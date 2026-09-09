@@ -1,5 +1,11 @@
 //! Stop-hook entry helpers shared by the gates: the never-break-a-turn panic
-//! guard and the session-scoped one-shot skip.
+//! guard, the session-scoped one-shot skip, and the `max_attempts` concession.
+//!
+//! The last two are the same shape and exist for the same reason: a Stop is
+//! adjudicated by four independent processes, so a hatch one gate spends can be
+//! consumed by a stop another gate then blocks. Both are therefore bounded by
+//! `stop_hook_active` — honoured while the chain is still being blocked, spent
+//! on the first stop that actually completes.
 
 use std::path::Path;
 
@@ -280,35 +286,234 @@ and the consumption is written to the gate's log.",
     Ok(())
 }
 
+/// Where an already-honoured skip is parked until the stop it authorised
+/// actually completes: `<state_dir>/skips/<id>.skip.honoured`.
+fn honoured_session_skip_path(state_dir: &Path, session_id: &str) -> std::path::PathBuf {
+    state_dir
+        .join("skips")
+        .join(format!("{session_id}.skip.honoured"))
+}
+
 /// Consume the one-shot skip belonging to `session_id`, if there is one.
 ///
-/// Returns the reason it carried and deletes the marker, so it applies once.
-/// A skip issued by a DIFFERENT session is not visible here and is left
-/// untouched — that is the whole point, and it is what the shared marker could
-/// not do. Consumption is written to `log.jsonl` by this function rather than
-/// by each caller, so a gate cannot consume a bypass without leaving a record.
-pub fn consume_session_skip(state_dir: &Path, session_id: &str) -> Option<String> {
+/// Returns the reason it carried while the escape is still owed, and `None`
+/// once it has been spent — or when it cannot be honoured. A skip issued by a
+/// DIFFERENT session is not visible here and is left untouched — that is the
+/// whole point, and it is what the shared marker could not do. Consumption is
+/// written to `log.jsonl` by this function rather than by each caller, so a
+/// gate cannot consume a bypass without leaving a record.
+///
+/// # The skip is spent by a completed stop, not by this gate's own verdict
+///
+/// A Stop is adjudicated by four independent processes (donegate, reviewgate,
+/// tdd, propguard), each holding only its own verdict. Session-scoping the
+/// marker fixed *whose* skip gets consumed; it did not fix *when*. This
+/// function used to delete the marker the instant it read it, so when donegate
+/// honoured the session's skip and allowed while reviewgate blocked the same
+/// stop, **no stop happened** and the operator's one-shot escape had been spent
+/// on nothing: they had to re-issue it on every re-entry, for every gate, until
+/// the four-way conjunction went green at once — the standing pressure toward a
+/// *permanent* bypass that CLAUDE.md 第5節 forbids.
+///
+/// `stop_hook_active` is the seam that fixes it. Claude Code sets it on the
+/// stop that follows a block ([`crate::hook::HookInput`]), so it distinguishes
+/// "this stop is a re-entry after somebody blocked" from "this stop starts a
+/// fresh chain". The lifecycle is therefore:
+///
+/// 1. **Skip present** — honour it and `rename` it to `<id>.skip.honoured`.
+///    The escape is now *owed*: it has authorised a stop that has not completed.
+/// 2. **Only `<id>.skip.honoured` present, `stop_hook_active == true`** — some
+///    gate blocked the stop this skip authorised, so the stop never happened.
+///    Keep honouring it; the escape is still owed.
+/// 3. **Only `<id>.skip.honoured` present, `stop_hook_active == false`** — the
+///    chain ended, so a stop this skip authorised did complete. Delete the
+///    record and return `None`. This is what keeps the escape one-shot rather
+///    than permanent.
+///
+/// A `rename` (rather than a second bookkeeping file) is used so that a skip
+/// the operator *re-issues* is never mistaken for an outstanding honour: the
+/// two states have different filenames and step 1 always wins.
+///
+/// # Failure modes, all resolved to the restrictive side
+///
+/// * Marker unreadable → `None` (not honoured). A token we cannot read is not a
+///   token we may act on (CLAUDE.md 第3節).
+/// * `rename` fails → the honour cannot be recorded, so it cannot be bounded.
+///   Fall back to `remove_file`, honouring it exactly once. If that fails too,
+///   the skip can be neither bounded nor cleared, so it is **not** honoured.
+/// * Empty marker → `None`, and the file is removed: `issue_session_skip`
+///   refuses an empty reason, so a blank file is hand-made and must not become
+///   a silent, permanent hatch.
+pub fn consume_session_skip(
+    state_dir: &Path,
+    session_id: &str,
+    stop_hook_active: bool,
+) -> Option<String> {
     if !usable_session_id(session_id) {
         return None;
     }
     let path = session_skip_path(state_dir, session_id);
-    let reason = std::fs::read_to_string(&path).ok()?.trim().to_string();
-    // An empty marker cannot have been written by `issue_session_skip`, which
-    // refuses an empty reason. Treat it as no skip AND remove it, so a
-    // hand-made blank file is not a silent, permanent hatch.
-    let _ = std::fs::remove_file(&path);
-    if reason.is_empty() {
+    let honoured = honoured_session_skip_path(state_dir, session_id);
+
+    let record = |reason: &str, reentry: bool| {
+        append_jsonl(
+            state_dir,
+            &serde_json::json!({
+                "event": "skip_consumed",
+                "session_id": session_id,
+                "reason": reason,
+                // True when this honour is a re-entry after some gate blocked
+                // the stop the skip authorised — the same escape, not a second
+                // one. Without this field the log would read as N bypasses.
+                "reentry": reentry,
+            }),
+        );
+    };
+
+    // (1) A skip nobody has honoured yet — or one the operator has just
+    // re-issued, which supersedes any stale record.
+    if path.exists() {
+        let reason = std::fs::read_to_string(&path).ok()?.trim().to_string();
+        if reason.is_empty() {
+            let _ = std::fs::remove_file(&path);
+            return None;
+        }
+        if std::fs::rename(&path, &honoured).is_err() && std::fs::remove_file(&path).is_err() {
+            // Neither bounded nor cleared: honouring it now would create a
+            // standing bypass, so do not honour it.
+            return None;
+        }
+        record(&reason, false);
+        return Some(reason);
+    }
+
+    if !honoured.exists() {
         return None;
+    }
+
+    // (2) The stop this skip authorised was blocked by some other gate, so it
+    // never happened: the escape is still owed.
+    if stop_hook_active {
+        let reason = std::fs::read_to_string(&honoured).ok()?.trim().to_string();
+        if reason.is_empty() {
+            return None;
+        }
+        record(&reason, true);
+        return Some(reason);
+    }
+
+    // (3) A stop this skip authorised completed. Spend it.
+    let _ = std::fs::remove_file(&honoured);
+    None
+}
+
+fn concession_path(state_dir: &Path, session_id: &str) -> std::path::PathBuf {
+    state_dir
+        .join("concessions")
+        .join(format!("{session_id}.giveup"))
+}
+
+/// Record that this gate exhausted `max_attempts` and ALLOWED the stop.
+///
+/// # Why a concession has to be remembered
+///
+/// `max_attempts` is a deliberate, bounded fail-open: after N consecutive
+/// blocks the gate stops enforcing so a genuinely stuck agent is never trapped.
+/// The concession is earned — the operator paid N blocked stops for it.
+///
+/// But a Stop is adjudicated by **four independent processes** (donegate,
+/// reviewgate, propguard, tdd), each seeing only its own verdict. When donegate
+/// gives up and allows while tdd blocks the same stop, **the stop does not
+/// happen** — and the old code had just called `state::reset`, erasing the
+/// counter. On the re-entry donegate counts from 1 again and blocks, so the
+/// agent must pay another N blocked stops for a concession it already earned,
+/// every time some other gate is still red. That is the same defect the skip
+/// token had ([`consume_session_skip`]), on the same seam, and it is unbounded:
+/// while another gate keeps blocking, the concession can never be collected.
+///
+/// Call this INSTEAD of `state::reset` on the give-up path. It clears the
+/// attempt counter exactly as `reset` did (the file the counter lives in is
+/// untouched by this function — the caller still resets it) and additionally
+/// leaves a marker that [`concession_owed`] can find on the re-entry.
+pub fn concede(state_dir: &Path, session_id: &str) {
+    if !usable_session_id(session_id) {
+        return;
+    }
+    let path = concession_path(state_dir, session_id);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // Content is informational only; presence is the signal. Written as one
+    // atomic `write` so a concurrent reader never sees a half-file.
+    let _ = std::fs::write(&path, b"gave up after max_attempts\n");
+    append_jsonl(
+        state_dir,
+        &serde_json::json!({
+            "event": "concession_recorded",
+            "session_id": session_id,
+        }),
+    );
+}
+
+/// Is a give-up this gate already made still owed?
+///
+/// Mirrors [`consume_session_skip`]'s three states, for the same reason and on
+/// the same seam:
+///
+/// 1. **No marker** → nothing was conceded. `false`; enforce normally.
+/// 2. **Marker + `stop_hook_active`** → Claude Code re-entered after *some*
+///    gate blocked, so the stop this concession authorised never happened. The
+///    concession is **still owed**: `true`, and the marker stays.
+/// 3. **Marker + not a re-entry** → a stop this concession authorised
+///    completed. Spend it: delete the marker and return `false`.
+///
+/// State 3 is what keeps this bounded. Without it "remember the give-up" would
+/// become a permanent bypass — the gate would never enforce again for the rest
+/// of the session, which is strictly worse than the defect being fixed.
+///
+/// A marker that exists but cannot be removed is **not** honoured (`false`):
+/// honouring it would be unbounded, since the same failure blocks state 3 from
+/// ever spending it. Undeterminable → restrictive side (CLAUDE.md 第3節).
+#[must_use]
+pub fn concession_owed(state_dir: &Path, session_id: &str, stop_hook_active: bool) -> bool {
+    if !usable_session_id(session_id) {
+        return false;
+    }
+    let path = concession_path(state_dir, session_id);
+    if !path.exists() {
+        return false;
+    }
+    if stop_hook_active {
+        append_jsonl(
+            state_dir,
+            &serde_json::json!({
+                "event": "concession_still_owed",
+                "session_id": session_id,
+            }),
+        );
+        return true;
+    }
+    // A stop this concession authorised completed. Spend it.
+    if std::fs::remove_file(&path).is_err() {
+        // Cannot clear it, so state 3 can never fire for it either: honouring
+        // it now would hand out an unbounded bypass instead of a one-stop one.
+        append_jsonl(
+            state_dir,
+            &serde_json::json!({
+                "event": "concession_unclearable",
+                "session_id": session_id,
+            }),
+        );
+        return false;
     }
     append_jsonl(
         state_dir,
         &serde_json::json!({
-            "event": "skip_consumed",
+            "event": "concession_spent",
             "session_id": session_id,
-            "reason": reason,
         }),
     );
-    Some(reason)
+    false
 }
 
 /// Append `entry` as one JSON line to `<state_dir>/log.jsonl`, creating the

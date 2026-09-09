@@ -23,7 +23,9 @@ compile_error!(
 );
 
 pub mod append;
+pub mod attribution;
 pub mod boundary;
+pub mod callgraph;
 pub mod code_index;
 pub mod config;
 pub mod daily;
@@ -36,6 +38,7 @@ pub mod git_probe;
 pub mod hash;
 pub mod hook;
 pub mod hook_latency;
+pub mod index_store;
 pub mod inject;
 pub mod inject_metrics;
 pub mod install;
@@ -54,6 +57,7 @@ pub mod session;
 pub mod shell;
 pub mod spans;
 pub mod store;
+pub mod text_index;
 pub mod transcript;
 pub mod trust;
 pub mod undetermined;

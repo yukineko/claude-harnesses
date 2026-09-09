@@ -348,6 +348,11 @@ enum Command {
     /// Either mode then reads each changed file's CURRENT contents from cwd
     /// (fail-soft: a missing/unreadable source file just yields no
     /// dependency edges for that hunk).
+    DiffriskReport {
+        /// Emit one JSON object instead of the human-readable summary.
+        #[arg(long)]
+        json: bool,
+    },
     ReviewOrder {
         /// Read a unified diff from this file (the hermetic, tested mode).
         #[arg(long)]
@@ -1285,10 +1290,22 @@ enum PolicyAction {
         #[arg(long)]
         approval: bool,
     },
-    /// Print the auto-answer audit trail (JSONL): every question the policy
-    /// self-answered without prompting a human. The review surface for
-    /// hands-off autonomy — gates are skipped, but each self-answer is logged
-    /// and inspectable here. Prints nothing (exit 0) if the log is absent.
+    /// Print the gate-decision audit trail (JSONL): every question whose
+    /// verdict the policy resolved — `auto` (self-answered, `chosen` set),
+    /// `escalate` and `block` (no answer, `chosen` null). The review surface for
+    /// hands-off autonomy: an `auto` row says a gate was skipped with a recorded
+    /// answer, an `escalate`/`block` row says a gate fired and where it went.
+    ///
+    /// This used to print `auto` alone, described as "every question the policy
+    /// self-answered". That was a fail-open review surface: the gates that
+    /// actually stopped something left no trace, so an empty log read as "no
+    /// gate fired" when it in fact meant "nothing was auto-answered".
+    /// specs/spec-loop.toml R4 requires the divert gate's record to be
+    /// inspectable here, and that gate's default verdict is `escalate`.
+    ///
+    /// Invalid input is not journaled: no verdict was resolved, and it already
+    /// fails loudly on stderr with exit 1. Prints nothing (exit 0) if the log is
+    /// absent.
     Answers {
         /// Directory holding the decision log (default: the state dir).
         #[arg(long)]
@@ -2268,6 +2285,7 @@ fn run_user(cmd: Command) -> Result<()> {
         } => run_review_worthiness(
             &cwd, files, insertions, deletions, rationale, task_link, json, from_git, &base, &head,
         )?,
+        Command::DiffriskReport { json } => run_diffrisk_report(&cfg, &cwd, json),
         Command::ReviewOrder {
             diff_file,
             from_git,
@@ -2900,6 +2918,73 @@ fn resolve_policy_verdict(
         policy::decide_approval(risk, reversible, confidence)
     } else {
         policy::decide(risk, reversible, confidence)
+    }
+}
+
+/// Answer the question "is the post-execution call-graph path actually doing
+/// anything?" from the `diffrisk-outcomes.jsonl` journal.
+///
+/// This exists because that question used to be UNANSWERABLE. The only visible
+/// artifact was the overwatch violation registry, and a registry with zero
+/// `diffrisk-*` entries is equally consistent with "the call graph ran on every
+/// task and legitimately found nothing" and "the call graph never ran once".
+/// CLAUDE.md 3 forbids exactly that collapse, so the journal separates them and
+/// this command reads it back.
+///
+/// An ABSENT journal is reported as `unknown`, not as zero: no file means the
+/// hook has not run since journaling landed, which is not the same fact as
+/// "ran and found nothing".
+fn run_diffrisk_report(cfg: &Config, cwd: &Path, json: bool) {
+    let dir = state::project_state_dir(cfg, cwd);
+    let path = gatelog::diffrisk_outcomes_path(&dir);
+    let present = path.exists();
+    let recs = gatelog::load_diffrisk_outcomes(&dir);
+
+    let total = recs.len();
+    let inspected = recs.iter().filter(|r| r.inspected).count();
+    let mut by_outcome: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for r in &recs {
+        *by_outcome.entry(r.outcome.as_str()).or_insert(0) += 1;
+    }
+    // Only records where the call graph actually ran carry counts, so summing
+    // `Some` values never silently mixes in a blind-spot exit as a zero.
+    let caller_sites: usize = recs.iter().filter_map(|r| r.caller_sites).sum();
+    let changed_symbols: usize = recs.iter().filter_map(|r| r.changed_symbols).sum();
+
+    if json {
+        let v = serde_json::json!({
+            "journal": path.to_string_lossy(),
+            "journal_present": present,
+            "invocations": if present { serde_json::json!(total) } else { serde_json::Value::Null },
+            "inspected": if present { serde_json::json!(inspected) } else { serde_json::Value::Null },
+            "blind_spots": if present { serde_json::json!(total - inspected) } else { serde_json::Value::Null },
+            "by_outcome": by_outcome,
+            "changed_symbols_total": changed_symbols,
+            "caller_sites_total": caller_sites,
+        });
+        println!("{v}");
+        return;
+    }
+
+    println!("diff-risk journal: {}", path.display());
+    if !present {
+        println!("  status: unknown \u{2014} no journal on disk.");
+        println!("  This is NOT the same as zero findings: it means the post-execution");
+        println!("  diff-risk hook has not run here since journaling landed. Nothing");
+        println!("  has been inspected, so nothing can be called clean.");
+        return;
+    }
+    println!("  invocations : {total}");
+    println!("  inspected   : {inspected}  (the call graph actually ran)");
+    println!(
+        "  blind spots : {}  (never inspected \u{2014} NOT a clean result)",
+        total - inspected
+    );
+    println!("  changed symbols seen : {changed_symbols}");
+    println!("  caller sites found   : {caller_sites}");
+    println!("  by outcome:");
+    for (k, n) in &by_outcome {
+        println!("    {k:<20} {n}");
     }
 }
 
@@ -3931,15 +4016,18 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             // is dead at the pre-execution call sites (empty diff) finally has a
             // real diff here. A High-risk verdict (public-API change on a
             // sensitive path) is recorded to the overwatch violation registry.
-            // OBSERVATIONAL and fully fail-soft: it never changes the exit code
-            // or the schedule-time gated-task separation. Only fire on the
+            // OBSERVATIONAL: it never changes the exit code or the
+            // schedule-time gated-task separation. It is NOT silent, though —
+            // every invocation is journaled and non-inspected outcomes are named
+            // on stderr, so an empty registry is not mistaken for a clean one.
+            // Only fire on the
             // Running/Pending→Done edge so a re-run of `set --status done` does
             // not double-record.
             if st == state::Status::Done && prior_status != state::Status::Done {
                 if let Some(t) = rs.tasks.iter().find(|t| t.id == task) {
                     let paths = task_files(cfg, cwd, &run, &task);
                     let session = session_id_from_env().unwrap_or_default();
-                    diffrisk_record::record_post_execution_diff_risk(
+                    let dr = diffrisk_record::record_post_execution_diff_risk(
                         cfg,
                         cwd,
                         &run,
@@ -3948,6 +4036,29 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                         state::now_secs(),
                         &session,
                     );
+                    // Do NOT discard this. `ClassifiedNotHigh` is the only
+                    // outcome that means "the call graph ran and found nothing";
+                    // every other non-recording outcome means it did not run, or
+                    // could not conclude, or could not persist what it found.
+                    // Collapsing those back into one silent no-op is the
+                    // fail-open CLAUDE.md 1/3 forbid, so they are named on
+                    // stderr as well as journaled. Still non-blocking: no exit
+                    // code changes.
+                    match dr {
+                        gatelog::DiffRiskOutcome::ClassifiedNotHigh => {}
+                        gatelog::DiffRiskOutcome::Recorded => {
+                            eprintln!(
+                                "diff-risk: HIGH — recorded a blastguard violation for task '{task}' (run '{run}')"
+                            );
+                        }
+                        other => {
+                            eprintln!(
+                                "diff-risk: NOT INSPECTED ({}) for task '{task}' (run '{run}') — \
+                                 this is not a clean result; see `diffrisk-outcomes.jsonl`",
+                                other.as_str()
+                            );
+                        }
+                    }
                     // Mid-flight runtime-conflict detection (design 625aa170 A):
                     // record this task's ACTUAL changed-file set into the
                     // overwatch project-global registry and, on a detected

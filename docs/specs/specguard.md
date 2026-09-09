@@ -39,7 +39,12 @@ report と（人間レビューが要るときは）sentinel を書く。判定�
   固定（override > `baseline_ref` > recorded `.last-ref` > `fallback_ref`）。`scope::is_safe_ref` が baseline ref から
   先頭ダッシュ・空白・shell metacharacter を弾く。
 - **fail-soft** — `pending`（SessionStart hook 入口）は best-effort で、config 欠落等どんなエラーでも何も出さず exit 0。
-  `scope::code_index_files`（fugu-router 連携）は欠落・エラーで空を返し fail-soft。relevant-file map / escalation
+  `scope::code_index_files` は `harness_core::index_store` を**同一プロセスで**呼ぶ（旧: `fugu-router` を
+  2 回 spawn して JSON を parse。`SPECGUARD_FUGU_BIN` も撤去）。判定不能（git が列挙できない / 索引が
+  読めない / stale のまま再構築できない）は空ではなく `Determination::Undetermined` を返す — 第3節の
+  「探せなかった」と「無かった」を同じ出力に写さない要求。`relevant_file_map` はその Undetermined を
+  base 集合のみへ degrade させる（map は加算的な advisory であり、ここから verdict を出す消費者は無い。
+  出た時点でこの degrade は失効する — 関数の doc comment に明記）。relevant-file map / escalation
   機能（`SPECGUARD_RELEVANT_MAP`, `scope::relevant_file_map`）は既定 OFF で、未設定なら従来挙動と厳密に不変。
 - **baseline hold** — findings が出た run では baseline を advance せず sentinel を立てる。次 run で同じ drift が
   再検出される。人間が `specguard ack`（既定で修正コミットの存在=`report::has_new_commits` を要求）で解除する。
@@ -100,7 +105,9 @@ report と（人間レビューが要るときは）sentinel を書く。判定�
   既定空＝従来どおり全変更を tracking）を持つ。
 - **`scope`** — 変更駆動スコープ解決。`resolve`（baseline→diff→classify の全パイプライン）、`resolve_baseline`、
   `changed_files`（3-tier fallback、`whole_tree_fallback_max_files` 予算超過で Err）、`classify`（純: 変更ファイル→area）、
-  `shard_input_files`、`fingerprint_files`、`relevant_file_map`/`shard_query`/`code_index_files`（コードインデックス連携）。
+  `shard_input_files`、`fingerprint_files`、`relevant_file_map`/`shard_query`/`code_index_files`
+  （`harness_core::index_store` への in-process 問い合わせ。symbol 索引に加えて**全文索引**も引くので、
+  宣言行ではなく本文（呼び出し箇所）だけに現れる名前でもファイルが map に載る）。
 - **`prompt`** — テンプレート（data）+ 解決済みスコープからプロンプトを描画。`Shard`（`Area`/`Invariants`/`Decisions`）、
   `shards`/`shard_label`/`render_shard`/`render_shard_with_map`/`render_brief`/`render_refute`/`render_completeness`、
   各 `*_TEMPLATE`/`*_PLACEHOLDERS`、`signals_insufficient_context`（`NEEDS_WIDER_SCOPE_SIGNAL` 検出）。canon の中身は
@@ -114,6 +121,10 @@ report と（人間レビューが要るときは）sentinel を書く。判定�
   `load`/`load_or_init`/`save`/`sync`（`exclude: &GlobSet` を取り追加/変更を除外フィルタ）/`apply_changes`/`prune_excluded`/
   `set_spec`/`resolve`、`DEFAULT_MAP_PATH`=`.specguard/spec-map.toml`。意味的帰属（spec-doc 紐付け・drift 解決）は
   `set_spec`/`resolve` を通じ LLM 消費者が行い、store は決定論的に永続化・同期・除外のみ。
+  `MapEntry` は `symbols` / `called_by` / `ambiguous_symbols`（いずれも `#[serde(default)]` で
+  旧マップと後方互換）を持ち、`SpecMap::enrich` が決定論的索引から埋める。索引が答えられない場合は
+  マップを**書き換えずに** `Undetermined` を返す。CLI は `map search`（全文＋symbol 検索の結果を
+  map entry に帰属させる）/ `map callers`（永続化された call graph）/ `map enrich`。
 
 ## 段階的 ratification トリアージ (graded ratify)
 

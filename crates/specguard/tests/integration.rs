@@ -1615,3 +1615,399 @@ canon = ["docs/spec.md"]
         "filler_d (added since build_ref) must be tracked:\n{after_sync}"
     );
 }
+
+// --- `specguard brief --json`: the machine-readable tri-state canon-coverage
+// verdict (specs/spec-loop.toml R3-brief-emits-tri-state-verdict). ---
+
+/// Write a spec map at the default store path with the given entry tables.
+fn write_map(repo: &Path, entries: &[String]) -> std::path::PathBuf {
+    let path = repo.join(".specguard/spec-map.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let mut body = String::from("last_synced = \"deadbeef\"\n");
+    for e in entries {
+        body.push_str(e);
+    }
+    fs::write(&path, body).unwrap();
+    path
+}
+
+/// One `[entries.<key>]` table. `spec_doc = None` means the canon for that
+/// entry has not been authored yet.
+fn map_entry(key: &str, spec_doc: Option<&str>, impl_files: &[&str]) -> String {
+    let mut s =
+        format!("[entries.\"{key}\"]\nkey = \"{key}\"\nkind = \"feature\"\nstatus = \"tracked\"\n");
+    if let Some(d) = spec_doc {
+        s.push_str(&format!("spec_doc = \"{d}\"\n"));
+    }
+    s.push_str(&format!("impl_files = {impl_files:?}\n"));
+    s
+}
+
+/// The `verdict` field of a `brief --json` run, plus the raw parsed object.
+fn brief_json(repo: &Path, task: &str) -> (std::process::Output, serde_json::Value) {
+    let out = run_specguard(repo, "HEAD", &["brief", task, "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
+        panic!(
+            "brief --json must print one JSON object; parse failed ({e}).\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    });
+    (out, v)
+}
+
+fn verdict_of(v: &serde_json::Value) -> String {
+    v.get("verdict")
+        .and_then(|x| x.as_str())
+        .unwrap_or_else(|| panic!("no string `verdict` field in {v}"))
+        .to_string()
+}
+
+/// The verdict a rendered brief states in its coverage block, read back out of
+/// the prose. Exactly one must be stated.
+fn prose_verdict(repo: &Path, task: &str) -> String {
+    let p = run_specguard(repo, "HEAD", &["brief", task, "--prompt"]);
+    assert!(
+        p.status.success(),
+        "brief --prompt failed: {}",
+        String::from_utf8_lossy(&p.stderr)
+    );
+    let s = String::from_utf8_lossy(&p.stdout).to_string();
+    assert!(!s.contains("{{"), "no leftover placeholders: {s}");
+    let stated: Vec<String> = ["covered", "not-covered", "undetermined"]
+        .into_iter()
+        .filter(|t| s.contains(&format!("**{t}**")))
+        .map(|t| t.to_string())
+        .collect();
+    assert_eq!(
+        stated.len(),
+        1,
+        "the brief must state exactly one verdict, found {stated:?} in:\n{s}"
+    );
+    stated[0].clone()
+}
+
+/// R3 acceptance 1: `brief --json` has a `verdict` field, and all THREE of its
+/// values are reachable through the real binary.
+#[test]
+fn brief_json_verdict_field_reaches_all_three_states() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    init_repo(repo);
+    write_config(repo, "unused");
+    let task = "make coverage.rs emit a tri-state verdict";
+
+    // (1) undetermined — the store was never built here.
+    let (out, v) = brief_json(repo, task);
+    assert_eq!(verdict_of(&v), "undetermined", "no store: {v}");
+    assert_eq!(out.status.code(), Some(10), "undetermined exit code");
+
+    // (2) covered — a matching entry names a spec document.
+    write_map(
+        repo,
+        &[map_entry(
+            "specguard-brief",
+            Some("docs/DESIGN-spec-loop.md"),
+            &["crates/specguard/src/coverage.rs"],
+        )],
+    );
+    let (out, v) = brief_json(repo, task);
+    assert_eq!(verdict_of(&v), "covered", "{v}");
+    assert_eq!(out.status.code(), Some(0), "an answer exits 0");
+    assert_eq!(
+        v["entries"],
+        serde_json::json!(["specguard-brief"]),
+        "covered names the entries it relied on: {v}"
+    );
+
+    // (3) not-covered — the store was read and holds no canon for this task.
+    write_map(
+        repo,
+        &[map_entry(
+            "specguard-brief",
+            None,
+            &["crates/specguard/src/coverage.rs"],
+        )],
+    );
+    let (out, v) = brief_json(repo, task);
+    assert_eq!(verdict_of(&v), "not-covered", "{v}");
+    assert_eq!(out.status.code(), Some(0), "an answer exits 0");
+    assert_eq!(
+        v["matched_without_spec"],
+        serde_json::json!(["specguard-brief"]),
+        "not-covered names what it matched: {v}"
+    );
+}
+
+/// R3 acceptance 2: every state in which the store could not answer resolves to
+/// `undetermined`. None of them may reach /flow as `not-covered`, which is the
+/// verdict that makes it draft a spec.
+#[test]
+fn brief_json_unobservable_store_states_are_undetermined_never_not_covered() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    init_repo(repo);
+    write_config(repo, "unused");
+    let task = "make coverage.rs emit a tri-state verdict";
+
+    let check = |label: &str, out: &std::process::Output, v: &serde_json::Value| {
+        assert_eq!(
+            verdict_of(v),
+            "undetermined",
+            "[{label}] must be undetermined, got {v}"
+        );
+        assert_ne!(
+            verdict_of(v),
+            "not-covered",
+            "[{label}] 'could not observe' must not become 'no spec exists'"
+        );
+        assert!(
+            v.get("reason")
+                .and_then(|r| r.as_str())
+                .is_some_and(|r| !r.trim().is_empty()),
+            "[{label}] undetermined must carry a reason: {v}"
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(10),
+            "[{label}] undetermined must not exit 0"
+        );
+    };
+
+    // (a) map file absent.
+    let (out, v) = brief_json(repo, task);
+    check("absent", &out, &v);
+
+    // (b) map file present but unparseable.
+    let path = repo.join(".specguard/spec-map.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "not TOML [[[ entries = ??\n").unwrap();
+    let (out, v) = brief_json(repo, task);
+    check("corrupt", &out, &v);
+
+    // (c) map file present but unreadable. If this environment cannot make a
+    // file unreadable (root, or a mode-ignoring filesystem) the test FAILS
+    // rather than silently reporting a path it never observed.
+    write_map(
+        repo,
+        &[map_entry(
+            "specguard-brief",
+            Some("docs/DESIGN-spec-loop.md"),
+            &["crates/specguard/src/coverage.rs"],
+        )],
+    );
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+    assert!(
+        fs::read_to_string(&path).is_err(),
+        "this environment cannot make a file unreadable, so the permission path \
+         is UNOBSERVED — it must not be reported as verified"
+    );
+    let (out, v) = brief_json(repo, task);
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    check("unreadable", &out, &v);
+
+    // (d) map present, zero entries.
+    write_map(repo, &[]);
+    let (out, v) = brief_json(repo, task);
+    check("empty store", &out, &v);
+
+    // (e) populated store, but the task text yields no usable query token, so
+    // nothing was ever tested against it.
+    write_map(
+        repo,
+        &[map_entry(
+            "specguard-brief",
+            Some("docs/DESIGN-spec-loop.md"),
+            &["crates/specguard/src/coverage.rs"],
+        )],
+    );
+    let (out, v) = brief_json(repo, "a of を !! -");
+    check("no query token", &out, &v);
+}
+
+/// R3 acceptance 4 (exit-status half): a caller that branches only on the exit
+/// status — a shell `if`, a pre-commit wrapper — must not read `undetermined`
+/// as success. The status must also DISCRIMINATE: both real answers exit 0, so
+/// a blanket non-zero would not satisfy this either.
+#[test]
+fn brief_json_undetermined_is_not_success_to_an_exit_status_only_caller() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    init_repo(repo);
+    write_config(repo, "unused");
+    let task = "make coverage.rs emit a tri-state verdict";
+
+    let (undet, _) = brief_json(repo, task); // no store yet
+    assert!(
+        !undet.status.success(),
+        "`if specguard brief --json ...; then` must NOT take the success branch \
+         on undetermined (exit code was {:?})",
+        undet.status.code()
+    );
+    assert_eq!(undet.status.code(), Some(10));
+
+    write_map(
+        repo,
+        &[map_entry(
+            "specguard-brief",
+            Some("docs/DESIGN-spec-loop.md"),
+            &["crates/specguard/src/coverage.rs"],
+        )],
+    );
+    let (covered, _) = brief_json(repo, task);
+    write_map(
+        repo,
+        &[map_entry(
+            "specguard-brief",
+            None,
+            &["crates/specguard/src/coverage.rs"],
+        )],
+    );
+    let (not_covered, _) = brief_json(repo, task);
+    assert!(
+        covered.status.success() && not_covered.status.success(),
+        "both real answers must exit 0, else the non-zero on undetermined says \
+         nothing (covered {:?}, not-covered {:?})",
+        covered.status.code(),
+        not_covered.status.code()
+    );
+    assert_ne!(
+        undet.status.code(),
+        covered.status.code(),
+        "undetermined and covered must be distinguishable by status alone"
+    );
+}
+
+/// R3 acceptance 3 (end-to-end half): for the SAME store state, the prose the
+/// brief prompt carries and the machine `verdict` agree — in all three states,
+/// including the entry list the `covered` prose quotes.
+#[test]
+fn brief_prose_and_json_verdict_agree_for_the_same_store_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    init_repo(repo);
+    write_config(repo, "unused");
+    let task = "make coverage.rs emit a tri-state verdict";
+
+    // undetermined (no store)
+    let (_, v) = brief_json(repo, task);
+    assert_eq!(verdict_of(&v), prose_verdict(repo, task), "undetermined");
+
+    // covered
+    write_map(
+        repo,
+        &[map_entry(
+            "specguard-brief",
+            Some("docs/DESIGN-spec-loop.md"),
+            &["crates/specguard/src/coverage.rs"],
+        )],
+    );
+    let (_, v) = brief_json(repo, task);
+    assert_eq!(verdict_of(&v), prose_verdict(repo, task), "covered");
+    let prompt = run_specguard(repo, "HEAD", &["brief", task, "--prompt"]);
+    let prose = String::from_utf8_lossy(&prompt.stdout).to_string();
+    for e in v["entries"].as_array().unwrap() {
+        assert!(
+            prose.contains(e.as_str().unwrap()),
+            "every entry the JSON credits must appear in the prose: {e} not in\n{prose}"
+        );
+    }
+
+    // not-covered
+    write_map(
+        repo,
+        &[map_entry(
+            "specguard-brief",
+            None,
+            &["crates/specguard/src/coverage.rs"],
+        )],
+    );
+    let (_, v) = brief_json(repo, task);
+    assert_eq!(verdict_of(&v), prose_verdict(repo, task), "not-covered");
+}
+
+/// R3 acceptance 3, the structural half: ONE invocation of `brief` reads the
+/// spec map exactly ONCE.
+///
+/// Agreement tests cannot see a duplicated resolver that happens to agree; a
+/// read counter can. The store here is a FIFO carrying the map exactly once, so
+/// a second resolution anywhere in the invocation blocks forever instead of
+/// quietly agreeing with the first. The assertion is that the process finishes
+/// (and that the one read it did make actually fed the prose).
+#[test]
+fn brief_reads_the_spec_map_exactly_once_per_invocation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    init_repo(repo);
+    write_config(repo, "unused");
+    let task = "make coverage.rs emit a tri-state verdict";
+
+    let body = format!(
+        "last_synced = \"deadbeef\"\n{}",
+        map_entry(
+            "specguard-brief",
+            Some("docs/DESIGN-spec-loop.md"),
+            &["crates/specguard/src/coverage.rs"],
+        )
+    );
+    let src = repo.join("map-body.toml");
+    fs::write(&src, &body).unwrap();
+
+    let fifo = repo.join(".specguard/spec-map.toml");
+    fs::create_dir_all(fifo.parent().unwrap()).unwrap();
+    let mk = Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("mkfifo runs");
+    assert!(mk.success(), "mkfifo failed — cannot count store reads");
+
+    // One writer, one payload: the second reader (if any) gets no data and no
+    // writer, and blocks.
+    let mut writer = Command::new("bash")
+        .arg("-c")
+        .arg(format!("cat {} > {}", src.display(), fifo.display()))
+        .spawn()
+        .expect("writer spawns");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_specguard"))
+        .current_dir(repo)
+        .args(["--config", "specguard.toml", "--date", "2026-01-01"])
+        .args(["brief", task, "--prompt"])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("specguard spawns");
+
+    // Poll rather than wait(): a second read would never return.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let finished = loop {
+        match child.try_wait().expect("try_wait") {
+            Some(_) => break true,
+            None if std::time::Instant::now() >= deadline => break false,
+            None => std::thread::sleep(std::time::Duration::from_millis(50)),
+        }
+    };
+    if !finished {
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = writer.kill();
+        let _ = writer.wait();
+        panic!(
+            "`specguard brief` did not finish within 20s against a one-shot spec-map \
+             FIFO: it read the store more than once, i.e. the coverage resolution is \
+             not shared between the prose and the machine verdict"
+        );
+    }
+    let out = child.wait_with_output().expect("output");
+    let _ = writer.wait();
+    assert!(
+        out.status.success(),
+        "brief --prompt failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        s.contains("**covered**") && s.contains("specguard-brief"),
+        "the single read must be the one that fed the prose: {s}"
+    );
+}

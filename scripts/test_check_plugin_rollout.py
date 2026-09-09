@@ -64,7 +64,14 @@ FIXTURE_PLUGINS = {
     "propguard": "0.9.1",    # GATE
     "specguard": "2.1.0",    # GATE
     "stuckguard": "0.4.2",   # GATE
-    "taintguard": "0.1.2",   # GATE
+    "parallelguard": "0.1.0",  # GATE
+    # NOT a GATE crate any more, and no longer a crate at all: crates/taintguard
+    # was withdrawn from the repo on 2026-08-24 (0521d013) after its verdicts
+    # blocked real work. The name stays here as a FIXTURE IDENTITY only — the
+    # park tests below are written around it and its removal from GATE_CRATES is
+    # what makes it the right stand-in for "a plugin somebody parked". Nothing
+    # in this file asserts that the crate exists.
+    "taintguard": "0.1.2",   # non-gate (fixture identity, see above)
     "overwatch": "5.0.1",    # GATE
     "condukt": "3.0.0",      # non-gate
     "benchkit": "0.1.0",     # non-gate (the kind users disable on purpose)
@@ -933,6 +940,45 @@ class CrateLocalRuntimeArtifacts(_FixtureCase):
             f"checker={sorted(cpr.DEPLOY_EXCLUDED_TOP)}",
         )
 
+    def test_protected_suffixes_match_the_rollout_script(self):
+        """copy_plugin_dir's protect list must equal PLATFORM_SUFFIXES.
+
+        The same coupling as the excludes above, in the other direction and with
+        a worse failure mode. `bin/<name>-<suffix>` exists in a deployed dir and
+        never in the crate, so a `--delete` mirror removes it unless the copy
+        protects it by name; `_is_rebuild_artifact` is the table that decides
+        which names those are. A suffix added here but not to the shell array
+        means the next re-copy of a plugin built for that platform silently
+        deletes its binary and leaves the plugin deployed with its launcher
+        alone — hooks that never start, so no finding is emitted at all
+        (measured 2026-09-08, backlog 51e6ebc7).
+
+        rollout-plugins.sh cannot import this table: copy_plugin_dir is sliced
+        out and sourced in isolation by
+        scripts/test_rollout_copy_preserves_artifacts.py, so it must be free of
+        outer references. Hence a hand copy, and hence this pin.
+
+        Regression guard, not a RED-first assertion — it is green as written and
+        must stay green.
+        """
+        script = (_HERE / "rollout-plugins.sh").read_text(encoding="utf-8")
+        arrays = re.findall(
+            r"^  local -a plat_suffixes=\(\n(.*?)^  \)", script, re.M | re.S
+        )
+        self.assertEqual(
+            len(arrays), 1,
+            "expected exactly one `local -a plat_suffixes=(...)` array in "
+            f"rollout-plugins.sh to compare against; found {len(arrays)}. A "
+            "renamed or restructured array must not read as 'no drift found'.",
+        )
+        shell_suffixes = arrays[0].split()
+        self.assertEqual(
+            sorted(shell_suffixes), sorted(cpr.PLATFORM_SUFFIXES),
+            "copy_plugin_dir's protected suffixes and the checker's "
+            f"PLATFORM_SUFFIXES disagree: shell={sorted(shell_suffixes)} "
+            f"checker={sorted(cpr.PLATFORM_SUFFIXES)}",
+        )
+
 
 class SkillOnlyPlugins(_FixtureCase):
     """Which plugins the provenance dimension applies to at all.
@@ -1779,12 +1825,31 @@ class ParkedRealDeclaration(unittest.TestCase):
         plugins, _unverifiable = cpr.scan_plugins()
         parked, problems = cpr.load_parked(plugins, path=str(path))
         self.assertEqual(problems, [], f"the shipped declaration is invalid: {problems}")
+        # "Real" has to mean exactly what load_parked means by it — a crate DIR
+        # under crates/ or a plugin.json name — or this asserts a roster and
+        # fails for being correct, the trap the class docstring describes.
+        #
+        # The line this replaces was `assertIn(name, plugins)`, and `plugins` is
+        # scan_plugins()'s list of (crate, plugin_name, version) TUPLES: a bare
+        # name is never an element of it, so the assertion could not pass once
+        # ANY plugin was parked. Measured 2026-09-08 at 610b47e4: red ever since
+        # parallelguard was parked (2026-08-28), and invisible because no gate
+        # runs this suite.
+        known = {c for c, _p, _v in plugins} | {p for _c, p, _v in plugins if p}
+        known |= {d.name for d in Path(cpr.CRATES).iterdir() if d.is_dir()}
+        # Anti-vacuity: an assertion against a set this large is worth nothing
+        # unless the set can actually exclude something. Pin that here rather
+        # than trusting it (CLAUDE.md 2.(b)).
+        self.assertNotIn(
+            "definitely-not-a-plugin", known,
+            "the membership check below cannot fail, so it proves nothing",
+        )
         # Whatever IS declared must carry the fields the loader requires, so an entry
         # can never read as a park while missing its own justification.
         for name, entry in parked.items():
             self.assertIn("reason", entry, f"{name} is parked with no reason")
             self.assertIn("parked_at", entry, f"{name} is parked with no parked_at")
-            self.assertIn(name, plugins, f"{name} is parked but is not a real plugin")
+            self.assertIn(name, known, f"{name} is parked but is not a real plugin")
 
     def test_the_loader_actually_validates_at_this_call_site(self):
         """Positive control for the assertion above: `problems == []` has to mean the

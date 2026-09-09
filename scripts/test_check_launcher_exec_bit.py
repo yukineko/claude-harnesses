@@ -239,18 +239,29 @@ class RealRepoState(unittest.TestCase):
 
     def test_the_scope_finds_every_plugin_that_ships_a_binary(self):
         """A count assertion, so the scope cannot quietly shrink to a subset and
-        keep reporting green over it. 37 = 40 plugins minus the THREE that are
-        skills-only (daily-report, scout, flow) and ship no binary.
+        keep reporting green over it.
 
-        Was `39` with a docstring reading "41 plugins minus the two ... (three
-        names)" — self-contradictory, and 41 - 3 is 38, not 39. That constant
-        was already RED at HEAD before taintguard's removal (measured
-        2026-08-24: 38 launchers in the index vs the 39 asserted here), because
-        it was never re-derived when `flow` became the third skills-only plugin.
-        Both errors are corrected together: the population is now 40 plugins
-        after taintguard was retired, and 40 - 3 = 37."""
+        39 LAUNCHER FILES, not 39 plugins — and getting that unit wrong is why
+        this constant has gone stale twice. `launchers()` returns one entry per
+        file under crates/*/bin/, so a crate shipping two of them contributes
+        two. Measured 2026-09-08 at 051f7850:
+
+            ls -d crates/*/.claude-plugin/plugin.json | wc -l          -> 41
+            plugins with no bin/ at all: daily-report, flow, scout     ->  3
+            crates/*/bin with more than one launcher: specguard
+                (specforge, specguard)                                 -> +1
+
+            41 - 3 + 1 = 39
+
+        Previous docstrings computed `plugins - skills_only` and compared it to
+        a count of FILES, which can only agree by accident; both of the earlier
+        "corrections" re-derived the same wrong formula and the assertion went
+        red again as soon as the population moved. If this fails, re-run the
+        three commands above rather than editing the number to whatever
+        len(found) currently is — a count pinned to the observation it is
+        supposed to check proves nothing."""
         found = cleb.launchers(cleb.index_entries(repo=str(REPO_ROOT)))
-        self.assertEqual(len(found), 37, [p for _m, p in found])
+        self.assertEqual(len(found), 39, [p for _m, p in found])
 
 
 if __name__ == "__main__":

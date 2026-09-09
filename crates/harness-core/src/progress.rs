@@ -377,36 +377,16 @@ pub fn file_growth_signal(path: &Path) -> Determination<Vec<u8>> {
 /// mutating `$HOME`. Any failure to find and stat a transcript file — an absent
 /// or unreadable `projects_dir`, no matching session file — is `Undetermined`
 /// (an absent transcript cannot prove the holder is frozen).
+///
+/// The lookup itself lives in
+/// [`crate::transcript::locate_session_transcript_in`] — `precommit-audit`
+/// needs the same "session id → transcript file" step to attribute a working
+/// tree's changes, and two copies of a rule whose failure mode is permissive
+/// would drift apart.
 pub fn transcript_signal_in(projects_dir: &Path, session_id: &str) -> Determination<Vec<u8>> {
-    if session_id.is_empty() {
-        return Determination::undetermined("empty session id: no transcript to locate");
-    }
-    let target = format!("{session_id}.jsonl");
-    let entries = match std::fs::read_dir(projects_dir) {
-        Ok(e) => e,
-        Err(e) => {
-            return Determination::undetermined(format!(
-                "projects dir {} unreadable: {e}",
-                projects_dir.display()
-            ))
-        }
-    };
-    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
-    for entry in entries.flatten() {
-        let candidate = entry.path().join(&target);
-        if let Ok(meta) = std::fs::metadata(&candidate) {
-            let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
-            if best.as_ref().is_none_or(|(t, _)| mtime > *t) {
-                best = Some((mtime, candidate));
-            }
-        }
-    }
-    match best {
-        Some((_, path)) => file_growth_signal(&path),
-        None => Determination::undetermined(format!(
-            "no transcript for session {session_id} under {}",
-            projects_dir.display()
-        )),
+    match crate::transcript::locate_session_transcript_in(projects_dir, session_id) {
+        Determination::Known(path) => file_growth_signal(&path),
+        Determination::Undetermined(why) => Determination::Undetermined(why),
     }
 }
 

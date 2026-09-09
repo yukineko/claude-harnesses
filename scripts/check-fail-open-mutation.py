@@ -140,6 +140,21 @@ SCENARIOS = [
         new="    if true {\n        return None;\n    }\n",
     ),
     Scenario(
+        crate="parallelguard",
+        file_rel="crates/parallelguard/src/model.rs",
+        description=(
+            "acquire(): hardcode the cap check to never fire, so a class that "
+            "already holds `cap` live slots is admitted anyway — the width "
+            "limit this gate exists to enforce, removed."
+        ),
+        old="        if live >= cap {\n"
+        "            return Decision::Deny(deny_reason(class, live, cap));\n"
+        "        }\n",
+        new="        if false {\n"
+        "            return Decision::Deny(deny_reason(class, live, cap));\n"
+        "        }\n",
+    ),
+    Scenario(
         crate="mutategate",
         file_rel="crates/mutategate/src/lib.rs",
         description=(

@@ -1,6 +1,6 @@
 {
   "name": "precommit-audit",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "description": "Config-driven pre-commit static audit for Claude Code: a Stop hook that runs generic checks plus your project rules (from a TOML file) over the pending diff — shelling out to git and optional linters — and blocks the stop, feeding findings back to the agent until they're clean. Subscription-native (one hook + bundled Rust binary, no API key). v0.1.16: the shared in-tree `<audit_dir>/.audit-skip` marker is gone — it was the fifth mirror of the one-shot bypass the four Stop gates dropped in the same change. It carried no attribution and lived in the working tree, so whichever invocation ran next spent it: a bypass one session armed was routinely consumed by a different session's commit, or by a human's terminal `git commit`. The replacement is `precommit-audit skip --reason \"...\"`, scoped to the issuing session via CLAUDE_CODE_SESSION_ID, reason-required, and recorded at both issue and consumption. An invocation with no session id consumes nothing at all.",
   "author": {
     "name": "yukineko"

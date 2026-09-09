@@ -124,6 +124,36 @@ impl Fixture {
         }
     }
 
+    /// A backlog driver registration for `project` whose heartbeat is far older
+    /// than the TTL — the observation that establishes "no session is working
+    /// here" (backlog `7039ad47`, 2026-09-07).
+    ///
+    /// Since that fix, the absence of a registration is `Undetermined`, not
+    /// death: most sessions register nothing, so reading absence as death would
+    /// make the death rule's registration term hold vacuously. Every fixture in
+    /// this file that needs a POSITIVELY unoccupied worktree therefore has to
+    /// supply an aged-out record; leaving it out yields `undetermined`, which
+    /// blocks resume for an unrelated reason and would prove nothing.
+    fn write_stale_driver(&self, name: &str, project: &Path) {
+        let dir = self.home.join(".backlog").join("drivers").join("bucket");
+        std::fs::create_dir_all(&dir).unwrap();
+        let project = project
+            .canonicalize()
+            .unwrap_or_else(|_| project.to_path_buf());
+        let record = serde_json::json!({
+            "session_id": format!("sess-{name}"),
+            "pid": 1,
+            "project": project.to_string_lossy(),
+            "registered_at": 0,
+            "heartbeat_at": 0,
+        });
+        std::fs::write(
+            dir.join(format!("{name}.driver")),
+            serde_json::to_vec_pretty(&record).unwrap(),
+        )
+        .unwrap();
+    }
+
     /// A registered linked worktree of the fixture repo.
     fn add_worktree(&self, name: &str, branch: &str) -> PathBuf {
         let path = self.wt_base.join(name);
@@ -473,6 +503,7 @@ fn interrupted_failed_task_worktree_is_resumable() {
     let wt = f.add_worktree("wt-interrupted", "feat/interrupted");
     let rid = f.init_run(r#"[{"id":"t1","title":"x","touched_files":["a.rs"],"deps":[],"class":"serial","done_criteria":"d"}]"#);
     f.set_task(&rid, "t1", "failed", &wt, "feat/interrupted");
+    f.write_stale_driver("long-gone", &wt);
 
     // Fixture precondition, read from the report the new path consumes: this
     // worktree is POSITIVELY unoccupied — no RUNNING task claims it (from a
@@ -787,6 +818,7 @@ fn resume_command_hands_off_to_state_resume_context() {
     let wt = f.add_worktree("wt-handoff", "feat/handoff");
     let rid = f.init_run(r#"[{"id":"t1","title":"x","touched_files":["a.rs"],"deps":[],"class":"serial","done_criteria":"d"}]"#);
     f.set_task(&rid, "t1", "failed", &wt, "feat/handoff");
+    f.write_stale_driver("long-gone", &wt);
 
     // Establish death before reading the offer: an unclaimed worktree is
     // undetermined on a first probe, and undetermined is not an offer.

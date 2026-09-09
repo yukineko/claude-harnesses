@@ -238,10 +238,30 @@ fn gate_run(hook: Option<HookInput>) -> ! {
 
     let session = input.session_key();
 
-    if let Some(reason) = harness_core::gate::run::consume_session_skip(&cfg.state_dir, &session) {
+    if let Some(reason) = harness_core::gate::run::consume_session_skip(
+        &cfg.state_dir,
+        &session,
+        input.stop_hook_active,
+    ) {
         state::reset(&cfg.state_dir, &session);
         log_event(&cfg, &session, "skip", 0);
         eprintln!("tdd: session-scoped skip consumed — allowing stop ({reason})");
+        std::process::exit(0);
+    }
+
+    // A give-up this session already earned, on a stop that never happened. Four
+    // gates adjudicate one Stop; if tdd gave up and allowed while another gate
+    // blocked, `state::reset` erased the counter and the re-entry starts from 1,
+    // so the concession has to be paid for again — and again, for as long as any
+    // other gate stays red. Checked before the panic-prone `gate::evaluate`,
+    // alongside the skip, per `run_guarded`'s caller contract.
+    if harness_core::gate::run::concession_owed(&cfg.state_dir, &session, input.stop_hook_active) {
+        log_event(&cfg, &session, "giveup-reentry", 0);
+        eprintln!(
+            "tdd: already gave up on this stop (max_attempts exhausted) and another gate \
+             blocked it, so the concession is still owed — allowing stop. There was still \
+             no test when the give-up was recorded."
+        );
         std::process::exit(0);
     }
 
@@ -261,6 +281,8 @@ fn gate_run(hook: Option<HookInput>) -> ! {
 
     if attempt > cfg.max_attempts {
         state::reset(&cfg.state_dir, &session);
+        // Remember the concession — see `concession_owed` above.
+        harness_core::gate::run::concede(&cfg.state_dir, &session);
         log_event(&cfg, &session, "giveup", attempt);
         eprintln!(
             "tdd: still no test after {} attempts — allowing stop. Add one or set TDD_DISABLE=1.",

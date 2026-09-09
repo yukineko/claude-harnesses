@@ -25,6 +25,22 @@ That last one is the point: deletion is the irreversible action here, so
 the same uncertainty the other way and reports it, so an undetermined dir is
 loud rather than silently skipped — see scripts/plugin_cache.py.
 
+Entries in the cache that are NOT version dirs:
+  - a DANGLING symlink (its target PROVABLY does not exist: ENOENT, ENOTDIR,
+    or an ELOOP cycle that resolves to nothing by construction) is removed. It
+    addresses nothing and holds no bytes, so unlinking it cannot lose anything.
+    Measured 2026-09-08: condukt/0.4.2 had pointed at a long-pruned 0.6.0 since
+    2026-07-02, and every prune run before this reported "0 stale dir(s)"
+    while it sat there — the scan skipped every non-dir entry without a word;
+  - a symlink that could not be RESOLVED (EACCES on a path component, an IO
+    error) is REPORTED and left in place. "I was not allowed to look" is not
+    "the target is gone", and the first version of this code conflated them
+    via os.path.exists() — which answers False for both — and unlinked a
+    pointer to a live directory with exit 0. See plugin_cache._link_resolution;
+  - anything else (a plain file, a link to a file, a non-plugin entry at
+    <cache>/<name>) is REPORTED and left in place. Unaccounted state must be
+    loud, but it must not be deleted on a guess.
+
 Exit codes:
   0 — pruned cleanly (or nothing to prune), no undetermined state
   1 — at least one dir could not be removed, or the cache could not be scanned
@@ -70,17 +86,27 @@ def main(argv=None):
                     size += os.path.getsize(os.path.join(dp, f))
                 except OSError:
                     pass
+        # Render BEFORE removing: describe() reads the filesystem (a dangling
+        # link's target comes from readlink), so a description taken afterwards
+        # degrades to "-> ?" and the log stops saying what was actually removed.
+        desc = s.describe()
         if args.dry_run:
-            print(f"[dry-run] would remove {s.describe()}")
+            print(f"[dry-run] would remove {desc}")
             freed += size
             continue
         try:
-            shutil.rmtree(s.path)
+            # A dangling symlink is not a tree: rmtree would raise
+            # NotADirectoryError and the entry would be reported as a failure
+            # forever instead of being cleaned up.
+            if s.kind == "dangling-link":
+                os.unlink(s.path)
+            else:
+                shutil.rmtree(s.path)
         except OSError as exc:
-            failed.append(f"{s.describe()}: {exc}")
+            failed.append(f"{desc}: {exc}")
             continue
         freed += size
-        print(f"pruned {s.describe()}")
+        print(f"pruned {desc}")
 
     verb = "would free" if args.dry_run else "freed"
     print(

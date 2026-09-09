@@ -104,7 +104,7 @@ fn a_skip_issued_by_one_session_is_invisible_to_another() {
     issue_session_skip(&dir, "session-A", "landing a doc-only fix")
         .expect("issuing a well-formed skip must succeed");
 
-    let stolen = consume_session_skip(&dir, "session-B");
+    let stolen = consume_session_skip(&dir, "session-B", false);
     assert!(
         stolen.is_none(),
         "session B consumed a skip that session A issued: B's own gate is now waved through on an \
@@ -112,7 +112,7 @@ fn a_skip_issued_by_one_session_is_invisible_to_another() {
          got: {stolen:?}"
     );
 
-    let mine = consume_session_skip(&dir, "session-A");
+    let mine = consume_session_skip(&dir, "session-A", false);
     assert_eq!(
         mine.as_deref(),
         Some("landing a doc-only fix"),
@@ -133,7 +133,7 @@ fn my_own_skip_is_consumed_and_returns_its_reason() {
     issue_session_skip(&dir, "sess-1", "flaky check, tracked in backlog 1234").unwrap();
 
     assert_eq!(
-        consume_session_skip(&dir, "sess-1").as_deref(),
+        consume_session_skip(&dir, "sess-1", false).as_deref(),
         Some("flaky check, tracked in backlog 1234"),
         "the issuing session must be able to consume its own skip, and get the reason back"
     );
@@ -141,16 +141,24 @@ fn my_own_skip_is_consumed_and_returns_its_reason() {
 
 /// ONE-SHOT: consuming removes it, so the same session's NEXT stop is gated
 /// again. A hatch that persists is not an exception, it is a disabled gate.
+///
+/// Both consumes pass `stop_hook_active: false` — two stops that each START a
+/// chain, which is what "the same session's NEXT stop" means. The claim is
+/// therefore unchanged by the third argument. The *other* axis — a re-entry
+/// after some gate blocked the stop this token authorised, where the token is
+/// still owed because no stop happened — is pinned in
+/// `gate_skip_token_survives_block.rs`, including the control that says it must
+/// still be spent the first time a chain actually ends.
 #[test]
 fn a_skip_is_one_shot_for_its_own_session_too() {
     let dir = state_dir("one-shot");
     issue_session_skip(&dir, "sess-1", "one stop only").unwrap();
 
     assert!(
-        consume_session_skip(&dir, "sess-1").is_some(),
+        consume_session_skip(&dir, "sess-1", false).is_some(),
         "apparatus: the first consume must find the skip, else the emptiness below is vacuous"
     );
-    let second = consume_session_skip(&dir, "sess-1");
+    let second = consume_session_skip(&dir, "sess-1", false);
     assert!(
         second.is_none(),
         "the skip survived its own consumption: the same session's next stop would be waved \
@@ -169,7 +177,7 @@ fn a_skip_is_one_shot_for_its_own_session_too() {
 fn consuming_when_nothing_was_issued_finds_nothing() {
     let dir = state_dir("no-skip");
     assert!(
-        consume_session_skip(&dir, "sess-1").is_none(),
+        consume_session_skip(&dir, "sess-1", false).is_none(),
         "a state dir with no skip in it must yield no skip"
     );
     assert!(
@@ -197,7 +205,7 @@ fn a_skip_with_no_reason_is_refused_and_records_nothing() {
              unexplained bypass is exactly the unattributable exception this design removes"
         );
         assert!(
-            consume_session_skip(&dir, "sess-1").is_none(),
+            consume_session_skip(&dir, "sess-1", false).is_none(),
             "a refused skip must leave nothing consumable — otherwise the refusal is cosmetic and \
              the next stop is still waved through. tree={:?}",
             tree(&dir)
@@ -221,7 +229,7 @@ fn a_skip_with_no_session_id_is_refused() {
         "an unattributable skip must be refused, not filed under a shared placeholder"
     );
     assert!(
-        consume_session_skip(&dir, "").is_none(),
+        consume_session_skip(&dir, "", false).is_none(),
         "and the empty session id must consume nothing"
     );
     assert!(
@@ -261,7 +269,7 @@ fn the_local_fallback_bucket_can_neither_be_issued_nor_consumed() {
     std::fs::create_dir_all(planted.parent().expect("skips dir")).unwrap();
     std::fs::write(&planted, "planted in the shared bucket\n").unwrap();
 
-    let consumed = consume_session_skip(&dir, "_local");
+    let consumed = consume_session_skip(&dir, "_local", false);
     assert!(
         consumed.is_none(),
         "a skip in the shared `_local` bucket was consumed: every session whose payload lacks an \
@@ -274,7 +282,7 @@ fn the_local_fallback_bucket_can_neither_be_issued_nor_consumed() {
     // cannot read anything.
     issue_session_skip(&dir, "sess-real", "a real attributed skip").unwrap();
     assert_eq!(
-        consume_session_skip(&dir, "sess-real").as_deref(),
+        consume_session_skip(&dir, "sess-real", false).as_deref(),
         Some("a real attributed skip"),
         "apparatus: an attributed skip in this very state dir must still work"
     );
@@ -335,7 +343,7 @@ fn consuming_a_skip_is_recorded_in_the_gate_log() {
     let before = log(&dir);
 
     assert!(
-        consume_session_skip(&dir, "sess-rec").is_some(),
+        consume_session_skip(&dir, "sess-rec", false).is_some(),
         "apparatus: the skip must actually have been consumed"
     );
 
@@ -372,11 +380,11 @@ fn a_skip_in_one_gates_state_dir_is_not_visible_in_anothers() {
     issue_session_skip(&a, "sess-1", "only this gate").unwrap();
 
     assert!(
-        consume_session_skip(&b, "sess-1").is_none(),
+        consume_session_skip(&b, "sess-1", false).is_none(),
         "a skip issued for one gate must not apply to a different gate"
     );
     assert!(
-        consume_session_skip(&a, "sess-1").is_some(),
+        consume_session_skip(&a, "sess-1", false).is_some(),
         "apparatus: and it must still be there for the gate it was issued for"
     );
 }

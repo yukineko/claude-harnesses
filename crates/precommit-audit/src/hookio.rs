@@ -74,7 +74,22 @@ pub fn session_id() -> Option<String> {
 /// invocation can never pick up a skip it did not ask for.
 pub fn consume_session_skip(root: &Path, audit_dir: &str) -> Option<String> {
     let session = session_id()?;
-    let reason = harness_core::gate::run::consume_session_skip(&skip_state_dir(), &session)?;
+    // `stop_hook_active: false` — spend the token on first read.
+    //
+    // The shared helper's third state exists because FOUR independent Stop
+    // gates adjudicate one stop, so a token honoured by a gate that allows can
+    // be burned by a stop another gate then blocks. `stop_hook_active` is the
+    // signal that distinguishes a re-entry after a block from a fresh chain,
+    // and Claude Code only sets it on Stop hooks. A pre-commit hook has no
+    // equivalent, so there is nothing honest to pass but `false`, which is
+    // exactly the one-shot behaviour this call site already had.
+    //
+    // The analogous defect DOES exist here — a later pre-commit check can
+    // block the very commit this skip authorised, and the token is gone — but
+    // closing it needs a signal this process does not receive, so it is filed
+    // rather than papered over with a guessed `true` (which would never delete
+    // the marker at all: a permanent bypass, which CLAUDE.md §5 forbids).
+    let reason = harness_core::gate::run::consume_session_skip(&skip_state_dir(), &session, false)?;
     let _ = std::fs::remove_file(block_marker(root, audit_dir));
     Some(reason)
 }

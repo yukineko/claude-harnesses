@@ -201,7 +201,15 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     // questions used to share one answer: "I am refusing to run the checks this
     // project declared" rendered as `checks: 0`, i.e. as "allow every stop".
     if declaration.is_refusal() {
-        refuse(&cfg, &declaration, &root, &session, interactive, __start);
+        refuse(
+            &cfg,
+            &declaration,
+            &root,
+            &session,
+            interactive,
+            __start,
+            input.stop_hook_active,
+        );
     }
 
     if cfg.checks.is_empty() {
@@ -220,10 +228,39 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     }
 
     // one-shot escape hatch
-    if let Some(reason) = harness_core::gate::run::consume_session_skip(&cfg.state_dir, &session) {
+    if let Some(reason) = harness_core::gate::run::consume_session_skip(
+        &cfg.state_dir,
+        &session,
+        input.stop_hook_active,
+    ) {
         state::reset(&cfg.state_dir, &session);
         log_event(&cfg, &session, "skip", &[], 0);
         eprintln!("donegate: session-scoped skip consumed — allowing stop ({reason})");
+        harness_core::hook_latency::record(
+            "donegate",
+            &session,
+            __start.elapsed().as_millis() as u64,
+        );
+        std::process::exit(0);
+    }
+
+    // A give-up this session already earned, on a stop that never happened.
+    //
+    // `max_attempts` is a bounded fail-open: after N consecutive blocks donegate
+    // stops enforcing so a stuck agent is not trapped. If some OTHER gate blocks
+    // the stop that give-up allowed, the concession was spent on nothing — and
+    // the old code had already `state::reset`, so the next re-entry counts from
+    // 1 and blocks again. While another gate stays red the concession can never
+    // be collected. Checked here, alongside the skip, because it is an escape
+    // hatch and must precede the panic-prone `gate::evaluate` (see the caller
+    // contract on `run_guarded` and `tests/gate_escape_ordering.rs`).
+    if harness_core::gate::run::concession_owed(&cfg.state_dir, &session, input.stop_hook_active) {
+        log_event(&cfg, &session, "giveup-reentry", &[], 0);
+        eprintln!(
+            "donegate: already gave up on this stop (max_attempts exhausted) and another \
+             gate blocked it, so the concession is still owed — allowing stop. The checks \
+             were RED when the give-up was recorded and have not been re-run."
+        );
         harness_core::hook_latency::record(
             "donegate",
             &session,
@@ -254,6 +291,9 @@ fn gate_run(hook: Option<HookInput>) -> ! {
 
     if attempt > cfg.max_attempts {
         state::reset(&cfg.state_dir, &session);
+        // Remember the concession so a stop ANOTHER gate blocks cannot silently
+        // spend it — see `concession_owed` at the top of this function.
+        harness_core::gate::run::concede(&cfg.state_dir, &session);
         log_event(&cfg, &session, "giveup", &failing, attempt);
         // DURABLE SENTINEL (backlog 5151605e part 3). The stop is still allowed
         // here — that is deliberate and unchanged, so a genuinely stuck agent is
@@ -460,9 +500,17 @@ fn refuse(
     session: &str,
     interactive: bool,
     start: std::time::Instant,
+    // Threaded in rather than defaulted: both hatches below —
+    // `consume_session_skip` and `concession_owed` — need to know whether this
+    // stop is a re-entry after some gate blocked, and a wrong constant here
+    // would either spend the hatch on a stop that never happened (false) or
+    // keep honouring it forever (true).
+    stop_hook_active: bool,
 ) -> ! {
     // The one-shot escape hatch still applies to a refusal.
-    if let Some(reason) = harness_core::gate::run::consume_session_skip(&cfg.state_dir, session) {
+    if let Some(reason) =
+        harness_core::gate::run::consume_session_skip(&cfg.state_dir, session, stop_hook_active)
+    {
         state::reset(&cfg.state_dir, session);
         log_event(cfg, session, "skip", &[], 0);
         eprintln!("donegate: session-scoped skip consumed — allowing stop ({reason})");
@@ -470,9 +518,24 @@ fn refuse(
         std::process::exit(0);
     }
 
+    // Same concession bookkeeping as the failing-checks path: a give-up spent on
+    // a stop some other gate blocked must survive to the re-entry, or a trust
+    // refusal can never be escaped while any other gate is red.
+    if harness_core::gate::run::concession_owed(&cfg.state_dir, session, stop_hook_active) {
+        log_event(cfg, session, "giveup-refusal-reentry", &[], 0);
+        eprintln!(
+            "donegate: already gave up on this stop (unable to judge, max_attempts exhausted) \
+             and another gate blocked it, so the concession is still owed — allowing stop. \
+             NOTHING WAS VERIFIED."
+        );
+        harness_core::hook_latency::record("donegate", session, start.elapsed().as_millis() as u64);
+        std::process::exit(0);
+    }
+
     let attempt = state::bump(&cfg.state_dir, session, cfg.reset_after_secs);
     if attempt > cfg.max_attempts {
         state::reset(&cfg.state_dir, session);
+        harness_core::gate::run::concede(&cfg.state_dir, session);
         log_event(cfg, session, "giveup-refusal", &[], attempt);
         eprintln!(
             "donegate: still unable to judge after {} attempts — {}. Allowing stop; NOTHING WAS \

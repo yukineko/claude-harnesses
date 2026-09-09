@@ -1,7 +1,31 @@
 # schemaguard 監査 — schema.rs / registry.rs の全 verdict 経路 (read-only)
 
-測定点: このリポジトリの `crates/schemaguard/` は本監査コミット時点で HEAD の状態のまま
-（本監査は `crates/schemaguard/` を1行も変更していない）。行番号はすべて実測（`Read` で確認済み）。
+> **状態: 一部 STALE。読む前にここを読むこと（2026-09-09、測定点 `f17bbba3`）。**
+>
+> - **condukt 側の引用（§4.1 とその参照）は再ピン済みで、逐語引用と一致する。**
+> - **schemaguard 側の引用（§1〜§3、`schema.rs` / `registry.rs` / `schemaguard/src/main.rs`）は
+>   行番号が実体と合っていない。** `crates/schemaguard/src/schema.rs` での実測（doc の値 → 実体）:
+>   `validate()` 84 → 236、`let obj = match value.as_object()` 86 → 252、
+>   `if val.is_none()` 107 → 277、`let type_ok = match &field.ty` 120 → 311、
+>   `if !type_ok` 129 → 328、`Accept any JSON value without a type check.` 19 → 43、
+>   `enum_on_non_string_value_is_a_violation_not_a_silent_pass` 384 → 622。
+>   ずれ幅が +24〜+238 と一定でないので、機械的な一括再ピンはできない。
+> - **より重要: 本監査の中心的な指摘は既に是正されている。** §1 の `continue` 2 本と #11 が
+>   「『合格』と『検査できなかった』が同じ空集合に潰れる」と指摘し「3値化（`Determination<T>` 的な
+>   設計）の候補」と書いた点は、`crates/schemaguard/src/schema.rs:249` の
+>   `pub fn validate_report(value: &serde_json::Value, fields: &[Field], path: &str) -> Report {`
+>   として landed 済み
+>   （`violations` / `undetermined` / `waived` の3値。`validate()` は
+>   「a two-valued consumer must see "could not check" on the restricted side」と docstring に明記した
+>   上で `into_violations()` で restrictive 側へ畳む adapter として残っている）。
+>
+> したがってこの文書に必要なのは**行番号の付け替えではなく再監査**である。番号だけ直すと
+> 「解決済みの設計を現状の欠陥として提示する」ことになり、CLAUDE.md 第4節が禁じる
+> 「次のレビュアーを騙す散文」そのものになる。起票済み。
+
+測定点: このリポジトリの `crates/schemaguard/` は本監査**実施**時点で HEAD の状態のまま
+（本監査は `crates/schemaguard/` を1行も変更していない）。行番号は**実施当時**の実測値であり、
+上の警告のとおり schemaguard 側は現在の HEAD とは一致しない。
 
 対象:
 - `crates/schemaguard/src/schema.rs` の `validate()`（全84〜183行）
@@ -9,7 +33,7 @@
 - `validate()` の戻り値 `Vec<Violation>` を消費する production 経路の**全体**（§4 に全集合を列挙）:
   - `crates/schemaguard/src/main.rs` の `cmd_check`（105〜146行。ゲート自身の CLI verdict 出力点）
   - `crates/condukt/src/main.rs` の `schema_precheck` / `schema_precheck_each` /
-    `render_schema_violations`（4848〜4898行）
+    `render_schema_violations`（5184〜5234行）
 
 目的: CLAUDE.md 第3節（「判定不能は clean ではない。必ず block か ask に解決する」）に照らして、
 各分岐が **restrictive**（violation を積む＝block 相当）・**permissive**（意図的・理由付きで
@@ -40,7 +64,7 @@
 
 - **schema.rs:114（required チェック後の continue）**: `required=false` かつ値が欠落しているケースでは
   violation を1件も積まずに次のフィールドへ進む。これは意図的 permissive（分類 #3）であり、
-  `render_schema_violations`（condukt/src/main.rs:4882-4898）はこの結果、violation リストが空なら
+  `render_schema_violations`（condukt/src/main.rs:5218-5234）はこの結果、violation リストが空なら
   「全フィールドが検査され合格した」というメッセージ性（`Ok(())` を返し何も表示しない）を下流に返す。
   しかし実際には「このフィールドは検査対象にすらならなかった（値が無いから）」というだけであり、
   「値があって、正しい型で、enum を満たし、配列要素も正しかった」から合格したのとは意味が異なる。
@@ -139,8 +163,8 @@ production 経路）:
 | A | `crates/schemaguard/src/schema.rs:175` | 「let mut sub = validate(elem, field.items, &elem_path);」 | `validate()` 自身からの再帰呼び出し（配列要素。§1 分類 #9）。戻り値は次行の append で親の violation リストへ合流する |
 <!-- doc-claim-exempt: historical quote — this audit is a snapshot of the pre-fix tree; `cmd_check` now calls `schema::validate_report` and resolves it through `check_verdict` (schemaguard 0.1.9), which is exactly the change this row's finding asked for -->
 | B | `crates/schemaguard/src/main.rs:121` | 「let violations = schema::validate(&value, &schema.fields, "");」 | **schemaguard 自身の CLI `cmd_check`**。§4.2 |
-| C | `crates/condukt/src/main.rs:5085` | 「let violations = schemaguard::schema::validate(&value, &schema.fields, "");」 | condukt `schema_precheck`。§4.1 |
-| D | `crates/condukt/src/main.rs:5099` | 「let mut sub = schemaguard::schema::validate(v, &schema.fields, &format!("[{i}]"));」 | condukt `schema_precheck_each`。§4.1 |
+| C | `crates/condukt/src/main.rs:5196` | 「let violations = schemaguard::schema::validate(&value, &schema.fields, "");」 | condukt `schema_precheck`。§4.1 |
+| D | `crates/condukt/src/main.rs:5210` | 「let mut sub = schemaguard::schema::validate(v, &schema.fields, &format!("[{i}]"));」 | condukt `schema_precheck_each`。§4.1 |
 
 `schemaguard` を依存に持つ crate は condukt のみである（実測: `grep -rn "schemaguard" crates/*/Cargo.toml`
 → 自クレートの `[package]`/`[lib]`/`[[bin]]` 名を除くと `crates/condukt/Cargo.toml:18`
@@ -154,7 +178,7 @@ production 経路）:
 > 全 verdict 経路を洗い出すことを目的とする監査が、持っていない網羅性（「唯一の」）を主張し、
 > ゲート自身の CLI verdict 経路を未検査のまま残していた。本版で §4.2 として検査・追記する。
 
-### 4.1 condukt 側の消費 — `schema_precheck` 系3関数（4848〜4898行、実測済み）
+### 4.1 condukt 側の消費 — `schema_precheck` 系3関数（5184〜5234行、実測済み）
 
 ```rust
 /// Validate raw LLM JSON against a named schemaguard schema BEFORE deserialize.
@@ -173,7 +197,7 @@ fn schema_precheck(raw: &str, schema_name: &str) -> Result<()> {
     render_schema_violations(schema_name, violations)
 }
 ```
-（condukt/src/main.rs:4848-4862）
+（condukt/src/main.rs:5184-5198）
 
 ```rust
 /// Validate each element of a slice of already-parsed JSON values against a
@@ -192,7 +216,7 @@ fn schema_precheck_each(values: &[serde_json::Value], schema_name: &str) -> Resu
     render_schema_violations(schema_name, violations)
 }
 ```
-（condukt/src/main.rs:4864-4878）
+（condukt/src/main.rs:5200-5214）
 
 ```rust
 /// Shared bail-with-structured-violations rendering for the two precheck
@@ -215,13 +239,13 @@ fn render_schema_violations(
     Ok(())
 }
 ```
-（condukt/src/main.rs:4880-4898）
+（condukt/src/main.rs:5216-5234）
 
 呼び出し箇所（実測、いずれも `?` で `Result` を即座に伝播しており in-process 直接消費）:
 
-- condukt/src/main.rs:3145 `schema_precheck_each(items, "verdict")?;`（consensus verdict 配列入力）
-- condukt/src/main.rs:3149 `schema_precheck_each(items, "verdict")?;`（`{"verdicts": [...]}` ラッパー形状）
-- condukt/src/main.rs:3423 `schema_precheck(&raw, "decomposition")?;`（`run_state` の
+- condukt/src/main.rs:3451 `schema_precheck_each(items, "verdict")?;`（consensus verdict 配列入力）
+- condukt/src/main.rs:3455 `schema_precheck_each(items, "verdict")?;`（`{"verdicts": [...]}` ラッパー形状）
+- condukt/src/main.rs:3729 `schema_precheck(&raw, "decomposition")?;`（`run_state` の
   `StateAction::Init` で decomposition JSON を deserialize する直前）
 
 **事実として記録する消費の形状**:
@@ -335,14 +359,14 @@ fn render_schema_violations(
 `v.path` / `v.problem` を出力へ埋め込む）:
 
 - condukt: `schema_precheck` / `schema_precheck_each` / `render_schema_violations`
-  （condukt/src/main.rs:4848-4898）
+  （condukt/src/main.rs:5184-5234）
 - **schemaguard 自身: `cmd_check`（schemaguard/src/main.rs:105-146）** — 前版はこれを見落としていた
   （§4 冒頭の訂正を参照）
 
 次タスクが `validate()` の戻り値を三値型（例: `Determination<Vec<Violation>>` や、フィールド単位で
 `Checked`/`NotApplicable` を区別する型）へ変更する場合、**この4関数のシグネチャ・消費ロジックを
 壊さない設計を優先すべき** ——具体的には、三値型から既存の `Vec<Violation>` 相当（「検査した上での
-違反リスト」）を取り出す変換経路を用意し、呼び出し側（condukt/src/main.rs:3145/3149/3423 の3箇所と
+違反リスト」）を取り出す変換経路を用意し、呼び出し側（condukt/src/main.rs:3451/3455/3729 の3箇所と
 schemaguard/src/main.rs:121）は無改修で通せることが望ましい。
 
 壊す場合に lockstep で追随が必要な対象は**2系統**ある:

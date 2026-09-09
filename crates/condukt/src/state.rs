@@ -1471,8 +1471,10 @@ pub enum EditGateDecision {
     /// The edit is in-scope, a real (non-fallback) `cargo check` verdict was
     /// obtained, and it reports the crate is broken: reject the edit.
     Reject,
-    /// Allow the edit. Covers not-required, fallback (gate could not be
-    /// trusted or does not apply), a clean build, and any malformed verdict.
+    /// Allow the edit. Covers exactly three READABLE verdicts: not-required,
+    /// fallback (the gate could not be trusted or does not apply), and a clean
+    /// build. A malformed verdict is NOT covered — it is 判定不能 and resolves
+    /// to [`EditGateDecision::Reject`].
     Allow,
 }
 
@@ -1480,32 +1482,49 @@ pub enum EditGateDecision {
 /// JSON produced by `editgate::check_edit` and decides whether a Rust-file edit
 /// should be rejected.
 ///
-/// Rejects ONLY when `required == true && fallback == false && broken == true`
-/// — i.e. the edit is in-scope for the gate, a real (non-fallback) `cargo
-/// check` verdict was obtained, and that verdict says the crate no longer
-/// compiles. Every other case (not required, fallback, or a clean build)
-/// allows the edit.
+/// Allows ONLY on a verdict it could actually read. All three of `required`,
+/// `fallback` and `broken` must be present AND be booleans; only then is the
+/// `required && !fallback && broken` conjunction evaluated, rejecting when the
+/// edit is in-scope for the gate, a real (non-fallback) `cargo check` verdict
+/// was obtained, and that verdict says the crate no longer compiles. The three
+/// readable cases that allow the edit are: not required, fallback, clean build.
 ///
-/// **Every missing/non-bool field resolves to the restricted side**: `fallback`
-/// defaults to `false` ("this verdict is the gate's to decide"), `broken` to
-/// `true`. `required` still defaults to `false`, because a missing `required`
-/// genuinely means the gate was never claimed to be in scope — so a wholly
-/// malformed verdict still Allows, on that ground alone rather than by
-/// defaulting three fields permissively.
+/// **A missing or non-bool field is a producer malfunction, not a signal**, so
+/// it resolves to the restricted side (`Reject`) — including `required`. The
+/// ground is measured, not assumed: `editgate::check_edit` writes `required`,
+/// `broken` and `fallback` on every one of its four return paths
+/// (`crates/condukt/src/editgate.rs:134,147,208,221` — non-Rust file, no live
+/// worktree, a real `cargo check` result, and an unspawnable `cargo`). There is
+/// no path on which it emits a verdict lacking any of them. A verdict that is
+/// missing one therefore did not come from a working producer, and says nothing
+/// about whether the edit compiles.
+///
+/// This function used to default `required` to `false`, on the reading that a
+/// missing `required` "means the gate was never claimed to be in scope". Given
+/// the four emission sites above, that reading was wrong: it turned every
+/// unparseable verdict — `{}`, `null`, `{"required": 1}`, anything a garbled
+/// producer emitted — into "out of scope, allow", because the conjunction
+/// short-circuited on the very first term. That is 判定不能 written as `clean`,
+/// which CLAUDE.md 第3節 forbids: 判定不能 must resolve to `block`. An edit
+/// whose compile status could not be determined is not an edit that compiles.
 #[allow(dead_code)]
 pub fn enforce_edit_gate(verdict: &serde_json::Value) -> EditGateDecision {
-    let required = verdict
-        .get("required")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let fallback = verdict
-        .get("fallback")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let broken = verdict
-        .get("broken")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
+    // `None` means "the key is absent, or present but not a bool" — i.e. it
+    // could not be read. `None` is deliberately NOT collapsed into `false` via
+    // `unwrap_or`: "the producer said false" and "the producer said nothing
+    // readable" are different answers and must not share an encoding.
+    fn read_bool(verdict: &serde_json::Value, key: &str) -> Option<bool> {
+        verdict.get(key).and_then(serde_json::Value::as_bool)
+    }
+
+    let (Some(required), Some(fallback), Some(broken)) = (
+        read_bool(verdict, "required"),
+        read_bool(verdict, "fallback"),
+        read_bool(verdict, "broken"),
+    ) else {
+        // At least one field was unreadable: 判定不能 → restricted side.
+        return EditGateDecision::Reject;
+    };
 
     if required && !fallback && broken {
         EditGateDecision::Reject
@@ -4668,14 +4687,116 @@ mod tests {
         assert_eq!(enforce_edit_gate(&verdict), EditGateDecision::Allow);
     }
 
-    /// A malformed verdict (missing fields) must fail open to Allow, never
-    /// reject and never panic.
+    /// A malformed verdict (missing/non-bool fields) is 判定不能 and must
+    /// resolve to the RESTRICTED side (Reject), never to Allow, and never panic.
+    ///
+    /// This test previously asserted the opposite (`Allow` for both values,
+    /// under the name `enforce_edit_gate_malformed_verdict_never_rejects`),
+    /// pinning the fail-open as the spec: `required` defaulted to `false`, so
+    /// the `required && !fallback && broken` conjunction short-circuited and a
+    /// wholly unparseable verdict was reported as "the gate does not apply".
+    /// `editgate::check_edit` emits `required` on every one of its four return
+    /// paths (`editgate.rs:134,147,208,221`), so a verdict without a bool
+    /// `required` is a PRODUCER MALFUNCTION — a verdict that could not be
+    /// parsed — not a legitimate "gate out of scope" signal. CLAUDE.md 第3節:
+    /// 判定不能 must resolve to `block`, never to `clean`.
     #[test]
-    fn enforce_edit_gate_malformed_verdict_never_rejects() {
+    fn enforce_edit_gate_malformed_verdict_rejects() {
         let verdict = serde_json::json!({});
-        assert_eq!(enforce_edit_gate(&verdict), EditGateDecision::Allow);
+        assert_eq!(
+            enforce_edit_gate(&verdict),
+            EditGateDecision::Reject,
+            "an empty verdict object is 判定不能 and must Reject, got {:?} for {verdict}",
+            enforce_edit_gate(&verdict)
+        );
         let garbage = serde_json::json!({ "broken": "not-a-bool", "required": 1 });
-        assert_eq!(enforce_edit_gate(&garbage), EditGateDecision::Allow);
+        assert_eq!(
+            enforce_edit_gate(&garbage),
+            EditGateDecision::Reject,
+            "a verdict with non-bool `required`/`broken` is 判定不能 and must Reject, \
+             got {:?} for {garbage}",
+            enforce_edit_gate(&garbage)
+        );
+    }
+
+    /// A JSON `null` verdict carries no fields at all: 判定不能, so Reject.
+    /// This is the shape a caller lands on when the producer wrote nothing, or
+    /// when its output failed to parse and was folded into `Value::Null`.
+    #[test]
+    fn enforce_edit_gate_null_verdict_rejects() {
+        let verdict = serde_json::Value::Null;
+        assert_eq!(
+            enforce_edit_gate(&verdict),
+            EditGateDecision::Reject,
+            "a null verdict is 判定不能 and must Reject, got {:?} for {verdict}",
+            enforce_edit_gate(&verdict)
+        );
+    }
+
+    /// An empty verdict object — every field missing, including `required` —
+    /// must Reject rather than short-circuit through the permissive
+    /// `required` default.
+    #[test]
+    fn enforce_edit_gate_empty_object_verdict_rejects() {
+        let verdict = serde_json::json!({});
+        assert_eq!(
+            enforce_edit_gate(&verdict),
+            EditGateDecision::Reject,
+            "an empty verdict object is 判定不能 and must Reject, got {:?} for {verdict}",
+            enforce_edit_gate(&verdict)
+        );
+    }
+
+    /// Fields that are present but not booleans are unparseable, which is
+    /// 判定不能 — not "absent, therefore out of scope". Must Reject.
+    #[test]
+    fn enforce_edit_gate_non_bool_fields_reject() {
+        let verdict = serde_json::json!({ "required": 1, "broken": "not-a-bool" });
+        assert_eq!(
+            enforce_edit_gate(&verdict),
+            EditGateDecision::Reject,
+            "a non-bool `required` cannot be read as \"out of scope\"; it is 判定不能 and \
+             must Reject, got {:?} for {verdict}",
+            enforce_edit_gate(&verdict)
+        );
+    }
+
+    /// The realistic caller path for a producer that emitted garbage: parse its
+    /// output, fold a parse failure into `Value::Null`, and hand that to the
+    /// gate. A checker whose output could not be parsed is not a checker that
+    /// passed, so this must Reject.
+    #[test]
+    fn enforce_edit_gate_unparseable_producer_output_rejects() {
+        let verdict = serde_json::from_str::<serde_json::Value>("not json")
+            .unwrap_or(serde_json::Value::Null);
+        assert_eq!(
+            enforce_edit_gate(&verdict),
+            EditGateDecision::Reject,
+            "a verdict parsed from non-JSON garbage is 判定不能 and must Reject, \
+             got {:?} for {verdict}",
+            enforce_edit_gate(&verdict)
+        );
+    }
+
+    /// ANTI-VACUITY POSITIVE CONTROL. An explicitly out-of-scope verdict — all
+    /// three fields present, `required:false`, and a clean build — must still
+    /// Allow. Together with `enforce_edit_gate_allows_real_clean_verdict` and
+    /// `enforce_edit_gate_allows_on_fallback_even_if_broken`, this makes
+    /// "reject everything" fail as a fix for the malformed-verdict tests above.
+    #[test]
+    fn enforce_edit_gate_allows_explicit_not_required_clean_verdict() {
+        let verdict = serde_json::json!({
+            "required": false,
+            "fallback": false,
+            "broken": false,
+        });
+        assert_eq!(
+            enforce_edit_gate(&verdict),
+            EditGateDecision::Allow,
+            "an explicit `required:false` with a clean build must still Allow, \
+             got {:?} for {verdict}",
+            enforce_edit_gate(&verdict)
+        );
     }
 
     /// The spawn-failure verdict shape (`cargo` unspawnable → cannot determine)

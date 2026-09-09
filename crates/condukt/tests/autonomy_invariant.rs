@@ -514,12 +514,50 @@ fn policy_answer_conflict_beats_approval() {
 ///   (resume x2, issue discovery x2, open_questions x1, manual cancel x1, curate
 ///   promote x2 — a manual "eval golden 化しますか?" confirmation before writing
 ///   a verified run into the curate dataset; out-of-loop, not a self-driving stop).
-/// flow SKILL (10): HDR x1 + PROSE (Step 0.5 documents the policy-answer routing
+/// flow SKILL (13): HDR x1 + PROSE (Step 0.5 documents the policy-answer routing
 ///   contract: the autonomy switch plus the exit 0/2/3 branches that name
 ///   `AskUserQuestion` on escalate/fallback) + DEGRADE (lock gate, 3-failure —
 ///   auto self-answers, escalate/fallback re-Asks) + ESCALATE (pivot: routed to
-///   `escalate` as a genuine strategic-judgment 質疑). flow states the residual-
-///   stops invariant literally (see prose pin below).
+///   `escalate` as a genuine strategic-judgment 質疑) + OBITUARY x1 (see below).
+///   flow states the residual-stops invariant literally (see prose pin below).
+///
+///   The 11th is an OBITUARY, audited 2026-09-07 (backlog 3214f55b). The count
+///   went 10 -> 11 at `5289312f` ("backlog を /flow・/backlog で処理させる促しを
+///   全廃する"), whose diff against this file is a SINGLE added line:
+///
+///       「開いている仕事があれば AskUserQuestion で `/flow` を確認せよ」というディレクティブを
+///
+///   That line QUOTES a directive the same commit ABOLISHED, inside prose whose
+///   next sentence is 「2026-08-20 にユーザーの指示で廃止した」. It adds no prompt
+///   site: the thing it names no longer exists. So the re-audit this test forces
+///   resolves to none of (a) permission approval, (b) worker-blocked stop, or
+///   (c) genuine judgment request — it is (d) a historical citation.
+///
+///   The count is raised rather than the counter taught to skip quotations. A
+///   grep that tries to tell a live prompt from a mention would have to model
+///   prose, and every case it got wrong would go the permissive way: a real new
+///   stop phrased narratively would stop turning this test red, and the freeze
+///   would rot silently. Counting every occurrence keeps the detector dumb and
+///   total; the cost is exactly this — an occasional human audit that concludes
+///   "not a prompt", recorded here so the next reader does not redo it.
+///
+///   The 12th and 13th arrived with the spec-gap divert gate (Step 3-1.5,
+///   specs/spec-loop.toml R4), audited 2026-09-07. Both are PROHIBITIONS naming
+///   the tool in order to forbid it — the gate's heading ("素の
+///   `AskUserQuestion` は使わない") and the sentence that bans emitting one
+///   outside the `condukt policy answer` shim. Neither is a call site: the gate
+///   reaches a human only through Step 0.5's `escalate` branch, whose own
+///   occurrences were already counted above.
+///
+///   The gate itself IS a new residual stop, and that is deliberate rather than
+///   an oversight this allowlist is papering over. It is category (c), a genuine
+///   judgment request: "may this task be implemented with no canon governing
+///   it?" is a design decision, and R4's acceptance fixes its profile at
+///   risk medium / reversible high / confidence low — the same profile as
+///   `pivot`, which is escalate. Giving it `--approval` would clamp it to auto
+///   and delete exactly the judgment it exists to ask for. flow's own
+///   residual-stops prose was widened in the same commit to name it (d), so the
+///   skill does not describe a set of stops smaller than the one it implements.
 /// scout SKILL (8): HDR x1 + PROSE x1 (invariant) + heading x1 + DEGRADE (Phase 4
 ///   selection routed through `condukt policy answer`: auto adopts top-N,
 ///   escalate/fallback re-emits the multiSelect prompt; plus auto-handoff and
@@ -539,7 +577,7 @@ fn policy_answer_conflict_beats_approval() {
 const ASK_ALLOWLIST: &[(&str, usize)] = &[
     ("compass/skills/compass/SKILL.md", 3),
     ("condukt/skills/condukt/SKILL.md", 23),
-    ("flow/skills/flow/SKILL.md", 10),
+    ("flow/skills/flow/SKILL.md", 13),
     ("hypothesis/skills/add/SKILL.md", 1),
     ("overwatch/skills/overwatch/SKILL.md", 7),
     ("scout/skills/scout/SKILL.md", 8),

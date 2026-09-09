@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので expect を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::expect_used)]
 //! The location axis: a destructive command whose targets provably land inside
 //! this session's own tree (or a temp dir) is a QUESTION; the same command
 //! aimed anywhere else — or aimed at something blastguard cannot resolve —
@@ -34,7 +37,12 @@ const PROJECT: &str = "/home/yuki/proj";
 const HOME: &str = "/home/yuki";
 
 /// Models a filesystem with no symlinks: every path is already its own real
-/// path. Injected so these tests never touch the disk.
+/// path. Injected so the LOCATION axis these tests own is decided by the
+/// fixture rather than by whatever happens to be on this machine.
+///
+/// One case in `relaxed_truncating_forms_inside_the_project` does touch the
+/// disk, and says why at the call site: recoverability (added 0.2.59) is an
+/// observation about real bytes, and no injected resolver can stand in for it.
 fn identity(p: &str) -> Option<String> {
     Some(p.to_string())
 }
@@ -211,13 +219,47 @@ fn relaxed_find_exec_rm_confined_to_the_project() {
 
 #[test]
 fn relaxed_truncating_forms_inside_the_project() {
-    for cmd in [
-        "truncate -s 0 target/log.txt",
-        "echo hi > target/log.txt",
-        "cargo test > /tmp/test.log",
-        "shred target/secret.bin",
-    ] {
+    for cmd in ["truncate -s 0 target/log.txt", "shred target/secret.bin"] {
         assert_confined_ask(cmd, scoped(cmd));
+    }
+
+    // TRUNCATING REDIRECTS MOVED ONE AXIS OVER (operator ruling, 2026-09-09):
+    // recoverability is asked BEFORE location, because location is the weaker
+    // answer of the two. A confined file with an hour of uncommitted work in it
+    // is still unrecoverable; a tracked, clean file outside the tree is
+    // recoverable and nobody's business. So this test now pins both sides
+    // instead of one.
+    //
+    // Side 1 — the bytes exist and nothing else holds a copy: the confined Ask
+    // is exactly what it was. A REAL file is needed here (`/tmp` is one of the
+    // safe roots, and is in no git work tree), which is why this one case
+    // departs from the injected-filesystem convention the rest of the file
+    // keeps: recoverability is an observation about the disk, and there is no
+    // honest way to assert it without one.
+    let existing = std::env::temp_dir().join("blastguard-scoped-redirect-probe.txt");
+    std::fs::write(&existing, b"bytes that exist only here")
+        .expect("write the probe file the recoverability check needs");
+    let cmd = format!("cargo test > {}", existing.display());
+    assert_confined_ask(&cmd, scoped(&cmd));
+
+    // Side 2 — the target does not exist, so the redirect destroys nothing.
+    // 「よみかきに一々許可をもとめるのは健全でもなんでもない。無駄」: a write that
+    // costs nothing is not a question. This was an Ask before the ruling, and
+    // it is the single largest class of friction the ruling retired — 49 of the
+    // 226 non-allow verdicts measured over 2045 real commands were truncating
+    // redirects, and none of them destroyed anything.
+    let absent = std::env::temp_dir().join("blastguard-scoped-redirect-absent.txt");
+    let _ = std::fs::remove_file(&absent);
+    for cmd in [
+        "echo hi > target/log.txt".to_string(),
+        format!("cargo test > {}", absent.display()),
+    ] {
+        assert_eq!(
+            scoped(&cmd),
+            Decision::Allow,
+            "`{cmd}` truncates a file that is not there — there are no prior \
+             bytes to lose, so there is nothing to ask about"
+        );
     }
 }
 

@@ -52,7 +52,7 @@ mod tests {
     use super::GATE_CRATES;
 
     #[test]
-    fn gate_crates_is_the_known_six() {
+    fn gate_crates_is_the_known_seven() {
         assert_eq!(
             GATE_CRATES,
             &[
@@ -61,7 +61,8 @@ mod tests {
                 "specguard",
                 "stuckguard",
                 "mutategate",
-                "overwatch"
+                "overwatch",
+                "parallelguard"
             ]
         );
     }

@@ -235,7 +235,11 @@ fn check_run(hook: Option<HookInput>) -> ! {
     let session = input.session_key();
 
     // one-shot escape hatch
-    if let Some(reason) = harness_core::gate::run::consume_session_skip(&cfg.state_dir, &session) {
+    if let Some(reason) = harness_core::gate::run::consume_session_skip(
+        &cfg.state_dir,
+        &session,
+        input.stop_hook_active,
+    ) {
         state::reset(&cfg.state_dir, &session);
         log_event(&cfg, &session, "skip", &[], &[], 0);
         eprintln!("propguard: session-scoped skip consumed — allowing stop ({reason})");

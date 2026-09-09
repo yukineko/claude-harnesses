@@ -1,0 +1,45 @@
+# specforge — the SOURCE side of the spec loop (gather / draft / prompt / ratify).
+#
+# Why this file exists. `/flow`'s fourth source (Step 3-1.5, specs/spec-loop.toml
+# R4-flow-spec-gap-source) sends a task with no governing canon BACK to
+# specforge instead of pushing it blindly into condukt. specforge refuses to run
+# without a config — measured 2026-09-07:
+#
+#     specforge draft --id r4demo --req req.md
+#     specforge: error: reading config specforge.toml: No such file or directory (os error 2)
+#     exit 2
+#
+# That refusal is correct (it does not invent a project it was never told
+# about), but it meant the divert edge R4 describes terminated in an error the
+# moment it was taken. This file is the divert target's config.
+#
+# Everything not set here keeps its built-in default, and the defaults already
+# match this repo: `[output].spec_dir` is "specs", which is where
+# specs/spec-loop.toml already lives, and `[agent]` is the enforced read-only
+# allowlist (the normalize agent reads the requirement and canon and emits a
+# draft on stdout; the harness — not the agent — writes files).
+
+[project]
+name = "claude-harnesses"
+root = "."
+
+[sources]
+# Repo docs that specforge's gather step treats as canon material. The built-in
+# default is `["docs/**/*.md"]` alone; this widens it to the other two places
+# this repo actually keeps canon — the ratified specs themselves, and CLAUDE.md.
+#
+# The widening is measured, not assumed (2026-09-07, worktree session-05717fa8,
+# `specforge gather --topic "spec-gap divert"`, 24 fragments):
+#
+#     10  docs/DESIGN-spec-loop.md
+#      6  docs/AGENTIC-CODING-GUIDE.md
+#      4  specs/spec-loop.toml          <-- only reachable via the toml glob
+#      2  docs/DESIGN-continuous-audit-triage.md
+#      1  docs/specs/spec-map-backfill-notes.md
+#      1  docs/GLOSSARY.md
+#
+# So `specs/**/*.toml` earns its place. `CLAUDE.md` contributed 0 fragments for
+# that particular topic — that is topic scoring doing its job, not a dead glob,
+# and it is recorded here rather than quietly dropped so the next reader knows
+# it was checked and not merely hoped for.
+canon = ["docs/**/*.md", "specs/**/*.toml", "CLAUDE.md"]

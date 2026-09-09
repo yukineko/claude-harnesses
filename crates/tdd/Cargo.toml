@@ -1,6 +1,6 @@
 [package]
 name = "tdd"
-version = "0.1.26"
+version = "0.1.28"
 edition = "2021"
 rust-version.workspace = true
 description = "Test-first gate for Claude Code. On Stop it blocks when implementation lines were added and no test is visible in the uncommitted changes (it reads the working tree only, never already-committed tests); and the `red`/`green`/`verify` subcommands make test-first (RED before GREEN) a verifiable artifact for the /tdd skill. Subscription-native (one hook + bundled Rust binary, no API key)."

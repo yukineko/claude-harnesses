@@ -146,10 +146,10 @@ title = "blastguard の上書きリダイレクト deny が、存在しないフ
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = []
-status = "pending"
-notes = ""
+status = "cancelled"
+notes = "348ae92b と同一 (blastguard の上書きリダイレクト deny が存在しないファイルにも既存ファイル上書きと主張する件)。本チケットは notes が空。348ae92b には 2026-09-10 に実測した 4 例 (v>1] / 6: / 2>&1 / 存在しないファイルへの truncate) が入っている。さらに 19c359d0 が、同じ 2> の解析経路が逆方向にも壊れている (cargo test 2> /etc/fstab が Deny されない) ことを示している。"
 created_at = 1786024035
-updated_at = 1786024035
+updated_at = 1788982607
 weight = 0.0
 issue_number = 195
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/195"
@@ -10242,10 +10242,12 @@ tags = [
     "condukt",
     "p2",
 ]
-status = "pending"
-notes = "2026-08-11、8b871bb1 の implementer が full-suite 1 回目で crates/condukt/src/oracle.rs:248 の失敗を観測したが、assertion の payload を捕まえる前に再現しなくなった (以後 9 連続 pass)。独立 verifier は 40 回の単独実行と 10 回の full-suite で再現せず、root cause は UNVERIFIED (benign とは判定していない)。verifier が調べた「bare task id t1 と共有 ~/.tdd/state を他テストと共有している」という仮説は経路を追って REFUTED: proof_dir は root 相対の .tdd、~/.tdd/config.toml は存在せず、~/.tdd/state/log.jsonl に t1 のヒットは 0 件、root は毎回 TempDir。requires_oracle=true では valid_fp_oracle の assert しか落ちようがなく、それには temp dir が持ちえない proof file が必要。したがって別の原因が残っている。次にやること: 落ちたときの out payload を必ず出力する形に assert を変え、再発を待って事実を取る。"
+status = "cancelled"
+notes = """
+2026-08-11、8b871bb1 の implementer が full-suite 1 回目で crates/condukt/src/oracle.rs:248 の失敗を観測したが、assertion の payload を捕まえる前に再現しなくなった (以後 9 連続 pass)。独立 verifier は 40 回の単独実行と 10 回の full-suite で再現せず、root cause は UNVERIFIED (benign とは判定していない)。verifier が調べた「bare task id t1 と共有 ~/.tdd/state を他テストと共有している」という仮説は経路を追って REFUTED: proof_dir は root 相対の .tdd、~/.tdd/config.toml は存在せず、~/.tdd/state/log.jsonl に t1 のヒットは 0 件、root は毎回 TempDir。requires_oracle=true では valid_fp_oracle の assert しか落ちようがなく、それには temp dir が持ちえない proof file が必要。したがって別の原因が残っている。次にやること: 落ちたときの out payload を必ず出力する形に assert を変え、再発を待って事実を取る。
+c63f1c23 へ統合。同一クラス (full-suite 並列時のみ落ちる) の 3 件をまとめた。本チケットの実測 (REFUTED になった共有 ~/.tdd/state 仮説を含む) は c63f1c23 の notes に原文転記済み。done ではなく fail にしているのは、作業が完了したのではなく統合先へ移したため。"""
 created_at = 1786451504
-updated_at = 1786451504
+updated_at = 1788982606
 weight = 0.0
 issue_number = 244
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/244"
@@ -15792,10 +15794,12 @@ title = "oracle::tests::no_reproduction_tests_falls_back_even_when_required が�
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p2"]
-status = "pending"
-notes = "cargo test -p condukt (760 unit tests 並列) で 4 回中 1 回 FAILED、単体指定では 4/4 通る。観測日 2026-08-21、観測点 5bb3579f。check_oracle(true, None, t1, tmp) は tdd バイナリを spawn するので、フルスイート時の負荷で spawn の結果が変わる経路が疑わしいが未検証。間欠 fail は「環境のせい」で通してはいけない類 — 落ちたときに required/valid_fp_oracle/reason の実値を残すよう assert メッセージを厚くするか、tdd の spawn 結果を注入可能にして決定論化する。放置すると F->P オラクルのゲート自体が「たまに落ちるので無視するもの」になる。"
+status = "cancelled"
+notes = """
+cargo test -p condukt (760 unit tests 並列) で 4 回中 1 回 FAILED、単体指定では 4/4 通る。観測日 2026-08-21、観測点 5bb3579f。check_oracle(true, None, t1, tmp) は tdd バイナリを spawn するので、フルスイート時の負荷で spawn の結果が変わる経路が疑わしいが未検証。間欠 fail は「環境のせい」で通してはいけない類 — 落ちたときに required/valid_fp_oracle/reason の実値を残すよう assert メッセージを厚くするか、tdd の spawn 結果を注入可能にして決定論化する。放置すると F->P オラクルのゲート自体が「たまに落ちるので無視するもの」になる。
+c63f1c23 へ統合。47eedff9 と同一テストの同一 flake を 12 日あけて二重起票したもの。本チケットの機構仮説 (check_oracle が tdd バイナリを spawn する) は c63f1c23 に原文転記済み。"""
 created_at = 1787531944
-updated_at = 1787531944
+updated_at = 1788982607
 weight = 0.0
 issue_number = 391
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/391"
@@ -17101,10 +17105,10 @@ title = "core.hooksPath が main ツリーの絶対パス固定のため、workt
 project = "/home/hiroyuki_nakayama/src/claude-harnesses"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
-notes = ""
+status = "cancelled"
+notes = "666b6704 と同一 (core.hooksPath が main ツリーの絶対パス固定のため worktree のゲートが dark になる件)。title 類似度 0.63、共有トークン core.hooksPath / dark。本チケットは notes が空で、666b6704 側に記述がある。失われる情報は無い。"
 created_at = 1788757792
-updated_at = 1788757792
+updated_at = 1788982607
 weight = 0.0
 
 [[task]]
@@ -19248,3 +19252,137 @@ updated_at = 1788982244
 weight = 0.0
 issue_number = 475
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/475"
+
+[[task]]
+id = "c63f1c23"
+title = "condukt の unit test が full-suite 並列時のみ落ちる flake クラス (プロセス外の共有状態が原因)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flaky-test",
+    "p1",
+]
+status = "pending"
+notes = """
+47eedff9 / f232c901 / 572c8640 の統合。3 件は別々に起票されていたが、同一クラスである。
+いずれも「単独実行では通り、full-suite 並列でのみ落ちる」= テストがプロセス外の共有状態に依存している。
+
+■ 統合前の 3 件の実測（原文を失わないためここに転記）
+
+(1) 47eedff9 — oracle::tests::no_reproduction_tests_falls_back_even_when_required
+    2026-08-11、8b871bb1 の implementer が full-suite 1 回目で crates/condukt/src/oracle.rs:248 の
+    失敗を観測したが、assertion payload を捕まえる前に再現しなくなった (以後 9 連続 pass)。
+    独立 verifier は単独 40 回・full-suite 10 回で再現せず、root cause は UNVERIFIED
+    (benign とは判定していない)。
+    重要な負の結果: 「bare task id t1 と共有 ~/.tdd/state を他テストと共有している」という仮説は
+    経路追跡で REFUTED。proof_dir は root 相対の .tdd、~/.tdd/config.toml は存在せず、
+    ~/.tdd/state/log.jsonl に t1 のヒットは 0 件、root は毎回 TempDir。
+    requires_oracle=true では valid_fp_oracle の assert しか落ちようがなく、
+    それには temp dir が持ちえない proof file が要る。別の原因が残っている。
+
+(2) f232c901 — 同じテスト。2026-08-21、観測点 5bb3579f。
+    cargo test -p condukt (760 unit tests 並列) で 4 回中 1 回 FAILED、単体指定では 4/4 通る。
+    機構仮説 (未検証): check_oracle(true, None, t1, tmp) は tdd バイナリを spawn するので、
+    full-suite 時の負荷で spawn の結果が変わる経路が疑わしい。
+
+(3) 572c8640 — diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded
+    2026-09-10、測定点 59563fde。同一条件 3 回中 1 回だけ赤。
+    run1 全ターゲット 768 passed / 1 FAILED、run2 bin のみ 769/0、run3 全ターゲット全 green、
+    単独実行 1 passed。
+    機構 (最も具体的): crates/condukt/src/diffrisk_record.rs:500 の当該テストは cwd と wt を
+    tempfile::tempdir() で作るが、台帳パスだけは Config::load() と state::project_state_dir()
+    から導いている (同 504-507 行)。つまり台帳は tempdir の外、実際の共有 state ルート配下に落ちる。
+
+■ このクラスに共通する構造
+
+テスト本体は TempDir で隔離しているつもりでも、(a) 外部バイナリの spawn か
+(b) Config::load() 経由の実 state ルート参照で、隔離の外へ漏れている。
+別プロセスとして並行実行される cargo のターゲット間では、この漏れが相互干渉になる。
+
+■ なぜ放置してはいけないか
+
+f232c901 の指摘どおり、間欠 fail を放置すると F to P オラクルのゲート自体が
+「たまに落ちるので無視するもの」になる。CLAUDE.md 4 が禁じる隠蔽への構造的圧力である。
+
+■ 完了条件
+
+(1) 3 件それぞれについて、台帳・proof・spawn 先が TempDir の外へ出ていないことを
+    型または fixture で保証する。
+(2) 修正の検証は単発実行ではなく反復実行で行う (再現率が 1/3 から 1/10 なので、最低 20 回)。
+(3) 落ちたときに実値 (required / valid_fp_oracle / reason / entry JSON) を残す assertion にする。
+    現状は payload が取れず root cause が UNVERIFIED のまま残っている。
+
+■ 判定不能な点
+
+(1) の root cause は今も未同定。共有 ~/.tdd/state 説は REFUTED 済みなので、そこへは戻らないこと。"""
+created_at = 1788982587
+updated_at = 1788982587
+weight = 0.0
+issue_number = 476
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/476"
+
+[[task]]
+id = "4d596f6b"
+title = "同一リポジトリが 4 マシン分の project キーに分裂し、pending 454 件中 145 件がこの Mac のキューから見えない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+status = "pending"
+notes = """
+実測 2026-09-10、測定点 e9703c26。.backlog/tasks.toml は repo 内にあり git で全マシンに共有されるが、
+各マシンは自分の絶対パスで絞るため、互いの起票が見えない。
+
+  pending 総数 454
+    /Users/yuki/src/harness                        309  (この Mac から見える)
+    /mnt/c/Users/hiroyuki_nakayama/src/harness      97  (見えない)
+    /home/hiroyuki_nakayama/src/claude-harnesses    43  (見えない)
+    C:/Users/hiroyuki_nakayama/src/harness           5  (見えない)
+
+4 キーとも同一リポジトリであることは title をサンプルして確認した (specguard / condukt / flow /
+CLAUDE.md 第8節 / rollout を参照している)。ディレクトリ名が claude-harnesses と harness で
+割れているのは checkout 名の違いにすぎない。
+
+■ 予測が測定に否定された点 (重要)
+
+「同じ課題が複数マシンで二重起票されているはず」と予測して全走査したが、
+同一タイトルが複数 project キーに存在する件数は 0 だった。したがって実害は
+重複起票ではなく可視性の分断だけである。この区別を失うと、対策が
+「重複マージ」という誤った方向へ向かう。
+
+■ なぜ project フィールドの単純な書き換えで直せないか
+
+crates/backlog/src/task.rs:184 の hashkey(title, project) が、docstring の言葉どおり
+the raw project path を title と結合して task の cross-session 同一性を作っている
+(意図は別 project の同名タスクの衝突回避)。project を書き換えると全 hashkey が変わり、
+claim ledger (claim_ledger.rs) と overwatch anchor の参照が切れる。
+さらに片方のマシンのパスへ寄せると、他方のマシンから全件が見えなくなるだけで、
+分断の向きが変わるにすぎない。
+
+■ 筋の良い方向 (未検証の設計案。着手前に裁定が要る)
+
+論理 project ID (例: git remote URL、または repo root の正規化名) を導入し、
+hashkey と既定フィルタの両方をそれで引く。既存 hashkey の移行が要るので、
+claim ledger と overwatch の既存エントリをどう扱うかが設計の本体である。
+
+■ 判定不能な点 / 両方の読み
+
+(a) 実在の欠陥: 同一リポジトリを 1 つのキューとして扱えていない。
+(b) 意図的な仕様: project はあくまでマシン上の作業ディレクトリを指し、
+    別マシンの作業は別 project として扱う設計かもしれない。
+見分け方: crates/backlog/src/config.rs:84 の locate が repo_root を返す設計から、
+store は repo 単位を意図していると読めるが、project フィールドだけが cwd 絶対パスの
+ままである。この不整合が意図的かは docstring からは判定できないので人間の裁定が要る。
+
+■ 関連
+
+03450b7c (worktree パスが project キーになる — 同根の別症状)
+29a4bcc3 (next と list で既定スコープが違う)
+0dafa254 (STATUSES が cancelled / claimed を含まず正しい status が unknown 警告になる)"""
+created_at = 1788982719
+updated_at = 1788982719
+weight = 0.0
+issue_number = 477
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/477"

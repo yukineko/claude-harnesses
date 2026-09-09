@@ -9862,7 +9862,7 @@ title = "セッション異常終了への対応: (a) 中断作業を次セッ�
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
-status = "pending"
+status = "claimed"
 notes = """
 部分完了 (2026-08-12, condukt 0.7.129, merge 6fc4fdee)。(b) GC 側だけが着地した: condukt worktree reconcile が git worktree list と全 run-state namespace と作業ツリーの三者照合を行い live/dead/undetermined を返す。is_removable はワイルドカード無しの網羅 match で、あらゆる Undetermined と Role::Primary は keep に解決する。dirty な worktree は refs/preserved へ退避されるまで削除に到達しない。統合前に kill rate を独立再測定した: Role::Primary の arm 削除は E0004 コンパイルエラー、Undetermined 3 arm と preserved arm と primary_witnesses の退行はすべて KILLED、対照 (is_removable 常に false) は 2 件を殺した。(a) resume 側は未着手である。--json が resume の surface として存在するが消費者が 1 つも無い (0cf3775c で追跡)。したがって本 item は done ではない。残っているのは (a) のみ。
 
@@ -9885,7 +9885,7 @@ death criterion ruling 待ちで、それが決まるまで実装できない。
 終わったように見える。
 """
 created_at = 1786403442
-updated_at = 1787273410
+updated_at = 1788907481
 weight = 0.0
 issue_number = 237
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/237"
@@ -12157,7 +12157,7 @@ budgetguard と ctxrot は transcript を読むがトークン数とコストの
 recent_turns で指示を参照する。判定不能時は従来どおり block を維持する（空集合へ潰さない）。
 親 826c29bf"""
 created_at = 1788791667
-updated_at = 1788791667
+updated_at = 1788908491
 weight = 0.0
 issue_number = 422
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/422"
@@ -12558,7 +12558,7 @@ title = "check-prompt-injection.py は走査集合が空だと clean で exit 0 
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
-status = "pending"
+status = "done"
 notes = """
 フォールト注入で観測（2026-09-07、測定点 00bf96df）。
 
@@ -12590,7 +12590,7 @@ injectguard だけが例外。
 RED 先行（_tracked_files を空にして落ちることを観測）+ anti-vacuity 対照（正常系は依然 exit 0）。
 親 826c29bf"""
 created_at = 1788792835
-updated_at = 1788792835
+updated_at = 1788907594
 weight = 0.0
 issue_number = 434
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/434"
@@ -13132,7 +13132,7 @@ title = "fe84d350 の RED テスト (commit 375587a2 / branch t2-occupancy-undet
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
-status = "pending"
+status = "done"
 notes = """
 実測 2026-08-17、測定点 f1131a36 (local == origin/main、ahead/behind = 0/0)、WSL2 linux-x86_64、worktree session-52834a1f。
 
@@ -13222,7 +13222,7 @@ control (dead_clean_worktree_is_removable) とその削除理由も記録され�
 同じ `git cat-file -t 375587a2` を打つこと。
 """
 created_at = 1786943936
-updated_at = 1786950547
+updated_at = 1788907595
 weight = 0.0
 
 [[task]]
@@ -16340,3 +16340,127 @@ updated_at = 1788906753
 weight = 0.0
 issue_number = 464
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/464"
+
+[[task]]
+id = "122a34d1"
+title = "condukt run branch が origin へ push されず machine-local に留まる — 1b19e6d2 の『消失』の真因"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "実測 2026-09-09、この mac 上。1b19e6d2 は『375587a2 は共有 odb から失われた』と結論していたが、それは WSL2 側からの観測であり、**この mac には commit も branch も無傷で存在していた**。git cat-file -t 375587a2 は commit を返し、full sha は 375587a24ba4f8868e1c01d7d70d65ed81f6fb87。branch condukt/run-20260814-005232-58819/run-20260814-005232-58819/t2-occupancy-undetermined が ~/.condukt/worktrees/run-20260814-005232-58819-t2-occupancy-undetermined に checkout されたまま生きており、3 本の RED テスト (unclaimed_clean_worktree_with_no_witness_is_not_removable / unclaimed_worktree_occupancy_is_undetermined_not_dead / unclaimed_worktree_with_advancing_activity_is_live) は crates/condukt/tests/worktree_reconcile.rs に +231 行として全て含まれている。git ls-remote --heads origin は空を返した = **一度も push されていなかった**。したがって GC が食べたのではなく、他機からは最初から見えなかっただけである (1b19e6d2 の 2 つの読みのうち (b) 側が正しく、しかし『ID の誤記』ではなく『machine-local』が正解)。2026-09-09 に origin へ push して保全済み。構造的な欠陥はここ: condukt の run branch は worker が commit した時点では **local にしか存在せず、merge されなければ永久に push されない**。並行する別マシン/別 clone からは、その成果は存在しないのと区別できない。しかも 1b19e6d2 が示すとおり、その不在は『GC が消した』と誤読され、実在しない欠陥の調査に工数が費やされた。修正案: worker の commit 後 (merge 前) に run branch を origin へ push する、または refs/preserved を push 対象に含める。判定不能を残さないという観点では、少なくとも『この branch は未 push である』ことが resume/reconcile の出力に現れるべき。"
+created_at = 1788907618
+updated_at = 1788907618
+weight = 0.0
+issue_number = 465
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/465"
+
+[[task]]
+id = "a3ee51c9"
+title = "fe84d350 と e99f61e4(b) は unblock 済み — 前提だった『RED テストは失われた』が誤りだった"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "fe84d350 の notes と done criteria 4、および e99f61e4 の notes は『375587a2 の RED 3 本が失われたので実行不能、書き直しが必要』という前提で書かれている。**この前提は 2026-09-09 にこの mac 上で反証された** (122a34d1 に逐語の観測)。commit も branch も 3 本の RED テストも無傷で存在し、origin へ push して保全済み。したがって: (1) fe84d350 の done criteria 4『RED を書くところからやり直す必要がある』は不要 — git checkout で回収できる。(2) 『再構成した RED は新規に RED を観測し直すものとして扱うこと』という注意も不要になる — 元の RED 観測の証跡そのものが commit として現存するため。(3) e99f61e4(b) が待っていた 2026-08-14 の death criterion 裁定は既に降りており、実装を止めていたのは失われた RED だけだったので、**両方とも着手可能**。回収方法: git checkout condukt/run-20260814-005232-58819/run-20260814-005232-58819/t2-occupancy-undetermined -- crates/condukt/tests/worktree_reconcile.rs、または当該 branch を base に作業する。注意: この ticket は fe84d350 / e99f61e4 の notes を書き換えていない (backlog edit --notes は追記ではなく置換で、長い notes を shell 引数経由で往復させると backtick が食われて破壊されるため)。着手する者は必ず本 ticket と 122a34d1 を先に読むこと。"
+created_at = 1788907656
+updated_at = 1788907656
+weight = 0.0
+issue_number = 466
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/466"
+
+[[task]]
+id = "2634e16c"
+title = "e99f61e4(b) は既に実装・merge 済み — 4 チケットの notes が「未着手」のまま腐っている"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "stale-ticket",
+    "p1",
+]
+status = "pending"
+notes = """
+実測 2026-09-09、worktree session-25763e04、測定点 fc92b25e。e99f61e4(b) (死んだセッション worktree の fail-closed GC) を実装するよう指示されたが、実装は既に存在し origin/main の祖先である。commit 5bb3579f421b348786b378b48229e42ceb8b25ba (2026-08-24)、git merge-base --is-ancestor 5bb3579f origin/main が 0 を返す。wt_reconcile.rs:1148 に fn unclaimed_occupancy が存在し、2026-08-14 の裁定どおり 3 点連言 (停滞 かつ 窓経過 かつ transcript 不在) で Dead を立証する。transcript witness が判定不能なら Undetermined = 保持。
+
+観測 (判断ではない): 122a34d1 が復旧した 375587a2 の RED テスト 3 本 (unclaimed_clean_worktree_with_no_witness_is_not_removable / unclaimed_worktree_occupancy_is_undetermined_not_dead / unclaimed_worktree_with_advancing_activity_is_live) を現ツリーへ持ち込んだところ、実装を 1 行も変えずに 3 本とも GREEN だった (23 passed / 0 failed)。空虚ではないことも確認済み: 5bb3579f^ の fail-open (index.complete なら Known(Occupancy::Dead)) を注入すると 3 本とも KILLED (実装自身のテスト 4 本も合わせて 7 FAILED)。
+
+腐っている記述: (1) e99f61e4 notes 末尾「(b) 死んだセッション残骸の fail-closed GC: 未完了」、(2) a3ee51c9 notes「両方とも着手可能」、(3) 27c731a1 notes「実装は 1 行も書いていない」および「直す 1 箇所」の逐語コードは既に置換済み、(4) 2d3cbda2 (GC が無い) も reconcile/cleanup の現状を反映していない。
+
+完了条件: 4 件の notes を現状に合わせるか close する。特に e99f61e4 は (a)(b) とも landed なので done 候補。ただし 2d3cbda2 が言う「sweeper が存在しない」(project の全 open run を走査して自動回収する driver) は reconcile が判定を出すだけで自動実行の導線が無い点で今も真かもしれない — これは未検証。"""
+created_at = 1788959331
+updated_at = 1788959331
+weight = 0.0
+issue_number = 467
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/467"
+
+[[task]]
+id = "c5f21147"
+title = "blastguard: heredoc 本文中の比較演算子 > を shell リダイレクトと誤判定して block する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+status = "pending"
+notes = """
+実測 2026-09-09、worktree session-25763e04。python3 のヒアドキュメントを bash に食わせたところ、本文中の比較演算子が redirect として解析され block された。逐語の block メッセージ 2 件:
+
+  1) 実際にリダイレクトを含む正当なケース (scratchpad への新規書き出し):
+     "> /private/tmp/claude-502/.../scratchpad/recovered.rs" truncates and overwrites an existing file
+     (当該ファイルは存在しなかった。存在しないファイルへの > を「既存を上書きする」と述べている)
+
+  2) リダイレクトが一切無いケース (誤検知):
+     "> 0" truncates and overwrites an existing file
+     原因は heredoc 本文の python コード中の "while s>0 and (...)" という比較。
+     bash はヒアドキュメント本文をコマンドとして解析しないので、これは shell 意味論として存在しない
+     リダイレクトである。0 という名前のファイルを truncate する経路は無い。
+
+帰結: heredoc でスクリプトを渡す運用 (このリポジトリの標準的な操作) が、内容に < や > を含むだけで
+止まる。しかも「別の書き方に直して回避する」ことが CLAUDE.md の禁じる respelling そのものになるため、
+作業者は正当な出口を失う。
+
+完了条件: heredoc 本文 (<<EOF / <<PY 等のデリミタ間) を redirect スキャンの対象外にする。
+負の対照として、heredoc の外にある本物の > がなお block されることを固定する。
+あわせて 1) の「存在しないファイルを既存と述べる」文言も、存在確認をしていないなら
+「上書きしうる」と正しく述べるか、実際に stat して三値で言い分けること
+(検査していない事実を断定しない — 直近 commit b61d68b4 と同じクラス)。"""
+created_at = 1788959351
+updated_at = 1788959351
+weight = 0.0
+issue_number = 468
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/468"
+
+[[task]]
+id = "a66260f7"
+title = "テストのモジュール doc が存在しないテスト名を anti-vacuity control として挙げていた (照合ゲートが無い)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "docs",
+    "p2",
+]
+status = "pending"
+notes = """
+実測 2026-09-09、測定点 fc92b25e。crates/condukt/tests/worktree_reconcile.rs のモジュール header が
+「the two anti-vacuity controls (dead_clean_worktree_is_removable, progressing_task_worktree_is_live)」
+と書いていたが、progressing_task_worktree_is_live という関数はこのファイルに存在しない
+(実名は progressing_task_worktree_is_live_and_never_removable)。5bb3579f が本体を拡張した際に
+header 側が追随しなかった残り。今回の commit で 3 本へ更新し実名へ直したが、これは手作業であり
+再発を止めるものが何も無い。
+
+危険性: anti-vacuity control の一覧は「このファイルが空虚でないことの根拠」そのものなので、
+存在しないテスト名が列挙されていると、レビュアーは実在しない保護を実在すると読む
+(CLAUDE.md 第4節「docstring で実挙動と違う安全な話を書く」に該当)。
+
+完了条件: doc コメント/モジュール header 中の識別子が同ファイル内に実在することを機械照合する
+ゲートを置く (判定不能は block へ倒す)。あるいは最低限 anti-vacuity control の一覧だけでも
+コンパイル時に参照される形 (const の配列に関数を並べる等) にして、名前の腐敗をコンパイルエラーにする。"""
+created_at = 1788959366
+updated_at = 1788959366
+weight = 0.0
+issue_number = 469
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/469"

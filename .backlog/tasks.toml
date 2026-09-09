@@ -16383,15 +16383,29 @@ title = "condukt の autonomy 不変条件テスト askuserquestion_sites_match_
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
-status = "pending"
+status = "done"
 notes = """
 測定 2026-09-09。cargo test -p condukt --test autonomy_invariant で 15 passed / 1 failed。使い捨て worktree の e018fe91 (origin/main の tip) でも同一に再現するので、merge 29e9257b が持ち込んだものではない。
 
 このテストは policy-answer shim の凍結オラクルであり、自律モードで人間への停止が消えていないことを機械検査する唯一の砦である。それが赤いまま main に居るということは、autonomy gate の契約が現在は誰にも検査されていないということ。p0 にしたのはそのため。CLAUDE.md 第1節『赤は検出であって邪魔ではない』の対象そのもの。
 
-まず allowlist と実際の AskUserQuestion サイトのどちらがずれたのかを観測すること (テストを allowlist 側に合わせて緩めるのは第4節が禁じる隠蔽になりうる)。"""
+まず allowlist と実際の AskUserQuestion サイトのどちらがずれたのかを観測すること (テストを allowlist 側に合わせて緩めるのは第4節が禁じる隠蔽になりうる)。
+
+--- 検証 2026-09-10 (RESOLVED / 修正済みを実測で確認) ---
+
+(1) 修正コミット: 7c6c8c7a6270563edad500290abcab9417690b36 "fix(condukt): ASK_ALLOWLIST の flow エントリを再監査して 11 にし、main の red を解消する (0.7.144)"、Author date 2026-09-07 14:14:15 +0900。git merge-base --is-ancestor 7c6c8c7a e018fe91 は NO、c7c4ea49 は YES。つまりチケット測定時の origin/main tip (e018fe91) にはこの修正が入っておらず、その後 main に取り込まれた。ASK_ALLOWLIST の flow エントリを 10 -> 11 へ引き上げ、11 件目が廃止済みディレクティブの歴史的引用 (OBITUARY) であるという再監査結果を逐語で doc comment に記録している。その後さらに main 上で 13 まで増えている (c7c4ea49 時点の allowlist は flow=13)。
+
+(2) RED の再現: 使い捨て worktree を e018fe91 に作って cargo test -p condukt --test autonomy_invariant を実行したところ、チケットの記述どおり 15 passed / 1 failed。失敗メッセージ逐語: assertion left == right failed: AskUserQuestion count changed in flow/skills/flow/SKILL.md (allowlist 10, found 11). left: 11 / right: 10 (crates/condukt/tests/autonomy_invariant.rs:637)。当初の測定は正しかった。
+
+(3) 現在の GREEN が空虚でないことの確認 (mutation probe、worktree session-25763e04 @ c7c4ea49、実施後すべて revert 済み): ベースライン 16 passed / 0 failed。
+  A) allowlist に無い crates/backlog/skills/backlog/SKILL.md に AskUserQuestion を 1 行追加 -> RED: "unaudited AskUserQuestion site(s) in backlog/skills/backlog/SKILL.md (1 occurrence(s))" (autonomy_invariant.rs:658)。
+  B) allowlist 済みの crates/flow/skills/flow/SKILL.md に 1 行追加 (13 -> 14) -> RED: "AskUserQuestion count changed in flow/skills/flow/SKILL.md (allowlist 13, found 14)" (autonomy_invariant.rs:666)。
+  C) crates/tdd/skills/tdd/SKILL.md の唯一の AskUserQuestion 行を削除 (1 -> 0) -> RED: "allowlisted AskUserQuestion site(s) missing from tdd/skills/tdd/SKILL.md (expected 1, found 0)" (autonomy_invariant.rs:678)。
+  revert 後に再実行して 16 passed / 0 failed に復帰。追加・カウント変化・削除の 3 方向すべてで RED を観測したので、この凍結オラクルは実際に監視しており vacuous ではない。
+
+結論: 実在の RED であり、実在の修正 (7c6c8c7a) で解消済み。テストは非空虚。よって done。"""
 created_at = 1788898312
-updated_at = 1788898312
+updated_at = 1788983402
 weight = 0.0
 issue_number = 447
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/447"

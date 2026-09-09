@@ -19386,3 +19386,59 @@ updated_at = 1788982719
 weight = 0.0
 issue_number = 477
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/477"
+
+[[task]]
+id = "028f9bc6"
+title = "propguard: block reason still asserts an unverified property count, and the gate is inert in this repo (9ec045a1 remainder)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "9ec045a1 scoped slice landed for donegate/reviewgate/tdd. propguard was left out on purpose: it is a GATE crate needing a canary rollout. Two separate things to settle. (1) The gate is currently INERT here: derive.rs source_criteria returns None when neither criteria_file nor inline done_criteria is set, and gate.rs evaluate then allows with tag no-criteria, so no verdict is ever reached in this repo. That means any wording audit of it is unobservable in practice and needs a fixture, not a live run. (2) cfd0cc76 already records that propguard inject mode assumes the unattributed diff is the agents own code, which is the same authorship assertion reviewgate had removed. Confirm whether those two are the same finding or should stay split. Do NOT loosen any predicate. Measured 2026-09-10 in worktree agent-a625dfd1222062623."
+created_at = 1788983470
+updated_at = 1788983470
+weight = 0.0
+issue_number = 478
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/478"
+
+[[task]]
+id = "6108a7fa"
+title = "stuckguard never reads the hook payload instruction, so a deliberately repeated operation is indistinguishable from a stuck loop (9ec045a1 remainder)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "Verified 2026-09-10 in worktree agent-a625dfd1222062623: grep for transcript_path, prompt and recent_turns across crates/stuckguard/src returns ZERO hits. The only session context stuckguard reads is the overwatch lease via anchor.rs fetch_session_anchor, which is a task record, not the users instruction. Consequence: main.rs:251 detects repetition of the same operation and main.rs:271 tells the agent to step back, question its assumptions and try a different approach. The repetition count itself is honestly measured, so this is NOT the same wording defect that was fixed in donegate/reviewgate/tdd; it is 9ec045a1 step 2 (connect the verdict path to the instruction). Without it stuckguard cannot tell an operation repeated BECAUSE THE USER ASKED FOR IT from a genuine loop. stuckguard is a GATE crate so any change needs a canary rollout. Note 809cf00f is a prerequisite: harness_core transcript recent_turns maps every failure to an empty Vec, which is a §3 violation that would make the instruction read fail-open."
+created_at = 1788983479
+updated_at = 1788983479
+weight = 0.0
+issue_number = 479
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/479"
+
+[[task]]
+id = "0217c6b2"
+title = "backlog ticket 9ec045a1 cites crates/donegate/donegate.toml, a path that has never existed"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "Measured 2026-09-10. Ticket 9ec045a1 points at crates/donegate/donegate.toml lines 30 and 36 as evidence. git show e46cf146:crates/donegate/donegate.toml returns fatal: path does not exist in e46cf146, and the file does not exist at HEAD either. The intended referent is the REPO ROOT donegate.toml, whose lines 30 and 36 at e46cf146 are the fmt and clippy cmd entries (cargo fmt --all and cargo clippy --workspace) - i.e. the evidence that donegate derives its verdict from workspace-wide commands. No prose needed fixing there, so nothing was changed. Filing it because a wrong path in a p0 ticket costs the next reader real time, and per CLAUDE.md the fix is to correct the record rather than let the next author transcribe it."
+created_at = 1788983492
+updated_at = 1788983492
+weight = 0.0
+issue_number = 480
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/480"
+
+[[task]]
+id = "61c1f83c"
+title = "No gate checks plugin marketplace.json / plugin.json descriptions for claims the code does not make - tdd shipped a stale one for 3 versions"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "Measured 2026-09-10 in worktree agent-a625dfd1222062623. scripts/check-doc-claims.py restricts its scope to docs/**/*.md by its own docstring, and check-claudemd-claims.py covers CLAUDE.md. NOTHING covers the user-facing plugin descriptions. Consequence measured: commit b61d68b4 corrected the tdd claim in crates/tdd/Cargo.toml and crates/tdd/.claude-plugin/plugin.json to say it blocks when no test is visible in the uncommitted changes, but the .claude-plugin/marketplace.json entry for tdd still read a Stop hook that blocks the turn when implementation code lands without an accompanying test, plus the phrase blocks a Stop for missing test coverage. That is the exact absence claim CLAUDE.md §4 forbids, in the most user-facing copy there is, and it survived a lockstep version bump because the bump gate only compares version fields, never description text. I corrected the tdd text in this branch, but the GAP remains: the next crate to do this will not be caught either. Consider extending check-doc-claims.py, or a dedicated gate, to diff plugin.json description against the marketplace.json entry for the same plugin and require them to agree."
+created_at = 1788983543
+updated_at = 1788983543
+weight = 0.0
+issue_number = 481
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/481"

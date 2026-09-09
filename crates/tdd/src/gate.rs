@@ -259,6 +259,30 @@ fn generic_block_reason(
     )
 }
 
+/// The notice printed when tdd concedes a stop it had already given up on and
+/// another gate blocked that same stop (`run_guarded`'s concession
+/// bookkeeping). Extracted from `main.rs` so its wording is unit-testable: it
+/// describes what the scan observed, so this module's scope limits (see the
+/// module docstring) bind it exactly as they bind [`block_reason`].
+pub fn concession_reentry_notice() -> String {
+    "tdd: already gave up on this stop (max_attempts exhausted) and another gate \
+     blocked it, so the concession is still owed — allowing stop. When the give-up \
+     was recorded, no test was visible in the uncommitted changes; already-committed \
+     tests were not consulted, and the scan has not been re-run since."
+        .to_string()
+}
+
+/// The notice printed when tdd exhausts `max_attempts` and allows the stop.
+/// Extracted from `main.rs` for the same reason as
+/// [`concession_reentry_notice`].
+pub fn giveup_notice(max_attempts: u32) -> String {
+    format!(
+        "tdd: after {max_attempts} attempts a test is still not visible in the uncommitted \
+         changes (already-committed tests were not consulted) — allowing stop. Add one, or set \
+         TDD_DISABLE=1."
+    )
+}
+
 /// Compact human report for manual `tdd gate` / `tdd status` runs.
 pub fn human_report(v: &Report, cfg: &Config) -> String {
     match &v.scan {
@@ -707,6 +731,128 @@ mod tests {
         assert!(
             !report_with_test_evidence().blocks(&cfg),
             "a change with test evidence must STILL be allowed"
+        );
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // CLAUDE.md §4 — the SAME unchecked-absence claim, in the two notices that
+    // were lifted verbatim out of `main.rs` and so never received the wording
+    // correction `block_reason` / `human_report` already carry.
+    //
+    // The scope argument is identical (see the banner above): the scan reads
+    // the porcelain status, the unstaged/staged diffs and the untracked files,
+    // all relative to HEAD, and never the commit log. So neither notice may
+    // assert that there IS no test; each may only report the absence it
+    // observed IN THE SCOPE IT INSPECTED. The sibling crate donegate words its
+    // equivalent give-up notices that way already ("The checks were RED when
+    // the give-up was recorded and have not been re-run" — it names what it
+    // observed, not what it concluded).
+    //
+    // These are wording tests only — no verdict predicate is involved — so the
+    // anti-vacuity halves below carry the whole burden of stopping a future
+    // author from "fixing" the claim by deleting the sentence.
+    // ══════════════════════════════════════════════════════════════════════
+
+    /// (a) The concession notice must not assert an absence tdd never checked.
+    /// The UNQUALIFIED claim is rejected; a properly SCOPED one ("no test was
+    /// visible in the uncommitted changes") is what the positive half demands.
+    #[test]
+    fn concession_reentry_notice_does_not_assert_an_unchecked_absence_of_a_test() {
+        let notice = concession_reentry_notice();
+        let lower = notice.to_lowercase();
+        for bare in ["there was still no test when", "still no test when"] {
+            assert!(
+                !lower.contains(bare),
+                "the concession notice states the absence of a test as an unqualified \
+                 fact ({bare:?}); tdd inspected only the UNCOMMITTED changes and never \
+                 read already-committed tests.\n--- notice ---\n{notice}"
+            );
+        }
+        assert!(
+            TDD_INSPECTED_SCOPE_TOKENS
+                .iter()
+                .any(|t| lower.contains(&t.to_lowercase())),
+            "where the concession notice reports having found no test it must name the \
+             scope it actually inspected — the uncommitted/working-tree changes (one of \
+             {TDD_INSPECTED_SCOPE_TOKENS:?}).\n--- notice ---\n{notice}"
+        );
+        assert!(
+            TDD_COMMITTED_NOT_CONSULTED_TOKENS
+                .iter()
+                .any(|t| lower.contains(&t.to_lowercase())),
+            "the concession notice must say already-committed tests were NOT consulted \
+             (one of {TDD_COMMITTED_NOT_CONSULTED_TOKENS:?}).\n--- notice ---\n{notice}"
+        );
+    }
+
+    /// (b) ANTI-VACUITY for the concession notice: scoping the claim must not
+    /// become an excuse to drop the two facts the notice genuinely reports —
+    /// that the concession is still owed, and that the stop is being allowed.
+    #[test]
+    fn concession_reentry_notice_still_reports_the_owed_concession_and_the_allowed_stop() {
+        let notice = concession_reentry_notice();
+        let lower = notice.to_lowercase();
+        assert!(
+            lower.contains("concession") && lower.contains("owed"),
+            "the concession notice must still say the concession is still owed\n\
+             --- notice ---\n{notice}"
+        );
+        assert!(
+            lower.contains("allowing stop"),
+            "the concession notice must still say it is ALLOWING the stop\n\
+             --- notice ---\n{notice}"
+        );
+    }
+
+    /// (a) The give-up notice carries the same unchecked claim ("still no test
+    /// after N attempts"). Same rule: reject the unqualified absolute, require
+    /// the scope to be named wherever the absence is reported.
+    #[test]
+    fn giveup_notice_does_not_assert_an_unchecked_absence_of_a_test() {
+        let notice = giveup_notice(3);
+        let lower = notice.to_lowercase();
+        for bare in ["still no test after", "no test after 3 attempts"] {
+            assert!(
+                !lower.contains(bare),
+                "the give-up notice states the absence of a test as an unqualified fact \
+                 ({bare:?}); tdd inspected only the UNCOMMITTED changes, so a test that \
+                 landed in an earlier commit is invisible to it.\n\
+                 --- notice ---\n{notice}"
+            );
+        }
+        assert!(
+            TDD_INSPECTED_SCOPE_TOKENS
+                .iter()
+                .any(|t| lower.contains(&t.to_lowercase())),
+            "where the give-up notice reports having found no test it must name the \
+             scope it actually inspected — the uncommitted/working-tree changes (one of \
+             {TDD_INSPECTED_SCOPE_TOKENS:?}).\n--- notice ---\n{notice}"
+        );
+        assert!(
+            TDD_COMMITTED_NOT_CONSULTED_TOKENS
+                .iter()
+                .any(|t| lower.contains(&t.to_lowercase())),
+            "the give-up notice must say already-committed tests were NOT consulted \
+             (one of {TDD_COMMITTED_NOT_CONSULTED_TOKENS:?}).\n--- notice ---\n{notice}"
+        );
+    }
+
+    /// (b) ANTI-VACUITY for the give-up notice: it must keep the attempt count
+    /// it was handed, the TDD_DISABLE=1 escape hatch, and the fact that it is
+    /// allowing the stop. Deleting the sentence is not a fix.
+    #[test]
+    fn giveup_notice_still_names_the_attempt_count_and_escape_hatch() {
+        let notice = giveup_notice(3);
+        for tok in ["3", "TDD_DISABLE=1"] {
+            assert!(
+                notice.contains(tok),
+                "the give-up notice must still contain {tok:?}\n--- notice ---\n{notice}"
+            );
+        }
+        assert!(
+            notice.to_lowercase().contains("allowing stop"),
+            "the give-up notice must still say it is ALLOWING the stop\n\
+             --- notice ---\n{notice}"
         );
     }
 }

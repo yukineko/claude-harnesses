@@ -257,11 +257,7 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     // alongside the skip, per `run_guarded`'s caller contract.
     if harness_core::gate::run::concession_owed(&cfg.state_dir, &session, input.stop_hook_active) {
         log_event(&cfg, &session, "giveup-reentry", 0);
-        eprintln!(
-            "tdd: already gave up on this stop (max_attempts exhausted) and another gate \
-             blocked it, so the concession is still owed — allowing stop. There was still \
-             no test when the give-up was recorded."
-        );
+        eprintln!("{}", gate::concession_reentry_notice());
         std::process::exit(0);
     }
 
@@ -284,10 +280,7 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         // Remember the concession — see `concession_owed` above.
         harness_core::gate::run::concede(&cfg.state_dir, &session);
         log_event(&cfg, &session, "giveup", attempt);
-        eprintln!(
-            "tdd: still no test after {} attempts — allowing stop. Add one or set TDD_DISABLE=1.",
-            cfg.max_attempts
-        );
+        eprintln!("{}", gate::giveup_notice(cfg.max_attempts));
         std::process::exit(0);
     }
 

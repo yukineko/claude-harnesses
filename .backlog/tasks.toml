@@ -15112,9 +15112,44 @@ main 側は**構造的に常に ff** になる。したがってこれは稀な�
 「毎回 green な commit を 1 本余分に要求する」という代償が常態化している。
 
 今回もその回避策を採った (この notes 追記そのものが、その green な 1 commit を
-兼ねている)。"""
+兼ねている)。
+
+---
+## 再発 3 件目 (実測 2026-09-09) — §8 の統合 1 回につき 1 回、例外なく
+
+`git pull origin main` (e018fe91..77049bfc) の 28 conflict を専用 worktree
+`integrate/main-77049bfc` で解決し、merge commit `f17bbba3` を作成した。pre-commit は
+最後まで green（`[ack] crates/harness-core/src/gate/run.rs: test-removed` を含む
+check-test-weakening の acknowledge まで通過し、`clippy-lints: clean`、commit の
+exit code 0）。post-commit は sentinel を消費して静かに終了している。
+
+その直後、main の作業ツリーで
+
+    git merge --ff-only integrate/main-77049bfc      -> Fast-forward
+
+を実行したところ、commit は 1 つも作られていないのに:
+
+    ! UNGATED COMMIT: f17bbba32627 merge(origin/main): 77049bfc を統合する — …
+      The local gate did not inspect this content (--no-verify, cherry-pick or
+      rebase). Recorded in the bypass ledger; 1 entr(y/ies) outstanding.
+
+機序は 2026-08-28 / 2026-09-07 の記録と完全に一致する。ff 後の HEAD が親 2 つの
+merge commit なので `.githooks/post-merge` の
+`parents="$(git rev-parse HEAD^@ | grep -c .)"` が 2 を返し、早期 exit のガードを
+通過して post-commit へ exec される。main の git-dir に sentinel が無いのは
+per-worktree だから当然で、既に検査済みの commit が bypass として記録される。
+
+**今回は `--ff-only` を明示していた点が新しい。** git 自身が「これは ff であって
+merge commit を作らない」と保証している操作でも post-merge は区別できていない、
+ということなので、`--no-edit` 付きの通常 merge に限った話ではない。
+
+3 回連続（2026-08-28 / 09-07 / 09-09）。すべて §8 に従って worktree で実装し main へ
+統合した回であり、**§8 に従うたびに 100% 再現する**。誤検知が稀ではなく定常である
+ことの、これで 3 例目の実測。回避策も毎回同じ（worktree 側で green な pre-commit を
+1 回走らせて ledger を消す）で、本 notes 追記を含む起票作業がその 1 commit を兼ねている。
+"""
 created_at = 1787905350
-updated_at = 1788774436
+updated_at = 1788924015
 weight = 0.0
 issue_number = 411
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/411"
@@ -16847,9 +16882,76 @@ launcher が見つからないので hook が起動せず、finding が 1 件も
 完了条件: (1) `.orphaned_at` の書き手を特定する（Claude Code 本体か別セッションか）。
 (2) rollout の registry patch 後に pointer が指す dir の存在を検証し、存在しなければ
 非 0 で終わる（判定不能を成功に写さない）。(3) 巻き戻しが再発しうるなら、rollout の
-成功条件を「patch を書いた」ではなく「一定時間後も pointer が生きている」に変える。"""
+成功条件を「patch を書いた」ではなく「一定時間後も pointer が生きている」に変える。
+
+---
+## 追試 (2026-09-09、測定点 f17bbba3) — 2 つの現象は別物だった。両方とも書き手を特定した
+
+起票時は「rollout 直後に registry が巻き戻り、配備済み dir に `.orphaned_at` が付く」を
+1 件として書いていたが、実測すると**原因の異なる 2 件**である。分けて追う。
+
+### (1) registry の巻き戻し — 出所は「別 base で走った別セッションの rollout」
+
+巻き戻った `installed_plugins.json` が指していたのは donegate 0.1.29 / propguard 0.1.43 /
+tdd 0.1.26。これは**いずれも origin/main (77049bfc) 側のバージョン**である
+（当ブランチ側は 0.1.30 / 0.1.44 / 0.1.27）。つまり registry を上書きしたのはバグではなく、
+**origin/main をチェックアウトした別セッションが自分の rollout を正常に実行した結果**で、
+こちらの新しい版へのポインタが last-writer-wins で潰されたもの。
+
+したがってこの半分は rollout の壊れではなく、**`installed_plugins.json` が全セッション共有の
+単一ファイルであること**に由来する構造的競合である。`f17bbba3` で両者のバージョンが合流した
+今は同じ潰れ方を再現しないが、**並行セッションが別の base で rollout するたびに必ず起きる**
+（§8「別セッションは常に存在する前提で動く」）。
+
+完了条件はここで変わる: rollout が registry を書くとき、**上書き対象が自分より新しくないことを
+確認する**（単調性チェック。降格になる書き込みは block、少なくとも報告）。判定不能
+（registry が読めない・版が比較不能）は §3 に従って書き込みを止める側へ倒すこと。
+
+### (2) `.orphaned_at` — 書き手は Claude Code 本体だった（このリポジトリではない）
+
+    grep -rln 'orphaned_at' --exclude-dir=target --exclude-dir=.git .
+      -> .backlog/tasks.toml だけ（＝この起票文だけ。scripts/ も crates/ も 0 hit）
+    grep -rl 'orphaned_at' ~/.claude/plugins
+      -> 0 hit（配備物にも書き手はいない）
+    grep -rl 'orphaned_at' /usr/lib/node_modules/@anthropic-ai/claude-code/bin
+      -> claude.exe   ← ここ
+
+`claude.exe` 内の逐語:
+
+    var JL=".orphaned_at", Nu=".in_use", uEt=".gcs-sha", SD=".links_materialized";
+    ...
+    n(`Not marking a symlinked plugin version: ${r}`)
+    n(`Not writing .orphaned_at outside the plugin cache root: ${r}`)
+    n(`Failed to write .orphaned_at: ${r}: ${f}`)
+    ...
+    n("Skipping the orphaned-version sweep: the cache root volume could not be read ...")
+
+書式も一致する: マーカーの中身は `${Date.now()}` の**ミリ秒 epoch 1 行**で、実測は
+`1788915479226`（= 2026-09-09 09:57:59 JST）。Rust なら RFC3339、Python なら秒の float に
+なるところで、JS の `Date.now()` 形式であること自体が書き手を示している。
+
+観測された 5 件（donegate 0.1.27 / propguard 0.1.40 / reviewgate 0.1.20 / condukt 0.7.148 /
+tdd 0.1.24）は**すべて mtime が 4 ミリ秒以内**に収まっており、plugin ごとの rollout ではなく
+**1 回の sweep** が付けたものと分かる。付いた対象はいずれも registry から参照されなくなった
+旧版 dir である。
+
+**したがって `.orphaned_at` は rollout の副作用ではなく、Claude Code の
+orphaned-version GC が「registry がもう指していない版 dir」に付ける印である。**
+これ自体は正常動作であり、このリポジトリ側に直すものは無い。
+
+### 2 件が繋がる箇所 — ここが本当の危険
+
+(1) と (2) は独立に正常でも、**連鎖すると配備物が消える**:
+別セッションの rollout が registry を古い版へ巻き戻す → こちらが配備したばかりの新しい版 dir が
+「参照されていない」状態になる → 次の sweep がそれに `.orphaned_at` を付ける → 猶予後に GC される。
+`claude.exe` の近傍には `jts=21600000`（6 時間）と `Wts=600000`（10 分）が置かれており、
+猶予と sweep 間隔と読めるが、**どちらがどちらかは未確認**なので推測で書かない。
+
+つまり**この ticket の実体は (1) の単調性チェック 1 本**である。(2) は原因究明済みとして
+閉じ、GC は与件として扱う。完了条件は (1) の節に書いたとおり。
+"""
 created_at = 1788913542
-updated_at = 1788913542
+updated_at = 1788924015
 weight = 0.0
 
 [[task]]
@@ -16885,6 +16987,7 @@ built from, so it is not verifiable as current」を報告した（実行前は 
 created_at = 1788913542
 updated_at = 1788913542
 weight = 0.0
+
 [[task]]
 id = "826c29bf"
 title = "gate の mission を「明瞭な指示に照らした Audit」に揃える: 不明瞭なら明確化 Ask 必須、正当な根拠があれば block+Ask、根拠が無ければ通す"
@@ -18463,3 +18566,146 @@ updated_at = 1788906753
 weight = 0.0
 issue_number = 464
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/464"
+
+[[task]]
+id = "9c57995e"
+title = "precommit-audit の session skip も、後続の pre-commit チェックが止めた commit で焼かれる（stop_hook_active に相当する信号が無い）"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "hooks",
+    "p2",
+]
+status = "pending"
+notes = """
+observed 2026-09-09（測定点 f17bbba3、session e9ebfcb6）。origin/main 統合の過程で発見。
+
+【何が起きるか】
+`harness_core::gate::run::consume_session_skip` は 2026-09-09 に第3引数
+`stop_hook_active` を得て三状態になった: 尊重した札を `<id>.skip.honoured` へ park し、
+別ゲートが block した再入では尊重を続け、chain が実際に終わった最初の 1 回で消費する。
+これは「Stop を 4 プロセスが独立に裁く」ために必要だった。
+
+`crates/precommit-audit/src/hookio.rs:75` の `consume_session_skip` は 5 本目の
+呼び出し元だが、pre-commit フックなので Claude Code から `stop_hook_active` を
+受け取らない。したがって `false`（＝読んだ瞬間に消費）を渡している。
+
+同型の欠陥はここにも存在する: precommit-audit が札を消費して pass した後、
+**別の pre-commit チェック**（check-doc-claims / check-test-weakening /
+clippy-lints / raw-io-ratchet 等）が同じ commit を止めると、commit は起きていないのに
+operator の 1 回限りの札は消えている。次の試行では札を再発行しなければならない。
+
+【なぜ推測で埋めなかったか】
+`true` を渡すと `.honoured` が永久に削除されない＝恒久バイパスになる（CLAUDE.md §5 が
+禁じるもの）。`false` は少なくとも従来挙動と同一で、恒久バイパスは作らない。
+どちらも正しくないが、`false` は既存挙動の保存であり、`true` は新しい穴の作成である。
+
+【完了条件】
+pre-commit プロセスが「直前の commit 試行が失敗したか」を観測できる seam を見つけるか、
+無いことを確定させる。候補: (a) `.git/` 配下に precommit-audit 自身が置く試行マーカーを
+post-commit が消す（post-commit は commit が成立したときだけ走る）、(b) 札を
+「N 秒以内 / M 回まで」の時間窓にする（one-shot ではなくなるので要判断）、
+(c) 観測不能と確定し、その事実をコード内に明記して閉じる。
+測れないなら §2 に従って人間に返すこと。"""
+created_at = 1788923641
+updated_at = 1788923641
+weight = 0.0
+
+[[task]]
+id = "c8c11add"
+title = "guard-maintree-edit.py が main のツリーでの conflict 解決を止める（pre-commit の main-tree-guard は merge を許すのに、Edit 側だけ MERGE_HEAD を見ていない）"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "failpositive",
+    "p1",
+]
+status = "pending"
+notes = """
+observed 2026-09-09（測定点 f17bbba3、session e9ebfcb6）。
+
+【手順と観測】
+1. ユーザーが main の作業ツリーで `git pull origin main` を実行し、28 ファイルが
+   conflict した状態（`.git/MERGE_HEAD` あり）になった。
+2. conflict 解決のために Edit ツールを使ったところ、`scripts/guard-maintree-edit.py`
+   が PreToolUse で拒否した。
+3. しかし CLAUDE.md 第8節は「main の作業ツリーで許されるのは統合（merge・conflict
+   解決）だけ」と明記しており、pre-commit の `main-tree-guard` も **merge commit は
+   通す**（block するのは非 merge commit だけ）。
+
+つまり **同じ不変条件を守る 2 つのゲートが、許可範囲について食い違っている**。
+commit 側は merge を許すのに、edit 側はその merge を完成させる編集を拒む。
+
+【影響】
+`git pull` が conflict した瞬間、main のツリーは「解決できないが abort もしにくい」
+状態になる。今回は `git merge --abort` -> 専用 worktree で `git merge origin/main` を
+やり直す、という迂回で通した（結果的に §8 に沿ってはいるが、迂回であって設計ではない）。
+より悪いのは、この不整合が **共有 skip ファイルや --no-verify への圧力**になること。
+
+【完了条件】
+`guard-maintree-edit.py` が `.git/MERGE_HEAD`（および `REBASE_HEAD` /
+`CHERRY_PICK_HEAD` を含めるかは要判断）の存在を見て、進行中の統合に属する編集を
+許可する。**判定不能は従来どおり block 側**へ倒すこと。回帰テストを添え、
+`main-tree-guard` と許可範囲が一致することを機械照合できる形にすること。"""
+created_at = 1788923641
+updated_at = 1788923641
+weight = 0.0
+
+[[task]]
+id = "f5c09303"
+title = "docs/audit-schemaguard-verdict-paths.md の schemaguard 側は再ピンではなく再監査が要る（中心的な指摘は validate_report で既に是正済み）"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "docs",
+    "p2",
+]
+status = "pending"
+notes = """
+observed 2026-09-09（測定点 f17bbba3、session e9ebfcb6）。origin/main 統合の後始末で発見。
+
+【何を観測したか】
+1. 同文書の condukt 側引用が全部ずれていた（merge で `crates/condukt/src/main.rs` の行が動いたため）。
+   実測して再ピン済み: `schema_precheck` 系3関数 4848〜4898 -> **5184〜5234**、
+   呼び出し 3145/3149/3423 -> **3451/3455/3729**。逐語引用は現在の実体と一致する。
+2. **schemaguard 側はもっと深くずれている。** 一定オフセットではないので一括置換ができない:
+
+       validate()                        doc 84    -> 実体 236   (+152)
+       let obj = match value.as_object() doc 86    -> 実体 252   (+166)
+       if val.is_none()                  doc 107   -> 実体 277   (+170)
+       let type_ok = match &field.ty     doc 120   -> 実体 311   (+191)
+       if !type_ok                       doc 129   -> 実体 328   (+199)
+       "Accept any JSON value ..."       doc 19-21 -> 実体 43    (+24)
+       enum_on_non_string_value_...      doc 384   -> 実体 622   (+238)
+
+3. **より重要 — 本監査の中心的な指摘は既に landed している。**
+   §1 の `continue` 2 本と #11 が「『合格』と『検査できなかった』が同じ空集合に潰れる」
+   「3値化（`Determination<T>` 的な設計）の候補」と書いた点は、`crates/schemaguard/src/schema.rs:249`
+   の `validate_report(...) -> Report`（`violations` / `undetermined` / `waived` の3値）として
+   実装済み。`validate()` は「a two-valued consumer must see "could not check" on the restricted
+   side」と docstring に明記したうえで `into_violations()` で restrictive 側へ畳む adapter として
+   残っている（＝§3 の規範どおりに畳んでいる）。
+
+【なぜ機械的に再ピンしなかったか】
+番号だけ直すと **解決済みの設計を現状の欠陥として提示する**ことになる。それは CLAUDE.md 第4節が
+禁じる「次のレビュアーを騙す散文」そのもので、行番号が合っているぶん**むしろ発見しにくくなる**。
+「引用が壊れている」文書は読者が疑うが、「引用が正しく内容が古い」文書は疑われない。
+
+【暫定処置（済み）】
+文書冒頭に状態バナーを置き、condukt 側は再ピン済み・schemaguard 側は実体と不一致・中心的指摘は
+是正済み、であることを実測値つきで明記した。読者が古い結論を現状と読み違えないようにするため。
+
+【完了条件】
+`crates/schemaguard/src/schema.rs` の現行 `validate_report` / `Report` / `Waived` /
+`Undetermined` に対して §1〜§3 を**書き直す**（行番号の付け替えではない）。分類軸は
+restrictive / 意図的 permissive / silent-skip のままでよいが、3値化後は
+「silent-skip が `Undetermined` として表現可能になったか」「`Waived` が意図的 permissive の
+宣言として機能しているか」が新しい問いになる。書き直した結果として残る silent-skip が
+0 本なら、その事実（0 本であること）を測定コマンドつきで記録して閉じる。
+
+`check-doc-claims.py` はこの文書を通していた。逐語引用を伴わない行番号だけの記述
+（例「全84〜183行」「105〜146行」）は gate から見えないため。**それ自体が別の起票候補**
+（引用なし行番号を検出できるか、できないなら書式として禁じるか）。"""
+created_at = 1788924360
+updated_at = 1788924360
+weight = 0.0

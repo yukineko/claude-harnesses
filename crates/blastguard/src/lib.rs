@@ -32,5 +32,6 @@ pub mod hookio;
 pub mod interactive;
 pub mod model;
 pub mod retro;
+pub mod reversible;
 pub mod rule_id;
 pub mod scope;

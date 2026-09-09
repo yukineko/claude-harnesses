@@ -3537,6 +3537,132 @@ fn quoted_string_literals(payload: &str) -> Vec<String> {
     out
 }
 
+/// Tokens through which an inline interpreter program can reach anything
+/// outside its own process: the filesystem, another process, the network, or
+/// the interpreter's own dynamic-eval door.
+///
+/// This list exists only to gate the ALLOW in [`interpreter_code_verdict`], and
+/// it is read in the opposite direction from
+/// [`INTERPRETER_DESTRUCTIVE_CALLS`]: that list names hazards to REPORT, so a
+/// miss there costs one finding; this list names everything that must be
+/// ABSENT before the gate stays quiet, so a miss here costs the whole verdict.
+/// Entries are therefore deliberately over-broad — `open(` matches a read-only
+/// open, `import os` matches `os.getcwd()` — because a false Ask costs one
+/// keypress and a false Allow costs the gate.
+const INTERPRETER_EFFECT_TOKENS: &[&str] = &[
+    // Process execution, in every interpreter's spelling.
+    "subprocess",
+    "os.system",
+    "os.popen",
+    "os.exec",
+    "os.spawn",
+    "os.fork",
+    "os.kill",
+    "child_process",
+    "system(",
+    "exec(",
+    "execsync",
+    "spawnsync",
+    "popen",
+    "kernel.",
+    "%x",
+    "qx",
+    // Dynamic eval: a program that builds a program is not readable by reading
+    // it, so it can never qualify for the Allow no matter what else it says.
+    "eval(",
+    "eval ",
+    "__import__",
+    "importlib",
+    "compile(",
+    "instance_eval",
+    "class_eval",
+    "new Function",
+    // Filesystem, read or write alike. `open(` is included on purpose: a
+    // read-only open is harmless, but distinguishing it from a write means
+    // parsing the mode argument, and a mis-parse lands on the permissive side.
+    "open(",
+    "open ",
+    "fileutils",
+    "shutil",
+    "pathlib",
+    "os.path",
+    "os.mkdir",
+    "os.makedirs",
+    "os.rename",
+    "os.replace",
+    "os.truncate",
+    "os.chmod",
+    "os.chown",
+    "os.walk",
+    "os.listdir",
+    "os.scandir",
+    "write_text",
+    "write_bytes",
+    "writefile",
+    "readfile",
+    "require('fs')",
+    "require(\"fs\")",
+    "from fs",
+    "file.",
+    "dir.",
+    "io.",
+    "tempfile",
+    "glob",
+    "shutil",
+    // Network egress.
+    "socket",
+    "urllib",
+    "requests",
+    "httpx",
+    "http.client",
+    "ftplib",
+    "smtplib",
+    "telnetlib",
+    "fetch(",
+    "axios",
+    "net::http",
+    "open-uri",
+    "net.",
+    "https.",
+    "http.",
+    // Native-code and interpreter-internals doors.
+    "ctypes",
+    "cffi",
+    "mmap",
+    "sys.modules",
+    "process.binding",
+    "dlopen",
+];
+
+/// Whether the program text visible on the command line is the program that
+/// will actually run.
+///
+/// A `$`, a backtick or a `$(…)` means the shell rewrites the payload before
+/// the interpreter ever sees it, so scanning the visible text answers a
+/// question about a DIFFERENT program. That is 判定不能 (CLAUDE.md §3), and the
+/// caller must resolve it to `Ask` rather than to the Allow.
+///
+/// `$` is refused wholesale even though Perl and Ruby spell ordinary variables
+/// with it. Telling `$x`-the-Perl-variable from `$x`-the-shell-expansion needs
+/// the quoting context, which is exactly what has already been stripped by the
+/// time a payload reaches here — so the two are indistinguishable, and the
+/// indistinguishable case resolves restrictively. The cost is that Perl and
+/// Ruby one-liners keep asking; that is the correct side to be wrong on.
+fn payload_is_statically_readable(payload: &str) -> bool {
+    !payload.contains('$') && !payload.contains('`')
+}
+
+/// The effect-bearing token in `payload`, if any. Case-folded for the same
+/// reason as [`interpreter_destructive_call`]: `FileUtils` and `fileutils` are
+/// one hazard.
+fn interpreter_effect_token(payload: &str) -> Option<&'static str> {
+    let lowered = payload.to_ascii_lowercase();
+    INTERPRETER_EFFECT_TOKENS
+        .iter()
+        .find(|needle| lowered.contains(&needle.to_ascii_lowercase()))
+        .copied()
+}
+
 /// Judge interpreter code that this command will execute.
 ///
 /// The arm this replaces returned a flat `Deny` on the SHAPE of the invocation,
@@ -3549,9 +3675,30 @@ fn quoted_string_literals(payload: &str) -> Vec<String> {
 /// human present `Decision::hardened` collapses the Ask to Deny anyway, so the
 /// restrictive resolution still holds; what changes is that a real finding is
 /// no longer indistinguishable from a shrug.
+/// Whether the payload handed to [`interpreter_code_verdict`] is the WHOLE
+/// program, or only as much of it as happens to be visible.
+///
+/// This distinction is the difference between the two defects that
+/// `tests/inline_eval_mirror_closure.rs` closed, and only the first of them may
+/// ever reach an `Allow`. With `-c "print(1)"` the program is the payload:
+/// reading it is reading the program. With `cat evil.py | python3 -`,
+/// `python3 - <<EOF`, or `python3 <(…)`, the program arrives at runtime through
+/// stdin and what is visible on the command line is a fragment at best — so
+/// "no effect token found in the visible text" says nothing whatever about the
+/// program, and treating it as a clearance would re-open the stdin mirrors
+/// exactly as they were before that file closed them.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProgramVisibility {
+    /// The payload is the entire program (`-c`, `-e`, `--eval`).
+    Whole,
+    /// The payload is a fragment; the real program comes from stdin at runtime.
+    Fragment,
+}
+
 fn interpreter_code_verdict(
     shape: &str,
     payloads: &[String],
+    visibility: ProgramVisibility,
     depth: usize,
     ctx: &Ctx<'_>,
 ) -> Decision {
@@ -3581,6 +3728,64 @@ fn interpreter_code_verdict(
         }
         layer = next;
     }
+    // USER RULING 2026-09-09 — an inline program the gate can fully READ, and
+    // in which it finds no token capable of any effect outside the
+    // interpreter's own process, is allowed rather than asked about.
+    //
+    // Read this as the narrow thing it is. Every path above still runs first
+    // and is untouched: `interpreter_destructive_call` still denies, the
+    // recursive `analyze_shell_payload` still denies, and a program this
+    // function cannot read still falls through to the `Ask` below. What is new
+    // is only the case where the entire program text is visible and contains
+    // nothing to judge — `python3 -c "print(1)"` has no effect for a blast-
+    // radius gate to have an opinion about.
+    //
+    // The caveat is recorded rather than argued away, because it is the reason
+    // this was a human's ruling and not the analyser's inference: absence of a
+    // known token is NOT proof of safety (CLAUDE.md §3 — 「わからない」は
+    // 「大丈夫」ではない). `INTERPRETER_EFFECT_TOKENS` is an enumeration, and
+    // an enumeration can be short. This is a deliberate, human-authorised
+    // acceptance of that specific gap, for this rule only.
+    //
+    // What was measured before taking it (2026-09-09, over the 24 transcripts
+    // in `~/.claude/projects/-home-hiroyuki-nakayama-src-claude-harnesses`):
+    // this Ask fired 72 times for the `-c`/`-e` shape and 5 more for the stdin
+    // shape, against 25 for the confined-redirect Ask. A gate that asks about
+    // ordinary work teaches its operator to stop reading the question — the
+    // failure mode that retired the sibling crate `taintguard` by user ruling
+    // on 2026-08-24, recorded in `crate::approve`. The approval memory that
+    // normally absorbs repetition cannot help here: it keys on the effect, and
+    // a different inline program is correctly a different effect, so every
+    // invocation is a first one.
+    //
+    // Two guards bound the gap. Neither may be removed without re-taking the
+    // ruling above, because either one alone re-opens it:
+    //   1. the program must be STATICALLY READABLE — an expansion means the
+    //      text scanned is not the text that runs
+    //      (`payload_is_statically_readable`);
+    //   2. EVERY payload must qualify, so one unreadable or effect-bearing
+    //      layer sends the whole invocation back to `Ask`.
+    let mut readable_and_inert = visibility == ProgramVisibility::Whole && !payloads.is_empty();
+    for payload in payloads {
+        if !payload_is_statically_readable(payload) || interpreter_effect_token(payload).is_some() {
+            readable_and_inert = false;
+            break;
+        }
+        // The quoted literals nested inside also have to be inert: a shell
+        // command hiding one layer down is reached through one of these, and
+        // the descent above only DENIES on them — silence there is not a
+        // clearance.
+        if quoted_string_literals(payload).iter().any(|inner| {
+            !payload_is_statically_readable(inner) || interpreter_effect_token(inner).is_some()
+        }) {
+            readable_and_inert = false;
+            break;
+        }
+    }
+    if readable_and_inert {
+        return Decision::Allow;
+    }
+
     Decision::ask(format!(
         "{shape}, and blastguard cannot read that program as safe or destructive — it refuses to \
 guess what the program does"
@@ -3624,12 +3829,49 @@ fn analyze_code_interpreter(cmd: &str, rest: &[&str], depth: usize, ctx: &Ctx<'_
                 payloads.extend(inline_command_payloads(rest, pos, &flag[1 + idx + 1..]));
             }
         }
-        return interpreter_code_verdict(
+        let verdict = interpreter_code_verdict(
             &format!("`{cmd}` is invoked with an inline-eval flag"),
             &payloads,
+            ProgramVisibility::Whole,
             depth,
             ctx,
         );
+        // An `Allow` here means "the PROGRAM has nothing to object to", which is
+        // not the same as "this command line has nothing to object to". The
+        // operands are still unjudged, and an interpreter can be an editor:
+        // `perl -i -pe s/a/b/ .githooks/pre-commit` rewrites a gate file in
+        // place, and its program (`s/a/b/`) is as readable and effect-free as
+        // any other. Before the 2026-09-09 ruling that command was blocked by
+        // this arm's blanket `Ask`, so the protected-path question was never
+        // reached on its own account; returning the `Allow` directly would have
+        // retired that protection as a side effect of a change about noise.
+        // So a clean program falls through to the same operand classification
+        // every unrecognised verb gets, and only a clean program over clean
+        // operands ends up allowed.
+        if !matches!(verdict, Decision::Allow) {
+            return verdict;
+        }
+        // `unknown_verb_protected_ask` cannot be reused here: it returns a flat
+        // `Allow` for `is_code_interpreter(cmd)` (see its first guard), which
+        // was correct only while this arm blocked everything by itself.
+        for op in positional_operands(rest, &[]) {
+            let hit = if has_glob_meta(op) {
+                glob_literal_prefix(op)
+                    .map(|p| exclude::touches_protected(&p))
+                    .unwrap_or(false)
+            } else {
+                exclude::touches_protected(op)
+            };
+            if hit {
+                return Decision::ask(format!(
+                    "`{cmd}` runs a program with no effect blastguard can see, but {op} is a \
+protected gate/config path handed to it as an operand — an interpreter is also an editor \
+(`perl -i -pe …`), and blastguard cannot tell from the operand alone whether this reads it, \
+rewrites it or removes it, so it refuses to guess"
+                ));
+            }
+        }
+        return Decision::Allow;
     }
 
     // `analyze_command_at` is handed TOKENS, not the raw segment, so the
@@ -3662,7 +3904,7 @@ fn analyze_code_interpreter(cmd: &str, rest: &[&str], depth: usize, ctx: &Ctx<'_
         None if opens_heredoc => format!("`{cmd}` is fed a here-document"),
         None => format!("`{cmd}` is fed a substituted source"),
     };
-    interpreter_code_verdict(&shape, &payloads, depth, ctx)
+    interpreter_code_verdict(&shape, &payloads, ProgramVisibility::Fragment, depth, ctx)
 }
 
 /// True if this stage names a program FILE for the interpreter to run, rather
@@ -3743,9 +3985,13 @@ fn analyze_interpreter_stdin_exec(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Dec
                 program_texts.extend(quoted_string_literals(&statement[i - 1]));
             }
             let shape = format!("`{}` takes its program from stdin", stage.trim());
-            if let Some(deny) =
-                acc.record(interpreter_code_verdict(&shape, &program_texts, depth, ctx))
-            {
+            if let Some(deny) = acc.record(interpreter_code_verdict(
+                &shape,
+                &program_texts,
+                ProgramVisibility::Fragment,
+                depth,
+                ctx,
+            )) {
                 return deny;
             }
         }

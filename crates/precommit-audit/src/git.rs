@@ -62,7 +62,14 @@ fn git_ok(cwd: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 /// Files changed vs HEAD plus untracked files (excluding standard ignores),
-/// de-duplicated and sorted. This is the audit's working set.
+/// de-duplicated and sorted.
+///
+/// This is the **unattributed** working set: a checkout carries no session
+/// identity, so in a tree two sessions share this answers for both of them.
+/// `main` narrows it through `harness_core::attribution` before auditing, which
+/// drops only files another session's transcript positively claims — never
+/// files that merely fail to appear in this session's own footprint. Do not
+/// treat this list as "what I changed"; it is "what changed here".
 ///
 /// Fails closed: a git error here means the working set is UNKNOWN, not empty —
 /// callers must never treat `Err` as "nothing changed".

@@ -23,6 +23,7 @@ compile_error!(
 );
 
 pub mod append;
+pub mod attribution;
 pub mod boundary;
 pub mod callgraph;
 pub mod code_index;

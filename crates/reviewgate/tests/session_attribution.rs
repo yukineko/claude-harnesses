@@ -45,12 +45,54 @@
 //!
 //! | transcript answer | review set | reason must say |
 //! |---|---|---|
-//! | `Known(edited)` | `changed ∩ edited` | how many were excluded, and which |
+//! | `Known(mine)` | `changed − (peers − mine)` | how many were excluded, and which |
 //! | `Undetermined`  | **the full `changed` set — no narrowing** | attribution was undetermined |
 //!
 //! The `Undetermined` row is the fail-closed one (CLAUDE.md 第3節): narrowing on
 //! an unreadable transcript would rewrite "I cannot tell whose these are" into
 //! "none of these are mine", which is the permissive answer.
+//!
+//! ## Why the first row is a subtraction and not `changed ∩ mine`
+//!
+//! This file's first version wrote that row as `changed ∩ mine`, and it was
+//! wrong for the same reason the second row is right. An intersection reads
+//! "absent from my footprint" as "not mine", and that read is refuted by
+//! measurement, not by argument. Re-measured independently on 2026-09-09
+//! against this repository's own session `e9ebfcb6` (13.2 MB transcript, 92
+//! recorded `Edit`/`Write` paths, plus 31 sidechain transcripts):
+//!
+//! ```text
+//! $ git diff --stat crates/harness-core/src/lib.rs
+//!  crates/harness-core/src/lib.rs | 1 +
+//! Edit/Write blocks naming harness-core/src/lib.rs (parent + sidechains): 0
+//! Bash blocks naming it: 1
+//!   sed -i '/^pub mod boundary;$/i pub mod attribution;' crates/harness-core/src/lib.rs
+//! ```
+//!
+//! That line is this session's own edit — it is what makes the new module
+//! reachable at all — and it is in NO footprint, because `sed -i` is a `Bash`
+//! tool_use and `harness_core::transcript::EDIT_TOOLS` collects only
+//! `Edit`/`Write`/`MultiEdit`/`NotebookEdit`. The same session ran 24 `sed -i`
+//! commands. So:
+//!
+//! ```text
+//! f in my footprint      ==> f IS mine     (sound)
+//! f not in my footprint  ==> UNKNOWN       (NOT "f is not mine")
+//! ```
+//!
+//! An intersection collapses the second line into the third, which is exactly
+//! the 判定不能→permissive collapse 第3節 forbids — and it is worse here than
+//! the second row's case, because it fails *silently*: a session that did its
+//! editing through a heredoc or `sed -i` intersects to ∅, `reviewable_files`
+//! comes back empty, and `evaluate` returns `allow("no-reviewable-changes")`.
+//! The gate goes DARK, which is the failure mode
+//! `own_edit_is_still_reviewed_across_the_abs_rel_boundary` below already
+//! exists to catch from the other direction.
+//!
+//! Hence: an exclusion must be a POSITIVE observation about a peer. A file
+//! leaves the review set only when another session's transcript claims it and
+//! mine does not. `mine` still wins on an overlap — a file I touched is never
+//! someone else's problem to review.
 //!
 //! Paths need normalising before the intersection: `changed_files` returns paths
 //! **relative to the repo root**, a transcript records **absolute** ones. A
@@ -131,10 +173,45 @@ impl Fixture {
         self.repo.join(name).to_string_lossy().into_owned()
     }
 
+    /// The project-slug directory of a realistic Claude Code transcript store.
+    ///
+    /// Layout matters and is not decoration. Transcripts live at
+    /// `$HOME/.claude/projects/<project-slug>/<session-id>.jsonl`, and
+    /// `harness_core::attribution::attribute_from_transcript` finds a PEER by
+    /// walking two levels up from this session's own transcript and scanning
+    /// every slug it finds. The first version of this fixture wrote the
+    /// transcript straight into `$HOME`, which makes that grandparent
+    /// `std::env::temp_dir()` — so no peer transcript existed anywhere the code
+    /// looks, and every test built the *unattributed* case regardless of the
+    /// scenario its name described. Two of them then asserted the *peer*
+    /// outcome against it. Keep new transcripts in this tree.
+    fn slug_dir(&self) -> PathBuf {
+        let d = self
+            .home
+            .join(".claude")
+            .join("projects")
+            .join("-home-t-project");
+        std::fs::create_dir_all(&d).expect("create projects slug dir");
+        d
+    }
+
+    /// This session's transcript.
+    fn transcript(&self, edited: &[String], read_only: &[String]) -> PathBuf {
+        self.transcript_named("this-session", edited, read_only)
+    }
+
+    /// A **concurrent** session's transcript, in the same projects tree — the
+    /// artefact that makes a file "someone else's" rather than merely
+    /// unattributed. Without one on disk there is no peer, only an absence of
+    /// evidence, and an absence of evidence is not an exclusion.
+    fn peer_transcript(&self, edited: &[String], read_only: &[String]) -> PathBuf {
+        self.transcript_named("peer-session", edited, read_only)
+    }
+
     /// Write a transcript whose assistant turns record an `Edit` of each of
     /// `edited` (absolute paths) plus a `Read` of each of `read_only`.
-    fn transcript(&self, edited: &[String], read_only: &[String]) -> PathBuf {
-        let p = self.home.join("transcript.jsonl");
+    fn transcript_named(&self, session: &str, edited: &[String], read_only: &[String]) -> PathBuf {
+        let p = self.slug_dir().join(format!("{session}.jsonl"));
         let mut body = String::new();
         body.push_str(r#"{"type":"user","message":{"role":"user","content":"go"}}"#);
         body.push('\n');
@@ -294,7 +371,11 @@ fn tool_use_line(tool: &str, arg_key: &str, arg_value: &str) -> String {
 /// EXPECTED RED. **This is the ticket.**
 ///
 /// The tree is dirty with two files; the transcript shows this session edited
-/// only `mine.rs`. `peer.rs` belongs to a concurrent session sharing the tree.
+/// only `mine.rs`. `peer.rs` belongs to a concurrent session sharing the tree —
+/// and that session's transcript is on disk in the same projects tree, saying
+/// so. That second transcript is what makes this the peer case; without it the
+/// scenario is `an_unattributed_file_stays_in_the_review_set` below, which has
+/// the opposite correct answer.
 ///
 /// Two assertions, and they are non-vacuous only as a pair:
 ///   1. the REVIEWED set (log `files`) is exactly `["mine.rs"]` — red today,
@@ -314,6 +395,12 @@ fn peer_written_file_is_excluded_from_the_review_set() {
     f.dirty("mine.rs", "fn mine() {}\n");
     f.dirty("peer.rs", "fn peer() {}\n");
     let tp = f.transcript(&[f.abs("mine.rs")], &[]);
+    let peer = f.peer_transcript(&[f.abs("peer.rs")], &[]);
+    assert!(
+        peer.exists() && peer.parent() == tp.parent(),
+        "fixture precondition: a CONCURRENT session's transcript must exist \
+         alongside ours, or this test silently becomes the unattributed case"
+    );
 
     let o = f.run("s-peer", tp.to_str().unwrap());
 
@@ -342,6 +429,12 @@ fn peer_written_file_is_excluded_from_the_review_set() {
 /// *mentions*. Reading a peer's file is exactly what a session sharing a tree
 /// does, so a grep-for-`file_path` implementation would re-open the bug while
 /// looking fixed.
+///
+/// The peer transcript is what makes this observable at all. `mine` beats
+/// `peers` on an overlap, so if a `Read` wrongly counted as an edit, `peer.rs`
+/// would land in `mine`, out-rank the peer's real claim, and come back into the
+/// review set. With no peer on disk the file would stay in for the *legitimate*
+/// reason (unattributed) and the test would pass while observing nothing.
 #[test]
 fn a_file_this_session_only_read_is_not_attributed_to_it() {
     if !git_available() {
@@ -353,6 +446,8 @@ fn a_file_this_session_only_read_is_not_attributed_to_it() {
     f.dirty("peer.rs", "fn peer() {}\n");
     // The session Read peer.rs (a normal thing to do) but Edited only mine.rs.
     let tp = f.transcript(&[f.abs("mine.rs")], &[f.abs("peer.rs")]);
+    // ...and the session that actually WROTE peer.rs is on disk saying so.
+    f.peer_transcript(&[f.abs("peer.rs")], &[]);
 
     let o = f.run("s-readonly", tp.to_str().unwrap());
 
@@ -361,6 +456,83 @@ fn a_file_this_session_only_read_is_not_attributed_to_it() {
         vec!["mine.rs".to_string()],
         "a Read is not an edit: peer.rs appears in the transcript but this \
          session did not write it"
+    );
+}
+
+/// PASSING CONTROL — the same rule pointed at the PEER's transcript.
+///
+/// A peer that merely `Read` a file has not claimed it, so the file is
+/// unattributed and stays in. An implementation that treated any `file_path` in
+/// a peer transcript as a claim would drop files nobody wrote — and it would
+/// drop the most-read files first, which are the ones most likely to be edited
+/// by the shell.
+#[test]
+fn a_file_a_peer_only_read_is_not_excluded() {
+    if !git_available() {
+        eprintln!("skipping: git not available");
+        return;
+    }
+    let f = Fixture::new();
+    f.dirty("mine.rs", "fn mine() {}\n");
+    f.dirty("nobodys.rs", "fn nobodys() {}\n");
+    let tp = f.transcript(&[f.abs("mine.rs")], &[]);
+    f.peer_transcript(&[], &[f.abs("nobodys.rs")]);
+
+    let o = f.run("s-peer-read", tp.to_str().unwrap());
+
+    assert_eq!(o.decision, "block");
+    assert_eq!(
+        o.log_files,
+        vec!["mine.rs".to_string(), "nobodys.rs".to_string()],
+        "a peer's Read is not a peer's edit; nobodys.rs is unattributed and \
+         unattributed stays in the review set"
+    );
+}
+
+/// PASSING CONTROL — **the property the intersection rule got wrong.**
+///
+/// Same dirty tree as `peer_written_file_is_excluded_from_the_review_set`, with
+/// the one difference that decides the answer: no other session's transcript
+/// claims `unowned.rs`. Nobody's footprint mentions it, which is precisely what
+/// this session's own `sed -i` edits look like (module docstring, measured), so
+/// it must be reviewed. Excluding it is the fail-open the intersection rule
+/// shipped: had every changed file looked like this, `reviewable_files` would
+/// come back empty and `evaluate` would `allow("no-reviewable-changes")`.
+///
+/// Asserting the block as well as the file list is what distinguishes "reviewed
+/// both" from "the gate went dark and reviewed neither".
+#[test]
+fn an_unattributed_file_stays_in_the_review_set() {
+    if !git_available() {
+        eprintln!("skipping: git not available");
+        return;
+    }
+    let f = Fixture::new();
+    f.dirty("mine.rs", "fn mine() {}\n");
+    f.dirty("unowned.rs", "fn unowned() {}\n");
+    let tp = f.transcript(&[f.abs("mine.rs")], &[]);
+    // Deliberately NO peer transcript: an exclusion needs positive evidence.
+    assert!(
+        std::fs::read_dir(f.slug_dir())
+            .expect("slug dir")
+            .filter_map(|e| e.ok())
+            .all(|e| e.path() == tp),
+        "fixture precondition: ours must be the ONLY transcript on disk"
+    );
+
+    let o = f.run("s-unattributed", tp.to_str().unwrap());
+
+    assert_eq!(
+        o.decision, "block",
+        "an unattributed change is still a change to review; an allow here \
+         means the gate went dark on a file this session may well have written \
+         through the shell"
+    );
+    assert_eq!(
+        o.log_files,
+        vec!["mine.rs".to_string(), "unowned.rs".to_string()],
+        "absence from every footprint is UNKNOWN, not `not mine` — measured: a \
+         `sed -i` edit this session really made appears in no footprint at all"
     );
 }
 

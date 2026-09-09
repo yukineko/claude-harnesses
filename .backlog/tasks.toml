@@ -18772,3 +18772,52 @@ gate_crates_is_the_known_seven ... ok / 1 passed; 0 failed (exit 0)。」"""
 created_at = 1788926693
 updated_at = 1788926693
 weight = 0.0
+
+
+[[task]]
+id = "b773fff0"
+title = "attribution 残穴: 自分の sed -i 編集を peer の Edit 記録が上書きし監査から除外しうる（harness_core::attribution モジュール doc に記載済み）"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = ""
+created_at = 1788929396
+updated_at = 1788929396
+weight = 0.0
+
+[[task]]
+id = "963d0d09"
+title = "peer footprint: mtime はセッション活動の証拠でない — rsync/cp/touch が store 全体を再日付けし peer-forever が黙って復活する。各レコードの timestamp（content-derived）へ移行する"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = ""
+created_at = 1788930715
+updated_at = 1788930715
+weight = 0.0
+
+[[task]]
+id = "873a2621"
+title = "peer footprint: 24h window は liveness ではない — 2時間前に終了したセッションが今も自分のファイルを除外しうる。heartbeat-TTL claim registry(condukt/overwatch)から peer を導出する"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = ""
+created_at = 1788930715
+updated_at = 1788930715
+weight = 0.0
+
+[[task]]
+id = "a96d1a5e"
+title = "attribute_from_transcript: grandparent の basename が projects なだけで信用している。resolve 済み $HOME/.claude/projects と照合し不一致は peer なしへ倒す"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = ""
+created_at = 1788930715
+updated_at = 1788930715
+weight = 0.0

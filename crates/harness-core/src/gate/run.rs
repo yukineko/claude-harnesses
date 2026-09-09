@@ -1,5 +1,11 @@
 //! Stop-hook entry helpers shared by the gates: the never-break-a-turn panic
-//! guard and the session-scoped one-shot skip.
+//! guard, the session-scoped one-shot skip, and the `max_attempts` concession.
+//!
+//! The last two are the same shape and exist for the same reason: a Stop is
+//! adjudicated by four independent processes, so a hatch one gate spends can be
+//! consumed by a stop another gate then blocks. Both are therefore bounded by
+//! `stop_hook_active` — honoured while the chain is still being blocked, spent
+//! on the first stop that actually completes.
 
 use std::path::Path;
 
@@ -399,6 +405,115 @@ pub fn consume_session_skip(
     // (3) A stop this skip authorised completed. Spend it.
     let _ = std::fs::remove_file(&honoured);
     None
+}
+
+fn concession_path(state_dir: &Path, session_id: &str) -> std::path::PathBuf {
+    state_dir
+        .join("concessions")
+        .join(format!("{session_id}.giveup"))
+}
+
+/// Record that this gate exhausted `max_attempts` and ALLOWED the stop.
+///
+/// # Why a concession has to be remembered
+///
+/// `max_attempts` is a deliberate, bounded fail-open: after N consecutive
+/// blocks the gate stops enforcing so a genuinely stuck agent is never trapped.
+/// The concession is earned — the operator paid N blocked stops for it.
+///
+/// But a Stop is adjudicated by **four independent processes** (donegate,
+/// reviewgate, propguard, tdd), each seeing only its own verdict. When donegate
+/// gives up and allows while tdd blocks the same stop, **the stop does not
+/// happen** — and the old code had just called `state::reset`, erasing the
+/// counter. On the re-entry donegate counts from 1 again and blocks, so the
+/// agent must pay another N blocked stops for a concession it already earned,
+/// every time some other gate is still red. That is the same defect the skip
+/// token had ([`consume_session_skip`]), on the same seam, and it is unbounded:
+/// while another gate keeps blocking, the concession can never be collected.
+///
+/// Call this INSTEAD of `state::reset` on the give-up path. It clears the
+/// attempt counter exactly as `reset` did (the file the counter lives in is
+/// untouched by this function — the caller still resets it) and additionally
+/// leaves a marker that [`concession_owed`] can find on the re-entry.
+pub fn concede(state_dir: &Path, session_id: &str) {
+    if !usable_session_id(session_id) {
+        return;
+    }
+    let path = concession_path(state_dir, session_id);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // Content is informational only; presence is the signal. Written as one
+    // atomic `write` so a concurrent reader never sees a half-file.
+    let _ = std::fs::write(&path, b"gave up after max_attempts\n");
+    append_jsonl(
+        state_dir,
+        &serde_json::json!({
+            "event": "concession_recorded",
+            "session_id": session_id,
+        }),
+    );
+}
+
+/// Is a give-up this gate already made still owed?
+///
+/// Mirrors [`consume_session_skip`]'s three states, for the same reason and on
+/// the same seam:
+///
+/// 1. **No marker** → nothing was conceded. `false`; enforce normally.
+/// 2. **Marker + `stop_hook_active`** → Claude Code re-entered after *some*
+///    gate blocked, so the stop this concession authorised never happened. The
+///    concession is **still owed**: `true`, and the marker stays.
+/// 3. **Marker + not a re-entry** → a stop this concession authorised
+///    completed. Spend it: delete the marker and return `false`.
+///
+/// State 3 is what keeps this bounded. Without it "remember the give-up" would
+/// become a permanent bypass — the gate would never enforce again for the rest
+/// of the session, which is strictly worse than the defect being fixed.
+///
+/// A marker that exists but cannot be removed is **not** honoured (`false`):
+/// honouring it would be unbounded, since the same failure blocks state 3 from
+/// ever spending it. Undeterminable → restrictive side (CLAUDE.md 第3節).
+#[must_use]
+pub fn concession_owed(state_dir: &Path, session_id: &str, stop_hook_active: bool) -> bool {
+    if !usable_session_id(session_id) {
+        return false;
+    }
+    let path = concession_path(state_dir, session_id);
+    if !path.exists() {
+        return false;
+    }
+    if stop_hook_active {
+        append_jsonl(
+            state_dir,
+            &serde_json::json!({
+                "event": "concession_still_owed",
+                "session_id": session_id,
+            }),
+        );
+        return true;
+    }
+    // A stop this concession authorised completed. Spend it.
+    if std::fs::remove_file(&path).is_err() {
+        // Cannot clear it, so state 3 can never fire for it either: honouring
+        // it now would hand out an unbounded bypass instead of a one-stop one.
+        append_jsonl(
+            state_dir,
+            &serde_json::json!({
+                "event": "concession_unclearable",
+                "session_id": session_id,
+            }),
+        );
+        return false;
+    }
+    append_jsonl(
+        state_dir,
+        &serde_json::json!({
+            "event": "concession_spent",
+            "session_id": session_id,
+        }),
+    );
+    false
 }
 
 /// Append `entry` as one JSON line to `<state_dir>/log.jsonl`, creating the

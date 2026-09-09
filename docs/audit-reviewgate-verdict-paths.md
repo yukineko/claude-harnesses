@@ -42,18 +42,18 @@
 | A5 | `git::run_diff` (`crates/reviewgate/src/git.rs:135-143`) | `()`（戻り値なし） | 否 | **P1 の実体**（§1） |
 | A6 | `git::truncate_on_boundary` (`crates/reviewgate/src/git.rs:145-162`) | `DiffText` | — | R（§2） |
 | A7 | `review::build_set` / `reviewable_files` (`crates/reviewgate/src/review.rs:57-83`) | `Option<GlobSet>` → `Vec<String>` | 否 | **P6**（§1）＋ R（§2） |
-| A8 | `review::run_reviewer` (`crates/reviewgate/src/review.rs:621-666`) | `harness_core::verdict::Verdict` 3値 | 是（ただし到達しない穴あり） | **P3 / P4**（§1）＋ R（§2） |
-| A9 | `review::classify` (`crates/reviewgate/src/review.rs:668-678`) | `Verdict` | 否（`Undetermined` を返す枝が無い） | **P3 / P4**（§1） |
-| A10 | `review::evaluate` (`crates/reviewgate/src/review.rs:181-284`) | `Decision{Allow,Block}` | 2値 | D×4 ＋ **P1**（§1,§3） |
-| A11 | `review::decide_subprocess` (`crates/reviewgate/src/review.rs:316-395`) | `Decision` | 2値 | R ＋ **P5**（§1,§2） |
-| A12 | `review::decide_truncated` (`crates/reviewgate/src/review.rs:414-440`) | `Decision` | 2値 | R（§2） |
-| A13 | `review::decide_scan_failed` (`crates/reviewgate/src/review.rs:452-476`) | `Decision` | 2値 | R（§2） |
+| A8 | `review::run_reviewer` (`crates/reviewgate/src/review.rs:605-650`) | `harness_core::verdict::Verdict` 3値 | 是（ただし到達しない穴あり） | **P3 / P4**（§1）＋ R（§2） |
+| A9 | `review::classify` (`crates/reviewgate/src/review.rs:652-662`) | `Verdict` | 否（`Undetermined` を返す枝が無い） | **P3 / P4**（§1） |
+| A10 | `review::evaluate` (`crates/reviewgate/src/review.rs:165-268`) | `Decision{Allow,Block}` | 2値 | D×4 ＋ **P1**（§1,§3） |
+| A11 | `review::decide_subprocess` (`crates/reviewgate/src/review.rs:300-379`) | `Decision` | 2値 | R ＋ **P5**（§1,§2） |
+| A12 | `review::decide_truncated` (`crates/reviewgate/src/review.rs:398-424`) | `Decision` | 2値 | R（§2） |
+| A13 | `review::decide_scan_failed` (`crates/reviewgate/src/review.rs:436-460`) | `Decision` | 2値 | R（§2） |
 | A14 | `config::Config::load` (`crates/reviewgate/src/config.rs:188-273`) | `Config` | **否**（読めた/読めなかったが同型） | **P7**（§1） |
 | A15 | `config::Config::disabled_env` (`crates/reviewgate/src/config.rs:276-280`) | `bool` | 否 | R（§2） |
 | A16 | `state::load`（`harness_core::gate::state:54-59`）の消費 (`crates/reviewgate/src/main.rs:195`) | `SessionState` | 否 | R（§2） |
 | A17 | `main::review_command` の panic barrier (`crates/reviewgate/src/main.rs:150-152`) | `run_guarded` | 是（fail-closed） | R（§2） |
 | A18 | `HookInput::parse` → `interactive` (`crates/reviewgate/src/main.rs:144-149`, `133`) | `bool` | 否 | **P8**（§1） |
-| A19 | `review::attribute` (`crates/reviewgate/src/review.rs:131-153`) → `Attribution{Narrowed,Undetermined}`（型定義は `:103-116`）、および産出元の `harness_core::transcript::files_edited_by_session` | `Attribution` 2値／`Determination<BTreeSet<String>>` 3値 | 是 | R（§2） |
+| A19 | `review::attribute` (`crates/reviewgate/src/review.rs:128-137`) → `Attribution{Narrowed,Undetermined}`（型定義は `:106-120`）。判定本体は `harness_core::attribution::attribute_from_transcript` に集約済みで、reviewgate 側に残るのは note の描画のみ。産出元は `harness_core::transcript::files_edited_by_session_and_subagents`（自分の footprint・3値）と `peer_edit_footprint_in`（peer の footprint・失敗は空集合＝除外が減る側） | `Attribution` 2値／`Determination<BTreeSet<String>>` 3値 | 是 | R（§2） |
 
 | # | 消費サイト | 何に変換されるか | 備考 |
 |---|---|---|---|
@@ -153,7 +153,7 @@ fn run_diff(root: &Path, base: &[&str], files: &[String], out: &mut String) {
 これは「サイズ超過で末尾を切った」しか表現できない:
 
 ```rust
-// crates/reviewgate/src/review.rs:226-232  evaluate()
+// crates/reviewgate/src/review.rs:210-216  evaluate()
     let crate::git::DiffText {
         text: diff,
         truncated,
@@ -212,8 +212,8 @@ FAKEGIT: injecting failure for: ls-files --others --exclude-standard -- a.rs unt
 
 P1 の同じ穴は、diff が空にならない場合により静かに効く。3 つの取得コマンドのうち 1 つだけが落ちると、
 diff は**非空だが不完全**になり、`empty-diff` の分岐すら通らずに hash が記録される
-（`crates/reviewgate/src/review.rs:252` `let hash = hash_diff(&diff);` → `Decision` の `last_hash` として保存され、
-以後 `crates/reviewgate/src/review.rs:255-257` の `already-reviewed` がその**部分 diff** を「レビュー済み」と証明する）。
+（`crates/reviewgate/src/review.rs:236` `let hash = hash_diff(&diff);` → `Decision` の `last_hash` として保存され、
+以後 `crates/reviewgate/src/review.rs:239-241` の `already-reviewed` がその**部分 diff** を「レビュー済み」と証明する）。
 
 #### 実測（Probe I）
 
@@ -241,7 +241,7 @@ diff --git a/a.rs b/a.rs
 `files`（レビュー対象の一覧）は `changed_files()` 由来なので**2 ファイル**を主張し、
 実際に reviewer へ渡った diff は**1 ファイル分**だった。ブロック時の reason 文面も同じ `files` を使う
 （subprocess_reason 経由で file_list(files) に渡る:
-`crates/reviewgate/src/review.rs:385`「let reason = subprocess_reason(&files, findings, attempts, cfg.max_attempts);」）ため、
+`crates/reviewgate/src/review.rs:369`「let reason = subprocess_reason(&files, findings, attempts, cfg.max_attempts);」）ため、
 **「2 files をレビューした」と表示しながら 1 file しか見せていない**状態が起こりうる
 （Probe A の baseline が `レビュー対象 (2 files)` を出力しているのが同じ経路の証拠）。
 
@@ -251,7 +251,7 @@ diff --git a/a.rs b/a.rs
 「stdout の読み取り自体が失敗した」が入っていない:
 
 ```rust
-// crates/reviewgate/src/review.rs:616-620
+// crates/reviewgate/src/review.rs:600-604
 /// Returns a [`Verdict`]: `Clean` (ran, nothing to report), `Violation`
 /// (findings), or `Undetermined` (the reviewer could not run to a conclusion —
 /// spawn failure, non-zero exit with no output, timeout, wait error). An
@@ -260,7 +260,7 @@ diff --git a/a.rs b/a.rs
 ```
 
 ```rust
-// crates/reviewgate/src/review.rs:648-658
+// crates/reviewgate/src/review.rs:632-642
         Ok(Some(status)) => {
             let mut out = String::new();
             if let Some(mut so) = child.stdout.take() {
@@ -279,7 +279,7 @@ diff --git a/a.rs b/a.rs
 第 1 項が偽で成立せず、`classify("")` に落ちる:
 
 ```rust
-// crates/reviewgate/src/review.rs:668-678
+// crates/reviewgate/src/review.rs:652-662
 fn classify(out: &str) -> Verdict {
     let t = out.trim();
     if t.is_empty() {
@@ -319,7 +319,7 @@ PROBE-B EXIT=0 / stdout: [] / stderr: []
 `classify("")` に到達する経路は P3 だけではない。**prompt の配送失敗**も同じ場所へ落ちる:
 
 ```rust
-// crates/reviewgate/src/review.rs:633-644
+// crates/reviewgate/src/review.rs:617-628
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -336,19 +336,19 @@ PROBE-B EXIT=0 / stdout: [] / stderr: []
 
 `child.stdin.take()` が `None` のときも、`write_all` が `Err`（EPIPE 等）のときも else が無い。
 reviewer は diff を**受け取らないまま**走り、何も出力せず exit 0 すれば `Clean` になる。
-さらに `.stderr(Stdio::null())`（`crates/reviewgate/src/review.rs:635`）により、reviewer 自身が吐いた診断も捨てられる。
+さらに `.stderr(Stdio::null())`（`crates/reviewgate/src/review.rs:619`）により、reviewer 自身が吐いた診断も捨てられる。
 
-**D の主張とその棄却**: `crates/reviewgate/src/review.rs:614` は `Output that is empty or starts with "LGTM" = clean.` と
+**D の主張とその棄却**: `crates/reviewgate/src/review.rs:598` は `Output that is empty or starts with "LGTM" = clean.` と
 **宣言している**ので、一見 D（宣言済み仕様）に見える。しかし同じ関数が reviewer へ渡す prompt は、
 clean の合図を**空ではなく `LGTM` という明示的なトークン**と定めている:
 
 ```rust
-// crates/reviewgate/src/review.rs:625-626（run_reviewer が組み立てる prompt）
+// crates/reviewgate/src/review.rs:609-610（run_reviewer が組み立てる prompt）
          実在し根拠のある問題だけを、深刻度(high/med/low)付きで簡潔に箇条書きしてください。\
          該当ファイルと行が分かるよう示すこと。問題が無ければ `LGTM` とだけ出力してください。\n\n\
 ```
 
-つまり**空出力は契約上の clean 合図ではない**。加えて同じ関数の隣接分岐（`crates/reviewgate/src/review.rs:654-656`）は
+つまり**空出力は契約上の clean 合図ではない**。加えて同じ関数の隣接分岐（`crates/reviewgate/src/review.rs:638-640`）は
 「exit≠0 かつ空出力」を信用せず `Undetermined` にしており、**crate 自身が空出力を
 「情報が無い」と扱う判断を既に持っている**。CLAUDE.md 第3節の「エラー時に空の集合を返さない。
 空集合は下流で『検査対象なし ＝ 合格』と読まれる」に真っ向から該当するため、**D ではなく P** と分類する。
@@ -371,7 +371,7 @@ EXIT=0 / stdout: [] / stderr: []
 > 独立検証者の指摘 1（未列挙の重大サイト）への対応。
 
 ```rust
-// crates/reviewgate/src/review.rs:375-384  decide_subprocess()
+// crates/reviewgate/src/review.rs:359-368  decide_subprocess()
         Verdict::Violation(r) => {
             let findings = r.as_str();
             let attempts = prior_attempts + 1;
@@ -388,10 +388,10 @@ EXIT=0 / stdout: [] / stderr: []
 所見を報告した」という **KNOWN な違反**である。それを:
 
 1. **警告なしで** allow する（直前に `eprintln!` が無い。`grep -n 'giveup\|eprintln!'` の結果は §3 の表）。
-2. **タグ `"giveup"` は inject mode の giveup（`crates/reviewgate/src/review.rs:264`）と同一の文字列リテラル**であり、
+2. **タグ `"giveup"` は inject mode の giveup（`crates/reviewgate/src/review.rs:248`）と同一の文字列リテラル**であり、
    crate 自身が確立した「giveup は *distinct tag* で clean と区別する」という規約
    （`crates/reviewgate/src/review.rs:22-23`「then give up / loudly with a distinct tag so the turn is never permanently trapped.」、
-   `crates/reviewgate/src/review.rs:447-448`「then give up *loudly* with a distinct tag so a persistently / broken git can never trap the turn.」）から外れている。
+   `crates/reviewgate/src/review.rs:431-432`「then give up *loudly* with a distinct tag so a persistently / broken git can never trap the turn.」）から外れている。
 3. `emit_violation` は `Decision::Block` の分岐からしか呼ばれない（`crates/reviewgate/src/main.rs:245`）ので、
    **overwatch violation stream に何も残らない**。§0.1 B5 のとおり、この stream は
    `benchkit::auditsample` が「gates が通してしまった miss」を検出する *real audit source* であり、
@@ -447,7 +447,7 @@ allow 自体は「決めた許可」である。
 - 他の 3 経路（`Undetermined` / truncated / scan-failed）は、**より情報の少ない**状態
   （判定不能）であるにもかかわらず、いずれも警告＋専用タグを持つ。**最も情報が確かな
   「違反あり」だけが無診断**という非対称は、設計として宣言された跡が無い（doc も test も無い）。
-  `reviewer_error_gives_up_after_max_attempts_but_never_traps`（`crates/reviewgate/src/review.rs:799-814`）等、
+  `reviewer_error_gives_up_after_max_attempts_but_never_traps`（`crates/reviewgate/src/review.rs:783-798`）等、
   他 3 経路の giveup には固定テストがあるが、**Violation giveup を固定するテストは存在しない**
   （`grep -rn 'tag, "giveup"' crates/reviewgate/` は 0 件）。
 - したがって「bounded に allow すること」自体は D に近いが、**その allow が
@@ -590,12 +590,12 @@ Claude Code 本体を制御して観測する手段は無い。**判定不能な
 | `crates/reviewgate/src/git.rs:127-129` | `if s.len() > max_bytes { break; }` | 打ち切りは `truncate_on_boundary` で `truncated: true` になり block へ（§3 D の bounded 経路） |
 | `crates/reviewgate/src/review.rs:63` |「.unwrap_or(true)」＝ include 側の inc.as_ref().map(...).unwrap_or(true) | include 集合が構築できない＝**全ファイルをレビュー対象にする**方向（Probe H3 で実測） |
 | `crates/reviewgate/src/review.rs:64` |「.unwrap_or(false)」＝ exclude 側の !exc.as_ref().map(...).unwrap_or(false) | exclude が構築できない＝**何も除外しない**方向 |
-| `crates/reviewgate/src/review.rs:195-199` / `128-132` | `if now() - st.last_ts > cfg.reset_after_secs { 0 } else { st.attempts }` | idle 後に attempts を 0 に戻す＝ giveup までの猶予が**増える**＝ block 側 |
-| `crates/reviewgate/src/review.rs:248-250` | `if truncated { return decide_truncated(...); }` | **hash short-circuit より前**に置かれている。`already-reviewed` が切り詰め diff を certify するのを防ぐ（コメント `crates/reviewgate/src/review.rs:246-247` が理由を明記） |
-| `crates/reviewgate/src/review.rs:336-369` | `Verdict::Undetermined(r) => …` → `Decision::Block` | reviewer crash / timeout / 非ゼロ終了かつ空出力を clean と誤認しない。**P3/P4 はこの分岐に*到達しない*ケースがあることを指摘している**（分岐自体は正しい） |
-| `crates/reviewgate/src/review.rs:362-368` / `295-304` / `332-340` | `last_hash: String::new(),` | 判定不能・未レビュー末尾・undetermined change set に hash を**記録しない**＝ `already-reviewed` に certify させない |
-| `crates/reviewgate/src/review.rs:414-440` | `decide_truncated` → `Decision::Block`（giveup まで） | 切り詰めた末尾を未レビューのまま通さない |
-| `crates/reviewgate/src/review.rs:452-476` | `decide_scan_failed` → `Decision::Block`（giveup まで） | `ChangeScan::Failed` を block へ |
+| `crates/reviewgate/src/review.rs:179-183` / `128-132` | `if now() - st.last_ts > cfg.reset_after_secs { 0 } else { st.attempts }` | idle 後に attempts を 0 に戻す＝ giveup までの猶予が**増える**＝ block 側 |
+| `crates/reviewgate/src/review.rs:232-234` | `if truncated { return decide_truncated(...); }` | **hash short-circuit より前**に置かれている。`already-reviewed` が切り詰め diff を certify するのを防ぐ（コメント `crates/reviewgate/src/review.rs:230-231` が理由を明記） |
+| `crates/reviewgate/src/review.rs:320-353` | `Verdict::Undetermined(r) => …` → `Decision::Block` | reviewer crash / timeout / 非ゼロ終了かつ空出力を clean と誤認しない。**P3/P4 はこの分岐に*到達しない*ケースがあることを指摘している**（分岐自体は正しい） |
+| `crates/reviewgate/src/review.rs:346-352` / `295-304` / `332-340` | `last_hash: String::new(),` | 判定不能・未レビュー末尾・undetermined change set に hash を**記録しない**＝ `already-reviewed` に certify させない |
+| `crates/reviewgate/src/review.rs:398-424` | `decide_truncated` → `Decision::Block`（giveup まで） | 切り詰めた末尾を未レビューのまま通さない |
+| `crates/reviewgate/src/review.rs:436-460` | `decide_scan_failed` → `Decision::Block`（giveup まで） | `ChangeScan::Failed` を block へ |
 | `crates/reviewgate/src/config.rs:193-204` | project `reviewgate.toml` が untrusted なら**無視して** home/defaults にフォールバック（`eprintln!` あり） | `reviewer_cmd` が Stop hook から subprocess 実行されるため、untrusted な repo 同梱値の実行は RCE。**警告を出す**点でも silent ではない |
 | `crates/reviewgate/src/config.rs:260-271` | sanitize floor 4 件（`max_attempts==0→1` 等） | 0 を放置するとゲートが無意味な極端側（毎回即 giveup 等）に振れる。**floor はゲートを弱めていない** |
 | `crates/reviewgate/src/config.rs:276-280` | `.map(\|v\| !v.is_empty() && v != "0").unwrap_or(false)` | 未設定・読み取り失敗で `false`＝「無効化**されていない**」＝ armed のまま |
@@ -626,11 +626,11 @@ $ grep -n 'giveup\|eprintln!' crates/reviewgate/src/review.rs
 
 | # | giveup サイト | tag | **直前の警告** | 発生条件 | 分類 |
 |---|---|---|---|---|---|
-| G1 | `crates/reviewgate/src/review.rs:262-268` | `"giveup"` | **無し** | inject mode で `attempts > max_attempts` | **D**（§3.2） |
-| G2 | `crates/reviewgate/src/review.rs:339-352` | `"reviewer-error-giveup"` | **有り**（`:205`） | `Verdict::Undetermined` | D |
-| G3 | `crates/reviewgate/src/review.rs:378-384` | `"giveup"`（G1 と同一） | **無し** | `Verdict::Violation`（所見あり） | **P5**（§1） |
-| G4 | `crates/reviewgate/src/review.rs:416-429` | `"truncated-giveup"` | **有り**（`:282`） | diff 切り詰め | D |
-| G5 | `crates/reviewgate/src/review.rs:454-466` | `"git-scan-failed-giveup"` | **有り**（`:320`） | `ChangeScan::Failed` | D |
+| G1 | `crates/reviewgate/src/review.rs:246-252` | `"giveup"` | **無し** | inject mode で `attempts > max_attempts` | **D**（§3.2） |
+| G2 | `crates/reviewgate/src/review.rs:323-336` | `"reviewer-error-giveup"` | **有り**（`:205`） | `Verdict::Undetermined` | D |
+| G3 | `crates/reviewgate/src/review.rs:362-368` | `"giveup"`（G1 と同一） | **無し** | `Verdict::Violation`（所見あり） | **P5**（§1） |
+| G4 | `crates/reviewgate/src/review.rs:400-413` | `"truncated-giveup"` | **有り**（`:282`） | diff 切り詰め | D |
+| G5 | `crates/reviewgate/src/review.rs:438-450` | `"git-scan-failed-giveup"` | **有り**（`:320`） | `ChangeScan::Failed` | D |
 
 - `:218` の `eprintln!` は **giveup ではなく block 経路**の警告（`Undetermined` で block するとき）。
   giveup 直前の警告と混同しないこと。
@@ -646,16 +646,16 @@ $ grep -n 'giveup\|eprintln!' crates/reviewgate/src/review.rs
 
 | 位置 | 挙動 | 宣言箇所 / 固定テスト |
 |---|---|---|
-| git repo でない | `ChangeScan::NotRepo` → `allow("no-git", st)`（`crates/reviewgate/src/review.rs:188-189`） | `crates/reviewgate/src/git.rs:1-10` module doc。`non_repo_dir_is_notrepo`（`crates/reviewgate/src/git.rs:229-234`）、`genuine_non_repo_with_real_git_still_allows` / `unspawnable_git_without_a_dot_git_still_allows`（`tests/git_probe_wiring.rs:141,168`） |
-| レビュー対象が `min_changed_files` 未満 | `allow("no-reviewable-changes", st)`（`crates/reviewgate/src/review.rs:222-224`） | operator が `include`/`exclude`/`min_changed_files` で制御する宣言済みスコープ |
-| 同一 diff hash の再 stop | `allow("already-reviewed", st)`（`crates/reviewgate/src/review.rs:255-257`） | `crates/reviewgate/src/review.rs:9-11` module doc（convergence）。無限 block を防ぐ核 |
+| git repo でない | `ChangeScan::NotRepo` → `allow("no-git", st)`（`crates/reviewgate/src/review.rs:172-173`） | `crates/reviewgate/src/git.rs:1-10` module doc。`non_repo_dir_is_notrepo`（`crates/reviewgate/src/git.rs:229-234`）、`genuine_non_repo_with_real_git_still_allows` / `unspawnable_git_without_a_dot_git_still_allows`（`tests/git_probe_wiring.rs:141,168`） |
+| レビュー対象が `min_changed_files` 未満 | `allow("no-reviewable-changes", st)`（`crates/reviewgate/src/review.rs:206-208`） | operator が `include`/`exclude`/`min_changed_files` で制御する宣言済みスコープ |
+| 同一 diff hash の再 stop | `allow("already-reviewed", st)`（`crates/reviewgate/src/review.rs:239-241`） | `crates/reviewgate/src/review.rs:9-11` module doc（convergence）。無限 block を防ぐ核 |
 | **G1** inject giveup | bounded に allow（無音・タグ `"giveup"`） | `crates/reviewgate/src/config.rs:45-46`「give up and allow the stop so the agent isn't trapped」。**inject mode では gate 自身が verdict を持たない**（レビューするのは agent 自身）ので、*捨てられた既知の違反は存在しない* — この点が G3 と決定的に異なる |
-| **G2 / G4 / G5** | bounded に allow ＋ 警告 ＋ 専用タグ | 各 `decide_*` の doc / 分岐コメント（`crates/reviewgate/src/review.rs:313-315` と `188-200`, `270-278`, `307-316`）。`reviewer_error_gives_up_after_max_attempts_but_never_traps`（`:642`）/ `truncated_diff_gives_up_after_max_attempts_but_never_traps`（`:726`）/ `failed_git_scan_gives_up_after_max_attempts_but_never_traps`（`:782`）が固定 |
+| **G2 / G4 / G5** | bounded に allow ＋ 警告 ＋ 専用タグ | 各 `decide_*` の doc / 分岐コメント（`crates/reviewgate/src/review.rs:297-299` と `188-200`, `270-278`, `307-316`）。`reviewer_error_gives_up_after_max_attempts_but_never_traps`（`:642`）/ `truncated_diff_gives_up_after_max_attempts_but_never_traps`（`:726`）/ `failed_git_scan_gives_up_after_max_attempts_but_never_traps`（`:782`）が固定 |
 | session 限定 skip | 消費されたら allow（`crates/reviewgate/src/main.rs:180`「harness_core::gate::run::consume_session_skip(」、`eprintln!` あり） | `harness_core::gate::run::consume_session_skip`。**`reviewgate skip --reason "..."` という operator の明示的行為**が前提で、**発行したセッションにだけ**適用される（共有 project root の `.reviewgate-skip` は撤去済み — 次に停止した別セッションが消費してしまうため）。読めない marker は `None`＝**尊重しない**（判定不能→制限側）。第3引数 `input.stop_hook_active` により、他ゲートが block した stop では札を焼かず、chain が実際に終わった最初の 1 回で消費される |
 | `REVIEWGATE_DISABLE=1` | 即 allow / exit 0（`crates/reviewgate/src/main.rs:161-167`） | `Config::disabled_env`。panic guard の**外側**ではなく `review_run` 内だが、config 読み込みより前に評価され常に到達可能 |
 | config `enabled = false` | 即 allow / exit 0（`crates/reviewgate/src/main.rs:170-176`） | operator の明示的意思 |
 | 設定ファイルが**存在しない** | `Config::default()`（armed） | `crates/reviewgate/src/config.rs:1-6`「Safe by default: … Installing the hook can never *trap* a turn on its own.」**不在は判定不能ではなく KNOWN な答え**。budgetguard 監査 §1 の carve-out と同じ線引き（**存在するのに読めない/解釈できない**場合だけが P7） |
-| `classify` の `LGTM` 前方一致 | `Clean`（`crates/reviewgate/src/review.rs:673-676`） | `crates/reviewgate/src/review.rs:614`「Output that is empty or starts with "LGTM" = clean.」＋ prompt（469 行）で reviewer に指示済み。classify_lgtm_is_clean（571 行）が固定 |
+| `classify` の `LGTM` 前方一致 | `Clean`（`crates/reviewgate/src/review.rs:657-660`） | `crates/reviewgate/src/review.rs:598`「Output that is empty or starts with "LGTM" = clean.」＋ prompt（469 行）で reviewer に指示済み。classify_lgtm_is_clean（571 行）が固定 |
 | stdout が空 ＝ `Clean` | — | **D 主張を §1 P4 で棄却した**（prompt は `LGTM` を要求しており、空は契約上の clean 合図ではない） |
 
 ---
@@ -676,7 +676,7 @@ $ grep -n 'giveup\|eprintln!' crates/reviewgate/src/review.rs
    説明しており、**同一ファイル内で自己矛盾**している（budgetguard 監査 §5 と同型）。
    加えて「our own bug → allow」は、`ChangeScan::Failed` が block する現在の設計とも整合しない。
    `never trap a turn` は CLAUDE.md 第1節が「verdict 経路の docstring に書いた時点で赤信号」と
-   名指しする語であり、この crate では `crates/reviewgate/src/review.rs:333`, `278`, `315` にも現れる
+   名指しする語であり、この crate では `crates/reviewgate/src/review.rs:317`, `278`, `315` にも現れる
    （そこでは bounded giveup の正当化に使われており、G2/G4/G5 は実際に警告付き＝宣言どおり。
    一方 G1/G3 は同じ語の傘の下にありながら無音である点が、この語の危うさを示す実例になっている）。
 3. **`crates/reviewgate/src/git.rs:94-98`**（`diff_text` の doc）:
@@ -686,7 +686,7 @@ $ grep -n 'giveup\|eprintln!' crates/reviewgate/src/review.rs
    — `truncated` が覆うのは**サイズ超過による欠落だけ**であり、取得コマンド失敗による欠落
    （P1/P2）は同じ「silently allow」を招くのに flag に現れない。doc は「caller は refuse できる」と
    読ませるが、refuse する材料が渡っていない。
-4. **`crates/reviewgate/src/review.rs:616-620`**（`run_reviewer` の doc）: `Undetermined` の原因を
+4. **`crates/reviewgate/src/review.rs:600-604`**（`run_reviewer` の doc）: `Undetermined` の原因を
    `spawn failure, non-zero exit with no output, timeout, wait error` と**列挙**しているが、
    実際には stdout 読み取り失敗（P3）・prompt 配送失敗（P4）が抜けており、それらは `Clean` に落ちる。
 5. **`reviewgate status` の `config:` 行**（`crates/reviewgate/src/main.rs:307-313`）: パース成否を見ずに
@@ -702,7 +702,7 @@ CLAUDE.md 第6節に従い、**「経路を辿れなかった」を「経路が�
 
 | 候補 | 状態 | 根拠 |
 |---|---|---|
-| `classify` の `first.to_ascii_lowercase().starts_with("lgtm")`（`crates/reviewgate/src/review.rs:674`）が、"lgtm" で始まる**実所見**を Clean と誤分類しうる | **RECORDED, not asserted** | 前方一致であり `lgtm, but: high severity …` のような出力は Clean になる。prompt（`:469`）は「問題が無ければ `LGTM` **とだけ**」と指示しているので契約違反の出力ではあるが、LLM reviewer が前置きに "LGTM overall, but…" と書く実務的確率は無視できない。**実測していないので P に格上げしない**。是正するなら完全一致にすべき、という指摘のみ記録 |
+| `classify` の `first.to_ascii_lowercase().starts_with("lgtm")`（`crates/reviewgate/src/review.rs:658`）が、"lgtm" で始まる**実所見**を Clean と誤分類しうる | **RECORDED, not asserted** | 前方一致であり `lgtm, but: high severity …` のような出力は Clean になる。prompt（`:469`）は「問題が無ければ `LGTM` **とだけ**」と指示しているので契約違反の出力ではあるが、LLM reviewer が前置きに "LGTM overall, but…" と書く実務的確率は無視できない。**実測していないので P に格上げしない**。是正するなら完全一致にすべき、という指摘のみ記録 |
 | `hash_diff` の `DefaultHasher`（`crates/reviewgate/src/review.rs:85-89`）の衝突・std 更新による不安定性 | **棄却（restrictive 方向）** | 衝突すれば `already-reviewed` で誤 allow だが 64bit SipHash の偶発衝突は無視可能。std 更新でハッシュが変われば**過去の hash と一致しなくなる**＝もう一度 block する側に倒れる。`hash_is_stable_and_distinct`（`:582`）が同一プロセス内の安定性を固定 |
 | `state::save` / `append_jsonl` の書き込み失敗（`crates/reviewgate/src/main.rs:209-217`, `209-217`, `275`） | **棄却（restrictive 方向）** | `last_hash` を保存できなければ次の stop で `already-reviewed` が成立せず**再度 block**する。attempts を保存できなければ giveup までの猶予が増える |
 | `crates/reviewgate/src/main.rs:307`「std::env::current_dir().unwrap_or_else(」＝ 失敗時に Path::new(".") へ落ちる | **判定経路ではない（が §4-5 で別の欠陥あり）** | 下流消費者を列挙した: status は --json を持たず、grep -rn 'reviewgate status' に機械的消費者は無い（唯一の消費者は端末の人間）。ただし**人間が「ゲートは armed か」を判断する面**なので免責は狭い。`current_dir` 失敗そのものより、§4-5 の config 誤報のほうが実害が大きい |
@@ -716,10 +716,10 @@ CLAUDE.md 第6節に従い、**「経路を辿れなかった」を「経路が�
 
 | # | 指摘 | 本稿での対応 |
 |---|---|---|
-| 1 | `crates/reviewgate/src/review.rs:375-384` の **Violation-giveup** が P/R/D のどこにも列挙されていない | **§1 P5 として独立に列挙**し、逐語引用・実測（Probe C2、対照 D/E）・D 主張の明示的棄却つきで **P** に分類した |
+| 1 | `crates/reviewgate/src/review.rs:359-368` の **Violation-giveup** が P/R/D のどこにも列挙されていない | **§1 P5 として独立に列挙**し、逐語引用・実測（Probe C2、対照 D/E）・D 主張の明示的棄却つきで **P** に分類した |
 | 2 | D 表の「giveup は 4 箇所、いずれも直前に無条件 `eprintln!` 警告」が事実と違う | **§3.1 で `grep -n` の生出力を貼り、giveup は 5 箇所・警告があるのは 3 箇所（G2/G4/G5）だけ**であることを表で示した。`:218` は giveup ではなく block 経路の警告である点も明記。G1/G3 が hook モードで無音であることは Probe C2/E で実測 |
 | 3 | 上記の誤りに依存していた P1 の対比記述（「empty-diff だけが無警告」） | **§1 P1 末尾に訂正ブロックを置き**、正しい対比（「判定不能を*表現できた* 3 経路は block＋警告＋専用タグ、`diff_text` の失敗だけは表現する型が無く正常系 allow タグに合流する」）へ差し替えた |
-| 4 | 行番号の誤り 3 件 | (a) `ls-files --others` は `crates/reviewgate/src/git.rs:119-126` ではなく **`crates/reviewgate/src/git.rs:109-118`**（`if let Ok(o)` が 109、対応する閉じ括弧が 118。ファイル内容の読み込みは別に `crates/reviewgate/src/git.rs:119-130`）。(b) `Ok(Some(status))` アームは `crates/reviewgate/src/review.rs:647-657` ではなく **`crates/reviewgate/src/review.rs:648-658`**。(c) `evaluate()` の `DiffText` destructure は**4 行のまま**逐語引用した（§1 P1、`crates/reviewgate/src/review.rs:226-232`）。本稿の行番号は全件 `sed -n` で再確認済み |
+| 4 | 行番号の誤り 3 件 | (a) `ls-files --others` は `crates/reviewgate/src/git.rs:119-126` ではなく **`crates/reviewgate/src/git.rs:109-118`**（`if let Ok(o)` が 109、対応する閉じ括弧が 118。ファイル内容の読み込みは別に `crates/reviewgate/src/git.rs:119-130`）。(b) `Ok(Some(status))` アームは `crates/reviewgate/src/review.rs:631-641` ではなく **`crates/reviewgate/src/review.rs:632-642`**。(c) `evaluate()` の `DiffText` destructure は**4 行のまま**逐語引用した（§1 P1、`crates/reviewgate/src/review.rs:210-216`）。本稿の行番号は全件 `sed -n` で再確認済み |
 
 加えて、前回草稿が「未確証」として表に留めていた 2 件（config フォールバックによる厳格さの後退／
 `interactive` 誤判定）は、**実測（Probe J / Probe G）を行って P7・P8 に格上げ**した。

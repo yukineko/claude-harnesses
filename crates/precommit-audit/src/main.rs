@@ -332,6 +332,53 @@ fn run() {
         let cfg_rel = classify::norm(&rel.to_string_lossy());
         files.retain(|f| classify::norm(f) != cfg_rel);
     }
+
+    // WHOSE changes are these? `changed_and_untracked` scanned the working
+    // TREE, which carries no session identity — in a checkout two sessions
+    // share it answers for both of them, and this audit then blocks you on a
+    // peer's edits (backlog `1e44bfd9`, observed twice). The shortest way out
+    // of a block you did not earn is to issue a skip, so the gate's own
+    // pressure pushes toward disabling the gate.
+    //
+    // Unlike the Stop gates this process gets no hook payload, so it has no
+    // `transcript_path`; the session identity it does have is the same
+    // `CLAUDE_CODE_SESSION_ID` the skip hatch already keys on, and
+    // `attribute_from_session` turns that into the transcript.
+    //
+    // Two things are deliberately NOT narrowed away, because this gate blocks
+    // on hard-coded secrets and missing tests and a silent narrowing is a
+    // silent pass:
+    //
+    //   * Undetermined — no session (a plain terminal `git commit`), no
+    //     `$HOME`, no transcript file, an unreadable one — keeps the FULL set.
+    //   * A file NO transcript claims stays in. The footprint only sees
+    //     `Edit`/`Write` blocks, so an edit made with `sed -i` is invisible in
+    //     it (measured; see `harness_core::attribution`). Only a file a PEER's
+    //     transcript positively claims is dropped.
+    let session = hookio::session_id().unwrap_or_default();
+    let attribution = harness_core::attribution::attribute_from_session(&root, &session, &files);
+    match &attribution {
+        harness_core::attribution::Attribution::Narrowed { keep, excluded }
+            if !excluded.is_empty() =>
+        {
+            eprintln!(
+                "pre-commit audit 帰属: 変更 {total} 件のうち {n} 件は別セッションの transcript に\
+                 編集記録があり本セッションには無いため、監査対象から除外しました: {list}",
+                total = keep.len() + excluded.len(),
+                n = excluded.len(),
+                list = excluded.join(", "),
+            );
+        }
+        harness_core::attribution::Attribution::Narrowed { .. } => {}
+        harness_core::attribution::Attribution::Undetermined { why } => {
+            eprintln!(
+                "pre-commit audit 帰属: 判定不能 — {why}。変更を本セッションのものへ絞り込まずに\
+                 全件を監査対象にしています（判定不能を「自分の変更ではない」へ倒さないため）。"
+            );
+        }
+    }
+    let files: Vec<String> = attribution.files(&files).to_vec();
+
     if files.is_empty() {
         exit(0);
     }

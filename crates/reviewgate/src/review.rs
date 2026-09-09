@@ -97,15 +97,19 @@ fn now() -> i64 {
 /// A working tree carries no session identity, so `git diff --name-only` in a
 /// shared checkout answers for EVERY concurrent session (backlog `1e44bfd9`,
 /// observed 2026-07-21 session c6a1fdbf and 2026-07-23 session 143f3d21). The
-/// session's own transcript is the artefact that does carry identity, so this
-/// is the intersection of the two — and, because that intersection can fail,
-/// it is three-valued in the shape 第3節 requires.
+/// session's own transcript is the artefact that does carry identity — but it
+/// records only `Edit`/`Write` blocks, so a `sed -i` edit appears in NO
+/// footprint (measured, see `harness_core::attribution`). A file is therefore
+/// dropped only when a *peer's* transcript positively claims it; absence of
+/// evidence keeps it. Because even that can fail to be computed, the type is
+/// three-valued in the shape 第3節 requires.
 enum Attribution {
-    /// The transcript was read. `mine` is what this session edited; `excluded`
-    /// is what it did not, kept so the exclusion can be NAMED rather than
-    /// silently applied.
+    /// The transcript was read. `keep` is what still gets reviewed — this
+    /// session's edits plus everything unattributed; `excluded` is the narrow
+    /// set another session claims, kept so the exclusion can be NAMED rather
+    /// than silently applied.
     Narrowed {
-        mine: Vec<String>,
+        keep: Vec<String>,
         excluded: Vec<String>,
     },
     /// The transcript could not be read. **Do not narrow.** Narrowing here
@@ -115,41 +119,21 @@ enum Attribution {
     Undetermined { why: String },
 }
 
-/// Resolve `p` as far as the filesystem allows, so an absolute path recorded by
-/// the transcript and a repo-relative path from `git` compare equal.
+/// Split `changed` into "review it" and "another session positively owns it".
 ///
-/// `canonicalize` also resolves the symlinked temp dirs some hosts use, which
-/// is why it is applied to BOTH sides rather than just joining the root. A
-/// deleted file cannot be canonicalised; falling back to the unresolved path is
-/// correct there — worst case the two spellings differ and the file stays in
-/// the review set, which is the restrictive direction.
-fn resolve(p: &Path) -> std::path::PathBuf {
-    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
-}
-
-/// Split `changed` into "this session wrote it" and "someone else did".
+/// The split itself is `harness_core::attribution` — `precommit-audit` needs
+/// exactly the same rule from a different entry point (a session id rather than
+/// a `transcript_path`), and a second copy of a rule whose failure mode is
+/// permissive would drift. What stays here is only the rendering of the note.
 fn attribute(root: &Path, transcript_path: &str, changed: &[String]) -> Attribution {
-    let edited = match harness_core::transcript::files_edited_by_session(transcript_path) {
-        harness_core::verdict::Determination::Known(v) => v,
-        harness_core::verdict::Determination::Undetermined(why) => {
-            return Attribution::Undetermined {
-                why: why.as_str().to_string(),
-            }
+    match harness_core::attribution::attribute_from_transcript(root, transcript_path, changed) {
+        harness_core::attribution::Attribution::Narrowed { keep, excluded } => {
+            Attribution::Narrowed { keep, excluded }
         }
-    };
-    let edited: std::collections::BTreeSet<std::path::PathBuf> =
-        edited.iter().map(|p| resolve(Path::new(p))).collect();
-
-    let mut mine = Vec::new();
-    let mut excluded = Vec::new();
-    for c in changed {
-        if edited.contains(&resolve(&root.join(c))) {
-            mine.push(c.clone());
-        } else {
-            excluded.push(c.clone());
+        harness_core::attribution::Attribution::Undetermined { why } => {
+            Attribution::Undetermined { why }
         }
     }
-    Attribution::Narrowed { mine, excluded }
 }
 
 /// The line that makes attribution visible. `None` when there is nothing to
@@ -161,10 +145,10 @@ fn attribute(root: &Path, transcript_path: &str, changed: &[String]) -> Attribut
 fn attribution_note(a: &Attribution) -> Option<String> {
     match a {
         Attribution::Narrowed { excluded, .. } if excluded.is_empty() => None,
-        Attribution::Narrowed { mine, excluded } => Some(format!(
-            "⚖ 帰属: 変更 {total} 件のうち {n} 件は本セッションの transcript に編集記録が無いため\
-             レビュー対象から除外しました（作業ツリーを共有している別セッションの変更の可能性）: {list}",
-            total = mine.len() + excluded.len(),
+        Attribution::Narrowed { keep, excluded } => Some(format!(
+            "⚖ 帰属: 変更 {total} 件のうち {n} 件は別セッションの transcript に編集記録があり\
+             本セッションには無いため、レビュー対象から除外しました: {list}",
+            total = keep.len() + excluded.len(),
             n = excluded.len(),
             list = excluded.join(", "),
         )),
@@ -207,7 +191,7 @@ pub fn evaluate(
     let attribution = attribute(root, transcript_path, &changed);
     let note = attribution_note(&attribution);
     let changed = match &attribution {
-        Attribution::Narrowed { mine, .. } => mine.clone(),
+        Attribution::Narrowed { keep, .. } => keep.clone(),
         // 判定不能: review everything, exactly as before this feature existed.
         Attribution::Undetermined { .. } => changed,
     };

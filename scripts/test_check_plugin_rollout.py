@@ -150,7 +150,8 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
                   skill_only=(), no_host_binary=(), force_host_binary=(),
                   asset_missing=None, asset_modified=None, asset_extra=None,
                   asset_crlf=None, asset_binary=None, source_extra=None,
-                  cached_versions=None, settings_extra=None, no_bin_launcher=()):
+                  cached_versions=None, settings_extra=None, no_bin_launcher=(),
+                  enabled_extra_keys=None, registry_extra_keys=None):
     """Build a fixture repo + registry + settings under `tmp`.
 
     versions           — crate -> source version (defaults to FIXTURE_PLUGINS)
@@ -189,6 +190,12 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
                          hook (`.gitignore`: "crate-local runtime progress
                          artifacts (taskprog etc.) — never track"), which is not
                          plugin payload and must not be deployed.
+    enabled_extra_keys — literal `enabledPlugins` keys (owner suffix included)
+                         merged into the built map. Used for the ORPHAN shape
+                         (`ghost@yukineko` with no crates/ghost) and for the
+                         foreign-owner control that must NOT be reported.
+    registry_extra_keys— literal `installed_plugins.json` plugin keys (owner
+                         suffix included), same two uses on the registry side.
     """
     asset_missing = dict(asset_missing or {})
     asset_modified = dict(asset_modified or {})
@@ -283,6 +290,12 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
             plugins[f"{c}@{OWNER}"] = [{}]
         for c, raw in (registry_raw_entries or {}).items():
             plugins[f"{c}@{OWNER}"] = raw
+        # Literal registry keys, owner suffix included. Distinct from
+        # `registry_raw_entries` (which appends @yukineko) because the orphan
+        # dimension is scoped BY that suffix: a plugin from another marketplace
+        # is not this repo's to account for, and a fixture that cannot write one
+        # could never show that scoping actually excludes anything.
+        plugins.update(registry_extra_keys or {})
         _write_json(registry_path, {"plugins": plugins})
 
     # Superseded version dirs left in the cache. `marker_pids` on an entry makes
@@ -311,6 +324,11 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
             for c in enabled_absent:
                 en.pop(c, None)
             data = {"enabledPlugins": {f"{c}@{OWNER}": v for c, v in en.items()}}
+            # Same reasoning as registry_extra_keys: literal enabledPlugins
+            # keys, owner suffix included, so a case can write a key for a
+            # plugin that has no crate (the retired-plugin shape) or one owned
+            # by another marketplace (which must NOT be reported).
+            data["enabledPlugins"].update(enabled_extra_keys or {})
             data.update(settings_extra or {})
             _write_json(settings_path, data)
     return crates, registry_path, settings_path
@@ -319,7 +337,8 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
 class _FixtureCase(unittest.TestCase):
     """Rebinds the script's path constants at the fixture, restores after."""
 
-    def run_main(self, tmp, *, changed=(), core_version="0.2.1", parked=None, **kwargs):
+    def run_main(self, tmp, *, changed=(), core_version="0.2.1", parked=None,
+                 retired=None, **kwargs):
         crates, registry_path, settings_path = _make_fixture(Path(tmp), **kwargs)
         saved = (
             cpr.CRATES,
@@ -329,6 +348,7 @@ class _FixtureCase(unittest.TestCase):
             getattr(cpr, "PLUGIN_CACHE_ROOT", None),
             getattr(cpr, "SOURCE_CORE_VERSION", None),
             cpr.PARKED_PATH,
+            getattr(cpr, "RETIRED_PATH", None),
         )
         cpr.CRATES = str(crates)
         cpr.REGISTRY_PATH = str(registry_path)
@@ -343,6 +363,14 @@ class _FixtureCase(unittest.TestCase):
         if parked is not None:
             parked_path.write_text(json.dumps(parked, indent=2), encoding="utf-8")
         cpr.PARKED_PATH = str(parked_path)
+        # Same reasoning as parked_path above, for the retirement declaration:
+        # left at its default it resolves to the REAL scripts/retired-plugins.json
+        # and that file's entries would silently reclassify fixture findings.
+        # `retired=None` writes no file at all — the "nothing retired" default.
+        retired_path = Path(tmp) / "retired-plugins.json"
+        if retired is not None:
+            retired_path.write_text(json.dumps(retired, indent=2), encoding="utf-8")
+        cpr.RETIRED_PATH = str(retired_path)
         cpr.SOURCE_CHANGED_SINCE = _changed_stub(changed)
         # Without this the stale-version-dir dimension would inspect the REAL
         # plugin cache on the developer's machine and every case would inherit
@@ -365,6 +393,7 @@ class _FixtureCase(unittest.TestCase):
                 cpr.PLUGIN_CACHE_ROOT,
                 cpr.SOURCE_CORE_VERSION,
                 cpr.PARKED_PATH,
+                cpr.RETIRED_PATH,
             ) = saved
         return rc, out.getvalue(), err.getvalue()
 
@@ -1893,6 +1922,305 @@ class PartitionParked(unittest.TestCase):
         red, suppressed = cpr.partition_parked(["a: x", "b: y"], {})
         self.assertEqual(len(red), 2)
         self.assertEqual(suppressed, {})
+
+
+GHOST = "ghostplugin"
+
+
+def _retirement(name=GHOST, **over):
+    entry = {
+        "reason": "withdrawn by user ruling; its verdicts blocked real work",
+        "retired_at": "2026-08-24",
+    }
+    entry.update(over)
+    return {"retired": {name: entry}}
+
+
+class RetiredPlugins(_FixtureCase):
+    """The REVERSE direction: something is enabled/installed that crates/ no
+    longer backs.
+
+    Every other dimension in this file runs crates/ -> settings/registry/cache,
+    so it can only ever report a plugin that EXISTS in source. The retired shape
+    is the mirror image and was measured to be invisible: taintguard was deleted
+    from the repo on 2026-08-24 (0521d013) and stayed enabled and deployed on the
+    live machine, with `check-plugin-rollout.py` exiting 0 the whole time
+    (backlog 0cd69e11). A change is inert until it is rolled out; the inverse is
+    that a REMOVAL is inert until it is propagated, and nothing enforced the
+    inverse.
+
+    Measured before the fix, at c7c4ea49 (2026-09-10), one direction at a time:
+      settings — rc=0, the name appeared NOWHERE in stdout+stderr, and
+                 "OK: all 6 GATE plugin(s) enabled (9 plugins checked against
+                 enabledPlugins)" was printed over it.
+      registry — rc=0, likewise absent from all output.
+      cache    — rc=1 ALREADY, via plugin_cache.scan: "ghostplugin: cached but
+                 no current version known from crates/ — cannot tell which of
+                 its dirs is live, so none are pruned". That direction needed no
+                 new detection; the case below pins it so it cannot regress.
+    """
+
+    def test_enabled_with_no_crate_is_a_hard_failure(self):
+        """A key in enabledPlugins with no crate behind it is a LIVE HOOK with no
+        source of truth: the plugin's cached bytes still execute on every session
+        while nothing in this repo can be read to say what they do."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp, enabled_extra_keys={f"{GHOST}@{OWNER}": True}
+            )
+            self.assertEqual(rc, cpr.RC_RETIRED)
+            self.assertIn("RETIRED BUT STILL LIVE", err)
+            self.assertIn(f"{GHOST}@{OWNER}", err)
+            self.assertIn("no crate", err)
+            # The message must name the file it observed the key in, so the
+            # reader can go and look rather than take the checker's word.
+            self.assertIn(str(Path(tmp) / "settings.json"), err)
+            # A green line about a population must not be printed over it.
+            self.assertNotIn("OK: every ", out)
+
+    def test_registry_entry_with_no_crate_is_a_hard_failure(self):
+        """`installed_plugins.json` still listing a withdrawn plugin means the
+        removal was never propagated: the entry is one enabledPlugins edit away
+        from being live again, and `claude plugin` still offers it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, _out, err = self.run_main(
+                tmp, registry_extra_keys={f"{GHOST}@{OWNER}": [{"version": "0.1.0"}]}
+            )
+            self.assertEqual(rc, cpr.RC_RETIRED)
+            self.assertIn("RETIRED BUT STILL LIVE", err)
+            self.assertIn(f"{GHOST}@{OWNER}", err)
+
+    def test_a_foreign_owner_key_is_not_an_orphan(self):
+        """Anti-vacuity control. `~/.claude` is machine-global: it legitimately
+        carries plugins from other marketplaces (measured on this machine
+        2026-09-10: rust-analyzer-lsp@claude-plugins-official,
+        swift-lsp@claude-plugins-official, vrm-pipeline@vrm-pipeline). Reporting
+        those as orphans would make the new red permanent and unclearable, i.e.
+        exactly the hazard scripts/parked-plugins.json exists to prevent."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, _out, err = self.run_main(
+                tmp,
+                enabled_extra_keys={"someone-elses@othermarket": True},
+                registry_extra_keys={"someone-elses@othermarket": [{"version": "1.0.0"}]},
+            )
+            self.assertEqual(rc, cpr.RC_OK)
+            self.assertNotIn("someone-elses", err)
+
+    def test_cache_dir_with_no_crate_is_already_a_hard_failure(self):
+        """Regression pin for the ONE direction that was already covered before
+        this task (verbatim output recorded in the class docstring). It is
+        reported by plugin_cache.scan and folded into the ROLLOUT class, so it
+        keeps rc=1 — deliberately NOT re-reported by the orphan dimension, which
+        would give the same fact two exit codes and two remedies."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, _out, err = self.run_main(tmp, cached_versions={GHOST: ["0.1.0"]})
+            self.assertEqual(rc, cpr.RC_ROLLOUT)
+            self.assertIn(
+                f"{GHOST}: cached but no current version known from crates/", err
+            )
+            self.assertNotIn("RETIRED BUT STILL LIVE", err)
+
+    def test_a_declared_retirement_suppresses_the_red_and_prints_it_verbatim(self):
+        """The declared retirement is the honest way to clear this red. It must
+        print what it silenced, exactly as the parked report does — a suppression
+        the operator cannot read is the fail-open this feature would otherwise
+        become."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, _out, err = self.run_main(
+                tmp,
+                enabled_extra_keys={f"{GHOST}@{OWNER}": True},
+                retired=_retirement(),
+            )
+            self.assertEqual(rc, cpr.RC_OK)
+            self.assertIn("RETIRED ON PURPOSE", err)
+            self.assertIn("withdrawn by user ruling", err)
+            self.assertIn("2026-08-24", err)
+            self.assertIn("suppressing 1 finding(s)", err)
+            # Verbatim, not a count: the suppressed finding's own text.
+            self.assertIn(f"{GHOST}@{OWNER}", err)
+            self.assertNotIn("RETIRED BUT STILL LIVE", err)
+
+    def test_a_declared_retirement_also_covers_its_orphan_cache_dir(self):
+        """The cache orphan is `<name>: cached but no current version known from
+        crates/`, and unlike a SUPERSEDED dir the pruner will never remove it: it
+        cannot tell which dir is live, so it keeps them all (correctly — deleting
+        is the irreversible action). Left unsuppressed, a declared retirement
+        would therefore have no reachable green at all, which is the permanent-red
+        hazard of backlog a6f165cd. The bytes are still named in the report."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, _out, err = self.run_main(
+                tmp, cached_versions={GHOST: ["0.1.0"]}, retired=_retirement()
+            )
+            self.assertEqual(rc, cpr.RC_OK)
+            self.assertIn("RETIRED ON PURPOSE", err)
+            self.assertIn("cached but no current version known from crates/", err)
+            self.assertNotIn("ROLLOUT DRIFT", err)
+
+    def test_a_retirement_naming_a_live_crate_is_rejected(self):
+        """The OPPOSITE validation to load_parked's: a park must name a real
+        plugin, a retirement must name one that is GONE. A retirement entry for a
+        crate that still exists is a stale declaration — it silences nothing
+        today and would silence a real red the day that crate is deleted."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, _out, err = self.run_main(tmp, retired=_retirement("blastguard"))
+            self.assertEqual(rc, cpr.RC_RETIRED_CONFIG)
+            self.assertIn("UNUSABLE RETIRED DECLARATION", err)
+            self.assertIn("blastguard", err)
+            self.assertIn("still exists under crates/", err)
+
+    def test_a_retirement_that_suppresses_nothing_is_called_out(self):
+        """Mirror of the parked NOTE. A declaration covering nothing is a loaded
+        gun aimed at a future red nobody will re-read."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, _out, err = self.run_main(tmp, retired=_retirement())
+            self.assertEqual(rc, cpr.RC_OK)
+            self.assertIn("RETIRED ON PURPOSE", err)
+            self.assertIn("suppressing NOTHING", err)
+
+    def test_unreadable_settings_does_not_yield_a_green_orphan_line(self):
+        """Judgment-impossible must not fold into an empty orphan set. Settings
+        Claude Code cannot parse is also settings THIS script cannot enumerate,
+        so 'no orphan found' would be a claim about a population it never saw."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(tmp, settings_text="{ not json")
+            self.assertNotEqual(rc, cpr.RC_OK)
+            self.assertNotIn("OK: every ", out)
+            self.assertIn("cannot enumerate enabledPlugins", err)
+
+    def test_non_dict_enabled_plugins_is_undetermined_for_the_orphan_dimension(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(tmp, enabled_plugins_raw=["blastguard@yukineko"])
+            self.assertNotEqual(rc, cpr.RC_OK)
+            self.assertNotIn("OK: every ", out)
+            self.assertIn("cannot enumerate enabledPlugins", err)
+
+    def test_unreadable_registry_does_not_yield_a_green_orphan_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(tmp, registry_text="{ not json")
+            self.assertNotEqual(rc, cpr.RC_OK)
+            self.assertNotIn("OK: every ", out)
+            self.assertIn("cannot enumerate installed plugins", err)
+
+    def test_absent_inputs_skip_the_dimension_without_claiming_a_verdict(self):
+        """Fail-soft on ABSENT, exactly as both existing dimensions do: nothing
+        configured and nothing deployed is not a failure. But with no source to
+        enumerate there is also nothing to be green about, so no OK line."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, _err = self.run_main(
+                tmp, write_settings=False, write_registry=False
+            )
+            self.assertEqual(rc, cpr.RC_OK)
+            self.assertNotIn("OK: every ", out)
+
+    def test_the_clean_case_states_the_population_it_inspected(self):
+        """A green line has to say what it looked at, or the reader cannot tell a
+        verified fleet from an unread one."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, _err = self.run_main(tmp)
+            self.assertEqual(rc, cpr.RC_OK)
+            self.assertIn("OK: every ", out)
+            self.assertIn("enabledPlugins", out)
+
+
+class RetiredDeclaration(unittest.TestCase):
+    """load_retired() validation. Deliberately parallel to ParkedDeclaration —
+    same fail-closed shapes, inverted name rule."""
+
+    def _load(self, tmp, payload, plugins=()):
+        path = Path(tmp) / "retired-plugins.json"
+        if isinstance(payload, str):
+            path.write_text(payload, encoding="utf-8")
+        else:
+            path.write_text(json.dumps(payload), encoding="utf-8")
+        return cpr.load_retired(list(plugins), path=str(path), crates_dir=str(Path(tmp) / "nocrates"))
+
+    def test_absent_file_means_nothing_retired(self):
+        self.assertEqual(
+            cpr.load_retired([], path="/nonexistent/r.json", crates_dir="/nonexistent"),
+            ({}, []),
+        )
+
+    def test_unparseable_file_is_a_problem_not_an_empty_set(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            retired, problems = self._load(tmp, "{ nope")
+            self.assertEqual(retired, {})
+            self.assertEqual(len(problems), 1)
+            self.assertIn("unparseable", problems[0])
+
+    def test_wrong_top_level_shape_is_a_problem(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            retired, problems = self._load(tmp, {"retired": []})
+            self.assertEqual(retired, {})
+            self.assertEqual(len(problems), 1)
+
+    def test_entry_missing_reason_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            retired, problems = self._load(
+                tmp, {"retired": {"ghost": {"retired_at": "2026-08-24"}}}
+            )
+            self.assertEqual(retired, {})
+            self.assertIn("reason", problems[0])
+
+    def test_entry_with_unparseable_date_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            retired, problems = self._load(
+                tmp, {"retired": {"ghost": {"reason": "r", "retired_at": "last august"}}}
+            )
+            self.assertEqual(retired, {})
+            self.assertIn("YYYY-MM-DD", problems[0])
+
+    def test_a_valid_entry_for_a_vanished_plugin_is_accepted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            retired, problems = self._load(
+                tmp, {"retired": {"ghost": {"reason": "r", "retired_at": "2026-08-24"}}}
+            )
+            self.assertEqual(problems, [])
+            self.assertIn("ghost", retired)
+
+
+class RetiredRealDeclaration(unittest.TestCase):
+    """The declaration this repo actually ships must be VALID, for the same
+    reason ParkedRealDeclaration exists: a file that says which reds are
+    intentional is worthless the moment it stops parsing, and nothing else runs
+    this loader against the real file.
+
+    Like that class, this asserts no ROSTER — pinning which plugins are retired
+    would couple the mechanism's suite to a transient operational fact and go red
+    for being correct.
+    """
+
+    def test_the_shipped_declaration_is_valid(self):
+        path = Path(cpr.REPO) / "scripts" / "retired-plugins.json"
+        self.assertTrue(path.is_file(), f"shipped declaration is missing: {path}")
+        plugins, _unverifiable = cpr.scan_plugins()
+        retired, problems = cpr.load_retired(plugins, path=str(path))
+        self.assertEqual(problems, [], f"the shipped declaration is invalid: {problems}")
+        known = {c for c, _p, _v in plugins} | {p for _c, p, _v in plugins if p}
+        known |= {d.name for d in Path(cpr.CRATES).iterdir() if d.is_dir()}
+        self.assertNotIn(
+            "definitely-not-a-plugin", known,
+            "the membership check below cannot fail, so it proves nothing",
+        )
+        for name, entry in retired.items():
+            self.assertIn("reason", entry, f"{name} is retired with no reason")
+            self.assertIn("retired_at", entry, f"{name} is retired with no retired_at")
+            self.assertNotIn(
+                name, known,
+                f"{name} is declared retired but still exists under crates/",
+            )
+
+    def test_the_loader_actually_validates_at_this_call_site(self):
+        """Positive control: `problems == []` must mean the file was inspected."""
+        plugins, _unverifiable = cpr.scan_plugins()
+        with tempfile.TemporaryDirectory() as td:
+            bad = Path(td) / "retired-plugins.json"
+            bad.write_text(
+                '{"retired": {"ghostplugin": {"reason": "missing retired_at"}}}',
+                encoding="utf-8",
+            )
+            _retired, problems = cpr.load_retired(plugins, path=str(bad))
+        self.assertNotEqual(problems, [], "loader accepted an entry with no retired_at")
+
 
 if __name__ == "__main__":
     unittest.main()

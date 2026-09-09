@@ -22,7 +22,12 @@
     "by user ruling, so neither the park nor its observe-only posture exists any",
     "more; this file is about DEPLOYMENT only and holds no entry for it.",
     "The checker itself warns when an entry suppresses nothing: a stale park",
-    "silences a future red."
+    "silences a future red.",
+    "NOT to be confused with scripts/retired-plugins.json, which is the inverse:",
+    "a park names a plugin that EXISTS in crates/ and is deliberately not armed;",
+    "a retirement names one that is GONE from crates/ while leftovers of it are",
+    "still on the machine. Each loader rejects the other file's names, so any one",
+    "name belongs to exactly one of the two files."
   ],
   "parked": {
     "parallelguard": {

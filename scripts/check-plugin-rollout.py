@@ -10,7 +10,8 @@ gate, and still never take effect for any running session — this happened to
 5 plugins in one sitting before this script existed (hypothesis, condukt,
 compass, blastguard, overwatch all sat committed-but-undeployed).
 
-This script checks two independent dimensions of "is it actually live":
+This script checks three independent dimensions of "is it actually live". Two of
+them run crates/ -> settings/registry/cache; the third runs the other way.
 
 1. ROLLOUT (hard failure). For every plugin under crates/<name>/, compares:
      - crates/<name>/.claude-plugin/plugin.json  .version       (source of truth)
@@ -56,6 +57,25 @@ fixes and a caller that conflates them sends the reader to the wrong command —
       trusted (unparseable, wrong shape, an entry with no reason/parked_at, or a
       name matching no plugin). Fix: repair that file. Outranks every other
       class — see the tail of main() for why.
+  5 — RETIRED class: something is enabled or installed on THIS machine that no
+      crate under crates/ backs any more (dimension 4 below). Its own code
+      because its remedy is the inverse of every other class's — nothing is to
+      be rolled out or enabled, something is to be REMOVED (or declared retired).
+      Ranked LAST, because this verdict is computed from settings.json and the
+      registry: when either of those is itself broken, the class that owns that
+      file has to be acted on first.
+  6 — RETIRED_CONFIG class: scripts/retired-plugins.json exists but cannot be
+      trusted (unparseable, wrong shape, an entry with no reason/retired_at, or
+      a name that STILL matches a plugin under crates/). Fix: repair that file.
+      Same standing as PARKED_CONFIG, one file over.
+
+  Neither 5 nor 6 has its own branch in .githooks/pre-push, which is not
+  editable from a Claude session here (Edit/Write on .githooks/** is denied in
+  the user's permission settings). That file's `*)` catch-all prints this
+  script's full output and marks it advisory — the same fallback the
+  UNVERIFIABLE class relied on before it got a branch, and the output names the
+  actual problem. Adding the two branches is filed as a backlog item rather than
+  done silently.
 
 3. PARKED (third state, not a failure at all). A plugin can be deliberately
    left un-rolled-out / un-enabled, and before scripts/parked-plugins.json
@@ -69,6 +89,28 @@ fixes and a caller that conflates them sends the reader to the wrong command —
    optional revisit pointer, and — verbatim — every finding it is suppressing. It
    does NOT affect the exit code in either direction, and it does not touch the
    source-tree or cache checks (see main()).
+
+4. ORPHAN / RETIRED (hard failure, both directions). The three dimensions above
+   all enumerate crates/ and walk OUTWARD, so none of them can report a plugin
+   that is live on this machine but has no crate any more. That is exactly the
+   shape a retired plugin leaves behind, and it was measured, not theorised:
+   crates/taintguard was deleted from the repo on 2026-08-24 (0521d013) by user
+   ruling because its verdicts blocked real work, and it stayed enabled in
+   ~/.claude/settings.json and deployed in the cache while this script exited 0
+   (backlog 0cd69e11). The plugin section of CLAUDE.md says a CHANGE is inert
+   until it is rolled out; the inverse is that a REMOVAL is inert until it is
+   propagated, and until check_orphans() existed nothing enforced the inverse.
+   Re-measured at c7c4ea49 (2026-09-10) against a fixture, one direction at a
+   time: the settings and registry directions each returned rc=0 with the name
+   appearing NOWHERE in the output; the cache direction already returned rc=1 via
+   plugin_cache.scan ("<name>: cached but no current version known from
+   crates/"), so it is left where it is rather than given a second exit code.
+   Scoped strictly to "<name>@yukineko" keys — both files are machine-global and
+   legitimately carry other marketplaces' plugins. A deliberate leftover is
+   declared in scripts/retired-plugins.json (the inverse of parked-plugins.json:
+   its names must match NO crate), which moves the finding into a RETIRED ON
+   PURPOSE report that still prints it verbatim. There is no bypass flag and no
+   env-var escape hatch.
 
 The rollout dimension checks FOUR things, because a matching version string is
 not evidence that anything in that directory is current:
@@ -136,7 +178,11 @@ lie about the file and fail-open on the exact hole this script exists to close.
 Registry path defaults to ~/.claude/plugins/installed_plugins.json; override
 with CLAUDE_PLUGIN_REGISTRY (same env var rollout-plugins.sh honors) so this
 is testable against a fixture registry. Settings path defaults to
-~/.claude/settings.json; override with CLAUDE_SETTINGS.
+~/.claude/settings.json; override with CLAUDE_SETTINGS. The two declaration
+files default to scripts/parked-plugins.json and scripts/retired-plugins.json;
+override with PARKED_PLUGINS / RETIRED_PLUGINS. Every one of these overrides
+exists to point the checker at a FIXTURE — none of them relaxes a verdict, and
+none of them may grow into one.
 
 Run from the repo root:  python3 scripts/check-plugin-rollout.py
 """
@@ -162,6 +208,17 @@ RC_UNVERIFIABLE = 3
 # fleet, the file that says which reds are intentional cannot be trusted — so
 # this run cannot tell an intentional red from a real one in either direction.
 RC_PARKED_CONFIG = 4
+# A plugin is enabled or installed on this machine that crates/ no longer backs
+# (see check_orphans). Its own class because its remedy is the opposite of every
+# other class's: nothing here is to be rolled out or enabled — something is to be
+# REMOVED, or declared retired. Ranked LAST in main()'s precedence, deliberately:
+# this verdict is computed from settings.json and the registry, so if either of
+# those is itself broken the class that owns that file must be acted on first.
+RC_RETIRED = 5
+# The retirement DECLARATION itself is unusable (see load_retired). Same
+# reasoning as RC_PARKED_CONFIG one file over: while it cannot be read, an
+# intentional leftover and a real one are indistinguishable in both directions.
+RC_RETIRED_CONFIG = 6
 
 REPO = os.getcwd()
 CRATES = os.path.join(REPO, "crates")
@@ -512,16 +569,8 @@ def load_parked(plugins, path=None):
     # parked-plugins.json (where nothing was wrong) instead of the plugin.json
     # that actually broke, and the real UNVERIFIABLE finding was outranked by a
     # bogus PARKED_CONFIG one.
-    known = set()
-    if os.path.isdir(CRATES):
-        known.update(
-            name for name in os.listdir(CRATES)
-            if os.path.isdir(os.path.join(CRATES, name))
-        )
-    for crate, pname, _src_ver in plugins:
-        known.add(crate)
-        if pname:
-            known.add(pname)
+    # Shared with load_retired, which requires the exact complement of this set.
+    known = _known_plugin_names(plugins)
 
     parked, problems = {}, []
     for name, entry in sorted(data["parked"].items()):
@@ -591,8 +640,13 @@ def parked_report(name, entry, suppressed):
 def partition_parked(problems, parked):
     """Split `problems` into (still_red, {name: [suppressed, ...]}).
 
+    `parked` is any {name: entry} declaration map — load_retired's output is
+    passed through the same function, because "which findings does this
+    declaration cover" is one question with one answer, and two copies of the
+    prefix rule could disagree about it.
+
     Problem strings for a specific plugin are all built as `f"{crate}: ..."`, so
-    a leading `"<parked name>: "` is what identifies one. Matching on that exact
+    a leading `"<declared name>: "` is what identifies one. Matching on that exact
     prefix (not a substring search) keeps fleet-wide findings — the superseded-
     version-dir line, which merely NAMES crates inside it — on the red side where
     they belong: a removable cache dir is removable whether or not the plugin is
@@ -607,6 +661,311 @@ def partition_parked(problems, parked):
         else:
             still_red.append(problem)
     return still_red, suppressed
+
+
+RETIRED_PATH = os.environ.get(
+    "RETIRED_PLUGINS", os.path.join(REPO, "scripts", "retired-plugins.json")
+)
+
+# Keys a retirement entry must carry. Same two as PARKED_REQUIRED and for the
+# same reasons, with the date named for what it records here: the day the crate
+# left the repository. Kept a separate tuple rather than aliased, so renaming one
+# file's field cannot silently rename the other's.
+RETIRED_REQUIRED = ("reason", "retired_at")
+
+
+def _known_plugin_names(plugins, crates_dir=None):
+    """Every name that a plugin in THIS repo can legitimately be called.
+
+    A crate DIR under crates/ or a plugin.json "name" — not merely a plugin the
+    scan managed to PARSE, because a crate whose plugin.json is corrupt is absent
+    from `plugins` while very much still existing in source.
+
+    Shared by load_parked (which requires membership) and load_retired (which
+    requires NON-membership) so the two predicates are exact complements of one
+    set. Computed twice they could drift, and the drift would show up as a name
+    that both files reject or, worse, that both accept.
+    """
+    crates_dir = CRATES if crates_dir is None else crates_dir
+    known = set()
+    if os.path.isdir(crates_dir):
+        known.update(
+            name for name in os.listdir(crates_dir)
+            if os.path.isdir(os.path.join(crates_dir, name))
+        )
+    for crate, pname, _src_ver in plugins:
+        known.add(crate)
+        if pname:
+            known.add(pname)
+    return known
+
+
+def load_retired(plugins, path=None, crates_dir=None):
+    """Return (retired, config_problems) from the retired-plugins declaration.
+
+    `retired` maps plugin name -> entry dict. `config_problems` is a list of
+    human-readable reasons the DECLARATION cannot be trusted.
+
+    Why this file exists (backlog 0cd69e11)
+    ---------------------------------------
+    Every other dimension in this script enumerates crates/ and walks OUTWARD to
+    settings / registry / cache, so it can only ever report on a plugin that
+    still exists in source. check_orphans() adds the reverse direction, and that
+    direction needs a way to say "yes, on purpose" — otherwise the only way to
+    clear its red would be to weaken it.
+
+    This is the same third state scripts/parked-plugins.json provides, one step
+    further along: a park says "do not arm this yet", a retirement says "this is
+    gone and the leftovers on this machine are known". The two files are kept
+    separate because their name rule is INVERTED — a park must name a plugin that
+    exists, a retirement must name one that does not — and putting opposite
+    validations behind one key would make the file unreadable to a human. As a
+    side effect the two are mutually exclusive by construction: any name is
+    rejected by exactly one of the two loaders, never accepted by both.
+
+    Fail-closed on every unusable shape, exactly as load_parked does, and for the
+    same reason: an unreadable declaration is the one state in which "is this red
+    intentional?" has no answer, and reading it as "nothing is retired" would put
+    a real red and an intentional one on the same footing. An ABSENT file is the
+    normal case and is not a problem.
+
+    A name that DOES still match a crate under crates/ is a hard problem — the
+    mirror image of load_parked's typo guard. A stale retirement suppresses
+    nothing today (that plugin is not an orphan) while standing ready to suppress
+    a genuine red on the day the crate really is deleted, which is precisely the
+    detection this file was added to preserve.
+    """
+    path = path or RETIRED_PATH
+    state, data = _load_json(path)
+    if state == ABSENT:
+        return {}, []
+    if state == MALFORMED:
+        return {}, [
+            f"{path} is present but unparseable ({data}). Whether a plugin that "
+            "no longer exists under crates/ is still enabled ON PURPOSE cannot be "
+            "determined, so no such red is treated as intentional and this run "
+            "reports the declaration itself as broken."
+        ]
+    if not isinstance(data, dict) or not isinstance(data.get("retired"), dict):
+        return {}, [
+            f"{path} must be an object with a \"retired\" object in it, got "
+            f"{type(data).__name__} / {type(data.get('retired') if isinstance(data, dict) else None).__name__}. "
+            "Nothing is retired by an unreadable declaration."
+        ]
+
+    known = _known_plugin_names(plugins, crates_dir)
+    retired, problems = {}, []
+    for name, entry in sorted(data["retired"].items()):
+        if not isinstance(entry, dict):
+            problems.append(
+                f"{path}: retired entry \"{name}\" must be an object with "
+                f"{'/'.join(RETIRED_REQUIRED)}, got {type(entry).__name__}."
+            )
+            continue
+        missing = [
+            k for k in RETIRED_REQUIRED
+            if not isinstance(entry.get(k), str) or not entry[k].strip()
+        ]
+        if missing:
+            problems.append(
+                f"{path}: retired entry \"{name}\" is missing a non-empty "
+                f"{', '.join(missing)}. A retirement with no stated {missing[0]} "
+                "cannot be told apart from leftover state nobody remembers."
+            )
+            continue
+        if not PARKED_DATE_RE.match(entry["retired_at"]):
+            problems.append(
+                f"{path}: retired entry \"{name}\" has retired_at="
+                f"{entry['retired_at']!r}, which is not a YYYY-MM-DD date. When the "
+                "crate left the repository is the question this field answers, so "
+                "an unparseable one answers nothing."
+            )
+            continue
+        if name in known:
+            problems.append(
+                f"{path}: retired entry \"{name}\" still exists under crates/ "
+                "(as a crate directory or a plugin.json name). It is not retired, "
+                "so this entry suppresses nothing today while standing ready to "
+                "suppress a real red the day that crate IS deleted — the exact "
+                "detection this file exists to keep. Delete the entry."
+            )
+            continue
+        retired[name] = entry
+    return retired, problems
+
+
+def retired_report(name, entry, suppressed):
+    """One human-readable line-block for a declared retirement.
+
+    Prints the SUPPRESSED findings verbatim, for the same reason parked_report
+    does: a suppression the operator cannot read is the fail-open this feature
+    would otherwise become.
+    """
+    lines = [f"{name}: retired {entry['retired_at']} — {entry['reason']}"]
+    revisit = entry.get("revisit")
+    if isinstance(revisit, str) and revisit.strip():
+        lines.append(f"    revisit: {revisit.strip()}")
+    if suppressed:
+        lines.append(
+            f"    suppressing {len(suppressed)} finding(s) that would otherwise be red:"
+        )
+        lines.extend(f"      * {s}" for s in suppressed)
+    else:
+        lines.append(
+            "    NOTE: this retirement is currently suppressing NOTHING — no "
+            "leftover of it was found on this machine. Remove the entry so a "
+            "future red is not silenced by a declaration nobody re-read."
+        )
+    return "\n".join(lines)
+
+
+def check_orphans(plugins):
+    """Return (problems, inspected) for plugins that crates/ no longer backs.
+
+    THE REVERSE DIRECTION. scan_plugins() enumerates crates/, so every other
+    dimension here runs crates/ -> settings/registry/cache and can only ever
+    report a plugin that still EXISTS in source. This one runs the other way.
+
+    Measured (backlog 0cd69e11): crates/taintguard was deleted from the repo on
+    2026-08-24 (0521d013) by user ruling because its verdicts blocked real work,
+    and it stayed enabled in ~/.claude/settings.json and deployed in the cache on
+    the live machine while this script exited 0. Re-measured at c7c4ea49 against
+    a fixture, one direction at a time:
+      * settings — rc=0 and the name appeared nowhere in the output, with
+        "OK: all 6 GATE plugin(s) enabled" printed over it. UNCHECKED.
+      * registry — rc=0, likewise absent from the output. UNCHECKED.
+      * cache    — rc=1 already, from plugin_cache.scan: "<name>: cached but no
+        current version known from crates/ — cannot tell which of its dirs is
+        live, so none are pruned". ALREADY CHECKED, and deliberately NOT
+        duplicated here: one fact must not carry two exit codes and two remedies.
+
+    The rule the plugin section of CLAUDE.md states is that a CHANGE is inert
+    until it is rolled out. The inverse is that a REMOVAL is inert until it is
+    propagated, and nothing enforced the inverse.
+
+    Both directions are HARD failures, not warnings. An enabledPlugins key with
+    no crate behind it is a live hook with no source of truth: the cached bytes
+    execute on every session while nothing in this repo can be read to say what
+    they do. A registry entry with no crate is the same removal half-done — it is
+    one enabledPlugins edit away from running again. Neither is a user preference
+    the way "benchkit is off on purpose" is; the honest way to clear either is a
+    declaration in scripts/retired-plugins.json, which suppresses the red and
+    still prints it verbatim.
+
+    Scoped strictly to keys ending in "@yukineko". Both files are machine-global
+    and legitimately carry plugins from other marketplaces (measured on this
+    machine 2026-09-10: rust-analyzer-lsp@claude-plugins-official,
+    swift-lsp@claude-plugins-official, vrm-pipeline@vrm-pipeline). Reporting
+    those would make this red permanent and unclearable.
+
+    ABSENT settings / registry contribute nothing and are not failures — the same
+    fail-soft both existing dimensions apply. A PRESENT-but-unreadable one, or an
+    enabledPlugins/plugins value of the wrong shape, is reported as its own
+    problem rather than yielding an empty orphan set: "found no orphan" and
+    "could not look" must not print as the same thing. Those messages duplicate a
+    cause that check_enabled/check_rollout also report, deliberately — this
+    dimension's verdict has to stand on its own, exactly as check_settings_pins
+    re-reports the same unreadable settings.json for its own purpose.
+
+    `inspected` is a list of "<count> <label>" strings naming the populations
+    actually enumerated, so the caller's green line can state what it looked at
+    instead of claiming a verdict over a population it never read.
+    """
+    known = _known_plugin_names(plugins)
+    problems, inspected = [], []
+
+    s_state, settings = _load_json(SETTINGS_PATH)
+    if s_state == MALFORMED:
+        problems.append(
+            f"cannot enumerate enabledPlugins in {SETTINGS_PATH} ({settings}) — "
+            "whether a plugin with no crate under crates/ is still enabled here "
+            "cannot be determined, so this dimension reports undetermined rather "
+            "than 'none found'."
+        )
+    elif s_state == OK:
+        raw = settings.get("enabledPlugins") if isinstance(settings, dict) else None
+        if raw is None:
+            inspected.append("0 enabledPlugins key(s)")
+        elif not isinstance(raw, dict):
+            problems.append(
+                f"cannot enumerate enabledPlugins in {SETTINGS_PATH}: it is a "
+                f"{type(raw).__name__}, not an object, so the keys it would hold "
+                "cannot be read at all."
+            )
+        else:
+            inspected.append(f"{len(raw)} enabledPlugins key(s)")
+            for key in sorted(raw):
+                name = _repo_plugin_name(key)
+                if name is None or name in known:
+                    continue
+                # Reported whether the value is truthy or not. A truthy key is a
+                # live hook; a `false` one is a removal that got half-propagated,
+                # which is the same defect one step from re-arming itself. The
+                # wording branches so the message states what was observed and
+                # not one word more.
+                posture = (
+                    "enabled and executing on every session"
+                    if raw[key]
+                    else "listed but set to a falsy value, so inert today"
+                )
+                problems.append(
+                    f"{name}: \"{key}\" is in enabledPlugins in {SETTINGS_PATH} "
+                    f"({posture}), but no crate under {CRATES} carries that name "
+                    "— neither a crate directory nor a plugin.json \"name\". A "
+                    "removal that was never propagated: nothing in this repo can "
+                    "be read to say what those bytes do. Remove the key and "
+                    "restart Claude Code, or declare the retirement in "
+                    f"{RETIRED_PATH}."
+                )
+
+    r_state, registry = _load_json(REGISTRY_PATH)
+    if r_state == MALFORMED:
+        problems.append(
+            f"cannot enumerate installed plugins in {REGISTRY_PATH} ({registry}) "
+            "— whether a plugin with no crate under crates/ is still installed "
+            "cannot be determined, so this dimension reports undetermined rather "
+            "than 'none found'."
+        )
+    elif r_state == OK:
+        raw = registry.get("plugins") if isinstance(registry, dict) else None
+        if raw is None:
+            inspected.append("0 registry entr(y/ies)")
+        elif not isinstance(raw, dict):
+            problems.append(
+                f"cannot enumerate installed plugins in {REGISTRY_PATH}: "
+                f"\"plugins\" is a {type(raw).__name__}, not an object, so the "
+                "entries it would hold cannot be read at all."
+            )
+        else:
+            inspected.append(f"{len(raw)} registry entr(y/ies)")
+            for key in sorted(raw):
+                name = _repo_plugin_name(key)
+                if name is None or name in known:
+                    continue
+                problems.append(
+                    f"{name}: \"{key}\" is installed in {REGISTRY_PATH}, but no "
+                    f"crate under {CRATES} carries that name. The removal was "
+                    "never propagated: the plugin is still installed, so it is "
+                    "one enabledPlugins edit away from running again. Uninstall "
+                    f"it, or declare the retirement in {RETIRED_PATH}."
+                )
+
+    return problems, inspected
+
+
+def _repo_plugin_name(key):
+    """`"<name>@yukineko"` -> `"<name>"`; None for any key this repo does not own.
+
+    ~/.claude/settings.json and installed_plugins.json are machine-global. A key
+    from another marketplace is not this repo's to account for, and treating one
+    as an orphan would produce a red that no change to this repository could ever
+    clear.
+    """
+    suffix = f"@{OWNER}"
+    if not isinstance(key, str) or not key.endswith(suffix):
+        return None
+    name = key[: -len(suffix)]
+    return name or None
 
 
 def scan_plugins():
@@ -1234,6 +1593,12 @@ def main():
         )
 
     parked, parked_config = load_parked(plugins)
+    retired, retired_config = load_retired(plugins)
+
+    # The REVERSE direction (crates/ <- settings/registry). Every other call
+    # below walks outward from crates/, so none of them can see a plugin that is
+    # live on this machine but no longer has a crate. See check_orphans.
+    orphan_problems, orphan_inspected = check_orphans(plugins)
 
     rollout_problems, rollout_checked = check_rollout(plugins)
     gate_failures, warnings, (enabled_checked, gates_seen) = check_enabled(plugins)
@@ -1271,6 +1636,29 @@ def main():
     # removable superseded dir is removable either way). `unverifiable` is left
     # alone for the same reason: a plugin.json that cannot be read is a broken
     # source tree, not an intentional state.
+    # A declared retirement covers (1) this run's own orphan findings and (2) the
+    # cache's "<name>: cached but no current version known from crates/" line.
+    # (2) is deliberately different from how a PARK is treated: a park does not
+    # excuse a cache finding because a SUPERSEDED dir is removable by the pruner
+    # either way, so that red stays actionable. An orphan's dirs are not: the
+    # pruner cannot tell which of them is live and therefore keeps them all
+    # (correctly - deletion is the irreversible action, and this change does not
+    # touch that). Left unsuppressed, a declared retirement would have no
+    # reachable green at all, which is the permanent-red hazard of backlog
+    # a6f165cd that the declaration mechanism exists to prevent. The bytes are
+    # still named, verbatim, in the RETIRED ON PURPOSE report.
+    #
+    # The undetermined lines from check_orphans are NOT prefixed with a plugin
+    # name, so no declaration can suppress them - "could not look" stays red.
+    retired_suppressed = {name: [] for name in retired}
+    if retired:
+        orphan_problems, suppressed = partition_parked(orphan_problems, retired)
+        for name, items in suppressed.items():
+            retired_suppressed[name].extend(items)
+        stale_problems, suppressed = partition_parked(stale_problems, retired)
+        for name, items in suppressed.items():
+            retired_suppressed[name].extend(items)
+
     parked_suppressed = {name: [] for name in parked}
     if parked:
         if rollout_problems:
@@ -1315,6 +1703,26 @@ def main():
             "a malfunction, taintguard was armed to clear it, and a known false "
             "positive then blocked real work. Clearing a park means resolving the "
             "reason above and deleting the entry — in that order.",
+            file=sys.stderr,
+        )
+
+    if retired:
+        print(
+            f"\nRETIRED ON PURPOSE ({len(retired)} plugin(s) declared in "
+            f"{RETIRED_PATH} - NOT a failure, and NOT a green either):",
+            file=sys.stderr,
+        )
+        for name in sorted(retired):
+            print(
+                f"  - {retired_report(name, retired[name], retired_suppressed[name])}",
+                file=sys.stderr,
+            )
+        print(
+            "\nA retirement records that a crate LEFT this repository and that "
+            "its leftovers on this machine are known. It is not a licence to "
+            "leave them there: clearing one means removing the enabledPlugins "
+            "key / uninstalling the plugin / deleting its cache dir, then "
+            "deleting the entry.",
             file=sys.stderr,
         )
 
@@ -1395,6 +1803,26 @@ def main():
             f"{identical} (no rollout drift){held}"
             f"{parked_note}"
         )
+    # The orphan dimension's own verdict line. Printed only when something was
+    # actually enumerated (an absent settings.json / registry leaves nothing to
+    # be green about) and only when no orphan finding - including the
+    # "could not look" ones - was produced, so this sentence can never stand
+    # over a population the checker did not read. A declared retirement is named
+    # rather than silently subtracted: "every key maps to a crate" would be false
+    # while one is suppressed, which is the same class of lie as printing a green
+    # over a plugin the scan lost.
+    if orphan_inspected and not orphan_problems:
+        covered = sorted(n for n, items in retired_suppressed.items() if items)
+        retired_note = (
+            f" ({len(covered)} declared retired, reported above: {', '.join(covered)})"
+            if covered
+            else ""
+        )
+        print(
+            f"OK: every @{OWNER} plugin key on this machine maps to a crate under "
+            f"crates/ ({' + '.join(orphan_inspected)} inspected){retired_note}"
+        )
+
     if (
         gate_failures is not None
         and not gate_failures
@@ -1421,6 +1849,25 @@ def main():
             f"{'/'.join(PARKED_REQUIRED)} and a name that matches a plugin under "
             "crates/. Deleting the file entirely is also valid — it means nothing "
             "is parked.",
+            file=sys.stderr,
+        )
+
+    if retired_config:
+        print(
+            f"\nUNUSABLE RETIRED DECLARATION ({len(retired_config)} problem(s)): "
+            "the file that says which of the leftovers below are known and "
+            "intentional cannot be trusted, so NONE of them was treated as "
+            "intentional:",
+            file=sys.stderr,
+        )
+        for pr in retired_config:
+            print(f"  - {pr}", file=sys.stderr)
+        print(
+            f"\nFix: repair {RETIRED_PATH}. Each entry needs a non-empty "
+            f"{'/'.join(RETIRED_REQUIRED)} and a name that matches NO plugin under "
+            "crates/ (that is the inverse of parked-plugins.json, on purpose). "
+            "Deleting the file entirely is also valid - it means nothing is "
+            "declared retired.",
             file=sys.stderr,
         )
 
@@ -1465,6 +1912,27 @@ def main():
             file=sys.stderr,
         )
 
+    if orphan_problems:
+        print(
+            f"\nRETIRED BUT STILL LIVE ({len(orphan_problems)} problem(s)): "
+            "something is enabled or installed on this machine that crates/ no "
+            "longer backs. A change is inert until it is rolled out; a REMOVAL is "
+            "inert until it is propagated:",
+            file=sys.stderr,
+        )
+        for pr in orphan_problems:
+            print(f"  - {pr}", file=sys.stderr)
+        print(
+            "\nFix: this class is NOT fixed by a rollout and NOT fixed by enabling "
+            "anything - the remedy is removal. Take the key out of enabledPlugins "
+            "(then restart Claude Code) and/or uninstall the plugin. If the "
+            "leftover is deliberate and known, declare it in "
+            f"{RETIRED_PATH} with a reason, a retired_at and a revisit trigger; "
+            "that moves it to a RETIRED ON PURPOSE report which still prints the "
+            "finding verbatim.",
+            file=sys.stderr,
+        )
+
     # Distinct exit code per failure CLASS so callers can route the reader to
     # the right fix. .githooks/pre-push used to branch on a bare non-zero and
     # unconditionally print "run scripts/rollout-plugins.sh --plugin <name>" —
@@ -1484,14 +1952,34 @@ def main():
     # unusable, the reader cannot tell which of the reds below were meant to be
     # there. Acting on any of the other remedies first risks arming something
     # that was parked on purpose — the 2026-08-04 incident exactly.
+    #
+    # RETIRED_CONFIG sits beside PARKED_CONFIG at the top for the identical
+    # reason, one file over. RETIRED itself sits at the BOTTOM, which is not a
+    # statement that it matters least: its verdict is COMPUTED FROM
+    # settings.json and the registry, so when either of those is broken the
+    # class that owns that file has to be acted on first, or the orphan list is
+    # being read off an input nobody has repaired yet. Its own block above still
+    # printed, with its own remedy.
+    #
+    # Neither new code has a branch in .githooks/pre-push (that file is not
+    # editable from here - Edit/Write on .githooks/** is denied by the user's
+    # permission settings). Its `*)` catch-all prints this script's full output
+    # and marks it advisory, which is the same fallback the UNVERIFIABLE class
+    # relied on before it got its own branch, and the output names the actual
+    # problem. Adding explicit branches for 5 and 6 is filed for the user rather
+    # than done silently here.
     if parked_config:
         return RC_PARKED_CONFIG
+    if retired_config:
+        return RC_RETIRED_CONFIG
     if unverifiable:
         return RC_UNVERIFIABLE
     if rollout_problems:
         return RC_ROLLOUT
     if gate_failures:
         return RC_ENABLEMENT
+    if orphan_problems:
+        return RC_RETIRED
     return RC_OK
 
 

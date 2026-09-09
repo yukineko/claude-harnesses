@@ -1,3 +1,5 @@
+
+
 [[task]]
 id = "0ba79281"
 title = 'CLAUDE.md: Windows で成立しない cargo 手順 (. "$HOME/.cargo/env") を直す'
@@ -19596,3 +19598,71 @@ updated_at = 1788983543
 weight = 0.0
 issue_number = 481
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/481"
+
+[[task]]
+id = "e650d84a"
+title = "check-plugin-rollout.py の新クラス rc=5/6 に .githooks/pre-push の分岐が無い"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "rollout-gate",
+    "p2",
+]
+status = "pending"
+notes = "0cd69e11 item(3) の対応で check-plugin-rollout.py に RC_RETIRED=5 / RC_RETIRED_CONFIG=6 を追加した。.githooks/pre-push は rc ごとに remedy を出し分けるが 5/6 用の case が無く catch-all の *) に落ちる。全出力を出して advisory と表示するので誤誘導ではないが他クラスと非対称。.githooks/** は permission deny 対象なのでこちらでは触っていない。ユーザ側で branch 追加を判断してほしい。測定: branch worktree-agent-ad28c375730ca93e4, 2026-09-10。"
+created_at = 1788984251
+updated_at = 1788984251
+weight = 0.0
+issue_number = 482
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/482"
+
+[[task]]
+id = "5461ba1c"
+title = "orphan cache dir の finding が ROLLOUT クラスに畳まれ remedy が誤誘導になる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "rollout-gate",
+    "p1",
+]
+status = "pending"
+notes = "plugin_cache.scan は crates/ に無い plugin の cache dir を '<name>: cached but no current version known from crates/' として報告し、check-plugin-rollout.py の main() はこれを stale_problems 経由で rollout_problems に畳む。その結果 ROLLOUT DRIFT ブロックの Fix 行 'scripts/rollout-plugins.sh --plugin <name>' が出るが、crate が存在しない plugin にこのコマンドは効かない。さらに悪いことに、読み手を『撤去された plugin を rollout し直す』方向へ向ける = 2026-08-04 の taintguard 事案 (a6f165cd) と同じ形。今回追加した RETIRED クラス (rc=5) 側へ回すのが正しい可能性がある。今回は検出そのものは既に fail-closed で効いているため remedy 文言の再配置は手を付けていない。測定: 2026-09-10, worktree-agent-ad28c375730ca93e4, fixture で rc=1 と逐語出力を確認済み (test_cache_dir_with_no_crate_is_already_a_hard_failure が pin)。"
+created_at = 1788984267
+updated_at = 1788984267
+weight = 0.0
+issue_number = 483
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/483"
+
+[[task]]
+id = "e83acc9c"
+title = "check-plugin-rollout.py は pre-push の advisory のみで、どこからも block されていない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "rollout-gate",
+    "p1",
+]
+status = "pending"
+notes = "grep の結果、このスクリプトの唯一の実行者は .githooks/pre-push:188 で、rc=1/2/3/4 のすべての branch が 'This is advisory only — the push is not blocked.' と書いている (rc=1 は 2026-07-23 に意図的に demote)。.githooks/pre-commit はこのスクリプトを走らせない (grep 'plugin-rollout' でヒット無し)。したがって 0cd69e11 item(3) で塞いだ穴 (RETIRED クラス) も含め、このゲートの検出は誰も止めない。CLAUDE.md 1./6. の『検出側を厚くする』は満たすが『機械ゲートで強制する』は満たしていない。どこで block すべきか (SessionStart? pre-commit?) は人間の判断。測定: 2026-09-10, worktree-agent-ad28c375730ca93e4。"
+created_at = 1788984279
+updated_at = 1788984279
+weight = 0.0
+issue_number = 484
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/484"
+
+[[task]]
+id = "52862cdd"
+title = "worktree から check-plugin-rollout.py を走らせると tdd が source=0.1.28 registry=0.1.29 で red になる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "rollout-gate",
+    "p2",
+]
+status = "pending"
+notes = "2026-09-10, branch worktree-agent-ad28c375730ca93e4 (base c7c4ea49) から実行して観測: 'tdd: source=0.1.28 registry=0.1.29 <- rollout-plugins.sh not run since bump' と '1 superseded plugin version dir(s) ... tdd/0.1.29'。並行して別 agent が rollout-plugins.sh を回していたので、worktree が main より古いことに由来する一過性の flap である可能性が高いが、判断せず起票する。source < registry (worktree が deployed より古い) という向きなので、この checker が想定する 'bump したのに rollout していない' とは逆向きで、メッセージ 'rollout-plugins.sh not run since bump' はこの向きでは正しくない可能性がある。要確認。"
+created_at = 1788984287
+updated_at = 1788984287
+weight = 0.0
+issue_number = 485
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/485"

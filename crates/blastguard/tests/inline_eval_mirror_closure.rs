@@ -162,20 +162,46 @@ fn destructive_inline_payload_is_denied() {
     assert_deny(r#"python3 -c "import os; os.system('dd of=/dev/sda if=/dev/zero')""#);
 }
 
-/// A benign — or simply unanalysable — inline payload must resolve to `Ask`,
-/// the refusal to guess, NOT to a `Deny` that asserts "can run an arbitrary
-/// destructive command" about a payload nothing read.
+/// An inline payload that is neither destructive nor readable-and-inert must
+/// resolve to `Ask`, the refusal to guess — NOT to a `Deny` asserting "can run
+/// an arbitrary destructive command" about a payload nothing read.
 ///
-/// RED today: every one of these is `Deny`.
+/// This was originally written as `benign_inline_payload_is_ask_not_deny`, with
+/// the benign cases below asserting `Ask` too. **User ruling 2026-09-09** split
+/// that: a program the gate can fully READ and finds no effect token in is now
+/// `Allow` (`benign_readable_inline_payload_is_allowed`), while everything the
+/// gate cannot read stays here. The `Deny`-vs-`Ask` distinction this test was
+/// created for is unchanged and is still what it asserts.
 #[test]
-fn benign_inline_payload_is_ask_not_deny() {
-    assert_ask(r#"python3 -c "print(1)""#);
-    assert_ask(r#"node -e "console.log(1)""#);
-    assert_ask(r#"ruby -e 'puts 1'"#);
-    assert_ask(r#"perl -e 'print 1'"#);
-    assert_ask(r#"php -r 'echo 1;'"#);
-    assert_ask(r#"lua -e 'print(1)'"#);
-    assert_ask(r#"node -p "1+1""#);
+fn unreadable_inline_payload_is_ask_not_deny() {
+    // Shell expansion: the text on the command line is not the program that
+    // runs, so there is nothing here that can be read as safe.
+    assert_ask(r#"python3 -c "print($HOME)""#);
+    assert_ask(r#"node -e "console.log(`${x}`)""#);
+    // Readable, but carrying an effect the gate will not clear on its own.
+    assert_ask(r#"python3 -c "import socket; print(socket.gethostname())""#);
+    assert_ask(r#"python3 -c "open('/tmp/f').read()""#);
+    assert_ask(r#"node -e "require('fs').readFileSync('/etc/hosts')""#);
+}
+
+/// The other half of the 2026-09-09 ruling: a fully readable program with no
+/// token capable of an effect outside the interpreter's own process is
+/// `Allow`, not `Ask`.
+///
+/// Paired deliberately with `unreadable_inline_payload_is_ask_not_deny` and
+/// `destructive_inline_payload_is_denied`: the three together are what make the
+/// verdict a genuine three-way split. Any regression that collapses the rule
+/// back to ONE answer for every inline program — whichever answer that is —
+/// turns at least one of the three RED.
+#[test]
+fn benign_readable_inline_payload_is_allowed() {
+    assert_allow(r#"python3 -c "print(1)""#);
+    assert_allow(r#"node -e "console.log(1)""#);
+    assert_allow(r#"ruby -e 'puts 1'"#);
+    assert_allow(r#"perl -e 'print 1'"#);
+    assert_allow(r#"php -r 'echo 1;'"#);
+    assert_allow(r#"lua -e 'print(1)'"#);
+    assert_allow(r#"node -p "1+1""#);
 }
 
 /// The bundled short-flag path (`-ic` = `-i` + `-c`, CA-blastguard-007) must
@@ -184,9 +210,13 @@ fn benign_inline_payload_is_ask_not_deny() {
 /// answer in either direction.
 ///
 /// Mixed today: the benign case is RED (`Deny`), the destructive case GREEN.
+/// (2026-09-09: the benign case's expected verdict moved `Ask` -> `Allow` with
+/// the ruling recorded in `interpreter_code_verdict`; the property this test
+/// exists for — bundled and unbundled reach the SAME verdict — is unchanged,
+/// and the `assert_eq!` below is what actually pins it.)
 #[test]
 fn bundled_short_eval_flag_matches_unbundled() {
-    assert_ask(r#"python3 -ic "print(1)""#);
+    assert_allow(r#"python3 -ic "print(1)""#);
     assert_deny(r#"python3 -ic "import shutil; shutil.rmtree('/')""#);
     // Equality of the two spellings, stated directly, so a fix that special-
     // cases one of them is caught even if both happen to be blocking.

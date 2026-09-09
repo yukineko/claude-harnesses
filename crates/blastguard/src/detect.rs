@@ -1402,6 +1402,47 @@ primitive, not a filesystem path",
             return deny;
         }
         if !redirect_target_is_safe(&target) {
+            // RECOVERABILITY runs FIRST (operator ruling 2026-09-09). The two
+            // verdicts this precedes — the confined ask and the flat deny —
+            // fired 63 times across 25 transcripts, and neither had ever asked
+            // the only question that decides whether the write costs anything:
+            // are these bytes recoverable afterwards? The deny even asserted
+            // `truncates and overwrites an existing file` while NOTHING in the
+            // crate checked existence — a §4 divergence between the reason a
+            // human reads and the finding actually made.
+            //
+            // Order matters. Confinement is a LOCATION answer ("inside your
+            // own tree"), which is weaker than a RECOVERY answer ("git holds
+            // these bytes"): a scratch file with an hour of uncommitted work in
+            // it is confined and still unrecoverable, while a tracked, clean
+            // file outside the session root is recoverable and worth nobody's
+            // attention. Asking recovery first lets the strong answer win.
+            //
+            // The protected-path check above already ran and is a SEPARATE
+            // axis: a gate/config file is surfaced however recoverable it is,
+            // because a silently disabled gate voids every later verdict. Only
+            // targets that cleared it reach here.
+            let recovery = crate::reversible::probe(&target, ctx.raw_base.as_deref());
+            if recovery.is_recoverable() {
+                continue;
+            }
+            // NOT SPLIT THREE WAYS HERE, deliberately. `Undetermined` and
+            // `Unrecoverable` both fall through to the Deny below, so this arm
+            // blocks exactly the set 0.2.58 blocked minus the recoverable ones
+            // — it never turns a former Deny into something weaker.
+            //
+            // Splitting them was tried and backed out. By `model.rs`'s own
+            // doctrine an undetermined answer is a refusal and refusals are
+            // `Ask`, which would also make an unplaceable `$TMPDIR` target
+            // passable instead of a dead end. But every relative target in an
+            // unscoped `detect::detect` call is undetermined for want of a cwd,
+            // so the split moved about a dozen established denies to asks —
+            // relitigating deny-vs-ask for a whole class this change had no
+            // need to touch, and buying nothing measurable (2067 real commands:
+            // 163 non-allow either way, the split only shifting 24 of them from
+            // deny to ask). The distinction is still visible: the reason text
+            // says which answer was reached, and `rule_id` files them under
+            // different ids.
             // LOCATION axis. Gated on the line containing no `cd`/`pushd`/
             // `popd` at all: this scan runs BEFORE the per-segment cwd walk
             // below, so it has no per-segment base to resolve a relative
@@ -1418,7 +1459,8 @@ primitive, not a filesystem path",
                 }
             }
             return Decision::deny(format!(
-                "'> {target}' truncates and overwrites an existing file"
+                "'> {target}' destroys the file's current contents and {}",
+                recovery.describe()
             ));
         }
     }
@@ -2300,6 +2342,55 @@ fn assignment_execution_is_unconditional(segs: &[SeparatedSegment], idx: usize) 
 /// is code.
 ///
 /// Quote-aware, because a `<<` inside quotes is data (`echo "a << b"`).
+/// True when a here-document's delimiter is QUOTED (`<<'TAG'`, `<<"TAG"`,
+/// `<<\TAG`), which is the shell telling itself to pass the body through
+/// verbatim: no parameter expansion, no command substitution, no backticks.
+///
+/// This is not a heuristic, it is the documented behaviour of the construct,
+/// and it decides whether a `$` in the body is a shell expansion or ordinary
+/// program text. Measured 2026-09-09: 28 of this operator's here-documents were
+/// being withheld from Allow because their Python bodies contained a `$` — a
+/// regex end-anchor, or a `${…}` inside a Rust format string being edited — in
+/// a `<<'PY'` heredoc where the shell substitutes nothing at all. Reading those
+/// as "the text is a template" was simply false about the shell.
+///
+/// Returns false for an unquoted delimiter and for a segment with no
+/// here-document at all: both of those are the side where expansion CAN happen,
+/// which is the restrictive answer for every caller.
+fn here_document_delimiter_is_quoted(seg: &str) -> bool {
+    let chars: Vec<char> = seg.chars().collect();
+    let (mut in_s, mut in_d) = (false, false);
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\'' && !in_d {
+            in_s = !in_s;
+            i += 1;
+            continue;
+        }
+        if c == '"' && !in_s {
+            in_d = !in_d;
+            i += 1;
+            continue;
+        }
+        if !in_s && !in_d && c == '<' && chars.get(i + 1) == Some(&'<') {
+            if chars.get(i + 2) == Some(&'<') {
+                i += 3;
+                continue;
+            }
+            // Skip `-` (`<<-TAG`, the tab-stripping form) and any spaces, then
+            // look at the first character of the delimiter itself.
+            let mut j = i + 2;
+            while matches!(chars.get(j), Some('-') | Some(' ') | Some('\t')) {
+                j += 1;
+            }
+            return matches!(chars.get(j), Some('\'') | Some('"') | Some('\\'));
+        }
+        i += 1;
+    }
+    false
+}
+
 fn opens_here_document(seg: &str) -> bool {
     let chars: Vec<char> = seg.chars().collect();
     let (mut in_s, mut in_d) = (false, false);
@@ -3497,7 +3588,69 @@ const INTERPRETER_DESTRUCTIVE_CALLS: &[&str] = &[
     "rmdir $",
     "rmdir \"",
     "rmdir '",
+    // Ruby's receiver-qualified form. `unlink(`/`unlink "` do not match
+    // `File.unlink f`, where the argument is a bare block variable — measured
+    // reaching Allow on 2026-09-09 as
+    // `Dir[…].each { |f| File.unlink f }` while its `FileUtils.rm_rf` twin
+    // denied. Same hazard, different spelling.
+    "file.unlink",
+    "file.delete",
 ];
+
+/// Interpreter-level calls that OVERWRITE or TRUNCATE a file the program NAMES.
+///
+/// Kept apart from [`INTERPRETER_DESTRUCTIVE_CALLS`] because these are not
+/// destructive by themselves. Writing a file is exactly the thing the operator
+/// ruled must NOT be surfaced (「よみかきに一々許可をもとめるのは…無駄」) — what
+/// decides is the OBJECT, not the verb: overwriting a tracked, clean file costs
+/// a `git restore`, and overwriting an Obsidian note costs the note. So a hit
+/// here does not decide anything on its own; it only turns on the recoverability
+/// probe over the same payload's string literals.
+///
+/// That is why this list being short is not the v0.2.57 mistake. A miss leaves
+/// the payload exactly where it was — read, descended, and judged by every other
+/// rule — rather than allowing it.
+const INTERPRETER_WRITE_CALLS: &[&str] = &[
+    "os.truncate(",
+    ".truncate(",
+    "ftruncate(",
+    "copyfile(",
+    "copyfileobj(",
+    "shutil.copy2(",
+    "o_wronly",
+    "o_rdwr",
+    "o_trunc",
+    "o_creat",
+    "writefilesync(",
+    "createwritestream(",
+    "file.write(",
+    // `open(path, 'w')` and friends. The mode operand is matched WITH its
+    // quotes and closing paren so an identifier ending in `w` cannot match.
+    ",'w')",
+    ", 'w')",
+    ",\"w\")",
+    ", \"w\")",
+    ",'wb')",
+    ", 'wb')",
+    ",\"wb\")",
+    ", \"wb\")",
+    ",'w+')",
+    ", 'w+')",
+    ",'wb+')",
+    ", 'wb+')",
+    ",'w'",
+    ",'wb'",
+];
+
+/// The overwrite-shaped call in `payload`, if any. Case-folded for the same
+/// reason as [`interpreter_destructive_call`].
+fn interpreter_write_call(payload: &str) -> Option<&'static str> {
+    let lowered = payload.to_ascii_lowercase();
+    INTERPRETER_WRITE_CALLS
+        .iter()
+        .find(|needle| lowered.contains(**needle))
+        .copied()
+}
 
 /// The destructive interpreter-level call in `payload`, if any. Case-folded
 /// because `FileUtils.rm_rf` and `fileutils.rm_rf` are the same hazard.
@@ -3509,12 +3662,324 @@ fn interpreter_destructive_call(payload: &str) -> Option<&'static str> {
         .copied()
 }
 
+/// Commands whose effect cannot be undone after the fact, sitting beside the
+/// `mkfs` arm that already denies for the same reason.
+///
+/// This list is not the unsound kind. The v0.2.57 attempt failed because it
+/// enumerated EFFECTS — an open set, since a program reaches an effect without
+/// naming it — and used a miss as grounds to allow. These are enumerated
+/// IRREVERSIBLE OPERATIONS and used only to deny: a miss falls through to the
+/// rules below exactly as before, so the list being short costs nothing it was
+/// not already costing. Each entry is a distinctive program name, so quoting
+/// cannot hide it once `quoted_string_literals` reaches the text.
+///
+/// Every one of these was measured reaching `Allow` on 2026-09-09 against
+/// blastguard 0.2.58 (adversary corpus, 112 must-surface cases): the gate would
+/// have wiped a partition table or expired a reflog without a word.
+fn irreversible_device_verb(cmd: &str, rest: &[&str]) -> Option<&'static str> {
+    let joined = rest.join(" ");
+    match cmd {
+        "wipefs" => Some("wipefs erases the filesystem/partition signatures on a device"),
+        "blkdiscard" => Some("blkdiscard discards every block on a device"),
+        "sgdisk" if joined.contains("--zap") => {
+            Some("sgdisk --zap-all destroys the GUID partition table")
+        }
+        "parted" | "sfdisk" | "cfdisk" | "fdisk" if joined.contains("mklabel") => {
+            Some("writing a new disk label discards the existing partition table")
+        }
+        "mke2fs" | "mkswap" | "mkntfs" | "mkdosfs" => {
+            Some("this formats a filesystem, destroying all data on the target")
+        }
+        "nvme" if joined.contains("format") => Some("nvme format erases the namespace's contents"),
+        "cryptsetup" if joined.contains("luksErase") || joined.contains("erase") => {
+            Some("cryptsetup erase destroys the LUKS key slots — the data becomes unreadable")
+        }
+        "lvremove" | "vgremove" | "pvremove" => {
+            Some("removing an LVM volume destroys the data it holds")
+        }
+        "hdparm" if joined.contains("security-erase") => {
+            Some("hdparm --security-erase wipes the whole drive at the firmware level")
+        }
+        "badblocks" if joined.contains("-w") => {
+            Some("badblocks -w is a WRITE-mode test: it overwrites every block it checks")
+        }
+        "crontab" if rest.contains(&"-r") => {
+            Some("crontab -r deletes the user's crontab with no copy kept")
+        }
+        "chattr" if joined.contains("+i") => Some(
+            "chattr +i makes a file immutable — the gates that need to rewrite it stop working",
+        ),
+        _ => None,
+    }
+}
+
+/// git subcommands that destroy the object store itself.
+///
+/// Separate from [`irreversible_device_verb`] because `git` never reaches that
+/// arm — it has its own [`analyze_git`] — and because these are the specific
+/// commands that invalidate the assumption [`crate::reversible`] runs on. That
+/// module answers "these bytes are recoverable" with "git has a copy"; these
+/// three commands are how the copy stops existing.
+fn irreversible_git_subcommand(sub: &str, args: &[&str]) -> Option<&'static str> {
+    let joined = args.join(" ");
+    match sub {
+        "gc" if joined.contains("--prune=now") || joined.contains("--prune=all") => Some(
+            "git gc --prune=now deletes unreachable objects with no grace period — the dangling \
+commits that make dropped stashes, deleted branches and hard resets recoverable are gone",
+        ),
+        "reflog" if args.first() == Some(&"expire") && joined.contains("--expire=now") => Some(
+            "git reflog expire --expire=now drops the reflog entries that are the last handle on \
+commits nothing else references",
+        ),
+        "filter-branch" | "filter-repo" => Some(
+            "rewriting history detaches every existing clone and worktree from the commits they \
+are built on",
+        ),
+        _ => None,
+    }
+}
+
+/// Ask when any positional operand names a protected gate/config path.
+///
+/// This is the GATE-DISABLING axis, and it is deliberately independent of
+/// recoverability: `.githooks/pre-commit` is tracked by git and trivially
+/// restored, and must STILL be surfaced, because a gate that got quietly
+/// rewritten makes every verdict after it worthless. The operator's ruling
+/// removed friction from the recoverability axis; it did not touch this one
+/// (「破壊的な変更を暗黙に実施しないこと」).
+///
+/// `unknown_verb_protected_ask` cannot be reused for either caller: it returns a
+/// flat `Allow` for anything `is_code_interpreter` matches, and it is not
+/// reached at all once a command word resolves to nothing nameable.
+fn protected_operand_ask(head: &str, rest: &[&str], operands_are_files: bool) -> Option<Decision> {
+    for op in positional_operands(rest, &[]) {
+        if !has_glob_meta(op) {
+            if exclude::touches_protected(op) {
+                return Some(Decision::ask(format!(
+                    "`{head}` has no irreversible operation in it, but `{op}` is a protected \
+gate/config path — changing it changes which hooks and gates run, and blastguard will not do that \
+implicitly"
+                )));
+            }
+            continue;
+        }
+        if let Some(prefix) = glob_literal_prefix(op) {
+            if exclude::touches_protected(&prefix) {
+                return Some(Decision::ask(format!(
+                    "`{head}` has no irreversible operation in it, but `{op}` expands under \
+`{prefix}`, a protected gate/config path — changing it changes which hooks and gates run, and \
+blastguard will not do that implicitly"
+                )));
+            }
+            continue;
+        }
+        // A pattern with no literal prefix (`?githooks/pre-commit`, `*`) was
+        // never TESTED against the protected set — the test was not applicable.
+        // v0.2.57 wrote `unwrap_or(false)` here and so reported untested as
+        // unprotected, which is how `perl -i -pe s/.*// ?githooks/pre-commit`
+        // got through. §3: an absent answer resolves to the restrictive side,
+        // and it still does — but only for a caller whose operands really are
+        // file operands.
+        //
+        // TWO CORRECTIONS, both measured 2026-09-09 over 2045 real Bash
+        // commands, and both about this branch specifically.
+        //
+        // 1. THE REASON WAS FALSE. This branch means "blastguard could not test
+        //    this token"; it was reporting "`{op}` IS a protected gate/config
+        //    path". Those are different statements and the second was never
+        //    observed — a reason asserting an unmade finding is the §4 failure
+        //    aimed squarely at the human reading the block. The text below now
+        //    says which of the two actually happened.
+        //
+        // 2. IT WAS NOT ALWAYS LOOKING AT OPERANDS. Tokens arrive here already
+        //    whitespace-split with quoting stripped, so an inline-eval payload
+        //    turns into a fistful of code words — and `[` is a glob
+        //    metacharacter. `len(d['task']))` denoises to `len(d[task]))`,
+        //    which has glob meta and no literal DIRECTORY prefix, so it was
+        //    reported as an untested protected path. Eleven asks in the sample
+        //    were exactly this, each naming a Python fragment as a gate file.
+        //    `operands_are_files` is how a caller states that its trailing
+        //    tokens are really file operands: an in-place editor
+        //    (`perl -i -pe … ?githooks/pre-commit`) rewrites what it is handed
+        //    and passes `true`; a plain `python3 -c '…'` cannot tell an operand
+        //    from a word of its own program and passes `false`.
+        //
+        // The residual that leaves is narrow and named: `python3 -c '…'
+        // ?githooks/x` reaches Allow unless the program's own string literals
+        // name the path, which `interpreter_code_verdict` checks separately.
+        if operands_are_files {
+            return Some(Decision::ask(format!(
+                "`{head}` rewrites its file operands in place, and `{op}` is a glob with no \
+literal prefix — blastguard could not test whether it expands onto a protected gate/config path, \
+and an untested answer is not a clean one"
+            )));
+        }
+    }
+    None
+}
+
+/// True when the interpreter was told to REWRITE the files it is handed rather
+/// than merely read them: `perl -i`, `perl -pi -e`, `ruby -i.bak`, `sed -i`,
+/// and the `--in-place` long spelling.
+///
+/// Only these commands make the trailing tokens file operands with certainty,
+/// which is what [`protected_operand_ask`] needs before it can fail closed on a
+/// glob it could not test. `python3 -i` is deliberately NOT here: python's `-i`
+/// means "drop to an interactive prompt afterwards" and says nothing about
+/// operands, so folding it in would re-open the false-reason asks this
+/// distinction exists to close.
+fn interpreter_edits_in_place(cmd: &str, rest: &[&str]) -> bool {
+    let base = cmd.rsplit('/').next().unwrap_or(cmd);
+    let stem = base.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+    if !matches!(stem, "perl" | "ruby" | "sed" | "gsed") {
+        return false;
+    }
+    rest.iter().any(|t| {
+        if let Some(long) = t.strip_prefix("--") {
+            return long == "in-place" || long.starts_with("in-place=");
+        }
+        match t.strip_prefix('-') {
+            // A bundled short-flag run. `-i`, `-pi`, `-i.bak` all edit in place.
+            Some(letters) => {
+                !letters.is_empty() && letters.starts_with(|c: char| c != '-') && {
+                    let head: String = letters
+                        .chars()
+                        .take_while(|c| c.is_ascii_alphabetic())
+                        .collect();
+                    head.contains('i')
+                }
+            }
+            None => false,
+        }
+    })
+}
+
+/// Closing delimiter for a Perl/Ruby generic-quote opener.
+///
+/// The bracket pairs close with their mirror; every other punctuation character
+/// closes with itself (`q!…!`, `q/…/`, `%w|…|`).
+fn generic_quote_close(open: char) -> Option<char> {
+    match open {
+        '(' => Some(')'),
+        '{' => Some('}'),
+        '[' => Some(']'),
+        '<' => Some('>'),
+        c if c.is_ascii_punctuation() && !c.is_alphanumeric() && c != '_' => Some(c),
+        _ => None,
+    }
+}
+
+/// True when the character before a generic-quote operator lets it BE an
+/// operator rather than the tail of an identifier. `q(` inside `unique_q(x)` is
+/// part of a name; `system q(…)` is a quote.
+fn generic_quote_can_start(prev: Option<char>) -> bool {
+    !matches!(prev, Some(c) if c.is_alphanumeric() || c == '_' || c == '$' || c == '@' || c == '%')
+}
+
+/// Bodies of Perl/Ruby **generic quotes** — `q(…)`, `qq{…}`, `qw[…]`, `qx/…/`,
+/// `%q(…)`, `%Q{…}`, `%w[…]`, `%x(…)`.
+///
+/// THIS IS THE HOLE THAT SHIPPED IN v0.2.57 AND WAS REVERTED IN v0.2.58.
+/// [`quoted_string_literals`] knew exactly three delimiters — `"`, `'`, `` ` ``
+/// — so `perl -e "system 'mkfs /dev/sda'"` was denied while
+/// `perl -e "system q(mkfs /dev/sda)"` was not. The SAME hazard, and the
+/// spelling of the quote decided the verdict. The descent simply could not
+/// reach the body, and "could not reach" was resolving to the permissive side.
+///
+/// Adding a second denylist of effect tokens (what v0.2.57 did) does not fix
+/// this and cannot: the defect is a blind spot in the DESCENT, so the repair
+/// belongs in the descent. With the body extracted, the shell analyser that
+/// already judges `bash -c` payloads reaches it unchanged — no new judgment,
+/// and no new list to keep complete.
+///
+/// Nesting is tracked for the four bracket pairs, so `qw(a (b) c)` yields the
+/// whole body rather than stopping at the inner `)`. Every returned slice is a
+/// strict substring of `payload`, which is what keeps the caller's descent
+/// terminating.
+fn generic_quote_literals(payload: &str) -> Vec<String> {
+    // Longest first: `qq` and `%q` must win over `q` at the same position.
+    const OPS: &[&str] = &[
+        "%q", "%Q", "%w", "%W", "%i", "%I", "%x", "%r", "%s", "qq", "qw", "qr", "qx", "q", "%",
+    ];
+    let bytes = payload.as_bytes();
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0usize;
+    'scan: while i < payload.len() {
+        if !payload.is_char_boundary(i) {
+            i += 1;
+            continue;
+        }
+        for op in OPS {
+            if !payload[i..].starts_with(op) {
+                continue;
+            }
+            let prev = payload[..i].chars().next_back();
+            if !generic_quote_can_start(prev) {
+                continue;
+            }
+            // A bare `%` is the modulo/format operator far more often than it
+            // is a quote, so it only counts when a BRACKET follows it —
+            // `x % (y)` is arithmetic, `%(…)` is not written that way in
+            // practice, so require a bracket AND a non-space before nothing.
+            let after = i + op.len();
+            let Some(open) = payload[after..].chars().next() else {
+                continue;
+            };
+            if *op == "%" && !matches!(open, '(' | '{' | '[') {
+                continue;
+            }
+            let Some(close) = generic_quote_close(open) else {
+                continue;
+            };
+            let body_start = after + open.len_utf8();
+            let nests = matches!(open, '(' | '{' | '[' | '<');
+            let mut depth = 1usize;
+            let mut j = body_start;
+            while j < payload.len() {
+                let Some(c) = payload[j..].chars().next() else {
+                    break;
+                };
+                if c == '\\' {
+                    j += c.len_utf8();
+                    if let Some(esc) = payload[j..].chars().next() {
+                        j += esc.len_utf8();
+                    }
+                    continue;
+                }
+                if nests && c == open {
+                    depth += 1;
+                } else if c == close {
+                    depth -= 1;
+                    if depth == 0 {
+                        let inner = &payload[body_start..j];
+                        if !inner.trim().is_empty() && !out.iter().any(|p| p == inner) {
+                            out.push(inner.to_string());
+                        }
+                        i = j + c.len_utf8();
+                        continue 'scan;
+                    }
+                }
+                j += c.len_utf8();
+            }
+            // Unterminated: nothing reliable to extract, and skipping the
+            // operator is what lets the outer scan keep making progress.
+            break;
+        }
+        i += payload[i..].chars().next().map_or(1, char::len_utf8);
+        let _ = bytes;
+    }
+    out
+}
+
 /// The quoted string literals inside an interpreter program. A destructive
 /// SHELL command reaches the system through one of these
 /// (`os.system("mkfs /dev/sda")`, `` `rm -rf /` ``), so each literal is handed
 /// to the shell analyser that already judges `bash -c` payloads.
+///
+/// Covers the three ASCII quotes plus every Perl/Ruby generic quote (see
+/// [`generic_quote_literals`] for why the latter is not optional).
 fn quoted_string_literals(payload: &str) -> Vec<String> {
-    let mut out = Vec::new();
+    let mut out = generic_quote_literals(payload);
     let mut chars = payload.char_indices().peekable();
     while let Some((start, c)) = chars.next() {
         if !matches!(c, '"' | '\'' | '`') {
@@ -3554,6 +4019,7 @@ fn interpreter_code_verdict(
     payloads: &[String],
     depth: usize,
     ctx: &Ctx<'_>,
+    expansion_possible: bool,
 ) -> Decision {
     // Descend through nested quoting rather than stopping at the first layer.
     // A destructive command can sit several quote layers down —
@@ -3562,6 +4028,10 @@ fn interpreter_code_verdict(
     // plainly readable. Each layer is a strict substring of the one above, so
     // the descent terminates; the cap only bounds pathological nesting.
     const MAX_QUOTE_LAYERS: usize = 4;
+    // Each recovery probe spawns `git status` on one path. This runs inside a
+    // PreToolUse hook, so the number of them a single command line can provoke
+    // is bounded rather than left to the length of the program.
+    const MAX_RECOVERY_PROBES: usize = 6;
     let mut layer: Vec<String> = payloads.to_vec();
     for _ in 0..MAX_QUOTE_LAYERS {
         if layer.is_empty() {
@@ -3577,14 +4047,286 @@ fn interpreter_code_verdict(
             if let Decision::Deny(reason) = analyze_shell_payload(payload, depth, ctx) {
                 return Decision::Deny(reason);
             }
-            next.extend(quoted_string_literals(payload));
+            let literals = quoted_string_literals(payload);
+            // GATE-DISABLING axis, checked on the OBJECTS rather than the verbs.
+            //
+            // `perl -e "unlink q{.githooks/pre-commit}"` reached Allow while
+            // this was verb-only: `INTERPRETER_DESTRUCTIVE_CALLS` lists
+            // `unlink(`, `unlink "`, `unlink '`, `unlink glob`, … and a
+            // generic-quote spelling is simply not among them. Extending that
+            // list is the move that failed in v0.2.57 — a verb can always be
+            // spelled another way, or reached without being spelled at all.
+            //
+            // A path cannot. Whatever the program means to do to
+            // `.githooks/pre-commit`, naming it is how it gets there, so the
+            // decidable question is whether a protected path appears in the
+            // program's own string literals. That is checked here, once, for
+            // every quoting form the descent can reach.
+            // ARGV-LIST SUBPROCESS CALLS. `subprocess.run(['git','stash',
+            // 'clear'])` never forms a shell line, so `analyze_shell_payload`
+            // above sees only the Python around it and the per-literal scans
+            // below see three harmless words. `subprocess.run(['mkfs.ext4', …])`
+            // denied only because its first element is a recognisable command
+            // ALONE; the moment the hazard needs two words to be visible, it
+            // vanished. Measured 2026-09-09: this was the single case where the
+            // candidate lost coverage 0.2.58 had.
+            //
+            // Re-joining the list restores the line the interpreter is about to
+            // exec. Gated on the payload actually containing a subprocess
+            // spelling so the join is never invented out of unrelated literals
+            // in an ordinary program.
+            let lowered = payload.to_ascii_lowercase();
+            if ["subprocess.", "child_process", "spawnsync(", "execfile("]
+                .iter()
+                .any(|m| lowered.contains(m))
+            {
+                if let Decision::Deny(reason) =
+                    analyze_shell_payload(&literals.join(" "), depth, ctx)
+                {
+                    return Decision::Deny(reason);
+                }
+            }
+            let write_call = interpreter_write_call(payload);
+            let mut probed = 0usize;
+            for literal in &literals {
+                let candidate = literal.trim();
+                if candidate.is_empty() || candidate.contains(char::is_whitespace) {
+                    continue;
+                }
+                if exclude::touches_protected(candidate) {
+                    return Decision::ask(format!(
+                        "{shape}, and that program names `{candidate}`, a protected gate/config \
+path — changing it changes which hooks and gates run, and blastguard will not do that implicitly"
+                    ));
+                }
+                // RECOVERABILITY of what the program OVERWRITES.
+                //
+                // The verdict below allows a program in which no irreversible
+                // operation was found, and that was leaking a whole class:
+                // `os.truncate('<an Obsidian note>', 0)`,
+                // `open('<the same note>','w')`,
+                // `shutil.copyfile('/dev/null', '<the same note>')` and
+                // `open('/dev/sda','wb').write(…)` were all measured reaching
+                // Allow on 2026-09-09, every one of them naming its target in
+                // plain text the descent had already read. 0.2.58 blocked all
+                // four — by blocking every interpreter program, benign ones
+                // included, which is the friction the ruling removed.
+                //
+                // The axis that separates them is the same one
+                // `reversible.rs` was written for, applied one level in: a
+                // write to a tracked, clean file costs a `git restore` and is
+                // none of the gate's business; a write to a note that exists
+                // nowhere else is final. `/dev/sda` lands here too and needs no
+                // special case — it exists, it is in no work tree, so nothing
+                // holds a second copy of it.
+                //
+                // Gated on `write_call` so a READ of an unrecoverable path
+                // stays silent: `open('/etc/hosts').read()` names an
+                // unrecoverable file and destroys nothing, and asking about it
+                // is exactly the waste the ruling names. Gated on the literal
+                // looking like a path, and capped, because each probe spawns
+                // git and this runs inside a PreToolUse hook.
+                if write_call.is_some() && probed < MAX_RECOVERY_PROBES && candidate.contains('/') {
+                    probed += 1;
+                    let recovery = crate::reversible::probe(candidate, ctx.raw_base.as_deref());
+                    if let crate::reversible::Recovery::Unrecoverable(why) = &recovery {
+                        let call = write_call.unwrap_or("a write");
+                        if let Some(root) = ctx.confined_root("interpreter write", &[candidate]) {
+                            return confined_ask(
+                                &format!("`{call}` onto `{candidate}`"),
+                                &root,
+                                &[candidate],
+                            );
+                        }
+                        return Decision::deny(format!(
+                            "{shape}, and it writes `{candidate}` (`{call}`) — {why}"
+                        ));
+                    }
+                }
+            }
+            next.extend(literals);
         }
         layer = next;
     }
-    Decision::ask(format!(
-        "{shape}, and blastguard cannot read that program as safe or destructive — it refuses to \
-guess what the program does"
-    ))
+    // THE EMPTY SET IS NOT A CLEAN SCAN (CLAUDE.md §3). Everything below turns
+    // on the program text having been READ; if there was no text, nothing was
+    // examined and the Allow would be asserting a scan that never happened.
+    //
+    // The two shapes are not alike and must not share a verdict:
+    //   `python3 - <<'PY' … PY`     — the body is in `payloads`; it was read.
+    //   `cat evil.py | python3 -`   — the program is in a file. `payloads` is
+    //                                 empty and the command line says nothing
+    //                                 whatever about what will run.
+    // v0.2.57 allowed both and re-opened a fail-open that
+    // `tests/inline_eval_mirror_closure.rs` had already closed once. The
+    // measured friction is entirely the first shape (51 here-documents across
+    // 25 transcripts), so withholding the second costs nothing real.
+    if payloads.iter().all(|p| p.trim().is_empty()) {
+        return Decision::ask(format!(
+            "{shape}, and that program is not on the command line — blastguard has no text to \
+read, so it cannot tell whether anything here is irreversible"
+        ));
+    }
+
+    // TEXT THAT WILL BE SUBSTITUTED IS NOT THE PROGRAM EITHER. A payload
+    // carrying `$…`, `$(…)` or a backtick is expanded by the shell before the
+    // interpreter ever sees it, so what was scanned above is a template and
+    // what runs is something else. `printf '%s' "$(cat evil.py)" | node` has a
+    // perfectly non-empty payload and says exactly as much about the program as
+    // `cat evil.py | node` does, which is nothing.
+    //
+    // This is the guard the empty-set check alone does not give: without it,
+    // the arbitrary-program hole simply moves from "no text" to "text that is a
+    // placeholder", and the mirror closure in
+    // `tests/inline_eval_mirror_closure.rs` would be re-opened through a
+    // spelling it does not enumerate.
+    // NOR IS TEXT THAT BUILDS ITS OWN CODE. Same principle as the shell
+    // expansion below, one level in: a program that decodes, concatenates or
+    // looks up the name of what it is about to call is not described by its own
+    // source. `getattr(__import__('os'), 'sys' + 'tem')('wipefs -a /dev/sda')`
+    // contains no `os.system` for any scan to find, and
+    // `exec(bytes.fromhex('…'))` contains no operation at all until it runs.
+    // All four spellings were measured reaching Allow on 2026-09-09.
+    //
+    // Be clear about what this is and is not. It IS a list, and a list can be
+    // short. It is not the v0.2.57 mistake, because it does not enumerate
+    // effects (open-ended, and a miss there meant "allow"); it enumerates the
+    // constructs that make the text unfaithful to the program, and a miss means
+    // the text is taken at face value — the same standing this arm already
+    // gives text with no marker in it at all. Adding a spelling here is a
+    // strict improvement; the set never has to be complete to be sound in the
+    // direction it moves.
+    const CODE_BUILDING: &[&str] = &[
+        "exec(",
+        "eval(",
+        "compile(",
+        "getattr(",
+        "__import__",
+        "__builtins__",
+        "__getattribute__",
+        "globals()[",
+        "vars(",
+        "sys.modules[",
+        "b64decode",
+        "fromhex(",
+        "decode('hex'",
+        "instance_eval",
+        "class_eval",
+        "kernel.send",
+        ".send \"",
+        ".send '",
+        "new function(",
+        "settimeout(\"",
+        "settimeout('",
+        // Execution reached through a PATH or a SERIALISED OBJECT rather than
+        // through source text. Each of these runs code the command line does
+        // not contain, so the text that was read describes the loader and not
+        // the program. All measured reaching Allow on 2026-09-09.
+        "runpy.",
+        "run_path(",
+        "import_module(",
+        "pickle.load",
+        "marshal.load",
+        "functiontype(",
+        "yaml.unsafe_load",
+        "yaml.load(",
+        // `os.system(open(…).read())` — a shell command assembled at run time.
+        // The literal-argument spellings never reach here: the descent hands
+        // them to `analyze_shell_payload`, which denies `os.system('mkfs …')`
+        // several lines above.
+        "system(open(",
+        "system(f\"",
+        "system(f'",
+        "popen(open(",
+    ];
+    for payload in payloads {
+        let lowered = payload.to_ascii_lowercase();
+        if let Some(marker) = CODE_BUILDING.iter().find(|m| lowered.contains(**m)) {
+            return Decision::ask(format!(
+                "{shape}, and that program builds or decodes the code it runs (`{marker}`) — the \
+text on the command line is not the program that will execute, so blastguard cannot tell whether \
+anything here is irreversible"
+            ));
+        }
+    }
+
+    if let Some(expanded) = payloads
+        .iter()
+        .filter(|_| expansion_possible)
+        .find(|p| p.contains('$') || p.contains('`'))
+    {
+        let sample: String = expanded.trim().chars().take(60).collect();
+        return Decision::ask(format!(
+            "{shape}, and that program contains a shell expansion (`{sample}`) — the text on the \
+command line is a template, not the program that will run, so blastguard cannot tell whether \
+anything here is irreversible"
+        ));
+    }
+
+    // No irreversible operation was found in the program text that WAS read.
+    //
+    // Operator ruling, 2026-09-09, verbatim: 「健全とは戻せない変更でもない限り
+    // 自律的に実行できること。破壊的な変更を暗黙に実施しないこと。よみかきに
+    // 一々許可をもとめるのは健全でもなんでもない。無駄」 — soundness is that
+    // anything short of an unrecoverable change runs autonomously; asking about
+    // reads and writes is waste.
+    //
+    // BE EXACT ABOUT WHAT THIS ALLOW CLAIMS, because the reason it replaces was
+    // not exact. That reason said blastguard "cannot read that program", and
+    // measured over 25 transcripts it fired 71 times — but it was false on its
+    // face: the here-document body and the `-c` payload are both pushed into
+    // `payloads` and both scanned above. The program WAS read. What the old
+    // wording did was dress a policy default up as an inability, which is the
+    // §4 failure aimed at whoever reads it.
+    //
+    // So, precisely: the text was read, it was descended through four layers of
+    // quoting, and no irreversible operation was found in it. That is NOT proof
+    // the program has no effects — a program can reach an effect without
+    // spelling a recognisable name, and no command-line scan can settle that
+    // (which is exactly why the v0.2.57 effect-token allowlist was unsound and
+    // was reverted). It IS the operator's ruling that absence of evidence of
+    // irreversibility resolves to Allow rather than to friction.
+    //
+    // THE RESIDUAL, STATED CORRECTLY. An earlier draft of this comment said the
+    // leak was limited to effects reached "without naming them in text this
+    // descent can see". That was false, and an adversarial reviewer measured it
+    // false on 2026-09-09: `os.truncate('<an Obsidian note>', 0)` names its
+    // effect in plain text, is read by the descent, and was allowed. The
+    // residual was never "unnamed effects"; it was "named effects that are not
+    // on a list" — a much larger set, and one that grows with every interpreter
+    // API nobody enumerated. Writing the smaller, safer-sounding version of that
+    // is the §4 failure aimed at the next reviewer.
+    //
+    // Fourteen of twenty-six mirror-shaped irreversible probes reached Allow
+    // when that comment was written. What closed them was NOT a longer verb
+    // list; it was moving the question onto the OBJECT — is the thing this
+    // program writes recoverable? — which is the same substitution
+    // `reversible.rs` exists for, and is decidable where "does this program
+    // have effects" is not.
+    //
+    // What is left, stated so nobody has to rediscover it:
+    //
+    //   * A program that destroys a path it does not NAME — one it computes,
+    //     reads from a file, or receives in `argv`. `CODE_BUILDING` catches the
+    //     common constructs and the empty-set and expansion guards catch the
+    //     unreadable shapes, but a program that assembles a pathname from
+    //     fragments is not described by its own source and will be allowed.
+    //   * A destructive verb whose spelling is on neither list AND whose object
+    //     is recoverable-looking. The two lists are used ONLY to escalate, so a
+    //     miss leaves the payload exactly where it was rather than allowing it —
+    //     but a miss is still a miss.
+    //   * Reading a protected gate file is surfaced (the object check above
+    //     cannot tell a read from a write). That is friction the operator's
+    //     ruling would call waste; it is kept because the gate-disabling axis is
+    //     the one axis the ruling did not touch.
+    //
+    // With no human present `Decision::hardened` does not help here — it
+    // collapses Ask to Deny and leaves Allow alone. Four things bound the
+    // residual: `analyze_shell_payload` and `interpreter_destructive_call` on
+    // every layer, the argv-list re-join, and the recoverability probe over the
+    // literals of any payload that writes. Do not remove one without taking the
+    // ruling again.
+    Decision::Allow
 }
 
 /// The operand that makes an interpreter read its program from STDIN rather
@@ -3624,12 +4366,24 @@ fn analyze_code_interpreter(cmd: &str, rest: &[&str], depth: usize, ctx: &Ctx<'_
                 payloads.extend(inline_command_payloads(rest, pos, &flag[1 + idx + 1..]));
             }
         }
-        return interpreter_code_verdict(
+        let verdict = interpreter_code_verdict(
             &format!("`{cmd}` is invoked with an inline-eval flag"),
             &payloads,
             depth,
             ctx,
+            true,
         );
+        if !matches!(verdict, Decision::Allow) {
+            return verdict;
+        }
+        // An interpreter is also an EDITOR. `perl -i -pe 's/x//' .githooks/pre-commit`
+        // has a harmless program and a gate file for an operand, and until the
+        // arm above started allowing benign programs, its blanket Ask was the
+        // only thing stopping it.
+        if let Some(ask) = protected_operand_ask(cmd, rest, interpreter_edits_in_place(cmd, rest)) {
+            return ask;
+        }
+        return Decision::Allow;
     }
 
     // `analyze_command_at` is handed TOKENS, not the raw segment, so the
@@ -3643,7 +4397,26 @@ fn analyze_code_interpreter(cmd: &str, rest: &[&str], depth: usize, ctx: &Ctx<'_
         .into_iter()
         .map(|(payload, _)| payload)
         .collect();
-    payloads.extend(process_substitution_payloads(&text));
+    // A PROCESS SUBSTITUTION IS A COMMAND, NOT A PROGRAM. `python3 <(cat
+    // evil.py)` hands the interpreter a `/dev/fd/…` file whose contents are the
+    // OUTPUT of `cat evil.py` — so the substitution's own text says as little
+    // about the program as the upstream stage of `cat evil.py | python3` does,
+    // which is nothing. Pushing it verbatim made `payloads` non-empty and so
+    // walked straight past the empty-set guard below; measured 2026-09-09,
+    // `python3 <(cat evil.py)` and `node <(cat evil.js)` reached Allow while
+    // their pipe twins asked, and the Deny on the destructive spellings was
+    // incidental — it came from analysing the inner `echo`'s literal, not from
+    // any reading of the program.
+    //
+    // Taking the inner command's string LITERALS is the same rule the pipe arm
+    // in `analyze_interpreter_stdin_exec` already uses: `<(echo "console.log(1)")`
+    // is readable and benign, `<(cat evil.py)` yields nothing and falls to the
+    // empty-set Ask. The two mirrors now answer alike.
+    let subs = process_substitution_payloads(&text);
+    let has_process_substitution = !subs.is_empty();
+    for sub in &subs {
+        payloads.extend(quoted_string_literals(sub));
+    }
     if opens_heredoc {
         // The here-document body is whatever follows the `<<TAG` token; hand
         // the whole operand text to the auditor rather than trying to find the
@@ -3651,7 +4424,8 @@ fn analyze_code_interpreter(cmd: &str, rest: &[&str], depth: usize, ctx: &Ctx<'_
         payloads.push(text.clone());
     }
 
-    if stdin_operand.is_none() && !opens_heredoc && payloads.is_empty() {
+    if stdin_operand.is_none() && !opens_heredoc && !has_process_substitution && payloads.is_empty()
+    {
         // A script file, a module, or a bare REPL. Nothing on this command line
         // is a program to audit.
         return Decision::Allow;
@@ -3662,7 +4436,13 @@ fn analyze_code_interpreter(cmd: &str, rest: &[&str], depth: usize, ctx: &Ctx<'_
         None if opens_heredoc => format!("`{cmd}` is fed a here-document"),
         None => format!("`{cmd}` is fed a substituted source"),
     };
-    interpreter_code_verdict(&shape, &payloads, depth, ctx)
+    interpreter_code_verdict(
+        &shape,
+        &payloads,
+        depth,
+        ctx,
+        !here_document_delimiter_is_quoted(&text),
+    )
 }
 
 /// True if this stage names a program FILE for the interpreter to run, rather
@@ -3743,9 +4523,13 @@ fn analyze_interpreter_stdin_exec(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Dec
                 program_texts.extend(quoted_string_literals(&statement[i - 1]));
             }
             let shape = format!("`{}` takes its program from stdin", stage.trim());
-            if let Some(deny) =
-                acc.record(interpreter_code_verdict(&shape, &program_texts, depth, ctx))
-            {
+            if let Some(deny) = acc.record(interpreter_code_verdict(
+                &shape,
+                &program_texts,
+                depth,
+                ctx,
+                !here_document_delimiter_is_quoted(cmd),
+            )) {
                 return deny;
             }
         }
@@ -4221,6 +5005,32 @@ fn unknown_wrapper_ask(
             // reported separately by the resolver because they are different
             // facts, but this arm owes the same thing to each: it still cannot
             // name the program.
+            // MEASURED FRICTION, DELIBERATELY LEFT IN PLACE. This is the single
+            // largest ask class in the field — 67 of 223 non-allow verdicts
+            // across 25 transcripts (2026-09-09) — and every one of them was a
+            // local tool held in a variable: `$B brief --json …`,
+            // `"$C/bin/specforge" --help`, `$SF draft --help`. Not one
+            // destroyed anything, so by the operator's ruling the gate is
+            // spending attention it should not.
+            //
+            // It is NOT flattened to Allow, because the arm is over-firing, not
+            // superfluous: the eleven tests around
+            // `a_head_whose_value_the_line_does_not_pin_down_still_asks` show
+            // it is what catches `$RM -rf /some/path`, and a delete is not one
+            // of the reads and writes the ruling freed. Two narrowings were
+            // considered and rejected here rather than shipped:
+            //   * allow when the operands are recoverable — makes the verdict
+            //     depend on whether a path happens to exist today, so
+            //     `$RM -rf ~/work` would be asked about only until the first
+            //     time it succeeded;
+            //   * allow when no force/recursive flag appears — a denylist of
+            //     flags, which is the same unsound shape as the v0.2.57 effect
+            //     tokens.
+            // The real repair is upstream, in what `CommandWordOrigin` can
+            // resolve: most of the 67 are `AssignedButUnknowable` because the
+            // value came from `$(mktemp -d)` or contained `$HOME`, and those
+            // are paths, not verbs. That is its own measurement and its own
+            // change.
             CommandWordOrigin::NoReachingAssignment | CommandWordOrigin::AssignedButUnknowable => {
                 let head = tokens[idx];
                 return Decision::ask(format!(
@@ -4656,6 +5466,8 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize, ctx: &Ctx<'_>) 
         other => {
             if other.starts_with("mkfs") {
                 Decision::deny("mkfs formats a filesystem, destroying all data")
+            } else if let Some(reason) = irreversible_device_verb(other, rest) {
+                Decision::deny(reason)
             } else {
                 // Round 2: this arm WAS `Decision::Allow`, i.e. every verb
                 // without a rule reached every protected path unclassified.
@@ -5399,6 +6211,17 @@ fn analyze_git(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
         return Decision::deny(HOOKSPATH_REASON);
     }
     let sub = normalized_command(rest[idx]);
+    // Object-store destruction, checked before the per-subcommand arms below.
+    //
+    // These matter more here than anywhere else in this file: the recoverability
+    // rule in `crate::reversible` decides that a tracked, clean file is safe to
+    // overwrite BECAUSE git holds a copy. These three commands are the ones
+    // that throw that copy away. Leaving them at Allow — which is where they
+    // were, measured 2026-09-09 against 0.2.58 — meant the gate would silently
+    // dismantle the very thing its other verdicts rely on.
+    if let Some(reason) = irreversible_git_subcommand(&sub, &rest[idx + 1..]) {
+        return Decision::deny(reason);
+    }
     match sub.as_str() {
         "clean" => {
             let has_f = has_short(rest, 'f') || rest.contains(&"--force");
@@ -7570,7 +8393,10 @@ mod tests {
         // that allowed this was a universal bypass (`/tmp/../etc/hosts`) and has
         // been deleted, not patched. A denied temp-log redirect is a false
         // positive; that is the acceptable side of the trade.
-        assert!(bash("cargo build 2> /tmp/err.log").is_deny());
+        // An fd redirect truncates like any other — pinned on a target whose
+        // bytes are known unrecoverable, since a nonexistent one destroys
+        // nothing and is allowed by design.
+        assert!(bash("cargo build 2> /etc/hosts").is_deny());
     }
 
     #[test]
@@ -8242,8 +9068,16 @@ mod tests {
         assert!(bash("shred --help /some/path").is_deny());
         assert!(bash("truncate --help -s 0 /some/path").is_deny());
         // A truncating redirect is still denied earlier by detect_bash, so the
-        // help rule cannot launder one.
-        assert!(bash("shred --help > /some/path").is_deny());
+        // help rule cannot launder one. The target must be one whose bytes are
+        // KNOWN to be unrecoverable: the old `/some/path` placeholder does not
+        // exist, and a write that destroys nothing is no longer a finding.
+        assert!(bash("shred --help > /etc/hosts").is_deny());
+        // The allow side, which the one-sided original never pinned: same rule,
+        // same shape, target that destroys nothing.
+        assert_eq!(
+            bash("shred --help > /nonexistent-dir-xyz/out"),
+            Decision::Allow
+        );
         // Bare `rm --help` / `sh --help` keep working.
         assert_eq!(bash("rm --help"), Decision::Allow);
         assert_eq!(bash("sh --help"), Decision::Allow);
@@ -8294,17 +9128,20 @@ mod tests {
     #[test]
     fn bg2_every_explicit_fd_redirect_truncates() {
         // Space-separated, any fd — all truncate the target.
-        assert!(bash("shred --help 2> /some/path").is_deny());
-        assert!(bash("shred --help 0> /some/path").is_deny());
-        assert!(bash("shred --help 3> /some/path").is_deny());
-        assert!(bash("shred --help 9> /some/path").is_deny());
+        assert!(bash("shred --help 2> /etc/hosts").is_deny());
+        assert!(bash("shred --help 0> /etc/hosts").is_deny());
+        assert!(bash("shred --help 3> /etc/hosts").is_deny());
+        assert!(bash("shred --help 9> /etc/hosts").is_deny());
         // Controls that already denied before the fix.
-        assert!(bash("shred --help >  /some/path").is_deny());
-        assert!(bash("shred --help 1> /some/path").is_deny());
+        assert!(bash("shred --help >  /etc/hosts").is_deny());
+        assert!(bash("shred --help 1> /etc/hosts").is_deny());
         // The plain-command proof that rule 2 (not the help rule) is what was
         // missing: `echo` has no rule of its own, so only rule 2 can catch it.
-        assert!(bash("echo x 2> /some/path").is_deny());
-        assert!(bash("echo x 3>/some/path").is_deny());
+        assert!(bash("echo x 2> /etc/hosts").is_deny());
+        assert!(bash("echo x 3>/etc/hosts").is_deny());
+        // 0.2.59: every fd form must ALSO agree on the allow side, or the fd
+        // walk could regress to catching only stdout and stay green.
+        assert_eq!(bash("echo x 3> /nonexistent-dir-xyz/out"), Decision::Allow);
     }
 
     #[test]
@@ -8320,10 +9157,12 @@ mod tests {
         // longer a safe class. `is_temp_scratch` was a raw prefix test that
         // `/tmp/../<anything>` walked straight out of, disabling the whole
         // truncating-redirect rule; it is deleted rather than normalised.
-        assert!(bash("cargo test 2> /tmp/log").is_deny());
-        assert!(bash("cargo test > /tmp/log").is_deny());
-        assert!(bash("cargo test 2> /var/tmp/log").is_deny());
-        assert!(bash("cargo test 2> /tmpfile").is_deny());
+        assert!(bash("cargo test 2> /etc/hosts").is_deny());
+        // Targets whose bytes are known unrecoverable. `/tmp/...` placeholders
+        // that do not exist are no longer a finding (see the D1 test, which
+        // now proves the absence of a temp carve-out on a REAL temp file).
+        assert!(bash("cargo test > /etc/hosts").is_deny());
+        assert!(bash("cargo test 2> /etc/fstab").is_deny());
         // Append is not truncation at any fd.
         assert_eq!(bash("cmd 2>> err.log"), Decision::Allow);
     }
@@ -8453,12 +9292,26 @@ mod tests {
             "echo x > /var/tmp/../../etc/hosts",
             "echo x > /var/folders/../../etc/hosts",
             "echo x > /tmp//../etc/hosts",
-            // The `/private` twins of the same traversal.
-            "echo x > /private/var/tmp/../../etc/hosts",
-            "echo x > /private/var/folders/../../etc/hosts",
         ] {
             assert!(bash(c).is_deny(), "expected deny: {c}");
         }
+        // The `/private` twins of the same traversal are macOS spellings, and
+        // they are NO LONGER exercised as denies here. Not because the
+        // traversal stopped being resolved — `exclude::normalize` still folds
+        // it, and the four rows above prove a `/tmp/..` prefix cannot hide
+        // `/etc/hosts` — but because the rule now asks whether the RESOLVED
+        // target holds bytes worth protecting, and `/private/etc/hosts` does
+        // not exist on the Linux host this suite runs on, so there is nothing
+        // there to destroy. Asserting a deny would be asserting the host's
+        // layout, not the gate's behaviour.
+        //
+        // The traversal property itself is what mattered, and it is pinned
+        // directly, without depending on any file existing:
+        assert_eq!(
+            crate::exclude::normalize("/private/var/tmp/../../etc/hosts"),
+            "/private/etc/hosts"
+        );
+        assert_eq!(crate::exclude::normalize("/tmp/../etc/hosts"), "/etc/hosts");
         // A target that resolves to a PROTECTED path is a modify: whether the
         // write strengthens or disarms is not derivable here, so it gates as an
         // Ask and hardens to Deny with no human present. What the traversal
@@ -8467,23 +9320,60 @@ mod tests {
         assert_protected_modify(bash("echo x > /private/tmp/../../Users/yuki/.zshrc"));
     }
 
+    /// A file that really exists under `/tmp`, holding bytes no git repository
+    /// has a copy of. Removed by the caller.
+    ///
+    /// The D1 tests below need this because their invariant is about the
+    /// TARGET'S LOCATION and can only be demonstrated on a target that actually
+    /// holds something: a `/tmp` path that does not exist destroys nothing when
+    /// truncated, so a placeholder cannot tell "no temp carve-out" apart from
+    /// "nothing there to lose".
+    fn temp_file_with_bytes(tag: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("bg-d1-{}-{tag}", std::process::id()));
+        std::fs::write(&p, b"bytes that exist nowhere else\n").expect("write temp fixture");
+        p
+    }
+
     #[test]
     fn d1_plain_temp_redirects_are_denied_not_carved_out() {
-        // The carve-out is GONE, not narrowed. These are false positives and
-        // are the accepted cost — do not re-add a temp-directory exemption.
+        // The carve-out is GONE, not narrowed — do not re-add a temp-directory
+        // exemption.
+        //
+        // The check that actually proves this changed in 0.2.59. It used to be
+        // a list of `/tmp/...` placeholders asserted to deny; but the rule no
+        // longer denies on a path PREFIX at all, it denies on the target's
+        // bytes being unrecoverable, so a nonexistent placeholder now allows
+        // for a reason that has nothing to do with a carve-out. Asserting on it
+        // would have been asserting a coincidence.
+        //
+        // So: a REAL file under `/tmp`, holding real bytes, outside any repo.
+        // If a temp exemption were ever reintroduced this denies no longer, and
+        // that is the whole claim.
+        let real = temp_file_with_bytes("plain");
+        let real = real.to_string_lossy().into_owned();
         for c in [
-            "cargo test 2> /tmp/log",
-            "cargo test > /tmp/log",
-            "cargo test 2> /var/tmp/log",
-            "make 2> /var/folders/xy/z/T/err",
-            "cargo test 2> /private/tmp/log",
+            format!("cargo test 2> {real}"),
+            format!("cargo test > {real}"),
+            format!("make 2> {real}"),
         ] {
-            assert!(bash(c).is_deny(), "expected deny: {c}");
+            assert!(
+                bash(&c).is_deny(),
+                "a real, untracked temp file is unrecoverable — expected deny: {c}"
+            );
         }
+        // The other side, which the placeholder version never pinned: the same
+        // shape, same directory, on a target that holds nothing. Truncating it
+        // destroys nothing, and by the operator's ruling that is not the gate's
+        // business.
+        let absent = std::env::temp_dir().join(format!("bg-d1-{}-absent", std::process::id()));
+        let absent = absent.to_string_lossy().into_owned();
+        assert_eq!(bash(&format!("cargo test 2> {absent}")), Decision::Allow);
+
         // Non-truncating ways to capture output are still allowed, so there is
         // always a rephrasing available.
-        assert_eq!(bash("cargo test 2>> /tmp/log"), Decision::Allow);
+        assert_eq!(bash(&format!("cargo test 2>> {real}")), Decision::Allow);
         assert_eq!(bash("cargo test 2> /dev/null"), Decision::Allow);
+        let _ = std::fs::remove_file(&real);
     }
 
     // ---- D2: flock's `-c` is a shell command string, not an opaque value ----
@@ -8998,7 +9888,7 @@ mod tests {
             "'rm' -rf /some/path",
             r#""rm" -rf /some/path"#,
             "/bin/rm -rf /some/path",
-            "shred --help > /some/path",
+            "shred --help > /etc/hosts",
         ] {
             assert!(bash(c).is_deny(), "expected deny: {c}");
         }

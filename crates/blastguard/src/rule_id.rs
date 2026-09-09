@@ -89,6 +89,28 @@ pub fn rule_id(reason: &str) -> &'static str {
     if reason.contains("is a command blastguard has no rule for") {
         return "unknown-verb-protected-path";
     }
+    // 0.2.59, gate-disabling axis. Both wordings say the same thing about the
+    // same class — an operation with nothing irreversible in it that
+    // nonetheless names a gate/config path — reached once through an
+    // interpreter's OPERANDS (`perl -i -pe … .githooks/pre-commit`) and once
+    // through the string literals INSIDE its program
+    // (`perl -e "unlink q{.githooks/pre-commit}"`). Same id: a recurring one is
+    // the same signal either way, and splitting it would halve the count that
+    // makes it visible.
+    if reason.contains("no irreversible operation in it, but")
+        || reason.contains("that program names")
+    {
+        return "unknown-verb-protected-path";
+    }
+    // The UNTESTED twin, and it earns its own id for the same reason the
+    // `Undetermined` verdicts do: it does not say "this is a gate file", it says
+    // "blastguard could not tell". A recurring one is a gap in this crate's own
+    // plumbing (a glob shape it cannot resolve), not a report about the agent.
+    if reason.contains("rewrites its file operands in place")
+        && reason.contains("glob with no literal prefix")
+    {
+        return "protected-path-untested";
+    }
     if reason.contains("disarms a protected gate/config path") {
         return "protected-path-disarm";
     }
@@ -127,8 +149,25 @@ pub fn rule_id(reason: &str) -> &'static str {
     if reason == "fork bomb pattern detected" {
         return "fork-bomb";
     }
-    if reason.contains("truncates and overwrites an existing file") {
+    // The reason this matches replaced `truncates and overwrites an existing
+    // file`, which asserted an existence check the crate never performed. The
+    // rule id is unchanged on purpose: it is the same rule, now reporting what
+    // it actually observed. The old wording stays matched so a retro replay of
+    // a pre-0.2.59 log still classifies.
+    if reason.contains("destroys the file's current contents")
+        || reason.contains("truncates and overwrites an existing file")
+    {
         return "truncating-redirect";
+    }
+    // The same question asked one level in: an interpreter PROGRAM that
+    // overwrites a file whose bytes exist nowhere else
+    // (`os.truncate('<an Obsidian note>', 0)`). Its own id rather than sharing
+    // `truncating-redirect`, because a recurring one names a different problem:
+    // work is reaching unrecoverable files through interpreter code rather than
+    // through the shell, which is precisely the route that opens when the shell
+    // route gets harder to use.
+    if reason.contains("` (`") && reason.contains(", and it writes `") {
+        return "interpreter-unrecoverable-write";
     }
 
     // Bash: rm.
@@ -236,6 +275,22 @@ pub fn rule_id(reason: &str) -> &'static str {
     }
     if reason.contains("inline-eval flag") {
         return "code-interpreter-inline-eval";
+    }
+    // 0.2.59, and it MUST precede the shape ids below. Every reason it matches
+    // also contains one of their shape phrases, because the shape is the first
+    // clause of the sentence — placed after them, this branch is dead, and the
+    // paragraph at its old site claimed a distinction the code did not draw
+    // (§4). The strengthened `assert_eq!` in this module's own test is what
+    // caught that; the earlier `assert_ne!(…, "unknown")` form passed happily.
+    //
+    // Distinct from every other interpreter id on purpose: this one is not a
+    // finding about a program, it is the statement that NO program text reached
+    // the gate (`cat evil.py | python3 -`). The reason it replaced — "cannot
+    // read that program as safe or destructive" — was applied to here-documents
+    // whose body the gate had in fact read, so a shared id would have pooled two
+    // different situations and made neither countable.
+    if reason.contains("not on the command line — blastguard has no text to read") {
+        return "unresolvable-interpreter-program";
     }
     if reason.contains("takes its program from stdin")
         || reason.contains("reads its program from stdin")
@@ -490,10 +545,30 @@ mod tests {
                 "Bash",
                 json!({ "command": "python3 -c \"import shutil; shutil.rmtree('/')\"" }),
             ),
-            // The refusal-to-guess ask on an unreadable inline program.
-            ("Bash", json!({ "command": "python3 -c \"print(1)\"" })),
-            // The stdin-mirror ask.
+            // `python3 -c "print(1)"` was here as "the refusal-to-guess ask on
+            // an unreadable inline program". It is Allow as of 0.2.59 (operator
+            // ruling: only unrecoverable changes are surfaced), and this list
+            // is a list of BLOCKING inputs — an Allow here would fail
+            // `deny_reason`'s own precondition, not the completeness claim.
+            // Removing it does not shrink the obligation: the two reasons that
+            // took over its arm are added below, so every wording the arm can
+            // still emit is exercised.
+            //
+            // The stdin-mirror ask: no program text reached the gate at all.
             ("Bash", json!({ "command": "cat evil.py | python3 -" })),
+            // 0.2.59: a readable program that names a gate/config path. Blocks
+            // on the gate-disabling axis even though the file is tracked and so
+            // perfectly recoverable — the two axes are separate.
+            (
+                "Bash",
+                json!({ "command": "perl -e \"unlink q{.githooks/pre-commit}\"" }),
+            ),
+            // 0.2.59: the same axis reached through an interpreter's OPERAND
+            // rather than through its program text.
+            (
+                "Bash",
+                json!({ "command": "perl -i -pe 's/a/b/' .githooks/pre-commit" }),
+            ),
         ];
 
         for (tool, input) in cases {
@@ -584,20 +659,82 @@ mod tests {
         assert_eq!(rule_id(&wrapped), "rm-recursive");
 
         // Pin the AUDIT, not only the id. The two paths must also agree when
-        // the program is NOT demonstrably destructive, and must agree on `Ask`
-        // there — the refusal to guess — rather than on the blanket Deny this
-        // rule used to issue on shape alone. Without this, a regression back to
-        // shape-matching would leave every assertion above green.
+        // the program is NOT demonstrably destructive — without this, a
+        // regression back to shape-matching would leave every assertion above
+        // green.
+        //
+        // What they agree ON changed in 0.2.59. This block previously required
+        // `Ask`, described as "the refusal to guess". Operator ruling
+        // 2026-09-09 replaced the question the gate asks: only UNRECOVERABLE
+        // changes are surfaced, and `print(1)` is not one, so the agreed answer
+        // is now `Allow`. The invariant — both paths reach the SAME verdict on
+        // the SAME program — is what this test owns, and it is unchanged.
         for cmd in [
             "python3 -c \"print(1)\"",
             "find . -exec python3 -c \"print(1)\" \\;",
         ] {
             let d = detect::detect("Bash", Some(&json!({ "command": cmd })));
             assert!(
-                matches!(d, Decision::Ask(_)),
-                "a benign inline program must be Ask (a refusal to guess), not \
-                 a verdict, for {cmd:?} — got {d:?}"
+                matches!(d, Decision::Allow),
+                "a program with no irreversible operation in it must be Allow \
+                 for {cmd:?} — got {d:?}"
             );
         }
+
+        // The strength this block loses by dropping `Ask` is put back on the
+        // other side, which the old one-sided form never covered: the two paths
+        // must ALSO agree on the shapes that still withhold Allow. Both are new
+        // in 0.2.59, and both would be silently unreachable without a case here.
+        for (cmd, want) in [
+            // No program text on the command line at all: the empty set is not
+            // a clean scan.
+            (
+                "cat evil.py | python3 -",
+                "unresolvable-interpreter-program",
+            ),
+            // A program naming a gate/config path — recoverable from git, and
+            // surfaced anyway on the gate-disabling axis.
+            (
+                "perl -e \"unlink q{.githooks/pre-commit}\"",
+                "unknown-verb-protected-path",
+            ),
+        ] {
+            let d = detect::detect("Bash", Some(&json!({ "command": cmd })));
+            let reason = match &d {
+                Decision::Deny(r) | Decision::Ask(r) => r.clone(),
+                Decision::Allow => panic!("{cmd:?} must not be Allow, got {d:?}"),
+            };
+            // `assert_eq!`, not `assert_ne!(…, "unknown")`. The weaker form was
+            // here first and it proved almost nothing: every reason that
+            // classified to SOME id passed it, including one that classified to
+            // the wrong rule. Naming the expected id is what makes this a test
+            // of the mapping rather than of its non-emptiness.
+            assert_eq!(
+                rule_id(&reason),
+                want,
+                "{cmd:?} classifies to the wrong rule id. reason: {reason}"
+            );
+        }
+
+        // The 0.2.59 object-side rule needs a file that really exists and that
+        // git really does not hold, so it cannot be written as a static string
+        // like the cases above.
+        let scratch = std::env::temp_dir().join("blastguard-rule-id-unrecoverable.txt");
+        std::fs::write(&scratch, b"bytes that exist only here")
+            .expect("write the probe file the recoverability check needs");
+        let cmd = format!(
+            "python3 - <<'PY'\nimport os\nos.truncate({:?}, 0)\nPY",
+            scratch.display().to_string()
+        );
+        let d = detect::detect("Bash", Some(&json!({ "command": cmd })));
+        let reason = match &d {
+            Decision::Deny(r) | Decision::Ask(r) => r.clone(),
+            Decision::Allow => panic!("{cmd:?} must not be Allow, got {d:?}"),
+        };
+        assert_eq!(
+            rule_id(&reason),
+            "interpreter-unrecoverable-write",
+            "reason: {reason}"
+        );
     }
 }

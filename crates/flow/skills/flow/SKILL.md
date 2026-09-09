@@ -451,7 +451,8 @@ divert を強行せず人間へ返すこと。
   （3-1 の 3 が通常どおり `next --claim` する）。これは散文ではなく**実測**である
   （2026-09-07、使い捨て git repo。`ratify` が
   `backlog: 3 件を起票 / 0 件は起票済み (計 3 requirement)` を出力し、直後の
-  `backlog list --status pending` に `[r4demo:R1]`〜`[r4demo:R3]` の3件が `p1 / pending` で並んだ。
+  `backlog list --status pending`（**確認のための純粋な read であって、ピックに使ってはいけない**。
+  ピックは常に `next --claim`）に `[r4demo:R1]`〜`[r4demo:R3]` の3件が `p1 / pending` で並んだ。
   実 repo の `.backlog/tasks.toml` は無変更で、`r4demo` の grep は 0 ヒット）。
 - 元の課題は `backlog fail <id> --reason ...` **ではなく pending に戻す**
   （`backlog edit <id> --status pending`）。spec 由来の要件が先に処理され、元の課題は

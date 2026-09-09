@@ -91,7 +91,7 @@ exec precommit-audit --mode precommit
 
 - 行単位: 行末に `# audit-ignore: <理由>` を付ける（JS/TS は `//`）。理由は必須で、マーカーだけでは抑制されない。
 - ファイル単位: 先頭 20 行以内に `audit-ignore-file: <理由>` を書く。
-- 一回限りのバイパス: `<audit_dir>/.audit-skip` を作る（読み取り時に消費される）。
+- 一回限りのバイパス: `precommit-audit skip --reason "<理由>"`。理由は必須で、**発行したセッション**の次の audit にだけ適用され、発行と消費の両方が記録される。（旧来の `<audit_dir>/.audit-skip` ファイルは撤去した。共有の作業ツリーに置かれ帰属を持たないため、次に走った invocation が消費してしまっていた — CLAUDE.md §5。）
 
 ### 他の Stop ゲート（donegate / reviewgate / tdd）との関係
 

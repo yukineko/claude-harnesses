@@ -1,5 +1,5 @@
 //! Stop-hook entry helpers shared by the gates: the never-break-a-turn panic
-//! guard and the one-shot skip-marker consumer.
+//! guard and the session-scoped one-shot skip.
 
 use std::path::Path;
 
@@ -59,7 +59,7 @@ enum PanicAction {
 ///
 /// **Caller contract (load-bearing since this fails closed):** because a panic
 /// now *blocks* the stop, `body` MUST evaluate its panic-free operator escapes —
-/// the `disabled` toggles and the `consume_skip(&root, ".<gate>-skip")` marker —
+/// the `disabled` toggles and the `consume_session_skip(state_dir, session)` skip —
 /// *before* any panic-prone verification (config is fail-soft; the checkers /
 /// git / subprocess work is not). Otherwise a deterministically-crashing gate
 /// would be unescapable: the operator's skip marker or `enabled = false` would be
@@ -144,96 +144,240 @@ fn panic_exit(name: &str, action: PanicAction) -> ! {
     }
 }
 
-/// Read a marker's one-line reason: the trimmed contents, or
-/// `"(no reason given)"` when it is empty but readable.
-///
-/// `None` means **判定不能** — the path exists but its contents could not be
-/// read (it is a directory, a device, unreadable, …). That is deliberately NOT
-/// mapped to a default reason: a token we cannot read is not a token we may act
-/// on (CLAUDE.md 第3節). It used to become `"(no reason given)"`, i.e. an IO
-/// failure was honoured as a valid escape — and since `remove_file` fails on
-/// the same path, it was re-honoured on *every* later stop: a permanent bypass
-/// created by accident.
-fn skip_reason(p: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(p).ok()?;
-    let trimmed = text.trim();
-    Some(if trimmed.is_empty() {
-        "(no reason given)".to_string()
-    } else {
-        trimmed.to_string()
-    })
+/// Why a session-scoped skip could not be issued.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SkipIssueError {
+    /// No session to attribute the skip to. The caller could not read
+    /// `CLAUDE_CODE_SESSION_ID`, so the skip would have to be filed under a
+    /// placeholder — which is the unattributable shared marker this API exists
+    /// to remove. Refused rather than guessed.
+    NoSession,
+    /// The session id is not a usable single path component (empty, or carrying
+    /// a separator or `..`). Accepting it would let the marker be written
+    /// outside the state dir, or under a name another session also computes.
+    UnusableSessionId,
+    /// A skip must say WHY. An unexplained bypass is invisible to review even
+    /// when it is recorded.
+    EmptyReason,
+    /// The marker could not be written.
+    Io(String),
 }
 
-/// Where an already-honoured marker is parked until the stop it authorised
-/// actually completes: `<marker>.honoured`, beside the marker itself.
-fn honoured_name(marker: &str) -> String {
-    format!("{marker}.honoured")
+impl std::fmt::Display for SkipIssueError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SkipIssueError::NoSession => write!(
+                f,
+                "no session id (CLAUDE_CODE_SESSION_ID is unset) — a skip must be attributable to \
+the session that asked for it"
+            ),
+            SkipIssueError::UnusableSessionId => write!(
+                f,
+                "session id is not a usable path component (empty, or contains a separator or `..`)"
+            ),
+            SkipIssueError::EmptyReason => {
+                write!(
+                    f,
+                    "a skip requires a reason; refusing to record an unexplained bypass"
+                )
+            }
+            SkipIssueError::Io(e) => write!(f, "could not record the skip: {e}"),
+        }
+    }
 }
 
-/// Consume a one-shot skip marker `<root>/<marker>` for the stop being
-/// adjudicated right now: return its trimmed one-line reason (or
-/// `"(no reason given)"` when the file is empty) while the escape is still
-/// owed, and `None` once it has been spent — or when it cannot be honoured.
+/// True when `session_id` is a single, safe path component that identifies ONE
+/// session.
 ///
-/// # The token is spent by a completed stop, not by this gate's own verdict
+/// `"_local"` is rejected on purpose. It is what `HookInput::session_key`
+/// substitutes when the payload carries no session id, so it is the SAME key
+/// for every such run — keying a skip on it would rebuild the shared marker
+/// this API exists to delete, under a new name. "Which session is this?" being
+/// unanswerable resolves to "no skip" (CLAUDE.md §3), not to a skip everyone
+/// shares.
+fn usable_session_id(session_id: &str) -> bool {
+    !session_id.is_empty()
+        && session_id != "."
+        && session_id != ".."
+        && session_id != "_local"
+        && !session_id.contains('/')
+        && !session_id.contains('\\')
+        && !session_id.contains('\0')
+}
+
+/// Where the one-shot skip for `session_id` lives: `<state_dir>/skips/<id>.skip`.
+fn session_skip_path(state_dir: &Path, session_id: &str) -> std::path::PathBuf {
+    state_dir.join("skips").join(format!("{session_id}.skip"))
+}
+
+/// Issue a one-shot, reason-required skip **for `session_id` only**.
+///
+/// This replaces the project-root marker files (`.donegate-skip` and friends)
+/// that `consume_skip` used to read. Those sat in the SHARED project root, so
+/// whichever session's Stop hook fired next consumed them — waving that
+/// session's legitimate gate through on an exception someone else asked for.
+/// CLAUDE.md §5 names that mechanism as forbidden under parallel sessions, and
+/// it was the only in-session hatch that existed: the documented env-var
+/// alternatives never reach a Stop hook (the hook is a child of the Claude Code
+/// app and inherits ITS environment, not the Bash tool's), and
+/// `~/.claude/settings.json` is permission-denied for editing. An escape route
+/// that only exists in a forbidden form is what turns gate work into a game of
+/// getting past the gate.
+///
+/// The replacement is STRICTER, not looser: an unattributable, unexplained,
+/// unrecorded shared file becomes an attributed, reason-carrying, recorded and
+/// session-limited one. Every refusal here resolves the undeterminable case to
+/// "no skip", per CLAUDE.md §3.
+pub fn issue_session_skip(
+    state_dir: &Path,
+    session_id: &str,
+    reason: &str,
+) -> Result<std::path::PathBuf, SkipIssueError> {
+    if session_id.is_empty() {
+        return Err(SkipIssueError::NoSession);
+    }
+    if !usable_session_id(session_id) {
+        return Err(SkipIssueError::UnusableSessionId);
+    }
+    let reason = reason.trim();
+    if reason.is_empty() {
+        return Err(SkipIssueError::EmptyReason);
+    }
+    let path = session_skip_path(state_dir, session_id);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| SkipIssueError::Io(e.to_string()))?;
+    }
+    std::fs::write(&path, format!("{reason}\n")).map_err(|e| SkipIssueError::Io(e.to_string()))?;
+    append_jsonl(
+        state_dir,
+        &serde_json::json!({
+            "event": "skip_issued",
+            "session_id": session_id,
+            "reason": reason,
+        }),
+    );
+    Ok(path)
+}
+
+/// The `<gate> skip --reason "…"` CLI action, shared by every gate so the four
+/// cannot drift apart — one capability, one implementation. (Two rules for one
+/// capability is how this repo's mirrors keep diverging.)
+///
+/// The session is read from `CLAUDE_CODE_SESSION_ID`, which is measured to be
+/// the same value a Stop hook receives as `session_id` (observed 2026-09-08:
+/// the env var and `~/.donegate/state/log.jsonl`'s `session_id` agreed). If it
+/// is unset there is no session to attribute the skip to, and the request is
+/// refused rather than filed under a shared placeholder.
+pub fn skip_command(gate: &str, state_dir: &Path, reason: &str) -> Result<(), SkipIssueError> {
+    let session = std::env::var("CLAUDE_CODE_SESSION_ID").unwrap_or_default();
+    issue_session_skip(state_dir, &session, reason)?;
+    eprintln!(
+        "{gate}: one-shot skip recorded for session {session}\n  reason: {}\n  \
+It applies to THIS session's next stop only; no other session can consume it, \
+and the consumption is written to the gate's log.",
+        reason.trim()
+    );
+    Ok(())
+}
+
+/// Where an already-honoured skip is parked until the stop it authorised
+/// actually completes: `<state_dir>/skips/<id>.skip.honoured`.
+fn honoured_session_skip_path(state_dir: &Path, session_id: &str) -> std::path::PathBuf {
+    state_dir
+        .join("skips")
+        .join(format!("{session_id}.skip.honoured"))
+}
+
+/// Consume the one-shot skip belonging to `session_id`, if there is one.
+///
+/// Returns the reason it carried while the escape is still owed, and `None`
+/// once it has been spent — or when it cannot be honoured. A skip issued by a
+/// DIFFERENT session is not visible here and is left untouched — that is the
+/// whole point, and it is what the shared marker could not do. Consumption is
+/// written to `log.jsonl` by this function rather than by each caller, so a
+/// gate cannot consume a bypass without leaving a record.
+///
+/// # The skip is spent by a completed stop, not by this gate's own verdict
 ///
 /// A Stop is adjudicated by four independent processes (donegate, reviewgate,
-/// tdd, propguard), each holding only its own verdict. This function used to
-/// `remove_file` the marker the instant *its* gate decided to allow. So when
-/// donegate honoured `.donegate-skip` and allowed while reviewgate blocked the
-/// same stop, **no stop happened** and the operator's one-shot escape had been
-/// spent on nothing: they had to re-place the marker on every re-entry, for
-/// every gate, until the four-way conjunction went green at once — the standing
-/// pressure toward a *permanent* bypass that CLAUDE.md 第5節 forbids.
+/// tdd, propguard), each holding only its own verdict. Session-scoping the
+/// marker fixed *whose* skip gets consumed; it did not fix *when*. This
+/// function used to delete the marker the instant it read it, so when donegate
+/// honoured the session's skip and allowed while reviewgate blocked the same
+/// stop, **no stop happened** and the operator's one-shot escape had been spent
+/// on nothing: they had to re-issue it on every re-entry, for every gate, until
+/// the four-way conjunction went green at once — the standing pressure toward a
+/// *permanent* bypass that CLAUDE.md 第5節 forbids.
 ///
 /// `stop_hook_active` is the seam that fixes it. Claude Code sets it on the
 /// stop that follows a block ([`crate::hook::HookInput`]), so it distinguishes
 /// "this stop is a re-entry after somebody blocked" from "this stop starts a
 /// fresh chain". The lifecycle is therefore:
 ///
-/// 1. **Marker present** — honour it and `rename` it to `<marker>.honoured`.
+/// 1. **Skip present** — honour it and `rename` it to `<id>.skip.honoured`.
 ///    The escape is now *owed*: it has authorised a stop that has not completed.
-/// 2. **Only `<marker>.honoured` present, `stop_hook_active == true`** — some
-///    gate blocked the stop this token authorised, so the stop never happened.
+/// 2. **Only `<id>.skip.honoured` present, `stop_hook_active == true`** — some
+///    gate blocked the stop this skip authorised, so the stop never happened.
 ///    Keep honouring it; the escape is still owed.
-/// 3. **Only `<marker>.honoured` present, `stop_hook_active == false`** — the
-///    chain ended, so a stop this token authorised did complete. Delete the
+/// 3. **Only `<id>.skip.honoured` present, `stop_hook_active == false`** — the
+///    chain ended, so a stop this skip authorised did complete. Delete the
 ///    record and return `None`. This is what keeps the escape one-shot rather
-///    than permanent (pinned by
-///    `tests/gate_skip_token_survives_block.rs::token_is_consumed_exactly_once_on_the_ordinary_path`).
+///    than permanent.
 ///
-/// A `rename` (rather than a second bookkeeping file) is used so that a marker
-/// the operator *re-places* is never mistaken for an outstanding honour: the
+/// A `rename` (rather than a second bookkeeping file) is used so that a skip
+/// the operator *re-issues* is never mistaken for an outstanding honour: the
 /// two states have different filenames and step 1 always wins.
 ///
 /// # Failure modes, all resolved to the restrictive side
 ///
-/// * Marker unreadable → `None` (not honoured); see [`skip_reason`].
+/// * Marker unreadable → `None` (not honoured). A token we cannot read is not a
+///   token we may act on (CLAUDE.md 第3節).
 /// * `rename` fails → the honour cannot be recorded, so it cannot be bounded.
-///   Fall back to the old behaviour and `remove_file` the marker, honouring it
-///   exactly once. If that fails too, the token can be neither bounded nor
-///   cleared, so it is **not** honoured at all (`None`).
-/// * `<marker>.honoured` unreadable on a re-entry → `None` (the gate checks).
-///
-/// # Residual, stated rather than hidden
-///
-/// `if !p.exists()` maps EACCES to "no marker" exactly as it does ENOENT, so an
-/// unreadable-by-permission marker still reads as absent (restrictive here, but
-/// it is a判定不能 rendered as a verdict). Pinning it needs an injectable
-/// metadata probe — filed as backlog `dc85e1c8`, not fixed here.
-pub fn consume_skip(root: &Path, marker: &str, stop_hook_active: bool) -> Option<String> {
-    let p = root.join(marker);
-    let honoured = root.join(honoured_name(marker));
+///   Fall back to `remove_file`, honouring it exactly once. If that fails too,
+///   the skip can be neither bounded nor cleared, so it is **not** honoured.
+/// * Empty marker → `None`, and the file is removed: `issue_session_skip`
+///   refuses an empty reason, so a blank file is hand-made and must not become
+///   a silent, permanent hatch.
+pub fn consume_session_skip(
+    state_dir: &Path,
+    session_id: &str,
+    stop_hook_active: bool,
+) -> Option<String> {
+    if !usable_session_id(session_id) {
+        return None;
+    }
+    let path = session_skip_path(state_dir, session_id);
+    let honoured = honoured_session_skip_path(state_dir, session_id);
 
-    // (1) A token nobody has honoured yet — or one the operator has just
-    // re-placed, which supersedes any stale record.
-    if p.exists() {
-        let reason = skip_reason(&p)?;
-        if std::fs::rename(&p, &honoured).is_err() && std::fs::remove_file(&p).is_err() {
+    let record = |reason: &str, reentry: bool| {
+        append_jsonl(
+            state_dir,
+            &serde_json::json!({
+                "event": "skip_consumed",
+                "session_id": session_id,
+                "reason": reason,
+                // True when this honour is a re-entry after some gate blocked
+                // the stop the skip authorised — the same escape, not a second
+                // one. Without this field the log would read as N bypasses.
+                "reentry": reentry,
+            }),
+        );
+    };
+
+    // (1) A skip nobody has honoured yet — or one the operator has just
+    // re-issued, which supersedes any stale record.
+    if path.exists() {
+        let reason = std::fs::read_to_string(&path).ok()?.trim().to_string();
+        if reason.is_empty() {
+            let _ = std::fs::remove_file(&path);
+            return None;
+        }
+        if std::fs::rename(&path, &honoured).is_err() && std::fs::remove_file(&path).is_err() {
             // Neither bounded nor cleared: honouring it now would create a
             // standing bypass, so do not honour it.
             return None;
         }
+        record(&reason, false);
         return Some(reason);
     }
 
@@ -241,13 +385,18 @@ pub fn consume_skip(root: &Path, marker: &str, stop_hook_active: bool) -> Option
         return None;
     }
 
-    // (2) The stop this token authorised was blocked by some other gate, so it
+    // (2) The stop this skip authorised was blocked by some other gate, so it
     // never happened: the escape is still owed.
     if stop_hook_active {
-        return skip_reason(&honoured);
+        let reason = std::fs::read_to_string(&honoured).ok()?.trim().to_string();
+        if reason.is_empty() {
+            return None;
+        }
+        record(&reason, true);
+        return Some(reason);
     }
 
-    // (3) A stop this token authorised completed. Spend it.
+    // (3) A stop this skip authorised completed. Spend it.
     let _ = std::fs::remove_file(&honoured);
     None
 }
@@ -264,7 +413,7 @@ pub fn append_jsonl(state_dir: &Path, entry: &serde_json::Value) {
     }
     if let Ok(line) = serde_json::to_string(entry) {
         // Single atomic append (body + '\n' in one write) — see issue #15.
-        crate::append::append_line(&path, &line);
+        crate::append::append_line_reporting(&path, &line, "gate run log");
     }
 }
 
@@ -328,43 +477,6 @@ mod tests {
         let r: Result<(), PanicAction> = guard(true, true, || panic!("boom"));
         std::panic::set_hook(prev);
         assert_eq!(r, Err(PanicAction::InteractiveError));
-    }
-
-    fn skip_root(tag: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("hc-gate-skip-{}-{tag}", std::process::id()));
-        std::fs::create_dir_all(&d).unwrap();
-        d
-    }
-
-    #[test]
-    fn skip_marker_absent_is_none() {
-        let root = skip_root("absent");
-        assert!(consume_skip(&root, ".x-skip", false).is_none());
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn skip_marker_with_reason_is_consumed_once() {
-        let root = skip_root("reason");
-        std::fs::write(root.join(".x-skip"), "  because\n").unwrap();
-        assert_eq!(
-            consume_skip(&root, ".x-skip", false).as_deref(),
-            Some("because")
-        );
-        // consumed: a second call sees nothing.
-        assert!(consume_skip(&root, ".x-skip", false).is_none());
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn skip_marker_empty_gives_default_reason() {
-        let root = skip_root("empty");
-        std::fs::write(root.join(".x-skip"), "   \n").unwrap();
-        assert_eq!(
-            consume_skip(&root, ".x-skip", false).as_deref(),
-            Some("(no reason given)")
-        );
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

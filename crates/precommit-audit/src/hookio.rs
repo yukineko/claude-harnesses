@@ -41,19 +41,55 @@ pub fn read_stdin() -> HookInput {
     }
 }
 
-/// One-shot escape hatch: `<audit_dir>/.audit-skip`. If present, consume it
-/// (delete), clear the block marker, and return the reason string.
-pub fn consume_skip(root: &Path, audit_dir: &str) -> Option<String> {
-    let skip = root.join(audit_dir).join(".audit-skip");
-    if !skip.exists() {
-        return None;
-    }
-    let reason = std::fs::read_to_string(&skip)
+/// Where this crate's session-scoped skip markers live.
+///
+/// Deliberately under the user's home, NOT under the repo: the thing this
+/// replaced was `<root>/<audit_dir>/.audit-skip`, a one-shot file inside the
+/// shared working tree. Any concurrent session — or any later `git commit` by
+/// anyone — consumed whichever skip happened to be lying there, so the bypass
+/// one session asked for silently spent itself on somebody else's commit.
+/// CLAUDE.md §5 names that mechanism as forbidden under parallel sessions, and
+/// the four Stop gates moved off it in the same change as this.
+pub fn skip_state_dir() -> PathBuf {
+    harness_core::config::base_dir("precommit-audit").join("state")
+}
+
+/// The session this invocation belongs to, if any.
+///
+/// `None` for a plain pre-commit-framework or terminal `git commit` — there is
+/// no session to scope a skip to, so none can be issued and none can be
+/// consumed. That is the intended narrowing, not a gap: an unattributable
+/// bypass is exactly what was removed.
+pub fn session_id() -> Option<String> {
+    std::env::var("CLAUDE_CODE_SESSION_ID")
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "(no reason given)".to_string());
-    let _ = std::fs::remove_file(&skip);
+}
+
+/// One-shot, session-scoped escape hatch. Consumes the calling session's skip
+/// (if it issued one), clears the block marker, and returns the reason.
+///
+/// Returns `None` when there is no session id at all, so a non-Claude
+/// invocation can never pick up a skip it did not ask for.
+pub fn consume_session_skip(root: &Path, audit_dir: &str) -> Option<String> {
+    let session = session_id()?;
+    // `stop_hook_active: false` — spend the token on first read.
+    //
+    // The shared helper's third state exists because FOUR independent Stop
+    // gates adjudicate one stop, so a token honoured by a gate that allows can
+    // be burned by a stop another gate then blocks. `stop_hook_active` is the
+    // signal that distinguishes a re-entry after a block from a fresh chain,
+    // and Claude Code only sets it on Stop hooks. A pre-commit hook has no
+    // equivalent, so there is nothing honest to pass but `false`, which is
+    // exactly the one-shot behaviour this call site already had.
+    //
+    // The analogous defect DOES exist here — a later pre-commit check can
+    // block the very commit this skip authorised, and the token is gone — but
+    // closing it needs a signal this process does not receive, so it is filed
+    // rather than papered over with a guessed `true` (which would never delete
+    // the marker at all: a permanent bypass, which CLAUDE.md §5 forbids).
+    let reason = harness_core::gate::run::consume_session_skip(&skip_state_dir(), &session, false)?;
     let _ = std::fs::remove_file(block_marker(root, audit_dir));
     Some(reason)
 }
@@ -102,7 +138,7 @@ pub fn write_audit_log(
     });
     let path = root.join(audit_dir).join("audit-log.jsonl");
     if let Ok(line) = serde_json::to_string(&entry) {
-        harness_core::append::append_line(&path, &line);
+        harness_core::append::append_line_reporting(&path, &line, "precommit audit");
     }
 }
 

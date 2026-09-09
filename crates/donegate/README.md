@@ -40,9 +40,17 @@ and reads exit codes — so it can never hit a rate limit.
 - A per-session **attempt counter** gives up after `max_attempts` consecutive
   blocks (default 3) and allows the stop, so a genuinely stuck agent isn't
   trapped. The counter resets after `reset_after_secs` of idle, or on any green.
-- **Escape hatch**: create `.donegate-skip` (one-line reason) in the project
-  root — consumed once, allows the next stop.
-- **Kill switch**: `DONEGATE_DISABLE=1`.
+- **Escape hatch**: `donegate skip --reason "<why>"` — consumed once, allows
+  the next stop, and applies only to the session that issued it. A reason is
+  required, and both the issue and the consumption are appended to the gate log,
+  so a bypass cannot happen unrecorded. (This replaces the old `.donegate-skip`
+  file in the project root, which was removed: a shared one-shot marker is
+  consumed by whichever session stops next, waving *that* session's legitimate
+  gate through — CLAUDE.md section 5 forbids exactly that under parallel
+  sessions.)
+- **Kill switch**: `DONEGATE_DISABLE=1`, effective only in the environment
+  Claude Code itself was started with — exporting it from a tool call does not
+  reach this hook, which inherits the app's environment.
 - **Safe by default**: with no `[[check]]` configured, the gate allows every
   stop. Installing the hook can never block a project that hasn't opted in.
 

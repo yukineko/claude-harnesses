@@ -77,22 +77,15 @@ fn body_src(main_rs: &str, body_fn: &str) -> String {
 /// Does `body` place every escape needle before the `::evaluate(` anchor?
 /// Extracted so both the real-source guard and the synthetic teeth-check below
 /// exercise the exact same comparison.
-fn escapes_precede_evaluate(body: &str, skip_marker: &str) -> Result<(), String> {
+fn escapes_precede_evaluate(body: &str, _skip_marker: &str) -> Result<(), String> {
     let eval_pos = body.find("::evaluate(").ok_or("no ::evaluate( anchor")?;
-    // Deliberately NOT closed with `)`. This test pins the ORDER of the escape
-    // relative to `::evaluate(`, not `consume_skip`'s arity, and pinning the
-    // closing paren made it fail the moment a third argument was threaded in
-    // (`stop_hook_active`) even though the escape had not moved an inch. The
-    // synthetic teeth-check arms below still match this prefix, so the negative
-    // controls keep their teeth — a loosened needle that stopped catching a
-    // reordered escape would be the weakening CLAUDE.md 第4節 forbids, and it
-    // does not: `find` still requires the call site to precede the anchor.
-    let skip_needle = format!("consume_skip(&root, \"{skip_marker}\"");
-    for needle in [
-        "Config::disabled_env()",
-        "!cfg.enabled",
-        skip_needle.as_str(),
-    ] {
+    // The shared project-root marker `.<gate>-skip` was replaced by a
+    // session-scoped skip (CLAUDE.md §5: a shared one-shot file is consumed by
+    // whichever session stops next). The ORDERING requirement this guard exists
+    // for is unchanged — the operator's escape must still be reachable before
+    // any panic-prone verification — so only the spelling of the needle moved.
+    let skip_needle = "consume_session_skip(";
+    for needle in ["Config::disabled_env()", "!cfg.enabled", skip_needle] {
         let pos = body
             .find(needle)
             .ok_or_else(|| format!("missing escape `{needle}`"))?;
@@ -110,14 +103,16 @@ fn ordering_check_has_teeth_on_a_violating_body() {
     // A body where verification runs BEFORE the skip marker must be REJECTED —
     // proving the guard below can actually go red (a green-only test is useless).
     let bad = "fn gate_run() {\n    if Config::disabled_env() {}\n    if !cfg.enabled {}\n    \
-               let v = gate::evaluate(&cfg, &root);\n    consume_skip(&root, \".donegate-skip\");\n}";
+               let v = gate::evaluate(&cfg, &root);\n    \
+               consume_session_skip(&cfg.state_dir, &session);\n}";
     assert!(
         escapes_precede_evaluate(bad, ".donegate-skip").is_err(),
-        "a post-evaluate skip marker must be flagged"
+        "a post-evaluate skip must be flagged"
     );
     // The corrected order (skip before evaluate) must pass.
     let good = "fn gate_run() {\n    if Config::disabled_env() {}\n    if !cfg.enabled {}\n    \
-                consume_skip(&root, \".donegate-skip\");\n    let v = gate::evaluate(&cfg, &root);\n}";
+                consume_session_skip(&cfg.state_dir, &session);\n    \
+                let v = gate::evaluate(&cfg, &root);\n}";
     assert!(escapes_precede_evaluate(good, ".donegate-skip").is_ok());
 }
 

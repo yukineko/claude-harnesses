@@ -324,8 +324,31 @@ fn command_wrapper_prefix_hiding_the_fetch_is_denied() {
 
 #[test]
 fn command_wrapper_prefix_anti_vacuity_control_stays_allow() {
-    // The wrapper is real, but there is no fetch behind it — nothing to deny.
-    assert_allow(bash("command ls | sh"), "command ls | sh (no fetch)");
+    // The wrapper is real, but there is no FETCH behind it — so the egress rule
+    // must not answer. That is what this control has always been for: proving
+    // the test above passes because `curl` was found behind the wrapper, not
+    // because everything spelled `… | sh` denies.
+    //
+    // It used to assert the whole verdict was `Allow`, which was a proxy for
+    // "no rule answers at all". That proxy expired when the interpreter/shell
+    // stdin-exec mirror closed: `ls | sh` executes `ls`'s OUTPUT as a shell
+    // program, an unreadable program, so it is now an Ask of its own (pinned in
+    // `tests/inline_eval_mirror_closure.rs::shell_stdin_program_mirror_is_judged`).
+    // The control therefore asserts the two things it actually meant — no Deny,
+    // and not from the egress arm — instead of the proxy.
+    let d = bash("command ls | sh");
+    assert!(
+        !d.is_deny(),
+        "expected no Deny for `command ls | sh` (no fetch behind the wrapper), got {d:?}"
+    );
+    let reason = match &d {
+        Decision::Allow => String::new(),
+        Decision::Deny(r) | Decision::Ask(r) => r.clone(),
+    };
+    assert!(
+        !reason.contains("fetches/decodes remote or opaque content"),
+        "the egress arm must stay silent when there is no fetch — got: {reason}"
+    );
 }
 
 #[test]

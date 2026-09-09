@@ -1,6 +1,11 @@
-//! The test-existence gate: did this change add implementation code without a
-//! test? Deterministic — it reads git, never runs the suite (that's donegate's
-//! job). The verdict drives whether the Stop hook blocks.
+//! The test-existence gate: does the UNCOMMITTED diff add implementation code
+//! with no test in it? Deterministic — it reads git, never runs the suite
+//! (that's donegate's job). Its scope is the working tree only: the unstaged
+//! and staged diffs plus untracked files, all relative to HEAD. Tests that are
+//! already committed are never consulted, so every message this module renders
+//! says "no test in the uncommitted changes" and not "this change has no
+//! test" — the latter is an absence the gate never checked (CLAUDE.md §4).
+//! The verdict drives whether the Stop hook blocks.
 
 use std::path::Path;
 
@@ -65,8 +70,17 @@ impl Report {
                 let blocks =
                     f.added_impl_lines >= cfg.min_added_impl_lines.max(1) && !f.has_test_evidence();
                 if blocks {
+                    // State the observation, not an absence that was never
+                    // checked. The scan reads `git status` + the unstaged and
+                    // staged diffs + untracked files (`git.rs`) — all relative
+                    // to HEAD — so it can report that no test appears in the
+                    // uncommitted changes, and nothing about tests that are
+                    // already committed. This reason travels to overwatch as a
+                    // recorded finding, so the distinction has to survive here
+                    // too, not only in the model-facing message.
                     Verdict::violation(format!(
-                        "{} new implementation line(s) added with no accompanying test",
+                        "{} new implementation line(s) added, with no test visible in the \
+                         uncommitted changes (already-committed tests were not consulted)",
                         f.added_impl_lines
                     ))
                 } else {
@@ -201,8 +215,9 @@ pub fn block_reason(v: &Report, attempt: u32, max: u32) -> String {
             "🔴 tdd: couldn't determine what changed — a `git` command failed (attempt \
              {attempt}/{max}). Not allowing the stop blindly on an undetermined changeset \
              (that would let untested code through). Fix the git error (see `tdd status`), \
-             or create `.tdd-skip` in the project root with a one-line reason to skip once, \
-             or set TDD_DISABLE=1 to disable entirely."
+             or run `tdd skip --reason \"...\"` to skip once (THIS session only, recorded), \
+             or set TDD_DISABLE=1 in the environment Claude Code itself was started with \
+             (exporting it from a tool call does not reach this hook)."
         ),
         // Neither reachable in practice (a non-blocking report never reaches
         // `block_reason`), but resolved to the same loud message rather than an
@@ -227,14 +242,20 @@ fn generic_block_reason(
         format!("\n  implementation changed: {}", shown.join(", "))
     };
     format!(
-        "🔴 tdd: write a test first — {added_impl_lines} new implementation line(s) added with no \
-         accompanying test (attempt {attempt}/{max}).{sample}\n\n\
+        "🔴 tdd: write a test first — {added_impl_lines} new implementation line(s) added, and no \
+         test is visible in the uncommitted changes (attempt {attempt}/{max}).{sample}\n\n\
+         Scope actually inspected: the working tree only — the unstaged and staged diffs plus \
+         untracked files, all relative to HEAD. tdd did NOT read already-committed tests, so this \
+         is \"no test in the uncommitted changes\", not \"this change has no test\". If the test \
+         covering this change is already committed, say so and take the one-shot skip below.\n\n\
          Add a test that exercises this change (a `#[test]`, `def test_…`, `func Test…`, \
          `it(...)`, or a file under tests/), then finish. Prefer test-first: run \
          `tdd red --task <id>` to capture the failing test before you implement, and \
          `tdd green --task <id>` once it passes.\n\n\
-         Genuinely no test needed (pure refactor/rename/docs)? Create `.tdd-skip` in the \
-         project root with a one-line reason (consumed once). Disable entirely: TDD_DISABLE=1.",
+         Genuinely no test needed (pure refactor/rename/docs)? Run \
+         `tdd skip --reason \"...\"` — one stop, THIS session only, and recorded. Disable \
+         entirely: TDD_DISABLE=1 in the environment Claude Code itself was started with \
+         (exporting it from a tool call does not reach this hook).",
     )
 }
 
@@ -260,11 +281,14 @@ pub fn human_report(v: &Report, cfg: &Config) -> String {
                         "yes (inline test added)"
                     }
                 } else {
-                    "none"
+                    "none in the uncommitted changes"
                 }
             ));
             if v.blocks(cfg) {
-                s.push_str("\n🔴 would BLOCK: implementation added without a test");
+                s.push_str(
+                    "\n🔴 would BLOCK: implementation lines added and no test visible in \
+                     the uncommitted changes (already-committed tests were not consulted)",
+                );
             } else {
                 s.push_str("\n✓ would allow the stop");
             }
@@ -437,7 +461,7 @@ mod tests {
             "must name the git failure: {reason}"
         );
         assert!(
-            reason.contains(".tdd-skip"),
+            reason.contains("tdd skip --reason"),
             "must name the one-shot skip: {reason}"
         );
         assert!(
@@ -512,5 +536,177 @@ mod tests {
             Determination::Known(None) => "Known(None)",
             Determination::Undetermined(_) => "Undetermined",
         }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // CLAUDE.md §4 — "no accompanying test" is a claim tdd never checked.
+    //
+    // `crate::git::added_lines` reads `git diff -U0`, `git diff --cached -U0`
+    // and `git ls-files --others --exclude-standard` (git.rs:136-145);
+    // `crate::git::changed_files` reads `git status --porcelain=v1 -z`
+    // (git.rs:90). That is the UNCOMMITTED working-tree + index + untracked
+    // change set and nothing else — no `git log`, no `HEAD` comparison. A
+    // test that is already committed — written first, in an
+    // earlier commit, exactly as this repo's own F→P discipline requires — is
+    // invisible to the scan. The gate is entitled to say "I saw implementation
+    // lines and no test IN WHAT I INSPECTED". It is not entitled to say the
+    // change has no test.
+    //
+    // The verdict predicate is NOT changing: the same input must still block,
+    // and the message must still name the lines and files actually observed.
+    // Those are the anti-vacuity controls below.
+    // ══════════════════════════════════════════════════════════════════════
+
+    /// Ways an implementer may name what was actually inspected.
+    /// NOTE: `"uncommitted".contains("committed")` is true, so the
+    /// already-committed tokens below deliberately avoid the bare word.
+    const TDD_INSPECTED_SCOPE_TOKENS: &[&str] = &[
+        "uncommitted",
+        "not yet committed",
+        "working tree",
+        "working-tree",
+        "未コミット",
+        "コミットされていない",
+    ];
+
+    /// Ways an implementer may say already-committed tests were not consulted.
+    const TDD_COMMITTED_NOT_CONSULTED_TOKENS: &[&str] = &[
+        "already committed",
+        "already-committed",
+        "previously committed",
+        "existing commits",
+        "コミット済み",
+        "既にコミット",
+        "既存のコミット",
+    ];
+
+    /// The report the gate builds for "implementation added, no test visible in
+    /// the uncommitted diff" — the input that blocks today and must keep
+    /// blocking after the wording fix.
+    fn missing_test_report() -> Report {
+        Report {
+            scan: Determination::Known(Some(Fields {
+                added_impl_lines: 12,
+                test_marker_added: false,
+                test_file_changed: false,
+                impl_files: vec!["src/foo.rs".to_string(), "src/bar.rs".to_string()],
+            })),
+        }
+    }
+
+    /// The same shape WITH test evidence — the control proving the predicate
+    /// still discriminates.
+    fn report_with_test_evidence() -> Report {
+        Report {
+            scan: Determination::Known(Some(Fields {
+                added_impl_lines: 12,
+                test_marker_added: true,
+                test_file_changed: false,
+                impl_files: vec!["src/foo.rs".to_string()],
+            })),
+        }
+    }
+
+    /// (a) The dishonest claim, in the model-facing block reason.
+    #[test]
+    fn block_reason_does_not_assert_the_change_has_no_test() {
+        let reason = block_reason(&missing_test_report(), 1, 3);
+        let lower = reason.to_lowercase();
+        assert!(
+            !lower.contains("no accompanying test"),
+            "tdd only inspected the UNCOMMITTED diff; it cannot assert the change has \
+             no accompanying test.\n--- reason ---\n{reason}"
+        );
+        assert!(
+            !lower.contains("without a test"),
+            "same claim, different phrasing — tdd did not look at committed tests.\n\
+             --- reason ---\n{reason}"
+        );
+    }
+
+    /// (a, positive half) It must state what it DID inspect, and that
+    /// already-committed tests were not consulted.
+    #[test]
+    fn block_reason_states_that_only_the_uncommitted_changes_were_inspected() {
+        let reason = block_reason(&missing_test_report(), 1, 3);
+        let lower = reason.to_lowercase();
+        assert!(
+            TDD_INSPECTED_SCOPE_TOKENS
+                .iter()
+                .any(|t| lower.contains(&t.to_lowercase())),
+            "the block reason must name the scope it actually inspected — the \
+             uncommitted/working-tree changes (one of {TDD_INSPECTED_SCOPE_TOKENS:?}).\n\
+             --- reason ---\n{reason}"
+        );
+        assert!(
+            TDD_COMMITTED_NOT_CONSULTED_TOKENS
+                .iter()
+                .any(|t| lower.contains(&t.to_lowercase())),
+            "the block reason must say already-committed tests were NOT consulted \
+             (one of {TDD_COMMITTED_NOT_CONSULTED_TOKENS:?}).\n--- reason ---\n{reason}"
+        );
+    }
+
+    /// (a) The same dishonest claim in the `Verdict::Violation` reason
+    /// (gate.rs line ~69), which travels to overwatch as the recorded finding.
+    #[test]
+    fn verdict_reason_does_not_assert_the_change_has_no_test() {
+        let cfg = Config::default();
+        let v = missing_test_report().verdict(&cfg);
+        assert!(
+            v.blocks(),
+            "the verdict predicate must not change: this still blocks"
+        );
+        let reason = v
+            .reason()
+            .map(|r| r.as_str().to_string())
+            .unwrap_or_default();
+        assert!(
+            !reason.to_lowercase().contains("no accompanying test"),
+            "the recorded violation reason asserts an absence tdd never checked.\n\
+             --- reason ---\n{reason}"
+        );
+        // ANTI-VACUITY for this assertion: the reason must still carry the
+        // number of implementation lines tdd genuinely counted.
+        assert!(
+            reason.contains("12"),
+            "the violation reason must still report the 12 added implementation lines \
+             it really observed.\n--- reason ---\n{reason}"
+        );
+    }
+
+    /// (b) ANTI-VACUITY #1. The block reason must still carry the facts tdd
+    /// really did observe, and the escape hatches.
+    #[test]
+    fn block_reason_still_names_the_observed_lines_files_and_escape_hatches() {
+        let reason = block_reason(&missing_test_report(), 1, 3);
+        for tok in [
+            "12",
+            "src/foo.rs",
+            "src/bar.rs",
+            "tdd skip",
+            "TDD_DISABLE",
+            "1/3",
+        ] {
+            assert!(
+                reason.contains(tok),
+                "the block reason must still contain {tok:?}\n--- reason ---\n{reason}"
+            );
+        }
+    }
+
+    /// (b) ANTI-VACUITY #2. The verdict predicate is unchanged: the same input
+    /// still blocks, and test evidence still allows.
+    #[test]
+    fn the_blocking_predicate_is_unchanged_by_the_wording_fix() {
+        let cfg = Config::default();
+        assert!(
+            missing_test_report().blocks(&cfg),
+            "impl lines with no visible test must STILL block"
+        );
+        assert!(
+            !report_with_test_evidence().blocks(&cfg),
+            "a change with test evidence must STILL be allowed"
+        );
     }
 }

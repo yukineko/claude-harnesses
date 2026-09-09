@@ -43,7 +43,8 @@
 - **hook I/O** — `hook::HookInput`（stdin payload）と `run_hook`／`is_headless`／`read_stdin_if_piped` を提供（詳細は下記
   module 責務）。
 - **gate 実行** — `gate::run::run_guarded(name, interactive, body)` が Stop-hook 本体を panic guard 下で回し、
-  `consume_skip`（one-shot skip marker 消費）と `append_jsonl`（共有 event log）を添える。`gate::runner::run` は外部
+  `issue_session_skip` / `consume_session_skip`（セッション限定・理由必須・記録付きの one-shot skip）と
+  `append_jsonl`（共有 event log）を添える。`gate::runner::run` は外部
   コマンドを実行し `RawOutcome`（tail は `TAIL_CAP_BYTES`=256KiB で cap）を返す。`gate::state` は session ごとの
   `SessionState`（`load`/`save`/`reset`/`bump`）で失敗回数を TTL 付きで管理する。
 - **note store** — `store::Store::{new, project_dir, write_note, list_notes}`（`.md`、mtime 新しい順）＋ `load_json`/
@@ -62,7 +63,8 @@
 
 - **`hook`** — 全 hook が共有する stdin payload 構造体（`HookInput`/`ContextWindow`）と、ターンを壊さない `run_hook`／
   `is_headless`／`read_stdin_if_piped`／`catch_silent`／`catch_and_log`。**詳細は `docs/specs/harness-core-hook.md`。**
-- **`gate`**（`run`/`runner`/`state`）— Stop-gate 機構。`run_guarded` panic guard、`consume_skip`、共有 event log
+- **`gate`**（`run`/`runner`/`state`）— Stop-gate 機構。`run_guarded` panic guard、
+  `issue_session_skip`/`consume_session_skip`、共有 event log
   `append_jsonl`、外部コマンド runner（`RawOutcome`, tail cap）、session 単位の失敗カウント state（TTL bump/reset）。
 - **`store`** — 永続・Obsidian 互換の per-project ノートストア（`Store`, `project_key`, `load_json`/`save_json`）＋
   context-ledger のパス解決。並列セッション安全のフォールバックを内包。

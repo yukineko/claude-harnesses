@@ -84,7 +84,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "autoflow"
-version = "0.1.22"
+version = "0.1.23"
 dependencies = [
  "clap",
  "harness-core",
@@ -115,7 +115,7 @@ dependencies = [
 
 [[package]]
 name = "beacon"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "chrono",
@@ -163,7 +163,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "blastguard"
-version = "0.2.55"
+version = "0.2.56"
 dependencies = [
  "globset",
  "harness-core",
@@ -305,7 +305,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.150"
+version = "0.7.151"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -328,7 +328,7 @@ dependencies = [
 
 [[package]]
 name = "context-governor"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "anyhow",
  "harness-core",
@@ -365,7 +365,7 @@ dependencies = [
 
 [[package]]
 name = "ctxrot"
-version = "0.5.23"
+version = "0.5.24"
 dependencies = [
  "anyhow",
  "chrono",
@@ -395,7 +395,7 @@ dependencies = [
 
 [[package]]
 name = "daily"
-version = "0.3.11"
+version = "0.3.12"
 dependencies = [
  "blastguard",
  "chrono",
@@ -469,7 +469,7 @@ dependencies = [
 
 [[package]]
 name = "donegate"
-version = "0.1.28"
+version = "0.1.30"
 dependencies = [
  "anyhow",
  "chrono",
@@ -663,7 +663,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.15"
+version = "0.2.16"
 dependencies = [
  "anyhow",
  "chrono",
@@ -914,7 +914,7 @@ dependencies = [
 
 [[package]]
 name = "precommit-audit"
-version = "0.1.15"
+version = "0.1.17"
 dependencies = [
  "globset",
  "harness-core",
@@ -938,7 +938,7 @@ dependencies = [
 
 [[package]]
 name = "propguard"
-version = "0.1.41"
+version = "0.1.44"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1090,7 +1090,7 @@ dependencies = [
 
 [[package]]
 name = "reviewgate"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1353,7 +1353,7 @@ dependencies = [
 
 [[package]]
 name = "tdd"
-version = "0.1.25"
+version = "0.1.27"
 dependencies = [
  "anyhow",
  "chrono",

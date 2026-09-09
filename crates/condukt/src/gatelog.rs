@@ -9,63 +9,51 @@
 //! `Escalate`/`Block` nothing is answered and the caller falls through to a
 //! real `AskUserQuestion` (escalate) or refuses (block).
 //!
-//! **Every resolved verdict is journaled**, not only the self-answered ones:
-//! `auto`, `escalate` and `block` each append one [`GateDecision`]. Journaling
-//! only `auto` made an escalated gate indistinguishable from a gate that never
-//! fired at all — see [`GateDecision`] for why that silence was a fail-open.
-//! [`AnswerOutcome::Invalid`] is the one outcome not journaled: no verdict was
-//! resolved, the input was rejected, and it says so on stderr with exit 1.
+//! **All three verdicts are journaled**, not just the self-answered one. The log
+//! records that the gate was *consulted* and what it decided; `policy` says
+//! which verdict came back and, on escalate/block, `chosen` is empty because
+//! nothing was picked. Recording only the self-answers (the original contract)
+//! made "the gate escalated to a human" and "the gate was never consulted"
+//! byte-for-byte identical in the audit trail — the log is the review surface
+//! that stands in for the prompts autonomy removed, so an absent row read as
+//! "no gate fired". A malformed invocation (an out-of-range `--recommend`, an
+//! unparseable level) is still **not** journaled: it is a rejected input, not a
+//! decision.
 //!
 //! The verdict→answer mapping is a pure function ([`answer_outcome`]) so the
 //! auto/escalate/exit-code contract is unit-testable without spawning a
-//! process. The log I/O mirrors [`crate::checkpoint`]'s append-only journal and
-//! inherits its fail-soft write: a failed append is swallowed and leaves no
-//! trace, which means a *write* failure still reads downstream as "no gate
-//! fired". That residual hole is filed as a backlog item rather than fixed here
-//! — closing it means changing `harness_core::append::append_line`, which is
-//! linked into every plugin.
+//! process. The log I/O mirrors [`crate::checkpoint`]'s append-only journal:
+//! best-effort, in that a logging failure never changes a verdict or an exit
+//! code, but **never silent** — a lost record is reported on stderr.
 
 use crate::policy::Decision;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// One gate decision — the append-only audit record written on **every**
-/// resolved verdict, not only the self-answered ones.
-///
-/// This used to journal `auto` alone, on the reasoning that "escalate/block are
-/// never journaled because nothing was answered". That reasoning confused
-/// *answering* with *deciding*. An escalate IS a decision: the policy examined
-/// the gate and ruled that a human must rule on it. Recording only the
-/// self-answers left `condukt policy answers` unable to distinguish "this gate
-/// never fired" from "this gate fired and went to a human" — the two collapse
-/// into the same silence, which is precisely the reading CLAUDE.md 第1節 names
-/// as a fail-open (沈黙は許容される degrade ではない). It also made
-/// `specs/spec-loop.toml` R4's second acceptance criterion — "divert の可否は
-/// `condukt policy answer` を通り、`condukt policy answers` に記録が残る" —
-/// unsatisfiable for its own default verdict, which is `escalate`.
+/// One gate consultation — the append-only audit record written every time a
+/// question is resolved against a policy verdict, whether or not it was
+/// self-answered.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GateDecision {
     /// The question that was asked.
     pub question: String,
     /// The options that were offered.
     pub options: Vec<String>,
-    /// 0-based index of the recommended option, exactly as the caller supplied
-    /// it. On `auto` it is also the chosen one and is guaranteed in range —
-    /// an out-of-range index there is [`AnswerOutcome::Invalid`], which is
-    /// rejected rather than journaled. On `escalate`/`block` nothing is chosen,
-    /// so the index is advisory and is recorded unvalidated: it says what the
-    /// caller recommended, not what was picked.
+    /// 0-based index of the recommended option. It records what was *offered* as
+    /// the recommendation, so it stays meaningful on escalate/block, where the
+    /// recommendation existed but was not taken.
     pub recommend_index: usize,
-    /// The option that was chosen (== `options[recommend_index]`), or `None`
-    /// when the policy answered nothing (`escalate`/`block`).
+    /// The option that was chosen. On `auto` this is `options[recommend_index]`;
+    /// on escalate/block it is the **empty string**, because nothing was picked.
     ///
-    /// `Option<String>` rather than an empty string on purpose: `""` is a
-    /// legal option text, so an empty `chosen` would be indistinguishable from
-    /// "chose the empty option". Records written before this field became
-    /// optional carry a bare string and still deserialize, as `Some`.
-    pub chosen: Option<String>,
-    /// The policy verdict that produced this record: `"auto"` (self-answered
-    /// with `chosen`), `"escalate"` (handed to a human), or `"block"` (refused).
+    /// Empty rather than absent on purpose: the field has no `serde(default)`,
+    /// and [`load_decisions`] drops lines that fail to deserialize, so omitting
+    /// the key would make every escalate row vanish silently from
+    /// `condukt policy answers` — a hole in the very trail this records.
+    #[serde(default)]
+    pub chosen: String,
+    /// The policy verdict this consultation returned: `"auto"` (self-answered
+    /// with `chosen`), `"escalate"` (handed to a human) or `"block"` (refused).
     pub policy: String,
     /// Unix seconds when the decision was recorded.
     pub created_at: i64,
@@ -130,28 +118,79 @@ pub fn decisions_path(dir: &Path) -> PathBuf {
     dir.join("gate-decisions.jsonl")
 }
 
-/// Append one decision to the log. Fail-soft: any IO/serialize error is
-/// swallowed so an audit-log failure never breaks a turn (a single-line append
-/// is atomic on POSIX for our line sizes). Mirrors
-/// [`crate::checkpoint::append_journal`].
+/// Append one gate consultation to the log — auto, escalate or block alike.
+///
+/// Best-effort but **never silent**: an IO or serialize failure does not change
+/// the command's exit code (the verdict has already been decided and is still
+/// delivered on stdout), but it is reported on stderr. A dropped record would
+/// otherwise make "the gate escalated" indistinguishable from "the gate was
+/// never consulted", which is the same erasure this log exists to prevent.
+/// Mirrors [`crate::checkpoint::append_journal`].
 pub fn append_decision(dir: &Path, entry: &GateDecision) {
-    let Ok(line) = serde_json::to_string(entry) else {
-        return;
+    let line = match serde_json::to_string(entry) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!(
+                "warning: gate-decisions: could not serialize the {} record ({e}) — \
+                 this consultation is LOST from the audit trail",
+                entry.policy
+            );
+            return;
+        }
     };
-    let _ = std::fs::create_dir_all(dir);
-    harness_core::append::append_line(&decisions_path(dir), &line);
+    harness_core::append::append_line_reporting(&decisions_path(dir), &line, "gate-decisions");
 }
 
-/// Load the decision log in file order. A missing file yields an empty vec and
-/// corrupt lines are skipped — never panics. Mirrors
+/// Read a JSONL journal, reporting anything that could not be turned into a
+/// record instead of dropping it.
+///
+/// A **missing** file is genuinely "nothing recorded yet" and stays quiet. Any
+/// other read error, and every unparseable line, is announced on stderr: the
+/// caller still gets the records it could recover (these are review surfaces,
+/// and a partial history beats none), but the reader is told the list it is
+/// looking at is short. Silently returning the survivors would let a truncated
+/// log read as a complete one.
+///
+/// Note the remaining gap, tracked as backlog `d343ecbc`: the return type is
+/// still a bare `Vec`, so "read failed" and "log is empty" are the same value to
+/// a caller that ignores stderr. The principled fix is
+/// `harness_core::verdict::Determination`; this only stops the loss being silent.
+fn load_journal<T: serde::de::DeserializeOwned>(path: &Path, sink: &str) -> Vec<T> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(e) => {
+            eprintln!(
+                "warning: {sink}: could not read {} ({e}) — reporting an EMPTY history, \
+                 which is not the same as an empty log",
+                path.display()
+            );
+            return Vec::new();
+        }
+    };
+    let mut out = Vec::new();
+    let mut skipped = 0usize;
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        match serde_json::from_str::<T>(line) {
+            Ok(v) => out.push(v),
+            Err(_) => skipped += 1,
+        }
+    }
+    if skipped != 0 {
+        eprintln!(
+            "warning: {sink}: skipped {skipped} unreadable line(s) in {} — \
+             the history shown is incomplete",
+            path.display()
+        );
+    }
+    out
+}
+
+/// Load the decision log in file order. Missing file → empty vec; unreadable
+/// lines are skipped **and reported on stderr** — never panics. Mirrors
 /// [`crate::checkpoint::load_journal`].
 pub fn load_decisions(dir: &Path) -> Vec<GateDecision> {
-    let Ok(text) = std::fs::read_to_string(decisions_path(dir)) else {
-        return Vec::new();
-    };
-    text.lines()
-        .filter_map(|l| serde_json::from_str::<GateDecision>(l).ok())
-        .collect()
+    load_journal(&decisions_path(dir), "gate-decisions")
 }
 
 // ── Circuit-breaker verdict journal ─────────────────────────────────────────
@@ -193,30 +232,35 @@ pub fn circuit_log_path(dir: &Path, run_id: &str) -> PathBuf {
     ))
 }
 
-/// Append one circuit verdict to the run's log. Fail-soft: any IO/serialize
-/// error is swallowed so a journaling failure never changes the gate's exit
-/// code. Mirrors [`append_decision`].
+/// Append one circuit verdict to the run's log. Best-effort but **never
+/// silent**: a journaling failure never changes the gate's exit code, but it is
+/// reported on stderr rather than dropped. Mirrors [`append_decision`].
 pub fn append_circuit(dir: &Path, run_id: &str, entry: &CircuitRecord) {
-    let Ok(line) = serde_json::to_string(entry) else {
-        return;
+    let line = match serde_json::to_string(entry) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!(
+                "warning: circuit log: could not serialize the {} record ({e}) — \
+                 this verdict is LOST from the run history",
+                entry.verdict
+            );
+            return;
+        }
     };
-    let _ = std::fs::create_dir_all(dir);
-    harness_core::append::append_line(&circuit_log_path(dir, run_id), &line);
+    harness_core::append::append_line_reporting(
+        &circuit_log_path(dir, run_id),
+        &line,
+        "circuit log",
+    );
 }
 
 /// Load a run's circuit-verdict log in file order. Missing file → empty vec;
-/// corrupt lines are skipped — never panics. Mirrors [`load_decisions`]. The
+/// unreadable lines are skipped **and reported on stderr** — never panics. Mirrors [`load_decisions`]. The
 /// read side of the append-only journal: exercised by tests and ready for a
 /// future `circuit stats` aggregator; `append_circuit` is the live write path.
 #[allow(dead_code)]
 pub fn load_circuit_records(dir: &Path, run_id: &str) -> Vec<CircuitRecord> {
-    let Ok(text) = std::fs::read_to_string(circuit_log_path(dir, run_id)) else {
-        return Vec::new();
-    };
-    text.lines()
-        .filter(|l| !l.trim().is_empty())
-        .filter_map(|l| serde_json::from_str::<CircuitRecord>(l).ok())
-        .collect()
+    load_journal(&circuit_log_path(dir, run_id), "circuit log")
 }
 
 // ── Gate-exec verdict journal ───────────────────────────────────────────────
@@ -255,30 +299,34 @@ pub fn gate_exec_log_path(dir: &Path, run_id: &str) -> PathBuf {
     ))
 }
 
-/// Append one gate-exec verdict to the run's log. Fail-soft: any IO/serialize
-/// error is swallowed so a journaling failure never changes the gate's exit
-/// code. Mirrors [`append_circuit`].
+/// Append one gate-exec verdict to the run's log. Best-effort but **never
+/// silent**: a journaling failure never changes the gate's exit code, but it is
+/// reported on stderr rather than dropped. Mirrors [`append_circuit`].
 pub fn append_gate_exec(dir: &Path, run_id: &str, entry: &GateExecRecord) {
-    let Ok(line) = serde_json::to_string(entry) else {
-        return;
+    let line = match serde_json::to_string(entry) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!(
+                "warning: gate-exec log: could not serialize a record ({e}) — \
+                 this verdict is LOST from the run history"
+            );
+            return;
+        }
     };
-    let _ = std::fs::create_dir_all(dir);
-    harness_core::append::append_line(&gate_exec_log_path(dir, run_id), &line);
+    harness_core::append::append_line_reporting(
+        &gate_exec_log_path(dir, run_id),
+        &line,
+        "gate-exec log",
+    );
 }
 
 /// Load a run's gate-exec-verdict log in file order. Missing file → empty vec;
-/// corrupt lines are skipped — never panics. Mirrors [`load_circuit_records`].
+/// unreadable lines are skipped **and reported on stderr** — never panics. Mirrors [`load_circuit_records`].
 /// The read side of the append-only journal: exercised by tests and ready for a
 /// future `gate stats` aggregator; `append_gate_exec` is the live write path.
 #[allow(dead_code)]
 pub fn load_gate_exec_records(dir: &Path, run_id: &str) -> Vec<GateExecRecord> {
-    let Ok(text) = std::fs::read_to_string(gate_exec_log_path(dir, run_id)) else {
-        return Vec::new();
-    };
-    text.lines()
-        .filter(|l| !l.trim().is_empty())
-        .filter_map(|l| serde_json::from_str::<GateExecRecord>(l).ok())
-        .collect()
+    load_journal(&gate_exec_log_path(dir, run_id), "gate-exec log")
 }
 
 // ── Post-execution diff-risk outcome journal ────────────────────────────────
@@ -379,15 +427,20 @@ pub fn diffrisk_outcomes_path(dir: &Path) -> PathBuf {
     dir.join("diffrisk-outcomes.jsonl")
 }
 
-/// Append one diff-risk outcome. Fail-soft: any IO/serialize error is swallowed
-/// so a journaling failure never changes the hook's (already fail-soft)
-/// behaviour. Mirrors [`append_decision`].
+/// Append one diff-risk outcome. Best-effort but **never silent**: a journaling
+/// failure never changes the hook's (already fail-soft) behaviour, and it is
+/// reported on stderr so a reader can tell this history has a hole in it.
+/// Mirrors [`append_decision`].
 pub fn append_diffrisk_outcome(dir: &Path, entry: &DiffRiskRecord) {
     let Ok(line) = serde_json::to_string(entry) else {
         return;
     };
     let _ = std::fs::create_dir_all(dir);
-    harness_core::append::append_line(&diffrisk_outcomes_path(dir), &line);
+    harness_core::append::append_line_reporting(
+        &diffrisk_outcomes_path(dir),
+        &line,
+        "diffrisk-outcomes",
+    );
 }
 
 /// Load the diff-risk outcome log in file order. Missing file → empty vec;
@@ -457,7 +510,7 @@ mod tests {
             question: q.to_string(),
             options: opts(),
             recommend_index: 0,
-            chosen: Some("adopt".to_string()),
+            chosen: "adopt".to_string(),
             policy: "auto".to_string(),
             created_at: at,
         };
@@ -527,7 +580,7 @@ mod tests {
             question: "ok?".to_string(),
             options: opts(),
             recommend_index: 0,
-            chosen: Some("adopt".to_string()),
+            chosen: "adopt".to_string(),
             policy: "auto".to_string(),
             created_at: 1,
         };
@@ -565,7 +618,7 @@ mod tests {
                             question: format!("q{}_{}", t, i),
                             options: vec!["a".to_string(), "b".to_string()],
                             recommend_index: 0,
-                            chosen: Some("a".to_string()),
+                            chosen: "a".to_string(),
                             policy: "auto".to_string(),
                             created_at: (t * 1000 + i) as i64,
                         };

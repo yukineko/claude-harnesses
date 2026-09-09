@@ -235,29 +235,93 @@ fn probe_xargs_forms_do_not_hide_a_destructive_inner_command() {
     }
 }
 
-/// PROBE 4 — the chmod/chown mirror.
+/// PROBE 4 — the chmod/chown mirror, CLOSED 2026-09-07.
 ///
 /// Non-recursive `chmod` onto a protected gate path is denied because removing
 /// read or exec DISARMS the hook without writing a byte of it. `chown`'s
-/// non-recursive arm is an unconditional `Allow`. This probe RECORDS which way
-/// that goes; it deliberately does not assert the chown case, because whether
+/// non-recursive arm was an unconditional `Allow`, and the earlier version of
+/// this probe RECORDED that rather than asserting it, reasoning that "whether
 /// chown can disarm anything here is a question about the OS, not about
 /// blastguard, and asserting a `Deny` I have not shown to be warranted would be
-/// the same unbacked claim in the other direction.
+/// the same unbacked claim in the other direction."
+///
+/// The first half of that is right and the conclusion does not follow. `Allow`
+/// is not the neutral position — it is the OTHER unbacked claim, the one that
+/// says "this is fine". The verdict that matches what is actually known is
+/// neither: `Ask`, which per `Decision`'s own doc "is NOT a verdict about the
+/// command, it is a refusal to guess about one". Whether re-owning a gate file
+/// disarms it depends on the new owner, on who the loader runs as, and on which
+/// loader it is — none of which is on the command line. So the mirror is closed
+/// with `Ask`, not with the `Deny` the earlier probe correctly declined to
+/// assert.
 #[test]
-fn probe_records_the_chmod_chown_asymmetry() {
-    let chmod = bash("chmod 000 .githooks/pre-commit");
-    let chown = bash("chown nobody .githooks/pre-commit");
-    let chgrp = bash("chown :staff .githooks/pre-commit");
+fn chmod_chown_mirror_is_closed_with_ask() {
+    use blastguard::model::Decision;
 
-    // The chmod half is settled behaviour and is asserted, so this test fails
-    // if the disarm rule ever regresses.
+    // The chmod half is settled behaviour and stays asserted, so this test
+    // fails if the disarm rule ever regresses.
+    let chmod = bash("chmod 000 .githooks/pre-commit");
     assert!(
-        !matches!(chmod, blastguard::model::Decision::Allow),
+        !matches!(chmod, Decision::Allow),
         "chmod disarm rule regressed: {chmod:?}"
     );
 
-    // The chown half is only recorded. `cargo test -- --nocapture` prints it.
-    println!("chown protected target  -> {chown:?}");
-    println!("chown :group protected  -> {chgrp:?}");
+    for cmd in [
+        "chown nobody .githooks/pre-commit",
+        "chown :staff .githooks/pre-commit",
+        "chown yuki .claude/settings.json",
+        "chgrp staff .githooks/pre-commit",
+        // The container: `.claude` is not itself a protected path but holds
+        // them, the same distinction `protected_tree_deny` draws for `rm`.
+        "chown nobody .claude",
+        // The wildcard, mirroring `chmod 000 .claude/*`.
+        "chown nobody .claude/*",
+    ] {
+        let d = bash(cmd);
+        assert!(
+            d.is_ask(),
+            "re-owning a protected gate path must ASK (not guess either way): {cmd:?} -> {d:?}"
+        );
+    }
+
+    // ANTI-VACUITY CONTROL. The rule must classify its TARGET, not fire on the
+    // verb — otherwise every one of the asserts above would pass for free and
+    // ordinary ownership work would be unusable.
+    for cmd in [
+        "chown yuki src/main.rs",
+        "chgrp staff target/release/blastguard",
+        "chown yuki src/*.rs",
+        "chown nobody /tmp/scratch",
+    ] {
+        assert_eq!(
+            bash(cmd),
+            Decision::Allow,
+            "ordinary chown/chgrp must stay Allow: {cmd:?}"
+        );
+    }
+
+    // The recursive arm keeps its stronger verdict: a whole tree re-owned is a
+    // positively recognised hazard, not an unanalysable one.
+    assert!(
+        bash("chown -R nobody .").is_deny(),
+        "recursive chown must stay a Deny, not soften to Ask"
+    );
+}
+
+/// A `--reference=` chown/chmod supplies its spec from another FILE, so the
+/// first non-option operand is already a TARGET rather than the mode/owner.
+/// Consuming it as the spec made the protected path invisible to the scan — the
+/// same off-by-one on both verbs.
+#[test]
+fn reference_form_does_not_swallow_the_protected_target() {
+    for cmd in [
+        "chmod --reference=/tmp/x .githooks/pre-commit",
+        "chown --reference=/tmp/x .githooks/pre-commit",
+    ] {
+        let d = bash(cmd);
+        assert!(
+            !matches!(d, blastguard::model::Decision::Allow),
+            "--reference= consumed the protected target: {cmd:?} -> {d:?}"
+        );
+    }
 }

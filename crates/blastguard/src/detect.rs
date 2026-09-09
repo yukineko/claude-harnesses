@@ -633,6 +633,40 @@ it controls which hooks, gates or policies run, so blastguard refuses"
     }
 }
 
+/// Verdict for a non-recursive `chown`/`chgrp` whose target is, holds, or globs
+/// into a protected gate/config path.
+///
+/// **`Ask`, not `Deny`, and that is the whole point of the rule.** Whether
+/// re-owning a gate file actually disarms it is not derivable from the command
+/// line: it depends on who the new owner is, on which account the loader runs
+/// as, and on which loader it is (git refuses a repository whose ownership it
+/// finds "dubious"; a `.claude/hooks/*` script is executed off its permission
+/// bits, not its owner). A `Deny` would assert a disarm that has not been shown
+/// — but `Allow` is not the neutral answer either, it is the OPPOSITE unbacked
+/// claim, and it is the one this arm used to make.
+/// [`crate::model::Decision::Ask`] is the answer that is true: per its own doc,
+/// it "is NOT a verdict about the command, it is a refusal to guess about one".
+///
+/// This closes a MIRROR GAP with the `chmod` arm next door, which has classified
+/// its targets since round 3 while this verb kept measuring blast radius (`-R`)
+/// only — so `chown nobody .githooks/pre-commit` was a plain `Allow`.
+fn protected_reown_ask(action: &str, path: &str) -> Option<Decision> {
+    let reaches = exclude::is_protected_path(path)
+        || exclude::holds_protected_paths(path)
+        || (has_glob_meta(path)
+            && glob_literal_prefix(path)
+                .map(|p| exclude::touches_protected(&p))
+                .unwrap_or(false));
+    if !reaches {
+        return None;
+    }
+    Some(Decision::ask(format!(
+        "{action} re-owns a protected gate/config path ({path}) — whether that disarms the \
+gate depends on the new owner and on which account its loader runs as, neither of which is \
+on the command line, so blastguard refuses to guess and asks"
+    )))
+}
+
 /// Verdict for a RECURSIVE copy whose landing directory is, or holds, protected
 /// paths.
 ///
@@ -1437,6 +1471,14 @@ primitive, not a filesystem path",
     // cross-segment relationship) so a Deny here outranks whatever the
     // per-segment loop finds, per `VerdictAcc`. See `analyze_pipe_egress`.
     if let Some(deny) = acc.record(analyze_pipe_egress(cmd)) {
+        return deny;
+    }
+
+    // 2c-bis. The stdin MIRRORS of an inline-eval invocation: a here-document
+    // body or a pipe delivering the program. Cross-segment for the same reason
+    // 2c is — the per-segment loop sees tokens only, so the body and the
+    // upstream stage are invisible to it. See `analyze_interpreter_stdin_exec`.
+    if let Some(deny) = acc.record(analyze_interpreter_stdin_exec(cmd, depth, ctx)) {
         return deny;
     }
 
@@ -3336,31 +3378,390 @@ fn strip_version_suffix(cmd: &str) -> &str {
     &cmd[..end]
 }
 
-/// Inline-code eval flags for the interpreters in [`is_code_interpreter`]
-/// (`python -c`, `perl -e`/`-E`, `ruby -e`, `node -e`/`--eval`/`-p`, `php -r`).
-/// A script-file argument (no such flag) is deliberately NOT matched, so
-/// `find -exec python3 script.py` is left alone.
+/// The inline-eval flag letters that belong to THIS interpreter.
 ///
-/// CA-blastguard-007: also recognizes a combined/stacked short-flag token
-/// (e.g. `-ic`, python's `-i` interactive flag stacked with `-c`) that
-/// *contains* one of the single-character eval flags (`c`, `e`, `r`, `p`) as
-/// one of its bundled option letters. This is deliberately restricted to
-/// short-flag tokens (`-xyz`, not `--xyz`) so long flags like `--color` are
-/// never mistaken for an eval flag (avoiding false positives on unrelated
-/// long options that merely contain a letter `c`/`e`/`r`/`p`).
-fn is_inline_eval_flag(tok: &str) -> bool {
-    if matches!(tok, "-c" | "-e" | "-E" | "-r" | "-p" | "--eval" | "--print") {
+/// The union scan `c|e|r|p` this replaces was a shape match, not an audit: it
+/// fired on flags the interpreter never sees. Measured before the fix —
+/// `python3 -m pip install -r req.txt` and `python3 manage.py -p 8000` were
+/// both `Deny`, because `-r` is pip's flag and `-p` is the app's. It also fired
+/// on the `-rf` sitting inside an unrelated `rm -rf` payload, which made a
+/// here-string test pass for a reason that had nothing to do with here-strings.
+/// Asking each interpreter about its own spelling is the audit.
+fn interpreter_eval_flag_letters(cmd: &str) -> &'static str {
+    match strip_version_suffix(cmd) {
+        "python" => "c",
+        // Perl's `-e`/`-E` supply the program. `-n`/`-p` only WRAP one, so they
+        // are an eval position solely in a bundle that also carries `e`/`E`.
+        "perl" => "eE",
+        "ruby" => "e",
+        // Node's `-p` is `--print`, which evaluates its argument.
+        "node" | "nodejs" => "ep",
+        "php" => "r",
+        "lua" => "e",
+        _ => "",
+    }
+}
+
+/// True if `tok` spells an inline-eval flag for an interpreter whose own
+/// eval letters are `letters` (bundled short flags included: `-ic` is `-i`+`-c`).
+fn is_inline_eval_flag_for(tok: &str, letters: &str) -> bool {
+    if matches!(tok, "--eval" | "--print")
+        || tok.starts_with("--eval=")
+        || tok.starts_with("--print=")
+    {
         return true;
     }
-    if is_short_flag(tok) {
-        // Bundled short flags, e.g. `-ic` = `-i` + `-c`. Match on the
-        // lowercase eval-flag letters only (`E` is intentionally excluded
-        // here as a bundled char: it is Ruby/Perl's `-E`, distinct enough
-        // from common bundles that we keep the stacked check to the
-        // clearly-common `-c`/`-e`/`-r`/`-p` letters to stay precise).
-        return tok[1..].chars().any(|c| matches!(c, 'c' | 'e' | 'r' | 'p'));
+    if is_short_flag(tok) && tok.len() > 1 {
+        return tok[1..].chars().any(|c| letters.contains(c));
     }
     false
+}
+
+/// Position in `rest` of the interpreter's OWN inline-eval flag, if any.
+///
+/// Scans only the interpreter's own options — the tokens before the first
+/// operand. `-m <module>`, a bare `-` (read the program from stdin), `--`, and
+/// the first non-flag token (a script path) each hand the remaining argv to a
+/// CHILD program, whose flags say nothing about how the interpreter itself was
+/// invoked. Scanning all of `rest` was the defect; see
+/// [`interpreter_eval_flag_letters`] for the measured false Denies.
+fn interpreter_inline_eval_pos(cmd: &str, rest: &[&str]) -> Option<usize> {
+    let letters = interpreter_eval_flag_letters(cmd);
+    if letters.is_empty() {
+        return None;
+    }
+    for (i, tok) in rest.iter().enumerate() {
+        if is_redirect_token(tok) {
+            continue;
+        }
+        if is_inline_eval_flag_for(tok, letters) {
+            return Some(i);
+        }
+        if *tok == "--" || *tok == "-" {
+            return None;
+        }
+        if tok.starts_with("--") {
+            continue;
+        }
+        if is_short_flag(tok) {
+            // `-m` takes a module name; everything after it is that module's
+            // own argv.
+            if tok[1..].contains('m') {
+                return None;
+            }
+            continue;
+        }
+        // First non-flag token: the script path. The interpreter's own options
+        // are over.
+        return None;
+    }
+    None
+}
+
+/// Interpreter-language destructive calls, which have no shell spelling and so
+/// are invisible to [`analyze_shell_payload`]. `shutil.rmtree('/')` deletes a
+/// tree without ever naming `rm`.
+/// Bare-builtin spellings are listed WITH their following punctuation (`unlink `,
+/// `unlink(`) so an identifier that merely contains the word does not match.
+/// Perl's `unlink glob "*"` has no dot-qualified form at all, which is why a
+/// list of only `os.`/`shutil.`/`fs.` methods left it unjudged.
+const INTERPRETER_DESTRUCTIVE_CALLS: &[&str] = &[
+    "rmtree",
+    "rm_rf",
+    "remove_entry",
+    "removedirs",
+    "os.remove",
+    // Node's fs API is usually reached through `require('fs').rmSync(…)`, so
+    // the receiver is not spelled `fs.` at all — match the distinctive method
+    // names on their own.
+    "rmsync",
+    "unlinksync",
+    "rmdirsync",
+    "fs.rm(",
+    "file.delete",
+    "dir.delete",
+    // Bare builtins must be followed by something that OPENS AN ARGUMENT.
+    // `"unlink "` on its own matched the English sentence
+    // `echo 'please unlink (later)' | python3`, and the gate then named a
+    // finding it had not observed — the reason claimed the program deletes
+    // files when the program was prose. A reason that asserts an unobserved
+    // finding is the §4 failure aimed at the human reading it.
+    "unlink(",
+    "unlink;",
+    "unlink glob",
+    "unlink $",
+    "unlink @",
+    "unlink \"",
+    "unlink '",
+    "rmdir(",
+    "rmdir $",
+    "rmdir \"",
+    "rmdir '",
+];
+
+/// The destructive interpreter-level call in `payload`, if any. Case-folded
+/// because `FileUtils.rm_rf` and `fileutils.rm_rf` are the same hazard.
+fn interpreter_destructive_call(payload: &str) -> Option<&'static str> {
+    let lowered = payload.to_ascii_lowercase();
+    INTERPRETER_DESTRUCTIVE_CALLS
+        .iter()
+        .find(|needle| lowered.contains(**needle))
+        .copied()
+}
+
+/// The quoted string literals inside an interpreter program. A destructive
+/// SHELL command reaches the system through one of these
+/// (`os.system("mkfs /dev/sda")`, `` `rm -rf /` ``), so each literal is handed
+/// to the shell analyser that already judges `bash -c` payloads.
+fn quoted_string_literals(payload: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut chars = payload.char_indices().peekable();
+    while let Some((start, c)) = chars.next() {
+        if !matches!(c, '"' | '\'' | '`') {
+            continue;
+        }
+        let mut end = None;
+        for (i, d) in chars.by_ref() {
+            if d == c {
+                end = Some(i);
+                break;
+            }
+        }
+        if let Some(end) = end {
+            let inner = &payload[start + c.len_utf8()..end];
+            if !inner.trim().is_empty() && !out.iter().any(|p| p == inner) {
+                out.push(inner.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// Judge interpreter code that this command will execute.
+///
+/// The arm this replaces returned a flat `Deny` on the SHAPE of the invocation,
+/// without ever reading the program — `python3 -c "print(1)"` was denied with a
+/// reason ("can run an arbitrary destructive command") that was a statement
+/// about the shape, not a finding about the command. A gate's job is to audit
+/// the action: if the program demonstrably destroys something, that is a
+/// `Deny`; if it cannot be shown to, the honest verdict is `Ask` — "NOT a
+/// verdict about the command, it is a refusal to guess" (`model.rs`). With no
+/// human present `Decision::hardened` collapses the Ask to Deny anyway, so the
+/// restrictive resolution still holds; what changes is that a real finding is
+/// no longer indistinguishable from a shrug.
+fn interpreter_code_verdict(
+    shape: &str,
+    payloads: &[String],
+    depth: usize,
+    ctx: &Ctx<'_>,
+) -> Decision {
+    // Descend through nested quoting rather than stopping at the first layer.
+    // A destructive command can sit several quote layers down —
+    // `python3 <(echo "import os; os.system('mkfs /dev/sda')")` buries it three
+    // deep — and a one-layer scan reported that shape as unreadable when it was
+    // plainly readable. Each layer is a strict substring of the one above, so
+    // the descent terminates; the cap only bounds pathological nesting.
+    const MAX_QUOTE_LAYERS: usize = 4;
+    let mut layer: Vec<String> = payloads.to_vec();
+    for _ in 0..MAX_QUOTE_LAYERS {
+        if layer.is_empty() {
+            break;
+        }
+        let mut next = Vec::new();
+        for payload in &layer {
+            if let Some(call) = interpreter_destructive_call(payload) {
+                return Decision::deny(format!(
+                    "{shape}, and it runs `{call}`, which deletes files or directories outright"
+                ));
+            }
+            if let Decision::Deny(reason) = analyze_shell_payload(payload, depth, ctx) {
+                return Decision::Deny(reason);
+            }
+            next.extend(quoted_string_literals(payload));
+        }
+        layer = next;
+    }
+    Decision::ask(format!(
+        "{shape}, and blastguard cannot read that program as safe or destructive — it refuses to \
+guess what the program does"
+    ))
+}
+
+/// The operand that makes an interpreter read its program from STDIN rather
+/// than from a file. `python3 -` and `python3 /dev/stdin` execute whatever is
+/// piped, here-doc'd or here-string'd in — the same capability as `-c`, which
+/// is why leaving these at `Allow` was the mirror fail-open: the `-c` shape was
+/// denied while every stdin spelling of it went unjudged.
+/// Judge a code-interpreter invocation: `python3`, `perl`, `ruby`, `node`,
+/// `php`, `lua`.
+///
+/// Two shapes reach the same capability — running arbitrary code — and before
+/// this function only the first was judged at all:
+///
+/// 1. **Inline eval** (`python3 -c "…"`): was a flat `Deny` on shape, with the
+///    program never read. Now the program is audited; see
+///    [`interpreter_code_verdict`].
+/// 2. **stdin / substituted source** (`python3 -`, `python3 /dev/stdin`,
+///    `python3 - <<EOF`, `python3 <<<"…"`, `python3 <(…)`): every one of these
+///    was `Allow`. That is the mirror fail-open — the same file already treats
+///    `… | python3` as a code-exec sink in [`stage_is_interpreter_terminal`],
+///    so it reached opposite conclusions about the same capability.
+///
+/// Running a script FILE (`python3 app.py`, `python3 -m http.server`) stays
+/// `Allow`: the interpreter is not being handed a program on the command line,
+/// and the file's contents are outside what a command-line gate can see.
+fn analyze_code_interpreter(cmd: &str, rest: &[&str], depth: usize, ctx: &Ctx<'_>) -> Decision {
+    if let Some(pos) = interpreter_inline_eval_pos(cmd, rest) {
+        let mut payloads = payloads_after(rest, pos);
+        // Glued forms, where the program is in the SAME token as the flag:
+        // short `-c<payload>` and long `--eval=<payload>`.
+        let flag = rest[pos];
+        if let Some((_, value)) = flag.split_once('=') {
+            payloads.extend(inline_command_payloads(rest, pos, value));
+        } else if is_short_flag(flag) {
+            let letters = interpreter_eval_flag_letters(cmd);
+            if let Some(idx) = flag[1..].find(|c: char| letters.contains(c)) {
+                payloads.extend(inline_command_payloads(rest, pos, &flag[1 + idx + 1..]));
+            }
+        }
+        return interpreter_code_verdict(
+            &format!("`{cmd}` is invoked with an inline-eval flag"),
+            &payloads,
+            depth,
+            ctx,
+        );
+    }
+
+    // `analyze_command_at` is handed TOKENS, not the raw segment, so the
+    // operand text is reassembled here. Whitespace-joining is lossless for the
+    // purpose of auditing: the here-document body, the here-string and the
+    // process-substitution payload all survive as text.
+    let text = rest.join(" ");
+    let stdin_operand = interpreter_stdin_operand(rest);
+    let opens_heredoc = opens_here_document(&text);
+    let mut payloads: Vec<String> = here_string_operands(&text)
+        .into_iter()
+        .map(|(payload, _)| payload)
+        .collect();
+    payloads.extend(process_substitution_payloads(&text));
+    if opens_heredoc {
+        // The here-document body is whatever follows the `<<TAG` token; hand
+        // the whole operand text to the auditor rather than trying to find the
+        // terminator, since a missed terminator must not silence the audit.
+        payloads.push(text.clone());
+    }
+
+    if stdin_operand.is_none() && !opens_heredoc && payloads.is_empty() {
+        // A script file, a module, or a bare REPL. Nothing on this command line
+        // is a program to audit.
+        return Decision::Allow;
+    }
+
+    let shape = match stdin_operand {
+        Some(op) => format!("`{cmd} {op}` reads its program from stdin"),
+        None if opens_heredoc => format!("`{cmd}` is fed a here-document"),
+        None => format!("`{cmd}` is fed a substituted source"),
+    };
+    interpreter_code_verdict(&shape, &payloads, depth, ctx)
+}
+
+/// True if this stage names a program FILE for the interpreter to run, rather
+/// than taking its program from stdin. Flags, redirections and a bare `-` are
+/// not program files.
+fn stage_has_program_operand(rest: &[&str]) -> bool {
+    let mut skip_next = false;
+    for tok in rest {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if is_bare_redirect_op(tok) {
+            skip_next = true;
+            continue;
+        }
+        if is_redirect_token(tok) || tok.starts_with('-') {
+            continue;
+        }
+        return true;
+    }
+    false
+}
+
+/// Cross-segment closure of the stdin mirrors of an inline-eval invocation.
+///
+/// [`analyze_command_at`] judges ONE segment from its tokens alone, so two
+/// spellings escape it entirely: the here-document BODY (which lives on the
+/// lines after the segment) and the pipe (`echo … | python3`, where the
+/// interpreter stage carries no operand at all and so looks like a bare REPL).
+/// Both hand a program to an interpreter exactly as `-c` does, and both were
+/// `Allow` — while the same file's [`stage_is_interpreter_terminal`] already
+/// called `… | python3` a code-exec sink in the egress path. This runs over the
+/// FULL command text, where the body and the upstream stage are both visible.
+fn analyze_interpreter_stdin_exec(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
+    let heredoc_open = opens_here_document(cmd);
+    let mut acc = VerdictAcc::default();
+    for statement in split_statements_into_pipe_stages(cmd) {
+        for (i, stage) in statement.iter().enumerate() {
+            let tokens: Vec<&str> = stage.split_whitespace().collect();
+            let Some(first) = tokens.first() else {
+                continue;
+            };
+            let head = normalized_command(first);
+            if !is_shell(&head) && !is_code_interpreter(&head) {
+                continue;
+            }
+            let rest = &tokens[1..];
+            let has_program_file = stage_has_program_operand(rest);
+            let takes_stdin_program = interpreter_stdin_operand(rest).is_some()
+                || (!has_program_file && (i > 0 || heredoc_open));
+            if !takes_stdin_program {
+                continue;
+            }
+            // The program is whatever the pipeline or the here-document
+            // delivers, so the whole command line is the text to audit — but
+            // it must NOT be handed back to `analyze_shell_payload`, which
+            // re-enters this very function on the same string and overflows the
+            // stack. Everything gathered below is a strict SUBSTRING of `cmd`,
+            // so the descent terminates.
+            //
+            // Only the program this stage actually receives is audited — not
+            // the whole command line. Scanning the line let text from an
+            // unrelated statement become the finding: `rmdir olddir; echo hi |
+            // python3` was denied for "runs `rmdir`" when the program was `hi`.
+            // A reason must name what was observed about THIS program.
+            let mut program_texts: Vec<String> = Vec::new();
+            if heredoc_open {
+                // The here-document body: everything after the line carrying
+                // the `<<TAG`.
+                if let Some((_, body)) = cmd.split_once('\n') {
+                    program_texts.push(body.to_string());
+                }
+            }
+            if i > 0 {
+                // Piped in: the program is whatever the upstream stage of THIS
+                // statement emits, which is readable when it emits a literal.
+                program_texts.extend(quoted_string_literals(&statement[i - 1]));
+            }
+            let shape = format!("`{}` takes its program from stdin", stage.trim());
+            if let Some(deny) =
+                acc.record(interpreter_code_verdict(&shape, &program_texts, depth, ctx))
+            {
+                return deny;
+            }
+        }
+    }
+    acc.finish()
+}
+
+fn interpreter_stdin_operand<'a>(rest: &[&'a str]) -> Option<&'a str> {
+    rest.iter()
+        .find(|t| {
+            matches!(
+                **t,
+                "-" | "/dev/stdin" | "/dev/fd/0" | "/proc/self/fd/0" | "/dev/tty"
+            )
+        })
+        .copied()
 }
 
 /// Strip one layer of matching surrounding quotes from a reconstructed
@@ -4137,7 +4538,12 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize, ctx: &Ctx<'_>) 
                     &chmod_mode_and_targets(rest).1,
                     "recursive chmod re-permissions a whole tree",
                 )
-                .or_root_itself(ctx, "chmod", "recursive chmod (-R)", &chmod_mode_and_targets(rest).1)
+                .or_root_itself(
+                    ctx,
+                    "chmod",
+                    "recursive chmod (-R)",
+                    &chmod_mode_and_targets(rest).1,
+                )
             } else {
                 // Round 3, shape 3 of the disarm-by-non-write class. Like the
                 // `rm` arm, this rule measured BLAST RADIUS (`-R`) and never
@@ -4182,7 +4588,7 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize, ctx: &Ctx<'_>) 
                 }
             }
         }
-        "chown" => {
+        verb @ ("chown" | "chgrp") => {
             if has_short(rest, 'R') || rest.contains(&"--recursive") {
                 // The first positional operand of `chown` is the OWNER spec
                 // (`yuki`, `yuki:staff`), not a path — dropping it is what
@@ -4201,7 +4607,20 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize, ctx: &Ctx<'_>) 
                 )
                 .or_root_itself(ctx, "chown", "recursive chown (-R)", targets)
             } else {
-                Decision::Allow
+                // Round 5, the chmod MIRROR. This rule measured BLAST RADIUS
+                // (`-R`) and never asked what the target was, so every
+                // non-recursive form was `Allow` — including
+                // `chown nobody .githooks/pre-commit`, one verb away from the
+                // chmod arm that has classified its targets since round 3.
+                // `chgrp` was not matched at all.
+                //
+                // The verdict is `Ask` rather than `Deny`; see
+                // `protected_reown_ask` for why that is the honest one.
+                let (_owner, targets) = chown_owner_and_targets(rest);
+                targets
+                    .into_iter()
+                    .find_map(|t| protected_reown_ask(verb, t))
+                    .unwrap_or(Decision::Allow)
             }
         }
         // CA-blastguard-009: `tee FILE` (no -a/--append) truncates/overwrites
@@ -4228,15 +4647,12 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize, ctx: &Ctx<'_>) 
             }
         }
         // CA-blastguard-006: a bare top-level command-interpreter invocation
-        // with an inline-eval flag (`python3 -c "…"`, no `find` wrapper) is
-        // just as dangerous as the same payload wrapped in `find -exec`/`-ok`
-        // (handled in analyze_find) — it can run an arbitrary destructive
-        // command. Deny it here too, not only inside the find-exec path.
-        cmd if is_code_interpreter(cmd) && rest.iter().any(|t| is_inline_eval_flag(t)) => {
-            Decision::deny(
-                "a code interpreter invoked with an inline-eval flag can run an arbitrary destructive command",
-            )
-        }
+        // (`python3 -c "…"`, no `find` wrapper) can run an arbitrary
+        // destructive command, just like the same payload wrapped in
+        // `find -exec`/`-ok` (handled in analyze_find). Judge it here too, not
+        // only inside the find-exec path — and judge the PROGRAM, not the shape
+        // of the invocation. See `analyze_code_interpreter`.
+        cmd if is_code_interpreter(cmd) => analyze_code_interpreter(cmd, rest, depth, ctx),
         other => {
             if other.starts_with("mkfs") {
                 Decision::deny("mkfs formats a filesystem, destroying all data")
@@ -4316,7 +4732,35 @@ fn is_chmod_option(tok: &str) -> bool {
 /// Returns `None` for the mode when none could be located; callers must treat
 /// that as "unparseable", not as "harmless" (see the `chmod` arm).
 fn chmod_mode_and_targets<'a>(rest: &[&'a str]) -> (Option<&'a str>, Vec<&'a str>) {
-    let mut mode: Option<&'a str> = None;
+    spec_and_targets(rest, is_chmod_option)
+}
+
+/// Split `chown`/`chgrp` arguments into the OWNER spec and the file operands.
+fn chown_owner_and_targets<'a>(rest: &[&'a str]) -> (Option<&'a str>, Vec<&'a str>) {
+    spec_and_targets(rest, is_chown_option)
+}
+
+/// Split `rest` into the leading spec operand (a chmod MODE, a chown OWNER) and
+/// the file operands, skipping option flags and redirect punctuation.
+///
+/// `--reference=FILE` takes the spec from another file, so the command has NO
+/// spec operand and the first non-option token is already a TARGET. Consuming it
+/// as the spec anyway made the target invisible to every protected-path check
+/// downstream — measured 2026-09-07 on the deployed rules:
+/// `chmod --reference=/tmp/x .githooks/pre-commit` was `Allow`, while the same
+/// command spelled `chmod 000 .githooks/pre-commit` was a Deny. One off-by-one,
+/// both verbs, the entire disarm class walked through it.
+fn spec_and_targets<'a>(
+    rest: &[&'a str],
+    is_option: fn(&str) -> bool,
+) -> (Option<&'a str>, Vec<&'a str>) {
+    let mut spec: Option<&'a str> = None;
+    // `--reference=` already supplied the spec, so no operand is one.
+    let mut spec_taken = rest.iter().any(|t| t.starts_with("--reference="));
+    // Tracked separately from `spec_taken`: with `--reference=` the spec is
+    // taken before the scan starts, and option flags must still be skipped
+    // rather than collected as file operands.
+    let mut seen_positional = false;
     let mut targets: Vec<&'a str> = Vec::new();
     let mut end_of_options = false;
     let mut i = 0;
@@ -4332,21 +4776,29 @@ fn chmod_mode_and_targets<'a>(rest: &[&'a str]) -> (Option<&'a str>, Vec<&'a str
             // `positional_operands`, so "what counts as an operand" stays one
             // definition).
             i += 2;
-        } else if is_redirect_token(t) || (!end_of_options && mode.is_none() && is_chmod_option(t))
-        {
-            // Redirect punctuation the shell consumes, or one of chmod's own
-            // option flags: neither is a mode and neither is a file operand.
+        } else if is_redirect_token(t) || (!end_of_options && !seen_positional && is_option(t)) {
+            // Redirect punctuation the shell consumes, or one of the command's
+            // own option flags: neither is a spec and neither is a file operand.
             i += 1;
         } else {
-            if mode.is_none() {
-                mode = Some(t);
-            } else {
+            seen_positional = true;
+            if spec_taken {
                 targets.push(t);
+            } else {
+                spec = Some(t);
+                spec_taken = true;
             }
             i += 1;
         }
     }
-    (mode, targets)
+    (spec, targets)
+}
+
+/// `chown`/`chgrp` accept every flag [`is_chmod_option`] lists, plus `--from=`
+/// (chown only). Kept as a superset rather than a separate table so a flag added
+/// to one verb cannot silently become a positional operand on the other.
+fn is_chown_option(tok: &str) -> bool {
+    tok.starts_with("--from=") || is_chmod_option(tok)
 }
 
 /// True when `mode` takes executability AWAY from the file's owner.
@@ -5234,10 +5686,17 @@ fn analyze_find(rest: &[&str], depth: usize, ctx: &Ctx<'_>) -> Decision {
             // per match. (The nested shell's own `-c` payload is already covered
             // by the `is_shell` arm above, which denies the whole invocation
             // without needing to look at the payload text at all.)
-            if is_code_interpreter(c) && tail[ci..].iter().any(|t| is_inline_eval_flag(t)) {
-                return Decision::deny(
-                "find -exec on a code interpreter with an inline-eval flag can run an arbitrary destructive command per match",
-            );
+            // Audited by the SAME function as the bare top-level invocation
+            // (`analyze_code_interpreter`), not by a second shape rule. Two
+            // rules for one capability is how the mirrors drift apart: this one
+            // used to deny on shape while the bare path audited the program, so
+            // the identical command classified under two different rule ids
+            // depending on whether a `find` wrapped it.
+            if is_code_interpreter(c) {
+                let verdict = analyze_code_interpreter(c, &tail[ci + 1..], depth, ctx);
+                if !matches!(verdict, Decision::Allow) {
+                    return verdict;
+                }
             }
             // CA-blastguard-016 (false positive): this used to normalise EVERY
             // token in `rest` and deny if any of them came out as `rm`, so quoted
@@ -10160,17 +10619,30 @@ and must not be Allowed: {failing:?}"
     /// ARM 3, destructive literal. This is the FAIL-OPEN direction of the same
     /// wiring: resolving `$CMD` to `/bin/rm` makes the upstream stage neither
     /// unresolvable nor a fetch, so the pipe rule would stop answering
-    /// altogether — and the control shows what is left when it does.
+    /// altogether — and the control pins that silence.
     ///
     /// Ask, and specifically not Deny (the arm did not get wired) and not Allow
     /// (it did not stop answering).
     #[test]
     fn invariance_the_pipe_egress_arm_still_asks_when_that_literal_is_destructive() {
-        assert_eq!(
-            verdict_name(&bash("/bin/rm | sh")),
-            "allow",
-            "control: with the head spelled out nothing answers, so resolving \
-             the head would turn the Ask below into an Allow"
+        // Control: with the head spelled out the upstream stage is resolvable,
+        // so the PIPE-EGRESS ARM must not be the one that answers. That silence
+        // is what makes the Ask below attributable to the resolution failure
+        // and to nothing else.
+        //
+        // This control used to assert the whole verdict was `allow`, on the
+        // premise that with this arm silent NOTHING answered. That premise
+        // expired when the interpreter/shell stdin-exec mirror closed:
+        // `/bin/rm | sh` hands a shell a program it cannot read, which is now
+        // its own Ask (`analyze_interpreter_stdin_exec`). So the control moved
+        // from "nothing answers" to "this arm does not answer" — which is what
+        // it was always standing in for, and is strictly MORE discriminating,
+        // because it names the arm instead of relying on no other arm existing.
+        let control_reason = reason_of(&bash("/bin/rm | sh"));
+        assert!(
+            !control_reason.contains(PIPE_ARM_REASON),
+            "control: with the head spelled out the pipe-egress arm must go \
+             silent, but it answered — got: {control_reason}"
         );
         let cmd = "CMD=/bin/rm; $CMD | sh";
         let d = bash(cmd);

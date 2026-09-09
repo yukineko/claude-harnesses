@@ -9,7 +9,10 @@
 //! derives 3–5 semantic *properties* from it (idempotence, error-path-returns-Err,
 //! output-schema stability, bounds/monotonicity, no-partial-write, determinism —
 //! a keyword taxonomy inspired by PGS, arXiv:2506.18315), checks the generated
-//! code against them, and BLOCKS when fewer than a configured `threshold` hold.
+//! code against them, and BLOCKS until at least a configured `threshold` of them
+//! is verified. In `subprocess` mode that is a measured count of PASSes; in
+//! `inject` mode nothing has been judged yet, and the block reason says so
+//! rather than reporting the unverified state as a count of failures.
 //!
 //! Two modes, like reviewgate:
 //!   * `inject` — block once per new diff and inject the property checklist so the
@@ -18,7 +21,10 @@
 //!     `PROP <id>: PASS|FAIL` verdict per property; propguard counts the PASSes.
 //!
 //! Failure modes are split deliberately (mirroring the sibling gates):
-//!   * a *harness* error (bad config, no git, our own bug) → exit 0, allow.
+//!   * a *harness* error that is an observed ABSENCE of scope (no git repo,
+//!     unreadable config falling back to defaults) → exit 0, allow. An error
+//!     that leaves the answer UNDETERMINED does not allow — see the checker
+//!     and panic clauses below (CLAUDE.md §3).
 //!   * no done_criteria / nothing checkable → allow (never invent a finding).
 //!   * fewer than `threshold` properties satisfied → block (bounded, escapable).
 //!   * a *checker* that itself fails → block (bounded) then give up loudly, so a
@@ -102,6 +108,18 @@ enum Command {
     Status,
     /// Trust the current project so its ./propguard.toml (incl. checker_cmd) is honored.
     Trust,
+    /// Record a ONE-SHOT skip of the next property check for THIS session.
+    ///
+    /// Replaces the old `.propguard-skip` file in the project root, which sat
+    /// in the shared tree and was consumed by whichever session stopped next —
+    /// waving that session's legitimate gate through (CLAUDE.md §5 forbids
+    /// exactly that under parallel sessions). This one is attributed to the
+    /// issuing session, requires a reason, and its consumption is logged.
+    Skip {
+        /// Why this check is being skipped. Required.
+        #[arg(long)]
+        reason: String,
+    },
 }
 
 fn main() {
@@ -114,7 +132,27 @@ fn main() {
         Command::Init { force } => exit_on_err(init(force)),
         Command::Status => status(),
         Command::Trust => exit_on_err(trust()),
+        Command::Skip { reason } => exit_on_err(skip_cmd(&reason)),
     }
+}
+
+/// Record a one-shot, session-scoped skip. See `Command::Skip`.
+fn skip_cmd(reason: &str) -> anyhow::Result<()> {
+    let root = std::env::current_dir()?;
+    let mut cfg = Config::load(&root);
+    // The Stop hook applies `state_dir_override()` before it reads the skip (see
+    // `check_run`). Issuing one WITHOUT the same override writes the marker into
+    // a directory the hook never reads, so the hatch is silently inert whenever
+    // `PROPGUARD_STATE_DIR` is set: the command reports success and prints "it
+    // applies to THIS session's next stop only", and then the next stop blocks
+    // anyway. A hatch that reports having been armed when it was not is worse
+    // than no hatch — CLAUDE.md §4 forbids prose that describes behaviour the
+    // code does not have, and this is that mismatch in executable form.
+    if let Some(dir) = state_dir_override() {
+        cfg.state_dir = dir;
+    }
+    harness_core::gate::run::skip_command("propguard", &cfg.state_dir, reason)
+        .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 fn derive_command(criteria: &str) {
@@ -197,12 +235,14 @@ fn check_run(hook: Option<HookInput>) -> ! {
     let session = input.session_key();
 
     // one-shot escape hatch
-    if let Some(reason) =
-        harness_core::gate::run::consume_skip(&root, ".propguard-skip", input.stop_hook_active)
-    {
+    if let Some(reason) = harness_core::gate::run::consume_session_skip(
+        &cfg.state_dir,
+        &session,
+        input.stop_hook_active,
+    ) {
         state::reset(&cfg.state_dir, &session);
         log_event(&cfg, &session, "skip", &[], &[], 0);
-        eprintln!("propguard: .propguard-skip consumed — allowing stop ({reason})");
+        eprintln!("propguard: session-scoped skip consumed — allowing stop ({reason})");
         harness_core::hook_latency::record(
             "propguard",
             &session,

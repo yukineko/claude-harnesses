@@ -52,7 +52,8 @@
 サブコマンドは `clap` の `Command` enum（`main`）。
 
 - **`check`（Stop hook）** — `read_stdin`→`HookInput::parse`。`PROPGUARD_DISABLE` / config `enabled=false` /
-  `.propguard-skip`（1回限り・理由1行、`consume_skip`）で早期許可。それ以外は `gate::evaluate`→
+  session 限定 skip（1回限り・理由必須、`propguard skip --reason` で発行し `consume_session_skip` で消費）で
+  早期許可。共有 project root の `.propguard-skip` は撤去済み（CLAUDE.md §5）。それ以外は `gate::evaluate`→
   `state::save`/`reset`→`log_event`（JSONL 1行）。非対話時 block は `{"decision":"block","reason":…}` を
   stdout へ、対話時は stderr。`harness_core::hook_latency::record` で latency 記録。
 - **`gate::evaluate`（コア）** — (1) `source_criteria` で done_criteria 解決（無→`no-criteria` 許可）、

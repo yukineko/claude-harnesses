@@ -120,8 +120,24 @@ pub fn run_bg(session_id: &str, transcript_path: &str, cwd: &Path, cfg: &Config)
     if transcript_path.is_empty() {
         return;
     }
-    let turns =
-        transcript::recent_turns(transcript_path, DISTILL_MAX_TURNS, DISTILL_MAX_TURN_CHARS);
+    // Forwarded, not swallowed: "could not read the transcript" is a different
+    // fact from "there was nothing to distill", and only the second warrants
+    // silence. The deterministic rescue note is the fallback record either way,
+    // but a distill that never ran must not look like one that had no material.
+    let turns = match transcript::recent_turns(
+        transcript_path,
+        DISTILL_MAX_TURNS,
+        DISTILL_MAX_TURN_CHARS,
+    ) {
+        harness_core::verdict::Determination::Known(t) => t,
+        harness_core::verdict::Determination::Undetermined(why) => {
+            eprintln!(
+                "ctxrot distill: transcript を読めなかったため蒸留をスキップします\
+                     （素材が無かったのではありません）: {transcript_path} — {why}"
+            );
+            return;
+        }
+    };
     if turns.is_empty() {
         return;
     }

@@ -13,7 +13,10 @@ assets and prints `file:line` + the verbatim line, exiting 1 on any hit.
 
 Self-contained: stdlib only, so it runs identically in CI and locally
 (`python3 scripts/check-prompt-injection.py`). Exit 0 = clean; exit 1 = one or
-more suspicious lines (all printed).
+more suspicious lines (all printed); exit 2 = UNDETERMINED, the gate could not
+reach a verdict (currently: prompt-asset discovery came up empty, see `main`).
+Exit 2 is not a milder exit 1 -- the pre-commit runner blocks on both and names
+2 as undetermined. Never add an exit path that resolves cannot-determine into 0.
 
 False-positive discipline (load-bearing): this very repo is *full* of defensive
 text that quotes attack phrasings in order to instruct the agent NOT to obey
@@ -365,8 +368,56 @@ def scan_file(path: Path) -> list[tuple[int, str, str]]:
     return scan_lines(text.splitlines(), added_lines, diff_available)
 
 
+RC_OK = 0
+RC_FINDINGS = 1
+RC_UNDETERMINED = 2
+
+
 def main(argv: list[str]) -> int:
-    files = [Path(a) for a in argv[1:]] if len(argv) > 1 else iter_target_files()
+    if len(argv) > 1:
+        # Caller named the files explicitly. `len(argv) > 1` guarantees this is
+        # non-empty, so the vacuity guard below neither applies nor should:
+        # scanning one deliberately chosen file is a legitimate use.
+        files = [Path(a) for a in argv[1:]]
+    else:
+        files = iter_target_files()
+        # Fail CLOSED on an empty discovery set (CLAUDE.md section 3: an empty
+        # set is read downstream as "nothing to inspect = pass"). A real
+        # checkout ALWAYS holds tracked prompt assets -- CLAUDE.md itself is one
+        # of TARGET_GLOBS -- so zero targets means discovery BROKE, not that the
+        # surface is clean.
+        #
+        # The concrete break: `_tracked_files()` returns a *set*, so a
+        # `git ls-files` that SUCCEEDS but lists nothing (empty or corrupt
+        # index, fresh checkout) yields an EMPTY SET rather than None, and
+        # `iter_target_files`'s `if tracked is not None and p not in tracked:
+        # continue` then drops EVERY candidate. Printing the clean message there
+        # made this gate -- the FIRST blocking gate the pre-commit hook runs --
+        # commit the exact cannot-determine-collapsed-into-all-good fail-open it
+        # exists to police. `check-fail-open.py`, which names this script as its
+        # own model, has carried this guard all along; injectguard is the one
+        # that drifted.
+        #
+        # The sibling case is already safe and is deliberately left alone: when
+        # git is UNAVAILABLE `_tracked_files()` returns None, which DISABLES the
+        # filter, so the scan set becomes a SUPERSET of the tracked one -- it
+        # can never narrow, only widen (measured on this checkout: 147 targets
+        # with the real set, 147 with None, 0 with an empty set). Widening is
+        # restrictive, so that path needs no guard. Only the
+        # successful-but-EMPTY set is dangerous, and it is fully caught here,
+        # because an empty tracked set can only ever produce an empty `files`.
+        if not files:
+            print(
+                "injectguard: UNDETERMINED -- prompt-asset discovery found ZERO "
+                "files to scan, so refusing to report clean (cannot-determine "
+                "must fail closed). A real checkout always has tracked prompt "
+                "assets, so an empty scan set means git ls-files returned "
+                "nothing (empty/corrupt index, fresh checkout), this is not "
+                "running inside the repo checkout, or TARGET_GLOBS no longer "
+                "match the tree layout.",
+                file=sys.stderr,
+            )
+            return RC_UNDETERMINED
     total = 0
     for path in files:
         for lineno, text, name in scan_file(path):
@@ -379,9 +430,10 @@ def main(argv: list[str]) -> int:
               f"If any is a legitimate defense, frame it under a "
               f"prompt-injection/untrusted heading or add a defense marker "
               f"nearby.", file=sys.stderr)
-        return 1
-    print("injectguard: prompt assets clean (no planted injection detected).")
-    return 0
+        return RC_FINDINGS
+    print(f"injectguard: prompt assets clean "
+          f"({len(files)} scanned, no planted injection detected).")
+    return RC_OK
 
 
 if __name__ == "__main__":

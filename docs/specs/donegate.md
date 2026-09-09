@@ -31,9 +31,13 @@
 - **無限ループ防止（試行カウンタ）** — セッションごとの連続ブロック回数を `state::bump` で数え、`max_attempts`（既定 3）を
   超えたら諦めて停止を通す（`giveup`、exit 0）。カウンタは `reset_after_secs`（既定 600s）アイドル、またはグリーン到達で
   `state::reset`。`session_key` が session を識別。
-- **エスケープハッチ / キルスイッチ** — project root の `.donegate-skip`（1 行理由）は
-  `harness_core::gate::run::consume_skip` で一度だけ消費され次の停止を通す（`skip`）。`DONEGATE_DISABLE=1`
-  （`Config::disabled_env`、空/`0` は無効扱い）で完全停止。
+- **エスケープハッチ / キルスイッチ** — `donegate skip --reason "<理由>"`（`skip_cmd` →
+  `harness_core::gate::run::skip_command`）が発行セッション限定の skip を書き、
+  `harness_core::gate::run::consume_session_skip` が一度だけ消費して次の停止を通す。理由は必須で、
+  発行・消費の両方が gate log に追記される。共有 project root の `.donegate-skip` は撤去済み
+  （一度だけ消費される共有ファイルは他セッションの正当なゲートを素通りさせる — CLAUDE.md §5）。
+  `DONEGATE_DISABLE=1`（`Config::disabled_env`、空/`0` は無効扱い）で完全停止。ただし env は
+  Claude Code 自身を起動した環境でのみ効き、ツール呼び出しからの export は Stop hook に届かない。
 - **config sanitize** — `max_attempts==0`→1、`default_timeout_secs==0`→300、`output_tail_lines==0`→40 に補正し、
   `name`/`cmd` が空白のみの check は除去（`Config::load`）。
 
@@ -43,7 +47,8 @@
 
 - **`gate`（Stop フック本体）** — stdin から hook JSON（`session_id`/`cwd`/`stop_hook_active`、`HookInput::parse`）を
   読み、stdin が無ければ interactive（manual）モード。手順は `gate_run`：(1) `DONEGATE_DISABLE` チェック → (2) config
-  load・enabled/checks 空チェック → (3) `.donegate-skip` 消費チェック → (4) `gate::evaluate` で `git::changed_files` に
+  load・enabled/checks 空チェック → (3) session 限定 skip の消費チェック（`consume_session_skip`） →
+  (4) `gate::evaluate` で `git::changed_files` に
   基づき適用チェックを実行 → (5) `all_green` なら reset+`green` log+exit 0、必須失敗があれば `bump` し
   `attempt>max_attempts` で `giveup`、そうでなければ `blocked` を log し `block_reason` を JSON `decision:block` で出力。
   各判定は `~/.donegate/state/log.jsonl` に JSONL 1 行追記（`verdict` は `green`/`blocked`/`giveup`/`skip`）、

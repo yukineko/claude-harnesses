@@ -120,7 +120,12 @@ file is optional. Start from the documented template
 - Per line: append `# audit-ignore: <reason>` (use `//` for JS/TS). A reason is
   **required** — a bare marker does not suppress.
 - Per file: put `audit-ignore-file: <reason>` in the first 20 lines.
-- One-shot bypass: create `<audit_dir>/.audit-skip` (consumed on read).
+- One-shot bypass: `precommit-audit skip --reason "<why>"`. A reason is
+  required, the skip applies only to the session that issued it, it is
+  consumed by that session's next audit, and both the issue and the
+  consumption are recorded. (The old `<audit_dir>/.audit-skip` file was
+  removed: it sat in the shared working tree with no attribution, so
+  whichever invocation ran next spent it — CLAUDE.md section 5.)
 
 ## Relation to the other Stop gates (donegate / reviewgate / tdd)
 

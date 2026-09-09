@@ -67,7 +67,23 @@ pub fn write(input: &HookInput, cfg: &Config, trigger: &str) -> Option<PathBuf> 
         }
     }
 
-    let turns = transcript::recent_turns(&input.transcript_path, MAX_TURNS, MAX_TURN_CHARS);
+    // Forward the undetermined answer instead of reading it as "no turns". An
+    // unreadable transcript used to produce no note and no diagnostic, which is
+    // byte-for-byte identical to "there was nothing worth saving" — the failure
+    // this hook exists to prevent, reported as a success. Same shape as the
+    // existing-note lookup above: say so on stderr, keep exit 0 (rescue is an
+    // observability hook, not a verdict).
+    let turns = match transcript::recent_turns(&input.transcript_path, MAX_TURNS, MAX_TURN_CHARS) {
+        harness_core::verdict::Determination::Known(t) => t,
+        harness_core::verdict::Determination::Undetermined(why) => {
+            eprintln!(
+                "ctxrot rescue: transcript を読めなかったため退避ノートを作成できません\
+                 （「保存すべき内容が無かった」ではありません）: {} — {why}",
+                input.transcript_path
+            );
+            return None;
+        }
+    };
     if turns.is_empty() {
         return None;
     }

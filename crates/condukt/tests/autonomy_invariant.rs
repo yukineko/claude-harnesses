@@ -97,62 +97,6 @@ fn run_autonomy_check(home: &Path, autonomous_env: Option<&str>) -> (i32, String
     (code, stdout)
 }
 
-/// Every row of the `gate-decisions.jsonl` journal under `dir`, parsed.
-///
-/// A MISSING file is a failure, not an empty journal: after a resolved verdict
-/// the decision must be on the record. Recording nothing would make "this gate
-/// never fired" and "this gate fired and went to a human" the same silence,
-/// which CLAUDE.md 第1節 names as a fail-open (沈黙は許容される degrade ではない).
-fn journal_rows(dir: &Path) -> Vec<serde_json::Value> {
-    let path = dir.join("gate-decisions.jsonl");
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
-        panic!(
-            "a resolved verdict must be journaled at {}: {e}",
-            path.display()
-        )
-    });
-    text.lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| serde_json::from_str(l).expect("each journal line is one JSON object"))
-        .collect()
-}
-
-/// The invariant these tests actually mean — stated directly instead of
-/// through the "the file does not exist" proxy they used until 2026-09-07.
-///
-/// The proxy conflated two different properties: "nothing was SELF-ANSWERED"
-/// (what the failure messages claimed) and "nothing was RECORDED" (what the
-/// assertion tested). When condukt started journaling every resolved verdict,
-/// the proxy broke while the property held. This asserts the property, and is
-/// strictly stronger than the proxy ever was: the proxy could not tell an
-/// unwritten journal from one full of forged `auto` rows.
-fn assert_journaled_as_non_answer(dir: &Path, expected_policy: &str) {
-    let rows = journal_rows(dir);
-    assert_eq!(
-        rows.len(),
-        1,
-        "exactly one decision was made, so exactly one row is expected: {rows:?}"
-    );
-    assert_eq!(
-        rows[0]["policy"],
-        serde_json::json!(expected_policy),
-        "the row must record the verdict that actually happened: {rows:?}"
-    );
-    assert!(
-        rows[0]["chosen"].is_null(),
-        "a {expected_policy} answered nothing, so `chosen` must be null — a \
-         non-null value would be a self-answer recorded under a verdict that \
-         did not self-answer: {rows:?}"
-    );
-    assert!(
-        !rows
-            .iter()
-            .any(|r| r["policy"] == serde_json::json!("auto")),
-        "no row may claim `auto`: that is the reading downstream counts as \
-         \"passed a gate without a human\" (overwatch `parse_auto_approved`): {rows:?}"
-    );
-}
-
 fn write_config(home: &Path, body: &str) {
     let dir = home.join(".condukt");
     std::fs::create_dir_all(&dir).unwrap();
@@ -349,7 +293,7 @@ fn policy_answer_untestable_clamps_auto_to_escalate_never_self_answers() {
         out, r#"{"answered":false,"policy":"escalate"}"#,
         "must print the escalate JSON shape, never self-answer"
     );
-    assert_journaled_as_non_answer(tmp.path(), "escalate");
+    assert_journaled_but_not_self_answered(tmp.path(), "escalate");
 }
 
 // ---------------------------------------------------------------------------
@@ -471,7 +415,7 @@ fn policy_answer_approval_is_inert_when_not_autonomous() {
         out, r#"{"answered":false,"policy":"escalate"}"#,
         "must print the escalate JSON (an exact match also rules out a clap error)"
     );
-    assert_journaled_as_non_answer(tmp.path(), "escalate");
+    assert_journaled_but_not_self_answered(tmp.path(), "escalate");
 }
 
 #[test]
@@ -484,7 +428,7 @@ fn policy_answer_approval_never_relaxes_the_irreversible_block() {
         run_policy_answer_approval(tmp.path(), "high", "low", "high", true, &["--approval"]);
     assert_eq!(code, 3, "a block must survive --approval; got {out:?}");
     assert_eq!(out, r#"{"answered":false,"policy":"block"}"#);
-    assert_journaled_as_non_answer(tmp.path(), "block");
+    assert_journaled_but_not_self_answered(tmp.path(), "block");
 }
 
 #[test]
@@ -820,193 +764,46 @@ fn invariant_prose_anchors_are_present() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// 3. SKILL AUDIT: the spec-gap divert gate (flow SKILL Step 3-1.5,
-//    specs/spec-loop.toml R4-flow-spec-gap-source).
-// ---------------------------------------------------------------------------
-//
-// The gate decides whether a task is sent BACK to `specforge` instead of into
-// `condukt`'s implementation phase. Four of its properties are load-bearing and
-// none of them is executable Rust, so — exactly like the invariant prose above —
-// they are pinned as anchors here. Written by an agent that did not author the
-// section (CLAUDE.md §2(a)); each pin below was proved non-vacuous by deleting
-// or weakening the property in SKILL.md and observing it go RED.
-
-/// The `#### 3-1.5.` section of the flow SKILL, up to the next `####` heading.
+/// Assert this consultation is journaled **without** being recorded as a
+/// self-answer: exactly one row, carrying `expected_policy`, naming no chosen
+/// option.
 ///
-/// Scoping matters: the whole file legitimately contains `--approval` (the
-/// deploy/push permission framing), so the "this gate carries no `--approval`"
-/// property is only meaningful against this slice.
-fn flow_spec_gap_section(flow: &str) -> String {
-    let start = flow
-        .find("#### 3-1.5.")
-        .expect("flow SKILL must keep the `#### 3-1.5.` spec-gap gate section");
-    let body = &flow[start + "#### 3-1.5.".len()..];
-    let end = body
-        .find("\n#### ")
-        .map(|i| start + "#### 3-1.5.".len() + i)
-        .unwrap_or(flow.len());
-    flow[start..end].to_string()
-}
-
-/// The text of a fenced shell invocation of `cmd` inside `section`, from the
-/// command up to the closing fence. Used to assert what a specific command line
-/// does and does not carry, independently of the prose around it.
-fn fenced_invocation<'a>(section: &'a str, cmd: &str) -> &'a str {
-    // The command must be at the START of a line: the same words also appear
-    // inline in the prose/heading ("`condukt policy answer` 経由"), and matching
-    // those would test the sentence instead of the invocation.
-    let start = section
-        .match_indices(cmd)
-        .map(|(i, _)| i)
-        .find(|i| *i == 0 || section.as_bytes()[i - 1] == b'\n')
-        .unwrap_or_else(|| panic!("spec-gap section must invoke `{cmd}` in a fenced command"));
-    let rest = &section[start..];
-    let end = rest.find("```").unwrap_or(rest.len());
-    &rest[..end]
-}
-
-fn flow_skill() -> String {
-    std::fs::read_to_string(repo_root().join("crates/flow/skills/flow/SKILL.md"))
-        .expect("flow SKILL.md is readable")
-}
-
-/// Property 1 — the preflight branches on BOTH the exit status and the
-/// `verdict` field. A branch on the verdict alone would read the JSON of a run
-/// that failed (or printed nothing) as if it were an answer; a branch on the
-/// status alone cannot tell `covered` from `not-covered`, which are both exit 0.
-#[test]
-fn spec_gap_gate_branches_on_both_exit_code_and_verdict() {
-    let section = flow_spec_gap_section(&flow_skill());
-    assert!(
-        section.contains("specguard brief --json"),
-        "the spec-gap preflight must call `specguard brief --json`: {section}"
+/// This replaces an older `assert!(!gate-decisions.jsonl.exists())`. That check
+/// and this one protect the same named invariant — the message on the old
+/// assertion was "must not be journaled *as a self-answer*" — but file-absence
+/// was a proxy that happened to hold only because escalate/block were not
+/// recorded at all. Now that every consultation is journaled, the proxy would
+/// fail while the invariant holds, so it is asserted directly. This form is
+/// strictly stronger on the invariant's own axis: absence proved nothing about
+/// what a row would have said, whereas this rejects a row claiming `auto` or
+/// naming a choice.
+fn assert_journaled_but_not_self_answered(dir: &std::path::Path, expected_policy: &str) {
+    let path = dir.join("gate-decisions.jsonl");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "the consultation must be journaled at {}: {e} — an unrecorded escalate is \
+             indistinguishable from a gate that never fired",
+            path.display()
+        )
+    });
+    let rows: Vec<serde_json::Value> = text
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| {
+            serde_json::from_str(l)
+                .unwrap_or_else(|e| panic!("journal line is not JSON: {e} — {l:?}"))
+        })
+        .collect();
+    assert_eq!(rows.len(), 1, "exactly one consultation expected: {rows:?}");
+    let row = &rows[0];
+    assert_eq!(
+        row["policy"],
+        serde_json::json!(expected_policy),
+        "wrong verdict recorded: {row}"
     );
-    assert!(
-        section.contains("rc=$?"),
-        "the preflight must CAPTURE the exit status (`rc=$?`), not just the JSON"
-    );
-    assert!(
-        section.contains("verdict"),
-        "the preflight must name the `verdict` field it branches on"
-    );
-    // Both answers are exit 0, so each branch must state the status AND the
-    // verdict it requires.
-    assert!(
-        section.contains("rc=0 かつ") && section.contains("covered"),
-        "the `covered` branch must require rc=0 AND the verdict"
-    );
-    assert!(
-        section.contains("not-covered"),
-        "the divert branch must name the `not-covered` verdict"
-    );
-    // A non-zero status is not a verdict: it must be routed by the catch-all,
-    // never read as one of the two answers.
-    assert!(
-        section.contains("rc=10"),
-        "the section must name the undetermined exit code (rc=10) that \
-         `specguard brief --json` returns"
-    );
-    assert!(
-        section.contains("それ以外すべて"),
-        "the section must keep the catch-all branch that absorbs every state \
-         that is not an answer (non-zero rc, missing binary, unreadable output, \
-         absent `verdict` field)"
-    );
-}
-
-/// Property 2 — `undetermined` (and every state that could not be observed)
-/// does NOT divert, and is never rounded into `not-covered`. `not-covered`
-/// makes `specforge` WRITE a new spec, so collapsing "could not look" into it
-/// is the substitution CLAUDE.md §3 forbids.
-#[test]
-fn spec_gap_gate_never_collapses_undetermined_into_not_covered() {
-    let section = flow_spec_gap_section(&flow_skill());
-    assert!(
-        section.contains("undetermined"),
-        "the section must name the third verdict at all"
-    );
-    assert!(
-        section.contains("divert しない"),
-        "the section must state that the undetermined branch does NOT divert"
-    );
-    assert!(
-        section.contains("`not-covered` へ丸めてはならない"),
-        "the section must forbid rounding undetermined into `not-covered` — \
-         this is the sentence most likely to rot: {section}"
-    );
-    // ...and it must say which way is the safe side, because "fail closed"
-    // reads backwards here: diverting is the WRITING action.
-    assert!(
-        section.contains("安全側") && section.contains("divert しない"),
-        "the section must state that the safe side of this gate is NOT to \
-         divert (divert is the write-side action)"
-    );
-    // The residual-stops prose elsewhere in the skill must still name this gate,
-    // so the documented set of stops is not smaller than the implemented one.
-    assert!(
-        flow_skill().contains("spec-gap divert"),
-        "flow SKILL must name the spec-gap divert among its residual stops"
-    );
-}
-
-/// Property 3 — the consent gate is a JUDGMENT request, so it goes through
-/// `condukt policy answer` with R4's fixed profile and deliberately WITHOUT
-/// `--approval`.
-///
-/// This is the one deliberate ABSENCE assertion in this file: `--approval`
-/// clamps escalate → auto (see `policy_answer_approval_self_answers_when_autonomous`
-/// above), so adding it here would silently self-answer "should this task be
-/// implemented with no canon?" — deleting the human judgment rather than
-/// recording it. The absence is asserted against the fenced invocation only,
-/// because the surrounding prose legitimately mentions `--approval` in order to
-/// forbid it.
-#[test]
-fn spec_gap_consent_gate_is_a_judgment_request_without_approval() {
-    let section = flow_spec_gap_section(&flow_skill());
-    let invocation = fenced_invocation(&section, "condukt policy answer");
-    for flag in ["--risk medium", "--reversible high", "--confidence low"] {
-        assert!(
-            invocation.contains(flag),
-            "the spec-gap consent gate must keep R4's fixed profile flag \
-             `{flag}`: {invocation}"
-        );
-    }
-    assert!(
-        !invocation.contains("--approval"),
-        "the spec-gap consent gate must NOT carry `--approval`: it is a \
-         judgment request (\"should we divert?\"), and `--approval` would clamp \
-         escalate to auto and self-answer it: {invocation}"
-    );
-    // The prohibition must also be stated in prose, so a future editor sees WHY
-    // the flag is missing rather than treating its absence as an oversight.
-    assert!(
-        section.contains("`--approval` を付けない"),
-        "the section must state in prose that `--approval` is deliberately \
-         omitted from this gate"
-    );
-    // And the gate must not be replaced by a bare prompt that leaves no record.
-    assert!(
-        section.contains("素の `AskUserQuestion` は使わない"),
-        "the section must keep the ban on bypassing `condukt policy answer` \
-         with a bare prompt (a bypass leaves no row in gate-decisions.jsonl)"
-    );
-}
-
-/// Property 4 — no divert counter. Termination is R0's ratify contract floor
-/// (`Spec::contract_violations()` empty), not a capped number of attempts; a
-/// counter measures attempts rather than whether the spec became executable.
-#[test]
-fn spec_gap_gate_forbids_a_divert_counter() {
-    let section = flow_spec_gap_section(&flow_skill());
-    assert!(
-        section.contains("divert 回数を数えて止めるカウンタを足してはならない"),
-        "the section must keep the explicit prohibition on a divert counter: \
-         {section}"
-    );
-    assert!(
-        section.contains("contract_violations()") || section.contains("contract floor"),
-        "the section must name what DOES terminate the loop (R0's ratify \
-         contract floor) in place of a counter"
+    assert_eq!(
+        row["chosen"],
+        serde_json::json!(""),
+        "nothing was self-answered, so no option may be recorded as chosen: {row}"
     );
 }

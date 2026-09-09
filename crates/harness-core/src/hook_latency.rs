@@ -50,7 +50,7 @@ pub fn record_to(path: &Path, hook: &str, session: &str, elapsed_ms: u64) {
     };
     if let Ok(line) = serde_json::to_string(&entry) {
         // Single atomic append (body + '\n' in one write) — see issue #15.
-        crate::append::append_line(path, &line);
+        crate::append::append_line_reporting(path, &line, "hook latency");
     }
 }
 

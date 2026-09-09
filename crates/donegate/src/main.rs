@@ -74,6 +74,19 @@ enum Command {
     Status,
     /// Trust the current project so its ./donegate.toml commands are honored.
     Trust,
+    /// Record a ONE-SHOT skip of the next stop check for THIS session.
+    ///
+    /// Replaces the old `.donegate-skip` file in the project root, which sat in
+    /// the shared tree and was consumed by whichever session stopped next —
+    /// waving that session's legitimate gate through (CLAUDE.md §5 forbids
+    /// exactly that under parallel sessions). This one is attributed to the
+    /// issuing session, requires a reason, and its consumption is logged.
+    Skip {
+        /// Why this stop is being skipped. Required — an unexplained bypass is
+        /// invisible to review even when it is recorded.
+        #[arg(long)]
+        reason: String,
+    },
 }
 
 fn read_stdin() -> String {
@@ -91,7 +104,16 @@ fn main() {
         Command::Init { force } => exit_on_err(init(force)),
         Command::Status => status(),
         Command::Trust => exit_on_err(trust_cmd()),
+        Command::Skip { reason } => exit_on_err(skip_cmd(&reason)),
     }
+}
+
+/// Record a one-shot, session-scoped skip. See `Command::Skip`.
+fn skip_cmd(reason: &str) -> anyhow::Result<()> {
+    let root = std::env::current_dir()?;
+    let (cfg, _) = Config::resolve(&root);
+    harness_core::gate::run::skip_command("donegate", &cfg.state_dir, reason)
+        .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 /// Add the current project root to the shared workspace-trust list so its
@@ -129,7 +151,10 @@ fn exit_on_err(r: anyhow::Result<()>) {
 /// The Stop hook. Always exits 0 toward Claude (the `decision` field, not the
 /// exit code, is what blocks a stop). Returns exit 1 only in manual CLI mode.
 ///
-/// The never-break-a-turn panic guard lives in `harness_core::gate::run`: a
+/// The panic barrier lives in `harness_core::gate::run`. It is deliberately
+/// NOT a "never break the turn" guard — CLAUDE.md §1 names that phrase in a
+/// verdict-path docstring as a red flag, because it is what justified mapping
+/// panics to `allow`. This barrier is fail-closed and merely bounded: a
 /// panic in `gate_run` fails CLOSED in hook mode (emits a `decision:block`,
 /// bounded to one block via `stop_hook_active` so it can't trap the session) and
 /// is surfaced (exit 1) in manual CLI mode. Real `process::exit` calls inside
@@ -203,12 +228,14 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     }
 
     // one-shot escape hatch
-    if let Some(reason) =
-        harness_core::gate::run::consume_skip(&root, ".donegate-skip", input.stop_hook_active)
-    {
+    if let Some(reason) = harness_core::gate::run::consume_session_skip(
+        &cfg.state_dir,
+        &session,
+        input.stop_hook_active,
+    ) {
         state::reset(&cfg.state_dir, &session);
         log_event(&cfg, &session, "skip", &[], 0);
-        eprintln!("donegate: .donegate-skip consumed — allowing stop ({reason})");
+        eprintln!("donegate: session-scoped skip consumed — allowing stop ({reason})");
         harness_core::hook_latency::record(
             "donegate",
             &session,
@@ -417,9 +444,10 @@ fn refusal_reason(d: &config::Declaration, attempt: u32, max: u32) -> String {
         ),
     };
     format!(
-        "{head}\n\nOther ways out: DONEGATE_DISABLE=1 (turn donegate off), HARNESS_TRUST_ALL=1 \
-         (trust every project), or a `.donegate-skip` file in the project root with a one-line \
-         reason (consumed once)."
+        "{head}\n\nOther ways out: `donegate skip --reason \"...\"` (one stop, THIS session \
+         only, recorded), HARNESS_TRUST_ALL=1 (trust every project), or DONEGATE_DISABLE=1 in \
+         the environment Claude Code itself was started with — exporting it from a tool call \
+         does not reach this hook, which inherits the app's environment."
     )
 }
 
@@ -444,19 +472,19 @@ fn refuse(
     session: &str,
     interactive: bool,
     start: std::time::Instant,
-    // Threaded in rather than defaulted: `consume_skip` needs to know whether
-    // this stop is a re-entry after some gate blocked, and a wrong constant
-    // here would either burn the operator's one-shot token on a stop that never
-    // happened (false) or keep honouring it forever (true).
+    // Threaded in rather than defaulted: `consume_session_skip` needs to know
+    // whether this stop is a re-entry after some gate blocked, and a wrong
+    // constant here would either burn the operator's one-shot token on a stop
+    // that never happened (false) or keep honouring it forever (true).
     stop_hook_active: bool,
 ) -> ! {
     // The one-shot escape hatch still applies to a refusal.
     if let Some(reason) =
-        harness_core::gate::run::consume_skip(root, ".donegate-skip", stop_hook_active)
+        harness_core::gate::run::consume_session_skip(&cfg.state_dir, session, stop_hook_active)
     {
         state::reset(&cfg.state_dir, session);
         log_event(cfg, session, "skip", &[], 0);
-        eprintln!("donegate: .donegate-skip consumed — allowing stop ({reason})");
+        eprintln!("donegate: session-scoped skip consumed — allowing stop ({reason})");
         harness_core::hook_latency::record("donegate", session, start.elapsed().as_millis() as u64);
         std::process::exit(0);
     }

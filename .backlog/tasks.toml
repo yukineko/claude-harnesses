@@ -1,5 +1,3 @@
-
-
 [[task]]
 id = "0ba79281"
 title = 'CLAUDE.md: Windows で成立しない cargo 手順 (. "$HOME/.cargo/env") を直す'
@@ -16570,7 +16568,7 @@ title = "ユーザー裁定で repo から撤去した taintguard が、この�
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
-status = "pending"
+status = "done"
 notes = """
 実測 2026-09-09、測定点 8366ed89。
 
@@ -16582,9 +16580,54 @@ notes = """
 
 帰結: 撤去の理由になった実害 (turn が external-read で tainted になり以後の Write/Edit と allowlist 外 Bash が deny される) が、この機体では今も起こりうる。source から crate を消すことは稼働ハーネスの無効化にならない — プラグイン節の『rollout しない限り稼働ハーネスには一切反映されない』の裏返しで、撤去にも同じことが言える。
 
-必要な作業: (1) enabledPlugins から taintguard を外す (settings.json は自己 deny なのでユーザー操作か /plugin が要る)、(2) キャッシュの 0.2.0 ディレクトリを削除、(3) prune が『source に無い』を『判断不能なので残す』に写している点を、撤去済みプラグインを表現できる形にするか parked-plugins.json 相当の明示宣言で扱うかを決める。"""
+必要な作業: (1) enabledPlugins から taintguard を外す (settings.json は自己 deny なのでユーザー操作か /plugin が要る)、(2) キャッシュの 0.2.0 ディレクトリを削除、(3) prune が『source に無い』を『判断不能なので残す』に写している点を、撤去済みプラグインを表現できる形にするか parked-plugins.json 相当の明示宣言で扱うかを決める。
+
+--- 検証と完了 2026-09-10、測定点 652b609e ---
+
+3 項目すべて解決したので close する。以下はすべて私自身が実行した観測である
+(エージェントの報告をそのまま採らず、要点は独立に測り直した)。
+
+(1) enabledPlugins から taintguard を外す → 既に外れていた。
+    実測: enabledPlugins 39 件、taintguard キー無し。
+(2) キャッシュの 0.2.0 ディレクトリを削除 → 既に存在しない。
+    実測: ls -d のパス展開が no matches。crates/taintguard も無い。
+    check-plugin-rollout.py は exit 0 で、taintguard に一切言及しない。
+    起票 (2026-09-09) から本日までの間に稼働側へ伝播したものと見られる。
+
+(3) prune が『source に無い』を『判断不能なので残す』に写している点 → 実装した。
+    コミット 432f58ac (統合済み)。
+
+    実装前に 3 方向を個別に注入して測ったところ、3 者は同じ挙動ではなかった:
+      settings (enabledPlugins に居るが crates/ に無い)  → 未検査、rc=0、無言
+      registry (installed_plugins.json に居るが同上)      → 未検査、rc=0、無言
+      cache    (キャッシュに版ディレクトリがあるが同上)  → 既に検査済み、rc=1
+    よって新検出は settings と registry に限定し、cache 経路は一切触っていない。
+    プルーナは今も『判断できないものは消さない』ままである (削除は破壊的なので
+    それが正しい fail-closed の向き)。欠けていたのは削除ではなく報告だった。
+
+    私自身による非空虚性の確認 (実装者の自己申告に依存しないため):
+      実機 settings.json の複製に taintguard@yukineko を注入し CLAUDE_SETTINGS で
+      差し替えて実行した。実機ファイルは無改変 (diff -q で IDENTICAL を確認)。
+        control  : exit 0、OK: every @yukineko plugin key on this machine maps to
+                   a crate under crates/ (39 enabledPlugins key(s) + 44 registry
+                   entr(y/ies) inspected)
+        faulted  : exit 5、RETIRED BUT STILL LIVE (1 problem(s)) — taintguard を
+                   名指しし『A removal that was never propagated』と報告する
+      python3 -m unittest scripts.test_check_plugin_rollout → Ran 123 tests OK
+      (既存 102 + 新規 21。既存テストは 1 本も赤くなっていない)
+
+    撤去を正直に宣言する経路として scripts/retired-plugins.json を新設した
+    (parked-plugins.json と同型だが名前規則は逆向き: crates/ に実在する名前を
+    書いたら宣言の側が stale として rc=6 で落ちる)。bypass フラグも環境変数の
+    抜け穴も無い。
+
+繰り越す残件 (本票では扱わない、別チケット):
+  e83acc9c — このゲートを実際に block させる経路が無い。pre-push は advisory 扱い。
+  e650d84a — pre-push に rc=5 / rc=6 の分岐が無い。.githooks は編集が deny されている。
+  5461ba1c — cache orphan の修復案内が rollout を指しており、撤去済みプラグインの
+             再武装を勧める向きになっている (2026-08-04 の形)。"""
 created_at = 1788898809
-updated_at = 1788898809
+updated_at = 1788991487
 weight = 0.0
 issue_number = 454
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/454"
@@ -16705,9 +16748,40 @@ workspace のテストが定期的に実行され RED が見える導線を作�
 pending に残っていた。413d88b6 の RED は e018fe91 で完全に再現し、
 修正 7c6c8c7a は 2026-09-07 に着地している。つまり赤も緑も見えていない。
 これは 1 件の配線漏れではなく、CLAUDE.md 第1節『fail は検出であり価値である』の
-前提そのものが成立していない状態である。"""
+前提そのものが成立していない状態である。
+
+--- 項目 (2) の実測 2026-09-10、測定点 652b609e ---
+
+『cargo test --workspace が走らないので赤が見えない』ことの直接の証拠を得た。
+実際に回した結果:
+
+  cargo test --workspace --no-fail-fast
+  ok targets:     115
+  FAILED targets: 3
+    crates/backlog tests/project_scope.rs      6 passed; 2 failed
+      a_pinned_store_dir_still_scopes_by_project
+      a_pinned_store_dir_still_works_outside_any_repo
+    blastguard unittests src/lib.rs          318 passed; 1 failed
+      detect::tests::bg2_fd_dup_and_safe_targets_stay_allowed
+    blastguard tests/scoped_destructive.rs    20 passed; 1 failed
+      relaxed_truncating_forms_inside_the_project
+
+つまり本日時点で workspace には 4 本の RED があり、どれも誰にも見えていない。
+blastguard の 2 本は稼働中のゲートの安全性退行であり 19c359d0 が該当する。
+
+所要時間の実測 (warm、同一 worktree、2 回):
+  1 回目 96 秒 / 2 回目も同程度。pre-push は既に cargo check --workspace
+  --all-targets を許容しており (.githooks/pre-push:375)、その前例からすると
+  pre-push へ載せられる水準である。
+
+配線がまだできない理由 (判断ではなく事実):
+  ユーザーの ~/.claude/settings.json の deny リストが
+  Edit(//Users/yuki/**/.githooks/**) と Write(...) を禁じているため、
+  .githooks/pre-push を編集できない。したがってこの項目は
+  『実装方法が分からない』のではなく『権限が無い』で止まっている。
+  同じ壁に e650d84a と e83acc9c も当たっている。人間の操作が要る。"""
 created_at = 1788902156
-updated_at = 1788983765
+updated_at = 1788991488
 weight = 0.0
 issue_number = 457
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/457"

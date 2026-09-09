@@ -16416,15 +16416,43 @@ title = "harness-core の fleet::gate_crates_is_the_known_six が赤い — GATE
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
+status = "done"
 notes = """
 測定 2026-09-09、測定点 e018fe91 と merge 後の双方で同一に再現。cargo test -p harness-core --lib で 276 passed / 1 failed。
 
 crates/harness-core/src/fleet.rs:56 の assert が left(実体)=blastguard,propguard,specguard,stuckguard,mutategate,overwatch,parallelguard の7件、right(期待)=同6件(parallelguard 無し)。remote が taintguard を撤去し parallelguard を足した際に、fleet.rs の一覧は更新されたがテストの期待値が据え置かれた形。
 
-注意: pre-commit の gate-crates-sync は 11 sources 間で一致と報告して緑になる。つまり sync ゲートとこのテストが別々の真実を見ており、片方が緑でももう片方が赤い。どちらが正典かを決めてから直すこと。"""
+注意: pre-commit の gate-crates-sync は 11 sources 間で一致と報告して緑になる。つまり sync ゲートとこのテストが別々の真実を見ており、片方が緑でももう片方が赤い。どちらが正典かを決めてから直すこと。
+
+--- 検証 2026-09-10、測定点 c7c4ea49 ---
+
+前提はこの測定点では偽。RED は解消している。
+
+観測:
+  cargo test -p harness-core fleet
+  running 1 test
+  test fleet::tests::gate_crates_is_the_known_seven ... ok
+  test result: ok. 1 passed; 0 failed; 321 filtered out
+
+修正コミットは df54d12a 'fix(harness-core): fleet の drift 検出テストを
+GATE_CRATES の 7 件へ合わせる'。HEAD の祖先であることを
+git merge-base --is-ancestor で確認済み。テスト名も _six から _seven へ
+改名されており、期待値は parallelguard を含む 7 件になっている。
+
+起票が残した『どちらが正典か』への答え: 正典は GATE_CRATES 定数の側で、
+テストは定数へ合わせる形で解決された。両者は現在一致している。
+
+なお本チケットとは別に観測した点 (起票せず記録のみ):
+このテストは同一ファイル内の定数を literal で言い直しているだけなので、
+他 sources との乖離は検出できない。乖離を見るのは
+scripts/check-gate-crates-sync.py の側で、SOURCES に
+crates/harness-core/src/fleet.rs が exact 一致で登録されている
+(scripts/check-gate-crates-sync.py:307)。ただし sync が読むのは定数であって
+テストの literal ではないため、テスト literal は SOURCES に含まれない
+12 個目の手書きコピーである。これは意図された tripwire として機能しており
+(実際に今回の drift を捕まえた)、故障モードは常に『期待値が古い』側に出る。"""
 created_at = 1788898314
-updated_at = 1788898314
+updated_at = 1788983575
 weight = 0.0
 issue_number = 448
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/448"

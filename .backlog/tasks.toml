@@ -16807,3 +16807,81 @@ prune が恒常的に exit 1 になる可能性があるので、実際の cache
 created_at = 1788849813
 updated_at = 1788849813
 weight = 0.0
+
+[[task]]
+id = "a078ddb2"
+title = "rollout 直後に installed_plugins.json が巻き戻され、配備済み dir が .orphaned_at で無効化される"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "deploy-verify",
+    "p1",
+]
+status = "pending"
+notes = """
+observed 2026-09-09 09:20 JST（測定点 fde5f74d、session e9ebfcb6）。
+`scripts/rollout-plugins.sh --canary` が 41 plugin を配備し、registry patch も成功した
+（その直前のバックアップ `~/.claude/plugins/installed_plugins.json.bak-1788913100` は
+donegate=0.1.28 / reviewgate=0.1.23 と正しい値を持っている）。ところが同 09:20:19 に
+**別の書き手**が live の installed_plugins.json を上書きし、pointer が
+
+  - donegate  -> .../cache/yukineko/donegate/0.1.29   （ディレクトリは存在しない）
+  - reviewgate-> .../cache/yukineko/reviewgate/0.1.22  （存在しない）
+  - condukt   -> .../cache/yukineko/condukt/0.7.145    （存在しない）
+
+に戻された。同時刻に、配備されたばかりの各 version dir へ `.orphaned_at`
+（epoch ms、例 reviewgate/0.1.23 は 1788913219671）が書き込まれていた。
+`grep -rn 'orphaned_at' scripts/` は 0 ヒットなので、**このリポジトリのスクリプトが
+書いたものではない** — 書き手は Claude Code 本体か、別セッションの plugin 同期処理。
+
+なぜ重大か: registry が存在しない dir を指した状態は「red」ではなく **dark** である。
+launcher が見つからないので hook が起動せず、finding が 1 件も出ない。実際 rollout 直後の
+`check-plugin-rollout.py` は「rollout-plugins.sh not run since bump」と報告しており、
+これは症状の説明として誤り（rollout は走っていて、その後に巻き戻されていた）。
+
+暫定対処（本セッションで実施）: `rollout-plugins.sh --canary --force` を再実行すると
+`.orphaned_at` は消え registry も正しい dir を指す（最終 rc=0、
+「40 plugins deployed at their source version and file-for-file identical」）。
+ただしこれは競合が再発しないことを保証しない。
+
+完了条件: (1) `.orphaned_at` の書き手を特定する（Claude Code 本体か別セッションか）。
+(2) rollout の registry patch 後に pointer が指す dir の存在を検証し、存在しなければ
+非 0 で終わる（判定不能を成功に写さない）。(3) 巻き戻しが再発しうるなら、rollout の
+成功条件を「patch を書いた」ではなく「一定時間後も pointer が生きている」に変える。"""
+created_at = 1788913542
+updated_at = 1788913542
+weight = 0.0
+
+[[task]]
+id = "649d15f6"
+title = "rollout-plugins.sh の --force と --no-rebuild を併用すると .deployed-from.json が全 plugin から消える"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "deploy-verify",
+    "p1",
+]
+status = "pending"
+notes = """
+observed 2026-09-09（測定点 fde5f74d、session e9ebfcb6）。
+`scripts/rollout-plugins.sh --canary --force --no-rebuild` を実行したところ、
+直後の `check-plugin-rollout.py` が **37 件**の
+「no .deployed-from.json beside the deployed binary — cannot tell which commit it was
+built from, so it is not verifiable as current」を報告した（実行前は 14 件で、内容も別物）。
+`--force` が配備先ツリーを crate の鏡像として作り直す際に `.deployed-from.json` を消し、
+その再生成が rebuild 側の工程にあるため `--no-rebuild` で飛ばされる、という組み合わせ。
+
+なぜ重大か: `.deployed-from.json` は「この binary はどのコミットから来たか」という
+**provenance の唯一の記録**であり、`check-plugin-rollout.py` の currency 判定と
+`harness_core_version` 判定の両方がこれを読む。消えると「古い版が配られている」ことを
+検出できなくなる ＝ 検査の目そのものが落ちる。しかも消したのは rollout 自身なので、
+「rollout を走らせた」ことが「検証可能性を失った」ことと同義になっていた。
+
+復旧: `--force` を rebuild 付き（`--no-rebuild` なし）で再実行すれば provenance は戻る（実施済み）。
+
+完了条件: `--force` と `--no-rebuild` の併用を (a) エラーにして拒否する、または
+(b) provenance 再生成を copy 側の工程へ移して両立させる。どちらでもよいが、
+**黙って provenance を消す経路を残さない**こと。回帰テストを添えること。"""
+created_at = 1788913542
+updated_at = 1788913542
+weight = 0.0

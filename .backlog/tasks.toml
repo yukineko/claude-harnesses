@@ -4459,9 +4459,40 @@ working tree を検査するため、実際には存在しないドリフトで�
 したがって完了条件に追加: pre-commit のチェックのうち「ツリー全体の整合」を見るもの
 (check-doc-claims 等) は、pathspec commit のときは実際にコミットされる内容に対して
 検査するか、検査対象外のファイル由来の失敗をそう明示すること。
+
+--- 2026-09-09: reviewgate 側は landed。precommit-audit 側は未着手なので pending のまま ---
+
+【landed】commit 917fc9c4（RED は b7b4266b、branch fix/issue-15-jsonl-append-race）。
+完了条件 (a)「当該セッションが書いたものに絞る」を transcript ベースで実装した。
+
+- 層1（新規、crate 非依存）: `harness_core::transcript::files_edited_by_session(path)
+  -> Determination<BTreeSet<String>>`。transcript を前方に流し、Edit / Write / MultiEdit /
+  NotebookEdit の tool_use が書いたパスだけを集める（Read / Grep は編集ではないので入れない —
+  他セッションのファイルを読むのはツリー共有時にまさに起きるので、`file_path` を字面で拾う
+  実装は同じバグを再生産する）。読めなかった transcript は `Known(∅)` ではなく `Undetermined`。
+- 層2: `review::evaluate` が `changed ∩ edited` に絞り、**除外したファイルを名指しで**
+  reason と stderr に出す。transcript が `Undetermined` のときは**絞らない**（全件レビュー ＋
+  「帰属: 判定不能」と明示）。判定不能を「自分の変更ではない」へ倒さないため。
+  突き合わせは両辺 canonicalize（transcript は絶対パス / git は repo 相対。素朴比較だと
+  常に空集合になり、ゲートは red ではなく dark になる）。
+- F→P: harness-core 1 passed/8 failed → 9/9、reviewgate 6 passed/3 failed → 9/9。
+  アンチ空虚の対照 6 本は両状態で green。テストは利害関係のない agent が先に書いた。
+
+【未着手 1】precommit-audit 側。チケットは reviewgate と precommit-audit の両方を挙げているが、
+`crates/precommit-audit/src/git.rs:69` の `changed_and_untracked` は今も作業ツリー走査を
+そのまま返す（実測 2026-09-08、`grep -n 'pub fn' crates/precommit-audit/src/git.rs`）。
+層1 は crate 非依存なので再利用できるが、**pre-commit フックは Stop hook ではないので
+transcript_path を受け取らない** — セッション同定の入口を別に決める必要がある（環境変数か、
+overwatch のセッションレジストリか）。これは設計判断なので勝手に埋めない。
+
+【未着手 2】2 例目として追記された pathspec commit × check-doc-claims。
+「作業ツリー全体の整合」を見るチェックが、実際にコミットされる木ではなく working tree を
+検査することに由来する別クラスの欠陥で、層1 では直らない。
+
+したがってチケットは pending のまま残す。
 """
 created_at = 1784607099
-updated_at = 1784747310
+updated_at = 1788913058
 weight = 0.0
 issue_number = 292
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/292"

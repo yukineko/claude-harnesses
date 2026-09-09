@@ -1,5 +1,3 @@
-
-
 [[task]]
 id = "0ba79281"
 title = 'CLAUDE.md: Windows で成立しない cargo 手順 (. "$HOME/.cargo/env") を直す'
@@ -13359,7 +13357,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
 status = "done"
-notes = """
+notes = '''
 実測 2026-08-17、測定点 f1131a36 (local == origin/main、ahead/behind = 0/0)、WSL2 linux-x86_64、worktree session-52834a1f。
 
 【何が起きているか】
@@ -13449,7 +13447,7 @@ control (dead_clean_worktree_is_removable) とその削除理由も記録され�
 
 
 --- 並行セッションが同じチケットに書いた追記 (統合時に連結。共通前置部は重複するため除去) ---
-5. `git rev-list --left-right --count HEAD...origin/main` → `0\\t0` (未 fetch の remote に居るのではない)
+5. `git rev-list --left-right --count HEAD...origin/main` → `0\t0` (未 fetch の remote に居るのではない)
 --- CLOSED 2026-09-07 (測定点 b5135ffd, linux-x86_64) ---
 【消失は確定。回収は不可能】
 git fetch でリモートの全ブランチ・タグを取得した後も回収できない:
@@ -13486,7 +13484,7 @@ charter と各 notes が「375587a2 の RED を 2026-08-14 に読み直して裁
 ことになっていた**。これは CLAUDE.md 第4節が最も重く禁じる「確かめていないことを
 確かめたかのように報告する」の在庫版である。close するが、この誤りは訂正せず
 そのまま残す — 次に同種の記述を見た者が疑えるようにするため。
-"""
+'''
 created_at = 1786943936
 updated_at = 1788907595
 weight = 0.0
@@ -18972,3 +18970,84 @@ notes = """実測 2026-09-09。python3 -c "print(open('.githooks/pre-commit').re
 created_at = 1788947185
 updated_at = 1788947185
 weight = 0.0
+
+[[task]]
+id = "572c8640"
+title = "condukt の diffrisk_record ユニットテストが全ターゲット実行でのみ flaky に落ちる — 台帳パスが tempdir ではなく共有 state ルートを指している"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flaky-test",
+    "p1",
+]
+status = "pending"
+notes = """
+実測 2026-09-10、測定点 59563fde (merge 直後の main)。同一条件で 3 回実行し 1 回だけ赤。
+
+  run1 cargo test -p condukt --no-fail-fast          -> 768 passed / 1 FAILED
+       diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded
+  run2 cargo test -p condukt --bin condukt --no-fail-fast -> 769 passed / 0 failed
+  run3 cargo test -p condukt --no-fail-fast          -> 全 green (34 test-result 行すべて ok)
+  単独実行 (--exact でこのテストのみ)                  -> 1 passed
+
+内容起因ではない。この merge は crates/condukt/src/ を 1 バイトも変えていない
+(git diff e6b9184e..59563fde -- crates/condukt/src/ = 0 bytes)。
+
+疑わしい機構 (未確定、要検証): crates/condukt/src/diffrisk_record.rs:500 の当該テストは
+cwd と wt を tempfile::tempdir() で作るが、台帳パスだけは Config::load() と
+state::project_state_dir() から導いている (同 504-507 行)。つまり台帳は tempdir の外、
+実際の共有 state ルート配下に落ちる。run2 (bin ターゲットのみ) が緑で run1/run3
+(全ターゲット同時) でのみ落ちたことは、cargo が別プロセスとして並行実行する
+integration テストとの干渉と整合する。
+
+判定不能な点: 干渉相手を特定していない。この merge が worktree_reconcile.rs に
+union で 7 本のテストを足しているので、その fixture が触る state ルートが
+同一かどうかを先に確かめること。同一でなければ別の integration テストが相手である。
+
+見分け方: (1) 当該テストの ledger を tempdir 配下へ閉じ込めて 10 回連続実行し赤が消えるか、
+(2) 消えるなら共有 state ルートが原因と確定、(3) 消えないなら Config::load() が読む
+設定自体が並行実行で書き換わっている。
+
+再現が 1/3 なので、修正の検証は単発実行ではなく反復実行 (最低 20 回) で行うこと。"""
+created_at = 1788978970
+updated_at = 1788978970
+weight = 0.0
+issue_number = 470
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/470"
+
+[[task]]
+id = "348ae92b"
+title = "blastguard の redirect 誤検知が構文クラスをまたいで再現する — 4 例目は 2>&1 (ファイルを1つも書かない)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+status = "pending"
+notes = """
+c5f21147 の追加証拠。2026-09-10 の 1 セッションで 4 回ブロックされ、いずれもファイル書き込みは 0 件だった。
+
+  (1) 'v>1]'  … Python のリスト内包の比較演算子
+  (2) '6:'    … len(ours)>6 の比較演算子 (スライス添字を伴う)
+  (3) '2>&1'  … stderr を stdout へ束ねる複製リダイレクト。truncate しない
+  (4) '/path/merge-msg.txt' … 本物の truncate リダイレクトだが、対象は存在しないファイル
+
+(3) が新しい。fd 複製 (2>&1) は POSIX 上 open(O_TRUNC) を伴わないので、
+truncate の検出器がこれを拾うのは構文解析の誤りであって閾値の問題ではない。
+(4) はメッセージの 'an existing file' という断定が、blastguard が実行していない
+stat を主張している点で c5f21147 の指摘と同じ。
+
+影響: いずれも別構文へ書き換えれば通るため、CLAUDE.md 4 が禁じる 'ゲートを黙らせる'
+方向への圧力が実務上かかり続ける。本セッションでは書き換えず、毎回逐語で宣言して
+別ツール経路 (Write ツール / スクリプトファイル) に落とした。
+
+完了条件: (a) 2>&1 と、リダイレクトを含まない比較演算子が誤検知されないこと、
+(b) それぞれに RED を先に観測した回帰テストがあること、
+(c) 存在しないファイルへの truncate リダイレクトに対して 'an existing file' と
+書かない (stat していないなら断定しない)。"""
+created_at = 1788978972
+updated_at = 1788978972
+weight = 0.0
+issue_number = 471
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/471"

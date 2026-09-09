@@ -6665,10 +6665,10 @@ tags = [
     "dod9",
     "p1",
 ]
-status = "pending"
+status = "done"
 notes = "main.rs:274 consults compass::charter_freshness returning Option Verdict; None skips the freshness check and falls through to auto-drive the backlog queue. compass.rs folds FIVE distinct outcomes into None: binary genuinely absent (probe false), spawn failure, invocation timeout (recv_timeout empties then parse yields None), unparseable stdout (from_slice ok None), and wait error. Only the ABSENT case justifies proceed (soft-dep: a repo without compass is unaffected). The present-but-undetermined cases (hung/slow/crashed/garbage compass) mean freshness cannot be determined, which per CLAUDE.md section 3 must resolve restrictive (stand down), yet here they proceed to blind-drive a possibly-stale charter, violating flows own never-blind-drive-a-stale-charter invariant. REACHABLE and active: compass is installed in this repo and the test hung_compass_invocation_returns_promptly_with_graceful_none confirms a hung compass returns None which then drives. Fix: make charter_freshness tri-state (Determination Verdict or an enum Absent/Undetermined/Known) so only Absent proceeds and Undetermined stands down like a stale verdict does. F to P: a disinterested agent points autoflow at a hanging fake compass binary with a non-empty backlog, observes autoflow drives (decision not block) rather than standing down (RED), then the tri-state fix makes Undetermined stand down (GREEN). cargo test and clippy green, autoflow version 3-file lockstep bump. This refines the already-landed freshness gate 89efa84b."
 created_at = 1785007853
-updated_at = 1785007853
+updated_at = 1788982128
 weight = 0.0
 issue_number = 66
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/66"
@@ -8930,10 +8930,10 @@ title = "propguard: 一部の git サブコマンドの diff が読めなくて�
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
+status = "done"
 notes = "87dbfbb8 と同一ブランチ (9a2eb9f0) で実装済み。検証者が Mode::Subprocess の到達性を実測で確定 (実 all-PASS checker で properties-satisfied/ALLOW に到達し、partial diff では diff-read-failed で block)。merge は 87dbfbb8 の F1/F4 と同時。"
 created_at = 1785968746
-updated_at = 1786021408
+updated_at = 1788982129
 weight = 0.0
 issue_number = 170
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/170"
@@ -9995,10 +9995,10 @@ tags = [
     "merge-integration",
     "p1",
 ]
-status = "pending"
+status = "done"
 notes = "observation 2026-08-11, 測定点 010de418。2本の branch に実装済みだが main に入っていない。(A) fix/trust-and-sentinel (82b960f9 + 538a8ac8, worktree w-trustsentinel): 5151605e の F1/F3/F4 を閉じた。F1 は harness_core::trust::is_listed (trust_all 短絡を含まない membership 述語) を新設し、condukt の worktree 伝播ゲートと read-back を is_trusted から is_listed へ移した。is_trusted の意味は不変 (trust_all || is_listed) で、他5箇所の呼び出し元は read 判定なので影響なし。実測 green: condukt worktree_trust_tests 22件 / donegate 6件+1件 / harness-core trust 2件。**merge 未了の理由**: この branch は古い main から切られており condukt を 0.7.121 から 0.7.122 へ上げているが main は既に 0.7.124。merge すると9ファイルが conflict する (marketplace.json / Cargo.lock / condukt と donegate の plugin.json と Cargo.toml / donegate main.rs / harness-core Cargo.toml と trust.rs)。うち trust.rs と donegate main.rs は版番号ではなく内容の conflict。**現在の main へ rebase してから merge すること。** 版番号は rebase 後に main の現況から取り直す (condukt は 0.7.125、donegate は 0.1.26、harness-core は 0.2.6 が起点になる見込みだが実測すること)。(B) fix/backlog-store-divergence (edd5977b, worktree w-storediv): 5ba13c3e の完了条件(2)。crates/backlog/src/divergence.rs を新設し、旧 home ストアに当該 project の pending があるのに解決ストアが空のとき黙って空を返さない三値 (Absent / Unreadable / Scanned) を list と next と session-start に配線した。解決ストアが空のときだけ非0で block し、作業がある場合は exit 0 + stderr 警告に留める (非0にすると overwatch の shell_soft が (none) を描画し condukt の 2>/dev/null || true が実項目を捨てるため)。この判断根拠の消費者表は divergence.rs のモジュール doc にある。backlog 208件 green。こちらは main から切ったので conflict しない見込みだが未検証。**どちらも rollout 未実行**なので稼働ハーネスには未反映。harness-core が 0.2.5 へ上がるため (A) を入れると fleet 全体の再配布が要る。"
 created_at = 1786375536
-updated_at = 1786375536
+updated_at = 1788982130
 weight = 0.0
 issue_number = 233
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/233"
@@ -13075,7 +13075,7 @@ title = "precommit-audit の .audit-skip は共有ツリー上の一度きりフ
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
+status = "done"
 notes = """
 測定 2026-09-08、測定点 5a9e1a18。
 
@@ -13106,7 +13106,7 @@ done_criteria: セッションA が発行した skip を セッションB の pr
 テストは利害関係のない Agent が書き、先に RED を観測すること (第2節)。
 親 b173f2b9 / 826c29bf"""
 created_at = 1788821470
-updated_at = 1788821470
+updated_at = 1788982131
 weight = 0.0
 issue_number = 442
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/442"
@@ -16270,10 +16270,10 @@ title = "blastguard に承認の記憶 (TOFU) を足す — project 内に閉じ
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
+status = "done"
 notes = 'ユーザー裁定 2026-08-24。taintguard 撤去 (0521d013) の後継として、利便性を壊さずに危険を止める判定をここに置く。【仕様 — ユーザーの指示を逐語で保存】(1) taintguard はコマンドの内容を見ずに Bash というツール種別ごと落としていたため利便性そのものに影響した。(2) 基本的に project 内のファイル、あるいは過去に実行されていて問題ないファイルまで検出されなくてもよい。(3) もちろん初回に強い権限で実行しようとするときは Ask すべき。(4) 過去に実行されても変更があったときは再度判断すべき。(5) パラメータが違えば害にもなるので、これらの検証が必要。(6) そもそもそういった shell はつくらない、そういった shell の作成自体を監査する必要がある。(7) パラメータがあっても影響が project 内部ならよいが、外部に及ぶのであれば Ask するか禁止を報告する。(8) shell の実行パスを本来は引数でもらってはいけないが、その場合でも 2 つ上の親を指す形や cwd 相対からの実行についても path を正規化して検査すべき。【既にあるもの — 作り直さない】(8) と (7) の軸は実装済みである。crates/blastguard/src/scope.rs の module doc が逐語で「WHERE a destructive operand lands — the axis crate::detect s delete rules did not have」と述べ、Placement は Inside / IsRoot / Outside の三分。classify(operand, cwd) が cwd を受けて相対パスを解決し、normalize_abs が字句的に親参照を畳む (テストが /a/b/../c は /a/c、/.. は / を固定。コメント「POSIX: /.. is /. Popping past the root simply stays at the root」)。**畳んだ後も親参照が残る場合は Determination::undetermined("operand still contains an unresolved ..") を返す** (scope.rs:364-367) ので、第3節が既にパス正規化へ適用されている。テスト scope.rs:591-599 は cwd を /home/yuki/proj/crates として ../etc/passwd と ../../usr/lib と /home/yuki/proj/../usr がいずれも inside_root ではないことを固定している。egress とリモートペイロード実行も tests/egress_exec_closure.rs で被覆済み。したがって不足しているのは **記憶** だけである (永続ストアは無く、BLASTGUARD_ASK 以外に state dir 系の識別子は 0 ヒット)。【踏んではいけない罠 — いずれも実測で確認済み】(a) **素朴な prefix 判定で「project 内なら通す」を書かない。** scope.rs は is_temp_scratch という述語を universal bypass として撤去した経緯を逐語で記録している: 「a raw starts_with prefix test over a path whose .. was not resolved, so /tmp/../etc/hosts passed it and thereby disabled the whole rule」。同じ穴を作り直すことになる。(b) **memo の鍵に rule_id を使わない。** crates/blastguard/src/rule_id.rs の doc が逐語で「An unrecognized reason … falls back to "unknown" rather than guessing」と述べる。unknown を鍵にすると 1 件承認した時点で将来のあらゆる unknown が承認済みになる。鍵はコマンド固有 (正規化コマンド + パラメータ + 対象の内容ハッシュ) にする。(c) **symlink 未解決のパスを鍵にしない。** crates/blastguard/src/exclude.rs:315 は逐語で「Deliberately not canonicalize: the path may not exist yet (a cp creating a new file)」と述べ、これは正しい理由だが結果として symlink が解決されない。TOFU と組み合わせると「一度承認してから symlink を張り替える」で承認を持ち越せる — 記憶が新しく持ち込む攻撃である。鍵は canonicalize 済みの実体とし、取れなければ承認を無効化して Ask に倒す。(d) **cwd_prefix_bypass_closure.rs の anti-vacuity control を green に保つ。** あの test は保護外への 2 段コマンドと保護ファイルを読むだけの 2 段コマンドが Allow のままであることを固定しており、doc が逐語で「otherwise everything is Deny now would be as vacuous a false-clear as everything is Allow was before」と述べる。【第3節が新しく適用される面 — 永続化は新しい判定面である】ストアが読めない → 「承認済み」ではなく Ask。ハッシュが取れない → 承認を無効化して Ask ((4) を担保する唯一の機構なので、取得失敗を承認側に倒すと仕様が空になる)。エントリのパース不能 → そのエントリを承認として扱わない。空のストア → 「承認なし」= 初回 = Ask であり「問題なし」ではない。【アンチ空虚の対照が必須】承認の記憶が実際に Ask を減らしていることと、減らしすぎていないことを同時に固定する: (i) 同一コマンド + 同一パラメータ + 内容不変の 2 回目が Ask にならないこと、(ii) パラメータだけ変えた 2 回目が Ask に戻ること、(iii) 対象の内容だけ変えた 2 回目が Ask に戻ること、(iv) 効果が project 外に及ぶものは承認済みでも Ask または Deny のままであること。RED 先行で観測する。【(6) は別レイヤ — DoD13 を unpark する】「そういった shell の作成自体を監査する」は charter の DoD13 (2026-08-21 の人間裁定で追加、現在 parked) がそのまま該当する。逐語「shell スクリプトにおいて『解決の失敗』が『もっともらしい既定』へ黙って化ける形が機械検出され、検出時に local ゲート (pre-commit) が非 0 で終了する」。根拠として挙がっているのが f9bba02a (nullglob で glob が消え、引数 0 個の ls が PWD を列挙して成功し、cp -f が repo 直下のファイルを 38 回上書きした件) で、まさに「パラメータ次第で外部に及ぶ shell」の実例。新しい糸を立てず DoD13 を unpark して使う。本 item の実装が landed した後に着手する。【この item が閉じても閉じない穴】d3721c8a (provenance 軸の enforcement 点が無くなった件) は直交する軸なので、本 item では閉じない。関連: 0521d013, d3721c8a, DoD13, scope.rs, exclude.rs, rule_id.rs'
 created_at = 1787540824
-updated_at = 1787540824
+updated_at = 1788982132
 weight = 0.0
 issue_number = 402
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/402"
@@ -16743,10 +16743,10 @@ title = "fe84d350 と e99f61e4(b) は unblock 済み — 前提だった『RED �
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
+status = "done"
 notes = "fe84d350 の notes と done criteria 4、および e99f61e4 の notes は『375587a2 の RED 3 本が失われたので実行不能、書き直しが必要』という前提で書かれている。**この前提は 2026-09-09 にこの mac 上で反証された** (122a34d1 に逐語の観測)。commit も branch も 3 本の RED テストも無傷で存在し、origin へ push して保全済み。したがって: (1) fe84d350 の done criteria 4『RED を書くところからやり直す必要がある』は不要 — git checkout で回収できる。(2) 『再構成した RED は新規に RED を観測し直すものとして扱うこと』という注意も不要になる — 元の RED 観測の証跡そのものが commit として現存するため。(3) e99f61e4(b) が待っていた 2026-08-14 の death criterion 裁定は既に降りており、実装を止めていたのは失われた RED だけだったので、**両方とも着手可能**。回収方法: git checkout condukt/run-20260814-005232-58819/run-20260814-005232-58819/t2-occupancy-undetermined -- crates/condukt/tests/worktree_reconcile.rs、または当該 branch を base に作業する。注意: この ticket は fe84d350 / e99f61e4 の notes を書き換えていない (backlog edit --notes は追記ではなく置換で、長い notes を shell 引数経由で往復させると backtick が食われて破壊されるため)。着手する者は必ず本 ticket と 122a34d1 を先に読むこと。"
 created_at = 1788907656
-updated_at = 1788907656
+updated_at = 1788982133
 weight = 0.0
 issue_number = 466
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/466"
@@ -19051,3 +19051,200 @@ updated_at = 1788978972
 weight = 0.0
 issue_number = 471
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/471"
+
+[[task]]
+id = "19c359d0"
+title = "blastguard の frozen テスト 2 本が HEAD 8c056f05 で RED — うち 1 本は /etc への stderr リダイレクトが Deny されなくなった退行の可能性"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "red",
+    "p1",
+]
+status = "pending"
+notes = """
+実測 2026-09-10、測定点 8c056f05 (= worktree session-25763e04 の 50e2fa0a と同一ツリー)、測定コマンド: cargo test -p blastguard --no-fail-fast。
+
+lib 318 passed / 1 failed、tests/scoped_destructive 20 passed / 1 failed。他の 16 テストバイナリは全て green。
+
+RED 1: detect::tests::bg2_fd_dup_and_safe_targets_stay_allowed
+  crates/blastguard/src/detect.rs:9165 で panic。逐語:
+    assertion failed: bash("cargo test 2[REDIR] /etc/fstab").is_deny()
+  ([REDIR] は本 notes を書くときのシェル解釈を避けるための置換。実体は数字 2 の直後に大なり記号 1 文字。)
+  つまり /etc/fstab を stderr で上書きするコマンドが Deny ではなくなっている。
+
+RED 2: scoped_destructive::relaxed_truncating_forms_inside_the_project
+  crates/blastguard/tests/scoped_destructive.rs:243 で panic。逐語:
+    is confined to a safe root, so it must Ask (not refuse); got Deny("...destroys the files current contents and it exists, and it is not inside a git work tree - nothing holds a second copy of these bytes")
+  対象は $TMPDIR 配下の /var/folders/... 。macOS の TMPDIR は git work tree の外なので、
+  f18134da が入れた「戻せるか」軸が safe root 内でも Deny に倒れる。
+
+帰属 (実測): git log --oneline -- crates/blastguard/src/detect.rs と .../tests/scoped_destructive.rs の
+両方の直近 commit が f18134da (fix(blastguard): Ask の判定軸を「効果の有無」から「戻せるか」へ置き換える、0.2.59)。
+TOFU 承認記憶 (approve.rs、直近 commit 56d43f1b) とは別系統であり、tests/approval_memory.rs は 9/9 green。
+
+本物の欠陥か意図した挙動かの見分け方:
+ - RED 1 は「意図した緩和」ではありえない側の形 (システムファイルの破壊)。f18134da が
+   fd 複製・リダイレクト先の判定を変えた際に /etc 配下の絶対パス保護が落ちていないかを、
+   detect.rs の redirect 経路を読んで確認する。落ちているならゲートの退行。
+ - RED 2 は「テストの前提が macOS で成立しない」可能性が高い (Linux の /tmp は git work tree の外だが
+   テストは safe root だと仮定している)。実体が正しく、テストの fixture が OS 依存なら
+   テスト側を hermetic にするのが正。ただし「テストが環境依存だから」で赤を黙らせないこと。
+
+なぜ誰も気づいていなかったか: 本件は backlog c4321fc2 / 65bfb279 / 35968776 が指摘する
+「workspace のテストを走らせるゲートが存在しない」の実例 3 件目。pre-commit / pre-push は
+cargo check --workspace までで cargo test を走らせない。"""
+created_at = 1788982169
+updated_at = 1788982169
+weight = 0.0
+issue_number = 472
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/472"
+
+[[task]]
+id = "881d7933"
+title = "check-fail-open.py の READDIR_WINDOW=6 が 1 行足りず、b0cacd15 が名指しした 2 サイト目 (path_shadow.rs の list_binary_names) を検出できない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "failopen",
+    "scripts",
+    "p2",
+]
+status = "pending"
+notes = """
+実測 2026-09-10、測定点 8c056f05、測定コマンド: python3 scripts/check-fail-open.py --all
+
+b0cacd15 の完了条件は「上記 2 サイトが検出されること」。実測:
+ - サイト 1 crates/harness-status/src/plugins.rs:108 dir_nonempty は検出される。
+   逐語出力: crates/harness-status/src/plugins.rs:108: [read-unwrap-or-empty] (advisory) .unwrap_or(false)
+ - サイト 2 crates/harness-status/src/path_shadow.rs:99-108 list_binary_names は検出されない
+   (--all の全出力に path_shadow.rs のヒットが 1 件も無い)。
+
+原因 (推測ではなく行数で決まる):
+  path_shadow.rs:100 が std::fs::read_dir(dir)、:107 が .unwrap_or_default()。距離は 7 行。
+  scripts/check-fail-open.py:346-349 は
+    lo = max(0, idx - READDIR_WINDOW)
+    if any(RS_IO_CALL.search(code[j]) for j in range(lo, idx + 1))
+  で、READDIR_WINDOW は :111 で 6。idx は 0 起点なので unwrap の idx=106、lo=100、
+  range(100,107) が見るのは 0 起点 100..106 = 1 起点 101..107。read_dir のある 1 起点 100 行目
+  (0 起点 99) はちょうど 1 つ外。off-by-one というより窓幅がこのサイトに 1 足りない。
+
+実体側も未修正のまま残っている (逐語 crates/harness-status/src/path_shadow.rs:99-108):
+  fn list_binary_names(dir: &Path) -> Vec<String> {
+      std::fs::read_dir(dir).map(|it| { ... .collect() }).unwrap_or_default()
+  }
+同じファイルの直下 :110-119 の scan_cache_bins は既に三値化されており
+「A missing cache root is a legitimate absence ... yields Known(vec![]); any OTHER read_dir error」
+と docstring に書いている。b0cacd15 が指摘したミラーギャップがそのまま残っている。
+
+本物の欠陥か意図か: 窓幅の拡大は誤検知を増やしうるので、単純に 7 や 8 にするのが正しいとは限らない。
+より確実なのは「read_dir から unwrap までを行数ではなく式の連鎖 (.map(...).unwrap_or_default() が
+同一 statement か) で判定する」こと。どちらを採るかは人間裁定。ただし現状は
+「baseline の数字がこのサイトを含んでいない」ので、ラチェットの母数が過小である点は事実。
+
+b0cacd15 は本件のため PARTIAL 判定として pending のまま残した。"""
+created_at = 1788982197
+updated_at = 1788982197
+weight = 0.0
+issue_number = 473
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/473"
+
+[[task]]
+id = "5a5653f5"
+title = "ff17a108 の再開情報 (branch / commit / worktree) がこの mac から到達不能 — machine-local な再開手掛かりを backlog に書く形が壊れている"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "portability",
+    "p2",
+]
+status = "pending"
+notes = """
+実測 2026-09-10、測定点 8c056f05。ff17a108 の staleness 検証中に判明。
+
+ff17a108 の notes は再開手順として次を指す:
+ - t3 worktree: /home/hiroyuki_nakayama/condukt-worktrees/run-20260818-143719-13654-t3
+ - t3 commit: f7b6d149 / 1854f2ea / 596c2ab8
+ - API 契約の正典: (t3-worktree)/.scratch/t3-scope-api-contract.md
+
+この mac (/Users/yuki/src/harness) での実測:
+  git cat-file -t f7b6d149  =>  fatal: Not a valid object name f7b6d149
+  git branch -a --list "*run-20260818*"  =>  0 件
+  ls /home/hiroyuki_nakayama  =>  存在しない (この機械は darwin)
+  grep -rn contract_a_pending_item_is_announced crates/  =>  0 件
+  crates/hypothesis: version 0.1.13 (Cargo.toml:5 と plugin.json:3)。notes は worker が
+  0.1.13 から 0.1.14 へ上げる前提なので、実装は 1 行も landed していない。
+
+つまり ff17a108 は「別マシンの worktree と、その worktree にしか無い .scratch/ の設計文書と、
+push されていない commit」を唯一の情報源にしており、機械が変わった時点で再開不能になっている。
+これは backlog 122a34d1 (condukt run branch が origin へ push されず machine-local に留まる) と
+同じクラスだが、そちらは commit の消失、こちらは「起票の本文が到達不能なポインタだけで出来ている」形。
+
+本物の欠陥か意図か: ff17a108 の冒頭は逐語で「RID とスコープが worktree 内の .scratch/RESUME.md にしか
+無く、worktree 削除で失われるため backlog に固定する」と書いており、起票者は保全のつもりで書いている。
+つまり意図は正しく、手段が足りていない (パスと SHA を書いても、その先が push も同期もされていなければ
+保全にならない)。見分ける必要は無く、対策の設計だけが要る。候補:
+ (1) 再開情報を書くときは branch を必ず origin へ push し、push 済みであることを起票時に検証する。
+ (2) .scratch/ の設計文書 (API 契約の正典など) は worktree 外 (repo 内の docs/ か backlog notes 本体) に置く。
+ (3) machine 名を明記し、別マシンから読んだときに「この機械には無い」と分かるようにする。
+
+ff17a108 自体は本件のため PARTIAL 判定として pending のまま残した (実装が絶対に landed していないことは
+確定しているが、残作業を再開する手段がこの機械には無い)。"""
+created_at = 1788982221
+updated_at = 1788982221
+weight = 0.0
+issue_number = 474
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/474"
+
+[[task]]
+id = "3bd68bd3"
+title = "42b7c9af は done だが 2d2b8b63 の「統合すれば必然的に閉じる」は成立していない — blastguard Decision と tdd ChangeScan は今も独立定義"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "typegate",
+    "failopen",
+    "p2",
+]
+status = "pending"
+notes = """
+実測 2026-09-10、測定点 8c056f05。backlog の staleness 監査中に判明。
+
+2d2b8b63 (harness-core に共有 Verdict 三値型を新設し全ゲートを移行させる) の notes 末尾は逐語で
+「42b7c9af (型契約で構築不能化) に統合。同一の証拠・同一の対象で、42b7c9af を実装すれば必然的に閉じる」
+と書いている。42b7c9af は status=done。しかし 2d2b8b63 の完了条件の後半
+「既存 verdict 型が新型の newtype か再エクスポートになり」は満たされていない。
+
+実測 (2d2b8b63 が名指しした 4 件の再発明を 1 件ずつ):
+ - crates/propguard/src/gate.rs: pub enum CheckOutcome  =>  消滅。gate.rs:38 で
+   use harness_core::verdict::Determination を使っている。移行済み。
+ - crates/reviewgate/src/review.rs: enum ReviewerResult  =>  消滅。review.rs:33 で
+   use harness_core::verdict::Verdict。移行済み。
+ - crates/blastguard/src/model.rs:29  pub enum Decision { Allow, Deny(String), Ask(String) }
+   =>  今も独立定義。harness_core::verdict の newtype でも再エクスポートでもない。
+ - crates/tdd/src/git.rs:30  pub enum ChangeScan { NotRepo, Failed, Files(Vec<String>) }
+   =>  今も独立定義。同ファイル :43 に AddedScan という同型の 2 つ目もある。
+
+42b7c9af 自身の完了条件は「gate crate 2 つ以上が移行済み」だったので、42b7c9af は正しく done。
+成立していないのは 2d2b8b63 側の予測 (「必然的に閉じる」) の方である。
+
+本物の欠陥か意図か — 見分ける材料:
+ blastguard Decision は model.rs:20-28 の docstring が逐語で「exhaustive match is load-bearing ...
+ With #[non_exhaustive] every consumer would need a wildcard arm, and a wildcard arm next to Allow is
+ where a future cannot determine variant would silently land as permission to proceed」と書いており、
+ Allow/Deny/Ask という PreToolUse 固有の 3 値は Verdict の Clean/Violation/Undetermined とは
+ 意味が違う。したがって「移行しないのが正しい」可能性が高い。tdd ChangeScan / AddedScan も
+ NotRepo (適用外) を持つので Determination<Vec<String>> にそのまま畳めない。
+ つまり 2d2b8b63 の完了条件の文言 (4 件すべてを newtype 化) の方が現実に合っていない疑いがある。
+
+やること: 2d2b8b63 の完了条件を「4 件すべて」から「移行できるものは移行し、できないものは
+なぜ Verdict に畳めないかを型の docstring に書く」へ彫り直すか、blastguard/tdd の 2 件を
+明示的に対象外と宣言して close するかを人間が裁定する。
+2d2b8b63 は本件のため PARTIAL 判定として pending のまま残した。"""
+created_at = 1788982244
+updated_at = 1788982244
+weight = 0.0
+issue_number = 475
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/475"

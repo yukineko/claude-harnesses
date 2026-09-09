@@ -23,10 +23,15 @@
 //! For a gate, "cannot determine" blocks the user. For a GC, the restrictive
 //! side is **do not delete** — deletion is the only irreversible operation
 //! here. So every assertion below that involves an unreadable/unattributable
-//! input asserts `removable == false`, and the two anti-vacuity controls
-//! (`dead_clean_worktree_is_removable`, `progressing_task_worktree_is_live`)
-//! exist so that an implementation which answered "undetermined" to everything
-//! could not pass this file.
+//! input asserts `removable == false`, and the three anti-vacuity controls
+//! (`dead_clean_worktree_is_removable`,
+//! `progressing_task_worktree_is_live_and_never_removable`,
+//! `unclaimed_worktree_with_advancing_activity_is_live`) exist so that an
+//! implementation which answered "undetermined" to everything could not pass
+//! this file. The first is the end-to-end control that a real directory can
+//! still reach `removable == true`; the other two are the control that the
+//! `live` verdict is reached by observing something, on the claimed path and on
+//! the unclaimed-witness path respectively.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -262,6 +267,13 @@ fn removable(report: &serde_json::Value, name: &str) -> bool {
     entry(report, name)["removable"]
         .as_bool()
         .expect("entry has a boolean `removable`")
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
 }
 
 /// A minimal run-state document with one task in `status` pointing at `wt`.
@@ -524,6 +536,206 @@ fn dead_clean_worktree_is_removable() {
     assert!(
         removable(&report, "wt-clean"),
         "a dead, clean, attributable worktree must be removable; entry: {e}"
+    );
+}
+
+// -- 3b. Recovered RED tests from commit 375587a2 (2026-08-14) --------------
+//
+// These three were written by an agent that wrote no implementation and were
+// observed RED against the pre-fix binary; the commit is recovered verbatim
+// from branch
+// `condukt/run-20260814-005232-58819/run-20260814-005232-58819/t2-occupancy-undetermined`
+// (backlog `122a34d1`, `a3ee51c9`). The ONLY edit made while re-landing them is
+// the `Fixture::new` tag of the first one: the tag `dead-clean` it was written
+// against is now held by `dead_clean_worktree_is_removable`, and `Fixture::new`
+// keys its scratch directory on `(pid, tag)` and `remove_dir_all`s it, so two
+// tests sharing a tag destroy each other's fixture when the harness runs them
+// in parallel. No assertion, message, or fixture SHAPE was changed.
+
+/// RECOVERED from 375587a2, where it was a REWRITE of the then-existing
+/// `dead_clean_worktree_is_removable`. In this tree it does not replace that
+/// test — the "(a)/(b)/(c)" lettering of section 3 above is NOT this one's.
+///
+/// This fixture — a clean, attributable worktree under a state
+/// root that is perfectly readable and simply EMPTY — used to assert
+/// `occupancy == "dead"` and `removable == true`, i.e. it wrote "condukt has no
+/// run for you, therefore you are dead" down as the specification.
+///
+/// An empty-but-readable state root is not evidence about this directory at
+/// all. It is the state every checkout is in before its first condukt run, and
+/// it is what any worktree created outside condukt (every §8 `session-*` tree,
+/// every hand-made `git worktree add`) looks like forever. So the same fixture
+/// now pins the opposite: no claim plus no witness is `undetermined`, and
+/// undetermined keeps the directory.
+///
+/// What this test STOPS proving, stated rather than glossed over: it was the
+/// end-to-end control that a real directory can reach `removable == true` at
+/// all, so it was what would have caught an implementation that made the whole
+/// GC vacuous. That property is not covered by THIS test.
+///
+/// CORRECTED WHEN RE-LANDED (2026-09-09): the original of this paragraph
+/// pointed at `.scratch/t2-testwriter-notes.md` and said the lost property was
+/// uncovered. Both statements are false in this tree and are fixed here rather
+/// than carried over. The scratch file was never part of the repository, and
+/// the lost end-to-end property was revived by `dead_clean_worktree_is_removable`
+/// in commit `5bb3579f`, which supplies all three death conjuncts for real
+/// (frozen signals, a window collapsed to 0 across two probes, and a readable
+/// transcript store with no directory for the path) and pins that the worktree
+/// reaches `dead` + `removable == true`.
+#[test]
+fn unclaimed_clean_worktree_with_no_witness_is_not_removable() {
+    let f = Fixture::new("recovered-noclaim-nowitness");
+    let _wt = f.add_worktree("wt-clean", "feat/clean");
+
+    let report = f.reconcile_json(&[]);
+    assert_eq!(
+        report["state_scan"]["readable"], true,
+        "fixture precondition: the state root is readable, so an undetermined \
+         answer here cannot be the already-covered unreadable-state path: {report}"
+    );
+    assert_eq!(
+        report["state_scan"]["runs"], 0,
+        "fixture precondition: this state root is EMPTY — the point of the test \
+         is that emptiness is not evidence: {report}"
+    );
+
+    let e = entry(&report, "wt-clean");
+    assert_eq!(e["attribution"]["value"], "this-repo", "entry: {e}");
+    assert_eq!(e["dirty"]["value"], false, "entry: {e}");
+    assert_eq!(
+        e["occupancy"]["value"], "undetermined",
+        "a readable-but-empty state root says nothing about who is working in \
+         this directory; reporting the KNOWN value `dead` claims an observation \
+         that was never made; entry: {e}"
+    );
+    assert!(
+        !e["occupancy"]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .trim()
+            .is_empty(),
+        "an undetermined occupancy must say why; entry: {e}"
+    );
+    assert!(
+        !removable(&report, "wt-clean"),
+        "undetermined occupancy must never authorize an irreversible delete; entry: {e}"
+    );
+    assert_eq!(
+        report["removable_count"], 0,
+        "the report's own summary must agree with the per-entry decision: {report}"
+    );
+}
+
+/// The core fix, in the shape the defect was measured in: a worktree that NO
+/// running condukt task claims must be `undetermined`, never `dead` — even when
+/// condukt's run state is complete, readable, and full of other runs.
+///
+/// Everything else about this entry is positively known and permissive: git
+/// registers it, so it is attributable to this repo; `git status` runs and is
+/// empty, so it is clean. The ONLY input that used to make it `dead` is the
+/// absence of a claim — and the index this absence is read from contains only
+/// RUNNING tasks that recorded a `worktree`, so it can never contain a worktree
+/// condukt did not create. The run written here claims a DIFFERENT path, so the
+/// scan is complete AND non-empty: this cannot pass through the
+/// `corrupt_run_state_makes_occupancy_undetermined` path by accident.
+#[test]
+fn unclaimed_worktree_occupancy_is_undetermined_not_dead() {
+    let f = Fixture::new("unclaimed-undetermined");
+    let _wt = f.add_worktree("wt-unclaimed", "feat/unclaimed");
+    let elsewhere = f.wt_base.join("some-other-tree");
+    f.write_run_state(
+        "some-other-checkout-beef",
+        "run-elsewhere",
+        &run_state_json("run-elsewhere", "t1", "running", &elsewhere, now_secs()),
+    );
+
+    let report = f.reconcile_json(&[]);
+    assert_eq!(
+        report["state_scan"]["readable"], true,
+        "fixture precondition: the scan must be COMPLETE, otherwise this test \
+         would be re-proving the unreadable-state path: {report}"
+    );
+    assert!(
+        report["state_scan"]["running_tasks"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 1,
+        "fixture precondition: the scan must have found a real running task, so \
+         'nothing claims wt-unclaimed' is a genuine absence of a claim: {report}"
+    );
+
+    let e = entry(&report, "wt-unclaimed");
+    assert_eq!(e["attribution"]["value"], "this-repo", "entry: {e}");
+    assert_eq!(e["dirty"]["value"], false, "entry: {e}");
+    assert_eq!(
+        e["occupancy"]["value"], "undetermined",
+        "condukt's index holds only RUNNING tasks that recorded a worktree, so \
+         the absence of a claim is NO INFORMATION about this directory — \
+         reporting it as the KNOWN value `dead` is a claim the evidence does \
+         not support, and it is how a live session tree was reported dead while \
+         it was running a build; entry: {e}"
+    );
+    let reason = e["occupancy"]["reason"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        !reason.trim().is_empty(),
+        "an undetermined occupancy must say WHY — a silent undetermined leaves \
+         the operator unable to tell 'checked' from 'could not check'; entry: {e}"
+    );
+    assert!(
+        !reason.contains("could not be read in full"),
+        "the run state WAS read in full here (state_scan.readable == true), so \
+         blaming an unreadable scan would be a false reason; reason: {reason}"
+    );
+    assert!(
+        !removable(&report, "wt-unclaimed"),
+        "a directory whose occupancy is undetermined must not be deletable; entry: {e}"
+    );
+}
+
+/// RECOVERED from 375587a2. The witness path must be able to reach `live` for a worktree NOTHING
+/// claims. This is the anti-vacuity control for the fix itself: the two tests
+/// above are also satisfied by an implementation that answers a constant
+/// `undetermined` to every unclaimed path and observes nothing at all, and such
+/// an implementation would report the live `session-*` tree exactly as
+/// confidently — and exactly as baselessly — as the old `dead` did.
+///
+/// The witness is not injected. The first probe has no prior snapshot, so it is
+/// undetermined by construction; then real work lands in the worktree (a file
+/// appears, which is what a live session looks like to an outside observer: no
+/// condukt run state, no commit yet, just content moving) and the second probe
+/// observes the worktree's own activity signal advance.
+#[test]
+fn unclaimed_worktree_with_advancing_activity_is_live() {
+    let f = Fixture::new("unclaimed-witness");
+    let wt = f.add_worktree("wt-witnessed", "feat/witnessed");
+
+    // Probe 1: anchors the witness. One observation is never a verdict.
+    let report = f.reconcile_json(&[]);
+    let e = entry(&report, "wt-witnessed");
+    assert_eq!(
+        e["occupancy"]["value"], "undetermined",
+        "a first, unanchored probe cannot witness anything; entry: {e}"
+    );
+    assert!(!removable(&report, "wt-witnessed"), "entry: {e}");
+
+    // Real work in the worktree, with no condukt run state anywhere.
+    std::fs::write(wt.join("worker-notes.md"), "in progress\n").unwrap();
+
+    let report = f.reconcile_json(&[]);
+    let e = entry(&report, "wt-witnessed");
+    assert_eq!(
+        e["occupancy"]["value"], "live",
+        "the worktree's own activity advanced between two probes — that is an \
+         independent witness of liveness, and it must be consulted for a path \
+         no condukt task claims; if this reads `undetermined` the fix is a \
+         constant and nothing is actually being observed; entry: {e}"
+    );
+    assert!(
+        !removable(&report, "wt-witnessed"),
+        "a live worktree is never removable; entry: {e}"
     );
 }
 

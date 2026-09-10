@@ -4860,10 +4860,57 @@ title = "cargo test 中に実 stdin を read する harness-core のテストが
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
-notes = "観測: cargo test --workspace をバックグラウンド(stdin が閉じないパイプ)で走らせると harness_core::hook::tests::headless_and_piped_guards_are_callable_and_pure が read_stdin_if_piped -> read_to_end(stdin) で 38 分ブロックした。sample(1) でスタック採取済み。</dev/null で再実行すると 3333 passed で完走。 / なぜ問題か: ハングするテストは結果を報告しないので、検証装置そのものが fail-open になる(CI ではタイムアウト kill が インフラ起因のフレークとして片付けられやすい)。判定不能を判定に落とせていない典型 / 証拠: crates/harness-core/src/hook.rs:486 -> :187 read_stdin_if_piped -> :158 read_stdin / 完了条件: このテストが ambient stdin に依存せず決定論的に終了する(stdin を注入可能にするか、is_terminal 判定をテスト用に差し替える)ことを、閉じていない stdin 下でも完走する形で固定する"
+status = "done"
+notes = """
+観測: cargo test --workspace をバックグラウンド(stdin が閉じないパイプ)で走らせると harness_core::hook::tests::headless_and_piped_guards_are_callable_and_pure が read_stdin_if_piped -> read_to_end(stdin) で 38 分ブロックした。sample(1) でスタック採取済み。</dev/null で再実行すると 3333 passed で完走。 / なぜ問題か: ハングするテストは結果を報告しないので、検証装置そのものが fail-open になる(CI ではタイムアウト kill が インフラ起因のフレークとして片付けられやすい)。判定不能を判定に落とせていない典型 / 証拠: crates/harness-core/src/hook.rs:486 -> :187 read_stdin_if_piped -> :158 read_stdin / 完了条件: このテストが ambient stdin に依存せず決定論的に終了する(stdin を注入可能にするか、is_terminal 判定をテスト用に差し替える)ことを、閉じていない stdin 下でも完走する形で固定する
+
+--- 完了 2026-09-11、実装 12667081 ---
+
+チケットの主張は HEAD で再現した。判断ではなく観測で確定させた。
+
+【RED — 同一テスト・同一引数、stdin の fd だけを変えた 2 回】
+  control  fd 0 = /dev/null    ⇒ 1 passed (1.6s)
+  probe    fd 0 = 開いた pipe  ⇒ 45 秒経っても判定が一度も報告されない
+
+blocked 中のプロセスから sample(1) で採った実スタック (5 分経過時点):
+  hook.rs:486 (テスト本体)
+    ⇒ hook.rs:187 read_stdin_if_piped
+      ⇒ hook.rs:158 read_stdin
+        ⇒ Take<Stdin>::read_to_end ⇒ read(2) [libsystem_kernel]
+チケットが記載していた経路と完全に一致する。親の cargo を kill しても
+テストバイナリは ppid=1 の orphan として read(2) に居座り続けた。
+
+【修正】
+read_capped<R: Read> と read_if_piped<R: Read>(stdin_is_terminal, r) を
+純粋なコアとして切り出し、ambient な std::io::stdin() / is_terminal() は
+薄いラッパ側だけに残した。完了条件が要求していた「stdin を注入可能にするか
+is_terminal 判定をテスト用に差し替える」の両方を満たしている。
+
+【F to P (同一 probe で対にして観測)】
+  fix を stash: control 1 passed / probe STILL BLOCKED after 45s
+  fix を適用:   control 1 passed / probe 1 passed (0.1s)
+
+【副次の発見 — probe 自身が vacuous だった】
+probe の最初の版は --exact にモジュールパスを渡しておらず
+"running 0 tests ... 322 filtered out" で「何も実行せずに緑」を返していた。
+control も probe も rc=0 で、危うくそれを「修正不要」の根拠にしかけた。
+実行件数が 1 でなければ vacuous として弾くチェックを probe に入れてある。
+これは「何も検証していないテストは常に通る」の実例であり、
+CLAUDE.md 第2節の 2 条件が無条件には成り立たないことの再確認である。
+
+【テストは弱めていない】
+旧テストの本体は最後が `let _ = payload.len();` で、どんな String でも真に
+なる。何も検証していないのでハングしない限り必ず緑だった。新しい本体は
+両分岐の値を assert する。旧コメントがこの ambient 読み取りを
+"keeps the test hermetic and non-flaky" と書いていた点も同一コミットで訂正した。
+
+【残: 利害関係のない agent による網羅テスト】
+第2節(a) に従い、cap 境界 (MAX_STDIN_BYTES) / 非 UTF-8 の lossy decode /
+terminal 分岐の短絡 を突く網羅テストは別 agent に書かせる (dispatch 済み)。
+本チケットの完了条件「閉じていない stdin 下でも完走する」は上の F to P で
+満たしているので、そちらは別途 finding として起票する。"""
 created_at = 1784627338
-updated_at = 1789075563
+updated_at = 1789075754
 weight = 0.0
 issue_number = 294
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/294"
@@ -4963,7 +5010,7 @@ title = "condukt state check-oracle が fallback:true に黙って縮退する�
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
+status = "done"
 notes = """
 
 
@@ -5024,9 +5071,33 @@ Determination<Option<String>> の三値 (Known(Some) / Known(None)=ENOENT の
 ありながら、素の load_decomposition のままである。
 
 修正は agent へ dispatch 済み (別 worktree、RED を先に観測させ、テストは
-利害関係のない別 subagent に書かせ、3 分岐それぞれに mutation を要求)。"""
+利害関係のない別 subagent に書かせ、3 分岐それぞれに mutation を要求)。
+
+--- 完了 2026-09-11、測定点 69ffeabd ---
+
+confirmed 側 (else なし if let 3 段でゲートが丸ごと黙って skip される) を
+修正して merge 済み (実装 2d57c47a、main へ e8bcbe14)。
+
+修正後の実体を main で再測定して確認した:
+  git show main:crates/condukt/src/main.rs → 3865 行目
+  match state::fp_gate_scope(cfg, cwd, &run, &task) {
+      FpGateScope::NoDecomposition => {}          // 観測された不在のみ carve-out
+      FpGateScope::Undetermined(why) => bail!(...) // 判定不能は verify 拒否
+      FpGateScope::Task { requires_fp_oracle, reproduction_tests } => { ... }
+  }
+
+三分岐が型で網羅されているので、read fault / 権限エラー / 非 UTF-8 /
+JSON パース失敗 / task id 不一致 はもう「素通りして verified」にはならず、
+"refusing to verify task ...: cannot determine whether the fail-to-pass
+oracle applies" で bail する。散文の「fails soft (degrade to the legacy
+gate)」も同時に撤去した (legacy gate は 1 つも走らないので嘘だった)。
+
+falsified 側 (fallback:true への縮退) は本チケット本文で既に測り直し済みで、
+現状 Reject になることを確認している。ただしその過程で見つけた
+「run 由来の fallback:true 3 分岐が到達不能で、散文と食い違う」件は
+別チケット e5174b6a として残してある — done ではなくそちらへ引き継ぐ。"""
 created_at = 1784642695
-updated_at = 1789075563
+updated_at = 1789075754
 weight = 0.0
 issue_number = 296
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/296"

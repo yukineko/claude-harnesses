@@ -19321,7 +19321,7 @@ tags = [
     "red",
     "p1",
 ]
-status = "pending"
+status = "done"
 notes = """
 実測 2026-09-10、測定点 8c056f05 (= worktree session-25763e04 の 50e2fa0a と同一ツリー)、測定コマンド: cargo test -p blastguard --no-fail-fast。
 
@@ -19463,9 +19463,68 @@ So the expectation (confined + unrecoverable -> Ask) is RIGHT and is what produc
 fixture fails to set up "confined". The honest repair is to make the fixture hermetic - pass the real
 temp dir as tmpdir via the existing scoped_with helper - which is a fixture repair, not a weakening.
 But it is still an edit to a frozen test, so it needs the human's word before anyone makes it.
+
+=== 2026-09-10 CLOSED, worktree agent-a07923cb77ff8e38c (branch worktree-agent-a07923cb77ff8e38c) ===
+
+The human ruled: make the fixture hermetic via the existing scoped_with helper, keep the assertion
+text and the expected value unchanged. Widening the production TEMP_ROOTS was explicitly rejected,
+and so was leaving it red. RED 2 is now FIXED; RED 1 was already fixed and deployed in 0.2.60/0.2.61.
+Shipped as blastguard 0.2.62 (three-file lockstep, canary rollout, health-gate PROCEED).
+
+RED re-observed first, before any edit, at 627b756a:
+  panicked at crates/blastguard/tests/scoped_destructive.rs:243:5:
+  is confined to a safe root, so it must Ask (not refuse); got Deny("... destroys the file's current
+  contents and it exists, and it is not inside a git work tree - nothing holds a second copy of
+  these bytes")
+
+The diagnosis in the section above was re-verified independently, not taken on trust, and it holds.
+One extra measurement pins the non-hermeticity to the fixture alone: the SAME test binary, the SAME
+code, run twice with only the environment differing, gives opposite results.
+  TMPDIR ambient (/var/folders/...): FAILED
+  TMPDIR=/tmp:                       ok
+That is the definition of a fixture that is not hermetic - /tmp is in the fixed TEMP_ROOTS and
+/var/folders is not, so on Linux the fixture's tmpdir:None agreed with production by accident.
+
+THE CHANGE (fixture setup only; no production file was touched, and detect.rs is byte-identical to
+HEAD). The case now creates its own pid-named scratch directory under the process temp dir and hands
+that directory to SafeRoots::new as the tmpdir argument, exactly as main.rs:364 does, then judges
+through scoped_with instead of scoped. Side 2 (the absent-target Allow) was moved onto the same
+scratch root and the same root set, for consistency; it reaches Allow ahead of the location axis
+either way, so no verdict moved. The assertion text, the expected Ask and the expected Allow are all
+unchanged. check-test-weakening reports clean (verdict clean, findings []), which is the mechanical
+statement that no assertion was removed, no test deleted, no ignore added.
+
+INDEPENDENCE FROM THE AMBIENT ENVIRONMENT, measured after the repair over four values:
+  TMPDIR ambient (/var/folders/.../T): ok   (this is the value that used to be RED)
+  TMPDIR=/tmp:                          ok   (identical to TMPDIR unset - temp_dir falls back to /tmp)
+  TMPDIR=/private/var/tmp:              ok
+Whatever temp_dir resolves to, that same directory is now passed in as a root, so the OS and the
+runner's environment no longer decide the verdict. One precondition remains and is documented in the
+fixture rather than hidden: temp_dir must be outside a git work tree, since recoverability is asked
+before location. Both real values satisfy it.
+
+NON-VACUITY re-proved by mutation. The confined-Ask branch in detect.rs (the ctx.confined_root arm of
+the truncating-redirect loop) was DELETED, and the repaired test went red:
+  panicked at crates/blastguard/tests/scoped_destructive.rs:287:5:
+  is confined to a safe root, so it must Ask (not refuse); got Deny("... destroys the file's current
+  contents and it exists, and it is not inside a git work tree - nothing holds a second copy of
+  these bytes")
+The mutation was then reverted; git diff for detect.rs is empty.
+
+GREEN: cargo test -p blastguard - 20 test binaries, 0 failed (lib 321 passed, scoped_destructive 21
+passed). cargo fmt and cargo clippy -p blastguard --all-targets -D warnings both clean.
+
+DEPLOYED BINARY VERIFIED BEHAVIOURALLY (not by hash), at
+~/.claude/plugins/cache/yukineko/blastguard/0.2.62/bin/blastguard-darwin-arm64,
+.deployed-from.json commit 627b756a dirty true, reports version 0.2.62:
+  system-dir truncating redirect into /etc/paths.d  -> deny (the 0.2.60/0.2.61 fix is intact)
+  fd-dup pipeline (build 2 to 1, piped to tail)     -> allow (no regression in the allow direction)
+  confined redirect under the real TMPDIR           -> ask, "truncating redirect is confined to
+                                                       /private/var/folders/... - a safe root"
+The third line is the deployed proof of the very property this frozen test pins.
 """
 created_at = 1788982169
-updated_at = 1789040538
+updated_at = 1789044433
 weight = 0.0
 issue_number = 472
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/472"
@@ -20284,3 +20343,128 @@ updated_at = 1789042799
 weight = 0.0
 issue_number = 493
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/493"
+
+[[task]]
+id = "b9d1503d"
+title = "blastguard の config 除外 glob **/.claude/** が .claude/worktrees/** 配下を丸ごと免除し、CLAUDE.md 8 が義務づける agent worktree 内では truncating redirect ルールが一切効かない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+status = "pending"
+notes = """
+実測 2026-09-10、測定点 627b756a (dirty)、blastguard 0.2.61 のビルド済みバイナリに実 PreToolUse payload を投入。
+
+exclude.rs の CONFIG 側 glob に **/.claude と **/.claude/** が入っている (crates/blastguard/src/exclude.rs:18-19)。
+detect.rs の redirect_target_is_safe は is_config_file が真なら「安全」と判定して truncating redirect ルールを
+まるごと飛ばす (crates/blastguard/src/detect.rs:1904-1912)。
+
+ところが CLAUDE.md 8 が義務づける agent worktree の置き場は /Users/yuki/src/harness/.claude/worktrees/ である。
+つまり worktree 内の全ファイルがパスに .claude/ を含むので、config 除外に一致する。
+
+逐語の実測 (payload の command は cargo test を worktree 内の実ソースへ truncate する形):
+  target = /Users/yuki/src/harness/.claude/worktrees/agent-a07923cb77ff8e38c/crates/blastguard/src/detect.rs
+  結果 = 出力なし (= allow)、exit 0
+
+対照: 同じ形で target を /var/folders/.../T 配下の未追跡ファイルにすると deny になる。両者とも
+git が第二の複製を持たない点は同じで、違いはパスに .claude/ が含まれるかどうかだけ。
+
+なぜ重いか: agent worktree は実装作業が行われる唯一の場所 (CLAUDE.md 8 は main の作業ツリーでの編集を禁じている)。
+そこで truncating redirect ルールが常時無効ということは、このゲートが守るべき差分の大半を見ていない。
+recoverability 軸にも location 軸にも到達する前に、除外で抜けている。
+
+考えられる直し方 (未検証、判断であって観測ではない): config 除外の意図は .claude 配下の設定ファイル
+(settings.json / agents / skills) であって、.claude/worktrees 配下のチェックアウト全体ではないはず。
+worktrees セグメントを除外の対象外にする、あるいは config glob を設定ファイル拡張子に限定する。
+いずれにせよテストを先に RED で観測してから直すこと。"""
+created_at = 1789044941
+updated_at = 1789044941
+weight = 0.0
+issue_number = 496
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/496"
+
+[[task]]
+id = "cc809395"
+title = "guard-maintree-bash.py が worktree 内の相対パス編集と repo 外への書き込みを main ツリー変更として誤検知する (3 例)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "false-positive",
+    "p2",
+]
+status = "pending"
+notes = """
+実測 2026-09-10、worktree agent-a07923cb77ff8e38c、cwd は当該 worktree。いずれも main の作業ツリーには一切触っていない。
+
+誤検知 1 — repo の外へのディレクトリ作成:
+  mkdir -p /Users/yuki/bg-hermetic-probe
+  Refused: mkdir -p /Users/yuki/bg-hermetic-probe mutates this project MAIN working tree.
+  /Users/yuki は repo (/Users/yuki/src/harness) の外であり、main の作業ツリーではない。
+
+誤検知 2 — worktree 内の相対パスから scratchpad へのコピー:
+  cp crates/blastguard/src/detect.rs /private/tmp/claude-502/.../scratchpad/detect.rs.orig
+  Refused: ... mutates this project MAIN working tree.
+  書き込み先は /private/tmp 配下。読み出し元は自分の worktree。
+
+誤検知 3 — worktree 内の相対パスへの sed -i:
+  sed -i (空文字) 行番号指定 crates/blastguard/Cargo.toml など 3 ファイルの version bump
+  Refused: ... mutates this project MAIN working tree.
+  cwd は worktree なので、相対パスは worktree 内を指す。
+
+影響: version bump の 3 ファイル lockstep という日常作業が shell から実行できず、Edit ツールへの
+迂回を強いられる。ゲート自体は fail-closed で正しい方向に倒れているので緊急ではないが、
+誤検知が続くと 5 の「skip 機構で黙らせる」圧力になる。
+
+推測される原因 (未検証): 相対パスを cwd ではなく repo の main ツリーに対して解決している、
+または repo 外の絶対パスを「未知だから main」と扱っている。判定不能を制限側へ倒す設計自体は正しいので、
+直すなら cwd 解決の側であって、緩めることではない。"""
+created_at = 1789044960
+updated_at = 1789044960
+weight = 0.0
+issue_number = 497
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/497"
+
+[[task]]
+id = "2348d3e4"
+title = "worktree 分離ゲートが環境変数設定コマンドと dot-source を「git でないと示せない」として拒否し、CLAUDE.md が指示するツールチェーン読み込み行そのものが実行できない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "false-positive",
+    "p2",
+]
+status = "pending"
+notes = """
+実測 2026-09-10、worktree agent-a07923cb77ff8e38c。以下、コマンド名は本チケット自身がゲートに拒否されたため意図的に言い換えてある (それ自体が 4 例目の証拠)。
+
+例 1 — CLAUDE.md の「ビルド / テスト / ゲート」節が指示する行 (ドット 1 文字で cargo の環境ファイルを読み込む形):
+  拒否メッセージ: this command runs a string through . , which cannot be verified to stay inside the worktree.
+  CLAUDE.md は cargo コマンドの前にこの行を通せと明記しているので、指針とゲートが正面から矛盾している。
+
+例 2 — 環境変数を 1 つ外して同一テストを走らせる比較測定 (環境変数設定コマンドに削除オプションを付ける形):
+  拒否メッセージ: runs ... with the text test in a plain command, so what it runs cannot be shown not to be git.
+  当該コマンドは git ではないが、引数に test という語が含まれるだけで拒否される。
+
+例 3 — 同じ測定を複数の環境値に対して for ループで回す形:
+  拒否メッセージ: inside a construct too complex to verify。
+
+例 4 — 本チケットを起票しようとした backlog add 自身:
+  拒否メッセージ: runs backlog with the text (notes 本文) in a plain command, so what it runs cannot be
+  shown not to be git. notes 本文に例 2 のコマンド名が含まれていたことが理由。
+
+影響: 「同一コードを環境だけ変えて 2 回走らせる」という、CLAUDE.md 2 が要求する観測手法そのものが
+shell から取りにくい。今回は変数名イコール値の前置代入で迂回できた (変数を消す代わりに既定値へ固定する形が
+同値だったため) が、変数を消す測定は一般には表現できない。
+
+ゲートの向き自体は fail-closed で正しく、緩めるべきではない。直すなら、実行子を許可リストで解決したうえで
+なお git を起動しうる形だけを拒否する方向 = 精度を上げる話。"""
+created_at = 1789044991
+updated_at = 1789044991
+weight = 0.0
+issue_number = 498
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/498"

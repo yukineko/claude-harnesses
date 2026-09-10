@@ -236,11 +236,53 @@ fn relaxed_truncating_forms_inside_the_project() {
     // departs from the injected-filesystem convention the rest of the file
     // keeps: recoverability is an observation about the disk, and there is no
     // honest way to assert it without one.
-    let existing = std::env::temp_dir().join("blastguard-scoped-redirect-probe.txt");
+    //
+    // HERMETICITY (fixture repair, 0.2.62). This case must build the SAME safe
+    // root set production builds, and until now it did not. `main.rs`'s
+    // `safe_roots` reads `$TMPDIR` and hands it to `SafeRoots::new`; `roots()`
+    // above passes `None` for that parameter while the probe file was written
+    // into `std::env::temp_dir()`. On Linux those two agree by accident —
+    // `temp_dir()` is `/tmp`, which is in the fixed `TEMP_ROOTS` — but on macOS
+    // it is the per-user `/var/folders/…/T`, which is not, so the identical
+    // code answered Deny here and Ask in the shipped hook. Verified against the
+    // real binary, the same command piped in twice with the environment as the
+    // only difference: with `TMPDIR` set -> `ask`, with it unset -> `deny`. The
+    // product was right and the fixture was modelling an environment no hook
+    // runs in, so the scratch root is now created here and passed in
+    // explicitly. That is also what makes this hermetic rather than merely
+    // green on this machine: whatever `temp_dir()` resolves to, that same
+    // directory becomes a root, so the verdict no longer depends on the runner
+    // exporting `TMPDIR` (or on which OS it is). The pid in the directory name
+    // keeps concurrent `cargo test` runs off each other's probe file — the
+    // previous fixed name was shared by every run on the box.
+    //
+    // One precondition is NOT removed and is stated rather than hidden: the
+    // case still needs `temp_dir()` to sit outside any git work tree, because
+    // recoverability is asked before location and a tracked, clean file is
+    // answered `Allow` by the earlier axis. That holds for both real values
+    // (`/tmp`, `/var/folders/…/T`); a `TMPDIR` pointed inside a repo would make
+    // this case fail loudly, which is the correct direction — its premise
+    // ("nothing else holds these bytes") would genuinely be false there.
+    let scratch =
+        std::env::temp_dir().join(format!("blastguard-scoped-redirect-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).expect("create the scratch root this case vouches for");
+    let temp_roots = SafeRoots::new(
+        Some(PROJECT),
+        Some(PROJECT),
+        Some(HOME),
+        Some(
+            scratch
+                .to_str()
+                .expect("the scratch directory path is UTF-8"),
+        ),
+        Some(identity),
+    );
+
+    let existing = scratch.join("blastguard-scoped-redirect-probe.txt");
     std::fs::write(&existing, b"bytes that exist only here")
         .expect("write the probe file the recoverability check needs");
     let cmd = format!("cargo test > {}", existing.display());
-    assert_confined_ask(&cmd, scoped(&cmd));
+    assert_confined_ask(&cmd, scoped_with(&cmd, &temp_roots));
 
     // Side 2 — the target does not exist, so the redirect destroys nothing.
     // 「よみかきに一々許可をもとめるのは健全でもなんでもない。無駄」: a write that
@@ -248,14 +290,21 @@ fn relaxed_truncating_forms_inside_the_project() {
     // it is the single largest class of friction the ruling retired — 49 of the
     // 226 non-allow verdicts measured over 2045 real commands were truncating
     // redirects, and none of them destroyed anything.
-    let absent = std::env::temp_dir().join("blastguard-scoped-redirect-absent.txt");
+    // Same scratch root and same root set as side 1, for the same reason: the
+    // two sides differ only in whether the target exists, so letting them run
+    // against different safe-root models would make the comparison dishonest.
+    // (This side reaches Allow ahead of the location axis either way — an
+    // absent file is `NothingToDestroy` — so the change moves no verdict; it
+    // removes a second ambient dependency and the second machine-wide fixed
+    // filename.)
+    let absent = scratch.join("blastguard-scoped-redirect-absent.txt");
     let _ = std::fs::remove_file(&absent);
     for cmd in [
         "echo hi > target/log.txt".to_string(),
         format!("cargo test > {}", absent.display()),
     ] {
         assert_eq!(
-            scoped(&cmd),
+            scoped_with(&cmd, &temp_roots),
             Decision::Allow,
             "`{cmd}` truncates a file that is not there — there are no prior \
              bytes to lose, so there is nothing to ask about"

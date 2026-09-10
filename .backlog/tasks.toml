@@ -21786,3 +21786,93 @@ updated_at = 1789068963
 weight = 0.0
 issue_number = 522
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/522"
+
+[[task]]
+id = "2d143236"
+title = "docs/gate-taxonomy.md names 18 CI workflow files that do not exist (GHA is banned repo-wide)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+Measured 2026-09-11 in worktree agent-ad17472050aebf993 at 9a4e400c, while working backlog 1e44bfd9.
+
+docs/gate-taxonomy.md's 実行タイミング column says gates run at 'pre-commit / CI' and names a specific workflow file per row -- doc-claims.yml (line 40), test-weakening.yml (41), version-lockstep.yml (42, 43), bench-regression.yml (44), and more. grep -c for .yml in that file returns 18.
+
+Measurement: 'ls .github/workflows/' exits 1 -- the directory does not exist at all in this checkout. So every one of those 18 names points at nothing.
+
+This is not merely stale: CLAUDE.md section 7 bans GitHub Actions repo-wide and says the gate's block/allow authority must stay local. A taxonomy document that presents CI as a co-equal enforcement point for each gate teaches the next reader the opposite of the current norm, and it is exactly the class of rot the doc-claims gate exists to catch -- except these are bare filenames, not path:line citations, so no gate sees them.
+
+Not fixed here on purpose: this ticket's change was scoped to the two claim gates, and rewriting 18 rows of an unrelated table would have buried the diff. Decide whether the column should say 'pre-commit only' or be dropped."""
+created_at = 1789071589
+updated_at = 1789071589
+weight = 0.0
+issue_number = 529
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/529"
+
+[[task]]
+id = "87d8c644"
+title = "check-doc-claims CLAIM_RE requires a file extension, so citations of extensionless paths are silently not claims"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+Measured 2026-09-11 in worktree agent-ad17472050aebf993, while working backlog 1e44bfd9.
+
+CLAIM_RE in scripts/check-doc-claims.py requires the path component to carry a file-ish extension. A backticked citation of an extensionless path is therefore not recognised as a claim AT ALL: it produces zero findings and exit 0, with no signal that anything was skipped.
+
+Observed, against both the pre-change and post-change gate: a doc containing a backticked /etc/passwd:1 gives exit 0 'all cited claims match', while the same doc with /etc/hosts.conf:1 gives exit 1 path-escapes-repo. The only difference is the extension.
+
+Why it matters: several load-bearing files in this repo have no extension and are cited in prose -- .githooks/pre-commit, .githooks/commit-msg, and every plugin launcher under crates/<c>/bin/<name>. A citation of any of those is unverifiable by this gate and looks identical to a verified one.
+
+Currently LATENT, measured: scanning docs/ plus CLAUDE.md for backticked path:line tokens that lack an extension returns 2 hits, both non-paths (a timestamp and a ':196,:200' fragment). So nothing is being missed today.
+
+The extension requirement is deliberate false-positive discipline (the module docstring says ordinary prose such as a log excerpt must not become a claim), so the fix is NOT to drop it. Options: an allowlist of known extensionless repo paths, or requiring a leading path separator plus an existing-in-index check."""
+created_at = 1789071590
+updated_at = 1789071590
+weight = 0.0
+issue_number = 530
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/530"
+
+[[task]]
+id = "8312ecef"
+title = "pre-commit header does not say which tree doc-claims/claudemd-claims judge; .githooks is permission-denied to agents"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+status = "pending"
+notes = """
+Noted 2026-09-11 while working backlog 1e44bfd9 in worktree agent-ad17472050aebf993.
+
+check-doc-claims.py and check-claudemd-claims.py now judge the git INDEX (the tree the commit records) on both the document side and the cited-file side, with --source worktree as an opt-in for ad-hoc use. The .githooks/pre-commit header block that describes each gate still describes only WHAT they catch, not WHICH TREE they judge.
+
+That header is not false today, so this is a precision gap rather than a section-4 prose/behaviour contradiction -- filing it rather than letting it pass silently.
+
+I could not fix it in the same commit: editing .githooks/pre-commit is refused by this session's permission settings ('File is in a directory that is denied by your permission settings'). Reporting instead of routing around it, per CLAUDE.md section 5. A human, or a session whose permissions allow .githooks, should add a clause to the doc-claims and claudemd-claims rows saying the verdict is about the index."""
+created_at = 1789071591
+updated_at = 1789071591
+weight = 0.0
+issue_number = 531
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/531"
+
+[[task]]
+id = "eb1f8021"
+title = "session scratchpad directory is shared across concurrent sessions and silently clobbers files"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+Observed 2026-09-11, working backlog 1e44bfd9 in worktree agent-ad17472050aebf993.
+
+The scratchpad path handed to a session is described as session-specific and isolated. It is not isolated in practice. I wrote a mutation-testing harness to <scratchpad>/mutate.py, ran it successfully, and a short time later the same path contained an unrelated script belonging to a DIFFERENT session -- it targeted crates/condukt/src/verify.rs inside worktree agent-af603b3614507bdb9, a worktree that is not mine. My file was gone, with no error and no warning; I only noticed because the tool surfaced a 'changed on disk' notice whose contents were plainly not mine.
+
+Impact: silent loss of work-in-progress between concurrent sessions, and worse, a script that MUTATES A SOURCE FILE AND RESTORES IT IN A FINALLY BLOCK can be replaced mid-run. Had the swap landed while my harness held a mutated copy of scripts/check-doc-claims.py, the restore would never have run and a deliberately broken gate could have been left in the tree. That is the same shape as the killed-task-orphan-loop hazard already recorded in memory: two agents sharing a fixed path corrupt each other's measurement.
+
+Workaround I adopted: namespace everything under <scratchpad>/docclaims-ad17472/. Real fix: give each session a genuinely distinct scratchpad root, or document loudly that the directory is project-scoped and shared so agents namespace by default."""
+created_at = 1789071593
+updated_at = 1789071593
+weight = 0.0
+issue_number = 532
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/532"

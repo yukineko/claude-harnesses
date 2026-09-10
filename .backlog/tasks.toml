@@ -21949,3 +21949,21 @@ updated_at = 1789070219
 weight = 0.0
 issue_number = 526
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/526"
+
+[[task]]
+id = "a3ae340d"
+title = "condukt diffrisk_record journaling test flakes in full-suite run (pre-existing at 1e428175)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flaky-test",
+    "condukt",
+    "p1",
+]
+status = "pending"
+notes = "MEASURED, pre-existing at HEAD 1e428175, NOT caused by deba848a. diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded fails intermittently only in the full parallel run: diffrisk_record.rs:540 'one record per invocation', left 1 right 2 - a MISSING record, not an extra one. Isolated runs pass 3/3. DECISIVE: with verify.rs and main.rs checked back out to HEAD, the full suite was run 5 times and run 5 still FAILED, so it reproduces unmodified. Matters because this test pins that 'inspected and clean' stays distinguishable from 'never inspected' - a real regression there would now be dismissed as the known flake. Do NOT silence it. Suspected but UNCONFIRMED mechanism: project_state_dir(cfg, tempdir) may resolve to a shared dir across concurrent test binaries; print the resolved path from two concurrent runs before changing anything."
+created_at = 1789072944
+updated_at = 1789072944
+weight = 0.0
+issue_number = 533
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/533"

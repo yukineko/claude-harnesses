@@ -985,6 +985,26 @@ const BEHAVIORAL_MARKERS: &[&str] = &[
     "実行時",
     "起動",
     "稼働",
+    // Japanese STRUCTURAL-claim markers. A criteria saying "type X has been
+    // renamed" / "there is no change to the Stop protocol" is a claim about the
+    // shape of the code that no `cargo test` exit status observes — it needs a
+    // reader. These were measured missing on 2026-09-11 against a real 6-item
+    // done_criteria that scored `behavioral == false`.
+    //
+    // Deliberately NOT added, with reasons (a marker that fires without cause
+    // costs a verifier run and trains readers to distrust the list):
+    //   * "0 件"  — a grep hit count IS mechanically observable; it is a
+    //     coverage problem (the grep is a SECOND command), not a judgement one,
+    //     and `criteria_coverage` is what catches it.
+    //   * bare "import" — the lowercased scan would match "important", firing on
+    //     unrelated prose; the Japanese-only "import し" form is too
+    //     wording-fragile to earn a slot.
+    "リネーム",
+    "改名",
+    "変更が無い",
+    "変更がない",
+    "変更は無い",
+    "変更はない",
 ];
 
 /// True iff `done_criteria` demands behavioral judgement (implementation /
@@ -1008,6 +1028,204 @@ pub fn criteria_is_behavioral(done_criteria: &str, is_behavioral_hint: Option<bo
         .any(|m| lower.contains(&m.to_lowercase()))
 }
 
+/// Whether the ONE command [`mechanical_cmd`] extracts can discharge the WHOLE
+/// `done_criteria`, or only a part of it.
+///
+/// # Why this type exists
+///
+/// [`mechanical_cmd`] returns the **first** runnable command it finds and
+/// `return`s out of its scan loop. Before this type existed,
+/// [`classify_criteria`] set `skip_eligible` from `mechanical_cmd.is_some()`
+/// alone — so a criteria asserting six separate things, only the last of which
+/// embedded a runnable command, was reported as `skip_verifier: true` once that
+/// one command exited 0. Five claims had been checked by nobody, and the caller
+/// could not tell that apart from a genuinely complete check. That is the
+/// "検査した" / "検査できなかった" collapse CLAUDE.md §3 forbids, and the same
+/// shape as the partial-bundle fail-open named in §6.
+///
+/// # What it is (and is not)
+///
+/// This is a **multiplicity** proxy, not a semantic coverage proof. It answers
+/// "does this text assert more than one thing?" — deterministically, from
+/// structure the author wrote down. It cannot answer "does `cargo test -p x`
+/// actually establish claim 3?"; nothing short of the LLM verifier can, which
+/// is exactly why the answer here is *whether to run that verifier*.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CriteriaCoverage {
+    /// The criteria asserts a single claim, so one extracted command is the
+    /// whole of it. Only this variant permits skipping the verifier.
+    Single,
+    /// The criteria asserts more than one claim. One command cannot discharge
+    /// it — the verifier must run. Carries the two counts so the verdict can
+    /// say *why* rather than just refusing.
+    Partial { enumerated: usize, commands: usize },
+    /// The question could not be decided (a counter was unavailable). 判定不能
+    /// is not `Single`: it resolves to the restricted side exactly like
+    /// [`CriteriaCoverage::Partial`].
+    Undecidable,
+}
+
+impl CriteriaCoverage {
+    /// True only for [`CriteriaCoverage::Single`]. `Partial` and `Undecidable`
+    /// both veto the skip — there is deliberately no `unwrap_or(true)` anywhere
+    /// that could collapse the third state into the permissive one.
+    pub fn permits_skip(self) -> bool {
+        matches!(self, CriteriaCoverage::Single)
+    }
+
+    /// Structured rendering for the `check-criteria` JSON, so a consumer can
+    /// branch on `kind` instead of parsing a `Debug` string. Emitted on EVERY
+    /// `state check-criteria` path that actually classified a criteria (skip,
+    /// refusal, and fail-soft alike) — the point of the field is to let the
+    /// skill say *why* the verifier is required, and a field that appears only
+    /// when the answer is bad cannot be relied on for that. The one path
+    /// without it is "the task has no done_criteria", where there is nothing to
+    /// have coverage OF.
+    pub fn as_json(self) -> serde_json::Value {
+        match self {
+            CriteriaCoverage::Single => serde_json::json!({ "kind": "single" }),
+            CriteriaCoverage::Partial {
+                enumerated,
+                commands,
+            } => serde_json::json!({
+                "kind": "partial",
+                "enumerated": enumerated,
+                "commands": commands,
+            }),
+            CriteriaCoverage::Undecidable => serde_json::json!({ "kind": "undecidable" }),
+        }
+    }
+}
+
+/// Count the enumeration markers with which the author separated claims.
+///
+/// Returns `None` when the count could not be produced (regex unavailable);
+/// callers must treat that as 判定不能, never as zero — zero means "one claim",
+/// which is the permissive answer.
+///
+/// Two families are counted and the LARGER is returned (never the sum), so a
+/// line that is both line-leading and inline — `1) …\n2) …` — is not
+/// double-counted:
+///
+/// * **line-leading**: `- ` / `* ` / `+ ` / `•` / `・` / `1)` / `(1)` / `1.` /
+///   `1:` / `1、` at the start of a line.
+/// * **inline**: only the *paren* ordinal forms `N)` / `(N)` / `（N）`, preceded
+///   by start-of-text or a separator. The bare `N.` form is deliberately NOT
+///   matched inline: version strings (`0.7.152`) and `file.rs:12.` would
+///   false-positive, and a marker that fires without cause is its own defect.
+fn enumerated_claim_count(done_criteria: &str) -> Option<usize> {
+    let line_re = regex::Regex::new(r"^[ \t]*(?:[-*+][ \t]|[•・]|\(?\d{1,2}[)\.:：、])").ok()?;
+    let inline_re = regex::Regex::new(r"(?:^|[\s　、。,;/])[(（]?\d{1,2}[)）]").ok()?;
+    let by_line = done_criteria
+        .lines()
+        .filter(|l| line_re.is_match(l))
+        .count();
+    let inline = inline_re.find_iter(done_criteria).count();
+    Some(by_line.max(inline))
+}
+
+/// Count the distinct commands the criteria *names*. Two named commands mean
+/// running one leaves the other unchecked, regardless of how the text is laid
+/// out — this is the axis that catches a single unenumerated sentence such as
+/// "`cargo test -p x` / `cargo fmt` / `cargo clippy` が green であること", where
+/// [`mechanical_cmd`] takes the first and drops the other two.
+///
+/// Returns `None` on 判定不能 (regex unavailable) — see
+/// [`enumerated_claim_count`].
+///
+/// A backticked span counts as a command when either:
+///
+/// * it has arguments (contains whitespace) and its head has program-name shape
+///   (`^[a-z][a-z0-9_.+-]*$`) — this is what makes `grep -n 'x' crates/y` count
+///   even though `grep` is not an [`is_criteria_runner`]; or
+/// * it is a single token that IS an [`is_criteria_runner`] (`pytest`).
+///
+/// The two conditions are why a backticked *identifier* or *path* — `Foo`,
+/// `harness_core::verdict`, `crates/donegate/src`, `verify.rs` — does not count:
+/// treating every backtick as a claim would refuse the skip for a criteria that
+/// merely mentions a file, which would disable the feature rather than repair
+/// it. **Known gap, stated rather than hidden**: a single-token non-runner
+/// command (`mypy`, `ruff`) is not counted, so "`pytest` and `mypy` pass" is
+/// still under-counted on this axis. It is caught only if the author enumerates.
+///
+/// [`mechanical_cmd`]'s prose fallback has the same first-wins shape, so bare
+/// unbackticked runner keywords are counted too — word-anchored and by distinct
+/// kind, for reasons recorded at the call site. The larger of the two counts
+/// wins (max, never sum: "`cargo test -p x`" hits both axes and is one
+/// command).
+fn command_mention_count(done_criteria: &str) -> Option<usize> {
+    let backtick_re = regex::Regex::new(r"`([^`]+)`").ok()?;
+    let prog_re = regex::Regex::new(r"^[a-z][a-z0-9_.+-]*$").ok()?;
+    let mut backticked = 0usize;
+    for caps in backtick_re.captures_iter(done_criteria) {
+        let inner = caps.get(1).map(|m| m.as_str().trim()).unwrap_or("");
+        let mut toks = inner.split_whitespace();
+        let Some(head) = toks.next() else {
+            continue;
+        };
+        let has_args = toks.next().is_some();
+        if (has_args && prog_re.is_match(head)) || is_criteria_runner(head) {
+            backticked += 1;
+        }
+    }
+    // Word-anchored, and counted as DISTINCT kinds.
+    //
+    // `\b` is not decoration here: plain `contains("go test")` is TRUE for the
+    // string "cargo test" (…car|go test…), so an unanchored scan reported two
+    // commands for the single-claim criteria "`cargo test -p condukt` exits 0"
+    // and refused a skip that is legitimate. Measured 2026-09-11 by the
+    // regression test `purely_mechanical_criteria_is_skip_eligible`, which went
+    // RED on exactly that. The same latent collision exists in
+    // [`mechanical_cmd`]'s prose fallback but is masked there by the arm order
+    // (the `cargo test` arm returns before the `go test` arm is reached).
+    //
+    // Distinct kinds rather than occurrences: repeating the SAME command twice
+    // ("cargo test を実行する。cargo test が green であること") is one claim
+    // stated twice, and counting occurrences would refuse a legitimate skip.
+    // The gap that buys: two DIFFERENT invocations of one runner named only in
+    // prose ("cargo test -p a and cargo test -p b") count as one. Backticking
+    // them — the form the skill's own examples use — counts them as two.
+    let lower = done_criteria.to_lowercase();
+    let prose_re = regex::Regex::new(r"\b(?:cargo test|npm test|pytest|go test)\b").ok()?;
+    let prose: std::collections::BTreeSet<&str> =
+        prose_re.find_iter(&lower).map(|m| m.as_str()).collect();
+    Some(backticked.max(prose.len()))
+}
+
+/// Decide coverage from the two counts. Split out from [`criteria_coverage`] so
+/// the 判定不能 arm is reachable from a test: neither counter fails on any input
+/// a test can supply (their regexes are literals that always compile), so a
+/// `None` that only ever arose inside `criteria_coverage` would be an untested
+/// branch — and an untested fail-closed arm is indistinguishable from a missing
+/// one (CLAUDE.md §2/§6).
+fn coverage_from_counts(enumerated: Option<usize>, commands: Option<usize>) -> CriteriaCoverage {
+    let (Some(enumerated), Some(commands)) = (enumerated, commands) else {
+        return CriteriaCoverage::Undecidable;
+    };
+    if enumerated >= 2 || commands >= 2 {
+        CriteriaCoverage::Partial {
+            enumerated,
+            commands,
+        }
+    } else {
+        CriteriaCoverage::Single
+    }
+}
+
+/// Does one extracted command cover this whole `done_criteria`?
+///
+/// See [`CriteriaCoverage`] for what this does and does not claim. Both axes
+/// are independent and either one firing is enough; both err toward detecting
+/// multiplicity, because a missed detection is a fail-open (a partial check
+/// reported as a complete pass) while a spurious detection only costs one
+/// verifier run.
+pub fn criteria_coverage(done_criteria: &str) -> CriteriaCoverage {
+    coverage_from_counts(
+        enumerated_claim_count(done_criteria),
+        command_mention_count(done_criteria),
+    )
+}
+
 /// Classification of a done_criteria for the verifier-skip decision.
 #[derive(Debug, Clone)]
 pub struct Classification {
@@ -1015,9 +1233,16 @@ pub struct Classification {
     pub behavioral: bool,
     /// A runnable mechanical check derived from the criteria, if any.
     pub mechanical_cmd: Option<Vec<String>>,
-    /// The LLM verifier may be skipped ONLY when this is true: a mechanical
-    /// command exists AND the criteria carries no behavioral markers. Any
-    /// ambiguity resolves to `false` (run the verifier — the safe side).
+    /// Whether the one command in `mechanical_cmd` can discharge the whole
+    /// criteria, or only part of it. `Partial` and `Undecidable` both veto the
+    /// skip; only `Single` permits it.
+    pub coverage: CriteriaCoverage,
+    /// The LLM verifier may be skipped ONLY when this is true. All THREE must
+    /// hold: a mechanical command exists, the criteria carries no behavioral
+    /// markers, AND `coverage.permits_skip()` — the criteria must not assert
+    /// more than that one command can check. Any ambiguity resolves to `false`
+    /// (run the verifier — the safe side); in particular
+    /// [`CriteriaCoverage::Undecidable`] resolves to `false`, not to `true`.
     pub skip_eligible: bool,
     /// Expected exit code, carried through structurally from a
     /// [`crate::model::MechanicalCheck`] hint when one was supplied. `None`
@@ -1034,15 +1259,54 @@ pub struct Classification {
     pub expect_substring: Option<String>,
 }
 
-/// Classify a done_criteria: behavioral vs purely mechanical, and whether the
-/// verifier may be skipped. Behavioral criteria are never skip-eligible even
-/// when they embed a runnable command.
+/// Classify a done_criteria: behavioral vs purely mechanical, whether one
+/// command covers it, and whether the verifier may be skipped.
+///
+/// Three independent vetoes, ALL of which must clear for `skip_eligible`:
+///
+/// 1. **behavioral** — the criteria demands judgement. Never skip-eligible even
+///    when it embeds a runnable command.
+/// 2. **runnable** — no command could be extracted, so there is nothing to run
+///    in the verifier's place.
+/// 3. **coverage** — the criteria asserts more than the one extracted command
+///    can check (see [`CriteriaCoverage`]). A partial check must not be
+///    reported as a complete pass.
 ///
 /// `is_behavioral_hint` / `mechanical_check_hint` are the interpreter-declared
 /// structured facts from the owning [`crate::model::Task`]
-/// (`is_behavioral` / `mechanical_check`). When present they are authoritative
-/// and override the corresponding prose heuristic; pass `None` for either to
-/// get the original prose-only behavior (byte-for-byte unchanged).
+/// (`is_behavioral` / `mechanical_check`). Each remains authoritative over the
+/// prose heuristic it replaces: `is_behavioral_hint` decides veto 1 outright,
+/// and `mechanical_check_hint.cmd` decides *which* command veto 2 sees. Pass
+/// `None` for either to get the original prose-only extraction.
+///
+/// **Veto 3 is NOT subject to either hint, and that is deliberate.** The
+/// justification, from what the schema actually carries rather than from what
+/// would be convenient:
+///
+/// * `crate::model::MechanicalCheck` (`cmd` / `expect_exit` /
+///   `expect_substring`) declares *what to run and what to expect from it*. No
+///   field of it declares "and nothing else in this criteria needs checking".
+///   Reading a `mechanical_check` as a coverage claim would be inferring a fact
+///   the interpreter never stated — a judgement standing in for an observation,
+///   which CLAUDE.md §2 forbids.
+/// * The interpreter already HAS a separate channel for "the verifier must run
+///   anyway": `is_behavioral`. Because that channel exists and is distinct, the
+///   presence of a `mechanical_check` cannot be read as its absence. And
+///   `is_behavioral: false` only says no *judgement* is required — a six-item
+///   all-mechanical criteria is still five unchecked items.
+/// * A `mechanical_check` is written by the interpreter LLM, i.e. by the
+///   producing side. §6 says a norm must not rest on the producing side's own
+///   declaration; coverage is precisely such a norm.
+///
+/// The measured cost of that choice, stated rather than hidden: an author whose
+/// hint genuinely covers a multi-item criteria with one compound command (`a &&
+/// b && c`) still gets the verifier. That is a wasted verifier run, not a wrong
+/// answer, and it is the side §3 requires when the alternative is a silent
+/// partial pass. Crediting such a command would require deciding that `a && b
+/// && c` discharges claims like "the Stop protocol is unchanged" — which cannot
+/// be decided deterministically. If the cost ever justifies an explicit
+/// interpreter-declared coverage field, that is a schema change for a human to
+/// rule on, not something to infer here.
 pub fn classify_criteria(
     done_criteria: &str,
     is_behavioral_hint: Option<bool>,
@@ -1050,7 +1314,8 @@ pub fn classify_criteria(
 ) -> Classification {
     let behavioral = criteria_is_behavioral(done_criteria, is_behavioral_hint);
     let mechanical_cmd = mechanical_cmd(done_criteria, mechanical_check_hint);
-    let skip_eligible = !behavioral && mechanical_cmd.is_some();
+    let coverage = criteria_coverage(done_criteria);
+    let skip_eligible = !behavioral && mechanical_cmd.is_some() && coverage.permits_skip();
     let (expect_exit, expect_substring) = match mechanical_check_hint {
         Some(check) => (check.expect_exit, check.expect_substring.clone()),
         None => (None, None),
@@ -1058,6 +1323,7 @@ pub fn classify_criteria(
     Classification {
         behavioral,
         mechanical_cmd,
+        coverage,
         skip_eligible,
         expect_exit,
         expect_substring,
@@ -1066,23 +1332,49 @@ pub fn classify_criteria(
 
 /// Build the verify-gate verdict for the purely-mechanical branch.
 ///
-/// [`classify_criteria`] sets `skip_eligible` only when `mechanical_cmd.is_some()`,
-/// so a `skip_eligible` classification with no command is supposed to be impossible.
-/// If that invariant is ever violated (schema drift, external JSON, a future
-/// refactor) we must NOT panic in an unattended run — a panic there breaks the turn.
-/// Instead we fail soft: emit a verdict that refuses to skip the verifier, since
-/// running the verifier is the safe side.
+/// This function may only ever emit `skip_verifier: true` for a classification
+/// that [`classify_criteria`] found skip-eligible. It re-checks that itself
+/// rather than trusting the caller to have checked, because the one thing it can
+/// emit — "the LLM verifier may be skipped" — is unrecoverable downstream: the
+/// caller cannot tell a complete check from a partial one after the fact.
+///
+/// Two refusal arms, both resolving to `skip_verifier: false` with a machine
+/// readable `reason` (CLAUDE.md §3 — 判定不能 resolves restricted, and neither
+/// arm panics an unattended run):
+///
+/// * `skip_eligible == false` — the classifier said the verifier must run
+///   (behavioral, or the criteria asserts more than the command covers). The
+///   command is NOT run here; the caller's non-skip path runs it as evidence.
+/// * `mechanical_cmd == None` while `skip_eligible == true` — an
+///   invariant-violating input (schema drift, external JSON, a future refactor).
 ///
 /// `run` runs the mechanical command, returning `(passed, output)`; it is only
-/// invoked when a command actually exists.
+/// invoked when a command exists AND the classification is skip-eligible.
 ///
 /// Returns `(verdict_json, gate_failed)`. `gate_failed` is true only when a real
 /// mechanical command was run and failed (the caller then fails this gate). A
-/// missing command never fails the gate — the verifier still runs.
+/// refusal never fails the gate — the verifier still runs.
 pub fn mechanical_skip_verdict(
     cls: &Classification,
     run: impl FnOnce(&[String]) -> (bool, String),
 ) -> (serde_json::Value, bool) {
+    if !cls.skip_eligible {
+        // The classifier already ruled the verifier must run. Emitting
+        // `skip_verifier: true` here would silently overturn that ruling, so
+        // refuse — and say which veto fired, so the refusal is diagnosable
+        // rather than just opaque.
+        let out = serde_json::json!({
+            "mechanical": cls.mechanical_cmd.is_some(),
+            "behavioral": cls.behavioral,
+            "passed": false,
+            "skip_verifier": false,
+            "coverage": cls.coverage.as_json(),
+            "reason": "classification is not skip-eligible (behavioral criteria, \
+                       no runnable command, or the criteria asserts more than the \
+                       extracted command covers); the verifier must run",
+        });
+        return (out, false);
+    }
     let Some(cmd) = cls.mechanical_cmd.as_ref() else {
         // Invariant-violating input: skip_eligible with no command. Fail soft —
         // refuse to skip the verifier rather than panicking an unattended run.
@@ -1091,6 +1383,7 @@ pub fn mechanical_skip_verdict(
             "behavioral": cls.behavioral,
             "passed": false,
             "skip_verifier": false,
+            "coverage": cls.coverage.as_json(),
             "reason": "skip_eligible classification carried no mechanical command; \
                        refusing to skip the verifier (safe side)",
         });
@@ -1102,6 +1395,7 @@ pub fn mechanical_skip_verdict(
         "behavioral": false,
         "passed": passed,
         "skip_verifier": passed,
+        "coverage": cls.coverage.as_json(),
         "cmd": cmd,
         "output": output,
     });
@@ -1886,6 +2180,7 @@ mod tests {
         let cls = Classification {
             behavioral: false,
             mechanical_cmd: None,
+            coverage: CriteriaCoverage::Single,
             skip_eligible: true,
             expect_exit: None,
             expect_substring: None,
@@ -1931,6 +2226,7 @@ mod tests {
         let cls = Classification {
             behavioral: false,
             mechanical_cmd: Some(vec!["cargo".to_string(), "test".to_string()]),
+            coverage: CriteriaCoverage::Single,
             skip_eligible: true,
             expect_exit: None,
             expect_substring: None,
@@ -2048,6 +2344,7 @@ test result: FAILED. 1 passed; 1 failed; 0 ignored";
         let cls = Classification {
             behavioral: false,
             mechanical_cmd: Some(vec!["cargo".to_string(), "test".to_string()]),
+            coverage: CriteriaCoverage::Single,
             skip_eligible: true,
             expect_exit: None,
             expect_substring: None,
@@ -2911,6 +3208,685 @@ note: run with `RUST_BACKTRACE=1` for a backtrace";
                 "without docker reachable, the note must be docker_unavailable: {v}"
             );
         }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Multi-claim coverage veto (`CriteriaCoverage` / `classify_criteria`)
+    //
+    // Pins the fix for: a done_criteria asserting SIX separate things, where
+    // only the LAST item embedded a runnable command, used to report
+    // `skip_verifier: true` once that one command exited 0 — five claims
+    // checked by nobody. CLAUDE.md §3: a partial check must never be reported
+    // as a complete pass, and "cannot determine" resolves to the RESTRICTED
+    // side. These tests pin that a criteria naming/enumerating more than one
+    // claim can never make the verifier-skip path eligible, regardless of the
+    // behavioral flag or of a structured mechanical-check hint.
+    // ══════════════════════════════════════════════════════════════════════
+
+    /// Local helper: "at most one" — the count is either `None` (axis
+    /// undetermined) or `Some(n)` with `n <= 1`. Used to assert an axis was
+    /// NOT fooled into over-counting, without presuming whether the
+    /// implementation resolves the "no markers" case to `Some(0)`/`Some(1)`
+    /// or to `None` — the contract only forbids `Some(n >= 2)` here.
+    fn at_most_one(v: Option<usize>) -> bool {
+        !matches!(v, Some(n) if n >= 2)
+    }
+
+    /// Local helper: "at least two" — a determinate count of 2 or more.
+    fn at_least_two(v: Option<usize>) -> bool {
+        matches!(v, Some(n) if n >= 2)
+    }
+
+    // ── C2: `CriteriaCoverage::permits_skip` truth table ───────────────────
+
+    /// `permits_skip()` is true for `Single` — the ONLY variant that may
+    /// authorize skipping the verifier. If this flips, every downstream veto
+    /// in `classify_criteria` loses its foundation.
+    #[test]
+    fn permits_skip_true_only_for_single() {
+        assert!(
+            CriteriaCoverage::Single.permits_skip(),
+            "Single coverage must permit skip"
+        );
+    }
+
+    /// `permits_skip()` is false for `Partial` — a partially-enumerated or
+    /// partially-named criteria must never certify a full pass from one
+    /// command's exit code.
+    #[test]
+    fn permits_skip_false_for_partial() {
+        let c = CriteriaCoverage::Partial {
+            enumerated: 2,
+            commands: 2,
+        };
+        assert!(
+            !c.permits_skip(),
+            "Partial coverage must not permit skip: {c:?}"
+        );
+    }
+
+    /// `permits_skip()` is false for `Undecidable` — "cannot determine
+    /// coverage" must resolve to the restricted side (CLAUDE.md §3), never to
+    /// "treat as fully covered".
+    #[test]
+    fn permits_skip_false_for_undecidable() {
+        assert!(
+            !CriteriaCoverage::Undecidable.permits_skip(),
+            "Undecidable coverage must not permit skip"
+        );
+    }
+
+    // ── C3: `coverage_from_counts` truth table ──────────────────────────────
+
+    /// Both axes known and each `<= 1` ⇒ `Single`, across the (0,0)/(0,1)/
+    /// (1,0)/(1,1) corners of the "low count" region.
+    #[test]
+    fn coverage_from_counts_single_when_both_axes_le_one() {
+        for (e, c) in [(0usize, 0usize), (0, 1), (1, 0), (1, 1)] {
+            let got = coverage_from_counts(Some(e), Some(c));
+            assert_eq!(
+                got,
+                CriteriaCoverage::Single,
+                "enumerated={e}, commands={c} must resolve to Single, got {got:?}"
+            );
+        }
+    }
+
+    /// `enumerated >= 2` (with `commands` known) ⇒ `Partial`, carrying BOTH
+    /// counts through verbatim — not just flagging "partial", the exact
+    /// numbers must survive so downstream reporting is accurate.
+    #[test]
+    fn coverage_from_counts_partial_when_enumerated_at_least_two() {
+        let got = coverage_from_counts(Some(2), Some(1));
+        assert_eq!(
+            got,
+            CriteriaCoverage::Partial {
+                enumerated: 2,
+                commands: 1
+            },
+            "enumerated>=2 must yield Partial carrying both counts verbatim: {got:?}"
+        );
+
+        let got2 = coverage_from_counts(Some(6), Some(1));
+        assert_eq!(
+            got2,
+            CriteriaCoverage::Partial {
+                enumerated: 6,
+                commands: 1
+            },
+            "counts must be carried through unchanged, not clamped or summarized: {got2:?}"
+        );
+    }
+
+    /// `commands >= 2` (with `enumerated` known) ⇒ `Partial`, carrying both
+    /// counts verbatim — this is the SEPARATE axis from enumeration: a
+    /// single unenumerated sentence naming several commands must also be
+    /// caught (this is exactly the reproducing bug's item 6).
+    #[test]
+    fn coverage_from_counts_partial_when_commands_at_least_two() {
+        let got = coverage_from_counts(Some(1), Some(3));
+        assert_eq!(
+            got,
+            CriteriaCoverage::Partial {
+                enumerated: 1,
+                commands: 3
+            },
+            "commands>=2 must yield Partial carrying both counts verbatim: {got:?}"
+        );
+    }
+
+    /// `enumerated == None` ⇒ `Undecidable`, never `Single` — even though the
+    /// OTHER axis is a harmless-looking `Some(0)`. "Cannot determine" must
+    /// not be laundered into "fine" by a low count on the sibling axis.
+    #[test]
+    fn coverage_from_counts_undecidable_when_enumerated_axis_unknown() {
+        let got = coverage_from_counts(None, Some(0));
+        assert_eq!(
+            got,
+            CriteriaCoverage::Undecidable,
+            "a None enumerated axis must never resolve to Single: {got:?}"
+        );
+    }
+
+    /// `commands == None` ⇒ `Undecidable`, never `Single`, for the same
+    /// reason as above with the axes swapped.
+    #[test]
+    fn coverage_from_counts_undecidable_when_commands_axis_unknown() {
+        let got = coverage_from_counts(Some(0), None);
+        assert_eq!(
+            got,
+            CriteriaCoverage::Undecidable,
+            "a None commands axis must never resolve to Single: {got:?}"
+        );
+    }
+
+    /// Both axes `None` ⇒ `Undecidable`.
+    #[test]
+    fn coverage_from_counts_undecidable_when_both_axes_unknown() {
+        let got = coverage_from_counts(None, None);
+        assert_eq!(
+            got,
+            CriteriaCoverage::Undecidable,
+            "both axes None must resolve to Undecidable: {got:?}"
+        );
+    }
+
+    // ── C4: `enumerated_claim_count` list-marker recognition ───────────────
+
+    /// Multi-line `1) …` / `2) …` numbered-paren markers must be recognised
+    /// as (at least) two separate enumerated claims.
+    #[test]
+    fn enumerated_claim_count_multiline_paren_numbered() {
+        let dc = "1) do A\n2) do B";
+        let n = enumerated_claim_count(dc);
+        assert!(
+            at_least_two(n),
+            "paren-numbered multi-line list must count >=2: {n:?}"
+        );
+    }
+
+    /// Multi-line `1. …` / `2. …` dot-numbered markers must be recognised as
+    /// (at least) two separate enumerated claims.
+    #[test]
+    fn enumerated_claim_count_multiline_dot_numbered() {
+        let dc = "1. do A\n2. do B";
+        let n = enumerated_claim_count(dc);
+        assert!(
+            at_least_two(n),
+            "dot-numbered multi-line list must count >=2: {n:?}"
+        );
+    }
+
+    /// Multi-line `- …` / `- …` dash-bullet markers must be recognised as (at
+    /// least) two separate enumerated claims.
+    #[test]
+    fn enumerated_claim_count_multiline_dash_bullets() {
+        let dc = "- do A\n- do B";
+        let n = enumerated_claim_count(dc);
+        assert!(
+            at_least_two(n),
+            "dash-bullet multi-line list must count >=2: {n:?}"
+        );
+    }
+
+    /// Multi-line `・…` / `・…` (Japanese nakaguro bullet) markers must be
+    /// recognised as (at least) two separate enumerated claims — the
+    /// reproducing bug's surrounding prose is Japanese, so this marker form
+    /// is not a decorative extra.
+    #[test]
+    fn enumerated_claim_count_multiline_nakaguro_bullets() {
+        let dc = "・do A\n・do B";
+        let n = enumerated_claim_count(dc);
+        assert!(
+            at_least_two(n),
+            "nakaguro-bullet multi-line list must count >=2: {n:?}"
+        );
+    }
+
+    /// Single-line inline `(1) … (2) …` markers must still be recognised as
+    /// (at least) two claims even without newlines separating them.
+    #[test]
+    fn enumerated_claim_count_inline_paren_numbered() {
+        let dc = "(1) do A (2) do B";
+        let n = enumerated_claim_count(dc);
+        assert!(
+            at_least_two(n),
+            "inline paren-numbered list must count >=2: {n:?}"
+        );
+    }
+
+    /// Single-line inline `1) … 2) …` markers must still be recognised as (at
+    /// least) two claims even without newlines separating them.
+    #[test]
+    fn enumerated_claim_count_inline_paren_numbered_no_leading_paren() {
+        let dc = "1) do A 2) do B";
+        let n = enumerated_claim_count(dc);
+        assert!(
+            at_least_two(n),
+            "inline numbered list must count >=2: {n:?}"
+        );
+    }
+
+    /// Plain prose with no list markers at all must not be over-counted on
+    /// the enumeration axis.
+    #[test]
+    fn enumerated_claim_count_prose_without_markers_is_at_most_one() {
+        let dc = "`cargo test -p condukt` exits 0";
+        let n = enumerated_claim_count(dc);
+        assert!(
+            at_most_one(n),
+            "marker-free prose must count <=1 on the enumeration axis: {n:?}"
+        );
+    }
+
+    /// A bare version-number dot form (`0.7.154`) embedded in prose must NOT
+    /// be mistaken for a `1.`/`2.` enumerated-list marker. This is the
+    /// concrete false-positive risk of a naive digit-dot scan.
+    #[test]
+    fn enumerated_claim_count_not_fooled_by_version_number_dot_form() {
+        let dc = "bump the plugin to 0.7.154 and confirm `cargo test -p condukt` exits 0";
+        let n = enumerated_claim_count(dc);
+        assert!(
+            at_most_one(n),
+            "a bare version number must not be counted as >=2 enumerated claims: {n:?}"
+        );
+    }
+
+    // ── C5: `command_mention_count` distinct-command recognition ───────────
+
+    /// A single unenumerated sentence naming three backticked runner
+    /// commands separated by `/` must count as (at least) two distinct
+    /// commands — this is exactly item 6 of the reproducing bug's criteria,
+    /// and the enumeration axis alone cannot catch it (no list markers).
+    #[test]
+    fn command_mention_count_multiple_backticked_runners_in_one_sentence() {
+        let dc = "`cargo test -p donegate` / `cargo fmt` / `cargo clippy` が green であること";
+        let n = command_mention_count(dc);
+        assert!(
+            at_least_two(n),
+            "three backticked runner commands in one sentence must count >=2: {n:?}"
+        );
+    }
+
+    /// A backticked non-runner command WITH arguments (e.g. `grep -n 'foo'
+    /// path`) must still be counted as a command mention alongside a second
+    /// backticked command.
+    #[test]
+    fn command_mention_count_backticked_nonrunner_with_args_counts() {
+        let dc = "`grep -n 'foo' crates/x/src` が 0 件 かつ `cargo test -p x` が green";
+        let n = command_mention_count(dc);
+        assert!(
+            at_least_two(n),
+            "a backticked command with arguments plus a second command must count >=2: {n:?}"
+        );
+    }
+
+    /// A backticked bare Rust path (`harness_core::verdict`) alongside ONE
+    /// real command must not be double-counted as a second command — paths
+    /// are not commands, and over-counting here would over-block the
+    /// legitimate single-claim skip case.
+    #[test]
+    fn command_mention_count_bare_import_path_not_counted_as_command() {
+        let dc = "`harness_core::verdict` を import しており `cargo test -p x` が green";
+        let n = command_mention_count(dc);
+        assert!(
+            at_most_one(n),
+            "a bare `::`-path in backticks must not be counted as a command: {n:?}"
+        );
+    }
+
+    /// A backticked bare filename (`verify.rs`) alongside ONE real command
+    /// must not be double-counted as a second command.
+    #[test]
+    fn command_mention_count_bare_filename_not_counted_as_command() {
+        let dc = "`verify.rs` を更新し `cargo test -p x` が green";
+        let n = command_mention_count(dc);
+        assert!(
+            at_most_one(n),
+            "a bare filename in backticks must not be counted as a command: {n:?}"
+        );
+    }
+
+    /// A backticked bare directory path (`crates/donegate/src`) alongside
+    /// ONE real command must not be double-counted as a second command.
+    #[test]
+    fn command_mention_count_bare_directory_path_not_counted_as_command() {
+        let dc = "`crates/donegate/src` 配下で `cargo test -p x` が green";
+        let n = command_mention_count(dc);
+        assert!(
+            at_most_one(n),
+            "a bare directory path in backticks must not be counted as a command: {n:?}"
+        );
+    }
+
+    /// Known substring collision: the literal text `"cargo test"` CONTAINS
+    /// `"go test"` as a substring (car|go test). A naive `contains("go
+    /// test")` scan would double-count a single `cargo test` mention as two
+    /// distinct commands (cargo AND go). Pins that this does not happen.
+    #[test]
+    fn command_mention_count_cargo_test_does_not_collide_with_go_test_substring() {
+        let dc = "`cargo test -p condukt` exits 0";
+        let n = command_mention_count(dc);
+        assert_eq!(
+            n,
+            Some(1),
+            "\"cargo test\" contains \"go test\" as a substring and must not be double-counted as cargo+go: {n:?}"
+        );
+    }
+
+    /// Repeating the SAME runner keyword twice in prose (e.g. mentioning
+    /// `cargo test` once as an instruction and once as the pass condition) is
+    /// ONE claim, not two — the axis counts DISTINCT commands, not
+    /// occurrences.
+    #[test]
+    fn command_mention_count_repeated_same_runner_keyword_is_one_claim() {
+        let dc = "cargo test を実行する。cargo test が green であること";
+        let n = command_mention_count(dc);
+        assert!(
+            at_most_one(n),
+            "repeating the same runner keyword must not count as two distinct commands: {n:?}"
+        );
+    }
+
+    // ── C1: three independent vetoes on `skip_eligible` ─────────────────────
+
+    /// Veto (a) — behavioral: even with a resolvable mechanical command AND
+    /// `Single` coverage, `behavioral == true` alone must force
+    /// `skip_eligible == false`. Isolates the behavioral veto from the other
+    /// two by keeping command-resolution and coverage on their permissive
+    /// side.
+    #[test]
+    fn veto_behavioral_alone_blocks_skip_despite_command_and_single_coverage() {
+        let dc = "`cargo test -p condukt` exits 0";
+        let c = classify_criteria(dc, Some(true), None);
+        assert!(
+            c.behavioral,
+            "is_behavioral_hint(Some(true)) must be authoritative"
+        );
+        assert!(
+            c.mechanical_cmd.is_some(),
+            "prose extraction must still resolve a command: {:?}",
+            c.mechanical_cmd
+        );
+        assert_eq!(
+            c.coverage,
+            CriteriaCoverage::Single,
+            "coverage must be Single: {:?}",
+            c.coverage
+        );
+        assert!(
+            !c.skip_eligible,
+            "behavioral veto alone must block skip_eligible even with a command and Single coverage: {c:?}"
+        );
+    }
+
+    /// Veto (b) — missing mechanical command: even with `behavioral == false`
+    /// AND `Single` coverage, `mechanical_cmd.is_none()` alone must force
+    /// `skip_eligible == false`.
+    #[test]
+    fn veto_missing_command_alone_blocks_skip_despite_nonbehavioral_and_single_coverage() {
+        let dc = "the README documents the new flag";
+        let c = classify_criteria(dc, None, None);
+        assert!(
+            !c.behavioral,
+            "this criteria carries no behavioral markers: {c:?}"
+        );
+        assert!(
+            c.mechanical_cmd.is_none(),
+            "this criteria names no runnable command: {:?}",
+            c.mechanical_cmd
+        );
+        assert_eq!(
+            c.coverage,
+            CriteriaCoverage::Single,
+            "coverage must be Single: {:?}",
+            c.coverage
+        );
+        assert!(
+            !c.skip_eligible,
+            "a missing mechanical command alone must block skip_eligible even when non-behavioral and Single: {c:?}"
+        );
+    }
+
+    // ── C6: end-to-end reproduction of the original defect ─────────────────
+
+    /// The actual reproducing criteria: a 6-item enumerated list whose items
+    /// 1-5 are structural claims and whose item 6 names three commands in one
+    /// unenumerated sentence. Before the fix this reported
+    /// `skip_verifier: true` once item 6's command exited 0, leaving items
+    /// 1-5 checked by nobody. Pins that `classify_criteria` now refuses to
+    /// certify a skip for this criteria.
+    #[test]
+    fn classify_criteria_six_item_reproducer_is_not_skip_eligible() {
+        let dc = "\
+1) 構造Aを直す
+2) 構造Bを直す
+3) 構造Cを直す
+4) 構造Dを直す
+5) 構造Eを直す
+6) `cargo test -p donegate` / `cargo fmt` / `cargo clippy` が green であること";
+        let c = classify_criteria(dc, None, None);
+        assert!(
+            matches!(c.coverage, CriteriaCoverage::Partial { .. }),
+            "the 6-item criteria must be classified Partial coverage, got {:?}",
+            c.coverage
+        );
+        assert!(
+            !c.skip_eligible,
+            "a 6-claim criteria with only 1 checked command must never be skip_eligible: {c:?}"
+        );
+    }
+
+    /// Isolates the COVERAGE veto from the BEHAVIORAL veto: a two-item
+    /// enumerated criteria containing NO behavioral markers at all (verified
+    /// directly via `criteria_is_behavioral`) must still be blocked from
+    /// skip_eligible purely on coverage grounds. This is the test that must
+    /// die if the coverage rule were ever removed — the behavioral veto alone
+    /// cannot explain the outcome here.
+    #[test]
+    fn coverage_veto_fires_even_when_criteria_is_not_behavioral_at_all() {
+        let dc = "1) `cargo test -p condukt` が green であること\n2) `cargo fmt --check` が green であること";
+        assert!(
+            !criteria_is_behavioral(dc, None),
+            "this criteria must carry NO behavioral markers, or the test does not isolate coverage: {dc}"
+        );
+        let c = classify_criteria(dc, None, None);
+        assert!(
+            !c.behavioral,
+            "classify_criteria must agree the criteria is not behavioral: {c:?}"
+        );
+        assert!(
+            matches!(c.coverage, CriteriaCoverage::Partial { .. }),
+            "a two-item enumerated criteria must be Partial coverage, got {:?}",
+            c.coverage
+        );
+        assert!(
+            !c.skip_eligible,
+            "coverage alone (independent of the behavioral flag) must block skip_eligible: {c:?}"
+        );
+    }
+
+    // ── C7: no regression on the legitimate single-claim case ──────────────
+
+    /// A genuinely single-claim, non-behavioral, mechanically-checkable
+    /// English criteria must still be skip-eligible with `Single` coverage —
+    /// the coverage veto must not over-block the case it exists to preserve.
+    #[test]
+    fn classify_criteria_single_claim_english_remains_skip_eligible() {
+        let c = classify_criteria("`cargo test -p condukt` exits 0", None, None);
+        assert_eq!(
+            c.coverage,
+            CriteriaCoverage::Single,
+            "coverage must be Single: {:?}",
+            c.coverage
+        );
+        assert!(
+            c.skip_eligible,
+            "a genuine single-claim criteria must remain skip_eligible: {c:?}"
+        );
+    }
+
+    /// Same regression guard for the Japanese phrasing of a single-claim
+    /// criteria.
+    #[test]
+    fn classify_criteria_single_claim_japanese_remains_skip_eligible() {
+        let c = classify_criteria("`cargo test -p condukt` が green であること", None, None);
+        assert_eq!(
+            c.coverage,
+            CriteriaCoverage::Single,
+            "coverage must be Single: {:?}",
+            c.coverage
+        );
+        assert!(
+            c.skip_eligible,
+            "a genuine single-claim criteria must remain skip_eligible: {c:?}"
+        );
+    }
+
+    // ── C8: the mechanical-check hint does not exempt the coverage rule ────
+
+    /// A structured `MechanicalCheck` hint naming a real command is
+    /// authoritative for WHICH command to run, but it must NOT certify
+    /// coverage: given to a multi-claim, non-behavioral criteria, the
+    /// classification must still refuse skip_eligible, even though
+    /// `mechanical_cmd` resolves cleanly to the hint's argv.
+    #[test]
+    fn mechanical_hint_does_not_exempt_multiclaim_coverage_veto() {
+        let hint = crate::model::MechanicalCheck {
+            cmd: "cargo test -p condukt".to_string(),
+            expect_exit: None,
+            expect_substring: None,
+        };
+        let dc = "1) `cargo test -p condukt` が green であること\n2) `cargo fmt --check` が green であること";
+        let c = classify_criteria(dc, None, Some(&hint));
+        assert_eq!(
+            c.mechanical_cmd.as_deref(),
+            Some(&["cargo", "test", "-p", "condukt"].map(String::from)[..]),
+            "the hint must still resolve mechanical_cmd structurally: {:?}",
+            c.mechanical_cmd
+        );
+        assert!(
+            !c.skip_eligible,
+            "a mechanical-check hint must not exempt a multi-claim criteria from the coverage veto: {c:?}"
+        );
+    }
+
+    /// Converse regression guard: the same hint applied to a genuinely
+    /// single-claim criteria must still leave `skip_eligible == true` with
+    /// `Single` coverage — the coverage veto must not accidentally swallow
+    /// the hinted single-claim path either.
+    #[test]
+    fn mechanical_hint_on_single_claim_criteria_remains_skip_eligible() {
+        let hint = crate::model::MechanicalCheck {
+            cmd: "cargo test -p condukt".to_string(),
+            expect_exit: None,
+            expect_substring: None,
+        };
+        let c = classify_criteria("the README documents the new flag", None, Some(&hint));
+        assert_eq!(
+            c.coverage,
+            CriteriaCoverage::Single,
+            "coverage must be Single: {:?}",
+            c.coverage
+        );
+        assert!(
+            c.skip_eligible,
+            "a hint on a single-claim criteria must remain skip_eligible: {c:?}"
+        );
+    }
+
+    // ── C9: `mechanical_skip_verdict` never overturns the classifier ───────
+
+    /// Given a `Classification` whose `skip_eligible` is `false` because of
+    /// `Partial` coverage, `mechanical_skip_verdict` must not skip the
+    /// verifier, must not fail the gate, must carry a reason, and — crucially
+    /// — must NOT invoke the `run` closure at all, even though the closure
+    /// would (if invoked) report a pass. A verdict builder that "double
+    /// checks" by running the command anyway would silently launder the
+    /// coverage veto back into a pass.
+    #[test]
+    fn mechanical_skip_verdict_respects_partial_coverage_veto_without_running() {
+        let cls = Classification {
+            behavioral: false,
+            mechanical_cmd: Some(vec!["cargo".to_string(), "test".to_string()]),
+            coverage: CriteriaCoverage::Partial {
+                enumerated: 2,
+                commands: 2,
+            },
+            skip_eligible: false,
+            expect_exit: None,
+            expect_substring: None,
+        };
+        let invoked = std::cell::Cell::new(false);
+        let (verdict, gate_failed) = mechanical_skip_verdict(&cls, |_cmd| {
+            invoked.set(true);
+            eprintln!("error: run must not be invoked when skip_eligible is false due to Partial coverage");
+            (true, "would-have-passed".to_string())
+        });
+        assert!(
+            !invoked.get(),
+            "the run closure must NOT be invoked when the classifier already vetoed the skip"
+        );
+        assert_eq!(
+            verdict["skip_verifier"],
+            serde_json::json!(false),
+            "skip_verifier must be false when skip_eligible is false: {verdict}"
+        );
+        assert!(
+            verdict.get("reason").and_then(|r| r.as_str()).is_some(),
+            "the verdict must carry a machine-readable reason: {verdict}"
+        );
+        assert!(
+            !gate_failed,
+            "refusing to skip on a coverage veto must not fail the gate — the verifier still runs: gate_failed={gate_failed}"
+        );
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // C10: the bare (unbackticked) runner-keyword scan is WHOLE-WORD.
+    //
+    // A longer word that merely STARTS (or ends) with a runner keyword is not
+    // a mention of that command. An over-eager substring scan would flip
+    // coverage to `Partial` and refuse a legitimate skip — an over-block is a
+    // defect too, not a free safe side (the clause this pins is symmetric
+    // with the earlier "cargo test" / "go test" substring-collision pin).
+    // ══════════════════════════════════════════════════════════════════════
+
+    /// Axis-level: "npm testing" is a longer word ("testing") that merely
+    /// STARTS WITH the runner keyword "test" (via "npm test..."), and "npm"
+    /// alone names no command either. Neither may be counted as a mention.
+    #[test]
+    fn command_mention_count_prefix_collision_npm_testing_is_not_npm_test() {
+        let dc = "we use the npm testing framework here";
+        let n = command_mention_count(dc);
+        assert_eq!(
+            n,
+            Some(0),
+            "\"npm testing\" must not be mistaken for a mention of `npm test` — a word merely starting with a runner keyword is not a whole-word match: {n:?}"
+        );
+    }
+
+    /// Axis-level, suffix side of the same whole-word rule: "unittest" is a
+    /// longer word that merely ENDS WITH the runner keyword "test". It must
+    /// not be counted as a second command alongside the one real backticked
+    /// command.
+    #[test]
+    fn command_mention_count_suffix_collision_unittest_is_not_test() {
+        let dc = "run the unittest suite; `cargo test -p condukt` exits 0";
+        let n = command_mention_count(dc);
+        assert_eq!(
+            n,
+            Some(1),
+            "\"unittest\" must not be mistaken for a bare mention of `test` — whole-word matching applies at both ends of the word: {n:?}"
+        );
+    }
+
+    /// End-to-end: this is where the over-block actually costs something. A
+    /// criteria containing the prefix-collision word "testing" (inside "npm
+    /// testing framework") alongside ONE genuine backticked command must
+    /// still resolve to `Single` coverage, non-behavioral, and
+    /// `skip_eligible == true`. If the scan were substring-based instead of
+    /// whole-word, "npm test" would be spuriously counted as a second named
+    /// command, coverage would flip to `Partial`, and a legitimate skip would
+    /// be wrongly refused.
+    #[test]
+    fn classify_criteria_prefix_collision_word_does_not_block_legitimate_skip() {
+        let dc = "we use the npm testing framework; `cargo test -p condukt` exits 0";
+        let c = classify_criteria(dc, None, None);
+        assert!(
+            !c.behavioral,
+            "this criteria carries no behavioral markers: {c:?}"
+        );
+        assert_eq!(
+            c.coverage,
+            CriteriaCoverage::Single,
+            "a prefix-collision word must not flip coverage to Partial: {:?}",
+            c.coverage
+        );
+        assert!(
+            c.skip_eligible,
+            "a prefix-collision word must not spuriously refuse a legitimate single-claim skip: {c:?}"
+        );
     }
 }
 

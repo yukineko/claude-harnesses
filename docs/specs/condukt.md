@@ -69,8 +69,14 @@
   通常パス（自動 verified・exit 0）は不変。`record-run --all` は fugu-router 向けに outcome を冪等記録（Stop hook）。`test` は
   `[test].command`→自動検出（cargo/npm/pytest）で `sh -c` 実行し exit code 伝播。
 - **`state check-oracle|check-criteria`** — F→P 再現証明の判定 / `done_criteria` の機械ゲート＋`skip_verifier`
-  導出（振る舞い系は常に `skip_verifier:false`）。`verify::classify_criteria` は構造化 `is_behavioral`/
-  `mechanical_check` を権威ヒントに、無ければ散文ヒューリスティック（`BEHAVIORAL_MARKERS`）へ縮退。
+  導出。`verify::classify_criteria` は **3 つの veto の AND**（振る舞い系 / 実行可能コマンド無し /
+  coverage が `Single` でない）で `skip_eligible` を決め、いずれか 1 つでも立てば `skip_verifier:false`。
+  coverage（`verify::CriteriaCoverage`）は「criteria が抽出済み 1 コマンドより多くを主張しているか」を
+  列挙マーカー数とコマンド言及数の 2 軸で決定論的に測り、`Partial`/`Undecidable` はどちらも skip を拒む
+  — 部分チェックを完全 pass として報告しないため。構造化 `is_behavioral`/`mechanical_check` は
+  それぞれ 1 番目・2 番目の veto の権威ヒントで（無ければ散文ヒューリスティック `BEHAVIORAL_MARKERS` へ縮退）、
+  **coverage veto はどちらのヒントでも外れない**（ヒントは走らせるコマンドを宣言するだけで、
+  criteria 全体を賄うとは宣言していない）。
 - **`state claim/…/is-claimed`, `execution-state`, `conflict-check/abandon/pause/resume/cancel`,
   `checkpoint/rollback`, `verifier-model`** — クロスセッション占有・可逆性・実行編集・verifier≠worker モデル解決。
 - **`policy decide/answer/answers`** — 中央 graded-autonomy: risk × reversibility × confidence を

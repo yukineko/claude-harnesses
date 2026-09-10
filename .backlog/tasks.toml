@@ -19667,3 +19667,109 @@ updated_at = 1789040755
 weight = 0.0
 issue_number = 490
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/490"
+
+[[task]]
+id = "f84a6779"
+title = "condukt: diffrisk_record journal test is unreliable under a full workspace run (passes alone, failed 1 of 2 workspace runs)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "flaky-test",
+    "test-isolation",
+    "p2",
+]
+status = "pending"
+notes = """
+Observed 2026-09-10 in worktree agent-a3292f0e8fb2bc7e3 while running the full workspace suite
+three times over for an unrelated blastguard change.
+
+  run 1 (cargo test --workspace --no-fail-fast): PASSED
+  run 2 (same command, same commit f4fcab66):     FAILED
+  isolated re-run of just this test:              PASSED
+
+Verbatim failure from run 2:
+
+  ---- diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded stdout ----
+  thread 'diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded'
+  panicked at crates/condukt/src/diffrisk_record.rs:540:9:
+  assertion `left == right` failed: one record per invocation
+    left: 1
+   right: 2
+
+So one of the two journal records was missing. The assertion is a GOOD one - it is the
+'inspected and clean' vs 'never inspected' distinction, which is the tri-state this repo cares
+most about - and it is the TEST that is unreliable, not obviously the contract.
+
+NOT caused by the change under test. The diff on that branch touches only
+crates/blastguard/src/{scope.rs,detect.rs} (an added system-directory predicate) plus version
+files; condukt only links blastguard and does not call the new code. The test also passes alone.
+
+TWO CANDIDATE CAUSES, neither yet settled - do not close this on the first plausible one:
+
+ (a) Cross-run contention. A second session was running its own
+     cargo test --workspace in /Users/yuki/src/.harness-worktrees/session-25763e04 during these
+     runs. Different target dir, but if project_state_dir resolves anywhere shared (under $HOME
+     rather than under the test's tempdir cwd) the two runs write the same ledger. This is the
+     failure mode MEMORY already records: concurrent cargo runs corrupting each other through
+     fixed fixtures.
+
+ (b) Intra-process races. cargo runs a binary's tests multi-threaded. The test reads
+     crate::state::project_state_dir(&cfg, cwd.path()); if that consults an env var that any
+     sibling test in the same binary sets via std::env::set_var, the resolved directory can change
+     underneath it. Passing in isolation is consistent with this too, since isolation also removes
+     the siblings - so 'it passed alone' does NOT discriminate between (a) and (b).
+
+To discriminate: run the condukt bin tests alone with --test-threads=1 while a second workspace run
+is active, and again with default threads and no second run. Whichever reproduces names the cause.
+
+Until then this is an unreliable oracle on a contract worth protecting, which is worse than a plain
+red: it will be dismissed as flaky the next time it fires for a real reason.
+
+=== SETTLED 2026-09-10 by repeated measurement. Both of my earlier hypotheses were WRONG. ===
+
+It is a PRE-EXISTING ~50% flake, and it is NOT cross-run contention.
+
+What I got wrong, recorded because the reasoning error is the reusable part:
+
+ 1. I first blamed a concurrent cargo test --workspace in another session's worktree, on the
+    strength of ONE observation (passed in run 1, failed in run 2, other run active). It then
+    failed again in run 3 with NO other cargo process alive. Hypothesis dead.
+
+ 2. I then ran the pre-change commit ONCE, saw 769 passed / 0 failed against my 768 / 1, and was
+    one step from concluding my own blastguard change had caused it. That would have been a
+    single-sample conclusion about a nondeterministic test - the same error as (1), in the
+    opposite direction.
+
+The measurement that actually settles it - repeat the SAME suite in the SAME tree N times:
+
+  HEAD f4fcab66 (with the blastguard system-dir axis), cargo test -p condukt --bin condukt:
+    run 1 FAILED (768/1) | run 2 ok (769/0) | run 3 ok (769/0) | run 4 FAILED (768/1)
+      -> 2 of 4 red
+
+  c7c4ea49 (immediately BEFORE that change), same command, separate worktree:
+    run 1 ok | run 2 FAILED | run 3 ok | run 4 FAILED | run 5 ok | run 6 FAILED
+      -> 3 of 6 red
+
+Same test both sides (diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded),
+same assertion (one record per invocation, left: 1, right: 2), same rate. The blastguard change is
+exonerated by measurement, not by argument.
+
+It also explains why the task's baseline reported only 3 red targets without this one: that run
+happened to land on the green side of the coin.
+
+REMAINING CAUSE, still unsettled: it passes when run alone and fails about half the time when the
+768 sibling tests in the same binary run alongside it, with no other process involved. That points
+at an intra-process race - shared mutable state (an env var, a process-global, or a state directory
+that does not actually vary per test) between this test and a sibling. crates/condukt/src/diffrisk_record.rs
+around line 540 reads crate::state::project_state_dir(&cfg, cwd.path()); the next step is to check
+whether that path really is per-test, and whether any sibling calls std::env::set_var for something
+it consults.
+
+Priority note: a 50% oracle on the 'inspected and clean vs never inspected' tri-state is worse than
+a steady red, because the next person to see it fire will have a ready-made reason to dismiss it."""
+created_at = 1789041207
+updated_at = 1789041542
+weight = 0.0
+issue_number = 492
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/492"

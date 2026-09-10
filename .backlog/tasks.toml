@@ -1445,11 +1445,23 @@ tags = [
     "p1",
     "wontfix",
 ]
-status = "pending"
+status = "cancelled"
 notes = """
 U-shaped attention bias under-attends middle (>30% degradation vs edges); place highest-relevance chunks at start AND end, bury least-relevant in middle. Cheap, separate ordering pass over already-selected chunks. 証拠: https://docs.haystack.deepset.ai/reference/rankers-api (LostInTheMiddleRanker). 完了条件: injected spec/retrieved chunks emitted in edge-weighted order (rank1 first, rank2 last, lowest centered) via one ordering pass.
 Inapplicable to context-governor's hook architecture as scoped. Lost-in-the-middle edge-ordering requires a MULTI-CHUNK relevance-ranked injection; the injector emits exactly ONE best-scoring section (injector.rs:92-106 max_by_key), and the rehydrator emits normative pins with no query to rank by. Adding top-K multi-chunk retrieval to create ranked chunks fights the crate's explicit size-minimization axis (lib.rs 'minimize resident normative text'), and edge-ordering resident pins would risk burying Verbatim content mid-context, contradicting I2 lossless-recall. Deferred by user decision to pursue grounded safety/autonomy p1s. Recommend reclassify as guidance-only or retarget if multi-chunk retrieval is ever introduced.
-調査済み・実装不能につき guidance-only として close (ユーザー裁定 2026-08-02)。edge-ordering は multi-chunk の relevance-ranked injection を前提とするが、injector は最高スコア 1 section のみ、rehydrator は ranking する query を持たない。top-K 導入は crate の size-minimization 軸と I2 lossless-recall に反する。詳細は notes に保持。"""
+調査済み・実装不能につき guidance-only として close (ユーザー裁定 2026-08-02)。edge-ordering は multi-chunk の relevance-ranked injection を前提とするが、injector は最高スコア 1 section のみ、rehydrator は ranking する query を持たない。top-K 導入は crate の size-minimization 軸と I2 lossless-recall に反する。詳細は notes に保持。
+
+--- 再測定して cancelled にする 2026-09-11、測定点 2abf8dea ---
+
+close の根拠は 2026-08-02 のユーザー裁定 (guidance-only) だが、その前提が今も
+成り立つかを測り直した。成り立つ:
+  crates/context-governor/src/defaults/injector.rs:95 が `max_by_key` で
+  最高スコアの 1 section だけを選ぶ。edge-ordering が前提とする
+  multi-chunk の relevance-ranked injection は存在しない。
+notes が書いていたパスは injector.rs だったが、実体は defaults/injector.rs へ
+移動している (結論は変わらない)。
+
+status を cancelled にする。done ではない — 実装していないため。"""
 created_at = 1782753890
 updated_at = 1787734763
 weight = 0.0
@@ -1793,11 +1805,26 @@ tags = [
     "scout",
     "p1",
 ]
-status = "pending"
+status = "cancelled"
 notes = """
 context 圧力は検知するが古い tool 出力/過去 thinking を能動的に除去しない(context-rot 緩和の最高ROIレバー)。事実は note store に退避しつつ clear。repo の中核テーゼと整合。/ 証拠(peer): context-engineering の tool-result clearing パターン; repo: ctxrot に clear 機構なし / 完了条件: 圧力%検知→古い tool 出力 clear(事実は保持)→thinking clear を hook で発火
 Architecturally inapplicable to a hook (same class as prompt-caching batch). A Claude Code hook has NO output channel to clear/null resident tool_result or thinking blocks: the only emit surface is decision:block/deny and additionalContext (which ADDS text, never removes). preguard.rs:16 documents 'PreToolUse cannot inject additionalContext'. The only actor that removes content is compaction, which a hook cannot trigger at a custom pressure threshold (see memory compaction-not-hook-triggerable) nor apply selectively block-by-block. Anthropic 'clear tool uses' context-editing is an API-request param the CLIENT sets, unavailable to a subscription-mode plugin hook. Achievable levers already exist: preguard PREVENTS large reads entering context (PreToolUse deny+reason); rescue preserves facts pre-compact; distill is the proactive auto-distill answer. The 'clear resident blocks via hook' framing is not buildable.
-実測で architecturally-inapplicable を確認 (測定日 2026-09-07, 測定点 e018fe91): hook の出力面は additive か blocking のみ (main.rs:375 permissionDecision:deny / main.rs:408 additionalContext / decision:block) で、常駐 tool_result・thinking ブロックを除去する経路は無い。main.rs:371 に "PreToolUse can not inject additionalContext" と明記。ctxrot に clear 機構は存在しない (grep で loadset.rs:102 clear_preferred_note のみ、無関係)。done_criteria の「古い tool 出力 clear」は hook 層では実装不能。"""
+実測で architecturally-inapplicable を確認 (測定日 2026-09-07, 測定点 e018fe91): hook の出力面は additive か blocking のみ (main.rs:375 permissionDecision:deny / main.rs:408 additionalContext / decision:block) で、常駐 tool_result・thinking ブロックを除去する経路は無い。main.rs:371 に "PreToolUse can not inject additionalContext" と明記。ctxrot に clear 機構は存在しない (grep で loadset.rs:102 clear_preferred_note のみ、無関係)。done_criteria の「古い tool 出力 clear」は hook 層では実装不能。
+
+--- 再測定して cancelled にする 2026-09-11、測定点 2abf8dea ---
+
+2026-09-07 (e018fe91) の architecturally-inapplicable の判定が今も成り立つかを
+測り直した。成り立つ:
+  crates/ctxrot/src/ の clear で始まる関数は clear_preferred_note
+  (loadset.rs:102 と唯一の呼び出し main.rs:883) の 1 本だけで、常駐の
+  tool_result / thinking ブロックとは無関係である。
+  hook の出力面は main.rs:375 の permissionDecision:deny、main.rs:408 の
+  additionalContext、および decision:block のみ。いずれも追加か阻止であって
+  除去ではない。main.rs:371 のコメントが逐語で
+  「PreToolUse can't inject additionalContext」と書いている。
+
+done_criteria の「古い tool 出力 clear」は hook 層では実装不能なので
+cancelled にする。done ではない。"""
 created_at = 1782856095
 updated_at = 1788936545
 weight = 0.0
@@ -1850,11 +1877,28 @@ tags = [
     "scout",
     "p1",
 ]
-status = "pending"
+status = "cancelled"
 notes = """
 828 の println!/eprintln! があり tracing:: は 0。span/レベルフィルタ(RUST_LOG)が無く hook 障害の観測性が低い。/ 証拠: grep println!|eprintln! 828 hits, tracing:: 0 hits, workspace.dependencies に tracing 無し / 完了条件: tracing を workspace.deps に追加、hot path の出力を tracing マクロ化、RUST_LOG でレベル制御可能
 Harmful as specified — scout miscounted grep hits without the architecture. In this codebase stdout is a STRUCTURED WIRE PROTOCOL, not incidental logging: hook binaries emit their JSON decision/additionalContext to stdout via println! (ctxrot/main.rs:280,310,331), and CLI commands emit JSON to stdout that the flow/scout/condukt skills capture via $(...) (compass/main.rs:606,689,750; backlog/main.rs:226,320 println! json!({additionalContext})). Converting these println! to tracing::info! (stderr, RUST_LOG-gated, OFF by default) would make every hook emit nothing to stdout and every CLI-JSON contract return empty — breaking the whole PDO loop (backlog next / compass gap / condukt would all get empty strings). 'tracing:: = 0 hits' is correct-by-design. Only a small fraction (internal fail-soft eprintln! diagnostics) is a safe tracing target, and even that needs a stderr-pinned subscriber and is NOT what the done-condition ('hot path の出力を tracing マクロ化') asks. Introducing a global subscriber across ~30 binaries also risks never-break-a-turn for marginal gain. Not buildable as specified.
-実測で not-buildable を確認 (測定日 2026-09-07, 測定点 e018fe91): tracing:: は crates/*/src/ に 0 ヒットだが、これは design どおり。stdout は構造化ワイヤプロトコルであり ctxrot/main.rs に println! 71 箇所・compass/main.rs に 29 箇所が JSON decision/additionalContext を吐いている。done_criteria の「hot path の出力を tracing マクロ化」を満たすと hook の stdout が空になり PDO ループ (backlog next / compass gap / condukt) が全滅する。仕様のまま実装不可。"""
+実測で not-buildable を確認 (測定日 2026-09-07, 測定点 e018fe91): tracing:: は crates/*/src/ に 0 ヒットだが、これは design どおり。stdout は構造化ワイヤプロトコルであり ctxrot/main.rs に println! 71 箇所・compass/main.rs に 29 箇所が JSON decision/additionalContext を吐いている。done_criteria の「hot path の出力を tracing マクロ化」を満たすと hook の stdout が空になり PDO ループ (backlog next / compass gap / condukt) が全滅する。仕様のまま実装不可。
+
+--- 再測定して cancelled にする 2026-09-11、測定点 2abf8dea ---
+
+2026-09-07 (e018fe91) の not-buildable の判定が今も成り立つかを測り直した。
+成り立つ。ただし件数は起票時から動いているので、そのまま継承せず記録する:
+  grep -rn --include='*.rs' -E "println!|eprintln!" crates/*/src/ | wc -l  -> 1597
+    (起票時の主張は 828。母数が倍近くに増えているが結論は変わらない)
+  grep -rn --include='*.rs' "tracing::" crates/*/src/ | wc -l              -> 0
+  workspace の Cargo.toml における tracing の宣言                          -> 0 件
+stdout が構造化ワイヤプロトコルである点も不変で、crates/ctxrot/src/main.rs:404
+付近が hook_output に additionalContext を積んで JSON として stdout へ出す。
+
+done_criteria の「hot path の出力を tracing マクロ化」を満たすと、この
+stdout が空になり PDO ループ (backlog next / compass gap / condukt) が全滅する。
+仕様のまま実装不可なので cancelled にする。done ではない。
+tracing 自体を否定するものではない — 安全な対象は内部の fail-soft な
+eprintln! 診断に限られ、それは done_criteria が求めているものではない。"""
 created_at = 1782856113
 updated_at = 1788936545
 weight = 0.0
@@ -20873,6 +20917,7 @@ updated_at = 1789057581
 weight = 0.0
 issue_number = 502
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/502"
+
 [[task]]
 id = "9271d739"
 title = "blastguard: the config exemption covers the deployed-plugin and transcript subtrees of the user's home Claude directory, so recursively deleting every deployed gate binary is auto-allowed"
@@ -21023,3 +21068,43 @@ updated_at = 1789058637
 weight = 0.0
 issue_number = 504
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/504"
+
+[[task]]
+id = "57c03b14"
+title = "backlog edit は不正な --status を拒否しながら exit 0 で終わる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+実測 2026-09-11、測定点 2abf8dea。
+
+  backlog edit 966ae7aa --status cancelled
+  出力: Error: warning: unknown status 'cancelled'; valid values are pending | done | failed
+  exit code: 0
+
+拒否そのものは正しい (cancelled は CLI の語彙に無い)。問題は終了ステータスで、
+「拒否した」と「成功した」が下流から区別不能になっている。スクリプトが
+  backlog edit <id> --status X || handle_failure
+と書いた場合、handle_failure は決して呼ばれず、status は変わっていないのに
+変わったものとして扱われる。CLAUDE.md 第3節の「subprocess は stdout だけでなく
+必ず終了ステータスを判定に使う」の供給側の違反であり、消費側がいくら正しく
+書いても検出できない。
+
+さらに出力自体が矛盾している: 接頭辞は Error だが本文は warning と名乗る。
+どちらの深刻度なのかが読めない。
+
+見分けるべき2つの読み:
+ (a) 実在の欠陥 — 不正な入力は非0で終わるべき。
+ (b) 意図的な fail-soft — 「edit の他のフィールドは適用したので成功」。
+     ただしこの呼び出しでは --status しか渡していないので、適用されたものは
+     何も無く、(b) の読みでも exit 0 は正当化されない。
+
+関連: cancelled が CLI から到達不能なため、terminal な非完了は TOML を直接
+編集するしかない。この2つは同じ根 (status 語彙が pending|done|failed の3値で、
+「やらないと決めた」を表現できない) から出ている。"""
+created_at = 1789062145
+updated_at = 1789062145
+weight = 0.0
+issue_number = 505
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/505"

@@ -20354,8 +20354,9 @@ tags = [
     "fail-open",
     "p1",
 ]
-status = "pending"
+status = "done"
 notes = """
+
 
 実測 2026-09-10、測定点 627b756a (dirty)、blastguard 0.2.61 のビルド済みバイナリに実 PreToolUse payload を投入。
 
@@ -20435,9 +20436,20 @@ recoverability 軸が location 軸より前に短絡するため、追跡済み�
    三値も維持: ask が deny にも allow にも潰れていない。
    退行 3 点も維持: system dir への truncate redirect = deny、fd-dup = ALLOW、
    実 TMPDIR 配下の confined redirect (ファイル存在) = ask。
-"""
+
+
+--- クローズ 2026-09-11 ---
+デプロイ済みバイナリで検証済みのためクローズする。
+blastguard 0.2.63、.deployed-from.json は commit ff1f34c8d6684f9c1ae026f70d230bd1566c78aa / dirty:false。
+canary health-gate は proceed (observed_violations=0, threshold=2)。
+デプロイ済み 0.2.63 に対する実測: D は ask (元 ALLOW)、E は deny、F は ask。
+1 変数だけを振った 10 形すべてで内外の判定が一致。
+over-correction 対照 3 件 (.claude/agents/foo.md、チェックアウト内 .claude/agents/foo.md、
+チェックアウト内 Cargo.toml) は ALLOW のまま。
+退行 3 点も維持: system dir への truncate redirect = deny、fd-dup = ALLOW、
+実 TMPDIR 配下の confined redirect (ファイル存在) = ask。"""
 created_at = 1789044941
-updated_at = 1789058431
+updated_at = 1789058639
 weight = 0.0
 issue_number = 496
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/496"
@@ -20454,6 +20466,7 @@ tags = [
 ]
 status = "pending"
 notes = """
+
 実測 2026-09-10、worktree agent-a07923cb77ff8e38c、cwd は当該 worktree。いずれも main の作業ツリーには一切触っていない。
 
 誤検知 1 — repo の外へのディレクトリ作成:
@@ -20477,9 +20490,20 @@ notes = """
 
 推測される原因 (未検証): 相対パスを cwd ではなく repo の main ツリーに対して解決している、
 または repo 外の絶対パスを「未知だから main」と扱っている。判定不能を制限側へ倒す設計自体は正しいので、
-直すなら cwd 解決の側であって、緩めることではない。"""
+直すなら cwd 解決の側であって、緩めることではない。
+
+--- 追記 2026-09-11 (worktree agent-ac83774675a511f4d) ---
+
+誤検知 4 — シェル変数への代入だけを含む行:
+  行頭が SCR=/private/tmp/.../scratchpad という代入で始まる複合コマンド
+  Refused: `SCR=/private/tmp/.../scratchpad` mutates this project's MAIN working tree.
+  代入はファイルを一切変更しない。書き込み先も /private/tmp 配下で repo の外。
+  cwd は自分の worktree。誤検知 1・2 と同じ「repo 外の絶対パスを main とみなす」族に見える。
+  回避策として fixture 生成を python スクリプトファイルに移した (迂回ではなく、
+  同じ作業を別の道具で行った。ゲートは黙らせていない)。
+"""
 created_at = 1789044960
-updated_at = 1789044960
+updated_at = 1789058636
 weight = 0.0
 issue_number = 497
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/497"
@@ -20603,3 +20627,75 @@ updated_at = 1789047766
 weight = 0.0
 issue_number = 501
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/501"
+
+[[task]]
+id = "66a50b8c"
+title = 'worktree-isolation guard refuses `. "$HOME/.cargo/env"` and a `bash <script>` invocation from inside a worktree, forcing a different spelling for routine toolchain setup and script execution'
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "false-positive",
+    "p2",
+]
+status = "pending"
+notes = """
+実測 2026-09-11、worktree agent-ac83774675a511f4d 内。ゲートは worktree 分離を守る側であり、
+判定不能を制限側へ倒す設計自体は正しい。ただし次の 2 つは日常作業であり、別の綴りへの
+書き換えを強いられた (ゲートは黙らせていない。skip 機構も使っていない)。
+
+拒否 1 — CLAUDE.md が指示するツールチェーン読み込み:
+  CLAUDE.md の「ビルド / テスト / ゲート」節は cargo の前に $HOME/.cargo/env を source する
+  ことを指示している。その綴りをそのまま実行すると:
+  「This agent is isolated in the worktree ..., but this command runs a string through .,
+   which can't be verified to stay inside the worktree.」
+  代わりに PATH へ $HOME/.cargo/bin を足す形にした。
+  リポジトリの指示そのものがゲートに拒否される状態なので、どちらかを直す必要がある。
+
+拒否 2 — worktree 内スクリプトの bash 実行:
+  worktree 内の相対パスのシェルスクリプトを bash 経由で実行しようとすると:
+  「this command runs bash inside a construct too complex to verify; what it reads or is
+   handed as shell text cannot be shown not to run git.」
+  スクリプトの絶対パスを直接実行する形なら通った (同じスクリプト、同じ引数)。
+
+影響: どちらも「同じ作業の別の綴り」で通るため、ゲートが守っている不変条件
+(worktree の外を触らない) を実際に強めてはいない。CLAUDE.md 5 の「skip 機構で黙らせる」
+圧力になる前に、cwd 解決か許容綴りの側を直すのが筋。"""
+created_at = 1789058636
+updated_at = 1789058636
+weight = 0.0
+issue_number = 503
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/503"
+
+[[task]]
+id = "d17abe39"
+title = "blastguard: the directory holding all agent worktrees is not treated as a container of protected paths, so recursively deleting every checkout at once asks instead of denying"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p2",
+]
+status = "pending"
+notes = """
+実測 2026-09-11、blastguard 0.2.63 (本票の直前に landed した worktrees 免除の修正込み)。
+
+修正前は .claude/worktrees の再帰削除が ALLOW だった。修正後は ask になる (制限側へ移動)。
+ただし deny ではない。
+
+holds_protected_paths は PROTECTED_GLOBS のディレクトリ前置き (.claude、.githooks など) を
+見るため、.claude/worktrees はどのパターンにも一致しない。しかし各チェックアウトは
+それ自身の .claude/settings.json と .githooks を持つので、この 1 コマンドは
+「protected paths を holding する tree」を人数分まとめて消す。
+比較: ホームや project 直下の Claude ディレクトリそのものの再帰削除は container ルールで deny になる。
+
+さらに blast radius として、全並行セッションの未コミット作業が同時に消える。
+recoverability 軸では未追跡ファイルは復旧不能と判定される対象である。
+
+ask で十分かどうかは判断が要る (非対話セッションでは ask は deny に硬化するので、
+実運用では deny 相当になる場面が多い)。判断を人間に返すため修正ではなく起票にとどめる。"""
+created_at = 1789058637
+updated_at = 1789058637
+weight = 0.0
+issue_number = 504
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/504"

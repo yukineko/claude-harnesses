@@ -1,3 +1,5 @@
+
+
 [[task]]
 id = "0ba79281"
 title = 'CLAUDE.md: Windows で成立しない cargo 手順 (. "$HOME/.cargo/env") を直す'
@@ -19353,9 +19355,119 @@ TOFU 承認記憶 (approve.rs、直近 commit 56d43f1b) とは別系統であり
 
 なぜ誰も気づいていなかったか: 本件は backlog c4321fc2 / 65bfb279 / 35968776 が指摘する
 「workspace のテストを走らせるゲートが存在しない」の実例 3 件目。pre-commit / pre-push は
-cargo check --workspace までで cargo test を走らせない。"""
+cargo check --workspace までで cargo test を走らせない。
+
+=== 2026-09-10 investigation, worktree agent-a3292f0e8fb2bc7e3 (branch worktree-agent-a3292f0e8fb2bc7e3) ===
+
+STATUS: RED 1 FIXED and DEPLOYED (blastguard 0.2.60). RED 2 still red, DELIBERATELY NOT TOUCHED -
+awaiting a human ruling. Ticket stays pending for that reason.
+
+--- The earlier hypothesis in these notes was WRONG on both counts. Correcting it (section 4). ---
+
+(1) It is NOT a redirect-PARSING regression. The notes above, and the task framing derived from them,
+assumed the 2> operand extraction had broken and needed balanced operand extraction. Measured: it had
+not. In the SAME failing test, the line above the failing one - cargo test 2> /etc/hosts - denies
+correctly, and 12 redirect spellings were probed against an existing target (>, 2>, 1>, &>, tab-
+separated, no-space, double-quoted, single-quoted, inside a subshell, after a semicolon, behind a
+here-string, trailing &) and ALL extracted the operand correctly and denied. The nested here-string
+form the repo recorded as OPEN is closed. Only >| mis-parses, to an EMPTY operand, and it still
+denies (fail-closed) with a wrong reason string - filed separately as 8abd74c4.
+
+The single variable behind RED 1 is EXISTENCE: /etc/hosts exists on this Mac, /etc/fstab does not.
+
+(2) RED 1 is NOT a stale test expectation. It pins a REAL and LIVE fail-open, and the frozen test was
+right. f18134da moved the axis to recoverability; a path that does not exist yet answers
+NothingToDestroy - truthfully - and the redirect rule continues past it into Allow. That is the correct
+answer to the question it asked and the wrong question for a file whose EXISTENCE is the payload.
+
+Measured against the DEPLOYED 0.2.59 binary
+(~/.claude/plugins/cache/yukineko/blastguard/0.2.59/bin/blastguard-darwin-arm64,
+.deployed-from.json commit 59563fde, dirty false):
+
+  echo x > /etc/sudoers.d/zz-evil        -> ALLOW   (privilege escalation drop-in)
+  echo x > /etc/paths.d/zz-evil          -> ALLOW   ($PATH injection)
+  echo x > /Library/LaunchDaemons/e.plist-> ALLOW   (persistence)
+  echo x > /usr/local/bin/newthing       -> ALLOW   (binary shadowing)
+  echo x >> /etc/paths.d/zz-evil         -> ALLOW   (append loop only checked protected paths)
+  cargo test 2> /etc/hosts               -> deny    (exists, so recoverability caught it)
+
+ORIGIN, established by BISECTION not by reading. Disposable worktree at
+/Users/yuki/src/.harness-worktrees/bisect-19c359d0, built and RUN at both commits:
+  f18134da^ = f492ff46 (0.2.58): both tests PASS; all four system-dir writes above DENY.
+  f18134da            (0.2.59): both tests FAIL; all four ALLOW.
+So f18134da is confirmed as the origin. Note f18134da also EDITED both tests in the same commit, so
+"green at the parent" is green for the parent's assertions - but the binary probe at the parent is
+independent of the tests and shows the same flip, which is the stronger evidence.
+Worth recording: 0.2.58 denied these for a reason string that was itself false ("truncates and
+overwrites an existing file", asserted with nothing in the crate checking existence). f18134da
+correctly fixed that false reason and, in the same move, dropped the verdict.
+
+--- FIX (blastguard 0.2.60) ---
+
+A SECOND AXIS, not a special case, and not a change to the recoverability axis. reversible.rs's own
+module doc already reserved it: "Recoverability is not the only reason to surface a command ... That
+axis stays where it already lives ... and callers must consult it FIRST." Added
+scope::is_inside_system_dir + detect::system_path_block, consulted by BOTH the truncating and the
+append redirect loops, before the recoverability probe, beside the existing protected_path_block.
+
+It denies rather than asks: protected_path_block asks because only the human knows whether an edit to
+their own gate config strengthens or disarms it, and that ambiguity has no counterpart when an agent
+installs into /etc.
+
+The system list is deliberately NARROWER than scope::NEVER_A_ROOT, which exists to answer a different
+question. /home, /Users, /Volumes, /mnt are excluded - denying every absolute write under them would
+re-create the friction 0.2.59 measured and retired. /var is excluded because the macOS per-user
+$TMPDIR (/var/folders/...) and /var/tmp live under it. A target confined to a safe root escapes, so a
+project checked out at /opt/myproj is unaffected.
+
+New tests, each observed RED before being made green:
+  bg2_system_dir_writes_deny_even_when_the_target_is_absent
+    RED verbatim: assertion failed: bash("echo x > /etc/sudoers.d/zz-evil").is_deny()
+  bg2_system_dir_rule_does_not_swallow_ordinary_absent_targets
+    Passed from the start - it is the anti-over-block guard, and it is what keeps the fix from being
+    a blanket deny on absolute paths. Recorded honestly: it was never RED.
+
+DEPLOYED-BINARY VERIFICATION (0.2.60, live wrapper
+~/.claude/plugins/cache/yukineko/blastguard/0.2.60/bin/blastguard; registry installed_plugins.json
+repointed to the 0.2.60 installPath; .deployed-from.json commit c7c4ea49):
+  cargo test 2> /etc/fstab                -> deny  (was ALLOW)
+  echo x > /etc/sudoers.d/zz-evil         -> deny  (was ALLOW)
+  echo x >> /etc/paths.d/zz-evil          -> deny  (was ALLOW)
+  echo x > /Library/LaunchDaemons/e.plist -> deny  (was ALLOW)
+  echo x > /usr/local/bin/newthing        -> deny  (was ALLOW)
+  Non-regression, still permissive where it should be:
+  cargo test > $TMPDIR/probe.txt (file exists) -> ask   (confined to a safe root)
+  cargo test > /tmp/zz-absent.log              -> ALLOW
+  echo x 3> /nonexistent-dir-xyz/out           -> ALLOW
+  shred --help 2>&1                            -> ALLOW (fd-dup, not a file write)
+  echo hi > /Users/yuki/scratch-note.txt       -> ALLOW
+
+--- RED 2: NOT FIXED, NEEDS A HUMAN RULING ---
+
+scoped_destructive::relaxed_truncating_forms_inside_the_project is a TEST FIXTURE defect, and the
+PRODUCT is correct. I did not edit it, per the instruction to ask rather than change a test whose
+expectation I think is wrong.
+
+The fixture calls SafeRoots::new(cwd, project, home, tmpdir=None, resolver) while writing its probe
+file into std::env::temp_dir(). Its own comment says "/tmp is one of the safe roots" - true on Linux,
+where temp_dir() returns /tmp, which IS in the hardcoded scope::TEMP_ROOTS. On macOS temp_dir()
+returns $TMPDIR = /var/folders/..., which is NOT in TEMP_ROOTS and was NOT passed as tmpdir, so the
+fixture never constructs the "confined to a safe root" precondition its own assertion message names,
+and the verdict is correctly Deny.
+
+Production is unaffected: main.rs:364 does std::env::var("TMPDIR") and passes it to SafeRoots::new.
+Proved by running the real binary twice on the same command, same probe file, differing only in env:
+  WITH TMPDIR set (production on macOS): ask | truncating redirect is confined to
+                                         /private/var/folders/0z/.../T - a safe root for this session
+  WITHOUT TMPDIR (the fixture's tmpdir:None): deny | ... it is not inside a git work tree
+
+So the expectation (confined + unrecoverable -> Ask) is RIGHT and is what production does; only the
+fixture fails to set up "confined". The honest repair is to make the fixture hermetic - pass the real
+temp dir as tmpdir via the existing scoped_with helper - which is a fixture repair, not a weakening.
+But it is still an edit to a frozen test, so it needs the human's word before anyone makes it.
+"""
 created_at = 1788982169
-updated_at = 1788982169
+updated_at = 1789040538
 weight = 0.0
 issue_number = 472
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/472"
@@ -19831,3 +19943,280 @@ updated_at = 1789041049
 weight = 0.0
 issue_number = 491
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/491"
+
+[[task]]
+id = "d5613105"
+title = "blastguard: cp/mv/install into a system directory are still Allow (same hole 0.2.60 closed for redirects)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "security",
+    "p1",
+]
+status = "pending"
+notes = """
+Measured 2026-09-10 against the locally built 0.2.59 binary (worktree agent-a3292f0e8fb2bc7e3), PreToolUse payload on stdin, cwd=/Users/yuki/src/harness:
+  cp evil /etc/paths.d/zz            -> ALLOW (silent)
+  install -m755 evil /usr/local/bin/x -> ALLOW (silent)
+  mv evil /Library/LaunchDaemons/e.plist -> ALLOW (silent)
+  tee /etc/paths.d/zz                -> deny (caught by the tee rule, not by any system-dir axis)
+
+Same root cause as 19c359d0: f18134da (0.2.59) moved the axis to recoverability, and a path that does not exist yet answers NothingToDestroy, so the write is allowed. 0.2.60 added scope::is_inside_system_dir and wired it into the TRUNCATING and APPEND redirect loops only. The cp/mv/install DESTINATION path is a separate rule and was NOT wired up, so the identical payload lands through a different verb.
+
+This is the mirror-gap pattern the repo already records: a fix landed on one path, the twin was left open. Fix = call system_path_block on the destination operand of the copy/move/install rules too.
+
+Note the 0.2.58 behaviour for contrast: all of these were DENIED at f18134da^, for the wrong stated reason (truncates and overwrites an existing file, asserted without any existence check). So the verdict regressed while the reason string was being corrected."""
+created_at = 1789040398
+updated_at = 1789040398
+weight = 0.0
+issue_number = 486
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/486"
+
+[[task]]
+id = "8abd74c4"
+title = "blastguard: the >| redirect operand is mis-extracted to an empty string, producing a true verdict with a false reason"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "prose-vs-behaviour",
+    "p2",
+]
+status = "pending"
+notes = """
+Measured 2026-09-10, locally built 0.2.59 binary, worktree agent-a3292f0e8fb2bc7e3.
+
+  cargo test >| /etc/hosts
+    -> deny | '> ' destroys the file's current contents and '' is a relative path and blastguard does not know which directory it is relative to, so it cannot tell whether these bytes are recoverable
+
+Compare the same target through every other spelling, all of which extract /etc/hosts correctly and deny with the right reason: '>', '2>', '1>', '&>', '>' + tab, quoted '"/etc/hosts"', single-quoted, no-space '2>/etc/hosts', inside a subshell, after a semicolon, and behind a here-string. Twelve forms were probed; only >| mis-parses.
+
+The bash clobber-override operator >| is being split as '>' followed by an operand beginning '|', and the operand comes out empty. The VERDICT is still deny, so this is fail-closed and not a hole - but the reason a human reads names a relative path and an empty target that do not exist in the command. That is a CLAUDE.md section 4 divergence between the stated reason and the actual finding, and it is also the kind of empty-operand path that only stays safe by luck: anything downstream that treats an empty target as 'nothing to check' would turn it into an Allow.
+
+Fix = teach the redirect operand scanner that >| is a single two-character operator."""
+created_at = 1789040400
+updated_at = 1789040400
+weight = 0.0
+issue_number = 487
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/487"
+
+[[task]]
+id = "a529cd11"
+title = "guard-maintree-bash.py false-positives on sed -i '' with an absolute in-worktree path"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gates",
+    "false-positive",
+    "worktree",
+    "p2",
+]
+status = "pending"
+notes = """
+Observed 2026-09-10 from worktree agent-a3292f0e8fb2bc7e3.
+
+Both of these were REFUSED with 'mutates this project's MAIN working tree', although the target path is inside the worktree, not main:
+  sed -i '' 's|A|B|' crates/blastguard/src/detect.rs
+  sed -i '' 's|A|B|' /Users/yuki/src/harness/.claude/worktrees/agent-a3292f0e8fb2bc7e3/crates/blastguard/src/detect.rs
+
+The refusal message echoes the command truncated at the token AFTER the empty-string argument ("... 'crates" and "... /Users"), which shows the parser consumed the empty '' as the sed script and then took the NEXT token as the file - i.e. it is not resolving the real operand. BSD sed requires the empty '' after -i; GNU sed does not, so this only bites on macOS.
+
+Impact is friction, not a hole - the gate fails CLOSED, which is the correct direction, and the work was completed with the Edit tool instead. Filing it because a gate that refuses legitimate in-worktree edits pushes work toward tools that the gate does not see, which is the pressure CLAUDE.md section 5 warns about.
+
+Also note the second refusal fired on a path that literally starts with the worktree root, so a prefix check against the worktree path would have cleared it."""
+created_at = 1789040401
+updated_at = 1789040401
+weight = 0.0
+issue_number = 488
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/488"
+
+[[task]]
+id = "8025f407"
+title = "plugin cache: superseded version dirs hold a NEWER binary, so the version dir does not identify the build"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "rollout",
+    "provenance",
+    "p2",
+]
+status = "pending"
+notes = """
+Observed 2026-09-10.
+
+  /Users/yuki/.claude/plugins/cache/yukineko/blastguard/0.2.52/bin/blastguard-darwin-arm64 --version
+    -> blastguard 0.2.59
+
+The 0.2.52 directory contains a 0.2.59 build. Behaviourally it answered identically to the 0.2.59 dir on all three probes I ran (the /etc/sudoers.d allow, the /etc/fstab allow, the /etc/hosts deny), which is how I noticed - I was using the older dir as a control and it was not one.
+
+Why it matters: MEMORY records 'deploy provenance not hash' - verify a deployed binary via .deployed-from.json, never sha256. That is right, but it is easy to also read the version DIRECTORY as identifying the build, and this shows it does not. Any audit that keeps an old version dir around as a before/after control will silently compare a build against itself.
+
+Likely cause: rebuild-plugins.sh swaps binaries into existing cache bin files and does not restrict itself to the currently-registered version dir. Either prune superseded dirs eagerly, or leave their binaries alone so the dir keeps meaning what its name says."""
+created_at = 1789040403
+updated_at = 1789040403
+weight = 0.0
+issue_number = 489
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/489"
+
+[[task]]
+id = "f1c170ab"
+title = "blastguard: cd into a system dir then a RELATIVE redirect escapes the system-directory axis"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "security",
+    "p1",
+]
+status = "pending"
+notes = """
+Measured 2026-09-10 against the DEPLOYED blastguard 0.2.60 binary
+(~/.claude/plugins/cache/yukineko/blastguard/0.2.60/bin/blastguard), PreToolUse payload on stdin:
+
+  cd /etc && echo x > paths.d/zz-evil   -> ALLOW
+  cd /etc/paths.d && echo x > zz-evil   -> ALLOW
+
+while the equivalent absolute forms are all denied by the system-directory axis 0.2.60 added:
+
+  echo x > /etc/paths.d/zz-evil         -> deny
+  echo x > /tmp/../etc/paths.d/zz-evil  -> deny
+  echo x > /etc/../etc/paths.d/zz-evil  -> deny
+  echo x > /private/etc/paths.d/zz-evil -> deny
+
+NOT A REGRESSION - established with a control, not by reasoning. A disposable worktree at
+c7c4ea49 (the commit immediately BEFORE the 0.2.60 system-dir axis landed) was built and probed:
+both cd forms were already ALLOW there. So 0.2.60 neither introduced nor closed this.
+
+WHY IT IS OPEN. scope::is_inside_system_dir returns false for any operand that is not absolute,
+deliberately - it has no base to resolve a relative path against, and guessing one would
+manufacture wrong answers. The absolute-path axis therefore never sees paths.d/zz-evil. The
+machinery that COULD see it already exists: detect.rs threads cwd through the per-segment walk via
+advance_cwd_and_rewrite, precisely so a cd in an earlier segment is visible to a later one, and the
+BG-cwd comment in detect.rs documents this whole class. The system-dir check simply runs in the
+line-level scan that happens BEFORE that walk, where no per-segment base exists yet.
+
+Note the truncating-redirect loop already guards its confinement check with
+!line_changes_cwd_before(cmd, usize::MAX) for exactly this reason - it refuses to call a relative
+target confined when the line moved the cwd. The system-dir axis needs the mirror of that: when the
+line DOES change cwd, resolve the target against the walked cwd and re-ask.
+
+FIX SHAPE: move or duplicate the system_path_block call into the per-segment path, after
+advance_cwd_and_rewrite has rewritten relative operands against the established cwd.
+
+The false docstring that claimed this case was handled has been corrected in the same area
+(scope.rs, is_inside_system_dir, section Undetermined) and now states plainly that the false return
+means NOT CHECKED rather than checked-and-clean, and cites this ticket."""
+created_at = 1789040755
+updated_at = 1789040755
+weight = 0.0
+issue_number = 490
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/490"
+
+[[task]]
+id = "f84a6779"
+title = "condukt: diffrisk_record journal test is unreliable under a full workspace run (passes alone, failed 1 of 2 workspace runs)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "flaky-test",
+    "test-isolation",
+    "p2",
+]
+status = "pending"
+notes = """
+Observed 2026-09-10 in worktree agent-a3292f0e8fb2bc7e3 while running the full workspace suite
+three times over for an unrelated blastguard change.
+
+  run 1 (cargo test --workspace --no-fail-fast): PASSED
+  run 2 (same command, same commit f4fcab66):     FAILED
+  isolated re-run of just this test:              PASSED
+
+Verbatim failure from run 2:
+
+  ---- diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded stdout ----
+  thread 'diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded'
+  panicked at crates/condukt/src/diffrisk_record.rs:540:9:
+  assertion `left == right` failed: one record per invocation
+    left: 1
+   right: 2
+
+So one of the two journal records was missing. The assertion is a GOOD one - it is the
+'inspected and clean' vs 'never inspected' distinction, which is the tri-state this repo cares
+most about - and it is the TEST that is unreliable, not obviously the contract.
+
+NOT caused by the change under test. The diff on that branch touches only
+crates/blastguard/src/{scope.rs,detect.rs} (an added system-directory predicate) plus version
+files; condukt only links blastguard and does not call the new code. The test also passes alone.
+
+TWO CANDIDATE CAUSES, neither yet settled - do not close this on the first plausible one:
+
+ (a) Cross-run contention. A second session was running its own
+     cargo test --workspace in /Users/yuki/src/.harness-worktrees/session-25763e04 during these
+     runs. Different target dir, but if project_state_dir resolves anywhere shared (under $HOME
+     rather than under the test's tempdir cwd) the two runs write the same ledger. This is the
+     failure mode MEMORY already records: concurrent cargo runs corrupting each other through
+     fixed fixtures.
+
+ (b) Intra-process races. cargo runs a binary's tests multi-threaded. The test reads
+     crate::state::project_state_dir(&cfg, cwd.path()); if that consults an env var that any
+     sibling test in the same binary sets via std::env::set_var, the resolved directory can change
+     underneath it. Passing in isolation is consistent with this too, since isolation also removes
+     the siblings - so 'it passed alone' does NOT discriminate between (a) and (b).
+
+To discriminate: run the condukt bin tests alone with --test-threads=1 while a second workspace run
+is active, and again with default threads and no second run. Whichever reproduces names the cause.
+
+Until then this is an unreliable oracle on a contract worth protecting, which is worse than a plain
+red: it will be dismissed as flaky the next time it fires for a real reason.
+
+=== SETTLED 2026-09-10 by repeated measurement. Both of my earlier hypotheses were WRONG. ===
+
+It is a PRE-EXISTING ~50% flake, and it is NOT cross-run contention.
+
+What I got wrong, recorded because the reasoning error is the reusable part:
+
+ 1. I first blamed a concurrent cargo test --workspace in another session's worktree, on the
+    strength of ONE observation (passed in run 1, failed in run 2, other run active). It then
+    failed again in run 3 with NO other cargo process alive. Hypothesis dead.
+
+ 2. I then ran the pre-change commit ONCE, saw 769 passed / 0 failed against my 768 / 1, and was
+    one step from concluding my own blastguard change had caused it. That would have been a
+    single-sample conclusion about a nondeterministic test - the same error as (1), in the
+    opposite direction.
+
+The measurement that actually settles it - repeat the SAME suite in the SAME tree N times:
+
+  HEAD f4fcab66 (with the blastguard system-dir axis), cargo test -p condukt --bin condukt:
+    run 1 FAILED (768/1) | run 2 ok (769/0) | run 3 ok (769/0) | run 4 FAILED (768/1)
+      -> 2 of 4 red
+
+  c7c4ea49 (immediately BEFORE that change), same command, separate worktree:
+    run 1 ok | run 2 FAILED | run 3 ok | run 4 FAILED | run 5 ok | run 6 FAILED
+      -> 3 of 6 red
+
+Same test both sides (diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded),
+same assertion (one record per invocation, left: 1, right: 2), same rate. The blastguard change is
+exonerated by measurement, not by argument.
+
+It also explains why the task's baseline reported only 3 red targets without this one: that run
+happened to land on the green side of the coin.
+
+REMAINING CAUSE, still unsettled: it passes when run alone and fails about half the time when the
+768 sibling tests in the same binary run alongside it, with no other process involved. That points
+at an intra-process race - shared mutable state (an env var, a process-global, or a state directory
+that does not actually vary per test) between this test and a sibling. crates/condukt/src/diffrisk_record.rs
+around line 540 reads crate::state::project_state_dir(&cfg, cwd.path()); the next step is to check
+whether that path really is per-test, and whether any sibling calls std::env::set_var for something
+it consults.
+
+Priority note: a 50% oracle on the 'inspected and clean vs never inspected' tri-state is worse than
+a steady red, because the next person to see it fire will have a ready-made reason to dismiss it."""
+created_at = 1789041207
+updated_at = 1789041542
+weight = 0.0
+issue_number = 492
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/492"

@@ -19975,9 +19975,23 @@ kill された (AssertionError: 1 != 4)。
 
 他の 22 本にも同じ変更を入れるか、あるいは mutation を扱う手順側で
 毎回 __pycache__ を消すことを必須にするか、どちらかを決めること。
-前者の方が良い — 手順の遵守を人間の記憶に置かない (CLAUDE.md 6.)。"""
+前者の方が良い — 手順の遵守を人間の記憶に置かない (CLAUDE.md 6.)。
+
+--- 母数を実測 2026-09-11 (起票時に「調べていない」と書いた部分の補完) ---
+
+  grep -ln exec_module scripts/test_*.py | wc -l  -> 15
+  ls scripts/test_*.py | wc -l                    -> 24 (新規の1本を含む)
+
+つまり **15 本**が SourceFileLoader.exec_module 経由で被検証スクリプトを読んでおり、
+同じ偽 GREEN / 偽 SURVIVOR の経路を持つ。うち 1 本 (test_check_workspace_tests.py) は
+対処済みなので、残り **14 本**が未対処。
+
+なお対処が効いていることは実測済み: __pycache__ を消さずに ranking mutation
+(バイト長不変の並べ替え) を注入したところ、対処後の suite は正しく kill した
+(AssertionError: 1 != 4)。対処前は同じ条件で SURVIVED と誤判定していた。
+"""
 created_at = 1789047296
-updated_at = 1789047296
+updated_at = 1789057644
 weight = 0.0
 issue_number = 499
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/499"

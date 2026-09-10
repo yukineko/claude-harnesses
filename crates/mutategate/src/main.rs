@@ -6,8 +6,11 @@
 //!
 //! This binary does **not** run the mutation engine itself; it consumes the JSON
 //! that `cargo mutants` leaves in `mutants.out/outcomes.json`. Wiring the engine
-//! run + this gate together is the job of `scripts/mutation-gate.sh` and the
-//! `.github/workflows/mutation.yml` CI job. Keeping the scoring here (pure,
+//! run + this gate together is the job of `scripts/mutation-gate.sh`. That script
+//! currently has NO automatic trigger: its `.github/workflows/mutation.yml` CI job
+//! was deleted in a572f5ad under CLAUDE.md §7 (GitHub Actions ban) and nothing
+//! replaced it, so the gate runs only when a human invokes it (measured
+//! 2026-09-11 at 89b31bb4). Keeping the scoring here (pure,
 //! unit-tested) makes the pass/fail decision deterministic and independent of the
 //! slow engine.
 //!

@@ -55,8 +55,18 @@
 # conservative for the pilot so the gate is signal, not flake; raise over time.
 #
 # TIME: real mutation runs are slow. This script passes --timeout to bound each
-# test build+run; tune MUTANTS_TIMEOUT. CI (.github/workflows/mutation.yml) runs
-# pilot-limited with an overall job timeout.
+# test build+run; tune MUTANTS_TIMEOUT.
+#
+# NO AUTOMATIC TRIGGER (measured 2026-09-11 at 89b31bb4): nothing invokes this
+# script. Its only trigger was `.github/workflows/mutation.yml`, deleted in
+# a572f5ad ("eradicate GitHub Actions") under CLAUDE.md §7. A grep over the repo
+# finds no execution site -- only the usage examples below and
+# scripts/test_mutation_pilots.sh, which exercises the pilot MAPPING without
+# running the gate. So the kill-rate gate is currently INERT: 100% passthrough,
+# which is the exact fail-open scripts/mutation-pilots.sh was written to close.
+# Do not read this file's existence as coverage. Re-wiring a trigger is tracked
+# in the backlog; per §7 the replacement must be local (pre-push or an explicit
+# script), never a hosted CI service.
 #
 # USAGE:
 #   scripts/mutation-gate.sh                 # pilot=harness-core, threshold=0.80

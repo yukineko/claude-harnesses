@@ -84,6 +84,10 @@ gate is signal, not flake.
   the `case "$PILOT"` block).
 - Raise `MIN_KILL_RATE` as suites harden; inspect survivors under
   `target/mutants-<pilot>/` (`missed.txt`).
-- CI: `.github/workflows/mutation.yml` runs the pilot on manual dispatch, a weekly
-  schedule, and PRs touching the gate machinery — pilot-limited with a 30-minute
-  job cap.
+- TRIGGER: none, as of 2026-09-11 (measured at 89b31bb4). The gate used to be run
+  by `.github/workflows/mutation.yml`, which was deleted in a572f5ad when GitHub
+  Actions was banned repo-wide (CLAUDE.md §7). Nothing replaced it, so
+  `scripts/mutation-gate.sh` has no execution site and the kill-rate gate is
+  INERT — 100% passthrough until a human runs it by hand. Treat this crate as
+  scoring machinery that is currently unwired, not as coverage. Any replacement
+  trigger must be local per §7 (pre-push or an explicit script), never hosted CI.

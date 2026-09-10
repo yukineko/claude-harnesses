@@ -98,5 +98,10 @@ usage/IO/parse エラー。
 - `specguard` は現時点で `similarity.rs` のみに絞っている。他のファイル
   （`ratify.rs`/`scope.rs`/`specmap.rs` 等）へのパイロット拡大は、それぞれの実行時間と
   ベースラインの安定性（他の git-HEAD 依存テストが無いか）を確認してから行う。
-- CI: `.github/workflows/mutation.yml` が手動ディスパッチ・週次スケジュール・ゲート機構に
-  触れる PR でパイロットを走らせる — パイロット限定、ジョブ上限 30 分。
+- èµ·å契機: **現在は無い**（2026-09-11 実測、測定点 89b31bb4）。以前は
+  `.github/workflows/mutation.yml` が走らせていたが、GitHub Actions の全面禁止
+  （CLAUDE.md Â§7）に伴い a572f5ad で削除され、**代替は置かれていない**。
+  `scripts/mutation-gate.sh` を実行する箇所は repo 内に 1 つも無く、kill-rate
+  ゲートは **INERT（100% passthrough）** である—人間が手で叩くときだけ動く。
+  この crate の存在を coverage と読まないこと。再結線は Â§7 に従い local
+  （pre-push または明示スクリプト）で行う—ホスト型 CI は使わない。

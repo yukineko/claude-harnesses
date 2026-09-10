@@ -4563,7 +4563,7 @@ tags = [
     "reviewgate",
     "p1",
 ]
-status = "pending"
+status = "claimed"
 notes = """
 observed 2026-07-21T04:11Z (session c6a1fdbf): reviewgate round 1/2 と precommit-audit --mode stop が、当セッションが一度も触っていない scripts/check-fail-open.py を「自分の変更」として提示し TEST MISSING でブロックした。実際の書き手は並行セッション e0d74f05（backlog lock 保有・12:06/12:20/12:35/12:52 に commit、当該ファイルの mtime 13:10）。ゲートは working tree を見るだけで帰属を見ない。
 
@@ -4674,7 +4674,7 @@ pathspec commit がブロックされる。ブロック解除の最短経路の�
 を読むようにする。doc 側と被引用ファイル側の両方を同じ源から読むこと
 (片方だけを index にすると、源の不一致それ自体が新しい fail-open になる)。"""
 created_at = 1784607099
-updated_at = 1788913058
+updated_at = 1789069768
 weight = 0.0
 issue_number = 292
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/292"
@@ -4815,10 +4815,10 @@ title = "cargo test 中に実 stdin を read する harness-core のテストが
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
+status = "claimed"
 notes = "観測: cargo test --workspace をバックグラウンド(stdin が閉じないパイプ)で走らせると harness_core::hook::tests::headless_and_piped_guards_are_callable_and_pure が read_stdin_if_piped -> read_to_end(stdin) で 38 分ブロックした。sample(1) でスタック採取済み。</dev/null で再実行すると 3333 passed で完走。 / なぜ問題か: ハングするテストは結果を報告しないので、検証装置そのものが fail-open になる(CI ではタイムアウト kill が インフラ起因のフレークとして片付けられやすい)。判定不能を判定に落とせていない典型 / 証拠: crates/harness-core/src/hook.rs:486 -> :187 read_stdin_if_piped -> :158 read_stdin / 完了条件: このテストが ambient stdin に依存せず決定論的に終了する(stdin を注入可能にするか、is_terminal 判定をテスト用に差し替える)ことを、閉じていない stdin 下でも完走する形で固定する"
 created_at = 1784627338
-updated_at = 1784627338
+updated_at = 1789069768
 weight = 0.0
 issue_number = 294
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/294"
@@ -4868,10 +4868,10 @@ title = "overwatch record-finding の --verdict を必須にする（省略時 c
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
+status = "claimed"
 notes = "ユーザー裁定 2026-07-21: 省略時に confirmed を記録する現状は、棄却が起きないので fail-open ではないが、UNVERIFIED が既定では決して発生しないことを意味し、同日 CLAUDE.md に明文化した「確実性を捏造しない」不変条件と齟齬する。--verdict 省略は入力エラー(exit 非0)にし、記録者に毎回判断を強制する。既存の全呼び出し箇所(SKILL.md / scripts/continuous-audit.sh / docs/specs/overwatch.md の例を含む)を洗い出して更新すること。証拠: 1a2e89ea で三値化した AuditVerdict の既定経路。完了条件: --verdict なしの record-finding が非0で落ち、テストがその赤を先に観測していること"
 created_at = 1784638238
-updated_at = 1784638238
+updated_at = 1789069768
 weight = 0.0
 issue_number = 295
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/295"
@@ -4918,10 +4918,10 @@ title = "condukt state check-oracle が fallback:true に黙って縮退する�
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
+status = "claimed"
 notes = ""
 created_at = 1784642695
-updated_at = 1784642695
+updated_at = 1789069771
 weight = 0.0
 issue_number = 296
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/296"
@@ -5079,10 +5079,43 @@ title = "condukt/flow の sink が main への直接 push 前提のまま — ru
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
-notes = ""
+status = "cancelled"
+notes = """
+
+
+--- 前提を HEAD で測り直した結果 cancelled 2026-09-11、測定点 9a4e400c ---
+
+このチケットの前提「ruleset 有効化後は main への push が必ず弾かれる」は、
+測定した結果 HEAD で成り立たない。結論を継承せず測り直した観測:
+
+1. main への直接 push は今日も通っている。origin/main の reflog:
+     9a4e400c 2026-09-11 04:47:11 update by push
+     f7ffc2c9 2026-09-11 04:37:37 update by push
+     89b31bb4 2026-09-11 02:49:43 update by push
+     1ab9845c 2026-09-11 02:44:32 update by push
+     2abf8dea 2026-09-11 02:26:15 update by push
+     c875209d 2026-09-11 01:34:47 update by push
+     496110e6 2026-09-10 22:34:16 update by push
+     627b756a 2026-09-10 21:20:43 update by push
+   直近 2 日で 8 件の直接 push が受理されており、拒否は 1 件も無い。
+   (update by push は local からの直接更新であって PR merge 由来ではない)
+
+2. required status check の供給源が存在しない。
+     ls .github/workflows/ -- No such file or directory
+   CLAUDE.md 第7節により GitHub Actions はリポジトリ全体で使用禁止となり、
+   ワークフロー定義自体が撤去されている。required check として登録できる
+   check が 1 つも無いので、「check 未報告で PR が止まる」状態を作れない。
+
+したがって done_criteria が想定する障害 (直接 push が弾かれるので PR 経路が
+要る) は現時点で発生しない。実装すると、起きない障害のために sink の経路を
+分岐させ、しかもその分岐は GitHub の PR/auto-merge に依存する
+(第7節が禁じる「流れを通す権限を外部サービスへ預ける」方向)。
+
+cancelled にする。done ではない -- 実装していない。
+前提が復活したとき (ruleset を再度有効化する等) は再起票すること。その際も
+「弾かれるはず」ではなく実際の push 拒否を観測してから起票する。"""
 created_at = 1784652930
-updated_at = 1784652930
+updated_at = 1789069778
 weight = 0.0
 issue_number = 302
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/302"
@@ -5107,10 +5140,38 @@ title = "PR が required status check で BLOCKED になっていることが誰
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
-notes = ""
+status = "cancelled"
+notes = """
+
+
+--- 前提を HEAD で測り直した結果 cancelled 2026-09-11、測定点 9a4e400c ---
+
+このチケットは 71b7b1bc と前提を共有しており、同じ測定で崩れる。
+
+前提: 「PR が required status check で BLOCKED になっていることが誰にも
+見えない」。この BLOCKED 状態を作るのは required status check であり、
+その供給源は GitHub Actions のワークフローだった。
+
+観測 (測定点 9a4e400c):
+  ls .github/workflows/ -- No such file or directory
+ワークフロー定義は撤去済み。CLAUDE.md 第7節により GitHub Actions は
+リポジトリ全体で使用禁止 (gh workflow run / gh run watch / gh run list /
+gh run view のいずれも行わない、CI の green を完了判定に使わない) となった。
+required check として登録できる check が存在しないので、PR が check 待ちで
+停止する状態そのものが発生しない。
+
+さらに、この done_criteria を満たすには overwatch が PR の check 状態を
+読みに行く必要がある。それは第7節が名指しで禁じている行為であり、
+可視化のためであっても CI 状態をローカルの判定面に取り込むことになる。
+つまりこのチケットは「前提が消えた」だけでなく「実装すると規範に反する」。
+
+引用されていた実例 (PR #24 が required check で停止していた件) は、
+第7節が生まれた原因の観測そのものであり、対処は可視化ではなく
+外部ゲートの撤去という形で既に済んでいる。
+
+cancelled にする。done ではない -- 実装していない。"""
 created_at = 1784658081
-updated_at = 1784658081
+updated_at = 1789069778
 weight = 0.0
 issue_number = 304
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/304"
@@ -21454,7 +21515,7 @@ title = "tdd FAIL-OPEN: a test-marker regex hit in ANY file (README, toml, fixtu
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
-status = "pending"
+status = "claimed"
 notes = '''
 Found and independently re-verified 2026-09-11 at HEAD 2abf8dea by reading crates/tdd/src/gate.rs classify().
 
@@ -21494,7 +21555,7 @@ Related: gate.rs human_report then renders this as "yes (inline test added)" / "
 
 Also note the first arm: any added line in a test-glob file, including a blank-adjacent comment line, is evidence. That may be intentional but it is unstated.'''
 created_at = 1789064330
-updated_at = 1789064330
+updated_at = 1789069768
 weight = 0.0
 issue_number = 509
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/509"
@@ -21786,3 +21847,17 @@ updated_at = 1789068963
 weight = 0.0
 issue_number = 522
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/522"
+
+[[task]]
+id = "eaef7281"
+title = "ctxrot の context 使用率推定が実窓と乖離する — 実残 14.70M/15M (約2%消費) の局面で ~96% 危険域を出し rescue note を書き出す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "実測 2026-09-11、測定点 9a4e400c。同一セッション内で ctxrot の UserPromptSubmit guard が ~56% -> ~88% -> ~96%（危険域）と段階的に警告し、先行退避ノート (/Users/yuki/.ctxrot/store/harness-e77d23c7/rescue-3eb48fff-20260911-044911.md) を書き出し、高品質 distill をバックグラウンド起動した。しかし同時点でハーネスが報告する実残トークンは 14,699,157 / 15,000,000 = 実消費 約2% であり、auto-compact の発火点には遠く及ばない。ユーザーからも auto compact かからないのだけど と指摘があった。推定の分母が実際のセッション窓 (このセッションは 15M) ではなく、より小さい固定値を仮定していると見られる。害: (a) 誤警報が常態化するとゲージ全体が無視される、(b) 不要な distill/rescue の起動がコストと注意を奪う、(c) ユーザーが auto-compact の不発を異常と誤認する。既知の制約として、どのフックも /compact を任意閾値で起動できない (auto-compact は実窓付近でのみ発火する) ので、ctxrot 側は自前推定の精度が全てである。要調査: 分母の決定箇所と、実窓サイズをハーネスから取得できるか。取得できないなら、推定不能であることを % ではなく unknown として表示すべき (CLAUDE.md 第3節: 判定不能を確定値として表示しない)。"
+created_at = 1789069834
+updated_at = 1789069834
+weight = 0.0
+issue_number = 523
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/523"

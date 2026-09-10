@@ -2071,5 +2071,207 @@ class AmendIsNotABypass(GateTestCase):
 
 
 
+# ---------------------------------------------------------------------------
+# 12. The certificate names a DIFF, and two different operations can wear its
+#     clothes.
+#
+# The certificate is the pair (tree that was inspected, HEAD it was inspected
+# against), so "this commit was gated" means: same tree, and the commit sits on
+# the certified HEAD.  An amend legitimately breaks the second half -- the
+# commit it replaces was the certified HEAD, and the replacement is a sibling of
+# it, not a child (see AmendIsNotABypass above) -- so any relaxation for amend
+# has to answer TWO questions that are easy to conflate:
+#
+#     was this an amend at all?         -- the reflog's `commit (amend):` marker
+#     was it an amend of THE certified  -- the replaced commit, i.e. HEAD@{1},
+#     commit?                              equals the certified HEAD
+#
+# Neither question answers the other, and each one alone is satisfiable by a
+# commit whose content the gate never inspected.  The two tests below construct
+# exactly those two commits.  Both must be RECORDED: in each, the diff that was
+# committed is not the diff that was judged, which is the literal meaning of
+# "never inspected".  Each is GREEN against .githooks as it stands -- they are
+# not defect pins; they are the two observations that make a one-sided amend
+# carve-out (present or future) distinguishable from a two-sided one.
+# ---------------------------------------------------------------------------
+class CertificateBindsTheDiffNotTheOperation(GateTestCase):
+    def _certificate(self, h):
+        """The (tree, head) pre-commit wrote.  Read BEFORE the commit that will
+        consume it: post-commit deletes the sentinel as it decides."""
+        self.assertTrue(h.sentinel.exists(), "precondition: a certificate exists")
+        fields = h.sentinel.read_text().split()
+        self.assertEqual(
+            len(fields), 2, "certificate must name a tree AND a head: %r" % fields
+        )
+        return fields[0], fields[1]
+
+    def _reflog_subject(self, h):
+        return h.git("reflog", "-1", "--format=%gs", "HEAD").stdout.strip()
+
+    def test_amend_certified_against_another_head_is_recorded(self):
+        """Catches a post-commit that trusts the `commit (amend):` reflog marker
+        on its own.  The marker says HOW the commit was made; it does not say
+        that the commit being replaced is the one the gate judged.  Here the
+        gate inspected this tree as a diff against C0, and what got committed is
+        that tree as a diff against C1 -- a diff nothing ever looked at -- so it
+        must be recorded even though the operation really was an amend.
+        """
+        h = self.harness()
+        c0 = h.git("rev-parse", "HEAD").stdout.strip()
+        c0_tree = h.git("rev-parse", "HEAD^{tree}").stdout.strip()
+
+        # The gate goes green over the index while HEAD is C0, so it judged the
+        # diff C0 -> tree.
+        h.write("a.txt", "one\n")
+        h.git("add", "-A")
+        self.assertEqual(h.pre_commit().returncode, 0)
+        certified_tree, certified_head = self._certificate(h)
+        self.assertEqual(certified_head, c0, "precondition: the certificate names C0")
+
+        # Two commits land underneath.  Plumbing, so no hook runs, the index is
+        # untouched and the certificate survives -- same technique as
+        # test_certificate_does_not_survive_head_moving.  Two, not one: amending
+        # a commit whose parent were C0 would put the certified HEAD back among
+        # the new commit's parents and the certificate would match honestly.
+        c1 = h.git(
+            "commit-tree", c0_tree, "-p", c0, "-m", "someone else's commit"
+        ).stdout.strip()
+        c2 = h.git(
+            "commit-tree", c0_tree, "-p", c1, "-m", "and another"
+        ).stdout.strip()
+        h.git("update-ref", "HEAD", c2)
+
+        proc = h.commit("amended", "--amend", "--no-verify")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+        head = h.git("rev-parse", "HEAD").stdout.strip()
+        parents = h.git("rev-parse", "HEAD^@").stdout.split()
+        self.assertEqual(
+            h.git("rev-parse", "HEAD^{tree}").stdout.strip(),
+            certified_tree,
+            "precondition: the certified TREE must match what was committed, or "
+            "the tree comparison decides this case and nothing here is exercised",
+        )
+        self.assertEqual(parents, [c1], "precondition: the amend re-parented onto C1")
+        self.assertNotIn(
+            certified_head,
+            parents,
+            "precondition: the certified HEAD is not a parent, so the ordinary "
+            "match cannot be what decides this",
+        )
+        subject = self._reflog_subject(h)
+        self.assertTrue(
+            subject.startswith("commit (amend):"),
+            "precondition: git recorded this as an amend, so the amend marker "
+            "alone WOULD certify it; observed subject: %r" % subject,
+        )
+        self.assertNotEqual(
+            h.git("rev-parse", "HEAD@{1}").stdout.strip(),
+            certified_head,
+            "precondition: the commit that was replaced is NOT the certified "
+            "one -- that is the whole difference from an honest amend",
+        )
+
+        self.assertLedgerHas(
+            h,
+            1,
+            "the gate judged this tree against C0 and the commit that landed "
+            "sits on C1, so the diff committed was never inspected",
+        )
+        self.assertEqual(
+            h.ledger_lines()[0].split("\t")[0],
+            head,
+            "the ledger must name the commit the amend produced",
+        )
+
+    def test_non_amend_commit_one_reflog_step_from_the_certified_head_is_recorded(self):
+        """Catches a post-commit that trusts `HEAD@{1} == certified HEAD` on its
+        own.  HEAD@{1} is only the previous entry in a log that can have holes:
+        a ref update issued from a SECOND worktree moves this worktree's HEAD
+        without writing anything to its reflog, and then the certified commit is
+        what HEAD@{1} resolves to -- even though no amend happened and the
+        commit that landed sits on a different parent entirely.
+
+        Same family as test_certificate_does_not_survive_head_moving: a
+        certificate earned against one HEAD, spent on a commit made against
+        another.  The only difference is that the HEAD move left no reflog
+        entry, which is exactly what makes the reflog agree.
+        """
+        h = self.harness()
+        c0 = h.git("rev-parse", "HEAD").stdout.strip()
+
+        h.write("a.txt", "one\n")
+        h.git("add", "-A")
+        self.assertEqual(h.commit("first").returncode, 0)
+        c1 = h.git("rev-parse", "HEAD").stdout.strip()
+        self.assertLedgerEmpty(h, "precondition: that commit went through the gate")
+
+        # The gate goes green over a second change, judged as a diff against C1.
+        h.write("a.txt", "two\n")
+        h.git("add", "-A")
+        self.assertEqual(h.pre_commit().returncode, 0)
+        certified_tree, certified_head = self._certificate(h)
+        self.assertEqual(certified_head, c1, "precondition: the certificate names C1")
+
+        # A parallel session rewinds the branch (CLAUDE.md #8: another session is
+        # always assumed).  Issued from the OTHER worktree on purpose: git logs
+        # HEAD's reflog only for the worktree whose own HEAD it is updating, so
+        # this worktree's HEAD changes value silently, leaving C1 as the newest
+        # thing its reflog knows about.
+        other = h.root.parent / (h.root.name + "-wt")
+        self.addCleanup(shutil.rmtree, str(other), True)
+        h.git("worktree", "add", "-q", "-b", "side", str(other), c0)
+        h.git("update-ref", "refs/heads/main", c0, cwd=other)
+        self.assertEqual(
+            h.git("rev-parse", "HEAD").stdout.strip(),
+            c0,
+            "precondition: this worktree's HEAD was rewound to C0",
+        )
+
+        proc = h.commit("ungated onto a parent the gate never judged", "--no-verify")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+        head = h.git("rev-parse", "HEAD").stdout.strip()
+        parents = h.git("rev-parse", "HEAD^@").stdout.split()
+        self.assertEqual(
+            h.git("rev-parse", "HEAD^{tree}").stdout.strip(),
+            certified_tree,
+            "precondition: the certified TREE must match what was committed, or "
+            "the tree comparison decides this case and nothing here is exercised",
+        )
+        self.assertEqual(parents, [c0], "precondition: the commit was made on C0")
+        self.assertNotIn(
+            certified_head,
+            parents,
+            "precondition: the certified HEAD is not a parent, so the ordinary "
+            "match cannot be what decides this",
+        )
+        subject = self._reflog_subject(h)
+        self.assertTrue(
+            subject.startswith("commit:"),
+            "precondition: git recorded an ordinary commit, NOT an amend; "
+            "observed subject: %r" % subject,
+        )
+        self.assertEqual(
+            h.git("rev-parse", "HEAD@{1}").stdout.strip(),
+            certified_head,
+            "precondition: the reflog gap must leave the certified commit one "
+            "step back, so the HEAD@{1} test alone WOULD certify this commit",
+        )
+
+        self.assertLedgerHas(
+            h,
+            1,
+            "the gate judged this tree against C1 and the commit that landed "
+            "sits on C0, so the diff committed was never inspected",
+        )
+        self.assertEqual(
+            h.ledger_lines()[0].split("\t")[0],
+            head,
+            "the ledger must name the commit that was made",
+        )
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

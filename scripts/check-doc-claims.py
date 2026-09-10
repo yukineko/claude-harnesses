@@ -802,16 +802,32 @@ def main(argv=None) -> int:
                 )
             )
         if blocking:
+            # The remedy differs by source, and printing the index advice under
+            # `--source worktree` would be a docstring that lies about its own
+            # run -- the exact failure this gate exists to catch.
+            if source.name == SOURCE_INDEX:
+                remedy = (
+                    "Fix the document (or the code) AND STAGE THE FIX — this\n"
+                    "gate judges the git index, i.e. the tree the commit would\n"
+                    "record, so an unstaged correction does not count (and, by\n"
+                    "the same rule, a peer session's unstaged edit cannot block\n"
+                    "you)."
+                )
+            else:
+                remedy = (
+                    "Fix the document (or the code) on disk. NOTE: you ran\n"
+                    "`--source worktree`, so this verdict is about the files as\n"
+                    "they sit on disk, NOT about the tree a commit would record.\n"
+                    "The pre-commit gate judges the index; re-run without\n"
+                    "`--source` to see the verdict that will actually block."
+                )
             print(
                 "\ncheck-doc-claims: {} claim(s) no longer match the {}.\n"
-                "Fix the document (or the code) AND STAGE THE FIX — this gate\n"
-                "judges the git index, i.e. the tree the commit would record,\n"
-                "so an unstaged correction does not count (and, by the same\n"
-                "rule, a peer session's unstaged edit cannot block you).\n"
+                "{}\n"
                 "If a claim is deliberately historical, say so on the line\n"
                 "before it:\n"
                 "  <!-- doc-claim-exempt: <reason> -->".format(
-                    len(blocking), source.name
+                    len(blocking), source.name, remedy
                 ),
                 file=sys.stderr,
             )

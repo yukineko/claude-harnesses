@@ -193,17 +193,34 @@ def main(argv=None) -> int:
                 )
             )
         if blocking:
+            # The remedy differs by source. Printing the index advice under
+            # `--source worktree` would make this message describe a run that
+            # did not happen — prose contradicting behaviour, which is what
+            # this gate exists to catch.
+            if source.name == "index":
+                remedy = (
+                    "Fix CLAUDE.md (or the code) IN THIS COMMIT, and STAGE the\n"
+                    "fix — this gate judges the git index, i.e. the tree the\n"
+                    "commit would record, so an unstaged correction does not\n"
+                    "count."
+                )
+            else:
+                remedy = (
+                    "Fix CLAUDE.md (or the code) on disk. NOTE: you ran\n"
+                    "`--source worktree`, so this verdict is about the files as\n"
+                    "they sit on disk, NOT about the tree a commit would record.\n"
+                    "The pre-commit gate judges the index; re-run without\n"
+                    "`--source` to see the verdict that will actually block."
+                )
             print(
                 "\ncheck-claudemd-claims: {} claim(s) in CLAUDE.md no longer "
                 "match the {}.\n"
-                "Fix CLAUDE.md (or the code) IN THIS COMMIT, and STAGE the\n"
-                "fix — this gate judges the git index, i.e. the tree the\n"
-                "commit would record, so an unstaged correction does not\n"
-                "count. If a claim is deliberately historical, say so on the\n"
+                "{}\n"
+                "If a claim is deliberately historical, say so on the\n"
                 "line before it:\n"
                 "  <!-- doc-claim-exempt: <reason> -->\n"
                 "There is no bypass flag for this gate.".format(
-                    len(blocking), source.name
+                    len(blocking), source.name, remedy
                 ),
                 file=sys.stderr,
             )

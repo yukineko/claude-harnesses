@@ -22240,7 +22240,49 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 status = "pending"
-notes = "実測 2026-09-11、測定点 5b3251a1。command -v tdd -- /Users/yuki/.claude/plugins/cache/yukineko/tdd/0.1.24/bin/tdd。tdd --version -- tdd 0.1.29。crates/tdd/.claude-plugin/plugin.json -- 0.1.30。cache 配下に存在する version dir は 0.1.24 / 0.1.25 / 0.1.29 の 3 つで、registry は最古の 0.1.24 を指したままである。つまり (a) registry が新しい version dir へ repoint されていない、(b) 0.1.24 の dir の中身は後から上書きされており dir 名が中身を偽っている、(c) repo HEAD はさらに 1 つ先の 0.1.30 で未 rollout。/Users/yuki/.claude/plugins/cache/yukineko/tdd/0.1.24/.deployed-from.json は commit f70706e690e86c2f2e8c67be0207e3db8fc8441f dirty=false harness_core_version 0.2.17 deployed_at 1788983941 を記録しているが、この provenance が 0.1.29 の binary のものなのか 0.1.24 のものなのかは dir 名からは判別できない。害: tdd は F to P オラクルの実体であり、condukt の完了ゲートがこの binary の exit code に依存している (crates/condukt/src/oracle.rs の check_oracle が spawn する)。稼働中のゲートが repo のどの版なのか分からない状態は、ゲートの判定を検証不能にする。要確認: scripts/check-plugin-rollout.py がこの乖離を検出できるか (version dir 名と中身の binary の自称版が食い違うケース)。検出できないなら、それ自体が rollout ゲートの盲点である。対処は scripts/rollout-plugins.sh の実行だが、まず何が起きて 3 つの version dir が並んだのかを観測してから直すこと。"
+notes = """
+実測 2026-09-11、測定点 5b3251a1。command -v tdd -- /Users/yuki/.claude/plugins/cache/yukineko/tdd/0.1.24/bin/tdd。tdd --version -- tdd 0.1.29。crates/tdd/.claude-plugin/plugin.json -- 0.1.30。cache 配下に存在する version dir は 0.1.24 / 0.1.25 / 0.1.29 の 3 つで、registry は最古の 0.1.24 を指したままである。つまり (a) registry が新しい version dir へ repoint されていない、(b) 0.1.24 の dir の中身は後から上書きされており dir 名が中身を偽っている、(c) repo HEAD はさらに 1 つ先の 0.1.30 で未 rollout。/Users/yuki/.claude/plugins/cache/yukineko/tdd/0.1.24/.deployed-from.json は commit f70706e690e86c2f2e8c67be0207e3db8fc8441f dirty=false harness_core_version 0.2.17 deployed_at 1788983941 を記録しているが、この provenance が 0.1.29 の binary のものなのか 0.1.24 のものなのかは dir 名からは判別できない。害: tdd は F to P オラクルの実体であり、condukt の完了ゲートがこの binary の exit code に依存している (crates/condukt/src/oracle.rs の check_oracle が spawn する)。稼働中のゲートが repo のどの版なのか分からない状態は、ゲートの判定を検証不能にする。要確認: scripts/check-plugin-rollout.py がこの乖離を検出できるか (version dir 名と中身の binary の自称版が食い違うケース)。検出できないなら、それ自体が rollout ゲートの盲点である。対処は scripts/rollout-plugins.sh の実行だが、まず何が起きて 3 つの version dir が並んだのかを観測してから直すこと。
+
+--- 一般化して訂正 2026-09-11、測定点 07c2b32c ---
+
+起票時は tdd 固有の事故として書いたが、condukt を実際に rollout して観測した
+ところ **同じ形が再現し、しかも設計どおりである**ことが分かった。訂正する。
+
+観測 (scripts/rollout-plugins.sh --plugin condukt を実行した直後):
+  command -v condukt
+    -- /Users/yuki/.claude/plugins/cache/yukineko/condukt/0.7.138/bin/condukt
+  condukt --version
+    -- condukt 0.7.154
+  check-plugin-rollout.py -- condukt の DRIFT は解消 (registry は追随した)
+
+つまり「version dir 名 0.7.138」と「中身の binary 0.7.154」の乖離は、
+rollout 直後の正常な状態である。rollout の出力にその理由が出ている:
+  kept tdd/0.1.24 (in use by pid 93141)
+  kept tdd/0.1.25 (in use by pid 67424)
+  kept overwatch/0.2.27 (in use by pid 67424,93141)
+稼働中のセッションが掴んでいる version dir は消さずに残し、中身を差し替える。
+実行中のプロセスの足元からディレクトリを消さないための意図的な設計である。
+
+したがって起票時の (a)(b) は誤読だった:
+  (a) 「registry が新しい version dir へ repoint されていない」-- 誤り。
+      registry は追随しており、DRIFT 検査も通る。
+  (b) 「dir 名が中身を偽っている」-- 現象としては正しいが事故ではない。
+
+【残る本物の懸念 — こちらは有効】
+起票時の (c) は今も有効: repo HEAD が 0.1.30 なのに稼働は 0.1.29 で、
+tdd は rollout されていない。tdd は F to P オラクルの実体であり、condukt の
+完了ゲートがこの binary の exit code に依存しているので、稼働版が repo より
+古いままなのは実害がある。ただしこれは今 agent が 0.1.31 へ bump 中なので、
+その merge 後に rollout する。
+
+【この件から一般化して残すべきこと】
+**deploy された binary の版を version dir 名から読んではならない。**
+dir 名は「最初にその dir が作られたときの版」であって現在の中身ではない。
+判定に使ってよいのは `<binary> --version` と .deployed-from.json だけである
+(memory の deploy-provenance-not-hash と整合する)。version dir 名を版の
+根拠に使っている検査・スクリプト・手順があれば、それは誤答する。
+要調査: check-plugin-rollout.py が何を根拠に registry 追随を判定しているか。
+dir 名だけを見ているなら、中身が別版でも OK を返しうる。"""
 created_at = 1789070219
 updated_at = 1789070219
 weight = 0.0

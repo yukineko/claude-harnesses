@@ -11653,4 +11653,227 @@ and must not be Allowed: {failing:?}"
             "must be answered by the pipe-egress arm, not another one — got: {reason}"
         );
     }
+
+    // ---- `.claude/worktrees/**`: the config allowlist exempted whole checkouts ----
+    //
+    // CLAUDE.md §8 makes a git worktree MANDATORY for implementation work, and
+    // those checkouts live at `<repo>/.claude/worktrees/agent-*/`. Every one of
+    // `ALLOW_GLOBS`' four `.claude` entries swallows that container whole, so
+    // `exclude::is_config_file` answers `true` for every file in every
+    // worktree — and the three call sites below (`analyze_rm`'s exemption,
+    // `redirect_target_is_safe`, `detect_write`) each turn that into an
+    // outright `Allow`. Measured on the deployed 0.2.62 binary with one
+    // directory-component name as the only difference:
+    //
+    // ```text
+    //   shape                                      IN .claude/worktrees   OUTSIDE
+    //   truncating redirect at target/CACHEDIR.TAG ALLOW                  ask
+    //   truncating redirect at src/main.rs         ALLOW                  ask
+    //   rm -rf target                              ALLOW                  ask
+    //   rm -rf src                                 ALLOW                  ask
+    //   rm -rf <the whole worktree>                ALLOW                  ask
+    // ```
+    //
+    // These tests are about the VERDICT, not about the predicate: they pin that
+    // the tri-state survives (the confined twin is an `Ask`, so a fix that
+    // answered `Deny` inside the worktree would be a different bug, not this
+    // one), and that a protected path inside a checkout still resolves on the
+    // protected axis rather than being reclassified by the re-rooting.
+
+    const WT_PROJECT: &str = "/home/yuki/proj";
+    const WT_HOME: &str = "/home/yuki";
+
+    /// Models a filesystem with no symlinks, the same convention
+    /// `tests/scoped_destructive.rs` uses: the LOCATION axis these cases lean
+    /// on is decided by the fixture rather than by whatever is on this machine.
+    fn wt_identity(p: &str) -> Option<String> {
+        Some(p.to_string())
+    }
+
+    /// The safe-root model a real session has: `cwd` and `CLAUDE_PROJECT_DIR`
+    /// both at the repo root. Without it every relative operand is
+    /// `Undetermined` for want of a cwd (that is what `SafeRoots::none` — and
+    /// therefore the plain `bash` helper — gives), and the confined `Ask` the
+    /// outside twin is supposed to earn could never appear.
+    fn wt_roots() -> SafeRoots {
+        SafeRoots::new(
+            Some(WT_PROJECT),
+            Some(WT_PROJECT),
+            Some(WT_HOME),
+            None,
+            Some(wt_identity),
+        )
+    }
+
+    fn wt_bash(cmd: &str) -> Decision {
+        detect_scoped("Bash", Some(&json!({ "command": cmd })), &wt_roots())
+    }
+
+    /// The identical command with one directory component renamed. `.claude` is
+    /// the only thing that changes, so any difference in the verdict is caused
+    /// by the config allowlist and by nothing else.
+    fn wt_outside_twin(cmd: &str) -> String {
+        cmd.replacen(".claude/worktrees", "notclaude/worktrees", 1)
+    }
+
+    /// Parity, asserted on the VARIANT rather than on the whole `Decision`:
+    /// the reason strings legitimately quote the operand, so they differ by
+    /// construction. Asserted with the crate's own three-way `verdict_name`,
+    /// never as a boolean "not allow" — a collapse of `Ask` into `Deny` has to
+    /// fail here too.
+    #[track_caller]
+    fn assert_worktree_parity(inside: &str, expected: &str) {
+        let outside = wt_outside_twin(inside);
+        let got = wt_bash(inside);
+        let twin = wt_bash(&outside);
+        assert_eq!(
+            verdict_name(&twin),
+            expected,
+            "fixture check: the OUTSIDE twin `{outside}` is supposed to be the \
+             baseline this case measures against; got {twin:?}"
+        );
+        assert_eq!(
+            verdict_name(&got),
+            verdict_name(&twin),
+            "`{inside}` and `{outside}` differ only in the name of one \
+             directory component, so they must reach the same verdict. A §8 \
+             worktree is a source CHECKOUT, not the Claude Code config tree, \
+             and `.claude/**` in ALLOW_GLOBS must not exempt it. \
+             inside={got:?} outside={twin:?}"
+        );
+    }
+
+    #[test]
+    fn recursive_rm_of_worktree_source_is_not_excused_by_the_config_allowlist() {
+        for cmd in [
+            "rm -rf .claude/worktrees/agent-x/src",
+            "rm -rf .claude/worktrees/agent-x/target",
+            "rm -rf .claude/worktrees/agent-x",
+        ] {
+            assert_worktree_parity(cmd, "ask");
+        }
+    }
+
+    #[test]
+    fn write_into_worktree_source_is_not_excused_by_the_config_allowlist() {
+        // No safe-root model needed: `detect_write` consults
+        // `is_config_file` before it ever looks at the content, so the
+        // empty-content wipe below is simply never reached inside a worktree.
+        for path in [
+            ".claude/worktrees/agent-x/src/main.rs",
+            ".claude/worktrees/agent-x/target/CACHEDIR.TAG",
+        ] {
+            let outside = path.replacen(".claude/worktrees", "notclaude/worktrees", 1);
+            let got = detect(
+                "Write",
+                Some(&json!({ "file_path": path, "content": "   " })),
+            );
+            let twin = detect(
+                "Write",
+                Some(&json!({ "file_path": outside, "content": "   " })),
+            );
+            assert_eq!(
+                verdict_name(&twin),
+                "deny",
+                "fixture check: wiping `{outside}` with blank content is the \
+                 baseline verdict this case measures against; got {twin:?}"
+            );
+            assert_eq!(
+                verdict_name(&got),
+                verdict_name(&twin),
+                "wiping `{path}` destroys a source file in a §8 worktree \
+                 checkout exactly as wiping `{outside}` does; the `.claude/**` \
+                 config exemption must not swallow it. inside={got:?} \
+                 outside={twin:?}"
+            );
+        }
+    }
+
+    /// TRI-STATE, the confined case. A truncating redirect at an EXISTING,
+    /// unrecoverable file inside a safe root is an `Ask` — not a `Deny`, and
+    /// not an `Allow`. Both halves matter: the defect is the `Allow`, and a fix
+    /// that over-corrected into `Deny` would have broken the location axis
+    /// `tests/scoped_destructive.rs` owns.
+    ///
+    /// HERMETIC, the same way `relaxed_truncating_forms_inside_the_project`
+    /// is: recoverability is an observation about real bytes, so this case
+    /// needs a real file — and the scratch directory holding it is passed to
+    /// `SafeRoots::new` explicitly rather than assumed to be a root, so the
+    /// verdict does not depend on the runner exporting `TMPDIR` or on which OS
+    /// `temp_dir()` resolves for. The pid in the name keeps concurrent
+    /// `cargo test` runs off each other's fixture. One precondition is stated
+    /// rather than hidden: `temp_dir()` must sit outside any git work tree, or
+    /// the earlier recoverability axis answers `Allow` for both sides and the
+    /// comparison stops meaning anything.
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn a_truncating_redirect_into_worktree_source_asks_exactly_as_its_twin_does() {
+        let scratch = std::env::temp_dir().join(format!(
+            "blastguard-worktree-redirect-{}",
+            std::process::id()
+        ));
+        let inside_dir = scratch.join(".claude/worktrees/agent-x/src");
+        let outside_dir = scratch.join("notclaude/worktrees/agent-x/src");
+        std::fs::create_dir_all(&inside_dir).expect("create the worktree-shaped fixture");
+        std::fs::create_dir_all(&outside_dir).expect("create the outside-twin fixture");
+        let inside_file = inside_dir.join("main.rs");
+        let outside_file = outside_dir.join("main.rs");
+        for f in [&inside_file, &outside_file] {
+            std::fs::write(f, b"fn main() {}\n")
+                .expect("write the bytes the recoverability probe needs to find");
+        }
+
+        let scratch_str = scratch
+            .to_str()
+            .expect("the scratch directory path is UTF-8");
+        let roots = SafeRoots::new(
+            Some(scratch_str),
+            Some(scratch_str),
+            Some(WT_HOME),
+            Some(scratch_str),
+            Some(wt_identity),
+        );
+
+        let inside_cmd = format!("cargo test > {}", inside_file.display());
+        let outside_cmd = format!("cargo test > {}", outside_file.display());
+        let got = detect_scoped("Bash", Some(&json!({ "command": inside_cmd })), &roots);
+        let twin = detect_scoped("Bash", Some(&json!({ "command": outside_cmd })), &roots);
+
+        assert_eq!(
+            verdict_name(&twin),
+            "ask",
+            "fixture check: `{outside_cmd}` truncates an existing, \
+             unrecoverable file inside a safe root, which is the confined Ask \
+             this case measures against; got {twin:?}"
+        );
+        assert_eq!(
+            verdict_name(&got),
+            "ask",
+            "`{inside_cmd}` destroys the same bytes in a §8 worktree checkout. \
+             It must reach the SAME confined Ask — an `allow` is the \
+             `.claude/**` exemption swallowing a source tree, and a `deny` \
+             would be an over-correction that voids the location axis. \
+             got={got:?} twin={twin:?}"
+        );
+    }
+
+    /// TRI-STATE, the protected axis. Re-rooting a worktree path must not move
+    /// a gate/config file OFF the protected axis: the checkout's own
+    /// `.claude/settings.json` decides whether the hooks fire in that tree, and
+    /// deleting it is still a flat `Deny` while writing it is still an `Ask`
+    /// that hardens to `Deny`. This is the over-correction guard for group (c).
+    #[test]
+    fn a_protected_path_inside_a_worktree_still_resolves_on_the_protected_axis() {
+        assert_protected_destroy(wt_bash(
+            "rm -rf .claude/worktrees/agent-x/.claude/settings.json",
+        ));
+        assert_protected_destroy(wt_bash("rm -rf .claude/worktrees/agent-x/.claude/hooks"));
+        assert_protected_modify(detect(
+            "Write",
+            Some(&json!({
+                "file_path": ".claude/worktrees/agent-x/.claude/settings.json",
+                "content": "{}"
+            })),
+        ));
+    }
 }

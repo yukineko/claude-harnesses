@@ -206,7 +206,9 @@ A Claude Code PreToolUse hook that denies project-destroying operations.\n\n\
 USAGE:\n  blastguard                  read a PreToolUse payload from stdin (normal mode)\n  blastguard record-approval  read a PostToolUse payload from stdin and record\n                              that this exact effect was approved\n  blastguard --version        print version\n  blastguard --help           this help\n\n\
 It denies recursive/wildcard rm, git reset --hard, git clean -fdx, truncate,\n\
 shred, mkfs, dd of=, recursive chmod/chown, find -delete, and single-> file\n\
-overwrites — while exempting repo config files (.claude/**, *.toml, *.lock, …).",
+overwrites — while exempting repo CONFIG files (.claude/** config, *.toml,\n\
+*.lock, …). A worktree checked out under .claude/worktrees/ is source, not\n\
+config, and is judged by the path it would have outside that directory.",
         ver = env!("CARGO_PKG_VERSION")
     );
 }

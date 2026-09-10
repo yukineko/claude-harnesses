@@ -4,6 +4,12 @@
 //! `package.json`, `.claude/**`, …) is routine and must never be treated as a
 //! destructive blast. This module centralizes that judgement plus the helpers
 //! that pull candidate paths out of tool inputs and shell operands.
+//!
+//! The `.claude/**` half is about the CONFIG tree, not about everything that
+//! happens to sit under a `.claude` directory. A git worktree checked out at
+//! `.claude/worktrees/<name>/` — where CLAUDE.md §8 requires all implementation
+//! work to happen — is source, and [`is_config_file`] judges it by the path it
+//! would have outside. See [`strip_worktree_checkout`].
 
 use std::sync::OnceLock;
 
@@ -12,7 +18,10 @@ use harness_core::verdict::Determination;
 
 /// Glob patterns whose matches are always allowed (treated as config files).
 const ALLOW_GLOBS: &[&str] = &[
-    // The Claude Code project config tree, anywhere in the repo.
+    // The Claude Code project config tree, anywhere in the repo. NOT a licence
+    // for whatever else is parked under a `.claude` directory: a worktree
+    // checkout under `.claude/worktrees/` is re-rooted first, see
+    // `strip_worktree_checkout`.
     ".claude",
     ".claude/**",
     "**/.claude",
@@ -399,6 +408,86 @@ pub fn normalize(raw: &str) -> String {
     resolve_parents(&collapse(raw))
 }
 
+/// Re-root a path that lives inside a git worktree checked out under
+/// `.claude/worktrees/<name>/`, returning the path RELATIVE to that checkout.
+///
+/// The `.claude/**` entries in [`ALLOW_GLOBS`] are about CONFIG — a project's
+/// Claude Code settings, agents and skills. They are not about the source of a
+/// whole repository, and CLAUDE.md §8 puts one there: every agent worktree is
+/// checked out at `<repo>/.claude/worktrees/agent-*/`, which is the ONLY place
+/// implementation work is allowed to happen. Matching the full path against the
+/// allowlist therefore exempted every file of every checkout from every rule
+/// that consults [`is_config_file`] — the gate was blind in exactly the tree it
+/// is meant to watch.
+///
+/// Measured 2026-09-10 against the deployed 0.2.62 binary, holding git tracking
+/// (untracked), existence (true) and the payload cwd fixed and varying only one
+/// directory-component name (`.claude` vs `notclaude`) in the same throwaway
+/// repo:
+///
+/// ```text
+/// shape                                     in .claude/worktrees   outside
+/// truncating redirect at target/CACHEDIR.TAG  ALLOW                ask
+/// truncating redirect at src/main.rs          ALLOW                ask
+/// rm -rf target                               ALLOW                ask
+/// rm -rf src                                  ALLOW                ask
+/// rm -rf <the checkout root itself>           ALLOW                ask
+/// ```
+///
+/// Why RE-ROOT rather than un-exempt: deleting the `.claude` globs, or refusing
+/// the exemption to anything under `.claude/worktrees/`, would also take the
+/// checkout's OWN `Cargo.toml` and its own `.claude/agents/*.md` with it — i.e.
+/// it would re-introduce, inside every worktree, precisely the noise the
+/// allowlist exists to suppress, and worktrees are where the editing happens.
+/// Re-rooting judges the remainder as the relative path it actually is, so
+/// `<checkout>/Cargo.toml` stays exempt as `Cargo.toml` and
+/// `<checkout>/src/main.rs` stops being exempt, exactly as they would outside.
+///
+/// This can only ever REMOVE an exemption, never add one: every path with a
+/// `.claude` component already matched `**/.claude/**` before this ran, so the
+/// re-rooted verdict is a subset of the old one.
+///
+/// The boundary is matched CASE-INSENSITIVELY — the opposite of [`glob_set`],
+/// for the same reason [`protected_set`] folds. Folding here strips MORE
+/// prefixes and therefore exempts FEWER paths, which is the restrictive
+/// direction; a case-sensitive boundary would let `.CLAUDE/Worktrees/...` (the
+/// same directory on this machine's case-insensitive filesystem) keep the
+/// blanket exemption.
+///
+/// An empty remainder — the checkout root itself, or the `worktrees` container
+/// above it — is `Some("")`, and [`is_config_file`] answers false for it. That
+/// is deliberate: `rm -rf <checkout>` and `rm -rf .claude/worktrees` destroy
+/// every agent's uncommitted work, and both were ALLOW.
+///
+/// Returns `None` when there is no such boundary (the overwhelmingly common
+/// case), so the caller matches the path unchanged and nothing else moves.
+fn strip_worktree_checkout(norm: &str) -> Option<String> {
+    let comps: Vec<&str> = norm.split('/').filter(|c| !c.is_empty()).collect();
+    // Scanned to the END, not stopped at the first hit: a worktree checked out
+    // inside another worktree re-roots at the INNERMOST one. The outer prefix
+    // is not config under either reading, so the innermost boundary is the one
+    // that leaves the smallest remainder — again the restrictive direction.
+    let mut boundary = None;
+    for (i, c) in comps.iter().enumerate() {
+        if c.eq_ignore_ascii_case(".claude")
+            && comps
+                .get(i + 1)
+                .is_some_and(|next| next.eq_ignore_ascii_case("worktrees"))
+        {
+            boundary = Some(i);
+        }
+    }
+    // `+ 3` skips `.claude`, `worktrees` and the checkout's own directory name.
+    // `get` returning None is the "path IS the container or the checkout root"
+    // case and yields an empty remainder, not an absent one.
+    boundary.map(|i| {
+        comps
+            .get(i + 3..)
+            .map(|rest| rest.join("/"))
+            .unwrap_or_default()
+    })
+}
+
 /// True when `path` is a repo config file that must never be blocked.
 ///
 /// A path whose `..` survives resolution returns FALSE — it fails the allowlist.
@@ -412,8 +501,18 @@ pub fn is_config_file(path: &str) -> bool {
     if norm.is_empty() || has_unresolved_parent(&norm) {
         return false;
     }
+    // A repository checked out under `.claude/worktrees/<name>/` is SOURCE, not
+    // config; judge it by the path it would have outside. See
+    // [`strip_worktree_checkout`] for the measurement this closes.
+    let subject = match strip_worktree_checkout(&norm) {
+        // The checkout root itself, or the `worktrees` container: no remainder
+        // to judge, and nothing about either is a config file.
+        Some(rest) if rest.is_empty() => return false,
+        Some(rest) => rest,
+        None => norm,
+    };
     match glob_set() {
-        Determination::Known(set) => set.is_match(&norm),
+        Determination::Known(set) => set.is_match(&subject),
         // The allowlist could not be compiled, so nothing was tested against
         // it. Exempting on that basis would waive the rules for every path at
         // once; refusing the exemption only sends paths to the rules, which is
@@ -713,6 +812,223 @@ mod tests {
         match build_set(&refs, true, "derived") {
             Determination::Known(set) => assert_eq!(set.len(), refs.len()),
             Determination::Undetermined(_) => panic!("derived directory prefixes do not compile"),
+        }
+    }
+
+    // ---- `.claude/worktrees/**`: a CHECKOUT is source, not config ----
+    //
+    // CLAUDE.md §8 makes a git worktree MANDATORY for every implementation
+    // task, and those worktrees are parked at
+    // `<repo>/.claude/worktrees/agent-*/`. `ALLOW_GLOBS` exempts the Claude
+    // Code CONFIG tree with `.claude`, `.claude/**`, `**/.claude` and
+    // `**/.claude/**` — four patterns whose `**` swallows the worktrees
+    // container whole, so EVERY file of EVERY worktree answers `true` here and
+    // skips the rules. Measured on the deployed 0.2.62 binary, holding
+    // everything fixed except the name of ONE directory component:
+    //
+    // ```text
+    //   shape                                      IN .claude/worktrees   OUTSIDE
+    //   truncating redirect at target/CACHEDIR.TAG ALLOW                  ask
+    //   truncating redirect at src/main.rs         ALLOW                  ask
+    //   rm -rf target                              ALLOW                  ask
+    //   rm -rf src                                 ALLOW                  ask
+    //   rm -rf <the whole worktree>                ALLOW                  ask
+    // ```
+    //
+    // The exemption is legitimate for CONFIG and is not being removed. What
+    // these tests pin is that a `.claude/worktrees/<one component>` boundary
+    // RE-ROOTS the question: only the remainder of the path (relative to that
+    // checkout root) is asked whether it is config, exactly as it would be
+    // asked inside the repo the checkout is a copy of.
+
+    /// The identical shape, differing only in the name of ONE directory
+    /// component. Used as the parity twin throughout this section: `.claude`
+    /// is the only thing that changes, so any difference in the answer is
+    /// caused by the allowlist and by nothing else.
+    fn outside_twin(path: &str) -> String {
+        path.replacen(".claude/worktrees", "notclaude/worktrees", 1)
+    }
+
+    #[test]
+    fn worktree_source_files_are_not_config_files() {
+        for path in [
+            ".claude/worktrees/agent-x/src/main.rs",
+            ".claude/worktrees/agent-x/target/CACHEDIR.TAG",
+            "/abs/repo/.claude/worktrees/agent-x/src/main.rs",
+        ] {
+            let remainder = path.rsplit_once("agent-x/").map_or(path, |(_, rest)| rest);
+            assert!(
+                !is_config_file(path),
+                "`{path}` is a SOURCE file in a §8 worktree checkout, not repo \
+                 config. The `.claude/**` allowlist entry is about the Claude \
+                 Code config tree; exempting a checkout under it waives every \
+                 rule for the only place implementation work is allowed to \
+                 happen. The remainder after the `.claude/worktrees/<checkout>` \
+                 boundary is `{remainder}`, which is not config."
+            );
+        }
+    }
+
+    #[test]
+    fn worktree_classification_matches_the_identical_shape_outside() {
+        // Parity is the actual contract: whatever the answer is for
+        // `notclaude/worktrees/...`, the `.claude/worktrees/...` twin must get
+        // the SAME one. Asserting parity rather than a bare `false` also keeps
+        // this test honest if the outside answer ever legitimately changes.
+        for inside in [
+            ".claude/worktrees/agent-x/src/main.rs",
+            ".claude/worktrees/agent-x/target/CACHEDIR.TAG",
+            ".claude/worktrees/agent-x/README.md",
+            "/abs/repo/.claude/worktrees/agent-x/src/main.rs",
+        ] {
+            let outside = outside_twin(inside);
+            assert_eq!(
+                is_config_file(inside),
+                is_config_file(&outside),
+                "`{inside}` and `{outside}` differ ONLY in the name of one \
+                 directory component, so they must be classified identically; \
+                 a checkout is source wherever it is parked."
+            );
+        }
+    }
+
+    #[test]
+    fn the_worktrees_container_and_a_checkout_root_are_not_config_files() {
+        // Re-rooting leaves an EMPTY remainder for these, and an empty
+        // remainder is not config — it is the checkout itself (or the box the
+        // checkouts live in). `rm -rf .claude/worktrees/agent-x` deletes a
+        // whole session's work; it must not be waved through as a config edit.
+        for path in [
+            ".claude/worktrees",
+            ".claude/worktrees/agent-x",
+            "/abs/repo/.claude/worktrees",
+            "/abs/repo/.claude/worktrees/agent-x",
+        ] {
+            assert!(
+                !is_config_file(path),
+                "`{path}` names a worktree checkout (or the container holding \
+                 them), whose re-rooted remainder is EMPTY. An empty remainder \
+                 is not a config file, and calling it one exempts destroying an \
+                 entire session's tree."
+            );
+        }
+    }
+
+    #[test]
+    fn the_worktrees_boundary_is_matched_case_insensitively() {
+        // Same asymmetry rule the rest of this module already follows: folding
+        // the BOUNDARY strips more paths out of the exemption, so it is the
+        // restrictive direction — and on macOS `.claude/Worktrees/agent-x` IS
+        // `.claude/worktrees/agent-x`, the same directory on disk.
+        //
+        // The cases below keep `.claude` in its exact lowercase spelling on
+        // purpose, and that is what makes them discriminating. `ALLOW_GLOBS` is
+        // matched case-SENSITIVELY (see `glob_set`), so a path spelled
+        // `.CLAUDE/...` already fails the allowlist for a reason that has
+        // nothing to do with this defect — asserting on it would look rigorous
+        // and prove nothing. These paths DO match `.claude/**` today; only a
+        // case-insensitive reading of the `worktrees` component can take the
+        // exemption back off them.
+        for path in [
+            ".claude/Worktrees/agent-x/src/main.rs",
+            ".claude/WORKTREES/agent-x/src/main.rs",
+            ".claude/WorkTrees/agent-x/target/CACHEDIR.TAG",
+            "/abs/repo/.claude/Worktrees/agent-x/src/main.rs",
+        ] {
+            assert!(
+                !is_config_file(path),
+                "`{path}` names the same checkout as its all-lowercase \
+                 spelling on a case-insensitive filesystem; a shifted letter \
+                 in `worktrees` must not buy back an exemption a source \
+                 checkout is not entitled to."
+            );
+        }
+    }
+
+    #[test]
+    fn a_worktree_inside_a_worktree_re_roots_at_the_innermost_checkout() {
+        // Nested worktrees are ordinary here: a session already working in
+        // `.claude/worktrees/a` spawns its own sub-worktree underneath. The
+        // remainder must be taken from the INNERMOST boundary, or the outer
+        // `.claude/worktrees/a/.claude/...` prefix re-exempts everything the
+        // outer re-rooting just removed.
+        assert!(
+            !is_config_file(".claude/worktrees/a/.claude/worktrees/b/src/main.rs"),
+            "a worktree nested in a worktree is still a source checkout: the \
+             remainder after the innermost `.claude/worktrees/b` boundary is \
+             `src/main.rs`, which is not config."
+        );
+        assert!(
+            !is_config_file(
+                "/abs/repo/.claude/worktrees/a/.claude/worktrees/b/target/CACHEDIR.TAG"
+            ),
+            "same, absolute: the remainder after the innermost boundary is \
+             `target/CACHEDIR.TAG`, which is not config."
+        );
+    }
+
+    // ---- anti-over-correction: what the exemption legitimately covers ----
+
+    /// CONTROL (expected to pass BEFORE any fix). Ordinary Claude Code config —
+    /// user-level, project-level and nested — carries no `worktrees` segment,
+    /// so re-rooting never applies to it and it must stay exempt.
+    #[test]
+    fn claude_config_without_a_worktrees_segment_stays_exempt() {
+        for path in [
+            ".claude/settings.json",
+            ".claude/agents/foo.md",
+            "nested/.claude/settings.json",
+            "/Users/x/.claude/agents/a.md",
+            ".claude",
+        ] {
+            assert!(
+                is_config_file(path),
+                "`{path}` is Claude Code config with no `.claude/worktrees` \
+                 boundary in it. Re-rooting must not reach it — removing this \
+                 exemption is the over-correction, not the fix."
+            );
+        }
+    }
+
+    /// CONTROL (expected to pass BEFORE any fix). The re-rooted remainder is
+    /// still ASKED the config question rather than being answered `false`
+    /// wholesale: a `Cargo.toml` in a checkout is as much a manifest as one in
+    /// the repo, and a checkout's own `.claude/agents/foo.md` is as much config.
+    #[test]
+    fn the_re_rooted_remainder_is_still_asked_the_config_question() {
+        for path in [
+            ".claude/worktrees/agent-x/Cargo.toml",
+            ".claude/worktrees/agent-x/crates/blastguard/Cargo.toml",
+            ".claude/worktrees/agent-x/.claude/agents/foo.md",
+            "/abs/repo/.claude/worktrees/agent-x/Cargo.lock",
+        ] {
+            let outside = outside_twin(path);
+            assert!(
+                is_config_file(path),
+                "`{path}`: the fix RE-ROOTS the path, it does not blanket-deny \
+                 the worktree. The remainder still matches the allowlist \
+                 (`*.toml` / `*.lock` / `.claude/**`), so this must stay exempt \
+                 — its twin `{outside}` is exempt for exactly that reason."
+            );
+        }
+    }
+
+    /// CONTROL (expected to pass BEFORE any fix). Only the literal
+    /// `.claude/worktrees` boundary re-roots. A component that merely CONTAINS
+    /// the word, or a file named after it, is ordinary `.claude` config.
+    #[test]
+    fn only_the_worktrees_boundary_re_roots_not_a_lookalike_component() {
+        for path in [
+            ".claude/notworktrees/agent-x/src/main.rs",
+            ".claude/agents/worktrees.md",
+            ".claude/worktrees-archive/agent-x/src/main.rs",
+        ] {
+            assert!(
+                is_config_file(path),
+                "`{path}` has no `.claude/worktrees/<checkout>` boundary — the \
+                 segment only looks like one. Re-rooting on a substring would \
+                 strip the exemption from ordinary config."
+            );
         }
     }
 }

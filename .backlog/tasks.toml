@@ -4455,7 +4455,7 @@ tags = [
     "failopen",
     "p1",
 ]
-status = "pending"
+status = "done"
 notes = """
 合成ハザード。gate は別プロセスで相互不可視 (docs/stop-gate-latency.md:34-40 が order-independence を要求)。harness-core/src/gate/run.rs:47-57 の consume_skip は marker を削除して allow を返すため、あるゲートが一度きりの skip 札を消費した後に別のゲートが block すると、その stop は起きないのに札だけ失われる。attempt カウンタも同様に、どのゲートが実際に block したかに関わらず進む (donegate/src/main.rs:194 の bump)。order-independence は保たれるが budget independence が保たれていない。fail-closed 化でブロック頻度が上がるほど顕在化する / 完了条件: skip 札の消費と attempt の bump が『実際に stop が成立したか』に条件づけられる、もしくはゲート横断で共有される。複数ゲートが同一 stop に対して独立に予算を消費しないことをテストで pin
 
@@ -4488,7 +4488,41 @@ risk of this design」と明記）が無期限ブロックに変わる。(B) は
 
 どちらを採るかは観測では決まらず、予測で埋めれば CLAUDE.md 第2節が禁じる「判断で ok を出す」
 になる。したがって**人間の裁定待ちとして pending に残す**。裁定が出れば実装は小さい。
-"""
+
+
+--- 実測 + ユーザー裁定で close する 2026-09-11、測定点 89b31bb4 ---
+
+【再測定 — チケットの前提はもう成り立たない】
+crates/donegate/src/main.rs の state::bump 呼び出しは 2 箇所しかない:
+  :289  // blocking failures present  の下
+  :535  refuse path
+どちらも donegate 自身が block / refuse を返す経路でしか到達しない。
+つまり「他ゲートの block を donegate の予算として数える」経路は現状のコードに無い。
+
+チケットが記述した害 (他ゲートの block が黙って concession 予算を食う) は
+aeb848a4 (2026-09-09) の harness_core::gate::run で閉じている:
+  concession_path   crates/harness-core/src/gate/run.rs:410
+  concede           同 :438
+  concession_owed   同 :478
+コメントが逐語で "Remember the concession so a stop ANOTHER gate blocks
+cannot silently spend it" と書いており、donegate の give-up 2 箇所は
+どちらも concede を呼ぶ。チケットの「未着手」メモは 2026-09-08 で、
+修正はその翌日に landed していた (またしても、修正が landed した事実が
+誰にも観測されないまま pending に残っていた = c4321fc2 / 65bfb279 が
+保持している構造的問題の 4 例目)。
+
+【残った論点は観測では決まらない → 人間に投げた】
+「各ゲートが自分の block だけを数える per-gate セマンティクス」を正とするか、
+「全ゲートで 1 つの concession 予算を共有する」設計へ変えるか。これは
+予測で埋めれば CLAUDE.md 第2節が禁じる「判断で ok を出す」になるので、
+flow Step 0.5 の shim に掛けた:
+
+  condukt state autonomy-check          -> {"autonomous":true}  (exit 0)
+  condukt policy answer (--approval なし。判断要求なので付けない)
+    --risk medium --reversible high --confidence low
+  -> exit 2 {"answered":false,"policy":"escalate"}  = 人間へ
+
+【ユーザー裁定 2026-09-11】per-gate のまま。追加実装なし。done で閉じる。"""
 created_at = 1784606616
 updated_at = 1788859901
 weight = 0.0
@@ -21165,3 +21199,17 @@ updated_at = 1789062145
 weight = 0.0
 issue_number = 505
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/505"
+
+[[task]]
+id = "3130bc33"
+title = "mutategate は GATE_CRATES に含まれるが .claude-plugin/plugin.json を持たない — canary rollout 対象として名指しされているのに plugin として rollout 不能"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "実測 2026-09-11、測定点 89b31bb4。scripts/rollout-plugins.sh:134 の GATE_CRATES= は 7 crate を列挙し、CLAUDE.md も同じ 7 件を canary 要件の対象として正典コピーに持つ (check-gate-crates-sync.py が機械照合)。しかし crates/mutategate/ には .claude-plugin/ ディレクトリが存在せず (ls で確認)、7 件中この 1 件だけが plugin ではない素の Rust crate である。したがって scripts/rollout-plugins.sh --plugin mutategate --canary は成立しない。check-version-bumped.py の plugin ループも plugin.json 不在でこの crate を skip するので、mutategate を触っても bump-on-change は発火しない (harness-core でもないので shared 経路にも乗らない)。これが意図的な carve-out なのか名簿の側の誤りなのかは未判定 — 起票のみ。"
+created_at = 1789064423
+updated_at = 1789064423
+weight = 0.0
+issue_number = 514
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/514"

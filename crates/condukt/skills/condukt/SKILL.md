@@ -759,14 +759,28 @@ CC=$(condukt state check-criteria --run "$RID" --task "<id>")
 ```
 - **`skip_verifier: true`** の場合のみ verifier agent を省略できる。これは done_criteria が
   **純粋に機械的**（`cargo test`/`npm test`/`pytest`/backtick コマンド等、観察可能な事実の確認のみ）で、
+  **かつ抽出された 1 本のコマンドが criteria 全体を賄っている**（下の coverage）で、
   かつその機械チェックが **exit 0 で pass** したときに限る。この場合 `verified` に set してよい。
+- **`coverage`（部分チェックを完全 pass として報告しない）**: 分類器が抽出するのは
+  **最初に見つかった 1 本のコマンドだけ**なので、criteria が複数の主張を並べていれば残りは
+  誰も検査しない。分類器は「この criteria は 1 コマンドより多くを主張しているか」を決定論的に測り
+  （**列挙マーカー**の本数 `1)`/`1.`/`- `/`・`/`(1)` と、criteria が**名指しするコマンド**の本数の
+  2 軸。どちらかが 2 以上なら `Partial`、数えられなければ `Undecidable`）、`Single` 以外は
+  `skip_verifier:false` に倒す。したがって
+  「1) `grep …` が 0 件 …… 6) `cargo test -p x` / `cargo fmt` / `cargo clippy` が green」のような
+  6 項目 criteria は、`cargo test` が exit 0 でも verifier を省略できない — 残り 5 項目を
+  誰も見ていないからである。**`mechanical_check` ヒントを渡してもこの veto は外れない**:
+  ヒントは「どのコマンドを走らせるか」の権威であって「それで criteria 全体を賄える」という
+  宣言ではない（「verifier を必ず回せ」を伝える別チャネル `is_behavioral` が存在することが、
+  その読み替えを許さない）。1 コマンドで賄いたいなら criteria を 1 主張に割る — それが本来の分割単位。
 - **`skip_verifier: false`** なら **必ず verifier agent を起動する**。特に done_criteria に「実装」
   「ロジック」「設計」「コード」「振る舞い」「検証」「正しく」等（英語 implement/logic/design/behavior/
   correct/prove/enforce 等）の**判断を要する語**が含まれる場合は `behavioral: true` となり、
   たとえ埋め込まれたテストコマンドが通っていても **スキップしない**。通ったテストは verifier に
   渡す **証拠 (`evidence`)** であって、verifier の**代替ではない**。
-- 分類が曖昧なとき（コマンドが取れない・判定不能）は `skip_verifier: false` に倒れる（安全側 =
-  verifier を回す）。ターンを壊さない原則により、迷ったら必ず verifier を走らせる。
+- 分類が曖昧なとき（コマンドが取れない・coverage が数えられない・その他の判定不能）は
+  `skip_verifier: false` に倒れる（安全側 = verifier を回す。CLAUDE.md §3「判定不能は制限側」）。
+  **verifier を回すことはターンを壊す行為ではない**ので、迷ったら必ず走らせる。
 
 **`reproduction_tests` の決定論先行実行（LLM verifier 起動前の証拠収集）**:
 タスクに `reproduction_tests` がある場合、main が worktree 内でそのコマンドを直接 `Bash` 実行する

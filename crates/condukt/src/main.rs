@@ -4528,6 +4528,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                     "mechanical": cls.mechanical_cmd.is_some(),
                     "behavioral": cls.behavioral,
                     "skip_verifier": false,
+                    "coverage": cls.coverage.as_json(),
                     "evidence": evidence,
                 });
                 println!("{}", serde_json::to_string(&out)?);

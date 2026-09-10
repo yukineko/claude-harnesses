@@ -4919,7 +4919,67 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 status = "claimed"
-notes = ""
+notes = """
+
+
+--- HEAD で測り直した結果 2026-09-11、測定点 5b3251a1 ---
+
+チケットの字句どおりの主張は falsified、しかし懸念そのものは別の場所で
+confirmed だった。両方を記録する。
+
+【falsified — 「F to P を tdd バイナリ経由で記録しないと fallback:true に
+縮退して旧 done_criteria ゲートで通る」】
+
+deployed の tdd 0.1.29 で直接測った:
+  cd (空の git repo) && tdd oracle --task no-such-task-xyz
+  出力: {"has_green":false,"has_red":false,"transition":"unknown","valid_fp_oracle":false}
+  exit=1
+
+crates/tdd/src/main.rs:349 の oracle_command は valid でない限り exit 1 を返す。
+一方 crates/condukt/src/oracle.rs:186 の verdict_from_oracle_output は
+exit_ok=false を先頭で短絡し fallback:false / valid:false を返す。これは
+enforce_fp_gate (state.rs:1442 の required かつ !fallback かつ !valid) で
+Reject になる。したがって「proof を記録していない fix/feature タスク」は
+現状 Allow ではなく Reject である。
+
+副次の観測: oracle.rs:70 の transition unknown を fallback:true へ落とす分岐は
+check_oracle 経由では到達不能である (unknown なら tdd は必ず exit 1 を返し、
+上の短絡が先に効くため)。同様に「stdout が空」「stdout が JSON として
+パース不能」の fallback:true 2 分岐も、tdd が exit 0 のときは必ず整形済み
+JSON を印字するので到達不能。つまり run 由来の fallback:true 面は現状すべて
+死んでおり、生きている fallback:true は !requires_oracle のみ。散文
+(「charter DoD のオラクル生成不能時 fallback」) と実挙動が食い違っている。
+
+【confirmed — ゲートが丸ごと黙って skip される経路が別にある】
+
+crates/condukt/src/main.rs:3856 付近、condukt state set の Verified 昇格前に
+走る F to P ゲート:
+
+  if let Ok(dec_raw) = state::load_decomposition(cfg, cwd, &run) {
+      if let Ok(dec) = serde_json::from_str::<model::Decomposition>(&dec_raw) {
+          if let Some(dt) = dec.tasks.iter().find(|dt| dt.id == task) {
+              ... check_oracle ... enforce_fp_gate ...
+
+else の無い if let が 3 段。どれか 1 つでも外れるとゲートは 1 度も走らず、
+タスクはそのまま verified になる:
+  1. load_decomposition が Err — ENOENT (本当に decomposition が無い＝正当) と
+     read fault / 権限エラー / 非 UTF-8 (判定不能) が同じ値に潰れている
+  2. Decomposition の JSON パース失敗 — 判定不能なのに素通り
+  3. run-state の task id が decomposition のどの task にも一致しない
+
+さらに直前のコメントが「fails soft (degrade to the legacy gate)」と書いているが、
+legacy gate は 1 つも走らない。散文が実挙動と食い違っている (CLAUDE.md 第4節)。
+
+【原則的な修正先は既に用意されている】
+crates/condukt/src/state.rs:571 の load_decomposition_determined が
+Determination<Option<String>> の三値 (Known(Some) / Known(None)=ENOENT の
+観測された不在 / Undetermined(why)) を返す。その doc comment 自身が逐語で
+「Move a site here when, and only when, its output starts feeding a judgment」
+と書いている。この F to P ゲートの callsite はまさに judgment を下す場所で
+ありながら、素の load_decomposition のままである。
+
+修正は agent へ dispatch 済み (別 worktree、RED を先に観測させ、テストは
+利害関係のない別 subagent に書かせ、3 分岐それぞれに mutation を要求)。"""
 created_at = 1784642695
 updated_at = 1789069771
 weight = 0.0
@@ -21861,3 +21921,31 @@ updated_at = 1789069834
 weight = 0.0
 issue_number = 523
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/523"
+
+[[task]]
+id = "e5174b6a"
+title = "condukt oracle.rs の fallback:true 3分岐が check_oracle 経由では到達不能 — 散文は charter DoD の縮退契約と書いているが実挙動は Reject"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "実測 2026-09-11、測定点 5b3251a1。crates/condukt/src/oracle.rs には run 由来の fallback:true が 3 経路ある: (1) verdict_from_oracle の transition unknown 分岐 (oracle.rs:70 付近)、(2) verdict_from_oracle_output の stdout 空 分岐、(3) 同 stdout が JSON パース不能 分岐。いずれも check_oracle 経由では到達しない。理由: crates/tdd/src/main.rs:349 の oracle_command は valid_fp_oracle が true でない限り exit 1 で終了する。deployed の tdd 0.1.29 で直接確認した -- tdd oracle --task no-such-task-xyz は {has_green:false,has_red:false,transition:unknown,valid_fp_oracle:false} を印字して exit=1。verdict_from_oracle_output は exit_ok=false を先頭で短絡して fallback:false を返すので、(1) には決して降りない。(2)(3) も tdd が exit 0 のときは必ず整形済み JSON を印字するため到達しない。問題は挙動そのものではなく散文との食い違いである: verdict_from_oracle の doc comment は逐語で「Per the charter DoD (オラクル生成不能時の fallback) that is a can't-generate condition and must degrade to the legacy done_criteria gate (fallback: true -- enforce_fp_gate Allows), NOT hard-reject」と書いており、charter の DoD が実装されているかのように読める。実際には charter が要求した縮退は起きず hard-reject される。CLAUDE.md 第4節 (散文が実挙動と食い違ったら次のレビュアーを騙す仕掛けになる) に該当。要判断: charter DoD の縮退契約を本当に実現したいのか (その場合 tdd oracle の exit code 設計を変える必要がある。ただし縮退は fail-open なので第3節と衝突する)、それとも縮退契約自体を撤回して散文を実挙動に合わせるのか。後者が妥当に見えるが、これは仕様判断なので人間に返す。付随して、到達不能な 3 分岐にユニットテストが付いている場合、それらは pure function の契約テストであって gate 経路の証明ではないことを doc に明記すべき。"
+created_at = 1789070218
+updated_at = 1789070218
+weight = 0.0
+issue_number = 525
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/525"
+
+[[task]]
+id = "5319d798"
+title = "tdd プラグインの deploy が三重に乖離 — PATH は 0.1.24 の version dir を指し、その中の binary は 0.1.29 を自称し、repo HEAD は 0.1.30"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "実測 2026-09-11、測定点 5b3251a1。command -v tdd -- /Users/yuki/.claude/plugins/cache/yukineko/tdd/0.1.24/bin/tdd。tdd --version -- tdd 0.1.29。crates/tdd/.claude-plugin/plugin.json -- 0.1.30。cache 配下に存在する version dir は 0.1.24 / 0.1.25 / 0.1.29 の 3 つで、registry は最古の 0.1.24 を指したままである。つまり (a) registry が新しい version dir へ repoint されていない、(b) 0.1.24 の dir の中身は後から上書きされており dir 名が中身を偽っている、(c) repo HEAD はさらに 1 つ先の 0.1.30 で未 rollout。/Users/yuki/.claude/plugins/cache/yukineko/tdd/0.1.24/.deployed-from.json は commit f70706e690e86c2f2e8c67be0207e3db8fc8441f dirty=false harness_core_version 0.2.17 deployed_at 1788983941 を記録しているが、この provenance が 0.1.29 の binary のものなのか 0.1.24 のものなのかは dir 名からは判別できない。害: tdd は F to P オラクルの実体であり、condukt の完了ゲートがこの binary の exit code に依存している (crates/condukt/src/oracle.rs の check_oracle が spawn する)。稼働中のゲートが repo のどの版なのか分からない状態は、ゲートの判定を検証不能にする。要確認: scripts/check-plugin-rollout.py がこの乖離を検出できるか (version dir 名と中身の binary の自称版が食い違うケース)。検出できないなら、それ自体が rollout ゲートの盲点である。対処は scripts/rollout-plugins.sh の実行だが、まず何が起きて 3 つの version dir が並んだのかを観測してから直すこと。"
+created_at = 1789070219
+updated_at = 1789070219
+weight = 0.0
+issue_number = 526
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/526"

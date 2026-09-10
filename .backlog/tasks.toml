@@ -5639,7 +5639,7 @@ title = "condukt state check-criteria が多項目 done_criteria を1コマン�
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "claimed"
+status = "done"
 notes = """
 測定日 2026-07-22 / 測定点 d6aa9549 / run-20260722-072334 の Phase 6 前段で観測。
 
@@ -5729,7 +5729,51 @@ condukt の version は 0.7.154 へ (0.7.153 は並行 agent が使用中)。
 【同 run で観測されていた関連 2 件は未再測】
 donegate-version-bump-lockstep の縮約と donegate-stop-protocol-regression-test の
 passed:false は今回測っていない。前者は本チケットの修正で一緒に直る見込みだが、
-**見込みは判断であって観測ではない**ので、修正後に測り直すこと。"""
+**見込みは判断であって観測ではない**ので、修正後に測り直すこと。
+
+--- 修正が landed。deployed binary で確認して done にする 2026-09-11、測定点 363b6793 ---
+
+修正は 07c2b32c で merge 済み (condukt 0.7.154、rollout 実行済み)。
+agent の報告を鵜呑みにせず、**稼働している binary** に対して自分で測り直した。
+
+使い捨て repo に decomposition を書いて condukt state init し、
+deployed の condukt 0.7.154 に直接問い合わせた:
+
+  t1 = 3 項目の done_criteria (grep / import / cargo test)
+    {"behavioral":false,
+     "coverage":{"commands":2,"enumerated":3,"kind":"partial"},
+     "mechanical":true,"skip_verifier":false}
+
+  t2 = 単一主張 (`sh -c true` exits 0)
+    {"behavioral":false,"cmd":["sh","-c","true"],
+     "coverage":{"kind":"single"},"passed":true,"skip_verifier":true}
+
+t1 が決定的である: behavioral が false のまま skip_verifier が false になった。
+つまり marker 語彙ではなく **coverage veto 単独**が効いている。起票時の主因分析
+(抽出コマンドが criteria をカバーしているかを誰も要求していない) が正しく、
+そこが塞がれたことを示す。t2 は機能を無効化しただけではないことの対照であり、
+単一主張の正当な skip は従来どおり通る。
+
+起票時に観測されていた 6 項目の縮約 (cargo test 1 本 + skip_verifier:true) は
+再現しない。
+
+【この修正が持ち込んだ制約 -- 引き継ぎとして残す】
+1. coverage は多重性の proxy であって意味的な証明ではない。マーカーも 2 つ目の
+   コマンド名も持たない 1 文が 2 つのことを主張している場合は捕まえられない。
+   既知の穴 2 つ (単一トークンの非 runner コマンド、同一 runner の 2 回の言及) は
+   コード中に明記されている。
+2. mechanical_check ヒントは coverage veto を免除しない。理由は
+   classify_criteria の doc にある: MechanicalCheck のどのフィールドも
+   「これ以外に検査すべきものは無い」とは宣言しておらず、かつ producing side が
+   書くものなので第6節により規範をそこに置けない。代償 (1 本の複合コマンドが
+   本当に多項目をカバーしているケースでも verifier が走る) は隠さず doc に記載。
+   実際の頻度は未計測である -- ゼロだと主張はしない。
+
+【同 run で観測されていた関連 2 件は依然として未測】
+donegate-version-bump-lockstep の縮約と donegate-stop-protocol-regression-test の
+passed:false。前者は本修正で直る見込みだが見込みは観測ではない。別途測ること。
+
+done にする。"""
 created_at = 1784723291
 updated_at = 1789070279
 weight = 0.0

@@ -21051,3 +21051,316 @@ updated_at = 1789062588
 weight = 0.0
 issue_number = 506
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/506"
+
+[[task]]
+id = "b802a5cf"
+title = "Open question: should tdd narrow its impl-line count by transcript attribution the way reviewgate narrows its review set? (raised by 9ec045a1)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+Raised 2026-09-11 at HEAD 2abf8dea while closing the surviving half of 9ec045a1.
+
+tdd now DISCLOSES that authorship of its impl-file list was never verified (commit on branch fix-9ec045a1-gate-reasons). It does not NARROW. reviewgate does narrow: review.rs:191 calls harness_core::attribution::attribute_from_transcript and drops files a peer session positively claims, keeping everything unattributed.
+
+I deliberately did not wire the same call into tdd, because narrowing changes the VERDICT in the permissive direction: fewer attributed files means a smaller added_impl_lines, which can fall under min_added_impl_lines and turn a block into an allow. CLAUDE.md forbids widening a gate into allowing more as a side effect of a wording fix, so this needs a human decision rather than my judgement.
+
+The two sides:
+
+FOR narrowing -- in a shared checkout tdd currently demands a test for a concurrent session or a human edit that the agent never made. That is a false block, and CLAUDE.md section 8 records the same attribution bug biting donegate and reviewgate as measured, not hypothetical.
+
+AGAINST narrowing -- harness_core::attribution only sees Edit/Write/MultiEdit/NotebookEdit tool_use blocks in the transcript. A sed -i or a heredoc write appears in NO footprint (documented at crates/harness-core/src/transcript.rs EDIT_TOOLS). So narrowing would drop implementation the agent really did write via Bash, and let genuinely untested code through the gate. reviewgate can afford this because its worst case is reviewing less; tdd cannot, because its worst case is allowing untested code to land.
+
+Note that the asymmetry is real and may be the right answer: reviewgate narrows, tdd only discloses. If so, that reasoning should be written down somewhere, because the next audit will read the difference as another mirror gap and try to close it."""
+created_at = 1789064270
+updated_at = 1789064270
+weight = 0.0
+issue_number = 507
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/507"
+
+[[task]]
+id = "5a77b9e4"
+title = "Two propguard tickets (028f9bc6, cfd0cc76) assert defects that b61d68b4 already fixed - re-measure before working them"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+status = "pending"
+notes = """
+Measured 2026-09-11 at HEAD 2abf8dea, worktree /Users/yuki/src/.harness-worktrees/ticket-9ec045a1.
+
+Filing this rather than silently closing them, because deciding a ticket is stale is itself a judgement someone should be able to check.
+
+028f9bc6 title says: "propguard: block reason still asserts an unverified property count". At HEAD the inject-mode headline (crates/propguard/src/gate.rs:812-818) reads verbatim:
+
+  "propguard: この差分の semantic property は未検証です (round {attempt}). propguard 自身は各プロパティの成否を判定していません。検証済みのプロパティがまだ 1 つも無いため停止しているのであって、「成り立たなかった」という測定結果ではありません。"
+
+and the measured phrasing (satisfied=N < threshold=M) is emitted only on the other branch of an if that keys on whether a checker actually produced findings. Tests at gate.rs:2610 and :2632 pin both halves. So the first half of 028f9bc6 appears ALREADY FIXED. Its second half -- that propguard is inert in this repo -- is still true: there is no propguard.toml and no criteria file at the repo root, so derive.rs source_criteria returns None and gate.rs allows at the no-criteria arm.
+
+cfd0cc76 title says: "propguard inject mode assumes the unattributed diff is the agents own code". At HEAD block_reason (gate.rs:831-834) reads verbatim:
+
+  "propguard は各ファイルの作成者を検証していません。あなたが書いたものではないファイル (人間の編集や、併走する別セッションの変更) が混じっている可能性があります。"
+
+pinned by inject_mode_block_reason_does_not_claim_the_listed_files_are_the_agents_own_code (gate.rs:2865). So cfd0cc76 also appears ALREADY FIXED.
+
+Both were filed by b61d68b4 as follow-ups and then apparently closed by that same commit or its neighbours without the tickets being marked done. Someone with authority to close should re-measure and close, or tell me what I missed."""
+created_at = 1789064272
+updated_at = 1789064272
+weight = 0.0
+issue_number = 508
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/508"
+
+[[task]]
+id = "1ff0fcc9"
+title = "tdd FAIL-OPEN: a test-marker regex hit in ANY file (README, toml, fixture) sets test evidence and allows the stop - the comment claims an impl-file guard that does not exist"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+status = "pending"
+notes = '''
+Found and independently re-verified 2026-09-11 at HEAD 2abf8dea by reading crates/tdd/src/gate.rs classify().
+
+crates/tdd/src/gate.rs:172-181 verbatim:
+
+    for AddedLine { file, text } in added {
+        let marker_hit = markers.is_match(text);
+        if is_test_file(file) {
+            test_marker_added = true; // any added line in a test file is evidence
+            continue;
+        }
+        if marker_hit {
+            test_marker_added = true; // inline test written in an impl file
+            continue;
+        }
+
+The comment on the second arm says "inline test written in an impl file". There is NO is_impl_file(file) guard on that arm. is_impl_file is defined right above at gate.rs:165 and is applied only to the added_impl_lines counter at gate.rs:182. So marker_hit is evaluated against every added line of every changed path, whether or not the path is in impl_globs at all.
+
+Consequence: test_marker_added drives Fields::has_test_evidence, which drives Report::verdict -> Verdict::from_findings(Vec::new()) -> Clean -> the Stop hook ALLOWS. One matching added line anywhere silences the whole gate for that turn.
+
+The default marker set makes this trivially reachable. crates/tdd/src/config.rs:190-198 verbatim:
+
+    r"#\[\s*(tokio::|async_std::|rstest|test)",
+    r"\bfn\s+test_",
+    r"\bdef\s+test_",
+    r"\bfunc\s+Test\w",
+    r"\b(it|test|describe)\s*\(",
+    r"@Test\b",
+
+The fifth pattern matches the bare substring test( or it( or describe( followed by optional whitespace and an open paren. An added line in a CHANGELOG.md, a Cargo.toml comment, a JSON fixture, a shell script, or a commit-message template containing test( is sufficient. Adding documentation that quotes the gate own block-reason text - which contains def test_ and func Test and it(...) - would also do it.
+
+This is a fail-open in the verdict predicate, not a wording issue: "cannot determine whether a real test was added" is being resolved to "clean". It is also a docstring-vs-behaviour contradiction of the kind CLAUDE.md section 4 names.
+
+Suggested fix (narrows the gate, i.e. blocks MORE, which is the safe direction): guard the marker arm with is_impl_file(file), so a marker only counts as inline-test evidence when it lands in a file the config actually calls implementation. Needs its own RED test from a disinterested agent before the change, per section 2(b).
+
+Related: gate.rs human_report then renders this as "yes (inline test added)" / "yes (test file + inline test)" (gate.rs around :329-334), asserting an inline test was added when all that was observed is a regex hit somewhere.
+
+Also note the first arm: any added line in a test-glob file, including a blank-adjacent comment line, is evidence. That may be intentional but it is unstated.'''
+created_at = 1789064330
+updated_at = 1789064330
+weight = 0.0
+issue_number = 509
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/509"
+
+[[task]]
+id = "b74955f4"
+title = "propguard inject mode records EVERY derived property as a fleet violation, contradicting the CA-propguard-06 comment in the same function"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+Reported by an adversarial audit 2026-09-11 at HEAD 2abf8dea. Verdict CONFIRMED by the auditor with verbatim quotes; I have NOT independently re-verified the overwatch write path, so treat the consumption half as UNVERIFIED until someone traces it.
+
+crates/propguard/src/gate.rs:442-445 verbatim:
+
+    fn unsatisfied_prop_ids(props: &[Property], findings: Option<&str>) -> Vec<&static str> {
+        let Some(out) = findings else {
+            return props.iter().map(|p| p.id).collect();
+        };
+
+The early return fires whenever findings is None. Inject mode constructs exactly that: gate.rs around :273-279 builds Determination::Known(Verified { satisfied: 0, findings: None }). So in inject mode ALL 3-5 derived properties are returned as violated and appended as ViolationSource::Propguard events (main.rs around :306 and :485-497), read later by overwatch violations / overwatch review-queue.
+
+Nothing evaluated any of them. The same function guards against precisely this, but only inside the Some(out) branch. gate.rs:451-457 verbatim:
+
+    // None means the checker emitted NO verdict line for it - it was
+    // never evaluated, which is NOT the same as checked-and-failed. Only
+    // a property that was checked and FAILED (Some(false)) is a fleet
+    // violation; a never-evaluated (unchecked) property must not be
+    // reported violated / pollute the fleet-correlation store, per
+    // property (CA-propguard-06).
+
+and main.rs:446 verbatim: "Record a fleet-level overwatch violation for each failing PROP-* property on a Block decision." In inject mode none of them is failing; none was checked.
+
+The sibling path gets this right - decide_diff_failed doc (gate.rs around :649-652) says NO per-property violation is attributed because nothing was checked. Same defect class as the satisfied=0 headline that b61d68b4 fixed, surviving on the durable-record surface instead of the message surface.
+
+Currently latent in THIS repo: there is no propguard.toml and no criteria file at the repo root, so derive.rs source_criteria returns None and gate.rs allows at the no-criteria arm before any of this runs. It is not latent for any project that configures propguard, and inject is the mode the shipped starter template writes."""
+created_at = 1789064369
+updated_at = 1789064369
+weight = 0.0
+issue_number = 510
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/510"
+
+[[task]]
+id = "a380d2fe"
+title = "stuckguard progress advisory prints an unmeasured error-recurrence sentinel as a measurement, and labels a 2-signal mean as 3 signals"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+Reported by an adversarial audit 2026-09-11 at HEAD 2abf8dea. CONFIRMED by the auditor with verbatim quotes; I have not independently re-verified.
+
+Surface: crates/stuckguard/src/main.rs around :304-306, injected into the conversation as hookSpecificOutput.additionalContext (main.rs around :221-229), so the agent reads it. Verbatim:
+
+    "stuckguard: progress may be stalling (score {:.2} - diversity {:.2}, state stability {:.2}, error recurrence {:.2}). この先しばらく同じ種類の操作/状態/エラーが続いています。..."
+
+crates/stuckguard/src/detect.rs around :249 verbatim:
+
+    // Reported as 0.0 when unavailable so the struct field keeps its shape for
+    // existing readers; the score below no longer treats that as a measurement.
+    let error_recurrence_signal = error_recurrence.unwrap_or(0.0);
+
+and detect.rs around :238-242 verbatim:
+
+    ///   error_recurrence_signal FIELD still reports 0.0 in that case, so read
+    ///   the field as "recurrence contribution", not as "recurrence was measured".
+
+Two problems:
+
+1. The message prints that unwrap_or(0.0) sentinel as "error recurrence 0.00", in the same notation and the same parenthesis as the two signals that WERE measured, with no marker distinguishing them. This is the identical defect propguard fixed for satisfied=0 - a non-judgement printed in the notation of a measurement. The code comment even anticipates the misreading and asks readers to interpret the field correctly, which is exactly the self-申告 CLAUDE.md section 6 says not to rely on: the message does not carry the caveat the comment carries.
+
+2. error_recurrence is None whenever cur.failed_test_digest is None (detect.rs around :236) - i.e. every non-error loop, which the same file describes as the repeated-Read/Grep/Edit shape this advisory exists to notice. In that case the score is a mean over TWO signals (detect.rs around :264-266), so the printed triple is not the mean of the printed number, and the prose asserting 同じ種類の…エラーが続いています claims recurring errors on a window where recurrence was never evaluated and there may be no errored event at all.
+
+Mitigating: gated behind progress_advisory_enabled, default false (config.rs around :150).
+
+Related LOW: crates/stuckguard/README.md around :29-31 and README.ja.md still say the score combines 3 signals, which the two-signal mean contradicts."""
+created_at = 1789064370
+updated_at = 1789064370
+weight = 0.0
+issue_number = 511
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/511"
+
+[[task]]
+id = "c193cf9e"
+title = "Starter config templates written to user disk still carry the pre-b61d68b4 overclaims for tdd, propguard and reviewgate (the block reasons were fixed, the templates were not)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+Reported by an adversarial audit 2026-09-11 at HEAD 2abf8dea, CONFIRMED with verbatim quotes. Three crates, one pattern: b61d68b4 and f70706e6 corrected the block reasons and the plugin manifests, but the STARTER consts that init writes into the user project were never swept. A template is worse than a README because it is persisted into someone project and read as the local contract.
+
+1. propguard - crates/propguard/src/main.rs around :595-597 (STARTER, written by propguard init at main.rs around :587) and the identical crates/propguard/propguard.example.toml around :3-5, verbatim:
+
+   # On Stop, propguard derives 3-5 semantic properties (invariants) from the current
+   # task done_criteria and checks the generated code against them before the agent
+   # can declare done. It blocks when fewer than threshold properties hold.
+
+   followed 11 lines later by mode = "inject" as the written default. In inject mode propguard checks nothing and counts nothing - gate.rs around :273-276 builds Verified { satisfied: 0, findings: None } and blocks unconditionally on a new diff hash. The block_reason doc (gate.rs around :766-772) already says printing that 0 as a count reported a NON-judgement in the notation of a measurement; the template still describes the gate as a measurement.
+   Weaker same-claim surfaces: crates/propguard/src/main.rs around :565 println for propguard status (block if < N hold), and crates/propguard/.claude-plugin/marketplace.json around :11.
+
+2. tdd - crates/tdd/src/main.rs around :458-460 (STARTER_CONFIG, written by tdd init) and crates/tdd/tdd.example.toml around :3-4, verbatim:
+
+   # On Stop, tdd gate blocks the turn when implementation code was ADDED without
+   # an accompanying test ...
+
+   The substring without an accompanying test is exactly what the frozen test at gate.rs around :640 rejects in the block reason (!lower.contains("no accompanying test")) and :645 (!lower.contains("without a test")). The scan is working-tree only.
+
+3. reviewgate - crates/reviewgate/src/main.rs around :377-378 (STARTER), crates/reviewgate/reviewgate.example.toml around :10-12, crates/reviewgate/src/config.rs around :18-19, crates/reviewgate/README.md around :17, crates/reviewgate/src/main.rs around :6, verbatim:
+
+   #   mode = "inject"     block once per new diff and inject a rubric; the running
+   #                       agent reviews its own changes (no API key).
+
+   review.rs around :499-504 already documents why 自分の変更 was removed from the message: the list is an unattributed union with no blame, no author, no session id. The frozen tests (review.rs around :997 and :1147) bind inject_reason and subprocess_reason only - they do not reach the template, the Mode::Inject doc comment, or the README.
+
+This is the mirror-gap class 61c1f83c named for JSON manifests, and 49a457c8 named for tdd README/SKILL. The general lesson: the frozen tests pin the ONE string they were written against, so each fix lands on one mirror. A gate that scans all agent- and user-facing surfaces of a crate for the claims its own frozen tests forbid would catch all of these at once."""
+created_at = 1789064404
+updated_at = 1789064404
+weight = 0.0
+issue_number = 512
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/512"
+
+[[task]]
+id = "c31ab45d"
+title = 'tdd README.ja and donegate README.ja still state the fail-open "harness errors always allow the stop" contract that d6db4670 falsified - both survive only in the ja mirror'
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+Reported by an adversarial audit 2026-09-11 at HEAD 2abf8dea, CONFIRMED with verbatim quotes.
+
+CLAUDE.md section 1 names ターンを壊さない in a verdict-path docstring as a red flag, and b61d68b4 removed 10 such labels. Two survive, both in the Japanese README only - the English README has no twin line, which is why the sweep missed them.
+
+1. crates/tdd/README.ja.md around :23 verbatim:
+
+   - harness 自身のバグでターンを壊さない。 tdd 側のエラー（自前のバグ、git が読めない等）では hook モードで exit 0 を返し、停止を許す。tdd が壊れたせいでターンが詰まることは無い。
+
+   Both halves are false at HEAD. git が読めない: gate.rs around :148-153 maps ChangeScan::Failed / AddedScan::Failed to Determination::undetermined, and block_reason Undetermined arm blocks. 自前のバグ: harness_core/src/gate/run.rs around :44-46 documents hook mode + first stop -> emit decision block and exit 0, fail closed. The crate own main.rs around :199-202 says the opposite of its README: "It is deliberately NOT a never break the turn guard - CLAUDE.md section 1 names that phrase in a verdict-path docstring as a red flag."
+
+2. crates/donegate/README.ja.md around :38 verbatim:
+
+   - ハーネスのエラー（設定ミスや donegate 自身のバグ）は常に終了コード 0 で停止を通す。意図的にブロックするのは、実際に失敗したチェックだけだ。
+
+   config.rs around :164-169 is_refusal returns true for RefusedUntrusted and Unreadable. An unparseable donegate.toml (設定ミス) routes to refuse() (main.rs around :203-212) which emits a blocking Verdict::undetermined (main.rs around :552-566). A panic fails closed via run_guarded.
+
+Note crates/reviewgate/agents/reviewgate-typing.md around :39 already instructs reviewers to grep for ターンを壊さない - so the detector exists but is only run on demand, not as a gate."""
+created_at = 1789064405
+updated_at = 1789064405
+weight = 0.0
+issue_number = 513
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/513"
+
+[[task]]
+id = "b96e9973"
+title = 'stuckguard presents a "past lesson" as relevant on a >=1-shared-token match, with no relevance floor'
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+status = "pending"
+notes = '''
+Reported by an adversarial audit 2026-09-11 at HEAD 2abf8dea, CONFIRMED by the auditor. Not independently re-verified by me.
+
+Surface: crates/stuckguard/src/main.rs around :266, appended to the escalation message the agent reads:
+
+    out.push_str(&format!("\n past lesson: {lesson_text}"));
+
+backed by README.ja.md around :44: 関連する過去のレッスンを検索してエスカレーションメッセージに含める.
+
+The query is t.detail (main.rs around :333-338), which for a repeat trip is format!("{} を {} 回", cur.tool, same.len()) (detect.rs around :138) - about four tokens, two of which are Japanese particles. harness_core/src/lessons.rs search filters only on .filter(|m| m.score > 0.0), so any single shared token (bash, を, 回) qualifies and the top-1 hit is presented to the agent as this pattern lesson. No relevance floor is checked, so 関連する is a claim the code never established.
+
+Low severity: the message is advisory and stuckguard never blocks. But an irrelevant "past lesson" injected at an escalation point is actively misleading at the moment the agent is being told to stop and think.'''
+created_at = 1789064423
+updated_at = 1789064423
+weight = 0.0
+issue_number = 515
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/515"
+
+[[task]]
+id = "5a746cb9"
+title = 'tdd SKILL.md:96 tells the agent the Stop block means "there is implementation with no test attached" - the diagnosis the gate own frozen tests forbid'
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = '''
+Reported by an adversarial audit 2026-09-11 at HEAD 2abf8dea, CONFIRMED. Extends 49a457c8, which covered SKILL.md:3 and :13 and README.md:10; this is a third and higher-value line in the same file.
+
+crates/tdd/skills/tdd/SKILL.md:96 verbatim:
+
+    - Stop でブロックされる → テストが付いていない実装がある。テストを足す。純粋な
+
+This is agent-facing and it is the DIAGNOSIS the agent is told to act on: it translates the block into an unqualified claim about the change. The block reason itself is forbidden from saying this - crates/tdd/src/gate.rs around :640-643 verbatim:
+
+    !lower.contains("no accompanying test"),
+    "tdd only inspected the UNCOMMITTED diff; it cannot assert the change has \
+     no accompanying test.\n--- reason ---\n{reason}"
+
+So the honest message is handed to the agent and then re-narrated dishonestly by the skill that ships alongside it. The correct reading is: the block means no test was visible in the uncommitted changes; if the covering test is already committed, say so and take the one-shot skip.
+
+Nothing binds SKILL.md - the frozen tests bind block_reason, giveup_notice and concession_reentry_notice only, and check-doc-claims scopes itself to docs/**/*.md.'''
+created_at = 1789064425
+updated_at = 1789064425
+weight = 0.0
+issue_number = 516
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/516"

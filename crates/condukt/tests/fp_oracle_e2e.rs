@@ -283,3 +283,171 @@ fn task_without_a_fix_or_feature_kind_verifies_unconditionally() {
         "expected the verified count in stderr, got: {stderr}"
     );
 }
+
+// ── The gate must not be skippable by making the decomposition unreadable ───
+//
+// The three tests below pin the arms that used to `if let Ok(..)` / `if let
+// Some(..)` with no `else`: each silently skipped the ENTIRE F→P gate and let
+// the task be promoted to `verified` with no oracle check at all. Every one of
+// them uses the SAME setup as
+// `fix_task_without_valid_fail_to_pass_oracle_is_refused` (a `kind:"fix"` task
+// with zero proof artifacts, which the gate rejects when it can read the
+// decomposition), so a pass here means exactly one thing: damaging the
+// decomposition converted a Reject into an Allow.
+
+/// Locate the run's persisted `<run>.decomposition.json` under the isolated
+/// `$HOME`. Walks rather than reconstructing `project_dir`'s hashing.
+fn find_decomposition(home: &Path, run: &str) -> PathBuf {
+    fn walk(dir: &Path, name: &str, out: &mut Option<PathBuf>) {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, name, out);
+            } else if p.file_name().and_then(|s| s.to_str()) == Some(name) {
+                *out = Some(p);
+            }
+        }
+    }
+    let mut found = None;
+    walk(home, &format!("{run}.decomposition.json"), &mut found);
+    found.unwrap_or_else(|| panic!("no {run}.decomposition.json under {}", home.display()))
+}
+
+/// Seed a `kind:"fix"` run with NO proof artifacts, then hand the caller the
+/// path of the persisted decomposition to damage.
+fn seed_ungated_fix_run(tag: &str, run: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+    let dir = unique_dir(tag);
+    let home = unique_dir(&format!("{tag}-home"));
+    let tdd_path = tdd_bin_dir();
+    init_run(
+        &dir,
+        &home,
+        &tdd_path,
+        run,
+        "task1",
+        Some("fix"),
+        Some("cargo test -p demo"),
+    );
+    let dec = find_decomposition(&home, run);
+    (dir, home, tdd_path, dec)
+}
+
+fn set_verified(dir: &Path, home: &Path, tdd_path: &Path, run: &str) -> (i32, String, String) {
+    run_condukt(
+        dir,
+        home,
+        tdd_path,
+        &[
+            "state", "set", "--run", run, "--task", "task1", "--status", "verified",
+        ],
+    )
+}
+
+#[test]
+fn unreadable_decomposition_refuses_verification() {
+    let (dir, home, tdd_path, dec) = seed_ungated_fix_run("undet", "run-undet");
+
+    // Something IS there but cannot be read as text: non-UTF-8 bytes. This is
+    // `Determination::Undetermined`, NOT `Known(None)` — the gate has not
+    // observed that the task is out of scope, it has failed to look at all.
+    std::fs::write(&dec, [0xff_u8, 0xfe, 0xff, 0xfe]).expect("write non-UTF-8 decomposition");
+
+    let (code, _stdout, stderr) = set_verified(&dir, &home, &tdd_path, "run-undet");
+    assert_ne!(
+        code, 0,
+        "an unreadable decomposition must NOT promote to verified\nstderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("refusing to verify"),
+        "expected a refusal, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("cannot determine whether the fail-to-pass oracle applies"),
+        "the refusal must say the gate could not be evaluated, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("cannot read"),
+        "the underlying `why` must be surfaced verbatim, got: {stderr}"
+    );
+}
+
+#[test]
+fn unparseable_decomposition_refuses_verification() {
+    let (dir, home, tdd_path, dec) = seed_ungated_fix_run("parse", "run-parse");
+
+    // Readable UTF-8, but not a decomposition. Whether this task is in the
+    // oracle's scope is unknowable — it must not resolve to "allow".
+    std::fs::write(&dec, "{ this is not json").expect("write corrupt decomposition");
+
+    let (code, _stdout, stderr) = set_verified(&dir, &home, &tdd_path, "run-parse");
+    assert_ne!(
+        code, 0,
+        "an unparseable decomposition must NOT promote to verified\nstderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("refusing to verify"),
+        "expected a refusal, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("cannot determine whether the fail-to-pass oracle applies"),
+        "the refusal must say the gate could not be evaluated, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("not parseable"),
+        "the refusal must name the parse failure, got: {stderr}"
+    );
+}
+
+#[test]
+fn decomposition_without_this_task_refuses_verification() {
+    let (dir, home, tdd_path, dec) = seed_ungated_fix_run("nomatch", "run-nomatch");
+
+    // A well-formed decomposition that does not contain `task1`. Run-state
+    // tasks are seeded 1:1 from `dec.tasks` at `state init`, so this means the
+    // two files no longer agree and this task's `kind` cannot be read.
+    std::fs::write(
+        &dec,
+        decomposition_json("some-other-task", Some("fix"), Some("cargo test -p demo")),
+    )
+    .expect("write mismatched decomposition");
+
+    let (code, _stdout, stderr) = set_verified(&dir, &home, &tdd_path, "run-nomatch");
+    assert_ne!(
+        code, 0,
+        "a decomposition with no entry for this task must NOT promote to verified\nstderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("refusing to verify"),
+        "expected a refusal, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("cannot determine whether the fail-to-pass oracle applies"),
+        "the refusal must say the gate could not be evaluated, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("no decomposition entry"),
+        "the refusal must name the missing entry, got: {stderr}"
+    );
+}
+
+#[test]
+fn genuinely_absent_decomposition_still_verifies() {
+    // The deliberate carve-out, pinned so the fix above cannot over-block:
+    // ENOENT is a REAL observation of absence (`Known(None)`), and a run with
+    // no decomposition at all must still be settable to verified.
+    let (dir, home, tdd_path, dec) = seed_ungated_fix_run("absent", "run-absent");
+    std::fs::remove_file(&dec).expect("remove decomposition");
+
+    let (code, _stdout, stderr) = set_verified(&dir, &home, &tdd_path, "run-absent");
+    assert_eq!(
+        code, 0,
+        "an absent decomposition must still allow verification\nstderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("1/1 verified"),
+        "expected the verified count in stderr, got: {stderr}"
+    );
+}

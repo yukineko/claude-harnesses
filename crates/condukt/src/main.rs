@@ -3849,45 +3849,61 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
 
             // F→P oracle completion gate: before promoting a task to
             // `verified`, ask `tdd oracle` (via `oracle::check_oracle`)
-            // whether it carries a valid Fail→Pass reproduction proof. This
-            // mirrors `CheckOracle`'s load + run_dir resolution exactly, but
-            // fails soft (degrade to the legacy gate) whenever the
-            // decomposition or matching task can't be found — a run-state
-            // task with no matching decomposition entry must still be
-            // settable to verified.
+            // whether it carries a valid Fail→Pass reproduction proof.
+            //
+            // This used to walk the decomposition with three nested `if let`
+            // arms and no `else` on any of them, under a comment claiming it
+            // "fails soft (degrade to the legacy gate)". No legacy gate ran:
+            // an unreadable decomposition, an unparseable one, or one with no
+            // entry for this task each skipped the oracle ENTIRELY and set the
+            // task to `verified` unchecked. `state::fp_gate_scope` now returns
+            // those three as `Undetermined`, and only a genuinely absent
+            // decomposition (ENOENT — a real observation of absence, not a
+            // failure to look) still passes through ungated.
             let mut fp_gate_value: Option<bool> = None;
             if st == state::Status::Verified {
-                if let Ok(dec_raw) = state::load_decomposition(cfg, cwd, &run) {
-                    if let Ok(dec) = serde_json::from_str::<model::Decomposition>(&dec_raw) {
-                        if let Some(dt) = dec.tasks.iter().find(|dt| dt.id == task) {
-                            // Resolve run_dir from `rs` (immutable read) into a
-                            // local *before* taking the `&mut` borrow below.
-                            let run_dir = rs
-                                .tasks
-                                .iter()
-                                .find(|s| s.id == task)
-                                .and_then(|s| s.worktree.as_deref())
-                                .map(std::path::PathBuf::from)
-                                .unwrap_or_else(|| cwd.to_path_buf());
-                            let verdict = oracle::check_oracle(
-                                dt.requires_fp_oracle(),
-                                dt.reproduction_tests.as_deref(),
-                                &task,
-                                &run_dir,
-                            );
-                            match state::enforce_fp_gate(&verdict) {
-                                state::FpGateDecision::Reject => {
-                                    bail!(
-                                        "refusing to verify task '{task}': no valid fail-to-pass reproduction oracle ({})",
-                                        verdict
-                                            .get("reason")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("see `condukt state check-oracle` for details")
-                                    );
-                                }
-                                state::FpGateDecision::Allow(v) => {
-                                    fp_gate_value = v;
-                                }
+                match state::fp_gate_scope(cfg, cwd, &run, &task) {
+                    // The one deliberate carve-out: there is no decomposition
+                    // for this run at all, so nothing anywhere claims an
+                    // oracle is required and the run must stay settable.
+                    state::FpGateScope::NoDecomposition => {}
+                    state::FpGateScope::Undetermined(why) => {
+                        bail!(
+                            "refusing to verify task '{task}': cannot determine whether the \
+                             fail-to-pass oracle applies — {why}"
+                        );
+                    }
+                    state::FpGateScope::Task {
+                        requires_fp_oracle,
+                        reproduction_tests,
+                    } => {
+                        // Resolve run_dir from `rs` (immutable read) into a
+                        // local *before* taking the `&mut` borrow below.
+                        let run_dir = rs
+                            .tasks
+                            .iter()
+                            .find(|s| s.id == task)
+                            .and_then(|s| s.worktree.as_deref())
+                            .map(std::path::PathBuf::from)
+                            .unwrap_or_else(|| cwd.to_path_buf());
+                        let verdict = oracle::check_oracle(
+                            requires_fp_oracle,
+                            reproduction_tests.as_deref(),
+                            &task,
+                            &run_dir,
+                        );
+                        match state::enforce_fp_gate(&verdict) {
+                            state::FpGateDecision::Reject => {
+                                bail!(
+                                    "refusing to verify task '{task}': no valid fail-to-pass reproduction oracle ({})",
+                                    verdict
+                                        .get("reason")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("see `condukt state check-oracle` for details")
+                                );
+                            }
+                            state::FpGateDecision::Allow(v) => {
+                                fp_gate_value = v;
                             }
                         }
                     }

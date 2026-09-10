@@ -289,13 +289,28 @@ const SYSTEM_DIRS: &[&str] = &[
 ///
 /// A relative path is not judged by this predicate at all — it returns `false`
 /// — because "which directory is this relative to?" is a question this
-/// predicate has no base to answer, and guessing one is how
-/// `cd /etc && echo x > paths.d/evil` would come out clean. The caller keeps
-/// the verdict it already had for relative operands, which is the confinement
-/// walk that already refuses to resolve them without a base. A path whose `..`
-/// survives [`crate::exclude::normalize`] is likewise not claimed to be
-/// outside: it is matched on its literal prefix, and an unresolved residue can
-/// only ADD matches here, never remove one.
+/// predicate has no base to answer, and guessing one is how a wrong answer
+/// would get manufactured.
+///
+/// **This leaves a hole open, and it is open, not handled.** Measured
+/// 2026-09-10 against the deployed 0.2.60 binary:
+///
+/// ```text
+/// cd /etc && echo x > paths.d/zz-evil   -> ALLOW
+/// cd /etc/paths.d && echo x > zz-evil   -> ALLOW
+/// ```
+///
+/// The same two commands were `ALLOW` on a build of the immediately preceding
+/// commit as well, so this predicate did not introduce the hole and does not
+/// close it: closing it needs the relative target resolved against the cwd that
+/// an earlier `cd` segment established, which is the `advance_cwd_and_rewrite`
+/// walk in [`crate::detect`], not a path predicate. Tracked in backlog
+/// `f1c170ab`. Do NOT read the `false` return here as "checked and clean" — it
+/// is "not checked", and the caller supplies whatever verdict it had.
+///
+/// The ABSOLUTE forms this predicate does judge are not fooled by `..`:
+/// [`crate::exclude::normalize`] resolves it, so `/tmp/../etc/paths.d/x` and
+/// `/etc/../etc/paths.d/x` both match (verified against the deployed binary).
 pub fn is_inside_system_dir(path: &str) -> bool {
     let norm = crate::exclude::normalize(path);
     if !norm.starts_with('/') {

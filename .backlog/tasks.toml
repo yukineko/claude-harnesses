@@ -19612,3 +19612,58 @@ updated_at = 1789040403
 weight = 0.0
 issue_number = 489
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/489"
+
+[[task]]
+id = "f1c170ab"
+title = "blastguard: cd into a system dir then a RELATIVE redirect escapes the system-directory axis"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "security",
+    "p1",
+]
+status = "pending"
+notes = """
+Measured 2026-09-10 against the DEPLOYED blastguard 0.2.60 binary
+(~/.claude/plugins/cache/yukineko/blastguard/0.2.60/bin/blastguard), PreToolUse payload on stdin:
+
+  cd /etc && echo x > paths.d/zz-evil   -> ALLOW
+  cd /etc/paths.d && echo x > zz-evil   -> ALLOW
+
+while the equivalent absolute forms are all denied by the system-directory axis 0.2.60 added:
+
+  echo x > /etc/paths.d/zz-evil         -> deny
+  echo x > /tmp/../etc/paths.d/zz-evil  -> deny
+  echo x > /etc/../etc/paths.d/zz-evil  -> deny
+  echo x > /private/etc/paths.d/zz-evil -> deny
+
+NOT A REGRESSION - established with a control, not by reasoning. A disposable worktree at
+c7c4ea49 (the commit immediately BEFORE the 0.2.60 system-dir axis landed) was built and probed:
+both cd forms were already ALLOW there. So 0.2.60 neither introduced nor closed this.
+
+WHY IT IS OPEN. scope::is_inside_system_dir returns false for any operand that is not absolute,
+deliberately - it has no base to resolve a relative path against, and guessing one would
+manufacture wrong answers. The absolute-path axis therefore never sees paths.d/zz-evil. The
+machinery that COULD see it already exists: detect.rs threads cwd through the per-segment walk via
+advance_cwd_and_rewrite, precisely so a cd in an earlier segment is visible to a later one, and the
+BG-cwd comment in detect.rs documents this whole class. The system-dir check simply runs in the
+line-level scan that happens BEFORE that walk, where no per-segment base exists yet.
+
+Note the truncating-redirect loop already guards its confinement check with
+!line_changes_cwd_before(cmd, usize::MAX) for exactly this reason - it refuses to call a relative
+target confined when the line moved the cwd. The system-dir axis needs the mirror of that: when the
+line DOES change cwd, resolve the target against the walked cwd and re-ask.
+
+FIX SHAPE: move or duplicate the system_path_block call into the per-segment path, after
+advance_cwd_and_rewrite has rewritten relative operands against the established cwd.
+
+The false docstring that claimed this case was handled has been corrected in the same area
+(scope.rs, is_inside_system_dir, section Undetermined) and now states plainly that the false return
+means NOT CHECKED rather than checked-and-clean, and cites this ticket."""
+created_at = 1789040755
+updated_at = 1789040755
+weight = 0.0
+issue_number = 490
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/490"

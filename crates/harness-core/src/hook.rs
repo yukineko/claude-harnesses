@@ -154,8 +154,25 @@ pub const MAX_STDIN_BYTES: u64 = 10 * 1024 * 1024;
 /// hiccup; input past the cap is truncated rather than read unbounded. Reads as
 /// bytes and lossily decodes so a multi-byte char split at the cap can't error.
 pub fn read_stdin() -> String {
+    read_capped(std::io::stdin())
+}
+
+/// The pure core of [`read_stdin`]: apply the [`MAX_STDIN_BYTES`] cap and the
+/// lossy decode to an arbitrary reader.
+///
+/// This exists so the cap and the decode can be exercised **without touching
+/// the process's real stdin**. A test that reads ambient stdin is not hermetic:
+/// when the test runner is launched with stdin on a pipe that never reaches
+/// EOF, `read_to_end` blocks in `read(2)` forever, and a test that never
+/// terminates reports no verdict at all — the verification apparatus itself
+/// stops distinguishing "checked and fine" from "never finished checking".
+/// Observed 2026-09-11: an orphaned `harness_core` test binary sat in
+/// `hook.rs:158 read_stdin -> read_to_end -> read(2)` for over five minutes
+/// under exactly that fd, while the same binary with stdin on `/dev/null`
+/// finished in 6.3s.
+pub fn read_capped<R: Read>(r: R) -> String {
     let mut buf = Vec::new();
-    let _ = std::io::stdin().take(MAX_STDIN_BYTES).read_to_end(&mut buf);
+    let _ = r.take(MAX_STDIN_BYTES).read_to_end(&mut buf);
     String::from_utf8_lossy(&buf).into_owned()
 }
 
@@ -181,10 +198,21 @@ pub fn is_headless() -> bool {
 /// payload with the usual [`MAX_STDIN_BYTES`] cap. Pure: only inspects/reads
 /// the stdin fd.
 pub fn read_stdin_if_piped() -> String {
-    if std::io::stdin().is_terminal() {
+    read_if_piped(std::io::stdin().is_terminal(), std::io::stdin())
+}
+
+/// The pure core of [`read_stdin_if_piped`]: the terminal check is an argument
+/// rather than an ambient probe of fd 0, and the payload comes from an
+/// arbitrary reader.
+///
+/// Both branches are therefore reachable from a test without the test
+/// depending on how its own runner happened to wire fd 0. See [`read_capped`]
+/// for why depending on that is not merely flaky but silently verdict-less.
+pub fn read_if_piped<R: Read>(stdin_is_terminal: bool, r: R) -> String {
+    if stdin_is_terminal {
         return String::new();
     }
-    read_stdin()
+    read_capped(r)
 }
 
 /// Run `f`, swallowing any panic. Returns `true` if `f` completed without
@@ -472,18 +500,33 @@ mod tests {
 
     #[test]
     fn headless_and_piped_guards_are_callable_and_pure() {
-        // Both guards must complete without panicking regardless of how the
-        // test harness wires stdout/stdin fds. We do NOT assert an exact bool
-        // for `is_headless()` (it depends on whether stdout is a terminal under
-        // the runner — captured, piped, or a real TTY), only that the call
-        // returns a bool. This keeps the test hermetic and non-flaky.
+        // `is_headless()` only inspects the stdout fd, so calling it cannot
+        // block under any runner. We do NOT assert an exact bool (it depends on
+        // whether stdout is a terminal — captured, piped, or a real TTY), only
+        // that the call returns.
         let headless: bool = is_headless();
         let _ = headless;
 
-        // Under `cargo test` stdin is typically NOT a terminal, so this takes
-        // the piped path and reads (usually EOF → empty). It must not block on
-        // an interactive read and must return a String either way.
-        let payload: String = read_stdin_if_piped();
-        let _ = payload.len();
+        // This used to call `read_stdin_if_piped()`, which reads the RUNNER's
+        // own fd 0. The comment that stood here called that "hermetic and
+        // non-flaky"; it was neither. With fd 0 on a pipe that never reaches
+        // EOF the call blocks in `read(2)` and the test reports no verdict at
+        // all — measured 2026-09-11 (backlog 5b8235fa): an orphaned test binary
+        // sat in `read_stdin -> read_to_end -> read(2)` for over five minutes,
+        // while the identical binary with fd 0 on `/dev/null` finished in 6.3s.
+        //
+        // The same two branches are covered here through the injected core, and
+        // now actually assert a value: the old body ended in `let _ =
+        // payload.len();`, which is true of every possible String.
+        assert_eq!(
+            read_if_piped(true, &b"never read"[..]),
+            "",
+            "an interactive stdin must short-circuit without reading the reader"
+        );
+        assert_eq!(
+            read_if_piped(false, &b"payload"[..]),
+            "payload",
+            "a piped stdin must read the payload through"
+        );
     }
 }

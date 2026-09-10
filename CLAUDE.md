@@ -32,7 +32,7 @@ ctxrot の Stop hook 各 `main.rs`）が通る panic barrier は fail-closed へ
 連続 2 回目の panic だけが `stop_hook_active` により bounded に allow へ落ちる。
 `docs/stop-gate-latency.md` の記述もこの移行に合わせて更新済み（旧「A gate that errors internally
 allows the stop」という一律の記述は撤去）。
-（`crates/harness-core/src/hook.rs:217`「exits 0 so the turn is never broken」の `run_hook` は今も存在するが、
+（`crates/harness-core/src/hook.rs:245`「exits 0 so the turn is never broken」の `run_hook` は今も存在するが、
 判定を持たない純粋な observability hook（ctxrot の Guard/Rescue/Restore 等）専用の入口であり、
 下の carve-out の側に属する。判定を持つコードが `run_hook` を使っていないかは、新しい Stop hook を
 追加するたびに確認すること。）したがって:

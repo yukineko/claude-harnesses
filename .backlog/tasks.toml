@@ -5501,7 +5501,44 @@ HEAD を動かすので reflog subject が commit (amend) にならず、条件�
    別綴りで迂回せず、worktree から実行し直して要件を満たした。66a50b8c と同種。
 2. scripts/deny-no-verify.py: probe 内の git commit --no-verify を拒否。
    scratch repo には hook が 1 つも無く --no-verify は不要だったので、
-   フラグを別綴りにするのではなく削除して従った。'''
+   フラグを別綴りにするのではなく削除して従った。
+
+--- 修正案を検証: 全テスト緑だが mutation 2/3 が生存 2026-09-11、測定点 e8bcbe14 ---
+
+上に記録した修正案 (reflog subject と HEAD@{1} の 2 条件) を候補として実装し、
+実際のテストハーネスで検証した。良い結果と、正直に書くべき悪い結果がある。
+
+【良い結果】候補を .scratch/candidate-hooks/post-commit に置き、
+scripts/test_gate_bypass.py の _HOOKS_DIR をそこへ rebind して全 122 テストを実行:
+  Ran 122 tests in 77.406s / OK / run=122 failures=0 errors=0
+amend の RED が緑になり、かつ NoVerifyIsRecorded と
+test_certificate_does_not_survive_head_moving を含む他 121 本が緑のまま。
+「何でも通す carve-out」への過剰是正ではないことの対照は取れている。
+
+【悪い結果 — こちらが本題】mutation を 3 通り掛けたところ 2 つが生存した:
+  carve-out を丸ごと削除        -- KILLED
+    (test_amend_of_a_gated_commit_is_not_recorded_as_ungated が RED に戻る)
+  条件(1) reflog subject のみに縮退 -- *** SURVIVED *** run=122 failures=0
+  条件(2) HEAD@{1} 一致のみに縮退   -- *** SURVIVED *** run=122 failures=0
+
+つまり現行スイートが固定しているのは「何らかの carve-out が存在すること」だけで、
+**2 条件のどちらの半分も、どのテストにも固定されていない**。候補のコメントは
+「BOTH conditions are required」と書いているが、それは現時点では**議論であって
+観測ではない**。CLAUDE.md 第2節 (落ちることを確認していないテストは何も証明しない)
+と第6節 (自分の発見にも同じ立証責任) により、この状態のまま人間へ「検証済み」
+として渡してはならない。
+
+【対処】利害関係の無い別 agent へ dispatch 済み。2 つの生存 mutation それぞれを
+殺すテストを、候補の実装を読ませずに契約記述のみから書かせる。想定シナリオは
+(a) 別の HEAD に対して得た証明書での amend、(b) amend ではないのに certified commit が
+reflog 上 1 つ前に来る操作 (branch 切り替え等)。どちらも実 .githooks に対しては
+緑になるはずなので、RED を増やさずに landed できる。
+
+**どうしても殺せない場合は 2 条件を 1 条件へ単純化するのが正しい** -- 区別できない
+条件を「念のため」残すのは、次の読者に検証済みだと誤読させる仕掛けになる。
+
+【この時点で人間へ渡してよい状態ではない】上の検証が終わるまで、
+.githooks/post-commit へのパッチ適用は依頼しない。'''
 created_at = 1784673254
 updated_at = 1789070279
 weight = 0.0

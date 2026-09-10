@@ -2003,5 +2003,73 @@ class KnownDefectsDenyNoVerify(DenyNoVerify):
         self.assertAllowed("echo 'unbalanced")
 
 
+
+# ---------------------------------------------------------------------------
+# N. `git commit --amend` — the certificate binds (tree, HEAD), and an amend
+#    moves HEAD out from under a certificate that WAS honestly earned.
+#
+# This is a false POSITIVE, so it errs on the fail-closed side and is not
+# dangerous on its own. It matters because amend is a routine operation: every
+# amend puts an entry in the ledger, and a signal that fires on routine work
+# stops meaning "someone ran --no-verify". A ledger that cries wolf gets read as
+# noise, and then a real bypass is read as noise too.
+#
+# Filed as backlog 6267bfbe.
+# ---------------------------------------------------------------------------
+class AmendIsNotABypass(GateTestCase):
+    def test_amend_runs_every_gate(self):
+        """Precondition for the test below: the amend really is inspected.
+
+        If amend did not run the gates, recording it would be CORRECT and there
+        would be no defect — so this must be established first, separately, or
+        the failing test below proves nothing.
+        """
+        h = self.harness()
+        h.write("a.txt", "one\n")
+        h.git("add", "-A")
+        self.assertEqual(h.commit("first").returncode, 0)
+
+        h.write("a.txt", "two\n")
+        h.git("add", "-A")
+        # Only the amend's own scanner runs may be counted: the log
+        # accumulates across commits, so the seed commit's run is cleared
+        # out first. Without this the assertion below compares 28 entries
+        # against 14 and fails for a reason that has nothing to do with amend.
+        h.clear_log()
+        proc = h.commit("first", "--amend")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(
+            h.ran(), SCANNERS, "every gate must have run for the amend itself"
+        )
+
+    def test_amend_of_a_gated_commit_is_not_recorded_as_ungated(self):
+        """The content in an amended commit WAS inspected: pre-commit ran on it
+        and went green (pinned by the test above). Recording it as ungated
+        states the opposite of what was observed.
+
+        Mechanism: pre-commit certifies (tree, HEAD) where HEAD is the commit
+        being amended, C1. The commit git then writes replaces C1, so its parent
+        is C0 -- C1 is not among its parents, the certified HEAD does not match,
+        and post-commit concludes the content was never inspected.
+        """
+        h = self.harness()
+        h.write("a.txt", "one\n")
+        h.git("add", "-A")
+        self.assertEqual(h.commit("first").returncode, 0)
+        self.assertLedgerEmpty(h, "precondition: the seed commit was gated")
+
+        h.write("a.txt", "two\n")
+        h.git("add", "-A")
+        proc = h.commit("first", "--amend")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+        self.assertLedgerEmpty(
+            h,
+            "the amend ran every gate and they went green, so the committed "
+            "content WAS inspected; the ledger must not claim it was not",
+        )
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

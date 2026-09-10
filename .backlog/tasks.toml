@@ -20873,6 +20873,7 @@ updated_at = 1789057581
 weight = 0.0
 issue_number = 502
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/502"
+
 [[task]]
 id = "9271d739"
 title = "blastguard: the config exemption covers the deployed-plugin and transcript subtrees of the user's home Claude directory, so recursively deleting every deployed gate binary is auto-allowed"
@@ -21023,3 +21024,30 @@ updated_at = 1789058637
 weight = 0.0
 issue_number = 504
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/504"
+
+[[task]]
+id = "49a457c8"
+title = 'tdd README.md and SKILL.md still carry the unscoped "without a test" claim that marketplace.json/plugin.json were corrected for (9ec045a1 mirror gap)'
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+Measured 2026-09-11 at HEAD 2abf8dea in worktree /Users/yuki/src/.harness-worktrees/ticket-9ec045a1.
+
+f70706e6 corrected the tdd description in .claude-plugin/marketplace.json, and b61d68b4 corrected Cargo.toml + plugin.json + the clap about string, so that all of them now scope the claim to the UNCOMMITTED changes. Three distribution surfaces were left behind with the old unqualified claim:
+
+  crates/tdd/README.md:10  -- verbatim: "implementation code cannot land **without a test** -- a blocked stop feeds the reason back so the agent writes one"
+  crates/tdd/skills/tdd/SKILL.md:3 (frontmatter description) -- verbatim: "Stop hook と併用し、テスト無しの実装を物理的に止める。"
+  crates/tdd/skills/tdd/SKILL.md:13 -- verbatim: "RED→GREEN になったか・テスト無し実装のブロック)は tdd バイナリと Stop hook。"
+
+What the code actually inspects (crates/tdd/src/git.rs): changed_files runs git status --porcelain=v1 -z; added_lines runs git diff -U0, git diff --cached -U0 and git ls-files --others --exclude-standard. All HEAD-relative. The commit log is never read, so an already-committed test is invisible. The honest statement, already used everywhere else in the crate, is "no test visible in the uncommitted changes (already-committed tests were not consulted)".
+
+The SKILL.md frontmatter description is the highest-value one: it is what the agent sees in the skill listing.
+
+This is the same mirror-gap class as 61c1f83c (no gate checks plugin/marketplace descriptions for claims the code does not make). 61c1f83c is scoped to the JSON manifests; README.md and SKILL.md are a further unscanned surface."""
+created_at = 1789062588
+updated_at = 1789062588
+weight = 0.0
+issue_number = 506
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/506"

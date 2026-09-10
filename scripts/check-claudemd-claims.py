@@ -15,11 +15,28 @@ module docstring.
 This gate does not duplicate the claim-extraction/verification engine. It
 loads `check-doc-claims.py` (a sibling stdlib script; its filename has a
 hyphen, so it is loaded via `importlib.util.spec_from_file_location` rather
-than a normal `import`) and calls the SAME `scan()` / `extract_claims()` /
-`check_claim()` functions, restricted to the single file `CLAUDE.md`. The
-claim syntax, the finding kinds, the `doc-claim-exempt` marker, and the
-whitespace/case/delimiter rules for quote matching are all identical to
-check-doc-claims.py — see that module's docstring for the full contract.
+than a normal `import`) and calls the SAME `make_source()` / `scan()` /
+`extract_claims()` / `check_claim()` functions, restricted to the single file
+`CLAUDE.md`. The claim syntax, the finding kinds, the `doc-claim-exempt`
+marker, and the whitespace/case/delimiter rules for quote matching are all
+identical to check-doc-claims.py — see that module's docstring for the full
+contract.
+
+Which tree is judged — the git INDEX
+------------------------------------
+Because the engine is shared, so is the artifact under judgment: by default
+(`--source index`) BOTH CLAUDE.md and every file it cites are read from the git
+index at stage 0, i.e. from the tree the commit would record. `--source
+worktree` restores the old on-disk reading for ad-hoc use.
+
+This gate had the identical defect check-doc-claims.py did, for the identical
+reason — it is the same engine. Reading the working tree let a PEER SESSION's
+unstaged edit to a file CLAUDE.md cites block a commit whose index was entirely
+correct, and the shortest ways out of that block were the gate-bypass flag or
+rewriting CLAUDE.md's line numbers to match an uncommitted tree, which is
+precisely the policy rot this gate exists to catch. See check-doc-claims.py's
+module docstring for the measured reproduction and for why the scope, the doc
+side and the cited-file side must all come from ONE source.
 
 Scope
 -----
@@ -29,18 +46,28 @@ A repository with NO CLAUDE.md is not a clean scope: an instruction file that
 is supposed to exist but does not is a failure to observe the norm surface,
 not "nothing to check". So a missing CLAUDE.md is Undetermined (exit 2), not
 exit 0 — the same discipline check-doc-claims.py applies to an empty doc set.
+In index mode "missing" means NOT STAGED: a CLAUDE.md that exists on disk but
+is not in the index is not part of the commit being made, so the norm surface
+of that commit is unobserved, and that is exit 2 by the same argument.
 
 Fail-closed contract — NO bypass flag
 --------------------------------------
   exit 0  every claim in CLAUDE.md checks out
   exit 1  at least one unexempted finding                    -> block
-  exit 2  the verdict could not be determined (missing file,
-          unreadable file, cited file unreadable, etc.)      -> block
+  exit 2  the verdict could not be determined (CLAUDE.md not
+          in the judged tree, unreadable file, cited file
+          unreadable, not a git repository or not its top
+          level, a git call failing, an unmerged index entry,
+          a cited path staged as a symlink or submodule)     -> block
 
-There is deliberately NO `--allow` / `--skip` / `--no-verify`-style flag on
-this gate. A gate scoped correctly (one file, one purpose) should never need
-an escape hatch of its own — the only sanctioned way to exempt a specific
-claim is the same per-line marker check-doc-claims.py already supports:
+`--source` is NOT a bypass: both values point the gate at a real tree and both
+block on a stale citation. What it selects is WHICH tree the claim is asserted
+about, and the default is the one the commit records.
+
+There is deliberately NO `--allow` / `--skip` / bypass-style flag on this gate.
+A gate scoped correctly (one file, one purpose) should never need an escape
+hatch of its own — the only sanctioned way to exempt a specific claim is the
+same per-line marker check-doc-claims.py already supports:
 
     <!-- doc-claim-exempt: <reason> -->
 
@@ -83,6 +110,18 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--repo", default=None)
     ap.add_argument("--json", action="store_true")
+    # The choices come from the engine only at parse time below, so that this
+    # gate can still report a clean exit-2 if the engine itself fails to load.
+    ap.add_argument(
+        "--source",
+        choices=("index", "worktree"),
+        default="index",
+        help=(
+            "which tree to judge, on BOTH the CLAUDE.md side and the "
+            "cited-file side. index (default) is the tree the commit would "
+            "record; worktree is the files as they sit on disk."
+        ),
+    )
     args = ap.parse_args(argv)
 
     repo = args.repo or os.path.dirname(_HERE)
@@ -96,27 +135,49 @@ def main(argv=None) -> int:
             file=sys.stderr,
         )
         if args.json:
-            print(json.dumps({"verdict": "undetermined", "findings": []}))
+            print(
+                json.dumps(
+                    {
+                        "verdict": "undetermined",
+                        "source": args.source,
+                        "findings": [],
+                    }
+                )
+            )
         return 2
 
     try:
+        source = engine.make_source(repo, args.source)
         # explicit=["CLAUDE.md"] restricts doc_set() to exactly that one file,
         # and — the property this gate depends on — doc_set() already raises
-        # Undetermined if an explicitly named document does not exist. A
-        # missing CLAUDE.md therefore resolves to exit 2 for free, via the
-        # same code path check-doc-claims.py uses for a typo'd --doc.
-        findings = engine.scan(repo, ["CLAUDE.md"])
+        # Undetermined if an explicitly named document is not present in the
+        # judged tree. A CLAUDE.md that is missing (index mode: not staged)
+        # therefore resolves to exit 2 for free, via the same code path
+        # check-doc-claims.py uses for a typo'd --doc.
+        findings = engine.scan(repo, ["CLAUDE.md"], source)
     except engine.Undetermined as exc:
         print(f"check-claudemd-claims: undetermined — {exc}", file=sys.stderr)
         if args.json:
-            print(json.dumps({"verdict": "undetermined", "findings": []}))
+            print(
+                json.dumps(
+                    {
+                        "verdict": "undetermined",
+                        "source": args.source,
+                        "findings": [],
+                    }
+                )
+            )
         return 2
 
     blocking = [f for f in findings if not f["exempt"]]
     verdict = "mismatched" if blocking else "clean"
 
     if args.json:
-        print(json.dumps({"verdict": verdict, "findings": findings}))
+        print(
+            json.dumps(
+                {"verdict": verdict, "source": source.name, "findings": findings}
+            )
+        )
     else:
         for f in findings:
             mark = "exempt" if f["exempt"] else "BLOCK"
@@ -132,17 +193,42 @@ def main(argv=None) -> int:
                 )
             )
         if blocking:
+            # The remedy differs by source. Printing the index advice under
+            # `--source worktree` would make this message describe a run that
+            # did not happen — prose contradicting behaviour, which is what
+            # this gate exists to catch.
+            if source.name == "index":
+                remedy = (
+                    "Fix CLAUDE.md (or the code) IN THIS COMMIT, and STAGE the\n"
+                    "fix — this gate judges the git index, i.e. the tree the\n"
+                    "commit would record, so an unstaged correction does not\n"
+                    "count."
+                )
+            else:
+                remedy = (
+                    "Fix CLAUDE.md (or the code) on disk. NOTE: you ran\n"
+                    "`--source worktree`, so this verdict is about the files as\n"
+                    "they sit on disk, NOT about the tree a commit would record.\n"
+                    "The pre-commit gate judges the index; re-run without\n"
+                    "`--source` to see the verdict that will actually block."
+                )
             print(
                 "\ncheck-claudemd-claims: {} claim(s) in CLAUDE.md no longer "
-                "match the code.\n"
-                "Fix CLAUDE.md (or the code) IN THIS COMMIT. If a claim is\n"
-                "deliberately historical, say so on the line before it:\n"
+                "match the {}.\n"
+                "{}\n"
+                "If a claim is deliberately historical, say so on the\n"
+                "line before it:\n"
                 "  <!-- doc-claim-exempt: <reason> -->\n"
-                "There is no bypass flag for this gate.".format(len(blocking)),
+                "There is no bypass flag for this gate.".format(
+                    len(blocking), source.name, remedy
+                ),
                 file=sys.stderr,
             )
         else:
-            print("check-claudemd-claims: all CLAUDE.md claims match the tree.")
+            print(
+                f"check-claudemd-claims: all CLAUDE.md claims match the "
+                f"{source.name}."
+            )
 
     return 1 if blocking else 0
 

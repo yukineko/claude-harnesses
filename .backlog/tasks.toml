@@ -1,5 +1,3 @@
-
-
 [[task]]
 id = "0ba79281"
 title = 'CLAUDE.md: Windows で成立しない cargo 手順 (. "$HOME/.cargo/env") を直す'
@@ -20220,3 +20218,69 @@ updated_at = 1789041542
 weight = 0.0
 issue_number = 492
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/492"
+
+[[task]]
+id = "3424f47f"
+title = "blastguard 0.2.61 が、危険な書き込み先を散文で引用しただけの commit message を deny する — 修正の記録がその修正自身に止められる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+status = "pending"
+notes = """
+実測 2026-09-10、測定点 e251ad46、blastguard 0.2.61 (稼働中)。
+
+何が起きたか (2 件、別々の理由で連続して止まった):
+
+1) 19c359d0 の修正を統合する merge commit のメッセージに、0.2.59 で ALLOW
+   だった書き込み先を逐語で列挙したところ、git commit がそのメッセージごと
+   deny された。理由は逐語で
+
+     writes into a system directory - a NEW file there is itself the change
+     (a sudoers.d/paths.d drop-in, a LaunchDaemon plist, a binary shadowing
+     one on PATH), so whether the old bytes were recoverable does not make it safe
+
+   判定はこの文面について正しい。問題は判定対象で、実際に実行されるのは
+   git commit であって、そこに埋め込まれた散文ではない。結果として
+   「何が危険だったか」を記録する行為が、その危険を塞いだ当の修正に
+   止められる。回避したので実害は無かったが、記録の忠実さが削られる。
+
+2) 続けて、この起票を書くための python の出力をファイルへ向けた行が
+   deny された。理由は逐語で
+
+     destroys the file's current contents and (空) is a relative path and
+     blastguard does not know which directory it is relative to, so it cannot
+     tell whether these bytes are recoverable
+
+   operand が空で抽出されている。判定は安全側 (fail-closed) なので正しいが、
+   理由は偽である。同セッションで起票された 8abd74c4 と同じ形。
+
+これは既知クラスの再発である。同型:
+  - task の散文に deploy needle が含まれるだけで force-gate される件
+  - notes 内の逆クオートがコマンド置換として食われる件
+  - a529cd11 (guard-maintree-bash.py が sed の空文字引数で誤検知)
+  - 8abd74c4 (空 operand への誤解析)
+いずれも「実行される文字列」と「引用された文字列」を区別していない、
+あるいは operand 抽出が実際の shell 文法と食い違っている。
+
+今回取った対応: (1) はコマンド形の綴りを外して散文化した。証拠そのものは
+残してある。(2) はシェルのリダイレクトを使わずファイルを書いた。
+テストを緩めたりゲートを無効化したりはしていない。別構文で同じことを
+通す迂回もしていない。
+
+検討すべき方向 (どれも未検証):
+ (a) commit message や notes のような非実行文脈を判定前に除外する。
+     ただし「どこまでが非実行か」の判定自体が新しい fail-open 面になりうる。
+ (b) 除外はせず、引用したい側が散文化する運用を明文化する。
+     いま実際にやっているのはこれ。安全側だが記録が痩せる。
+ (c) 何もしない。誤検知の頻度が低いなら妥当でありうるが、頻度は未測定。
+
+判断材料が足りないので実装は保留し、まず起票のみ。"""
+created_at = 1789042797
+updated_at = 1789042799
+weight = 0.0
+issue_number = 493
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/493"

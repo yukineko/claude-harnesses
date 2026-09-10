@@ -4623,7 +4623,56 @@ overwatch のセッションレジストリか）。これは設計判断なの�
 検査することに由来する別クラスの欠陥で、層1 では直らない。
 
 したがってチケットは pending のまま残す。
-"""
+
+
+--- 再測定 2026-09-11、測定点 f7ffc2c9 ---
+
+【未着手 1 は landed していた — 結論を継承せず測り直した結果】
+チケットは precommit-audit 側を「未着手」としていたが、現在の HEAD では
+帰属絞り込みが実装済みである:
+  crates/precommit-audit/src/main.rs:359
+    let attribution = harness_core::attribution::attribute_from_session(...)
+  同 :361 Narrowed { keep, excluded } / :373 Undetermined { why } を
+  それぞれ明示的に処理し、:380 で attribution.files(&files) に絞る。
+git.rs:69 の changed_and_untracked も docstring が逐語で
+「This is the **unattributed** working set ... `main` narrows it through
+`harness_core::attribution` before auditing, which drops only files another
+session's transcript positively claims — never files that merely fail to
+appear in this session's own footprint」と書いており、実装と一致する。
+判定不能を「自分の変更ではない」へ倒していない点も完了条件どおり。
+チケットが懸念した「セッション同定の入口」は attribute_from_session が
+session_id を受ける形で解決済み。
+
+【未着手 2 は今も再現する — 実測で確認した】
+pathspec commit x check-doc-claims。まず「もう直っている」可能性を潰すため
+段階的に測った:
+
+  (a) SKILL.md を作業ツリーで 1 行ずらす -> 検出されない。
+      理由は判明: scripts/check-doc-claims.py:108 LINE_DRIFT_TOLERANCE = 10
+      があり、10 行以内のずれは finding にならない。
+  (b) 引用文そのものを破壊する -> [BLOCK] quote-not-found x2。
+      つまり当該 claim は確かに検査対象である (検査されていないから
+      静かなのではない)。この対照を取らずに (a) だけで「直っている」と
+      判断していたら誤りだった。
+  (c) 13 行ずらす (チケットの実測は 11 行のずれ) -> **再現**:
+      [BLOCK] docs/plugin-dependency-graph.md:141 -> SKILL.md:130
+              line-drifted (quote is at line(s) 143 but the claim cites 130)
+      ほか計 5 件。このとき staged SKILL.md count = 0、すなわち
+      **index には一切入っておらず、コミットされる木では引用は正しいまま**。
+
+したがってチケットの記述どおり、ゲートは「このコミットは正しいか」ではなく
+「作業ディレクトリ全体は整合しているか」を見ている。他セッションが 11 行以上の
+未 stage 変更を持っているだけで、その行を一度も触っていないセッションの
+pathspec commit がブロックされる。ブロック解除の最短経路のうち 2 つ
+(--no-verify / 自分のコミット時点では偽になる行番号へ書き換える) が有害で
+あるという構造も変わっていない。LINE_DRIFT_TOLERANCE=10 は緩和にはなるが、
+閾値の内側に収まるかどうかは他セッションの編集量という自分の制御外の量で
+決まるので、解決ではない。
+
+【残る作業】check-doc-claims (および同エンジンを使う check-claudemd-claims)
+が、pre-commit 実行時には作業ツリーではなく **index (git show :<path>)**
+を読むようにする。doc 側と被引用ファイル側の両方を同じ源から読むこと
+(片方だけを index にすると、源の不一致それ自体が新しい fail-open になる)。"""
 created_at = 1784607099
 updated_at = 1788913058
 weight = 0.0

@@ -4362,8 +4362,65 @@ tags = [
     "failopen",
     "p1",
 ]
-status = "pending"
-notes = "81888b5a の復活（これで棄却誤り2回目）。第一検証者は『到達不能』として棄却。2026-07-29 の staleness 監査でも自動検証者が STALE と判定したが、これも誤りであることを実コードで確認した。決定的証拠 (測定点 6302d166): crates/condukt/src/state.rs:1277-1296 の enforce_edit_gate は fallback を false、broken を true と制限側に既定するよう部分修正されたが、required が unwrap_or(false) のまま残っている。判定式は required かつ not fallback かつ broken の連言なので、required が欠落すると false になり連言全体が短絡して Allow へ落ちる。つまり Value::Null や空オブジェクトという現実の失敗形（hook stdout が truncated/空/非JSON）はいまも Allow。自動検証者は fallback と broken の2つだけを見て required を見落とした。さらに悪いことに state.rs:4037 の enforce_edit_gate_malformed_verdict_never_rejects が空オブジェクトとゴミ入力の両方について Allow を assert しており、fail-open を仕様として固定している。これは CLAUDE.md 第2節が checks_verdict の実例で名指ししている『何も検証していないテストの assert が仕様として固定される』パターンそのもので、関数を変えて生きている。state.rs:4065 の missing_fallback_key_rejects は required:true が明示されている場合しか効かない。/ 完了条件（変更なし）: 必須フィールド欠落時に Allow ではなく Undetermined/Reject を返し、Value::Null を渡すテストが reject を pin する。加えて 4037 の never_rejects テストは fail-open を固定しているので同時に是正が必要。"
+status = "done"
+notes = """
+81888b5a の復活（これで棄却誤り2回目）。第一検証者は『到達不能』として棄却。2026-07-29 の staleness 監査でも自動検証者が STALE と判定したが、これも誤りであることを実コードで確認した。決定的証拠 (測定点 6302d166): crates/condukt/src/state.rs:1277-1296 の enforce_edit_gate は fallback を false、broken を true と制限側に既定するよう部分修正されたが、required が unwrap_or(false) のまま残っている。判定式は required かつ not fallback かつ broken の連言なので、required が欠落すると false になり連言全体が短絡して Allow へ落ちる。つまり Value::Null や空オブジェクトという現実の失敗形（hook stdout が truncated/空/非JSON）はいまも Allow。自動検証者は fallback と broken の2つだけを見て required を見落とした。さらに悪いことに state.rs:4037 の enforce_edit_gate_malformed_verdict_never_rejects が空オブジェクトとゴミ入力の両方について Allow を assert しており、fail-open を仕様として固定している。これは CLAUDE.md 第2節が checks_verdict の実例で名指ししている『何も検証していないテストの assert が仕様として固定される』パターンそのもので、関数を変えて生きている。state.rs:4065 の missing_fallback_key_rejects は required:true が明示されている場合しか効かない。/ 完了条件（変更なし）: 必須フィールド欠落時に Allow ではなく Undetermined/Reject を返し、Value::Null を渡すテストが reject を pin する。加えて 4037 の never_rejects テストは fail-open を固定しているので同時に是正が必要。
+
+--- 実測して done にする 2026-09-11、測定点 1ab9845c ---
+
+このチケットの前提は既に解消していた。結論を継承せず HEAD で測り直し、
+さらに「テストが空虚でないこと」まで確認したうえで close する。
+
+【前提の再測定】crates/condukt/src/state.rs:1511 の enforce_edit_gate は、
+チケットが名指しした unwrap_or(false) を持たない。3 フィールドとも
+Option<bool> のまま読み、1 つでも読めなければ Reject に倒す:
+
+  fn read_bool(verdict, key) -> Option<bool> {
+      verdict.get(key).and_then(serde_json::Value::as_bool)
+  }
+  let (Some(required), Some(fallback), Some(broken)) = (...) else {
+      // At least one field was unreadable: 判定不能 -> restricted side.
+      return EditGateDecision::Reject;
+  };
+
+コメントも逐語で「`None` is deliberately NOT collapsed into `false` via
+`unwrap_or`: 『the producer said false』と『the producer said nothing
+readable』は別の答えであり同じ符号化を共有してはならない」と書いている。
+
+【fail-open を仕様として固定していたテストも是正済み】チケットが最も
+重視していた state.rs の enforce_edit_gate_malformed_verdict_never_rejects
+(空オブジェクトとゴミ入力の両方に Allow を assert していたもの) は
+enforce_edit_gate_malformed_verdict_rejects へ置換され、旧名と旧挙動が
+doc comment に逐語で残されている (CLAUDE.md 第4節の作法どおり、散文が
+実挙動と食い違ったまま放置されていない)。あわせて null / 空オブジェクト /
+非 bool / producer 出力パース不能 の 4 形が個別に Reject を pin している。
+
+【テストが空虚でないことの確認 — これが本題】通ったことだけを根拠に
+close しない。チケットが記述した fail-open をコードへ再注入して、テストが
+実際にそれを殺すかを測った:
+
+  変異: read_bool を Some(... .unwrap_or(false)) にして全フィールドを
+        false へ既定させる (= チケットが書いた当時の挙動)
+  結果: rc=101 KILLED。7 passed / 5 failed。
+        落ちたのは malformed_verdict_rejects / null_verdict_rejects /
+        empty_object_verdict_rejects / non_bool_fields_reject /
+        unparseable_producer_output_rejects の 5 本。
+  対照: Allow 側の 4 本 (allows_real_clean_verdict /
+        allows_on_fallback_even_if_broken / allows_when_not_required /
+        allows_explicit_not_required_clean_verdict) は変異下でも green の
+        まま。したがって「何でも Reject する」への過剰是正でもない。
+
+  変異なしの実測: cargo test -p condukt --bins enforce_edit_gate
+                 -> 12 passed / 0 failed
+
+完了条件の 2 つ (「必須フィールド欠落時に Allow ではなく Reject を返し
+Value::Null を渡すテストが reject を pin する」「never_rejects テストの
+是正」) はどちらも満たされている。done にする。
+
+【この件で残る一般的な所見】このチケットは「棄却の誤り 2 回」を経てから
+実際に修正された。修正が landed した事実もまた誰にも観測されないまま
+pending に残っていた。赤も緑も見えないという構造的な問題は c4321fc2 と
+65bfb279 が保持している。"""
 created_at = 1784606616
 updated_at = 1785279948
 weight = 0.0

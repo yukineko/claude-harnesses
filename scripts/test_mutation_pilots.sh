@@ -48,8 +48,23 @@ run_case "non-crate path mentioning pilot -> default (no spurious match)" \
 # runs the default pilot, NEVER an empty list.
 run_case "machinery-only change -> default harness-core" "harness-core" \
   "scripts/mutation-gate.sh"
+# NOTE ON THE ANCHOR: this case used to use blastguard as its stand-in for "an
+# uncalibrated GATE crate". blastguard was CALIBRATED on 2026-09-11 (classify.rs,
+# 95.0% kill-rate) and added to PILOTS, so that proxy drifted and the case started
+# failing. The named property — an UNCALIBRATED crate must fall back to the default
+# rather than claim coverage it has not earned — is unchanged, so the case is
+# re-anchored on a crate that is still measurably uncalibrated (propguard,
+# measured 48.7% on src/config.rs) rather than deleted or relaxed. If propguard is
+# ever calibrated, re-anchor again; do NOT change the expectation to match.
 run_case "uncalibrated GATE crate only -> default (never empty, no false coverage)" \
-  "harness-core" "crates/blastguard/src/main.rs"
+  "harness-core" "crates/propguard/src/main.rs"
+
+# blastguard is a calibrated pilot as of 2026-09-11 — a change under it must now
+# fire the gate against blastguard itself, not fall back to the default. This is
+# the positive half of the case above: together they pin that the fallback is
+# driven by CALIBRATION, not by a crate being a GATE crate.
+run_case "calibrated GATE crate (blastguard) -> blastguard" "blastguard" \
+  "crates/blastguard/src/classify.rs"
 run_case "empty input -> default harness-core (never empty)" "harness-core" ""
 
 if [ "$fail" -ne 0 ]; then

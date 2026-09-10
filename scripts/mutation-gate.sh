@@ -35,6 +35,20 @@
 #     large to mutate whole, so the default MUTANTS_EXTRA narrows to
 #     src/circuit.rs — the circuit-breaker state-machine logic, which is pure
 #     (no filesystem/process I/O) and already carries 20 unit tests.
+#   * A fourth pilot, `blastguard`, is the first GATE crate added since specguard
+#     (measured 2026-09-11 at 89b31bb4). Scoped to src/classify.rs — the risk
+#     classifier that decides whether a command requires a gate — which is pure
+#     (io-free) and carries 14 unit tests. Measured kill-rate 95.0% (19 of 20
+#     viable mutants killed, 6 unviable), comfortably over the 0.80 bar, so it
+#     was added rather than assumed. The ONE survivor is recorded in the backlog:
+#     `classify.rs:44:41: replace && with || in RiskAssessment::requires_gate` —
+#     a gate-relevant predicate whose conjunction no test distinguishes.
+#   * The remaining GATE_CRATES were measured in the same round and did NOT
+#     qualify: stuckguard src/detect.rs 78.8% (11 of 52 survived), propguard
+#     src/config.rs 48.7% (20 of 39 survived), and overwatch src/canary.rs
+#     UNDETERMINED (its baseline `cargo test` fails inside cargo-mutants' scratch
+#     copy, exit status 4, so no mutant was ever tested). They are deliberately
+#     absent from scripts/mutation-pilots.sh; see that file's comment.
 #   * You can narrow further to specific files with
 #     MUTANTS_EXTRA="--file crates/harness-core/src/hash.rs" to keep a real run
 #     fast. NOTE: `--file` globs are matched against paths relative to the repo
@@ -73,6 +87,7 @@
 #   PILOT=difflog MIN_KILL_RATE=0.7 scripts/mutation-gate.sh
 #   PILOT=specguard scripts/mutation-gate.sh  # polarity gate (src/similarity.rs)
 #   PILOT=condukt scripts/mutation-gate.sh    # circuit-breaker logic (src/circuit.rs)
+#   PILOT=blastguard scripts/mutation-gate.sh # risk classifier (src/classify.rs)
 #   MUTANTS_EXTRA="--file crates/harness-core/src/hash.rs" scripts/mutation-gate.sh
 set -euo pipefail
 
@@ -91,6 +106,9 @@ case "$PILOT" in
     ;;
   condukt)
     default_mutants_extra="--file crates/condukt/src/circuit.rs"
+    ;;
+  blastguard)
+    default_mutants_extra="--file crates/blastguard/src/classify.rs"
     ;;
   *)
     default_mutants_extra=""

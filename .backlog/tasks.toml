@@ -4686,8 +4686,62 @@ title = "mutation gate: calibrate blastguard/propguard/stuckguard/overwatch as p
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
-notes = ""
+status = "done"
+notes = """
+
+
+--- 実測して close する 2026-09-11、測定点 89b31bb4 ---
+
+チケットは 3 つを求めていた: (1) mutation-pilots.sh の PILOTS 拡張、
+(2) mutation-gate.sh の case ブロック、(3) triggers。(1)(2) は実測に基づいて
+完了し、(3) は別チケット de721e5e へ切り出した (理由は下記)。
+
+【4 crate すべてを実際に測った — 名簿に足すのではなく】
+cargo-mutants を導入 (このマシンに未インストールだった) し、各 crate の
+純粋・テスト密度の高いファイル 1 本に絞って本物の kill-rate を測定した:
+
+  blastguard  src/classify.rs   95.0%  (19/20 viable, 6 unviable)   -> 追加した
+  stuckguard  src/detect.rs     78.8%  (41/52、11 生存)             -> 基準未達
+  propguard   src/config.rs     48.7%  (19/39、20 生存)             -> 基準未達
+  overwatch   src/canary.rs     判定不能 (baseline 失敗、exit 4)     -> 測定不能
+
+【追加したのは blastguard 1 件だけ】mutation-pilots.sh 自身の規約が
+「calibrated scope を持ち MIN_KILL_RATE 以上を保つようになって初めて
+このリストに載る」「未 calibrate の crate を載せるのは false coverage
+であり、それ自体が fail-open」と書いている。チケットの表題は 4 件を
+求めていたが、測定に反して 4 件全部を載せるのは、まさにその規約が
+禁じている行為なので行わなかった。3 件の不採用は「未着手」ではなく
+**報告された測定結果**であり、各々を個別に起票した
+(1116bee1 propguard / f6c60f58 stuckguard / 9bee4b86 overwatch)。
+blastguard の唯一の生存 mutant も 9aced690 として起票した。
+
+【テストの proxy drift を是正した (削除も緩和もしていない)】
+scripts/test_mutation_pilots.sh は "uncalibrated GATE crate only -> default"
+の代表として blastguard を使っていた。blastguard が calibrated になった
+ことで proxy が陳腐化し、このケースが赤くなった。assert が名指ししている
+性質 (未 calibrate の crate は既定へ落ちる) は不変なので、期待値を書き換える
+のではなく、今も測定上 uncalibrated な propguard へ **anchor を張り直した**。
+あわせて逆向きのケース (calibrated な blastguard は blastguard へ写る) を
+新設し、2 本で「所属を決めるのは GATE crate かどうかではなく calibration
+である」を固定した。
+
+【空虚でないことの確認】新設の 2 ケースに変異を注入して確認した:
+  変異A: PILOTS から blastguard を外す  -> "calibrated GATE crate" が FAIL
+  変異B: PILOTS に propguard を足す     -> "uncalibrated GATE crate" が FAIL
+どちらも意図した側のケースだけが落ちた。9/9 pass (変異なし)。
+
+【(3) triggers を切り出した理由 — 未実施であることを明記する】
+測定中に、より重い事実が判明した: **mutation gate にはそもそも起動契機が
+1 つも無い**。scripts/mutation-gate.sh を実行する箇所は repo 内に存在せず、
+唯一の契機だった .github/workflows/mutation.yml は a572f5ad (GHA 全面禁止)
+で削除されていた。つまりゲートは 100% passthrough で INERT である。
+これを閉じるには (a) .githooks/pre-push への結線が要るが自分には deny
+されており、(b) pre-push は既に約 346s/push で mutation は分単位のため
+置き場所と費用がユーザー裁定を要する。したがって黙って迂回せず
+**de721e5e (p1) として可視化**した。あわせて、存在しない CI ジョブを
+coverage として語っていた散文 4 箇所を 6af3eb30 で実態に合わせた。
+
+(1)(2) は完了。(3) は de721e5e が保持する。この 2 点をもって done にする。"""
 created_at = 1784611504
 updated_at = 1784611504
 weight = 0.0
@@ -12485,7 +12539,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
 status = "done"
-notes = """
+notes = '''
 測定 2026-09-07、測定点 e46cf146。8 crate の src/ に対する grep。
 
 判定経路に transcript 参照ゼロ: donegate / reviewgate / tdd / propguard / stuckguard。
@@ -12562,7 +12616,7 @@ N new implementation line(s) added" と命令形で書いていた。cbf07bfe �
 `is_impl_file(file)` ガードが無い (is_impl_file は :165 で定義され、行数
 カウンタにしか適用されていない)。既定マーカー \b(it|test|describe)\s*\( が
 README・.toml・JSON fixture の 1 行に当たるだけでテスト証跡が立ち、その
-ターンのゲートが黙る。別チケットとして残す。"""
+ターンのゲートが黙る。別チケットとして残す。'''
 created_at = 1788791667
 updated_at = 1788908491
 weight = 0.0
@@ -21259,6 +21313,7 @@ updated_at = 1789064423
 weight = 0.0
 issue_number = 514
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/514"
+
 [[task]]
 id = "49a457c8"
 title = 'tdd README.md and SKILL.md still carry the unscoped "without a test" claim that marketplace.json/plugin.json were corrected for (9ec045a1 mirror gap)'
@@ -21598,3 +21653,87 @@ updated_at = 1789064425
 weight = 0.0
 issue_number = 516
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/516"
+
+[[task]]
+id = "de721e5e"
+title = "mutation gate に起動契機が無い — GHA 撤去後どこからも実行されず kill-rate ゲートは 100% passthrough"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "実測 2026-09-11、測定点 89b31bb4。scripts/mutation-gate.sh / scripts/mutation-pilots.sh を実行する箇所が repo 内に存在しない (scripts/ .githooks/ を grep してヒットするのは自身の usage 例と scripts/test_mutation_pilots.sh のみ。後者は pilot の MAPPING を試すだけでゲートを走らせない)。唯一の起動契機だった .github/workflows/mutation.yml は a572f5ad で削除された (CLAUDE.md 第7節の GHA 全面禁止)。結果として、テストが欠陥を検出できるかを測る唯一のゲートが完全に INERT である — mutation-pilots.sh 自身の WHY コメントが閉じるために書かれたと述べている当の fail-open。散文は 6af3eb30 で実態に合わせて是正済み (INERT と明記) だが結線そのものは未解決。第7節により代替は local (pre-push か明示スクリプト) でなければならない。pre-push は既に約 346s/push で mutation 実行は分単位なので、置き場所と費用はユーザー裁定が要る。"
+created_at = 1789068956
+updated_at = 1789068956
+weight = 0.0
+issue_number = 517
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/517"
+
+[[task]]
+id = "1116bee1"
+title = "propguard の suite は kill-rate 48.7% — 39 viable mutant 中 20 が生存"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "実測 2026-09-11、測定点 89b31bb4。PILOT=propguard MUTANTS_EXTRA='--file crates/propguard/src/config.rs' scripts/mutation-gate.sh -> kill-rate 48.7%、20/39 生存。閾値 0.80 に遠く及ばず mutation pilot として登録できない (登録すれば false coverage = それ自体が fail-open)。GATE crate の設定パーサがこの水準ということは、config の誤読を捕まえるテストが半分無いということ。生存 mutant 一覧は再実行して target/mutants-propguard/mutants.out/missed.txt を見る。"
+created_at = 1789068958
+updated_at = 1789068958
+weight = 0.0
+issue_number = 518
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/518"
+
+[[task]]
+id = "f6c60f58"
+title = "stuckguard の suite は kill-rate 78.8% — 閾値 0.80 に僅かに届かず 52 viable 中 11 生存"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "実測 2026-09-11、測定点 89b31bb4。PILOT=stuckguard MUTANTS_EXTRA='--file crates/stuckguard/src/detect.rs' scripts/mutation-gate.sh -> 78.8%、11/52 生存。あと 1 件強を殺せば pilot に登録できる位置にあり、calibrated pilot を最も安く 1 つ増やせる候補。detect.rs は stuckguard の検出ロジック本体。"
+created_at = 1789068959
+updated_at = 1789068959
+weight = 0.0
+issue_number = 519
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/519"
+
+[[task]]
+id = "9bee4b86"
+title = "overwatch は cargo-mutants 下で baseline cargo test が失敗し kill-rate を測定できない (exit status 4)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "実測 2026-09-11、測定点 89b31bb4。PILOT=overwatch MUTANTS_EXTRA='--file crates/overwatch/src/canary.rs' で cargo-mutants が 'cargo test failed in an unmutated tree, so no mutants were tested' を出し result: Failure(101) / exit status 4。mutation-gate.sh は正しく fail-closed して exit 2 (partial/stale な outcomes.json を採点しない)。原因は specguard の ack_blocks_when_no_new_commits_since_raised と同類と推測されるが未確認 — cargo-mutants は git チェックアウトでない scratch コピーでビルド/テストするため $HOME や実 git HEAD に依存するテストがそこで落ちる。overwatch は store.rs が HOME_ENV_LOCK で $HOME を差し替える設計なので候補は多い。落ちているテストを特定し --cargo-test-arg=--skip で除外すれば pilot 化できる可能性がある。特定作業は未実施。"
+created_at = 1789068960
+updated_at = 1789068960
+weight = 0.0
+issue_number = 520
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/520"
+
+[[task]]
+id = "9aced690"
+title = "blastguard classify.rs の唯一の生存 mutant: requires_gate の && を || にしても全テストが通る"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+status = "pending"
+notes = "実測 2026-09-11、測定点 89b31bb4。blastguard/classify.rs の kill-rate は 95.0% (19/20) と高いが、唯一の生存 mutant が判定述語そのものにある: crates/blastguard/src/classify.rs:44:41 'replace && with || in RiskAssessment::requires_gate'。どちらの論理でも全テストが通る = この連言を区別するテストが 1 本も無い。境界を突くテストを 1 本足せば 100% になる。"
+created_at = 1789068961
+updated_at = 1789068961
+weight = 0.0
+issue_number = 521
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/521"
+
+[[task]]
+id = "13f4e5eb"
+title = "backlog CLI の parse 失敗が場所を隠す — 'failed to parse <path>' だけで行・列・理由が出ない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = '''実測 2026-09-11。.backlog/tasks.toml に不正なエスケープが 1 箇所入った状態で backlog add を呼ぶと、出力は 'Error: failed to parse /…/.backlog/tasks.toml' の 1 行のみ。859 タスク・12000 行超のファイルのどこが悪いのか、何が悪いのかが一切分からない。python の tomllib は同じファイルに対して "Unescaped '\\' in a string (at line 12563, column 47)" と行・列・理由を出す。原因診断のために別のパーサを持ち出さねばならないのは、エラーが判定を伝えていないということ。toml パーサのエラーをそのまま伝播させるだけで解決する。再現: notes に生のバックスラッシュ (正規表現など) を含むテキストを basic multiline string へ手で書き込む。'''
+created_at = 1789068963
+updated_at = 1789068963
+weight = 0.0
+issue_number = 522
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/522"

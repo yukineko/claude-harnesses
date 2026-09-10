@@ -24,15 +24,26 @@
 # CALIBRATED PILOTS: keep this list in lockstep with the `case "$PILOT"` block in
 # scripts/mutation-gate.sh. A crate only belongs here once it has a calibrated scope
 # there and holds >= MIN_KILL_RATE (see "HOW TO EXPAND" in mutation-gate.sh). The
-# remaining GATE_CRATES (blastguard/propguard/stuckguard/overwatch) are NOT yet
-# calibrated, so they are deliberately absent — a change to them does not fire this
-# gate rather than firing it with no meaningful scope (that would be false coverage,
-# a fail-open of its own). Adding them is tracked follow-up work.
+# remaining GATE_CRATES were MEASURED on 2026-09-11 at 89b31bb4 (cargo-mutants, one
+# pure file each, threshold 0.80). `blastguard` qualified and was added; the other
+# three did NOT, so they stay deliberately absent:
+#
+#   blastguard  src/classify.rs   95.0%  (19/20 viable)            ADDED
+#   stuckguard  src/detect.rs     78.8%  (41/52, 11 survived)      below bar
+#   propguard   src/config.rs     48.7%  (19/39, 20 survived)      below bar
+#   overwatch   src/canary.rs     UNDETERMINED (baseline failure)  unmeasurable
+#
+# Re-measure with: PILOT=<crate> MUTANTS_EXTRA="--file <path>" scripts/mutation-gate.sh
+# These three absences are a REPORTED measurement, not an untried backlog item.
+# Listing a crate whose suite is below the bar would be false coverage — a fail-open
+# of its own — and listing overwatch, whose baseline `cargo test` fails inside
+# cargo-mutants' scratch copy (exit status 4: no mutant was ever tested), would score
+# a run that measured nothing. Raising those suites is tracked follow-up work.
 set -euo pipefail
 
 # Priority order = the order pilots are emitted when several changed. Also the
 # fallback default (first entry) when nothing calibrated matched.
-PILOTS="harness-core specguard condukt"
+PILOTS="harness-core specguard condukt blastguard"
 DEFAULT_PILOT="harness-core"
 
 changed="$(cat)"

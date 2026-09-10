@@ -16779,9 +16779,68 @@ blastguard の 2 本は稼働中のゲートの安全性退行であり 19c359d0
   Edit(//Users/yuki/**/.githooks/**) と Write(...) を禁じているため、
   .githooks/pre-push を編集できない。したがってこの項目は
   『実装方法が分からない』のではなく『権限が無い』で止まっている。
-  同じ壁に e650d84a と e83acc9c も当たっている。人間の操作が要る。"""
+  同じ壁に e650d84a と e83acc9c も当たっている。人間の操作が要る。
+
+--- 項目 (2) の進捗 2026-09-10、測定点 d415d5ea、worktree agent-aa54b994b297e4963 ---
+
+ゲート本体を実装した。**このチケットはまだ close しない** — 配線 (.githooks/pre-push への
+挿入) は権限が無くてできず、人間の操作を待っているため。実装は緑、配線は未了。
+
+## 作ったもの
+
+scripts/check-workspace-tests.py (新規、未配線)
+  cargo test --workspace --no-fail-fast と scripts/test_*.py 23 suite の両方を走らせ、
+  失敗クラスごとに別々の exit code を返す。全ての非0がブロック。bypass flag も
+  環境変数の抜け穴も無い (この repo の bypass 機構は gate-bypass.py の ledger 1 本だけ)。
+    0 OK / 1 CARGO_FAILURE / 2 PYTHON_FAILURE / 3 CARGO_UNDETERMINED /
+    4 PYTHON_UNDETERMINED / 5 ENVIRONMENT / 6 DEADLINE
+  順位は 5 > 6 > 3 > 4 > 1 > 2 (判定不能が失敗より上位 — 走っていない body の上に
+  「3件失敗」と出すのがこのゲートが潰そうとしている嘘そのものなので)。ただし exit code が
+  何であれ、発火したクラスは全部 print する。
+scripts/test_check_workspace_tests.py (新規、79 tests、2.45s)
+  利害関係のない subagent が CLAUDE.md 2.(a) に従って作成。実 cargo は一切起動しない。
+
+## 起票時の数字の訂正 (どちらも実測しなおした)
+
+**前の測定「115 ok targets / 3 FAILED / 96 秒」は撤回する。** あれは
+crates/harness-core/src/hook.rs の headless_and_piped_guards_are_callable_and_pure が
+read_stdin_if_piped() で stdin をブロックしたまま 15h42m 止まっていた run の
+**部分的な出力**であり、完走していなかった。
+
+stdin を /dev/null にして測りなおした結果 (worktree agent-aa54b994b297e4963、2 回とも完走):
+  cold (target/ 空から)  345.2 秒  rc=101
+  warm                   152.8 秒  rc=101
+  targets 232 / passing 4937 / failing 4 (2 回とも同じ 4 件なので flake ではない)
+
+  project_scope (tests/project_scope.rs) :: a_pinned_store_dir_still_scopes_by_project
+  project_scope (tests/project_scope.rs) :: a_pinned_store_dir_still_works_outside_any_repo
+  blastguard (unittests src/lib.rs) :: detect::tests::bg2_fd_dup_and_safe_targets_stay_allowed
+  scoped_destructive (tests/scoped_destructive.rs) :: relaxed_truncating_forms_inside_the_project
+
+**したがって pre-push の実コストは 152.8 (cargo) + 193.4 (python 23 suite) = 約 346 秒 / 約6分**で
+あり、事前に見積もっていた約 156 秒の 2 倍以上ある。配線を判断する人はこの数字で判断すること。
+
+## stdin の件 (配線する側が必ず知っている必要がある)
+
+git は pre-push フックに ref list を **stdin で**渡す。上記のテストは stdin を読むので、
+子プロセスが hook の stdin を継承すると (a) ref list を食う (b) 書き手が閉じなければ
+永久にハングする。実測: `< /dev/null` なら 0.00s、`(sleep 25) |` なら 24.81s —
+実行時間が stdin の書き手の寿命と一致する。
+check-workspace-tests.py は cargo にも python にも **stdin=/dev/null を無条件で**渡し、
+さらに子ごとに wall-clock deadline を持ち、期限切れは **process group ごと** kill して
+exit 6 でブロックする (親だけ kill すると test binary が孤児になる — 実際に 15 時間ものを
+手で kill した)。deadline を伸ばす/切る環境変数は用意していない。
+
+## 残件 (これが close 条件)
+
+.githooks/pre-push への挿入。挿入位置は末尾の `cleanup_typecheck_tree` / `exit 0`
+(現 384-385 行) の直前、type-check の for ループの `done` の後。挿入する 85 行は
+`sh -n` で単体・合成とも構文検査済み (合成 472 行、rc=0)。
+セッションからは編集できない (~/.claude/settings.json の deny が
+Edit(//Users/yuki/**/.githooks/**) と Write(...) を禁じている)。人間の操作が要る。
+"""
 created_at = 1788902156
-updated_at = 1788991488
+updated_at = 1789047258
 weight = 0.0
 issue_number = 457
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/457"
@@ -18703,9 +18762,63 @@ notes = """
 
 なお本票は Python suite の話であり、cargo test --workspace が走らない件は
 別ギャップとして c4321fc2 の (2) が保持している。両方を同時に直すのが自然だが、
-別物として扱うこと。"""
+別物として扱うこと。
+
+--- 進捗 2026-09-10、測定点 d415d5ea、worktree agent-aa54b994b297e4963 ---
+
+ゲート本体を実装した。**このチケットはまだ close しない** — 配線 (.githooks/pre-push への
+挿入) は権限が無くてできず、人間の操作を待っているため。実装は緑、配線は未了。
+c4321fc2 の項目 (2) と同じ 1 本のゲートで両方を満たす形にした (詳細はそちらにも記録)。
+
+## 作ったもの
+
+scripts/check-workspace-tests.py (新規、未配線)
+  cargo test --workspace --no-fail-fast と scripts/test_*.py の**両方**を走らせ、
+  どちらかに失敗があればブロックする。失敗クラスごとに別 exit code:
+    0 OK / 1 CARGO_FAILURE / 2 PYTHON_FAILURE / 3 CARGO_UNDETERMINED /
+    4 PYTHON_UNDETERMINED / 5 ENVIRONMENT / 6 DEADLINE
+  本票の「注意」節 (判定不能は block へ倒すこと) はそのまま実装した:
+  python3 が見つからない / suite が import 不能 / discovery が 0 件 / signal で kill /
+  Ran 0 tests / 終了ステータスと出力が矛盾 — いずれも 4 (または 6) でブロックし、
+  それぞれ別の文言で「何が判定できなかったか」を言う。**「0 failures」とは絶対に書かない。**
+  discovery が 0 件を返したら空リストではなく problem を返す (「走らせる suite が無い＝合格」に
+  写さない)。bypass flag も環境変数の抜け穴も無い。
+
+scripts/test_check_workspace_tests.py (新規、81 tests、2.45s)
+  CLAUDE.md 2.(a) に従い、実装に利害の無い subagent が作成。実 cargo は一切起動しない
+  (fake runner 注入 + 純関数化)。RED を先に観測してから実装した。
+  さらに mutation kill-rate を実測: 11 個の fail-open mutation を注入して 10 個を kill、
+  生き残った 1 個 (ranking の順序入れ替え) はテストを追加して kill を実測で確認した。
+
+## 実測しなおした数字 (本票の「60s 弱」は陳腐化していた)
+
+23 suite を 1 本ずつ python3 -m unittest scripts.<module> で直列実行:
+  **905 tests / 23 suite / 193.4 秒 / 全緑** (2026-09-10、worktree agent-aa54b994b297e4963)
+最も遅いのは test_gate_bypass 67.7s、次に test_check_test_weakening 32.2s、
+test_precommit_hook 26.8s。60s 弱ではなく約 193 秒である。
+
+cargo 側も測りなおしており (c4321fc2 参照)、warm 152.8 秒。
+**したがって pre-push に両方載せた場合の実コストは約 346 秒 (約6分)。**
+配線を判断する人はこの数字で判断すること。
+
+## 起動方法の落とし穴 (このゲートの実装中に発見、06a9d33f として別途起票)
+
+23 suite のうち **13 本は unittest.main() を持たない**ので、
+`python3 scripts/test_X.py` で起動すると**テストを1件も実行せず exit 0** する。
+出力も空なので呼び出し側からは「全部通った」と区別がつかない。
+したがってこのゲートは必ず `python3 -m unittest scripts.<module>` の形で起動し、
+その理由を discover_python_suites() の docstring に明記してある。
+配線を別実装でやり直す人がここを踏まないように、本票にも残す。
+
+## 残件 (これが close 条件)
+
+.githooks/pre-push への挿入。挿入位置は末尾の `cleanup_typecheck_tree` / `exit 0`
+(現 384-385 行) の直前。挿入する 85 行は `sh -n` で単体・合成とも構文検査済み。
+セッションからは編集できない (~/.claude/settings.json の deny が
+Edit(//Users/yuki/**/.githooks/**) と Write(...) を禁じている)。人間の操作が要る。
+"""
 created_at = 1788849812
-updated_at = 1788983823
+updated_at = 1789047261
 weight = 0.0
 
 [[task]]
@@ -19740,3 +19853,201 @@ updated_at = 1788984287
 weight = 0.0
 issue_number = 485
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/485"
+
+[[task]]
+id = "06a9d33f"
+title = "13/23 の scripts/test_*.py は python3 で直接実行すると 0 件実行して exit 0 になる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+実測 2026-09-10、測定点 d415d5ea、worktree agent-aa54b994b297e4963。
+
+grep -L "unittest.main()" scripts/test_*.py が 13 ファイルを返す:
+  test_check_bench_regression / test_check_cross_crate_constants /
+  test_check_claudemd_claims / test_check_doc_claims / test_check_launcher_exec_bit /
+  test_check_fail_open / test_check_prompt_injection / test_check_test_weakening /
+  test_git_hook_coverage / test_gate_bypass / test_prepush_hook /
+  test_record_audit / test_precommit_hook
+
+これらには __main__ ガード + unittest.main() が無いので、python3 scripts/test_X.py
+という起動の仕方をすると **テストを1件も実行せず exit 0** する。出力も空になるため、
+呼び出し側からは「全部通った」と区別がつかない。起動スタイルの中に隠れた fail-open で
+あり、CLAUDE.md 第3節「判定不能を clean に写すな」にそのまま該当する。
+
+正しい起動は python3 -m unittest scripts.<module> (repo root を cwd に)。
+scripts/check-workspace-tests.py の discover_python_suites() の docstring に
+この事実と理由を明記した (同 script はこの形でしか起動しない)。
+
+やること (どちらかは要る):
+ (a) 13 ファイルに __main__ ガード + unittest.main() を足して直接実行でも走るようにする。
+ (b) 直接実行を明示的に拒否する (冒頭で非0 exit) — 黙って 0 を返すよりは block。
+目的はどちらも「黙って 0 を返す」経路を消すこと。"""
+created_at = 1789042846
+updated_at = 1789042846
+weight = 0.0
+issue_number = 494
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/494"
+
+[[task]]
+id = "e2f5f2b2"
+title = ".githooks/pre-push の冒頭 prose が「ブロックするチェックは ONE」と書くが実際は 2 本ある"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+実測 2026-09-10、測定点 d415d5ea。CLAUDE.md 第4節 (prose が実挙動と食い違う) に該当。
+
+.githooks/pre-push:6
+    "This hook has three advisory nudges plus one blocking check:"
+.githooks/pre-push:39
+    "ONE check blocks: the first thing this hook does is look for an ungated commit"
+
+しかし同ファイル :280 に
+    "# --- the second blocking check: the compiler ---"
+があり、:309 / :331 / :354 / :366 / :377 の 5 箇所が exit 1 する。
+つまりブロックするチェックは 1 本ではなく 2 本。冒頭の 2 箇所が更新されないまま
+compiler ブロックが着地している。
+
+これは実害がある種類の陳腐化で、この 2 行だけ読んだ人は「pre-push は bypass ledger しか
+止めない」と理解する。実際には型エラーでも push は止まる。
+
+修正できない理由 (判断ではなく事実): ユーザーの ~/.claude/settings.json の deny リストが
+Edit(//Users/yuki/**/.githooks/**) と Write(...) を禁じているため、セッションからは
+編集できない。人間の操作が要る。c4321fc2 / 65bfb279 / e650d84a / e83acc9c と同じ壁。
+
+なお scripts/check-workspace-tests.py を pre-push へ配線すると 3 本目のブロックが増えるので、
+その配線と同時にこの 2 行を直すのが最も安い。"""
+created_at = 1789043558
+updated_at = 1789043558
+weight = 0.0
+issue_number = 495
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/495"
+
+[[task]]
+id = "05726f9f"
+title = "scripts/test_*.py の import shim (spec_from_file_location + exec_module) は __pycache__ 越しに古いコードを検証しうる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+実測 2026-09-10、worktree agent-aa54b994b297e4963。mutation kill-rate 実施中に発見。
+
+## 何が起きたか (観測)
+
+check-workspace-tests.py に mutation を注入して kill されるか確かめる作業中、
+main() の ranking chain を **並べ替えるだけ** の mutation (return 文の順序入れ替え、
+バイト長は不変) を注入したところ、テストが緑のままで「SURVIVED」と判定された。
+しかし実際にはその mutation は **一度もロードされていなかった**。
+
+原因: テスト側の import shim が
+    _SPEC = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(_SPEC)
+    _SPEC.loader.exec_module(mod)
+という形で、SourceFileLoader 経由で読んでいる。SourceFileLoader は __pycache__ の
+.pyc を **(source の mtime, source の size)** で検証する。mtime の粒度は **1 秒**。
+したがって「直前の compile と同じ壁時計秒の中で行われた、バイト長を変えない編集」は
+検証をすり抜け、インタプリタは古い bytecode を配る。
+
+## なぜ重要か (これは fail-open の一種)
+
+古いキャッシュが作れるのは **偽の GREEN / 偽の SURVIVOR だけ**で、偽の RED は作れない。
+つまりこの経路は常に「テストが実際には何も見ていない」側に倒れる。CLAUDE.md 2.(b)
+「落ちることを確認していないテストは何も証明しない」の機械的な裏口にあたる。
+
+## 影響範囲 (未確認 — ここは調べていない)
+
+scripts/test_*.py は 23 本あり、ハイフン入りのスクリプト名を import するために
+どれも同種の shim を持っている可能性が高い。**実際に何本がこの形かは数えていない**
+(この起票時点で確認したのは新規の test_check_workspace_tests.py のみ)。
+まず `grep -ln exec_module scripts/test_*.py` で母数を出すこと。
+
+## 対処 (新規 suite では適用済み)
+
+scripts/test_check_workspace_tests.py はキャッシュ経路を使わない形へ変更済み:
+    exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), mod.__dict__)
+理由をコメントで残してある (後で「単純化」して戻されないように)。
+再確認: __pycache__ を消さずに同じ mutation を注入したところ、今度は正しく
+kill された (AssertionError: 1 != 4)。
+
+他の 22 本にも同じ変更を入れるか、あるいは mutation を扱う手順側で
+毎回 __pycache__ を消すことを必須にするか、どちらかを決めること。
+前者の方が良い — 手順の遵守を人間の記憶に置かない (CLAUDE.md 6.)。"""
+created_at = 1789047296
+updated_at = 1789047296
+weight = 0.0
+issue_number = 499
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/499"
+
+[[task]]
+id = "e494a8a3"
+title = "condukt diffrisk_record::every_invocation_is_journaled_even_when_nothing_is_recorded が workspace 実行時のみ間欠的に RED"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = '''
+実測 2026-09-10/11、worktree agent-aa54b994b297e4963、測定点 d415d5ea (ツリーは 3 回とも同一)。
+
+## 観測 (診断ではない)
+
+同じツリーに対する cargo test --workspace --no-fail-fast の 3 回の完走:
+
+  run 1 (cold, 345.2s)  failing 4 件 — condukt は含まれない
+  run 2 (warm, 152.8s)  failing 4 件 — condukt は含まれない
+  run 3 (warm, 183s、scripts/check-workspace-tests.py 経由の初の end-to-end 実行)
+                        failing 5 件 — **condukt が増えている**
+
+  condukt (unittests src/main.rs) ::
+    diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded
+
+単体で再実行すると通る:
+  cargo test -p condukt --bin condukt \
+    diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded -- --exact
+  -> test result: ok. 1 passed; 0 failed; 768 filtered out; finished in 0.05s
+
+したがって「3 回中 1 回、workspace 実行時にのみ RED を観測した」が事実である。
+**flaky と断定はしない** — それは診断であり、まだ観測していない。
+
+## 状態依存の疑い (コードの逐語観測まで。原因の断定はしていない)
+
+crates/condukt/src/diffrisk_record.rs:500 のテスト本体:
+
+  501:  let cfg = Config::load();
+  502:  let cwd = tempfile::tempdir().expect("tempdir");
+  504:  let ledger = crate::gatelog::diffrisk_outcomes_path(&crate::state::project_state_dir(
+  505:      &cfg,
+  506:      cwd.path(),
+  507:  ));
+
+cwd と worktree は tempdir に隔離されているが、**Config::load() は実環境の設定を読み、
+project_state_dir(&cfg, ...) は cfg 由来の実 state dir を指しうる**。
+HOME も state dir も pin されていない。並行するテスト・並行セッション・
+同一マシン上の別の condukt 実行と同じ ledger を共有する経路があれば、
+順序依存/競合で間欠 RED になりうる。**これは仮説であって、まだ検証していない。**
+
+既知の同型 (MEMORY): 「ledger tests must pin state dir + session id or they pollute
+the live ledger」(cg injector dedup env-session の件)。
+
+## やること
+
+1. まず再現させる: workspace 全体を数回まわして頻度を測る (単体では出ない)。
+   併走している他の cargo/condukt プロセスの有無も同時に記録すること。
+2. 再現したら、HOME と state dir を pin したうえで同じ観測をとる。
+   pin して消えるなら共有 state が原因、消えないなら別。
+3. 判断で「flaky だから無視」にしない。CLAUDE.md 2. — 判断は予測であって事実ではない。
+
+## なぜ p1 か
+
+間欠 RED は、人が手で 1 回まわして「通ったからよし」と判断したときに最も見逃される種類で
+あり、まさに 65bfb279 / c4321fc2 が言う「赤が誰にも見えない」状態を作る。
+実際この 5 本目は、手で 2 回まわした測定では 2 回とも見えず、
+ゲート (scripts/check-workspace-tests.py) の初回実行で初めて見えた。'''
+created_at = 1789057581
+updated_at = 1789057581
+weight = 0.0
+issue_number = 502
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/502"

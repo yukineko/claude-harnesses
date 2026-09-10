@@ -12484,7 +12484,7 @@ title = "ゲート8本中5本が判定経路で指示を一切参照しない �
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
-status = "pending"
+status = "done"
 notes = """
 測定 2026-09-07、測定点 e46cf146。8 crate の src/ に対する grep。
 
@@ -12516,7 +12516,53 @@ budgetguard と ctxrot は transcript を読むがトークン数とコストの
 修正の方向: 判定述語を変えずに、まず block 理由を「実際に確かめた事実」へ書き換える
 （これは CLAUDE.md 第4節の docstring 逸脱の是正でもある）。そのうえで type (b) のものは
 recent_turns で指示を参照する。判定不能時は従来どおり block を維持する（空集合へ潰さない）。
-親 826c29bf"""
+親 826c29bf
+
+--- 再測定して close する 2026-09-11、測定点 e0fff3fc ---
+
+チケットの 5 主張を HEAD で測り直した結果、**4 件は既に修正済み**だった
+(b61d68b4 2026-09-09 が 4 ゲート、f70706e6 2026-09-10 が tdd の残り 3 経路)。
+またしても「修正が landed した事実が誰にも観測されないまま pending に
+残っていた」類型である。
+
+  reviewgate "your changes"  -> 修正済み review.rs:507-520 (作成者未検証を明記)
+  tdd "no accompanying test" -> 修正済み gate.rs:82 ほか 6 経路
+  donegate "not done yet"    -> 修正済み gate.rs:207-211
+  propguard satisfied=0      -> 修正済み gate.rs:812-818 (未検証であって不成立ではない)
+  stuckguard transcript 0 件 -> 事実として今も真だが判定を持たない advisory。
+                                別途 6108a7fa として起票済み。
+
+前提として名指しされていた 809cf00f も解消済み: recent_turns は
+transcript.rs:167 で Determination<Vec<Turn>> を返し open/read 失敗で
+fail-closed する (チケットは :141 と書いていた = line drift)。
+
+【生き残り 1 件を修正】tdd の generic_block_reason だけが作成者開示を
+一切持たなかった (reviewgate と propguard は両方とも持っていた = この repo が
+繰り返し踏む mirror gap)。tdd の走査は git status/diff/ls-files でチェック
+アウト全体を見ており session identity を持たないのに、"write a test first —
+N new implementation line(s) added" と命令形で書いていた。cbf07bfe で
+作成者未検証の開示を追加 (tdd 0.1.29 -> 0.1.30、lockstep 3 ファイル)。
+判定述語 (閾値・制御フロー) には一切触れていない。
+
+【自分で検証した — agent の報告を鵜呑みにしていない】
+  1. commit された内容を検査した (worktree ではなく `git show <branch>:` 側)。
+     agent worktree は HEAD と一致し dirty なし。
+  2. cargo test -p tdd = 94 passed / 0 failed (72+4+8+5+2+3)。
+  3. **独自の変異を 1 件注入した** (agent の M1-M6 とは別物):
+       "Authorship was NOT verified." -> "Authorship was checked."
+     語 "authorship" は残したまま**否定だけを反転**する変異。keyword を
+     grep するだけのテストならこれを生き延びるが、実際は
+     block_reason_discloses_unverified_authorship_of_the_impl_files_list が
+     gate.rs:975 で panic し KILLED。テストは主張そのものを pin している。
+     変異は復元済み (git diff 0 行)。
+
+【この作業で見つかった新規欠陥 8 件を起票】うち 1ff0fcc9 (p0) は自分でも
+コードを読んで確認した実在の fail-open: gate.rs:178 の
+`if marker_hit { test_marker_added = true; }` にはコメントが述べる
+`is_impl_file(file)` ガードが無い (is_impl_file は :165 で定義され、行数
+カウンタにしか適用されていない)。既定マーカー \b(it|test|describe)\s*\( が
+README・.toml・JSON fixture の 1 行に当たるだけでテスト証跡が立ち、その
+ターンのゲートが黙る。別チケットとして残す。"""
 created_at = 1788791667
 updated_at = 1788908491
 weight = 0.0

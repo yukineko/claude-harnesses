@@ -5538,7 +5538,50 @@ reflog 上 1 つ前に来る操作 (branch 切り替え等)。どちらも実 .g
 条件を「念のため」残すのは、次の読者に検証済みだと誤読させる仕掛けになる。
 
 【この時点で人間へ渡してよい状態ではない】上の検証が終わるまで、
-.githooks/post-commit へのパッチ適用は依頼しない。'''
+.githooks/post-commit へのパッチ適用は依頼しない。
+
+--- 2条件が両方とも固定された。パッチは適用可能な状態 2026-09-11、測定点 6374a143 ---
+
+前の記録で「mutation 2/3 が生存 = 2条件のどちらも固定されていない」と訂正したが、
+利害関係の無い agent が候補実装を読まずに契約のみから 2 本のテストを書き、
+両方の生存 mutation が殺されるようになった (landed: 6374a143)。
+
+scripts/test_gate_bypass.py::CertificateBindsTheDiffNotTheOperation
+- test_amend_certified_against_another_head_is_recorded
+    reflog marker だけを信じる縮退を殺す。別の HEAD に対して得た証明書での
+    amend は、検査した diff と landed した diff が別物なので記録されねばならない。
+- test_non_amend_commit_one_reflog_step_from_the_certified_head_is_recorded
+    HEAD@{1} 一致だけを信じる縮退を殺す。
+
+【この過程で分かった非対称性 — 実装コメントにも反映済み】
+2 条件は対等ではない。reflog が無傷な非 amend コミットでは HEAD@{1} は必ず
+そのコミットの first parent なので、外側の親ループが先に受理してしまい
+carve-out には到達しない。つまり **HEAD@{1} 条件の独立した価値は reflog の
+「穴」にのみ依存する**。そして穴を空ける現実的な操作は、並行 worktree からの
+ref 更新 (自 worktree の reflog にエントリを書かずに HEAD が動く) であり、
+これは CLAUDE.md 第8節の運用では例外ではなく日常である。
+逆に marker 条件は通常の wrong-base amend で簡単に破れる。
+測定環境: git 2.50.1 (Apple Git-155) / darwin。他の git 版では未確認だが、
+その場合テスト側の前提 assert が黙って通るのではなく大声で落ちる作りになっている。
+
+【自分でも独立に確認した】
+GATE_HOOKS_UNDER_TEST を候補ディレクトリに向けて全スイート実行:
+  Ran 124 tests in 68.375s / OK
+実 .githooks に対しては failures=1 (AmendIsNotABypass のみ = 本件の欠陥)。
+
+【パッチの置き場所を .scratch から scripts/ へ移した】
+scripts/patch-postcommit-amend.py として tracked にした。理由は eb1f8021 の実測 --
+scratchpad は並行セッション間で共有されており、他セッションのファイルが作業中の
+ハーネスを上書きした事例が観測されている。人間に適用を依頼するパッチが
+gitignore された共有ディレクトリにしか無いのは、黙って消えうるということ。
+
+【人間への依頼内容】.githooks/** はこのセッションで編集権限が無い。
+worktree から (main のツリーでは行わない):
+    python3 scripts/patch-postcommit-amend.py
+    cp .scratch/candidate-hooks/post-commit .githooks/post-commit
+    sh -n .githooks/post-commit
+    python3 scripts/test_gate_bypass.py       # 期待: Ran 124 tests ... OK
+適用後は scripts/patch-postcommit-amend.py を削除してよい。'''
 created_at = 1784673254
 updated_at = 1789070279
 weight = 0.0
@@ -22172,6 +22215,7 @@ updated_at = 1789071165
 weight = 0.0
 issue_number = 528
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/528"
+
 [[task]]
 id = "da4e353d"
 title = "deny-no-verify.py はカレントリポジトリと無関係な mktemp scratch repo への git commit --no-verify も拒否する"
@@ -22185,6 +22229,7 @@ updated_at = 1789070821
 weight = 0.0
 issue_number = 527
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/527"
+
 [[task]]
 id = "2d143236"
 title = "docs/gate-taxonomy.md names 18 CI workflow files that do not exist (GHA is banned repo-wide)"
@@ -22274,3 +22319,17 @@ updated_at = 1789071593
 weight = 0.0
 issue_number = 532
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/532"
+
+[[task]]
+id = "81cc27cc"
+title = "並行 worktree からの ref 更新は自 worktree の reflog に穴を空ける — HEAD@{1} を同一性の根拠に使う判定は全て要再点検"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "実測 2026-09-11、測定点 6374a143、git 2.50.1 (Apple Git-155) / darwin。post-commit の証明書検証 (6267bfbe) の検証中に観測した一般的な所見。(1) reflog が無傷な非 amend コミットでは rev-parse HEAD@{1} は必ずそのコミットの first parent と一致する。(2) ところが別 worktree から git update-ref refs/heads/main を打つと、こちらの worktree の HEAD は動くのに こちらの reflog にはエントリが書かれない。この穴をまたぐと rev-parse HEAD@{1} は「1 つ前のエントリの new sha」を返す (stderr に warning: log for ref HEAD has gap after ... が出る) のであって、現エントリの old sha ではない。(3) git symbolic-ref HEAD は穴を作らない (空メッセージのエントリを書く)。害: CLAUDE.md 第8節はセッションごとの worktree を必須にしているので、この穴は例外ではなく日常的に発生する。HEAD@{1} を「直前の HEAD」と読んで同一性や順序を判定しているコードがあれば、並行セッション下で静かに誤答する。要調査: harness 内で HEAD@{1} ないし reflog を判定に使っている箇所の棚卸し。判定に使っているなら、穴の可能性を検出できるか (warning の有無・gap の検出) を確認し、検出できないなら判定不能として制限側へ倒すこと。なお 6267bfbe の post-commit パッチはこの穴を承知の上で 2 条件の AND にしており、穴があっても reflog subject 条件が効くので誤って許可側へは倒れない。"
+created_at = 1789074758
+updated_at = 1789074758
+weight = 0.0
+issue_number = 534
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/534"

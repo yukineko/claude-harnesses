@@ -529,4 +529,146 @@ mod tests {
             "a piped stdin must read the payload through"
         );
     }
+
+    /// A reader that serves `head` and then fails with an [`std::io::Error`].
+    ///
+    /// [`read_capped`]'s doc comment claims "Errors are swallowed (returns what
+    /// was read, possibly empty)". That is prose about a path no other test
+    /// reaches, so it needs a reader that actually errors part way through.
+    struct ErrAfter {
+        head: Vec<u8>,
+        drained: bool,
+    }
+
+    impl std::io::Read for ErrAfter {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.drained {
+                return Err(std::io::Error::other("synthetic mid-stream read failure"));
+            }
+            let n = self.head.len().min(buf.len());
+            buf[..n].copy_from_slice(&self.head[..n]);
+            self.head.drain(..n);
+            self.drained = self.head.is_empty();
+            Ok(n)
+        }
+    }
+
+    /// A reader whose `read` must never be called.
+    ///
+    /// Panicking is strictly stronger than asserting an empty result: an empty
+    /// reader also yields `""`, so `assert_eq!(.., "")` alone cannot tell "did
+    /// not read" from "read and found nothing".
+    struct PanicOnRead;
+
+    impl std::io::Read for PanicOnRead {
+        fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+            panic!("read_if_piped touched the reader even though stdin is a terminal");
+        }
+    }
+
+    #[test]
+    fn read_capped_truncates_at_exactly_max_stdin_bytes() {
+        use std::io::Read as _;
+
+        // A synthetic repeating reader offering MAX_STDIN_BYTES + OVER bytes.
+        // Deliberately *bounded*: with an endless reader, a mutant that drops
+        // the `.take(MAX_STDIN_BYTES)` would hang instead of fail, and a test
+        // that never terminates reports no verdict at all (the very failure
+        // mode `read_capped`'s doc comment records).
+        const OVER: u64 = 4096;
+        let over_cap = std::io::repeat(b'x').take(MAX_STDIN_BYTES + OVER);
+
+        let got = read_capped(over_cap);
+        assert_eq!(
+            got.len() as u64,
+            MAX_STDIN_BYTES,
+            "a reader offering MAX_STDIN_BYTES + {OVER} bytes must yield exactly \
+             MAX_STDIN_BYTES; got {} bytes",
+            got.len()
+        );
+        assert!(
+            got.bytes().all(|b| b == b'x'),
+            "the truncated prefix must be the bytes the reader served"
+        );
+
+        // The other side of the boundary: input under the cap is not truncated.
+        assert_eq!(read_capped(&b"short"[..]), "short");
+    }
+
+    #[test]
+    fn read_capped_decodes_invalid_utf8_lossily() {
+        // 0x80 is a UTF-8 continuation byte with no lead byte: not valid UTF-8.
+        // A non-lossy decode would error (or panic on unwrap) here.
+        assert_eq!(
+            read_capped(&[b'a', 0x80, b'b'][..]),
+            "a\u{FFFD}b",
+            "an invalid byte must become U+FFFD, not abort the read"
+        );
+        assert_eq!(
+            read_capped(&[0x80][..]),
+            "\u{FFFD}",
+            "input that is entirely invalid must still yield the replacement \
+             char, not the empty string a swallowed decode error would give"
+        );
+    }
+
+    #[test]
+    fn read_capped_returns_partial_content_when_the_reader_errors_midway() {
+        let got = read_capped(ErrAfter {
+            head: b"partial".to_vec(),
+            drained: false,
+        });
+        assert_eq!(
+            got, "partial",
+            "read_capped's doc comment promises errors are swallowed and what \
+             was read is returned; a reader that serves bytes then fails must \
+             therefore yield those bytes, not the empty string"
+        );
+    }
+
+    #[test]
+    fn read_if_piped_does_not_touch_the_reader_when_stdin_is_a_terminal() {
+        // If the short-circuit is removed or inverted, PanicOnRead fires and
+        // this test dies. Asserting only on the empty return value would not:
+        // reading an exhausted reader also returns "".
+        assert_eq!(
+            read_if_piped(true, PanicOnRead),
+            "",
+            "an interactive stdin must return empty WITHOUT reading"
+        );
+    }
+
+    #[test]
+    fn read_if_piped_reads_through_and_splits_a_multibyte_char_at_the_cap() {
+        use std::io::Read as _;
+
+        assert_eq!(read_if_piped(false, &b"payload"[..]), "payload");
+
+        // 'あ' is 3 bytes (E3 81 82). Placing it so that only its first byte
+        // fits under the cap is exactly the case read_stdin's doc comment
+        // names: "a multi-byte char split at the cap can't error".
+        let split_at_cap = std::io::repeat(b'a')
+            .take(MAX_STDIN_BYTES - 1)
+            .chain("\u{3042}".as_bytes());
+
+        let got = read_if_piped(false, split_at_cap);
+        assert_eq!(
+            got.chars().count() as u64,
+            MAX_STDIN_BYTES,
+            "MAX_STDIN_BYTES-1 filler chars plus one replacement char"
+        );
+        assert!(
+            got.ends_with('\u{FFFD}'),
+            "the half-read multi-byte char must decode to U+FFFD"
+        );
+        assert!(
+            !got.contains('\u{3042}'),
+            "the char was cut by the cap, so it must NOT appear intact"
+        );
+        assert_eq!(
+            got.len() as u64,
+            MAX_STDIN_BYTES - 1 + 3,
+            "U+FFFD is 3 bytes in UTF-8, replacing the single truncated byte"
+        );
+    }
 }

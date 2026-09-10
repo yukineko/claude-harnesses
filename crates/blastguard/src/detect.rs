@@ -588,6 +588,37 @@ or disarms it, so it refuses to guess"
     }
 }
 
+/// Deny reason for a write that lands in a SYSTEM directory, or `None` when the
+/// target is elsewhere.
+///
+/// Sits beside [`protected_path_block`] as the second reason a write is
+/// surfaced no matter how recoverable it is, and is checked in the same place
+/// for the same reason: [`crate::reversible`] can only see bytes that already
+/// exist, and the payload here is the file's existence rather than its content
+/// (`/etc/sudoers.d/evil` destroys nothing and grants root).
+///
+/// Deny rather than the neighbouring `Ask`: see
+/// [`crate::scope::is_inside_system_dir`] for why the ambiguity that makes
+/// `Ask` honest for a gate-config path has no counterpart here.
+///
+/// A target the session legitimately owns escapes — a project checked out at
+/// `/opt/myproj` is a safe root like any other, and `confined_root` is what
+/// decides that. The escape is asked only for paths this predicate already
+/// matched, so it can never ADMIT a system path that was not confined.
+fn system_path_block(action: &str, target: &str, ctx: &Ctx) -> Option<Decision> {
+    if !crate::scope::is_inside_system_dir(target) {
+        return None;
+    }
+    if ctx.confined_root(action, &[target]).is_some() {
+        return None;
+    }
+    Some(Decision::deny(format!(
+        "'{action} {target}' writes into a system directory - a NEW file there is itself the \
+change (a `sudoers.d`/`paths.d` drop-in, a LaunchDaemon plist, a binary shadowing one on \
+$PATH), so whether the old bytes were recoverable does not make it safe"
+    )))
+}
+
 /// Deny reason for an operation that DISARMS a protected gate/hook/policy path
 /// without writing a single byte to it, or `None` when the target is not one.
 ///
@@ -1402,6 +1433,14 @@ primitive, not a filesystem path",
             return deny;
         }
         if !redirect_target_is_safe(&target) {
+            // SYSTEM-DIRECTORY axis, checked BEFORE recoverability for the same
+            // reason the protected-path axis above is: the recoverability probe
+            // reports `NothingToDestroy` for a path that does not exist yet, and
+            // `continue`s past it into Allow. That is the correct answer to the
+            // question it was asked and the wrong question for `/etc/sudoers.d`.
+            if let Some(deny) = system_path_block("redirect", &target, ctx) {
+                return deny;
+            }
             // RECOVERABILITY runs FIRST (operator ruling 2026-09-09). The two
             // verdicts this precedes — the confined ask and the flat deny —
             // fired 63 times across 25 transcripts, and neither had ever asked
@@ -1474,6 +1513,13 @@ primitive, not a filesystem path",
     //     distinction. Ordinary appends (`echo x >> /tmp/log`) stay allowed.
     for target in append_redirect_targets(cmd) {
         if let Some(deny) = protected_path_block("append redirect", &target) {
+            return deny;
+        }
+        // The system-directory axis does not care about the truncate/append
+        // distinction either: `>>` is how a `paths.d` entry or an
+        // `authorized_keys` line gets added, and one appended line is the
+        // whole payload.
+        if let Some(deny) = system_path_block("append redirect", &target, ctx) {
             return deny;
         }
     }
@@ -9165,6 +9211,70 @@ mod tests {
         assert!(bash("cargo test 2> /etc/fstab").is_deny());
         // Append is not truncation at any fd.
         assert_eq!(bash("cmd 2>> err.log"), Decision::Allow);
+    }
+
+    // BG2-SYS: a write that CREATES a file in a system directory changes what
+    // the machine does, and the recoverability axis cannot see it.
+    //
+    // 0.2.59 replaced "does this command have an effect?" with "are these bytes
+    // recoverable?" (`reversible.rs`). That is the right axis for a file whose
+    // CONTENT is the value at risk, and it is the wrong axis for a file whose
+    // EXISTENCE is the payload: `/etc/sudoers.d/x`, `/etc/paths.d/x` and
+    // `/Library/LaunchDaemons/x.plist` do not exist yet, so the probe answers
+    // `NothingToDestroy` — truthfully — and the redirect rule `continue`s past
+    // them into Allow. Measured on the DEPLOYED 0.2.59 binary, all three were
+    // allowed; all three were denied by 0.2.58.
+    //
+    // `reversible.rs`'s own module doc already names this carve-out — "writing
+    // `.githooks/pre-commit` is perfectly recoverable from git and must still
+    // be surfaced... that axis stays where it already lives... and callers must
+    // consult it FIRST" — so this is that second axis, not a patch to the
+    // recoverability one. It is deliberately NOT folded into
+    // `protected_path_block`: that one answers `Ask` (a human may legitimately
+    // edit their own gate config), while nothing an agent does autonomously has
+    // a reason to install into `/etc`.
+    #[test]
+    fn bg2_system_dir_writes_deny_even_when_the_target_is_absent() {
+        // The three real persistence vectors, none of which exist on this host.
+        assert!(bash("echo x > /etc/sudoers.d/zz-evil").is_deny());
+        assert!(bash("echo x > /etc/paths.d/zz-evil").is_deny());
+        assert!(bash("echo x > /Library/LaunchDaemons/evil.plist").is_deny());
+        // PATH shadowing at every common prefix.
+        assert!(bash("echo x > /usr/local/bin/newthing").is_deny());
+        assert!(bash("echo x > /opt/homebrew/bin/newthing").is_deny());
+        assert!(bash("echo x > /bin/newthing").is_deny());
+        // The frozen `/etc/fstab` case: absent on macOS, present on Linux, and
+        // the verdict must not depend on which host runs the suite.
+        assert!(bash("cargo test 2> /etc/fstab").is_deny());
+        // APPEND is the same payload. One line is a whole `paths.d` entry, and
+        // the append loop only ever consulted the protected-path axis.
+        assert!(bash("echo x >> /etc/paths.d/zz-evil").is_deny());
+        assert!(bash("echo x >> /etc/sudoers.d/zz-evil").is_deny());
+    }
+
+    // The other half of the same rule: this must not become a blanket deny on
+    // absolute paths. Each of these is outside every system directory, and the
+    // 0.2.59 ruling (which freed 75 of 226 non-allow verdicts over 2045 real
+    // commands) depends on them staying Allow.
+    #[test]
+    fn bg2_system_dir_rule_does_not_swallow_ordinary_absent_targets() {
+        assert_eq!(bash("echo x 3> /nonexistent-dir-xyz/out"), Decision::Allow);
+        assert_eq!(
+            bash("cargo test > /tmp/zz-absent-probe.log"),
+            Decision::Allow
+        );
+        assert_eq!(
+            bash("cargo test > /var/tmp/zz-absent-probe.log"),
+            Decision::Allow
+        );
+        // `/var` holds the macOS per-user temp dir, so it must NOT be treated
+        // as a system directory wholesale.
+        assert_eq!(
+            bash("cargo test > /var/folders/zz/T/zz-absent-probe.log"),
+            Decision::Allow
+        );
+        // fd-dup is still not a file write at all.
+        assert_eq!(bash("shred --help 2>&1"), Decision::Allow);
     }
 
     #[test]

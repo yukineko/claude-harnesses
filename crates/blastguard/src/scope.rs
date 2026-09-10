@@ -213,6 +213,99 @@ const MIN_DERIVED_ROOT_COMPONENTS: usize = 2;
 /// [`MIN_DERIVED_ROOT_COMPONENTS`].
 const TEMP_ROOTS: &[&str] = &["/tmp", "/var/tmp", "/private/tmp", "/private/var/tmp"];
 
+/// Directories where a file's mere EXISTENCE changes what the machine does.
+///
+/// This list answers a different question from [`NEVER_A_ROOT`], even though
+/// the two overlap. `NEVER_A_ROOT` asks "may a session's cwd be handed out as
+/// a safe root?", and is broad on purpose — `/home`, `/Users`, `/Volumes` and
+/// `/mnt` are on it because they hold EVERY user's data, not because writing
+/// into them reconfigures anything. Those four are deliberately absent here:
+/// denying every absolute write under `/Users` would re-create exactly the
+/// friction that 0.2.59 measured and retired.
+///
+/// What is on this list is the set where creating a NEW file is itself the
+/// payload:
+///
+///   * `/etc` (and its macOS real path `/private/etc`) — `sudoers.d`,
+///     `paths.d`, `pam.d`, `cron.d`: drop-in directories where one new file is
+///     a privilege, a `$PATH` entry, or an authentication rule.
+///   * `/Library`, `/System` — macOS `LaunchDaemons`/`LaunchAgents` plists,
+///     i.e. persistence. Note this is the ROOT-level `/Library`; a user's own
+///     `~/Library` is under `/Users/…` and is not covered here.
+///   * `/bin`, `/sbin`, `/lib`, `/lib32`, `/lib64`, `/usr`, `/opt` — the
+///     executable and library search paths, where a new file shadows a command
+///     that something else is about to run.
+///   * `/boot`, `/proc`, `/sys`, `/root` — kernel, boot and the root account.
+///
+/// `/var` is NOT here, and must not be added: the macOS per-user temp
+/// directory (`$TMPDIR`, `/var/folders/…`) and `/var/tmp` both live under it,
+/// and both are legitimate scratch space. `/dev` is not here either — the
+/// redirect rule's own safe list already names `/dev/null` and friends.
+const SYSTEM_DIRS: &[&str] = &[
+    "/bin",
+    "/boot",
+    "/etc",
+    "/lib",
+    "/lib32",
+    "/lib64",
+    "/opt",
+    "/private/etc",
+    "/proc",
+    "/root",
+    "/sbin",
+    "/sys",
+    "/usr",
+    "/Library",
+    "/System",
+];
+
+/// True when `path` names, or lies inside, a directory from [`SYSTEM_DIRS`].
+///
+/// # Why this is a separate axis from recoverability
+///
+/// [`crate::reversible`] answers "are the bytes at this path recoverable after
+/// they are gone?", and it answers it correctly: a path that does not exist
+/// yet has no bytes to lose, so it reports `NothingToDestroy`. That is true,
+/// and for a file whose CONTENT is the thing at risk it is the whole question.
+///
+/// It is the wrong question for a file whose EXISTENCE is the thing at risk.
+/// `/etc/sudoers.d/evil` does not exist, destroys nothing by being created, and
+/// grants root. `reversible`'s own module doc reserves this case in as many
+/// words — *"Recoverability is not the only reason to surface a command …
+/// That axis stays where it already lives … and callers must consult it
+/// FIRST"* — so this predicate is that reserved axis being filled in, not a
+/// patch to the recoverability one.
+///
+/// # Why the answer is Deny and not Ask
+///
+/// [`crate::detect`]'s `protected_path_block` answers `Ask` because a human
+/// legitimately edits their own gate config and only the human can say whether
+/// a given edit strengthens or disarms it. There is no matching legitimate
+/// case here: nothing an agent does autonomously has a reason to install a file
+/// into `/etc` or `/Library/LaunchDaemons`, so the ambiguity that makes `Ask`
+/// the honest answer over there does not exist over here.
+///
+/// # Undetermined
+///
+/// A relative path is not judged by this predicate at all — it returns `false`
+/// — because "which directory is this relative to?" is a question this
+/// predicate has no base to answer, and guessing one is how
+/// `cd /etc && echo x > paths.d/evil` would come out clean. The caller keeps
+/// the verdict it already had for relative operands, which is the confinement
+/// walk that already refuses to resolve them without a base. A path whose `..`
+/// survives [`crate::exclude::normalize`] is likewise not claimed to be
+/// outside: it is matched on its literal prefix, and an unresolved residue can
+/// only ADD matches here, never remove one.
+pub fn is_inside_system_dir(path: &str) -> bool {
+    let norm = crate::exclude::normalize(path);
+    if !norm.starts_with('/') {
+        return false;
+    }
+    SYSTEM_DIRS
+        .iter()
+        .any(|dir| norm == *dir || norm.starts_with(&format!("{dir}/")))
+}
+
 /// The roots this session is allowed to destroy things INSIDE, plus the means
 /// to resolve an operand against them.
 ///

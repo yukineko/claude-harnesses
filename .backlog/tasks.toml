@@ -5242,10 +5242,43 @@ title = "condukt/flow の完了ゲートが PR の CI 結果を見ていない �
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
-notes = ""
+status = "cancelled"
+notes = """
+
+
+--- CLAUDE.md 第7節に正面から反するため cancelled 2026-09-11、測定点 1e428175 ---
+
+このチケットの done_criteria は「sink の前に PR の mergeStateStatus を確認する
+経路」を要求している。これは CI の状態を完了判定に取り込む行為であり、
+CLAUDE.md 第7節が名指しで禁じているものである。第7節から逐語:
+
+  CI の green を「作業完了」の判定基準にする行為（advisory な参考情報として
+  一瞥するのではなく、それに依存してタスクの終わり方を決める行為）のいずれも
+  行わない。
+
+このチケットが求めているのはまさに「それに依存してタスクの終わり方を決める」
+経路そのものである。実装すると、流れを止める/通す権限を GitHub へ預けることに
+なる (第7節冒頭: ゲートを制御するものを外部に置くことは、いかなる理由であれ
+許さない)。
+
+加えて、前提となる障害が現状は発生しない。測定 (測定点 1e428175):
+  ls .github/workflows/ -- No such file or directory
+ワークフロー定義は撤去済みなので required check として登録できる check が
+1 つも無く、「required check が赤いまま PR が残る」状態を作れない。
+
+引用されている実例 (PR #24) は第7節が生まれた原因の観測そのものであり、
+対処は「CI を見に行く経路を足す」ではなく「外部ゲートを撤去する」という形で
+既に済んでいる。71b7b1bc / c057c7e7 と同じ前提の系列であり、3 件とも cancelled。
+
+cancelled にする。done ではない -- 実装していない。実装してはならない。
+
+【残る正当な懸念と、その正しい置き場所】
+「worker が完了と報告したが実際には流れが進んでいない」という乖離自体は実在の
+問題である。ただしその検出は、ローカルに権限がある面 -- pre-push フックの
+通過、worktree の commit、merge の成否 -- で行うべきであり、外部サービスの
+状態を見に行くことで行ってはならない。その方向の起票が必要なら別チケットとする。"""
 created_at = 1784658081
-updated_at = 1784658081
+updated_at = 1789070279
 weight = 0.0
 issue_number = 305
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/305"
@@ -5399,7 +5432,7 @@ tags = [
     "fail-positive",
     "p1",
 ]
-status = "pending"
+status = "claimed"
 notes = """
 実測 2026-07-22 / 測定点 6d4312c5。
 
@@ -5423,9 +5456,54 @@ post-commit が照合する (tree, parent) が証明書の (tree, HEAD) と一�
 （現行スイートに amend のケースが無い）。(2) 証明書に親コミットを含めるか、amend を検出して
 (tree, HEAD^) でも照合するかを決める。(3) 「証明書が HEAD に束縛される」設計は
 test_certificate_does_not_survive_head_moving が意図的に固定しているので、その意図
-（HEAD が動いたら証明書を無効化する）を壊さない形で amend だけを救う必要がある。"""
+（HEAD が動いたら証明書を無効化する）を壊さない形で amend だけを救う必要がある。
+
+--- HEAD で再現を観測し RED を固定 2026-09-11、測定点 1e428175 ---
+
+再現した。起票時 (6d4312c5) の「原因（推定・要検証）」も観測で確定した。
+
+【RED を固定した】scripts/test_gate_bypass.py に 2 テストを追加:
+- test_amend_runs_every_gate ... GREEN。amend 自体が 14 スキャナ全部を走らせ
+  green で完了することを先に固定する。これが無いと下の RED は何も証明しない
+  (ゲートが走っていないなら ledger に載せるのが正しい挙動だから)。
+- test_amend_of_a_gated_commit_is_not_recorded_as_ungated ... RED。
+  観測した失敗 (逐語):
+    Lists differ: ['ddee224326345dccfd6f0574e4e186a8a1793201\\tfirst'] != []
+    : bypass ledger must be empty ...
+スイート全体: Ran 122 tests in 66.671s / FAILED (failures=1) -- この新規 RED のみ。
+
+【原因を確定】推定どおりだった。.githooks/post-commit は証明書の
+(certified_tree, certified_head) を、コミット済みの (HEAD^{tree}, HEAD^@) と
+照合する。amend では pre-commit が判定した HEAD は「amend される前の C1」だが、
+git が書く新コミットの親は C0 なので C1 は親集合に現れず不一致になる。
+
+【修正案を実測で裏付けた】amend は reflog から決定論的に判別できる。
+空の scratch repo で測定:
+  amend 直後:  git reflog -1 --format=%gs HEAD  --  [commit (amend): first]
+               git rev-parse HEAD@{1}            --  99aeec27... (= 置き換えられた C1)
+               certified_head との一致           --  YES
+  平常 commit: git reflog -1 --format=%gs HEAD  --  [commit: second]
+したがって post-commit で「reflog subject が commit (amend) で始まる」かつ
+「certified_head == HEAD@{1}」の両方を満たすときだけ certified 扱いにすればよい。
+
+これは test_certificate_does_not_survive_head_moving が固定している意図
+(HEAD が動いたら証明書を無効化する) を壊さない。あのテストは update-ref で
+HEAD を動かすので reflog subject が commit (amend) にならず、条件を満たさない。
+
+【なぜ修正を入れていないか -- CLAUDE.md 第5節】
+.githooks/** はこのセッションの権限設定で Edit/Write が deny されている。
+別 agent に代行させるのは権限のロンダリングなので行わない。修正パッチは
+人間へ返す。RED テストは先に landed 済みなので、修正が入れば緑になる。
+
+【この作業中に踏んだゲート拒否 2 件 -- 迂回していない、記録する】
+1. scripts/guard-maintree-bash.py: mktemp した使い捨て repo での probe を
+   「main の作業ツリーを変更する」として拒否 (行頭の bare 変数代入が原因)。
+   別綴りで迂回せず、worktree から実行し直して要件を満たした。66a50b8c と同種。
+2. scripts/deny-no-verify.py: probe 内の git commit --no-verify を拒否。
+   scratch repo には hook が 1 つも無く --no-verify は不要だったので、
+   フラグを別綴りにするのではなく削除して従った。"""
 created_at = 1784673254
-updated_at = 1784673254
+updated_at = 1789070279
 weight = 0.0
 issue_number = 306
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/306"
@@ -5436,7 +5514,7 @@ title = "condukt state check-criteria が多項目 done_criteria を1コマン�
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
+status = "claimed"
 notes = """
 測定日 2026-07-22 / 測定点 d6aa9549 / run-20260722-072334 の Phase 6 前段で観測。
 
@@ -5473,9 +5551,62 @@ behavior 等と、日本語の『実装』『ロジック』等は列挙され�
 修正方針の候補: (a) マーカー語彙の拡充では追いつかない(自然言語の網羅は原理的に不可能)ので、
 done_criteria が複数の独立項目を含む場合は項目数と抽出コマンド数を比較し、
 カバーされていない項目があれば skip_verifier:false に倒す。
-(b) task.worktree が存在しない場合は passed:false ではなく明示的な undetermined を返す。"""
+(b) task.worktree が存在しない場合は passed:false ではなく明示的な undetermined を返す。
+
+--- HEAD で再現を観測 2026-09-11、測定点 1e428175 ---
+
+2026-07-22 の観測をそのまま継承せず、HEAD で測り直した。**再現した。**
+
+crates/condukt/src/verify.rs の test module に一時的な probe を差し込み、
+チケットが記載した 6 項目の done_criteria をそのまま classify_criteria と
+mechanical_skip_verdict に通した。観測された出力 (逐語):
+
+  PROBE behavioral=false skip_eligible=true cmd=Some(["cargo", "test", "-p", "donegate"])
+  PROBE verdict={"behavioral":false,"cmd":["cargo","test","-p","donegate"],
+                 "mechanical":true,"output":"ok","passed":true,"skip_verifier":true}
+
+6 項目のうち実際に走るのは 1 つだけで、残り 5 項目は誰にも検証されないまま
+skip_verifier:true が返る。起票時 (d6aa9549) と同一の挙動である。probe は
+測定後に git checkout -- で完全に戻した (作業ツリーに残していない)。
+
+【原因 — 読解で特定、agent に検証させる】
+チケットの仮説 (BEHAVIORAL_MARKERS の語彙不足) は寄与因子として正しいが、
+主因ではない。主因は 2 つ:
+
+1. verify.rs:1144 の mechanical_cmd は captures_iter のループ内で
+   最初にマッチした runner を return して即座に抜ける。項目 1 の
+   バッククォート内 grep は is_criteria_runner が false なので飛ばされ、
+   項目 6 の cargo test が採用される。項目 6 の中の cargo fmt / cargo clippy
+   すら落ちている。
+2. classify_criteria の skip_eligible = !behavioral かつ mechanical_cmd.is_some()。
+   抽出したコマンドが criteria 全体を **カバーしているか** を誰も要求していない。
+   1 本見つかれば全体を skip 可能と判定する。
+
+したがって、仮に 6 項目すべてが機械的主張であっても同じ縮約が起きる。
+marker 語彙を足すだけでは直らない。
+
+【契約との矛盾】
+Classification の doc comment は逐語で「Any ambiguity resolves to false
+(run the verifier -- the safe side)」と書いているが、実装はこの契約を
+守っていない。CLAUDE.md 第4節 (散文と実挙動の食い違い) および第3節
+(部分的な検査を完全な合格として報告しない) の両方に該当する。
+CLAUDE.md 第6節が名指しする specguard の「件数閾値を満たす部分的な束が
+clean として下流へ渡る」事例と同じクラスである。
+
+【対処】
+別 worktree の agent へ dispatch 済み。要求した内容: (a) 先に RED を自分で
+観測させる、(b) カバレッジ規則を決定論で入れ、曖昧は skip_eligible=false へ
+倒す、(c) 単一主張の正当な skip は退行させない、(d) テストは利害関係の無い
+別 subagent に契約記述のみから書かせる、(e) 3 回以上の mutation でどのテストが
+死ぬかを報告させる、(f) 嘘になった doc comment を同一コミットで直す。
+condukt の version は 0.7.154 へ (0.7.153 は並行 agent が使用中)。
+
+【同 run で観測されていた関連 2 件は未再測】
+donegate-version-bump-lockstep の縮約と donegate-stop-protocol-regression-test の
+passed:false は今回測っていない。前者は本チケットの修正で一緒に直る見込みだが、
+**見込みは判断であって観測ではない**ので、修正後に測り直すこと。"""
 created_at = 1784723291
-updated_at = 1784723291
+updated_at = 1789070279
 weight = 0.0
 issue_number = 307
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/307"

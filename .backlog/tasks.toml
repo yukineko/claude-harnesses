@@ -22340,7 +22340,39 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = []
 status = "pending"
-notes = "Observed 2026-09-11 in worktree-agent-ac18021931cc42393 at commit 2d57c47a. Test: diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded. Under the default parallel test-threads it intermittently fails with: assertion left == right failed: one record per invocation, left 1 right 2 (crates/condukt/src/diffrisk_record.rs:540). PRE-EXISTING and independent of the F-P oracle gate fix in 2d57c47a: measured at BASELINE with that change stashed out, it still failed 1 of 3 runs. Passes 769/769 with --test-threads=1 and passes when run alone. Not root-caused. Ruled out: the ledger path is NOT shared across tests (repo_root falls back to the unique tempdir cwd, so project_key differs per test), and no warning from append_line_reporting about a LOST record was observed on a failing run, so a reported append failure is not the mechanism either. Impact: an intermittent red in the condukt suite trains readers to ignore it, which is the failure mode CLAUDE.md section 1 warns about."
+notes = """
+Observed 2026-09-11 in worktree-agent-ac18021931cc42393 at commit 2d57c47a. Test: diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded. Under the default parallel test-threads it intermittently fails with: assertion left == right failed: one record per invocation, left 1 right 2 (crates/condukt/src/diffrisk_record.rs:540). PRE-EXISTING and independent of the F-P oracle gate fix in 2d57c47a: measured at BASELINE with that change stashed out, it still failed 1 of 3 runs. Passes 769/769 with --test-threads=1 and passes when run alone. Not root-caused. Ruled out: the ledger path is NOT shared across tests (repo_root falls back to the unique tempdir cwd, so project_key differs per test), and no warning from append_line_reporting about a LOST record was observed on a failing run, so a reported append failure is not the mechanism either. Impact: an intermittent red in the condukt suite trains readers to ignore it, which is the failure mode CLAUDE.md section 1 warns about.
+
+--- 2 体目の独立測定を統合 2026-09-11、測定点 b304eb1a ---
+
+別の agent が別 worktree・別コミット (deba848a、HEAD 1e428175) で同じ flake を
+独立に起票していた (a3ae340d、重複として cancelled)。その観測をここへ転記する。
+**2 つの独立測定が一致したこと自体が、この flake が実在し、どちらの変更にも
+起因しないことの証拠**である。
+
+a3ae340d 側の固有の観測:
+  - 失敗の向きは「余分な record」ではなく **欠落した record** (left 1 right 2)。
+    つまり invocation は起きたのに journal に載っていない。
+  - full parallel run でのみ再現。単独実行は 3/3 で通る。
+  - verify.rs と main.rs を HEAD へ checkout し直した無改変の状態で
+    full suite を 5 回実行し、5 回目が FAILED。
+  - 疑っている機構 (テストバイナリ間で共有される project_state_dir) は
+    **仮説であって観測ではない**と明示されている。
+
+こちら側 (2d57c47a) の観測と合わせると:
+  無改変 baseline で 3 回中 1 回失敗 / 5 回中 1 回失敗
+  --test-threads=1 では 769/769 通る
+  単独実行では通る
+
+【なぜ p2 以上に扱うべきか】
+このテストが固定しているのは「検査して clean だった」と「一度も検査されていない」
+が下流から区別可能であること、すなわち CLAUDE.md 第3節そのものである。
+record の欠落が起きるということは、その区別が失われる経路が実在しうるということ。
+flake として無視すると、本番でも journal が欠落しうるかどうかを誰も知らないまま
+になる。「並列テストの都合」で片付けるのは判断であって観測ではない。
+
+root cause は未特定。次の一手は仮説の検証: project_state_dir が本当に
+テストバイナリ間で共有されるのかを、両 agent が疑ったまま確認していない。"""
 created_at = 1789071165
 updated_at = 1789071165
 weight = 0.0
@@ -22474,8 +22506,33 @@ tags = [
     "condukt",
     "p1",
 ]
-status = "pending"
-notes = "MEASURED, pre-existing at HEAD 1e428175, NOT caused by deba848a. diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded fails intermittently only in the full parallel run: diffrisk_record.rs:540 'one record per invocation', left 1 right 2 - a MISSING record, not an extra one. Isolated runs pass 3/3. DECISIVE: with verify.rs and main.rs checked back out to HEAD, the full suite was run 5 times and run 5 still FAILED, so it reproduces unmodified. Matters because this test pins that 'inspected and clean' stays distinguishable from 'never inspected' - a real regression there would now be dismissed as the known flake. Do NOT silence it. Suspected but UNCONFIRMED mechanism: project_state_dir(cfg, tempdir) may resolve to a shared dir across concurrent test binaries; print the resolved path from two concurrent runs before changing anything."
+status = "cancelled"
+notes = """
+MEASURED, pre-existing at HEAD 1e428175, NOT caused by deba848a. diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded fails intermittently only in the full parallel run: diffrisk_record.rs:540 'one record per invocation', left 1 right 2 - a MISSING record, not an extra one. Isolated runs pass 3/3. DECISIVE: with verify.rs and main.rs checked back out to HEAD, the full suite was run 5 times and run 5 still FAILED, so it reproduces unmodified. Matters because this test pins that 'inspected and clean' stays distinguishable from 'never inspected' - a real regression there would now be dismissed as the known flake. Do NOT silence it. Suspected but UNCONFIRMED mechanism: project_state_dir(cfg, tempdir) may resolve to a shared dir across concurrent test binaries; print the resolved path from two concurrent runs before changing anything.
+
+--- a35997cb と重複。統合先を a35997cb に定めて cancelled 2026-09-11、測定点 b304eb1a ---
+
+同一の flake を、互いを知らない 2 体の agent が独立に起票していた
+(a35997cb と本チケット)。片方を消して片方に集約する -- ただし**観測は捨てない**。
+2 つの独立測定が一致していること自体が、この flake が実在し、かつ
+それぞれの変更に起因しないことの最良の証拠だからである。
+
+統合先は a35997cb。本チケットの固有の観測を向こうへ転記済み:
+  - 失敗は「余分な record」ではなく **欠落した record** である (left 1 right 2)
+  - full parallel run でのみ再現し、単独実行は 3/3 で通る
+  - verify.rs と main.rs を HEAD へ戻した状態で full suite を 5 回回し、
+    5 回目が FAILED。つまり無改変でも再現する
+  - 疑っている機構 (テストバイナリ間で共有される project_state_dir) は
+    **観測ではなく仮説**として記録されている
+
+a35997cb 側の独立測定 (別 agent、別 worktree、別コミット 2d57c47a):
+  - 変更を stash out した baseline で 3 回中 1 回失敗
+  - --test-threads=1 では 769/769 通る
+
+2 者が別々の commit・別々の worktree で同じ失敗を再現しており、
+どちらの変更にも起因しないことは十分に確立している。root cause は未特定。
+
+cancelled にする。done ではない -- 直していない。作業は a35997cb で続ける。"""
 created_at = 1789072944
 updated_at = 1789072944
 weight = 0.0

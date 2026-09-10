@@ -4563,7 +4563,7 @@ tags = [
     "reviewgate",
     "p1",
 ]
-status = "claimed"
+status = "done"
 notes = """
 observed 2026-07-21T04:11Z (session c6a1fdbf): reviewgate round 1/2 と precommit-audit --mode stop が、当セッションが一度も触っていない scripts/check-fail-open.py を「自分の変更」として提示し TEST MISSING でブロックした。実際の書き手は並行セッション e0d74f05（backlog lock 保有・12:06/12:20/12:35/12:52 に commit、当該ファイルの mtime 13:10）。ゲートは working tree を見るだけで帰属を見ない。
 
@@ -4672,9 +4672,54 @@ pathspec commit がブロックされる。ブロック解除の最短経路の�
 【残る作業】check-doc-claims (および同エンジンを使う check-claudemd-claims)
 が、pre-commit 実行時には作業ツリーではなく **index (git show :<path>)**
 を読むようにする。doc 側と被引用ファイル側の両方を同じ源から読むこと
-(片方だけを index にすると、源の不一致それ自体が新しい fail-open になる)。"""
+(片方だけを index にすると、源の不一致それ自体が新しい fail-open になる)。
+
+--- 両半分とも解消。実測して done にする 2026-09-11、測定点 cf51306d ---
+
+前回の再測定で「未着手1 は既に landed、未着手2 は今も再現」と二分していた。
+未着手2 の修正が landed した (a6c05aef、実装は 64deb1c9) ので、通ったことを
+根拠にせず自分で測り直した。
+
+【未着手2 の再現シナリオを HEAD で再実行】
+前回 (f7ffc2c9) に再現させた条件をそのまま使う: 被引用ファイルを作業ツリーで
+13 行ずらし、index には一切入れない。
+
+  対象: crates/condukt/skills/condukt/SKILL.md を 13 行シフト (未 stage)
+  staged count: 0
+  結果: SKILL.md 由来の [BLOCK] は 0 件。
+        check-doc-claims: all cited claims match the index. / exit=0
+
+前回はここで 5 件の [BLOCK] line-drifted が出ていた。解消している。
+
+【対照 -- ゲートが検査をやめただけではないことの確認】
+「静かになった」を「直った」と読まないため、同じ差分を stage して測り直した:
+
+  [BLOCK] docs/plugin-dependency-graph.md:141 -> SKILL.md:130
+          line-drifted (quote is at line(s) 143 but the claim cites 130)
+  [BLOCK] docs/plugin-dependency-graph.md:144 -> SKILL.md:127 line-drifted
+  [BLOCK] docs/plugin-dependency-graph.md:181 -> SKILL.md:937 line-drifted
+
+同一の drift が stage された瞬間に、チケットが記録していたのと逐語で同じ
+finding を出す。つまりゲートは「作業ディレクトリ全体が整合しているか」ではなく
+「このコミットは正しいか」を見るようになった。測定後、作業ツリーは復元済み。
+
+【未着手1 は前回の再測定どおり landed 済み】
+crates/precommit-audit/src/main.rs:359 の attribute_from_session による
+帰属絞り込みが実装済みで、Narrowed / Undetermined を明示的に処理し、
+判定不能を「自分の変更ではない」へ倒していない。
+
+【この修正が持ち込んだ別の性質 -- 引き継ぎとして記録】
+index を源にしたことで、未 track の被引用ファイルは path-not-found (exit 1)
+として扱われるようになった。担当 agent は Undetermined (exit 2) 案も実装して
+測定したうえで棄却している: exit 2 は findings レベルの exemption を通過しない
+ため、既に exempt 済みの crates/autoflow/src/compass.rs の 5 件で
+**リポジトリの全コミットが解除手段なくブロックされる**状態になった。
+git ls-files は確定的に答えるので、不在は「観測の失敗」ではなく
+「claim についての答え」である、という理由づけも実装の docstring にある。
+
+done にする。両半分とも観測で確認した。"""
 created_at = 1784607099
-updated_at = 1789069768
+updated_at = 1789074802
 weight = 0.0
 issue_number = 292
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/292"
@@ -21867,7 +21912,7 @@ Related: gate.rs human_report then renders this as "yes (inline test added)" / "
 
 Also note the first arm: any added line in a test-glob file, including a blank-adjacent comment line, is evidence. That may be intentional but it is unstated.'''
 created_at = 1789064330
-updated_at = 1789069768
+updated_at = 1789074802
 weight = 0.0
 issue_number = 509
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/509"

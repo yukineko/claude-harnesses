@@ -59,6 +59,30 @@ blastguard は Claude Code の **PreToolUse** フックである。エージェ�
 **対象外**であり、常に deny になる（守護者自身を無効化する経路を塞ぐため、
 この一群は設定ファイル除外より優先される）。
 
+**さらに `.claude/worktrees/` 配下のチェックアウトは、設定ファイルではなくソース**
+として扱う（0.2.63）。CLAUDE.md 8 は実装作業を worktree でのみ行うことを義務づけており、
+その置き場が `.claude/worktrees/` である。パスに `.claude` が含まれるという一点だけで
+除外していた結果、**作業が行われる唯一の場所でルールが一切効いていなかった**。実測
+（2026-09-10、0.2.62 のデプロイ済みバイナリ。git 追跡・ファイルの存在・payload の cwd を
+固定し、ディレクトリ名 1 個だけを `.claude` と `notclaude` で振った）:
+
+```text
+形                                         .claude/worktrees 内   外
+target/CACHEDIR.TAG への truncate redirect   ALLOW                ask
+src/main.rs への truncate redirect           ALLOW                ask
+target の再帰削除                            ALLOW                ask
+src の再帰削除                               ALLOW                ask
+チェックアウト自体の再帰削除                 ALLOW                ask
+```
+
+現在はチェックアウト境界より後ろの**相対パス**を除外リストに掛ける。つまり
+チェックアウト直下の `Cargo.toml` は `Cargo.toml` として除外されたまま、
+チェックアウト内の `.claude/agents/x.md` も `.claude/agents/x.md` として除外された
+まま、チェックアウト内の `src/main.rs` は除外されなくなる — worktree の外と
+まったく同じ扱いになる。除外を消すのではなく根を付け替えるのは、消すと worktree の
+中だけ `Cargo.toml` の編集が騒がしくなり、除外が抑えていたノイズを作業場所に
+呼び戻してしまうからである。
+
 ## 場所（blast radius）で判定する — 0.2.51
 
 **0.2.50 までのルールは「形」だけを見ており、「どこ」を見ていなかった。** 実測

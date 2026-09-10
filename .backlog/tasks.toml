@@ -20356,6 +20356,7 @@ tags = [
 ]
 status = "pending"
 notes = """
+
 実測 2026-09-10、測定点 627b756a (dirty)、blastguard 0.2.61 のビルド済みバイナリに実 PreToolUse payload を投入。
 
 exclude.rs の CONFIG 側 glob に **/.claude と **/.claude/** が入っている (crates/blastguard/src/exclude.rs:18-19)。
@@ -20379,9 +20380,64 @@ recoverability 軸にも location 軸にも到達する前に、除外で抜け�
 考えられる直し方 (未検証、判断であって観測ではない): config 除外の意図は .claude 配下の設定ファイル
 (settings.json / agents / skills) であって、.claude/worktrees 配下のチェックアウト全体ではないはず。
 worktrees セグメントを除外の対象外にする、あるいは config glob を設定ファイル拡張子に限定する。
-いずれにせよテストを先に RED で観測してから直すこと。"""
+いずれにせよテストを先に RED で観測してから直すこと。
+
+--- 追記 2026-09-11 (別セッション / worktree agent-ac83774675a511f4d, branch worktree-agent-ac83774675a511f4d) ---
+
+1. 再現 (デプロイ済み 0.2.62 バイナリ、実 PreToolUse payload。コマンドは一切実行していない。判定のみ読んだ)
+
+D 未追跡ファイル, .claude/worktrees 内   exists=True  untracked  ALLOW (出力なし)
+E 未追跡ファイル, .claude を含まない worktree  exists=True  untracked  deny
+F 未追跡ファイル, main のツリー          exists=True  untracked  ask
+起票時の表と一致した。
+
+さらに変数を 1 個だけに絞った測定 (同一 throwaway repo 内、同じ深さ、同じ basename、
+どちらも未追跡・存在する。違いはディレクトリ名 1 個が .claude か notclaude かだけ):
+
+形                                   .claude/worktrees 内   外
+target/CACHEDIR.TAG への truncate      ALLOW                ask
+src/main.rs への truncate              ALLOW                ask
+target の再帰削除                      ALLOW                ask
+src の再帰削除                         ALLOW                ask
+チェックアウト自体の再帰削除           ALLOW                ask
+git clean -fdx / truncate -s 0 / chmod -R / find -delete は両側とも ask (差なし)
+
+罠の記録: 最初 git 追跡済みのファイルで測ると内外どちらも ALLOW になる。
+recoverability 軸が location 軸より前に短絡するため、追跡済みファイルでは path 軸を
+区別できない。未追跡かつ存在するファイルで測る必要がある。
+
+2. 消費経路は 3 つ。is_config_file が true になると、いずれも Decision::Allow に落ちる。
+   analyze_rm の literal-config-operand 免除 (detect.rs)、redirect_target_is_safe (detect.rs)、
+   detect_write (detect.rs)。1 つの述語の欠陥が上の 5 形すべてを生んでいた。
+
+3. 直し方: 除外を消すのではなく根を付け替えた (exclude.rs の strip_worktree_checkout)。
+   .claude/worktrees/<チェックアウト名> 境界より後ろの相対パスを除外リストに掛ける。
+   境界の照合は大文字小文字を無視する (剥がす方向が制限側であるため、glob_set とは逆)。
+   境界が無ければ None を返し、パスはそのまま照合される。
+   残余が空 (チェックアウト自体、または worktrees コンテナ) は config ではないと答える。
+   除外を消さなかった理由: 消すとチェックアウト直下の Cargo.toml や
+   チェックアウト内の .claude/agents/*.md まで免除を失い、除外が抑えていたノイズを
+   作業場所に呼び戻す。付け替えは免除を減らすことしかできない (元は全部が
+   **/.claude/** に一致していたので、新しい判定は必ず旧判定の部分集合)。
+
+4. テストは利害関係のない subagent が先に書き、RED を独立に観測した (CLAUDE.md 2(a))。
+   RED 8 件 (exclude.rs 5 / detect.rs 3)、over-correction 対照の GREEN 4 件。
+   RED 時: lib 325 passed / 8 failed。修正後: lib 333 passed / 0 failed、
+   cargo test -p blastguard は 20 target すべて ok。
+   subagent はブリーフの誤りを 1 件訂正した: 大文字小文字の検査を
+   .CLAUDE/... で書くと初回から通ってしまう (ALLOW_GLOBS が元々 case-sensitive なので
+   この欠陥とは無関係の理由で外れる)。.claude/Worktrees/... に差し替えて RED を得た。
+
+5. 修正後の実測 (自前ビルド 0.2.63): 上の 10 形すべてで内外の判定が一致。
+   D は ALLOW から ask へ (制限側へ移動)。over-correction 対照は据え置き:
+   .claude/agents/foo.md / チェックアウト内 .claude/agents/foo.md /
+   チェックアウト内 Cargo.toml はいずれも ALLOW のまま。
+   三値も維持: ask が deny にも allow にも潰れていない。
+   退行 3 点も維持: system dir への truncate redirect = deny、fd-dup = ALLOW、
+   実 TMPDIR 配下の confined redirect (ファイル存在) = ask。
+"""
 created_at = 1789044941
-updated_at = 1789044941
+updated_at = 1789058431
 weight = 0.0
 issue_number = 496
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/496"
@@ -20468,3 +20524,82 @@ updated_at = 1789044991
 weight = 0.0
 issue_number = 498
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/498"
+
+[[task]]
+id = "9271d739"
+title = "blastguard: the config exemption covers the deployed-plugin and transcript subtrees of the user's home Claude directory, so recursively deleting every deployed gate binary is auto-allowed"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+status = "pending"
+notes = """
+実測 2026-09-10、blastguard 0.2.62 のデプロイ済みバイナリに実 PreToolUse payload を投入 (コマンドは実行していない。判定のみ読んだ)。
+
+exclude.rs の ALLOW_GLOBS にある **/.claude/** は $HOME 配下の Claude 設定ツリーにもそのまま一致する。
+その結果、次がいずれも ALLOW (出力なし = 素通り) になる:
+
+  - ホームの Claude ディレクトリ配下 plugins サブツリーの再帰削除 → ALLOW
+    ここには全 gate プラグインのデプロイ済みバイナリ (blastguard 自身を含む) が入っている。
+    消えれば hook は起動せず、全ゲートが同時に無音化する。
+  - ホームの Claude ディレクトリ配下 projects サブツリーの再帰削除 → ALLOW
+    transcripts と memory ノートが入っている。git が複製を持たないので復旧不能。
+
+対照 (同じ測定):
+  - ホームの Claude ディレクトリ「そのもの」の再帰削除は deny になる。
+    理由文は「protected gate/config paths を holding する directory tree」。
+    つまり container ルールは親だけを守り、子ディレクトリは守っていない。
+  - 同じ形でリポジトリ内の .githooks を消す場合は deny。
+
+なぜ重いか: デプロイ済みバイナリの消失は「ゲートが赤くなる」ではなく「ゲートが暗転する」。
+finding が出ないので、無音化したこと自体が観測できない (CLAUDE.md の launcher exec bit の節と同じ失敗様式)。
+
+考えられる直し方 (未検証・判断であって観測ではない): PROTECTED_GLOBS に plugins サブツリーを名前で加える、
+あるいは ALLOW_GLOBS 側の Claude ディレクトリ免除を「設定ファイルそのもの」に限定する。
+b9d1503d (worktrees セグメント) と同じ族だが、直す場所が別なので別票にした。"""
+created_at = 1789047764
+updated_at = 1789047764
+weight = 0.0
+issue_number = 500
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/500"
+
+[[task]]
+id = "ed0f8f65"
+title = "blastguard: agent and skill definition files under the project Claude directory are config-exempt, so deleting or emptying them is auto-allowed even though they define agent behaviour"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "injection",
+    "p2",
+]
+status = "pending"
+notes = """
+実測 2026-09-10、blastguard 0.2.62 のデプロイ済みバイナリに実 PreToolUse payload を投入 (コマンドは実行していない)。
+
+ALLOW_GLOBS の **/.claude/** により、プロジェクトの Claude ディレクトリ配下 agents / skills サブツリーが
+config 扱いで免除される。実測:
+
+  - agents サブツリーの再帰削除 → ALLOW
+  - skills サブツリーの再帰削除 → ALLOW
+  - agents 配下の md ファイルを truncating redirect で空にする → ALLOW
+  - skills 配下の SKILL 本文を truncating redirect で空にする → ALLOW
+
+対照: 同じディレクトリ配下でも settings.json は PROTECTED_GLOBS にあるので ask (非対話なら deny に硬化) になる。
+
+なぜ気になるか: agent 定義と skill 本文は「どのフックが走るか」ではないが「エージェントが何をするか」を決める。
+settings.json を守る理由 (guard を disarm できる) は agent/skill 定義にも程度の差で当てはまる。
+一方で agent/skill の編集は日常作業でもあるので、全面 deny は摩擦が大きい。
+どの粒度が正しいかは判断が要るので、修正ではなく起票にとどめる。
+
+注: この 2 つは PROTECTED_GLOBS に入れると常時 deny になり、skills を書く作業そのものが止まる。
+recoverability 軸 (git が追跡していれば allow) に載せるほうが筋がよい可能性があるが、未検証。"""
+created_at = 1789047766
+updated_at = 1789047766
+weight = 0.0
+issue_number = 501
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/501"

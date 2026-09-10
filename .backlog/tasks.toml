@@ -22080,3 +22080,16 @@ updated_at = 1789070219
 weight = 0.0
 issue_number = 526
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/526"
+[[task]]
+id = "a35997cb"
+title = "condukt: diffrisk_record journaling test is flaky under parallel test-threads"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = "Observed 2026-09-11 in worktree-agent-ac18021931cc42393 at commit 2d57c47a. Test: diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded. Under the default parallel test-threads it intermittently fails with: assertion left == right failed: one record per invocation, left 1 right 2 (crates/condukt/src/diffrisk_record.rs:540). PRE-EXISTING and independent of the F-P oracle gate fix in 2d57c47a: measured at BASELINE with that change stashed out, it still failed 1 of 3 runs. Passes 769/769 with --test-threads=1 and passes when run alone. Not root-caused. Ruled out: the ledger path is NOT shared across tests (repo_root falls back to the unique tempdir cwd, so project_key differs per test), and no warning from append_line_reporting about a LOST record was observed on a failing run, so a reported append failure is not the mechanism either. Impact: an intermittent red in the condukt suite trains readers to ignore it, which is the failure mode CLAUDE.md section 1 warns about."
+created_at = 1789071165
+updated_at = 1789071165
+weight = 0.0
+issue_number = 528
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/528"

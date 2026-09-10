@@ -1458,6 +1458,96 @@ pub fn enforce_fp_gate(verdict: &serde_json::Value) -> FpGateDecision {
     }
 }
 
+/// What the F→P completion gate managed to learn about one task from the run's
+/// persisted decomposition — the input `enforce_fp_gate` needs before it can
+/// render any verdict at all.
+///
+/// Tri-state on purpose. The gate's caller previously walked the decomposition
+/// with three nested `if let` arms and no `else` on any of them, so "the file
+/// could not be read", "the file is not parseable" and "the task is not in it"
+/// all fell through to the same place as "the gate passed": the task was
+/// promoted to `verified` with the oracle never consulted. Those are three
+/// flavours of 判定不能, and this type makes them unrepresentable as `Task`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FpGateScope {
+    /// There genuinely is no decomposition for this run — ENOENT, a real
+    /// observation of absence rather than a failure to look. The gate has
+    /// nothing to check against and the promotion proceeds.
+    NoDecomposition,
+    /// The task's decomposition entry was read. Carries the two fields
+    /// `oracle::check_oracle` consumes.
+    Task {
+        requires_fp_oracle: bool,
+        reproduction_tests: Option<String>,
+    },
+    /// Whether the gate applies to this task could not be determined, for the
+    /// carried reason. Must not resolve to a promotion.
+    Undetermined(String),
+}
+
+/// Resolve what the F→P completion gate can know about `task_id` in `run_id`.
+///
+/// Pure with respect to the decision (it only reads), and split out of
+/// `main.rs` so each arm is unit-testable — a branch that only exists inside a
+/// 700-line `match` in `main` has no test that can observe it die.
+///
+/// Only ENOENT is permissive here. Everything else — an I/O fault, a
+/// non-UTF-8 file, unparseable JSON, or a decomposition that does not contain
+/// this task — is [`FpGateScope::Undetermined`], because in every one of those
+/// cases the task's `kind` was never read and so "is the Fail→Pass oracle
+/// required for this task?" has no observed answer.
+pub fn fp_gate_scope(cfg: &Config, cwd: &Path, run_id: &str, task_id: &str) -> FpGateScope {
+    use harness_core::verdict::Required;
+
+    let raw = match load_decomposition_determined(cfg, cwd, run_id).require() {
+        Required::Blocked(verdict) => {
+            let why = verdict
+                .reason()
+                .map(|r| r.as_str().to_string())
+                .unwrap_or_else(|| {
+                    format!("the decomposition for run '{run_id}' could not be read")
+                });
+            return FpGateScope::Undetermined(why);
+        }
+        // ENOENT. Deliberately permissive, and the ONLY permissive arm: the
+        // file's absence is itself the observation. A run whose decomposition
+        // was never persisted (or has been cleaned up) still has to be
+        // settable to verified, and there is no task record anywhere claiming
+        // an oracle is required.
+        Required::Determined(None) => return FpGateScope::NoDecomposition,
+        Required::Determined(Some(raw)) => raw,
+    };
+
+    let dec = match serde_json::from_str::<crate::model::Decomposition>(&raw) {
+        Ok(d) => d,
+        Err(e) => {
+            return FpGateScope::Undetermined(format!(
+                "the decomposition for run '{run_id}' is not parseable: {e}"
+            ));
+        }
+    };
+
+    match dec.tasks.iter().find(|t| t.id == task_id) {
+        Some(t) => FpGateScope::Task {
+            requires_fp_oracle: t.requires_fp_oracle(),
+            reproduction_tests: t.reproduction_tests.clone(),
+        },
+        // NOT an absence. `state init` is the only writer of both files and it
+        // seeds `RunState.tasks` one-for-one from `dec.tasks` in the same
+        // command (see `StateAction::Init` in main.rs — the sole
+        // `save_decomposition` call site; nothing else ever appends a
+        // run-state task or rewrites a decomposition). So a run-state id that
+        // the decomposition does not contain means the two files no longer
+        // agree, and this task's `kind` is unreadable — not observed to be
+        // out of scope. There is no observation available here that would
+        // make it an absence, so it blocks.
+        None => FpGateScope::Undetermined(format!(
+            "run '{run_id}' has no decomposition entry for task '{task_id}' — the run state \
+             and the decomposition disagree, so this task's kind cannot be read"
+        )),
+    }
+}
+
 // ── Edit-time compile gate (analog of the F→P oracle gate) ────────────────
 
 /// Decision produced by [`enforce_edit_gate`] from an `editgate::check_edit`

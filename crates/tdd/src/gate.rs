@@ -6,6 +6,20 @@
 //! says "no test in the uncommitted changes" and not "this change has no
 //! test" — the latter is an absence the gate never checked (CLAUDE.md §4).
 //! The verdict drives whether the Stop hook blocks.
+//!
+//! **The same limit applies on the other axis: authorship.** The scan is
+//! `git status --porcelain` plus `git diff -U0` / `git diff --cached -U0` /
+//! `git ls-files --others` (see [`crate::git`]) — commands that answer for the
+//! whole checkout and carry no session identity. So `Fields::impl_files` is
+//! every uncommitted implementation file, not "the files you wrote": in a
+//! shared checkout it can hold a human's edit or a concurrent session's change
+//! (CLAUDE.md §8 documents that this is measured, not hypothetical). tdd does
+//! not narrow it — narrowing on a footprint the transcript may not carry would
+//! drop real work and let untested code through — so it must instead SAY so,
+//! exactly as the sibling gates do (`reviewgate::review::inject_reason`,
+//! `propguard::gate::block_reason`). "N implementation lines added, write a
+//! test" addressed to the agent is a claim about who added them, and that is
+//! the second absence this module may not assert.
 
 use std::path::Path;
 
@@ -229,6 +243,15 @@ pub fn block_reason(v: &Report, attempt: u32, max: u32) -> String {
     }
 }
 
+/// The model-facing block reason. It states two scope limits, and they are
+/// **different claims that do not substitute for each other**: what tdd looked
+/// at (the uncommitted changes — already-committed tests were not consulted)
+/// and *whose* changes those are (unknown — authorship was never verified; see
+/// the module docs). Neither is decoration: this string is the only thing the
+/// agent reads, and both absences are ones the gate did not check.
+///
+/// The blocking predicate is untouched by either sentence — [`Report::blocks`]
+/// still decides, and the whole unattributed set is still counted.
 fn generic_block_reason(
     added_impl_lines: usize,
     impl_files: &[String],
@@ -248,6 +271,11 @@ fn generic_block_reason(
          untracked files, all relative to HEAD. tdd did NOT read already-committed tests, so this \
          is \"no test in the uncommitted changes\", not \"this change has no test\". If the test \
          covering this change is already committed, say so and take the one-shot skip below.\n\n\
+         Authorship was NOT verified. tdd's scan is `git status` / `git diff` / `git ls-files` \
+         over the whole checkout, and none of those carries session identity, so the files \
+         listed above are simply everything uncommitted — they may include a human's edits or \
+         a concurrent session's changes as well as your own. tdd did not check who wrote them. \
+         If a listed file is not yours, say so and take the one-shot skip below.\n\n\
          Add a test that exercises this change (a `#[test]`, `def test_…`, `func Test…`, \
          `it(...)`, or a file under tests/), then finish. Prefer test-first: run \
          `tdd red --task <id>` to capture the failing test before you implement, and \
@@ -853,6 +881,231 @@ mod tests {
             notice.to_lowercase().contains("allowing stop"),
             "the give-up notice must still say it is ALLOWING the stop\n\
              --- notice ---\n{notice}"
+        );
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Unverified-authorship disclosure for the `impl_files` list rendered in
+    // `generic_block_reason`'s "implementation changed: …" line.
+    //
+    // `git::changed_files` (git.rs:90, `git status --porcelain=v1 -z`) and
+    // `git::added_lines` (git.rs:136-145, `git diff -U0` / `git diff --cached
+    // -U0` / `git ls-files --others --exclude-standard`) all read the WHOLE
+    // working tree relative to HEAD. None of them carries session identity —
+    // no `git blame`, no author, no session id — so the files this gate lists
+    // as "implementation changed" may not be the agent's own edits: a human
+    // may have touched them, or a concurrent/parallel session sharing this
+    // checkout (CLAUDE.md §8: another session must ALWAYS be assumed to
+    // exist). Two sibling gates already carry this disclosure for the
+    // identically-unattributed file list they render from the same kind of
+    // scan (`crate::git::changed_files` equivalents):
+    //   - reviewgate, review.rs:510-514
+    //   - propguard, gate.rs:831-834
+    // tdd's `impl_files` list is built from that same unattributed vector
+    // (`Fields::impl_files`, populated in `classify` from `added_lines`) and
+    // carries no such disclosure today.
+    // ══════════════════════════════════════════════════════════════════════
+
+    /// Ways an implementer may name authorship / who made the change.
+    const TDD_AUTHORSHIP_TOKENS: &[&str] = &[
+        "authorship",
+        "author",
+        "who wrote",
+        "who made",
+        "who authored",
+        "who edited",
+    ];
+
+    /// Ways an implementer may say that authorship was not verified.
+    const TDD_UNVERIFIED_TOKENS: &[&str] = &[
+        "not verified",
+        "not verify",
+        "unverified",
+        "did not verify",
+        "does not verify",
+        "never verified",
+        "doesn't verify",
+    ];
+
+    /// Ways an implementer may say the list can include edits that are not
+    /// the agent's own — a human's, or a concurrent/parallel session's.
+    const TDD_HUMAN_OR_CONCURRENT_TOKENS: &[&str] = &[
+        "human",
+        "concurrent session",
+        "parallel session",
+        "another session",
+        "other session",
+        "concurrent/parallel session",
+    ];
+
+    /// A report whose `impl_files` list is real files from THIS worktree that
+    /// the test process itself did not create — the same shape sibling gates
+    /// use (`.githooks/pre-push` in reviewgate/propguard's own tests) to make
+    /// the point concrete: this exact list can legitimately contain a
+    /// human-edited file, and the gate has no way to tell.
+    fn missing_test_report_with_unattributed_files() -> Report {
+        Report {
+            scan: Determination::Known(Some(Fields {
+                added_impl_lines: 12,
+                test_marker_added: false,
+                test_file_changed: false,
+                impl_files: vec!["src/foo.rs".to_string(), ".githooks/pre-push".to_string()],
+            })),
+        }
+    }
+
+    /// (a) THE DISHONEST CLAIM. `block_reason`, exercised through the real
+    /// `Report` → `block_reason` path (not a private helper called with
+    /// hand-made args), must disclose that authorship of the listed impl
+    /// files was never verified AND that the list may therefore include a
+    /// human's or a concurrent/parallel session's edits. Today it only says
+    /// "implementation changed: <files>", asserting nothing about authorship
+    /// but also disclosing nothing — an agent reading it has no way to know
+    /// the list might not be its own edits. EXPECTED RED.
+    #[test]
+    fn block_reason_discloses_unverified_authorship_of_the_impl_files_list() {
+        let reason = block_reason(&missing_test_report_with_unattributed_files(), 1, 3);
+        let lower = reason.to_lowercase();
+        assert!(
+            TDD_AUTHORSHIP_TOKENS.iter().any(|t| lower.contains(t)),
+            "the block reason must name authorship (one of \
+             {TDD_AUTHORSHIP_TOKENS:?}) when it lists implementation files it never \
+             attributed.\n--- reason ---\n{reason}"
+        );
+        assert!(
+            TDD_UNVERIFIED_TOKENS.iter().any(|t| lower.contains(t)),
+            "the block reason must say authorship was NOT verified (one of \
+             {TDD_UNVERIFIED_TOKENS:?}).\n--- reason ---\n{reason}"
+        );
+        assert!(
+            TDD_HUMAN_OR_CONCURRENT_TOKENS
+                .iter()
+                .any(|t| lower.contains(t)),
+            "the block reason must say the file list may include edits by the human \
+             or a concurrent/parallel session (one of \
+             {TDD_HUMAN_OR_CONCURRENT_TOKENS:?}) — tdd's scan carries no session \
+             identity (git.rs `changed_files`/`added_lines`).\n--- reason ---\n{reason}"
+        );
+    }
+
+    /// (b1) ANTI-VACUITY. The disclosure must not come at the cost of the
+    /// facts tdd genuinely observed: the added-line count and every impl file
+    /// it actually passed in.
+    #[test]
+    fn block_reason_with_disclosure_still_names_the_lines_and_every_impl_file() {
+        let report = missing_test_report_with_unattributed_files();
+        let reason = block_reason(&report, 1, 3);
+        assert!(
+            reason.contains("12"),
+            "the block reason must still contain the observed added-line count \
+             (12).\n--- reason ---\n{reason}"
+        );
+        let Determination::Known(Some(fields)) = &report.scan else {
+            unreachable!("fixture is Known(Some(_))");
+        };
+        for f in &fields.impl_files {
+            assert!(
+                reason.contains(f.as_str()),
+                "the block reason must still list every impl file passed in, \
+                 including {f:?}\n--- reason ---\n{reason}"
+            );
+        }
+    }
+
+    /// (b2) ANTI-VACUITY. The disclosure must not come at the cost of asking
+    /// for a test and naming both escape hatches.
+    #[test]
+    fn block_reason_with_disclosure_still_asks_for_a_test_and_names_both_escape_hatches() {
+        let reason = block_reason(&missing_test_report_with_unattributed_files(), 1, 3);
+        let lower = reason.to_lowercase();
+        assert!(
+            lower.contains("test"),
+            "the block reason must still ask for a test.\n--- reason ---\n{reason}"
+        );
+        assert!(
+            reason.contains("tdd skip"),
+            "the block reason must still name the `tdd skip` escape hatch.\n\
+             --- reason ---\n{reason}"
+        );
+        assert!(
+            reason.contains("TDD_DISABLE=1"),
+            "the block reason must still name the TDD_DISABLE=1 escape hatch.\n\
+             --- reason ---\n{reason}"
+        );
+    }
+
+    /// (b3) ANTI-VACUITY. This new authorship disclosure is a DIFFERENT claim
+    /// from the existing "scope inspected" disclosure
+    /// (`TDD_INSPECTED_SCOPE_TOKENS` / `TDD_COMMITTED_NOT_CONSULTED_TOKENS`,
+    /// pinned by `block_reason_states_that_only_the_uncommitted_changes_were_inspected`
+    /// above): one is about WHAT tdd looked at (uncommitted vs. committed),
+    /// the other is about WHO made the changes it looked at (the agent vs. a
+    /// human/concurrent session). Neither substitutes for the other, so this
+    /// test pins that the pre-existing scope sentence is untouched by the new
+    /// requirement — (a) cannot be satisfied merely by relabeling it.
+    #[test]
+    fn block_reason_still_states_the_uncommitted_only_scope_alongside_the_new_disclosure() {
+        let reason = block_reason(&missing_test_report_with_unattributed_files(), 1, 3);
+        let lower = reason.to_lowercase();
+        assert!(
+            TDD_INSPECTED_SCOPE_TOKENS
+                .iter()
+                .any(|t| lower.contains(&t.to_lowercase())),
+            "the block reason must still name the scope it actually inspected — the \
+             uncommitted/working-tree changes (one of {TDD_INSPECTED_SCOPE_TOKENS:?}) — \
+             this is a DIFFERENT claim from the authorship disclosure.\n\
+             --- reason ---\n{reason}"
+        );
+        assert!(
+            TDD_COMMITTED_NOT_CONSULTED_TOKENS
+                .iter()
+                .any(|t| lower.contains(&t.to_lowercase())),
+            "the block reason must still say already-committed tests were NOT \
+             consulted (one of {TDD_COMMITTED_NOT_CONSULTED_TOKENS:?}).\n\
+             --- reason ---\n{reason}"
+        );
+    }
+
+    /// (b4) ANTI-VACUITY. The verdict predicate is unchanged by the wording
+    /// fix: a report with `added_impl_lines >= 1` and no test evidence still
+    /// blocks, and one with test evidence still does not. This duplicates the
+    /// existing `the_blocking_predicate_is_unchanged_by_the_wording_fix` test
+    /// above (same claim); it is written again here, under its own name and
+    /// against the unattributed-files fixture, so it stands as an
+    /// independent anti-vacuity control specifically for this authorship-
+    /// disclosure change rather than relying on an assertion written for a
+    /// different fix.
+    #[test]
+    fn authorship_disclosure_does_not_change_the_blocking_predicate() {
+        let cfg = Config::default();
+        assert!(
+            missing_test_report_with_unattributed_files().blocks(&cfg),
+            "impl lines with no visible test must STILL block, unattributed file \
+             list notwithstanding"
+        );
+        assert!(
+            !report_with_test_evidence().blocks(&cfg),
+            "a change with test evidence must STILL be allowed"
+        );
+    }
+
+    /// (b5) ANTI-VACUITY. The reason is not empty and remains a substantial
+    /// instruction, so an empty string (or a one-line stub) cannot vacuously
+    /// satisfy (a)'s token checks by virtue of never being compared against
+    /// anything real.
+    #[test]
+    fn block_reason_with_disclosure_remains_a_substantial_instruction() {
+        let reason = block_reason(&missing_test_report_with_unattributed_files(), 1, 3);
+        assert!(
+            !reason.is_empty(),
+            "the block reason must not be empty\n--- reason ---\n{reason}"
+        );
+        assert!(
+            reason.len() > 200,
+            "the block reason must remain a substantial instruction (>200 chars), \
+             not a stub that happens to contain the required tokens \
+             (len={})\n--- reason ---\n{reason}",
+            reason.len()
         );
     }
 }

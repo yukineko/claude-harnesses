@@ -21987,7 +21987,7 @@ title = "tdd FAIL-OPEN: a test-marker regex hit in ANY file (README, toml, fixtu
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
-status = "claimed"
+status = "pending"
 notes = '''
 Found and independently re-verified 2026-09-11 at HEAD 2abf8dea by reading crates/tdd/src/gate.rs classify().
 
@@ -22027,7 +22027,7 @@ Related: gate.rs human_report then renders this as "yes (inline test added)" / "
 
 Also note the first arm: any added line in a test-glob file, including a blank-adjacent comment line, is evidence. That may be intentional but it is unstated.'''
 created_at = 1789064330
-updated_at = 1789074802
+updated_at = 1789111971
 weight = 0.0
 issue_number = 509
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/509"

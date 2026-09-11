@@ -22642,3 +22642,59 @@ updated_at = 1789075692
 weight = 0.0
 issue_number = 535
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/535"
+
+[[task]]
+id = "0909c590"
+title = "stop-verify-worktree の git status probe が並行 workspace build の負荷下で timeout し block する (負荷依存の非決定 Stop ゲート)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "p1",
+]
+status = "pending"
+notes = """
+実測 2026-09-11、測定点 27839b28 (rollout 実行中のセッション 3365f18c)。
+
+scripts/stop-verify-worktree.py が Stop 時に次を出して block した (逐語):
+
+    Do not stop yet: could not determine whether this turn is ending dirty on main.
+    Failed probe: git status --porcelain
+    A check that could not run has not passed (CLAUDE.md 3), so this resolves to a
+    block rather than an allow.
+
+このとき並行して scripts/rollout-plugins.sh --canary が cargo build --release
+--workspace --bins (39 crate) と plugin cache への rsync を WSL2 /mnt/c (9p 経由の
+Windows ボリューム) 上で走らせていた。同じ Stop hook の数十秒後、負荷が落ちた状態で
+git status --porcelain を手で叩くと exit 0 で即座に応答した ( M .backlog/tasks.toml /
+ M Cargo.lock を返した)。_git() の timeout は 15 秒 (stop-verify-worktree.py:47)。
+
+判定不能を block に倒すのは CLAUDE.md 第3節どおり正しい。問題は「判定不能になった
+原因が負荷であって、ツリーの状態ではない」点。
+
+2つの読みがあり、どちらか確定していない:
+ (a) 実在の欠陥 — 15 秒の timeout が /mnt/c + 並行 workspace build の下では短すぎ、
+     ツリーが実際には判定可能なのに block する。Stop ゲートが負荷に依存して
+     非決定的になる。
+ (b) 意図的な仕様 — fail-closed は設計どおりで、stop_hook_active による bounded
+     allow (2回目の Stop は通る) がコストの上限を押さえているので、timeout を
+     延ばすと今度は「本当に git が壊れている」ケースの検出が遅れる。
+
+見分ける方法 (どちらかに決着させる観測):
+ 1. cargo build --release --workspace を走らせながら、同 repo で
+    git status --porcelain の wall time を 50 回測る。
+ 2. p99 が 15 秒を超えるなら (a) が確定 = timeout が原因。その場合の是正は timeout
+    延長ではなく、timeout と他の判定不能を区別して別 slug で報告すること
+    (「負荷で測れなかった」と「git が壊れている」を同じ出力に写さない —
+    第3節の二値潰しと同じ構造の問題)。
+ 3. p99 が 15 秒を大きく下回るなら (a) は棄却され、probe が落ちた原因は timeout では
+    ない (fork 失敗 / index.lock 競合等)。原因を別途特定する。「たぶん負荷だろう」で
+    閉じてはいけない — それが第2節の禁じる判断。
+
+関連: このゲート自身が「判定不能 = block」の正しい実装例なので、直すのは判定の向き
+ではなく判定不能の原因の切り分け粒度である。"""
+created_at = 1789113312
+updated_at = 1789113312
+weight = 0.0
+issue_number = 536
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/536"

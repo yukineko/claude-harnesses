@@ -22642,3 +22642,68 @@ updated_at = 1789075692
 weight = 0.0
 issue_number = 535
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/535"
+
+[[task]]
+id = "d55f406a"
+title = "gate-bypass ledger が pre-commit green の merge commit を ungated として記録した (再現せず・機構は判定不能)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+観測 2026-09-11、測定点 27839b28。
+
+【事実】
+main のツリーで .backlog/tasks.toml の conflict を解決して merge commit
+27839b28 を作った。pre-commit は走って green だった (injectguard /
+fail-open-guard / hardcoded-secret-guard の clean 行を確認)。にもかかわらず
+post-commit が .git/gate-bypassed に 27839b28 を ungated として追記した。
+
+さらに時系列が食い違っている:
+  1. commit 直後の git push origin main は SUCCEEDED (69ffeabd..27839b28)
+     remote にも 27839b28 が入っている (git ls-remote で確認)
+  2. その後の git push origin main は pre-push が BLOCKED した
+  3. gate-bypass.py の終了コードは正しい (引数なし=1、--json=1、--status=2)
+  4. .githooks/pre-push:71-87 のチェック自体も正しく、非0を block に写している
+
+post-commit は同期実行で backgrounding は無い (.githooks/post-commit を通読)。
+したがって「commit -> ledger 追記 -> push」の順なら 1 は block されるはずで、
+1 と 2 が両立しない。どちらかの前提が誤っている。
+
+【再現を試みた -- 再現しなかった】
+scripts/test_gate_bypass.py の GateHarness で実フックを使い、捨て repo に対し
+2 アーム測定した (.scratch/probe_merge_ledger.py):
+
+  clean-merge  conflicted=False scanners=56 ledger_entries=0
+  conflicted   conflicted=True  scanners=14 ledger_entries=0
+
+conflict を解決した merge commit は ledger に入らなかった。つまり
+「merge の形が原因」という当初の仮説は falsified である。27839b28 の
+entry の原因は判定不能 (undetermined) のままにする -- 気に入った筋書きを
+事実として書かない。
+
+なお probe の第1版は harness の commit() が何も stage しない (git add 無し・
+check=False) ことに気づかず空コミットを測っていて、conflicted=False を返して
+いた。実行件数と HEAD の増加を assert するチェックを入れて修正した。
+これも「何も検証していないテストは常に通る」の実例。
+
+【なぜ重要か】
+これが false positive なら、正当な merge をしただけで push が止まり、
+CLAUDE.md 第5節が禁じる共有 skip ファイルや --no-verify への構造的圧力になる。
+逆に false negative (1 で push が通った) 側なら、ungated commit が
+remote に出るのを止められていないことになり、こちらの方が重い。
+どちらなのかが確定していないこと自体が問題である。
+
+【完了条件】
+27839b28 の entry がどの経路で書かれたかを、判断ではなく観測で特定する。
+具体的には (a) pre-commit が sentinel を書かずに exit 0 する経路があるか
+(.githooks/pre-commit:338-343 の git write-tree 失敗時など)、
+(b) 並行セッションの pre-commit が共有 ledger を触ったのか、
+(c) push と post-commit の実際の順序、を切り分ける。
+既知の類縁: --amend は必ず ledger に入る (.githooks/pre-commit:333-336 が
+自認する false positive)。本件がその同類かどうかも未確定。"""
+created_at = 1789123819
+updated_at = 1789123819
+weight = 0.0
+issue_number = 543
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/543"

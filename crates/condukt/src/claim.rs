@@ -155,9 +155,14 @@ fn all_skipped_project_undetermined(idents: &[String], why: &str) -> ClaimOutcom
 /// racing `condukt state claim-task` processes essentially never interleave in
 /// it by chance — a concurrency regression test needs a deterministic way to
 /// force the interleave inside the [`RunLock`]-held critical section. No-op
-/// unless `CONDUKT_TEST_CLAIM_DELAY_MS` is set (never set outside the
-/// `run_lock_concurrency` integration test), so production behavior is
-/// unchanged. Mirrors `overwatch::lease::artificial_race_delay`.
+/// unless `CONDUKT_TEST_CLAIM_DELAY_MS` is set, so production behavior is
+/// unchanged. As of condukt 0.7.162 exactly two integration tests set it:
+/// `run_lock_concurrency` (150ms) and `claim_worktree_scope`'s
+/// `p5_claim_from_main_tree_contends_on_the_same_claims_lock_as_the_linked_worktree`
+/// (14000ms). Grep before asserting the list is still complete — the previous
+/// wording claimed the var was "never set outside the `run_lock_concurrency`
+/// integration test" and was already false when the second setter landed.
+/// Mirrors `overwatch::lease::artificial_race_delay`.
 fn artificial_race_delay() {
     if let Some(ms) = std::env::var("CONDUKT_TEST_CLAIM_DELAY_MS")
         .ok()

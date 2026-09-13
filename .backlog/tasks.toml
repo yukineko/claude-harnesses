@@ -6730,7 +6730,7 @@ touched_files = []
 status = "pending"
 notes = "e19d501a の作業中に cargo test --workspace を4回回したうち1回で失敗 (2035 passed / 1 failed)。他3回と、隔離/直列での11回連続実行では pass。失敗させた変更は backlog/autoflow/daily/flow のみで condukt はそれらに依存しないため、condukt のテストバイナリは差分の有無で同一。したがって原因は変更ではなくマシン負荷への感度である。完了条件: 負荷を掛けた状態で決定論的に再現させ、テストが実時間のタイミングに依存しているのか lock 実装側にレースがあるのかを事実として切り分けること。落ちるのを見なかったことにしない。テストを緩める・retry でごまかすのは不可。"
 created_at = 1784755092
-updated_at = 1789306177
+updated_at = 1789306489
 weight = 0.0
 issue_number = 323
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/323"
@@ -6771,7 +6771,7 @@ touched_files = []
 status = "pending"
 notes = "実測 (2026-07-24): 他ジョブで CPU 飽和中に cargo test --workspace を3回回すと 3/3 で compass::tests::compass_invocation_faster_than_timeout_still_returns_output が落ちた (exit 101)。無負荷の CI (ubuntu/macos) では同テストは ok。これは compass 呼び出しが timeout 前に返ることを assert する速度依存テストで、マシン負荷でプロセス起動が遅れると閾値を超えて落ちる。condukt の repo_primary_lock_serializes_concurrent_rmw_no_lost_update (35d61d23) と同じ負荷依存クラス (こちらは isolated 30/30 pass で再現せず)。判定がマシン速度に依存する検査は非決定論ゲートで、緑/赤が環境で変わる。完了条件: これら timeout/並行テストの閾値を負荷耐性のある形にするか、負荷下でも決定論になるよう設計し直し、負荷を掛けた状態で決定的に緑を観測する。"
 created_at = 1784832249
-updated_at = 1789306177
+updated_at = 1789306493
 weight = 0.0
 issue_number = 324
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/324"
@@ -7569,10 +7569,10 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "claimed"
 notes = "scout 2026-07-25 (score 1.05). 証拠: crates/condukt/hooks/hooks.json は SessionStart / Stop / PostToolUse のみで SubagentStop の項目が無い (全文27行)。同イベントの実使用が crates/context-governor/hooks/hooks.json:40 と crates/context-governor/src/bin/context-governor.rs:123 にあり、in-repo で裏付け済み。hook が子のループ内でも発火することは crates/condukt/agents/condukt-worker.md:5-11 の PostToolUse 宣言が裏付ける。完了条件: SubagentStop 発火時に該当 running タスクの last_seen が更新され、以後 TTL 判定がその時刻を基準に動く。ツール呼び出し 0 件の子をブロックする経路も統合テストで通る。"
 created_at = 1784916599
-updated_at = 1784916599
+updated_at = 1789306494
 weight = 0.0
 issue_number = 52
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/52"
@@ -7589,10 +7589,10 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "claimed"
 notes = "scout 2026-07-25 (score 0.90). 証拠: crates/harness-core/src/usage.rs:370 の ingest(&mut agg, &text, Some(AGENT_SUB), false, false); と usage.rs:215 の track_ts: update first_ts/last_ts (only the main transcript should)。gauge の出力フィールドは crates/gauge/src/main.rs:480-487 で agent_id/agent_type/description/cost_usd/turns/tokens のみで時刻なし。セッション単位には crates/gauge/src/main.rs:540 の fn duration_secs が既にある。実測 2026-07-25 03:01-03:03 (本セッション自身が対象、6サンプル x 20秒): 稼働中の子は idle 0-57秒、終了済みの子は idle 2287-2387秒で2桁差。ただし生きている子でも delta=0 の瞬間があるため単一サンプルの閾値は誤検知する。完了条件: gauge subagents --json の各要素に last_activity_at / first_activity_at / elapsed_secs が入り、実行中に呼ぶと単調増加することをテストで確認できる。"
 created_at = 1784916600
-updated_at = 1784916600
+updated_at = 1789306494
 weight = 0.0
 issue_number = 53
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/53"
@@ -7609,10 +7609,10 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "claimed"
 notes = "scout 2026-07-25 (score 0.80). 証拠1: crates/condukt/src/circuit.rs:154-160 の .and_then(max_updated_at).map(...).unwrap_or(0) により idle_secs が 0 = たった今進捗した に潰れ、非トリップ側に倒れる。すぐ隣の duration_secs は正しく None を返す (crates/condukt/src/state.rs:1265) ので扱いが非対称。証拠2: crates/condukt/src/state.rs:1360 の cost_usd: ts.cost_usd.unwrap_or(0.0)。証拠3: crates/overwatch/src/aggregate.rs:210-217 の .and_then(|s| s.trim().parse::<usize>().ok()).unwrap_or(0) により done/total の parse 失敗が 0/0 になり、0/0 の run と読めなかった run が同じ表示になる (crates/overwatch/src/render.rs:138-142)。完了条件: idle_secs を null か unknown として出し 0 と区別可能にする。cost 未計測時も 0.0 を捏造しない。overwatch の進捗欄が parse 不能時に ?/? 等の未計測表記になる。"
 created_at = 1784916601
-updated_at = 1784916601
+updated_at = 1789306494
 weight = 0.0
 issue_number = 54
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/54"
@@ -24929,10 +24929,10 @@ tags = [
     "condukt",
 ]
 touched_files = []
-status = "pending"
+status = "claimed"
 notes = "測定点 branch batch5-d83b0e8f ff985fac / 2026-09-13. d83b0e8f (claim registry) の調査項目として実測した確定の欠陥。読みは 1 つしかない (判定不能ではない)。機構: acquire_repo_primary(cfg, repo) は RunLock::acquire_or_skip 経由で lock_path に入り、lock_path は project_key(repo_root(cwd)) でキーを作る。呼び出し側が渡す repo は crates/condukt/src/worktree.rs:238 の toplevel(cwd) すなわち git rev-parse --show-toplevel であり、linked worktree では worktree 自身を返す。実測: from main tree が pp2/main、from linked wt が pp2/wt1。ランタイム確認 (condukt worktree reconcile が当該ロックを取る): 手順1 linked worktree から実行すると project dir は wt1-d22e03ed のみ。手順2 main tree から実行すると main-8fe192a0 と wt1-d22e03ed の 2 つ。手順3 main tree のディレクトリに live pid の __repo_primary__.lock を置いた状態で linked worktree から実行すると exit=0 で素通り (直列化されない)。手順4 は反証防止の control で、同じロックを linked worktree 自身のディレクトリに置いて同じ場所から実行すると exit=1 になり contended のメッセージが出る。したがってプローブは識別力を持っており手順3の素通りは本物。手順5 その worktree ロックを保持したまま main tree から実行すると exit=0 で素通り。影響: CLAUDE.md 第8節は全セッションが linked worktree で作業することを絶対義務としているので、共有 git index と default branch と worktree admin を変更する 2 プロセスは必ず別ロックになり決して競合しない。ロックが守るはずのものを守っていない。影響箇所: crates/condukt/src/main.rs:3258 と :3288 と :3318、crates/condukt/src/worktree.rs:645 と :894 と :1053 (worktree merge の checkout-default-branch + merge のクリティカルセクションを含む)。修正方向: d83b0e8f で claim registry に入れたのと同じ手当て、すなわち harness_core::projkey::main_worktree_root で解決した project root を使う lock_path_in_project 系を repo-primary にも適用する。両者は同型なので同じ道具が使える。関連 d83b0e8f 43393ce2"
 created_at = 1789292612
-updated_at = 1789306177
+updated_at = 1789306485
 weight = 0.0
 issue_number = 605
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/605"
@@ -25207,7 +25207,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
 touched_files = []
-status = "pending"
+status = "claimed"
 notes = """
 compass charter の ONE（2026-09-13 の人間裁定で north_star の射程に入れた状態解決軸、測定点 c1706736）。
 
@@ -25232,7 +25232,7 @@ CLAUDE.md 2.(a): 利害のない agent が RED を先に観測してから GREEN
 right_size: m。
 これを閉じるまで 2d3cbda2（worktree/branch GC）と 5daf0b60（abandon --all-stuck）には着手しない — 共有 claim registry が worktree から見えないまま GC を書くと、生きている作業を dead と判定して削除する側へ倒れる。"""
 created_at = 1789292392
-updated_at = 1789306177
+updated_at = 1789306485
 weight = 0.0
 issue_number = 604
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/604"
@@ -25721,7 +25721,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
 touched_files = []
-status = "pending"
+status = "claimed"
 notes = """
 実測 2026-09-13、測定点 c39701bc、rollout 直後（overwatch は harness-core 0.2.24 で再ビルド済み）。
 
@@ -25744,7 +25744,7 @@ notes = """
 
 関連: d83b0e8f (claim registry の worktree 分裂、本日 landed) / 43393ce2 (run-state も分裂) / bcfc5491 (repo_primary ロックも分裂) / 2c1e54b3 (消費者列挙の ONE)。"""
 created_at = 1789297114
-updated_at = 1789297114
+updated_at = 1789306485
 weight = 0.0
 issue_number = 628
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/628"

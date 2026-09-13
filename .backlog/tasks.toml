@@ -6738,10 +6738,10 @@ tags = [
     "scout",
     "p1",
 ]
-status = "claimed"
+status = "pending"
 notes = "問題: 現行の record 型は成果物(backlog/code)を別フォーマットで再掲しがちで、限界情報量が低い。実例 2026-07-24-harness-d52fbfce.md 旧版は完了サマリ/残課題/関連が 11 個の ID と evidence(path:line)を並べ直しただけで、backlog notes と重複していた。また (1)このセッション最大の価値=ユーザーによる停止契約の3手の認知修正弧が最終5項に平板化され sequence と各修正の why が失われた (2)つまずきが道具の話に留まり認知の側(『止まらない』をリテラルに取りすぎた)が書かれない (3)自己批判/確信度較正(goal_proximity を勘で振った信頼性・L2/L3 省略の妥当性)の軸が型に無い。 / 範例: 同ノートを本セッションでメタ認知版へ書き直し済み(認知の修正弧を物語化・つまずきを認知の側へ・自己批判を要追跡へ・ID 列はポインタ化)。この before/after が改善の参照見本。 / 完了条件: session-insights の record skill(SKILL.md)と distill subagent プロンプトを更新し、(a)『認知の変化/修正された理解』セクション(初期モデル→各修正→各修正が塞いだ失敗モード)を型に追加、(b)『自己批判/確信度』セクション(最も確信の低い判断・次はこうする)を追加、(c)distill プロンプトに『backlog/code を複製せず、そこに書けない推論・修正・較正を書く。ID/evidence はポインタに畳む』を明示、(d)書き直した 2026-07-24 ノートを参照見本として docs か skill に紐づけ。skill を触るので session-insights の version を micro bump(3ファイル lockstep)し rollout する。 / 参考: AEGIS メタ認知フレーム(ユーザー提供予定の doc。現状 /Users/yuki/src/AEGIS-Meta-Cognition-Complete.md は未発見)を materials に取り込めれば反映する"
 created_at = 1784836915
-updated_at = 1789274304
+updated_at = 1789277948
 weight = 0.0
 issue_number = 332
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/332"
@@ -6823,10 +6823,10 @@ tags = [
     "autonomy",
     "p1",
 ]
-status = "claimed"
+status = "pending"
 notes = "0.7.108 で decide_untestable + --untestable フラグ(Auto→Escalate clamp, 不変条件テスト autonomy_invariant.rs)を追加済み(903a0d28)。残: 各 skill の §2 untestable 脱出ハッチ(『テストが書けない→AskUserQuestion』)を、自律モードで condukt policy answer に掛けるときは必ず --untestable を付ける配線。現状 CLAUDE.md §2 は『policy answer に掛けるなら escalate 相当』と要求するが、フラグ未指定だと通常 decide にかかり auto 自答され得る。crates/condukt/skills, crates/flow/skills, crates/scout/skills の該当ゲート記述を --untestable 付きに更新。F→P はスキル文言なので kind:chore + 観測可能層でのテスト。"
 created_at = 1784909592
-updated_at = 1789274304
+updated_at = 1789277948
 weight = 0.0
 issue_number = 30
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/30"

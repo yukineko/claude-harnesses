@@ -6507,10 +6507,10 @@ tags = [
     "autonomy",
     "p1",
 ]
-status = "claimed"
+status = "done"
 notes = "継続自律には condukt スイッチ・autoflow の継続挙動・ctxrot の distill/auto-compact が全て on かつ協調している必要があるが、今は CONDUKT_AUTONOMOUS(condukt)/autoflow の cap(autonomy フィールド無し)/ctxrot の auto_distill_on_band・auto_compact_enabled(独立 bool)の3系統。片方 on にしても停止する。 / 証拠: docs/USAGE.md:25、ctxrot/src/config.rs:131 auto_distill_on_band と :141 auto_compact_enabled、autoflow は autonomy を読まない / 完了条件: autoflow・ctxrot・flow/condukt/scout skills が読む単一スイッチ(例 condukt state autonomy-set on)で、on にすれば全層が一貫して keep-executing になる"
 created_at = 1784835986
-updated_at = 1789290467
+updated_at = 1789296822
 weight = 0.0
 issue_number = 325
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/325"
@@ -7085,10 +7085,10 @@ tags = [
     "subagent-liveness",
     "p1",
 ]
-status = "claimed"
+status = "done"
 notes = "scout 2026-07-25 (score 1.91). 証拠: crates/condukt/src/state.rs:936-937 の .filter(|t| t.updated_at.map(|ts| ts < threshold).unwrap_or(false))。docstring (state.rs:930-931) は absence of evidence is not evidence of being stuck と述べるが、実効は判定不能を正常稼働に写している。さらに crates/condukt/src/main.rs:3927 の t.updated_at = None; により abandon 自身がこの不可視状態を再生産する。完了条件: Determination を返す三値になり、CLI が undetermined_tasks を非空で表示し exit code か outcome で clean でないことを下流に伝える。"
 created_at = 1784916592
-updated_at = 1789290467
+updated_at = 1789296822
 weight = 0.0
 issue_number = 46
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/46"
@@ -23685,10 +23685,10 @@ title = "condukt の task-claim registry が worktree ごとに別ストアに�
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
-status = "claimed"
+status = "done"
 notes = "測定点 main d0c4adc1 / 2026-09-13 17:30 JST. 同一秒に同一 hashkey を 2 つの cwd から問い合わせた実測: cwd=/Users/yuki/src/harness では claimed true holder_run flow-79d79a35-3490-4bbd-9bb4-d501e749e65d、cwd=/Users/yuki/src/.harness-worktrees/session-79d79a35 では claimed false holder_run null。3 hashkey (ae82040f705734f4 6d68148f89c73fa5 11a1e1bfe1878e1a) すべてで同じ。ディスク上も 2 ストアに分かれている: /Users/yuki/.condukt/state/harness-e77d23c7/claims.json は task_claims を 12 件持ち、/Users/yuki/.condukt/state/session-79d79a35-4f9872cd/claims.json は別実体。原因の読み: crates/condukt/src/store.rs は harness_core::projkey::repo_root を再輸出しており、crates/harness-core/src/projkey.rs の 50 行目から 61 行目の repo_root は cur.join(.git).exists() が真になる最初の祖先を返す。linked worktree では .git はディレクトリではなくファイルだが exists は真なので worktree 自身が返り、project_key が main と別になる。同じ state.rs の 980 行目は crate::worktree::toplevel(cwd).unwrap_or_else(repo_root) を使っており worktree 対応の解決が既に存在するのに、claim 経路はそれを使っていない。影響: CLAUDE.md 第8節は作業を worktree で行うことを絶対義務としているため、worker が claim を問い合わせる場所は必ず worktree であり、そこでは常に claimed false が返る。つまりクロスセッション二重着手の最終ガードは、作業が行われる唯一の場所で構造的に盲目である。判定不能ではなく誤った clean を返す点で第3節にも反する。読み 1 (実在の欠陥): claim の project_key は main の toplevel で解決すべきで、worktree ごとに分離するのは誤り。読み 2 (意図どおり): claim は worktree 単位のリソース排他であり分離が仕様。見分け方: crates/condukt/src/claim.rs の doc comment と autonomy_invariant のテストが cross-session という語で何を指しているかを読む。cross-session を名乗るなら読み 1。関連: memory の trust store misses harness-worktrees と同型 (型の封印が、作業が要求される場所でだけ効いていない)"
 created_at = 1789289857
-updated_at = 1789290467
+updated_at = 1789296821
 weight = 0.0
 issue_number = 587
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/587"

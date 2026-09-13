@@ -286,9 +286,25 @@ fn all_stuck_does_not_abandon_a_task_whose_worktree_is_unreadable() {
     );
 
     let a1 = fx.condukt(&["state", "abandon", "--run", &rid, "--all-stuck"]);
-    assert!(a1.status.success(), "abandon #1 failed: {a1:?}");
+    assert_eq!(
+        a1.status.code(),
+        Some(3),
+        "abandon #1: a durable progress signal that cannot be READ is \
+         UNOBSERVABLE — neither stuck nor healthy — so `--all-stuck` must \
+         REPORT it and exit 3, while still not abandoning the task. Exit 0 \
+         here is the silent `nothing to abandon` a caller reads as \
+         'all clear' (CLAUDE.md §1/§3), i.e. the fail-open this gate exists \
+         to kill. abandon #1 was: {a1:?}"
+    );
     let a2 = fx.condukt(&["state", "abandon", "--run", &rid, "--all-stuck"]);
-    assert!(a2.status.success(), "abandon #2 failed: {a2:?}");
+    assert_eq!(
+        a2.status.code(),
+        Some(3),
+        "abandon #2: the second observation does not make an unreadable \
+         signal readable — the task is still UNOBSERVABLE, so `--all-stuck` \
+         must again report it and exit 3, and still not abandon it. \
+         abandon #2 was: {a2:?}"
+    );
 
     let t = fx.task(&rid, "t1");
     assert_eq!(

@@ -24291,3 +24291,42 @@ updated_at = 1789293287
 weight = 0.0
 issue_number = 613
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/613"
+
+[[task]]
+id = "d65110df"
+title = "abandon --all-stuck: dirty-veto の判定不能が exit 3 にならず、三値 scan_stuck と終了ステータスが割れている"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "condukt",
+    "p1",
+]
+status = "pending"
+notes = """
+実測 2026-09-13、測定点 bc989543 (t5 統合直後)。二つの独立した変更が同じ run で main へ landed した結果、「判定不能」の扱いが経路によって割れている。
+
+(1) 0791722b (backlog b637936f) が stuck スキャンを三値化した。state.rs::scan_stuck は Running task を stuck / healthy / undetermined に分け、undetermined のうち Undetermination::Unobservable が一つでもあれば state abandon --all-stuck は exit 3 で終わる。「判定できなかった」を exit 0 の沈黙に写さないためのもの。
+
+(2) その直後に統合した 5daf0b60 (t5) の uncommitted-work veto は、確定した Known(Stalled) であっても worktree が dirty または読めない場合に task を KEEP する。KEEP の理由は stderr に逐語で出るが、StuckScan のどちらのリストにも入らない。したがって has_unobservable() は false のままで、exit code は 0 になる。
+
+つまり同じ「判定不能」でも:
+  worktree HEAD が読めない  -> undetermined/Unobservable -> exit 3
+  worktree の dirtiness が読めない -> stderr のみ      -> exit 0
+
+abandon の可否についてはどちらも制限側 (KEEP) に倒れているので fail-open ではない。割れているのは下流へ渡す終了ステータスであり、スクリプトから見ると後者は「クリーンなスキャンだった」と読める。CLAUDE.md 3: 「検査した」と「検査できなかった」を下流から区別不能にしてはならない。
+
+現在の契約を固定しているテスト: crates/condukt/tests/abandon_dirty_guard.rs の helper abandon_all_stuck_twice が assert 二つで status.success() を要求している (行 242/244)。これは「dirty veto が効いた run は exit 0」を pin している。ただしこの assert は helper 内の前提条件であって、テストが自分の doc comment で名乗っている性質 (task が abandon されない) ではない。main 側には同種の再アンカー前例がある (0.7.159 が abandon_progress_gate_e2e の status.success() 二行を exit==3 へ張り直した。marketplace.json の condukt エントリに逐語で残っている)。
+
+完了条件 (利害のない agent が RED を先に観測すること、CLAUDE.md 2):
+  a. uncommitted_work_keep_reason が Determination を返す形のまま、Undetermined の読み (Err、worktree 未記録) を StuckScan.undetermined へ Unobservable として載せる。
+  b. Known(Some(reason)) = 観測できた dirty は undetermined ではない (worker は生きていると判定できている) ので、載せない。この非対称を doc に書く。
+  c. abandon_dirty_guard.rs の cannot-determine ケースの exit code を 3 に張り直し、dirty ケースは 0 のままであることを対照として同時に pin する。
+  d. どちらのケースも stderr の veto 行が消えないことを併せて確認する。
+
+起票者は本件を統合中に作り込んだ当人 (t5 のマージ実施者) であり、同一セッションで実装と検証を兼ねないために作業ではなく起票として残す。"""
+created_at = 1789294567
+updated_at = 1789294567
+weight = 0.0
+issue_number = 617
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/617"

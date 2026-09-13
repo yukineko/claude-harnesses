@@ -23067,3 +23067,17 @@ updated_at = 1789274268
 weight = 0.0
 issue_number = 554
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/554"
+
+[[task]]
+id = "c867ff8e"
+title = "overwatch rollback_cli::record_finding docstring still documents a None (Option) branch that the signature no longer has"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "b9f43028 changed verdict from Option<str> to a required str at the CLI layer (main.rs Command::RecordFinding.verdict: String) and correspondingly rollback_cli::record_finding(verdict: and str) is called with verdict.as_deref never applicable (main.rs passes and verdict directly, always Some in spirit). But the docstring on rollback_cli::record_finding (crates/overwatch/src/rollback_cli.rs around line 64) still reads quote star Some(raw) parsed by AuditVerdict::parse... star None the caller stated no verdict. Reads as Confirmed, preserving the pre tri state ingestion contract unquote. There is no call path left that passes None into this function (the only caller is main.rs which always passes a str derived from a required clap arg), so this docstring describes an unreachable branch as if it were live behavior. This is exactly the CLAUDE.md section 4 shape (docstring asserting something the implementation does not do) though the risk direction here is documentation drift rather than fail open: a future reader could mistakenly believe omitting verdict is still silently accepted by this function. Distinct from backlog 7f07228e (the store::record_finding library path hardcoding Confirmed) though related in the same commit family. To confirm: read crates/overwatch/src/rollback_cli.rs fn record_finding signature (verdict: and str, non Option) versus its doc comment two bullets above it. To refute: check whether some other caller still passes an Option-shaped None into this exact function (grep call sites of rollback_cli::record_finding); if one exists the doc is accurate and this ticket is wrong."
+created_at = 1789274840
+updated_at = 1789274840
+weight = 0.0
+issue_number = 559
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/559"

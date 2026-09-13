@@ -26012,3 +26012,100 @@ updated_at = 1789306451
 weight = 0.0
 issue_number = 633
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/633"
+
+[[task]]
+id = "d69f4b23"
+title = "check-plugin-rollout の mirror 判定が untracked なローカル build 成果物を source of truth にしている (tdd が恒常 red)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+測定 2026-09-13 22:40 JST、測定点 main=55e6e195。
+
+観測（すべて実測、逐語）:
+- SessionStart hook が毎回 ROLLOUT DRIFT を出す: "tdd: deployed tree is not a mirror of crates/tdd — 1 deployed file(s) differ from source: bin/tdd-darwin-arm64"。提示される fix は "scripts/rollout-plugins.sh --plugin tdd --force"。
+- crates/tdd/bin/ の中身: tdd (4044 bytes, launcher) と tdd-darwin-arm64 (1852304 bytes)。
+- git ls-files crates/tdd/bin/ が返すのは bin/tdd のみ。つまり tdd-darwin-arm64 は UNTRACKED。
+- deployed 側 (~/.claude/plugins/cache/yukineko/tdd/0.1.29 と 0.1.32 の両方) は 1852288 bytes、sha256 先頭 b4d460a233ef9b02。source 側は 1852304 bytes、a6a5127790d964f5。
+- mtime: source=2026-09-13 14:49、deployed=22:35。deploy 元 commit 876073eb の commit 時刻は 22:31。つまり deployed のほうが NEWER で、source 側の untracked 成果物が STALE。
+- .deployed-from.json は両 dir とも commit 876073eb / dirty false / harness_core 0.2.24。provenance 上は健全。
+- crates/*/bin/*-darwin-arm64 は repo 全体で 1 個だけ（この tdd のみ）。41 plugin 中 tdd だけが source bin/ に host binary を抱えている。
+- rebuild-plugins.sh:313 のコメントは "only 2 of 39 plugins actually carry a staged crates/<name>/bin/<base>" と書いており、staged な成果物は --stage-repo 経由で入る建前。この tdd の 1 本は untracked なので、その sanctioned path を通っていない。
+
+2 つの読み:
+(a) 実在の欠陥 — mirror 判定が git 管理外のワーキングツリー上のファイルを source of truth にしているため、判定が clone/CI で再現しない。しかも repo 自身の規範 deploy-provenance-not-hash（バイナリは sha256 でなく .deployed-from.json で検証する）に反して byte 比較している。提示される --force fix は 14:49 の古い成果物を配布し直す方向なので、red を消すどころか deployment を退行させうる。
+(b) 意図的な仕様 — crates/<c>/bin/<host binary> は staged 成果物として置かれる前提で、単にこの 1 本が古いだけ。正しい対処は rebuild-plugins.sh --stage-repo で staged 成果物を更新すること。
+
+見分ける方法: scripts/rollout-plugins.sh:469 は "$src/bin/$stem" の存在で deployed bin を protect / drop する分岐を持つ。この stray artifact を削除（または --stage-repo で更新）したうえで check-plugin-rollout.py を再実行し、(i) red が消えるなら (b)、(ii) 別の理由で red が残る / 他 plugin にも同種の red が出るなら (a)。
+
+注意: この stray artifact は 2026-09-13 の tdd 0.1.29 version dir 手動 seed（memory rollout-cannot-undark-running-session に記録）と時刻が近い。手 cp の副産物である可能性が高いが未確認。"""
+created_at = 1789306755
+updated_at = 1789306755
+weight = 0.0
+issue_number = 636
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/636"
+
+[[task]]
+id = "4d0cffee"
+title = "flow driver の task-claim が registry から消えているのに backlog 側は claimed のまま（heartbeat が 2 サイクル連続で refreshed 0）"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+測定 2026-09-13 22:35-22:42 JST、測定点 main=55e6e195、session 2444be10。
+
+観測:
+- 自セッションは batch 6 の 3 件 (e8c03e9e / 42ad4688 / 53c825f6) を claim して background agent に渡し、agent は今も走っている（condukt run-20260913-223733-78880 の file claim が heartbeat_at=1789306661 と数秒前）。
+- ところが condukt state heartbeat --run flow-2444be10-e07a-4c9a-a785-01f58d3995fa は 2 サイクル連続で "refreshed 0 claim(s)" を返す。
+- condukt state claims の task_claims に flow-2444be10 のエントリは 1 件も無い。他セッションのもの（flow-79d79a35, flow-25763e04, flow-b57a58c3 等）は残っている。
+- 一方 .backlog/tasks.toml 側では上記 3 件が status=claimed のまま。つまり「backlog は claimed、registry は無主」という乖離。
+
+先に否定した読み（記録として残す）: 「task_claims に heartbeat 経路が無いのでは」と疑ったが、crates/condukt/src/claim.rs:950 が
+    for c in reg.files.values_mut().chain(reg.task_claims.values_mut())
+と files と task_claims の両方を回しているので、heartbeat 経路の欠落ではない。この読みは REFUTED。
+
+残る 2 つの読み:
+(a) 実在の欠陥 — dispatch 時の condukt state claim-task が実際には登録に失敗していた（あるいは別の run_id で登録された）。exit code は fail-soft で握り潰される設計なので、登録できなくてもループは進む。その場合 registry には最初から入っていない。
+(b) 登録はされたが TTL で reap された — heartbeat が run_id 一致で絞るため、claim 時と heartbeat 時で run_id が食い違っていれば refresh されずに期限切れになる。
+
+見分ける方法: hashkey は backlog task.rs:208 の hashkey(title, project) で決定論的に再計算できる。同じ title/project で claim-task を打ち直し、直後に condukt state claims を見る。(i) 登録が現れれば (b)（元の登録が reap されたか run_id 不一致）、(ii) 登録が現れないのに exit 0 が返るなら (a)（fail-soft が登録失敗を隠している）。
+
+影響: 現在の多重着手ガードは backlog 側の status=claimed だけに縮退している。registry 側が空なので condukt state is-claimed は exit 1 を返し、「誰も持っていない」と読める。並行セッションが 4 本走っている状況では、この 2 層のうち 1 層が黙って落ちていることになる。"""
+created_at = 1789306765
+updated_at = 1789306765
+weight = 0.0
+issue_number = 637
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/637"
+
+[[task]]
+id = "dac6bf50"
+title = "負荷依存 flake (35d61d23 / 8c5d46fa) の検証プロトコルが未定義 — 静かなマシンでの green は修正の証拠にならない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+測定 2026-09-13 22:42 JST、測定点 main=55e6e195。
+
+観測: session 79d79a35 の condukt run-20260913-223004-15261 が t4-lockflake (35d61d23) と t5-compassflake (8c5d46fa) を、同 run の他タスク 3 本および別セッションの worker と同時並行で実行している（file claim の heartbeat_at=1789306631 で live）。同時に両 ticket は .backlog/tasks.toml 上では status=pending のまま。
+
+自分の以前の判断の訂正（記録として残す）: 自分はこの 2 件を「並列バッチの負荷が測定を汚染するので静かなマシンで直列に回すべき」として batch から外し pending に戻した。これは誤りを含む。両 ticket の主張は「CPU 負荷下でテストが赤くなる」であり、修正を検証したいなら負荷は汚染要因ではなく必要条件である。静かなマシンで green を観測しても、それは「負荷下で直った」の証拠にはならない — 元々静かなら赤くならないからである。したがって並行実行下での観測のほうが fix 検証としてはむしろ強い。
+
+本当に定義されていないのは検証プロトコルのほうである。必要なのは:
+- 再現条件の明示（同時に走らせる負荷の量と種類。何コアをどれだけ占有した状態か）
+- RED の事前観測（CLAUDE.md 2(b)）。修正前にその負荷条件で実際に落ちることを観測していなければ、修正後の green は何も証明しない。
+- 試行回数。flake は 1 回の green で閉じられない。何回連続 green なら通すのかを done_criteria に書く必要がある。
+
+現状の 2 ticket の done_criteria にはこのいずれも書かれていない。よって誰が回しても「通ったから直った」で閉じられてしまう。
+
+見分ける方法 / 次の一手: 両 ticket の done_criteria に上記 3 点（負荷条件・RED 事前観測・連続 green 回数）を追記する。追記せずに閉じられた場合、その close は測定ではなく判断である。"""
+created_at = 1789306777
+updated_at = 1789306777
+weight = 0.0
+issue_number = 638
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/638"

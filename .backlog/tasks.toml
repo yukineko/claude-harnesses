@@ -25393,9 +25393,34 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "測定日 2026-09-13、測定点 05962e2a。harness_core::projkey::repo_root は「.git を含む最も近い祖先」を返す (crates/harness-core/src/projkey.rs:50)。linked worktree では .git は FILE だが .exists() は真なので、repo_root(worktree) = worktree 自身になる。したがって project_key も worktree ごとに別キーになり、claims.json / run state が worktree 単位に分割される。実測: /Users/yuki/src/.harness-worktrees/session-2444be10 から condukt state init を実行したところ、state は /Users/yuki/.condukt/state/session-2444be10-d7db0410/ に作られた。repo 本体の正典ディレクトリは /Users/yuki/.condukt/state/harness-e77d23c7/ で、そこに既存の claims.json がある。帰結: CLAUDE.md 8 が全作業を worktree で行うことを絶対義務としている一方で、claim registry はセッションごとに別ファイルへ分岐するため、「別 session が同じファイルを占有中なら state set が skip する」というクロスセッション衝突ゲート (crates/condukt/src/claim.rs) が事実上どのセッションに対しても発火しない。ゲートは exit 0 を返し続けるので、下流からは「衝突が無かった」と「衝突を検査できる場所に居なかった」が区別できない = 3 の判定不能を clean に写す形。要検討: repo_root が linked worktree を common git dir (git rev-parse --git-common-dir の親) へ解決すべきか、それとも claims だけ別キーにすべきか。"
+notes = """
+測定日 2026-09-13、測定点 05962e2a。harness_core::projkey::repo_root は「.git を含む最も近い祖先」を返す (crates/harness-core/src/projkey.rs:50)。linked worktree では .git は FILE だが .exists() は真なので、repo_root(worktree) = worktree 自身になる。したがって project_key も worktree ごとに別キーになり、claims.json / run state が worktree 単位に分割される。実測: /Users/yuki/src/.harness-worktrees/session-2444be10 から condukt state init を実行したところ、state は /Users/yuki/.condukt/state/session-2444be10-d7db0410/ に作られた。repo 本体の正典ディレクトリは /Users/yuki/.condukt/state/harness-e77d23c7/ で、そこに既存の claims.json がある。帰結: CLAUDE.md 8 が全作業を worktree で行うことを絶対義務としている一方で、claim registry はセッションごとに別ファイルへ分岐するため、「別 session が同じファイルを占有中なら state set が skip する」というクロスセッション衝突ゲート (crates/condukt/src/claim.rs) が事実上どのセッションに対しても発火しない。ゲートは exit 0 を返し続けるので、下流からは「衝突が無かった」と「衝突を検査できる場所に居なかった」が区別できない = 3 の判定不能を clean に写す形。要検討: repo_root が linked worktree を common git dir (git rev-parse --git-common-dir の親) へ解決すべきか、それとも claims だけ別キーにすべきか。
+
+--- 検証 2026-09-13 (flow session 2444be10、測定点 main a5e6654e) ---
+batch5 の agent が「7816e5be は f677a41c が独立に直したので重複」と報告した。検証した結果、
+その報告は半分しか正しくない。重複として閉じてはいけない。
+
+観測:
+ (1) f677a41c は repo_root を変更していない。crates/harness-core/src/projkey.rs:50 は
+     今も「.git を含む最も近い祖先」のままで、linked worktree では .git が FILE でも
+     exists() が真なので worktree 自身を返す。この起票が書いている機構はそのまま残っている。
+ (2) f677a41c がしたのは main_worktree_root という別関数の追加であり、その docstring が
+     理由を明記している: repo_root を作り変えると run-state / precedent / autoflow の
+     既存ストアが一斉に移動して孤児化するので、repo 全体の同一性を必要とするストアだけが
+     opt-in する。より広い移行は backlog 43393ce2 として別管理、と書いてある。
+ (3) condukt の claim registry は実際に opt-in 済み。crates/condukt/src/claim.rs:253 が
+     harness_core::projkey::main_worktree_root(cwd) を呼んでいる。
+
+したがって切り分けはこうなる:
+ - この起票の「クロスセッション claim ゲートが構造的に無効化される」半分は CLOSED。
+ - 「project key が worktree ごとに分かれる」根本半分は OPEN で、43393ce2 と同じもの。
+   run state / precedent / autoflow のストアは今も worktree ごとに分裂している
+   (実測: ~/.condukt/state/session-2444be10-d7db0410 と ~/.condukt/state/harness-e77d23c7 が併存)。
+
+教訓 (CLAUDE.md 6): この「重複だから落としてよい」という報告を無検証で受け入れていたら、
+まだ直っていない根本半分が閉じられていた。批判・棄却も発見と同じ立証責任で検査する。"""
 created_at = 1789291703
-updated_at = 1789291703
+updated_at = 1789306364
 weight = 0.0
 issue_number = 597
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/597"

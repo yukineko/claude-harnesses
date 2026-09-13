@@ -1,5 +1,3 @@
-
-
 [[task]]
 id = "0ba79281"
 title = 'CLAUDE.md: Windows で成立しない cargo 手順 (. "$HOME/.cargo/env") を直す'
@@ -25926,3 +25924,60 @@ updated_at = 1789297068
 weight = 0.0
 issue_number = 626
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/626"
+
+[[task]]
+id = "29b08fc7"
+title = "guard-maintree-bash.py が shell 変数代入と scratchpad への redirect を main ツリー変更として誤検知する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+OBSERVED 2026-09-13、flow session 2444be10。2 回連続で誤検知に当たった。
+
+1 回目に拒否されたコマンド (要旨):
+  cd /Users/yuki/src/harness
+  git show <rev>:.backlog/tasks.toml > <scratchpad>/base.toml   ... など 3 本
+拒否理由: "cd /Users/yuki/src/harness mutates this project MAIN working tree"
+
+2 回目、cd を消して git -C に書き換え、出力先も scratchpad のままにしたところ、今度は
+  S=/private/tmp/claude-502/.../scratchpad
+という **shell 変数代入そのもの** が
+  "Refused: S=/private/... mutates this project MAIN working tree"
+として拒否された。
+
+なぜ誤検知か: どちらのコマンドも main のファイルを 1 バイトも書かない。redirect 先は
+すべて session scratchpad であり、git show は read-only。2 回目に至っては代入文であって
+コマンドですらない。マッチャが「main の repo パスらしき文字列が出現するか」で見ており、
+(a) 書き込み先がどこか (b) そもそも書き込みか、のどちらも見ていないように読める。
+
+なぜ害があるか: これは 9ec3609e (blastguard が値なしの git config を write 扱い) と
+同じクラスで、arity/方向を見ずにトークンだけで判定している。実害は 2 つある。
+ 1. 進行中の merge の conflict を解析するには、3 バージョンを取り出して比較する必要がある。
+    その解析は read-only なのに止まる。CLAUDE.md 8 は merge/conflict 解決を main で
+    行うことを明示的に許しているので、その作業を支える読み取りまで止めるのは過剰。
+ 2. 迂回が「別の綴りを試す」になりやすい。実際 1 回目の後に自分は綴りを変えて再試行し、
+    2 回目も拒否された。ゲートを緩めろという話ではなく、rewrite-until-it-passes の
+    反射を訓練してしまう形だという話 (ebd1359a と同じ懸念)。
+
+なお本体のゲート判定は正しく効いていることも観測した: 同じセッションで main への
+非 merge commit は main-tree-guard が実際に block し、merge 進行中の commit は
+"main-tree-guard: allowed — Merge in progress" として通した。つまり commit 経路の判定は
+正しい。問題は Bash PreToolUse 側の事前マッチャだけである。
+
+2 つの読みと見分け方:
+ (a) 純粋な誤検知 — マッチャが repo パス文字列の出現だけを見ている。見分け方: 代入文
+     だけの行や、redirect 先が scratchpad のコマンドを食わせて、書き込み先を解析して
+     いるかを確認する。
+ (b) 意図的に広く倒している — main パスに触れる形は全部 ask に寄せる設計。見分け方:
+     scratchpad 宛 redirect を許す例外がテストで固定されているかを見る。
+(b) であっても、代入文を「mutates」と表示するメッセージは誤りなので文言は直すべき。"""
+created_at = 1789306451
+updated_at = 1789306451
+weight = 0.0
+issue_number = 633
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/633"

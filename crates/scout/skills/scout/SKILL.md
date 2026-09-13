@@ -193,6 +193,34 @@ condukt state autonomy-check   # autonomous なら exit 0 + {"autonomous":true}�
   （黙って積まない）。安全側の不変:
   - `--dry-run` は autonomy でも**必ずここで停止**する（選別省略は「停止しない」ではない）。
   - `condukt` バイナリが無い / `answer` 未対応なら非 autonomous とみなし、従来どおり Ask を出す。
+  - **測れない決定には `--untestable` を付ける**（次項）。選別ゲートは可逆なので `--untestable` を
+    付けないが、施策の妥当性そのものが**測れない**と判明したゲートは別扱いになる。
+
+**測れない決定は自答しない（CLAUDE.md §2・`--untestable`）**
+
+施策の効果や前提が**観測で確かめられない**と判明した場合 — 効果測定の手段が無い、
+検証する術が環境的に存在しない、書いたテストが意味のある観測にならない — その判断を
+`policy answer` の通常経路に流してはならない。低 risk・可逆な施策は `decide` で **auto** に落ち、
+**「テスト不能なので判断で通した」という §2 最大の抜け穴**がそのまま開く。`--untestable` は
+`auto` を **`escalate` へ引き上げる上向き clamp** で、`--approval` の下向き clamp より**常に優先**する
+（`crates/condukt/tests/autonomy_invariant.rs` の `policy_answer_untestable_beats_approval` が
+binary 境界で機械検査する）:
+
+```bash
+OUT=$(condukt policy answer --untestable \
+        --risk "$RISK" --reversible "$REV" --confidence low \
+        --question "<何が測れないのか。なぜ測れないのか>" \
+        --option "<測らずに積む案>" --option "<測れる形に施策を切り直す案>" 2>/dev/null)
+case $? in
+  0) : ;;  # 到達しない（--untestable が auto を escalate へ clamp する）
+  2) : ;;  # escalate: AskUserQuestion で人間に投げる。何が測れないのかを添える
+  3) : ;;  # block: 積まない
+  *) : ;;  # 旧バイナリ / 不正入力 → 安全側 = AskUserQuestion
+esac
+```
+
+**測れないという事実こそ人間が知るべき情報**であり、それを表明して返すことは失敗ではなく成果である。
+迷ったら付ける — 付け忘れは判断の消失になるが、付けすぎは冗長な質問で済む。
 
 `--dry-run` ならここで停止し、提示だけで終了。
 

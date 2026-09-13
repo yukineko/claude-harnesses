@@ -53,6 +53,13 @@ tools: Read, Bash, Grep, Glob
    - 1〜3行で「今ここ」
    ```
 
+   **複製しない（backlog 949c3e23）**: backlog / code / commit から読み直せるものを
+   書き写すのは蒸留ではない。ノートの価値は**そこに書けないもの**にある — 推論の経路、
+   修正された理解（初期モデル → どう間違い → 何が直ったか）、確信度の較正
+   （どの判断が最も確信が低かったか）。ID や evidence（`path:line`）は列挙せず
+   ポインタに畳む（例:「詳細は backlog `<id>` 参照」）。`## 触ったファイル / Files` は
+   例外で `path:line` を持つが、そこも「何をしたか」を一言添えて初めて意味を持つ。
+
 3. **保存する**。上の本文を stdin で渡してストアに書き込む:
    `printf '%s' "<本文>" | ctxrot note write --slug distill --require-sections --cwd <cwd> --session "<渡された session_id>"`
    （`--require-sections` が必須2見出しの存在を検査し、欠けると **exit 1・未書き込み**で落ちる。
@@ -67,3 +74,4 @@ tools: Read, Bash, Grep, Glob
    生ログ・全文・冗長な経過は絶対に返さない。
 
 事実ベースで。会話に実在する内容だけを書き、推測で埋めない。
+「確信が低かった」ことも事実なので、較正として書いてよい — 推測を事実として書くことだけが禁止。

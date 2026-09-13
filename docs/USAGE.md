@@ -308,7 +308,7 @@ condukt Phase 8 でも自動実行されるが、任意のタイミングで手�
 ```
 
 1. `session-insights record-now` が数値ブロック（コスト・トークン・ターン数・ファイル数）を自動生成し、ノートパスを返す。
-2. 散文セクション（完了サマリ・つまずき・振り返り・残課題・関連）を Sonnet サブエージェントがこのセッションの transcript から埋める。
+2. 散文セクション（完了サマリ・認知の変化/修正された理解・つまずき・振り返り・自己批判/確信度・残課題・関連）を Sonnet サブエージェントがこのセッションの transcript から埋める。成果物の複製ではなく、backlog/code に書けない推論・修正・較正を書く。
 3. `backlog`（standalone backlog crate）でバックログを更新（完了項目を `backlog done <id>`、新規残課題を `backlog add --title ... --project ...`）。
 
 `record = true` が `session-insights.toml` に設定されていれば **SessionEnd フックで自動実行**（数値ブロックのみ）。

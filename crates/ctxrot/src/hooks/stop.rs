@@ -8,6 +8,23 @@
 //! percentage stays tiny while the budget meter is already "112%"; aligning here
 //! makes the nudge fire when it should.
 //!
+//! That divergence cuts both ways, so the raw model percentage IS read — not as
+//! the meter, but as a **veto on the block** (backlog `54c56d24`, human ruling
+//! 2026-09-13). A budget-meter crossing says the *budget* is spent; it says
+//! nothing about whether the real window is under pressure. When Claude Code's
+//! own `context_window.used_percentage` arrives and reads below
+//! `model_window_continue_below_percentage`, demanding `/compact` would
+//! interrupt the run over a false alarm, so this hook carries on instead. The
+//! durable-context half of "distill-and-continue" is NOT this hook's job: the
+//! guard's proactive `auto_distill_on_band` distill (`hooks::guard`) already
+//! externalizes the history on the same band crossing.
+//!
+//! The veto is restrictive by construction (CLAUDE.md §3): it requires a
+//! POSITIVE measurement. An absent `context_window`, an absent
+//! `used_percentage`, or a reading at/above the threshold all still block. There
+//! is deliberately no `unwrap_or` default standing in for a missing signal —
+//! "we could not measure the window" is not "the window is empty".
+//!
 //! never-break-a-turn / no turn-trap: blocking on Stop is BOUNDED. We nudge at
 //! most ONCE per band crossing (mirroring the guard's "advice once per band"),
 //! persisting the last-nudged band in `<state_dir>/<safe>.compact-band`. A second
@@ -24,8 +41,8 @@ use crate::hooks::guard::safe_session;
 
 /// Stop hook core: returns `(json, check_kind)` — `json` a
 /// `{"decision":"block","reason":"..."}` string — when the budget-meter usage
-/// crosses into a new band at/above the threshold, `None` to allow the
-/// session to end. `check_kind` is a stable short discriminator for
+/// crosses into a new band at/above the threshold AND the measured model window
+/// does not veto the block, `None` to allow the session to end. `check_kind` is a stable short discriminator for
 /// cross-gate correlated-error detection
 /// (`overwatch::violation::RawViolation::check_kind`), distinguishing the
 /// normal over-threshold block from the unmeasurable-transcript nudge.
@@ -91,6 +108,32 @@ pub fn run(input: &HookInput, cfg: &Config) -> Option<(String, &'static str)> {
                 .map(|json| (json, "unmeasurable-transcript"));
         }
         return None;
+    }
+
+    // The budget meter crossed a band — but the budget meter is not the model
+    // window (module docs), so a crossing alone is no evidence of window
+    // pressure. Claude Code's own `context_window.used_percentage` (raw
+    // 0.0–100.0, NOT the 0.0–1.0 scale `frac`/`threshold` use) is the only
+    // authoritative measurement of the real window. When it ARRIVES and reads
+    // below the continue threshold, demanding `/compact` would interrupt the run
+    // over a false alarm, so carry on instead.
+    //
+    // Restrictive by construction (CLAUDE.md §3): the veto needs a POSITIVE
+    // measurement. Absent `context_window`, absent `used_percentage`, or a
+    // reading at/above the threshold all fall through to the block below — no
+    // `unwrap_or` default stands in for the missing signal.
+    //
+    // Deliberately does NOT touch `state_file`: continuing is not nudging, so the
+    // band stays unconsumed and a later Stop at this same band whose measurement
+    // has gone absent still blocks.
+    if let Some(measured_pct) = input
+        .context_window
+        .as_ref()
+        .and_then(|cw| cw.used_percentage)
+    {
+        if measured_pct < cfg.model_window_continue_below_percentage {
+            return None;
+        }
     }
 
     // Record that we nudged at this band so the next Stop here does not re-block.
@@ -366,5 +409,133 @@ mod tests {
         // 0.80 → band 2 (higher) → re-fires.
         let t2 = write_transcript(base, 160_000);
         assert!(run(&input_for("s-climb", &t2, false), &cfg).is_some());
+    }
+
+    // ---- measured model-window gate (backlog 54c56d24) ----------------------
+    //
+    // The budget meter is deliberately NOT the true window (module docstring),
+    // so a 0.92 budget reading says nothing about whether the ~1M model window
+    // is actually under pressure. These tests pin the two invariants of the
+    // human ruling (2026-09-13, 54c56d24): a MEASURED-low true window continues
+    // without the /compact demand, and an ABSENT measurement resolves to block
+    // (CLAUDE.md §3 — cannot-determine is restrictive, never permissive).
+
+    /// As [`input_for`] (never re-entrant), but carrying Claude Code's own
+    /// `context_window` report. `pct` is the raw 0.0–100.0 `used_percentage`;
+    /// `None` models the field arriving empty — the cannot-determine case.
+    fn input_with_model_window(session: &str, transcript: &str, pct: Option<f64>) -> HookInput {
+        HookInput {
+            context_window: Some(harness_core::hook::ContextWindow {
+                used_percentage: pct,
+                ..Default::default()
+            }),
+            ..input_for(session, transcript, false)
+        }
+    }
+
+    #[test]
+    fn measured_low_model_window_continues_instead_of_demanding_compact() {
+        // Budget meter 184000/200000 = 0.92 → over the 0.90 budget threshold, so
+        // the pre-change code emitted the /compact block. But Claude Code itself
+        // reports the TRUE window at 12 % used: there is no window pressure, and
+        // interrupting the run to /compact would be a false alarm.
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        let t = write_transcript(base, 184_000);
+        let cfg = cfg_at(base, true, 0.90);
+        assert!(
+            run(
+                &input_with_model_window("s-measured-low", &t, Some(12.0)),
+                &cfg
+            )
+            .is_none(),
+            "a measured-low true model window must continue, not demand /compact"
+        );
+    }
+
+    #[test]
+    fn absent_used_percentage_still_blocks() {
+        // `context_window` arrived but `used_percentage` did not: we cannot
+        // determine the true window. §3 → block, exactly as before this gate.
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        let t = write_transcript(base, 184_000);
+        let cfg = cfg_at(base, true, 0.90);
+        let (out, check_kind) = run(&input_with_model_window("s-absent-pct", &t, None), &cfg)
+            .expect("an unmeasurable model window must NOT be read as 'plenty of room'");
+        assert_eq!(check_kind, "budget-threshold-crossed");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["decision"], "block");
+    }
+
+    #[test]
+    fn no_context_window_payload_at_all_still_blocks() {
+        // The whole `context_window` object is absent (older Claude Code, or a
+        // non-Stop payload shape). Same cannot-determine, same restrictive side.
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        let t = write_transcript(base, 184_000);
+        let cfg = cfg_at(base, true, 0.90);
+        let input = input_for("s-no-cw", &t, false);
+        assert!(input.context_window.is_none(), "control: no payload");
+        let (out, _) = run(&input, &cfg).expect("absent payload must still block");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["decision"], "block");
+    }
+
+    #[test]
+    fn measured_high_model_window_still_blocks() {
+        // The carve-out must not degenerate into "always continue": a measurement
+        // at/above the continue threshold is real window pressure and still blocks.
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        let t = write_transcript(base, 184_000);
+        let cfg = cfg_at(base, true, 0.90);
+        let (out, check_kind) = run(
+            &input_with_model_window("s-measured-high", &t, Some(95.0)),
+            &cfg,
+        )
+        .expect("a measured-HIGH true model window must still block");
+        assert_eq!(check_kind, "budget-threshold-crossed");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["decision"], "block");
+    }
+
+    #[test]
+    fn measured_low_continue_does_not_consume_the_band_ratchet() {
+        // Continuing is not nudging. If the continue path wrote the `.compact-band`
+        // file, a LATER Stop at the same band whose measurement is absent would
+        // take the `band <= last` early return and be silently allowed — turning a
+        // cannot-determine into a permit. The ratchet must stay unconsumed.
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        let t = write_transcript(base, 184_000);
+        let cfg = cfg_at(base, true, 0.90);
+        assert!(
+            run(&input_with_model_window("s-ratchet", &t, Some(12.0)), &cfg).is_none(),
+            "measured-low continues"
+        );
+        let (out, _) = run(&input_with_model_window("s-ratchet", &t, None), &cfg)
+            .expect("the signal going absent at the same band must still block");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["decision"], "block");
+    }
+
+    #[test]
+    fn continue_threshold_is_configurable_and_zero_never_continues() {
+        // `model_window_continue_below_percentage = 0.0` is the restrictive floor
+        // the config sanitizer falls back to: NO measurement is ever "low enough",
+        // so the gate degrades to the pre-change always-block behaviour.
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        let t = write_transcript(base, 184_000);
+        let cfg = Config {
+            model_window_continue_below_percentage: 0.0,
+            ..cfg_at(base, true, 0.90)
+        };
+        let (out, _) = run(&input_with_model_window("s-thresh0", &t, Some(0.0)), &cfg)
+            .expect("a zero continue threshold must never continue");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["decision"], "block");
     }
 }

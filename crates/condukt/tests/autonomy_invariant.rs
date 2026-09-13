@@ -500,7 +500,7 @@ fn policy_answer_conflict_beats_approval() {
 ///             two-stop invariant does not govern them; they are pinned here
 ///             only so a NEW prompt cannot sneak in unaudited.
 ///
-/// condukt SKILL (23): HDR x1 + PROSE x4 (invariant #1 now documents the
+/// condukt SKILL (25): HDR x1 + PROSE x4 (invariant #1 now documents the
 ///   policy-answer routing contract — auto self-answers / escalate re-Asks /
 ///   block refuses — spanning several lines, plus the Phase 3 heading) + DEGRADE
 ///   (Phase 3 agreement routed through `condukt policy answer` with
@@ -514,6 +514,21 @@ fn policy_answer_conflict_beats_approval() {
 ///   (resume x2, issue discovery x2, open_questions x1, manual cancel x1, curate
 ///   promote x2 — a manual "eval golden 化しますか?" confirmation before writing
 ///   a verified run into the curate dataset; out-of-loop, not a self-driving stop).
+///
+///   The 24th and 25th arrived with the CLAUDE.md §2 untestable gate (backlog
+///   44d5af11, audited 2026-09-13): the `escalate` branch and the fail-safe
+///   fallback branch of the `condukt policy answer --untestable` invocation in
+///   invariant #1. Same shape as the DEGRADE rows above — except the verdict is
+///   pinned to `escalate` by the flag rather than derived — so it classifies as
+///   ESCALATE, category (c), a genuine judgment request: "may this proceed when
+///   we cannot measure whether it is right?" is precisely the decision §2
+///   forbids self-answering. `--untestable` is the UPWARD clamp (auto ->
+///   escalate) and beats `--approval` (see 1d below), so this stop cannot be
+///   clamped away; the skill is instructed never to pair the two, which
+///   `crates/integration-tests/tests/untestable_gate_wiring.rs` checks as text.
+///   This IS a new residual stop and is deliberate: a decision that cannot be
+///   tested has no automated signal to defer to, so the only honest verdict is
+///   to hand it to a human. Nothing was removed to make room for it.
 /// flow SKILL (13): HDR x1 + PROSE (Step 0.5 documents the policy-answer routing
 ///   contract: the autonomy switch plus the exit 0/2/3 branches that name
 ///   `AskUserQuestion` on escalate/fallback) + DEGRADE (lock gate, 3-failure —
@@ -558,10 +573,16 @@ fn policy_answer_conflict_beats_approval() {
 ///   and delete exactly the judgment it exists to ask for. flow's own
 ///   residual-stops prose was widened in the same commit to name it (d), so the
 ///   skill does not describe a set of stops smaller than the one it implements.
-/// scout SKILL (8): HDR x1 + PROSE x1 (invariant) + heading x1 + DEGRADE (Phase 4
+/// scout SKILL (10): HDR x1 + PROSE x1 (invariant) + heading x1 + DEGRADE (Phase 4
 ///   selection routed through `condukt policy answer`: auto adopts top-N,
 ///   escalate/fallback re-emits the multiSelect prompt; plus auto-handoff and
-///   the hard-rule prose) — all skipped/answered under autonomy.
+///   the hard-rule prose) — all skipped/answered under autonomy — plus ESCALATE
+///   x2 (backlog 44d5af11, audited 2026-09-13: the `escalate` and fail-safe
+///   fallback branches of the `--untestable` invocation). Scout's selection gate
+///   is reversible and stays auto BY DESIGN, which is exactly why the untestable
+///   case needed separating out: a finding whose effect cannot be measured was
+///   riding that same permissive path. Category (c), identical rationale to the
+///   condukt rows above; a new residual stop, deliberately.
 /// overwatch SKILL (7): heading x1 + HOTL x5 (pause / resume / reassign / reap /
 ///   end — each an "HOTL gate: 実行前に AskUserQuestion で確認" before a
 ///   side-effecting control command) + PROSE x1 (summary line restating that all
@@ -576,11 +597,11 @@ fn policy_answer_conflict_beats_approval() {
 /// hypothesis add SKILL (1): HOTL (L14, prompt for a missing argument).
 const ASK_ALLOWLIST: &[(&str, usize)] = &[
     ("compass/skills/compass/SKILL.md", 3),
-    ("condukt/skills/condukt/SKILL.md", 23),
+    ("condukt/skills/condukt/SKILL.md", 25),
     ("flow/skills/flow/SKILL.md", 13),
     ("hypothesis/skills/add/SKILL.md", 1),
     ("overwatch/skills/overwatch/SKILL.md", 7),
-    ("scout/skills/scout/SKILL.md", 8),
+    ("scout/skills/scout/SKILL.md", 10),
     ("tdd/skills/tdd/SKILL.md", 1),
 ];
 

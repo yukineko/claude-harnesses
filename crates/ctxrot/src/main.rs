@@ -71,8 +71,11 @@ enum Command {
     /// PreToolUse hook: splice cached `Read` content into a `Task` prompt when it
     /// mentions a path this session already read (see `hooks::handoffguard`).
     Handoff,
-    /// Stop hook: block the turn (ask Claude to run /compact) when context
-    /// usage exceeds `auto_compact_at_percentage`. Exits 0 immediately when
+    /// Stop hook: block the turn (ask Claude to run /compact) when budget-meter
+    /// usage exceeds `auto_compact_at_percentage` AND the measured true model
+    /// window does not veto it (`model_window_continue_below_percentage`; the
+    /// veto needs a positive `context_window.used_percentage` reading, so a
+    /// missing measurement still blocks). Exits 0 immediately when
     /// `stop_hook_active` is true (re-entry guard) or `auto_compact_enabled`
     /// is false (opt-in). Requires `auto_compact_enabled = true` in config.
     Stop,
@@ -1168,6 +1171,18 @@ auto_compact_enabled = false
 # Fraction of the context window (0.0–1.0) that triggers the nudge.
 # Default 0.90 (90 %). env: CTXROT_AUTO_COMPACT_AT_PERCENTAGE
 auto_compact_at_percentage = 0.90
+# Veto on that nudge, read from Claude Code's OWN context_window.used_percentage
+# (raw 0–100 scale). auto_compact_at_percentage is measured against ctxrot's
+# small configured budget, which can read past 100 % while the real ~1M model
+# window is nearly empty — so a budget crossing alone is not window pressure.
+# When the measured true window is BELOW this value, the Stop hook carries on
+# instead of interrupting the run with a /compact demand.
+# Restrictive by construction: the veto needs the measurement to arrive. If
+# used_percentage is missing (older Claude Code, or the field simply absent) the
+# nudge still fires — "could not measure" is not "plenty of room".
+# 0.0 disables the veto entirely; an unparseable value resolves to 0.0.
+# Default 50.0. env: CTXROT_MODEL_WINDOW_CONTINUE_BELOW
+model_window_continue_below_percentage = 50.0
 "#;
 
 fn init() -> anyhow::Result<()> {

@@ -24,8 +24,32 @@ allowed-tools: Task, AskUserQuestion, Bash(condukt:*), Bash(fugu-router:*), Bash
    (ユーザー常設許諾 2026-08-07: 自律走行中の権限認可は事前許諾済みなので `escalate`→`auto` へ clamp。
    ただし `block` は緩めず、非 autonomous では不活性)。合意 (Phase 3) がこれに当たり、schedule 由来の
    risk/confidence を添えて `--approval` 付きで通す。一方 **genuine な判断ゲート — resume 選択 (Phase 0)・
-   `open_questions` (Phase 1)・conflict (Phase 3.5)・worker `blocked` (Phase 5) — には `--approval` を
+   `open_questions` (Phase 1)・conflict (Phase 3.5)・worker `blocked` (Phase 5)・
+   **測れない決定** (下記) — には `--approval` を
    付けず**、低 confidence/高 risk を与えて **escalate** に倒す (＝人に聞く)。**迷ったら付けない**。
+
+   **測れない決定 (CLAUDE.md §2) には `--untestable` を付ける。** done_criteria を検証するテストが
+   書けない・書いても意味のある観測にならない・環境的に実行できない — そう判明した時点で、その
+   判断は自答してはならない。`--untestable` は `auto` を **`escalate` へ引き上げる上向き clamp** で、
+   `--approval` の下向き clamp より**常に優先**する (`crates/condukt/tests/autonomy_invariant.rs` の
+   `policy_answer_untestable_beats_approval` が binary 境界で機械検査する)。フラグを付け忘れると
+   通常の `decide` に掛かり、**低 risk・可逆なら auto で自答されうる** — それが
+   「テスト不能なので判断で通した」という §2 最大の抜け穴そのものである:
+   ```bash
+   OUT=$(condukt policy answer --untestable \
+           --risk "$RISK" --reversible "$REV" --confidence low \
+           --question "<何が測れないのか。なぜ測れないのか>" \
+           --option "<測らずに進める案>" --option "<測れるように課題を切り直す案>" 2>/dev/null)
+   case $? in
+     0) : ;;  # 到達しない (--untestable が auto を escalate へ clamp する)
+     2) : ;;  # escalate: AskUserQuestion で人間に投げる。測れないという事実を添える
+     3) : ;;  # block: 進めない
+     *) : ;;  # 旧バイナリ / 不正入力 → 安全側 = AskUserQuestion
+   esac
+   ```
+   この gate に当たる典型は Phase 1 (done_criteria がそもそも検証不能と判明した)・
+   Phase 5 (worker が「テストが書けない」と報告した)・Phase 6 (verifier が観測を作れなかった)。
+   **測れないことを自分の判断で埋めず、人間に返すこと自体が成果である** (CLAUDE.md §2)。
    自答履歴は `condukt policy answers` で監査できる。**worker `blocked` と GATED 承認待ちは、インラインで
    loop を止める代わりに durable async escalation channel (`condukt escalate add|list|resolve`) に enqueue
    して out-of-band で解消できる**（HOTL: loop は残りのタスクを続行し、人間が後で `escalate resolve` で答えると

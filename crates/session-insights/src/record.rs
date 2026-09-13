@@ -10,6 +10,22 @@
 //! on later calls we replace ONLY the auto-generated `## コスト` and
 //! `## 数値サマリ` blocks (delimited by stable HTML-comment markers) and leave
 //! every prose section untouched.
+//!
+//! The skeleton carries two sections whose whole purpose is to keep the note
+//! from becoming a second copy of the deliverable (backlog `949c3e23`):
+//! `## 認知の変化 / 修正された理解` (the initial model, each correction, and the
+//! failure mode each correction closed) and `## 自己批判 / 確信度` (the judgement
+//! held with the least confidence, and what would be done differently). Neither
+//! can be reconstructed from backlog, code, or git history — which is precisely
+//! the test for what belongs in a record at all. Their POSITION is part of the
+//! design: the correction arc sits directly under the summary it reframes, and
+//! the calibration directly under the policy it qualifies; appended at the end
+//! they read as an afterthought.
+//!
+//! Note that `merge` does NOT back-fill these into notes created before they
+//! existed — `replace_block` deliberately leaves text it finds no markers in
+//! untouched, so a model's restructuring is never clobbered. Older notes keep
+//! the older shape.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -172,11 +188,17 @@ fn skeleton(ctx: &RecordCtx) -> String {
          ## 完了サマリ\n\
          <!-- fill: 完了サマリ -->\n\
          \n\
+         ## 認知の変化 / 修正された理解\n\
+         <!-- fill: 認知の変化 / 修正された理解 -->\n\
+         \n\
          ## つまずき / 学び\n\
          <!-- fill: つまずき / 学び -->\n\
          \n\
          ## 振り返り / 確立した方針\n\
          <!-- fill: 振り返り / 確立した方針 -->\n\
+         \n\
+         ## 自己批判 / 確信度\n\
+         <!-- fill: 自己批判 / 確信度 -->\n\
          \n\
          ## 注意点 / 落とし穴\n\
          <!-- fill: 注意点 / 落とし穴 -->\n\
@@ -341,14 +363,32 @@ mod tests {
     }
 
     #[test]
+    fn cognition_sections_sit_next_to_what_they_qualify() {
+        // Ordering is load-bearing: 認知の変化 reframes the 完了サマリ that
+        // precedes it, and 自己批判 qualifies the 方針 it follows. Appended at
+        // the bottom instead, both read as an afterthought and get skipped --
+        // which is the failure mode the ticket describes (the correction arc
+        // flattened into the last five bullets).
+        let tp = write_transcript("order");
+        let s = skeleton(&ctx(tp.to_str().unwrap(), 4));
+        let at = |h: &str| s.find(h).unwrap_or_else(|| panic!("missing: {h}\n{s}"));
+        assert!(at("## 完了サマリ") < at("## 認知の変化 / 修正された理解"));
+        assert!(at("## 認知の変化 / 修正された理解") < at("## つまずき / 学び"));
+        assert!(at("## 振り返り / 確立した方針") < at("## 自己批判 / 確信度"));
+        assert!(at("## 自己批判 / 確信度") < at("## 注意点 / 落とし穴"));
+    }
+
+    #[test]
     fn skeleton_has_all_sections_and_placeholders() {
         let tp = write_transcript("skel");
         let s = skeleton(&ctx(tp.to_str().unwrap(), 4));
         for h in [
             "# 2026-06-22 harness セッション記録",
             "## 完了サマリ",
+            "## 認知の変化 / 修正された理解",
             "## つまずき / 学び",
             "## 振り返り / 確立した方針",
+            "## 自己批判 / 確信度",
             "## 注意点 / 落とし穴",
             "## 数値サマリ",
             "## コスト",
@@ -361,6 +401,11 @@ mod tests {
         assert!(s.contains("<!-- fill: 完了サマリ -->"));
         assert!(s.contains("<!-- fill: 注意点 / 落とし穴 -->"));
         assert!(s.contains("<!-- fill: 要追跡 / あとで確認 -->"));
+        // The two cognition sections (backlog 949c3e23). A record that only
+        // re-serializes the deliverable duplicates backlog/code; these are the
+        // two axes that CANNOT be reconstructed from either.
+        assert!(s.contains("<!-- fill: 認知の変化 / 修正された理解 -->"));
+        assert!(s.contains("<!-- fill: 自己批判 / 確信度 -->"));
         assert!(s.contains(COST_START) && s.contains(COST_END));
         assert!(s.contains(NUM_START) && s.contains(NUM_END));
         // numeric auto values

@@ -1,5 +1,5 @@
 ---
-description: 今セッションを Obsidian の record ノートに記録する。数値（コスト/トークン/ターン）は session-insights が自動充填し、散文（完了サマリ/学び/振り返り/残課題/関連）をあなたが埋める。AEGIS の /record 相当。
+description: 今セッションを Obsidian の record ノートに記録する。数値（コスト/トークン/ターン）は session-insights が自動充填し、散文（完了サマリ/認知の変化/学び/振り返り/自己批判・確信度/残課題/関連）をあなたが埋める。成果物の複製ではなく認知の記録。AEGIS の /record 相当。
 ---
 
 You are running the **session-insights `/record`** command: write a human-readable
@@ -28,8 +28,23 @@ job is to author the Japanese prose sections based on THIS conversation.
    concise Japanese prose grounded in this session. Mirror the AEGIS record
    intent per section:
    - `## 完了サマリ` — 2–4 行で、何を達成したか（変更したファイル/コミット/動いた機能）。
-   - `## つまずき / 学び` — 詰まった点と、その解決から得た学び。
+     **ID の羅列は禁止**。個別 ID は backlog にあるので、ここではポインタに畳む
+     （例:「正本 `422d256a`、個別 ID は backlog 参照」）。
+   - `## 認知の変化 / 修正された理解` — **このセッションで自分の理解がどう変わったか**を
+     順序どおりに書く。型は「初期モデル → 修正1 → 修正2 → …」で、**各修正に
+     『その修正が塞いだ失敗モード』を必ず添える**（例:「修正1 →『止まるのはタスク完了時のみ』
+     ← 無限ループ化を防ぐ境界」）。最終形だけを書かない — 最終形だけなら仕様であって
+     認知の記録ではなく、次に同じ誤りを踏む人の役に立たない。理解が変わらなかった回は
+     「変化なし」と正直に書く（無理に物語を作らない）。
+   - `## つまずき / 学び` — 詰まった点と、その解決から得た学び。**道具の話で止めない**:
+     つまずきの多くは道具ではなく認知の側にある（命題をリテラルに取りすぎた、前提を
+     確認せず進めた等）。道具の学びは軽微として最後にまとめる。
    - `## 振り返り / 確立した方針` — 今後に効く方針・判断基準（**省略しない**）。
+   - `## 自己批判 / 確信度` — **最も確信の低かった判断はどれか**、それを何で
+     代用したか（勘・推測・未検証の仮定）、**次はどう測るか**。省略した検証
+     （テストを書かなかった・別 agent に回さなかった等）があればその妥当性も。
+     ここは「うまくいった話」を書く場所ではない。何も自己批判が無い回は、
+     それ自体が確信度の較正ミスを疑う材料なので、そう書く。
    - `## 注意点 / 落とし穴` — 触ると壊れる箇所・前提・ハマりどころなど、次に同じ領域を触る人が**事前に知っておくべき注意**（「方針」ではなく「気をつけろ」の粒度）。
    - `## 残課題` — 未完了・先送り・次にやること。
    - `## 要追跡 / あとで確認` — 今は判断できず**後日見直すべき項目**（仮の選択・要観察の挙動・効果測定待ち・期限付きの再確認など）。可能なら確認の起点（条件/日付）も添える。
@@ -47,9 +62,13 @@ job is to author the Japanese prose sections based on THIS conversation.
      subagent_type: "general-purpose",   // or ctxrot:ctxrot-distiller
      model: "sonnet",
      prompt: "Read this session transcript and return ONLY the per-section
-              bullet points for a record note: 完了サマリ / つまずき・学び /
-              振り返り・確立した方針 / 注意点・落とし穴 / 残課題 /
-              要追跡・あとで確認 / 関連. Do not implement anything.
+              bullet points for a record note: 完了サマリ / 認知の変化・修正された理解 /
+              つまずき・学び / 振り返り・確立した方針 / 自己批判・確信度 /
+              注意点・落とし穴 / 残課題 / 要追跡・あとで確認 / 関連.
+              Do NOT duplicate what backlog/code/commits already hold: fold ids
+              and path:line evidence into pointers, and spend the note on the
+              reasoning, the corrected understanding, and the confidence
+              calibration that exist nowhere else. Do not implement anything.
               Transcript: <abs path to $CLAUDE_CODE_SESSION_ID.jsonl under
               ~/.claude/projects/<slug>/>"
    )
@@ -85,6 +104,19 @@ job is to author the Japanese prose sections based on THIS conversation.
 
 ## Hard rules
 
+- **成果物を複製しない。** backlog / code / commit から読み直せるものは、この
+  ノートの仕事ではない。record が書くのは**そこに書けないもの** — 推論の経路、
+  修正された理解、確信度の較正。ID と evidence（`path:line`）は列挙せず
+  ポインタに畳む。この規範を破った実例と、それを書き直した版が参照見本として
+  残っている（下記）。
+- **参照見本（before/after）**: ユーザーの Obsidian vault の
+  `records/2026-07-24-harness-d52fbfce.md`（wikilink: `[[2026-07-24-harness-d52fbfce]]`）。
+  旧版は完了サマリ・残課題・関連が 11 個の ID と evidence を並べ直しただけで
+  backlog notes と重複していた。書き直した現行版は、そのセッション最大の価値
+  （ユーザーによる停止契約の 3 手の認知修正弧）を「初期モデル → 修正1/2/3 →
+  各修正が塞いだ失敗モード」として物語化し、つまずきを道具ではなく認知の側に置き、
+  ID 列をポインタに畳んでいる。**新しい章立てに迷ったらこのノートを読む。**
+  （このノートは vault 内にあり repo には含まれない。見つからない場合はユーザーに尋ねる。）
 - **Never edit anything between** `<!-- si:numeric:start -->` … `<!-- si:numeric:end -->`
   **or** `<!-- si:cost:start -->` … `<!-- si:cost:end -->`. Those blocks are
   machine-owned and will be overwritten on the next `record-now` / SessionEnd.

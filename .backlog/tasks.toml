@@ -6295,7 +6295,7 @@ title = "harness-core boundary: read_dir_entries の途中エントリ失敗ア�
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "claimed"
+status = "pending"
 notes = """
 独立検証者のフォールト注入 (2026-07-23) で判明。read_dir_entries の mid-iteration entry error アームを Undetermined を返す代わりに continue に書き換えても、テストスイートは緑のまま (exit 0) だった。他の3つの注入 (全エラーを Known 空へ / read_to_string を全エラー Known(None) へ / stdout_allowing を無条件 Known へ) はいずれも赤くなったので、このアームだけが無防備。
 
@@ -6305,7 +6305,7 @@ notes = """
 
 必要なのは fault-injecting filesystem (FUSE) か、失敗するイテレータをテストから注入できる seam。seam を入れる場合は production API を汚さない形にすること。現状は test module 内に UNCOVERED BRANCH コメントで明記済み。"""
 created_at = 1784747178
-updated_at = 1789279307
+updated_at = 1789279242
 weight = 0.0
 issue_number = 318
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/318"
@@ -23459,3 +23459,30 @@ updated_at = 1789279405
 weight = 0.0
 issue_number = 571
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/571"
+[[task]]
+id = "7357bc96"
+title = "プラグイン35件の配備バイナリが harness-core 0.2.17 のまま(source は 0.2.19)。GATE crate 4件を含む"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "2026-09-13 に scripts/check-plugin-rollout.py が実測: 『deployed binary links harness-core 0.2.17, but the source tree is now at 0.2.19 <- rollout-plugins.sh not run since that shared-crate change』が 35 件。含まれる GATE crate は blastguard / propguard / specguard / stuckguard の4件で、スクリプト自身が『a disabled fleet defense gate is a silent hole: everything reports green and nothing guards』と書いている種類のもの(ここでは disabled ではなく stale だが、古い共有クレートで動いている点は同じ)。原因は harness-core が 0.2.17→0.2.19 に上がった後に全体 rollout が回っていないこと。対処は scripts/rollout-plugins.sh を --plugin 無しで実行(GATE crate には --canary)。未実行の理由: 実行するとライブの harness 全40プラグインのバイナリを差し替える。2026-09-13 14:50 時点で pid 64230 / 64566 / 80124 の3セッションが稼働中(prune-plugin-cache.py が使用中として報告)で、走行中セッションの足元でバイナリが入れ替わる影響を判断できなかったためユーザーへ回した。tdd 単体(--plugin tdd)は実行済みで exit 0、stale 一覧から消えている。"
+created_at = 1789279126
+updated_at = 1789279126
+weight = 0.0
+issue_number = 567
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/567"
+
+[[task]]
+id = "73b167d3"
+title = "tdd の Stop hook が、キャッシュ内では実行不可能な復旧手順を案内している"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "2026-09-13 実測。crates/tdd/bin/tdd:59 が fix 文言として 'Build it with scripts/build-plugin-bin.sh for $os-$arch, or remove the tdd Stop hook.' を出し、それが gate の UNCHECKED メッセージ(bin/tdd:82)に埋め込まれてユーザーに提示される。だがプラグインキャッシュ内でそのスクリプトを走らせることは原理的にできない: キャッシュ同梱の Cargo.toml が rust-version をワークスペースルートから継承しており、ルートが同梱されていないため cargo が 'failed to find a workspace root' で exit 101 になる(実測)。正しい復旧手順は ~/src/harness で scripts/rollout-plugins.sh --plugin tdd。文言を直すか、shim 側で『このプラグインは repo から rollout する』と案内するかのどちらか。compass など他の shim も同じ文言(scripts/build-plugin-bin.sh on that platform)を持つので、直すなら横並びで確認すること。"
+created_at = 1789279127
+updated_at = 1789279127
+weight = 0.0
+issue_number = 568
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/568"

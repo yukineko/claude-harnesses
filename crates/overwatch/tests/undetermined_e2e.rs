@@ -176,6 +176,8 @@ fn seed_finding(home: &Path, work: &Path, id: &str) {
         work,
         &[
             "record-finding",
+            "--verdict",
+            "confirmed",
             "--finding-id",
             id,
             "--source",

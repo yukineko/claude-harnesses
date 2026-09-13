@@ -175,7 +175,15 @@ pub fn classify(cfg: &Config, changed: &ChangeScan, added: &AddedScan) -> Report
             test_marker_added = true; // any added line in a test file is evidence
             continue;
         }
-        if marker_hit {
+        // The comment on this arm always said "inline test written in an impl
+        // file"; the guard that would make it true was missing, so a marker hit
+        // in ANY changed path counted (backlog 1ff0fcc9). The default marker set
+        // matches the bare substring `test(`, which reaches CHANGELOG.md, a
+        // Cargo.toml comment, a JSON fixture or a shell script — one such added
+        // line silenced the gate for the whole turn. "A regex matched somewhere"
+        // is not "a test was added"; collapsing the two resolved an undetermined
+        // changeset to clean. Narrowing it can only BLOCK more, never less.
+        if marker_hit && is_impl_file(file) {
             test_marker_added = true; // inline test written in an impl file
             continue;
         }
@@ -326,11 +334,15 @@ pub fn human_report(v: &Report, cfg: &Config) -> String {
                 "test evidence:    {}\n",
                 if f.has_test_evidence() {
                     if f.test_file_changed && f.test_marker_added {
-                        "yes (test file + inline test)"
+                        "yes (test file changed + test marker in an impl file)"
                     } else if f.test_file_changed {
                         "yes (test file changed)"
                     } else {
-                        "yes (inline test added)"
+                        // What was observed is a marker regex matching an added
+                        // line inside an implementation file — not proof that the
+                        // line is a test. Report the observation, not the
+                        // inference it invites (CLAUDE.md 4).
+                        "yes (test marker in an impl file)"
                     }
                 } else {
                     "none in the uncommitted changes"
@@ -405,6 +417,81 @@ mod tests {
         };
         assert!(f.test_marker_added);
         assert!(!v.blocks(&cfg));
+    }
+
+    /// The marker text used by the pair below. It matches the default marker
+    /// `\b(it|test|describe)\s*\(` on the bare substring `test(` — the point is
+    /// that ordinary prose reaches it, not that anyone wrote a test.
+    const PROSE_WITH_A_MARKER: &str = "- changelog: reworked the test(x) helper";
+
+    #[test]
+    fn marker_in_an_impl_file_is_evidence_control() {
+        // Anti-vacuity control for the next test: if PROSE_WITH_A_MARKER stopped
+        // matching the marker set, the fail-open test below would pass for the
+        // wrong reason (no hit at all, rather than a hit correctly ignored).
+        let cfg = Config::default();
+        let changed = files(&["src/lib.rs"]);
+        let added = lines(vec![
+            added("src/lib.rs", "pub fn add(a:i32,b:i32)->i32{a+b}"),
+            added("src/lib.rs", PROSE_WITH_A_MARKER),
+        ]);
+        let v = classify(&cfg, &changed, &added);
+        let Determination::Known(Some(f)) = &v.scan else {
+            panic!("expected a known, scoped scan");
+        };
+        assert!(
+            f.test_marker_added,
+            "control failed: the marker text no longer matches, so the \
+             fail-open test is vacuous"
+        );
+    }
+
+    #[test]
+    fn marker_in_a_non_impl_non_test_file_is_not_evidence() {
+        // The fail-open (backlog 1ff0fcc9): the marker arm carried the comment
+        // "inline test written in an impl file" but no is_impl_file guard, so a
+        // regex hit in ANY changed path set test evidence and allowed the stop.
+        // CHANGELOG.md is in neither impl_globs nor test_path_globs, and the
+        // default marker set matches the bare substring `test(` — so one line of
+        // release notes silenced the whole gate for the turn.
+        let cfg = Config::default();
+        let changed = files(&["src/lib.rs", "CHANGELOG.md"]);
+        let added = lines(vec![
+            added("src/lib.rs", "pub fn add(a:i32,b:i32)->i32{a+b}"),
+            added("CHANGELOG.md", PROSE_WITH_A_MARKER),
+        ]);
+        let v = classify(&cfg, &changed, &added);
+        let Determination::Known(Some(f)) = &v.scan else {
+            panic!("expected a known, scoped scan");
+        };
+        assert_eq!(f.added_impl_lines, 1);
+        assert!(
+            !f.test_marker_added,
+            "a marker hit outside both impl_globs and test_path_globs counted as \
+             an inline test: 'cannot tell whether a test was added' resolved to \
+             'clean'"
+        );
+        assert!(
+            v.blocks(&cfg),
+            "impl lines landed with no test anywhere, yet the gate allowed the stop"
+        );
+    }
+
+    #[test]
+    fn marker_in_a_manifest_is_not_evidence() {
+        // Same shape, second surface: Cargo.toml is not an impl glob either.
+        let cfg = Config::default();
+        let changed = files(&["src/lib.rs", "Cargo.toml"]);
+        let added = lines(vec![
+            added("src/lib.rs", "pub fn add(a:i32,b:i32)->i32{a+b}"),
+            added("Cargo.toml", "# bumped for the test(x) fix"),
+        ]);
+        let v = classify(&cfg, &changed, &added);
+        let Determination::Known(Some(f)) = &v.scan else {
+            panic!("expected a known, scoped scan");
+        };
+        assert!(!f.test_marker_added);
+        assert!(v.blocks(&cfg));
     }
 
     #[test]

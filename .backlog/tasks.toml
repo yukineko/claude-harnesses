@@ -1,5 +1,3 @@
-
-
 [[task]]
 id = "0ba79281"
 title = 'CLAUDE.md: Windows で成立しない cargo 手順 (. "$HOME/.cargo/env") を直す'
@@ -6729,10 +6727,10 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "claimed"
+status = "pending"
 notes = "e19d501a の作業中に cargo test --workspace を4回回したうち1回で失敗 (2035 passed / 1 failed)。他3回と、隔離/直列での11回連続実行では pass。失敗させた変更は backlog/autoflow/daily/flow のみで condukt はそれらに依存しないため、condukt のテストバイナリは差分の有無で同一。したがって原因は変更ではなくマシン負荷への感度である。完了条件: 負荷を掛けた状態で決定論的に再現させ、テストが実時間のタイミングに依存しているのか lock 実装側にレースがあるのかを事実として切り分けること。落ちるのを見なかったことにしない。テストを緩める・retry でごまかすのは不可。"
 created_at = 1784755092
-updated_at = 1789296911
+updated_at = 1789306177
 weight = 0.0
 issue_number = 323
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/323"
@@ -6770,10 +6768,10 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "claimed"
+status = "pending"
 notes = "実測 (2026-07-24): 他ジョブで CPU 飽和中に cargo test --workspace を3回回すと 3/3 で compass::tests::compass_invocation_faster_than_timeout_still_returns_output が落ちた (exit 101)。無負荷の CI (ubuntu/macos) では同テストは ok。これは compass 呼び出しが timeout 前に返ることを assert する速度依存テストで、マシン負荷でプロセス起動が遅れると閾値を超えて落ちる。condukt の repo_primary_lock_serializes_concurrent_rmw_no_lost_update (35d61d23) と同じ負荷依存クラス (こちらは isolated 30/30 pass で再現せず)。判定がマシン速度に依存する検査は非決定論ゲートで、緑/赤が環境で変わる。完了条件: これら timeout/並行テストの閾値を負荷耐性のある形にするか、負荷下でも決定論になるよう設計し直し、負荷を掛けた状態で決定的に緑を観測する。"
 created_at = 1784832249
-updated_at = 1789296911
+updated_at = 1789306177
 weight = 0.0
 issue_number = 324
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/324"
@@ -7471,10 +7469,10 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "claimed"
+status = "done"
 notes = "scout 2026-07-25 (score 1.35). 証拠: crates/condukt/src/lock.rs:135-141 の .status().map(|s| s.success()).unwrap_or(false)、使用箇所 lock.rs:290 の Some(existing) if !pid_alive(existing.pid) => remove_file。同型が crates/hypothesis/src/lock.rs:75-88 と :237。修正済みの対比が crates/overwatch/src/lock.rs:85-88 に逐語で残る。kill を起動できない=生死を尋ねられなかった、を所有者は死んだに写しており、生きているホルダーのロックを奪う。完了条件: Determination<bool> を返し reap 分岐が Known(false) のみで発火する。overwatch の tests/faultinject_pid_alive.rs 相当 (空 PATH で kill を起動不能にする) を両クレートに置く。"
 created_at = 1784916593
-updated_at = 1789291299
+updated_at = 1789306297
 weight = 0.0
 issue_number = 47
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/47"
@@ -7491,10 +7489,10 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "claimed"
+status = "done"
 notes = "scout 2026-07-25 (score 1.28). 証拠: crates/condukt/src/claim.rs:185-195 の fn load が serde_json::from_str(&txt).unwrap_or_default() で破損 registry を空に落とす。docstring は Corruption loses others claims, but proceeding is safer と明記しており、実装と意図が一致したうえで fail-open。帰結: 他セッションの全 claim が沈黙のうちに消え、衝突するファイルを持つ複数 worker が同時に走る。完了条件: ファイル無し (正当な空) と読めたがパース不能を区別し、後者では claim 取得が Err/hard-skip になる。破損 registry で claim_files が成功しない回帰テストを固定する。"
 created_at = 1784916594
-updated_at = 1789291299
+updated_at = 1789306296
 weight = 0.0
 issue_number = 48
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/48"
@@ -7511,10 +7509,10 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "claimed"
+status = "done"
 notes = "scout 2026-07-25 (score 1.28). 証拠: crates/harness-core/src/usage.rs:369-372 の if agg.turns == 0 { continue; }。帰結: 起動したが一度も出力していない sub-agent = 最も疑わしい状態が、そんな sub-agent は存在しないと同じ出力になる。沈黙を不在に写す fail-open。完了条件: 空または turn 0 の agent-*.jsonl に対して gauge subagents --json が turns:0 のエントリを欠落ではなく返し、存在するが未産出と区別可能であることをテストが示す。"
 created_at = 1784916595
-updated_at = 1789291299
+updated_at = 1789306294
 weight = 0.0
 issue_number = 49
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/49"
@@ -7531,10 +7529,10 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "claimed"
+status = "done"
 notes = "scout 2026-07-25 (score 1.20). 証拠: crates/condukt/src/main.rs:3908-3910 で stuck_task_ids の結果を取り、3923-3927 で t.status = Pending; t.worktree = None; t.branch = None; t.updated_at = None; を生存確認も dirty 判定もなしに実行。既存の未使用シグナル crates/condukt/src/worktree.rs:2014 の pub fn is_dirty。TTL 既定は circuit.rs:349 / config.rs:205 の stuck_ttl_secs: 1800。帰結: 生きている worker の未コミット作業が state から切り離され孤児化し、同一 worktree に2体が乗る。完了条件: 既定で dry-run になり、dirty な worktree を持つ対象は明示確認なしに abandon されない。worktree を消さずに reset する経路の回帰テストがある。"
 created_at = 1784916597
-updated_at = 1789291299
+updated_at = 1789306295
 weight = 0.0
 issue_number = 50
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/50"
@@ -7551,10 +7549,10 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "claimed"
+status = "pending"
 notes = "scout 2026-07-25 (score 1.13)。2026-07-29 の staleness 監査で自動検証者は STALE と判定したが、3つの完了条件のうち1つが未達なので LIVE のまま残す（検証者自身も残渣として言及しながら STALE と結論していた）。実測 (測定点 6302d166): 条件(1) reap 一覧の可視化と、条件(3) 長時間 Task 中の生存判定は、progress ゲート化により実質的に解決済み。crates/condukt/src/claim.rs:285 が Reap fires ONLY on Known(Stalled) と明記し、stale_claim_but_progressing_is_not_reaped と stale_claim_with_undetermined_progress_is_not_reaped の2テストが pin している。condukt state probe も landed。/ 未達なのは条件(2): claim::heartbeat の Err が呼び出し側で警告として表面化すること。crates/condukt/src/main.rs:3790 はいまも let アンダースコア = claim::heartbeat(...) で Result を捨てている。同ファイル 3863 行には疑問符で伝播する版があるので、3790 だけが取り残された形。/ 残る完了条件: main.rs:3790 の heartbeat 失敗を握り潰さず警告として表面化させ、それを pin するテストを置く。"
 created_at = 1784916598
-updated_at = 1789291299
+updated_at = 1789306177
 weight = 0.0
 issue_number = 51
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/51"
@@ -24931,10 +24929,10 @@ tags = [
     "condukt",
 ]
 touched_files = []
-status = "claimed"
+status = "pending"
 notes = "測定点 branch batch5-d83b0e8f ff985fac / 2026-09-13. d83b0e8f (claim registry) の調査項目として実測した確定の欠陥。読みは 1 つしかない (判定不能ではない)。機構: acquire_repo_primary(cfg, repo) は RunLock::acquire_or_skip 経由で lock_path に入り、lock_path は project_key(repo_root(cwd)) でキーを作る。呼び出し側が渡す repo は crates/condukt/src/worktree.rs:238 の toplevel(cwd) すなわち git rev-parse --show-toplevel であり、linked worktree では worktree 自身を返す。実測: from main tree が pp2/main、from linked wt が pp2/wt1。ランタイム確認 (condukt worktree reconcile が当該ロックを取る): 手順1 linked worktree から実行すると project dir は wt1-d22e03ed のみ。手順2 main tree から実行すると main-8fe192a0 と wt1-d22e03ed の 2 つ。手順3 main tree のディレクトリに live pid の __repo_primary__.lock を置いた状態で linked worktree から実行すると exit=0 で素通り (直列化されない)。手順4 は反証防止の control で、同じロックを linked worktree 自身のディレクトリに置いて同じ場所から実行すると exit=1 になり contended のメッセージが出る。したがってプローブは識別力を持っており手順3の素通りは本物。手順5 その worktree ロックを保持したまま main tree から実行すると exit=0 で素通り。影響: CLAUDE.md 第8節は全セッションが linked worktree で作業することを絶対義務としているので、共有 git index と default branch と worktree admin を変更する 2 プロセスは必ず別ロックになり決して競合しない。ロックが守るはずのものを守っていない。影響箇所: crates/condukt/src/main.rs:3258 と :3288 と :3318、crates/condukt/src/worktree.rs:645 と :894 と :1053 (worktree merge の checkout-default-branch + merge のクリティカルセクションを含む)。修正方向: d83b0e8f で claim registry に入れたのと同じ手当て、すなわち harness_core::projkey::main_worktree_root で解決した project root を使う lock_path_in_project 系を repo-primary にも適用する。両者は同型なので同じ道具が使える。関連 d83b0e8f 43393ce2"
 created_at = 1789292612
-updated_at = 1789296911
+updated_at = 1789306177
 weight = 0.0
 issue_number = 605
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/605"
@@ -25209,7 +25207,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
 touched_files = []
-status = "claimed"
+status = "pending"
 notes = """
 compass charter の ONE（2026-09-13 の人間裁定で north_star の射程に入れた状態解決軸、測定点 c1706736）。
 
@@ -25234,7 +25232,7 @@ CLAUDE.md 2.(a): 利害のない agent が RED を先に観測してから GREEN
 right_size: m。
 これを閉じるまで 2d3cbda2（worktree/branch GC）と 5daf0b60（abandon --all-stuck）には着手しない — 共有 claim registry が worktree から見えないまま GC を書くと、生きている作業を dead と判定して削除する側へ倒れる。"""
 created_at = 1789292392
-updated_at = 1789296911
+updated_at = 1789306177
 weight = 0.0
 issue_number = 604
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/604"
@@ -25617,6 +25615,44 @@ issue_number = 623
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/623"
 
 [[task]]
+id = "8d2429aa"
+title = "condukt: worktree merge の merge_completed_at stamp が let _ = state::with_run_locked で握り潰されている"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "twin check (t6-heartbeat-surface-err の mirror-gap 調査) で発見。crates/condukt/src/main.rs:3215 (WtAction::Merge の Merged arm) が let _ = state::with_run_locked(...) で Result を捨てている。コメントは fail-soft on a missing run/task を理由にしているが、実際に潰れるのは (a) run state が読めない/壊れている (b) lock 競合 (c) save の IO 失敗 も同じで、merge は成功したのに merge_completed_at が永久に未計測になる。state timings は未計測フェーズを明示マーカーにするので即座の誤読にはならないが、失敗と no-op が区別できない点は CLAUDE.md 3 の型。t6 で StateAction::Set の claim upkeep 側は stderr 警告へ移行済み。同じ扱い (stderr で step/run/原因/帰結を名指し、exit code は据え置き) が妥当か判断のうえ対処する。"
+created_at = 1789296045
+updated_at = 1789296045
+weight = 0.0
+issue_number = 620
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/620"
+
+[[task]]
+id = "95dddd4f"
+title = "condukt: Status::Discarded は terminal なのに claim release の対象外 — 破棄した実験のファイル claim が TTL まで残る"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "claim",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "twin check (t6-heartbeat-surface-err) で発見。crates/condukt/src/state.rs の Status::Discarded は doc comment で Terminal like Verified/Cancelled と明記されているのに、crates/condukt/src/main.rs の StateAction::Set 内 claim upkeep の matches! は Verified|Failed|Cancelled のみを見ており Discarded を含まない。結果、worktree discard で破棄した実験の touched_files は release されず、stale-claim TTL が切れるまで他セッションを block する。挙動の妥当性 (破棄直後に claim を手放してよいか) を判断したうえで、含めるなら matches! に追加し、含めないなら doc に理由を書く。テストは tests/heartbeat_err_surfaced.rs の control (intact registry で release が実際に走ることを claims.json で観測する型) をそのまま Discarded へ拡張できる。"
+created_at = 1789296051
+updated_at = 1789296051
+weight = 0.0
+issue_number = 621
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/621"
+
+[[task]]
 id = "5e54fb25"
 title = "rollout: --plugin 指定の実行は verify を skip して rc=0 を返すため、drift が残ったまま成功と読める"
 project = "/Users/yuki/src/harness"
@@ -25689,37 +25725,40 @@ issue_number = 628
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/628"
 
 [[task]]
-id = "8d2429aa"
-title = "condukt: worktree merge の merge_completed_at stamp が let _ = state::with_run_locked で握り潰されている"
+id = "82e6a952"
+title = "backlog edit --status が claimed を受け付けず、reap された in-flight タスクを再 claim できない"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
-tags = [
-    "condukt",
-    "fail-open",
-    "p2",
-]
+tags = ["p2"]
+touched_files = []
 status = "pending"
-notes = "twin check (t6-heartbeat-surface-err の mirror-gap 調査) で発見。crates/condukt/src/main.rs:3215 (WtAction::Merge の Merged arm) が let _ = state::with_run_locked(...) で Result を捨てている。コメントは fail-soft on a missing run/task を理由にしているが、実際に潰れるのは (a) run state が読めない/壊れている (b) lock 競合 (c) save の IO 失敗 も同じで、merge は成功したのに merge_completed_at が永久に未計測になる。state timings は未計測フェーズを明示マーカーにするので即座の誤読にはならないが、失敗と no-op が区別できない点は CLAUDE.md 3 の型。t6 で StateAction::Set の claim upkeep 側は stderr 警告へ移行済み。同じ扱い (stderr で step/run/原因/帰結を名指し、exit code は据え置き) が妥当か判断のうえ対処する。"
-created_at = 1789296045
-updated_at = 1789296045
-weight = 0.0
-issue_number = 620
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/620"
+notes = """
+測定日 2026-09-13、測定点 67dffa6e、cwd=/Users/yuki/src/.harness-worktrees/session-79d79a35。
 
-[[task]]
-id = "95dddd4f"
-title = "condukt: Status::Discarded は terminal なのに claim release の対象外 — 破棄した実験のファイル claim が TTL まで残る"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "condukt",
-    "claim",
-    "p2",
-]
-status = "pending"
-notes = "twin check (t6-heartbeat-surface-err) で発見。crates/condukt/src/state.rs の Status::Discarded は doc comment で Terminal like Verified/Cancelled と明記されているのに、crates/condukt/src/main.rs の StateAction::Set 内 claim upkeep の matches! は Verified|Failed|Cancelled のみを見ており Discarded を含まない。結果、worktree discard で破棄した実験の touched_files は release されず、stale-claim TTL が切れるまで他セッションを block する。挙動の妥当性 (破棄直後に claim を手放してよいか) を判断したうえで、含めるなら matches! に追加し、含めないなら doc に理由を書く。テストは tests/heartbeat_err_surfaced.rs の control (intact registry で release が実際に走ることを claims.json で観測する型) をそのまま Discarded へ拡張できる。"
-created_at = 1789296051
-updated_at = 1789296051
+実測（逐語）:
+  backlog edit 2c1e54b3 --status claimed
+  -> Error: warning: unknown status 'claimed'; valid values are pending | done | failed
+
+一方で store には claimed が実在する: .backlog/tasks.toml の同 id は直前まで status = claimed であり、
+backlog next --claim がその値を書く。つまり CLI の edit 経路だけが、store が正当に保持する状態を表現できない。
+
+これが問題になる具体的な経路（本日実測）: stale-claim の reaper が in-flight の 4 件
+(2c1e54b3 / bcfc5491 / 35d61d23 / 8c5d46fa) を updated_at=1789306177 で claimed -> pending へ戻した。
+実際には condukt run が走行中で、claim registry 側では claim されたままである。
+pending に戻った以上、別 driver の backlog next --claim が同じ task を掴みうる。
+最終ガード condukt state is-claimed が拾うので二重着手は防げるが、掴んだ側は task を
+pending へ戻す往復を強いられ、かつ こちらからは claimed へ戻す手段が CLI に無い。
+
+分けて見るべき 2 点:
+(1) edit の status 語彙が store の語彙の部分集合になっている（表現不能）。
+(2) reaper が liveness を見ずに時間だけで requeue している疑い。走行中の run があるかは
+    condukt state / claim registry から観測できるはずで、時間だけの判定は判定不能を
+    'stale である' 側へ潰している。(1) と (2) は別チケットに割れる可能性がある。
+
+再現手順: backlog next --claim で 1 件掴み、CLAIM_STALE_SECS 経過後に SessionStart requeue を走らせ、
+pending に戻ったものを backlog edit <id> --status claimed で戻そうとする。"""
+created_at = 1789306309
+updated_at = 1789306309
 weight = 0.0
-issue_number = 621
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/621"
+issue_number = 629
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/629"

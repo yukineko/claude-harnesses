@@ -4505,8 +4505,15 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             } else if all_stuck {
                 // Bulk path: TTL-staleness alone does NOT authorise a reset —
                 // `scan_stuck` additionally requires a confirmed
-                // `Known(Stalled)` progress verdict per task. The explicit
-                // `--task` arm above stays deliberately ungated (human override).
+                // `Known(Stalled)` progress verdict per task AND a worktree
+                // observed clean, because a reset clears the task's worktree
+                // reference and re-dispatches a second worker, which would
+                // orphan any uncommitted work there. A task held back by the
+                // dirty veto is named on stderr by the scan — so a shorter list
+                // here is never the only trace of a check that could not run.
+                // The explicit `--task` arm above stays deliberately ungated
+                // (human override), which is how a worker that died mid-edit,
+                // leaving a dirty worktree the bulk gate refuses, is reclaimed.
                 //
                 // The scan is tri-valued: what it could NOT determine is carried
                 // out separately instead of being folded into "healthy", because

@@ -125,6 +125,13 @@ enum Command {
         #[command(subcommand)]
         action: CtxAction,
     },
+    /// Report the shared autonomy switch and the two ctxrot bools it defaults.
+    /// Prints `{"autonomous":<bool>,"auto_distill_on_band":<bool>,
+    /// "auto_compact_enabled":<bool>,"source":"<layer>"}` and exits 0 — a report,
+    /// not a gate. `source` names the deciding layer (`env`, `switch-file`,
+    /// `config`, `default`, `undetermined-switch-file`); an unreadable switch
+    /// file reports `autonomous:false` with `undetermined-switch-file`.
+    Autonomy,
     /// Internal: the DETACHED async-distill worker spawned by the PreCompact
     /// rescue when `distill_on_compact` is on. Runs `claude -p` on the
     /// pre-compaction transcript and writes a high-quality `distill-*` note. Not a
@@ -754,6 +761,23 @@ fn main() {
                 }
             }
         },
+        Command::Autonomy => {
+            // Resolved twice by construction (here and inside `Config::load`),
+            // which is deterministic: same env, same file, same cwd. The config
+            // carries the RESULT of the default layer; this call carries the
+            // `source`/`autonomous` the layer decided from.
+            let autonomy = config::autonomy_default_layer();
+            let cfg = Config::load();
+            println!(
+                "{}",
+                serde_json::json!({
+                    "autonomous": autonomy.autonomous,
+                    "auto_distill_on_band": cfg.auto_distill_on_band,
+                    "auto_compact_enabled": cfg.auto_compact_enabled,
+                    "source": autonomy.source.as_str(),
+                })
+            );
+        }
         Command::Statusline => {
             // Never CRASH the status bar (always exit 0) — but never render a
             // blank/green line for an UNKNOWN state either. A cannot-determine

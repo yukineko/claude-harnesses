@@ -153,7 +153,22 @@ fn pid_alive(pid: u32) -> Determination<bool> {
 /// keyed the same way (sanitised run id, per project) so unrelated runs and
 /// unrelated projects never share a lock.
 fn lock_path(cfg: &Config, cwd: &Path, run_id: &str) -> PathBuf {
-    let dir = cfg.state_dir.join(project_key(&repo_root(cwd)));
+    lock_path_in_project(cfg, &repo_root(cwd), run_id)
+}
+
+/// Lock file path for a run under an ALREADY-RESOLVED project root.
+///
+/// [`lock_path`] is this function with `repo_root(cwd)` as the root — the
+/// composition is shared so the two can never drift in how they key the
+/// directory or sanitise the run id. It exists separately because a caller
+/// whose store is keyed by something other than `repo_root` (today: the claim
+/// registry, which is keyed by the MAIN worktree root so every linked worktree
+/// of a repo shares ONE registry) must put its lock beside its own store. If it
+/// went through `lock_path` instead, the shared `claims.json` would be
+/// read-modify-written under two different lock files — an unserialized race
+/// introduced by sharing the file.
+pub(crate) fn lock_path_in_project(cfg: &Config, project_root: &Path, run_id: &str) -> PathBuf {
+    let dir = cfg.state_dir.join(project_key(project_root));
     dir.join(format!(
         "{}.lock",
         harness_core::store::safe_session(run_id)
@@ -196,18 +211,40 @@ impl RunLock {
         Self::acquire_or_skip_at(lock_path(cfg, cwd, run_id), Self::DEADLINE)
     }
 
-    /// Deadline-parameterized [`RunLock::acquire_or_skip`]. The hard-skip claims
-    /// path ([`crate::claim::claim_files`]) delegates here so both production
-    /// (the 10s default) and its wedged-holder regression test (a short
-    /// deadline) drive the SAME skip-on-contention code. Same mapping (a failed
-    /// acquisition maps to `None`, never to a usable guard).
-    pub(crate) fn acquire_or_skip_with_deadline(
+    /// [`RunLock::acquire_or_skip`] against an ALREADY-RESOLVED project root
+    /// instead of a `cwd`.
+    ///
+    /// Only the claim registry uses this, for its reserved
+    /// [`crate::claim::CLAIMS_LOCK_KEY`]: that registry is keyed by the MAIN
+    /// worktree root, so every linked worktree of a repo read-modify-writes ONE
+    /// `claims.json` and must therefore contend on ONE `__claims__.lock`. Run
+    /// state is NOT keyed that way, so every run-state caller stays on
+    /// [`RunLock::acquire_or_skip`] and its `repo_root`-derived path is
+    /// unchanged. Same fallible contract: a failed acquisition is `None`, never
+    /// a usable guard.
+    pub(crate) fn acquire_or_skip_in_project(
         cfg: &Config,
-        cwd: &Path,
+        project_root: &Path,
+        run_id: &str,
+    ) -> Option<Self> {
+        Self::acquire_or_skip_at(
+            lock_path_in_project(cfg, project_root, run_id),
+            Self::DEADLINE,
+        )
+    }
+
+    /// Deadline-parameterized [`RunLock::acquire_or_skip_in_project`], the
+    /// project-root sibling of [`RunLock::acquire_or_skip_with_deadline`]. The
+    /// hard-skip claims path ([`crate::claim::claim_files`]) delegates here so
+    /// production (the 10s default) and its wedged-holder regression test (a
+    /// short deadline) drive the SAME skip-on-contention code.
+    pub(crate) fn acquire_or_skip_in_project_with_deadline(
+        cfg: &Config,
+        project_root: &Path,
         run_id: &str,
         deadline: Duration,
     ) -> Option<Self> {
-        Self::acquire_or_skip_at(lock_path(cfg, cwd, run_id), deadline)
+        Self::acquire_or_skip_at(lock_path_in_project(cfg, project_root, run_id), deadline)
     }
 
     /// Core of [`RunLock::acquire_or_skip`] against an explicit lock `path`:
@@ -418,6 +455,7 @@ mod tests {
             deploy_command: None,
             loop_max_iters: 10,
             autonomous: false,
+            autonomy_source: harness_core::autonomy::Source::BuiltinDefault,
             consensus_enabled: false,
             consensus_samples: crate::consensus::DEFAULT_SAMPLES,
             consensus_threshold: crate::consensus::DEFAULT_THRESHOLD,

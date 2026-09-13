@@ -1211,10 +1211,27 @@ pub struct UndeterminedTask {
 /// appear in neither: `stuck` is a set of task ids to abandon, `undetermined` is
 /// a set of findings to report, and the two are independent — tasks that ARE
 /// stuck are still abandoned when other tasks are undetermined.
+///
+/// # A THIRD way to appear in neither list (known gap, stated not hidden)
+///
+/// A task held back by the uncommitted-work veto in [`scan_stuck`] also lands in
+/// neither list. It is reported — [`scan_stuck`] names it and its reason on
+/// stderr — but only there, so [`Self::has_unobservable`] stays `false` and
+/// `state abandon --all-stuck` exits 0 for it. For a worktree OBSERVED dirty
+/// that is correct: the worker is determined to be alive, which is not an
+/// undetermination. For the veto's `Err(_)` / no-worktree readings it is NOT
+/// correct — those are cannot-determine and belong in `undetermined` with
+/// [`Undetermination::Unobservable`], the same as an unreadable worktree HEAD.
+/// The two landed in the same run from independent branches and the exit-code
+/// contract was never reconciled; the current one is pinned by
+/// `tests/abandon_dirty_guard.rs`. Tracked as backlog `d65110df`. The abandon
+/// DECISION is fail-closed in both readings (the task is kept either way) — it
+/// is the status handed downstream that is split.
 #[derive(Debug, Clone, Default)]
 pub struct StuckScan {
-    /// Task ids the bulk re-dispatch path may abandon: Running, TTL-stale, and
-    /// a confirmed `Known(Stalled)` progress verdict.
+    /// Task ids the bulk re-dispatch path may abandon: Running, TTL-stale, a
+    /// confirmed `Known(Stalled)` progress verdict, **and** a worktree observed
+    /// to hold no uncommitted work (the veto documented on [`scan_stuck`]).
     pub stuck: Vec<String>,
     /// Running tasks whose staleness could not be determined at all. NOT a
     /// subset of `stuck`, and NOT "fine". Carries BOTH classes of
@@ -1256,7 +1273,14 @@ impl StuckScan {
 ///   `task-updated-at [UNREADABLE] task has no updated_at (legacy) — durable
 ///   progress unreadable`).
 /// * `updated_at >= threshold` → **healthy**: it advanced within the TTL.
-/// * `updated_at < threshold` and `Known(Stalled)` → **stuck**.
+/// * `updated_at < threshold`, `Known(Stalled)`, **and** a worktree observed to
+///   hold no uncommitted work → **stuck**.
+/// * `updated_at < threshold`, `Known(Stalled)`, but
+///   [`uncommitted_work_keep_reason`] returns a reason (uncommitted work is
+///   present, or dirtiness could not be read at all) → **neither list**: the
+///   task is KEPT and named on stderr with that reason. See the known gap on
+///   [`StuckScan`] for why the `could not read` half of that arm ought to be in
+///   `undetermined` and is not yet (backlog `d65110df`).
 /// * `updated_at < threshold` and `Known(Progressing)` → **healthy**: a
 ///   demonstrably live worker.
 /// * `updated_at < threshold` and `Undetermined(why)` → **undetermined**, split
@@ -1285,8 +1309,9 @@ impl StuckScan {
 ///
 /// The progress verdict is matched EXHAUSTIVELY with **no wildcard arm**, so a
 /// new [`progress::Liveness`] variant is a compile error rather than a silently
-/// permissive default. Only a confirmed `Known(Stalled)` authorises an abandon —
-/// the same rule as [`crate::claim::retain_claim`], stated in the positive.
+/// permissive default. A confirmed `Known(Stalled)` is NECESSARY for an abandon
+/// — the same rule as [`crate::claim::retain_claim`], stated in the positive —
+/// but since the uncommitted-work veto landed it is no longer SUFFICIENT.
 /// The `reason` recorded for a Running task with no `updated_at`: there is no
 /// durable transition to measure the TTL against, so "is it stale?" has no
 /// answer for this task — which is not the same as "no".
@@ -1554,13 +1579,21 @@ fn task_progress(
         ("task-updated-at", updated),
     ]);
     let key = format!("{key_prefix}:{run_id}:{}", t.id);
-    let verdict = progress::sample(
-        &crate::claim::progress_store_dir(cfg, cwd),
-        &key,
-        current,
-        now,
-        progress::window_secs(progress::DEFAULT_WINDOW_SECS),
-    );
+    // The progress store is keyed by the project (main-worktree) root. When that
+    // cannot be resolved there is no store to compare against, so the verdict is
+    // Undetermined — forwarded with its reason rather than sampled against a
+    // substituted directory, which would hold no prior sample and could not
+    // distinguish "frozen" from "never seen".
+    let verdict = match crate::claim::progress_store_dir(cfg, cwd) {
+        Determination::Known(store) => progress::sample(
+            &store,
+            &key,
+            current,
+            now,
+            progress::window_secs(progress::DEFAULT_WINDOW_SECS),
+        ),
+        Determination::Undetermined(why) => Determination::Undetermined(why),
+    };
     (signals, verdict)
 }
 
@@ -2853,6 +2886,7 @@ mod tests {
             deploy_command: None,
             loop_max_iters: 10,
             autonomous: false,
+            autonomy_source: harness_core::autonomy::Source::BuiltinDefault,
             consensus_enabled: false,
             consensus_samples: crate::consensus::DEFAULT_SAMPLES,
             consensus_threshold: crate::consensus::DEFAULT_THRESHOLD,

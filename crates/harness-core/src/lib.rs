@@ -24,6 +24,7 @@ compile_error!(
 
 pub mod append;
 pub mod attribution;
+pub mod autonomy;
 pub mod boundary;
 pub mod callgraph;
 pub mod code_index;

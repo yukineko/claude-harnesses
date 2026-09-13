@@ -34,6 +34,31 @@
 //!   to the heartbeat, NOT the recorded pid — the condukt CLI is ephemeral, so a
 //!   pid check would read every claim as dead on the next invocation.
 //!
+//! # Where the registry lives: the MAIN worktree root, not `repo_root`
+//!
+//! The store is keyed by [`harness_core::projkey::main_worktree_root`], so every
+//! linked worktree of a repository shares ONE `claims.json`. Run state is
+//! deliberately NOT keyed that way (it still uses `repo_root`).
+//!
+//! The contract at the top of this module is what forces the difference: this
+//! registry exists to stop "two condukt sessions on the SAME machine from
+//! processing overlapping work". `projkey::repo_root` stops at the first
+//! ancestor holding a `.git` ENTRY, and in a linked worktree `.git` is a file —
+//! so it returns the worktree itself. Keying on it gave each worktree its own
+//! private registry, and under CLAUDE.md §8 (all work happens in a linked
+//! worktree) that is precisely where the guard had to hold: a claim taken in one
+//! worktree read as "not claimed" from every other, so the last guard against
+//! two sessions taking the same task answered "free" (backlog `d83b0e8f`).
+//!
+//! Two consequences, stated plainly:
+//!
+//! * **Migration**: claims written under the old worktree-derived key are not
+//!   moved. They are orphaned, and age out via the heartbeat TTL like any other
+//!   unreleased claim.
+//! * **Scope**: run state, precedent and autoflow's stores still key off
+//!   `repo_root` and are untouched here — relocating them would orphan live
+//!   on-disk state. That wider migration is backlog `43393ce2`.
+//!
 //! # Concurrency & safety
 //!
 //! Every mutation is a load → mutate → save cycle guarded by the proven
@@ -48,7 +73,12 @@
 use crate::config::Config;
 use crate::lock::RunLock;
 use crate::schedule::files_conflict;
-use crate::store::{project_key, repo_root};
+use crate::store::project_key;
+// `repo_root` is only referenced by this module's fixtures, which assert what the
+// OLD (per-worktree) key resolved to; production code keys off
+// `claim_project_root` instead.
+#[cfg(test)]
+use crate::store::repo_root;
 use anyhow::Result;
 use harness_core::progress::{self, Liveness};
 use harness_core::verdict::{Determination, Required};
@@ -59,7 +89,7 @@ use std::path::{Path, PathBuf};
 /// Reserved run-id used only to key the registry's own RMW lock file
 /// (`<project>/__claims__.lock`), reusing the proven per-run lock. It never names
 /// a real run, so it cannot collide with one.
-const CLAIMS_LOCK_KEY: &str = "__claims__";
+pub(crate) const CLAIMS_LOCK_KEY: &str = "__claims__";
 
 /// Synthetic holder run-id stamped on a [`Skipped`] entry when the claims-registry
 /// lock was contended past its deadline (rather than a real peer run holding the
@@ -67,21 +97,30 @@ const CLAIMS_LOCK_KEY: &str = "__claims__";
 /// proceeding to an unlocked read-modify-write that could double-claim.
 const LOCK_CONTENDED_HOLDER: &str = "__lock_contended__";
 
-/// Fail-CLOSED outcome for a contended claims-registry lock: every requested
-/// identity (file path or task hashkey) is reported skipped and none claimed, so
-/// the caller treats them as unavailable and skips the task. This is the whole
-/// point of the hard-skip lock — under pathological contention two timed-out
-/// writers must NOT both proceed to an unlocked RMW and double-claim the same
-/// work (last-writer-wins). The synthetic [`LOCK_CONTENDED_HOLDER`] distinguishes
-/// a contention skip from a real peer-run skip.
-fn all_skipped(idents: &[String]) -> ClaimOutcome {
+/// Synthetic holder run-id stamped on a [`Skipped`] entry when the registry's
+/// PROJECT ROOT could not be resolved ([`claim_project_root`] returned
+/// `Undetermined`), so we do not know which `claims.json` this repo's sessions
+/// share and cannot tell whether the work is already claimed. Fail-CLOSED: the
+/// caller hard-skips.
+///
+/// It is deliberately NOT [`LOCK_CONTENDED_HOLDER`]. Those are different facts —
+/// "a peer is mid-write" versus "I cannot locate the registry at all" — and
+/// collapsing them into one marker would make the second invisible in the skip
+/// JSON, which is where an operator reads why a task did not run.
+const PROJECT_UNDETERMINED_HOLDER: &str = "__project_undetermined__";
+
+/// Fail-CLOSED outcome: every requested identity (file path or task hashkey) is
+/// reported skipped and none claimed, so the caller treats them as unavailable
+/// and skips the task. `holder` records WHICH refusal this was — see
+/// [`LOCK_CONTENDED_HOLDER`] and [`PROJECT_UNDETERMINED_HOLDER`].
+fn all_skipped_by(idents: &[String], holder: &str) -> ClaimOutcome {
     ClaimOutcome {
         claimed: Vec::new(),
         skipped: idents
             .iter()
             .map(|f| Skipped {
                 file: f.clone(),
-                holder_run: LOCK_CONTENDED_HOLDER.to_string(),
+                holder_run: holder.to_string(),
                 holder_pid: 0,
                 holder_session: None,
             })
@@ -89,14 +128,41 @@ fn all_skipped(idents: &[String]) -> ClaimOutcome {
     }
 }
 
+/// Fail-CLOSED outcome for a contended claims-registry lock. This is the whole
+/// point of the hard-skip lock — under pathological contention two timed-out
+/// writers must NOT both proceed to an unlocked RMW and double-claim the same
+/// work (last-writer-wins). The synthetic [`LOCK_CONTENDED_HOLDER`] distinguishes
+/// a contention skip from a real peer-run skip.
+fn all_skipped(idents: &[String]) -> ClaimOutcome {
+    all_skipped_by(idents, LOCK_CONTENDED_HOLDER)
+}
+
+/// Fail-CLOSED outcome for an unresolvable project root, marked with
+/// [`PROJECT_UNDETERMINED_HOLDER`]. `why` is echoed to stderr so the refusal is
+/// never silent (CLAUDE.md §4): the JSON says WHICH refusal it was, stderr says
+/// why the resolution failed.
+fn all_skipped_project_undetermined(idents: &[String], why: &str) -> ClaimOutcome {
+    eprintln!(
+        "condukt: claim registry project root undetermined ({why}); hard-skipping \
+         {} identity(ies) rather than claiming against an unknown registry",
+        idents.len()
+    );
+    all_skipped_by(idents, PROJECT_UNDETERMINED_HOLDER)
+}
+
 /// Test-only race-window widener for [`claim_tasks`]'s load->check->save section.
 /// Real process-spawn overhead dwarfs that section's natural duration, so two
 /// racing `condukt state claim-task` processes essentially never interleave in
 /// it by chance — a concurrency regression test needs a deterministic way to
 /// force the interleave inside the [`RunLock`]-held critical section. No-op
-/// unless `CONDUKT_TEST_CLAIM_DELAY_MS` is set (never set outside the
-/// `run_lock_concurrency` integration test), so production behavior is
-/// unchanged. Mirrors `overwatch::lease::artificial_race_delay`.
+/// unless `CONDUKT_TEST_CLAIM_DELAY_MS` is set, so production behavior is
+/// unchanged. As of condukt 0.7.162 exactly two integration tests set it:
+/// `run_lock_concurrency` (150ms) and `claim_worktree_scope`'s
+/// `p5_claim_from_main_tree_contends_on_the_same_claims_lock_as_the_linked_worktree`
+/// (14000ms). Grep before asserting the list is still complete — the previous
+/// wording claimed the var was "never set outside the `run_lock_concurrency`
+/// integration test" and was already false when the second setter landed.
+/// Mirrors `overwatch::lease::artificial_race_delay`.
 fn artificial_race_delay() {
     if let Some(ms) = std::env::var("CONDUKT_TEST_CLAIM_DELAY_MS")
         .ok()
@@ -168,22 +234,54 @@ pub struct Registry {
     pub task_claims: BTreeMap<String, Claim>,
 }
 
+/// The root this registry is keyed by: the MAIN worktree root of the repo
+/// containing `cwd`, so all of that repo's linked worktrees address ONE store.
+///
+/// Why claims use this while run state does not: the module contract above says
+/// this registry "stops two condukt sessions on the SAME machine from processing
+/// overlapping work". "The same machine" is a REPO-wide scope, not a
+/// per-checkout one, and under CLAUDE.md §8 the sessions it must separate are
+/// each in their own linked worktree — so a per-worktree key makes the guard
+/// answer "free" exactly when two sessions collide. Run state is the opposite
+/// case: it is per-run bookkeeping that already lives on disk under
+/// `repo_root`-derived keys, and re-keying it would orphan those files (backlog
+/// `43393ce2`).
+///
+/// `Undetermined` is a legitimate answer and is never collapsed into a path: see
+/// [`harness_core::projkey::main_worktree_root`] for the arms.
+fn claim_project_root(cwd: &Path) -> Determination<PathBuf> {
+    harness_core::projkey::main_worktree_root(cwd)
+}
+
+/// `<state_dir>/<project-key>` for an already-resolved project root.
+fn project_dir(cfg: &Config, project_root: &Path) -> PathBuf {
+    cfg.state_dir.join(project_key(project_root))
+}
+
+/// The pair every registry read-modify-write needs, resolved ONCE: the project
+/// root (which keys both `claims.json` AND its `__claims__` lock) and the
+/// registry path. Resolving them together is what keeps the file and its lock
+/// from being derived by two different routes.
+fn claim_paths(cfg: &Config, cwd: &Path) -> Determination<(PathBuf, PathBuf)> {
+    claim_project_root(cwd).map(|root| {
+        let path = project_dir(cfg, &root).join("claims.json");
+        (root, path)
+    })
+}
+
 /// `<state_dir>/<project-key>/claims.json` — beside the run-state files, so it is
-/// per-project and unrelated projects never share a registry.
-fn registry_path(cfg: &Config, cwd: &Path) -> PathBuf {
-    cfg.state_dir
-        .join(project_key(&repo_root(cwd)))
-        .join("claims.json")
+/// per-project and unrelated projects never share a registry. `Undetermined`
+/// when the project root cannot be resolved; callers must fail closed.
+fn registry_path(cfg: &Config, cwd: &Path) -> Determination<PathBuf> {
+    claim_paths(cfg, cwd).map(|(_, path)| path)
 }
 
 /// `<state_dir>/<project-key>/execution-state.json` — the joined "who is running
 /// what" view, written beside `claims.json`.
 // Wired into the CLI by the follow-up task; used by tests today.
 #[allow(dead_code)]
-fn execution_state_path(cfg: &Config, cwd: &Path) -> PathBuf {
-    cfg.state_dir
-        .join(project_key(&repo_root(cwd)))
-        .join("execution-state.json")
+fn execution_state_path(cfg: &Config, cwd: &Path) -> Determination<PathBuf> {
+    claim_project_root(cwd).map(|root| project_dir(cfg, &root).join("execution-state.json"))
 }
 
 /// Read the registry as a three-valued observation: an ABSENT file is a
@@ -326,11 +424,13 @@ fn is_stale(c: &Claim, now: i64, ttl: i64) -> bool {
 /// Directory where per-run progress snapshots are persisted (one file per run,
 /// keyed by run id). Colocated with the claim registry's state dir so it is torn
 /// down with the run's state, never leaking across projects.
-pub(crate) fn progress_store_dir(cfg: &Config, cwd: &Path) -> PathBuf {
-    registry_path(cfg, cwd)
-        .parent()
-        .map(|p| p.join("progress"))
-        .unwrap_or_else(|| PathBuf::from("progress"))
+/// `Undetermined` when the project root cannot be resolved. It is NOT defaulted
+/// to a relative `progress/` directory (which the previous `unwrap_or_else` did):
+/// a progress store that silently moved to the process's cwd has no prior
+/// samples, and "no prior sample" is read by [`progress::sample`] as a verdict
+/// this module's reap gate must not act on.
+pub(crate) fn progress_store_dir(cfg: &Config, cwd: &Path) -> Determination<PathBuf> {
+    claim_project_root(cwd).map(|root| project_dir(cfg, &root).join("progress"))
 }
 
 /// Multi-signal, multi-sample PROGRESS verdict for the run owning claim `c`.
@@ -395,8 +495,16 @@ fn claim_progress(cfg: &Config, cwd: &Path, c: &Claim, now: i64) -> Determinatio
         ("run-tasks", task_progress),
     ]);
     let key = format!("claim:{}", c.run_id);
+    // Fail-CLOSED: without a resolvable store there is nowhere to compare
+    // against, so the verdict is Undetermined — and `retain_claim` KEEPS a claim
+    // whose progress is Undetermined, so an unresolvable project root can never
+    // force-steal someone's claim.
+    let store = match progress_store_dir(cfg, cwd) {
+        Determination::Known(d) => d,
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
     progress::sample(
-        &progress_store_dir(cfg, cwd),
+        &store,
         &key,
         current,
         now,
@@ -571,8 +679,21 @@ fn claim_files_with_deadline(
     deadline: std::time::Duration,
 ) -> Result<ClaimOutcome> {
     let ttl = ttl_secs(cfg);
-    let path = registry_path(cfg, cwd);
-    let _lock = match RunLock::acquire_or_skip_with_deadline(cfg, cwd, CLAIMS_LOCK_KEY, deadline) {
+    // Fail-CLOSED: an unresolvable project root means we cannot tell which
+    // registry this repo's sessions share, so every requested file is reported
+    // skipped and the caller hard-skips the task.
+    let (root, path) = match claim_paths(cfg, cwd) {
+        Determination::Known(p) => p,
+        Determination::Undetermined(why) => {
+            return Ok(all_skipped_project_undetermined(files, why.as_str()))
+        }
+    };
+    let _lock = match RunLock::acquire_or_skip_in_project_with_deadline(
+        cfg,
+        &root,
+        CLAIMS_LOCK_KEY,
+        deadline,
+    ) {
         Some(l) => l,
         None => return Ok(all_skipped(files)),
     };
@@ -643,11 +764,19 @@ pub fn claim_tasks(
     title: Option<&str>,
 ) -> Result<ClaimOutcome> {
     let ttl = ttl_secs(cfg);
-    let path = registry_path(cfg, cwd);
+    // Fail-CLOSED: an unresolvable project root means we cannot tell which
+    // registry this repo's sessions share, so every requested hashkey is
+    // reported skipped and the caller hard-skips the task.
+    let (root, path) = match claim_paths(cfg, cwd) {
+        Determination::Known(p) => p,
+        Determination::Undetermined(why) => {
+            return Ok(all_skipped_project_undetermined(hashkeys, why.as_str()))
+        }
+    };
     // HARD-SKIP on contention: proceeding to an unlocked RMW here is what lets
     // two timed-out writers both claim the same hashkey (double-claim). Treat
     // every requested hashkey as unavailable so the caller skips the task.
-    let _lock = match RunLock::acquire_or_skip(cfg, cwd, CLAIMS_LOCK_KEY) {
+    let _lock = match RunLock::acquire_or_skip_in_project(cfg, &root, CLAIMS_LOCK_KEY) {
         Some(l) => l,
         None => return Ok(all_skipped(hashkeys)),
     };
@@ -700,11 +829,20 @@ pub fn claim_tasks(
 /// Release every claim (files AND tasks) held by `run_id` (call on run completion
 /// / gate cleanup). Returns the total number of claims released.
 pub fn release_run(cfg: &Config, cwd: &Path, run_id: &str) -> Result<usize> {
-    let path = registry_path(cfg, cwd);
+    let (root, path) = match claim_paths(cfg, cwd) {
+        Determination::Known(p) => p,
+        Determination::Undetermined(why) => {
+            return Err(project_undetermined_err(
+                "release a run's claims",
+                cwd,
+                why.as_str(),
+            ))
+        }
+    };
     // On contention, SKIP (return 0 released) rather than run an unlocked RMW
     // that could clobber a concurrent writer's fresh claims. Safe: an unreleased
     // claim ages out via the heartbeat-TTL stale reap.
-    let _lock = match RunLock::acquire_or_skip(cfg, cwd, CLAIMS_LOCK_KEY) {
+    let _lock = match RunLock::acquire_or_skip_in_project(cfg, &root, CLAIMS_LOCK_KEY) {
         Some(l) => l,
         None => return Ok(0),
     };
@@ -723,10 +861,19 @@ pub fn release_run(cfg: &Config, cwd: &Path, run_id: &str) -> Result<usize> {
 /// Release specific `files` held by `run_id` (call when a task reaches a terminal
 /// status). Only removes files this run actually holds. Returns the count removed.
 pub fn release_files(cfg: &Config, cwd: &Path, run_id: &str, files: &[String]) -> Result<usize> {
-    let path = registry_path(cfg, cwd);
+    let (root, path) = match claim_paths(cfg, cwd) {
+        Determination::Known(p) => p,
+        Determination::Undetermined(why) => {
+            return Err(project_undetermined_err(
+                "release file claims",
+                cwd,
+                why.as_str(),
+            ))
+        }
+    };
     // On contention, SKIP (0 released) rather than run an unlocked RMW that
     // could clobber concurrent claims. Safe: a stale claim ages out via TTL.
-    let _lock = match RunLock::acquire_or_skip(cfg, cwd, CLAIMS_LOCK_KEY) {
+    let _lock = match RunLock::acquire_or_skip_in_project(cfg, &root, CLAIMS_LOCK_KEY) {
         Some(l) => l,
         None => return Ok(0),
     };
@@ -747,10 +894,19 @@ pub fn release_files(cfg: &Config, cwd: &Path, run_id: &str, files: &[String]) -
 // Wired into the CLI by the follow-up task.
 #[allow(dead_code)]
 pub fn release_tasks(cfg: &Config, cwd: &Path, hashkeys: &[String]) -> Result<usize> {
-    let path = registry_path(cfg, cwd);
+    let (root, path) = match claim_paths(cfg, cwd) {
+        Determination::Known(p) => p,
+        Determination::Undetermined(why) => {
+            return Err(project_undetermined_err(
+                "release task claims",
+                cwd,
+                why.as_str(),
+            ))
+        }
+    };
     // On contention, SKIP (0 released) rather than run an unlocked RMW that
     // could clobber concurrent claims. Safe: a stale claim ages out via TTL.
-    let _lock = match RunLock::acquire_or_skip(cfg, cwd, CLAIMS_LOCK_KEY) {
+    let _lock = match RunLock::acquire_or_skip_in_project(cfg, &root, CLAIMS_LOCK_KEY) {
         Some(l) => l,
         None => return Ok(0),
     };
@@ -768,11 +924,20 @@ pub fn release_tasks(cfg: &Config, cwd: &Path, hashkeys: &[String]) -> Result<us
 /// reaped. Reaps stale claims first. Returns how many claims were refreshed.
 pub fn heartbeat(cfg: &Config, cwd: &Path, run_id: &str, now: i64) -> Result<usize> {
     let ttl = ttl_secs(cfg);
-    let path = registry_path(cfg, cwd);
+    let (root, path) = match claim_paths(cfg, cwd) {
+        Determination::Known(p) => p,
+        Determination::Undetermined(why) => {
+            return Err(project_undetermined_err(
+                "refresh claim heartbeats",
+                cwd,
+                why.as_str(),
+            ))
+        }
+    };
     // On contention, SKIP (0 refreshed) rather than run an unlocked RMW that
     // could clobber concurrent claims. A single missed heartbeat is safe — the
     // claim only ages out after the full stuck-TTL of silence.
-    let _lock = match RunLock::acquire_or_skip(cfg, cwd, CLAIMS_LOCK_KEY) {
+    let _lock = match RunLock::acquire_or_skip_in_project(cfg, &root, CLAIMS_LOCK_KEY) {
         Some(l) => l,
         None => return Ok(0),
     };
@@ -796,11 +961,23 @@ pub fn heartbeat(cfg: &Config, cwd: &Path, run_id: &str, now: i64) -> Result<usi
 /// `condukt state claims` for observability.
 pub fn active_claims(cfg: &Config, cwd: &Path, now: i64) -> Result<Registry> {
     let ttl = ttl_secs(cfg);
-    let path = registry_path(cfg, cwd);
+    // An unresolvable project root is an ERROR here, never an empty `Registry`:
+    // `state claims` printing `{}` and `state is-claimed` exiting "not claimed"
+    // is precisely how this bug read as "the work is free".
+    let (root, path) = match claim_paths(cfg, cwd) {
+        Determination::Known(p) => p,
+        Determination::Undetermined(why) => {
+            return Err(project_undetermined_err(
+                "read the live claims",
+                cwd,
+                why.as_str(),
+            ))
+        }
+    };
     // Observability read. On contention, return a freshly-loaded, reaped
     // snapshot WITHOUT persisting (the save is only a housekeeping compaction) —
     // proceeding to an unlocked save could clobber a concurrent writer.
-    match RunLock::acquire_or_skip(cfg, cwd, CLAIMS_LOCK_KEY) {
+    match RunLock::acquire_or_skip_in_project(cfg, &root, CLAIMS_LOCK_KEY) {
         Some(_lock) => {
             // Read-only in intent, but it persists a reap-compaction: on an
             // unreadable registry that save would wipe it. And the returned
@@ -878,7 +1055,13 @@ pub fn run_liveness(cfg: &Config, cwd: &Path, run_id: &str, now: i64) -> RunLive
         // No placer id to test — death cannot be established. Fail closed.
         return RunLiveness::Undetermined;
     }
-    let reg = match read_registry(&registry_path(cfg, cwd)) {
+    // No resolvable registry ⇒ liveness cannot be established. Fail closed:
+    // `Undetermined` keeps the merge hold, exactly as a corrupt registry does.
+    let path = match registry_path(cfg, cwd) {
+        Determination::Known(p) => p,
+        Determination::Undetermined(_) => return RunLiveness::Undetermined,
+    };
+    let reg = match read_registry(&path) {
         Ok(Some(reg)) => reg,
         // Genuinely-absent registry: no claims exist for anyone ⇒ Dead.
         Ok(None) => return RunLiveness::Dead,
@@ -914,12 +1097,33 @@ fn read_registry(path: &Path) -> std::io::Result<Option<Registry>> {
     }
 }
 
+/// The `Err` an operation returns when the registry's project root is
+/// unresolvable.
+///
+/// Deliberately an error, and never `Ok(0)` or an empty [`Registry`]: downstream
+/// both of those read as clean facts ("nothing to release", "nothing is
+/// claimed"), which is the exact fail-open backlog `d83b0e8f` is about. The
+/// resolution reason travels in the message so the refusal names its cause.
+fn project_undetermined_err(op: &str, cwd: &Path, why: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "condukt claim registry: cannot resolve the project (main-worktree) root for \
+         {} — {why}; refusing to {op} against an unknown registry",
+        cwd.display()
+    )
+}
+
 /// Test-only accessor for the private registry path, so cross-module tests
 /// (e.g. the worktree merge-hold gate) can seed a CORRUPT registry at exactly
 /// the location [`run_liveness`] reads.
+///
+/// Panics when the project root is `Undetermined`. That is the sanctioned
+/// test-only use of [`Required::expect`]: a fixture whose own repo layout cannot
+/// be resolved is a broken fixture, not a runtime condition to degrade around.
 #[cfg(test)]
 pub(crate) fn registry_path_for_test(cfg: &Config, cwd: &Path) -> PathBuf {
     registry_path(cfg, cwd)
+        .require()
+        .expect("test fixture: the registry project root must resolve")
 }
 
 /// Who holds a task claim — the observability slice of a [`Claim`] for the
@@ -1042,13 +1246,22 @@ fn join_execution_state(
 #[allow(dead_code)]
 pub fn write_execution_state(cfg: &Config, cwd: &Path, now: i64) -> Result<Vec<ExecutionEntry>> {
     let ttl = ttl_secs(cfg);
-    let path = registry_path(cfg, cwd);
+    let (root, path) = match claim_paths(cfg, cwd) {
+        Determination::Known(p) => p,
+        Determination::Undetermined(why) => {
+            return Err(project_undetermined_err(
+                "build the execution-state view",
+                cwd,
+                why.as_str(),
+            ))
+        }
+    };
     // On contention, degrade to a read-only view: compute and return the joined
     // rows from a freshly-loaded, reaped snapshot but persist NOTHING (neither
     // the registry compaction nor the execution-state file), rather than run an
     // unlocked RMW that could clobber a concurrent writer. The view regenerates
     // on the next uncontended call.
-    match RunLock::acquire_or_skip(cfg, cwd, CLAIMS_LOCK_KEY) {
+    match RunLock::acquire_or_skip_in_project(cfg, &root, CLAIMS_LOCK_KEY) {
         Some(_lock) => {
             // Persists BOTH the compacted registry and the derived view; an
             // unreadable registry would publish an empty registry and an empty
@@ -1058,7 +1271,10 @@ pub fn write_execution_state(cfg: &Config, cwd: &Path, now: i64) -> Result<Vec<E
             save(&path, &reg)?;
             let pending = backlog_pending();
             let entries = join_execution_state(&reg.task_claims, &pending);
-            save(&execution_state_path(cfg, cwd), &entries)?;
+            save(
+                &project_dir(cfg, &root).join("execution-state.json"),
+                &entries,
+            )?;
             Ok(entries)
         }
         None => {
@@ -1076,6 +1292,29 @@ pub fn write_execution_state(cfg: &Config, cwd: &Path, now: i64) -> Result<Vec<E
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    // ── path adapters ───────────────────────────────────────────────────────
+    //
+    // `super::registry_path` / `super::execution_state_path` return
+    // `Determination<PathBuf>` since the registry moved to the MAIN worktree
+    // root. Every fixture below builds its own plain temp directory, whose root
+    // always resolves, so these adapters keep the existing tests calling the
+    // same names with the same meaning instead of restating the resolution in
+    // each one. They assert (via `expect`) rather than defaulting: a fixture
+    // whose root does not resolve is broken, and must not quietly test a
+    // different path than production writes.
+
+    fn registry_path(cfg: &Config, cwd: &Path) -> PathBuf {
+        super::registry_path(cfg, cwd)
+            .require()
+            .expect("test fixture: the registry project root must resolve")
+    }
+
+    fn execution_state_path(cfg: &Config, cwd: &Path) -> PathBuf {
+        super::execution_state_path(cfg, cwd)
+            .require()
+            .expect("test fixture: the registry project root must resolve")
+    }
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -1264,6 +1503,7 @@ mod tests {
             deploy_command: None,
             loop_max_iters: 10,
             autonomous: false,
+            autonomy_source: harness_core::autonomy::Source::BuiltinDefault,
             consensus_enabled: false,
             consensus_samples: crate::consensus::DEFAULT_SAMPLES,
             consensus_threshold: crate::consensus::DEFAULT_THRESHOLD,

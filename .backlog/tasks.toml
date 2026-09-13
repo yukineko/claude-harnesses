@@ -1,3 +1,5 @@
+
+
 [[task]]
 id = "0ba79281"
 title = 'CLAUDE.md: Windows で成立しない cargo 手順 (. "$HOME/.cargo/env") を直す'
@@ -7549,10 +7551,10 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "done"
 notes = "scout 2026-07-25 (score 1.13)。2026-07-29 の staleness 監査で自動検証者は STALE と判定したが、3つの完了条件のうち1つが未達なので LIVE のまま残す（検証者自身も残渣として言及しながら STALE と結論していた）。実測 (測定点 6302d166): 条件(1) reap 一覧の可視化と、条件(3) 長時間 Task 中の生存判定は、progress ゲート化により実質的に解決済み。crates/condukt/src/claim.rs:285 が Reap fires ONLY on Known(Stalled) と明記し、stale_claim_but_progressing_is_not_reaped と stale_claim_with_undetermined_progress_is_not_reaped の2テストが pin している。condukt state probe も landed。/ 未達なのは条件(2): claim::heartbeat の Err が呼び出し側で警告として表面化すること。crates/condukt/src/main.rs:3790 はいまも let アンダースコア = claim::heartbeat(...) で Result を捨てている。同ファイル 3863 行には疑問符で伝播する版があるので、3790 だけが取り残された形。/ 残る完了条件: main.rs:3790 の heartbeat 失敗を握り潰さず警告として表面化させ、それを pin するテストを置く。"
 created_at = 1784916598
-updated_at = 1789306177
+updated_at = 1789306276
 weight = 0.0
 issue_number = 51
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/51"
@@ -25393,9 +25395,34 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "測定日 2026-09-13、測定点 05962e2a。harness_core::projkey::repo_root は「.git を含む最も近い祖先」を返す (crates/harness-core/src/projkey.rs:50)。linked worktree では .git は FILE だが .exists() は真なので、repo_root(worktree) = worktree 自身になる。したがって project_key も worktree ごとに別キーになり、claims.json / run state が worktree 単位に分割される。実測: /Users/yuki/src/.harness-worktrees/session-2444be10 から condukt state init を実行したところ、state は /Users/yuki/.condukt/state/session-2444be10-d7db0410/ に作られた。repo 本体の正典ディレクトリは /Users/yuki/.condukt/state/harness-e77d23c7/ で、そこに既存の claims.json がある。帰結: CLAUDE.md 8 が全作業を worktree で行うことを絶対義務としている一方で、claim registry はセッションごとに別ファイルへ分岐するため、「別 session が同じファイルを占有中なら state set が skip する」というクロスセッション衝突ゲート (crates/condukt/src/claim.rs) が事実上どのセッションに対しても発火しない。ゲートは exit 0 を返し続けるので、下流からは「衝突が無かった」と「衝突を検査できる場所に居なかった」が区別できない = 3 の判定不能を clean に写す形。要検討: repo_root が linked worktree を common git dir (git rev-parse --git-common-dir の親) へ解決すべきか、それとも claims だけ別キーにすべきか。"
+notes = """
+測定日 2026-09-13、測定点 05962e2a。harness_core::projkey::repo_root は「.git を含む最も近い祖先」を返す (crates/harness-core/src/projkey.rs:50)。linked worktree では .git は FILE だが .exists() は真なので、repo_root(worktree) = worktree 自身になる。したがって project_key も worktree ごとに別キーになり、claims.json / run state が worktree 単位に分割される。実測: /Users/yuki/src/.harness-worktrees/session-2444be10 から condukt state init を実行したところ、state は /Users/yuki/.condukt/state/session-2444be10-d7db0410/ に作られた。repo 本体の正典ディレクトリは /Users/yuki/.condukt/state/harness-e77d23c7/ で、そこに既存の claims.json がある。帰結: CLAUDE.md 8 が全作業を worktree で行うことを絶対義務としている一方で、claim registry はセッションごとに別ファイルへ分岐するため、「別 session が同じファイルを占有中なら state set が skip する」というクロスセッション衝突ゲート (crates/condukt/src/claim.rs) が事実上どのセッションに対しても発火しない。ゲートは exit 0 を返し続けるので、下流からは「衝突が無かった」と「衝突を検査できる場所に居なかった」が区別できない = 3 の判定不能を clean に写す形。要検討: repo_root が linked worktree を common git dir (git rev-parse --git-common-dir の親) へ解決すべきか、それとも claims だけ別キーにすべきか。
+
+--- 検証 2026-09-13 (flow session 2444be10、測定点 main a5e6654e) ---
+batch5 の agent が「7816e5be は f677a41c が独立に直したので重複」と報告した。検証した結果、
+その報告は半分しか正しくない。重複として閉じてはいけない。
+
+観測:
+ (1) f677a41c は repo_root を変更していない。crates/harness-core/src/projkey.rs:50 は
+     今も「.git を含む最も近い祖先」のままで、linked worktree では .git が FILE でも
+     exists() が真なので worktree 自身を返す。この起票が書いている機構はそのまま残っている。
+ (2) f677a41c がしたのは main_worktree_root という別関数の追加であり、その docstring が
+     理由を明記している: repo_root を作り変えると run-state / precedent / autoflow の
+     既存ストアが一斉に移動して孤児化するので、repo 全体の同一性を必要とするストアだけが
+     opt-in する。より広い移行は backlog 43393ce2 として別管理、と書いてある。
+ (3) condukt の claim registry は実際に opt-in 済み。crates/condukt/src/claim.rs:253 が
+     harness_core::projkey::main_worktree_root(cwd) を呼んでいる。
+
+したがって切り分けはこうなる:
+ - この起票の「クロスセッション claim ゲートが構造的に無効化される」半分は CLOSED。
+ - 「project key が worktree ごとに分かれる」根本半分は OPEN で、43393ce2 と同じもの。
+   run state / precedent / autoflow のストアは今も worktree ごとに分裂している
+   (実測: ~/.condukt/state/session-2444be10-d7db0410 と ~/.condukt/state/harness-e77d23c7 が併存)。
+
+教訓 (CLAUDE.md 6): この「重複だから落としてよい」という報告を無検証で受け入れていたら、
+まだ直っていない根本半分が閉じられていた。批判・棄却も発見と同じ立証責任で検査する。"""
 created_at = 1789291703
-updated_at = 1789291703
+updated_at = 1789306364
 weight = 0.0
 issue_number = 597
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/597"
@@ -25762,3 +25789,140 @@ updated_at = 1789306309
 weight = 0.0
 issue_number = 629
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/629"
+
+[[task]]
+id = "21242b8a"
+title = "backlog done cannot close its mirrored GitHub issue: PAT lacks closeIssue, 4 issues left OPEN"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "deploy-verify",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+OBSERVED 2026-09-13 during the batch-5 sink. Four consecutive `backlog done` calls each printed:
+  warning: issue #NN left OPEN: gh issue close failed: GraphQL: Resource not accessible by
+  personal access token (closeIssue); run `backlog sync --apply` to retry
+for issues #47 #48 #49 #50 (tickets e3fe81d5 / 9bfa8cf0 / 81f284c4 / 5daf0b60).
+
+THIS IS NOT A FAIL-OPEN and the warning is the correct behaviour: it says "left OPEN" rather
+than reporting a clean close, so local done and remote open are distinguishable downstream.
+Local .backlog/tasks.toml is authoritative and all four are status=done. Per CLAUDE.md section 7
+GitHub is advisory only, so nothing about task completion is blocked by this.
+
+THE ACTUAL ISSUE: it is not transient. The fine-grained PAT is missing the Issues:write scope
+that closeIssue needs, so EVERY done from now on leaves its mirror open and the GitHub view
+drifts monotonically from the queue. `backlog sync --apply` will fail the same way until the
+token is fixed, so the suggested retry is not a fix.
+
+Same shape as the 2026-07-21 measurement in CLAUDE.md section 7: a needed permission absent from
+the fine-grained PAT, discovered only at the point of use. Decide deliberately which it is:
+ (a) grant Issues:write and let the mirror keep working, or
+ (b) accept the drift and stop mirroring on done, so the warning does not become background
+     noise that trains everyone to ignore warnings.
+Leaving it as-is picks (b) by default without anyone deciding it."""
+created_at = 1789297089
+updated_at = 1789297089
+weight = 0.0
+issue_number = 627
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/627"
+
+[[task]]
+id = "9ec3609e"
+title = "blastguard blocks 'git config core.hooksPath' as a READ (no value argument repoints nothing)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "injection",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+OBSERVED 2026-09-13 in flow session 2444be10. Command: git -C <repo> config core.hooksPath
+Blocked with: "git config core.hooksPath repoints every git hook at once, disabling the repo hook gates"
+
+THE CONFLATION: `git config <key>` with NO value argument is a READ; it prints the current
+value and changes nothing. `git config <key> <value>` is the write that actually repoints
+hooks. blastguard appears to match on the KEY NAME alone and so refuses the read with a
+message describing the write.
+
+WHY IT MATTERS: the read is exactly what you want available when AUDITING whether the hook
+gates are armed. Refusing it means the question "are the gates actually installed here?"
+cannot be answered through the obvious command, which pushes toward re-spelling it another
+way -- i.e. the gate trains the rewrite-until-it-passes reflex. Same concern as ebd1359a,
+different construct. This is NOT a request to loosen blastguard: a genuine
+`git config core.hooksPath <path>` SHOULD stay blocked. The ask is to distinguish arity.
+
+TWO READINGS, and how to tell them apart:
+ (a) real false positive -- the matcher keys on the option name and ignores whether a value
+     follows. Discriminator: check whether blastguard permits `git config user.name`
+     (a read of a harmless key) but refuses `git config core.hooksPath`; if only the
+     hooks key is refused, the rule is key-based and arity-blind.
+ (b) deliberate -- someone decided even naming that key is suspicious. Discriminator: look
+     for an explicit comment/test pinning the read case as intended.
+Do not resolve this by relaxing the key match; resolve it by requiring a value argument
+before treating it as a write.
+
+CONTEXT that triggered it: I was auditing whether the main-tree isolation gate
+(scripts/check-worktree-isolation.py) was armed, because commit ea12e6dd is a NON-merge
+commit on main (single parent) touching .backlog/tasks.toml, which that gate is supposed to
+refuse. That audit is unfinished because the read was blocked -- see the separate ticket."""
+created_at = 1789297056
+updated_at = 1789297056
+weight = 0.0
+issue_number = 625
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/625"
+
+[[task]]
+id = "fd653574"
+title = "UNDETERMINED: non-merge commit ea12e6dd landed on main touching .backlog/tasks.toml, which check-worktree-isolation.py should refuse"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+OBSERVED 2026-09-13, flow session 2444be10.
+
+FACT: commit ea12e6dd on main is "chore(backlog): サイクル5 の 3 件を sink (d83b0e8f / 9976b845 / b637936f)".
+git show --format="parents: %p" gives a SINGLE parent (e8bfc97d), so it is NOT a merge commit.
+It changes .backlog/tasks.toml and Cargo.lock. Neighbouring 23eafdf8 looks like the same shape.
+
+WHY THAT IS A QUESTION: scripts/check-worktree-isolation.py exists to refuse exactly this --
+its own docstring says "refuse a non-merge commit made from the MAIN working tree ... The only
+thing you can do to the main tree is INTEGRATE". I grepped it for an exemption covering
+.backlog or state-only commits and found none (the word backlog appears only in prose about a
+ticket, not as a path exemption).
+
+WHY THIS IS UNDETERMINED AND NOT A FINDING: I could not observe whether the hook is ARMED in
+this checkout. The gate is opt-in via core.hooksPath, and the read that would answer it --
+`git config core.hooksPath`, which takes no value and therefore changes nothing -- was BLOCKED
+by blastguard as though it were the repointing write (filed separately as 9ec3609e). I did not
+re-spell it another way to get the value, because doing so is the rewrite-until-it-passes
+reflex that ticket is about. So the audit is genuinely incomplete, not concluded.
+
+TWO READINGS, and the discriminator for each:
+ (a) THE GATE IS UNARMED in this clone (core.hooksPath never set). Then section 8 is currently
+     unenforced here and every session can commit to main freely -- the single most load-bearing
+     invariant in CLAUDE.md would be running on self-report alone. Discriminator: read
+     core.hooksPath (needs 9ec3609e resolved, or a human runs it).
+ (b) THE GATE IS ARMED AND WAS BYPASSED (--no-verify, or a declared-merge escape hatch claimed
+     for a non-merge). Discriminator: check .git/gate-bypassed for a sentinel around that commit
+     time, and check whether CONDUKT_GIT_HOOK / the declared_merge_integration path in the
+     script can be asserted by a caller that is not actually merging.
+Both readings matter and they have different fixes, so do not collapse them.
+
+NOT AN ACCUSATION: the commit content itself is legitimate sink bookkeeping. The question is
+whether the mechanism that is supposed to make main-tree commits impossible is actually working.
+If the answer is (a), that is worth more than any single ticket in this queue."""
+created_at = 1789297068
+updated_at = 1789297068
+weight = 0.0
+issue_number = 626
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/626"

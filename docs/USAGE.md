@@ -22,7 +22,15 @@
 
 ループは `compass gap` で鮮度をゲートし（charter が陳腐なら自動実行せず `/compass` を促す）、backlog ロックを取得して二重ループを防ぐ。`/flow` は `/backlog` の上位互換なので**併走させない**（backlog ロックで物理的に直列化される）。
 
-**autonomy switch**: config の `autonomous` または env `CONDUKT_AUTONOMOUS=1` を立てると、`/condukt` が `condukt state autonomy-check` の exit code で分岐して Phase 3 の人間合意などのゲートを縮退する（完全自走）。既定は無効（HOTL 維持）。有効化前に `donegate` / `reviewgate` / `propguard` などの検証ゲートを整えておくこと。
+**autonomy switch（condukt / ctxrot / autoflow 共通の 1 スイッチ）**: `condukt state autonomy-set on|off` が書く永続スイッチファイル（`$HARNESS_AUTONOMY_DIR` または `~/.harness/autonomy/<project-key>.json`）を3 プラグインが**直接**読む（subprocess なし）。project-key は **main worktree root** 由来なので、main ツリーで立てたスイッチは linked worktree からも見える（CLAUDE.md §8）。
+
+解決順位（上から優先）: env `HARNESS_AUTONOMOUS` → env `CONDUKT_AUTONOMOUS`（旧エイリアス。引き続き有効）→ スイッチファイル → 各 crate の config（condukt なら `~/.condukt/config.toml` の `autonomous`）→ 既定 off。スイッチファイルが**存在しない**のは確定した「未設定」で、静かに off になる。ファイルが**あるのに読めない/壊れている**場合は判定不能なので **off に fail-closed し、そのパスを名指す警告を stderr に出す**（CLAUDE.md §1/§3。壊れていることと未設定を見分けられない沈黙は作らない）。
+
+- `condukt state autonomy-check` は従来どおり `{"autonomous":<bool>}` だけを出力し（autonomous なら exit 0、そうでなければ 1）、`/condukt` はその exit code で分岐して Phase 3 の人間合意などのゲートを縮退する。どの層が決めたかは `--explain` を付けたときだけ `"source"` （`env` / `switch-file` / `config` / `default` / `undetermined-switch-file`）として出る。
+- `condukt state autonomy-path` は `{"path":...,"source":...}` を出力する。
+- `ctxrot autonomy` は `{"autonomous":...,"auto_distill_on_band":...,"auto_compact_enabled":...,"source":...}` を出力する。スイッチが on のときこの 2 つは**既定として** true になるが、config.toml / `CTXROT_AUTO_COMPACT` / `CTXROT_AUTO_DISTILL_ON_BAND` での**明示的な指定は常にスイッチより優先する**。
+
+既定は無効（HOTL 維持）。有効化前に `donegate` / `reviewgate` / `propguard` などの検証ゲートを整えておくこと。
 
 ```
 /flow

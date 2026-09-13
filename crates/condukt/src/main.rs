@@ -49,6 +49,7 @@ mod wt_reconcile;
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
 use config::Config;
+use harness_core::verdict::Determination;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -825,6 +826,24 @@ enum LessonsAction {
     },
 }
 
+/// The two durable positions of the shared autonomy switch. Two values, not a
+/// bool, so `autonomy-set` rejects anything else at the CLI boundary instead of
+/// writing a file that would later read back as `Undetermined`.
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum AutonomySwitch {
+    On,
+    Off,
+}
+
+impl From<AutonomySwitch> for harness_core::autonomy::AutonomyMode {
+    fn from(v: AutonomySwitch) -> Self {
+        match v {
+            AutonomySwitch::On => harness_core::autonomy::AutonomyMode::On,
+            AutonomySwitch::Off => harness_core::autonomy::AutonomyMode::Off,
+        }
+    }
+}
+
 // `Set` carries many optional measurement/provenance fields (model/cost/
 // agent-id/findings, routing basis/confidence/rationale, lines-changed)
 // alongside the smaller variants; it's a short-lived CLI arg struct consumed
@@ -1152,11 +1171,37 @@ enum StateAction {
         #[arg(long)]
         task: String,
     },
-    /// Report whether condukt is in autonomous mode (config.toml `autonomous` +
-    /// `CONDUKT_AUTONOMOUS` env). Prints `{"autonomous":<bool>}` and exits 0 when
-    /// autonomous, 1 when not — so the /condukt skill can branch on the exit code
-    /// to skip human gates (e.g. the Phase 3 agreement) only when autonomous.
-    AutonomyCheck,
+    /// Report whether condukt is in autonomous mode. Resolves the shared switch
+    /// (`harness_core::autonomy`): the env (`HARNESS_AUTONOMOUS`,
+    /// `CONDUKT_AUTONOMOUS`) beats the switch file written by `autonomy-set`,
+    /// which beats config.toml `autonomous`, which defaults to off.
+    ///
+    /// Prints `{"autonomous":<bool>}` and exits 0 when autonomous, 1 when not —
+    /// so the /condukt skill can branch on the exit code to skip human gates
+    /// (e.g. the Phase 3 agreement) only when autonomous. Those stdout bytes are
+    /// a FROZEN contract (`crates/condukt/tests/autonomy_invariant.rs`), so the
+    /// deciding layer is reported by `--explain` instead of being added to them.
+    /// An unreadable switch file resolves to NOT autonomous and warns on stderr.
+    AutonomyCheck {
+        /// Also print `"source"`: which layer decided (`env`, `switch-file`,
+        /// `config`, `default`, `undetermined-switch-file`). Same exit codes.
+        #[arg(long)]
+        explain: bool,
+    },
+    /// Turn the shared autonomy switch on or off for THIS repo, durably.
+    ///
+    /// Writes `<$HARNESS_AUTONOMY_DIR or ~/.harness/autonomy>/<project-key>.json`
+    /// atomically. The key is the repo's MAIN worktree root, so a switch set here
+    /// is visible from every linked worktree of the same repo (CLAUDE.md §8) and
+    /// is read directly — no subprocess — by ctxrot and autoflow too.
+    AutonomySet {
+        /// `on` or `off`.
+        #[arg(value_enum)]
+        mode: AutonomySwitch,
+    },
+    /// Print `{"path":"<switch file>","source":"<deciding layer>"}` and exit 0.
+    /// The path is where `autonomy-set` writes, whether or not it exists yet.
+    AutonomyPath,
     /// Durably checkpoint a run: snapshot its run-state + each task's branch SHA
     /// and journal the event. Prints the new checkpoint seq. The reversibility
     /// safety net for autonomous proceeding (charter #7).
@@ -4731,14 +4776,55 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             debug_assert!(!verify::same_model(&chosen, &worker));
             println!("{chosen}");
         }
-        StateAction::AutonomyCheck => {
+        StateAction::AutonomyCheck { explain } => {
             // Shared predicate (see `policy_is_autonomous`): delegate to the
             // central policy engine instead of reading the raw bool. This
             // preserves the existing stdout bytes + exit contract exactly.
+            // `cfg.autonomous` already carries the shared switch (Config::load
+            // layers it between config.toml and the env), and any warning about
+            // an unreadable switch file was printed to stderr there.
             let autonomous = policy_is_autonomous(cfg);
-            println!("{{\"autonomous\":{autonomous}}}");
+            if explain {
+                // The deciding layer lives HERE and only here: adding it to the
+                // plain form would redden the frozen oracle that pins those bytes.
+                println!(
+                    "{{\"autonomous\":{autonomous},\"source\":\"{}\"}}",
+                    cfg.autonomy_source.as_str()
+                );
+            } else {
+                println!("{{\"autonomous\":{autonomous}}}");
+            }
             if !autonomous {
                 std::process::exit(1);
+            }
+        }
+        StateAction::AutonomySet { mode } => {
+            let mode: harness_core::autonomy::AutonomyMode = mode.into();
+            harness_core::autonomy::write(cwd, mode)
+                .context("writing the shared autonomy switch")?;
+            let path = match harness_core::autonomy::switch_path(cwd) {
+                Determination::Known(p) => p.display().to_string(),
+                // `write` just succeeded, so this cannot be reached; if it ever
+                // is, say so rather than printing a path we did not resolve.
+                Determination::Undetermined(why) => bail!("{why}"),
+            };
+            println!(
+                "{}",
+                serde_json::json!({ "mode": mode.as_str(), "path": path })
+            );
+        }
+        StateAction::AutonomyPath => {
+            match harness_core::autonomy::switch_path(cwd) {
+                Determination::Known(path) => println!(
+                    "{}",
+                    serde_json::json!({
+                        "path": path.display().to_string(),
+                        "source": cfg.autonomy_source.as_str(),
+                    })
+                ),
+                // No path could be resolved, so there is no path to print. Fail
+                // loudly instead of emitting a guess (CLAUDE.md §3).
+                Determination::Undetermined(why) => bail!("{why}"),
             }
         }
         StateAction::Checkpoint { run, label } => {

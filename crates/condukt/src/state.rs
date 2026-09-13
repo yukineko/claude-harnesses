@@ -2886,6 +2886,7 @@ mod tests {
             deploy_command: None,
             loop_max_iters: 10,
             autonomous: false,
+            autonomy_source: harness_core::autonomy::Source::BuiltinDefault,
             consensus_enabled: false,
             consensus_samples: crate::consensus::DEFAULT_SAMPLES,
             consensus_threshold: crate::consensus::DEFAULT_THRESHOLD,

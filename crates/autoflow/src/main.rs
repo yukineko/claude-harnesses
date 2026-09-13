@@ -302,7 +302,7 @@ fn stop_run(input: HookInput) {
                             // escalation by autonomy — autonomous keeps going
                             // (noting out-of-band handling), non-autonomous asks
                             // the user to confirm/redirect.
-                            let reason = if is_autonomous() {
+                            let reason = if is_autonomous(&cwd) {
                                 format!(
                                     "自律継続中: condukt の pending が {} 回連続で減っていません（進捗停滞を検知）。残課題 {} 件:\n{}\n\nout-of-band で対処しつつ継続します（/condukt を再実行）。",
                                     cfg.stuck_threshold,
@@ -364,21 +364,33 @@ fn stop_run(input: HookInput) {
     }
 }
 
-/// Whether the current run is autonomous, per `condukt state autonomy-check`.
-/// Shells out (like `lock::backlog_driver_active`): exit 0 = autonomous; ANY
-/// failure — non-zero exit, spawn error, missing binary — is treated as
-/// non-autonomous (fail-safe: default to asking the user rather than assuming
-/// autonomy). Consulted ONLY on the `EscalateStuck` path to word the visible
-/// escalation message, so no extra subprocess is spawned on the common
-/// progress (`Continue`) path.
-fn is_autonomous() -> bool {
-    std::process::Command::new("condukt")
-        .args(["state", "autonomy-check"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|st| st.success())
-        .unwrap_or(false)
+/// Whether the current run is autonomous, read DIRECTLY from the shared switch
+/// (`harness_core::autonomy`): the env (`HARNESS_AUTONOMOUS`,
+/// `CONDUKT_AUTONOMOUS`) beats the switch file, which defaults to off.
+///
+/// # Why the `condukt` subprocess was removed
+///
+/// This used to run `condukt state autonomy-check` and read its exit code. That
+/// made the answer depend on `condukt` being on `PATH` — and a `PATH` miss came
+/// back as exit-non-zero, i.e. byte-identical to a deliberate "not autonomous".
+/// A cannot-determine was being read as a verdict, which is the class of bug
+/// CLAUDE.md section 3 exists to close. The shared switch is a file this process
+/// can read itself, so there is no spawn to fail.
+///
+/// Still fail-closed: an unreadable switch file resolves to NOT autonomous (the
+/// user gets asked) and the warning naming it is surfaced on stderr.
+///
+/// NOTE ON SCOPE: this reads the SHARED switch, not condukt's private
+/// `~/.condukt/config.toml`. A user who set only `autonomous = true` in that
+/// file (and never ran `condukt state autonomy-set on`) is not autonomous here.
+/// autoflow consults this ONLY to word the visible `EscalateStuck` message — it
+/// blocks either way — so the narrower read changes wording, not control flow.
+fn is_autonomous(cwd: &std::path::Path) -> bool {
+    let resolved = harness_core::autonomy::resolve(cwd, None);
+    if let Some(warning) = resolved.warning {
+        eprintln!("{warning}");
+    }
+    resolved.autonomous
 }
 
 fn block(cwd: &std::path::Path, session: &str, check_kind: &str, reason: &str) {

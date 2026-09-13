@@ -297,6 +297,28 @@ impl Default for Config {
     }
 }
 
+/// The shared autonomy switch, resolved for the current directory.
+///
+/// ctxrot has no autonomy setting of its own to feed the layer below the switch,
+/// so `config_value` is `None`: for ctxrot the order is env, then switch file,
+/// then off. A cwd that cannot be read means the repo the switch belongs to is
+/// unknown, which is cannot-determine, not "off" — it resolves to off WITH a
+/// warning rather than silently keying the switch on `"."` (CLAUDE.md section 3).
+pub fn autonomy_default_layer() -> harness_core::autonomy::Resolved {
+    match std::env::current_dir() {
+        Ok(cwd) => harness_core::autonomy::resolve(&cwd, None),
+        Err(e) => harness_core::autonomy::Resolved {
+            autonomous: false,
+            source: harness_core::autonomy::Source::UndeterminedSwitchFile,
+            warning: Some(format!(
+                "warning: autonomy switch is UNDETERMINED: the current directory \
+                 cannot be read ({e}), so the project the switch belongs to is \
+                 unknown\nwarning: resolving autonomy to OFF (fail-closed)"
+            )),
+        },
+    }
+}
+
 impl Config {
     pub fn config_path() -> PathBuf {
         base_dir().join("config.toml")
@@ -304,8 +326,28 @@ impl Config {
 
     /// Load config from disk (if present) layered over defaults, then apply env
     /// overrides. Any read/parse error silently falls back to defaults.
+    ///
+    /// The shared autonomy switch (`harness_core::autonomy`) is applied FIRST,
+    /// as a default layer: when it is on and the user has configured neither
+    /// `auto_distill_on_band` nor `auto_compact_enabled`, both become true. It
+    /// sits below the file and env layers on purpose — one switch must never
+    /// override an explicit human decision, so `CTXROT_AUTO_COMPACT=0` (or the
+    /// same key in config.toml) still wins. A switch file that exists but cannot
+    /// be read is fail-closed: it changes nothing and warns on stderr.
     pub fn load() -> Self {
         let mut cfg = Config::default();
+
+        // -- shared autonomy switch: a DEFAULT layer, below file config and env --
+        let autonomy = autonomy_default_layer();
+        if autonomy.autonomous {
+            cfg.auto_distill_on_band = true;
+            cfg.auto_compact_enabled = true;
+        }
+        if let Some(warning) = autonomy.warning {
+            // Named, never silent: an unreadable switch must not be
+            // indistinguishable from one that was never set (CLAUDE.md section 1).
+            eprintln!("{warning}");
+        }
 
         if let Ok(text) = std::fs::read_to_string(Self::config_path()) {
             if let Ok(fc) = toml::from_str::<FileConfig>(&text) {

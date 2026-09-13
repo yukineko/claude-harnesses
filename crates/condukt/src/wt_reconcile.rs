@@ -1882,7 +1882,20 @@ fn resume_judgement(
 pub fn reconcile(cfg: &Config, cwd: &Path, repo: &Path, preserve_dirty: bool) -> Result<Report> {
     let now = state::now_secs();
     let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
-    let store = crate::claim::progress_store_dir(cfg, cwd);
+    // The progress store is keyed by the project (main-worktree) root. This
+    // reconciliation decides whether worktrees may be DELETED, so an
+    // unresolvable store is refused outright rather than substituted: with no
+    // prior samples every occupancy verdict would be computed against an empty
+    // history.
+    let store = match crate::claim::progress_store_dir(cfg, cwd) {
+        Determination::Known(s) => s,
+        Determination::Undetermined(why) => anyhow::bail!(
+            "wt reconcile: cannot resolve the progress store for {} — {}; refusing to \
+             judge worktree liveness without it",
+            cwd.display(),
+            why.as_str()
+        ),
+    };
     let index = scan_state_root(&cfg.state_dir);
     let repo_git_dir = worktree::repo_git_common_dir(repo);
 

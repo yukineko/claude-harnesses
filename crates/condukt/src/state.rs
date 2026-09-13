@@ -1554,13 +1554,21 @@ fn task_progress(
         ("task-updated-at", updated),
     ]);
     let key = format!("{key_prefix}:{run_id}:{}", t.id);
-    let verdict = progress::sample(
-        &crate::claim::progress_store_dir(cfg, cwd),
-        &key,
-        current,
-        now,
-        progress::window_secs(progress::DEFAULT_WINDOW_SECS),
-    );
+    // The progress store is keyed by the project (main-worktree) root. When that
+    // cannot be resolved there is no store to compare against, so the verdict is
+    // Undetermined — forwarded with its reason rather than sampled against a
+    // substituted directory, which would hold no prior sample and could not
+    // distinguish "frozen" from "never seen".
+    let verdict = match crate::claim::progress_store_dir(cfg, cwd) {
+        Determination::Known(store) => progress::sample(
+            &store,
+            &key,
+            current,
+            now,
+            progress::window_secs(progress::DEFAULT_WINDOW_SECS),
+        ),
+        Determination::Undetermined(why) => Determination::Undetermined(why),
+    };
     (signals, verdict)
 }
 

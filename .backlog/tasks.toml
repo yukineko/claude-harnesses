@@ -24292,3 +24292,40 @@ updated_at = 1789294091
 weight = 0.0
 issue_number = 616
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/616"
+
+[[task]]
+id = "19ed3ae9"
+title = "main の作業ツリーに未コミットの backlog 起票が残ると、並行セッション同士が同じファイルの clean を待ち合ってデッドロックする"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "process",
+    "condukt",
+    "p1",
+]
+status = "pending"
+notes = """
+測定 2026-09-13 19:18、測定点 main bc989543。
+
+観測した事実:
+1. main の作業ツリーに .backlog/tasks.toml の未コミット変更 (numstat 56/0、純粋な追記) が残っていた。中身は並行セッション 2444be10 が backlog add で起票した 347db98f。
+2. そのため私の統合が物理的に止まった。逐語: error: Your local changes to the following files would be overwritten by merge: .backlog/tasks.toml / Please commit your changes or stash them before you merge. / Aborting
+3. ps -eo pid,etime,command で、当の 2444be10 セッション自身が pid 73802 で次を回していた: until [ -z "$(git -C /Users/yuki/src/harness status --porcelain -- .backlog/tasks.toml)" ]; do sleep 20; done
+   つまり自分の backlog add が汚したファイルが clean になるのを自分で待っていた。
+4. 私も同じ条件で待つプロセスを立てていた (pid 77254)。両者が同じファイルの clean を待ち、誰もそれを commit しない。待つだけでは永久に解けない。
+
+構造的な原因: backlog CLI は cwd の git root にあるストアへ書く (memory: backlog store follows cwd)。main の作業ツリーで backlog add を実行すると、CLAUDE.md 8 が禁じる main への直接編集がファイルとして残る。しかし commit は worktree-isolation ゲートが正しく止めるので、起票者は自分で片付けられない状態に入る。書けるが commit できない、という穴。
+
+今回の解き方 (再現手順としてではなく、実際にやったこととして記録): 追記が純粋な追記であることを numstat と削除行の不在で確認し、内容をブランチへ移植して tomllib で id 重複ゼロとフィールド一致を検証し (commit 645e4fa0)、main 側の冗長になったコピーを git checkout -- で戻してから merge した (f677a41c)。内容は失っていない。
+
+直すべき方向の候補 (どれも未検証の設計案であり、観測ではない):
+読み 1: backlog add が main の作業ツリーで実行されたことを検出して拒否し、worktree を使えと言う。ただし起票そのものを止めるのは CLAUDE.md の always file findings と衝突するので、拒否ではなく自動的に worktree 側のストアへ書くほうが筋かもしれない。
+読み 2: 起票は許し、統合側が今回のように移植で解く運用を正式な手順として文書化する。
+見分け方: backlog add の実行場所を計測する。main の作業ツリーからの起票が実際に何割あるかを測ってから決める。今は測っていない。
+
+なお guard-maintree-bash.py は main の作業ツリー上の git checkout -- <tracked file> を通した。これがゲートの穴なのか、統合操作として意図的に許しているのかは未確認。"""
+created_at = 1789295854
+updated_at = 1789295854
+weight = 0.0
+issue_number = 619
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/619"

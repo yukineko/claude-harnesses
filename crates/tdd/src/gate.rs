@@ -1195,4 +1195,59 @@ mod tests {
             reason.len()
         );
     }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // `human_report`'s test-evidence line (f667897d). Before this commit the
+    // marker-only branch printed "yes (inline test added)" and the combined
+    // branch printed "yes (test file + inline test)" -- both asserting an
+    // inline TEST was observed when all `classify` ever recorded is a marker
+    // REGEX HIT (CLAUDE.md §4: prose must not claim more than was checked).
+    // Nothing exercised `human_report` before this pair was added -- no test
+    // in this file called it at all -- so the wording fix itself had zero
+    // kill rate.
+    // ══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn human_report_marker_only_evidence_does_not_overclaim_an_inline_test() {
+        let cfg = Config::default();
+        let report = report_with_test_evidence(); // test_marker_added, no test file
+        let out = human_report(&report, &cfg);
+        assert!(
+            !out.contains("inline test added"),
+            "human_report claimed an inline TEST was observed, but classify only \
+             recorded a marker regex hit in an impl file\n--- report ---\n{out}"
+        );
+        assert!(
+            out.contains("test marker in an impl file"),
+            "human_report must describe what was actually observed (a marker \
+             regex hit in an impl file), not what it invites the reader to \
+             infer\n--- report ---\n{out}"
+        );
+    }
+
+    #[test]
+    fn human_report_combined_evidence_does_not_overclaim_an_inline_test() {
+        let cfg = Config::default();
+        let report = Report {
+            scan: Determination::Known(Some(Fields {
+                added_impl_lines: 3,
+                test_marker_added: true,
+                test_file_changed: true,
+                impl_files: vec!["src/foo.rs".to_string()],
+            })),
+        };
+        let out = human_report(&report, &cfg);
+        assert!(
+            !out.contains("inline test"),
+            "human_report claimed an inline TEST was observed in the combined \
+             (test file + marker) branch, but classify only recorded a marker \
+             regex hit\n--- report ---\n{out}"
+        );
+        assert!(
+            out.contains("test file changed") && out.contains("test marker in an impl file"),
+            "human_report must name both observations it actually made \
+             (a changed test file AND a marker hit in an impl file)\n\
+             --- report ---\n{out}"
+        );
+    }
 }

@@ -22707,3 +22707,114 @@ updated_at = 1789123819
 weight = 0.0
 issue_number = 543
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/543"
+
+[[task]]
+id = "2afeb849"
+title = "condukt schedule の force-gate が touched_files のパス名に反応する — checker script を編集するだけのタスクが high-risk irreversible に誤分類される"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+実測 2026-09-13、測定点 37cc0be1、condukt 0.7.154。
+
+観測: condukt schedule が touched_files のパス文字列だけを根拠に
+"force-gated: high-risk irreversible action" を返す。prose は同一で固定した対照実験:
+
+  touched_files = ["scripts/foo.py"]                        -> not gated
+  touched_files = ["scripts/check-plugin-rollout.py"]       -> GATED
+  touched_files = ["scripts/test_check_plugin_rollout.py"]  -> GATED
+
+title と done_criteria は 3 回とも "neutral title" / "none" で固定しているので、
+発火源は prose ではなく **パス名に含まれる部分文字列** である。
+
+なぜ問題か: これらのタスクは checker スクリプトを worktree 内で編集するだけで、
+何もデプロイしないし不可逆でもない。gated に落ちると condukt の不変条件 2 により
+実装フェーズの対象外になり、人間の承認待ちに積まれる。つまり
+「ファイル名にその語が入っている」という理由だけで、通常の編集タスクが
+オーケストレータから実行不能になる。
+
+既知の隣接事例: memory の classify-deploy-needle-forcegate は task の PROSE に
+deploy needle が入ると force-gate されることを記録していたが、今回の観測は
+**touched_files のパスでも同じことが起きる**ことを示す。パスは課題文と違って
+言い換えられない (実在のファイル名なので) ぶん、回避手段が無い点がより悪い。
+
+判定不能なので両方の読みを残す:
+  (a) 実在の欠陥 = classifier がパス名を command-shaped text と同じ needle 集合で
+      走査しており、ファイル名と実行内容を区別していない。
+  (b) 意図的な仕様 = その語を含むファイルを触るタスクは人間の目を通せ、という設計。
+      その場合でも「編集」と「実行」は別軸なので、gated ではなく警告が妥当。
+
+見分ける方法: classifier の needle 集合と、それを touched_files に適用している箇所を読む。
+パスに対して command 用の needle を使っているなら (a)。
+パス専用の意図的なリストがあるなら (b) で、その場合は編集と実行の区別を足す話になる。
+
+発見経緯: /flow から dispatch された condukt run run-20260913-131646-20280 の Phase 2 で、
+scripts/check-plugin-rollout.py を編集するタスクが gated に落ちたため対照実験した。"""
+created_at = 1789273019
+updated_at = 1789273019
+weight = 0.0
+issue_number = 545
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/545"
+
+[[task]]
+id = "7f07228e"
+title = "overwatch store::record_finding (library 経路) が verdict を引数に持たず ReviewFinding::new が無条件 Confirmed を刻む — CLI 側を必須化しても 3 producer がここを通る"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+実測 2026-09-13、測定点 f667897d の worktree (backlog eda212a0 の作業中に発見)。
+
+eda212a0 は CLI (`overwatch record-finding --verdict`) の省略時 confirmed 既定を廃止したが、
+**同じ欠陥が library 経路に残る**。
+
+逐語 crates/overwatch/src/review_finding.rs:155-174:
+    pub fn new(
+        finding_id: String, source: String, severity: Option<String>,
+        summary: String, file: Option<String>, rationale: Option<String>, ts: i64,
+    ) -> Self {
+        Self { ..., verdict: AuditVerdict::Confirmed, ts }
+    }
+
+逐語 crates/overwatch/src/store.rs:514-532 — `pub fn record_finding(...)` の引数に
+**verdict が無い**。`ReviewFinding::new(...)` をそのまま `append_review_finding` する
+(`.with_verdict(..)` を呼ばない) ので、この経路で記録された finding は
+**常に Confirmed** になる。呼び出し側が unverified を表明する手段が型に存在しない。
+
+実 producer は 3 本 (いずれも `let _ =` で戻り値も捨てている):
+  crates/specguard/src/main.rs:2116
+  crates/specguard/src/main.rs:2200
+  crates/propguard/src/main.rs:372
+  crates/condukt/src/gate_exec.rs:319
+
+なぜ問題か: eda212a0 のユーザー裁定は「UNVERIFIED が既定では決して発生しない」ことを
+問題視したものだった。CLI を必須化しても、この 4 箇所が通る経路では
+UNVERIFIED は**表現すら不可能**なままなので、裁定の意図は半分しか達成されていない。
+`confirmed` のみが `review-queue --to-backlog` で backlog へ橋渡しされるため、
+「検証していない finding が actionable work として queue に入る」経路が残る。
+
+判定不能なので両方の読みを残す:
+  (a) 実在の欠陥 = library 経路も verdict を要求すべきで、new() の
+      hardcoded Confirmed は CLI 側と同じ「確実性の捏造」。
+  (b) 意図的な仕様 = これらの producer (gate escalate / spec drift / prop violation) は
+      「ゲートが実際に検出した事実」なので confirmed で正しい、という読み。
+      その場合でも new() が既定を握るのではなく、各 producer が明示すべき
+      (eda212a0 の裁定理由がまさにそれ)。
+
+見分ける方法: 4 producer それぞれについて、記録している事実が
+「敵対的検証を経た CONFIRMED」なのか「ゲートが観測しただけの raw signal」なのかを読む。
+後者が 1 つでもあれば (a)。gate_exec の escalate は「人間の判断が要る」状態なので
+unverified 寄りに見えるが未確認。
+
+あわせて: 4 producer は全て `let _ =` で Result を捨てている。fail-soft の意図は
+docstring に書かれているが、記録失敗が完全に不可視なのが妥当かは別途要検討。
+
+スコープ外として起票: eda212a0 の完了条件は CLI の --verdict 必須化なので、
+本件はそこに含めず別チケットにした。"""
+created_at = 1789273494
+updated_at = 1789273494
+weight = 0.0
+issue_number = 546
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/546"

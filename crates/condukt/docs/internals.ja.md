@@ -90,6 +90,17 @@ worktree HEAD と `updated_at` を multi-sample で観測して `Known(Stalled)`
 `Progressing` も `Undetermined` も戻しません（fail-closed）。1 回目の呼び出しでは何も戻らないのが
 正常です（1 回の観測は「凍結」を意味しない）。worktree が消えた本当に死んだ worker は
 `Undetermined` のままなので、人間が明示する `--task <id>`（意図的にゲート無し）で戻します。
+
+判定できなかったタスクは **healthy に畳まれず、必ず stderr に id・class・理由つきで報告されます**
+（backlog `b637936f`。以前は bulk 一覧から消えるだけで、`nothing to abandon` という「問題なし」に
+読める沈黙になっていた）。class は `Undetermined` の理由文字列ではなく **signal ごとの `readable`
+フラグ**で決まります:
+
+- `unobservable` — durable な進捗 signal をそもそも読めなかった（`updated_at` が無い / worktree
+  HEAD が読めない / worktree を持たない）。**exit 3**。
+- `awaiting-sample` — 全 signal は読めたが multi-sample の観測が未完了（1 回目、または window
+  未経過）。**exit 0**。健全と判定したのではなく「今はまだ分からない」であり、報告され、window で
+  区切られ、次の呼び出しで解消する。
 pending に戻したタスクは Phase 5 で通常通り再投入します。
 
 ---
@@ -576,7 +587,7 @@ cancelled (terminal) ← AskUserQuestion でユーザーがキャンセル
 | `condukt state reconcile --run <rid>` | branch がマージ済みまたは削除済みのタスクを自動 verified に昇格 |
 | `condukt state resume-context --run <rid>` | pending / failed / done タスクを JSON で返す（再開用）|
 | `condukt state test --run <rid>` | プロジェクトのテストスイートを実行（auto-detect: cargo/npm/pytest）|
-| `condukt state abandon --run <rid> --all-stuck` | TTL 超過 **かつ** 進捗が `Known(Stalled)` と確定した running タスクを pending に戻す（multi-sample。`Progressing`/`Undetermined` は戻さない）|
+| `condukt state abandon --run <rid> --all-stuck` | TTL 超過 **かつ** 進捗が `Known(Stalled)` と確定した running タスクを pending に戻す（multi-sample。`Progressing`/`Undetermined` は戻さない）。判定不能なタスクは stderr に報告し、`unobservable` があれば exit 3、観測未完了の `awaiting-sample` だけなら exit 0 |
 | `condukt state conflict-check --file <json>` | 他セッションとのファイル競合 / 目的競合を確認 |
 | `condukt state cancel --run <rid> --task <tid>` | タスクを cancelled（terminal）に設定 |
 | `condukt state list-tasks` | キャンセル可能なタスク（pending/running/done）を一覧取得 |

@@ -24236,3 +24236,59 @@ updated_at = 1789293020
 weight = 0.0
 issue_number = 611
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/611"
+
+[[task]]
+id = "347db98f"
+title = "condukt diffrisk_record journal test intermittently sees 1 of 2 records under full-target test load"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flaky-test",
+    "p1",
+]
+status = "pending"
+notes = """
+MEASURED 2026-09-13, tree = main mid-merge of run-20260913-182640-69073 t5 (MERGE_HEAD 66a5ce1d, base 05962e2a).
+
+SYMPTOM: diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded
+panics at crates/condukt/src/diffrisk_record.rs:540 -- assertion left == right failed:
+one record per invocation; left: 1, right: 2. Always the SAME test and SAME assertion.
+
+RATE: cargo test -p condukt --quiet (ALL targets) -> 1 FAIL in 4 runs. Plus 2 consecutive
+FAILs via scripts/test-changed-crates.sh, which is what donegate runs.
+NEVER reproduced with cargo test -p condukt --bins alone (3 runs green, one of them
+--test-threads=1 with 809 passed). So it needs the integration-test binaries running
+concurrently, i.e. it is LOAD-dependent, not order-dependent.
+
+NOT the same defect as 4b94e371. That one had VARYING failure identity across runs;
+this one is stable. I initially reported it as that class and that was wrong.
+
+REFUTED (do not re-walk these):
+ - shared ledger across tests. project_dir = cfg.state_dir.join(project_key(repo_root(cwd))).
+   repo_root falls back to cwd when no ancestor has .git, and project_key hashes the FULL
+   canonical path (harness-core/src/projkey.rs:24,50), so each tempdir test gets its own
+   diffrisk-outcomes.jsonl. No cross-test sharing.
+ - a return path that skips journaling. Every return in record_post_execution_diff_risk
+   goes through journal(...) (diffrisk_record.rs:261,265,328,344,384).
+ - git() swallowing a non-zero exit. git_output_to_result bails on both non-zero status
+   and timeout (worktree.rs:188,199).
+
+STILL UNDETERMINED (the actual open question): whether the lost record is (a) an append
+that failed, or (b) a line dropped at parse. append_line_reporting prints a LOST warning
+on failure (harness-core/src/append.rs:64) and load_diffrisk_outcomes silently drops
+unparseable lines via filter_map(ok()) (gatelog.rs:448). A --nocapture run grepping for
+that warning happened to PASS, so the discriminator was not captured. NEXT STEP: loop the
+full-target run under --nocapture until it fails and check whether the LOST warning is
+present. If it is absent, the line was written but did not parse, and the silent
+filter_map(ok()) drop is itself the CLAUDE.md section 3 problem -- a hole in the history
+that the loader hides.
+
+WHY IT MATTERS BEYOND THE TEST: this journal exists specifically so that
+inspected-and-clean is distinguishable from never-inspected. If a record can be lost
+under load, that distinction has a hole under exactly the concurrent conditions the
+fleet runs in."""
+created_at = 1789294091
+updated_at = 1789294091
+weight = 0.0
+issue_number = 616
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/616"

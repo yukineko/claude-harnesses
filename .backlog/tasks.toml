@@ -7104,10 +7104,10 @@ tags = [
     "subagent-liveness",
     "p1",
 ]
-status = "pending"
+status = "claimed"
 notes = "scout 2026-07-25 (score 1.35). 証拠: crates/condukt/src/lock.rs:135-141 の .status().map(|s| s.success()).unwrap_or(false)、使用箇所 lock.rs:290 の Some(existing) if !pid_alive(existing.pid) => remove_file。同型が crates/hypothesis/src/lock.rs:75-88 と :237。修正済みの対比が crates/overwatch/src/lock.rs:85-88 に逐語で残る。kill を起動できない=生死を尋ねられなかった、を所有者は死んだに写しており、生きているホルダーのロックを奪う。完了条件: Determination<bool> を返し reap 分岐が Known(false) のみで発火する。overwatch の tests/faultinject_pid_alive.rs 相当 (空 PATH で kill を起動不能にする) を両クレートに置く。"
 created_at = 1784916593
-updated_at = 1784916593
+updated_at = 1789291299
 weight = 0.0
 issue_number = 47
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/47"
@@ -7123,10 +7123,10 @@ tags = [
     "subagent-liveness",
     "p1",
 ]
-status = "pending"
+status = "claimed"
 notes = "scout 2026-07-25 (score 1.28). 証拠: crates/condukt/src/claim.rs:185-195 の fn load が serde_json::from_str(&txt).unwrap_or_default() で破損 registry を空に落とす。docstring は Corruption loses others claims, but proceeding is safer と明記しており、実装と意図が一致したうえで fail-open。帰結: 他セッションの全 claim が沈黙のうちに消え、衝突するファイルを持つ複数 worker が同時に走る。完了条件: ファイル無し (正当な空) と読めたがパース不能を区別し、後者では claim 取得が Err/hard-skip になる。破損 registry で claim_files が成功しない回帰テストを固定する。"
 created_at = 1784916594
-updated_at = 1784916594
+updated_at = 1789291299
 weight = 0.0
 issue_number = 48
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/48"
@@ -7142,10 +7142,10 @@ tags = [
     "subagent-liveness",
     "p1",
 ]
-status = "pending"
+status = "claimed"
 notes = "scout 2026-07-25 (score 1.28). 証拠: crates/harness-core/src/usage.rs:369-372 の if agg.turns == 0 { continue; }。帰結: 起動したが一度も出力していない sub-agent = 最も疑わしい状態が、そんな sub-agent は存在しないと同じ出力になる。沈黙を不在に写す fail-open。完了条件: 空または turn 0 の agent-*.jsonl に対して gauge subagents --json が turns:0 のエントリを欠落ではなく返し、存在するが未産出と区別可能であることをテストが示す。"
 created_at = 1784916595
-updated_at = 1784916595
+updated_at = 1789291299
 weight = 0.0
 issue_number = 49
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/49"
@@ -7161,10 +7161,10 @@ tags = [
     "subagent-liveness",
     "p1",
 ]
-status = "pending"
+status = "claimed"
 notes = "scout 2026-07-25 (score 1.20). 証拠: crates/condukt/src/main.rs:3908-3910 で stuck_task_ids の結果を取り、3923-3927 で t.status = Pending; t.worktree = None; t.branch = None; t.updated_at = None; を生存確認も dirty 判定もなしに実行。既存の未使用シグナル crates/condukt/src/worktree.rs:2014 の pub fn is_dirty。TTL 既定は circuit.rs:349 / config.rs:205 の stuck_ttl_secs: 1800。帰結: 生きている worker の未コミット作業が state から切り離され孤児化し、同一 worktree に2体が乗る。完了条件: 既定で dry-run になり、dirty な worktree を持つ対象は明示確認なしに abandon されない。worktree を消さずに reset する経路の回帰テストがある。"
 created_at = 1784916597
-updated_at = 1784916597
+updated_at = 1789291299
 weight = 0.0
 issue_number = 50
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/50"
@@ -7180,10 +7180,10 @@ tags = [
     "subagent-liveness",
     "p1",
 ]
-status = "pending"
+status = "claimed"
 notes = "scout 2026-07-25 (score 1.13)。2026-07-29 の staleness 監査で自動検証者は STALE と判定したが、3つの完了条件のうち1つが未達なので LIVE のまま残す（検証者自身も残渣として言及しながら STALE と結論していた）。実測 (測定点 6302d166): 条件(1) reap 一覧の可視化と、条件(3) 長時間 Task 中の生存判定は、progress ゲート化により実質的に解決済み。crates/condukt/src/claim.rs:285 が Reap fires ONLY on Known(Stalled) と明記し、stale_claim_but_progressing_is_not_reaped と stale_claim_with_undetermined_progress_is_not_reaped の2テストが pin している。condukt state probe も landed。/ 未達なのは条件(2): claim::heartbeat の Err が呼び出し側で警告として表面化すること。crates/condukt/src/main.rs:3790 はいまも let アンダースコア = claim::heartbeat(...) で Result を捨てている。同ファイル 3863 行には疑問符で伝播する版があるので、3790 だけが取り残された形。/ 残る完了条件: main.rs:3790 の heartbeat 失敗を握り潰さず警告として表面化させ、それを pin するテストを置く。"
 created_at = 1784916598
-updated_at = 1785280078
+updated_at = 1789291299
 weight = 0.0
 issue_number = 51
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/51"

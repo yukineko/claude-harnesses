@@ -23067,3 +23067,62 @@ updated_at = 1789274268
 weight = 0.0
 issue_number = 554
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/554"
+
+[[task]]
+id = "15ef580f"
+title = "rollout 後も稼働セッションは旧 version dir に pin され続けるため dark gate は再起動まで dark のまま — check-plugin-rollout.py はその間 clean を報告する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+実測 2026-09-13、測定点 e927a311。8206b09f の rollout 中に観測した派生欠陥で、8206b09f とは別クラス。
+
+観測した経緯:
+1. tdd 0.1.29 の version dir に host binary が無く Stop gate が dark だった (8206b09f)
+2. scripts/rollout-plugins.sh --plugin tdd で 0.1.31 を build+seed し、
+   installed_plugins.json の installPath が tdd/0.1.31 を指すようになった
+3. rollout 直後に python3 scripts/check-plugin-rollout.py を再実行 --> tdd の所見 0 件 (clean)
+4. **にもかかわらず、稼働中のこのセッションの tdd Stop hook は同じメッセージを返し続けた** (逐語):
+     tdd gate did not run: no bundled binary for darwin-arm64, so whether implementation
+     changed without a test was NOT evaluated. This stop is therefore UNCHECKED, not approved
+
+原因 (観測): 稼働中の claude プロセスは起動時に解決した plugin root を保持し続ける。
+prune の出力がその証拠を逐語で残している:
+  kept tdd/0.1.29 (in use by pid 64230,64566,80124)
+pid 64230 はこのセッション自身 (ps -o pid,ppid,comm -p の親が claude 64230)。
+つまり registry がディスク上で 0.1.31 を指していても、live session は 0.1.29/bin/tdd を exec する。
+0.1.29/bin には launcher しか無いので dark のまま。
+
+なぜ問題か (ここが本題): check-plugin-rollout.py は **ディスク上の registry** を見て clean を返すが、
+**稼働中のセッションが実際に exec している version dir** は見ていない。したがって
+「ゲートが dark である」状態が続いている最中に、検出器は「問題なし」を報告する。
+これは 8206b09f が塞いだ短絡 (version drift が host-binary 不在を隠す) と同じ形の、
+一段外側の fail-open である: 検査したのは registry であって稼働実体ではない。
+CLAUDE.md 第3節の「検査した」と「検査できなかった」を下流から区別不能にする形でもある。
+
+判定不能なので両方の読みを残す:
+  (a) 実在の欠陥 = 検出器の対象が間違っている。稼働プロセスが握っている version dir を
+      観測して、registry と食い違うなら報告すべき。prune が既に in use by pid を
+      算出できているので、同じ情報源が使える見込みがある。
+  (b) 意図的な仕様 = rollout は次回セッションから効くのが設計で、稼働セッションへの反映は
+      対象外。この場合でも「稼働セッションは旧版のまま」という事実は report に出すべきで、
+      黙って clean を返すのが問題。
+
+見分ける方法: check-plugin-rollout.py と prune-plugin-cache.py の in-use 判定ロジックを読み、
+稼働 pid が握る version dir を取得する経路が既にあるか確認する。あるなら (a) は実装で解ける。
+そのうえで「registry は新版・稼働 pid は旧版」の状態を作って検出器が非0で落ちるかを
+RED として先に観測すること。
+
+この run での扱い: ユーザー裁定により、このセッションは dark のまま進めた。
+0.1.29 の bin へ手で cp する案は、version dir が 0.1.29 を名乗りながら中身が 0.1.31 ビルドになる
+乖離を作る (禁忌ルールが手動 cp を禁じる理由そのもの、かつ 8206b09f の完了条件 1 が
+古いバイナリの流用を禁じているのと同じ形) ので採らなかった。
+
+関連: 8206b09f (dark の本体)、d52e2f79 (fleet-wide な harness-core drift)、
+b6a80342 (rollout drift の検出を push ではなく session start に置き直す)。"""
+created_at = 1789274445
+updated_at = 1789274445
+weight = 0.0
+issue_number = 555
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/555"

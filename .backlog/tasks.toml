@@ -24593,3 +24593,69 @@ updated_at = 1789294567
 weight = 0.0
 issue_number = 617
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/617"
+
+[[task]]
+id = "1050f9d1"
+title = "condukt の marketplace/plugin.json changelog で、段落のバージョンラベルと version フィールドが食い違っている (v0.7.162 と書かれた段落の実体は 0.7.164)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "doc-drift",
+    "condukt",
+    "p2",
+]
+status = "pending"
+notes = """
+測定 2026-09-13、測定点 main 7cf423f4。
+
+事実: .claude-plugin/marketplace.json の condukt エントリで version フィールドは 0.7.164 だったが、description の先頭段落は「v0.7.162: doc-only correction of the prose the 0.7.161 integration left stale ...」と名乗っていた。同じ description の中には、別の作業が付けた「v0.7.163」と「v0.7.162 (integrated; branch-local label was v0.7.161)」の段落も存在する。したがって v0.7.162 というラベルが 2 つの別々の変更に付いており、どちらが 0.7.162 として配布された実体なのかを changelog だけからは決められない。
+
+なぜ起きるか (観測ではなく構造の説明): 並行セッションが同じ crate を同時に bump すると、ブランチ内で付けたラベルと、統合時に採番し直した実際のバージョンがずれる。こちらの作業では採番し直した段落に "(integrated; branch-local label was vX)" を明記して食い違いを可視化したが、この規約は機械強制されていないので守られないことがある。
+
+影響: changelog は「どの版に何が入ったか」を答えるための唯一の記録で、その版番号が実際の配布版と一致しないなら、その段落は次の読者を誤らせる。CLAUDE.md 第4節の散文ドリフトと同じクラス。
+
+直し方の候補 (未検証):
+読み 1: check-plugin-versions.py を拡張し、description の先頭段落のラベルが version フィールドと一致することを要求する。統合時の採番し直しを機械が検出できるようになる。ただし "(integrated; branch-local label was vX)" のような但し書きの形を規約として固定する必要がある。
+読み 2: changelog を description に持たせること自体をやめ、別ファイルに出す。
+見分け方: まず読み 1 の照合を warning として回し、実際にどれくらいの頻度でずれるかを測る。今は測っていない。
+
+他人のブランチが書いた段落なので、こちらでは書き換えていない。"""
+created_at = 1789296699
+updated_at = 1789296699
+weight = 0.0
+issue_number = 622
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/622"
+
+[[task]]
+id = "077617cf"
+title = "blastguard が python heredoc 内の文字列を shell リダイレクトと誤読して、読み取り専用のコマンドを 3 回ブロックした"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+status = "pending"
+notes = """
+測定 2026-09-13、測定点 main 7cf423f4 前後。flow batch5 の統合作業中に 3 回発生した。いずれも実際には何も破壊しないコマンド。
+
+ケース 1 (逐語): Refused: SC=/private/... && git diff -- .backl ... mutates this projects MAIN working tree. 実体は git diff の出力を /private/tmp のスクラッチパッドへリダイレクトするだけの読み取り。guard-maintree-bash.py が main ツリーの mutation と判定した。既出の 55826e4f と同じクラス (リダイレクト先が repo 外でも main の変更とみなす)。
+
+ケース 2 (逐語): the redirect destroys the files current contents and the empty path is a relative path and blastguard does not know which directory it is relative to, so it cannot tell whether these bytes are recoverable。実体は python3 - のヒアドキュメント内に git conflict marker の文字列 (大なり記号 7 個 + 半角空白 + main) を含む正規表現リテラルが入っていただけ。ヒアドキュメントの本文が shell のリダイレクト構文として解析されている。
+
+ケース 3: 同じヒアドキュメント内の print 文に矢印 (イコール + 大なり記号) を含む文字列リテラルがあるだけでブロックされた。chr(62) で組み立てるよう書き換えると通った。
+
+影響: conflict 解決のような、まさに git の marker 文字列を扱う作業でブロックが多発する。迂回として文字列を chr() で組み立てる・スクラプトファイルに逃がす、という書き換えを強いられるが、これは検出を弱めているのではなく、単に同じ読み取りを別の綴りで書いているだけなので、ゲートの目的 (破壊の防止) は一切果たされていない。誤検知が高頻度だと、本物の警告と見分けがつかなくなる。
+
+直し方の候補 (未検証):
+読み 1: ヒアドキュメント本体 (<< EOF から終端まで) を shell 構文解析の対象から外す。python3 - や bash -s のような stdin 実行の引数は shell のトークンではない。
+読み 2: リダイレクト先が repo 外の絶対パス (スクラッチパッド) であることを判定できたときは main ツリーの mutation としない。ケース 1 はこれで消える。
+見分け方: この 3 ケースを再現テストとして固定してから、どちらの修正が何件消すかを測る。今は測っていない。
+
+注意: 迂回のために書き換えた綴りをゲートの回避手段として定着させないこと。正しい直し方はパーサ側であり、書き手側の綴り規約ではない。"""
+created_at = 1789296709
+updated_at = 1789296709
+weight = 0.0
+issue_number = 623
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/623"

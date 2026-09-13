@@ -55,6 +55,30 @@ pub struct Task {
     pub project_unresolved: bool,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// The repo-relative files this task is expected to touch, as declared by
+    /// whoever filed it. Consumed by [`crate::dedup::scope_overlap`] and
+    /// [`crate::dedup::group_by_overlap`] to answer whether two queued tasks
+    /// would collide if two sessions ran them at the same time.
+    ///
+    /// **An empty vector means "nobody declared a scope", NOT "this task
+    /// touches nothing".** Those are different answers and collapsing them is
+    /// the fail-open this field was added with a three-valued reader to avoid:
+    /// `any()` over an empty set is `false`, so a bool-valued overlap check
+    /// reports "does not overlap" for precisely the tasks whose overlap is
+    /// UNKNOWN. `crates/condukt/src/schedule.rs`'s `Class::Parallel` arm hit
+    /// exactly this and answers it by routing an undeclared task onto the
+    /// serial track ("when in doubt, serialize"); the backlog side answers it
+    /// by returning the third value [`crate::dedup::ScopeOverlap::Undeclared`]
+    /// instead of a `false` (CLAUDE.md §3).
+    ///
+    /// Absent in every tasks.toml written before this field existed;
+    /// `#[serde(default)]` loads those as an empty vector. The empty default is
+    /// correct here BECAUSE empty is not read as "no overlap": a legacy record
+    /// genuinely did not declare a scope, an empty vector is the faithful
+    /// spelling of that, and the three-valued reader reports it as
+    /// `Undeclared` rather than guessing either way.
+    #[serde(default)]
+    pub touched_files: Vec<String>,
     pub status: String,
     #[serde(default)]
     pub notes: String,
@@ -207,6 +231,7 @@ mod tests {
             issue_number: None,
             issue_url: None,
             issue_closed_at: None,
+            touched_files: Vec::new(),
         }
     }
 
@@ -454,6 +479,51 @@ mod tests {
             t.issue_closed_at.is_none(),
             "an absent issue_closed_at must read as None (unconfirmed), so the close is retried"
         );
+    }
+
+    /// (A) Back-compat: a tasks.toml record written before `touched_files`
+    /// existed must load, with the field reading as an EMPTY declaration.
+    /// `#[serde(default)]` is what makes that true; without it every legacy
+    /// record fails to deserialize and the whole store stops loading.
+    ///
+    /// The empty vector is the honest reading of "this record never declared a
+    /// scope" — and it is safe to default to only because the reader
+    /// (`crate::dedup::scope_overlap`) answers an empty declaration with the
+    /// third value `Undeclared` rather than with "does not overlap".
+    /// Dies if `#[serde(default)]` is dropped from `touched_files`.
+    #[test]
+    fn serde_roundtrip_without_touched_files() {
+        let json = r#"{
+            "id": "abcd1234",
+            "title": "old task",
+            "project": "/tmp/p",
+            "tags": [],
+            "status": "pending",
+            "notes": "",
+            "created_at": 0,
+            "updated_at": 0
+        }"#;
+        let t: Task = serde_json::from_str(json).expect("deserialize without touched_files");
+        assert!(
+            t.touched_files.is_empty(),
+            "an absent touched_files must read as an empty (undeclared) scope"
+        );
+    }
+
+    /// A record that DOES declare a scope round-trips with the entries intact —
+    /// otherwise a declared scope silently degrades into an undeclared one on
+    /// the next save/load cycle.
+    /// Dies if the field is marked `#[serde(skip)]`.
+    #[test]
+    fn touched_files_roundtrips_through_serde() {
+        let mut t = make_task(vec![], "pending");
+        t.touched_files = vec![
+            "crates/backlog/src/task.rs".to_string(),
+            "crates/backlog/src/dedup.rs".to_string(),
+        ];
+        let json = serde_json::to_string(&t).unwrap();
+        let back: Task = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.touched_files, t.touched_files);
     }
 
     /// A record that DOES carry the field round-trips through serde with the

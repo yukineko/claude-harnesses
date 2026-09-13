@@ -6130,7 +6130,7 @@ tags = [
     "scout",
     "p1",
 ]
-status = "claimed"
+status = "done"
 notes = "根拠: 類似度判定は既に実装済みで未適用 — overwatch/src/lease.rs:29 の POSSIBLE_DUPLICATE_THRESHOLD 0.6 と lease.rs:191 の possible_duplicate は live lease 同士でしか比較しておらず backlog キューには一切かかっていない。グループ実行の受け皿である tags と tag フィルタは next_claim (store.rs:638, main.rs:319) まで貫通済みなので、束ね方だけが欠けている。/ 完了条件: backlog の近縁タスクが1グループとして出力され、1グループを1セッションが取る運用が成立する。似た2タスクが別セッションで同時に走らないことを観測。"
 created_at = 1784745779
 updated_at = 1789287766
@@ -6148,7 +6148,7 @@ tags = [
     "scout",
     "p1",
 ]
-status = "claimed"
+status = "done"
 notes = "根拠: crates/backlog/src/task.rs:21-43 に scope も touched_files も無い。一方 overwatch/src/lease.rs:103 の scopes_overlap は実装済み (テスト lease.rs:541)。flow SKILL.md:247 は scope が未確定なら省略と書いており、空 scope は衝突検知の対象外に落ちる。/ 完了条件: Task が scope を持ち serde default で旧 tasks.toml が読める。scope の重なりで束を作れる。overwatch begin --scope へ backlog 側の scope をそのまま渡せる。"
 created_at = 1784745779
 updated_at = 1789287766
@@ -6217,7 +6217,7 @@ tags = [
     "scout",
     "p1",
 ]
-status = "pending"
+status = "done"
 notes = "根拠: 91e503c8 で記録した帰属バグの是正側。cargo fmt --all と cargo clippy --workspace は他セッションの crate まで見るため、worktree 分離しても main 側の赤を拾う可能性がある。第8節の worktree 義務化と対になる修正。/ 完了条件: 自分が触っていない crate の赤によって自分の停止がブロックされないことをテストで観測する。"
 created_at = 1784746561
 updated_at = 1789288110
@@ -23746,3 +23746,219 @@ updated_at = 1789289865
 weight = 0.0
 issue_number = 588
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/588"
+[[task]]
+id = "635c50e5"
+title = "既存の赤: backlog の project_scope テスト 2 件が落ちている (a_pinned_store_dir_still_scopes_by_project / _still_works_outside_any_repo、out=no tasks)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "test",
+    "red",
+    "p1",
+]
+status = "pending"
+notes = """
+実測 2026-09-13、測定点 1235d60d。backlog の並列バッチ実装中に worker が発見し、親セッションが独立に再現した既存の赤。今回の変更とは無関係である。
+
+逐語:
+
+  test a_pinned_store_dir_still_works_outside_any_repo ... FAILED
+  test a_pinned_store_dir_still_scopes_by_project ... FAILED
+  thread 'a_pinned_store_dir_still_works_outside_any_repo' panicked at crates/backlog/tests/project_scope.rs:366:5:
+  out=no tasks
+  thread 'a_pinned_store_dir_still_scopes_by_project' panicked at crates/backlog/tests/project_scope.rs:325:5:
+  out=no tasks
+  test result: FAILED. 6 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out
+
+【既存であることの根拠 — 判断ではなく測定】
+worker 側: 自分の tracked 変更を stash し、新規 2 ファイルを退避して HEAD で再ビルドしたところ、バイト単位で同一の失敗が出た。その後復元し diff で無傷を確認。
+親セッション側: crates/backlog が main と完全に同一 (git diff --stat main -- crates/backlog が空) の別 worktree で cargo test -p backlog --test project_scope を走らせ、同じ 2 件が同じ行番号で落ちることを確認した。
+
+つまりこの赤は 2 つの独立した観測で既存と確定している。
+
+【なぜ誰も気づいていないか】
+donegate の test-changed-crates.sh は変更 crate だけを cargo test するので、crates/backlog を誰も触らない限りこの target は走らない。pre-commit も pre-push も cargo test をしない (pre-push は cargo check --workspace であって型検査)。memory の red-tickets-often-already-fixed が指摘する「赤も緑も誰も観測していない」状態そのものである。
+
+【やること】
+out=no tasks が出るということは、pin した store dir から list が何も返していない。project スコープの解決が絡む経路なので、task.rs の project_unresolved と store の canonicalize_project_with_marker まわりを疑うのが順当。まず RED を再現する最小ケースに落としてから直す。
+
+注意: この 2 件を「環境のせい」で通過させないこと (CLAUDE.md 第4節)。落ちている理由を観測で特定する。
+
+関連 e73a1fd5 / f7b018f8。"""
+created_at = 1789289359
+updated_at = 1789289359
+weight = 0.0
+issue_number = 586
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/586"
+[[task]]
+id = "7b6bcfe6"
+title = "harness_core の text_similarity は日本語で機能しない — 分かち書きしないため文節が丸ごと1トークンになり、既知の重複ペアが 0.26 (閾値 0.6) にしかならない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "fail-open",
+    "p1",
+]
+status = "pending"
+notes = """
+実測 2026-09-13、測定点 1235d60d。f7b018f8 の閾値 0.6 を既知の重複ペアで検証しようとして判明した、より上流の欠陥。
+
+【何が壊れているか】
+harness_core::lessons::tokenize は空白と非英数字でしか区切らない:
+
+    for t in s.to_lowercase().split(|c: char| !c.is_alphanumeric()) {
+        if t.len() >= 3 and STOP に無い { out.insert(t) }
+    }
+
+日本語は分かち書きしないうえ、ひらがな・カタカナ・漢字はすべて char::is_alphanumeric が true なので区切られない。結果、日本語の1文節がまるごと1トークンになる。さらに t.len() はバイト長なので、助詞「の」「が」は3バイトあり単独トークンとして残る。
+
+【実測】既知の重複ペア (2026-09-13 に単一セッションが別item として連続 claim した 91e503c8 と 15eb3f94) のタイトルで測ると:
+
+  tokens A: check, donegate, fail, open, required, skip, vector, workspace, が, の, ファイルへの構造的圧力, 他セッションの赤が全セッションを止める, 全体を見るため, 共有
+  tokens B: check, donegate, required, reviewgate, workspace, worktree, の, を自分の, スコープに絞る, 全体スキャンをやめる
+
+  intersection = check, donegate, required, workspace, の  (5)
+  union = 19
+  jaccard = 0.263158
+
+閾値 0.6 の半分以下であり、この「本物の重複」は検出できない。
+
+注意: この 0.263 は tokenize と jaccard を Python で忠実に再実装して出した replication であって、Rust の text_similarity を直接実行した値ではない。Rust 側での測定が要る。ただし結論の根拠はこの算術ではなくトークン列そのもので、そちらは tokenize を読めば確認できる。
+
+【何が言えるか】
+マッチしているのは英単語 (donegate / required / check / workspace) と助詞「の」だけで、日本語の実質部分は「他セッションの赤が全セッションを止める」のような巨大トークンになり何ともマッチしない。つまり text_similarity は日本語タイトルに対して事実上、英単語の混入率しか測っていない。「の」が効いているのは偶然のノイズであり、精度をさらに悪くしている。
+
+【影響範囲 — 既に出荷済みのゲートが無音で無効化されている】
+consumer は crates/overwatch/src/lease.rs:195 の possible_duplicate (第4.6a) 一本。このリポジトリの lease goal はほぼ日本語なので、possible_duplicate は日常的に「重複なし」を返している可能性が高い。これは CLAUDE.md 第1節が statusline の例 (3b1eb24) で名指しした「沈黙が余裕ありと読まれる fail-open」と同型である。何も出ないことが検査済みと読まれている。
+
+【やること】
+(1) Rust 側で上記ペアの text_similarity を実測し、値を事実として固定する。
+(2) possible_duplicate が日本語 goal のペアに対して実際に何を返すかを、既知の重複ペアで観測する。空振りするなら、それは閾値の問題ではなくトークナイザの問題として記録する。
+(3) 閾値 0.6 を黙って下げて取り繕わない。0.263 を拾うために閾値を下げると無関係なペアも拾う。直すならトークナイザ側 (日本語は文字 n-gram、たとえば bigram に落とす) である。
+(4) f7b018f8 の backlog 側クラスタリングは、この上流欠陥を継承する。同じ scorer を使う限り日本語タイトルでは効かないことを、実装側にも明記する。
+
+関連 f7b018f8 / 15eb3f94 / 91e503c8 / 56eb3f9a。"""
+created_at = 1789280225
+updated_at = 1789280225
+weight = 0.0
+issue_number = 574
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/574"
+
+[[task]]
+id = "83b6ec7a"
+title = "check-fail-open の ratchet baseline が未更新 — count が 63 から 45 へ改善しているのに locked in されず、静かに退行しうる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "ratchet",
+    "p2",
+]
+status = "pending"
+notes = """
+実測 2026-09-13、測定点 1235d60d。逐語:
+
+  fail-open-guard RATCHET: count FELL 63 -> 45 — an improvement that is not yet locked in. Ratchet the baseline down so the gain cannot silently regress: run python3 scripts/check-fail-open.py --update-baseline and commit scripts/check-fail-open.baseline.
+
+pre-commit は --ratchet 無しで呼ぶので commit は止まらない。したがってこのドリフトは誰も踏まないまま残る。18 件ぶんの改善が baseline に反映されていないので、その 18 件が再び fail-open に戻っても gate は気付かない。
+
+意図的に据え置いているのでなければ --update-baseline して commit する。ただし並行セッションが同時に count を動かしている最中に再 baseline すると、相手の未コミットの改善を巻き込むか、逆に相手の退行を locked in してしまうので、実行するセッションは実行時点で他セッションが走っていないことを観測してから行うこと (CLAUDE.md 第8節)。
+
+本セッションで実行しなかった理由: 進行中の並列バッチが crates を触っており、上の条件を満たせなかった。判断で埋めず事実として残す。"""
+created_at = 1789287940
+updated_at = 1789287940
+weight = 0.0
+issue_number = 583
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/583"
+
+[[task]]
+id = "93a8bd27"
+title = "reviewgate: changed_files は fail-closed なのに diff_text は fail-open — 変更ありと観測済みなのに空 diff が allow(empty-diff) になる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "fail-open",
+    "p1",
+]
+status = "pending"
+notes = """
+実測 2026-09-13、測定点 1235d60d。propguard で 87dbfbb8 として done になった欠陥の、reviewgate 側の未修正ミラー。
+
+逐語 crates/reviewgate/src/review.rs:205-217 (and は原文の参照記号を置換したもの):
+
+    let files = reviewable_files(cfg, and changed);
+    if files.len() < cfg.min_changed_files {
+        return allow("no-reviewable-changes", st);
+    }
+    let crate::git::DiffText { text: diff, truncated } =
+        crate::git::diff_text(root, and files, cfg.max_diff_bytes);
+    if diff.trim().is_empty() {
+        return allow("empty-diff", st);
+    }
+
+この allow に到達した時点で changed_files は既に「変更あり」を積極的に観測している (files.len() が min_changed_files 以上)。したがって diff が空になる経路は (a) diff_text 内部の git 失敗、または (b) バイナリ/非UTF-8 の変更しかない。どちらも判定不能であり、CLAUDE.md 第3節が禁じる permissive 側への解決である。
+
+原因は crates/reviewgate/src/git.rs:135 の run_diff。Command の spawn 失敗も非0終了も黙って無視され、出力が空のまま返る:
+
+    if let Ok(o) = Command::new("git").current_dir(root).args(and args).output() {
+        if o.status.success() {
+            out.push_str(and String::from_utf8_lossy(and o.stdout));
+        }
+    }
+
+同じモジュール内で changed_files 側 (git.rs:33-79) は collect が false を返したら ChangeScan::Failed に倒す fail-closed になっており、契約が非対称である。git.rs:1-10 のモジュール doc も changed_files の三値だけを説明し diff_text には触れていない。
+
+さらに DiffText の truncated フラグは「大きすぎて切った」だけを表現しており「取得に失敗した」を表現できない。三値が要る: Known(text) / Truncated / Failed。Failed は既存の decide_truncated と同じ bounded block へ倒すのが筋で、写経元はその truncated 経路そのもの。
+
+完了条件: changed_files が非空を返したのに diff_text が空/失敗を返す状況で reviewgate が allow しないことを、先に RED を観測したうえでテストで固定する。空虚テスト防止の対照として、本当に空の diff (クリーンなツリー) では allow(empty-diff) のままであることも同時に固定する。
+
+関連 87dbfbb8 (propguard 側・done) / 8271c1a1 (done だが reviewgate の run_diff は残っている) / 1ddd37e9 / f71ac81a (同じ diff_text の別軸・タイムアウト)。"""
+created_at = 1789280099
+updated_at = 1789280099
+weight = 0.0
+issue_number = 573
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/573"
+
+[[task]]
+id = "d470a478"
+title = "donegate を crate scoped にした結果、共有 crate を変更したときの依存先 fmt/clippy が誰にも検査されない (CI 禁止のため canon の backstop が存在しない)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "coverage",
+    "p1",
+]
+status = "pending"
+notes = """
+実測 2026-09-13、測定点 1235d60d。15eb3f94 の実装 (donegate の fmt/clippy を触った crate だけに絞る) で顕在化した、リポジトリ全体の被覆欠落。15eb3f94 自体は正しい修正であり、これはその副作用を独立の事実として残すもの。
+
+【欠落の内容】
+harness-core のように広く依存される crate を変更しても、lint されるのはその crate 自身だけで、~39 の依存先の clippy/fmt 状態は検査されない。
+
+写経元の scripts/test-changed-crates.sh は同じ制約を KNOWN LIMITATION (deliberate, not an oversight) として明記し、fan-out を捕まえるのは CI の仕事だと書いている。しかし CLAUDE.md 第7節により GitHub Actions はこのリポジトリで使用禁止なので、その逃げ道は存在しない。つまり canon のコメントが前提にしている backstop が、このリポジトリには無い。
+
+【実測した backstop の有無】
+自動で workspace 全体に効くのは .githooks/pre-push の cargo check --workspace --all-targets だけ。これは型検査であって lint でも fmt でもない。
+scripts/check-clippy-lints.py (pre-commit) も変更 crate scoped なので backstop にならない。
+したがって広く依存される crate を変更したあと、依存先の clippy/fmt 状態は手動 sweep まで UNKNOWN のままになる。
+
+【なぜ fail-open と呼ぶか】
+沈黙が検査済みと読まれる形だから。donegate が緑を返したとき、それは「触った crate は緑」であって「workspace が緑」ではない。下流 (人間) はその区別を出力から読み取れない。CLAUDE.md 第1節が statusline の例 (3b1eb24) で名指しした型と同じである。
+
+【候補の解】
+(a) 依存先を cargo metadata の逆依存グラフで求め、直接の依存先までは lint する。第1近似で fan-out の大半を拾えるはずで、コストは測る必要がある。
+(b) Stop ゲートではなく pre-push に workspace 全体の lint を足す。頻度が低いので latency 予算が違う。
+(c) 何もしないが、donegate の緑の意味を出力で明示する (触った crate のみ検査した、と毎回書く)。最低限これは要る。
+
+どれを採るかは latency の実測が要る。判断ではなく測定で決めること。
+
+関連 15eb3f94 / 91e503c8。"""
+created_at = 1789287938
+updated_at = 1789287938
+weight = 0.0
+issue_number = 581
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/581"
+

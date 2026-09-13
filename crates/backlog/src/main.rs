@@ -1,5 +1,6 @@
 mod claim_ledger;
 mod config;
+mod dedup;
 mod divergence;
 mod driver;
 mod github;
@@ -62,6 +63,20 @@ enum Command {
         /// this title+project's content hashkey.
         #[arg(long)]
         force: bool,
+    },
+
+    /// Group the queued tasks by DECLARED file scope (`touched_files`), so two
+    /// items that would collide are visible before two sessions take them.
+    /// Advisory: it prints, it never blocks. Tasks that declare no scope are
+    /// listed separately — an undeclared scope is not "no overlap".
+    Overlap {
+        /// Filter by project path
+        #[arg(long)]
+        project: Option<String>,
+
+        /// Every project IN THIS STORE, not just the cwd-resolved one.
+        #[arg(long)]
+        all: bool,
     },
 
     /// List tasks
@@ -711,6 +726,53 @@ fn run(cli: Cli) -> Result<()> {
                 gh_probe,
             )?;
             println!("added: {id}");
+            // (f7b018f8) The store's own duplicate guard is an EXACT hashkey
+            // match, so a differently-phrased filing of the same work is filed
+            // silently. Surface the near-duplicate peers here. This is
+            // ADVISORY: the task above is already written, this cannot fail the
+            // command, and it never blocks — the ruling was
+            // 「blocking しないまま、ただし必ず可視化」.
+            report_near_duplicates(&tasks_path, &id);
+        }
+
+        Command::Overlap { project, all } => {
+            let tasks_path = store_path()?;
+            let effective_project = read_project_scope(&location, project, all, "overlap")?;
+            let queued: Vec<task::Task> =
+                store::list(&tasks_path, None, effective_project.as_deref(), None)?
+                    .into_iter()
+                    .filter(dedup::is_queued)
+                    .collect();
+            let grouping = dedup::group_by_overlap(&queued);
+            println!(
+                "file-scope overlap over {} queued task(s) (advisory — nothing is blocked):",
+                queued.len()
+            );
+            if grouping.groups.is_empty() {
+                println!("  (no task in this queue declares touched_files)");
+            }
+            for group in &grouping.groups {
+                println!("  group: {}", group.join(" "));
+            }
+            // The undeclared list is printed even when it is the WHOLE queue —
+            // especially then. `touched_files` is new, so every record written
+            // before it existed lands here, and rendering that as an empty
+            // overlap report would be the exact "checked, nothing found" lie
+            // the three-valued judgment exists to prevent.
+            println!(
+                "  undeclared: {} task(s) — {} (must_serialize = {}); this is NOT \"no overlap\"",
+                grouping.undeclared.len(),
+                dedup::ScopeOverlap::Undeclared.label(),
+                dedup::ScopeOverlap::Undeclared.must_serialize()
+            );
+            for id in &grouping.undeclared {
+                let title = queued
+                    .iter()
+                    .find(|t| &t.id == id)
+                    .map(|t| t.title.as_str())
+                    .unwrap_or("");
+                println!("    {id}  {title}");
+            }
         }
 
         Command::List {
@@ -916,6 +978,54 @@ fn run(cli: Cli) -> Result<()> {
                             "hashkey".to_string(),
                             serde_json::Value::String(task::hashkey(&t.title, &t.project)),
                         );
+                        // (f7b018f8) Near-duplicate peers travel with the task
+                        // a driver was just handed, in BOTH channels: this
+                        // field for the driver, and the stderr notice below for
+                        // the human. Two sessions taking the same work twice is
+                        // what this exists to make visible; a field nobody
+                        // prints would not have made it visible.
+                        //
+                        // `peers` is a scan RESULT, and an empty one is not a
+                        // clean bill of health — the stderr notice says so
+                        // explicitly, which is why it is emitted unconditionally
+                        // rather than only when peers were found.
+                        let peers = match store::load(&tasks_path) {
+                            Ok(all) => {
+                                dedup::near_duplicates(&t, &all, dedup::NEAR_DUPLICATE_THRESHOLD)
+                            }
+                            Err(e) => {
+                                // Re-reading the store failed AFTER the claim
+                                // succeeded. Say so; do not print an empty
+                                // peer list, which reads as "scanned, nothing
+                                // found" (CLAUDE.md §3).
+                                eprintln!(
+                                    "warning: near-duplicate scan for {} could not run \
+                                     (store re-read failed: {e}) — this is NOT \"no \
+                                     duplicates\"",
+                                    t.id
+                                );
+                                obj.insert(
+                                    "near_duplicates_scanned".to_string(),
+                                    serde_json::Value::Bool(false),
+                                );
+                                Vec::new()
+                            }
+                        };
+                        if !obj.contains_key("near_duplicates_scanned") {
+                            obj.insert(
+                                "near_duplicates_scanned".to_string(),
+                                serde_json::Value::Bool(true),
+                            );
+                            eprintln!(
+                                "{}",
+                                dedup::near_duplicate_report(
+                                    &t,
+                                    &peers,
+                                    dedup::NEAR_DUPLICATE_THRESHOLD
+                                )
+                            );
+                        }
+                        obj.insert("near_duplicates".to_string(), serde_json::to_value(&peers)?);
                     }
                     println!("{}", serde_json::to_string_pretty(&v)?);
                 }
@@ -1289,6 +1399,45 @@ fn store_repo_root(tasks_path: &Path) -> String {
         .and_then(|p| p.parent())
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default()
+}
+
+/// (f7b018f8) Print the near-duplicate scan for task `id` to stderr.
+///
+/// ADVISORY by construction: it returns `()`, carries no verdict, and cannot
+/// change any exit code — the ruling was 「blocking しないまま、ただし必ず
+/// 可視化」 (do not block; always make it visible). It runs AFTER the write, so
+/// a task is never lost to a failing scan.
+///
+/// Every failure path says WHY the scan did not run instead of printing an
+/// empty peer list: "could not scan" and "scanned, found nothing" must not
+/// render the same (CLAUDE.md §3). Note that even a successful empty scan is
+/// not a clean bill of health here — see `dedup`'s module docs on the
+/// tokenizer's blind spot for Japanese titles (backlog 7b6bcfe6) — which is
+/// why `dedup::near_duplicate_report` renders that case explicitly rather than
+/// staying silent.
+fn report_near_duplicates(tasks_path: &Path, id: &str) {
+    let all = match store::load(tasks_path) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!(
+                "warning: near-duplicate scan for {id} could not run (store re-read \
+                 failed: {e}) — this is NOT \"no duplicates\""
+            );
+            return;
+        }
+    };
+    let Some(anchor) = all.iter().find(|t| t.id == id) else {
+        eprintln!(
+            "warning: near-duplicate scan for {id} could not run (the task is absent from \
+             the store it was just written to) — this is NOT \"no duplicates\""
+        );
+        return;
+    };
+    let peers = dedup::near_duplicates(anchor, &all, dedup::NEAR_DUPLICATE_THRESHOLD);
+    eprintln!(
+        "{}",
+        dedup::near_duplicate_report(anchor, &peers, dedup::NEAR_DUPLICATE_THRESHOLD)
+    );
 }
 
 /// Close the GitHub issue mirroring task `id`, if the store says there is one

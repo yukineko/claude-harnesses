@@ -4960,10 +4960,34 @@ title = "overwatch record-finding の --verdict を必須にする（省略時 c
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "claimed"
-notes = "ユーザー裁定 2026-07-21: 省略時に confirmed を記録する現状は、棄却が起きないので fail-open ではないが、UNVERIFIED が既定では決して発生しないことを意味し、同日 CLAUDE.md に明文化した「確実性を捏造しない」不変条件と齟齬する。--verdict 省略は入力エラー(exit 非0)にし、記録者に毎回判断を強制する。既存の全呼び出し箇所(SKILL.md / scripts/continuous-audit.sh / docs/specs/overwatch.md の例を含む)を洗い出して更新すること。証拠: 1a2e89ea で三値化した AuditVerdict の既定経路。完了条件: --verdict なしの record-finding が非0で落ち、テストがその赤を先に観測していること"
+status = "done"
+notes = """
+ユーザー裁定 2026-07-21: 省略時に confirmed を記録する現状は、棄却が起きないので fail-open ではないが、UNVERIFIED が既定では決して発生しないことを意味し、同日 CLAUDE.md に明文化した「確実性を捏造しない」不変条件と齟齬する。--verdict 省略は入力エラー(exit 非0)にし、記録者に毎回判断を強制する。既存の全呼び出し箇所(SKILL.md / scripts/continuous-audit.sh / docs/specs/overwatch.md の例を含む)を洗い出して更新すること。証拠: 1a2e89ea で三値化した AuditVerdict の既定経路。完了条件: --verdict なしの record-finding が非0で落ち、テストがその赤を先に観測していること
+
+--- 2026-09-13 outcome (flow run-20260913-131646-20280 / t3) ---
+DONE. commit b9f43028 on main (merge 9d9dfb09).
+RecordFinding.verdict was Option<String> -> String (clap-required); rollback_cli.rs の
+verdict.map(AuditVerdict::parse).unwrap_or(AuditVerdict::Confirmed) を削除して
+AuditVerdict::parse(verdict) に置換。docs/specs/overwatch.md の 3 箇所から
+「省略時 confirmed」の記述を同一コミットで撤去 (CLAUDE.md 4)。
+RED を先に観測: crates/overwatch/tests/verdict_required.rs の
+omitting_verdict_is_an_input_error が変更前は exit 0 + {"verdict":"confirmed"} を
+記録して落ちることを逐語で確認してから GREEN 化した。空虚防止の control として
+explicit_verdict_is_accepted が confirmed/refuted/unverified の 3 値すべてを通す。
+呼び出し箇所 14 件 (audit_round / compact_findings_cli / disposition_metrics /
+reconcile_fixed / review_queue / undetermined_e2e) を更新、overwatch 26 テストバイナリ green。
+version 0.2.33 lockstep。
+
+未了として明示すること:
+- CLAUDE.md 2(a) 未充足。fork は subagent を起動できないため、実装者と
+  テスト作成者が同一エージェントだった。利害関係のない agent による独立検証が別途必要。
+- condukt 上の状態は verified ではなく done。F->P オラクルが exit 1 で拒否した
+  (no valid fail-to-pass reproduction oracle)。事後に tdd red/green 証跡を捏造しないため
+  done のまま残した。
+- ライブラリ経路 store::record_finding / ReviewFinding::new は今も Confirmed を
+  ハードコードしている (CLI 経路のみ修正)。スコープ外として 7f07228e に起票済み。"""
 created_at = 1784638238
-updated_at = 1789272760
+updated_at = 1789273938
 weight = 0.0
 issue_number = 295
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/295"
@@ -21987,7 +22011,7 @@ title = "tdd FAIL-OPEN: a test-marker regex hit in ANY file (README, toml, fixtu
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
-status = "claimed"
+status = "done"
 notes = '''
 Found and independently re-verified 2026-09-11 at HEAD 2abf8dea by reading crates/tdd/src/gate.rs classify().
 
@@ -22025,9 +22049,29 @@ Suggested fix (narrows the gate, i.e. blocks MORE, which is the safe direction):
 
 Related: gate.rs human_report then renders this as "yes (inline test added)" / "yes (test file + inline test)" (gate.rs around :329-334), asserting an inline test was added when all that was observed is a regex hit somewhere.
 
-Also note the first arm: any added line in a test-glob file, including a blank-adjacent comment line, is evidence. That may be intentional but it is unstated.'''
+Also note the first arm: any added line in a test-glob file, including a blank-adjacent comment line, is evidence. That may be intentional but it is unstated.
+
+--- 2026-09-13 outcome (flow run-20260913-131646-20280 / t2) ---
+DONE. commit f667897d on main (merge 9d9dfb09).
+起票時の suggested fix どおり、marker arm に is_impl_file(file) ガードを追加した
+(crates/tdd/src/gate.rs classify())。あわせて human_report の文言を実挙動に合わせて
+訂正 (CLAUDE.md 4): "yes (test file + inline test)" -> "yes (test file changed +
+test marker in an impl file)"、"yes (inline test added)" -> "yes (test marker in an
+impl file)"。regex がヒットしただけのものを「inline test が追加された」と
+断言していた記述を撤去した。
+RED を先に観測: 追加した marker_in_a_non_impl_non_test_file_is_not_evidence と
+marker_in_a_manifest_is_not_evidence が変更前は 2 件とも落ち、control の
+marker_in_an_impl_file_is_evidence_control が通ることを逐語で確認した。
+mutation 3 体 kill 確認。tdd スイート green。version 0.1.31 lockstep。
+
+未了として明示すること:
+- CLAUDE.md 2(a) 未充足。起票文は disinterested agent による RED テストを要求していたが、
+  fork は subagent を起動できず実装者とテスト作成者が同一だった。独立検証が別途必要。
+- condukt 上の状態は verified ではなく done (F->P オラクルが exit 1 で拒否)。
+- 起票文末尾が指摘していた第 1 arm (test-glob ファイルへの追加行はすべて evidence)
+  はスコープ外として手を付けていない。別途起票する。'''
 created_at = 1789064330
-updated_at = 1789272760
+updated_at = 1789273940
 weight = 0.0
 issue_number = 509
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/509"
@@ -22621,7 +22665,7 @@ tags = [
     "fail-open",
     "p0",
 ]
-status = "claimed"
+status = "pending"
 notes = """
 観測 2026-09-11 (session 1266dc19)。tdd の Stop hook が gate did not run: no bundled binary for darwin-arm64 を返し、実装がテスト無しで変わったかは NOT evaluated のまま停止した。fail-closed で1回 block し、次の stop は通す設計なのでトラップにはならないが、以後すべての stop で tdd ゲートは事実上 dark である (red ではなく dark)。
 
@@ -22636,9 +22680,31 @@ notes = """
 完了条件:
 1. 0.1.29 に対して 0.1.25 の古いバイナリを流用せず (0.1.29 の src は Sep 11 04:24 で新しい)、repo の HEAD から build して seed し、deployed binary が起動することを behavioral に確認する
 2. rebuild が fresh version dir に host bin を seed する経路が tdd でなぜ効かなかったかを特定し、RED を先に観測したうえで塞ぐ
-3. check-plugin-rollout.py が「registry の指す version dir に host bin が無い」を block できるか確認し、できないなら追加する"""
+3. check-plugin-rollout.py が「registry の指す version dir に host bin が無い」を block できるか確認し、できないなら追加する
+
+--- 2026-09-13 partial outcome (flow run-20260913-131646-20280 / t1) ---
+NOT DONE. 完了条件 3 のみ landed。1 と 2 は未了なので pending に戻す。
+
+条件 3 = 達成: commit 51f77f3d on main (merge 9d9dfb09)。
+scripts/check-plugin-rollout.py の check_rollout で、version drift を検出した arm が
+continue で短絡し、同じ crate の host-binary 不在を一切報告しないことが原因だった。
+drift が subsume しない部分集合だけを返す _absent_binary_problems() を追加し、
+continue の前に problems へ extend する。undetermined (crates/<c> を読めない /
+installPath/bin を列挙できない) は「binary あり」ではなく所見として報告する
+(CLAUDE.md 3)。RED を逐語で観測し、mutation 5 体 kill (うち 3 体は undetermined arm の
+テストを足して初めて kill できた)。python スイート 129 件 OK。
+実機で走らせると tdd の dark 状態を実際に報告するようになった。
+
+条件 1 = 未了: 0.1.29 (現在は 0.1.31) の version dir へ HEAD から build した host
+バイナリを seed し、deployed binary が起動することを behavioral に確認する作業は
+GATED deploy (condukt の t4) であり、人間の承認なしに実行しない。よって実行していない。
+条件 2 = 未了: rebuild が fresh version dir に host bin を seed する経路が tdd で
+なぜ効かなかったかの root cause 特定は着手していない。条件 1 の実機確認が前提になる。
+
+したがって「tdd の Stop ゲートが dark である」という現象自体は今も解消していない。
+解消したのは「その dark 状態を check-plugin-rollout.py が検出できない」という検出側の欠落だけ。"""
 created_at = 1789075692
-updated_at = 1789272760
+updated_at = 1789273941
 weight = 0.0
 issue_number = 535
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/535"
@@ -22761,6 +22827,7 @@ updated_at = 1789272899
 weight = 0.0
 issue_number = 544
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/544"
+
 [[task]]
 id = "2afeb849"
 title = "condukt schedule の force-gate が touched_files のパス名に反応する — checker script を編集するだけのタスクが high-risk irreversible に誤分類される"
@@ -22871,3 +22938,52 @@ updated_at = 1789273494
 weight = 0.0
 issue_number = 546
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/546"
+
+[[task]]
+id = "86262040"
+title = "tdd gate.rs classify() 第1arm: test-glob ファイルへの追加行は内容を問わず test evidence になる (意図か fail-open か未判定)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = """
+1ff0fcc9 (marker arm に is_impl_file ガードを足す) を 2026-09-13 に修正した際、
+同じ関数の第 1 arm はスコープ外として意図的に手を付けなかった。その arm の所見をここに残す。
+未判定の起票であり、欠陥かどうかはこのチケットから判断する。
+
+測定点: commit f667897d (main, merge 9d9dfb09)、測定日 2026-09-13。
+crates/tdd/src/gate.rs classify() の逐語:
+
+    for AddedLine { file, text } in added {
+        let marker_hit = markers.is_match(text);
+        if is_test_file(file) {
+            test_marker_added = true; // any added line in a test file is evidence
+            continue;
+        }
+
+第 1 arm は marker_hit を一切見ない。test_globs に一致するパスへの追加行であれば、
+その中身が何であっても test_marker_added を立てる。空行・コメント行・
+インポート行の追加 1 行でも、そのターンの tdd ゲート全体が Clean になり Stop が通る。
+
+2 つの読みがあり、どちらかは未判定である:
+(A) 意図的。テストファイルに触ったこと自体をテスト作業の証拠とみなす設計で、
+    marker regex はテストファイル外の inline test を拾うための補助にすぎない。
+    この読みなら欠陥ではないが、コメント "any added line in a test file is evidence" が
+    唯一の根拠であり、仕様として宣言された場所がない。
+(B) fail-open。「実際にテストが追加されたか判定できない」を「clean」に写している。
+    1ff0fcc9 で塞いだ第 2 arm と同じクラスであり、こちらのほうが到達は容易
+    (テストファイルの空行追加で足りる)。
+
+見分け方: tdd の config に test_globs の意図を書いた宣言、または
+「テストファイルへの無意味な追加行だけで Stop が通ってよい」ことを固定した
+既存テストが存在するかを確認する。存在しなければ (A) は自己申告であって観測ではなく、
+CLAUDE.md 3 (判定不能は制限側) の対象になる。
+
+なお第 2 arm の修正時にこの arm を同時に狭めなかったのは、
+起票 1ff0fcc9 の done_criteria が第 2 arm に限定されていたためであり、
+安全だと判断したからではない。"""
+created_at = 1789273961
+updated_at = 1789273961
+weight = 0.0
+issue_number = 550
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/550"

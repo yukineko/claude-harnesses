@@ -23989,9 +23989,27 @@ worktree cwd (同一秒): last_outcome = null
 読み2 (仕様): outcomes/carve-state は生成物なので ignore は正しく、worktree から compass を回すことを想定していないだけ。
 見分け方: compass の README/DESIGN が outcomes.json を project 永続状態と位置づけているか、それとも再生成可能な cache と位置づけているかを読む。永続状態と書いてあれば読み1。
 
-最低限の是正（読み1でも読み2でも成立する）: 読めなかった場合と 0 件だった場合を区別する。今は両方 null。Determination で undetermined を返し、gap の消費側がそれを 前進なし と読まないようにする。"""
+最低限の是正（読み1でも読み2でも成立する）: 読めなかった場合と 0 件だった場合を区別する。今は両方 null。Determination で undetermined を返し、gap の消費側がそれを 前進なし と読まないようにする。
+
+【2026-09-13 追記 — 三例目。しかもこれは verdict 経路である】
+compass pivot-check を同一秒に 2 つの cwd から実行した実測（測定点 a8f79bd7）:
+
+  main cwd     -> {"recommendation":"persevere","streak":0,"threshold":3,"reason":"latest outcome is forward; persevere"}
+  worktree cwd -> {"recommendation":"persevere","streak":0,"threshold":3,"reason":"no outcomes recorded yet; persevere"}
+
+pivot-check は north_star を彫り直すべきかを決める判定であり、observability ではない。
+worktree から実行すると outcomes が 0 件に見えるため、backward がいくつ積み上がっても
+streak は 0 のままで、**pivot 検出器は worktree からは構造的に発火しない**。
+reason 文字列が no outcomes recorded yet と言っている点に注目 — ゲート自身は
+読めなかったのではなく 一度も記録されていない と述べており、これは
+CLAUDE.md 第3節の 空集合を返さない に真っ向から反する形（Absent と Undetermined の同一視）。
+
+したがって本件は compass の内部都合ではなく、DoD14(b) が要求する
+『共有ストアの worktree 読み取りは Known(空) ではなく Undetermined』の実例である。
+消費者は少なくとも 3 本: compass gap の last_outcome、compass pivot-check、carve-state.json の round。
+"""
 created_at = 1789292019
-updated_at = 1789292019
+updated_at = 1789292706
 weight = 0.0
 issue_number = 602
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/602"

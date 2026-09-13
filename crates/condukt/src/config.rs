@@ -1,4 +1,12 @@
-//! Runtime configuration: defaults <- ~/.condukt/config.toml <- environment.
+//! Runtime configuration: defaults <- ~/.condukt/config.toml <- the shared
+//! autonomy switch file <- environment.
+//!
+//! `autonomous` is the one field with a layer between the file and the
+//! environment: the durable cross-plugin switch (`harness_core::autonomy`),
+//! which ctxrot and autoflow read from the same place. Its precedence — env
+//! beats the switch file, which beats config.toml, which defaults to off —
+//! lives in `harness_core::autonomy::read`, so condukt, ctxrot and autoflow
+//! cannot drift apart on the order.
 //!
 //! Everything is generic and project-agnostic. The AEGIS-specific notion of
 //! "never parallelize these shared files" lives entirely in `shared_globs`, so
@@ -37,7 +45,17 @@ pub struct Config {
     /// loop can run with no user approval beyond genuinely-needed information.
     /// Defaults to false (every existing AskUserQuestion still fires — fully
     /// backward compatible). Read by `condukt state autonomy-check`.
+    ///
+    /// Resolved through `harness_core::autonomy`: the env (`HARNESS_AUTONOMOUS`,
+    /// `CONDUKT_AUTONOMOUS`) beats the shared switch file, which beats this
+    /// config.toml value, which defaults to off. A switch file that exists but
+    /// cannot be read forces it to false and warns on stderr.
     pub autonomous: bool,
+    /// WHICH layer decided `autonomous`. Reported by `state autonomy-check
+    /// --explain` and `state autonomy-path`; deliberately NOT printed by the
+    /// plain `state autonomy-check`, whose stdout bytes are a frozen contract
+    /// (`crates/condukt/tests/autonomy_invariant.rs`).
+    pub autonomy_source: harness_core::autonomy::Source,
     /// Multi-sample self-consistency (cost guard). When true, `condukt consensus
     /// plan` fans a task out into N candidate implementations, verifies each, and
     /// takes a majority vote. OFF by default: N-sample generation is N× the cost,
@@ -192,6 +210,26 @@ pub fn base_dir() -> PathBuf {
     harness_core::config::base_dir("condukt")
 }
 
+/// Resolve autonomy through the shared layers for the CURRENT directory.
+///
+/// A cwd that cannot be read is not "no project": it means the repo the switch
+/// belongs to is unknown, so it resolves to OFF with a named warning rather
+/// than silently keying the switch on `"."` (CLAUDE.md section 3).
+fn resolve_autonomy(config_value: Option<bool>) -> harness_core::autonomy::Resolved {
+    match std::env::current_dir() {
+        Ok(cwd) => harness_core::autonomy::resolve(&cwd, config_value),
+        Err(e) => harness_core::autonomy::Resolved {
+            autonomous: false,
+            source: harness_core::autonomy::Source::UndeterminedSwitchFile,
+            warning: Some(format!(
+                "warning: autonomy switch is UNDETERMINED: the current directory \
+                 cannot be read ({e}), so the project the switch belongs to is \
+                 unknown\nwarning: resolving autonomy to OFF (fail-closed)"
+            )),
+        },
+    }
+}
+
 impl Config {
     pub fn load() -> Self {
         let base = base_dir();
@@ -207,6 +245,7 @@ impl Config {
             deploy_command: None,
             loop_max_iters: 10,
             autonomous: false,
+            autonomy_source: harness_core::autonomy::Source::BuiltinDefault,
             consensus_enabled: false,
             consensus_samples: crate::consensus::DEFAULT_SAMPLES,
             consensus_threshold: crate::consensus::DEFAULT_THRESHOLD,
@@ -222,6 +261,10 @@ impl Config {
             worker_sandbox_pids_limit: None,
         };
 
+        // Captured so the shared switch layer below knows whether config.toml
+        // said anything at all: `Some(false)` (an explicit "off") and `None`
+        // (never mentioned) resolve to the same bool but to different sources.
+        let mut file_autonomous: Option<bool> = None;
         if let Ok(txt) = std::fs::read_to_string(base.join("config.toml")) {
             if let Ok(fc) = toml::from_str::<FileConfig>(&txt) {
                 if let Some(v) = fc.worktree_base {
@@ -247,6 +290,7 @@ impl Config {
                 }
                 if let Some(v) = fc.autonomous {
                     cfg.autonomous = v;
+                    file_autonomous = Some(v);
                 }
                 if let Some(lc) = fc.loop_cfg {
                     if let Some(v) = lc.build_command {
@@ -323,10 +367,19 @@ impl Config {
                 cfg.stuck_ttl_secs = n;
             }
         }
-        if let Ok(v) = std::env::var("CONDUKT_AUTONOMOUS") {
-            if let Some(b) = parse_autonomous_env(&v) {
-                cfg.autonomous = b;
-            }
+        // -- the shared autonomy switch: config.toml, then switch file, then env --
+        // `harness_core::autonomy::read` owns all three layers, including the
+        // `CONDUKT_AUTONOMOUS` override that used to be applied right here, so
+        // condukt/ctxrot/autoflow cannot disagree about the order. The env still
+        // outranks the durable switch (a switch left on can always be forced off
+        // for one invocation); see `crates/condukt/tests/autonomy_invariant.rs`.
+        let resolved = resolve_autonomy(file_autonomous);
+        cfg.autonomous = resolved.autonomous;
+        cfg.autonomy_source = resolved.source;
+        if let Some(warning) = resolved.warning {
+            // Named, never silent: a switch file that exists but cannot be read
+            // must not behave like one that was never set (CLAUDE.md section 1).
+            eprintln!("{warning}");
         }
         // Reuses the generic truthy/falsy parser (despite its name) to force the
         // self-consistency switch from the environment, overriding config.toml.

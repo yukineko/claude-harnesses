@@ -23937,3 +23937,17 @@ updated_at = 1789290452
 weight = 0.0
 issue_number = 590
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/590"
+
+[[task]]
+id = "38c6ac26"
+title = "backlog tasks.toml の union 解決を手書き Python ではなくスクリプト化し、id 欠落ゼロと status drift の検証を固定テストにする"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "測定点 main 874d6d47 / 2026-09-13. 観測: 当セッション 1 回で .backlog/tasks.toml の merge conflict を 3 回解決した。3 回とも同じ手順を手書きの Python で再実装している: stage 2 の全文を土台にし、stage 3 にしか存在しない task ブロックを verbatim 追記し、tomllib で id 欠落 0 と意図しない status drift 0 を検証する。手順は確立しているが、実体はその場限りのスクリプトであり、次に同じ conflict が来たらまた手で書くことになる。過去には conflict マーカー行を素朴に除去して task ブロックの境界を切断し tomllib が Cannot overwrite a value で落ちた事例もある。完了条件: scripts/ に union マージャを置き、(a) 両側にしか無い id が両方残ること (b) id の重複が 0 であること (c) status が意図せず変わった場合に非 0 で落ちること を検証するテストを付ける。判定不能 (どちらの status が正か外部証跡で決まらない) は clean ではなく非 0 に倒し、人間に返すこと。status が両側で食い違った場合の正解は overwatch の live lease と condukt claim registry という外部の実測で決めるのが当セッションで確立した手順なので、スクリプトはそれを自動判定せず衝突として報告するに留める"
+created_at = 1789290581
+updated_at = 1789290581
+weight = 0.0
+issue_number = 591
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/591"

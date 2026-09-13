@@ -23951,3 +23951,17 @@ updated_at = 1789290581
 weight = 0.0
 issue_number = 591
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/591"
+
+[[task]]
+id = "b53bc124"
+title = "flow の sink が backlog の status だけを閉じて condukt の run-state を閉じないため deploy タスクが running で残る"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "測定点 main 6c173b88 / 2026-09-13. 観測: run-20260913-131646-20280 は t1 から t3 が done、t4 が running のまま残っていた。t4 は decomposition 上 tdd と overwatch を rollout する deploy タスクであり、実作業はセッション中に完了して main へ merge 済み、rollout も実施済みだった。にもかかわらず run-state だけが running のまま残り、autoflow の Stop hook が毎ターン condukt に残課題が 1 件あります t4 pending と報告し続けた。condukt state probe の判定は verdict undetermined で、理由は逐語 task has no worktree - no task-scoped progress signal exists for it。deploy タスクは worktree を持たないので、worktree の HEAD を見る進捗判定が原理的に効かない。condukt state reconcile も nothing to change を返す (branch が記録されていないため)。手動で state set --status verified を 4 件打って初めて gate PASS になった。読み 1 (実在の欠陥): flow の sink 手順が backlog done と release-task と overwatch end までしか到達しておらず、condukt の run-state を閉じる段が抜けている。worktree を持たない deploy タスクは reconcile でも救われないので、永久に running のまま残る。読み 2 (意図どおり): run を閉じるのは condukt skill の責務で flow の責務ではなく、flow から起動した run が開いたままなのは想定内。見分け方: flow の SKILL.md の 3-3 sink 節に condukt state set または gate への言及があるかを読む。無ければ読み 1。修正案: sink に run-state の終了段を足すか、reconcile が worktree を持たないタスクを branch ではなく decomposition の done_criteria の機械判定で閉じられるようにする。後者の場合、判定不能は verified ではなく undetermined に倒すこと"
+created_at = 1789290765
+updated_at = 1789290765
+weight = 0.0
+issue_number = 593
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/593"

@@ -1,5 +1,6 @@
 /// Event aggregation and state projection.
 use crate::store::{self, LeaseRegistry};
+use harness_core::verdict::Determination;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -513,7 +514,27 @@ struct CachedView {
 /// directly unit-testable without touching the filesystem. Also guards
 /// against a clock-skew/corrupt timestamp in the future (`built_at > now`),
 /// which is treated as stale rather than trusted.
-fn cache_is_fresh(built_at: i64, now: i64, ttl_secs: i64) -> bool {
+///
+/// **`ledger_mtime` is accepted but NOT consulted as of this commit.** The
+/// verdict is today computed from `built_at`/`now`/`ttl_secs` alone, exactly as
+/// before this parameter existed, so behaviour is unchanged: a lease written
+/// after the cache was built still does not invalidate it, and `overwatch
+/// status` can therefore keep reporting the pre-registration roster (`(none)`
+/// under `== Sessions ==`) for up to `STATUS_CACHE_TTL_SECS`. This signature
+/// exists so that defect can be pinned by a failing test first; the comparison
+/// that actually invalidates the cache lands in the follow-up step of backlog
+/// 7d820338 (task `t3-overwatch`). Do not describe this function as
+/// invalidating on ledger changes until that code is here.
+///
+/// The parameter is a [`Determination`] rather than an `Option` so that "the
+/// ledger mtime could not be observed" stays distinguishable from a real
+/// timestamp when the follow-up consumes it.
+pub(crate) fn cache_is_fresh(
+    built_at: i64,
+    now: i64,
+    ttl_secs: i64,
+    _ledger_mtime: Determination<i64>,
+) -> bool {
     built_at <= now && now - built_at <= ttl_secs
 }
 
@@ -530,7 +551,16 @@ pub fn build_cached(cwd: &Path) -> ProgressView {
     if let Ok(cache_path) = store::status_cache_path(cwd) {
         if let Ok(txt) = std::fs::read_to_string(&cache_path) {
             if let Ok(cached) = serde_json::from_str::<CachedView>(&txt) {
-                if cache_is_fresh(cached.built_at, now, STATUS_CACHE_TTL_SECS) {
+                // Resolved here (not inside `cache_is_fresh`, which stays a
+                // pure predicate) and only on a cache hit, so the cold path
+                // does not stat the ledger. An unobservable mtime travels as
+                // `Undetermined`, never as a sentinel timestamp.
+                if cache_is_fresh(
+                    cached.built_at,
+                    now,
+                    STATUS_CACHE_TTL_SECS,
+                    store::leases_mtime(cwd),
+                ) {
                     return cached.view;
                 }
             }
@@ -1136,14 +1166,25 @@ mod tests {
 
     // -- status cache (cache_is_fresh / build_cached) --------------------
 
+    // These three predate the `ledger_mtime` parameter and assert the
+    // TTL-boundary behaviour only. They pass `Determination::known(built_at)`
+    // (ledger last written no later than the cache build) purely so they
+    // compile; the parameter is ignored by `cache_is_fresh` as of this commit,
+    // so their verdicts are unchanged from before it existed.
     #[test]
     fn test_cache_is_fresh_within_ttl() {
-        assert!(cache_is_fresh(1000, 1005, STATUS_CACHE_TTL_SECS));
+        assert!(cache_is_fresh(
+            1000,
+            1005,
+            STATUS_CACHE_TTL_SECS,
+            Determination::known(1000)
+        ));
         // Exactly at the TTL boundary is still fresh (inclusive).
         assert!(cache_is_fresh(
             1000,
             1000 + STATUS_CACHE_TTL_SECS,
-            STATUS_CACHE_TTL_SECS
+            STATUS_CACHE_TTL_SECS,
+            Determination::known(1000)
         ));
     }
 
@@ -1152,14 +1193,20 @@ mod tests {
         assert!(!cache_is_fresh(
             1000,
             1000 + STATUS_CACHE_TTL_SECS + 1,
-            STATUS_CACHE_TTL_SECS
+            STATUS_CACHE_TTL_SECS,
+            Determination::known(1000)
         ));
     }
 
     #[test]
     fn test_cache_is_fresh_rejects_future_built_at() {
         // A `built_at` after `now` is clock-skew/corruption, not "fresh".
-        assert!(!cache_is_fresh(2000, 1000, STATUS_CACHE_TTL_SECS));
+        assert!(!cache_is_fresh(
+            2000,
+            1000,
+            STATUS_CACHE_TTL_SECS,
+            Determination::known(2000)
+        ));
     }
 
     // `build_cached` and `store::status_cache_path` resolve under the real

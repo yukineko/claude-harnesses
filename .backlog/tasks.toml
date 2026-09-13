@@ -23343,3 +23343,21 @@ updated_at = 1789274840
 weight = 0.0
 issue_number = 559
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/559"
+
+[[task]]
+id = "fa54b8ed"
+title = "conflict 解決を伴う merge commit が pre-commit を通らず bypass ledger に UNGATED として残る"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gates",
+    "git",
+    "p2",
+]
+status = "pending"
+notes = "実測 2026-09-13、測定点 e15bec19。session worktree で git merge main を実行し .backlog/tasks.toml の conflict を解決してから git commit --no-edit で merge commit を作ったところ、pre-commit の出力が一切出ないまま commit が成功し、直後の post-commit が UNGATED COMMIT: e15bec19d176 を記録した。gate-bypass.py --json は verdict outstanding、entries 1 件を返す。結果として git push がブロックされる。/ 重要: --no-verify は使っていない。cherry-pick でも rebase でもない。通常の conflict 解決後の merge commit である。にもかかわらず ledger はこの 3 つのいずれかが起きたと述べており、診断メッセージが実際の原因と食い違っている (CLAUDE.md 4 の docstring と実挙動の不一致と同型)。/ 仮説 (未検証、見分ける方法つき): pre-commit が発行する証明書は tree と judged HEAD の両方に束縛される。merge commit は親を 2 つ持つため、pre-commit 実行時点の HEAD と結果 commit の親集合が一致せず、証明書が当該 commit に紐づかない。これは amend が常に ledger を踏むのと同一クラスである。見分ける方法: conflict の無い単純な merge (--no-ff) でも ledger を踏むかを観測する。踏むなら merge commit 一般の構造的問題、踏まないなら conflict 解決経路に固有。/ 影響: merge は CLAUDE.md 8 が main の作業ツリーに唯一許している操作であり、その正規手順が毎回 ledger を踏むなら、ledger の outstanding は異常の指標として機能しなくなる (常時点灯するシグナルは読まれなくなる)。/ 回避策として本セッションでは後続の gated commit を 1 本積んで ledger を green で消した。これは回避であって修正ではない。関連: amend が常に ledger を踏む既知事象。"
+created_at = 1789278855
+updated_at = 1789278855
+weight = 0.0
+issue_number = 562
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/562"

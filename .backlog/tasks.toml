@@ -25650,3 +25650,38 @@ updated_at = 1789297053
 weight = 0.0
 issue_number = 624
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/624"
+
+[[task]]
+id = "e073bdb1"
+title = "overwatch status のテキスト表示が live lease 4 件を (none) と表示する。JSON には出る。project が null"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-13、測定点 c39701bc、rollout 直後（overwatch は harness-core 0.2.24 で再ビルド済み）。
+
+同一時刻の 2 つの表示形式:
+  overwatch status         -> == Sessions ==  (none)
+  overwatch status --json  -> sessions[0].leases に 4 件
+       00d1160bf294b1af / 052a7668cb486c1f / a192382d08ee3bf7 / a4050204859f1c7a
+       いずれも status フィールドが空文字、project が null
+
+4 件は直前に overwatch begin で登録したもので、begin はいずれも rc=0 と {possible_duplicate: [], scope_overlap: []} を返している。
+
+本セッション開始時の SessionStart hook 出力は逐語で session 79d79a35-... (3 live) と 3 件の lease を表示していた（rollout 前、旧バイナリ）。同じセッション・同じコマンドで rollout 後に (none) になったので、退行の疑いが濃い。
+
+なぜ p0 か: overwatch の Sessions 表示は CLAUDE.md 第8節の前提（別セッションは常に存在する）を運用で支える唯一の人間向け面であり、いま誰が何を担当しているかを (none) と答えることは 誰も作業していない と読まれる。第1節の 沈黙は許容される degrade ではない にそのまま当たる。判定不能でも空でもなく、実在する 4 件が見えていない。
+
+読み1 (退行): テキストレンダラが project でフィルタしており、lease の project が null になったため全件が落ちている。project が null になった原因は、d83b0e8f で入った main_worktree_root ベースの project 解決変更の波及。つまり本件は DoD14 の軸そのもので、是正が別の消費者を壊した形。
+読み2 (元からの仕様): テキスト表示は project スコープ付きで、cwd の project と一致する lease だけを出す設計であり、begin 側が project を書かないのは別の欠陥。
+
+見分け方: overwatch begin が lease に project を書き込む経路と、status のテキストレンダラが project でフィルタする経路を読む。begin 側が以前は project を書いていたのに書かなくなっていれば読み1。begin が元から書いていないなら読み2（その場合テキスト表示は一度も動いていなかったことになるので、SessionStart hook の (3 live) 出力がどこから来たかを追う）。
+
+関連: d83b0e8f (claim registry の worktree 分裂、本日 landed) / 43393ce2 (run-state も分裂) / bcfc5491 (repo_primary ロックも分裂) / 2c1e54b3 (消費者列挙の ONE)。"""
+created_at = 1789297114
+updated_at = 1789297114
+weight = 0.0
+issue_number = 628
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/628"

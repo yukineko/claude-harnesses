@@ -377,7 +377,10 @@ pub fn create_namespaced(
     branch: &str,
 ) -> Result<PathBuf> {
     match run {
-        None => create(repo, worktree_base, topic, branch),
+        None => {
+            eprintln!("{}", legacy_degradation_warning(topic, branch));
+            create(repo, worktree_base, topic, branch)
+        }
         Some(run) => {
             validate_run_ns(run)?;
             // Validate the *inputs* too, so a bad topic/branch is reported
@@ -393,6 +396,28 @@ pub fn create_namespaced(
             )
         }
     }
+}
+
+/// What [`create_namespaced`] prints to stderr when `run` is `None`.
+///
+/// The degradation to the legacy layout is a real back-compat guarantee, but it
+/// is also the failure mode backlog 2904dc6c names: omit `--run` and the caller
+/// silently gets machine-global names that collide across concurrent sessions,
+/// with nothing turning red. CLAUDE.md is explicit that 沈黙は許容される
+/// degrade ではない — so the degradation stays, and announces itself.
+///
+/// Separated from the `eprintln!` so its text can be asserted directly, and
+/// deliberately NOT a refusal: whether omitting `--run` should be a hard error
+/// is a back-compat ruling for a human (backlog 79d631d4), not something to
+/// settle here.
+fn legacy_degradation_warning(topic: &str, branch: &str) -> String {
+    format!(
+        "condukt worktree: WARNING — no --run given, so this worktree falls back to the \
+         legacy un-namespaced layout (topic={topic}, branch={branch}). Those names are \
+         machine-global: a concurrent session that emits the same task id aims at the \
+         same dir and the same branch ref. Pass --run <run-id> unless you specifically \
+         mean the legacy layout."
+    )
 }
 
 /// The branch a caller means when it says `--run <run> --branch <branch>`: the

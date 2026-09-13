@@ -1083,6 +1083,39 @@ enum StateAction {
         run: String,
     },
     /// Reset running/failed tasks back to pending, clearing their worktree/branch refs.
+    ///
+    /// REPORTING is unconditional: every Running task whose liveness could not
+    /// be determined is printed on stderr with its id, its class and its reason,
+    /// whatever the exit code. A bare `nothing to abandon` is never the whole of
+    /// stderr while anything is undetermined — that silence was the defect this
+    /// path exists to fix.
+    ///
+    /// EXIT CODES for `--all-stuck` (the scan is tri-valued: a Running task is
+    /// stuck, healthy, or UNDETERMINED — and the undetermined ones split by
+    /// WHY, read off the per-signal `readable` flags, never off reason text):
+    ///
+    /// * 3 — at least one task is UNOBSERVABLE: a durable progress signal could
+    ///   not be read at all (no `updated_at`, an unreadable worktree HEAD, a
+    ///   task with no worktree). The engine tried to look and could not; no
+    ///   re-run fixes that on its own.
+    /// * 0 — nothing was unobservable. Tasks that were confirmed stuck have been
+    ///   abandoned (zero of them is still exit 0). This includes the case where
+    ///   the only undetermined tasks are AWAITING-SAMPLE: every signal read
+    ///   cleanly and the multi-sample window simply needs another observation,
+    ///   which the first invocation on any TTL-stale task always does. Such a
+    ///   task's liveness is genuinely unknown at that instant — it is NOT being
+    ///   called healthy — but the state is self-resolving, bounded by the freeze
+    ///   window, and printed, so it is not a failure to observe.
+    /// * 1 — an ordinary error (unreadable run state, unknown task, ...).
+    ///
+    /// 3 is consistent with condukt's existing 0=auto / 2=escalate / 3=block
+    /// convention (documented in `crates/condukt/README.md` line 57, where
+    /// `state reconcile` exits 2 to escalate a duplicate completion): an
+    /// unobservable task is not a question for a human to answer inline, it is a
+    /// scan that must not be read as clean.
+    ///
+    /// The explicit `--task <id>` override performs no scan and therefore never
+    /// exits 3.
     Abandon {
         #[arg(long)]
         run: String,
@@ -4492,6 +4525,14 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             all_stuck,
         } => {
             let mut rs = state::RunState::load(cfg, cwd, &run)?;
+            // Running tasks whose staleness could not be determined at all. Only
+            // the bulk scan can produce these; the explicit `--task` override
+            // performs no scan, so it leaves this empty and never exits 3.
+            let mut undetermined: Vec<state::UndeterminedTask> = Vec::new();
+            // Whether any of them is a failure to OBSERVE (as opposed to an
+            // observation still in progress) — the only thing that makes the
+            // scan non-clean.
+            let mut unobservable_present = false;
             let ids: Vec<String> = if let Some(task_id) = task {
                 // Specific task: validate it exists and is running/failed.
                 let t = rs
@@ -4508,16 +4549,40 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                 vec![task_id]
             } else if all_stuck {
                 // Bulk path: TTL-staleness alone does NOT authorise a reset —
-                // `stuck_task_ids` additionally requires a confirmed
-                // `Known(Stalled)` progress verdict per task. The explicit
-                // `--task` arm above stays deliberately ungated (human override).
-                state::stuck_task_ids(cfg, cwd, &rs, cfg.stuck_ttl_secs, state::now_secs())
+                // `scan_stuck` additionally requires a confirmed
+                // `Known(Stalled)` progress verdict per task AND a worktree
+                // observed clean, because a reset clears the task's worktree
+                // reference and re-dispatches a second worker, which would
+                // orphan any uncommitted work there. A task held back by the
+                // dirty veto is named on stderr by the scan — so a shorter list
+                // here is never the only trace of a check that could not run.
+                // The explicit `--task` arm above stays deliberately ungated
+                // (human override), which is how a worker that died mid-edit,
+                // leaving a dirty worktree the bulk gate refuses, is reclaimed.
+                //
+                // The scan is tri-valued: what it could NOT determine is carried
+                // out separately instead of being folded into "healthy", because
+                // a silent list is read downstream as "all clear" (CLAUDE.md §1/§3).
+                let scan = state::scan_stuck(cfg, cwd, &rs, cfg.stuck_ttl_secs, state::now_secs());
+                unobservable_present = scan.has_unobservable();
+                undetermined = scan.undetermined;
+                scan.stuck
             } else {
                 bail!("specify --task <id> or --all-stuck");
             };
 
             if ids.is_empty() {
-                eprintln!("nothing to abandon");
+                if undetermined.is_empty() {
+                    eprintln!("nothing to abandon");
+                } else if unobservable_present {
+                    eprintln!(
+                        "nothing to abandon, and the scan was NOT clean — see the undetermined task(s) below"
+                    );
+                } else {
+                    eprintln!(
+                        "nothing to abandon yet — the observation below is INCOMPLETE, not clean; re-run this command to finish it"
+                    );
+                }
             } else {
                 for id in &ids {
                     let t = rs
@@ -4532,6 +4597,52 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                 }
                 rs.save(cfg, cwd)?;
                 eprintln!("abandoned {} task(s): {}", ids.len(), ids.join(", "));
+            }
+
+            // Report what could NOT be determined. This runs AFTER the abandon
+            // above: a task that is confirmed stuck is still recovered even when
+            // a different task is undetermined — abandoning and reporting are
+            // independent. Reporting is also independent of the exit code: BOTH
+            // classes are printed, because the silence is the defect, and only
+            // the class decides whether the scan counts as clean.
+            let unobservable: Vec<&state::UndeterminedTask> = undetermined
+                .iter()
+                .filter(|u| u.class == state::Undetermination::Unobservable)
+                .collect();
+            let awaiting: Vec<&state::UndeterminedTask> = undetermined
+                .iter()
+                .filter(|u| u.class == state::Undetermination::AwaitingSample)
+                .collect();
+            if !unobservable.is_empty() {
+                eprintln!(
+                    "{} task(s) UNDETERMINED (unobservable): a durable progress signal could not be read — neither stuck nor healthy, and must not be read as clean:",
+                    unobservable.len()
+                );
+                for u in &unobservable {
+                    eprintln!(
+                        "  undetermined [{}]: {} — {}",
+                        u.class.label(),
+                        u.id,
+                        u.reason
+                    );
+                }
+            }
+            if !awaiting.is_empty() {
+                eprintln!(
+                    "{} task(s) UNDETERMINED (awaiting-sample): every signal read cleanly but the multi-sample observation is INCOMPLETE — their liveness is unknown right now, which is not the same as fine; re-run this command to complete the observation:",
+                    awaiting.len()
+                );
+                for u in &awaiting {
+                    eprintln!(
+                        "  undetermined [{}]: {} — {}",
+                        u.class.label(),
+                        u.id,
+                        u.reason
+                    );
+                }
+            }
+            if !unobservable.is_empty() {
+                std::process::exit(3);
             }
         }
         StateAction::Pause { run } => {

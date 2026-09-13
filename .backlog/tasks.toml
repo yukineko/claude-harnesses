@@ -23595,3 +23595,60 @@ updated_at = 1789287720
 weight = 0.0
 issue_number = 578
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/578"
+
+[[task]]
+id = "77ca162f"
+title = "backlog の status と condukt claim registry が乖離し、main の作業ツリーに他セッションの未コミット store 書き込みが溜まる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+実測 2026-09-13、測定点 16f16879。
+
+観測 1 — main の作業ツリーが他セッションの backlog 書き込みで dirty になっていた。
+git diff で 4 件が claimed から pending へ戻っていた (updated_at 1789287766):
+  15eb3f94 / 6267bfbe / e73a1fd5 / f7b018f8
+HEAD 側の updated_at は 1789279070 と 1789279071 で、別セッションが claim した時刻。
+自セッションはこの 4 件を worktree の store から claim しており、main の store には書いていない
+(maintree guard が Bash 経由の backlog edit を実際に拒否した実績がある)。
+したがって main のツリーを汚したのは自分ではない別の主体である。
+
+観測 2 — その結果 git merge --ff-only が中断した (逐語):
+  Aborting
+  Updating 16f16879..bd897529
+自分の worktree commit を main へ統合できない。統合は第8節が main で唯一許す操作なので、
+他セッションの未コミット書き込みがそれを塞いでいることになる。
+
+観測 3 — ただし多重実行は起きていない。condukt claim registry は 4 件すべてを
+holder_run = flow-79d79a35-... と報告しており、クロスセッションの最終ガードは効いている:
+  {"claimed": true, "hashkey": "221a549eaca40b49", "holder_run": "flow-79d79a35-..."}
+つまり壊れているのは backlog の status 台帳であって、排他そのものではない。
+
+なぜ問題か: backlog の status と condukt claim registry が**別々の真実**を持ち、
+どちらが正かが決まっていない。status だけを見る消費者 (backlog next --claim を含む) は
+別セッションが実作業中の item を pending と読む。今回は claim registry が救ったが、
+それは二重の網の 2 枚目であって 1 枚目が破れていることに変わりはない。
+さらに main の作業ツリーに store 書き込みが溜まる経路は、第8節が禁じる
+「main を直接触る」を backlog バイナリ経由で成立させている。
+
+判定不能なので両方の読みを残す:
+  (a) 実在の欠陥 = backlog バイナリは cwd の git root にストアを持つので、cwd が main の
+      セッションは main のツリーへ直接書く。maintree guard は Bash コマンドを見るので
+      バイナリ内部の書き込みは捕まえられない。この場合の修正は、store 書き込み側で
+      「ここは main の作業ツリーか」を判定して拒否するか、store を作業ツリー外へ出すこと。
+  (b) 意図的な仕様 = .backlog/tasks.toml は共有キューなので main に置くのが設計で、
+      dirty なまま放置されるのは運用 (commit 忘れ) の問題にすぎない。
+
+見分ける方法: crates/backlog の store 書き込み経路に main-worktree 判定があるか読む。
+無ければ (a)。あるなら、なぜ今回すり抜けたかを観測する。
+併せて scripts/guard-maintree-bash.py が Bash しか見ていないことを確認する
+(自セッションの backlog edit は実際に拒否されたので、Bash 経路には効いている)。
+
+関連: 5ba13c3e (backlog ストアの分裂)、marketplace-claim-overserializes の教訓
+(共有ファイルを 1 リソースとして扱うと過剰直列化する) と同じ共有ストア問題の別面。"""
+created_at = 1789287807
+updated_at = 1789287807
+weight = 0.0
+issue_number = 579
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/579"

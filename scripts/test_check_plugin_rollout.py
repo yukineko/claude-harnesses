@@ -2222,5 +2222,157 @@ class RetiredRealDeclaration(unittest.TestCase):
         self.assertNotEqual(problems, [], "loader accepted an entry with no retired_at")
 
 
+class DriftDoesNotMaskDarkness(_FixtureCase):
+    """A stale version and an ABSENT host binary are not the same failure.
+
+    Observed on this machine 2026-09-13 (backlog 8206b09f): the registry pointed
+    tdd at 0.1.29, whose bin/ held only the POSIX-sh launcher and no
+    tdd-darwin-arm64 at all. The Stop hook answered "gate did not run: no bundled
+    binary for darwin-arm64" — the gate was not red, it was DARK: it produces no
+    finding, so nothing about the silence distinguishes "nothing to report" from
+    "nobody looked". check-plugin-rollout.py reported only
+
+        tdd: source=0.1.30 registry=0.1.29 <- rollout-plugins.sh not run since bump
+
+    and never mentioned the missing binary, because check_rollout `continue`s on a
+    version mismatch with the verbatim comment
+
+        # The version is already known stale; the binary necessarily is too.
+        # Reporting both would just double-count one fix.
+
+    That comment is a prediction, and the observed state falsifies it: an ABSENT
+    binary is not a STALE binary. Both may be cured by the same command, but only
+    one of them means the gate is not running at all, and that is the one the
+    short-circuit hides.
+
+    test_absent_binary_alone_is_named is the anti-vacuity control: without it a
+    plain typo in the asserted substring would make the masking test pass for the
+    wrong reason.
+    """
+
+    NEEDLE = "execs nothing"
+
+    def test_absent_binary_alone_is_named(self):
+        """Control: with no version drift the absent binary IS named."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(tmp, no_host_binary=("specguard",))
+        self.assertNotEqual(rc, 0, f"out={out}\nerr={err}")
+        self.assertIn(
+            self.NEEDLE, out + err,
+            "control failed: the absent-binary finding is not reachable even "
+            f"without drift, so the masking test below would be vacuous.\nout={out}\nerr={err}",
+        )
+
+    def _helper(self, tmp, *, crate_dir=True, bin_kind="dir"):
+        """Drive _absent_binary_problems directly over a hand-built install tree.
+
+        The fixture builder cannot express "bin/ exists but is not listable" or
+        "the crate directory is gone", and those are the two UNDETERMINED arms —
+        the ones §3 says must resolve restrictively. Exercising the helper
+        directly is the only way to observe them.
+        """
+        root = Path(tmp)
+        crates = root / "crates"
+        if crate_dir:
+            (crates / "widget" / "src").mkdir(parents=True)
+            (crates / "widget" / "src" / "main.rs").write_text("fn main(){}", encoding="utf-8")
+        else:
+            crates.mkdir(parents=True)
+        install = root / "install"
+        install.mkdir()
+        if bin_kind == "dir":
+            (install / "bin").mkdir()
+        elif bin_kind == "file":
+            (install / "bin").write_text("not a directory", encoding="utf-8")
+        saved = cpr.CRATES
+        cpr.CRATES = str(crates)
+        try:
+            return cpr._absent_binary_problems("widget", {"installPath": str(install)})
+        finally:
+            cpr.CRATES = saved
+
+    def test_unlistable_bin_is_reported_not_assumed_present(self):
+        """bin/ is a FILE: presence is undetermined, and undetermined is not OK."""
+        with tempfile.TemporaryDirectory() as tmp:
+            problems = self._helper(tmp, bin_kind="file")
+        self.assertNotEqual(
+            problems, [],
+            "an unlistable bin/ resolved to silence — 'cannot tell' became "
+            "'a binary is deployed', which is the fail-open this arm exists to stop",
+        )
+        self.assertIn("undetermined", " ".join(problems))
+
+    def test_undeterminable_source_is_reported_not_assumed_skill_only(self):
+        """crates/widget is gone: whether a binary was expected is undetermined."""
+        with tempfile.TemporaryDirectory() as tmp:
+            problems = self._helper(tmp, crate_dir=False)
+        self.assertNotEqual(
+            problems, [],
+            "an unreadable source crate resolved to silence — 'cannot tell "
+            "whether it ships a binary' became 'skill-only, nothing to check'",
+        )
+
+    def test_skill_only_plugin_with_drift_is_not_accused_of_shipping_a_binary(self):
+        """scout/flow/daily-report ship no crate; drift must not invent one.
+
+        Without the `not ships` exemption the helper reaches the absent-binary
+        arm and prints "crates/widget declares a binary target" about a plugin
+        whose source declares nothing of the kind — a message asserting
+        something never observed (CLAUDE.md 4).
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "crates" / "widget").mkdir(parents=True)  # no Cargo.toml, no src/main.rs
+            install = root / "install"
+            (install / "bin").mkdir(parents=True)             # present, but holds no binary
+            saved = cpr.CRATES
+            cpr.CRATES = str(root / "crates")
+            try:
+                problems = cpr._absent_binary_problems("widget", {"installPath": str(install)})
+            finally:
+                cpr.CRATES = saved
+        self.assertEqual(
+            problems, [],
+            "a skill-only plugin was accused of shipping an undeployed binary: "
+            f"{problems}",
+        )
+
+    def test_present_binary_is_not_reported(self):
+        """Anti-vacuity: the helper is not simply always non-empty."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "crates" / "widget" / "src").mkdir(parents=True)
+            (root / "crates" / "widget" / "src" / "main.rs").write_text("fn main(){}", encoding="utf-8")
+            install = root / "install"
+            (install / "bin").mkdir(parents=True)
+            (install / "bin" / ("widget-" + cpr.HOST_SUFFIX)).write_text("x", encoding="utf-8")
+            saved = cpr.CRATES
+            cpr.CRATES = str(root / "crates")
+            try:
+                problems = cpr._absent_binary_problems("widget", {"installPath": str(install)})
+            finally:
+                cpr.CRATES = saved
+        self.assertEqual(problems, [], f"a deployed host binary must be clean here: {problems}")
+
+    def test_version_drift_does_not_mask_the_absent_binary(self):
+        """Both wrong at once: the darkness must still be named."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp,
+                no_host_binary=("specguard",),
+                registry_versions={**FIXTURE_PLUGINS, "specguard": "2.0.0"},
+            )
+        self.assertNotEqual(rc, 0, f"out={out}\nerr={err}")
+        self.assertIn(
+            "source=2.1.0 registry=2.0.0", out + err,
+            f"the pre-existing drift finding regressed.\nout={out}\nerr={err}",
+        )
+        self.assertIn(
+            self.NEEDLE, out + err,
+            "a stale version masked the fact that NO host binary is deployed. "
+            "Those are different failures: stale runs old code (red), absent "
+            f"runs nothing (dark).\nout={out}\nerr={err}",
+        )
+
 if __name__ == "__main__":
     unittest.main()

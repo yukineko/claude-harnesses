@@ -23937,3 +23937,21 @@ updated_at = 1789290452
 weight = 0.0
 issue_number = 590
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/590"
+
+[[task]]
+id = "43393ce2"
+title = "condukt の run-state も worktree ごとに別ストアへ分裂している (claims だけでなく project_dir 全体)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p1",
+    "fail-open",
+    "condukt",
+]
+status = "pending"
+notes = "測定点 main 874d6d47 / 2026-09-13. d83b0e8f (claim registry の worktree 分裂) を調査中に発見した同型の別件。crates/condukt/src/state.rs:331 の project_dir も cfg.state_dir.join(project_key(repo_root(cwd))) であり、claim registry と同じく linked worktree では repo_root が worktree 自身を返すため別キーになる。実測: /Users/yuki/.condukt/state/ 配下に session- で始まるキーのディレクトリが多数あり、そのうち session-2444be10-d7db0410 は run-20260913-133807-77531.json と .decomposition.json と .journal.jsonl と .checkpoints.json を、session-b57a58c3-3fcd5268 は run-20260811-230435-19389 一式を、session-b9a78b46-e56b248f は run-20260805-224954-26962 ほか 2 run を保持している。つまり worktree を cwd にして作られた run は main から見えない。読み 1 (実在の欠陥): run-state も main worktree root で addressing すべきで、condukt status や state list が cwd 次第で別集合を返すのは二重着手と孤児 run の温床。読み 2 (意図どおり): run は作った tree に属するローカル状態であり分裂は無害。見分け方: condukt state list を main の cwd と /Users/yuki/src/.harness-worktrees/session-2444be10 の cwd の両方で実行し run-20260913-133807-77531 が前者に出るかを見る。両方に出れば読み 2、片方だけなら読み 1。注意: d83b0e8f では claim 経路のみを局所修正し project_dir は意図的に触っていない。repo_root を全体で変えると既存の run-state が孤児化するため。関連 d83b0e8f"
+created_at = 1789290713
+updated_at = 1789290713
+weight = 0.0
+issue_number = 592
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/592"

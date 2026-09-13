@@ -65,3 +65,38 @@ name = "test-changed"
 cmd = "scripts/test-changed-crates.sh"
 when_changed = ["**/*.rs"]
 timeout_secs = 900
+
+# The git-hook suites. .githooks/ IS the block/allow authority in this repo
+# (CLAUDE.md #7), and until now nothing ran the tests that guard it —
+# scripts/check-workspace-tests.py would have (it globs scripts/test_*.py), but
+# nothing invokes that either, so the guards of the guards were unguarded
+# (backlog c3a98510).
+#
+# Split in two ON PURPOSE, from measurement at aed66762:
+#   test_precommit_hook.py    Ran 16 tests   OK       -> required, below
+#   test_git_hook_coverage.py Ran  9 tests   OK       -> required, below
+#   test_gate_bypass.py       Ran 124 tests  FAILED(1)-> advisory, below that
+#
+# The green pair is enforced. The red one is NOT silenced and NOT blocking: its
+# single failure is the open defect backlog 6267bfbe pins (the post-commit amend
+# certificate), whose fix is blocked on a permission deny over .githooks/**.
+# Making it required today would block every stop in the repo, and that pressure
+# is what manufactures a shared skip file (CLAUDE.md #5) or a deleted assertion
+# (CLAUDE.md #4). When 6267bfbe lands, move test_gate_bypass into
+# scripts/run-hook-tests.sh and delete the advisory entry.
+[[check]]
+name = "hook-tests"
+cmd = "scripts/run-hook-tests.sh"
+when_changed = [".githooks/**", "scripts/test_precommit_hook.py", "scripts/test_git_hook_coverage.py", "scripts/run-hook-tests.sh", "scripts/gate-bypass.py", "scripts/deny-no-verify.py"]
+timeout_secs = 300
+
+# Advisory, with a named expiry condition — not a permanent exemption. `optional`
+# means a failure warns instead of blocking; it still RUNS and still reports, so
+# a SECOND failure appearing next to the known one is visible rather than hidden
+# behind a suite nobody executes.
+[[check]]
+name = "gate-bypass-tests-advisory"
+cmd = "python3 scripts/test_gate_bypass.py"
+when_changed = [".githooks/**", "scripts/test_gate_bypass.py", "scripts/gate-bypass.py", "scripts/deny-no-verify.py"]
+timeout_secs = 300
+optional = true

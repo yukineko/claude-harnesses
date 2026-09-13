@@ -6320,7 +6320,7 @@ title = "harness-core boundary: read_dir_entries の途中エントリ失敗ア�
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
+status = "claimed"
 notes = """
 独立検証者のフォールト注入 (2026-07-23) で判明。read_dir_entries の mid-iteration entry error アームを Undetermined を返す代わりに continue に書き換えても、テストスイートは緑のまま (exit 0) だった。他の3つの注入 (全エラーを Known 空へ / read_to_string を全エラー Known(None) へ / stdout_allowing を無条件 Known へ) はいずれも赤くなったので、このアームだけが無防備。
 
@@ -6330,7 +6330,7 @@ notes = """
 
 必要なのは fault-injecting filesystem (FUSE) か、失敗するイテレータをテストから注入できる seam。seam を入れる場合は production API を汚さない形にすること。現状は test module 内に UNCOVERED BRANCH コメントで明記済み。"""
 created_at = 1784747178
-updated_at = 1789279242
+updated_at = 1789289879
 weight = 0.0
 issue_number = 318
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/318"
@@ -6362,10 +6362,10 @@ tags = [
     "scout",
     "p1",
 ]
-status = "pending"
+status = "claimed"
 notes = "根拠: 0213f7a9 で入れた create_namespaced は run が None のとき従来動作にフォールバックする (crates/condukt/src/worktree.rs の create_namespaced)。後方互換としては正しいが、--run を渡す保証は SKILL.md の散文 (--run は必ず渡す) だけで、機械的強制が無い。tests/worktree_namespace_concurrency.rs は --run を渡した場合の正しさを証明するが、--run が実際に渡されることは証明しない。LLM が1箇所書き忘れれば衝突が復活し、そのとき何も赤くならない (黙って旧レイアウトに戻るだけ)。CLAUDE.md 第6節が禁じる 気をつける に安全性を置いた状態。/ 案: 並列セッションが live なとき --run 省略を非0で拒否する。単一セッション時と明示的な legacy フラグ指定時は従来どおり通す。live 判定不能は第3節に従い制限側 (拒否) へ倒す。/ 完了条件: 並列セッション live 下で --run を省略した worktree create が非0で終了することを観測する。単一セッション時は通ることも観測する。"
 created_at = 1784747525
-updated_at = 1789279456
+updated_at = 1789289879
 weight = 0.0
 issue_number = 320
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/320"
@@ -6380,10 +6380,10 @@ tags = [
     "scout",
     "p1",
 ]
-status = "pending"
+status = "claimed"
 notes = "根拠: .githooks/pre-push の rollout drift rc=1 は 2026-07-23 に BLOCK から advisory へ降格した。理由は品質ではなく場所の誤り — drift はこのマシンの plugin cache の性質であり、push はコードをリモートへ共有する操作なので、ローカルの配備状態が良質な commit の共有可否を決めるべきではない。/ ただし降格しただけでは、元の失敗モード (commit と version bump 済みの fix がどのセッションにも届かない。2026-07-22 に16プラグインが約20コミットにわたり無言で drift した実績あり) が 誰かが気づく に退行する。CLAUDE.md 第6節が禁じる状態。/ 検出そのものは check-plugin-rollout.py として無傷で残っているので、これを operator が行動できる地点 = session start に出す。/ 完了条件: drift がある状態で新しいセッションを開始すると、その事実が明示的に提示されることを観測する。drift が無いときは提示されないことも観測する (常時出す通知は何も検出していない)。"
 created_at = 1784749265
-updated_at = 1789278965
+updated_at = 1789289879
 weight = 0.0
 issue_number = 321
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/321"
@@ -6467,7 +6467,7 @@ tags = ["p1"]
 status = "pending"
 notes = "e19d501a の作業中に cargo test --workspace を4回回したうち1回で失敗 (2035 passed / 1 failed)。他3回と、隔離/直列での11回連続実行では pass。失敗させた変更は backlog/autoflow/daily/flow のみで condukt はそれらに依存しないため、condukt のテストバイナリは差分の有無で同一。したがって原因は変更ではなくマシン負荷への感度である。完了条件: 負荷を掛けた状態で決定論的に再現させ、テストが実時間のタイミングに依存しているのか lock 実装側にレースがあるのかを事実として切り分けること。落ちるのを見なかったことにしない。テストを緩める・retry でごまかすのは不可。"
 created_at = 1784755092
-updated_at = 1789273875
+updated_at = 1789289888
 weight = 0.0
 issue_number = 323
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/323"
@@ -6505,7 +6505,7 @@ tags = ["p1"]
 status = "pending"
 notes = "実測 (2026-07-24): 他ジョブで CPU 飽和中に cargo test --workspace を3回回すと 3/3 で compass::tests::compass_invocation_faster_than_timeout_still_returns_output が落ちた (exit 101)。無負荷の CI (ubuntu/macos) では同テストは ok。これは compass 呼び出しが timeout 前に返ることを assert する速度依存テストで、マシン負荷でプロセス起動が遅れると閾値を超えて落ちる。condukt の repo_primary_lock_serializes_concurrent_rmw_no_lost_update (35d61d23) と同じ負荷依存クラス (こちらは isolated 30/30 pass で再現せず)。判定がマシン速度に依存する検査は非決定論ゲートで、緑/赤が環境で変わる。完了条件: これら timeout/並行テストの閾値を負荷耐性のある形にするか、負荷下でも決定論になるよう設計し直し、負荷を掛けた状態で決定的に緑を観測する。"
 created_at = 1784832249
-updated_at = 1789273876
+updated_at = 1789289888
 weight = 0.0
 issue_number = 324
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/324"
@@ -23947,3 +23947,17 @@ updated_at = 1789289359
 weight = 0.0
 issue_number = 586
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/586"
+
+[[task]]
+id = "ebd1359a"
+title = "blastguard: inline-eval の python が open(..,'w') を持つと、同じコマンドで READ しているだけの tracked ファイルに書き込みを帰属させる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = '実測 2026-09-13、測定点 984619c8。flow の sink 中に 2 回踏んだ。/ 1 件目 (逐語): "python3 is invoked with an inline-eval flag, and it writes .backlog/tasks.toml (,(w)) — it is tracked by git but carries uncommitted changes — those changes exist nowhere else"。実際のコマンドは tasks.toml を tomllib で READ し、書き込み先は scratchpad 配下の別ファイルだった。inline eval の中では open の第1引数と mode が構文的に結びつかないため、blastguard は「どこかに w がある」ことと「tracked file 名が出現する」ことを結合して最も危険な解釈を採った。/ 2 件目 (逐語): "(> $S/getnotes.py) destroys the file(s) current contents and $S/getnotes.py contains a shell expansion, so blastguard cannot tell which file this names, let alone whether its contents are recoverable"。/ **これは fail-open ではなく fail-closed 側の誤検知であり、その意味で設計どおりに動いている** (model.rs:9 の it is NOT a verdict about the command, it is a refusal そのもの)。したがって「緩めろ」という起票ではない。判定不能を Ask に倒す第3節の実装として正しい。/ 問題は精度ではなく**回避策の形**である。ユーザー側の自然な対処は (a) 変数をやめて literal path を書く、(b) inline eval をやめてスクリプトファイルにする、の 2 つで、どちらも blastguard から見た曖昧さを消すだけで危険度は 1 ミリも下がらない。つまり現状の Ask は「安全になるまで待て」ではなく「blastguard に読める書き方に直せ」という要求になっており、繰り返すうちに「とりあえず literal に書き直して通す」という**反射**を育てる。その反射は、本当に危険なコマンドを literal に書き直しただけで通してしまう瞬間に牙を剥く。/ 完了条件: inline eval 内の open(path, mode) について、mode が書き込みで path が literal なときは**その path** に帰属させ、同じコマンド内で READ しているだけの tracked file に帰属させないことを観測する。path が非 literal (変数・式) のときは従来どおり Ask のままであることも同時に観測する (安全側を緩めない対照)。'
+created_at = 1789289896
+updated_at = 1789289896
+weight = 0.0
+issue_number = 589
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/589"

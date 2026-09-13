@@ -5721,9 +5721,34 @@ worktree から (main のツリーでは行わない):
     cp .scratch/candidate-hooks/post-commit .githooks/post-commit
     sh -n .githooks/post-commit
     python3 scripts/test_gate_bypass.py       # 期待: Ran 124 tests ... OK
-適用後は scripts/patch-postcommit-amend.py を削除してよい。'''
+適用後は scripts/patch-postcommit-amend.py を削除してよい。
+
+---
+2026-09-13 バッチ3で着手し、**権限 deny で機械的にブロックされた**ので pending へ
+戻した。放置ではなく、人間の手が要る地点に到達したという記録である。
+
+観測した拒否 (逐語): "File is in a directory that is denied by your permission
+settings." deny 規則は ~/.claude/settings.json の
+Edit(//Users/yuki/**/.githooks/**) と Write(同) の 2 本。
+
+**sed や python 経由で書き換えて迂回することは意図的にしなかった。** deny は
+.githooks を保護するために張られたものであり、別のツールに持ち替えて同じ
+書き込みを達成するのは CLAUDE.md 第4節の隠蔽そのものになる。ゲートを迂回した
+実装は、ゲートが無かったことにする行為である。
+
+前提は再測済みで RED は生きている: "Ran 124 tests in 76.499s / FAILED
+(failures=1)" で、その 1 件が本チケットの pin。また先行セッションが用意した
+ワンショット適用スクリプト scripts/patch-postcommit-amend.py (追跡済み、
+commit cf51306d) は HEAD でもアンカーが一致し、生成した候補は sh -n を通る。
+つまり残っているのは人間が 2 コマンド打つことだけである。
+
+**人間への依頼**: 次のどちらかを選ぶこと。(a) settings.json の deny を
+.githooks に対して一時的に外して自動適用させる、(b) ユーザー自身が
+patch-postcommit-amend.py を実行して結果を確認する。どちらも取らないなら、
+本チケットは実装不能として明示的に閉じるべきで、pending のまま
+「いつか誰かが」にしておくのが最も悪い。'''
 created_at = 1784673254
-updated_at = 1789287766
+updated_at = 1789289861
 weight = 0.0
 issue_number = 306
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/306"
@@ -6130,10 +6155,10 @@ tags = [
     "scout",
     "p1",
 ]
-status = "claimed"
+status = "done"
 notes = "根拠: 類似度判定は既に実装済みで未適用 — overwatch/src/lease.rs:29 の POSSIBLE_DUPLICATE_THRESHOLD 0.6 と lease.rs:191 の possible_duplicate は live lease 同士でしか比較しておらず backlog キューには一切かかっていない。グループ実行の受け皿である tags と tag フィルタは next_claim (store.rs:638, main.rs:319) まで貫通済みなので、束ね方だけが欠けている。/ 完了条件: backlog の近縁タスクが1グループとして出力され、1グループを1セッションが取る運用が成立する。似た2タスクが別セッションで同時に走らないことを観測。"
 created_at = 1784745779
-updated_at = 1789287766
+updated_at = 1789289536
 weight = 0.0
 issue_number = 312
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/312"
@@ -6148,10 +6173,10 @@ tags = [
     "scout",
     "p1",
 ]
-status = "claimed"
+status = "done"
 notes = "根拠: crates/backlog/src/task.rs:21-43 に scope も touched_files も無い。一方 overwatch/src/lease.rs:103 の scopes_overlap は実装済み (テスト lease.rs:541)。flow SKILL.md:247 は scope が未確定なら省略と書いており、空 scope は衝突検知の対象外に落ちる。/ 完了条件: Task が scope を持ち serde default で旧 tasks.toml が読める。scope の重なりで束を作れる。overwatch begin --scope へ backlog 側の scope をそのまま渡せる。"
 created_at = 1784745779
-updated_at = 1789287766
+updated_at = 1789289535
 weight = 0.0
 issue_number = 313
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/313"
@@ -6217,10 +6242,10 @@ tags = [
     "scout",
     "p1",
 ]
-status = "claimed"
+status = "done"
 notes = "根拠: 91e503c8 で記録した帰属バグの是正側。cargo fmt --all と cargo clippy --workspace は他セッションの crate まで見るため、worktree 分離しても main 側の赤を拾う可能性がある。第8節の worktree 義務化と対になる修正。/ 完了条件: 自分が触っていない crate の赤によって自分の停止がブロックされないことをテストで観測する。"
 created_at = 1784746561
-updated_at = 1789287766
+updated_at = 1789289537
 weight = 0.0
 issue_number = 315
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/315"

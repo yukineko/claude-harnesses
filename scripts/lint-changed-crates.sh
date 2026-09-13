@@ -2,8 +2,8 @@
 #
 # lint-changed-crates.sh — run `cargo fmt --check` and `cargo clippy` for only
 # the crates touched in the working tree. Invoked by donegate's Stop gate (see
-# donegate.toml), and shaped deliberately after scripts/test-changed-crates.sh,
-# which does the same scoping for `cargo test`.
+# donegate.toml: the single `lint-changed` check), and shaped deliberately after
+# scripts/test-changed-crates.sh, which does the same scoping for `cargo test`.
 #
 # WHY NOT `cargo fmt --all` / `cargo clippy --workspace`: donegate runs on every
 # Stop, so these checks sit directly in the turn-completion path — and the
@@ -85,7 +85,7 @@ if ! command -v cargo >/dev/null 2>&1; then
     # In a Cargo workspace, absent cargo is a broken environment, not a reason to
     # wave a turn through. donegate's max_attempts still prevents a permanent trap.
     echo "lint-changed-crates: cargo not found (and \$HOME/.cargo/env did not provide it)" >&2
-    echo "  the fmt/clippy checks cannot run — fix the toolchain or disable them in donegate.toml" >&2
+    echo "  the fmt/clippy run cannot happen — fix the toolchain, or disable the lint-changed check in donegate.toml" >&2
     exit 1
 fi
 
@@ -122,7 +122,7 @@ if [ "$diff_rc" -ne 0 ] || [ "$untracked_rc" -ne 0 ]; then
     # Cannot determine the changed set — fail CLOSED rather than report
     # "nothing to lint". donegate's max_attempts still prevents a permanent trap.
     echo "lint-changed-crates: git could not determine the changed file set (diff rc=$diff_rc, untracked rc=$untracked_rc)" >&2
-    echo "  refusing to pass a turn as 'nothing to lint' when the change set is unknown — fix the repo state, or disable these checks in donegate.toml" >&2
+    echo "  refusing to pass a turn as 'nothing to lint' when the change set is unknown — fix the repo state, or disable the lint-changed check in donegate.toml" >&2
     exit 1
 fi
 

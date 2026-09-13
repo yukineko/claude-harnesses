@@ -29,10 +29,17 @@ The second class of tests covers the fail-CLOSED behaviour carried over from
 `scripts/test-changed-crates.sh`: cannot-determine (absent cargo, failing git)
 must never be reported as "nothing to lint".
 
-Point the suite at a MUTATED script to observe it going RED:
+A third class reads the repository's real `donegate.toml` and pins HOW the
+script is wired in (one check, 600s, the union of the old triggers, and no
+workspace-wide lint anywhere) — the configuration half of the same property.
+
+Point the suite at a MUTATED script — or a MUTATED donegate config — to observe
+it going RED:
 
     LINT_CHANGED_CRATES_SCRIPT=/tmp/mutant/lint-changed-crates.sh \\
         python3 scripts/test_lint_changed_crates.py
+    DONEGATE_TOML_UNDER_TEST=/tmp/mutant/donegate.toml \\
+        python3 scripts/test_lint_changed_crates.py DonegateWiresItAsOneCheck
 """
 
 from __future__ import annotations
@@ -41,6 +48,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -56,6 +64,14 @@ _SCRIPT = Path(
 # Copied into every scratch repo because the script calls it by path before it
 # builds anything.  Real file, real behaviour (it no-ops well under its cap).
 _CAP_SCRIPT = _HERE / "cap-target-dir.sh"
+
+# The donegate config whose WIRING is pinned below.  Overridable for the same
+# reason the script is: a regression pin that has never been observed failing
+# proves nothing, and the only way to observe this one failing is to point it at
+# a config that has the defect.
+_DONEGATE_TOML = Path(
+    os.environ.get("DONEGATE_TOML_UNDER_TEST", _REPO / "donegate.toml")
+)
 
 
 def _which(name: str) -> str:
@@ -424,6 +440,78 @@ class FailsClosedWhenItCannotDetermine(unittest.TestCase):
             + _detail(proc),
         )
         self.assertIn("not a git repo", proc.stderr)
+
+
+class DonegateWiresItAsOneCheck(unittest.TestCase):
+    """Pins HOW donegate.toml calls the script — the repository's real file, not
+    a scratch copy.
+
+    WHY THIS IS PINNED AT ALL.  The script was first wired in as the `cmd` of
+    BOTH pre-existing checks (`fmt` and `clippy`).  Since one invocation runs
+    fmt AND clippy, that made every Stop run the whole sweep TWICE, and left the
+    `fmt` entry budgeting 120s for a job that now includes a cold clippy build —
+    donegate would report `fmt` as a TIMEOUT while `clippy` (600s) passed.  The
+    fix is one check at the binding (600s) budget.  Without this test the
+    collapse is unpinned and the next editor re-splits it; the failure mode is a
+    spurious block, which is exactly what gets a gate disabled.
+
+    Which half went red is still reported — by the script's own stderr
+    (`cargo fmt --check FAILED for ...` / `cargo clippy FAILED for ...`), which
+    is what the two check NAMES used to buy."""
+
+    UNION_TRIGGERS = {"**/*.rs", "Cargo.toml", "Cargo.lock"}
+
+    def setUp(self):
+        manifest = _DONEGATE_TOML
+        # No donegate.toml means nothing can be pinned about the wiring. That is
+        # a failure of this test, not a pass by absence.
+        self.assertTrue(manifest.is_file(), "%s does not exist" % manifest)
+        self.config = tomllib.loads(manifest.read_text())
+        self.checks = self.config.get("check", [])
+        self.assertTrue(self.checks, "donegate.toml declares no [[check]] at all")
+
+    def _lint_checks(self):
+        return [c for c in self.checks if "lint-changed-crates.sh" in c.get("cmd", "")]
+
+    def test_the_lint_script_is_wired_in_exactly_once(self):
+        lint = self._lint_checks()
+        self.assertEqual(
+            1, len(lint),
+            "one invocation of lint-changed-crates.sh already runs BOTH fmt and "
+            "clippy, so N entries mean N full sweeps per Stop; found %d: %r"
+            % (len(lint), [c.get("name") for c in lint]),
+        )
+        self.assertEqual("lint-changed", lint[0].get("name"))
+
+    def test_it_carries_the_binding_budget_and_the_union_of_the_triggers(self):
+        lint = self._lint_checks()
+        self.assertEqual(1, len(lint), "precondition: exactly one lint check")
+        check = lint[0]
+        self.assertEqual(
+            600, check.get("timeout_secs"),
+            "the budget has to cover the clippy half (the old 120s fmt budget "
+            "would fire a spurious TIMEOUT on a cold clippy build)",
+        )
+        self.assertEqual(
+            self.UNION_TRIGGERS, set(check.get("when_changed", [])),
+            "the single check must still fire for everything the two old checks "
+            "fired for — a Cargo.toml/Cargo.lock-only change must reach clippy",
+        )
+
+    def test_no_check_lints_the_whole_workspace_any_more(self):
+        """The ticket's criterion, at the configuration layer: nothing in
+        donegate.toml may run the workspace-wide form again."""
+        offenders = [
+            (c.get("name"), c.get("cmd"))
+            for c in self.checks
+            if "cargo fmt --all" in c.get("cmd", "")
+            or "cargo clippy --workspace" in c.get("cmd", "")
+        ]
+        self.assertEqual(
+            [], offenders,
+            "a workspace-wide lint is back in donegate.toml, so a crate this "
+            "turn never touched can block this turn's stop again: %r" % offenders,
+        )
 
 
 if __name__ == "__main__":

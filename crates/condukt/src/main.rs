@@ -4464,8 +4464,15 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             } else if all_stuck {
                 // Bulk path: TTL-staleness alone does NOT authorise a reset —
                 // `stuck_task_ids` additionally requires a confirmed
-                // `Known(Stalled)` progress verdict per task. The explicit
-                // `--task` arm above stays deliberately ungated (human override).
+                // `Known(Stalled)` progress verdict per task AND a worktree
+                // observed clean, because a reset clears the task's worktree
+                // reference and re-dispatches a second worker, which would
+                // orphan any uncommitted work there. A task held back for either
+                // reason is named on stderr by the selector — so a shorter list
+                // here is never the only trace of a check that could not run.
+                // The explicit `--task` arm above stays deliberately ungated
+                // (human override), which is how a worker that died mid-edit,
+                // leaving a dirty worktree the bulk gate refuses, is reclaimed.
                 state::stuck_task_ids(cfg, cwd, &rs, cfg.stuck_ttl_secs, state::now_secs())
             } else {
                 bail!("specify --task <id> or --all-stuck");

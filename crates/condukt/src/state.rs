@@ -1075,21 +1075,37 @@ const STUCK_GATE_PROGRESS_KEY_PREFIX: &str = "stuck";
 /// progress verdict of such a task is `Undetermined` anyway (its
 /// `task-updated-at` signal is unreadable), so both filters agree.
 ///
-/// # What this does NOT see (residual, stated rather than glossed over)
+/// # UNCOMMITTED WORK VETOES the abandon (backlog `5daf0b60` / `0dc6546f`)
 ///
-/// The signals are `probe_run`'s task-scoped pair, and neither of them moves for
-/// a worker that is *thinking*, or *editing files in its worktree without
-/// committing*. Such a worker hardens to `Known(Stalled)` once the window
-/// elapses and IS abandoned here — the very re-dispatch this gate exists to
-/// prevent, for the subset of live workers that have not yet committed. Closing
-/// it needs a third signal that sees uncommitted work (working-tree mtime / a
-/// `git status` digest); that signal is deliberately NOT added here because no
-/// test pins it, and it is tracked as backlog `0dc6546f`. The gate as it stands
-/// protects the *committing* worker only.
+/// Both signals above are COMMIT-SHAPED: neither this task's worktree HEAD nor
+/// its `updated_at` moves for a worker that is *editing files in its worktree
+/// without having committed*. Such a worker hardened to `Known(Stalled)` once
+/// the window elapsed and WAS abandoned here — the very re-dispatch this gate
+/// exists to prevent, and with the first worker's uncommitted work as the thing
+/// orphaned by it. A confirmed `Known(Stalled)` is therefore *also* not
+/// sufficient: each surviving candidate's worktree is read with
+/// [`crate::worktree::is_dirty`] by [`uncommitted_work_keep_reason`], and only a
+/// worktree observed CLEAN may be abandoned. "Dirty" and "could not read" both
+/// KEEP the task (CLAUDE.md §3 — detachment is the irreversible direction), and
+/// every kept task is named on stderr with its reason, so that a smaller result
+/// set is never the only trace of a check that could not run.
+///
+/// # What this STILL does not see (residual, stated rather than glossed over)
+///
+/// A worker that is merely *thinking* — no commit, and no file written in its
+/// worktree either (a long model call; a build whose outputs land outside the
+/// worktree) — moves no signal and dirties nothing, so it still reads
+/// `Known(Stalled)` and IS abandoned. Closing that needs a signal for "this
+/// agent is alive" that is not derived from the worktree at all (a worker
+/// heartbeat / a live process), which this gate does not have. Dirtiness is also
+/// read ONCE, at selection time: a worker whose first edit lands microseconds
+/// after that read is not protected by it either. What the gate now protects is
+/// the *committing* worker (progress) and the *editing* worker (this veto).
 ///
 /// The EXPLICIT override `state abandon --task <id>` is deliberately UNGATED and
 /// does not call this: a human naming one task is how a genuinely dead worker
-/// whose worktree was deleted (`Undetermined` forever here) is still recovered.
+/// whose worktree was deleted (`Undetermined` forever here), or one whose
+/// worktree is dirty because the worker died mid-edit, is still recovered.
 pub fn stuck_task_ids(
     cfg: &Config,
     cwd: &Path,
@@ -1113,8 +1129,83 @@ pub fn stuck_task_ids(
             );
             stuck_progress_is_abandonable(&verdict)
         })
+        .filter(|t| match uncommitted_work_keep_reason(t) {
+            None => true,
+            Some(reason) => {
+                // CLAUDE.md §3: a silently smaller result set makes "checked"
+                // and "could not check" indistinguishable downstream, so the
+                // kept task is named here with the reason it was kept, plus the
+                // ungated override that reclaims it if the human disagrees.
+                eprintln!("condukt: NOT abandoning running task '{}': {reason}", t.id);
+                eprintln!(
+                    "condukt:   override with `condukt state abandon --run {} --task {}` \
+                     if you know this worker is dead",
+                    run.run_id, t.id
+                );
+                false
+            }
+        })
         .map(|t| t.id.clone())
         .collect()
+}
+
+/// Would bulk-abandoning `t` ORPHAN work that is not in any commit? `None` =
+/// nothing of the sort was observed and the abandon may proceed; `Some(reason)`
+/// = keep the task, and this is what to tell the human.
+///
+/// # Why this is a veto here, and not a third progress SIGNAL
+///
+/// [`task_progress`] answers a *temporal* question — "did this fingerprint move
+/// across the window?" — and needs two samples to answer it. Dirtiness is not
+/// temporal: one `git status --porcelain` is a complete present-tense fact
+/// ("there IS work here that no commit accounts for"). Folding it into the
+/// fingerprint would make the protection conditional on the digest CHANGING
+/// between samples, so a worker that finished its edits and is now compiling or
+/// thinking would present a FROZEN digest, harden to `Known(Stalled)` and be
+/// abandoned with its uncommitted work orphaned — exactly the worker this
+/// exists for. As a signal it would protect "a worker typing during the
+/// window"; as a veto it protects "any worktree holding uncommitted work".
+/// [`task_progress`] is also shared with the print-only [`probe_run`], and
+/// deciding who may be reaped is authority that belongs to the reap-
+/// authoritative selector, not to its observability twin.
+///
+/// # Every reading except "clean" keeps the task
+///
+/// `Ok(false)` — a worktree observed clean — is the ONLY reading that permits an
+/// abandon. `Ok(true)` is uncommitted work; `Err(_)` (git failed, path gone,
+/// index corrupt — what a worker killed mid-`git add` leaves behind) is
+/// cannot-determine, which is never "dead" (CLAUDE.md §3) because the direction
+/// of a wrong call here — clearing the task's worktree reference and
+/// re-dispatching a second worker into a live worktree — is irreversible.
+///
+/// A task with NO worktree recorded is likewise kept. That arm is unreachable
+/// from [`stuck_task_ids`] today (such a task has no task-scoped progress signal
+/// at all, so it is already `Undetermined` and dropped upstream); it is written
+/// fail-closed rather than omitted so that a future change upstream cannot make
+/// this function permissive by accident.
+fn uncommitted_work_keep_reason(t: &TaskState) -> Option<String> {
+    let observed: Determination<Option<String>> = match t.worktree.as_deref() {
+        Some(wt) => match worktree::is_dirty(Path::new(wt)) {
+            Ok(true) => Determination::Known(Some(format!(
+                "worktree {wt} has uncommitted changes — abandoning would clear the \
+                 task's worktree reference and re-dispatch a SECOND worker into it, \
+                 orphaning that work"
+            ))),
+            Ok(false) => Determination::Known(None),
+            Err(e) => Determination::undetermined(format!(
+                "cannot determine whether worktree {wt} holds uncommitted work ({e}); \
+                 a failed read is not evidence that the worker is dead"
+            )),
+        },
+        None => Determination::undetermined(
+            "cannot determine whether this task holds uncommitted work — no worktree \
+             is recorded for it",
+        ),
+    };
+    match observed {
+        Determination::Known(keep) => keep,
+        Determination::Undetermined(why) => Some(why.as_str().to_string()),
+    }
 }
 
 /// May a TTL-stale task be bulk-abandoned on this progress verdict? Matched
@@ -1169,7 +1260,12 @@ pub struct TaskProbe {
     /// that is not softened into `progressing`. This report is print-only and
     /// keeps its own freeze clock, so it carries no reap authority of its own;
     /// the gates that do are `claim_progress` (claims) and `stuck_task_ids`
-    /// (bulk abandon), the latter reading this same task-scoped signal pair.
+    /// (bulk abandon). The latter reads this same task-scoped signal pair and
+    /// then applies a FURTHER veto this field does not show
+    /// ([`uncommitted_work_keep_reason`]): a task printed `stalled` here may
+    /// still be un-abandonable there because its worktree holds uncommitted
+    /// work, or because that could not be read. `stalled` in this report is
+    /// therefore not a prediction that `--all-stuck` will reclaim the task.
     pub verdict: String,
 }
 
@@ -1308,22 +1404,28 @@ fn task_progress(
 ///
 /// A worker that is thinking, or editing files in its worktree **without
 /// committing**, moves neither the worktree HEAD nor `updated_at`, so once the
-/// window elapses it reads `stalled` even though it is working.
+/// window elapses it reads `stalled` even though it is working. **That is still
+/// true of the verdict printed here**, unchanged: `state probe` shows `stalled`
+/// for a worker that is mid-edit, and a human reading this report must not take
+/// `stalled` for "safe to reclaim".
 ///
 /// This paragraph used to justify that misreading by saying it "costs a human a
 /// wrong glance, not a stolen worktree", because `StateAction::Probe` only
 /// prints. **That justification is dead.** [`stuck_task_ids`] — the selector
 /// behind `state abandon --all-stuck`, which resets a task to `Pending`, clears
-/// its worktree and gets it re-dispatched — is now gated on the SAME task-scoped
+/// its worktree and gets it re-dispatched — is gated on the SAME task-scoped
 /// signal pair, assembled by the SAME [`task_progress`]. This function still
 /// reaps nothing itself (and keeps a separate freeze clock, see
-/// [`PROBE_PROGRESS_KEY_PREFIX`]), but the blind spot the two share now has reap
-/// consequences on the other side: a not-yet-committing worker reads `stalled`
-/// there and loses its worktree. Closing it needs a third signal that sees
-/// uncommitted work (working-tree mtime / a `git status` digest); it is
-/// deliberately not added yet because no test pins it, and it is tracked as
-/// backlog `0dc6546f`. The other reap-authoritative twin is
-/// `claim::claim_progress`, a run-scoped gate unchanged by this function.
+/// [`PROBE_PROGRESS_KEY_PREFIX`]), and the reap consequence the blind spot used
+/// to have on the other side is now blocked there — but *not* by this verdict:
+/// [`stuck_task_ids`] applies [`uncommitted_work_keep_reason`] as a separate
+/// veto AFTER the verdict, so an editing worker still reads `stalled` here while
+/// no longer being abandonable there (backlog `0dc6546f`, closed). The veto is
+/// deliberately not folded into this shared verdict: see
+/// [`uncommitted_work_keep_reason`] for why a present-tense fact must not be
+/// carried by a fingerprint that only reports CHANGE. The other
+/// reap-authoritative twin is `claim::claim_progress`, a run-scoped gate
+/// unchanged by this function.
 ///
 /// This is the observability twin of the reap gate — it does not reap anything,
 /// but it samples the SAME engine, so repeated probes across the window are what
@@ -3980,6 +4082,51 @@ mod tests {
             "a task past the TTL whose own worktree HEAD was frozen for the full \
              window is confirmed stalled and MUST remain abandonable — a gate that \
              answers 'nothing is ever stuck' is not a fix. got {ids:?}"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    // ── uncommitted-work veto ─────────────────────────────────────────────
+    // The dirty / cannot-read / clean arms are pinned end-to-end, at the real
+    // consumer, by `tests/abandon_dirty_guard.rs`. The two tests below cover
+    // what an e2e CANNOT reach: the no-worktree arm is unreachable through the
+    // CLI (such a task is already `Undetermined` and dropped by the progress
+    // filter upstream), so without a direct test it would be an arm with a zero
+    // kill rate — exactly the shape a later "simplification" deletes.
+
+    /// A task recording NO worktree is KEPT. Nothing can be read about whether
+    /// it holds uncommitted work, and cannot-determine is never "dead" (§3).
+    #[test]
+    fn uncommitted_work_keep_reason_keeps_a_task_with_no_worktree() {
+        let t = running_task("serial-task", None, Some(now_secs()));
+        let reason = uncommitted_work_keep_reason(&t);
+        assert!(
+            reason.is_some(),
+            "a task with no worktree gives the veto nothing to read; that is \
+             cannot-determine and must KEEP the task, not permit the abandon"
+        );
+        let reason = reason.unwrap_or_default();
+        assert!(
+            reason.contains("cannot determine"),
+            "the kept task's reason is what the human is told on stderr, so it \
+             must say the check could not run; got {reason:?}"
+        );
+    }
+
+    /// **ANTI-VACUITY CONTROL.** The veto must be able to answer "abandon is
+    /// permitted", otherwise the test above passes against a function that
+    /// keeps everything — a blanket never-abandon is not a fix.
+    #[test]
+    fn uncommitted_work_keep_reason_permits_a_clean_worktree_control() {
+        let tmp = make_tmp_dir("veto-clean-control");
+        let wt = tmp.join("wt-clean");
+        init_git_repo(&wt);
+        let t = running_task("clean", Some(&wt), Some(now_secs()));
+        assert_eq!(
+            uncommitted_work_keep_reason(&t),
+            None,
+            "a worktree OBSERVED clean has nothing to orphan and is the one \
+             reading that lets the bulk abandon proceed"
         );
         std::fs::remove_dir_all(&tmp).ok();
     }

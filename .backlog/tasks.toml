@@ -1,3 +1,5 @@
+
+
 [[task]]
 id = "0ba79281"
 title = 'CLAUDE.md: Windows で成立しない cargo 手順 (. "$HOME/.cargo/env") を直す'
@@ -6093,7 +6095,7 @@ tags = [
 status = "done"
 notes = "根拠: 類似度判定は既に実装済みで未適用 — overwatch/src/lease.rs:29 の POSSIBLE_DUPLICATE_THRESHOLD 0.6 と lease.rs:191 の possible_duplicate は live lease 同士でしか比較しておらず backlog キューには一切かかっていない。グループ実行の受け皿である tags と tag フィルタは next_claim (store.rs:638, main.rs:319) まで貫通済みなので、束ね方だけが欠けている。/ 完了条件: backlog の近縁タスクが1グループとして出力され、1グループを1セッションが取る運用が成立する。似た2タスクが別セッションで同時に走らないことを観測。"
 created_at = 1784745779
-updated_at = 1789287766
+updated_at = 1789289536
 weight = 0.0
 issue_number = 312
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/312"
@@ -6111,7 +6113,7 @@ tags = [
 status = "done"
 notes = "根拠: crates/backlog/src/task.rs:21-43 に scope も touched_files も無い。一方 overwatch/src/lease.rs:103 の scopes_overlap は実装済み (テスト lease.rs:541)。flow SKILL.md:247 は scope が未確定なら省略と書いており、空 scope は衝突検知の対象外に落ちる。/ 完了条件: Task が scope を持ち serde default で旧 tasks.toml が読める。scope の重なりで束を作れる。overwatch begin --scope へ backlog 側の scope をそのまま渡せる。"
 created_at = 1784745779
-updated_at = 1789287766
+updated_at = 1789289535
 weight = 0.0
 issue_number = 313
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/313"
@@ -6180,7 +6182,7 @@ tags = [
 status = "done"
 notes = "根拠: 91e503c8 で記録した帰属バグの是正側。cargo fmt --all と cargo clippy --workspace は他セッションの crate まで見るため、worktree 分離しても main 側の赤を拾う可能性がある。第8節の worktree 義務化と対になる修正。/ 完了条件: 自分が触っていない crate の赤によって自分の停止がブロックされないことをテストで観測する。"
 created_at = 1784746561
-updated_at = 1789288110
+updated_at = 1789289537
 weight = 0.0
 issue_number = 315
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/315"
@@ -6255,7 +6257,7 @@ title = "harness-core boundary: read_dir_entries の途中エントリ失敗ア�
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
+status = "done"
 notes = """
 独立検証者のフォールト注入 (2026-07-23) で判明。read_dir_entries の mid-iteration entry error アームを Undetermined を返す代わりに continue に書き換えても、テストスイートは緑のまま (exit 0) だった。他の3つの注入 (全エラーを Known 空へ / read_to_string を全エラー Known(None) へ / stdout_allowing を無条件 Known へ) はいずれも赤くなったので、このアームだけが無防備。
 
@@ -6265,7 +6267,7 @@ notes = """
 
 必要なのは fault-injecting filesystem (FUSE) か、失敗するイテレータをテストから注入できる seam。seam を入れる場合は production API を汚さない形にすること。現状は test module 内に UNCOVERED BRANCH コメントで明記済み。"""
 created_at = 1784747178
-updated_at = 1789279242
+updated_at = 1789290995
 weight = 0.0
 issue_number = 318
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/318"
@@ -6297,10 +6299,10 @@ tags = [
     "scout",
     "p1",
 ]
-status = "pending"
+status = "done"
 notes = "根拠: 0213f7a9 で入れた create_namespaced は run が None のとき従来動作にフォールバックする (crates/condukt/src/worktree.rs の create_namespaced)。後方互換としては正しいが、--run を渡す保証は SKILL.md の散文 (--run は必ず渡す) だけで、機械的強制が無い。tests/worktree_namespace_concurrency.rs は --run を渡した場合の正しさを証明するが、--run が実際に渡されることは証明しない。LLM が1箇所書き忘れれば衝突が復活し、そのとき何も赤くならない (黙って旧レイアウトに戻るだけ)。CLAUDE.md 第6節が禁じる 気をつける に安全性を置いた状態。/ 案: 並列セッションが live なとき --run 省略を非0で拒否する。単一セッション時と明示的な legacy フラグ指定時は従来どおり通す。live 判定不能は第3節に従い制限側 (拒否) へ倒す。/ 完了条件: 並列セッション live 下で --run を省略した worktree create が非0で終了することを観測する。単一セッション時は通ることも観測する。"
 created_at = 1784747525
-updated_at = 1789279456
+updated_at = 1789290996
 weight = 0.0
 issue_number = 320
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/320"
@@ -6315,10 +6317,10 @@ tags = [
     "scout",
     "p1",
 ]
-status = "pending"
+status = "done"
 notes = "根拠: .githooks/pre-push の rollout drift rc=1 は 2026-07-23 に BLOCK から advisory へ降格した。理由は品質ではなく場所の誤り — drift はこのマシンの plugin cache の性質であり、push はコードをリモートへ共有する操作なので、ローカルの配備状態が良質な commit の共有可否を決めるべきではない。/ ただし降格しただけでは、元の失敗モード (commit と version bump 済みの fix がどのセッションにも届かない。2026-07-22 に16プラグインが約20コミットにわたり無言で drift した実績あり) が 誰かが気づく に退行する。CLAUDE.md 第6節が禁じる状態。/ 検出そのものは check-plugin-rollout.py として無傷で残っているので、これを operator が行動できる地点 = session start に出す。/ 完了条件: drift がある状態で新しいセッションを開始すると、その事実が明示的に提示されることを観測する。drift が無いときは提示されないことも観測する (常時出す通知は何も検出していない)。"
 created_at = 1784749265
-updated_at = 1789278965
+updated_at = 1789290998
 weight = 0.0
 issue_number = 321
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/321"
@@ -6402,7 +6404,7 @@ tags = ["p1"]
 status = "pending"
 notes = "e19d501a の作業中に cargo test --workspace を4回回したうち1回で失敗 (2035 passed / 1 failed)。他3回と、隔離/直列での11回連続実行では pass。失敗させた変更は backlog/autoflow/daily/flow のみで condukt はそれらに依存しないため、condukt のテストバイナリは差分の有無で同一。したがって原因は変更ではなくマシン負荷への感度である。完了条件: 負荷を掛けた状態で決定論的に再現させ、テストが実時間のタイミングに依存しているのか lock 実装側にレースがあるのかを事実として切り分けること。落ちるのを見なかったことにしない。テストを緩める・retry でごまかすのは不可。"
 created_at = 1784755092
-updated_at = 1789273875
+updated_at = 1789289888
 weight = 0.0
 issue_number = 323
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/323"
@@ -6440,7 +6442,7 @@ tags = ["p1"]
 status = "pending"
 notes = "実測 (2026-07-24): 他ジョブで CPU 飽和中に cargo test --workspace を3回回すと 3/3 で compass::tests::compass_invocation_faster_than_timeout_still_returns_output が落ちた (exit 101)。無負荷の CI (ubuntu/macos) では同テストは ok。これは compass 呼び出しが timeout 前に返ることを assert する速度依存テストで、マシン負荷でプロセス起動が遅れると閾値を超えて落ちる。condukt の repo_primary_lock_serializes_concurrent_rmw_no_lost_update (35d61d23) と同じ負荷依存クラス (こちらは isolated 30/30 pass で再現せず)。判定がマシン速度に依存する検査は非決定論ゲートで、緑/赤が環境で変わる。完了条件: これら timeout/並行テストの閾値を負荷耐性のある形にするか、負荷下でも決定論になるよう設計し直し、負荷を掛けた状態で決定的に緑を観測する。"
 created_at = 1784832249
-updated_at = 1789273876
+updated_at = 1789289888
 weight = 0.0
 issue_number = 324
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/324"
@@ -6750,7 +6752,7 @@ tags = ["p1"]
 status = "pending"
 notes = "compact スライス(0.2.11)の姉妹。store.rs:1109 の if let Ok(txt)=std::fs::read_to_string(archive) を boundary::read_to_string 三値へ。争点: 呼び出し側 reconcile.rs:167/189 が明文の fail-soft 契約(pre-push フック/監査ラウンドを絶対に壊さない、失敗は 0 へ縮退)を持ち unwrap_or_default。Undetermined を Err 伝播すると契約が変わる。裁定が必要: reconcile 出力は verdict か observability か(CLAUDE.md 第1節 carve-out)。disposition_cli.rs:100 の unwrap_or_default も同様。裁定してから移行し ratchet を更に下げる。"
 created_at = 1784904181
-updated_at = 1789290481
+updated_at = 1789274307
 weight = 0.0
 issue_number = 28
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/28"
@@ -7104,10 +7106,10 @@ tags = [
     "subagent-liveness",
     "p1",
 ]
-status = "pending"
+status = "claimed"
 notes = "scout 2026-07-25 (score 1.35). 証拠: crates/condukt/src/lock.rs:135-141 の .status().map(|s| s.success()).unwrap_or(false)、使用箇所 lock.rs:290 の Some(existing) if !pid_alive(existing.pid) => remove_file。同型が crates/hypothesis/src/lock.rs:75-88 と :237。修正済みの対比が crates/overwatch/src/lock.rs:85-88 に逐語で残る。kill を起動できない=生死を尋ねられなかった、を所有者は死んだに写しており、生きているホルダーのロックを奪う。完了条件: Determination<bool> を返し reap 分岐が Known(false) のみで発火する。overwatch の tests/faultinject_pid_alive.rs 相当 (空 PATH で kill を起動不能にする) を両クレートに置く。"
 created_at = 1784916593
-updated_at = 1784916593
+updated_at = 1789291299
 weight = 0.0
 issue_number = 47
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/47"
@@ -7123,10 +7125,10 @@ tags = [
     "subagent-liveness",
     "p1",
 ]
-status = "pending"
+status = "claimed"
 notes = "scout 2026-07-25 (score 1.28). 証拠: crates/condukt/src/claim.rs:185-195 の fn load が serde_json::from_str(&txt).unwrap_or_default() で破損 registry を空に落とす。docstring は Corruption loses others claims, but proceeding is safer と明記しており、実装と意図が一致したうえで fail-open。帰結: 他セッションの全 claim が沈黙のうちに消え、衝突するファイルを持つ複数 worker が同時に走る。完了条件: ファイル無し (正当な空) と読めたがパース不能を区別し、後者では claim 取得が Err/hard-skip になる。破損 registry で claim_files が成功しない回帰テストを固定する。"
 created_at = 1784916594
-updated_at = 1784916594
+updated_at = 1789291299
 weight = 0.0
 issue_number = 48
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/48"
@@ -7142,10 +7144,10 @@ tags = [
     "subagent-liveness",
     "p1",
 ]
-status = "pending"
+status = "claimed"
 notes = "scout 2026-07-25 (score 1.28). 証拠: crates/harness-core/src/usage.rs:369-372 の if agg.turns == 0 { continue; }。帰結: 起動したが一度も出力していない sub-agent = 最も疑わしい状態が、そんな sub-agent は存在しないと同じ出力になる。沈黙を不在に写す fail-open。完了条件: 空または turn 0 の agent-*.jsonl に対して gauge subagents --json が turns:0 のエントリを欠落ではなく返し、存在するが未産出と区別可能であることをテストが示す。"
 created_at = 1784916595
-updated_at = 1784916595
+updated_at = 1789291299
 weight = 0.0
 issue_number = 49
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/49"
@@ -7161,10 +7163,10 @@ tags = [
     "subagent-liveness",
     "p1",
 ]
-status = "pending"
+status = "claimed"
 notes = "scout 2026-07-25 (score 1.20). 証拠: crates/condukt/src/main.rs:3908-3910 で stuck_task_ids の結果を取り、3923-3927 で t.status = Pending; t.worktree = None; t.branch = None; t.updated_at = None; を生存確認も dirty 判定もなしに実行。既存の未使用シグナル crates/condukt/src/worktree.rs:2014 の pub fn is_dirty。TTL 既定は circuit.rs:349 / config.rs:205 の stuck_ttl_secs: 1800。帰結: 生きている worker の未コミット作業が state から切り離され孤児化し、同一 worktree に2体が乗る。完了条件: 既定で dry-run になり、dirty な worktree を持つ対象は明示確認なしに abandon されない。worktree を消さずに reset する経路の回帰テストがある。"
 created_at = 1784916597
-updated_at = 1784916597
+updated_at = 1789291299
 weight = 0.0
 issue_number = 50
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/50"
@@ -7180,10 +7182,10 @@ tags = [
     "subagent-liveness",
     "p1",
 ]
-status = "pending"
+status = "claimed"
 notes = "scout 2026-07-25 (score 1.13)。2026-07-29 の staleness 監査で自動検証者は STALE と判定したが、3つの完了条件のうち1つが未達なので LIVE のまま残す（検証者自身も残渣として言及しながら STALE と結論していた）。実測 (測定点 6302d166): 条件(1) reap 一覧の可視化と、条件(3) 長時間 Task 中の生存判定は、progress ゲート化により実質的に解決済み。crates/condukt/src/claim.rs:285 が Reap fires ONLY on Known(Stalled) と明記し、stale_claim_but_progressing_is_not_reaped と stale_claim_with_undetermined_progress_is_not_reaped の2テストが pin している。condukt state probe も landed。/ 未達なのは条件(2): claim::heartbeat の Err が呼び出し側で警告として表面化すること。crates/condukt/src/main.rs:3790 はいまも let アンダースコア = claim::heartbeat(...) で Result を捨てている。同ファイル 3863 行には疑問符で伝播する版があるので、3790 だけが取り残された形。/ 残る完了条件: main.rs:3790 の heartbeat 失敗を握り潰さず警告として表面化させ、それを pin するテストを置く。"
 created_at = 1784916598
-updated_at = 1785280078
+updated_at = 1789291299
 weight = 0.0
 issue_number = 51
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/51"
@@ -24026,3 +24028,95 @@ updated_at = 1789292032
 weight = 0.0
 issue_number = 603
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/603"
+
+[[task]]
+id = "ebd1359a"
+title = "blastguard: inline-eval の python が open(..,'w') を持つと、同じコマンドで READ しているだけの tracked ファイルに書き込みを帰属させる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = '実測 2026-09-13、測定点 984619c8。flow の sink 中に 2 回踏んだ。/ 1 件目 (逐語): "python3 is invoked with an inline-eval flag, and it writes .backlog/tasks.toml (,(w)) — it is tracked by git but carries uncommitted changes — those changes exist nowhere else"。実際のコマンドは tasks.toml を tomllib で READ し、書き込み先は scratchpad 配下の別ファイルだった。inline eval の中では open の第1引数と mode が構文的に結びつかないため、blastguard は「どこかに w がある」ことと「tracked file 名が出現する」ことを結合して最も危険な解釈を採った。/ 2 件目 (逐語): "(> $S/getnotes.py) destroys the file(s) current contents and $S/getnotes.py contains a shell expansion, so blastguard cannot tell which file this names, let alone whether its contents are recoverable"。/ **これは fail-open ではなく fail-closed 側の誤検知であり、その意味で設計どおりに動いている** (model.rs:9 の it is NOT a verdict about the command, it is a refusal そのもの)。したがって「緩めろ」という起票ではない。判定不能を Ask に倒す第3節の実装として正しい。/ 問題は精度ではなく**回避策の形**である。ユーザー側の自然な対処は (a) 変数をやめて literal path を書く、(b) inline eval をやめてスクリプトファイルにする、の 2 つで、どちらも blastguard から見た曖昧さを消すだけで危険度は 1 ミリも下がらない。つまり現状の Ask は「安全になるまで待て」ではなく「blastguard に読める書き方に直せ」という要求になっており、繰り返すうちに「とりあえず literal に書き直して通す」という**反射**を育てる。その反射は、本当に危険なコマンドを literal に書き直しただけで通してしまう瞬間に牙を剥く。/ 完了条件: inline eval 内の open(path, mode) について、mode が書き込みで path が literal なときは**その path** に帰属させ、同じコマンド内で READ しているだけの tracked file に帰属させないことを観測する。path が非 literal (変数・式) のときは従来どおり Ask のままであることも同時に観測する (安全側を緩めない対照)。'
+created_at = 1789289896
+updated_at = 1789289896
+weight = 0.0
+issue_number = 589
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/589"
+
+[[task]]
+id = "4b94e371"
+title = "condukt の bin テストが並列実行下で非決定に落ちる (--test-threads=1 なら 805/0)。落ちる顔ぶれが run ごとに変わる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+実測 2026-09-13、測定点 1a5f451a (main)。バッチ4 のエージェントが「2 件は main でも同じに落ちる既存の赤、1 件だけが順序依存」と報告したので額面で受け取らず自分で測り直した。**その切り分けは誤りで、3 件とも同じ 1 つの欠陥である。** 決定的な対照:
+
+  cargo test -p condukt --bins                      -> FAILED. 802 passed; 3 failed
+  cargo test -p condukt --bins -- --test-threads=1  -> ok.     805 passed; 0 failed
+  cargo test -p condukt --no-fail-fast              -> FAILED. 803 passed; 2 failed
+
+同一バイナリ・同一コミットで、スレッド数だけを変えると赤が消える。さらに **落ちる顔ぶれが run ごとに入れ替わる**: ある run では diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded と editgate::tests::ambient_colour_env_cannot_switch_the_gate_off、別の run では editgate::tests::a_non_zero_cargo_exit_is_never_reported_as_clean。したがって「どれが既存の赤か」を数えること自体に意味が無い。
+
+観測した assertion (逐語): assertion (left == right) failed: a crate that fails to compile must be broken: {"broken":false,"diagnostics":null,"fallback":false,"reason":"cargo check reported no errors","required":true} / left: Bool(false) / right: true (crates/condukt/src/editgate.rs:493)。他の 2 件は editgate.rs:521 と diffrisk_record.rs:540。
+
+**なぜ危険か。** この赤はコードの欠陥を検出していない。にもかかわらず、ユーザーの「どんどん並列で」方針の下ではバッチ自身の並列度が上がるほど頻繁に出る。赤が偽なら 2 つの悪いことが同時に起きる: (a) 本物の赤がノイズに埋もれる、(b) 実装者が「また例のやつだろう」と赤を読まずに通す習慣を獲得する。後者は CLAUDE.md 第1節が名指しで禁じている「赤を邪魔と捉える」状態そのものであり、ゲート群への投資を丸ごと無効化する。
+
+**疑うべき共有状態** (未確定、これから測る側): env var の書き換え (ambient_colour_env は明らかに環境変数を触る)、固定パスの fixture / journal 先 (diffrisk_record は journal を書く)、cargo check を走らせる作業ディレクトリの共有。Rust のテストは同一プロセス内スレッドなので、set_var は全テストに見える。
+
+**完了条件**: cargo test -p condukt が既定の並列度で 10 回連続 green になることを観測する。同時に、各テストが共有 state ではなく自分専用の state を使っていることを構造で示すこと (スレッド数を 1 に固定して隠すのは修正ではない — それは検出を殺す方向であり第4節に触れる)。
+
+関連: 8c5d46fa (cargo test --workspace が負荷依存で非決定) と 35d61d23 (lock テストが高負荷時に 4 回中 1 回落ちる) は同じクラス。91d319d2 に隔離実行の規約を起票済み。3 件まとめて「並列下で嘘の赤を出すテスト」として扱うのが正しい。"""
+created_at = 1789291247
+updated_at = 1789291247
+weight = 0.0
+issue_number = 594
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/594"
+
+[[task]]
+id = "5cc59321"
+title = "flow が condukt バッチを fork subagent に投げると並列度が黙って 1 に縮退する — fork は subagent を起動できない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+実測 2026-09-13、測定点 1a5f451a。バッチ4 の実行体が自己申告した逐語: condukt parallel workers are subagents spawned by the /condukt skill, and as a fork I am barred from spawning subagents ... I implemented the four items serially myself ... CONDUKT_MAX_PARALLEL=4 was never meaningfully applied.
+
+**構造**: condukt の並列度は worker = subagent として実装されている。一方 flow がバッチを回すとき、実行体は fork subagent である。subagent は subagent を起こせないので、**condukt の並列実行経路そのものが到達不能になる**。CONDUKT_MAX_PARALLEL を渡しても受理され、エラーも警告も出ず、直列で完走する。
+
+**なぜ p1 か。** ユーザーの常設方針は「どんどん並列で pending 処理したい。worktree つかって merge すればいい」である。その方針を実行したつもりの経路が、黙って直列に縮退している。しかも成果物は正しく landed するので **成功の顔をして返ってくる**。CLAUDE.md 第1節の「沈黙は許容される degrade ではない」に真っ向から該当する — 下流 (この場合は人間) が「並列で回った」と読める出力を、判定を持つ層が返している。
+
+**未測定の部分は未測定と書く**: 同日のバッチ3 (agent aea2dfb8f464e7c9c) は worktree を 2 本作り workers と複数形で報告したので、そちらは実際に subagent を起こせた可能性がある。もしそうなら縮退は fork 固有であって全 subagent 種別に共通ではないことになる。**この差は測っていないので断定しない。** 先に測るべきはここ: 同じバッチを (a) fork, (b) 非 fork の general-purpose agent で起動し、condukt が実際に worker を並列起動したかを worktree 数と各 worker の開始時刻の重なりで観測する。
+
+**完了条件**: 並列で走れない実行体から condukt の並列 run が要求されたとき、**非0 か明示的な警告で「直列に縮退した」と宣言される**ことを観測する。宣言せずに直列完走しないことを対照として同時に観測する (第3節: 判定不能・能力不足は沈黙ではなく制限側の明示へ倒す)。縮退そのものを禁じる必要は無い — 見えれば flow 側が別の実行体を選べる。
+
+関連: 91d319d2 (隔離実行規約)、4b94e371 (並列下の偽の赤)。並列度を上げる方針は、上げたつもりが上がっていない経路と、上げると嘘の赤が出るテストの両方を潰さないと成立しない。"""
+created_at = 1789291263
+updated_at = 1789291263
+weight = 0.0
+issue_number = 595
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/595"
+
+[[task]]
+id = "51595c41"
+title = "condukt: worktree の作成基点(current HEAD)とマージ先(default_branch)の非対称を解消する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+iro 0bb8dcfd で実測・判定済み。worktree.rs:726-729 は start-point 無しの 'git worktree add -b' ＝着手時の HEAD から切る。main.rs:3174 の merge は常に cfg.default_branch へ。この2つが食い違うと、feature ブランチ上で走らせた run が **feature の履歴ごと default_branch へ統合する**（2026-09-13 run-20260913-130340-73812 で iro の main が実機A/B未の広角補正を抱えたまま進んだ）。SKILL.md/README.md はこの組み合わせに一切触れていない（'feature ブランチ'/'start-point'/'base branch'/'基点' で 0 ヒット）。
+
+取り得る決着は3つで、どれを選ぶかが本チケットの判断:
+(a) 作成側を default_branch 基点に揃える（worktree add -b <branch> <default_branch>）— マージ先と一致するが、feature ブランチ上のコードに依存するタスクが土台を失う。
+(b) マージ先を『着手時の HEAD のブランチ』にする — create 時に基点 ref を記録する状態追加が要る。意図（元の場所へ戻す）を保つのはこちら。
+(c) 作成時の基点 sha を記録し、**merge 時にそれが default_branch の祖先でなければ止めて報告する**（統合はせず人へ返す）。ハッピーパスを変えずに『黙って main が動く』だけを潰す最小案。
+
+いずれにせよ SKILL.md Phase 7 に『どのブランチへマージされるか』を明記すること。注意: 現在 harness の配備バイナリは 35 件が harness-core 0.2.17 のまま（7357bc96）なので、source を直しても rollout するまで挙動は変わらない。"""
+created_at = 1789291438
+updated_at = 1789291438
+weight = 0.0
+issue_number = 596
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/596"

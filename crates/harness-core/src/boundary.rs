@@ -67,10 +67,34 @@ pub fn read_dir_entries(dir: &Path) -> Determination<Vec<PathBuf>> {
         }
     };
 
+    collect_dir_entries(dir, iter.map(|entry| entry.map(|entry| entry.path())))
+}
+
+/// The mid-iteration half of [`read_dir_entries`], split out so the per-entry
+/// `Err` arm can be reached by a test.
+///
+/// It is a seam, not a feature: `std::fs::DirEntry` has no public constructor
+/// and `ReadDir` cannot be built by hand, so the only way to hand this loop a
+/// failing element is to take the elements as a plain iterator of
+/// `io::Result<PathBuf>`. Two attempts to provoke a real `ReadDir::next()`
+/// error on macOS/APFS were measured and both failed (unlinking every entry
+/// then rmdir'ing mid-iteration, and chmod 000 mid-iteration; both yielded
+/// errs=0 / oks=199 because readdir(3) keeps streaming its cached block), so
+/// without this split the arm is unreachable from a test and rewriting it to
+/// `continue` would leave the suite fully green — the vacuity CLAUDE.md 2(b)
+/// warns about.
+///
+/// Deliberately private and deliberately NOT generic over the element type:
+/// [`read_dir_entries`]'s signature is unchanged, so no caller can pass its own
+/// iterator in production and no `unwrap_or`-shaped shortcut is introduced.
+fn collect_dir_entries<I>(dir: &Path, entries: I) -> Determination<Vec<PathBuf>>
+where
+    I: IntoIterator<Item = io::Result<PathBuf>>,
+{
     let mut out = Vec::new();
-    for entry in iter {
+    for entry in entries {
         match entry {
-            Ok(entry) => out.push(entry.path()),
+            Ok(path) => out.push(path),
             Err(e) => {
                 return Determination::undetermined(format!(
                     "cannot read an entry of {}: {e} — the entries read so far are a \
@@ -561,16 +585,83 @@ mod tests {
         );
     }
 
-    // UNCOVERED BRANCH — stated, not hidden: the mid-iteration `Err(e)` arm of
-    // `read_dir_entries` (the "partial listing" guard) has NO test here, because
-    // no deterministic way to make `ReadDir::next()` yield an `Err` was found on
-    // this platform. Two routes were measured on macOS/APFS, both with the
-    // handle already open: unlinking every entry and rmdir'ing the directory
-    // mid-iteration, and chmod 000 on the directory mid-iteration. Both returned
-    // errs=0 / oks=199 — readdir(3) kept streaming the cached block. Rewriting
-    // that arm to `continue` therefore leaves this suite fully green, so nothing
-    // below defends it. Covering it needs a fault-injecting filesystem (FUSE) or
-    // a seam that lets a test hand in a failing iterator.
+    // The mid-iteration `Err(e)` arm — the "partial listing" guard — is reached
+    // through the `collect_dir_entries` seam. It used to be uncovered: no
+    // deterministic way to make `ReadDir::next()` yield an `Err` was found on
+    // this platform (two routes measured on macOS/APFS with the handle already
+    // open — unlinking every entry then rmdir'ing mid-iteration, and chmod 000
+    // mid-iteration — both returned errs=0 / oks=199, readdir(3) kept streaming
+    // its cached block). The seam takes the elements as plain
+    // `io::Result<PathBuf>`, so a failing element can be handed in directly
+    // without a fault-injecting filesystem.
+
+    fn failing_entry() -> io::Error {
+        io::Error::other("simulated mid-iteration entry failure")
+    }
+
+    /// The arm the seam exists for: one bad element poisons the WHOLE call.
+    /// Rewriting it to `continue` (or to `filter_map(Result::ok)`) turns this
+    /// red — that is the mutation this test is here to kill.
+    #[test]
+    fn a_failed_entry_mid_iteration_is_undetermined_not_a_short_listing() {
+        let dir = Path::new("/tmp/some-dir");
+        let entries = vec![
+            Ok(dir.join("a.txt")),
+            Err(failing_entry()),
+            Ok(dir.join("b.txt")),
+        ];
+
+        let why = expect_undetermined(collect_dir_entries(dir, entries));
+        assert!(
+            why.contains("some-dir"),
+            "the reason must name the directory it could not finish reading: {why}"
+        );
+        assert!(
+            why.contains("partial listing"),
+            "the reason must say WHY a short answer is not an answer: {why}"
+        );
+    }
+
+    /// Anti-vacuity control for the test above: the same seam, same shape, with
+    /// no failing element, must come back `Known` — otherwise the assertion
+    /// above would pass against a function that returns `Undetermined` always.
+    #[test]
+    fn the_seam_without_a_failure_is_known_and_sorted() {
+        let dir = Path::new("/tmp/some-dir");
+        let entries = vec![
+            Ok(dir.join("zeta.txt")),
+            Ok(dir.join("alpha.txt")),
+            Ok(dir.join("middle.txt")),
+        ];
+
+        let got = expect_known(collect_dir_entries(dir, entries));
+        let names: Vec<String> = got
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["alpha.txt", "middle.txt", "zeta.txt"],
+            "the seam must still sort by file name"
+        );
+    }
+
+    /// A failure on the FIRST element, where `out` is still empty. Without this
+    /// case the arm could be rewritten to "return Undetermined only if we had
+    /// already collected something", which would let an all-bad listing come
+    /// back as `Known([])` — the exact empty-means-clean fail-open this module
+    /// exists to prevent.
+    #[test]
+    fn a_failure_on_the_first_entry_is_still_undetermined_not_known_empty() {
+        let dir = Path::new("/tmp/some-dir");
+        let entries: Vec<io::Result<PathBuf>> = vec![Err(failing_entry())];
+
+        let why = expect_undetermined(collect_dir_entries(dir, entries));
+        assert!(
+            why.contains("partial listing"),
+            "an empty-so-far listing must not downgrade to Known([]): {why}"
+        );
+    }
 
     // ---- read_to_string ---------------------------------------------------
 

@@ -22702,9 +22702,44 @@ GATED deploy (condukt の t4) であり、人間の承認なしに実行しな�
 なぜ効かなかったかの root cause 特定は着手していない。条件 1 の実機確認が前提になる。
 
 したがって「tdd の Stop ゲートが dark である」という現象自体は今も解消していない。
-解消したのは「その dark 状態を check-plugin-rollout.py が検出できない」という検出側の欠落だけ。"""
+解消したのは「その dark 状態を check-plugin-rollout.py が検出できない」という検出側の欠落だけ。
+--- 完了条件 1 と 3 は landed。残りは条件 2 だけ 2026-09-13、測定点 86041740 ---
+
+【条件 3 = 達成】51f77f3d で check-plugin-rollout.py の短絡を外した。
+version drift の報告が host binary 不在の検査を隠していた経路を塞いだ結果、
+実際にこの状態を逐語で報告できるようになった (rollout 前の実測):
+  tdd: crates/tdd declares a binary target, but no darwin-arm64 binary is deployed
+  under the tdd 0.1.29 bin dir — the plugin is installed but execs nothing, so its
+  hook is DARK (it reports nothing, which is not the same as reporting nothing wrong)
+
+【条件 1 = 達成】0.1.25 の古いバイナリを流用せず、repo HEAD (86041740) から
+scripts/rollout-plugins.sh --plugin tdd で build して seed した。実測:
+  tdd/0.1.31/bin/tdd-darwin-arm64  1852304 bytes  Sep 13 13:36
+  .deployed-from.json: commit 8604174044085d44413f06fa6afe44fb18da0159, dirty:false,
+                       harness_core_version 0.2.19
+  installed_plugins.json の installPath が tdd/0.1.31 を指す
+behavioral 確認 (sha256 比較ではなく実起動。memory deploy-provenance-not-hash):
+  launcher  tdd/0.1.31/bin/tdd --version            -->  tdd 0.1.31  exit 0
+  host bin  tdd/0.1.31/bin/tdd-darwin-arm64 --version -->  tdd 0.1.31
+  gate      空の hook 入力で no bundled binary メッセージが出ないことを確認
+rollout 後に check-plugin-rollout.py を再実行し、tdd と overwatch の所見が 0 件になった。
+
+【条件 2 = 未達。ここだけが残り】rebuild が fresh version dir に host bin を seed する経路が
+tdd でなぜ効かなかったかは **特定していない**。RED も観測していない。
+やっていないのでやっていないと書く。
+
+観測はある: 今日の overwatch rollout では fresh version dir への seed が正常に働いた (逐語)
+  cache  seeded overwatch-darwin-arm64 (fresh version dir overwatch/0.2.33)
+つまり seed 経路自体は現在機能している。したがって 0.1.29 が seed されなかった原因は
+「seed 経路の欠陥」ではなく「0.1.29 の version dir を作ったのが rollout-plugins.sh では
+なかった (bump 後に rollout を走らせていない)」可能性がある。**ただしこれは予測であって
+観測ではない** (CLAUDE.md 第2節)。確定させるには次を測ること:
+  (a) bump だけして rollout を走らせない状態を再現し、version dir がいつ誰に作られるかを観測する
+  (b) その状態を check-plugin-rollout.py が block できるか (条件 3 の修正で今は block できるはず)
+  (c) rollout を走らせずに version dir ができる経路が実在するなら、それ自体が dark gate の
+      再発経路なので塞ぐ。RED を先に観測すること。"""
 created_at = 1789075692
-updated_at = 1789273941
+updated_at = 1789274256
 weight = 0.0
 issue_number = 535
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/535"
@@ -22987,3 +23022,48 @@ updated_at = 1789273961
 weight = 0.0
 issue_number = 550
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/550"
+
+[[task]]
+id = "d52e2f79"
+title = "稼働中の 19 plugin が harness-core 0.2.17 にリンクされたまま (source は 0.2.19) — 共有クレート変更後に rollout が走っていない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+実測 2026-09-13、測定点 86041740。測定コマンド python3 scripts/check-plugin-rollout.py
+
+check-plugin-rollout.py が 19 plugin について逐語で次を報告する:
+  deployed binary links harness-core 0.2.17, but the source tree is now at 0.2.19
+  (rollout-plugins.sh not run since that shared-crate change)
+
+対象 (この run で rollout した tdd と overwatch を除く):
+  gauge / harness-status / hypothesis / playbook / precommit-audit / propguard /
+  replaykit / reviewgate / runbook / schemaguard / session-insights / ship /
+  specguard / stuckguard / taskprog / tracekit / trajectoryeval ほか
+
+なぜ問題か: harness-core は 36 plugin に静的リンクされる共有クレートなので、
+0.2.17 と 0.2.19 の差分に判定ロジックの変更が含まれている場合、稼働中のゲートは
+repo の HEAD が主張する挙動ではなく 2 バージョン前の挙動で判定している。
+これは dark (8206b09f) とは別のクラスで、ゲートは動いているが **古い判定で動いている**。
+propguard / specguard / stuckguard / reviewgate は判定を持つゲートなので影響範囲に入る。
+
+判定不能なので両方の読みを残す:
+  (a) 実在の問題 = 0.2.17 から 0.2.19 の間に判定挙動の変更があり、稼働ゲートが古い判定で
+      動いている。この場合は rollout が必要。
+  (b) 無害 = 0.2.17 から 0.2.19 の差分が判定に影響しない (テスト追加や stdin 注入化など)。
+      実際 0.2.19 への直近 2 commit は stdin の網羅テストと Cargo.lock 同期に見える。
+
+見分ける方法: git log と git diff で harness-core 0.2.17 から 0.2.19 の差分のうち、
+tests/ と *.md 以外のリンクされる差分を列挙し、verdict 経路に触れるものがあるか確認する。
+触れていれば (a) 確定で fleet 全体の rollout が必要。触れていなければ (b) だが、
+その場合でも drift は蓄積するので定期 rollout の運用を決める必要がある。
+
+関連: b6a80342 (rollout drift の検出を push ではなく session start に置き直す)。
+発見経緯: 8206b09f の rollout 中に check-plugin-rollout.py の全体出力を読んで観測した。
+この run では tdd と overwatch だけを rollout しており、他 19 plugin には触れていない。"""
+created_at = 1789274268
+updated_at = 1789274268
+weight = 0.0
+issue_number = 554
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/554"

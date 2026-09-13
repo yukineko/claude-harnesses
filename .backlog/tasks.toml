@@ -24219,3 +24219,20 @@ updated_at = 1789294662
 weight = 0.0
 issue_number = 618
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/618"
+
+[[task]]
+id = "d0cc3a5f"
+title = "check-doc-claims の exempt リストに約46件の陳腐化した path:line 引用が溜まっている (docs/autoflow-verdict-audit.md / docs/gate-taxonomy.md)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p2",
+    "doc-drift",
+]
+status = "pending"
+notes = "測定点 main bdc051e5 / 2026-09-13. サイクル5 のコミット中に pre-commit の check-doc-claims が出力した内容から観測。ブロックはせず exempt として素通りしているが、件数は約46件で、内訳は quote-not-found と line-drifted と path-not-found。逐語例: docs/autoflow-verdict-audit.md:403 -> crates/autoflow/src/compass.rs:11 path-not-found (cited path does not exist)、docs/autoflow-verdict-audit.md:412 -> crates/autoflow/src/main.rs:276 quote-not-found (quote occurs nowhere in the file)、docs/autoflow-verdict-audit.md:422 -> crates/autoflow/src/lock.rs:80 line-drifted (quote is at line(s) 93 but the claim cites 80)、docs/gate-taxonomy.md:172 -> crates/tdd/src/config.rs:82 quote-not-found、docs/gate-taxonomy.md:234 -> scripts/check-fail-open.py:92 quote-not-found。CLAUDE.md 第4節は散文が実装と食い違うことを次のレビュアーを騙す仕掛けと呼んでおり、exempt で恒常的に見逃されている引用はまさにそれ。とくに path-not-found は crates/autoflow/src/compass.rs というファイル自体が存在しないことを意味し、当該監査ドキュメントの結論が現在のコードについて何も言っていない可能性がある。読み 1 (実在の腐敗): exempt は移行期の措置のはずで、恒久的に溜めてよいものではない。引用を直すかドキュメントを撤去する。読み 2 (意図どおり): 当該2ファイルは特定時点のスナップショット監査であり、当時の行番号を保存することに意味がある。見分け方: docs/autoflow-verdict-audit.md の冒頭が測定点 (rev) を明記した凍結スナップショットを名乗っているかを読む。名乗っていれば読み 2 だが、その場合でも exempt ではなく凍結である旨をファイル内に書くべき。"
+created_at = 1789293020
+updated_at = 1789293020
+weight = 0.0
+issue_number = 611
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/611"

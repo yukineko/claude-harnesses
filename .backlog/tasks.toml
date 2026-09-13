@@ -24190,3 +24190,32 @@ updated_at = 1789290713
 weight = 0.0
 issue_number = 592
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/592"
+
+[[task]]
+id = "95a6fc34"
+title = "condukt claim_tasks has no deadline seam, so the cross-worktree claims-lock contention test must burn 14 real seconds"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "test-speed",
+    "p2",
+]
+status = "pending"
+notes = """
+MEASURED 2026-09-13, measurement point dd7cd8c2 (branch batch5-d83b0e8f).
+
+FACT: cargo test -p condukt --test claim_worktree_scope takes 14.46s wall. The whole cost is one test: p5_claim_from_main_tree_contends_on_the_same_claims_lock_as_the_linked_worktree in crates/condukt/tests/claim_worktree_scope.rs. It sets CONDUKT_TEST_CLAIM_DELAY_MS=14000 on a first claim-task process so that a second process, launched from the OTHER worktree, is forced to block on the shared __claims__ lock. 14000 was chosen because RunLock::DEADLINE is 10s and the blocked side must be observed BLOCKING rather than timing out.
+
+WHY IT COSTS REAL TIME: lock.rs already has a deadline-parameterized seam, acquire_or_skip_in_project_with_deadline, but claim.rs claim_tasks calls the non-parameterized entry point, so a test cannot shrink RunLock::DEADLINE for the claim path the way it can elsewhere. The only lever left is the artificial delay, and the delay must EXCEED the fixed 10s deadline for the observation to mean what the test says it means.
+
+WHAT A FIX LOOKS LIKE: thread a deadline through claim_tasks the same way it is threaded through the in_project lock helpers, then the test can use a 300ms delay against a 200ms deadline and assert the same property in under a second.
+
+DO NOT fix this by lowering the delay below the deadline. That turns the blocked side into a timeout-skip and the test then passes for the wrong reason - it would no longer distinguish contention from a plain skip. The anti-vacuity control p5_control_uncontended_main_tree_claim_succeeds is what currently keeps the pair honest; any change here must keep a control that fails if the lock stops being shared.
+
+SEVERITY: this is test-suite latency, not a defect in shipped behaviour. Filed because 14s in a per-crate suite is the kind of cost that later gets paid down by weakening the test instead of by adding the seam."""
+created_at = 1789294662
+updated_at = 1789294662
+weight = 0.0
+issue_number = 618
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/618"

@@ -403,6 +403,13 @@ enum ShadowRunAction {
         topic: String,
         #[arg(long)]
         branch: String,
+        /// Run id to namespace the shadow worktree and its branch under, exactly
+        /// as `worktree create --run` does. Omit it for the legacy,
+        /// un-namespaced layout (byte-identical path and ref). Whatever is
+        /// passed here must be passed to `shadow-run finish` too: the branch
+        /// created is the branch deleted.
+        #[arg(long)]
+        run: Option<String>,
         /// Model the shadow attempt will run under (recorded, not enforced —
         /// the caller is responsible for actually invoking that model).
         #[arg(long)]
@@ -415,6 +422,13 @@ enum ShadowRunAction {
         path: PathBuf,
         #[arg(long)]
         branch: String,
+        /// Run id the shadow worktree was cut under (the same `--run` that was
+        /// given to `exec`). Omit it for an un-namespaced shadow worktree. It is
+        /// checked against the branch git actually has checked out at `--path`:
+        /// a mismatch is refused outright rather than force-deleting a ref that
+        /// does not exist while the real branch survives.
+        #[arg(long)]
+        run: Option<String>,
         #[arg(long)]
         title: String,
         #[arg(long)]
@@ -2330,19 +2344,27 @@ fn run_shadow_run(cfg: &Config, cwd: &Path, action: ShadowRunAction) -> Result<(
         ShadowRunAction::Exec {
             topic,
             branch,
+            run,
             model,
         } => {
             if !shadow_run::is_enabled(&dir) {
                 bail!("shadow-run is disabled — run `condukt shadow-run enable` first");
             }
             let repo = worktree::toplevel(cwd)?;
-            let path = worktree::create(&repo, &cfg.worktree_base, &topic, &branch)?;
+            let path = worktree::create_namespaced(
+                &repo,
+                &cfg.worktree_base,
+                run.as_deref(),
+                &topic,
+                &branch,
+            )?;
             println!("{}", path.display());
             eprintln!("condukt: shadow-run worktree ready for model '{model}' at {}; the caller implements there, then calls `shadow-run finish`", path.display());
         }
         ShadowRunAction::Finish {
             path,
             branch,
+            run,
             title,
             model,
             pass,
@@ -2357,7 +2379,7 @@ fn run_shadow_run(cfg: &Config, cwd: &Path, action: ShadowRunAction) -> Result<(
                 cost_usd: cost,
                 duration_secs: duration,
             };
-            let recorded = shadow_run::finish(&repo, &path, &branch, &outcome)?;
+            let recorded = shadow_run::finish(&repo, &path, &branch, run.as_deref(), &outcome)?;
             if recorded {
                 println!("shadow-run discarded and recorded to fugu-router");
             } else {

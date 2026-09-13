@@ -395,6 +395,82 @@ pub fn create_namespaced(
     }
 }
 
+/// The branch a caller means when it says `--run <run> --branch <branch>`: the
+/// run-scoped ref for `Some(run)`, the caller's ref VERBATIM for `None`
+/// (byte-identical to the legacy, un-namespaced spelling).
+///
+/// [`create_namespaced`] splices the namespace on the CREATE side; a discard
+/// that force-deletes the caller's raw `--branch` would then aim at a ref that
+/// was never created while the real one survives. This is the same splice,
+/// exposed so the two sides can be computed from one definition instead of two
+/// that can drift apart.
+pub fn run_scoped_branch(run: Option<&str>, branch: &str) -> Result<String> {
+    validate_branch(branch)?;
+    match run {
+        None => Ok(branch.to_string()),
+        Some(run) => {
+            validate_run_ns(run)?;
+            Ok(namespaced_branch(run, branch))
+        }
+    }
+}
+
+/// Whether `candidate` is `branch` under SOME valid run namespace, i.e. whether
+/// there exists a run id `r` for which [`run_scoped_branch`]`(Some(r), branch)`
+/// is exactly `candidate`.
+///
+/// Used by the discard side to recognise "the same logical branch, namespaced
+/// by a run this call was not told about" — as opposed to an unrelated ref,
+/// which must never be force-deleted on the strength of a caller's guess. The
+/// run segment is held to [`validate_run_ns`], so an arbitrary extra path
+/// segment does not qualify.
+pub fn is_run_scoped_form(candidate: &str, branch: &str) -> bool {
+    let (prefix, last) = match branch.rsplit_once('/') {
+        Some((p, l)) => (Some(p), l),
+        None => (None, branch),
+    };
+    let rest = match prefix {
+        Some(p) => match candidate.strip_prefix(p).and_then(|r| r.strip_prefix('/')) {
+            Some(r) => r,
+            None => return false,
+        },
+        None => candidate,
+    };
+    match rest.split_once('/') {
+        Some((run, tail)) => tail == last && validate_run_ns(run).is_ok(),
+        None => false,
+    }
+}
+
+/// The branch git itself says is checked out at the worktree registered at
+/// `path`, read from `git worktree list --porcelain`.
+///
+/// Tri-state on purpose (CLAUDE.md §3). `Known(Some(b))` is an observation:
+/// that directory is a registered worktree on branch `b`. `Known(None)` is also
+/// an observation — the path is not a registered worktree, or it is one with a
+/// detached HEAD, i.e. there is genuinely no branch to name. `Undetermined` is
+/// "git could not be asked", which is NOT the same as "there is no branch": a
+/// caller about to run `git branch -D` must refuse rather than fall back to a
+/// guessed ref.
+pub fn registered_branch(repo: &Path, path: &Path) -> Determination<Option<String>> {
+    let entries = match list_all(repo) {
+        Ok(e) => e,
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "could not list the worktrees of {}: {e}",
+                repo.display()
+            ))
+        }
+    };
+    let want = canonicalize_prefix(path);
+    for (p, branch, _) in entries {
+        if canonicalize_prefix(&p) == want {
+            return Determination::Known(branch);
+        }
+    }
+    Determination::Known(None)
+}
+
 /// Canonicalize `path`, falling back to canonicalizing the nearest existing
 /// ancestor and rejoining the non-existent trailing components when `path`
 /// itself does not exist yet (the common case here: we are about to create a

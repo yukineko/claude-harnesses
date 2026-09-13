@@ -352,14 +352,20 @@ impl SubAgentUsage {
 ///
 /// Three-valued (see [`Determination`]): `Known(vec![])` when the `subagents/`
 /// directory is genuinely **absent** (e.g. the older inline-sidechain layout,
-/// which is not attributable per agent) or holds no sub-agent with usage;
-/// `Undetermined(why)` when the directory exists but could not be enumerated.
-/// The two must not collapse — an unreadable directory reported as an empty
-/// list is "this session spent nothing on sub-agents", which is a claim this
-/// function did not observe.
+/// which is not attributable per agent) or holds no `agent-<id>.jsonl` files
+/// at all; `Undetermined(why)` when the directory exists but could not be
+/// enumerated. The two must not collapse — an unreadable directory reported
+/// as an empty list is "this session spent nothing on sub-agents", which is a
+/// claim this function did not observe.
 ///
-/// Within a successfully enumerated directory, individual unreadable files and
-/// per-line parse errors are still skipped.
+/// A sub-agent whose file **was found and read but carries zero turns**
+/// (launched, then died before completing one, or an empty transcript) is
+/// **not** dropped from the returned list: it still surfaces as one entry
+/// with `turns: 0` and empty `models`, so "launched but produced nothing" is
+/// distinguishable from "this agent never existed". Only a file that could
+/// not even be *read* (`std::fs::read_to_string` erroring) is skipped —
+/// per-line parse errors within a readable file are likewise skipped, not
+/// treated as zero turns.
 pub fn subagent_usage(main_transcript: &str) -> Determination<Vec<SubAgentUsage>> {
     subagent_files(main_transcript).map(|files| {
         let mut out = Vec::new();
@@ -369,9 +375,11 @@ pub fn subagent_usage(main_transcript: &str) -> Determination<Vec<SubAgentUsage>
             };
             let mut agg = Aggregate::default();
             ingest(&mut agg, &text, Some(AGENT_SUB), false, false);
-            if agg.turns == 0 {
-                continue;
-            }
+            // A sub-agent whose transcript carries zero turns (launched but
+            // died before completing one, or an empty file) is NOT skipped:
+            // dropping it here would make "launched but produced nothing"
+            // indistinguishable from "this agent never existed". The entry
+            // still surfaces, with `turns: 0` and empty `models`.
             // agent_id from the `agent-<id>.jsonl` stem.
             let stem = file
                 .file_stem()

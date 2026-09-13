@@ -64,9 +64,11 @@
 //! Every mutation is a load → mutate → save cycle guarded by the proven
 //! [`crate::lock::RunLock`], keyed on the reserved id [`CLAIMS_LOCK_KEY`] so all
 //! sessions serialize on one lock file (`<project>/__claims__.lock`) and no update
-//! is lost. Writes are atomic (temp + rename). Everything is fail-soft: a missing
-//! or corrupt registry is treated as empty rather than aborting a state
-//! transition, and the module never panics.
+//! is lost. Writes are atomic (temp + rename). A MISSING registry is fail-soft
+//! (it is a legitimately empty one — nobody has claimed yet); a present-but
+//! -UNPARSEABLE one is NOT: it is "cannot determine" ([`load`]), and every
+//! consumer refuses rather than act on a phantom empty set or save over claims
+//! it could not read. The module never panics.
 
 use crate::config::Config;
 use crate::lock::RunLock;
@@ -79,7 +81,7 @@ use crate::store::project_key;
 use crate::store::repo_root;
 use anyhow::Result;
 use harness_core::progress::{self, Liveness};
-use harness_core::verdict::Determination;
+use harness_core::verdict::{Determination, Required};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -277,14 +279,72 @@ fn execution_state_path(cfg: &Config, cwd: &Path) -> Determination<PathBuf> {
     claim_project_root(cwd).map(|root| project_dir(cfg, &root).join("execution-state.json"))
 }
 
-/// Fail-soft load: a missing or corrupt registry is treated as empty rather than
-/// breaking the caller. (Corruption loses others' claims, but proceeding is safer
-/// than aborting a state transition — the worst case degrades to today's
-/// no-claim behavior.)
-fn load(path: &Path) -> Registry {
-    match std::fs::read_to_string(path) {
-        Ok(txt) => serde_json::from_str(&txt).unwrap_or_default(),
-        Err(_) => Registry::default(),
+/// Read the registry as a three-valued observation: an ABSENT file is a
+/// legitimately empty registry ([`Determination::Known`] — nobody has claimed
+/// yet, which is the normal state of a fresh project), while a present-but
+/// -UNPARSEABLE file, or any other read failure, is
+/// [`Determination::Undetermined`] — the claims that exist could not be
+/// observed.
+///
+/// This used to collapse both into an empty [`Registry`], documented as
+/// fail-soft ("proceeding is safer than aborting a state transition"). It was
+/// not: every consumer reads an empty registry as "no live holder ⇒ free to
+/// claim", so ONE corrupt `claims.json` made every other session's claims
+/// vanish and the next claim then SAVED an empty registry over them — the mass
+/// double-claim this module exists to prevent. That is the canonical fail-open
+/// shape of CLAUDE.md §3: the empty set standing in for "could not check".
+///
+/// The value is only reachable through [`Determination::require`], so each
+/// caller must spell out, in the diff, what an unreadable registry means for
+/// it. Every caller here refuses (see [`load_or_refuse`]); the absent-file arm
+/// is what keeps that from degrading into a blanket "always refuse".
+fn load(path: &Path) -> Determination<Registry> {
+    match read_registry(path) {
+        Ok(Some(reg)) => Determination::known(reg),
+        // Genuinely absent (ENOENT): an observation of "no claims", not a
+        // failure to look.
+        Ok(None) => Determination::known(Registry::default()),
+        Err(e) => Determination::undetermined(format!(
+            "claim registry {} exists but could not be read/parsed: {e}",
+            path.display()
+        )),
+    }
+}
+
+/// [`load`] for the callers that must not act on a phantom empty registry:
+/// yields the observed [`Registry`], or an error naming `action` as the thing
+/// being refused.
+///
+/// Every current consumer of [`load`] resolves `Undetermined` this way, for one
+/// of two reasons, both restrictive per CLAUDE.md §3:
+///
+/// - it would GRANT a claim ([`claim_files_with_deadline`], [`claim_tasks`])
+///   against a set of holders it cannot see, i.e. double-claim;
+/// - or it would SAVE the phantom-empty registry back
+///   ([`release_run`], [`release_files`], [`release_tasks`], [`heartbeat`],
+///   [`active_claims`], [`write_execution_state`]), destroying the claims it
+///   failed to parse — turning a transient unreadable file into permanent data
+///   loss for every other session.
+///
+/// A refusal costs nothing that is not already lost: an unreleased claim ages
+/// out through the heartbeat TTL, and the caller sees WHY instead of a silent
+/// empty answer.
+fn load_or_refuse(path: &Path, action: &str) -> Result<Registry> {
+    match load(path).require() {
+        Required::Determined(reg) => Ok(reg),
+        Required::Blocked(v) => {
+            let why = match v.reason() {
+                Some(r) => r.as_str().to_string(),
+                None => "no reason recorded".to_string(),
+            };
+            anyhow::bail!(
+                "refusing to {action}: {why}. The registry is NOT empty — its \
+                 contents are unknown, so acting on it could double-claim files \
+                 another live session holds, or overwrite their claims. Inspect \
+                 (and, if it is genuinely garbage, remove) {} to recover.",
+                path.display()
+            )
+        }
     }
 }
 
@@ -306,7 +366,8 @@ fn save<T: Serialize>(path: &Path, val: &T) -> Result<()> {
 /// derive the same temp name. Without it a nanos collision between two concurrent
 /// degraded writers (e.g. after a fail-soft lock timeout) could have both write
 /// the SAME fixed `json.tmp` path, so a rename publishes a half-written registry —
-/// which loads as empty, wiping every claim and enabling mass double-claim.
+/// which no longer parses, so (since [`load`] became tri-state) every claim and
+/// release against it is REFUSED until a human repairs the file.
 /// Mirrors `lock::TMP_SEQ` / `overwatch::store::TMP_SEQ`.
 static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
@@ -631,7 +692,9 @@ fn claim_files_with_deadline(
         Some(l) => l,
         None => return Ok(all_skipped(files)),
     };
-    let mut reg = load(&path);
+    // GRANT path. An unreadable registry hides exactly the holders this check
+    // exists to find, so "no conflict found" would be meaningless. Refuse.
+    let mut reg = load_or_refuse(&path, "claim files")?;
     reap(&mut reg, now, ttl, &|c| claim_progress(cfg, cwd, c, now));
 
     let mut outcome = ClaimOutcome::default();
@@ -712,7 +775,9 @@ pub fn claim_tasks(
         Some(l) => l,
         None => return Ok(all_skipped(hashkeys)),
     };
-    let mut reg = load(&path);
+    // GRANT path, same reasoning as claim_files: an unseen holder is not an
+    // absent one.
+    let mut reg = load_or_refuse(&path, "claim tasks")?;
     reap(&mut reg, now, ttl, &|c| claim_progress(cfg, cwd, c, now));
     artificial_race_delay();
 
@@ -776,7 +841,10 @@ pub fn release_run(cfg: &Config, cwd: &Path, run_id: &str) -> Result<usize> {
         Some(l) => l,
         None => return Ok(0),
     };
-    let mut reg = load(&path);
+    // This RMW SAVES the registry back; on an unreadable one that would publish
+    // an empty registry, destroying every other run's claims. Unreleased claims
+    // age out via the heartbeat TTL, so refusing loses nothing durable.
+    let mut reg = load_or_refuse(&path, "release this run's claims")?;
     let before = reg.files.len() + reg.task_claims.len();
     reg.files.retain(|_, c| c.run_id != run_id);
     reg.task_claims.retain(|_, c| c.run_id != run_id);
@@ -804,7 +872,9 @@ pub fn release_files(cfg: &Config, cwd: &Path, run_id: &str, files: &[String]) -
         Some(l) => l,
         None => return Ok(0),
     };
-    let mut reg = load(&path);
+    // Saves the registry back — see release_run: refuse rather than publish an
+    // empty one over claims we could not parse.
+    let mut reg = load_or_refuse(&path, "release these files")?;
     let before = reg.files.len();
     reg.files
         .retain(|k, c| !(c.run_id == run_id && files.contains(k)));
@@ -835,7 +905,8 @@ pub fn release_tasks(cfg: &Config, cwd: &Path, hashkeys: &[String]) -> Result<us
         Some(l) => l,
         None => return Ok(0),
     };
-    let mut reg = load(&path);
+    // Saves the registry back — see release_run.
+    let mut reg = load_or_refuse(&path, "release these task claims")?;
     let before = reg.task_claims.len();
     reg.task_claims.retain(|k, _| !hashkeys.contains(k));
     let removed = before - reg.task_claims.len();
@@ -865,7 +936,10 @@ pub fn heartbeat(cfg: &Config, cwd: &Path, run_id: &str, now: i64) -> Result<usi
         Some(l) => l,
         None => return Ok(0),
     };
-    let mut reg = load(&path);
+    // Saves the registry back. A missed heartbeat is survivable (the claim only
+    // ages out after a full stuck-TTL of silence); publishing an empty registry
+    // over unparseable bytes is not.
+    let mut reg = load_or_refuse(&path, "refresh this run's heartbeat")?;
     reap(&mut reg, now, ttl, &|c| claim_progress(cfg, cwd, c, now));
     let mut n = 0;
     for c in reg.files.values_mut().chain(reg.task_claims.values_mut()) {
@@ -900,13 +974,21 @@ pub fn active_claims(cfg: &Config, cwd: &Path, now: i64) -> Result<Registry> {
     // proceeding to an unlocked save could clobber a concurrent writer.
     match RunLock::acquire_or_skip_in_project(cfg, &root, CLAIMS_LOCK_KEY) {
         Some(_lock) => {
-            let mut reg = load(&path);
+            // Read-only in intent, but it persists a reap-compaction: on an
+            // unreadable registry that save would wipe it. And the returned
+            // value is DISPLAYED — an empty list here reads as "nobody holds
+            // anything", the very confusion this change exists to remove, so
+            // the undetermined state is surfaced as an error instead.
+            let mut reg = load_or_refuse(&path, "list active claims")?;
             reap(&mut reg, now, ttl, &|c| claim_progress(cfg, cwd, c, now));
             save(&path, &reg)?;
             Ok(reg)
         }
         None => {
-            let mut reg = load(&path);
+            // Contended: nothing is persisted here, but the rows are still
+            // shown to (and scripted against by) the caller, so an unreadable
+            // registry must not be rendered as an empty one.
+            let mut reg = load_or_refuse(&path, "list active claims")?;
             reap(&mut reg, now, ttl, &|c| claim_progress(cfg, cwd, c, now));
             Ok(reg)
         }
@@ -996,10 +1078,10 @@ pub fn run_liveness(cfg: &Config, cwd: &Path, run_id: &str, now: i64) -> RunLive
 
 /// Read the claim registry distinguishing a genuinely-absent file (`Ok(None)`)
 /// from a present-but-unreadable/corrupt one (`Err`), so a caller that must fail
-/// CLOSED on "cannot determine" can tell the two apart. Plain [`load`]
-/// deliberately collapses both to an empty registry for callers that are fine
-/// degrading to no-claims; [`run_liveness`] cannot use it because that collapse
-/// is exactly the silent fail-open it must avoid.
+/// CLOSED on "cannot determine" can tell the two apart. This is the single
+/// reading primitive of the module: [`load`] wraps it into the shared
+/// [`Determination`] tri-state (absent ⇒ `Known(empty)`, `Err` ⇒
+/// `Undetermined`) and [`run_liveness`] maps it to [`RunLiveness`] directly.
 fn read_registry(path: &Path) -> std::io::Result<Option<Registry>> {
     match std::fs::read_to_string(path) {
         Ok(txt) => serde_json::from_str(&txt)
@@ -1176,7 +1258,10 @@ pub fn write_execution_state(cfg: &Config, cwd: &Path, now: i64) -> Result<Vec<E
     // on the next uncontended call.
     match RunLock::acquire_or_skip_in_project(cfg, &root, CLAIMS_LOCK_KEY) {
         Some(_lock) => {
-            let mut reg = load(&path);
+            // Persists BOTH the compacted registry and the derived view; an
+            // unreadable registry would publish an empty registry and an empty
+            // "who is running what" view (read as "nothing is running").
+            let mut reg = load_or_refuse(&path, "write the execution-state view")?;
             reap(&mut reg, now, ttl, &|c| claim_progress(cfg, cwd, c, now));
             save(&path, &reg)?;
             let pending = backlog_pending();
@@ -1188,7 +1273,9 @@ pub fn write_execution_state(cfg: &Config, cwd: &Path, now: i64) -> Result<Vec<E
             Ok(entries)
         }
         None => {
-            let mut reg = load(&path);
+            // Contended: persists nothing, but still RETURNS the view, so the
+            // same "empty means nothing is running" misreading applies.
+            let mut reg = load_or_refuse(&path, "write the execution-state view")?;
             reap(&mut reg, now, ttl, &|c| claim_progress(cfg, cwd, c, now));
             let pending = backlog_pending();
             Ok(join_execution_state(&reg.task_claims, &pending))
@@ -1226,6 +1313,21 @@ mod tests {
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
+    /// Test-only reader that DEMANDS a determinable registry: the tests below
+    /// that use it are asserting on registry contents, so an undetermined read
+    /// is a test failure, never a silently-empty registry. (Production code has
+    /// no such shortcut — it goes through [`load_or_refuse`].)
+    fn load_known(path: &Path) -> Registry {
+        match load(path).require() {
+            Required::Determined(reg) => reg,
+            Required::Blocked(v) => panic!(
+                "registry at {} was undetermined: {:?}",
+                path.display(),
+                v.reason().map(|r| r.as_str().to_string())
+            ),
+        }
+    }
+
     fn make_tmp_dir(tag: &str) -> PathBuf {
         let n = SEQ.fetch_add(1, Ordering::Relaxed);
         let p =
@@ -1258,8 +1360,9 @@ mod tests {
     // writer renames its OWN fully-written temp atomically, so a concurrent
     // reader always sees a complete, parseable registry. Under the old fixed
     // `json.tmp` name both writers share one temp and one can rename a partially
-    // written file (corrupt → loads empty → mass double-claim). Large payload so
-    // a single `write` is not atomic at the OS level (widens the corrupt window).
+    // written file (corrupt → unreadable → every claim/release refused). Large
+    // payload so a single `write` is not atomic at the OS level (widens the
+    // corrupt window).
     #[test]
     fn concurrent_saves_never_publish_corrupt_registry() {
         let path = make_tmp_dir("concurrent-save").join("claims.json");
@@ -1290,7 +1393,7 @@ mod tests {
                         save(&path, &reg).unwrap();
                         // Interleave reads: every observed file must be a
                         // complete, parseable registry (never half-written).
-                        let loaded = load(&path);
+                        let loaded = load_known(&path);
                         assert_eq!(
                             loaded.files.len(),
                             reg.files.len(),
@@ -1302,7 +1405,7 @@ mod tests {
         });
 
         // Final state is intact.
-        let final_reg = load(&path);
+        let final_reg = load_known(&path);
         assert_eq!(final_reg.files.len(), reg.files.len());
     }
 
@@ -1656,16 +1759,93 @@ mod tests {
         assert_eq!(out.skipped.len(), 1);
     }
 
+    /// An UNPARSEABLE registry is cannot-determine: the claim is REFUSED and
+    /// the bytes are left alone.
+    ///
+    /// This assertion previously read `assert_eq!(out.claimed, ["src/a.rs"])`
+    /// under the name `corrupt_registry_is_treated_as_empty` — it pinned the
+    /// fail-open as the contract (CLAUDE.md §2: a test can fix a defect as the
+    /// spec). The behaviour it certified is the one being removed, so the test
+    /// is re-pointed at the new contract rather than deleted; the claim-still
+    /// -succeeds half it used to cover lives on in
+    /// `absent_registry_is_empty_and_claim_succeeds` below, where absence — not
+    /// corruption — is the reason the registry is empty.
     #[test]
-    fn corrupt_registry_is_treated_as_empty() {
-        let tmp = make_tmp_dir("corrupt");
+    fn corrupt_registry_refuses_the_claim_and_is_not_clobbered() {
+        let tmp = make_tmp_dir("corrupt-refuse");
         let cfg = make_cfg(&tmp);
         let path = registry_path(&cfg, &tmp);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, b"not json at all {{{").unwrap();
-        // Fail-soft: claim still succeeds (registry read as empty).
+        let corrupt: &[u8] = b"not json at all {{{";
+        std::fs::write(&path, corrupt).unwrap();
+
+        let err = claim_files(&cfg, &tmp, "runA", None, &files(&["src/a.rs"]), 100)
+            .expect_err("an unreadable registry must not grant a claim");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("refusing to claim files"),
+            "the error must say what was refused, got: {msg}"
+        );
+
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            corrupt,
+            "a refused claim must not overwrite the registry it could not parse"
+        );
+    }
+
+    /// The other half: an ABSENT registry is a legitimately empty one, so the
+    /// first claim in a fresh project still succeeds. Without this pin the fix
+    /// above could degrade into a blanket refusal.
+    #[test]
+    fn absent_registry_is_empty_and_claim_succeeds() {
+        let tmp = make_tmp_dir("absent-ok");
+        let cfg = make_cfg(&tmp);
+        let path = registry_path(&cfg, &tmp);
+        assert!(!path.exists(), "precondition: no registry yet");
+
         let out = claim_files(&cfg, &tmp, "runA", None, &files(&["src/a.rs"]), 100).unwrap();
         assert_eq!(out.claimed, vec!["src/a.rs".to_string()]);
+        assert!(load_known(&path).files.contains_key("src/a.rs"));
+    }
+
+    /// Release/heartbeat must not publish an empty registry over bytes they
+    /// could not parse — that would turn a transient unreadable file into
+    /// permanent loss of every other session's claims.
+    #[test]
+    fn corrupt_registry_refuses_release_and_heartbeat_without_clobbering() {
+        let tmp = make_tmp_dir("corrupt-release");
+        let cfg = make_cfg(&tmp);
+        let path = registry_path(&cfg, &tmp);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let corrupt: &[u8] = b"{ truncated";
+        std::fs::write(&path, corrupt).unwrap();
+
+        assert!(release_run(&cfg, &tmp, "runA").is_err(), "release_run");
+        assert!(
+            release_files(&cfg, &tmp, "runA", &files(&["src/a.rs"])).is_err(),
+            "release_files"
+        );
+        assert!(
+            release_tasks(&cfg, &tmp, &files(&["hk1"])).is_err(),
+            "release_tasks"
+        );
+        assert!(heartbeat(&cfg, &tmp, "runA", 100).is_err(), "heartbeat");
+        assert!(
+            claim_tasks(&cfg, &tmp, &files(&["hk1"]), "runA", None, 100, None).is_err(),
+            "claim_tasks"
+        );
+        assert!(active_claims(&cfg, &tmp, 100).is_err(), "active_claims");
+        assert!(
+            write_execution_state(&cfg, &tmp, 100).is_err(),
+            "write_execution_state"
+        );
+
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            corrupt,
+            "no refused operation may rewrite the unreadable registry"
+        );
     }
 
     // ---- task-level claims ------------------------------------------------
@@ -1948,7 +2128,7 @@ mod tests {
         // Nothing was written to the registry (no unlocked double-claim).
         let path = registry_path(&cfg, &tmp);
         assert!(
-            !path.exists() || load(&path).files.is_empty(),
+            !path.exists() || load_known(&path).files.is_empty(),
             "a contended claim must not persist any claim to the registry"
         );
 

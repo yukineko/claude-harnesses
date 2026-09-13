@@ -1068,12 +1068,40 @@ const STUCK_GATE_PROGRESS_KEY_PREFIX: &str = "stuck";
 /// to claims: staleness only makes a task ELIGIBLE, and the reap fires only on a
 /// confirmed `Known(Stalled)` from the multi-sample progress engine.
 /// `Known(Progressing)` and `Undetermined` both mean "do not abandon"
-/// (fail-closed, CLAUDE.md §3) — see [`stuck_progress_is_abandonable`].
+/// (fail-closed, CLAUDE.md §3) — see the exhaustive match in [`scan_stuck`],
+/// which is where that rule now lives. It used to live in a separate
+/// `stuck_progress_is_abandonable` predicate, but that predicate could only
+/// answer abandon / do-not-abandon — the two-valued shape that lost the "could
+/// not determine" answer — so it was folded into the three-way match.
 ///
-/// Tasks whose `updated_at` is `None` (legacy data without timestamp) are still
-/// **not** stuck — absence of evidence is not evidence of being stuck — and the
-/// progress verdict of such a task is `Undetermined` anyway (its
-/// `task-updated-at` signal is unreadable), so both filters agree.
+/// Tasks whose `updated_at` is `None` are still **not** returned here — absence
+/// of evidence is not evidence of being stuck. They are, however, no longer
+/// INVISIBLE: [`scan_stuck`] classifies each of them as `undetermined` with
+/// reason `missing-updated-at`, and this wrapper keeps only the `stuck` half of
+/// that answer. A caller that must know whether the scan was CLEAN (CLAUDE.md
+/// §3: "cannot determine" is never "clean") has to call [`scan_stuck`] and read
+/// [`StuckScan::undetermined`]; `state abandon --all-stuck` does exactly that,
+/// reports EVERY undetermined task, and exits 3 when any of them is
+/// [`Undetermination::Unobservable`].
+///
+/// # No production caller remains (stated, not hidden)
+///
+/// `state abandon --all-stuck` — the only production consumer — now calls
+/// [`scan_stuck`] directly, because it needs the undetermined half too. This
+/// wrapper is kept as the stable ids-only view of the same scan, and is what
+/// this module's unit tests drive; that is why `dead_code` is allowed for
+/// non-test builds on the next line. It is an unused *view*, not unreachable
+/// logic: every line it forwards to runs on the production path.
+///
+/// Such a task's progress verdict is also `Undetermined` — VERIFIED, not
+/// assumed: [`task_progress`] maps `updated_at: None` to
+/// `Determination::undetermined("task has no updated_at (legacy) — durable
+/// progress unreadable")` for the `task-updated-at` signal, and
+/// [`progress::fingerprint_from_signals`] is fail-closed on any unreadable
+/// signal, so the folded fingerprint — and therefore
+/// [`harness_core::progress::classify`]'s verdict — is `Undetermined`. That is
+/// why the two arms below agree on "not abandonable"; they no longer agree on
+/// "say nothing".
 ///
 /// # What this does NOT see (residual, stated rather than glossed over)
 ///
@@ -1090,6 +1118,7 @@ const STUCK_GATE_PROGRESS_KEY_PREFIX: &str = "stuck";
 /// The EXPLICIT override `state abandon --task <id>` is deliberately UNGATED and
 /// does not call this: a human naming one task is how a genuinely dead worker
 /// whose worktree was deleted (`Undetermined` forever here) is still recovered.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn stuck_task_ids(
     cfg: &Config,
     cwd: &Path,
@@ -1097,41 +1126,205 @@ pub fn stuck_task_ids(
     stuck_ttl_secs: u64,
     now: i64,
 ) -> Vec<String> {
-    let threshold = now - stuck_ttl_secs as i64;
-    run.tasks
-        .iter()
-        .filter(|t| t.status == Status::Running)
-        .filter(|t| t.updated_at.map(|ts| ts < threshold).unwrap_or(false))
-        .filter(|t| {
-            let (_, verdict) = task_progress(
-                cfg,
-                cwd,
-                STUCK_GATE_PROGRESS_KEY_PREFIX,
-                &run.run_id,
-                t,
-                now,
-            );
-            stuck_progress_is_abandonable(&verdict)
-        })
-        .map(|t| t.id.clone())
-        .collect()
+    scan_stuck(cfg, cwd, run, stuck_ttl_secs, now).stuck
 }
 
-/// May a TTL-stale task be bulk-abandoned on this progress verdict? Matched
-/// exhaustively with **no wildcard arm**, so a new [`progress::Liveness`]
-/// variant is a compile error rather than a silently permissive default.
+/// WHY a Running task's liveness could not be determined — decided from the
+/// per-signal [`SignalSample::readable`] flags, **never** from the text of the
+/// `Undetermined` reason. The engine already draws this line structurally; this
+/// enum only names it.
 ///
-/// Only a confirmed `Known(Stalled)` authorises the abandon. `Progressing` is a
-/// demonstrably live worker, and `Undetermined` — an unreadable worktree HEAD, a
-/// task with no worktree at all, a first observation, or a window that has not
-/// elapsed — is "cannot determine", which is never "dead" (CLAUDE.md §3). This
-/// is the same rule as [`crate::claim::retain_claim`], stated in the positive.
-fn stuck_progress_is_abandonable(v: &Determination<progress::Liveness>) -> bool {
-    match v {
-        Determination::Known(progress::Liveness::Stalled) => true,
-        Determination::Known(progress::Liveness::Progressing) => false,
-        Determination::Undetermined(_) => false,
+/// The two are not interchangeable and are deliberately not one value: one is a
+/// failure to observe, the other is an observation that is not finished yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Undetermination {
+    /// At least one durable progress signal could not be READ (or there were no
+    /// signals at all). The engine tried to look and could not — the genuine
+    /// "cannot determine" of CLAUDE.md §3. There is no next observation that
+    /// fixes this on its own.
+    Unobservable,
+    /// Every signal was read cleanly, but the multi-sample protocol has not
+    /// reached a verdict yet (first observation, or the freeze window has not
+    /// elapsed). The liveness of such a task is genuinely UNKNOWN at this
+    /// instant — this variant does not mean "fine" — but unlike
+    /// [`Undetermination::Unobservable`] it has a defined next step: observe
+    /// again.
+    AwaitingSample,
+}
+
+impl Undetermination {
+    /// The operator-facing label printed next to the task id.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Undetermination::Unobservable => "unobservable",
+            Undetermination::AwaitingSample => "awaiting-sample",
+        }
     }
+}
+
+/// A Running task whose staleness could NOT be determined, and why.
+///
+/// Each value is a distinct observation made by [`scan_stuck`] — never a
+/// default, never an absence folded into silence. `reason` is operator-facing
+/// text that names the classification (`missing-updated-at` /
+/// `progress-undetermined`) and, for the latter, carries the progress engine's
+/// own explanation so the operator learns WHY the verdict could not be reached.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UndeterminedTask {
+    /// The task id, as it appears in the run state.
+    pub id: String,
+    /// Which kind of "cannot determine" this is.
+    pub class: Undetermination,
+    /// Why this task's staleness could not be determined.
+    pub reason: String,
+}
+
+/// The tri-valued result of one bulk stuck scan: a Running task is stuck,
+/// healthy, or **undetermined**.
+///
+/// The third answer is the one the old `Vec<String>` return of
+/// [`stuck_task_ids`] could not represent, so it was silently folded into
+/// "healthy" — `state abandon --all-stuck` then printed a bare
+/// `nothing to abandon`, which an operator or a script reads as "all clear"
+/// (CLAUDE.md §1: silence that reads as no-problem is a fail-open; §3: "cannot
+/// determine" must not resolve to "clean").
+///
+/// A task appears in AT MOST one list. Healthy tasks and every non-Running task
+/// appear in neither: `stuck` is a set of task ids to abandon, `undetermined` is
+/// a set of findings to report, and the two are independent — tasks that ARE
+/// stuck are still abandoned when other tasks are undetermined.
+#[derive(Debug, Clone, Default)]
+pub struct StuckScan {
+    /// Task ids the bulk re-dispatch path may abandon: Running, TTL-stale, and
+    /// a confirmed `Known(Stalled)` progress verdict.
+    pub stuck: Vec<String>,
+    /// Running tasks whose staleness could not be determined at all. NOT a
+    /// subset of `stuck`, and NOT "fine". Carries BOTH classes of
+    /// [`Undetermination`]; every entry is reported to the operator, and the
+    /// class decides only the exit code.
+    pub undetermined: Vec<UndeterminedTask>,
+}
+
+impl StuckScan {
+    /// Did the scan fail to OBSERVE something? This — not "is `undetermined`
+    /// non-empty" — is what makes the scan non-clean for the exit code, because
+    /// an [`Undetermination::AwaitingSample`] task is an observation in
+    /// progress, not a failed one. Both classes are reported regardless.
+    #[must_use]
+    pub fn has_unobservable(&self) -> bool {
+        self.undetermined
+            .iter()
+            .any(|u| u.class == Undetermination::Unobservable)
+    }
+}
+
+/// Scan a run's RUNNING tasks and classify each one as stuck / healthy /
+/// undetermined. This is the whole answer; [`stuck_task_ids`] is the thin
+/// wrapper that keeps only `stuck` for the callers that only ever wanted the
+/// abandon set.
+///
+/// Classification of each `Status::Running` task (non-Running tasks are
+/// candidates for neither list — they were never dispatched, so their missing
+/// timestamps are not findings):
+///
+/// * `updated_at == None` → **undetermined / [`Undetermination::Unobservable`]**
+///   (`missing-updated-at`). There is no durable transition to measure the TTL
+///   against, so "is it stale?" has no answer here — not "no". This arm is an
+///   early return (the TTL comparison below is impossible without a timestamp),
+///   but it agrees with the structural rule rather than contradicting it:
+///   [`task_progress`] reports such a task's `task-updated-at` signal as
+///   UNREADABLE, which is `Unobservable` by the same test used below (observed
+///   with `condukt state probe` on a run whose `updated_at` was `null`:
+///   `task-updated-at [UNREADABLE] task has no updated_at (legacy) — durable
+///   progress unreadable`).
+/// * `updated_at >= threshold` → **healthy**: it advanced within the TTL.
+/// * `updated_at < threshold` and `Known(Stalled)` → **stuck**.
+/// * `updated_at < threshold` and `Known(Progressing)` → **healthy**: a
+///   demonstrably live worker.
+/// * `updated_at < threshold` and `Undetermined(why)` → **undetermined**, split
+///   by the per-signal [`SignalSample::readable`] flags and by nothing else:
+///   * any signal unreadable (or no signals at all) →
+///     [`Undetermination::Unobservable`] — e.g. an unreadable worktree HEAD or a
+///     task with no worktree.
+///   * every signal readable → [`Undetermination::AwaitingSample`] — the
+///     multi-sample protocol needs another observation (first sample, or the
+///     window has not elapsed).
+///
+/// The split is read off `readable`, **never** off the `Undetermined` reason
+/// text: sniffing that free-text string would put the fail-open back, one
+/// rewording away.
+///
+/// # The residual this buys, stated without softening
+///
+/// An `AwaitingSample` task's liveness is genuinely UNKNOWN at that instant, and
+/// `state abandon --all-stuck` nevertheless exits 0 for it. That is not because
+/// the task is fine — nothing here observed that it is. It is because the state
+/// is (a) self-resolving: the very next invocation either reaches a verdict or
+/// reclassifies it, (b) bounded: it lasts exactly until the freeze window
+/// elapses, and (c) REPORTED: the task id, its class and its reason are printed
+/// on stderr every time, so the operator is never handed silence. Remove any one
+/// of those three and the exit 0 stops being defensible.
+///
+/// The progress verdict is matched EXHAUSTIVELY with **no wildcard arm**, so a
+/// new [`progress::Liveness`] variant is a compile error rather than a silently
+/// permissive default. Only a confirmed `Known(Stalled)` authorises an abandon —
+/// the same rule as [`crate::claim::retain_claim`], stated in the positive.
+/// The `reason` recorded for a Running task with no `updated_at`: there is no
+/// durable transition to measure the TTL against, so "is it stale?" has no
+/// answer for this task — which is not the same as "no".
+const MISSING_UPDATED_AT_REASON: &str =
+    "missing-updated-at: the task has no durable transition timestamp, so its staleness cannot be measured";
+
+pub fn scan_stuck(
+    cfg: &Config,
+    cwd: &Path,
+    run: &RunState,
+    stuck_ttl_secs: u64,
+    now: i64,
+) -> StuckScan {
+    let threshold = now - stuck_ttl_secs as i64;
+    let mut scan = StuckScan::default();
+    for t in run.tasks.iter().filter(|t| t.status == Status::Running) {
+        let Some(ts) = t.updated_at else {
+            scan.undetermined.push(UndeterminedTask {
+                id: t.id.clone(),
+                class: Undetermination::Unobservable,
+                reason: MISSING_UPDATED_AT_REASON.to_string(),
+            });
+            continue;
+        };
+        if ts >= threshold {
+            // Advanced within the TTL: healthy, and no progress sample needed.
+            continue;
+        }
+        let (signals, verdict) = task_progress(
+            cfg,
+            cwd,
+            STUCK_GATE_PROGRESS_KEY_PREFIX,
+            &run.run_id,
+            t,
+            now,
+        );
+        // Structural split, read off the samples themselves. An EMPTY signal set
+        // is counted as unobservable, not as "everything read fine": an empty
+        // set read as a pass is the fail-open CLAUDE.md §3 names outright.
+        let class = if signals.is_empty() || signals.iter().any(|s| !s.readable) {
+            Undetermination::Unobservable
+        } else {
+            Undetermination::AwaitingSample
+        };
+        match verdict {
+            Determination::Known(progress::Liveness::Stalled) => scan.stuck.push(t.id.clone()),
+            Determination::Known(progress::Liveness::Progressing) => {}
+            Determination::Undetermined(why) => scan.undetermined.push(UndeterminedTask {
+                id: t.id.clone(),
+                class,
+                reason: format!("progress-undetermined: {}", why.as_str()),
+            }),
+        }
+    }
+    scan
 }
 
 // ── Progress probe (observability) ────────────────────────────────────────

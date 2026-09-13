@@ -159,6 +159,20 @@ condukt state abandon --run <RID> --all-stuck
 /condukt --resume <RID>
 ```
 
+`--all-stuck` の終了コードは、スキャンが clean だったかを表す（判定不能を沈黙で
+「問題なし」に写さないため — CLAUDE.md §1/§3）。判定できなかったタスクは
+どちらの場合も id・分類・理由が stderr に出力される。
+
+| exit | 意味 |
+| ---- | ---- |
+| `0` | スキャンが clean。判定不能なタスクが無いか、あっても 2 サンプル目の観測待ち (`awaiting-sample`) だけ — これは自己解決する（次回の呼び出しで判定に至る）うえで、毎回 stderr に報告される |
+| `3` | 少なくとも 1 件のタスクの durable な進捗シグナルが **読めなかった** (`unobservable`)。stuck でも healthy でもない。例: 記録された worktree で `git rev-parse HEAD` が失敗する / `updated_at` が無い |
+
+exit 3 でも「判定不能なタスクを abandon する」ことは無い（abandon されるのは
+`Known(Stalled)` が確定したタスクだけで、報告と abandon は独立している）。
+読めなかったタスクを人間の判断で回収したい場合は `--task <id>` の明示指定を使う
+（こちらは意図的に ungated）。
+
 ---
 
 ## パターン 6 — 実装前に仕様を確認する (specguard brief)

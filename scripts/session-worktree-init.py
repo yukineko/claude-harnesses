@@ -33,6 +33,31 @@ def _git(cwd: str, *args: str) -> str | None:
     return out.stdout.strip() if out.returncode == 0 else None
 
 
+def _report_rollout_drift(root: str) -> None:
+    """Print the rollout-drift notice, if there is one to print.
+
+    Fail-soft by the same rule as the rest of this hook: a setup hook must not
+    break session start. Note the asymmetry — the DRIFT check itself is not
+    fail-soft about its own verdict (an unverifiable check prints UNDETERMINED
+    rather than nothing, see session-rollout-drift.py). What is soft here is
+    only this hook's ability to reach it at all.
+    """
+    helper = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "session-rollout-drift.py")
+    if not os.path.isfile(helper):
+        return
+    try:
+        out = subprocess.run(
+            (sys.executable or "python3", helper, root),
+            capture_output=True, text=True, timeout=90,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return
+    text = (out.stdout or "").strip()
+    if text:
+        print(text)
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -46,6 +71,14 @@ def main() -> int:
     common = _git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
     if git_dir is None or common is None:
         return 0  # not a git repo — nothing to do
+
+    # Rollout drift, reported where an operator can act (backlog b6a80342).
+    # Called from here rather than registered as its own SessionStart hook
+    # because .claude/settings.json is deny-listed for editing; this hook is
+    # already wired, so it is the reachable surface. Printed for worktree
+    # sessions too — drift is a property of the machine, not of the checkout.
+    _report_rollout_drift(_git(cwd, "rev-parse", "--show-toplevel") or cwd)
+
     if os.path.realpath(git_dir) != os.path.realpath(common):
         # Already in a worktree — the session is where it should be.
         print("[worktree-init] session is in a worktree ✓")

@@ -24035,3 +24035,25 @@ updated_at = 1789291263
 weight = 0.0
 issue_number = 595
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/595"
+
+[[task]]
+id = "51595c41"
+title = "condukt: worktree の作成基点(current HEAD)とマージ先(default_branch)の非対称を解消する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+iro 0bb8dcfd で実測・判定済み。worktree.rs:726-729 は start-point 無しの 'git worktree add -b' ＝着手時の HEAD から切る。main.rs:3174 の merge は常に cfg.default_branch へ。この2つが食い違うと、feature ブランチ上で走らせた run が **feature の履歴ごと default_branch へ統合する**（2026-09-13 run-20260913-130340-73812 で iro の main が実機A/B未の広角補正を抱えたまま進んだ）。SKILL.md/README.md はこの組み合わせに一切触れていない（'feature ブランチ'/'start-point'/'base branch'/'基点' で 0 ヒット）。
+
+取り得る決着は3つで、どれを選ぶかが本チケットの判断:
+(a) 作成側を default_branch 基点に揃える（worktree add -b <branch> <default_branch>）— マージ先と一致するが、feature ブランチ上のコードに依存するタスクが土台を失う。
+(b) マージ先を『着手時の HEAD のブランチ』にする — create 時に基点 ref を記録する状態追加が要る。意図（元の場所へ戻す）を保つのはこちら。
+(c) 作成時の基点 sha を記録し、**merge 時にそれが default_branch の祖先でなければ止めて報告する**（統合はせず人へ返す）。ハッピーパスを変えずに『黙って main が動く』だけを潰す最小案。
+
+いずれにせよ SKILL.md Phase 7 に『どのブランチへマージされるか』を明記すること。注意: 現在 harness の配備バイナリは 35 件が harness-core 0.2.17 のまま（7357bc96）なので、source を直しても rollout するまで挙動は変わらない。"""
+created_at = 1789291438
+updated_at = 1789291438
+weight = 0.0
+issue_number = 596
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/596"

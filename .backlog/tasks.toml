@@ -23965,3 +23965,64 @@ updated_at = 1789290765
 weight = 0.0
 issue_number = 593
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/593"
+
+[[task]]
+id = "b0e1e4a2"
+title = "compass: outcomes.json/carve-state.json が gitignore なので worktree から不可視になり last_outcome が null に潰れる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+同一秒に 2 つの cwd から compass gap を実行して実測（測定日 2026-09-13、測定点 main=05962e2a / worktree=dd6808b7、compass 0.1.17）。
+
+main cwd: last_outcome = {seq: 62, recorded_at: 1786635865, verdict: forward, evidence: [DoD12 の (a)(b)(c) が landed ...]}
+worktree cwd (同一秒): last_outcome = null
+
+原因: .gitignore:21-22 が .compass/carve-state.json と .compass/outcomes.json を無視している。.compass/charter.md だけが tracked。linked worktree は fresh checkout なので ignored ファイルは存在せず、main の 63 件の outcome が worktree からは 0 件に見える。
+
+なぜ重要か: CLAUDE.md 第8節は作業を worktree で行うことを絶対義務にしており、compass skill 自身も 現ツリーへ書き込む skill は worktree から実行する と明記している。つまり compass を規約どおりに動かす唯一の場所から、計測ループの履歴が構造的に見えない。しかも見えないことが last_outcome: null として返る — これは outcome が一度も記録されていない状態と区別がつかない。判定不能が 空 へ潰れる形であり、charter 自身の north_star が名指ししているクラスそのもの。claim registry の worktree 分離 (p0 d83b0e8f) と同型で、ストアの解決が repo_root ベースであることが共通の根。
+
+影響: (a) compass gap の last_outcome が常に null になり、前回の verdict が次サイクルへ再浮上しない（build ≠ validate の validate 側が効かない）。(b) carve-state.json も worktree ごとに新規作成されるので carve round が fork する。実測: worktree 側の carve-state.json は本日 18:32 に新規作成され 41487 bytes、main 側は 2026-09-07 22:56 の 35329 bytes。
+
+読み1 (欠陥): これらは project 単位の永続状態なので tracked にするか、machine-global ストア（~/.compass など）へ移すべき。
+読み2 (仕様): outcomes/carve-state は生成物なので ignore は正しく、worktree から compass を回すことを想定していないだけ。
+見分け方: compass の README/DESIGN が outcomes.json を project 永続状態と位置づけているか、それとも再生成可能な cache と位置づけているかを読む。永続状態と書いてあれば読み1。
+
+最低限の是正（読み1でも読み2でも成立する）: 読めなかった場合と 0 件だった場合を区別する。今は両方 null。Determination で undetermined を返し、gap の消費側がそれを 前進なし と読まないようにする。"""
+created_at = 1789292019
+updated_at = 1789292019
+weight = 0.0
+issue_number = 602
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/602"
+
+[[task]]
+id = "165e4ee2"
+title = "blastguard: python3 -c の引用された引数の中身を redirect として解釈し、空ターゲットの上書きとして deny する疑い"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+実測 2026-09-13、測定点 05962e2a、blastguard 稼働版。
+
+拒否されたコマンド（逐語、ただし本 notes 用に backtick は除去）:
+  cd WORKTREE and compass gap 2>&1 | python3 -c PYSRC 2>&1 | head -60
+ここで PYSRC は二重引用符で括られた python ソースで、その中に print('---',k,'---') と print(s[:1200]) と json.dumps(v,ensure_ascii=False) を含む。
+
+返ってきた逐語:
+  '> ' destroys the file's current contents and  is a relative path and blastguard does not know which directory it is relative to, so it cannot tell whether these bytes are recoverable
+
+エラーメッセージのパス部分が空である点に注目。redirect のターゲットが空文字として抽出されており、実際にはそのようなリダイレクトはコマンドに存在しない。回避策: python ソースをファイルへ書き出して python3 FILE で実行すると通る（実際にそうして続行した）。
+
+読み1 (欠陥): 二重引用符で括られた -c 引数の内部を走査対象にしており、引用境界を尊重していない。空ターゲットの redirect を抽出した時点で判定不能なのだから、Ask ではなく Deny に倒れているのも別問題（空ターゲットは そもそも redirect ではない の可能性が高い）。
+読み2 (仕様): 引用の中でも destructive な形は拒否するという意図的な保守側。ただしその場合でもターゲットが空という事実は 判定不能 であり、メッセージが 'これらのバイトが復元可能か判断できない' と言いながら deny しているのは 3 節に適合する。
+
+見分け方: crates/blastguard/src/detect.rs の redirect 抽出が引用状態を持つトークナイザを通しているかを読む。通していれば読み2、通していなければ読み1。加えて、抽出された target が空文字のときの分岐が Deny か Ask かを読む。空で Deny なら、そこが本件の実体。
+
+再現の最小形は未取得（本件は /compass 実行中に踏んだので、元の課題へ戻るため深追いしていない）。最小形の特定自体が本チケットの第一歩。"""
+created_at = 1789292032
+updated_at = 1789292032
+weight = 0.0
+issue_number = 603
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/603"

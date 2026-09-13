@@ -15201,9 +15201,40 @@ project_unresolved = false
 tags = []
 touched_files = []
 status = "pending"
-notes = ""
+notes = """
+
+
+【2026-09-13 追記 — 同じ根 (src walk が .gitignore を見ない) の二つ目の症状。しかも判定が「どのチェックアウトから走らせたか」に依存する】
+測定点 876073eb、測定日 2026-09-13。同一コミットの 2 つのチェックアウトから scripts/check-plugin-rollout.py を走らせ、逐語で異なる verdict を得た:
+
+  cwd=/Users/yuki/src/harness (main)        -> rc=1
+     ROLLOUT DRIFT (1 problem): tdd: deployed tree is not a mirror of crates/tdd
+     - 1 deployed file(s) differ from source: bin/tdd-darwin-arm64
+  cwd=/Users/yuki/src/.harness-worktrees/session-79d79a35 -> rc=0
+     OK: 40 plugins deployed at their source version and file-for-file identical to their crate (no rollout drift)
+
+原因は実測済み: crates/tdd/bin/tdd-darwin-arm64 は .gitignore:45 (crates/*/bin/*-darwin-arm64) で無視される未追跡ファイルであり、
+main のツリーにだけ手動ビルドの残骸として存在する (1852304 bytes, mtime Sep 13 14:49, sha256 先頭 a6a5127790d964f5)。
+worktree には存在しない。deployed 側は 1852288 bytes / b4d460a233ef9b02 で、これは今日の rollout がビルドした正しい現行版である。
+
+  - main から見ると この残骸が src に入るので src ∩ dst に落ち、バイト比較されて differing になる = 偽の赤。
+  - worktree から見ると src に無いので extra 側に落ち、_is_rebuild_artifact が per-platform binary として除外する = 緑。
+
+つまり extra 側の除外は正しく効いており、壊れているのは src 側だけである。src の walk が
+.gitignore を尊重していれば、この残骸は そもそも crate の一部ではない ので両方のツリーで同じ緑になる。
+元の所見 (crates/*/.claude/progress.md が未デプロイ source として誤検出される) と同一の修正で閉じる。
+
+二次的だがこちらの方が重い含意: rollout-plugins.sh は自分の最後に同じチェッカを呼んで
+「この rollout が本当に着地したか」を検証する。その REPO は cd $(dirname $0)/.. でスクリプト自身の場所から決まるので、
+CLAUDE.md 第8節に従って worktree から rollout を走らせると、rollout の自己検証は main のツリーが報告する赤を構造的に見ない。
+これは DoD14 が扱っている状態解決軸が Rust ではなく shell 層に現れた実例であり、
+DoD14(a) の分類表が言語をまたぐ必要があるという charter の記述の裏付けになる。
+
+なお、この残骸ファイルは削除していない。宣言の無い赤を「たぶん意図的だろう」と解釈して消すのは
+2026-08-04 の taintguard の誤りと同型であり、CLAUDE.md 禁忌ルールが明示的に禁じている。
+"""
 created_at = 1787189177
-updated_at = 1787189177
+updated_at = 1789306583
 weight = 0.0
 issue_number = 365
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/365"

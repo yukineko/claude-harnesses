@@ -23459,6 +23459,7 @@ updated_at = 1789279405
 weight = 0.0
 issue_number = 571
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/571"
+
 [[task]]
 id = "7357bc96"
 title = "プラグイン35件の配備バイナリが harness-core 0.2.17 のまま(source は 0.2.19)。GATE crate 4件を含む"
@@ -23542,3 +23543,22 @@ updated_at = 1789287645
 weight = 0.0
 issue_number = 577
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/577"
+
+[[task]]
+id = "840c4a17"
+title = "stop-verify-worktree.py が dirty の帰属を見ず、編集していないセッションを停止不能にする"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "attribution",
+    "worktree",
+    "p1",
+]
+status = "pending"
+notes = "実測 2026-09-13、session 85e45da4。このセッションは 1 行も編集していない (files touched: 0) が、scripts/stop-verify-worktree.py が main の作業ツリーの dirty を検出して stop をブロックした。dirty の中身は稼働中の別セッション 79d79a35 (heartbeat 2 分前、4 agent live) の .backlog/tasks.toml への書き込みで、開始時点の git status に既に存在していた。ゲートの観測 (main が dirty) は正しいが、処方箋 (自分の作業を worktree へ移して commit せよ) は 'dirty は stop しようとしている者が作った' という未検証の前提に立っており、その前提が偽のとき、処方箋に従うことは他 live セッションの未コミット状態を stash/revert/commit で破壊する行為になる。CLAUDE.md 第8節末尾が言う帰属のバグに該当する。構造原因: backlog バイナリは cwd の git root に書くため、cwd が main のセッションは main のツリーを直接汚し、Bash を監視する maintree guard には捕まらない。完了条件: dirty を作った主体と stop しようとしている主体が異なるケースをテストで再現し、その場合にゲートが 'あなたの変更ではない' と帰属を明示して分岐すること (素通りさせるのではなく、誰の変更かを述べたうえで判断を返す) を観測する。判定不能 (帰属が特定できない) は従来どおり block 側へ倒す。"
+created_at = 1789287940
+updated_at = 1789287940
+weight = 0.0
+issue_number = 582
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/582"

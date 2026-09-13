@@ -10,12 +10,19 @@
 # "ship broken code, touch one test file" stop being a clean path to a finished turn.
 #
 # LATENCY IS THE DESIGN CONSTRAINT: these run on every Stop. Each check is scoped
-# with when_changed so a docs/scripts-only turn pays nothing, and the test check
-# is scoped to touched crates (see scripts/test-changed-crates.sh) rather than the
-# full 39-crate workspace. A gate slow enough to be disabled protects nothing.
+# with when_changed so a docs/scripts-only turn pays nothing, and EVERY cargo
+# check is scoped to the touched crates rather than the full 39-crate workspace
+# (scripts/test-changed-crates.sh for tests, scripts/lint-changed-crates.sh for
+# fmt/clippy). A gate slow enough to be disabled protects nothing.
+#
+# ATTRIBUTION IS THE OTHER CONSTRAINT: fmt/clippy used to run workspace-wide, so
+# a red crate the current turn never touched blocked the stop of whoever WAS
+# working — with the shared skip file as the only escape (CLAUDE.md #8). Both are
+# scoped now; scripts/test_lint_changed_crates.py pins both directions of that.
 #
 # NOTE: cargo is rustup-managed here and hook PATH does not always include the
-# shim dir, so each cargo check sources ~/.cargo/env first (CLAUDE.md rule).
+# shim dir, so each cargo check sources ~/.cargo/env first (CLAUDE.md rule) —
+# the two lint-changed-crates.sh entries do that inside the script.
 # NOTE: a project donegate.toml is IGNORED unless the project root is trusted —
 # run `donegate trust` once per clone, or this file silently does nothing.
 
@@ -25,15 +32,31 @@ default_timeout_secs = 300
 output_tail_lines = 40
 reset_after_secs = 600    # attempt counter resets after this idle gap
 
+# fmt and clippy are ONE script (scripts/lint-changed-crates.sh) invoked twice:
+# it runs `cargo fmt -p <pkg> -- --check` AND `cargo clippy -p <pkg>` for the
+# crates changed in the working tree. Both entries therefore run the same two
+# commands; they are kept as two checks because their `when_changed` sets differ
+# (a Cargo.toml/Cargo.lock-only change must still reach clippy) and because two
+# names make donegate's feedback say which of the two configured triggers fired.
+# The script itself states, in its header, the coverage this scoping gives up
+# (a shared crate is linted only in itself, not in its dependents) — read it
+# before assuming the fan-out is checked anywhere.
+#
+# KNOWN WART, not yet fixed: because both entries now run fmt AND clippy, the
+# `fmt` entry's 120s budget has to cover a clippy build too. A cold clippy build
+# of a large crate can exceed it, and donegate would then report `fmt` as a
+# TIMEOUT while `clippy` (600s) passes — a spurious block, on the safe side but
+# noisy. The two candidate fixes are one check named `lint-changed` at 600s, or
+# a mode argument to the script; neither is applied here.
 [[check]]
 name = "fmt"
-cmd = '. "$HOME/.cargo/env" 2>/dev/null; cargo fmt --all -- --check'
+cmd = "scripts/lint-changed-crates.sh"
 when_changed = ["**/*.rs"]
 timeout_secs = 120
 
 [[check]]
 name = "clippy"
-cmd = '. "$HOME/.cargo/env" 2>/dev/null; cargo clippy --workspace --all-targets -- -D warnings'
+cmd = "scripts/lint-changed-crates.sh"
 when_changed = ["**/*.rs", "Cargo.toml", "Cargo.lock"]
 timeout_secs = 600
 

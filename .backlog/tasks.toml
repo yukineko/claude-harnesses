@@ -5567,12 +5567,8 @@ id = "6267bfbe"
 title = "bypass ledger が git commit --amend を誤って「未検証コミット」と記録する（証明書が HEAD に束縛されているため）"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
-tags = [
-    "gate",
-    "fail-positive",
-    "p1",
-]
-status = "pending"
+tags = ["blocked-githooks"]
+status = "failed"
 notes = '''
 実測 2026-07-22 / 測定点 6d4312c5。
 
@@ -5721,9 +5717,11 @@ worktree から (main のツリーでは行わない):
     cp .scratch/candidate-hooks/post-commit .githooks/post-commit
     sh -n .githooks/post-commit
     python3 scripts/test_gate_bypass.py       # 期待: Ran 124 tests ... OK
-適用後は scripts/patch-postcommit-amend.py を削除してよい。'''
+適用後は scripts/patch-postcommit-amend.py を削除してよい。
+defer (ユーザー裁定 2026-09-13): .githooks への書き込みが assistant に deny されているため着手不能。実装と検証は完了済み (mutation kill 確認、候補フックに対し 124 tests OK)。残るのは人手でのパッチ適用のみ。backlog CLI に deferred 状態が無いため failed で表現している — 放棄ではない'''
 created_at = 1784673254
-updated_at = 1789287766
+updated_at = 1789290441
+defer_until = 1789463241
 weight = 0.0
 issue_number = 306
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/306"
@@ -6008,52 +6006,14 @@ id = "c3a98510"
 title = "hook のテスト3本 (test_precommit_hook / test_gate_bypass / test_git_hook_coverage) がどこからも実行されない"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
-tags = ["p1"]
-status = "claimed"
+tags = ["blocked-githooks"]
+status = "failed"
 notes = """
-同じクラスが scripts/tests/*.sh にもある: version-bumped-bin-only.sh / version-bumped-shared-crate.sh / provenance-core-version.sh / canary-*.sh 等はどのフックからも runner からも呼ばれず、テスト対象スクリプトの docstring からのみ参照される手動実行のみ。実測 2026-07-30 (main ab74a0be 直後): grep -rln version-bumped-bin-only は check-version-bumped.py と自分自身の2件のみ。wiring には .githooks への書き込みが必要 (現在 permission deny)。
-
---- HEAD で再測定: runner は既に存在し、残るのは wiring だけ 2026-09-11、測定点 e8bcbe14 ---
-
-起票時の主張「3本のテストがどこからも実行されない」は今も成り立つ。実測:
-  test_precommit_hook     参照元: scripts/test_gate_bypass.py のみ
-  test_gate_bypass        参照元: deny-no-verify.py / check-workspace-tests.py /
-                                  test_git_hook_coverage.py
-  test_git_hook_coverage  参照元: 無し
-いずれもフックからも runner からも呼ばれていない。
-
-【ただし状況は起票時から変わっている — runner は既に作られている】
-scripts/check-workspace-tests.py (2026-09-10 に landed) が両方のテスト体を走らせる:
-cargo test --workspace と scripts/test_*.py 全 23 スイート (905 テスト、193.4s 直列)。
-本チケットの 3 本はこの 23 スイートに含まれる。scripts/test_check_workspace_tests.py で
-テスト済み。失敗クラスごとに別々の exit code を返し、判定不能クラスも含めて全ての
-非 0 が block する設計になっている。
-
-つまり残作業は wiring 1 点だけであり、それは c4321fc2 / 65bfb279 が保持している
-pre-push への 1 ブロック追加と **同一の作業**である。ブロック本体は
-session worktree の .scratch/prepush_block.sh に用意済み (85 行、sh -n clean)。
-本チケットは独立作業ではなく、その handoff に包含される。重複実装しないこと。
-
-【wiring 前に必ず解消が要る依存 — これを見落とすと push が全面停止する】
-2026-09-11 に scripts/test_gate_bypass.py へ意図的な RED を 1 本 landed した
-(6267bfbe: amend が bypass ledger に載る件)。check-workspace-tests.py を
-pre-push に繋いだ瞬間、この RED が **全ての push を block する**。
-したがって wiring と .githooks/post-commit の amend 修正は **同時に**適用する
-必要がある。修正パッチは検証済みで 6267bfbe に記録してある。
-
-同様に、check-workspace-tests.py の docstring が記録している既存の red 4 件
-(backlog の project_scope 2 件、blastguard の 2 件) も wiring 時点で block する。
-これは第1節どおり「ゲートが仕事をした」結果であって wiring を見送る理由ではないが、
-**wiring は red 0 件を先に作ってから**でないと push が止まる、という順序の問題がある。
-人間へ返すときはこの順序を必ず添えること。
-
-【今回 red 件数を測っていない理由】
-測るには cargo test --workspace が要るが、測定時点で別 worktree の agent が 2 体
-condukt の cargo ビルドを回していた。並行 cargo 実行は固定 /tmp フィクスチャ経由で
-互いを壊しうるので、その状況で取った数字は測定として無効である。判断で埋めず、
-「測っていない」と記録する。他の cargo 実行が無い状態で測り直すこと。"""
+2026-09-13 main aed66762: ユーザー裁定により defer。理由は 6267bfbe と同じく .githooks への書き込みが assistant に deny されていること、および本チケットの残作業 (pre-push への check-workspace-tests.py wiring) が 6267bfbe の post-commit amend 修正と同時適用でなければ全 push を止めること。両者は分離できないので 1 つの人手作業として扱う。適用順序: (1) 6267bfbe のパッチ (scripts/patch-postcommit-amend.py で .scratch/candidate-hooks/post-commit を生成し .githooks/post-commit へ適用、sh -n で構文確認、scripts/test_gate_bypass.py が Ran 124 tests OK になること) (2) その後に pre-push の wiring。wiring 前に red 0 件を作る必要がある点は据え置き。実測 2026-09-13 main aed66762: cargo test -p backlog の tests/project_scope.rs は 6 passed 2 failed で、a_pinned_store_dir_still_scopes_by_project と a_pinned_store_dir_still_works_outside_any_repo が今も red。これは 2026-09-10 に check-workspace-tests.py の docstring が記録した 4 件のうちの 2 件であり、バッチ3 の dedup 実装では解消していない。残る blastguard 2 件は未測定 (workspace 全体は測っていないので測っていないと書く)
+defer (ユーザー裁定 2026-09-13): 残作業は pre-push への wiring で .githooks 書き込みが必要。かつ 6267bfbe の post-commit 修正と同時適用でないと全 push が止まるため、2 件で 1 つの人手作業。backlog CLI に deferred 状態が無いため failed で表現している — 放棄ではない"""
 created_at = 1784724729
-updated_at = 1789279099
+updated_at = 1789290441
+defer_until = 1789463241
 weight = 0.0
 issue_number = 310
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/310"
@@ -23746,6 +23706,7 @@ updated_at = 1789289865
 weight = 0.0
 issue_number = 588
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/588"
+
 [[task]]
 id = "635c50e5"
 title = "既存の赤: backlog の project_scope テスト 2 件が落ちている (a_pinned_store_dir_still_scopes_by_project / _still_works_outside_any_repo、out=no tasks)"
@@ -23790,6 +23751,7 @@ updated_at = 1789289359
 weight = 0.0
 issue_number = 586
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/586"
+
 [[task]]
 id = "7b6bcfe6"
 title = "harness_core の text_similarity は日本語で機能しない — 分かち書きしないため文節が丸ごと1トークンになり、既知の重複ペアが 0.26 (閾値 0.6) にしかならない"
@@ -23962,3 +23924,16 @@ weight = 0.0
 issue_number = 581
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/581"
 
+[[task]]
+id = "89001e33"
+title = "backlog edit --status が deferred を受け付けず、defer の入口が fail だけなのに help がそれを示さない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "測定点 main aed66762 / 2026-09-13. 観測: backlog edit 6267bfbe --status deferred は逐語 warning unknown status deferred; valid values are pending done failed を返して拒否した。一方 backlog fail 6267bfbe --reason ... は逐語 deferred until 2026-09-15 09:07 UTC (2 日後に再実行されます) を返し、実際に deferred 状態へ遷移した。つまり deferred は実在する状態だが、到達経路は fail のみで、edit --status の valid values 一覧にも backlog --help のコマンド一覧にも defer という語が現れない。overwatch status は by status の集計に deferred という行を表示するので、利用者は deferred を独立した状態だと認識する。影響: defer したい呼び出し側が edit --status deferred を試して拒否され、状態名が存在しないと誤認する。実際に当セッションはそう誤認し、ユーザーに deferred は存在しないと報告してから訂正した。読み 1 (実在の欠陥): fail が defer を兼ねているという契約がヘルプに書かれていない。fail という語は失敗を意味するので、defer の入口として発見できない。backlog fail --help も Mark a task as failed としか書かず backoff 再実行に触れていない。読み 2 (意図どおり): fail は失敗と defer を意図的に同一視しており (失敗したタスクは時間を置いて再試行する)、deferred は fail の内部表現にすぎない。見分け方: crates/backlog/src/task.rs と main.rs の fail ハンドラを読み、backoff 再実行が fail の意味論として doc に書かれているかを見る。書かれていれば読み 2 で、修正はヘルプ文の追記のみ。修正案: fail --help に 2 日後に自動で pending へ戻る旨を書き、edit --status の拒否メッセージに defer したい場合は fail を使えと添える"
+created_at = 1789290452
+updated_at = 1789290452
+weight = 0.0
+issue_number = 590
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/590"

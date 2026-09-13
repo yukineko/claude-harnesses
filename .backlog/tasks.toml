@@ -24172,3 +24172,39 @@ updated_at = 1789292392
 weight = 0.0
 issue_number = 604
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/604"
+
+[[task]]
+id = "8d2429aa"
+title = "condukt: worktree merge の merge_completed_at stamp が let _ = state::with_run_locked で握り潰されている"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "fail-open",
+    "p2",
+]
+status = "pending"
+notes = "twin check (t6-heartbeat-surface-err の mirror-gap 調査) で発見。crates/condukt/src/main.rs:3215 (WtAction::Merge の Merged arm) が let _ = state::with_run_locked(...) で Result を捨てている。コメントは fail-soft on a missing run/task を理由にしているが、実際に潰れるのは (a) run state が読めない/壊れている (b) lock 競合 (c) save の IO 失敗 も同じで、merge は成功したのに merge_completed_at が永久に未計測になる。state timings は未計測フェーズを明示マーカーにするので即座の誤読にはならないが、失敗と no-op が区別できない点は CLAUDE.md 3 の型。t6 で StateAction::Set の claim upkeep 側は stderr 警告へ移行済み。同じ扱い (stderr で step/run/原因/帰結を名指し、exit code は据え置き) が妥当か判断のうえ対処する。"
+created_at = 1789296045
+updated_at = 1789296045
+weight = 0.0
+issue_number = 620
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/620"
+
+[[task]]
+id = "95dddd4f"
+title = "condukt: Status::Discarded は terminal なのに claim release の対象外 — 破棄した実験のファイル claim が TTL まで残る"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "claim",
+    "p2",
+]
+status = "pending"
+notes = "twin check (t6-heartbeat-surface-err) で発見。crates/condukt/src/state.rs の Status::Discarded は doc comment で Terminal like Verified/Cancelled と明記されているのに、crates/condukt/src/main.rs の StateAction::Set 内 claim upkeep の matches! は Verified|Failed|Cancelled のみを見ており Discarded を含まない。結果、worktree discard で破棄した実験の touched_files は release されず、stale-claim TTL が切れるまで他セッションを block する。挙動の妥当性 (破棄直後に claim を手放してよいか) を判断したうえで、含めるなら matches! に追加し、含めないなら doc に理由を書く。テストは tests/heartbeat_err_surfaced.rs の control (intact registry で release が実際に走ることを claims.json で観測する型) をそのまま Discarded へ拡張できる。"
+created_at = 1789296051
+updated_at = 1789296051
+weight = 0.0
+issue_number = 621
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/621"

@@ -4180,17 +4180,56 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             // Claim upkeep (PDO): release this task's files once it reaches a
             // terminal state (its work is done — free them for other sessions),
             // and refresh the run's remaining claims so a live-but-quiet session
-            // is not reaped mid-run. Both are fail-soft — never break the update.
+            // is not reaped mid-run.
+            //
+            // EXIT-CODE CONTRACT (deliberate; pinned by
+            // `tests/heartbeat_err_surfaced.rs`): a failure here does NOT change
+            // the exit code and does NOT undo the transition, because the durable
+            // state write has already happened above (`rs.save(..)?`). Bubbling a
+            // `?` out of this block would report failure for an operation that
+            // demonstrably succeeded, and would leave the caller unable to tell
+            // which half broke — the state transition, or the claim bookkeeping
+            // around it. So the transition stands and the upkeep failure is
+            // reported instead, naming the step, the run and the CONSEQUENCE.
+            //
+            // That is not a CLAUDE.md §3 exemption. §3 forbids resolving "cannot
+            // determine" to "clean"; a loud stderr warning is exactly the refusal
+            // to call it clean. What was here before — `let _ = ...` under a
+            // comment reading "Both are fail-soft — never break the update" — is
+            // the §1 red flag verbatim, and it did what §1 predicts: a refused
+            // heartbeat (e.g. an unparseable `claims.json`, which
+            // `claim::load_or_refuse` correctly declines to act on) was
+            // indistinguishable from a successful one at every downstream
+            // observation point, so this run's claims silently stopped being
+            // refreshed and could be reaped as stale while it was still working
+            // (backlog `cd624e4c`).
             if matches!(
                 st,
                 state::Status::Verified | state::Status::Failed | state::Status::Cancelled
             ) {
                 let files = task_files(cfg, cwd, &run, &task);
                 if !files.is_empty() {
-                    let _ = claim::release_files(cfg, cwd, &run, &files);
+                    if let Err(e) = claim::release_files(cfg, cwd, &run, &files) {
+                        eprintln!(
+                            "condukt: claim release FAILED for run '{run}' (task '{task}'): {e}\n  \
+                             consequence: this terminal task's file claims were NOT released, so \
+                             those files stay claimed and BLOCK other sessions from taking them \
+                             until the claim ages out through the stale-claim TTL. Inspect with \
+                             `condukt state claims`; release explicitly with `condukt state \
+                             release --run {run}`."
+                        );
+                    }
                 }
             }
-            let _ = claim::heartbeat(cfg, cwd, &run, state::now_secs());
+            if let Err(e) = claim::heartbeat(cfg, cwd, &run, state::now_secs()) {
+                eprintln!(
+                    "condukt: claim heartbeat FAILED for run '{run}': {e}\n  consequence: this \
+                     run's claims were NOT refreshed, so a session that is still working can have \
+                     its claims REAPED AS STALE and its files handed to another session mid-run. \
+                     Inspect with `condukt state claims`; refresh explicitly with `condukt state \
+                     heartbeat --run {run}`."
+                );
+            }
         }
         StateAction::Show { run } => {
             let rs = state::RunState::load(cfg, cwd, &run)?;

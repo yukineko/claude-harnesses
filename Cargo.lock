@@ -365,7 +365,7 @@ dependencies = [
 
 [[package]]
 name = "ctxrot"
-version = "0.5.25"
+version = "0.5.26"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1225,7 +1225,7 @@ dependencies = [
 
 [[package]]
 name = "session-insights"
-version = "0.2.16"
+version = "0.2.17"
 dependencies = [
  "anyhow",
  "chrono",

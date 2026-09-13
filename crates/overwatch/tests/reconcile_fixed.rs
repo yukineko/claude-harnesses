@@ -97,6 +97,8 @@ fn reconcile_fixed_confirms_finding_referenced_by_fix_commit() {
         &work,
         &[
             "record-finding",
+            "--verdict",
+            "confirmed",
             "--finding-id",
             "CA-overwatch-777",
             "--source",
@@ -138,6 +140,8 @@ fn reconcile_fixed_ignores_non_matching_commits() {
         &work,
         &[
             "record-finding",
+            "--verdict",
+            "confirmed",
             "--finding-id",
             "CA-overwatch-888",
             "--source",
@@ -171,6 +175,8 @@ fn reconcile_fixed_is_idempotent_across_repeated_runs() {
         &work,
         &[
             "record-finding",
+            "--verdict",
+            "confirmed",
             "--finding-id",
             "CA-overwatch-999",
             "--source",
@@ -214,6 +220,8 @@ fn reconcile_fixed_dry_run_does_not_write_disposition() {
         &work,
         &[
             "record-finding",
+            "--verdict",
+            "confirmed",
             "--finding-id",
             "CA-overwatch-321",
             "--source",

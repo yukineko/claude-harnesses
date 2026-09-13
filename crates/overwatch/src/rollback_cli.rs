@@ -79,13 +79,15 @@ pub fn record_finding(
     summary: &str,
     file: Option<&str>,
     rationale: Option<&str>,
-    verdict: Option<&str>,
+    verdict: &str,
 ) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let now = store::now();
-    let verdict = verdict
-        .map(AuditVerdict::parse)
-        .unwrap_or(AuditVerdict::Confirmed);
+    // No `unwrap_or(Confirmed)` here any more: the caller is required to pass a
+    // verdict, so there is no "the recorder said nothing" case left to invent a
+    // value for. An UNRECOGNISED value still resolves to `Unverified` inside
+    // `AuditVerdict::parse` — undetermined to the restrictive side.
+    let verdict = AuditVerdict::parse(verdict);
     let finding = ReviewFinding::new(
         finding_id.to_string(),
         source.to_string(),

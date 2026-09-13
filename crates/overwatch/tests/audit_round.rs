@@ -278,6 +278,8 @@ fn confirmed_finding_recorded_by_audit_loop_surfaces_in_review_queue() {
         &work,
         &[
             "record-finding",
+            "--verdict",
+            "confirmed",
             "--finding-id",
             "CA-round1-001",
             "--source",

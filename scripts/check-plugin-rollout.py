@@ -1091,8 +1091,19 @@ def check_rollout(plugins):
             problems.append(
                 f"{crate}: source={src_ver} registry={reg_ver} <- rollout-plugins.sh not run since bump"
             )
-            # The version is already known stale; the binary necessarily is too.
-            # Reporting both would just double-count one fix.
+            # The provenance dimension below IS subsumed by the stale version —
+            # asking which commit an admittedly-old binary came from adds nothing
+            # to the one fix. One state is NOT subsumed, and this arm used to
+            # swallow it: a version dir with NO host binary at all. Observed
+            # 2026-09-13 (backlog 8206b09f) — the registry pointed tdd at 0.1.29,
+            # whose bin/ held only the launcher, and tdd's Stop hook answered
+            # "gate did not run: no bundled binary for darwin-arm64". A stale
+            # binary runs OLD code and still adjudicates; an absent one runs
+            # NOTHING, so the gate stops producing findings altogether. Silence
+            # from a dark gate is indistinguishable from a clean one, which is
+            # the failure this checker exists to make visible. Same remedy, but
+            # only one of the two means nobody is looking, so it gets said.
+            problems.extend(_absent_binary_problems(crate, entry[0]))
             continue
         problem = _provenance_problem(crate, entry[0])
         if problem:
@@ -1101,6 +1112,52 @@ def check_rollout(plugins):
         if problem:
             problems.append(problem)
     return problems, checked
+
+
+def _absent_binary_problems(crate, entry):
+    """The subset of `_provenance_problem` that a stale version does NOT subsume.
+
+    Returns a list (possibly empty) so the caller can `extend` it unconditionally.
+    Only two states are reported here: the source declares a binary and none is
+    deployed, and the deployed bin/ could not be listed at all. Everything else
+    `_provenance_problem` checks (manifest presence, dirtiness, commit currency)
+    is genuinely implied by an out-of-date version and stays out of this arm so
+    one fix is not reported twice.
+
+    Every "cannot tell" resolves to a problem, never to silence: an unlistable
+    bin/ is exactly the state that would otherwise let a dark gate certify itself.
+    """
+    install = entry.get("installPath")
+    if not install:
+        # The stale-version finding already names the plugin; without a path
+        # there is nothing further to look at, and `_provenance_problem` reports
+        # the missing installPath on the non-drift path.
+        return []
+    ships = _crate_ships_binary(crate)
+    if ships is None:
+        return [
+            f"{crate}: could not determine from crates/{crate} whether this "
+            "plugin ships a binary, so whether the deployed version dir is "
+            "missing one cannot be told either"
+        ]
+    if not ships:
+        return []
+    deployed = _host_binary_deployed(install)
+    if deployed is None:
+        return [
+            f"{crate}: could not list {os.path.join(install, 'bin')}, so whether "
+            "a binary is deployed at all is undetermined (undetermined is not "
+            "'present')"
+        ]
+    if not deployed:
+        return [
+            f"{crate}: crates/{crate} declares a binary target, but no "
+            f"{HOST_SUFFIX} binary is deployed under "
+            f"{os.path.join(install, 'bin')} — the plugin is installed but "
+            "execs nothing, so its hook is DARK (it reports nothing, which is "
+            "not the same as reporting nothing wrong) (re-run rollout-plugins.sh)"
+        ]
+    return []
 
 
 def _provenance_problem(crate, entry):

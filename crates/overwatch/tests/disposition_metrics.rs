@@ -143,6 +143,8 @@ fn review_metrics_computes_fp_rate_agreement_rate_and_median_latency() {
             &work,
             &[
                 "record-finding",
+                "--verdict",
+                "confirmed",
                 "--finding-id",
                 id,
                 "--source",
@@ -262,6 +264,8 @@ fn median_latency_join_uses_earliest_ts_on_refound_finding() {
         &work,
         &[
             "record-finding",
+            "--verdict",
+            "confirmed",
             "--finding-id",
             "F-refound",
             "--source",

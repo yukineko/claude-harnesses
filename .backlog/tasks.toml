@@ -24118,3 +24118,39 @@ updated_at = 1789291438
 weight = 0.0
 issue_number = 596
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/596"
+
+[[task]]
+id = "2c1e54b3"
+title = "DoD14(a): repo_root / project_key の全消費者を列挙し、共有ストアか worktree ローカルかを宣言させる (compass ONE)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+status = "pending"
+notes = """
+compass charter の ONE（2026-09-13 の人間裁定で north_star の射程に入れた状態解決軸、測定点 c1706736）。
+
+背景: 判定も IO も panic も正常なまま、読んでいるストアが違うために結果だけが空になるクラス。実測 2 件（いずれも同一秒に 2 つの cwd から同じ読み取り、測定点 27844b5e）:
+  d83b0e8f  condukt claim registry   main cwd = claimed:true   worktree cwd = claimed:false
+  b0e1e4a2  compass gap              main cwd = last_outcome seq 62   worktree cwd = null
+
+共通の根は harness_core::projkey::repo_root が .git の exists() で止まること。linked worktree では .git がファイルとして存在するので worktree 自身が repo root として返る。CLAUDE.md 第8節が作業を worktree に限定する以上、この分裂は例外ではなく既定の実行条件である。
+
+なぜ列挙が先で是正が後か: どのストアを Undetermined へ倒すべきかは そのストアが project 全体で 1 つのはずか を先に決めないと判定できない。全部倒すと worktree ローカルで正しく動いているストアまで壊す。列挙と分類は読み取りだけで完結し不可逆な変更を伴わない。
+
+やること:
+(1) repo_root と project_key の呼び出し元を機械列挙する。grep だけでは漏れる — crates/condukt/src/store.rs は pub use で再エクスポートしているので、再エクスポート経由の間接呼び出しまで追うこと。
+(2) 各消費者について、そのストアが project 全体で 1 つのはずか worktree ごとに 1 つでよいかを、docstring と実際の使われ方から判定する。判定できないものは共有側（制限側）に分類し、その事実を記録する。
+(3) 分類を機械可読な形（テーブルかテスト）で固定し、未分類の消費者が増えたら pre-commit が非 0 で落ちるようにする。
+
+既知の入口 2 つ:
+- crates/condukt/src/state.rs:980 に既に crate::worktree::toplevel(cwd).unwrap_or_else(|_| repo_root(cwd)) という worktree 対応の解決が存在し、claim 経路だけがそれを使っていない。
+- compass 側は .gitignore:21-22 が .compass/outcomes.json と carve-state.json を無視しているのが実体。原因が Rust ではなく ignore 規則なので、分類表は言語をまたぐ必要がある。
+
+CLAUDE.md 2.(a): 利害のない agent が RED を先に観測してから GREEN 化すること。実装者はこの検証テストを書かない。
+right_size: m。
+これを閉じるまで 2d3cbda2（worktree/branch GC）と 5daf0b60（abandon --all-stuck）には着手しない — 共有 claim registry が worktree から見えないまま GC を書くと、生きている作業を dead と判定して削除する側へ倒れる。"""
+created_at = 1789292392
+updated_at = 1789292392
+weight = 0.0
+issue_number = 604
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/604"

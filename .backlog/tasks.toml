@@ -5723,7 +5723,7 @@ worktree から (main のツリーでは行わない):
     python3 scripts/test_gate_bypass.py       # 期待: Ran 124 tests ... OK
 適用後は scripts/patch-postcommit-amend.py を削除してよい。'''
 created_at = 1784673254
-updated_at = 1789287730
+updated_at = 1789287766
 weight = 0.0
 issue_number = 306
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/306"
@@ -6053,7 +6053,7 @@ condukt の cargo ビルドを回していた。並行 cargo 実行は固定 /tm
 互いを壊しうるので、その状況で取った数字は測定として無効である。判断で埋めず、
 「測っていない」と記録する。他の cargo 実行が無い状態で測り直すこと。"""
 created_at = 1784724729
-updated_at = 1789287724
+updated_at = 1789279099
 weight = 0.0
 issue_number = 310
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/310"
@@ -6133,7 +6133,7 @@ tags = [
 status = "claimed"
 notes = "根拠: 類似度判定は既に実装済みで未適用 — overwatch/src/lease.rs:29 の POSSIBLE_DUPLICATE_THRESHOLD 0.6 と lease.rs:191 の possible_duplicate は live lease 同士でしか比較しておらず backlog キューには一切かかっていない。グループ実行の受け皿である tags と tag フィルタは next_claim (store.rs:638, main.rs:319) まで貫通済みなので、束ね方だけが欠けている。/ 完了条件: backlog の近縁タスクが1グループとして出力され、1グループを1セッションが取る運用が成立する。似た2タスクが別セッションで同時に走らないことを観測。"
 created_at = 1784745779
-updated_at = 1789287724
+updated_at = 1789287766
 weight = 0.0
 issue_number = 312
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/312"
@@ -6151,7 +6151,7 @@ tags = [
 status = "claimed"
 notes = "根拠: crates/backlog/src/task.rs:21-43 に scope も touched_files も無い。一方 overwatch/src/lease.rs:103 の scopes_overlap は実装済み (テスト lease.rs:541)。flow SKILL.md:247 は scope が未確定なら省略と書いており、空 scope は衝突検知の対象外に落ちる。/ 完了条件: Task が scope を持ち serde default で旧 tasks.toml が読める。scope の重なりで束を作れる。overwatch begin --scope へ backlog 側の scope をそのまま渡せる。"
 created_at = 1784745779
-updated_at = 1789287724
+updated_at = 1789287766
 weight = 0.0
 issue_number = 313
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/313"
@@ -6220,7 +6220,7 @@ tags = [
 status = "claimed"
 notes = "根拠: 91e503c8 で記録した帰属バグの是正側。cargo fmt --all と cargo clippy --workspace は他セッションの crate まで見るため、worktree 分離しても main 側の赤を拾う可能性がある。第8節の worktree 義務化と対になる修正。/ 完了条件: 自分が触っていない crate の赤によって自分の停止がブロックされないことをテストで観測する。"
 created_at = 1784746561
-updated_at = 1789287731
+updated_at = 1789287766
 weight = 0.0
 issue_number = 315
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/315"
@@ -23544,6 +23544,24 @@ weight = 0.0
 issue_number = 577
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/577"
 
+[[task]]
+id = "486e83ca"
+title = "SessionStart の requeue が live な lease を持つ task の claim を解放する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flow",
+    "backlog",
+    "fail-open",
+    "p1",
+]
+status = "pending"
+notes = "観測 2026-09-13 17:22:46 (測定点 16f16879)。session a6738634 の SessionStart で backlog の session-start hook が .backlog/tasks.toml の 4 件を一括で claimed から pending へ戻した (updated_at が 4 件とも 1789287766 の単一書き込み)。うち 3 件 f7b018f8 / e73a1fd5 / 15eb3f94 は overwatch status 上の lease が live で heartbeat 58 秒前だった (前セッション 79d79a35 の worker が実際に稼働中)。つまり requeue は claim 保持者の生存を一切見ずに解放している。損害: 解放された task を別セッションが claim でき、同一ブランチに 2 本目の worker が積まれる (既知の二重 dispatch)。なお同時に解放された 6267bfbe は lease が無く、そちらの解放は正しい。読みは 2 つ: (a) requeue は「前セッションは死んだ」前提の設計で、生存確認の欠落がバグ。(b) 意図的に無条件 requeue で、排他は condukt state claim-task の最終ガードに委ねている。見分け方: claim-task が live lease を持つ task に対して他セッションの claim を実際に弾くかを観測する。弾かないなら (a) で確定。完了条件: live lease を持つ task が requeue されないことをテストで観測し、lease の生存が観測できない場合は解放しない (制限側に倒す) こと。是正済みの現物: この finding の commit で 3 件を claimed へ戻してある。"
+created_at = 1789287880
+updated_at = 1789287880
+weight = 0.0
+issue_number = 580
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/580"
 [[task]]
 id = "f38fc59c"
 title = "autonomy_invariant の module docstring の 3 分類に untestable (genuine judgment request) が無く、新規 row が category (c) を別義で使っている"

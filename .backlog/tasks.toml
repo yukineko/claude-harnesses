@@ -4960,10 +4960,10 @@ title = "overwatch record-finding の --verdict を必須にする（省略時 c
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
+status = "claimed"
 notes = "ユーザー裁定 2026-07-21: 省略時に confirmed を記録する現状は、棄却が起きないので fail-open ではないが、UNVERIFIED が既定では決して発生しないことを意味し、同日 CLAUDE.md に明文化した「確実性を捏造しない」不変条件と齟齬する。--verdict 省略は入力エラー(exit 非0)にし、記録者に毎回判断を強制する。既存の全呼び出し箇所(SKILL.md / scripts/continuous-audit.sh / docs/specs/overwatch.md の例を含む)を洗い出して更新すること。証拠: 1a2e89ea で三値化した AuditVerdict の既定経路。完了条件: --verdict なしの record-finding が非0で落ち、テストがその赤を先に観測していること"
 created_at = 1784638238
-updated_at = 1789075563
+updated_at = 1789272760
 weight = 0.0
 issue_number = 295
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/295"
@@ -5699,7 +5699,7 @@ worktree から (main のツリーでは行わない):
     python3 scripts/test_gate_bypass.py       # 期待: Ran 124 tests ... OK
 適用後は scripts/patch-postcommit-amend.py を削除してよい。'''
 created_at = 1784673254
-updated_at = 1789075563
+updated_at = 1789272869
 weight = 0.0
 issue_number = 306
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/306"
@@ -22027,7 +22027,7 @@ Related: gate.rs human_report then renders this as "yes (inline test added)" / "
 
 Also note the first arm: any added line in a test-glob file, including a blank-adjacent comment line, is evidence. That may be intentional but it is unstated.'''
 created_at = 1789064330
-updated_at = 1789074802
+updated_at = 1789272760
 weight = 0.0
 issue_number = 509
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/509"
@@ -22621,7 +22621,7 @@ tags = [
     "fail-open",
     "p0",
 ]
-status = "pending"
+status = "claimed"
 notes = """
 観測 2026-09-11 (session 1266dc19)。tdd の Stop hook が gate did not run: no bundled binary for darwin-arm64 を返し、実装がテスト無しで変わったかは NOT evaluated のまま停止した。fail-closed で1回 block し、次の stop は通す設計なのでトラップにはならないが、以後すべての stop で tdd ゲートは事実上 dark である (red ではなく dark)。
 
@@ -22638,7 +22638,7 @@ notes = """
 2. rebuild が fresh version dir に host bin を seed する経路が tdd でなぜ効かなかったかを特定し、RED を先に観測したうえで塞ぐ
 3. check-plugin-rollout.py が「registry の指す version dir に host bin が無い」を block できるか確認し、できないなら追加する"""
 created_at = 1789075692
-updated_at = 1789075692
+updated_at = 1789272760
 weight = 0.0
 issue_number = 535
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/535"
@@ -22707,3 +22707,57 @@ updated_at = 1789123819
 weight = 0.0
 issue_number = 543
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/543"
+
+[[task]]
+id = "230c34ec"
+title = "specguard brief の verdict が構造的に covered を返せない (spec-map 134/134 が no spec-doc) — flow 3-1.5 の spec-gap trigger 3 が空虚に発火する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+実測 2026-09-13、測定点 37cc0be1 (specguard map の last synced と同一)。
+
+観測: specguard brief --json はどの課題文に対しても verdict=not-covered を返す。
+対照実験 (アンチ空虚): 正典に確実に存在する 3 topic を投げても全て not-covered だった。
+  判定不能は clean ではなく block か ask に解決する      -- rc=0 verdict=not-covered
+  main の作業ツリーで編集せず worktree で作業する          -- rc=0 verdict=not-covered
+  plugin を触ったら version を 3 ファイル lockstep で bump -- rc=0 verdict=not-covered
+これらは CLAUDE.md 第3節・第8節・禁忌ルールの逐語内容なので、covered が返らないのは
+「正典が無い」ではなく「判定面が機能していない」ことを意味する。
+
+原因 (測定): specguard map list は 134 entries を持つが、そのうち spec-doc を持つ entry は 0 件。
+  total entries: 134
+  with (no spec-doc): 134
+  with a spec-doc: (0 行)
+つまり covered を返しうる入力が構造的に存在しない。verdict は二値的に not-covered へ固定されている。
+
+なぜ問題か: flow SKILL.md の Step 3-1.5 は trigger 3 として
+verdict=not-covered を spec-gap divert (specforge へ差し戻し) の発火条件にしている。
+現状この trigger は全課題で発火するので、(a) 全タスクが divert 候補になり、
+(b) その escalate が常時発生して人間の判断が儀式化する。
+さらに divert は書き込み側 (specforge draft が新しい spec を起こす) なので、
+判定面が死んでいる状態での発火は「読めなかった」を「仕様が無い」へ写す —
+3-1.5 自身が明示的に禁じている置換であり、CLAUDE.md 第3節の
+「判定不能を permissive/誤った側へ潰す」の一形態。
+
+判定不能なので両方の読みを残す:
+  (a) 実在の欠陥 = spec-map に spec-doc を結び付ける経路 (drift-map) が未実行/未配線で、
+      brief が三値のうち covered を出せない。この場合 brief は not-covered ではなく
+      undetermined (exit 10) を返すべきで、二値へ潰れているのが欠陥。
+  (b) 意図的な仕様 = spec-doc がまだ 1 件も無いのは事実なので not-covered は正しい、
+      という読み。ただしその場合でも trigger 3 は全件発火するので flow 側の運用が破綻する。
+
+見分ける方法: spec-doc を 1 件だけ作って map の当該 entry に結び付け、
+その領域の課題文で brief が covered を返すか観測する。
+返るなら (a) は「未配線」であり配線すれば解ける。返らないなら brief の判定経路自体の欠陥。
+併せて specguard brief が undetermined (exit 10) を実際に返す入力が存在するかも確認する
+(存在しないなら三値は名目だけで実体は二値)。
+
+発見経緯: /flow の Step 3-1.5 プリフライトで 3 件全部が not-covered になり、
+divert する前に対照実験を掛けて空虚さが判明した。divert は実行していない。"""
+created_at = 1789272899
+updated_at = 1789272899
+weight = 0.0
+issue_number = 544
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/544"

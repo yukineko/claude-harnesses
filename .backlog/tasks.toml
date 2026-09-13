@@ -5572,7 +5572,7 @@ tags = [
     "fail-positive",
     "p1",
 ]
-status = "claimed"
+status = "pending"
 notes = '''
 実測 2026-07-22 / 測定点 6d4312c5。
 
@@ -5723,7 +5723,7 @@ worktree から (main のツリーでは行わない):
     python3 scripts/test_gate_bypass.py       # 期待: Ran 124 tests ... OK
 適用後は scripts/patch-postcommit-amend.py を削除してよい。'''
 created_at = 1784673254
-updated_at = 1789279070
+updated_at = 1789287730
 weight = 0.0
 issue_number = 306
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/306"
@@ -6009,7 +6009,7 @@ title = "hook のテスト3本 (test_precommit_hook / test_gate_bypass / test_gi
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
+status = "claimed"
 notes = """
 同じクラスが scripts/tests/*.sh にもある: version-bumped-bin-only.sh / version-bumped-shared-crate.sh / provenance-core-version.sh / canary-*.sh 等はどのフックからも runner からも呼ばれず、テスト対象スクリプトの docstring からのみ参照される手動実行のみ。実測 2026-07-30 (main ab74a0be 直後): grep -rln version-bumped-bin-only は check-version-bumped.py と自分自身の2件のみ。wiring には .githooks への書き込みが必要 (現在 permission deny)。
 
@@ -6053,7 +6053,7 @@ condukt の cargo ビルドを回していた。並行 cargo 実行は固定 /tm
 互いを壊しうるので、その状況で取った数字は測定として無効である。判断で埋めず、
 「測っていない」と記録する。他の cargo 実行が無い状態で測り直すこと。"""
 created_at = 1784724729
-updated_at = 1789279099
+updated_at = 1789287724
 weight = 0.0
 issue_number = 310
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/310"
@@ -6133,7 +6133,7 @@ tags = [
 status = "claimed"
 notes = "根拠: 類似度判定は既に実装済みで未適用 — overwatch/src/lease.rs:29 の POSSIBLE_DUPLICATE_THRESHOLD 0.6 と lease.rs:191 の possible_duplicate は live lease 同士でしか比較しておらず backlog キューには一切かかっていない。グループ実行の受け皿である tags と tag フィルタは next_claim (store.rs:638, main.rs:319) まで貫通済みなので、束ね方だけが欠けている。/ 完了条件: backlog の近縁タスクが1グループとして出力され、1グループを1セッションが取る運用が成立する。似た2タスクが別セッションで同時に走らないことを観測。"
 created_at = 1784745779
-updated_at = 1789279071
+updated_at = 1789287724
 weight = 0.0
 issue_number = 312
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/312"
@@ -6151,7 +6151,7 @@ tags = [
 status = "claimed"
 notes = "根拠: crates/backlog/src/task.rs:21-43 に scope も touched_files も無い。一方 overwatch/src/lease.rs:103 の scopes_overlap は実装済み (テスト lease.rs:541)。flow SKILL.md:247 は scope が未確定なら省略と書いており、空 scope は衝突検知の対象外に落ちる。/ 完了条件: Task が scope を持ち serde default で旧 tasks.toml が読める。scope の重なりで束を作れる。overwatch begin --scope へ backlog 側の scope をそのまま渡せる。"
 created_at = 1784745779
-updated_at = 1789279071
+updated_at = 1789287724
 weight = 0.0
 issue_number = 313
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/313"
@@ -6220,7 +6220,7 @@ tags = [
 status = "claimed"
 notes = "根拠: 91e503c8 で記録した帰属バグの是正側。cargo fmt --all と cargo clippy --workspace は他セッションの crate まで見るため、worktree 分離しても main 側の赤を拾う可能性がある。第8節の worktree 義務化と対になる修正。/ 完了条件: 自分が触っていない crate の赤によって自分の停止がブロックされないことをテストで観測する。"
 created_at = 1784746561
-updated_at = 1789279071
+updated_at = 1789287731
 weight = 0.0
 issue_number = 315
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/315"
@@ -23459,6 +23459,7 @@ updated_at = 1789279405
 weight = 0.0
 issue_number = 571
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/571"
+
 [[task]]
 id = "7357bc96"
 title = "プラグイン35件の配備バイナリが harness-core 0.2.17 のまま(source は 0.2.19)。GATE crate 4件を含む"
@@ -23542,3 +23543,55 @@ updated_at = 1789287645
 weight = 0.0
 issue_number = 577
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/577"
+
+[[task]]
+id = "f38fc59c"
+title = "autonomy_invariant の module docstring の 3 分類に untestable (genuine judgment request) が無く、新規 row が category (c) を別義で使っている"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+実測 2026-09-13、測定点 16f16879。
+測定コマンド: git diff 824a0f8d..16f16879 -- crates/condukt/tests/autonomy_invariant.rs
+
+crates/condukt/tests/autonomy_invariant.rs の module docstring は、frozen な
+ASK_ALLOWLIST の count が動いたとき人間が何を再監査すべきかを 3 分類で定義している (逐語):
+  forcing a human to re-audit whether the new prompt is (a) degraded-under-autonomy,
+  (b) a sanctioned worker-blocked stop, or (c) a sanctioned GATED approval.
+
+一方 44d5af11 (untestable 配線) で追加された 4 row の rationale は逐語でこう書く:
+  so it classifies as ESCALATE, category (c), a genuine judgment request
+および
+  Category (c), identical rationale to the condukt rows above
+
+つまり (c) を module docstring は「sanctioned GATED approval」と定義しているのに、
+新規 row は「genuine judgment request」の意味で使っている。**同じラベルが 2 つの別義**を持つ。
+
+なぜ問題か: この docstring は frozen assert が赤くなったときに次の監査者が読む唯一の
+分類表である。ラベルの意味が row ごとに違うと、再監査は「どの箱に入れるか」で迷い、
+最終的に「まあ (c) でいいだろう」に倒れる。CLAUDE.md 第4節 (散文が実装/運用と食い違うと
+次のレビュアーを騙す仕掛けになる) の一例。
+
+なお **今回の count 変更そのものは締める方向**であり、これは欠陥ではない:
+  condukt/skills/condukt/SKILL.md  23 -> 25
+  scout/skills/scout/SKILL.md       8 -> 10
+どちらも Ask 箇所が増えた側であり、逐語の rationale が併記され、削除された row は 0 件。
+問題はラベル体系だけである。
+
+判定不能なので両方の読みを残す:
+  (a) 実在の欠陥 = docstring の 3 分類が古く、CLAUDE.md 第2節の untestable
+      (測れない決定は人間に返す) という第 4 のカテゴリが後から増えたのに反映されていない。
+      この場合の修正は docstring 側に (d) untestable / genuine judgment request を足すこと。
+  (b) 意図的 = (c) を広義の sanctioned stop の意味で使っており、GATED approval はその例示に
+      すぎない。その場合でも文言が例示だと読めないので、書き方を直す必要はある。
+
+見分ける方法: flow SKILL.md の Step 0.5 の表と突き合わせる。あちらは権限認可 (approval) と
+判断要求 (untestable / conflict / pivot / worker blocked / spec-gap divert) を明確に 2 種へ
+分けており、GATED approval は前者、untestable は後者である。両者が別種であることが
+既に正典化されているなら (a) が正しい。"""
+created_at = 1789287720
+updated_at = 1789287720
+weight = 0.0
+issue_number = 578
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/578"

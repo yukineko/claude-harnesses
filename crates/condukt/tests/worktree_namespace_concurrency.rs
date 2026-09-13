@@ -302,3 +302,55 @@ fn omitting_run_keeps_the_legacy_unnamespaced_layout() {
         fx.branches()
     );
 }
+
+/// The degradation in `omitting_run_keeps_the_legacy_unnamespaced_layout` is
+/// correct back-compat, but it used to be SILENT: omit `--run` and you got
+/// machine-global names with nothing on stderr to say so (backlog 2904dc6c).
+/// CLAUDE.md 1: 沈黙は許容される degrade ではない.
+///
+/// This asserts the warning is really emitted by the real binary — deleting the
+/// `eprintln!` turns it red. Asserting only on a message-building helper would
+/// leave that deletion invisible, which is the vacuity CLAUDE.md 2(b) warns of.
+#[test]
+fn omitting_run_announces_the_legacy_degradation_on_stderr() {
+    let fx = Fixture::new("legacy-warns");
+    let out = fx.condukt(&["worktree", "create", "--topic", "t1", "--branch", "b1"]);
+    assert!(
+        out.status.success(),
+        "legacy create must still succeed: {out:?}"
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--run"),
+        "the warning must name the flag that was omitted: {stderr}"
+    );
+    assert!(
+        stderr.contains("legacy"),
+        "the warning must say which layout was used: {stderr}"
+    );
+
+    // The warning goes to stderr, never stdout: stdout is the worktree PATH and
+    // callers parse it. Polluting it would break every existing caller.
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("WARNING"),
+        "stdout must stay the bare path, callers parse it: {stdout}"
+    );
+}
+
+/// Anti-vacuity control for the test above: passing `--run` must NOT warn.
+/// Without this, an unconditional `eprintln!` would satisfy the assertions
+/// above while making the warning meaningless noise on every single call.
+#[test]
+fn passing_run_does_not_warn() {
+    let fx = Fixture::new("ns-quiet");
+    let out = fx.create_ns("run-quiet", "t1", "b1");
+    assert!(out.status.success(), "namespaced create failed: {out:?}");
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("WARNING"),
+        "a correctly namespaced create must be silent: {stderr}"
+    );
+}

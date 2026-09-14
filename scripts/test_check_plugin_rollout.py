@@ -59,6 +59,17 @@ def _host_suffix_for_fixture():
 
 _HOST_SUFFIX = _host_suffix_for_fixture()
 
+# What a CORRECTLY deployed per-platform binary looks like to the only consumer
+# that matters, the launcher shell script: non-empty, and executable. The fixture
+# writes this by default because "deployed" has to mean "launchable" — a fixture
+# whose baseline fleet was zero-byte/0644 would model a fleet that is uniformly
+# dark, and every case built on it would be asserting against a broken baseline
+# (measured: it turned 43 unrelated cases red the moment the checker started
+# applying the launcher's own `[ -x ]` predicate). Cases about the dark states
+# opt IN via host_binary_content / host_binary_mode.
+_DEFAULT_HOST_BINARY_BYTES = b"#!/bin/sh\nexit 0\n"
+_DEFAULT_HOST_BINARY_MODE = 0o755
+
 FIXTURE_PLUGINS = {
     "blastguard": "1.2.0",   # GATE
     "propguard": "0.9.1",    # GATE
@@ -151,7 +162,8 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
                   asset_missing=None, asset_modified=None, asset_extra=None,
                   asset_crlf=None, asset_binary=None, source_extra=None,
                   cached_versions=None, settings_extra=None, no_bin_launcher=(),
-                  enabled_extra_keys=None, registry_extra_keys=None):
+                  enabled_extra_keys=None, registry_extra_keys=None,
+                  host_binary_content=None, host_binary_mode=None):
     """Build a fixture repo + registry + settings under `tmp`.
 
     versions           — crate -> source version (defaults to FIXTURE_PLUGINS)
@@ -196,6 +208,16 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
                          foreign-owner control that must NOT be reported.
     registry_extra_keys— literal `installed_plugins.json` plugin keys (owner
                          suffix included), same two uses on the registry side.
+    host_binary_content— crate -> exact bytes to write as the deployed host
+                         binary. Default `_DEFAULT_HOST_BINARY_BYTES` (non-empty),
+                         because the launcher `exec`s this file: its CONTENT and
+                         MODE are as load-bearing as its name. Pass b"" to model
+                         the truncated/zero-byte rollout.
+    host_binary_mode   — crate -> permission bits to chmod the deployed host
+                         binary to. Default `_DEFAULT_HOST_BINARY_MODE` (0o755,
+                         launchable); pass 0o644 to model a binary deployed
+                         without the exec bit. Set explicitly rather than left to
+                         the umask, so the baseline does not vary by machine.
     """
     asset_missing = dict(asset_missing or {})
     asset_modified = dict(asset_modified or {})
@@ -203,6 +225,8 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
     asset_crlf = dict(asset_crlf or {})
     asset_binary = dict(asset_binary or {})
     source_extra = dict(source_extra or {})
+    host_binary_content = dict(host_binary_content or {})
+    host_binary_mode = dict(host_binary_mode or {})
     versions = dict(versions or FIXTURE_PLUGINS)
     crates = tmp / "crates"
     for crate in versions:
@@ -266,7 +290,12 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
                 ):
                     hostbin = install / "bin" / f"{c}-{_HOST_SUFFIX}"
                     hostbin.parent.mkdir(parents=True, exist_ok=True)
-                    hostbin.write_text("", encoding="utf-8")
+                    hostbin.write_bytes(
+                        host_binary_content.get(c, _DEFAULT_HOST_BINARY_BYTES)
+                    )
+                    os.chmod(
+                        hostbin, host_binary_mode.get(c, _DEFAULT_HOST_BINARY_MODE)
+                    )
                 # A real rollout rsyncs the whole crate into the version dir, so
                 # the fixture must too — otherwise every plugin would look like
                 # it had an empty deployed tree and the asset assertions would
@@ -1073,6 +1102,92 @@ class SkillOnlyPlugins(_FixtureCase):
             f"a declared-but-undeployed binary must not pass.\nout={out}\nerr={err}",
         )
         self.assertIn("specguard", out + err)
+
+    # --- "deployed" must mean LAUNCHABLE, not merely NAMED -------------------
+    #
+    # `_host_binary_deployed()` answers by filename only:
+    #
+    #     return any(
+    #         e.endswith("-" + HOST_SUFFIX) or e.endswith("-" + HOST_SUFFIX + ".exe")
+    #         for e in entries
+    #     )
+    #
+    # but the file's only consumer is the per-plugin launcher, which demands the
+    # exec bit (crates/tdd/bin/tdd:52-55):
+    #
+    #     binary="$root/tdd-$os-$arch$ext"
+    #     if [ -x "$binary" ]; then
+    #       exec "$binary" "$@"
+    #     fi
+    #     echo "tdd: no bundled binary for $os-$arch ($binary)." >&2
+    #
+    # So a non-executable or zero-byte host binary produces the SAME dark failure
+    # as the absent one covered above — the launcher refuses it, the hook never
+    # starts, and a gate that cannot start emits no finding. Reporting that as a
+    # clean rollout is the fail-open: "the gate cannot run" rendered as "the gate
+    # is fine". Nothing else in the repo covers this file:
+    # check-launcher-exec-bit.py is scoped to `crates/<crate>/bin/<dotless name>`
+    # in the GIT INDEX (LAUNCHER_RE, `git ls-files -s`), and its own docstring
+    # records that per-platform binaries "are build artifacts and are not
+    # tracked, so they never appear here" — the DEPLOYED binary's mode is checked
+    # by no gate at all.
+
+    def test_deployed_host_binary_without_exec_bit_is_drift(self):
+        """Right name, real payload, mode 0o644: the launcher will not exec it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp,
+                host_binary_content={"specguard": b"#!/bin/sh\nexit 0\n"},
+                host_binary_mode={"specguard": 0o644},
+            )
+        self.assertNotEqual(
+            rc, 0,
+            "a deployed host binary with no exec bit is as inert as an absent "
+            f"one and must not pass.\nout={out}\nerr={err}",
+        )
+        self.assertIn("specguard", out + err, f"out={out}\nerr={err}")
+
+    def test_deployed_host_binary_that_is_empty_is_drift(self):
+        """Right name, executable, zero bytes: exec'ing it cannot run the gate.
+
+        A 0-byte file with the exec bit is not a program; the kernel rejects it
+        (ENOEXEC) and the hook dies without producing a finding — dark, not red.
+        It is the shape a truncated/interrupted copy leaves behind, which is
+        exactly when a rollout check is supposed to speak up.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp,
+                host_binary_content={"specguard": b""},
+                host_binary_mode={"specguard": 0o755},
+            )
+        self.assertNotEqual(
+            rc, 0,
+            "a zero-byte deployed host binary must not pass as deployed."
+            f"\nout={out}\nerr={err}",
+        )
+        self.assertIn("specguard", out + err, f"out={out}\nerr={err}")
+
+    def test_executable_nonempty_host_binary_passes(self):
+        """Control arm: the two cases above must fail for the RIGHT reason.
+
+        Same fixture, same plugin, the only difference being a host binary that
+        is both executable and non-empty. If this arm were red too, the two
+        assertions above would prove nothing about mode or size — they would just
+        be inheriting some unrelated red from the fixture.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp,
+                host_binary_content={"specguard": b"#!/bin/sh\nexit 0\n"},
+                host_binary_mode={"specguard": 0o755},
+            )
+        self.assertEqual(
+            rc, 0,
+            "a launchable deployed host binary must pass.\n"
+            f"out={out}\nerr={err}",
+        )
+        self.assertIn("no rollout drift", out, f"out={out}\nerr={err}")
 
     def test_deployed_binary_still_needs_provenance_even_if_source_has_no_crate(self):
         """A binary on disk must be verifiable whatever the source says.

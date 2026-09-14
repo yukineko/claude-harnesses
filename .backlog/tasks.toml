@@ -22027,7 +22027,7 @@ Related: gate.rs human_report then renders this as "yes (inline test added)" / "
 
 Also note the first arm: any added line in a test-glob file, including a blank-adjacent comment line, is evidence. That may be intentional but it is unstated.'''
 created_at = 1789064330
-updated_at = 1789111971
+updated_at = 1789117985
 weight = 0.0
 issue_number = 509
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/509"
@@ -22621,7 +22621,7 @@ tags = [
     "fail-open",
     "p0",
 ]
-status = "pending"
+status = "claimed"
 notes = """
 観測 2026-09-11 (session 1266dc19)。tdd の Stop hook が gate did not run: no bundled binary for darwin-arm64 を返し、実装がテスト無しで変わったかは NOT evaluated のまま停止した。fail-closed で1回 block し、次の stop は通す設計なのでトラップにはならないが、以後すべての stop で tdd ゲートは事実上 dark である (red ではなく dark)。
 
@@ -22638,7 +22638,7 @@ notes = """
 2. rebuild が fresh version dir に host bin を seed する経路が tdd でなぜ効かなかったかを特定し、RED を先に観測したうえで塞ぐ
 3. check-plugin-rollout.py が「registry の指す version dir に host bin が無い」を block できるか確認し、できないなら追加する"""
 created_at = 1789075692
-updated_at = 1789075692
+updated_at = 1789117500
 weight = 0.0
 issue_number = 535
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/535"

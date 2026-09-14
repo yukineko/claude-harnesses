@@ -22779,3 +22779,132 @@ updated_at = 1789123819
 weight = 0.0
 issue_number = 543
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/543"
+
+[[task]]
+id = "c02273d9"
+title = "blastguard: project 内の plain untracked ファイルの rm が allow — git が復元できないのに 2026-09-14 ruling の rule 1 を満たさない"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = ""
+created_at = 1789349260
+updated_at = 1789349260
+weight = 0.0
+issue_number = 644
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/644"
+
+[[task]]
+id = "565950fb"
+title = "blastguard: 配置不能ターゲットの Deny を「他 project / home dotfile は ask」へ分岐させる (2026-09-14 ruling rule 5/6 の未実装分)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = ""
+created_at = 1789349275
+updated_at = 1789349275
+weight = 0.0
+issue_number = 645
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/645"
+
+[[task]]
+id = "2731382e"
+title = "blastguard: 明示指示時の guard skip 機構を設計する — agent が自分で立てられる skip はゲートの無効化になる (2026-09-14 ruling rule 4)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = ""
+created_at = 1789349292
+updated_at = 1789349292
+weight = 0.0
+issue_number = 646
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/646"
+
+[[task]]
+id = "f6efdfa1"
+title = "blastguard: redirect target の解決を出現ごとに行う — 同一トークンが複数 segment にあると現在は解決を一律拒否し、deny の理由が実際の truncate 先を名指しできない"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = ""
+created_at = 1789350167
+updated_at = 1789350167
+weight = 0.0
+issue_number = 647
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/647"
+
+[[task]]
+id = "a83802ad"
+title = "blastguard: append redirect (>>) が変数形で silently permissive — P=/etc/fstab; echo x >> $P が Allow (truncate 側で塞いだのと同じ欠陥クラス)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = ""
+created_at = 1789350173
+updated_at = 1789350173
+weight = 0.0
+issue_number = 648
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/648"
+
+[[task]]
+id = "3e44204b"
+title = "blastguard: deny to ask 統一は shape deny を直接反転できない (rm -rf / が同じ経路)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+ユーザー決定「中間: deny ではなく ask に統一」は、shape deny の分岐を反転するだけでは実装できない。
+
+測定 (2026-09-14, blastguard 0.2.64 release バイナリ, scratchpad/why.py):
+以下はすべて *同一の deny 理由* を返す。つまり同じ経路で deny されている。
+
+  rm -rf /                            -> deny: "recursive rm (-r) can delete an entire directory tree"
+  rm -rf /*                           -> deny: 同上
+  rm -rf "$HOME"                      -> deny: 同上
+  rm -rf /usr/lib                     -> deny: 同上
+  rm -rf /etc/systemd                 -> deny: 同上
+  rm -rf <他 project>/crates          -> deny: 同上   <-- ask にしたいのはこれだけ
+
+shape_deny_or_confined_ask (crates/blastguard/src/detect.rs:283) の
+None => Decision::deny(deny_reason) を ask に変えると、上の 6 件すべてが ask になる。
+rm -rf / と rm -rf "$HOME" が ask に落ちるのは容認できない (ユーザー spec の
+「システム dir は rm してはいけない」に真っ向から反する)。
+
+したがって必要なのは分岐の反転ではなく、shape deny の *前* に
+system-path / protected-path の判定を置いて catastrophic を deny に固定し、
+残りだけを ask に落とす順序変更。これは判定順序の変更なので、
+CLAUDE.md §2(a) により利害関係のない Agent がテストを書く必要がある。
+
+残り 4 件の spec 差分 (別チケット):
+  rm -rf <tracked dir>        want allow, got ask   (制限側なので急がない)
+  rm -f <untracked in proj>   want ask,   got allow (c02273d9 fail-open)
+  rm -rf /tmp/...             want allow, got ask   (制限側)
+  echo x > ../../outside.log  want ask,   got allow (fail-open, 未起票)
+
+「ただし Ask の推奨は削除実行しないにしておくこと」も、この順序変更と同じ
+コミットで入れる (Ask の文言側)。
+"""
+created_at = 1789351207
+updated_at = 1789351238
+weight = 0.0
+issue_number = 649
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/649"
+
+[[task]]
+id = "ea41fd4b"
+title = "blastguard fail-open: 相対パス redirect (echo x > ../../outside.log) が allow"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = ""
+created_at = 1789351245
+updated_at = 1789351245
+weight = 0.0
+issue_number = 650
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/650"

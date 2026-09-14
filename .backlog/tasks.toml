@@ -22025,7 +22025,23 @@ Suggested fix (narrows the gate, i.e. blocks MORE, which is the safe direction):
 
 Related: gate.rs human_report then renders this as "yes (inline test added)" / "yes (test file + inline test)" (gate.rs around :329-334), asserting an inline test was added when all that was observed is a regex hit somewhere.
 
-Also note the first arm: any added line in a test-glob file, including a blank-adjacent comment line, is evidence. That may be intentional but it is unstated.'''
+Also note the first arm: any added line in a test-glob file, including a blank-adjacent comment line, is evidence. That may be intentional but it is unstated.
+
+---
+
+## specforge divert の結果 (2026-09-11, session 3365f18c)
+
+`specforge draft --id tdd-test-evidence` は **rigor 未達で refuse**。チケットの事実主張 (gate.rs:178-181 / :165 / :182 / :332-334) は逐語検証され誤りなし。refuse 理由は「仕様化できない＝書き込む正典が無い」。`docs/specs/tdd.md:1` が自ら REVIEW-NEEDED (人間レビューまで正典扱いしない) と宣言しているため。
+
+**着手前に人間の決定が必要な 4 件** (sentinel `.specforge-pending` より逐語転記。sentinel は worktree-local で他セッションから不可視のためここへ移送した):
+
+## Ask する質問（4件）
+
+1. **tdd の正典はどれか。** `docs/specs/tdd.md` の REVIEW-NEEDED を外して批准するのか、`docs/specs/` に新しい「test evidence 契約」節を起こすのか、`crates/tdd/README.md` を正典とするのか。
+2. **要件1 の外部契約変更を承認するか。** marker evidence を `impl_globs`（かつ非 test）に限定すると、`README.md:34` と `docs/specs/tdd.md:53-55` の記述を同一コミットで書き換えることになります。`impl_globs` にも `test_path_globs` にも属さない path（`.md` / `.toml` / JSON fixture / shell）の marker ヒットは **evidence でない（absent）** か、**判定不能（block）** か。
+3. **要件2 の三値の trigger を確定させたい。** `Undetermined` に落とすのは (a) glob/regex のビルド失敗・空集合（`gate.rs:121, 131`）、(b) marker パターンの一部脱落、(c) 上記 2 の「非 impl な marker ヒット」、のどれか（複数可）。また「証拠なし ＋ 追加実装行 0」は現行どおり allow のままか（`min_added_impl_lines` 契約の維持可否）。
+4. **要件5 の意図。** `gate.rs:174-177`（test-glob ファイルの任意の追加行、空行隣接のコメント行を含む、が evidence）は意図的か。意図的なら「なぜ」を 1 文で（例: test ファイルへの変更は人間の意思表示として十分）。意図的でないなら要件1 と同じ絞り込み（marker 一致行のみ evidence）を適用してよいか。
+'''
 created_at = 1789064330
 updated_at = 1789117985
 weight = 0.0

@@ -35,7 +35,9 @@ exactly the failure mode CLAUDE.md 2 names -- a test that verifies nothing
 always passes, and its assert then gets read as a specification. Before these
 three can count as evidence, they need a discriminator that an absent script
 cannot satisfy: assert on the gate's OWN diagnostic text on stderr, not on
-the exit code alone. CLAUDE.md 2(b): a test never seen failing proves nothing, so
+the exit code alone.
+
+CLAUDE.md 2(b): a test never seen failing proves nothing, so
 that RED observation is a required part of this ticket, not a formality.
 
 WHAT THE GATE IS FOR. `harness_core::projkey::repo_root` stops at the first
@@ -65,7 +67,7 @@ because the ticket text does not pin them precisely:
       actual invocation, not a mere mention. A `pub use harness_core::projkey
       ::{project_key, repo_root};` re-export line (no trailing paren) is NOT
       itself a call site. This matches the regex style already used by
-      scripts/check-raw-io-ratchet.py (`\bread_to_string\s*\(`) and is what
+      scripts/check-raw-io-ratchet.py (`\\bread_to_string\\s*\\(`) and is what
       makes the re-export-hop fixture (test 10) resolvable without also
       forcing every `store.rs`-shaped re-export module into the table.
   (b) A `language = "gitignore"` entry's own validity does not require a

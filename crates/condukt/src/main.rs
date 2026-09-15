@@ -42,6 +42,7 @@ mod shadow_run;
 mod state;
 mod status;
 mod store;
+mod subagent_stop;
 mod verify;
 mod worktree;
 mod wt_reconcile;
@@ -78,6 +79,16 @@ enum Command {
     /// the same turn. Fail-soft everywhere else: any other outcome or error
     /// prints nothing and exits 0 (a hook must never break a turn).
     Editgate,
+    /// SubagentStop hook: when a child sub-agent terminates, advance the owning
+    /// run task's durable `updated_at` — the timestamp `state probe`, `circuit
+    /// check` and the claim reap gate measure idleness against — to that moment.
+    /// Writes ONLY when the payload is attributable: unparseable stdin, a
+    /// non-SubagentStop event, no readable run state, a cwd outside every
+    /// recorded task worktree, an ambiguous match, or a non-running task all
+    /// leave the stored timestamp untouched and print the reason on stderr,
+    /// because a fabricated heartbeat makes a dead child look alive. Exits 0
+    /// always (observability, not a gate).
+    SubagentStop,
     /// Compute a schedule from a decomposition JSON (stdin or --file).
     Schedule {
         #[arg(long)]
@@ -1787,6 +1798,12 @@ fn main() {
             }
             run_editgate();
         }),
+        Command::SubagentStop => run_hook(|| {
+            if Config::disabled() {
+                return;
+            }
+            run_subagent_stop();
+        }),
         other => {
             if let Err(e) = run_user(other) {
                 eprintln!("condukt: {e:#}");
@@ -1853,6 +1870,32 @@ fn run_editgate() {
             println!("{line}");
         }
     }
+}
+
+/// SubagentStop hook. Reads the payload from stdin and, when it is attributable
+/// to a running task of this project, advances that task's durable `updated_at`
+/// to now — the timestamp the TTL/idle judgements (`state probe`, `circuit
+/// check`, the claim reap gate) already read. Every unattributable shape leaves
+/// the stored timestamp untouched; the outcome (written or not, and why) is
+/// always printed on stderr, never on stdout — this hook returns no verdict.
+/// Called under [`run_hook`], so it exits 0 and a panic is swallowed. That
+/// exit-0 contract governs the process status ONLY: it is never a reason to
+/// write a timestamp that could not be justified (a fabricated heartbeat makes
+/// a dead child look alive downstream).
+fn run_subagent_stop() {
+    let cfg = Config::load();
+    let cwd = match std::env::current_dir() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "condukt subagent-stop: no progress timestamp written: cwd unreadable \
+                 ({e}), so the project's run state could not be located"
+            );
+            return;
+        }
+    };
+    let outcome = subagent_stop::run(&cfg, &cwd, &read_stdin(), state::now_secs());
+    eprintln!("condukt subagent-stop: {}", outcome.describe());
 }
 
 fn run_user(cmd: Command) -> Result<()> {
@@ -2389,7 +2432,7 @@ fn run_user(cmd: Command) -> Result<()> {
         // These are dispatched as hooks in main() (via run_hook, which exits and
         // never returns here). Reaching this arm would be an internal dispatch
         // bug; return a clean error instead of panicking the process.
-        Command::Restore | Command::Statusline | Command::Editgate => {
+        Command::Restore | Command::Statusline | Command::Editgate | Command::SubagentStop => {
             bail!("internal: hook subcommands must be dispatched in main(), not run_user()")
         }
     }

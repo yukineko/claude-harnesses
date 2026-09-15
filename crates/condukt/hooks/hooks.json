@@ -15,6 +15,13 @@
         ]
       }
     ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/condukt subagent-stop", "timeout": 10 }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Edit|Write|MultiEdit",

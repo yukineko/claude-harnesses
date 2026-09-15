@@ -1,3 +1,5 @@
+
+
 [[task]]
 id = "0ba79281"
 title = 'CLAUDE.md: Windows で成立しない cargo 手順 (. "$HOME/.cargo/env") を直す'
@@ -26137,3 +26139,250 @@ updated_at = 1789306451
 weight = 0.0
 issue_number = 633
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/633"
+
+[[task]]
+id = "d69f4b23"
+title = "check-plugin-rollout の mirror 判定が untracked なローカル build 成果物を source of truth にしている (tdd が恒常 red)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+測定 2026-09-13 22:40 JST、測定点 main=55e6e195。
+
+観測（すべて実測、逐語）:
+- SessionStart hook が毎回 ROLLOUT DRIFT を出す: "tdd: deployed tree is not a mirror of crates/tdd — 1 deployed file(s) differ from source: bin/tdd-darwin-arm64"。提示される fix は "scripts/rollout-plugins.sh --plugin tdd --force"。
+- crates/tdd/bin/ の中身: tdd (4044 bytes, launcher) と tdd-darwin-arm64 (1852304 bytes)。
+- git ls-files crates/tdd/bin/ が返すのは bin/tdd のみ。つまり tdd-darwin-arm64 は UNTRACKED。
+- deployed 側 (~/.claude/plugins/cache/yukineko/tdd/0.1.29 と 0.1.32 の両方) は 1852288 bytes、sha256 先頭 b4d460a233ef9b02。source 側は 1852304 bytes、a6a5127790d964f5。
+- mtime: source=2026-09-13 14:49、deployed=22:35。deploy 元 commit 876073eb の commit 時刻は 22:31。つまり deployed のほうが NEWER で、source 側の untracked 成果物が STALE。
+- .deployed-from.json は両 dir とも commit 876073eb / dirty false / harness_core 0.2.24。provenance 上は健全。
+- crates/*/bin/*-darwin-arm64 は repo 全体で 1 個だけ（この tdd のみ）。41 plugin 中 tdd だけが source bin/ に host binary を抱えている。
+- rebuild-plugins.sh:313 のコメントは "only 2 of 39 plugins actually carry a staged crates/<name>/bin/<base>" と書いており、staged な成果物は --stage-repo 経由で入る建前。この tdd の 1 本は untracked なので、その sanctioned path を通っていない。
+
+2 つの読み:
+(a) 実在の欠陥 — mirror 判定が git 管理外のワーキングツリー上のファイルを source of truth にしているため、判定が clone/CI で再現しない。しかも repo 自身の規範 deploy-provenance-not-hash（バイナリは sha256 でなく .deployed-from.json で検証する）に反して byte 比較している。提示される --force fix は 14:49 の古い成果物を配布し直す方向なので、red を消すどころか deployment を退行させうる。
+(b) 意図的な仕様 — crates/<c>/bin/<host binary> は staged 成果物として置かれる前提で、単にこの 1 本が古いだけ。正しい対処は rebuild-plugins.sh --stage-repo で staged 成果物を更新すること。
+
+見分ける方法: scripts/rollout-plugins.sh:469 は "$src/bin/$stem" の存在で deployed bin を protect / drop する分岐を持つ。この stray artifact を削除（または --stage-repo で更新）したうえで check-plugin-rollout.py を再実行し、(i) red が消えるなら (b)、(ii) 別の理由で red が残る / 他 plugin にも同種の red が出るなら (a)。
+
+注意: この stray artifact は 2026-09-13 の tdd 0.1.29 version dir 手動 seed（memory rollout-cannot-undark-running-session に記録）と時刻が近い。手 cp の副産物である可能性が高いが未確認。"""
+created_at = 1789306755
+updated_at = 1789306755
+weight = 0.0
+issue_number = 636
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/636"
+
+[[task]]
+id = "4d0cffee"
+title = "flow driver の task-claim が registry から消えているのに backlog 側は claimed のまま（heartbeat が 2 サイクル連続で refreshed 0）"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+測定 2026-09-13 22:35-22:42 JST、測定点 main=55e6e195、session 2444be10。
+
+観測:
+- 自セッションは batch 6 の 3 件 (e8c03e9e / 42ad4688 / 53c825f6) を claim して background agent に渡し、agent は今も走っている（condukt run-20260913-223733-78880 の file claim が heartbeat_at=1789306661 と数秒前）。
+- ところが condukt state heartbeat --run flow-2444be10-e07a-4c9a-a785-01f58d3995fa は 2 サイクル連続で "refreshed 0 claim(s)" を返す。
+- condukt state claims の task_claims に flow-2444be10 のエントリは 1 件も無い。他セッションのもの（flow-79d79a35, flow-25763e04, flow-b57a58c3 等）は残っている。
+- 一方 .backlog/tasks.toml 側では上記 3 件が status=claimed のまま。つまり「backlog は claimed、registry は無主」という乖離。
+
+先に否定した読み（記録として残す）: 「task_claims に heartbeat 経路が無いのでは」と疑ったが、crates/condukt/src/claim.rs:950 が
+    for c in reg.files.values_mut().chain(reg.task_claims.values_mut())
+と files と task_claims の両方を回しているので、heartbeat 経路の欠落ではない。この読みは REFUTED。
+
+残る 2 つの読み:
+(a) 実在の欠陥 — dispatch 時の condukt state claim-task が実際には登録に失敗していた（あるいは別の run_id で登録された）。exit code は fail-soft で握り潰される設計なので、登録できなくてもループは進む。その場合 registry には最初から入っていない。
+(b) 登録はされたが TTL で reap された — heartbeat が run_id 一致で絞るため、claim 時と heartbeat 時で run_id が食い違っていれば refresh されずに期限切れになる。
+
+見分ける方法: hashkey は backlog task.rs:208 の hashkey(title, project) で決定論的に再計算できる。同じ title/project で claim-task を打ち直し、直後に condukt state claims を見る。(i) 登録が現れれば (b)（元の登録が reap されたか run_id 不一致）、(ii) 登録が現れないのに exit 0 が返るなら (a)（fail-soft が登録失敗を隠している）。
+
+影響: 現在の多重着手ガードは backlog 側の status=claimed だけに縮退している。registry 側が空なので condukt state is-claimed は exit 1 を返し、「誰も持っていない」と読める。並行セッションが 4 本走っている状況では、この 2 層のうち 1 層が黙って落ちていることになる。"""
+created_at = 1789306765
+updated_at = 1789306765
+weight = 0.0
+issue_number = 637
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/637"
+
+[[task]]
+id = "dac6bf50"
+title = "負荷依存 flake (35d61d23 / 8c5d46fa) の検証プロトコルが未定義 — 静かなマシンでの green は修正の証拠にならない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+測定 2026-09-13 22:42 JST、測定点 main=55e6e195。
+
+観測: session 79d79a35 の condukt run-20260913-223004-15261 が t4-lockflake (35d61d23) と t5-compassflake (8c5d46fa) を、同 run の他タスク 3 本および別セッションの worker と同時並行で実行している（file claim の heartbeat_at=1789306631 で live）。同時に両 ticket は .backlog/tasks.toml 上では status=pending のまま。
+
+自分の以前の判断の訂正（記録として残す）: 自分はこの 2 件を「並列バッチの負荷が測定を汚染するので静かなマシンで直列に回すべき」として batch から外し pending に戻した。これは誤りを含む。両 ticket の主張は「CPU 負荷下でテストが赤くなる」であり、修正を検証したいなら負荷は汚染要因ではなく必要条件である。静かなマシンで green を観測しても、それは「負荷下で直った」の証拠にはならない — 元々静かなら赤くならないからである。したがって並行実行下での観測のほうが fix 検証としてはむしろ強い。
+
+本当に定義されていないのは検証プロトコルのほうである。必要なのは:
+- 再現条件の明示（同時に走らせる負荷の量と種類。何コアをどれだけ占有した状態か）
+- RED の事前観測（CLAUDE.md 2(b)）。修正前にその負荷条件で実際に落ちることを観測していなければ、修正後の green は何も証明しない。
+- 試行回数。flake は 1 回の green で閉じられない。何回連続 green なら通すのかを done_criteria に書く必要がある。
+
+現状の 2 ticket の done_criteria にはこのいずれも書かれていない。よって誰が回しても「通ったから直った」で閉じられてしまう。
+
+見分ける方法 / 次の一手: 両 ticket の done_criteria に上記 3 点（負荷条件・RED 事前観測・連続 green 回数）を追記する。追記せずに閉じられた場合、その close は測定ではなく判断である。"""
+created_at = 1789306777
+updated_at = 1789306777
+weight = 0.0
+issue_number = 638
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/638"
+
+[[task]]
+id = "5e62b0eb"
+title = "condukt claim registry: cancelled タスクの削除済み worktree が run-scoped progress signal を恒久 Undetermined にし、死んだ run の file claim が永久に reap されない (condukt の version ファイルが全セッションからブロックされる)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "claim-registry",
+    "fail-closed-deadlock",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-13 22:40 JST、測定点 15adc7bd（main）、cwd=/Users/yuki/src/harness（main worktree）。
+
+現象: 30.8日前に死んだ run の file claim が永久に reap されず、他セッションの condukt タスクを恒久的にブロックする。実測でブロックされた: 本セッションの condukt state set --run run-20260913-223733-78880 --task t1-subagentstop --status running が exit 1 で skipped、conflicts=[crates/condukt/Cargo.toml, crates/condukt/.claude-plugin/plugin.json], holder_run=run-20260814-025356-78549, holder_pid=80275。progress window（既定90秒）を空けて再実行しても同じ exit 1（＝1回目だから未確定、ではない）。
+
+holder が死んでいる証拠（5点、いずれも観測）:
+  - pid 80275 は ps -p で不在。
+  - claim の heartbeat_at=1786644417、経過 2662249 秒 = 30.81 日（stuck TTL を遥かに超過）。
+  - holder session b57a58c3-eec2-4880-bc67-40ffdafb18cd の transcript mtime は Aug 14 22:58。
+  - holder の worktree t1/t2/t3 の HEAD commit 日時は 2026-08-14 03:03-03:08 で凍結。
+  - holder の t4 worktree（/Users/yuki/.condukt/worktrees/run-20260814-025356-78549-t4）は既に削除済み（git -C ... rev-parse HEAD が fatal: No such file or directory）。
+
+根本原因（コード上の経路、逐語）: crates/condukt/src/claim.rs の run_worktree_head_signal は run.tasks を status で絞らずに t.worktree.as_deref() を集め、どれか1つでも読めなければ signal 全体を Undetermined にする（docstring: 「Any recorded worktree is unreadable (removed, or never a git repo) => Undetermined for the whole signal」）。run-20260814-025356-78549 の t4 は status=cancelled で、cancelled タスクの worktree は condukt worktree remove/cleanup が正当に削除する。つまり「タスクを1つ cancel して worktree を掃除した run」は、その瞬間から run-scoped head signal が恒久的に Undetermined になる。
+harness_core::progress::fingerprint_from_signals は 1 つでも Undetermined なら全体 Undetermined（progress.rs:148）。claim_progress はそれを progress::sample に渡すが、Undetermined な current では snapshot が書かれない（実測: 期待される snapshot ファイル ~/.condukt/state/harness-e77d23c7/progress/691cce99ba15316e.json = fnv1a64("claim:run-20260814-025356-78549") が存在しない。同ディレクトリには同時刻 22:36 に書かれた別 run の snapshot が 4 つあるので、store dir 自体は解決できている）。
+retain_claim は「Known(Stalled) のときだけ reap」なので、Undetermined は claim を永久に保持する。
+
+これは fail-open ではなく fail-closed 側の恒久デッドロックである。CLAUDE.md 第3節の「判定不能は制限側へ」は正しく効いているが、判定不能が**構造的に永久**になる経路があるため、制限側が解除不能になっている。設計意図（live-but-quiet な holder を force-steal しない）は正しいが、terminal タスクの削除済み worktree を「読めない signal」として数えるのは意図ではないはず。
+
+影響が大きい理由: ブロックされた 2 ファイルは crates/condukt/Cargo.toml と plugin.json、すなわち CLAUDE.md の version lockstep 禁忌ルールにより **condukt を触る全タスクが必ず触る**ファイル。したがって condukt プラグインを改修する condukt タスクは、以後どのセッションからも claim できない。
+
+修正方向（案、要検討）:
+  (1) run_worktree_head_signal が畳み込む対象を非 terminal なタスクに限定する（cancelled/verified/failed の worktree 消失は進捗不能の証拠ではなく、単に掃除済み）。
+  (2) 非 terminal タスクが 1 つも worktree を持たない場合は既存どおり Undetermined（現行の 2 つ目の arm を維持）。
+  (3) それでも「全 signal が構造的に恒久 Undetermined」な claim を検出して人間に見せる経路（overwatch review-queue か condukt state claims の警告欄）を足す。黙って永久保持しない。
+反証防止の control: 削除済み worktree を持つが **running** タスクの run は従来どおり Undetermined のままであること（生きている worker を force-steal しないという元の設計意図を壊していないこと）をテストで固定する。
+
+本セッションでの回避（隠蔽しないため明記）: 根本修正は行わず、documented な明示 override である condukt state release --run run-20260814-025356-78549 --file crates/condukt/Cargo.toml --file crates/condukt/.claude-plugin/plugin.json を、上記 5 点の死亡証拠を添えて実行した。skip ファイルや --force やゲート緩和は使っていない。"""
+created_at = 1789306874
+updated_at = 1789306874
+weight = 0.0
+issue_number = 639
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/639"
+
+[[task]]
+id = "90e78490"
+title = "condukt schedule force-gate: 散文中の比較演算子 '>=' が truncating redirect として誤検知され、タスクが gated に落ちて実装対象外になる (176e572e の取りこぼし)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-13、測定点 15adc7bd。condukt 0.7.154 (/Users/yuki/.claude/plugins/cache/yukineko/condukt/0.7.154/bin/condukt)。
+
+176e572e「blastguard classify: '->' と '<x>' が task prose で '>' truncating-redirect force-gate を誤発火させる」は done になっているが、比較演算子 '>=' は今も誤発火する。同じクラスの取りこぼし（CLAUDE.md の gate-crate audit mirror gaps: 修正が 1 つの mirror にだけ landed する）。
+
+識別力のある最小プローブ（1 タスクだけの decomposition を condukt schedule に掛け、done_criteria の 1 トークンだけを差し替えた対照実験）:
+  done_criteria に「last >= first」を含む  -> warnings = ["task 't2-usagets' force-gated: high-risk irreversible action (declared class Parallel)"]
+  同じ文を「last is at or after first」に置換 -> warnings = []
+他は 1 バイトも変えていないので、'>=' が単独の原因であることが確定している（判定不能ではない）。
+
+影響: タイムスタンプ/順序/境界を扱うタスクの done_criteria は自然に '>=' や '<=' を含む。それが high-risk irreversible として gated に落ちると、condukt schedule は batches からも serial からも外して gated に入れるため、そのタスクは実装フェーズの対象外になる（SKILL.md 不変条件2）。つまり誤検知が「実装されない」に直結する。本セッションでは実際に t2-usagets が gated に落ち、散文を言い換えて回避した（回避したことは報告に明記済み）。
+
+やること: 176e572e が入れた prose 除外を '>=' / '<=' と、シェルの redirect にならない他の比較・矢印トークンへ広げる。反証防止の control として、本物の truncating redirect（例: コマンド文字列中の実際の出力先指定）は従来どおり force-gate されることを同じテストで固定すること — 除外を広げて gate を無効化してはならない。"""
+created_at = 1789306920
+updated_at = 1789306920
+weight = 0.0
+issue_number = 640
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/640"
+
+[[task]]
+id = "c8add656"
+title = "flow の claim が二重に通る: 2 セッションが同一 backlog 3 件 (2c1e54b3/bcfc5491/e073bdb1) を同時に claim し、両方が実装フェーズへ進んだ"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flow",
+    "condukt",
+    "claim-registry",
+    "cross-session",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-13 22:30-22:37 JST、測定点 15adc7bd。
+
+2 つの flow セッションが、どちらも自分を「サイクル6」と呼びながら、重なり合う backlog 集合を同時に claim した。
+
+観測:
+  - セッション A (本セッション経由の coordinator): main の commit b04cfb3e「chore(backlog): flow サイクル6 の 6 件を claim」— 2c1e54b3 / bcfc5491 / e073bdb1 / e8c03e9e / 42ad4688 / 53c825f6。
+  - セッション B (session 79d79a35-3490-4bbd-9bb4-d501e749e65d): commit c39701bc「chore(backlog): サイクル6 の 4 件を claim (2c1e54b3 / bcfc5491 / 35d61d23 / 8c5d46fa)」。B は condukt run run-20260913-223004-15261 を 22:30:04 に init し、t1-classify(2c1e54b3) / t2-repoprimary(bcfc5491) / t3-overwatch(e073bdb1) を含む 5 タスクに分解して worker を走らせた（22:37 時点で 4 タスクが running、worktree 内で rustc が実働中）。
+  - 重複は 3 件: 2c1e54b3 / bcfc5491 / e073bdb1。
+  - condukt の task_claims レジストリには B の 4 件 (hashkey a192382d08ee3bf7=2c1e54b3, a4050204859f1c7a=bcfc5491, 00d1160bf294b1af=35d61d23, 052a7668cb486c1f=8c5d46fa) が run_id=flow-79d79a35-... で入っている。e073bdb1 は task_claims に無いまま B が t3-overwatch として実装している。
+
+なぜ二重 claim が起きたか（要調査、ここは観測ではなく読み）: file 単位の claim レジストリ (claims.json の files) と task 単位の claim レジストリ (task_claims) と、backlog 側の claimed ステータスの 3 つが別々に更新され、flow の claim 段階がどれを権威にしているかが揃っていない疑い。A の 6 件 claim が B の 4 件 claim を見なかったか、逆順だったか、いずれかの経路が相手を観測できていない。
+
+実害（観測）: A 側の executor は 3 件を重複実装しないためにスキップせざるをえず、その 3 件は A の報告上「未着手」として残る。B が完了させれば実質は進むが、A の coordinator は自分の claim を握ったまま sink するため、backlog 上の帰属と実際に実装したセッションが食い違う。CLAUDE.md 第8節は「別セッションは常に存在する」を前提にせよと言っており、claim 機構はまさにそれを支える面なので、ここが二重に通ることは第8節の運用面の穴である。
+
+やること: (1) file claim / task claim / backlog status のどれが claim の権威かを 1 つに決め、他をその射影にする。(2) flow の claim 段階で、既に live な cross-session task claim を持つ id を claim させない（condukt state is-claimed が既に exit code 契約を持っているので、それを flow の claim 経路が実際に consult しているかを確認する）。(3) 反証防止の control として、live holder が居ない id は従来どおり claim できることを同じテストで固定する。
+
+関連: 5e62b0eb (claim registry の reap 恒久 Undetermined), e073bdb1, 2c1e54b3, bcfc5491。"""
+created_at = 1789306932
+updated_at = 1789306932
+weight = 0.0
+issue_number = 641
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/641"
+
+[[task]]
+id = "56a2cc7b"
+title = "e073bdb1 調査メモ: 読み1/読み2 はコードと不整合。有力なのは build_cached の 10 秒 status_cache による text/JSON 不一致 (未確定)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "overwatch",
+    "investigation",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-13 22:42 JST、測定点 15adc7bd。e073bdb1 の調査補助として、重複 claim の相手セッション (79d79a35) が t3-overwatch で実装中のため実装はせず観測のみを残す。
+
+e073bdb1 が挙げた 2 つの読みは、どちらも今日の観測と合わない。
+
+読み1 (テキストレンダラが project でフィルタしている) は誤り: crates/overwatch/src/render.rs:112 の format_roster は project を一切参照しない。sessions が空なら placeholder で "(none)"、非空なら全件出す。project によるフィルタは存在しない。
+読み2 (begin が project を書かない別欠陥) も的外れ: Lease 構造体 (crates/overwatch/src/store.rs) のフィールドは key/title/session_id/run_id/claimed_at/heartbeat_at/scope/done_criteria であって project は無い。ticket の JSON で project が null に見えたのは、そもそも存在しないフィールドを読んだため。
+
+ストアの分裂でもない (ここが重要): ~/.overwatch/harness-e77d23c7/overwatch/leases.json に ticket の 4 件 (00d1160bf294b1af / 052a7668cb486c1f / a192382d08ee3bf7 / a4050204859f1c7a) が実在した。これは repo cwd から overwatch status が読むのと同じキーのストアである。~/.overwatch/session-79d79a35-4f9872cd/overwatch/leases.json も存在するが中身は空 {} なので、begin が別ストアへ書いたわけではない。
+（ただし crates/overwatch/src/store.rs:58 が harness_core::projkey::repo_root を使っている事実は変わらないので、linked worktree から begin した場合の分裂リスクは別途残る = 2c1e54b3 の軸。今回の 4 件はそれに当たらなかった、というだけ。）
+
+未検証の第3の読み (これが最有力だが確定していない): crates/overwatch/src/aggregate.rs:527 の build_cached は ~/.overwatch/<key>/overwatch/status_cache.json に ProgressView 丸ごとをキャッシュし、STATUS_CACHE_TTL_SECS = 10 秒 (aggregate.rs:501) 以内なら再構築せずそれを返す。overwatch status と overwatch status --json は どちらも build_cached を通る同一経路なので、2 つの出力が食い違いうるのは「片方がキャッシュヒット、片方がミス」のときだけである。エージェントの 2 つの bash 呼び出しの間隔は 10 秒を超えることが普通にあるので、begin 前に書かれたキャッシュを 1 回目 (テキスト) が返し、2 回目 (--json) で TTL 切れにより再構築されて 4 件が現れた、という順序と整合する。
+これが正しければ本件は「Sessions 表示が、10 秒前の世界を根拠に 別セッションは居ない と断言しうる」という問題であり、render.rs:239 のコメントが自ら危険だと名指ししている主張 ("(none) in the Sessions section is the claim no other session is live — the fact CLAUDE.md 第8節 tells every session NOT to assume") をキャッシュ経由で復活させていることになる。
+確定させる手順 (未実施): begin 直後に status を 2 回、10 秒未満の間隔と 10 秒超の間隔で叩き分け、status_cache.json の built_at と出力の食い違いを対応づける。反証防止の control として、キャッシュを消してから同じ 2 回を叩くと両方 4 件になることを示す。
+
+なお現時点 (22:42) で 4 件が (none) になっているのは正常な reap である: heartbeat_at=1789297086 に対し now=1789306956 で経過 9870 秒、LEASE_TTL_SECS=1800 (store.rs:53) を超過しており reap_stale が落としている。したがって今の (none) は ticket の現象の再現ではない。ticket の現象を再現するには fresh な lease が要る。"""
+created_at = 1789306974
+updated_at = 1789306974
+weight = 0.0
+issue_number = 642
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/642"

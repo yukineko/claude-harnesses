@@ -11358,9 +11358,15 @@ project_unresolved = false
 tags = ["p1"]
 touched_files = []
 status = "pending"
-notes = "実測 2026-08-11、測定点 d48c7133。git merge --no-ff fix/backlog-store-divergence を main で実行し、pre-commit の全ゲートが green で通った (逐語: OK: 41 plugins version-consistent / OK: no changed plugin left un-bumped vs HEAD (41 plugins scanned) / raw-io-ratchet: count == baseline (48) / main-tree-guard: allowed -- Merge in progress / check-test-weakening: no unacknowledged test weakening)。にもかかわらず直後の scripts/gate-bypass.py --json は verdict outstanding を返し、entries に当の d48c7133 が入っている。post-commit の案内文どおりなら この状態では git push が block される。原因の仮説: 証明書が tree と judged HEAD の両方に束縛されているため、merge では hook 実行時の HEAD (4fbfefc4) と生成された commit の親子関係が食い違い、証明書が当該 commit に紐づかない。これは 6267bfbe (git commit --amend が同じ理由で誤記録される) と同一クラスであり、amend だけの問題ではないことを示す実測である。判定不能ではなく判定が誤った側に確定している: 実際には検査済みの commit が 未検証 として記録されている。影響が amend より重いのは、CLAUDE.md 8 が main で許すのは統合 (merge) だけなので、規範どおりに作業すると毎回これを踏む点。完了条件: (1) merge commit が green な pre-commit を通ったとき ledger に載らないこと、(2) 逆に本当に --no-verify された merge は載ること (アンチ空虚性)、(3) 既に outstanding な d48c7133 を解消する手順を書くこと。見分ける方法: --no-verify した merge と 通常の merge を同条件で作り ledger を比較する。関連 6267bfbe、amend-always-trips-bypass-ledger。"
+notes = """
+実測 2026-08-11、測定点 d48c7133。git merge --no-ff fix/backlog-store-divergence を main で実行し、pre-commit の全ゲートが green で通った (逐語: OK: 41 plugins version-consistent / OK: no changed plugin left un-bumped vs HEAD (41 plugins scanned) / raw-io-ratchet: count == baseline (48) / main-tree-guard: allowed -- Merge in progress / check-test-weakening: no unacknowledged test weakening)。にもかかわらず直後の scripts/gate-bypass.py --json は verdict outstanding を返し、entries に当の d48c7133 が入っている。post-commit の案内文どおりなら この状態では git push が block される。原因の仮説: 証明書が tree と judged HEAD の両方に束縛されているため、merge では hook 実行時の HEAD (4fbfefc4) と生成された commit の親子関係が食い違い、証明書が当該 commit に紐づかない。これは 6267bfbe (git commit --amend が同じ理由で誤記録される) と同一クラスであり、amend だけの問題ではないことを示す実測である。判定不能ではなく判定が誤った側に確定している: 実際には検査済みの commit が 未検証 として記録されている。影響が amend より重いのは、CLAUDE.md 8 が main で許すのは統合 (merge) だけなので、規範どおりに作業すると毎回これを踏む点。完了条件: (1) merge commit が green な pre-commit を通ったとき ledger に載らないこと、(2) 逆に本当に --no-verify された merge は載ること (アンチ空虚性)、(3) 既に outstanding な d48c7133 を解消する手順を書くこと。見分ける方法: --no-verify した merge と 通常の merge を同条件で作り ledger を比較する。関連 6267bfbe、amend-always-trips-bypass-ledger。
+
+【2026-09-13】本件の機構は 36c936bc に実測で確定させた。post-merge の
+parents -lt 2 guard が fast-forward を判別できず、行き先が merge commit だと
+main 側に存在しない証明書を探して ungated と記録する。再現手順と逐語は 36c936bc にある。
+"""
 created_at = 1786376360
-updated_at = 1786376360
+updated_at = 1789306830
 weight = 0.0
 issue_number = 235
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/235"
@@ -17994,9 +18000,57 @@ merge commit を作らない」と保証している操作でも post-merge は�
 統合した回であり、**§8 に従うたびに 100% 再現する**。誤検知が稀ではなく定常である
 ことの、これで 3 例目の実測。回避策も毎回同じ（worktree 側で green な pre-commit を
 1 回走らせて ledger を消す）で、本 notes 追記を含む起票作業がその 1 commit を兼ねている。
+
+
+【2026-09-13 — 機構を実測で確定した。仮説どおりで、しかも §8 のワークフローでは毎回起きる】
+測定日 2026-09-13、測定点 55e6e195。
+
+再現した操作列 (すべて逐語):
+  1. worktree で通常コミット fb8f24f5 (pre-commit 全ゲート green)
+  2. worktree で git merge main -> 55e6e195 を作成。
+     pre-merge-commit が pre-commit を exec し、全ゲート green
+     (逐語の最終行: check-test-weakening: no unacknowledged test weakening.)
+     このとき bypass ledger は空 (pre-commit の cleared 行が出ていない)
+  3. main で git merge --ff-only session-79d79a35 -> Fast-forward
+  4. python3 scripts/gate-bypass.py -> rc=1
+     gate-bypass: 1 ungated commit(s) outstanding
+       55e6e1958df6  merge: main (15adc7bd) を取り込む
+
+確定した機構は .githooks/post-merge の 1 行である:
+
+    parents="$(git rev-parse HEAD^@ 2>/dev/null | grep -c .)" || exit 0
+    [ "${parents:-0}" -lt 2 ] && exit 0
+
+同じファイルのコメントは意図をこう書いている (逐語):
+  A fast-forward merge creates no commit, so there is nothing to certify and the
+  absent sentinel must not be read as a bypass
+
+つまり意図は「この merge がコミットを作ったか」だが、実装は「HEAD の親が 2 つ以上か」である。
+両者は fast-forward の行き先が merge commit のときに乖離する。実測値:
+  git rev-parse 55e6e195^@ -> fb8f24f5 (worktree の直前コミット) と 15adc7bd (ff 前の main)
+親は 2 つなので guard は発火せず post-commit を exec する。post-commit は証明書
+gate-verified-tree を GIT_DIR_LOCAL から読むが、証明書は手順 2 で worktree 側の
+git dir (.git/worktrees/session-79d79a35) に書かれ、そこで消費済みである。
+main 側には最初から存在しないので「未検査」と判定され ledger に積まれる。
+
+重要なのは、これが例外的な操作ではないこと: CLAUDE.md 第8節が要求する
+「worktree で作業 -> main へ ff」の最後の一手そのものであり、worktree branch の先頭が
+merge commit である限り毎回起きる。ゲートが repo 自身の正規ワークフローで偽陽性を出している。
+
+判別の候補 (どちらも決定論的。実装は未着手で、§2(a) により利害のない agent がテストを先に書くこと):
+  (a) reflog の最終エントリ。ff は merge <branch>: Fast-forward、真の merge は
+      merge <x>: Merge made by the ort strategy と書き分けられる。
+  (b) 第一親と ORIG_HEAD の一致。この merge が作った commit なら first parent == ORIG_HEAD。
+      実測では 55e6e195 の first parent は fb8f24f5 で、ORIG_HEAD (15adc7bd) は第二親だった。
+      ただし worktree 側が直前に main を取り込んでいる形では成り立たない場合があるので
+      (a) の方が素直である。
+
+d55f406a が「再現せず・機構は判定不能」としていたのは本件と同一クラスであり、
+上の手順で決定論的に再現する。7ec6fca5 も同じ。fa54b8ed (conflict 解決を伴う merge) は
+pre-commit を通るかどうかが異なるので別物の可能性があり、まだ切り分けていない。
 """
 created_at = 1787905350
-updated_at = 1788924015
+updated_at = 1789306829
 weight = 0.0
 issue_number = 411
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/411"
@@ -23712,9 +23766,14 @@ remote に出るのを止められていないことになり、こちらの方�
 (b) 並行セッションの pre-commit が共有 ledger を触ったのか、
 (c) push と post-commit の実際の順序、を切り分ける。
 既知の類縁: --amend は必ず ledger に入る (.githooks/pre-commit:333-336 が
-自認する false positive)。本件がその同類かどうかも未確定。"""
+自認する false positive)。本件がその同類かどうかも未確定。
+
+【2026-09-13】本件の機構は 36c936bc に実測で確定させた。post-merge の
+parents -lt 2 guard が fast-forward を判別できず、行き先が merge commit だと
+main 側に存在しない証明書を探して ungated と記録する。再現手順と逐語は 36c936bc にある。
+"""
 created_at = 1789123819
-updated_at = 1789123819
+updated_at = 1789306829
 weight = 0.0
 issue_number = 543
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/543"

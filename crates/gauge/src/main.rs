@@ -81,7 +81,10 @@ enum Command {
     /// on the `description` recorded in the `Task`'s sidecar.
     Subagents {
         /// Emit JSON: `[{agent_id, agent_type, description, cost_usd, turns,
-        /// tokens_input, tokens_output}]`.
+        /// tokens_input, tokens_output, first_activity_at, last_activity_at,
+        /// elapsed_secs}]`. The three time fields are `null` when the
+        /// sub-agent's transcript carried no parseable timestamp — unknown,
+        /// never `0` and never "now".
         #[arg(long)]
         json: bool,
         /// Session id whose sub-agents to list. Defaults to the newest transcript.
@@ -435,6 +438,52 @@ fn find_transcript(session_id: Option<&str>) -> Option<std::path::PathBuf> {
     best.map(|(_, p)| p)
 }
 
+/// Seconds spanned by a sub-agent's first..last activity, or `None` when that
+/// span was not observed.
+///
+/// `None` covers three cases that must not be collapsed into a number: an
+/// endpoint is absent (the transcript carried no timestamp), an endpoint is
+/// present but unparseable, or the endpoints are inverted (an out-of-order
+/// transcript). In particular the inverted case is **not** clamped to `0` the
+/// way [`duration_secs`] clamps the session span: `0` here would assert "no
+/// time passed", which is a measurement this function did not make. A consumer
+/// reading `elapsed_secs` gets either an observed span or an explicit null.
+fn span_secs(first: Option<&str>, last: Option<&str>) -> Option<i64> {
+    let a = chrono::DateTime::parse_from_rfc3339(first?).ok()?;
+    let b = chrono::DateTime::parse_from_rfc3339(last?).ok()?;
+    let secs = (b - a).num_seconds();
+    if secs < 0 {
+        None
+    } else {
+        Some(secs)
+    }
+}
+
+/// One `gauge subagents --json` array element.
+///
+/// `first_activity_at` / `last_activity_at` / `elapsed_secs` serialize to
+/// `null` when unknown (see [`span_secs`] and
+/// `harness_core::usage::SubAgentUsage::first_activity_at`) — never `0`, never
+/// the current time. Rendering an unmeasured activity time as a number would
+/// make a long-dead sub-agent read as freshly active to any caller that
+/// compares it against the clock.
+fn subagent_json(s: &usage::SubAgentUsage, cost_usd: f64) -> serde_json::Value {
+    let tokens_input: u64 = s.models.values().map(|m| m.input).sum();
+    let tokens_output: u64 = s.models.values().map(|m| m.output).sum();
+    serde_json::json!({
+        "agent_id": s.agent_id,
+        "agent_type": s.agent_type,
+        "description": s.description,
+        "cost_usd": cost_usd,
+        "turns": s.turns,
+        "tokens_input": tokens_input,
+        "tokens_output": tokens_output,
+        "first_activity_at": s.first_activity_at,
+        "last_activity_at": s.last_activity_at,
+        "elapsed_secs": span_secs(s.first_activity_at.as_deref(), s.last_activity_at.as_deref()),
+    })
+}
+
 fn subagents_cmd(json: bool, session_id: Option<&str>) {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
     let cfg = Config::load(&root);
@@ -471,22 +520,8 @@ fn subagents_cmd(json: bool, session_id: Option<&str>) {
         |s: &usage::SubAgentUsage| -> f64 { pricing::session_cost(s.models.iter(), &cfg.pricing) };
 
     if json {
-        let arr: Vec<serde_json::Value> = subs
-            .iter()
-            .map(|s| {
-                let tokens_input: u64 = s.models.values().map(|m| m.input).sum();
-                let tokens_output: u64 = s.models.values().map(|m| m.output).sum();
-                serde_json::json!({
-                    "agent_id": s.agent_id,
-                    "agent_type": s.agent_type,
-                    "description": s.description,
-                    "cost_usd": cost_of(s),
-                    "turns": s.turns,
-                    "tokens_input": tokens_input,
-                    "tokens_output": tokens_output,
-                })
-            })
-            .collect();
+        let arr: Vec<serde_json::Value> =
+            subs.iter().map(|s| subagent_json(s, cost_of(s))).collect();
         println!(
             "{}",
             serde_json::to_string(&serde_json::Value::Array(arr)).unwrap_or_else(|_| "[]".into())
@@ -505,11 +540,22 @@ fn subagents_cmd(json: bool, session_id: Option<&str>) {
     let mut subs = subs;
     subs.sort_by_key(|s| std::cmp::Reverse(s.turns));
     for s in &subs {
+        // "time unknown" rather than "0s": a sub-agent whose transcript
+        // carried no timestamp has an UNOBSERVED activity span, and printing a
+        // duration for it would be a measurement this command never made.
+        let span = match span_secs(
+            s.first_activity_at.as_deref(),
+            s.last_activity_at.as_deref(),
+        ) {
+            Some(secs) => fmt_duration(secs),
+            None => "time unknown".to_string(),
+        };
         println!(
-            "  {:<18} {:>9}  {} turns  {}",
+            "  {:<18} {:>9}  {} turns  {:>12}  {}",
             s.agent_id,
             report::money(cost_of(s)),
             s.turns,
+            span,
             s.description
                 .as_deref()
                 .or(s.agent_type.as_deref())
@@ -695,6 +741,82 @@ mod find_transcript_tests {
         assert_eq!(
             result.unwrap().file_name().unwrap().to_str().unwrap(),
             "newer.jsonl"
+        );
+    }
+}
+
+#[cfg(test)]
+mod subagent_json_tests {
+    use super::*;
+
+    fn sub(first: Option<&str>, last: Option<&str>) -> usage::SubAgentUsage {
+        usage::SubAgentUsage {
+            agent_id: "t1".into(),
+            agent_type: Some("condukt:condukt-worker".into()),
+            description: Some("t1".into()),
+            models: Default::default(),
+            turns: 3,
+            first_activity_at: first.map(|s| s.to_string()),
+            last_activity_at: last.map(|s| s.to_string()),
+        }
+    }
+
+    #[test]
+    fn emits_activity_timestamps_and_elapsed() {
+        let v = subagent_json(
+            &sub(Some("2026-07-25T10:00:00Z"), Some("2026-07-25T10:05:30Z")),
+            0.5,
+        );
+        assert_eq!(v["first_activity_at"], "2026-07-25T10:00:00Z");
+        assert_eq!(v["last_activity_at"], "2026-07-25T10:05:30Z");
+        assert_eq!(v["elapsed_secs"], 330);
+    }
+
+    /// An unmeasured activity time must render as null. A `0` here would read
+    /// as "no elapsed time / epoch" about something never observed, and would
+    /// make a long-dead child look freshly active (CLAUDE.md section 3).
+    #[test]
+    fn absent_timestamps_render_null_never_zero() {
+        let v = subagent_json(&sub(None, None), 0.0);
+        assert!(
+            v["first_activity_at"].is_null(),
+            "got {}",
+            v["first_activity_at"]
+        );
+        assert!(
+            v["last_activity_at"].is_null(),
+            "got {}",
+            v["last_activity_at"]
+        );
+        assert!(v["elapsed_secs"].is_null(), "got {}", v["elapsed_secs"]);
+        assert_ne!(v["elapsed_secs"], serde_json::json!(0));
+        // The pre-existing fields are untouched.
+        assert_eq!(v["agent_id"], "t1");
+        assert_eq!(v["turns"], 3);
+    }
+
+    /// Only one endpoint known is still an unknown span.
+    #[test]
+    fn half_known_span_is_null() {
+        let v = subagent_json(&sub(Some("2026-07-25T10:00:00Z"), None), 0.0);
+        assert_eq!(v["first_activity_at"], "2026-07-25T10:00:00Z");
+        assert!(v["last_activity_at"].is_null());
+        assert!(v["elapsed_secs"].is_null());
+    }
+
+    #[test]
+    fn span_secs_refuses_unparseable_and_inverted() {
+        assert_eq!(
+            span_secs(Some("2026-07-25T10:00:00Z"), Some("2026-07-25T10:00:09Z")),
+            Some(9)
+        );
+        assert_eq!(span_secs(None, Some("2026-07-25T10:00:09Z")), None);
+        assert_eq!(span_secs(Some("not-a-timestamp"), Some("also-not")), None);
+        // Out-of-order endpoints: the span cannot be determined, so it is NOT
+        // clamped to 0 (which would claim "no time passed").
+        assert_eq!(
+            span_secs(Some("2026-07-25T10:05:00Z"), Some("2026-07-25T10:00:00Z")),
+            None
         );
     }
 }

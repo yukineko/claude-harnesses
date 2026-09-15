@@ -1,3 +1,5 @@
+
+
 [[task]]
 id = "0ba79281"
 title = 'CLAUDE.md: Windows で成立しない cargo 手順 (. "$HOME/.cargo/env") を直す'
@@ -5869,7 +5871,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["blocked-githooks"]
 touched_files = []
-status = "failed"
+status = "pending"
 notes = '''
 実測 2026-07-22 / 測定点 6d4312c5。
 
@@ -6021,8 +6023,7 @@ worktree から (main のツリーでは行わない):
 適用後は scripts/patch-postcommit-amend.py を削除してよい。
 defer (ユーザー裁定 2026-09-13): .githooks への書き込みが assistant に deny されているため着手不能。実装と検証は完了済み (mutation kill 確認、候補フックに対し 124 tests OK)。残るのは人手でのパッチ適用のみ。backlog CLI に deferred 状態が無いため failed で表現している — 放棄ではない'''
 created_at = 1784673254
-updated_at = 1789290441
-defer_until = 1789463241
+updated_at = 1789489969
 weight = 0.0
 issue_number = 306
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/306"
@@ -6313,13 +6314,12 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["blocked-githooks"]
 touched_files = []
-status = "failed"
+status = "pending"
 notes = """
 2026-09-13 main aed66762: ユーザー裁定により defer。理由は 6267bfbe と同じく .githooks への書き込みが assistant に deny されていること、および本チケットの残作業 (pre-push への check-workspace-tests.py wiring) が 6267bfbe の post-commit amend 修正と同時適用でなければ全 push を止めること。両者は分離できないので 1 つの人手作業として扱う。適用順序: (1) 6267bfbe のパッチ (scripts/patch-postcommit-amend.py で .scratch/candidate-hooks/post-commit を生成し .githooks/post-commit へ適用、sh -n で構文確認、scripts/test_gate_bypass.py が Ran 124 tests OK になること) (2) その後に pre-push の wiring。wiring 前に red 0 件を作る必要がある点は据え置き。実測 2026-09-13 main aed66762: cargo test -p backlog の tests/project_scope.rs は 6 passed 2 failed で、a_pinned_store_dir_still_scopes_by_project と a_pinned_store_dir_still_works_outside_any_repo が今も red。これは 2026-09-10 に check-workspace-tests.py の docstring が記録した 4 件のうちの 2 件であり、バッチ3 の dedup 実装では解消していない。残る blastguard 2 件は未測定 (workspace 全体は測っていないので測っていないと書く)
 defer (ユーザー裁定 2026-09-13): 残作業は pre-push への wiring で .githooks 書き込みが必要。かつ 6267bfbe の post-commit 修正と同時適用でないと全 push が止まるため、2 件で 1 つの人手作業。backlog CLI に deferred 状態が無いため failed で表現している — 放棄ではない"""
 created_at = 1784724729
-updated_at = 1789290441
-defer_until = 1789463241
+updated_at = 1789489969
 weight = 0.0
 issue_number = 310
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/310"
@@ -7583,10 +7583,10 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "claimed"
+status = "pending"
 notes = "scout 2026-07-25 (score 1.05). 証拠: crates/condukt/hooks/hooks.json は SessionStart / Stop / PostToolUse のみで SubagentStop の項目が無い (全文27行)。同イベントの実使用が crates/context-governor/hooks/hooks.json:40 と crates/context-governor/src/bin/context-governor.rs:123 にあり、in-repo で裏付け済み。hook が子のループ内でも発火することは crates/condukt/agents/condukt-worker.md:5-11 の PostToolUse 宣言が裏付ける。完了条件: SubagentStop 発火時に該当 running タスクの last_seen が更新され、以後 TTL 判定がその時刻を基準に動く。ツール呼び出し 0 件の子をブロックする経路も統合テストで通る。"
 created_at = 1784916599
-updated_at = 1789306494
+updated_at = 1789489969
 weight = 0.0
 issue_number = 52
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/52"
@@ -7603,10 +7603,10 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "claimed"
+status = "pending"
 notes = "scout 2026-07-25 (score 0.90). 証拠: crates/harness-core/src/usage.rs:370 の ingest(&mut agg, &text, Some(AGENT_SUB), false, false); と usage.rs:215 の track_ts: update first_ts/last_ts (only the main transcript should)。gauge の出力フィールドは crates/gauge/src/main.rs:480-487 で agent_id/agent_type/description/cost_usd/turns/tokens のみで時刻なし。セッション単位には crates/gauge/src/main.rs:540 の fn duration_secs が既にある。実測 2026-07-25 03:01-03:03 (本セッション自身が対象、6サンプル x 20秒): 稼働中の子は idle 0-57秒、終了済みの子は idle 2287-2387秒で2桁差。ただし生きている子でも delta=0 の瞬間があるため単一サンプルの閾値は誤検知する。完了条件: gauge subagents --json の各要素に last_activity_at / first_activity_at / elapsed_secs が入り、実行中に呼ぶと単調増加することをテストで確認できる。"
 created_at = 1784916600
-updated_at = 1789306494
+updated_at = 1789489969
 weight = 0.0
 issue_number = 53
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/53"
@@ -7623,10 +7623,10 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "claimed"
+status = "pending"
 notes = "scout 2026-07-25 (score 0.80). 証拠1: crates/condukt/src/circuit.rs:154-160 の .and_then(max_updated_at).map(...).unwrap_or(0) により idle_secs が 0 = たった今進捗した に潰れ、非トリップ側に倒れる。すぐ隣の duration_secs は正しく None を返す (crates/condukt/src/state.rs:1265) ので扱いが非対称。証拠2: crates/condukt/src/state.rs:1360 の cost_usd: ts.cost_usd.unwrap_or(0.0)。証拠3: crates/overwatch/src/aggregate.rs:210-217 の .and_then(|s| s.trim().parse::<usize>().ok()).unwrap_or(0) により done/total の parse 失敗が 0/0 になり、0/0 の run と読めなかった run が同じ表示になる (crates/overwatch/src/render.rs:138-142)。完了条件: idle_secs を null か unknown として出し 0 と区別可能にする。cost 未計測時も 0.0 を捏造しない。overwatch の進捗欄が parse 不能時に ?/? 等の未計測表記になる。"
 created_at = 1784916601
-updated_at = 1789306494
+updated_at = 1789489969
 weight = 0.0
 issue_number = 54
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/54"
@@ -26562,3 +26562,77 @@ updated_at = 1789490571
 weight = 0.0
 issue_number = 658
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/658"
+
+[[task]]
+id = "b0a21d16"
+title = "condukt gatelog::CircuitRecord::idle_secs が i64 のまま未計測を 0 として journal に書く"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+9be41285 (backlog 53c825f6) で decide_circuit / circuit check の JSON 出力は
+idle を三値化した (idle_secs が null 許容 + 兄弟キー idle_unknown_reason)。
+しかし journal 側の crates/condukt/src/gatelog.rs:219 `pub idle_secs: i64` は
+そのままで、crates/condukt/src/circuit.rs:342 の journaled_idle_secs が
+未計測ケースを 0 に写している。これは修正前と同じ collapse であり、
+gatelog を読む下流は「たった今進捗した」と「測れなかった」を再び区別できない。
+circuit.rs:329 にこの残課題を隠さず明記したコメントがある。
+
+done_criteria:
+- gatelog::CircuitRecord::idle_secs を Option<i64> ないし三値に広げ、
+  未計測を 0 ではなく欠落として記録する
+- 兄弟キー idle_unknown_reason を journal にも載せる
+- 未計測時に 0 が書かれないことを固定する挙動テストを追加する
+  (現状は RED になるはず。先に RED を観測すること)
+- gatelog を読む既存の消費者が欠落を「進捗した」と読まないことを確認する"""
+created_at = 1789490417
+updated_at = 1789490417
+weight = 0.0
+issue_number = 656
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/656"
+
+[[task]]
+id = "55fb3861"
+title = "condukt の fugu 記録で cost 解決失敗が 0.0 に潰れ、未計測がコスト 0 として記録される"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+backlog 53c825f6 の evidence 2。crates/condukt/src/main.rs:5218 付近:
+
+    let cost = s
+        .agent_id
+        .as_deref()
+        .and_then(state::resolve_agent_cost)
+        .unwrap_or(s.cost_usd);
+
+resolve_agent_cost が解決できなかった場合 s.cost_usd に落ちるが、SKILL.md の
+prose は description 文字列照合が脆いためこれを 0.0 の既定値のまま残すことが
+多いと同じ箇所のコメント自身が認めている。結果として「コストを解決できなかった」
+が「このタスクはコスト 0 だった」として fugu に記録され、下流の routing 計測が
+未計測を無料として集計する。CLAUDE.md #3 の判定不能を permissive 側へ倒す形。
+
+既に同一ファイル内に正しい先例がある: spawn_fugu_record (main.rs:5299 付近) の
+duration_secs は三値で、0.0 を「未計測」として扱い --duration を省略する。
+cost も同じ形に揃えればよい (約 4 行)。
+
+done_criteria:
+- cost を Option<f64> の三値にし、解決失敗時に 0.0 を捏造せず --cost を省略する
+  (もしくは fugu-router 側が未計測を表現できるキーへ渡す)
+- verifier 側の同型の unwrap_or_else(|| s.verifier_cost_usd.unwrap_or(0.0))
+  (main.rs:5230 付近) も同時に直す。片側だけの修正は gate-crate audit mirror gap
+  と同じ再発パターンになる
+- 解決失敗時に 0.0 が記録されないことを固定する挙動テストを追加する
+  (先に RED を観測すること)
+
+依存: このファイルは run-20260913-223733-78880-t1 (backlog e8c03e9e) が
+main.rs を触るため、そのマージ後に着手すること。"""
+created_at = 1789490424
+updated_at = 1789490424
+weight = 0.0
+issue_number = 657
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/657"

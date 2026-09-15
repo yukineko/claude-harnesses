@@ -26455,3 +26455,77 @@ updated_at = 1789306974
 weight = 0.0
 issue_number = 642
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/642"
+
+[[task]]
+id = "b0a21d16"
+title = "condukt gatelog::CircuitRecord::idle_secs が i64 のまま未計測を 0 として journal に書く"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+9be41285 (backlog 53c825f6) で decide_circuit / circuit check の JSON 出力は
+idle を三値化した (idle_secs が null 許容 + 兄弟キー idle_unknown_reason)。
+しかし journal 側の crates/condukt/src/gatelog.rs:219 `pub idle_secs: i64` は
+そのままで、crates/condukt/src/circuit.rs:342 の journaled_idle_secs が
+未計測ケースを 0 に写している。これは修正前と同じ collapse であり、
+gatelog を読む下流は「たった今進捗した」と「測れなかった」を再び区別できない。
+circuit.rs:329 にこの残課題を隠さず明記したコメントがある。
+
+done_criteria:
+- gatelog::CircuitRecord::idle_secs を Option<i64> ないし三値に広げ、
+  未計測を 0 ではなく欠落として記録する
+- 兄弟キー idle_unknown_reason を journal にも載せる
+- 未計測時に 0 が書かれないことを固定する挙動テストを追加する
+  (現状は RED になるはず。先に RED を観測すること)
+- gatelog を読む既存の消費者が欠落を「進捗した」と読まないことを確認する"""
+created_at = 1789490417
+updated_at = 1789490417
+weight = 0.0
+issue_number = 656
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/656"
+
+[[task]]
+id = "55fb3861"
+title = "condukt の fugu 記録で cost 解決失敗が 0.0 に潰れ、未計測がコスト 0 として記録される"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+backlog 53c825f6 の evidence 2。crates/condukt/src/main.rs:5218 付近:
+
+    let cost = s
+        .agent_id
+        .as_deref()
+        .and_then(state::resolve_agent_cost)
+        .unwrap_or(s.cost_usd);
+
+resolve_agent_cost が解決できなかった場合 s.cost_usd に落ちるが、SKILL.md の
+prose は description 文字列照合が脆いためこれを 0.0 の既定値のまま残すことが
+多いと同じ箇所のコメント自身が認めている。結果として「コストを解決できなかった」
+が「このタスクはコスト 0 だった」として fugu に記録され、下流の routing 計測が
+未計測を無料として集計する。CLAUDE.md #3 の判定不能を permissive 側へ倒す形。
+
+既に同一ファイル内に正しい先例がある: spawn_fugu_record (main.rs:5299 付近) の
+duration_secs は三値で、0.0 を「未計測」として扱い --duration を省略する。
+cost も同じ形に揃えればよい (約 4 行)。
+
+done_criteria:
+- cost を Option<f64> の三値にし、解決失敗時に 0.0 を捏造せず --cost を省略する
+  (もしくは fugu-router 側が未計測を表現できるキーへ渡す)
+- verifier 側の同型の unwrap_or_else(|| s.verifier_cost_usd.unwrap_or(0.0))
+  (main.rs:5230 付近) も同時に直す。片側だけの修正は gate-crate audit mirror gap
+  と同じ再発パターンになる
+- 解決失敗時に 0.0 が記録されないことを固定する挙動テストを追加する
+  (先に RED を観測すること)
+
+依存: このファイルは run-20260913-223733-78880-t1 (backlog e8c03e9e) が
+main.rs を触るため、そのマージ後に着手すること。"""
+created_at = 1789490424
+updated_at = 1789490424
+weight = 0.0
+issue_number = 657
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/657"

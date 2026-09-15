@@ -25906,9 +25906,40 @@ notes = """
 2026-09-13 22:42 を最後に 46 時間無出力のまま running と表示され続け、実装は 0 行だった
 (5 branch 中 4 本が main より 0 commit)。agent を停止し claim registry を解放して
 pending へ戻した。本チケットの内容自体は未着手のままで、失敗ではない。
-経緯と、回収した RED スイートの詳細は 2c1e54b3 にある。"""
+経緯と、回収した RED スイートの詳細は 2c1e54b3 にある。
+
+【2026-09-15 — RED 証跡が回収され main に載った。凍結テストの矛盾は実測で決着済み】
+死んだ run の生存 subagent が a637ad63 (挙動不変のスタブ: cache_is_fresh に ledger mtime を
+三値で渡す引数を追加) と ece01200 (RED 4 件) を残していた。自己申告ではなく自分で実測した:
+  cargo test -p overwatch --bin overwatch aggregate::tests::
+  test result: FAILED. 44 passed; 4 failed
+差分は mod tests 内への追加 2 hunk のみ、削除 0 行、production コード無変更を diff で確認済み。
+
+固定された 4 件 (うち 1 件は観測可能な e2e):
+  rule2 same-second  ledger mtime == built_at を fresh にしない
+  rule2 general      built_at より後の ledger write は TTL 残があっても無効化する
+  rule3              ledger mtime が Undetermined なら fresh にしない (第3節)
+  e2e                同一秒に登録された lease が TTL 内キャッシュに隠されない
+                     = status が (none) と出る欠陥そのもの
+
+報告者が「凍結テスト test_cache_is_fresh_within_ttl が rule2 実装で赤に反転する。
+人間の判断が要る」と挙げていた件は、実測で決着した。a637ad63 の diff を見ると
+同テストは直前まで cache_is_fresh(1000, 1005, STATUS_CACHE_TTL_SECS) であり、
+ledger 引数は存在しなかった。Determination::known(1000) は同 commit が機械的に
+挿入したもので、その時点の docstring 自身が accepted but NOT consulted と明記している。
+つまり m == built_at は同一秒の意味論についての人間の決定ではなく、
+シグネチャ移行の副産物である。テストが名指ししている性質は TTL の新鮮さだけなので、
+ledger を built_at より古い値へ (例 999) 再アンカーすれば、元々固定していた性質は
+そのまま保たれる。実装者への Ask は不要。ただし再アンカーは実装と同じ commit で行うこと。
+
+main は今この RED を抱えている。隠していない: pre-commit は cargo test を走らせないので
+他者の commit は止めないが、緑ではない。次の一手は rule2/rule3 の実装であり、
+テスト作者とは別の実装者が行うこと (第2節(a))。
+
+overwatch は 0.2.34 -> 0.2.35 に lockstep 済み。GATE crate なので
+scripts/rollout-plugins.sh --canary が別途必要。"""
 created_at = 1789297114
-updated_at = 1789471806
+updated_at = 1789472132
 weight = 0.0
 issue_number = 628
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/628"

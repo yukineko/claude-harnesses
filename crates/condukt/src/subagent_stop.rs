@@ -251,6 +251,25 @@ mod tests {
         matches!(o, Outcome::Touched { .. })
     }
 
+    /// The reason an `Undetermined` carries, panicking (with what came back
+    /// instead) when the determination was `Known`.
+    ///
+    /// Asserting on the REASON — not merely on "it was blocked" — is what makes
+    /// an undetermined arm observable: several arms here return `Undetermined`
+    /// for different causes, so a verdict-only assertion passes even when the
+    /// specific guard under test has been deleted.
+    fn undetermined_reason<T: std::fmt::Debug>(d: Determination<T>) -> String {
+        match d.require() {
+            Required::Determined(v) => {
+                panic!("expected Undetermined, got Known({v:?})")
+            }
+            Required::Blocked(verdict) => verdict
+                .reason()
+                .map(|r| r.as_str().to_string())
+                .expect("an Undetermined verdict always carries a reason"),
+        }
+    }
+
     fn test_cfg(tmp: &Path) -> Config {
         Config {
             worktree_base: tmp.join("worktrees"),
@@ -490,6 +509,11 @@ mod tests {
 
     /// The owning task exists and owns the cwd, but has already settled. A
     /// stopped sub-agent is no evidence that a non-running task is progressing.
+    ///
+    /// The body asserts BOTH halves its name claims: that resolution itself is
+    /// `Undetermined` (not merely that no write happened downstream — two
+    /// separate guards can produce that same outcome), and that the stored
+    /// timestamp is untouched end-to-end.
     #[test]
     fn non_running_owner_is_undetermined_and_writes_nothing() {
         let tmp = tmpdir("settled");
@@ -513,6 +537,16 @@ mod tests {
         );
         assert!(!wrote(&out), "{}", out.describe());
         assert_eq!(stored_updated_at(&cfg, &tmp, "run-1", "t1"), Some(1_000));
+
+        // The half the name claims and the end-to-end assertions above cannot
+        // see: resolution ITSELF refused, naming the status it observed.
+        let why = undetermined_reason(resolve_owner(wt.to_str().unwrap(), &[rs]));
+        assert!(
+            why.contains("not running") && why.contains("Done"),
+            "resolution must refuse a settled owner and name its status; got: {why}"
+        );
+        // And the run's other running task was not stamped in its place.
+        assert_eq!(stored_updated_at(&cfg, &tmp, "run-1", "t2"), Some(1_000));
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -611,16 +645,198 @@ mod tests {
         );
     }
 
-    /// An empty cwd carries no attribution at all.
+    /// An empty cwd carries no attribution at all — and says SO, naming the
+    /// missing cwd rather than the downstream "no worktree matched".
+    ///
+    /// The reason is asserted, not just the verdict: an empty cwd already falls
+    /// through to an empty `matches` and comes back `Undetermined` from the `[]`
+    /// arm, so a verdict-only assertion cannot observe the dedicated guard at
+    /// all (it survived deletion with the suite green). The two answers differ
+    /// only in what the operator is told, which is the whole product of an
+    /// undetermined arm, so that is what this pins.
     #[test]
-    fn empty_cwd_is_undetermined() {
+    fn empty_cwd_is_undetermined_and_says_the_cwd_is_missing() {
+        let runs = vec![run_with(
+            "run-1",
+            vec![task("t1", Status::Running, Some("/tmp/wt-a"), Some(1_000))],
+        )];
+        let why = undetermined_reason(resolve_owner("   ", &runs));
+        assert!(
+            why.contains("carries no cwd"),
+            "an empty cwd must be diagnosed as a MISSING cwd, not as an \
+             unmatched worktree; got: {why}"
+        );
+    }
+
+    /// The `[(rs, t)]` arm's own `running` check, observed directly rather than
+    /// through `run()`.
+    ///
+    /// `resolve_owner` and `record_progress` each guard the same fact, so an
+    /// end-to-end assertion cannot tell which one refused: deleting either left
+    /// the other to produce an identical observable outcome, and both deletions
+    /// survived a green suite. `resolve_owner` is pure, so this calls it
+    /// directly and asserts the DETERMINATION and the status it names.
+    #[test]
+    fn resolve_owner_refuses_a_settled_owner_and_names_its_status() {
+        let runs = vec![run_with(
+            "run-1",
+            vec![task("t1", Status::Done, Some("/tmp/wt-a"), Some(1_000))],
+        )];
+        let why = undetermined_reason(resolve_owner("/tmp/wt-a", &runs));
+        assert!(
+            why.contains("not running"),
+            "the refusal must say the task is not running; got: {why}"
+        );
+        assert!(
+            why.contains("Done"),
+            "the refusal must name the status observed; got: {why}"
+        );
+    }
+
+    /// Every non-running status is refused, not just the one sampled above —
+    /// `Running` is the only status that may receive a heartbeat.
+    #[test]
+    fn only_a_running_task_can_be_resolved_as_owner() {
+        for status in [
+            Status::Pending,
+            Status::Done,
+            Status::Failed,
+            Status::Verified,
+            Status::Cancelled,
+            Status::Discarded,
+        ] {
+            let runs = vec![run_with(
+                "run-1",
+                vec![task("t1", status, Some("/tmp/wt-a"), Some(1_000))],
+            )];
+            let why = undetermined_reason(resolve_owner("/tmp/wt-a", &runs));
+            assert!(
+                why.contains("not running"),
+                "status {status:?} must not resolve to an owner; got: {why}"
+            );
+        }
+        // The positive control: the same input with `Running` DOES resolve, so
+        // the loop above is discriminating on status and not on some other
+        // property of the fixture.
         let runs = vec![run_with(
             "run-1",
             vec![task("t1", Status::Running, Some("/tmp/wt-a"), Some(1_000))],
         )];
         assert!(matches!(
-            resolve_owner("   ", &runs).require(),
-            Required::Blocked(_)
+            resolve_owner("/tmp/wt-a", &runs).require(),
+            Required::Determined(_)
         ));
+    }
+
+    /// `record_progress`'s OWN `running` re-check, called directly with a
+    /// hand-built `Owner` — the "it settled between resolution and the locked
+    /// write" race the function's docstring claims to handle.
+    ///
+    /// Nothing else can reach this path: `run()` cannot produce an `Owner` for a
+    /// settled task, because `resolve_owner` refuses one first. So without this
+    /// test the documented race is unverified and the guard has no kill rate.
+    #[test]
+    fn record_progress_refuses_a_task_that_settled_after_resolution() {
+        let tmp = tmpdir("settled-race");
+        let cfg = test_cfg(&tmp);
+        let wt = tmp.join("wt-t1");
+        std::fs::create_dir_all(&wt).unwrap();
+        let rs = run_with(
+            "run-1",
+            vec![task(
+                "t1",
+                Status::Done,
+                Some(wt.to_str().unwrap()),
+                Some(1_000),
+            )],
+        );
+        rs.save(&cfg, &tmp).expect("save run state");
+
+        // The Owner a resolution made a moment earlier, when the task was still
+        // running; the stored state has since settled.
+        let owner = Owner {
+            run_id: "run-1".to_string(),
+            task_id: "t1".to_string(),
+            worktree: wt.clone(),
+        };
+        let out = record_progress(&cfg, &tmp, &owner, 9_999);
+
+        assert!(
+            !wrote(&out),
+            "a task that settled before the locked write must not be stamped: {}",
+            out.describe()
+        );
+        assert!(
+            matches!(&out, Outcome::NotWritten(why) if why.contains("settled between")),
+            "the reason must name the settle-after-resolution race; got: {}",
+            out.describe()
+        );
+        assert_eq!(
+            stored_updated_at(&cfg, &tmp, "run-1", "t1"),
+            Some(1_000),
+            "the stored timestamp must be untouched"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The same re-check, in the positive direction: a still-running task IS
+    /// stamped by a direct `record_progress` call. Without this, the test above
+    /// would also pass if `record_progress` had simply stopped writing at all.
+    #[test]
+    fn record_progress_stamps_a_still_running_task() {
+        let tmp = tmpdir("race-control");
+        let cfg = test_cfg(&tmp);
+        let wt = tmp.join("wt-t1");
+        std::fs::create_dir_all(&wt).unwrap();
+        let rs = run_with(
+            "run-1",
+            vec![task(
+                "t1",
+                Status::Running,
+                Some(wt.to_str().unwrap()),
+                Some(1_000),
+            )],
+        );
+        rs.save(&cfg, &tmp).expect("save run state");
+
+        let owner = Owner {
+            run_id: "run-1".to_string(),
+            task_id: "t1".to_string(),
+            worktree: wt.clone(),
+        };
+        let out = record_progress(&cfg, &tmp, &owner, 9_999);
+
+        assert!(wrote(&out), "{}", out.describe());
+        assert_eq!(stored_updated_at(&cfg, &tmp, "run-1", "t1"), Some(9_999));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A task named by an `Owner` but absent from the run gets no timestamp,
+    /// and the run's other tasks are not stamped in its place.
+    #[test]
+    fn record_progress_refuses_a_task_that_is_gone() {
+        let tmp = tmpdir("gone");
+        let cfg = test_cfg(&tmp);
+        let rs = run_with(
+            "run-1",
+            vec![task("t1", Status::Running, Some("/tmp/wt-a"), Some(1_000))],
+        );
+        rs.save(&cfg, &tmp).expect("save run state");
+
+        let owner = Owner {
+            run_id: "run-1".to_string(),
+            task_id: "vanished".to_string(),
+            worktree: PathBuf::from("/tmp/wt-a"),
+        };
+        let out = record_progress(&cfg, &tmp, &owner, 9_999);
+
+        assert!(!wrote(&out), "{}", out.describe());
+        assert!(
+            matches!(&out, Outcome::NotWritten(why) if why.contains("no longer present")),
+            "got: {}",
+            out.describe()
+        );
+        assert_eq!(stored_updated_at(&cfg, &tmp, "run-1", "t1"), Some(1_000));
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

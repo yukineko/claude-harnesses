@@ -7583,10 +7583,10 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "done"
 notes = "scout 2026-07-25 (score 1.05). 証拠: crates/condukt/hooks/hooks.json は SessionStart / Stop / PostToolUse のみで SubagentStop の項目が無い (全文27行)。同イベントの実使用が crates/context-governor/hooks/hooks.json:40 と crates/context-governor/src/bin/context-governor.rs:123 にあり、in-repo で裏付け済み。hook が子のループ内でも発火することは crates/condukt/agents/condukt-worker.md:5-11 の PostToolUse 宣言が裏付ける。完了条件: SubagentStop 発火時に該当 running タスクの last_seen が更新され、以後 TTL 判定がその時刻を基準に動く。ツール呼び出し 0 件の子をブロックする経路も統合テストで通る。"
 created_at = 1784916599
-updated_at = 1789489969
+updated_at = 1789493776
 weight = 0.0
 issue_number = 52
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/52"
@@ -7603,10 +7603,10 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "done"
 notes = "scout 2026-07-25 (score 0.90). 証拠: crates/harness-core/src/usage.rs:370 の ingest(&mut agg, &text, Some(AGENT_SUB), false, false); と usage.rs:215 の track_ts: update first_ts/last_ts (only the main transcript should)。gauge の出力フィールドは crates/gauge/src/main.rs:480-487 で agent_id/agent_type/description/cost_usd/turns/tokens のみで時刻なし。セッション単位には crates/gauge/src/main.rs:540 の fn duration_secs が既にある。実測 2026-07-25 03:01-03:03 (本セッション自身が対象、6サンプル x 20秒): 稼働中の子は idle 0-57秒、終了済みの子は idle 2287-2387秒で2桁差。ただし生きている子でも delta=0 の瞬間があるため単一サンプルの閾値は誤検知する。完了条件: gauge subagents --json の各要素に last_activity_at / first_activity_at / elapsed_secs が入り、実行中に呼ぶと単調増加することをテストで確認できる。"
 created_at = 1784916600
-updated_at = 1789489969
+updated_at = 1789493778
 weight = 0.0
 issue_number = 53
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/53"
@@ -7623,10 +7623,10 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "done"
 notes = "scout 2026-07-25 (score 0.80). 証拠1: crates/condukt/src/circuit.rs:154-160 の .and_then(max_updated_at).map(...).unwrap_or(0) により idle_secs が 0 = たった今進捗した に潰れ、非トリップ側に倒れる。すぐ隣の duration_secs は正しく None を返す (crates/condukt/src/state.rs:1265) ので扱いが非対称。証拠2: crates/condukt/src/state.rs:1360 の cost_usd: ts.cost_usd.unwrap_or(0.0)。証拠3: crates/overwatch/src/aggregate.rs:210-217 の .and_then(|s| s.trim().parse::<usize>().ok()).unwrap_or(0) により done/total の parse 失敗が 0/0 になり、0/0 の run と読めなかった run が同じ表示になる (crates/overwatch/src/render.rs:138-142)。完了条件: idle_secs を null か unknown として出し 0 と区別可能にする。cost 未計測時も 0.0 を捏造しない。overwatch の進捗欄が parse 不能時に ?/? 等の未計測表記になる。"
 created_at = 1784916601
-updated_at = 1789489969
+updated_at = 1789494037
 weight = 0.0
 issue_number = 54
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/54"

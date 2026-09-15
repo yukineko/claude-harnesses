@@ -213,7 +213,14 @@ pub fn aggregate(path: &str) -> Option<Aggregate> {
 ///
 /// - `force_bucket`: if set, every turn is attributed to that agent bucket;
 ///   otherwise the bucket is derived from each line's `isSidechain` flag.
-/// - `track_ts`: update `first_ts`/`last_ts` (only the main transcript should).
+/// - `track_ts`: update `agg.first_ts`/`agg.last_ts` from each line's
+///   `timestamp`. Two callers pass `true`, and they mean different spans
+///   because they pass different accumulators: [`aggregate`] passes `true`
+///   only for the **main** transcript (so the *session* span stays
+///   main-transcript-only — the sibling sub-agent files it folds into the same
+///   accumulator pass `false` and never move it), while [`subagent_usage`]
+///   passes `true` against a **fresh per-sub-agent** [`Aggregate`], so those
+///   timestamps describe that one sub-agent's own activity.
 /// - `count_tools`: tally `tool_use` calls into `agg.tools` (main thread only).
 ///
 /// Returns whether any sub-agent (sidechain) turn was seen.
@@ -328,6 +335,30 @@ pub struct SubAgentUsage {
     pub models: BTreeMap<String, ModelUsage>,
     #[serde(default)]
     pub turns: u64,
+    /// First timestamp observed in **this sub-agent's own** transcript, kept
+    /// verbatim as the transcript wrote it (RFC3339).
+    ///
+    /// `None` means the transcript carried no parseable `timestamp` at all —
+    /// **"when this agent was active is unknown"**, which is not the same
+    /// claim as any instant. It is deliberately not defaulted to `0`/epoch or
+    /// to "now": either would turn an unmeasured activity time into a number,
+    /// and a consumer comparing it against the clock would read a
+    /// long-finished child as freshly active (CLAUDE.md §3 — cannot-determine
+    /// resolves to the restrictive side, and the restrictive answer here is
+    /// "no answer").
+    #[serde(default)]
+    pub first_activity_at: Option<String>,
+    /// Last timestamp observed in this sub-agent's own transcript, verbatim.
+    /// Same absence contract as
+    /// [`first_activity_at`](Self::first_activity_at): `None` is "unknown",
+    /// never "zero".
+    ///
+    /// Transcripts are append-ordered, so this is at or after
+    /// `first_activity_at`; both are reported as written rather than sorted,
+    /// so a caller that finds them inverted is seeing a genuinely out-of-order
+    /// transcript rather than a normalization this function invented.
+    #[serde(default)]
+    pub last_activity_at: Option<String>,
 }
 
 impl SubAgentUsage {
@@ -366,6 +397,14 @@ impl SubAgentUsage {
 /// not even be *read* (`std::fs::read_to_string` erroring) is skipped —
 /// per-line parse errors within a readable file are likewise skipped, not
 /// treated as zero turns.
+///
+/// Each entry also carries the first/last activity timestamp read from that
+/// sub-agent's own transcript
+/// ([`first_activity_at`](SubAgentUsage::first_activity_at) /
+/// [`last_activity_at`](SubAgentUsage::last_activity_at)). A transcript with no
+/// parseable timestamp leaves both `None` — "unknown", never `0` and never the
+/// current time. This does not touch the session-level span from
+/// [`aggregate`], which still comes from the main transcript alone.
 pub fn subagent_usage(main_transcript: &str) -> Determination<Vec<SubAgentUsage>> {
     subagent_files(main_transcript).map(|files| {
         let mut out = Vec::new();
@@ -373,8 +412,14 @@ pub fn subagent_usage(main_transcript: &str) -> Determination<Vec<SubAgentUsage>
             let Ok(text) = std::fs::read_to_string(&file) else {
                 continue;
             };
+            // `track_ts: true` against this FRESH per-file accumulator: the
+            // timestamps it collects are this one sub-agent's own activity
+            // span, and cannot move the session-level span (a different
+            // `Aggregate`, built in `aggregate`). Passing `false` here — as
+            // this call used to — discarded the only record of when a
+            // sub-agent was last active.
             let mut agg = Aggregate::default();
-            ingest(&mut agg, &text, Some(AGENT_SUB), false, false);
+            ingest(&mut agg, &text, Some(AGENT_SUB), true, false);
             // A sub-agent whose transcript carries zero turns (launched but
             // died before completing one, or an empty file) is NOT skipped:
             // dropping it here would make "launched but produced nothing"
@@ -394,6 +439,10 @@ pub fn subagent_usage(main_transcript: &str) -> Determination<Vec<SubAgentUsage>
                 description,
                 models: agg.models,
                 turns: agg.turns,
+                // Stay `None` when the transcript held no timestamp: absence
+                // of an observation, not an observation of zero.
+                first_activity_at: agg.first_ts,
+                last_activity_at: agg.last_ts,
             });
         }
         out
@@ -718,5 +767,157 @@ mod tests {
         assert!(known(subagent_usage(path.to_str().unwrap())).is_empty());
         assert!(known(subagent_usage("")).is_empty());
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// Per-sub-agent activity timestamps must come from **that sub-agent's
+    /// own** transcript.
+    ///
+    /// Before this, `subagent_usage` called `ingest` with `track_ts: false`,
+    /// so the per-agent timestamps were discarded outright: every sub-agent
+    /// reported no activity time at all, and a child that died 40 minutes ago
+    /// was indistinguishable from one that answered a second ago.
+    #[test]
+    fn subagent_usage_records_first_and_last_activity() {
+        let base = std::env::temp_dir().join(format!(
+            "harness-core-subts-{}-activity",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let stem = "sess";
+        let sub_dir = base.join(stem).join("subagents");
+        std::fs::create_dir_all(&sub_dir).unwrap();
+        let main_path = base.join(format!("{stem}.jsonl"));
+        std::fs::write(
+            &main_path,
+            concat!(
+                r#"{"type":"user","timestamp":"2026-07-25T09:00:00Z","message":{}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+
+        // Recent child: three lines spanning 5 minutes.
+        std::fs::write(
+            sub_dir.join("agent-recent.jsonl"),
+            concat!(
+                r#"{"type":"user","timestamp":"2026-07-25T10:00:00Z","message":{}}"#,
+                "\n",
+                r#"{"type":"assistant","timestamp":"2026-07-25T10:00:07Z","isSidechain":true,"message":{"model":"claude-opus-4-8","content":[],"usage":{"input_tokens":1,"output_tokens":1}}}"#,
+                "\n",
+                r#"{"type":"assistant","timestamp":"2026-07-25T10:05:00Z","isSidechain":true,"message":{"model":"claude-opus-4-8","content":[],"usage":{"input_tokens":2,"output_tokens":2}}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        // Long-finished child: a different, much older span. Its timestamps
+        // must not be overwritten by (or leak into) the other agent's.
+        std::fs::write(
+            sub_dir.join("agent-stale.jsonl"),
+            concat!(
+                r#"{"type":"assistant","timestamp":"2026-07-20T01:00:00Z","isSidechain":true,"message":{"model":"claude-haiku-4-5","content":[],"usage":{"input_tokens":1,"output_tokens":1}}}"#,
+                "\n",
+                r#"{"type":"assistant","timestamp":"2026-07-20T01:00:30Z","isSidechain":true,"message":{"model":"claude-haiku-4-5","content":[],"usage":{"input_tokens":1,"output_tokens":1}}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+
+        let subs = known(subagent_usage(main_path.to_str().unwrap()));
+        let recent = subs.iter().find(|s| s.agent_id == "recent").unwrap();
+        assert_eq!(
+            recent.first_activity_at.as_deref(),
+            Some("2026-07-25T10:00:00Z"),
+            "first activity is the first timestamped line of this agent's transcript"
+        );
+        assert_eq!(
+            recent.last_activity_at.as_deref(),
+            Some("2026-07-25T10:05:00Z"),
+            "last activity is the last timestamped line of this agent's transcript"
+        );
+        assert!(
+            recent.last_activity_at >= recent.first_activity_at,
+            "last must be at or after first, got {:?} .. {:?}",
+            recent.first_activity_at,
+            recent.last_activity_at
+        );
+
+        let stale = subs.iter().find(|s| s.agent_id == "stale").unwrap();
+        assert_eq!(
+            stale.first_activity_at.as_deref(),
+            Some("2026-07-20T01:00:00Z"),
+            "timestamps are per sub-agent, not shared across the scan"
+        );
+        assert_eq!(
+            stale.last_activity_at.as_deref(),
+            Some("2026-07-20T01:00:30Z")
+        );
+        assert!(stale.last_activity_at >= stale.first_activity_at);
+
+        // The session-level contract is unchanged: the sibling sub-agent files
+        // still do not move the session's own first_ts/last_ts, which come
+        // from the main transcript alone.
+        let agg = aggregate(main_path.to_str().unwrap()).expect("aggregate");
+        assert_eq!(agg.first_ts.as_deref(), Some("2026-07-25T09:00:00Z"));
+        assert_eq!(agg.last_ts.as_deref(), Some("2026-07-25T09:00:00Z"));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A sub-agent transcript with **no** timestamp anywhere must report the
+    /// activity times as absent — not `0`, not "now". A number here would say
+    /// "this agent was active at the epoch / just now" about something that
+    /// was never observed, which is the unmeasured-as-zero fail-open
+    /// (CLAUDE.md §3).
+    #[test]
+    fn subagent_usage_absent_timestamps_stay_absent() {
+        let base =
+            std::env::temp_dir().join(format!("harness-core-subts-{}-absent", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let stem = "sess";
+        let sub_dir = base.join(stem).join("subagents");
+        std::fs::create_dir_all(&sub_dir).unwrap();
+        let main_path = base.join(format!("{stem}.jsonl"));
+        std::fs::write(&main_path, "{\"type\":\"user\",\"message\":{}}\n").unwrap();
+        std::fs::write(
+            sub_dir.join("agent-nots.jsonl"),
+            concat!(
+                r#"{"type":"assistant","isSidechain":true,"message":{"model":"claude-opus-4-8","content":[],"usage":{"input_tokens":5,"output_tokens":5}}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+
+        let subs = known(subagent_usage(main_path.to_str().unwrap()));
+        let s = subs.iter().find(|s| s.agent_id == "nots").unwrap();
+        assert_eq!(s.turns, 1, "the agent did work; only its time is unknown");
+        assert!(
+            s.first_activity_at.is_none(),
+            "no timestamp in the transcript must stay absent, got {:?}",
+            s.first_activity_at
+        );
+        assert!(
+            s.last_activity_at.is_none(),
+            "no timestamp in the transcript must stay absent, got {:?}",
+            s.last_activity_at
+        );
+
+        // …and it must serialize as null, never as a number.
+        let v = serde_json::to_value(s).unwrap();
+        assert!(
+            v["first_activity_at"].is_null(),
+            "absent activity time must serialize null, got {}",
+            v["first_activity_at"]
+        );
+        assert!(
+            v["last_activity_at"].is_null(),
+            "absent activity time must serialize null, got {}",
+            v["last_activity_at"]
+        );
+        assert!(
+            !v["first_activity_at"].is_number(),
+            "an unmeasured activity time must never render as a number"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

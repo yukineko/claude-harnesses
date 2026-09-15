@@ -1,5 +1,3 @@
-
-
 [[task]]
 id = "0ba79281"
 title = 'CLAUDE.md: Windows で成立しない cargo 手順 (. "$HOME/.cargo/env") を直す'
@@ -18064,9 +18062,17 @@ merge commit である限り毎回起きる。ゲートが repo 自身の正規�
 d55f406a が「再現せず・機構は判定不能」としていたのは本件と同一クラスであり、
 上の手順で決定論的に再現する。7ec6fca5 も同じ。fa54b8ed (conflict 解決を伴う merge) は
 pre-commit を通るかどうかが異なるので別物の可能性があり、まだ切り分けていない。
-"""
+
+
+【2026-09-15 — 二度目の再現。決定論的であることが確認できた】
+同一セッション内で 2 回目の ff でも同じ形で発火した。
+  worktree で merge commit 89def60a を作成 (pre-merge-commit -> pre-commit 全ゲート green)
+  main で git merge --ff-only session-79d79a35
+  python3 scripts/gate-bypass.py --json -> {"verdict": "outstanding", "entries": [{"commit": "89def60a...", ...}]}
+一度目は 55e6e195 で、条件も結果も同一。偶発ではなく、worktree branch の先頭が
+merge commit である限り ff のたびに起きる。"""
 created_at = 1787905350
-updated_at = 1789306829
+updated_at = 1789471867
 weight = 0.0
 issue_number = 411
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/411"

@@ -25320,9 +25320,48 @@ compass charter の ONE（2026-09-13 の人間裁定で north_star の射程に�
 
 CLAUDE.md 2.(a): 利害のない agent が RED を先に観測してから GREEN 化すること。実装者はこの検証テストを書かない。
 right_size: m。
-これを閉じるまで 2d3cbda2（worktree/branch GC）と 5daf0b60（abandon --all-stuck）には着手しない — 共有 claim registry が worktree から見えないまま GC を書くと、生きている作業を dead と判定して削除する側へ倒れる。"""
+これを閉じるまで 2d3cbda2（worktree/branch GC）と 5daf0b60（abandon --all-stuck）には着手しない — 共有 claim registry が worktree から見えないまま GC を書くと、生きている作業を dead と判定して削除する側へ倒れる。
+
+【2026-09-15 — サイクル6 は死んだ。ただし RED スイートだけは実在したので回収した】
+測定日 2026-09-15、測定点 03c82520。
+
+condukt run run-20260913-223004-15261 に dispatch した agent は 2026-09-13 22:42 を最後に
+46 時間 1 バイトも出力せず、ハーネス上は running のままだった (出力ファイルの mtime で実測)。
+成果は実測で次のとおり: 5 branch 中 4 本が main より 0 commit、残る t3-overwatch が
+挙動不変のスタブ 1 件 (a637ad63) のみ。つまり実装は一切進んでいない。
+
+ただし t1-classify の worktree に、未追跡のまま 438 行のテストスイート
+scripts/test_check_projkey_store_classification.py が残っていた。これは本チケットが
+要求する DoD14(a) のゲート (repo_root / project_key / main_worktree_root の全呼び出し元を
+人間が埋める表で固定し、未分類の新規呼び出し元が現れたら fail closed する) に対する
+利害のない作者による事前 RED であり、prune すれば失われるので branch へ回収した。
+
+自分で RED を実測した (著者の申告を採らず):
+  python3 scripts/test_check_projkey_store_classification.py
+  Ran 12 tests -- FAILED (failures=9)
+
+ただし RED の質に問題がある。緑だった 3 件
+  test_missing_table_file_exits_two
+  test_corrupt_table_file_exits_two
+  test_zero_consumers_discovered_exits_two_not_zero
+はいずれも returncode == 2 だけを見ており、スクリプトが存在しない場合も
+インタプリタ自身の can't open file で 2 になる。したがってゲートがディスク上に
+1 バイトも無い状態で通っており、実装後にゲートを削除しても通り続ける = 
+最も重要な変異に対する kill rate が 0 である。CLAUDE.md 2 の
+「何も検証していないテストは常に通る」そのもので、この assert が仕様として固定されると害になる。
+実装者は exit code だけでなくゲート自身の診断文字列 (stderr) を判別に使うこと。
+この訂正はファイル冒頭の docstring にも書き込んで回収した。
+
+また著者の docstring は「At the time this file was committed ... see the commit message /
+task report」と書いていたが、その commit も task report も存在しない (run が commit せずに死んだ)。
+次のレビュアーを存在しない証跡へ誘導するので、回収時に事実に合わせて書き換えた。
+
+著者が本文中で主張している計測値は未検証のまま残す:
+  measured: 32 distinct ~/.condukt/state/<project> dirs for the one harness repo
+これが正しければ DoD14 の強い裏付けになるが、私は再現していない。採用する前に測り直すこと。
+"""
 created_at = 1789292392
-updated_at = 1789306485
+updated_at = 1789471767
 weight = 0.0
 issue_number = 604
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/604"

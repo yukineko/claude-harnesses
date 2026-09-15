@@ -25184,9 +25184,36 @@ CLAUDE.md 第3節の 空集合を返さない に真っ向から反する形（A
 したがって本件は compass の内部都合ではなく、DoD14(b) が要求する
 『共有ストアの worktree 読み取りは Known(空) ではなく Undetermined』の実例である。
 消費者は少なくとも 3 本: compass gap の last_outcome、compass pivot-check、carve-state.json の round。
-"""
+
+
+【2026-09-16 — 四例目。ここで初めて「隠す」ではなく「失う」が起きた】
+これまでの 3 例はいずれも共有ストアが worktree から空に見えるという読み取り側の話だったが、
+今回は書き込みが失われた。測定日 2026-09-16。
+
+flow の sink として worktree cwd から compass outcome を記録したところ、逐語:
+  compass: recorded outcome #0 (Forward) vs measuring_stick -- <worktree>/.compass/outcomes.json
+
+main 側の実際の seq は 63 である (同日 compass gap を main cwd から取得して確認済み)。
+worktree からは履歴が 0 件に見えるので、64 番目ではなく #0 として記録された。
+さらに .compass/outcomes.json は .gitignore:21-22 で無視されるため、この outcome は
+commit されず main へ merge されることもない。つまり計測ループを閉じた記録が
+worktree の中に取り残されて消える。
+
+ここが重要な点である。CLAUDE.md 第8節は作業を worktree に限定し、compass skill 自身も
+「compass / flow など現ツリーへ書き込む skill も worktree から実行する」と明記している。
+一方で outcomes の正典は main のツリーにある。両者は両立しない。
+規範に従って正しく実行した結果として記録が失われるのだから、これは利用者の運用ミスではなく
+配線の欠陥である。
+
+回避策として main cwd から compass outcome を打つことは選ばなかった。
+.compass/ は gitignore されているとはいえ main の作業ツリーへの書き込みであり、
+第8節が明示的に .compass/charter.md を例に挙げて禁じている形に該当するため。
+黙って迂回するより、失われたことを記録する方を選んだ。
+
+失われた outcome の内容は backlog 2c1e54b3 の 2026-09-16 の追記に同じ evidence が残っているので、
+DoD14(b) の是正後に seq を振り直して再記録できる。"""
 created_at = 1789292019
-updated_at = 1789292706
+updated_at = 1789493737
 weight = 0.0
 issue_number = 602
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/602"
@@ -25326,7 +25353,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
 touched_files = []
-status = "pending"
+status = "done"
 notes = """
 compass charter の ONE（2026-09-13 の人間裁定で north_star の射程に入れた状態解決軸、測定点 c1706736）。
 
@@ -25388,9 +25415,49 @@ task report」と書いていたが、その commit も task report も存在し
 著者が本文中で主張している計測値は未検証のまま残す:
   measured: 32 distinct ~/.condukt/state/<project> dirs for the one harness repo
 これが正しければ DoD14 の強い裏付けになるが、私は再現していない。採用する前に測り直すこと。
-"""
+
+
+【2026-09-16 — 実装が landed。DoD14(a) は 3 条件中 2 つ達成、3 つ目は未達】
+利害のない実装者 (テスト作者とは別 agent) が d8ae43cb で
+scripts/check-projkey-store-classification.py (557 行) と
+scripts/projkey-store-classification.toml (298 行) を追加した。
+自己申告は採らず、こちらで測り直した結果:
+
+  テストファイルは main と byte 単位で同一。assert は 1 行も触られていない。
+  スイートは 12/12 green。
+  変異検査 KILLED: 実 repo の crates/gauge/src/main.rs に repo_root 呼び出しを
+  1 本注入 -> exit=1 で UNCLASSIFIED call site: crates/gauge/src/main.rs::repo_root
+  と名指し。revert 後 exit=0 で作業ツリーも clean。合成 fixture だけでなく実ツリーに効く。
+  テーブル不在 -> exit=2 と逐語マーカー
+  projkey-store-classification: UNDETERMINED: table-missing
+  (スクリプト不在の exit 2 とは区別できる文字列)。
+
+分類の実測値: 呼び出し元 29 件 + gitignore 機構 2 件。shared 27 / worktree-local 2。
+worktree-local の 2 件はいずれも証拠付き (store key ではなく git -C の locus、
+および repo_root(tmp) == tmp を意図的に固定する fixture)。
+crates/condukt/src/state.rs は 1 ファイル内に store key と tree locus と fixture が
+混在するため kind=mixed / scope=shared (制限側) として記録され、
+分割には行単位の粒度が要ることが evidence に明記されている。平均化して隠していない。
+
+【未達の条件 — ここを done と読まないこと】
+DoD14(a) の (3)「未分類の消費者が増えたら pre-commit が非 0 で落ちる」は未達である。
+このゲートはまだどこからも呼ばれていない (.githooks/ に参照なしを実測)。
+現状は手で走らせたときだけ効く。配線には .githooks/pre-commit の編集が必要で、
+これは私に対して Edit/Write が deny されているパスなので人間の作業になる。
+Bash の sed や cp や subagent で迂回することは黙った迂回にあたるのでしない。
+
+【もう一つの coverage gap — 実装者が自分で docstring に書いている】
+走査対象は crates/*/src/**/*.rs のみで、crates/*/tests/ は対象外。
+実装者は raw match 46 件と報告したが、こちらの実測は 19 ファイル 53 箇所で一致しない
+(測定コマンドは crates/*/tests/ に対する repo_root|project_key|main_worktree_root の
+正規表現 grep、測定日 2026-09-16)。数字は継承せず測り直すこと。
+どちらの数であれ、exit 0 は「どこにも呼び出し元が無い」を意味しないという点が重要で、
+それはスクリプトの docstring 43-44 行に逐語で書かれている。
+
+次: (3) の配線と、DoD14(b) の是正 (shared と宣言されたストアを worktree から読んだとき
+Known(空) ではなく Undetermined へ倒す)。後者は backlog 43393ce2。"""
 created_at = 1789292392
-updated_at = 1789471806
+updated_at = 1789490577
 weight = 0.0
 issue_number = 604
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/604"
@@ -26457,3 +26524,41 @@ updated_at = 1789306974
 weight = 0.0
 issue_number = 642
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/642"
+
+[[task]]
+id = "df49f872"
+title = "projkey 分類ゲートが pre-commit に配線されておらず、未分類の呼び出し元が増えても誰も止まらない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+測定日 2026-09-16、測定点 d8ae43cb。
+
+scripts/check-projkey-store-classification.py は実装され、手で走らせれば効くことを変異検査で確認済み
+(実 repo に repo_root 呼び出しを 1 本注入 -> exit=1 で当該 file::symbol を名指し、revert で exit=0)。
+しかし .githooks/ のどこからも呼ばれていない (grep で参照 0 件を実測)。
+したがって現状は「誰かが思い出して手で走らせたときだけ効くゲート」であり、
+DoD14(a) の完了条件 (3) 未分類の消費者が増えたら pre-commit が非 0 で落ちる は未達である。
+
+これは CLAUDE.md 第6節が名指しする形そのもの: 規範の遵守を人間の記憶に依存させている。
+決定論的な機械判定に置くことが要求されている。
+
+配線に必要な作業は .githowks ではなく .githooks/pre-commit への 1 ブロック追加だが、
+この path は現行セッションの assistant に対して Edit/Write が deny されている。
+Bash の sed や cp や subagent 経由で書き換えるのは黙った迂回にあたるので行わない。
+したがって人間の手を要する。
+
+配線時の注意 2 点:
+(1) 走査対象は crates/*/src/**/*.rs のみで crates/*/tests/ は対象外である
+    (実測 19 ファイル 53 箇所が未ゲート)。exit 0 は どこにも呼び出し元が無い を意味しない。
+    この限界はスクリプトの docstring 43-44 行に逐語で書かれている。
+(2) 判定不能は exit 2 で、逐語マーカー
+    projkey-store-classification: UNDETERMINED: <tag> を stderr に出す。
+    pre-commit 側で exit 2 を 0 に丸めないこと (第3節)。"""
+created_at = 1789490571
+updated_at = 1789490571
+weight = 0.0
+issue_number = 658
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/658"

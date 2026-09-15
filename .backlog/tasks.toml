@@ -1,5 +1,3 @@
-
-
 [[task]]
 id = "0ba79281"
 title = 'CLAUDE.md: Windows で成立しない cargo 手順 (. "$HOME/.cargo/env") を直す'
@@ -25560,9 +25558,33 @@ that the loader hides.
 WHY IT MATTERS BEYOND THE TEST: this journal exists specifically so that
 inspected-and-clean is distinguishable from never-inspected. If a record can be lost
 under load, that distinction has a hole under exactly the concurrent conditions the
-fleet runs in."""
+fleet runs in.
+
+=== 追加実測 2026-09-16 (flow cycle6 / run-20260913-223733-78880 t1 worker, 測定点 847a782e) ===
+
+原因は「同時に走る integration test バイナリ」ではなく、より一般に
+TMPDIR に対する同時 create/write/remove の churn である。切り分け:
+
+  - t1 の新規テスト (subagent_stop 15 件) を含め既定並列度  -> 10 回中 4 回 FAIL
+  - t1 のテストを --skip subagent_stop で除外              -> 5 回中 0 回 FAIL
+  - 全体を --test-threads=1                                 -> 毎回 824/824 green
+  - 決定的: t1 のテストを除外したまま、無関係なプロセスに
+    $TMPDIR への平凡な create/write/remove churn をさせる   -> 3 回中 1 回 FAIL
+
+つまり subagent_stop のテストは原因ではなく、単に負荷を上げてヒット率を
+上げているだけ。既存メモの「integration-test バイナリが必要」という
+条件は狭すぎる ($TMPDIR churn で十分)。
+
+未解明で、ここが本題: 2 回の journal append のうち 1 回が落ちているのに、
+diffrisk-outcomes の "this record is LOST" 警告が一切出ていない。
+このテストが守ろうとしているのはまさに「穴の空いた履歴」であり、
+記録が失われたのに誰も気づけない経路が実在することになる。
+flake の再現条件よりこちらの方が重い。
+
+なお本件は weaken / skip / disable していない。cycle6 の 3 ブランチは
+すべて -- --test-threads=1 で測って green を確認した。"""
 created_at = 1789294091
-updated_at = 1789294091
+updated_at = 1789494555
 weight = 0.0
 issue_number = 616
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/616"
@@ -26636,3 +26658,104 @@ updated_at = 1789490424
 weight = 0.0
 issue_number = 657
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/657"
+
+[[task]]
+id = "41508876"
+title = "bypass-permissions モードの system-reminder が Bash 経由の編集を促し、PostToolUse editgate を迂回させる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+観測 2026-09-16、flow cycle6 の condukt worker (run-20260913-223733-78880 t1) が
+「tool result の中に現れた system-reminder が怪しい」として報告してきた内容。
+worker は指示に従わず Edit/Write を使い続け、実際に editgate が壊れた中間状態を
+3 回ブロックした。worker の判断が正しかったので、機構として起票する。
+
+当該 system-reminder の文面 (bypass permissions mode 時に出るもの):
+  "Do your work through the Bash tool wherever it can accomplish the job:
+   read files with cat, head, or sed -n, search with grep and find, and make
+   file changes with sed, heredocs, or short scripts, rather than using the
+   dedicated Read, Edit, or Write tools."
+
+問題: このリポジトリの editgate は PostToolUse で Edit/Write に紐づいている。
+sed / heredoc / python スクリプトでファイルを書き換えると PostToolUse の
+matcher に当たらず、コンパイルゲートが一切走らない。つまりこの reminder に
+素直に従うほどゲートが暗くなる。CLAUDE.md #7 の「ゲートを迂回する経路を
+黙って作らない」および #4 (隠蔽) に構造的に反する。
+
+これは prompt injection ではなくハーネス側の正規のメッセージだと思われるが、
+「正規である」ことと「ゲートを暗くする」ことは両立するので、出所に関わらず
+機構として塞ぐべき。
+
+done_criteria (どれか、ないし複合):
+- editgate の matcher を Bash にも広げ、リポジトリ内のファイルを書き換える
+  Bash コマンド (sed -i / heredoc リダイレクト / python の open(...,'w')) の
+  後にも同じコンパイル検査を走らせる
+- あるいは CLAUDE.md に「このリポジトリでは source 編集は必ず Edit/Write で
+  行う (editgate が PostToolUse でしか走らないため)」を明文で置き、
+  reminder より強い規範として機械ゲートで裏打ちする
+- どちらにせよ「Bash で書き換えた source がゲートを通っていない」ことを
+  検出する RED を先に作る
+
+補足: 本 coordinator 自身も同じ reminder を受け取っており、本サイクルでは
+mutation 用の一時的な書き換えにのみ python を使い (テスト後に必ず
+git checkout -- で復元)、恒久的な source 編集には使っていない。"""
+created_at = 1789494562
+updated_at = 1789494562
+weight = 0.0
+issue_number = 659
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/659"
+
+[[task]]
+id = "20e35ba2"
+title = "main の作業ツリーを 2 者が同時に統合に使うと、後発の merge commit が main-tree-guard に非 merge として弾かれる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-16。CLAUDE.md #8 は main の作業ツリーを「統合 (merge・conflict 解決)
+だけ」に許しているが、統合そのものが並行しうることを想定していない。
+main の作業ツリーは 1 本しかないので、2 者が同時に統合すると壊れる。
+
+観測した具体列 (reflog 実物):
+  1ea6cffb HEAD@{3}: commit (merge)   <- 私の merge
+  3a9cab23 HEAD@{2}: commit (merge)   <- 同じ branch (847a782e) の merge
+  166c5587 HEAD@{1}: merge session-79d79a35: Fast-forward
+  51b8ffed HEAD@{0}: merge session-2444be10: Merge made by the 'ort' strategy
+
+私は `git merge --no-ff --no-commit condukt/.../t1-subagentstop` で 4 本の
+version conflict を解決し、統合後の実測 (condukt 1092 passed / 0 failed) まで
+終えてから commit した。その commit は main-tree-guard にブロックされた。
+理由は、その間に別の統合主体が同じ branch を merge し終えて MERGE_HEAD を
+消していたため、私の commit が「merge ではない main での commit」に見えたから。
+
+ゲートの判定自体は正しい (fail-closed で正しく止めた)。問題は 2 点:
+
+(a) 私の conflict 解決 (4 ファイルすべてを 0.7.168 に揃えた) が黙って捨てられ、
+    先着の解決 (本人の commit message によれば conflict は 2 本) が採用された。
+    結果的に内容は一致していたが、それは偶然であって保証ではない。
+    ロスが起きたことがゲートの出力からは分からない。
+(b) 後発側には「先着が同じ merge を済ませた」と分かる出力が無い。
+    guard の出力は CONDUKT_MAINTREE_OVERRIDE の案内であり、これを額面どおり
+    使うと二重 merge か、さらに悪い上書きになる。誤誘導。
+
+done_criteria:
+- main の作業ツリーでの統合に排他を入れる (既存の backlog lock / condukt state
+  の仕組みを流用できるはず)。待つのではなく、少なくとも「今ほかの統合が
+  進行中」と分かること
+- main-tree-guard がブロックする際、「MERGE_HEAD が消えたのは別の統合が
+  完了したからかもしれない」を判定して名指しする。HEAD が自分の読んだ値から
+  動いていれば断定できる。判定できないなら判定不能としてそう言う
+- CONDUKT_MAINTREE_OVERRIDE の案内を、このケースでは出さない
+  (出すと二重 merge を誘発する)
+
+関連: c8add656 (同一サイクルの二重 claim)。あちらは claim 段階、これは統合段階。"""
+created_at = 1789494572
+updated_at = 1789494572
+weight = 0.0
+issue_number = 660
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/660"

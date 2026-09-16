@@ -23846,9 +23846,36 @@ verdict=not-covered を spec-gap divert (specforge へ差し戻し) の発火条
 (存在しないなら三値は名目だけで実体は二値)。
 
 発見経緯: /flow の Step 3-1.5 プリフライトで 3 件全部が not-covered になり、
-divert する前に対照実験を掛けて空虚さが判明した。divert は実行していない。"""
+divert する前に対照実験を掛けて空虚さが判明した。divert は実行していない。
+
+--- サイクル7 追記 ---
+
+再測定 2026-09-16 (現在の main): 230c34ec の症状は未修正のまま。
+サイクル7 の 4 件の課題文すべてが rc=0 verdict=not-covered。
+アンチ空虚の対照として、正典に確実に存在する 3 topic を投げても全て not-covered:
+  "spec loop R4 flow spec gap source"      -- rc=0 verdict=not-covered
+  "blastguard three-valued decision ask"   -- rc=0 verdict=not-covered
+  "fail-closed gate invariant"             -- rc=0 verdict=not-covered
+したがって flow 3-1.5 の trigger 3 は依然として判別能力を持たない。
+coordinator は not-covered を spec-gap の証拠として扱わず、undetermined として
+divert せずに続行した (第3節: 測れないことを測れたことに写さない)。
+
+サイクル7 が追加で観測した事実 (再測定の副産物、測定点 main 72995339):
+spec-map は .gitignore:80 で .specguard/spec-map.toml として ignore されており、
+main の作業ツリーにしか実体が無い。同じ 7 本の probe を CLAUDE.md 第8節が義務づける
+worktree (測定点 778155e4) から実行すると、verdict は not-covered ではなく
+rc=10 verdict=undetermined になる (spec-map が空と読まれるため)。
+つまり brief の verdict は cwd がどちらの作業ツリーかで変わる。第8節は全作業を
+worktree で行うことを義務づけているので、規範どおりに働く実行主体から見た
+brief は構造的に常に undetermined である。これは本チケットの読み (a)/(b) とは
+別の第3の経路であり、not-covered と undetermined のどちらを見るかが
+測定場所に依存するという意味で、判定面の問題をさらに一段深くする。
+measure コマンド: specguard brief --json <topic> を cwd=main と cwd=worktree で各7本。
+spec-map 規模 (cwd=main, 測定日 2026-09-16): specguard map list は 184 行、
+うち "(no spec-doc)" を含む行 183。covered を返しうる entry は依然ほぼ皆無。
+"""
 created_at = 1789272899
-updated_at = 1789272899
+updated_at = 1789582112
 weight = 0.0
 issue_number = 544
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/544"

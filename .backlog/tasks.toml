@@ -26849,3 +26849,104 @@ updated_at = 1789566348
 weight = 0.0
 issue_number = 661
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/661"
+
+[[task]]
+id = "3ff1c172"
+title = "bypass ledger records a gated merge when main HEAD moves concurrently"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "concurrency",
+    "high",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-16、測定点 main 678e11c5、cwd=/Users/yuki/src/harness。
+
+事象: worktree ブランチ session-010a3c10 を main へ merge した際、pre-commit は
+完走して全ゲート green を出力した (main-tree-guard: allowed / check-test-weakening
+まで到達)。ところが ref 更新の直前に別セッションが main を 95111cb7 から dfa713f4 へ
+進めたため git が update_ref failed for ref HEAD (is at dfa713f4 but expected
+95111cb7) を返し、merge は一度失敗した。再開して 678e11c5 として commit した後、
+python3 scripts/gate-bypass.py --json は verdict=outstanding で 678e11c5 を
+ungated として列挙した。
+
+読み: pre-commit の証明書は tree と「判定時点の HEAD」に束縛される。並行セッションが
+その間に HEAD を動かすと、実際にはゲートを通過した commit が証明書不一致となり
+未検証として台帳に載る。amend の既知事象 (6267bfbe) と同じ欠陥クラスだが、
+トリガが異なる: あちらは自分で HEAD を書き換える、こちらは他セッションが動かす。
+6267bfbe が amend 固有の手当てで閉じられると、この経路は残る。
+
+影響: 正当にゲートを通った merge が未検証として記録され git push が塞がれる。
+偽陽性なので「台帳を無視してよい」という運用習慣を育てる方向に働く — これは
+CLAUDE.md 4 が禁じる隠蔽への圧力になる。CLAUDE.md 8 が全セッションに worktree
+作業を義務づけている以上、main への merge は常に並行 HEAD 移動と競合しうるので
+稀なケースではない。
+
+done_criteria: 並行して HEAD が動いた状況で pre-commit を通過した merge commit が
+台帳に載らないこと。先に RED (現状の再現テスト) を観測してから GREEN にすること。
+
+関連: 6267bfbe (amend が同じ台帳に載る)。同じ証明書束縛が原因。"""
+created_at = 1789566470
+updated_at = 1789566470
+weight = 0.0
+issue_number = 662
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/662"
+
+[[task]]
+id = "b9e09691"
+title = "claim writes land on main tree, so every session races to rescue the same dirty backlog store"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "concurrency",
+    "high",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-16、測定点 main 95111cb7 から 678e11c5。
+
+観測した事実の連鎖:
+1. flow の cycle 開始で backlog next --claim を実行した。backlog のストアは cwd の
+   git root に従う (既知) ため、cwd=main のまま走った claim 書き込みは main の作業
+   ツリーの .backlog/tasks.toml を dirty にした。4 件が pending から claimed へ。
+2. ターン終了時に stop-verify-worktree.py が CLAUDE.md 8 違反として停止をブロック
+   した。ブロックは正しい — main が dirty なのは事実である。
+3. その dirty を worktree へ移して commit (b8cb74b5) し main へ merge しようとした
+   ところ、ref 更新の直前に別セッションが同じ内容を dfa713f4 として main へ直接
+   commit していた。両者の .backlog/tasks.toml は diff で byte 一致。
+4. 結果として同じ状態が二重に rescue された。今回は byte 一致だったので無害。
+
+問題の所在は 4 ではなく 1 にある。claim 書き込みが main のツリーへ出る限り、
+全セッションが構造的に「main を dirty にしてから rescue する」経路を強制される。
+今回たまたま無害だったのは両者が同一バイト列を見たからで、片方が先に別の claim を
+書いていれば、後から rescue した側の commit が相手の in-flight な claim 書き込みを
+自分の commit に取り込む (condukt-worker-dirty-tree-commit と同じクラス)。
+CLAUDE.md 8 が全セッションに worktree を義務づけているのに、claim という
+最も頻度の高い書き込みだけが main のツリーへ出ている点が矛盾である。
+
+なお 3 で別セッションが main へ直接 commit していること自体も CLAUDE.md 8 に
+反するが、これは本チケットの主題ではなく別途の観測として記す。そのセッションも
+同じ rescue 圧力に晒されていた可能性が高い。
+
+修正方向の候補 (判断は未確定):
+(a) flow が claim の前に自セッションの worktree へ cd する。
+(b) backlog の claim 書き込みを harness_core::projkey で解決した main worktree root
+    に対する commit 込みの操作にする。
+(c) claim 状態をワークツリー管理下のファイルから外す。
+どれを採るかは設計判断なので、まず (a) の実効性を計測してから決めるべき。
+
+done_criteria: 通常の flow cycle を回した後に main の作業ツリーが dirty に
+ならないこと。先に現状の RED (cycle 実行後に main が dirty になる) を観測してから
+GREEN にすること。
+
+関連: 3ff1c172 (この rescue の merge が台帳に偽陽性で載った)。"""
+created_at = 1789566483
+updated_at = 1789566483
+weight = 0.0
+issue_number = 664
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/664"

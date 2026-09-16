@@ -601,4 +601,188 @@ mod tests {
         );
         std::fs::remove_dir_all(&base).ok();
     }
+
+    /// Run `git` in `dir`, failing the test loudly on a non-zero exit (a
+    /// half-built fixture must never be mistaken for the property under test).
+    fn git(dir: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap_or_else(|e| panic!("fixture: could not spawn `git {args:?}`: {e}"));
+        assert!(
+            out.status.success(),
+            "fixture: `git {args:?}` in {} failed (exit {:?}): stdout={} stderr={}",
+            dir.display(),
+            out.status.code(),
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// Every file named EXACTLY `<REPO_PRIMARY_LOCK_KEY>.lock` under `dir`
+    /// (the transient `…​.lock.tmp.*` publish files are not matched).
+    ///
+    /// This observes what the lock code ITSELF published instead of re-deriving
+    /// the path with `lock_path`/`repo_root`. Deriving the expectation from the
+    /// function under test is precisely what makes a test unable to tell
+    /// "worktree-scoped" from "main-worktree-scoped".
+    fn published_repo_primary_locks(dir: &Path) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    found.extend(published_repo_primary_locks(&p));
+                } else if p
+                    .file_name()
+                    .map(|n| n == format!("{REPO_PRIMARY_LOCK_KEY}.lock").as_str())
+                    .unwrap_or(false)
+                {
+                    found.push(p);
+                }
+            }
+        }
+        found.sort();
+        found
+    }
+
+    // The repo-primary lock must be scoped to the REPOSITORY, not to whichever
+    // checkout of it a process happens to be standing in. A real `git worktree
+    // add` gives the main tree a `.git` DIRECTORY and the linked worktree a
+    // `.git` FILE; both share ONE git index, ONE `.git/worktrees` admin dir and
+    // ONE default branch, which is exactly what every holder of this lock
+    // mutates (`worktree::merge`'s checkout+merge, the main-tree commit,
+    // `git worktree prune`). So a mutator whose cwd is the main tree and a
+    // mutator whose cwd is a linked worktree of the SAME repo must contend the
+    // SAME lock file, and the second must be REFUSED while the first holds it.
+    //
+    // The assertion observes the SERIALIZATION behaviour (the contender is
+    // refused), not merely path equality, because serialization is the property
+    // the lock is bought for; the published-lock-file paths are reported
+    // alongside it only to name the mechanism when it breaks. A failure is
+    // observed FAST (an unshared lock is granted immediately); only the passing
+    // path pays `RunLock::DEADLINE`, which is the honest cost of proving that a
+    // live holder is waited out rather than reaped.
+    #[test]
+    fn repo_primary_lock_is_one_lock_across_a_repo_and_its_linked_worktree() {
+        let base = std::env::temp_dir().join(format!(
+            "condukt-repo-primary-worktree-{}-{}",
+            std::process::id(),
+            now_unix_nanos()
+        ));
+        let main_tree = base.join("main-tree");
+        let linked = base.join("linked-wt");
+        std::fs::create_dir_all(&main_tree).unwrap();
+
+        git(&main_tree, &["init", "-q"]);
+        git(&main_tree, &["config", "user.email", "t@t.t"]);
+        git(&main_tree, &["config", "user.name", "t"]);
+        git(&main_tree, &["config", "commit.gpgsign", "false"]);
+        // `git worktree add` needs at least one commit to branch from.
+        std::fs::write(main_tree.join("seed.txt"), "seed\n").unwrap();
+        git(&main_tree, &["add", "seed.txt"]);
+        git(&main_tree, &["commit", "-q", "-m", "seed"]);
+        git(
+            &main_tree,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "linked-wt",
+                linked
+                    .to_str()
+                    .expect("fixture: worktree path must be UTF-8"),
+            ],
+        );
+
+        // Fixture invariants: without the real `.git`-file indirection this test
+        // would be testing nothing at all.
+        assert!(
+            main_tree.join(".git").is_dir(),
+            "fixture invariant: the main tree's .git must be a DIRECTORY, got {}",
+            main_tree.join(".git").display()
+        );
+        assert!(
+            linked.join(".git").is_file(),
+            "fixture invariant: the linked worktree's .git must be a FILE (a \
+             `gitdir:` pointer). That indirection — which makes `.exists()` true \
+             at the worktree itself — is the whole subject of this test; got {}",
+            linked.join(".git").display()
+        );
+
+        let cfg = test_cfg(base.join("state"));
+
+        // Holder: a primary-repo critical section entered with cwd = MAIN TREE.
+        let holder = match acquire_repo_primary(&cfg, &main_tree) {
+            Ok(g) => g,
+            Err(e) => panic!(
+                "setup: the first repo-primary acquire (cwd = the main tree) must \
+                 succeed on a fresh state dir; got: {e:#}"
+            ),
+        };
+        assert!(
+            holder.held(),
+            "setup: the main-tree holder must genuinely hold the lock"
+        );
+        let while_main_holds = published_repo_primary_locks(&cfg.state_dir);
+
+        // The property: a second primary-repo mutator standing in a LINKED
+        // WORKTREE of the same repo must contend that same lock, so it is
+        // refused rather than granted a second, independent lock.
+        let contender = acquire_repo_primary(&cfg, &linked);
+        // Snapshot WHILE the contender's guard (if it was wrongly granted one) is
+        // still alive, so the failure message reports the lock files that actually
+        // coexisted rather than what survived the contender's drop.
+        let during_contention = published_repo_primary_locks(&cfg.state_dir);
+        let granted = match contender {
+            Ok(g) => {
+                let held = g.held();
+                drop(g);
+                held
+            }
+            Err(_) => false,
+        };
+
+        assert!(
+            !granted,
+            "PROPERTY (the repo-primary lock is scoped to the REPOSITORY, not to a \
+             checkout) violated: `acquire_repo_primary` with cwd = the LINKED \
+             WORKTREE {} was GRANTED while a holder taken with cwd = the MAIN TREE \
+             {} of the SAME repository was still alive. Those two cwds share one \
+             git index, one `.git/worktrees` admin dir and one default branch — the \
+             very things every holder of this lock mutates — so they must contend \
+             ONE lock file and the second must be refused. Lock files published \
+             under {}: while only the main tree held it {:?}; while the \
+             linked-worktree acquire was outstanding {:?}. A SECOND, distinct path \
+             there means the lock is keyed by `repo_root(cwd)`, which stops at the \
+             first ancestor holding a `.git` ENTRY and therefore returns the LINKED \
+             WORKTREE itself (there `.git` is a FILE), instead of the main worktree \
+             root shared by both checkouts.",
+            linked.display(),
+            main_tree.display(),
+            cfg.state_dir.display(),
+            while_main_holds,
+            during_contention
+        );
+
+        assert_eq!(
+            during_contention.len(),
+            1,
+            "PROPERTY (one lock FILE per repository): a repo and its linked \
+             worktree must address a single `{REPO_PRIMARY_LOCK_KEY}.lock` under a \
+             single project-keyed directory; more than one means the two checkouts \
+             were keyed as separate projects and never contended. Found {:?} under {}",
+            during_contention,
+            cfg.state_dir.display()
+        );
+
+        drop(holder);
+        assert!(
+            published_repo_primary_locks(&cfg.state_dir).is_empty(),
+            "the repo-primary lock file must be released (removed) on guard drop"
+        );
+
+        std::fs::remove_dir_all(&base).ok();
+    }
 }

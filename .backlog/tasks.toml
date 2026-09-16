@@ -22698,3 +22698,101 @@ updated_at = 1789113312
 weight = 0.0
 issue_number = 536
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/536"
+
+[[task]]
+id = "c9373b92"
+title = "rollout-plugins.sh --plugin runs skip the verification that would catch a dark deploy"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "scripts/rollout-plugins.sh:1106-1113 returns 0 early for any filtered run: 'verify: skipped — this run was filtered to: ...'. check-plugin-rollout.py DOES detect 'installed but execs nothing' (check-plugin-rollout.py:1147-1153, ROLLOUT-class fatal at rollout-plugins.sh:1120-1125), but the single most common invocation shape — scripts/rollout-plugins.sh --plugin <name> — never runs it. So the one path an operator uses to roll out one plugin has ZERO post-hoc check that the host binary actually landed. The stated reason (a whole-fleet verdict would fail for plugins this run never touched) argues for a SCOPED verification of the targeted plugins, not for skipping verification entirely. Found while closing 8206b09f."
+created_at = 1789118611
+updated_at = 1789118611
+weight = 0.0
+issue_number = 537
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/537"
+
+[[task]]
+id = "ba5794b3"
+title = "canary rollout halt leaves already-passed stages deployed with no host binary"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "In the --canary path, the per-stage registry pointer is written inside the stage loop (scripts/rollout-plugins.sh:940 registry_patch), but run_rebuild_and_sync — the only thing that seeds host binaries — is at :1066, AFTER the loop. A gate verdict halting the run (exit 5 at :1037 'gate could not evaluate', exit 4 at :1044 'rollback advised') therefore leaves every stage 0..N-1 that already PASSED holding a fresh version dir and a live registry pointer with launcher-only bin/, and execute_stage_rollback (:797-849) restores only the stage just applied. Result: those plugins are installed, version-consistent, and exec nothing — dark, not red. Same class already measured once as backlog 51e6ebc7 (a --force --canary rollout blanked blastguard/overwatch/specguard). Found while closing 8206b09f."
+created_at = 1789118621
+updated_at = 1789118621
+weight = 0.0
+issue_number = 538
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/538"
+
+[[task]]
+id = "a0525604"
+title = "rebuild-plugins.sh masks cargo metadata failure and can no-op the whole run at rc 0"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """scripts/rebuild-plugins.sh:81-82: TARGET_DIR="$(cargo metadata --no-deps --format-version=1 | sed -n '...')" — the pipeline's exit status is sed's, which is always 0, so a failed or empty cargo metadata silently yields an empty TARGET_DIR and REL falls back to $REPO/target/release. Measured on this machine: .cargo/config.toml sets target-dir=/tmp/condukt-build, so $REPO/target/release does not exist at all; under that fallback [ -x "$src" ] is false for EVERY plugin, the main loop takes its 'missing' branch (:282-284) and the seed pass takes its silent continue (:379), and the script still exits 0 at :401 with a green summary. $REPO is $(dirname $0)/.. i.e. the worktree, which makes the fallback wrong more often, not less. CLAUDE.md §3: the exit status must be part of the verdict. Found while closing 8206b09f."""
+created_at = 1789118631
+updated_at = 1789118631
+weight = 0.0
+issue_number = 539
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/539"
+
+[[task]]
+id = "f4c91e60"
+title = "rebuild-seeds-every-launcher.sh is red on this machine: hardcodes $REPO/target/release"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """scripts/tests/rebuild-seeds-every-launcher.sh:53 and :58 test [ -x "$REPO/target/release/$l" ], but .cargo/config.toml sets target-dir=/tmp/condukt-build. Observed verbatim: 'FAIL: target/release/specguard still missing after build' (rc=1) while /tmp/condukt-build/release/specguard exists and is executable. The test should resolve the target dir the same way the script under test does (cargo metadata, rebuild-plugins.sh:81-82) instead of assuming the default. Compounding: rebuild-plugins.sh:231-234 records that scripts/tests/*.sh are wired into NO hook and must be run by hand, so the regression pins guarding the seed pass — the only path that populates a fresh version dir — are both manual-only AND currently red. Found while closing 8206b09f."""
+created_at = 1789118640
+updated_at = 1789118640
+weight = 0.0
+issue_number = 540
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/540"
+
+[[task]]
+id = "687275de"
+title = "autoUpdate:true directory marketplace can create a launcher-only version dir with no repo script involved"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "~/.claude/plugins/known_marketplaces.json has yukineko as source=directory with autoUpdate:true. scripts/rollout-plugins.sh:8-16 documents that Claude Code's own /plugin update for such a marketplace does exactly two things: plain-copy crates/<name>/ into a fresh cache/<name>/<version>/, and repoint installed_plugins.json. Neither builds nor copies a host binary, and .gitignore:45-48 ignores crates/*/bin/*-{darwin,linux}-*, so the tree copy yields exactly bin/<name> (the tracked launcher) and nothing else — the observed dark state, reachable with NO repo script in the loop and therefore not closable by hardening rebuild-plugins.sh. Options: disable autoUpdate for this marketplace, or add a SessionStart check that the registry-pointed dir holds a usable host binary. Found while closing 8206b09f."
+created_at = 1789118651
+updated_at = 1789118651
+weight = 0.0
+issue_number = 541
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/541"
+
+[[task]]
+id = "f96404f5"
+title = "rebuild-plugins.sh launcher detection omits bare windows suffixes the other two tools include"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "scripts/rebuild-plugins.sh:373 excludes *-darwin-arm64|*-darwin-x86_64|*-linux-x86_64|*-linux-arm64|*-windows-x86_64.exe|*-windows-arm64.exe when deciding 'is this bin/ entry a launcher', omitting the BARE *-windows-x86_64 / *-windows-arm64 that scripts/rollout-plugins.sh:432-435 (plat_suffixes) and scripts/check-plugin-rollout.py PLATFORM_SUFFIXES both carry. .gitignore:45-48 ignores only darwin/linux, so a committed crates/<n>/bin/<n>-windows-x86_64 WOULD be tracked, copied into every fresh version dir, and then misread by the seed loop as a launcher — seeding <n>-windows-x86_64-<hostsuffix>. Three copies of one suffix table with no machine cross-check between them. Found while closing 8206b09f."
+created_at = 1789118661
+updated_at = 1789118661
+weight = 0.0
+issue_number = 542
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/542"
+
+[[task]]
+id = "8e2627fc"
+title = "blastguard GATE crate is disabled in settings.json — installed but inert"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "scripts/check-plugin-rollout.py exits 2 (ENABLEMENT class) on this machine, verbatim: 'blastguard: GATE crate is not enabled — disabled (set to false) in /home/hiroyuki_nakayama/.claude/settings.json. It is installed but inert: none of its hooks fire, so the gate silently guards nothing.' Per that script's own docstring a disabled GATE crate is a hard failure with no legitimate reason to run this repo with one off. It is not declared in scripts/parked-plugins.json (only parallelguard is), so this is an undeclared red — and CLAUDE.md warns against BOTH ignoring it and force-enabling it to clear it (2026-08-04, taintguard). Needs a human ruling: either re-enable, or declare the park with a reason. Unrelated to the rollout dimension, which is clean (40 plugins, no drift). Found while closing 8206b09f."
+created_at = 1789345110
+updated_at = 1789345110
+weight = 0.0
+issue_number = 643
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/643"

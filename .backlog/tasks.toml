@@ -26849,3 +26849,33 @@ updated_at = 1789566348
 weight = 0.0
 issue_number = 661
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/661"
+
+[[task]]
+id = "fa86a52f"
+title = "session-insights の files touched が Bash 編集を数えず 0 と報告する (無言の過少計上)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-16、セッション 7bc826f2、record ノート 2026-09-16-harness-7bc826f2.md。
+
+数値サマリが files touched: 0 と表示したが、当該セッションは .backlog/tasks.toml を worktree で編集し commit している。ゼロではない。
+
+機構 (1 経路のみ、判定不能ではない): crates/session-insights/src/main.rs:126 が s.record_tool(input.tool_name, input.target()) を呼び、target() は harness-core/src/hook.rs:134 で Edit / Write / MultiEdit / Read / NotebookEdit の 5 つだけ file_path を返し、それ以外は None を返す。Bash は match の _ アームに落ちるので常に None。crates/session-insights/src/metrics.rs:79 の record_tool は None なら files に何も積まない。したがって Bash で編集したファイルは 1 件も計上されない。
+
+なぜ常態なのか: bypass permissions mode のハーネス指示は Read / Edit / Write ではなく cat / sed / heredoc すなわち Bash でファイルを読み書きせよと明示している。したがってこの構成では files touched は例外的にではなく系統的に 0 になる。
+
+fail-open の形: 下流 (人間・record ノート) は files touched: 0 を『ファイルを触っていない』と読む。実際は『Bash 経由の編集を観測できていない』であって、CLAUDE.md 第3節の判定不能を clean に写す形そのもの。沈黙ではなく 0 という確信ある値を出しているぶん質が悪い。
+
+修正方向: 計測できない場合は 0 ではなく unknown を表現できる型にする (harness_core::verdict::Determination)。あわせて Bash の tool_input.command から書き込み先を抽出するか、少なくとも Bash イベントが存在する場合は files touched を undetermined として表示する。前者は完全な抽出が難しいので、後者を先に入れるのが安全側。
+
+done_criteria: Bash だけでファイルを編集したセッションで、record ノートの files touched が 0 ではなく unknown 相当を表示すること。RED を先に観測すること (現状は 0 が出るはずなので、それが RED)。
+
+関連: 2faad055 (同じ数値サマリの turns が自己矛盾。別の軸だが同じブロック)。"""
+created_at = 1789566481
+updated_at = 1789566481
+weight = 0.0
+issue_number = 663
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/663"

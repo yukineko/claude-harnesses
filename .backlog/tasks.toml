@@ -26436,9 +26436,31 @@ retain_claim は「Known(Stalled) のときだけ reap」なので、Undetermine
   (3) それでも「全 signal が構造的に恒久 Undetermined」な claim を検出して人間に見せる経路（overwatch review-queue か condukt state claims の警告欄）を足す。黙って永久保持しない。
 反証防止の control: 削除済み worktree を持つが **running** タスクの run は従来どおり Undetermined のままであること（生きている worker を force-steal しないという元の設計意図を壊していないこと）をテストで固定する。
 
-本セッションでの回避（隠蔽しないため明記）: 根本修正は行わず、documented な明示 override である condukt state release --run run-20260814-025356-78549 --file crates/condukt/Cargo.toml --file crates/condukt/.claude-plugin/plugin.json を、上記 5 点の死亡証拠を添えて実行した。skip ファイルや --force やゲート緩和は使っていない。"""
+本セッションでの回避（隠蔽しないため明記）: 根本修正は行わず、documented な明示 override である condukt state release --run run-20260814-025356-78549 --file crates/condukt/Cargo.toml --file crates/condukt/.claude-plugin/plugin.json を、上記 5 点の死亡証拠を添えて実行した。skip ファイルや --force やゲート緩和は使っていない。
+
+=== 追加実測 2026-09-16、測定点 main 12afeb9b、condukt 0.7.166 ===
+
+不死 claim が今も生きていることの直接観測。condukt state claims の
+同時点スナップショットを run_id で束ねた結果:
+
+  p0trio-1                    files=1   最新 heartbeat から 35.5 日
+  run-20260814-025356-78549   files=10  最新 heartbeat から 33.8 日
+  run-20260913-223004-15261   files=10  最新 heartbeat から  3.0 日
+
+78549 は本チケットの当該 run。2026-08-14 に claim して以来 33.8 日、
+一度も reap されていない。以前この run から明示 override で 2 件
+(crates/condukt/Cargo.toml と plugin.json) を解放したが、残り 10 件は
+そのまま。したがって「たまたま一度きり」ではなく恒常状態である。
+
+15261 はサイクル6 で死んだピアセッションの run で、同じ形で 10 件を
+握ったまま死んでいる。本件の機構が直っていないので同じ末路になった。
+
+なお本サイクル (run-20260913-223733-78880) では別の穴も見つけて 06eb8aa3
+として起票した: run が gate PASS しても file claim は自動解放されない。
+5e62b0eb が「reap が効かない」なのに対し、06eb8aa3 は「そもそも解放が
+呼ばれない」。2 つ揃うと、握ったまま死んだ run の claim は永久に残る。"""
 created_at = 1789306874
-updated_at = 1789306874
+updated_at = 1789566339
 weight = 0.0
 issue_number = 639
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/639"
@@ -26759,3 +26781,71 @@ updated_at = 1789494572
 weight = 0.0
 issue_number = 660
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/660"
+
+[[task]]
+id = "06eb8aa3"
+title = "condukt state reconcile / gate で run が完了しても file claim が解放されず、共有 version ファイルを握り続ける"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-16、測定点 main 12afeb9b、condukt 0.7.166 (デプロイ版)。
+
+手順と実測:
+  1. condukt state reconcile --run run-20260913-223733-78880
+     -> 3 task すべて Running から Verified へ。"3/3 verified"
+  2. condukt state gate --run run-20260913-223733-78880
+     -> "gate PASS: run complete"、exit 0
+  3. condukt state claims で当該 run の保持数を数える
+     -> 依然 13 件を保持:
+        .claude-plugin/marketplace.json
+        crates/condukt/.claude-plugin/plugin.json
+        crates/condukt/Cargo.toml
+        crates/condukt/hooks/hooks.json
+        crates/condukt/src/circuit.rs
+        crates/condukt/src/main.rs
+        crates/condukt/src/state.rs
+        crates/condukt/src/subagent_stop.rs
+        crates/gauge/.claude-plugin/plugin.json
+        crates/gauge/Cargo.toml
+        crates/gauge/src/main.rs
+        crates/harness-core/Cargo.toml
+        crates/harness-core/src/usage.rs
+  4. condukt state release --run run-20260913-223733-78880
+     -> "released 13 claim(s)"。registry は 35 件から 22 件へ
+
+つまり run が terminal に到達しても file claim は自動解放されない。
+release は完全に手動で、しかもどの phase の手順にも入っていない。
+
+なぜ p0 か: 握られる 13 件には .claude-plugin/marketplace.json と
+crates/<plugin>/Cargo.toml と plugin.json が含まれる。version lockstep の
+禁忌ルールにより、どの plugin タスクもこの 3 種を必ず触る。したがって
+解放し忘れた run が 1 本あるだけで、以後どのセッションも当該 plugin の
+タスクを claim できなくなる。fail-open ではなく fail-CLOSED の恒久 deadlock。
+
+これが仮説でないことの実測 (同じ registry の同時点スナップショット):
+  p0trio-1                    files=1   最新 heartbeat から 35.5 日
+  run-20260814-025356-78549   files=10  最新 heartbeat から 33.8 日
+  run-20260913-223004-15261   files=10  最新 heartbeat から  3.0 日
+78549 は 5e62b0eb で root cause を特定済みの不死 claim。15261 は
+サイクル6 で死んだピアセッションの run。どちらも「握ったまま死んだ」形で、
+本件の自動解放があれば少なくとも terminal 到達分は残らなかった。
+
+done_criteria:
+- task が terminal status (verified / done / cancelled / failed) に遷移した
+  時点で、その task の file claim を解放する。state set / reconcile /
+  cancel / abandon のすべての経路で。release-task が task-claim registry に
+  対してやっていることの file 版であり、同型の道具が既にある
+- run 全体が gate PASS した時点で、その run が残す claim が 0 であることを
+  固定する挙動テストを追加する (先に RED を観測すること)
+- 解放できなかった場合は沈黙しない。何が残ったかを名指しして非0で終わる
+
+関連: 5e62b0eb (progress 判定が Undetermined になり reap されない不死 claim)。
+あちらは「reap が効かない」、本件は「そもそも解放が呼ばれない」。別の穴。"""
+created_at = 1789566331
+updated_at = 1789566331
+weight = 0.0
+issue_number = 661
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/661"

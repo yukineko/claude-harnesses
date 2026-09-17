@@ -1428,7 +1428,21 @@ primitive, not a filesystem path",
     // short-circuit: `echo x > target/log && rm -rf /usr` has a confined
     // redirect AND an unconfined delete, and the Deny has to win.
     let mut line_level_asks: Vec<Decision> = Vec::new();
-    for target in redirect_targets(cmd) {
+    // Per-occurrence segment indices, or `None` when the per-segment scan could
+    // not be corroborated against this line-level one. `None` resolves nothing
+    // and judges every raw token exactly as before this existed.
+    let redirect_segments = redirect_target_occurrences(cmd);
+    for (occurrence, raw_target) in redirect_targets(cmd).into_iter().enumerate() {
+        // Resolve `> "$P"` to the path it will actually name BEFORE any axis
+        // judges it: every check below asks a question about a path, and the
+        // unresolved token answers none of them (see
+        // `resolve_redirect_target_at`). Falling back to the raw token keeps the
+        // pre-existing verdict for everything that cannot be resolved.
+        let target = redirect_segments
+            .as_ref()
+            .and_then(|occ| occ.get(occurrence))
+            .and_then(|(seg_idx, _)| resolve_redirect_target_at(cmd, *seg_idx, &raw_target))
+            .unwrap_or(raw_target);
         if let Some(deny) = protected_path_block("redirect", &target) {
             return deny;
         }
@@ -1462,7 +1476,40 @@ primitive, not a filesystem path",
             // because a silently disabled gate voids every later verdict. Only
             // targets that cleared it reach here.
             let recovery = crate::reversible::probe(&target, ctx.raw_base.as_deref());
-            if recovery.is_recoverable() {
+            // RECOVERABLE **AND MINE**. Recoverability alone used to allow, and
+            // that was a fail-open across project boundaries: any git-tracked
+            // file in ANY checkout on this machine probes as recoverable, so
+            // `echo x > <other project>/CLAUDE.md` was silently ALLOWED while
+            // the same write inside this session's own tree was merely asked
+            // about. Measured 2026-09-14 against 0.2.63.
+            //
+            // Operator ruling (2026-09-14): work inside THIS project that git
+            // can restore may run unattended; another project is someone
+            // else's tree and is an Ask whose recommended answer is "do not
+            // run". "git can undo it" answers the COST question, not the
+            // WHOSE-TREE question, so both must hold to skip the prompt.
+            let runs_unattended = match recovery {
+                // Nothing to lose, and that is true in ANY tree: a file that
+                // does not exist has no prior bytes for the write to destroy.
+                // Gating this on confinement was wrong and regressed
+                // `bg2_system_dir_rule_does_not_swallow_ordinary_absent_targets`
+                // — the location question only arises once there are bytes.
+                crate::reversible::Recovery::NothingToDestroy => true,
+                // THIS is the whose-tree case. Any git-tracked file in ANY
+                // checkout on the machine probes as restorable, so before this
+                // gate `echo x > <other project>/CLAUDE.md` was silently
+                // ALLOWED while the same write inside this session's own tree
+                // was merely asked about (measured 2026-09-14 against 0.2.63).
+                // "git can undo it" answers the COST question, not the
+                // WHOSE-TREE one, so both must hold to skip the prompt.
+                crate::reversible::Recovery::RecoverableFromGit => {
+                    ctx.confined_root("redirect", &[target.as_str()]).is_some()
+                }
+                // Unrecoverable / Undetermined keep falling through, per
+                // CLAUDE.md §3.
+                _ => false,
+            };
+            if runs_unattended {
                 continue;
             }
             // NOT SPLIT THREE WAYS HERE, deliberately. `Undetermined` and
@@ -2372,10 +2419,15 @@ fn assignments_reach_parent_shell(segs: &[SeparatedSegment], idx: usize) -> bool
 fn assignment_execution_is_unconditional(segs: &[SeparatedSegment], idx: usize) -> bool {
     // `take` rather than a slice: an out-of-range `idx` then scans the whole
     // line instead of panicking, which is also the restrictive direction.
+    // An OPEN here-document still hides whether the segments after it are code
+    // (see `here_document_layout`). A CLOSED one does not: its body has been
+    // identified and skipped, and the line past the delimiter is ordinary code.
+    let (_, unclosed_here_doc) = here_document_layout(segs);
+    if unclosed_here_doc.map(|o| o < idx).unwrap_or(false) {
+        return false;
+    }
     !segs.iter().take(idx).any(|s| {
-        matches!(s.sep_after, SegmentSep::Conditional)
-            || opens_unmodelled_construct(&s.text)
-            || opens_here_document(&s.text)
+        matches!(s.sep_after, SegmentSep::Conditional) || opens_unmodelled_construct(&s.text)
     })
 }
 
@@ -2465,6 +2517,180 @@ fn opens_here_document(seg: &str) -> bool {
         i += 1;
     }
     false
+}
+
+/// One here-document opener: the delimiter word it declares, and whether the
+/// `<<-` spelling was used (which lets the closing line be indented with TABS).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HereDocOpener {
+    delimiter: String,
+    strips_tabs: bool,
+}
+
+/// Every here-document this segment OPENS, in the order the shell will consume
+/// their bodies.
+///
+/// Quote-aware for the same reason [`opens_here_document`] is: a `<<` inside
+/// quotes is data. `<<<` is a here-STRING and opens no body, so all three
+/// characters are consumed.
+///
+/// The delimiter word may be written bare (`<<EOF`), single- or double-quoted
+/// (`<<'EOF'`, `<<"EOF"`) or backslash-escaped (`<<\EOF`); all four spell the
+/// same delimiter, and only the quoting changes whether the BODY is expanded —
+/// a distinction [`here_document_delimiter_is_quoted`] makes elsewhere and this
+/// function deliberately does not need.
+fn here_document_openers(seg: &str) -> Vec<HereDocOpener> {
+    let chars: Vec<char> = seg.chars().collect();
+    let (mut in_s, mut in_d) = (false, false);
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\'' && !in_d {
+            in_s = !in_s;
+            i += 1;
+            continue;
+        }
+        if c == '"' && !in_s {
+            in_d = !in_d;
+            i += 1;
+            continue;
+        }
+        if !in_s && !in_d && c == '<' && chars.get(i + 1) == Some(&'<') {
+            if chars.get(i + 2) == Some(&'<') {
+                i += 3;
+                continue;
+            }
+            i += 2;
+            let strips_tabs = chars.get(i) == Some(&'-');
+            if strips_tabs {
+                i += 1;
+            }
+            while chars.get(i) == Some(&' ') || chars.get(i) == Some(&'\t') {
+                i += 1;
+            }
+            let mut delimiter = String::new();
+            let mut quote: Option<char> = None;
+            while let Some(&ch) = chars.get(i) {
+                match quote {
+                    Some(q) => {
+                        i += 1;
+                        if ch == q {
+                            quote = None;
+                        } else {
+                            delimiter.push(ch);
+                        }
+                    }
+                    None => {
+                        if ch == '\'' || ch == '"' {
+                            quote = Some(ch);
+                            i += 1;
+                        } else if ch == '\\' {
+                            i += 1;
+                            if let Some(&esc) = chars.get(i) {
+                                delimiter.push(esc);
+                                i += 1;
+                            }
+                        } else if ch.is_whitespace()
+                            || ch == ';'
+                            || ch == '|'
+                            || ch == '&'
+                            || ch == '>'
+                            || ch == '<'
+                            || ch == ')'
+                        {
+                            break;
+                        } else {
+                            delimiter.push(ch);
+                            i += 1;
+                        }
+                    }
+                }
+            }
+            // An unterminated quote means the delimiter was never finished on
+            // this segment; refusing to record it keeps the body OPEN, which is
+            // the conservative direction (see `here_document_layout`).
+            if quote.is_none() && !delimiter.is_empty() {
+                out.push(HereDocOpener {
+                    delimiter,
+                    strips_tabs,
+                });
+            } else {
+                out.push(HereDocOpener {
+                    delimiter: String::new(),
+                    strips_tabs: false,
+                });
+            }
+            continue;
+        }
+        i += 1;
+    }
+    out
+}
+
+/// True when this segment is the line that CLOSES the given here-document.
+///
+/// The match is exact on purpose. `bash` ends a here-document only on a line
+/// holding the delimiter and nothing else — `EOF ` with a trailing space does
+/// NOT close it — so anything short of exact equality must leave the body open.
+/// Reading a near-miss as a close would hand the segments after it back to the
+/// resolver as code when the shell is still treating them as data, which is the
+/// permissive direction and precisely what this scan exists to avoid.
+/// `<<-` is the one documented relaxation: it strips LEADING TABS (not spaces)
+/// from the closing line.
+fn segment_closes_here_document(seg: &str, opener: &HereDocOpener) -> bool {
+    if opener.delimiter.is_empty() {
+        return false;
+    }
+    let line = if opener.strips_tabs {
+        seg.trim_start_matches('\t')
+    } else {
+        seg
+    };
+    line == opener.delimiter
+}
+
+/// Which segments are here-document BODY (data the shell never executes), and
+/// whether any here-document is left OPEN at the end of the line.
+///
+/// Returns `(is_body, first_unclosed_opener_index)`.
+///
+/// Why this is worth modelling rather than treating every here-document as an
+/// opaque tail: a body is the one shape where text that reads exactly like an
+/// assignment never ran at all, so the resolver must not believe it — and, once
+/// the delimiter line has been SEEN, the segments after it are ordinary code
+/// and there is no longer any reason to disbelieve them. Collapsing both into
+/// "a here-document appeared, distrust everything after it" made
+/// `P=a` / `cat <<'EOF'` / … / `EOF` / `P=/etc/fstab` / `echo x > "$P"`
+/// unresolvable, so the verdict could not name the file the shell truncates
+/// even though the line says it plainly. Pinned by
+/// tests/redirect_target_resolution.rs.
+///
+/// Both failure directions stay conservative: an opener whose delimiter cannot
+/// be read, and a delimiter line that never arrives, both leave the body open
+/// to the end of the line, which is exactly the old coarse behaviour.
+fn here_document_layout(segs: &[SeparatedSegment]) -> (Vec<bool>, Option<usize>) {
+    let mut is_body = vec![false; segs.len()];
+    let mut pending: Vec<HereDocOpener> = Vec::new();
+    let mut opener_idx: Option<usize> = None;
+    for idx in 0..segs.len() {
+        if pending.is_empty() {
+            let opened = here_document_openers(&segs[idx].text);
+            if !opened.is_empty() {
+                pending = opened;
+                opener_idx = Some(idx);
+            }
+            continue;
+        }
+        is_body[idx] = true;
+        if segment_closes_here_document(&segs[idx].text, &pending[0]) {
+            pending.remove(0);
+            if pending.is_empty() {
+                opener_idx = None;
+            }
+        }
+    }
+    (is_body, opener_idx)
 }
 
 /// True when this segment opens a compound command whose body may run zero
@@ -2850,7 +3076,15 @@ fn resolve_expanded_command_word(cmd: &str, seg_idx: usize, word: &str) -> Comma
     // exists too, skipping means answering with a value the shell has since
     // replaced.
     let mut latest_rebind: Option<usize> = None;
+    // A here-document BODY is data the shell never executes, so a `NAME=value`
+    // typed inside one neither assigns nor rebinds. Skipping it here is what
+    // lets the closed-here-document case above be believed at all: the reason
+    // to distrust the tail was the body, and the body is now identified.
+    let (is_here_doc_body, _) = here_document_layout(&segs);
     for idx in 0..seg_idx {
+        if is_here_doc_body.get(idx).copied().unwrap_or(false) {
+            continue;
+        }
         if !assignments_reach_parent_shell(&segs, idx) {
             continue;
         }
@@ -2919,6 +3153,94 @@ fn resolve_expanded_command_word(cmd: &str, seg_idx: usize, word: &str) -> Comma
         return CommandWordOrigin::AssignedButUnknowable;
     }
     CommandWordOrigin::Literal(value)
+}
+
+/// Resolve a redirect TARGET that is a bare variable expansion (`> "$P"`) to
+/// the literal path it will name, when an assignment EARLIER IN THE SAME
+/// COMMAND determines it. `None` means "not resolvable" and the caller must
+/// keep judging the raw token exactly as before.
+///
+/// `seg_idx` is the segment the occurrence being judged lives in, supplied by
+/// [`redirect_target_occurrences`]. It is NOT derived from the token text:
+/// two redirects can spell the same token and name different files.
+///
+/// Why this exists. Every downstream axis a redirect target is judged on —
+/// protected-path, system-directory, recoverability, confinement — is a
+/// question about a PATH, and `"$P"` is not a path. Before this, all four
+/// silently failed to place the target and the line fell through to the flat
+/// Deny, so `P=/tmp/x.log; echo hi > "$P"` was refused while the literal
+/// `echo hi > /tmp/x.log` was allowed — the same effect, decided oppositely by
+/// spelling alone. Measured on this repo's own traffic (183 unique commands,
+/// 2026-09-14): 4 denies, ALL of this class, none of them a real hazard.
+///
+/// It does NOT weaken the gate, because it only ever hands the axes a MORE
+/// specific path than the unplaceable token they get today:
+/// - a resolved target that is protected / in a system dir / unrecoverable is
+///   still blocked, now by the axis that actually names the reason;
+/// - anything this cannot resolve returns `None` and keeps today's verdict.
+///
+/// The believability rules are NOT reimplemented here. This delegates to
+/// [`resolve_expanded_command_word`], so a redirect target inherits the same
+/// contract a command word has: a later rebinding the scan cannot read, an
+/// array assignment, a conditionally-executed assignment, a value that is
+/// itself an expansion, an empty value, and an assignment that never reaches
+/// the parent shell all resolve to something other than `Literal` and
+/// therefore to `None` here. Those are the cases where "which file is this"
+/// has no answer, and per CLAUDE.md §3 no answer is not a permissive answer.
+fn resolve_redirect_target_at(cmd: &str, seg_idx: usize, target: &str) -> Option<String> {
+    // A literal path: nothing to resolve, nothing to change.
+    referenced_variable_name(target)?;
+    match resolve_expanded_command_word(cmd, seg_idx, target) {
+        CommandWordOrigin::Literal(value) => Some(value),
+        // `AssignedButUnknowable` and `NoReachingAssignment` are both "this
+        // token does not name a path I can see" - the restrictive side.
+        _ => None,
+    }
+}
+
+/// Pair every truncating-redirect target on the line with the index of the
+/// segment it occurs in, so each occurrence is resolved against the bindings
+/// that actually reach IT.
+///
+/// Resolving by token text alone is a fail-open, found by adversarial review
+/// with bash evidence that both writes land:
+///
+///   P=<proj>/ok.log; echo a > "$P"; P=/etc/fstab; echo b > "$P"   -> Allow
+///
+/// Every occurrence of the same spelling received the FIRST occurrence's
+/// answer, so a line that rebinds the name between two redirects had its
+/// second redirect judged as the first one's file. A here-document BODY
+/// supplies such a decoy first hit too (a body is data, not a redirect), so
+/// the decoy need not even be a live command.
+///
+/// Returns `None` - meaning "resolve nothing on this line, keep the
+/// pre-existing verdict for every target" - unless the per-segment scan
+/// reproduces the line-level scan of [`redirect_targets`] exactly, in order.
+/// The two scanners can disagree (segment splitting cuts on `&`, `|`, `;` and
+/// newlines, which also delimit fd-dup syntax), and a per-segment scan that
+/// dropped or reordered a target would hand an occurrence the wrong segment's
+/// bindings - the very defect this function exists to close. Per CLAUDE.md
+/// section 3, a scan that cannot be corroborated is not a permissive scan.
+/// Pinned by tests/redirect_target_resolution.rs.
+fn redirect_target_occurrences(cmd: &str) -> Option<Vec<(usize, String)>> {
+    let line_level = redirect_targets(cmd);
+    let mut per_segment: Vec<(usize, String)> = Vec::new();
+    for (seg_idx, seg) in split_segments_with_separators(cmd).iter().enumerate() {
+        for target in redirect_targets(&seg.text) {
+            per_segment.push((seg_idx, target));
+        }
+    }
+    if per_segment.len() != line_level.len() {
+        return None;
+    }
+    if per_segment
+        .iter()
+        .zip(line_level.iter())
+        .any(|((_, a), b)| a != b)
+    {
+        return None;
+    }
+    Some(per_segment)
 }
 
 /// Find the first single `>` redirect outside quotes and return its target
@@ -11288,8 +11610,8 @@ and must not be Allowed: {failing:?}"
 
     /// A here-document BODY is data, never code. The resolver sees the body's
     /// lines as ordinary newline-separated segments, so a `NAME=value` typed
-    /// inside one reads as a pure assignment list and WINS over the real
-    /// assignment above it.
+    /// inside one reads as a pure assignment list and must NOT be allowed to
+    /// win over the real assignment above it.
     ///
     /// This is the one shape here where the invented literal is not merely
     /// stale but was never an assignment at all.
@@ -11298,6 +11620,15 @@ and must not be Allowed: {failing:?}"
     /// the body line verbatim and then `PROG_A marker` — the body assigned
     /// nothing, and A is still the program. (The quoted-delimiter spelling
     /// `<<'EOF'` behaves the same.)
+    ///
+    /// The answer is the REAL assignment, by name. This test previously pinned
+    /// `AssignedButUnknowable` here — the coarser mechanism that reached the
+    /// same safety by distrusting the entire tail of any line containing a
+    /// here-document. That mechanism could not name the file a rebound redirect
+    /// target truncates (tests/redirect_target_resolution.rs), so the body is
+    /// now identified rather than merely feared. The claim this test makes is
+    /// unchanged and is asserted twice over: the body's value never wins, and
+    /// the value that does win is the one the shell actually holds.
     #[test]
     fn an_assignment_typed_inside_a_here_document_body_is_data_and_never_ran() {
         for cmd in [
@@ -11305,14 +11636,106 @@ and must not be Allowed: {failing:?}"
             "BIN=/bin/rm\ncat <<'EOF'\nBIN=/bin/echo\nEOF\n$BIN -rf /some/path",
             "BIN=/bin/rm\ncat <<-EOF\nBIN=/bin/echo\nEOF\n$BIN -rf /some/path",
         ] {
+            let origin = resolve_first_expansion_word(cmd);
+            assert_ne!(
+                origin,
+                CommandWordOrigin::Literal("/bin/echo".to_string()),
+                "the body line never ran, so its value must never be the answer; for {cmd:?}"
+            );
             assert_eq!(
-                resolve_first_expansion_word(cmd),
-                CommandWordOrigin::AssignedButUnknowable,
+                origin,
+                CommandWordOrigin::Literal("/bin/rm".to_string()),
                 "for {cmd:?}"
             );
             let d = bash(cmd);
-            assert_eq!(verdict_name(&d), "ask", "for {cmd:?}, got {d:?}");
+            // Resolving the head to `/bin/rm` hands the line to the recursive-rm
+            // rule, which denies. Before this it was an unresolved `ask`, so the
+            // precision moved the verdict to the MORE restrictive side.
+            assert_eq!(verdict_name(&d), "deny", "for {cmd:?}, got {d:?}");
         }
+    }
+
+    /// The conservative half of the same model, and the reason the precision
+    /// above is not a fail-open: a here-document CLOSES only on a line holding
+    /// the delimiter and nothing else, so every near-miss must leave the body
+    /// open and the segments after it unbelievable.
+    ///
+    /// The assignment is placed AFTER the here-document on purpose, so the two
+    /// answers are distinguishable. Closed → the assignment is code and is
+    /// believed. Open → it is still body data, there is no reaching assignment
+    /// at all, and the expansion stays unresolved.
+    #[test]
+    fn a_here_document_closes_only_on_an_exact_delimiter_line() {
+        // Closed: the delimiter line is exact, so what follows is code.
+        for cmd in [
+            "cat <<EOF\nbody\nEOF\nBIN=/bin/rm\n$BIN -rf /some/path",
+            "cat <<'EOF'\nbody\nEOF\nBIN=/bin/rm\n$BIN -rf /some/path",
+            // `<<-` strips leading TABS from the closing line, so this closes.
+            "cat <<-EOF\nbody\n\tEOF\nBIN=/bin/rm\n$BIN -rf /some/path",
+        ] {
+            assert_eq!(
+                resolve_first_expansion_word(cmd),
+                CommandWordOrigin::Literal("/bin/rm".to_string()),
+                "an exact delimiter line ends the body; for {cmd:?}"
+            );
+        }
+        // Open: every one of these is a NEAR-MISS that bash does not accept as
+        // a close, so the assignment after it is still body data.
+        for cmd in [
+            // No delimiter line at all.
+            "cat <<EOF\nbody\nBIN=/bin/rm\n$BIN -rf /some/path",
+            // Trailing space.
+            "cat <<EOF\nbody\nEOF \nBIN=/bin/rm\n$BIN -rf /some/path",
+            // A different word.
+            "cat <<EOF\nbody\nNOTEOF\nBIN=/bin/rm\n$BIN -rf /some/path",
+            // `<<-` strips TABS, not spaces.
+            "cat <<-EOF\nbody\n  EOF\nBIN=/bin/rm\n$BIN -rf /some/path",
+            // Plain `<<` strips nothing at all.
+            "cat <<EOF\nbody\n\tEOF\nBIN=/bin/rm\n$BIN -rf /some/path",
+        ] {
+            assert_eq!(
+                resolve_first_expansion_word(cmd),
+                CommandWordOrigin::NoReachingAssignment,
+                "a near-miss must NOT end the body; for {cmd:?}"
+            );
+        }
+    }
+
+    /// An opener whose delimiter this scan cannot read must leave the body open
+    /// to the end of the line — the same answer it gave before here-documents
+    /// were modelled at all. An unterminated quote is the shape that reaches it,
+    /// and it is asserted at the unit that decides it: the opener IS recorded
+    /// (so the body opens) with an empty delimiter that NOTHING can close.
+    ///
+    /// Recording no opener at all would be the fail-open: the body would never
+    /// open, and the data lines after it would be handed back as code.
+    #[test]
+    fn an_unreadable_here_document_delimiter_opens_a_body_nothing_closes() {
+        let openers = here_document_openers("cat <<'EOF");
+        assert_eq!(
+            openers.len(),
+            1,
+            "the body must still open; got {openers:?}"
+        );
+        assert_eq!(openers[0].delimiter, "", "an unreadable delimiter is empty");
+        for line in ["EOF", "'EOF", "", "\tEOF"] {
+            assert!(
+                !segment_closes_here_document(line, &openers[0]),
+                "nothing may close an unreadable delimiter; {line:?} did"
+            );
+        }
+    }
+
+    /// A here-STRING (`<<<`) opens no body at all: its operand is on the same
+    /// line and no following line is consumed. Reading one as a here-document
+    /// would swallow the rest of the line as data.
+    #[test]
+    fn a_here_string_opens_no_here_document_body() {
+        assert!(here_document_openers("grep x <<< \"$HAY\"").is_empty());
+        assert_eq!(
+            resolve_first_expansion_word("grep x <<< data\nBIN=/bin/rm\n$BIN -rf /some/path"),
+            CommandWordOrigin::Literal("/bin/rm".to_string()),
+        );
     }
 
     /// An ARRAY assignment. `quote_aware_words` tracks parentheses, so

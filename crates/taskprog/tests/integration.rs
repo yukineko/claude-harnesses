@@ -73,6 +73,76 @@ fn stop_malformed_stdin_exits_zero() {
     assert_eq!(code, 0, "Stop hook must exit 0 on empty stdin (fail-soft)");
 }
 
+/// End-to-end regression for the observed defect: the real Stop hook, handed a
+/// cwd deep inside the source tree, must seed the progress file at the PROJECT
+/// ROOT and must not create a `.claude/` directory beside that cwd.
+///
+/// The artefact that prompted this was
+/// `crates/blastguard/src/.claude/progress.md` — an empty skeleton stamped with
+/// an unrelated session id, sitting inside a source directory because the hook
+/// anchored on whatever cwd it was handed.
+#[test]
+fn stop_from_a_subdirectory_seeds_only_the_project_root() {
+    let bin = env!("CARGO_BIN_EXE_taskprog");
+    let root = unique_dir();
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    let sub = root.join("crates").join("blastguard").join("src");
+    std::fs::create_dir_all(&sub).unwrap();
+
+    let payload = format!(
+        r#"{{"hook_event_name":"Stop","cwd":{},"session_id":"809492a4"}}"#,
+        serde_json_string(&sub.to_string_lossy())
+    );
+    let mut child = Command::new(bin)
+        .arg("stop")
+        .current_dir(&sub)
+        .env("HOME", &root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("binary spawns");
+    if let Some(mut child_stdin) = child.stdin.take() {
+        let _ = child_stdin.write_all(payload.as_bytes());
+    }
+    let out = child.wait_with_output().expect("binary runs");
+    assert_eq!(out.status.code().unwrap_or(-1), 0, "Stop must exit 0");
+
+    let at_root = root
+        .canonicalize()
+        .unwrap()
+        .join(".claude")
+        .join("progress.md");
+    assert!(
+        at_root.exists(),
+        "progress file must be seeded at the project root ({})",
+        at_root.display()
+    );
+    assert!(
+        !sub.join(".claude").exists(),
+        "must NOT create .claude beside the subdirectory cwd"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// Minimal JSON string literal encoder — the test payload embeds a filesystem
+/// path, and on Windows-backed mounts that path can contain backslashes which
+/// would otherwise produce invalid JSON.
+fn serde_json_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 #[test]
 fn status_runs_read_only_without_panic() {
     // `status` prints the resolved config for the (empty, isolated) cwd.

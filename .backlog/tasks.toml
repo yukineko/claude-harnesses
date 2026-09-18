@@ -22970,7 +22970,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
 touched_files = []
-status = "pending"
+status = "done"
 notes = '''
 Found and independently re-verified 2026-09-11 at HEAD 2abf8dea by reading crates/tdd/src/gate.rs classify().
 
@@ -23046,7 +23046,7 @@ mutation 3 体 kill 確認。tdd スイート green。version 0.1.31 lockstep。
   はスコープ外として手を付けていない。別途起票する。
 '''
 created_at = 1789064330
-updated_at = 1789273940
+updated_at = 1789703648
 weight = 0.0
 issue_number = 509
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/509"
@@ -25075,7 +25075,7 @@ notes = """
 pending へ戻した。本チケットの内容自体は未着手のままで、失敗ではない。
 経緯と、回収した RED スイートの詳細は 2c1e54b3 にある。"""
 created_at = 1789292612
-updated_at = 1789566348
+updated_at = 1789703527
 weight = 0.0
 issue_number = 605
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/605"
@@ -26054,7 +26054,7 @@ main は今この RED を抱えている。隠していない: pre-commit は ca
 overwatch は 0.2.34 -> 0.2.35 に lockstep 済み。GATE crate なので
 scripts/rollout-plugins.sh --canary が別途必要。"""
 created_at = 1789297114
-updated_at = 1789566348
+updated_at = 1789703527
 weight = 0.0
 issue_number = 628
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/628"
@@ -26486,7 +26486,7 @@ retain_claim は「Known(Stalled) のときだけ reap」なので、Undetermine
 5e62b0eb が「reap が効かない」なのに対し、06eb8aa3 は「そもそも解放が
 呼ばれない」。2 つ揃うと、握ったまま死んだ run の claim は永久に残る。"""
 created_at = 1789306874
-updated_at = 1789566348
+updated_at = 1789703527
 weight = 0.0
 issue_number = 639
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/639"
@@ -27695,3 +27695,66 @@ updated_at = 1789702622
 weight = 0.0
 issue_number = 666
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/666"
+
+[[task]]
+id = "cffd9787"
+title = "tdd gate.rs: 第1 arm「test-glob ファイルへの追加行はすべて evidence」の是非が未決着 (1ff0fcc9 のスコープ外残件)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+起票元: 1ff0fcc9 の本文末尾「Also note the first arm: any added line in a test-glob file, including a blank-adjacent comment line, is evidence. That may be intentional but it is unstated.」および 2026-09-13 outcome の「起票文末尾が指摘していた第 1 arm はスコープ外として手を付けていない。別途起票する。」— その別途起票が実際には行われていなかったため、ここで起こす (実測 2026-09-18、測定点 e8f4cba7)。
+
+現状の逐語 (crates/tdd/src/gate.rs:173-176):
+        if is_test_file(file) {
+            test_marker_added = true; // any added line in a test file is evidence
+            continue;
+        }
+marker_hit を一切見ずに、test_path_globs に一致する path への *任意の* 追加行 (空行に隣接するコメント行・import 行・改行のみの変更を含む) が has_test_evidence を立て、Verdict::Clean 経由で Stop hook を allow する。marker arm の方は 1ff0fcc9 で is_impl_file ガードが入り narrow 済み (f667897d) なので、現在この 1 本だけが「regex を一切見ない evidence 経路」として残っている。
+
+読みは 2 つあり、どちらかは観測では決まらない (人間の決定が要る):
+ (a) 実在の欠陥 — 「テストを追加した」の証拠として test ファイルへの任意の 1 行は弱すぎる。marker 一致行のみを evidence にすべき (marker arm と同じ narrow を適用)。
+ (b) 意図的な仕様 — test ファイルを触ったこと自体が人間の意思表示として十分であり、意図的に緩くしてある。
+
+見分け方: crates/tdd/README.md と docs/specs/tdd.md の test evidence 契約の記述を読む。ただし docs/specs/tdd.md:1 は自ら REVIEW-NEEDED を宣言しており正典として確定していない (1ff0fcc9 の specforge divert が rigor 未達で refuse された理由がこれ)。したがって本件は 1ff0fcc9 の「Ask する質問4件」の 4 番と同じ決定待ちであり、正典の確定が先行する。
+
+narrow する場合は marker arm と同じく「ブロックが増える方向」なので安全側。ただし CLAUDE.md 2(b) に従い、利害のない agent の RED を先に観測すること。"""
+created_at = 1789703621
+updated_at = 1789703621
+weight = 0.0
+issue_number = 667
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/667"
+
+[[task]]
+id = "e0269780"
+title = "tdd 1ff0fcc9 の修正は実装者自身がテストを書いており CLAUDE.md 2(a) 未充足 — 利害のない agent による独立検証が要る"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+起票元: 1ff0fcc9 の 2026-09-13 outcome が自ら「未了として明示すること: CLAUDE.md 2(a) 未充足。起票文は disinterested agent による RED テストを要求していたが、fork は subagent を起動できず実装者とテスト作成者が同一だった。独立検証が別途必要。」と書いている残件。
+
+実測 2026-09-18、測定点 e8f4cba7 (cargo test -p tdd):
+  gate::tests::marker_in_a_non_impl_non_test_file_is_not_evidence ... ok
+  gate::tests::marker_in_a_manifest_is_not_evidence ... ok
+  gate::tests::marker_in_an_impl_file_is_evidence_control ... ok
+  test result: ok. 77 passed; 0 failed (他スイート 4/8/5/2/3 もすべて green)
+実装 (crates/tdd/src/gate.rs:185 の `if marker_hit && is_impl_file(file)`) も逐語で存在を確認済み。
+
+したがって「テストが通っている」ことは事実として確定しているが、CLAUDE.md 2(a) が要求する条件 —「実装した本人は自分の実装を検証するテストを自分で書かない」— は満たされていない。2(a) はまさに「生成と検証が盲点を共有すると、検証は儀式になる」ことを防ぐための条件なので、green であること自体はこの欠落を埋めない。
+
+やること: condukt-verifier / 独立 subagent / continuous-audit の finder≠verifier のいずれかで、別の agent (できれば別モデル) に以下を検証させる。
+ 1. 追加された 3 テストが、is_impl_file ガードを外した状態で実際に落ちるか (fault injection で RED を再観測する。2(b))。
+ 2. ガードの narrow によって従来 allow されていた正当なケースが block に転じていないか (偽陽性の確認)。
+ 3. marker set (crates/tdd/src/config.rs:190-198) に対して、impl_globs にも test_path_globs にも属さない path が evidence にならないことが網羅されているか。
+
+本件は 1ff0fcc9 の再実装ではない (実装は landed 済み)。独立検証のみがスコープ。関連: cffd9787 (第1 arm の未決着)。"""
+created_at = 1789703640
+updated_at = 1789703640
+weight = 0.0
+issue_number = 668
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/668"

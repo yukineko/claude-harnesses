@@ -14,6 +14,16 @@ fn run(payload: &str) -> (i32, String) {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        // Test isolation for the repeat ledger (2026-09-18). A second identical
+        // refusal in one session downgrades to an `Ask`, and the ledger is keyed
+        // on `CLAUDE_CODE_SESSION_ID` under `$HOME` — which these tests inherit
+        // from whoever ran `cargo test`. Without this, markers written by one
+        // `cargo test` run survive into the NEXT one and every expected `deny`
+        // becomes an `ask` on the second run: a genuinely non-deterministic
+        // suite. An unattributable run resolves to `Undetermined` = no
+        // downgrade, which is the condition these tests mean to measure.
+        // `repeat_downgrade.rs` sets the variable explicitly instead.
+        .env_remove("CLAUDE_CODE_SESSION_ID")
         .spawn()
         .expect("binary spawns");
     if let Some(mut child_stdin) = child.stdin.take() {
@@ -32,7 +42,9 @@ fn run_with_env(payload: &str, envs: &[(&str, &str)]) -> (i32, String) {
     let mut cmd = Command::new(bin);
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        // Repeat-ledger test isolation — see the note in integration.rs.
+        .env_remove("CLAUDE_CODE_SESSION_ID");
     for (k, v) in envs {
         cmd.env(k, v);
     }

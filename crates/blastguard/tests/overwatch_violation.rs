@@ -20,7 +20,9 @@ fn run_with_home(payload: &str, home: &std::path::Path) -> (i32, String) {
     cmd.env("HOME", home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        // Repeat-ledger test isolation — see the note in integration.rs.
+        .env_remove("CLAUDE_CODE_SESSION_ID");
     let mut child = cmd.spawn().expect("binary spawns");
     if let Some(mut child_stdin) = child.stdin.take() {
         let _ = child_stdin.write_all(payload.as_bytes());
@@ -167,7 +169,9 @@ fn unwritable_store_does_not_panic_and_stays_exit_zero() {
     cmd.env("HOME", home.path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        // Repeat-ledger test isolation — see the note in integration.rs.
+        .env_remove("CLAUDE_CODE_SESSION_ID");
     let mut child = cmd.spawn().expect("binary spawns");
     if let Some(mut child_stdin) = child.stdin.take() {
         let _ = child_stdin.write_all(deny_payload().as_bytes());

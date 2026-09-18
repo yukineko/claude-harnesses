@@ -42,6 +42,15 @@ fn run_with_ask(payload: &str, ask: &str) -> (i32, String) {
     let bin = env!("CARGO_BIN_EXE_blastguard");
     let mut child = Command::new(bin)
         .env("BLASTGUARD_ASK", ask)
+        // Hold the repeat ledger out of a test about the entry boundary. Since
+        // 2026-09-18 a second identical refusal in one session downgrades to an
+        // `Ask` (`harness_core::repeat`), and these cases deliberately feed the
+        // SAME payload twice — once interactive, once headless — to compare the
+        // two modes. Inheriting the ambient `CLAUDE_CODE_SESSION_ID` therefore
+        // made the headless run a "repeat" of the interactive one and turned its
+        // `deny` into an `ask`, measuring the ledger instead of the boundary.
+        // Unattributable runs resolve to `Undetermined`, i.e. no downgrade.
+        .env_remove("CLAUDE_CODE_SESSION_ID")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

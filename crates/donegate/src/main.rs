@@ -375,16 +375,12 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     // Stop-hook channel: `Clean` yields `None`, and both non-clean arms — a
     // violation and an undetermined — yield the same blocking JSON, so there is
     // no arm that could let a non-green gate end the turn.
-    let blocked = harness_core::verdict::Verdict::violation(reason);
-    match blocked.stop_decision() {
-        Some(decision) => println!("{decision}"),
-        // Unreachable for a Violation, but resolved to the restricted side rather
-        // than to silence (which the Stop protocol reads as "allow").
-        None => println!(
-            "{}",
-            json!({ "decision": "block", "reason": "donegate: required checks failed" })
-        ),
-    }
+    // Routed through the repeat ledger (operator ruling 2026-09-18: a gate does
+    // not override the same instruction twice). `emit_stop_block` prints the
+    // same blocking JSON on a first occurrence and announces a waiver — never
+    // falls silent — on a second. The old `None` arm's job (never let a
+    // non-green gate end the turn by printing nothing) is preserved inside it.
+    harness_core::repeat::emit_stop_block("donegate", &reason);
     harness_core::hook_latency::record("donegate", &session, __start.elapsed().as_millis() as u64);
     std::process::exit(0);
 }
@@ -549,24 +545,20 @@ fn refuse(
 
     log_event(cfg, session, "refused", &[], attempt);
     let reason = refusal_reason(declaration, attempt, cfg.max_attempts);
-    // `undetermined`, not `violation`: donegate is not asserting the project is
-    // broken, it is asserting it could not tell.
-    let verdict = harness_core::verdict::Verdict::undetermined(reason.clone());
+    // This refusal is an `undetermined`, not a `violation`: donegate is not
+    // asserting the project is broken, it is asserting it could not tell. The
+    // distinction is documentary at this site — `Verdict::stop_decision()` maps
+    // both arms to byte-identical Stop JSON — so it is recorded here rather than
+    // carried by a binding nothing reads.
 
     if interactive {
         eprintln!("{reason}");
         harness_core::hook_latency::record("donegate", session, start.elapsed().as_millis() as u64);
         std::process::exit(1);
     }
-    match verdict.stop_decision() {
-        Some(decision) => println!("{decision}"),
-        // Unreachable for an Undetermined; still resolved to the restricted side
-        // rather than to silence, which the Stop protocol reads as "allow".
-        None => println!(
-            "{}",
-            json!({ "decision": "block", "reason": "donegate: could not judge this project" })
-        ),
-    }
+    // See the note at the required-checks block: routed through the repeat
+    // ledger, which keeps the never-print-nothing guarantee.
+    harness_core::repeat::emit_stop_block("donegate", &reason);
     harness_core::hook_latency::record("donegate", session, start.elapsed().as_millis() as u64);
     std::process::exit(0);
 }

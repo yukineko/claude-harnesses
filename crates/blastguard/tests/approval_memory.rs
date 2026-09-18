@@ -143,6 +143,22 @@ impl Fixture {
             .env("CLAUDE_CODE_ENTRYPOINT", "cli")
             .env_remove("BLASTGUARD_ASK")
             .env_remove("TMPDIR")
+            // Hold the OTHER downgrade mechanism constant. Since 2026-09-18 a
+            // second identical refusal in the same session becomes an `Ask`
+            // (`harness_core::repeat`, wired in `main::downgrade_on_repeat`),
+            // and this suite re-runs the same command inside one fixture on
+            // purpose. Without this the suite would inherit the AMBIENT
+            // `CLAUDE_CODE_SESSION_ID` of whoever ran `cargo test` and start
+            // measuring the repeat ledger instead of the approval memory —
+            // which is exactly what happened when the ledger landed.
+            //
+            // Removing it makes every run unattributable, which
+            // `repeat::observe` resolves to `Undetermined` and therefore to NO
+            // downgrade. So the memory is the only mechanism left in play, and
+            // that is the one thing these tests claim to measure. The repeat
+            // ledger's own behaviour is pinned separately, and adversarially,
+            // in `tests/repeat_downgrade.rs`.
+            .env_remove("CLAUDE_CODE_SESSION_ID")
             .current_dir(&self.base);
         let mut child = cmd.spawn().expect("binary spawns");
         if let Some(mut stdin) = child.stdin.take() {
@@ -307,11 +323,25 @@ fn an_unpromoted_pending_is_not_an_approval() {
     );
 }
 
-/// A `Deny` is never downgraded, however often it has run.
+/// A `Deny` is never downgraded **by the memory**, however often it has run.
 ///
 /// The memory's whole contract is that it moves `Ask` → `Allow` and touches
 /// nothing else. A `Deny` produces no PostToolUse in production (the tool never
 /// runs), but a hand-planted pending must not be able to reach it either.
+///
+/// # Scope, narrowed 2026-09-18 — read this before trusting the name
+///
+/// This is NOT "a deny is never downgraded, full stop", and it never was
+/// (the name has always said *by the memory*). Since the operator ruling
+/// 「ユーザの指示を2度やぶるgateはいらない。2度目はaskせよ」 a second identical
+/// refusal inside one session IS downgraded to an `Ask` — by
+/// `harness_core::repeat`, a different mechanism with a different trigger.
+/// `Fixture::invoke` removes `CLAUDE_CODE_SESSION_ID` so that mechanism cannot
+/// fire here and this test keeps measuring the memory alone.
+///
+/// If you are looking for the guarantee that *nothing* downgrades a deny: it no
+/// longer exists, deliberately. `tests/repeat_downgrade.rs` pins what replaced
+/// it, including the controls that keep the first refusal at full strength.
 #[test]
 fn deny_is_never_downgraded_by_the_memory() {
     let f = Fixture::new("deny-untouched");

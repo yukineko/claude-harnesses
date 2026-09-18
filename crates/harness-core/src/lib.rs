@@ -52,6 +52,7 @@ pub mod plugin_bin;
 pub mod pricing;
 pub mod progress;
 pub mod projkey;
+pub mod repeat;
 pub mod retrieval;
 pub mod scorer;
 pub mod session;

@@ -26815,7 +26815,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
 touched_files = []
-status = "claimed"
+status = "pending"
 notes = """
 実測 2026-09-16、測定点 main 12afeb9b、condukt 0.7.166 (デプロイ版)。
 
@@ -26871,7 +26871,7 @@ done_criteria:
 関連: 5e62b0eb (progress 判定が Undetermined になり reap されない不死 claim)。
 あちらは「reap が効かない」、本件は「そもそも解放が呼ばれない」。別の穴。"""
 created_at = 1789566331
-updated_at = 1789566348
+updated_at = 1789704099
 weight = 0.0
 issue_number = 661
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/661"

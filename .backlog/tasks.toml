@@ -25065,7 +25065,7 @@ tags = [
     "condukt",
 ]
 touched_files = []
-status = "claimed"
+status = "pending"
 notes = """
 測定点 branch batch5-d83b0e8f ff985fac / 2026-09-13. d83b0e8f (claim registry) の調査項目として実測した確定の欠陥。読みは 1 つしかない (判定不能ではない)。機構: acquire_repo_primary(cfg, repo) は RunLock::acquire_or_skip 経由で lock_path に入り、lock_path は project_key(repo_root(cwd)) でキーを作る。呼び出し側が渡す repo は crates/condukt/src/worktree.rs:238 の toplevel(cwd) すなわち git rev-parse --show-toplevel であり、linked worktree では worktree 自身を返す。実測: from main tree が pp2/main、from linked wt が pp2/wt1。ランタイム確認 (condukt worktree reconcile が当該ロックを取る): 手順1 linked worktree から実行すると project dir は wt1-d22e03ed のみ。手順2 main tree から実行すると main-8fe192a0 と wt1-d22e03ed の 2 つ。手順3 main tree のディレクトリに live pid の __repo_primary__.lock を置いた状態で linked worktree から実行すると exit=0 で素通り (直列化されない)。手順4 は反証防止の control で、同じロックを linked worktree 自身のディレクトリに置いて同じ場所から実行すると exit=1 になり contended のメッセージが出る。したがってプローブは識別力を持っており手順3の素通りは本物。手順5 その worktree ロックを保持したまま main tree から実行すると exit=0 で素通り。影響: CLAUDE.md 第8節は全セッションが linked worktree で作業することを絶対義務としているので、共有 git index と default branch と worktree admin を変更する 2 プロセスは必ず別ロックになり決して競合しない。ロックが守るはずのものを守っていない。影響箇所: crates/condukt/src/main.rs:3258 と :3288 と :3318、crates/condukt/src/worktree.rs:645 と :894 と :1053 (worktree merge の checkout-default-branch + merge のクリティカルセクションを含む)。修正方向: d83b0e8f で claim registry に入れたのと同じ手当て、すなわち harness_core::projkey::main_worktree_root で解決した project root を使う lock_path_in_project 系を repo-primary にも適用する。両者は同型なので同じ道具が使える。関連 d83b0e8f 43393ce2
 
@@ -25075,7 +25075,7 @@ notes = """
 pending へ戻した。本チケットの内容自体は未着手のままで、失敗ではない。
 経緯と、回収した RED スイートの詳細は 2c1e54b3 にある。"""
 created_at = 1789292612
-updated_at = 1789703527
+updated_at = 1789716373
 weight = 0.0
 issue_number = 605
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/605"
@@ -25994,7 +25994,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
 touched_files = []
-status = "claimed"
+status = "pending"
 notes = """
 実測 2026-09-13、測定点 c39701bc、rollout 直後（overwatch は harness-core 0.2.24 で再ビルド済み）。
 
@@ -26054,7 +26054,7 @@ main は今この RED を抱えている。隠していない: pre-commit は ca
 overwatch は 0.2.34 -> 0.2.35 に lockstep 済み。GATE crate なので
 scripts/rollout-plugins.sh --canary が別途必要。"""
 created_at = 1789297114
-updated_at = 1789703527
+updated_at = 1789716373
 weight = 0.0
 issue_number = 628
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/628"
@@ -26435,7 +26435,7 @@ tags = [
     "p0",
 ]
 touched_files = []
-status = "claimed"
+status = "pending"
 notes = """
 実測 2026-09-13 22:40 JST、測定点 15adc7bd（main）、cwd=/Users/yuki/src/harness（main worktree）。
 
@@ -26486,7 +26486,7 @@ retain_claim は「Known(Stalled) のときだけ reap」なので、Undetermine
 5e62b0eb が「reap が効かない」なのに対し、06eb8aa3 は「そもそも解放が
 呼ばれない」。2 つ揃うと、握ったまま死んだ run の claim は永久に残る。"""
 created_at = 1789306874
-updated_at = 1789703527
+updated_at = 1789716373
 weight = 0.0
 issue_number = 639
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/639"
@@ -27861,3 +27861,21 @@ updated_at = 1789715685
 weight = 0.0
 issue_number = 671
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/671"
+
+[[task]]
+id = "7ca076f8"
+title = "blastguard: '-c <arg>' の後ろに fd 複製リダイレクト (2>&1 / 1>&2) が来ると空ターゲットの書き込みと誤認して deny する"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """実測 2026-09-18、deployed blastguard 0.2.65 のバイナリに直接 payload を流して測定 (scratchpad/probe_narrow.py)。本セッション中に読み取り専用の調査コマンドを 4 回ブロックした実害あり。拒否文は逐語で: "'> ' destroys the file's current contents and `` is a relative path and blastguard does not know which directory it is relative to, so it cannot tell whether these bytes are recoverable"。空のバッククォートが決定的で、リダイレクトのターゲットが空文字列としてパースされている。空の相対パスは解決不能なので RepoProbe が Undetermined になり第3節どおり制限側 (deny) に倒れる。つまり fail-open ではなく fail-closed 側の誤検知だが、正当な read-only コマンドを止めている。最小切り分け (10 ケース、control 込み): allow= 'ls 2>&1' / 'echo hi > /tmp/x' / 'echo "hello" 2>&1' / 'python3 -c "pass"' / 'python3 -c "pass" >/dev/null' / 'python3 script.py 2>&1'。deny または ask = 'python3 -c "pass" 2>&1' / 'python3 -c "pass" 1>&2' / 'bash -c "pass" 2>&1' / "python3 -c 'pass' 2>&1"。したがってトリガは python 固有でも引用符固有でもなく **-c <arg> の直後に N>&M 形式の fd 複製リダイレクトが来ること**。'>' に実ターゲットがある場合 (>/dev/null) は通るので、壊れているのは N>&M の扱いに限られる。おそらく tokenizer が -c の引数を消費した後に '2>&1' を redirect+空target に分解している。修正方向: fd 複製リダイレクト (N>&M) は**ファイルへの書き込みではない**ので redirect ルールの対象から外す。空ターゲットを解決不能な相対パスとして扱う経路は残してよいが、そもそも N>&M がそこへ来ないようにする。反証防止の control を必ず置くこと: 'echo hi > /etc/passwd' が引き続き deny であること、'echo hi > relative.txt' の空でない相対パスの扱いを変えていないこと。副次観測: 同一セッション内で 'python3 -c "pass" 2>&1' の 2 度目以降は deny ではなく ask を返した。2026-09-18 の repeat ledger が deployed 0.2.65 で稼働していることの直接証拠であり、本件とは別事象。"""
+created_at = 1789716368
+updated_at = 1789716368
+weight = 0.0
+issue_number = 672
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/672"

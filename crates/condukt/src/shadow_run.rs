@@ -14,7 +14,8 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
+use harness_core::verdict::Determination;
 use serde::{Deserialize, Serialize};
 
 use crate::worktree;
@@ -58,19 +59,91 @@ pub struct ShadowOutcome {
     pub duration_secs: f64,
 }
 
+/// Which branch a `finish` must force-delete for the shadow worktree at
+/// `worktree_path`, given the caller's `--run` / `--branch`.
+///
+/// Namespacing is a TWO-SIDED property: `exec` cuts the worktree through
+/// [`worktree::create_namespaced`], so a `finish` that force-deletes the raw
+/// `--branch` aims at a ref that was never created while the real, run-scoped
+/// one is stranded on disk. The branch is therefore resolved against what git
+/// actually registered for that directory, never against the caller's spelling
+/// alone:
+///
+/// * cannot ask git -> REFUSE (`Undetermined` is not "there is no namespace";
+///   guessing here means `git branch -D` on an unverified ref);
+/// * the worktree names no branch at all -> REFUSE (nothing to discard by name);
+/// * git's branch equals the caller's `--run`/`--branch` splice -> that branch;
+/// * `--run` was omitted and git's branch is the SAME logical branch under some
+///   run namespace -> that branch (this is the resolution the legacy CLI could
+///   not express, and it is read off git, not assumed);
+/// * anything else -> REFUSE with both spellings named. A namespace mismatch is
+///   an observable failure, never a quiet success that strands the real branch.
+fn resolve_discard_branch(
+    repo: &Path,
+    worktree_path: &Path,
+    run: Option<&str>,
+    branch: &str,
+) -> Result<String> {
+    let expected = worktree::run_scoped_branch(run, branch)?;
+    let registered = match worktree::registered_branch(repo, worktree_path) {
+        Determination::Known(b) => b,
+        Determination::Undetermined(undecided) => bail!(
+            "refusing to discard the shadow worktree at {}: which branch git has \
+             checked out there could not be determined ({undecided}), and discarding \
+             force-deletes a branch. Nothing was removed.",
+            worktree_path.display()
+        ),
+    };
+    let Some(registered) = registered else {
+        bail!(
+            "refusing to discard the shadow worktree at {}: git registers no branch \
+             for that path (not a worktree, or a detached HEAD), so there is no ref \
+             this finish may force-delete. Nothing was removed.",
+            worktree_path.display()
+        )
+    };
+    if registered == expected {
+        return Ok(registered);
+    }
+    if run.is_none() && worktree::is_run_scoped_form(&registered, branch) {
+        // `exec` (or `worktree create`) ran under a run namespace this finish
+        // was not told about. Observed from git, not assumed: the directory
+        // being discarded really is on that ref, and that ref really is
+        // `branch` under a namespace, so discarding it closes the gap instead
+        // of stranding the branch.
+        return Ok(registered);
+    }
+    bail!(
+        "run-namespace mismatch for the shadow worktree at {}: git has branch {} \
+         checked out there, but --run/--branch resolve to {}. Refusing to \
+         force-delete a branch that is not the one this worktree is on; nothing \
+         was removed.",
+        worktree_path.display(),
+        registered,
+        expected
+    )
+}
+
 /// Finish a shadow-run: discard the shadow worktree (force-remove + force-
 /// delete its branch — the committed work is never merged) and best-effort
 /// record the outcome to fugu-router. Returns whether the fugu-router record
 /// call actually landed (`false` when fugu-router is absent from PATH — a
 /// soft no-op, matching `record_runs`'s fail-soft posture elsewhere in this
 /// binary).
+///
+/// `run` is the run namespace the shadow worktree was cut under (`None` for the
+/// legacy, un-namespaced caller). The ref that gets deleted is resolved by
+/// [`resolve_discard_branch`] BEFORE anything is removed, so a mismatch leaves
+/// the worktree and every branch untouched.
 pub fn finish(
     repo: &Path,
     worktree_path: &Path,
     branch: &str,
+    run: Option<&str>,
     outcome: &ShadowOutcome,
 ) -> Result<bool> {
-    worktree::discard(repo, worktree_path, Some(branch)).with_context(|| {
+    let target = resolve_discard_branch(repo, worktree_path, run, branch)?;
+    worktree::discard(repo, worktree_path, Some(&target)).with_context(|| {
         format!(
             "failed to discard shadow worktree at {}",
             worktree_path.display()
@@ -190,7 +263,7 @@ mod tests {
             cost_usd: 0.42,
             duration_secs: 12.5,
         };
-        finish(&repo, &path, branch, &outcome).expect("finish should succeed");
+        finish(&repo, &path, branch, None, &outcome).expect("finish should succeed");
 
         assert!(!path.exists(), "shadow worktree dir should be removed");
         assert!(

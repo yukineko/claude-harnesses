@@ -1,5 +1,6 @@
 /// Event aggregation and state projection.
 use crate::store::{self, LeaseRegistry};
+use harness_core::verdict::Determination;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -513,7 +514,27 @@ struct CachedView {
 /// directly unit-testable without touching the filesystem. Also guards
 /// against a clock-skew/corrupt timestamp in the future (`built_at > now`),
 /// which is treated as stale rather than trusted.
-fn cache_is_fresh(built_at: i64, now: i64, ttl_secs: i64) -> bool {
+///
+/// **`ledger_mtime` is accepted but NOT consulted as of this commit.** The
+/// verdict is today computed from `built_at`/`now`/`ttl_secs` alone, exactly as
+/// before this parameter existed, so behaviour is unchanged: a lease written
+/// after the cache was built still does not invalidate it, and `overwatch
+/// status` can therefore keep reporting the pre-registration roster (`(none)`
+/// under `== Sessions ==`) for up to `STATUS_CACHE_TTL_SECS`. This signature
+/// exists so that defect can be pinned by a failing test first; the comparison
+/// that actually invalidates the cache lands in the follow-up step of backlog
+/// 7d820338 (task `t3-overwatch`). Do not describe this function as
+/// invalidating on ledger changes until that code is here.
+///
+/// The parameter is a [`Determination`] rather than an `Option` so that "the
+/// ledger mtime could not be observed" stays distinguishable from a real
+/// timestamp when the follow-up consumes it.
+pub(crate) fn cache_is_fresh(
+    built_at: i64,
+    now: i64,
+    ttl_secs: i64,
+    _ledger_mtime: Determination<i64>,
+) -> bool {
     built_at <= now && now - built_at <= ttl_secs
 }
 
@@ -530,7 +551,16 @@ pub fn build_cached(cwd: &Path) -> ProgressView {
     if let Ok(cache_path) = store::status_cache_path(cwd) {
         if let Ok(txt) = std::fs::read_to_string(&cache_path) {
             if let Ok(cached) = serde_json::from_str::<CachedView>(&txt) {
-                if cache_is_fresh(cached.built_at, now, STATUS_CACHE_TTL_SECS) {
+                // Resolved here (not inside `cache_is_fresh`, which stays a
+                // pure predicate) and only on a cache hit, so the cold path
+                // does not stat the ledger. An unobservable mtime travels as
+                // `Undetermined`, never as a sentinel timestamp.
+                if cache_is_fresh(
+                    cached.built_at,
+                    now,
+                    STATUS_CACHE_TTL_SECS,
+                    store::leases_mtime(cwd),
+                ) {
                     return cached.view;
                 }
             }
@@ -1136,14 +1166,25 @@ mod tests {
 
     // -- status cache (cache_is_fresh / build_cached) --------------------
 
+    // These three predate the `ledger_mtime` parameter and assert the
+    // TTL-boundary behaviour only. They pass `Determination::known(built_at)`
+    // (ledger last written no later than the cache build) purely so they
+    // compile; the parameter is ignored by `cache_is_fresh` as of this commit,
+    // so their verdicts are unchanged from before it existed.
     #[test]
     fn test_cache_is_fresh_within_ttl() {
-        assert!(cache_is_fresh(1000, 1005, STATUS_CACHE_TTL_SECS));
+        assert!(cache_is_fresh(
+            1000,
+            1005,
+            STATUS_CACHE_TTL_SECS,
+            Determination::known(1000)
+        ));
         // Exactly at the TTL boundary is still fresh (inclusive).
         assert!(cache_is_fresh(
             1000,
             1000 + STATUS_CACHE_TTL_SECS,
-            STATUS_CACHE_TTL_SECS
+            STATUS_CACHE_TTL_SECS,
+            Determination::known(1000)
         ));
     }
 
@@ -1152,14 +1193,130 @@ mod tests {
         assert!(!cache_is_fresh(
             1000,
             1000 + STATUS_CACHE_TTL_SECS + 1,
-            STATUS_CACHE_TTL_SECS
+            STATUS_CACHE_TTL_SECS,
+            Determination::known(1000)
         ));
     }
 
     #[test]
     fn test_cache_is_fresh_rejects_future_built_at() {
         // A `built_at` after `now` is clock-skew/corruption, not "fresh".
-        assert!(!cache_is_fresh(2000, 1000, STATUS_CACHE_TTL_SECS));
+        assert!(!cache_is_fresh(
+            2000,
+            1000,
+            STATUS_CACHE_TTL_SECS,
+            Determination::known(2000)
+        ));
+    }
+
+    // -- `_ledger_mtime` contract (backlog 7d820338, task t3-overwatch) ------
+    //
+    // The stub above accepts `_ledger_mtime` and ignores it, so every test in
+    // this block is expected to FAIL against the current implementation.
+    // Each pins exactly one rule of the contract; see the task's decision
+    // record for the full statement. Rules restated here for the reader:
+    //
+    //   1. Known(m), m <  built_at -> ledger unchanged since build -> TTL decides.
+    //   2. Known(m), m >= built_at -> NOT fresh, regardless of TTL (the `>=`
+    //      is deliberate: both `store::now()` and `leases_mtime` are whole
+    //      unix seconds, so a same-second write is indistinguishable from an
+    //      earlier one and must resolve to the restrictive side).
+    //   3. Undetermined(_)        -> NOT fresh (an unobservable mtime must
+    //      never be served as a cache hit).
+    //   4. Ledger strictly older than the build: pre-existing TTL behaviour
+    //      (expired TTL / future built_at) still holds.
+
+    #[test]
+    fn test_cache_is_fresh_rule1_older_ledger_within_ttl_is_fresh() {
+        // Rule 1: the ledger predates the build (999 < built_at 1000) and the
+        // cache is still within its TTL -> freshness is decided by the TTL,
+        // exactly as if the ledger had never been consulted.
+        assert!(
+            cache_is_fresh(1000, 1005, STATUS_CACHE_TTL_SECS, Determination::known(999)),
+            "an unmoved ledger (mtime strictly before built_at) must not by \
+             itself invalidate a cache that is still within its TTL"
+        );
+    }
+
+    #[test]
+    fn test_cache_is_fresh_rule1_older_ledger_still_expires_at_ttl() {
+        // Rule 1 (continued) + rule 4: an older, unmoved ledger does not
+        // grant immortality — the TTL boundary still applies on top of it.
+        assert!(
+            !cache_is_fresh(
+                1000,
+                1000 + STATUS_CACHE_TTL_SECS + 1,
+                STATUS_CACHE_TTL_SECS,
+                Determination::known(999)
+            ),
+            "an older, unmoved ledger must not keep serving a cache entry \
+             past its own TTL"
+        );
+    }
+
+    #[test]
+    fn test_cache_is_fresh_rule2_same_second_ledger_write_is_not_fresh() {
+        // Rule 2, the same-second tie case called out as most likely to be
+        // silently dropped: the ledger's mtime EQUALS built_at (whole-second
+        // resolution can't order them), well within TTL otherwise. Must
+        // resolve to NOT fresh, not to a TTL check.
+        assert!(
+            !cache_is_fresh(
+                1000,
+                1005,
+                STATUS_CACHE_TTL_SECS,
+                Determination::known(1000)
+            ),
+            "a ledger mtime equal to built_at (same-second write, `>=` not \
+             `>`) is ambiguous under whole-second timestamps and MUST \
+             resolve to not-fresh rather than falling through to the TTL check"
+        );
+    }
+
+    #[test]
+    fn test_cache_is_fresh_rule2_ledger_written_after_build_is_not_fresh() {
+        // Rule 2, the unambiguous case: the ledger moved strictly after the
+        // cache was built. TTL is irrelevant here.
+        assert!(
+            !cache_is_fresh(
+                1000,
+                1005,
+                STATUS_CACHE_TTL_SECS,
+                Determination::known(1001)
+            ),
+            "a ledger write strictly after the cache was built must \
+             invalidate the cache regardless of remaining TTL"
+        );
+    }
+
+    #[test]
+    fn test_cache_is_fresh_rule3_undetermined_ledger_mtime_is_not_fresh() {
+        // Rule 3: the ledger mtime could not be observed at all. "I could
+        // not tell whether the ledger moved" must never be served as a
+        // fresh cache hit, even though the TTL alone would say fresh.
+        assert!(
+            !cache_is_fresh(
+                1000,
+                1005,
+                STATUS_CACHE_TTL_SECS,
+                Determination::undetermined("leases.json metadata unreadable (test)")
+            ),
+            "an unobservable ledger mtime (Undetermined) must never be \
+             served as a fresh cache hit; unknown must resolve to the \
+             restricted side (CLAUDE.md §3), not to allow"
+        );
+    }
+
+    #[test]
+    fn test_cache_is_fresh_rule4_future_built_at_with_older_ledger_is_not_fresh() {
+        // Rule 4, isolated from rule 2: clock skew (`built_at > now`) must
+        // stay not-fresh even when the ledger predates the cache build, so
+        // this failure mode is not accidentally masked by the ledger check.
+        assert!(
+            !cache_is_fresh(2000, 1000, STATUS_CACHE_TTL_SECS, Determination::known(500)),
+            "a built_at after now (clock skew/corruption) must stay \
+             not-fresh even when the ledger mtime predates the cache build"
+        );
     }
 
     // `build_cached` and `store::status_cache_path` resolve under the real
@@ -1327,5 +1484,87 @@ mod tests {
         // Vecs wholesale).
         assert!(first.sessions.is_empty());
         assert!(second.sessions.is_empty());
+    }
+
+    /// Observable end-to-end reproduction of the defect (backlog 7d820338):
+    /// a `status_cache.json` built at T with an empty roster, and a
+    /// `leases.json` holding one LIVE lease whose mtime is forced to the
+    /// SAME whole unix second T (the ambiguous same-second tie rule 2
+    /// resolves toward not-fresh), must not have its stale empty roster
+    /// served back by `build_cached`. This is the actual symptom users saw
+    /// (`overwatch status` printing `(none)` under `== Sessions ==` while
+    /// live leases existed) — the predicate tests above pin the decision in
+    /// isolation, this one pins it through the real cache-file + real
+    /// leases-file path that `overwatch status` actually takes.
+    ///
+    /// Self-contained: runs entirely under `HomeSandbox` (isolated `$HOME`),
+    /// so it can never read or write the developer's real `~/.overwatch`
+    /// ledger. Forces the leases.json mtime with `File::set_modified` rather
+    /// than relying on wall-clock timing, so the same-second tie is exact
+    /// and deterministic rather than a race.
+    #[test]
+    fn test_build_cached_same_second_lease_write_is_not_served_stale() {
+        let sandbox = HomeSandbox::new("same-second-lease");
+        let cwd = sandbox.dir.clone();
+
+        let built_at = store::now();
+
+        // Seed a status cache built at `built_at` with an EMPTY roster —
+        // this is the pre-registration snapshot `status` would have taken
+        // right before the lease below was written.
+        let cache_path = store::status_cache_path(&cwd).unwrap();
+        std::fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+        let seeded = CachedView {
+            built_at,
+            view: ProgressView {
+                sessions: Vec::new(),
+                ..Default::default()
+            },
+        };
+        std::fs::write(&cache_path, serde_json::to_string(&seeded).unwrap()).unwrap();
+
+        // Seed a leases.json with one live lease (recent heartbeat, well
+        // under `store::LEASE_TTL_SECS`, so `reap_stale` keeps it).
+        let leases_path = store::leases_path(&cwd).unwrap();
+        std::fs::create_dir_all(leases_path.parent().unwrap()).unwrap();
+        let mut leases: LeaseRegistry = BTreeMap::new();
+        leases.insert(
+            "k1".to_string(),
+            Lease {
+                key: "k1".to_string(),
+                title: "Task 1".to_string(),
+                session_id: "sess-a".to_string(),
+                run_id: "run-1".to_string(),
+                claimed_at: built_at,
+                heartbeat_at: built_at,
+                scope: Vec::new(),
+                done_criteria: None,
+            },
+        );
+        std::fs::write(&leases_path, serde_json::to_string(&leases).unwrap()).unwrap();
+
+        // Force leases.json's mtime to EXACTLY `built_at` — the same whole
+        // unix second as the cache build, not merely "close to it" — so the
+        // tie is exact rather than a timing-dependent race.
+        {
+            use std::time::{Duration, SystemTime};
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&leases_path)
+                .unwrap();
+            file.set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(built_at as u64))
+                .unwrap();
+        }
+
+        let view = build_cached(&cwd);
+        assert!(
+            !view.sessions.is_empty(),
+            "a lease registered in the SAME second the status cache was \
+             built must not be masked by a still-fresh-by-TTL cache: \
+             build_cached returned an empty roster while leases.json holds \
+             a live lease written in the same second as the cache — this is \
+             the exact `overwatch status` reporting `(none)` under \
+             `== Sessions ==` defect from backlog 7d820338"
+        );
     }
 }

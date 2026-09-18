@@ -22,7 +22,15 @@
 
 ループは `compass gap` で鮮度をゲートし（charter が陳腐なら自動実行せず `/compass` を促す）、backlog ロックを取得して二重ループを防ぐ。`/flow` は `/backlog` の上位互換なので**併走させない**（backlog ロックで物理的に直列化される）。
 
-**autonomy switch**: config の `autonomous` または env `CONDUKT_AUTONOMOUS=1` を立てると、`/condukt` が `condukt state autonomy-check` の exit code で分岐して Phase 3 の人間合意などのゲートを縮退する（完全自走）。既定は無効（HOTL 維持）。有効化前に `donegate` / `reviewgate` / `propguard` などの検証ゲートを整えておくこと。
+**autonomy switch（condukt / ctxrot / autoflow 共通の 1 スイッチ）**: `condukt state autonomy-set on|off` が書く永続スイッチファイル（`$HARNESS_AUTONOMY_DIR` または `~/.harness/autonomy/<project-key>.json`）を3 プラグインが**直接**読む（subprocess なし）。project-key は **main worktree root** 由来なので、main ツリーで立てたスイッチは linked worktree からも見える（CLAUDE.md §8）。
+
+解決順位（上から優先）: env `HARNESS_AUTONOMOUS` → env `CONDUKT_AUTONOMOUS`（旧エイリアス。引き続き有効）→ スイッチファイル → 各 crate の config（condukt なら `~/.condukt/config.toml` の `autonomous`）→ 既定 off。スイッチファイルが**存在しない**のは確定した「未設定」で、静かに off になる。ファイルが**あるのに読めない/壊れている**場合は判定不能なので **off に fail-closed し、そのパスを名指す警告を stderr に出す**（CLAUDE.md §1/§3。壊れていることと未設定を見分けられない沈黙は作らない）。
+
+- `condukt state autonomy-check` は従来どおり `{"autonomous":<bool>}` だけを出力し（autonomous なら exit 0、そうでなければ 1）、`/condukt` はその exit code で分岐して Phase 3 の人間合意などのゲートを縮退する。どの層が決めたかは `--explain` を付けたときだけ `"source"` （`env` / `switch-file` / `config` / `default` / `undetermined-switch-file`）として出る。
+- `condukt state autonomy-path` は `{"path":...,"source":...}` を出力する。
+- `ctxrot autonomy` は `{"autonomous":...,"auto_distill_on_band":...,"auto_compact_enabled":...,"source":...}` を出力する。スイッチが on のときこの 2 つは**既定として** true になるが、config.toml / `CTXROT_AUTO_COMPACT` / `CTXROT_AUTO_DISTILL_ON_BAND` での**明示的な指定は常にスイッチより優先する**。
+
+既定は無効（HOTL 維持）。有効化前に `donegate` / `reviewgate` / `propguard` などの検証ゲートを整えておくこと。
 
 ```
 /flow
@@ -158,6 +166,20 @@ Phase 0 で open run を検知し `AskUserQuestion` なしで自動的に Phase 
 condukt state abandon --run <RID> --all-stuck
 /condukt --resume <RID>
 ```
+
+`--all-stuck` の終了コードは、スキャンが clean だったかを表す（判定不能を沈黙で
+「問題なし」に写さないため — CLAUDE.md §1/§3）。判定できなかったタスクは
+どちらの場合も id・分類・理由が stderr に出力される。
+
+| exit | 意味 |
+| ---- | ---- |
+| `0` | スキャンが clean。判定不能なタスクが無いか、あっても 2 サンプル目の観測待ち (`awaiting-sample`) だけ — これは自己解決する（次回の呼び出しで判定に至る）うえで、毎回 stderr に報告される |
+| `3` | 少なくとも 1 件のタスクの durable な進捗シグナルが **読めなかった** (`unobservable`)。stuck でも healthy でもない。例: 記録された worktree で `git rev-parse HEAD` が失敗する / `updated_at` が無い |
+
+exit 3 でも「判定不能なタスクを abandon する」ことは無い（abandon されるのは
+`Known(Stalled)` が確定したタスクだけで、報告と abandon は独立している）。
+読めなかったタスクを人間の判断で回収したい場合は `--task <id>` の明示指定を使う
+（こちらは意図的に ungated）。
 
 ---
 
@@ -308,7 +330,7 @@ condukt Phase 8 でも自動実行されるが、任意のタイミングで手�
 ```
 
 1. `session-insights record-now` が数値ブロック（コスト・トークン・ターン数・ファイル数）を自動生成し、ノートパスを返す。
-2. 散文セクション（完了サマリ・つまずき・振り返り・残課題・関連）を Sonnet サブエージェントがこのセッションの transcript から埋める。
+2. 散文セクション（完了サマリ・認知の変化/修正された理解・つまずき・振り返り・自己批判/確信度・残課題・関連）を Sonnet サブエージェントがこのセッションの transcript から埋める。成果物の複製ではなく、backlog/code に書けない推論・修正・較正を書く。
 3. `backlog`（standalone backlog crate）でバックログを更新（完了項目を `backlog done <id>`、新規残課題を `backlog add --title ... --project ...`）。
 
 `record = true` が `session-insights.toml` に設定されていれば **SessionEnd フックで自動実行**（数値ブロックのみ）。

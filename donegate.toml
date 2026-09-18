@@ -10,12 +10,20 @@
 # "ship broken code, touch one test file" stop being a clean path to a finished turn.
 #
 # LATENCY IS THE DESIGN CONSTRAINT: these run on every Stop. Each check is scoped
-# with when_changed so a docs/scripts-only turn pays nothing, and the test check
-# is scoped to touched crates (see scripts/test-changed-crates.sh) rather than the
-# full 39-crate workspace. A gate slow enough to be disabled protects nothing.
+# with when_changed so a docs/scripts-only turn pays nothing, and EVERY cargo
+# check is scoped to the touched crates rather than the full 39-crate workspace
+# (scripts/test-changed-crates.sh for tests, scripts/lint-changed-crates.sh for
+# fmt/clippy). A gate slow enough to be disabled protects nothing.
+#
+# ATTRIBUTION IS THE OTHER CONSTRAINT: fmt/clippy used to run workspace-wide, so
+# a red crate the current turn never touched blocked the stop of whoever WAS
+# working — with the shared skip file as the only escape (CLAUDE.md #8). They are
+# scoped now, as one `lint-changed` check;
+# scripts/test_lint_changed_crates.py pins both directions of that.
 #
 # NOTE: cargo is rustup-managed here and hook PATH does not always include the
-# shim dir, so each cargo check sources ~/.cargo/env first (CLAUDE.md rule).
+# shim dir, so each cargo check sources ~/.cargo/env first (CLAUDE.md rule) —
+# lint-changed-crates.sh does that inside the script.
 # NOTE: a project donegate.toml is IGNORED unless the project root is trusted —
 # run `donegate trust` once per clone, or this file silently does nothing.
 
@@ -25,15 +33,30 @@ default_timeout_secs = 300
 output_tail_lines = 40
 reset_after_secs = 600    # attempt counter resets after this idle gap
 
+# fmt and clippy are ONE check, because they are ONE script: a single run of
+# scripts/lint-changed-crates.sh does `cargo fmt -p <pkg> -- --check` AND
+# `cargo clippy -p <pkg> --all-targets -- -D warnings` for every crate changed in
+# the working tree.
+#
+# WHY NOT TWO ENTRIES (it was briefly written that way, and that was a defect):
+# with the same script as the `cmd` of both, every Stop ran the whole fmt+clippy
+# sweep TWICE, and the `fmt` entry budgeted 120s for a job that now includes a
+# cold clippy build — donegate would report `fmt` as a TIMEOUT while `clippy`
+# (600s) passed. A spurious block is exactly what gets a gate disabled.
+# `when_changed` is the union of what the two used to fire on (so a
+# Cargo.toml/Cargo.lock-only change still reaches clippy) and `timeout_secs` is
+# the binding budget of the two. Which half went red is still reported — by the
+# script's own stderr (`cargo fmt --check FAILED for ...` /
+# `cargo clippy FAILED for ...`), which is all the two names were buying.
+# scripts/test_lint_changed_crates.py::DonegateWiresItAsOneCheck pins this, so
+# the split cannot come back unnoticed.
+#
+# The script itself states, in its header, the coverage this scoping gives up
+# (a shared crate is linted only in itself, not in its ~39 dependents, and no CI
+# backstops it here) — read it before assuming the fan-out is checked anywhere.
 [[check]]
-name = "fmt"
-cmd = '. "$HOME/.cargo/env" 2>/dev/null; cargo fmt --all -- --check'
-when_changed = ["**/*.rs"]
-timeout_secs = 120
-
-[[check]]
-name = "clippy"
-cmd = '. "$HOME/.cargo/env" 2>/dev/null; cargo clippy --workspace --all-targets -- -D warnings'
+name = "lint-changed"
+cmd = "scripts/lint-changed-crates.sh"
 when_changed = ["**/*.rs", "Cargo.toml", "Cargo.lock"]
 timeout_secs = 600
 
@@ -42,3 +65,38 @@ name = "test-changed"
 cmd = "scripts/test-changed-crates.sh"
 when_changed = ["**/*.rs"]
 timeout_secs = 900
+
+# The git-hook suites. .githooks/ IS the block/allow authority in this repo
+# (CLAUDE.md #7), and until now nothing ran the tests that guard it —
+# scripts/check-workspace-tests.py would have (it globs scripts/test_*.py), but
+# nothing invokes that either, so the guards of the guards were unguarded
+# (backlog c3a98510).
+#
+# Split in two ON PURPOSE, from measurement at aed66762:
+#   test_precommit_hook.py    Ran 16 tests   OK       -> required, below
+#   test_git_hook_coverage.py Ran  9 tests   OK       -> required, below
+#   test_gate_bypass.py       Ran 124 tests  FAILED(1)-> advisory, below that
+#
+# The green pair is enforced. The red one is NOT silenced and NOT blocking: its
+# single failure is the open defect backlog 6267bfbe pins (the post-commit amend
+# certificate), whose fix is blocked on a permission deny over .githooks/**.
+# Making it required today would block every stop in the repo, and that pressure
+# is what manufactures a shared skip file (CLAUDE.md #5) or a deleted assertion
+# (CLAUDE.md #4). When 6267bfbe lands, move test_gate_bypass into
+# scripts/run-hook-tests.sh and delete the advisory entry.
+[[check]]
+name = "hook-tests"
+cmd = "scripts/run-hook-tests.sh"
+when_changed = [".githooks/**", "scripts/test_precommit_hook.py", "scripts/test_git_hook_coverage.py", "scripts/run-hook-tests.sh", "scripts/gate-bypass.py", "scripts/deny-no-verify.py"]
+timeout_secs = 300
+
+# Advisory, with a named expiry condition — not a permanent exemption. `optional`
+# means a failure warns instead of blocking; it still RUNS and still reports, so
+# a SECOND failure appearing next to the known one is visible rather than hidden
+# behind a suite nobody executes.
+[[check]]
+name = "gate-bypass-tests-advisory"
+cmd = "python3 scripts/test_gate_bypass.py"
+when_changed = [".githooks/**", "scripts/test_gate_bypass.py", "scripts/gate-bypass.py", "scripts/deny-no-verify.py"]
+timeout_secs = 300
+optional = true

@@ -65,6 +65,60 @@ pub fn leases_path(cwd: &Path) -> Result<PathBuf> {
     Ok(storage_root(cwd)?.join("leases.json"))
 }
 
+/// Last modification time of the leases ledger, as unix seconds — the same
+/// unit as [`now`] and as the status cache's `built_at`, so the two are
+/// directly comparable.
+///
+/// Tri-state on purpose: every way of failing to observe the mtime — the path
+/// could not be resolved, the file is absent, its metadata is unreadable, or
+/// the timestamp predates the unix epoch — yields
+/// `Determination::undetermined` naming `leases.json`, never a sentinel like
+/// `0` or `i64::MAX`. A sentinel would be indistinguishable from a real
+/// observation at the consumer, which is the collapse
+/// [`harness_core::verdict::Determination`] exists to prevent. This mirrors
+/// the boundary idiom used by [`load_leases`]
+/// ([`harness_core::boundary::read_to_string`]); `boundary` has no metadata
+/// accessor today, so the `std::fs::metadata` call is made here and its error
+/// is mapped into the same tri-state rather than erased with `.ok()`.
+pub fn leases_mtime(cwd: &Path) -> harness_core::verdict::Determination<i64> {
+    use harness_core::verdict::Determination;
+
+    let path = match leases_path(cwd) {
+        Ok(p) => p,
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "leases.json path could not be resolved for cwd {}: {e}",
+                cwd.display()
+            ));
+        }
+    };
+    let meta = match std::fs::metadata(&path) {
+        Ok(m) => m,
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "leases.json metadata unreadable at {}: {e}",
+                path.display()
+            ));
+        }
+    };
+    let modified = match meta.modified() {
+        Ok(t) => t,
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "leases.json mtime unavailable at {}: {e}",
+                path.display()
+            ));
+        }
+    };
+    match modified.duration_since(std::time::UNIX_EPOCH) {
+        Ok(d) => Determination::known(d.as_secs() as i64),
+        Err(e) => Determination::undetermined(format!(
+            "leases.json mtime precedes the unix epoch at {}: {e}",
+            path.display()
+        )),
+    }
+}
+
 /// Path to the events.jsonl file (append-only).
 pub fn events_path(cwd: &Path) -> Result<PathBuf> {
     Ok(storage_root(cwd)?.join("events.jsonl"))

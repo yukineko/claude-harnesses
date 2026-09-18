@@ -25,6 +25,15 @@
 //! stop (→ done/allow); the other is the user explicitly asking to stop THIS
 //! Stop (see below) — every other path blocks.
 //!
+//! The escalating Stop differs from a routine one in exactly one further way: it
+//! does NOT re-mark the pending ids `running` (backlog `1bac3de6`). `running` is
+//! the claim "a worker is on it", so re-asserting it on the very Stop that
+//! reports stalled progress contradicts that report, launders an already-`failed`
+//! task back into the healthy set, and invites a second worker onto the same
+//! worktree/branch. `decide_progress` resets the streak at the escalation, so the
+//! next Stop is a routine continuation and marks running again — the suppression
+//! is scoped to the escalating Stop, not a stand-down.
+//!
 //! Independently of the above (Tier 2 delegation-record advisory): on every
 //! `record_requested`/`continuing` Stop, if this session's transcript shows
 //! `/flow` drove a condukt run to completion without ever calling
@@ -244,9 +253,30 @@ fn stop_run(input: HookInput) {
                     s.phase = Phase::Continuing;
                     state::save(&cfg.state_dir, &session_id, &s);
 
-                    // Mark tasks as running so interruptions can be detected.
-                    let ids: Vec<&str> = pending.iter().map(|t| t.id.as_str()).collect();
-                    condukt::mark_running(&cwd, &ids);
+                    // Mark tasks as running so interruptions can be detected --
+                    // but ONLY on the routine continuation (backlog 1bac3de6).
+                    // `running` is the claim "a worker is on it", and the 2-hour
+                    // sweep in `condukt::find_pending` reads a stale one as an
+                    // interruption. Re-asserting that claim on an ESCALATION
+                    // contradicts the escalation itself: the message says the
+                    // pending set has not shrunk for `stuck_threshold` cycles
+                    // while the run-state simultaneously reports every one of
+                    // those tasks as actively running. It also launders a task a
+                    // worker already `failed` back to `running`, hiding the
+                    // failure, and invites a second worker onto the same
+                    // worktree/branch (memory: condukt-redispatch-stuck-worker-dup).
+                    //
+                    // Scoped to the escalating Stop only: `decide_progress`
+                    // resets the streak to 0 there, so the next Stop is a
+                    // routine `Continue` and marks running again. This is not a
+                    // stand-down -- the ticket's "escalate N times then Done"
+                    // half was retracted by the 2026-09-13 ruling, since
+                    // `state::Phase::Continuing` makes an empty pending set the
+                    // only legitimate stop.
+                    if !matches!(decision, StopDecision::EscalateStuck) {
+                        let ids: Vec<&str> = pending.iter().map(|t| t.id.as_str()).collect();
+                        condukt::mark_running(&cwd, &ids);
+                    }
 
                     let list = pending
                         .iter()
@@ -272,7 +302,7 @@ fn stop_run(input: HookInput) {
                             // escalation by autonomy — autonomous keeps going
                             // (noting out-of-band handling), non-autonomous asks
                             // the user to confirm/redirect.
-                            let reason = if is_autonomous() {
+                            let reason = if is_autonomous(&cwd) {
                                 format!(
                                     "自律継続中: condukt の pending が {} 回連続で減っていません（進捗停滞を検知）。残課題 {} 件:\n{}\n\nout-of-band で対処しつつ継続します（/condukt を再実行）。",
                                     cfg.stuck_threshold,
@@ -334,21 +364,33 @@ fn stop_run(input: HookInput) {
     }
 }
 
-/// Whether the current run is autonomous, per `condukt state autonomy-check`.
-/// Shells out (like `lock::backlog_driver_active`): exit 0 = autonomous; ANY
-/// failure — non-zero exit, spawn error, missing binary — is treated as
-/// non-autonomous (fail-safe: default to asking the user rather than assuming
-/// autonomy). Consulted ONLY on the `EscalateStuck` path to word the visible
-/// escalation message, so no extra subprocess is spawned on the common
-/// progress (`Continue`) path.
-fn is_autonomous() -> bool {
-    std::process::Command::new("condukt")
-        .args(["state", "autonomy-check"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|st| st.success())
-        .unwrap_or(false)
+/// Whether the current run is autonomous, read DIRECTLY from the shared switch
+/// (`harness_core::autonomy`): the env (`HARNESS_AUTONOMOUS`,
+/// `CONDUKT_AUTONOMOUS`) beats the switch file, which defaults to off.
+///
+/// # Why the `condukt` subprocess was removed
+///
+/// This used to run `condukt state autonomy-check` and read its exit code. That
+/// made the answer depend on `condukt` being on `PATH` — and a `PATH` miss came
+/// back as exit-non-zero, i.e. byte-identical to a deliberate "not autonomous".
+/// A cannot-determine was being read as a verdict, which is the class of bug
+/// CLAUDE.md section 3 exists to close. The shared switch is a file this process
+/// can read itself, so there is no spawn to fail.
+///
+/// Still fail-closed: an unreadable switch file resolves to NOT autonomous (the
+/// user gets asked) and the warning naming it is surfaced on stderr.
+///
+/// NOTE ON SCOPE: this reads the SHARED switch, not condukt's private
+/// `~/.condukt/config.toml`. A user who set only `autonomous = true` in that
+/// file (and never ran `condukt state autonomy-set on`) is not autonomous here.
+/// autoflow consults this ONLY to word the visible `EscalateStuck` message — it
+/// blocks either way — so the narrower read changes wording, not control flow.
+fn is_autonomous(cwd: &std::path::Path) -> bool {
+    let resolved = harness_core::autonomy::resolve(cwd, None);
+    if let Some(warning) = resolved.warning {
+        eprintln!("{warning}");
+    }
+    resolved.autonomous
 }
 
 fn block(cwd: &std::path::Path, session: &str, check_kind: &str, reason: &str) {

@@ -278,19 +278,20 @@ enum Command {
         #[arg(long)]
         rationale: Option<String>,
         /// The adversarial verifier's TRI-state verdict:
-        /// `confirmed` | `refuted` | `unverified`.
+        /// `confirmed` | `refuted` | `unverified`. REQUIRED.
         ///
         /// Any unrecognized value is recorded as `unverified` (undetermined
         /// resolves to the restrictive side — never silently confirmed, never
-        /// dropped). Omitting the flag records `confirmed`, preserving the
-        /// pre-tri-state contract where this command ingested ONLY the
-        /// verifier's CONFIRMED subset; say `--verdict unverified` explicitly
-        /// when the verifier could not settle the claim. Only `confirmed`
-        /// findings are forwarded by `review-queue --to-backlog`;
-        /// `unverified` ones stay visible in the queue, marked, pending
-        /// re-verification.
+        /// dropped). Omitting the flag used to record `confirmed`, which kept
+        /// the pre-tri-state contract but meant `unverified` could never arise
+        /// by default — a third state reachable only on request is not a third
+        /// state. Recording is the moment the verifier knows whether it settled
+        /// the claim, so it has to say (user ruling 2026-07-21, backlog
+        /// eda212a0). Only `confirmed` findings are forwarded by
+        /// `review-queue --to-backlog`; `unverified` ones stay visible in the
+        /// queue, marked, pending re-verification.
         #[arg(long)]
-        verdict: Option<String>,
+        verdict: String,
     },
     /// Continuous-Audit round metrics ledger (2630b4c5). `record` appends one
     /// round's counts to the convergence ledger that `audit-metrics` reads back.
@@ -716,7 +717,7 @@ fn main() -> Result<()> {
                 &summary,
                 file.as_deref(),
                 rationale.as_deref(),
-                verdict.as_deref(),
+                &verdict,
             )?;
         }
         Command::AuditRound { action } => match action {

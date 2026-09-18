@@ -713,6 +713,7 @@ pub fn add_with_weight(
             issue_number: None,
             issue_url: None,
             issue_closed_at: None,
+            touched_files: Vec::new(),
         };
         tasks.push(task);
         save(path, &tasks)?;
@@ -1564,6 +1565,7 @@ pub fn add_with_weight_and_github_push<R: Fn(&[&str]) -> Option<(bool, String)>>
             issue_number: None,
             issue_url: None,
             issue_closed_at: None,
+            touched_files: Vec::new(),
         };
 
         // Fail-soft GitHub push: never abort the add on a non-GitHub remote,
@@ -2521,6 +2523,7 @@ mod tests {
             issue_number: None,
             issue_url: None,
             issue_closed_at: None,
+            touched_files: Vec::new(),
         };
         let seed = vec![
             seed_task("d", STATUS_DONE),
@@ -2606,6 +2609,7 @@ mod tests {
                     issue_number: None,
                     issue_url: None,
                     issue_closed_at: None,
+                    touched_files: Vec::new(),
                 });
             }
             save(&path, &seed).unwrap();
@@ -3190,6 +3194,7 @@ mod tests {
                     issue_number: None,
                     issue_url: None,
                     issue_closed_at: None,
+                    touched_files: Vec::new(),
                 });
             }
             save(&path, &seed).unwrap();
@@ -3626,6 +3631,7 @@ mod tests {
                             issue_number: None,
                             issue_url: None,
                             issue_closed_at: None,
+                            touched_files: Vec::new(),
                         });
                     }
                     barrier.wait();
@@ -3700,6 +3706,7 @@ mod tests {
                 issue_number: None,
                 issue_url: None,
                 issue_closed_at: None,
+                touched_files: Vec::new(),
             }],
             &rec,
         )
@@ -3811,6 +3818,7 @@ mod tests {
                 issue_number: None,
                 issue_url: None,
                 issue_closed_at: None,
+                touched_files: Vec::new(),
             },
             Task {
                 id: "fresh".to_string(),
@@ -3827,6 +3835,7 @@ mod tests {
                 issue_number: None,
                 issue_url: None,
                 issue_closed_at: None,
+                touched_files: Vec::new(),
             },
         ];
         save(&path, &seed).unwrap();
@@ -4582,6 +4591,7 @@ mod tests {
                 issue_number: None,
                 issue_url: None,
                 issue_closed_at: None,
+                touched_files: Vec::new(),
             }],
         )
         .unwrap();
@@ -4703,6 +4713,7 @@ mod tests {
             issue_number,
             issue_url: None,
             issue_closed_at,
+            touched_files: Vec::new(),
         }
     }
 
@@ -5092,6 +5103,40 @@ mod tests {
                 reason: crate::github::CloseReason::Completed,
             }],
             "a close that was never confirmed must be retried"
+        );
+    }
+
+    /// (A) A REAL pre-existing `tasks.toml` — a hand-written `[[task]]` block
+    /// with no `touched_files` key, exactly as every record on disk looks
+    /// today — must still load through the production `load` path, not merely
+    /// through a serde-json fixture. Loading is all-or-nothing (`toml::from_str`
+    /// over the whole file), so a missing `#[serde(default)]` does not degrade
+    /// one record: it takes the entire store offline.
+    ///
+    /// Dies if `#[serde(default)]` is dropped from `Task::touched_files`.
+    #[test]
+    fn load_reads_a_legacy_store_that_has_no_touched_files_key() {
+        let path = tmp_path();
+        std::fs::write(
+            &path,
+            r#"[[task]]
+id = "91e503c8"
+title = "legacy record written before touched_files existed"
+project = "/repo"
+tags = []
+status = "pending"
+notes = ""
+created_at = 1
+updated_at = 1
+weight = 0.0
+"#,
+        )
+        .unwrap();
+        let tasks = load(&path).expect("a legacy store must still load");
+        assert_eq!(tasks.len(), 1);
+        assert!(
+            tasks[0].touched_files.is_empty(),
+            "an absent touched_files key must read as an undeclared (empty) scope"
         );
     }
 

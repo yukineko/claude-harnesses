@@ -1,0 +1,298 @@
+# Classification of every call site of `harness_core::projkey::{repo_root,
+# project_key, main_worktree_root}` under `crates/*/src/`.
+#
+# Checked by scripts/check-projkey-store-classification.py. A call site present
+# in the tree but absent here is a BLOCKING finding; so is an entry here with no
+# matching call site, and so is a count that has drifted.
+#
+# WHY. `repo_root` stops at the first ancestor whose `.git` merely EXISTS. In a
+# linked worktree `.git` is a FILE, so `repo_root` returns the WORKTREE, not the
+# shared repo. CLAUDE.md §8 makes linked worktrees mandatory, so every durable
+# store keyed off `repo_root`/`project_key` partitions per worktree and reads
+# back EMPTY — which downstream reads as "no claim / no conflict / no progress",
+# a fail-open (CLAUDE.md §3). Measured symptom recorded on backlog 2c1e54b3:
+# 32 distinct `~/.condukt/state/<project>` directories for this one repo.
+#
+# FIELDS
+#   file     path relative to the repo root
+#   symbol   repo_root | project_key | main_worktree_root
+#   count    number of call sites of that symbol in that file (comments and
+#            string literals excluded — the checker lexes them away)
+#   scope    shared         the value must be ONE per project, identical from
+#                           every linked worktree
+#            worktree-local the value is legitimately per-checkout
+#   kind     store-key       the value keys a durable file on disk
+#            tree-locus      the value is only a directory to run git/tests in
+#            test            the call site is unit-test code
+#            definition-site the call lives in projkey.rs itself
+#            mixed           the file's call sites of this symbol are not all
+#                            the same kind; `scope` is then the RESTRICTIVE
+#                            reading of the set, never an average
+#   evidence why that scope, in terms of what the value is actually used for
+#
+# RULE FOR WHOEVER ADDS THE NEXT ENTRY: `scope = "shared"` unless you have read
+# the call site and can say in `evidence` why a per-worktree value is correct
+# there. "Probably fine" is a prediction, not evidence (CLAUDE.md §2).
+#
+# `scope = "shared"` does NOT assert the call site is already correct. Several
+# below are shared-by-contract but still keyed off `repo_root` today, i.e. they
+# ARE the defect; migrating them is backlog 43393ce2, deliberately not done here
+# (re-keying relocates stores that already exist on disk and orphans them).
+
+# ── autoflow ───────────────────────────────────────────────────────────────
+
+[[consumer]]
+file = "crates/autoflow/src/backlog.rs"
+symbol = "repo_root"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "repo_project_path() canonicalises repo_root(cwd) into the string used as backlog's `--project` filter. Tasks are filed against one project identity; from a linked worktree this yields the worktree path, so the queue filters to a different (empty) project."
+
+[[consumer]]
+file = "crates/autoflow/src/condukt.rs"
+symbol = "project_key"
+count = 5
+scope = "shared"
+kind = "mixed"
+evidence = "3 production calls key `~/.condukt/state/<key>/` (has_completed_tasks_for_run, load_latest) — condukt's run state, which must be the same directory the condukt binary wrote; 2 are unit-test calls asserting this crate's key equals harness_core's. Restrictive reading of the set: shared."
+
+[[consumer]]
+file = "crates/autoflow/src/condukt.rs"
+symbol = "repo_root"
+count = 3
+scope = "shared"
+kind = "mixed"
+evidence = "Feeds the project_key calls above (2 production, 1 in a test fixture). Same store, same identity requirement."
+
+[[consumer]]
+file = "crates/autoflow/src/delegation_audit.rs"
+symbol = "project_key"
+count = 4
+scope = "shared"
+kind = "test"
+evidence = "Four test fixtures compute project_key(repo_root(&repo)) to place a run-state file where the code under test will look for it. They mirror the production key derivation, so they inherit its shared-identity contract."
+
+[[consumer]]
+file = "crates/autoflow/src/delegation_audit.rs"
+symbol = "repo_root"
+count = 4
+scope = "shared"
+kind = "test"
+evidence = "The inner half of the same four fixture expressions."
+
+# ── condukt ────────────────────────────────────────────────────────────────
+
+[[consumer]]
+file = "crates/condukt/src/claim.rs"
+symbol = "main_worktree_root"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "claim_project_root() — the cross-session claim registry (claims.json) must answer 'taken' when two sessions in DIFFERENT worktrees of one repo collide, so it is keyed by main_worktree_root, not repo_root. This is the one call site where the shared identity is already used."
+
+[[consumer]]
+file = "crates/condukt/src/claim.rs"
+symbol = "project_key"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "project_dir(cfg, project_root) turns the already-resolved MAIN worktree root into `<state_dir>/<project-key>`; it is only ever called with claim_project_root()'s answer."
+
+[[consumer]]
+file = "crates/condukt/src/claim.rs"
+symbol = "repo_root"
+count = 2
+scope = "worktree-local"
+kind = "test"
+evidence = "Two fixture preconditions (`assert_eq!(repo_root(tmp), tmp)` and the same for a nested worktree) that deliberately PIN the per-checkout behaviour of repo_root. They key no store; changing them to a shared root would destroy what they check."
+
+[[consumer]]
+file = "crates/condukt/src/escalate.rs"
+symbol = "project_key"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "escalations_path() = `<state_dir>/<project-key>/escalations.json`. An escalation queue that a second worktree cannot see is not a queue; overwatch/src/review_escalation.rs re-derives this exact path to read it. Still keyed off repo_root today (backlog 43393ce2)."
+
+[[consumer]]
+file = "crates/condukt/src/escalate.rs"
+symbol = "repo_root"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "The inner half of escalations_path()'s `project_key(&repo_root(cwd))`."
+
+[[consumer]]
+file = "crates/condukt/src/hooks/restore.rs"
+symbol = "repo_root"
+count = 1
+scope = "worktree-local"
+kind = "tree-locus"
+evidence = "Passed to wt_reconcile::reportable_unregistered_dirs(&repo, ...), which immediately resolves worktree::repo_git_common_dir(repo) — the COMMON git dir, identical from any linked worktree. The value is a git -C locus, never a store key."
+
+[[consumer]]
+file = "crates/condukt/src/lock.rs"
+symbol = "project_key"
+count = 2
+scope = "shared"
+kind = "store-key"
+evidence = "lock_path_in_project() names `<state_dir>/<project-key>/<run>.lock`, plus one test asserting that path. A lock must sit beside the store it serialises: its doc comment already records that the claim registry must NOT go through lock_path, because a shared claims.json read-modify-written under two different lock files is an unserialised race."
+
+[[consumer]]
+file = "crates/condukt/src/lock.rs"
+symbol = "repo_root"
+count = 2
+scope = "shared"
+kind = "store-key"
+evidence = "lock_path() = lock_path_in_project(cfg, &repo_root(cwd), run_id), plus the matching test. Same store, same identity requirement."
+
+[[consumer]]
+file = "crates/condukt/src/main.rs"
+symbol = "project_key"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "`cfg.state_dir.join(store::project_key(&store::repo_root(&cwd)))` resolves the run-state dir that editgate consults; it must be the directory CheckOracle wrote, so both must agree on one identity per project."
+
+[[consumer]]
+file = "crates/condukt/src/main.rs"
+symbol = "repo_root"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "The inner half of the same expression. Reached through the `crate::store` re-export (store.rs:9), not the fully qualified path."
+
+[[consumer]]
+file = "crates/condukt/src/precedent.rs"
+symbol = "project_key"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "precedents_path() = `<state_dir>/<project-key>/precedents.json`, beside escalations.json/claims.json. Precedents exist to be reused across runs and sessions, which under CLAUDE.md §8 means across worktrees."
+
+[[consumer]]
+file = "crates/condukt/src/precedent.rs"
+symbol = "repo_root"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "The inner half of precedents_path()'s `project_key(&repo_root(cwd))`."
+
+[[consumer]]
+file = "crates/condukt/src/state.rs"
+symbol = "project_key"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "project_dir() = `<state_dir>/<project-key>` — the run-state directory autoflow/src/condukt.rs reads back. Two crates deriving one directory is exactly why projkey exists (see its module doc)."
+
+[[consumer]]
+file = "crates/condukt/src/state.rs"
+symbol = "repo_root"
+count = 8
+scope = "shared"
+kind = "mixed"
+evidence = "NOT one kind: line 332 keys project_dir (store-key); 793/980/2036/2300/2427 are git -C / test-command loci where the current checkout is the right answer (tree-locus); 3260/3269 are fixture preconditions pinning per-checkout behaviour (test). Because the set is mixed, scope records the RESTRICTIVE member (the store key), not an average. Splitting this row needs per-line granularity the checker does not have; recorded here rather than resolved silently."
+
+# ── harness-core ───────────────────────────────────────────────────────────
+
+[[consumer]]
+file = "crates/harness-core/src/autonomy.rs"
+symbol = "main_worktree_root"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "switch_path() — the autonomy switch a worker in a linked worktree cannot see is not a switch, so it is keyed by main_worktree_root and forwards Undetermined verbatim rather than falling back to repo_root. Already correct."
+
+[[consumer]]
+file = "crates/harness-core/src/autonomy.rs"
+symbol = "project_key"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "Turns switch_path()'s already-resolved MAIN worktree root into the switch file name."
+
+[[consumer]]
+file = "crates/harness-core/src/projkey.rs"
+symbol = "project_key"
+count = 7
+scope = "shared"
+kind = "definition-site"
+evidence = "One definition (excluded by the checker) and seven calls, all inside projkey.rs's own unit tests (determinism, non-collision, rootless paths, the documented key format). They key no store; they pin the key function itself, whose whole purpose is one identity per canonical root."
+
+[[consumer]]
+file = "crates/harness-core/src/projkey.rs"
+symbol = "repo_root"
+count = 1
+scope = "shared"
+kind = "definition-site"
+evidence = "Step 1 of main_worktree_root(): `let root = repo_root(cwd)` is the starting point from which the linked-worktree indirection is followed to the SHARED root. Removing it would remove the only path to the shared identity."
+
+[[consumer]]
+file = "crates/harness-core/src/undetermined.rs"
+symbol = "project_key"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "default_sink_path() = `<base>/<project-key>/overwatch/undetermined.jsonl` — the undetermined-event ledger `overwatch undetermined-metrics` reads. A ledger split per worktree reads back empty, i.e. 'no undetermined events', the exact fail-open it exists to measure. Still keyed off repo_root today."
+
+[[consumer]]
+file = "crates/harness-core/src/undetermined.rs"
+symbol = "repo_root"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "The inner half of default_sink_path()'s key derivation."
+
+# ── overwatch ──────────────────────────────────────────────────────────────
+
+[[consumer]]
+file = "crates/overwatch/src/store.rs"
+symbol = "project_key"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "storage_root() = `~/.overwatch/<project-key>/overwatch/`, holding leases.json. A lease registry exists to make two sessions collide; per-worktree partitioning makes every lease look free."
+
+[[consumer]]
+file = "crates/overwatch/src/store.rs"
+symbol = "repo_root"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "The inner half of storage_root()'s key derivation."
+
+[[consumer]]
+file = "crates/overwatch/src/review_escalation.rs"
+symbol = "project_key"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "condukt_escalations_path() re-derives condukt's escalations.json path from another crate. It is correct exactly when it matches crates/condukt/src/escalate.rs; both must therefore move together to the shared identity."
+
+[[consumer]]
+file = "crates/overwatch/src/review_escalation.rs"
+symbol = "repo_root"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "The inner half of condukt_escalations_path()'s key derivation."
+
+# ── non-Rust mechanisms ────────────────────────────────────────────────────
+#
+# Not every per-worktree store is reached through a projkey call. compass keeps
+# its state IN the tree, so the mechanism that partitions it is .gitignore: an
+# ignored path exists separately in every linked worktree. Recorded here so the
+# table spans the mechanism, and so it goes stale-detecting if the line is moved
+# or removed.
+
+[[consumer]]
+language = "gitignore"
+pattern = ".compass/carve-state.json"
+evidence = "Ignored, so each linked worktree carries its OWN carve state; a re-carve done in one worktree is invisible in every other. Tracked as a mechanism, not a call site — no Rust symbol is involved."
+
+[[consumer]]
+language = "gitignore"
+pattern = ".compass/outcomes.json"
+evidence = "Same mechanism as carve-state.json: ignored, therefore per-worktree. compass outcomes recorded in one worktree do not inform a run in another."

@@ -200,7 +200,12 @@ fn build_prompt(cwd: &Path, turns: &[Turn]) -> String {
          \x20 ## 決定事項 / Decisions\n\
          \x20 ## 残課題 / Open todos\n\
          - 可能なら次も含める: ## 触ったファイル / Files, ## 重要な事実 / Key facts, ## 現在地 / Where we are\n\
-         - 箇条書き中心・簡潔に。生ログの貼り直しは禁止。\n\n",
+         - 箇条書き中心・簡潔に。生ログの貼り直しは禁止。\n\
+         - backlog / code / commit に既にある内容を複製しない。そこから読み直せるものは\n\
+         \x20 このノートの仕事ではない。書くのは、そこに書けないもの — 推論の経路、\n\
+         \x20 修正された理解（初期モデル→どう間違い→何が直ったか）、確信度の較正\n\
+         \x20 （どの判断が最も確信が低かったか）。\n\
+         - ID・evidence（path:line）は列挙せずポインタに畳む（例: 詳細は backlog <id> 参照）。\n\n",
     );
     s.push_str(&format!("project: {proj}\n\n---- 会話ログ ----\n\n"));
     for t in turns {
@@ -369,6 +374,33 @@ mod tests {
         // plain → prog + args; shell metachars → sh -c (smoke: it doesn't panic)
         let _ = build_command("claude -p");
         let _ = build_command("foo | bar");
+    }
+
+    /// The distill contract must forbid re-serializing what backlog/code already
+    /// hold (backlog 949c3e23). A distillation that re-lists ids and
+    /// `path:line` evidence spends the whole note on material the reader can
+    /// fetch verbatim, and spends none on the reasoning that exists nowhere
+    /// else. `build_prompt` is the only place the contract reaches the model, so
+    /// it is the observable layer for this rule.
+    #[test]
+    fn distill_prompt_forbids_duplicating_backlog_and_code() {
+        let turns = vec![Turn {
+            role: "user".to_string(),
+            text: "hello".to_string(),
+        }];
+        let prompt = build_prompt(Path::new("/tmp/proj"), &turns);
+        assert!(
+            prompt.contains("複製しない"),
+            "the prompt must forbid duplicating backlog/code: {prompt}"
+        );
+        assert!(
+            prompt.contains("ポインタ"),
+            "the prompt must require ids/evidence be folded into pointers: {prompt}"
+        );
+        assert!(
+            prompt.contains("確信度") || prompt.contains("較正"),
+            "the prompt must ask for the calibration that only the session has: {prompt}"
+        );
     }
 
     #[test]

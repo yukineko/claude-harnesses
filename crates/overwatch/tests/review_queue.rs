@@ -109,6 +109,8 @@ fn review_queue_merges_all_three_sources_time_ordered() {
         &work,
         &[
             "record-finding",
+            "--verdict",
+            "confirmed",
             "--finding-id",
             "F-001",
             "--source",
@@ -181,6 +183,8 @@ fn review_queue_collapses_a_refound_finding_to_one_row() {
         &work,
         &[
             "record-finding",
+            "--verdict",
+            "confirmed",
             "--finding-id",
             "F-9",
             "--source",
@@ -196,6 +200,8 @@ fn review_queue_collapses_a_refound_finding_to_one_row() {
         &work,
         &[
             "record-finding",
+            "--verdict",
+            "confirmed",
             "--finding-id",
             "F-9",
             "--source",
@@ -212,6 +218,8 @@ fn review_queue_collapses_a_refound_finding_to_one_row() {
         &work,
         &[
             "record-finding",
+            "--verdict",
+            "confirmed",
             "--finding-id",
             "F-10",
             "--source",
@@ -688,6 +696,8 @@ fn review_queue_review_findings_unreadable_surfaces_warning_not_empty() {
         &work,
         &[
             "record-finding",
+            "--verdict",
+            "confirmed",
             "--finding-id",
             "F-77",
             "--source",

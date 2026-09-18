@@ -84,7 +84,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "autoflow"
-version = "0.1.23"
+version = "0.1.25"
 dependencies = [
  "clap",
  "harness-core",
@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "backlog"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "anyhow",
  "clap",
@@ -163,7 +163,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "blastguard"
-version = "0.2.63"
+version = "0.2.64"
 dependencies = [
  "globset",
  "harness-core",
@@ -305,7 +305,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.154"
+version = "0.7.168"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -365,7 +365,7 @@ dependencies = [
 
 [[package]]
 name = "ctxrot"
-version = "0.5.24"
+version = "0.5.27"
 dependencies = [
  "anyhow",
  "chrono",
@@ -585,7 +585,7 @@ dependencies = [
 
 [[package]]
 name = "gauge"
-version = "0.3.13"
+version = "0.3.14"
 dependencies = [
  "anyhow",
  "chrono",
@@ -663,7 +663,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.18"
+version = "0.2.25"
 dependencies = [
  "anyhow",
  "chrono",
@@ -706,7 +706,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "hypothesis"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "anyhow",
  "chrono",
@@ -858,7 +858,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "overwatch"
-version = "0.2.32"
+version = "0.2.35"
 dependencies = [
  "anyhow",
  "clap",
@@ -1225,7 +1225,7 @@ dependencies = [
 
 [[package]]
 name = "session-insights"
-version = "0.2.16"
+version = "0.2.17"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1340,7 +1340,7 @@ checksum = "c3a6bfce3d99adfa72d24750a61f782f3036a81e7f86d8841ee1326deaebd171"
 
 [[package]]
 name = "taskprog"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "clap",
@@ -1353,7 +1353,7 @@ dependencies = [
 
 [[package]]
 name = "tdd"
-version = "0.1.30"
+version = "0.1.32"
 dependencies = [
  "anyhow",
  "chrono",

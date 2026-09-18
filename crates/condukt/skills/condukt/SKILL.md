@@ -24,8 +24,32 @@ allowed-tools: Task, AskUserQuestion, Bash(condukt:*), Bash(fugu-router:*), Bash
    (ユーザー常設許諾 2026-08-07: 自律走行中の権限認可は事前許諾済みなので `escalate`→`auto` へ clamp。
    ただし `block` は緩めず、非 autonomous では不活性)。合意 (Phase 3) がこれに当たり、schedule 由来の
    risk/confidence を添えて `--approval` 付きで通す。一方 **genuine な判断ゲート — resume 選択 (Phase 0)・
-   `open_questions` (Phase 1)・conflict (Phase 3.5)・worker `blocked` (Phase 5) — には `--approval` を
+   `open_questions` (Phase 1)・conflict (Phase 3.5)・worker `blocked` (Phase 5)・
+   **測れない決定** (下記) — には `--approval` を
    付けず**、低 confidence/高 risk を与えて **escalate** に倒す (＝人に聞く)。**迷ったら付けない**。
+
+   **測れない決定 (CLAUDE.md §2) には `--untestable` を付ける。** done_criteria を検証するテストが
+   書けない・書いても意味のある観測にならない・環境的に実行できない — そう判明した時点で、その
+   判断は自答してはならない。`--untestable` は `auto` を **`escalate` へ引き上げる上向き clamp** で、
+   `--approval` の下向き clamp より**常に優先**する (`crates/condukt/tests/autonomy_invariant.rs` の
+   `policy_answer_untestable_beats_approval` が binary 境界で機械検査する)。フラグを付け忘れると
+   通常の `decide` に掛かり、**低 risk・可逆なら auto で自答されうる** — それが
+   「テスト不能なので判断で通した」という §2 最大の抜け穴そのものである:
+   ```bash
+   OUT=$(condukt policy answer --untestable \
+           --risk "$RISK" --reversible "$REV" --confidence low \
+           --question "<何が測れないのか。なぜ測れないのか>" \
+           --option "<測らずに進める案>" --option "<測れるように課題を切り直す案>" 2>/dev/null)
+   case $? in
+     0) : ;;  # 到達しない (--untestable が auto を escalate へ clamp する)
+     2) : ;;  # escalate: AskUserQuestion で人間に投げる。測れないという事実を添える
+     3) : ;;  # block: 進めない
+     *) : ;;  # 旧バイナリ / 不正入力 → 安全側 = AskUserQuestion
+   esac
+   ```
+   この gate に当たる典型は Phase 1 (done_criteria がそもそも検証不能と判明した)・
+   Phase 5 (worker が「テストが書けない」と報告した)・Phase 6 (verifier が観測を作れなかった)。
+   **測れないことを自分の判断で埋めず、人間に返すこと自体が成果である** (CLAUDE.md §2)。
    自答履歴は `condukt policy answers` で監査できる。**worker `blocked` と GATED 承認待ちは、インラインで
    loop を止める代わりに durable async escalation channel (`condukt escalate add|list|resolve`) に enqueue
    して out-of-band で解消できる**（HOTL: loop は残りのタスクを続行し、人間が後で `escalate resolve` で答えると
@@ -89,11 +113,24 @@ pending に戻したタスクは Phase 0-alt → Phase 5 で通常通り再投�
 
 - **1 回目の呼び出しでは何も戻らないのが正常**である (1 回の観測は「凍結」を意味しない)。
   window (既定 90 秒、`HARNESS_PROGRESS_WINDOW_SECS` で上書き可) を空けて再度呼ぶ。
+  この 1 回目は `UNDETERMINED (awaiting-sample)` として **stderr に報告され、exit 0** で返る
+  (観測が未完了なだけで、タスクが健全だと判定したわけではない)。
 - 「`nothing to abandon` が返る = コマンドが壊れている」ではない。生きている worker を
   巻き添えにしないための設計である。
 - 本当に死んだ worker で worktree が消えている場合は `Undetermined` が続き bulk では戻らない。
   その場合は人間が明示する `condukt state abandon --run $RID --task <id>` を使う
   (こちらは意図的に **ゲート無し**)。
+
+**`--all-stuck` の exit code (判定不能を黙って clean にしないための三値)**:
+
+| exit | 意味 | 取るべき行動 |
+|---|---|---|
+| `0` | **観測に失敗したタスクは無い**。stuck と確定したタスクは pending に戻した (0 件でも 0)。`awaiting-sample` (全 signal は読めたが multi-sample の観測が未完了) だけが残っている場合もここに入る — その場合もタスクは stderr に列挙される | `awaiting-sample` が出ていれば window を空けて再実行。それ以外は Phase 5 へ |
+| `3` | **`unobservable`**: durable な進捗 signal をそもそも読めなかったタスクがある (`updated_at` が無い / worktree HEAD が読めない / worktree を持たない)。これは「問題なし」ではなく「判定できなかった」 | 該当タスクを人間が確認し、死んでいるなら `--task <id>` (ゲート無しの override) で戻す |
+| `1` | 通常のエラー (run state が読めない・タスクが無い 等) | エラーを読んで修正 |
+
+exit 0/3 のどちらでも、判定不能なタスクは **必ず stderr に id・class・理由つきで出力される**。
+`nothing to abandon` だけが stderr の全内容になるのは、本当に何も判定不能でなかったときだけである。
 
 現在実行中の worker がある場合は誤って停止しないよう、実行中 Task の有無を確認してから実行する。
 
@@ -1391,7 +1428,9 @@ condukt state cancel --run <run_id> --task <task_id>
 - **stuck worker** → `condukt state abandon --run $RID --task <id>` で `pending` に戻し Phase 5 へ
   再投入する (この明示指定は人間の override であり意図的にゲート無し)。`--all-stuck` は TTL 超過
   かつ **進捗が `Known(Stalled)` と確定した** running タスクだけをまとめて戻す (multi-sample な
-  ので 1 回目は何も戻らないのが正常。詳細は Phase 0 の STUCK タスク節)。Phase 0 の
+  ので 1 回目は何も戻らないのが正常で、`awaiting-sample` として報告され exit 0。**exit 3 は
+  `unobservable`** = signal を読めなかったタスクがあるという報告であり、コマンドの故障ではない。
+  詳細は Phase 0 の STUCK タスク節)。Phase 0 の
   open run チェック時に running タスクを検出したら、Task の有無を確認後に実行する。
 - **merge 衝突** → Phase 7 で `condukt worktree merge` が pre-flight 衝突を検出した場合、worktree
   内で手動マージ解消後に Phase 7 リトライするか、大きな衝突は再実装として Phase 5 に戻す。詳細は

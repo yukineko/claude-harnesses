@@ -42,6 +42,7 @@ mod shadow_run;
 mod state;
 mod status;
 mod store;
+mod subagent_stop;
 mod verify;
 mod worktree;
 mod wt_reconcile;
@@ -49,6 +50,7 @@ mod wt_reconcile;
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
 use config::Config;
+use harness_core::verdict::Determination;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -77,6 +79,16 @@ enum Command {
     /// the same turn. Fail-soft everywhere else: any other outcome or error
     /// prints nothing and exits 0 (a hook must never break a turn).
     Editgate,
+    /// SubagentStop hook: when a child sub-agent terminates, advance the owning
+    /// run task's durable `updated_at` — the timestamp `state probe`, `circuit
+    /// check` and the claim reap gate measure idleness against — to that moment.
+    /// Writes ONLY when the payload is attributable: unparseable stdin, a
+    /// non-SubagentStop event, no readable run state, a cwd outside every
+    /// recorded task worktree, an ambiguous match, or a non-running task all
+    /// leave the stored timestamp untouched and print the reason on stderr,
+    /// because a fabricated heartbeat makes a dead child look alive. Exits 0
+    /// always (observability, not a gate).
+    SubagentStop,
     /// Compute a schedule from a decomposition JSON (stdin or --file).
     Schedule {
         #[arg(long)]
@@ -403,6 +415,13 @@ enum ShadowRunAction {
         topic: String,
         #[arg(long)]
         branch: String,
+        /// Run id to namespace the shadow worktree and its branch under, exactly
+        /// as `worktree create --run` does. Omit it for the legacy,
+        /// un-namespaced layout (byte-identical path and ref). Whatever is
+        /// passed here must be passed to `shadow-run finish` too: the branch
+        /// created is the branch deleted.
+        #[arg(long)]
+        run: Option<String>,
         /// Model the shadow attempt will run under (recorded, not enforced —
         /// the caller is responsible for actually invoking that model).
         #[arg(long)]
@@ -415,6 +434,13 @@ enum ShadowRunAction {
         path: PathBuf,
         #[arg(long)]
         branch: String,
+        /// Run id the shadow worktree was cut under (the same `--run` that was
+        /// given to `exec`). Omit it for an un-namespaced shadow worktree. It is
+        /// checked against the branch git actually has checked out at `--path`:
+        /// a mismatch is refused outright rather than force-deleting a ref that
+        /// does not exist while the real branch survives.
+        #[arg(long)]
+        run: Option<String>,
         #[arg(long)]
         title: String,
         #[arg(long)]
@@ -811,6 +837,24 @@ enum LessonsAction {
     },
 }
 
+/// The two durable positions of the shared autonomy switch. Two values, not a
+/// bool, so `autonomy-set` rejects anything else at the CLI boundary instead of
+/// writing a file that would later read back as `Undetermined`.
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum AutonomySwitch {
+    On,
+    Off,
+}
+
+impl From<AutonomySwitch> for harness_core::autonomy::AutonomyMode {
+    fn from(v: AutonomySwitch) -> Self {
+        match v {
+            AutonomySwitch::On => harness_core::autonomy::AutonomyMode::On,
+            AutonomySwitch::Off => harness_core::autonomy::AutonomyMode::Off,
+        }
+    }
+}
+
 // `Set` carries many optional measurement/provenance fields (model/cost/
 // agent-id/findings, routing basis/confidence/rationale, lines-changed)
 // alongside the smaller variants; it's a short-lived CLI arg struct consumed
@@ -1050,6 +1094,39 @@ enum StateAction {
         run: String,
     },
     /// Reset running/failed tasks back to pending, clearing their worktree/branch refs.
+    ///
+    /// REPORTING is unconditional: every Running task whose liveness could not
+    /// be determined is printed on stderr with its id, its class and its reason,
+    /// whatever the exit code. A bare `nothing to abandon` is never the whole of
+    /// stderr while anything is undetermined — that silence was the defect this
+    /// path exists to fix.
+    ///
+    /// EXIT CODES for `--all-stuck` (the scan is tri-valued: a Running task is
+    /// stuck, healthy, or UNDETERMINED — and the undetermined ones split by
+    /// WHY, read off the per-signal `readable` flags, never off reason text):
+    ///
+    /// * 3 — at least one task is UNOBSERVABLE: a durable progress signal could
+    ///   not be read at all (no `updated_at`, an unreadable worktree HEAD, a
+    ///   task with no worktree). The engine tried to look and could not; no
+    ///   re-run fixes that on its own.
+    /// * 0 — nothing was unobservable. Tasks that were confirmed stuck have been
+    ///   abandoned (zero of them is still exit 0). This includes the case where
+    ///   the only undetermined tasks are AWAITING-SAMPLE: every signal read
+    ///   cleanly and the multi-sample window simply needs another observation,
+    ///   which the first invocation on any TTL-stale task always does. Such a
+    ///   task's liveness is genuinely unknown at that instant — it is NOT being
+    ///   called healthy — but the state is self-resolving, bounded by the freeze
+    ///   window, and printed, so it is not a failure to observe.
+    /// * 1 — an ordinary error (unreadable run state, unknown task, ...).
+    ///
+    /// 3 is consistent with condukt's existing 0=auto / 2=escalate / 3=block
+    /// convention (documented in `crates/condukt/README.md` line 57, where
+    /// `state reconcile` exits 2 to escalate a duplicate completion): an
+    /// unobservable task is not a question for a human to answer inline, it is a
+    /// scan that must not be read as clean.
+    ///
+    /// The explicit `--task <id>` override performs no scan and therefore never
+    /// exits 3.
     Abandon {
         #[arg(long)]
         run: String,
@@ -1105,11 +1182,37 @@ enum StateAction {
         #[arg(long)]
         task: String,
     },
-    /// Report whether condukt is in autonomous mode (config.toml `autonomous` +
-    /// `CONDUKT_AUTONOMOUS` env). Prints `{"autonomous":<bool>}` and exits 0 when
-    /// autonomous, 1 when not — so the /condukt skill can branch on the exit code
-    /// to skip human gates (e.g. the Phase 3 agreement) only when autonomous.
-    AutonomyCheck,
+    /// Report whether condukt is in autonomous mode. Resolves the shared switch
+    /// (`harness_core::autonomy`): the env (`HARNESS_AUTONOMOUS`,
+    /// `CONDUKT_AUTONOMOUS`) beats the switch file written by `autonomy-set`,
+    /// which beats config.toml `autonomous`, which defaults to off.
+    ///
+    /// Prints `{"autonomous":<bool>}` and exits 0 when autonomous, 1 when not —
+    /// so the /condukt skill can branch on the exit code to skip human gates
+    /// (e.g. the Phase 3 agreement) only when autonomous. Those stdout bytes are
+    /// a FROZEN contract (`crates/condukt/tests/autonomy_invariant.rs`), so the
+    /// deciding layer is reported by `--explain` instead of being added to them.
+    /// An unreadable switch file resolves to NOT autonomous and warns on stderr.
+    AutonomyCheck {
+        /// Also print `"source"`: which layer decided (`env`, `switch-file`,
+        /// `config`, `default`, `undetermined-switch-file`). Same exit codes.
+        #[arg(long)]
+        explain: bool,
+    },
+    /// Turn the shared autonomy switch on or off for THIS repo, durably.
+    ///
+    /// Writes `<$HARNESS_AUTONOMY_DIR or ~/.harness/autonomy>/<project-key>.json`
+    /// atomically. The key is the repo's MAIN worktree root, so a switch set here
+    /// is visible from every linked worktree of the same repo (CLAUDE.md §8) and
+    /// is read directly — no subprocess — by ctxrot and autoflow too.
+    AutonomySet {
+        /// `on` or `off`.
+        #[arg(value_enum)]
+        mode: AutonomySwitch,
+    },
+    /// Print `{"path":"<switch file>","source":"<deciding layer>"}` and exit 0.
+    /// The path is where `autonomy-set` writes, whether or not it exists yet.
+    AutonomyPath,
     /// Durably checkpoint a run: snapshot its run-state + each task's branch SHA
     /// and journal the event. Prints the new checkpoint seq. The reversibility
     /// safety net for autonomous proceeding (charter #7).
@@ -1695,6 +1798,12 @@ fn main() {
             }
             run_editgate();
         }),
+        Command::SubagentStop => run_hook(|| {
+            if Config::disabled() {
+                return;
+            }
+            run_subagent_stop();
+        }),
         other => {
             if let Err(e) = run_user(other) {
                 eprintln!("condukt: {e:#}");
@@ -1761,6 +1870,32 @@ fn run_editgate() {
             println!("{line}");
         }
     }
+}
+
+/// SubagentStop hook. Reads the payload from stdin and, when it is attributable
+/// to a running task of this project, advances that task's durable `updated_at`
+/// to now — the timestamp the TTL/idle judgements (`state probe`, `circuit
+/// check`, the claim reap gate) already read. Every unattributable shape leaves
+/// the stored timestamp untouched; the outcome (written or not, and why) is
+/// always printed on stderr, never on stdout — this hook returns no verdict.
+/// Called under [`run_hook`], so it exits 0 and a panic is swallowed. That
+/// exit-0 contract governs the process status ONLY: it is never a reason to
+/// write a timestamp that could not be justified (a fabricated heartbeat makes
+/// a dead child look alive downstream).
+fn run_subagent_stop() {
+    let cfg = Config::load();
+    let cwd = match std::env::current_dir() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "condukt subagent-stop: no progress timestamp written: cwd unreadable \
+                 ({e}), so the project's run state could not be located"
+            );
+            return;
+        }
+    };
+    let outcome = subagent_stop::run(&cfg, &cwd, &read_stdin(), state::now_secs());
+    eprintln!("condukt subagent-stop: {}", outcome.describe());
 }
 
 fn run_user(cmd: Command) -> Result<()> {
@@ -2297,7 +2432,7 @@ fn run_user(cmd: Command) -> Result<()> {
         // These are dispatched as hooks in main() (via run_hook, which exits and
         // never returns here). Reaching this arm would be an internal dispatch
         // bug; return a clean error instead of panicking the process.
-        Command::Restore | Command::Statusline | Command::Editgate => {
+        Command::Restore | Command::Statusline | Command::Editgate | Command::SubagentStop => {
             bail!("internal: hook subcommands must be dispatched in main(), not run_user()")
         }
     }
@@ -2330,19 +2465,27 @@ fn run_shadow_run(cfg: &Config, cwd: &Path, action: ShadowRunAction) -> Result<(
         ShadowRunAction::Exec {
             topic,
             branch,
+            run,
             model,
         } => {
             if !shadow_run::is_enabled(&dir) {
                 bail!("shadow-run is disabled — run `condukt shadow-run enable` first");
             }
             let repo = worktree::toplevel(cwd)?;
-            let path = worktree::create(&repo, &cfg.worktree_base, &topic, &branch)?;
+            let path = worktree::create_namespaced(
+                &repo,
+                &cfg.worktree_base,
+                run.as_deref(),
+                &topic,
+                &branch,
+            )?;
             println!("{}", path.display());
             eprintln!("condukt: shadow-run worktree ready for model '{model}' at {}; the caller implements there, then calls `shadow-run finish`", path.display());
         }
         ShadowRunAction::Finish {
             path,
             branch,
+            run,
             title,
             model,
             pass,
@@ -2357,7 +2500,7 @@ fn run_shadow_run(cfg: &Config, cwd: &Path, action: ShadowRunAction) -> Result<(
                 cost_usd: cost,
                 duration_secs: duration,
             };
-            let recorded = shadow_run::finish(&repo, &path, &branch, &outcome)?;
+            let recorded = shadow_run::finish(&repo, &path, &branch, run.as_deref(), &outcome)?;
             if recorded {
                 println!("shadow-run discarded and recorded to fugu-router");
             } else {
@@ -4125,17 +4268,56 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             // Claim upkeep (PDO): release this task's files once it reaches a
             // terminal state (its work is done — free them for other sessions),
             // and refresh the run's remaining claims so a live-but-quiet session
-            // is not reaped mid-run. Both are fail-soft — never break the update.
+            // is not reaped mid-run.
+            //
+            // EXIT-CODE CONTRACT (deliberate; pinned by
+            // `tests/heartbeat_err_surfaced.rs`): a failure here does NOT change
+            // the exit code and does NOT undo the transition, because the durable
+            // state write has already happened above (`rs.save(..)?`). Bubbling a
+            // `?` out of this block would report failure for an operation that
+            // demonstrably succeeded, and would leave the caller unable to tell
+            // which half broke — the state transition, or the claim bookkeeping
+            // around it. So the transition stands and the upkeep failure is
+            // reported instead, naming the step, the run and the CONSEQUENCE.
+            //
+            // That is not a CLAUDE.md §3 exemption. §3 forbids resolving "cannot
+            // determine" to "clean"; a loud stderr warning is exactly the refusal
+            // to call it clean. What was here before — `let _ = ...` under a
+            // comment reading "Both are fail-soft — never break the update" — is
+            // the §1 red flag verbatim, and it did what §1 predicts: a refused
+            // heartbeat (e.g. an unparseable `claims.json`, which
+            // `claim::load_or_refuse` correctly declines to act on) was
+            // indistinguishable from a successful one at every downstream
+            // observation point, so this run's claims silently stopped being
+            // refreshed and could be reaped as stale while it was still working
+            // (backlog `cd624e4c`).
             if matches!(
                 st,
                 state::Status::Verified | state::Status::Failed | state::Status::Cancelled
             ) {
                 let files = task_files(cfg, cwd, &run, &task);
                 if !files.is_empty() {
-                    let _ = claim::release_files(cfg, cwd, &run, &files);
+                    if let Err(e) = claim::release_files(cfg, cwd, &run, &files) {
+                        eprintln!(
+                            "condukt: claim release FAILED for run '{run}' (task '{task}'): {e}\n  \
+                             consequence: this terminal task's file claims were NOT released, so \
+                             those files stay claimed and BLOCK other sessions from taking them \
+                             until the claim ages out through the stale-claim TTL. Inspect with \
+                             `condukt state claims`; release explicitly with `condukt state \
+                             release --run {run}`."
+                        );
+                    }
                 }
             }
-            let _ = claim::heartbeat(cfg, cwd, &run, state::now_secs());
+            if let Err(e) = claim::heartbeat(cfg, cwd, &run, state::now_secs()) {
+                eprintln!(
+                    "condukt: claim heartbeat FAILED for run '{run}': {e}\n  consequence: this \
+                     run's claims were NOT refreshed, so a session that is still working can have \
+                     its claims REAPED AS STALE and its files handed to another session mid-run. \
+                     Inspect with `condukt state claims`; refresh explicitly with `condukt state \
+                     heartbeat --run {run}`."
+                );
+            }
         }
         StateAction::Show { run } => {
             let rs = state::RunState::load(cfg, cwd, &run)?;
@@ -4425,6 +4607,14 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             all_stuck,
         } => {
             let mut rs = state::RunState::load(cfg, cwd, &run)?;
+            // Running tasks whose staleness could not be determined at all. Only
+            // the bulk scan can produce these; the explicit `--task` override
+            // performs no scan, so it leaves this empty and never exits 3.
+            let mut undetermined: Vec<state::UndeterminedTask> = Vec::new();
+            // Whether any of them is a failure to OBSERVE (as opposed to an
+            // observation still in progress) — the only thing that makes the
+            // scan non-clean.
+            let mut unobservable_present = false;
             let ids: Vec<String> = if let Some(task_id) = task {
                 // Specific task: validate it exists and is running/failed.
                 let t = rs
@@ -4441,16 +4631,40 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                 vec![task_id]
             } else if all_stuck {
                 // Bulk path: TTL-staleness alone does NOT authorise a reset —
-                // `stuck_task_ids` additionally requires a confirmed
-                // `Known(Stalled)` progress verdict per task. The explicit
-                // `--task` arm above stays deliberately ungated (human override).
-                state::stuck_task_ids(cfg, cwd, &rs, cfg.stuck_ttl_secs, state::now_secs())
+                // `scan_stuck` additionally requires a confirmed
+                // `Known(Stalled)` progress verdict per task AND a worktree
+                // observed clean, because a reset clears the task's worktree
+                // reference and re-dispatches a second worker, which would
+                // orphan any uncommitted work there. A task held back by the
+                // dirty veto is named on stderr by the scan — so a shorter list
+                // here is never the only trace of a check that could not run.
+                // The explicit `--task` arm above stays deliberately ungated
+                // (human override), which is how a worker that died mid-edit,
+                // leaving a dirty worktree the bulk gate refuses, is reclaimed.
+                //
+                // The scan is tri-valued: what it could NOT determine is carried
+                // out separately instead of being folded into "healthy", because
+                // a silent list is read downstream as "all clear" (CLAUDE.md §1/§3).
+                let scan = state::scan_stuck(cfg, cwd, &rs, cfg.stuck_ttl_secs, state::now_secs());
+                unobservable_present = scan.has_unobservable();
+                undetermined = scan.undetermined;
+                scan.stuck
             } else {
                 bail!("specify --task <id> or --all-stuck");
             };
 
             if ids.is_empty() {
-                eprintln!("nothing to abandon");
+                if undetermined.is_empty() {
+                    eprintln!("nothing to abandon");
+                } else if unobservable_present {
+                    eprintln!(
+                        "nothing to abandon, and the scan was NOT clean — see the undetermined task(s) below"
+                    );
+                } else {
+                    eprintln!(
+                        "nothing to abandon yet — the observation below is INCOMPLETE, not clean; re-run this command to finish it"
+                    );
+                }
             } else {
                 for id in &ids {
                     let t = rs
@@ -4465,6 +4679,52 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                 }
                 rs.save(cfg, cwd)?;
                 eprintln!("abandoned {} task(s): {}", ids.len(), ids.join(", "));
+            }
+
+            // Report what could NOT be determined. This runs AFTER the abandon
+            // above: a task that is confirmed stuck is still recovered even when
+            // a different task is undetermined — abandoning and reporting are
+            // independent. Reporting is also independent of the exit code: BOTH
+            // classes are printed, because the silence is the defect, and only
+            // the class decides whether the scan counts as clean.
+            let unobservable: Vec<&state::UndeterminedTask> = undetermined
+                .iter()
+                .filter(|u| u.class == state::Undetermination::Unobservable)
+                .collect();
+            let awaiting: Vec<&state::UndeterminedTask> = undetermined
+                .iter()
+                .filter(|u| u.class == state::Undetermination::AwaitingSample)
+                .collect();
+            if !unobservable.is_empty() {
+                eprintln!(
+                    "{} task(s) UNDETERMINED (unobservable): a durable progress signal could not be read — neither stuck nor healthy, and must not be read as clean:",
+                    unobservable.len()
+                );
+                for u in &unobservable {
+                    eprintln!(
+                        "  undetermined [{}]: {} — {}",
+                        u.class.label(),
+                        u.id,
+                        u.reason
+                    );
+                }
+            }
+            if !awaiting.is_empty() {
+                eprintln!(
+                    "{} task(s) UNDETERMINED (awaiting-sample): every signal read cleanly but the multi-sample observation is INCOMPLETE — their liveness is unknown right now, which is not the same as fine; re-run this command to complete the observation:",
+                    awaiting.len()
+                );
+                for u in &awaiting {
+                    eprintln!(
+                        "  undetermined [{}]: {} — {}",
+                        u.class.label(),
+                        u.id,
+                        u.reason
+                    );
+                }
+            }
+            if !unobservable.is_empty() {
+                std::process::exit(3);
             }
         }
         StateAction::Pause { run } => {
@@ -4598,14 +4858,55 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             debug_assert!(!verify::same_model(&chosen, &worker));
             println!("{chosen}");
         }
-        StateAction::AutonomyCheck => {
+        StateAction::AutonomyCheck { explain } => {
             // Shared predicate (see `policy_is_autonomous`): delegate to the
             // central policy engine instead of reading the raw bool. This
             // preserves the existing stdout bytes + exit contract exactly.
+            // `cfg.autonomous` already carries the shared switch (Config::load
+            // layers it between config.toml and the env), and any warning about
+            // an unreadable switch file was printed to stderr there.
             let autonomous = policy_is_autonomous(cfg);
-            println!("{{\"autonomous\":{autonomous}}}");
+            if explain {
+                // The deciding layer lives HERE and only here: adding it to the
+                // plain form would redden the frozen oracle that pins those bytes.
+                println!(
+                    "{{\"autonomous\":{autonomous},\"source\":\"{}\"}}",
+                    cfg.autonomy_source.as_str()
+                );
+            } else {
+                println!("{{\"autonomous\":{autonomous}}}");
+            }
             if !autonomous {
                 std::process::exit(1);
+            }
+        }
+        StateAction::AutonomySet { mode } => {
+            let mode: harness_core::autonomy::AutonomyMode = mode.into();
+            harness_core::autonomy::write(cwd, mode)
+                .context("writing the shared autonomy switch")?;
+            let path = match harness_core::autonomy::switch_path(cwd) {
+                Determination::Known(p) => p.display().to_string(),
+                // `write` just succeeded, so this cannot be reached; if it ever
+                // is, say so rather than printing a path we did not resolve.
+                Determination::Undetermined(why) => bail!("{why}"),
+            };
+            println!(
+                "{}",
+                serde_json::json!({ "mode": mode.as_str(), "path": path })
+            );
+        }
+        StateAction::AutonomyPath => {
+            match harness_core::autonomy::switch_path(cwd) {
+                Determination::Known(path) => println!(
+                    "{}",
+                    serde_json::json!({
+                        "path": path.display().to_string(),
+                        "source": cfg.autonomy_source.as_str(),
+                    })
+                ),
+                // No path could be resolved, so there is no path to print. Fail
+                // loudly instead of emitting a guess (CLAUDE.md §3).
+                Determination::Undetermined(why) => bail!("{why}"),
             }
         }
         StateAction::Checkpoint { run, label } => {

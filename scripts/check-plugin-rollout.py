@@ -421,10 +421,83 @@ def _host_binary_deployed(install):
         return None
     # See the matching PLATFORM_SUFFIXES comment above: on Windows the deployed
     # filename carries a trailing .exe that HOST_SUFFIX alone does not match.
-    return any(
-        e.endswith("-" + HOST_SUFFIX) or e.endswith("-" + HOST_SUFFIX + ".exe")
-        for e in entries
+    return any(_is_host_binary_name(e) for e in entries)
+
+
+def _is_host_binary_name(entry):
+    """Does `entry` name THIS host's per-platform binary?"""
+    return entry.endswith("-" + HOST_SUFFIX) or entry.endswith(
+        "-" + HOST_SUFFIX + ".exe"
     )
+
+
+def _host_binary_unusable(install):
+    """Why the deployed host binary cannot be exec'd — or None if it can.
+
+    `_host_binary_deployed` answers the NAME question, and a name is not the
+    predicate the actual consumer applies. The consumer is the launcher shell
+    script every plugin ships, and it requires the file to be EXECUTABLE
+    (crates/tdd/bin/tdd:52-55):
+
+        binary="$root/tdd-$os-$arch$ext"
+        if [ -x "$binary" ]; then
+          exec "$binary" "$@"
+        fi
+        echo "tdd: no bundled binary for $os-$arch ($binary)." >&2
+
+    So a deployed host binary sitting at mode 0644, or truncated to zero bytes
+    (`execve(2)` returns ENOEXEC for an empty file even with the exec bit set),
+    produces byte-for-byte the SAME dark outcome as an absent one: the launcher
+    refuses it, the plugin's hooks never start, and no finding is emitted to
+    notice it by. Checking only the filename made this checker report "no
+    rollout drift" over precisely that state — measured, and pinned by
+    test_check_plugin_rollout.SkillOnlyPlugins.
+    test_deployed_host_binary_without_exec_bit_is_drift / ..._that_is_empty_....
+
+    Nothing else covers it: scripts/check-launcher-exec-bit.py is scoped by
+    `^crates/([^/]+)/bin/([^/.]+)$` against the git INDEX, and per-platform
+    binaries are build artifacts that are never tracked, so they never appear
+    there at all.
+
+    Every "cannot tell" branch returns a problem rather than None, per CLAUDE.md
+    §3: a binary whose mode or size could not be read is undetermined, and
+    undetermined is not "runnable".
+    """
+    bindir = os.path.join(install, "bin")
+    try:
+        entries = sorted(os.listdir(bindir))
+    except OSError as exc:
+        return f"could not list {bindir} ({exc}), so whether the deployed binary can be exec'd is undetermined"
+    for entry in entries:
+        if not _is_host_binary_name(entry):
+            continue
+        path = os.path.join(bindir, entry)
+        try:
+            size = os.path.getsize(path)
+        except OSError as exc:
+            return (
+                f"could not stat the deployed host binary {path} ({exc}), so "
+                "whether it can be exec'd is undetermined"
+            )
+        if not os.access(path, os.X_OK):
+            return (
+                f"the deployed host binary {path} is NOT executable, so the "
+                "launcher's `[ -x ]` test fails and it execs nothing — exactly "
+                "as dark as an absent binary (chmod +x it, or re-run "
+                "rollout-plugins.sh)"
+            )
+        if size == 0:
+            return (
+                f"the deployed host binary {path} is zero bytes, so exec'ing it "
+                "fails with ENOEXEC and the plugin's hooks never start — the "
+                "shape a truncated or interrupted copy leaves (re-run "
+                "rollout-plugins.sh)"
+            )
+        return None
+    # No host-named entry at all. That is the ABSENT case, which
+    # `_host_binary_deployed` already reports with its own message; saying it
+    # twice would give one fact two remedies.
+    return None
 REGISTRY_PATH = os.environ.get(
     "CLAUDE_PLUGIN_REGISTRY", os.path.expanduser("~/.claude/plugins/installed_plugins.json")
 )
@@ -1091,8 +1164,19 @@ def check_rollout(plugins):
             problems.append(
                 f"{crate}: source={src_ver} registry={reg_ver} <- rollout-plugins.sh not run since bump"
             )
-            # The version is already known stale; the binary necessarily is too.
-            # Reporting both would just double-count one fix.
+            # The provenance dimension below IS subsumed by the stale version —
+            # asking which commit an admittedly-old binary came from adds nothing
+            # to the one fix. One state is NOT subsumed, and this arm used to
+            # swallow it: a version dir with NO host binary at all. Observed
+            # 2026-09-13 (backlog 8206b09f) — the registry pointed tdd at 0.1.29,
+            # whose bin/ held only the launcher, and tdd's Stop hook answered
+            # "gate did not run: no bundled binary for darwin-arm64". A stale
+            # binary runs OLD code and still adjudicates; an absent one runs
+            # NOTHING, so the gate stops producing findings altogether. Silence
+            # from a dark gate is indistinguishable from a clean one, which is
+            # the failure this checker exists to make visible. Same remedy, but
+            # only one of the two means nobody is looking, so it gets said.
+            problems.extend(_absent_binary_problems(crate, entry[0]))
             continue
         problem = _provenance_problem(crate, entry[0])
         if problem:
@@ -1101,6 +1185,52 @@ def check_rollout(plugins):
         if problem:
             problems.append(problem)
     return problems, checked
+
+
+def _absent_binary_problems(crate, entry):
+    """The subset of `_provenance_problem` that a stale version does NOT subsume.
+
+    Returns a list (possibly empty) so the caller can `extend` it unconditionally.
+    Only two states are reported here: the source declares a binary and none is
+    deployed, and the deployed bin/ could not be listed at all. Everything else
+    `_provenance_problem` checks (manifest presence, dirtiness, commit currency)
+    is genuinely implied by an out-of-date version and stays out of this arm so
+    one fix is not reported twice.
+
+    Every "cannot tell" resolves to a problem, never to silence: an unlistable
+    bin/ is exactly the state that would otherwise let a dark gate certify itself.
+    """
+    install = entry.get("installPath")
+    if not install:
+        # The stale-version finding already names the plugin; without a path
+        # there is nothing further to look at, and `_provenance_problem` reports
+        # the missing installPath on the non-drift path.
+        return []
+    ships = _crate_ships_binary(crate)
+    if ships is None:
+        return [
+            f"{crate}: could not determine from crates/{crate} whether this "
+            "plugin ships a binary, so whether the deployed version dir is "
+            "missing one cannot be told either"
+        ]
+    if not ships:
+        return []
+    deployed = _host_binary_deployed(install)
+    if deployed is None:
+        return [
+            f"{crate}: could not list {os.path.join(install, 'bin')}, so whether "
+            "a binary is deployed at all is undetermined (undetermined is not "
+            "'present')"
+        ]
+    if not deployed:
+        return [
+            f"{crate}: crates/{crate} declares a binary target, but no "
+            f"{HOST_SUFFIX} binary is deployed under "
+            f"{os.path.join(install, 'bin')} — the plugin is installed but "
+            "execs nothing, so its hook is DARK (it reports nothing, which is "
+            "not the same as reporting nothing wrong) (re-run rollout-plugins.sh)"
+        ]
+    return []
 
 
 def _provenance_problem(crate, entry):
@@ -1150,6 +1280,16 @@ def _provenance_problem(crate, entry):
             f"{os.path.join(install, 'bin')} — the plugin is installed but "
             "execs nothing (re-run rollout-plugins.sh)"
         )
+    if ships:
+        # A file with the right NAME is not a binary the launcher will run. See
+        # _host_binary_unusable: mode 0644 and zero bytes are both as dark as
+        # absence. Scoped to `ships` deliberately — when the source no longer
+        # declares a binary, the leftover's mode is moot and the crate's absence
+        # is already reported by check_orphans / plugin_cache.scan; demanding an
+        # exec bit there would attach a second remedy to that one fact.
+        unusable = _host_binary_unusable(install)
+        if unusable:
+            return f"{crate}: {unusable}"
     # A binary is on disk (whether or not the source still declares one), so its
     # provenance must be verifiable.
     manifest_path = os.path.join(install, PROVENANCE_FILE)

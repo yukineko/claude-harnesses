@@ -128,6 +128,8 @@ fn compact_findings_archives_resolved_and_keeps_hot_bounded_to_open() {
             &work,
             &[
                 "record-finding",
+                "--verdict",
+                "confirmed",
                 "--finding-id",
                 id,
                 "--source",

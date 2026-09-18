@@ -21,6 +21,7 @@ error it exits 0 and stays silent.
 | `ctxrot preguard` | `PreToolUse` | **Preventive gate, before the load.** Two layers: (1) **rule-based** — a `Read` matching a `load_deny` glob is denied *regardless of size* ("never load these"; holds even for a bounded slice by default), while a `load_allow` glob bypasses the size gate ("trusted, load whole"). (2) **size-based** — an *unbounded* `Read` (no `limit`) of a local file at/above `gate_file_bytes` (default **1MB**) is denied with an actionable reason. Precedence: **deny → limit → allow → size**. Narrow by design so normal source reads are untouched. |
 | `ctxrot toolguard` | `PostToolUse` | When a `Read`/`Bash`/`Grep`/… returns a huge payload, nudges you to route the *next* heavy read through a sub-agent and keep only conclusions. (Handles the 50KB–1MB middle band the `preguard` gate lets through.) The per-session nudge count is bounded by `toolguard_nudge_cap` (default 3) so the advice itself doesn't become rot. |
 | `ctxrot stop` | `Stop` | **Opt-in auto-compact nudge.** When budget-meter usage crosses `auto_compact_at_percentage` (default **0.90**), returns `{"decision":"block"}` asking Claude to run `/compact`. The threshold is measured off ctxrot's **OWN budget meter** (`est_tokens / context_window`, the same estimate `guard`/`usage` band from — which can read >100%), **not** the raw model-window `used_percentage`, so it fires correctly against the true ~1M window. Off by default (`auto_compact_enabled = false`); the block is bounded to once per band crossing so it can never permanently trap a turn. |
+| `ctxrot autonomy` | — | Report the SHARED autonomy switch (the one `condukt state autonomy-set on\|off` writes, read directly — no subprocess) and the two ctxrot bools it defaults: prints `{"autonomous":<bool>,"auto_distill_on_band":<bool>,"auto_compact_enabled":<bool>,"source":"<layer>"}` and exits 0. `source` is one of `env` / `switch-file` / `config` / `default` / `undetermined-switch-file`. When the switch is ON and you configured neither bool, both default to true; an explicit config.toml value or `CTXROT_AUTO_COMPACT` / `CTXROT_AUTO_DISTILL_ON_BAND` always wins. A switch file that exists but cannot be read reports `autonomous:false` with `source:"undetermined-switch-file"` (fail-closed), never a silent "off". |
 | `ctxrot statusline` | `statusLine` | Always-on context-usage meter (`ctxrot 52% ▮▮▯▯ band1 ~104k/200k`), colored by band (green→yellow→red). Reads Claude's `context_window.used_percentage` from the status JSON (falls back to estimating from the transcript). `ctxrot install` sets it only when no status line exists yet, so a custom one is never clobbered. |
 
 Plus two skills:
@@ -219,12 +220,21 @@ auto_distill_on_band = true     # ON by default: also fire the SAME background d
                                 #   the first time real usage crosses into the TOP band
                                 #   (≈90%+ / the 200k danger line) without waiting for a
                                 #   /compact. Gated independently of distill_on_compact.
+                                #   SHARED SWITCH: when `condukt state autonomy-set on`
+                                #   is in effect this DEFAULTS to true; writing it here
+                                #   (or CTXROT_AUTO_DISTILL_ON_BAND) always wins — one
+                                #   switch never overrides an explicit human decision.
 
 # Stop-hook auto-compact nudge (feature ⑤, opt-in):
 auto_compact_enabled = false    # OFF by default. When true, `ctxrot stop` (the Stop hook)
                                 #   returns {"decision":"block"} asking Claude to /compact
                                 #   once budget-meter usage crosses the threshold below.
                                 #   Bounded to once per band crossing (never traps a turn).
+                                #   SHARED SWITCH: `condukt state autonomy-set on` makes
+                                #   this DEFAULT to true; this key or CTXROT_AUTO_COMPACT
+                                #   always wins over it. A shared switch file that exists
+                                #   but cannot be read changes nothing and warns on stderr
+                                #   (fail-closed) — see `ctxrot autonomy`.
 auto_compact_at_percentage = 0.90 # fraction at which to nudge — measured against ctxrot's
                                 #   OWN budget meter (est_tokens / context_window, same as
                                 #   guard/usage), NOT the raw model-window used_percentage.

@@ -148,6 +148,24 @@ pub struct Config {
     /// window. Default 0.90. Only meaningful when `auto_compact_enabled` is true.
     /// env: `CTXROT_AUTO_COMPACT_AT_PERCENTAGE`
     pub auto_compact_at_percentage: f64,
+    /// Percentage (0.0-100.0, the raw scale of
+    /// `HookInput.context_window.used_percentage`) BELOW which a budget-meter
+    /// band crossing is answered with "carry on" instead of the `/compact`
+    /// block. The budget meter measures ctxrot's own small configured budget and
+    /// can read over 100 % while the real ~1M model window is nearly empty
+    /// (`hooks::stop` module docs), so a budget crossing alone is not evidence
+    /// of window pressure. Claude Code's own `used_percentage` is the only
+    /// authoritative measurement of the real window, so it -- and only it -- may
+    /// license skipping the interruption.
+    ///
+    /// Restrictive by construction: this carve-out applies ONLY when the
+    /// measurement actually arrived. An absent `context_window` / absent
+    /// `used_percentage` is a cannot-determine and still blocks (CLAUDE.md 3).
+    /// `0.0` disables the carve-out entirely (nothing is ever "low enough"),
+    /// which is the value the sanitizer falls back to for a non-finite or
+    /// negative setting. Default 50.0.
+    /// env: `CTXROT_MODEL_WINDOW_CONTINUE_BELOW`
+    pub model_window_continue_below_percentage: f64,
 
     // ---- parent→child Read handoff (`hooks::handoffguard`) ---------------------
     /// Master switch. When true: `Read`s at/above `handoff_min_bytes` are cached
@@ -203,6 +221,7 @@ struct FileConfig {
     auto_distill_on_band: Option<bool>,
     auto_compact_enabled: Option<bool>,
     auto_compact_at_percentage: Option<f64>,
+    model_window_continue_below_percentage: Option<f64>,
     toolguard_nudge_cap: Option<u64>,
     handoff_enabled: Option<bool>,
     handoff_min_bytes: Option<u64>,
@@ -268,12 +287,35 @@ impl Default for Config {
             auto_distill_on_band: true,
             auto_compact_enabled: false,
             auto_compact_at_percentage: 0.90,
+            model_window_continue_below_percentage: 50.0,
             handoff_enabled: true,
             handoff_min_bytes: 20_000,
             handoff_max_entry_bytes: 200_000,
             handoff_max_inject_bytes: 200_000,
             handoff_cache_lines: 50,
         }
+    }
+}
+
+/// The shared autonomy switch, resolved for the current directory.
+///
+/// ctxrot has no autonomy setting of its own to feed the layer below the switch,
+/// so `config_value` is `None`: for ctxrot the order is env, then switch file,
+/// then off. A cwd that cannot be read means the repo the switch belongs to is
+/// unknown, which is cannot-determine, not "off" — it resolves to off WITH a
+/// warning rather than silently keying the switch on `"."` (CLAUDE.md section 3).
+pub fn autonomy_default_layer() -> harness_core::autonomy::Resolved {
+    match std::env::current_dir() {
+        Ok(cwd) => harness_core::autonomy::resolve(&cwd, None),
+        Err(e) => harness_core::autonomy::Resolved {
+            autonomous: false,
+            source: harness_core::autonomy::Source::UndeterminedSwitchFile,
+            warning: Some(format!(
+                "warning: autonomy switch is UNDETERMINED: the current directory \
+                 cannot be read ({e}), so the project the switch belongs to is \
+                 unknown\nwarning: resolving autonomy to OFF (fail-closed)"
+            )),
+        },
     }
 }
 
@@ -284,8 +326,28 @@ impl Config {
 
     /// Load config from disk (if present) layered over defaults, then apply env
     /// overrides. Any read/parse error silently falls back to defaults.
+    ///
+    /// The shared autonomy switch (`harness_core::autonomy`) is applied FIRST,
+    /// as a default layer: when it is on and the user has configured neither
+    /// `auto_distill_on_band` nor `auto_compact_enabled`, both become true. It
+    /// sits below the file and env layers on purpose — one switch must never
+    /// override an explicit human decision, so `CTXROT_AUTO_COMPACT=0` (or the
+    /// same key in config.toml) still wins. A switch file that exists but cannot
+    /// be read is fail-closed: it changes nothing and warns on stderr.
     pub fn load() -> Self {
         let mut cfg = Config::default();
+
+        // -- shared autonomy switch: a DEFAULT layer, below file config and env --
+        let autonomy = autonomy_default_layer();
+        if autonomy.autonomous {
+            cfg.auto_distill_on_band = true;
+            cfg.auto_compact_enabled = true;
+        }
+        if let Some(warning) = autonomy.warning {
+            // Named, never silent: an unreadable switch must not be
+            // indistinguishable from one that was never set (CLAUDE.md section 1).
+            eprintln!("{warning}");
+        }
 
         if let Ok(text) = std::fs::read_to_string(Self::config_path()) {
             if let Ok(fc) = toml::from_str::<FileConfig>(&text) {
@@ -384,6 +446,9 @@ impl Config {
                 if let Some(v) = fc.auto_compact_at_percentage {
                     cfg.auto_compact_at_percentage = v;
                 }
+                if let Some(v) = fc.model_window_continue_below_percentage {
+                    cfg.model_window_continue_below_percentage = v;
+                }
                 if let Some(v) = fc.handoff_enabled {
                     cfg.handoff_enabled = v;
                 }
@@ -456,6 +521,13 @@ impl Config {
                 cfg.auto_compact_at_percentage = f;
             }
         }
+        if let Ok(v) = std::env::var("CTXROT_MODEL_WINDOW_CONTINUE_BELOW") {
+            // A value we cannot parse is NOT a reason to keep the permissive
+            // default: an operator who typed a threshold meant to change the
+            // gate, and silently keeping 50.0 would hide the typo. Unparseable
+            // resolves to 0.0 (carve-out off, always block) per CLAUDE.md 3.
+            cfg.model_window_continue_below_percentage = v.trim().parse::<f64>().unwrap_or(0.0);
+        }
         if let Some(v) = env_bool("CTXROT_HANDOFF_ENABLE") {
             cfg.handoff_enabled = v;
         }
@@ -481,6 +553,19 @@ impl Config {
         }
         if cfg.context_window == 0 {
             cfg.context_window = 200_000;
+        }
+        // The dangerous direction for this threshold is HIGH (100.0 means every
+        // measurement counts as low enough, i.e. the /compact block never fires),
+        // so a nonsense value must fall to the RESTRICTIVE floor, not back to the
+        // default. NaN fails every comparison, so test it explicitly rather than
+        // relying on an ordering check (CLAUDE.md 3: defaults go restrictive).
+        if !cfg.model_window_continue_below_percentage.is_finite()
+            || cfg.model_window_continue_below_percentage < 0.0
+        {
+            cfg.model_window_continue_below_percentage = 0.0;
+        }
+        if cfg.model_window_continue_below_percentage > 100.0 {
+            cfg.model_window_continue_below_percentage = 100.0;
         }
         // Re-anchor needs a sane band floor (≥1) and a non-zero cadence, else it
         // would fire on every band-0 prompt / every turn.
@@ -585,5 +670,62 @@ mod tests {
         let cfg = Config::load();
         std::env::remove_var("CTXROT_AUTO_COMPACT_AT_PERCENTAGE");
         assert!((cfg.auto_compact_at_percentage - 0.75).abs() < f64::EPSILON);
+    }
+
+    /// Load with `CTXROT_MODEL_WINDOW_CONTINUE_BELOW` set to `raw`, serialized on
+    /// the shared HOME/env lock (`Config::load` reads process-wide env).
+    fn load_with_continue_below(raw: &str) -> Config {
+        let _guard = HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("CTXROT_MODEL_WINDOW_CONTINUE_BELOW", raw);
+        let cfg = Config::load();
+        std::env::remove_var("CTXROT_MODEL_WINDOW_CONTINUE_BELOW");
+        cfg
+    }
+
+    #[test]
+    fn model_window_continue_below_defaults_to_fifty() {
+        // The /compact block is vetoed only when the measured true window is
+        // genuinely low. Pinning the default keeps a silent widening (e.g. to
+        // 100.0, which would disable the block entirely) from landing unnoticed.
+        let cfg = Config::default();
+        assert!((cfg.model_window_continue_below_percentage - 50.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn model_window_continue_below_env_override() {
+        let cfg = load_with_continue_below("20");
+        assert!((cfg.model_window_continue_below_percentage - 20.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn unparseable_continue_below_falls_to_the_restrictive_floor() {
+        // CLAUDE.md 3: a value we cannot parse is a cannot-determine. It must NOT
+        // silently keep the permissive 50.0 default -- it resolves to 0.0, which
+        // turns the veto off entirely so the /compact block behaves as before.
+        let cfg = load_with_continue_below("not-a-number");
+        assert_eq!(cfg.model_window_continue_below_percentage, 0.0);
+    }
+
+    #[test]
+    fn negative_and_nan_continue_below_fall_to_the_restrictive_floor() {
+        // NaN fails every ordering comparison, so a bare `< 0.0` / `> 100.0` pair
+        // would let it through and make EVERY comparison in the gate false --
+        // which happens to be restrictive here, but only by accident. Pin it.
+        assert_eq!(
+            load_with_continue_below("-5").model_window_continue_below_percentage,
+            0.0
+        );
+        assert_eq!(
+            load_with_continue_below("NaN").model_window_continue_below_percentage,
+            0.0
+        );
+    }
+
+    #[test]
+    fn over_hundred_continue_below_is_clamped_to_a_real_percentage() {
+        // 250 % is not a percentage of anything; clamp to the top of the scale
+        // rather than leaving a value no measurement can ever exceed.
+        let cfg = load_with_continue_below("250");
+        assert!((cfg.model_window_continue_below_percentage - 100.0).abs() < f64::EPSILON);
     }
 }

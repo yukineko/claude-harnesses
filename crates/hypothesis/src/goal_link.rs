@@ -126,6 +126,8 @@ mod tests {
             created_at: "2026-01-01T00:00:00Z".to_string(),
             updated_at: "2026-01-01T00:00:00Z".to_string(),
             shipped_at: None,
+            scope_write_paths: None,
+            scope_read_paths: None,
         }
     }
 

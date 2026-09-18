@@ -232,6 +232,51 @@ fn stats_reports_shipped_vs_measured_counts_as_one_json_object() {
     assert_eq!(v1["validated"], 0);
 }
 
+// ── t3 done_criteria (1): `hypothesis draft` ────────────────────────────────
+//
+// t3 done_criteria item 1: "hypothesis draft サブコマンドが存在し、曖昧なタスク
+// 文から未解決項目を列挙する". As of this commit `draft` is not a registered
+// clap subcommand at all (see crates/hypothesis/src/main.rs `enum Command`),
+// so this MUST fail: clap rejects the unknown subcommand with a non-zero exit
+// and a usage message on stderr, not the exit-0 + open-questions-on-stdout
+// contract this test pins down.
+//
+// What this test does NOT prove: it does not specify *how* draft decides an
+// item is unresolved (that policy is the implementation's to choose), nor does
+// it constrain the exact wording of an open item — only that (a) the
+// subcommand exists, (b) it exits 0 on a deliberately ambiguous task string,
+// and (c) it prints at least one line to stdout that a human/skill could read
+// as an open/unresolved item. A `draft` that always prints "no open
+// questions" for every input (including a maximally vague one) would make
+// this test pass but would not actually be interrogating anything — that
+// deeper property is out of scope for a black-box CLI smoke test and would
+// need its own test once `draft`'s decision policy exists.
+#[test]
+fn draft_lists_open_items_for_an_ambiguous_task() {
+    let bin = env!("CARGO_BIN_EXE_hypothesis");
+    let home = temp_home("draft-ambiguous");
+
+    let out = Command::new(bin)
+        .args(["draft", "make it better somehow"])
+        .env("HOME", &home)
+        .output()
+        .expect("draft runs");
+    std::fs::remove_dir_all(&home).ok();
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(
+        out.status.code().unwrap_or(-1),
+        0,
+        "draft must exit 0 for an ambiguous task, stderr: {stderr}"
+    );
+    assert!(
+        !stdout.trim().is_empty(),
+        "draft must list at least one open/unresolved item for a deliberately \
+         ambiguous task string, got empty stdout (stderr: {stderr})"
+    );
+}
+
 #[test]
 fn session_start_hook_survives_empty_stdin() {
     // SessionStart runs under run_hook: malformed/empty stdin must never break a

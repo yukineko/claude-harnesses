@@ -27861,3 +27861,21 @@ updated_at = 1789715685
 weight = 0.0
 issue_number = 671
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/671"
+
+[[task]]
+id = "7ca076f8"
+title = "blastguard: '-c <arg>' の後ろに fd 複製リダイレクト (2>&1 / 1>&2) が来ると空ターゲットの書き込みと誤認して deny する"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """実測 2026-09-18、deployed blastguard 0.2.65 のバイナリに直接 payload を流して測定 (scratchpad/probe_narrow.py)。本セッション中に読み取り専用の調査コマンドを 4 回ブロックした実害あり。拒否文は逐語で: "'> ' destroys the file's current contents and `` is a relative path and blastguard does not know which directory it is relative to, so it cannot tell whether these bytes are recoverable"。空のバッククォートが決定的で、リダイレクトのターゲットが空文字列としてパースされている。空の相対パスは解決不能なので RepoProbe が Undetermined になり第3節どおり制限側 (deny) に倒れる。つまり fail-open ではなく fail-closed 側の誤検知だが、正当な read-only コマンドを止めている。最小切り分け (10 ケース、control 込み): allow= 'ls 2>&1' / 'echo hi > /tmp/x' / 'echo "hello" 2>&1' / 'python3 -c "pass"' / 'python3 -c "pass" >/dev/null' / 'python3 script.py 2>&1'。deny または ask = 'python3 -c "pass" 2>&1' / 'python3 -c "pass" 1>&2' / 'bash -c "pass" 2>&1' / "python3 -c 'pass' 2>&1"。したがってトリガは python 固有でも引用符固有でもなく **-c <arg> の直後に N>&M 形式の fd 複製リダイレクトが来ること**。'>' に実ターゲットがある場合 (>/dev/null) は通るので、壊れているのは N>&M の扱いに限られる。おそらく tokenizer が -c の引数を消費した後に '2>&1' を redirect+空target に分解している。修正方向: fd 複製リダイレクト (N>&M) は**ファイルへの書き込みではない**ので redirect ルールの対象から外す。空ターゲットを解決不能な相対パスとして扱う経路は残してよいが、そもそも N>&M がそこへ来ないようにする。反証防止の control を必ず置くこと: 'echo hi > /etc/passwd' が引き続き deny であること、'echo hi > relative.txt' の空でない相対パスの扱いを変えていないこと。副次観測: 同一セッション内で 'python3 -c "pass" 2>&1' の 2 度目以降は deny ではなく ask を返した。2026-09-18 の repeat ledger が deployed 0.2.65 で稼働していることの直接証拠であり、本件とは別事象。"""
+created_at = 1789716368
+updated_at = 1789716368
+weight = 0.0
+issue_number = 672
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/672"

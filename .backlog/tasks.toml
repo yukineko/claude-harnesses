@@ -27780,6 +27780,7 @@ title = "compass charter が「RED テストは 375587a2 に委託済み」と�
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
+touched_files = []
 status = "pending"
 notes = "実測 2026-08-17、測定点 2d744145。`compass gap` の dod 最終要素 (2026-08-17 再測の節) が逐語で「RED テストは 375587a2 に委託済みで 2026-08-14 に裁定との整合を読み直し確認済み」と書いている。しかし当該 commit は共有 odb に存在しない: `git cat-file -t 375587a2` → `fatal: Not a valid object name 375587a2`、`git branch -a --contains 375587a2` → `error: malformed object name`、`refs/preserved` も 0 件 (`git for-each-ref | grep -i preserv` が無出力)。測定 vantage は linked worktree で main と同一 odb を共有しているため「この worktree から見えないだけ」ではない。さらに現行ツリーの状態がこれを裏付ける: crates/condukt/tests/worktree_reconcile.rs には削除されたはずの `dead_clean_worktree_is_removable` が今も存在し、375587a2 が追加したはずの 3 本 (unclaimed_clean_worktree_with_no_witness_is_not_removable / unclaimed_worktree_occupancy_is_undetermined_not_dead / unclaimed_worktree_with_advancing_activity_is_live) は 1 本も存在しない。つまり 375587a2 は **merge されたことがなく**、main は fix 前の状態のままである。影響: charter は steering document なので、これを読んだ次のセッションは『RED は済んでいるので実装だけすればよい』と誤読する。CLAUDE.md 第4節 (散文が実挙動と食い違う = 次のレビュアーを騙す仕掛け) が charter 自身に発生している形。是正: 当該記述を『RED テストは失われており書き直しが必要』へ改める。関連 1b19e6d2 (消失の追跡)、fe84d350 (本体)。なお本セッションは fe84d350 の実装を fresh RED から起こす形で着手済みなので、実体の側は前進する。"
 created_at = 1786951864
@@ -27795,6 +27796,7 @@ tags = [
     "deploy-verify",
     "p1",
 ]
+touched_files = []
 status = "pending"
 notes = """
 実測 2026-08-17 16:30 (このセッションの外で行われた rollout)。
@@ -27833,6 +27835,7 @@ tags = [
     "code-index",
     "p1",
 ]
+touched_files = []
 status = "pending"
 notes = "観測 (2026-08-24, 測定点 71337356): crates/fugu-router/src/main.rs:884-887 の doc 逐語『Fail-soft: a missing/empty index yields [] and exit 0, never an error.』。実装 (main.rs:889-893) も load_index が missing→空 Vec なので、下流は『索引が無い』『索引が壊れている』『該当なし』を区別できない。CLAUDE.md 3.『エラー時に空の集合を返さない』に直接該当し、索引が未構築なだけのときに『そのシンボルは存在しない』と読まれる。対照として同じ store を読む context-governor codesearch.rs は三値 (IndexAbsent / Unreadable(String) / NoSymbolMatch) で答えており、そちらが正典側の形。案: search の JSON に status を足して index-absent / unreadable / no-match / hits を区別する。未測定: 現在の呼び出し側が誰かは未調査で、exit code を変えたときの互換性影響はこの起票では測っていない。"
 created_at = 1787550771
@@ -27840,3 +27843,21 @@ updated_at = 1787550771
 weight = 0.0
 issue_number = 403
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/403"
+
+[[task]]
+id = "2ae5503f"
+title = "check-plugin-rollout.py が enabledPlugins:false から「none of its hooks fire」という未観測の挙動を断定する (blastguard で実測と矛盾)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "実測 2026-09-18、測定点 main 1e79dc4b、blastguard 0.2.65 rollout 直後。scripts/check-plugin-rollout.py:1710 が GATE crate の finding として逐語で 'It is installed but inert: none of its hooks fire, so the gate silently guards nothing.' を出す。根拠は ~/.claude/settings.json の enabledPlugins に当該キーが false または不在であることだけで、hook が発火するかどうかは一切観測していない。ところが実測では blastguard@yukineko が false のまま blastguard の hook は発火している: 本セッション中に 5 回 deny を返した (rm -rf /mnt/c/tmp/harness-worktrees/premerge-probe / git reset --hard / git stash drop x2 / python3 -c の文字列リテラル内の '> ' への誤検知)。いずれの拒否文も crates/blastguard/src/reversible.rs の文言そのもの (例: 'blastguard does not know which directory it is relative to, so it cannot tell whether these bytes are recoverable') なので帰属は確実。つまり設定値 (configuration) から挙動 (behaviour) を断定しており、CLAUDE.md 第2節が禁じる『判断を事実として棚に置く』に当たる。実害: この文言を読んだセッションは『blastguard は何も守っていない』と誤読して防御を前提から外す。逆に、私は一度この出力を信じて自分の正しい帰属を誤って訂正した (観測より散文を信じた実例)。是正方向: 設定値から言えることだけを言い、hook が実際に発火するかは Undetermined として明示する。finding が failure であること自体は変えない (第3節: 判定不能は制限側)。付随して、なぜ false でも発火するのかは未解明であり別途調査が要る (settings.json 内に blastguard の hooks 配線は無く、plugin 側 hooks/hooks.json が enabledPlugins を無視して読まれている可能性)。"
+created_at = 1789715685
+updated_at = 1789715685
+weight = 0.0
+issue_number = 671
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/671"

@@ -447,6 +447,64 @@ class Enablement(_FixtureCase):
             self.assertIn("blastguard", err)
             self.assertIn("disabled (set to false)", err)
 
+    def test_disabled_gate_finding_does_not_assert_unobserved_hook_behaviour(self):
+        """**Measured 2026-09-18 (backlog 2ae5503f): the finding asserted a
+        behaviour it never observed, and the assertion was false.**
+
+        The finding used to end with the words *"none of its hooks fire, so the
+        gate silently guards nothing"*. Its only evidence is the value of
+        `enabledPlugins["<name>@yukineko"]` in settings.json — a CONFIGURATION
+        value. Whether a hook process actually runs is a BEHAVIOUR, and this
+        check never looks at one.
+
+        On this machine the two disagreed. `blastguard@yukineko` was `false`
+        while blastguard's PreToolUse hook denied five commands in a single
+        session, each refusal carrying wording that exists only in
+        `crates/blastguard/src/reversible.rs` (e.g. "blastguard does not know
+        which directory it is relative to, so it cannot tell whether these bytes
+        are recoverable"), so the attribution is not in doubt.
+
+        The cost is not cosmetic: a reader who believes the sentence drops a live
+        defense from their model of the system, and in the session that measured
+        this, the sentence was believed over the observation — a correct
+        attribution was retracted because the prose said the gate was inert.
+
+        What must NOT change is the verdict. A GATE crate that is not enabled is
+        still a failure (CLAUDE.md §3: what we could not determine resolves to
+        the restricted side). This test pins the reasoning, not the severity,
+        which is why it asserts RC_ENABLEMENT alongside the wording.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, _out, err = self.run_main(tmp, enabled={"blastguard": False})
+
+            # Severity is unchanged — this is not a relaxation.
+            self.assertEqual(rc, cpr.RC_ENABLEMENT)
+            self.assertIn("blastguard", err)
+            self.assertIn("disabled (set to false)", err)
+
+            self.assertNotIn(
+                "none of its hooks fire",
+                err,
+                "the check observes enabledPlugins, never a hook process, so it "
+                "must not state as fact that no hook fires — measured false for "
+                "blastguard on 2026-09-18",
+            )
+            self.assertNotIn(
+                "silently guards nothing",
+                err,
+                "same claim, second clause: whether the gate guards anything was "
+                "not observed either",
+            )
+            # And it must still say what IS wrong, rather than going quiet.
+            # Matched case-insensitively: the requirement is that the reader is
+            # told the behaviour was unmeasured, not how the words are cased.
+            self.assertIn(
+                "not observed",
+                err.lower(),
+                "replacing a false claim with silence would be worse: the reader "
+                "must be told that hook behaviour was NOT measured",
+            )
+
     def test_non_gate_disabled_is_a_warning_not_a_failure(self):
         """Users disable non-gate plugins on purpose (benchkit / daily-report /
         ship are off deliberately today) — inform, never block."""

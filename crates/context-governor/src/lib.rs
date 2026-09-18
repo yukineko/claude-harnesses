@@ -28,6 +28,7 @@
 //! crate. This crate adds only the governor-specific contract on top.
 
 pub mod backing;
+pub mod codesearch;
 pub mod handlers;
 pub mod io;
 pub mod ledger;

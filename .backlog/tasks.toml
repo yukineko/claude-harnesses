@@ -27822,3 +27822,21 @@ updated_at = 1786953564
 weight = 0.0
 issue_number = 355
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/355"
+
+[[task]]
+id = "3f3a0e90"
+title = "fugu-router code-index search が「索引が無い」と「該当なし」を同じ空配列で返す"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "code-index",
+    "p1",
+]
+status = "pending"
+notes = "観測 (2026-08-24, 測定点 71337356): crates/fugu-router/src/main.rs:884-887 の doc 逐語『Fail-soft: a missing/empty index yields [] and exit 0, never an error.』。実装 (main.rs:889-893) も load_index が missing→空 Vec なので、下流は『索引が無い』『索引が壊れている』『該当なし』を区別できない。CLAUDE.md 3.『エラー時に空の集合を返さない』に直接該当し、索引が未構築なだけのときに『そのシンボルは存在しない』と読まれる。対照として同じ store を読む context-governor codesearch.rs は三値 (IndexAbsent / Unreadable(String) / NoSymbolMatch) で答えており、そちらが正典側の形。案: search の JSON に status を足して index-absent / unreadable / no-match / hits を区別する。未測定: 現在の呼び出し側が誰かは未調査で、exit code を変えたときの互換性影響はこの起票では測っていない。"
+created_at = 1787550771
+updated_at = 1787550771
+weight = 0.0
+issue_number = 403
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/403"

@@ -24,11 +24,8 @@ use std::path::PathBuf;
 
 /// Every skill that routes human gates through `condukt policy answer`.
 /// `(crate dir, skill dir)` — the path is `crates/<crate>/skills/<skill>/SKILL.md`.
-const GATED_SKILLS: &[(&str, &str)] = &[
-    ("flow", "flow"),
-    ("condukt", "condukt"),
-    ("scout", "scout"),
-];
+const GATED_SKILLS: &[(&str, &str)] =
+    &[("flow", "flow"), ("condukt", "condukt"), ("scout", "scout")];
 
 fn skill(crate_dir: &str, skill_dir: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

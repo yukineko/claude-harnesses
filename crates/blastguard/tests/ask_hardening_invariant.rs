@@ -56,7 +56,9 @@ fn permission_decision_with_env(envs: &[(&str, &str)]) -> String {
     }
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        // Repeat-ledger test isolation — see the note in integration.rs.
+        .env_remove("CLAUDE_CODE_SESSION_ID");
     let mut child = cmd.spawn().expect("binary spawns");
     if let Some(mut child_stdin) = child.stdin.take() {
         child_stdin

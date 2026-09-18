@@ -286,6 +286,13 @@ fn emit(decision: Decision, input: Option<&HookInput>) {
         decision.hardened()
     };
 
+    // Operator ruling 2026-09-18 —「ユーザの指示を2度やぶるgateはいらない。
+    // 2度目はaskせよ」. Deliberately placed AFTER `hardened()`, not before: the
+    // operator was asked whether headless/agent runs should be exempt and ruled
+    // 「全 gate で 2度目は無条件に通す」, so the downgrade has to survive the
+    // hardening that would otherwise fold it straight back into a deny.
+    let decision = downgrade_on_repeat(input, decision);
+
     let Some(line) = hookio::decision_line(&decision) else {
         return; // Allow → print nothing.
     };
@@ -305,6 +312,72 @@ fn emit(decision: Decision, input: Option<&HookInput>) {
             record_violation(input, reason)
         });
     }
+}
+
+/// Hand the decision back to the human when this gate has already refused this
+/// exact effect in this session.
+///
+/// # The ruling
+///
+/// 「ユーザの指示を2度やぶるgateはいらない。2度目はaskせよ」 (operator,
+/// 2026-09-18). A first `Deny` tells the user something they had not weighed. A
+/// second `Deny` for the same effect, after they have read the reason and asked
+/// again, adds nothing — it just substitutes the gate's judgement for theirs.
+/// So the repeat becomes an `Ask`: still not an automatic yes, but a question
+/// the human can answer instead of a refusal they cannot clear.
+///
+/// # What this may and may not do
+///
+/// `Deny` is the only variant it touches. `Ask` and `Allow` return untouched,
+/// so this can never make a verdict *stricter*, and it can never manufacture an
+/// `Allow` — the strongest thing it produces is a question. The escalation
+/// `Ask` → `Deny` has no path through here at all.
+///
+/// # Fail-closed (CLAUDE.md §3)
+///
+/// [`harness_core::repeat::must_yield`] answers `false` for both "first time"
+/// and "could not tell" — an unset session id, an unwritable ledger, an IO
+/// error. A ledger that cannot answer therefore leaves the `Deny` exactly as it
+/// was; "I did not check" never reads as "the user already saw this".
+fn downgrade_on_repeat(input: Option<&HookInput>, decision: Decision) -> Decision {
+    let Decision::Deny(reason) = &decision else {
+        return decision;
+    };
+    let Some(input) = input else {
+        // No parsed payload means no effect to identify, and an unidentifiable
+        // effect cannot be shown to be a repeat of anything.
+        return decision;
+    };
+    let fingerprint = repeat_fingerprint(input, reason);
+    if !harness_core::repeat::must_yield("blastguard", &fingerprint) {
+        return decision;
+    }
+    Decision::Ask(format!(
+        "{reason}\n\n(2度目の同一要求です。blastguard は同じ指示を2度は上書きしません — \
+         この判断は人間に返されました。)"
+    ))
+}
+
+/// The identity of "the same refusal again".
+///
+/// Built from the tool, its primary target and the deny reason rather than the
+/// whole `tool_input`: a `Write` carries its file *content*, and keying on that
+/// would make every retyped byte a brand-new finding, so the second attempt at
+/// the same file would never register as a repeat. Including the reason keeps
+/// two different rules firing on one path distinguishable — clearing one must
+/// not silently clear the other.
+fn repeat_fingerprint(input: &HookInput, reason: &str) -> String {
+    let target = bash_command(input)
+        .or_else(|| {
+            input
+                .tool_input
+                .as_ref()
+                .and_then(|t| t.get("file_path"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+    format!("{}\u{1}{}\u{1}{}", input.tool_name, target, reason)
 }
 
 /// Run the detector with a panic barrier.

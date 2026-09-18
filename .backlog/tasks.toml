@@ -22969,6 +22969,7 @@ title = "tdd FAIL-OPEN: a test-marker regex hit in ANY file (README, toml, fixtu
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
+touched_files = []
 status = "pending"
 notes = '''
 Found and independently re-verified 2026-09-11 at HEAD 2abf8dea by reading crates/tdd/src/gate.rs classify().
@@ -27015,6 +27016,7 @@ tags = [
     "worktree-hygiene",
     "p1",
 ]
+touched_files = []
 status = "pending"
 notes = """
 実測 2026-09-11、測定点 27839b28 (rollout 実行中のセッション 3365f18c)。
@@ -27068,6 +27070,7 @@ title = "blastguard: project 内の plain untracked ファイルの rm が allow
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
+touched_files = []
 status = "pending"
 notes = ""
 created_at = 1789349260
@@ -27082,6 +27085,7 @@ title = "blastguard: 配置不能ターゲットの Deny を「他 project / hom
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
+touched_files = []
 status = "pending"
 notes = ""
 created_at = 1789349275
@@ -27096,6 +27100,7 @@ title = "blastguard: 明示指示時の guard skip 機構を設計する — age
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
+touched_files = []
 status = "pending"
 notes = ""
 created_at = 1789349292
@@ -27110,6 +27115,7 @@ title = "blastguard: redirect target の解決を出現ごとに行う — 同�
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
+touched_files = []
 status = "pending"
 notes = ""
 created_at = 1789350167
@@ -27124,6 +27130,7 @@ title = "blastguard: append redirect (>>) が変数形で silently permissive �
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
+touched_files = []
 status = "pending"
 notes = ""
 created_at = 1789350173
@@ -27138,6 +27145,7 @@ title = "blastguard: deny to ask 統一は shape deny を直接反転できな�
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
+touched_files = []
 status = "pending"
 notes = """
 【2026-09-14 追記2】要件文 v2 (人間の裁定3件を反映) を specforge draft に再投入し、
@@ -27364,6 +27372,7 @@ title = "blastguard fail-open: 相対パス redirect (echo x > ../../outside.log
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
+touched_files = []
 status = "pending"
 notes = ""
 created_at = 1789351245
@@ -27378,6 +27387,7 @@ title = "taskprog が crates/blastguard/src/.claude/progress.md を自動生成 
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p2"]
+touched_files = []
 status = "done"
 notes = """
 【2026-09-14】condukt run run-20260914-121207-24519 で実装、commit 65bd3bad
@@ -27434,6 +27444,7 @@ title = "taskprog: Config::load も cwd 直下の taskprog.toml しか見ず pro
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = []
+touched_files = []
 status = "pending"
 notes = "a6258cc7 (resolve_progress_path の project-root アンカー化) の作業中に発見。crates/taskprog/src/config.rs の Config::load(cwd) は PathBuf::from(cwd).join('taskprog.toml') を見るだけなので、cwd がサブディレクトリのセッション/サブエージェントは project root に置かれた taskprog.toml を読み落とし、~/.taskprog/config.toml か Default に落ちる。resolve_progress_path は 0.1.8 で resolve_project_root() 経由の三値解決になったが、Config::load は非アンカーのまま残っている。結果として root に progress_file を明示設定していても、サブディレクトリ cwd の hook はその設定を見ずに既定パスを使う。修正は Config::load も resolve_project_root() を使い root の taskprog.toml を探すこと。判定不能時の扱い (home config へ落とすか Default か) を決める必要がある。"
 created_at = 1789356056
@@ -27448,6 +27459,7 @@ title = 'taskprog: empty-cwd の doc と実挙動が矛盾 ("." 置換で Undete
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p2"]
+touched_files = []
 status = "pending"
 notes = '''
 taskprog: 新設 doc が production の空 cwd 置換と矛盾し、empty-cwd の Undetermined 腕が
@@ -27486,6 +27498,7 @@ title = "taskprog: install.rs settings_path() が HOME 不明時に cwd へフ�
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p3"]
+touched_files = []
 status = "pending"
 notes = """
 taskprog: install.rs settings_path() が HOME 解決失敗時に cwd 脇へ .claude/settings.json を
@@ -27516,6 +27529,7 @@ title = "taskprog 0.1.8 の rollout 未実行 + 迷子 progress.md 残置で che
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
+touched_files = []
 status = "pending"
 notes = """
 taskprog 0.1.8 の rollout が未実行で、欠陥が稼働ハーネスで再現し続けている。
@@ -27546,12 +27560,14 @@ updated_at = 1789357190
 weight = 0.0
 issue_number = 655
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/655"
+
 [[task]]
 id = "c9373b92"
 title = "rollout-plugins.sh --plugin runs skip the verification that would catch a dark deploy"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
+touched_files = []
 status = "pending"
 notes = "scripts/rollout-plugins.sh:1106-1113 returns 0 early for any filtered run: 'verify: skipped — this run was filtered to: ...'. check-plugin-rollout.py DOES detect 'installed but execs nothing' (check-plugin-rollout.py:1147-1153, ROLLOUT-class fatal at rollout-plugins.sh:1120-1125), but the single most common invocation shape — scripts/rollout-plugins.sh --plugin <name> — never runs it. So the one path an operator uses to roll out one plugin has ZERO post-hoc check that the host binary actually landed. The stated reason (a whole-fleet verdict would fail for plugins this run never touched) argues for a SCOPED verification of the targeted plugins, not for skipping verification entirely. Found while closing 8206b09f."
 created_at = 1789118611
@@ -27566,6 +27582,7 @@ title = "canary rollout halt leaves already-passed stages deployed with no host 
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
+touched_files = []
 status = "pending"
 notes = "In the --canary path, the per-stage registry pointer is written inside the stage loop (scripts/rollout-plugins.sh:940 registry_patch), but run_rebuild_and_sync — the only thing that seeds host binaries — is at :1066, AFTER the loop. A gate verdict halting the run (exit 5 at :1037 'gate could not evaluate', exit 4 at :1044 'rollback advised') therefore leaves every stage 0..N-1 that already PASSED holding a fresh version dir and a live registry pointer with launcher-only bin/, and execute_stage_rollback (:797-849) restores only the stage just applied. Result: those plugins are installed, version-consistent, and exec nothing — dark, not red. Same class already measured once as backlog 51e6ebc7 (a --force --canary rollout blanked blastguard/overwatch/specguard). Found while closing 8206b09f."
 created_at = 1789118621
@@ -27580,6 +27597,7 @@ title = "rebuild-plugins.sh masks cargo metadata failure and can no-op the whole
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
+touched_files = []
 status = "pending"
 notes = """scripts/rebuild-plugins.sh:81-82: TARGET_DIR="$(cargo metadata --no-deps --format-version=1 | sed -n '...')" — the pipeline's exit status is sed's, which is always 0, so a failed or empty cargo metadata silently yields an empty TARGET_DIR and REL falls back to $REPO/target/release. Measured on this machine: .cargo/config.toml sets target-dir=/tmp/condukt-build, so $REPO/target/release does not exist at all; under that fallback [ -x "$src" ] is false for EVERY plugin, the main loop takes its 'missing' branch (:282-284) and the seed pass takes its silent continue (:379), and the script still exits 0 at :401 with a green summary. $REPO is $(dirname $0)/.. i.e. the worktree, which makes the fallback wrong more often, not less. CLAUDE.md §3: the exit status must be part of the verdict. Found while closing 8206b09f."""
 created_at = 1789118631
@@ -27594,6 +27612,7 @@ title = "rebuild-seeds-every-launcher.sh is red on this machine: hardcodes $REPO
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
+touched_files = []
 status = "pending"
 notes = """scripts/tests/rebuild-seeds-every-launcher.sh:53 and :58 test [ -x "$REPO/target/release/$l" ], but .cargo/config.toml sets target-dir=/tmp/condukt-build. Observed verbatim: 'FAIL: target/release/specguard still missing after build' (rc=1) while /tmp/condukt-build/release/specguard exists and is executable. The test should resolve the target dir the same way the script under test does (cargo metadata, rebuild-plugins.sh:81-82) instead of assuming the default. Compounding: rebuild-plugins.sh:231-234 records that scripts/tests/*.sh are wired into NO hook and must be run by hand, so the regression pins guarding the seed pass — the only path that populates a fresh version dir — are both manual-only AND currently red. Found while closing 8206b09f."""
 created_at = 1789118640
@@ -27608,6 +27627,7 @@ title = "autoUpdate:true directory marketplace can create a launcher-only versio
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
+touched_files = []
 status = "pending"
 notes = "~/.claude/plugins/known_marketplaces.json has yukineko as source=directory with autoUpdate:true. scripts/rollout-plugins.sh:8-16 documents that Claude Code's own /plugin update for such a marketplace does exactly two things: plain-copy crates/<name>/ into a fresh cache/<name>/<version>/, and repoint installed_plugins.json. Neither builds nor copies a host binary, and .gitignore:45-48 ignores crates/*/bin/*-{darwin,linux}-*, so the tree copy yields exactly bin/<name> (the tracked launcher) and nothing else — the observed dark state, reachable with NO repo script in the loop and therefore not closable by hardening rebuild-plugins.sh. Options: disable autoUpdate for this marketplace, or add a SessionStart check that the registry-pointed dir holds a usable host binary. Found while closing 8206b09f."
 created_at = 1789118651
@@ -27622,6 +27642,7 @@ title = "rebuild-plugins.sh launcher detection omits bare windows suffixes the o
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
+touched_files = []
 status = "pending"
 notes = "scripts/rebuild-plugins.sh:373 excludes *-darwin-arm64|*-darwin-x86_64|*-linux-x86_64|*-linux-arm64|*-windows-x86_64.exe|*-windows-arm64.exe when deciding 'is this bin/ entry a launcher', omitting the BARE *-windows-x86_64 / *-windows-arm64 that scripts/rollout-plugins.sh:432-435 (plat_suffixes) and scripts/check-plugin-rollout.py PLATFORM_SUFFIXES both carry. .gitignore:45-48 ignores only darwin/linux, so a committed crates/<n>/bin/<n>-windows-x86_64 WOULD be tracked, copied into every fresh version dir, and then misread by the seed loop as a launcher — seeding <n>-windows-x86_64-<hostsuffix>. Three copies of one suffix table with no machine cross-check between them. Found while closing 8206b09f."
 created_at = 1789118661
@@ -27636,6 +27657,7 @@ title = "blastguard GATE crate is disabled in settings.json — installed but in
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
+touched_files = []
 status = "pending"
 notes = "scripts/check-plugin-rollout.py exits 2 (ENABLEMENT class) on this machine, verbatim: 'blastguard: GATE crate is not enabled — disabled (set to false) in /home/hiroyuki_nakayama/.claude/settings.json. It is installed but inert: none of its hooks fire, so the gate silently guards nothing.' Per that script's own docstring a disabled GATE crate is a hard failure with no legitimate reason to run this repo with one off. It is not declared in scripts/parked-plugins.json (only parallelguard is), so this is an undeclared red — and CLAUDE.md warns against BOTH ignoring it and force-enabling it to clear it (2026-08-04, taintguard). Needs a human ruling: either re-enable, or declare the park with a reason. Unrelated to the rollout dimension, which is clean (40 plugins, no drift). Found while closing 8206b09f."
 created_at = 1789345110
@@ -27643,3 +27665,33 @@ updated_at = 1789345110
 weight = 0.0
 issue_number = 643
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/643"
+
+[[task]]
+id = "03e004ec"
+title = "post-merge: 既存 merge commit への fast-forward を bypass として誤記録し push をブロックする"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "実測 2026-09-18。worktree (session-47b2f117) で origin/main を merge し、pre-commit が green (rc=0) で通って merge commit d067c116 を作成。その後 main で `git merge --ff-only session-47b2f117` を実行したところ、post-merge が発火し ledger (.git/gate-bypassed) に d067c116 を「ungated」として記録、`git push` がブロックされた。原因: .githooks/post-merge:23-24 のガードが `git rev-parse HEAD^@` の親数だけを見ており、ff 後の HEAD は「既に他所で作られ certified 済みの merge commit」なのに親 2 を満たすため post-commit へ exec してしまう。ヘッダのコメント (:17-19)「A fast-forward merge creates no commit, so there is nothing to certify and the absent sentinel must not be read as a bypass」は ff 先が非 merge commit の場合しか成立していない。さらに証跡 sentinel は per-worktree (pre-commit:340-342 GIT_DIR_LOCAL/gate-verified-tree) で ledger は common (pre-commit:348 GIT_DIR_COMMON/gate-bypassed) なので、worktree で書かれた certificate は main の post-commit から原理的に参照できない。CLAUDE.md 8 が命じる「worktree で実装 → main へ merge」の正規ルートを通ると必ず踏む。fail-closed 側の誤検知なので安全側ではあるが、正規ルートが常に赤くなる。修正案: post-merge で「HEAD が merge 前の ORIG_HEAD の子として *この実行で* 作られたか」を判定する、または sentinel を GIT_DIR_COMMON 側に置いて worktree 間で参照可能にする。"
+created_at = 1789702606
+updated_at = 1789702606
+weight = 0.0
+issue_number = 665
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/665"
+
+[[task]]
+id = "fc6b48d2"
+title = "rollout-plugins.sh --canary が overwatch 自身のバイナリ欠落でブートストラップ不能 (鶏と卵)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "実測 2026-09-18 linux-x86_64。稼働 cache の host binary が全 41 plugin で欠落した状態から `scripts/rollout-plugins.sh --canary --dry-run` を実行すると、canary 健全性ゲートが overwatch を使うため即座に `overwatch: no bundled binary for linux-x86_64 (.../overwatch/0.2.35/bin/overwatch-linux-x86_64)` で rc=1 終了する。GATE クレートは canary 必須 (docs/repo-operations.md) なので、overwatch のバイナリを配るには canary が要り、canary を回すには overwatch のバイナリが要る、という循環になる。今回は `scripts/rebuild-plugins.sh --no-clean` を先に手で回して cache へ seed することで抜けたが、この回避手順はどこにも書かれていない。Stop hook / SessionStart hook が出すメッセージは `scripts/build-plugin-bin.sh` を案内するが、これは crates/<name>/bin/ へ stage するだけで稼働 cache には配らないため、案内どおりに実行しても hook は復旧しない (案内が実挙動と食い違っている = CLAUDE.md 4)。修正案: (a) canary ゲートが overwatch を実行できないときの bootstrap 経路を rollout-plugins.sh に持たせる、(b) hook のメッセージを rebuild-plugins.sh へ直す、の両方。"
+created_at = 1789702622
+updated_at = 1789702622
+weight = 0.0
+issue_number = 666
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/666"

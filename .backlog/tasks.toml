@@ -27758,3 +27758,18 @@ updated_at = 1789703640
 weight = 0.0
 issue_number = 668
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/668"
+
+[[task]]
+id = "126d038a"
+title = "condukt schedule が done_criteria の散文中の > を shell redirect と誤読し、純粋なコード修正タスクを force-gate する"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "測定日 2026-09-18、測定点 main 5553217c、condukt 0.7.168。crates/condukt/src/schedule.rs:478 の resolve_force_gate(classify_change(&task_action_text(t), ...)) は task_action_text (title + done_criteria + touched_files を連結した自由文) を blastguard の shell コマンド分類器に渡す。実測(決定論・再現可能、probe は condukt schedule --file <1タスクの decomposition>): done_criteria='> foo' -> GATED / '>foo' -> GATED / '>= built_at' -> GATED / 'm > built_at' -> GATED / 'm >= built_at' -> GATED。対照: 'm < built_at' -> not gated / 'Determination<i64>' -> not gated / 'built_at' -> not gated / 'fresh' -> not gated。したがって trigger は文字 '>' 単体であり、< は引かない(プローブに識別力があることの control 済み)。実害: backlog e073bdb1 の実装タスク(overwatch cache_is_fresh が ledger mtime を consult する純粋なコード修正)が、done_criteria に比較条件 'Known(m) かつ m >= built_at は TTL に関わらず not fresh' と書いただけで gated へ隔離され、schedule の warnings が 'high-risk irreversible action (declared class Serial)' と報告した。方向は制限側(fail-closed)なので fail-open ではないが、(a) 正しい仕様記述が書けないほど分類器が過敏である、(b) gated 隔離が日常化すると §5 が禁じる恒常的迂回(散文を書き換えて分類器を避ける = ゲートのゲーミング)へ構造的な圧力がかかる。読みは 2 つ: (a) 実在の欠陥 = 自然言語の done_criteria に shell 分類器を掛けるのが誤り(action text から done_criteria を外す、または shell トークンとしての > を判定する前に自由文かコマンドかを判別する)。(b) 意図的な仕様 = LLM の under-tag を塞ぐため過剰検出を受容している。見分ける方法: classify_change の呼び出し側が期待する入力が『実行されるコマンド』か『タスクの説明文』かを、schedule.rs:461-476 の docstring (deploy/push/release を force-gate する意図) と blastguard::classify の契約 docstring の両方で確認する。前者が『説明文』を想定していないなら (a)。関連: bcfc5491 / e073bdb1 / 5e62b0eb の p0 trio run"
+created_at = 1789704704
+updated_at = 1789704704
+weight = 0.0
+issue_number = 669
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/669"

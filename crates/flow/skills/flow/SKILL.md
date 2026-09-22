@@ -10,11 +10,11 @@ allowed-tools: Task, AskUserQuestion, Bash(backlog:*), Bash(compass:*), Bash(con
 `/flow` は **課題の供給 → 解決手段の実行** を1本のループで回す。
 
 ```
-SOURCE（課題の供給）              EXECUTOR（解決手段の実行）
-  compass    … 次の右サイズの一手   ─┐
-  backlog    … 確定済みキュー        ├─▶  condukt（fugu-router がモデル選択）─▶ verify
-  hypothesis … 計測待ちの PDO 仮説   │
-  prompt     … ユーザー直の課題文   ─┘
+SOURCE（課題の供給。上から順に引く）   EXECUTOR（解決手段の実行）
+  backlog    … 確定済みキュー【主経路】─┐
+  hypothesis … 計測待ちの PDO 仮説      ├─▶  condukt（fugu-router がモデル選択）─▶ verify
+  compass    … 次の右サイズの一手       │    ※backlog が空のときだけ引く（自動 carve）
+  prompt     … ユーザー直の課題文      ─┘
                                      │
   specforge  … spec-gap の戻り経路   ◀┘  正典が無い課題は実装フェーズへ通さず
        └──▶ ratify ──▶ backlog ──▶ (次の周回で flow が拾う)
@@ -30,7 +30,7 @@ SOURCE（課題の供給）              EXECUTOR（解決手段の実行）
 >    （leap of faith）があれば、full build ではなく**その assumption だけを de-risk する最小実験**に落とす。
 >    leap of faith が無ければ「その仮説を検証する実験」として condukt に流す（build）。完了すると condukt が
 >    gate PASS 時に `awaiting-measurement`（出荷済み・未計測）へ遷移させる。
-> ② **awaiting-measurement** な仮説 → **measure step**（Step 3-1 の 2）で観測値を回収し、
+> ② **awaiting-measurement** な仮説 → **measure step**（Step 3-1 の 1）で観測値を回収し、
 >    **計測した証拠を添えて** validate/reject して閉じる（出荷だけでは validate しない＝build ≠ validate）。
 
 **役割分担（外さない）**: ループ制御（どの source を引くか・実行・検証・止め時の判定）は **この skill（LLM）**。
@@ -182,19 +182,27 @@ auto へ移した**（block が返れば止まる。実際の防護は blastguar
 `gate-decisions.jsonl` に残り `condukt policy answers` で監査できる** — ゲートは削除ではなく記録付きで自答される）。
 **budgetguard の予算超過による早期脱出（Step 4）はどのモードでも維持**する。
 
-### Step 1 — compass ゲート（盲目実行の防止）
+### Step 1 — compass ゲートは**ここでは引かない**（backlog 優先。2026-09-23 のユーザー裁定）
 
-source を引く前に、ゴールが鮮明かを確認する:
+**引数なしの `/flow` では、compass / charter を先に引いてはいけない。** 確定キューである
+backlog を先に処理し、**backlog が一手も出さなかったときだけ** charter 側へ降りる。
+したがってこの Step では `compass gap` を実行せず、そのまま **Step 2（driver 登録）→
+Step 3-1** へ進む。compass の実行点は **3-1 の 3（backlog フォールバック）** に移動した。
 
-```bash
-compass gap     # ゴール−現状の gap と候補の一手を出す
-```
+**Why**（裁定の理由を残す。次の著者が「先に引く」へ戻さないため）:
 
-- charter が **陳腐・矛盾・抽象すぎて一手が引けない**場合 → **自動実行しない**。
-  ユーザーに「先に `/compass` で再オリエンテーションが必要」と伝えて**停止**する（権威で自動解決しない）。
-- charter が鮮明で **右サイズの一手が引ける**場合 → その一手を `to_condukt` 候補として保持し、Step 2 へ。
+- backlog は**既に裁定済みの仕事**である。charter を先に引くと、積まれている確定仕事を
+  差し置いて「今いちばん大きな gap」が毎周回で割り込み、**キューが減らない**。
+  ユーザーから見た症状は「backlog に pending が何百件あるのに別のことを始める」。
+- 「盲目実行の防止」という元の目的は backlog には元々かかっていない。backlog item は
+  起票時点で観測と done 条件を持つので、charter の鮮度は**その item を実行してよいかの
+  判定材料ではない**。charter ゲートが本当に守っているのは **compass 由来の一手**であり、
+  その経路では**今も同じ強さでかかる**（3-1 の 3 を参照）。ゲートを外したのではなく、
+  **ゲートを本来の対象だけに絞った**。
+- **引数ありの `/flow <課題>` はこの裁定の対象外**（Step 0 のとおり課題文へ直行する）。
 
-> compass は「ONE に絞り残りは parked」が思想。`/flow` はそれを尊重し、compass の主筋を**最優先 source** として扱う。
+> compass は「ONE に絞り残りは parked」が思想であり、それ自体は変わらない。変わったのは
+> **compass を引く順番**だけで、「最優先 source」ではなく **backlog が枯れたときの供給源**になった。
 
 ### Step 2 — driver 登録（**排他ではない**）
 
@@ -239,8 +247,10 @@ backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drive
 
 #### 3-1. 次のタスクを優先度順にピック
 
-1. **compass の主筋**（Step 1 の `to_condukt`）が未消化なら → それを最優先で選ぶ。
-2. **measure step（計測ループを閉じる / build ≠ validate）** — 新規 build より**先に**、出荷済み・未計測の仮説を回収する:
+> **順序は backlog 優先**（2026-09-23 のユーザー裁定）。compass / charter は **1 と 2 が
+> どちらも一手を出さなかったときのフォールバック**であり、先頭では引かない（Step 1 を参照）。
+
+1. **measure step（計測ループを閉じる / build ≠ validate）** — 新規 build より**先に**、出荷済み・未計測の仮説を回収する:
    ```bash
    hypothesis list --status awaiting-measurement   # condukt が merge 時に遷移させた「出荷済み・未計測」
    ```
@@ -251,7 +261,7 @@ backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drive
      - **まだ観測不能**（データ蓄積待ち等）→ awaiting-measurement のまま残し、
        「計測待ち（まだ観測不能）」として報告し次の候補へ進む（ここで無限ループしない）。
    - `hypothesis` バイナリが無い / 0 件なら skip。
-3. measure 対象（今観測可能なもの）が無ければ **backlog**（確定キュー）。
+2. measure 対象（今観測可能なもの）が無ければ **backlog**（確定キュー）。**これが引数なし `/flow` の主経路である。**
    backlog に **複数の ready 課題がある場合は、順列（1件ずつ）ではなく 1 回の condukt run に束ねて並列処理**する。
    **並列/直列の判定は flow がするのではなく、condukt の決定論スケジューラ（`schedule.rs`）に委譲**する
    ＝ flow は独立候補を「束ねて渡すだけ」で、ファイル競合・`Serial`/`Gated` クラス・shared-glob・依存層は
@@ -291,6 +301,34 @@ backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drive
       weight 無指定は既定 0.0＝従来の (priority, created_at) 順（後方互換）。weight は順序を変えるだけで priority は上書きしない。
       クロスプロジェクトで繰り返し検出される作業種別は `docs/backlog-tag-taxonomy.md` の規約タグ（例:
       `worktree-hygiene` / `deploy-verify` / `network-infra`）も併せて付ける。
+3. **backlog が一手も出さなかったときだけ compass / charter を引く（自動実行する）。**
+   `backlog next --claim` が（1 度取り直したうえで）`no pending tasks` を返し、measure 対象も無い —
+   このときに限り、ここで初めて charter 側へ降りる:
+   ```bash
+   compass gap     # ゴール−現状の gap と候補の一手を出す
+   ```
+   - **charter が鮮明で右サイズの一手が引ける** → その一手を `to_condukt` として採用し、6 へ進む
+     （以降は backlog 由来と同じ扱い。sink は 3-3 の compass 由来＝`compass outcome` を使う）。
+   - **charter が陳腐・矛盾・抽象すぎて一手が引けない** → **`/compass` を案内して停止するのではなく、
+     その場で charter を彫り直す**（＝「backlog が無ければ自動で charter を実行する」の実体）。
+     `compass` skill の Step 1〜5（`compass evaluate` → C3–C5 の自己判定 → 未解決の問いを
+     `AskUserQuestion` で 1 問ずつ詰める → `compass charter --write` → `compass gap --write`）を回し、
+     彫り直した charter から一手を引いて 6 へ進む。
+     - **この carve 中の `AskUserQuestion` は残す。** charter を彫る問いは「どちらを選ぶべきか」を
+       人間に尋ねる**判断要求**であって権限認可ではないので、`--approval` を付けてはならない
+       （Step 0.5 の表の見分け方に従う）。自動化されたのは**「charter を引きに行く」という動作**で
+       あって、**ゴールの中身を人間の代わりに決めること**ではない。
+     - 人間が離席して `sentinel` に落ちた場合は、分かっている範囲で charter を保存し、
+       残りを保留に流して**ループを終える**（Step 4 へ）。彫れないまま実装へ進まない。
+   - **`compass` バイナリが無い / 呼び出しが失敗した** → charter の状態を**観測できなかった**のであって
+     「一手が無い」ではない。ここで condukt へ流さず、その事実を報告して Step 4 へ抜ける
+     （判定不能を「仕事なし」にも「実行してよい」にも丸めない。CLAUDE.md 3）。
+
+   > **なぜ compass を先頭から降ろしたのに、ゲート自体は残すのか。** charter の鮮度ゲートが
+   > 守っているのは **compass 由来の一手**（ゴールからの差分として導かれた、まだ誰も裁定していない
+   > 仕事）であって、起票時に観測と done 条件を持った backlog item ではない。順序を変えても
+   > この経路のゲートは**一切緩んでいない** — 緩んだと読めたらそれは実装のバグである。
+
 4. **`open` 仮説（新規 discovery）は、ユーザーが明示的にそれを回せと言ったときだけ**引く。
    **backlog が空になったことを理由に自動でここへ降りてはいけない** — それは「仕事が無いので
    仕事を作る」であり、下の 5 の停止判定に反する。自動ループでは open 仮説は
@@ -311,9 +349,15 @@ backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drive
      その**仮説を検証する実験**（full build）を課題文にする。
    いずれも仮説 ID を控える。`hypothesis` バイナリが無い / 0 件 / `rat` 未対応なら従来どおり full build に流す。
 5. **停止判定 — 仕事が無いなら繰り返さない。** 継続してよいのは次の 3 つが**実際に一手を出したとき**だけ:
-   **(i) compass 主筋**（Step 1 の `to_condukt` が未消化）、**(ii) measure step**（3-1 の 2 で
-   **今observable**な awaiting-measurement 仮説）、**(iii) backlog の pending**。
+   **(i) backlog の pending**（3-1 の 2。主経路）、**(ii) measure step**（3-1 の 1 で
+   **今observable**な awaiting-measurement 仮説）、**(iii) compass 主筋**（3-1 の 3 の
+   フォールバックで実際に引けた `to_condukt`）。
    この 3 つがどれも空なら → **ループを抜けて Step 4 へ**。
+
+   **順序が変わっても停止条件の集合は変わらない**（3 つのまま）。変わったのは**引く順番**だけで、
+   「backlog が空だから止まる」わけではない — backlog が空でも compass が一手を出せば継続する。
+   逆に compass が一手を出せない（charter を彫っても右サイズが無い・`sentinel`・compass 不在）なら、
+   そこで止まるのが正しい。
 
    **`open` 仮説だけを根拠にループを継続してはいけない**（3-1 の 4 は上の 3 つが空のときの
    継続理由にならない）。open 仮説は「これから作れる仕事」であって「積まれている仕事」ではないので、
@@ -448,7 +492,7 @@ specforge ratify --id <spec id> --reason "<なぜこの spec を受け入れる�
 divert を強行せず人間へ返すこと。
 
 - `ratify` が通れば、その spec 由来の項目が backlog に現れ、**flow は次の周回でそれを拾う**
-  （3-1 の 3 が通常どおり `next --claim` する）。これは散文ではなく**実測**である
+  （3-1 の 2 が通常どおり `next --claim` する）。これは散文ではなく**実測**である
   （2026-09-07、使い捨て git repo。`ratify` が
   `backlog: 3 件を起票 / 0 件は起票済み (計 3 requirement)` を出力し、直後の
   `backlog list --status pending`（**確認のための純粋な read であって、ピックに使ってはいけない**。
@@ -540,8 +584,8 @@ blocked/失敗の item は `fail`** と書き分ける（**部分成功をその
   - hypothesis 由来（**新規 experiment の build が完了**）→ condukt は gate PASS 時に linked_hypotheses を
     **`awaiting-measurement`（出荷済み・未計測）へ遷移済み**。**出荷しただけでは validate しない**ので、
     flow はこの場で validate/reject せず、仮説を awaiting-measurement に残す。閉じるのは**次サイクルの
-    measure step（3-1 の 2）**が観測値を添えて行う（build ≠ validate）。「計測待ち N 件」を残課題として報告する。
-  - measure step 由来（**3-1 の 2 で観測値を回収した awaiting-measurement 仮説**）→ 観測した成果を添えて閉じる:
+    measure step（3-1 の 1）**が観測値を添えて行う（build ≠ validate）。「計測待ち N 件」を残課題として報告する。
+  - measure step 由来（**3-1 の 1 で観測値を回収した awaiting-measurement 仮説**）→ 観測した成果を添えて閉じる:
     ```bash
     hypothesis validate <id> --run <RID> --evidence "<観測した成果>"   # 反証なら reject <id> --reason "<反証内容>"
     ```
@@ -646,12 +690,13 @@ compass pivot-check   # {"recommendation":"persevere"|"pivot","streak":N,"thresh
 | ユーザーが中断を指示 | 直ちに Step 4（driver 登録の解除）へ |
 | 循環ブレーカーが trip（下記のとおり毎イテレーション `condukt circuit check --run RID` を実行し **nonzero**＝failure-streak がキャップ到達・予算超過・no-progress stall のいずれか） | **決定論的に clean stop**（ループを止め Step 4 へ。人にも policy にも聞かない hard stop。停止理由は verdict の JSONL に記録される）。非自律で追加確認を入れたい場合の**フォールバックのみ** `AskUserQuestion`「続行 / 中止」 |
 | budgetguard が予算超過を返す | ループ終了（Step 4）。残キューはそのまま次セッションへ（予算軸は上の circuit check にも consolidate 済み） |
-| compass ゲートが「再スコープが必要」を示す | ループを止め、`/compass` をユーザーに促す |
+| compass フォールバック（3-1 の 3）で charter を彫っても右サイズの一手が出ない / `sentinel` で離席 | ループを止め Step 4 へ（backlog も measure も空なので継続理由が無い）。**彫り直しを勝手に繰り返さない** |
+| `compass` バイナリ不在・呼び出し失敗（charter の状態を観測できなかった） | 「仕事なし」にも「実行してよい」にも丸めず、その事実を報告して Step 4 へ |
 | `backlog next` が予期しないエラー | 報告して Step 4 へ |
 
 ## ハードルール
 
-- **仕事が無いのに繰り返さない（停止条件は compass 主筋 / measure / backlog pending の 3 つだけ）。**
+- **仕事が無いのに繰り返さない（停止条件は backlog pending / measure / compass 主筋 の 3 つだけ）。**
   この 3 つがどれも一手を出さないなら Step 4 へ抜ける。**`open` 仮説は継続理由にならない** —
   それは「積まれている仕事」ではなく「これから作れる仕事」なので、継続条件に入れると
   キューが空でもループが永久に新しい仕事を発明し続ける。残った open 仮説と観測不能な
@@ -685,7 +730,10 @@ compass pivot-check   # {"recommendation":"persevere"|"pivot","streak":N,"thresh
   あれば順列ではなく 1 回の condukt run に束ねて渡し、**並列/直列の実判定は condukt の `schedule.rs`（ファイル競合・
   Serial/Gated・shared-glob・依存層）に委譲**する。flow 自身は独立候補を束ねるだけで、危険/高コストなら condukt が
   自動で直列化する（conservative＝迷えば直列）。予算逼迫や明白な相互依存が読めるときは flow 側でバッチ幅を絞る（極端は N=1）。
-- **盲目実行しない**: compass ゲートが鮮明でない限り、自動でキューを流し始めない。
+- **盲目実行しない**: compass 由来の一手は、charter が鮮明でない限り condukt へ流さない
+  （彫り直してから引く。3-1 の 3）。**backlog はこのゲートの対象ではない** — 確定キューの item は
+  起票時に観測と done 条件を持っており、charter の鮮度はその item を実行してよいかの判定材料ではない
+  （2026-09-23 の裁定。順序を変えただけでゲートは緩めていない）。
 - **driver 登録の解除を絶対に飛ばさない**（早期脱出・エラー時も）。解除漏れは `autoflow` /
   `daily` を最大 30 分止める。
 - **自律モードでは human gate を `condukt policy answer` に通す（Step 0.5）**: `autonomy-check` exit 0 のとき、

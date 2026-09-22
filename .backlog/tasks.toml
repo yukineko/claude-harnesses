@@ -18068,9 +18068,36 @@ pre-commit を通るかどうかが異なるので別物の可能性があり、
   main で git merge --ff-only session-79d79a35
   python3 scripts/gate-bypass.py --json -> {"verdict": "outstanding", "entries": [{"commit": "89def60a...", ...}]}
 一度目は 55e6e195 で、条件も結果も同一。偶発ではなく、worktree branch の先頭が
-merge commit である限り ff のたびに起きる。"""
+merge commit である限り ff のたびに起きる。
+
+--- 2026-09-23 自然実験で機構を確定: ff merge の「行き先」が merge commit だと踏む ---
+
+session 79d79a35 で偶然 2 回の対照が取れたので逐語で残す。仮説ではなく観測である。
+
+実験 1 (踏んだ): main を ff で 414be4f1 へ進めた。414be4f1 自身が merge commit
+(親が 2 つ) である。この ff の直後に post-merge が発火し、bypass ledger に
+ungated commit として記録された。
+
+実験 2 (踏まなかった): main を ff で ecf5fdc8 へ進めた。ecf5fdc8 は通常の commit
+(親が 1 つ)。同じ ff という操作だが ledger は反応しなかった。
+
+つまり post-merge の判定は「今回の操作が本当に merge だったか」ではなく
+「HEAD の親が 2 つ以上か」を見ている。ff merge は HEAD を動かすだけで新しい commit を
+作らないので、行き先が過去の merge commit だった場合に「merge commit が今できた」と
+誤読する。操作の性質ではなく到達点の形状で判定しているのが根因。
+
+事後: その後の pre-commit が green で通った際、逐語で
+    cleared 1 ungated commit(s) from the bypass ledger
+と表示され ledger は自動で解消した。つまり実害は「次に green な commit を打つまで
+push がブロックされる」ことに限られるが、誤検知であること自体は変わらない。
+
+見分け方 (将来の実装者向け): ff かどうかは post-merge 側では
+ORIG_HEAD と HEAD の関係で判定できる。ORIG_HEAD が HEAD の祖先なら ff であり、
+その場合 HEAD の親の数は今回の操作の産物ではないので判定に使ってはならない。
+
+関連: 36c936bc / d55f406a (同一事象の両起票)。"""
 created_at = 1787905350
-updated_at = 1789471867
+updated_at = 1790119645
 weight = 0.0
 issue_number = 411
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/411"
@@ -23010,6 +23037,21 @@ Related: gate.rs human_report then renders this as "yes (inline test added)" / "
 
 Also note the first arm: any added line in a test-glob file, including a blank-adjacent comment line, is evidence. That may be intentional but it is unstated.
 
+---
+
+## specforge divert の結果 (2026-09-11, session 3365f18c)
+
+`specforge draft --id tdd-test-evidence` は **rigor 未達で refuse**。チケットの事実主張 (gate.rs:178-181 / :165 / :182 / :332-334) は逐語検証され誤りなし。refuse 理由は「仕様化できない＝書き込む正典が無い」。`docs/specs/tdd.md:1` が自ら REVIEW-NEEDED (人間レビューまで正典扱いしない) と宣言しているため。
+
+**着手前に人間の決定が必要な 4 件** (sentinel `.specforge-pending` より逐語転記。sentinel は worktree-local で他セッションから不可視のためここへ移送した):
+
+## Ask する質問（4件）
+
+1. **tdd の正典はどれか。** `docs/specs/tdd.md` の REVIEW-NEEDED を外して批准するのか、`docs/specs/` に新しい「test evidence 契約」節を起こすのか、`crates/tdd/README.md` を正典とするのか。
+2. **要件1 の外部契約変更を承認するか。** marker evidence を `impl_globs`（かつ非 test）に限定すると、`README.md:34` と `docs/specs/tdd.md:53-55` の記述を同一コミットで書き換えることになります。`impl_globs` にも `test_path_globs` にも属さない path（`.md` / `.toml` / JSON fixture / shell）の marker ヒットは **evidence でない（absent）** か、**判定不能（block）** か。
+3. **要件2 の三値の trigger を確定させたい。** `Undetermined` に落とすのは (a) glob/regex のビルド失敗・空集合（`gate.rs:121, 131`）、(b) marker パターンの一部脱落、(c) 上記 2 の「非 impl な marker ヒット」、のどれか（複数可）。また「証拠なし ＋ 追加実装行 0」は現行どおり allow のままか（`min_added_impl_lines` 契約の維持可否）。
+4. **要件5 の意図。** `gate.rs:174-177`（test-glob ファイルの任意の追加行、空行隣接のコメント行を含む、が evidence）は意図的か。意図的なら「なぜ」を 1 文で（例: test ファイルへの変更は人間の意思表示として十分）。意図的でないなら要件1 と同じ絞り込み（marker 一致行のみ evidence）を適用してよいか。
+
 --- 2026-09-13 outcome (flow run-20260913-131646-20280 / t2) ---
 DONE. commit f667897d on main (merge 9d9dfb09).
 起票時の suggested fix どおり、marker arm に is_impl_file(file) ガードを追加した
@@ -23028,9 +23070,72 @@ mutation 3 体 kill 確認。tdd スイート green。version 0.1.31 lockstep。
   fork は subagent を起動できず実装者とテスト作成者が同一だった。独立検証が別途必要。
 - condukt 上の状態は verified ではなく done (F->P オラクルが exit 1 で拒否)。
 - 起票文末尾が指摘していた第 1 arm (test-glob ファイルへの追加行はすべて evidence)
-  はスコープ外として手を付けていない。別途起票する。'''
+  はスコープ外として手を付けていない。別途起票する。
+
+
+--- 2026-09-22 人間裁定 (session 79d79a35)。人間判断待ち 4 件のうち 3 件が決着 ---
+
+specforge が refuse した理由「書き込む正典が無い」を解消する裁定をユーザーから得た。
+逐語の選択肢と回答:
+
+Q1 tdd の正典をどこに置くか -> 「docs/specs/tdd.md を批准する」
+   REVIEW-NEEDED マーカーを外し、既存の docs/specs/tdd.md を正典として扱う。
+   specforge は以後そこへ書ける。marker evidence を説明している既存記述
+   (53-55 行) は、契約変更に合わせて同一コミットで直す必要がある (CLAUDE.md 4)。
+
+Q2 impl_globs にも test_path_globs にも属さないパスでの marker ヒットの扱い
+   -> 「evidence ではない (absent) — landed 済みの挙動を追認」
+   f667897d が実装した挙動がそのまま正典になる。block (Undetermined) へは上げない。
+   したがって Q3 (三値の trigger をどこに置くか) はこの回答から従属的に決まる:
+   非 impl な marker ヒットは新しい Undetermined trigger を作らない。
+   glob/regex のビルド失敗・空集合という既存の判定不能経路は従来どおり。
+
+Q4 第 1 arm (test-glob ファイルへの任意の追加行が evidence) は意図的か
+   -> 「意図的でない — 第2arm と同じ絞り込みを適用してよい」
+   marker 一致行のみを evidence にする。ゲートは狭まる (より多く block する) 方向なので
+   安全側。実装は別チケット 1454ba50 で行う。
+
+残る未了 (この裁定では閉じない):
+- CLAUDE.md 2(a) 未充足。f667897d の実装者がその検証テストも書いた。
+  利害のない agent による独立検証を本セッションで実施中。結果は判明次第ここへ追記する。
+- docs/specs/tdd.md の批准そのもの (REVIEW-NEEDED 除去 + 53-55 行の契約記述更新) は未実施。
+- 1454ba50 (第 1 arm の絞り込み) は未実装。
+
+--- 2026-09-22 独立検証の結果 (CLAUDE.md 2(a) の未充足を解消) ---
+
+利害のない別 agent が f667897d の修正を独立検証した。実装者ではない agent が測定し、
+実装には一切触れていない。結論: 修正は独立検証を通過した。
+
+1. 修正の存在 (逐語、crates/tdd/src/gate.rs:186-189):
+       if marker_hit && is_impl_file(file) {
+           test_marker_added = true; // inline test written in an impl file
+           continue;
+       }
+   述語 (:164-165):
+       let is_test_file = |f: &str| test_set.is_match(f);
+       let is_impl_file = |f: &str| impl_set.is_match(f) && !is_test_file(f);
+
+2. baseline: cargo test -p tdd は 6 バイナリ 99 テストで 0 failure。
+
+3. 変異検査 = KILLED。&& is_impl_file(file) の連言だけを削除 (構文を消す変異であって
+   if false ではない。git diff で 1 行のみの変更であることを確認済み)。逐語:
+       test gate::tests::marker_in_a_manifest_is_not_evidence ... FAILED
+       test gate::tests::marker_in_a_non_impl_non_test_file_is_not_evidence ... FAILED
+       test result: FAILED. 75 passed; 2 failed
+   どちらも test_marker_added の assert で落ちており、副作用ではなく当該性質を観測している。
+   revert 後は 99/99 green に戻り、gate.rs は変異前とバイト同一。
+
+4. anti-vacuity 対照: 変異下でも marker_in_an_impl_file_is_evidence_control は ok のまま。
+   対照が変異と一緒に動かないので、上の 2 件の kill は本物。
+
+したがって「実装者が自分の実装を検証するテストを書いた」という 2(a) の懸念は、
+本件では実害が無いことが測定で示された (主張ではなく測定)。
+
+ただし検証者が新たに 2 件を測定した。どちらも本チケットの修正行の上に乗っている:
+- human_report の過大主張が live (別チケット化した。下記)
+- 第 1 arm の是正は単独では観測可能な効果を持たない (1454ba50 に記録した)'''
 created_at = 1789064330
-updated_at = 1789273940
+updated_at = 1790119362
 weight = 0.0
 issue_number = 509
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/509"
@@ -23720,9 +23825,19 @@ tdd でなぜ効かなかったかは **特定していない**。RED も観測�
   (a) bump だけして rollout を走らせない状態を再現し、version dir がいつ誰に作られるかを観測する
   (b) その状態を check-plugin-rollout.py が block できるか (条件 3 の修正で今は block できるはず)
   (c) rollout を走らせずに version dir ができる経路が実在するなら、それ自体が dark gate の
-      再発経路なので塞ぐ。RED を先に観測すること。"""
+      再発経路なので塞ぐ。RED を先に観測すること。
+
+--- 条件 2 も landed。本チケットは done 2026-09-16、測定点 ba478375 ---
+残っていた条件 2 (rebuild が fresh version dir に host bin を seed する経路が
+tdd でなぜ効かなかったかの root cause) は origin 側の別セッションが閉じた:
+commit 790612b3 fix(rollout): stop the seed pass from skipping silently, and
+make deployed mean launchable (8206b09f)。merge fba766ed、status を done に
+落としたのは ff89dc3e。したがって完了条件 1/2/3 がすべて landed である。
+この行は main での統合時に、ours の計測ノートと theirs の done 判定を
+突き合わせて追記した (どちらか一方を捨てると記録か判定のどちらかが失われるため)。
+"""
 created_at = 1789075692
-updated_at = 1789279088
+updated_at = 1789345754
 weight = 0.0
 issue_number = 535
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/535"
@@ -23791,9 +23906,36 @@ remote に出るのを止められていないことになり、こちらの方�
 【2026-09-13】本件の機構は 36c936bc に実測で確定させた。post-merge の
 parents -lt 2 guard が fast-forward を判別できず、行き先が merge commit だと
 main 側に存在しない証明書を探して ungated と記録する。再現手順と逐語は 36c936bc にある。
-"""
+
+
+--- 2026-09-23 自然実験で機構を確定: ff merge の「行き先」が merge commit だと踏む ---
+
+session 79d79a35 で偶然 2 回の対照が取れたので逐語で残す。仮説ではなく観測である。
+
+実験 1 (踏んだ): main を ff で 414be4f1 へ進めた。414be4f1 自身が merge commit
+(親が 2 つ) である。この ff の直後に post-merge が発火し、bypass ledger に
+ungated commit として記録された。
+
+実験 2 (踏まなかった): main を ff で ecf5fdc8 へ進めた。ecf5fdc8 は通常の commit
+(親が 1 つ)。同じ ff という操作だが ledger は反応しなかった。
+
+つまり post-merge の判定は「今回の操作が本当に merge だったか」ではなく
+「HEAD の親が 2 つ以上か」を見ている。ff merge は HEAD を動かすだけで新しい commit を
+作らないので、行き先が過去の merge commit だった場合に「merge commit が今できた」と
+誤読する。操作の性質ではなく到達点の形状で判定しているのが根因。
+
+事後: その後の pre-commit が green で通った際、逐語で
+    cleared 1 ungated commit(s) from the bypass ledger
+と表示され ledger は自動で解消した。つまり実害は「次に green な commit を打つまで
+push がブロックされる」ことに限られるが、誤検知であること自体は変わらない。
+
+見分け方 (将来の実装者向け): ff かどうかは post-merge 側では
+ORIG_HEAD と HEAD の関係で判定できる。ORIG_HEAD が HEAD の祖先なら ff であり、
+その場合 HEAD の親の数は今回の操作の産物ではないので判定に使ってはならない。
+
+関連: 36c936bc / d55f406a (同一事象の両起票)。"""
 created_at = 1789123819
-updated_at = 1789306829
+updated_at = 1790119646
 weight = 0.0
 issue_number = 543
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/543"
@@ -23846,9 +23988,36 @@ verdict=not-covered を spec-gap divert (specforge へ差し戻し) の発火条
 (存在しないなら三値は名目だけで実体は二値)。
 
 発見経緯: /flow の Step 3-1.5 プリフライトで 3 件全部が not-covered になり、
-divert する前に対照実験を掛けて空虚さが判明した。divert は実行していない。"""
+divert する前に対照実験を掛けて空虚さが判明した。divert は実行していない。
+
+--- サイクル7 追記 ---
+
+再測定 2026-09-16 (現在の main): 230c34ec の症状は未修正のまま。
+サイクル7 の 4 件の課題文すべてが rc=0 verdict=not-covered。
+アンチ空虚の対照として、正典に確実に存在する 3 topic を投げても全て not-covered:
+  "spec loop R4 flow spec gap source"      -- rc=0 verdict=not-covered
+  "blastguard three-valued decision ask"   -- rc=0 verdict=not-covered
+  "fail-closed gate invariant"             -- rc=0 verdict=not-covered
+したがって flow 3-1.5 の trigger 3 は依然として判別能力を持たない。
+coordinator は not-covered を spec-gap の証拠として扱わず、undetermined として
+divert せずに続行した (第3節: 測れないことを測れたことに写さない)。
+
+サイクル7 が追加で観測した事実 (再測定の副産物、測定点 main 72995339):
+spec-map は .gitignore:80 で .specguard/spec-map.toml として ignore されており、
+main の作業ツリーにしか実体が無い。同じ 7 本の probe を CLAUDE.md 第8節が義務づける
+worktree (測定点 778155e4) から実行すると、verdict は not-covered ではなく
+rc=10 verdict=undetermined になる (spec-map が空と読まれるため)。
+つまり brief の verdict は cwd がどちらの作業ツリーかで変わる。第8節は全作業を
+worktree で行うことを義務づけているので、規範どおりに働く実行主体から見た
+brief は構造的に常に undetermined である。これは本チケットの読み (a)/(b) とは
+別の第3の経路であり、not-covered と undetermined のどちらを見るかが
+測定場所に依存するという意味で、判定面の問題をさらに一段深くする。
+measure コマンド: specguard brief --json <topic> を cwd=main と cwd=worktree で各7本。
+spec-map 規模 (cwd=main, 測定日 2026-09-16): specguard map list は 184 行、
+うち "(no spec-doc)" を含む行 183。covered を返しうる entry は依然ほぼ皆無。
+"""
 created_at = 1789272899
-updated_at = 1789272899
+updated_at = 1789582112
 weight = 0.0
 issue_number = 544
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/544"
@@ -25039,7 +25208,7 @@ tags = [
     "condukt",
 ]
 touched_files = []
-status = "claimed"
+status = "pending"
 notes = """
 測定点 branch batch5-d83b0e8f ff985fac / 2026-09-13. d83b0e8f (claim registry) の調査項目として実測した確定の欠陥。読みは 1 つしかない (判定不能ではない)。機構: acquire_repo_primary(cfg, repo) は RunLock::acquire_or_skip 経由で lock_path に入り、lock_path は project_key(repo_root(cwd)) でキーを作る。呼び出し側が渡す repo は crates/condukt/src/worktree.rs:238 の toplevel(cwd) すなわち git rev-parse --show-toplevel であり、linked worktree では worktree 自身を返す。実測: from main tree が pp2/main、from linked wt が pp2/wt1。ランタイム確認 (condukt worktree reconcile が当該ロックを取る): 手順1 linked worktree から実行すると project dir は wt1-d22e03ed のみ。手順2 main tree から実行すると main-8fe192a0 と wt1-d22e03ed の 2 つ。手順3 main tree のディレクトリに live pid の __repo_primary__.lock を置いた状態で linked worktree から実行すると exit=0 で素通り (直列化されない)。手順4 は反証防止の control で、同じロックを linked worktree 自身のディレクトリに置いて同じ場所から実行すると exit=1 になり contended のメッセージが出る。したがってプローブは識別力を持っており手順3の素通りは本物。手順5 その worktree ロックを保持したまま main tree から実行すると exit=0 で素通り。影響: CLAUDE.md 第8節は全セッションが linked worktree で作業することを絶対義務としているので、共有 git index と default branch と worktree admin を変更する 2 プロセスは必ず別ロックになり決して競合しない。ロックが守るはずのものを守っていない。影響箇所: crates/condukt/src/main.rs:3258 と :3288 と :3318、crates/condukt/src/worktree.rs:645 と :894 と :1053 (worktree merge の checkout-default-branch + merge のクリティカルセクションを含む)。修正方向: d83b0e8f で claim registry に入れたのと同じ手当て、すなわち harness_core::projkey::main_worktree_root で解決した project root を使う lock_path_in_project 系を repo-primary にも適用する。両者は同型なので同じ道具が使える。関連 d83b0e8f 43393ce2
 
@@ -25049,7 +25218,7 @@ notes = """
 pending へ戻した。本チケットの内容自体は未着手のままで、失敗ではない。
 経緯と、回収した RED スイートの詳細は 2c1e54b3 にある。"""
 created_at = 1789292612
-updated_at = 1789566348
+updated_at = 1790114679
 weight = 0.0
 issue_number = 605
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/605"
@@ -25968,7 +26137,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
 touched_files = []
-status = "claimed"
+status = "pending"
 notes = """
 実測 2026-09-13、測定点 c39701bc、rollout 直後（overwatch は harness-core 0.2.24 で再ビルド済み）。
 
@@ -26028,7 +26197,7 @@ main は今この RED を抱えている。隠していない: pre-commit は ca
 overwatch は 0.2.34 -> 0.2.35 に lockstep 済み。GATE crate なので
 scripts/rollout-plugins.sh --canary が別途必要。"""
 created_at = 1789297114
-updated_at = 1789566348
+updated_at = 1790114679
 weight = 0.0
 issue_number = 628
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/628"
@@ -26409,7 +26578,7 @@ tags = [
     "p0",
 ]
 touched_files = []
-status = "claimed"
+status = "pending"
 notes = """
 実測 2026-09-13 22:40 JST、測定点 15adc7bd（main）、cwd=/Users/yuki/src/harness（main worktree）。
 
@@ -26460,7 +26629,7 @@ retain_claim は「Known(Stalled) のときだけ reap」なので、Undetermine
 5e62b0eb が「reap が効かない」なのに対し、06eb8aa3 は「そもそも解放が
 呼ばれない」。2 つ揃うと、握ったまま死んだ run の claim は永久に残る。"""
 created_at = 1789306874
-updated_at = 1789566348
+updated_at = 1790114679
 weight = 0.0
 issue_number = 639
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/639"
@@ -26600,9 +26769,54 @@ Bash の sed や cp や subagent 経由で書き換えるのは黙った迂回�
     この限界はスクリプトの docstring 43-44 行に逐語で書かれている。
 (2) 判定不能は exit 2 で、逐語マーカー
     projkey-store-classification: UNDETERMINED: <tag> を stderr に出す。
-    pre-commit 側で exit 2 を 0 に丸めないこと (第3節)。"""
+    pre-commit 側で exit 2 を 0 に丸めないこと (第3節)。
+
+--- 2026-09-23 配線待ち: パッチ確定、exit code 契約を実測。人間が適用する ---
+
+/flow df49f872 として明示指名され着手したが、.githooks/** は権限設定で deny されており
+LLM 側からは書き込めない。Edit ツールの逐語の拒否:
+    File is in a directory that is denied by your permission settings
+sed も同じ deny に掛かる (逐語: sed to .../.githooks/pre-commit was blocked by a deny rule)。
+この deny は「ゲートを agent が武装解除できない」ための保護なので、sed/cp/subagent での
+迂回は行っていない (CLAUDE.md 5 の silent circumvention に当たるため)。
+ユーザー裁定 2026-09-23: パッチはユーザー自身が適用する。
+
+適用すべき変更は 1 行。.githooks/pre-commit の run 群、worktree-isolation の直後:
+
+    run check-worktree-isolation.py worktree-isolation
+    run check-projkey-store-classification.py projkey-store-classification
+    run check-gate-crates-sync.py gate-crates-sync
+
+パッチファイル (このセッションの scratchpad。消える前に適用するか、上の 1 行を手で足す):
+    df49f872-pre-commit.patch
+
+なぜ run ヘルパにそのまま乗せてよいか (実測。.githooks/pre-commit:153-175 を読んで確認):
+- run は scripts/<name> が存在しなければ rc=1 で block する。逐語:
+    scripts/<scanner> is missing - cannot determine, so blocking.
+  ゲート本体が消えたら素通りではなく block になる = fail-closed。
+- run は exit 2 を UNDETERMINED として block する。逐語:
+    UNDETERMINED (exit 2) - the gate could not reach a verdict.
+    This blocks. An uninspected surface is not a clean surface
+- exit 0 のみ通過。
+
+check-projkey-store-classification.py の三値はこの契約に一致する (実測):
+- exit 0: 逐語 projkey-store-classification: OK - 29 classified call site(s)
+- exit 1: 未分類の消費者を検出。crates/gauge/src/main.rs に repo_root 呼び出しを 1 本
+  注入すると exit=1 で当該 call site を名指しし、revert で exit=0 に戻る (変異検査 KILLED)。
+- exit 2: 分類テーブルが読めないとき。逐語
+    projkey-store-classification: UNDETERMINED: table-missing: <path> does not exist;
+    no call site can be confirmed classified
+    projkey-store-classification: cannot determine whether every projkey store consumer
+    is classified; blocking (CLAUDE.md 3)
+
+したがって配線後は、未分類の消費者が増えた commit と、テーブルが壊れた commit の両方が
+pre-commit で止まる。これは charter の ONE (DoD14(a)) の完了条件 3 そのものである。
+
+適用後にやること: pre-commit を 1 回走らせて projkey-store-classification の行が
+出ることを目視し、commit して merge する。ファイルは本セッションの worktree ではなく
+好きな worktree でよい (.githooks は repo 共有)。"""
 created_at = 1789490571
-updated_at = 1789490571
+updated_at = 1790115339
 weight = 0.0
 issue_number = 658
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/658"
@@ -26789,7 +27003,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
 touched_files = []
-status = "claimed"
+status = "pending"
 notes = """
 実測 2026-09-16、測定点 main 12afeb9b、condukt 0.7.166 (デプロイ版)。
 
@@ -26845,7 +27059,7 @@ done_criteria:
 関連: 5e62b0eb (progress 判定が Undetermined になり reap されない不死 claim)。
 あちらは「reap が効かない」、本件は「そもそも解放が呼ばれない」。別の穴。"""
 created_at = 1789566331
-updated_at = 1789566348
+updated_at = 1790114679
 weight = 0.0
 issue_number = 661
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/661"
@@ -26879,6 +27093,7 @@ updated_at = 1789566481
 weight = 0.0
 issue_number = 663
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/663"
+
 [[task]]
 id = "3ff1c172"
 title = "bypass ledger records a gated merge when main HEAD moves concurrently"
@@ -26979,3 +27194,789 @@ updated_at = 1789566483
 weight = 0.0
 issue_number = 664
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/664"
+
+[[task]]
+id = "0909c590"
+title = "stop-verify-worktree の git status probe が並行 workspace build の負荷下で timeout し block する (負荷依存の非決定 Stop ゲート)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-11、測定点 27839b28 (rollout 実行中のセッション 3365f18c)。
+
+scripts/stop-verify-worktree.py が Stop 時に次を出して block した (逐語):
+
+    Do not stop yet: could not determine whether this turn is ending dirty on main.
+    Failed probe: git status --porcelain
+    A check that could not run has not passed (CLAUDE.md 3), so this resolves to a
+    block rather than an allow.
+
+このとき並行して scripts/rollout-plugins.sh --canary が cargo build --release
+--workspace --bins (39 crate) と plugin cache への rsync を WSL2 /mnt/c (9p 経由の
+Windows ボリューム) 上で走らせていた。同じ Stop hook の数十秒後、負荷が落ちた状態で
+git status --porcelain を手で叩くと exit 0 で即座に応答した ( M .backlog/tasks.toml /
+ M Cargo.lock を返した)。_git() の timeout は 15 秒 (stop-verify-worktree.py:47)。
+
+判定不能を block に倒すのは CLAUDE.md 第3節どおり正しい。問題は「判定不能になった
+原因が負荷であって、ツリーの状態ではない」点。
+
+2つの読みがあり、どちらか確定していない:
+ (a) 実在の欠陥 — 15 秒の timeout が /mnt/c + 並行 workspace build の下では短すぎ、
+     ツリーが実際には判定可能なのに block する。Stop ゲートが負荷に依存して
+     非決定的になる。
+ (b) 意図的な仕様 — fail-closed は設計どおりで、stop_hook_active による bounded
+     allow (2回目の Stop は通る) がコストの上限を押さえているので、timeout を
+     延ばすと今度は「本当に git が壊れている」ケースの検出が遅れる。
+
+見分ける方法 (どちらかに決着させる観測):
+ 1. cargo build --release --workspace を走らせながら、同 repo で
+    git status --porcelain の wall time を 50 回測る。
+ 2. p99 が 15 秒を超えるなら (a) が確定 = timeout が原因。その場合の是正は timeout
+    延長ではなく、timeout と他の判定不能を区別して別 slug で報告すること
+    (「負荷で測れなかった」と「git が壊れている」を同じ出力に写さない —
+    第3節の二値潰しと同じ構造の問題)。
+ 3. p99 が 15 秒を大きく下回るなら (a) は棄却され、probe が落ちた原因は timeout では
+    ない (fork 失敗 / index.lock 競合等)。原因を別途特定する。「たぶん負荷だろう」で
+    閉じてはいけない — それが第2節の禁じる判断。
+
+関連: このゲート自身が「判定不能 = block」の正しい実装例なので、直すのは判定の向き
+ではなく判定不能の原因の切り分け粒度である。"""
+created_at = 1789113312
+updated_at = 1789113312
+weight = 0.0
+issue_number = 536
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/536"
+
+[[task]]
+id = "c02273d9"
+title = "blastguard: project 内の plain untracked ファイルの rm が allow — git が復元できないのに 2026-09-14 ruling の rule 1 を満たさない"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1789349260
+updated_at = 1789349260
+weight = 0.0
+issue_number = 644
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/644"
+
+[[task]]
+id = "565950fb"
+title = "blastguard: 配置不能ターゲットの Deny を「他 project / home dotfile は ask」へ分岐させる (2026-09-14 ruling rule 5/6 の未実装分)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1789349275
+updated_at = 1789349275
+weight = 0.0
+issue_number = 645
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/645"
+
+[[task]]
+id = "2731382e"
+title = "blastguard: 明示指示時の guard skip 機構を設計する — agent が自分で立てられる skip はゲートの無効化になる (2026-09-14 ruling rule 4)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1789349292
+updated_at = 1789349292
+weight = 0.0
+issue_number = 646
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/646"
+
+[[task]]
+id = "f6efdfa1"
+title = "blastguard: redirect target の解決を出現ごとに行う — 同一トークンが複数 segment にあると現在は解決を一律拒否し、deny の理由が実際の truncate 先を名指しできない"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1789350167
+updated_at = 1789350167
+weight = 0.0
+issue_number = 647
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/647"
+
+[[task]]
+id = "a83802ad"
+title = "blastguard: append redirect (>>) が変数形で silently permissive — P=/etc/fstab; echo x >> $P が Allow (truncate 側で塞いだのと同じ欠陥クラス)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1789350173
+updated_at = 1789350173
+weight = 0.0
+issue_number = 648
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/648"
+
+[[task]]
+id = "3e44204b"
+title = "blastguard: deny to ask 統一は shape deny を直接反転できない (rm -rf / が同じ経路)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+【2026-09-14 追記2】要件文 v2 (人間の裁定3件を反映) を specforge draft に再投入し、
+再び B 判定。v1 と違い、今度は要件文そのものの欠陥を突いている。決定的なもの:
+
+D1' 受け入れ条件が vacuous だった (私の欠陥)。
+    detect::detect は detect.rs:116-117 で SafeRoots::none() を固定で渡す。
+    scope.rs:342-344 いわく「every classify call answers Undetermined」。
+    よって Placement::Inside は決して返らず、A6 の allow 側は到達不能、
+    A7 は git 述語を一切検証しないまま通る。CLAUDE.md 第2節
+    「何も検証していないテストは常に通る」そのもの。
+    観測層は detect_scoped (detect.rs:69) にしないと成立しない。
+
+D3' 裁定2 (C4 TEMP = allow) が回帰テスト CA-blastguard-004 の検出力を消す。
+    detect.rs:8396-8403 の wrapper_flags_do_not_bypass_detection は
+    sudo -u root / nice -n10 / env -i / ionice -c3 の 4 行すべてが
+    rm -rf /tmp/x を対象にしている。C4=allow にすると 4 行とも allow になり、
+    wrapper flag 解析を丸ごと削除してもこのテストは通る。
+    テストは残るが何も証明しなくなる = CLAUDE.md 第4節。
+
+D4' 裁定3 (C2 = 常に ask) は container に対する Deny -> Ask の緩和。
+    detect.rs:652-655 が Deny である積極的論拠を書いている:
+    「a recursive delete of a directory removes EVERYTHING under it —
+     the protected paths are a subset of what goes, so there is nothing
+     to guess about」。撤回リストにこれが無い。
+
+D2' 撤回対象は 2 件ではない。測定点 1d45dd69 / 2026-09-14:
+    grep -c 'is_deny()' detect.rs -> 290 件、うち /tmp を含む行 13 件。
+    撤回リストに無い実例: detect.rs:8744 rm -rf .claude /
+    8745 rm -rf /Users/yuki/.claude / 8393 sudo rm -rf /var/data。
+
+D5' 「破壊的操作」の外延が未定義 (truncate 64 / shred 41 / git clean 16 /
+    find -delete 3 / dd 3 の言及がある)。R1-R3 が支配する verb 集合が決まらない。
+
+D6' 1 行に複数 target があるときの合成規則が無い。model.rs:12-15 の
+    Deny > Ask > Allow と VerdictAcc (detect.rs:1163) がある一方、
+    R3 の「該当すれば allow で確定」は単一 target 前提。
+    rm -rf <project>/a /other/b や ... && rm -rf /usr/lib が未定義。
+    仕様として一番危ない経路が未被覆。
+
+D7' 事実誤り (私の欠陥)。RealPathResolver (scope.rs:89) と TargetProbe
+    (approve.rs:107) は trait ではなく fn ポインタの型別名。
+
+参考: R3 の順序記述 (safe list > C1 > C2) は canon の実体
+(detect.rs:1955-1958 は protected が safe list より先) と字面で食い違う。
+
+--- 以下 .specforge-pending (v2) 全文 ---
+
+date: 2026-09-14
+spec: blastguard-path-policy
+summary: R9 の観測層が detect::detect では A6/A7 を検証不能にし、撤回リストが実体 (少なくとも .claude 2件・/var/data 1件・/tmp 13件) を網羅せず、裁定2 の適用が回帰テスト CA-blastguard-004 の検出力を消すため、6 点の裁定を人間に上げる
+
+canon を実際に開いて確認しました。**要望の引用の大半は逐語で正しい**（`model.rs:28-43` の三値、`scope.rs:240-243` の `/var` 禁止、`SYSTEM_DIRS` が `scope.rs:244-260`、`TEMP_ROOTS` が `scope.rs:214`、`PROTECTED_GLOBS` が `exclude.rs:67-136`、`detect.rs:283` の `None => Decision::deny`、`detect.rs:1959` の safe list、`interactive.rs:9-15`、`approve.rs:30-34` の safe-root 境界、`docs/specs/blastguard.md:106` の二値記述）。要望の事実主張そのものは概ね接地しています。
+
+しかし **acceptance を厳格化できない箇所が残る**ので draft は書きません。以下、落ちたゲートと逐語引用です。
+
+---
+
+## D1'（G3・決定的）— R9 の観測層と `detect::detect` の実体が矛盾。A6/A7 は原理的に無意味になる
+
+`crates/blastguard/src/detect.rs:116-117`（逐語）:
+
+> `pub fn detect(tool_name: &str, tool_input: Option<&Value>) -> Decision {`
+> `    detect_scoped(tool_name, tool_input, &SafeRoots::none())`
+
+`crates/blastguard/src/scope.rs:342-344`（`SafeRoots::none` の doc、逐語）:
+
+> No location model: every [`SafeRoots::classify`] call answers `Undetermined`, so every caller keeps the verdict it had before this module existed.
+
+R1 の C3 は `Placement::Inside { root = project root }` に依拠します。ところが R9 が観測層に指定した `detect::detect` は `SafeRoots::none()` を固定で渡すので、**`Inside` は決して返らない** → R6 により `Undetermined` → C5 → ask。したがって:
+
+- **A6 の allow 側（`rm -rf <project>/crates/foo` が `Decision::Allow`）は `detect::detect` では到達不能**。
+- さらに A6 の ask 側と A7（`Undetermined` で ask）が **同じ理由で ask になる**ので、A7 は git 述語を一切検証しないまま通る。CLAUDE.md 第2節「**何も検証していないテストは常に通る**」がまさに名指しする失敗です。
+
+観測層は `detect_scoped`（`detect.rs:69`）でなければ成立しませんが、要望はそう書いていません。**どちらを正とするかは仕様判断**なので機械が決めません。
+
+## D2'（G3・決定的）— 「撤回する既存記述」が実体と合わない（2 件ではない）
+
+要望は撤回対象を `scope.rs:56-63` と `detect.rs:8399` の **2 件**と宣言し、「散文と実装の食い違いを残さない」と書いています。実測（測定コマンド・測定点 `1d45dd69`・測定日 2026-09-14）:
+
+- `grep -c 'is_deny()' crates/blastguard/src/detect.rs` → **290 件**
+- そのうち `/tmp` を含む行 → **13 件**（`detect.rs:8399-8402`, `9622`, `9638`, `9814-9815` ほか）
+
+裁定2/裁定3 が期待値を反転させる assert のうち、撤回リストに**無い**ものの実例（逐語）:
+
+- `detect.rs:8744`: `assert!(bash("rm -rf .claude").is_deny());`
+- `detect.rs:8745`: `assert!(bash("rm -rf /Users/yuki/.claude").is_deny());`
+  → A3 が `Ask` を要求する当のケース。
+- `detect.rs:8393`: `assert!(bash("sudo rm -rf /var/data").is_deny());`
+  → 裁定1 で `/var` を C1 に入れないので C5 → ask。
+- `detect.rs:8400-8402`: `nice -n10` / `env -i` / `ionice -c3` + `/tmp/x`（下記 D3'）。
+
+撤回対象を 2 件と数えたまま実装すると、残りは**赤いテストとして現れるか、黙って期待値を書き換えられる**。後者は CLAUDE.md 第4節の禁止事項です。
+
+## D3'（G3 + CLAUDE.md 第2節(b)・決定的）— 裁定2 の機械適用が回帰テスト CA-blastguard-004 の検出力を消す
+
+`crates/blastguard/src/detect.rs:8396-8403`（逐語）:
+
+> `// ---- Regression: CA-blastguard-004 (wrapper flag bypass) ----`
+> `#[test]`
+> `fn wrapper_flags_do_not_bypass_detection() {`
+> `    assert!(bash("sudo -u root rm -rf /tmp/x").is_deny());`
+> `    assert!(bash("nice -n10 rm -rf /tmp/x").is_deny());`
+> `    assert!(bash("env -i rm -rf /tmp/x").is_deny());`
+> `    assert!(bash("ionice -c3 rm -rf /tmp/x").is_deny());`
+> `}`
+
+要望は 8399 の 1 行だけを「期待値を allow に更新」と指示しますが、**4 行すべてが `/tmp/x` = C4 → allow** になります。4 行とも allow にすると、このテストは wrapper flag 解析を丸ごと削除しても通る — すなわち「wrapper 経由の bypass を検出する」という回帰被覆が消えます。テストは残るが何も証明しなくなる形で、CLAUDE.md 第2節「落ちることを確認していないテストは、何も証明しない」／第4節「通すためだけに緩める」に該当します。
+
+裁定2 はこの副作用を明示していません。**回帰被覆をどう保存するか（例: target を C5 のパスへ差し替えて deny→ask で検出力を残す）は人間の判断**です。
+
+## D4'（G3）— C2 container の verdict が canon の積極的論拠と衝突し、撤回リストにも無い
+
+`crates/blastguard/src/detect.rs:652-655`（`protected_tree_deny` の doc、逐語）:
+
+> The verdict is a Deny rather than an Ask because a recursive delete of a directory removes EVERYTHING under it — the protected paths are a subset of what goes, so there is nothing to guess about.
+
+裁定3 の C2 = 常に ask は、この **Deny → Ask の緩和**です（`detect.rs:657` は `is_protected_path(path) || holds_protected_paths(path)` で container を拾い、`Decision::deny` を返す）。canon はこの Deny に「guess することが無い」という積極的論拠を書いており、要望の撤回リストはここを含みません。機械は「どちらが正か」を決めません。
+
+## D5'（G2・沈黙）— 「破壊的操作」の外延が canon にも要望にも無い
+
+R1 は対象を「削除・truncate する redirect」とだけ書きます。`detect.rs` には他に `truncate`（64 箇所で言及）/ `shred`（41）/ `git clean`（16）/ `find -delete`（3）/ `dd`（3）系の破壊ルールがあり、`protected_disarm_deny` / `system_path_block` / `protected_glob_deny` / `protected_landing_block` など独立した block 関数も存在します（`detect.rs:579/608/636/656/720/773`）。
+
+**R1-R3 の支配下に入る verb 集合が決まらない**ので、実装者は `git clean -fdx <project>` や `shred <project>/x` が C3 = allow になるのかを推測するしかありません。A1-A8 は `rm -rf` と `>` しか触れないので、acceptance でも塞がりません。
+
+## D6'（G2・沈黙）— 1 行に複数 target があるときの合成規則が無い
+
+`crates/blastguard/src/model.rs:12-15`（逐語）:
+
+> Ranking, used everywhere sub-analyses are combined: `Deny > Ask > Allow`. A `Deny` found anywhere on a command line must always outrank an `Ask` found anywhere else on it, or the stronger verdict would be silently downgraded.
+
+`detect.rs:1163` の `VerdictAcc` がこの合成を実装しています。R3 の「該当すれば allow で確定」は **単一 target を前提**にしており、`rm -rf <project>/a /other/b`（C3 + C5）や `rm -rf <project>/a && rm -rf /usr/lib`（C3 + C1）で C3 の allow が他を打ち消すのかが未定義です。ここを決めないと A2/A6 のテストは単一 target でしか書けず、**仕様として一番危ない経路が未被覆のまま**残ります。
+
+## D7'（G1・事実誤り。修正は軽微だが仕様文の訂正が要る）
+
+R7 は `scope::RealPathResolver` と `approve::TargetProbe` を「trait」と呼び、`GitStateProbe` も trait として新設するとしていますが、canon では両方とも **fn ポインタの型別名**です:
+
+- `crates/blastguard/src/scope.rs:89`: `pub type RealPathResolver = fn(&str) -> Option<String>;`
+- `crates/blastguard/src/approve.rs:107`: `pub type TargetProbe = fn(&str) -> Determination<String>;`
+
+trait にするか fn 型にするかで fake 注入の書き方が変わり（fn 型はクロージャの状態を持てないので、A6 の「clean を返す fake」と「untracked を返す fake」を 1 つのテスト内で切り替える書き方が変わる）、`detect` の純粋性契約の守り方にも影響します。
+
+### 参考（ブロッカーではないが要一行明記）
+
+R3 の「safe list は C1 より先」は、canon の実体（`detect.rs:1955-1958`）では **protected が safe list より先**です:
+
+> `if exclude::is_protected_path(&t) {`
+> `    return false;`
+> `}`
+
+`/dev/null` が protected になることは無いので観測上は衝突しませんが、R3 の順序記述（safe list > C1 > C2）と canon の順序（C2 > safe list）が字面で食い違うので、どちらの記述を正典にするか一行で決めてください。
+
+---
+
+## 人間に埋めてほしいもの（雛形）
+
+以下を要望に追記していただければ、D1'-D7' はすべて閉じます（D2'/D3'/D4' は裁定が要る項目です）。
+
+**(1) 観測層の裁定（D1'）**
+
+```
+裁定4 (D1'): 受け入れ条件の観測層は `detect_scoped(tool, input, &SafeRoots::new(...))` とする
+             / あるいは `detect::detect` の既定 scope を `SafeRoots::none()` から変更する。
+             選んだ側の理由を 1 文で。
+```
+
+**(2) 撤回リストの完全化（D2'/D4'）**
+
+`detect.rs` の該当 assert を列挙して、各行の新期待値を明記してください。最低限、下記は裁定が必要です:
+
+| 場所 | 現在 | 新期待値 (要裁定) | 理由 |
+|---|---|---|---|
+| `detect.rs:8744` `rm -rf .claude` | deny | ask? | C2 container (裁定3) |
+| `detect.rs:8745` `rm -rf /Users/yuki/.claude` | deny | ask? | 同上 |
+| `detect.rs:8393` `sudo rm -rf /var/data` | deny | ask? | `/var` は C1 外 (裁定1) |
+| `detect.rs:8399-8402` `/tmp/x` × 4 | deny | allow? | C4 (裁定2) — ただし (3) を参照 |
+| `detect.rs:652-655` `protected_tree_deny` の doc | Deny の論拠 | 撤回? | 裁定3 と衝突 |
+| `/tmp` を含む残り 9 件 (`9622`/`9638`/`9814-9815` ほか) | deny | ? | C4 |
+
+**(3) CA-blastguard-004 の回帰被覆の保存方法（D3'）**
+
+```
+裁定5: wrapper flag bypass の回帰テストは、target を <C5 のパス> へ差し替えて
+       `is_ask()` で検出力を保つ / それとも被覆を落とす。落とすなら代替の被覆を明示。
+```
+
+**(4) 支配下 verb の外延（D5'）**
+
+```
+R1 の「破壊的操作」= 次の verb だけとする:
+  rm / truncate する redirect (`>`) / <他に含めるものを列挙: git clean -fdx? shred? dd of=? find -delete?>
+列挙外の verb は本 spec の支配下に入らず、現行判定を維持する。
+```
+
+**(5) 複数 target の合成規則（D6'）**
+
+```
+R3': 1 行に複数の対象パスがあるとき、各パスを独立に C1-C5 へ分類し、
+     得られた verdict を `Deny > Ask > Allow` で合成する (model.rs:12-15 の順位を維持)。
+     すなわち C3/C4 の allow は他パスの Deny/Ask を打ち消さない。
+     acceptance に `rm -rf <project>/a /other/b` -> Ask、
+     `rm -rf <project>/a && rm -rf /usr/lib` -> Deny を追加する。
+```
+
+**(6) `GitStateProbe` の形（D7'）**
+
+```
+R7': `GitStateProbe` は `pub type GitStateProbe = fn(&str) -> Determination<GitState>;`
+     (RealPathResolver / TargetProbe と同じ fn 型別名) とする
+     / あるいは trait とし、その場合 detect 側の型パラメータ追加を明示する。
+```
+
+```
+"""
+created_at = 1789351207
+updated_at = 1789354813
+weight = 0.0
+issue_number = 649
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/649"
+
+[[task]]
+id = "ea41fd4b"
+title = "blastguard fail-open: 相対パス redirect (echo x > ../../outside.log) が allow"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1789351245
+updated_at = 1789351245
+weight = 0.0
+issue_number = 650
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/650"
+
+[[task]]
+id = "a6258cc7"
+title = "taskprog が crates/blastguard/src/.claude/progress.md を自動生成 (別セッション id・空の skeleton)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = """
+【2026-09-14】condukt run run-20260914-121207-24519 で実装、commit 65bd3bad
+(taskprog 0.1.7 -> 0.1.8, 8 files, +540 -38)。
+
+実装:
+ resolve_progress_path -> Determination<PathBuf> 化。新設 resolve_project_root は
+ .git マーカーの上方探索 (worktree では .git は FILE なので exists() で判定)。
+ root 不明なら書かない (StopOutcome::NotAnchored)。harness_core::projkey::repo_root は
+ マーカー不在時に cwd を返す fail-open なので意図的に使わず自前実装。
+
+独立検証 (実装者とは別 agent, read-only + kill-test) の verdict: FAIL。
+内訳は「ソース修正は全 done criteria 合格、FAIL の理由は後始末」。
+
+ PASS 1: 実バイナリ runtime 観測。subdir cwd -> root の .claude/progress.md へ書き、
+         cwd 脇に .claude/ を作らない。root 不明 -> 無書き込み + additionalContext で理由。
+ PASS 2: 三値の畳み込み 4 箇所 (main.rs:73 / main.rs:108 / main.rs:170 / update.rs:47)
+         すべて制限側。Determination への unwrap_or / .ok() は 0 件。
+         projkey::repo_root が fail-open という主張も projkey.rs:49-61 の逐語で真と確認。
+ PASS 3: kill-test 3 本すべて検出された。
+         M1 (Undetermined 腕を cwd フォールバックへ戻す) -> 4 件 RED
+         M2 (上方探索を潰して常に cwd) -> unit 6 + integration 1 件 RED
+         M3 (project_label を input.project_name() へ戻す) -> 1 件 RED
+            (落ちたメッセージ '# Progress — src' が観測された現物のヘッダと完全一致)
+         「何も検証していないテスト」は 0 件。
+ PASS 4: 既存 2 テストの弱化なし。fixture に .git 追加 + StopOutcome assert 追加で
+         むしろ強化。期待値の緩和 0 件。
+
+未解決 (FAIL の実体) — いずれも 2026-09-14 の時点で私の権限では実行できなかった:
+ F1 HIGH: rollout 未実行。check-plugin-rollout.py が exit 1
+          (taskprog: source=0.1.8 registry=0.1.7)。配布中の 0.1.7 バイナリを実行すると
+          今も stray ファイルを '# Progress — src' ヘッダ付きで生成する
+          = 欠陥は稼働ハーネスで未修正。version lockstep 3 ファイルは 0.1.8 で揃っている
+          (check-plugin-versions.py は OK: 41 plugins version-consistent)。残るのは rollout のみ。
+          taskprog は parked-plugins.json に宣言が無いのでこの red は意図的 parked ではない。
+          -> `bash scripts/rollout-plugins.sh --plugin taskprog` が auto mode classifier に
+             ブロックされた。迂回はしていない。
+ F2 MED : 動機となった現物 crates/blastguard/src/.claude/progress.md (untracked, 285B) が残置。
+          check-plugin-rollout.py が blastguard も赤にしている
+          (deployed tree is not a mirror — 1 source file(s) not deployed)。
+          -> rm -rf が permission deny。迂回はしていない。
+
+派生起票: b6fdf66b (Config::load も未アンカー) は起票済み。F3/F4 を本セッションで追加起票。
+"""
+created_at = 1789354847
+updated_at = 1789357210
+weight = 0.0
+issue_number = 651
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/651"
+
+[[task]]
+id = "b6fdf66b"
+title = "taskprog: Config::load も cwd 直下の taskprog.toml しか見ず project root へアンカーされていない"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "pending"
+notes = "a6258cc7 (resolve_progress_path の project-root アンカー化) の作業中に発見。crates/taskprog/src/config.rs の Config::load(cwd) は PathBuf::from(cwd).join('taskprog.toml') を見るだけなので、cwd がサブディレクトリのセッション/サブエージェントは project root に置かれた taskprog.toml を読み落とし、~/.taskprog/config.toml か Default に落ちる。resolve_progress_path は 0.1.8 で resolve_project_root() 経由の三値解決になったが、Config::load は非アンカーのまま残っている。結果として root に progress_file を明示設定していても、サブディレクトリ cwd の hook はその設定を見ずに既定パスを使う。修正は Config::load も resolve_project_root() を使い root の taskprog.toml を探すこと。判定不能時の扱い (home config へ落とすか Default か) を決める必要がある。"
+created_at = 1789356056
+updated_at = 1789356056
+weight = 0.0
+issue_number = 652
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/652"
+
+[[task]]
+id = "977e7b2a"
+title = 'taskprog: empty-cwd の doc と実挙動が矛盾 ("." 置換で Undetermined 腕が到達不能)'
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = '''
+taskprog: 新設 doc が production の空 cwd 置換と矛盾し、empty-cwd の Undetermined 腕が
+hook から到達不能 (CLAUDE.md 第4節: docstring と実挙動の食い違い / 第6節-1: 論理的矛盾)。
+
+観測 (2026-09-14, 測定点 65bd3bad, 独立検証者):
+ crates/taskprog/src/config.rs のテスト doc (逐語):
+   "An empty cwd is what HookInput::default() carries when stdin was garbage.
+    It is not \"the current directory\" — it is no information."
+ ところが production の呼び出し側 3 箇所がすべて呼ぶ前に空 cwd を "." へ置換している:
+   src/main.rs:63-67  session_start_hook
+   src/main.rs:89-93  stop_hook
+   src/update.rs:40-44 on_stop
+     let cwd = if input.cwd.is_empty() { "." } else { &input.cwd };
+
+ 結果: stdin が壊れた Stop では「情報なし」ではなく *プロセスの実 cwd の repo root* に
+ アンカーして seed する。迷子ファイル欠陥の再発ではない (上方探索は効く) が、
+ テスト an_empty_cwd_is_undetermined は *どの hook 経路も通らない枝* を pin している。
+ 唯一の到達経路は `taskprog write --cwd ""`。
+
+ 置換自体は 65bd3bad 以前から存在 (diff 上 context 行) だが、それと矛盾する doc が
+ 65bd3bad で新規追加されたので、矛盾は本コミット由来。
+
+要る裁定 (人間): doc を実挙動に合わせる / "." 置換を外して空 cwd を Undetermined として
+扱う、のどちらを正とするか。後者なら stdin 破損時に taskprog は何も書かなくなる。
+'''
+created_at = 1789357186
+updated_at = 1789357186
+weight = 0.0
+issue_number = 653
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/653"
+
+[[task]]
+id = "4ea30ce0"
+title = "taskprog: install.rs settings_path() が HOME 不明時に cwd へフォールバック (fail-open)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = """
+taskprog: install.rs settings_path() が HOME 解決失敗時に cwd 脇へ .claude/settings.json を
+作る (a6258cc7 と同じ家系の fail-open)。
+
+観測 (2026-09-14, 測定点 65bd3bad, 独立検証者) crates/taskprog/src/install.rs:5-9 逐語:
+  fn settings_path() -> PathBuf {
+      dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
+          .join(".claude").join("settings.json")
+  }
+
+CLAUDE.md 第3節「Result/Option を bool へ潰すとき unwrap_or の既定値は必ず制限側」に反する。
+HOME が引けない = 「どこに書くべきか分からない」であって「cwd でいい」ではない。
+a6258cc7 で resolve_progress_path に入れたのと同じ三値化 (Determination) が要る。
+
+重大度 LOW: hook 経路ではなく手動 `taskprog install` のみ。65bd3bad は本箇所を無改変。
+関連: a6258cc7 (progress.md, 修正済み) / b6fdf66b (Config::load, 未修正)。
+"""
+created_at = 1789357188
+updated_at = 1789357188
+weight = 0.0
+issue_number = 654
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/654"
+
+[[task]]
+id = "9c92597c"
+title = "taskprog 0.1.8 の rollout 未実行 + 迷子 progress.md 残置で check-plugin-rollout.py が赤"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+taskprog 0.1.8 の rollout が未実行で、欠陥が稼働ハーネスで再現し続けている。
+併せて迷子ファイル crates/blastguard/src/.claude/progress.md が残置され blastguard も赤い。
+
+観測 (2026-09-14, 測定点 65bd3bad, 独立検証者):
+  python3 scripts/check-plugin-rollout.py -> exit 1
+    taskprog: source=0.1.8 registry=0.1.7 <- rollout-plugins.sh not run since bump
+    blastguard: deployed tree is not a mirror of crates/blastguard
+      — 1 source file(s) not deployed: src/.claude/progress.md
+  配布中の ~/.claude/plugins/cache/yukineko/taskprog/0.1.7/bin/taskprog を実行:
+    stray under subdir exists: True / at root exists: False / header: '# Progress — src'
+
+version lockstep 3 ファイルは 0.1.8 で揃っている (check-plugin-versions.py は
+OK: 41 plugins version-consistent)。taskprog は parked-plugins.json に宣言が無いので
+この red は「意図的 parked」ではない。
+
+やること (2 つとも 2026-09-14 のセッションでは実行権限が無く、迂回もしていない):
+ 1. bash scripts/rollout-plugins.sh --plugin taskprog
+    -> auto mode classifier にブロックされた
+ 2. crates/blastguard/src/.claude/ の削除 (untracked, 285B, placeholder のみ)
+    -> rm -rf が permission deny
+
+完了条件: python3 scripts/check-plugin-rollout.py が exit 0。
+"""
+created_at = 1789357190
+updated_at = 1789357190
+weight = 0.0
+issue_number = 655
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/655"
+
+[[task]]
+id = "1454ba50"
+title = "tdd classify(): test-glob ファイルへの追加行は marker が無くても test evidence になる (第1arm。1ff0fcc9 がスコープ外として残した残件)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+起票 2026-09-22、測定点 414be4f1。1ff0fcc9 の本文末尾と 2026-09-13 outcome の
+両方が「第 1 arm はスコープ外として手を付けていない。別途起票する」と明示していたが、
+起票されていなかったので切り出す。
+
+対象 (crates/tdd/src/gate.rs classify() のループ第 1 arm、1ff0fcc9 起票時の逐語):
+
+    for AddedLine { file, text } in added {
+        let marker_hit = markers.is_match(text);
+        if is_test_file(file) {
+            test_marker_added = true; // any added line in a test file is evidence
+            continue;
+        }
+
+第 2 arm (marker arm) は f667897d で is_impl_file(file) ガードが入り、非 impl ファイルの
+marker ヒットは evidence にならなくなった。しかし第 1 arm は marker_hit を一切見ない。
+test-glob に一致するパスへの追加行であれば、空行に隣接するコメント行でも、
+import 文でも、test マーカーを含まない任意の行でも test_marker_added を立てる。
+
+なぜ問題になりうるか: test_marker_added は Fields::has_test_evidence を駆動し、
+それが Report::verdict を Clean にして Stop hook を ALLOW させる。つまり
+「テストファイルに何か 1 行足した」が「テストを書いた」として扱われる。
+1ff0fcc9 が第 2 arm について指摘したのと同じ構造 (判定不能/弱い証拠が clean へ潰れる)
+が第 1 arm に残っている。
+
+判定不能として両方の読みを残す:
+(a) 実在の欠陥 — marker を含まない追加行は「テストを書いた」証拠として弱すぎる。
+    第 2 arm と同じ絞り込み (marker 一致行のみ evidence) を適用すべき。
+(b) 意図的な仕様 — test ファイルへの変更は人間の意思表示として十分であり、
+    marker を要求すると正当なテスト編集 (fixture 追加、ヘルパ抽出、テーブル駆動の
+    ケース追加など marker 行を伴わない編集) が evidence として数えられなくなる。
+    1ff0fcc9 の起票文自身が「That may be intentional but it is unstated」と書いている。
+
+どちらかを見分ける方法: これは外部契約の変更なので、コードだけでは決まらない。
+1ff0fcc9 に転記済みの「人間判断待ち 4 件」のうち第 4 問がまさにこの arm を対象にしており
+(意図的か? 意図的なら理由を 1 文で、そうでなければ第 1 要件と同じ絞り込みを適用してよいか)、
+その回答が discriminator になる。したがって本チケットは 1ff0fcc9 の第 4 問の回答待ちであり、
+回答前に実装してはならない。
+
+測定状況: 本チケット起票時点で、第 1 arm の到達可能性と既存テストによる固定の有無は
+利害のない agent が測定中。測定結果は判明し次第ここへ追記する。
+
+参照: 1ff0fcc9 (親チケット、p0)、f667897d (第 2 arm の修正)。
+
+--- 2026-09-22 人間裁定 (session 79d79a35) ---
+
+起票時に「両方の読み」として残した (a)/(b) のうち、ユーザーが (a) を選んだ。
+逐語: 「意図的でない — 第2arm と同じ絞り込みを適用してよい」。
+
+したがって本チケットは判定不能ではなくなり、実装タスクになる:
+marker 一致行のみを evidence とし、marker を含まない追加行は test-glob ファイルであっても
+test_marker_added を立てない。ゲートが狭まる (より多く block する) 方向なので安全側。
+
+併せて決まったこと (親チケット 1ff0fcc9 の Q1/Q2 より):
+- tdd の正典は docs/specs/tdd.md (REVIEW-NEEDED を外して批准する)。
+  この挙動変更は外部契約の変更なので、正典の記述も同一コミットで直すこと (CLAUDE.md 4)。
+- 非 impl・非 test パスの marker ヒットは absent (evidence ではない) で確定。
+
+実装前の必須手順 (CLAUDE.md 2(a)/(b)): 検証テストは実装者ではない別 agent が書き、
+先に RED を観測すること。anti-vacuity の対照 (marker 一致行はちゃんと evidence になる、
+という正例) を同時に置くこと。第 2 arm の修正 f667897d が用意した 3 テスト
+(marker_in_a_non_impl_non_test_file_is_not_evidence /
+marker_in_a_manifest_is_not_evidence / marker_in_an_impl_file_is_evidence_control)
+が近い形の先例になる。
+
+--- 2026-09-22 実測: この絞り込みは単独では効果が無い (実装方針の変更が必要) ---
+
+利害のない agent の検証中に判明し、こちらで逐語確認した。
+
+crates/tdd/src/gate.rs:48-50:
+    pub fn has_test_evidence(&self) -> bool {
+        self.test_marker_added || self.test_file_changed
+    }
+
+crates/tdd/src/gate.rs:167:
+    let test_file_changed = changed.iter().any(|f| is_test_file(f));
+
+第 1 arm が発火するのは is_test_file(file) が真のときだけであり、その file は追加行を
+持つ以上 changed にも入っている。したがって第 1 arm が発火する入力では
+test_file_changed が必ず既に真であり、has_test_evidence() は test_marker_added を
+どう変えても真のままになる。
+
+つまり「第 1 arm に marker 一致の条件を足す」という起票どおりの実装は、
+verdict を一切変えない。テストは書けるが (test_marker_added の値は変わるので)、
+ゲートの挙動は 1 ビットも動かない。これは CLAUDE.md 2 が警告する
+「何も検証していないテストは常に通る」の隣接形であり、
+修正したように見えて何も直っていない変更になる。
+
+検証者の実機プローブ (worktree のバイナリを使い捨て repo に対して実行):
+    対照A  実装 3 行のみ、tests/ パス無し                         -> BLOCK する
+    プローブ1 実装 3 行 + tests/fixtures/data.txt に
+              「# just a note, no test marker at all」            -> stop を許可
+    プローブB 実装 3 行 + tests/blank.txt に 空行 1 行だけ        -> stop を許可
+tests/ 配下の任意のパスに改行 1 バイトを足すだけでゲートが黙る。
+第 1 arm には :190 の impl 側にある !text.trim().is_empty() ガードも無く、
+git::added_lines は untracked ファイルの全行を逐語で読むので空行もここへ到達する。
+
+既存テストによる固定: 無い。第 1 arm 付近の唯一のテスト separate_test_file_is_evidence
+(:498-511) は本物の assert_eq! 行を使い test_file_changed を assert しており、
+marker 無し/空行のケースは一度も観測していない。
+
+したがって本チケットの完了条件は起票時より広い。人間裁定 (marker 一致行のみ evidence)
+の意図を実際に満たすには test_file_changed 側も同時に締める必要がある。
+これは外部契約の変更幅が裁定時の想定より大きいので、実装前に人間へ差し戻す。"""
+created_at = 1790084488
+updated_at = 1790119359
+weight = 0.0
+issue_number = 674
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/674"
+
+[[task]]
+id = "bf2de0ad"
+title = "backlog の stale-claim requeue が main の作業ツリーへ書き込み、main を dirty にして stop-verify-worktree ゲートを踏ませる (CLAUDE.md 8 と構造的に衝突)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+観測 2026-09-22、測定点 414be4f1、session 79d79a35。/flow 実行中に発生。
+
+何が起きたか: ターン終了時に stop-verify-worktree.py が逐語で
+  Do not stop yet: this turn is ending on the MAIN working tree with uncommitted changes.
+を返して停止をブロックした。main の git status は .backlog/tasks.toml の 1 ファイルのみ modified。
+このセッションは CLAUDE.md 8 に従い、編集をすべて worktree
+(/Users/yuki/src/.harness-worktrees/session-79d79a35) で行っており、main では merge しか
+していない。つまり dirty 化したのは人間でも LLM でもなく、backlog 側のツールである。
+
+差分の中身 (HEAD と working tree を tomllib で読んで id 単位に比較した実測):
+  status 変更 4 件、いずれも claimed -> pending
+    06eb8aa3 / 5e62b0eb / bcfc5491 / e073bdb1
+  id の追加 0 件、削除 0 件、task 総数 992 で不変
+  updated_at は 1789566348 -> 1790114248 に更新されている
+加えて先頭の空行 2 行が除去され、1ff0fcc9 に touched_files = [] が正規化で追加されていた。
+
+つまり内容としては正当な stale-claim の requeue (TTL による reap) である。問題は中身ではなく
+書き込み先: cwd が main だったために main のストアへ書かれ、main が dirty のまま残った。
+
+なぜ問題か:
+1. CLAUDE.md 8 は main の作業ツリーで許されるのは統合だけと定めている。ツールが main を
+   dirty にすると、セッションは「自分が触っていない変更」を commit するか捨てるかの二択を
+   迫られる。どちらも 8 に反する (commit は非 merge commit、捨てるのはツールの正当な仕事の破棄)。
+2. stop-verify-worktree ゲートが発火するので、ターンが終われなくなる。ゲート自体は正しく
+   仕事をしている (これは red であって誤検知ではない) が、原因が自分の作業ではないので
+   セッション側に直す手段がない。
+3. backlog のストアは cwd の git root に従う (memory backlog-store-follows-cwd)。したがって
+   worktree から呼べば worktree のストア、main から呼べば main のストアに書く。requeue は
+   セッションの cwd と無関係に発火しうるので、どちらに書くかが実行時の偶然で決まっている。
+
+今回の回避 (恒久修正ではない): 差分を id 単位の delta として scratchpad に逐語保存してから
+main を HEAD へ restore し、同じ 4 件の requeue を worktree 側で backlog edit --status pending
+として再適用し、worktree で commit して merge した。捨てた情報は無い。
+
+判定不能ではなく確定の欠陥だが、正しい修正方向には 2 つの読みがあるので両方残す:
+(a) requeue の書き込み先を cwd ではなく project root (main worktree root) に固定する。
+    43393ce2 / DoD14(b) が扱っている「共有ストアの解決」と同じ軸で、同じ道具
+    (harness_core::projkey::main_worktree_root) が使える。ただしこの向きだと
+    main のストアへ書く以上、main が dirty になる問題自体は残る。
+(b) requeue をファイルへ即時書き込みせず、次に backlog が書き込むタイミングまで遅延させるか、
+    そもそも main の作業ツリーではなく共有の状態ディレクトリへ持つ。
+    main を dirty にしないことを要件にするならこちらが筋。
+見分ける方法: そもそも「tasks.toml が git 追跡下の作業ファイルである」ことが根因なので、
+5ba13c3e / backlog-store-split と合わせて「キューの正典をどこに置くか」を決める必要がある。
+
+関連: 5ba13c3e (legacy ストア分裂)、43393ce2 と DoD14(b) (共有ストアの worktree 解決)、
+backlog requeue lock scoping (SessionStart requeue の TOCTOU)。"""
+created_at = 1790114712
+updated_at = 1790114712
+weight = 0.0
+issue_number = 675
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/675"
+
+[[task]]
+id = "860a78b3"
+title = "tdd human_report が過大主張: marker が 1 つも一致していないのに test marker in an impl file と表示する (f667897d が直した当の行、CLAUDE.md 4)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+観測 2026-09-22、利害のない検証 agent の実機プローブ。測定点 ecf5fdc8。
+
+crates/tdd/src/gate.rs:337 付近の human_report が、逐語で次を出力した:
+
+    test evidence:    yes (test file changed + test marker in an impl file)
+
+これが出た入力では marker は 1 つも一致していない (検証者が入力行を既定の 6 本の
+marker 正規表現すべてに対して照合して確認)。impl ファイルにも marker は無い。
+したがって後半の「test marker in an impl file」は事実に反する。
+
+機構: 第 1 arm (:174、test-glob ファイルへの任意の追加行) と第 2 arm (:186、marker 一致 +
+impl ファイル) が同一の bool test_marker_added に書き込む。:337 の分岐は
+test_file_changed && test_marker_added を「両方が起きた」と解釈するが、
+test_marker_added は第 1 arm 経由でも立つので、marker が無くても両方真になりうる。
+
+皮肉な点: この文字列は f667897d が「regex が一致しただけのものを inline test が
+追加されたと断言していた」記述を撤去するために書き直した、まさにその行である。
+第 2 arm については正確になったが、第 1 arm 経由の経路には対応していない。
+
+既存テストが捕まえられない理由: human_report_..._does_not_overclaim の 2 本
+(:1211 と :1229) は Fields のリテラルを直接組み立てるので、classify() を通らず
+この経路を観測できない。後続コミット d71b1db2 も「human_report wording had zero
+kill rate」と報告している。
+
+対照的に block_reason (:288) は誠実で、「or a file under tests/」と緩い規則を明示している。
+つまり同じ事実について、block する側の文言は正直で、allow する側の文言が過大主張している。
+
+なぜ問題か: CLAUDE.md 4 が禁じる「docstring/コメントで実挙動と違う安全な話を書く」の
+実行時出力版。ユーザーはこの 1 行を見てテストが書かれたと信じるが、実際に起きたのは
+tests/ 配下のファイルに 1 行足しただけでありうる。
+
+修正の向き: 表示は観測に忠実であるべきなので、第 1 arm 由来か第 2 arm 由来かを
+区別できる形 (bool を 2 本に割る、または列挙にする) にして、marker が実際に
+一致した場合にのみ marker を名乗る。ゲートの verdict は変えずに表示だけ直せるので、
+1454ba50 (verdict を変える契約変更) とは独立に着手できる。
+
+関連: 1ff0fcc9 (親)、1454ba50 (第 1 arm の verdict 側)、f667897d、d71b1db2。"""
+created_at = 1790114920
+updated_at = 1790119361
+weight = 0.0
+issue_number = 676
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/676"

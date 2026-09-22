@@ -243,6 +243,14 @@ write_provenance() {
 
 # --- refresh ---------------------------------------------------------------
 updated_cache=0 updated_repo=0 updated_hooks=0 missing="" checked=0 skipped_filter=0
+# Launchers in a FRESH current-version dir that this run could not seed a host
+# binary for, as "<plugin>/<version>:<launcher>". Separate from `missing` (which
+# the main refresh loop fills for dirs that ALREADY had a host binary) because
+# the two states have different severities: `missing` is a warning about a
+# possibly-renamed non-workspace bin, whereas an unseeded fresh dir is a plugin
+# that is installed, version-consistent and execs NOTHING. Non-empty makes this
+# script exit non-zero — see the tail.
+seed_missing=""
 shopt -s nullglob
 for binfile in "$CACHE"/*/*/bin/*-"$SUF$EXT"; do
   checked=$((checked+1))
@@ -374,9 +382,35 @@ for i in "${!plugin_names[@]}"; do
         continue ;;
     esac
     hostbin="$bindir/$binname-$SUF$EXT"
-    [ -e "$hostbin" ] && continue       # host bin already present (main loop handled it)
+    # `-e` is NOT the predicate the consumer applies. The launcher requires the
+    # file to be EXECUTABLE and non-empty (crates/tdd/bin/tdd:52-55 — `if [ -x
+    # "$binary" ]; then exec ...`), so a host bin sitting at mode 0644 or
+    # truncated to zero bytes was accepted here as "already handled" while the
+    # launcher refused it: dark, not red. The main refresh loop does not save
+    # that case either — it only copies when `cmp -s` says the bytes DIFFER, so
+    # a non-executable file whose bytes already match is chmod'd by nobody and
+    # no code path ever restores the exec bit. Skipping now demands both.
+    # Pinned by scripts/tests/rebuild-seed-skip-is-silent.sh (case D).
+    if [ -x "$hostbin" ] && [ -s "$hostbin" ]; then
+      continue                          # host bin present AND runnable
+    fi
     src="$REL/$binname$EXT"
-    [ -x "$src" ] || continue           # only seed a launcher we actually built this run
+    # No artifact to seed from. This used to be a bare silent `continue`, and
+    # that silence — not the skip — was the fail-open: this pass is the ONLY
+    # path that populates a freshly rolled-out version dir (see the comment
+    # block above), so a launcher it declines to seed execs a binary that does
+    # not exist, and the run still printed a clean summary and exited 0. The
+    # `missing` WARNING below could not cover it: that accumulator is fed by the
+    # main refresh loop, which globs *existing* `*-$SUF` files and therefore
+    # never visits a fresh dir at all. Record it and fail loudly at the end,
+    # mirroring the identical `[ ! -x "$src" ]` condition the main loop already
+    # reports (see its `missing="$missing $binname"` branch above).
+    # CLAUDE.md §3: "could not seed" must not resolve to the same output as
+    # "nothing needed seeding".
+    if [ ! -x "$src" ]; then
+      seed_missing="$seed_missing $pname/$ver:$binname"
+      continue
+    fi
     checked=$((checked+1))
     if [ $dry = 1 ]; then
       echo "cache  would seed $binname-$SUF$EXT (fresh version dir $pname/$ver)"
@@ -398,4 +432,29 @@ if [ -n "$missing" ]; then
   echo "(these cache plugins had a $SUF binary but no matching target/release/<name> — a non-workspace or renamed bin?)" >&2
 fi
 [ $checked = 0 ] && echo "note: no *-$SUF binaries found under $CACHE (wrong cache root, or no host-platform plugins installed)."
+
+# A fresh version dir this run left holding only its launcher is a DARK deploy:
+# the plugin is installed and version-consistent, its hooks fire, and the
+# launcher then execs a binary that is not there — so no finding is emitted to
+# notice it by. That is the state the seed pass exists to prevent, and exiting 0
+# after failing to prevent it is exactly CLAUDE.md §3's forbidden collapse of
+# "could not check" into "checked and fine".
+#
+# Non-zero is deliberate rather than a warning-only line. scripts/rollout-
+# plugins.sh calls this script under `set -euo pipefail` (its run_rebuild_and_
+# sync), so a non-zero exit ABORTS the rollout with an error instead of letting
+# it continue to prune superseded dirs and print "done." over a fleet that
+# execs nothing. It also does not depend on anyone reading stderr, which a
+# warning does.
+#
+# Pinned by scripts/tests/rebuild-seed-skip-is-silent.sh (cases B and D).
+if [ -n "$seed_missing" ]; then
+  echo "ERROR: could not seed a host binary into a FRESH version dir for:$seed_missing" >&2
+  echo "  Each entry is <plugin>/<version>:<launcher>. No $REL/<launcher>$EXT was" >&2
+  echo "  built this run, so that version dir holds only its launcher and the" >&2
+  echo "  plugin execs NOTHING while looking correctly deployed (dark, not red)." >&2
+  echo "  Check that the launcher name matches a workspace bin target, and that" >&2
+  echo "  the release build actually wrote to: $REL" >&2
+  exit 1
+fi
 exit 0

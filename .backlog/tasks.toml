@@ -25093,7 +25093,7 @@ tags = [
     "condukt",
 ]
 touched_files = []
-status = "claimed"
+status = "pending"
 notes = """
 測定点 branch batch5-d83b0e8f ff985fac / 2026-09-13. d83b0e8f (claim registry) の調査項目として実測した確定の欠陥。読みは 1 つしかない (判定不能ではない)。機構: acquire_repo_primary(cfg, repo) は RunLock::acquire_or_skip 経由で lock_path に入り、lock_path は project_key(repo_root(cwd)) でキーを作る。呼び出し側が渡す repo は crates/condukt/src/worktree.rs:238 の toplevel(cwd) すなわち git rev-parse --show-toplevel であり、linked worktree では worktree 自身を返す。実測: from main tree が pp2/main、from linked wt が pp2/wt1。ランタイム確認 (condukt worktree reconcile が当該ロックを取る): 手順1 linked worktree から実行すると project dir は wt1-d22e03ed のみ。手順2 main tree から実行すると main-8fe192a0 と wt1-d22e03ed の 2 つ。手順3 main tree のディレクトリに live pid の __repo_primary__.lock を置いた状態で linked worktree から実行すると exit=0 で素通り (直列化されない)。手順4 は反証防止の control で、同じロックを linked worktree 自身のディレクトリに置いて同じ場所から実行すると exit=1 になり contended のメッセージが出る。したがってプローブは識別力を持っており手順3の素通りは本物。手順5 その worktree ロックを保持したまま main tree から実行すると exit=0 で素通り。影響: CLAUDE.md 第8節は全セッションが linked worktree で作業することを絶対義務としているので、共有 git index と default branch と worktree admin を変更する 2 プロセスは必ず別ロックになり決して競合しない。ロックが守るはずのものを守っていない。影響箇所: crates/condukt/src/main.rs:3258 と :3288 と :3318、crates/condukt/src/worktree.rs:645 と :894 と :1053 (worktree merge の checkout-default-branch + merge のクリティカルセクションを含む)。修正方向: d83b0e8f で claim registry に入れたのと同じ手当て、すなわち harness_core::projkey::main_worktree_root で解決した project root を使う lock_path_in_project 系を repo-primary にも適用する。両者は同型なので同じ道具が使える。関連 d83b0e8f 43393ce2
 
@@ -25103,7 +25103,7 @@ notes = """
 pending へ戻した。本チケットの内容自体は未着手のままで、失敗ではない。
 経緯と、回収した RED スイートの詳細は 2c1e54b3 にある。"""
 created_at = 1789292612
-updated_at = 1789566348
+updated_at = 1790114679
 weight = 0.0
 issue_number = 605
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/605"
@@ -26022,7 +26022,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
 touched_files = []
-status = "claimed"
+status = "pending"
 notes = """
 実測 2026-09-13、測定点 c39701bc、rollout 直後（overwatch は harness-core 0.2.24 で再ビルド済み）。
 
@@ -26082,7 +26082,7 @@ main は今この RED を抱えている。隠していない: pre-commit は ca
 overwatch は 0.2.34 -> 0.2.35 に lockstep 済み。GATE crate なので
 scripts/rollout-plugins.sh --canary が別途必要。"""
 created_at = 1789297114
-updated_at = 1789566348
+updated_at = 1790114679
 weight = 0.0
 issue_number = 628
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/628"
@@ -26463,7 +26463,7 @@ tags = [
     "p0",
 ]
 touched_files = []
-status = "claimed"
+status = "pending"
 notes = """
 実測 2026-09-13 22:40 JST、測定点 15adc7bd（main）、cwd=/Users/yuki/src/harness（main worktree）。
 
@@ -26514,7 +26514,7 @@ retain_claim は「Known(Stalled) のときだけ reap」なので、Undetermine
 5e62b0eb が「reap が効かない」なのに対し、06eb8aa3 は「そもそも解放が
 呼ばれない」。2 つ揃うと、握ったまま死んだ run の claim は永久に残る。"""
 created_at = 1789306874
-updated_at = 1789566348
+updated_at = 1790114679
 weight = 0.0
 issue_number = 639
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/639"
@@ -26843,7 +26843,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
 touched_files = []
-status = "claimed"
+status = "pending"
 notes = """
 実測 2026-09-16、測定点 main 12afeb9b、condukt 0.7.166 (デプロイ版)。
 
@@ -26899,7 +26899,7 @@ done_criteria:
 関連: 5e62b0eb (progress 判定が Undetermined になり reap されない不死 claim)。
 あちらは「reap が効かない」、本件は「そもそも解放が呼ばれない」。別の穴。"""
 created_at = 1789566331
-updated_at = 1789566348
+updated_at = 1790114679
 weight = 0.0
 issue_number = 661
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/661"
@@ -27666,3 +27666,65 @@ updated_at = 1790114530
 weight = 0.0
 issue_number = 674
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/674"
+
+[[task]]
+id = "bf2de0ad"
+title = "backlog の stale-claim requeue が main の作業ツリーへ書き込み、main を dirty にして stop-verify-worktree ゲートを踏ませる (CLAUDE.md 8 と構造的に衝突)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+観測 2026-09-22、測定点 414be4f1、session 79d79a35。/flow 実行中に発生。
+
+何が起きたか: ターン終了時に stop-verify-worktree.py が逐語で
+  Do not stop yet: this turn is ending on the MAIN working tree with uncommitted changes.
+を返して停止をブロックした。main の git status は .backlog/tasks.toml の 1 ファイルのみ modified。
+このセッションは CLAUDE.md 8 に従い、編集をすべて worktree
+(/Users/yuki/src/.harness-worktrees/session-79d79a35) で行っており、main では merge しか
+していない。つまり dirty 化したのは人間でも LLM でもなく、backlog 側のツールである。
+
+差分の中身 (HEAD と working tree を tomllib で読んで id 単位に比較した実測):
+  status 変更 4 件、いずれも claimed -> pending
+    06eb8aa3 / 5e62b0eb / bcfc5491 / e073bdb1
+  id の追加 0 件、削除 0 件、task 総数 992 で不変
+  updated_at は 1789566348 -> 1790114248 に更新されている
+加えて先頭の空行 2 行が除去され、1ff0fcc9 に touched_files = [] が正規化で追加されていた。
+
+つまり内容としては正当な stale-claim の requeue (TTL による reap) である。問題は中身ではなく
+書き込み先: cwd が main だったために main のストアへ書かれ、main が dirty のまま残った。
+
+なぜ問題か:
+1. CLAUDE.md 8 は main の作業ツリーで許されるのは統合だけと定めている。ツールが main を
+   dirty にすると、セッションは「自分が触っていない変更」を commit するか捨てるかの二択を
+   迫られる。どちらも 8 に反する (commit は非 merge commit、捨てるのはツールの正当な仕事の破棄)。
+2. stop-verify-worktree ゲートが発火するので、ターンが終われなくなる。ゲート自体は正しく
+   仕事をしている (これは red であって誤検知ではない) が、原因が自分の作業ではないので
+   セッション側に直す手段がない。
+3. backlog のストアは cwd の git root に従う (memory backlog-store-follows-cwd)。したがって
+   worktree から呼べば worktree のストア、main から呼べば main のストアに書く。requeue は
+   セッションの cwd と無関係に発火しうるので、どちらに書くかが実行時の偶然で決まっている。
+
+今回の回避 (恒久修正ではない): 差分を id 単位の delta として scratchpad に逐語保存してから
+main を HEAD へ restore し、同じ 4 件の requeue を worktree 側で backlog edit --status pending
+として再適用し、worktree で commit して merge した。捨てた情報は無い。
+
+判定不能ではなく確定の欠陥だが、正しい修正方向には 2 つの読みがあるので両方残す:
+(a) requeue の書き込み先を cwd ではなく project root (main worktree root) に固定する。
+    43393ce2 / DoD14(b) が扱っている「共有ストアの解決」と同じ軸で、同じ道具
+    (harness_core::projkey::main_worktree_root) が使える。ただしこの向きだと
+    main のストアへ書く以上、main が dirty になる問題自体は残る。
+(b) requeue をファイルへ即時書き込みせず、次に backlog が書き込むタイミングまで遅延させるか、
+    そもそも main の作業ツリーではなく共有の状態ディレクトリへ持つ。
+    main を dirty にしないことを要件にするならこちらが筋。
+見分ける方法: そもそも「tasks.toml が git 追跡下の作業ファイルである」ことが根因なので、
+5ba13c3e / backlog-store-split と合わせて「キューの正典をどこに置くか」を決める必要がある。
+
+関連: 5ba13c3e (legacy ストア分裂)、43393ce2 と DoD14(b) (共有ストアの worktree 解決)、
+backlog requeue lock scoping (SessionStart requeue の TOCTOU)。"""
+created_at = 1790114712
+updated_at = 1790114712
+weight = 0.0
+issue_number = 675
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/675"

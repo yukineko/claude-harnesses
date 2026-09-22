@@ -18068,9 +18068,36 @@ pre-commit を通るかどうかが異なるので別物の可能性があり、
   main で git merge --ff-only session-79d79a35
   python3 scripts/gate-bypass.py --json -> {"verdict": "outstanding", "entries": [{"commit": "89def60a...", ...}]}
 一度目は 55e6e195 で、条件も結果も同一。偶発ではなく、worktree branch の先頭が
-merge commit である限り ff のたびに起きる。"""
+merge commit である限り ff のたびに起きる。
+
+--- 2026-09-23 自然実験で機構を確定: ff merge の「行き先」が merge commit だと踏む ---
+
+session 79d79a35 で偶然 2 回の対照が取れたので逐語で残す。仮説ではなく観測である。
+
+実験 1 (踏んだ): main を ff で 414be4f1 へ進めた。414be4f1 自身が merge commit
+(親が 2 つ) である。この ff の直後に post-merge が発火し、bypass ledger に
+ungated commit として記録された。
+
+実験 2 (踏まなかった): main を ff で ecf5fdc8 へ進めた。ecf5fdc8 は通常の commit
+(親が 1 つ)。同じ ff という操作だが ledger は反応しなかった。
+
+つまり post-merge の判定は「今回の操作が本当に merge だったか」ではなく
+「HEAD の親が 2 つ以上か」を見ている。ff merge は HEAD を動かすだけで新しい commit を
+作らないので、行き先が過去の merge commit だった場合に「merge commit が今できた」と
+誤読する。操作の性質ではなく到達点の形状で判定しているのが根因。
+
+事後: その後の pre-commit が green で通った際、逐語で
+    cleared 1 ungated commit(s) from the bypass ledger
+と表示され ledger は自動で解消した。つまり実害は「次に green な commit を打つまで
+push がブロックされる」ことに限られるが、誤検知であること自体は変わらない。
+
+見分け方 (将来の実装者向け): ff かどうかは post-merge 側では
+ORIG_HEAD と HEAD の関係で判定できる。ORIG_HEAD が HEAD の祖先なら ff であり、
+その場合 HEAD の親の数は今回の操作の産物ではないので判定に使ってはならない。
+
+関連: 36c936bc / d55f406a (同一事象の両起票)。"""
 created_at = 1787905350
-updated_at = 1789471867
+updated_at = 1790119645
 weight = 0.0
 issue_number = 411
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/411"
@@ -23879,9 +23906,36 @@ remote に出るのを止められていないことになり、こちらの方�
 【2026-09-13】本件の機構は 36c936bc に実測で確定させた。post-merge の
 parents -lt 2 guard が fast-forward を判別できず、行き先が merge commit だと
 main 側に存在しない証明書を探して ungated と記録する。再現手順と逐語は 36c936bc にある。
-"""
+
+
+--- 2026-09-23 自然実験で機構を確定: ff merge の「行き先」が merge commit だと踏む ---
+
+session 79d79a35 で偶然 2 回の対照が取れたので逐語で残す。仮説ではなく観測である。
+
+実験 1 (踏んだ): main を ff で 414be4f1 へ進めた。414be4f1 自身が merge commit
+(親が 2 つ) である。この ff の直後に post-merge が発火し、bypass ledger に
+ungated commit として記録された。
+
+実験 2 (踏まなかった): main を ff で ecf5fdc8 へ進めた。ecf5fdc8 は通常の commit
+(親が 1 つ)。同じ ff という操作だが ledger は反応しなかった。
+
+つまり post-merge の判定は「今回の操作が本当に merge だったか」ではなく
+「HEAD の親が 2 つ以上か」を見ている。ff merge は HEAD を動かすだけで新しい commit を
+作らないので、行き先が過去の merge commit だった場合に「merge commit が今できた」と
+誤読する。操作の性質ではなく到達点の形状で判定しているのが根因。
+
+事後: その後の pre-commit が green で通った際、逐語で
+    cleared 1 ungated commit(s) from the bypass ledger
+と表示され ledger は自動で解消した。つまり実害は「次に green な commit を打つまで
+push がブロックされる」ことに限られるが、誤検知であること自体は変わらない。
+
+見分け方 (将来の実装者向け): ff かどうかは post-merge 側では
+ORIG_HEAD と HEAD の関係で判定できる。ORIG_HEAD が HEAD の祖先なら ff であり、
+その場合 HEAD の親の数は今回の操作の産物ではないので判定に使ってはならない。
+
+関連: 36c936bc / d55f406a (同一事象の両起票)。"""
 created_at = 1789123819
-updated_at = 1789306829
+updated_at = 1790119646
 weight = 0.0
 issue_number = 543
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/543"

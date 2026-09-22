@@ -23072,9 +23072,43 @@ Q4 第 1 arm (test-glob ファイルへの任意の追加行が evidence) は意
 - CLAUDE.md 2(a) 未充足。f667897d の実装者がその検証テストも書いた。
   利害のない agent による独立検証を本セッションで実施中。結果は判明次第ここへ追記する。
 - docs/specs/tdd.md の批准そのもの (REVIEW-NEEDED 除去 + 53-55 行の契約記述更新) は未実施。
-- 1454ba50 (第 1 arm の絞り込み) は未実装。'''
+- 1454ba50 (第 1 arm の絞り込み) は未実装。
+
+--- 2026-09-22 独立検証の結果 (CLAUDE.md 2(a) の未充足を解消) ---
+
+利害のない別 agent が f667897d の修正を独立検証した。実装者ではない agent が測定し、
+実装には一切触れていない。結論: 修正は独立検証を通過した。
+
+1. 修正の存在 (逐語、crates/tdd/src/gate.rs:186-189):
+       if marker_hit && is_impl_file(file) {
+           test_marker_added = true; // inline test written in an impl file
+           continue;
+       }
+   述語 (:164-165):
+       let is_test_file = |f: &str| test_set.is_match(f);
+       let is_impl_file = |f: &str| impl_set.is_match(f) && !is_test_file(f);
+
+2. baseline: cargo test -p tdd は 6 バイナリ 99 テストで 0 failure。
+
+3. 変異検査 = KILLED。&& is_impl_file(file) の連言だけを削除 (構文を消す変異であって
+   if false ではない。git diff で 1 行のみの変更であることを確認済み)。逐語:
+       test gate::tests::marker_in_a_manifest_is_not_evidence ... FAILED
+       test gate::tests::marker_in_a_non_impl_non_test_file_is_not_evidence ... FAILED
+       test result: FAILED. 75 passed; 2 failed
+   どちらも test_marker_added の assert で落ちており、副作用ではなく当該性質を観測している。
+   revert 後は 99/99 green に戻り、gate.rs は変異前とバイト同一。
+
+4. anti-vacuity 対照: 変異下でも marker_in_an_impl_file_is_evidence_control は ok のまま。
+   対照が変異と一緒に動かないので、上の 2 件の kill は本物。
+
+したがって「実装者が自分の実装を検証するテストを書いた」という 2(a) の懸念は、
+本件では実害が無いことが測定で示された (主張ではなく測定)。
+
+ただし検証者が新たに 2 件を測定した。どちらも本チケットの修正行の上に乗っている:
+- human_report の過大主張が live (別チケット化した。下記)
+- 第 1 arm の是正は単独では観測可能な効果を持たない (1454ba50 に記録した)'''
 created_at = 1789064330
-updated_at = 1790114530
+updated_at = 1790114919
 weight = 0.0
 issue_number = 509
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/509"
@@ -27660,9 +27694,49 @@ test_marker_added を立てない。ゲートが狭まる (より多く block �
 という正例) を同時に置くこと。第 2 arm の修正 f667897d が用意した 3 テスト
 (marker_in_a_non_impl_non_test_file_is_not_evidence /
 marker_in_a_manifest_is_not_evidence / marker_in_an_impl_file_is_evidence_control)
-が近い形の先例になる。"""
+が近い形の先例になる。
+
+--- 2026-09-22 実測: この絞り込みは単独では効果が無い (実装方針の変更が必要) ---
+
+利害のない agent の検証中に判明し、こちらで逐語確認した。
+
+crates/tdd/src/gate.rs:48-50:
+    pub fn has_test_evidence(&self) -> bool {
+        self.test_marker_added || self.test_file_changed
+    }
+
+crates/tdd/src/gate.rs:167:
+    let test_file_changed = changed.iter().any(|f| is_test_file(f));
+
+第 1 arm が発火するのは is_test_file(file) が真のときだけであり、その file は追加行を
+持つ以上 changed にも入っている。したがって第 1 arm が発火する入力では
+test_file_changed が必ず既に真であり、has_test_evidence() は test_marker_added を
+どう変えても真のままになる。
+
+つまり「第 1 arm に marker 一致の条件を足す」という起票どおりの実装は、
+verdict を一切変えない。テストは書けるが (test_marker_added の値は変わるので)、
+ゲートの挙動は 1 ビットも動かない。これは CLAUDE.md 2 が警告する
+「何も検証していないテストは常に通る」の隣接形であり、
+修正したように見えて何も直っていない変更になる。
+
+検証者の実機プローブ (worktree のバイナリを使い捨て repo に対して実行):
+    対照A  実装 3 行のみ、tests/ パス無し                         -> BLOCK する
+    プローブ1 実装 3 行 + tests/fixtures/data.txt に
+              「# just a note, no test marker at all」            -> stop を許可
+    プローブB 実装 3 行 + tests/blank.txt に 空行 1 行だけ        -> stop を許可
+tests/ 配下の任意のパスに改行 1 バイトを足すだけでゲートが黙る。
+第 1 arm には :190 の impl 側にある !text.trim().is_empty() ガードも無く、
+git::added_lines は untracked ファイルの全行を逐語で読むので空行もここへ到達する。
+
+既存テストによる固定: 無い。第 1 arm 付近の唯一のテスト separate_test_file_is_evidence
+(:498-511) は本物の assert_eq! 行を使い test_file_changed を assert しており、
+marker 無し/空行のケースは一度も観測していない。
+
+したがって本チケットの完了条件は起票時より広い。人間裁定 (marker 一致行のみ evidence)
+の意図を実際に満たすには test_file_changed 側も同時に締める必要がある。
+これは外部契約の変更幅が裁定時の想定より大きいので、実装前に人間へ差し戻す。"""
 created_at = 1790084488
-updated_at = 1790114530
+updated_at = 1790114919
 weight = 0.0
 issue_number = 674
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/674"
@@ -27728,3 +27802,55 @@ updated_at = 1790114712
 weight = 0.0
 issue_number = 675
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/675"
+
+[[task]]
+id = "860a78b3"
+title = "tdd human_report が過大主張: marker が 1 つも一致していないのに test marker in an impl file と表示する (f667897d が直した当の行、CLAUDE.md 4)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+観測 2026-09-22、利害のない検証 agent の実機プローブ。測定点 ecf5fdc8。
+
+crates/tdd/src/gate.rs:337 付近の human_report が、逐語で次を出力した:
+
+    test evidence:    yes (test file changed + test marker in an impl file)
+
+これが出た入力では marker は 1 つも一致していない (検証者が入力行を既定の 6 本の
+marker 正規表現すべてに対して照合して確認)。impl ファイルにも marker は無い。
+したがって後半の「test marker in an impl file」は事実に反する。
+
+機構: 第 1 arm (:174、test-glob ファイルへの任意の追加行) と第 2 arm (:186、marker 一致 +
+impl ファイル) が同一の bool test_marker_added に書き込む。:337 の分岐は
+test_file_changed && test_marker_added を「両方が起きた」と解釈するが、
+test_marker_added は第 1 arm 経由でも立つので、marker が無くても両方真になりうる。
+
+皮肉な点: この文字列は f667897d が「regex が一致しただけのものを inline test が
+追加されたと断言していた」記述を撤去するために書き直した、まさにその行である。
+第 2 arm については正確になったが、第 1 arm 経由の経路には対応していない。
+
+既存テストが捕まえられない理由: human_report_..._does_not_overclaim の 2 本
+(:1211 と :1229) は Fields のリテラルを直接組み立てるので、classify() を通らず
+この経路を観測できない。後続コミット d71b1db2 も「human_report wording had zero
+kill rate」と報告している。
+
+対照的に block_reason (:288) は誠実で、「or a file under tests/」と緩い規則を明示している。
+つまり同じ事実について、block する側の文言は正直で、allow する側の文言が過大主張している。
+
+なぜ問題か: CLAUDE.md 4 が禁じる「docstring/コメントで実挙動と違う安全な話を書く」の
+実行時出力版。ユーザーはこの 1 行を見てテストが書かれたと信じるが、実際に起きたのは
+tests/ 配下のファイルに 1 行足しただけでありうる。
+
+修正の向き: 表示は観測に忠実であるべきなので、第 1 arm 由来か第 2 arm 由来かを
+区別できる形 (bool を 2 本に割る、または列挙にする) にして、marker が実際に
+一致した場合にのみ marker を名乗る。ゲートの verdict は変えずに表示だけ直せるので、
+1454ba50 (verdict を変える契約変更) とは独立に着手できる。
+
+関連: 1ff0fcc9 (親)、1454ba50 (第 1 arm の verdict 側)、f667897d、d71b1db2。"""
+created_at = 1790114920
+updated_at = 1790114920
+weight = 0.0
+issue_number = 676
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/676"

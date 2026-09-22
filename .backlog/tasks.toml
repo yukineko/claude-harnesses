@@ -22970,7 +22970,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
 touched_files = []
-status = "claimed"
+status = "done"
 notes = '''
 Found and independently re-verified 2026-09-11 at HEAD 2abf8dea by reading crates/tdd/src/gate.rs classify().
 
@@ -23108,7 +23108,7 @@ Q4 第 1 arm (test-glob ファイルへの任意の追加行が evidence) は意
 - human_report の過大主張が live (別チケット化した。下記)
 - 第 1 arm の是正は単独では観測可能な効果を持たない (1454ba50 に記録した)'''
 created_at = 1789064330
-updated_at = 1790114919
+updated_at = 1790119362
 weight = 0.0
 issue_number = 509
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/509"
@@ -27675,7 +27675,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "done"
 notes = """
 起票 2026-09-22、測定点 414be4f1。1ff0fcc9 の本文末尾と 2026-09-13 outcome の
 両方が「第 1 arm はスコープ外として手を付けていない。別途起票する」と明示していたが、
@@ -27781,7 +27781,7 @@ marker 無し/空行のケースは一度も観測していない。
 の意図を実際に満たすには test_file_changed 側も同時に締める必要がある。
 これは外部契約の変更幅が裁定時の想定より大きいので、実装前に人間へ差し戻す。"""
 created_at = 1790084488
-updated_at = 1790114919
+updated_at = 1790119359
 weight = 0.0
 issue_number = 674
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/674"
@@ -27855,7 +27855,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "done"
 notes = """
 観測 2026-09-22、利害のない検証 agent の実機プローブ。測定点 ecf5fdc8。
 
@@ -27895,7 +27895,7 @@ tests/ 配下のファイルに 1 行足しただけでありうる。
 
 関連: 1ff0fcc9 (親)、1454ba50 (第 1 arm の verdict 側)、f667897d、d71b1db2。"""
 created_at = 1790114920
-updated_at = 1790114920
+updated_at = 1790119361
 weight = 0.0
 issue_number = 676
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/676"

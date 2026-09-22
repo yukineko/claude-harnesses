@@ -313,7 +313,8 @@ fn check_run(hook: Option<HookInput>) -> ! {
                 );
                 std::process::exit(1);
             }
-            println!("{}", json!({ "decision": "block", "reason": reason }));
+            // Repeat ledger: operator ruling 2026-09-18.
+            harness_core::repeat::emit_stop_block("propguard", &reason);
             harness_core::hook_latency::record(
                 "propguard",
                 &session,

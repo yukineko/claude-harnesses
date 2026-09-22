@@ -515,27 +515,31 @@ struct CachedView {
 /// against a clock-skew/corrupt timestamp in the future (`built_at > now`),
 /// which is treated as stale rather than trusted.
 ///
-/// **`ledger_mtime` is accepted but NOT consulted as of this commit.** The
-/// verdict is today computed from `built_at`/`now`/`ttl_secs` alone, exactly as
-/// before this parameter existed, so behaviour is unchanged: a lease written
-/// after the cache was built still does not invalidate it, and `overwatch
-/// status` can therefore keep reporting the pre-registration roster (`(none)`
-/// under `== Sessions ==`) for up to `STATUS_CACHE_TTL_SECS`. This signature
-/// exists so that defect can be pinned by a failing test first; the comparison
-/// that actually invalidates the cache lands in the follow-up step of backlog
-/// 7d820338 (task `t3-overwatch`). Do not describe this function as
-/// invalidating on ledger changes until that code is here.
+/// `ledger_mtime` IS consulted: it invalidates the cache independently of the
+/// TTL window. A ledger mtime that is `Known(m)` with `m >= built_at` (a
+/// same-second write counts, since whole-second timestamps cannot distinguish
+/// "just before" from "just after" the build) means the leases ledger changed
+/// at-or-after the cache was built, so the entry is **not fresh** regardless
+/// of remaining TTL. An `Undetermined` mtime (the ledger could not be stat'd)
+/// is likewise treated as **not fresh** rather than as "no change observed" —
+/// an unobservable signal must resolve to the restricted side (CLAUDE.md §3),
+/// not to allow. Only when the mtime is `Known(m)` with `m < built_at` does
+/// this fall through to the original `built_at`/`now`/`ttl_secs` TTL check.
 ///
 /// The parameter is a [`Determination`] rather than an `Option` so that "the
 /// ledger mtime could not be observed" stays distinguishable from a real
-/// timestamp when the follow-up consumes it.
+/// timestamp.
 pub(crate) fn cache_is_fresh(
     built_at: i64,
     now: i64,
     ttl_secs: i64,
-    _ledger_mtime: Determination<i64>,
+    ledger_mtime: Determination<i64>,
 ) -> bool {
-    built_at <= now && now - built_at <= ttl_secs
+    match ledger_mtime {
+        Determination::Known(m) if m >= built_at => false,
+        Determination::Undetermined(_) => false,
+        _ => built_at <= now && now - built_at <= ttl_secs,
+    }
 }
 
 /// Build the full ProgressView, reusing a short-lived on-disk cache when
@@ -1177,14 +1181,14 @@ mod tests {
             1000,
             1005,
             STATUS_CACHE_TTL_SECS,
-            Determination::known(1000)
+            Determination::known(999)
         ));
         // Exactly at the TTL boundary is still fresh (inclusive).
         assert!(cache_is_fresh(
             1000,
             1000 + STATUS_CACHE_TTL_SECS,
             STATUS_CACHE_TTL_SECS,
-            Determination::known(1000)
+            Determination::known(999)
         ));
     }
 

@@ -62,7 +62,6 @@ mod stop_intent;
 use clap::{Parser, Subcommand};
 use harness_core::hook::{read_stdin, run_hook, HookInput};
 use harness_core::verdict::{Determination, Verdict};
-use serde_json::json;
 
 use config::Config;
 use state::{Phase, StopDecision};
@@ -395,7 +394,8 @@ fn is_autonomous(cwd: &std::path::Path) -> bool {
 
 fn block(cwd: &std::path::Path, session: &str, check_kind: &str, reason: &str) {
     emit_violation(cwd, session, check_kind);
-    println!("{}", json!({ "decision": "block", "reason": reason }));
+    // Repeat ledger: operator ruling 2026-09-18.
+    harness_core::repeat::emit_stop_block("autoflow", reason);
 }
 
 /// Block because autoflow could not make an observation it needs.
@@ -425,19 +425,17 @@ fn block_undetermined(
          （恒久的に解消できない場合の緊急退避は AUTOFLOW_DISABLE=1）。"
     ));
     emit_violation(cwd, session, check_kind);
-    match verdict.stop_decision() {
-        Some(decision) => println!("{decision}"),
-        // Unreachable: `Verdict::undetermined` is never `Clean`. Kept explicit
-        // because falling silent here would reinstate the very fail-open this
-        // function exists to close, so the impossible branch still blocks.
-        None => println!(
-            "{}",
-            json!({
-                "decision": "block",
-                "reason": format!("{what}（判定不能）: {why}"),
-            })
-        ),
-    }
+    // Repeat ledger: operator ruling 2026-09-18. `emit_stop_block` keeps the
+    // never-print-nothing guarantee this site relied on the `None` arm for.
+    // `Verdict::undetermined` always carries a reason; the fallback keeps the
+    // impossible branch blocking rather than silent.
+    harness_core::repeat::emit_stop_block(
+        "autoflow",
+        verdict
+            .reason()
+            .map(|r| r.as_str())
+            .unwrap_or("autoflow: 判定不能のため stop をブロックします"),
+    );
 }
 
 /// Record a fleet-level violation for a blocking Stop, for cross-gate

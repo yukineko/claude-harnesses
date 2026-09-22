@@ -84,7 +84,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "autoflow"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "clap",
  "harness-core",
@@ -163,7 +163,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "blastguard"
-version = "0.2.64"
+version = "0.2.65"
 dependencies = [
  "globset",
  "harness-core",
@@ -196,7 +196,7 @@ dependencies = [
 
 [[package]]
 name = "budgetguard"
-version = "0.1.19"
+version = "0.1.20"
 dependencies = [
  "anyhow",
  "chrono",
@@ -305,7 +305,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.168"
+version = "0.7.170"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -328,7 +328,7 @@ dependencies = [
 
 [[package]]
 name = "context-governor"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "anyhow",
  "harness-core",
@@ -469,7 +469,7 @@ dependencies = [
 
 [[package]]
 name = "donegate"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "anyhow",
  "chrono",
@@ -663,7 +663,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.25"
+version = "0.2.27"
 dependencies = [
  "anyhow",
  "chrono",
@@ -706,7 +706,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "hypothesis"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "anyhow",
  "chrono",
@@ -858,7 +858,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "overwatch"
-version = "0.2.35"
+version = "0.2.36"
 dependencies = [
  "anyhow",
  "clap",
@@ -938,7 +938,7 @@ dependencies = [
 
 [[package]]
 name = "propguard"
-version = "0.1.44"
+version = "0.1.45"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1090,7 +1090,7 @@ dependencies = [
 
 [[package]]
 name = "reviewgate"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1353,7 +1353,7 @@ dependencies = [
 
 [[package]]
 name = "tdd"
-version = "0.1.33"
+version = "0.1.34"
 dependencies = [
  "anyhow",
  "chrono",

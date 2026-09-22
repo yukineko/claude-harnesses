@@ -1705,9 +1705,23 @@ def check_enabled(plugins):
             continue
         state = "disabled (set to false)" if key in enabled else "absent from enabledPlugins"
         if is_gate:
+            # State the OBSERVATION (a settings value), not a behaviour this
+            # check never looks at. The previous wording ended "none of its
+            # hooks fire, so the gate silently guards nothing" — a claim about
+            # runtime, inferred from configuration alone, and measured FALSE on
+            # 2026-09-18 (backlog 2ae5503f): `blastguard@yukineko` was `false`
+            # while blastguard's PreToolUse hook denied five commands in one
+            # session. Severity is unchanged — a GATE crate that is not enabled
+            # is still a hard failure, because "we could not determine whether
+            # this gate is guarding anything" resolves to the restricted side
+            # (CLAUDE.md §3). Only the reasoning is corrected.
             gate_failures.append(
                 f"{crate}: GATE crate is not enabled — {state} in {SETTINGS_PATH}. "
-                "It is installed but inert: none of its hooks fire, so the gate silently guards nothing."
+                "Claude Code is configured not to load it, so it is expected to be "
+                "inert; whether its hooks actually fire was NOT observed by this "
+                "check, which reads enabledPlugins and never a hook process. Treat "
+                "the gate as unverified rather than as known-dead: on 2026-09-18 a "
+                "GATE crate with this exact setting was measured still firing."
             )
         else:
             warnings.append(f"{crate}: not enabled ({state})")

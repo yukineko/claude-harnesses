@@ -50,7 +50,9 @@ fn run(envs: &[(&str, &str)]) -> Run {
         .env_remove("CLAUDE_CODE_ENTRYPOINT")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        // Repeat-ledger test isolation — see the note in integration.rs.
+        .env_remove("CLAUDE_CODE_SESSION_ID");
     for (k, v) in envs {
         cmd.env(k, v);
     }

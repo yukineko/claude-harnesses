@@ -455,7 +455,8 @@ pub fn emit_and_exit(result: Option<GateResult>) -> ! {
                     std::process::exit(0);
                 }
                 Verdict::Block(reason, _check_kind) => {
-                    println!("{}", json!({ "decision": "block", "reason": reason }));
+                    // Repeat ledger: operator ruling 2026-09-18.
+                    harness_core::repeat::emit_stop_block("budgetguard", &reason);
                     std::process::exit(0);
                 }
             }

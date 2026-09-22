@@ -26627,9 +26627,66 @@ retain_claim は「Known(Stalled) のときだけ reap」なので、Undetermine
 なお本サイクル (run-20260913-223733-78880) では別の穴も見つけて 06eb8aa3
 として起票した: run が gate PASS しても file claim は自動解放されない。
 5e62b0eb が「reap が効かない」なのに対し、06eb8aa3 は「そもそも解放が
-呼ばれない」。2 つ揃うと、握ったまま死んだ run の claim は永久に残る。"""
+呼ばれない」。2 つ揃うと、握ったまま死んだ run の claim は永久に残る。
+=== 追加実測 2026-09-23、測定点 main 6725d0d3 — 同じ機構を TASK claim で再現した ===
+
+これまでの実測はすべて file claim だった。今回、同じ不死が **task claim** でも
+起きることを本セッション自身の claim で観測した。file claim 固有の穴ではなく
+retain_claim の progress ゲートそのものの帰結である。
+
+観測: 本セッション (2444be10-e07a-4c9a-a785-01f58d3995fa) が 2026-09-16 に取った
+4 件の task claim (a4050204859f1c7a / 3cd5754819c50a69 / 12e54ff974ef54b4 /
+caa9442e63a3e007) は、**152.5 時間 (6.4 日) 後も condukt state is-claimed が
+rc=0 (claimed) を返し続けた**。一方 backlog 側は CLAIM_STALE_SECS により
+4 件とも pending へ requeue 済みだった。
+
+機構 (crates/condukt/src/claim.rs:589-598、逐語):
+  「A claim whose heartbeat has lapsed past the TTL is kept UNLESS its run's
+   progress is confirmed Known(Stalled) - Progressing or Undetermined preserve
+   it (fail-closed: "cannot determine" never reaps).」
+claim を取った run (run-20260917-030727-89796) は stall watchdog で落ち、その
+worktree が消えたため progress が恒久的に Undetermined になる。したがって
+reap 条件 (Known(Stalled)) が永久に成立せず claim は不死になる。本チケットが
+主張している機構と同一であり、**file claim だけでなく task claim でも起きる**
+ことをこの測定が示している。
+
+=== 帰結 (これが実害) — 2 つの期限の不一致が deadlock を作る ===
+
+backlog は CLAIM_STALE_SECS (約 1 時間) で item を pending へ戻すのに、
+condukt 側の is-claimed は永久に claimed を返す。この 2 つの期限が一致していない
+ことが致命的で、次の閉ループになる:
+
+  1. backlog next --claim が item を後続セッションへ渡す (requeue 済みなので渡る)。
+  2. そのセッションは flow の claim-skip ゲートに従い condukt state is-claimed を引く。
+  3. rc=0 (claimed) が返るので「他セッションが作業中」と解釈して item をキューへ戻す。
+  4. 1 に戻る。
+
+つまり **どのセッションも受け取った直後に必ず手放す**。この 4 件は、誰かが手で
+claim を解放するまで、**どのセッションにも着手できない状態** に陥っていた。
+実際に本セッションが condukt state release-task を 4 回打って手で解放し、
+ようやくサイクル7 を再開できた。
+
+重要なのは「遅くなる」ではなく「**誰にも実行不能になる**」という点である。
+fail-closed が正しく効いた結果ではなく、判定不能が構造的に永久であるために
+制限側が解除不能になっている (本チケット冒頭の指摘と同じ構図)。
+
+したがって修正案には task claim 側の経路も含めること。retain_claim は file claim
+と task claim の両方を通るので、run の死を Known(Stalled) へ解決できるようにすれば
+両方が同時に直る。ただし live な run を誤って reap しないこと (両方向のテスト) は
+引き続き最優先の不変条件。
+
+併せて観測した他 run の不死 file claim (他セッションの所有物なので手を出さず、
+計測値としてのみ記録する。解放していない):
+
+  run-20260814-025356-78549   files=10   最新 heartbeat から 40.2 日
+  p0trio-1                    files=1    最新 heartbeat から 41.9 日
+
+前回測定 (2026-09-16) の 33.8 日 / 35.5 日から単調に増えており、reap が
+一度も発火していないことがここでも確認できる。なお 2026-09-16 に観測された
+run-20260913-223004-15261 の 10 件は今回のスナップショットには現れず、
+registry の合計は 11 件 (+ task_claims セクション) である。"""
 created_at = 1789306874
-updated_at = 1790114679
+updated_at = 1790120207
 weight = 0.0
 issue_number = 639
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/639"

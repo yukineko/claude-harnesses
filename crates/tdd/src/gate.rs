@@ -45,8 +45,17 @@ pub struct Fields {
 }
 
 impl Fields {
+    /// Evidence is an added line that MATCHED a test marker — nothing else.
+    ///
+    /// `test_file_changed` used to be an independent disjunct here, which made
+    /// a path the gate's proof: appending one blank line to any file under
+    /// `tests/` satisfied it and silenced the gate for the whole turn (backlog
+    /// 1454ba50, measured). A path is not a test, and a deleted or renamed test
+    /// file is the opposite of one. The field is still recorded — it is a true
+    /// fact about the changeset and the message uses it — but it is no longer
+    /// evidence on its own.
     pub fn has_test_evidence(&self) -> bool {
-        self.test_marker_added || self.test_file_changed
+        self.test_marker_added
     }
 }
 
@@ -171,21 +180,30 @@ pub fn classify(cfg: &Config, changed: &ChangeScan, added: &AddedScan) -> Report
     let mut impl_files: Vec<String> = Vec::new();
     for AddedLine { file, text } in added {
         let marker_hit = markers.is_match(text);
-        if is_test_file(file) {
-            test_marker_added = true; // any added line in a test file is evidence
+        // One arm, one rule: the added line must MATCH A MARKER, and it must
+        // land somewhere a test can live (an impl file — an inline `mod tests`
+        // — or a test file).
+        //
+        // Both halves were learned by measurement. The marker requirement came
+        // first (backlog 1ff0fcc9): the comment on the impl arm always said
+        // "inline test written in an impl file", but the guard that would make
+        // it true was missing, so a marker hit in ANY changed path counted —
+        // the default set matches the bare substring `test(`, which reaches
+        // CHANGELOG.md, a Cargo.toml comment, a JSON fixture or a shell script.
+        // The test-file arm was the same hole with the halves swapped: it took
+        // ANY added line, marker or not, so a comment, an import or a single
+        // blank line under `tests/` was accepted as proof a test was written
+        // (backlog 1454ba50 — probed against a real checkout, not reasoned).
+        // "A regex matched somewhere" and "a path under tests/ was touched" are
+        // both "cannot tell whether a test was added", and resolving that to
+        // clean is the fail-open this repo exists to catch. Narrowing can only
+        // BLOCK more, never less.
+        if marker_hit && (is_impl_file(file) || is_test_file(file)) {
+            test_marker_added = true;
             continue;
         }
-        // The comment on this arm always said "inline test written in an impl
-        // file"; the guard that would make it true was missing, so a marker hit
-        // in ANY changed path counted (backlog 1ff0fcc9). The default marker set
-        // matches the bare substring `test(`, which reaches CHANGELOG.md, a
-        // Cargo.toml comment, a JSON fixture or a shell script — one such added
-        // line silenced the gate for the whole turn. "A regex matched somewhere"
-        // is not "a test was added"; collapsing the two resolved an undetermined
-        // changeset to clean. Narrowing it can only BLOCK more, never less.
-        if marker_hit && is_impl_file(file) {
-            test_marker_added = true; // inline test written in an impl file
-            continue;
+        if is_test_file(file) {
+            continue; // a test path, but this line is not a test
         }
         if is_impl_file(file) && !text.trim().is_empty() {
             added_impl_lines += 1;
@@ -332,20 +350,36 @@ pub fn human_report(v: &Report, cfg: &Config) -> String {
             s.push_str(&format!("added impl lines: {}\n", f.added_impl_lines));
             s.push_str(&format!(
                 "test evidence:    {}\n",
+                // Report the observation, not the inference it invites
+                // (CLAUDE.md 4). What was observed is that a marker regex
+                // matched an added line in a file where a test can live; that
+                // is not proof the line IS a test, so the wording does not say
+                // so. The old wording named "test marker in an impl file" on a
+                // branch that the test-file arm could also reach with zero
+                // marker matches — an overclaim the gate's own message made
+                // (backlog 860a78b3).
                 if f.has_test_evidence() {
-                    if f.test_file_changed && f.test_marker_added {
-                        "yes (test file changed + test marker in an impl file)"
-                    } else if f.test_file_changed {
-                        "yes (test file changed)"
-                    } else {
-                        // What was observed is a marker regex matching an added
-                        // line inside an implementation file — not proof that the
-                        // line is a test. Report the observation, not the
-                        // inference it invites (CLAUDE.md 4).
-                        "yes (test marker in an impl file)"
-                    }
+                    "yes (an added line matched a test marker)"
+                } else if f.test_file_changed {
+                    // Worth saying out loud: a test PATH was touched and still
+                    // did not count, which is exactly the case a reader would
+                    // otherwise assume was a bug.
+                    "none — a test file changed, but no added line matched a test marker"
                 } else {
                     "none in the uncommitted changes"
+                }
+            ));
+            // Still reported, because it is a true fact about the changeset and
+            // a reader looking for "but I did touch tests/" needs to see that
+            // the gate saw it too. Kept on its own line, and labelled as not
+            // being evidence, so it can never again be read as half of a claim
+            // about a marker (backlog 1454ba50, 860a78b3).
+            s.push_str(&format!(
+                "test file:        {}\n",
+                if f.test_file_changed {
+                    "changed (a path, not a test — not evidence on its own)"
+                } else {
+                    "not changed"
                 }
             ));
             if v.blocks(cfg) {
@@ -500,13 +534,26 @@ mod tests {
         let changed = files(&["src/lib.rs", "tests/add_test.rs"]);
         let added = lines(vec![
             added("src/lib.rs", "pub fn add(a:i32,b:i32)->i32{a+b}"),
-            added("tests/add_test.rs", "assert_eq!(add(1,2),3);"),
+            // Was `assert_eq!(add(1,2),3);` — a bare assert that matches NONE
+            // of the default markers. The property this test names is "a real
+            // test was added in a separate test file"; the old fixture only
+            // represented "a line was added under tests/", which is the very
+            // thing 1454ba50 removed from the evidence rule. The fixture is
+            // what drifted from the name, so the fixture is what moved.
+            added(
+                "tests/add_test.rs",
+                "#[test] fn test_add(){assert_eq!(add(1,2),3);}",
+            ),
         ]);
         let v = classify(&cfg, &changed, &added);
         let Determination::Known(Some(f)) = &v.scan else {
             panic!("expected a known, scoped scan");
         };
         assert!(f.test_file_changed);
+        assert!(
+            f.test_marker_added,
+            "a real #[test] added in a separate test file was not recorded as a marker"
+        );
         assert!(!v.blocks(&cfg));
     }
 
@@ -1218,10 +1265,22 @@ mod tests {
              recorded a marker regex hit in an impl file\n--- report ---\n{out}"
         );
         assert!(
-            out.contains("test marker in an impl file"),
+            out.contains("an added line matched a test marker"),
             "human_report must describe what was actually observed (a marker \
-             regex hit in an impl file), not what it invites the reader to \
+             regex hit on an added line), not what it invites the reader to \
              infer\n--- report ---\n{out}"
+        );
+        // Re-anchored from the old literal "test marker in an impl file".
+        // That phrase was itself the overclaim 860a78b3 filed: it named a FILE
+        // CLASS the code does not record, on a branch the test-file arm could
+        // also reach with zero marker matches. The named property (do not claim
+        // an inline test was observed) is asserted above and is unchanged; only
+        // the string standing in for "what was observed" moved, and it moved
+        // toward the observation.
+        assert!(
+            !out.contains("in an impl file"),
+            "human_report named a file class classify() never recorded\n\
+             --- report ---\n{out}"
         );
     }
 
@@ -1243,11 +1302,379 @@ mod tests {
              (test file + marker) branch, but classify only recorded a marker \
              regex hit\n--- report ---\n{out}"
         );
+        // Re-anchored alongside its sibling above: both observations are still
+        // required to appear, but each is now stated as the thing classify()
+        // actually recorded, on its own line, so neither can be read as
+        // qualifying the other.
         assert!(
-            out.contains("test file changed") && out.contains("test marker in an impl file"),
-            "human_report must name both observations it actually made \
-             (a changed test file AND a marker hit in an impl file)\n\
+            out.contains("an added line matched a test marker"),
+            "human_report dropped the marker observation\n--- report ---\n{out}"
+        );
+        assert!(
+            out.contains("test file:        changed"),
+            "human_report dropped the changed-test-file observation\n\
              --- report ---\n{out}"
+        );
+        assert!(
+            !out.contains("in an impl file"),
+            "human_report named a file class classify() never recorded\n\
+             --- report ---\n{out}"
+        );
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // What counts as TEST EVIDENCE: at least one ADDED line that MATCHES a
+    // configured test-marker regex, in a file that is either an impl-glob or a
+    // test-glob file. A path, on its own, is not evidence; a blank line is not
+    // evidence; an import or a comment is not evidence.
+    //
+    // Today the gate answers a different question. `Fields::has_test_evidence`
+    // (gate.rs:48-50) is `self.test_marker_added || self.test_file_changed`;
+    // `test_file_changed` (gate.rs:167) is set by a test-glob path merely
+    // APPEARING in the changed set; and the first arm of the `classify` loop
+    // (gate.rs:174-177) sets `test_marker_added` for ANY added line in a test
+    // file — no marker check, no blank-line guard. Measured consequence: one
+    // blank line added to any `tests/` path, or a test path in the changed set
+    // contributing no added lines at all, silences the gate for the whole turn.
+    // That is "I cannot tell whether a test was added" resolving to "clean" —
+    // the fail-open CLAUDE.md §3 names.
+    //
+    // The controls in this block are anti-vacuity: (a), (b) and (f) must pass
+    // BEFORE and AFTER the change, so a "fix" that simply never finds evidence
+    // cannot satisfy this suite.
+    // ══════════════════════════════════════════════════════════════════════
+
+    /// One implementation line, so every case below has something to block on
+    /// (`min_added_impl_lines` defaults to 1).
+    const EVIDENCE_IMPL_LINE: &str = "pub fn add(a:i32,b:i32)->i32{a+b}";
+
+    /// A line that DOES match the default marker set (`\bfn\s+test_`).
+    const EVIDENCE_MARKER_LINE: &str = "    fn test_add() { assert_eq!(add(1,2),3); }";
+
+    /// Lines that match NO default marker — an import and a comment: exactly
+    /// the kind of edit that lands in a test file without adding a test.
+    const EVIDENCE_NON_MARKER_LINES: &[&str] = &["use crate::add;", "    // fixture for the adder"];
+
+    /// ANTI-VACUITY for (c): the "non-marker" fixture text above must really
+    /// contain no marker. Placed in an IMPL file, where the marker arm is
+    /// already guarded today, so this control passes before and after the
+    /// change. If someone edits `EVIDENCE_NON_MARKER_LINES` into something that
+    /// happens to match a marker, (c) would pass for the wrong reason and this
+    /// control is what catches it.
+    #[test]
+    fn control_non_marker_fixture_text_really_matches_no_marker() {
+        let cfg = Config::default();
+        let changed = files(&["src/lib.rs"]);
+        let mut v = vec![added("src/lib.rs", EVIDENCE_IMPL_LINE)];
+        for l in EVIDENCE_NON_MARKER_LINES {
+            v.push(added("src/lib.rs", l));
+        }
+        let report = classify(&cfg, &changed, &lines(v));
+        let Determination::Known(Some(f)) = &report.scan else {
+            panic!("expected a known, scoped scan");
+        };
+        assert!(
+            !f.test_marker_added,
+            "control failed: the supposedly marker-free fixture text now matches a \
+             test marker, so the non-marker cases below are vacuous"
+        );
+    }
+
+    /// (a) CONTROL — a marker-matching added line in an IMPL file IS evidence,
+    /// and the stop is allowed. True today; must stay true. Without this, a
+    /// change that always answered "no evidence" would satisfy (c)/(d)/(e).
+    #[test]
+    fn control_marker_line_in_an_impl_file_is_evidence() {
+        let cfg = Config::default();
+        let changed = files(&["src/lib.rs"]);
+        let added_lines = lines(vec![
+            added("src/lib.rs", EVIDENCE_IMPL_LINE),
+            added("src/lib.rs", EVIDENCE_MARKER_LINE),
+        ]);
+        let v = classify(&cfg, &changed, &added_lines);
+        let Determination::Known(Some(f)) = &v.scan else {
+            panic!("expected a known, scoped scan");
+        };
+        assert!(
+            f.test_marker_added,
+            "control failed: a marker-matching added line in an impl-glob file must \
+             set the marker flag"
+        );
+        assert!(
+            f.has_test_evidence(),
+            "control failed: a marker-matching added line in an impl-glob file is \
+             test evidence"
+        );
+        assert!(
+            !v.blocks(&cfg),
+            "control failed: an inline test written in an impl file must still allow \
+             the stop — tightening evidence must not turn a real test into a block"
+        );
+    }
+
+    /// (b) CONTROL — a marker-matching added line in a TEST file IS evidence,
+    /// and the stop is allowed. True today (for the wrong reason: the
+    /// unconditional test-file arm), and it must stay true once the marker
+    /// check is added, which is what makes it a control rather than a
+    /// regression test.
+    ///
+    /// Deliberately asserts `has_test_evidence()` rather than naming which
+    /// private flag carries the evidence: the contract is "this is evidence",
+    /// not "this particular boolean is the one that records it".
+    #[test]
+    fn control_marker_line_in_a_test_file_is_evidence() {
+        let cfg = Config::default();
+        let changed = files(&["src/lib.rs", "tests/add_test.rs"]);
+        let added_lines = lines(vec![
+            added("src/lib.rs", EVIDENCE_IMPL_LINE),
+            added("tests/add_test.rs", EVIDENCE_MARKER_LINE),
+        ]);
+        let v = classify(&cfg, &changed, &added_lines);
+        let Determination::Known(Some(f)) = &v.scan else {
+            panic!("expected a known, scoped scan");
+        };
+        assert!(
+            f.has_test_evidence(),
+            "control failed: a marker-matching added line in a test-glob file is test \
+             evidence"
+        );
+        assert!(
+            !v.blocks(&cfg),
+            "control failed: a real test added in a test file must still allow the \
+             stop"
+        );
+    }
+
+    /// (c) A NON-marker added line in a test file is NOT evidence. An import or
+    /// a comment added to `tests/add_test.rs` is not a test; treating it as one
+    /// lets implementation land with nothing exercising it. EXPECTED RED: the
+    /// first arm of `classify`'s loop (gate.rs:174-177) sets
+    /// `test_marker_added` for ANY added line in a test file.
+    #[test]
+    fn non_marker_line_in_a_test_file_is_not_evidence() {
+        let cfg = Config::default();
+        let changed = files(&["src/lib.rs", "tests/add_test.rs"]);
+        let mut v = vec![added("src/lib.rs", EVIDENCE_IMPL_LINE)];
+        for l in EVIDENCE_NON_MARKER_LINES {
+            v.push(added("tests/add_test.rs", l));
+        }
+        let report = classify(&cfg, &changed, &lines(v));
+        let Determination::Known(Some(f)) = &report.scan else {
+            panic!("expected a known, scoped scan");
+        };
+        assert_eq!(f.added_impl_lines, 1);
+        assert!(
+            !f.test_marker_added,
+            "an added line in a test-glob file that matches NO test marker (an \
+             import, a comment) was recorded as a test marker: 'cannot tell whether \
+             a test was added' resolved to 'clean'"
+        );
+        assert!(
+            !f.has_test_evidence(),
+            "an import and a comment added to a test file counted as test evidence; \
+             evidence is a marker-matching added line, not any edit to a test path"
+        );
+        assert!(
+            report.blocks(&cfg),
+            "an implementation line landed with no marker-matching added line \
+             anywhere, yet the gate allowed the stop"
+        );
+    }
+
+    /// (d) A BLANK added line in a test file is NOT evidence. This is the
+    /// cheapest possible silencer: one newline appended to any `tests/` path.
+    /// EXPECTED RED, same unguarded arm as (c) — and note the blank-line guard
+    /// that `blank_added_lines_dont_count` already pins for impl files
+    /// (gate.rs:190) has no counterpart on the test-file arm.
+    #[test]
+    fn blank_line_in_a_test_file_is_not_evidence() {
+        let cfg = Config::default();
+        let changed = files(&["src/lib.rs", "tests/add_test.rs"]);
+        let added_lines = lines(vec![
+            added("src/lib.rs", EVIDENCE_IMPL_LINE),
+            added("tests/add_test.rs", ""),
+            added("tests/add_test.rs", "   "),
+        ]);
+        let v = classify(&cfg, &changed, &added_lines);
+        let Determination::Known(Some(f)) = &v.scan else {
+            panic!("expected a known, scoped scan");
+        };
+        assert_eq!(f.added_impl_lines, 1);
+        assert!(
+            !f.test_marker_added,
+            "a blank added line in a test-glob file was recorded as a test marker: \
+             whitespace is not a test"
+        );
+        assert!(
+            !f.has_test_evidence(),
+            "appending a blank line to a test file counted as test evidence, so one \
+             newline silences the gate for the whole turn"
+        );
+        assert!(
+            v.blocks(&cfg),
+            "an implementation line landed and the only thing added to the test file \
+             was whitespace, yet the gate allowed the stop"
+        );
+    }
+
+    /// (e) A test-glob path merely PRESENT in the changed set, contributing
+    /// ZERO added lines, is NOT evidence. This is the `test_file_changed`
+    /// half of `has_test_evidence` (gate.rs:49, set at gate.rs:167 from the
+    /// changed-file list alone): a deletion, a rename, a mode change, or a
+    /// `git add` of an unchanged path puts a test path in the changed set
+    /// without a single added line. EXPECTED RED.
+    #[test]
+    fn a_test_glob_path_with_zero_added_lines_is_not_evidence() {
+        let cfg = Config::default();
+        // `tests/add_test.rs` is in the changed set but contributes no added
+        // lines at all — every added line belongs to the impl file.
+        let changed = files(&["src/lib.rs", "tests/add_test.rs"]);
+        let added_lines = lines(vec![added("src/lib.rs", EVIDENCE_IMPL_LINE)]);
+        let v = classify(&cfg, &changed, &added_lines);
+        let Determination::Known(Some(f)) = &v.scan else {
+            panic!("expected a known, scoped scan");
+        };
+        assert_eq!(f.added_impl_lines, 1);
+        assert!(
+            !f.has_test_evidence(),
+            "a test-glob path appearing in the changed set with ZERO added lines \
+             counted as test evidence; a path is not a test, and a deleted or \
+             renamed test file is the opposite of one"
+        );
+        assert!(
+            v.blocks(&cfg),
+            "an implementation line landed and no test line was added anywhere, yet \
+             the gate allowed the stop because a test path appeared in the changed \
+             set"
+        );
+    }
+
+    /// (f) CONTROL — a marker-matching added line in a file that is NEITHER
+    /// impl-glob NOR test-glob is not evidence. `marker_in_a_non_impl_non_test_file_is_not_evidence`
+    /// and `marker_in_a_manifest_is_not_evidence` already pin this for
+    /// CHANGELOG.md and Cargo.toml; this adds the third surface named in the
+    /// contract, a JSON fixture, and must keep passing after the change.
+    #[test]
+    fn control_marker_line_in_a_json_fixture_is_not_evidence() {
+        let cfg = Config::default();
+        let changed = files(&["src/lib.rs", "fixtures/cases.json"]);
+        let added_lines = lines(vec![
+            added("src/lib.rs", EVIDENCE_IMPL_LINE),
+            added("fixtures/cases.json", "  {\"name\": \"describe(add)\"},"),
+        ]);
+        let v = classify(&cfg, &changed, &added_lines);
+        let Determination::Known(Some(f)) = &v.scan else {
+            panic!("expected a known, scoped scan");
+        };
+        assert_eq!(f.added_impl_lines, 1);
+        assert!(
+            !f.test_marker_added,
+            "a marker hit outside both impl_globs and test_path_globs counted as an \
+             inline test: 'cannot tell whether a test was added' resolved to 'clean'"
+        );
+        assert!(
+            !f.has_test_evidence(),
+            "a JSON fixture line counted as test evidence"
+        );
+        assert!(
+            v.blocks(&cfg),
+            "impl lines landed with no test anywhere, yet the gate allowed the stop"
+        );
+    }
+
+    // ── the same three cases, at the VERDICT layer ────────────────────────
+    //
+    // The three tests above assert the field-level property first, so Rust
+    // stops there and the user-visible half — "does the gate actually block?" —
+    // is never observed failing. These companions assert only the verdict, so
+    // the consequence that matters to a user (a stop allowed with untested
+    // implementation in the tree) is itself observed RED rather than inferred
+    // from the flag.
+
+    /// (c) at the verdict layer. EXPECTED RED.
+    #[test]
+    fn non_marker_line_in_a_test_file_still_blocks_the_stop() {
+        let cfg = Config::default();
+        let changed = files(&["src/lib.rs", "tests/add_test.rs"]);
+        let mut v = vec![added("src/lib.rs", EVIDENCE_IMPL_LINE)];
+        for l in EVIDENCE_NON_MARKER_LINES {
+            v.push(added("tests/add_test.rs", l));
+        }
+        let report = classify(&cfg, &changed, &lines(v));
+        assert!(
+            matches!(report.verdict(&cfg), Verdict::Violation(_)),
+            "an import and a comment added to a test file allowed the stop: the gate \
+             read 'a test path was edited' as 'a test was added'"
+        );
+        assert!(
+            report.blocks(&cfg),
+            "implementation landed with no marker-matching added line anywhere and \
+             the stop was allowed"
+        );
+    }
+
+    /// (d) at the verdict layer. EXPECTED RED.
+    #[test]
+    fn blank_line_in_a_test_file_still_blocks_the_stop() {
+        let cfg = Config::default();
+        let changed = files(&["src/lib.rs", "tests/add_test.rs"]);
+        let added_lines = lines(vec![
+            added("src/lib.rs", EVIDENCE_IMPL_LINE),
+            added("tests/add_test.rs", ""),
+            added("tests/add_test.rs", "   "),
+        ]);
+        let v = classify(&cfg, &changed, &added_lines);
+        assert!(
+            matches!(v.verdict(&cfg), Verdict::Violation(_)),
+            "one blank line appended to a test file allowed the stop — the cheapest \
+             possible way to silence the gate for a whole turn"
+        );
+        assert!(
+            v.blocks(&cfg),
+            "implementation landed and the only thing added to the test file was \
+             whitespace, and the stop was allowed"
+        );
+    }
+
+    /// (e) at the verdict layer. EXPECTED RED.
+    #[test]
+    fn a_test_glob_path_with_zero_added_lines_still_blocks_the_stop() {
+        let cfg = Config::default();
+        let changed = files(&["src/lib.rs", "tests/add_test.rs"]);
+        let added_lines = lines(vec![added("src/lib.rs", EVIDENCE_IMPL_LINE)]);
+        let v = classify(&cfg, &changed, &added_lines);
+        assert!(
+            matches!(v.verdict(&cfg), Verdict::Violation(_)),
+            "a test-glob path in the changed set contributing ZERO added lines \
+             allowed the stop; a path is not a test"
+        );
+        assert!(
+            v.blocks(&cfg),
+            "implementation landed, no test line was added anywhere, and the stop was \
+             allowed because a test path appeared in the changed set"
+        );
+    }
+
+    /// CONTROL for the three verdict companions above: the same verdict layer
+    /// must still ALLOW when a real marker-matching line is added to the test
+    /// file. Without this, a change that made the gate block unconditionally
+    /// would satisfy them.
+    #[test]
+    fn control_marker_line_in_a_test_file_still_allows_the_stop() {
+        let cfg = Config::default();
+        let changed = files(&["src/lib.rs", "tests/add_test.rs"]);
+        let added_lines = lines(vec![
+            added("src/lib.rs", EVIDENCE_IMPL_LINE),
+            added("tests/add_test.rs", EVIDENCE_MARKER_LINE),
+        ]);
+        let v = classify(&cfg, &changed, &added_lines);
+        assert!(
+            matches!(v.verdict(&cfg), Verdict::Clean(_)),
+            "control failed: a real test added in a test file must still mint Clean"
+        );
+        assert!(
+            !v.blocks(&cfg),
+            "control failed: a real test added in a test file must still allow the stop"
         );
     }
 }

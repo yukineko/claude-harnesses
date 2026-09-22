@@ -1,4 +1,6 @@
-> **REVIEW-NEEDED** — この仕様は実装から逆算生成した draft。人間レビューまで正典として扱わない。
+> **批准済み** — 2026-09-23、ユーザー裁定によりこのファイルを tdd の正典とする。
+> 実装から逆算生成した draft だったが、レビューを経て正典に昇格した。
+> 実装を変えたら同じコミットでこのファイルも直すこと (CLAUDE.md 4)。
 
 # tdd 仕様
 
@@ -50,9 +52,14 @@ RED だったか・RED→GREEN になったか）は `tdd` バイナリと Stop 
   `gate::evaluate`（`git::changed_files`＋`git::added_lines` →
   `classify`）で verdict を得る。`Verdict::blocks` が真（git スコープ有り・追加実装行 ≥
   `min_added_impl_lines.max(1)`・テスト証跡無し）なら attempt を bump し、`max_attempts` 超過で許可、
-  それ以外は `decision:block` を出す。テスト証跡は「追加された test-marker 行（`#[test]`/`def test_`/
-  `func Test…`/`it(...)` 等の `test_markers` 正規表現）」または「`test_path_globs` に一致する test file の
-  変更」（`Verdict::has_test_evidence`）。
+  それ以外は `decision:block` を出す。テスト証跡は **`test_markers` 正規表現に一致した追加行が 1 本以上あること**
+  （`#[test]`/`def test_`/`func Test…`/`it(...)` 等）だけである（`Fields::has_test_evidence`）。
+  その行は `impl_globs` か `test_path_globs` のどちらかに一致するファイルに追加されていなければならない
+  （前者は inline な `mod tests`、後者は独立した test file を指す）。
+  **`test_path_globs` に一致するファイルが変更されたこと自体は証跡にならない** — パスはテストではなく、
+  削除・リネームされた test file はテストの逆である。実測 (backlog 1454ba50、2026-09-23): 旧契約では
+  `tests/` 配下の任意のファイルに空行を 1 本足すだけでゲートがそのターン中ずっと黙った。
+  変更された test file は `human_report` に事実として表示されるが、証跡としては数えない。
 - **`red --task <id> [--cmd]`** — `runner::run_cmd` でテスト実行（`resolve_cmd` は `--cmd`＞config
   `test_cmd`）→ `judge_red`（失敗を要求）→ `<proof_dir>/<id>.red.json`（task/phase/cmd/passed/exit_code/
   ts/output_tail）を書く。既に通れば exit 1。
@@ -97,7 +104,7 @@ RED だったか・RED→GREEN になったか）は `tdd` バイナリと Stop 
 
 ## テスト作成者と実装者の分離 (strict separation)
 
-> **REVIEW-NEEDED**: コードから逆算 (2026-07-09 セッション)。人間レビュー前は正典としない。
+> **批准済み** (2026-09-23)。元はコードから逆算した記述 (2026-07-09 セッション)。
 
 ### 概要
 

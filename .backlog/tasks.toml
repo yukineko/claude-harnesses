@@ -1,5 +1,3 @@
-
-
 [[task]]
 id = "0ba79281"
 title = 'CLAUDE.md: Windows で成立しない cargo 手順 (. "$HOME/.cargo/env") を直す'
@@ -22971,7 +22969,8 @@ title = "tdd FAIL-OPEN: a test-marker regex hit in ANY file (README, toml, fixtu
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
-status = "pending"
+touched_files = []
+status = "claimed"
 notes = '''
 Found and independently re-verified 2026-09-11 at HEAD 2abf8dea by reading crates/tdd/src/gate.rs classify().
 
@@ -23045,9 +23044,37 @@ mutation 3 体 kill 確認。tdd スイート green。version 0.1.31 lockstep。
 - condukt 上の状態は verified ではなく done (F->P オラクルが exit 1 で拒否)。
 - 起票文末尾が指摘していた第 1 arm (test-glob ファイルへの追加行はすべて evidence)
   はスコープ外として手を付けていない。別途起票する。
-'''
+
+
+--- 2026-09-22 人間裁定 (session 79d79a35)。人間判断待ち 4 件のうち 3 件が決着 ---
+
+specforge が refuse した理由「書き込む正典が無い」を解消する裁定をユーザーから得た。
+逐語の選択肢と回答:
+
+Q1 tdd の正典をどこに置くか -> 「docs/specs/tdd.md を批准する」
+   REVIEW-NEEDED マーカーを外し、既存の docs/specs/tdd.md を正典として扱う。
+   specforge は以後そこへ書ける。marker evidence を説明している既存記述
+   (53-55 行) は、契約変更に合わせて同一コミットで直す必要がある (CLAUDE.md 4)。
+
+Q2 impl_globs にも test_path_globs にも属さないパスでの marker ヒットの扱い
+   -> 「evidence ではない (absent) — landed 済みの挙動を追認」
+   f667897d が実装した挙動がそのまま正典になる。block (Undetermined) へは上げない。
+   したがって Q3 (三値の trigger をどこに置くか) はこの回答から従属的に決まる:
+   非 impl な marker ヒットは新しい Undetermined trigger を作らない。
+   glob/regex のビルド失敗・空集合という既存の判定不能経路は従来どおり。
+
+Q4 第 1 arm (test-glob ファイルへの任意の追加行が evidence) は意図的か
+   -> 「意図的でない — 第2arm と同じ絞り込みを適用してよい」
+   marker 一致行のみを evidence にする。ゲートは狭まる (より多く block する) 方向なので
+   安全側。実装は別チケット 1454ba50 で行う。
+
+残る未了 (この裁定では閉じない):
+- CLAUDE.md 2(a) 未充足。f667897d の実装者がその検証テストも書いた。
+  利害のない agent による独立検証を本セッションで実施中。結果は判明次第ここへ追記する。
+- docs/specs/tdd.md の批准そのもの (REVIEW-NEEDED 除去 + 53-55 行の契約記述更新) は未実施。
+- 1454ba50 (第 1 arm の絞り込み) は未実装。'''
 created_at = 1789064330
-updated_at = 1789273940
+updated_at = 1790114530
 weight = 0.0
 issue_number = 509
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/509"
@@ -27017,6 +27044,7 @@ tags = [
     "worktree-hygiene",
     "p1",
 ]
+touched_files = []
 status = "pending"
 notes = """
 実測 2026-09-11、測定点 27839b28 (rollout 実行中のセッション 3365f18c)。
@@ -27070,6 +27098,7 @@ title = "blastguard: project 内の plain untracked ファイルの rm が allow
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
+touched_files = []
 status = "pending"
 notes = ""
 created_at = 1789349260
@@ -27084,6 +27113,7 @@ title = "blastguard: 配置不能ターゲットの Deny を「他 project / hom
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
+touched_files = []
 status = "pending"
 notes = ""
 created_at = 1789349275
@@ -27098,6 +27128,7 @@ title = "blastguard: 明示指示時の guard skip 機構を設計する — age
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
+touched_files = []
 status = "pending"
 notes = ""
 created_at = 1789349292
@@ -27112,6 +27143,7 @@ title = "blastguard: redirect target の解決を出現ごとに行う — 同�
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
+touched_files = []
 status = "pending"
 notes = ""
 created_at = 1789350167
@@ -27126,6 +27158,7 @@ title = "blastguard: append redirect (>>) が変数形で silently permissive �
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
+touched_files = []
 status = "pending"
 notes = ""
 created_at = 1789350173
@@ -27140,6 +27173,7 @@ title = "blastguard: deny to ask 統一は shape deny を直接反転できな�
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
+touched_files = []
 status = "pending"
 notes = """
 【2026-09-14 追記2】要件文 v2 (人間の裁定3件を反映) を specforge draft に再投入し、
@@ -27366,6 +27400,7 @@ title = "blastguard fail-open: 相対パス redirect (echo x > ../../outside.log
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
+touched_files = []
 status = "pending"
 notes = ""
 created_at = 1789351245
@@ -27380,6 +27415,7 @@ title = "taskprog が crates/blastguard/src/.claude/progress.md を自動生成 
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p2"]
+touched_files = []
 status = "done"
 notes = """
 【2026-09-14】condukt run run-20260914-121207-24519 で実装、commit 65bd3bad
@@ -27436,6 +27472,7 @@ title = "taskprog: Config::load も cwd 直下の taskprog.toml しか見ず pro
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = []
+touched_files = []
 status = "pending"
 notes = "a6258cc7 (resolve_progress_path の project-root アンカー化) の作業中に発見。crates/taskprog/src/config.rs の Config::load(cwd) は PathBuf::from(cwd).join('taskprog.toml') を見るだけなので、cwd がサブディレクトリのセッション/サブエージェントは project root に置かれた taskprog.toml を読み落とし、~/.taskprog/config.toml か Default に落ちる。resolve_progress_path は 0.1.8 で resolve_project_root() 経由の三値解決になったが、Config::load は非アンカーのまま残っている。結果として root に progress_file を明示設定していても、サブディレクトリ cwd の hook はその設定を見ずに既定パスを使う。修正は Config::load も resolve_project_root() を使い root の taskprog.toml を探すこと。判定不能時の扱い (home config へ落とすか Default か) を決める必要がある。"
 created_at = 1789356056
@@ -27450,6 +27487,7 @@ title = 'taskprog: empty-cwd の doc と実挙動が矛盾 ("." 置換で Undete
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p2"]
+touched_files = []
 status = "pending"
 notes = '''
 taskprog: 新設 doc が production の空 cwd 置換と矛盾し、empty-cwd の Undetermined 腕が
@@ -27488,6 +27526,7 @@ title = "taskprog: install.rs settings_path() が HOME 不明時に cwd へフ�
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p3"]
+touched_files = []
 status = "pending"
 notes = """
 taskprog: install.rs settings_path() が HOME 解決失敗時に cwd 脇へ .claude/settings.json を
@@ -27518,6 +27557,7 @@ title = "taskprog 0.1.8 の rollout 未実行 + 迷子 progress.md 残置で che
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
+touched_files = []
 status = "pending"
 notes = """
 taskprog 0.1.8 の rollout が未実行で、欠陥が稼働ハーネスで再現し続けている。
@@ -27548,3 +27588,81 @@ updated_at = 1789357190
 weight = 0.0
 issue_number = 655
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/655"
+
+[[task]]
+id = "1454ba50"
+title = "tdd classify(): test-glob ファイルへの追加行は marker が無くても test evidence になる (第1arm。1ff0fcc9 がスコープ外として残した残件)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+起票 2026-09-22、測定点 414be4f1。1ff0fcc9 の本文末尾と 2026-09-13 outcome の
+両方が「第 1 arm はスコープ外として手を付けていない。別途起票する」と明示していたが、
+起票されていなかったので切り出す。
+
+対象 (crates/tdd/src/gate.rs classify() のループ第 1 arm、1ff0fcc9 起票時の逐語):
+
+    for AddedLine { file, text } in added {
+        let marker_hit = markers.is_match(text);
+        if is_test_file(file) {
+            test_marker_added = true; // any added line in a test file is evidence
+            continue;
+        }
+
+第 2 arm (marker arm) は f667897d で is_impl_file(file) ガードが入り、非 impl ファイルの
+marker ヒットは evidence にならなくなった。しかし第 1 arm は marker_hit を一切見ない。
+test-glob に一致するパスへの追加行であれば、空行に隣接するコメント行でも、
+import 文でも、test マーカーを含まない任意の行でも test_marker_added を立てる。
+
+なぜ問題になりうるか: test_marker_added は Fields::has_test_evidence を駆動し、
+それが Report::verdict を Clean にして Stop hook を ALLOW させる。つまり
+「テストファイルに何か 1 行足した」が「テストを書いた」として扱われる。
+1ff0fcc9 が第 2 arm について指摘したのと同じ構造 (判定不能/弱い証拠が clean へ潰れる)
+が第 1 arm に残っている。
+
+判定不能として両方の読みを残す:
+(a) 実在の欠陥 — marker を含まない追加行は「テストを書いた」証拠として弱すぎる。
+    第 2 arm と同じ絞り込み (marker 一致行のみ evidence) を適用すべき。
+(b) 意図的な仕様 — test ファイルへの変更は人間の意思表示として十分であり、
+    marker を要求すると正当なテスト編集 (fixture 追加、ヘルパ抽出、テーブル駆動の
+    ケース追加など marker 行を伴わない編集) が evidence として数えられなくなる。
+    1ff0fcc9 の起票文自身が「That may be intentional but it is unstated」と書いている。
+
+どちらかを見分ける方法: これは外部契約の変更なので、コードだけでは決まらない。
+1ff0fcc9 に転記済みの「人間判断待ち 4 件」のうち第 4 問がまさにこの arm を対象にしており
+(意図的か? 意図的なら理由を 1 文で、そうでなければ第 1 要件と同じ絞り込みを適用してよいか)、
+その回答が discriminator になる。したがって本チケットは 1ff0fcc9 の第 4 問の回答待ちであり、
+回答前に実装してはならない。
+
+測定状況: 本チケット起票時点で、第 1 arm の到達可能性と既存テストによる固定の有無は
+利害のない agent が測定中。測定結果は判明し次第ここへ追記する。
+
+参照: 1ff0fcc9 (親チケット、p0)、f667897d (第 2 arm の修正)。
+
+--- 2026-09-22 人間裁定 (session 79d79a35) ---
+
+起票時に「両方の読み」として残した (a)/(b) のうち、ユーザーが (a) を選んだ。
+逐語: 「意図的でない — 第2arm と同じ絞り込みを適用してよい」。
+
+したがって本チケットは判定不能ではなくなり、実装タスクになる:
+marker 一致行のみを evidence とし、marker を含まない追加行は test-glob ファイルであっても
+test_marker_added を立てない。ゲートが狭まる (より多く block する) 方向なので安全側。
+
+併せて決まったこと (親チケット 1ff0fcc9 の Q1/Q2 より):
+- tdd の正典は docs/specs/tdd.md (REVIEW-NEEDED を外して批准する)。
+  この挙動変更は外部契約の変更なので、正典の記述も同一コミットで直すこと (CLAUDE.md 4)。
+- 非 impl・非 test パスの marker ヒットは absent (evidence ではない) で確定。
+
+実装前の必須手順 (CLAUDE.md 2(a)/(b)): 検証テストは実装者ではない別 agent が書き、
+先に RED を観測すること。anti-vacuity の対照 (marker 一致行はちゃんと evidence になる、
+という正例) を同時に置くこと。第 2 arm の修正 f667897d が用意した 3 テスト
+(marker_in_a_non_impl_non_test_file_is_not_evidence /
+marker_in_a_manifest_is_not_evidence / marker_in_an_impl_file_is_evidence_control)
+が近い形の先例になる。"""
+created_at = 1790084488
+updated_at = 1790114530
+weight = 0.0
+issue_number = 674
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/674"

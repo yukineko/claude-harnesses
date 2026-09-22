@@ -44,9 +44,11 @@
 - **型不一致は以降のチェックを打ち切る** — `validate_report` はフィールドが必須欠落なら violation を積んで
   continue（optional 欠落なら `waived` を積んで continue）、型不一致なら violation を積んだ後 enum/再帰
   チェックをスキップする（mistyped 値に更なる検査は無意味）。
-- **メトリクスは fail-soft**（`metrics.rs`）— `record_reject` の書き込み IO エラーは stderr へ warning を
-  出すのみでゲートの終了コードを変えない。`counts` はファイル欠落で空 map、malformed 行は黙ってスキップ
-  （`parse_counts`）。パース失敗も違反も両方 reject として計上する（`cmd_check` は前者に `record_reject(name, 1)`、
+- **メトリクスの書き込みは fail-soft、読み出しは fail-closed**（`metrics.rs`）— `record_reject` の書き込み IO
+  エラーは stderr へ warning を出すのみでゲートの終了コードを変えない。`counts` はファイル欠落で `Known(空 map)`、
+  読めない store は `Undetermined`。`parse_counts` は読めない行・malformed 行を `skipped` として数え
+  （空行は無視）、1 行でも skip があれば `counts` は過少カウントを `Known` として出さず `Undetermined` に倒す
+  （`schemaguard metrics` は exit 2・`unknown`。backlog 27926f7e）。パース失敗も違反も両方 reject として計上する（`cmd_check` は前者に `record_reject(name, 1)`、
   後者に `record_reject(name, error_count)`）。
 - **append-only JSONL** — reject は `~/.schemaguard/rejects.jsonl`（`harness_core::config::base_dir("schemaguard")`
   ＝ `~/.schemaguard/`）へ 1 行 1 reject で追記される。`ts`（unix 秒, `SystemTime`）は optional field で、

@@ -9143,10 +9143,10 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "claimed"
+status = "done"
 notes = 'Measured 2026-08-02 on branch session-1faeac72 (base main 83aaeda4). Isolating the deletion of 2 assertions from crates/blastguard/src/detect.rs, with NO other change, makes the gate report verdict=weakened kind=assertion-removed detail="assertion macros 498 -> 496". Re-adding unrelated assertions ELSEWHERE IN THE SAME FILE returns it to verdict=clean while the deletion is still present. So a commit that removes a genuine assertion and adds any assertions to the same file passes with no acknowledgement required. Verified the gate is otherwise live on this diff (an injected #[ignore] is caught as ignore-added). This is DOCUMENTED behaviour, not a hidden bug: check-test-weakening.py:55 says "Scope is NET, PER FILE, base vs HEAD -- not per commit". Filed because the documented scope and the stated purpose diverge: the gate exists so a weakening cannot pass unacknowledged, and this class passes unacknowledged. Not fixing unilaterally -- per-hunk or per-test-function counting would raise the false-positive rate on refactors, and that tradeoff is the gate owner s call. Completion condition: either an assertion deleted from a test function is flagged regardless of same-file additions, or check-test-weakening.py states in prose that this class is deliberately out of scope and why.'
 created_at = 1785638160
-updated_at = 1790183465
+updated_at = 1790184986
 weight = 0.0
 issue_number = 118
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/118"
@@ -9163,10 +9163,10 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "claimed"
+status = "done"
 notes = 'Found by the blastguard per-gate verdict audit 2026-08-02 (sibling of the nested-Ask defect fixed in 0.2.39). crates/blastguard/src/classify.rs:216 reads: if detect::detect("Bash", Some(&json!({ "command": text }))).is_deny() { High, irreversible }. Only a DENY raises the risk. An ASK -- which is blastguard REFUSING to guess whether the command is destructive, per model.rs:9 -- falls through the history-rewrite check to the default arm, Risk::Low + reversible:true. That is the same collapse the 0.2.39 fix removed one layer down, but here the consumer turns it into an autonomy decision: condukt policy/gate check treats Low+reversible as the AutoExec case, so a command blastguard explicitly could not analyse is eligible to run without human approval. CLAUDE.md 3 says cannot-determine resolves restrictive; the tri-state exists and is discarded at the point of consumption (memory: erasure-lives-at-callsite). NOT fixed in the audit commit on purpose: the obvious change (Ask => at least Medium, or High+irreversible) alters gating for every condukt task and is a policy call, not a detector bug -- and over-raising would push routine work into escalate. Needs a decision on which band an Ask maps to, then an F-to-P with the condukt gate tests. Completion condition: classify() distinguishes Ask from Allow, and a test asserts a detect-Ask command does not reach Risk::Low+reversible.'
 created_at = 1785639095
-updated_at = 1790183466
+updated_at = 1790184984
 weight = 0.0
 issue_number = 119
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/119"
@@ -9196,10 +9196,10 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "claimed"
+status = "done"
 notes = "run_diff は if let Some(text) = run_git(..) で失敗を捨てる。git diff と git diff --cached が両方失敗し untracked も無ければ diff は空になり evaluate が allow(empty-diff) を返す。docs/audit-propguard-verdict-paths.md の F-2。修正には DiffText に三値を持たせ decide_scan_failed 相当の新アームが要る。証拠: gate.rs の scan_failed_reason 自身がこの穴を日本語で説明している。"
 created_at = 1785798115
-updated_at = 1790183467
+updated_at = 1790184987
 weight = 0.0
 issue_number = 121
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/121"
@@ -30105,3 +30105,79 @@ updated_at = 1790184460
 weight = 0.0
 issue_number = 746
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/746"
+
+[[task]]
+id = "ec2ec82a"
+title = "propguard git.rs の 15 テストが git 不在時に黙って return し ok を報告する (git_available の unwrap_or(false))"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "test-vacuity",
+    "propguard",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "観測 2026-09-24、測定点 b47f08e3。crates/propguard/src/git.rs:532 の test helper git_available() は Command::new(git).arg(--version).output().map(status.success).unwrap_or(false) で OSError を false へ潰す。その戻り値を 15 箇所 (grep -c で 15) の #[test] が if !git_available() then eprintln skipping and return として消費するため、git が起動できない環境では 15 本のテストが何も検証せずに ok を報告する。CLAUDE.md 2 の「検証していないテストの assert が仕様として固定されうる」と同じクラスで、さらに unwrap_or の既定値が permissive 側 (3 節違反)。到達可能性は推測ではない: この repo のメモリに xcode license blocks toolchain (cc/git/ld が exit 69 で失敗しうる) が記録されており、その状態では 122 passed のうち 15 本が空虚になる。見分け方: PATH から git を外して cargo test -p propguard を走らせ、テスト数が変わらず全 ok になることを確認する。完了条件: git が起動できないことを skip ではなくテスト失敗に写すか、少なくとも起動失敗と「git は在るが --version が非0」を区別する。対照として通常環境で 15 本が実際に本体を走らせていることを固定する。"
+created_at = 1790185002
+updated_at = 1790185002
+weight = 0.0
+issue_number = 747
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/747"
+
+[[task]]
+id = "127733e0"
+title = "condukt が workspace clippy lints (unwrap_used/expect_used = deny) に opt-in しておらず、clippy-lints ゲートが condukt を一度も検査しない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "clippy",
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "観測 2026-09-24、測定点 b47f08e3。pre-commit の clippy-lints ゲートが crates/condukt を触った commit で逐語に「not opted in ([lints] workspace = true absent): crates/condukt」と出力し、blastguard だけを検査して「clippy-lints: clean」と報告した。crates/blastguard/Cargo.toml は [lints] workspace = true を持ち、そのコメントが「判定を持つ crate では panic は判定不能そのものなので、production 側に unwrap / expect を書けなくする」と理由を述べている。condukt は schedule の force-gate と gate_exec の AutoExec/Escalate という判定を持つ crate であり、同じ理由がそのまま当てはまるのに除外されている。これは fail-open そのものではないが、検出側が condukt に対してだけ不在であるという意味で 6 節の「検出側を厚くする」に反する。見分け方: cargo clippy -p condukt --all-targets -- -D clippy::unwrap_used -D clippy::expect_used を走らせ、現状の違反件数を数える。完了条件: (1) 違反件数を実測して記録する、(2) 件数が払える規模なら [lints] workspace = true を入れて green にする、(3) 払えない規模なら ratchet 方式の baseline を置いて増加を止める。どれを採るかは件数を測ってから決める。"
+created_at = 1790185014
+updated_at = 1790185014
+weight = 0.0
+issue_number = 748
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/748"
+
+[[task]]
+id = "84d9267d"
+title = "condukt diffrisk_record の every_invocation_is_journaled_even_when_nothing_is_recorded が共有 state dir 依存で非決定に落ちる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flake",
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "実測 2026-09-24、測定点 b47f08e3 + 本セッションの blastguard 修正。同一コードで cargo test -p condukt --bin condukt を連続 2 回走らせた結果: 1 回目 test result: FAILED. 846 passed; 1 failed、2 回目 test result: ok. 847 passed; 0 failed。単体指定 (cargo test -p condukt --bin condukt every_invocation_is_journaled) では常に pass。落ちる assert は crates/condukt/src/diffrisk_record.rs:540 の assert_eq!(outcomes.len(), 2, one record per invocation) で、直前に crate::state::project_state_dir(&cfg, cwd.path()) から load_diffrisk_outcomes している = 実在の共有 state dir を読んでいる。memory の backlog 0c22c77b (Config::load が実 ~/.condukt/state を共有するため load-sensitive) と同一クラスの可能性が高いが、同一かどうかは未確認。害は二重: (1) 緑が観測として信用できない、(2) 落ちたときに「自分の変更のせい」と誤読され、実際そう疑って 2 回追加測定するコストを払った。完了条件: このテストが読む state dir をテスト専用の temp dir に固定し、連続 10 回の実行で 10/10 pass することを実測で示す。対照として、本物の記録欠落を仕込んだときに落ちることも同時に固定する (skip や削除で黙らせない)。"
+created_at = 1790185028
+updated_at = 1790185028
+weight = 0.0
+issue_number = 749
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/749"
+
+[[task]]
+id = "1302a69c"
+title = "タスク散文をシェルコマンドとして detect に食わせる設計を再検討する (実測: 1040 件中 Deny 85 / Ask 101)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "実測 2026-09-24、測定点 b47f08e3。blastguard::classify::classify は detect(Bash, {command: text}) を呼ぶが、その text は condukt では「シェルコマンド」ではなくタスクの散文 (title + done_criteria + touched_files) である。この repo の .backlog/tasks.toml の実タスク記述 1040 件を同じ形で detect へ投入した結果: TOTAL=1040 DENY=85 ASK=101 ALLOW=854。つまり実タスク記述の 8.2% が「破壊的コマンド」と判定され、9.7% が「解析不能」と判定されている。Ask の実例はいずれも日本語散文で、引用符やパスや rm 等の語が本文中に現れたもの (例: ctxrot/governor: truncate large tool outputs instead of only nudging ... )。memory の classify-deploy-needle-force-gate (「やってはいけないこと」を説明した散文が High/irreversible に force-gate される) と同じ根である。本セッションで Ask を Medium+irreversible へ写したので (backlog ed941047) Ask 分は escalate へ回るようになったが、それは「散文をコマンドとして読む」という前提の上での制限側解決であって前提自体の是非は未検討である。両方の読み: (a) 散文に破壊的コマンドが書かれていれば実際にそれが実行されうるので検査は正しい、(b) 散文は実行されないのでこれは category error であり、force-gate と escalate のノイズ源である。見分け方: force-gate / escalate された実タスクを追跡し、そのうち実際に破壊的コマンドが実行されたものの割合を数える。完了条件: どちらの読みが正しいかを実測で決め、(b) なら classify にコマンド由来かタスク散文由来かの入力種別を渡して検査を切り分ける。"
+created_at = 1790185046
+updated_at = 1790185046
+weight = 0.0
+issue_number = 750
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/750"

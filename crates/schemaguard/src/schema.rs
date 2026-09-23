@@ -41,7 +41,6 @@ pub enum Ty {
     #[allow(dead_code)]
     Object,
     /// Accept any JSON value without a type check.
-    #[allow(dead_code)]
     Any,
 }
 
@@ -625,7 +624,7 @@ mod tests {
         // no else arm, so a non-string value skipped the constraint entirely and
         // validated clean — "could not check" silently became "passed".
         //
-        // Not reachable through the five registered schemas today (every field
+        // Not reachable through the registered schemas today (every field
         // carrying `enum_values` is `Ty::String`, so the type check rejects first),
         // but `validate`/`Field` are public API, so an external caller pairing
         // `enum_values` with `Ty::Any`/`Ty::Number` hits it.

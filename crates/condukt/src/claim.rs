@@ -512,6 +512,13 @@ fn claim_progress(cfg: &Config, cwd: &Path, c: &Claim, now: i64) -> Determinatio
     )
 }
 
+/// The value [`run_worktree_head_signal`] folds in for a recorded worktree that
+/// `stat()` reports as absent. It is deliberately NOT a valid git object id
+/// (those are lowercase hex), so it can never alias a real HEAD, and it is a
+/// constant, so an absent worktree contributes the SAME bytes at every sample —
+/// an absent worktree must read as frozen, not as churn.
+const ABSENT_WORKTREE_MARKER: &[u8] = b"<absent-worktree>";
+
 /// RUN-scoped durable head signal: the git HEAD of every worktree that `run`'s
 /// own tasks record, folded into one deterministic value.
 ///
@@ -529,10 +536,27 @@ fn claim_progress(cfg: &Config, cwd: &Path, c: &Claim, now: i64) -> Determinatio
 ///   It deliberately does NOT fall back to the repo-wide HEAD — that fallback is
 ///   the defect described on [`claim_progress`], and it resolves "I cannot see
 ///   this run" to a signal that another session controls.
-/// * **Any recorded worktree is unreadable** (removed, or never a git repo) ⇒
-///   `Undetermined` for the whole signal, not "that one contributed nothing". A
-///   failed read must never be summed into a value that can then read as frozen
-///   and fire a reap.
+/// * **A recorded worktree EXISTS but git cannot be asked about it** (malformed
+///   or absent `.git`, permissions, transient IO) ⇒ `Undetermined` for the whole
+///   signal, not "that one contributed nothing". A failed read must never be
+///   summed into a value that can then read as frozen and fire a reap.
+///
+/// An **ABSENT** worktree is the one case that is deliberately NOT
+/// `Undetermined`. `stat()` answering `NotFound` is a SUCCESSFUL observation:
+/// git can never advance a HEAD in a directory that does not exist, so that
+/// worktree will never contribute progress again. It folds in as the explicit,
+/// stable [`ABSENT_WORKTREE_MARKER`] alongside its task id — the same shape as a
+/// real head entry, so the fingerprint stays comparable across samples. It is a
+/// marker rather than an omission on purpose: omitting absent worktrees would
+/// silently degrade a mixed run to its surviving worktrees, and degrade an
+/// all-absent run to a constant empty fold that reads as frozen for the wrong
+/// reason. Conflating absence with unreadability is what made a deleted run's
+/// claims immortal (backlog 5e62b0eb: 10 file claims held 40.4 days against an
+/// 1800s TTL).
+///
+/// The two cases are NOT distinguishable from `git_head_signal`'s error — `git
+/// rev-parse HEAD` exits 128 for an absent directory AND for a malformed `.git`
+/// alike — so existence is checked as its own observation, before git is asked.
 fn run_worktree_head_signal(run: &crate::state::RunState) -> Determination<Vec<u8>> {
     let mut worktrees: Vec<(&str, &str)> = run
         .tasks
@@ -549,10 +573,28 @@ fn run_worktree_head_signal(run: &crate::state::RunState) -> Determination<Vec<u
     }
     let mut heads: Vec<(&str, Vec<u8>)> = Vec::with_capacity(worktrees.len());
     for (task_id, wt) in worktrees {
-        match progress::git_head_signal(Path::new(wt)) {
+        let path = Path::new(wt);
+        match std::fs::metadata(path) {
+            // Determinately ABSENT: a successful observation, folded in as an
+            // explicit stable marker (never omitted — see the doc comment).
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                heads.push((task_id, ABSENT_WORKTREE_MARKER.to_vec()));
+                continue;
+            }
+            // Present but un-stat-able (permissions, transient IO): we could not
+            // even establish existence, so this is a failed read, not absence.
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "run worktree {wt} for task {task_id} could not be stat'd: {e}"
+                ));
+            }
+            Ok(_) => {}
+        }
+        match progress::git_head_signal(path) {
             Determination::Known(sha) => heads.push((task_id, sha)),
-            // Fail-closed: one unreadable worktree HEAD makes the run-scoped
-            // signal unreadable, never a partial "rest of them are frozen".
+            // Fail-closed: the directory is THERE but git refused, so one
+            // unreadable worktree HEAD makes the run-scoped signal unreadable,
+            // never a partial "rest of them are frozen".
             Determination::Undetermined(why) => return Determination::Undetermined(why),
         }
     }
@@ -2453,20 +2495,41 @@ mod tests {
         std::fs::remove_dir_all(&tmp).ok();
     }
 
-    /// (A3) The protective-Undetermined pin: the run DOES record a worktree,
-    /// but the path is unreadable (removed / never a git repo). An unreadable
-    /// signal must resolve to `Undetermined`, never to `Known(Stalled)` — and
-    /// the consequence at the reap layer is that the claim survives.
+    /// (A3) The protective-Undetermined pin: the run DOES record a worktree, the
+    /// directory is THERE, but its git state cannot be read (malformed `.git`).
+    /// An unreadable signal must resolve to `Undetermined`, never to
+    /// `Known(Stalled)` — and the consequence at the reap layer is that the
+    /// claim survives.
+    ///
+    /// Re-anchored for 5e62b0eb. The named property (unreadable ⇒ Undetermined ⇒
+    /// claim kept) and both assertions are UNCHANGED; only the fixture moved.
+    /// It used to record a purely ABSENT path, using absence as a PROXY for
+    /// unreadability — a proxy that was exact only while the implementation
+    /// conflated the two. 5e62b0eb draws the line exactly between them (absence
+    /// is a successful observation; "there but unaskable" is not), so the proxy
+    /// has drifted off the property this test names, and the fixture now
+    /// expresses unreadability directly. The absent case is covered by
+    /// `claim_with_only_absent_run_worktrees_is_reaped_once_stale`, which
+    /// asserts the OPPOSITE outcome.
     #[test]
     fn claim_progress_with_unreadable_run_worktree_is_undetermined_and_keeps_the_claim() {
         let tmp = make_tmp_dir("claim-scope-unreadable-wt");
-        // Recorded in run state but never created: the worktree was removed
-        // out from under the run (or never materialised).
+        // Recorded in run state and really present on disk, but git refuses to
+        // answer about it: a genuine failure to observe, not an observation.
         let gone = tmp.join("worktree-that-is-not-a-repo");
+        make_unreadable_worktree(&gone);
         let (cfg, claim, home) = progress_fixture(&tmp, "runGoneWt", Some(&gone));
         assert!(
-            !gone.exists(),
-            "fixture precondition: the recorded worktree must not exist"
+            gone.is_dir(),
+            "fixture precondition: the recorded worktree must exist"
+        );
+        assert!(
+            matches!(
+                progress::git_head_signal(&gone),
+                Determination::Undetermined(_)
+            ),
+            "fixture precondition: git must genuinely refuse on the recorded \
+             worktree, or this test guards nothing"
         );
         let _h = pin_home(&home);
         let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
@@ -2678,6 +2741,272 @@ mod tests {
             kept,
             "a holder whose run-scoped worktree set changed is demonstrably \
              alive; its claim must never be force-stolen"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    // ── absence is an OBSERVATION, not a failure to observe (5e62b0eb) ──────
+    //
+    // `run_worktree_head_signal` folds each recorded worktree's git HEAD, and
+    // today it collapses TWO different facts into one `Undetermined`:
+    //
+    //   * the directory is GONE — `stat()` returned ENOENT, which is a
+    //     SUCCESSFUL observation. git can never advance a HEAD in a directory
+    //     that does not exist, so a run whose worktrees are all absent will
+    //     never progress again; and
+    //   * the directory is THERE but git could not be asked (malformed/absent
+    //     `.git`, permissions, transient IO) — a genuine failure to observe.
+    //
+    // Only the second is "cannot determine" (CLAUDE.md §3). Conflating them
+    // makes a run whose worktrees have been deleted read `Undetermined`
+    // forever, so `retain_claim` keeps its claim forever — measured live, 10
+    // file claims held 40.4 days and 9 task claims held up to 57.5 days against
+    // an 1800s TTL.
+    //
+    // The three tests below pin the split, and they state the property at the
+    // REAP layer (did the claim actually leave the registry?) rather than only
+    // at the verdict enum, because reap authority is what the defect abuses.
+    // (C2) and (C3) are the SAFETY side and take precedence over (C1) in any
+    // tradeoff: a live run must never be wrongly reaped.
+
+    /// Build a directory that EXISTS but whose git state cannot be read.
+    ///
+    /// A plain empty directory is NOT enough: `git -C <dir> rev-parse HEAD`
+    /// walks UP, so a bare directory inside the fixture repo answers with the
+    /// ENCLOSING repo's HEAD (observed: exit 0, the outer sha). A `.git` that is
+    /// present but malformed makes git refuse — `fatal: invalid gitfile format`,
+    /// exit 128 — while `stat()` on the directory still succeeds. That is
+    /// exactly "there, but cannot be asked", as distinct from "not there".
+    fn make_unreadable_worktree(dir: &Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join(".git"), "this is not a gitfile\n").unwrap();
+    }
+
+    /// Hold `claim` under both a file key and a task key, run the REAL reap with
+    /// the REAL progress path (no `test_hook::with_forced` — forcing the verdict
+    /// would bypass the logic under test), and report whether each survived.
+    ///
+    /// Also asserts the claim is genuinely heartbeat-stale at `now`: without
+    /// that, `retain_claim` short-circuits to "keep" before ever consulting
+    /// progress, and a "the claim survived" assertion would pass vacuously.
+    fn survives_reap(cfg: &Config, cwd: &Path, claim: &Claim, now: i64) -> (bool, bool) {
+        let ttl = ttl_secs(cfg);
+        assert!(
+            is_stale(claim, now, ttl),
+            "fixture precondition: the claim must be heartbeat-stale at {now} \
+             (ttl {ttl}), or retain_claim never reaches the progress verdict and \
+             the test proves nothing"
+        );
+        let mut reg = Registry::default();
+        reg.files.insert("src/x.rs".to_string(), claim.clone());
+        reg.task_claims
+            .insert("task-hash".to_string(), claim.clone());
+        reap(&mut reg, now, ttl, &|c| claim_progress(cfg, cwd, c, now));
+        (
+            reg.files.contains_key("src/x.rs"),
+            reg.task_claims.contains_key("task-hash"),
+        )
+    }
+
+    /// (C1) REAP SIDE. Every worktree the run records is ABSENT. No git HEAD
+    /// anywhere can ever move for this run again, so with a lapsed heartbeat and
+    /// a full sampling window elapsed the verdict must converge to
+    /// `Known(Stalled)` and the claim must actually leave the registry.
+    ///
+    /// Two absent worktrees rather than one, so the absent marker has to be
+    /// well-defined PER worktree and stable across samples; a marker that
+    /// varied between samples would read as `Progressing` and keep the claim
+    /// immortal in a different way.
+    #[test]
+    fn claim_with_only_absent_run_worktrees_is_reaped_once_stale() {
+        let tmp = make_tmp_dir("claim-absent-reaped");
+        let gone_a = tmp.join("wt-gone-a");
+        let gone_b = tmp.join("wt-gone-b");
+        let (cfg, claim, home) = progress_fixture(&tmp, "runAllGone", Some(&gone_a));
+        save_run_worktrees(
+            &cfg,
+            &tmp,
+            "runAllGone",
+            &[("t-a", &gone_a), ("t-b", &gone_b)],
+        );
+        // Observed, not assumed: both recorded worktrees really are absent.
+        assert!(
+            !gone_a.exists() && !gone_b.exists(),
+            "fixture precondition: both recorded worktrees must be absent"
+        );
+        let _h = pin_home(&home);
+        let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
+        let t0 = 10_000i64;
+
+        let v1 = claim_progress(&cfg, &tmp, &claim, t0);
+        assert!(
+            matches!(v1, Determination::Undetermined(_)),
+            "first sample (no prior snapshot) must be Undetermined, got {v1:?}"
+        );
+
+        let repo_head = head_of(&tmp);
+        let now = t0 + window;
+        let v2 = claim_progress(&cfg, &tmp, &claim, now);
+        assert_eq!(
+            repo_head,
+            head_of(&tmp),
+            "fixture precondition: nothing may commit during this test"
+        );
+        assert_eq!(
+            v2,
+            Determination::Known(Liveness::Stalled),
+            "every worktree this run records is GONE; stat() returning ENOENT is \
+             a successful observation that git can never advance a HEAD there \
+             again, so this is a determinate freeze — not 'cannot determine' \
+             (got {v2:?})"
+        );
+
+        // The property, not the enum: the dead run's claim must be reclaimable.
+        let (file_kept, task_kept) = survives_reap(&cfg, &tmp, &claim, now);
+        assert!(
+            !file_kept && !task_kept,
+            "a heartbeat-stale claim whose run's worktrees are all absent must be \
+             REAPED (file kept={file_kept}, task kept={task_kept}); keeping it is \
+             how 10 file claims survived 40.4 days against an 1800s TTL"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// (C2) SAFETY SIDE — takes precedence over (C1). The run records one ABSENT
+    /// worktree and one that EXISTS and is being COMMITTED to. The live one is
+    /// proof the holder is alive, so the verdict must be `Known(Progressing)`
+    /// and the claim must survive.
+    ///
+    /// This is the test that forbids the cheap fix. Folding absence in by simply
+    /// OMITTING the absent worktree would leave only the live one — which here
+    /// happens to work — but it also means a run with one absent and one live
+    /// worktree silently degrades to the live one, and a run with ALL worktrees
+    /// absent folds to a constant empty value that looks frozen for the wrong
+    /// reason. The absent worktree must contribute an EXPLICIT absent marker so
+    /// the live HEAD next to it can still move the fingerprint.
+    #[test]
+    fn claim_with_one_absent_and_one_advancing_worktree_is_not_reaped() {
+        let tmp = make_tmp_dir("claim-absent-plus-live");
+        let gone = tmp.join("wt-gone");
+        let live = tmp.join("wt-live");
+        init_git_repo(&live);
+        let (cfg, claim, home) = progress_fixture(&tmp, "runMixed", Some(&live));
+        save_run_worktrees(
+            &cfg,
+            &tmp,
+            "runMixed",
+            &[("t-gone", &gone), ("t-live", &live)],
+        );
+        assert!(
+            !gone.exists(),
+            "fixture precondition: the first recorded worktree must be absent"
+        );
+        assert_eq!(
+            repo_root(&live),
+            live,
+            "fixture precondition: the live worktree must be its own git root, \
+             or its HEAD is not a signal this test controls"
+        );
+        let _h = pin_home(&home);
+        let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
+        let t0 = 10_000i64;
+
+        let v1 = claim_progress(&cfg, &tmp, &claim, t0);
+        assert!(
+            matches!(v1, Determination::Undetermined(_)),
+            "first sample (no prior snapshot) must be Undetermined, got {v1:?}"
+        );
+
+        // The holder does durable work in the worktree it still has. Nothing
+        // else moves: the shared project repo stays frozen, and the run's task
+        // `updated_at` values are pinned by `save_run_worktrees`.
+        let repo_before = head_of(&tmp);
+        git_advance_head(&live);
+        assert_eq!(
+            repo_before,
+            head_of(&tmp),
+            "fixture precondition: the shared project repo HEAD must stay frozen, \
+             so the live worktree's commit is the ONLY thing that can move the \
+             fingerprint"
+        );
+
+        let now = t0 + window;
+        let v2 = claim_progress(&cfg, &tmp, &claim, now);
+        assert_eq!(
+            v2,
+            Determination::Known(Liveness::Progressing),
+            "one recorded worktree is gone but another is being committed to; the \
+             holder is demonstrably alive and an absent sibling must never erase \
+             that evidence (got {v2:?})"
+        );
+
+        let (file_kept, task_kept) = survives_reap(&cfg, &tmp, &claim, now);
+        assert!(
+            file_kept && task_kept,
+            "a live holder's claim must NEVER be reaped (file kept={file_kept}, \
+             task kept={task_kept})"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// (C3) SAFETY SIDE — takes precedence over (C1). The run records a worktree
+    /// that EXISTS but whose git state cannot be read. That is a genuine failure
+    /// to observe, not an observation, so it must stay `Undetermined` and the
+    /// claim must survive.
+    ///
+    /// This is the half of the split that absence must NOT swallow: "not there"
+    /// is determinate, "there but unaskable" is not. Both facts are observed
+    /// in-test rather than assumed — the directory really exists, and
+    /// `git_head_signal` really refuses on it — because if the fixture silently
+    /// became an absent path (or a readable repo) this test would go on passing
+    /// while guarding nothing.
+    #[test]
+    fn claim_with_existing_but_unreadable_run_worktree_is_not_reaped() {
+        let tmp = make_tmp_dir("claim-unreadable-live");
+        let wt = tmp.join("wt-present-but-unaskable");
+        make_unreadable_worktree(&wt);
+        assert!(
+            wt.is_dir(),
+            "fixture precondition: the recorded worktree must EXIST, or this \
+             test degenerates into the absent case it exists to distinguish"
+        );
+        assert!(
+            matches!(
+                progress::git_head_signal(&wt),
+                Determination::Undetermined(_)
+            ),
+            "fixture precondition: git must genuinely refuse on this directory; \
+             a plain directory would answer with the enclosing repo's HEAD and \
+             this test would guard nothing"
+        );
+
+        let (cfg, claim, home) = progress_fixture(&tmp, "runUnaskable", Some(&wt));
+        save_run_worktrees(&cfg, &tmp, "runUnaskable", &[("t-a", &wt)]);
+        let _h = pin_home(&home);
+        let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
+        let t0 = 10_000i64;
+
+        let repo_head = head_of(&tmp);
+        let _ = claim_progress(&cfg, &tmp, &claim, t0);
+        let now = t0 + window;
+        let v2 = claim_progress(&cfg, &tmp, &claim, now);
+        assert_eq!(
+            repo_head,
+            head_of(&tmp),
+            "fixture precondition: nothing may commit during this test"
+        );
+        assert!(
+            matches!(v2, Determination::Undetermined(_)),
+            "the worktree is THERE but git cannot be asked about it; that is a \
+             failure to observe, and folding it in with absence would hand reap \
+             authority to a failed read (got {v2:?})"
+        );
+
+        let (file_kept, task_kept) = survives_reap(&cfg, &tmp, &claim, now);
+        assert!(
+            file_kept && task_kept,
+            "a claim whose run-scoped head signal could not be READ must be KEPT, \
+             never force-stolen (file kept={file_kept}, task kept={task_kept})"
         );
         std::fs::remove_dir_all(&tmp).ok();
     }

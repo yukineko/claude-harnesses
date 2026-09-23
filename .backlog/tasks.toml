@@ -26613,9 +26613,19 @@ notes = """
 
 見分ける方法: scripts/rollout-plugins.sh:469 は "$src/bin/$stem" の存在で deployed bin を protect / drop する分岐を持つ。この stray artifact を削除（または --stage-repo で更新）したうえで check-plugin-rollout.py を再実行し、(i) red が消えるなら (b)、(ii) 別の理由で red が残る / 他 plugin にも同種の red が出るなら (a)。
 
-注意: この stray artifact は 2026-09-13 の tdd 0.1.29 version dir 手動 seed（memory rollout-cannot-undark-running-session に記録）と時刻が近い。手 cp の副産物である可能性が高いが未確認。"""
+注意: この stray artifact は 2026-09-13 の tdd 0.1.29 version dir 手動 seed（memory rollout-cannot-undark-running-session に記録）と時刻が近い。手 cp の副産物である可能性が高いが未確認。
+
+【再測定 2026-09-23、測定点 5a2efb46】チェックが収束しないことを実測で確認した。
+`scripts/rollout-plugins.sh --plugin tdd --force` を実行しても
+  tdd: deployed tree is not a mirror of crates/tdd — 1 deployed file(s) differ from source: bin/tdd-darwin-arm64
+は消えなかった。内訳:
+  crates/tdd/bin/tdd-darwin-arm64 は git 管理外 (`git ls-files --error-unmatch` が did not match で失敗)。1852304 bytes、Sep 13 14:49。
+  deployed 0.1.34/bin/tdd-darwin-arm64 は 1868832 bytes、Sep 23 13:47。
+  deployed の .deployed-from.json は commit=5a2efb46 dirty=false harness_core=0.2.27 で正しい。
+
+したがって向きが逆である: deployed 側が新しく正しく、repo 側の未追跡ローカル 成果物が 10 日古い。チェックは『正しい配備』を『古いローカル残骸』と byte 比較して 配備の側を誤りと報告している。Rust のビルドは byte 再現しないので (memory: deploy-provenance-not-hash)、この比較は原理的に収束しない。"""
 created_at = 1789306755
-updated_at = 1789306755
+updated_at = 1790138918
 weight = 0.0
 issue_number = 636
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/636"
@@ -28972,3 +28982,96 @@ updated_at = 1790151373
 weight = 0.0
 issue_number = 698
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/698"
+
+[[task]]
+id = "6a707b72"
+title = "after filtered rollouts (--plugin condukt/schemaguard/tdd/overwatch) 12 plugins incl. GATE blastguard/propguard/donegate/reviewgate had registry-pointed version dirs with NO darwin-arm64 binary (dark); each filtered run reported rc=0"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "rollout",
+    "deploy-verify",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-09-23 ~13:38-13:42 JST, session 9d349393, main 94341ef2 (just pushed; integrated 36 origin commits that bumped many plugin versions). Ran scripts/rollout-plugins.sh --plugin X for condukt, schemaguard, tdd and --plugin overwatch --canary: all rc=0, each printing 'verify: skipped — this run was filtered'. check-plugin-rollout.py then reported 20 problems, incl. 'crates/blastguard declares a binary target, but no darwin-arm64 binary is deployed under ~/.claude/plugins/cache/yukineko/blastguard/0.2.65/bin' (dir mtime 13:38; registry installPath pointed at 0.2.65; bin held only the launcher). Same for autoflow budgetguard context-governor donegate hypothesis propguard reviewgate. A full 'scripts/rollout-plugins.sh --canary' repaired all but tdd (d69f4b23). Reading (a) defect: a filtered rollout repoints/creates version dirs for plugins OUTSIDE its filter without seeding their binaries, darkening gates, and its rc=0 + skipped verify hides it. Reading (b) something else (a concurrent session, or Claude Code's own plugin sync after the pulled version bumps) created the dirs, and the filtered run merely did not repair them. How to tell: in a sandbox HOME, bump two plugins' versions, run rollout --plugin <one>, and check whether the other's registry installPath / version dir changed."
+created_at = 1790138609
+updated_at = 1790138609
+weight = 0.0
+issue_number = 691
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/691"
+
+[[task]]
+id = "9eeffa69"
+title = "flow Step 3-4 'condukt circuit check --run flow-<session>' trips idle_unmeasured whenever no condukt run state exists under that id"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flow",
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-09-23 session 9d349393 after a successful cycle (5 items done): verdict trip, reason idle_unmeasured, idle_unknown_reason 'run state could not be loaded'. The flow skill passes the flow-<session> id, but condukt run state lives under the condukt run's own id (and this cycle's condukt fork never ran state init). Reading (a) defect: the skill passes an id that never has run state, so the breaker always trips after the first cycle and /flow stops regardless of remaining work (593 pending). Reading (b) intended: the fail-closed trip is meant to force the driver to pass a real run id. How to tell: read the flow SKILL.md 3-4 and condukt circuit check's run lookup; check whether any flow cycle ever got exit 0."
+created_at = 1790138658
+updated_at = 1790138658
+weight = 0.0
+issue_number = 692
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/692"
+
+[[task]]
+id = "3bfc18bf"
+title = "scripts/plugin_cache.py が crates/<n>/.claude-plugin/plugin.json を無防備に json.load し、並行セッションの書き込み中に読むと 'unreadable plugin.json' を 恒久的な欠陥として報告する (実測: 3 連続再実行で 0 件に消える)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-23、測定点 ce1d3235。rollout 前の check-plugin-rollout.py が
+  condukt: unreadable plugin.json (Expecting property name enclosed in double quotes: line 3 column 1 (char 23))
+  overwatch: unreadable plugin.json (Expecting property name enclosed in double quotes: line 4 column 1 (char 48))
+を出した。しかし両ファイルは python json.load で正常にパースでき (condukt 0.7.170 / overwatch 0.2.36)、直後に同じチェックを 3 連続で再実行すると unreadable の件数は 3 回とも 0 だった。両ファイルの mtime は観測時刻の数秒前で、別セッションが書き込み中だった。
+
+機構: scripts/plugin_cache.py:169 が `json.load(fh)` を直接呼び、ValueError を `problems.append(f'{d}: unreadable plugin.json ({exc})')` に 写している。atomic read でも retry でもないので、並行 writer の途中状態を 読むと構文エラーになる。
+
+なぜ問題か (2 つ):
+(a) scripts/rollout-plugins.sh:1101 のコメントが、この所見を 「real problems with real remedies」の側に分類している。つまり一過性の race が 恒久的な欠陥として報告される。
+(b) 同じ所見が version dir の prune を抑止する (`cached but no current version known from crates/ — cannot tell which of its dirs is live, so none are pruned`)。読めなかっただけで prune が止まる。
+
+判定不能を『欠陥あり』へ写しているので方向としては fail-closed 側であり、第3節には反しない。問題は『判定不能』と『実際に壊れている』が下流から 区別できないこと。両方の読み: (a) 実在の race (b) 意図的に保守的な設計。見分け方: 書き込み中でない静止状態で再現するかどうか。実測では再現しない。
+
+修正案: 読み取りを retry するか、tempfile+rename の atomic write を writer 側に 要求するか、少なくとも『一過性かもしれない』と区別可能に報告する。"""
+created_at = 1790138915
+updated_at = 1790138915
+weight = 0.0
+issue_number = 693
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/693"
+
+[[task]]
+id = "7182a24c"
+title = "scripts/rollout-plugins.sh が asset sync の cp 失敗を stderr に出しながら exit 0 を返す — GATE crate の bin が欠けても rollout は成功と報告される"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-23、測定点 94341ef2。フリート全体の rollout (--canary) のログ末尾:
+  cp: /Users/yuki/.claude/plugins/cache/yukineko/overwatch/0.2.36/bin/overwatch-darwin-arm64: No such file or directory
+にもかかわらずスクリプトの exit code は 0 だった。
+
+今回は実害なし: 並行セッションが rollout 中に overwatch を 0.2.36 -> 0.2.37 へ bump し、0.2.36 の dir が prune された後に cp が走ったため。registry は 0.2.37 を 指しており、0.2.37/bin/overwatch-darwin-arm64 は 2033952 bytes で存在し、`overwatch status` は rc=0 で動作する。GATE 5 本すべて bin 実在を確認済み。
+
+しかし潜在的な fail-open である: 同じ cp 失敗が *現行* version dir に対して 起きた場合、launcher には sibling version へのフォールバックが無いため その GATE は暗転する (hook が起動せず finding も出ない = red ではなく dark)。それでも rollout は exit 0 で『成功』と報告する。
+
+これは harness-core の既知クラス『subprocess の stdout だけ見て終了ステータスを 判定に使わない』(CLAUDE.md 第3節) と同型。
+
+done_criteria: asset sync / bin copy のいずれかが失敗したら rollout は非0で 終わり、どの plugin のどのファイルが落ちたかを名指しする。一過性の race (version dir が prune された等) は、成功と区別可能な形で 報告したうえで非0にするか、少なくとも警告として集計する。"""
+created_at = 1790138917
+updated_at = 1790138917
+weight = 0.0
+issue_number = 694
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/694"

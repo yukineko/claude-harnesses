@@ -21,11 +21,13 @@
 //!     `PROP <id>: PASS|FAIL` verdict per property; propguard counts the PASSes.
 //!
 //! Failure modes are split deliberately (mirroring the sibling gates):
-//!   * a *harness* error that is an observed ABSENCE of scope (no git repo,
-//!     unreadable config falling back to defaults) → exit 0, allow. An error
-//!     that leaves the answer UNDETERMINED does not allow — see the checker
-//!     and panic clauses below (CLAUDE.md §3).
-//!   * no done_criteria / nothing checkable → allow (never invent a finding).
+//!   * an observed ABSENCE of scope (no git repo, no config file) → exit 0,
+//!     allow. An error that leaves the answer UNDETERMINED does not allow: a
+//!     config or criteria file that exists but cannot be read/parsed blocks
+//!     (`config-unreadable` / `criteria-unreadable`), and see the checker and
+//!     panic clauses below (CLAUDE.md §3).
+//!   * no done_criteria configured / nothing checkable → allow (never invent a
+//!     finding).
 //!   * fewer than `threshold` properties satisfied → block (bounded, escapable).
 //!   * a *checker* that itself fails → block (bounded) then give up loudly, so a
 //!     broken checker can never become a bypass.
@@ -325,17 +327,20 @@ fn check_run(hook: Option<HookInput>) -> ! {
     }
 }
 
-/// Isolated-vs-systemic checker-outage handling. A `checker-error-giveup`
-/// `Allow` (the checker itself failed repeatedly and propguard gave up
-/// bounded by `max_attempts`) previously left ZERO fleet signal and always
-/// shipped unverified. This now records the give-up as a fleet-correlatable
-/// occurrence, asks overwatch whether the `checker-outage` signature has
-/// become *systemic* (recurring across distinct tasks/sessions — not just
-/// this one task retrying), and — only if so — rewrites the decision to a
-/// fail-closed `Block` via [`gate::escalate_giveup_on_systemic`] plus a
-/// durable HIGH-severity human-review-queue escalation. Any other decision
-/// (including every other `Allow` tag and every `Block`) passes through
-/// completely unchanged.
+/// Isolated-vs-systemic outage handling. An outage give-up `Allow` — one of
+/// [`gate::OUTAGE_GIVEUP_TAGS`]: `checker-error-giveup`,
+/// `git-scan-failed-giveup` or `diff-read-failed-giveup` (propguard could not
+/// check the change, retried bounded by `max_attempts`, and gave up) —
+/// previously left ZERO fleet signal and always shipped unverified; before
+/// CA-propguard-02 only `checker-error-giveup` was handled here. This records
+/// the give-up as a fleet-correlatable occurrence under its own outage
+/// signature, asks overwatch whether that signature has become *systemic*
+/// (recurring across distinct tasks/sessions — not just this one task
+/// retrying), and — only if so — rewrites the decision to a fail-closed
+/// `Block` via [`gate::escalate_giveup_on_systemic`] plus a durable
+/// HIGH-severity human-review-queue escalation. Any other decision (including
+/// `truncated-giveup`, every other `Allow` tag and every `Block`) passes
+/// through completely unchanged.
 ///
 /// **Recording is fail-soft; READING BACK is not.** Failing to *append* the
 /// occurrence, or to record the review finding, is best-effort and ignored (a
@@ -344,23 +349,17 @@ fn check_run(hook: Option<HookInput>) -> ! {
 /// build cannot decode — then whether this outage is fleet-wide is
 /// **undetermined**, and this returns a `Block` tagged
 /// `checker-outage-undetermined` rather than letting the give-up `Allow` ship.
-/// The previous `let Ok(events) = .. else { return false }` could never fire
-/// (the callee already swallowed every error into `Ok(vec![])`), so it read as
-/// error handling while being dead code; the real undetermined path resolved to
-/// `false` → `Allow{"checker-error-giveup"}` → unverified code shipped. See
-/// [`gate::escalate_giveup_on_outage_scan`].
+/// See [`gate::escalate_giveup_on_outage_scan`].
 fn handle_checker_outage(decision: Decision, root: &Path, session: &str) -> Decision {
-    if !matches!(
-        &decision,
-        Decision::Allow {
-            tag: "checker-error-giveup",
-            ..
-        }
-    ) {
+    let signature_id = match &decision {
+        Decision::Allow { tag, .. } => gate::outage_signature_id(tag),
+        Decision::Block { .. } => None,
+    };
+    let Some(signature_id) = signature_id else {
         return decision;
-    }
+    };
 
-    let systemic = record_and_check_systemic_outage(root, session);
+    let systemic = record_and_check_systemic_outage(root, session, signature_id);
     let decision = gate::escalate_giveup_on_outage_scan(decision, systemic);
 
     if matches!(
@@ -372,14 +371,16 @@ fn handle_checker_outage(decision: Decision, root: &Path, session: &str) -> Deci
     ) {
         let _ = overwatch::store::record_finding(
             root,
-            "propguard-checker-outage-systemic".to_string(),
+            format!("propguard-{signature_id}-systemic"),
             "propguard".to_string(),
             Some("high".to_string()),
-            "propguard's checker has failed repeatedly across multiple tasks/sessions \
-             (a fleet-wide outage, not an isolated flake) — propguard is now failing \
-             CLOSED (blocking stops) instead of shipping unverified code. Investigate \
-             checker_cmd health; see `propguard status`."
-                .to_string(),
+            format!(
+                "propguard has given up on the same outage ({signature_id}) repeatedly \
+                 across multiple tasks/sessions (a fleet-wide outage, not an isolated \
+                 flake) — propguard is now failing CLOSED (blocking stops) instead of \
+                 shipping unverified code. Investigate checker_cmd / git health; see \
+                 `propguard status`."
+            ),
             None,
             None,
         );
@@ -388,8 +389,9 @@ fn handle_checker_outage(decision: Decision, root: &Path, session: &str) -> Deci
     decision
 }
 
-/// Record this checker-outage occurrence to overwatch's violation stream
-/// under the synthetic property id `"checker-outage"` (give-ups previously
+/// Record this outage occurrence to overwatch's violation stream under the
+/// synthetic property id `signature_id` (`checker-outage`, `git-scan-outage`
+/// or `diff-read-outage`, see [`gate::outage_signature_id`]; give-ups previously
 /// recorded nothing, so the fleet had no signal at all), then query whether
 /// that signature has crossed overwatch's systemic-recurrence policy
 /// (occurrences >= threshold, spanning >1 distinct task or session — a
@@ -404,11 +406,12 @@ fn handle_checker_outage(decision: Decision, root: &Path, session: &str) -> Deci
 fn record_and_check_systemic_outage(
     root: &Path,
     session: &str,
+    signature_id: &str,
 ) -> harness_core::verdict::Determination<bool> {
     let ts = overwatch::store::now();
     let task_key = format!("propguard:{}", root.display());
     let raw = overwatch::violation::RawViolation {
-        property_id: Some("checker-outage"),
+        property_id: Some(signature_id),
         ..Default::default()
     };
     if let Some(event) = overwatch::violation::build_event(
@@ -430,17 +433,17 @@ fn record_and_check_systemic_outage(
         overwatch::store::ViolationScan::Absent => return Determination::Known(false),
         overwatch::store::ViolationScan::Events(events) => events,
         overwatch::store::ViolationScan::Undetermined => {
-            return Determination::undetermined(
+            return Determination::undetermined(format!(
                 "the overwatch violation ledger is unreadable or holds a line this build \
-                 cannot decode, so checker-outage recurrence could not be counted",
-            )
+                     cannot decode, so {signature_id} recurrence could not be counted"
+            ))
         }
     };
     let policy = overwatch::violation::RecurrencePolicy::default();
     Determination::Known(
         overwatch::violation::systemic_issues(&events, ts, policy)
             .iter()
-            .any(|r| r.signature == "propguard:checker-outage"),
+            .any(|r| r.signature == format!("propguard:{signature_id}")),
     )
 }
 
@@ -554,12 +557,23 @@ fn status() {
     println!("criteria_file:  {}", cfg.criteria_file);
     println!("state_dir:      {}", cfg.state_dir.display());
 
+    if let Some(why) = &cfg.load_error {
+        println!(
+            "config error:   {why} — built-in defaults shown above; every stop is BLOCKED \
+             (config-unreadable) until this is fixed"
+        );
+    }
+
     match derive::source_criteria(&cfg, &root) {
-        None => println!(
+        harness_core::verdict::Determination::Known(None) => println!(
             "done_criteria:  (none found — set PROPGUARD_CRITERIA, write {}, or config done_criteria; every stop is allowed)",
             cfg.criteria_file
         ),
-        Some(criteria) => {
+        harness_core::verdict::Determination::Undetermined(why) => println!(
+            "done_criteria:  UNREADABLE — {why}; every stop is BLOCKED (criteria-unreadable) until \
+             the file is readable or removed"
+        ),
+        harness_core::verdict::Determination::Known(Some(criteria)) => {
             let props = derive::derive_properties(&criteria, cfg.min_properties, cfg.max_properties);
             let threshold = cfg.threshold.min(props.len()).max(1);
             println!("done_criteria:  {}", criteria.trim());

@@ -46,7 +46,9 @@ propguard derive "冪等に再実行でき、失敗時は panic せずエラー�
    現タスクの done_criteria を書き出す
 3. `propguard.toml` の inline `done_criteria`
 
-いずれも見つからなければ **すべての停止を許可**（勝手に指摘を作らない）。
+いずれも設定されていなければ **すべての停止を許可**（勝手に指摘を作らない）。ただし
+`criteria_file` が存在するのに読めず inline `done_criteria` も空の場合は「未設定」ではなく
+判定不能として **ブロック**（`criteria-unreadable`）。
 
 ## 2 つのモード
 
@@ -68,7 +70,14 @@ subprocess モードでは PASS 数を直接比較。閾値は実際に導出さ
 `(diff, properties)` をハッシュ化。直前に検査を強制した停止と一致すれば許可（既に対応済み）。
 diff が *変化* すれば 1 ラウンド消費、`max_attempts`（既定 2）で上限。fail-closed だが有界：
 
-- git リポジトリでない / 検査対象なし / done_criteria なし → **許可**
+- git リポジトリでない / 検査対象なし / done_criteria が一切設定されていない → **許可**
+- 設定ファイル（`propguard.toml` / `~/.propguard/config.toml`）が存在するのに読めない・解析
+  できない → **ブロック**（`config-unreadable`、自動通過なし）。組み込み既定値で黙って代用しない
+- `criteria_file` が存在するのに読めず inline も空 → **ブロック**（`criteria-unreadable`、自動通過なし）
+- 障害系の give-up（`checker-error-giveup` / `git-scan-failed-giveup` / `diff-read-failed-giveup`）は
+  overwatch の violation ledger に記録し、タスク/セッションを跨いで再発したら **ブロック**
+  （`checker-outage-systemic`）、ledger が読めなければ **ブロック**（`checker-outage-undetermined`）。
+  `truncated-giveup` は障害ではないので対象外
 - チェッカーが crash / timeout / 解析不能出力 → **ブロック**（有界）後に警告して通過 —
   壊れたチェッカーはバイパスにならない
 - 大きすぎて切り詰められた diff（未検査の末尾）→ **ブロック**（有界）後に通過

@@ -16,12 +16,19 @@
 //! The single place the numeric block threshold is enforced is
 //! [`below_threshold`]: the stop is blocked iff `satisfied < threshold`.
 //!
-//! Fail-closed, but bounded and escapable. Environment errors that predate any
-//! check (no git repo, no done_criteria, nothing checkable) always allow — the
-//! gate never invents a finding. A checker that itself fails (crash / timeout /
-//! unparseable output) does NOT allow silently: it blocks up to `max_attempts`
-//! with a loud, escapable reason, then gives up loudly, so a broken checker can
-//! never become a bypass. A truncated diff (unchecked tail) is treated the same
+//! Fail-closed, but escapable. Genuine absence that predates any check (no git
+//! repo, no done_criteria source configured at all, nothing checkable) allows —
+//! the gate never invents a finding. But "configured and unreadable" is not
+//! absence: a config file that exists yet cannot be read/parsed
+//! (`config-unreadable`) or a criteria file that exists yet cannot be read with
+//! nothing inline to fall back to (`criteria-unreadable`) BLOCKS every stop until
+//! fixed or explicitly skipped (CA-propguard-01/03) — there is no give-up, since
+//! the operator (or agent) can fix the file and retrying cannot. A checker that
+//! itself fails (crash / timeout / unparseable output) does NOT allow silently:
+//! it blocks up to `max_attempts` with a loud, escapable reason, then gives up
+//! loudly — and that give-up (like the git-scan / diff-read give-ups) is
+//! recorded in the fleet recurrence ledger and escalated back to a Block when
+//! the outage is systemic (see [`escalate_giveup_on_systemic`]). A truncated diff (unchecked tail) is treated the same
 //! way, and so is a diff that could not be READ in full — including one where
 //! only some of the reads feeding it succeeded, which is never handed onward as
 //! though it were the whole change (see [`decide_diff_failed`]). A genuine
@@ -185,9 +192,37 @@ fn effective_threshold(cfg: &Config, n_props: usize) -> usize {
 
 /// Core decision. `st` is the loaded prior session state.
 pub fn evaluate(cfg: &Config, root: &Path, st: &crate::state::SessionState) -> Decision {
-    // 1. Source the task's done_criteria. No criteria ⇒ nothing to formalize.
-    let Some(criteria) = source_criteria(cfg, root) else {
-        return allow("no-criteria", st);
+    // 0. A config file that exists but could not be read/parsed: every knob
+    //    below (including `done_criteria`) is a built-in default standing in
+    //    for an operator config we could not see. Undetermined ⇒ fail closed
+    //    (CA-propguard-03). No give-up: retrying cannot fix it, the operator can.
+    if let Some(why) = &cfg.load_error {
+        return Decision::Block {
+            reason: config_unreadable_reason(why),
+            tag: "config-unreadable",
+            files: vec![],
+            properties: Vec::new(),
+            attempts: st.attempts.saturating_add(1),
+            last_hash: String::new(),
+        };
+    }
+
+    // 1. Source the task's done_criteria. Genuinely none configured ⇒ nothing
+    //    to formalize, allow. Configured but unreadable ⇒ fail closed
+    //    (CA-propguard-01) — never the same answer as "none configured".
+    let criteria = match source_criteria(cfg, root) {
+        Determination::Known(Some(c)) => c,
+        Determination::Known(None) => return allow("no-criteria", st),
+        Determination::Undetermined(why) => {
+            return Decision::Block {
+                reason: criteria_unreadable_reason(why.as_str()),
+                tag: "criteria-unreadable",
+                files: vec![],
+                properties: Vec::new(),
+                attempts: st.attempts.saturating_add(1),
+                last_hash: String::new(),
+            };
+        }
     };
 
     // 2. Derive the semantic properties (deterministic, capped 3–5).
@@ -462,37 +497,75 @@ fn unsatisfied_prop_ids(props: &[Property], findings: Option<&str>) -> Vec<&'sta
         .collect()
 }
 
-/// Pure mapper: escalate an isolated checker-outage give-up to a fail-closed
-/// `Block` when the outage is *systemic* (recurring across tasks/sessions),
-/// per the fleet-outage-vs-isolated-flake design. Any decision other than the
-/// `checker-error-giveup` `Allow` is returned unchanged for either flag value
-/// — this function only ever rewrites that one specific give-up, never any
-/// other Allow tag (e.g. `properties-satisfied`, `giveup`, `truncated-giveup`)
-/// and never an existing Block.
+/// The bounded give-up `Allow` tags that stand for an *outage* — propguard
+/// could not observe or check the change (checker failed, git scan failed, diff
+/// could not be read), retried up to `max_attempts`, and shipped UNVERIFIED.
+/// Each is recorded in the fleet recurrence ledger and escalated to a Block
+/// when it recurs systemically (CA-propguard-02).
 ///
-/// `systemic_outage == false` (the common, isolated case — a checker flaked
-/// on just this task/session) keeps the input `Allow` unchanged: propguard
-/// must never fail-halt the whole fleet over one task's transient checker
-/// error. Only a *confirmed fleet-wide* outage (the caller has already
-/// checked recurrence across distinct tasks/sessions) flips to `Block`.
+/// Deliberately NOT included: `truncated-giveup` (deterministic per task — the
+/// diff is simply larger than `max_diff_bytes`, not an outage) and `giveup`
+/// (the checker ran and counted; below-threshold is a real verdict).
+pub const OUTAGE_GIVEUP_TAGS: &[&str] = &[
+    "checker-error-giveup",
+    "git-scan-failed-giveup",
+    "diff-read-failed-giveup",
+];
+
+/// The synthetic overwatch `property_id` a given outage give-up tag is
+/// recorded under, so each outage kind has its own recurrence signature
+/// (`propguard:<id>`). `None` for any tag that is not an outage give-up.
+pub fn outage_signature_id(tag: &str) -> Option<&'static str> {
+    match tag {
+        "checker-error-giveup" => Some("checker-outage"),
+        "git-scan-failed-giveup" => Some("git-scan-outage"),
+        "diff-read-failed-giveup" => Some("diff-read-outage"),
+        _ => None,
+    }
+}
+
+fn is_outage_giveup(decision: &Decision) -> bool {
+    matches!(decision, Decision::Allow { tag, .. } if OUTAGE_GIVEUP_TAGS.contains(tag))
+}
+
+/// Pure mapper: escalate an isolated outage give-up to a fail-closed `Block`
+/// when the outage is *systemic* (recurring across tasks/sessions), per the
+/// fleet-outage-vs-isolated-flake design. It rewrites ONLY the outage give-up
+/// `Allow`s in [`OUTAGE_GIVEUP_TAGS`] — `checker-error-giveup`,
+/// `git-scan-failed-giveup` and `diff-read-failed-giveup` — to the single tag
+/// `checker-outage-systemic`. Every other decision is returned unchanged for
+/// either flag value: other Allow tags (e.g. `properties-satisfied`, `giveup`,
+/// `truncated-giveup`) and every existing Block.
+///
+/// `systemic_outage == false` (the common, isolated case — a flake on just
+/// this task/session) keeps the input `Allow` unchanged: propguard must never
+/// fail-halt the whole fleet over one task's transient error. Only a
+/// *confirmed fleet-wide* outage (the caller has already checked recurrence
+/// across distinct tasks/sessions) flips to `Block`.
 pub fn escalate_giveup_on_systemic(decision: Decision, systemic_outage: bool) -> Decision {
-    match decision {
-        Decision::Allow {
-            tag: "checker-error-giveup",
-            ..
-        } if systemic_outage => Decision::Block {
-            reason: "propguard: FLEET-WIDE checker outage confirmed (recurring across \
-                     multiple tasks/sessions) — holding the stop to avoid shipping \
-                     UNVERIFIED code. Fix checker_cmd (see `propguard status`) or set \
-                     PROPGUARD_DISABLE=1 to bypass."
-                .to_string(),
-            tag: "checker-outage-systemic",
-            files: vec![],
-            properties: vec![],
-            attempts: 0,
-            last_hash: String::new(),
-        },
-        other => other,
+    if !(systemic_outage && is_outage_giveup(&decision)) {
+        return decision;
+    }
+    let Decision::Allow { tag, .. } = decision else {
+        return decision;
+    };
+    let what = match tag {
+        "git-scan-failed-giveup" => "git scan (`git diff`/`git status`) failure",
+        "diff-read-failed-giveup" => "diff read failure",
+        _ => "checker outage",
+    };
+    Decision::Block {
+        reason: format!(
+            "propguard: FLEET-WIDE {what} confirmed (recurring across multiple \
+             tasks/sessions; give-up tag {tag}) — holding the stop to avoid shipping \
+             UNVERIFIED code. Fix the cause (see `propguard status`) or set \
+             PROPGUARD_DISABLE=1 to bypass."
+        ),
+        tag: "checker-outage-systemic",
+        files: vec![],
+        properties: vec![],
+        attempts: 0,
+        last_hash: String::new(),
     }
 }
 
@@ -503,14 +576,14 @@ pub fn escalate_giveup_on_systemic(decision: Decision, systemic_outage: bool) ->
 /// * `Known(false)` — checked, isolated flake → the input `Allow` is unchanged.
 /// * `Known(true)`  — checked, fleet-wide outage → `Block` (delegated).
 /// * `Undetermined` — the ledger could not be read / holds an undecodable line.
-///   We already know propguard's checker FAILED (this path is only reached from
-///   the `checker-error-giveup` arm), and we now cannot tell whether that
+///   We already know propguard gave up on an outage (this path is only reached
+///   from an [`OUTAGE_GIVEUP_TAGS`] arm), and we now cannot tell whether that
 ///   failure is fleet-wide. Two unknowns stacked must not resolve to "ship it":
 ///   this blocks, with its OWN tag and reason so it is never mistaken for a
 ///   *confirmed* systemic outage (`checker-outage-systemic`). Per CLAUDE.md §3,
 ///   判定不能 resolves to the restricted side.
 ///
-/// Like its delegate, this rewrites ONLY the `checker-error-giveup` `Allow`;
+/// Like its delegate, this rewrites ONLY the [`OUTAGE_GIVEUP_TAGS`] `Allow`s;
 /// every other decision passes through untouched on all three answers, so an
 /// unreadable ledger cannot turn an unrelated `Allow` into a `Block`.
 pub fn escalate_giveup_on_outage_scan(
@@ -520,27 +593,29 @@ pub fn escalate_giveup_on_outage_scan(
     use harness_core::verdict::Determination;
     match outage {
         Determination::Known(systemic) => escalate_giveup_on_systemic(decision, systemic),
-        Determination::Undetermined(why) => match decision {
-            Decision::Allow {
-                tag: "checker-error-giveup",
-                ..
-            } => Decision::Block {
+        Determination::Undetermined(why) => {
+            if !is_outage_giveup(&decision) {
+                return decision;
+            }
+            let Decision::Allow { tag, .. } = decision else {
+                return decision;
+            };
+            Decision::Block {
                 reason: format!(
-                    "propguard: the checker failed AND the fleet violation ledger could not \
-                     be read ({why}), so whether this is an isolated flake or a fleet-wide \
-                     outage is UNDETERMINED — holding the stop rather than shipping \
-                     UNVERIFIED code on an unverifiable signal. Fix checker_cmd and the \
-                     overwatch store (see `propguard status`), or set PROPGUARD_DISABLE=1 \
-                     to bypass."
+                    "propguard: gave up on an outage ({tag}) AND the fleet violation ledger \
+                     could not be read ({why}), so whether this is an isolated flake or a \
+                     fleet-wide outage is UNDETERMINED — holding the stop rather than \
+                     shipping UNVERIFIED code on an unverifiable signal. Fix the cause and \
+                     the overwatch store (see `propguard status`), or set \
+                     PROPGUARD_DISABLE=1 to bypass."
                 ),
                 tag: "checker-outage-undetermined",
                 files: vec![],
                 properties: vec![],
                 attempts: 0,
                 last_hash: String::new(),
-            },
-            other => other,
-        },
+            }
+        }
     }
 }
 
@@ -702,6 +777,18 @@ fn diff_failed_reason(why: &str, files: &[String], attempt: u32, max: u32) -> St
         why = why,
         n = files.len(),
         list = file_list(files),
+    )
+}
+
+fn config_unreadable_reason(why: &str) -> String {
+    format!(
+        "🚧 propguard: 設定ファイルを読めませんでした — {why}\n\n         設定ファイルは存在するのに読み取り/解析できないため、propguard が従うべき設定 (done_criteria・         mode・threshold など) が判定不能です。組み込みの既定値で代用すると「未設定」と区別できないまま         検査を素通りさせるので、この停止をブロックしています (再試行では解消しないため自動の通過許可は         ありません)。\n\n         前に進むには次のいずれか:\n         - 設定ファイルの権限/内容を直す (`propguard status` で対象ファイルを確認)。\n         - このチェックを1回だけスキップ: `propguard skip --reason ...` を実行 (理由を1行)。\n         - propguard を完全に無効化: 環境変数 PROPGUARD_DISABLE=1。"
+    )
+}
+
+fn criteria_unreadable_reason(why: &str) -> String {
+    format!(
+        "🚧 propguard: done_criteria ファイルを読めませんでした — {why}\n\n         criteria_file は存在するのに読めず、inline の done_criteria も空なので、このタスクの完了条件が         判定不能です。「done_criteria 未設定」として通過させると、読めないファイルの条件が一切検査されない         まま停止できてしまうため、この停止をブロックしています (再試行では解消しないため自動の通過許可は         ありません)。\n\n         前に進むには次のいずれか:\n         - criteria_file の権限/内容を直す (`propguard status` で確認)。\n         - このチェックを1回だけスキップ: `propguard skip --reason ...` を実行 (理由を1行)。\n         - propguard を完全に無効化: 環境変数 PROPGUARD_DISABLE=1。"
     )
 }
 
@@ -1431,6 +1518,102 @@ mod tests {
         match escalate_giveup_on_systemic(other_allow(), false) {
             Decision::Allow { tag, .. } => assert_eq!(tag, "properties-satisfied"),
             Decision::Block { .. } => panic!("non-giveup Allow must not be rewritten"),
+        }
+    }
+
+    /// CA-propguard-02: `escalate_giveup_on_systemic` (and its caller,
+    /// `main::handle_checker_outage`) special-cases the tag
+    /// `"checker-error-giveup"` ONLY. `"git-scan-failed-giveup"` and
+    /// `"diff-read-failed-giveup"` are the exact same shape of give-up
+    /// (propguard gave up bounded by `max_attempts` and shipped an unverified
+    /// Allow) but never escalate to a fail-closed Block on a systemic outage,
+    /// and so never leave a fleet-visible overwatch record either — a
+    /// systemic git/diff-read outage looks identical to an isolated flake
+    /// forever.
+    #[test]
+    fn ca_propguard_02_git_scan_giveup_also_escalates_when_systemic() {
+        let d = Decision::Allow {
+            tag: "git-scan-failed-giveup",
+            attempts: 2,
+            last_hash: String::new(),
+        };
+        match escalate_giveup_on_systemic(d, true) {
+            Decision::Block { tag, .. } => {
+                assert_eq!(
+                    tag, "checker-outage-systemic",
+                    "a systemic outage on git-scan-failed-giveup must escalate the \
+                     same way checker-error-giveup does"
+                );
+            }
+            Decision::Allow { tag, .. } => panic!(
+                "a systemic outage on git-scan-failed-giveup must escalate to a \
+                 fail-closed Block just like checker-error-giveup does; it stayed \
+                 Allow (tag={tag:?})"
+            ),
+        }
+    }
+
+    /// Twin of the test above for the other give-up tag this same finding
+    /// names.
+    #[test]
+    fn ca_propguard_02_diff_read_giveup_also_escalates_when_systemic() {
+        let d = Decision::Allow {
+            tag: "diff-read-failed-giveup",
+            attempts: 2,
+            last_hash: String::new(),
+        };
+        match escalate_giveup_on_systemic(d, true) {
+            Decision::Block { tag, .. } => {
+                assert_eq!(
+                    tag, "checker-outage-systemic",
+                    "a systemic outage on diff-read-failed-giveup must escalate the \
+                     same way checker-error-giveup does"
+                );
+            }
+            Decision::Allow { tag, .. } => panic!(
+                "a systemic outage on diff-read-failed-giveup must escalate to a \
+                 fail-closed Block just like checker-error-giveup does; it stayed \
+                 Allow (tag={tag:?})"
+            ),
+        }
+    }
+
+    /// CA-propguard-02, the other half: an UNREADABLE recurrence ledger on a
+    /// git-scan / diff-read give-up also fails closed (its own tag), and the
+    /// deliberately excluded `truncated-giveup` is left alone on every answer.
+    #[test]
+    fn ca_propguard_02_outage_scan_covers_new_giveups_but_not_truncated() {
+        for tag in ["git-scan-failed-giveup", "diff-read-failed-giveup"] {
+            let d = Decision::Allow {
+                tag,
+                attempts: 0,
+                last_hash: String::new(),
+            };
+            match escalate_giveup_on_outage_scan(
+                d,
+                Determination::undetermined("test: ledger unreadable"),
+            ) {
+                Decision::Block { tag: t, .. } => assert_eq!(t, "checker-outage-undetermined"),
+                Decision::Allow { .. } => panic!("{tag}: undetermined ledger must block"),
+            }
+            assert!(outage_signature_id(tag).is_some(), "{tag} must be recorded");
+        }
+        let truncated = || Decision::Allow {
+            tag: "truncated-giveup",
+            attempts: 0,
+            last_hash: String::new(),
+        };
+        assert!(outage_signature_id("truncated-giveup").is_none());
+        match escalate_giveup_on_systemic(truncated(), true) {
+            Decision::Allow { tag, .. } => assert_eq!(tag, "truncated-giveup"),
+            Decision::Block { .. } => panic!("truncated-giveup is not an outage"),
+        }
+        match escalate_giveup_on_outage_scan(
+            truncated(),
+            Determination::undetermined("test: ledger unreadable"),
+        ) {
+            Decision::Allow { tag, .. } => assert_eq!(tag, "truncated-giveup"),
+            Decision::Block { .. } => panic!("truncated-giveup is not an outage"),
         }
     }
 
@@ -2240,6 +2423,162 @@ PROP output-schema: PASS";
             }
         }
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// CA-propguard-01: `source_criteria` (derive.rs) folds an EXISTING but
+    /// UNREADABLE `criteria_file` (permission denied) into the same `None` as
+    /// "nothing configured at all" once the inline `done_criteria` is also
+    /// empty — so `evaluate` reaches the exact same `allow("no-criteria")` for
+    /// two operationally distinct situations: an operator who never wrote a
+    /// criteria file, and one whose criteria file exists but propguard cannot
+    /// read it (and so is silently not being enforced at all). Once fixed,
+    /// the unreadable case must be distinguishable from genuine absence —
+    /// either a different allow tag, or a fail-closed Block.
+    #[cfg(unix)]
+    #[test]
+    fn ca_propguard_01_unreadable_criteria_file_must_not_look_like_not_configured() {
+        use std::os::unix::fs::PermissionsExt;
+        let _crit_guard = crate::derive::tests::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("PROPGUARD_CRITERIA");
+
+        let root = scratch_dir();
+        let criteria_file = "criteria.txt";
+        std::fs::write(root.join(criteria_file), "must be idempotent").unwrap();
+        std::fs::set_permissions(
+            root.join(criteria_file),
+            std::fs::Permissions::from_mode(0o000),
+        )
+        .unwrap();
+        // If chmod 000 doesn't actually deny this uid (e.g. running as root),
+        // the test's premise is absent — say so instead of asserting the
+        // wrong thing (mirrors derive.rs's own unreadable-criteria-file test).
+        let denied = std::fs::read_to_string(root.join(criteria_file)).is_err();
+
+        let cfg = Config {
+            criteria_file: criteria_file.to_string(),
+            done_criteria: String::new(), // empty inline: nothing to fall back to
+            ..Config::default()
+        };
+
+        let decision = evaluate(&cfg, &root, &fresh_state());
+
+        std::fs::set_permissions(
+            root.join(criteria_file),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(
+            denied,
+            "precondition: chmod 000 must deny this uid (running as root?)"
+        );
+
+        match decision {
+            Decision::Allow { tag, .. } => {
+                assert_ne!(
+                    tag, "no-criteria",
+                    "an EXISTING but UNREADABLE criteria_file must not be \
+                     indistinguishable from having no criteria_file configured at \
+                     all; got allow tag={tag:?}, the same tag used when nothing is \
+                     configured"
+                );
+            }
+            Decision::Block { .. } => {
+                // Also an acceptable fix: fail closed on an unreadable
+                // criteria source instead of silently allowing.
+            }
+        }
+    }
+
+    /// CA-propguard-01 (fixer's own assertion, stronger than "a different
+    /// tag"): an existing-but-unreadable criteria_file with no inline fallback
+    /// must resolve FAIL-CLOSED — a Block tagged `criteria-unreadable` whose
+    /// reason names the file — not merely a different Allow.
+    #[cfg(unix)]
+    #[test]
+    fn ca_propguard_01_unreadable_criteria_file_blocks_fail_closed() {
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = crate::derive::tests::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("PROPGUARD_CRITERIA");
+
+        let root = scratch_dir();
+        let criteria_file = "criteria.txt";
+        std::fs::write(root.join(criteria_file), "must be idempotent").unwrap();
+        std::fs::set_permissions(
+            root.join(criteria_file),
+            std::fs::Permissions::from_mode(0o000),
+        )
+        .unwrap();
+        let denied = std::fs::read_to_string(root.join(criteria_file)).is_err();
+
+        let cfg = Config {
+            criteria_file: criteria_file.to_string(),
+            done_criteria: String::new(),
+            ..Config::default()
+        };
+        let decision = evaluate(&cfg, &root, &fresh_state());
+
+        std::fs::set_permissions(
+            root.join(criteria_file),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        // Control: the same root with the file genuinely absent is the
+        // documented `no-criteria` allow, so the Block above is caused by
+        // unreadability, not by something else about this root.
+        std::fs::remove_file(root.join(criteria_file)).unwrap();
+        let absent = evaluate(&cfg, &root, &fresh_state());
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(
+            denied,
+            "precondition: chmod 000 must deny this uid (running as root?)"
+        );
+        match decision {
+            Decision::Block { tag, reason, .. } => {
+                assert_eq!(tag, "criteria-unreadable");
+                assert!(
+                    reason.contains("criteria.txt"),
+                    "the block reason must surface which file is unreadable: {reason}"
+                );
+            }
+            Decision::Allow { tag, .. } => panic!(
+                "an unreadable criteria_file with no inline fallback must BLOCK \
+                 (fail closed); got Allow tag={tag:?}"
+            ),
+        }
+        match absent {
+            Decision::Allow { tag, .. } => assert_eq!(tag, "no-criteria"),
+            Decision::Block { tag, .. } => {
+                panic!("control: an absent criteria_file must allow no-criteria, got Block {tag}")
+            }
+        }
+    }
+
+    /// CA-propguard-03 at the gate layer: a Config carrying `load_error`
+    /// blocks `config-unreadable` before anything else, even when criteria
+    /// would otherwise be absent.
+    #[test]
+    fn config_load_error_blocks_fail_closed() {
+        let root = scratch_dir();
+        let cfg = Config {
+            load_error: Some("cannot read /x/propguard.toml: denied".to_string()),
+            ..Config::default()
+        };
+        let d = evaluate(&cfg, &root, &fresh_state());
+        let _ = std::fs::remove_dir_all(&root);
+        match d {
+            Decision::Block { tag, reason, .. } => {
+                assert_eq!(tag, "config-unreadable");
+                assert!(reason.contains("/x/propguard.toml"), "{reason}");
+            }
+            Decision::Allow { tag, .. } => panic!("load_error must block, got Allow {tag}"),
+        }
     }
 
     /// Anti-vacuity control #2, and the requirement that this fix must not

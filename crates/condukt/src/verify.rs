@@ -1711,9 +1711,10 @@ pub fn parse_checks_holder(raw: &str) -> anyhow::Result<Option<Vec<crate::model:
     /// The strictness lives on this local type rather than on `model::Check`
     /// itself because `model::Check` is reached through `model::Task`: making
     /// *that* strict would fail the whole `Decomposition` parse over one stray
-    /// key, and `task_files`/`decomposition_files` swallow that into an empty
-    /// `touched_files`, which conflict analysis reads as "no conflicts". The
-    /// oracle's input is the only place that needs to be picky.
+    /// key, and every consumer of `task_files`/`decomposition_files` (the claim
+    /// guard, the terminal claim hand-back, diff-risk classification) would go
+    /// `Undetermined` over it. The oracle's input is the only place that needs
+    /// to be picky.
     ///
     /// The destructure-and-rebuild in the conversion below is the drift guard:
     /// add a field to either struct and this stops compiling.

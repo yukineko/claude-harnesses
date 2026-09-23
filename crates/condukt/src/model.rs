@@ -26,11 +26,15 @@ pub enum Class {
 ///
 /// Deliberately **permissive** on unknown fields, and that is not an oversight:
 /// this type is reached through [`Task`], so making it strict would make one
-/// stray key inside a check element fail the whole `Decomposition` parse — and
-/// `main.rs`'s `task_files`/`decomposition_files` swallow that failure into an
-/// empty `touched_files` list, which conflict analysis reads as "no conflicts"
-/// and schedules colliding tasks in parallel. Strictness at this layer buys a
-/// caught typo at the price of a silent scheduling hazard.
+/// stray key inside a check element fail the whole `Decomposition` parse. That
+/// parse failure is no longer silent — `main.rs`'s
+/// `task_files`/`decomposition_files` return
+/// `harness_core::verdict::Determination`, so an unparseable decomposition is
+/// `Undetermined` rather than an empty `touched_files` list — but the blast
+/// radius is still wide: every consumer of the file set (the claim guard, the
+/// terminal claim hand-back, diff-risk classification) would go undetermined
+/// over one stray key. Strictness at this layer buys a caught typo at the price
+/// of that.
 ///
 /// The typo *is* caught, but at the boundary that claims authority instead:
 /// `verify::parse_checks_holder` deserializes the oracle's own input through a

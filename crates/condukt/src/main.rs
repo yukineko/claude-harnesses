@@ -50,7 +50,7 @@ mod wt_reconcile;
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
 use config::Config;
-use harness_core::verdict::Determination;
+use harness_core::verdict::{Determination, Required};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -3360,6 +3360,26 @@ fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
                 "condukt: discarded experiment task '{task}' in run '{run}' \
                  (worktree removed, branch force-deleted, learning recorded in findings)"
             );
+            // Claim hand-back (backlog `06eb8aa3`): `discard_experiment` writes
+            // the terminal status `Discarded` and released nothing, and the
+            // `state set` gate omitted `Discarded` too — so there was no second
+            // chance and a discarded experiment's files were held until the TTL
+            // reaped them. The release lives here rather than inside
+            // `discard_experiment` so `state.rs` keeps no dependency on the
+            // claim registry, and so every route goes through the one helper.
+            // No frozen exit-code contract here: incomplete is named AND
+            // non-zero.
+            let outcome = release_terminal_task_files(cfg, cwd, &run, &task);
+            if let TerminalRelease::Released(n) = &outcome {
+                if *n > 0 {
+                    eprintln!(
+                        "condukt: handed back {n} file claim(s) held by discarded task '{task}'"
+                    );
+                }
+            } else if let Some(msg) = outcome.warning(&run, &task) {
+                eprintln!("{msg}");
+                std::process::exit(1);
+            }
         }
         WtAction::Reconcile {
             json,
@@ -3957,35 +3977,51 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             // ANOTHER run owns any of them, hard-skip — its work is already in
             // flight elsewhere, so we must not process it again. Non-conflicting
             // files are still claimed so sibling tasks proceed (partial progress).
-            // Fail-soft: a task with no declared touched_files is not guarded.
+            // A task that genuinely declares no touched_files is not guarded —
+            // but that is now distinguishable from a task whose touched_files
+            // could not be READ, which is named on stderr instead of passing as
+            // "nothing to guard" (see `task_files`).
             if st == state::Status::Running {
-                let files = task_files(cfg, cwd, &run, &task);
-                if !files.is_empty() {
-                    let session = session_id_from_env();
-                    let out = claim::claim_files(
-                        cfg,
-                        cwd,
-                        &run,
-                        session.as_deref(),
-                        &files,
-                        state::now_secs(),
-                    )?;
-                    if !out.skipped.is_empty() {
-                        println!(
-                            "{}",
-                            serde_json::to_string_pretty(&serde_json::json!({
-                                "skipped": true,
-                                "run": run,
-                                "task": task,
-                                "conflicts": out.skipped,
-                            }))?
-                        );
+                match task_files(cfg, cwd, &run, &task).require() {
+                    Required::Blocked(verdict) => {
                         eprintln!(
-                            "condukt: task '{task}' skipped — {} file(s) already \
-                             claimed by a live run",
-                            out.skipped.len()
+                            "condukt: cross-session claim guard NOT RUN for run '{run}' (task \
+                             '{task}'): which files it will touch could not be determined — \
+                             {}\n  consequence: those files were NOT claimed, so a concurrent \
+                             session can take them and both runs can edit the same files. This \
+                             is an UNCHECKED result, not a clean one.",
+                            undetermined_why(&verdict)
                         );
-                        std::process::exit(1);
+                    }
+                    Required::Determined(files) => {
+                        if !files.is_empty() {
+                            let session = session_id_from_env();
+                            let out = claim::claim_files(
+                                cfg,
+                                cwd,
+                                &run,
+                                session.as_deref(),
+                                &files,
+                                state::now_secs(),
+                            )?;
+                            if !out.skipped.is_empty() {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string_pretty(&serde_json::json!({
+                                        "skipped": true,
+                                        "run": run,
+                                        "task": task,
+                                        "conflicts": out.skipped,
+                                    }))?
+                                );
+                                eprintln!(
+                                    "condukt: task '{task}' skipped — {} file(s) already \
+                                     claimed by a live run",
+                                    out.skipped.len()
+                                );
+                                std::process::exit(1);
+                            }
+                        }
                     }
                 }
             }
@@ -4184,38 +4220,54 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             // not double-record.
             if st == state::Status::Done && prior_status != state::Status::Done {
                 if let Some(t) = rs.tasks.iter().find(|t| t.id == task) {
-                    let paths = task_files(cfg, cwd, &run, &task);
                     let session = session_id_from_env().unwrap_or_default();
-                    let dr = diffrisk_record::record_post_execution_diff_risk(
-                        cfg,
-                        cwd,
-                        &run,
-                        t,
-                        &paths,
-                        state::now_secs(),
-                        &session,
-                    );
-                    // Do NOT discard this. `ClassifiedNotHigh` is the only
-                    // outcome that means "the call graph ran and found nothing";
-                    // every other non-recording outcome means it did not run, or
-                    // could not conclude, or could not persist what it found.
-                    // Collapsing those back into one silent no-op is the
-                    // fail-open CLAUDE.md 1/3 forbid, so they are named on
-                    // stderr as well as journaled. Still non-blocking: no exit
-                    // code changes.
-                    match dr {
-                        gatelog::DiffRiskOutcome::ClassifiedNotHigh => {}
-                        gatelog::DiffRiskOutcome::Recorded => {
+                    // Same discipline as the outcome match below, one step
+                    // earlier: an undetermined touched-file set must not be fed
+                    // in as an empty one, because "classified nothing" would
+                    // then be indistinguishable from "classified and found
+                    // nothing". The recording is SKIPPED and said out loud.
+                    match task_files(cfg, cwd, &run, &task).require() {
+                        Required::Blocked(verdict) => {
                             eprintln!(
-                                "diff-risk: HIGH — recorded a blastguard violation for task '{task}' (run '{run}')"
+                                "diff-risk: NOT RUN for task '{task}' (run '{run}') — which \
+                                 files it touches could not be determined — {}. No \
+                                 classification was made; that is not a clean result.",
+                                undetermined_why(&verdict)
                             );
                         }
-                        other => {
-                            eprintln!(
-                                "diff-risk: NOT INSPECTED ({}) for task '{task}' (run '{run}') — \
-                                 this is not a clean result; see `diffrisk-outcomes.jsonl`",
-                                other.as_str()
+                        Required::Determined(paths) => {
+                            let dr = diffrisk_record::record_post_execution_diff_risk(
+                                cfg,
+                                cwd,
+                                &run,
+                                t,
+                                &paths,
+                                state::now_secs(),
+                                &session,
                             );
+                            // Do NOT discard this. `ClassifiedNotHigh` is the only
+                            // outcome that means "the call graph ran and found nothing";
+                            // every other non-recording outcome means it did not run, or
+                            // could not conclude, or could not persist what it found.
+                            // Collapsing those back into one silent no-op is the
+                            // fail-open CLAUDE.md 1/3 forbid, so they are named on
+                            // stderr as well as journaled. Still non-blocking: no exit
+                            // code changes.
+                            match dr {
+                                gatelog::DiffRiskOutcome::ClassifiedNotHigh => {}
+                                gatelog::DiffRiskOutcome::Recorded => {
+                                    eprintln!(
+                                        "diff-risk: HIGH — recorded a blastguard violation for task '{task}' (run '{run}')"
+                                    );
+                                }
+                                other => {
+                                    eprintln!(
+                                        "diff-risk: NOT INSPECTED ({}) for task '{task}' (run '{run}') — \
+                                         this is not a clean result; see `diffrisk-outcomes.jsonl`",
+                                        other.as_str()
+                                    );
+                                }
+                            }
                         }
                     }
                     // Mid-flight runtime-conflict detection (design 625aa170 A):
@@ -4291,22 +4343,22 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             // observation point, so this run's claims silently stopped being
             // refreshed and could be reaped as stale while it was still working
             // (backlog `cd624e4c`).
-            if matches!(
-                st,
-                state::Status::Verified | state::Status::Failed | state::Status::Cancelled
-            ) {
-                let files = task_files(cfg, cwd, &run, &task);
-                if !files.is_empty() {
-                    if let Err(e) = claim::release_files(cfg, cwd, &run, &files) {
-                        eprintln!(
-                            "condukt: claim release FAILED for run '{run}' (task '{task}'): {e}\n  \
-                             consequence: this terminal task's file claims were NOT released, so \
-                             those files stay claimed and BLOCK other sessions from taking them \
-                             until the claim ages out through the stale-claim TTL. Inspect with \
-                             `condukt state claims`; release explicitly with `condukt state \
-                             release --run {run}`."
-                        );
-                    }
+            //
+            // The gate is `releases_claims`, not a local `matches!`. The local
+            // one listed `Verified | Failed | Cancelled` and had silently fallen
+            // out of step with `Status`'s own notion of terminal: `Discarded` is
+            // terminal for `state::gate_reasons`, `state::reconcile_run` and
+            // `wt_reconcile`, and was missing here, so a discarded experiment
+            // kept its file claims forever.
+            if releases_claims(st) {
+                let outcome = release_terminal_task_files(cfg, cwd, &run, &task);
+                // The exit code does NOT move (see the contract above), but the
+                // warning is printed for EVERY incomplete outcome — including
+                // the one that used to be silent, where the files to release
+                // could not be determined at all and the old `if
+                // !files.is_empty()` skipped the release with no output.
+                if let Some(msg) = outcome.warning(&run, &task) {
+                    eprintln!("{msg}");
                 }
             }
             if let Err(e) = claim::heartbeat(cfg, cwd, &run, state::now_secs()) {
@@ -4363,7 +4415,19 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
         }
         StateAction::Claim { run, session, file } => {
             let files = if file.is_empty() {
-                decomposition_files(cfg, cwd, &run)
+                // An unreadable decomposition used to arrive here as an empty
+                // list, so `state claim` claimed nothing and exited 0 — "I could
+                // not work out what to guard" published as "there is nothing to
+                // guard". Refuse instead (CLAUDE.md §3).
+                match decomposition_files(cfg, cwd, &run).require() {
+                    Required::Determined(f) => f,
+                    Required::Blocked(verdict) => bail!(
+                        "refusing to claim files for run '{run}': which files it touches could \
+                         not be determined — {}. Nothing was claimed, so a concurrent session \
+                         can take these files; pass them explicitly with --file to proceed.",
+                        undetermined_why(&verdict)
+                    ),
+                }
             } else {
                 file
             };
@@ -4498,6 +4562,49 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                         "reconcile: applied {} change(s) — run '{run}': {done}/{total} verified",
                         changes.len()
                     );
+                    // Claim hand-back (backlog `06eb8aa3`): reconcile drives
+                    // tasks to `Verified`/`Cancelled`/`Discarded` — terminal
+                    // statuses the completion gate accepts — and used to leave
+                    // every one of their file claims held. That is how a run
+                    // reported 3/3 verified with `state gate` PASS while still
+                    // sitting on 13 files. Same shared helper the `state set`
+                    // path uses, so the two cannot drift apart again.
+                    //
+                    // Unlike `state set`, this path has NO frozen exit-code
+                    // contract, so an incomplete hand-back is a FAILURE of the
+                    // command: it is named AND the exit code is non-zero, so a
+                    // caller can tell a released run from a stranded one.
+                    let mut handed_back = 0usize;
+                    let mut stranded = Vec::new();
+                    for c in &changes {
+                        if c.old_status == c.new_status || !releases_claims(c.new_status) {
+                            continue;
+                        }
+                        let outcome = release_terminal_task_files(cfg, cwd, &run, &c.task_id);
+                        if let TerminalRelease::Released(n) = &outcome {
+                            handed_back += *n;
+                        } else if let Some(msg) = outcome.warning(&run, &c.task_id) {
+                            stranded.push(msg);
+                        }
+                    }
+                    if handed_back > 0 {
+                        eprintln!(
+                            "reconcile: handed back {handed_back} file claim(s) from task(s) \
+                             that reached a terminal status"
+                        );
+                    }
+                    if !stranded.is_empty() {
+                        for msg in &stranded {
+                            eprintln!("{msg}");
+                        }
+                        eprintln!(
+                            "reconcile: {} task(s) reached a terminal status but their file \
+                             claims were NOT handed back (see above) — exiting non-zero so this \
+                             is not mistaken for a completed run",
+                            stranded.len()
+                        );
+                        std::process::exit(1);
+                    }
                 }
             }
         }
@@ -4768,6 +4875,21 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             }
             let (done, total) = rs.counts();
             eprintln!("run '{run}': {done}/{total} done");
+            // Claim hand-back (backlog `06eb8aa3`): `Cancelled` is terminal —
+            // it is exactly one of the statuses the `state set` path releases on
+            // — but reaching it through THIS handler released nothing. Same
+            // shared helper, so the two routes to the same status behave the
+            // same. No frozen exit-code contract here, so an incomplete
+            // hand-back is named AND exits non-zero.
+            let outcome = release_terminal_task_files(cfg, cwd, &run, &task);
+            if let TerminalRelease::Released(n) = &outcome {
+                if *n > 0 {
+                    eprintln!("condukt: handed back {n} file claim(s) held by task '{task}'");
+                }
+            } else if let Some(msg) = outcome.warning(&run, &task) {
+                eprintln!("{msg}");
+                std::process::exit(1);
+            }
         }
         StateAction::CheckCriteria { run, task } => {
             let rs = state::RunState::load(cfg, cwd, &run)?;
@@ -4986,36 +5108,243 @@ fn session_id_from_env() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// All `touched_files` across a run's decomposition (deduped). Fail-soft: an empty
-/// vec when the decomposition is missing or unparseable, so claim/release degrade
-/// to no-ops rather than erroring.
-fn decomposition_files(cfg: &Config, cwd: &Path, run_id: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    if let Ok(raw) = state::load_decomposition(cfg, cwd, run_id) {
-        if let Ok(dec) = serde_json::from_str::<model::Decomposition>(&raw) {
-            for t in &dec.tasks {
-                for f in &t.touched_files {
-                    if !out.contains(f) {
-                        out.push(f.clone());
+/// Is this status *finished* work, so the task's file claims must go back?
+///
+/// Exhaustive with no wildcard on purpose, and deliberately identical to
+/// [`wt_reconcile`]'s `is_terminal`: `Discarded` is terminal for the completion
+/// gate (`state::gate_reasons`), for `state::reconcile_run` and for
+/// `wt_reconcile`, and it used to be missing from the one `matches!` that
+/// released claims — so a discarded experiment kept its files forever. A new
+/// [`state::Status`] variant must be classified here explicitly; guessing either
+/// way strands claims or hands a live task's files to another session.
+fn releases_claims(status: state::Status) -> bool {
+    match status {
+        state::Status::Pending | state::Status::Running | state::Status::Done => false,
+        state::Status::Failed | state::Status::Verified => true,
+        state::Status::Cancelled | state::Status::Discarded => true,
+    }
+}
+
+/// The outcome of handing one terminal task's file claims back to the registry.
+///
+/// Three answers, not two. `Released` is the only one that means the hand-back
+/// completed; the other two are the ways it did not, kept distinguishable so no
+/// caller can read "I could not do it" as "there was nothing to do".
+#[derive(Debug)]
+enum TerminalRelease {
+    /// The task's files were determined AND the registry accepted the release.
+    /// The count is how many claims were removed; `0` is the honest, quiet
+    /// answer for a task that legitimately touches no files.
+    Released(usize),
+    /// WHICH files this task holds could not be determined, so NOTHING was
+    /// released. `still_held` is what the registry says this run is sitting on,
+    /// so the operator is told concretely what is stranded.
+    Undetermined {
+        why: String,
+        still_held: Determination<Vec<String>>,
+    },
+    /// The files were known, but the registry refused or failed the release.
+    Failed { files: Vec<String>, err: String },
+}
+
+impl TerminalRelease {
+    /// The operator-facing warning, or `None` when — and only when — the
+    /// hand-back completed. Callers with no frozen exit-code contract turn a
+    /// `Some` into a non-zero exit.
+    ///
+    /// Every incomplete variant names the failing step ("claim release"), the
+    /// run, the task, the underlying cause and the CONSEQUENCE (the files stay
+    /// claimed and block other sessions) — the shape
+    /// `tests/heartbeat_err_surfaced.rs` pins for the `state set` path.
+    fn warning(&self, run_id: &str, task_id: &str) -> Option<String> {
+        match self {
+            TerminalRelease::Released(_) => None,
+            TerminalRelease::Undetermined { why, still_held } => {
+                let held = match still_held {
+                    Determination::Known(f) if f.is_empty() => {
+                        "  (the claim registry currently records no files held by this run)"
+                            .to_string()
                     }
+                    Determination::Known(f) => {
+                        format!("  still held by run '{run_id}': {}", f.join(", "))
+                    }
+                    Determination::Undetermined(e) => format!(
+                        "  what run '{run_id}' still holds could not be read either: {}",
+                        e.as_str()
+                    ),
+                };
+                Some(format!(
+                    "condukt: claim release NOT PERFORMED for run '{run_id}' (task \
+                     '{task_id}'): which files this task holds could not be determined — \
+                     {why}\n  consequence: NO file claims were released for this terminal \
+                     task, so they stay claimed and BLOCK other sessions from taking them \
+                     until they age out through the stale-claim TTL. This is an UNCHECKED \
+                     result, not a clean one — 'cannot determine which files to release' is \
+                     not 'there is nothing to release'. Inspect with `condukt state claims`; \
+                     release explicitly with `condukt state release --run {run_id}`.\n{held}"
+                ))
+            }
+            TerminalRelease::Failed { files, err } => Some(format!(
+                "condukt: claim release FAILED for run '{run_id}' (task '{task_id}'): \
+                 {err}\n  consequence: this terminal task's file claims were NOT released, \
+                 so those files stay claimed and BLOCK other sessions from taking them \
+                 until the claim ages out through the stale-claim TTL. Inspect with \
+                 `condukt state claims`; release explicitly with `condukt state release \
+                 --run {run_id}`.\n  files that stayed held: {}",
+                files.join(", ")
+            )),
+        }
+    }
+}
+
+/// The files the claim registry currently records as held by `run_id`.
+///
+/// Only used to NAME what stays stranded when a hand-back cannot be completed,
+/// so an unreadable registry is its own answer rather than an empty list.
+fn run_held_files(cfg: &Config, cwd: &Path, run_id: &str) -> Determination<Vec<String>> {
+    match claim::active_claims(cfg, cwd, state::now_secs()) {
+        Ok(reg) => {
+            let mut held: Vec<String> = reg
+                .files
+                .iter()
+                .filter(|(_, c)| c.run_id == run_id)
+                .map(|(k, _)| k.clone())
+                .collect();
+            held.sort();
+            Determination::known(held)
+        }
+        Err(e) => Determination::undetermined(format!("the claim registry could not be read: {e}")),
+    }
+}
+
+/// THE single hand-back path for a task that has reached a terminal status.
+///
+/// Every route to a terminal status goes through this one function — `state
+/// set`, `state reconcile`, `state cancel` and `worktree discard` — so they
+/// cannot drift apart again. Before this existed, exactly one of the four (the
+/// `state set` handler) released anything, and it did so through an inline block
+/// whose `matches!` gate had already fallen out of step with `Status`'s own
+/// notion of terminal (backlog `06eb8aa3`: 3/3 verified, gate PASS, 13 files
+/// still held and released by hand).
+///
+/// It deliberately does NOT decide the exit code — the callers do, because they
+/// do not agree on one: `state set`'s exit code is a frozen contract
+/// (`tests/heartbeat_err_surfaced.rs`, the durable state write already stands),
+/// while `reconcile` / `cancel` / `discard` have no such contract and treat an
+/// incomplete hand-back as a failure of the command.
+fn release_terminal_task_files(
+    cfg: &Config,
+    cwd: &Path,
+    run_id: &str,
+    task_id: &str,
+) -> TerminalRelease {
+    let files = match task_files(cfg, cwd, run_id, task_id).require() {
+        Required::Determined(f) => f,
+        Required::Blocked(verdict) => {
+            return TerminalRelease::Undetermined {
+                why: undetermined_why(&verdict),
+                still_held: run_held_files(cfg, cwd, run_id),
+            }
+        }
+    };
+    if files.is_empty() {
+        // Genuinely nothing to hand back. This is the ONLY quiet non-release,
+        // and it is reachable only from a `Known` observation.
+        return TerminalRelease::Released(0);
+    }
+    match claim::release_files(cfg, cwd, run_id, &files) {
+        Ok(n) => TerminalRelease::Released(n),
+        Err(e) => TerminalRelease::Failed {
+            files,
+            err: format!("{e}"),
+        },
+    }
+}
+
+/// The reason carried by a blocking [`harness_core::verdict::Verdict`], for
+/// operator-facing messages. Never empty: a verdict with no stated reason is
+/// reported as such rather than as a blank.
+fn undetermined_why(verdict: &harness_core::verdict::Verdict) -> String {
+    verdict
+        .reason()
+        .map(|r| r.as_str().to_string())
+        .unwrap_or_else(|| format!("{verdict:?} (no reason recorded)"))
+}
+
+/// Load and parse a run's decomposition, keeping "could not read it" distinct
+/// from anything it might legitimately contain.
+///
+/// Both file-set readers below go through this, so there is exactly one place
+/// that decides what an unreadable or unparseable decomposition means.
+fn load_parsed_decomposition(
+    cfg: &Config,
+    cwd: &Path,
+    run_id: &str,
+) -> Determination<model::Decomposition> {
+    let raw = match state::load_decomposition(cfg, cwd, run_id) {
+        Ok(raw) => raw,
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "the decomposition for run '{run_id}' could not be loaded: {e}"
+            ))
+        }
+    };
+    match serde_json::from_str::<model::Decomposition>(&raw) {
+        Ok(dec) => Determination::known(dec),
+        Err(e) => Determination::undetermined(format!(
+            "the decomposition for run '{run_id}' could not be parsed: {e}"
+        )),
+    }
+}
+
+/// All `touched_files` across a run's decomposition (deduped).
+///
+/// Tri-state on purpose (CLAUDE.md §3). `Known(vec![])` means "this run's tasks
+/// declare no touched files"; `Undetermined` means "which files this run touches
+/// could not be established at all". The previous signature returned `Vec<String>`
+/// and mapped BOTH onto the empty vec, so `condukt state claim` against an
+/// unreadable decomposition claimed nothing and reported success — "I could not
+/// check" published as "there is nothing to guard".
+fn decomposition_files(cfg: &Config, cwd: &Path, run_id: &str) -> Determination<Vec<String>> {
+    load_parsed_decomposition(cfg, cwd, run_id).map(|dec| {
+        let mut out: Vec<String> = Vec::new();
+        for t in &dec.tasks {
+            for f in &t.touched_files {
+                if !out.contains(f) {
+                    out.push(f.clone());
                 }
             }
         }
-    }
-    out
+        out
+    })
 }
 
-/// The `touched_files` of one task in a run's decomposition. Fail-soft: empty when
-/// the decomposition or the task can't be found.
-fn task_files(cfg: &Config, cwd: &Path, run_id: &str, task_id: &str) -> Vec<String> {
-    if let Ok(raw) = state::load_decomposition(cfg, cwd, run_id) {
-        if let Ok(dec) = serde_json::from_str::<model::Decomposition>(&raw) {
-            if let Some(t) = dec.tasks.iter().find(|t| t.id == task_id) {
-                return t.touched_files.clone();
-            }
-        }
+/// The `touched_files` of one task in a run's decomposition.
+///
+/// Tri-state on purpose (CLAUDE.md §3), and this is the reader the terminal
+/// claim hand-back depends on. `Known(vec![])` is the honest answer for a task
+/// that legitimately touches no files; `Undetermined` is the honest answer for
+/// all three ways the question cannot be answered — the decomposition cannot be
+/// loaded, cannot be parsed, or does not contain this task id.
+///
+/// Collapsing the second into the first (the old `-> Vec<String>` returning
+/// `Vec::new()` on every failure) is the empty-set fail-open CLAUDE.md §3 names:
+/// the caller's `if !files.is_empty()` then skipped the release entirely and
+/// silently, and the run kept holding files it had finished with.
+fn task_files(cfg: &Config, cwd: &Path, run_id: &str, task_id: &str) -> Determination<Vec<String>> {
+    let dec = match load_parsed_decomposition(cfg, cwd, run_id) {
+        Determination::Known(d) => d,
+        // FORWARD the existing Undetermined — it was already recorded at its
+        // origin, so re-minting one here would double-count the give-up.
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
+    match dec.tasks.iter().find(|t| t.id == task_id) {
+        Some(t) => Determination::known(t.touched_files.clone()),
+        None => Determination::undetermined(format!(
+            "task '{task_id}' is absent from run '{run_id}'s decomposition, so the \
+             files it touches are unknown"
+        )),
     }
-    Vec::new()
 }
 
 /// Snapshot each task's current branch tip SHA (best-effort): tasks with no

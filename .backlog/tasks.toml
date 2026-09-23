@@ -28926,3 +28926,21 @@ updated_at = 1790183580
 weight = 0.0
 issue_number = 708
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/708"
+
+[[task]]
+id = "45c3a699"
+title = "backlog: done/cancelled を tracked の tasks.done.toml に分離し tasks.toml を pending 系だけにする"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "User directive 2026-09-24. Measured at main b47f08e3: tasks.toml 29,227 lines / 2.0MB; pending 599, done 416, cancelled 18, claimed 4; done+cancelled bytes ~0.8MB (~39%). backlog has no archive/compact. Every write rewrites the whole file, so done rows inflate IO, diffs and merge-conflict surface. Terminal rows never change -> append-only tasks.done.toml. Readers (dedup/hashkey, id resolution, list --status done, gh sync, session_start, other crates reading .backlog/tasks.toml e.g. specguard forge/queue.rs, schemaguard registry.rs, compass route.rs, autoflow) must see both files; an unreadable done file is Undetermined, never 'no done tasks'. Old binaries in running sessions will keep writing done rows into tasks.toml -> new code must tolerate and migrate them. Paired with f09db5ce (claim state out of tracked file)."
+created_at = 1790183776
+updated_at = 1790183776
+weight = 0.0
+issue_number = 712
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/712"

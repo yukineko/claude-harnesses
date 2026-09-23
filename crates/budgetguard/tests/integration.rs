@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! End-to-end tests: drive the real built `budgetguard` binary and assert on
 //! exit code + stdout. `budgetguard gate` is a Stop hook — harness errors always
 //! exit 0 (never break the turn). The rest is a subcommand CLI.

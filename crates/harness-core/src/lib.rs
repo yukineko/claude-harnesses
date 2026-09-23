@@ -10,6 +10,12 @@
 //! hook wrapper (see the harness invariants). Plugin-specific domain logic and
 //! config/metrics *fields* stay in each plugin crate and compose these.
 
+// Test code asserts by unwrapping/expecting/panicking on purpose — that's the
+// assertion, not a fail-open. Production code (this attribute does not reach
+// it: cfg(test) is only enabled when building test targets) stays covered by
+// the deny in the root Cargo.toml's `[workspace.lints.clippy]`.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+
 // never-break-a-turn invariant backstop: the exit-0-on-error guarantee relies on
 // std::panic::catch_unwind in hook::run_hook and gate::run_guarded. Under
 // panic="abort" catch_unwind is a silent NO-OP and a panicking hook would abort

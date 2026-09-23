@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! t3 done_criteria (4): "harness-core の interrogate.rs に IO (ファイル読み/
 //! subprocess/ネットワーク) が 1 箇所も追加されていない — IO は hypothesis 側の
 //! 呼び出し層にある".

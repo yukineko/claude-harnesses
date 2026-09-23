@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! End-to-end tests for the real built `donegate` binary. donegate is a clap
 //! subcommand CLI; its `gate` subcommand is the Stop hook (reads a JSON
 //! HookInput from stdin and must ALWAYS exit 0 toward Claude — it blocks via a

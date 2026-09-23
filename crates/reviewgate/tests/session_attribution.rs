@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! RED (layer 2) for backlog `1e44bfd9` — reviewgate must review only the files
 //! **this session** edited, not every file dirty in a shared working tree.
 //!

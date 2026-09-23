@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Runtime behavior tests for `ScopeDraft::declare` (t3, API contract §1/§1.1/§1.2).
 //!
 //! The type-level half of done_criteria item 3 — that a `ScopeDeclaration`

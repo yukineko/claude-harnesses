@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! End-to-end proof that `Verdict::Undetermined` (exit 2 from `check_verdict`)
 //! is reachable through the **CLI**, not just through library-level unit tests
 //! that build a `Field` slice by hand.

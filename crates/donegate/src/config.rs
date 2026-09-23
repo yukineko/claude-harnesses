@@ -459,8 +459,12 @@ cmd = "echo home"
         std::env::remove_var("HARNESS_TRUST_ALL");
 
         assert!(cfg.checks.is_empty());
-        // `#![deny(clippy::panic)]` covers tests too, so assert the shape first and
-        // then destructure -- an `if let` alone would pass vacuously on a mismatch.
+        // Assert the shape first, then destructure -- an `if let` alone would
+        // pass vacuously on a mismatch (main.rs's crate-root
+        // `#![cfg_attr(test, allow(clippy::panic, ...))]` permits a manual
+        // `panic!` in test code, so this is a testing-style choice now, not a
+        // lint constraint: `assert!(matches!(..))` surfaces the actual `decl`
+        // value on failure, where a silently-skipped `if let` would not).
         assert!(
             matches!(&decl, Declaration::Unreadable { .. }),
             "an invalid TOML config must be Unreadable; got {decl:?}"

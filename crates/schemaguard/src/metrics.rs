@@ -191,6 +191,42 @@ mod tests {
         );
     }
 
+    /// Independent verification (backlog 27926f7e fix, commit 2ddbd51d): a store
+    /// whose final line was cut off mid-write (no trailing newline, and the
+    /// truncated fragment does not parse as JSON) must resolve to `Undetermined`,
+    /// not to the sum over the lines that DID parse. This is the "interrupted
+    /// write" shape, distinct from the already-tested `{broken\n` case (which has
+    /// a trailing newline) and distinct from whole-file invalid UTF-8 (which
+    /// `boundary::read_to_string` already turns into `Undetermined` upstream of
+    /// `parse_counts`, so it would not have discriminated the old code from the
+    /// new). A truncated trailing line is valid UTF-8 the whole way through the
+    /// read, so it can only be caught by `parse_counts`'s per-line skip-counting.
+    #[test]
+    fn counts_at_with_truncated_trailing_line_is_undetermined() {
+        let dir = std::env::temp_dir().join(format!(
+            "schemaguard-metrics-truncated-{}-{}",
+            std::process::id(),
+            unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rejects.jsonl");
+        // One well-formed line, then a second line cut off mid-write: no
+        // trailing newline, and the fragment is not valid JSON on its own.
+        std::fs::write(
+            &path,
+            "{\"schema\":\"playbook\",\"violations\":1}\n{\"schema\":\"epis",
+        )
+        .unwrap();
+        let got = counts_at(&path);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+        assert!(
+            matches!(got, Determination::Undetermined(_)),
+            "a truncated trailing line (interrupted write, no newline) must be \
+             Undetermined, not a partial sum presented as fact — got {got:?}"
+        );
+    }
+
     /// Anti-vacuity control: a fully well-formed store is still `Known`.
     #[test]
     fn counts_at_well_formed_store_is_known() {

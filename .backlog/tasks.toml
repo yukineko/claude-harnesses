@@ -29083,7 +29083,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = []
 touched_files = []
-status = "pending"
+status = "done"
 notes = """
 Raised 2026-09-23 while implementing 06eb8aa3. NOT resolved - deferred deliberately. condukt policy answer returned {"answered":false,"policy":"block"}, i.e. it must go to a human.
 
@@ -29123,9 +29123,45 @@ Pick one, explicitly:
 (b) Keep exit 0 for state set; the ticket criterion is satisfied at the other terminal paths and at the completion gate. Then the ignored test should be deleted and the ticket criterion amended to say so.
 (c) Adopt the fault-class split above, and write down explicitly why Undetermined and Failed deserve different exit codes.
 
-Until then the #[ignore] stays and main is green."""
+Until then the #[ignore] stays and main is green.
+
+【解決 2026-09-24 — ユーザー裁定により (c) fault class 分割を採用、commit 306cf008、condukt 0.7.177】
+
+裁定の条件は「線引きの根拠を明文化すること」であり、それを満たした。
+
+根拠 (main.rs の state set 呼び出し側に逐語で書き下し済み):
+2 つのテストは同じ状況について主張していなかった。注入する fault が違う。
+  - heartbeat_err_surfaced.rs は REGISTRY を壊す -> file set は判明しており
+    release が確定的に失敗する -> TerminalRelease::Failed。残留ファイルを
+    全て名指しできる = 失敗の完全な観測。exit 0 のまま。
+  - terminal_release_claims_e2e.rs は DECOMPOSITION を壊す -> どのファイルを
+    解放すべきか判定できず release は試行すらされない -> Undetermined。
+    観測が無く、あるのは観測の不在だけ。警告文自身が
+    "This is an UNCHECKED result, not a clean one" と書いている。
+    exit code は機械の消費者が読む唯一の経路なので、0 のままでは
+    「判定できなかった」が「検査して問題なし」と同じ値に写る = §3 が
+    禁じる合流。よって制限側 (非0) に解決する。
+
+したがって「文面を変えずに凍結契約を構成で狭めた」わけではない。型
+(TerminalRelease の三値) が既に引いていた線に裁定を合わせただけである。
+heartbeat_err_surfaced.rs は 1 バイトも変更していない (git diff 空、5/5 green)。
+
+起票時の懸念への回答: 起票者は「凍結契約の論拠 (durable な state write は
+既に成立している) は両 fault class に等しく当てはまる」と指摘しており、
+これは正しい。だから両者を区別しているのは *その論拠ではない*。区別軸は
+確定/判定不能であって深刻度ではない。この点は main.rs に弱点として明記した。
+
+コスト (隠さず明記): Undetermined 経路では非0が「state write が失敗した」を
+意味しなくなる。遷移が着地したかを知りたい呼び出し側は exit code ではなく
+`condukt state show` を読む必要がある。
+
+観測: RED を先に確認 (#[ignore] を外した時点で assert_ne が
+left: Some(0) right: Some(0) で失敗。前提 assert は通っており正しい理由で
+落ちている) -> GREEN。terminal_release_claims_e2e 9 passed/0 ignored
+(以前 8 passed/1 ignored)、heartbeat_err_surfaced 5/5 差分ゼロ、
+--bins 846 passed/0 failed、fmt/clippy green。assert の編集・削除はゼロ。"""
 created_at = 1790176547
-updated_at = 1790176547
+updated_at = 1790180029
 weight = 0.0
 issue_number = 699
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/699"

@@ -24,10 +24,12 @@
   `MutationSummary`）と `evaluate`（`MutationSummary`＋閾値→`GateOutcome`）は副作用のない純関数で、
   `lib.rs::tests` の固定 JSON でカバーされる。判定は入力 JSON に対して決定論的。
 - **baseline は除外** — `outcomes.json` の `Baseline` シナリオ（未改変ビルド）は mutant ではなく、
-  スコアから除く。`is_mutant` は scenario JSON が `"Mutant"` キーを持つオブジェクトのときだけ真を返す
-  （Baseline はベア文字列 `"Baseline"` として serialize される）。トップレベルの集計値を信用せず
+  スコアから除く。`classify_scenario` はベア文字列 `"Baseline"` だけを除外し、`"Mutant"` キーを持つ
+  オブジェクトを mutant とし、それ以外の形（null・欠落・未知の値）は `unknown` に計上する
+  （分母に入り kill には数えない。捨てない — CA-mutategate-03）。未知の `summary` も同様に `unknown`
+  へ計上する（CA-mutategate-01）。トップレベルの集計値を信用せず
   `outcomes` 配列から直接数えるので、スコアは生レコードだけから再現可能。
-- **kill-rate の定義（固定）** — `viable = caught + missed + timeout`（`unviable` はコンパイル不能で
+- **kill-rate の定義（固定）** — `viable = caught + missed + timeout + unknown`（`unviable` はコンパイル不能で
   シグナルを持たないため分母から除外）、`killed = caught + timeout`（timeout はテストが露出させた
   観測可能な誤動作なので kill 扱い）、`kill_rate = killed / viable`。`success`/`failure` は帳簿目的で
   数えるがスコアには入れない。
@@ -79,8 +81,9 @@ CLI 引数は `clap` の `Cli` 構造体で定義（`main.rs`）:
 - **`lib.rs`** — 純粋なパース／スコアリングコア。`MutationSummary`（`caught`/`missed`/`timeout`/`unviable`/
   `success`/`failure` のタリー、メソッド `viable`/`killed`/`kill_rate`）、`GateOutcome`（`summary`/
   `kill_rate`/`threshold`/`passed`/`reason`）、`parse_outcomes`（JSON テキスト→`MutationSummary`、
-  baseline 除外・未知状態無視）、`is_mutant`（scenario が `"Mutant"` キー保持オブジェクトか）、
+  ベア文字列 baseline だけ除外・未知 scenario/summary は `unknown` へ計上）、`classify_scenario`
+  （scenario を Baseline / Mutant / Unrecognised に分類）、
   `evaluate`（タリー＋閾値→判定、epsilon 込み `>=`、viable ゼロ＝失敗）、定数 `KILL_RATE_EPSILON`(1e-9)。
   `outcomes.json` の生表現は `RawLabOutcome`/`RawScenarioOutcome`（`serde::Deserialize`、`scenario` は
   未型付け `serde_json::Value`）で受ける。`#[cfg(test)]` にサンプル JSON ベースの回帰テスト群
-  （baseline 無視・viable/killed 集計・閾値境界・viable ゼロ失敗・未知状態無視・malformed エラー）。
+  （baseline 無視・viable/killed 集計・閾値境界・viable ゼロ失敗・未知状態/未知 scenario を unknown 計上・malformed エラー）。

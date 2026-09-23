@@ -8293,7 +8293,7 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "claimed"
+status = "pending"
 notes = """
 監査で確定 (測定点 6302d166、測定日 2026-07-29)。42 crate 中 workspace lints を opt-in しているのは 8 crate のみ (blastguard fetchguard mutategate overwatch propguard specguard stuckguard taintguard)。残り 34 crate には clippy::unwrap_used / expect_used の強制が一切無い。
 
@@ -8305,7 +8305,7 @@ harness-core も未被覆。これは全プラグインバイナリに静的リ�
 
 完了条件の案: 4 crate へ lints workspace opt-in を追加し、露出する既存の unwrap と expect を修正する。crate ごとに version の micro bump を 3 ファイル lockstep で行う。harness-core は別途検討 (crate 数が多く露出量が読めないため、まず件数を実測してから分割する)。"""
 created_at = 1785327705
-updated_at = 1790183118
+updated_at = 1790183422
 weight = 0.0
 issue_number = 90
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/90"
@@ -8366,10 +8366,10 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "claimed"
+status = "pending"
 notes = "Measurement half of 5b33b4cd, split out because it cannot be satisfied by shipping — it needs two real Continuous-Audit rounds run under the new rules. Shipped in 0558db6f (overwatch 0.2.15, deployed and live-verified): audit-round record refuses regression_tests_added < confirmed, continuous-audit.sh stops on it via run_ow_gate, SKILL.md Step 3.5 mirror sweep is mandatory. What remains is purely observation: run two rounds and check audit-metrics reports converging:true both times. Baseline to beat, from the ledger that motivated the item: new_findings 5,1,13,0,14,15 with converging:false and round 2026W29 at confirmed:10 / regression_tests_added:0. Caveat when reading the result: closure_rate is now an acceptance precondition and will read 1.0 for every new round, so it carries no signal — judge convergence ONLY by the new_findings trend, which is what is_converging actually uses. A rise in new_findings is not automatically failure either: Step 3.5 is expected to surface twins that previously went unharvested, so an early round may legitimately go UP before it comes down."
 created_at = 1785341708
-updated_at = 1790183118
+updated_at = 1790183422
 weight = 0.0
 issue_number = 94
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/94"
@@ -9102,10 +9102,10 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "claimed"
 notes = "計測日 2026-08-02、測定点 a30b323f、測定コマンド: overwatch review-metrics。closure [condukt-gate] 0.00 (0/4) / [continuous-audit] 0.00 (0/36) / [record-audit] 0.00 (0/3)。457b44f1 で closure rate が計測可能になった結果、初めて見えた事実。specguard は ack 経由で disposition を積むようになったが、他の producer には閉じる導線が無い。review-metrics は『1 finding に fix commit が landed しているが disposition 無し』も警告している。"
 created_at = 1785634225
-updated_at = 1785634225
+updated_at = 1790183465
 weight = 0.0
 issue_number = 116
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/116"
@@ -9140,10 +9140,10 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "claimed"
 notes = 'Measured 2026-08-02 on branch session-1faeac72 (base main 83aaeda4). Isolating the deletion of 2 assertions from crates/blastguard/src/detect.rs, with NO other change, makes the gate report verdict=weakened kind=assertion-removed detail="assertion macros 498 -> 496". Re-adding unrelated assertions ELSEWHERE IN THE SAME FILE returns it to verdict=clean while the deletion is still present. So a commit that removes a genuine assertion and adds any assertions to the same file passes with no acknowledgement required. Verified the gate is otherwise live on this diff (an injected #[ignore] is caught as ignore-added). This is DOCUMENTED behaviour, not a hidden bug: check-test-weakening.py:55 says "Scope is NET, PER FILE, base vs HEAD -- not per commit". Filed because the documented scope and the stated purpose diverge: the gate exists so a weakening cannot pass unacknowledged, and this class passes unacknowledged. Not fixing unilaterally -- per-hunk or per-test-function counting would raise the false-positive rate on refactors, and that tradeoff is the gate owner s call. Completion condition: either an assertion deleted from a test function is flagged regardless of same-file additions, or check-test-weakening.py states in prose that this class is deliberately out of scope and why.'
 created_at = 1785638160
-updated_at = 1785638160
+updated_at = 1790183465
 weight = 0.0
 issue_number = 118
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/118"
@@ -9160,10 +9160,10 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "claimed"
 notes = 'Found by the blastguard per-gate verdict audit 2026-08-02 (sibling of the nested-Ask defect fixed in 0.2.39). crates/blastguard/src/classify.rs:216 reads: if detect::detect("Bash", Some(&json!({ "command": text }))).is_deny() { High, irreversible }. Only a DENY raises the risk. An ASK -- which is blastguard REFUSING to guess whether the command is destructive, per model.rs:9 -- falls through the history-rewrite check to the default arm, Risk::Low + reversible:true. That is the same collapse the 0.2.39 fix removed one layer down, but here the consumer turns it into an autonomy decision: condukt policy/gate check treats Low+reversible as the AutoExec case, so a command blastguard explicitly could not analyse is eligible to run without human approval. CLAUDE.md 3 says cannot-determine resolves restrictive; the tri-state exists and is discarded at the point of consumption (memory: erasure-lives-at-callsite). NOT fixed in the audit commit on purpose: the obvious change (Ask => at least Medium, or High+irreversible) alters gating for every condukt task and is a policy call, not a detector bug -- and over-raising would push routine work into escalate. Needs a decision on which band an Ask maps to, then an F-to-P with the condukt gate tests. Completion condition: classify() distinguishes Ask from Allow, and a test asserts a detect-Ask command does not reach Risk::Low+reversible.'
 created_at = 1785639095
-updated_at = 1785639095
+updated_at = 1790183466
 weight = 0.0
 issue_number = 119
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/119"
@@ -9193,10 +9193,10 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "claimed"
 notes = "run_diff は if let Some(text) = run_git(..) で失敗を捨てる。git diff と git diff --cached が両方失敗し untracked も無ければ diff は空になり evaluate が allow(empty-diff) を返す。docs/audit-propguard-verdict-paths.md の F-2。修正には DiffText に三値を持たせ decide_scan_failed 相当の新アームが要る。証拠: gate.rs の scan_failed_reason 自身がこの穴を日本語で説明している。"
 created_at = 1785798115
-updated_at = 1785798115
+updated_at = 1790183467
 weight = 0.0
 issue_number = 121
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/121"
@@ -9238,10 +9238,10 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "claimed"
 notes = "親 backlog item 67e95a19 (hashkey 3358a647274b19d0) が gauge と reviewgate の2クレートを DoD9 verdict-path 監査対象として挙げていた。reviewgate は docs/audit-reviewgate-verdict-paths.md (773行, P1-P8の8件fail-open確認) として完了済み。本item は残りの gauge クレートを対象とする。テンプレートは docs/audit-blastguard-verdict-paths.md / docs/audit-budgetguard-verdict-paths.md / docs/audit-reviewgate-verdict-paths.md を踏襲する: verdict を生成/消費する箇所を逐語引用し、P(Producer)/R(Router)/D(Decider) の3-way分類を行い、fail-open が確認されたものは fault-injection で修正を証明し、独立モデルによる検証を経る。対象は crates/gauge/src/ の verdict-producing/consuming ロジック。"
 created_at = 1785800449
-updated_at = 1785800449
+updated_at = 1790183468
 weight = 0.0
 issue_number = 124
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/124"
@@ -15641,7 +15641,7 @@ worktree の後片付けまで手作業になった (touch は通るのに rm �
   = 直すなら Ask ではなく deny 条件の絞り込みで。
 除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit a82274cb --status pending"""
 created_at = 1785376257
-updated_at = 1787120517
+updated_at = 1790183451
 weight = 0.0
 
 [[task]]
@@ -15654,7 +15654,7 @@ touched_files = []
 status = "pending"
 notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 21b7b1a7 --status pending"
 created_at = 1785376999
-updated_at = 1787120517
+updated_at = 1790183451
 weight = 0.0
 
 [[task]]
@@ -15669,7 +15669,7 @@ notes = """
 2026-07-30 実測: jq で ~/.claude/settings.json の enabledPlugins を確認したところ fetchguard@yukineko / taintguard@yukineko / mutategate@yukineko の3つが ABSENT。taintguard 分は既存項目 e4687aad が、fetchguard 分は a9ff687e がカバーするので、本項目は mutategate と『そもそも意図的に無効化されているのか』の判断部分に限る。意図なら a9ff687e / e4687aad の前提も崩れる。
 除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 6803bd45 --status pending"""
 created_at = 1785377000
-updated_at = 1787120517
+updated_at = 1790183451
 weight = 0.0
 
 [[task]]
@@ -15682,7 +15682,7 @@ touched_files = []
 status = "pending"
 notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 079b643f --status pending"
 created_at = 1785377010
-updated_at = 1787120517
+updated_at = 1790183464
 weight = 0.0
 
 [[task]]
@@ -15723,7 +15723,7 @@ notes = """
 実測 (2026-08-03, linux-x86_64): バイナリ欠落時、blastguard の launcher だけは permissionDecision:ask + 'NOT evaluated / UNCHECKED, not approved' を stdout に出して fail-CLOSED する。一方 budgetguard / propguard / stuckguard / overwatch / autoflow / harness-status / playbook / runbook / session-insights / ship の launcher は stderr にメッセージを出すだけで exit 0 = hook 的には「異常なし」= ガードが無音で外れる。propguard / stuckguard / overwatch は check-plugin-rollout.py 自身が GATE crate として分類しているのに fail-open。condukt も同様で、condukt state autonomy-check の exit 0 が偽の「自律モード」として読まれ、/flow が human gate を自答し始める寸前だった (exit 1 = 非自律 が正)。対応方針: blastguard/bin/blastguard の launcher が既に持っている fail-closed パターンを全 plugin の launcher に横展開する。特に exit code の意味が「許可」に倒れる hook (PreToolUse/Stop) では絶対に exit 0 で抜けないこと。
 除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 8aeb4cab --status pending"""
 created_at = 1785740425
-updated_at = 1787120517
+updated_at = 1790183467
 weight = 0.0
 
 [[task]]
@@ -15741,7 +15741,7 @@ notes = """
 実測 (2026-08-03): scripts/rollout-plugins.sh --canary は canary stage plan を overwatch バイナリ (overwatch canary-plan) で計算する。しかし overwatch 自身が「linux バイナリ欠落」対象になっていると、launcher が空 stdout + exit 0 を返し、それを json.load して JSONDecodeError: Expecting value: line 2 column 1 で traceback crash する。= 「壊れた状態を直すための道具が、壊れた状態では使えない」ブートストラップ・デッドロック。しかも stage plan が空のまま進みかけるので fail-open でもある。対応方針: (1) canary-plan の stdout が空/非 JSON なら明示的に fail-closed して「overwatch を先に復旧せよ」と案内する (2) gate crate 自身の復旧は canary を要求しない bootstrap 経路を用意する。
 除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit b4947e03 --status pending"""
 created_at = 1785740425
-updated_at = 1787120517
+updated_at = 1790183467
 weight = 0.0
 
 [[task]]
@@ -15767,7 +15767,7 @@ touched_files = []
 status = "pending"
 notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 82ba4a00 --status pending"
 created_at = 1785809526
-updated_at = 1787120517
+updated_at = 1790183469
 weight = 0.0
 
 [[task]]
@@ -15780,7 +15780,7 @@ touched_files = []
 status = "pending"
 notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit dab60741 --status pending"
 created_at = 1785809527
-updated_at = 1787120517
+updated_at = 1790183469
 weight = 0.0
 
 [[task]]

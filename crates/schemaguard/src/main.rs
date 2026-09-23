@@ -147,10 +147,12 @@ fn cmd_check(args: CheckArgs) -> i32 {
 /// and the JSON object to print.
 ///
 /// Pure (no IO, no metrics side effect) so the three-answer resolution is
-/// directly testable — including the `Undetermined` → exit 2 arm, which the five
-/// registered schemas cannot currently reach end-to-end (every schema that
-/// declares `items` also declares `Ty::Array`, so a non-array value is rejected
-/// by the type check before the items constraint is reached).
+/// directly testable — including the `Undetermined` → exit 2 arm. Among the
+/// registered schemas, only the `undetermined-probe` probe schema reaches that
+/// arm end-to-end (its `items_any` field is `Ty::Any` with declared `items`;
+/// every other schema that declares `items` also declares `Ty::Array`, so a
+/// non-array value is rejected by the type check before the items constraint
+/// is reached). The CLI path is covered by `tests/undetermined_probe.rs`.
 ///
 /// `Verdict::exit_code` carries a single block code, and this CLI has two
 /// distinct blocking codes (1 = checked and invalid, 2 = could not determine),
@@ -316,9 +318,10 @@ mod tests {
     #[test]
     fn undetermined_check_exits_two_not_zero() {
         // The core invariant: a declared check the engine could not apply must
-        // not leave through the `valid: true` / exit 0 door. Not reachable
-        // through the five registered schemas today (see `check_verdict`'s
-        // docs), which is why it is exercised here on the mapping itself.
+        // not leave through the `valid: true` / exit 0 door. Exercised here on
+        // the mapping itself; the end-to-end CLI path goes through the
+        // `undetermined-probe` schema (see `check_verdict`'s docs and
+        // `tests/undetermined_probe.rs`).
         let value = json!({"config": {"id": "a"}});
         let report = schema::validate_report(&value, INAPPLICABLE_ITEMS_FIELDS, "");
         let (code, out) = check_verdict("test-schema", &report);

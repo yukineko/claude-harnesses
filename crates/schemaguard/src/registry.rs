@@ -214,6 +214,45 @@ static VERDICT_FIELDS: &[Field] = &[
     },
 ];
 
+// undetermined-probe → items_any items
+static UNDETERMINED_PROBE_ITEM_FIELDS: &[Field] = &[Field {
+    name: "id",
+    ty: Ty::String,
+    required: true,
+    enum_values: &[],
+    items: &[],
+}];
+
+/// `undetermined-probe` top-level fields.
+///
+/// This is a **probe schema**: no real producer emits `undetermined-probe`
+/// payloads. Its only purpose is to make the `Undetermined` verdict (exit 2
+/// from `check`) reachable end to end through the CLI (backlog d17107ad).
+///
+/// Every other registered schema that declares `items` also types the field
+/// `Ty::Array`, so a non-array value is rejected by the type check before the
+/// items constraint is reached. Here `items_any` is `Ty::Any`, which waives the
+/// type check, so a non-array value reaches the declared `items` sub-schema,
+/// which cannot be applied to it and is reported as undetermined. `name` is an
+/// ordinary required string so the plain violation arm (exit 1) is reachable
+/// on this schema too. Exercised by `tests/undetermined_probe.rs`.
+static UNDETERMINED_PROBE_FIELDS: &[Field] = &[
+    Field {
+        name: "name",
+        ty: Ty::String,
+        required: true,
+        enum_values: &[],
+        items: &[],
+    },
+    Field {
+        name: "items_any",
+        ty: Ty::Any,
+        required: true,
+        enum_values: &[],
+        items: UNDETERMINED_PROBE_ITEM_FIELDS,
+    },
+];
+
 // ── public API ───────────────────────────────────────────────────────────────
 
 /// All registered schema names in a stable order (used by `schemaguard list`).
@@ -223,6 +262,7 @@ pub fn names() -> Vec<&'static str> {
         "episode",
         "playbook",
         "scout-measure",
+        "undetermined-probe",
         "verdict",
     ]
 }
@@ -245,6 +285,10 @@ pub fn get(name: &str) -> Option<Schema> {
         "scout-measure" => Some(Schema {
             name: "scout-measure".to_string(),
             fields: SCOUT_MEASURE_FIELDS.to_vec(),
+        }),
+        "undetermined-probe" => Some(Schema {
+            name: "undetermined-probe".to_string(),
+            fields: UNDETERMINED_PROBE_FIELDS.to_vec(),
         }),
         "verdict" => Some(Schema {
             name: "verdict".to_string(),
@@ -494,8 +538,8 @@ mod tests {
     // ── names() / get() ────────────────────────────────────────────────────
 
     #[test]
-    fn names_returns_five_schemas() {
-        assert_eq!(names().len(), 5);
+    fn names_returns_six_schemas() {
+        assert_eq!(names().len(), 6);
     }
 
     #[test]

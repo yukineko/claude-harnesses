@@ -28,7 +28,7 @@ use anyhow::{bail, Result};
 
 use crate::config::Config;
 use crate::store::{project_key, repo_root};
-use harness_core::verdict::Determination;
+use harness_core::verdict::{Determination, Required};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -76,68 +76,89 @@ impl Drop for RunLock {
 /// today is only serialized by the upstream flow backlog lock). Mirrors
 /// `claim::CLAIMS_LOCK_KEY`; it never names a real run so cannot collide with one.
 ///
-/// **`<project>` here is the MAIN worktree root's project key, not the
-/// cwd's.** The fixed key alone does not make the lock repo-scoped — the
-/// DIRECTORY it lands in has to be repo-scoped too. Keyed off
-/// [`crate::store::repo_root`] it was not: in a linked worktree `.git` is a
-/// FILE, so `repo_root` stops at the worktree and each checkout got its own
-/// `__repo_primary__.lock`. Two condukt processes mutating the same primary
-/// repo from different checkouts then took two different locks and never
-/// contended (backlog `bcfc5491`). [`acquire_repo_primary`] therefore resolves
-/// [`harness_core::projkey::main_worktree_root`] and goes through
-/// [`RunLock::acquire_or_skip_in_project`] — the same treatment the claim
-/// registry already had.
+/// The fixed key alone is not sufficient for that "ONE per-repo lock": the
+/// PROJECT it is keyed under must also be repo-wide, which is why
+/// [`acquire_repo_primary`] resolves its project root through
+/// [`harness_core::projkey::main_worktree_root`] and not `repo_root`.
 pub const REPO_PRIMARY_LOCK_KEY: &str = "__repo_primary__";
+
+/// The project root the repo-primary lock is keyed by: the MAIN worktree root
+/// of the repo containing `cwd`, so every linked worktree of that repo and the
+/// main tree itself address ONE lock file.
+///
+/// Why not `repo_root` (which every run-state path still uses): `repo_root`
+/// stops at the first ancestor holding a `.git` ENTRY, and in a linked worktree
+/// `.git` is a FILE — so it returns the LINKED WORKTREE, giving each checkout
+/// its own project key and therefore its own `__repo_primary__.lock`. Two
+/// condukt processes would then each hold "the" primary lock and both mutate
+/// the ONE thing this lock protects: the shared git index, the shared
+/// `.git/worktrees` admin dir and the shared default branch. Under CLAUDE.md §8
+/// every session works in its own linked worktree, so that split is the normal
+/// case, not an edge one.
+///
+/// Run state is deliberately NOT re-keyed here: it is per-run bookkeeping that
+/// already lives on disk under `repo_root`-derived keys, and moving it would
+/// orphan those files (backlog `43393ce2`). Same opt-in shape the claim
+/// registry took in `d83b0e8f`.
+///
+/// `Undetermined` is a legitimate answer and is never collapsed into a path —
+/// see [`harness_core::projkey::main_worktree_root`] for the arms.
+fn repo_primary_project_root(cwd: &Path) -> Determination<PathBuf> {
+    harness_core::projkey::main_worktree_root(cwd)
+}
 
 /// Acquire the repo-scoped primary lock for the repo containing `cwd`, holding
 /// it (via the returned RAII guard) for the whole primary-repo critical section.
 ///
-/// **Keyed by the repo, not by the checkout.** The project root is
-/// [`harness_core::projkey::main_worktree_root`] — the identity that is stable
-/// across a repo's linked worktrees — so the main tree and every linked
-/// worktree of one repo contend on ONE lock file. `repo_root(cwd)` (what
-/// [`lock_path`] and [`RunLock::acquire_or_skip`] use, and what this function
-/// used before backlog `bcfc5491`) returns the LINKED WORKTREE itself, which
-/// silently gave each checkout a private lock guarding nothing shared.
+/// The lock file is `<state_dir>/<project-key of the MAIN WORKTREE ROOT>/`
+/// `__repo_primary__.lock` (see [`repo_primary_project_root`]), so a caller
+/// standing in a linked worktree and a caller standing in the main tree of the
+/// SAME repo contend that one file rather than each taking a private lock.
 ///
-/// **Fallible on purpose, on both arms.**
+/// **Fallible on purpose, in two ways.**
 ///
-/// - The bounded wait already absorbs ordinary contention (a live holder is
-///   waited out for [`RunLock::DEADLINE`], a dead holder is reaped and retried
-///   immediately), so reaching the deadline — or hitting an I/O/serialization
-///   error — means we genuinely cannot determine whether a peer is
-///   mid-mutation of the one primary repo.
-/// - An `Undetermined` main worktree root is the same class of answer one step
-///   earlier: without the repo-wide identity there is no way to name the lock
-///   every checkout of this repo shares, so any lock we could still take would
-///   guard nothing. Collapsing it to `repo_root` would be exactly the fail-open
-///   this function was fixed to close, and returning `Ok` would hand back a
-///   guard that means "checked" when nothing was checked.
+/// 1. The bounded wait already absorbs ordinary contention (a live holder is
+///    waited out for [`RunLock::DEADLINE`], a dead holder is reaped and retried
+///    immediately), so reaching the deadline — or hitting an I/O/serialization
+///    error — means we genuinely cannot determine whether a peer is
+///    mid-mutation of the one primary repo.
+/// 2. The project root itself may be `Undetermined` (an unreadable/unparseable
+///    `.git` gitfile, a missing `commondir`, a candidate root that cannot be
+///    verified). Then we do not know WHICH lock file is the repo's one lock,
+///    and there is no fallback: falling back to `repo_root(cwd)` would publish
+///    a per-checkout lock that a main-tree peer never contends — i.e. it would
+///    recreate exactly the split this keying removes, while looking locked.
 ///
-/// Both resolve to the restrictive side: `Err`, so the caller refuses instead
-/// of mutating `main`/the shared index/the worktree admin dir unlocked. Never
-/// panics.
+/// Both are cannot-determine, and both resolve to the restrictive side: `Err`,
+/// so the caller refuses instead of mutating `main`/the shared index/the
+/// worktree admin dir unlocked. Never panics.
 pub fn acquire_repo_primary(cfg: &Config, cwd: &Path) -> Result<RunLock> {
-    let project_root = match harness_core::projkey::main_worktree_root(cwd) {
-        Determination::Known(root) => root,
-        Determination::Undetermined(why) => bail!(
-            "could not resolve the main worktree root for {} ({why}); the \
-             repo-primary lock is keyed by that root, so it cannot be named — \
-             refusing to mutate the primary repo unlocked rather than falling \
-             back to a per-checkout lock that would guard nothing",
-            cwd.display()
-        ),
+    let root = match repo_primary_project_root(cwd).require() {
+        Required::Determined(root) => root,
+        Required::Blocked(v) => {
+            let why = match v.reason() {
+                Some(r) => r.as_str().to_string(),
+                None => "no reason recorded".to_string(),
+            };
+            bail!(
+                "could not determine the main worktree root for {} ({why}); \
+                 refusing to mutate the primary repo unlocked, because the one \
+                 lock file every checkout of this repo must contend cannot be \
+                 addressed (falling back to a per-checkout path would publish a \
+                 lock no peer contends)",
+                cwd.display()
+            );
+        }
     };
-    match RunLock::acquire_or_skip_in_project(cfg, &project_root, REPO_PRIMARY_LOCK_KEY) {
+    match RunLock::acquire_or_skip_in_project(cfg, &root, REPO_PRIMARY_LOCK_KEY) {
         Some(guard) => Ok(guard),
         None => bail!(
-            "could not acquire the repo-primary lock for {} (keyed by the main \
-             worktree root {}) within {:?}; refusing to mutate the primary repo \
-             unlocked (a concurrent condukt execution could be merging, \
-             committing into the shared index, or pruning worktrees at the same \
-             time)",
+            "could not acquire the repo-primary lock for {} (main worktree root {}) \
+             within {:?}; refusing to mutate the primary repo unlocked (a concurrent \
+             condukt execution could be merging, committing into the shared index, or \
+             pruning worktrees at the same time)",
             cwd.display(),
-            project_root.display(),
+            root.display(),
             RunLock::DEADLINE
         ),
     }
@@ -193,14 +214,6 @@ fn pid_alive(pid: u32) -> Determination<bool> {
 /// Lock file path for a run — sits beside the run's `<run-id>.json` state file,
 /// keyed the same way (sanitised run id, per project) so unrelated runs and
 /// unrelated projects never share a lock.
-///
-/// The project here is [`crate::store::repo_root`], which in a LINKED WORKTREE
-/// is the worktree itself (its `.git` is a file, and `repo_root` stops at the
-/// first ancestor that has one). That is correct for RUN STATE — those files
-/// already live on disk under worktree-derived keys, and re-keying them would
-/// orphan them (backlog `43393ce2`) — but it is wrong for anything whose
-/// contract is repo-wide. Those callers must NOT come through here; they resolve
-/// their own root and use [`lock_path_in_project`]. See its docs for the list.
 fn lock_path(cfg: &Config, cwd: &Path, run_id: &str) -> PathBuf {
     lock_path_in_project(cfg, &repo_root(cwd), run_id)
 }
@@ -210,21 +223,17 @@ fn lock_path(cfg: &Config, cwd: &Path, run_id: &str) -> PathBuf {
 /// [`lock_path`] is this function with `repo_root(cwd)` as the root — the
 /// composition is shared so the two can never drift in how they key the
 /// directory or sanitise the run id. It exists separately because a caller
-/// whose scope is REPO-WIDE rather than per-checkout must key its lock by the
-/// MAIN worktree root ([`harness_core::projkey::main_worktree_root`]) so every
-/// linked worktree of a repo contends on ONE file. Two callers need that:
+/// whose store is keyed by something other than `repo_root` (today: the claim
+/// registry, which is keyed by the MAIN worktree root so every linked worktree
+/// of a repo shares ONE registry) must put its lock beside its own store. If it
+/// went through `lock_path` instead, the shared `claims.json` would be
+/// read-modify-written under two different lock files — an unserialized race
+/// introduced by sharing the file.
 ///
-/// - the **claim registry** ([`crate::claim::CLAIMS_LOCK_KEY`]), whose store
-///   `claims.json` is itself keyed by that root. Through `lock_path` the one
-///   shared registry would be read-modify-written under two different lock
-///   files — an unserialized race introduced by sharing the file.
-/// - the **repo-primary lock** ([`REPO_PRIMARY_LOCK_KEY`]), which has no store
-///   of its own but guards the one primary repo — its shared index, its default
-///   branch, its worktree admin dir. Through `lock_path` each checkout got a
-///   private lock and the mutators it exists to serialize never contended
-///   (backlog `bcfc5491`).
-///
-/// Run state is neither: it stays on [`lock_path`]'s `repo_root`-derived path.
+/// The repo-primary lock ([`acquire_repo_primary`]) is the second such caller,
+/// for the same reason in the other direction: it protects a resource — the ONE
+/// git index / `.git/worktrees` admin dir / default branch — that every linked
+/// worktree shares, so it too must be keyed by the main worktree root.
 pub(crate) fn lock_path_in_project(cfg: &Config, project_root: &Path, run_id: &str) -> PathBuf {
     let dir = cfg.state_dir.join(project_key(project_root));
     dir.join(format!(
@@ -262,14 +271,9 @@ impl RunLock {
     /// proceed and double-write (last-writer-wins). Never panics.
     /// Waits up to [`RunLock::DEADLINE`]. Live callers:
     /// `state::with_run_locked`, `state::discard_experiment`, the `state set`
-    /// CLI arm and `repo_commit::commit`.
-    ///
-    /// NOT the repo-wide callers: `claim::*` and [`acquire_repo_primary`] key
-    /// on the main worktree root and go through
-    /// [`RunLock::acquire_or_skip_in_project`] instead. This entry point's
-    /// `repo_root`-derived path is per-CHECKOUT, so routing a repo-wide lock
-    /// through it hands each linked worktree a private lock (backlog
-    /// `bcfc5491`).
+    /// CLI arm, `claim::{claim_tasks, release_*, heartbeat, active_claims,
+    /// write_execution_state}`, `repo_commit::commit`, and (via
+    /// [`acquire_repo_primary`]) every primary-repo mutator in `worktree`/`main`.
     pub fn acquire_or_skip(cfg: &Config, cwd: &Path, run_id: &str) -> Option<Self> {
         Self::acquire_or_skip_at(lock_path(cfg, cwd, run_id), Self::DEADLINE)
     }
@@ -277,15 +281,15 @@ impl RunLock {
     /// [`RunLock::acquire_or_skip`] against an ALREADY-RESOLVED project root
     /// instead of a `cwd`.
     ///
-    /// Both REPO-WIDE locks use this, and only they:
+    /// Two callers use this, both because the thing they guard is shared by
+    /// every checkout of a repo and so must be keyed by the MAIN worktree root:
     ///
-    /// - the claim registry's [`crate::claim::CLAIMS_LOCK_KEY`] — that registry
-    ///   is keyed by the MAIN worktree root, so every linked worktree of a repo
-    ///   read-modify-writes ONE `claims.json` and must contend on ONE
-    ///   `__claims__.lock`;
-    /// - [`acquire_repo_primary`]'s [`REPO_PRIMARY_LOCK_KEY`] — the primary
-    ///   repo (shared index, default branch, worktree admin dir) is likewise one
-    ///   object for all of its checkouts (backlog `bcfc5491`).
+    /// - the claim registry, for its reserved [`crate::claim::CLAIMS_LOCK_KEY`]
+    ///   — every linked worktree read-modify-writes ONE `claims.json` and must
+    ///   therefore contend ONE `__claims__.lock`;
+    /// - [`acquire_repo_primary`], for [`REPO_PRIMARY_LOCK_KEY`] — every
+    ///   checkout mutates ONE git index, ONE `.git/worktrees` admin dir and ONE
+    ///   default branch, so they must contend ONE `__repo_primary__.lock`.
     ///
     /// Run state is NOT keyed that way, so every run-state caller stays on
     /// [`RunLock::acquire_or_skip`] and its `repo_root`-derived path is
@@ -613,12 +617,22 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    // The repo-primary lock is REPO-scoped, not run-scoped: `acquire_repo_primary`
-    // keys off the FIXED reserved id, so its lock file lands at
-    // `<state_dir>/<project-key>/__repo_primary__.lock` regardless of any run id
-    // — the single shared path every primary-repo mutator (merge / main-tree
-    // commit / prune) contends. It is genuinely HELD and distinct from the
-    // claims registry lock.
+    // The repo-primary lock is MAIN-WORKTREE-ROOT-scoped, not run-scoped:
+    // `acquire_repo_primary` keys off the FIXED reserved id under the project key
+    // of the repo's MAIN worktree root, so its lock file lands at
+    // `<state_dir>/<project-key of the main worktree root>/__repo_primary__.lock`
+    // regardless of any run id — the single shared path every primary-repo
+    // mutator (merge / main-tree commit / prune) contends, from whichever
+    // checkout it happens to stand in. It is genuinely HELD and distinct from
+    // the claims registry lock.
+    //
+    // Re-anchored (was `project_key(&repo_root(&cwd))`, and its message called
+    // the path "repo-scoped"): that prose named worktree-scoping as though it
+    // were repo-scoping. The property this test fixes — ONE fixed reserved key
+    // per repo, distinct from the claims-registry lock — is unchanged; only the
+    // root resolution it pins is sharpened. That a LINKED worktree resolves to
+    // the same root is the separate subject of
+    // `repo_primary_lock_is_one_lock_across_a_repo_and_its_linked_worktree`.
     #[test]
     fn acquire_repo_primary_is_held_and_repo_scoped() {
         assert_eq!(REPO_PRIMARY_LOCK_KEY, "__repo_primary__");
@@ -632,19 +646,30 @@ mod tests {
         std::fs::create_dir_all(&cwd).unwrap();
         let cfg = test_cfg(base.join("state"));
 
-        let expected = cfg
-            .state_dir
-            .join(project_key(&repo_root(&cwd)))
-            .join(format!(
-                "{}.lock",
-                harness_core::store::safe_session(REPO_PRIMARY_LOCK_KEY)
-            ));
+        // Fixture invariant, observed directly rather than by re-deriving the
+        // expectation from the code under test: `cwd` carries no `.git` entry
+        // and no ancestor of a fresh temp dir does either, so there is no
+        // linked-worktree indirection to follow and `cwd` IS its own main
+        // worktree root. The expected key below is therefore anchored on the
+        // literal `cwd`, not on a call to `repo_root`/`main_worktree_root`.
+        assert!(
+            !cwd.join(".git").exists(),
+            "fixture invariant: {} must have no .git entry, so it is its own \
+             main worktree root",
+            cwd.join(".git").display()
+        );
+        let expected = cfg.state_dir.join(project_key(&cwd)).join(format!(
+            "{}.lock",
+            harness_core::store::safe_session(REPO_PRIMARY_LOCK_KEY)
+        ));
 
         let guard = acquire_repo_primary(&cfg, &cwd).expect("repo-primary lock must be acquirable");
         assert!(guard.held(), "repo-primary lock must be genuinely held");
         assert!(
             expected.exists(),
-            "repo-primary lock file must be published at the repo-scoped path {}",
+            "repo-primary lock file must be published under the project key of the \
+             repo's MAIN WORKTREE ROOT (not of whichever checkout the caller stands \
+             in), at {}",
             expected.display()
         );
         drop(guard);
@@ -683,67 +708,249 @@ mod tests {
         std::fs::remove_dir_all(&base).ok();
     }
 
-    // The OTHER cannot-determine arm, one step earlier than acquisition: the
-    // repo-primary lock is keyed by `main_worktree_root`, so when that root is
-    // `Undetermined` the lock cannot even be NAMED. CLAUDE.md section 3 — that
-    // must not be written as "no lock needed" (an `Ok` guard) nor as a silent
-    // fallback to `repo_root` (which is the per-checkout key this lock was
-    // fixed to stop using, backlog `bcfc5491`). It must be `Err`.
+    // The `Undetermined` half of the main-worktree-root keying: when the repo's
+    // main worktree root CANNOT be resolved, `acquire_repo_primary` must resolve
+    // to `Err` and must publish NOTHING — never fall back to `repo_root(cwd)` or
+    // any other path.
     //
-    // Fault injection, deterministic and purely on the filesystem: a repo root
-    // whose `.git` is a FILE with no `gitdir:` line. `main_worktree_root` reads
-    // it as a gitdir pointer, cannot parse a target, and returns
-    // `Undetermined("main-worktree-root: gitfile-unparseable: ...")`. No timing,
-    // no subprocess, no git installation involved. The `state_dir` here is a
-    // perfectly good WRITABLE directory, so an acquisition would have SUCCEEDED
-    // had the code fallen back to a checkout-derived key — which is exactly the
-    // fail-open this asserts against.
+    // Injected fault: a `.git` FILE with no `gitdir:` line, which is exactly the
+    // `main-worktree-root: gitfile-unparseable` arm. Note the fault is chosen so
+    // that a fallback would SUCCEED (`repo_root` stops right here, because `.git`
+    // exists), which is what makes the two assertions able to tell a refusal from
+    // a fallback: a fallback would leave a published `__repo_primary__.lock`
+    // under the state dir that no main-tree peer ever contends — locked-looking
+    // and unserialized, the very split this keying removes.
+    //
+    // NOTE ON PROVENANCE (CLAUDE.md §2(a)): this test was written by the same
+    // agent that wrote the `Required::Blocked` arm it exercises, so it is WEAK
+    // evidence and wants review by a disinterested party. Its kill power was
+    // nonetheless observed, not assumed: with the arm mutated to
+    // `Required::Blocked(_) => crate::store::repo_root(cwd)` (the fail-open) it
+    // FAILS, at the first assertion — the grant is reached, so the run stops
+    // there and the published-lock assertion below is NOT separately exercised
+    // by that mutant.
     #[test]
     fn acquire_repo_primary_refuses_when_the_main_worktree_root_is_undetermined() {
         let base = std::env::temp_dir().join(format!(
-            "condukt-repo-primary-undet-{}-{}",
+            "condukt-repo-primary-undet-root-{}-{}",
             std::process::id(),
             now_unix_nanos()
         ));
         let cwd = base.join("repo");
         std::fs::create_dir_all(&cwd).unwrap();
-        // A `.git` FILE that designates nothing.
+        // A `.git` FILE that is not a parseable gitdir pointer.
         std::fs::write(cwd.join(".git"), b"this is not a gitdir pointer\n").unwrap();
-        let state = base.join("state");
-        std::fs::create_dir_all(&state).unwrap();
-
-        // Precondition: the injected fault really does produce `Undetermined`.
-        // Without this the test could pass for the wrong reason (e.g. the root
-        // resolving fine and the acquisition failing on something else).
-        let det = harness_core::projkey::main_worktree_root(&cwd);
         assert!(
-            matches!(det, Determination::Undetermined(_)),
-            "fault injection failed: main_worktree_root must be Undetermined for a \
-             `.git` file with no gitdir line"
+            cwd.join(".git").is_file(),
+            "fixture invariant: .git must be a FILE for the gitfile arm to be reached"
         );
+        let cfg = test_cfg(base.join("state"));
 
         // `match`, not `expect_err`: `RunLock` is intentionally not `Debug`.
-        let msg = match acquire_repo_primary(&test_cfg(state.clone()), &cwd) {
+        let msg = match acquire_repo_primary(&cfg, &cwd) {
             Ok(_) => panic!(
-                "an UNDETERMINED main worktree root must be Err: the repo-primary \
-                 lock cannot be keyed, so handing back a guard would report \
-                 'serialized' when nothing was serialized"
+                "an UNDETERMINED main worktree root must be `Err`: the one lock file \
+                 every checkout of this repo must contend cannot be addressed, so \
+                 there is no lock to hand out. Granting one here means a fallback \
+                 path was used."
             ),
             Err(e) => format!("{e:#}"),
         };
         assert!(
             msg.contains("main worktree root") && msg.contains("refusing"),
-            "the error must name the unresolvable main worktree root and say we \
+            "the error must name the unresolved main worktree root and say we \
              refuse; got: {msg}"
         );
-
-        // And it must not have fallen back to the per-checkout key: no lock file
-        // may exist anywhere under the state dir.
-        let key = project_key(&repo_root(&cwd));
         assert!(
-            !state.join(key).join("__repo_primary__.lock").exists(),
-            "refusing must not leave a lock published under the checkout-derived \
-             key — that is the very fallback this arm exists to prevent"
+            published_repo_primary_locks(&cfg.state_dir).is_empty(),
+            "an UNDETERMINED main worktree root must publish NO lock file at all; a \
+             fallback key (e.g. `repo_root(cwd)`, which stops at this very dir) would \
+             publish a per-checkout lock that no peer contends. Found {:?} under {}",
+            published_repo_primary_locks(&cfg.state_dir),
+            cfg.state_dir.display()
+        );
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// Run `git` in `dir`, failing the test loudly on a non-zero exit (a
+    /// half-built fixture must never be mistaken for the property under test).
+    fn git(dir: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap_or_else(|e| panic!("fixture: could not spawn `git {args:?}`: {e}"));
+        assert!(
+            out.status.success(),
+            "fixture: `git {args:?}` in {} failed (exit {:?}): stdout={} stderr={}",
+            dir.display(),
+            out.status.code(),
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// Every file named EXACTLY `<REPO_PRIMARY_LOCK_KEY>.lock` under `dir`
+    /// (the transient `…​.lock.tmp.*` publish files are not matched).
+    ///
+    /// This observes what the lock code ITSELF published instead of re-deriving
+    /// the path with `lock_path`/`repo_root`. Deriving the expectation from the
+    /// function under test is precisely what makes a test unable to tell
+    /// "worktree-scoped" from "main-worktree-scoped".
+    fn published_repo_primary_locks(dir: &Path) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    found.extend(published_repo_primary_locks(&p));
+                } else if p
+                    .file_name()
+                    .map(|n| n == format!("{REPO_PRIMARY_LOCK_KEY}.lock").as_str())
+                    .unwrap_or(false)
+                {
+                    found.push(p);
+                }
+            }
+        }
+        found.sort();
+        found
+    }
+
+    // The repo-primary lock must be scoped to the REPOSITORY, not to whichever
+    // checkout of it a process happens to be standing in. A real `git worktree
+    // add` gives the main tree a `.git` DIRECTORY and the linked worktree a
+    // `.git` FILE; both share ONE git index, ONE `.git/worktrees` admin dir and
+    // ONE default branch, which is exactly what every holder of this lock
+    // mutates (`worktree::merge`'s checkout+merge, the main-tree commit,
+    // `git worktree prune`). So a mutator whose cwd is the main tree and a
+    // mutator whose cwd is a linked worktree of the SAME repo must contend the
+    // SAME lock file, and the second must be REFUSED while the first holds it.
+    //
+    // The assertion observes the SERIALIZATION behaviour (the contender is
+    // refused), not merely path equality, because serialization is the property
+    // the lock is bought for; the published-lock-file paths are reported
+    // alongside it only to name the mechanism when it breaks. A failure is
+    // observed FAST (an unshared lock is granted immediately); only the passing
+    // path pays `RunLock::DEADLINE`, which is the honest cost of proving that a
+    // live holder is waited out rather than reaped.
+    #[test]
+    fn repo_primary_lock_is_one_lock_across_a_repo_and_its_linked_worktree() {
+        let base = std::env::temp_dir().join(format!(
+            "condukt-repo-primary-worktree-{}-{}",
+            std::process::id(),
+            now_unix_nanos()
+        ));
+        let main_tree = base.join("main-tree");
+        let linked = base.join("linked-wt");
+        std::fs::create_dir_all(&main_tree).unwrap();
+
+        git(&main_tree, &["init", "-q"]);
+        git(&main_tree, &["config", "user.email", "t@t.t"]);
+        git(&main_tree, &["config", "user.name", "t"]);
+        git(&main_tree, &["config", "commit.gpgsign", "false"]);
+        // `git worktree add` needs at least one commit to branch from.
+        std::fs::write(main_tree.join("seed.txt"), "seed\n").unwrap();
+        git(&main_tree, &["add", "seed.txt"]);
+        git(&main_tree, &["commit", "-q", "-m", "seed"]);
+        git(
+            &main_tree,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "linked-wt",
+                linked
+                    .to_str()
+                    .expect("fixture: worktree path must be UTF-8"),
+            ],
+        );
+
+        // Fixture invariants: without the real `.git`-file indirection this test
+        // would be testing nothing at all.
+        assert!(
+            main_tree.join(".git").is_dir(),
+            "fixture invariant: the main tree's .git must be a DIRECTORY, got {}",
+            main_tree.join(".git").display()
+        );
+        assert!(
+            linked.join(".git").is_file(),
+            "fixture invariant: the linked worktree's .git must be a FILE (a \
+             `gitdir:` pointer). That indirection — which makes `.exists()` true \
+             at the worktree itself — is the whole subject of this test; got {}",
+            linked.join(".git").display()
+        );
+
+        let cfg = test_cfg(base.join("state"));
+
+        // Holder: a primary-repo critical section entered with cwd = MAIN TREE.
+        let holder = match acquire_repo_primary(&cfg, &main_tree) {
+            Ok(g) => g,
+            Err(e) => panic!(
+                "setup: the first repo-primary acquire (cwd = the main tree) must \
+                 succeed on a fresh state dir; got: {e:#}"
+            ),
+        };
+        assert!(
+            holder.held(),
+            "setup: the main-tree holder must genuinely hold the lock"
+        );
+        let while_main_holds = published_repo_primary_locks(&cfg.state_dir);
+
+        // The property: a second primary-repo mutator standing in a LINKED
+        // WORKTREE of the same repo must contend that same lock, so it is
+        // refused rather than granted a second, independent lock.
+        let contender = acquire_repo_primary(&cfg, &linked);
+        // Snapshot WHILE the contender's guard (if it was wrongly granted one) is
+        // still alive, so the failure message reports the lock files that actually
+        // coexisted rather than what survived the contender's drop.
+        let during_contention = published_repo_primary_locks(&cfg.state_dir);
+        let granted = match contender {
+            Ok(g) => {
+                let held = g.held();
+                drop(g);
+                held
+            }
+            Err(_) => false,
+        };
+
+        assert!(
+            !granted,
+            "PROPERTY (the repo-primary lock is scoped to the REPOSITORY, not to a \
+             checkout) violated: `acquire_repo_primary` with cwd = the LINKED \
+             WORKTREE {} was GRANTED while a holder taken with cwd = the MAIN TREE \
+             {} of the SAME repository was still alive. Those two cwds share one \
+             git index, one `.git/worktrees` admin dir and one default branch — the \
+             very things every holder of this lock mutates — so they must contend \
+             ONE lock file and the second must be refused. Lock files published \
+             under {}: while only the main tree held it {:?}; while the \
+             linked-worktree acquire was outstanding {:?}. A SECOND, distinct path \
+             there means the lock is keyed by `repo_root(cwd)`, which stops at the \
+             first ancestor holding a `.git` ENTRY and therefore returns the LINKED \
+             WORKTREE itself (there `.git` is a FILE), instead of the main worktree \
+             root shared by both checkouts.",
+            linked.display(),
+            main_tree.display(),
+            cfg.state_dir.display(),
+            while_main_holds,
+            during_contention
+        );
+
+        assert_eq!(
+            during_contention.len(),
+            1,
+            "PROPERTY (one lock FILE per repository): a repo and its linked \
+             worktree must address a single `{REPO_PRIMARY_LOCK_KEY}.lock` under a \
+             single project-keyed directory; more than one means the two checkouts \
+             were keyed as separate projects and never contended. Found {:?} under {}",
+            during_contention,
+            cfg.state_dir.display()
+        );
+
+        drop(holder);
+        assert!(
+            published_repo_primary_locks(&cfg.state_dir).is_empty(),
+            "the repo-primary lock file must be released (removed) on guard drop"
         );
 
         std::fs::remove_dir_all(&base).ok();

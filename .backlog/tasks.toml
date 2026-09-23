@@ -1,3 +1,4 @@
+
 [[task]]
 id = "0ba79281"
 title = 'CLAUDE.md: Windows で成立しない cargo 手順 (. "$HOME/.cargo/env") を直す'
@@ -8190,7 +8191,7 @@ touched_files = []
 status = "pending"
 notes = "2026-07-28 時点で verdict 未採用 gate は 0 本になった (schemaguard 1601b835 / autoflow cec3a431 で解消)。残る勾配は harness_core::verdict の低採用 gate 各1 file: budgetguard / gauge / reviewgate。確立した手順は 監査 (read-only・docs/ へ出力・crates 無変更) から RED 先行観測、三値化 GREEN、micro bump、--plugin スコープの rollout までの2フェーズで、worker と verifier を別モデルにする。task text には必ず 既に fail-closed な経路のリスト を不合格条件として明記すること (誤検出で意図的設計を壊すのを防ぐため。autoflow の lock.rs:81 が実例)"
 created_at = 1785193820
-updated_at = 1790120246
+updated_at = 1785193820
 weight = 0.0
 issue_number = 84
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/84"
@@ -25208,7 +25209,7 @@ tags = [
     "condukt",
 ]
 touched_files = []
-status = "pending"
+status = "done"
 notes = """
 測定点 branch batch5-d83b0e8f ff985fac / 2026-09-13. d83b0e8f (claim registry) の調査項目として実測した確定の欠陥。読みは 1 つしかない (判定不能ではない)。機構: acquire_repo_primary(cfg, repo) は RunLock::acquire_or_skip 経由で lock_path に入り、lock_path は project_key(repo_root(cwd)) でキーを作る。呼び出し側が渡す repo は crates/condukt/src/worktree.rs:238 の toplevel(cwd) すなわち git rev-parse --show-toplevel であり、linked worktree では worktree 自身を返す。実測: from main tree が pp2/main、from linked wt が pp2/wt1。ランタイム確認 (condukt worktree reconcile が当該ロックを取る): 手順1 linked worktree から実行すると project dir は wt1-d22e03ed のみ。手順2 main tree から実行すると main-8fe192a0 と wt1-d22e03ed の 2 つ。手順3 main tree のディレクトリに live pid の __repo_primary__.lock を置いた状態で linked worktree から実行すると exit=0 で素通り (直列化されない)。手順4 は反証防止の control で、同じロックを linked worktree 自身のディレクトリに置いて同じ場所から実行すると exit=1 になり contended のメッセージが出る。したがってプローブは識別力を持っており手順3の素通りは本物。手順5 その worktree ロックを保持したまま main tree から実行すると exit=0 で素通り。影響: CLAUDE.md 第8節は全セッションが linked worktree で作業することを絶対義務としているので、共有 git index と default branch と worktree admin を変更する 2 プロセスは必ず別ロックになり決して競合しない。ロックが守るはずのものを守っていない。影響箇所: crates/condukt/src/main.rs:3258 と :3288 と :3318、crates/condukt/src/worktree.rs:645 と :894 と :1053 (worktree merge の checkout-default-branch + merge のクリティカルセクションを含む)。修正方向: d83b0e8f で claim registry に入れたのと同じ手当て、すなわち harness_core::projkey::main_worktree_root で解決した project root を使う lock_path_in_project 系を repo-primary にも適用する。両者は同型なので同じ道具が使える。関連 d83b0e8f 43393ce2
 
@@ -25216,9 +25217,71 @@ notes = """
 2026-09-13 22:42 を最後に 46 時間無出力のまま running と表示され続け、実装は 0 行だった
 (5 branch 中 4 本が main より 0 commit)。agent を停止し claim registry を解放して
 pending へ戻した。本チケットの内容自体は未着手のままで、失敗ではない。
-経緯と、回収した RED スイートの詳細は 2c1e54b3 にある。"""
+経緯と、回収した RED スイートの詳細は 2c1e54b3 にある。
+=== 解決 2026-09-23 (サイクル7) ===
+
+前提の再測定 (着手前、測定点 main 6725d0d3): TRUE。lock.rs:156 は依然
+lock_path_in_project(cfg, and repo_root(cwd), run_id) であり、
+acquire_repo_primary -> RunLock::acquire_or_skip -> lock_path -> repo_root(cwd)
+の経路で worktree 分裂が残っていた。
+
+着地: commit eab522d0 (main へ dafe3e70 で merge)。condukt 0.7.169 -> 0.7.170、
+3 ファイル lockstep 済み。
+
+修正内容: acquire_repo_primary が private な repo_primary_project_root 経由で
+harness_core::projkey::main_worktree_root を使い、既存の
+RunLock::acquire_or_skip_in_project で publish する。claim registry が
+d83b0e8f で取ったのと同型の opt-in。
+
+fail-closed (第3節): main worktree root が Undetermined のとき Required::Blocked
+アームは bail! して Err になる。**フォールバック経路は存在しない** — repo_root(cwd)
+へ落とすと、どの main-tree peer も contend しない per-checkout ロックを publish して
+しまい、施錠されているように見えたまま本件の分裂を再生産するため。Undet の reason は
+エラー文へ載せている。
+
+スコープ判断: lock_path / acquire_or_skip は**あえて** re-root していない。これらは
+per-RUN ロックと共有で、その契約は「ロックは自分の <run-id>.json の隣に置く」であり、
+state ファイルは既に repo_root 由来のキーでディスク上に存在する。一括で re-root すると
+全 run ロックが守るべき state から引き剥がされ既存ファイルが孤児化する (広い移行は
+43393ce2)。repo-primary だけが opt-in する形にした。呼び出し側 7 箇所
+(worktree.rs:670/919/1078/2374, main.rs:3379/3409/3439) はシグネチャも
+fallible 契約も不変。
+
+F to P オラクル: 成立を観測。tdd oracle -> transition fail_to_pass、valid_fp_oracle true。
+  RED (修正前 eb6c77bb): test result: FAILED. 5 passed; 1 failed; 834 filtered out
+    state/linked-wt-336da117/__repo_primary__.lock と
+    state/main-tree-b6a79b48/__repo_primary__.lock の 2 本が併存することを観測。
+  GREEN (eab522d0): test result: ok. 841 passed; 0 failed
+  main 上でも 3 回連続で 841 passed; 0 failed を確認 (dafe3e70)。
+
+第2節(a) の分離: F to P テスト
+lock::tests::repo_primary_lock_is_one_lock_across_a_repo_and_its_linked_worktree は
+先行セッションの別 agent が 8b8f058e で書いたものを**一切改変せずに**緑にした
+(8b8f058e..eab522d0 の差分でテスト本体が byte-identical であることを検証者が確認)。
+
+既存テストの再アンカー: acquire_repo_primary_is_held_and_repo_scoped は
+assertion メッセージを読んだうえで同一 commit で再アンカーした。旧メッセージは
+project_key(repo_root(cwd)) から導出しながら「repo-scoped」と名乗っており、
+worktree scoping を repo scoping と誤記していた。期待値は今は literal cwd に
+アンカーし、!cwd.join(".git").exists() の fixture 不変条件で裏付けている
+(テスト対象の resolver を呼び直して導出しない)。メッセージも
+「the project key of the repo's MAIN WORKTREE ROOT」と明示するよう鋭くした。
+
+追加テスト acquire_repo_primary_refuses_when_the_main_worktree_root_is_undetermined:
+Required::Blocked アームが kill rate ゼロの forwarding arm になるのを防ぐため追加。
+**実装者自身が書いたので第2節(a) 上は弱い証拠**である旨をテスト本文にも記載済み。
+利害関係のない検証者 (別モデル) が自分で
+Required::Blocked(_) => crate::store::repo_root(cwd) へ mutate して FAILED になることを
+独立に再現し、kill 能力を確認した。
+
+未実施 (隠さず明記): scripts/rollout-plugins.sh を走らせていないので、稼働ハーネスの
+condukt バイナリは旧挙動のまま。反映は別ステップ。
+
+副産物の観測 (別途起票): condukt の run state 自体も repo_root キーで per-worktree に
+分裂しており、linked worktree からは main の run が見えない (state resume-context が
+no run で落ちる)。本件と同じ欠陥クラスだがロックではなく state ストア側。"""
 created_at = 1789292612
-updated_at = 1790114679
+updated_at = 1790121087
 weight = 0.0
 issue_number = 605
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/605"
@@ -26137,7 +26200,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
 touched_files = []
-status = "pending"
+status = "done"
 notes = """
 実測 2026-09-13、測定点 c39701bc、rollout 直後（overwatch は harness-core 0.2.24 で再ビルド済み）。
 
@@ -26195,9 +26258,64 @@ main は今この RED を抱えている。隠していない: pre-commit は ca
 テスト作者とは別の実装者が行うこと (第2節(a))。
 
 overwatch は 0.2.34 -> 0.2.35 に lockstep 済み。GATE crate なので
-scripts/rollout-plugins.sh --canary が別途必要。"""
+scripts/rollout-plugins.sh --canary が別途必要。
+=== 解決 2026-09-23 (サイクル7) ===
+
+前提の再測定 (着手前、測定点 main 6725d0d3): TRUE。cargo test -p overwatch --bins は
+365 passed / 4 failed / 1 ignored で、6 日前と同一の 4 本が赤のままだった。
+
+着地: commit 32437a9c (main へ 39ce1952 で merge)。overwatch 0.2.35 -> 0.2.36、
+3 ファイル lockstep 済み。
+
+実装 (aggregate.rs の cache_is_fresh): ledger_mtime を実際に消費するようにした。
+  - Undetermined は return false (第3節: 判定不能は制限側)。match は網羅的にしてあり、
+    Determination に将来 variant が増えたら permissive 側へ黙って落ちるのではなく
+    コンパイルエラーになる。
+  - Known(m) で m >= built_at なら return false。同一秒の tie (順序づけ不能) を
+    含めるため > ではなく >= である。TTL 判定に到達する前に決まる。
+  - それ以外は従来どおり TTL と clock-skew (built_at <= now) が決める。
+
+docstring の是正 (第4節、同一 commit): a637ad63 が入れた
+「ledger_mtime is accepted but NOT consulted as of this commit」および
+「Do not describe this function as invalidating on ledger changes until that code is here」
+という記述は実装後は偽になるので、docstring ブロックごと書き直した。同じ主張をしていた
+テストブロックのコメント 2 箇所も併せて是正した。
+
+F to P オラクル: 成立を観測。transition fail_to_pass、valid_fp_oracle true。
+  RED (修正前): test result: FAILED. 3 passed; 3 failed; 364 filtered out
+    落ちた 3 本は rule2 x2 と rule3。
+  GREEN (32437a9c): test result: ok. 369 passed; 0 failed; 1 ignored
+  main 上でも 369 passed / 0 failed / 1 ignored を確認 (39ce1952)。
+
+第2節(a) の分離: 4 本の F to P テストは先行セッションの別 agent が書いたもので、
+**一切改変していない**。各関数本体を git show HEAD:... と新ファイルから機械抽出して
+byte 比較で確認した。#[test] は前後とも 48 個、#[ignore] は前後とも 0 個。
+
+再アンカーしたテスト 5 本 (いずれも assertion 本文と期待値は不変。名指ししている
+性質を保つための引数の付け替えのみ):
+  test_cache_is_fresh_within_ttl            known(1000) -> known(999)   TTL の新鮮さ (境界含む)
+  test_cache_is_fresh_expired_past_ttl      known(1000) -> known(999)   TTL 超過での失効
+  test_cache_is_fresh_rejects_future_built_at known(2000) -> known(1999) clock skew の拒否
+  test_build_cached_reuses_fresh_cache_without_rebuilding   leases 無し -> 空 registry (mtime = built_at - 1)
+  test_build_cached_second_call_within_ttl_hits_cache       leases 無し -> 空 registry (mtime = built_at - 1)
+最初の 3 本は ledger が built_at と同値だったため rule2 が先に発火してしまい、
+名指ししている性質 (TTL / clock skew) をもはや観測しなくなる。この引数は a637ad63 が
+シグネチャ移行時に機械的に挿入したもので、同 commit 自身が「accepted but NOT consulted」と
+書いているとおり同一秒の意味論についての人間の決定ではない (根拠は 56a2cc7b に記録済み)。
+後ろ 2 本は leases.json が存在しないと store::leases_mtime が Undetermined を返し
+rule3 が正しくキャッシュヒットを拒むため赤くなったもので、空 registry を置くことで
+「lease が登録されていない」という前提を保ったまま再アンカーした。
+
+未実施 (隠さず明記):
+  - overwatch は GATE クレートなので scripts/rollout-plugins.sh --canary が別途必要。
+    この run では走らせていない。稼働ハーネスの overwatch は旧挙動のまま。
+  - store::leases_mtime が「leases.json が存在しない」を Undetermined として返す点
+    (store.rs:95-103) は rule3 と組み合わさると「一度も lease が書かれていないストアでは
+    キャッシュを一切配らない」という、本チケットの rule よりも広い挙動になる。
+    制限側なので安全だが、absent と unreadable を分けるべきかは未評価。
+    store.rs は本タスクのスコープ外なので触っていない。別途起票する。"""
 created_at = 1789297114
-updated_at = 1790114679
+updated_at = 1790127688
 weight = 0.0
 issue_number = 628
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/628"
@@ -26627,9 +26745,66 @@ retain_claim は「Known(Stalled) のときだけ reap」なので、Undetermine
 なお本サイクル (run-20260913-223733-78880) では別の穴も見つけて 06eb8aa3
 として起票した: run が gate PASS しても file claim は自動解放されない。
 5e62b0eb が「reap が効かない」なのに対し、06eb8aa3 は「そもそも解放が
-呼ばれない」。2 つ揃うと、握ったまま死んだ run の claim は永久に残る。"""
+呼ばれない」。2 つ揃うと、握ったまま死んだ run の claim は永久に残る。
+=== 追加実測 2026-09-23、測定点 main 6725d0d3 — 同じ機構を TASK claim で再現した ===
+
+これまでの実測はすべて file claim だった。今回、同じ不死が **task claim** でも
+起きることを本セッション自身の claim で観測した。file claim 固有の穴ではなく
+retain_claim の progress ゲートそのものの帰結である。
+
+観測: 本セッション (2444be10-e07a-4c9a-a785-01f58d3995fa) が 2026-09-16 に取った
+4 件の task claim (a4050204859f1c7a / 3cd5754819c50a69 / 12e54ff974ef54b4 /
+caa9442e63a3e007) は、**152.5 時間 (6.4 日) 後も condukt state is-claimed が
+rc=0 (claimed) を返し続けた**。一方 backlog 側は CLAIM_STALE_SECS により
+4 件とも pending へ requeue 済みだった。
+
+機構 (crates/condukt/src/claim.rs:589-598、逐語):
+  「A claim whose heartbeat has lapsed past the TTL is kept UNLESS its run's
+   progress is confirmed Known(Stalled) - Progressing or Undetermined preserve
+   it (fail-closed: "cannot determine" never reaps).」
+claim を取った run (run-20260917-030727-89796) は stall watchdog で落ち、その
+worktree が消えたため progress が恒久的に Undetermined になる。したがって
+reap 条件 (Known(Stalled)) が永久に成立せず claim は不死になる。本チケットが
+主張している機構と同一であり、**file claim だけでなく task claim でも起きる**
+ことをこの測定が示している。
+
+=== 帰結 (これが実害) — 2 つの期限の不一致が deadlock を作る ===
+
+backlog は CLAIM_STALE_SECS (約 1 時間) で item を pending へ戻すのに、
+condukt 側の is-claimed は永久に claimed を返す。この 2 つの期限が一致していない
+ことが致命的で、次の閉ループになる:
+
+  1. backlog next --claim が item を後続セッションへ渡す (requeue 済みなので渡る)。
+  2. そのセッションは flow の claim-skip ゲートに従い condukt state is-claimed を引く。
+  3. rc=0 (claimed) が返るので「他セッションが作業中」と解釈して item をキューへ戻す。
+  4. 1 に戻る。
+
+つまり **どのセッションも受け取った直後に必ず手放す**。この 4 件は、誰かが手で
+claim を解放するまで、**どのセッションにも着手できない状態** に陥っていた。
+実際に本セッションが condukt state release-task を 4 回打って手で解放し、
+ようやくサイクル7 を再開できた。
+
+重要なのは「遅くなる」ではなく「**誰にも実行不能になる**」という点である。
+fail-closed が正しく効いた結果ではなく、判定不能が構造的に永久であるために
+制限側が解除不能になっている (本チケット冒頭の指摘と同じ構図)。
+
+したがって修正案には task claim 側の経路も含めること。retain_claim は file claim
+と task claim の両方を通るので、run の死を Known(Stalled) へ解決できるようにすれば
+両方が同時に直る。ただし live な run を誤って reap しないこと (両方向のテスト) は
+引き続き最優先の不変条件。
+
+併せて観測した他 run の不死 file claim (他セッションの所有物なので手を出さず、
+計測値としてのみ記録する。解放していない):
+
+  run-20260814-025356-78549   files=10   最新 heartbeat から 40.2 日
+  p0trio-1                    files=1    最新 heartbeat から 41.9 日
+
+前回測定 (2026-09-16) の 33.8 日 / 35.5 日から単調に増えており、reap が
+一度も発火していないことがここでも確認できる。なお 2026-09-16 に観測された
+run-20260913-223004-15261 の 10 件は今回のスナップショットには現れず、
+registry の合計は 11 件 (+ task_claims セクション) である。"""
 created_at = 1789306874
-updated_at = 1790120245
+updated_at = 1790120207
 weight = 0.0
 issue_number = 639
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/639"
@@ -27059,7 +27234,7 @@ done_criteria:
 関連: 5e62b0eb (progress 判定が Undetermined になり reap されない不死 claim)。
 あちらは「reap が効かない」、本件は「そもそも解放が呼ばれない」。別の穴。"""
 created_at = 1789566331
-updated_at = 1790120245
+updated_at = 1790114679
 weight = 0.0
 issue_number = 661
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/661"
@@ -28428,3 +28603,102 @@ updated_at = 1790138021
 weight = 0.0
 issue_number = 685
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/685"
+[[task]]
+id = "6af7bcdc"
+title = "condukt の run state ストアも repo_root キーで per-worktree に分裂する (bcfc5491 と同じ欠陥クラス、ロックではなく state 側)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "project-key",
+    "worktree-split",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-23、測定点 main 6725d0d3。bcfc5491 (repo-primary ロックの worktree 分裂) の修正中に副産物として観測した。
+
+現象: linked worktree を cwd にして condukt state resume-context --run run-20260917-030727-89796 を打つと
+  condukt: no run run-20260917-030727-89796 at /Users/yuki/.condukt/state/session-2444be10-d7db0410/run-20260917-030727-89796.json: No such file or directory (os error 2)
+となる。main tree から同じコマンドを打つと正常に JSON が返る。run state のプロジェクトキーが checkout ごとに別解決されている。
+
+機構: lock.rs の lock_path と同様、state パスも store::repo_root(cwd) 由来のキーを使う。repo_root は .git ENTRY を持つ最初の祖先で止まり、linked worktree では .git が FILE なので worktree 自身を返す。
+
+bcfc5491 との関係: 同じ欠陥クラスだが別の store であり、bcfc5491 では閉じていない。eab522d0 は repo-primary ロックだけを main_worktree_root へ opt-in させ、lock_path と run state は意図的に据え置いた。広い移行は 43393ce2。
+
+実害 (観測済み): CLAUDE.md 第8節が全作業を worktree で行うことを義務づけているのに、worktree からは自分の run が見えない。オーケストレータは state 系コマンドだけ main tree を cwd にせざるを得ず、worktree 分離の原則と矛盾する。
+
+判断は求めない。事実として起票する。"""
+created_at = 1790130736
+updated_at = 1790130736
+weight = 0.0
+issue_number = 680
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/680"
+
+[[task]]
+id = "840449a8"
+title = "condukt --bins に負荷依存フレークが 2 本 (claim_progress_head_signal_ignores_run_state_task_ordering / diffrisk_record every_invocation_is_journaled)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "flake",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-23、測定点 main dafe3e70。サイクル7 t1 の着地確認中に観測した。
+
+観測: cargo test -p condukt --bins を繰り返すと、別 worktree で cargo (overwatch のビルド/テスト) が同時に走っている間だけ単発の失敗が出る。2 回の run で**別々のテスト**が 1 本ずつ落ちた:
+
+  run A: 840 passed; 1 failed -> claim::tests::claim_progress_head_signal_ignores_run_state_task_ordering
+  run B: 840 passed; 1 failed -> diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded
+    (run B は t1 の検証者が独立に観測したもの)
+
+対照: 同時実行が無くなった後に 3 回連続で実行すると 3 回とも
+  test result: ok. 841 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+であった。したがって t1 (eab522d0、lock.rs のみ) の回帰ではない。
+
+疑い: 固定の一時パス / 共有ストアを使うテストが、並行 run と実ストアを取り合っている可能性。MEMORY の 'killed task leaves orphan loop' が記録している「固定 /tmp fixture 経由で 2 つの cargo test が互いを壊す」と同じ形に見える。claim 系は実際に ~/.condukt/state 配下の claims.json を触りうるので、テストが実ストアに触っていないかを先に確認すべき。
+
+これは隠さないために起票する。緑を 3 回観測したことを理由に「フレークだから無視」とはしない — 2 本とも判定経路 (claim progress と journal) のテストであり、負荷で落ちるなら本番でも判定不能になりうる。
+
+未検証: 原因の特定はしていない。どの一時パスを共有しているかは未調査。"""
+created_at = 1790130752
+updated_at = 1790130752
+weight = 0.0
+issue_number = 681
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/681"
+
+[[task]]
+id = "19a12a8e"
+title = "overwatch store::leases_mtime が leases.json の absent と unreadable を両方 Undetermined にするため、rule3 と組むと lease 未登録ストアでキャッシュを一切配らない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "overwatch",
+    "determination",
+    "absent-vs-unreadable",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-23、測定点 main 39ce1952。e073bdb1 (cache_is_fresh の rule2/rule3 実装) の実装者が作業中に気づき、スコープ外として報告してきたものを起票する。
+
+事実: store.rs:95-103 の store::leases_mtime は leases.json が**存在しない**場合も metadata unreadable と同じく Determination::Undetermined を返す。e073bdb1 で入れた rule3 は Undetermined を一律 not-fresh に倒すので、両者を合わせると「一度も lease が書かれていないストアでは status cache を一切配らない」という挙動になる。
+
+評価: 制限側なので安全であり fail-open ではない。ただし e073bdb1 が述べている rule よりも**広い**挙動であり、意図されたものかは未確認。
+
+論点: absent (台帳がまだ無い = 積極的な観測) と unreadable (台帳はあるが metadata が読めない = 本当に判定不能) は、CLAUDE.md 第3節の三値の考え方では別物のはずである。5e62b0eb で議論されている「worktree が消えていることは判定不能ではなく観測である」と同じ区別が、ここにも当てはまる可能性がある。
+
+スコープ: store.rs は e073bdb1 の touched_files 外なので今回は一切触っていない。絶対に黙って変えないこと — 制限側から緩める変更になるので、先に absent を Known として扱ってよい根拠を示す必要がある。
+
+未検証: absent を Known(0) 相当に倒した場合に何が fresh として配られるようになるかは測っていない。"""
+created_at = 1790130765
+updated_at = 1790130765
+weight = 0.0
+issue_number = 682
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/682"

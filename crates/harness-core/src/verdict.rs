@@ -516,6 +516,18 @@ impl<T> Required<T> {
     /// # Panics
     ///
     /// Panics when `self` is [`Required::Blocked`].
+    // Intentional, documented panic: this API's whole contract (see the
+    // `# Panics` doc above and the fail-closed panic barrier in
+    // `crate::gate::run::run_guarded`) is to abort on `Blocked` rather than
+    // silently substitute a value. Not a fail-open site.
+    #[expect(
+        clippy::panic,
+        reason = "documented `# Panics` API: Required::expect's entire \
+                  contract is to abort on Blocked; the Stop-hook panic \
+                  barrier resolves this to fail-closed block, so panicking \
+                  here is the intended behavior, not a judgment-bearing \
+                  fail-open"
+    )]
     #[track_caller]
     pub fn expect(self, msg: &str) -> T {
         match self {

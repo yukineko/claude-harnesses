@@ -70,16 +70,25 @@ unwrap_used = "deny"
 expect_used = "deny"
 # panic は上の2つと同じ理由（判定を持つ crate で panic は判定不能そのもの）だが、
 # 経緯が違う: これは新規の締め付けではなく、既に 15 ファイルに手貼りされていた
-# `#![deny(clippy::panic)]` の集約先。うち **10 個をここへ引き取り**、該当ファイルの
-# 属性行を削除した（blastguard lib+main / mutategate lib+main / overwatch lib+main /
-# propguard main / specguard main+forge-main / stuckguard main）。
+# `#![deny(clippy::panic)]` の集約先。最初の10個は 2026-07-23 (c23ac506) にここへ
+# 引き取り、該当ファイルの属性行を削除した（blastguard lib+main / mutategate
+# lib+main / overwatch lib+main / propguard main / specguard main+forge-main /
+# stuckguard main）。残る 5 個（budgetguard / donegate / reviewgate / schemaguard
+# lib+main）は、その時点では該当 crate が `[lints] workspace = true` を持たず
+# （それは unwrap_used / expect_used の deny も同時に持ち込むため、当時はスコープ外
+# としていた）、手貼りのまま残していた。
 #
-# 残る 5 個（budgetguard / donegate / reviewgate / schemaguard lib+main）は
-# **手貼りのまま残す**。集約するにはその crate に `[lints] workspace = true` が要り、
-# それは unwrap_used / expect_used の deny も同時に持ち込む＝この一手のスコープを超える。
-# 「15 個を集約した」ではなく「10 個を集約し 5 個を残した」と書くのは、
-# 散文が実挙動と食い違わないようにするため（CLAUDE.md 第4節）。残り 5 個の集約は
-# それらの crate が workspace lints を opt-in する時に持ち越す。
+# **その5個も含め、15個全てがここへ集約済み**（budgetguard / donegate / reviewgate /
+# schemaguard / harness-core の5 crate が `[lints] workspace = true` を opt-in
+# したのに合わせて、該当ファイルの手貼り `#![deny(clippy::panic)]` を削除）。
+# 集約に伴い露出した production 側の unwrap/expect/panic は、各 crate で
+# 個別に処理済み（schemaguard main.rs の serde_json::to_string(..).unwrap() は
+# 「値を印字できなかった verdict は clean に見えてはならない」の原則に沿って
+# print_json_verdict によるエラーハンドリングへ置換、harness-core store.rs の
+# 静的 regex と verdict.rs の Required::expect の意図的 panic は per-site
+# `#[expect(clippy::expect_used/panic, reason = "…")]` で ratchet 化）。
+# 「15 個を集約した」がいまの正しい状態であり、「10 個を集約し 5 個を残した」は
+# 過去の中間状態を指す（散文が実挙動と食い違わないようにするため。CLAUDE.md 第4節）。
 #
 # 集約が空虚でないことは対照実験で確認済み（2026-07-23 / c23ac506 の上）:
 # 属性を外し この行も入れない状態では production の panic! を clippy は

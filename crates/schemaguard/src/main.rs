@@ -1,7 +1,5 @@
 //! schemaguard — schema-validation gate for LLM structured outputs.
 //!
-#![deny(clippy::panic)]
-//!
 //! Validates a JSON value against a named declared schema, emits a structured
 //! error (the re-ask contract) when invalid, and records reject counts so
 //! silent drops at source→executor boundaries become observable.
@@ -14,10 +12,18 @@
 //!   1  — JSON parsed but schema violations found
 //!   2  — could not determine: JSON failed to parse, an unknown schema was
 //!        requested, a declared check could not be applied to the value it was
-//!        handed (reported under `undetermined`), or (`metrics`) the reject
-//!        store exists but is unreadable
+//!        handed (reported under `undetermined`), (`metrics`) the reject
+//!        store exists but is unreadable, or the verdict itself could not be
+//!        serialized to JSON (reported on stderr; stdout carries no verdict)
 //!
 //! This is a plain CLI, not a lifecycle hook — do not wrap in `run_hook`.
+//!
+//! `clippy::panic` (along with `unwrap_used`/`expect_used`) is now enforced via
+//! this crate's `[lints] workspace = true` in `Cargo.toml`, which inherits the
+//! aggregated `[workspace.lints.clippy]` in the root `Cargo.toml` — this used to
+//! be a hand-placed `#![deny(clippy::panic)]` here; it moved to the shared
+//! aggregation point instead of being duplicated.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -70,6 +76,37 @@ struct MetricsArgs {
 
 // ── command handlers ──────────────────────────────────────────────────────────
 
+/// Serialize `value` to JSON and print it to stdout, returning whether that
+/// succeeded.
+///
+/// Every verdict this CLI prints is built from this crate's own string/number/
+/// bool fields, so in practice `Serialize` cannot fail on them — but
+/// `Serialize` IS fallible in general (e.g. a non-finite `f64`, a non-UTF-8 map
+/// key), and `.unwrap()`-ing that here would turn an unreachable-in-practice
+/// error into an uncontrolled panic instead of an observable answer. A verdict
+/// the caller cannot print is not a clean verdict: on this (believed
+/// unreachable) error path this writes a plain-text, unambiguously-non-JSON
+/// line to stderr and returns `false` so every call site forces exit code 2
+/// ("cannot determine") rather than falling through to whatever exit code the
+/// unprintable verdict would have carried.
+fn print_json_verdict<T: serde::Serialize>(value: &T, pretty: bool) -> bool {
+    let rendered = if pretty {
+        serde_json::to_string_pretty(value)
+    } else {
+        serde_json::to_string(value)
+    };
+    match rendered {
+        Ok(s) => {
+            println!("{s}");
+            true
+        }
+        Err(e) => {
+            eprintln!("schemaguard: internal error: verdict could not be serialized: {e}");
+            false
+        }
+    }
+}
+
 fn cmd_check(args: CheckArgs) -> i32 {
     // Resolve schema first so we can fail fast before reading any input.
     let schema = match registry::get(&args.schema) {
@@ -93,7 +130,7 @@ fn cmd_check(args: CheckArgs) -> i32 {
                     "valid": false,
                     "error": format!("cannot read file {}: {}", path.display(), e)
                 });
-                println!("{}", serde_json::to_string(&out).unwrap());
+                print_json_verdict(&out, false);
                 return 2;
             }
         },
@@ -101,7 +138,7 @@ fn cmd_check(args: CheckArgs) -> i32 {
             let mut buf = String::new();
             if let Err(e) = std::io::stdin().read_to_string(&mut buf) {
                 let out = json!({"valid": false, "error": format!("cannot read stdin: {}", e)});
-                println!("{}", serde_json::to_string(&out).unwrap());
+                print_json_verdict(&out, false);
                 return 2;
             }
             buf
@@ -118,7 +155,7 @@ fn cmd_check(args: CheckArgs) -> i32 {
                 "valid": false,
                 "error": format!("invalid JSON: {}", e)
             });
-            println!("{}", serde_json::to_string(&out).unwrap());
+            print_json_verdict(&out, false);
             return 2;
         }
     };
@@ -139,8 +176,14 @@ fn cmd_check(args: CheckArgs) -> i32 {
             report.violations().len() + report.undetermined().len(),
         );
     }
-    println!("{}", serde_json::to_string(&out).unwrap());
-    code
+    // A verdict that could not be printed must not report as clean: if
+    // serialization somehow fails, force exit 2 ("cannot determine") rather
+    // than returning `code`, which could be 0.
+    if print_json_verdict(&out, false) {
+        code
+    } else {
+        2
+    }
 }
 
 /// Map a validation [`schema::Report`] onto this CLI's verdict: the exit code
@@ -239,16 +282,19 @@ fn cmd_metrics(args: MetricsArgs) -> i32 {
         }
     };
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&counts).unwrap());
+        // Same "unprintable verdict must not report clean" rule as cmd_check:
+        // if this (believed-unreachable) serialization ever fails, force exit
+        // 2 instead of falling through to 0.
+        if !print_json_verdict(&counts, true) {
+            return 2;
+        }
+    } else if counts.is_empty() {
+        println!("No rejects recorded yet.");
     } else {
-        if counts.is_empty() {
-            println!("No rejects recorded yet.");
-        } else {
-            println!("{:<20} rejects", "schema");
-            println!("{}", "-".repeat(32));
-            for (schema, count) in &counts {
-                println!("{:<20} {}", schema, count);
-            }
+        println!("{:<20} rejects", "schema");
+        println!("{}", "-".repeat(32));
+        for (schema, count) in &counts {
+            println!("{:<20} {}", schema, count);
         }
     }
     0

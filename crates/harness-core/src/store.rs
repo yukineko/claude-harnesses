@@ -135,6 +135,19 @@ fn note_session_tag(path: &Path) -> Option<String> {
 }
 
 fn tagged_note_re() -> Regex {
+    // The pattern is a hardcoded string literal with no runtime-variable input
+    // (never built from user/session data), so the only way `Regex::new` can
+    // fail here is a syntax typo in this literal. That typo would still be a
+    // RUNTIME panic (regex syntax is not checked by rustc), but it fires on
+    // every call regardless of input, so the unit test
+    // `store::tests::detects_filename_session_tag` panics on it and a broken
+    // pattern cannot land silently.
+    #[expect(
+        clippy::expect_used,
+        reason = "static regex literal with no variable input; a syntax error \
+                  here panics on every call and is caught by \
+                  store::tests::detects_filename_session_tag"
+    )]
     Regex::new(r"-([0-9a-f]{8}|nosess)-\d{8}-\d{6}$").expect("static regex")
 }
 

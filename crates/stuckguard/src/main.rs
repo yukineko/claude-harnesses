@@ -199,20 +199,26 @@ fn watch() {
                 record_lesson(&session, t);
             }
         }
-    } else if cfg.progress_advisory_enabled {
+    } else {
         // The early, soft advisory only runs when the hard detector did NOT
         // already trip this call — it never replaces or alters the hard
         // repeat/oscillation escalation above, it's strictly an additional,
         // lower-severity signal for the case the hard detector missed.
-        emitted = progress_advisory_message(&mut st, seq, &cfg);
-    } else if cfg.scope_drift_enabled {
-        // PDO scope-drift advisory (§4.4): lowest priority, structurally
-        // mutually exclusive with the hard trip and the progress advisory above
-        // (else-if chain), so it never replaces or perturbs their bookkeeping.
+        if cfg.progress_advisory_enabled {
+            emitted = progress_advisory_message(&mut st, seq, &cfg);
+        }
+        // PDO scope-drift advisory (§4.4): lowest priority. It runs only when
+        // the hard detector did not trip (outer else) AND the progress
+        // advisory did not EMIT this call — gated on the actual output, not on
+        // `progress_advisory_enabled`, so enabling both advisories never makes
+        // scope-drift unreachable (CA-stuckguard-01). At most one advisory is
+        // emitted per call, and a firing progress advisory keeps priority.
         // Only fires when the session holds an anchor with a non-empty scope.
-        if let Some(a) = &anchor {
-            emitted = anchor::scope_drift(&st.events, &a.scope, cfg.drift_threshold)
-                .map(|drifted| anchor::scope_drift_message(&a.scope, &drifted));
+        if emitted.is_none() && cfg.scope_drift_enabled {
+            if let Some(a) = &anchor {
+                emitted = anchor::scope_drift(&st.events, &a.scope, cfg.drift_threshold)
+                    .map(|drifted| anchor::scope_drift_message(&a.scope, &drifted));
+            }
         }
     }
 
@@ -515,7 +521,9 @@ ignore_tools = ["TodoWrite"]
 # --- PDO session anchor (needs overwatch; both fail-soft to no-op) ---
 # scope_drift_enabled = false  # nudge when recent edits fall OUTSIDE the session's
                              # declared anchor scope (overwatch lease). default OFF —
-                             # opt in; fires below the hard/progress advisories.
+                             # opt in; fires below the hard/progress advisories:
+                             # only when neither emitted this call (both advisories
+                             # may be on together; at most one fires per call).
 # drift_threshold = 3          # consecutive out-of-scope edits before it fires
 # heartbeat_piggyback_enabled = true  # refresh condukt/overwatch heartbeat on every
                              # tool call so a long task isn't falsely reaped and stolen
@@ -943,8 +951,8 @@ mod tests {
     #[test]
     fn progress_advisory_does_not_replace_hard_escalation_trip() {
         // Simulates the watch() dispatch: when detect::detect() finds a hard
-        // trip, the progress advisory branch must never run (it's an
-        // `else if`) — the hard escalation message must be exactly what
+        // trip, the progress advisory branch must never run (it lives in the
+        // `else` of the hard-trip branch) — the hard escalation message must be exactly what
         // main.rs's message() would already produce, unaffected by the
         // advisory feature existing at all.
         let cfg = Config {

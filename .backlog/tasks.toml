@@ -8367,9 +8367,12 @@ project_unresolved = false
 tags = ["p1"]
 touched_files = []
 status = "pending"
-notes = "Measurement half of 5b33b4cd, split out because it cannot be satisfied by shipping — it needs two real Continuous-Audit rounds run under the new rules. Shipped in 0558db6f (overwatch 0.2.15, deployed and live-verified): audit-round record refuses regression_tests_added < confirmed, continuous-audit.sh stops on it via run_ow_gate, SKILL.md Step 3.5 mirror sweep is mandatory. What remains is purely observation: run two rounds and check audit-metrics reports converging:true both times. Baseline to beat, from the ledger that motivated the item: new_findings 5,1,13,0,14,15 with converging:false and round 2026W29 at confirmed:10 / regression_tests_added:0. Caveat when reading the result: closure_rate is now an acceptance precondition and will read 1.0 for every new round, so it carries no signal — judge convergence ONLY by the new_findings trend, which is what is_converging actually uses. A rise in new_findings is not automatically failure either: Step 3.5 is expected to surface twins that previously went unharvested, so an early round may legitimately go UP before it comes down."
+notes = """
+Measurement half of 5b33b4cd, split out because it cannot be satisfied by shipping — it needs two real Continuous-Audit rounds run under the new rules. Shipped in 0558db6f (overwatch 0.2.15, deployed and live-verified): audit-round record refuses regression_tests_added < confirmed, continuous-audit.sh stops on it via run_ow_gate, SKILL.md Step 3.5 mirror sweep is mandatory. What remains is purely observation: run two rounds and check audit-metrics reports converging:true both times. Baseline to beat, from the ledger that motivated the item: new_findings 5,1,13,0,14,15 with converging:false and round 2026W29 at confirmed:10 / regression_tests_added:0. Caveat when reading the result: closure_rate is now an acceptance precondition and will read 1.0 for every new round, so it carries no signal — judge convergence ONLY by the new_findings trend, which is what is_converging actually uses. A rise in new_findings is not automatically failure either: Step 3.5 is expected to surface twins that previously went unharvested, so an early round may legitimately go UP before it comes down.
+
+USER RULING 2026-09-24: run 3+ real Continuous-Audit rounds under the DEFAULT window (no --window 2, no goal redefinition). Each round closes every CONFIRMED with a regression test before record. Record from the MAIN repo root (ledger is keyed by cwd; a worktree cwd writes a different ledger). Round 2026W39 (new=25, confirmed=19, unverified=6, tests=19) is the first of the series; converging still NO."""
 created_at = 1785341708
-updated_at = 1790183422
+updated_at = 1790184608
 weight = 0.0
 issue_number = 94
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/94"
@@ -15531,7 +15534,7 @@ project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "claimed"
+status = "pending"
 notes = """
 除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 3e2aade5 --status pending
 
@@ -15559,9 +15562,11 @@ Q2. Is systemMessage invisible to the model?
 - So the flat claim "systemMessage is invisible to the model" is FALSE for async hooks and DirectoryAdded(slash_command).
 - SILENT in the source: whether a SYNCHRONOUS hook's systemMessage on the remaining events also reaches the model. The source says only "shown to the user" (L958); it never says "not Claude" for it (contrast permissionDecisionReason, L1815, which says "shown to the user but not Claude" explicitly). Reading A: user-only (implied by the L3710/L2868 contrasts). Reading B: unstated; not guaranteed invisible. -> human.
 
-STOPPED FOR HUMAN: 上の SILENT 2 点 (PreToolUse で JSON を返すが permissionDecision を省いた場合 / 同期 hook の systemMessage が model に届くか) は一次資料が沈黙しているため、両読みを記録して停止。決着手段の候補: 人間の判断、または claude -p を使った観測テスト。関連起票: ceb0a9bf (fugu-router の top-level additionalContext), 19ebd4a9 (context-governor io.rs の (not the model) コメント)。"""
+STOPPED FOR HUMAN: 上の SILENT 2 点 (PreToolUse で JSON を返すが permissionDecision を省いた場合 / 同期 hook の systemMessage が model に届くか) は一次資料が沈黙しているため、両読みを記録して停止。決着手段の候補: 人間の判断、または claude -p を使った観測テスト。関連起票: ceb0a9bf (fugu-router の top-level additionalContext), 19ebd4a9 (context-governor io.rs の (not the model) コメント)。
+
+USER RULING 2026-09-24: settle both open points by MEASUREMENT: write a minimal experimental hook and observe in Claude Code (a) what a PreToolUse hook's valid JSON without permissionDecision does, (b) whether a synchronous hook's systemMessage reaches the model. Record observed behaviour with version and date."""
 created_at = 1785310500
-updated_at = 1790180266
+updated_at = 1790184608
 weight = 0.0
 
 [[task]]
@@ -15614,7 +15619,7 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "claimed"
+status = "pending"
 notes = """
 2026-07-30 AEGIS で実測。誤検知ではなく設計どおりの命中だが、ルールが over-broad。
 
@@ -15669,9 +15674,11 @@ worktree の後片付けまで手作業になった (touch は通るのに rm �
 除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit a82274cb --status pending
 
 ## 2026-09-24 session-9d349393 /condukt: STOPPED FOR HUMAN (spec gap, no code change)
-The notes' own open design questions remain (glob-loader repos, per-project opt-in vs conservative default, touch/rm asymmetry). Added counterexample to the premise that an unregistered hook file executes nothing: if settings.json or a hooks.json already REGISTERS a hook path that does not exist yet, creating that file activates it — so allow-only-new-files needs a registration check (a settings parser inside a GATE crate) or it opens a hole. Also: blastguard Ask hardens to Deny outside CLAUDE_CODE_ENTRYPOINT=cli, so Ask is not an escape either. Needs a human decision on the design before a GATE-crate change. Note also the 2026-08-17 exclusion above."""
+The notes' own open design questions remain (glob-loader repos, per-project opt-in vs conservative default, touch/rm asymmetry). Added counterexample to the premise that an unregistered hook file executes nothing: if settings.json or a hooks.json already REGISTERS a hook path that does not exist yet, creating that file activates it — so allow-only-new-files needs a registration check (a settings parser inside a GATE crate) or it opens a hole. Also: blastguard Ask hardens to Deny outside CLAUDE_CODE_ENTRYPOINT=cli, so Ask is not an escape either. Needs a human decision on the design before a GATE-crate change. Note also the 2026-08-17 exclusion above.
+
+USER RULING 2026-09-24: RESUME design (supersedes the 2026-08-17 exclusion for this item). Settle the open design questions (per-project opt-in, registration check for pre-registered-but-absent hook paths, touch/rm asymmetry) and implement."""
 created_at = 1785376257
-updated_at = 1790180280
+updated_at = 1790184609
 weight = 0.0
 
 [[task]]

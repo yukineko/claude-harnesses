@@ -1,4 +1,3 @@
-
 [[task]]
 id = "0ba79281"
 title = 'CLAUDE.md: Windows で成立しない cargo 手順 (. "$HOME/.cargo/env") を直す'
@@ -29541,6 +29540,7 @@ updated_at = 1790184142
 weight = 0.0
 issue_number = 714
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/714"
+
 [[task]]
 id = "45c3a699"
 title = "backlog: done/cancelled を tracked の tasks.done.toml に分離し tasks.toml を pending 系だけにする"
@@ -29558,3 +29558,453 @@ updated_at = 1790183776
 weight = 0.0
 issue_number = 712
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/712"
+
+[[task]]
+id = "cfe6d14c"
+title = "gate-check escalated: task specguard-rollout risk=high reversible=false policy_is_auto=false"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt-gate",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "finding-id:gate-exec:run-20260724-054246-15607:specguard-rollout file:(none) severity:high | confirmed: 61日前 | regression test: 該当テストなし"
+created_at = 1790184307
+updated_at = 1790184307
+weight = 0.0
+issue_number = 716
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/716"
+
+[[task]]
+id = "79f1c03b"
+title = "gate-check escalated: task overwatch-rollout risk=high reversible=false policy_is_auto=false"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt-gate",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "finding-id:gate-exec:run-20260724-081356-91102:overwatch-rollout file:(none) severity:high | confirmed: 61日前 | regression test: 該当テストなし"
+created_at = 1790184310
+updated_at = 1790184310
+weight = 0.0
+issue_number = 717
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/717"
+
+[[task]]
+id = "ab178c4d"
+title = "gate-check escalated: task audit-canary-gate-coverage risk=high reversible=false policy_is_auto=true"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt-gate",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "finding-id:gate-exec:run-20260729-061440-32616:audit-canary-gate-coverage file:(none) severity:high | confirmed: 56日前 | regression test: 該当テストなし"
+created_at = 1790184313
+updated_at = 1790184313
+weight = 0.0
+issue_number = 718
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/718"
+
+[[task]]
+id = "4026e1a0"
+title = "gate-check escalated: task fix-canary-gate-final-stage risk=high reversible=false policy_is_auto=true"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt-gate",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "finding-id:gate-exec:run-20260729-061440-32616:fix-canary-gate-final-stage file:(none) severity:high | confirmed: 56日前 | regression test: 該当テストなし"
+created_at = 1790184315
+updated_at = 1790184315
+weight = 0.0
+issue_number = 719
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/719"
+
+[[task]]
+id = "d186c736"
+title = "record freshness: audit-convergence at 0 exceeds threshold 1 — Continuous-Audit rounds are finding fewer new problems over time"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "record-audit",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "finding-id:record-audit:audit-convergence file:(none) severity:high | confirmed: 55日前 | regression test: 該当テストなし"
+created_at = 1790184320
+updated_at = 1790184320
+weight = 0.0
+issue_number = 720
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/720"
+
+[[task]]
+id = "a7bc4de5"
+title = "record freshness: review-queue-depth at 42 exceeds threshold 20 — entries waiting on the human review surface"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "record-audit",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "finding-id:record-audit:review-queue-depth file:(none) severity:med | confirmed: 55日前 | regression test: 該当テストなし"
+created_at = 1790184323
+updated_at = 1790184323
+weight = 0.0
+issue_number = 721
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/721"
+
+[[task]]
+id = "6667b13a"
+title = "record freshness: backlog-rot at 4 exceeds threshold 0 — items pending over 21d, plus re-failed resurfacers"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "record-audit",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "finding-id:record-audit:backlog-rot file:(none) severity:med | confirmed: 55日前 | regression test: 該当テストなし"
+created_at = 1790184326
+updated_at = 1790184326
+weight = 0.0
+issue_number = 722
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/722"
+
+[[task]]
+id = "3bc58806"
+title = "parallelguard: LockGuard Drop removes lock by path w/o ownership token; slow-alive holder (>30s STALE_LOCK) deletes thief's lock -> concurrent RMW -> lost slot -> over-cap admit; doc :39-40 claim false"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "continuous-audit",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "finding-id:CA-parallelguard-01 file:crates/parallelguard/src/store.rs:90 severity:med | confirmed: 0日前 | rationale: verifier(opus): :90-94 Drop remove_file; :142-144 steal; :113 mtime age; :41 30s; main.rs:125-165 RMW; model.rs:113 cap. Needs SIGSTOP/suspend/clock step (hook timeout 10s). Crate PARKED. | regression test: 該当テストなし"
+created_at = 1790184328
+updated_at = 1790184382
+weight = 0.0
+issue_number = 723
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/723"
+
+[[task]]
+id = "1286de7d"
+title = "parallelguard twin: steal-vs-steal race — two waiters both see dead lock abandoned; second remove_file deletes first's fresh lock; both enter critical section"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "continuous-audit",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "finding-id:CA-parallelguard-02 file:crates/parallelguard/src/store.rs:141 severity:med | confirmed: 0日前 | rationale: verifier(opus) mirror sweep: :141-144 remove_file then create_new without re-check; realistic after a SIGKILLed hook with parallel batch. | regression test: 該当テストなし"
+created_at = 1790184331
+updated_at = 1790184383
+weight = 0.0
+issue_number = 724
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/724"
+
+[[task]]
+id = "4825a415"
+title = 'parallelguard: panic barrier wraps only decide(); emit() println! panic (EPIPE) escapes -> exit 101 (non-blocking) contradicting "every panic denies" doc'
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "continuous-audit",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "finding-id:CA-parallelguard-03 file:crates/parallelguard/src/main.rs:94 severity:low | confirmed: 0日前 | rationale: verifier(opus): :94 catch_unwind(decide); :104 emit; :195 println!; Cargo.toml:109 panic=unwind; doc :20-23. | regression test: 該当テストなし"
+created_at = 1790184334
+updated_at = 1790184384
+weight = 0.0
+issue_number = 725
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/725"
+
+[[task]]
+id = "0004faf8"
+title = "overwatch append_disposition dedup reads dispositions best-effort; unreadable/undecodable ledger -> duplicate row appended; rates count len() without per-id dedup (skew appears after repair)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "continuous-audit",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "finding-id:CA-overwatch-02 file:crates/overwatch/src/store.rs:1033 severity:med | confirmed: 0日前 | rationale: verifier(opus): :1033 read_dispositions; append :1043-1047; callers disposition_cli.rs:44, specguard main.rs:1592 unguarded; reconcile.rs:25-28 names risk; disposition.rs:110-131 rate over len. | regression test: 該当テストなし"
+created_at = 1790184337
+updated_at = 1790184386
+weight = 0.0
+issue_number = 726
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/726"
+
+[[task]]
+id = "7703f6d7"
+title = "overwatch twins: append_bridged_finding :725, append_bridged_entry :832, append_merge_conflict_resolution :1655, clear_runtime_overlap_holds :1283 do dedup-then-append on best-effort readers"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "continuous-audit",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "finding-id:CA-overwatch-03 file:crates/overwatch/src/store.rs:725 severity:low | confirmed: 0日前 | rationale: verifier(opus) mirror sweep: bridged paths gated upstream by scan_* in bridge.rs:406/412 (backstop only); resolution duplicates benign. Low. | regression test: 該当テストなし"
+created_at = 1790184339
+updated_at = 1790184387
+weight = 0.0
+issue_number = 727
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/727"
+
+[[task]]
+id = "15274c94"
+title = "systemic signature recurred 4x across 1 task(s)/2 session(s)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "systemic",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "kind:systemic identifier:blastguard:tee-truncate occurrences:1"
+created_at = 1790184341
+updated_at = 1790184341
+weight = 0.0
+issue_number = 728
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/728"
+
+[[task]]
+id = "1875f626"
+title = "systemic signature recurred 14x across 1 task(s)/4 session(s)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "systemic",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "kind:systemic identifier:blastguard:unknown-verb-protected-path occurrences:1"
+created_at = 1790184342
+updated_at = 1790184342
+weight = 0.0
+issue_number = 729
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/729"
+
+[[task]]
+id = "28f5be7f"
+title = "systemic signature recurred 5x across 1 task(s)/3 session(s)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "systemic",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "kind:systemic identifier:blastguard:interpreter-unrecoverable-write occurrences:1"
+created_at = 1790184344
+updated_at = 1790184344
+weight = 0.0
+issue_number = 730
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/730"
+
+[[task]]
+id = "326edfee"
+title = "systemic signature recurred 5x across 1 task(s)/2 session(s)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "systemic",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "kind:systemic identifier:blastguard:git-config-hookspath occurrences:1"
+created_at = 1790184346
+updated_at = 1790184346
+weight = 0.0
+issue_number = 731
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/731"
+
+[[task]]
+id = "9e644320"
+title = "systemic signature recurred 11x across 1 task(s)/2 session(s)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "systemic",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "kind:systemic identifier:blastguard:scoped-destructive-confined occurrences:1"
+created_at = 1790184347
+updated_at = 1790184347
+weight = 0.0
+issue_number = 732
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/732"
+
+[[task]]
+id = "6cf12ce9"
+title = "systemic signature recurred 20x across 1 task(s)/3 session(s)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "systemic",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "kind:systemic identifier:blastguard:unresolvable-command-word occurrences:1"
+created_at = 1790184349
+updated_at = 1790184349
+weight = 0.0
+issue_number = 733
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/733"
+
+[[task]]
+id = "7614e28e"
+title = "systemic signature recurred 3x across 3 task(s)/2 session(s)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "systemic",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "kind:systemic identifier:blastguard:protected-path occurrences:1"
+created_at = 1790184351
+updated_at = 1790184351
+weight = 0.0
+issue_number = 734
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/734"
+
+[[task]]
+id = "7c4e8218"
+title = "systemic signature recurred 3x across 3 task(s)/3 session(s)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "systemic",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "kind:systemic identifier:autoflow:record-requested occurrences:1"
+created_at = 1790184352
+updated_at = 1790184352
+weight = 0.0
+issue_number = 735
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/735"
+
+[[task]]
+id = "7c776a26"
+title = "[merge-conflict] merge of condukt/run-20260917-030727-89796/run-20260917-030727-89796/t3-reap-dead-run-claims into main held: 4 file(s) [.claude-plugin/marketplace.json, Cargo.lock, crates/condukt/.claude-plugin/plugin.json, crates/condukt/Cargo.toml]"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "merge-conflict",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "kind:merge-conflict identifier:condukt/run-20260917-030727-89796/run-20260917-030727-89796/t3-reap-dead-run-claims/merge-conflict occurrences:1"
+created_at = 1790184354
+updated_at = 1790184354
+weight = 0.0
+issue_number = 736
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/736"
+
+[[task]]
+id = "d28fb530"
+title = "awaiting human answer: t3/t4 (both edit crates/condukt/src/claim.rs) are BLOCKED by a file claim held by run p0trio-1, dead 41.9 days. User instruction for this batch was explicitly: do NOT clear the 11 foreign claims. Repo precedent (recorded in ticket 5e62b0eb itself) is that 'condukt state release --run <dead-run> --file <path>' with documented death evidence is the sanctioned, non-hiding override. Death evidence observed: (1) holder pid 94789 absent from ps; (2) heartbeat 41.9 days stale; (3) run state file p0trio-1.json mtime frozen Aug 12 10:46; (4) its surviving worktree HEAD frozen 2026-08-13; (5) its t1 and t3 worktrees are ABSENT, which is exactly the mechanism that makes progress permanently Undetermined and the claim immortal. This is defect 5e62b0eb blocking its own fix. Need a human ruling. (run run-20260917-030727-89796 task t3-reap-dead-run-claims)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "escalation",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "kind:escalation identifier:esc-6299e17a occurrences:1"
+created_at = 1790184355
+updated_at = 1790184355
+weight = 0.0
+issue_number = 737
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/737"
+
+[[task]]
+id = "3503d99e"
+title = "awaiting human answer: condukt worktree reconcile: the 2026-08-12 ruling settles LIVENESS for unclaimed worktrees but not DEATH. Under the strict reading Occupancy::Dead becomes unreachable from reconcile, which also makes the --preserve content-rescue path dead code (its match arms all require Known(Dead)) and makes two currently-green tests unpassable: dirty_worktree_is_preserved_before_it_becomes_removable and stale_preserved_ref_does_not_authorize_deletion. What positively establishes death? (run run-20260814-005232-58819 task t2-occupancy-undetermined)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "escalation",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "kind:escalation identifier:esc-bc08e8bd occurrences:1"
+created_at = 1790184357
+updated_at = 1790184357
+weight = 0.0
+issue_number = 738
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/738"
+
+[[task]]
+id = "d9ced7d3"
+title = "[merge-conflict] merge of condukt/run-20260728-015338-90001/audit-verdict-paths into main held: 0 file(s) [(unknown files)]"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "merge-conflict",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "kind:merge-conflict identifier:condukt/run-20260728-015338-90001/audit-verdict-paths/merge-conflict occurrences:1"
+created_at = 1790184359
+updated_at = 1790184359
+weight = 0.0
+issue_number = 739
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/739"
+
+[[task]]
+id = "c2f9cc02"
+title = "awaiting human answer: git_fast_subprocess フレークが 7 種の高負荷レシピ(最大 9x 減速・OOM 圧・3並列フルスイート)で一度も再現しなかった。閾値は crates/condukt/src/worktree.rs:2170 の Duration::from_secs(3) で、これは run_git_bounded_with に渡す実タイムアウト。再現が無いので閾値の測定的根拠も決定論置換の検証もできない。どうするか? (run run-20260721-220121 task t2)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "escalation",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "kind:escalation identifier:esc-72fbbf6f occurrences:1"
+created_at = 1790184361
+updated_at = 1790184361
+weight = 0.0
+issue_number = 740
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/740"

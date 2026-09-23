@@ -8293,7 +8293,7 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "done"
 notes = """
 監査で確定 (測定点 6302d166、測定日 2026-07-29)。42 crate 中 workspace lints を opt-in しているのは 8 crate のみ (blastguard fetchguard mutategate overwatch propguard specguard stuckguard taintguard)。残り 34 crate には clippy::unwrap_used / expect_used の強制が一切無い。
 
@@ -8305,7 +8305,7 @@ harness-core も未被覆。これは全プラグインバイナリに静的リ�
 
 完了条件の案: 4 crate へ lints workspace opt-in を追加し、露出する既存の unwrap と expect を修正する。crate ごとに version の micro bump を 3 ファイル lockstep で行う。harness-core は別途検討 (crate 数が多く露出量が読めないため、まず件数を実測してから分割する)。"""
 created_at = 1785327705
-updated_at = 1790183422
+updated_at = 1790184139
 weight = 0.0
 issue_number = 90
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/90"
@@ -29507,3 +29507,36 @@ updated_at = 1790183637
 weight = 0.0
 issue_number = 711
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/711"
+
+[[task]]
+id = "7f79ae47"
+title = "tasks.toml 3-way merge の newer-wins が終端状態 done を live requeue の pending で巻き戻す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-09-24 integ merge 505553f4: b19aad51 was done (verified PASS) on session-9d349393; main's live hook wrote status=pending with a newer updated_at; the per-id newer-wins rule restored pending, so a finished task re-entered the queue. Terminal states (done/cancelled) should be monotonic in any merge. Structural cause shared with f09db5ce (claim/requeue writes land in tracked file) and 45c3a699 (done rows in a separate append-only file would make this impossible). Re-marked done manually."
+created_at = 1790184140
+updated_at = 1790184140
+weight = 0.0
+issue_number = 713
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/713"
+
+[[task]]
+id = "c767cb47"
+title = "gate-bypass ledger は空の staged diff での pre-commit 実行で clear され、未検査の merge commit の diff を検査しないまま push を通す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-09-24: push of 4331fd90 was blocked by gate-bypass ledger (merge commit made by ff post-merge in main's tree had no certificate). Running .githooks/pre-commit in the integ worktree with an EMPTY staged diff printed 'gates green - cleared 1 ungated commit(s)' and the retry push passed. The commit's own merge diff (tasks.toml only here) was never re-checked. Two readings: (a) fail-open - clearing binds to tree state, not to the ungated commit's diff, so any ungated commit can be laundered by an empty run; (b) by design - the certificate attests the current tree passes all gates, which subsumes the commit. Distinguish: check whether the gates that run on an empty staged diff actually scan the full tree (e.g. check-doc-claims does) or only the staged diff (e.g. test-weakening, secret guard on added lines)."
+created_at = 1790184142
+updated_at = 1790184142
+weight = 0.0
+issue_number = 714
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/714"

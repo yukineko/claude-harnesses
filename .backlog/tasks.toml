@@ -28732,6 +28732,258 @@ issue_number = 686
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/686"
 
 [[task]]
+id = "76ea3820"
+title = "condukt claim_progress: absent session transcript is a second, independent immortality source for file claims"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "pending"
+notes = """
+Twin of 5e62b0eb, found while fixing it. Measured 2026-09-23 at main 94341ef2.
+
+progress.rs fingerprint_from_signals returns Undetermined if ANY input signal is Undetermined (harness-core/src/progress.rs:148, and its own test fingerprint_from_signals_is_undetermined_if_any_signal_is). claim_progress (condukt/src/claim.rs:492) folds THREE signals: run-worktree-heads, transcript, run-tasks.
+
+locate_session_transcript_in returns Undetermined when no transcript file is found for the session id (harness-core/src/transcript.rs:352-355), even when the projects dir itself was read successfully. That is a readable-directory negative result being reported as cannot-determine.
+
+MEASUREMENT: all 10 immortal file claims held by run-20260814-025356-78549 are owned by session b57a58c3-eec2-4880-bc67-40ffdafb18cd. That session has NO transcript under the claude projects dir (glob returns no matches; the projects dir itself is readable). So the transcript signal is Undetermined for those claims RIGHT NOW.
+
+CONSEQUENCE: fixing only run_worktree_head_signal (backlog 5e62b0eb, task t3) does NOT un-stick these 10 claims. The fingerprint stays Undetermined via the transcript arm, retain_claim keeps the claim, and the reap still never fires. 5e62b0eb was closed on the worktree axis only; this is the mirror axis.
+
+DESIGN QUESTION (genuine, do not assume): is a readable projects dir with no transcript for that session a positive observation of death, or a failure to observe? A live Claude Code session always has a transcript being written, and reap is only considered after the heartbeat is already stale past the stuck TTL of 1800s. But a transcript can also be absent because the projects dir moved or was pruned. Decide under CLAUDE.md section 3, and keep the overriding invariant that a LIVE run is never wrongly reaped."""
+created_at = 1790138428
+updated_at = 1790138428
+weight = 0.0
+issue_number = 687
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/687"
+
+[[task]]
+id = "d4d74fe2"
+title = "condukt diffrisk_record test every_invocation_is_journaled flakes under full-suite parallelism"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "pending"
+notes = """
+Measured 2026-09-23 at main ce1d3235, taking the cycle-7 baseline.
+
+cargo test -p condukt --bins  =>  840 passed / 1 failed.
+The single failure: diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded
+  assertion left == right failed: one record per invocation
+    left: 1
+   right: 2
+
+cargo test -p condukt --bins diffrisk_record  =>  7 passed / 0 failed. The same test passes in isolation.
+
+So this is a parallelism flake, not a real baseline red: the journal fixture is shared across concurrently running tests, so a peer test records into the same journal and the count assertion sees the wrong number. Same class as the known fixed-/tmp-fixture corruption pattern.
+
+Impact: it makes the condukt baseline non-green, so every task in this crate has to argue its red is pre-existing rather than simply reading a green baseline. That is exactly the condition under which a real regression gets waved through as the known flake.
+
+Fix direction: give the journal fixture a per-test unique path (the other claim.rs/progress tests already do this via make_tmp_dir), or serialize the test. Do NOT fix it by loosening the assertion to a range - the assertion one record per invocation is the property under test."""
+created_at = 1790138439
+updated_at = 1790138439
+weight = 0.0
+issue_number = 688
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/688"
+
+[[task]]
+id = "a16f8014"
+title = "condukt SKILL.md routes serial tasks and fast-path into main working tree, contradicting CLAUDE.md section 8"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "pending"
+notes = """
+Observed 2026-09-23 while running the cycle-7 batch through /condukt.
+
+condukt schedule put all four cycle-7 tasks in serial (file overlap is authoritative over class parallel). The condukt SKILL.md then instructs, for serial tasks, the Phase 4.5.5 fast path and the Phase 5 B single-worktree mode, that the work is implemented directly in the main working tree:
+  - Phase 4.5.5: main上で直接実装し / commit は condukt repo commit 経由
+  - Phase 5 B: 全タスクを main の作業ツリー1つで実行する
+  - Phase 5 A step 4 needs-serial: worktree を破棄し、タスクを serial として main で直接実装
+
+CLAUDE.md section 8 forbids this without exception: main の作業ツリーで許されるのは統合 merge と conflict 解決だけ. The carve-out for minor edits was explicitly removed. check-worktree-isolation.py blocks non-merge commits from the main working tree at pre-commit, so following SKILL.md as written would be blocked by the repo gate anyway.
+
+So the two documents disagree, and SKILL.md is the one that is wrong for this repo. In this run I deviated deliberately: each serial task got its own worktree and was run sequentially, which satisfies both the scheduler ordering and section 8.
+
+This matters because the SKILL is the instruction an autonomous agent follows. An agent that follows it literally will either be blocked by the pre-commit gate, or worse, reach for the shared skip file to get past it, which is the fail-open pressure section 5 warns about.
+
+Fix direction: change the serial and fast-path routing in crates/condukt/skills/condukt/SKILL.md to use a per-task worktree run sequentially, rather than the main working tree. Note condukt repo commit exists precisely to guard the shared index, so the SKILL guidance predates the section 8 tightening rather than disagreeing with it on purpose - confirm that before rewriting."""
+created_at = 1790138453
+updated_at = 1790138453
+weight = 0.0
+issue_number = 689
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/689"
+
+[[task]]
+id = "65d0c726"
+title = "condukt claim registry holds a task claim under an EMPTY STRING hashkey"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "pending"
+notes = """
+Observed 2026-09-23 in the live registry via condukt state claims.
+
+The task_claims section contains an entry whose key is the empty string:
+  key ""  run_id flow-9d349393-ae47-4a86-b705-252d48ab4dea  title "d17107ad 1d8df0e8d35d6398"  heartbeat age about 2.0h
+
+Every other task claim is keyed by a 16-hex-char hashkey (for example 12e54ff974ef54b4, caa9442e63a3e007). The title field of this entry contains what looks like a backlog id plus a hashkey as a single space-separated string, so a caller appears to have passed the hashkey positionally into the title slot and left the key argument empty.
+
+Why this is not cosmetic: the empty key is a single global slot. Any other run that also claims with an empty hashkey will collide with it, either stealing this claim or being told the item is already claimed when it is not. And condukt state is-claimed on an empty hashkey will answer about whatever last wrote that slot.
+
+This should be fail-closed, not silently accepted: claiming with an empty hashkey is a caller bug and the claim call should refuse it with a non-zero exit and a named reason, rather than writing an entry that can never be addressed or released by hashkey.
+
+Not filed as part of 5e62b0eb or 06eb8aa3 - it is a separate input-validation gap in the claim registry. Left in place, not cleared, because it belongs to another session."""
+created_at = 1790138469
+updated_at = 1790138469
+weight = 0.0
+issue_number = 690
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/690"
+
+[[task]]
+id = "752e006a"
+title = "condukt worktree create doubles the run id into the branch name when --branch is already run-qualified"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "pending"
+notes = """
+Observed 2026-09-23, condukt 0.7.168.
+
+Command run:
+  condukt worktree create --run run-20260917-030727-89796 --topic t3-reap-dead-run-claims --branch condukt/run-20260917-030727-89796/t3-reap-dead-run-claims
+
+Resulting branch:
+  condukt/run-20260917-030727-89796/run-20260917-030727-89796/t3-reap-dead-run-claims
+
+The run id appears TWICE. condukt prefixes the run namespace onto whatever --branch is given, so passing an already-qualified name double-prefixes it silently, with no warning and no diagnostic.
+
+Why this is not cosmetic: the later merge step is documented as
+  condukt worktree merge --branch condukt/$RID/<id>
+and that name does NOT exist, so the merge fails with
+  condukt: branch not found: does not resolve to a commit; refusing to merge (nothing recorded as a conflict)
+The operator then has to discover the real name by hand. The refusal itself is correct and fail-closed, which is good; the problem is upstream, that create accepted an input it then silently rewrote.
+
+Evidence this is a repeatable trap and not a one-off slip: the previous session on this same run produced the identical doubling, recorded in the cycle-7 brief as branch
+  condukt/run-20260917-030727-89796/run-20260917-030727-89796/t1-repo-primary-lock
+So two independent sessions hit it the same way.
+
+Contributing cause in the docs: the condukt SKILL.md Phase 5 step 1 shows --branch condukt/<t.id> in the command, then says the real branch becomes condukt/$RID/<t.id>, and every later step refers to condukt/$RID/<id>. Reading those together invites passing the qualified form to create.
+
+Fix direction: either reject an already-run-qualified --branch with a named error (fail-closed, consistent with the merge refusal), or normalise it idempotently so double-prefixing cannot happen. Also make create PRINT the branch it actually created, not only the worktree path - it currently prints only the path, so the rewrite is invisible at the point it happens."""
+created_at = 1790151326
+updated_at = 1790151326
+weight = 0.0
+issue_number = 695
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/695"
+
+[[task]]
+id = "e3d49aea"
+title = "guard-maintree-edit blocks Edit during a legitimate merge conflict resolution on main"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "pending"
+notes = """
+Observed 2026-09-23 while integrating the cycle-7 t3 branch.
+
+CLAUDE.md section 8 permits exactly one class of operation on the main working tree: 統合 merge と conflict 解決. The guard hook scripts/guard-maintree-edit.py states this itself in its own refusal text:
+  Merge / conflict-resolution are the ONLY operations allowed on the main tree.
+
+But the hook then refuses the Edit that performs that very conflict resolution. Repro: start a real merge on main that conflicts, then try to Edit a conflicted file to remove the markers. Verbatim refusal:
+  Refused: editing /Users/yuki/src/harness/crates/condukt/Cargo.toml writes to this project MAIN working tree.
+
+So the hook blocks the one main-tree operation its own message declares allowed. It cannot currently tell that a merge is in progress.
+
+Impact: the operator is pushed toward one of three bad outcomes - reach for CONDUKT_MAINTREE_OVERRIDE (turns a targeted guard into a blanket one, and per the maintree-guard stale-lock finding that override should not be used casually), or edit via sed to dodge the PreToolUse hook (which also makes editgate go dark, backlog 41508876), or abandon the merge.
+
+Workaround used in this run, which is clean and needs no override: merge main INTO the feature branch inside the worktree, resolve the conflict there where editing is allowed, commit, then fast-forward main. Main is never edited. This should probably be the documented procedure regardless.
+
+Note the fast-forward then trips the gate-bypass ledger (one outstanding entry, since FF moves HEAD with no pre-commit run on main) even though the merge content was fully gate-judged green in the worktree. The ledger self-clears on the next green pre-commit, so it is survivable, but it means the clean workaround still leaves a transient red.
+
+Fix direction: make the hook detect an in-progress merge (MERGE_HEAD present in the gitdir) and allow edits to files that are currently unmerged (git diff --name-only --diff-filter=U), while still refusing edits to any other path. That keeps the guard fail-closed for ordinary edits and stops it from contradicting its own stated carve-out. Do NOT widen it to allow arbitrary edits whenever MERGE_HEAD exists."""
+created_at = 1790151343
+updated_at = 1790151343
+weight = 0.0
+issue_number = 696
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/696"
+
+[[task]]
+id = "09d12125"
+title = "blastguard false positive: an arrow inside a quoted python string parses as a shell redirect"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "pending"
+notes = """
+Observed 2026-09-23.
+
+Command attempted (a read-only inspection of a tdd proof file):
+  python3 -c "
+  import json
+  d=json.load(open(PATH))
+  for k,v in d.items():
+      ... print(k, chr(61)+chr(62), v) ...
+  "
+where the printed separator was the two-character arrow written literally inside the double-quoted python program.
+
+blastguard refused, verbatim:
+  (single-quote)> (space)(single-quote) destroys the file current contents and `` is a relative path and blastguard does not know which directory it is relative to, so it cannot tell whether these bytes are recoverable
+
+The arrow inside the quoted python source was parsed as an output redirect, and the redirect target resolved to the empty string, which then produced the relative-path branch of the message. No file was ever going to be written - the whole program is a single quoted -c argument.
+
+Note the refusal itself is the correct SHAPE: it is fail-closed, and refusing when it cannot tell whether bytes are recoverable is exactly CLAUDE.md section 3. The defect is the tokenisation upstream of that judgement, not the judgement.
+
+Two concrete symptoms worth fixing together:
+1. The command text is tokenised without respecting the quoting of the -c argument, so ordinary punctuation inside a quoted program is read as shell metacharacters.
+2. The rendered message interpolates an EMPTY target and still prints backticks around nothing, producing the unreadable fragment: `` is a relative path. When the parsed redirect target is empty, that is itself evidence the parse is wrong, and it should be reported as a parse failure rather than as a finding about a file.
+
+Related class: the existing note that backticks in a double-quoted --notes argument are command-substituted and silently eat that span. Same root - argument text being re-parsed as shell after it has already been quoted.
+
+Impact is modest (workaround is to rephrase the command) but it costs a turn each time and it trains the operator to treat blastguard refusals as noise, which is the expensive failure mode."""
+created_at = 1790151358
+updated_at = 1790151358
+weight = 0.0
+issue_number = 697
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/697"
+
+[[task]]
+id = "eb445233"
+title = "condukt run_worktree_head_signal non-NotFound stat error arm has no test"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "pending"
+notes = """
+Raised by the implementer of 5e62b0eb and confirmed by reading the landed code (commit a2e9e3a3, condukt 0.7.171).
+
+run_worktree_head_signal now discriminates three cases in crates/condukt/src/claim.rs:
+
+  Err(e) if e.kind() == ErrorKind::NotFound  =>  fold in ABSENT_WORKTREE_MARKER (determinate absence)
+  Err(e)                                     =>  return Undetermined (stat failed: EACCES, transient IO)
+  Ok(_)                                      =>  ask git
+
+The middle arm is the one with no test. It is deliberately NOT written as Path::exists(), and that choice is load-bearing: exists() is metadata().is_ok(), so a permission or IO failure would have returned false and been recorded as determinate absence, which would let a LIVE run be reaped. The arm is therefore the thing preventing a real fail-open, and nothing observes it.
+
+Per CLAUDE.md section 2 that arm is currently a judgement, not an observation. It is on the fail-closed side, so a miss there is safe rather than reap-enabling, which is why it is filed rather than treated as blocking.
+
+This is also an instance of the known class: an Undetermined forwarding arm compiles fine with no behavioural test, and a test asserting only on the returned Determination can never be observed RED. It needs its own behavioural test with a fixture that makes stat fail with something other than NotFound.
+
+Testing difficulty, which is why the implementer skipped it: a chmod 000 fixture is unreliable under a root-ish or sandboxed test runner and would be flaky rather than honest. Options to evaluate: make the PARENT directory non-searchable rather than the worktree itself; or inject the error by making the recorded path exceed the platform name limit (ENAMETOOLONG) which is deterministic and needs no permission games. Confirm whichever is chosen actually produces a non-NotFound ErrorKind on macOS before relying on it - assert the kind in the test so the fixture cannot silently decay into the NotFound arm and pass vacuously."""
+created_at = 1790151373
+updated_at = 1790151373
+weight = 0.0
+issue_number = 698
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/698"
+
+[[task]]
 id = "6a707b72"
 title = "after filtered rollouts (--plugin condukt/schemaguard/tdd/overwatch) 12 plugins incl. GATE blastguard/propguard/donegate/reviewgate had registry-pointed version dirs with NO darwin-arm64 binary (dark); each filtered run reported rc=0"
 project = "/Users/yuki/src/harness"

@@ -28832,3 +28832,143 @@ updated_at = 1790138469
 weight = 0.0
 issue_number = 690
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/690"
+
+[[task]]
+id = "752e006a"
+title = "condukt worktree create doubles the run id into the branch name when --branch is already run-qualified"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "pending"
+notes = """
+Observed 2026-09-23, condukt 0.7.168.
+
+Command run:
+  condukt worktree create --run run-20260917-030727-89796 --topic t3-reap-dead-run-claims --branch condukt/run-20260917-030727-89796/t3-reap-dead-run-claims
+
+Resulting branch:
+  condukt/run-20260917-030727-89796/run-20260917-030727-89796/t3-reap-dead-run-claims
+
+The run id appears TWICE. condukt prefixes the run namespace onto whatever --branch is given, so passing an already-qualified name double-prefixes it silently, with no warning and no diagnostic.
+
+Why this is not cosmetic: the later merge step is documented as
+  condukt worktree merge --branch condukt/$RID/<id>
+and that name does NOT exist, so the merge fails with
+  condukt: branch not found: does not resolve to a commit; refusing to merge (nothing recorded as a conflict)
+The operator then has to discover the real name by hand. The refusal itself is correct and fail-closed, which is good; the problem is upstream, that create accepted an input it then silently rewrote.
+
+Evidence this is a repeatable trap and not a one-off slip: the previous session on this same run produced the identical doubling, recorded in the cycle-7 brief as branch
+  condukt/run-20260917-030727-89796/run-20260917-030727-89796/t1-repo-primary-lock
+So two independent sessions hit it the same way.
+
+Contributing cause in the docs: the condukt SKILL.md Phase 5 step 1 shows --branch condukt/<t.id> in the command, then says the real branch becomes condukt/$RID/<t.id>, and every later step refers to condukt/$RID/<id>. Reading those together invites passing the qualified form to create.
+
+Fix direction: either reject an already-run-qualified --branch with a named error (fail-closed, consistent with the merge refusal), or normalise it idempotently so double-prefixing cannot happen. Also make create PRINT the branch it actually created, not only the worktree path - it currently prints only the path, so the rewrite is invisible at the point it happens."""
+created_at = 1790151326
+updated_at = 1790151326
+weight = 0.0
+issue_number = 695
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/695"
+
+[[task]]
+id = "e3d49aea"
+title = "guard-maintree-edit blocks Edit during a legitimate merge conflict resolution on main"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "pending"
+notes = """
+Observed 2026-09-23 while integrating the cycle-7 t3 branch.
+
+CLAUDE.md section 8 permits exactly one class of operation on the main working tree: 統合 merge と conflict 解決. The guard hook scripts/guard-maintree-edit.py states this itself in its own refusal text:
+  Merge / conflict-resolution are the ONLY operations allowed on the main tree.
+
+But the hook then refuses the Edit that performs that very conflict resolution. Repro: start a real merge on main that conflicts, then try to Edit a conflicted file to remove the markers. Verbatim refusal:
+  Refused: editing /Users/yuki/src/harness/crates/condukt/Cargo.toml writes to this project MAIN working tree.
+
+So the hook blocks the one main-tree operation its own message declares allowed. It cannot currently tell that a merge is in progress.
+
+Impact: the operator is pushed toward one of three bad outcomes - reach for CONDUKT_MAINTREE_OVERRIDE (turns a targeted guard into a blanket one, and per the maintree-guard stale-lock finding that override should not be used casually), or edit via sed to dodge the PreToolUse hook (which also makes editgate go dark, backlog 41508876), or abandon the merge.
+
+Workaround used in this run, which is clean and needs no override: merge main INTO the feature branch inside the worktree, resolve the conflict there where editing is allowed, commit, then fast-forward main. Main is never edited. This should probably be the documented procedure regardless.
+
+Note the fast-forward then trips the gate-bypass ledger (one outstanding entry, since FF moves HEAD with no pre-commit run on main) even though the merge content was fully gate-judged green in the worktree. The ledger self-clears on the next green pre-commit, so it is survivable, but it means the clean workaround still leaves a transient red.
+
+Fix direction: make the hook detect an in-progress merge (MERGE_HEAD present in the gitdir) and allow edits to files that are currently unmerged (git diff --name-only --diff-filter=U), while still refusing edits to any other path. That keeps the guard fail-closed for ordinary edits and stops it from contradicting its own stated carve-out. Do NOT widen it to allow arbitrary edits whenever MERGE_HEAD exists."""
+created_at = 1790151343
+updated_at = 1790151343
+weight = 0.0
+issue_number = 696
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/696"
+
+[[task]]
+id = "09d12125"
+title = "blastguard false positive: an arrow inside a quoted python string parses as a shell redirect"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "pending"
+notes = """
+Observed 2026-09-23.
+
+Command attempted (a read-only inspection of a tdd proof file):
+  python3 -c "
+  import json
+  d=json.load(open(PATH))
+  for k,v in d.items():
+      ... print(k, chr(61)+chr(62), v) ...
+  "
+where the printed separator was the two-character arrow written literally inside the double-quoted python program.
+
+blastguard refused, verbatim:
+  (single-quote)> (space)(single-quote) destroys the file current contents and `` is a relative path and blastguard does not know which directory it is relative to, so it cannot tell whether these bytes are recoverable
+
+The arrow inside the quoted python source was parsed as an output redirect, and the redirect target resolved to the empty string, which then produced the relative-path branch of the message. No file was ever going to be written - the whole program is a single quoted -c argument.
+
+Note the refusal itself is the correct SHAPE: it is fail-closed, and refusing when it cannot tell whether bytes are recoverable is exactly CLAUDE.md section 3. The defect is the tokenisation upstream of that judgement, not the judgement.
+
+Two concrete symptoms worth fixing together:
+1. The command text is tokenised without respecting the quoting of the -c argument, so ordinary punctuation inside a quoted program is read as shell metacharacters.
+2. The rendered message interpolates an EMPTY target and still prints backticks around nothing, producing the unreadable fragment: `` is a relative path. When the parsed redirect target is empty, that is itself evidence the parse is wrong, and it should be reported as a parse failure rather than as a finding about a file.
+
+Related class: the existing note that backticks in a double-quoted --notes argument are command-substituted and silently eat that span. Same root - argument text being re-parsed as shell after it has already been quoted.
+
+Impact is modest (workaround is to rephrase the command) but it costs a turn each time and it trains the operator to treat blastguard refusals as noise, which is the expensive failure mode."""
+created_at = 1790151358
+updated_at = 1790151358
+weight = 0.0
+issue_number = 697
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/697"
+
+[[task]]
+id = "eb445233"
+title = "condukt run_worktree_head_signal non-NotFound stat error arm has no test"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "pending"
+notes = """
+Raised by the implementer of 5e62b0eb and confirmed by reading the landed code (commit a2e9e3a3, condukt 0.7.171).
+
+run_worktree_head_signal now discriminates three cases in crates/condukt/src/claim.rs:
+
+  Err(e) if e.kind() == ErrorKind::NotFound  =>  fold in ABSENT_WORKTREE_MARKER (determinate absence)
+  Err(e)                                     =>  return Undetermined (stat failed: EACCES, transient IO)
+  Ok(_)                                      =>  ask git
+
+The middle arm is the one with no test. It is deliberately NOT written as Path::exists(), and that choice is load-bearing: exists() is metadata().is_ok(), so a permission or IO failure would have returned false and been recorded as determinate absence, which would let a LIVE run be reaped. The arm is therefore the thing preventing a real fail-open, and nothing observes it.
+
+Per CLAUDE.md section 2 that arm is currently a judgement, not an observation. It is on the fail-closed side, so a miss there is safe rather than reap-enabling, which is why it is filed rather than treated as blocking.
+
+This is also an instance of the known class: an Undetermined forwarding arm compiles fine with no behavioural test, and a test asserting only on the returned Determination can never be observed RED. It needs its own behavioural test with a fixture that makes stat fail with something other than NotFound.
+
+Testing difficulty, which is why the implementer skipped it: a chmod 000 fixture is unreliable under a root-ish or sandboxed test runner and would be flaky rather than honest. Options to evaluate: make the PARENT directory non-searchable rather than the worktree itself; or inject the error by making the recorded path exceed the platform name limit (ENAMETOOLONG) which is deterministic and needs no permission games. Confirm whichever is chosen actually produces a non-NotFound ErrorKind on macOS before relying on it - assert the kind in the test so the fixture cannot silently decay into the NotFound arm and pass vacuously."""
+created_at = 1790151373
+updated_at = 1790151373
+weight = 0.0
+issue_number = 698
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/698"

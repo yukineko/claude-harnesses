@@ -30008,3 +30008,93 @@ updated_at = 1790184361
 weight = 0.0
 issue_number = 740
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/740"
+
+[[task]]
+id = "0ebd3748"
+title = "blastguard dir fingerprint (287e929b) の残 gap: symlink target 変化の未検出・Undetermined 経路と安定性のテスト欠如・deployed binary 未検証"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "CA-2026W39 blastguard-02 fix probe_directory: (1) a symlink inside a fingerprinted dir contributes only its link text, so changing the TARGET's content leaves the fingerprint identical -> standing approval still auto-Allows (reading (a) fail-open; (b) intended to avoid following links out of the dir — distinguish by deciding whether approval scope includes link targets); (2) no test for Undetermined outcomes (IO error, >10k entries, >64MiB, special file); (3) no stability test (unchanged dir -> identical fingerprint across runs); (4) the deployed binary was not exercised on the new detect path (rollout pending)."
+created_at = 1790184453
+updated_at = 1790184453
+weight = 0.0
+issue_number = 741
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/741"
+
+[[task]]
+id = "6bba2c81"
+title = "propguard: criteria FILE が読めなくても inline done_criteria があれば inline に fallback する (CA-propguard-01 の残り)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "29d08f54 made an unreadable criteria file block (criteria-unreadable) but left the path where a non-empty inline done_criteria exists: it silently falls back to inline, pinned by an existing test. Reading (a) fail-open: the declared authoritative source was unreadable and the gate judged on a different source without surfacing it; (b) by design: inline is an equally authoritative declaration. Distinguish by the documented precedence of file vs inline criteria in propguard README/spec."
+created_at = 1790184454
+updated_at = 1790184454
+weight = 0.0
+issue_number = 742
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/742"
+
+[[task]]
+id = "2ae3fa29"
+title = "budgetguard lock::LedgerLock が parallelguard と同じ O_EXCL + 30s mtime stale-steal (CA-parallelguard-01/02 の mirror 候補)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "Mirror sweep of CA-2026W39: docs/specs/budgetguard.md describes the same create_new + 30s stale-steal pattern parallelguard had (drop removes by path; two waiters can both steal). UNVERIFIED — only the spec doc was read, not the code. If confirmed, the parallelguard fix c9a28dc2 (std File::try_lock kernel advisory lock, guard owns File, never unlink) is the template; tests in crates/parallelguard/src/store.rs ca_parallelguard_01/02 are the model (02 is a 24-thread race, RED 6/6 on the old scheme)."
+created_at = 1790184456
+updated_at = 1790184456
+weight = 0.0
+issue_number = 743
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/743"
+
+[[task]]
+id = "6a68526b"
+title = "overwatch: clear_runtime_overlap_holds の SkippedUndetermined bail / SkippedContended 非計上に直接テストが無い (03abcd01)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Independent review of 03abcd01 (CA-overwatch-03): the twin test covers append_merge_conflict_resolution but not its caller clear_runtime_overlap_holds, whose control flow changed (errors on SkippedUndetermined, does not count SkippedContended as cleared). A regression there would not be caught."
+created_at = 1790184457
+updated_at = 1790184457
+weight = 0.0
+issue_number = 744
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/744"
+
+[[task]]
+id = "89fc4fe6"
+title = "overwatch compact は bridged findings / dispositions を依然 best-effort で読む (03abcd01 は hot findings のみ scan+bail 化)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "CA-overwatch-01 fix made compact read the HOT review_findings.jsonl via scan_jsonl and bail. The other inputs compact consults (bridged findings, dispositions) are still read best-effort; the fixer judged the error direction to be 'keep more' (not deletion). Unverified: confirm for each input that an unreadable ledger can only cause retention, never deletion of open findings."
+created_at = 1790184459
+updated_at = 1790184459
+weight = 0.0
+issue_number = 745
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/745"
+
+[[task]]
+id = "96072327"
+title = "backlog tests/project_scope.rs の a_pinned_store_dir_still_* 2件が main で RED (38b460f0 以前から)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Reported by the CA backlog fixer on unmodified 38b460f0 (both print out=no tasks) and re-observed by the integration agent at 4331fd90 (backlog 292 passed / 2 failed). Test names: a_pinned_store_dir_still_scopes_by_project, a_pinned_store_dir_still_works_outside_any_repo."
+created_at = 1790184460
+updated_at = 1790184460
+weight = 0.0
+issue_number = 746
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/746"

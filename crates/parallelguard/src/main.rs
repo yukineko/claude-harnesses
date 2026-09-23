@@ -25,10 +25,19 @@
 //! output IS an allow, byte for byte, so "the gate broke" would be
 //! indistinguishable from "the gate checked and found room".
 //!
+//! A deny is normally the JSON line on stdout with exit 0. When stdout cannot
+//! carry it — a write error such as a broken pipe, or a panic while emitting —
+//! the reason goes to stderr and the process exits 2, the other channel Claude
+//! Code treats as a block. Both the decision and the emit sit behind their own
+//! panic barrier, so no panic in `acquire` escapes as exit 101 (a non-blocking
+//! hook error, i.e. an allow).
+//!
 //! The cost of that choice is bounded on purpose. Every deny is recoverable
-//! without a human: the ledger is cleared at every turn boundary by `reset`, an
-//! abandoned lockfile is stolen after 30 s, and a denied call is a call that
-//! simply did not run — the model re-issues it. Nothing is lost but a round.
+//! without a human: the ledger is cleared at every turn boundary by `reset`, a
+//! killed hook's lock is released by the kernel with its process (the lock is
+//! a kernel advisory lock, never stolen on a timeout), and a denied call is a
+//! call that simply did not run — the model re-issues it. Nothing is lost but a
+//! round.
 //!
 //! **What this does NOT bound**, stated so a quiet gap is not mistaken for
 //! coverage: a `Bash` call made with `run_in_background: true` returns
@@ -55,10 +64,7 @@ const MAX_EVENT_LOG_BYTES: u64 = 256 * 1024;
 fn main() {
     let cmd = std::env::args().nth(1).unwrap_or_default();
     match cmd.as_str() {
-        "acquire" => {
-            cmd_acquire();
-            std::process::exit(0);
-        }
+        "acquire" => std::process::exit(cmd_acquire()),
         "release" => {
             let _ = std::panic::catch_unwind(AssertUnwindSafe(cmd_release));
             std::process::exit(0);
@@ -84,13 +90,20 @@ fn main() {
 
 // ---------------------------------------------------------------- acquire
 
-/// PreToolUse entry point: decide, then emit exactly one decision.
+/// PreToolUse entry point: decide, then emit exactly one decision, and return
+/// the process exit code.
 ///
-/// The panic barrier wraps only the decision, never the emit, so a crash
-/// produces one `deny` line and not a second one after a decision was already
-/// printed. A panic here is a gate that crashed before it could count, which is
-/// the same unknown as an unreadable ledger — it denies.
-fn cmd_acquire() {
+/// Two panic barriers, one per phase. The first wraps the decision: a panic
+/// there is a gate that crashed before it could count, which is the same
+/// unknown as an unreadable ledger — it denies. The second wraps the emit, so
+/// a crash while writing cannot escape as an uncaught panic (exit 101, which a
+/// `PreToolUse` hook treats as a non-blocking error, i.e. the call runs).
+///
+/// If the deny JSON cannot be delivered on stdout (a write error such as a
+/// broken pipe, or a panic while emitting), the gate falls back to the only
+/// other blocking channel Claude Code honors: the reason on stderr and exit
+/// code 2. An `Allow` writes nothing, so it cannot fail this way and exits 0.
+fn cmd_acquire() -> i32 {
     let decision = match std::panic::catch_unwind(AssertUnwindSafe(decide)) {
         Ok(d) => d,
         Err(_) => Decision::Deny(
@@ -101,7 +114,42 @@ fn cmd_acquire() {
                 .to_string(),
         ),
     };
-    emit(&decision);
+    let emitted = std::panic::catch_unwind(AssertUnwindSafe(|| emit(&decision)));
+    match (emitted, &decision) {
+        (Ok(Ok(())), _) => 0,
+        (Ok(Err(e)), Decision::Deny(reason)) => block_via_stderr(reason, &e.to_string()),
+        (Err(_), Decision::Deny(reason)) => {
+            block_via_stderr(reason, "the gate panicked while writing the deny")
+        }
+        // An Allow writes nothing to stdout, so neither a write error nor a
+        // panic inside emit is expected for it. If one happens anyway, the
+        // gate's own output path is broken, which is not a verified allow:
+        // block rather than let a crashed gate read as "checked and found room".
+        (Ok(Err(e)), Decision::Allow) => block_via_stderr(
+            "parallelguard: the gate's output path failed while allowing",
+            &e.to_string(),
+        ),
+        (Err(_), Decision::Allow) => block_via_stderr(
+            "parallelguard: the gate's output path panicked while allowing",
+            "panic in emit",
+        ),
+    }
+}
+
+/// Fallback block when stdout cannot carry the deny JSON: write the reason to
+/// stderr and return exit code 2, which Claude Code treats as a blocking
+/// `PreToolUse` result. A failed stderr write is ignored because the exit code
+/// alone still blocks; there is no third channel to report it on.
+fn block_via_stderr(reason: &str, stdout_failure: &str) -> i32 {
+    use std::io::Write;
+    let mut err = std::io::stderr().lock();
+    let _ = writeln!(
+        err,
+        "{reason}\n(parallelguard: the deny could not be written to stdout: {stdout_failure}; \
+         blocking via exit code 2 instead)"
+    );
+    let _ = err.flush();
+    2
 }
 
 /// The PreToolUse decision. Every early return is a deny with the reason the
@@ -189,11 +237,17 @@ fn slot_key(input: &HookInput) -> String {
 }
 
 /// Write the PreToolUse decision to stdout. `Allow` prints NOTHING — that is
-/// the protocol, and it is why no failure path may exit silently.
-fn emit(decision: &Decision) {
+/// the protocol, and it is why no failure path may exit silently. A write or
+/// flush failure is returned (never a `println!` panic) so the caller can fall
+/// back to the stderr + exit-2 block.
+fn emit(decision: &Decision) -> std::io::Result<()> {
+    use std::io::Write;
     if let Decision::Deny(reason) = decision {
-        println!("{}", deny_json(reason));
+        let mut out = std::io::stdout().lock();
+        writeln!(out, "{}", deny_json(reason))?;
+        out.flush()?;
     }
+    Ok(())
 }
 
 /// The one-line JSON Claude Code reads from a PreToolUse hook's stdout.

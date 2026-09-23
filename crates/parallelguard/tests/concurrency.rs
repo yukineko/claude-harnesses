@@ -216,6 +216,69 @@ fn the_cap_can_be_lowered_but_not_raised() {
 }
 
 #[test]
+fn ca_parallelguard_03_a_broken_stdout_pipe_on_deny_escapes_the_panic_barrier() {
+    // CA-parallelguard-03: cmd_acquire's catch_unwind (main.rs:94) wraps only
+    // decide(), never emit() (main.rs:104). emit() calls println! (main.rs:195),
+    // which panics if stdout is a broken pipe. The module doc promises "a
+    // panic in this binary ... every one of them resolves to deny" (main.rs:
+    // 20-23) -- but only a Deny reaches emit()'s println! at all, so a broken
+    // pipe on exactly that branch is the one case that actually needs the
+    // barrier, and it is unprotected. When stdout cannot carry the deny JSON
+    // at all, exit(0) is not the fail-closed outcome: Claude Code reads a
+    // PreToolUse hook that exits 0 with no readable stdout as an ALLOW (the
+    // same silence-is-allow rule main.rs:24-26 states for the normal case).
+    // The only channel left to block the call is exit code 2 with the reason
+    // on stderr, which Claude Code treats as a block. So the fail-closed fix
+    // is not "swallow the panic and exit 0" but "fall back to stderr + exit
+    // 2 when stdout is unusable".
+    let dir = tempfile::tempdir().unwrap();
+    // Fill the default cap (3) so the probe acquire below is a genuine Deny --
+    // an Allow prints nothing and can never reach the buggy println!.
+    let (admitted, _) = race(dir.path(), "Bash", 3);
+    assert_eq!(admitted, 3);
+
+    let mut child = Command::new(BIN)
+        .arg("acquire")
+        .env("PARALLELGUARD_STATE_DIR", dir.path())
+        .env_remove("HARNESS_MAX_PARALLEL")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the parallelguard binary should start");
+
+    // Close OUR read end of stdout before the child can write anything to it.
+    // This is safe to sequence deterministically (no sleep, no race): the
+    // child is still blocked in a blocking read on stdin at this point, and
+    // can only unblock after we write and close stdin below, which happens
+    // strictly after this drop in program order.
+    drop(child.stdout.take().expect("stdout was piped"));
+
+    let mut stdin = child.stdin.take().expect("stdin was piped");
+    stdin
+        .write_all(payload("Bash", "the-fourth-call").as_bytes())
+        .unwrap();
+    drop(stdin); // EOF: let the child's read_stdin() proceed.
+
+    let out = child.wait_with_output().expect("child should finish");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "a broken stdout pipe on a Deny must still block via the exit-2/stderr \
+         channel Claude Code honors when stdout cannot carry the deny JSON, \
+         not escape emit()'s unprotected println! as an uncaught panic (which \
+         Claude Code reads as an ALLOW, since stdout is unreadable); stderr \
+         was: {stderr}"
+    );
+    assert!(
+        !stderr.trim().is_empty(),
+        "an exit-2 block must carry the deny reason on stderr for Claude Code \
+         to show; stderr was empty"
+    );
+}
+
+#[test]
 fn status_is_readable_and_never_silently_empty() {
     let dir = tempfile::tempdir().unwrap();
     let out = Command::new(BIN)

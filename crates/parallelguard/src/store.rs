@@ -29,20 +29,19 @@ use crate::model::Inflight;
 /// `harness_core::store::context_ledger_base` applies, for the same reason).
 pub const ENV_STATE_DIR: &str = "PARALLELGUARD_STATE_DIR";
 
-/// How long a lockfile may exist before it is treated as abandoned.
-///
-/// The critical section it guards is a read, a `Vec` push, and a rename —
-/// microseconds. A lockfile older than this was left by a process that died
-/// between `create_new` and `Drop` (SIGKILL, power loss); without stealing it,
-/// one killed hook would deny every metered call for the rest of the session
-/// with no way for the agent to recover — a gate only a human can clear, which
-/// is a defect in the gate. Stealing cannot over-admit: the steal is itself
-/// serialized by `create_new`, so exactly one thief wins and the losers retry.
-const STALE_LOCK: Duration = Duration::from_secs(30);
-
 /// Lock acquisition budget: 400 attempts x 5 ms = up to 2 s. Sized well above
 /// the handful of concurrent hook processes one session can produce, so
 /// exhausting it means something is genuinely wrong rather than merely busy.
+///
+/// There is deliberately no staleness timeout and no steal. The lock is a
+/// kernel advisory lock (`File::try_lock`, i.e. `flock(LOCK_EX|LOCK_NB)` on
+/// unix) held on an open descriptor, and the kernel drops it when the
+/// descriptor closes — including when the holder is SIGKILLed. A dead holder
+/// therefore never outlives its process, and a live holder, however slow, is
+/// never judged dead by an mtime guess. (The previous `create_new` + 30 s
+/// mtime-steal scheme could delete a live holder's lockfile — its own `Drop`
+/// or a second thief removed by path whatever lock sat there — admitting two
+/// critical sections at once: CA-parallelguard-01/02.)
 const LOCK_ATTEMPTS: u32 = 400;
 const LOCK_DELAY: Duration = Duration::from_millis(5);
 
@@ -81,16 +80,14 @@ pub fn now_secs() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-/// RAII lock guard: the lockfile is removed on drop, including during a panic
-/// unwind, so a crashing hook does not wedge the session for `STALE_LOCK`.
+/// RAII lock guard: owns the open lockfile descriptor that carries the kernel
+/// lock. Releasing is closing that descriptor (on drop, including during a
+/// panic unwind, or by the kernel when the process dies). It NEVER removes
+/// the lockfile path: the path is persistent, and unlinking it while another
+/// process holds a lock on it would let a third process create a fresh inode
+/// at the same path and lock that one concurrently.
 pub struct LockGuard {
-    path: PathBuf,
-}
-
-impl Drop for LockGuard {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
+    _file: std::fs::File,
 }
 
 fn lock_path_for(path: &Path) -> PathBuf {
@@ -99,28 +96,16 @@ fn lock_path_for(path: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
-/// Whether a lockfile is old enough to be considered abandoned. An unreadable
-/// or future-dated mtime is NOT stale: without a readable age there is no
-/// evidence the holder is dead, and stealing on no evidence is the permissive
-/// guess this module refuses to make.
-fn lock_is_abandoned(lock_path: &Path, now: SystemTime) -> bool {
-    let Ok(meta) = std::fs::metadata(lock_path) else {
-        return false;
-    };
-    let Ok(modified) = meta.modified() else {
-        return false;
-    };
-    match now.duration_since(modified) {
-        Ok(age) => age > STALE_LOCK,
-        Err(_) => false,
-    }
-}
-
 /// Take the advisory lock guarding `path`'s critical section.
 ///
-/// `create_new` is atomic at the filesystem level, so this serializes concurrent
-/// hook processes without a new dependency. Failure to acquire is
-/// `Undetermined`, never a silent "assume nothing is in flight".
+/// Opens (creating if absent, never truncating or removing) the persistent
+/// lockfile `<path>.lock` and takes an exclusive kernel lock on it with
+/// `File::try_lock`, retrying within `LOCK_ATTEMPTS` x `LOCK_DELAY`. The lock
+/// belongs to the open descriptor, so ownership is exact: only the holder's
+/// own `LockGuard` can release it, and a holder that dies releases it with its
+/// process. Failure to acquire — the budget exhausted, or any IO error opening
+/// or locking the file — is `Undetermined`, never a silent "assume nothing is
+/// in flight".
 pub fn lock(path: &Path) -> Determination<LockGuard> {
     let lock_path = lock_path_for(path);
     if let Some(parent) = lock_path.parent() {
@@ -131,23 +116,28 @@ pub fn lock(path: &Path) -> Determination<LockGuard> {
             ));
         }
     }
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+    {
+        Ok(f) => f,
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "cannot open the lockfile {}: {e}",
+                lock_path.display()
+            ))
+        }
+    };
     for _ in 0..LOCK_ATTEMPTS {
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&lock_path)
-        {
-            Ok(_) => return Determination::known(LockGuard { path: lock_path }),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                if lock_is_abandoned(&lock_path, SystemTime::now()) {
-                    let _ = std::fs::remove_file(&lock_path);
-                    continue;
-                }
-                std::thread::sleep(LOCK_DELAY);
-            }
-            Err(e) => {
+        match file.try_lock() {
+            Ok(()) => return Determination::known(LockGuard { _file: file }),
+            Err(std::fs::TryLockError::WouldBlock) => std::thread::sleep(LOCK_DELAY),
+            Err(std::fs::TryLockError::Error(e)) => {
                 return Determination::undetermined(format!(
-                    "cannot create the lockfile {}: {e}",
+                    "cannot lock the lockfile {}: {e}",
                     lock_path.display()
                 ))
             }
@@ -200,14 +190,18 @@ pub fn save(path: &Path, value: &Inflight) -> Result<(), String> {
     })
 }
 
-/// Drop a session's ledger and any lockfile left behind with it.
+/// Drop a session's ledger.
 ///
 /// This is the turn boundary's self-heal: whatever leaked (a call the user
 /// rejected, a hook killed mid-flight, a corrupt store) is gone by the next
 /// turn without anyone having to intervene.
+///
+/// The lockfile is deliberately left in place. It needs no self-heal — a dead
+/// holder's kernel lock is already gone with its process — and unlinking it
+/// while a live hook holds it would let the next `lock` create a new inode at
+/// the same path and lock it concurrently with that holder.
 pub fn reset(path: &Path) {
     let _ = std::fs::remove_file(path);
-    let _ = std::fs::remove_file(lock_path_for(path));
 }
 
 #[cfg(test)]
@@ -298,35 +292,128 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_lockfile_is_not_abandoned() {
+    fn ca_parallelguard_01_guard_drop_never_touches_a_different_holders_lock() {
+        // CA-parallelguard-01: releasing a lock guard must never destroy
+        // ANOTHER holder's lock, nor let a third acquirer in while that
+        // holder is live. This is written only against the API surface
+        // common to both the mtime-steal scheme and the kernel-advisory-lock
+        // scheme (`lock`, `lock_path_for`, `session_path`, `Determination`,
+        // std), so it compiles and is meaningful against either
+        // implementation: whatever mechanism produced a *different*, live
+        // holder's file at the same lock path, releasing an unrelated guard
+        // must not remove it.
         let dir = tempfile::tempdir().unwrap();
-        let lp = dir.path().join("x.lock");
-        std::fs::write(&lp, b"").unwrap();
-        assert!(!lock_is_abandoned(&lp, SystemTime::now()));
+        let p = session_path(dir.path(), "s1");
+
+        let guard_a = match lock(&p) {
+            Determination::Known(g) => g,
+            Determination::Undetermined(why) => panic!("A failed to acquire: {why}"),
+        };
+
+        let lock_path = lock_path_for(&p);
+
+        // Stand in for a second, independent, live holder that now occupies
+        // the SAME lock path -- e.g. after a legitimate steal-and-recreate
+        // elsewhere, or simply a second process's own lockfile landing at
+        // the same path once the original file was replaced. However it got
+        // there, releasing A must not know or care about it.
+        std::fs::remove_file(&lock_path).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+            .unwrap();
+
+        // A's own critical section finishes and it releases.
+        drop(guard_a);
+
+        assert!(
+            lock_path.exists(),
+            "releasing guard A deleted a lockfile that belongs to a \
+             different, live holder just because it sat at the same path \
+             -- a third caller could now acquire concurrently with that \
+             holder"
+        );
     }
 
     #[test]
-    fn an_old_lockfile_is_abandoned() {
-        let dir = tempfile::tempdir().unwrap();
-        let lp = dir.path().join("x.lock");
-        std::fs::write(&lp, b"").unwrap();
-        let future = SystemTime::now() + STALE_LOCK + Duration::from_secs(5);
-        assert!(lock_is_abandoned(&lp, future));
+    fn ca_parallelguard_02_concurrent_contenders_never_both_hold_an_abandoned_lock() {
+        // CA-parallelguard-02: two contenders racing for the SAME abandoned
+        // (genuinely dead, nobody-alive-at-the-other-end) lock must never
+        // BOTH end up holding it at once -- no over-admission. Written only
+        // against the common API surface (`lock`, `lock_path_for`,
+        // `session_path`, `Determination`, std), with real concurrent
+        // threads racing through the real `lock()` so the test exercises
+        // whatever recovery mechanism the implementation actually uses
+        // (mtime-steal-by-path, or kernel `try_lock`) rather than assuming
+        // one. An atomic canary records how many guards were simultaneously
+        // alive across the run; over-admission shows up as a canary value
+        // above 1.
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Barrier};
+
+        const THREADS: usize = 24;
+        const ITERATIONS: usize = 40;
+
+        for iteration in 0..ITERATIONS {
+            let dir = tempfile::tempdir().unwrap();
+            let p = session_path(dir.path(), "s1");
+            let lock_path = lock_path_for(&p);
+            std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+
+            // A genuinely dead holder: a lockfile exists, nobody has it
+            // open, and its mtime is far older than any staleness window a
+            // recovery scheme might use.
+            std::fs::write(&lock_path, b"").unwrap();
+            let ancient = SystemTime::now() - Duration::from_secs(3600);
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&lock_path)
+                .unwrap()
+                .set_modified(ancient)
+                .unwrap();
+
+            let concurrent = Arc::new(AtomicUsize::new(0));
+            let max_concurrent = Arc::new(AtomicUsize::new(0));
+            let barrier = Arc::new(Barrier::new(THREADS));
+
+            std::thread::scope(|scope| {
+                for _ in 0..THREADS {
+                    let p = p.clone();
+                    let concurrent = Arc::clone(&concurrent);
+                    let max_concurrent = Arc::clone(&max_concurrent);
+                    let barrier = Arc::clone(&barrier);
+                    scope.spawn(move || {
+                        barrier.wait();
+                        if let Determination::Known(guard) = lock(&p) {
+                            let now = concurrent.fetch_add(1, Ordering::SeqCst) + 1;
+                            max_concurrent.fetch_max(now, Ordering::SeqCst);
+                            // Hold briefly so a genuinely concurrent second
+                            // admission has a real window to be observed.
+                            std::thread::sleep(Duration::from_millis(20));
+                            concurrent.fetch_sub(1, Ordering::SeqCst);
+                            drop(guard);
+                        }
+                    });
+                }
+            });
+
+            let observed = max_concurrent.load(Ordering::SeqCst);
+            assert!(
+                observed <= 1,
+                "over-admission on iteration {iteration}: {observed} threads \
+                 held the lock for the same abandoned lockfile at the same \
+                 time -- two contenders' abandoned-judgement raced and both \
+                 ended up with a Known guard"
+            );
+        }
     }
 
     #[test]
-    fn an_unreadable_lock_age_is_not_abandoned() {
-        // No evidence the holder is dead => no steal. Absence of an mtime is
-        // not evidence of death.
-        let dir = tempfile::tempdir().unwrap();
-        assert!(!lock_is_abandoned(
-            &dir.path().join("nope.lock"),
-            SystemTime::now()
-        ));
-    }
-
-    #[test]
-    fn reset_removes_the_ledger_and_a_leftover_lock() {
+    fn reset_removes_the_ledger_but_never_the_lockfile() {
+        // The lockfile is persistent under the kernel-lock design: unlinking
+        // it while a hook holds it would let the next `lock` lock a fresh
+        // inode at the same path concurrently with that holder.
         let dir = tempfile::tempdir().unwrap();
         let p = session_path(dir.path(), "s1");
         save(&p, &Inflight::default()).unwrap();
@@ -334,7 +421,7 @@ mod tests {
         std::fs::write(&lp, b"").unwrap();
         reset(&p);
         assert!(!p.exists());
-        assert!(!lp.exists());
+        assert!(lp.exists());
     }
 
     /// Set an env var for the duration of `f`. Tests in one binary share a

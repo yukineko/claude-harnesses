@@ -1,7 +1,9 @@
 [package]
-rust-version.workspace = true
+# `store::lock` uses `std::fs::File::try_lock` (kernel advisory lock, stable
+# since 1.89), so this crate's true MSRV is above the workspace's 1.85.
+rust-version = "1.89"
 name = "parallelguard"
-version = "0.1.0"
+version = "0.1.2"
 edition = "2021"
 description = "Per-session concurrency cap for Claude Code: a PreToolUse hook that counts in-flight Bash calls and subagents and denies the one that would exceed the cap."
 license = "MIT"

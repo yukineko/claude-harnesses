@@ -19,6 +19,7 @@
 use std::path::Path;
 
 use crate::config::Config;
+use harness_core::verdict::Determination;
 
 /// One derived semantic property (invariant) the generated code must satisfy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,58 +146,85 @@ pub fn derive_properties(criteria: &str, min: usize, max: usize) -> Vec<Property
 /// 2. a `criteria_file` in the project root (condukt / the agent writes it),
 /// 3. the inline `done_criteria` config value.
 ///
-/// Returns `None` when no non-empty source is found — the caller then has
-/// nothing to derive properties from and allows the stop.
-pub fn source_criteria(cfg: &Config, root: &Path) -> Option<String> {
+/// Three answers, not two (CA-propguard-01):
+///
+/// * `Known(Some(text))` — a non-empty source was found.
+/// * `Known(None)`       — no source is configured at all (no env, no
+///   criteria file, empty inline): the caller has nothing to derive
+///   properties from and allows the stop (`no-criteria`).
+/// * `Undetermined`      — the `criteria_file` EXISTS but could not be read
+///   (permission denied, invalid UTF-8, …) and there is no inline
+///   `done_criteria` to fall back to. That is "configured but unreadable", not
+///   "not configured": the caller must fail closed (`criteria-unreadable`),
+///   never fold it into `no-criteria`.
+///
+/// When the criteria file is unreadable but a non-empty inline
+/// `done_criteria` exists, the inline value is used (loudly, on stderr) —
+/// properties are still derived and checked, so the gate is not bypassed.
+pub fn source_criteria(cfg: &Config, root: &Path) -> Determination<Option<String>> {
     if let Ok(v) = std::env::var("PROPGUARD_CRITERIA") {
         let v = v.trim().to_string();
         if !v.is_empty() {
-            return Some(v);
+            return Determination::Known(Some(v));
         }
     }
     let p = root.join(&cfg.criteria_file);
     // `Known(Some(text))`: use it if non-empty. `Known(None)` (file absent) and
-    // an empty/blank file both fall through to the inline `done_criteria`
-    // below, unchanged from before this migration. `Undetermined` (the file
-    // exists but could not be read — permission denied, invalid UTF-8, …) is
-    // NOT folded into "absent": this function has no way to distinguish
-    // "nothing to derive from" (which `gate.rs` documents as an intentional
-    // allow) from "there IS a criteria file but we could not read it", so the
-    // latter is at least surfaced loudly here rather than silently treated as
-    // if the file had never existed.
+    // an empty/blank file both fall through to the inline `done_criteria`.
+    // `Undetermined` is remembered and, if the inline source is also empty,
+    // forwarded to the caller instead of collapsing into `Known(None)`.
+    let mut unreadable = None;
     match harness_core::boundary::read_to_string(&p) {
-        harness_core::verdict::Determination::Known(Some(text)) => {
+        Determination::Known(Some(text)) => {
             let t = text.trim().to_string();
             if !t.is_empty() {
-                return Some(t);
+                return Determination::Known(Some(t));
             }
         }
-        harness_core::verdict::Determination::Known(None) => {}
-        harness_core::verdict::Determination::Undetermined(reason) => {
+        Determination::Known(None) => {}
+        Determination::Undetermined(reason) => {
             eprintln!(
-                "propguard: cannot read criteria_file {}: {}; falling back to inline \
-                 done_criteria",
+                "propguard: cannot read criteria_file {}: {}",
                 p.display(),
                 reason.as_str()
             );
+            unreadable = Some(reason);
         }
     }
     let inline = cfg.done_criteria.trim();
     if !inline.is_empty() {
-        return Some(inline.to_string());
+        if unreadable.is_some() {
+            eprintln!("propguard: falling back to inline done_criteria");
+        }
+        return Determination::Known(Some(inline.to_string()));
     }
-    None
+    match unreadable {
+        // Forward the boundary's own payload (it already names the path and
+        // the cause, and was recorded where it was minted) rather than minting
+        // a second one.
+        Some(reason) => Determination::Undetermined(reason),
+        None => Determination::Known(None),
+    }
 }
 
 #[cfg(test)]
-mod tests {
+#[allow(clippy::panic)]
+pub(crate) mod tests {
     use super::*;
     use std::sync::Mutex;
 
     // These tests mutate the process-global env var PROPGUARD_CRITERIA. cargo runs
     // tests in one binary concurrently, so without serialization a remove_var in one
     // test can race a set_var/read in another. Guard every env-touching test with it.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    pub(crate) static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Unwrap a `Known` answer; an `Undetermined` here is a test failure.
+    fn known(d: Determination<Option<String>>) -> Option<String> {
+        match d {
+            Determination::Known(v) => v,
+            Determination::Undetermined(why) => panic!("unexpected Undetermined: {why}"),
+        }
+    }
 
     #[test]
     fn derives_matching_properties_from_criteria() {
@@ -272,7 +300,7 @@ mod tests {
             done_criteria: "inline that should lose".to_string(),
             ..Config::default()
         };
-        let got = source_criteria(&cfg, Path::new("/nonexistent-root-xyzzy"));
+        let got = known(source_criteria(&cfg, Path::new("/nonexistent-root-xyzzy")));
         std::env::remove_var("PROPGUARD_CRITERIA");
         assert_eq!(got.as_deref(), Some("must be idempotent"));
     }
@@ -285,7 +313,7 @@ mod tests {
             done_criteria: "handle errors and keep the schema stable".to_string(),
             ..Config::default()
         };
-        let got = source_criteria(&cfg, Path::new("/nonexistent-root-xyzzy"));
+        let got = known(source_criteria(&cfg, Path::new("/nonexistent-root-xyzzy")));
         assert_eq!(
             got.as_deref(),
             Some("handle errors and keep the schema stable")
@@ -293,11 +321,9 @@ mod tests {
     }
 
     /// An unreadable (but existing) `criteria_file` must fall through to the
-    /// inline `done_criteria`, exactly like a missing file — Undetermined is
-    /// not silently promoted to "found nothing", but this function has no
-    /// channel to report failure to its caller other than falling through to
-    /// the next source in priority order (unchanged from before the
-    /// boundary-read migration).
+    /// inline `done_criteria` when that inline value is non-empty — properties
+    /// are still derived and checked. (With an EMPTY inline value the answer is
+    /// `Undetermined` instead; see `unreadable_criteria_file_without_inline_is_undetermined`.)
     #[cfg(unix)]
     #[test]
     fn unreadable_criteria_file_falls_through_to_inline() {
@@ -329,7 +355,7 @@ mod tests {
             done_criteria: "inline fallback wins".to_string(),
             ..Config::default()
         };
-        let got = source_criteria(&cfg, &dir);
+        let got = known(source_criteria(&cfg, &dir));
 
         std::fs::set_permissions(
             dir.join(criteria_file),
@@ -355,6 +381,60 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var("PROPGUARD_CRITERIA");
         let cfg = Config::default(); // empty done_criteria
-        assert!(source_criteria(&cfg, Path::new("/nonexistent-root-xyzzy")).is_none());
+        assert!(known(source_criteria(&cfg, Path::new("/nonexistent-root-xyzzy"))).is_none());
+    }
+
+    /// CA-propguard-01, at the source layer: an existing-but-unreadable
+    /// criteria file with nothing inline to fall back to is `Undetermined`,
+    /// never `Known(None)` (which means "not configured").
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_criteria_file_without_inline_is_undetermined() {
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("PROPGUARD_CRITERIA");
+
+        let dir = std::env::temp_dir().join(format!(
+            "propguard-derive-unreadable-noinline-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let criteria_file = "criteria.txt";
+        std::fs::write(dir.join(criteria_file), "must be idempotent").unwrap();
+        std::fs::set_permissions(
+            dir.join(criteria_file),
+            std::fs::Permissions::from_mode(0o000),
+        )
+        .unwrap();
+        let denied = std::fs::read_to_string(dir.join(criteria_file)).is_err();
+
+        let cfg = Config {
+            criteria_file: criteria_file.to_string(),
+            done_criteria: String::new(),
+            ..Config::default()
+        };
+        let got = source_criteria(&cfg, &dir);
+
+        std::fs::set_permissions(
+            dir.join(criteria_file),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(
+            denied,
+            "precondition: chmod 000 must deny this uid (running as root?)"
+        );
+        match got {
+            Determination::Undetermined(why) => assert!(
+                why.as_str().contains("criteria.txt"),
+                "the reason must name the unreadable file: {why}"
+            ),
+            Determination::Known(v) => panic!(
+                "unreadable criteria_file with no inline fallback must be Undetermined, got Known({v:?})"
+            ),
+        }
     }
 }

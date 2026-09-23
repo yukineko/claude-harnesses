@@ -77,7 +77,20 @@ check of is allowed — the agent already addressed exactly that. A *changed* di
 costs one more round, capped by `max_attempts` (default 2), so the agent is never
 trapped. Fail-closed but bounded:
 
-- No git repo, nothing checkable, no done_criteria → **allow**.
+- No git repo, nothing checkable, no done_criteria source configured at all →
+  **allow**.
+- A config file (`propguard.toml` / `~/.propguard/config.toml`) that exists but
+  cannot be read or parsed → **block** (tag `config-unreadable`, no give-up) — it
+  is never silently replaced by built-in defaults.
+- A `criteria_file` that exists but cannot be read, with no inline
+  `done_criteria` to fall back to → **block** (tag `criteria-unreadable`, no
+  give-up) — "configured but unreadable" is never reported as "not configured".
+- The outage give-ups (`checker-error-giveup`, `git-scan-failed-giveup`,
+  `diff-read-failed-giveup`) are recorded in overwatch's violation ledger; when
+  one recurs across tasks/sessions it escalates to a **block**
+  (`checker-outage-systemic`), and an unreadable ledger blocks too
+  (`checker-outage-undetermined`). `truncated-giveup` is not an outage and is not
+  escalated.
 - A checker that crashes / times out / emits unusable output → **block**
   (bounded), then give up loudly — a broken checker never becomes a bypass.
 - A truncated (too-large) diff has an unchecked tail → **block** (bounded), then

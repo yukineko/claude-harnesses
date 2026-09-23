@@ -2,10 +2,16 @@
 //! trusted) layered over a home-level `~/.propguard/config.toml`, over built-in
 //! defaults.
 //!
-//! Safe by default: with no config propguard checks ordinary source changes, but
-//! if it can't find a task's `done_criteria` (nothing to derive properties
-//! from), or nothing checkable changed, or there is no git repo, it lets every
-//! stop through. Installing the hook can never *trap* a turn on its own.
+//! With no config at all propguard checks ordinary source changes, but if no
+//! `done_criteria` source is configured (nothing to derive properties from), or
+//! nothing checkable changed, or there is no git repo, it lets every stop
+//! through.
+//!
+//! A config file that EXISTS but cannot be read or parsed is not "no config":
+//! [`Config::load`] records it in [`Config::load_error`] and `gate::evaluate`
+//! blocks the stop (`config-unreadable`) instead of silently running on
+//! built-in defaults (CA-propguard-03). `propguard skip --reason ...` and
+//! `PROPGUARD_DISABLE=1` stay available as escape hatches.
 
 use std::path::{Path, PathBuf};
 
@@ -78,6 +84,13 @@ pub struct Config {
     pub checker_cmd: String,
     pub checker_timeout_secs: u64,
     pub state_dir: PathBuf,
+    /// `Some(reason)` when the chosen config file (project `propguard.toml` or
+    /// home `config.toml`) EXISTS but could not be read or parsed, so the
+    /// knobs above are built-in defaults standing in for an operator config we
+    /// could not see. That is *undetermined*, not "unconfigured": the gate
+    /// resolves it fail-closed (`gate::evaluate` → `config-unreadable` Block).
+    /// `None` when a config was read and applied, or none exists.
+    pub load_error: Option<String>,
 }
 
 /// On-disk form; every field optional.
@@ -181,6 +194,7 @@ impl Default for Config {
             checker_cmd: "claude -p".to_string(),
             checker_timeout_secs: 300,
             state_dir: base_dir().join("state"),
+            load_error: None,
         }
     }
 }
@@ -199,8 +213,13 @@ impl Config {
     /// since its `checker_cmd` is later run as a subprocess from the Stop hook
     /// and an untrusted, repo-shipped value would be arbitrary code execution.
     /// When the project file exists but the root is not trusted we ignore it and
-    /// fall back to the (trusted) home config, then built-in defaults. Any parse
-    /// error silently falls back (the gate must never crash a turn).
+    /// fall back to the (trusted) home config, then built-in defaults.
+    ///
+    /// A chosen file that exists but cannot be read (permission denied, invalid
+    /// UTF-8, …) or does not parse as TOML is NOT treated as "no config": the
+    /// returned config carries built-in defaults plus `load_error = Some(..)`,
+    /// which `gate::evaluate` turns into a fail-closed `config-unreadable`
+    /// Block (CA-propguard-03). Only a genuinely absent file means defaults.
     pub fn load(root: &Path) -> Self {
         let mut cfg = Config::default();
 
@@ -227,31 +246,30 @@ impl Config {
 
         if let Some(path) = chosen {
             // `Known(Some(text))`: read and apply. `Known(None)`: the file
-            // vanished between the `p.exists()` check above and this read —
-            // genuinely absent, same as "no config" (unchanged behavior).
-            // `Undetermined` (unreadable despite existing: permission denied,
-            // invalid UTF-8, …): this loader has no way to signal failure to
-            // its caller (`Config::load` returns `Self`, not a `Result`), and
-            // its whole documented contract is "the gate must never crash a
-            // turn" — an in-progress/unreadable config falls back to defaults
-            // exactly as a parse error already does a few lines below. This is
-            // the one call site in this migration where Undetermined and
-            // Known(None) converge on purpose, not by accident: both already
-            // shared the same fallback before this migration, and this keeps
-            // it that way while still naming the distinction in code.
+            // vanished between the `exists()` check above and this read —
+            // genuinely absent, same as "no config". `Undetermined`
+            // (unreadable despite existing) and a TOML parse error are
+            // "there IS an operator config but we cannot see it": recorded in
+            // `load_error` so the gate can fail closed rather than silently
+            // enforce built-in defaults — an empty `done_criteria` default
+            // would otherwise reach `allow("no-criteria")`, indistinguishable
+            // from never having configured propguard (CA-propguard-03).
             match harness_core::boundary::read_to_string(&path) {
                 harness_core::verdict::Determination::Known(Some(text)) => {
-                    if let Ok(fc) = toml::from_str::<FileConfig>(&text) {
-                        cfg.apply(fc);
+                    match toml::from_str::<FileConfig>(&text) {
+                        Ok(fc) => cfg.apply(fc),
+                        Err(e) => {
+                            let why = format!("cannot parse {}: {e}", path.display());
+                            eprintln!("propguard: {why}");
+                            cfg.load_error = Some(why);
+                        }
                     }
                 }
                 harness_core::verdict::Determination::Known(None) => {}
                 harness_core::verdict::Determination::Undetermined(reason) => {
-                    eprintln!(
-                        "propguard: cannot read {}: {}; falling back to defaults",
-                        path.display(),
-                        reason.as_str()
-                    );
+                    let why = format!("cannot read {}: {}", path.display(), reason.as_str());
+                    eprintln!("propguard: {why}");
+                    cfg.load_error = Some(why);
                 }
             }
         }
@@ -367,6 +385,7 @@ impl Config {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic)]
 mod tests {
     use super::*;
 
@@ -501,5 +520,200 @@ mod tests {
             cfg.checker_timeout_secs, 45,
             "checker_timeout_secs in propguard.toml must reach Config.checker_timeout_secs"
         );
+    }
+
+    // ── CA-propguard-03 ──────────────────────────────────────────────────
+    //
+    // These tests swap the process-global HOME and HARNESS_TRUST_ALL env
+    // vars, which every other test in this module leaves untouched, but
+    // cargo still runs tests in one process concurrently — guard with a
+    // lock so a parallel run of this file's own tests can't interleave.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// CA-propguard-03 (twin of CA-propguard-01, one layer up): `Config::load`
+    /// falls back to `Config::default()` both when `propguard.toml` does not
+    /// exist at all AND when it exists but cannot be read (permission
+    /// denied) — `Config::load` has no channel to report the difference to
+    /// its caller, so the two situations reach the exact same
+    /// `evaluate(..) -> allow("no-criteria")` outcome: an operator whose
+    /// propguard.toml is unreadable gets silently treated as if they never
+    /// configured propguard at all.
+    #[cfg(unix)]
+    #[test]
+    fn ca_propguard_03_unreadable_project_toml_must_not_look_like_not_configured() {
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _crit_guard = crate::derive::tests::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("PROPGUARD_CRITERIA");
+
+        let real_home = std::env::var("HOME").ok();
+        let fake_home = std::env::temp_dir().join(format!(
+            "propguard-config-envhome-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&fake_home);
+        std::fs::create_dir_all(&fake_home).expect("create fake HOME");
+        // Redirect HOME so no real ~/.propguard/config.toml on this machine
+        // can leak into either branch below.
+        std::env::set_var("HOME", &fake_home);
+        // Trust every root for this test (transient, process-scoped hatch —
+        // see harness_core::trust) so `Config::load` actually attempts to
+        // read the PROJECT propguard.toml instead of falling back to
+        // (nonexistent) home config on the untrusted path.
+        std::env::set_var("HARNESS_TRUST_ALL", "1");
+
+        let root = std::env::temp_dir().join(format!(
+            "propguard-config-project-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create project root");
+
+        let toml_path = Config::project_path(&root);
+        std::fs::write(&toml_path, "done_criteria = \"must be idempotent\"\n")
+            .expect("write propguard.toml");
+        std::fs::set_permissions(&toml_path, std::fs::Permissions::from_mode(0o000))
+            .expect("chmod 000");
+        // If chmod 000 doesn't actually deny this uid (e.g. running as
+        // root), the test's premise is absent.
+        let denied = std::fs::read_to_string(&toml_path).is_err();
+
+        let fresh_state = || crate::state::SessionState {
+            attempts: 0,
+            last_hash: String::new(),
+            last_ts: 0,
+        };
+        let unreadable_decision =
+            crate::gate::evaluate(&Config::load(&root), &root, &fresh_state());
+
+        // Now make the project genuinely unconfigured: no propguard.toml at
+        // all (same root, same trust grant, same empty home).
+        std::fs::set_permissions(&toml_path, std::fs::Permissions::from_mode(0o644))
+            .expect("chmod back before removing");
+        std::fs::remove_file(&toml_path).expect("remove propguard.toml");
+        let not_configured_decision =
+            crate::gate::evaluate(&Config::load(&root), &root, &fresh_state());
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&fake_home);
+        std::env::remove_var("HARNESS_TRUST_ALL");
+        match real_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+
+        assert!(
+            denied,
+            "precondition: chmod 000 must deny this uid (running as root?)"
+        );
+
+        fn tag(d: &crate::gate::Decision) -> &'static str {
+            match d {
+                crate::gate::Decision::Allow { tag, .. } => tag,
+                crate::gate::Decision::Block { tag, .. } => tag,
+            }
+        }
+        assert_ne!(
+            tag(&unreadable_decision),
+            tag(&not_configured_decision),
+            "an EXISTING but UNREADABLE propguard.toml must not be indistinguishable \
+             from having no propguard.toml at all; both reached decision tag={:?}",
+            tag(&unreadable_decision)
+        );
+    }
+
+    /// CA-propguard-03 (fixer's own assertion, stronger than "a different
+    /// tag"): an existing-but-unreadable project propguard.toml must make the
+    /// gate BLOCK (`config-unreadable`) with the file named in the reason, and
+    /// `Config::load` must expose it as `load_error`. A syntactically invalid
+    /// one likewise (パース不能 is 判定不能, CLAUDE.md §3).
+    #[cfg(unix)]
+    #[test]
+    fn ca_propguard_03_unreadable_or_unparseable_project_toml_blocks_fail_closed() {
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _crit_guard = crate::derive::tests::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("PROPGUARD_CRITERIA");
+        let real_home = std::env::var("HOME").ok();
+        let real_trust = std::env::var("HARNESS_TRUST_ALL").ok();
+
+        let fake_home = std::env::temp_dir().join(format!(
+            "propguard-config-envhome-blk-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&fake_home);
+        std::fs::create_dir_all(&fake_home).expect("create fake HOME");
+        std::env::set_var("HOME", &fake_home);
+        std::env::set_var("HARNESS_TRUST_ALL", "1");
+
+        let root = std::env::temp_dir().join(format!(
+            "propguard-config-project-blk-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create project root");
+        let toml_path = Config::project_path(&root);
+        let fresh_state = || crate::state::SessionState {
+            attempts: 0,
+            last_hash: String::new(),
+            last_ts: 0,
+        };
+
+        std::fs::write(&toml_path, "done_criteria = \"must be idempotent\"\n").unwrap();
+        std::fs::set_permissions(&toml_path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let denied = std::fs::read_to_string(&toml_path).is_err();
+        let unreadable_cfg = Config::load(&root);
+        let unreadable = crate::gate::evaluate(&unreadable_cfg, &root, &fresh_state());
+        std::fs::set_permissions(&toml_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        std::fs::write(&toml_path, "done_criteria = [not valid toml\n").unwrap();
+        let unparseable_cfg = Config::load(&root);
+        let unparseable = crate::gate::evaluate(&unparseable_cfg, &root, &fresh_state());
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&fake_home);
+        match real_trust {
+            Some(v) => std::env::set_var("HARNESS_TRUST_ALL", v),
+            None => std::env::remove_var("HARNESS_TRUST_ALL"),
+        }
+        match real_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+
+        assert!(
+            denied,
+            "precondition: chmod 000 must deny this uid (running as root?)"
+        );
+        assert!(
+            unreadable_cfg.load_error.is_some(),
+            "unreadable propguard.toml must surface as load_error"
+        );
+        assert!(
+            unparseable_cfg.load_error.is_some(),
+            "unparseable propguard.toml must surface as load_error"
+        );
+        for (what, d) in [("unreadable", unreadable), ("unparseable", unparseable)] {
+            match d {
+                crate::gate::Decision::Block { tag, reason, .. } => {
+                    assert_eq!(tag, "config-unreadable", "{what}");
+                    assert!(
+                        reason.contains("propguard.toml"),
+                        "{what}: reason must name the file: {reason}"
+                    );
+                }
+                crate::gate::Decision::Allow { tag, .. } => {
+                    panic!("{what} propguard.toml must BLOCK (fail closed); got Allow {tag:?}")
+                }
+            }
+        }
     }
 }

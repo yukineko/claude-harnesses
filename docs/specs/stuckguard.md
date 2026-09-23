@@ -28,8 +28,9 @@
   `sig::looks_error` が response の best-effort）。
 - **oscillation が repeat に優先** — `detect::detect` は oscillation を先に評価し、成立すればそれを返す。両立時は
   oscillation を採用。
-- **アドバイザリの優先順位（構造的排他）** — `watch` の発火判定は else-if チェーンで、ハードトリップ（repeat/oscillation）
-  → progress アドバイザリ → scope-drift アドバイザリ（§4.4）の順で最初に成立した1つだけを採る。ハードトリップが常に優先し、
+- **アドバイザリの優先順位（構造的排他）** — `watch` の発火判定は、ハードトリップ（repeat/oscillation）
+  → progress アドバイザリ → scope-drift アドバイザリ（§4.4）の順で最初に成立した1つだけを採る。scope-drift は
+  progress アドバイザリの*有効フラグ*ではなく*実際に出力したか*で門番されるので、両方有効でも到達可能（CA-stuckguard-01）。ハードトリップが常に優先し、
   scope-drift は最下位。下位アドバイザリは上位が発火した場合は評価されず、上位の bookkeeping（cooldown・nudge 回数・streak）を
   一切乱さない（`main::run_hook` 参照）。
 - **PDO anchor は fail-soft な副系** — scope-drift（§4.4）と heartbeat piggyback（§4.6b）はいずれも overwatch の live lease
@@ -54,7 +55,7 @@
   `record_nudge` + `log_event` + `message` を `additionalContext` に出力 → `state::save`。exit code は常に 0（`run_hook` 経由）。
   PDO anchor が有効な場合（`heartbeat_piggyback_enabled` or `scope_drift_enabled`）は `anchor::fetch_session_anchor` で
   session の live anchor を一度だけ読み、(a) heartbeat piggyback（§4.6b）を発火し、(b) ハード/progress が発火しなかったときの
-  else-if 最下段で scope-drift（§4.4）を評価する。いずれも fail-soft・advisory-only でナッジ経路をブロックしない。
+  最下段で（progress アドバイザリも出力しなかった場合に）scope-drift（§4.4）を評価する。いずれも fail-soft・advisory-only でナッジ経路をブロックしない。
 - **`install [--dry-run]`** — `~/.claude/settings.json` に PostToolUse フックをマージ（`install::install`、
   `harness_core::install` 経由で backup→write）。matcher は `Bash|Edit|MultiEdit|Write|Read|Grep|Glob`、timeout 10s。
   冪等（既存の `stuckguard` group を `MARKERS` で strip して置換）。

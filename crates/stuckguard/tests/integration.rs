@@ -669,3 +669,98 @@ fn undetermined_overwatch_anchor_diagnostic_reaches_the_real_binarys_stderr() {
         "the diagnostic must name the session id; got stderr: {stderr:?}"
     );
 }
+
+/// CA-stuckguard-01: `main::watch`'s advisory else-if chain
+/// (`if let Some(t) = &trip { .. } else if cfg.progress_advisory_enabled { .. }
+/// else if cfg.scope_drift_enabled { .. }`) branches on the
+/// `progress_advisory_enabled` FLAG, not on whether the progress advisory
+/// actually emitted anything. So when an operator turns BOTH advisories on
+/// (as the config comments and README describe them: independent, additive,
+/// opt-in signals), the `scope_drift_enabled` branch becomes structurally
+/// unreachable — `progress_advisory_message` may legitimately return `None`
+/// (e.g. the window is shorter than `progress_min_window`) and the chain
+/// still stops there, never trying scope-drift.
+///
+/// This test proves the branch is unreachable with a REAL scope-drift signal
+/// present: a fake `overwatch` binary on `PATH` answers `lease --session ..
+/// --json` with a live anchor whose scope does not cover the file this call
+/// edits (`drift_threshold = 1`, so a single out-of-scope edit is enough).
+/// `progress_advisory_enabled` is also on, but the 1-event window is below
+/// the default `progress_min_window` (6), so `detect::progress_score` (and
+/// therefore `progress_advisory_message`) returns `None` regardless of any
+/// threshold — isolating the bug to the else-if GATING, not to the progress
+/// advisory actually firing and legitimately taking priority.
+#[cfg(unix)]
+#[test]
+fn ca_stuckguard_01_scope_drift_unreachable_when_progress_advisory_flag_is_on() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = temp_home();
+    let session = "sess-ca-stuckguard-01";
+
+    // Fake `overwatch`: answers the PATH-resolution probe (`--version`) and
+    // `lease --session <id> --json` with a live lease whose scope is
+    // deliberately disjoint (by substring, per `file_in_scope`) from the file
+    // this call edits.
+    let fake_bin_dir = home.join("fakebin");
+    std::fs::create_dir_all(&fake_bin_dir).expect("create fake bin dir");
+    let script = fake_bin_dir.join("overwatch");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\n\
+         if [ \"$1\" = \"--version\" ]; then echo overwatch-fake; exit 0; fi\n\
+         if [ \"$1\" = \"lease\" ]; then printf '%s\\n' '{\"key\":\"\",\"run_id\":\"\",\"scope\":[\"src/core/**\"]}'; exit 0; fi\n\
+         exit 1\n",
+    )
+    .expect("write fake overwatch script");
+    let mut perms = std::fs::metadata(&script)
+        .expect("stat fake script")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&script, perms).expect("chmod fake script");
+
+    std::fs::write(
+        home.join("stuckguard.toml"),
+        "progress_advisory_enabled = true\n\
+         scope_drift_enabled = true\n\
+         drift_threshold = 1\n\
+         heartbeat_piggyback_enabled = false\n",
+    )
+    .expect("write stuckguard.toml");
+
+    let bin = env!("CARGO_BIN_EXE_stuckguard");
+    let path = format!("{}:/usr/bin:/bin", fake_bin_dir.display());
+    let payload = format!(
+        r#"{{"hook_event_name":"PostToolUse","session_id":"{session}","tool_name":"Edit","tool_input":{{"file_path":"docs/readme.md","old_string":"a","new_string":"b"}}}}"#
+    );
+    let mut child = Command::new(bin)
+        .args(["watch"])
+        .current_dir(&home)
+        .env("HOME", &home)
+        .env("PATH", &path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("binary spawns");
+    if let Some(mut child_stdin) = child.stdin.take() {
+        let _ = child_stdin.write_all(payload.as_bytes());
+    }
+    let out = child.wait_with_output().expect("binary runs");
+    let code = out.status.code().unwrap_or(-1);
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+
+    assert_eq!(code, 0, "PostToolUse hook must always exit 0");
+    assert!(
+        stdout.contains("docs/readme.md") || stdout.contains("🧭"),
+        "with BOTH advisory flags on, a real live anchor (scope src/core/**), \
+         and a real out-of-scope edit (docs/readme.md, drift_threshold=1), the \
+         scope-drift advisory must fire once the progress advisory declines \
+         (window too short for progress_min_window) — CA-stuckguard-01: the \
+         `else if cfg.progress_advisory_enabled` branch gates on the FLAG, not \
+         on whether `progress_advisory_message` actually emitted anything, so \
+         `else if cfg.scope_drift_enabled` never runs while the flag is on. \
+         stdout={stdout:?} stderr={stderr:?}"
+    );
+}

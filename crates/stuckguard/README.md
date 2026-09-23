@@ -39,8 +39,9 @@ When enabled, `watch` reads the current session's live overwatch lease
 consecutive *edited* files (Edit/Write, tracked via the existing signature's
 `file_path`) all fall **outside** the lease's declared scope for
 `drift_threshold` (default 3) consecutive edits, nudges to update the anchor or
-return to the task. It is structurally mutually exclusive (else-if chain) with
-the hard trip and the progress advisory — the hard trip always wins and
+return to the task. It runs only when the hard trip did not fire and the
+progress advisory did not emit this call (both advisories may be enabled
+together; at most one advisory fires per call) — the hard trip always wins and
 scope-drift, being lowest priority, never perturbs their bookkeeping. It no-ops
 when the session holds no lease, the scope is empty, or overwatch is absent
 (fail-soft). Advisory only — never blocks.

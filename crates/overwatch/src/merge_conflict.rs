@@ -263,6 +263,15 @@ fn resolution_result(
             }),
             false,
         ),
+        crate::store::AppendOutcome::SkippedUndetermined(why) => (
+            serde_json::json!({
+                "resolved": false,
+                "reason": "ledger_undetermined",
+                "note": why,
+                "conflict_id": conflict_id,
+            }),
+            false,
+        ),
     }
 }
 

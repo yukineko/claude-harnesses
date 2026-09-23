@@ -325,11 +325,21 @@ pub fn run(range: ReconcileRange, dry_run: bool, json: bool) -> Result<SourceHea
         for d in &new_dispositions {
             // Fail-soft: a single store-write failure must not abort the
             // batch or the command (matches `disposition_cli::record`).
-            if let Err(e) = store::append_disposition(&cwd, d) {
-                eprintln!(
+            match store::append_disposition(&cwd, d) {
+                Ok(store::AppendOutcome::Recorded) => {}
+                // Nothing persisted: say so rather than count it as recorded.
+                Ok(store::AppendOutcome::SkippedContended) => eprintln!(
+                    "overwatch: WARNING auto-reconcile disposition for {} NOT recorded: store lock contended",
+                    d.finding_id
+                ),
+                Ok(store::AppendOutcome::SkippedUndetermined(why)) => eprintln!(
+                    "overwatch: WARNING auto-reconcile disposition for {} NOT recorded: {why}",
+                    d.finding_id
+                ),
+                Err(e) => eprintln!(
                     "overwatch: WARNING could not record auto-reconcile disposition for {}: {e}",
                     d.finding_id
-                );
+                ),
             }
         }
     }

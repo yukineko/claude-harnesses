@@ -30337,3 +30337,64 @@ updated_at = 1790185752
 weight = 0.0
 issue_number = 758
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/758"
+
+[[task]]
+id = "c25e8519"
+title = "mutategate は GATE crate に分類され --canary を要求されるが、plugin を出荷せず 自動で実行する hook も無い — GATE 分類がこの crate では強制を伴っていない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-24、測定点 5ab3bb70。GATE crate 5 本の host binary 実在を確認する途中で
+mutategate だけが解決できなかったので追った。
+
+観測 (すべて逐語):
+  crates/mutategate/ の中身は Cargo.toml / README.ja.md / README.md / src / tests。
+  .claude-plugin/ ディレクトリが存在しない (plugin.json も marketplace エントリも無い)。
+  .claude-plugin/marketplace.json の 41 エントリに mutategate は含まれない。
+  /Users/yuki/.claude/plugins/cache/yukineko/ 配下に mutategate の dir は 0 件。
+  crates/mutategate/Cargo.toml は [[bin]] name = mutategate を持つ。
+
+一方で GATE 分類は 2 箇所が持っている:
+  scripts/rollout-plugins.sh:134 の
+    GATE_CRATES="blastguard propguard specguard stuckguard mutategate overwatch parallelguard"
+  CLAUDE.md の GATE クレート列挙 (check-gate-crates-sync.py が両者を機械照合する)。
+
+実行経路を追うと、.githooks/pre-push は mutategate を **実行しない**。3 箇所の出現は
+いずれも文字列であって呼び出しではない: 8 行目と 145 行目は助言メッセージ、88 行目は
+  GATE_PATTERN='^crates/(blastguard|propguard|specguard|stuckguard|mutategate|overwatch|parallelguard)/'
+という『gate crate が変更されたか』の検出パターン。binary を実際に起動するのは
+scripts/mutation-pilots.sh だけで、これは自動フックではない。
+
+したがって mutategate について GATE 分類が意味するのは『変更したら --canary を要求する』
+だけであり、他の GATE crate のように『配備された binary が hook として発火する』実体を
+持たない。plugin を出荷しないので rollout の対象にもなり得ない。
+
+両方の読み:
+  (a) 意図的。mutategate は mutation テストの道具であって常時発火する gate ではなく、
+      GATE_CRATES への登録は『触ったら慎重に』の印にすぎない。この読みなら欠陥ではない。
+  (b) 分類と実体の乖離。CLAUDE.md は GATE crate を『workflow 全体を止められる部品』と
+      定義しており、mutategate はその定義を満たさない。定義を満たさないものが同じ列挙に
+      入っていると、GATE 列挙を読んだ人間/スクリプトが『7 本とも配備されて発火している』と
+      誤読する。実際 SessionStart の rollout チェックは GATE を 5 本として数えており
+      (mutategate と parallelguard を除く)、列挙が 2 箇所で食い違っている。
+
+見分け方: mutategate が『止める』側の判定を持つことを意図されているかを人間に確認する。
+意図されていないなら (a) で、GATE_CRATES のコメントに『plugin ではない』と明記すれば足りる。
+意図されているなら (b) であり、hook 配線が欠けている = その gate は dark である。
+
+注意: これを『赤』として rollout や enable で消そうとしないこと。plugin.json が無いので
+rollout 対象にできず、2026-08-04 の taintguard の誤りを繰り返すだけになる。
+
+done_criteria: mutategate が GATE 列挙に入る理由が 1 箇所に明文化され、かつ
+『配備された binary が自動で発火する』という含意を持つかどうかが読んで分かる。"""
+created_at = 1790203482
+updated_at = 1790203482
+weight = 0.0
+issue_number = 759
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/759"

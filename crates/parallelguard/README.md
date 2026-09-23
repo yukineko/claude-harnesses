@@ -56,7 +56,9 @@ The cost of that choice is bounded on purpose — every deny is recoverable
 without a human:
 
 * the ledger is cleared at every turn boundary by `reset`;
-* a lockfile abandoned by a killed process is stolen after 30 s;
+* a killed hook never wedges the lock: it is a kernel advisory lock
+  (`flock`) on a persistent lockfile, released by the kernel when the holder
+  dies — there is no staleness timeout and nothing is ever stolen;
 * a denied call is a call that simply did not run — re-issuing it costs a round,
   not work.
 

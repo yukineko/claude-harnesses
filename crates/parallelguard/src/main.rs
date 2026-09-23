@@ -33,9 +33,11 @@
 //! hook error, i.e. an allow).
 //!
 //! The cost of that choice is bounded on purpose. Every deny is recoverable
-//! without a human: the ledger is cleared at every turn boundary by `reset`, an
-//! abandoned lockfile is stolen after 30 s, and a denied call is a call that
-//! simply did not run — the model re-issues it. Nothing is lost but a round.
+//! without a human: the ledger is cleared at every turn boundary by `reset`, a
+//! killed hook's lock is released by the kernel with its process (the lock is
+//! a kernel advisory lock, never stolen on a timeout), and a denied call is a
+//! call that simply did not run — the model re-issues it. Nothing is lost but a
+//! round.
 //!
 //! **What this does NOT bound**, stated so a quiet gap is not mistaken for
 //! coverage: a `Bash` call made with `run_in_background: true` returns

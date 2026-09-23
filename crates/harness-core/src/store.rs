@@ -135,6 +135,19 @@ fn note_session_tag(path: &Path) -> Option<String> {
 }
 
 fn tagged_note_re() -> Regex {
+    // The pattern is a hardcoded string literal with no runtime-variable input
+    // (never built from user/session data), so the only way `Regex::new` can
+    // fail here is a syntax typo in this literal — a compile-time-discoverable
+    // authoring bug, not a runtime failure mode that callers need to fail
+    // closed on. `note_session_tag`'s round-trip is exercised by
+    // `store::tests` (see the assertions around line 842), so a broken
+    // pattern cannot land silently.
+    #[expect(
+        clippy::expect_used,
+        reason = "static regex literal with no variable input; a syntax error \
+                  here is a compile-time authoring bug caught by store::tests, \
+                  not a runtime failure mode"
+    )]
     Regex::new(r"-([0-9a-f]{8}|nosess)-\d{8}-\d{6}$").expect("static regex")
 }
 

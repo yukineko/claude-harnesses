@@ -7,7 +7,11 @@
 //! runs an independent reviewer and blocks only when issues are reported. It is
 //! the "is this good code?" complement to donegate's "does it actually run?".
 //!
-#![deny(clippy::panic)]
+//! `clippy::panic` (along with `unwrap_used`/`expect_used`) is now enforced via
+//! this crate's `[lints] workspace = true` in `Cargo.toml`, which inherits the
+//! aggregated `[workspace.lints.clippy]` in the root `Cargo.toml` — this used to
+//! be a hand-placed `#![deny(clippy::panic)]` here; it moved to the shared
+//! aggregation point instead of being duplicated.
 //!
 //! Failure modes are split deliberately:
 //!   * a *harness* error (bad config, no git, our own bug) → exit 0, allow the
@@ -22,6 +26,8 @@
 //!     harness error: its dropped tail is unreviewed, so it blocks (bounded by
 //!     `max_attempts`, with an escapable reason) rather than silently allowing —
 //!     otherwise the tail would bypass the gate. See `review::decide_truncated`.
+
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod config;
 mod git;

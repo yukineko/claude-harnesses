@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! RED: the fail-open class `python3 scripts/check-fail-open.py --all` flags in
 //! harness-core (`readdir-let-else-swallow` / `readdir-flatten-swallow`) —
 //! `session::load_all`, `Store::list_notes`, and `usage::subagent_usage` all

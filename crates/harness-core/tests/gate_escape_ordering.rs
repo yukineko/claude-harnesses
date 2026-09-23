@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Regression guard for the fail-closed Stop-gate panic barrier.
 //!
 //! Since `harness_core::gate::run_guarded` fails CLOSED on a panic (a crashed

@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Contract tests for the three properties that decide **whose** footprint may
 //! silence a gate, and **how much of the transcript store** answering that
 //! question is allowed to cost.

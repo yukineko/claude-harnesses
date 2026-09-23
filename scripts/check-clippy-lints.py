@@ -77,24 +77,24 @@ variants below (`Undetermined` vs `Selection`), not one empty list, because an
 empty list read as "nothing to check, therefore clean" is exactly the fail-open
 CLAUDE.md 3 names. The former is exit 2, the latter is exit 0.
 
-KNOWN LIMITATION — four verdict-bearing gate crates are NOT covered
+FORMER KNOWN LIMITATION — now closed
 -------------------------------------------------------------------
-budgetguard, donegate, reviewgate and schemaguard have NO `[lints]` section at
-all (measured 2026-07-28 on branch flow/clippy-precommit-gate: `grep -n
-'^\\[lints\\]' crates/<name>/Cargo.toml` finds nothing in any of the four).
-They instead hand-paste `#![deny(clippy::panic)]` into their crate roots
-(crates/budgetguard/src/main.rs:6, crates/donegate/src/main.rs:9,
-crates/reviewgate/src/main.rs:10, crates/schemaguard/src/lib.rs:6 and
-crates/schemaguard/src/main.rs:3). `clippy::panic` is a different lint from
-`clippy::unwrap_used` and `clippy::expect_used`, so those two are not denied in
-those four crates by any invocation.
+budgetguard, donegate, reviewgate, schemaguard and harness-core used to have NO
+`[lints]` section (measured 2026-07-28 on branch flow/clippy-precommit-gate),
+hand-pasting `#![deny(clippy::panic)]` into their crate roots instead
+(crates/budgetguard/src/main.rs, crates/donegate/src/main.rs,
+crates/reviewgate/src/main.rs, crates/schemaguard/src/lib.rs and
+crates/schemaguard/src/main.rs — 5 hand-placed attributes across 4 crates).
+`clippy::panic` is a different lint from `clippy::unwrap_used` and
+`clippy::expect_used`, so those two were not denied in those crates by any
+invocation, and this scanner (membership derived from the opt-in) did not check
+them.
 
-Since membership here is derived from the opt-in, this scanner does not check
-them, and that is stated rather than left to be discovered. Closing it means
-adding `[lints] workspace = true` to those four manifests, which touches
-`crates/` and triggers this repo's plugin version-bump rules — deliberately out
-of scope for the change that introduced this file, not a judgement that the gap
-is unimportant.
+All five crates now carry `[lints] workspace = true` and the hand-placed
+`#![deny(clippy::panic)]` attributes were removed (the deny is inherited from
+the workspace root instead). This scanner now covers them like any other
+opted-in crate — there is no remaining special case here, by construction of
+the derivation rule above ("Membership is DERIVED, never hardcoded").
 
 Out-of-directory sources: a false negative that WAS demonstrated, now closed
 ---------------------------------------------------------------------------

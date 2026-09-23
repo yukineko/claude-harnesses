@@ -6,7 +6,11 @@
 //! keeps working. It is the dynamic, "does it actually run?" complement to the
 //! static (precommit) and spec-drift gates.
 //!
-#![deny(clippy::panic)]
+//! `clippy::panic` (along with `unwrap_used`/`expect_used`) is now enforced via
+//! this crate's `[lints] workspace = true` in `Cargo.toml`, which inherits the
+//! aggregated `[workspace.lints.clippy]` in the root `Cargo.toml` — this used to
+//! be a hand-placed `#![deny(clippy::panic)]` here; it moved to the shared
+//! aggregation point instead of being duplicated.
 //!
 //! Failure modes are split deliberately:
 //!   * a *check* failure → block on purpose, with an actionable reason.
@@ -22,6 +26,8 @@
 //!     that never opted in is not judged at all.
 //!   * *our own bug* (a panic) → the `harness_core::gate::run` barrier, which
 //!     fails CLOSED (blocks once, bounded by `stop_hook_active`).
+
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod config;
 mod gate;

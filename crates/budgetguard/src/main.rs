@@ -22,7 +22,13 @@
 //! give-up: no config file at all (the operator configured nothing), no
 //! transcript data to price, and `BUDGETGUARD_DISABLE=1` (the operator's
 //! explicit escape hatch, checked before the panic guard so it stays reachable).
-#![deny(clippy::panic)]
+//!
+//! `clippy::panic` (along with `unwrap_used`/`expect_used`) is now enforced via
+//! this crate's `[lints] workspace = true` in `Cargo.toml`, which inherits the
+//! aggregated `[workspace.lints.clippy]` in the root `Cargo.toml` — this used to
+//! be a hand-placed `#![deny(clippy::panic)]` here; it moved to the shared
+//! aggregation point instead of being duplicated.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod cache;
 mod config;

@@ -565,6 +565,18 @@ mod tests {
 
         const THREADS: usize = 6;
         const ITERS: usize = 8;
+        // No wall-clock bound on acquisition (backlog `35d61d23`). This test's
+        // property is mutual exclusion (no lost update; every RMW genuinely
+        // holds the lock), NOT the timeout. A finite deadline here made the
+        // test a scheduler race: pausing / starving the test process past it
+        // made `acquire_at` correctly refuse and the `held()` assert below
+        // fail with no lost update ever observed. The deadline's refusal
+        // semantics are proven separately by the hard-skip tests above, and
+        // the production `RunLock::DEADLINE` is untouched. Every holder is an
+        // in-process thread whose guard releases on drop (including panic
+        // unwind), so an unbounded wait only fails to return on a genuine
+        // never-released lock — a hang, never a pass.
+        const WAIT_UNTIL_ACQUIRED: Duration = Duration::MAX;
 
         std::thread::scope(|scope| {
             for _ in 0..THREADS {
@@ -572,7 +584,7 @@ mod tests {
                 let counter = counter.clone();
                 scope.spawn(move || {
                     for _ in 0..ITERS {
-                        let g = RunLock::acquire_at(lock_file.clone(), Duration::from_secs(10));
+                        let g = RunLock::acquire_at(lock_file.clone(), WAIT_UNTIL_ACQUIRED);
                         assert!(g.held(), "each RMW must genuinely hold the repo lock");
                         // Widened read->modify->write window: an unlocked racer
                         // reading the same `cur` here would lose an increment.

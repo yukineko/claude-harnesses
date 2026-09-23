@@ -28739,3 +28739,22 @@ updated_at = 1790138609
 weight = 0.0
 issue_number = 691
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/691"
+
+[[task]]
+id = "9eeffa69"
+title = "flow Step 3-4 'condukt circuit check --run flow-<session>' trips idle_unmeasured whenever no condukt run state exists under that id"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flow",
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-09-23 session 9d349393 after a successful cycle (5 items done): verdict trip, reason idle_unmeasured, idle_unknown_reason 'run state could not be loaded'. The flow skill passes the flow-<session> id, but condukt run state lives under the condukt run's own id (and this cycle's condukt fork never ran state init). Reading (a) defect: the skill passes an id that never has run state, so the breaker always trips after the first cycle and /flow stops regardless of remaining work (593 pending). Reading (b) intended: the fail-closed trip is meant to force the driver to pass a real run id. How to tell: read the flow SKILL.md 3-4 and condukt circuit check's run lookup; check whether any flow cycle ever got exit 0."
+created_at = 1790138658
+updated_at = 1790138658
+weight = 0.0
+issue_number = 692
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/692"

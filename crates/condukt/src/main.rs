@@ -4323,8 +4323,9 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             // is not reaped mid-run.
             //
             // EXIT-CODE CONTRACT (deliberate; pinned by
-            // `tests/heartbeat_err_surfaced.rs`): a failure here does NOT change
-            // the exit code and does NOT undo the transition, because the durable
+            // `tests/heartbeat_err_surfaced.rs`): a DETERMINATE failure here does
+            // NOT change the exit code, and nothing here undoes the transition,
+            // because the durable
             // state write has already happened above (`rs.save(..)?`). Bubbling a
             // `?` out of this block would report failure for an operation that
             // demonstrably succeeded, and would leave the caller unable to tell
@@ -4350,16 +4351,56 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             // terminal for `state::gate_reasons`, `state::reconcile_run` and
             // `wt_reconcile`, and was missing here, so a discarded experiment
             // kept its file claims forever.
+            // WHICH incomplete outcome moves the exit code, and why the two are
+            // NOT treated alike (backlog `9a4fb884`; the implementer of
+            // `06eb8aa3` refused to pick a side silently and deferred it, and the
+            // user ruled on 2026-09-24). The split is §3's own line, not a new
+            // one invented to make two test files agree:
+            //
+            //   `Failed`       — the file set WAS determined and the registry
+            //                    determinately refused the release. The warning
+            //                    enumerates every file that stayed held, so this
+            //                    is a COMPLETE observation of a failure. Exit
+            //                    stays 0: the durable state write stands, and a
+            //                    fully-named failure is not being passed off as
+            //                    clean — which is exactly what the frozen
+            //                    contract at `tests/heartbeat_err_surfaced.rs`
+            //                    (`release_files_failure_is_named_on_stderr`)
+            //                    asserts, and it keeps asserting it unchanged.
+            //   `Undetermined` — the file set could NOT be determined, so no
+            //                    release was even attempted. There is no
+            //                    observation here, only the absence of one; the
+            //                    warning says so in its own words ("This is an
+            //                    UNCHECKED result, not a clean one"). §3 governs
+            //                    precisely this case, and the exit code is the
+            //                    only channel a MACHINE consumer reads: leaving
+            //                    it 0 maps "could not check" onto the same value
+            //                    as "checked and clean" for every script and for
+            //                    the completion gate downstream. That is the
+            //                    conflation §3 forbids, so it resolves to the
+            //                    restrictive side.
+            //
+            // Stated plainly because it is the weak point of the split: the
+            // frozen contract's OWN rationale ("the durable state write already
+            // happened") is symmetric across both classes and is therefore not
+            // what distinguishes them. The asymmetry is determinate-vs-
+            // undetermined, not severity. The cost is also stated rather than
+            // hidden: on the `Undetermined` path a non-zero exit no longer means
+            // "the state write failed", so a caller that must know whether the
+            // transition landed reads `condukt state show`, not the exit code.
+            // The warning itself reports the transition as having stood.
+            let mut claim_release_undetermined = false;
             if releases_claims(st) {
                 let outcome = release_terminal_task_files(cfg, cwd, &run, &task);
-                // The exit code does NOT move (see the contract above), but the
-                // warning is printed for EVERY incomplete outcome — including
+                // The warning is printed for EVERY incomplete outcome — including
                 // the one that used to be silent, where the files to release
                 // could not be determined at all and the old `if
                 // !files.is_empty()` skipped the release with no output.
                 if let Some(msg) = outcome.warning(&run, &task) {
                     eprintln!("{msg}");
                 }
+                claim_release_undetermined =
+                    matches!(outcome, TerminalRelease::Undetermined { .. });
             }
             if let Err(e) = claim::heartbeat(cfg, cwd, &run, state::now_secs()) {
                 eprintln!(
@@ -4369,6 +4410,12 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                      Inspect with `condukt state claims`; refresh explicitly with `condukt state \
                      heartbeat --run {run}`."
                 );
+            }
+            // Deliberately LAST in the arm: the heartbeat upkeep above must still
+            // run and still report, so the exit carries the undetermined release
+            // without suppressing the other half of the same block.
+            if claim_release_undetermined {
+                std::process::exit(1);
             }
         }
         StateAction::Show { run } => {
@@ -5150,7 +5197,9 @@ enum TerminalRelease {
 impl TerminalRelease {
     /// The operator-facing warning, or `None` when — and only when — the
     /// hand-back completed. Callers with no frozen exit-code contract turn a
-    /// `Some` into a non-zero exit.
+    /// `Some` into a non-zero exit; `state set`, which has one, turns only the
+    /// `Undetermined` variant into a non-zero exit and keeps `Failed` at 0 (the
+    /// reasoning is at its call site, and backlog `9a4fb884` records the ruling).
     ///
     /// Every incomplete variant names the failing step ("claim release"), the
     /// run, the task, the underlying cause and the CONSEQUENCE (the files stay
@@ -5228,10 +5277,16 @@ fn run_held_files(cfg: &Config, cwd: &Path, run_id: &str) -> Determination<Vec<S
 /// still held and released by hand).
 ///
 /// It deliberately does NOT decide the exit code — the callers do, because they
-/// do not agree on one: `state set`'s exit code is a frozen contract
-/// (`tests/heartbeat_err_surfaced.rs`, the durable state write already stands),
-/// while `reconcile` / `cancel` / `discard` have no such contract and treat an
-/// incomplete hand-back as a failure of the command.
+/// do not agree on one. `reconcile` / `cancel` / `discard` have no frozen
+/// contract and treat ANY incomplete hand-back as a failure of the command.
+/// `state set` has one (`tests/heartbeat_err_surfaced.rs`: the durable state
+/// write already stands) and splits on the variant: `Failed` — a complete
+/// observation of a determinate failure, every stranded file named — keeps exit
+/// 0, while `Undetermined` — no observation at all — exits non-zero, because the
+/// exit code is the only channel a machine consumer reads and §3 forbids mapping
+/// "could not check" onto the value that means "checked and clean". The full
+/// argument, including what the split costs, is at the `state set` call site;
+/// backlog `9a4fb884` records that this was a human ruling, not an inference.
 fn release_terminal_task_files(
     cfg: &Config,
     cwd: &Path,

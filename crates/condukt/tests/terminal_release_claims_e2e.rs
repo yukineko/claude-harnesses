@@ -45,15 +45,22 @@
 //! claim-upkeep step is loud on stderr but leaves the exit code at 0, because
 //! the durable state write already succeeded. Backlog `06eb8aa3`'s
 //! done_criteria says instead that "a release that CANNOT be completed must NOT
-//! be silent: it must NAME what stayed held and exit NON-ZERO". Those two
-//! cannot both hold for `state set`.
+//! be silent: it must NAME what stayed held and exit NON-ZERO". Read as claims
+//! about the same situation, those two cannot both hold for `state set`.
 //!
 //! The two assertions are therefore split into two separate tests below —
 //! `unreadable_decomposition_terminal_set_is_not_silent` (loudness only, which
 //! contradicts nothing) and
 //! `unreadable_decomposition_terminal_set_exits_non_zero` (the exit-code half,
-//! which is the half in tension). Resolving that tension is a DECISION, not an
+//! which was the half in tension). Resolving that tension was a DECISION, not an
 //! implementation detail; do not quietly delete either test.
+//!
+//! It was decided on 2026-09-24 (backlog `9a4fb884`): the two files inject
+//! different FAULT CLASSES, so they were never claims about the same situation.
+//! A determinately-failed release with every stranded file named keeps exit 0
+//! (`heartbeat_err_surfaced.rs`, unchanged); a release whose file set could not
+//! be determined at all exits non-zero, because §3 forbids mapping "could not
+//! check" onto the value that means "checked and clean". Both tests now run.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -578,23 +585,28 @@ fn unreadable_decomposition_terminal_set_is_not_silent() {
 ///
 /// Backlog `06eb8aa3`'s done_criteria demands the opposite: "a release that
 /// CANNOT be completed must NOT be silent: it must NAME what stayed held and
-/// exit NON-ZERO." Both cannot hold. This test asserts the ticket's side; the
-/// implementer must resolve the conflict explicitly — either by changing the
-/// frozen contract deliberately, or by carrying the non-zero exit somewhere
-/// that does not lie about the state write.
+/// exit NON-ZERO."
+///
+/// RESOLVED 2026-09-24 by a human ruling (backlog `9a4fb884`), which is why the
+/// `#[ignore]` is gone. The two contracts were never about the same thing: they
+/// inject DIFFERENT fault classes, and `TerminalRelease` already distinguished
+/// them.
+///
+///   * `heartbeat_err_surfaced.rs` corrupts the REGISTRY, so the file set is
+///     known and the release determinately fails — `TerminalRelease::Failed`.
+///     Every stranded file is named. That stays exit 0, and that file was not
+///     touched: the frozen assertion still reads `Some(0)` verbatim.
+///   * THIS test corrupts the DECOMPOSITION, so which files to release cannot be
+///     determined at all and nothing is attempted —
+///     `TerminalRelease::Undetermined`. §3 governs that case and resolves it to
+///     the restrictive side, because the exit code is the only channel a machine
+///     consumer reads.
+///
+/// So neither contract was broken or narrowed by stealth; the ruling drew the
+/// line where the type already had one. The reasoning, and what the split costs
+/// (a non-zero exit here no longer implies the state write failed), is written
+/// out at the `state set` call site in `main.rs`.
 #[test]
-#[ignore = "DEFERRED TO A HUMAN, not weakened: this assertion contradicts the frozen \
-            exit-0 contract at tests/heartbeat_err_surfaced.rs:359 \
-            (`release_files_failure_is_named_on_stderr`, whose message is unhedged — \
-            \"same contract as the heartbeat half: the state write stands\") and the \
-            reasoning for it in main.rs's claim-upkeep block. Both cannot hold for \
-            `state set`: one requires exit 0 after a failed claim hand-back, this one \
-            requires non-zero. The implementer of backlog 06eb8aa3 closed the four \
-            release gaps and made this path LOUD (see \
-            `unreadable_decomposition_terminal_set_is_not_silent`, which passes) but did \
-            NOT pick a winner on the exit code, because picking one silently would be \
-            choosing which frozen contract to break. The body is kept intact so the \
-            contract it asks for stays readable in the tree. See backlog 06eb8aa3."]
 fn unreadable_decomposition_terminal_set_exits_non_zero() {
     let fx = Fixture::new("undet-exit");
     let dec = fx.write_decomp("dec.json", &[("t1", "src/shared.rs")]);

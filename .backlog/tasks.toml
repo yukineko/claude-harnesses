@@ -8187,10 +8187,10 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "claimed"
+status = "pending"
 notes = "2026-07-28 時点で verdict 未採用 gate は 0 本になった (schemaguard 1601b835 / autoflow cec3a431 で解消)。残る勾配は harness_core::verdict の低採用 gate 各1 file: budgetguard / gauge / reviewgate。確立した手順は 監査 (read-only・docs/ へ出力・crates 無変更) から RED 先行観測、三値化 GREEN、micro bump、--plugin スコープの rollout までの2フェーズで、worker と verifier を別モデルにする。task text には必ず 既に fail-closed な経路のリスト を不合格条件として明記すること (誤検出で意図的設計を壊すのを防ぐため。autoflow の lock.rs:81 が実例)"
 created_at = 1785193820
-updated_at = 1790183118
+updated_at = 1790183496
 weight = 0.0
 issue_number = 84
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/84"
@@ -9102,10 +9102,10 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "claimed"
+status = "pending"
 notes = "計測日 2026-08-02、測定点 a30b323f、測定コマンド: overwatch review-metrics。closure [condukt-gate] 0.00 (0/4) / [continuous-audit] 0.00 (0/36) / [record-audit] 0.00 (0/3)。457b44f1 で closure rate が計測可能になった結果、初めて見えた事実。specguard は ack 経由で disposition を積むようになったが、他の producer には閉じる導線が無い。review-metrics は『1 finding に fix commit が landed しているが disposition 無し』も警告している。"
 created_at = 1785634225
-updated_at = 1790183465
+updated_at = 1790183496
 weight = 0.0
 issue_number = 116
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/116"

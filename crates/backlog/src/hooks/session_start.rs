@@ -104,11 +104,13 @@ pub fn run(input: &HookInput) -> Option<String> {
             let mut out = notice.unwrap_or_default();
             out.push_str(&warnings);
             out.push_str(&format!(
-                "## Backlog \u{2014} tasks.toml UNREADABLE\n\n\
-                 backlog: tasks.toml unreadable at {}: {e:#} \u{2014} queue state UNKNOWN, not \
-                 empty. Do not treat this as \"no pending tasks\"; fix or restore the file \
+                "## Backlog \u{2014} store UNREADABLE\n\n\
+                 backlog: store unreadable at {} (tasks.toml or its done file {}): {e:#} \
+                 \u{2014} queue state UNKNOWN, not empty. Do not treat this as \"no pending \
+                 tasks\"; fix or restore the file named in the error \
                  (e.g. `backlog list` to reproduce the error).\n",
-                tasks_path.display()
+                tasks_path.display(),
+                store::done_path(&tasks_path).display()
             ));
             return Some(out);
         }

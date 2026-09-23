@@ -24,16 +24,91 @@ struct TasksFile {
     task: Vec<Task>,
 }
 
-/// tasks.toml から全タスクを読み込む。ファイル不在は空 Vec。
-pub fn load(path: &Path) -> Result<Vec<Task>> {
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let text = std::fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
+/// True for the TERMINAL statuses — `done` and `cancelled`. A terminal row
+/// lives in the done file (see [`done_path`]), and terminal is MONOTONIC: no
+/// write path moves a terminal task back to a non-terminal status, and when
+/// the two files disagree about an id the terminal row wins (see [`load`]).
+pub(crate) fn is_terminal_status(status: &str) -> bool {
+    status == STATUS_DONE || status == STATUS_CANCELLED
+}
+
+/// The sibling done file of a store: `<dir>/<stem>.done.toml` for
+/// `<dir>/<stem>.toml` (so `tasks.toml` -> `tasks.done.toml`). A store path
+/// that does not end in `.toml` gets `<name>.done.toml`.
+///
+/// backlog 45c3a699: terminal rows (`done` / `cancelled`) are kept here instead
+/// of in `tasks.toml`, so the live queue file stays small and a completion is a
+/// pure append to this file in git.
+pub fn done_path(path: &Path) -> PathBuf {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "tasks.toml".to_string());
+    let done_name = match name.strip_suffix(".toml") {
+        Some(stem) => format!("{stem}.done.toml"),
+        None => format!("{name}.done.toml"),
+    };
+    path.with_file_name(done_name)
+}
+
+/// Read one store file. A missing file is `Ok(None)`; a file that exists but
+/// cannot be read or parsed is `Err` naming that file — never an empty set.
+fn read_tasks_file(path: &Path) -> Result<Option<(String, Vec<Task>)>> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(anyhow::Error::new(e).context(format!("failed to read {}", path.display())))
+        }
+    };
     let file: TasksFile =
         toml::from_str(&text).with_context(|| format!("failed to parse {}", path.display()))?;
-    Ok(file.task)
+    Ok(Some((text, file.task)))
+}
+
+/// Load every task of a store: the UNION of `tasks.toml` and its done file
+/// ([`done_path`]).
+///
+/// - Neither file present: empty `Vec`. A missing done file just contributes
+///   no rows (the normal state of a store that never completed anything).
+/// - Either file present but unreadable/unparseable: `Err` naming THAT file.
+///   A done file we cannot read is UNDETERMINED, not "no finished tasks" — a
+///   listing without its done rows would be indistinguishable from a clean one
+///   (CLAUDE.md §3), and a `save` built on it would erase them.
+/// - An id present in both files is returned ONCE. Terminal wins: a row whose
+///   status is terminal ([`is_terminal_status`]) beats a non-terminal row, so a
+///   reverting git merge that re-introduces a completed task as `pending` in
+///   `tasks.toml` cannot resurrect it. When both rows are terminal the done
+///   file's row is used; when neither is, the `tasks.toml` row is used.
+///
+/// Order: `tasks.toml` rows in file order (a row that lost to its done-file
+/// twin keeps its position but carries the done-file content), then the
+/// remaining done-file rows in done-file order. Duplicate ids within
+/// `tasks.toml` are kept as they are (as before the split); a done-file row
+/// is matched against the FIRST row with its id.
+pub fn load(path: &Path) -> Result<Vec<Task>> {
+    let mut tasks = match read_tasks_file(path)? {
+        Some((_, t)) => t,
+        None => Vec::new(),
+    };
+    let done_file = done_path(path);
+    let Some((_, done_rows)) = read_tasks_file(&done_file)? else {
+        return Ok(tasks);
+    };
+    for d in done_rows {
+        match tasks.iter().position(|t| t.id == d.id) {
+            Some(i) => {
+                // Terminal wins; between two terminal rows the done file is
+                // authoritative; a non-terminal done-file row (only possible
+                // by hand-editing) never beats the live row.
+                if is_terminal_status(&d.status) {
+                    tasks[i] = d;
+                }
+            }
+            None => tasks.push(d),
+        }
+    }
+    Ok(tasks)
 }
 
 /// A process-global monotonic counter that, combined with the pid and a
@@ -109,11 +184,33 @@ impl DurabilitySyncer for RealSyncer {
     }
 }
 
-/// Vec<Task> を tasks.toml に書き戻す (アトミック書き込み: 一時ファイル→rename)。
+/// Vec<Task> を tasks.toml と done ファイルに書き戻す (各ファイルをアトミックに: 一時ファイル→rename)。
 ///
-/// CA-backlog-001: the write is made DURABLE — the fully-written temp file is
+/// backlog 45c3a699: `tasks` is PARTITIONED. Non-terminal rows go to `path`
+/// (`tasks.toml`); terminal rows (`done` / `cancelled`, see
+/// [`is_terminal_status`]) go to the done file ([`done_path`]). A terminal row
+/// left in `tasks.toml` by an older binary therefore migrates to the done file
+/// on the next save.
+///
+/// The done file keeps completion order: rows already in it stay where they
+/// are (rewritten in place only when their content changed, e.g. a sync stamp
+/// or a notes edit), and newly terminal ids are appended at the end in the
+/// order they appear in `tasks`. When no existing row changed and none was
+/// dropped, the new rows are appended to the file's existing BYTES, so the git
+/// diff of a completion is a pure append. When nothing at all changed, the
+/// done file is not rewritten. An existing done-file row whose id is not
+/// terminal in `tasks` is dropped from the done file (it is written wherever
+/// `tasks` puts it): `save` writes exactly the set it is given.
+///
+/// Write order: the done file FIRST, then `tasks.toml`. A crash between the
+/// two leaves a row in both files, which [`load`]'s terminal-wins union
+/// resolves; the reverse order could lose the row from both. A done file that
+/// exists but cannot be read/parsed fails the save (naming the file) before
+/// anything is written, rather than overwriting rows we could not see.
+///
+/// CA-backlog-001: each write is made DURABLE — the fully-written temp file is
 /// `sync_all`'d (fsync) BEFORE the rename, and the parent directory is fsync'd
-/// AFTER the rename — so a crash in the write window cannot leave `tasks.toml`
+/// AFTER the rename — so a crash in the write window cannot leave a store file
 /// truncated/empty (losing every task). This mirrors `lock.rs`'s `sync_all`
 /// durability. CA-backlog-003: the temp file has a UNIQUE per-writer name
 /// (pid + monotonic counter + nanos), so two concurrent degraded writers never
@@ -122,16 +219,85 @@ pub fn save(path: &Path, tasks: &[Task]) -> Result<()> {
     save_with_syncer(path, tasks, &RealSyncer)
 }
 
-/// The durable atomic-save core, generic over the [`DurabilitySyncer`] seam so
-/// a test can OBSERVE the fsync ordering. Production drives it via [`save`]
-/// with [`RealSyncer`]. The recorded step sequence is always
-/// `WriteTmp → SyncTmp → Rename → SyncDir`.
-fn save_with_syncer<S: DurabilitySyncer>(path: &Path, tasks: &[Task], syncer: &S) -> Result<()> {
+/// Serialize one row set as a `[[task]]` document.
+fn serialize_tasks(tasks: &[Task]) -> Result<String> {
     let file = TasksFile {
         task: tasks.to_vec(),
     };
-    let text = toml::to_string_pretty(&file).context("failed to serialize tasks to TOML")?;
+    toml::to_string_pretty(&file).context("failed to serialize tasks to TOML")
+}
 
+/// Content fingerprint of one row, used to decide whether an existing
+/// done-file row changed (`Task` does not implement `PartialEq`).
+fn row_fingerprint(t: &Task) -> Result<String> {
+    serialize_tasks(std::slice::from_ref(t))
+}
+
+/// The new done-file text for `terminal`, or `None` when the file on disk
+/// already holds exactly these rows (nothing to write).
+fn next_done_text(done_file: &Path, terminal: &[Task]) -> Result<Option<String>> {
+    let (existing_text, existing) = read_tasks_file(done_file)?.unwrap_or_default();
+    let mut kept: Vec<Task> = Vec::with_capacity(terminal.len());
+    let mut prefix_intact = true;
+    for old in &existing {
+        match terminal.iter().find(|t| t.id == old.id) {
+            Some(new) => {
+                if row_fingerprint(new)? != row_fingerprint(old)? {
+                    prefix_intact = false;
+                }
+                kept.push(new.clone());
+            }
+            None => prefix_intact = false,
+        }
+    }
+    let appended: Vec<Task> = terminal
+        .iter()
+        .filter(|t| !existing.iter().any(|o| o.id == t.id))
+        .cloned()
+        .collect();
+    if prefix_intact && appended.is_empty() {
+        return Ok(None);
+    }
+    if prefix_intact && !existing_text.trim().is_empty() {
+        // Pure append: the existing bytes are kept verbatim.
+        let mut text = existing_text;
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push('\n');
+        text.push_str(&serialize_tasks(&appended)?);
+        return Ok(Some(text));
+    }
+    kept.extend(appended);
+    serialize_tasks(&kept).map(Some)
+}
+
+/// The partitioning save core, generic over the [`DurabilitySyncer`] seam so
+/// a test can OBSERVE the fsync ordering. Production drives it via [`save`]
+/// with [`RealSyncer`]. Each file written records
+/// `WriteTmp → SyncTmp → Rename → SyncDir`; the done file (only when it
+/// changed) is written before `tasks.toml`.
+fn save_with_syncer<S: DurabilitySyncer>(path: &Path, tasks: &[Task], syncer: &S) -> Result<()> {
+    let (terminal, live): (Vec<Task>, Vec<Task>) = tasks
+        .iter()
+        .cloned()
+        .partition(|t| is_terminal_status(&t.status));
+    let done_file = done_path(path);
+    let done_text = next_done_text(&done_file, &terminal)?;
+    let live_text = serialize_tasks(&live)?;
+    if let Some(text) = done_text {
+        write_atomic_with_syncer(&done_file, &text, syncer)?;
+    }
+    write_atomic_with_syncer(path, &live_text, syncer)
+}
+
+/// Durable atomic write of `text` to `path` (temp file, fsync, rename, dir
+/// fsync).
+fn write_atomic_with_syncer<S: DurabilitySyncer>(
+    path: &Path,
+    text: &str,
+    syncer: &S,
+) -> Result<()> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)
@@ -1428,6 +1594,15 @@ pub fn mark_failed(path: &Path, id: &str, reason: Option<&str>) -> Result<()> {
             // Already failed — idempotent no-op, nothing to persist.
             return Ok(());
         }
+        // backlog 45c3a699: terminal is monotonic — `fail` must not reopen a
+        // done/cancelled task (failed is a retryable, non-terminal status).
+        if is_terminal_status(&task.status) {
+            return Err(anyhow!(
+                "refused: task {id} is {} (terminal) and terminal status is final; \
+                 `fail` would reopen it as a retryable task",
+                task.status
+            ));
+        }
         task.status = STATUS_FAILED.to_string();
         if let Some(r) = reason {
             if task.notes.is_empty() {
@@ -1472,6 +1647,17 @@ pub fn edit(
             .iter_mut()
             .find(|t| t.id == id)
             .ok_or_else(|| anyhow!("task not found: {}", id))?;
+        // backlog 45c3a699: terminal is monotonic. Refuse BEFORE touching any
+        // field so a refused edit leaves the task exactly as it was.
+        if let Some(v) = status {
+            if is_terminal_status(&task.status) && !is_terminal_status(v) {
+                return Err(anyhow!(
+                    "refused: task {id} is {} (terminal) and terminal status is final; \
+                     `edit --status {v}` would reopen it. File a new task for the remaining work",
+                    task.status
+                ));
+            }
+        }
         if let Some(v) = title {
             task.title = v.to_string();
         }

@@ -121,6 +121,35 @@ merge される tracked file)。したがってその中身はその repo のタ
 `project` フィールド自体は残る（誰が起票したかを示し、そのラベルが推測だった場合は `list` が
 `[project unresolved: …]` と表示する）が、**何が見えるかを決めるものではなくなった**。
 
+### 2 ファイル: live キューと done ファイル
+
+store は兄弟関係の 2 ファイルからなる: `tasks.toml`（live キュー）と `tasks.done.toml`
+（終端状態 — `done` / `cancelled` — の行すべて）。一般に `<dir>/<stem>.toml` の done ファイルは
+`<dir>/<stem>.done.toml`。
+
+- **読み取りは和集合を見る。** すべての reader は両ファイルの行を返す単一の loader を通る。
+  `list --status done`・`done <id>`・`edit <id>`・`sync`・重複ガード・near-duplicate 走査は、
+  done ファイルにしか無い行も見る。重複ガードの判定は従来どおり（`done` 行はどちらのファイルに
+  あっても再 add をブロックしない）。
+- **終端が勝ち、終端は最終。** 同じ id が両ファイルにあるとき（例: git merge が完了済みタスクを
+  `tasks.toml` に `pending` として戻した）、返るのは終端側の行 1 件で、`next` はそれを渡さない。
+  `done`/`cancelled` のタスクへの `edit --status pending|failed` は非0終了で拒否され、`fail` も
+  拒否される。タスクは終端のまま（既に done のタスクへの `done` は従来どおり冪等な成功）。
+- **壊れた done ファイルはエラーであり、空ではない。** `tasks.done.toml` が無いのは、まだ何も
+  完了していないというだけ。存在するのに読めない/パースできない場合、store を読むコマンド
+  (`list`・`next`・`add`・`done`・`edit`・`fail`・`sync`) はそのファイル名を含むエラーで非0終了する —
+  done 行を黙って欠いた一覧も、それを上書きする書き込みも起こさない。SessionStart フックは空キューでは
+  なく「store UNREADABLE」通知を注入する。
+- **書き込みは振り分ける。** 保存のたびに終端行は done ファイルへ、それ以外は `tasks.toml` へ書く。
+  done ファイルに既にある行は位置を保ち（内容が変わったとき — `sync` の記録や notes 編集 — だけ
+  その場で書き換える）、新たに終端になった行は末尾に追記されるので、完了の git diff は純粋な追記に
+  なる。done ファイルを先に書き、中身が変わらなければ書き直さない。各ファイルはアトミックに置換
+  される（fsync した一時ファイル + rename）。2 回の書き込みの間でクラッシュすると行が両ファイルに
+  残るが、終端優先の和集合で解決される。
+- **古いバイナリの行は次の書き込みで移行される。** 0.3.7 より古い backlog が `tasks.toml` に残した
+  `done`/`cancelled` 行は通常どおり一覧に出て、いずれかのコマンドが lock 下で store を保存した
+  次の機会に done ファイルへ移る。
+
 ### checkout 間の claim 排他 (`next --claim`)
 
 store は意図的に checkout に追従する (`<repo root>/.backlog/tasks.toml`。linked worktree は

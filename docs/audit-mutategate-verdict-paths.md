@@ -59,7 +59,7 @@ census が permissive 候補から外している。ただし**「三値を受�
 | # | 位置 | 逐語引用 | 解決先 | 判定 |
 |---|---|---|---|---|
 | B-1 | `crates/mutategate/src/main.rs:86` | `Err(e) => {` … `return ExitCode::from(2);` | **exit 2** | **restrictive** |
-| B-2 | `crates/mutategate/src/lib.rs:190` | `_ => s.unknown += 1,` | `unknown` へ計上 | **restrictive** |
+| B-2 | `crates/mutategate/src/lib.rs:202` | `_ => s.unknown += 1,` | `unknown` へ計上 | **restrictive** |
 
 B-2 は catchall アームだが、**捨てていない**。`unknown` は
 `MutationSummary::viable()` の分母に入り killed には入らないので、未知の状態が
@@ -80,8 +80,8 @@ kill-rate を**押し上げることはできない**。自分の docstring が�
 
 | # | 位置 | 逐語引用 | 解決先 | 判定 |
 |---|---|---|---|---|
-| C-1 | `crates/mutategate/src/lib.rs:231` | 「harness_core::verdict::Verdict::from_findings(Vec::new())」 | `Clean` | **正当** |
-| C-2 | `crates/mutategate/src/lib.rs:274` | `None => GateOutcome {` … `passed: false,` | **fail** | **restrictive** |
+| C-1 | `crates/mutategate/src/lib.rs:263` | 「harness_core::verdict::Verdict::from_findings(Vec::new())」 | `Clean` | **正当** |
+| C-2 | `crates/mutategate/src/lib.rs:306` | `None => GateOutcome {` … `passed: false,` | **fail** | **restrictive** |
 
 **C-1 は census が `empty_collection` として挙げたが、fail-open ではない。**
 CLAUDE.md 第3節が禁じる空集合は「エラー時に空を返し、下流が『検査対象なし＝合格』と読む」

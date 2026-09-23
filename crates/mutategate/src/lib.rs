@@ -32,7 +32,10 @@
 //! ```
 //! `summary` is one of `Success`, `CaughtMutant`, `MissedMutant`, `Timeout`,
 //! `Unviable`, `Failure`. The `Baseline` scenario (an unmutated build) is not a
-//! mutant and is excluded from the score. We count directly from the `outcomes`
+//! mutant and is excluded from the score — only the bare string `"Baseline"`
+//! is skipped. A record whose `scenario` is any other shape (null, absent, or
+//! unrecognised) is counted as `unknown` (in the viable denominator, never
+//! killed) rather than dropped (CA-mutategate-03). We count directly from the `outcomes`
 //! array rather than trusting the top-level summary counts, so the score is
 //! reproducible from the raw records alone.
 
@@ -99,8 +102,8 @@ struct RawLabOutcome {
 }
 
 /// Raw per-scenario record. `scenario` is either the string `"Baseline"` or an
-/// object `{ "Mutant": { .. } }`; we keep it as untyped JSON and only ask whether
-/// it is a mutant.
+/// object `{ "Mutant": { .. } }`; we keep it as untyped JSON and classify it with
+/// `classify_scenario` (any other shape is counted as `unknown`, not dropped).
 #[derive(Debug, Deserialize)]
 struct RawScenarioOutcome {
     #[serde(default)]
@@ -168,7 +171,11 @@ impl MutationSummary {
 
 /// Count mutant outcomes from raw `outcomes.json` text.
 ///
-/// Baseline scenarios are skipped. Unknown/absent `summary` values are
+/// Only the bare-string `"Baseline"` scenario is skipped. A scenario that is
+/// neither `"Baseline"` nor a `{"Mutant": ..}` object (null, absent,
+/// unrecognised) is counted as `unknown` regardless of its `summary`, so a
+/// malformed record grows the denominator instead of silently shrinking it
+/// (CA-mutategate-03). Unknown/absent `summary` values are
 /// **tracked, not dropped**: they land in `unknown`, which counts toward the
 /// viable denominator but not toward killed, so a `cargo-mutants` state this
 /// crate doesn't recognise (e.g. a future new state, or a malformed record)
@@ -177,8 +184,13 @@ pub fn parse_outcomes(json: &str) -> anyhow::Result<MutationSummary> {
     let lab: RawLabOutcome = serde_json::from_str(json)?;
     let mut s = MutationSummary::default();
     for o in &lab.outcomes {
-        if !is_mutant(&o.scenario) {
-            continue;
+        match classify_scenario(&o.scenario) {
+            Scenario::Baseline => continue,
+            Scenario::Unrecognised => {
+                s.unknown += 1;
+                continue;
+            }
+            Scenario::Mutant => {}
         }
         match o.summary.as_deref() {
             Some("CaughtMutant") => s.caught += 1,
@@ -193,10 +205,30 @@ pub fn parse_outcomes(json: &str) -> anyhow::Result<MutationSummary> {
     Ok(s)
 }
 
-/// A scenario is a mutant iff its JSON is an object carrying a `"Mutant"` key
-/// (the `Baseline` scenario serialises as the bare string `"Baseline"`).
-fn is_mutant(scenario: &serde_json::Value) -> bool {
-    scenario.get("Mutant").is_some()
+/// Shape of a record's `scenario` field.
+enum Scenario {
+    /// The bare string `"Baseline"` (an unmutated build) — the ONLY shape that
+    /// is excluded from the score.
+    Baseline,
+    /// An object carrying a `"Mutant"` key — counted by its `summary`.
+    Mutant,
+    /// Anything else (null, absent, other strings/objects). We cannot tell
+    /// whether it is a mutant, so it is counted as `unknown` (viable, not
+    /// killed) — never dropped (CA-mutategate-03).
+    Unrecognised,
+}
+
+/// Classify a scenario. Only the exact string `"Baseline"` is treated as
+/// non-mutant; `{"Mutant": ..}` is a mutant; every other shape is
+/// `Unrecognised` and must be counted conservatively by the caller.
+fn classify_scenario(scenario: &serde_json::Value) -> Scenario {
+    if scenario.as_str() == Some("Baseline") {
+        Scenario::Baseline
+    } else if scenario.get("Mutant").is_some() {
+        Scenario::Mutant
+    } else {
+        Scenario::Unrecognised
+    }
 }
 
 /// The gate's verdict for a run.
@@ -540,6 +572,49 @@ mod tests {
     #[test]
     fn malformed_json_is_an_error() {
         assert!(parse_outcomes("not json").is_err());
+    }
+
+    // ── CA-mutategate-03: a record whose `scenario` is null/unrecognised (not
+    //    the literal "Baseline" string, not a `{"Mutant": ...}` object) is
+    //    skipped by `is_mutant` (line 180's `continue`) BEFORE the summary
+    //    match ever runs — it is silently dropped from ALL counts, not even
+    //    `unknown`, unlike an unrecognised `summary` (CA-mutategate-01, which
+    //    IS tracked). A partial drop like this can flip a FAIL into a PASS by
+    //    shrinking the denominator instead of growing it. ────────────────────
+    #[test]
+    fn ca_mutategate_03_null_scenario_dropped_flips_fail_to_pass() {
+        // 4 clean-cut mutant kills, plus a 5th record whose `scenario` is
+        // absent (defaults to `Value::Null` via `#[serde(default)]`) — neither
+        // the "Baseline" literal nor a `{"Mutant": ...}` object.
+        let json = r#"{ "outcomes": [
+            { "scenario": { "Mutant": {} }, "summary": "CaughtMutant" },
+            { "scenario": { "Mutant": {} }, "summary": "CaughtMutant" },
+            { "scenario": { "Mutant": {} }, "summary": "CaughtMutant" },
+            { "scenario": { "Mutant": {} }, "summary": "CaughtMutant" },
+            { "summary": "MissedMutant" }
+        ] }"#;
+        let s = parse_outcomes(json).unwrap();
+        // The 5th record's scenario is null, not "Baseline" — it must count
+        // toward the viable denominator (as `unknown`, the same conservative
+        // treatment CA-mutategate-01 already gives an unrecognised `summary`),
+        // not vanish from every count the way a genuine Baseline correctly does.
+        assert_eq!(
+            s.viable(),
+            5,
+            "a null/unrecognised scenario must count toward viable, not be \
+             dropped like Baseline — got viable={} (caught={} unknown={})",
+            s.viable(),
+            s.caught,
+            s.unknown
+        );
+        let g = evaluate(s, 0.90);
+        assert!(
+            !g.passed,
+            "dropping the null-scenario record shrinks the denominator to \
+             4-killed/4-viable (100%) and wrongly PASSES a 0.90 threshold; \
+             the correct 4-killed/5-viable rate is 80%, which must FAIL: {}",
+            g.reason
+        );
     }
 
     // ── verdict(): the shared harness_core::verdict type must agree with

@@ -25208,7 +25208,7 @@ tags = [
     "condukt",
 ]
 touched_files = []
-status = "pending"
+status = "done"
 notes = """
 測定点 branch batch5-d83b0e8f ff985fac / 2026-09-13. d83b0e8f (claim registry) の調査項目として実測した確定の欠陥。読みは 1 つしかない (判定不能ではない)。機構: acquire_repo_primary(cfg, repo) は RunLock::acquire_or_skip 経由で lock_path に入り、lock_path は project_key(repo_root(cwd)) でキーを作る。呼び出し側が渡す repo は crates/condukt/src/worktree.rs:238 の toplevel(cwd) すなわち git rev-parse --show-toplevel であり、linked worktree では worktree 自身を返す。実測: from main tree が pp2/main、from linked wt が pp2/wt1。ランタイム確認 (condukt worktree reconcile が当該ロックを取る): 手順1 linked worktree から実行すると project dir は wt1-d22e03ed のみ。手順2 main tree から実行すると main-8fe192a0 と wt1-d22e03ed の 2 つ。手順3 main tree のディレクトリに live pid の __repo_primary__.lock を置いた状態で linked worktree から実行すると exit=0 で素通り (直列化されない)。手順4 は反証防止の control で、同じロックを linked worktree 自身のディレクトリに置いて同じ場所から実行すると exit=1 になり contended のメッセージが出る。したがってプローブは識別力を持っており手順3の素通りは本物。手順5 その worktree ロックを保持したまま main tree から実行すると exit=0 で素通り。影響: CLAUDE.md 第8節は全セッションが linked worktree で作業することを絶対義務としているので、共有 git index と default branch と worktree admin を変更する 2 プロセスは必ず別ロックになり決して競合しない。ロックが守るはずのものを守っていない。影響箇所: crates/condukt/src/main.rs:3258 と :3288 と :3318、crates/condukt/src/worktree.rs:645 と :894 と :1053 (worktree merge の checkout-default-branch + merge のクリティカルセクションを含む)。修正方向: d83b0e8f で claim registry に入れたのと同じ手当て、すなわち harness_core::projkey::main_worktree_root で解決した project root を使う lock_path_in_project 系を repo-primary にも適用する。両者は同型なので同じ道具が使える。関連 d83b0e8f 43393ce2
 
@@ -25216,9 +25216,71 @@ notes = """
 2026-09-13 22:42 を最後に 46 時間無出力のまま running と表示され続け、実装は 0 行だった
 (5 branch 中 4 本が main より 0 commit)。agent を停止し claim registry を解放して
 pending へ戻した。本チケットの内容自体は未着手のままで、失敗ではない。
-経緯と、回収した RED スイートの詳細は 2c1e54b3 にある。"""
+経緯と、回収した RED スイートの詳細は 2c1e54b3 にある。
+=== 解決 2026-09-23 (サイクル7) ===
+
+前提の再測定 (着手前、測定点 main 6725d0d3): TRUE。lock.rs:156 は依然
+lock_path_in_project(cfg, and repo_root(cwd), run_id) であり、
+acquire_repo_primary -> RunLock::acquire_or_skip -> lock_path -> repo_root(cwd)
+の経路で worktree 分裂が残っていた。
+
+着地: commit eab522d0 (main へ dafe3e70 で merge)。condukt 0.7.169 -> 0.7.170、
+3 ファイル lockstep 済み。
+
+修正内容: acquire_repo_primary が private な repo_primary_project_root 経由で
+harness_core::projkey::main_worktree_root を使い、既存の
+RunLock::acquire_or_skip_in_project で publish する。claim registry が
+d83b0e8f で取ったのと同型の opt-in。
+
+fail-closed (第3節): main worktree root が Undetermined のとき Required::Blocked
+アームは bail! して Err になる。**フォールバック経路は存在しない** — repo_root(cwd)
+へ落とすと、どの main-tree peer も contend しない per-checkout ロックを publish して
+しまい、施錠されているように見えたまま本件の分裂を再生産するため。Undet の reason は
+エラー文へ載せている。
+
+スコープ判断: lock_path / acquire_or_skip は**あえて** re-root していない。これらは
+per-RUN ロックと共有で、その契約は「ロックは自分の <run-id>.json の隣に置く」であり、
+state ファイルは既に repo_root 由来のキーでディスク上に存在する。一括で re-root すると
+全 run ロックが守るべき state から引き剥がされ既存ファイルが孤児化する (広い移行は
+43393ce2)。repo-primary だけが opt-in する形にした。呼び出し側 7 箇所
+(worktree.rs:670/919/1078/2374, main.rs:3379/3409/3439) はシグネチャも
+fallible 契約も不変。
+
+F to P オラクル: 成立を観測。tdd oracle -> transition fail_to_pass、valid_fp_oracle true。
+  RED (修正前 eb6c77bb): test result: FAILED. 5 passed; 1 failed; 834 filtered out
+    state/linked-wt-336da117/__repo_primary__.lock と
+    state/main-tree-b6a79b48/__repo_primary__.lock の 2 本が併存することを観測。
+  GREEN (eab522d0): test result: ok. 841 passed; 0 failed
+  main 上でも 3 回連続で 841 passed; 0 failed を確認 (dafe3e70)。
+
+第2節(a) の分離: F to P テスト
+lock::tests::repo_primary_lock_is_one_lock_across_a_repo_and_its_linked_worktree は
+先行セッションの別 agent が 8b8f058e で書いたものを**一切改変せずに**緑にした
+(8b8f058e..eab522d0 の差分でテスト本体が byte-identical であることを検証者が確認)。
+
+既存テストの再アンカー: acquire_repo_primary_is_held_and_repo_scoped は
+assertion メッセージを読んだうえで同一 commit で再アンカーした。旧メッセージは
+project_key(repo_root(cwd)) から導出しながら「repo-scoped」と名乗っており、
+worktree scoping を repo scoping と誤記していた。期待値は今は literal cwd に
+アンカーし、!cwd.join(".git").exists() の fixture 不変条件で裏付けている
+(テスト対象の resolver を呼び直して導出しない)。メッセージも
+「the project key of the repo's MAIN WORKTREE ROOT」と明示するよう鋭くした。
+
+追加テスト acquire_repo_primary_refuses_when_the_main_worktree_root_is_undetermined:
+Required::Blocked アームが kill rate ゼロの forwarding arm になるのを防ぐため追加。
+**実装者自身が書いたので第2節(a) 上は弱い証拠**である旨をテスト本文にも記載済み。
+利害関係のない検証者 (別モデル) が自分で
+Required::Blocked(_) => crate::store::repo_root(cwd) へ mutate して FAILED になることを
+独立に再現し、kill 能力を確認した。
+
+未実施 (隠さず明記): scripts/rollout-plugins.sh を走らせていないので、稼働ハーネスの
+condukt バイナリは旧挙動のまま。反映は別ステップ。
+
+副産物の観測 (別途起票): condukt の run state 自体も repo_root キーで per-worktree に
+分裂しており、linked worktree からは main の run が見えない (state resume-context が
+no run で落ちる)。本件と同じ欠陥クラスだがロックではなく state ストア側。"""
 created_at = 1789292612
-updated_at = 1790114679
+updated_at = 1790121087
 weight = 0.0
 issue_number = 605
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/605"

@@ -12,8 +12,9 @@
 //!   1  — JSON parsed but schema violations found
 //!   2  — could not determine: JSON failed to parse, an unknown schema was
 //!        requested, a declared check could not be applied to the value it was
-//!        handed (reported under `undetermined`), or (`metrics`) the reject
-//!        store exists but is unreadable
+//!        handed (reported under `undetermined`), (`metrics`) the reject
+//!        store exists but is unreadable, or the verdict itself could not be
+//!        serialized to JSON (reported on stderr; stdout carries no verdict)
 //!
 //! This is a plain CLI, not a lifecycle hook — do not wrap in `run_hook`.
 //!

@@ -80,11 +80,12 @@ CLAUDE.md 3 names. The former is exit 2, the latter is exit 0.
 FORMER KNOWN LIMITATION — now closed
 -------------------------------------------------------------------
 budgetguard, donegate, reviewgate, schemaguard and harness-core used to have NO
-`[lints]` section (measured 2026-07-28 on branch flow/clippy-precommit-gate),
-hand-pasting `#![deny(clippy::panic)]` into their crate roots instead
-(crates/budgetguard/src/main.rs, crates/donegate/src/main.rs,
+`[lints]` section (measured 2026-07-28 on branch flow/clippy-precommit-gate).
+The four plugin crates hand-pasted `#![deny(clippy::panic)]` into their crate
+roots instead (crates/budgetguard/src/main.rs, crates/donegate/src/main.rs,
 crates/reviewgate/src/main.rs, crates/schemaguard/src/lib.rs and
-crates/schemaguard/src/main.rs — 5 hand-placed attributes across 4 crates).
+crates/schemaguard/src/main.rs — 5 hand-placed attributes across 4 crates);
+harness-core had no deny of any of the three lints at all.
 `clippy::panic` is a different lint from `clippy::unwrap_used` and
 `clippy::expect_used`, so those two were not denied in those crates by any
 invocation, and this scanner (membership derived from the opt-in) did not check

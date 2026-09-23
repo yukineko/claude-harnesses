@@ -133,6 +133,43 @@ The `project` field is still recorded — it says which checkout filed the task,
 and `list` marks it `[project unresolved: …]` when that label was a guess — but
 it no longer decides what you can see.
 
+## Two files: live queue and done file
+
+A store is two sibling files: `tasks.toml` (the live queue) and
+`tasks.done.toml` (every terminal row — `done` or `cancelled`). In general the
+done file of `<dir>/<stem>.toml` is `<dir>/<stem>.done.toml`.
+
+- **Reads see the union.** Every reader goes through one loader that returns
+  both files' rows. `list --status done`, `done <id>`, `edit <id>`, `sync`, the
+  duplicate guard and the near-duplicate scan all see rows that live only in the
+  done file. The duplicate guard decides exactly as before: a `done` row does
+  not block a re-add, wherever it is stored.
+- **Terminal wins, and terminal is final.** When an id appears in both files
+  (for example a git merge re-introduced a completed task as `pending` in
+  `tasks.toml`), the terminal row is the one returned, once; `next` never hands
+  it out. `edit --status pending|failed` on a `done`/`cancelled` task is refused
+  with a non-zero exit, and `fail` on one is refused too; the task stays
+  terminal. (`done` on an already-done task is still an idempotent success.)
+- **A bad done file is an error, not an empty one.** A missing
+  `tasks.done.toml` just means nothing was completed yet. One that exists but
+  cannot be read or parsed makes `list`, `next`, `add`, `done`, `edit`, `fail`
+  and `sync` exit non-zero with an error naming that file — never a listing that
+  silently lacks the done rows, and never a write that would overwrite them. The
+  SessionStart hook injects a "store UNREADABLE" notice instead of an empty
+  queue.
+- **Writes partition.** Every save writes the terminal rows to the done file and
+  the rest to `tasks.toml`. Rows already in the done file keep their position
+  (rewritten in place only if their content changed, e.g. a `sync` stamp or a
+  notes edit); newly finished rows are appended, so a completion's git diff is a
+  pure append. The done file is written first and is not rewritten when nothing
+  in it changed. Each file is replaced atomically (fsync'd temp + rename); a
+  crash between the two writes leaves the row in both files, which
+  terminal-wins resolves.
+- **Old binaries migrate on the next write.** A `done`/`cancelled` row still in
+  `tasks.toml` (written by a backlog older than 0.3.7) is listed normally and
+  moves to the done file the next time any command saves the store under its
+  lock.
+
 ## Cross-checkout claim exclusion (`next --claim`)
 
 The store follows the checkout on purpose: `<repo root>/.backlog/tasks.toml`,

@@ -8190,7 +8190,7 @@ touched_files = []
 status = "pending"
 notes = "2026-07-28 時点で verdict 未採用 gate は 0 本になった (schemaguard 1601b835 / autoflow cec3a431 で解消)。残る勾配は harness_core::verdict の低採用 gate 各1 file: budgetguard / gauge / reviewgate。確立した手順は 監査 (read-only・docs/ へ出力・crates 無変更) から RED 先行観測、三値化 GREEN、micro bump、--plugin スコープの rollout までの2フェーズで、worker と verifier を別モデルにする。task text には必ず 既に fail-closed な経路のリスト を不合格条件として明記すること (誤検出で意図的設計を壊すのを防ぐため。autoflow の lock.rs:81 が実例)"
 created_at = 1785193820
-updated_at = 1785193820
+updated_at = 1790176418
 weight = 0.0
 issue_number = 84
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/84"
@@ -8293,7 +8293,7 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "done"
 notes = """
 監査で確定 (測定点 6302d166、測定日 2026-07-29)。42 crate 中 workspace lints を opt-in しているのは 8 crate のみ (blastguard fetchguard mutategate overwatch propguard specguard stuckguard taintguard)。残り 34 crate には clippy::unwrap_used / expect_used の強制が一切無い。
 
@@ -8305,7 +8305,7 @@ harness-core も未被覆。これは全プラグインバイナリに静的リ�
 
 完了条件の案: 4 crate へ lints workspace opt-in を追加し、露出する既存の unwrap と expect を修正する。crate ごとに version の micro bump を 3 ファイル lockstep で行う。harness-core は別途検討 (crate 数が多く露出量が読めないため、まず件数を実測してから分割する)。"""
 created_at = 1785327705
-updated_at = 1785327721
+updated_at = 1790183345
 weight = 0.0
 issue_number = 90
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/90"
@@ -8366,10 +8366,16 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
-notes = "Measurement half of 5b33b4cd, split out because it cannot be satisfied by shipping — it needs two real Continuous-Audit rounds run under the new rules. Shipped in 0558db6f (overwatch 0.2.15, deployed and live-verified): audit-round record refuses regression_tests_added < confirmed, continuous-audit.sh stops on it via run_ow_gate, SKILL.md Step 3.5 mirror sweep is mandatory. What remains is purely observation: run two rounds and check audit-metrics reports converging:true both times. Baseline to beat, from the ledger that motivated the item: new_findings 5,1,13,0,14,15 with converging:false and round 2026W29 at confirmed:10 / regression_tests_added:0. Caveat when reading the result: closure_rate is now an acceptance precondition and will read 1.0 for every new round, so it carries no signal — judge convergence ONLY by the new_findings trend, which is what is_converging actually uses. A rise in new_findings is not automatically failure either: Step 3.5 is expected to surface twins that previously went unharvested, so an early round may legitimately go UP before it comes down."
+status = "claimed"
+notes = """
+Measurement half of 5b33b4cd, split out because it cannot be satisfied by shipping — it needs two real Continuous-Audit rounds run under the new rules. Shipped in 0558db6f (overwatch 0.2.15, deployed and live-verified): audit-round record refuses regression_tests_added < confirmed, continuous-audit.sh stops on it via run_ow_gate, SKILL.md Step 3.5 mirror sweep is mandatory. What remains is purely observation: run two rounds and check audit-metrics reports converging:true both times. Baseline to beat, from the ledger that motivated the item: new_findings 5,1,13,0,14,15 with converging:false and round 2026W29 at confirmed:10 / regression_tests_added:0. Caveat when reading the result: closure_rate is now an acceptance precondition and will read 1.0 for every new round, so it carries no signal — judge convergence ONLY by the new_findings trend, which is what is_converging actually uses. A rise in new_findings is not automatically failure either: Step 3.5 is expected to surface twins that previously went unharvested, so an early round may legitimately go UP before it comes down.
+
+## 2026-09-24 session-9d349393 /condukt: STOPPED FOR HUMAN (spec gap, no round run)
+Observed: overwatch audit-metrics (cwd = main repo root, ledger harness-e77d23c7) = 6 rounds, new_findings 5,1,13,0,14,15, converging (last 3 rounds): NO. No round recorded since 0558db6f.
+Sandbox simulation (real ledger copied into a temp HOME, hypothetical rounds appended): after 1st new round with new=0 the report is still converging NO (the default window 3 still holds 14 then 15); after the 2nd it is yes. So TWO consecutive converging:true reports need at least THREE new real rounds under the default window, not two. is_converging = crates/overwatch/src/audit_round.rs:435 (all adjacent pairs non-increasing over the trailing window).
+Open questions: (1) accept 3+ rounds, or judge with --window 2, or redefine the criterion? (2) every CONFIRMED finding must become a regression test before audit-round record accepts the round, so each round is an unbounded fix campaign on gate crates, not a pure measurement. (3) the ledger key comes from the repo root: a round recorded with cwd inside a linked worktree lands in a DIFFERENT ledger than the main repo's; recording must use the main root (a write to ~/.overwatch, not to the main tree)."""
 created_at = 1785341708
-updated_at = 1785341708
+updated_at = 1790180280
 weight = 0.0
 issue_number = 94
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/94"
@@ -15531,10 +15537,37 @@ project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
-notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 3e2aade5 --status pending"
+status = "claimed"
+notes = """
+除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 3e2aade5 --status pending
+
+## 決着 (2026-09-24, session-9d349393 /condukt; 独立 verifier が全引用を逐語照合し CONFIRMED)
+3e2aade5 settlement (primary source: https://code.claude.com/docs/en/hooks.md fetched 2026-09-24, local copy scratchpad/hooks.md, line numbers refer to that copy)
+
+Q1. Is omitting permissionDecision equivalent to "defer"?
+- REFUTED verbatim. "defer" is an explicit fourth value with its own semantics:
+  L1814 "`"defer"` exits gracefully so the tool can be resumed later."
+  L1853 "Claude Code honors this value only in non-interactive mode with the `-p` flag. In interactive sessions it logs a warning and ignores the hook result."
+  L1858 "The hook returns `permissionDecision: "defer"`. The tool doesn't execute. The process exits with `stop_reason: "tool_deferred"`"
+  L1819 "precedence is `deny` > `defer` > `ask` > `allow`."
+  Omission does not pause the tool nor exit the process, so it is not defer.
+- What omission IS, for the no-output case, is stated verbatim:
+  L225 "Exit code 0 with no output means the hook has no decision to report, so the tool call continues through the normal permission flow. The hook can deny the call, but staying silent doesn't approve it."
+  L845 "exit 0  # No decision: the normal permission flow applies"
+- SILENT in the source: a PreToolUse hook that exits 0 with VALID JSON that omits permissionDecision (e.g. only additionalContext or only systemMessage). The PreToolUse table (L1814) lists the values but does not say what absence means; the "omit decision to allow" sentence (L1075) is scoped to events using TOP-LEVEL `decision`, which PreToolUse does not (L1810). Reading A: absence == no decision == normal permission flow (same as L225). Reading B: the source only guarantees that for "exit 0 with no output"; JSON-without-permissionDecision is undocumented. -> human.
+
+Q2. Is systemMessage invisible to the model?
+- Per-event and per-mode, not a flat rule:
+  L958 (JSON output table) "Warning message shown to the user."
+  L3710 async hooks: "Claude Code delivers the `additionalContext` and `systemMessage` fields from the hook's JSON response to Claude on the next conversation turn. Unlike a synchronous hook's `systemMessage`, neither field is shown to you."
+  L2868 DirectoryAdded/slash_command: "Claude Code delivers the hook's `systemMessage` to Claude as context on the next conversation turn, rather than showing it to you."
+  Discarded entirely on: Setup (L1300), InstructionsLoaded (L1339), MessageDisplay (L1505), Notification (L2357), ConfigChange (L2788), WorktreeCreate (L2956), WorktreeRemove (L3016), PreCompact (L3073), PostCompact (L3092), SessionEnd (L3356), Elicitation (L3439), ElicitationResult (L3486); CwdChanged/FileChanged show it as a terminal notification (L2823, L2946).
+- So the flat claim "systemMessage is invisible to the model" is FALSE for async hooks and DirectoryAdded(slash_command).
+- SILENT in the source: whether a SYNCHRONOUS hook's systemMessage on the remaining events also reaches the model. The source says only "shown to the user" (L958); it never says "not Claude" for it (contrast permissionDecisionReason, L1815, which says "shown to the user but not Claude" explicitly). Reading A: user-only (implied by the L3710/L2868 contrasts). Reading B: unstated; not guaranteed invisible. -> human.
+
+STOPPED FOR HUMAN: 上の SILENT 2 点 (PreToolUse で JSON を返すが permissionDecision を省いた場合 / 同期 hook の systemMessage が model に届くか) は一次資料が沈黙しているため、両読みを記録して停止。決着手段の候補: 人間の判断、または claude -p を使った観測テスト。関連起票: ceb0a9bf (fugu-router の top-level additionalContext), 19ebd4a9 (context-governor io.rs の (not the model) コメント)。"""
 created_at = 1785310500
-updated_at = 1787120517
+updated_at = 1790180266
 weight = 0.0
 
 [[task]]
@@ -15587,7 +15620,7 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "claimed"
 notes = """
 2026-07-30 AEGIS で実測。誤検知ではなく設計どおりの命中だが、ルールが over-broad。
 
@@ -15639,9 +15672,12 @@ worktree の後片付けまで手作業になった (touch は通るのに rm �
   だけ deny 直書き。interactive.rs:3 の「Ask is only safe when someone can answer」
   (敵対的 agent に farm される) という判断は筋が通るので、Ask には倒さない方が良い。
   = 直すなら Ask ではなく deny 条件の絞り込みで。
-除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit a82274cb --status pending"""
+除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit a82274cb --status pending
+
+## 2026-09-24 session-9d349393 /condukt: STOPPED FOR HUMAN (spec gap, no code change)
+The notes' own open design questions remain (glob-loader repos, per-project opt-in vs conservative default, touch/rm asymmetry). Added counterexample to the premise that an unregistered hook file executes nothing: if settings.json or a hooks.json already REGISTERS a hook path that does not exist yet, creating that file activates it — so allow-only-new-files needs a registration check (a settings parser inside a GATE crate) or it opens a hole. Also: blastguard Ask hardens to Deny outside CLAUDE_CODE_ENTRYPOINT=cli, so Ask is not an escape either. Needs a human decision on the design before a GATE-crate change. Note also the 2026-08-17 exclusion above."""
 created_at = 1785376257
-updated_at = 1787120517
+updated_at = 1790180280
 weight = 0.0
 
 [[task]]
@@ -26803,7 +26839,7 @@ fail-closed が正しく効いた結果ではなく、判定不能が構造的�
 run-20260913-223004-15261 の 10 件は今回のスナップショットには現れず、
 registry の合計は 11 件 (+ task_claims セクション) である。"""
 created_at = 1789306874
-updated_at = 1790120207
+updated_at = 1790176418
 weight = 0.0
 issue_number = 639
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/639"
@@ -27233,7 +27269,7 @@ done_criteria:
 関連: 5e62b0eb (progress 判定が Undetermined になり reap されない不死 claim)。
 あちらは「reap が効かない」、本件は「そもそも解放が呼ばれない」。別の穴。"""
 created_at = 1789566331
-updated_at = 1790114679
+updated_at = 1790176418
 weight = 0.0
 issue_number = 661
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/661"
@@ -28758,3 +28794,117 @@ updated_at = 1790138658
 weight = 0.0
 issue_number = 692
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/692"
+
+[[task]]
+id = "ceb0a9bf"
+title = "fugu-router UserPromptSubmit hook emits additionalContext at TOP level, not inside hookSpecificOutput — routing context may never reach the model"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fugu-router",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = 'Found while settling 3e2aade5 (2026-09-24). crates/fugu-router/src/main.rs ~L541 builds json!({"additionalContext": ctx}) and adds systemMessage, printed as the UserPromptSubmit hook stdout. Primary source https://code.claude.com/docs/en/hooks.md: "Return additionalContext inside hookSpecificOutput alongside the event name" (Add context for Claude section) and hookSpecificOutput "requires a hookEventName field set to the event name" (JSON output section). Because the stdout starts with a brace it is parsed as JSON, so it is NOT added as plain-text context either. The comment claims additionalContext reaches the model; the documented schema says top-level additionalContext is not a documented field. UNVERIFIED by observation: needs a behavioural test (real claude -p run with the hook) before fixing. Same check applies to any other crate emitting top-level additionalContext (grep).'
+created_at = 1790179827
+updated_at = 1790179827
+weight = 0.0
+issue_number = 702
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/702"
+
+[[task]]
+id = "19ebd4a9"
+title = "context-governor io.rs systemMessage doc says (not the model) — primary source does not state sync systemMessage is model-invisible"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "context-governor",
+    "docs-drift",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = 'Found while settling 3e2aade5 (2026-09-24). crates/context-governor/src/io.rs L36 doc comment: "A short message surfaced to the user (not the model)". hooks docs JSON output table says only "Warning message shown to the user"; for async hooks and DirectoryAdded slash_command systemMessage is delivered TO Claude. Whether a synchronous systemMessage reaches the model is unstated (see 3e2aade5 open question). Align the comment with the verbatim source once the human settles that question.'
+created_at = 1790179829
+updated_at = 1790179829
+weight = 0.0
+issue_number = 703
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/703"
+
+[[task]]
+id = "4a66378d"
+title = "donegate tests giveup_sentinel: 2 tests fail at 5a2efb46 (apparatus: under the cap donegate must block)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "donegate",
+    "red-test",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = 'Reported by the b19aad51 worker on 2026-09-24: giveups_across_two_sessions_do_become_systemic and repeated_giveups_in_one_session_never_become_systemic in crates/donegate/tests/giveup_sentinel.rs panic with "apparatus: under the cap donegate must block", both on the b19aad51 branch and (worker checked via git stash) on base 5a2efb46. Independent verifier re-check pending at filing time. Re-measure before working.'
+created_at = 1790181351
+updated_at = 1790181351
+weight = 0.0
+issue_number = 704
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/704"
+
+[[task]]
+id = "ec573200"
+title = "schemaguard cmd_metrics Blocked arm prints serde_json::to_string(..).unwrap_or_default() — serialization failure becomes an empty line"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "schemaguard",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Noticed by the b19aad51 worker 2026-09-24. crates/schemaguard/src/main.rs cmd_metrics Required::Blocked arm. Exit code is already 2 there, so not fail-open by exit code, but the error is silently dropped (empty stdout line). unwrap_or_default is not caught by clippy unwrap_used, so the deny lints do not cover this erasure pattern; grep other crates for unwrap_or_default on serialization."
+created_at = 1790181352
+updated_at = 1790181352
+weight = 0.0
+issue_number = 705
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/705"
+
+[[task]]
+id = "bf262dc7"
+title = "clippy deny-lint opt-in: remaining 28 crates after b19aad51 (condukt, tdd, autoflow, ctxrot, compass, precommit-audit first)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "clippy",
+    "fail-closed",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Follow-up split from b19aad51 (2026-09-24, commit 3eb7b8bf on session-9d349393 opted in budgetguard, donegate, reviewgate, schemaguard, harness-core). Measured on that commit: 41 crates with Cargo.toml, 28 still without a lints table: autoflow backlog beacon benchkit compass condukt context-governor ctxrot curate daily deepwiki difflog evalkit fugu-router gauge harness-status hypothesis integration-tests playbook precommit-audit replaykit runbook session-insights ship taskprog tdd tracekit trajectoryeval. Prioritise verdict-carrying ones (condukt, tdd, autoflow, ctxrot Stop hooks, precommit-audit, compass). Measure production vs test violations per crate first (cargo clippy -p X --lib --bins -- -W clippy::unwrap_used -W clippy::expect_used -W clippy::panic), one crate or small group per commit with its own lockstep bump."
+created_at = 1790181368
+updated_at = 1790181368
+weight = 0.0
+issue_number = 706
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/706"
+
+[[task]]
+id = "35f35d51"
+title = "harness-core boundary::tests::run_with_timeout_readable_stderr_is_known_and_complete failed once under load (344/345), passed on rerun"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "harness-core",
+    "flaky-test",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed by the b19aad51 independent verifier 2026-09-24 on commit 3eb7b8bf (which does not touch boundary.rs): first cargo test -p harness-core run failed this test, a --no-fail-fast rerun passed all 345. Timing-sensitive test under parallel load; a flaky gate test is a detection hole (red that is ignored). Reproduce with repeated runs under load before fixing."
+created_at = 1790183148
+updated_at = 1790183148
+weight = 0.0
+issue_number = 707
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/707"

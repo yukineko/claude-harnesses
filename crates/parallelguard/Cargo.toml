@@ -1,7 +1,7 @@
 [package]
 rust-version.workspace = true
 name = "parallelguard"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Per-session concurrency cap for Claude Code: a PreToolUse hook that counts in-flight Bash calls and subagents and denies the one that would exceed the cap."
 license = "MIT"

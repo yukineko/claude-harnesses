@@ -348,6 +348,35 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
+    fn blastguard_ask_command_escalates_end_to_end_under_auto_policy() {
+        // END-TO-END, not a hand-built RiskAssessment: the assessment comes out
+        // of the real `blastguard::classify::classify`, which is what
+        // `gather_assessment` calls. A command blastguard REFUSED to analyse
+        // (`Decision::Ask` — "not a verdict about the command, it is a refusal")
+        // must not be eligible for AutoExec: the Low+reversible pair is exactly
+        // `decide_gate_exec`'s auto-exec corner.
+        let text = "my-cleanup-wrapper rm -rf /some/path";
+
+        // Precondition: blastguard really refuses to analyse this TODAY. If the
+        // detector ever starts allowing/denying it outright, this test must
+        // fail rather than silently assert on a different input class.
+        let decision =
+            blastguard::detect::detect("Bash", Some(&serde_json::json!({ "command": text })));
+        assert!(
+            decision.is_ask(),
+            "precondition: blastguard must answer Ask for {text:?} today, got {decision:?}"
+        );
+
+        let a = blastguard::classify::classify(text);
+        assert_eq!(
+            decide_gate_exec(a.risk, a.reversible, true),
+            GateExec::Escalate,
+            "a command blastguard refused to analyse must escalate, not auto-exec; \
+             classify gave {a:?}"
+        );
+    }
+
+    #[test]
     fn undetermined_classification_never_auto_execs_and_keeps_its_reason() {
         // FAIL-CLOSED: a risk that could not be measured must NOT arrive as a
         // Low/reversible assessment (which, under an auto policy, would

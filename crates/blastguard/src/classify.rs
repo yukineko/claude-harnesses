@@ -193,8 +193,35 @@ const HISTORY_SIGNALS: &[&str] = &["git rebase", "rebase -i", "--amend", "filter
 ///   1. outward deploy/publish/push  → High, irreversible
 ///   2. locally destructive (whatever [`detect`] would DENY as a Bash command)
 ///      → High, irreversible
-///   3. local history rewrite        → Medium, reversible
-///   4. everything else              → Low, reversible
+///   3. [`detect`] answered ASK — it refused to analyse the construct
+///      → Medium, NOT reversible (see the note below)
+///   4. local history rewrite        → Medium, reversible
+///   5. everything else              → Low, reversible
+///
+/// ## Why an `Ask` is not `Low` + reversible
+///
+/// `Low` + `reversible: true` is not a neutral default here: it is the exact
+/// pair `condukt::gate_exec::decide_gate_exec` reads as
+/// `GateExec::AutoExec`, i.e. "run this without human sign-off". Routing an
+/// `Ask` — which `crate::model::Decision` defines as "NOT a verdict about the
+/// command, it is a refusal to guess about one" — into that pair turns
+/// blastguard's refusal to analyse into permission to proceed. That is the
+/// fail-open CLAUDE.md §3 forbids, one layer up from where `Ask` was
+/// introduced (backlog `ed941047`).
+///
+/// `reversible: false` is NOT a claim that the action cannot be undone; it is
+/// the restrictive resolution of "we do not know", because `reversible: true`
+/// is the claim we have no basis to make. `Medium` rather than `High` is a
+/// measured choice, not a hedge: [`RiskAssessment::requires_gate`] fires on
+/// `High && !reversible`, so mapping `Ask` to `High` would push every
+/// unanalysable action through condukt's outward GATED gate. Measured
+/// 2026-09-24 at rev `b47f08e3` over the 1040 real task descriptions in this
+/// repo's `.backlog/tasks.toml` (title + done-criteria + notes, fed to
+/// `detect` exactly as condukt feeds them): DENY 85, **ASK 101**, ALLOW 854 —
+/// and **74 of those 101 Asks classified `Low` + reversible**, i.e. were
+/// auto-exec eligible. `Medium` + `!reversible` moves those 74 to
+/// `Escalate` (a human decides) without force-gating the other 101 through
+/// the outward gate.
 pub fn classify(text: &str) -> RiskAssessment {
     let lower = text.to_ascii_lowercase();
 
@@ -211,16 +238,26 @@ pub fn classify(text: &str) -> RiskAssessment {
         };
     }
 
-    // 2. Locally destructive — reuse the binary detector so the two stay in
-    //    lockstep. Anything blastguard would DENY is irreversible data loss.
-    if detect::detect("Bash", Some(&json!({ "command": text }))).is_deny() {
+    // 2/3. Reuse the binary detector so the two stay in lockstep — and read
+    //    ALL THREE of its answers, not just `Deny`. Anything blastguard would
+    //    DENY is irreversible data loss. An `Ask` is blastguard refusing to
+    //    guess, which must not resolve to the auto-exec corner; see the
+    //    "Why an `Ask` is not `Low` + reversible" note above.
+    let verdict = detect::detect("Bash", Some(&json!({ "command": text })));
+    if verdict.is_deny() {
         return RiskAssessment {
             risk: Risk::High,
             reversible: false,
         };
     }
+    if verdict.is_ask() {
+        return RiskAssessment {
+            risk: Risk::Medium,
+            reversible: false,
+        };
+    }
 
-    // 3. History rewrite — recoverable via reflog, but risky.
+    // 4. History rewrite — recoverable via reflog, but risky.
     if HISTORY_SIGNALS.iter().any(|s| lower.contains(s)) {
         return RiskAssessment {
             risk: Risk::Medium,
@@ -228,7 +265,7 @@ pub fn classify(text: &str) -> RiskAssessment {
         };
     }
 
-    // 4. Default — ordinary, reversible work.
+    // 5. Default — ordinary, reversible work.
     RiskAssessment {
         risk: Risk::Low,
         reversible: true,
@@ -477,6 +514,99 @@ mod tests {
             reversible: false,
         };
         assert!(!reversible.merge(irreversible).reversible);
+    }
+
+    /// What [`detect`] answers for `text` as a Bash command — the exact call
+    /// `classify` makes internally, so a precondition assert here observes the
+    /// same verdict `classify` sees.
+    fn detect_verdict(text: &str) -> crate::model::Decision {
+        detect::detect("Bash", Some(&json!({ "command": text })))
+    }
+
+    /// Commands `detect` answers `Ask` for TODAY (measured, not guessed): an
+    /// unrecognised wrapper head in front of a destructive line, and an
+    /// unrecognised head naming a protected gate/config path. Each test below
+    /// asserts the `Ask` precondition first, so if the detector's coverage ever
+    /// moves these to `Allow`/`Deny` the test fails loudly instead of quietly
+    /// degrading into a test of some other input class.
+    const DETECT_ASK_COMMANDS: &[&str] = &[
+        "my-cleanup-wrapper rm -rf /some/path",
+        "some-wrapper chmod 777 .githooks/pre-commit",
+    ];
+
+    #[test]
+    fn detect_ask_is_never_classified_as_low_and_reversible() {
+        // CONTRACT: `Decision::Ask` is a refusal to analyse, not a clean bill of
+        // health. `{risk: Low, reversible: true}` is exactly the corner
+        // `condukt::gate_exec::decide_gate_exec` auto-execs under an auto
+        // policy, so mapping an Ask there lets a command blastguard explicitly
+        // declined to understand run without a human. Undetermined must resolve
+        // to the restricted side: at least Medium, and never reversible.
+        for text in DETECT_ASK_COMMANDS {
+            // Precondition: this really is an Ask today.
+            let d = detect_verdict(text);
+            assert!(
+                d.is_ask(),
+                "precondition: {text:?} must make detect answer Ask today, got {d:?}"
+            );
+
+            let a = classify(text);
+            assert!(
+                a.risk >= Risk::Medium,
+                "{text:?}: detect refused to analyse it, so classify must not report Low risk; got {a:?}"
+            );
+            assert!(
+                !a.reversible,
+                "{text:?}: an unanalysable command must not be reported reversible; got {a:?}"
+            );
+            assert_ne!(
+                a,
+                RiskAssessment {
+                    risk: Risk::Low,
+                    reversible: true,
+                },
+                "{text:?}: Low+reversible is the auto-exec corner; an Ask must never land there"
+            );
+        }
+    }
+
+    #[test]
+    fn detect_allow_control_still_classifies_low_and_reversible() {
+        // CONTROL — must stay green before AND after the fix. Without it the
+        // contract test above would also pass if someone escalated everything.
+        for text in ["refactor the parser", "fix a typo in the README"] {
+            let d = detect_verdict(text);
+            assert!(
+                matches!(d, crate::model::Decision::Allow),
+                "precondition: {text:?} must be plainly allowed by detect, got {d:?}"
+            );
+
+            let a = classify(text);
+            assert_eq!(a.risk, Risk::Low, "{text:?} must stay Low risk; got {a:?}");
+            assert!(a.reversible, "{text:?} must stay reversible; got {a:?}");
+            assert!(!a.requires_gate(), "{text:?} must not be force-gated");
+        }
+    }
+
+    #[test]
+    fn detect_deny_control_still_classifies_high_and_irreversible() {
+        // CONTROL — the existing Deny precedence must be untouched by the fix.
+        for text in ["rm -rf build", "git clean -fdx"] {
+            let d = detect_verdict(text);
+            assert!(
+                d.is_deny(),
+                "precondition: {text:?} must be denied by detect, got {d:?}"
+            );
+
+            let a = classify(text);
+            assert_eq!(
+                a.risk,
+                Risk::High,
+                "{text:?} must stay High risk; got {a:?}"
+            );
+            assert!(!a.reversible, "{text:?} must stay irreversible; got {a:?}");
+            assert!(a.requires_gate(), "{text:?} must require the GATED gate");
+        }
     }
 
     #[test]

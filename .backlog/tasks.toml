@@ -29225,3 +29225,123 @@ updated_at = 1790176575
 weight = 0.0
 issue_number = 701
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/701"
+
+[[task]]
+id = "57da511b"
+title = "backlog next --claim --project <P> が別 project の task を返す — 実測 8 件連続、flow の毎サイクルが空回りする"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-24、測定点 38b460f0。`backlog next --claim --project /Users/yuki/src/harness` を
+13 回呼んだところ、8 件が project フィールド `/mnt/c/Users/hiroyuki_nakayama/src/harness`
+の task だった (id: 3e2aade5 a82274cb 21b7b1a7 6803bd45 079b643f 8aeb4cab b4947e03
+82ba4a00 dab60741 のうち 8 件)。`--project` を渡しているのに別 project の item が
+claimed に落ちる。
+
+なぜ問題か: flow の 3-1 は claim してから中身を見るので、別 project の item を掴むたびに
+`backlog edit --status pending` で戻す往復が発生する。今回は 4 件取るのに 13 回の
+next --claim が必要だった。さらに戻すたびに main の tasks.toml へ書き込みが走るため、
+並行セッションとの競合を増やしている (下の所見と複合する)。
+
+両方の読み: (a) --project のフィルタが next の選択経路に効いていない実在の欠陥。
+(b) project フィールドが解決不能な item をあえて返す意図的な設計 (project_unresolved:
+false なので該当しないと思われる)。
+見分け方: next の実装で --project がクエリに渡っているか、選択後のフィルタなのかを読む。
+
+done_criteria: --project を渡したとき、その project に属さない item は claimed に
+落ちない。0 件になるまで next が進むか、no pending tasks を返す。"""
+created_at = 1790183635
+updated_at = 1790183635
+weight = 0.0
+issue_number = 709
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/709"
+
+[[task]]
+id = "6a668d24"
+title = "claim-skip ゲートの deadlock: is-claimed は期限切れしないが backlog は 1 時間で requeue する — 51 日前の死んだ claim が task を恒久的に着手不能にする"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flow",
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-24、測定点 38b460f0。backlog 67e95a19 (hashkey 3358a647274b19d0) の
+task claim を run `flow-5aaa9924-681a-4c95-8b6e-8579166d725a` が保持していた。
+  claimed_at == heartbeat_at (一度も heartbeat していない)
+  経過 1218.6 時間 (約 51 日)
+  pid 16722 は不在
+  ~/.claude/projects/-Users-yuki-src-harness/ に 5aaa9924* の transcript が存在しない
+
+機構: backlog 側は CLAIM_STALE_SECS (1 時間) で status を pending へ戻すので、item は
+何度でも `next --claim` に現れる。しかし condukt の claim registry 側は期限切れしないため
+`condukt state is-claimed` が exit 0 を返し続ける。flow の claim-skip ゲートは exit 0 を
+「他セッションが作業中」と読んで item を pending へ戻す。**結果としてどのセッションも
+永久に着手できない。** 2 つのストアの期限が非対称なことが原因。
+
+今回は死亡の証拠を 4 つ独立に確認 (上記) したうえで `condukt policy answer --approval` を
+通し、`condukt state release-task` で手動解放した。手動解放が要るということ自体が欠陥。
+
+注意: pid の不在は単独では証拠にならない (claim-task は一度きりの CLI なので pid は常に
+死んでいる。memory: maintree-guard-stale-lock)。transcript の不在と 51 日という経過が
+効いている証拠である。
+
+done_criteria: 2 つのストアの期限を同じ根拠で揃えるか、is-claimed が死んだ run の claim を
+claimed:true と報告しない。手動 release-task なしに item が再び着手可能になること。"""
+created_at = 1790183636
+updated_at = 1790183636
+weight = 0.0
+issue_number = 710
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/710"
+
+[[task]]
+id = "6b3ba543"
+title = "main の .backlog/tasks.toml が並行セッションの書き込み中に一時的に TOML パース不能になり、index が MERGE_HEAD なしで UU を示す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-24、測定点 b47f08e3。flow サイクル中に
+  tomllib.TOMLDecodeError: Invalid statement (at line 9108, column 1)
+  backlog list -> Error: failed to parse /Users/yuki/src/harness/.backlog/tasks.toml
+を観測した。同時に `git status --porcelain .backlog/tasks.toml` が `UU` を返したが、
+**.git/MERGE_HEAD は存在せず、ファイル内の conflict marker は 0 件**だった
+(`grep -c '^<<<<<<<|^=======|^>>>>>>>'` が 0)。
+
+同時刻、別セッション 9d349393 の transcript が 2.9 秒前に更新されており、main に
+c598ebd9 と b47f08e3 (いずれも backlog の claim/requeue 状態) を積んでいた。つまり
+並行セッションが main の共有キューを書いている最中の中間状態を読んでいる。
+
+なぜ問題か: (a) この間 `backlog` CLI は全セッションで使用不能になる (parse エラーで
+終了)。(b) UU を見たツール/人間は「未解決の conflict がある」と読むが、実際には
+marker も MERGE_HEAD も無いので、その判断は誤りに導かれる。(c) flow は毎サイクル
+main の tasks.toml へ書くので、セッション数に比例して衝突窓が広がる。
+
+既知の隣接所見: scripts/plugin_cache.py の同型の race を 3bfc18bf として起票済み
+(無防備な json.load が並行 writer の途中状態を読む)。こちらは TOML 版。
+
+両方の読み: (a) 書き込みが atomic (tempfile+rename) でない実在の欠陥。
+(b) 一過性なので許容という設計判断。見分け方: store の書き込み経路が rename を
+使っているかを読む。使っていなければ (a)。
+
+done_criteria: tasks.toml の書き込みが atomic であり、読み手が中間状態を観測しない。
+少なくとも parse 失敗を「壊れている」ではなく「今は読めない」と区別可能に報告する。"""
+created_at = 1790183637
+updated_at = 1790183637
+weight = 0.0
+issue_number = 711
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/711"

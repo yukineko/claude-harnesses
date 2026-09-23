@@ -28720,3 +28720,22 @@ updated_at = 1790138376
 weight = 0.0
 issue_number = 686
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/686"
+
+[[task]]
+id = "6a707b72"
+title = "after filtered rollouts (--plugin condukt/schemaguard/tdd/overwatch) 12 plugins incl. GATE blastguard/propguard/donegate/reviewgate had registry-pointed version dirs with NO darwin-arm64 binary (dark); each filtered run reported rc=0"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "rollout",
+    "deploy-verify",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-09-23 ~13:38-13:42 JST, session 9d349393, main 94341ef2 (just pushed; integrated 36 origin commits that bumped many plugin versions). Ran scripts/rollout-plugins.sh --plugin X for condukt, schemaguard, tdd and --plugin overwatch --canary: all rc=0, each printing 'verify: skipped — this run was filtered'. check-plugin-rollout.py then reported 20 problems, incl. 'crates/blastguard declares a binary target, but no darwin-arm64 binary is deployed under ~/.claude/plugins/cache/yukineko/blastguard/0.2.65/bin' (dir mtime 13:38; registry installPath pointed at 0.2.65; bin held only the launcher). Same for autoflow budgetguard context-governor donegate hypothesis propguard reviewgate. A full 'scripts/rollout-plugins.sh --canary' repaired all but tdd (d69f4b23). Reading (a) defect: a filtered rollout repoints/creates version dirs for plugins OUTSIDE its filter without seeding their binaries, darkening gates, and its rc=0 + skipped verify hides it. Reading (b) something else (a concurrent session, or Claude Code's own plugin sync after the pulled version bumps) created the dirs, and the filtered run merely did not repair them. How to tell: in a sandbox HOME, bump two plugins' versions, run rollout --plugin <one>, and check whether the other's registry installPath / version dir changed."
+created_at = 1790138609
+updated_at = 1790138609
+weight = 0.0
+issue_number = 691
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/691"

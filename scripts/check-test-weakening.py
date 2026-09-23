@@ -52,13 +52,42 @@ Two consequences of that design, stated so they read as decisions:
   `--pending-msg` points at the message that is being committed, not at a
   scratch file -- and it is held to the same exactness rules. This gate now runs
   from .githooks/commit-msg, where git supplies that path as $1.
-* Scope is NET, PER FILE, base vs HEAD -- not per commit. A file that did not
-  exist at the base cannot have had existing coverage weakened, and per-commit
-  analysis would fire on ordinary iteration (write test, refactor, consolidate);
-  a gate that fires on normal work gets switched off. The gap this leaves --
-  adding a strong new test inside a PR and gutting it before merge -- is covered
-  by a different control, the tdd F->P oracle, which requires a RED observation
-  before the GREEN and so leaves a proof trail this scanner need not duplicate.
+* Scope is base vs HEAD, not per commit. A file that did not exist at the base
+  cannot have had existing coverage weakened, and per-commit analysis would fire
+  on ordinary iteration (write test, refactor, consolidate); a gate that fires on
+  normal work gets switched off. The gap this leaves -- adding a strong new test
+  inside a PR and gutting it before merge -- is covered by a different control,
+  the tdd F->P oracle, which requires a RED observation before the GREEN and so
+  leaves a proof trail this scanner need not duplicate.
+* Assertion loss is counted at TWO granularities, and either one raises the
+  finding. Until 2026-09-24 it was counted only NET PER FILE, and that alone was
+  a hole large enough to walk a deletion through: removing two real assertions
+  from one `#[test]` function and adding any two elsewhere in the SAME file
+  returned `{"verdict": "clean", "findings": []}` while the deletion stood
+  (reproduced at rev b47f08e3; the same deletion alone reported
+  `assertion-removed`, `assertion macros 4 -> 2`). The gate exists so a weakening
+  cannot pass UNACKNOWLEDGED, and that class passed unacknowledged (backlog
+  `4cbfbbfc`). So a `#[test]` function that exists on BOTH sides and comes back
+  with fewer assertion macros is now reported by name, whatever the file total
+  did. Per-file counting is KEPT alongside it, because it still catches losses in
+  the parts of the surface that are not inside a `#[test]` body (helpers,
+  fixtures, `tests/` files' free functions).
+
+  The per-function half reads a COMMENT- AND LITERAL-MASKED copy of the surface
+  (`_mask_noncode`), because attributing a `#[test]` to a function requires
+  knowing it is code; the per-file counts still read the raw surface, so this
+  change does not move any existing verdict. It also means an `assert!` that
+  appears only inside a string fixture is not credited to the enclosing test.
+
+  What this deliberately does NOT do: pair functions across a rename. A function
+  present at the base and absent at HEAD is not reported as assertion loss -- a
+  rename is ordinary refactoring, and guessing which new name is "the same test"
+  would fire on normal work. Its disappearance is still visible to the per-file
+  `#[test]`-count check (`test-removed`). The remaining, acknowledged false
+  positive is the honest one: hoisting assertions out of a test body into a
+  shared helper lowers that body's count without weakening anything. That is what
+  the `test-weakening-justified:` marker is for, and it is a far cheaper failure
+  than the silent pass it replaces.
 """
 
 from __future__ import annotations
@@ -80,6 +109,17 @@ TEST_ATTR_RE = re.compile(
 )
 IGNORE_ATTR_RE = re.compile(r"#\s*\[\s*ignore\b")
 SHOULD_PANIC_RE = re.compile(r"#\s*\[\s*should_panic\b")
+
+# A function declaration, capturing its name — used to attribute a `#[test]`
+# attribute to the body it belongs to (see `test_fn_assertions`).
+FN_DECL_RE = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)")
+# Everything Rust permits between an attribute and the `fn` it applies to:
+# further attributes, visibility, and the asyncness/constness/ABI qualifiers.
+# Anything else means the `#[test]` we matched is not that function's attribute.
+ITEM_PREFIX_RE = re.compile(
+    r"\A(?:\s|#\s*\[[^\[\]]*\]|pub(?:\s*\([^()]*\))?|async|unsafe|const"
+    r'|extern(?:\s*"[^"]*")?)*\Z'
+)
 
 KIND_ASSERTION_REMOVED = "assertion-removed"
 KIND_TEST_REMOVED = "test-removed"
@@ -271,6 +311,119 @@ def _matching_brace(src: str, open_idx: int) -> int | None:
     return None
 
 
+def _mask_noncode(src: str, path: str) -> str:
+    """`src` with every comment and string/char literal blanked to spaces.
+
+    Length and newlines are preserved, so every index into the result is also an
+    index into `src` and the two can be sliced interchangeably.
+
+    This exists because `#[test]` is a string of nine characters that occurs
+    freely in this repo's PROSE: doc comments explaining the gate, and Rust
+    fixtures embedded in string literals by the gate crates' own tests. Measured
+    2026-09-24 at rev b47f08e3 over all 636 `.rs` files in the repo: matching the
+    attribute regex against raw source misattributes it in **18** files (e.g.
+    `crates/tdd/src/config.rs`, `crates/overwatch/src/store.rs`,
+    `crates/harness-core/tests/change_attribution.rs`), which is precisely the
+    known false-positive class in backlog `10663`/`10133`. Masking first drops
+    that to **0 of 636**, with 5113 test functions attributed — re-measured the
+    same day with the same scan. That measurement is what makes the
+    `Undetermined` above affordable: without it, 18 files would have blocked
+    every commit that touched them with exit 2, and a gate that fires on normal
+    work gets switched off.
+
+    An unterminated comment or literal raises: we cannot claim to have read a
+    file we cannot tokenise, and this scanner's contract is that an uninspected
+    surface is never a clean one.
+    """
+    out = list(src)
+    n = len(src)
+
+    def blank(a: int, b: int) -> None:
+        for k in range(a, b):
+            if out[k] != "\n":
+                out[k] = " "
+
+    i = 0
+    while i < n:
+        c = src[i]
+        if c == "/" and i + 1 < n and src[i + 1] == "/":
+            nl = src.find("\n", i)
+            end = n if nl == -1 else nl
+            blank(i, end)
+            i = end
+            continue
+        if c == "/" and i + 1 < n and src[i + 1] == "*":
+            j = i + 2
+            nest = 1
+            while j < n and nest > 0:
+                if src[j] == "/" and j + 1 < n and src[j + 1] == "*":
+                    nest += 1
+                    j += 2
+                elif src[j] == "*" and j + 1 < n and src[j + 1] == "/":
+                    nest -= 1
+                    j += 2
+                else:
+                    j += 1
+            if nest > 0:
+                raise Undetermined(f"{path}: unterminated block comment")
+            blank(i, j)
+            i = j
+            continue
+        if c == "r" and i + 1 < n and src[i + 1] in '#"':
+            j = i + 1
+            hashes = 0
+            while j < n and src[j] == "#":
+                hashes += 1
+                j += 1
+            if j < n and src[j] == '"':
+                close = '"' + "#" * hashes
+                end = src.find(close, j + 1)
+                if end == -1:
+                    raise Undetermined(f"{path}: unterminated raw string literal")
+                blank(i, end + len(close))
+                i = end + len(close)
+                continue
+            # `r` not opening a raw string after all: an ordinary identifier byte.
+        if c == '"':
+            j = i + 1
+            closed = False
+            while j < n:
+                if src[j] == "\\":
+                    j += 2
+                    continue
+                if src[j] == '"':
+                    j += 1
+                    closed = True
+                    break
+                j += 1
+            if not closed:
+                raise Undetermined(f"{path}: unterminated string literal")
+            blank(i, j)
+            i = j
+            continue
+        if c == "'":
+            # Escaped char literal / plain char literal / lifetime — the same
+            # three cases, resolved the same way, as in `_matching_brace`.
+            if i + 1 < n and src[i + 1] == "\\":
+                j = i + 3
+                while j < n and src[j] != "'":
+                    j += 1
+                if j < n:
+                    blank(i, j + 1)
+                    i = j + 1
+                    continue
+                i += 1
+                continue
+            if i + 2 < n and src[i + 2] == "'":
+                blank(i, i + 3)
+                i += 3
+                continue
+            i += 1
+            continue
+        i += 1
+    return "".join(out)
+
+
 def cfg_test_modules(src: str, path: str) -> str:
     """Concatenate every `#[cfg(test)]` module body found in `src`.
 
@@ -297,12 +450,58 @@ def test_surface(src: str, path: str) -> str:
     return cfg_test_modules(src, path)
 
 
-def counts(surface: str) -> dict:
+def test_fn_assertions(surface: str, path: str) -> dict:
+    """Assertion-macro count per `#[test]` function body, keyed by function name.
+
+    This is the per-function half of the assertion check (see the module
+    docstring): it makes a deletion inside one test visible even when another
+    test in the same file gained assertions and the file total did not move.
+
+    Attribution is exact rather than best-effort. Between a `#[test]` and its
+    `fn` only attributes, visibility, `async`/`unsafe`/`const` and `extern "C"`
+    may appear; anything else means this `#[test]` is not the attribute of the
+    function we found (the usual cause is the literal text `#[test]` inside a
+    string or a doc comment -- which this repo's own gate tests contain). We
+    cannot attribute it, so we do not guess: that raises `Undetermined` and the
+    whole run blocks with exit 2, the same answer an unbalanced `#[cfg(test)]`
+    module already gets. Silently skipping the occurrence instead would leave
+    exactly one un-inspected test function reported as clean, which is the
+    fail-open this function was added to close.
+
+    Names are keys, so two same-named test functions in different `#[cfg(test)]`
+    modules of one file SUM. A decrease in the sum is still a real decrease, and
+    the alternative (dropping duplicates) would hide one of them.
+    """
+    out: dict = {}
+    code = _mask_noncode(surface, path)
+    for m in TEST_ATTR_RE.finditer(code):
+        fm = FN_DECL_RE.search(code, m.end())
+        if fm is None:
+            raise Undetermined(f"{path}: a #[test] attribute with no `fn` after it")
+        between = code[m.end() : fm.start()]
+        if not ITEM_PREFIX_RE.match(between):
+            raise Undetermined(
+                "{}: cannot attribute a #[test] to a function body "
+                "(unexpected text before `fn`: {!r})".format(path, between.strip()[:80])
+            )
+        brace = code.find("{", fm.end())
+        if brace == -1:
+            raise Undetermined(f"{path}: #[test] fn {fm.group(1)} has no body")
+        end = _matching_brace(code, brace)
+        if end is None:
+            raise Undetermined(f"{path}: unbalanced braces in #[test] fn {fm.group(1)}")
+        body = code[brace : end + 1]
+        out[fm.group(1)] = out.get(fm.group(1), 0) + len(ASSERT_RE.findall(body))
+    return out
+
+
+def counts(surface: str, path: str = "") -> dict:
     return {
         "assertions": len(ASSERT_RE.findall(surface)),
         "tests": len(TEST_ATTR_RE.findall(surface)),
         "ignores": len(IGNORE_ATTR_RE.findall(surface)),
         "should_panics": len(SHOULD_PANIC_RE.findall(surface)),
+        "fn_assertions": test_fn_assertions(surface, path),
     }
 
 
@@ -359,17 +558,36 @@ def worktree_content(repo: str, path: str) -> str:
 # --- findings --------------------------------------------------------------
 
 
+def per_fn_losses(before: dict, after: dict) -> list:
+    """`(name, before, after)` for every `#[test]` fn that SURVIVED and lost
+    assertions.
+
+    Only names present on BOTH sides are compared. A name that is gone at HEAD is
+    a deletion or a rename, and neither is an assertion loss inside a surviving
+    test — see the module docstring for why a rename is deliberately not paired.
+    """
+    losses = []
+    for name, n_before in sorted(before.items()):
+        n_after = after.get(name)
+        if n_after is not None and n_after < n_before:
+            losses.append((name, n_before, n_after))
+    return losses
+
+
 def findings_for(path: str, before: dict, after: dict) -> list:
     out = []
-    if after["assertions"] < before["assertions"]:
-        out.append(
-            (
-                KIND_ASSERTION_REMOVED,
-                "assertion macros {} -> {}".format(
-                    before["assertions"], after["assertions"]
-                ),
-            )
+    losses = per_fn_losses(before["fn_assertions"], after["fn_assertions"])
+    if after["assertions"] < before["assertions"] or losses:
+        detail = "assertion macros {} -> {}".format(
+            before["assertions"], after["assertions"]
         )
+        if losses:
+            # Name ONLY the losing functions. Listing the whole file would
+            # satisfy a reviewer's eye while telling them nothing.
+            detail += "; weakened test fn(s): " + ", ".join(
+                "{}() {} -> {}".format(n, b, a) for n, b, a in losses
+            )
+        out.append((KIND_ASSERTION_REMOVED, detail))
     if after["tests"] < before["tests"]:
         out.append(
             (
@@ -518,8 +736,10 @@ def scan(repo: str, base: str, base_was_explicit: bool, pending_msg=None) -> lis
         rep = new or old  # attribute the finding to the surviving/current path
         before_src = blob_at(repo, merge_base, old) if old else ""
         after_src = worktree_content(repo, new) if new else ""
-        before = counts(test_surface(before_src, old)) if before_src else counts("")
-        after = counts(test_surface(after_src, new)) if after_src else counts("")
+        before = (
+            counts(test_surface(before_src, old), old) if before_src else counts("")
+        )
+        after = counts(test_surface(after_src, new), new) if after_src else counts("")
         for p, kind, detail in findings_for(rep, before, after):
             results.append(
                 {

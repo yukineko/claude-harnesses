@@ -1012,5 +1012,416 @@ class ResidualFailOpensRound26(GateTestCase):
         self.assertClean(rc, out, err)  # documents the gap, not an endorsement
 
 
+# ---------------------------------------------------------------------------
+# 8. Per-FUNCTION assertion loss: same-file additions must not mask a deletion
+#    (backlog 4cbfbbfc)
+#
+#    `findings_for()` compares assertion counts NET, PER FILE. Assertions
+#    deleted from one `#[test]` fn are therefore cancelled out by assertions
+#    added to a DIFFERENT `#[test]` fn in the same file, and the run reports
+#    `clean`. That is the gate's own signature fail-open, one level down: it
+#    inspected the file and reported a confident PASS about a test it watched
+#    get weaker.
+#
+#    The four `..._control_...` tests below are ANTI-VACUITY controls. They are
+#    GREEN against the unfixed scanner and must STAY green: a fix that reports
+#    every renamed / reformatted / brand-new test fn as assertion loss would
+#    turn them red, and a gate that fires on ordinary refactoring is a gate that
+#    gets switched off.
+# ---------------------------------------------------------------------------
+
+# victim_test: 3 assertions. bystander_test: 1. File total: 4.
+MASKED_BASE = """\
+use super::*;
+
+#[test]
+fn victim_test() {
+    assert!(holds());
+    assert_eq!(value(), 1);
+    assert_ne!(value(), 2);
+}
+
+#[test]
+fn bystander_test() {
+    assert!(other());
+}
+"""
+
+# victim_test 3 -> 1 (two assertions DELETED); bystander_test 1 -> 3.
+# File total stays at 4, so the NET-per-file comparison sees nothing.
+MASKED_NET_UNCHANGED = """\
+use super::*;
+
+#[test]
+fn victim_test() {
+    assert!(holds());
+}
+
+#[test]
+fn bystander_test() {
+    assert!(other());
+    assert!(other_again());
+    assert!(other_once_more());
+}
+"""
+
+# Same deletion, but the file total now RISES (4 -> 5). "More assertions than
+# before" is exactly the shape a weakening hides behind.
+MASKED_NET_INCREASED = """\
+use super::*;
+
+#[test]
+fn victim_test() {
+    assert!(holds());
+}
+
+#[test]
+fn bystander_test() {
+    assert!(other());
+    assert!(other_again());
+    assert!(other_once_more());
+    assert!(other_still());
+}
+"""
+
+# CONTROL: victim_test is RENAMED, keeping all 3 assertions. A per-function
+# comparison must not read "the old name vanished" as assertion loss.
+MASKED_CONTROL_RENAMED_FN = """\
+use super::*;
+
+#[test]
+fn renamed_victim_test() {
+    assert!(holds());
+    assert_eq!(value(), 1);
+    assert_ne!(value(), 2);
+}
+
+#[test]
+fn bystander_test() {
+    assert!(other());
+}
+"""
+
+# CONTROL: a brand-new #[test] fn is added; neither existing fn loses anything.
+MASKED_CONTROL_ADDED_FN = """\
+use super::*;
+
+#[test]
+fn victim_test() {
+    assert!(holds());
+    assert_eq!(value(), 1);
+    assert_ne!(value(), 2);
+}
+
+#[test]
+fn bystander_test() {
+    assert!(other());
+}
+
+#[test]
+fn freshly_added_test() {
+    assert!(brand_new());
+    assert_eq!(brand_new_value(), 7);
+}
+"""
+
+# CONTROL: victim_test's body is reformatted (let-bindings, blank lines, a
+# multi-line call) with its assertion count unchanged at 3.
+MASKED_CONTROL_REFORMATTED = """\
+use super::*;
+
+#[test]
+fn victim_test() {
+    let v = value();
+
+    assert!(holds());
+
+    assert_eq!(
+        v,
+        1,
+    );
+    assert_ne!(v, 2);
+}
+
+#[test]
+fn bystander_test() {
+    assert!(other());
+}
+"""
+
+# CONTROL: a file that did not exist at the base cannot have had coverage
+# weakened, however its functions are shaped.
+MASKED_CONTROL_NEW_FILE = """\
+use super::*;
+
+#[test]
+fn victim_test() {
+    assert!(holds());
+}
+
+#[test]
+fn bystander_test() {
+    assert!(other());
+    assert!(other_again());
+    assert!(other_once_more());
+}
+"""
+
+# The same masking, inside an inline `#[cfg(test)]` module -- the shape most of
+# this repo's tests actually have.
+LIB_MASKED_BASE = """\
+pub fn f(n: i32) -> i32 {
+    n
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn victim_test() {
+        assert_eq!(f(1), 1);
+        assert_ne!(f(1), 2);
+        assert!(f(1) > 0);
+    }
+
+    #[test]
+    fn bystander_test() {
+        assert!(f(2) == 2);
+    }
+}
+"""
+
+LIB_MASKED_WEAK = """\
+pub fn f(n: i32) -> i32 {
+    n
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn victim_test() {
+        assert_eq!(f(1), 1);
+    }
+
+    #[test]
+    fn bystander_test() {
+        assert!(f(2) == 2);
+        assert!(f(3) == 3);
+        assert!(f(4) == 4);
+    }
+}
+"""
+
+NEW_FILE_PATH = "crates/demo/tests/fresh.rs"
+
+
+class PerFunctionAssertionLoss(GateTestCase):
+    """Assertions lost by one `#[test]` fn must not be laundered through another."""
+
+    def _findings(self, payload, path=TEST_PATH, kind="assertion-removed"):
+        return [
+            f for f in payload["findings"]
+            if f["path"] == path and f["kind"] == kind
+        ]
+
+    # --- the contract -----------------------------------------------------
+
+    def test_masked_assertion_loss_blocks_when_file_total_is_unchanged(self):
+        """victim_test 3 -> 1 while bystander_test 1 -> 3: file total 4 -> 4.
+
+        The deletion is real and sits in a fn present on BOTH sides, so it must
+        be reported (exit 1, verdict weakened) even though the per-file net is
+        flat. Reporting `clean` here is the gate certifying a range whose
+        coverage it watched shrink.
+        """
+        repo = self.make_repo({TEST_PATH: MASKED_BASE, LIB_PATH: LIB_RS_BASE})
+        repo.write(TEST_PATH, MASKED_NET_UNCHANGED)
+        repo.commit("feat: implementation + move assertions off victim_test")
+        rc, payload, err = self.json_of(repo.root)
+        self.assertEqual(
+            rc, 1,
+            "a deletion inside victim_test must block even at a flat file total; "
+            f"got exit {rc}\nPAYLOAD:{payload}\nSTDERR:{err}",
+        )
+        self.assertEqual(payload["verdict"], "weakened", f"{payload}")
+        self.assertTrue(
+            self._findings(payload),
+            f"expected an assertion-removed finding on {TEST_PATH}: {payload}",
+        )
+
+    def test_masked_assertion_loss_blocks_when_file_total_increases(self):
+        """Same deletion, file total 4 -> 5. A rising count is not evidence of
+        rising coverage for the test that lost its assertions."""
+        repo = self.make_repo({TEST_PATH: MASKED_BASE, LIB_PATH: LIB_RS_BASE})
+        repo.write(TEST_PATH, MASKED_NET_INCREASED)
+        repo.commit("feat: implementation + gut victim_test, pad bystander_test")
+        rc, payload, err = self.json_of(repo.root)
+        self.assertEqual(
+            rc, 1,
+            "a deletion inside victim_test must block even when the file total "
+            f"rises; got exit {rc}\nPAYLOAD:{payload}\nSTDERR:{err}",
+        )
+        self.assertEqual(payload["verdict"], "weakened", f"{payload}")
+        self.assertTrue(
+            self._findings(payload),
+            f"expected an assertion-removed finding on {TEST_PATH}: {payload}",
+        )
+
+    def test_masked_assertion_loss_detail_names_the_losing_test_fn(self):
+        """The reviewer has to be able to see WHICH test got weaker.
+
+        `assertion macros 4 -> 4` is not actionable and, at a flat total, not
+        even printable. The detail must name `victim_test`; naming every fn in
+        the file instead (so that `bystander_test`, which GAINED assertions,
+        also appears) would satisfy a substring check while telling the reviewer
+        nothing, so that is pinned out too.
+        """
+        repo = self.make_repo({TEST_PATH: MASKED_BASE, LIB_PATH: LIB_RS_BASE})
+        repo.write(TEST_PATH, MASKED_NET_UNCHANGED)
+        repo.commit("feat: implementation + move assertions off victim_test")
+        rc, payload, err = self.json_of(repo.root)
+        self.assertEqual(rc, 1, f"precondition: it must block\n{payload}\n{err}")
+        found = self._findings(payload)
+        self.assertTrue(found, f"no assertion-removed finding to inspect: {payload}")
+        details = " ".join(f["detail"] for f in found)
+        self.assertIn(
+            "victim_test", details,
+            f"the detail must name the test fn that LOST assertions: {payload}",
+        )
+        self.assertNotIn(
+            "bystander_test", details,
+            "the detail must name the LOSING fn, not list every fn in the file "
+            f"(bystander_test gained assertions): {payload}",
+        )
+
+    def test_masked_assertion_loss_in_a_cfg_test_module_blocks(self):
+        """Same masking inside an inline `#[cfg(test)]` module."""
+        repo = self.make_repo({LIB_PATH: LIB_MASKED_BASE})
+        repo.write(LIB_PATH, LIB_MASKED_WEAK)
+        repo.commit("feat: implementation + move assertions off the inline victim_test")
+        rc, payload, err = self.json_of(repo.root)
+        self.assertEqual(
+            rc, 1,
+            "an inline #[cfg(test)] module gets the same per-function treatment; "
+            f"got exit {rc}\nPAYLOAD:{payload}\nSTDERR:{err}",
+        )
+        self.assertTrue(
+            self._findings(payload, path=LIB_PATH),
+            f"expected an assertion-removed finding on {LIB_PATH}: {payload}",
+        )
+
+    def test_masked_assertion_loss_is_acknowledgeable_under_the_existing_kind(self):
+        """The existing hatch must reach this finding, under the SAME slug.
+
+        A new kind would silently invalidate every `assertion-removed` marker
+        already written in history, so the finding keeps the existing slug and
+        an exact marker flips `acknowledged` to true and the exit back to 0.
+        The finding must still be REPORTED (acknowledged != invisible) -- an
+        empty `findings` list would pass a bare exit-code check while proving
+        only that the gate never saw the weakening.
+        """
+        repo = self.make_repo({TEST_PATH: MASKED_BASE, LIB_PATH: LIB_RS_BASE})
+        repo.write(TEST_PATH, MASKED_NET_UNCHANGED)
+        repo.commit(
+            "chore: victim_test's invariant was deleted with the code it guarded\n\n"
+            f"test-weakening-justified: {TEST_PATH}:assertion-removed "
+            "— the invariant victim_test checked no longer exists"
+        )
+        rc, payload, err = self.json_of(repo.root)
+        found = self._findings(payload)
+        self.assertTrue(
+            found,
+            "the finding must be raised before it can be acknowledged; an empty "
+            f"findings list means the masking was never detected: {payload}\n{err}",
+        )
+        self.assertTrue(
+            all(f["acknowledged"] for f in found),
+            f"the exact marker must acknowledge the finding: {payload}",
+        )
+        self.assertEqual(payload["verdict"], "clean", f"{payload}")
+        self.assertEqual(rc, 0, f"an acknowledged finding returns exit 0\n{payload}\n{err}")
+
+    def test_masked_assertion_loss_is_acknowledgeable_via_pending_msg(self):
+        """The other half of the hatch: the message about to be written.
+
+        A commit-msg hook passes `--pending-msg $1`, and on a branch's first
+        commit `base..HEAD` is empty, so this is the ONLY place a marker can
+        live at the moment the gate runs. If the new finding were reachable
+        only by an already-committed marker, the documented remedy would be
+        unapplicable exactly when it is needed.
+        """
+        repo = self.make_repo({TEST_PATH: MASKED_BASE, LIB_PATH: LIB_RS_BASE})
+        repo.write(TEST_PATH, MASKED_NET_UNCHANGED)
+        repo.git("add", "-A")  # staged, deliberately NOT committed
+        msg = repo.root / "pending-msg.txt"
+        msg.write_text(
+            "chore: victim_test guarded an invariant that no longer exists\n\n"
+            f"test-weakening-justified: {TEST_PATH}:assertion-removed "
+            "\u2014 the invariant victim_test checked was deleted here\n",
+            encoding="utf-8",
+        )
+        rc, out, err = self.run_gate(repo.root, "--json", "--pending-msg", str(msg))
+        payload = json.loads(out)
+        found = self._findings(payload)
+        self.assertTrue(
+            found,
+            "the finding must be raised before --pending-msg can acknowledge it; "
+            f"an empty findings list means the masking was never detected: {payload}\n{err}",
+        )
+        self.assertTrue(
+            all(f["acknowledged"] for f in found),
+            f"the pending-message marker must acknowledge the finding: {payload}",
+        )
+        self.assertEqual(rc, 0, f"an acknowledged finding returns exit 0\n{payload}\n{err}")
+
+    def test_masked_assertion_loss_wrong_kind_marker_still_blocks(self):
+        """Exactness is unchanged: a marker naming a different kind acknowledges
+        nothing, so the finding still blocks."""
+        repo = self.make_repo({TEST_PATH: MASKED_BASE, LIB_PATH: LIB_RS_BASE})
+        repo.write(TEST_PATH, MASKED_NET_UNCHANGED)
+        repo.commit(
+            "chore: gut victim_test with a mis-targeted marker\n\n"
+            f"test-weakening-justified: {TEST_PATH}:ignore-added — wrong kind"
+        )
+        rc, out, err = self.run_gate(repo.root)
+        self.assertBlocks(rc, out, err, kind="assertion-removed")
+
+    # --- anti-vacuity controls (GREEN before AND after the fix) -----------
+
+    def test_control_renaming_a_test_fn_at_constant_count_is_clean(self):
+        """A rename is not a deletion. victim_test -> renamed_victim_test keeps
+        all 3 assertions; a per-function comparison that pairs by name alone
+        would call the old name's disappearance a loss and block every rename."""
+        repo = self.make_repo({TEST_PATH: MASKED_BASE, LIB_PATH: LIB_RS_BASE})
+        repo.write(TEST_PATH, MASKED_CONTROL_RENAMED_FN)
+        repo.commit("refactor: rename victim_test, keep every assertion")
+        self.assertClean(*self.run_gate(repo.root))
+
+    def test_control_adding_a_new_test_fn_is_clean(self):
+        repo = self.make_repo({TEST_PATH: MASKED_BASE, LIB_PATH: LIB_RS_BASE})
+        repo.write(TEST_PATH, MASKED_CONTROL_ADDED_FN)
+        repo.commit("test: add a new #[test] fn, touch nothing else")
+        self.assertClean(*self.run_gate(repo.root))
+
+    def test_control_file_absent_at_base_is_clean(self):
+        """A file that did not exist at the base has no prior coverage to lose,
+        whatever the per-function shape of its contents."""
+        repo = self.make_repo({TEST_PATH: MASKED_BASE, LIB_PATH: LIB_RS_BASE})
+        repo.write(NEW_FILE_PATH, MASKED_CONTROL_NEW_FILE)
+        repo.commit("test: add a brand new test file")
+        self.assertClean(*self.run_gate(repo.root))
+
+    def test_control_reformatting_a_body_at_constant_count_is_clean(self):
+        """Same fn, same 3 assertions, different formatting: not a weakening."""
+        repo = self.make_repo({TEST_PATH: MASKED_BASE, LIB_PATH: LIB_RS_BASE})
+        repo.write(TEST_PATH, MASKED_CONTROL_REFORMATTED)
+        repo.commit("style: reformat victim_test, assertion count unchanged")
+        self.assertClean(*self.run_gate(repo.root))
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

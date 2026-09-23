@@ -1,4 +1,3 @@
-
 [[task]]
 id = "0ba79281"
 title = 'CLAUDE.md: Windows で成立しない cargo 手順 (. "$HOME/.cargo/env") を直す'
@@ -6726,7 +6725,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "claimed"
 notes = """
 e19d501a の作業中に cargo test --workspace を4回回したうち1回で失敗 (2035 passed / 1 failed)。他3回と、隔離/直列での11回連続実行では pass。失敗させた変更は backlog/autoflow/daily/flow のみで condukt はそれらに依存しないため、condukt のテストバイナリは差分の有無で同一。したがって原因は変更ではなくマシン負荷への感度である。完了条件: 負荷を掛けた状態で決定論的に再現させ、テストが実時間のタイミングに依存しているのか lock 実装側にレースがあるのかを事実として切り分けること。落ちるのを見なかったことにしない。テストを緩める・retry でごまかすのは不可。
 
@@ -6736,7 +6735,7 @@ e19d501a の作業中に cargo test --workspace を4回回したうち1回で失
 pending へ戻した。本チケットの内容自体は未着手のままで、失敗ではない。
 経緯と、回収した RED スイートの詳細は 2c1e54b3 にある。"""
 created_at = 1784755092
-updated_at = 1789471806
+updated_at = 1790120245
 weight = 0.0
 issue_number = 323
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/323"
@@ -6774,7 +6773,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "done"
 notes = """
 実測 (2026-07-24): 他ジョブで CPU 飽和中に cargo test --workspace を3回回すと 3/3 で compass::tests::compass_invocation_faster_than_timeout_still_returns_output が落ちた (exit 101)。無負荷の CI (ubuntu/macos) では同テストは ok。これは compass 呼び出しが timeout 前に返ることを assert する速度依存テストで、マシン負荷でプロセス起動が遅れると閾値を超えて落ちる。condukt の repo_primary_lock_serializes_concurrent_rmw_no_lost_update (35d61d23) と同じ負荷依存クラス (こちらは isolated 30/30 pass で再現せず)。判定がマシン速度に依存する検査は非決定論ゲートで、緑/赤が環境で変わる。完了条件: これら timeout/並行テストの閾値を負荷耐性のある形にするか、負荷下でも決定論になるよう設計し直し、負荷を掛けた状態で決定的に緑を観測する。
 
@@ -6784,7 +6783,7 @@ notes = """
 pending へ戻した。本チケットの内容自体は未着手のままで、失敗ではない。
 経緯と、回収した RED スイートの詳細は 2c1e54b3 にある。"""
 created_at = 1784832249
-updated_at = 1789471806
+updated_at = 1790129621
 weight = 0.0
 issue_number = 324
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/324"
@@ -7896,10 +7895,10 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "done"
 notes = "DoD9 schemaguard 監査で確認。metrics.rs:91-94 の _ => continue が lines() の Err を握り潰し、metrics.rs:95 の if let Ok(entry) が parse 失敗を握り潰す。truncate/破損した store は過少カウントを返すが、下流には正常な集計と区別できない形で渡る。さらに metrics.rs:130-138 の test parse_counts_skips_malformed_lines がこの挙動を正しいものとして固定しており、CLAUDE.md 第2節が checks_verdict(空スライス) 事例で名指しした 検証していないテストの assert が仕様として固定される パターンそのもの。修正方針: 読めた行数 / 捨てた行数を三値で返し、捨てた行があれば Undetermined 側へ倒す。テスト側も skipped 件数を assert する形へ書き換える (test-weakening ack が要る可能性あり)。"
 created_at = 1785008231
-updated_at = 1785008231
+updated_at = 1790130864
 weight = 0.0
 issue_number = 68
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/68"
@@ -8137,10 +8136,10 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "done"
 notes = "実測 2026-07-28 (run-20260728-015338-90001)。condukt worktree merge --branch condukt/RID/RID/topic のように解決できない branch 名を渡すと、overwatch review-queue に '[merge-conflict] merge of ... into main held: 0 file(s) [(unknown files)]' を記録し、コマンド自体は exit 0 を返した。branch が存在しないのは判定不能 (cannot determine) であって conflict ではない。0 file の conflict は意味を成さず、exit 0 は呼び出し側に成功と読まれる (実際 git log を見るまで merge されていないことに気づけなかった)。CLAUDE.md 第3節の 'IO 失敗・パース不能・空集合は clean ではない。必ず block か ask に解決する' に該当。期待挙動: 解決できない branch ref は非0終了で 'branch not found' として報告し、conflict ledger を汚さない。再現: RID=... ; condukt worktree merge --branch condukt/$RID/$RID/topic"
 created_at = 1785173992
-updated_at = 1785173992
+updated_at = 1790130863
 weight = 0.0
 issue_number = 81
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/81"
@@ -8155,10 +8154,10 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "claimed"
 notes = "実測 2026-07-28 (commit 1601b835, schemaguard 0.1.9)。validate を三値化 (Report: violations / undetermined / waived) し check_verdict が Clean=0 / Violation=1 / Undetermined=2 に写すようにしたが、Undetermined を実際に生む唯一の経路 (宣言された items 制約が適用できない) は登録済み5スキーマでは踏めない。items を宣言する唯一のフィールド decomposition.tasks が同時に Ty::Array も宣言しているため、非配列値は items に到達する前に型チェックで弾かれる (verifier が registry.rs の全5スキーマを読んで反例なしを確認済み)。したがって exit 2 は check_verdict のマッピング単体テスト (undetermined_check_exits_two_not_zero) でしか証明されておらず、CLI 経由の end-to-end 証跡が無い。これは worker が隠さず disclosure し docstring と docs/specs/schemaguard.md に明記した既知の限界であって隠蔽ではないが、残課題ではある。次の一手の候補: (a) items を宣言しつつ Ty::Any を許すスキーマを1つ登録して到達可能にする、(b) 判定不能を生む別の経路 (未知の Ty、壊れた schema 定義) を Undetermined へ配線する、(c) 到達不能なら第3値を持つ意味が薄いと判断して設計を見直す。まず (a) か (b) の可否を測ること"
 created_at = 1785174008
-updated_at = 1785174008
+updated_at = 1790120246
 weight = 0.0
 issue_number = 82
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/82"
@@ -8191,7 +8190,7 @@ touched_files = []
 status = "pending"
 notes = "2026-07-28 時点で verdict 未採用 gate は 0 本になった (schemaguard 1601b835 / autoflow cec3a431 で解消)。残る勾配は harness_core::verdict の低採用 gate 各1 file: budgetguard / gauge / reviewgate。確立した手順は 監査 (read-only・docs/ へ出力・crates 無変更) から RED 先行観測、三値化 GREEN、micro bump、--plugin スコープの rollout までの2フェーズで、worker と verifier を別モデルにする。task text には必ず 既に fail-closed な経路のリスト を不合格条件として明記すること (誤検出で意図的設計を壊すのを防ぐため。autoflow の lock.rs:81 が実例)"
 created_at = 1785193820
-updated_at = 1785193820
+updated_at = 1790120246
 weight = 0.0
 issue_number = 84
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/84"
@@ -26630,7 +26629,7 @@ retain_claim は「Known(Stalled) のときだけ reap」なので、Undetermine
 5e62b0eb が「reap が効かない」なのに対し、06eb8aa3 は「そもそも解放が
 呼ばれない」。2 つ揃うと、握ったまま死んだ run の claim は永久に残る。"""
 created_at = 1789306874
-updated_at = 1790114679
+updated_at = 1790120245
 weight = 0.0
 issue_number = 639
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/639"
@@ -27060,7 +27059,7 @@ done_criteria:
 関連: 5e62b0eb (progress 判定が Undetermined になり reap されない不死 claim)。
 あちらは「reap が効かない」、本件は「そもそも解放が呼ばれない」。別の穴。"""
 created_at = 1789566331
-updated_at = 1790114679
+updated_at = 1790120245
 weight = 0.0
 issue_number = 661
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/661"
@@ -27981,6 +27980,7 @@ updated_at = 1790119361
 weight = 0.0
 issue_number = 676
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/676"
+
 [[task]]
 id = "c9373b92"
 title = "rollout-plugins.sh --plugin runs skip the verification that would catch a dark deploy"
@@ -28299,3 +28299,113 @@ updated_at = 1789716368
 weight = 0.0
 issue_number = 672
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/672"
+
+[[task]]
+id = "f7a0cadc"
+title = "condukt editgate::tests::a_clean_crate_still_passes fails every full-binary run (rustup cannot choose cargo: HOME race with with_home)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "flaky",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+Measured 2026-09-23, branch session-9d349393 at 2ddbd51d (condukt 0.7.171). Running the whole condukt bin test binary (target/debug/deps/condukt-*) fails editgate::tests::a_clean_crate_still_passes every time: 16/16 under 8 concurrent copies, 6/6 under CPU load, 1/1 idle, and also with the newly added worktree test skipped (so it predates that change). Isolated (filter editgate) it passes 17/17.
+Verbatim panic (crates/condukt/src/editgate.rs:506): a compiling crate must not be broken: {"broken":true,"diagnostics":"error: rustup could not choose a version of cargo to run, because one wasn't specified explicitly, and no default is configured.","fallback":false,...}
+Reading (a) test-isolation race: other tests (worktree.rs with_home) swap the process-wide HOME under crate::env_lock::HOME_ENV_LOCK, but editgate's check_edit spawns cargo without taking that lock, so rustup sees a sandbox HOME with no toolchain. Reading (b) something else resets rustup state. Discriminator: make the editgate test take HOME_ENV_LOCK (or pass an explicit env to the cargo child) and rerun the full binary; red->green distinguishes (a).
+Note: under (a) the production editgate reports broken=true when rustup is unusable - fail-closed direction, but the reason text claims compile/type errors that did not happen (the reason misattributes a toolchain failure to the user's code).
+Found while working 35d61d23 / 8c5d46fa (load-sensitive tests)."""
+created_at = 1790127752
+updated_at = 1790127752
+weight = 0.0
+issue_number = 677
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/677"
+
+[[task]]
+id = "7c798579"
+title = "condukt claim_progress_head_signal / diffrisk_record journaling tests fail under concurrent test-binary runs (fixture dir vanishes, record count 1 vs 2)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "flaky",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+Measured 2026-09-23, branch session-9d349393 at 2ddbd51d. Running 16 copies of the full condukt test binary, 8 at a time: claim::tests::claim_progress_head_signal_binds_each_head_to_its_owning_task failed 2/16 and diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded failed 1/16. Neither failed in 6 single-copy runs under CPU load.
+Verbatim (claim.rs:2665): left Undetermined(... git rev-parse HEAD could not be spawned in /var/folders/.../condukt-claim-claim-scope-identity-23640-0/wt-b: No such file or directory (os error 2)) right Known(Progressing). The fixture worktree directory is missing mid-test.
+Verbatim (diffrisk_record.rs:540): one record per invocation, left 1 right 2.
+Readings: (a) fixture paths shared across processes or another test cleaning temp dirs / a shared journal path (cross-process fixture collision, cf. memory killed-task-leaves-orphan-loop); (b) a spawn failure under process pressure reported as missing dir. Discriminator: print the fixture paths and check for cross-process reuse; rerun with unique per-process roots.
+This is the same load/concurrency-sensitive class as 8c5d46fa and 35d61d23."""
+created_at = 1790127753
+updated_at = 1790127753
+weight = 0.0
+issue_number = 678
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/678"
+
+[[task]]
+id = "fcbf7b9c"
+title = "blastguard denies quoted heredoc bodies / quoted args containing > as file-truncating redirects"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+Observed 2026-09-23 (session 9d349393), deployed blastguard. The PreToolUse Bash hook denied three commands as file-truncating redirects when the ">" was not a redirect:
+1. python3 inline script inside a quoted heredoc (<<'EOF') containing Rust text "if parsed.skipped > 0" -> denied: '> 0' destroys the file's current contents.
+2. git commit -F - with a quoted heredoc body containing Rust match text "_ => continue" -> denied: '> continue' destroys the file's current contents.
+3. python3 -c "..." multi-line argument -> denied: '> ' destroys ... '' is a relative path.
+A quoted heredoc (<<'EOF') body and a quoted argument are data, not shell syntax; no redirect exists. Workaround used: write the script / message to a file first.
+Readings: (a) real parse defect (quoted-heredoc body and quoted strings scanned as shell tokens) - over-blocking, fail-closed direction but it pushes authors toward workarounds; (b) deliberate conservative policy for any construct blastguard cannot parse. Discriminator: check whether blastguard's parser models <<'EOF' quoting; if it returns Ask/Deny because it cannot parse, the message should say so instead of asserting a truncation. Related: 7ca076f8 (fd-dup redirect misread)."""
+created_at = 1790127754
+updated_at = 1790127754
+weight = 0.0
+issue_number = 679
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/679"
+
+[[task]]
+id = "1ae35d62"
+title = "condukt worktree merge: git_try timeout path of the branch-resolve preflight (c49761cd) has no RED/GREEN test"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Measured 2026-09-23 at 8107190b by the independent verifier of c49761cd (backlog f14c18be). merge() refuses an unresolvable branch via git_try(rev-parse --verify --quiet <branch>^{commit}); git_try maps timed_out to resolves=false which bails. Verified only by code-reading, never by an observed RED/GREEN. The tag/sha case (resolves but is not a branch, accepted) is checked only at raw-git level, not at the merge() call site. How to settle: PATH-shim a git that sleeps past GIT_TIMEOUT for rev-parse and assert merge() is Err with no conflict recorded; RED by making the timeout read as success."
+created_at = 1790130883
+updated_at = 1790130883
+weight = 0.0
+issue_number = 683
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/683"
+
+[[task]]
+id = "fe20606f"
+title = "condukt task claims vanish mid-run: claim-task rc=0 for 5 hashkeys, heartbeat refreshes 1, is-claimed later false while the task is still in progress"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-09-23, session 9d349393, run flow-9d349393-ae47-4a86-b705-252d48ab4dea, HEAD 8107190b. Sequence: condukt state claim-task --run R --hashkey X for 5 hashkeys (00d1160bf294b1af 052a7668cb486c1f 9e513f0365cf89ba ea7d776df3b89745 1d8df0e8d35d6398) each rc=0. Then condukt state heartbeat --run R printed 'refreshed 1 claim(s)' (twice, ~minutes apart). About 2.5h later: is-claimed --hashkey 00d1160bf294b1af returned claimed:false holder_run:null while the task was still being worked; release-task for two hashkeys printed 'released 0 task claim(s)'. Reading (a) defect: heartbeat refreshes FILE claims only, not TASK claims, so task claims reach TTL and get reaped while live, and the cross-session guard silently disappears (another /flow could then take the same task). Reading (b) intended: task claims have a separate keep-alive that /flow is expected to call. How to tell: read heartbeat's implementation in crates/condukt/src/claim.rs and whether any command refreshes task claims; then reproduce with a short TTL."
+created_at = 1790130895
+updated_at = 1790130895
+weight = 0.0
+issue_number = 684
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/684"

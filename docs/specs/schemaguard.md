@@ -44,9 +44,11 @@
 - **型不一致は以降のチェックを打ち切る** — `validate_report` はフィールドが必須欠落なら violation を積んで
   continue（optional 欠落なら `waived` を積んで continue）、型不一致なら violation を積んだ後 enum/再帰
   チェックをスキップする（mistyped 値に更なる検査は無意味）。
-- **メトリクスは fail-soft**（`metrics.rs`）— `record_reject` の書き込み IO エラーは stderr へ warning を
-  出すのみでゲートの終了コードを変えない。`counts` はファイル欠落で空 map、malformed 行は黙ってスキップ
-  （`parse_counts`）。パース失敗も違反も両方 reject として計上する（`cmd_check` は前者に `record_reject(name, 1)`、
+- **メトリクスの書き込みは fail-soft、読み出しは fail-closed**（`metrics.rs`）— `record_reject` の書き込み IO
+  エラーは stderr へ warning を出すのみでゲートの終了コードを変えない。`counts` はファイル欠落で `Known(空 map)`、
+  読めない store は `Undetermined`。`parse_counts` は読めない行・malformed 行を `skipped` として数え
+  （空行は無視）、1 行でも skip があれば `counts` は過少カウントを `Known` として出さず `Undetermined` に倒す
+  （`schemaguard metrics` は exit 2・`unknown`。backlog 27926f7e）。パース失敗も違反も両方 reject として計上する（`cmd_check` は前者に `record_reject(name, 1)`、
   後者に `record_reject(name, error_count)`）。
 - **append-only JSONL** — reject は `~/.schemaguard/rejects.jsonl`（`harness_core::config::base_dir("schemaguard")`
   ＝ `~/.schemaguard/`）へ 1 行 1 reject で追記される。`ts`（unix 秒, `SystemTime`）は optional field で、
@@ -68,16 +70,21 @@
   `{valid:false, schema, errors:[{path, problem}], undetermined:[…], not_checked:[…]}` を出し `1`。
   判定不能（宣言された制約を適用できなかった）なら同じ形状を出し `2`。ブロックする 2 アームはいずれも
   `record_reject(name, violations + undetermined 件数)` を呼ぶ。
-  なお現行の 5 スキーマは `items` を宣言するフィールド（`decomposition.tasks`）が `Ty::Array` でもあるため、
-  非配列値は items 判定の手前の型チェックで弾かれる。すなわち **検証由来の `2` は登録済みスキーマ経由では
-  現状到達しない**（`validate_report`/`check_verdict` の単体テストで検証している）。
+  実データ用の 5 スキーマは `items` を宣言するフィールド（`decomposition.tasks`）が `Ty::Array` でもあるため、
+  非配列値は items 判定の手前の型チェックで弾かれ、検証由来の `2` には到達しない。そのため **probe スキーマ
+  `undetermined-probe`** を登録している（backlog d17107ad）。これは実際の producer が存在しない probe で、
+  `name`（`Ty::String` 必須）と `items_any`（`Ty::Any` 必須、`items` に `id: Ty::String` 必須を宣言）を持つ。
+  `Ty::Any` は型チェックを免除するので、非配列の `items_any` は `items` 制約まで届き、適用不能として
+  `undetermined` に入り `2` で終わる。すなわち **検証由来の `2` は `undetermined-probe` 経由でのみ CLI から
+  end-to-end に到達する**（`tests/undetermined_probe.rs` で検証。配列なら `0`、`name` 欠落なら `1`）。
 - **`metrics [--json]`**（`cmd_metrics`）— `metrics::counts` の schema 別 reject 件数を表示。`--json` は
   `serde_json::to_string_pretty` で機械可読出力、無指定は human-readable table（reject 無しなら
   `No rejects recorded yet.`）。常に `0`。
 - **`list`**（`cmd_list`）— `registry::names` の既知スキーマ名を 1 行ずつ表示。常に `0`。
 
-宣言済みスキーマ（`registry::names` の安定順）は **5 つ**: `decomposition` / `episode` / `playbook` /
-`scout-measure` / `verdict`。
+宣言済みスキーマ（`registry::names` の安定順）は **6 つ**: `decomposition` / `episode` / `playbook` /
+`scout-measure` / `undetermined-probe` / `verdict`。うち `undetermined-probe` は実データの producer を持たない
+probe スキーマ（上記 `check` 参照）。
 
 > 実装との差異（flag）: `README.ja.md` / `README.md` / `plugin.json` の description は 4 スキーマ
 > （`decomposition`/`episode`/`playbook`/`scout-measure`）と記述し、`verdict` を列挙していない。
@@ -93,6 +100,7 @@
 - **`playbook`** — 必須 `title`(string)、optional `done_criteria`/`class`。
 - **`scout-measure`** — 必須 `title`/`lens`(enum `L1..L5`)/`severity`(enum `high|medium|low`)/`effort`(enum
   `xs|s|m|l|xl`)/`evidence`。
+- **`undetermined-probe`** — 必須 `name`(string)/`items_any`(any。`items` に必須 `id`(string) を宣言)。probe 専用。
 - **`verdict`** — 必須 `candidate`(string)/`pass`(bool)、optional `group`。
 
 ## module 責務
@@ -101,13 +109,14 @@
   （`cmd_check`/`cmd_metrics`/`cmd_list`）、`exit(code)`。lifecycle hook ではない。
 - **`lib`** — `metrics`/`registry`/`schema` を公開し、他クレートが in-process 検証できるライブラリ面。
 - **`schema`** — 外部依存の無い小さな宣言的スキーマエンジン。`Ty`（`String`/`Number`/`Bool`/`Array`/
-  `Object`/`Any`。後 2 者は `#[allow(dead_code)]` で予約＝現行 registry では未使用）、`Field`
+  `Object`/`Any`。`Object` は `#[allow(dead_code)]` で予約＝現行 registry では未使用、`Any` は
+`undetermined-probe.items_any` が使用）、`Field`
   （`name`/`ty`/`required`/`enum_values`/`items`）、`Schema`、`Violation`（`path`/`problem`, serde 可シリアライズ）、
   `Undetermined`（`path`/`problem`）、`Waived`（`path`/`reason`）、3 値の `Report`
   （`violations`/`undetermined`/`waived` アクセサ・`verdict`・`into_violations`）、
   純関数 `validate_report`（object 検査・必須・型・enum・array 要素の再帰、path prefix 付与）と
   2 値アダプタ `validate`。
-- **`registry`** — 名前付きスキーマの静的レジストリ。`names`（安定順の 5 名）と `get`（未知は `None`）。
+- **`registry`** — 名前付きスキーマの静的レジストリ。`names`（安定順の 6 名）と `get`（未知は `None`）。
   各スキーマの `Field` slice を保持。新スキーマはここに追加する。
 - **`metrics`** — reject 観測。`record_reject`（fail-soft 追記）、`write_reject_line`、`counts`（JSONL 読取り集計）、
   純ヘルパ `parse_counts`（FS 非依存でテスト可能）、`RejectLine`（`schema`/`violations`/optional `ts`）、

@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::hypothesis::{Assumption, Criterion, Evidence, Hypothesis, Risk, Status};
 use crate::lock::StoreLock;
 use anyhow::Result;
+use harness_core::interrogate::ScopeDeclaration;
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -152,6 +153,40 @@ impl Store {
         let mut h = Hypothesis::new(text, goal);
         h.success_criterion = success;
         h.kill_criterion = kill;
+        let id = h.id.clone();
+        self.hypotheses.push(h);
+        self.save()?;
+        Ok(id)
+    }
+
+    /// Record a hypothesis produced by the `draft` flow, with its scope already
+    /// resolved.
+    ///
+    /// Takes a [`ScopeDeclaration`] rather than two `Vec<String>`s on purpose.
+    /// That type has no public constructor, no `Default` and no `From`, so the
+    /// only way to reach this function is to have gone through
+    /// [`ScopeDraft::declare`](harness_core::interrogate::ScopeDraft::declare) and
+    /// received a `Known`. There is therefore no route into the store for a scope
+    /// that was never asked about or was answered "nothing" — not because this
+    /// function checks for one, but because such a value cannot be built. A
+    /// future edit cannot reintroduce the hole by forgetting a check.
+    ///
+    /// The declared paths are stored verbatim (`declare` normalizes nothing), so
+    /// the record says what the caller declared rather than what the store
+    /// preferred.
+    pub fn add_draft(
+        &mut self,
+        text: String,
+        goal: Option<String>,
+        success: Option<Criterion>,
+        kill: Option<Criterion>,
+        scope: &ScopeDeclaration,
+    ) -> Result<String> {
+        let mut h = Hypothesis::draft(text, goal);
+        h.success_criterion = success;
+        h.kill_criterion = kill;
+        h.scope_write_paths = Some(scope.write_paths().to_vec());
+        h.scope_read_paths = Some(scope.read_paths().to_vec());
         let id = h.id.clone();
         self.hypotheses.push(h);
         self.save()?;

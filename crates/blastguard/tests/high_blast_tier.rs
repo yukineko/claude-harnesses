@@ -141,6 +141,16 @@ fn git_force_refspec_ask_hardens_to_deny_when_no_human_is_present() {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            // Test isolation for the repeat ledger (2026-09-18). A second identical
+            // refusal in one session downgrades to an `Ask`, and the ledger is keyed
+            // on `CLAUDE_CODE_SESSION_ID` under `$HOME` — which these tests inherit
+            // from whoever ran `cargo test`. Without this, markers written by one
+            // `cargo test` run survive into the NEXT one and every expected `deny`
+            // becomes an `ask` on the second run: a genuinely non-deterministic
+            // suite. An unattributable run resolves to `Undetermined` = no
+            // downgrade, which is the condition these tests mean to measure.
+            // `repeat_downgrade.rs` sets the variable explicitly instead.
+            .env_remove("CLAUDE_CODE_SESSION_ID")
             .spawn()
             .expect("binary spawns");
         if let Some(mut stdin) = child.stdin.take() {
@@ -177,6 +187,7 @@ fn git_force_refspec_ask_stays_ask_in_an_interactive_cli_session() {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .env_remove("CLAUDE_CODE_SESSION_ID")
         .spawn()
         .expect("binary spawns");
     if let Some(mut stdin) = child.stdin.take() {
@@ -289,6 +300,7 @@ fn ask_hardens_to_deny_when_no_human_is_present() {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            .env_remove("CLAUDE_CODE_SESSION_ID")
             .spawn()
             .expect("binary spawns");
         if let Some(mut stdin) = child.stdin.take() {
@@ -325,6 +337,7 @@ fn ask_stays_ask_in_an_interactive_cli_session() {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .env_remove("CLAUDE_CODE_SESSION_ID")
         .spawn()
         .expect("binary spawns");
     if let Some(mut stdin) = child.stdin.take() {

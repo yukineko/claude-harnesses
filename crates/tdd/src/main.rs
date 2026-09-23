@@ -293,7 +293,8 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         eprintln!("\n{reason}");
         std::process::exit(1);
     }
-    println!("{}", json!({ "decision": "block", "reason": reason }));
+    // Repeat ledger: operator ruling 2026-09-18.
+    harness_core::repeat::emit_stop_block("tdd", &reason);
     std::process::exit(0);
 }
 

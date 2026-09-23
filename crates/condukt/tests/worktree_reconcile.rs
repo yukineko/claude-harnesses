@@ -40,6 +40,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use harness_core::progress;
+
 fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_condukt")
 }
@@ -253,9 +255,23 @@ impl Fixture {
     }
 
     fn reconcile_json_in(&self, dir: &Path, extra: &[&str]) -> serde_json::Value {
+        self.reconcile_json_env_in(dir, extra, &[])
+    }
+
+    /// `reconcile --json` from the repo root with extra environment variables.
+    fn reconcile_json_env(&self, extra: &[&str], env: &[(&str, &str)]) -> serde_json::Value {
+        self.reconcile_json_env_in(&self.repo, extra, env)
+    }
+
+    fn reconcile_json_env_in(
+        &self,
+        dir: &Path,
+        extra: &[&str],
+        env: &[(&str, &str)],
+    ) -> serde_json::Value {
         let mut args = vec!["worktree", "reconcile", "--json"];
         args.extend_from_slice(extra);
-        let out = self.condukt_in(dir, &args);
+        let out = self.condukt_env_in(dir, &args, env);
         assert!(
             out.status.success(),
             "`condukt worktree reconcile --json` failed (exit {:?}):\nstdout:\n{}\nstderr:\n{}",
@@ -1194,6 +1210,109 @@ fn corrupt_run_state_makes_occupancy_undetermined() {
         !removable(&report, "wt-corrupt"),
         "undetermined occupancy must not be removable; entry: {e}"
     );
+}
+
+// ── 3b. "No claim" is not proof of death ───────────────────────────────────
+//
+// A worktree condukt did not create — `/flow`'s `.harness-worktrees/session-*`
+// trees, or anything a human made with `git worktree add` — never writes a
+// condukt claim. Concluding `Dead` from "a fully readable scan found no claim"
+// therefore answers a question about *condukt's own bookkeeping* ("did I make
+// this?") as if it were the question that authorizes deletion ("is anyone
+// working here?"). Measured 2026-08-26 against the shipping binary: the live
+// session worktree this repository was being worked in reported
+// `occupancy: dead` and `removable: true` while a session was editing it.
+//
+// The ruling these four tests pin:
+//
+//   * an absent claim carries NO INFORMATION about the directory, so the run
+//     state resolves to `undetermined`, never to `dead`;
+//   * the worktree's own activity and the session transcript are the
+//     independent witnesses that can speak instead;
+//   * `Dead` requires the CONJUNCTION of (activity stalled) ∧ (the progress
+//     window elapsed) ∧ (the transcript consulted and showing no life).
+//
+// The third conjunct is the one that decays quietly: "could not consult the
+// transcript" (no derivable session id, unreadable store, `$HOME` unset) is
+// NOT "consulted and found nothing". Reading it as such collapses the
+// conjunction back to two terms and restores the same fail-open in a new
+// shape, which is why it gets a test of its own below.
+//
+// Anti-vacuity for this whole section lives in §3(a): some arrangement must
+// still reach `dead`/`removable: true`, or an implementation that decides
+// nothing would satisfy every assertion here.
+
+/// The fail-closed edge of the third conjunct: the activity witness HAS spoken
+/// and said "stalled", the window HAS elapsed — and the transcript witness
+/// could not be consulted at all. That is "I do not know whether a session is
+/// alive here", not "no session is alive here", and it must not resolve to
+/// `dead`.
+///
+/// Both unconsultable shapes are covered in one run, because both are the same
+/// answer:
+///
+/// * `session-1f2e3d4c` has the name `/flow` gives its worktrees, so a session
+///   id IS derivable — this entry cannot be waved away as "undetermined merely
+///   because there was no id to look up". The transcript store is absent, so
+///   the lookup itself is what fails.
+/// * `wt-anonymous` carries no session id at all: the id cannot be derived,
+///   which is equally "could not consult".
+///
+/// The first two conjuncts are made genuinely true rather than assumed: the
+/// progress window is collapsed to 0 through the engine's own `WINDOW_ENV`
+/// override and two probes are taken with no work in between, so the
+/// fingerprint is frozen across a window that has really elapsed. Everything
+/// standing between these entries and `dead` is therefore the transcript
+/// witness alone.
+#[test]
+fn stalled_unclaimed_worktree_with_unconsultable_transcript_is_undetermined() {
+    let f = Fixture::new("unclaimed-transcript");
+    let _named = f.add_worktree("session-1f2e3d4c", "feat/sess");
+    let _anon = f.add_worktree("wt-anonymous", "feat/anon");
+
+    // The fixture deliberately CREATES the transcript store (so the section's
+    // anti-vacuity control `dead_clean_worktree_is_removable` can reach `dead`
+    // at all). Remove it here, so the precondition is MADE true rather than
+    // asserted and hoped for.
+    std::fs::remove_dir_all(f.home.join(".claude")).unwrap();
+    assert!(
+        !f.home.join(".claude").join("projects").exists(),
+        "precondition: the transcript store must be ABSENT, so the transcript \
+         witness is unreadable rather than merely empty"
+    );
+
+    let env = [(progress::WINDOW_ENV, "0")];
+    // Probe 1 anchors the frozen fingerprint; probe 2 sees it unchanged across
+    // a window that has (trivially, but really) elapsed.
+    let _ = f.reconcile_json_env(&[], &env);
+    let report = f.reconcile_json_env(&[], &env);
+
+    for name in ["session-1f2e3d4c", "wt-anonymous"] {
+        let e = entry(&report, name);
+        assert_eq!(
+            e["occupancy"]["value"], "undetermined",
+            "a stalled, unclaimed worktree whose transcript witness could not be \
+             CONSULTED is undetermined; treating 'could not look' as 'looked and \
+             found nothing' turns the three-term conjunction back into two and \
+             re-opens the same hole; entry: {e}"
+        );
+        // Load-bearing, exactly as in
+        // `unclaimed_worktree_is_undetermined_when_the_transcript_store_is_unreadable`:
+        // without pinning the CAUSE this would pass on "first progress
+        // observation" if the two probes above ever stopped settling, and would
+        // then say nothing about the third term.
+        let reason = e["occupancy"]["reason"].as_str().unwrap_or_default();
+        assert!(
+            reason.contains("transcript store") && reason.contains("unreadable"),
+            "the cause must be the unreadable transcript store, not a missing \
+             session id: {name} carries a derivable id and must still land here \
+             for THIS reason; reason: {reason}"
+        );
+        assert!(
+            !removable(&report, name),
+            "undetermined occupancy must not authorize deletion; entry: {e}"
+        );
+    }
 }
 
 // ── 4. The primary (main) working tree is never removable ──────────────────

@@ -918,6 +918,34 @@ pub fn merge(
     // retryable.
     let _repo_lock = lock::acquire_repo_primary(cfg, repo)?;
 
+    // ── Branch must resolve (backlog f14c18be) ───────────────────────────────
+    // An unresolvable ref is cannot-determine, not a conflict: the trial merge
+    // below fails for it too, and used to be recorded as a 0-file
+    // merge-conflict held for review with `Ok` (exit 0), which callers read as
+    // handled. Refuse before any checkout or review-surface write. A timed-out
+    // or unspawnable `rev-parse` is also refused (restrictive side).
+    let (resolves, _, rev_err) = git_try(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("{branch}^{{commit}}"),
+        ],
+    )?;
+    if !resolves {
+        bail!(
+            "branch not found: '{branch}' does not resolve to a commit in {}; \
+             refusing to merge (nothing recorded as a conflict){}",
+            repo.display(),
+            if rev_err.trim().is_empty() {
+                String::new()
+            } else {
+                format!(": {}", rev_err.trim())
+            }
+        );
+    }
+
     // ── Pre-merge hold gate (decision A) ─────────────────────────────────────
     // A detected mid-flight actual-diff overlap HOLDS this branch for review.
     // Do not merge until it is resolved (the resolution clears the hold).
@@ -1253,6 +1281,71 @@ mod worktree_remove_tests {
 
         // The file should now exist on main
         assert!(repo.join("feat.txt").exists());
+    }
+
+    /// backlog f14c18be: a branch name that does not resolve is cannot-determine,
+    /// not a conflict. It must be a hard error naming the missing branch, and it
+    /// must NOT pollute the merge-conflict review surface with a 0-file entry.
+    #[test]
+    fn worktree_merge_nonexistent_branch_errors_and_records_no_conflict() {
+        let (tmp, repo) = init_repo();
+        let cfg = test_cfg(&repo);
+        let home = tmp.path().join("home-missing-branch");
+        fs::create_dir_all(&home).unwrap();
+        let (result, open) = with_home(&home, || {
+            let result = merge(&cfg, &repo, "condukt/no-such-run/no-such-task", "main");
+            let open = overwatch::store::open_merge_conflicts(&repo)
+                .expect("the review surface must be readable in the sandbox");
+            (result, open)
+        });
+        let err = match result {
+            Err(e) => format!("{e:#}"),
+            Ok(outcome) => panic!("an unresolvable branch must be Err, got Ok({outcome:?})"),
+        };
+        assert!(
+            err.contains("branch not found") && err.contains("condukt/no-such-run/no-such-task"),
+            "the error must say the branch was not found and name it, got: {err}"
+        );
+        assert!(
+            open.is_empty(),
+            "no merge-conflict entry may be recorded for a missing branch, got {open:?}"
+        );
+    }
+
+    /// backlog f14c18be, independent verification: an EMPTY branch string is a
+    /// distinct unresolvable-ref shape from a syntactically valid-looking but
+    /// missing branch name (the author's own test above uses
+    /// "condukt/no-such-run/no-such-task"). `format!("{branch}^{{commit}}")`
+    /// with `branch == ""` becomes the git revision `^{commit}`, which must
+    /// still fail `rev-parse --verify --quiet` and be refused BEFORE any
+    /// checkout or review-surface write — not fall through to the trial merge
+    /// (which also fails for `""`, but via a different git error path, and
+    /// pre-fix that recorded a 0-file merge-conflict entry and returned
+    /// `Ok(Conflict(..))`).
+    #[test]
+    fn worktree_merge_empty_branch_errors_and_records_no_conflict() {
+        let (tmp, repo) = init_repo();
+        let cfg = test_cfg(&repo);
+        let home = tmp.path().join("home-empty-branch");
+        fs::create_dir_all(&home).unwrap();
+        let (result, open) = with_home(&home, || {
+            let result = merge(&cfg, &repo, "", "main");
+            let open = overwatch::store::open_merge_conflicts(&repo)
+                .expect("the review surface must be readable in the sandbox");
+            (result, open)
+        });
+        let err = match result {
+            Err(e) => format!("{e:#}"),
+            Ok(outcome) => panic!("an empty branch name must be Err, got Ok({outcome:?})"),
+        };
+        assert!(
+            err.contains("branch not found"),
+            "the error must say the branch was not found, got: {err}"
+        );
+        assert!(
+            open.is_empty(),
+            "no merge-conflict entry may be recorded for an empty branch name, got {open:?}"
+        );
     }
 
     /// A real 3-way conflict is NO LONGER a hard error (design 625aa170): the

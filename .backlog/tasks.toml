@@ -6725,7 +6725,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "done"
 notes = """
 e19d501a の作業中に cargo test --workspace を4回回したうち1回で失敗 (2035 passed / 1 failed)。他3回と、隔離/直列での11回連続実行では pass。失敗させた変更は backlog/autoflow/daily/flow のみで condukt はそれらに依存しないため、condukt のテストバイナリは差分の有無で同一。したがって原因は変更ではなくマシン負荷への感度である。完了条件: 負荷を掛けた状態で決定論的に再現させ、テストが実時間のタイミングに依存しているのか lock 実装側にレースがあるのかを事実として切り分けること。落ちるのを見なかったことにしない。テストを緩める・retry でごまかすのは不可。
 
@@ -6735,7 +6735,7 @@ e19d501a の作業中に cargo test --workspace を4回回したうち1回で失
 pending へ戻した。本チケットの内容自体は未着手のままで、失敗ではない。
 経緯と、回収した RED スイートの詳細は 2c1e54b3 にある。"""
 created_at = 1784755092
-updated_at = 1789471806
+updated_at = 1790131160
 weight = 0.0
 issue_number = 323
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/323"
@@ -6773,7 +6773,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "done"
 notes = """
 実測 (2026-07-24): 他ジョブで CPU 飽和中に cargo test --workspace を3回回すと 3/3 で compass::tests::compass_invocation_faster_than_timeout_still_returns_output が落ちた (exit 101)。無負荷の CI (ubuntu/macos) では同テストは ok。これは compass 呼び出しが timeout 前に返ることを assert する速度依存テストで、マシン負荷でプロセス起動が遅れると閾値を超えて落ちる。condukt の repo_primary_lock_serializes_concurrent_rmw_no_lost_update (35d61d23) と同じ負荷依存クラス (こちらは isolated 30/30 pass で再現せず)。判定がマシン速度に依存する検査は非決定論ゲートで、緑/赤が環境で変わる。完了条件: これら timeout/並行テストの閾値を負荷耐性のある形にするか、負荷下でも決定論になるよう設計し直し、負荷を掛けた状態で決定的に緑を観測する。
 
@@ -6783,7 +6783,7 @@ notes = """
 pending へ戻した。本チケットの内容自体は未着手のままで、失敗ではない。
 経緯と、回収した RED スイートの詳細は 2c1e54b3 にある。"""
 created_at = 1784832249
-updated_at = 1789471806
+updated_at = 1790129621
 weight = 0.0
 issue_number = 324
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/324"
@@ -7895,10 +7895,10 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "done"
 notes = "DoD9 schemaguard 監査で確認。metrics.rs:91-94 の _ => continue が lines() の Err を握り潰し、metrics.rs:95 の if let Ok(entry) が parse 失敗を握り潰す。truncate/破損した store は過少カウントを返すが、下流には正常な集計と区別できない形で渡る。さらに metrics.rs:130-138 の test parse_counts_skips_malformed_lines がこの挙動を正しいものとして固定しており、CLAUDE.md 第2節が checks_verdict(空スライス) 事例で名指しした 検証していないテストの assert が仕様として固定される パターンそのもの。修正方針: 読めた行数 / 捨てた行数を三値で返し、捨てた行があれば Undetermined 側へ倒す。テスト側も skipped 件数を assert する形へ書き換える (test-weakening ack が要る可能性あり)。"
 created_at = 1785008231
-updated_at = 1785008231
+updated_at = 1790130864
 weight = 0.0
 issue_number = 68
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/68"
@@ -8136,10 +8136,10 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "done"
 notes = "実測 2026-07-28 (run-20260728-015338-90001)。condukt worktree merge --branch condukt/RID/RID/topic のように解決できない branch 名を渡すと、overwatch review-queue に '[merge-conflict] merge of ... into main held: 0 file(s) [(unknown files)]' を記録し、コマンド自体は exit 0 を返した。branch が存在しないのは判定不能 (cannot determine) であって conflict ではない。0 file の conflict は意味を成さず、exit 0 は呼び出し側に成功と読まれる (実際 git log を見るまで merge されていないことに気づけなかった)。CLAUDE.md 第3節の 'IO 失敗・パース不能・空集合は clean ではない。必ず block か ask に解決する' に該当。期待挙動: 解決できない branch ref は非0終了で 'branch not found' として報告し、conflict ledger を汚さない。再現: RID=... ; condukt worktree merge --branch condukt/$RID/$RID/topic"
 created_at = 1785173992
-updated_at = 1785173992
+updated_at = 1790130863
 weight = 0.0
 issue_number = 81
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/81"
@@ -8154,10 +8154,10 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "done"
 notes = "実測 2026-07-28 (commit 1601b835, schemaguard 0.1.9)。validate を三値化 (Report: violations / undetermined / waived) し check_verdict が Clean=0 / Violation=1 / Undetermined=2 に写すようにしたが、Undetermined を実際に生む唯一の経路 (宣言された items 制約が適用できない) は登録済み5スキーマでは踏めない。items を宣言する唯一のフィールド decomposition.tasks が同時に Ty::Array も宣言しているため、非配列値は items に到達する前に型チェックで弾かれる (verifier が registry.rs の全5スキーマを読んで反例なしを確認済み)。したがって exit 2 は check_verdict のマッピング単体テスト (undetermined_check_exits_two_not_zero) でしか証明されておらず、CLI 経由の end-to-end 証跡が無い。これは worker が隠さず disclosure し docstring と docs/specs/schemaguard.md に明記した既知の限界であって隠蔽ではないが、残課題ではある。次の一手の候補: (a) items を宣言しつつ Ty::Any を許すスキーマを1つ登録して到達可能にする、(b) 判定不能を生む別の経路 (未知の Ty、壊れた schema 定義) を Undetermined へ配線する、(c) 到達不能なら第3値を持つ意味が薄いと判断して設計を見直す。まず (a) か (b) の可否を測ること"
 created_at = 1785174008
-updated_at = 1785174008
+updated_at = 1790138019
 weight = 0.0
 issue_number = 82
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/82"
@@ -26613,9 +26613,19 @@ notes = """
 
 見分ける方法: scripts/rollout-plugins.sh:469 は "$src/bin/$stem" の存在で deployed bin を protect / drop する分岐を持つ。この stray artifact を削除（または --stage-repo で更新）したうえで check-plugin-rollout.py を再実行し、(i) red が消えるなら (b)、(ii) 別の理由で red が残る / 他 plugin にも同種の red が出るなら (a)。
 
-注意: この stray artifact は 2026-09-13 の tdd 0.1.29 version dir 手動 seed（memory rollout-cannot-undark-running-session に記録）と時刻が近い。手 cp の副産物である可能性が高いが未確認。"""
+注意: この stray artifact は 2026-09-13 の tdd 0.1.29 version dir 手動 seed（memory rollout-cannot-undark-running-session に記録）と時刻が近い。手 cp の副産物である可能性が高いが未確認。
+
+【再測定 2026-09-23、測定点 5a2efb46】チェックが収束しないことを実測で確認した。
+`scripts/rollout-plugins.sh --plugin tdd --force` を実行しても
+  tdd: deployed tree is not a mirror of crates/tdd — 1 deployed file(s) differ from source: bin/tdd-darwin-arm64
+は消えなかった。内訳:
+  crates/tdd/bin/tdd-darwin-arm64 は git 管理外 (`git ls-files --error-unmatch` が did not match で失敗)。1852304 bytes、Sep 13 14:49。
+  deployed 0.1.34/bin/tdd-darwin-arm64 は 1868832 bytes、Sep 23 13:47。
+  deployed の .deployed-from.json は commit=5a2efb46 dirty=false harness_core=0.2.27 で正しい。
+
+したがって向きが逆である: deployed 側が新しく正しく、repo 側の未追跡ローカル 成果物が 10 日古い。チェックは『正しい配備』を『古いローカル残骸』と byte 比較して 配備の側を誤りと報告している。Rust のビルドは byte 再現しないので (memory: deploy-provenance-not-hash)、この比較は原理的に収束しない。"""
 created_at = 1789306755
-updated_at = 1789306755
+updated_at = 1790138918
 weight = 0.0
 issue_number = 636
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/636"
@@ -28156,6 +28166,454 @@ issue_number = 676
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/676"
 
 [[task]]
+id = "c9373b92"
+title = "rollout-plugins.sh --plugin runs skip the verification that would catch a dark deploy"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "scripts/rollout-plugins.sh:1106-1113 returns 0 early for any filtered run: 'verify: skipped — this run was filtered to: ...'. check-plugin-rollout.py DOES detect 'installed but execs nothing' (check-plugin-rollout.py:1147-1153, ROLLOUT-class fatal at rollout-plugins.sh:1120-1125), but the single most common invocation shape — scripts/rollout-plugins.sh --plugin <name> — never runs it. So the one path an operator uses to roll out one plugin has ZERO post-hoc check that the host binary actually landed. The stated reason (a whole-fleet verdict would fail for plugins this run never touched) argues for a SCOPED verification of the targeted plugins, not for skipping verification entirely. Found while closing 8206b09f."
+created_at = 1789118611
+updated_at = 1789118611
+weight = 0.0
+issue_number = 537
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/537"
+
+[[task]]
+id = "ba5794b3"
+title = "canary rollout halt leaves already-passed stages deployed with no host binary"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "In the --canary path, the per-stage registry pointer is written inside the stage loop (scripts/rollout-plugins.sh:940 registry_patch), but run_rebuild_and_sync — the only thing that seeds host binaries — is at :1066, AFTER the loop. A gate verdict halting the run (exit 5 at :1037 'gate could not evaluate', exit 4 at :1044 'rollback advised') therefore leaves every stage 0..N-1 that already PASSED holding a fresh version dir and a live registry pointer with launcher-only bin/, and execute_stage_rollback (:797-849) restores only the stage just applied. Result: those plugins are installed, version-consistent, and exec nothing — dark, not red. Same class already measured once as backlog 51e6ebc7 (a --force --canary rollout blanked blastguard/overwatch/specguard). Found while closing 8206b09f."
+created_at = 1789118621
+updated_at = 1789118621
+weight = 0.0
+issue_number = 538
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/538"
+
+[[task]]
+id = "a0525604"
+title = "rebuild-plugins.sh masks cargo metadata failure and can no-op the whole run at rc 0"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """scripts/rebuild-plugins.sh:81-82: TARGET_DIR="$(cargo metadata --no-deps --format-version=1 | sed -n '...')" — the pipeline's exit status is sed's, which is always 0, so a failed or empty cargo metadata silently yields an empty TARGET_DIR and REL falls back to $REPO/target/release. Measured on this machine: .cargo/config.toml sets target-dir=/tmp/condukt-build, so $REPO/target/release does not exist at all; under that fallback [ -x "$src" ] is false for EVERY plugin, the main loop takes its 'missing' branch (:282-284) and the seed pass takes its silent continue (:379), and the script still exits 0 at :401 with a green summary. $REPO is $(dirname $0)/.. i.e. the worktree, which makes the fallback wrong more often, not less. CLAUDE.md §3: the exit status must be part of the verdict. Found while closing 8206b09f."""
+created_at = 1789118631
+updated_at = 1789118631
+weight = 0.0
+issue_number = 539
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/539"
+
+[[task]]
+id = "f4c91e60"
+title = "rebuild-seeds-every-launcher.sh is red on this machine: hardcodes $REPO/target/release"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """scripts/tests/rebuild-seeds-every-launcher.sh:53 and :58 test [ -x "$REPO/target/release/$l" ], but .cargo/config.toml sets target-dir=/tmp/condukt-build. Observed verbatim: 'FAIL: target/release/specguard still missing after build' (rc=1) while /tmp/condukt-build/release/specguard exists and is executable. The test should resolve the target dir the same way the script under test does (cargo metadata, rebuild-plugins.sh:81-82) instead of assuming the default. Compounding: rebuild-plugins.sh:231-234 records that scripts/tests/*.sh are wired into NO hook and must be run by hand, so the regression pins guarding the seed pass — the only path that populates a fresh version dir — are both manual-only AND currently red. Found while closing 8206b09f."""
+created_at = 1789118640
+updated_at = 1789118640
+weight = 0.0
+issue_number = 540
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/540"
+
+[[task]]
+id = "687275de"
+title = "autoUpdate:true directory marketplace can create a launcher-only version dir with no repo script involved"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "~/.claude/plugins/known_marketplaces.json has yukineko as source=directory with autoUpdate:true. scripts/rollout-plugins.sh:8-16 documents that Claude Code's own /plugin update for such a marketplace does exactly two things: plain-copy crates/<name>/ into a fresh cache/<name>/<version>/, and repoint installed_plugins.json. Neither builds nor copies a host binary, and .gitignore:45-48 ignores crates/*/bin/*-{darwin,linux}-*, so the tree copy yields exactly bin/<name> (the tracked launcher) and nothing else — the observed dark state, reachable with NO repo script in the loop and therefore not closable by hardening rebuild-plugins.sh. Options: disable autoUpdate for this marketplace, or add a SessionStart check that the registry-pointed dir holds a usable host binary. Found while closing 8206b09f."
+created_at = 1789118651
+updated_at = 1789118651
+weight = 0.0
+issue_number = 541
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/541"
+
+[[task]]
+id = "f96404f5"
+title = "rebuild-plugins.sh launcher detection omits bare windows suffixes the other two tools include"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "scripts/rebuild-plugins.sh:373 excludes *-darwin-arm64|*-darwin-x86_64|*-linux-x86_64|*-linux-arm64|*-windows-x86_64.exe|*-windows-arm64.exe when deciding 'is this bin/ entry a launcher', omitting the BARE *-windows-x86_64 / *-windows-arm64 that scripts/rollout-plugins.sh:432-435 (plat_suffixes) and scripts/check-plugin-rollout.py PLATFORM_SUFFIXES both carry. .gitignore:45-48 ignores only darwin/linux, so a committed crates/<n>/bin/<n>-windows-x86_64 WOULD be tracked, copied into every fresh version dir, and then misread by the seed loop as a launcher — seeding <n>-windows-x86_64-<hostsuffix>. Three copies of one suffix table with no machine cross-check between them. Found while closing 8206b09f."
+created_at = 1789118661
+updated_at = 1789118661
+weight = 0.0
+issue_number = 542
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/542"
+
+[[task]]
+id = "8e2627fc"
+title = "blastguard GATE crate is disabled in settings.json — installed but inert"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "scripts/check-plugin-rollout.py exits 2 (ENABLEMENT class) on this machine, verbatim: 'blastguard: GATE crate is not enabled — disabled (set to false) in /home/hiroyuki_nakayama/.claude/settings.json. It is installed but inert: none of its hooks fire, so the gate silently guards nothing.' Per that script's own docstring a disabled GATE crate is a hard failure with no legitimate reason to run this repo with one off. It is not declared in scripts/parked-plugins.json (only parallelguard is), so this is an undeclared red — and CLAUDE.md warns against BOTH ignoring it and force-enabling it to clear it (2026-08-04, taintguard). Needs a human ruling: either re-enable, or declare the park with a reason. Unrelated to the rollout dimension, which is clean (40 plugins, no drift). Found while closing 8206b09f."
+created_at = 1789345110
+updated_at = 1789345110
+weight = 0.0
+issue_number = 643
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/643"
+
+[[task]]
+id = "03e004ec"
+title = "post-merge: 既存 merge commit への fast-forward を bypass として誤記録し push をブロックする"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "実測 2026-09-18。worktree (session-47b2f117) で origin/main を merge し、pre-commit が green (rc=0) で通って merge commit d067c116 を作成。その後 main で `git merge --ff-only session-47b2f117` を実行したところ、post-merge が発火し ledger (.git/gate-bypassed) に d067c116 を「ungated」として記録、`git push` がブロックされた。原因: .githooks/post-merge:23-24 のガードが `git rev-parse HEAD^@` の親数だけを見ており、ff 後の HEAD は「既に他所で作られ certified 済みの merge commit」なのに親 2 を満たすため post-commit へ exec してしまう。ヘッダのコメント (:17-19)「A fast-forward merge creates no commit, so there is nothing to certify and the absent sentinel must not be read as a bypass」は ff 先が非 merge commit の場合しか成立していない。さらに証跡 sentinel は per-worktree (pre-commit:340-342 GIT_DIR_LOCAL/gate-verified-tree) で ledger は common (pre-commit:348 GIT_DIR_COMMON/gate-bypassed) なので、worktree で書かれた certificate は main の post-commit から原理的に参照できない。CLAUDE.md 8 が命じる「worktree で実装 → main へ merge」の正規ルートを通ると必ず踏む。fail-closed 側の誤検知なので安全側ではあるが、正規ルートが常に赤くなる。修正案: post-merge で「HEAD が merge 前の ORIG_HEAD の子として *この実行で* 作られたか」を判定する、または sentinel を GIT_DIR_COMMON 側に置いて worktree 間で参照可能にする。"
+created_at = 1789702606
+updated_at = 1789702606
+weight = 0.0
+issue_number = 665
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/665"
+
+[[task]]
+id = "fc6b48d2"
+title = "rollout-plugins.sh --canary が overwatch 自身のバイナリ欠落でブートストラップ不能 (鶏と卵)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "実測 2026-09-18 linux-x86_64。稼働 cache の host binary が全 41 plugin で欠落した状態から `scripts/rollout-plugins.sh --canary --dry-run` を実行すると、canary 健全性ゲートが overwatch を使うため即座に `overwatch: no bundled binary for linux-x86_64 (.../overwatch/0.2.35/bin/overwatch-linux-x86_64)` で rc=1 終了する。GATE クレートは canary 必須 (docs/repo-operations.md) なので、overwatch のバイナリを配るには canary が要り、canary を回すには overwatch のバイナリが要る、という循環になる。今回は `scripts/rebuild-plugins.sh --no-clean` を先に手で回して cache へ seed することで抜けたが、この回避手順はどこにも書かれていない。Stop hook / SessionStart hook が出すメッセージは `scripts/build-plugin-bin.sh` を案内するが、これは crates/<name>/bin/ へ stage するだけで稼働 cache には配らないため、案内どおりに実行しても hook は復旧しない (案内が実挙動と食い違っている = CLAUDE.md 4)。修正案: (a) canary ゲートが overwatch を実行できないときの bootstrap 経路を rollout-plugins.sh に持たせる、(b) hook のメッセージを rebuild-plugins.sh へ直す、の両方。"
+created_at = 1789702622
+updated_at = 1789702622
+weight = 0.0
+issue_number = 666
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/666"
+
+[[task]]
+id = "cffd9787"
+title = "tdd gate.rs: 第1 arm「test-glob ファイルへの追加行はすべて evidence」の是非が未決着 (1ff0fcc9 のスコープ外残件)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+起票元: 1ff0fcc9 の本文末尾「Also note the first arm: any added line in a test-glob file, including a blank-adjacent comment line, is evidence. That may be intentional but it is unstated.」および 2026-09-13 outcome の「起票文末尾が指摘していた第 1 arm はスコープ外として手を付けていない。別途起票する。」— その別途起票が実際には行われていなかったため、ここで起こす (実測 2026-09-18、測定点 e8f4cba7)。
+
+現状の逐語 (crates/tdd/src/gate.rs:173-176):
+        if is_test_file(file) {
+            test_marker_added = true; // any added line in a test file is evidence
+            continue;
+        }
+marker_hit を一切見ずに、test_path_globs に一致する path への *任意の* 追加行 (空行に隣接するコメント行・import 行・改行のみの変更を含む) が has_test_evidence を立て、Verdict::Clean 経由で Stop hook を allow する。marker arm の方は 1ff0fcc9 で is_impl_file ガードが入り narrow 済み (f667897d) なので、現在この 1 本だけが「regex を一切見ない evidence 経路」として残っている。
+
+読みは 2 つあり、どちらかは観測では決まらない (人間の決定が要る):
+ (a) 実在の欠陥 — 「テストを追加した」の証拠として test ファイルへの任意の 1 行は弱すぎる。marker 一致行のみを evidence にすべき (marker arm と同じ narrow を適用)。
+ (b) 意図的な仕様 — test ファイルを触ったこと自体が人間の意思表示として十分であり、意図的に緩くしてある。
+
+見分け方: crates/tdd/README.md と docs/specs/tdd.md の test evidence 契約の記述を読む。ただし docs/specs/tdd.md:1 は自ら REVIEW-NEEDED を宣言しており正典として確定していない (1ff0fcc9 の specforge divert が rigor 未達で refuse された理由がこれ)。したがって本件は 1ff0fcc9 の「Ask する質問4件」の 4 番と同じ決定待ちであり、正典の確定が先行する。
+
+narrow する場合は marker arm と同じく「ブロックが増える方向」なので安全側。ただし CLAUDE.md 2(b) に従い、利害のない agent の RED を先に観測すること。"""
+created_at = 1789703621
+updated_at = 1789703621
+weight = 0.0
+issue_number = 667
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/667"
+
+[[task]]
+id = "e0269780"
+title = "tdd 1ff0fcc9 の修正は実装者自身がテストを書いており CLAUDE.md 2(a) 未充足 — 利害のない agent による独立検証が要る"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+起票元: 1ff0fcc9 の 2026-09-13 outcome が自ら「未了として明示すること: CLAUDE.md 2(a) 未充足。起票文は disinterested agent による RED テストを要求していたが、fork は subagent を起動できず実装者とテスト作成者が同一だった。独立検証が別途必要。」と書いている残件。
+
+実測 2026-09-18、測定点 e8f4cba7 (cargo test -p tdd):
+  gate::tests::marker_in_a_non_impl_non_test_file_is_not_evidence ... ok
+  gate::tests::marker_in_a_manifest_is_not_evidence ... ok
+  gate::tests::marker_in_an_impl_file_is_evidence_control ... ok
+  test result: ok. 77 passed; 0 failed (他スイート 4/8/5/2/3 もすべて green)
+実装 (crates/tdd/src/gate.rs:185 の `if marker_hit && is_impl_file(file)`) も逐語で存在を確認済み。
+
+したがって「テストが通っている」ことは事実として確定しているが、CLAUDE.md 2(a) が要求する条件 —「実装した本人は自分の実装を検証するテストを自分で書かない」— は満たされていない。2(a) はまさに「生成と検証が盲点を共有すると、検証は儀式になる」ことを防ぐための条件なので、green であること自体はこの欠落を埋めない。
+
+やること: condukt-verifier / 独立 subagent / continuous-audit の finder≠verifier のいずれかで、別の agent (できれば別モデル) に以下を検証させる。
+ 1. 追加された 3 テストが、is_impl_file ガードを外した状態で実際に落ちるか (fault injection で RED を再観測する。2(b))。
+ 2. ガードの narrow によって従来 allow されていた正当なケースが block に転じていないか (偽陽性の確認)。
+ 3. marker set (crates/tdd/src/config.rs:190-198) に対して、impl_globs にも test_path_globs にも属さない path が evidence にならないことが網羅されているか。
+
+本件は 1ff0fcc9 の再実装ではない (実装は landed 済み)。独立検証のみがスコープ。関連: cffd9787 (第1 arm の未決着)。"""
+created_at = 1789703640
+updated_at = 1789703640
+weight = 0.0
+issue_number = 668
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/668"
+
+[[task]]
+id = "126d038a"
+title = "condukt schedule が done_criteria の散文中の > を shell redirect と誤読し、純粋なコード修正タスクを force-gate する"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "測定日 2026-09-18、測定点 main 5553217c、condukt 0.7.168。crates/condukt/src/schedule.rs:478 の resolve_force_gate(classify_change(&task_action_text(t), ...)) は task_action_text (title + done_criteria + touched_files を連結した自由文) を blastguard の shell コマンド分類器に渡す。実測(決定論・再現可能、probe は condukt schedule --file <1タスクの decomposition>): done_criteria='> foo' -> GATED / '>foo' -> GATED / '>= built_at' -> GATED / 'm > built_at' -> GATED / 'm >= built_at' -> GATED。対照: 'm < built_at' -> not gated / 'Determination<i64>' -> not gated / 'built_at' -> not gated / 'fresh' -> not gated。したがって trigger は文字 '>' 単体であり、< は引かない(プローブに識別力があることの control 済み)。実害: backlog e073bdb1 の実装タスク(overwatch cache_is_fresh が ledger mtime を consult する純粋なコード修正)が、done_criteria に比較条件 'Known(m) かつ m >= built_at は TTL に関わらず not fresh' と書いただけで gated へ隔離され、schedule の warnings が 'high-risk irreversible action (declared class Serial)' と報告した。方向は制限側(fail-closed)なので fail-open ではないが、(a) 正しい仕様記述が書けないほど分類器が過敏である、(b) gated 隔離が日常化すると §5 が禁じる恒常的迂回(散文を書き換えて分類器を避ける = ゲートのゲーミング)へ構造的な圧力がかかる。読みは 2 つ: (a) 実在の欠陥 = 自然言語の done_criteria に shell 分類器を掛けるのが誤り(action text から done_criteria を外す、または shell トークンとしての > を判定する前に自由文かコマンドかを判別する)。(b) 意図的な仕様 = LLM の under-tag を塞ぐため過剰検出を受容している。見分ける方法: classify_change の呼び出し側が期待する入力が『実行されるコマンド』か『タスクの説明文』かを、schedule.rs:461-476 の docstring (deploy/push/release を force-gate する意図) と blastguard::classify の契約 docstring の両方で確認する。前者が『説明文』を想定していないなら (a)。関連: bcfc5491 / e073bdb1 / 5e62b0eb の p0 trio run"
+created_at = 1789704704
+updated_at = 1789704704
+weight = 0.0
+issue_number = 669
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/669"
+
+[[task]]
+id = "23ea3f77"
+title = "compass charter が「RED テストは 375587a2 に委託済み」と主張するが当該 commit は存在しない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "実測 2026-08-17、測定点 2d744145。`compass gap` の dod 最終要素 (2026-08-17 再測の節) が逐語で「RED テストは 375587a2 に委託済みで 2026-08-14 に裁定との整合を読み直し確認済み」と書いている。しかし当該 commit は共有 odb に存在しない: `git cat-file -t 375587a2` → `fatal: Not a valid object name 375587a2`、`git branch -a --contains 375587a2` → `error: malformed object name`、`refs/preserved` も 0 件 (`git for-each-ref | grep -i preserv` が無出力)。測定 vantage は linked worktree で main と同一 odb を共有しているため「この worktree から見えないだけ」ではない。さらに現行ツリーの状態がこれを裏付ける: crates/condukt/tests/worktree_reconcile.rs には削除されたはずの `dead_clean_worktree_is_removable` が今も存在し、375587a2 が追加したはずの 3 本 (unclaimed_clean_worktree_with_no_witness_is_not_removable / unclaimed_worktree_occupancy_is_undetermined_not_dead / unclaimed_worktree_with_advancing_activity_is_live) は 1 本も存在しない。つまり 375587a2 は **merge されたことがなく**、main は fix 前の状態のままである。影響: charter は steering document なので、これを読んだ次のセッションは『RED は済んでいるので実装だけすればよい』と誤読する。CLAUDE.md 第4節 (散文が実挙動と食い違う = 次のレビュアーを騙す仕掛け) が charter 自身に発生している形。是正: 当該記述を『RED テストは失われており書き直しが必要』へ改める。関連 1b19e6d2 (消失の追跡)、fe84d350 (本体)。なお本セッションは fe84d350 の実装を fresh RED から起こす形で着手済みなので、実体の側は前進する。"
+created_at = 1786951864
+updated_at = 1786951864
+weight = 0.0
+
+[[task]]
+id = "a597b491"
+title = "condukt 0.7.139 が payload 無しで rollout され linux で dark になっている"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "deploy-verify",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-08-17 16:30 (このセッションの外で行われた rollout)。
+
+~/.claude/plugins/cache/yukineko/condukt/0.7.139/bin/ には launcher shim
+(condukt, 4867 bytes) しか無く、payload の condukt-linux-x86_64 が存在しない。実行すると:
+
+    condukt: no bundled binary for linux-x86_64 (.../0.7.139/bin/condukt-linux-x86_64).
+    exit=1
+
+一つ前の 0.7.138 は正常に動く。対照: compass 0.1.17 は bin/ に launcher と
+compass-linux-x86_64 の両方を持ち compass --version が通る。
+
+これは red ではなく dark である。launcher は exit 1 と診断を出すが、呼び出し側
+(SessionStart hook) は "condukt runs: unknown" と表示するだけで判定はしない。
+launcher-exec-bit ゲートは git index の mode を見るが、plugin cache に payload が
+landed したかは検査していない。
+
+未検証: 他 plugin にも同じ欠落があるか / この rollout を行った別セッションが失敗を検知していたか。
+
+是正の候補: check-plugin-rollout.py に「配布先の <name>-<target-triple> が実在し
+実行可能か」の検査を追加する。"""
+created_at = 1786953564
+updated_at = 1786953564
+weight = 0.0
+issue_number = 355
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/355"
+
+[[task]]
+id = "3f3a0e90"
+title = "fugu-router code-index search が「索引が無い」と「該当なし」を同じ空配列で返す"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "code-index",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "観測 (2026-08-24, 測定点 71337356): crates/fugu-router/src/main.rs:884-887 の doc 逐語『Fail-soft: a missing/empty index yields [] and exit 0, never an error.』。実装 (main.rs:889-893) も load_index が missing→空 Vec なので、下流は『索引が無い』『索引が壊れている』『該当なし』を区別できない。CLAUDE.md 3.『エラー時に空の集合を返さない』に直接該当し、索引が未構築なだけのときに『そのシンボルは存在しない』と読まれる。対照として同じ store を読む context-governor codesearch.rs は三値 (IndexAbsent / Unreadable(String) / NoSymbolMatch) で答えており、そちらが正典側の形。案: search の JSON に status を足して index-absent / unreadable / no-match / hits を区別する。未測定: 現在の呼び出し側が誰かは未調査で、exit code を変えたときの互換性影響はこの起票では測っていない。"
+created_at = 1787550771
+updated_at = 1787550771
+weight = 0.0
+issue_number = 403
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/403"
+
+[[task]]
+id = "2ae5503f"
+title = "check-plugin-rollout.py が enabledPlugins:false から「none of its hooks fire」という未観測の挙動を断定する (blastguard で実測と矛盾)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "実測 2026-09-18、測定点 main 1e79dc4b、blastguard 0.2.65 rollout 直後。scripts/check-plugin-rollout.py:1710 が GATE crate の finding として逐語で 'It is installed but inert: none of its hooks fire, so the gate silently guards nothing.' を出す。根拠は ~/.claude/settings.json の enabledPlugins に当該キーが false または不在であることだけで、hook が発火するかどうかは一切観測していない。ところが実測では blastguard@yukineko が false のまま blastguard の hook は発火している: 本セッション中に 5 回 deny を返した (rm -rf /mnt/c/tmp/harness-worktrees/premerge-probe / git reset --hard / git stash drop x2 / python3 -c の文字列リテラル内の '> ' への誤検知)。いずれの拒否文も crates/blastguard/src/reversible.rs の文言そのもの (例: 'blastguard does not know which directory it is relative to, so it cannot tell whether these bytes are recoverable') なので帰属は確実。つまり設定値 (configuration) から挙動 (behaviour) を断定しており、CLAUDE.md 第2節が禁じる『判断を事実として棚に置く』に当たる。実害: この文言を読んだセッションは『blastguard は何も守っていない』と誤読して防御を前提から外す。逆に、私は一度この出力を信じて自分の正しい帰属を誤って訂正した (観測より散文を信じた実例)。是正方向: 設定値から言えることだけを言い、hook が実際に発火するかは Undetermined として明示する。finding が failure であること自体は変えない (第3節: 判定不能は制限側)。付随して、なぜ false でも発火するのかは未解明であり別途調査が要る (settings.json 内に blastguard の hooks 配線は無く、plugin 側 hooks/hooks.json が enabledPlugins を無視して読まれている可能性)。"
+created_at = 1789715685
+updated_at = 1789715685
+weight = 0.0
+issue_number = 671
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/671"
+
+[[task]]
+id = "7ca076f8"
+title = "blastguard: '-c <arg>' の後ろに fd 複製リダイレクト (2>&1 / 1>&2) が来ると空ターゲットの書き込みと誤認して deny する"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """実測 2026-09-18、deployed blastguard 0.2.65 のバイナリに直接 payload を流して測定 (scratchpad/probe_narrow.py)。本セッション中に読み取り専用の調査コマンドを 4 回ブロックした実害あり。拒否文は逐語で: "'> ' destroys the file's current contents and `` is a relative path and blastguard does not know which directory it is relative to, so it cannot tell whether these bytes are recoverable"。空のバッククォートが決定的で、リダイレクトのターゲットが空文字列としてパースされている。空の相対パスは解決不能なので RepoProbe が Undetermined になり第3節どおり制限側 (deny) に倒れる。つまり fail-open ではなく fail-closed 側の誤検知だが、正当な read-only コマンドを止めている。最小切り分け (10 ケース、control 込み): allow= 'ls 2>&1' / 'echo hi > /tmp/x' / 'echo "hello" 2>&1' / 'python3 -c "pass"' / 'python3 -c "pass" >/dev/null' / 'python3 script.py 2>&1'。deny または ask = 'python3 -c "pass" 2>&1' / 'python3 -c "pass" 1>&2' / 'bash -c "pass" 2>&1' / "python3 -c 'pass' 2>&1"。したがってトリガは python 固有でも引用符固有でもなく **-c <arg> の直後に N>&M 形式の fd 複製リダイレクトが来ること**。'>' に実ターゲットがある場合 (>/dev/null) は通るので、壊れているのは N>&M の扱いに限られる。おそらく tokenizer が -c の引数を消費した後に '2>&1' を redirect+空target に分解している。修正方向: fd 複製リダイレクト (N>&M) は**ファイルへの書き込みではない**ので redirect ルールの対象から外す。空ターゲットを解決不能な相対パスとして扱う経路は残してよいが、そもそも N>&M がそこへ来ないようにする。反証防止の control を必ず置くこと: 'echo hi > /etc/passwd' が引き続き deny であること、'echo hi > relative.txt' の空でない相対パスの扱いを変えていないこと。副次観測: 同一セッション内で 'python3 -c "pass" 2>&1' の 2 度目以降は deny ではなく ask を返した。2026-09-18 の repeat ledger が deployed 0.2.65 で稼働していることの直接証拠であり、本件とは別事象。"""
+created_at = 1789716368
+updated_at = 1789716368
+weight = 0.0
+issue_number = 672
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/672"
+
+[[task]]
+id = "f7a0cadc"
+title = "condukt editgate::tests::a_clean_crate_still_passes fails every full-binary run (rustup cannot choose cargo: HOME race with with_home)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "flaky",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+Measured 2026-09-23, branch session-9d349393 at 2ddbd51d (condukt 0.7.171). Running the whole condukt bin test binary (target/debug/deps/condukt-*) fails editgate::tests::a_clean_crate_still_passes every time: 16/16 under 8 concurrent copies, 6/6 under CPU load, 1/1 idle, and also with the newly added worktree test skipped (so it predates that change). Isolated (filter editgate) it passes 17/17.
+Verbatim panic (crates/condukt/src/editgate.rs:506): a compiling crate must not be broken: {"broken":true,"diagnostics":"error: rustup could not choose a version of cargo to run, because one wasn't specified explicitly, and no default is configured.","fallback":false,...}
+Reading (a) test-isolation race: other tests (worktree.rs with_home) swap the process-wide HOME under crate::env_lock::HOME_ENV_LOCK, but editgate's check_edit spawns cargo without taking that lock, so rustup sees a sandbox HOME with no toolchain. Reading (b) something else resets rustup state. Discriminator: make the editgate test take HOME_ENV_LOCK (or pass an explicit env to the cargo child) and rerun the full binary; red->green distinguishes (a).
+Note: under (a) the production editgate reports broken=true when rustup is unusable - fail-closed direction, but the reason text claims compile/type errors that did not happen (the reason misattributes a toolchain failure to the user's code).
+Found while working 35d61d23 / 8c5d46fa (load-sensitive tests)."""
+created_at = 1790127752
+updated_at = 1790127752
+weight = 0.0
+issue_number = 677
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/677"
+
+[[task]]
+id = "7c798579"
+title = "condukt claim_progress_head_signal / diffrisk_record journaling tests fail under concurrent test-binary runs (fixture dir vanishes, record count 1 vs 2)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "flaky",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+Measured 2026-09-23, branch session-9d349393 at 2ddbd51d. Running 16 copies of the full condukt test binary, 8 at a time: claim::tests::claim_progress_head_signal_binds_each_head_to_its_owning_task failed 2/16 and diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded failed 1/16. Neither failed in 6 single-copy runs under CPU load.
+Verbatim (claim.rs:2665): left Undetermined(... git rev-parse HEAD could not be spawned in /var/folders/.../condukt-claim-claim-scope-identity-23640-0/wt-b: No such file or directory (os error 2)) right Known(Progressing). The fixture worktree directory is missing mid-test.
+Verbatim (diffrisk_record.rs:540): one record per invocation, left 1 right 2.
+Readings: (a) fixture paths shared across processes or another test cleaning temp dirs / a shared journal path (cross-process fixture collision, cf. memory killed-task-leaves-orphan-loop); (b) a spawn failure under process pressure reported as missing dir. Discriminator: print the fixture paths and check for cross-process reuse; rerun with unique per-process roots.
+This is the same load/concurrency-sensitive class as 8c5d46fa and 35d61d23."""
+created_at = 1790127753
+updated_at = 1790127753
+weight = 0.0
+issue_number = 678
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/678"
+
+[[task]]
+id = "fcbf7b9c"
+title = "blastguard denies quoted heredoc bodies / quoted args containing > as file-truncating redirects"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+Observed 2026-09-23 (session 9d349393), deployed blastguard. The PreToolUse Bash hook denied three commands as file-truncating redirects when the ">" was not a redirect:
+1. python3 inline script inside a quoted heredoc (<<'EOF') containing Rust text "if parsed.skipped > 0" -> denied: '> 0' destroys the file's current contents.
+2. git commit -F - with a quoted heredoc body containing Rust match text "_ => continue" -> denied: '> continue' destroys the file's current contents.
+3. python3 -c "..." multi-line argument -> denied: '> ' destroys ... '' is a relative path.
+A quoted heredoc (<<'EOF') body and a quoted argument are data, not shell syntax; no redirect exists. Workaround used: write the script / message to a file first.
+Readings: (a) real parse defect (quoted-heredoc body and quoted strings scanned as shell tokens) - over-blocking, fail-closed direction but it pushes authors toward workarounds; (b) deliberate conservative policy for any construct blastguard cannot parse. Discriminator: check whether blastguard's parser models <<'EOF' quoting; if it returns Ask/Deny because it cannot parse, the message should say so instead of asserting a truncation. Related: 7ca076f8 (fd-dup redirect misread)."""
+created_at = 1790127754
+updated_at = 1790127754
+weight = 0.0
+issue_number = 679
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/679"
+
+[[task]]
+id = "1ae35d62"
+title = "condukt worktree merge: git_try timeout path of the branch-resolve preflight (c49761cd) has no RED/GREEN test"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Measured 2026-09-23 at 8107190b by the independent verifier of c49761cd (backlog f14c18be). merge() refuses an unresolvable branch via git_try(rev-parse --verify --quiet <branch>^{commit}); git_try maps timed_out to resolves=false which bails. Verified only by code-reading, never by an observed RED/GREEN. The tag/sha case (resolves but is not a branch, accepted) is checked only at raw-git level, not at the merge() call site. How to settle: PATH-shim a git that sleeps past GIT_TIMEOUT for rev-parse and assert merge() is Err with no conflict recorded; RED by making the timeout read as success."
+created_at = 1790130883
+updated_at = 1790130883
+weight = 0.0
+issue_number = 683
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/683"
+
+[[task]]
+id = "fe20606f"
+title = "condukt task claims vanish mid-run: claim-task rc=0 for 5 hashkeys, heartbeat refreshes 1, is-claimed later false while the task is still in progress"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-09-23, session 9d349393, run flow-9d349393-ae47-4a86-b705-252d48ab4dea, HEAD 8107190b. Sequence: condukt state claim-task --run R --hashkey X for 5 hashkeys (00d1160bf294b1af 052a7668cb486c1f 9e513f0365cf89ba ea7d776df3b89745 1d8df0e8d35d6398) each rc=0. Then condukt state heartbeat --run R printed 'refreshed 1 claim(s)' (twice, ~minutes apart). About 2.5h later: is-claimed --hashkey 00d1160bf294b1af returned claimed:false holder_run:null while the task was still being worked; release-task for two hashkeys printed 'released 0 task claim(s)'. Reading (a) defect: heartbeat refreshes FILE claims only, not TASK claims, so task claims reach TTL and get reaped while live, and the cross-session guard silently disappears (another /flow could then take the same task). Reading (b) intended: task claims have a separate keep-alive that /flow is expected to call. How to tell: read heartbeat's implementation in crates/condukt/src/claim.rs and whether any command refreshes task claims; then reproduce with a short TTL."
+created_at = 1790130895
+updated_at = 1790130895
+weight = 0.0
+issue_number = 684
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/684"
+
+[[task]]
+id = "830715af"
+title = "schemaguard: README / plugin manifest / marketplace description list a stale schema set and version (no verdict, no undetermined-probe; 0.1.2)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "schemaguard",
+    "docs",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Reported 2026-09-23 by the implementer of d17107ad (merge 048aa2b1, schemaguard 0.1.15). docs/specs/schemaguard.md already notes that README and manifest descriptions list only 4 schemas and a stale version 0.1.2; registry.rs now has 6 (decomposition, episode, playbook, scout-measure, verdict, undetermined-probe). Prose that disagrees with the code misleads the next reader (CLAUDE.md 4). Settle by diffing registry::names() against each description."
+created_at = 1790138021
+updated_at = 1790138021
+weight = 0.0
+issue_number = 685
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/685"
+
+[[task]]
 id = "6af7bcdc"
 title = "condukt の run state ストアも repo_root キーで per-worktree に分裂する (bcfc5491 と同じ欠陥クラス、ロックではなく state 側)"
 project = "/Users/yuki/src/harness"
@@ -28254,3 +28712,114 @@ updated_at = 1790130765
 weight = 0.0
 issue_number = 682
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/682"
+
+[[task]]
+id = "314b344a"
+title = "gate-bypass ledger records a conflicted-merge commit (b5be0c49) as ungated although its git commit ran the hook suite green; no gate-verified-tree sentinel was written"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-09-23 session 9d349393. In worktree session-9d349393 a conflicted 'git merge main' was concluded with 'git commit -F -' (no --no-verify); output showed no FAILED/blocked line and the commit b5be0c49 was created. After ff of main to it, gate-bypass.py --json listed b5be0c49 as outstanding, and .git/worktrees/session-9d349393/gate-verified-tree did not exist. Earlier conflicted merges in the same worktree (cab69b07, 4223119b, 048aa2b1) were not left in the ledger. Reading (a) defect: pre-commit exits early for some merge shape (e.g. a merge whose second parent is the main tree's branch) without certifying, so post-commit records a gated commit as ungated (false positive that blocks push). Reading (b) intended: merges with main as parent are meant to be certified by pre-merge-commit, which does not run when conflicts are resolved by git commit. How to tell: read the early-exit paths in .githooks/pre-commit and pre-merge-commit and reproduce with a throwaway conflicted merge."
+created_at = 1790138376
+updated_at = 1790138376
+weight = 0.0
+issue_number = 686
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/686"
+
+[[task]]
+id = "6a707b72"
+title = "after filtered rollouts (--plugin condukt/schemaguard/tdd/overwatch) 12 plugins incl. GATE blastguard/propguard/donegate/reviewgate had registry-pointed version dirs with NO darwin-arm64 binary (dark); each filtered run reported rc=0"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "rollout",
+    "deploy-verify",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-09-23 ~13:38-13:42 JST, session 9d349393, main 94341ef2 (just pushed; integrated 36 origin commits that bumped many plugin versions). Ran scripts/rollout-plugins.sh --plugin X for condukt, schemaguard, tdd and --plugin overwatch --canary: all rc=0, each printing 'verify: skipped — this run was filtered'. check-plugin-rollout.py then reported 20 problems, incl. 'crates/blastguard declares a binary target, but no darwin-arm64 binary is deployed under ~/.claude/plugins/cache/yukineko/blastguard/0.2.65/bin' (dir mtime 13:38; registry installPath pointed at 0.2.65; bin held only the launcher). Same for autoflow budgetguard context-governor donegate hypothesis propguard reviewgate. A full 'scripts/rollout-plugins.sh --canary' repaired all but tdd (d69f4b23). Reading (a) defect: a filtered rollout repoints/creates version dirs for plugins OUTSIDE its filter without seeding their binaries, darkening gates, and its rc=0 + skipped verify hides it. Reading (b) something else (a concurrent session, or Claude Code's own plugin sync after the pulled version bumps) created the dirs, and the filtered run merely did not repair them. How to tell: in a sandbox HOME, bump two plugins' versions, run rollout --plugin <one>, and check whether the other's registry installPath / version dir changed."
+created_at = 1790138609
+updated_at = 1790138609
+weight = 0.0
+issue_number = 691
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/691"
+
+[[task]]
+id = "9eeffa69"
+title = "flow Step 3-4 'condukt circuit check --run flow-<session>' trips idle_unmeasured whenever no condukt run state exists under that id"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flow",
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-09-23 session 9d349393 after a successful cycle (5 items done): verdict trip, reason idle_unmeasured, idle_unknown_reason 'run state could not be loaded'. The flow skill passes the flow-<session> id, but condukt run state lives under the condukt run's own id (and this cycle's condukt fork never ran state init). Reading (a) defect: the skill passes an id that never has run state, so the breaker always trips after the first cycle and /flow stops regardless of remaining work (593 pending). Reading (b) intended: the fail-closed trip is meant to force the driver to pass a real run id. How to tell: read the flow SKILL.md 3-4 and condukt circuit check's run lookup; check whether any flow cycle ever got exit 0."
+created_at = 1790138658
+updated_at = 1790138658
+weight = 0.0
+issue_number = 692
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/692"
+
+[[task]]
+id = "3bfc18bf"
+title = "scripts/plugin_cache.py が crates/<n>/.claude-plugin/plugin.json を無防備に json.load し、並行セッションの書き込み中に読むと 'unreadable plugin.json' を 恒久的な欠陥として報告する (実測: 3 連続再実行で 0 件に消える)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-23、測定点 ce1d3235。rollout 前の check-plugin-rollout.py が
+  condukt: unreadable plugin.json (Expecting property name enclosed in double quotes: line 3 column 1 (char 23))
+  overwatch: unreadable plugin.json (Expecting property name enclosed in double quotes: line 4 column 1 (char 48))
+を出した。しかし両ファイルは python json.load で正常にパースでき (condukt 0.7.170 / overwatch 0.2.36)、直後に同じチェックを 3 連続で再実行すると unreadable の件数は 3 回とも 0 だった。両ファイルの mtime は観測時刻の数秒前で、別セッションが書き込み中だった。
+
+機構: scripts/plugin_cache.py:169 が `json.load(fh)` を直接呼び、ValueError を `problems.append(f'{d}: unreadable plugin.json ({exc})')` に 写している。atomic read でも retry でもないので、並行 writer の途中状態を 読むと構文エラーになる。
+
+なぜ問題か (2 つ):
+(a) scripts/rollout-plugins.sh:1101 のコメントが、この所見を 「real problems with real remedies」の側に分類している。つまり一過性の race が 恒久的な欠陥として報告される。
+(b) 同じ所見が version dir の prune を抑止する (`cached but no current version known from crates/ — cannot tell which of its dirs is live, so none are pruned`)。読めなかっただけで prune が止まる。
+
+判定不能を『欠陥あり』へ写しているので方向としては fail-closed 側であり、第3節には反しない。問題は『判定不能』と『実際に壊れている』が下流から 区別できないこと。両方の読み: (a) 実在の race (b) 意図的に保守的な設計。見分け方: 書き込み中でない静止状態で再現するかどうか。実測では再現しない。
+
+修正案: 読み取りを retry するか、tempfile+rename の atomic write を writer 側に 要求するか、少なくとも『一過性かもしれない』と区別可能に報告する。"""
+created_at = 1790138915
+updated_at = 1790138915
+weight = 0.0
+issue_number = 693
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/693"
+
+[[task]]
+id = "7182a24c"
+title = "scripts/rollout-plugins.sh が asset sync の cp 失敗を stderr に出しながら exit 0 を返す — GATE crate の bin が欠けても rollout は成功と報告される"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-23、測定点 94341ef2。フリート全体の rollout (--canary) のログ末尾:
+  cp: /Users/yuki/.claude/plugins/cache/yukineko/overwatch/0.2.36/bin/overwatch-darwin-arm64: No such file or directory
+にもかかわらずスクリプトの exit code は 0 だった。
+
+今回は実害なし: 並行セッションが rollout 中に overwatch を 0.2.36 -> 0.2.37 へ bump し、0.2.36 の dir が prune された後に cp が走ったため。registry は 0.2.37 を 指しており、0.2.37/bin/overwatch-darwin-arm64 は 2033952 bytes で存在し、`overwatch status` は rc=0 で動作する。GATE 5 本すべて bin 実在を確認済み。
+
+しかし潜在的な fail-open である: 同じ cp 失敗が *現行* version dir に対して 起きた場合、launcher には sibling version へのフォールバックが無いため その GATE は暗転する (hook が起動せず finding も出ない = red ではなく dark)。それでも rollout は exit 0 で『成功』と報告する。
+
+これは harness-core の既知クラス『subprocess の stdout だけ見て終了ステータスを 判定に使わない』(CLAUDE.md 第3節) と同型。
+
+done_criteria: asset sync / bin copy のいずれかが失敗したら rollout は非0で 終わり、どの plugin のどのファイルが落ちたかを名指しする。一過性の race (version dir が prune された等) は、成功と区別可能な形で 報告したうえで非0にするか、少なくとも警告として集計する。"""
+created_at = 1790138917
+updated_at = 1790138917
+weight = 0.0
+issue_number = 694
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/694"

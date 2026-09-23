@@ -89,9 +89,9 @@ fn write_reject_line(path: &PathBuf, schema: &str, violations: usize) -> anyhow:
 /// - store present but unreadable        → `Undetermined(why)`; the caller cannot
 ///   collapse this to a value, because [`Determination`] has no `unwrap_or`/`ok`
 ///
-/// Malformed *lines* inside a readable store are still silently skipped — that is
-/// a separate, still-open gap (see [`parse_counts`]), not something this function
-/// resolves.
+/// - store readable but with any unreadable/malformed line → `Undetermined(why)`;
+///   the sum over the remaining lines is an undercount, and presenting it as a
+///   count is the silent drop this counter exists to expose (backlog 27926f7e).
 pub fn counts() -> Determination<BTreeMap<String, usize>> {
     counts_at(&rejects_path())
 }
@@ -99,29 +99,60 @@ pub fn counts() -> Determination<BTreeMap<String, usize>> {
 /// [`counts`] against an explicit path, so the tri-state can be exercised without
 /// touching `$HOME`.
 pub fn counts_at(path: &Path) -> Determination<BTreeMap<String, usize>> {
-    boundary::read_to_string(path).map(|maybe_raw| match maybe_raw {
+    match boundary::read_to_string(path) {
         // Absent: never written. A genuinely empty observation, not a failure.
-        None => BTreeMap::new(),
-        Some(raw) => parse_counts(raw.lines().map(|l| Ok(l.to_string()))),
-    })
+        Determination::Known(None) => Determination::known(BTreeMap::new()),
+        Determination::Known(Some(raw)) => {
+            let parsed = parse_counts(raw.lines().map(|l| Ok(l.to_string())));
+            if parsed.skipped == 0 {
+                Determination::known(parsed.counts)
+            } else {
+                Determination::undetermined(format!(
+                    "{} line(s) of {} could not be read or parsed; the remaining sum is an undercount",
+                    parsed.skipped,
+                    path.display()
+                ))
+            }
+        }
+        Determination::Undetermined(why) => Determination::Undetermined(why),
+    }
+}
+
+/// Result of [`parse_counts`]: the sum over the lines that parsed, plus how many
+/// non-blank lines were dropped (IO error or malformed JSON). A non-zero
+/// `skipped` means `counts` is an undercount and must not be presented as a fact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedCounts {
+    pub counts: BTreeMap<String, usize>,
+    pub skipped: usize,
 }
 
 /// Pure helper: sum reject counts from an iterator of raw JSON lines.
 /// Exported for testing without touching the filesystem.
-pub fn parse_counts(
-    lines: impl Iterator<Item = std::io::Result<String>>,
-) -> BTreeMap<String, usize> {
+///
+/// Blank lines are not data and are ignored. An `Err` line or a non-blank line
+/// that does not parse is COUNTED in `skipped`, never silently dropped.
+pub fn parse_counts(lines: impl Iterator<Item = std::io::Result<String>>) -> ParsedCounts {
     let mut map: BTreeMap<String, usize> = BTreeMap::new();
+    let mut skipped = 0usize;
     for line in lines {
         let line = match line {
-            Ok(l) if !l.trim().is_empty() => l,
-            _ => continue,
+            Ok(l) if l.trim().is_empty() => continue,
+            Ok(l) => l,
+            Err(_) => {
+                skipped += 1;
+                continue;
+            }
         };
-        if let Ok(entry) = serde_json::from_str::<RejectLine>(&line) {
-            *map.entry(entry.schema).or_insert(0) += entry.violations;
+        match serde_json::from_str::<RejectLine>(&line) {
+            Ok(entry) => *map.entry(entry.schema).or_insert(0) += entry.violations,
+            Err(_) => skipped += 1,
         }
     }
-    map
+    ParsedCounts {
+        counts: map,
+        skipped,
+    }
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
@@ -134,10 +165,106 @@ mod tests {
         raw.lines().map(|l| Ok(l.to_string()))
     }
 
+    /// backlog 27926f7e: a readable store that contains a malformed line is an
+    /// UNDERCOUNT, not a count. Presenting the partial sum as `Known` is the
+    /// silent-drop this counter exists to expose.
+    #[test]
+    fn counts_at_with_malformed_line_is_undetermined() {
+        let dir = std::env::temp_dir().join(format!(
+            "schemaguard-metrics-malformed-{}-{}",
+            std::process::id(),
+            unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rejects.jsonl");
+        std::fs::write(
+            &path,
+            "{\"schema\":\"playbook\",\"violations\":1}\n{broken\n",
+        )
+        .unwrap();
+        let got = counts_at(&path);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+        assert!(
+            matches!(got, Determination::Undetermined(_)),
+            "a store with a malformed line must be Undetermined, got {got:?}"
+        );
+    }
+
+    /// Independent verification (backlog 27926f7e fix, commit 2ddbd51d): a store
+    /// whose final line was cut off mid-write (no trailing newline, and the
+    /// truncated fragment does not parse as JSON) must resolve to `Undetermined`,
+    /// not to the sum over the lines that DID parse. This is the "interrupted
+    /// write" shape, distinct from the already-tested `{broken\n` case (which has
+    /// a trailing newline) and distinct from whole-file invalid UTF-8 (which
+    /// `boundary::read_to_string` already turns into `Undetermined` upstream of
+    /// `parse_counts`, so it would not have discriminated the old code from the
+    /// new). A truncated trailing line is valid UTF-8 the whole way through the
+    /// read, so it can only be caught by `parse_counts`'s per-line skip-counting.
+    #[test]
+    fn counts_at_with_truncated_trailing_line_is_undetermined() {
+        let dir = std::env::temp_dir().join(format!(
+            "schemaguard-metrics-truncated-{}-{}",
+            std::process::id(),
+            unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rejects.jsonl");
+        // One well-formed line, then a second line cut off mid-write: no
+        // trailing newline, and the fragment is not valid JSON on its own.
+        std::fs::write(
+            &path,
+            "{\"schema\":\"playbook\",\"violations\":1}\n{\"schema\":\"epis",
+        )
+        .unwrap();
+        let got = counts_at(&path);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+        assert!(
+            matches!(got, Determination::Undetermined(_)),
+            "a truncated trailing line (interrupted write, no newline) must be \
+             Undetermined, not a partial sum presented as fact — got {got:?}"
+        );
+    }
+
+    /// Anti-vacuity control: a fully well-formed store is still `Known`.
+    #[test]
+    fn counts_at_well_formed_store_is_known() {
+        let dir = std::env::temp_dir().join(format!(
+            "schemaguard-metrics-wellformed-{}-{}",
+            std::process::id(),
+            unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rejects.jsonl");
+        std::fs::write(&path, "{\"schema\":\"playbook\",\"violations\":1}\n\n").unwrap();
+        let got = counts_at(&path);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+        let expected: BTreeMap<String, usize> = [("playbook".to_string(), 1)].into();
+        assert_eq!(
+            got,
+            Determination::known(expected),
+            "a well-formed store must be Known with its exact counts"
+        );
+    }
+
     #[test]
     fn parse_counts_empty_input() {
         let result = parse_counts(lines(""));
-        assert!(result.is_empty());
+        assert!(result.counts.is_empty());
+        assert_eq!(result.skipped, 0);
+    }
+
+    #[test]
+    fn parse_counts_io_error_line_is_skipped() {
+        let input = vec![
+            Ok(r#"{"schema":"episode","violations":1}"#.to_string()),
+            Err(std::io::Error::other("read failed")),
+        ];
+        let result = parse_counts(input.into_iter());
+        assert_eq!(result.counts["episode"], 1);
+        assert_eq!(result.skipped, 1, "an unreadable line must be counted");
     }
 
     #[test]
@@ -147,26 +274,31 @@ mod tests {
 {"schema":"decomposition","violations":3}
 "#;
         let result = parse_counts(lines(input));
-        assert_eq!(result["decomposition"], 5);
-        assert_eq!(result["episode"], 1);
+        assert_eq!(result.counts["decomposition"], 5);
+        assert_eq!(result.counts["episode"], 1);
     }
 
     #[test]
-    fn parse_counts_skips_malformed_lines() {
+    fn parse_counts_counts_malformed_lines_as_skipped() {
         let input = r#"not json at all
 {"schema":"playbook","violations":1}
 {broken
 "#;
         let result = parse_counts(lines(input));
-        assert_eq!(result.get("playbook"), Some(&1));
-        assert_eq!(result.len(), 1);
+        assert_eq!(result.counts.get("playbook"), Some(&1));
+        assert_eq!(result.counts.len(), 1);
+        assert_eq!(
+            result.skipped, 2,
+            "both malformed lines must be counted as skipped, not silently dropped"
+        );
     }
 
     #[test]
     fn parse_counts_missing_file_gives_empty() {
-        // counts() itself falls back to empty — we test the pure helper with no lines
+        // an absent store is Known(empty) in counts_at; here: the pure helper with no lines
         let result = parse_counts(std::iter::empty());
-        assert!(result.is_empty());
+        assert!(result.counts.is_empty());
+        assert_eq!(result.skipped, 0);
     }
 
     #[test]
@@ -174,7 +306,7 @@ mod tests {
         // A line with 0 violations should still be summed (edge case)
         let input = r#"{"schema":"episode","violations":0}"#;
         let result = parse_counts(lines(input));
-        assert_eq!(result["episode"], 0);
+        assert_eq!(result.counts["episode"], 0);
     }
 
     #[test]
@@ -182,6 +314,6 @@ mod tests {
         // Lines that include optional `ts` must still parse
         let input = r#"{"schema":"scout-measure","violations":2,"ts":1700000000}"#;
         let result = parse_counts(lines(input));
-        assert_eq!(result["scout-measure"], 2);
+        assert_eq!(result.counts["scout-measure"], 2);
     }
 }

@@ -52,8 +52,18 @@ pub enum Recovery {
     /// The path does not exist. Truncating or writing it destroys nothing —
     /// there are no prior bytes to lose.
     NothingToDestroy,
-    /// Tracked by git and byte-identical to the index and HEAD, so
-    /// `git restore` brings it back exactly.
+    /// The path is inside a git work tree.
+    ///
+    /// **This is a wider claim than its name suggests, on purpose.** Since the
+    /// operator ruling of 2026-09-18 ([`decide_recovery`]), *every* path inside
+    /// a checkout lands here — tracked-and-clean, tracked-with-uncommitted-
+    /// changes, untracked, and paths whose `git status` never answered. Only
+    /// the first of those is literally restorable by `git restore`; the rest
+    /// are treated as recoverable by operator decision, not by observation.
+    ///
+    /// The variant keeps its name so the diff of that ruling stays legible, but
+    /// do not read it as "git holds these bytes" — read it as "inside a work
+    /// tree, and therefore never denied or asked about".
     RecoverableFromGit,
     /// The bytes exist only here. Losing them is final; the reason names what
     /// makes it final.
@@ -77,8 +87,11 @@ impl Recovery {
     pub fn describe(&self) -> String {
         match self {
             Recovery::NothingToDestroy => "it does not exist yet".to_string(),
+            // Deliberately does NOT claim "git restore recovers it": since the
+            // 2026-09-18 ruling this variant also covers untracked and dirty
+            // paths, for which that sentence would be false (CLAUDE.md §4).
             Recovery::RecoverableFromGit => {
-                "it is tracked by git with no uncommitted changes, so `git restore` recovers it"
+                "it is inside a git work tree, which this gate does not refuse or ask about"
                     .to_string()
             }
             Recovery::Unrecoverable(why) | Recovery::Undetermined(why) => why.clone(),
@@ -110,19 +123,55 @@ pub enum GitState {
 /// | ✗ | — | — | `NothingToDestroy` |
 /// | ✓ | `NotRepo` | — | `Unrecoverable` (no version control holds a copy) |
 /// | ✓ | `Undetermined` | — | `Undetermined` |
-/// | ✓ | `Repo` | `TrackedClean` | `RecoverableFromGit` |
-/// | ✓ | `Repo` | `TrackedDirty` | `Unrecoverable` (uncommitted bytes) |
-/// | ✓ | `Repo` | `Untracked` | `Unrecoverable` (git has no copy) |
-/// | ✓ | `Repo` | `Undetermined` | `Undetermined` |
+/// | ✓ | `Repo` | **any** | `RecoverableFromGit` |
 ///
 /// The `exists = ✗` row is the one that retires the largest single class of
 /// false friction, and it is also a §4 correction: the rule it replaces denied
 /// with the words *"truncates and overwrites an existing file"* while nothing
 /// anywhere in the crate had ever checked whether the file existed.
+///
+/// # The `Repo` row collapsed on 2026-09-18 — and what that gives up
+///
+/// This table used to split `Repo` four ways, answering `Unrecoverable` for
+/// `TrackedDirty` and `Untracked` and `Undetermined` for `Undetermined`. The
+/// operator struck those three rows, verbatim:
+///
+/// > blastguardが拒否すべきはシステムのファイルであり、gitで復元できるもの
+/// > worktreeのファイルを拒否すべきことを禁止する
+/// >
+/// > またworktree内のファイルの処理をaskするのは禁止する。grepもrmも編集もすべて
+///
+/// *What blastguard may refuse is system files. Refusing files in a worktree —
+/// anything git can restore — is forbidden. Asking about operations on files
+/// inside a worktree is likewise forbidden: grep, rm, edits, all of them.*
+///
+/// The ruling followed a measured false deny: a heredoc writing a scratch file
+/// was refused because the path blastguard **guessed** at — it could not
+/// resolve the script's variable, so it fell back to the cwd, a worktree
+/// directory — came back `Untracked`. The gate was not protecting anything;
+/// it was reporting its own failure to resolve a path as danger.
+///
+/// **The protection this gives up is real, and is stated here rather than
+/// hidden (CLAUDE.md §4): uncommitted changes to tracked files, and untracked
+/// files inside a checkout, are NOT recoverable by git, and this function now
+/// reports them as recoverable anyway.** `RecoverableFromGit` under this table
+/// therefore means "inside a work tree", not "git holds these exact bytes" —
+/// see [`Recovery::RecoverableFromGit`].
+///
+/// What did **not** change is the `RepoProbe::Undetermined` row. "We could not
+/// determine whether this path is inside a work tree" is not "it is inside
+/// one", so it still resolves restrictively (CLAUDE.md §3). Only a *positive*
+/// observation of being inside a checkout relaxes the answer. The control test
+/// `undetermined_repo_probe_never_reports_recoverable` pins that boundary.
 pub fn decide_recovery(exists: bool, repo: RepoProbe, git: GitState) -> Recovery {
     if !exists {
         return Recovery::NothingToDestroy;
     }
+    // `git` is deliberately unused for the `Repo` arm: the operator's ruling
+    // makes "inside a work tree" the whole answer. It stays in the signature
+    // because `RepoProbe::NotRepo`/`Undetermined` callers still compute it and
+    // because narrowing the relaxation later must not be an API change.
+    let _ = git;
     match repo {
         RepoProbe::NotRepo => Recovery::Unrecoverable(
             "it exists, and it is not inside a git work tree — nothing holds a second copy of \
@@ -134,23 +183,9 @@ these bytes"
 so whether these bytes are recoverable is unknown"
                 .to_string(),
         ),
-        RepoProbe::Repo => match git {
-            GitState::TrackedClean => Recovery::RecoverableFromGit,
-            GitState::TrackedDirty => Recovery::Unrecoverable(
-                "it is tracked by git but carries uncommitted changes — those changes exist \
-nowhere else"
-                    .to_string(),
-            ),
-            GitState::Untracked => Recovery::Unrecoverable(
-                "it exists but git does not track it, so no committed copy can restore it"
-                    .to_string(),
-            ),
-            GitState::Undetermined => Recovery::Undetermined(
-                "it exists inside a git work tree, but `git status` did not answer, so whether \
-these bytes are recoverable is unknown"
-                    .to_string(),
-            ),
-        },
+        // Every git state, including Untracked, TrackedDirty and a `git status`
+        // that did not answer. Operator ruling 2026-09-18 — see above.
+        RepoProbe::Repo => Recovery::RecoverableFromGit,
     }
 }
 
@@ -289,30 +324,78 @@ mod tests {
         );
     }
 
+    /// **The 2026-09-18 operator ruling, pinned.** Being *inside a git work
+    /// tree* is the whole answer for this axis: every `GitState` row under
+    /// `RepoProbe::Repo` resolves to `RecoverableFromGit`, so nothing in a
+    /// checkout is ever denied or asked about.
+    ///
+    /// This replaced three rows that used to answer `Unrecoverable` /
+    /// `Undetermined` — see `tracked_but_dirty_*`, `untracked_*` and
+    /// `undetermined_never_reports_recoverable` below for what each of them
+    /// asserted before, and why it changed.
     #[test]
-    fn tracked_but_dirty_is_unrecoverable() {
-        let r = decide_recovery(true, RepoProbe::Repo, GitState::TrackedDirty);
-        assert!(matches!(r, Recovery::Unrecoverable(_)), "{r:?}");
-    }
-
-    #[test]
-    fn untracked_is_unrecoverable() {
-        let r = decide_recovery(true, RepoProbe::Repo, GitState::Untracked);
-        assert!(matches!(r, Recovery::Unrecoverable(_)), "{r:?}");
-    }
-
-    /// Both undetermined rows. Neither may report as recoverable — that is the
-    /// §3 invariant this whole module is built around.
-    #[test]
-    fn undetermined_never_reports_recoverable() {
-        for r in [
-            decide_recovery(true, RepoProbe::Undetermined, GitState::TrackedClean),
-            decide_recovery(true, RepoProbe::Repo, GitState::Undetermined),
+    fn inside_a_work_tree_is_always_recoverable_regardless_of_git_state() {
+        for git in [
+            GitState::TrackedClean,
+            GitState::TrackedDirty,
+            GitState::Untracked,
+            GitState::Undetermined,
         ] {
+            let r = decide_recovery(true, RepoProbe::Repo, git);
+            assert_eq!(
+                r,
+                Recovery::RecoverableFromGit,
+                "a path inside a git work tree must never be denied or asked \
+                 about (operator ruling 2026-09-18); git state was {git:?}"
+            );
+            assert!(r.is_recoverable(), "{r:?}");
+        }
+    }
+
+    /// **CHANGED 2026-09-18** (was `tracked_but_dirty_is_unrecoverable`, which
+    /// asserted `Unrecoverable`). The operator ruled that files inside a work
+    /// tree are never denied or asked about, uncommitted bytes included. The
+    /// protection this gives up is real and is documented on `decide_recovery`.
+    #[test]
+    fn tracked_but_dirty_is_allowed_inside_a_work_tree() {
+        assert_eq!(
+            decide_recovery(true, RepoProbe::Repo, GitState::TrackedDirty),
+            Recovery::RecoverableFromGit
+        );
+    }
+
+    /// **CHANGED 2026-09-18** (was `untracked_is_unrecoverable`, which asserted
+    /// `Unrecoverable`). This is the row that produced the false deny that
+    /// prompted the ruling: a scratch write was refused because the path
+    /// blastguard *guessed* at — the cwd, a worktree directory — was untracked.
+    #[test]
+    fn untracked_is_allowed_inside_a_work_tree() {
+        assert_eq!(
+            decide_recovery(true, RepoProbe::Repo, GitState::Untracked),
+            Recovery::RecoverableFromGit
+        );
+    }
+
+    /// CONTROL — must hold before and after the 2026-09-18 change.
+    ///
+    /// Only the `RepoProbe::Repo` arm was relaxed. "We could not determine
+    /// whether this path is inside a work tree" is NOT "it is inside one", so
+    /// it stays `Undetermined` and resolves restrictively (CLAUDE.md §3).
+    /// If this test ever goes green by turning into `RecoverableFromGit`, the
+    /// change was too wide.
+    #[test]
+    fn undetermined_repo_probe_never_reports_recoverable() {
+        for git in [
+            GitState::TrackedClean,
+            GitState::TrackedDirty,
+            GitState::Untracked,
+            GitState::Undetermined,
+        ] {
+            let r = decide_recovery(true, RepoProbe::Undetermined, git);
             assert!(matches!(r, Recovery::Undetermined(_)), "{r:?}");
             assert!(
                 !r.is_recoverable(),
-                "Undetermined must not read as recoverable"
+                "an undetermined repo probe must not read as recoverable"
             );
         }
     }

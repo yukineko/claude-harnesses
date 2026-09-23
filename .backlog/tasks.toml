@@ -28908,3 +28908,21 @@ updated_at = 1790183148
 weight = 0.0
 issue_number = 707
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/707"
+
+[[task]]
+id = "f09db5ce"
+title = "live backlog claim/requeue writes land in MAIN's tracked .backlog/tasks.toml; stop-verify-worktree then blocks every other session's stop on another session's state"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-09-24 02:05-02:12 JST: another session's /flow (cwd=main) claimed/released 622e33ca 67e95a19 f029190c 1d59cf7f d038263b etc. every few seconds in main's tasks.toml. Session 9d349393's stop hook (scripts/stop-verify-worktree.py) demanded it commit that foreign state; moving it into a worktree commit + ff raced the live writer and a --autostash ff produced a UU conflict on main's tasks.toml (resolved to the newest live content; stash@{0} autostash left behind since stash drop is blocked). Attribution bug per CLAUDE.md s8: the stop gate cannot tell own vs foreign dirt, and the backlog store follows cwd so a main-cwd /flow always dirties main. Also blocks integration ff-only merges that touch tasks.toml."
+created_at = 1790183580
+updated_at = 1790183580
+weight = 0.0
+issue_number = 708
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/708"

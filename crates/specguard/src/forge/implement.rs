@@ -240,8 +240,11 @@ fn reconcile(
     }
 }
 
-/// Run one impl task: create a worktree, run the agent, parse output, tear down
-/// the worktree if no changes were made (cheapest path).
+/// Run one impl task: create a worktree, run the agent in it, parse output.
+///
+/// If the worktree cannot be created the agent is NOT run (fail-closed): the
+/// task is returned as `failed` with git's stderr in `evidence_note`, because a
+/// write-enabled agent must never fall back to running in `repo_root`.
 ///
 /// `require_verification` fail-closes the evidence gate: when set, a self-reported
 /// `done` is only accepted if the harness re-runs the declared `test_cmd` here in
@@ -268,12 +271,41 @@ pub fn run_task(
         .arg("HEAD")
         .output();
 
-    let worktree_created = add.map(|o| o.status.success()).unwrap_or(false);
-    let effective_root = if worktree_created {
-        wt_path.clone()
-    } else {
-        repo_root.to_path_buf()
+    // Fail closed: the impl agent is write-enabled (Edit/Write/Bash(git *)), and
+    // its only confinement is the worktree it runs in. If the worktree could not
+    // be created (spawn error OR non-zero exit) there is no isolated tree to run
+    // it in, so the agent is NOT run at all — never fall back to `repo_root`,
+    // which is the caller's own working tree. The task is reported `failed`
+    // with git's stderr surfaced so the human sees why.
+    let add_failure = match add {
+        Ok(o) if o.status.success() => None,
+        Ok(o) => Some(format!(
+            "git worktree add exited {}: {}",
+            o.status
+                .code()
+                .map_or_else(|| "by signal".to_string(), |c| c.to_string()),
+            String::from_utf8_lossy(&o.stderr).trim_end()
+        )),
+        Err(e) => Some(format!("git worktree add could not be spawned: {e}")),
     };
+    if let Some(why) = add_failure {
+        eprintln!(
+            "specforge: WARN {spec_id}/{req_id}: worktree creation failed — impl agent NOT run (fail-closed; no isolated tree). {why}"
+        );
+        return ImplResult {
+            spec_id: spec_id.to_string(),
+            req_id: req_id.to_string(),
+            status: "failed".to_string(),
+            test_cmd: None,
+            test_result: None,
+            evidence_note: Some(format!(
+                "[harness] worktree creation failed; impl agent was not run (fail-closed, no isolated tree): {why}"
+            )),
+            worktree: None,
+            agent_exit: -1,
+        };
+    }
+    let effective_root = wt_path.clone();
 
     // Build impl agent config — write-enabled (opposite of normalize).
     let impl_cfg = AgentConfig {
@@ -312,30 +344,25 @@ pub fn run_task(
         require_verification,
     );
 
-    let result = ImplResult {
+    // The worktree is always left in place (no automatic cleanup, even when the
+    // agent made no changes) for the human to inspect or merge.
+    ImplResult {
         spec_id: spec_id.to_string(),
         req_id: req_id.to_string(),
         status: verdict.status,
         test_cmd: parsed.test_cmd,
         test_result: verdict.test_result,
         evidence_note: verdict.evidence_note,
-        worktree: if worktree_created {
-            Some(wt_path.to_string_lossy().to_string())
-        } else {
-            None
-        },
+        worktree: Some(wt_path.to_string_lossy().to_string()),
         agent_exit: out.agent_exit(),
-    };
-
-    // If agent made no changes and worktree was created, remove it (matches
-    // condukt/Claude Code `isolation:worktree` behaviour — cheap cleanup).
-    // We leave it on success/partial for the human to inspect or merge.
-
-    result
+    }
 }
 
-/// Impl agent args — write-enabled in the worktree, read-only outside.
-/// The worktree isolation ensures writes cannot escape into the main tree.
+/// Impl agent args — write-enabled. The agent's cwd is its own worktree (and
+/// [`run_task`] refuses to run it at all when that worktree could not be
+/// created), which keeps parallel agents off each other's and the caller's
+/// tree. This is cwd confinement only: the tool allowlist itself does not
+/// forbid absolute-path writes outside the worktree.
 fn impl_agent_args() -> Vec<String> {
     vec![
         "--print".to_string(),
@@ -601,6 +628,61 @@ mod tests {
         let note = r.evidence_note.unwrap();
         assert!(note.contains("実装メモ"), "agent note kept: {note}");
         assert!(note.contains("[harness]"), "harness note appended: {note}");
+    }
+
+    // ── worktree isolation: fail-open when `git worktree add` fails ────────────
+
+    #[test]
+    fn ca_specguard_01_worktree_add_failure_must_not_run_writeenabled_agent_on_repo_root() {
+        // CA-specguard-01: when `git worktree add` fails, `run_task` currently
+        // falls back to `effective_root = repo_root` (line 272-276) and still
+        // invokes the write-enabled impl agent (Edit/Write/Bash(git *)) there —
+        // i.e. directly against whatever tree `repo_root` points at, contrary to
+        // the module docstring's "worktree isolation" claim. A caller that passes
+        // the caller's own working tree as `repo_root` (as specforge's CLI does)
+        // gets that tree mutated when worktree creation merely fails, instead of
+        // the task being skipped fail-closed.
+        use std::os::unix::fs::PermissionsExt;
+
+        // `repo_root` is a plain directory with no `.git` — `git worktree add`
+        // deterministically fails against it ("fatal: not a git repository").
+        let repo_root = tempfile::tempdir().unwrap();
+        let worktree_base = tempfile::tempdir().unwrap();
+
+        // Stub "impl agent": ignores argv/stdin, just proves where it ran by
+        // touching a marker file in its cwd.
+        let script_dir = tempfile::tempdir().unwrap();
+        let script_path = script_dir.path().join("agent_stub.sh");
+        std::fs::write(&script_path, "#!/bin/sh\ntouch AGENT_RAN_HERE\n").unwrap();
+        let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script_path, perms).unwrap();
+
+        let cfg = AgentConfig {
+            command: script_path.to_string_lossy().to_string(),
+            args: vec![],
+        };
+
+        let result = run_task(
+            repo_root.path(),
+            "S1",
+            "R1",
+            "prompt",
+            worktree_base.path(),
+            &cfg,
+            false,
+        );
+
+        assert!(
+            result.worktree.is_none(),
+            "git worktree add must have failed against a non-git repo_root"
+        );
+        assert!(
+            !repo_root.path().join("AGENT_RAN_HERE").exists(),
+            "the write-enabled impl agent must NOT run directly against repo_root \
+             when worktree creation failed (fail-open onto the caller's tree) — \
+             the task should be skipped fail-closed instead"
+        );
     }
 
     #[test]

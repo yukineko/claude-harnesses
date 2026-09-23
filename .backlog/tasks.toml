@@ -28720,3 +28720,115 @@ updated_at = 1790138376
 weight = 0.0
 issue_number = 686
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/686"
+
+[[task]]
+id = "76ea3820"
+title = "condukt claim_progress: absent session transcript is a second, independent immortality source for file claims"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "pending"
+notes = """
+Twin of 5e62b0eb, found while fixing it. Measured 2026-09-23 at main 94341ef2.
+
+progress.rs fingerprint_from_signals returns Undetermined if ANY input signal is Undetermined (harness-core/src/progress.rs:148, and its own test fingerprint_from_signals_is_undetermined_if_any_signal_is). claim_progress (condukt/src/claim.rs:492) folds THREE signals: run-worktree-heads, transcript, run-tasks.
+
+locate_session_transcript_in returns Undetermined when no transcript file is found for the session id (harness-core/src/transcript.rs:352-355), even when the projects dir itself was read successfully. That is a readable-directory negative result being reported as cannot-determine.
+
+MEASUREMENT: all 10 immortal file claims held by run-20260814-025356-78549 are owned by session b57a58c3-eec2-4880-bc67-40ffdafb18cd. That session has NO transcript under the claude projects dir (glob returns no matches; the projects dir itself is readable). So the transcript signal is Undetermined for those claims RIGHT NOW.
+
+CONSEQUENCE: fixing only run_worktree_head_signal (backlog 5e62b0eb, task t3) does NOT un-stick these 10 claims. The fingerprint stays Undetermined via the transcript arm, retain_claim keeps the claim, and the reap still never fires. 5e62b0eb was closed on the worktree axis only; this is the mirror axis.
+
+DESIGN QUESTION (genuine, do not assume): is a readable projects dir with no transcript for that session a positive observation of death, or a failure to observe? A live Claude Code session always has a transcript being written, and reap is only considered after the heartbeat is already stale past the stuck TTL of 1800s. But a transcript can also be absent because the projects dir moved or was pruned. Decide under CLAUDE.md section 3, and keep the overriding invariant that a LIVE run is never wrongly reaped."""
+created_at = 1790138428
+updated_at = 1790138428
+weight = 0.0
+issue_number = 687
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/687"
+
+[[task]]
+id = "d4d74fe2"
+title = "condukt diffrisk_record test every_invocation_is_journaled flakes under full-suite parallelism"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "pending"
+notes = """
+Measured 2026-09-23 at main ce1d3235, taking the cycle-7 baseline.
+
+cargo test -p condukt --bins  =>  840 passed / 1 failed.
+The single failure: diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded
+  assertion left == right failed: one record per invocation
+    left: 1
+   right: 2
+
+cargo test -p condukt --bins diffrisk_record  =>  7 passed / 0 failed. The same test passes in isolation.
+
+So this is a parallelism flake, not a real baseline red: the journal fixture is shared across concurrently running tests, so a peer test records into the same journal and the count assertion sees the wrong number. Same class as the known fixed-/tmp-fixture corruption pattern.
+
+Impact: it makes the condukt baseline non-green, so every task in this crate has to argue its red is pre-existing rather than simply reading a green baseline. That is exactly the condition under which a real regression gets waved through as the known flake.
+
+Fix direction: give the journal fixture a per-test unique path (the other claim.rs/progress tests already do this via make_tmp_dir), or serialize the test. Do NOT fix it by loosening the assertion to a range - the assertion one record per invocation is the property under test."""
+created_at = 1790138439
+updated_at = 1790138439
+weight = 0.0
+issue_number = 688
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/688"
+
+[[task]]
+id = "a16f8014"
+title = "condukt SKILL.md routes serial tasks and fast-path into main working tree, contradicting CLAUDE.md section 8"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "pending"
+notes = """
+Observed 2026-09-23 while running the cycle-7 batch through /condukt.
+
+condukt schedule put all four cycle-7 tasks in serial (file overlap is authoritative over class parallel). The condukt SKILL.md then instructs, for serial tasks, the Phase 4.5.5 fast path and the Phase 5 B single-worktree mode, that the work is implemented directly in the main working tree:
+  - Phase 4.5.5: main上で直接実装し / commit は condukt repo commit 経由
+  - Phase 5 B: 全タスクを main の作業ツリー1つで実行する
+  - Phase 5 A step 4 needs-serial: worktree を破棄し、タスクを serial として main で直接実装
+
+CLAUDE.md section 8 forbids this without exception: main の作業ツリーで許されるのは統合 merge と conflict 解決だけ. The carve-out for minor edits was explicitly removed. check-worktree-isolation.py blocks non-merge commits from the main working tree at pre-commit, so following SKILL.md as written would be blocked by the repo gate anyway.
+
+So the two documents disagree, and SKILL.md is the one that is wrong for this repo. In this run I deviated deliberately: each serial task got its own worktree and was run sequentially, which satisfies both the scheduler ordering and section 8.
+
+This matters because the SKILL is the instruction an autonomous agent follows. An agent that follows it literally will either be blocked by the pre-commit gate, or worse, reach for the shared skip file to get past it, which is the fail-open pressure section 5 warns about.
+
+Fix direction: change the serial and fast-path routing in crates/condukt/skills/condukt/SKILL.md to use a per-task worktree run sequentially, rather than the main working tree. Note condukt repo commit exists precisely to guard the shared index, so the SKILL guidance predates the section 8 tightening rather than disagreeing with it on purpose - confirm that before rewriting."""
+created_at = 1790138453
+updated_at = 1790138453
+weight = 0.0
+issue_number = 689
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/689"
+
+[[task]]
+id = "65d0c726"
+title = "condukt claim registry holds a task claim under an EMPTY STRING hashkey"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "pending"
+notes = """
+Observed 2026-09-23 in the live registry via condukt state claims.
+
+The task_claims section contains an entry whose key is the empty string:
+  key ""  run_id flow-9d349393-ae47-4a86-b705-252d48ab4dea  title "d17107ad 1d8df0e8d35d6398"  heartbeat age about 2.0h
+
+Every other task claim is keyed by a 16-hex-char hashkey (for example 12e54ff974ef54b4, caa9442e63a3e007). The title field of this entry contains what looks like a backlog id plus a hashkey as a single space-separated string, so a caller appears to have passed the hashkey positionally into the title slot and left the key argument empty.
+
+Why this is not cosmetic: the empty key is a single global slot. Any other run that also claims with an empty hashkey will collide with it, either stealing this claim or being told the item is already claimed when it is not. And condukt state is-claimed on an empty hashkey will answer about whatever last wrote that slot.
+
+This should be fail-closed, not silently accepted: claiming with an empty hashkey is a caller bug and the claim call should refuse it with a non-zero exit and a named reason, rather than writing an entry that can never be addressed or released by hashkey.
+
+Not filed as part of 5e62b0eb or 06eb8aa3 - it is a separate input-validation gap in the claim registry. Left in place, not cleared, because it belongs to another session."""
+created_at = 1790138469
+updated_at = 1790138469
+weight = 0.0
+issue_number = 690
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/690"

@@ -25,7 +25,8 @@
 //!   moves the key rather than inheriting it;
 //! * every resolved target's CONTENT HASH — so a target that changed under a
 //!   standing approval is re-judged (「過去に実行されても変更があったときは
-//!   再度判断すべきである」).
+//!   再度判断すべきである」). For a directory target that is a hash of its
+//!   whole tree, not a constant (see [`TargetProbe`]).
 //!
 //! And it is bounded by WHERE the effect lands: an approval is only computable
 //! when every path-shaped token resolves strictly INSIDE one of this session's
@@ -97,8 +98,14 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 /// Resolve a path to a stable description of WHAT IS THERE right now.
 ///
-/// The binary's implementation answers with the target's kind and, for a
-/// regular file, a hash of its contents. Injected rather than called directly so
+/// The binary's implementation answers with the target's kind and a hash of
+/// its contents: for a regular file, the file's bytes; for a directory, a
+/// deterministic, bounded recursive walk (sorted relative paths, each entry's
+/// kind, each file's content hash, each symlink's link text). A directory is
+/// NOT a constant — a standing approval for a directory operand is re-judged as
+/// soon as anything under it changes (CA-blastguard-02). A walk that cannot
+/// complete (IO error, entry or byte cap exceeded, a special file) is
+/// `Undetermined`, never a partial or constant answer. Injected rather than called directly so
 /// every branch below — including "the target could not be probed" — is
 /// reachable from a unit test without a filesystem.
 ///

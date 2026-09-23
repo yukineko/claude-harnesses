@@ -256,7 +256,13 @@ boundary が正しく `Undetermined` を返し、テストが `expected Known` �
 ## 6. この監査が証明しないこと
 
 - `harness_core::boundary` / `overwatch::store` の内部は監査していない（各 crate 自身の DoD9 単位）。
-- F-2 / F-3 は**確認済みだが未修正**である。「後で見る」ではなく、証拠付きで backlog に載っている。
+- **F-2 はその後 propguard 0.1.38（`9a2eb9f0`）＋ 0.1.39（`4d08ee17`）で修正済み**である
+  （再測定 2026-09-24、測定点 `b47f08e3`: `cargo test -p propguard` が 122 passed / 0 failed。
+  `diff_text_of_an_undecodable_diff_is_undetermined_not_empty` /
+  `diff_text_with_one_unreadable_subcommand_is_undetermined_not_a_partial_diff` /
+  `diff_text_with_an_unreadable_untracked_scan_is_undetermined_not_an_empty_diff` が
+  この経路を固定している）。**F-3 は今も未修正**である（`crates/propguard/src/config.rs:34`
+  の `_ => Mode::Inject` は現存。同日再測定）。「後で見る」ではなく、証拠付きで backlog に載っている。
 - CLAUDE.md 第2節(a) の逸脱: テストは修正と同じ agent が書いた（本セッションの system prompt が
   Agent 起動を禁じるため）。RED の先行観測と反空虚対照で代償したが、生成と検証が盲点を共有する
   リスクは残る。独立再監査を推奨する。

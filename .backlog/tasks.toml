@@ -9241,10 +9241,10 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "claimed"
+status = "done"
 notes = "親 backlog item 67e95a19 (hashkey 3358a647274b19d0) が gauge と reviewgate の2クレートを DoD9 verdict-path 監査対象として挙げていた。reviewgate は docs/audit-reviewgate-verdict-paths.md (773行, P1-P8の8件fail-open確認) として完了済み。本item は残りの gauge クレートを対象とする。テンプレートは docs/audit-blastguard-verdict-paths.md / docs/audit-budgetguard-verdict-paths.md / docs/audit-reviewgate-verdict-paths.md を踏襲する: verdict を生成/消費する箇所を逐語引用し、P(Producer)/R(Router)/D(Decider) の3-way分類を行い、fail-open が確認されたものは fault-injection で修正を証明し、独立モデルによる検証を経る。対象は crates/gauge/src/ の verdict-producing/consuming ロジック。"
 created_at = 1785800449
-updated_at = 1790183468
+updated_at = 1790185767
 weight = 0.0
 issue_number = 124
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/124"
@@ -30184,3 +30184,156 @@ updated_at = 1790185046
 weight = 0.0
 issue_number = 750
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/750"
+
+[[task]]
+id = "fbb3100a"
+title = "gauge/harness-core P1+P5: sub-agent transcript と session record の「個別ファイルが読めなかった」が無音で落ち、過少計上が正典 record に焼き込まれる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gauge",
+    "fail-open",
+    "harness-core",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = '出典: docs/audit-gauge-verdict-paths.md の P1 (CRITICAL) と P5 (MEDIUM-HIGH)。監査日 2026-09-24、測定点 b47f08e3。P1: crates/harness-core/src/usage.rs:191 の if let Ok(sub_text) = std::fs::read_to_string(&file) が個別 sub-agent transcript の read 失敗を捨てる。直上の subagent_files(path) は Determination を返して Undetermined を正しく転送しているので、ディレクトリ粒度だけ fail-closed でファイル粒度が fail-open という同一関数内のミラーギャップである。監査の実測: main transcript 0.0075 ドル + sub-agent 1 体が 270.00 ドルを消費した状態で、対照 (注入なし) は budgetguard が session 270.0075 ドルで {"decision":"block"} を返す。agent-*.jsonl を 1 本だけ chmod 000 (ディレクトリは読める) にすると block が消え session 0.0075 ドルになり、診断はどこにも出ない。第二の対照 (subagents ディレクトリごと chmod 000) では正しく block する。つまり救われないのは「record が書かれなかった」ではなく「record が部分的に書かれた」場合。P5: crates/harness-core/src/session.rs:216-225 が同じ形で個別 record を無音 skip し、gauge report が過少計上する。修正: usage.rs:191 の Err アームを agg.subagent_scan = Determination::undetermined(...) に倒す。受け口の guard と budgetguard 側は監査の対照 3 で動作確認済み。usage.rs:412 の let ... else { continue; } も同時に倒す。同じコミットで crates/session-insights/src/record.rs:97-100 の docstring を直すこと — そこは gauge の保証を根拠に過少計上警告を省略しており、P1 はその前提を反証している。完了条件: 注入で block が消えないことを RED 先行で固定し、注入なしの対照も同時に固定する。'
+created_at = 1790185715
+updated_at = 1790185715
+weight = 0.0
+issue_number = 751
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/751"
+
+[[task]]
+id = "ff98fed0"
+title = "gauge/harness-core P2: 未知の model id が 0 ドルに価格付けされ、予算ゲートが恒久的に無効化される (unknown_model_is_free が仕様として固定している)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gauge",
+    "fail-open",
+    "harness-core",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "出典: docs/audit-gauge-verdict-paths.md の P2 (HIGH)。監査日 2026-09-24、測定点 b47f08e3。crates/harness-core/src/pricing.rs:59-64 の rate_for が未知の model id に 0 ドルを返す。監査の実測: 同一トークン数で block_usd=1.0 のとき opus は 30.0000 ドルで block、sonnet は 18.0000 ドルで block、claude-newfamily-1 は 0.0000 ドルを報告して block しない。model id はこちらが決める値ではなく外部が変える入力なので、新モデルが出た瞬間に予算ゲートが静かに無効になる。さらに悪いのは crates/harness-core/src/pricing.rs:155-162 の unknown_model_is_free がこの permissive 挙動を仕様として凍結していることで、CLAUDE.md 2 節が名指しする「検証していないテストの assert が仕様として書き下される」形そのものである (condukt verify.rs の checks_verdict(&[]) と同型)。修正: rate_for を Determination<Rate> 化する。ローカルモデル等の正当な無料ケースは明示的な input = 0.0 override を Known(0.0) として残す。unknown_model_is_free は逆向きの assert へ書き換える (削除ではなく反転 — 削除すると何が変わったか履歴から読めなくなる)。影響範囲は gauge 8 サイト + budgetguard + harness-status + session-insights なので段階移行になる。"
+created_at = 1790185717
+updated_at = 1790185717
+weight = 0.0
+issue_number = 752
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/752"
+
+[[task]]
+id = "00880b3d"
+title = "gauge P3+P4: gauge.toml の読み込み/パース失敗が無診断で既定値に落ち、rate 欠落の pricing override が 0 ドルで内蔵表を上書きして勝つ"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gauge",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "出典: docs/audit-gauge-verdict-paths.md の P3 / P4 (ともに HIGH)。本セッションで独立に再測定した (2026-09-24、測定点 b47f08e3、release ビルドの gauge バイナリ、全 probe に対照つき)。crates/gauge/src/config.rs:82-112 の Config::load は if let Ok(text) = read_to_string と if let Ok(fc) = toml::from_str の二重の if let Ok で失敗を捨て、:104-105 は r.input.unwrap_or(0.0) / r.output.unwrap_or(0.0) で rate 欠落を 0 ドルに写す。実測 (opus の input 100 万トークンを 1 セッション記録し gauge session --json を読む): 対照 1 override 無し cost_usd=5.0 / 対照 2 完全な override (input = 15.0) cost_usd=15.0 / probe 3 フィールド名を 1 文字だけ typo (inputt) cost_usd=0.0 rc=0 診断なし / probe 4 rate フィールドを丸ごと省略 cost_usd=0.0 rc=0。同時に gauge status は 3 と 4 でも pricing: 1 override(s) + built-in と表示し、読めなかった override を採用したと報告する。つまり設定ファイルの 1 文字の打ち間違いが全支出を 0 ドルに写し、その record を読む budgetguard の block を消す。修正: budgetguard の crates/budgetguard/src/config.rs:117 load_checked -> Determination<Config> と :192 locate の「不在 = Known(None)」「在るが読めない = Undetermined」の分離をそのまま移植する (前例が an_absent_config_is_known_default_not_undetermined として確立済み)。呼び出し側は gauge の 5 箇所 (crates/gauge/src/main.rs:196 238 252 489 609)。完了条件: 上記 4 ケースを RED 先行で固定し、対照 1 と 2 が引き続き正しい値を返すことも同時に固定する。"
+created_at = 1790185719
+updated_at = 1790185719
+weight = 0.0
+issue_number = 753
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/753"
+
+[[task]]
+id = "a2d3d195"
+title = "gauge P6+P7: session --json が「record が読めなかった」を null + exit 0 に、subagents --json が「transcript を読めなかった」を [] + exit 0 に潰す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gauge",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = '出典: docs/audit-gauge-verdict-paths.md の P6 / P7 (MEDIUM)。P6 は本セッションで独立に対照つきで再測定した (2026-09-24、測定点 b47f08e3、release ビルド)。gauge session --json --session s1 の実測: 対照 a 正常な record -> rc=0 {"agents":{},"cost_usd":5.0,...} / 対照 b record ファイルが存在しない -> rc=0 null / probe c record ファイルは存在するがデコードできない (必須フィールド cwd を削除) -> rc=0 null。b と c の出力はバイト単位で同一であり、「そんなセッションは無い」と「在るが読めなかった」が下流から区別不能になっている。crates/gauge/src/main.rs:19-21 の宣言 (unknown を出す) とも食い違う。P7 は crates/gauge/src/main.rs:490-497 が transcript 不達を [] + exit 0 に写すもので、その消費者は crates/condukt/src/state.rs:2248 の resolve_agent_cost (gauge subagents --json をパースして fugu-router の routing 方策に使う) である。修正: known_records (監査の R2) と Determination::Undetermined 枝 (R4) は既にあるので経路をそこへ寄せる。find_transcript を Determination<Option<PathBuf>> にするのが筋。完了条件: 上の 3 ケースで b と c が区別可能になり (c は非 0 か unknown)、a が変わらないことを RED 先行で固定する。'
+created_at = 1790185720
+updated_at = 1790185720
+weight = 0.0
+issue_number = 754
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/754"
+
+[[task]]
+id = "eb26e14e"
+title = "gauge P9+P11: report --since が last_ts 無し record を unwrap_or(false) で合計から落とし、直列化失敗が {} / [] として exit 0 で出力される"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gauge",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "出典: docs/audit-gauge-verdict-paths.md の P9 (LOW-MEDIUM) / P11 (UNVERIFIED latent, LOW)。監査日 2026-09-24、測定点 b47f08e3。P9: crates/gauge/src/main.rs:244-246 が last_ts を持たない record を --since のフィルタで落とす。unwrap_or の既定値が「期間外 = 合計に入れない」という permissive 側にあり、CLAUDE.md 3 節の「unwrap_or の既定値は必ず制限側」に反する。タイムスタンプが読めない record は「期間外」ではなく「判定不能」である。P11: crates/gauge/src/main.rs:292 と :527 で serde_json の直列化失敗が {} / [] として exit 0 で出力される。監査は直列化が失敗する入力を構成できなかったので UNVERIFIED (latent) としており、到達不能性は証明されていない — CLAUDE.md 6 節に従い棄却していない。監査自身の指摘: P11 の正解は同じ関数の 25 行上に既に書かれている。いずれも 1 から 2 行の修正。完了条件: P9 は last_ts 欠落 record が黙って落ちないことを RED 先行で固定する。P11 は直列化失敗を観測可能にできるかをまず確かめ、できないなら CLAUDE.md 2 節に従い ask する (判断で ok にしない)。"
+created_at = 1790185721
+updated_at = 1790185721
+weight = 0.0
+issue_number = 755
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/755"
+
+[[task]]
+id = "c444cd8e"
+title = 'gauge P8+P10 (UNVERIFIED): Path::exists() が「問いに答えられなかった」を「無い」に写し、4 つの read command が current_dir() 失敗を "." に写す'
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gauge",
+    "unverified",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = '出典: docs/audit-gauge-verdict-paths.md の P8 / P10。両方とも UNVERIFIED であり REFUTED ではない — 監査は permissive 経路を到達させる可搬なフォールト注入を構成できなかっただけで、到達不能性は証明していない (CLAUDE.md 6 節: 辿れなかったは無いではない)。P8: crates/gauge/src/config.rs:73-81 と :122-132 の Path::exists() は IO エラーを false に潰す。std::fs::try_exists が三値を返すので移行可能。budgetguard に是正済みの前例がある。P10: crates/gauge/src/main.rs:237 251 488 608 の current_dir() 失敗が "." に写る。注入が難しい理由も記録されている: cwd を chmod すると probe 自体が cd できなくなる。完了条件: まず観測を作れるかを確かめる。作れたら制限側へ倒す。作れないなら CLAUDE.md 2 節の「テストが書けない問題は判断で進めず ask する」に従い人間に返す — 自分の判断で ok にしない。'
+created_at = 1790185723
+updated_at = 1790185723
+weight = 0.0
+issue_number = 756
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/756"
+
+[[task]]
+id = "49d9bcae"
+title = "gauge P12+P13+P14: install が home 解決失敗時に ./.claude/settings.json へ書いて成功を報告し、window::load が未登録と破損を同じ None に写し、find_transcript(None) が全プロジェクト横断で最新を選ぶ"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gauge",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "出典: docs/audit-gauge-verdict-paths.md の P12 / P13 / P14 (いずれも LOW、コード読解で CONFIRMED)。監査日 2026-09-24、測定点 b47f08e3。P12: crates/gauge/src/install.rs:13-25 と :69-71 — home が解決できないとき相対パスの ./.claude/settings.json へ書き、しかも成功を報告する。設置されたつもりで設置されていない状態を作る。budgetguard 監査 7 節と同じ形なので別項目として起票するのが妥当と監査が述べている。P13: crates/gauge/src/window.rs:39-42 と crates/gauge/src/main.rs:175 640-648 — window::load が「未登録」と「壊れている」を同じ None に写す。P14: crates/gauge/src/main.rs:411-436 の find_transcript(None) が全プロジェクト横断で最新の transcript を選ぶ。消費者は crates/condukt/src/state.rs:2248 2281 なので、別プロジェクトの transcript を自プロジェクトのコストとして記録しうる。完了条件: 3 件それぞれに観測を作り、制限側へ倒す。P14 は「横断選択が意図された仕様か」を先に確認すること (仕様なら docstring に明記、そうでなければバグ)。"
+created_at = 1790185724
+updated_at = 1790185724
+weight = 0.0
+issue_number = 757
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/757"
+
+[[task]]
+id = "d95a96ac"
+title = "docs/autoflow-verdict-audit.md:422 の lock.rs:81 アンカーが腐っており、それを転記した別の監査文書へ誤りが伝播した"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "docs",
+    "anchor-rot",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "観測 2026-09-24、測定点 b47f08e3。pre-commit の check-doc-claims が逐語で [exempt] docs/autoflow-verdict-audit.md:422 -> crates/autoflow/src/lock.rs:81 line-drifted (quote is at line(s) 94, 144 but the claim cites 81) を出している。exempt 扱いなので commit は止まらないが、腐ったまま残る。実害は観測済み: gauge の verdict 経路監査を書いた agent が、この :81 を再測定せずに転記し、初稿に誤ったアンカーを書いた (merge cb27bc46 の前に修正済み)。現在の crates/autoflow/src/lock.rs:81 は docstring 行 holder and one-or-more registered drivers, and the explicitly であり、実際の inverted-unwrap_or の箇所は :94 の Some(v) => !v.get(stale).and_then(as_bool).unwrap_or(false), である。CLAUDE.md 3 節の「測定点の無い数字は次の著者が転記した瞬間に腐る」がアンカーについても成立することの実例。完了条件: (1) docs/autoflow-verdict-audit.md:422 のアンカーを :94 へ直し引用を実際の行と一致させる、(2) 同じ腐り方をしている exempt 扱いの他のアンカーを棚卸しする (check-doc-claims の出力には exempt が多数ある)、(3) exempt が「直さなくてよい」を意味しないことを文書に明記するか、exempt を期限つきにする。"
+created_at = 1790185752
+updated_at = 1790185752
+weight = 0.0
+issue_number = 758
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/758"

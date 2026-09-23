@@ -26705,7 +26705,7 @@ tags = [
     "p0",
 ]
 touched_files = []
-status = "pending"
+status = "done"
 notes = """
 実測 2026-09-13 22:40 JST、測定点 15adc7bd（main）、cwd=/Users/yuki/src/harness（main worktree）。
 
@@ -26813,7 +26813,7 @@ fail-closed が正しく効いた結果ではなく、判定不能が構造的�
 run-20260913-223004-15261 の 10 件は今回のスナップショットには現れず、
 registry の合計は 11 件 (+ task_claims セクション) である。"""
 created_at = 1789306874
-updated_at = 1790120207
+updated_at = 1790176596
 weight = 0.0
 issue_number = 639
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/639"
@@ -27187,7 +27187,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
 touched_files = []
-status = "pending"
+status = "done"
 notes = """
 実測 2026-09-16、測定点 main 12afeb9b、condukt 0.7.166 (デプロイ版)。
 
@@ -27243,7 +27243,7 @@ done_criteria:
 関連: 5e62b0eb (progress 判定が Undetermined になり reap されない不死 claim)。
 あちらは「reap が効かない」、本件は「そもそも解放が呼ばれない」。別の穴。"""
 created_at = 1789566331
-updated_at = 1790114679
+updated_at = 1790176597
 weight = 0.0
 issue_number = 661
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/661"
@@ -29075,3 +29075,117 @@ updated_at = 1790138917
 weight = 0.0
 issue_number = 694
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/694"
+
+[[task]]
+id = "9a4fb884"
+title = "HUMAN DECISION NEEDED: 06eb8aa3 done_criteria (exit non-zero on failed claim release) contradicts the frozen exit-0 contract for state set"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "pending"
+notes = """
+Raised 2026-09-23 while implementing 06eb8aa3. NOT resolved - deferred deliberately. condukt policy answer returned {"answered":false,"policy":"block"}, i.e. it must go to a human.
+
+THE TWO CONTRACTS
+
+(1) Ticket 06eb8aa3 done_criteria: 解放できなかった場合は沈黙しない。何が残ったかを名指しして非0で終わる。
+
+(2) Frozen contract at crates/condukt/tests/heartbeat_err_surfaced.rs:359, in release_files_failure_is_named_on_stderr:
+      assert_eq!(out.status.code(), Some(0),
+                 "same contract as the heartbeat half: the state write stands");
+    The message is UNHEDGED and names the contract. The reasoning is argued at length in the claim-upkeep block of main.rs, which explicitly addresses section 3:
+      "That is not a CLAUDE.md section 3 exemption. Section 3 forbids resolving cannot-determine to clean; a loud stderr warning is exactly the refusal to call it clean."
+
+Both cannot hold for state set: one demands exit 0 after a failed claim hand-back, the other demands non-zero.
+
+WHAT WAS DONE IN THE MEANTIME (commit d4a52b31, condukt 0.7.176)
+
+- The four gaps with NO contradiction were closed: reconcile / cancel / discard / state-set-Discarded now all release, routed through one shared helper release_terminal_task_files with a three-valued TerminalRelease (Released / Undetermined / Failed).
+- The LOUDNESS half of the ticket was implemented and is green: unreadable_decomposition_terminal_set_is_not_silent.
+- On paths with no frozen exit-code contract (reconcile, cancel, discard) an incomplete hand-back exits non-zero, per the ticket.
+- state set keeps exit 0. heartbeat_err_surfaced.rs was NOT touched (still 5/5 green).
+- The one test asserting state set exits non-zero (unreadable_decomposition_terminal_set_exits_non_zero) is marked #[ignore] with a reason naming this contradiction. Its BODY is intact so the contract it asks for stays readable. Acknowledged in-commit via test-weakening-justified. Zero assertions removed.
+
+A CANDIDATE RESOLUTION THAT WAS FOUND BUT DELIBERATELY NOT TAKEN
+
+The two test files inject DIFFERENT fault classes:
+  - heartbeat_err_surfaced injects a corrupt REGISTRY, decomposition fine  -> TerminalRelease::Failed
+  - the ignored test injects a corrupt DECOMPOSITION                        -> TerminalRelease::Undetermined
+Exiting non-zero only on Undetermined while keeping 0 on Failed would make BOTH files green with zero assertion edits.
+
+It was not implemented, and the reasoning should be checked by a human: the frozen contract rationale (the durable state write already happened, so reporting failure would lie about an operation that demonstrably succeeded) applies IDENTICALLY to both fault classes. Splitting the exit code on which half of the claim bookkeeping broke is a line nobody drew, and would narrow a frozen prose contract by construction while leaving its text unchanged - the quiet re-scoping CLAUDE.md section 4 treats as hiding.
+
+THE DECISION NEEDED
+
+Pick one, explicitly:
+(a) Change the frozen contract: state set exits non-zero when the claim hand-back is incomplete, accepting that a caller can no longer read exit 0 as the state write stands. Requires editing heartbeat_err_surfaced.rs with a same-commit ack.
+(b) Keep exit 0 for state set; the ticket criterion is satisfied at the other terminal paths and at the completion gate. Then the ignored test should be deleted and the ticket criterion amended to say so.
+(c) Adopt the fault-class split above, and write down explicitly why Undetermined and Failed deserve different exit codes.
+
+Until then the #[ignore] stays and main is green."""
+created_at = 1790176547
+updated_at = 1790176547
+weight = 0.0
+issue_number = 699
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/699"
+
+[[task]]
+id = "0c22c77b"
+title = "diffrisk_record flake ROOT CAUSE: the test uses Config::load() with no HOME override so it shares the real ~/.condukt state"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "pending"
+notes = """
+Root cause for the flake filed as d4d74fe2. Diagnosed 2026-09-23 during the 06eb8aa3 implementation.
+
+crates/condukt/src/diffrisk_record.rs test every_invocation_is_journaled_even_when_nothing_is_recorded calls Config::load() with NO HOME override, so project_state_dir resolves to the users REAL ~/.condukt/state/<project-key>. The journal is therefore shared across every parallel test in the binary (and across concurrent cargo runs), so the assertion one record per invocation sees a count contributed to by other tests.
+
+Reproduction, on an IDENTICAL committed tree, three consecutive runs of cargo test -p condukt --bins:
+  846 passed / 846 passed / 845 passed with 1 failed
+The failure is:
+  assertion left == right failed: one record per invocation
+    left: 1
+   right: 2
+Isolated it always passes: cargo test -p condukt --bins diffrisk_record gives 7 passed / 0 failed.
+
+WHY THIS MATTERS MORE THAN A FLAKY TEST: it means a green cargo test -p condukt --bins run is NOT currently a reliable observation for this crate. Every task in condukt has to argue whether a red is its own or the known flake, which is exactly the condition under which a real regression gets waved through. It also writes into the developers real state dir during a test run, which is a test-isolation defect in its own right independent of the flake.
+
+Fix direction: pin HOME (or the state dir) to a per-test temp dir, the way the claim.rs and progress tests already do via make_tmp_dir. Do NOT fix it by loosening the assertion to a range or by serialising the whole binary - one record per invocation is the property under test, and the isolation defect would remain.
+
+Note this was observed again during the 5e62b0eb and 06eb8aa3 merges, so it is live on main now."""
+created_at = 1790176562
+updated_at = 1790176562
+weight = 0.0
+issue_number = 700
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/700"
+
+[[task]]
+id = "3447ed78"
+title = "condukt 06eb8aa3 fix: five new arms have no behavioural test (Undetermined forwarding and Blocked arms)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "pending"
+notes = """
+Raised by the implementer of 06eb8aa3 (commit d4a52b31, condukt 0.7.176) and worth closing, because an Undetermined forwarding arm compiles fine with an empty body and a test asserting only on a Determination can never be observed RED.
+
+Untested arms introduced or left by that change, in crates/condukt/src/main.rs:
+
+1. run_held_files Undetermined arm - the registry itself is unreadable WHILE the decomposition is also unreadable. Changes only message text, never a verdict. Lowest risk.
+2. The --status running claim-guard Blocked arm (~main.rs:3980). It is loud on stderr but the EXIT CODE is unchanged. CLAUDE.md section 3 arguably wants this to refuse to go running rather than proceed while announcing it could not evaluate the claim guard. Nothing pins it either way today. This is the highest-value one: it is a guard that can now announce it did not run, and still let the transition happen.
+3. The --status done diff-risk Blocked arm - skips the recording and says so. No test.
+4. state claim (no --file) now bail!s on an undetermined decomposition instead of claiming nothing and exiting 0. The new fail-closed behaviour has no test.
+5. The reconcile / cancel / discard non-zero exit paths are exercised by the new suite only on the SUCCESS side. No test drives them to an INCOMPLETE hand-back, so the non-zero exit that the ticket asked for is, on those three paths, currently unobserved.
+
+Item 5 is the notable one for the ticket itself: 06eb8aa3 asked for name-what-remained-and-exit-non-zero, and that behaviour is implemented on three paths but proven on none of them. It is a construct no test can kill.
+
+Each needs its OWN behavioural test - a shared one will not do, because these are separate arms and a single test can only observe one."""
+created_at = 1790176575
+updated_at = 1790176575
+weight = 0.0
+issue_number = 701
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/701"

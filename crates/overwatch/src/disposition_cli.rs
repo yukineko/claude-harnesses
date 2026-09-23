@@ -92,6 +92,15 @@ fn disposition_result(
             }),
             false,
         ),
+        AppendOutcome::SkippedUndetermined(why) => (
+            serde_json::json!({
+                "recorded": false,
+                "reason": "ledger_undetermined",
+                "note": why,
+                "finding_id": record.finding_id,
+            }),
+            false,
+        ),
     }
 }
 

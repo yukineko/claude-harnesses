@@ -426,7 +426,7 @@ fn run_in(cwd: &Path) -> Result<SourceHealth> {
         .map(|already| plan_finding_bridges(&deduped, &findings, already))
         .unwrap_or_default();
 
-    let health = if undetermined.is_empty() {
+    let mut health = if undetermined.is_empty() {
         SourceHealth::AllRead
     } else {
         SourceHealth::SomeUndetermined
@@ -499,7 +499,32 @@ fn run_in(cwd: &Path) -> Result<SourceHealth> {
 
         match status {
             Ok(s) if s.success() => match store::append_bridged_finding(cwd, &f.finding_id) {
-                Ok(()) => bridged_now += 1,
+                Ok(store::AppendOutcome::Recorded) => bridged_now += 1,
+                Ok(store::AppendOutcome::SkippedContended) => {
+                    // The backlog task WAS added but the idempotency key was
+                    // NOT persisted (lock contended): say so, never a silent
+                    // success.
+                    bridged_now += 1;
+                    eprintln!(
+                        "overwatch: WARNING bridged finding {} but could not record it: store lock contended (continuing)",
+                        f.finding_id
+                    );
+                }
+                Ok(store::AppendOutcome::SkippedUndetermined(why)) => {
+                    // Added to the backlog, but the idempotency ledger could
+                    // not be read in full, so the key was refused (a duplicate
+                    // row is worse). The ledger is undetermined: name it and
+                    // exit 3 like any other undetermined source.
+                    bridged_now += 1;
+                    eprintln!(
+                        "overwatch: WARNING bridged finding {} but could not record it: {why}",
+                        f.finding_id
+                    );
+                    if !undetermined.contains(&"bridged_findings.jsonl") {
+                        undetermined.push("bridged_findings.jsonl");
+                    }
+                    health = SourceHealth::SomeUndetermined;
+                }
                 Err(e) => {
                     // The backlog task WAS added but we could not persist the
                     // idempotency key. Warn; a future round may re-add it (the
@@ -547,7 +572,25 @@ fn run_in(cwd: &Path) -> Result<SourceHealth> {
 
         match status {
             Ok(s) if s.success() => match store::append_bridged_entry(cwd, &p.key) {
-                Ok(()) => entries_bridged_now += 1,
+                Ok(store::AppendOutcome::Recorded) => entries_bridged_now += 1,
+                Ok(store::AppendOutcome::SkippedContended) => {
+                    entries_bridged_now += 1;
+                    eprintln!(
+                        "overwatch: WARNING bridged entry {} but could not record it: store lock contended (continuing)",
+                        p.key
+                    );
+                }
+                Ok(store::AppendOutcome::SkippedUndetermined(why)) => {
+                    entries_bridged_now += 1;
+                    eprintln!(
+                        "overwatch: WARNING bridged entry {} but could not record it: {why}",
+                        p.key
+                    );
+                    if !undetermined.contains(&"bridged_entries.jsonl") {
+                        undetermined.push("bridged_entries.jsonl");
+                    }
+                    health = SourceHealth::SomeUndetermined;
+                }
                 Err(e) => {
                     eprintln!(
                         "overwatch: WARNING bridged entry {} but could not record it (continuing): {e}",

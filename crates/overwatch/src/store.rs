@@ -704,8 +704,11 @@ pub fn bridged_findings_path(cwd: &Path) -> Result<PathBuf> {
 
 /// Append a bridged-finding record to bridged_findings.jsonl (one JSON line
 /// each). Called after a successful `backlog add` so the finding is never
-/// forwarded twice.
-pub fn append_bridged_finding(cwd: &Path, finding_id: &str) -> Result<()> {
+/// forwarded twice. Returns [`AppendOutcome`]: `Recorded` (written or already
+/// present), `SkippedContended`, or `SkippedUndetermined` when the existing
+/// ledger could not be read in full (the dedup cannot be answered, so the
+/// key is NOT appended; CA-overwatch-03). The caller must surface both skips.
+pub fn append_bridged_finding(cwd: &Path, finding_id: &str) -> Result<AppendOutcome> {
     let path = bridged_findings_path(cwd)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -720,13 +723,21 @@ pub fn append_bridged_finding(cwd: &Path, finding_id: &str) -> Result<()> {
     // open.
     let _lock = match LeaseLock::acquire_or_skip(cwd) {
         Some(l) => l,
-        None => return Ok(()),
+        None => return Ok(AppendOutcome::SkippedContended),
     };
-    if read_bridged_findings(cwd)?
-        .iter()
-        .any(|id| id == finding_id)
-    {
-        return Ok(());
+    // Dedup via the tri-state scan (CA-overwatch-03): an undetermined
+    // already-bridged set refuses the append rather than reading as "never
+    // bridged" and appending a duplicate key.
+    match ledger_contains::<BridgedFinding>(&path, "bridged_findings.jsonl", |r| {
+        r.finding_id == finding_id
+    }) {
+        Determination::Known(true) => return Ok(AppendOutcome::Recorded),
+        Determination::Known(false) => {}
+        Determination::Undetermined(why) => {
+            return Ok(AppendOutcome::SkippedUndetermined(format!(
+                "cannot tell whether finding {finding_id} is already bridged ({why}); bridge key NOT appended to avoid a duplicate row"
+            )))
+        }
     }
     // Test-only race widener (no-op in prod).
     artificial_delay("OVERWATCH_TEST_BRIDGE_DELAY_MS");
@@ -740,7 +751,7 @@ pub fn append_bridged_finding(cwd: &Path, finding_id: &str) -> Result<()> {
         .append(true)
         .open(&path)?
         .write_all(format!("{}\n", json).as_bytes())?;
-    Ok(())
+    Ok(AppendOutcome::Recorded)
 }
 
 /// Read the set of already-bridged finding-ids from bridged_findings.jsonl,
@@ -813,8 +824,9 @@ pub fn bridged_entries_path(cwd: &Path) -> Result<PathBuf> {
 
 /// Append a bridged-entry record to bridged_entries.jsonl (one JSON line each).
 /// Called after a successful `backlog add` for a non-finding stream so the
-/// entry is never forwarded twice.
-pub fn append_bridged_entry(cwd: &Path, key: &str) -> Result<()> {
+/// entry is never forwarded twice. Same [`AppendOutcome`] contract as
+/// [`append_bridged_finding`].
+pub fn append_bridged_entry(cwd: &Path, key: &str) -> Result<AppendOutcome> {
     let path = bridged_entries_path(cwd)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -827,10 +839,18 @@ pub fn append_bridged_entry(cwd: &Path, key: &str) -> Result<()> {
     // `acquire` left that window open.
     let _lock = match LeaseLock::acquire_or_skip(cwd) {
         Some(l) => l,
-        None => return Ok(()),
+        None => return Ok(AppendOutcome::SkippedContended),
     };
-    if read_bridged_entries(cwd)?.iter().any(|k| k == key) {
-        return Ok(());
+    // Dedup via the tri-state scan (CA-overwatch-03 twin of
+    // `append_bridged_finding`).
+    match ledger_contains::<BridgedEntry>(&path, "bridged_entries.jsonl", |r| r.key == key) {
+        Determination::Known(true) => return Ok(AppendOutcome::Recorded),
+        Determination::Known(false) => {}
+        Determination::Undetermined(why) => {
+            return Ok(AppendOutcome::SkippedUndetermined(format!(
+                "cannot tell whether entry {key} is already bridged ({why}); bridge key NOT appended to avoid a duplicate row"
+            )))
+        }
     }
     // Test-only race widener (no-op in prod).
     artificial_delay("OVERWATCH_TEST_BRIDGE_DELAY_MS");
@@ -844,7 +864,7 @@ pub fn append_bridged_entry(cwd: &Path, key: &str) -> Result<()> {
         .append(true)
         .open(&path)?
         .write_all(format!("{}\n", json).as_bytes())?;
-    Ok(())
+    Ok(AppendOutcome::Recorded)
 }
 
 /// Read the set of already-bridged non-finding entry keys from
@@ -975,7 +995,7 @@ pub fn dispositions_path(cwd: &Path) -> Result<PathBuf> {
 /// success: a contended append persists NOTHING, yet used to return a bare
 /// `Ok(())` indistinguishable from a real write, so callers printed
 /// `recorded:true` / `resolved:true` while the ledger was untouched.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppendOutcome {
     /// The record is persisted: written this call, or already present
     /// (idempotent dedup on the join key). Truthful `recorded:true`.
@@ -984,6 +1004,29 @@ pub enum AppendOutcome {
     /// SKIPPED and nothing was persisted this call. The caller should report
     /// `recorded:false` (nonzero exit) and retry shortly.
     SkippedContended,
+    /// The dedup check could not be answered: the existing ledger is present
+    /// but could not be read IN FULL (unreadable, or holding an undecodable
+    /// line — see [`scan_jsonl`]). A dropped line may be exactly the prior
+    /// record for this key, so appending would risk a duplicate row. The
+    /// append was REFUSED and nothing was persisted this call; the payload is
+    /// the reason. The caller must report it as not-recorded (nonzero exit /
+    /// warning), never as success. (CA-overwatch-02/03.)
+    SkippedUndetermined(String),
+}
+
+/// Answer "is there already a record matching `pred` in this ledger?" from the
+/// tri-state [`scan_jsonl`], for the dedup-then-append writers below.
+///
+/// `Known(true/false)` only when the whole ledger was read and decoded; an
+/// unreadable ledger or an undecodable line is `Undetermined(why)` — never
+/// `Known(false)`, which is what the old best-effort `read_*` dedup collapsed
+/// it to (and then appended a duplicate).
+fn ledger_contains<T: serde::de::DeserializeOwned>(
+    path: &Path,
+    ledger: &str,
+    pred: impl Fn(&T) -> bool,
+) -> Determination<bool> {
+    scan_jsonl::<T>(path, ledger).map(|rows| rows.iter().any(pred))
 }
 
 /// Append a human disposition to dispositions.jsonl (one JSON line each).
@@ -996,9 +1039,12 @@ pub enum AppendOutcome {
 /// [`append_bridged_finding`]: hold the store `LeaseLock` across the
 /// read->check->append critical section and re-check for an existing
 /// disposition with this `finding_id` INSIDE the lock, skipping the append if
-/// one is already present. Fail-soft: `LeaseLock` degrades to unlocked on
-/// timeout and never panics; a corrupt existing line is skipped by
-/// [`read_dispositions`].
+/// one is already present. On lock contention the append is HARD-SKIPPED
+/// ([`AppendOutcome::SkippedContended`]). The dedup reads the ledger via the
+/// tri-state [`scan_dispositions`] path: an unreadable ledger or a corrupt
+/// existing line makes the dedup undetermined and the append is REFUSED
+/// ([`AppendOutcome::SkippedUndetermined`]) — it is never treated as "no prior
+/// disposition" (that appended duplicate rows; CA-overwatch-02).
 pub fn append_disposition(cwd: &Path, disposition: &Disposition) -> Result<AppendOutcome> {
     append_disposition_with_deadline(cwd, disposition, LeaseLock::DEADLINE)
 }
@@ -1030,13 +1076,23 @@ fn append_disposition_with_deadline(
         Some(l) => l,
         None => return Ok(AppendOutcome::SkippedContended),
     };
-    if read_dispositions(cwd)?
-        .iter()
-        .any(|d| d.finding_id == disposition.finding_id)
-    {
+    // Dedup via the tri-state scan (CA-overwatch-02): the best-effort
+    // `read_dispositions` dropped an unreadable ledger / undecodable line, so a
+    // finding whose prior disposition sat on that line looked undispositioned
+    // and got a DUPLICATE row. An undetermined dedup refuses the append.
+    match ledger_contains::<Disposition>(&path, "dispositions.jsonl", |d| {
+        d.finding_id == disposition.finding_id
+    }) {
         // Already present (idempotent dedup on finding_id): the disposition IS
         // persisted, so this is a truthful Recorded, not a skip.
-        return Ok(AppendOutcome::Recorded);
+        Determination::Known(true) => return Ok(AppendOutcome::Recorded),
+        Determination::Known(false) => {}
+        Determination::Undetermined(why) => {
+            return Ok(AppendOutcome::SkippedUndetermined(format!(
+                "cannot tell whether finding {} is already dispositioned ({why}); disposition NOT appended to avoid a duplicate row",
+                disposition.finding_id
+            )))
+        }
     }
     // Test-only race widener (no-op in prod).
     artificial_delay("OVERWATCH_TEST_DISPOSITION_DELAY_MS");
@@ -1296,8 +1352,13 @@ pub fn clear_runtime_overlap_holds(cwd: &Path, branch: &str, now: i64) -> Result
                 note: Some("auto-cleared: branch landed".to_string()),
                 ts: now,
             };
-            append_merge_conflict_resolution(cwd, &resolution)?;
-            cleared += 1;
+            match append_merge_conflict_resolution(cwd, &resolution)? {
+                AppendOutcome::Recorded => cleared += 1,
+                // Nothing persisted: the hold is NOT cleared, so it must not
+                // be counted as cleared.
+                AppendOutcome::SkippedContended => {}
+                AppendOutcome::SkippedUndetermined(why) => anyhow::bail!(why),
+            }
         }
     }
     Ok(cleared)
@@ -1456,8 +1517,8 @@ pub struct CompactionReport {
 ///
 /// Fail-soft: a missing hot file is a no-op reporting all-zero counts (never
 /// creates files nor errors). A missing existing archive is likewise a
-/// legitimate no-op contribution (first compaction ever). But an existing
-/// archive that cannot be read IN FULL — unreadable (permission-denied,
+/// legitimate no-op contribution (first compaction ever). But a hot file OR an
+/// existing archive that cannot be read IN FULL — unreadable (permission-denied,
 /// non-UTF-8, …) OR holding a line that cannot be decoded — is distinct from
 /// absent and must not be treated as if it held (only) the records that came
 /// back: this ABORTS with `Err` before either file is rewritten, so an archive
@@ -1491,7 +1552,23 @@ pub fn compact_review_findings(cwd: &Path) -> Result<CompactionReport> {
         }
     };
 
-    let findings = read_review_findings(cwd)?;
+    // The HOT file is what `write_jsonl_atomic(&hot_path, &open)` rewrites
+    // below, so it must be read IN FULL exactly like the archive
+    // (CA-overwatch-01): the best-effort `read_review_findings` dropped an
+    // unreadable file / undecodable line and the rewrite then deleted that
+    // finding permanently. Abort before any write instead.
+    let findings: Vec<ReviewFinding> = match scan_jsonl::<ReviewFinding>(
+        &hot_path,
+        "review_findings.jsonl",
+    ) {
+        Determination::Known(v) => v,
+        Determination::Undetermined(reason) => {
+            anyhow::bail!(
+                    "cannot compact review findings: the hot store at {} could not be read in full ({reason}); aborting before any write to avoid discarding it",
+                    hot_path.display()
+                );
+        }
+    };
 
     let mut resolved_ids: BTreeSet<String> = read_bridged_findings(cwd)?.into_iter().collect();
     for d in read_dispositions(cwd)? {
@@ -1573,8 +1650,11 @@ pub fn merge_conflict_resolutions_path(cwd: &Path) -> Result<PathBuf> {
 /// Append one blocked-merge entry to `merge_conflicts.jsonl` (one JSON line
 /// each). Idempotent per `conflict_id`: re-recording the same blocked merge (a
 /// re-run of the same held task) is a no-op, guarded by a check-then-append
-/// under `LeaseLock` (same TOCTOU guard as `append_disposition`). Fail-soft by
-/// contract at the call site (recording must never break a turn).
+/// under `LeaseLock` (same TOCTOU guard as `append_disposition`). If the
+/// existing ledger cannot be read in full (unreadable / undecodable line) the
+/// dedup is undetermined and this returns `Err` WITHOUT appending
+/// (CA-overwatch-03), rather than double-rowing the entry. Callers warn on
+/// `Err`.
 pub fn append_merge_conflict(cwd: &Path, entry: &MergeConflictEntry) -> Result<()> {
     let path = merge_conflicts_path(cwd)?;
     if let Some(parent) = path.parent() {
@@ -1587,11 +1667,18 @@ pub fn append_merge_conflict(cwd: &Path, entry: &MergeConflictEntry) -> Result<(
         Some(l) => l,
         None => return Ok(()),
     };
-    if read_merge_conflicts(cwd)?
-        .iter()
-        .any(|e| e.conflict_id == entry.conflict_id)
-    {
-        return Ok(());
+    // Dedup via the tri-state scan (CA-overwatch-03 twin): an undetermined
+    // dedup is an ERROR, not a silent `Ok(())` — the callers (condukt) warn
+    // on `Err`, and the blocked merge must not be double-rowed.
+    match ledger_contains::<MergeConflictEntry>(&path, "merge_conflicts.jsonl", |e| {
+        e.conflict_id == entry.conflict_id
+    }) {
+        Determination::Known(true) => return Ok(()),
+        Determination::Known(false) => {}
+        Determination::Undetermined(why) => anyhow::bail!(
+            "cannot tell whether merge conflict {} is already recorded ({why}); entry NOT appended to avoid a duplicate row",
+            entry.conflict_id
+        ),
     }
     artificial_delay("OVERWATCH_TEST_MERGE_CONFLICT_DELAY_MS");
     let json = serde_json::to_string(entry)?;
@@ -1630,8 +1717,11 @@ pub fn scan_merge_conflicts(cwd: &Path) -> Result<Determination<Vec<MergeConflic
 /// `resolve-merge-conflict` and condukt's policy) that both resolve the SAME
 /// conflict must not double-row it. Same check-then-append TOCTOU guard as
 /// [`append_disposition`]: hold the store `LeaseLock`, re-check for an existing
-/// resolution of this `conflict_id` INSIDE the lock, skip if present. Fail-soft:
-/// `LeaseLock` degrades to unlocked on timeout and never panics.
+/// resolution of this `conflict_id` INSIDE the lock, skip if present. On lock
+/// contention the append is HARD-SKIPPED ([`AppendOutcome::SkippedContended`]);
+/// an unreadable / partially-undecodable resolution ledger makes the dedup
+/// undetermined and the append is REFUSED
+/// ([`AppendOutcome::SkippedUndetermined`]), never appended as a duplicate.
 ///
 /// Returns an [`AppendOutcome`] (like [`append_disposition`]) so the
 /// `resolve-merge-conflict` CLI can report a contended HARD-SKIP truthfully
@@ -1652,12 +1742,21 @@ pub fn append_merge_conflict_resolution(
         Some(l) => l,
         None => return Ok(AppendOutcome::SkippedContended),
     };
-    if read_merge_conflict_resolutions(cwd)?
-        .iter()
-        .any(|r| r.conflict_id == resolution.conflict_id)
-    {
+    // Dedup via the tri-state scan (CA-overwatch-03 twin).
+    match ledger_contains::<MergeConflictResolution>(
+        &path,
+        "merge_conflict_resolutions.jsonl",
+        |r| r.conflict_id == resolution.conflict_id,
+    ) {
         // Already present (idempotent dedup): the resolution IS persisted.
-        return Ok(AppendOutcome::Recorded);
+        Determination::Known(true) => return Ok(AppendOutcome::Recorded),
+        Determination::Known(false) => {}
+        Determination::Undetermined(why) => {
+            return Ok(AppendOutcome::SkippedUndetermined(format!(
+                "cannot tell whether merge conflict {} is already resolved ({why}); resolution NOT appended to avoid a duplicate row",
+                resolution.conflict_id
+            )))
+        }
     }
     artificial_delay("OVERWATCH_TEST_MERGE_RESOLUTION_DELAY_MS");
     let json = serde_json::to_string(resolution)?;
@@ -3433,6 +3532,218 @@ mod tests {
             archive_before,
             "the archive must survive untouched"
         );
+
+        restore_home(prev_home);
+    }
+
+    /// CA-overwatch-01: unlike the archive (read via `scan_jsonl`, which
+    /// aborts the whole compaction when a line cannot be decoded — see
+    /// `compact_review_findings_aborts_on_undecodable_archive_line` above),
+    /// the HOT `review_findings.jsonl` is read via the best-effort
+    /// `read_review_findings` (`store.rs:1494`), which silently drops an
+    /// undecodable line. Compaction then unconditionally rewrites the hot
+    /// file from whatever it decoded (`write_jsonl_atomic(&hot_path, &open)`),
+    /// so the finding that lived on that undecodable line is permanently
+    /// deleted with no error and no trace. RED: compaction currently returns
+    /// `Ok` here and clobbers the hot file; it should abort exactly like the
+    /// archive-side guard does.
+    #[test]
+    fn ca_overwatch_01_compact_review_findings_drops_undecodable_hot_line() {
+        // CA-overwatch-01: hot review_findings.jsonl best-effort read drops an undecodable line, then compaction rewrites the hot file without it
+        let _guard = home_lock();
+        let prev_home = std::env::var_os("HOME");
+
+        let dir = fresh_ledger_home("compact-undecodable-hot");
+        // r1 stays open (never bridged/dispositioned), so compaction would
+        // keep it in the hot file if it saw it.
+        append_review_finding(&dir, &finding("r1", 1)).unwrap();
+
+        // A second HOT-file line that is present, non-blank, but cannot be
+        // decoded as a `ReviewFinding` -- it may hold a real open finding
+        // (e.g. a CONFIRMED adversarial-review result) the caller cannot
+        // afford to lose.
+        let hot_path = review_findings_path(&dir).unwrap();
+        append_undecodable_line(&hot_path);
+        let hot_before = std::fs::read_to_string(&hot_path).unwrap();
+
+        let result = compact_review_findings(&dir);
+        assert!(
+            result.is_err(),
+            "compaction must abort when the HOT store holds an undecodable \
+             line, mirroring the archive-side guard, instead of silently \
+             rewriting the hot file without it (got {result:?})"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&hot_path).unwrap(),
+            hot_before,
+            "the hot file must survive untouched when compaction cannot read it in full"
+        );
+
+        restore_home(prev_home);
+    }
+
+    /// CA-overwatch-02: `append_disposition_with_deadline`'s dedup check
+    /// (`store.rs:1033`, `read_dispositions(cwd)?.iter().any(|d| d.finding_id
+    /// == disposition.finding_id)`) reads the ledger via the best-effort
+    /// `read_dispositions`, which silently drops any line that cannot be
+    /// decoded. So a finding_id whose EXISTING disposition line has become
+    /// undecodable (schema drift / corruption) is invisible to the dedup
+    /// check, and a second `record-disposition` / `reconcile-fixed` call for
+    /// the same finding_id appends a duplicate row instead of being
+    /// recognized as already-resolved. RED: the duplicate gets appended.
+    #[test]
+    fn ca_overwatch_02_append_disposition_duplicates_over_undecodable_prior_line() {
+        // CA-overwatch-02: dedup reads dispositions best-effort, so an undecodable prior line for the same finding_id does not block a duplicate append
+        let _guard = home_lock();
+        let prev_home = std::env::var_os("HOME");
+
+        let dir = fresh_ledger_home("disposition-dup-undecodable");
+        let path = dispositions_path(&dir).unwrap();
+        if let Some(p) = path.parent() {
+            std::fs::create_dir_all(p).unwrap();
+        }
+        // A line that is present, mentions finding_id "d1", but cannot be
+        // decoded as a `Disposition` -- e.g. the JSON got schema-drifted /
+        // truncated on disk. `read_dispositions` drops it silently, so the
+        // dedup check below never sees that d1 was already dispositioned.
+        std::fs::write(&path, "{\"finding_id\":\"d1\",not-valid-json\n").unwrap();
+
+        append_disposition(&dir, &disposition("d1")).unwrap();
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let d1_lines = raw.lines().filter(|l| l.contains("d1")).count();
+        assert_eq!(
+            d1_lines, 1,
+            "an undecodable prior line for finding_id d1 must not let a \
+             second d1 disposition be appended as a duplicate row; raw file:\n{raw}"
+        );
+
+        restore_home(prev_home);
+    }
+
+    /// CA-overwatch-03: `append_bridged_finding`'s dedup check (`store.rs:725`,
+    /// `read_bridged_findings(cwd)?.iter().any(|id| id == finding_id)`) is the
+    /// same best-effort-read-then-append shape as CA-overwatch-01/02, applied
+    /// to `bridged_findings.jsonl`. A finding_id whose existing bridge record
+    /// has become undecodable is invisible to the dedup check, so a second
+    /// `review-queue --to-backlog` run appends a duplicate bridge record for
+    /// the same finding_id instead of recognizing it as already forwarded.
+    /// (Low severity per the audit: bridging is also gated upstream by
+    /// `scan_*` callers in `bridge.rs`, so this is a backstop, not the primary
+    /// defense -- but the dedup-then-append itself is still broken.) RED: the
+    /// duplicate gets appended.
+    #[test]
+    fn ca_overwatch_03_append_bridged_finding_duplicates_over_undecodable_prior_line() {
+        // CA-overwatch-03: dedup reads bridged_findings best-effort, so an undecodable prior line for the same finding_id does not block a duplicate append
+        let _guard = home_lock();
+        let prev_home = std::env::var_os("HOME");
+
+        let dir = fresh_ledger_home("bridge-dup-undecodable");
+        let path = bridged_findings_path(&dir).unwrap();
+        if let Some(p) = path.parent() {
+            std::fs::create_dir_all(p).unwrap();
+        }
+        // A line that is present, mentions finding_id "b1", but cannot be
+        // decoded as a `BridgedFinding`. `read_bridged_findings` drops it
+        // silently, so the dedup check below never sees that b1 was already
+        // bridged.
+        std::fs::write(&path, "{\"finding_id\":\"b1\",not-valid-json\n").unwrap();
+
+        append_bridged_finding(&dir, "b1").unwrap();
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let b1_lines = raw.lines().filter(|l| l.contains("b1")).count();
+        assert_eq!(
+            b1_lines, 1,
+            "an undecodable prior line for finding_id b1 must not let a \
+             second b1 bridge record be appended as a duplicate row; raw file:\n{raw}"
+        );
+
+        restore_home(prev_home);
+    }
+
+    /// CA-overwatch-03 mirror twins of
+    /// `ca_overwatch_03_append_bridged_finding_duplicates_over_undecodable_prior_line`:
+    /// every other dedup-then-append writer must also refuse to append when an
+    /// undecodable prior line may hold the same key, and must SAY so (non-
+    /// `Recorded` outcome / `Err`), never report a silent success.
+    #[test]
+    fn ca_overwatch_03_twins_refuse_duplicate_over_undecodable_prior_line() {
+        let _guard = home_lock();
+        let prev_home = std::env::var_os("HOME");
+        let dir = fresh_ledger_home("dedup-twins-undecodable");
+
+        let count = |p: &std::path::Path, needle: &str| {
+            std::fs::read_to_string(p)
+                .unwrap()
+                .lines()
+                .filter(|l| l.contains(needle))
+                .count()
+        };
+        let seed = |p: &std::path::Path, line: &str| {
+            if let Some(parent) = p.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(p, line).unwrap();
+        };
+
+        // append_bridged_entry
+        let p = bridged_entries_path(&dir).unwrap();
+        seed(&p, "{\"key\":\"systemic:e1\",not-valid-json\n");
+        let out = append_bridged_entry(&dir, "systemic:e1").unwrap();
+        assert!(
+            matches!(out, AppendOutcome::SkippedUndetermined(_)),
+            "bridged_entry: undetermined dedup must be reported, got {out:?}"
+        );
+        assert_eq!(count(&p, "systemic:e1"), 1, "bridged_entry duplicated");
+
+        // append_merge_conflict (Result<()>: undetermined dedup is an Err)
+        let p = merge_conflicts_path(&dir).unwrap();
+        seed(&p, "{\"conflict_id\":\"c-9\",not-valid-json\n");
+        let res = append_merge_conflict(&dir, &merge_conflict_entry("c-9", 1));
+        assert!(
+            res.is_err(),
+            "merge_conflict: undetermined dedup must be an Err, got {res:?}"
+        );
+        assert_eq!(count(&p, "c-9"), 1, "merge_conflict duplicated");
+
+        // append_merge_conflict_resolution
+        let p = merge_conflict_resolutions_path(&dir).unwrap();
+        seed(&p, "{\"conflict_id\":\"c-8\",not-valid-json\n");
+        let out =
+            append_merge_conflict_resolution(&dir, &merge_conflict_resolution("c-8", 1)).unwrap();
+        assert!(
+            matches!(out, AppendOutcome::SkippedUndetermined(_)),
+            "merge_conflict_resolution: undetermined dedup must be reported, got {out:?}"
+        );
+        assert_eq!(count(&p, "c-8"), 1, "merge_conflict_resolution duplicated");
+
+        // append_disposition / append_bridged_finding report the refusal too
+        // (the RED tests above pin only the no-duplicate half).
+        let p = dispositions_path(&dir).unwrap();
+        seed(&p, "{\"finding_id\":\"d9\",not-valid-json\n");
+        let out = append_disposition(&dir, &disposition("d9")).unwrap();
+        assert!(
+            matches!(out, AppendOutcome::SkippedUndetermined(_)),
+            "disposition: got {out:?}"
+        );
+        let p = bridged_findings_path(&dir).unwrap();
+        seed(&p, "{\"finding_id\":\"b9\",not-valid-json\n");
+        let out = append_bridged_finding(&dir, "b9").unwrap();
+        assert!(
+            matches!(out, AppendOutcome::SkippedUndetermined(_)),
+            "bridged_finding: got {out:?}"
+        );
+
+        // Control: a fully readable ledger still appends (the fix must not
+        // turn every append into a refusal).
+        let p = bridged_entries_path(&dir).unwrap();
+        std::fs::remove_file(&p).unwrap();
+        assert_eq!(
+            append_bridged_entry(&dir, "systemic:ok").unwrap(),
+            AppendOutcome::Recorded
+        );
+        assert_eq!(count(&p, "systemic:ok"), 1);
 
         restore_home(prev_home);
     }

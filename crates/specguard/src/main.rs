@@ -1597,6 +1597,11 @@ fn ack(
                     Ok(overwatch::store::AppendOutcome::SkippedContended) => {
                         unrecorded.push(format!("{id} (store lock contended)"))
                     }
+                    // The dedup could not read the ledger in full, so the
+                    // append was refused: nothing persisted, same as above.
+                    Ok(overwatch::store::AppendOutcome::SkippedUndetermined(why)) => {
+                        unrecorded.push(format!("{id} ({why})"))
+                    }
                     Err(e) => unrecorded.push(format!("{id} ({e})")),
                 }
             }

@@ -26199,7 +26199,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
 touched_files = []
-status = "pending"
+status = "done"
 notes = """
 実測 2026-09-13、測定点 c39701bc、rollout 直後（overwatch は harness-core 0.2.24 で再ビルド済み）。
 
@@ -26257,9 +26257,64 @@ main は今この RED を抱えている。隠していない: pre-commit は ca
 テスト作者とは別の実装者が行うこと (第2節(a))。
 
 overwatch は 0.2.34 -> 0.2.35 に lockstep 済み。GATE crate なので
-scripts/rollout-plugins.sh --canary が別途必要。"""
+scripts/rollout-plugins.sh --canary が別途必要。
+=== 解決 2026-09-23 (サイクル7) ===
+
+前提の再測定 (着手前、測定点 main 6725d0d3): TRUE。cargo test -p overwatch --bins は
+365 passed / 4 failed / 1 ignored で、6 日前と同一の 4 本が赤のままだった。
+
+着地: commit 32437a9c (main へ 39ce1952 で merge)。overwatch 0.2.35 -> 0.2.36、
+3 ファイル lockstep 済み。
+
+実装 (aggregate.rs の cache_is_fresh): ledger_mtime を実際に消費するようにした。
+  - Undetermined は return false (第3節: 判定不能は制限側)。match は網羅的にしてあり、
+    Determination に将来 variant が増えたら permissive 側へ黙って落ちるのではなく
+    コンパイルエラーになる。
+  - Known(m) で m >= built_at なら return false。同一秒の tie (順序づけ不能) を
+    含めるため > ではなく >= である。TTL 判定に到達する前に決まる。
+  - それ以外は従来どおり TTL と clock-skew (built_at <= now) が決める。
+
+docstring の是正 (第4節、同一 commit): a637ad63 が入れた
+「ledger_mtime is accepted but NOT consulted as of this commit」および
+「Do not describe this function as invalidating on ledger changes until that code is here」
+という記述は実装後は偽になるので、docstring ブロックごと書き直した。同じ主張をしていた
+テストブロックのコメント 2 箇所も併せて是正した。
+
+F to P オラクル: 成立を観測。transition fail_to_pass、valid_fp_oracle true。
+  RED (修正前): test result: FAILED. 3 passed; 3 failed; 364 filtered out
+    落ちた 3 本は rule2 x2 と rule3。
+  GREEN (32437a9c): test result: ok. 369 passed; 0 failed; 1 ignored
+  main 上でも 369 passed / 0 failed / 1 ignored を確認 (39ce1952)。
+
+第2節(a) の分離: 4 本の F to P テストは先行セッションの別 agent が書いたもので、
+**一切改変していない**。各関数本体を git show HEAD:... と新ファイルから機械抽出して
+byte 比較で確認した。#[test] は前後とも 48 個、#[ignore] は前後とも 0 個。
+
+再アンカーしたテスト 5 本 (いずれも assertion 本文と期待値は不変。名指ししている
+性質を保つための引数の付け替えのみ):
+  test_cache_is_fresh_within_ttl            known(1000) -> known(999)   TTL の新鮮さ (境界含む)
+  test_cache_is_fresh_expired_past_ttl      known(1000) -> known(999)   TTL 超過での失効
+  test_cache_is_fresh_rejects_future_built_at known(2000) -> known(1999) clock skew の拒否
+  test_build_cached_reuses_fresh_cache_without_rebuilding   leases 無し -> 空 registry (mtime = built_at - 1)
+  test_build_cached_second_call_within_ttl_hits_cache       leases 無し -> 空 registry (mtime = built_at - 1)
+最初の 3 本は ledger が built_at と同値だったため rule2 が先に発火してしまい、
+名指ししている性質 (TTL / clock skew) をもはや観測しなくなる。この引数は a637ad63 が
+シグネチャ移行時に機械的に挿入したもので、同 commit 自身が「accepted but NOT consulted」と
+書いているとおり同一秒の意味論についての人間の決定ではない (根拠は 56a2cc7b に記録済み)。
+後ろ 2 本は leases.json が存在しないと store::leases_mtime が Undetermined を返し
+rule3 が正しくキャッシュヒットを拒むため赤くなったもので、空 registry を置くことで
+「lease が登録されていない」という前提を保ったまま再アンカーした。
+
+未実施 (隠さず明記):
+  - overwatch は GATE クレートなので scripts/rollout-plugins.sh --canary が別途必要。
+    この run では走らせていない。稼働ハーネスの overwatch は旧挙動のまま。
+  - store::leases_mtime が「leases.json が存在しない」を Undetermined として返す点
+    (store.rs:95-103) は rule3 と組み合わさると「一度も lease が書かれていないストアでは
+    キャッシュを一切配らない」という、本チケットの rule よりも広い挙動になる。
+    制限側なので安全だが、absent と unreadable を分けるべきかは未評価。
+    store.rs は本タスクのスコープ外なので触っていない。別途起票する。"""
 created_at = 1789297114
-updated_at = 1790114679
+updated_at = 1790127688
 weight = 0.0
 issue_number = 628
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/628"
@@ -28099,3 +28154,103 @@ updated_at = 1790119361
 weight = 0.0
 issue_number = 676
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/676"
+
+[[task]]
+id = "6af7bcdc"
+title = "condukt の run state ストアも repo_root キーで per-worktree に分裂する (bcfc5491 と同じ欠陥クラス、ロックではなく state 側)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "project-key",
+    "worktree-split",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-23、測定点 main 6725d0d3。bcfc5491 (repo-primary ロックの worktree 分裂) の修正中に副産物として観測した。
+
+現象: linked worktree を cwd にして condukt state resume-context --run run-20260917-030727-89796 を打つと
+  condukt: no run run-20260917-030727-89796 at /Users/yuki/.condukt/state/session-2444be10-d7db0410/run-20260917-030727-89796.json: No such file or directory (os error 2)
+となる。main tree から同じコマンドを打つと正常に JSON が返る。run state のプロジェクトキーが checkout ごとに別解決されている。
+
+機構: lock.rs の lock_path と同様、state パスも store::repo_root(cwd) 由来のキーを使う。repo_root は .git ENTRY を持つ最初の祖先で止まり、linked worktree では .git が FILE なので worktree 自身を返す。
+
+bcfc5491 との関係: 同じ欠陥クラスだが別の store であり、bcfc5491 では閉じていない。eab522d0 は repo-primary ロックだけを main_worktree_root へ opt-in させ、lock_path と run state は意図的に据え置いた。広い移行は 43393ce2。
+
+実害 (観測済み): CLAUDE.md 第8節が全作業を worktree で行うことを義務づけているのに、worktree からは自分の run が見えない。オーケストレータは state 系コマンドだけ main tree を cwd にせざるを得ず、worktree 分離の原則と矛盾する。
+
+判断は求めない。事実として起票する。"""
+created_at = 1790130736
+updated_at = 1790130736
+weight = 0.0
+issue_number = 680
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/680"
+
+[[task]]
+id = "840449a8"
+title = "condukt --bins に負荷依存フレークが 2 本 (claim_progress_head_signal_ignores_run_state_task_ordering / diffrisk_record every_invocation_is_journaled)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "flake",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-23、測定点 main dafe3e70。サイクル7 t1 の着地確認中に観測した。
+
+観測: cargo test -p condukt --bins を繰り返すと、別 worktree で cargo (overwatch のビルド/テスト) が同時に走っている間だけ単発の失敗が出る。2 回の run で**別々のテスト**が 1 本ずつ落ちた:
+
+  run A: 840 passed; 1 failed -> claim::tests::claim_progress_head_signal_ignores_run_state_task_ordering
+  run B: 840 passed; 1 failed -> diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded
+    (run B は t1 の検証者が独立に観測したもの)
+
+対照: 同時実行が無くなった後に 3 回連続で実行すると 3 回とも
+  test result: ok. 841 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+であった。したがって t1 (eab522d0、lock.rs のみ) の回帰ではない。
+
+疑い: 固定の一時パス / 共有ストアを使うテストが、並行 run と実ストアを取り合っている可能性。MEMORY の 'killed task leaves orphan loop' が記録している「固定 /tmp fixture 経由で 2 つの cargo test が互いを壊す」と同じ形に見える。claim 系は実際に ~/.condukt/state 配下の claims.json を触りうるので、テストが実ストアに触っていないかを先に確認すべき。
+
+これは隠さないために起票する。緑を 3 回観測したことを理由に「フレークだから無視」とはしない — 2 本とも判定経路 (claim progress と journal) のテストであり、負荷で落ちるなら本番でも判定不能になりうる。
+
+未検証: 原因の特定はしていない。どの一時パスを共有しているかは未調査。"""
+created_at = 1790130752
+updated_at = 1790130752
+weight = 0.0
+issue_number = 681
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/681"
+
+[[task]]
+id = "19a12a8e"
+title = "overwatch store::leases_mtime が leases.json の absent と unreadable を両方 Undetermined にするため、rule3 と組むと lease 未登録ストアでキャッシュを一切配らない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "overwatch",
+    "determination",
+    "absent-vs-unreadable",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-23、測定点 main 39ce1952。e073bdb1 (cache_is_fresh の rule2/rule3 実装) の実装者が作業中に気づき、スコープ外として報告してきたものを起票する。
+
+事実: store.rs:95-103 の store::leases_mtime は leases.json が**存在しない**場合も metadata unreadable と同じく Determination::Undetermined を返す。e073bdb1 で入れた rule3 は Undetermined を一律 not-fresh に倒すので、両者を合わせると「一度も lease が書かれていないストアでは status cache を一切配らない」という挙動になる。
+
+評価: 制限側なので安全であり fail-open ではない。ただし e073bdb1 が述べている rule よりも**広い**挙動であり、意図されたものかは未確認。
+
+論点: absent (台帳がまだ無い = 積極的な観測) と unreadable (台帳はあるが metadata が読めない = 本当に判定不能) は、CLAUDE.md 第3節の三値の考え方では別物のはずである。5e62b0eb で議論されている「worktree が消えていることは判定不能ではなく観測である」と同じ区別が、ここにも当てはまる可能性がある。
+
+スコープ: store.rs は e073bdb1 の touched_files 外なので今回は一切触っていない。絶対に黙って変えないこと — 制限側から緩める変更になるので、先に absent を Known として扱ってよい根拠を示す必要がある。
+
+未検証: absent を Known(0) 相当に倒した場合に何が fresh として配られるようになるかは測っていない。"""
+created_at = 1790130765
+updated_at = 1790130765
+weight = 0.0
+issue_number = 682
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/682"

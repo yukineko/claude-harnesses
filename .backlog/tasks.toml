@@ -25509,9 +25509,33 @@ notes = """
 
 見分け方: crates/blastguard/src/detect.rs の redirect 抽出が引用状態を持つトークナイザを通しているかを読む。通していれば読み2、通していなければ読み1。加えて、抽出された target が空文字のときの分岐が Deny か Ask かを読む。空で Deny なら、そこが本件の実体。
 
-再現の最小形は未取得（本件は /compass 実行中に踏んだので、元の課題へ戻るため深追いしていない）。最小形の特定自体が本チケットの第一歩。"""
+再現の最小形は未取得（本件は /compass 実行中に踏んだので、元の課題へ戻るため深追いしていない）。最小形の特定自体が本チケットの第一歩。
+
+--- 2026-09-24 flow cycle9 で 2 回再現、測定点 b19d9bbe ---
+『疑い』ではなく確定として書き直せる観測が取れた。逐語のブロック文言は 2 回とも同一:
+  '> ' destroys the file's current contents and `` is a relative path and blastguard
+  does not know which directory it is relative to, so it cannot tell whether these
+  bytes are recoverable
+重要な点: ブロックされた 2 コマンドはいずれも truncating redirect を 1 つも含まず、
+redirect は fd-dup の 2>&1 のみだった。それでも blastguard は『> に空のターゲット』と
+報告する。つまり誤検知の実体は『2>&1 を truncating redirect と読む』ことであり、
+ターゲットが空になるのはその誤読の帰結である。
+最小コントロールで切り分け済み (予測ではなく観測。4 本すべて同セッションで実行):
+  (i)  python3 -c "<複数行>"、redirect 一切なし                -> ALLOW
+  (ii) python3 -c "<単一行>" 2>&1 | head -3                   -> DENY (上記文言)
+  (iii) python3 --version 2>&1 | head -3                       -> ALLOW
+  (iv) python3 以外の多数のコマンド + 2>&1 | head               -> ALLOW
+したがって deny の必要十分条件は『python3 -c <文字列> が在ること』と『その後に 2>&1 が
+在ること』の両方であり、どちらか一方では発火しない。複数行かどうかは無関係だった
+(当初そう予測したが (i) と (ii) が反証した)。
+最小再現 (そのまま回帰 fixture にできる):
+  python3 -c "print('x')" 2>&1 | head -3
+隣接: 45f2bb7f (done, $( ) 内の 2>&1) / 079b643f (2>&1 の直後が ) ) / 32706d14。
+本件はそれらと同じ redirect_targets の解析であり、修正は同じ場所に収束する可能性が高い。
+done_criteria: 複数行の python3 -c "..." を含み truncating redirect を持たない
+コマンドが deny されないこと。上記 2 コマンドを回帰テストの fixture にできる。"""
 created_at = 1789292032
-updated_at = 1789292032
+updated_at = 1790204868
 weight = 0.0
 issue_number = 603
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/603"
@@ -29579,10 +29603,27 @@ tags = [
     "p0",
 ]
 touched_files = []
-status = "pending"
-notes = "finding-id:gate-exec:run-20260724-054246-15607:specguard-rollout file:(none) severity:high | confirmed: 61日前 | regression test: 該当テストなし"
+status = "done"
+notes = """
+finding-id:gate-exec:run-20260724-054246-15607:specguard-rollout file:(none) severity:high | confirmed: 61日前 | regression test: 該当テストなし
+
+--- 2026-09-24 flow cycle9 の実測で解決済みと判定 (測定点 b19d9bbe) ---
+この item は overwatch --to-backlog が橋渡しした「61/56 日前の run で gate-check が
+escalate した」という履歴記録であり、実施すべき作業そのものではない。現時点で
+その作業が満たされているかを実測した結果が以下。作業は当セッションでは行っていない
+(既に landed 済みだった)。
+実測:
+  crates/specguard/Cargo.toml version = 0.2.58
+  /Users/yuki/.claude/plugins/cache/yukineko/specguard/0.2.58/.deployed-from.json =
+    commit d5eab6754a711d1cc99858b3df73ed6e4f42f758, dirty:false,
+    harness_core_version 0.2.29, deployed_at 1790185107
+  git merge-base --is-ancestor d5eab675 HEAD -> YES (d5eab675 は HEAD の祖先)
+  scripts/check-plugin-rollout.py の ROLLOUT DRIFT 一覧に specguard は含まれない
+    (41 plugin 中 drift は tdd の 1 件のみ = 既知 d69f4b23)
+したがって specguard の rollout は現行 source version で完了しており、
+61 日前の escalation は解消済み。sha256 ではなく provenance で確認した。"""
 created_at = 1790184307
-updated_at = 1790184307
+updated_at = 1790204722
 weight = 0.0
 issue_number = 716
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/716"
@@ -29597,10 +29638,25 @@ tags = [
     "p0",
 ]
 touched_files = []
-status = "pending"
-notes = "finding-id:gate-exec:run-20260724-081356-91102:overwatch-rollout file:(none) severity:high | confirmed: 61日前 | regression test: 該当テストなし"
+status = "done"
+notes = """
+finding-id:gate-exec:run-20260724-081356-91102:overwatch-rollout file:(none) severity:high | confirmed: 61日前 | regression test: 該当テストなし
+
+--- 2026-09-24 flow cycle9 の実測で解決済みと判定 (測定点 b19d9bbe) ---
+この item は overwatch --to-backlog が橋渡しした「61/56 日前の run で gate-check が
+escalate した」という履歴記録であり、実施すべき作業そのものではない。現時点で
+その作業が満たされているかを実測した結果が以下。作業は当セッションでは行っていない
+(既に landed 済みだった)。
+実測:
+  crates/overwatch/Cargo.toml version = 0.2.38
+  /Users/yuki/.claude/plugins/cache/yukineko/overwatch/0.2.38/.deployed-from.json =
+    commit d5eab6754a711d1cc99858b3df73ed6e4f42f758, dirty:false,
+    harness_core_version 0.2.29, deployed_at 1790185105
+  git merge-base --is-ancestor d5eab675 HEAD -> YES
+  check-plugin-rollout.py の drift 一覧に overwatch は含まれない
+したがって overwatch の rollout は完了済みで、61 日前の escalation は解消済み。"""
 created_at = 1790184310
-updated_at = 1790184310
+updated_at = 1790204724
 weight = 0.0
 issue_number = 717
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/717"
@@ -29615,10 +29671,28 @@ tags = [
     "p0",
 ]
 touched_files = []
-status = "pending"
-notes = "finding-id:gate-exec:run-20260729-061440-32616:audit-canary-gate-coverage file:(none) severity:high | confirmed: 56日前 | regression test: 該当テストなし"
+status = "done"
+notes = """
+finding-id:gate-exec:run-20260729-061440-32616:audit-canary-gate-coverage file:(none) severity:high | confirmed: 56日前 | regression test: 該当テストなし
+
+--- 2026-09-24 flow cycle9 の実測で解決済みと判定 (測定点 b19d9bbe) ---
+この item は overwatch --to-backlog が橋渡しした「61/56 日前の run で gate-check が
+escalate した」という履歴記録であり、実施すべき作業そのものではない。現時点で
+その作業が満たされているかを実測した結果が以下。作業は当セッションでは行っていない
+(既に landed 済みだった)。
+実測 (散文コメントではなく挙動を観測した):
+  scripts/rollout-plugins.sh:944 以降の health gate は、どの条件分岐にも包まれて
+  いない。旧実装の `if [ $s -lt $((nstages - 1)) ]` は grep で 1 ヒットするが、
+  それは 946 行目の説明コメント内の記述のみ (実行文としては存在しない)。
+  scripts/tests/canary-final-stage-gate.sh を実行 -> PASS。逐語の assert:
+    ok: the only stage was health-gated (1 gate invocation)
+    ok: healthy gate reported PROCEED
+    ok: healthy single-stage canary exited 0
+    ok: run_rebuild_and_sync was reached (rollout completed)
+したがって canary gate の coverage 監査は完了しており、全 stage (単一 stage run の
+唯一の stage を含む) が gate される。56 日前の escalation は解消済み。"""
 created_at = 1790184313
-updated_at = 1790184313
+updated_at = 1790204725
 weight = 0.0
 issue_number = 718
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/718"
@@ -29633,10 +29707,27 @@ tags = [
     "p0",
 ]
 touched_files = []
-status = "pending"
-notes = "finding-id:gate-exec:run-20260729-061440-32616:fix-canary-gate-final-stage file:(none) severity:high | confirmed: 56日前 | regression test: 該当テストなし"
+status = "done"
+notes = """
+finding-id:gate-exec:run-20260729-061440-32616:fix-canary-gate-final-stage file:(none) severity:high | confirmed: 56日前 | regression test: 該当テストなし
+
+--- 2026-09-24 flow cycle9 の実測で解決済みと判定 (測定点 b19d9bbe) ---
+この item は overwatch --to-backlog が橋渡しした「61/56 日前の run で gate-check が
+escalate した」という履歴記録であり、実施すべき作業そのものではない。現時点で
+その作業が満たされているかを実測した結果が以下。作業は当セッションでは行っていない
+(既に landed 済みだった)。
+実測: 修正は既に landed しており、テストで固定されている。
+  scripts/tests/canary-gate-eval-failclosed.sh を実行 -> PASS。逐語の assert:
+    ok: rc=3 verdict exited 4 (rollback + halt) via the refactored helper
+    ok: reported ROLLBACK
+    ok: stage-0 rolled back to prior on rc=3
+    ok: violation-rollback event recorded (emit_record=1 honored)
+  rollout-plugins.sh の gate_rc 処理は non-{0,3} を fail CLOSED (stage rollback +
+  exit 5) にしており、明示の ROLLOUT_GATE_EVAL_FAILSOFT=1 でのみ PROCEED する。
+  これは CLAUDE.md 第3節 (判定不能は制限側) を満たす形。
+したがって final stage の gate 欠落は修正済み。56 日前の escalation は解消済み。"""
 created_at = 1790184315
-updated_at = 1790184315
+updated_at = 1790204726
 weight = 0.0
 issue_number = 719
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/719"
@@ -30398,3 +30489,93 @@ updated_at = 1790203482
 weight = 0.0
 issue_number = 759
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/759"
+
+[[task]]
+id = "acf4f7ba"
+title = "flow SKILL Step 1 が `compass gap` の出力に存在しない to_condukt を参照している (to_condukt は compass route 側のフィールド)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flow",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-24、測定点 b19d9bbe。flow cycle9 の Step 1 で観測。
+
+flow SKILL.md Step 1 は `compass gap` を実行し『その一手を to_condukt 候補として
+保持し、Step 2 へ』と書いている。しかし実際の `compass gap` の JSON トップレベルキーは
+  dod / recent_activity / progress_excerpt / measuring_stick / last_outcome / opportunities
+の 6 つで、to_condukt は存在しない。to_condukt を持つのは crates/compass/src/route.rs の
+RouteResult (route.rs:66 pub to_condukt: Vec<Task>) であり、別サブコマンドの出力である。
+
+影響: Step 1 を字義どおり実装しようとすると存在しないキーを読むことになり、None を
+『一手が引けない = charter が陳腐』と誤読しうる。Step 1 の停止条件は『charter が陳腐・
+矛盾・抽象すぎて一手が引けない場合は自動実行しない』なので、キー名の取り違えが
+ループ全体の誤停止に化ける経路がある。今回は opportunities を見て判断したので実害は
+出ていない。
+
+両方の読み: (a) SKILL の記述誤り (gap の出力で判断すべきところを route の語彙で書いた)。
+(b) to_condukt は『候補の呼び名』にすぎず特定フィールドを指していない、という意図的な
+散文。(b) なら誤りではないが、同名の実フィールドが別サブコマンドに存在する以上、
+読み手が (a) と区別できない。
+
+見分け方: flow が compass route を呼ぶ設計だったのかを履歴で確認する。呼ばないなら (a)。
+
+done_criteria: Step 1 が参照するフィールド名が `compass gap` の実出力と一致するか、
+route を呼ぶなら呼ぶと書かれている。"""
+created_at = 1790204868
+updated_at = 1790204868
+weight = 0.0
+issue_number = 760
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/760"
+
+[[task]]
+id = "7a842862"
+title = "overwatch --to-backlog が橋渡しする gate-check escalation は「起きた出来事」であって「やるべき作業」ではなく、解決経路を持たないまま p0 で滞留する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "overwatch",
+    "backlog",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-24、測定点 b19d9bbe。flow cycle9 のバッチが偶然この 4 件だったことで気づいた。
+
+観測した 4 件 (いずれも tag: condukt-gate, p0):
+  cfe6d14c gate-check escalated: task specguard-rollout ... (61 日前)
+  79f1c03b gate-check escalated: task overwatch-rollout ... (61 日前)
+  ab178c4d gate-check escalated: task audit-canary-gate-coverage ... (56 日前)
+  4026e1a0 gate-check escalated: task fix-canary-gate-final-stage ... (56 日前)
+notes の形は一律に finding-id:gate-exec:<run>:<task> file:(none) severity:high |
+confirmed: N日前 | regression test: 該当テストなし。
+
+問題の形: title が『<run> で gate-check が escalate した』という過去の出来事を述べて
+おり、何をすれば閉じるのかを述べていない。file:(none) なので触る対象も無い。結果として
+  - 自動では絶対に閉じない (誰も『あの escalation はもう解消した』と書き戻さない)
+  - p0 なのでキュー先頭に居座り、flow の毎サイクルが最初にこれを掴む
+という滞留が起きる。実際 4 件とも、実測すると裏の作業は既に完了していた (rollout は
+provenance で確認、canary gate は scripts/tests/ の 2 本が PASS)。
+
+重要 (過大主張を避ける): 今回 pending の condukt-gate タグは この 4 件で全部であり、
+大量滞留ではない。クラスとしての指摘であって件数の問題ではない。
+
+両方の読み: (a) 橋渡しの粒度が間違っている。escalation は『人間が判断を返すべき通知』で
+あって backlog item ではない、あるいは item にするなら『何を確認すれば閉じるか』を
+done_criteria として持たせるべき。(b) 意図的。escalation を消さずに残すことが目的で、
+閉じるのは人間の仕事だと設計されている。
+
+見分け方: overwatch の --to-backlog がこの kind に done_criteria を付ける口を持って
+いるかを読む。持っていて使っていないなら (a)。
+
+done_criteria: gate-check 由来の bridged item が『何を観測すれば閉じられるか』を
+notes に持つ。または escalation は backlog ではなく review-queue 側へ出す。"""
+created_at = 1790204869
+updated_at = 1790204869
+weight = 0.0
+issue_number = 761
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/761"

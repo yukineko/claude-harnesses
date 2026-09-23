@@ -6725,7 +6725,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "claimed"
+status = "done"
 notes = """
 e19d501a の作業中に cargo test --workspace を4回回したうち1回で失敗 (2035 passed / 1 failed)。他3回と、隔離/直列での11回連続実行では pass。失敗させた変更は backlog/autoflow/daily/flow のみで condukt はそれらに依存しないため、condukt のテストバイナリは差分の有無で同一。したがって原因は変更ではなくマシン負荷への感度である。完了条件: 負荷を掛けた状態で決定論的に再現させ、テストが実時間のタイミングに依存しているのか lock 実装側にレースがあるのかを事実として切り分けること。落ちるのを見なかったことにしない。テストを緩める・retry でごまかすのは不可。
 
@@ -6735,7 +6735,7 @@ e19d501a の作業中に cargo test --workspace を4回回したうち1回で失
 pending へ戻した。本チケットの内容自体は未着手のままで、失敗ではない。
 経緯と、回収した RED スイートの詳細は 2c1e54b3 にある。"""
 created_at = 1784755092
-updated_at = 1790120245
+updated_at = 1790131160
 weight = 0.0
 issue_number = 323
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/323"
@@ -8154,10 +8154,10 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "claimed"
+status = "done"
 notes = "実測 2026-07-28 (commit 1601b835, schemaguard 0.1.9)。validate を三値化 (Report: violations / undetermined / waived) し check_verdict が Clean=0 / Violation=1 / Undetermined=2 に写すようにしたが、Undetermined を実際に生む唯一の経路 (宣言された items 制約が適用できない) は登録済み5スキーマでは踏めない。items を宣言する唯一のフィールド decomposition.tasks が同時に Ty::Array も宣言しているため、非配列値は items に到達する前に型チェックで弾かれる (verifier が registry.rs の全5スキーマを読んで反例なしを確認済み)。したがって exit 2 は check_verdict のマッピング単体テスト (undetermined_check_exits_two_not_zero) でしか証明されておらず、CLI 経由の end-to-end 証跡が無い。これは worker が隠さず disclosure し docstring と docs/specs/schemaguard.md に明記した既知の限界であって隠蔽ではないが、残課題ではある。次の一手の候補: (a) items を宣言しつつ Ty::Any を許すスキーマを1つ登録して到達可能にする、(b) 判定不能を生む別の経路 (未知の Ty、壊れた schema 定義) を Undetermined へ配線する、(c) 到達不能なら第3値を持つ意味が薄いと判断して設計を見直す。まず (a) か (b) の可否を測ること"
 created_at = 1785174008
-updated_at = 1790120246
+updated_at = 1790138019
 weight = 0.0
 issue_number = 82
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/82"
@@ -28409,3 +28409,22 @@ updated_at = 1790130895
 weight = 0.0
 issue_number = 684
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/684"
+
+[[task]]
+id = "830715af"
+title = "schemaguard: README / plugin manifest / marketplace description list a stale schema set and version (no verdict, no undetermined-probe; 0.1.2)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "schemaguard",
+    "docs",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Reported 2026-09-23 by the implementer of d17107ad (merge 048aa2b1, schemaguard 0.1.15). docs/specs/schemaguard.md already notes that README and manifest descriptions list only 4 schemas and a stale version 0.1.2; registry.rs now has 6 (decomposition, episode, playbook, scout-measure, verdict, undetermined-probe). Prose that disagrees with the code misleads the next reader (CLAUDE.md 4). Settle by diffing registry::names() against each description."
+created_at = 1790138021
+updated_at = 1790138021
+weight = 0.0
+issue_number = 685
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/685"

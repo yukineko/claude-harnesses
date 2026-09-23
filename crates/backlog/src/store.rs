@@ -228,10 +228,12 @@ fn save_with_syncer<S: DurabilitySyncer>(path: &Path, tasks: &[Task], syncer: &S
 //     read-modify-write (`next_claim_with`). Measured reason for `add`:
 //     backlog bd6d81df, where two adds printed `added: <id>` and exited 0
 //     while their records existed in no store.
-//   - Runs the closure UNPROTECTED (`with_tasks_lock`): the remaining
-//     mutators (`requeue_expired`, `mark_*`, `edit`, and the `#[cfg(test)]`
-//     `add_with_weight`). Under contention these CAN lose an update and
-//     report success; that is a known defect of those paths, not a guarantee.
+//   - FAIL CLOSED without inspecting the flag (`with_tasks_lock_required`):
+//     the remaining production mutators (`requeue_expired`, `mark_done`,
+//     `mark_failed`, `edit`, `record_sync_outcomes`) return `Err` and do not
+//     run their read-modify-write (CA-backlog-03).
+//   - Runs the closure UNPROTECTED (`with_tasks_lock`): `#[cfg(test)]` only,
+//     used by the test helper `add_with_weight`. Not compiled into the binary.
 
 /// Sibling lockfile path for a tasks file (e.g. `tasks.toml` -> `tasks.toml.lock`).
 fn tasks_lock_path(path: &Path) -> PathBuf {
@@ -514,8 +516,9 @@ fn tasks_lock_is_abandoned_with(lock_path: &Path, policy: TasksLockPolicy) -> bo
 /// `None` means "mutual exclusion could NOT be established", which is not the
 /// same as "no concurrent writer exists". What the caller does with it differs
 /// per caller: the production `add` path and a claim's read-modify-write refuse
-/// (see [`with_tasks_lock_aware`]); the mutators still on [`with_tasks_lock`]
-/// proceed unprotected and can therefore lose an update.
+/// (see [`with_tasks_lock_aware`]); the other production mutators refuse too
+/// (see [`with_tasks_lock_required`]). Only the `#[cfg(test)]`
+/// [`with_tasks_lock`] proceeds unprotected.
 fn try_acquire_tasks_lock(path: &Path) -> Option<TasksLockGuard> {
     try_acquire_tasks_lock_with(path, TASKS_LOCK_POLICY)
 }
@@ -580,26 +583,49 @@ fn try_acquire_tasks_lock_with(path: &Path, policy: TasksLockPolicy) -> Option<T
 
 /// Run `f` while holding the tasks-file-scoped advisory lock — IF it can be
 /// acquired. If the bounded acquire budget is exhausted, `f` is run
-/// UNPROTECTED and cannot tell the difference, so this function guarantees
-/// only "serialized against other `with_tasks_lock` callers WHEN the lock was
-/// available". It does NOT guarantee mutual exclusion, and a caller that
-/// mutates through it can therefore have its read-modify-write clobbered by a
-/// concurrent writer while still returning `Ok`.
+/// UNPROTECTED and cannot tell the difference, so this function does NOT
+/// guarantee mutual exclusion, and a caller that mutates through it can have
+/// its read-modify-write clobbered by a concurrent writer while still
+/// returning `Ok`.
 ///
-/// That is why the production `add` path and a claim's read-modify-write do
-/// NOT use this: they use [`with_tasks_lock_aware`] and refuse. Remaining
-/// users (`requeue_expired`, `mark_*`, `edit`, and the `#[cfg(test)]`
-/// `add_with_weight`) accept the unprotected fallback; for them a lost update
-/// under contention is possible and undiagnosed, which is a defect of those
-/// paths rather than something this function makes safe.
+/// It is therefore `#[cfg(test)]`-only and is NOT compiled into the shipped
+/// binary. Its only remaining caller is the test-only [`add_with_weight`]
+/// helper (whose own doc states it can return `Ok(id)` for a lost write).
+/// Every production mutator goes through [`with_tasks_lock_required`] or
+/// [`with_tasks_lock_aware`], both of which refuse instead of running
+/// unprotected (CA-backlog-03).
 ///
 /// The guard is dropped — and thus the lock released — on every exit path,
 /// including when `f` returns `Err` or panics-unwinds.
+#[cfg(test)]
 fn with_tasks_lock<T>(path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
     // `_guard` is `Some` when we hold the lock, `None` when the bounded acquire
     // did not succeed and `f` therefore runs unprotected (`f` cannot tell).
     // Either way it drops (releasing the lock if held) when this fn returns.
     let _guard = try_acquire_tasks_lock(path);
+    f()
+}
+
+/// Run `f` ONLY while holding the tasks-file-scoped exclusive lock. If the
+/// bounded acquire does not succeed, `f` is NOT run and this returns `Err`
+/// naming the operation and the un-acquired lockfile — "could not establish
+/// mutual exclusion" is not "updated" (CA-backlog-03). Used by the mutators
+/// that do not need to see the lock state themselves: `requeue_expired`,
+/// `mark_done`, `mark_failed`, `edit`, `record_sync_outcomes`.
+///
+/// The guard drops (releasing the lock) on every exit path, including `f`
+/// returning `Err` or unwinding.
+fn with_tasks_lock_required<T>(path: &Path, op: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    let Some(_guard) = try_acquire_tasks_lock(path) else {
+        return Err(anyhow!(
+            "backlog {op} refused: the tasks-file lock {} could not be acquired within {}s, so \
+             this read-modify-write would run without mutual exclusion and could be silently \
+             lost; nothing was changed — retry. If this persists, the lockfile holds the pid of \
+             its owner; it is reclaimed automatically only when that pid is provably gone.",
+            tasks_lock_path(path).display(),
+            TASKS_LOCK_BUDGET.as_secs(),
+        ));
+    };
     f()
 }
 
@@ -617,9 +643,11 @@ fn with_tasks_lock<T>(path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
 ///     double-dispatch the SAME task to concurrent callers if it raced.
 ///     Refuses via `Determination::Undetermined`.
 ///
-/// The other mutators still call plain [`with_tasks_lock`] and are therefore
-/// NOT fail-closed: under contention they can lose an update and still report
-/// success. This is stated as the current behaviour, not as an acceptable one.
+/// The other production mutators (`requeue_expired`, `mark_done`,
+/// `mark_failed`, `edit`, `record_sync_outcomes`) go through
+/// [`with_tasks_lock_required`], which refuses with `Err` without running the
+/// closure when the lock is not held (CA-backlog-03). Only the `#[cfg(test)]`
+/// [`with_tasks_lock`] still runs unprotected.
 ///
 /// The guard drops (releasing the lock if held) on every exit path, including
 /// `f` returning `Err` or unwinding.
@@ -1129,10 +1157,11 @@ fn queue_order(a: &Task, b: &Task) -> std::cmp::Ordering {
 /// 変更したタスクの件数を返す。
 pub fn requeue_expired(path: &Path, now: i64) -> Result<usize> {
     // Serialize the load-modify-save against concurrent mutators on the same
-    // file. Fail-soft: if the scoped lock cannot be acquired, `with_tasks_lock`
-    // still runs the body unprotected, so this never starts returning Err where
-    // it previously returned Ok, and never blocks the SessionStart hook.
-    with_tasks_lock(path, || {
+    // file. Fail-closed (CA-backlog-03): if the scoped lock cannot be acquired
+    // the body does NOT run and this returns `Err` — the SessionStart hook
+    // surfaces that error in its additionalContext (CA-backlog-02) instead of
+    // pretending nothing needed requeuing.
+    with_tasks_lock_required(path, "requeue_expired", || {
         let mut tasks = load(path)?;
         let mut count = 0usize;
         for task in tasks.iter_mut() {
@@ -1191,7 +1220,7 @@ pub fn requeue_expired(path: &Path, now: i64) -> Result<usize> {
 /// (retry-on-timeout, `/flow` re-driving a step after a partial failure) safe
 /// to call twice for the same id without side effects.
 pub fn mark_done(path: &Path, id: &str) -> Result<()> {
-    with_tasks_lock(path, || {
+    with_tasks_lock_required(path, "done", || {
         let mut tasks = load(path)?;
         let task = tasks
             .iter_mut()
@@ -1356,7 +1385,7 @@ pub fn record_sync_outcomes(path: &Path, outcomes: &[SyncOutcome], now: i64) -> 
     if outcomes.is_empty() {
         return Ok(0);
     }
-    with_tasks_lock(path, || {
+    with_tasks_lock_required(path, "sync (record outcomes)", || {
         let mut tasks = load(path)?;
         let mut updated = 0usize;
         for outcome in outcomes {
@@ -1389,7 +1418,7 @@ pub fn record_sync_outcomes(path: &Path, outcomes: &[SyncOutcome], now: i64) -> 
 /// task. This makes at-least-once callers safe to call twice for the same id
 /// without side effects.
 pub fn mark_failed(path: &Path, id: &str, reason: Option<&str>) -> Result<()> {
-    with_tasks_lock(path, || {
+    with_tasks_lock_required(path, "fail", || {
         let mut tasks = load(path)?;
         let task = tasks
             .iter_mut()
@@ -1432,7 +1461,7 @@ pub fn edit(
     notes: Option<&str>,
     status: Option<&str>,
 ) -> Result<()> {
-    with_tasks_lock(path, || {
+    with_tasks_lock_required(path, "edit", || {
         // CA-backlog-004: reject an unknown --status up front (same validation
         // `list` uses) so a typo can never be persisted and strand the task.
         if let Some(w) = crate::task::status_warning(status) {
@@ -4027,7 +4056,7 @@ mod tests {
     // that moment — i.e. this is not a failed write, it is a LOST UPDATE: a
     // later degraded read-modify-write loaded a stale snapshot and clobbered it.
     //
-    // The licensing prose lives in this file: `with_tasks_lock` runs its
+    // The licensing prose lived in this file: `with_tasks_lock` ran its
     // closure UNPROTECTED when the advisory lock cannot be acquired within the
     // budget ("fail-soft: never return `Err` purely because of lock
     // contention"), and `with_tasks_lock_aware`'s doc states that for
@@ -4194,6 +4223,141 @@ mod tests {
              no diagnostic (backlog bd6d81df). Store now holds {} task(s).",
             stored.len(),
         );
+    }
+
+    /// CA-backlog-03: `mark_done` (and its siblings `mark_failed`/`edit`/
+    /// `record_sync_outcomes`/`requeue_expired`) go through plain
+    /// [`with_tasks_lock`], not [`with_tasks_lock_aware`], so — unlike
+    /// [`add_with_weight_and_github_push`] above, which this suite already
+    /// pins as fail-closed — they run their read-modify-write UNPROTECTED and
+    /// still return `Ok` when the exclusive lock could not be acquired for the
+    /// whole budget. The doc comment on `with_tasks_lock_aware` (store.rs
+    /// :620-622) admits this in prose ("NOT fail-closed: under contention they
+    /// can lose an update and still report success") but nothing enforces it.
+    ///
+    /// Same fault injection as `add_must_not_report_success_when_the_tasks_lock_is_unavailable`:
+    /// hold the lockfile the way a live external holder would (refreshed so it
+    /// never goes stale), then call `mark_done` and observe what it reports.
+    #[test]
+    fn ca_backlog_03_mark_done_must_not_report_success_when_the_tasks_lock_is_unavailable() {
+        let path = tmp_path();
+        let id = add(
+            &path,
+            "lock-unavailable mark_done",
+            "/repo",
+            vec![],
+            "",
+            1000,
+        )
+        .expect("seed task must be added while the lock is free");
+
+        let held = HeldTasksLock::acquire(&path);
+
+        let started = std::time::Instant::now();
+        let res = mark_done(&path, &id);
+        let elapsed = started.elapsed();
+
+        assert!(
+            !held.was_stolen(),
+            "fault injection lapsed: the externally-held lockfile {} went missing during \
+             mark_done, so this run did not actually exercise the unprotected path",
+            held.lock_path.display(),
+        );
+
+        let reported = match &res {
+            Ok(()) => "Ok(())".to_string(),
+            Err(e) => format!("Err({e})"),
+        };
+        assert!(
+            res.is_err(),
+            "mark_done reported success ({reported}) after failing to acquire the tasks-file \
+             lock for the whole budget ({elapsed:?}); it ran its read-modify-write UNPROTECTED \
+             (plain with_tasks_lock, not with_tasks_lock_aware), so the update it just claimed \
+             can be clobbered by any concurrent degraded writer with no diagnostic \
+             (CA-backlog-03, store.rs:598)."
+        );
+    }
+
+    /// CA-backlog-03 mirror twins: the other four mutators that were on plain
+    /// `with_tasks_lock` (`mark_failed`, `edit`, `record_sync_outcomes`,
+    /// `requeue_expired`). Same fault injection as the `mark_done` test; each
+    /// must return `Err` AND leave the stored task byte-for-byte unchanged
+    /// (the refusal must happen before the read-modify-write, not after).
+    fn assert_refused_and_unchanged<T: std::fmt::Debug>(
+        name: &str,
+        path: &Path,
+        before: &[Task],
+        held: &HeldTasksLock,
+        res: Result<T>,
+    ) {
+        assert!(
+            !held.was_stolen(),
+            "fault injection lapsed during {name}: lockfile {} went missing",
+            held.lock_path.display(),
+        );
+        assert!(
+            res.is_err(),
+            "{name} reported success ({res:?}) after failing to acquire the tasks-file lock; \
+             it ran its read-modify-write UNPROTECTED (CA-backlog-03)"
+        );
+        let after = load(path).unwrap();
+        assert_eq!(
+            format!("{before:?}"),
+            format!("{after:?}"),
+            "{name} refused but still mutated the store (CA-backlog-03)"
+        );
+    }
+
+    #[test]
+    fn ca_backlog_03_mark_failed_must_not_report_success_when_the_tasks_lock_is_unavailable() {
+        let path = tmp_path();
+        let id = add(
+            &path,
+            "lock-unavailable mark_failed",
+            "/repo",
+            vec![],
+            "",
+            1000,
+        )
+        .unwrap();
+        let before = load(&path).unwrap();
+        let held = HeldTasksLock::acquire(&path);
+        let res = mark_failed(&path, &id, Some("reason"));
+        assert_refused_and_unchanged("mark_failed", &path, &before, &held, res);
+    }
+
+    #[test]
+    fn ca_backlog_03_edit_must_not_report_success_when_the_tasks_lock_is_unavailable() {
+        let path = tmp_path();
+        let id = add(&path, "lock-unavailable edit", "/repo", vec![], "", 1000).unwrap();
+        let before = load(&path).unwrap();
+        let held = HeldTasksLock::acquire(&path);
+        let res = edit(&path, &id, Some("new title"), None, None, None);
+        assert_refused_and_unchanged("edit", &path, &before, &held, res);
+    }
+
+    #[test]
+    fn ca_backlog_03_record_sync_outcomes_must_not_report_success_when_the_tasks_lock_is_unavailable(
+    ) {
+        let path = tmp_path();
+        let id = add(&path, "lock-unavailable sync", "/repo", vec![], "", 1000).unwrap();
+        let before = load(&path).unwrap();
+        let held = HeldTasksLock::acquire(&path);
+        let res = record_sync_outcomes(&path, &[SyncOutcome::Closed { id }], 2000);
+        assert_refused_and_unchanged("record_sync_outcomes", &path, &before, &held, res);
+    }
+
+    #[test]
+    fn ca_backlog_03_requeue_expired_must_not_report_success_when_the_tasks_lock_is_unavailable() {
+        let path = tmp_path();
+        let id = add(&path, "lock-unavailable requeue", "/repo", vec![], "", 1000).unwrap();
+        // Make it a genuinely requeue-able deferred task so an unprotected run
+        // WOULD change the store (otherwise "unchanged" proves nothing).
+        mark_failed(&path, &id, None).unwrap();
+        let before = load(&path).unwrap();
+        let held = HeldTasksLock::acquire(&path);
+        let res = requeue_expired(&path, i64::MAX / 2);
+        assert_refused_and_unchanged("requeue_expired", &path, &before, &held, res);
     }
 
     /// A LIVE holder must never be reaped (backlog `d7e1ac30`).

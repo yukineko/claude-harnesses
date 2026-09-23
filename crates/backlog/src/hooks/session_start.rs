@@ -48,9 +48,25 @@ pub fn run(input: &HookInput) -> Option<String> {
             ));
         }
     };
-    if let Ok(count) = store::requeue_expired(&tasks_path, now) {
-        if count >= 1 {
-            eprintln!("{} 件の保留タスクが再キューされました", count);
+    // A requeue failure (store unreadable, save failed, lock not acquired) is
+    // NOT "0 tasks needed requeuing": expired deferrals and stale claims stay
+    // out of the queue until something rescues them. stderr never reaches the
+    // agent, so the failure is carried into `additionalContext` (CA-backlog-02).
+    let mut warnings = String::new();
+    match store::requeue_expired(&tasks_path, now) {
+        Ok(count) => {
+            if count >= 1 {
+                eprintln!("{} 件の保留タスクが再キューされました", count);
+            }
+        }
+        Err(e) => {
+            warnings.push_str(&format!(
+                "## Backlog \u{2014} requeue of expired/stale tasks FAILED\n\n\
+                 backlog: requeue_expired failed for {}: {e:#} \u{2014} expired deferrals and \
+                 stale claims were NOT returned to the queue; the pending list below may be \
+                 incomplete.\n\n",
+                tasks_path.display()
+            ));
         }
     }
 
@@ -64,13 +80,7 @@ pub fn run(input: &HookInput) -> Option<String> {
         Some(_) => None,
         None => Some(root.as_str()),
     };
-    let tasks = store::list(&tasks_path, None, scope, None).ok()?;
-
-    // pending または failed のタスクのみ対象 (is_pending() で判定)
-    let mut pending: Vec<_> = tasks.into_iter().filter(|t| t.is_pending()).collect();
-
-    // 優先度順 (priority() 昇順)、同優先度は created_at 昇順
-    pending.sort_by_key(|t| (t.priority(), t.created_at));
+    let listed = store::list(&tasks_path, None, scope, None);
 
     // Store divergence (backlog 5ba13c3e). This hook's own failure mode is the
     // silent one: injecting NOTHING is how a session was told "no queue" while
@@ -83,11 +93,40 @@ pub fn run(input: &HookInput) -> Option<String> {
         .message()
         .map(|m| format!("## Backlog \u{2014} store divergence\n\n{m}\n\n"));
 
+    // A read/parse failure is NOT an empty queue (CA-backlog-01). Returning
+    // `None` here made "tasks.toml is unreadable" byte-identical to "nothing
+    // queued" on the only channel this hook has, so the failure is injected
+    // explicitly — alongside the divergence notice, which does not depend on
+    // the resolved store being readable.
+    let tasks = match listed {
+        Ok(tasks) => tasks,
+        Err(e) => {
+            let mut out = notice.unwrap_or_default();
+            out.push_str(&warnings);
+            out.push_str(&format!(
+                "## Backlog \u{2014} tasks.toml UNREADABLE\n\n\
+                 backlog: tasks.toml unreadable at {}: {e:#} \u{2014} queue state UNKNOWN, not \
+                 empty. Do not treat this as \"no pending tasks\"; fix or restore the file \
+                 (e.g. `backlog list` to reproduce the error).\n",
+                tasks_path.display()
+            ));
+            return Some(out);
+        }
+    };
+
+    // pending または failed のタスクのみ対象 (is_pending() で判定)
+    let mut pending: Vec<_> = tasks.into_iter().filter(|t| t.is_pending()).collect();
+
+    // 優先度順 (priority() 昇順)、同優先度は created_at 昇順
+    pending.sort_by_key(|t| (t.priority(), t.created_at));
+
     if pending.is_empty() {
-        return notice;
+        let out = notice.unwrap_or_default() + &warnings;
+        return if out.is_empty() { None } else { Some(out) };
     }
 
     let mut out = notice.unwrap_or_default();
+    out.push_str(&warnings);
     out.push_str("## Backlog \u{2014} pending tasks for this project\n\n");
 
     for task in &pending {
@@ -186,6 +225,123 @@ fn repo_root(cwd: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use harness_core::hook::HookInput;
+
+    /// Builds a fresh temp "repo" — a dir with a `.git` entry so
+    /// `Config::locate` resolves `StoreLocation::Repo` — with `<repo>/.backlog/`
+    /// pre-created and `tasks.toml` written verbatim as `contents`. Independent
+    /// of the real `$HOME`: `Config::load()` only consults
+    /// `~/.backlog/config.toml`, which this repo's environment does not have
+    /// (`store_dir_pinned` stays false), so resolution falls straight through
+    /// to this temp repo root.
+    fn repo_with_tasks_toml(contents: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(dir.path().join(".git")).expect(".git");
+        let backlog_dir = dir.path().join(".backlog");
+        std::fs::create_dir_all(&backlog_dir).expect(".backlog");
+        std::fs::write(backlog_dir.join("tasks.toml"), contents).expect("write tasks.toml");
+        dir
+    }
+
+    fn hook_input_for(cwd: &std::path::Path) -> HookInput {
+        HookInput {
+            cwd: cwd.to_string_lossy().to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// CA-backlog-01: `run`'s line `store::list(&tasks_path, None, scope,
+    /// None).ok()?` uses `?` on the `.ok()`-converted `Result`, so a
+    /// read/parse failure and "queue is empty" produce the exact same
+    /// observable outcome — `None`, i.e. zero `additionalContext` — even
+    /// though this hook has no exit code and no stderr the agent ever sees,
+    /// so `additionalContext` is the only channel that could say otherwise.
+    #[test]
+    fn ca_backlog_01_corrupt_tasks_toml_is_silently_treated_as_empty_queue() {
+        let dir = repo_with_tasks_toml("this is not valid toml [[[ } not even close\n");
+        let input = hook_input_for(dir.path());
+
+        let result = run(&input);
+
+        assert!(
+            result.is_some(),
+            "session_start::run returned None for a repo whose tasks.toml fails to parse \
+             (CA-backlog-01, session_start.rs:67); that is byte-identical to the empty-queue \
+             case (also None, see :86-87) and gives the agent no signal — via the only channel \
+             this hook has, additionalContext — that the store is unreadable rather than empty"
+        );
+    }
+
+    /// CA-backlog-02: `run`'s line `if let Ok(count) = store::requeue_expired(...)`
+    /// has no `else` arm. When `requeue_expired` errors (its own `save` can
+    /// fail independently of `load`, e.g. the store directory is not
+    /// writable), the hook proceeds exactly as if 0 tasks were requeued — no
+    /// log, no diagnostic. A stale `claimed` task (`status="claimed"`, which
+    /// `Task::is_pending()` does NOT count as pending) that `requeue_expired`
+    /// should rescue back to `pending` therefore stays `claimed` forever,
+    /// invisible to every future SessionStart, with nothing ever reaching the
+    /// agent to say so.
+    #[test]
+    fn ca_backlog_02_requeue_expired_failure_is_swallowed_without_diagnostic() {
+        let dir = repo_with_tasks_toml(
+            r#"[[task]]
+id = "stale-claim-01"
+title = "stale claim needing rescue"
+project = "whatever"
+status = "claimed"
+tags = []
+notes = ""
+created_at = 1000
+updated_at = 1000
+"#,
+        );
+
+        // Make `.backlog` read-only-and-unwritable AFTER seeding tasks.toml, so
+        // `load()` (read-only) still succeeds but `requeue_expired`'s `save()`
+        // (which must create a new temp file in this directory) fails — this
+        // isolates the "save fails, load still works" fault the finding names,
+        // independently of CA-backlog-01's "load itself fails" fault.
+        let backlog_dir = dir.path().join(".backlog");
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&backlog_dir).unwrap().permissions();
+            perms.set_mode(0o555);
+            std::fs::set_permissions(&backlog_dir, perms).unwrap();
+        }
+
+        let input = hook_input_for(dir.path());
+        let result = run(&input);
+
+        // Restore write permission so the TempDir's own Drop cleanup can
+        // remove the directory's contents.
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&backlog_dir).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&backlog_dir, perms).unwrap();
+        }
+
+        // Ground truth: the fixture really is a genuine stale claim that WOULD
+        // requeue given a writable directory (proving the earlier failure
+        // inside `run` was the injected fault, not a malformed fixture that
+        // would never requeue regardless of permissions).
+        let requeues_once_writable =
+            store::requeue_expired(&backlog_dir.join("tasks.toml"), 9_999_999_999).is_ok();
+        assert!(
+            requeues_once_writable,
+            "fixture is broken: the stale-claim task never requeues even once permissions are \
+             restored, so this test's fault injection is not exercising CA-backlog-02 at all"
+        );
+
+        let text = result.unwrap_or_default();
+        assert!(
+            text.to_lowercase().contains("requeue")
+                || text.contains("再キュー")
+                || text.contains("stale-claim-01"),
+            "session_start::run gave no diagnostic at all about the failed requeue_expired \
+             call (CA-backlog-02, session_start.rs:51); additionalContext was: {text:?}"
+        );
+    }
 
     #[test]
     fn repo_root_returns_cwd_when_no_git() {

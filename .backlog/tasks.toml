@@ -1,4 +1,3 @@
-
 [[task]]
 id = "0ba79281"
 title = 'CLAUDE.md: Windows で成立しない cargo 手順 (. "$HOME/.cargo/env") を直す'
@@ -28603,6 +28602,7 @@ updated_at = 1790138021
 weight = 0.0
 issue_number = 685
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/685"
+
 [[task]]
 id = "6af7bcdc"
 title = "condukt の run state ストアも repo_root キーで per-worktree に分裂する (bcfc5491 と同じ欠陥クラス、ロックではなく state 側)"
@@ -28702,3 +28702,21 @@ updated_at = 1790130765
 weight = 0.0
 issue_number = 682
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/682"
+
+[[task]]
+id = "314b344a"
+title = "gate-bypass ledger records a conflicted-merge commit (b5be0c49) as ungated although its git commit ran the hook suite green; no gate-verified-tree sentinel was written"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-09-23 session 9d349393. In worktree session-9d349393 a conflicted 'git merge main' was concluded with 'git commit -F -' (no --no-verify); output showed no FAILED/blocked line and the commit b5be0c49 was created. After ff of main to it, gate-bypass.py --json listed b5be0c49 as outstanding, and .git/worktrees/session-9d349393/gate-verified-tree did not exist. Earlier conflicted merges in the same worktree (cab69b07, 4223119b, 048aa2b1) were not left in the ledger. Reading (a) defect: pre-commit exits early for some merge shape (e.g. a merge whose second parent is the main tree's branch) without certifying, so post-commit records a gated commit as ungated (false positive that blocks push). Reading (b) intended: merges with main as parent are meant to be certified by pre-merge-commit, which does not run when conflicts are resolved by git commit. How to tell: read the early-exit paths in .githooks/pre-commit and pre-merge-commit and reproduce with a throwaway conflicted merge."
+created_at = 1790138376
+updated_at = 1790138376
+weight = 0.0
+issue_number = 686
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/686"

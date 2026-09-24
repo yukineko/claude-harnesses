@@ -663,11 +663,12 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.30"
+version = "0.2.31"
 dependencies = [
  "anyhow",
  "chrono",
  "dirs",
+ "harness-core",
  "libc",
  "proptest",
  "regex",

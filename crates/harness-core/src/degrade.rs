@@ -42,6 +42,16 @@
 //! plugin binary. So this module carries the pure model — the degradations and
 //! the ordering — and each crate writes its own strategies over
 //! [`Degradation::ALL`] under its own dev-dependency.
+//!
+//! # Blinding at the boundary
+//!
+//! Degrading files cannot reach a subprocess, and it only reaches the files a
+//! test thought to damage. With the `fault-injection` feature (enable it from
+//! `[dev-dependencies]` only), [`assert_fails_closed`] runs a closure with every
+//! [`crate::boundary`] IO entry forced to `Undetermined` via
+//! [`crate::boundary::fault`], and asserts the result is not permissive. It
+//! also rejects a run in which no fault was injected, because a blind run that
+//! never looked proves nothing.
 
 use std::fs;
 use std::io;
@@ -203,6 +213,56 @@ pub fn explain_break<T: Permissiveness + std::fmt::Debug>(
          the gate's ability to see it did. A gate that cannot look has not \
          learned that there is nothing to find."
     ))
+}
+
+impl Permissiveness for crate::verdict::Verdict {
+    /// Only `Clean` lets work proceed. `Violation` and `Undetermined` both
+    /// score 0 and are deliberately not ranked against each other (see the
+    /// trait docs).
+    fn permissiveness(&self) -> u8 {
+        u8::from(matches!(self, crate::verdict::Verdict::Clean(_)))
+    }
+}
+
+/// Run `f` fully blind (every [`crate::boundary::fault::Entry`] faulted) and
+/// assert that what it returns is not permissive. Returns the value so the
+/// caller can assert more (for example on the reason).
+///
+/// This is the monotonicity property at its limit. A gate that can observe
+/// nothing has learned nothing, so its answer must not be "carry on".
+///
+/// # Panics
+///
+/// * The result's [`Permissiveness`] is not 0. This is the fail-open this
+///   assertion exists to catch.
+/// * No boundary call was faulted on this thread. A blind run that never
+///   reached a boundary entry proves nothing. It happens when the gate reads
+///   through `std::fs` directly, or does its IO on another thread. Passing in
+///   that case would report an untested gate as fail-closed.
+///
+/// A panic inside `f` propagates unchanged.
+#[cfg(feature = "fault-injection")]
+#[track_caller]
+pub fn assert_fails_closed<T: Permissiveness + std::fmt::Debug>(f: impl FnOnce() -> T) -> T {
+    use crate::boundary::fault::{with_fault_plan, FaultPlan};
+
+    let run = with_fault_plan(FaultPlan::blind(), f);
+    assert!(
+        run.injected > 0,
+        "VACUOUS fail-closed check: the closure made no boundary IO call on this thread, \
+         so blinding it changed nothing and proves nothing (it returned {:?}). Route the \
+         gate's IO through harness_core::boundary, or drive it on this thread.",
+        run.value
+    );
+    assert!(
+        run.value.permissiveness() == 0,
+        "FAIL-OPEN: with every boundary entry forced to Undetermined ({} call(s) faulted) \
+         the gate still returned a permissive verdict: {:?}. A gate that could not look \
+         has not learned that there is nothing to find.",
+        run.injected,
+        run.value
+    );
+    run.value
 }
 
 #[cfg(test)]

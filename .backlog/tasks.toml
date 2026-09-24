@@ -30734,3 +30734,57 @@ updated_at = 1790217907
 weight = 0.0
 issue_number = 763
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/763"
+
+[[task]]
+id = "8a4fe104"
+title = "condukt claim.rs backlog_pending maps a non-zero backlog list to an empty Vec"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "crates/condukt/src/claim.rs backlog_pending: a failed backlog list returns Vec::new(). Since backlog 0.3.9 (f09db5ce) list exits non-zero when the claim ledger is unreadable or the project identity is undetermined, so this path is now more reachable: an undetermined queue renders as no pending tasks in execution-state. Found by the f09db5ce verifier 2026-09-24."
+created_at = 1790218379
+updated_at = 1790218379
+weight = 0.0
+issue_number = 764
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/764"
+
+[[task]]
+id = "876943f1"
+title = "stale condukt run run-20260814-025356-78549 holds file claims on backlog store.rs with uncommitted WIP"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "condukt state set --status running refused on crates/backlog/src/store.rs, Cargo.toml, plugin.json: held by run-20260814-025356-78549 (session b57a58c3, pid 80319 dead, heartbeat 40 days old). probe verdict=stalled but abandon --all-stuck refuses because its worktrees t1/t2/t3 hold uncommitted changes (t2 edits backlog claim_ledger.rs and store.rs, superseded by f09db5ce). A human must decide whether that WIP is kept or discarded. The 45c3a699/f09db5ce run proceeded in its own worktrees without the claim-registry running state."
+created_at = 1790218380
+updated_at = 1790218380
+weight = 0.0
+issue_number = 765
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/765"
+
+[[task]]
+id = "f1b36c50"
+title = "after backlog 0.3.12 rollout the first write migrates done rows into tasks.done.toml; old binaries then no longer see done rows"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "backlog 0.3.7+ (45c3a699) moves done and cancelled rows to .backlog/tasks.done.toml on the next locked write. The repo data was deliberately NOT migrated in the implementing run. Once a new binary writes, any session still running backlog 0.3.6 or older reads only tasks.toml: list --status done is empty for it and its duplicate guard cannot see finished titles. Old binaries writing done rows back into tasks.toml are tolerated and re-migrated. Plan the rollout so old sessions end quickly."
+created_at = 1790218381
+updated_at = 1790218381
+weight = 0.0
+issue_number = 766
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/766"

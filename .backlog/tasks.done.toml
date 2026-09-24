@@ -12758,3 +12758,57 @@ updated_at = 1790248163
 weight = 0.0
 issue_number = 739
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/739"
+
+[[task]]
+id = "c2f9cc02"
+title = "awaiting human answer: git_fast_subprocess フレークが 7 種の高負荷レシピ(最大 9x 減速・OOM 圧・3並列フルスイート)で一度も再現しなかった。閾値は crates/condukt/src/worktree.rs:2170 の Duration::from_secs(3) で、これは run_git_bounded_with に渡す実タイムアウト。再現が無いので閾値の測定的根拠も決定論置換の検証もできない。どうするか? (run run-20260721-220121 task t2)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "escalation",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """
+kind:escalation identifier:esc-72fbbf6f occurrences:1
+
+--- 2026-09-24 policy shim で escalate 判定、人間へ回す ---
+condukt policy answer --untestable --risk medium --reversible high
+--confidence low -> exit 2 {"answered":false,"policy":"escalate"}
+
+CLAUDE.md 2 の「テストが書けない問題は判断で進めず ask する」に該当する。
+7 種の高負荷レシピで一度も再現していない以上、閾値の測定的根拠も
+決定論置換の検証も取れない。自分の判断で閉じることは禁止されているので、
+ユーザーに問うている。回答が来るまで pending。
+
+--- 2026-09-24 ユーザー裁定: 現状維持して閉じる ---
+escalation の経路: condukt policy answer --untestable --risk medium
+--reversible high --confidence low -> exit 2 {"answered":false,"policy":"escalate"}
+-> AskUserQuestion -> ユーザーの回答「現状維持して閉じる」。
+assistant の判断で閉じたのではなく、人間の裁定で閉じている。
+
+したがって crates/condukt/src/worktree.rs:2170 の Duration::from_secs(3) は
+据え置く。コードは一切変更していない。
+
+閉じる根拠として記録する測定結果:
+  7 種の高負荷レシピ (最大 9x 減速・OOM 圧・3 並列フルスイート) で
+  フレークは一度も再現しなかった。
+
+この記録の読み方を明示しておく (3. の判定不能の扱い):
+  「再現しなかった」は「フレークが存在しない」ではない。前者は観測、
+  後者は推測であり、両者を同一視しないこと。本 item を閉じるのは
+  「欠陥が無いと確定したから」ではなく「現在の観測手段では測れず、
+  測れないまま推測で閾値を動かすほうが危険だとユーザーが裁定したから」である。
+
+再開条件 (これが観測されたら新しい所見として起票し直す):
+  - 同じフレークが再度出現した場合。そのときのログ・負荷状況・
+    経過時間の実測値を添えること。3 秒を超えた実測値が 1 つでもあれば、
+    それが閾値の測定的根拠になる。
+  - run_git_bounded_with の呼び出し側が増え、3 秒境界の影響範囲が
+    変わった場合。"""
+created_at = 1790184361
+updated_at = 1790251498
+weight = 0.0
+issue_number = 740
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/740"

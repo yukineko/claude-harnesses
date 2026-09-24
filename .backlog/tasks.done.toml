@@ -12622,3 +12622,45 @@ updated_at = 1790245069
 weight = 0.0
 issue_number = 738
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/738"
+
+[[task]]
+id = "9e644320"
+title = "systemic signature recurred 11x across 1 task(s)/2 session(s)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "systemic",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """
+kind:systemic identifier:blastguard:scoped-destructive-confined occurrences:1
+
+2026-09-24 triage (session 9d349393, main 22a7f223): working as designed. Ledger groups: truncating redirects confined to /private/tmp (13), the project tree (8) or TMPDIR (7); rm -r of /tmp/backlog-*-target (8); Python writes onto scratchpad files (~20) or tracked files (tasks.toml x4, marketplace.json x3). USER RULING 2026-09-24: new files in the session scratchpad still ask (Keep asking); recurrence is the signal."""
+created_at = 1790184347
+updated_at = 1790247474
+weight = 0.0
+issue_number = 732
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/732"
+
+[[task]]
+id = "7614e28e"
+title = "systemic signature recurred 3x across 3 task(s)/2 session(s)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "systemic",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """
+kind:systemic identifier:blastguard:protected-path occurrences:1
+
+2026-09-24 triage (session 9d349393): correct blocks (settings.json/.githooks/gate *.toml via Edit/Write/redirect/cp/tee/chmod/sed -i, and the .claude/x/../ path trick). USER RULING 2026-09-24: gate-config names are protected wherever they live, including scratchpad fixtures (Intended). The sed -i '' mis-parse defect is split out as b34d4a77."""
+created_at = 1790184351
+updated_at = 1790247475
+weight = 0.0
+issue_number = 734
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/734"

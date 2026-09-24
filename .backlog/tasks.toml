@@ -17536,30 +17536,15 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "kind:systemic identifier:blastguard:git-config-hookspath occurrences:1"
+notes = """
+kind:systemic identifier:blastguard:git-config-hookspath occurrences:1
+
+USER RULING 2026-09-24: keep the deny; change the deny message only, so it suggests 'git config --get core.hooksPath'. All ~20 recovered occurrences were the one-argument read."""
 created_at = 1790184346
-updated_at = 1790244864
+updated_at = 1790247474
 weight = 0.0
 issue_number = 731
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/731"
-
-[[task]]
-id = "9e644320"
-title = "systemic signature recurred 11x across 1 task(s)/2 session(s)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "systemic",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "kind:systemic identifier:blastguard:scoped-destructive-confined occurrences:1"
-created_at = 1790184347
-updated_at = 1790244864
-weight = 0.0
-issue_number = 732
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/732"
 
 [[task]]
 id = "6cf12ce9"
@@ -17572,30 +17557,15 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "kind:systemic identifier:blastguard:unresolvable-command-word occurrences:1"
+notes = """
+kind:systemic identifier:blastguard:unresolvable-command-word occurrences:1
+
+USER RULING 2026-09-24: safe-reader list. Skip heredoc body analysis only when the delimiter is quoted AND the reader is known not to run the body (git commit -F -, cat, backlog --notes, ...); any other reader keeps analysing (fail closed). 78/465 rows were backticks in quoted-heredoc bodies; 359 variable command words are correct asks. Related c6fe8ca0 / 9e8fd854."""
 created_at = 1790184349
-updated_at = 1790244864
+updated_at = 1790247474
 weight = 0.0
 issue_number = 733
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/733"
-
-[[task]]
-id = "7614e28e"
-title = "systemic signature recurred 3x across 3 task(s)/2 session(s)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "systemic",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "kind:systemic identifier:blastguard:protected-path occurrences:1"
-created_at = 1790184351
-updated_at = 1790244865
-weight = 0.0
-issue_number = 734
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/734"
 
 [[task]]
 id = "d9ced7d3"

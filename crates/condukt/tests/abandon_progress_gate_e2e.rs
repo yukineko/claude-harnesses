@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! End-to-end coverage for the re-dispatch predicate behind
 //! `condukt state abandon` (backlog `356bd51d`).
 //!

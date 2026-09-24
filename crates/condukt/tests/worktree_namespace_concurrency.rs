@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Cross-session namespacing for condukt worktrees/branches (backlog 0213f7a9).
 //!
 //! `worktree_base` is machine-global (`~/.condukt/worktrees`, config.rs) and the

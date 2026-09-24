@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Two real `condukt` processes racing a PRIMARY-repo mutator (`worktree
 //! cleanup`, which runs `git worktree prune` under the repo-scoped
 //! `lock::REPO_PRIMARY_LOCK_KEY`) on the SAME repo must serialize on the one

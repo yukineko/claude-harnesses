@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! End-to-end coverage for the post-execution diff-risk recording (finding 4 /
 //! WorkItem-A): when a worker's task transitions to `done`, condukt diffs the
 //! task's worktree against the base branch, feeds the REAL diff to blastguard's

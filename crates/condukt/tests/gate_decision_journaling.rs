@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! SPEC tests for the `condukt policy answer` gate-decision journal.
 //!
 //! `condukt policy answer` is the deterministic gate-skip shim: it turns a

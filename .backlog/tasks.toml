@@ -990,9 +990,39 @@ cycle 12 で claim したが着手していない。理由を明示して返す:
 measured: 何も測っていない。unverified: すべて。推測で埋めずに pending に戻す。
 
 なお本サイクルで実施した fbb3100a は harness-core 側の gauge 消費経路であり、
-本 item が対象とする gauge crate 自身の verdict 経路とは別物。重複していない。"""
+本 item が対象とする gauge crate 自身の verdict 経路とは別物。重複していない。
+
+--- 2026-09-24 フェーズ1 (監査) を完了。フェーズ2 は未着手のまま pending (cycle 13) ---
+本 item が要求する 2 フェーズのうち、フェーズ 1 を独立した agent に read-only で実施させた。
+成果物: docs/audit-dod9-lowadoption-verdict-paths.md (615 行)。CONFIRMED 3 / UNVERIFIED 5。
+
+監査に与えた不合格条件 (本 item の指示どおり):
+  所見ごとに逐語引用 + file:line、消費経路の追跡、追跡できなければ CONFIRMED でも clean でもなく
+  UNVERIFIED とすること。既に fail-closed な経路を別立てで列挙し、後から意図的設計を
+  「修正」されないようにすること。
+
+CONFIRMED 3 件の行き先:
+  budgetguard  ledger.json 破損時に当日合計が自セッション分へ潰れる   -> 新規起票
+  gauge        gauge.toml パース失敗が Config::default() へ黙って戻る -> 新規起票
+  reviewgate   diff 取得失敗が empty-diff allow へ潰れる              -> 既存 3357c2e2。
+               ただし統合時点で main の efe6db14 が既に修正しており、実測して閉じた。
+
+監査が訂正した本 item の前提: 「3 クレートとも verdict 採用は 1 file」は budgetguard について
+不正確で、実測 3 file。budgetguard は 3 本中もっとも硬い。低採用というラベルと実装の健全性は
+別軸である、と監査が明記している。
+
+さらに監査者は、別の sub-agent が budgetguard のコメント (conservative: never under-reports) を
+額面どおり受け取って誤って fail-closed と分類したのを、ソースを読み直して訂正している。
+本 item が要求する worker/verifier のモデル多様性が、実際に誤分類を 1 件捕まえた形。
+
+未了 = フェーズ 2 (RED 先行観測 -> 三値化 GREEN -> micro bump -> --plugin スコープ rollout)。
+本セッションは budgetguard / gauge / reviewgate のコードを一行も読んでいないので、
+監査の逐語引用を追認していない。着手する人は引用の一致確認から始めること。
+
+pending に戻す理由: フェーズ 2 は crate ごとに独立なので、上の 2 件の新規起票で個別に進めた方が
+並列化できる。本 item はフェーズ 2 全体の傘として残す。"""
 created_at = 1785193820
-updated_at = 1790248164
+updated_at = 1790253413
 weight = 0.0
 issue_number = 84
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/84"

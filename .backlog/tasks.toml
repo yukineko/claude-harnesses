@@ -18343,3 +18343,22 @@ updated_at = 1790252283
 weight = 0.0
 issue_number = 781
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/781"
+
+[[task]]
+id = "ece51b35"
+title = "衝突マーカー入り (TOML として読めない) の .backlog/tasks.toml が commit でき、main まで fast-forward された — merge 完了 commit を検査するゲートが無い"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-24 実測: 0d68e5d4 (merge 完了の git commit) が <<<<<<< を含む tasks.toml を記録し、post-merge は UNGATED COMMIT として台帳に載せただけで止めなかった。24a00986 で修復。原因の一端は dispatcher 側の手順 (merge の CONFLICT を grep で表示したあと ; で続行した)。案: pre-commit / pre-merge-commit で conflict marker と .backlog/*.toml の parse を検査し block する。"
+created_at = 1790253957
+updated_at = 1790253957
+weight = 0.0
+issue_number = 803
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/803"

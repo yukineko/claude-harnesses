@@ -18328,3 +18328,41 @@ updated_at = 1790253492
 weight = 0.0
 issue_number = 800
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/800"
+
+[[task]]
+id = "06345780"
+title = "blastguard: operand 位置の command substitution ($(rm -rf ...) / backtick) を解析せず allow する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Measured 2026-09-24 against the base binary at 564b3676 (built separately by the verifier for 6cf12ce9; CLAUDE_CODE_ENTRYPOINT=cli, CLAUDECODE=1): echo $(rm -rf ~/work) -> allow; cat $(rm -rf ~/work) -> allow; cat <backtick>rm -rf ~/work<backtick> -> allow; cat <<'EOF' $(rm -rf /tmp/x) (heredoc) -> allow. A bare rm -rf ~/work is denied (recursive rm), so the substitution payload in an OPERAND position is never judged. This predates c4682476 and is not caused by it. The adversarial verifier of the 6cf12ce9 heredoc fix found it. Probe script: session 9d349393 scratchpad sysrec/probe3.py."
+created_at = 1790252037
+updated_at = 1790252037
+weight = 0.0
+issue_number = 775
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/775"
+
+[[task]]
+id = "b03811d5"
+title = "blastguard: python3 - <<'PY' 本文中の文字列リテラル '>' を空 target の truncating redirect として deny する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-09-24 in session 9d349393. The deployed blastguard denied a python3 - <<'PY' heredoc whose body held the list literal ['<', '>'] with: '> ' destroys the file's current contents and the empty target is a relative path. Reproduced with the 0.2.71 worktree binary (scratchpad sysrec/probe4.py). python3 is deliberately not on the safe-reader list (6cf12ce9 ruling), so the body is still analysed. But a '>' inside a Python string is not a shell redirect, and an EMPTY redirect target cannot be a real redirect at all: bash rejects it with a syntax error. Found while committing the 6cf12ce9 fix."
+created_at = 1790252283
+updated_at = 1790252283
+weight = 0.0
+issue_number = 781
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/781"

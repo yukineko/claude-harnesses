@@ -18217,3 +18217,52 @@ updated_at = 1790244857
 weight = 0.0
 issue_number = 772
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/772"
+
+[[task]]
+id = "9d2e22fd"
+title = "backlog done の GitHub issue ミラーが権限不足で片道になり、閉じられなかった issue が警告 1 行だけ残して永久に open のままになる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "github-mirror",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-24、測定点 4fc699c3、cycle 13 の sink 中。
+
+backlog done を 15 件走らせたところ、うち 2 件でこの警告が出た (逐語):
+  warning: issue #133 left OPEN: gh issue close failed: GraphQL: Resource not accessible by personal access
+  warning: issue #437 left OPEN: gh issue close failed: GraphQL: Resource not accessible by personal access
+
+backlog 側は done になり、GitHub issue は open のまま残る。つまり 2 つのストアが
+恒久的に食い違う。fail-open そのものではない (警告は出ている) が、次の 3 点で
+実質的に沈黙に近い:
+
+  1. 警告は done の stdout に 1 行混ざるだけで、終了コードは 0。スクリプトから
+     回すと検出されない。今回も 15 件を回すループの出力に紛れていた。
+  2. どの issue が閉じ損ねたかを後から列挙する手段が無い。台帳に残らないので、
+     「今 backlog done なのに open な issue」の集合は測れない。
+  3. 権限不足は恒久的な状態なので、再試行では絶対に解決しない。にもかかわらず
+     再試行を促す形にも、諦めを記録する形にもなっていない。
+
+CLAUDE.md 3 の「判定不能は制限側へ」の直接の違反ではない (close の成否は判定では
+ないため) が、CLAUDE.md 1 の「判定を持つかは消費のされ方で決まる」に当てはまる:
+下流の人間は backlog done を「issue も閉じた」と読む。
+
+測ったこと: 上記 2 件の逐語警告と、それでも rc=0 で done になること。
+測っていないこと: 過去に同じ経路で open のまま残った issue の総数。
+  PAT にどのスコープが欠けているか (Issues:write と推測されるが未確認)。
+
+考えられる直し方 (どれも未検証):
+  - 閉じ損ねた issue id を台帳へ追記し、後から列挙・再試行できるようにする。
+  - backlog に「issue ミラーが遅れている」を報告するサブコマンドを足す。
+  - そもそも権限が無い環境ではミラーを宣言的に無効化し、黙って片道にしない。"""
+created_at = 1790252488
+updated_at = 1790252488
+weight = 0.0
+issue_number = 784
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/784"

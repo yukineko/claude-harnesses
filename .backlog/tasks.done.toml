@@ -12456,3 +12456,169 @@ updated_at = 1790239208
 weight = 0.0
 issue_number = 730
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/730"
+
+[[task]]
+id = "7c4e8218"
+title = "systemic signature recurred 3x across 3 task(s)/3 session(s)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "systemic",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """
+kind:systemic identifier:autoflow:record-requested occurrences:1
+
+--- 2026-09-24 調査結果: 欠陥ではない (実測) ---
+signature autoflow:record-requested の実体は crates/autoflow/src/main.rs:197。
+Phase::Idle で turns >= min_turns かつ tool_events >= min_tool_events のときに
+Phase::RecordRequested へ遷移して block する Stop hook であり、
+遷移は state::save で永続化されるので 1 セッションにつき最大 1 回しか出ない。
+したがって「3 sessions で 3 occurrences」は設計どおりのレートそのもので、
+異常の兆候ではない。逆に 1 セッションで 2 回出ていたら欠陥だが、そうなっていない。
+
+両方の読みを残す:
+  (a) 実在の欠陥 = ない。コードが per-session 1 回を構造的に保証している。
+  (b) 意図的な仕様 = こちら。/session-insights:record を促す設計上の block。
+見分ける方法: 同一 session_id で 2 回以上出るかを見る。出れば (a)。
+今回の 3 件は 3 session に分かれているので (b) と確定した。
+
+本 item を閉じるのは「作業をした」からではなく「欠陥ではないと観測で確定した」から。
+recurrence registry 側の分類の問題は 7a842862 に転記した。"""
+created_at = 1790184352
+updated_at = 1790245065
+weight = 0.0
+issue_number = 735
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/735"
+
+[[task]]
+id = "7c776a26"
+title = "[merge-conflict] merge of condukt/run-20260917-030727-89796/run-20260917-030727-89796/t3-reap-dead-run-claims into main held: 4 file(s) [.claude-plugin/marketplace.json, Cargo.lock, crates/condukt/.claude-plugin/plugin.json, crates/condukt/Cargo.toml]"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "merge-conflict",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """
+kind:merge-conflict identifier:condukt/run-20260917-030727-89796/run-20260917-030727-89796/t3-reap-dead-run-claims/merge-conflict occurrences:1
+
+--- 2026-09-24 調査結果: 解決済み (実測) ---
+衝突していたブランチ
+condukt/run-20260917-030727-89796/.../t3-reap-dead-run-claims は
+既に存在しない (git branch -a で 0 ヒット)。つまり merge すべき対象が無い。
+
+衝突していた 4 ファイルは
+.claude-plugin/marketplace.json / Cargo.lock /
+crates/condukt/.claude-plugin/plugin.json / crates/condukt/Cargo.toml
+で、すべて version lockstep の対象。典型的な bump 衝突であって内容の衝突ではない。
+現在の状態を実測: scripts/check-plugin-versions.py ->
+"OK: 41 plugins version-consistent across Cargo.toml / plugin.json / marketplace.json"
+
+そして当の作業内容は別経路で main に入っている:
+  a2e9e3a3 fix(condukt): 不在の worktree を「観測できなかった」ではなく
+           「観測できた不在」として畳む (5e62b0eb)
+  git merge-base --is-ancestor a2e9e3a3 main -> YES
+  backlog 5e62b0eb は tasks.done.toml にあり status=done
+
+念のため: この修正は assistant のものではない。既に入っていたものを確認しただけ。"""
+created_at = 1790184354
+updated_at = 1790245066
+weight = 0.0
+issue_number = 736
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/736"
+
+[[task]]
+id = "d28fb530"
+title = "awaiting human answer: t3/t4 (both edit crates/condukt/src/claim.rs) are BLOCKED by a file claim held by run p0trio-1, dead 41.9 days. User instruction for this batch was explicitly: do NOT clear the 11 foreign claims. Repo precedent (recorded in ticket 5e62b0eb itself) is that 'condukt state release --run <dead-run> --file <path>' with documented death evidence is the sanctioned, non-hiding override. Death evidence observed: (1) holder pid 94789 absent from ps; (2) heartbeat 41.9 days stale; (3) run state file p0trio-1.json mtime frozen Aug 12 10:46; (4) its surviving worktree HEAD frozen 2026-08-13; (5) its t1 and t3 worktrees are ABSENT, which is exactly the mechanism that makes progress permanently Undetermined and the claim immortal. This is defect 5e62b0eb blocking its own fix. Need a human ruling. (run run-20260917-030727-89796 task t3-reap-dead-run-claims)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "escalation",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """
+kind:escalation identifier:esc-6299e17a occurrences:1
+
+--- 2026-09-24 調査結果: 前提が消滅、人間の裁定は不要 (実測) ---
+この escalation は「dead な run p0trio-1 が握ったままの file claim を
+強制解放してよいか」を人間に聞くものだった。前提が 2 つとも今は成立しない:
+
+(1) claim registry は空である。
+    condukt state claims -> live claims: 0、p0trio-1 present: False
+(2) 「claim が不死になる」原因そのものが修正済みである。
+    ticket 本文が名指ししていた機構 —「t1 と t3 の worktree が ABSENT で、
+    それが progress を永久に Undetermined にして claim を不死にする」— は
+    a2e9e3a3「不在の worktree を『観測できなかった』ではなく『観測できた不在』
+    として畳む (5e62b0eb)」で直っている。a2e9e3a3 は main の祖先。
+    元の defect ticket 5e62b0eb は status=done。
+
+したがって「強制解放してよいか」という問い自体が宙に浮いている。
+force-steal は行っていないし、行う必要も無かった (TTL と修正で自然に解けた)。
+ユーザーの「11 件の foreign claim を消すな」という指示にも触れていない。
+
+reap の設計も確認した: crates/condukt/src/claim.rs は heartbeat の古さを
+「必要条件であって十分条件ではない」と明記し、progress-gated な reap にしている
+(claim.rs:405 付近)。静かなだけの生存セッションを force-steal しない設計。"""
+created_at = 1790184355
+updated_at = 1790245068
+weight = 0.0
+issue_number = 737
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/737"
+
+[[task]]
+id = "3503d99e"
+title = "awaiting human answer: condukt worktree reconcile: the 2026-08-12 ruling settles LIVENESS for unclaimed worktrees but not DEATH. Under the strict reading Occupancy::Dead becomes unreachable from reconcile, which also makes the --preserve content-rescue path dead code (its match arms all require Known(Dead)) and makes two currently-green tests unpassable: dirty_worktree_is_preserved_before_it_becomes_removable and stale_preserved_ref_does_not_authorize_deletion. What positively establishes death? (run run-20260814-005232-58819 task t2-occupancy-undetermined)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "escalation",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """
+kind:escalation identifier:esc-bc08e8bd occurrences:1
+
+--- 2026-09-24 調査結果: 問いはコード内で決着済み (実測) ---
+この escalation の問いは「何が積極的に death を確立するのか」だった。
+crates/condukt/src/wt_reconcile.rs:1427 にその答えがコメントごと存在する:
+
+    // All four terms hold. This is the only path to `Dead`.
+    (
+        Determination::Known(progress::Liveness::Stalled),
+        Determination::Known(Transcripts::NoneEverRanHere),
+        Determination::Known(Registrations::AllStaleHere),
+    ) => Determination::Known(Occupancy::Dead),
+
+つまり death は 3 つの Known の連言で確立され、どれか 1 つでも Undetermined なら
+Dead にならず undetermined へ落ちる (直前・直後の arm がその形)。3. のとおり
+判定不能は制限側へ解決している。
+
+escalation が予測していた 3 つの帰結はいずれも成立していない:
+  「Occupancy::Dead が reconcile から到達不能になる」-> 到達可能 (上記 arm)
+  「--preserve の content-rescue が dead code になる」-> Known(Dead) を要求する
+      match arm は wt_reconcile.rs:296 と :356 に生きている
+  「2 つのテストが通らなくなる」-> 両方とも通る
+
+実行して確認した (assistant が独立に実行):
+  cargo test -p condukt --test worktree_reconcile
+  -> 28 passed; 0 failed
+  dirty_worktree_is_preserved_before_it_becomes_removable ... ok
+  stale_preserved_ref_does_not_authorize_deletion ... ok
+  dead_clean_worktree_is_removable ... ok
+  only_the_heartbeat_age_separates_live_from_dead ... ok
+  unclaimed_worktree_occupancy_is_undetermined_not_dead ... ok
+
+この設計と実装は assistant のものではない。既にあったものを測って確認しただけ。"""
+created_at = 1790184357
+updated_at = 1790245069
+weight = 0.0
+issue_number = 738
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/738"

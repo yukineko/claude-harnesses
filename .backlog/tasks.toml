@@ -17457,7 +17457,7 @@ blastguard:interpreter-unrecoverable-write の 2 signature だけ (fix 2acee03f)
 本 item は着手されていない。measured: 何も測っていない。unverified: すべて。
 推測で埋めずに pending のまま残す。"""
 created_at = 1790184320
-updated_at = 1790239210
+updated_at = 1790244863
 weight = 0.0
 issue_number = 720
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/720"
@@ -17520,7 +17520,7 @@ blastguard:interpreter-unrecoverable-write の 2 signature だけ (fix 2acee03f)
 本 item は着手されていない。measured: 何も測っていない。unverified: すべて。
 推測で埋めずに pending のまま残す。"""
 created_at = 1790184342
-updated_at = 1790239210
+updated_at = 1790244864
 weight = 0.0
 issue_number = 729
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/729"
@@ -17538,7 +17538,7 @@ touched_files = []
 status = "pending"
 notes = "kind:systemic identifier:blastguard:git-config-hookspath occurrences:1"
 created_at = 1790184346
-updated_at = 1790184346
+updated_at = 1790244864
 weight = 0.0
 issue_number = 731
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/731"
@@ -17556,7 +17556,7 @@ touched_files = []
 status = "pending"
 notes = "kind:systemic identifier:blastguard:scoped-destructive-confined occurrences:1"
 created_at = 1790184347
-updated_at = 1790184347
+updated_at = 1790244864
 weight = 0.0
 issue_number = 732
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/732"
@@ -17574,7 +17574,7 @@ touched_files = []
 status = "pending"
 notes = "kind:systemic identifier:blastguard:unresolvable-command-word occurrences:1"
 created_at = 1790184349
-updated_at = 1790184349
+updated_at = 1790244864
 weight = 0.0
 issue_number = 733
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/733"
@@ -17592,82 +17592,10 @@ touched_files = []
 status = "pending"
 notes = "kind:systemic identifier:blastguard:protected-path occurrences:1"
 created_at = 1790184351
-updated_at = 1790184351
+updated_at = 1790244865
 weight = 0.0
 issue_number = 734
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/734"
-
-[[task]]
-id = "7c4e8218"
-title = "systemic signature recurred 3x across 3 task(s)/3 session(s)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "systemic",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "kind:systemic identifier:autoflow:record-requested occurrences:1"
-created_at = 1790184352
-updated_at = 1790184352
-weight = 0.0
-issue_number = 735
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/735"
-
-[[task]]
-id = "7c776a26"
-title = "[merge-conflict] merge of condukt/run-20260917-030727-89796/run-20260917-030727-89796/t3-reap-dead-run-claims into main held: 4 file(s) [.claude-plugin/marketplace.json, Cargo.lock, crates/condukt/.claude-plugin/plugin.json, crates/condukt/Cargo.toml]"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "merge-conflict",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "kind:merge-conflict identifier:condukt/run-20260917-030727-89796/run-20260917-030727-89796/t3-reap-dead-run-claims/merge-conflict occurrences:1"
-created_at = 1790184354
-updated_at = 1790184354
-weight = 0.0
-issue_number = 736
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/736"
-
-[[task]]
-id = "d28fb530"
-title = "awaiting human answer: t3/t4 (both edit crates/condukt/src/claim.rs) are BLOCKED by a file claim held by run p0trio-1, dead 41.9 days. User instruction for this batch was explicitly: do NOT clear the 11 foreign claims. Repo precedent (recorded in ticket 5e62b0eb itself) is that 'condukt state release --run <dead-run> --file <path>' with documented death evidence is the sanctioned, non-hiding override. Death evidence observed: (1) holder pid 94789 absent from ps; (2) heartbeat 41.9 days stale; (3) run state file p0trio-1.json mtime frozen Aug 12 10:46; (4) its surviving worktree HEAD frozen 2026-08-13; (5) its t1 and t3 worktrees are ABSENT, which is exactly the mechanism that makes progress permanently Undetermined and the claim immortal. This is defect 5e62b0eb blocking its own fix. Need a human ruling. (run run-20260917-030727-89796 task t3-reap-dead-run-claims)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "escalation",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "kind:escalation identifier:esc-6299e17a occurrences:1"
-created_at = 1790184355
-updated_at = 1790184355
-weight = 0.0
-issue_number = 737
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/737"
-
-[[task]]
-id = "3503d99e"
-title = "awaiting human answer: condukt worktree reconcile: the 2026-08-12 ruling settles LIVENESS for unclaimed worktrees but not DEATH. Under the strict reading Occupancy::Dead becomes unreachable from reconcile, which also makes the --preserve content-rescue path dead code (its match arms all require Known(Dead)) and makes two currently-green tests unpassable: dirty_worktree_is_preserved_before_it_becomes_removable and stale_preserved_ref_does_not_authorize_deletion. What positively establishes death? (run run-20260814-005232-58819 task t2-occupancy-undetermined)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "escalation",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "kind:escalation identifier:esc-bc08e8bd occurrences:1"
-created_at = 1790184357
-updated_at = 1790184357
-weight = 0.0
-issue_number = 738
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/738"
 
 [[task]]
 id = "d9ced7d3"
@@ -18168,9 +18096,43 @@ done_criteria として持たせるべき。(b) 意図的。escalation を消さ
 いるかを読む。持っていて使っていないなら (a)。
 
 done_criteria: gate-check 由来の bridged item が『何を観測すれば閉じられるか』を
-notes に持つ。または escalation は backlog ではなく review-queue 側へ出す。"""
+notes に持つ。または escalation は backlog ではなく review-queue 側へ出す。
+
+--- 2026-09-24 再発データ (cycle 11) ---
+本サイクルで backlog next --claim が返した p0 4 件のうち 4 件すべてが、この
+ticket が指摘している「出来事を作業として橋渡ししたもの」だった:
+
+  7c4e8218 systemic  autoflow:record-requested 3x
+      -> 欠陥ではない。per-session 1 回の設計上の block (main.rs:197)。
+         「3 session で 3 回」は設計どおりのレートで、異常の兆候ではない。
+         recurrence registry が「意図された per-session gate の発火」を
+         「systemic signature」として数えている。カウント軸に session が
+         入っていないのが原因。
+  7c776a26 merge-conflict
+      -> 対象ブランチが既に存在しない。衝突 4 ファイルは全部 version lockstep
+         対象で、現在 41 plugin すべて consistent。解決すべき衝突が無い。
+  d28fb530 escalation
+      -> 前提 (dead run の claim が不死) が a2e9e3a3 で修正済み、registry も空。
+  3503d99e escalation
+      -> 問い (何が death を確立するか) が wt_reconcile.rs:1427 で決着済み、
+         予測された 3 つの帰結はいずれも成立せず、テスト 28 件が green。
+
+cycle 9 でも condukt-gate の 4 件が全く同じ形 (56-61 日前の橋渡しで、
+下の作業は既に完了済み) だった。2 サイクル連続で「claim した p0 の全件が
+既に解決済み」になっている。これはキューの汚染としては軽くない:
+p0 が優先度順の先頭に並ぶので、本物の p0 が後ろに押される。
+
+測定値: 本サイクル時点の pending 653 件、うち tag escalation 3 件、
+systemic 6 件、merge-conflict 2 件 (自分が claim 中の 4 件を除く)。
+橋渡し由来の総量自体は小さいが、全部 p0 なので先頭を占める。
+
+done_criteria への追加提案 (この ticket の本体は変えない):
+  橋渡し時点ではなく「拾われた時点」で前提がまだ成立しているかを
+  確認する経路があること。上の 4 件はいずれも 5 分以内の実測で
+  決着したので、自動化できる形をしている (ブランチの存在・registry の
+  中身・named test の green・per-session カウント軸)。"""
 created_at = 1790204869
-updated_at = 1790204869
+updated_at = 1790245070
 weight = 0.0
 issue_number = 761
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/761"

@@ -1,23 +1,30 @@
-//! Finishing a claimed task RELEASES its lease (backlog f09db5ce follow-up).
+//! The DERIVED `claimed` view must not mask a claimant's own `fail`
+//! (backlog f09db5ce follow-up).
 //!
 //! Claims are leases in the untracked ledger `$HOME/.backlog/claims/<slug>.json`
 //! and `claimed` is derived: a pending/failed row with a LIVE lease (< 3600s).
 //! Regression observed at 47b8b61c: after `next --claim` then `fail <id>`,
-//! `list --json` still reported the task `claimed` (not `failed`), `list
-//! --status failed` was empty, and no checkout could re-pick it for up to 1h,
-//! because `done` / `fail` / `edit --status` never touched the ledger. Before
-//! the lease change these commands overwrote the stored `claimed` status, so
-//! the claimant finishing its turn ended the claim. Required: `done`, `fail`
-//! and `edit --status <non-claimed>` release the lease; a release that cannot
-//! be recorded (ledger unreadable) must not be reported as plain success.
+//! `list --json` still reported the task `claimed` (not `failed`) and `list
+//! --status failed` was empty.
+//!
+//! Spec (coordinator revision, after a first draft of these tests showed that
+//! RELEASING the lease on done/fail lets a diverged checkout re-dispatch
+//! finished or just-failed work): NOTHING releases the lease; exclusion is
+//! unchanged and ends only when the lease ages out at CLAIM_STALE_SECS. The fix
+//! is confined to the derived view:
+//!   * `pending` row + live lease: "claimed" (unchanged);
+//!   * `failed` row + live lease whose `claimed_at` is STRICTLY greater than
+//!     the row's `updated_at` (a re-claim of an older failed row): "claimed";
+//!   * `failed` row updated AT or AFTER the claim (the claimant ran `fail`):
+//!     "failed", both displayed and filtered;
+//!   * terminal rows are never "claimed".
 //!
 //! Written by an independent test writer BEFORE the fix (CLAUDE.md §2(a)/(b)).
 //! Fixture approach mirrors `tests/claim_lease_untracked.rs`: the real binary,
 //! `HOME` pinned to a temp dir, a real git repo with a COMMITTED
 //! `.backlog/tasks.toml`, and a real linked worktree B of it. B's tracked row is
-//! never touched by A's `fail`/`done`/`edit` (separate checkout), so in B the
-//! only thing that can make the task look `claimed` is the ledger lease — which
-//! is exactly what these tests observe.
+//! never touched by A's `fail`/`done` (separate checkout), so B observes the
+//! ledger's exclusion alone.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -251,27 +258,6 @@ fn count_claimed_bytes(bytes: &str) -> usize {
     bytes.matches("status = \"claimed\"").count()
 }
 
-/// Ids holding a LIVE entry (age < CLAIM_STALE_SECS) in any project ledger.
-/// A ledger that exists but cannot be parsed fails the test (never "no ids").
-fn live_ledger_ids(f: &Fixture) -> Vec<String> {
-    let now = now_unix();
-    let mut ids = Vec::new();
-    for l in f.ledger_files() {
-        let raw = std::fs::read_to_string(&l).expect("ledger readable");
-        let v: serde_json::Value = serde_json::from_str(&raw)
-            .unwrap_or_else(|e| panic!("ledger {} unparseable ({e}): {raw}", l.display()));
-        if let Some(entries) = v["entries"].as_array() {
-            for e in entries {
-                let at = e["claimed_at"].as_i64().unwrap_or(now);
-                if now - at < CLAIM_STALE_SECS {
-                    ids.push(e["id"].as_str().unwrap_or_default().to_string());
-                }
-            }
-        }
-    }
-    ids
-}
-
 /// The `[[task]]` blocks of a tasks.toml that do NOT belong to `id`, so a test
 /// can assert that a command on `id` rewrote only that row.
 fn other_blocks(bytes: &str, id: &str) -> Vec<String> {
@@ -300,16 +286,62 @@ fn assert_only_row_changed(f: &Fixture, before: &str, id: &str) {
     );
 }
 
-/// 1. claim in A, `fail` in A: the task is `failed` in A (listed, filterable),
-///    not `claimed` anywhere, the lease is gone from the ledger, and B (whose
-///    tracked row is still pending and not deferred) can claim it again.
-///
-///    Note: `fail` has no `--defer` flag and ALWAYS sets `defer_until = now +
-///    2 days` in A's store, so A itself cannot re-pick it — re-claimability is
-///    observed from B, whose row `fail` in A does not touch.
+/// Ids returned by `list --json --status <status>` in `cwd`.
+fn ids_with_status(f: &Fixture, cwd: &Path, status: &str) -> Vec<String> {
+    let (code, out, err) = run(&["list", "--json", "--status", status], cwd, &f.home);
+    assert_eq!(code, 0, "list --status {status} must succeed: {err}");
+    json(&out)
+        .as_array()
+        .expect("array")
+        .iter()
+        .map(|r| r["id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// `next --claim` in `cwd` must succeed and must NOT hand out `title`.
+fn assert_claim_does_not_return(f: &Fixture, cwd: &Path, title: &str, why: &str) {
+    let (code, out, err) = run(&["next", "--claim"], cwd, &f.home);
+    assert_eq!(
+        code, 0,
+        "next --claim must succeed: stdout={out} stderr={err}"
+    );
+    if !out.contains("no pending tasks") {
+        let v = json(&out);
+        assert_ne!(v["title"], title, "{why}: {out}");
+    }
+}
+
+/// Set `claimed_at` of every ledger entry for `id` to `claimed_at`.
+fn set_lease_claimed_at(f: &Fixture, id: &str, claimed_at: i64) {
+    let ledgers = f.ledger_files();
+    assert_eq!(ledgers.len(), 1, "exactly one project ledger: {ledgers:?}");
+    let mut v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&ledgers[0]).unwrap()).unwrap();
+    let mut hit = 0;
+    for e in v["entries"].as_array_mut().expect("ledger has entries") {
+        if e["id"] == id {
+            e["claimed_at"] = serde_json::json!(claimed_at);
+            hit += 1;
+        }
+    }
+    assert!(hit > 0, "fixture: ledger must hold an entry for {id}");
+    std::fs::write(&ledgers[0], serde_json::to_string_pretty(&v).unwrap()).unwrap();
+}
+
+/// The `list --json` row titled `title` in `cwd`.
+fn row_of(f: &Fixture, cwd: &Path, title: &str) -> serde_json::Value {
+    list_json(f, cwd)
+        .into_iter()
+        .find(|r| r["title"] == title)
+        .unwrap_or_else(|| panic!("task {title:?} missing"))
+}
+
+/// 1. claim in A, `fail` in A: A shows it `failed` (displayed and filtered;
+///    not under `--status claimed`). The lease is NOT released: B still shows
+///    it `claimed` and B's `next --claim` does not hand it out.
 #[test]
-fn fail_releases_the_lease() {
-    let f = fixture("f1");
+fn claimant_fail_is_displayed_failed_but_still_excludes() {
+    let f = fixture("v1");
     let before = f.store_bytes(&f.a);
     let got = claim(&f, &f.a);
     assert_eq!(got["title"], "First task", "fixture: p0 wins: {got}");
@@ -322,78 +354,38 @@ fn fail_releases_the_lease() {
     assert_eq!(
         status_of(&rows_a, "First task"),
         "failed",
-        "after `fail`, A must list the task as failed, not claimed: {rows_a:?}"
+        "after the claimant's `fail`, A must list the task failed, not claimed: {rows_a:?}"
     );
+    assert!(
+        ids_with_status(&f, &f.a, "failed").contains(&id),
+        "`list --status failed` in A must include {id}"
+    );
+    assert!(
+        !ids_with_status(&f, &f.a, "claimed").contains(&id),
+        "`list --status claimed` in A must not include the failed task {id}"
+    );
+
     let rows_b = list_json(&f, &f.b);
-    assert_ne!(
+    assert_eq!(
         status_of(&rows_b, "First task"),
         "claimed",
-        "after `fail` in A the lease is over; B must not list the task claimed: {rows_b:?}"
+        "the lease is not released by `fail`: B (row still pending) must show claimed: {rows_b:?}"
     );
-
-    let (code, out, err) = run(&["list", "--json", "--status", "failed"], &f.a, &f.home);
-    assert_eq!(code, 0, "list --status failed must succeed: {err}");
-    let failed = json(&out);
-    assert!(
-        failed
-            .as_array()
-            .expect("array")
-            .iter()
-            .any(|r| r["id"] == id.as_str()),
-        "`list --status failed` must include the failed task {id}: {out}"
-    );
-
-    assert!(
-        !live_ledger_ids(&f).contains(&id),
-        "the ledger must no longer hold a live lease for {id} after `fail`"
-    );
-
-    let again = claim(&f, &f.b);
-    assert_eq!(
-        again["title"], "First task",
-        "with the lease released, B must be able to claim the task again: {again}"
+    assert_claim_does_not_return(
+        &f,
+        &f.b,
+        "First task",
+        "B must not re-dispatch a task A just failed while its lease is live",
     );
 
     assert_only_row_changed(&f, &before, &id);
 }
 
-/// 2. claim in A, `edit --status pending` in A: listed pending (not claimed)
-///    in both checkouts, and B can claim it.
+/// 2. claim in A, `done` in A: A shows done; B still shows `claimed` and B's
+///    `next --claim` does not hand out finished work.
 #[test]
-fn edit_status_pending_releases_the_lease() {
-    let f = fixture("f2");
-    let before = f.store_bytes(&f.a);
-    let got = claim(&f, &f.a);
-    assert_eq!(got["title"], "First task", "fixture: p0 wins: {got}");
-    let id = got["id"].as_str().unwrap().to_string();
-
-    let (code, out, err) = run(&["edit", &id, "--status", "pending"], &f.a, &f.home);
-    assert_eq!(code, 0, "edit must succeed: stdout={out} stderr={err}");
-
-    for (name, cwd) in [("A", &f.a), ("B", &f.b)] {
-        let rows = list_json(&f, cwd);
-        assert_eq!(
-            status_of(&rows, "First task"),
-            "pending",
-            "after `edit --status pending`, {name} must list the task pending: {rows:?}"
-        );
-    }
-
-    let again = claim(&f, &f.b);
-    assert_eq!(
-        again["title"], "First task",
-        "B must be able to claim the un-claimed task: {again}"
-    );
-
-    assert_only_row_changed(&f, &before, &id);
-}
-
-/// 3. claim in A, `done` in A: A lists it done; the lease no longer marks it
-///    claimed anywhere (B's tracked row is still pending, so a surviving lease
-///    is the only way B could show `claimed`); B's `next --claim` still works.
-#[test]
-fn done_releases_the_lease() {
-    let f = fixture("f3");
+fn claimant_done_is_not_redispatched_from_another_checkout() {
+    let f = fixture("v2");
     let before = f.store_bytes(&f.a);
     let got = claim(&f, &f.a);
     assert_eq!(got["title"], "First task", "fixture: p0 wins: {got}");
@@ -402,49 +394,114 @@ fn done_releases_the_lease() {
     let (code, out, err) = run(&["done", &id], &f.a, &f.home);
     assert_eq!(code, 0, "done must succeed: stdout={out} stderr={err}");
 
-    let rows_a = list_json(&f, &f.a);
     assert_eq!(
-        status_of(&rows_a, "First task"),
+        status_of(&list_json(&f, &f.a), "First task"),
         "done",
-        "A must list the task done: {rows_a:?}"
+        "A must list the task done"
     );
     let rows_b = list_json(&f, &f.b);
-    assert_ne!(
+    assert_eq!(
         status_of(&rows_b, "First task"),
         "claimed",
-        "after `done` in A the lease is over; B must not list the task claimed: {rows_b:?}"
+        "the lease is not released by `done`: B must still show claimed: {rows_b:?}"
+    );
+    assert_claim_does_not_return(
+        &f,
+        &f.b,
+        "First task",
+        "B must not re-dispatch work A already finished",
     );
 
-    let (code, out, err) = run(&["next", "--claim"], &f.b, &f.home);
-    assert_eq!(
-        code, 0,
-        "B's next --claim must not error after A's done: stdout={out} stderr={err}"
-    );
-
-    // `done` may move the row to the done file; only require that no
-    // `claimed` bytes appear and the other rows are untouched in tasks.toml.
+    // `done` may move the row to the done file; tasks.toml must still gain
+    // no `claimed` bytes and keep the other rows untouched.
     assert_only_row_changed(&f, &before, &id);
 }
 
-/// 4. claim in A, corrupt the ledger, `fail` in A: the release cannot be
-///    recorded, so the command must NOT report plain success silently — it
-///    either exits non-zero or warns on stderr that the lease is still held.
+/// 3. A failed row last updated LONG before a live lease (a re-claim of an old
+///    failed task) is displayed `claimed`, and filtered as such.
 #[test]
-fn fail_with_unreadable_ledger_is_not_silent() {
-    let f = fixture("f4");
+fn reclaimed_old_failed_row_is_displayed_claimed() {
+    let f = fixture_with("v3", |a, _home| {
+        let dir = a.join(".backlog");
+        std::fs::create_dir_all(&dir).unwrap();
+        // updated_at and defer_until far in the past: failed, not deferred,
+        // therefore claimable.
+        std::fs::write(
+            dir.join("tasks.toml"),
+            format!(
+                "[[task]]\nid = \"oldfail1\"\ntitle = \"Old failure\"\nproject = \"{}\"\n\
+                 tags = [\"p0\"]\nstatus = \"failed\"\nnotes = \"boom\"\ncreated_at = 1000\n\
+                 updated_at = 1000\ndefer_until = 1000\n",
+                a.display()
+            ),
+        )
+        .unwrap();
+    });
+    let before = f.store_bytes(&f.a);
+    assert_eq!(
+        status_of(&list_json(&f, &f.a), "Old failure"),
+        "failed",
+        "fixture: an unleased failed row is listed failed"
+    );
+
+    let got = claim(&f, &f.a);
+    assert_eq!(
+        got["title"], "Old failure",
+        "the old failed row is claimable: {got}"
+    );
+
+    for (name, cwd) in [("A", &f.a), ("B", &f.b)] {
+        assert_eq!(
+            status_of(&list_json(&f, cwd), "Old failure"),
+            "claimed",
+            "{name}: a failed row re-claimed after its last update must show claimed"
+        );
+        assert!(
+            ids_with_status(&f, cwd, "claimed").contains(&"oldfail1".to_string()),
+            "{name}: `list --status claimed` must include the re-claimed row"
+        );
+        assert!(
+            !ids_with_status(&f, cwd, "failed").contains(&"oldfail1".to_string()),
+            "{name}: `list --status failed` must not include the re-claimed row"
+        );
+    }
+    assert_eq!(
+        f.store_bytes(&f.a),
+        before,
+        "claiming must not touch A's tracked store"
+    );
+}
+
+/// 4. Boundary, pinned deterministically by editing the lease: for a failed
+///    row, claimed_at == updated_at => "failed" (updated AT the claim counts as
+///    the claimant's fail); claimed_at == updated_at + 1 => "claimed".
+#[test]
+fn failed_row_claimed_boundary_is_strict() {
+    let f = fixture("v4");
     let got = claim(&f, &f.a);
     let id = got["id"].as_str().unwrap().to_string();
-
-    let ledgers = f.ledger_files();
-    assert!(!ledgers.is_empty(), "fixture: a claim must create a ledger");
-    for l in &ledgers {
-        std::fs::write(l, "{ this is not json").unwrap();
-    }
-
     let (code, out, err) = run(&["fail", &id, "--reason", "boom"], &f.a, &f.home);
+    assert_eq!(code, 0, "fail must succeed: stdout={out} stderr={err}");
+
+    let updated_at = row_of(&f, &f.a, "First task")["updated_at"]
+        .as_i64()
+        .expect("updated_at is an integer");
     assert!(
-        code != 0 || err.to_lowercase().contains("lease"),
-        "`fail` whose lease release cannot be recorded must exit non-zero or warn \
-         about the lease on stderr; got exit {code}, stdout={out} stderr={err}"
+        now_unix() - updated_at < CLAIM_STALE_SECS,
+        "fixture: updated_at is recent, so a lease stamped at it is live"
+    );
+
+    set_lease_claimed_at(&f, &id, updated_at);
+    assert_eq!(
+        status_of(&list_json(&f, &f.a), "First task"),
+        "failed",
+        "claimed_at == updated_at: the row was updated at the claim => failed"
+    );
+
+    set_lease_claimed_at(&f, &id, updated_at + 1);
+    assert_eq!(
+        status_of(&list_json(&f, &f.a), "First task"),
+        "claimed",
+        "claimed_at > updated_at: a claim after the failure => claimed"
     );
 }

@@ -19,7 +19,7 @@
 
 use clap::{Parser, Subcommand};
 
-use harness_core::hook::{read_stdin, run_hook, HookInput};
+use harness_core::hook::{read_stdin, run_hook};
 
 #[derive(Parser)]
 #[command(
@@ -44,12 +44,12 @@ fn main() {
     match cli.command {
         Command::Scan => run_hook(|| {
             let raw = read_stdin();
-            if let Some(input) = HookInput::parse(&raw) {
-                if let Some(line) =
-                    fetchguard::gate::analyse(&input.tool_name, input.tool_response.as_ref())
-                {
-                    println!("{line}");
-                }
+            // The empty/unparseable split lives in `gate::analyse_payload` so
+            // it is reachable from a test — this `main` is not. Previously
+            // this line was `if let Some(input) = HookInput::parse(&raw)`
+            // with no `else`, which dropped an unreadable payload in silence.
+            if let Some(line) = fetchguard::gate::analyse_payload(&raw) {
+                println!("{line}");
             }
         }),
     }
@@ -57,7 +57,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use harness_core::hook::HookInput;
     use serde_json::json;
 
     #[test]

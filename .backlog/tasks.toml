@@ -1764,25 +1764,6 @@ issue_number = 131
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/131"
 
 [[task]]
-id = "56991fca"
-title = "taintguard と fetchguard の PreToolUse 入口が parse 不能な payload を沈黙で許可する (blastguard が修正済みのミラーギャップ)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "L5",
-    "scout",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "規範成立(2026-07-21)の後に生まれた2クレートが、blastguard が 6a02670c で直した入口の形をそのまま持って生まれた。PreToolUse で沈黙することは allow を意味する。証拠: crates/taintguard/src/main.rs:74-79 の if let Some(input) = HookInput::parse(and raw) に else 無し、かつ run_hook (判定を持たない hook 専用の exit0 常時経路) に包まれている。同型が crates/fetchguard/src/main.rs:46。修正済みの双子: crates/blastguard/src/main.rs:104-116 が None の腕で emit(Decision::ask(UNREADABLE_PAYLOAD), None) を返す。完了条件: 両クレートが None かつ raw 非空のとき blastguard と同じ ask/警告を出し、壊れた JSON を実バイナリに流すテストが沈黙ではなく decision 行を観測する。あわせて判定を持つ3サブコマンドを run_hook から harness_core::gate::run::run_guarded へ移す。"
-created_at = 1785879181
-updated_at = 1785879181
-weight = 0.0
-issue_number = 133
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/133"
-
-[[task]]
 id = "034b6620"
 title = "どの git hook も cargo を呼んでいない — check-clippy-lints.py を配線し verdict を持つクレートに workspace lints を継承させる"
 project = "/Users/yuki/src/harness"
@@ -18377,3 +18358,41 @@ updated_at = 1790252257
 weight = 0.0
 issue_number = 780
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/780"
+
+[[task]]
+id = "9418283f"
+title = "fetchguard scan: read_stdin / HookInput::parse / println の panic は run_hook の無音 exit0 に落ちる — scan 全体を catch_unwind で包み unreadable_payload_warning を出す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fetchguard",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-24 56991fca 修正時に判明。run_guarded は Stop 専用 (block+stop_hook_active) なので PostToolUse には不適。案 (b) main.rs で全体を catch_unwind、(c) harness-core に PostToolUse 用 run_guarded_warn を追加し他の warn-only hook でも共有。テスト可能性 (panic 注入経路) を先に確認すること。"
+created_at = 1790252366
+updated_at = 1790252366
+weight = 0.0
+issue_number = 782
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/782"
+
+[[task]]
+id = "70883137"
+title = "blastguard PreToolUse: read_stdin / parse 段の panic が run_hook の無音 exit0 (=allow) に落ちるか確認する (fetchguard 56991fca の双子)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-24 fetchguard 修正 worker の指摘。未検証。PreToolUse では沈黙は allow を意味する。"
+created_at = 1790252367
+updated_at = 1790252367
+weight = 0.0
+issue_number = 783
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/783"

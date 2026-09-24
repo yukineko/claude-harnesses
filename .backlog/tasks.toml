@@ -18475,3 +18475,21 @@ updated_at = 1790218655
 weight = 0.0
 issue_number = 767
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/767"
+
+[[task]]
+id = "b07709f6"
+title = "旧 binary の claimed 行が新 binary の next --claim から見えず、他セッション保持中の item を二重 claim する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-09-24 session 9d349393, main 86b71537, backlog 0.3.12. The 45c3a699/f09db5ce migration turned the legacy claimed rows (d186c736/15274c94/1875f626/28f5be7f) into pending, and claimed is now derived only from ~/.backlog/claims. Those 4 were claimed by session flow-2444be10 through an old binary (0.3.4). The new binary's next --claim handed all 4 to this session; only condukt state is-claimed (holder_run flow-2444be10) caught it, and they were returned to pending. Reading (a) defect: an old binary's claim that it wrote only to tasks.toml (does it also write the ledger?) is invisible to the new binary. Reading (b): old binaries already write the ledger and the 1h stale threshold reaped them. To tell them apart: check whether ~/.backlog/claims/<slug>.json held entries for those hashkeys right after the claim, and read 0.3.4 next --claim's write path. Related f1b36c50."
+created_at = 1790228670
+updated_at = 1790228670
+weight = 0.0
+issue_number = 768
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/768"

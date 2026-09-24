@@ -1627,28 +1627,6 @@ issue_number = 140
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/140"
 
 [[task]]
-id = "6de70510"
-title = "specguard の新しいテスト3本が unwrap_or_default で自分を反証不能にしている"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "L1",
-    "scout",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-規範の10日から12日後に書かれたテストが、読み取り失敗時に既定の空値で assert を満たしてしまう形。証拠: crates/specguard/src/main.rs:2476 (b39f94ea 2026-07-31) と :2653 :2801 (82a43c96 2026-08-02) が overwatch::store::read_review_findings(and repo).unwrap_or_default() の直後に assert!(recorded.is_empty()) を置いている。決定的なのは同じモジュールの周辺テスト8箇所 (:2391 :2436 :2462 :2532 :2578 :2605 :2630 :2672) が全て unwrap を使っていること — permissive 版が選ばれたのは assert が反証不能になる3箇所だけ。legacy の生き残りではなく、直近commitでの再生産である証拠として最も強い。完了条件: 3箇所を unwrap に置き換え、ストア読み取り失敗がテストを満たすのではなく落とすようにする。check-test-weakening に、同一 statement group 内で unwrap_or_default が assert の is_empty に入る形を検出する規則を足し、RED 先行で観測する。
-
-2026-09-24 flow: テスト 3 本を 22edd06e (specguard 0.2.59) で三値 reader に置換。mutation 証跡: 旧テストは undecodable line 注入 (M2/M3) で GREEN のまま、新テストは RED。done_criteria の第 2 部 (check-test-weakening.py の unwrap_or_default→is_empty 検出ルール) は別 item に分離した。"""
-created_at = 1785879193
-updated_at = 1790253715
-weight = 0.0
-issue_number = 142
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/142"
-
-[[task]]
 id = "6e36fe15"
 title = "Verdict の Clean に Check provenance token を要求する (敵対的検証で2点修正済み)"
 project = "/Users/yuki/src/harness"
@@ -16796,48 +16774,6 @@ issue_number = 729
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/729"
 
 [[task]]
-id = "326edfee"
-title = "systemic signature recurred 5x across 1 task(s)/2 session(s)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "systemic",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = """
-kind:systemic identifier:blastguard:git-config-hookspath occurrences:1
-
-USER RULING 2026-09-24: keep the deny; change the deny message only, so it suggests 'git config --get core.hooksPath'. All ~20 recovered occurrences were the one-argument read."""
-created_at = 1790184346
-updated_at = 1790247474
-weight = 0.0
-issue_number = 731
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/731"
-
-[[task]]
-id = "6cf12ce9"
-title = "systemic signature recurred 20x across 1 task(s)/3 session(s)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "systemic",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = """
-kind:systemic identifier:blastguard:unresolvable-command-word occurrences:1
-
-USER RULING 2026-09-24: safe-reader list. Skip heredoc body analysis only when the delimiter is quoted AND the reader is known not to run the body (git commit -F -, cat, backlog --notes, ...); any other reader keeps analysing (fail closed). 78/465 rows were backticks in quoted-heredoc bodies; 359 variable command words are correct asks. Related c6fe8ca0 / 9e8fd854."""
-created_at = 1790184349
-updated_at = 1790247474
-weight = 0.0
-issue_number = 733
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/733"
-
-[[task]]
 id = "0ebd3748"
 title = "blastguard dir fingerprint (287e929b) の残 gap: symlink target 変化の未検出・Undetermined 経路と安定性のテスト欠如・deployed binary 未検証"
 project = "/Users/yuki/src/harness"
@@ -18269,7 +18205,6 @@ issue_number = 799
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/799"
 
 [[task]]
-<<<<<<< HEAD
 id = "cac85c5b"
 title = "check-test-weakening.py に『unwrap_or_default の結果を is_empty で assert する』反証不能テストの検出ルールを足す (6de70510 から分離)"
 project = "/Users/yuki/src/harness"
@@ -18277,22 +18212,10 @@ project_unresolved = false
 tags = [
     "test-vacuity",
     "gate",
-=======
-id = "d7f2a4ea"
-title = "condukt circuit check は flow の run id では必ず trip する — flow は condukt run state を作らないので idle が構造的に測れない"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "flow",
-    "condukt",
-    "circuit-breaker",
-    "fail-closed",
->>>>>>> main
     "p1",
 ]
 touched_files = []
 status = "pending"
-<<<<<<< HEAD
 notes = "2026-09-24 分離。独立 author が RED 先行で作ること。specguard の実例 3 件は 22edd06e で直った。"
 created_at = 1790253715
 updated_at = 1790253715
@@ -18308,7 +18231,31 @@ project_unresolved = false
 tags = [
     "overwatch",
     "test-vacuity",
-=======
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-24 6de70510 worker の指摘。crates/overwatch/src/store.rs:344。未監査。"
+created_at = 1790253717
+updated_at = 1790253717
+weight = 0.0
+issue_number = 802
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/802"
+
+[[task]]
+id = "d7f2a4ea"
+title = "condukt circuit check は flow の run id では必ず trip する — flow は condukt run state を作らないので idle が構造的に測れない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flow",
+    "condukt",
+    "circuit-breaker",
+    "fail-closed",
+    "p1",
+]
+touched_files = []
+status = "pending"
 notes = """
 実測 2026-09-24、測定点 9949d349、cycle 13 の終了処理中。
 
@@ -18386,23 +18333,13 @@ project_unresolved = false
 tags = [
     "blastguard",
     "false-positive",
->>>>>>> main
     "p2",
 ]
 touched_files = []
 status = "pending"
-<<<<<<< HEAD
-notes = "2026-09-24 6de70510 worker の指摘。crates/overwatch/src/store.rs:344。未監査。"
-created_at = 1790253717
-updated_at = 1790253717
-weight = 0.0
-issue_number = 802
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/802"
-=======
 notes = "Observed 2026-09-24 in session 9d349393. The deployed blastguard denied a python3 - <<'PY' heredoc whose body held the list literal ['<', '>'] with: '> ' destroys the file's current contents and the empty target is a relative path. Reproduced with the 0.2.71 worktree binary (scratchpad sysrec/probe4.py). python3 is deliberately not on the safe-reader list (6cf12ce9 ruling), so the body is still analysed. But a '>' inside a Python string is not a shell redirect, and an EMPTY redirect target cannot be a real redirect at all: bash rejects it with a syntax error. Found while committing the 6cf12ce9 fix."
 created_at = 1790252283
 updated_at = 1790252283
 weight = 0.0
 issue_number = 781
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/781"
->>>>>>> main

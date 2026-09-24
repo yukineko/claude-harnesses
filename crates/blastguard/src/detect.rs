@@ -1991,8 +1991,35 @@ fn redirect_target_is_safe(target: &str) -> bool {
 // the first is an unexpanded variable, the second normalises to `/etc/hosts`
 // and lands outside every safe root.
 
+/// True when the `&` at `chars[i]` belongs to a REDIRECTION OPERATOR rather
+/// than being the background/`&&` separator: the fd-duplication forms `2>&1`,
+/// `>&2`, `>&-`, `0<&3`, and the `>&<filename>` mirror of `&>`.
+///
+/// In every one of those the `&` is glued to the `>`/`<` that precedes it, and
+/// bash reads the pair as one operator. The splitters read it as a separator
+/// and cut the line in half, leaving a dangling `2>` whose redirect-target scan
+/// then found nothing after the `>` and reported the EMPTY string as a
+/// truncating-redirect target — the user-visible
+/// `'> ' destroys the file's current contents`, a verdict naming no file.
+///
+/// Deliberately keyed on the IMMEDIATELY preceding character, with no
+/// whitespace skipping: a genuine background operator always has whitespace or
+/// a word character before it (`cargo test > log &`), and bash itself requires
+/// `>&` to be unseparated to mean a dup — `2> &1` redirects into a file called
+/// `&1`. Skipping whitespace here would therefore turn real `&` separators
+/// invisible, which is the fail-open direction.
+///
+/// Used by all three splitters so a segment INDEX taken from one stays valid in
+/// the others (see [`split_segments_with_separators`]).
+fn ampersand_is_redirect_operator(chars: &[char], i: usize) -> bool {
+    i > 0 && matches!(chars[i - 1], '>' | '<')
+}
+
 /// Quote-aware split of a command line into individual simple-command segments
 /// on `;`, newline, `&&`, `||`, `|`, `&`.
+///
+/// An `&` that is part of a redirection operator (`2>&1`, `>&2`) does NOT end a
+/// segment — see [`ampersand_is_redirect_operator`].
 fn split_segments(cmd: &str) -> Vec<String> {
     // Iterate over `char`s, not raw bytes: casting a UTF-8 continuation byte
     // `as char` yields a bogus Latin-1 scalar (e.g. 0xA0 → U+00A0), which both
@@ -2018,7 +2045,7 @@ fn split_segments(cmd: &str) -> Vec<String> {
             i += 1;
             continue;
         }
-        if !in_s && !in_d {
+        if !in_s && !in_d && !(c == '&' && ampersand_is_redirect_operator(&chars, i)) {
             // Two-char operators.
             if (c == '&' && chars.get(i + 1) == Some(&'&'))
                 || (c == '|' && chars.get(i + 1) == Some(&'|'))
@@ -2098,7 +2125,7 @@ fn split_segments_paren_aware(cmd: &str) -> Vec<String> {
                 i += 1;
                 continue;
             }
-            if paren_depth == 0 {
+            if paren_depth == 0 && !(c == '&' && ampersand_is_redirect_operator(&chars, i)) {
                 if (c == '&' && chars.get(i + 1) == Some(&'&'))
                     || (c == '|' && chars.get(i + 1) == Some(&'|'))
                 {
@@ -2289,7 +2316,7 @@ fn split_segments_with_separators(cmd: &str) -> Vec<SeparatedSegment> {
             i += 1;
             continue;
         }
-        if !in_s && !in_d {
+        if !in_s && !in_d && !(c == '&' && ampersand_is_redirect_operator(&chars, i)) {
             let two_char_conditional = (c == '&' && chars.get(i + 1) == Some(&'&'))
                 || (c == '|' && chars.get(i + 1) == Some(&'|'));
             if two_char_conditional {
@@ -5840,16 +5867,63 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize, ctx: &Ctx<'_>) 
             // so the append arm below handed it an unconditional Allow.
             // Classifying the target FIRST is what makes the two spellings
             // agree.
-            let protected = positional_operands(rest, &[])
-                .into_iter()
-                .find_map(|t| protected_path_block("tee target", t));
-            match protected {
-                Some(deny) => deny,
-                None if rest.iter().any(|t| *t == "-a" || *t == "--append") => Decision::Allow,
-                None => Decision::deny(
-                    "tee without -a/--append truncates and overwrites its target file(s)",
-                ),
+            let targets = positional_operands(rest, &[]);
+            // Axis order is rule 2's, and for rule 2's reasons.
+            //
+            // PROTECTED first: a gate/config file is surfaced however
+            // recoverable it is, because a silently disabled gate voids every
+            // later verdict.
+            if let Some(deny) = targets
+                .iter()
+                .find_map(|t| protected_path_block("tee target", t))
+            {
+                return deny;
             }
+            // SYSTEM DIRECTORY next, and BEFORE recoverability — the probe
+            // answers `NothingToDestroy` for a path that does not exist yet,
+            // which is the correct answer to the question it was asked and the
+            // wrong question for `/etc/sudoers.d/evil`, a file that destroys
+            // nothing by being created and grants root.
+            if let Some(deny) = targets
+                .iter()
+                .find_map(|t| system_path_block("tee target", t, ctx))
+            {
+                return deny;
+            }
+            if rest.iter().any(|t| *t == "-a" || *t == "--append") {
+                return Decision::Allow;
+            }
+            // MIRROR GAP, round 4. Rule 2 in `detect_bash` stopped asserting
+            // that a truncating write destroys bytes without first asking
+            // whether any bytes are there (operator ruling 2026-09-09). `tee`
+            // is the same operation spelled as a command and kept the flat
+            // Deny, whose reason — "truncates and overwrites its target
+            // file(s)" — was a claim about files NOTHING in the crate had
+            // looked at. That is the §4 divergence between the reason a human
+            // reads and the finding actually made, and it was this crate's
+            // most-recurring false positive (overwatch signature
+            // `blastguard:tee-truncate`, 94 occurrences across 21 sessions).
+            //
+            // Only the strongest, least contestable half of rule 2's recovery
+            // ruling is taken here: `NothingToDestroy` — an ABSENT target, for
+            // which there are no prior bytes for the write to destroy, and
+            // which is true in any tree. `RecoverableFromGit` is deliberately
+            // NOT honoured: rule 2 pairs it with a confinement test that needs
+            // the whole LINE (`line_changes_cwd_before`) to rule out
+            // `cd /usr && …`, and this arm is handed tokens only. Undetermined
+            // and Unrecoverable keep denying, per CLAUDE.md §3 — so this can
+            // only move an absent target from Deny to Allow, never the reverse.
+            let all_absent = !targets.is_empty()
+                && targets.iter().all(|t| {
+                    matches!(
+                        crate::reversible::probe(t, ctx.raw_base.as_deref()),
+                        crate::reversible::Recovery::NothingToDestroy
+                    )
+                });
+            if all_absent {
+                return Decision::Allow;
+            }
+            Decision::deny("tee without -a/--append truncates and overwrites its target file(s)")
         }
         // CA-blastguard-006: a bare top-level command-interpreter invocation
         // (`python3 -c "…"`, no `find` wrapper) can run an arbitrary
@@ -12347,5 +12421,131 @@ and must not be Allowed: {failing:?}"
                 "content": "{}"
             })),
         ));
+    }
+
+    /// `2>&1` is an fd DUPLICATION. The three segment splitters treated its
+    /// `&` as the background/separator operator, cutting the line into
+    /// `... 2>` and `1` — and the dangling `2>` then reached
+    /// [`redirect_targets`], whose target scan found no token after the `>`
+    /// and pushed the EMPTY string as a truncating-redirect target.
+    ///
+    /// The user saw `'> ' destroys the file's current contents` — a verdict
+    /// naming no file at all, about a redirect that truncates nothing. It was
+    /// only reachable once something re-analysed a segment in isolation, which
+    /// is why the plain `foo 2>&1` line was fine and
+    /// `python3 -c <program> 2>&1` was not: `payloads_after` hands the
+    /// interpreter's own trailing tokens back to [`analyze_shell_payload`],
+    /// and by then the `2>&1` had already been cut in half.
+    ///
+    /// Recorded by overwatch as `blastguard:interpreter-unrecoverable-write`
+    /// (5 recurrences across 3 sessions) and as the sibling reports
+    /// `079b643f` / `45f2bb7f` — one defect, several symptoms.
+    #[test]
+    fn fd_dup_is_not_a_segment_separator() {
+        // Segmentation, stated directly: the fd-dup must stay in one piece.
+        assert_eq!(
+            split_segments("python3 -c foo 2>&1"),
+            vec!["python3 -c foo 2>&1".to_string()],
+            "`2>&1` is an fd dup, not a separator"
+        );
+        assert_eq!(
+            split_segments("echo x >&2"),
+            vec!["echo x >&2".to_string()],
+            "`>&2` is an fd dup, not a separator"
+        );
+        // …and the twins must agree, or a segment INDEX taken from one is
+        // meaningless in the other (see `split_segments_with_separators`).
+        let sep: Vec<String> = split_segments_with_separators("python3 -c foo 2>&1")
+            .into_iter()
+            .map(|s| s.text)
+            .collect();
+        assert_eq!(sep, split_segments("python3 -c foo 2>&1"));
+        assert_eq!(
+            split_segments_paren_aware("python3 -c foo 2>&1"),
+            split_segments("python3 -c foo 2>&1")
+        );
+
+        // A REAL background `&` still ends a segment — this fix must not make
+        // the splitter blind to the operator it exists to find.
+        assert_eq!(
+            split_segments("sleep 1 & rm -rf /some/path"),
+            vec!["sleep 1 ".to_string(), " rm -rf /some/path".to_string()],
+            "a background `&` must still separate"
+        );
+        assert!(
+            bash("sleep 1 & rm -rf /some/path").is_deny(),
+            "a destructive command after a background `&` must still be found"
+        );
+
+        // The end-to-end symptom.
+        for c in [
+            r#"python3 -c "print(1)" 2>&1"#,
+            "python3 -c foo 2>&1",
+            "python3 -c foo 2>&1 | head -3",
+            "perl -e foo 2>&1",
+            "node -e foo 2>&1",
+        ] {
+            assert_eq!(
+                bash(c),
+                Decision::Allow,
+                "an fd dup is not a truncating redirect: {c}"
+            );
+        }
+    }
+
+    /// `tee FILE` is the `>` redirect spelled as a command, and the two must
+    /// answer alike. Rule 2 in [`detect_bash`] stopped asserting that a write
+    /// destroys bytes without first probing whether any bytes are there
+    /// (operator ruling 2026-09-09); the `tee` arm is its MIRROR and never got
+    /// the same treatment, so it kept returning a flat Deny whose reason —
+    /// "truncates and overwrites its target file(s)" — was a claim about files
+    /// nothing in the crate had looked at. That is the §4 divergence the
+    /// redirect rule's own comment records having fixed.
+    ///
+    /// Recorded by overwatch as `blastguard:tee-truncate`: 94 occurrences
+    /// across 21 sessions, the most-recurring false positive in the ledger.
+    #[test]
+    fn tee_asks_the_same_questions_as_the_redirect_it_mirrors() {
+        // EXISTING bytes that no git repository holds: denied, exactly as the
+        // `>` twin is. This half must not move.
+        let real = temp_file_with_bytes("tee-mirror");
+        let real = real.to_string_lossy().into_owned();
+        assert!(
+            bash(&format!("echo x | tee {real}")).is_deny(),
+            "a real, untracked file is unrecoverable — tee must still deny it"
+        );
+        assert!(
+            bash(&format!("echo x > {real}")).is_deny(),
+            "control: the `>` twin denies the same target"
+        );
+
+        // ABSENT target: there are no prior bytes for the write to destroy.
+        // `>` allows this; `tee` denied it, and said it was overwriting a file
+        // that does not exist.
+        let absent = std::env::temp_dir().join(format!("bg-tee-{}-absent", std::process::id()));
+        let absent = absent.to_string_lossy().into_owned();
+        assert_eq!(
+            bash(&format!("echo x > {absent}")),
+            Decision::Allow,
+            "control: the `>` twin allows an absent target"
+        );
+        assert_eq!(
+            bash(&format!("echo x | tee {absent}")),
+            Decision::Allow,
+            "tee onto an absent target destroys nothing — the mirror must agree"
+        );
+
+        // The SYSTEM-DIRECTORY axis, which the tee arm never had at all.
+        // `/etc/sudoers.d/evil` does not exist, destroys nothing by being
+        // created, and grants root — so the recoverability answer above must
+        // NOT be allowed to reach it. Same ordering as rule 2.
+        assert!(
+            bash("echo x | tee /etc/sudoers.d/evil").is_deny(),
+            "creating a file in a system policy directory is not an absent-target allow"
+        );
+        // The protected-path axis the arm already had stays intact.
+        assert_protected_modify(bash("echo x | tee .githooks/pre-commit"));
+
+        let _ = std::fs::remove_file(&real);
     }
 }

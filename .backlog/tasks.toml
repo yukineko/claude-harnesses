@@ -1754,9 +1754,11 @@ taintguard 0.1.9 builds this gate-locally first, in a record shape close enough 
 
 Done when: at least three gates emit outcome records, one readout prints per-gate comply/override/escalate rates with reason clustering, and every number it reports carries its command, revision and date per the CLAUDE.md measurement rule.
 
-2026-09-24 現況調査 (main db9deefb): ledger は未実装。前提の 'taintguard 0.1.9 が gate-local に先行' は taintguard 撤去 (0521d013) で失効。Stop gate (donegate/tdd/reviewgate) は ~/.<gate>/state/log.jsonl に blocked / skip_consumed(理由付き) / giveup を既に記録している。設計判断待ち: (Q1) override の観測方法 (明示記録のみ vs 後続の成功から推定)、giveup の独立バケット化、(Q2) 読み時導出 (overwatch gate-outcomes) vs 新 store。"""
+2026-09-24 現況調査 (main db9deefb): ledger は未実装。前提の 'taintguard 0.1.9 が gate-local に先行' は taintguard 撤去 (0521d013) で失効。Stop gate (donegate/tdd/reviewgate) は ~/.<gate>/state/log.jsonl に blocked / skip_consumed(理由付き) / giveup を既に記録している。設計判断待ち: (Q1) override の観測方法 (明示記録のみ vs 後続の成功から推定)、giveup の独立バケット化、(Q2) 読み時導出 (overwatch gate-outcomes) vs 新 store。
+
+USER RULING 2026-09-24: Q1=明示記録のみ (OVERRIDDEN=skip_consumed, COMPLIED=同 session の後続 green, 後続なし=UNRESOLVED)。Q2=読み時導出 (overwatch gate-outcomes、新 store 無し)。giveup は独立バケット『上限による解放』。ESCALATED は n/a。"""
 created_at = 1785876708
-updated_at = 1790252259
+updated_at = 1790252316
 weight = 0.0
 issue_number = 131
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/131"

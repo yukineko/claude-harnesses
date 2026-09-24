@@ -18264,3 +18264,67 @@ updated_at = 1790253339
 weight = 0.0
 issue_number = 799
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/799"
+
+[[task]]
+id = "d7f2a4ea"
+title = "condukt circuit check は flow の run id では必ず trip する — flow は condukt run state を作らないので idle が構造的に測れない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flow",
+    "condukt",
+    "circuit-breaker",
+    "fail-closed",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-24、測定点 9949d349、cycle 13 の終了処理中。
+
+  OUT=$(condukt circuit check --run "flow-<session-id>" 2>&1); rc=$?
+  -> rc=1
+  {"verdict":"trip","reason":"idle_unmeasured","idle_secs":null,
+   "idle_unknown_reason":"run state could not be loaded — time since last progress is unmeasurable",
+   "budget_over_cap":false,"streak":0,"streak_cap":3}
+
+対照 (存在しない run id):
+  condukt circuit check --run "definitely-no-such-run-xyz" -> rc=1、同じ trip / idle_unmeasured
+
+つまり「flow の run id」と「存在しない run id」が同じ出力になる。flow の run id は
+condukt state claim-task が claim を書く先ではあるが、condukt run state (run そのもの) は
+flow が condukt を起動しない限り作られない。したがって condukt を起こさないサイクル
+(backlog item を直接処理して merge するだけのサイクル) では、circuit check は常に trip する。
+
+trip 自体は fail-closed として正しい (測れないなら止める)。問題は、flow SKILL が
+circuit trip を「人にも policy にも聞かない clean stop」と規定していることで、
+これが構造的に必ず起きるなら、ブレーカーは「異常の検出」ではなく「毎回の定型停止」になる。
+ブレーカーが常時 trip していると、本物の trip と区別できない。
+
+あわせて観測した別の欠陥:
+  condukt circuit check   (--run 無し)  -> exit 2 (clap の usage error)
+  exit 2 は flow SKILL の policy-answer routing では escalate に相当する値であり、
+  ブレーカーの結果として解釈すると意味が壊れる。少なくとも「引数不足」と
+  「ブレーカーの判定」が同じ番号空間に乗っているのは危うい。
+
+自己訂正 (CLAUDE.md 4): 本セッションの cycle 11 / 12 の報告で「circuit check exit 0
+(trip していない)」と書いたが、あれは `condukt circuit check | head` の後で $? を読んだ
+もので、パイプ最終要素の終了コードだった。ブレーカーは当時も実際には測っていない。
+同じ形の誤測定を本セッション内で 2 回やっている。
+
+測ったこと: 上記の 3 パターンの exit code と JSON。
+測っていないこと: flow SKILL が実際にどの run id を渡す想定なのか (SKILL の散文は
+`condukt circuit check` としか書いていない)。condukt run state がどこに書かれ、
+flow 由来の claim とどう別管理になっているか。
+
+考えられる直し方 (どれも未検証):
+  - flow 用に「condukt run を持たない driver」を表現できるようにし、その場合の
+    idle を backlog driver の heartbeat から測る。
+  - あるいは flow SKILL 側で、condukt run を起こしていないサイクルでは
+    ブレーカーの対象が無いことを明示し、trip を停止条件に使わない。
+  - 引数不足の exit 2 を判定の番号空間から外す。"""
+created_at = 1790253492
+updated_at = 1790253492
+weight = 0.0
+issue_number = 800
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/800"

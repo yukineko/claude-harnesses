@@ -13828,3 +13828,47 @@ updated_at = 1790253942
 weight = 0.0
 issue_number = 142
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/142"
+
+[[task]]
+id = "127733e0"
+title = "condukt が workspace clippy lints (unwrap_used/expect_used = deny) に opt-in しておらず、clippy-lints ゲートが condukt を一度も検査しない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "clippy",
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+観測 2026-09-24、測定点 b47f08e3。pre-commit の clippy-lints ゲートが crates/condukt を触った commit で逐語に「not opted in ([lints] workspace = true absent): crates/condukt」と出力し、blastguard だけを検査して「clippy-lints: clean」と報告した。crates/blastguard/Cargo.toml は [lints] workspace = true を持ち、そのコメントが「判定を持つ crate では panic は判定不能そのものなので、production 側に unwrap / expect を書けなくする」と理由を述べている。condukt は schedule の force-gate と gate_exec の AutoExec/Escalate という判定を持つ crate であり、同じ理由がそのまま当てはまるのに除外されている。これは fail-open そのものではないが、検出側が condukt に対してだけ不在であるという意味で 6 節の「検出側を厚くする」に反する。見分け方: cargo clippy -p condukt --all-targets -- -D clippy::unwrap_used -D clippy::expect_used を走らせ、現状の違反件数を数える。完了条件: (1) 違反件数を実測して記録する、(2) 件数が払える規模なら [lints] workspace = true を入れて green にする、(3) 払えない規模なら ratchet 方式の baseline を置いて増加を止める。どれを採るかは件数を測ってから決める。
+
+2026-09-24 resolved by 71f6f084 (merged d1125547): crates/condukt/Cargo.toml now has [lints] workspace = true. Regression test scripts/tests/clippy-lints-optin-verdict-crates.sh (independent sonnet author) was observed RED before the opt-in (tdd/condukt planted unwrap exited 0) and GREEN after (8/8). Re-ran GREEN on the merged branch."""
+created_at = 1790185014
+updated_at = 1790254586
+weight = 0.0
+issue_number = 748
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/748"
+
+[[task]]
+id = "2a3b033c"
+title = "既定 REFUTED を既定 UNVERIFIED へ — 実在する fail-open を落とした指示が3つの docs で現役"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "L1",
+    "scout",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+CLAUDE.md:188-191 は 2026-07-21 の実測 (specguard forge gather.rs の実在する fail-open が誤棄却された) を根拠に、既定 REFUTED という指示は検証者を棄却側に倒すと規範化し、示せないなら verdict は REFUTED ではなく UNVERIFIED とせよと定めた。しかし指示を出す側の doc は3本とも無修正: docs/adversarial-verify-design.md:93 の「既定 REFUTED。コード上の根拠で反証できたら Refute」、docs/loop-engineering-followup-instructions.md:33、docs/review-redesign-implementation-items.md:341 の「REFUTEDは捨てCONFIRMED/PLAUSIBLEのみ残す」。3本目は UNVERIFIED の受け皿が存在しない。規範を CLAUDE.md にだけ書いて、実際に agent が読むプロンプト仕様を直していない。完了条件: 3本の doc が既定 UNVERIFIED に書き換わり、REFUTED は到達しない理由を発見と同水準の逐語引用と経路追跡で示せた場合のみとなり、UNVERIFIED が overwatch review-queue に再検証待ちとして残る導線が doc から参照されている。
+
+2026-09-24 resolved by 239a119a (merged at 0c0e2496, condukt 0.7.180): the 3 docs plus a 4th live copy in crates/condukt/skills/condukt/SKILL.md (skeptic panel: couldn't break it => pass) now default to UNVERIFIED/abstain. Test crates/condukt/tests/verifier_default_not_refuted.rs (independent sonnet author): RED 0/2 before the SKILL edit, GREEN 2/2 after, re-run GREEN post-merge."""
+created_at = 1785879189
+updated_at = 1790254587
+weight = 0.0
+issue_number = 139
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/139"

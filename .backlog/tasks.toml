@@ -1581,31 +1581,15 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "workspace の unwrap_used / expect_used / panic の deny は 42 クレート中 8 にしか掛かっていない。condukt donegate reviewgate tdd budgetguard schemaguard harness-core 自身はいずれも verdict 形の判定を持ちながら対象外。さらに .githooks/pre-commit も pre-push も cargo を1回も呼ばない (pre-commit の run リストは :140-153、cargo の出現はコメント散文のみ)。これを直すために書かれた scripts/check-clippy-lints.py:20-24 は自分でそのギャップを docstring に書いた上でどの hook にも配線されていない。trybuild の compile-fail 契約も同様に enforcement site で走らず、.stderr を採取した rustc を固定する rust-toolchain.toml も存在しない。完了条件: check-clippy-lints.py が pre-commit の run リストに入り、上記クレートに lints workspace 継承が入り、rust-toolchain.toml が commit され、各クレートへ unwrap を注入して hook の RED を観測済み。"
+notes = """
+workspace の unwrap_used / expect_used / panic の deny は 42 クレート中 8 にしか掛かっていない。condukt donegate reviewgate tdd budgetguard schemaguard harness-core 自身はいずれも verdict 形の判定を持ちながら対象外。さらに .githooks/pre-commit も pre-push も cargo を1回も呼ばない (pre-commit の run リストは :140-153、cargo の出現はコメント散文のみ)。これを直すために書かれた scripts/check-clippy-lints.py:20-24 は自分でそのギャップを docstring に書いた上でどの hook にも配線されていない。trybuild の compile-fail 契約も同様に enforcement site で走らず、.stderr を採取した rustc を固定する rust-toolchain.toml も存在しない。完了条件: check-clippy-lints.py が pre-commit の run リストに入り、上記クレートに lints workspace 継承が入り、rust-toolchain.toml が commit され、各クレートへ unwrap を注入して hook の RED を観測済み。
+
+2026-09-24 progress: the cargo-calling hook part was already wired (.githooks/pre-commit runs check-clippy-lints.py), and condukt+tdd were opted in by 71f6f084. Still open: rust-toolchain.toml pin (waiting on a user decision: 1.97.1 pin vs stable vs trybuild-only) and trybuild compile-fail tests not running at any enforcement point."""
 created_at = 1785879185
-updated_at = 1785879185
+updated_at = 1790254586
 weight = 0.0
 issue_number = 136
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/136"
-
-[[task]]
-id = "2a3b033c"
-title = "既定 REFUTED を既定 UNVERIFIED へ — 実在する fail-open を落とした指示が3つの docs で現役"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "L1",
-    "scout",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "CLAUDE.md:188-191 は 2026-07-21 の実測 (specguard forge gather.rs の実在する fail-open が誤棄却された) を根拠に、既定 REFUTED という指示は検証者を棄却側に倒すと規範化し、示せないなら verdict は REFUTED ではなく UNVERIFIED とせよと定めた。しかし指示を出す側の doc は3本とも無修正: docs/adversarial-verify-design.md:93 の「既定 REFUTED。コード上の根拠で反証できたら Refute」、docs/loop-engineering-followup-instructions.md:33、docs/review-redesign-implementation-items.md:341 の「REFUTEDは捨てCONFIRMED/PLAUSIBLEのみ残す」。3本目は UNVERIFIED の受け皿が存在しない。規範を CLAUDE.md にだけ書いて、実際に agent が読むプロンプト仕様を直していない。完了条件: 3本の doc が既定 UNVERIFIED に書き換わり、REFUTED は到達しない理由を発見と同水準の逐語引用と経路追跡で示せた場合のみとなり、UNVERIFIED が overwatch review-queue に再検証待ちとして残る導線が doc から参照されている。"
-created_at = 1785879189
-updated_at = 1785879189
-weight = 0.0
-issue_number = 139
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/139"
 
 [[task]]
 id = "8696dd7e"
@@ -1619,9 +1603,12 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "型で塞げないクラス (Err の腕が正規の API で Clean を鋳造する形) を捕まえられる唯一の候補。機構は既にある: crates/harness-core/src/degrade.rs:8 が permissiveness(f(d(x))) が permissiveness(f(x)) 以下という単調性オラクルを定義し、Degradation の4種を持つ。にもかかわらず採用は2クレートのみ (crates/stuckguard/src/verdict_monotonicity.rs と crates/overwatch/tests/verdict_monotonicity.rs)。欠けているのは注入の継ぎ目。完了条件: boundary が cfg feature 付きの thread-local FaultPlan を持ち、4つの IO 入口すべてを強制的に Undetermined にできる。degrade が assert_fails_closed を公開し、全盲状態で permissiveness が 0 であることを表明する。少なくとも1つの gate crate で修正前の RED を観測済み。採用クレート数が減らないことを見るラチェット script が pre-commit の run リストに入る (cargo を走らせないので commit 時に成立する)。1コミット1クレートの opt-in なので並行セッションと衝突しない。"
+notes = """
+型で塞げないクラス (Err の腕が正規の API で Clean を鋳造する形) を捕まえられる唯一の候補。機構は既にある: crates/harness-core/src/degrade.rs:8 が permissiveness(f(d(x))) が permissiveness(f(x)) 以下という単調性オラクルを定義し、Degradation の4種を持つ。にもかかわらず採用は2クレートのみ (crates/stuckguard/src/verdict_monotonicity.rs と crates/overwatch/tests/verdict_monotonicity.rs)。欠けているのは注入の継ぎ目。完了条件: boundary が cfg feature 付きの thread-local FaultPlan を持ち、4つの IO 入口すべてを強制的に Undetermined にできる。degrade が assert_fails_closed を公開し、全盲状態で permissiveness が 0 であることを表明する。少なくとも1つの gate crate で修正前の RED を観測済み。採用クレート数が減らないことを見るラチェット script が pre-commit の run リストに入る (cargo を走らせないので commit 時に成立する)。1コミット1クレートの opt-in なので並行セッションと衝突しない。
+
+2026-09-24 slice 1 landed: a1cbb6ac (merged 041a4c38, harness-core 0.2.31) adds boundary::fault FaultPlan, with_fault_plan, degrade::assert_fails_closed, impl Permissiveness for Verdict; tests/fault_plan.rs 27 tests (independent sonnet author, RED 7/27 on a stub, GREEN 27/27, re-run post-merge). Remaining: slice 2 first gate-crate adoption with observed RED (stuckguard or overwatch), slice 3 pre-commit adoption ratchet scripts/check-fault-injection-adoption.py that also rejects fault-injection outside [dev-dependencies], slice 4 one crate per commit."""
 created_at = 1785879190
-updated_at = 1785879190
+updated_at = 1790254586
 weight = 0.0
 issue_number = 140
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/140"
@@ -16504,9 +16491,12 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "Follow-up split from b19aad51 (2026-09-24, commit 3eb7b8bf on session-9d349393 opted in budgetguard, donegate, reviewgate, schemaguard, harness-core). Measured on that commit: 41 crates with Cargo.toml, 28 still without a lints table: autoflow backlog beacon benchkit compass condukt context-governor ctxrot curate daily deepwiki difflog evalkit fugu-router gauge harness-status hypothesis integration-tests playbook precommit-audit replaykit runbook session-insights ship taskprog tdd tracekit trajectoryeval. Prioritise verdict-carrying ones (condukt, tdd, autoflow, ctxrot Stop hooks, precommit-audit, compass). Measure production vs test violations per crate first (cargo clippy -p X --lib --bins -- -W clippy::unwrap_used -W clippy::expect_used -W clippy::panic), one crate or small group per commit with its own lockstep bump."
+notes = """
+Follow-up split from b19aad51 (2026-09-24, commit 3eb7b8bf on session-9d349393 opted in budgetguard, donegate, reviewgate, schemaguard, harness-core). Measured on that commit: 41 crates with Cargo.toml, 28 still without a lints table: autoflow backlog beacon benchkit compass condukt context-governor ctxrot curate daily deepwiki difflog evalkit fugu-router gauge harness-status hypothesis integration-tests playbook precommit-audit replaykit runbook session-insights ship taskprog tdd tracekit trajectoryeval. Prioritise verdict-carrying ones (condukt, tdd, autoflow, ctxrot Stop hooks, precommit-audit, compass). Measure production vs test violations per crate first (cargo clippy -p X --lib --bins -- -W clippy::unwrap_used -W clippy::expect_used -W clippy::panic), one crate or small group per commit with its own lockstep bump.
+
+2026-09-24 progress: condukt and tdd are opted in by 71f6f084 (merged d1125547). The remaining crates on this list are still not opted in."""
 created_at = 1790181368
-updated_at = 1790181368
+updated_at = 1790254586
 weight = 0.0
 issue_number = 706
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/706"
@@ -16881,25 +16871,6 @@ updated_at = 1790185002
 weight = 0.0
 issue_number = 747
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/747"
-
-[[task]]
-id = "127733e0"
-title = "condukt が workspace clippy lints (unwrap_used/expect_used = deny) に opt-in しておらず、clippy-lints ゲートが condukt を一度も検査しない"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "clippy",
-    "condukt",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "観測 2026-09-24、測定点 b47f08e3。pre-commit の clippy-lints ゲートが crates/condukt を触った commit で逐語に「not opted in ([lints] workspace = true absent): crates/condukt」と出力し、blastguard だけを検査して「clippy-lints: clean」と報告した。crates/blastguard/Cargo.toml は [lints] workspace = true を持ち、そのコメントが「判定を持つ crate では panic は判定不能そのものなので、production 側に unwrap / expect を書けなくする」と理由を述べている。condukt は schedule の force-gate と gate_exec の AutoExec/Escalate という判定を持つ crate であり、同じ理由がそのまま当てはまるのに除外されている。これは fail-open そのものではないが、検出側が condukt に対してだけ不在であるという意味で 6 節の「検出側を厚くする」に反する。見分け方: cargo clippy -p condukt --all-targets -- -D clippy::unwrap_used -D clippy::expect_used を走らせ、現状の違反件数を数える。完了条件: (1) 違反件数を実測して記録する、(2) 件数が払える規模なら [lints] workspace = true を入れて green にする、(3) 払えない規模なら ratchet 方式の baseline を置いて増加を止める。どれを採るかは件数を測ってから決める。"
-created_at = 1790185014
-updated_at = 1790185014
-weight = 0.0
-issue_number = 748
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/748"
 
 [[task]]
 id = "84d9267d"
@@ -18362,6 +18333,7 @@ updated_at = 1790253957
 weight = 0.0
 issue_number = 803
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/803"
+
 [[task]]
 id = "b95b0171"
 title = "worktree に未マージのまま 9-64 日放置されたブランチが 12 本ある — 統合されなかった作業が誰にも見えないまま腐っている"
@@ -18466,3 +18438,41 @@ updated_at = 1790254127
 weight = 0.0
 issue_number = 805
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/805"
+
+[[task]]
+id = "6142e803"
+title = "condukt の absent-decomposition 系統合テスト 2 本が main で RED (fp_gate_scope_contract / fp_oracle_e2e)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "red-test",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-24 observed at main f9c555ff and 0c0e2496 with cargo test -p condukt --no-fail-fast: fp_gate_scope_contract::absent_decomposition_file_still_accepts_a_fix_task_with_no_proofs FAILED, fp_oracle_e2e::genuinely_absent_decomposition_still_verifies FAILED. Deterministic (failed in 3 separate runs across 2 worktrees). Cause not yet investigated."
+created_at = 1790254588
+updated_at = 1790254588
+weight = 0.0
+issue_number = 806
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/806"
+
+[[task]]
+id = "60118c20"
+title = "continuous-audit SKILL の model diversity 規則が claude-3-5-* の古いモデル ID を列挙している"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "overwatch",
+    "docs",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-24 reported by the 2a3b033c worker: crates/overwatch/skills/continuous-audit/SKILL.md Step 2 names claude-3-5-sonnet/opus/haiku. Current family is Opus 5.5 / Sonnet 5 / Haiku 4.5 / Fable 5.1. The rule should be stated as 'different model family member than the finder' rather than hardcoding IDs."
+created_at = 1790254590
+updated_at = 1790254590
+weight = 0.0
+issue_number = 807
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/807"

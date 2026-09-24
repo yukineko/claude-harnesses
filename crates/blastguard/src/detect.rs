@@ -6607,8 +6607,17 @@ fn git_subcommand_index(rest: &[&str]) -> Option<usize> {
 
 /// The shared reason for every way of repointing `core.hooksPath`. One wording
 /// so [`crate::rule_id`] gives the whole class one signature.
+///
+/// The second clause is there for the one-argument READ, `git config
+/// core.hooksPath`, which the `config` arm denies on purpose (see there). Every
+/// field occurrence of this rule measured on 2026-09-24 (backlog 326edfee) was
+/// that read, retried until it tripped the repeat signal. The verdict stays the
+/// same. The reason now names the spelling that is actually allowed, so the
+/// caller can read the value without asking.
 const HOOKSPATH_REASON: &str =
-    "git config core.hooksPath repoints every git hook at once, disabling the repo's hook gates";
+    "git config core.hooksPath repoints every git hook at once, disabling the repo's hook gates \
+     — to only READ the current value, use `git config --get core.hooksPath` \
+     (the bare one-argument form is refused because it is not told apart from a write)";
 
 /// Config assignments carried by git's GLOBAL options, in every spelling git
 /// accepts: `-c k=v`, `-ck=v` (glued), `--config-env k=v`, `--config-env=k=v`.

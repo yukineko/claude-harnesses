@@ -9,6 +9,22 @@ Two related-but-distinct concepts are hardcoded across these sources:
     `backlog`) that get reviewed but do not gate/block anything and so are
     NOT GATE crates (no canary requirement, not in pre-push's GATE_PATTERN).
 
+Two independent checks run here, and the second exists because the first is
+blind to it:
+
+  (1) the VALUE check — every tracked source's extracted crate SET must satisfy
+      its declared relation to the canonical set.
+  (2) the PROSE COUNT check — a sentence in a tracked source that states HOW
+      MANY GATE crates there are must agree with the canonical set's size.
+      (1) parses literals and compares sets, so it never reads the sentences
+      around them. Measured 2026-09-24: eight sentences across four tracked
+      sources still said "6" while every tracked literal held 7, and one of
+      them enumerated the six names with `parallelguard` missing — a reader
+      trusting the prose would conclude a real GATE crate was out of scope.
+      (1) was green throughout. A sentence that deliberately reports a PAST
+      count is exempted by putting `gate-count-historical` on it or the line
+      above, never by rewriting it — that would falsify the history.
+
 Sources and how each must relate to the canonical GATE_CRATES set:
   - scripts/rollout-plugins.sh    GATE_CRATES="..."     (space-separated, canonical)
   - .githooks/pre-push            GATE_PATTERN='...'    (regex alternation) — must
@@ -24,7 +40,7 @@ Sources and how each must relate to the canonical GATE_CRATES set:
     only the constant can drift.)
   - scripts/check-fail-open-mutation.py  module-level GATE_CRATES = (...) tuple —
     must equal canonical EXACTLY. This is the adversarial fail-open mutation
-    harness: it hardcodes the same 6-crate list only because it is a standalone
+    harness: it hardcodes the same 7-crate list only because it is a standalone
     Python script that cannot `pub use harness_core::fleet::GATE_CRATES`. A
     stale copy here would either mutation-test a crate that is no longer a GATE
     crate, or (worse) silently skip a real GATE crate's fail-open coverage.
@@ -317,6 +333,72 @@ SOURCES = [
 ]
 
 
+# A sentence that STATES HOW MANY GATE crates there are. The value-level check
+# below cannot see these: it parses the literal tuples/arrays and compares the
+# SETS, so prose that counts those sets drifts freely. That is not hypothetical
+# — on 2026-09-24 eight such sentences across four tracked sources still said
+# "6" while every tracked literal held 7, and one of them enumerated the six
+# names, silently omitting `parallelguard`. A reader trusting the prose would
+# conclude a real GATE crate was outside this gate's scope.
+_PROSE_COUNT_PATTERNS = [
+    re.compile(r"\bthe\s+(\d+)\s+GATE\s+crates\b", re.IGNORECASE),
+    re.compile(r"\bcanonical\s+(\d+)\s+GATE\s+crates\b", re.IGNORECASE),
+    re.compile(r"\bcanonical\s+(\d+)-crate\s+list\b", re.IGNORECASE),
+    re.compile(r"\bsame\s+(\d+)-crate\s+list\b", re.IGNORECASE),
+]
+
+# Opt-out for a sentence that deliberately reports a PAST count (a regression
+# narrative, a "before this module existed" note). Those must NOT be rewritten
+# to the current number — that would falsify the history the sentence exists to
+# record — so they are exempted by marker rather than by silence. The marker
+# must sit on the claiming line or the line directly above it, so an exemption
+# is always visible next to the claim it covers.
+_PROSE_COUNT_EXEMPT = "gate-count-historical"
+
+
+# Tracked in addition to SOURCES: files that describe this gate's own scope.
+# They are not sources of the VALUE, but they are where a reader looks to learn
+# how many crates the gate covers, so a wrong count there misleads exactly the
+# same way.
+_PROSE_EXTRA_PATHS = (
+    "scripts/check-gate-crates-sync.py",
+    "scripts/test_check_gate_crates_sync.py",
+)
+
+
+def prose_count_claims(repo, canonical, sources=SOURCES, extra_paths=None):
+    """Return [(rel_path, lineno, claimed, line)] for prose miscounting GATE crates.
+
+    `canonical` is the authoritative set; a sentence stating any other number is
+    a finding unless the claiming line, or the line directly above it, carries
+    the `gate-count-historical` marker.
+    """
+    if extra_paths is None:
+        extra_paths = _PROSE_EXTRA_PATHS
+    expected = len(canonical)
+    rel_paths = [rel for rel, _extractor, _mode in sources]
+    rel_paths += [p for p in extra_paths if p not in rel_paths]
+
+    hits = []
+    for rel_path in rel_paths:
+        path = os.path.join(repo, rel_path)
+        if not os.path.isfile(path):
+            continue
+        with open(path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        for idx, line in enumerate(lines):
+            if _PROSE_COUNT_EXEMPT in line:
+                continue
+            if idx > 0 and _PROSE_COUNT_EXEMPT in lines[idx - 1]:
+                continue
+            for pattern in _PROSE_COUNT_PATTERNS:
+                for m in pattern.finditer(line):
+                    claimed = int(m.group(1))
+                    if claimed != expected:
+                        hits.append((rel_path, idx + 1, claimed, line.strip()))
+    return hits
+
+
 def check(repo=REPO, sources=SOURCES):
     """Return (ok, canonical_set, [(path, mode, extracted_set_or_None), ...]) for the given repo."""
     parsed = []
@@ -392,12 +474,24 @@ def main():
               "scripts/rollout-plugins.sh", file=sys.stderr)
         return 1
 
+    prose = prose_count_claims(os.getcwd(), canonical)
+    if prose:
+        print("FAIL: prose miscounts the GATE crates "
+              f"(canonical has {len(canonical)})", file=sys.stderr)
+        for rel_path, lineno, claimed, line in prose:
+            print(f"  {rel_path}:{lineno} claims {claimed}: {line}", file=sys.stderr)
+        print("  Fix the number, or — if the sentence deliberately reports a PAST "
+              f"count — put `{_PROSE_COUNT_EXEMPT}` on that line or the one above it.",
+              file=sys.stderr)
+        return 1
+
     if ok:
         audit_targets = next(
             (crates for path, mode, crates in parsed if mode == "superset"), canonical
         )
         print(f"OK: GATE_CRATES consistent across {len(parsed)} sources: "
-              f"{','.join(sorted(canonical))} (audit targets: {','.join(sorted(audit_targets))})")
+              f"{','.join(sorted(canonical))} (audit targets: {','.join(sorted(audit_targets))}); "
+              f"prose counts agree ({len(canonical)})")
         return 0
 
     by_path = {rel_path: crates for rel_path, _mode, crates in parsed}

@@ -13,6 +13,7 @@ mod control;
 pub mod disposition;
 mod disposition_cli;
 pub mod event;
+mod gate_outcomes;
 mod lease;
 mod lock;
 pub mod merge_conflict;
@@ -419,6 +420,15 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// How each Stop gate's firings ended (donegate / tdd / reviewgate), with
+    /// the denominator: complied / overridden (skip with reason) / released by
+    /// the loop bound / unresolved, and escalated n/a. Derived at read time from
+    /// the gates' machine-global `~/.<gate>/state/log.jsonl`. Exit 3 when a log
+    /// or a line could not be determined.
+    GateOutcomes {
+        #[arg(long)]
+        json: bool,
+    },
     /// Companion to `review-queue`: surface the DENOMINATOR — the population
     /// of decisions condukt auto-approved (self-answered without a human,
     /// per `condukt policy answer`'s `gate-decisions.jsonl` journal) — as a
@@ -782,6 +792,9 @@ fn main() -> Result<()> {
                 review_queue::run(json, since, limit)?
             };
             exit_on_undetermined_sources(health);
+        }
+        Command::GateOutcomes { json } => {
+            gate_outcomes::run_cli(json, store::now())?;
         }
         Command::AutoApproved {
             json,

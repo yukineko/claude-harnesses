@@ -86,28 +86,41 @@ fn collect(root: &Path, args: &[&str], out: &mut Vec<String>) -> bool {
 /// reviewer (which only ever saw `text`) nor the inject-mode hash of `text` can
 /// certify it. Callers must therefore never treat a truncated diff as a
 /// complete, reviewed change — doing so would let the tail slip through the gate.
+///
+/// `fetch_failed` is `Some(why)` when any of the content-fetch commands (the
+/// unstaged diff, the staged diff, the untracked listing, or reading an
+/// untracked file) failed. The text is then INCOMPLETE — a file the change scan
+/// reported may be missing from it — so the caller must treat the diff as
+/// undetermined: never hash it, never hand it to a reviewer as the whole
+/// change, and never read an empty result as "nothing changed".
 pub struct DiffText {
     pub text: String,
     pub truncated: bool,
+    pub fetch_failed: Option<String>,
 }
 
 /// The combined diff for `files`: unstaged + staged hunks, plus the full text of
 /// any untracked files (which have no diff). Truncated to `max_bytes` with a
 /// marker so a huge diff can't blow up memory or the reviewer prompt; the
 /// returned `truncated` flag lets the caller refuse to silently allow a stop
-/// whose tail was dropped.
+/// whose tail was dropped, and `fetch_failed` reports a content-fetch failure
+/// (spawn error / non-zero exit / unreadable untracked file) so a partial or
+/// empty diff is never mistaken for the complete change.
 pub fn diff_text(root: &Path, files: &[String], max_bytes: usize) -> DiffText {
     let mut s = String::new();
-
-    run_diff(root, &["diff", "--"], files, &mut s);
-    run_diff(root, &["diff", "--cached", "--"], files, &mut s);
-
+    let mut failures: Vec<String> = Vec::new();
+    if let Err(e) = run_diff(root, &["diff", "--"], files, &mut s) {
+        failures.push(e);
+    }
+    if let Err(e) = run_diff(root, &["diff", "--cached", "--"], files, &mut s) {
+        failures.push(e);
+    }
     // untracked files among `files`: include their contents as "new file" diffs.
     let mut others = Vec::new();
     let mut args: Vec<&str> = vec!["ls-files", "--others", "--exclude-standard", "--"];
     args.extend(files.iter().map(String::as_str));
-    if let Ok(o) = Command::new("git").current_dir(root).args(&args).output() {
-        if o.status.success() {
+    match Command::new("git").current_dir(root).args(&args).output() {
+        Ok(o) if o.status.success() => {
             for line in String::from_utf8_lossy(&o.stdout).lines() {
                 let line = line.trim();
                 if !line.is_empty() {
@@ -115,30 +128,51 @@ pub fn diff_text(root: &Path, files: &[String], max_bytes: usize) -> DiffText {
                 }
             }
         }
+        Ok(o) => failures.push(format!(
+            "git ls-files --others exited {:?}",
+            o.status.code()
+        )),
+        Err(e) => failures.push(format!("git ls-files --others: {e}")),
     }
     for f in others {
         s.push_str(&format!("\n=== new file: {f} ===\n"));
-        if let Ok(content) = std::fs::read_to_string(root.join(&f)) {
-            s.push_str(&content);
-            if !s.ends_with('\n') {
-                s.push('\n');
+        match std::fs::read(root.join(&f)) {
+            Ok(bytes) => {
+                // Lossy: a non-UTF-8 byte must not drop the whole file from review.
+                s.push_str(&String::from_utf8_lossy(&bytes));
+                if !s.ends_with('\n') {
+                    s.push('\n');
+                }
             }
+            Err(e) => failures.push(format!("read untracked {f}: {e}")),
         }
         if s.len() > max_bytes {
             break;
         }
     }
-
-    truncate_on_boundary(s, max_bytes)
+    let mut d = truncate_on_boundary(s, max_bytes);
+    if !failures.is_empty() {
+        d.fetch_failed = Some(failures.join("; "));
+    }
+    d
 }
 
-fn run_diff(root: &Path, base: &[&str], files: &[String], out: &mut String) {
+/// Append the stdout of `git <base> <files>` to `out`. `Err` on a spawn error
+/// or non-zero exit: the diff for these files is then UNKNOWN, not empty.
+fn run_diff(root: &Path, base: &[&str], files: &[String], out: &mut String) -> Result<(), String> {
     let mut args: Vec<&str> = base.to_vec();
     args.extend(files.iter().map(String::as_str));
-    if let Ok(o) = Command::new("git").current_dir(root).args(&args).output() {
-        if o.status.success() {
+    match Command::new("git").current_dir(root).args(&args).output() {
+        Ok(o) if o.status.success() => {
             out.push_str(&String::from_utf8_lossy(&o.stdout));
+            Ok(())
         }
+        Ok(o) => Err(format!(
+            "git {} exited {:?}",
+            base.join(" "),
+            o.status.code()
+        )),
+        Err(e) => Err(format!("git {}: {e}", base.join(" "))),
     }
 }
 
@@ -147,6 +181,7 @@ fn truncate_on_boundary(mut s: String, max_bytes: usize) -> DiffText {
         return DiffText {
             text: s,
             truncated: false,
+            fetch_failed: None,
         };
     }
     let mut cut = max_bytes;
@@ -158,6 +193,7 @@ fn truncate_on_boundary(mut s: String, max_bytes: usize) -> DiffText {
     DiffText {
         text: s,
         truncated: true,
+        fetch_failed: None,
     }
 }
 

@@ -334,6 +334,29 @@ crates/gauge/src/main.rs (report_cmd)
 
 ### 3.3 reviewgate — CONFIRMED 1件（2つの発現経路）、UNVERIFIED 2件
 
+> **【2026-09-24 追記 — 本節の CONFIRMED finding は、この監査の統合中に別セッションが修正した】**
+>
+> 監査は測定点 `a2fbbbe2` に対して実施したが、統合(merge)の時点で main は
+> `efe6db14 fix(reviewgate): close audit P2-P8 permissive verdict paths (277440b1)` を
+> 取り込んでおり、そこで本 finding の根本原因が塞がれていた。以下は実測である:
+>
+> * `crates/reviewgate/src/git.rs` の `diff_text` は `DiffText` を返すようになり、
+>   `fetch_failed` フィールドが「内容取得コマンドが失敗した」ことを保持する。
+>   `run_diff` の `Err`、`git ls-files --others` の非ゼロ終了、untracked ファイルの
+>   read 失敗が、いずれも `failures` に積まれて `fetch_failed` になる。
+> * `crates/reviewgate/src/review.rs` の呼び出し側は `fetch_failed` を
+>   **空 diff による allow より前で**検査し、`decide_scan_failed` へルーティングする。
+>   コメントが理由を明示している（同ファイル 265-269 行付近）。
+> * 同 commit は `crates/reviewgate/tests/verdict_paths_p2_p8.rs`（986行）を追加している。
+>
+> したがって発現経路A・Bとも、現在の main では成立しない。以下の本文は**監査時点の記録**として
+> 残す（当時のコードについての記述であり、今日のコードについての記述ではない）。行番号の引用だけは
+> 統合時に現在のツリーへ合わせたので、**引用と本文の時制が一致していない**点に注意すること。
+> 本 finding に対応する起票 3357c2e2 は、この測定を根拠に閉じた。
+>
+> この追記自体が示していること: 監査は測定点を持たなければ 1 日で腐る。
+> 本節を読む人は、まず `git log --oneline crates/reviewgate/src/` を見ること。
+
 3クレート中もっとも severity が高い finding。reviewgate は Stop hook で「レビュー済みでない diff を
 block する」ゲートそのものであり、本 finding は block/allow を直接動かす。
 
@@ -420,7 +443,7 @@ tracked な既存ファイルへの変更のみで untracked 新規ファイル�
 `diff_text`内の`run_diff`（unstaged側・staged側の両方）がsubprocess失敗（非ゼロ終了／spawn失敗:
 例えば`.git/index.lock`競合、ディスクフル、権限問題、gitバイナリのクラッシュ）した場合、
 `others`（untrackedファイル一覧、対象がすべてtrackedなら空）も空なので、最終的な`diff`文字列は
-空になる。`diff.trim().is_empty()`が`true`となり、`crates/reviewgate/src/review.rs:209`の`return allow("empty-diff", st)`
+空になる。`diff.trim().is_empty()`が`true`となり、`crates/reviewgate/src/review.rs:278`の`return allow("empty-diff", st)`
 が実行される — **`changed_files`が確認した実在の変更が、一切レビューされずにStopが許可される**。
 
 **発現経路B（部分欠落 → 不完全diffが「レビュー済み」として確定する）**: `run_diff`の2回の呼び出し

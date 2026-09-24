@@ -54,9 +54,14 @@ pub enum Decision {
 }
 
 /// Files that changed *and* are worth reviewing (match include, not exclude).
+///
+/// A malformed glob is never dropped silently. In `include`, ANY malformed
+/// pattern widens the set to "every changed file" (dropping just that pattern
+/// would narrow the review scope — audit P6); in `exclude`, a malformed pattern
+/// excludes nothing. Both cases are named on stderr.
 pub fn reviewable_files(cfg: &Config, changed: &[String]) -> Vec<String> {
-    let inc = build_set(&cfg.include);
-    let exc = build_set(&cfg.exclude);
+    let inc = build_set("include", &cfg.include, GlobFailure::MatchEverything);
+    let exc = build_set("exclude", &cfg.exclude, GlobFailure::DropPattern);
     changed
         .iter()
         .filter(|f| {
@@ -67,19 +72,56 @@ pub fn reviewable_files(cfg: &Config, changed: &[String]) -> Vec<String> {
         .collect()
 }
 
-fn build_set(globs: &[String]) -> Option<globset::GlobSet> {
+/// What a malformed glob in a list resolves to — always the side that reviews
+/// MORE, never less.
+#[derive(Clone, Copy)]
+enum GlobFailure {
+    /// `include`: the whole list becomes `None` (= every file is reviewable).
+    MatchEverything,
+    /// `exclude`: only the malformed pattern is dropped (= it excludes nothing).
+    DropPattern,
+}
+
+/// `None` means "no usable set": for `include` that reviews every file, for
+/// `exclude` it excludes nothing — both the restrictive side.
+fn build_set(field: &str, globs: &[String], on_bad: GlobFailure) -> Option<globset::GlobSet> {
     let mut b = GlobSetBuilder::new();
     let mut any = false;
+    let mut bad = false;
     for g in globs {
-        if let Ok(glob) = Glob::new(g) {
-            b.add(glob);
-            any = true;
+        match Glob::new(g) {
+            Ok(glob) => {
+                b.add(glob);
+                any = true;
+            }
+            Err(e) => {
+                bad = true;
+                let effect = match on_bad {
+                    GlobFailure::MatchEverything => {
+                        "reviewing EVERY changed file instead of narrowing the scope"
+                    }
+                    GlobFailure::DropPattern => "it excludes nothing",
+                };
+                eprintln!(
+                    "reviewgate: WARNING malformed {field} glob `{g}` ({e}) — {effect}. \
+                     Fix it in the reviewgate config."
+                );
+            }
         }
     }
-    if !any {
+    if !any || (bad && matches!(on_bad, GlobFailure::MatchEverything)) {
         return None;
     }
-    b.build().ok()
+    match b.build() {
+        Ok(set) => Some(set),
+        Err(e) => {
+            eprintln!(
+                "reviewgate: WARNING {field} globs could not be compiled ({e}) — \
+                 {field} is ignored (include: every file reviewed; exclude: nothing excluded)."
+            );
+            None
+        }
+    }
 }
 
 fn hash_diff(diff: &str) -> String {
@@ -210,10 +252,8 @@ pub fn evaluate(
     let crate::git::DiffText {
         text: diff,
         truncated,
+        fetch_failed,
     } = crate::git::diff_text(root, &files, cfg.max_diff_bytes);
-    if diff.trim().is_empty() {
-        return allow("empty-diff", st);
-    }
 
     // attempt counter resets after an idle gap (a fresh turn).
     let prior_attempts = if now() - st.last_ts > cfg.reset_after_secs {
@@ -221,6 +261,22 @@ pub fn evaluate(
     } else {
         st.attempts
     };
+
+    // A content-fetch command failed: the diff is missing some (or all) of the
+    // change the scan reported. Checked BEFORE the empty-diff allow and the
+    // hash, because an incomplete diff read as "empty" would allow silently and
+    // an incomplete diff hashed would later be certified as already-reviewed.
+    // Same bounded fail-closed path as a failed change scan.
+    if let Some(why) = fetch_failed {
+        eprintln!(
+            "reviewgate: WARNING diff content fetch failed ({why}) — the diff is incomplete, \
+             so the change is treated as UNDETERMINED, not reviewed."
+        );
+        return with_note(decide_scan_failed(cfg, prior_attempts), note);
+    }
+    if diff.trim().is_empty() {
+        return allow("empty-diff", st);
+    }
 
     // Truncation guard (fail closed, bounded): the diff was larger than
     // max_diff_bytes and the tail was dropped. That tail is unreviewed, and the
@@ -360,8 +416,17 @@ fn decide_subprocess(
             let findings = r.as_str();
             let attempts = prior_attempts + 1;
             if attempts > cfg.max_attempts {
+                // Bounded escape (the turn is never trapped), but this is a
+                // KNOWN violation being let through: say so loudly, under a tag
+                // distinct from inject mode's "giveup", and main.rs records it
+                // in the overwatch violation stream (VIOLATION_GIVEUP_TAG).
+                eprintln!(
+                    "reviewgate: WARNING the independent reviewer still reports findings after \
+                     {max} attempt(s) — allowing the stop with the findings UNRESOLVED:\n{findings}",
+                    max = cfg.max_attempts,
+                );
                 return Decision::Allow {
-                    tag: "giveup",
+                    tag: VIOLATION_GIVEUP_TAG,
                     attempts: 0,
                     last_hash: String::new(),
                 };
@@ -377,6 +442,11 @@ fn decide_subprocess(
         }
     }
 }
+
+/// Tag of the one `Allow` that lets a KNOWN reviewer-reported violation through
+/// (the subprocess-mode giveup). Distinct from inject mode's `"giveup"`, and the
+/// caller must still record it as a violation event even though it allows.
+pub const VIOLATION_GIVEUP_TAG: &str = "review-giveup";
 
 fn allow(tag: &'static str, st: &crate::state::SessionState) -> Decision {
     Decision::Allow {
@@ -595,11 +665,14 @@ fn truncated_reason(cfg: &Config, files: &[String], attempt: u32, max: u32) -> S
 }
 
 /// Run `reviewer_cmd`, feeding it the review prompt on stdin and reading
-/// findings from stdout. Output that is empty or starts with "LGTM" = clean.
+/// findings from stdout. Output whose first line starts with "LGTM" = clean.
+/// EMPTY output is NOT clean: the prompt asks for an explicit `LGTM`, so silence
+/// means the reviewer gave no answer (it may never have read the diff).
 ///
-/// Returns a [`Verdict`]: `Clean` (ran, nothing to report), `Violation`
-/// (findings), or `Undetermined` (the reviewer could not run to a conclusion —
-/// spawn failure, non-zero exit with no output, timeout, wait error). An
+/// Returns a [`Verdict`]: `Clean` (ran, said LGTM), `Violation` (findings), or
+/// `Undetermined` (the reviewer could not run to a conclusion — spawn failure,
+/// prompt delivery failure, non-zero exit with no output, empty output,
+/// unreadable / non-UTF-8 stdout, timeout, wait error). An
 /// `Undetermined` is **not** a clean review and must resolve to the blocking
 /// side downstream — never Allow.
 fn run_reviewer(cfg: &Config, diff: &str) -> Verdict {
@@ -622,18 +695,31 @@ fn run_reviewer(cfg: &Config, diff: &str) -> Verdict {
         Ok(c) => c,
         Err(e) => return Verdict::undetermined(format!("spawn: {e}")),
     };
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(prompt.as_bytes());
-        // drop closes stdin so the reviewer sees EOF
-    }
+    // A prompt that never reached the reviewer means whatever it prints was
+    // not a review of this diff.
+    let delivered = match child.stdin.take() {
+        Some(mut stdin) => stdin
+            .write_all(prompt.as_bytes())
+            .map_err(|e| format!("prompt delivery: {e}")),
+        // drop above closes stdin so the reviewer sees EOF
+        None => Err("prompt delivery: reviewer stdin unavailable".to_string()),
+    };
 
     let timeout = Duration::from_secs(cfg.reviewer_timeout_secs);
     match child.wait_timeout(timeout) {
         Ok(Some(status)) => {
             let mut out = String::new();
-            if let Some(mut so) = child.stdout.take() {
-                use std::io::Read;
-                let _ = so.read_to_string(&mut out);
+            match child.stdout.take() {
+                Some(mut so) => {
+                    use std::io::Read;
+                    if let Err(e) = so.read_to_string(&mut out) {
+                        return Verdict::undetermined(format!("reviewer stdout unreadable: {e}"));
+                    }
+                }
+                None => return Verdict::undetermined("reviewer stdout unavailable"),
+            }
+            if let Err(e) = delivered {
+                return Verdict::undetermined(e);
             }
             if !status.success() && out.trim().is_empty() {
                 return Verdict::undetermined(format!("exit {:?}", status.code()));
@@ -649,10 +735,13 @@ fn run_reviewer(cfg: &Config, diff: &str) -> Verdict {
     }
 }
 
+/// Map reviewer output to a verdict. Empty output is `Undetermined`, not
+/// `Clean`: the reviewer was asked for an explicit `LGTM`, and an empty answer
+/// is indistinguishable from a reviewer that never looked (audit P4).
 fn classify(out: &str) -> Verdict {
     let t = out.trim();
     if t.is_empty() {
-        return Verdict::from_findings(vec![]);
+        return Verdict::undetermined("reviewer produced no output (expected `LGTM` or findings)");
     }
     let first = t.lines().next().unwrap_or("").trim();
     if first.eq_ignore_ascii_case("lgtm") || first.to_ascii_lowercase().starts_with("lgtm") {
@@ -712,7 +801,7 @@ mod tests {
     fn classify_lgtm_is_clean() {
         assert!(matches!(classify("LGTM"), Verdict::Clean(_)));
         assert!(matches!(classify("  lgtm \n"), Verdict::Clean(_)));
-        assert!(matches!(classify(""), Verdict::Clean(_)));
+        assert!(matches!(classify(""), Verdict::Undetermined(_)));
         assert!(matches!(
             classify("- high: bug in foo.rs:10"),
             Verdict::Violation(_)

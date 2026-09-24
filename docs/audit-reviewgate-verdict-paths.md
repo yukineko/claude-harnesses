@@ -7,6 +7,11 @@
 - **対象バージョン**: reviewgate 0.1.18（`crates/reviewgate/Cargo.toml:4`）
 - **性質**: **read-only**。`crates/reviewgate/` 配下のコード・テストは 1 行も変更していない。
   ここに記す P（permissive）項目は**すべて未是正**である。「見つけたが直していない」ことを明記する。
+- **是正状況（2026-09-24 追記、reviewgate 0.1.28、branch `flow/fix-reviewgate-277440b1`）**: P2〜P8 は是正済み。
+  回帰テストは `crates/reviewgate/tests/verdict_paths_p2_p8.rs`（実装者とは別の Agent が書き、未是正コードで RED を観測済み）。
+  P1 は同じ `DiffText::fetch_failed` 経路で塞がる（手動 probe で `git-scan-failed` の block を観測）が、専用の回帰テストは無く
+  backlog `3357c2e2` で別途追跡する。以下の本文は監査時点（`171062fc`）の記録である。是正で行が移動した引用だけは
+  現行コードの行番号へ付け替え、是正で消えた引用（旧 docstring）は `doc-claim-exempt` を付けて監査時点の記録として残した。
 - **位置づけ**: `docs/audit-blastguard-verdict-paths.md` / `docs/audit-budgetguard-verdict-paths.md` と
   同じフォーマット（P/R/D の 3 分類・逐語引用・実測・棄却候補にも同じ立証責任）に従う、
   compass charter DoD9（各 gate crate の verdict 経路の per-gate 監査）の 1 本。
@@ -59,7 +64,7 @@
 |---|---|---|---|
 | B1 | `main::review_run` の `match decision` (`crates/reviewgate/src/main.rs:198-263`) | `Decision::Block` → stdout に `{"decision":"block"}` ＋ exit 0 / `Allow` → exit 0 | **Claude Code へ渡る唯一の判定** |
 | B2 | main::emit_violation（実体は 276-292 行） | overwatch violation store へ 1 event | **Decision::Block の分岐からしか呼ばれない**＝ allow は fleet 統計に一切残らない: `crates/reviewgate/src/main.rs:247`「emit_violation(&root, &session, tag);」 |
-| B3 | main::log_event（実体は 294-304 行。allow 側は 219 行、block 側は 246 行） | state_dir 直下の log.jsonl に 1 行（verdict タグ＋mode） | repo 内に機械的消費者は無い（grep -rn log.jsonl crates/ で reviewgate/harness-core 以外に reviewgate 由来の読み手なし）。人間が読む観測ログ: `crates/reviewgate/src/main.rs:303`「harness_core::gate::run::append_jsonl(&cfg.state_dir, &entry);」 |
+| B3 | main::log_event（実体は 294-304 行。allow 側は 219 行、block 側は 246 行） | state_dir 直下の log.jsonl に 1 行（verdict タグ＋mode） | repo 内に機械的消費者は無い（grep -rn log.jsonl crates/ で reviewgate/harness-core 以外に reviewgate 由来の読み手なし）。人間が読む観測ログ: `crates/reviewgate/src/main.rs:332`「harness_core::gate::run::append_jsonl(&cfg.state_dir, &entry);」 |
 | B4 | `main::status` の `match git::changed_files` (`crates/reviewgate/src/main.rs:322-349`) | 人間向け stdout | 「ゲートが設定されているか」を人間が判断する面＝**判定を持つ側**（§4-5 の実測を参照） |
 | B5 | overwatch violation stream の下流 | overwatch violations CLI / benchkit::auditsample（`crates/benchkit/src/auditsample.rs:253`「ViolationSource::Reviewgate => "reviewgate",」。同ファイル 264 行は自身を the heart of the real audit source と呼び、gates が通してしまった miss を violation stream から検出する） | B2 が出ない経路は、この下流からも**永久に見えない** |
 
@@ -212,7 +217,7 @@ FAKEGIT: injecting failure for: ls-files --others --exclude-standard -- a.rs unt
 
 P1 の同じ穴は、diff が空にならない場合により静かに効く。3 つの取得コマンドのうち 1 つだけが落ちると、
 diff は**非空だが不完全**になり、`empty-diff` の分岐すら通らずに hash が記録される
-（`crates/reviewgate/src/review.rs:236` `let hash = hash_diff(&diff);` → `Decision` の `last_hash` として保存され、
+（`crates/reviewgate/src/review.rs:292` `let hash = hash_diff(&diff);` → `Decision` の `last_hash` として保存され、
 以後 `crates/reviewgate/src/review.rs:239-241` の `already-reviewed` がその**部分 diff** を「レビュー済み」と証明する）。
 
 #### 実測（Probe I）
@@ -241,7 +246,7 @@ diff --git a/a.rs b/a.rs
 `files`（レビュー対象の一覧）は `changed_files()` 由来なので**2 ファイル**を主張し、
 実際に reviewer へ渡った diff は**1 ファイル分**だった。ブロック時の reason 文面も同じ `files` を使う
 （subprocess_reason 経由で file_list(files) に渡る:
-`crates/reviewgate/src/review.rs:369`「let reason = subprocess_reason(&files, findings, attempts, cfg.max_attempts);」）ため、
+`crates/reviewgate/src/review.rs:434`「let reason = subprocess_reason(&files, findings, attempts, cfg.max_attempts);」）ため、
 **「2 files をレビューした」と表示しながら 1 file しか見せていない**状態が起こりうる
 （Probe A の baseline が `レビュー対象 (2 files)` を出力しているのが同じ経路の証拠）。
 
@@ -338,6 +343,7 @@ PROBE-B EXIT=0 / stdout: [] / stderr: []
 reviewer は diff を**受け取らないまま**走り、何も出力せず exit 0 すれば `Clean` になる。
 さらに `.stderr(Stdio::null())`（`crates/reviewgate/src/review.rs:619`）により、reviewer 自身が吐いた診断も捨てられる。
 
+<!-- doc-claim-exempt: historical quote — the PRE-FIX run_reviewer docstring at audit point 171062fc. The P4 fix (reviewgate 0.1.28) removed the "empty = clean" sentence on purpose; this line records the state that was fixed. -->
 **D の主張とその棄却**: `crates/reviewgate/src/review.rs:598` は `Output that is empty or starts with "LGTM" = clean.` と
 **宣言している**ので、一見 D（宣言済み仕様）に見える。しかし同じ関数が reviewer へ渡す prompt は、
 clean の合図を**空ではなく `LGTM` という明示的なトークン**と定めている:
@@ -600,7 +606,7 @@ Claude Code 本体を制御して観測する手段は無い。**判定不能な
 | `crates/reviewgate/src/config.rs:260-271` | sanitize floor 4 件（`max_attempts==0→1` 等） | 0 を放置するとゲートが無意味な極端側（毎回即 giveup 等）に振れる。**floor はゲートを弱めていない** |
 | `crates/reviewgate/src/config.rs:276-280` | `.map(\|v\| !v.is_empty() && v != "0").unwrap_or(false)` | 未設定・読み取り失敗で `false`＝「無効化**されていない**」＝ armed のまま |
 | `crates/reviewgate/src/main.rs:150-152` | `harness_core::gate::run::run_guarded("reviewgate", …)` | panic は **fail closed（block）**、`stop_hook_active` のときだけ bounded に allow（`crates/harness-core/src/gate/run.rs:85-99`） |
-| `crates/reviewgate/src/main.rs:197` |「let prior = state::load(&cfg.state_dir, &session);」＝ 実体は `crates/harness-core/src/gate/state.rs:54-59` の read_to_string(...).ok().and_then(...).unwrap_or_default() | state が壊れている＝ attempts:0 / last_hash 空＝「まだレビューしていない」＝ block 側 |
+| `crates/reviewgate/src/main.rs:219` |「let prior = state::load(&cfg.state_dir, &session);」＝ 実体は `crates/harness-core/src/gate/state.rs:54-59` の read_to_string(...).ok().and_then(...).unwrap_or_default() | state が壊れている＝ attempts:0 / last_hash 空＝「まだレビューしていない」＝ block 側 |
 
 ---
 
@@ -651,10 +657,10 @@ $ grep -n 'giveup\|eprintln!' crates/reviewgate/src/review.rs
 | 同一 diff hash の再 stop | `allow("already-reviewed", st)`（`crates/reviewgate/src/review.rs:239-241`） | `crates/reviewgate/src/review.rs:9-11` module doc（convergence）。無限 block を防ぐ核 |
 | **G1** inject giveup | bounded に allow（無音・タグ `"giveup"`） | `crates/reviewgate/src/config.rs:45-46`「give up and allow the stop so the agent isn't trapped」。**inject mode では gate 自身が verdict を持たない**（レビューするのは agent 自身）ので、*捨てられた既知の違反は存在しない* — この点が G3 と決定的に異なる |
 | **G2 / G4 / G5** | bounded に allow ＋ 警告 ＋ 専用タグ | 各 `decide_*` の doc / 分岐コメント（`crates/reviewgate/src/review.rs:297-299` と `188-200`, `270-278`, `307-316`）。`reviewer_error_gives_up_after_max_attempts_but_never_traps`（`:642`）/ `truncated_diff_gives_up_after_max_attempts_but_never_traps`（`:726`）/ `failed_git_scan_gives_up_after_max_attempts_but_never_traps`（`:782`）が固定 |
-| session 限定 skip | 消費されたら allow（`crates/reviewgate/src/main.rs:180`「harness_core::gate::run::consume_session_skip(」、`eprintln!` あり） | `harness_core::gate::run::consume_session_skip`。**`reviewgate skip --reason "..."` という operator の明示的行為**が前提で、**発行したセッションにだけ**適用される（共有 project root の `.reviewgate-skip` は撤去済み — 次に停止した別セッションが消費してしまうため）。読めない marker は `None`＝**尊重しない**（判定不能→制限側）。第3引数 `input.stop_hook_active` により、他ゲートが block した stop では札を焼かず、chain が実際に終わった最初の 1 回で消費される |
+| session 限定 skip | 消費されたら allow（`crates/reviewgate/src/main.rs:203`「harness_core::gate::run::consume_session_skip(」、`eprintln!` あり） | `harness_core::gate::run::consume_session_skip`。**`reviewgate skip --reason "..."` という operator の明示的行為**が前提で、**発行したセッションにだけ**適用される（共有 project root の `.reviewgate-skip` は撤去済み — 次に停止した別セッションが消費してしまうため）。読めない marker は `None`＝**尊重しない**（判定不能→制限側）。第3引数 `input.stop_hook_active` により、他ゲートが block した stop では札を焼かず、chain が実際に終わった最初の 1 回で消費される |
 | `REVIEWGATE_DISABLE=1` | 即 allow / exit 0（`crates/reviewgate/src/main.rs:161-167`） | `Config::disabled_env`。panic guard の**外側**ではなく `review_run` 内だが、config 読み込みより前に評価され常に到達可能 |
 | config `enabled = false` | 即 allow / exit 0（`crates/reviewgate/src/main.rs:170-176`） | operator の明示的意思 |
-| 設定ファイルが**存在しない** | `Config::default()`（armed） | `crates/reviewgate/src/config.rs:1-6`「Safe by default: … Installing the hook can never *trap* a turn on its own.」**不在は判定不能ではなく KNOWN な答え**。budgetguard 監査 §1 の carve-out と同じ線引き（**存在するのに読めない/解釈できない**場合だけが P7） |
+| 設定ファイルが**存在しない** | `Config::default()`（armed） | `crates/reviewgate/src/config.rs:1-6`「Safe by default: … Installing the hook can never *trap* a turn on its own.」**不在は判定不能ではなく KNOWN な答え**。budgetguard 監査 §1 の carve-out と同じ線引き（**存在するのに読めない/解釈できない**場合だけが P7） | <!-- doc-claim-exempt: historical quote — the PRE-FIX run_reviewer docstring at audit point 171062fc. The P4 fix (reviewgate 0.1.28) removed the "empty = clean" sentence on purpose; this line records the state that was fixed. -->
 | `classify` の `LGTM` 前方一致 | `Clean`（`crates/reviewgate/src/review.rs:657-660`） | `crates/reviewgate/src/review.rs:598`「Output that is empty or starts with "LGTM" = clean.」＋ prompt（469 行）で reviewer に指示済み。classify_lgtm_is_clean（571 行）が固定 |
 | stdout が空 ＝ `Clean` | — | **D 主張を §1 P4 で棄却した**（prompt は `LGTM` を要求しており、空は契約上の clean 合図ではない） |
 
@@ -702,10 +708,10 @@ CLAUDE.md 第6節に従い、**「経路を辿れなかった」を「経路が�
 
 | 候補 | 状態 | 根拠 |
 |---|---|---|
-| `classify` の `first.to_ascii_lowercase().starts_with("lgtm")`（`crates/reviewgate/src/review.rs:658`）が、"lgtm" で始まる**実所見**を Clean と誤分類しうる | **RECORDED, not asserted** | 前方一致であり `lgtm, but: high severity …` のような出力は Clean になる。prompt（`:469`）は「問題が無ければ `LGTM` **とだけ**」と指示しているので契約違反の出力ではあるが、LLM reviewer が前置きに "LGTM overall, but…" と書く実務的確率は無視できない。**実測していないので P に格上げしない**。是正するなら完全一致にすべき、という指摘のみ記録 |
+| `classify` の `first.to_ascii_lowercase().starts_with("lgtm")`（`crates/reviewgate/src/review.rs:747`）が、"lgtm" で始まる**実所見**を Clean と誤分類しうる | **RECORDED, not asserted** | 前方一致であり `lgtm, but: high severity …` のような出力は Clean になる。prompt（`:469`）は「問題が無ければ `LGTM` **とだけ**」と指示しているので契約違反の出力ではあるが、LLM reviewer が前置きに "LGTM overall, but…" と書く実務的確率は無視できない。**実測していないので P に格上げしない**。是正するなら完全一致にすべき、という指摘のみ記録 |
 | `hash_diff` の `DefaultHasher`（`crates/reviewgate/src/review.rs:85-89`）の衝突・std 更新による不安定性 | **棄却（restrictive 方向）** | 衝突すれば `already-reviewed` で誤 allow だが 64bit SipHash の偶発衝突は無視可能。std 更新でハッシュが変われば**過去の hash と一致しなくなる**＝もう一度 block する側に倒れる。`hash_is_stable_and_distinct`（`:582`）が同一プロセス内の安定性を固定 |
 | `state::save` / `append_jsonl` の書き込み失敗（`crates/reviewgate/src/main.rs:209-217`, `209-217`, `275`） | **棄却（restrictive 方向）** | `last_hash` を保存できなければ次の stop で `already-reviewed` が成立せず**再度 block**する。attempts を保存できなければ giveup までの猶予が増える |
-| `crates/reviewgate/src/main.rs:307`「std::env::current_dir().unwrap_or_else(」＝ 失敗時に Path::new(".") へ落ちる | **判定経路ではない（が §4-5 で別の欠陥あり）** | 下流消費者を列挙した: status は --json を持たず、grep -rn 'reviewgate status' に機械的消費者は無い（唯一の消費者は端末の人間）。ただし**人間が「ゲートは armed か」を判断する面**なので免責は狭い。`current_dir` 失敗そのものより、§4-5 の config 誤報のほうが実害が大きい |
+| `crates/reviewgate/src/main.rs:336`「std::env::current_dir().unwrap_or_else(」＝ 失敗時に Path::new(".") へ落ちる | **判定経路ではない（が §4-5 で別の欠陥あり）** | 下流消費者を列挙した: status は --json を持たず、grep -rn 'reviewgate status' に機械的消費者は無い（唯一の消費者は端末の人間）。ただし**人間が「ゲートは armed か」を判断する面**なので免責は狭い。`current_dir` 失敗そのものより、§4-5 の config 誤報のほうが実害が大きい |
 | `crates/reviewgate/src/install.rs:17-22` `dirs::home_dir().unwrap_or_else(\|\| PathBuf::from("."))` / `current_exe().ok()…unwrap_or_else(\|\| "reviewgate")` | **設置経路。本監査のスコープ外として記録** | home 解決に失敗すると `./.claude/settings.json` に書いて `Installed Stop hook` と**成功を報告**する（ゲートが設置されない fleet 規模の fail-open）。budgetguard 監査 §7・backlog `1e783882` と**同一クラス**。verdict 経路ではないので P に含めない |
 | P8（`interactive` 誤判定）の**下流**、すなわち Claude Code が Stop hook の exit 1 をどう扱うか | **UNVERIFIED（棄却しない）** | 本監査に Claude Code 本体を観測する手段が無い。観測できたのは「hook 実行でも block JSON が出ず exit 1 になる」ことと、それが docstring と矛盾すること（§4-1）まで。**判定不能を「問題なし」に写さない**ため P8 は開いたまま残す |
 | P1/P2 の**現場での発生頻度** | **UNVERIFIED** | 「git は普通失敗しない」は予測であって観測ではない。頻度は測っていない。ただし `changed_files` 側は同じ失敗を fail-closed 扱いすると既に決めており（`crates/reviewgate/src/git.rs:16-21`）、**同一 crate 内で頻度評価が矛盾している**ことは指摘できる |

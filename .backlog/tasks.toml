@@ -18615,3 +18615,42 @@ updated_at = 1790239305
 weight = 0.0
 issue_number = 770
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/770"
+
+[[task]]
+id = "b34d4a77"
+title = "blastguard: sed -i '' (BSD 空 suffix) の直後の script 式を -i の target として protected-path 判定する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Measured 2026-09-24 (worktree binary at 98548fda, CLAUDE_CODE_ENTRYPOINT=cli): sed -i '' '/.githooks.x/d' README.md → ask 'sed -i target targets a protected gate/config path (<the sed EXPRESSION>)'. The protected-path check reads the script expression as the in-place target. Field occurrences (session 25763e04, 2026-09-07T18:18/18:19): sed -i '' '<expr containing .githooks>' ~/.claude/settings.json. The ASK was correct (the real target is settings.json) but the reason named the wrong operand, so the underlying defect is latent: any sed -i '' script that mentions a protected path fragment asks on a benign file. Found while triaging 7614e28e (protected-path systemic recurrence)."
+created_at = 1790244856
+updated_at = 1790244856
+weight = 0.0
+issue_number = 771
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/771"
+
+[[task]]
+id = "c6fe8ca0"
+title = "blastguard: quoted-delimiter heredoc の body 行を command segment として unresolvable-command-word 判定する (markdown backtick で Ask)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "needs-ruling",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = '''Measured 2026-09-24 (worktree binary at 98548fda): git commit -F - <<'EOF' / (body line starting with a backtick span, e.g. `done` is set) / EOF → ask 'the command word ``done`` is an expansion…'. The same for python3 - <<'PY' bodies, <<"EOF", <<\EOF and <<-'EOF'. The shell substitutes NOTHING in a quoted-delimiter body. Cause: detect_bash (detect.rs ~1640) runs analyze_segment on every split_segments() segment, heredoc BODY segments included; here_document_layout() already knows which segments are body but is only consulted for assignments (detect.rs:3110). Ledger (violations.jsonl, rule unresolvable-command-word): 78 of 465 rows carry a backtick inside the command word (markdown spans in commit messages or notes, e.g. 9d349393 2026-09-24, a6738634, 79d79a35, 2444be10). The fix needs a design ruling: a body is inert only when its CONSUMER does not execute it (bash/sh <<'EOF' runs the body, so a $X head there is genuinely unresolvable), and choosing between a data-consumer allowlist and a shell-consumer denylist is a policy choice (the file calls flag denylists unsound). Found while triaging 6cf12ce9. Same root cause as 9e8fd854, which was filed concurrently from a field block; this entry adds the rule-level ledger count and the consumer-model ruling question, so merge the two when working either.'''
+created_at = 1790244857
+updated_at = 1790244857
+weight = 0.0
+issue_number = 772
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/772"

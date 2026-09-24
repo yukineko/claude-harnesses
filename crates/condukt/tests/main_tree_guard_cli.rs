@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! End-to-end coverage for `condukt guard main-tree` — the machine enforcement
 //! of CLAUDE.md §8 (do not share-edit the primary working tree).
 //!

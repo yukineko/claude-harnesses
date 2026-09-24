@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! End-to-end coverage for `condukt gate check` — the deterministic gate-exec
 //! decision (auto-execute a clearly-safe gated task vs escalate to a human).
 //! Spawns the built binary against an isolated temp HOME/state dir so it

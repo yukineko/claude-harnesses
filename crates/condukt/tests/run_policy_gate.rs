@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Integration coverage for the deterministic in-code RUN-POLICY gate wired
 //! into `condukt verify launch --run-policy`. Spawns the built binary so it
 //! exercises the new purely-additive `--run-policy` mode end-to-end:

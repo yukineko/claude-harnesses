@@ -193,9 +193,16 @@ fn git_output_to_result(
             timeout
         );
     }
-    let status = out
-        .status
-        .expect("status is Some when not timed_out (run_git_bounded invariant)");
+    // `status` is None only when the child was killed on timeout, which is
+    // handled above. If that invariant ever breaks, the outcome is unknown, so
+    // it is an error (fail closed), never a success.
+    let Some(status) = out.status else {
+        bail!(
+            "git {:?} in {} reported no exit status without timing out; outcome undetermined",
+            args,
+            dir.display()
+        );
+    };
     if !status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         let stdout = String::from_utf8_lossy(&out.stdout);
@@ -750,9 +757,16 @@ fn git_try(dir: &Path, args: &[&str]) -> Result<(bool, String, String)> {
             ),
         ));
     }
-    let status = out
-        .status
-        .expect("status is Some when not timed_out (run_git_bounded invariant)");
+    // `status` is None only when the child was killed on timeout, which is
+    // handled above. If that invariant ever breaks, the outcome is unknown, so
+    // it is an error (fail closed), never a success.
+    let Some(status) = out.status else {
+        bail!(
+            "git {:?} in {} reported no exit status without timing out; outcome undetermined",
+            args,
+            dir.display()
+        );
+    };
     Ok((
         status.success(),
         String::from_utf8_lossy(&out.stdout).trim().to_string(),

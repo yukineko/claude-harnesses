@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! End-to-end coverage for the deterministic `condukt verify` verdict
 //! subcommands (`regressions`, `confidence`). These wire the pure set-diff /
 //! confidence functions in `verify.rs` into the real CLI the verifier agent

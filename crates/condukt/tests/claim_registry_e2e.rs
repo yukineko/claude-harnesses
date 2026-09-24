@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! End-to-end coverage for the cross-session file-claim registry — the PDO
 //! (Parallel Development Orchestration) collision guard. Spawns the real binary
 //! against an isolated HOME so it exercises the actual CLI, the on-disk

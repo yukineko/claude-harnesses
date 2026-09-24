@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Integration coverage for the opt-in worker sandbox CLI (`condukt sandbox
 //! run`). Exercises BOTH new branches end-to-end against the real binary:
 //!   1. sandbox DISABLED (default) → the command runs unchanged on the host and

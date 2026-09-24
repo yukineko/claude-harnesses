@@ -1608,9 +1608,12 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "規範の10日から12日後に書かれたテストが、読み取り失敗時に既定の空値で assert を満たしてしまう形。証拠: crates/specguard/src/main.rs:2476 (b39f94ea 2026-07-31) と :2653 :2801 (82a43c96 2026-08-02) が overwatch::store::read_review_findings(and repo).unwrap_or_default() の直後に assert!(recorded.is_empty()) を置いている。決定的なのは同じモジュールの周辺テスト8箇所 (:2391 :2436 :2462 :2532 :2578 :2605 :2630 :2672) が全て unwrap を使っていること — permissive 版が選ばれたのは assert が反証不能になる3箇所だけ。legacy の生き残りではなく、直近commitでの再生産である証拠として最も強い。完了条件: 3箇所を unwrap に置き換え、ストア読み取り失敗がテストを満たすのではなく落とすようにする。check-test-weakening に、同一 statement group 内で unwrap_or_default が assert の is_empty に入る形を検出する規則を足し、RED 先行で観測する。"
+notes = """
+規範の10日から12日後に書かれたテストが、読み取り失敗時に既定の空値で assert を満たしてしまう形。証拠: crates/specguard/src/main.rs:2476 (b39f94ea 2026-07-31) と :2653 :2801 (82a43c96 2026-08-02) が overwatch::store::read_review_findings(and repo).unwrap_or_default() の直後に assert!(recorded.is_empty()) を置いている。決定的なのは同じモジュールの周辺テスト8箇所 (:2391 :2436 :2462 :2532 :2578 :2605 :2630 :2672) が全て unwrap を使っていること — permissive 版が選ばれたのは assert が反証不能になる3箇所だけ。legacy の生き残りではなく、直近commitでの再生産である証拠として最も強い。完了条件: 3箇所を unwrap に置き換え、ストア読み取り失敗がテストを満たすのではなく落とすようにする。check-test-weakening に、同一 statement group 内で unwrap_or_default が assert の is_empty に入る形を検出する規則を足し、RED 先行で観測する。
+
+2026-09-24 flow: テスト 3 本を 22edd06e (specguard 0.2.59) で三値 reader に置換。mutation 証跡: 旧テストは undecodable line 注入 (M2/M3) で GREEN のまま、新テストは RED。done_criteria の第 2 部 (check-test-weakening.py の unwrap_or_default→is_empty 検出ルール) は別 item に分離した。"""
 created_at = 1785879193
-updated_at = 1785879193
+updated_at = 1790253715
 weight = 0.0
 issue_number = 142
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/142"
@@ -18234,3 +18237,41 @@ updated_at = 1790253339
 weight = 0.0
 issue_number = 799
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/799"
+
+[[task]]
+id = "cac85c5b"
+title = "check-test-weakening.py に『unwrap_or_default の結果を is_empty で assert する』反証不能テストの検出ルールを足す (6de70510 から分離)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "test-vacuity",
+    "gate",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-24 分離。独立 author が RED 先行で作ること。specguard の実例 3 件は 22edd06e で直った。"
+created_at = 1790253715
+updated_at = 1790253715
+weight = 0.0
+issue_number = 801
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/801"
+
+[[task]]
+id = "e8a61ec3"
+title = "overwatch read_review_findings / read_dispositions は best-effort 二値 reader (read_jsonl_best_effort が unreadable/undecodable を空 Vec にする) — これで is_empty を assert する他のテスト・呼び出し元も同様に反証不能の疑い"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "overwatch",
+    "test-vacuity",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-24 6de70510 worker の指摘。crates/overwatch/src/store.rs:344。未監査。"
+created_at = 1790253717
+updated_at = 1790253717
+weight = 0.0
+issue_number = 802
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/802"

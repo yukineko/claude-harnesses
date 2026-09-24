@@ -35,8 +35,9 @@
 //! checkout's tracked `.backlog/tasks.toml`, so every claim (and every
 //! SessionStart stale-claim rescue) dirtied the git worktree it ran in. Now
 //! the tracked store is never written by a claim: the lease is this ledger's
-//! entry, and `claimed` is a DERIVED view — a pending/failed row whose id has
-//! a LIVE entry here (age < [`crate::store::CLAIM_STALE_SECS`]). `next
+//! entry, and `claimed` is a DERIVED view — a pending row whose id has a LIVE
+//! entry here (age < [`crate::store::CLAIM_STALE_SECS`]), or a failed row whose
+//! live entry is newer than its `updated_at` (`store::derive_claimed`). `next
 //! --claim`, plain `next` and `list` all consult the live leases. The ledger's
 //! location is unchanged on purpose: older binaries still write it, and a
 //! second location would split old and new claimers onto two ledgers.
@@ -78,7 +79,7 @@
 //! kept (for a human reading the file) until [`LEDGER_RETENTION_SECS`], then
 //! pruned on the next write so the file stays bounded.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -297,8 +298,22 @@ fn write_ledger(path: &Path, ledger: &Ledger) -> std::result::Result<(), String>
 }
 
 /// The ids holding a LIVE lease (age < [`CLAIM_STALE_SECS`]) in `identity`'s
-/// project-wide ledger — the set that the derived `claimed` view of plain
-/// `next` and `list` is built from.
+/// project-wide ledger — the set plain `next` excludes. See
+/// [`live_lease_times`] for the semantics; this is its key set.
+#[cfg(test)]
+pub(crate) fn live_leases(
+    identity: &str,
+    override_dir: Option<&Path>,
+) -> Determination<HashSet<String>> {
+    live_lease_times(identity, override_dir).map(|m| m.into_keys().collect())
+}
+
+/// Every id holding a LIVE lease (age < [`CLAIM_STALE_SECS`]) in `identity`'s
+/// project-wide ledger, mapped to the `claimed_at` of its NEWEST live entry —
+/// the input of the derived `claimed` view of `list` (which needs the claim
+/// time to tell a claimant's own later `fail` apart from a re-claim of an
+/// older failed row, see `store::derive_claimed`) and, via its keys, of plain
+/// `next`'s exclusion.
 ///
 /// A read without the ledger lock: writers publish by atomic rename
 /// ([`write_ledger`]), so a reader sees either the old or the new ledger,
@@ -306,12 +321,24 @@ fn write_ledger(path: &Path, ledger: &Ledger) -> std::result::Result<(), String>
 /// unreadable or unparseable one is `Undetermined` — the caller must refuse
 /// rather than render leased tasks as unclaimed. Never creates the claims
 /// directory.
-pub(crate) fn live_leases(
+pub(crate) fn live_lease_times(
     identity: &str,
     override_dir: Option<&Path>,
-) -> Determination<HashSet<String>> {
+) -> Determination<HashMap<String, i64>> {
     let dir = claims_dir(override_dir);
-    read_ledger(&ledger_path(&dir, identity)).map(|l| live_ids(&l, now_unix()))
+    read_ledger(&ledger_path(&dir, identity)).map(|l| {
+        let now = now_unix();
+        let mut out: HashMap<String, i64> = HashMap::new();
+        for e in l
+            .entries
+            .iter()
+            .filter(|e| now.saturating_sub(e.claimed_at) < CLAIM_STALE_SECS)
+        {
+            let at = out.entry(e.id.clone()).or_insert(e.claimed_at);
+            *at = (*at).max(e.claimed_at);
+        }
+        out
+    })
 }
 
 /// Only LIVE claims exclude. See the module docs: ageing out after

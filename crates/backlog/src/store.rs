@@ -10,7 +10,8 @@ use crate::task::{new_id, Task, STATUS_DONE, STATUS_FAILED, STATUS_PENDING};
 /// tracked store by this binary: a claim lease lives only in the untracked,
 /// project-wide claim ledger ([`crate::claim_ledger`]), and `claimed` is what
 /// `next --claim` / `list` / plain `next` REPORT for a pending/failed row that
-/// holds a LIVE lease there (see [`derive_claimed`]). Not part of
+/// holds a LIVE lease there (a `failed` row only when the lease is newer than
+/// its last update — see [`derive_claimed`]). Not part of
 /// `task::STATUSES` (the `--status` vocabulary) because it is not a stored
 /// lifecycle state.
 ///
@@ -1119,14 +1120,33 @@ pub fn next_excluding(
     Ok(pick_next(&tasks, now, tag_filter, project_filter.as_deref(), leased).map(|t| (*t).clone()))
 }
 
-/// The derived claim view (backlog f09db5ce): every pending/failed task whose
-/// id holds a LIVE lease in `leased` is reported with status
-/// [`STATUS_CLAIMED`]. Terminal tasks are left alone — a finished task is not
-/// "claimed" whatever the ledger still remembers. Display-only: the result
-/// must never be saved.
-pub fn derive_claimed(tasks: &mut [Task], leased: &std::collections::HashSet<String>) {
+/// The derived claim view (backlog f09db5ce). `leases` maps each id holding a
+/// LIVE lease to that lease's `claimed_at` (`claim_ledger::live_lease_times`).
+///
+///   - a `pending` row with a live lease is reported [`STATUS_CLAIMED`];
+///   - a `failed` row with a live lease is reported [`STATUS_CLAIMED`] ONLY if
+///     the lease was taken STRICTLY after the row's `updated_at` (a re-claim
+///     of an older failed row). A row updated at or after the claim — the
+///     claimant ran `fail` — keeps `failed`, both displayed and for the
+///     `--status` filter;
+///   - terminal rows are never reported claimed, whatever the ledger still
+///     remembers.
+///
+/// Display-only: exclusion is NOT decided here. Nothing releases a lease, so a
+/// failed row whose claimant just failed it stays excluded from `next` /
+/// `next --claim` until the lease ages out at [`CLAIM_STALE_SECS`]. The
+/// result must never be saved.
+pub fn derive_claimed(tasks: &mut [Task], leases: &std::collections::HashMap<String, i64>) {
     for t in tasks.iter_mut() {
-        if t.is_pending() && leased.contains(&t.id) {
+        let Some(&claimed_at) = leases.get(&t.id) else {
+            continue;
+        };
+        let claimed = match t.status.as_str() {
+            STATUS_PENDING => true,
+            STATUS_FAILED => claimed_at > t.updated_at,
+            _ => false,
+        };
+        if claimed {
             t.status = STATUS_CLAIMED.to_string();
         }
     }
@@ -1267,12 +1287,12 @@ pub(crate) fn test_ledger(path: &Path) -> (PathBuf, String) {
 #[cfg(test)]
 pub(crate) fn load_derived(path: &Path) -> Result<Vec<Task>> {
     let (dir, identity) = test_ledger(path);
-    let leased = match crate::claim_ledger::live_leases(&identity, Some(&dir)) {
-        Determination::Known(ids) => ids,
+    let leases = match crate::claim_ledger::live_lease_times(&identity, Some(&dir)) {
+        Determination::Known(m) => m,
         Determination::Undetermined(why) => return Err(anyhow!("test ledger unreadable: {why:?}")),
     };
     let mut tasks = load(path)?;
-    derive_claimed(&mut tasks, &leased);
+    derive_claimed(&mut tasks, &leases);
     Ok(tasks)
 }
 

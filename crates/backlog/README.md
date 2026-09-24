@@ -203,13 +203,25 @@ A claim writes **only** the ledger. The tracked `.backlog/tasks.toml` is not
 modified by `next --claim` (it still takes the tasks-file lock, for a
 consistent read), and SessionStart's requeue never rewrites rows on account of
 claims — so claiming leaves the git worktree clean. `claimed` is a DERIVED
-status: a `pending`/`failed` row whose id holds a live lease in the ledger.
+status, decided per row from its stored status and its live lease (if any):
+
+- a `pending` row with a live lease is shown `claimed`;
+- a `failed` row with a live lease is shown `claimed` only if the lease was
+  taken strictly AFTER the row's `updated_at` (a re-claim of an older failed
+  task). A row updated at or after the claim — the claimant ran `fail` — is
+  shown `failed`, and `--status failed` selects it;
+- a `done`/`cancelled` row is never shown `claimed`.
+
+This rule is display-only. Exclusion from `next` / `next --claim` is decided
+by the live lease alone, so a task its claimant just failed is listed `failed`
+yet is still not handed out until the lease ages out.
 
 - `next --claim` prints the task with `"status": "claimed"`, as before.
-- plain `next` skips leased tasks; `list` (text and `--json`) shows them as
-  `claimed`. The status filter applies to the derived view: `--status pending`
-  omits leased tasks and `--status claimed` selects them (it still prints the
-  "unknown status" warning, since `claimed` is not a stored status).
+- plain `next` skips leased tasks; `list` (text and `--json`) shows the
+  derived status above. The status filter applies to the derived view:
+  `--status pending` omits leased tasks and `--status claimed` selects the
+  rows shown `claimed` (it still prints the "unknown status" warning, since
+  `claimed` is not a stored status).
 - a row that an older binary persisted as `status = "claimed"` is read as
   `pending`; only a live lease excludes it. It is rewritten as `pending` the
   next time an unrelated command saves the store.

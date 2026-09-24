@@ -612,15 +612,21 @@ fn claim_identity(effective_project: Option<&str>) -> Result<String> {
 /// resolved, or a ledger that exists but cannot be read or parsed, means we do
 /// not know which tasks are claimed, and rendering them as pending would hand
 /// a leased task to a second driver (CLAUDE.md §3).
-fn live_lease_view(effective_project: Option<&str>, command: &str) -> Result<HashSet<String>> {
+///
+/// Returns each leased id with its lease's `claimed_at` (for
+/// `store::derive_claimed`); exclusion uses the key set.
+fn live_lease_view(
+    effective_project: Option<&str>,
+    command: &str,
+) -> Result<std::collections::HashMap<String, i64>> {
     let identity = claim_identity(effective_project).map_err(|e| {
         anyhow::anyhow!(
             "backlog {command} REFUSED: which tasks are claimed is recorded in the project-wide \
              claim ledger, and the ledger for this scope could not be located: {e}"
         )
     })?;
-    match claim_ledger::live_leases(&identity, None) {
-        Determination::Known(ids) => Ok(ids),
+    match claim_ledger::live_lease_times(&identity, None) {
+        Determination::Known(leases) => Ok(leases),
         Determination::Undetermined(why) => Err(anyhow::anyhow!(
             "backlog {command} REFUSED (this is NOT an empty or unclaimed queue): the claim \
              ledger could not be read, so which tasks are already claimed is unknown: {why}"
@@ -877,14 +883,15 @@ fn run(cli: Cli) -> Result<()> {
             // `claimed` is DERIVED from the untracked claim ledger; an
             // unreadable ledger refuses here, before either renderer, rather
             // than listing leased tasks as pending.
-            let leased = live_lease_view(effective_project.as_deref(), "list")?;
+            let leases = live_lease_view(effective_project.as_deref(), "list")?;
+            let leased: HashSet<String> = leases.keys().cloned().collect();
             guard_store_divergence(
                 &location,
                 &tasks_path,
                 effective_project.as_deref(),
                 &leased,
             )?;
-            store::derive_claimed(&mut tasks, &leased);
+            store::derive_claimed(&mut tasks, &leases);
             if let Some(s) = status.as_deref() {
                 tasks.retain(|t| t.status == s);
             }
@@ -988,10 +995,12 @@ fn run(cli: Cli) -> Result<()> {
             // Leased tasks are not queued work for the divergence count. The
             // lease set read here is advisory for that count only: the claim
             // path below re-reads the ledger under its lock.
-            let leased = live_lease_view(
+            let leased: HashSet<String> = live_lease_view(
                 effective_project.as_deref(),
                 if claim { "next --claim" } else { "next" },
-            )?;
+            )?
+            .into_keys()
+            .collect();
             guard_store_divergence(
                 &location,
                 &tasks_path,

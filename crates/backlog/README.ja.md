@@ -177,12 +177,21 @@ store の隣に置く lockfile = checkout 単位だったので、両者が **�
 claim が書くのは **ledger だけ** である。`next --claim` はトラックされた `.backlog/tasks.toml` を
 変更しない (一貫した読み取りのために tasks-file ロックは今も取る)。SessionStart の requeue も claim を
 理由に行を書き換えない。したがって claim しても git worktree は汚れない。`claimed` は **導出**
-ステータスで、ledger に生きた lease を持つ `pending`/`failed` 行を指す。
+ステータスで、行ごとに保存されたステータスと生きた lease (あれば) から決まる:
+
+- 生きた lease を持つ `pending` 行は `claimed` と表示する。
+- 生きた lease を持つ `failed` 行は、lease がその行の `updated_at` より **厳密に後** に取られた
+  場合 (古い failed タスクの再 claim) だけ `claimed` と表示する。claim と同時かそれ以降に更新された
+  行 (claimant が `fail` した) は `failed` と表示し、`--status failed` がそれを選ぶ。
+- `done`/`cancelled` 行は決して `claimed` と表示しない。
+
+この規則は表示だけのものである。`next` / `next --claim` からの除外は生きた lease だけで決まるので、
+claimant が直前に fail したタスクは `failed` と表示されつつ、lease が期限切れになるまで配られない。
 
 - `next --claim` は従来どおり `"status": "claimed"` でタスクを出力する。
-- 素の `next` は lease 中のタスクを返さない。`list` (テキストと `--json`) はそれを `claimed` と表示する。
-  status フィルタは導出後に適用される: `--status pending` は lease 中を含まず、`--status claimed` が
-  それを選ぶ (`claimed` は保存されるステータスではないので "unknown status" 警告は出る)。
+- 素の `next` は lease 中のタスクを返さない。`list` (テキストと `--json`) は上記の導出ステータスを表示する。
+  status フィルタは導出後に適用される: `--status pending` は lease 中を含まず、`--status claimed` は
+  `claimed` と表示される行を選ぶ (`claimed` は保存されるステータスではないので "unknown status" 警告は出る)。
 - 旧バイナリが `status = "claimed"` で保存した行は `pending` として読む。除外するのは生きた lease
   だけ。その行は、無関係なコマンドが次に store を保存したときに `pending` として書き直される。
 - `done`/`fail`/`edit --status pending` は lease を解放しない。終端でないタスクの lease は 1h で

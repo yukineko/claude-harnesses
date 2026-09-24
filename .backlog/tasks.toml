@@ -238,26 +238,6 @@ issue_number = 209
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/209"
 
 [[task]]
-id = "71ffe552"
-title = "CHANGELOG + release-plz でリリース自動化"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "L3",
-    "L4",
-    "scout",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = """
-CHANGELOG 0件・GitHub Releasesゼロ・tag1個でplugin.json versionを手動管理。version据え置きだと利用者に更新が届かない。/ 証拠: repo全体にCHANGELOG無し / https://release-plz.dev/ / Claude plugin-marketplaces docs(version bump必須) / 完了条件: release-plz workflow導入+Conventional Commits運用+CHANGELOG自動生成+GitHub Releases発行
-Design conflict: release-plz bumps Cargo.toml crate versions, but this repo enforces plugin.json<->Cargo.toml version parity (scripts/check-versions.sh) and does NOT publish to crates.io. A stock release-plz release-PR bumps Cargo.toml only and breaks the parity gate. Needs a decision before implementing: (A) release-plz owns bumps + a post-bump hook syncs each plugin.json, or (B) keep manual version bumps and use git-cliff CHANGELOG + a tag-triggered GitHub Release workflow (fits existing model, locally verifiable). Not auto-committing release CI to main untested."""
-created_at = 1782537551
-updated_at = 1787734763
-weight = 0.0
-
-[[task]]
 id = "cba17102"
 title = "pre-push の AUTONOMY_PATTERN advisory のノイズ量を評価し、多ければ対象を絞る"
 project = "/Users/yuki/src/harness"
@@ -271,21 +251,6 @@ updated_at = 1784554661
 weight = 0.0
 issue_number = 283
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/283"
-
-[[task]]
-id = "61599e06"
-title = "fail-open #7 specguard: 照合不能auditがneeds_user=no(clean)に。prompt(audit-prompt.md:107等)+parse.rs:55 starts_with(yes)else false+欠落field既定false。verify.rs/decision.rsのtwinはfail-closed済み"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = []
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1784579474
-updated_at = 1784579474
-weight = 0.0
-issue_number = 284
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/284"
 
 [[task]]
 id = "589b250d"
@@ -506,21 +471,6 @@ updated_at = 1785967342
 weight = 0.0
 issue_number = 301
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/301"
-
-[[task]]
-id = "5ddcc99c"
-title = "check-fail-open ratchet: CI で base-branch baseline と比較し RAISE を検出（方向の単調性を script で enforce）"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = []
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1784653267
-updated_at = 1784653267
-weight = 0.0
-issue_number = 303
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/303"
 
 [[task]]
 id = "6267bfbe"
@@ -798,21 +748,6 @@ issue_number = 310
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/310"
 
 [[task]]
-id = "17057070"
-title = "workspace-lints の対照実験を再現可能なスクリプトにする (今は scratchpad 限りで、lint がまだ機能しているか誰も再確認できない)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1784728446
-updated_at = 1784728446
-weight = 0.0
-issue_number = 311
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/311"
-
-[[task]]
 id = "2dedd498"
 title = "condukt worktree::tests::git_fast_subprocess_returns_output_without_timing_out が時間依存で flake する"
 project = "/Users/yuki/src/harness"
@@ -848,26 +783,6 @@ updated_at = 1784749369
 weight = 0.0
 issue_number = 322
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/322"
-
-[[task]]
-id = "dd321c52"
-title = "SessionStart の /flow で開始しますか の確認を自律時は自動起動に(真の不明点=charter stale 等のみ確認)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "L1",
-    "scout",
-    "autonomy",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "セッション開始時に open backlog があると『/flow で開始しますか?』と承認を求める。自律継続テーマでは開始許可を毎回問うのは不要な friction。 / 証拠: autoflow/src/main.rs:343-347 (SessionStart additionalContext のバックログ N 件.../flow で開始しますか?) / 完了条件: 自律モードで open work があれば SessionStart が承認を問わず /flow 継続を自動注入し、真の不明点(charter stale 等)のみ確認する"
-created_at = 1784836009
-updated_at = 1784836009
-weight = 0.0
-issue_number = 329
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/329"
 
 [[task]]
 id = "1c66598a"
@@ -1044,26 +959,6 @@ updated_at = 1784996803
 weight = 0.0
 issue_number = 62
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/62"
-
-[[task]]
-id = "f5da9422"
-title = "flow の compass ゲート(Step 1)を autonomy-graded にする — 機械的 gap は自動解決、矛盾/欠落だけ escalate"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "flow",
-    "scout",
-    "autonomy",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "根拠: flow SKILL の Step 1 compass ゲートは autonomy に関係なく一律ハード停止(charter が陳腐/矛盾/抽象すぎると『先に /compass しろ』と停止)。一方 Step 0.5 には既に condukt policy answer の per-gate graded 判定があり、ロック競合/resume/pivot はこれで採点している。compass ゲートだけがこの shim を通っていない。問題: gap の大半は機械的(charter は健全で current_gap が最新 outcome/直近コミットに未追従なだけ)で、これは判断不要なのに毎回人手停止を要求する。逆に north_star 彫り直し(C1欠落/C4矛盾)は全自動にすると盲目実行(§6 self-authorization)になるので停止が正しい。改修: flow Step 1 の compass gap 判定を Step 0.5 の policy-answer routing に通す。C2 陳腐/current_gap ドリフトのみ = risk:low reversible:high confidence:high で auto(gap 再導出して続行、監査ログに残す)。C1 欠落/C4 矛盾 = risk:medium confidence:low で escalate(pivot と同じ扱い、人に返す)。compass C4 の『矛盾は人間が裁く』不変条件は escalate 側で保たれる。完了条件: 自律モードで機械的 gap のとき routine な compass-stop を出さず auto 継続し、C1/C4 相当のときのみ escalate/停止する分岐のテスト。非自律は従来どおり全停止(後方互換)。gate-decisions.jsonl に自答が残る。scout 由来(この session の設計議論から)。"
-created_at = 1785007163
-updated_at = 1785007163
-weight = 0.0
-issue_number = 63
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/63"
 
 [[task]]
 id = "4f9516be"
@@ -1277,52 +1172,6 @@ issue_number = 95
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/95"
 
 [[task]]
-id = "e42cbcb0"
-title = "harness-core boundary test fails on this mac: pgrep -fc is a usage error, not a count"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "test-infra",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = """
-PRE-EXISTING on clean main, not introduced by any current work. Verified by running the same test at main (/Users/yuki/src/harness) and in a worktree: identical failure.
-
-  cargo test -p harness-core --lib run_with_timeout_kills_hung
-  boundary::tests::run_with_timeout_kills_hung_process_group_and_returns_promptly FAILED
-  expected Known, got Undetermined: pgrep -fc harness-core-boundary-test-marker-NNNNN exited 2
-  (expected one of [0, 1]); a checker that did not run to a conclusion has not passed.
-  stderr: usage: pgrep [-Lfilnoqvx] [-d delim] [-F pidfile] [-G gid]
-
-macOS pgrep has no -c flag, so the combined -fc is rejected as a usage error and exits 2. The code is behaving CORRECTLY: exit 2 is outside the expected {0,1}, so it resolves to Undetermined rather than pretending the process count is zero. The bug is the probe command, not the verdict handling — do not "fix" this by widening the accepted exit codes, which would turn a usage error into a count of zero and make the test pass for the wrong reason.
-
-Likely fix: use pgrep -f PATTERN and count the returned pids (exit 0 = at least one match, exit 1 = none), or gate on a platform-specific flag set. Whatever is chosen must keep a genuinely failed probe resolving to Undetermined.
-
-Note the whole rest of the crate is green: 250 passed with this one skipped."""
-created_at = 1785411178
-updated_at = 1785411178
-weight = 0.0
-issue_number = 96
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/96"
-
-[[task]]
-id = "1e783882"
-title = "overwatch lease lookup fails in production: bare overwatch is not on PATH (found by undetermined telemetry)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = 'First finding from the new undetermined-metrics stream (backlog 6d493e39), observed within minutes of deploying it. 2 events in the last 7 days at crates/harness-core/src/boundary.rs:186, reason: cannot run "overwatch lease --session <id> --json": No such file or directory (os error 2). Something spawns a bare "overwatch" that is not on PATH, so the lease lookup resolves to Undetermined every time it runs. Fail-closed, so nothing is wrong per se, but the lookup never succeeds and the caller has been silently degrading. Find the caller and give it the plugin-cache absolute path (the same way other cross-plugin execs resolve), or make the absence an explicit skip rather than a per-run give-up. Verify with: overwatch undetermined-metrics --window-days 7'
-created_at = 1785413973
-updated_at = 1785413973
-weight = 0.0
-issue_number = 97
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/97"
-
-[[task]]
 id = "4297c742"
 title = "Record a week of undetermined-metrics observations as compass evidence (from 2026-08-06)"
 project = "/Users/yuki/src/harness"
@@ -1426,21 +1275,6 @@ updated_at = 1785453157
 weight = 0.0
 issue_number = 104
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/104"
-
-[[task]]
-id = "13596fb6"
-title = "test_precommit_hook harness: semantic merge conflict class (both sides stub the same seam)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p3"]
-touched_files = []
-status = "pending"
-notes = 'Observed 2026-07-28. Two branches independently added a condukt stub to HookHarness at different offsets. git merged both textually with no conflict; the surviving unconditional CONDUKT_BIN assignment silently disarmed test_absent_condukt_binary_blocks. Each side was green alone; only the merge was red. Measured: origin/main 13 OK, ours 16 OK, merged 16 with 1 FAIL. Generalisable: a test HARNESS is a shared mutable seam, and two sides configuring the same seam produce a defect git cannot see. Worth a cheap structural check - assert in setUp that the number of places writing self.env["CONDUKT_BIN"] is exactly one - so the next duplicate is caught by a test rather than by a downstream failure whose cause is three files away.'
-created_at = 1785453165
-updated_at = 1785453165
-weight = 0.0
-issue_number = 105
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/105"
 
 [[task]]
 id = "ea68627b"
@@ -1680,25 +1514,6 @@ issue_number = 126
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/126"
 
 [[task]]
-id = "277440b1"
-title = "reviewgate P2-P8: 監査で実測された残り 7 件の permissive 経路が未是正のまま doc にしかない"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "reviewgate",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "docs/audit-reviewgate-verdict-paths.md は permissive 経路を 8 件、リリースバイナリへの fault injection で実測している。P1 は別途 3357c2e2 で追跡。残り 7 件: P2 部分取得でも失敗が伝わらず欠落ファイルを含む変更がレビュー済みとして certify される（untracked の内容が prompt に 0 回しか現れないのを実測）。P3 reviewer の stdout が非 UTF-8 だと Undetermined ではなく Clean へ潰れ所見が消える。P4 exit 0 かつ stdout 空を Clean と読む空集合 fail-open。P5 Violation の giveup が無診断・共有タグ・violation event 無しで allow する（対照の reviewer-error-giveup は stderr に WARNING を出すのに、こちらは無音で同一タグ）。P6 include glob の部分的なパース失敗がレビュー範囲を無診断で縮める。P7 config の read/parse 失敗がそう設定されていたに写り、status が壊れた config を採用済みのように表示する。P8 は doc 参照。全件そのまま未是正なので、監査が見つけた事実が doc の外に出ていない状態。是正は crate 側の verdict 三値化とセットで行う。"
-created_at = 1785844236
-updated_at = 1785844236
-weight = 0.0
-issue_number = 127
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/127"
-
-[[task]]
 id = "3a8e3b73"
 title = "gate protection contract: every gate must state what it protects, from what, on what grounds"
 project = "/Users/yuki/src/harness"
@@ -1825,25 +1640,6 @@ issue_number = 140
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/140"
 
 [[task]]
-id = "309c8aca"
-title = "DoD6 の converged 宣言を撤回する — 残り60サイトで計数が止まっただけ"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "L1",
-    "scout",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "DoD6 の条件は単調減少すること。提示された収束の根拠は count が baseline と等しいこと、すなわち減らなくなったこと。減少の停止を到達に読み替えている。証拠: .compass/charter.md:10 の「この軸は converged=達成として固定。現況 baseline=60 (実測 2026-07-31 HEAD 30f6d7b5、count==baseline、floor held)。以後の勾配は raw-IO ではなく DoD9 へ移す」。なお baseline 自体は 77 から 60 へ一度も上がっておらず、そこは健全 (反証として記録する)。問題は converged の一語で 60 件の未移行サイトが勾配から外れたこと。完了条件: charter から converged=達成として固定 を撤去し、baseline=60 で単調減少は維持されているが未達 (残 60 サイト) と改める。60 サイトを crate 別に列挙して docs に貼り、達成条件を数値か、残存サイトごとの boundary 不要理由の逐語記載で定義し直す。"
-created_at = 1785879191
-updated_at = 1785879191
-weight = 0.0
-issue_number = 141
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/141"
-
-[[task]]
 id = "6de70510"
 title = "specguard の新しいテスト3本が unwrap_or_default で自分を反証不能にしている"
 project = "/Users/yuki/src/harness"
@@ -1861,25 +1657,6 @@ updated_at = 1785879193
 weight = 0.0
 issue_number = 142
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/142"
-
-[[task]]
-id = "a5a14d24"
-title = "backlog タスクを repo 管理にし、repo優先＋machine フォールバックの二層ストアにする"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "backlog",
-    "flow",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "SUSPENDED 2026-08-05: 実装エージェントがセッション上限で強制終了。作業は失わずに保全済み — branch backlog-repo-store-a5a14d24 の commit 718ad42a (worktree /Users/yuki/src/.harness-worktrees/backlog-repo-store-a5a14d24)。新規 522行 + 変更 212行、cargo check 通過、cargo test -p backlog は 157+5+9+3+4 全 green。ただし RED を観測していない: RED 検証テストを書く担当の別エージェント (利害のない検証者) が同じ上限で死亡したため、CLAUDE.md 2(a)(b) の要件は未達。green は「壊れていない」以上の意味を持たない。未了: README 2種の更新 (現状は単一 machine ストアの記述のまま = 散文と実挙動が不一致)、bare label 25件の扱いの検証、rollout。マージ不可。"
-created_at = 1785879915
-updated_at = 1785926923
-weight = 0.0
-issue_number = 143
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/143"
 
 [[task]]
 id = "6e36fe15"
@@ -2096,24 +1873,6 @@ issue_number = 159
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/159"
 
 [[task]]
-id = "03450b7c"
-title = "worktree から積んだ backlog item が本体プロジェクトのキューに現れない (project key が worktree パスになる)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "worktree-hygiene",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "実測 2026-08-06: 本セッションが worktree 内から積んだ 3 件 (b4baf3d7 / 1469673b / 6d451627) は backlog list --project /Users/yuki/src/harness に現れず、--project 無しの全体一覧でのみ見えた。CLAUDE.md 第8節が全編集の worktree 実行を義務づけている以上、これは例外ではなく既定経路であり、積んだ item が本体キューから恒常的に欠落する。結果として SessionStart 注入も /flow の source も取りこぼす。完了条件: worktree 内から backlog add した item が、本体 repo の project key で list に現れること (git rev-parse --path-format=absolute --git-common-dir 等で main worktree へ正規化する)。"
-created_at = 1785966127
-updated_at = 1785966127
-weight = 0.0
-issue_number = 160
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/160"
-
-[[task]]
 id = "39c4f200"
 title = "pre-push 型検査の共有 target dir (.git/prepush-typecheck-target) が並行セッションの同時 push で cargo ロック競合しないか実測する — 現状は未観察"
 project = "/Users/yuki/src/harness"
@@ -2127,36 +1886,6 @@ updated_at = 1785966703
 weight = 0.0
 issue_number = 162
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/162"
-
-[[task]]
-id = "7598cd9e"
-title = "DoD9 の是正完了数を 7 of 22 から実測値 3 of 22 へ下げるか、ユーザーの判断を得て確定させる"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1785966704
-updated_at = 1785966704
-weight = 0.0
-issue_number = 163
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/163"
-
-[[task]]
-id = "87a1d74a"
-title = "check-test-weakening が doc コメント内の属性らしき文字列を実属性として数える — readonly_known_defects.rs の「ignore するな」という散文が ignore-added として BLOCK された (merge be81466a で ack 済み)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1785967466
-updated_at = 1785967466
-weight = 0.0
-issue_number = 165
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/165"
 
 [[task]]
 id = "2133b6fe"
@@ -2180,29 +1909,6 @@ updated_at = 1785967681
 weight = 0.0
 issue_number = 166
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/166"
-
-[[task]]
-id = "61e08bca"
-title = "check-gate-crates-sync.py が失敗しているのに、どのフックからも呼ばれていない (.githooks/pre-push の GATE_CRATES から taintguard が欠落)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "scout",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-実測 2026-08-06 (測定点 f08fa5f0): python3 -m unittest scripts.test_check_gate_crates_sync で RealRepoState の2テストが失敗する。canonical は7クレート (blastguard/propguard/specguard/stuckguard/taintguard/mutategate/overwatch) だが .githooks/pre-push が持つリストは taintguard を欠く6クレート。つまり taintguard は GATE crate として宣言されているのに pre-push の防御チェーンから外れている。
-
-さらに問題なのは、grep -rn 'check-gate-crates-sync' .githooks/ scripts/*.sh の結果、このスクリプトが**どのフックからも実行されていない**こと (ヒットするのは散文コメント2件のみ)。ゲートが存在し、赤く、誰も走らせていない状態。CLAUDE.md 第4節が禁じる『検査したふり』に構造的に近い。
-
-完了条件: (1) pre-push の GATE_CRATES に taintguard を足して同期を回復する、(2) check-gate-crates-sync.py を pre-commit の run リストへ配線し、drift が再発したら実際にブロックすることを RED で確認する。"""
-created_at = 1785967683
-updated_at = 1785967683
-weight = 0.0
-issue_number = 167
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/167"
 
 [[task]]
 id = "3e7d5df8"
@@ -5919,28 +5625,6 @@ status = "pending"
 notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 079b643f --status pending"
 created_at = 1785377010
 updated_at = 1787120517
-weight = 0.0
-
-[[task]]
-id = "6cc3c641"
-title = "statusLine の ctxrot パスがバージョン固定 — bump のたびに stale 化する"
-project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = """
-~/.claude/settings.json の statusLine.command が /home/.../cache/yukineko/ctxrot/<VERSION>/bin/ctxrot statusline とバージョンを絶対パスに埋め込んでいる。rollout-plugins.sh はこのパスを書き換えないので、ctxrot を bump するたびに (a) statusline が古いバイナリを実行し続け、(b) 旧 version dir が settings.json に pinned 扱いで prune できず、check-plugin-rollout.py が毎回 drift を報告する。OBSERVED 2026-07-30: repo が 0.5.21 の間 statusline は 0.5.20 を指しており、フリート rollout が FAILED を返した。今回は 0.5.21 へ手で書き換えて解消したが、これは対症療法で次の bump で必ず再発する。
-
-なぜ放置できないか: statusline は CLAUDE.md 上「判定を持つ側」に分類される surface (3b1eb24 — 空表示は「余裕あり」と読まれる fail-open なので unknown と明示する設計)。それが黙って古いバイナリで動くのは、判定ロジックの版と表示が乖離する経路になる。
-
-FIX 候補 (どれか一つ): (1) rollout-plugins.sh が settings.json 内の cache/yukineko/<name>/<version>/ 形式のパスを新 version へ書き換える。(2) check-plugin-rollout.py が「settings.json がバージョン固定パスを持っている」こと自体を drift として報告する (現状は pruned できない結果だけを見ており原因を名指ししていない)。(3) バージョン非依存の安定パス (symlink か wrapper) を用意して settings.json はそれを指す。
-
-注意: statusLine.command がシェル経由で実行されるか未確認なので、$(...) を使う動的解決は検証なしに入れないこと (壊れると statusline が沈黙し、それ自体が fail-open)。
-
---- 移設 20260820: machine-local ~/.backlog/tasks.toml から repo の .backlog/tasks.toml へ。移設前の project = '/mnt/c/Users/hiroyuki_nakayama/src/.harness-worktrees/session-e4068937' (この値では repo ストアの既定 list に出ない)。 ---"""
-created_at = 1785392374
-updated_at = 1785392410
 weight = 0.0
 
 [[task]]
@@ -18496,3 +18180,76 @@ updated_at = 1790252835
 weight = 0.0
 issue_number = 789
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/789"
+
+[[task]]
+id = "c397cd15"
+title = "stuckguard anchor.rs:293 heartbeat_piggyback が bare overwatch を Command::new する — 1e783882 で直した lease lookup の双子"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "stuckguard",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = '2026-09-24 found by the backlog sweep. 1e783882 (fixed in b23ff923) made the lease lookup resolve overwatch via PATH, then the plugin cache. The heartbeat path at anchor.rs:293 still runs a bare Command::new("overwatch"). Unverified: what the heartbeat does when overwatch is not on PATH, and whether that failure is silent.'
+created_at = 1790252963
+updated_at = 1790252963
+weight = 0.0
+issue_number = 793
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/793"
+
+[[task]]
+id = "d2509f51"
+title = "reviewgate run_reviewer が wait_timeout の後で stdout を読むため、64KB 超を書く reviewer は pipe 満杯で timeout まで deadlock する (結果は block だが可用性欠陥)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "reviewgate",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-24 277440b1 修正 worker の指摘。未再現。"
+created_at = 1790253000
+updated_at = 1790253000
+weight = 0.0
+issue_number = 794
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/794"
+
+[[task]]
+id = "d98465f9"
+title = "reviewgate classify が lgtm で始まる出力をすべて Clean にする — 'LGTM, but high: …' が Clean になる (監査 §5、未 assert)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "reviewgate",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-24 277440b1 修正 worker の指摘。docs/audit-reviewgate-verdict-paths.md §5。未修正。"
+created_at = 1790253003
+updated_at = 1790253003
+weight = 0.0
+issue_number = 795
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/795"
+
+[[task]]
+id = "e8c8a896"
+title = "reviewgate が reviewer の stderr を Stdio::null() で捨て、reviewer 自身の診断が失われる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "reviewgate",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-24 277440b1 修正 worker の指摘。"
+created_at = 1790253005
+updated_at = 1790253005
+weight = 0.0
+issue_number = 796
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/796"

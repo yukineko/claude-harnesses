@@ -13158,3 +13158,60 @@ updated_at = 1790252365
 weight = 0.0
 issue_number = 133
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/133"
+
+[[task]]
+id = "793aa283"
+title = "check-fail-open-mutation.py は taintguard のシナリオを1つも持たない — コメントは6と書きながらタプルは7クレート"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+scripts/check-fail-open-mutation.py:65-73 は7クレートを宣言するが、
+grep で crate= のシナリオ定義を数えると **6件**（blastguard / propguard / specguard / stuckguard /
+mutategate / overwatch）。taintguard のシナリオが存在しない。
+:61-63 は逐語「The canonical 6 GATE crates」、:47 は「one more hardcoded copy of the canonical
+6-crate list」と述べているが、対象のタプルは7要素。
+
+帰結: 既定実行は「scenarios run: 6/6」と印字して exit 0 しうるが、**最も新しい GATE クレートは
+一度もミューテーションされていない**。:415-417 の空ガードは --crate 名指し時にしか発火せず、
+既定経路にはクレート単位のカバレッジ assert が無い。
+
+修正: taintguard のシナリオを追加し、コメントの 6 を実数に合わせる（同じコミットで）。
+加えて既定経路に「宣言されたクレート全部にシナリオがあるか」の assert を置き、
+欠けていれば exit 非0 にする（欠落を沈黙で表現しない）。親 826c29bf
+
+--- 2026-09-24 再測で内容が変わっていた。散文側を直し機械判定を足して閉じる (commit 4fc699c3) ---
+起票時の主張「コメントは6と書きながらタプルは7クレート、taintguard のシナリオが無い」を
+再測した結果、シナリオ欠落の側は既に解決しており、残っていたのは散文の側だけだった。
+
+実測 (測定日 2026-09-24、測定点 a2fbbbe2):
+  grep -o 'crate="[a-z-]*"' scripts/check-fail-open-mutation.py | sort -u -> 7 件
+    blastguard mutategate overwatch parallelguard propguard specguard stuckguard
+  GATE_CRATES タプル -> 同じ 7 件 (taintguard が抜け parallelguard が入った)
+  python3 scripts/check-gate-crates-sync.py -> rc=0 (値は 11 ソース全部一致)
+  grep -rn 'canonical 6|6 GATE crate|6-crate' scripts/ -> 8 行が 6 を主張
+
+つまり値ゲートは green のまま散文だけが 1 クレート分ずれていた。とくに
+check-fail-open-mutation.py:13 は 6 つの名前を列挙して parallelguard が欠けており、
+読んだ人は「parallelguard はこのゲートの対象外」と結論する。
+
+現在値を主張している 7 箇所を直した。過去の件数を述べている 2 箇所
+(fleet.rs:7 と test の回帰記録) は書き換えていない — 今日の数字に直すと歴史の偽造になる。
+
+散文修正だけでは再発するので機械判定を足した: check-gate-crates-sync.py に
+prose_count_claims を追加し、GATE crate の件数を述べる文が canonical の要素数と
+食い違えば block する。過去の件数は gate-count-historical マーカーで免責し、
+マーカーは主張行かその直上にしか置けないので免責が必ず文の隣に見える。
+RED 先行を実測: 実装前 4 passed / 2 failed、実装後 6 passed / 0 failed、unittest 全 44 件 ok。
+実装後に実リポジトリへ当てて残り 1 件を実際に検出させてからマーカーを付けた
+(何も見つけずに green になったのではない)。
+
+taintguard のシナリオが無いという指摘は、対象クレートが 0521d013 で撤去されたため
+今後も満たされない。これは欠落ではなく正しい状態である。"""
+created_at = 1788792880
+updated_at = 1790252921
+weight = 0.0
+issue_number = 437
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/437"

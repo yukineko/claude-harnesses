@@ -1127,9 +1127,22 @@ project_unresolved = false
 tags = ["p1"]
 touched_files = []
 status = "pending"
-notes = "2026-07-28 時点で verdict 未採用 gate は 0 本になった (schemaguard 1601b835 / autoflow cec3a431 で解消)。残る勾配は harness_core::verdict の低採用 gate 各1 file: budgetguard / gauge / reviewgate。確立した手順は 監査 (read-only・docs/ へ出力・crates 無変更) から RED 先行観測、三値化 GREEN、micro bump、--plugin スコープの rollout までの2フェーズで、worker と verifier を別モデルにする。task text には必ず 既に fail-closed な経路のリスト を不合格条件として明記すること (誤検出で意図的設計を壊すのを防ぐため。autoflow の lock.rs:81 が実例)"
+notes = """
+2026-07-28 時点で verdict 未採用 gate は 0 本になった (schemaguard 1601b835 / autoflow cec3a431 で解消)。残る勾配は harness_core::verdict の低採用 gate 各1 file: budgetguard / gauge / reviewgate。確立した手順は 監査 (read-only・docs/ へ出力・crates 無変更) から RED 先行観測、三値化 GREEN、micro bump、--plugin スコープの rollout までの2フェーズで、worker と verifier を別モデルにする。task text には必ず 既に fail-closed な経路のリスト を不合格条件として明記すること (誤検出で意図的設計を壊すのを防ぐため。autoflow の lock.rs:81 が実例)
+
+--- 2026-09-24 claim して着手せず pending へ戻した ---
+cycle 12 で claim したが着手していない。理由を明示して返す:
+本 item は「監査 (read-only) -> RED 先行観測 -> 三値化 GREEN -> micro bump ->
+--plugin スコープ rollout」の 2 フェーズで、しかも worker と verifier を
+別モデルにすることを要求している。同一バッチで別の p0 (fbb3100a) を
+実装したため、片手間で始めると 2(a) の独立性要件を満たせない。
+
+measured: 何も測っていない。unverified: すべて。推測で埋めずに pending に戻す。
+
+なお本サイクルで実施した fbb3100a は harness-core 側の gauge 消費経路であり、
+本 item が対象とする gauge crate 自身の verdict 経路とは別物。重複していない。"""
 created_at = 1785193820
-updated_at = 1790183496
+updated_at = 1790248070
 weight = 0.0
 issue_number = 84
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/84"
@@ -17598,24 +17611,6 @@ issue_number = 734
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/734"
 
 [[task]]
-id = "d9ced7d3"
-title = "[merge-conflict] merge of condukt/run-20260728-015338-90001/audit-verdict-paths into main held: 0 file(s) [(unknown files)]"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "merge-conflict",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "kind:merge-conflict identifier:condukt/run-20260728-015338-90001/audit-verdict-paths/merge-conflict occurrences:1"
-created_at = 1790184359
-updated_at = 1790184359
-weight = 0.0
-issue_number = 739
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/739"
-
-[[task]]
 id = "c2f9cc02"
 title = "awaiting human answer: git_fast_subprocess フレークが 7 種の高負荷レシピ(最大 9x 減速・OOM 圧・3並列フルスイート)で一度も再現しなかった。閾値は crates/condukt/src/worktree.rs:2170 の Duration::from_secs(3) で、これは run_git_bounded_with に渡す実タイムアウト。再現が無いので閾値の測定的根拠も決定論置換の検証もできない。どうするか? (run run-20260721-220121 task t2)"
 project = "/Users/yuki/src/harness"
@@ -17626,9 +17621,19 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "kind:escalation identifier:esc-72fbbf6f occurrences:1"
+notes = """
+kind:escalation identifier:esc-72fbbf6f occurrences:1
+
+--- 2026-09-24 policy shim で escalate 判定、人間へ回す ---
+condukt policy answer --untestable --risk medium --reversible high
+--confidence low -> exit 2 {"answered":false,"policy":"escalate"}
+
+CLAUDE.md 2 の「テストが書けない問題は判断で進めず ask する」に該当する。
+7 種の高負荷レシピで一度も再現していない以上、閾値の測定的根拠も
+決定論置換の検証も取れない。自分の判断で閉じることは禁止されているので、
+ユーザーに問うている。回答が来るまで pending。"""
 created_at = 1790184361
-updated_at = 1790184361
+updated_at = 1790248070
 weight = 0.0
 issue_number = 740
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/740"
@@ -17798,26 +17803,6 @@ updated_at = 1790185046
 weight = 0.0
 issue_number = 750
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/750"
-
-[[task]]
-id = "fbb3100a"
-title = "gauge/harness-core P1+P5: sub-agent transcript と session record の「個別ファイルが読めなかった」が無音で落ち、過少計上が正典 record に焼き込まれる"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "gauge",
-    "fail-open",
-    "harness-core",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = '出典: docs/audit-gauge-verdict-paths.md の P1 (CRITICAL) と P5 (MEDIUM-HIGH)。監査日 2026-09-24、測定点 b47f08e3。P1: crates/harness-core/src/usage.rs:191 の if let Ok(sub_text) = std::fs::read_to_string(&file) が個別 sub-agent transcript の read 失敗を捨てる。直上の subagent_files(path) は Determination を返して Undetermined を正しく転送しているので、ディレクトリ粒度だけ fail-closed でファイル粒度が fail-open という同一関数内のミラーギャップである。監査の実測: main transcript 0.0075 ドル + sub-agent 1 体が 270.00 ドルを消費した状態で、対照 (注入なし) は budgetguard が session 270.0075 ドルで {"decision":"block"} を返す。agent-*.jsonl を 1 本だけ chmod 000 (ディレクトリは読める) にすると block が消え session 0.0075 ドルになり、診断はどこにも出ない。第二の対照 (subagents ディレクトリごと chmod 000) では正しく block する。つまり救われないのは「record が書かれなかった」ではなく「record が部分的に書かれた」場合。P5: crates/harness-core/src/session.rs:216-225 が同じ形で個別 record を無音 skip し、gauge report が過少計上する。修正: usage.rs:191 の Err アームを agg.subagent_scan = Determination::undetermined(...) に倒す。受け口の guard と budgetguard 側は監査の対照 3 で動作確認済み。usage.rs:412 の let ... else { continue; } も同時に倒す。同じコミットで crates/session-insights/src/record.rs:97-100 の docstring を直すこと — そこは gauge の保証を根拠に過少計上警告を省略しており、P1 はその前提を反証している。完了条件: 注入で block が消えないことを RED 先行で固定し、注入なしの対照も同時に固定する。'
-created_at = 1790185715
-updated_at = 1790185715
-weight = 0.0
-issue_number = 751
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/751"
 
 [[task]]
 id = "ff98fed0"

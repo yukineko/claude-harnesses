@@ -164,12 +164,35 @@ store の隣に置く lockfile = checkout 単位だったので、両者が **�
   FNV-1a の project ハッシュ。linked worktree は main working tree に正規化されるので、同一
   プロジェクトの全 checkout が 1 つの ledger を共有する)
 - ロック順序 (逆順にしないこと): `~/.backlog/claims/<slug>.lock` (project 全体) → `<store>.lock` (この checkout)
-- entry は 1h (`CLAIM_STALE_SECS`) で除外をやめる。store 側の stale-claim 再取得と同じ窓なので、
-  死んだ claimant が全 checkout でタスクを永久にロックすることはない。記録自体は 7 日保持する。
+- entry (**lease**) は 1h (`CLAIM_STALE_SECS`) で除外をやめるので、死んだ claimant が全 checkout
+  でタスクを永久にロックすることはない。記録自体は 7 日保持する。
 
 このパス上の判定不能はすべて **claim を拒否** し、理由を stderr に出して非0終了する。exit 0 +
 `no pending tasks` (= driver は「仕事がない」と読む) には決して倒さない。対象は: ledger ディレクトリを
 作れない / ledger ロックを取れない / ledger が読めない・パースできない・書けない / tasks-file ロックを
 保持できない / project identity を解決できない。**拒否は空のキューではない。**
+
+#### lease はトラックされた store に書かない — `claimed` は導出値
+
+claim が書くのは **ledger だけ** である。`next --claim` はトラックされた `.backlog/tasks.toml` を
+変更しない (一貫した読み取りのために tasks-file ロックは今も取る)。SessionStart の requeue も claim を
+理由に行を書き換えない。したがって claim しても git worktree は汚れない。`claimed` は **導出**
+ステータスで、ledger に生きた lease を持つ `pending`/`failed` 行を指す。
+
+- `next --claim` は従来どおり `"status": "claimed"` でタスクを出力する。
+- 素の `next` は lease 中のタスクを返さない。`list` (テキストと `--json`) はそれを `claimed` と表示する。
+  status フィルタは導出後に適用される: `--status pending` は lease 中を含まず、`--status claimed` が
+  それを選ぶ (`claimed` は保存されるステータスではないので "unknown status" 警告は出る)。
+- 旧バイナリが `status = "claimed"` で保存した行は `pending` として読む。除外するのは生きた lease
+  だけ。その行は、無関係なコマンドが次に store を保存したときに `pending` として書き直される。
+- `done`/`fail`/`edit --status pending` は lease を解放しない。終端でないタスクの lease は 1h で
+  期限切れになるまで除外を続ける。
+- `list`・素の `next`・`next --claim` は同じ方法 (上記の project identity) で ledger を特定する。
+  repo 外ではその identity は正規化した cwd。identity を解決できない (例: worktree の `.git` リンクが
+  切れている) か、ledger が存在するのに読めない・パースできない場合、`list` と素の `next` は
+  **拒否** する (非0終了、理由は stderr、stdout は空)。claim 済みかもしれないタスクを pending と
+  表示することはない。
+- store 乖離チェックは lease 中のタスクを「キューに残る作業」に数えない (以前、保存された
+  `claimed` 行を数えなかったのと同じ)。
 
 同梱の `bin/backlog-*` バイナリがプラグインの出荷物なので、エンドユーザーは cargo も API キーも不要。skill や hook が依存する挙動を変えたら、ワークスペースをビルド（`cargo build --workspace --release`）して再コミットする。

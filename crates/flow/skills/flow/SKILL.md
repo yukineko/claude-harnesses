@@ -273,9 +273,13 @@ backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drive
       backlog next --claim --project "$PWD"   # 選択と予約が同一クリティカルセクション。N 回繰り返す
       ```
       **`backlog list` で覗いて上位 N 件を自分のものと決めてはいけない**。`list` は純粋な read なので、
-      並走している別セッションと**同じ task を掴む**。`next --claim` は選んだ task を同じ
-      tasks-file ロックの中で `claimed` に落とすため、**2 つの driver が同じ task を受け取ることは無い**
-      （逆に、これがあるからキュー全体をロックする必要が無い）。
+      並走している別セッションと**同じ task を掴む**。`next --claim` は選んだ task を、選択と同じ
+      クリティカルセクション（project 全体の claim ledger ロック → tasks-file ロック）の中で
+      untracked な claim ledger（`~/.backlog/claims/<project-slug>.json`）に lease として記録するため、
+      **どの checkout からでも 2 つの driver が同じ task を受け取ることは無い**
+      （逆に、これがあるからキュー全体をロックする必要が無い）。トラックされた `.backlog/tasks.toml` は
+      書かれない（worktree は汚れない）。`claimed` は ledger から導出される表示上のステータスで、
+      `list` は lease 中の task を `claimed` と表示し、素の `next` はそれを返さない。
       - 出力が `no pending tasks` になるまで、または **N 件**（既定 N=condukt の `max_parallel`。
         無指定なら **4**）に達するまで繰り返す。
       - 各件の `id` / `title` / `notes` / **`hashkey`**（`next --claim` の出力にも含まれる）を控える
@@ -285,8 +289,9 @@ backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drive
         `no pending tasks` が返っても即座に「キューが空」と断定せず、1 度は取り直す。
       **claim-skip ゲート（多重着手の防止）**: 予約した各 item について
       `condukt state is-claimed --hashkey <hashkey>` を実行する。**exit 0（他セッションが既に claim 中）
-      → その item は諦め、`backlog edit <id> --status pending` で**キューに戻してから**次候補へ**
-      （戻し忘れても `CLAIM_STALE_SECS`＝1 時間で自動復帰するが、他セッションを 1 時間待たせない）。
+      → その item は諦めて次候補へ**。lease は ledger にしか無いので `backlog edit <id> --status pending`
+      では解放されない（store 上は既に pending）。lease は `CLAIM_STALE_SECS`＝1 時間で自動的に
+      除外をやめ、それまでは他の driver にも配られない。
       `condukt` が無い/失敗した場合は fail-soft（従来どおりピックを続行）。
    b. **コスト/危険ゲート（直列フォールバック）** — 次のどれかに該当する候補は**バッチから外して 1 件ずつ直列**に回す（安全側）:
       - budgetguard が予算逼迫を示す → バッチ幅を絞る（極端なら N=1＝従来の直列に縮退）。

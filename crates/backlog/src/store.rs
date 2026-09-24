@@ -6,16 +6,20 @@ use std::time::Duration;
 
 use crate::task::{new_id, Task, STATUS_DONE, STATUS_FAILED, STATUS_PENDING};
 
-/// CA-backlog-001: the atomic-claim reservation status written by
-/// [`next_claim`]. Deliberately kept LOCAL to `store.rs` (not part of
-/// `task::STATUSES`/the shared `--status` vocabulary) since it's an internal,
-/// transient marker rather than a user-facing lifecycle state — a claimed
-/// task is expected to resolve to `done`/`failed` shortly after via the
-/// SAME id, or be reclaimed as stale (see [`CLAIM_STALE_SECS`]). It compares
-/// unequal to `STATUS_PENDING`/`STATUS_FAILED`, so `Task::is_pending()`
-/// correctly excludes a claimed task from `next`'s candidate pool without any
-/// change to `is_pending` itself.
-const STATUS_CLAIMED: &str = "claimed";
+/// The DERIVED claim status (backlog f09db5ce). It is never written to the
+/// tracked store by this binary: a claim lease lives only in the untracked,
+/// project-wide claim ledger ([`crate::claim_ledger`]), and `claimed` is what
+/// `next --claim` / `list` / plain `next` REPORT for a pending/failed row that
+/// holds a LIVE lease there (see [`derive_claimed`]). Not part of
+/// `task::STATUSES` (the `--status` vocabulary) because it is not a stored
+/// lifecycle state.
+///
+/// Older binaries DID persist `status = "claimed"` into `tasks.toml`; [`load`]
+/// reads such a row as `pending`, so exclusion is governed solely by the
+/// ledger and a legacy row without a live lease is claimable again. The row
+/// is rewritten as `pending` only incidentally, by the next unrelated locked
+/// write of the store.
+pub(crate) const STATUS_CLAIMED: &str = "claimed";
 
 /// TOML ファイル全体のラッパー。[[task]] 配列を保持する。
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -86,7 +90,22 @@ fn read_tasks_file(path: &Path) -> Result<Option<(String, Vec<Task>)>> {
 /// remaining done-file rows in done-file order. Duplicate ids within
 /// `tasks.toml` are kept as they are (as before the split); a done-file row
 /// is matched against the FIRST row with its id.
+///
+/// A row persisted with the legacy `status = "claimed"` (written by binaries
+/// before backlog f09db5ce) is returned as `pending`: a claim is now a lease in
+/// the untracked ledger, never a stored status (see [`STATUS_CLAIMED`]).
 pub fn load(path: &Path) -> Result<Vec<Task>> {
+    let mut tasks = load_union(path)?;
+    for t in tasks.iter_mut() {
+        if t.status == STATUS_CLAIMED {
+            t.status = STATUS_PENDING.to_string();
+        }
+    }
+    Ok(tasks)
+}
+
+/// The union of `tasks.toml` and its done file, statuses as stored.
+fn load_union(path: &Path) -> Result<Vec<Task>> {
     let mut tasks = match read_tasks_file(path)? {
         Some((_, t)) => t,
         None => Vec::new(),
@@ -916,16 +935,15 @@ pub fn add_with_weight(
 }
 
 /// Reject an add whose content [`crate::task::hashkey`] is already held by
-/// EITHER (a) an existing task in `tasks` with status `pending`, `failed`, or
-/// the in-progress `claimed` state (a `done` task with the same title does NOT
-/// block a re-add), OR (b) a live cross-session claim reported by
-/// `condukt state is-claimed --hashkey <h>`.
+/// EITHER (a) an existing task in `tasks` with status `pending` or `failed` (a
+/// `done` task with the same title does NOT block a re-add), OR (b) a live
+/// cross-session claim reported by `condukt state is-claimed --hashkey <h>`.
 ///
-/// CA-backlog-002: `claimed` is included in (a). A task the local
-/// [`next_claim`] has reserved is active, in-progress work; blocking only
-/// `pending`/`failed` let a re-add slip through while the SAME task was
-/// mid-flight (its cross-session ledger entry, checked in (b), is separate and
-/// may be absent), spawning a duplicate of work already underway.
+/// CA-backlog-002: a task that is claimed (in-progress) must also block a
+/// re-add. Since backlog f09db5ce a claim no longer changes the stored status
+/// — the lease lives only in the claim ledger — so a claimed task is still
+/// `pending` in the store and (a) covers it directly (a legacy stored
+/// `claimed` row is loaded as `pending` too, see [`load`]).
 ///
 /// Fail-soft on (b): if the `condukt` binary is absent from PATH, or the
 /// command errors or exits with anything other than 0 (claimed) / 1 (not
@@ -960,10 +978,7 @@ fn check_duplicate(tasks: &[Task], title: &str, project: &str) -> Result<()> {
 
     if tasks.iter().any(|t| {
         crate::task::hashkey(&t.title, &t.project) == hk
-            && matches!(
-                t.status.as_str(),
-                STATUS_PENDING | STATUS_FAILED | STATUS_CLAIMED
-            )
+            && matches!(t.status.as_str(), STATUS_PENDING | STATUS_FAILED)
     }) {
         return Err(anyhow!(
             "duplicate task rejected: an existing pending/failed/claimed task already has this content (hashkey {hk}); use --force to add anyway"
@@ -1066,10 +1081,33 @@ fn run_with_bounded_wait(
 /// external claim/dedup on top (e.g. `/flow`'s `condukt state claim-task`).
 /// Callers who need backlog itself to guarantee at most one claimant should
 /// use [`next_claim`] instead.
+///
+/// Equivalent to [`next_excluding`] with nothing leased. The CLI's plain
+/// `next` uses [`next_excluding`] with the live ledger leases, so a task
+/// claimed in any checkout is not handed out (backlog f09db5ce); this
+/// ledger-blind form is therefore test-only.
+#[cfg(test)]
 pub fn next(
     path: &Path,
     tag_filter: Option<&str>,
     project_filter: Option<&str>,
+) -> Result<Option<Task>> {
+    next_excluding(
+        path,
+        tag_filter,
+        project_filter,
+        &std::collections::HashSet::new(),
+    )
+}
+
+/// [`next`], skipping every task id in `leased` — the ids holding a LIVE lease
+/// in the project-wide claim ledger (`claim_ledger::live_leases`). Still a
+/// pure read: no lock, no mutation.
+pub fn next_excluding(
+    path: &Path,
+    tag_filter: Option<&str>,
+    project_filter: Option<&str>,
+    leased: &std::collections::HashSet<String>,
 ) -> Result<Option<Task>> {
     let now = now_unix();
     let tasks = load(path)?;
@@ -1078,7 +1116,20 @@ pub fn next(
     // still matches its already-canonical stored form. See `list` for the
     // full rationale.
     let project_filter = project_filter.map(canonicalize_project);
-    Ok(pick_next(&tasks, now, tag_filter, project_filter.as_deref()).map(|t| (*t).clone()))
+    Ok(pick_next(&tasks, now, tag_filter, project_filter.as_deref(), leased).map(|t| (*t).clone()))
+}
+
+/// The derived claim view (backlog f09db5ce): every pending/failed task whose
+/// id holds a LIVE lease in `leased` is reported with status
+/// [`STATUS_CLAIMED`]. Terminal tasks are left alone — a finished task is not
+/// "claimed" whatever the ledger still remembers. Display-only: the result
+/// must never be saved.
+pub fn derive_claimed(tasks: &mut [Task], leased: &std::collections::HashSet<String>) {
+    for t in tasks.iter_mut() {
+        if t.is_pending() && leased.contains(&t.id) {
+            t.status = STATUS_CLAIMED.to_string();
+        }
+    }
 }
 
 /// Selects the single highest-priority eligible task from `tasks` (shared by
@@ -1098,11 +1149,14 @@ fn pick_next<'a>(
     now: i64,
     tag_filter: Option<&str>,
     project_filter: Option<&str>,
+    excluded: &std::collections::HashSet<String>,
 ) -> Option<&'a Task> {
     let mut candidates: Vec<&Task> = tasks
         .iter()
         .filter(|t| t.is_pending())
         .filter(|t| !t.is_deferred(now))
+        // Leased (claimed) in some checkout of this project, per the ledger.
+        .filter(|t| !excluded.contains(&t.id))
         .filter(|t| match tag_filter {
             Some(tag) => t.tags.iter().any(|tg| tg == tag),
             None => true,
@@ -1117,40 +1171,36 @@ fn pick_next<'a>(
     candidates.into_iter().next()
 }
 
-/// CA-backlog-001: a claim older than this (by `updated_at`) is treated as
-/// abandoned (the claimant crashed or was killed before calling `done`/`fail`)
-/// and is eligible to be reclaimed by a fresh [`next_claim`] call, so a dead
-/// claimant never permanently removes a task from the queue.
+/// CA-backlog-001: a claim lease older than this (by the ledger entry's
+/// `claimed_at`) is treated as abandoned (the claimant crashed or was killed
+/// before calling `done`/`fail`): it stops excluding its task, so a fresh
+/// claim can take it again and a dead claimant never permanently removes a
+/// task from the queue.
 pub const CLAIM_STALE_SECS: i64 = 3600;
 
-/// Atomically select the next eligible task AND mark it `claimed` in the same
-/// tasks-file-lock critical section, so a second concurrent `next_claim` call
-/// — even one racing within the same window — cannot observe and return the
-/// same task before the first call's claim is persisted (CA-backlog-001).
+/// Select the next eligible task under the tasks-file lock and reserve it via
+/// `reserve` (the project-wide claim ledger) inside that critical section
+/// (CA-backlog-001). The tracked store is NOT written (backlog f09db5ce): the
+/// ledger reservation IS the claim, and it is what makes a second concurrent
+/// caller — this checkout or another — skip the task. The returned task
+/// carries the derived status [`STATUS_CLAIMED`].
 ///
 /// This is opt-in (`backlog next --claim`); the plain [`next`] (no `--claim`)
-/// keeps its pre-existing pure-read behavior for existing callers, so this
-/// does not change default behavior in an incompatible way.
+/// stays a pure read.
 ///
-/// A `claimed` task is excluded from the candidate pool (`is_pending()` is
-/// false for `claimed`), UNLESS its claim is older than [`CLAIM_STALE_SECS`],
-/// in which case it is treated as eligible again (stale-claim reclaim) so a
-/// crashed claimer can't strand a task forever.
-///
-/// `excluded` names task ids that some OTHER checkout of this project has
-/// already claimed (see [`crate::claim_ledger`]); they are dropped from the
-/// candidate pool even though this checkout's own store still shows them
-/// pending — which is precisely the diverged state two checkouts are in.
+/// `excluded` names task ids holding a LIVE lease in the project-wide ledger
+/// (see [`crate::claim_ledger`]) — claimed by this or any other checkout of
+/// the project; they are dropped from the candidate pool even though the
+/// store still shows them pending. A lease older than [`CLAIM_STALE_SECS`] is
+/// not in `excluded`, so a crashed claimer can't strand a task forever.
 ///
 /// `reserve` is invoked INSIDE the critical section, after a candidate has
-/// been selected and BEFORE the local store is written, so the project-wide
-/// record always exists before the local one does. A reservation that fails
-/// aborts the claim WITHOUT touching the local store: a claim visible only in
-/// this checkout is invisible to every other one, which is the double-dispatch
-/// this whole path exists to prevent.
+/// been selected. A reservation that fails refuses the claim: an unrecorded
+/// claim would be invisible to every other checkout, which is the
+/// double-dispatch this whole path exists to prevent.
 ///
 /// Three answers, not two:
-///   - `Known(Some(task))` — claimed, and persisted.
+///   - `Known(Some(task))` — claimed (recorded in the ledger).
 ///   - `Known(None)` — nothing eligible. An OBSERVATION: the queue is empty
 ///     for this filter.
 ///   - `Undetermined(why)` — REFUSED. The mutual exclusion could not be
@@ -1158,8 +1208,8 @@ pub const CLAIM_STALE_SECS: i64 = 3600;
 ///     caller must not render this as an empty queue; `main.rs` exits non-zero
 ///     with the reason on stderr.
 ///
-/// `Err` stays reserved for genuine store IO failures (load/save), which
-/// `main` already surfaces as a non-zero exit.
+/// `Err` stays reserved for genuine store IO failures (load), which `main`
+/// already surfaces as a non-zero exit.
 pub(crate) fn next_claim_with(
     path: &Path,
     tag_filter: Option<&str>,
@@ -1181,37 +1231,58 @@ pub(crate) fn next_claim_with(
     })
 }
 
-/// Claim from this store alone, with no project-wide exclusion and no
-/// reservation. Test-only: production always goes through
-/// [`crate::claim_ledger::claim_next`], which wraps this in the project-scoped
-/// ledger critical section. Exposing a ledger-free claim to the binary is what
-/// made the cross-checkout double-claim possible in the first place, so it is
-/// deliberately not reachable from `main`.
+/// Test-only claim through the REAL ledger critical section
+/// ([`crate::claim_ledger::claim_next`]), with a claims directory and project
+/// identity private to this store (see [`test_ledger`]). Since backlog
+/// f09db5ce the ledger is the only place a claim lives, so a ledger-free
+/// claim would exclude nothing; production reaches the same function from
+/// `main`.
 #[cfg(test)]
 pub fn next_claim(
     path: &Path,
     tag_filter: Option<&str>,
     project_filter: Option<&str>,
 ) -> Result<Determination<Option<Task>>> {
-    let mut no_reservation = |_: &Task| Ok(());
-    next_claim_with(
-        path,
-        tag_filter,
-        project_filter,
-        &std::collections::HashSet::new(),
-        &mut no_reservation,
+    let (dir, identity) = test_ledger(path);
+    crate::claim_ledger::claim_next(path, tag_filter, project_filter, &identity, Some(&dir))
+}
+
+/// Test-only: the (claims dir, project identity) a test store's claims are
+/// recorded under — a sibling directory of the store, so tests never touch
+/// the real `~/.backlog/claims`.
+#[cfg(test)]
+pub(crate) fn test_ledger(path: &Path) -> (PathBuf, String) {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    (
+        path.with_file_name(format!("{name}.claims")),
+        path.to_string_lossy().into_owned(),
     )
 }
 
-/// The claim read-modify-write, split out so the fail-closed contract is
+/// Test-only: [`load`] with the DERIVED claim view applied from the test
+/// store's ledger ([`test_ledger`]) — what `list` shows.
+#[cfg(test)]
+pub(crate) fn load_derived(path: &Path) -> Result<Vec<Task>> {
+    let (dir, identity) = test_ledger(path);
+    let leased = match crate::claim_ledger::live_leases(&identity, Some(&dir)) {
+        Determination::Known(ids) => ids,
+        Determination::Undetermined(why) => return Err(anyhow!("test ledger unreadable: {why:?}")),
+    };
+    let mut tasks = load(path)?;
+    derive_claimed(&mut tasks, &leased);
+    Ok(tasks)
+}
+
+/// The claim select-and-reserve, split out so the fail-closed contract is
 /// deterministically testable. `locked` reports whether the exclusive tasks-lock
 /// is held.
 ///
-/// **FAIL CLOSED.** Without the lock we cannot guarantee this claim's
-/// read-modify-write is mutually exclusive, and an unprotected claim reads the
-/// same pending task in two concurrent callers and marks it `claimed` in both —
-/// dispatching ONE task to multiple processes (the silent double-claim this
-/// guard exists to prevent). So when `!locked` we REFUSE.
+/// **FAIL CLOSED.** Without the lock the read is not consistent with this
+/// checkout's own concurrent `add`/`edit`/`done` writers, so when `!locked` we
+/// REFUSE rather than select from a store we could not read under the lock.
 ///
 /// The refusal is `Undetermined`, NOT `Known(None)`. It used to be `Ok(None)`,
 /// which a caller cannot tell apart from "the queue is empty" — `main.rs`
@@ -1235,72 +1306,27 @@ fn claim_next_locked(
             path.display()
         )));
     }
-    {
-        let now = now_unix();
-        let mut tasks = load(path)?;
+    let now = now_unix();
+    // `load` reads a legacy stored `claimed` row as pending; whether it is
+    // still held is decided by the ledger (`excluded`) alone.
+    let tasks = load(path)?;
+    let Some(winner) = pick_next(&tasks, now, tag_filter, project_filter, excluded) else {
+        return Ok(Determination::known(None));
+    };
+    let mut claimed = winner.clone();
+    claimed.status = STATUS_CLAIMED.to_string();
 
-        // Build the pending-or-reclaimable-stale-claim candidate pool inline
-        // (can't reuse `pick_next`'s `is_pending()`-only filter as-is, since a
-        // fresh claim must NOT be reclaimable, only a stale one).
-        let winner_id = {
-            let mut candidates: Vec<&Task> = tasks
-                .iter()
-                .filter(|t| {
-                    t.is_pending()
-                        || (t.status == STATUS_CLAIMED
-                            && now.saturating_sub(t.updated_at) >= CLAIM_STALE_SECS)
-                })
-                .filter(|t| !t.is_deferred(now))
-                // Already claimed by ANOTHER CHECKOUT of this project: its own
-                // store says pending, the project-wide ledger says otherwise.
-                .filter(|t| !excluded.contains(&t.id))
-                .filter(|t| match tag_filter {
-                    Some(tag) => t.tags.iter().any(|tg| tg == tag),
-                    None => true,
-                })
-                .filter(|t| match project_filter {
-                    Some(proj) => project_matches(&t.project, proj),
-                    None => true,
-                })
-                .collect();
-            candidates.sort_by(|a, b| queue_order(a, b));
-            candidates.first().map(|t| t.id.clone())
-        };
-
-        let Some(id) = winner_id else {
-            return Ok(Determination::known(None));
-        };
-
-        let task = tasks
-            .iter_mut()
-            .find(|t| t.id == id)
-            .expect("winner_id came from tasks");
-        task.status = STATUS_CLAIMED.to_string();
-        task.updated_at = now;
-        let claimed = task.clone();
-
-        // Reserve project-wide FIRST. `tasks` has been mutated in memory only;
-        // returning here leaves the store on disk untouched, so a failed
-        // reservation claims nothing anywhere.
-        if let Err(why) = reserve(&claimed) {
-            return Ok(Determination::undetermined(format!(
-                "task {} could not be reserved project-wide ({why}); refusing to claim it in {} \
-                 alone, since a claim recorded in one checkout only is invisible to every other \
-                 checkout of this project",
-                claimed.id,
-                path.display()
-            )));
-        }
-
-        save(path, &tasks).with_context(|| {
-            format!(
-                "the project-wide reservation for task {} is already recorded and will keep the \
-                 task excluded until it ages out ({CLAIM_STALE_SECS}s)",
-                claimed.id
-            )
-        })?;
-        Ok(Determination::known(Some(claimed)))
+    // The ledger reservation IS the claim. Nothing is written to the tracked
+    // store (backlog f09db5ce), so a failed reservation claims nothing.
+    if let Err(why) = reserve(&claimed) {
+        return Ok(Determination::undetermined(format!(
+            "task {} could not be reserved project-wide ({why}); refusing to claim it, since a \
+             claim not recorded in the project-wide ledger is invisible to every other checkout \
+             of this project",
+            claimed.id
+        )));
     }
+    Ok(Determination::known(Some(claimed)))
 }
 
 /// The deterministic source-layer queue order:
@@ -1319,8 +1345,14 @@ fn queue_order(a: &Task, b: &Task) -> std::cmp::Ordering {
 }
 
 /// defer_until <= now のタスクの defer_until を None にクリアして status を "pending" に戻す。
-/// 加えて、TTL を超えた stale な `claimed` タスクも "pending" に戻す (CA-backlog-005)。
 /// 変更したタスクの件数を返す。
+///
+/// Claims are NOT touched here (backlog f09db5ce): a claim is a lease in the
+/// untracked claim ledger that simply stops excluding after
+/// [`CLAIM_STALE_SECS`], so there is nothing in the tracked store to rescue
+/// (the old CA-backlog-005 stale-`claimed` rescue rewrote the tracked file on
+/// every SessionStart). A legacy stored `claimed` row is read as `pending` by
+/// [`load`] and is not counted.
 pub fn requeue_expired(path: &Path, now: i64) -> Result<usize> {
     // Serialize the load-modify-save against concurrent mutators on the same
     // file. Fail-closed (CA-backlog-03): if the scoped lock cannot be acquired
@@ -1351,18 +1383,6 @@ pub fn requeue_expired(path: &Path, now: i64) -> Result<usize> {
                     task.status = STATUS_PENDING.to_string();
                     changed = true;
                 }
-            }
-            // CA-backlog-005: a stale `claimed` task — its claimant crashed or
-            // was killed before calling `done`/`fail` and its claim is older
-            // than CLAIM_STALE_SECS — is rescued back to `pending` here too, so
-            // plain `next` and the unattended SessionStart `requeue_expired`
-            // (not ONLY `next_claim`) can resurface it. Otherwise a crashed
-            // claimant strands its task in `claimed` indefinitely.
-            if task.status == STATUS_CLAIMED
-                && now.saturating_sub(task.updated_at) >= CLAIM_STALE_SECS
-            {
-                task.status = STATUS_PENDING.to_string();
-                changed = true;
             }
             if changed {
                 task.updated_at = now;
@@ -3268,8 +3288,9 @@ mod tests {
                 seen.len(),
                 "iter {iter}: two concurrent drivers were handed the same task: {got:?}"
             );
-            // (c) Persisted state agrees: exactly DRIVERS tasks are `claimed`.
-            let tasks = load(path.as_path()).unwrap();
+            // (c) Persisted state agrees: exactly DRIVERS tasks are `claimed`
+            //     (derived from the ledger, where the claims now live).
+            let tasks = load_derived(path.as_path()).unwrap();
             let claimed: Vec<&Task> = tasks
                 .iter()
                 .filter(|t| t.status == STATUS_CLAIMED)
@@ -3358,8 +3379,9 @@ mod tests {
                 winners.load(Ordering::SeqCst)
             );
 
-            // The task itself must now be persisted as claimed exactly once.
-            let tasks = load(path.as_path()).unwrap();
+            // The task itself must now be persisted as claimed exactly once
+            // (in the ledger; the derived view reports it).
+            let tasks = load_derived(path.as_path()).unwrap();
             let claimed_count = tasks
                 .iter()
                 .filter(|t| t.id == id && t.status == "claimed")
@@ -3518,10 +3540,12 @@ mod tests {
                  winners = {sorted:?}"
             );
 
-            // Every winner must be persisted as `claimed` (not clobbered by a
-            // racing add's load-modify-save).
+            // Every winner must be persisted as `claimed` (in the ledger; the
+            // derived view reports it) and still present in the store (not
+            // clobbered by a racing add's load-modify-save).
+            let derived = load_derived(path.as_path()).unwrap();
             for winner_id in winners.iter() {
-                let status = final_tasks
+                let status = derived
                     .iter()
                     .find(|t| &t.id == winner_id)
                     .map(|t| t.status.as_str());
@@ -3552,12 +3576,21 @@ mod tests {
 
     #[test]
     fn next_excludes_claimed_task_too() {
-        // Plain `next` also must not resurface a claimed task (claimed is not
-        // `is_pending()`), so `next` and `next_claim` agree on what's eligible.
+        // Plain `next` also must not resurface a claimed task, so `next` and
+        // `next_claim` agree on what's eligible. Since backlog f09db5ce the
+        // claim is a ledger lease, so plain `next` is handed the live leases
+        // (as `main` does) rather than reading a stored `claimed` status.
         let path = tmp_path();
         add(&path, "Task", "/repo", vec![], "", 100).unwrap();
         assert!(claimed_or_panic(next_claim(&path, None, None)).is_some());
-        assert!(next(&path, None, None).unwrap().is_none());
+        let (dir, identity) = test_ledger(&path);
+        let leased = match crate::claim_ledger::live_leases(&identity, Some(&dir)) {
+            Determination::Known(ids) => ids,
+            Determination::Undetermined(why) => panic!("ledger unreadable: {why:?}"),
+        };
+        assert!(next_excluding(&path, None, None, &leased)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -3566,10 +3599,10 @@ mod tests {
         let id = add(&path, "Task", "/repo", vec![], "", 100).unwrap();
         assert!(claimed_or_panic(next_claim(&path, None, None)).is_some());
 
-        // Force the claim to look old by rewriting updated_at directly.
-        let mut tasks = load(&path).unwrap();
-        tasks[0].updated_at = 100; // far in the past relative to `now_unix()`
-        save(&path, &tasks).unwrap();
+        // Force the claim to look old by backdating its ledger lease (the
+        // claim's only record since backlog f09db5ce).
+        let (dir, identity) = test_ledger(&path);
+        crate::claim_ledger::backdate_all_for_test(&identity, Some(&dir), 100);
 
         // A stale claim (older than CLAIM_STALE_SECS) must be reclaimable.
         let reclaimed = claimed_or_panic(next_claim(&path, None, None));
@@ -3626,7 +3659,13 @@ mod tests {
             claimed_or_panic(Ok(claimed)).is_some(),
             "with the lock held the claim proceeds as before"
         );
-        assert_eq!(load(&path).unwrap()[0].status, "claimed");
+        // backlog f09db5ce: the claim is recorded by the reservation (the
+        // ledger), never in the tracked store.
+        assert_eq!(
+            load(&path).unwrap()[0].status,
+            "pending",
+            "a claim must not write `claimed` into the tracked store"
+        );
     }
 
     /// A reservation that cannot be recorded must abort the claim and leave the
@@ -4002,77 +4041,68 @@ mod tests {
         assert_eq!(load(&path).unwrap()[0].status, "done");
     }
 
-    // --- CA-backlog-005: requeue_expired rescues a stale claimed task -------
+    // --- CA-backlog-005, re-anchored for backlog f09db5ce ----------------------
 
-    /// F→P regression oracle for CA-backlog-005. A `claimed` task whose
-    /// claimant crashed (claim older than CLAIM_STALE_SECS) must be rescued to
-    /// `pending` by `requeue_expired` — the unattended SessionStart path — not
-    /// only by `next_claim`. Before the fix `requeue_expired` ignored `claimed`
-    /// tasks entirely, so a crashed claimant stranded its task in `claimed`
-    /// forever (plain `next` never resurfaced it). RED before, GREEN after.
+    /// CA-backlog-005's protection — a crashed claimant must never strand its
+    /// task out of the queue — now holds WITHOUT any write to the tracked
+    /// store. A claim is a ledger lease that stops excluding after
+    /// CLAIM_STALE_SECS, and a legacy row an old binary persisted as
+    /// `status = "claimed"` loads as `pending`. So `requeue_expired` has no
+    /// claim to rescue: it must report 0 and leave the store's bytes
+    /// untouched (the old rescue rewrote the tracked file on every
+    /// SessionStart), while plain `next` still resurfaces the task.
     #[test]
-    fn requeue_expired_rescues_stale_claimed_task() {
+    fn requeue_expired_does_not_rewrite_legacy_claimed_rows() {
         let path = tmp_path();
 
-        // Seed a claimed task whose claim is far older than CLAIM_STALE_SECS
-        // relative to `now`, plus a FRESH claimed task that must NOT be rescued.
         let now = 10_000_000i64;
+        let row = |id: &str, updated_at: i64| Task {
+            id: id.to_string(),
+            title: format!("{id}-claim"),
+            project: "/repo".to_string(),
+            project_unresolved: false,
+            tags: vec![],
+            status: STATUS_CLAIMED.to_string(),
+            notes: String::new(),
+            created_at: 100,
+            updated_at,
+            defer_until: None,
+            weight: 0.0,
+            issue_number: None,
+            issue_url: None,
+            issue_closed_at: None,
+            touched_files: Vec::new(),
+        };
+        // Persisted as an old binary would have left them.
         let seed = vec![
-            Task {
-                id: "stale".to_string(),
-                title: "stale-claim".to_string(),
-                project: "/repo".to_string(),
-                project_unresolved: false,
-                tags: vec![],
-                status: STATUS_CLAIMED.to_string(),
-                notes: String::new(),
-                created_at: 100,
-                updated_at: now - CLAIM_STALE_SECS - 1, // past TTL
-                defer_until: None,
-                weight: 0.0,
-                issue_number: None,
-                issue_url: None,
-                issue_closed_at: None,
-                touched_files: Vec::new(),
-            },
-            Task {
-                id: "fresh".to_string(),
-                title: "fresh-claim".to_string(),
-                project: "/repo".to_string(),
-                project_unresolved: false,
-                tags: vec![],
-                status: STATUS_CLAIMED.to_string(),
-                notes: String::new(),
-                created_at: 100,
-                updated_at: now - 1, // well within TTL
-                defer_until: None,
-                weight: 0.0,
-                issue_number: None,
-                issue_url: None,
-                issue_closed_at: None,
-                touched_files: Vec::new(),
-            },
+            row("stale", now - CLAIM_STALE_SECS - 1),
+            row("fresh", now - 1),
         ];
         save(&path, &seed).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&before)
+                .matches("status = \"claimed\"")
+                .count(),
+            2,
+            "fixture: both rows are stored as legacy `claimed`"
+        );
 
         let count = requeue_expired(&path, now).unwrap();
-        assert_eq!(count, 1, "exactly the stale claimed task must be rescued");
+        assert_eq!(count, 0, "no claim-related requeue may happen");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "requeue_expired must not rewrite the tracked store on account of claims"
+        );
 
+        // Both legacy rows read as pending, so neither is stranded.
         let tasks = load(&path).unwrap();
-        let stale = tasks.iter().find(|t| t.id == "stale").unwrap();
-        let fresh = tasks.iter().find(|t| t.id == "fresh").unwrap();
-        assert_eq!(
-            stale.status, "pending",
-            "a stale claimed task must be rescued to pending by requeue_expired"
+        assert!(tasks.iter().all(|t| t.status == "pending"), "{tasks:?}");
+        assert!(
+            next(&path, None, None).unwrap().is_some(),
+            "a legacy claimed row with no live lease must be pickable"
         );
-        assert_eq!(
-            fresh.status, "claimed",
-            "a fresh (within-TTL) claimed task must NOT be rescued (no over-rescue)"
-        );
-
-        // And plain `next` (not just next_claim) can now resurface it.
-        let picked = next(&path, None, None).unwrap().unwrap();
-        assert_eq!(picked.id, "stale");
     }
 
     // ---- add_with_weight_and_github_push (backlog-add-integration) ---------

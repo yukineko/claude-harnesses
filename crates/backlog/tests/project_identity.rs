@@ -382,11 +382,17 @@ fn list_sees_same_task_from_main_tree_cwd() {
 /// The filter is what changed. A repo store is now the scope itself (see
 /// `tests/project_scope.rs`), so listing this checkout's own file resolves no
 /// identity at all and a dangling link cannot hide anything: the defect is
-/// removed at the root rather than made audible. What this test pins is
-/// therefore inverted — the task is LISTED — plus the one place an identity is
-/// still load-bearing and still fails closed: `next --claim`, whose ledger key
-/// IS the project identity (`main::claim_identity`), and which is the call a
-/// real driver makes.
+/// removed at the root rather than made audible.
+///
+/// **Re-pinned for backlog f09db5ce.** A claim is now a lease in the
+/// project-wide claim ledger only (never a stored status), and `list` derives
+/// `claimed` from that ledger, whose key IS the project identity
+/// (`main::claim_identity`). With the identity undetermined, which of these
+/// tasks another checkout has claimed cannot be read, so the default listing
+/// REFUSES (non-zero exit, reason on stderr) rather than rendering possibly
+/// claimed tasks as pending (CLAUDE.md §3). It is still never the empty
+/// answer — the distinguishability this test exists for — and `next --claim`
+/// still fails closed exactly as before.
 ///
 /// # Why this test carries a CONTROL
 ///
@@ -431,30 +437,34 @@ fn a_dangling_git_link_no_longer_hides_an_existing_task() {
     );
 
     // Anti-vacuity: the task genuinely, physically exists in this checkout's
-    // own store (not a mis-seeded empty file).
-    let (all_code, all_out, all_err) = run_in(&["list", "--all"], "", &home, &broken_dir);
-    assert_eq!(all_code, 0, "list --all must succeed; stderr: {}", all_err);
+    // own store (not a mis-seeded empty file). Read from disk: every claim-
+    // aware CLI read needs the identity this checkout lacks (below).
+    let on_disk = std::fs::read_to_string(broken_dir.join(".backlog").join("tasks.toml")).unwrap();
     assert!(
-        all_out.contains("Stranded task"),
+        on_disk.contains("Stranded task"),
         "anti-vacuity check failed: the seeded task must be physically present \
          in this checkout's store, got:\n{}",
-        all_out
+        on_disk
     );
 
-    // ---- The inverted assertion: the DEFAULT list shows it ----
+    // ---- The DEFAULT list: audible refusal, never the empty answer ----
     let (list_code, list_out, list_err) = run_in(&["list", "--json"], "", &home, &broken_dir);
-    assert_eq!(
+    assert_ne!(
         list_code, 0,
-        "the default list must succeed: no project identity is needed to read \
-         this checkout's own store; stderr: {}",
+        "the default list must REFUSE: whether this checkout's tasks are claimed \
+         lives in the claim ledger, keyed by a project identity that cannot be \
+         determined here, so rendering them (as pending) would be a guess; \
+         stdout={} stderr={}",
+        list_out, list_err
+    );
+    assert!(
+        list_err.contains("ledger") && list_err.contains("project identity"),
+        "the refusal must name the claim ledger and the undetermined identity, got: {}",
         list_err
     );
     assert!(
-        list_out.contains("Stranded task"),
-        "a task physically present in this checkout's own store must appear in \
-         the DEFAULT listing. A repo store is the scope, so there is no label \
-         to filter it out by — and a dangling `.git` link therefore cannot \
-         hide it, audibly or otherwise.\nGot:\n{}",
+        list_out.trim().is_empty(),
+        "a refused list must print nothing on stdout, got: {}",
         list_out
     );
 
@@ -703,12 +713,16 @@ fn next_and_list_agree_on_scope_for_a_repo_store() {
     );
 }
 
-/// Test (f): the `next` counterpart of test (d), re-pinned 2026-08-20.
+/// Test (f): the `next` counterpart of test (d), re-pinned 2026-08-20 and
+/// again for backlog f09db5ce.
 ///
-/// The undetermined condition (a dangling worktree `.git` link) no longer
-/// affects the READ: a repo store is the scope, so listing or ranking this
-/// checkout's own file needs no identity and the task is handed out rather
-/// than hidden. It is still load-bearing for `next --claim`, whose
+/// Since f09db5ce a claim is a lease in the project-wide claim ledger only,
+/// and plain `next`/`list` must skip/derive leased tasks from that ledger —
+/// keyed by the project identity. With the identity undetermined (a dangling
+/// worktree `.git` link) they cannot tell whether a task is already claimed
+/// elsewhere, so they REFUSE (non-zero, nothing on stdout) instead of handing
+/// out or listing a possibly-claimed task. The identity is load-bearing for
+/// `next --claim` too, whose
 /// cross-checkout ledger is KEYED by the project identity: a claim recorded
 /// under a guessed key is invisible to every other checkout, i.e. no exclusion
 /// at all. So the claim path must still refuse rather than print "no pending
@@ -763,42 +777,48 @@ fn next_claim_fails_closed_when_the_project_identity_cannot_be_determined() {
     );
 
     // Anti-vacuity: the task genuinely exists in this checkout's store.
-    let (all_code, all_out, all_err) = run_in(&["list", "--all"], "", &home, &broken_dir);
-    assert_eq!(all_code, 0, "list --all must succeed; stderr: {}", all_err);
+    let on_disk = std::fs::read_to_string(broken_dir.join(".backlog").join("tasks.toml")).unwrap();
     assert!(
-        all_out.contains("Stranded next task"),
+        on_disk.contains("Stranded next task"),
         "anti-vacuity check failed: the seeded task must be physically \
          present in this checkout's store, got:\n{}",
-        all_out
+        on_disk
     );
 
-    // The READ side no longer depends on the identity, so it hands the task
-    // over instead of failing closed. Pinned here (rather than left
-    // unmentioned) because the old version of this test asserted the
-    // opposite, and a reader needs to see which way it went.
+    // The claim-aware READ side (backlog f09db5ce) needs the identity to find
+    // the claim ledger, so with it undetermined both refuse — never exit 0
+    // with a possibly-claimed task, never the empty answer. Pinned here
+    // because earlier versions of this test asserted the opposite, and a
+    // reader needs to see which way it went.
     let (list_code, list_out, list_err) = run_in(&["list", "--json"], "", &home, &broken_dir);
-    assert_eq!(
+    assert_ne!(
         list_code, 0,
-        "the default list needs no identity for a repo store; stderr: {}",
-        list_err
+        "the default list must refuse without the identity that keys the claim \
+         ledger; stdout={} stderr={}",
+        list_out, list_err
     );
     assert!(
-        list_out.contains("Stranded next task"),
-        "the task must be listed, not hidden, got:\n{}",
+        list_out.trim().is_empty(),
+        "a refused list must print nothing on stdout, got: {}",
         list_out
     );
+    assert!(
+        list_err.contains("ledger"),
+        "the refusal must name the claim ledger, got: {}",
+        list_err
+    );
     let (bare_code, bare_out, bare_err) = run_in(&["next"], "", &home, &broken_dir);
-    assert_eq!(
+    assert_ne!(
         bare_code, 0,
-        "a bare `next` ranks over this store without needing an identity; \
-         stderr: {}",
-        bare_err
+        "a bare `next` must not hand out a task whose claim state cannot be \
+         read; stdout={} stderr={}",
+        bare_out, bare_err
     );
     assert!(
-        bare_out.contains("Stranded next task"),
-        "a bare `next` must hand out the task in this checkout's own store, \
-         got:\n{}",
-        bare_out
+        bare_out.trim().is_empty() && bare_err.contains("ledger"),
+        "a refused `next` prints nothing and names the ledger; stdout={} stderr={}",
+        bare_out,
+        bare_err
     );
 
     // The CLAIM side still needs the identity as its ledger key, and still

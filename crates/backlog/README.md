@@ -186,9 +186,9 @@ machine-global ledger keyed by project IDENTITY, not by store location:
   main working tree, so every checkout of one project shares one ledger)
 - lock order, never inverted: `~/.backlog/claims/<slug>.lock` (project-wide),
   then `<store>.tasks.toml.lock` (this checkout)
-- an entry stops excluding after 1h (`CLAIM_STALE_SECS`), matching the store's
-  own stale-claim reclaim, so a dead claimant cannot strand a task everywhere;
-  entries are kept for 7 days for a human reading the file
+- an entry (a **lease**) stops excluding after 1h (`CLAIM_STALE_SECS`), so a
+  dead claimant cannot strand a task everywhere; entries are kept for 7 days
+  for a human reading the file
 
 Every undetermined condition on this path **refuses the claim** and exits
 non-zero with the reason on stderr — never `no pending tasks` on exit 0, which
@@ -196,6 +196,33 @@ a driver reads as "there is no work". That covers: the ledger directory not
 being creatable, the ledger lock not being acquired, the ledger being
 unreadable/unparseable/unwritable, the tasks-file lock not being held, and a
 project identity that cannot be resolved. A refusal is not an empty queue.
+
+### The lease never touches the tracked store; `claimed` is derived
+
+A claim writes **only** the ledger. The tracked `.backlog/tasks.toml` is not
+modified by `next --claim` (it still takes the tasks-file lock, for a
+consistent read), and SessionStart's requeue never rewrites rows on account of
+claims — so claiming leaves the git worktree clean. `claimed` is a DERIVED
+status: a `pending`/`failed` row whose id holds a live lease in the ledger.
+
+- `next --claim` prints the task with `"status": "claimed"`, as before.
+- plain `next` skips leased tasks; `list` (text and `--json`) shows them as
+  `claimed`. The status filter applies to the derived view: `--status pending`
+  omits leased tasks and `--status claimed` selects them (it still prints the
+  "unknown status" warning, since `claimed` is not a stored status).
+- a row that an older binary persisted as `status = "claimed"` is read as
+  `pending`; only a live lease excludes it. It is rewritten as `pending` the
+  next time an unrelated command saves the store.
+- `done`/`fail`/`edit --status pending` do not release a lease; a leased
+  non-terminal task stays excluded until the lease ages out (1h).
+- `list`, plain `next` and `next --claim` locate the ledger the same way (the
+  project identity, see above); outside any repo that identity is the
+  canonical cwd. If the identity cannot be resolved (e.g. a dangling worktree
+  `.git` link) or the ledger exists but cannot be read or parsed, `list` and
+  plain `next` **refuse** (non-zero exit, reason on stderr, nothing on
+  stdout) rather than show a possibly-claimed task as pending.
+- the store-divergence check does not count leased tasks as queued work, as
+  it did not count stored `claimed` rows before.
 
 ## Build
 

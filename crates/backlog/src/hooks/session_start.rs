@@ -89,9 +89,17 @@ pub fn run(input: &HookInput) -> Option<String> {
     // channel that reaches it. So the notice is injected here, and injected
     // EVEN WHEN there is nothing else to say (the empty case is precisely the
     // one that needs it).
-    let notice = divergence::check(&tasks_path, Some(&root), scope)
-        .message()
-        .map(|m| format!("## Backlog \u{2014} store divergence\n\n{m}\n\n"));
+    // This hook does not consult the claim ledger, so leased tasks count as
+    // queued here (an empty lease set): the notice can only be quieter than
+    // the CLI's, never claim work exists that the store does not hold.
+    let notice = divergence::check(
+        &tasks_path,
+        Some(&root),
+        scope,
+        &std::collections::HashSet::new(),
+    )
+    .message()
+    .map(|m| format!("## Backlog \u{2014} store divergence\n\n{m}\n\n"));
 
     // A read/parse failure is NOT an empty queue (CA-backlog-01). Returning
     // `None` here made "tasks.toml is unreadable" byte-identical to "nothing
@@ -278,23 +286,25 @@ mod tests {
     /// has no `else` arm. When `requeue_expired` errors (its own `save` can
     /// fail independently of `load`, e.g. the store directory is not
     /// writable), the hook proceeds exactly as if 0 tasks were requeued — no
-    /// log, no diagnostic. A stale `claimed` task (`status="claimed"`, which
-    /// `Task::is_pending()` does NOT count as pending) that `requeue_expired`
-    /// should rescue back to `pending` therefore stays `claimed` forever,
-    /// invisible to every future SessionStart, with nothing ever reaching the
-    /// agent to say so.
+    /// log, no diagnostic. An expired deferral that `requeue_expired` should
+    /// return to `pending` therefore stays deferred, with nothing ever
+    /// reaching the agent to say so. (The fixture used to be a stale stored
+    /// `claimed` row; since backlog f09db5ce claims are ledger leases and
+    /// `requeue_expired` no longer rewrites claim rows, so an expired deferral
+    /// is the requeue that still needs a write.)
     #[test]
     fn ca_backlog_02_requeue_expired_failure_is_swallowed_without_diagnostic() {
         let dir = repo_with_tasks_toml(
             r#"[[task]]
 id = "stale-claim-01"
-title = "stale claim needing rescue"
+title = "expired deferral needing requeue"
 project = "whatever"
-status = "claimed"
+status = "failed"
 tags = []
 notes = ""
 created_at = 1000
 updated_at = 1000
+defer_until = 1000
 "#,
         );
 
@@ -323,16 +333,17 @@ updated_at = 1000
             std::fs::set_permissions(&backlog_dir, perms).unwrap();
         }
 
-        // Ground truth: the fixture really is a genuine stale claim that WOULD
-        // requeue given a writable directory (proving the earlier failure
+        // Ground truth: the fixture really is a genuine expired deferral that
+        // WOULD requeue given a writable directory (proving the earlier failure
         // inside `run` was the injected fault, not a malformed fixture that
         // would never requeue regardless of permissions).
-        let requeues_once_writable =
-            store::requeue_expired(&backlog_dir.join("tasks.toml"), 9_999_999_999).is_ok();
+        let requeued_once_writable =
+            store::requeue_expired(&backlog_dir.join("tasks.toml"), 9_999_999_999);
         assert!(
-            requeues_once_writable,
-            "fixture is broken: the stale-claim task never requeues even once permissions are \
-             restored, so this test's fault injection is not exercising CA-backlog-02 at all"
+            matches!(requeued_once_writable, Ok(1)),
+            "fixture is broken: the expired deferral does not requeue even once permissions are \
+             restored (got {requeued_once_writable:?}), so this test's fault injection is not \
+             exercising CA-backlog-02 at all"
         );
 
         let text = result.unwrap_or_default();

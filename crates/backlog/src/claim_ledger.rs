@@ -29,13 +29,26 @@
 //! (`store::canonical_project_id`). Two checkouts of one project therefore
 //! read and write ONE ledger, whatever their stores say.
 //!
+//! ## The ledger is the ONLY place a claim lives (backlog f09db5ce)
+//!
+//! A claim used to be recorded here AND as `status = "claimed"` in the
+//! checkout's tracked `.backlog/tasks.toml`, so every claim (and every
+//! SessionStart stale-claim rescue) dirtied the git worktree it ran in. Now
+//! the tracked store is never written by a claim: the lease is this ledger's
+//! entry, and `claimed` is a DERIVED view — a pending/failed row whose id has
+//! a LIVE entry here (age < [`crate::store::CLAIM_STALE_SECS`]). `next
+//! --claim`, plain `next` and `list` all consult the live leases. The ledger's
+//! location is unchanged on purpose: older binaries still write it, and a
+//! second location would split old and new claimers onto two ledgers.
+//!
 //! ## Lock order (never invert this)
 //!
 //!   1. the project-scoped ledger lock `~/.backlog/claims/<slug>.lock`
 //!      (WIDE: every checkout of this project), then
 //!   2. the per-store tasks-file lock `<store>.lock`
-//!      (NARROW: this checkout only, still needed — it is what protects the
-//!      local file against this checkout's own `add`/`edit`/`mark_*`).
+//!      (NARROW: this checkout only, still needed — it makes the candidate
+//!      read consistent with this checkout's own `add`/`edit`/`mark_*`; the
+//!      claim itself writes nothing to the store).
 //!
 //! Both are acquired in that order on every claim; nothing in this crate
 //! acquires them the other way round. A new caller that needs both MUST take
@@ -59,10 +72,9 @@
 //! ## What ages out, and why
 //!
 //! An entry stops excluding its task after [`crate::store::CLAIM_STALE_SECS`]
-//! (1h) — the identical window in which `store`'s own claim-reclaim already
-//! re-offers a `claimed` task whose claimant died. Keeping the ledger stricter
-//! than the store would make such a task permanently unclaimable in EVERY
-//! checkout, which is not "the restrictive side" but a deadlock. Entries are
+//! (1h), so a task whose claimant died is re-offered. Never ageing out would
+//! make such a task permanently unclaimable in EVERY checkout, which is not
+//! "the restrictive side" but a deadlock. Entries are
 //! kept (for a human reading the file) until [`LEDGER_RETENTION_SECS`], then
 //! pruned on the next write so the file stays bounded.
 
@@ -124,7 +136,8 @@ pub(crate) struct ClaimRecord {
     pub(crate) claimed_at: i64,
     /// The cwd of the claiming process — i.e. WHICH CHECKOUT took it.
     pub(crate) checkout: String,
-    /// The store file the claim was written into.
+    /// The store file the claim was selected from (observability only; the
+    /// claim itself is NOT written into it — backlog f09db5ce).
     pub(crate) store: String,
     /// The claiming process's pid. Observability only: `backlog` is a one-shot
     /// CLI, so this pid is dead by the time anyone reads the ledger (the same
@@ -283,19 +296,47 @@ fn write_ledger(path: &Path, ledger: &Ledger) -> std::result::Result<(), String>
     }
 }
 
+/// The ids holding a LIVE lease (age < [`CLAIM_STALE_SECS`]) in `identity`'s
+/// project-wide ledger — the set that the derived `claimed` view of plain
+/// `next` and `list` is built from.
+///
+/// A read without the ledger lock: writers publish by atomic rename
+/// ([`write_ledger`]), so a reader sees either the old or the new ledger,
+/// never a torn one. An absent ledger is a real observation (no leases); an
+/// unreadable or unparseable one is `Undetermined` — the caller must refuse
+/// rather than render leased tasks as unclaimed. Never creates the claims
+/// directory.
+pub(crate) fn live_leases(
+    identity: &str,
+    override_dir: Option<&Path>,
+) -> Determination<HashSet<String>> {
+    let dir = claims_dir(override_dir);
+    read_ledger(&ledger_path(&dir, identity)).map(|l| live_ids(&l, now_unix()))
+}
+
+/// Only LIVE claims exclude. See the module docs: ageing out after
+/// [`CLAIM_STALE_SECS`] is what keeps a dead claimant from making a task
+/// permanently unclaimable in every checkout.
+fn live_ids(ledger: &Ledger, now: i64) -> HashSet<String> {
+    ledger
+        .entries
+        .iter()
+        .filter(|e| now.saturating_sub(e.claimed_at) < CLAIM_STALE_SECS)
+        .map(|e| e.id.clone())
+        .collect()
+}
+
 /// Claim the next eligible task for `identity`'s project, excluding whatever
 /// ANY checkout of that project has already claimed.
 ///
 /// The whole critical section, in order (see the module docs on lock order):
 /// acquire the project-scoped ledger lock → read the ledger → select a
-/// candidate from THIS checkout's store that is not already claimed
-/// project-wide → record it in the ledger → write `claimed` into the local
-/// store → release (guards drop).
+/// candidate from THIS checkout's store that holds no live lease → record it
+/// in the ledger → release (guards drop). The tracked store is NOT written
+/// (backlog f09db5ce): the ledger entry is the claim.
 ///
-/// The reservation is written BEFORE the local store, and a failed reservation
-/// aborts the claim without touching the local store: a claim that is visible
-/// only in this checkout is exactly the invisible double-dispatch this exists
-/// to prevent.
+/// A failed reservation refuses the claim: a claim that is not in the ledger
+/// is exactly the invisible double-dispatch this exists to prevent.
 ///
 /// `Err` is reserved for a genuine store IO failure (already a non-zero exit
 /// via `main`); `Determination::Undetermined` is a deliberate REFUSAL to
@@ -331,15 +372,7 @@ pub(crate) fn claim_next(
     };
 
     let now = now_unix();
-    // Only LIVE claims exclude. See the module docs: mirroring the store's own
-    // stale-claim reclaim window is what keeps a dead claimant from making a
-    // task permanently unclaimable in every checkout.
-    let excluded: HashSet<String> = ledger
-        .entries
-        .iter()
-        .filter(|e| now.saturating_sub(e.claimed_at) < CLAIM_STALE_SECS)
-        .map(|e| e.id.clone())
-        .collect();
+    let excluded = live_ids(&ledger, now);
 
     let checkout = match std::env::current_dir() {
         Ok(d) => d.to_string_lossy().into_owned(),
@@ -376,6 +409,21 @@ pub(crate) fn claim_next(
         &excluded,
         &mut reserve,
     )
+}
+
+/// Test-only: backdate every entry of `identity`'s ledger to `claimed_at`, so
+/// a test can make its leases stale without sleeping for an hour.
+#[cfg(test)]
+pub(crate) fn backdate_all_for_test(identity: &str, override_dir: Option<&Path>, claimed_at: i64) {
+    let path = ledger_path(&claims_dir(override_dir), identity);
+    let mut ledger = match read_ledger(&path) {
+        Determination::Known(l) => l,
+        Determination::Undetermined(why) => panic!("test ledger unreadable: {why:?}"),
+    };
+    for e in ledger.entries.iter_mut() {
+        e.claimed_at = claimed_at;
+    }
+    write_ledger(&path, &ledger).expect("test ledger writable");
 }
 
 #[cfg(test)]

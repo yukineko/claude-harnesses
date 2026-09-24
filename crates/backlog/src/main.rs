@@ -17,6 +17,7 @@ use harness_core::boundary;
 use harness_core::hook::{read_stdin, run_hook, HookInput};
 use harness_core::verdict::{Determination, Required};
 use serde_json::json;
+use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
 
@@ -128,11 +129,12 @@ enum Command {
         #[arg(long)]
         all: bool,
 
-        /// Atomically reserve the returned task (CA-backlog-001): marks it
-        /// `claimed` under the tasks-file lock in the same critical section
-        /// that selects it, so two concurrent `next --claim` callers cannot
-        /// both be handed the same pending task. Without this flag, `next`
-        /// keeps its pre-existing pure-read behavior (no lock, no mutation).
+        /// Atomically reserve the returned task (CA-backlog-001): records a
+        /// lease in the project-wide claim ledger (~/.backlog/claims, not the
+        /// tracked store) in the same critical section that selects it, so
+        /// two concurrent `next --claim` callers, in any checkout, cannot
+        /// both be handed the same task. Without this flag, `next` is a pure
+        /// read (no lock, no mutation) that still skips leased tasks.
         #[arg(long)]
         claim: bool,
     },
@@ -593,6 +595,39 @@ fn claim_identity(effective_project: Option<&str>) -> Result<String> {
     Ok(canonical.label)
 }
 
+/// The ids holding a LIVE claim lease in this project's claim ledger — the
+/// input of the DERIVED `claimed` view that plain `next` and `list` render
+/// (backlog f09db5ce: a claim no longer writes the tracked store, so the
+/// ledger is the only place a claim is visible).
+///
+/// The ledger is located exactly as `next --claim` locates it
+/// ([`claim_identity`]), so a reader and a claimer of the same scope always
+/// consult the same file. That includes stores with no repo at all (a pinned
+/// or home store run outside any checkout): `store::canonical_project_id`
+/// answers with the canonical cwd there, which is also the key `next --claim`
+/// uses from that cwd, so reader and claimer still agree.
+///
+/// Every undetermined case is an `Err` (non-zero exit, reason on stderr,
+/// nothing on stdout), never an empty set: an identity that cannot be
+/// resolved, or a ledger that exists but cannot be read or parsed, means we do
+/// not know which tasks are claimed, and rendering them as pending would hand
+/// a leased task to a second driver (CLAUDE.md §3).
+fn live_lease_view(effective_project: Option<&str>, command: &str) -> Result<HashSet<String>> {
+    let identity = claim_identity(effective_project).map_err(|e| {
+        anyhow::anyhow!(
+            "backlog {command} REFUSED: which tasks are claimed is recorded in the project-wide \
+             claim ledger, and the ledger for this scope could not be located: {e}"
+        )
+    })?;
+    match claim_ledger::live_leases(&identity, None) {
+        Determination::Known(ids) => Ok(ids),
+        Determination::Undetermined(why) => Err(anyhow::anyhow!(
+            "backlog {command} REFUSED (this is NOT an empty or unclaimed queue): the claim \
+             ledger could not be read, so which tasks are already claimed is unknown: {why}"
+        )),
+    }
+}
+
 /// The project the divergence check asks about — always THIS CHECKOUT, even
 /// when the listing was widened.
 ///
@@ -627,10 +662,15 @@ fn divergence_scope(effective_project: Option<&str>) -> Option<String> {
 /// on purpose: see `divergence`'s module docs for the consumer-by-consumer
 /// reason a non-zero exit there would DESTROY real items rather than protect
 /// them.
+///
+/// `leased` holds the ids with a live claim lease: they are already being
+/// worked, so they do not count as queued work in the resolved store (the
+/// counterpart of the stored `claimed` status that pre-f09db5ce claims wrote).
 fn guard_store_divergence(
     location: &config::StoreLocation,
     tasks_path: &std::path::Path,
     project: Option<&str>,
+    leased: &HashSet<String>,
 ) -> Result<()> {
     let scope = divergence_scope(project);
     // The resolved store is counted under the scope its READER used, which for
@@ -641,7 +681,7 @@ fn guard_store_divergence(
         Some(_) => None,
         None => scope.as_deref(),
     };
-    match divergence::check(tasks_path, scope.as_deref(), resolved_scope) {
+    match divergence::check(tasks_path, scope.as_deref(), resolved_scope, leased) {
         divergence::Divergence::None => Ok(()),
         divergence::Divergence::Warn(msg) => {
             eprintln!("{msg}");
@@ -820,18 +860,34 @@ fn run(cli: Cli) -> Result<()> {
             // `default_project_scope`, shared with `next` so the two commands
             // cannot drift apart on what "this project" means.
             let effective_project = read_project_scope(&location, project, all, "list")?;
-            let tasks = store::list(
+            // The status filter is applied AFTER the derived claim view, so
+            // `--status pending` excludes leased tasks and `--status claimed`
+            // selects them (backlog f09db5ce).
+            let mut tasks = store::list(
                 &tasks_path,
                 tag.as_deref(),
                 effective_project.as_deref(),
-                status.as_deref(),
+                None,
             )?;
             // Before anything is printed: an empty listing produced from a
             // store that is not where this checkout's work actually lives must
             // not be rendered as an ordinary empty queue (backlog 5ba13c3e).
             // Placed ahead of BOTH renderers so neither `[]` nor `no tasks`
             // can escape on stdout when the answer is untrustworthy.
-            guard_store_divergence(&location, &tasks_path, effective_project.as_deref())?;
+            // `claimed` is DERIVED from the untracked claim ledger; an
+            // unreadable ledger refuses here, before either renderer, rather
+            // than listing leased tasks as pending.
+            let leased = live_lease_view(effective_project.as_deref(), "list")?;
+            guard_store_divergence(
+                &location,
+                &tasks_path,
+                effective_project.as_deref(),
+                &leased,
+            )?;
+            store::derive_claimed(&mut tasks, &leased);
+            if let Some(s) = status.as_deref() {
+                tasks.retain(|t| t.status == s);
+            }
 
             if as_json {
                 // Machine-readable array (consumed by autoflow). Each task keeps
@@ -928,7 +984,20 @@ fn run(cli: Cli) -> Result<()> {
             // the most expensive false answer in the crate. Checked BEFORE the
             // claim so a diverged store neither reports emptiness nor mutates
             // the wrong file (backlog 5ba13c3e).
-            guard_store_divergence(&location, &tasks_path, effective_project.as_deref())?;
+            //
+            // Leased tasks are not queued work for the divergence count. The
+            // lease set read here is advisory for that count only: the claim
+            // path below re-reads the ledger under its lock.
+            let leased = live_lease_view(
+                effective_project.as_deref(),
+                if claim { "next --claim" } else { "next" },
+            )?;
+            guard_store_divergence(
+                &location,
+                &tasks_path,
+                effective_project.as_deref(),
+                &leased,
+            )?;
             let task = if claim {
                 // The claim is project-GLOBAL, not store-local: the store
                 // follows the checkout by design, so a claim recorded only in
@@ -962,7 +1031,16 @@ fn run(cli: Cli) -> Result<()> {
                     }
                 }
             } else {
-                store::next(&tasks_path, tag.as_deref(), effective_project.as_deref())?
+                // A pure read, but claim-aware: a task holding a live lease in
+                // the project-wide ledger (claimed in this or any other
+                // checkout) is not handed out. An unreadable ledger refused
+                // above (backlog f09db5ce).
+                store::next_excluding(
+                    &tasks_path,
+                    tag.as_deref(),
+                    effective_project.as_deref(),
+                    &leased,
+                )?
             };
             match task {
                 Some(t) => {

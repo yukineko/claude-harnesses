@@ -58,6 +58,7 @@
 //! which is *not* an observation that the legacy store is empty and must never
 //! be collapsed into it.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// What could be established about the legacy `~/.backlog/tasks.toml`.
@@ -197,6 +198,11 @@ pub fn assess(
 /// *used* and wrong here — the whole question is whether the old file exists —
 /// so existence is checked before loading rather than inferred from emptiness.
 pub fn scan_legacy(legacy_path: &Path, project: Option<&str>) -> LegacyStore {
+    scan_queued(legacy_path, project, &HashSet::new())
+}
+
+/// [`scan_legacy`], not counting any task whose id is in `leased`.
+fn scan_queued(legacy_path: &Path, project: Option<&str>, leased: &HashSet<String>) -> LegacyStore {
     if !legacy_path.exists() {
         return LegacyStore::Absent;
     }
@@ -207,7 +213,10 @@ pub fn scan_legacy(legacy_path: &Path, project: Option<&str>) -> LegacyStore {
     let filter = project.map(crate::store::canonicalize_project);
     let mut matched = 0usize;
     let mut unresolved = 0usize;
-    for t in tasks.iter().filter(|t| t.is_pending()) {
+    for t in tasks
+        .iter()
+        .filter(|t| t.is_pending() && !leased.contains(&t.id))
+    {
         match filter.as_deref() {
             None => matched += 1,
             Some(f) => {
@@ -231,8 +240,19 @@ pub fn scan_legacy(legacy_path: &Path, project: Option<&str>) -> LegacyStore {
 /// purpose: that is the *pessimistic* input to [`assess`] (it can only push the
 /// verdict towards `Undetermined`, never away from it). The caller's own
 /// `store::list` surfaces the read error separately.
-pub fn resolved_pending(resolved_path: &Path, project: Option<&str>) -> usize {
-    match scan_legacy(resolved_path, project) {
+///
+/// A task in `leased` (it holds a live claim lease in the project-wide claim
+/// ledger) is NOT queued work: it is already being worked. Before backlog
+/// f09db5ce a claim was written into the store as `status = "claimed"`, which
+/// this count skipped; the lease no longer touches the store, so the caller
+/// passes the live leases instead, and a store whose every task is claimed
+/// still counts as holding no queued work.
+pub fn resolved_pending(
+    resolved_path: &Path,
+    project: Option<&str>,
+    leased: &HashSet<String>,
+) -> usize {
+    match scan_queued(resolved_path, project, leased) {
         LegacyStore::Scanned { matched, .. } => matched,
         LegacyStore::Absent | LegacyStore::Unreadable(_) => 0,
     }
@@ -276,10 +296,15 @@ pub fn legacy_path() -> PathBuf {
 ///
 /// `resolved_project` is therefore `None` for a repo store and the checkout's
 /// own identity for a pinned/legacy one.
+///
+/// `leased` is the set of task ids holding a live claim lease (see
+/// [`resolved_pending`]); a caller that does not consult the claim ledger
+/// passes an empty set, which counts leased tasks as queued.
 pub fn check(
     resolved_path: &Path,
     legacy_project: Option<&str>,
     resolved_project: Option<&str>,
+    leased: &HashSet<String>,
 ) -> Divergence {
     let legacy = legacy_path();
     if same_file(resolved_path, &legacy) {
@@ -291,7 +316,7 @@ pub fn check(
         // parse of the (potentially large) resolved store.
         return Divergence::None;
     }
-    let resolved = resolved_pending(resolved_path, resolved_project);
+    let resolved = resolved_pending(resolved_path, resolved_project, leased);
     assess(&legacy, resolved_path, resolved, &scanned)
 }
 

@@ -18586,3 +18586,22 @@ updated_at = 1790244857
 weight = 0.0
 issue_number = 772
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/772"
+
+[[task]]
+id = "06345780"
+title = "blastguard: operand 位置の command substitution ($(rm -rf ...) / backtick) を解析せず allow する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Measured 2026-09-24 against the base binary at 564b3676 (built separately by the verifier for 6cf12ce9; CLAUDE_CODE_ENTRYPOINT=cli, CLAUDECODE=1): echo $(rm -rf ~/work) -> allow; cat $(rm -rf ~/work) -> allow; cat <backtick>rm -rf ~/work<backtick> -> allow; cat <<'EOF' $(rm -rf /tmp/x) (heredoc) -> allow. A bare rm -rf ~/work is denied (recursive rm), so the substitution payload in an OPERAND position is never judged. This predates c4682476 and is not caused by it. The adversarial verifier of the 6cf12ce9 heredoc fix found it. Probe script: session 9d349393 scratchpad sysrec/probe3.py."
+created_at = 1790252037
+updated_at = 1790252037
+weight = 0.0
+issue_number = 775
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/775"

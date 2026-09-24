@@ -30579,3 +30579,70 @@ updated_at = 1790204869
 weight = 0.0
 issue_number = 761
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/761"
+
+[[task]]
+id = "84b7bca0"
+title = "~/.claude/settings.json の gauge Stop hook が削除済み cycle8 worktree の target/release を指していて not found になる (記録自体は plugin hook 側で継続)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gauge",
+    "worktree-hygiene",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-24 11:05 JST、測定点 b9f35fa8。ユーザー報告『gauge が not found になっている』を受けて測定した。
+
+根本原因 (逐語):
+  /Users/yuki/.claude/settings.json:112 の Stop hook が
+    /Users/yuki/src/.harness-worktrees/b8-gauge-0f876834/target/release/gauge record
+  を指している。この worktree は存在しない:
+    ls: /Users/yuki/src/.harness-worktrees/b8-gauge-0f876834: No such file or directory
+  git worktree list にも無い (cycle8 のバッチ終了時に削除された)。
+  settings.json の mtime は 2026-09-24 02:45 で、cycle8 バッチの実行時間帯と一致する。
+  worktree 名 b8-gauge-0f876834 の 0f876834 は cycle8 の backlog item (gauge DoD9 監査)
+  の id であり、この item の commit は df6b9f1d / cb27bc46 / 5ab3bb70。
+
+したがって cycle8 の worker が、自分の使い捨て worktree の target/release ビルドを
+ユーザーの GLOBAL な ~/.claude/settings.json へ書き込み、worktree 削除後も残した、
+というのが最有力の読み。ただし settings.json は git 管理外でバックアップも無いため、
+誰が書いたかの直接証拠 (履歴) は取れない。ユーザー自身の手編集という読みも排除できない。
+
+重要 — dark ではない (過大主張を避けるための測定):
+  gauge の記録自体は継続している。~/.gauge/store/sessions/ の最新書き込みは
+  9d349393...json が 11:05:18 (別セッション)。コントロールとして gauge report を
+  実行して同ファイルの mtime が変化しないことを確認済みなので、この書き込みは
+  report ではなく実際の gauge record によるもの。
+  理由: gauge plugin は自前で同じ Stop hook を出荷しており
+    crates/gauge/hooks/hooks.json: ${CLAUDE_PLUGIN_ROOT}/bin/gauge record (timeout 10)
+  かつ settings.json の enabledPlugins に gauge@yukineko: true が在る。
+  つまり hook は 2 本登録されており、plugin 側が動き、settings.json 側が not found で
+  失敗している。症状はエラー表示であって、テレメトリの消失ではない。
+  (plugin 側が書き手であるという断定までは isolate していない。観測できたのは
+   『壊れた path が在る』『記録は続いている』の 2 点。)
+
+修正案: settings.json の hooks.Stop ブロックごと削除する。plugin の hooks.json が
+同じ hook を ${CLAUDE_PLUGIN_ROOT} 相対で提供するので、手書きエントリは不要かつ
+二重登録になる。deployed の絶対パスへ書き換える案は version dir を固定してしまい
+次の micro bump で再び腐るので薦めない。
+なお settings.json は自分 (assistant) の deny list にあるため編集していない。
+
+クラスとしての指摘 (こちらが本体):
+  worker が使い捨て worktree の絶対パスを、repo 外の GLOBAL 設定へ書き込めてしまう。
+  worktree は必ず消えるので、この書き込みは必ず腐る。しかも壊れるのは書いた worker が
+  終了した後なので、書いた側は成功として報告する。CLAUDE.md 第4節の『やっていないことを
+  やったように見せる』とは別種だが、結果は同じく『後から静かに壊れる』。
+  さらに settings.json は Edit/Write の deny list に入っているのに変更されている。
+  Bash 経由 (sed/heredoc/python) なら deny を迂回できるという穴の可能性がある
+  (未検証。検証するなら deny list が PreToolUse の Bash も見ているかを読む)。
+
+done_criteria: (1) settings.json の Stop hook が存在しない path を指さない。
+(2) worktree 内のビルド成果物の絶対パスを repo 外の永続設定へ書く行為が検出される
+か、そもそも起きないこと。"""
+created_at = 1790215661
+updated_at = 1790215661
+weight = 0.0
+issue_number = 762
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/762"

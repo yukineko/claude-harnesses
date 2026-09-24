@@ -338,7 +338,12 @@ rollout-plugins.shと複数crateを横断していた）。この経験から、
   3. **非決定性を許容し、偽陽性は再検証で吸収する**: 各ラウンドで複数の独立したAIエージェントに
      「まだテストが捕捉していないバイパス／見落としを探せ」と指示し（今回の finder 役に相当）、
      見つかった候補は別の独立したAIエージェントで再検証する（今回の verifier 役に相当、
-     REFUTEDは捨てCONFIRMED/PLAUSIBLEのみ残す）。1ラウンドの結果を鵜呑みにせず、複数ラウンド
+     verdictは三値 CONFIRMED/REFUTED/UNVERIFIED で、既定はUNVERIFIED。REFUTEDは「到達しない理由」を
+     発見と同水準の逐語引用と全消費経路の追跡で示せた場合のみ。示せなければUNVERIFIEDとして捨てず、
+     `scripts/continuous-audit.sh ... --unverified-finding` で review-queue に `[UNVERIFIED]`
+     （再検証待ち・`--to-backlog` では流れない）として残す。手順は
+     `crates/overwatch/skills/continuous-audit/SKILL.md` Step 2/3。旧版の「REFUTEDは捨て
+     CONFIRMED/PLAUSIBLEのみ残す」はCLAUDE.md §6により撤回、PLAUSIBLEはUNVERIFIEDへ統合）。1ラウンドの結果を鵜呑みにせず、複数ラウンド
      ・複数エージェントを跨いだ収束（同じ問題が繰り返し浮上するか、それとも一度きりで消えるか）
      で確度を判断する——今回の2周の`/code-review`が実際にこの収束パターンを示した
      （1周目19件→2周目は主に1周目の修正の不備7件、新規の完全に独立した発見は少数）。

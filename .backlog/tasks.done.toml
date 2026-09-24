@@ -12384,3 +12384,75 @@ updated_at = 1790223293
 weight = 0.0
 issue_number = 708
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/708"
+
+[[task]]
+id = "15274c94"
+title = "systemic signature recurred 4x across 1 task(s)/2 session(s)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "systemic",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """
+kind:systemic identifier:blastguard:tee-truncate occurrences:1
+
+--- 2024 検証 (assistant が独立に再実行。agent の自己申告ではない) ---
+merge 98548fda / fix 2acee03f が main に載っている。
+
+実行したもの:
+  cargo test -p blastguard -> rc=0、343 lib + 7 bin + 統合すべて 0 failed
+  cargo test -p blastguard fd_dup_is_not_a_segment_separator -> ok
+  cargo test -p blastguard tee_asks_the_same_questions_as_the_redirect_it_mirrors -> ok
+
+さらに単体テストではなく実バイナリに hook JSON を stdin で与えて挙動を観測した
+(何も実行されない。判定文字列を読むだけ):
+  python3 -c ... 2>&1 | head -3        -> deny 無し (元の誤検知が消えた)
+  echo hi | tee <存在しないパス>        -> deny 無し (NothingToDestroy)
+  sleep 1 & rm -rf /Users/yuki/src     -> deny 継続 (本物の背景 & は今も分割される)
+  echo hi | tee ~/.claude/settings.json -> ask 継続 (protected path 軸は健在)
+最後の 2 件が対照。全部 Allow に倒す修正なら対照も落ちるので、
+これが「緩めただけ」ではないことの証拠になる。"""
+created_at = 1790184341
+updated_at = 1790239207
+weight = 0.0
+issue_number = 728
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/728"
+
+[[task]]
+id = "28f5be7f"
+title = "systemic signature recurred 5x across 1 task(s)/3 session(s)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "systemic",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """
+kind:systemic identifier:blastguard:interpreter-unrecoverable-write occurrences:1
+
+--- 2024 検証 (assistant が独立に再実行。agent の自己申告ではない) ---
+merge 98548fda / fix 2acee03f が main に載っている。
+
+実行したもの:
+  cargo test -p blastguard -> rc=0、343 lib + 7 bin + 統合すべて 0 failed
+  cargo test -p blastguard fd_dup_is_not_a_segment_separator -> ok
+  cargo test -p blastguard tee_asks_the_same_questions_as_the_redirect_it_mirrors -> ok
+
+さらに単体テストではなく実バイナリに hook JSON を stdin で与えて挙動を観測した
+(何も実行されない。判定文字列を読むだけ):
+  python3 -c ... 2>&1 | head -3        -> deny 無し (元の誤検知が消えた)
+  echo hi | tee <存在しないパス>        -> deny 無し (NothingToDestroy)
+  sleep 1 & rm -rf /Users/yuki/src     -> deny 継続 (本物の背景 & は今も分割される)
+  echo hi | tee ~/.claude/settings.json -> ask 継続 (protected path 軸は健在)
+最後の 2 件が対照。全部 Allow に倒す修正なら対照も落ちるので、
+これが「緩めただけ」ではないことの証拠になる。"""
+created_at = 1790184344
+updated_at = 1790239208
+weight = 0.0
+issue_number = 730
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/730"

@@ -30640,9 +30640,33 @@ notes = """
 
 done_criteria: (1) settings.json の Stop hook が存在しない path を指さない。
 (2) worktree 内のビルド成果物の絶対パスを repo 外の永続設定へ書く行為が検出される
-か、そもそも起きないこと。"""
+か、そもそも起きないこと。
+
+--- 2026-09-24 11:48 修正適用 (ユーザーが deny を外したので assistant が編集) ---
+~/.claude/settings.json の hooks.Stop ブロックを削除した。plugin 側の hooks.json が
+同じ hook を ${CLAUDE_PLUGIN_ROOT} 相対で供給するので手書きエントリは不要。
+バックアップ: ~/.claude/settings.json.bak-20260924-gauge-hook
+
+適用後の検証 (すべて実測):
+  JSON parse OK
+  hooks keys: ['SessionEnd', 'Stop'] -> ['SessionEnd']
+  b8-gauge-0f876834 の文字列は設定内に 0 件
+  Stop を除いた残り全体が backup と完全一致 (dict 比較 True)
+  SessionEnd hook 無変更 / gauge@yukineko: true 維持 / .githooks deny 維持 (deny 20 件)
+
+記録が止まっていなかったことの追加証拠: 本セッション 2444be10 の gauge record が
+11:45:37 に更新されている (直前ターン終了時の Stop)。壊れていたのは重複エントリだけで、
+plugin hook 側は最初から発火していた。当初 dark と書いたのは誤りで訂正済み。
+
+注意 (未検証の予測): hook 設定がセッション開始時に読まれる実装なら、この修正は
+起動中のセッションには反映されず not found 表示だけ残る可能性がある。次の Stop で
+エラーが消えるかを見れば決着する。
+
+本 item は PENDING のまま残す。done_criteria (1) は満たしたが (2)『worktree 内の
+ビルド成果物の絶対パスを repo 外の永続設定へ書く行為が検出されるか、そもそも
+起きないこと』は未着手であり、そちらが本体だから。"""
 created_at = 1790215661
-updated_at = 1790215661
+updated_at = 1790218145
 weight = 0.0
 issue_number = 762
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/762"

@@ -18477,3 +18477,22 @@ updated_at = 1790252610
 weight = 0.0
 issue_number = 788
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/788"
+
+[[task]]
+id = "30bd7891"
+title = "gate-outcomes の Unresolved (donegate 36%) が『block 後に session が終わった』と『未解決』を区別できない — gate log に session 終了記録が要る"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "overwatch",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-24 26d84958 実装 (e8eab34e) の実データ読み出しで観測。donegate firings 36 / complied 41.7% / overridden 13.9% / released 8.3% / unresolved 36.1%。override 理由はすべて『他セッションの red』= 帰属問題 (233f819c/840c4a17) を指す。"
+created_at = 1790252835
+updated_at = 1790252835
+weight = 0.0
+issue_number = 789
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/789"

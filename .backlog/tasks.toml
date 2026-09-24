@@ -1753,40 +1753,6 @@ issue_number = 127
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/127"
 
 [[task]]
-id = "5b0e9fe1"
-title = "taintguard: mark matcher covers Read only, so Grep/Bash/Glob import external content untainted"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "injection",
-    "taintguard",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-Measured 2026-08-05 against the deployed 0.1.6 binary with an isolated TAINTGUARD_STATE_DIR (anti-vacuity control: an in-repo Read stays SILENT in the same run, so the probe is not uniformly firing).
-
-hooks.json PostToolUse matcher is WebFetch|WebSearch|Read, and decide_mark (main.rs:104-118) has a catch-all _ =+ Ok(()). Observed: tool_name Grep produced NO taint, so a following Bash was allowed.
-
-The consequence is an asymmetric boundary. These import external-provenance content into context and do NOT taint:
-  - Grep with output_mode content over a path outside the repo
-  - Bash reading an external file (cat, head, less) -- Bash is in the GATE matcher only, never the MARK matcher
-  - Bash fetching a URL (curl, wget) -- i.e. the exact channel WebFetch is marked for
-  - Glob, NotebookRead, and MCP tools returning remote content
-
-Meanwhile a Read of the session worktree (mandated by CLAUDE.md section 8) DOES taint. So the gate is strict on an internal, trusted, mandated path and open on the external ones it exists to cover. See 270f36fa for the other half.
-
-Not claimed: I did not measure whether an MCP tool result reaches PostToolUse at all -- that is unverified, not refuted.
-
-Done when: a probe shows an external-content Grep and an external-content Bash read both taint the session, with an in-repo Grep and an in-repo Bash read still clean in the same run."""
-created_at = 1785875633
-updated_at = 1785875633
-weight = 0.0
-issue_number = 129
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/129"
-
-[[task]]
 id = "3a8e3b73"
 title = "gate protection contract: every gate must state what it protects, from what, on what grounds"
 project = "/Users/yuki/src/harness"
@@ -1884,25 +1850,6 @@ updated_at = 1785879181
 weight = 0.0
 issue_number = 133
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/133"
-
-[[task]]
-id = "d03dad3d"
-title = "taintguard classify の canonicalize 失敗が Trusted に潰れ、セッションが tainted にならない"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "L5",
-    "scout",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "同じ関数が ROOT の canonicalize 失敗には Trust::Indeterminate を返しながら、TARGET の同一失敗は lexical fallback に飲み込んでいる。ErrorKind で判別していないので、ELOOP・中間ディレクトリの EACCES・root 外を指す dangling symlink がすべて normalize_lexical を通り starts_with(root) を満たして Trusted になる。証拠: crates/taintguard/src/classify.rs:89-95 の joined.canonicalize().unwrap_or_else(|_| normalize_lexical(and joined))、対照が同関数の :73-75 の let Ok(root_canonical) = root.canonicalize() else return Trust::Indeterminate。消費側 crates/taintguard/src/main.rs:106-113 で Trusted は Ok(()) となり taint marker が書かれず、以後そのターンの Bash/Write/Edit が無制限になる。完了条件: NotFound だけが lexical fallback を取り、他の ErrorKind は Indeterminate を返す。root 内の symlink loop が Indeterminate になる fault injection テストを RED 先行で観測する。"
-created_at = 1785879182
-updated_at = 1785879182
-weight = 0.0
-issue_number = 134
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/134"
 
 [[task]]
 id = "034b6620"

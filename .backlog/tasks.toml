@@ -1718,9 +1718,11 @@ Concrete symptom: taintguard's refusal says the turn consumed untrusted-provenan
 
 Shape: each gate carries an addressable protection statement (asset, adversary, grounds) that is quotable by the README so check-doc-claims.py can pin it to the code, and that a user can read WITHOUT triggering the gate. taintguard 0.1.9 is doing this for itself first; this item is the generalisation across the gate fleet.
 
-Done when: every gate crate and every scripts/check-*.py exposes a protection statement naming asset and adversary, gate-taxonomy.md gains that column, and the statement is machine-pinned rather than prose that can drift."""
+Done when: every gate crate and every scripts/check-*.py exposes a protection statement naming asset and adversary, gate-taxonomy.md gains that column, and the statement is machine-pinned rather than prose that can drift.
+
+2026-09-24 調査: 未実装を確認。提案形式 PROTECTS/AGAINST/GROUNDS (Rust: harness_core::gate::Protection const + --protects、Python: PROTECTION dict)、専用 scripts/check-gate-protection.py で taxonomy 列と逐語一致・ratchet baseline で段階展開。ユーザー裁定待ち: Q1 gate の母集合、Q2 拒否メッセージへの表示方法。"""
 created_at = 1785876697
-updated_at = 1785876697
+updated_at = 1790252611
 weight = 0.0
 issue_number = 130
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/130"
@@ -18396,3 +18398,77 @@ updated_at = 1790252367
 weight = 0.0
 issue_number = 783
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/783"
+
+[[task]]
+id = "8dfb169a"
+title = "docs/gate-taxonomy.md の網羅漏れ: blastguard/specguard/stuckguard/overwatch/parallelguard 等の遮断 crate と check-*.py 10 本に行が無い"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "docs",
+    "gate",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-24 3a8e3b73 調査 (main 6bcf2a27) で発見。未修正。 4 本 (claudemd-claims/clippy-lints/hardcoded-secret/raw-io-ratchet) は pre-commit 配線済み。sync check の追加も検討。"
+created_at = 1790252605
+updated_at = 1790252605
+weight = 0.0
+issue_number = 785
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/785"
+
+[[task]]
+id = "864eb3e8"
+title = "docs/gate-taxonomy.md が GitHub Actions workflow (injectguard.yml / fail-open.yml 等) を『本ゲート』と記述し CLAUDE.md §7 の GHA 全面禁止と矛盾する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "docs",
+    "gha-ban",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-24 3a8e3b73 調査 (main 6bcf2a27) で発見。未修正。"
+created_at = 1790252607
+updated_at = 1790252607
+weight = 0.0
+issue_number = 786
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/786"
+
+[[task]]
+id = "94b54358"
+title = "docs/gate-taxonomy.md の trigger 凡例が pre-commit を fail-soft (python3/スクリプト不在で素通り) と書くが、現 .githooks/pre-commit は不在時に block する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "docs",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-24 3a8e3b73 調査 (main 6bcf2a27) で発見。未修正。 docstring と実挙動の不一致 (§4)。"
+created_at = 1790252609
+updated_at = 1790252609
+weight = 0.0
+issue_number = 787
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/787"
+
+[[task]]
+id = "e0342a84"
+title = "scripts/ にあるが .githooks/pre-commit に配線されていない check: check-shell-syntax / check-workspace-tests / check-projkey-store-classification / check-fail-open-mutation — dark gate か非ゲートかを決める"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-24 3a8e3b73 調査 (main 6bcf2a27) で発見。未修正。 fb6b1796 / 7ecf3797 と同型。"
+created_at = 1790252610
+updated_at = 1790252610
+weight = 0.0
+issue_number = 788
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/788"

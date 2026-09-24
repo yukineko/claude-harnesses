@@ -6,16 +6,27 @@
 //! `lib.rs` for the crate-level "why" and the provenance gap left by the
 //! removal of `taintguard`.
 //!
-//! Contract (shared by every plugin in this repo): a hook must NEVER break
-//! the user's turn. The `scan` subcommand reads a hook payload from stdin
-//! and always exits 0 (`harness_core::hook::run_hook`).
+//! What `scan` emits (stdin → at most one `additionalContext` warning line
+//! on stdout, always exit 0 — the PostToolUse tool call has already run, so
+//! a warning injected into the model's context is this hook's only lever):
 //!
-//! `scan` runs its real logic behind [`fetchguard::gate::analyse`]'s panic
-//! barrier so a crash in extraction/scanning resolves to the FAIL-CLOSED
-//! warning rather than letting it unwind into `run_hook`'s outer catch,
-//! which would silently exit 0 with no warning at all — an allow. This
-//! mirrors the panic-barrier shape the removed `taintguard::main` used, and
-//! `ctxrot::hooks::toolguard`'s `analyse`.
+//!   * empty stdin → silent. No tool call was described, so there is nothing
+//!     the silence could be misread as having checked.
+//!   * NON-EMPTY stdin that is not a parseable hook payload → the fail-closed
+//!     [`fetchguard::gate::unreadable_payload_warning`]. The response was never
+//!     scanned, and a silent scanner reads as "no injection found", so this
+//!     case must not be silent (the same split blastguard's `run` makes with
+//!     its `UNREADABLE_PAYLOAD` ask).
+//!   * a parsed payload → [`fetchguard::gate::analyse`], which runs the real
+//!     logic behind its own panic barrier so a crash in extraction/scanning
+//!     also resolves to the fail-closed warning rather than unwinding here.
+//!
+//! The body runs inside `harness_core::hook::run_hook`, whose outer catch
+//! turns any panic that escapes the above into a stderr log and a silent
+//! exit 0. Silence is not a clean verdict, which is why every judging path
+//! above emits its own warning instead of relying on that backstop. What is
+//! still outside those barriers is `read_stdin`, `HookInput::parse` and the
+//! final `println!`.
 
 use clap::{Parser, Subcommand};
 
@@ -44,12 +55,20 @@ fn main() {
     match cli.command {
         Command::Scan => run_hook(|| {
             let raw = read_stdin();
-            if let Some(input) = HookInput::parse(&raw) {
-                if let Some(line) =
+            if raw.trim().is_empty() {
+                return;
+            }
+            let line = match HookInput::parse(&raw) {
+                Some(input) => {
                     fetchguard::gate::analyse(&input.tool_name, input.tool_response.as_ref())
-                {
-                    println!("{line}");
                 }
+                // Non-empty but unparseable: the response was never scanned.
+                // `HookInput::parse` erases the reason via `.ok()`, so this is
+                // the only point that can tell it apart from "nothing arrived".
+                None => Some(fetchguard::gate::unreadable_payload_warning()),
+            };
+            if let Some(line) = line {
+                println!("{line}");
             }
         }),
     }

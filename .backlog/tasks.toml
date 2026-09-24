@@ -29742,10 +29742,10 @@ tags = [
     "p0",
 ]
 touched_files = []
-status = "pending"
+status = "claimed"
 notes = "finding-id:record-audit:audit-convergence file:(none) severity:high | confirmed: 55日前 | regression test: 該当テストなし"
 created_at = 1790184320
-updated_at = 1790184320
+updated_at = 1790218214
 weight = 0.0
 issue_number = 720
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/720"
@@ -29886,10 +29886,10 @@ tags = [
     "p0",
 ]
 touched_files = []
-status = "pending"
+status = "claimed"
 notes = "kind:systemic identifier:blastguard:tee-truncate occurrences:1"
 created_at = 1790184341
-updated_at = 1790184341
+updated_at = 1790218214
 weight = 0.0
 issue_number = 728
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/728"
@@ -29904,10 +29904,10 @@ tags = [
     "p0",
 ]
 touched_files = []
-status = "pending"
+status = "claimed"
 notes = "kind:systemic identifier:blastguard:unknown-verb-protected-path occurrences:1"
 created_at = 1790184342
-updated_at = 1790184342
+updated_at = 1790218215
 weight = 0.0
 issue_number = 729
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/729"
@@ -29922,10 +29922,10 @@ tags = [
     "p0",
 ]
 touched_files = []
-status = "pending"
+status = "claimed"
 notes = "kind:systemic identifier:blastguard:interpreter-unrecoverable-write occurrences:1"
 created_at = 1790184344
-updated_at = 1790184344
+updated_at = 1790218215
 weight = 0.0
 issue_number = 730
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/730"
@@ -30788,3 +30788,76 @@ updated_at = 1790218381
 weight = 0.0
 issue_number = 766
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/766"
+[[task]]
+id = "8d1232ff"
+title = "~/.claude/settings.json の手書き hook が plugin 同梱 hook を二重化する（gauge Stop に続き fugu-router SessionEnd でも再発。手書き側は fail-open）"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+観測（2026-09-24、すべて実測）:
+
+ユーザー報告: SessionEnd hook [${CLAUDE_PLUGIN_ROOT}/bin/fugu-router sync] failed:
+fugu-router: sync_repo is not configured in ~/.fugu-router/config.toml
+
+直接原因:
+  ~/.fugu-router/config.toml に store_file / playbook_file の 2 キーしか無く、
+  sync_repo が未設定だった。crates/fugu-router/src/main.rs:1211 の
+  cfg.sync_repo.as_deref().ok_or_else(...) がここで Err を返す。
+  ~/.fugu-router/sync-error.json に at=1790218456 で detail が記録されていた
+  （syncstate::record 経由。durable trace の仕組み自体は正しく動いていた）。
+
+同時に観測した本体の問題 — 手書き hook による二重化:
+  ~/.claude/settings.json の hooks.SessionEnd に、plugin の hooks.json と
+  同じ仕事をする生の git ワンライナーが書かれていた:
+    cd "$HOME/.fugu-router/sync" && git pull --rebase --autostash >/dev/null 2>&1;
+    git add -A >/dev/null 2>&1; git diff --cached --quiet || git commit -q -m ...
+    >/dev/null 2>&1; git push -q >/dev/null 2>&1; true
+
+  この手書き側には 3 つの欠陥がある:
+  (1) fail-open。全コマンドが >/dev/null 2>&1 で、チェーンが ; true で終わる。
+      どの git が落ちても成功と区別できない。CLAUDE.md 4/5 が名指しする形そのもの。
+      plugin 側は失敗を syncstate へ記録し UserPromptSubmit で surface する
+      （main.rs:509 で実際に消費されている。確認済み）。
+  (2) 順序が逆。pull を commit より先に打つ。main.rs:1240 付近のコメントが
+      「store files は sync_dir の中にあるので record のたびに未コミット変更が残り、
+      その状態で pull すると abort する。これが 34 日間 sync が黙って止まっていた原因」
+      と明記している当の順序。--autostash は緩和にすぎない。
+  (3) 同じ SessionEnd で plugin hook と同じ git dir を同時に叩くので index.lock で
+      競合しうる。負けた側が手書き hook なら (1) により無音で消える。
+
+  sync/ の commit log は "fugu-router sync <epoch>" だが、これは両者で同一の
+  メッセージ書式（main.rs:1394 と手書き側が一致）。plugin の sync は
+  sync_repo 未設定で必ず 1211 行目で落ちていたので、既存 commit はすべて
+  手書き hook が作ったもの。memory の「this Mac uses a raw git hook」と一致する。
+
+適用した修正:
+  1. ~/.fugu-router/config.toml に sync_repo（origin URL）と sync_dir
+     （既存 clone の ~/.fugu-router/sync）を追加。store_file / playbook_file は
+     既に同じ場所を指しているので移動は発生しない。
+  2. 検証（実測）: deployed binary 0.1.28 で fugu-router sync を実行
+     -> "pulling from remote... / pull done. / nothing to push" exit=0、
+     sync-error.json は syncstate::clear() により消滅。
+  3. 検証後に settings.json の hooks.SessionEnd を削除（hooks は {} になった）。
+     JSON parse OK / hooks 以外は backup と完全一致（dict 比較 True）/
+     fugu-router と gauge の enabledPlugins 維持 / .githooks deny 20 件維持。
+     backup: ~/.claude/settings.json.bak-20260924-gauge-hook
+
+done_criteria:
+  (1) [済] fugu-router sync が exit 0 で通り、SessionEnd の hook 失敗が消えること。
+  (2) [未] 手書き global hook が plugin 同梱 hook を二重化していないかを検出する
+      手段があること。本日 1 日で gauge Stop（84b7bca0）と fugu-router SessionEnd の
+      2 件が出た。~/.claude/settings.json の hooks と全 enabled plugin の
+      hooks.json を突き合わせ、同じ event に同じ仕事の entry が並んでいたら
+      報告する check が要る。これは repo 外の設定を読むので harness-status
+      あたりが妥当だが、置き場所は未決定。
+
+関連: 84b7bca0（同日の gauge Stop hook。あちらは worktree 絶対パスを
+repo 外の永続設定へ書いた件で、軸が違う）"""
+created_at = 1790218655
+updated_at = 1790218655
+weight = 0.0
+issue_number = 767
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/767"

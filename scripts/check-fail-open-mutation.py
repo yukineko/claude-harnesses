@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Adversarial fail-open mutation harness for the 6 GATE crates.
+"""Adversarial fail-open mutation harness for the 7 GATE crates.
 
 The other fail-open defenses in this repo are STATIC: `check-fail-open.py`
 greps for known swallow-shapes; code review reads doc comments and asserts
@@ -10,8 +10,9 @@ is exactly the unverified *judgment* the repo's top-level doctrine (see
 CLAUDE.md §2, "判断は予測にすぎない") warns against substituting for an
 observed fact.
 
-This script is the missing DYNAMIC check: for each of the 6 GATE crates
-(blastguard / propguard / specguard / stuckguard / mutategate / overwatch) it
+This script is the missing DYNAMIC check: for each of the 7 GATE crates
+(blastguard / propguard / specguard / stuckguard / mutategate / overwatch /
+parallelguard) it
 
   1. applies one concrete, mechanical fail-open mutation to a real source
      file (a literal old-string -> new-string replacement, applied
@@ -44,7 +45,7 @@ Usage:
   python3 scripts/check-fail-open-mutation.py --crate mutategate   # one crate only
   python3 scripts/check-fail-open-mutation.py --keep-going         # don't stop at first NOT-CAUGHT
 
-GATE_CRATES here is one more hardcoded copy of the canonical 6-crate list
+GATE_CRATES here is one more hardcoded copy of the canonical 7-crate list
 (unavoidable: this is a standalone Python script, not Rust, so it cannot
 `pub use harness_core::fleet::GATE_CRATES`). It is registered as an "exact"
 source in `scripts/check-gate-crates-sync.py`'s SOURCES list so drift between
@@ -59,7 +60,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 
-# The canonical 6 GATE crates (see crates/harness-core/src/fleet.rs and
+# The canonical 7 GATE crates (see crates/harness-core/src/fleet.rs and
 # scripts/check-gate-crates-sync.py). Kept as a plain, greppable tuple of
 # string literals — see check-gate-crates-sync.py's SOURCES registration.
 GATE_CRATES = (

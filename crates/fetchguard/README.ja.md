@@ -45,6 +45,11 @@ fetchguard 単体を「prompt-injection 防御は閉じている」と読んで�
   だった場合 → **undecidable** として扱い、警告を出す（判定不能 = untrusted）。
 - スキャン処理自体が panic した場合も、`fetchguard::gate::analyse` の
   panic barrier が同じ警告に fail-closed する。
+- stdin が空でないのに hook payload として parse できない場合も、
+  tool_response は一度もスキャンされていないので沈黙せず
+  `fetchguard::gate::unreadable_payload_warning` の警告を出す
+  （沈黙は「injection なし」と読まれる）。stdin が完全に空のときだけ沈黙する
+  （tool 呼び出しが何も記述されていない）。
 
 一方、以下は **正当な clean**（警告なし）として明示的に扱う:
 

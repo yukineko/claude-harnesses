@@ -13136,3 +13136,25 @@ notes = """
 created_at = 1787034964
 updated_at = 1790252188
 weight = 0.0
+
+[[task]]
+id = "56991fca"
+title = "taintguard と fetchguard の PreToolUse 入口が parse 不能な payload を沈黙で許可する (blastguard が修正済みのミラーギャップ)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "L5",
+    "scout",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+規範成立(2026-07-21)の後に生まれた2クレートが、blastguard が 6a02670c で直した入口の形をそのまま持って生まれた。PreToolUse で沈黙することは allow を意味する。証拠: crates/taintguard/src/main.rs:74-79 の if let Some(input) = HookInput::parse(and raw) に else 無し、かつ run_hook (判定を持たない hook 専用の exit0 常時経路) に包まれている。同型が crates/fetchguard/src/main.rs:46。修正済みの双子: crates/blastguard/src/main.rs:104-116 が None の腕で emit(Decision::ask(UNREADABLE_PAYLOAD), None) を返す。完了条件: 両クレートが None かつ raw 非空のとき blastguard と同じ ask/警告を出し、壊れた JSON を実バイナリに流すテストが沈黙ではなく decision 行を観測する。あわせて判定を持つ3サブコマンドを run_hook から harness_core::gate::run::run_guarded へ移す。
+
+2026-09-24 flow: fetchguard 半分を修正 (54283a50, merge bf3cb1a7)。独立 agent (sonnet) のテスト tests/unreadable_payload.rs を修正前に RED 3 件観測→GREEN 4 件。taintguard 半分は crate 撤去 (0521d013) で対象消滅。run_hook→run_guarded 移行は run_guarded が Stop 専用形のため行わず、別 item に分離。"""
+created_at = 1785879181
+updated_at = 1790252365
+weight = 0.0
+issue_number = 133
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/133"

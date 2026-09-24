@@ -252,7 +252,7 @@ class DriftDetection(unittest.TestCase):
             self.assertNotIn("overwatch", by_path["docs/OVERVIEW.md"])
 
     def test_fail_open_mutation_script_missing_a_crate_is_detected(self):
-        """scripts/check-fail-open-mutation.py hardcodes the same 6-crate list
+        """scripts/check-fail-open-mutation.py hardcodes the same 7-crate list
         (it cannot `pub use` the Rust constant, being a standalone Python
         script) so it is tracked here too; a dropped crate must be detected,
         not silently skip that crate's fail-open mutation coverage."""
@@ -264,7 +264,7 @@ class DriftDetection(unittest.TestCase):
             self.assertNotIn("mutategate", by_path["scripts/check-fail-open-mutation.py"])
 
     def test_fail_open_scanner_missing_a_crate_is_detected(self):
-        """scripts/check-fail-open.py hardcodes the same 6-crate list as its own
+        """scripts/check-fail-open.py hardcodes the same 7-crate list as its own
         merge-blocking scan scope (a fail-open here would silently drop a real
         GATE crate from fail-open enforcement). Found as an untracked 9th copy
         (docs/gate-taxonomy.md, backlog bb667ce1) and is now tracked here too."""
@@ -340,9 +340,12 @@ class DriftDetection(unittest.TestCase):
 
     def test_rollout_hint_missing_a_crate_is_detected(self):
         """Regression: check-plugin-rollout.py's GATE list shipped for a while
-        listing only 5 of the 6 GATE crates (specguard was missing), telling the
-        reader a plain rollout was fine for a crate rollout-plugins.sh rejects.
-        Nothing caught it because it wasn't a tracked source. It is now."""
+        listing only 5 of the 6 GATE crates (gate-count-historical: 6 was the
+        count at the time; rewriting it to today's number would falsify the
+        history this sentence exists to record) — specguard was missing, telling
+        the reader a plain rollout was fine for a crate rollout-plugins.sh
+        rejects. Nothing caught it because it wasn't a tracked source. It is
+        now."""
         with tempfile.TemporaryDirectory() as tmp:
             repo = _make_fixture_repo(Path(tmp), hint_missing=("specguard",))
             ok, canonical, parsed = cgcs.check(repo=str(repo))
@@ -734,6 +737,119 @@ class DriftDetection(unittest.TestCase):
                 os.chdir(cwd)
             self.assertEqual(rc, 1)
 
+
+
+class ProseCountDriftTest(unittest.TestCase):
+    """The prose that COUNTS the GATE crates must agree with the set itself.
+
+    `check()` compares the extracted SETS, so a sentence saying "the 6 GATE
+    crates" next to a 7-element tuple is invisible to it. That is the drift
+    actually observed on 2026-09-24: eight sentences across four tracked
+    sources still said 6 while every literal held 7, and one of them
+    enumerated the six names with `parallelguard` missing. A reader trusting
+    the prose would have concluded a real GATE crate was out of scope.
+
+    The injections below plant a wrong count; the controls are what stop the
+    checker from degenerating into "flag every digit near the word crate".
+    """
+
+    def _canonical(self):
+        _ok, canonical, _parsed = cgcs.check(repo=str(REPO_ROOT))
+        self.assertIsNotNone(canonical, "canonical set must parse from the real repo")
+        return canonical
+
+    # -- injections ---------------------------------------------------------
+
+    def test_a_stale_count_in_tracked_prose_is_reported(self):
+        canonical = self._canonical()
+        stale = len(canonical) - 1
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / "scripts").mkdir(parents=True)
+            target = repo / "scripts" / "planted.py"
+            target.write_text(
+                "# harness for the %d GATE crates\n" % stale, encoding="utf-8"
+            )
+            hits = cgcs.prose_count_claims(
+                str(repo), canonical, sources=[], extra_paths=("scripts/planted.py",)
+            )
+        self.assertEqual(len(hits), 1, "a stale prose count must be reported, got %r" % (hits,))
+        self.assertEqual(hits[0][1], 1)
+        self.assertEqual(hits[0][2], stale)
+
+    def test_a_stale_hyphenated_count_is_reported(self):
+        canonical = self._canonical()
+        stale = len(canonical) - 1
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / "scripts").mkdir(parents=True)
+            (repo / "scripts" / "planted.py").write_text(
+                "# hardcodes the same %d-crate list as everyone else\n" % stale,
+                encoding="utf-8",
+            )
+            hits = cgcs.prose_count_claims(
+                str(repo), canonical, sources=[], extra_paths=("scripts/planted.py",)
+            )
+        self.assertEqual(len(hits), 1, "the hyphenated spelling must be caught too")
+        self.assertEqual(hits[0][2], stale)
+
+    # -- controls -----------------------------------------------------------
+
+    def test_a_correct_count_is_not_reported(self):
+        canonical = self._canonical()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / "scripts").mkdir(parents=True)
+            (repo / "scripts" / "planted.py").write_text(
+                "# harness for the %d GATE crates\n" % len(canonical), encoding="utf-8"
+            )
+            hits = cgcs.prose_count_claims(
+                str(repo), canonical, sources=[], extra_paths=("scripts/planted.py",)
+            )
+        self.assertEqual(hits, [], "a correct count must not be flagged")
+
+    def test_a_marked_historical_count_is_exempt(self):
+        canonical = self._canonical()
+        stale = len(canonical) - 1
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / "scripts").mkdir(parents=True)
+            (repo / "scripts" / "planted.py").write_text(
+                "# regression: shipped listing only 5 of the %d GATE crates  "
+                "# %s\n" % (stale, cgcs._PROSE_COUNT_EXEMPT),
+                encoding="utf-8",
+            )
+            hits = cgcs.prose_count_claims(
+                str(repo), canonical, sources=[], extra_paths=("scripts/planted.py",)
+            )
+        self.assertEqual(hits, [], "a marked historical statement must not be rewritten")
+
+    def test_unrelated_numbers_near_the_word_crate_are_not_reported(self):
+        canonical = self._canonical()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / "scripts").mkdir(parents=True)
+            (repo / "scripts" / "planted.py").write_text(
+                "# 39 crates live under crates/; 3 of them ship no binary\n"
+                "# GATE_CRATES has 7 entries but this sentence counts nothing\n",
+                encoding="utf-8",
+            )
+            hits = cgcs.prose_count_claims(
+                str(repo), canonical, sources=[], extra_paths=("scripts/planted.py",)
+            )
+        self.assertEqual(hits, [], "the pattern must not fire on any nearby digit")
+
+    # -- the real repo ------------------------------------------------------
+
+    def test_the_real_repo_prose_agrees_with_the_real_set(self):
+        canonical = self._canonical()
+        hits = cgcs.prose_count_claims(str(REPO_ROOT), canonical)
+        self.assertEqual(
+            hits,
+            [],
+            "tracked prose miscounts the GATE crates: %s"
+            % "; ".join("%s:%d claims %d" % (h[0], h[1], h[2]) for h in hits),
+        )
 
 if __name__ == "__main__":
     unittest.main()

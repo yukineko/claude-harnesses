@@ -1718,9 +1718,13 @@ Concrete symptom: taintguard's refusal says the turn consumed untrusted-provenan
 
 Shape: each gate carries an addressable protection statement (asset, adversary, grounds) that is quotable by the README so check-doc-claims.py can pin it to the code, and that a user can read WITHOUT triggering the gate. taintguard 0.1.9 is doing this for itself first; this item is the generalisation across the gate fleet.
 
-Done when: every gate crate and every scripts/check-*.py exposes a protection statement naming asset and adversary, gate-taxonomy.md gains that column, and the statement is machine-pinned rather than prose that can drift."""
+Done when: every gate crate and every scripts/check-*.py exposes a protection statement naming asset and adversary, gate-taxonomy.md gains that column, and the statement is machine-pinned rather than prose that can drift.
+
+2026-09-24 調査: 未実装を確認。提案形式 PROTECTS/AGAINST/GROUNDS (Rust: harness_core::gate::Protection const + --protects、Python: PROTECTION dict)、専用 scripts/check-gate-protection.py で taxonomy 列と逐語一致・ratchet baseline で段階展開。ユーザー裁定待ち: Q1 gate の母集合、Q2 拒否メッセージへの表示方法。
+
+USER RULING 2026-09-24: Q1=新しい正典リスト (harness_core BLOCKING_GATES + scripts/check-* 全件と照合、ratchet baseline で PENDING 表示)。Q2=<gate> --protects で全文、拒否メッセージには 1 行要約。"""
 created_at = 1785876697
-updated_at = 1785876697
+updated_at = 1790252679
 weight = 0.0
 issue_number = 130
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/130"
@@ -1754,31 +1758,14 @@ taintguard 0.1.9 builds this gate-locally first, in a record shape close enough 
 
 Done when: at least three gates emit outcome records, one readout prints per-gate comply/override/escalate rates with reason clustering, and every number it reports carries its command, revision and date per the CLAUDE.md measurement rule.
 
-2026-09-24 現況調査 (main db9deefb): ledger は未実装。前提の 'taintguard 0.1.9 が gate-local に先行' は taintguard 撤去 (0521d013) で失効。Stop gate (donegate/tdd/reviewgate) は ~/.<gate>/state/log.jsonl に blocked / skip_consumed(理由付き) / giveup を既に記録している。設計判断待ち: (Q1) override の観測方法 (明示記録のみ vs 後続の成功から推定)、giveup の独立バケット化、(Q2) 読み時導出 (overwatch gate-outcomes) vs 新 store。"""
+2026-09-24 現況調査 (main db9deefb): ledger は未実装。前提の 'taintguard 0.1.9 が gate-local に先行' は taintguard 撤去 (0521d013) で失効。Stop gate (donegate/tdd/reviewgate) は ~/.<gate>/state/log.jsonl に blocked / skip_consumed(理由付き) / giveup を既に記録している。設計判断待ち: (Q1) override の観測方法 (明示記録のみ vs 後続の成功から推定)、giveup の独立バケット化、(Q2) 読み時導出 (overwatch gate-outcomes) vs 新 store。
+
+USER RULING 2026-09-24: Q1=明示記録のみ (OVERRIDDEN=skip_consumed, COMPLIED=同 session の後続 green, 後続なし=UNRESOLVED)。Q2=読み時導出 (overwatch gate-outcomes、新 store 無し)。giveup は独立バケット『上限による解放』。ESCALATED は n/a。"""
 created_at = 1785876708
-updated_at = 1790252259
+updated_at = 1790252316
 weight = 0.0
 issue_number = 131
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/131"
-
-[[task]]
-id = "56991fca"
-title = "taintguard と fetchguard の PreToolUse 入口が parse 不能な payload を沈黙で許可する (blastguard が修正済みのミラーギャップ)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "L5",
-    "scout",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "規範成立(2026-07-21)の後に生まれた2クレートが、blastguard が 6a02670c で直した入口の形をそのまま持って生まれた。PreToolUse で沈黙することは allow を意味する。証拠: crates/taintguard/src/main.rs:74-79 の if let Some(input) = HookInput::parse(and raw) に else 無し、かつ run_hook (判定を持たない hook 専用の exit0 常時経路) に包まれている。同型が crates/fetchguard/src/main.rs:46。修正済みの双子: crates/blastguard/src/main.rs:104-116 が None の腕で emit(Decision::ask(UNREADABLE_PAYLOAD), None) を返す。完了条件: 両クレートが None かつ raw 非空のとき blastguard と同じ ask/警告を出し、壊れた JSON を実バイナリに流すテストが沈黙ではなく decision 行を観測する。あわせて判定を持つ3サブコマンドを run_hook から harness_core::gate::run::run_guarded へ移す。"
-created_at = 1785879181
-updated_at = 1785879181
-weight = 0.0
-issue_number = 133
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/133"
 
 [[task]]
 id = "034b6620"
@@ -13052,9 +13039,12 @@ project_unresolved = false
 tags = ["p1"]
 touched_files = []
 status = "pending"
-notes = "実測 2026-09-13、測定点 36e3f960。本セッション (2444be10、authoring は worktree session-2444be10) の停止が scripts/stop-verify-worktree.py によりブロックされた。逐語: Do not stop yet: this turn is ending on the MAIN working tree with uncommitted changes。/ ところが main の dirty は私のものではない。git status --short は M .backlog/tasks.toml のみを返し、git diff は 28 行の挿入だけで削除ゼロ、追加された task は id 7357bc96 (プラグイン35件の配備バイナリが harness-core 0.2.17 のまま) と id 73b167d3 (tdd の Stop hook がキャッシュ内では実行不可能な復旧手順を案内している) の 2 件。どちらも私の起票ではない (本セッションの起票 13 件はすべて別 id)。created_at は 1789279126 と 1789279127 で、本セッション開始 1789273597 の約 5500 秒後。つまり別セッションが main の作業ツリーに直接書いた未コミット変更である。/ CLAUDE.md 第8節はこの形を明示的に予告している: ゲート (donegate / reviewgate / precommit-audit) が他セッションの変更を自分のものとして要求してきたら、それは帰属のバグであって自分の不備ではない。共有 skip ファイルで黙らせず、記録して報告する。本起票がその報告である。/ 構造的原因の候補 (未確定): このハーネスでは Bash ツールの cwd が毎回 main へリセットされる (観測: 各コマンド後に Shell cwd was reset to /Users/yuki/src/harness と表示される)。したがって authoring を worktree で行っていても、hook から見たセッションの cwd は常に main である。ゲートは セッションが main ツリー上にいる を真と判定し、そこに他セッションの dirty があれば block する。ゲートのロジック自体は正しく fail-closed で、bounded allow (stop_hook_active) も持つので trap はしない。誤っているのは dirty の帰属を見ていない点だけである。/ 判定不能なので両方の読み: (a) 実在の欠陥 = dirty なパスが当セッションの authoring 範囲に属するかを見ずに block している。(b) 意図的 = main が dirty であること自体が誰の責任であれ異常なので、誰が停止しようと止めるのが正しい (共有ツリーの汚れを可視化する設計)。見分け方: 第8節の文言 ゲートが他セッションの変更を自分のものとして要求してきたら帰属のバグ を正典として読むなら (a)。/ なお私は他セッションの未コミット変更を commit しない (marketplace 系で git add -A が他人の WIP を壊した既知事例がある)。共有 skip ファイルも使わない (一度だけ消費され他セッションの正当なゲートを素通りさせる)。"
+notes = """
+実測 2026-09-13、測定点 36e3f960。本セッション (2444be10、authoring は worktree session-2444be10) の停止が scripts/stop-verify-worktree.py によりブロックされた。逐語: Do not stop yet: this turn is ending on the MAIN working tree with uncommitted changes。/ ところが main の dirty は私のものではない。git status --short は M .backlog/tasks.toml のみを返し、git diff は 28 行の挿入だけで削除ゼロ、追加された task は id 7357bc96 (プラグイン35件の配備バイナリが harness-core 0.2.17 のまま) と id 73b167d3 (tdd の Stop hook がキャッシュ内では実行不可能な復旧手順を案内している) の 2 件。どちらも私の起票ではない (本セッションの起票 13 件はすべて別 id)。created_at は 1789279126 と 1789279127 で、本セッション開始 1789273597 の約 5500 秒後。つまり別セッションが main の作業ツリーに直接書いた未コミット変更である。/ CLAUDE.md 第8節はこの形を明示的に予告している: ゲート (donegate / reviewgate / precommit-audit) が他セッションの変更を自分のものとして要求してきたら、それは帰属のバグであって自分の不備ではない。共有 skip ファイルで黙らせず、記録して報告する。本起票がその報告である。/ 構造的原因の候補 (未確定): このハーネスでは Bash ツールの cwd が毎回 main へリセットされる (観測: 各コマンド後に Shell cwd was reset to /Users/yuki/src/harness と表示される)。したがって authoring を worktree で行っていても、hook から見たセッションの cwd は常に main である。ゲートは セッションが main ツリー上にいる を真と判定し、そこに他セッションの dirty があれば block する。ゲートのロジック自体は正しく fail-closed で、bounded allow (stop_hook_active) も持つので trap はしない。誤っているのは dirty の帰属を見ていない点だけである。/ 判定不能なので両方の読み: (a) 実在の欠陥 = dirty なパスが当セッションの authoring 範囲に属するかを見ずに block している。(b) 意図的 = main が dirty であること自体が誰の責任であれ異常なので、誰が停止しようと止めるのが正しい (共有ツリーの汚れを可視化する設計)。見分け方: 第8節の文言 ゲートが他セッションの変更を自分のものとして要求してきたら帰属のバグ を正典として読むなら (a)。/ なお私は他セッションの未コミット変更を commit しない (marketplace 系で git add -A が他人の WIP を壊した既知事例がある)。共有 skip ファイルも使わない (一度だけ消費され他セッションの正当なゲートを素通りさせる)。
+
+再観測 2026-09-24 (session 9d349393): 別セッション 2444be10 が main で merge 途中 (MERGE_HEAD 4d503182、UU .backlog/tasks.toml / tasks.done.toml、staged scripts/check-*.py 3 本) の状態で、stop-verify-worktree と reviewgate の両方が私の停止をブロックし、他セッションの merge 差分のレビューを要求した。自分は main を編集していない (私の変更は flow/post-integ-9d349393 にのみ commit)。"""
 created_at = 1789279262
-updated_at = 1789279262
+updated_at = 1790252715
 weight = 0.0
 issue_number = 569
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/569"
@@ -18375,3 +18365,134 @@ updated_at = 1790252257
 weight = 0.0
 issue_number = 780
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/780"
+
+[[task]]
+id = "9418283f"
+title = "fetchguard scan: read_stdin / HookInput::parse / println の panic は run_hook の無音 exit0 に落ちる — scan 全体を catch_unwind で包み unreadable_payload_warning を出す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fetchguard",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-24 56991fca 修正時に判明。run_guarded は Stop 専用 (block+stop_hook_active) なので PostToolUse には不適。案 (b) main.rs で全体を catch_unwind、(c) harness-core に PostToolUse 用 run_guarded_warn を追加し他の warn-only hook でも共有。テスト可能性 (panic 注入経路) を先に確認すること。"
+created_at = 1790252366
+updated_at = 1790252366
+weight = 0.0
+issue_number = 782
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/782"
+
+[[task]]
+id = "70883137"
+title = "blastguard PreToolUse: read_stdin / parse 段の panic が run_hook の無音 exit0 (=allow) に落ちるか確認する (fetchguard 56991fca の双子)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-24 fetchguard 修正 worker の指摘。未検証。PreToolUse では沈黙は allow を意味する。"
+created_at = 1790252367
+updated_at = 1790252367
+weight = 0.0
+issue_number = 783
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/783"
+
+[[task]]
+id = "8dfb169a"
+title = "docs/gate-taxonomy.md の網羅漏れ: blastguard/specguard/stuckguard/overwatch/parallelguard 等の遮断 crate と check-*.py 10 本に行が無い"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "docs",
+    "gate",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-24 3a8e3b73 調査 (main 6bcf2a27) で発見。未修正。 4 本 (claudemd-claims/clippy-lints/hardcoded-secret/raw-io-ratchet) は pre-commit 配線済み。sync check の追加も検討。"
+created_at = 1790252605
+updated_at = 1790252605
+weight = 0.0
+issue_number = 785
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/785"
+
+[[task]]
+id = "864eb3e8"
+title = "docs/gate-taxonomy.md が GitHub Actions workflow (injectguard.yml / fail-open.yml 等) を『本ゲート』と記述し CLAUDE.md §7 の GHA 全面禁止と矛盾する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "docs",
+    "gha-ban",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-24 3a8e3b73 調査 (main 6bcf2a27) で発見。未修正。"
+created_at = 1790252607
+updated_at = 1790252607
+weight = 0.0
+issue_number = 786
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/786"
+
+[[task]]
+id = "94b54358"
+title = "docs/gate-taxonomy.md の trigger 凡例が pre-commit を fail-soft (python3/スクリプト不在で素通り) と書くが、現 .githooks/pre-commit は不在時に block する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "docs",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-24 3a8e3b73 調査 (main 6bcf2a27) で発見。未修正。 docstring と実挙動の不一致 (§4)。"
+created_at = 1790252609
+updated_at = 1790252609
+weight = 0.0
+issue_number = 787
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/787"
+
+[[task]]
+id = "e0342a84"
+title = "scripts/ にあるが .githooks/pre-commit に配線されていない check: check-shell-syntax / check-workspace-tests / check-projkey-store-classification / check-fail-open-mutation — dark gate か非ゲートかを決める"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-24 3a8e3b73 調査 (main 6bcf2a27) で発見。未修正。 fb6b1796 / 7ecf3797 と同型。"
+created_at = 1790252610
+updated_at = 1790252610
+weight = 0.0
+issue_number = 788
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/788"
+
+[[task]]
+id = "30bd7891"
+title = "gate-outcomes の Unresolved (donegate 36%) が『block 後に session が終わった』と『未解決』を区別できない — gate log に session 終了記録が要る"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "overwatch",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-24 26d84958 実装 (e8eab34e) の実データ読み出しで観測。donegate firings 36 / complied 41.7% / overridden 13.9% / released 8.3% / unresolved 36.1%。override 理由はすべて『他セッションの red』= 帰属問題 (233f819c/840c4a17) を指す。"
+created_at = 1790252835
+updated_at = 1790252835
+weight = 0.0
+issue_number = 789
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/789"

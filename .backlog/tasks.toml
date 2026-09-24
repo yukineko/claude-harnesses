@@ -17446,9 +17446,18 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "finding-id:record-audit:audit-convergence file:(none) severity:high | confirmed: 55日前 | regression test: 該当テストなし"
+notes = """
+finding-id:record-audit:audit-convergence file:(none) severity:high | confirmed: 55日前 | regression test: 該当テストなし
+
+--- 2024 cycle-10 の途中終了について ---
+このバッチを回した background agent は stall watchdog により
+"no progress for 600s" で強制終了した。実働は約 11 分で、残りは飢餓状態。
+landed したのは blastguard:tee-truncate と
+blastguard:interpreter-unrecoverable-write の 2 signature だけ (fix 2acee03f)。
+本 item は着手されていない。measured: 何も測っていない。unverified: すべて。
+推測で埋めずに pending のまま残す。"""
 created_at = 1790184320
-updated_at = 1790225388
+updated_at = 1790239210
 weight = 0.0
 issue_number = 720
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/720"
@@ -17490,24 +17499,6 @@ issue_number = 722
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/722"
 
 [[task]]
-id = "15274c94"
-title = "systemic signature recurred 4x across 1 task(s)/2 session(s)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "systemic",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "kind:systemic identifier:blastguard:tee-truncate occurrences:1"
-created_at = 1790184341
-updated_at = 1790225388
-weight = 0.0
-issue_number = 728
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/728"
-
-[[task]]
 id = "1875f626"
 title = "systemic signature recurred 14x across 1 task(s)/4 session(s)"
 project = "/Users/yuki/src/harness"
@@ -17518,30 +17509,21 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "kind:systemic identifier:blastguard:unknown-verb-protected-path occurrences:1"
+notes = """
+kind:systemic identifier:blastguard:unknown-verb-protected-path occurrences:1
+
+--- 2024 cycle-10 の途中終了について ---
+このバッチを回した background agent は stall watchdog により
+"no progress for 600s" で強制終了した。実働は約 11 分で、残りは飢餓状態。
+landed したのは blastguard:tee-truncate と
+blastguard:interpreter-unrecoverable-write の 2 signature だけ (fix 2acee03f)。
+本 item は着手されていない。measured: 何も測っていない。unverified: すべて。
+推測で埋めずに pending のまま残す。"""
 created_at = 1790184342
-updated_at = 1790225388
+updated_at = 1790239210
 weight = 0.0
 issue_number = 729
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/729"
-
-[[task]]
-id = "28f5be7f"
-title = "systemic signature recurred 5x across 1 task(s)/3 session(s)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "systemic",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "kind:systemic identifier:blastguard:interpreter-unrecoverable-write occurrences:1"
-created_at = 1790184344
-updated_at = 1790225388
-weight = 0.0
-issue_number = 730
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/730"
 
 [[task]]
 id = "326edfee"
@@ -18493,3 +18475,143 @@ updated_at = 1790228670
 weight = 0.0
 issue_number = 768
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/768"
+
+[[task]]
+id = "1d2446de"
+title = "gate-bypass ledger が pre-merge-commit を green で通った merge を ungated として記録する (98548fda が 2 重に載り push が blocked)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+観測 (2026-09-24、すべて実測):
+
+python3 scripts/gate-bypass.py --json
+  verdict=outstanding、entries に 98548fda が 2 回。
+  .git/gate-bypassed にも同じ行が 2 行ある。
+  scripts/gate-bypass.py の docstring どおり exit 1 相当で、push が blocked になる。
+
+しかし当の merge は gate を素通りしていない。agent の transcript に残っている
+その merge の出力には pre-merge-commit の全チェックが green で並んでいる:
+  check-doc-claims / check-claudemd-claims OK
+  41 plugins version-consistent、un-bumped なし
+  hardcoded-secret-guard clean、raw-io-ratchet count == baseline (46)
+  GATE_CRATES consistent、launcher-exec-bit 39/39
+  clippy-lints: checking blastguard -> clean
+  main-tree-guard: allowed - Merge in progress (declared by .githooks/pre-merge-commit
+    and corroborated by GIT_REFLOG_ACTION)
+  check-test-weakening: no unacknowledged test weakening
+コマンドは素の git merge --no-ff で、--no-verify は付いていない
+(transcript を grep して確認した。付いていたら pre-merge-commit の出力自体が出ない)。
+
+つまり .githooks/post-merge が「pre-commit が certify した tree hash」と
+実際に commit された tree を比べる仕組みで、gate が実際に走って green だったのに
+不一致と判定している。.githooks/post-commit の header はこの仕組みを
+  match   -> gate を通った。sentinel を消費して黙る
+  no match -> 検査されていない。ledger へ追記
+と書いている。今回は「検査された」が「no match」になっている。
+
+対照 (同じ session の同じ main tree での merge):
+  9db95175 (conflict 解決後の git commit 経由)  -> ledger に載っていない
+  f6add075 (素の git merge --no-ff)            -> ledger に載っていない
+  98548fda (素の git merge --no-ff)            -> 2 回載っている
+f6add075 と 98548fda は同じコマンド形なので、コマンドの違いでは説明できない。
+差分の候補は「触ったファイルの種類」(前者は .backlog/tasks.toml のみ、後者は
+crates/blastguard/src/detect.rs + version 3 点 + Cargo.lock) と
+「clippy が実際に走ったかどうか」(前者は nothing to check、後者は blastguard を checking)。
+どちらが効いているかは未検証。ここから先は推測になるので測っていない。
+
+なぜ重要か: これは 4. が最も嫌う向きの逆、すなわち「検査したのに検査していないと
+記録する」偽陽性である。fail-open ではないので安全側ではあるが、
+偽陽性が常態化すると ledger が「いつもの赤」になり、本物の --no-verify が
+紛れても誰も見なくなる。ledger の価値はそこにしかないので、偽陽性は実害がある。
+2 重登録も別軸の bug (1 merge = 1 entry のはず)。
+
+done_criteria:
+  (1) 同じ形の merge (crate のソースを含む素の git merge --no-ff) を再現させ、
+      post-merge が ledger に書く条件を RED として観測すること。
+      推測ではなく、sentinel の tree hash と commit の tree hash を実際に
+      並べて差を見ること。
+  (2) 1 つの merge が 2 entry になる経路を特定すること。
+  (3) 偽陽性であれば post-merge 側を直す。もし「certify した tree と
+      commit された tree が本当に違う」のなら、それは gate が別の内容を
+      見ていたということなので、偽陽性ではなく pre-merge-commit 側の欠陥として
+      扱うこと。3. に従い、どちらか判定できないうちは ledger を黙らせない。
+
+注意: ledger は scripts/gate-bypass.py からは消せない (--clear を意図的に
+持たない)。green な pre-commit が走ると消える設計なので、次の通常 commit で
+消える見込みだが、それは「原因が直った」ことを意味しない。"""
+created_at = 1790239210
+updated_at = 1790239210
+weight = 0.0
+issue_number = 769
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/769"
+
+[[task]]
+id = "9e8fd854"
+title = "blastguard が heredoc の commit message 本文を command として解析し、ゲートの挙動を記録しようとする commit 自体をブロックする"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+観測 (2026-09-24、実測 2 回。どちらも逐語で宣言済み):
+
+cycle-10 の結果を sink する commit を打とうとして 2 連続でブロックされた。
+コマンドの形は次のとおりで、破壊的な操作は一切含まない:
+
+  git add .backlog/ && git commit -q -F - <<MSG ... MSG
+
+ブロック 1 の逐語:
+  rm disarms a protected gate/config path (~/.claude/settings.json) without
+  writing to it - it controls which hooks, gates or policies run, so blastguard
+  refuses
+
+ブロック 2 の逐語:
+  tee without -a/--append truncates and overwrites its target file(s)
+
+原因: Bash tool はヒアドキュメント本体を含むコマンド文字列全体を渡すので、
+commit message の散文が解析対象に入る。今回ブロックされたのは、
+検証で使った対照コマンドを message 本文に逐語で書いたから。つまり
+「ゲートが正しく動いたことを記録する行為」がそのゲートに止められている。
+
+これは既知クラスの新しい入口である。既存の
+classify-deploy-needle-forcegate (task の散文に deploy needle が入ると
+force-gate される) と同じ「散文をコマンドとして読む」問題だが、
+入口が backlog の notes ではなく git の commit message である点が違う。
+
+実害:
+  (1) ゲートの判定を逐語で記録できない。逐語の記録は 5. が要求しているもの
+      (「黙って迂回せず、見えるところに残す」) なので、これは規範同士が
+      衝突している状態になる。
+  (2) 回避すると message が薄まる。実際この commit では対照コマンドを
+      message から削って ticket 本文へ移した。ticket 側は python の
+      subprocess にリスト引数で渡すので shell を経由せず、同じ文字列が
+      問題なく通る。同じ内容が経路によって通ったり止まったりする。
+  (3) 迂回が「書き換えて通す」なので、5. の「skip 機構を恒常的な迂回に
+      使わない」には触れないが、書き手が学習するのは
+      「ゲートの話を書かない」という誤った適応である。
+
+副次観測: ブロック 2 の理由文 "tee without -a/--append truncates and
+overwrites its target file(s)" は、同じ日に merge した 2acee03f が
+まさに置き換えた旧文言である。つまり稼働中のバイナリは未だ fix 前で、
+repo だけが直っている状態 (rollout していないので当然)。
+memory の rollout-cannot-undark-running-session と整合する。
+
+done_criteria:
+  (1) heredoc 本体 (commit message) をコマンド解析の対象から外すべきか、
+      それとも対象のまま別扱いにすべきかを決めること。
+      判断材料: heredoc 本体に本物のコマンドを埋めて実行させる経路が
+      実在するか。あるなら単純除外は fail-open になるので不可。
+      推測で決めず、実際に到達経路を辿って観測すること。
+  (2) 決めた側を RED 先行で固定すること。除外するなら
+      「heredoc 本体の散文はブロックしない」、しないなら
+      「この形は仕様どおりである」と明記して逐語記録の方法を別に用意する。
+  (3) どちらに倒すにせよ、3. に従い判定不能は制限側に残すこと。"""
+created_at = 1790239305
+updated_at = 1790239305
+weight = 0.0
+issue_number = 770
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/770"

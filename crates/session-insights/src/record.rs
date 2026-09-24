@@ -98,6 +98,18 @@ fn session_models(ctx: &RecordCtx) -> Option<BTreeMap<String, ModelUsage>> {
 /// record is only ever written from a complete aggregate
 /// (`crates/gauge/src/main.rs` `record_hook` refuses an undetermined one), so
 /// there is no under-count to disclose on that path.
+///
+/// That last paragraph was FALSE at file granularity until backlog `fbb3100a`.
+/// `record_hook` did refuse an undetermined aggregate, but a session whose
+/// sub-agent transcripts were only PARTIALLY readable did not produce one:
+/// `harness_core::usage` dropped the individual `Err` and returned a `Known`
+/// under-count, which `record_hook` then accepted and burned into the
+/// canonical record. The guarantee this paragraph asserts therefore rests on
+/// the per-FILE read in `usage::aggregate` / `usage::subagent_usage` folding
+/// its failure into `subagent_scan`, not on `record_hook` alone — see
+/// `crates/harness-core/tests/subagent_file_read_undetermined.rs`, which pins
+/// both directions. Weaken that and this paragraph silently becomes a lie
+/// again.
 fn cost_incompleteness(ctx: &RecordCtx) -> Option<String> {
     let est = estimate_transcript_cost(ctx.transcript_path, ctx.overrides)?;
     match est.complete_cost() {

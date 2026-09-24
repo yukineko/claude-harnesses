@@ -12664,3 +12664,97 @@ updated_at = 1790247475
 weight = 0.0
 issue_number = 734
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/734"
+
+[[task]]
+id = "fbb3100a"
+title = "gauge/harness-core P1+P5: sub-agent transcript と session record の「個別ファイルが読めなかった」が無音で落ち、過少計上が正典 record に焼き込まれる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gauge",
+    "fail-open",
+    "harness-core",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """
+出典: docs/audit-gauge-verdict-paths.md の P1 (CRITICAL) と P5 (MEDIUM-HIGH)。監査日 2026-09-24、測定点 b47f08e3。P1: crates/harness-core/src/usage.rs:191 の if let Ok(sub_text) = std::fs::read_to_string(&file) が個別 sub-agent transcript の read 失敗を捨てる。直上の subagent_files(path) は Determination を返して Undetermined を正しく転送しているので、ディレクトリ粒度だけ fail-closed でファイル粒度が fail-open という同一関数内のミラーギャップである。監査の実測: main transcript 0.0075 ドル + sub-agent 1 体が 270.00 ドルを消費した状態で、対照 (注入なし) は budgetguard が session 270.0075 ドルで {"decision":"block"} を返す。agent-*.jsonl を 1 本だけ chmod 000 (ディレクトリは読める) にすると block が消え session 0.0075 ドルになり、診断はどこにも出ない。第二の対照 (subagents ディレクトリごと chmod 000) では正しく block する。つまり救われないのは「record が書かれなかった」ではなく「record が部分的に書かれた」場合。P5: crates/harness-core/src/session.rs:216-225 が同じ形で個別 record を無音 skip し、gauge report が過少計上する。修正: usage.rs:191 の Err アームを agg.subagent_scan = Determination::undetermined(...) に倒す。受け口の guard と budgetguard 側は監査の対照 3 で動作確認済み。usage.rs:412 の let ... else { continue; } も同時に倒す。同じコミットで crates/session-insights/src/record.rs:97-100 の docstring を直すこと — そこは gauge の保証を根拠に過少計上警告を省略しており、P1 はその前提を反証している。完了条件: 注入で block が消えないことを RED 先行で固定し、注入なしの対照も同時に固定する。
+
+--- 2026-09-24 修正完了 (commit 703e104c) ---
+ticket が指定した修正をそのまま実施し、指定された完了条件で固定した。
+
+倒した 2 箇所:
+  usage.rs aggregate()      個別 read の Err で agg.subagent_scan を
+                            Undetermined にする。残りのファイルは畳み続ける
+                            (総計はどちらにせよ過少なので、marker がその事実を
+                            可視化する役目を負う)
+  usage.rs subagent_usage() map のクロージャからは早期 return できないため
+                            match へ展開し、Undetermined を返すようにした
+
+RED 先行を実測 (crates/harness-core/tests/subagent_file_read_undetermined.rs):
+  修正前: 2 passed / 2 failed
+    one_unreadable_agent_file_makes_the_aggregate_scan_undetermined ... FAILED
+    one_unreadable_agent_file_makes_subagent_usage_undetermined ... FAILED
+    fully_readable_agent_files_keep_the_aggregate_scan_known ... ok
+    fully_readable_agent_files_keep_subagent_usage_known ... ok
+  修正後: 4 passed / 0 failed
+
+ticket の完了条件「注入で block が消えないことを RED 先行で固定し、注入なしの
+対照も同時に固定する」を満たしている。対照は注入と同数用意した。
+さらに注入自体が効いているか (mode 000 でも読めてしまう環境ではないか) を
+テスト内で確認し、効いていなければ黙って通さず panic する。効かない環境で
+assertion が通ってしまうと「検証していないテスト」になるため。
+
+docstring: crates/session-insights/src/record.rs を同じコミットで修正した。
+「gauge の正典 record は完全な aggregate からしか書かれない」という保証が
+実際には本修正に依存していたことを明記した。
+
+docs/audit-gauge-verdict-paths.md の §7 も同じコミットで更新している。
+check-doc-claims が「修正前コードの逐語引用が index と一致しない」として
+正しくブロックしたため。監査時点の記録は理由付き doc-claim-exempt で残した。
+
+テスト: harness-core / session-insights / gauge / budgetguard すべて 0 failed。
+version: harness-core 0.2.29 -> 0.2.30、session-insights 0.2.17 -> 0.2.18 の
+3 ファイル lockstep。41 plugin consistent。
+
+未了 (この ticket の範囲外): rollout していないので稼働中のバイナリはまだ旧版。
+CLAUDE.md 2(a) の「テストは利害のない Agent が書く」は満たしていない —
+実装と同じ assistant がテストも書いた。対照で空虚さは潰したが、同一主体の
+盲点は残る。独立モデルによる再検証を推奨する (元の監査自身も同じ但し書きを
+持っている)。"""
+created_at = 1790185715
+updated_at = 1790248162
+weight = 0.0
+issue_number = 751
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/751"
+
+[[task]]
+id = "d9ced7d3"
+title = "[merge-conflict] merge of condukt/run-20260728-015338-90001/audit-verdict-paths into main held: 0 file(s) [(unknown files)]"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "merge-conflict",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """
+kind:merge-conflict identifier:condukt/run-20260728-015338-90001/audit-verdict-paths/merge-conflict occurrences:1
+
+--- 2026-09-24 調査結果: 解決対象が存在しない (実測) ---
+衝突していたブランチ condukt/run-20260728-015338-90001/audit-verdict-paths は
+既に存在しない (git branch -a で 0 ヒット)。merge すべき対象が無いので、
+この merge-conflict は解決しようがない。
+
+title 自体が "held: 0 file(s) [(unknown files)]" であり、衝突ファイルすら
+記録されていない。橋渡し時点で既に中身の無い記録だった。
+
+7c776a26 と同型 (cycle 11 で同じ結論)。この形が繰り返し現れることは
+7a842862 に転記済み。"""
+created_at = 1790184359
+updated_at = 1790248163
+weight = 0.0
+issue_number = 739
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/739"

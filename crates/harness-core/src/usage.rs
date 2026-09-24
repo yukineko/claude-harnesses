@@ -188,8 +188,27 @@ pub fn aggregate(path: &str) -> Option<Aggregate> {
         match subagent_files(path) {
             Determination::Known(files) => {
                 for file in files {
-                    if let Ok(sub_text) = std::fs::read_to_string(&file) {
-                        ingest(&mut agg, &sub_text, Some(AGENT_SUB), false, false);
+                    match std::fs::read_to_string(&file) {
+                        Ok(sub_text) => {
+                            ingest(&mut agg, &sub_text, Some(AGENT_SUB), false, false);
+                        }
+                        // The directory listing succeeded but this one
+                        // transcript did not read. Dropping it here is the
+                        // more dangerous half of the same defect the
+                        // `Undetermined` arm below guards: a PARTIAL scan
+                        // yields a total that looks exactly like a session
+                        // with less spend, so the under-count silences the
+                        // consumers instead of alerting them. Fold it into
+                        // the same signal rather than continuing, and keep
+                        // folding the remaining files — the totals are an
+                        // under-count either way, and the marker is what
+                        // makes that visible.
+                        Err(e) => {
+                            agg.subagent_scan = Determination::undetermined(format!(
+                                "sub-agent transcript {} could not be read: {e}",
+                                file.display()
+                            ));
+                        }
                     }
                 }
             }
@@ -406,11 +425,27 @@ impl SubAgentUsage {
 /// current time. This does not touch the session-level span from
 /// [`aggregate`], which still comes from the main transcript alone.
 pub fn subagent_usage(main_transcript: &str) -> Determination<Vec<SubAgentUsage>> {
-    subagent_files(main_transcript).map(|files| {
+    let files = match subagent_files(main_transcript) {
+        Determination::Known(files) => files,
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
+    {
         let mut out = Vec::new();
         for file in files {
-            let Ok(text) = std::fs::read_to_string(&file) else {
-                continue;
+            // Same fail-closed contract as the directory listing above: a
+            // transcript that could not be READ is not a transcript that is
+            // absent. Returning the surviving rows here would report a
+            // shorter list as though it were the whole set, which is the
+            // shape `subagent_files` already refuses at directory
+            // granularity.
+            let text = match std::fs::read_to_string(&file) {
+                Ok(text) => text,
+                Err(e) => {
+                    return Determination::undetermined(format!(
+                        "sub-agent transcript {} could not be read: {e}",
+                        file.display()
+                    ))
+                }
             };
             // `track_ts: true` against this FRESH per-file accumulator: the
             // timestamps it collects are this one sub-agent's own activity
@@ -445,8 +480,8 @@ pub fn subagent_usage(main_transcript: &str) -> Determination<Vec<SubAgentUsage>
                 last_activity_at: agg.last_ts,
             });
         }
-        out
-    })
+        Determination::Known(out)
+    }
 }
 
 /// Read `{agentType, description}` from an `agent-<id>.meta.json` sidecar.

@@ -2753,9 +2753,15 @@ fn here_document_layout(segs: &[SeparatedSegment]) -> (Vec<bool>, Option<usize>)
 ///   * the opener segment opens exactly ONE here-document, and its delimiter
 ///     is QUOTED ([`here_document_delimiter_is_quoted`]). With an unquoted
 ///     delimiter the shell runs `$(…)` and backticks in the body;
-///   * the opener's line ENDS right after it (`ends_at_newline`). With
-///     `cat <<'EOF' | sh` or `cat <<'EOF'; x` the next segment is code, and the
-///     body goes to a shell;
+///   * the opener's line ENDS right after it: the segment is ended by a
+///     newline (`ends_at_newline`), and that newline is not escaped by a
+///     trailing backslash. With `cat <<'EOF' | sh` or `cat <<'EOF'; x` the
+///     next segment is code, and the body goes to a shell. The splitter does
+///     not model backslash-newline continuation. So for
+///     `git commit -F - <<'EOF' \` followed by `; rm -rf ~/work`, bash runs the
+///     `rm` on the opener's logical line and the body starts on the line after
+///     it (found by the independent verifier and reproduced in real bash). Any
+///     trailing backslash on the opener segment disqualifies it;
 ///   * the body is CLOSED by an exact delimiter line. An unclosed body is
 ///     undetermined, so it stays analysed;
 ///   * the reader is on [`reads_here_document_as_data`]'s closed list.
@@ -2782,6 +2788,7 @@ fn inert_here_document_body(segs: &[SeparatedSegment]) -> Vec<bool> {
             openers.len() == 1 && segment_closes_here_document(&segs[end - 1].text, &openers[0]);
         if closed
             && seg.ends_at_newline
+            && !seg.text.ends_with('\\')
             && here_document_delimiter_is_quoted(&seg.text)
             && reads_here_document_as_data(&seg.text)
         {
@@ -2804,8 +2811,15 @@ fn inert_here_document_body(segs: &[SeparatedSegment]) -> Vec<bool> {
 ///     later, and reading the body is the only look this gate gets at it.
 ///
 /// The program word must be spelled exactly `git` or `cat`, with no path and
-/// no leading assignment or wrapper. Any `<` or `>` left after the
-/// here-document operator (a redirect, `2>&1`) also disqualifies the reader.
+/// no leading assignment or wrapper. A word left after the here-document
+/// operator that carries shell syntax also disqualifies the reader:
+///   * `<` or `>` (a redirect, `2>&1`);
+///   * a backslash, which may be a line continuation;
+///   * a backtick, `(` or `)` (a substitution);
+///   * `;`, `&` or `|`.
+///
+/// The segment splitter already cuts on unquoted `;`, `&` and `|`, so this is
+/// a second line of defence. It keeps the check independent of that detail.
 /// `backlog add --notes` is not listed because it has no stdin form.
 ///
 /// Every other reader, known or not (bash, sh, zsh, python3, node, perl,
@@ -2825,7 +2839,10 @@ fn reads_here_document_as_data(seg: &str) -> bool {
         words.push(w);
         i += 1;
     }
-    if words.iter().any(|w| w.contains('<') || w.contains('>')) {
+    if words
+        .iter()
+        .any(|w| w.contains(['<', '>', '\\', '`', '(', ')', ';', '&', '|']))
+    {
         return false;
     }
     match words.first().copied() {

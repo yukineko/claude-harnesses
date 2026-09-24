@@ -1752,9 +1752,11 @@ Shape: every firing records one of COMPLIED / OVERRIDDEN (with the human reason)
 
 taintguard 0.1.9 builds this gate-locally first, in a record shape close enough to overwatch's that lifting it is mechanical. This item is that lift plus the other gates.
 
-Done when: at least three gates emit outcome records, one readout prints per-gate comply/override/escalate rates with reason clustering, and every number it reports carries its command, revision and date per the CLAUDE.md measurement rule."""
+Done when: at least three gates emit outcome records, one readout prints per-gate comply/override/escalate rates with reason clustering, and every number it reports carries its command, revision and date per the CLAUDE.md measurement rule.
+
+2026-09-24 現況調査 (main db9deefb): ledger は未実装。前提の 'taintguard 0.1.9 が gate-local に先行' は taintguard 撤去 (0521d013) で失効。Stop gate (donegate/tdd/reviewgate) は ~/.<gate>/state/log.jsonl に blocked / skip_consumed(理由付き) / giveup を既に記録している。設計判断待ち: (Q1) override の観測方法 (明示記録のみ vs 後続の成功から推定)、giveup の独立バケット化、(Q2) 読み時導出 (overwatch gate-outcomes) vs 新 store。"""
 created_at = 1785876708
-updated_at = 1785876708
+updated_at = 1790252259
 weight = 0.0
 issue_number = 131
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/131"
@@ -18280,3 +18282,96 @@ updated_at = 1790251833
 weight = 0.0
 issue_number = 774
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/774"
+
+[[task]]
+id = "f738a79a"
+title = "blastguard record_violation が overwatch::store::append_violation の失敗を let _ = で捨て、失われた violation 記録が報告されない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-24 26d84958 の現況調査 (main db9deefb) で発見。未修正・未検証。 crates/blastguard/src/main.rs record_violation。condukt gatelog の『失われた記録は報告する』規範と非対称。"
+created_at = 1790252252
+updated_at = 1790252252
+weight = 0.0
+issue_number = 776
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/776"
+
+[[task]]
+id = "e7c42def"
+title = "Stop gate の ~/.<gate>/state/log.jsonl のスキーマ不統一: verdict 行は session+ts、skip/concession 行は session_id で ts 無し。project/cwd も無い"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-24 26d84958 の現況調査 (main db9deefb) で発見。未修正・未検証。 donegate/tdd/reviewgate。per-project の gate 指標 (26d84958) の制約になる。"
+created_at = 1790252253
+updated_at = 1790252253
+weight = 0.0
+issue_number = 777
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/777"
+
+[[task]]
+id = "260f0774"
+title = "blastguard の Deny / Ask の結末が観測できない: Deny は PostToolUse を生まず、Ask の人間拒否は『何も観測されない』と区別不能"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "gate",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-24 26d84958 の現況調査 (main db9deefb) で発見。未修正・未検証。 approve.rs の pending→promote は承認しか観測しない。26d84958 の outcome ledger に blastguard を載せる前提条件。"
+created_at = 1790252255
+updated_at = 1790252255
+weight = 0.0
+issue_number = 778
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/778"
+
+[[task]]
+id = "65c56191"
+title = "guard-maintree-bash.py が read-only の 'git log … | head; c=$(git log …)' を main-tree mutation として block する (コマンド置換の誤検知)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-24 26d84958 の現況調査 (main db9deefb) で発見。未修正・未検証。 subagent が main で read-only 調査中に踏んだ。1ab31978 (改行分割) とは別の経路。未再現。"
+created_at = 1790252256
+updated_at = 1790252256
+weight = 0.0
+issue_number = 779
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/779"
+
+[[task]]
+id = "39040552"
+title = "propguard は log.jsonl に no-criteria を 1399 件記録し firing が 0 件 — criteria が供給されておらず実質一度も判定していない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "propguard",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-24 26d84958 の現況調査 (main db9deefb) で発見。未修正・未検証。 ~/.propguard/state/log.jsonl を集計。criteria 供給経路の欠落か、意図された休眠かは未判定。"
+created_at = 1790252257
+updated_at = 1790252257
+weight = 0.0
+issue_number = 780
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/780"

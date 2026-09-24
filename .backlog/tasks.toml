@@ -30646,3 +30646,67 @@ updated_at = 1790215661
 weight = 0.0
 issue_number = 762
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/762"
+
+[[task]]
+id = "9fdb49d8"
+title = "guard-maintree-bash.py の SEPARATORS に改行が無く、複数行 Bash の 2 行目以降が 1 行目の mutator の operand として吸収される (main tree 外の cp/rm も refuse)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "worktree-hygiene",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-24、測定点 32af5418。~/.claude/settings.json のバックアップを取ろうとして
+ブロックされ、切り分けた結果。
+
+逐語のブロック文言:
+  Refused: `cp /Users/yuki/.claude/settings.json /Users/yuki/.claude/settings.json.bak-20260924-gauge-hook`
+  mutates this project's MAIN working tree.
+しかし source も destination も /Users/yuki/.claude/ 配下で、main tree の外である。
+
+機構 (guard を直接 stdin JSON で叩いて確定させた。コマンドは実行していない):
+  scripts/guard-maintree-bash.py:299 の lexer は
+    shlex.shlex(command, posix=True, punctuation_chars="();<>|&(改行)(復帰)")
+  で改行を独立したトークンとして切り出す。ところが 75 行目の
+    SEPARATORS = frozenset({";", "&&", "||", "|", "&", ";;", "|&", "(", ")"})
+  に改行が入っていない。_candidate_targets の segment 分割 (336 行目 `if tok in SEPARATORS`)
+  は改行を separator と認識せず else 節へ落とすため、**改行は segment を切らない**。
+  結果、複数行コマンドの 2 行目以降の語が、1 行目の mutator の operand として
+  吸収される。TARGET_ALL に cp/rm/mv/touch/tee/mkdir 等が入っているので、
+  それらの後続行の語が main tree root 相対で解決され、not-ignored として refuse される。
+
+決定的コントロール (同一の cp を separator だけ変えて 5 通り):
+  改行区切り                                        -> REFUSE
+  ; 区切り                                          -> allow
+  && 区切り                                         -> allow
+  改行 + 無害な語 1 つ (ls)                          -> REFUSE
+  rm /tmp/zzz (改行) echo done                      -> REFUSE (対象は /tmp なのに)
+cp 単体 (1 行) は allow。つまり cp の target 判定自体は正しく、改行の扱いだけが原因。
+
+影響範囲: 複数行の Bash コマンドに mutator が 1 つでも含まれると、対象が main tree の
+外 (worktree / /tmp / ~/.claude) であっても refuse される。agent は複数行 Bash を
+日常的に書くので、誤検知の頻度は高い。実際このセッションでは worktree 作業中に
+2 回踏んだ。
+
+向きについて: これは over-block であり CLAUDE.md 第3節の安全側ではある。ただし
+『判定不能だから block』ではなく『パースを誤って main tree だと判定した』であって、
+誤検知は第5節が警告する迂回圧力 (共有 skip ファイル・環境変数での無効化) を生む。
+実際このセッションでも separator を変える回避が可能だと分かってしまっている
+(; や && なら通る)。誤検知を放置すると、その回避が常態化する。
+
+修正案: SEPARATORS に改行と復帰を加える。lexer が既に独立トークンとして出している
+ので 1 行で済む。回帰テストは上のコントロール 5 本をそのまま使える
+(特に『rm /tmp/zzz + 改行 + echo done』は対象が main tree 外であることが自明)。
+
+done_criteria: 複数行コマンドで、mutator の対象がすべて main tree 外なら allow される。
+かつ 2 行目に main tree 内への実際の mutation を置いた場合は従来どおり refuse される
+(改行を separator にしたことで検出漏れが生まれないことを RED で先に観測する)。"""
+created_at = 1790217907
+updated_at = 1790217907
+weight = 0.0
+issue_number = 763
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/763"

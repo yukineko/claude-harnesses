@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Two real processes racing `condukt state claim-task` for the SAME hashkey
 //! from DIFFERENT runs must never both succeed: exactly one must claim it
 //! (exit 0) and the other must be hard-skipped (exit 1). This is the

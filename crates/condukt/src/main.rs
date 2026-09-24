@@ -7,6 +7,8 @@
 //! analysis, manage the git-worktree lifecycle, track run state, and gate
 //! completion. Hooks (restore/statusline) never break a turn — they exit 0.
 
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+
 mod adversarial;
 mod checkpoint;
 mod circuit;

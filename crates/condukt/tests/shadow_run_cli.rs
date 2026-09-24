@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Integration coverage for the opt-in shadow-run CLI (`condukt shadow-run
 //! ...`). Exercises the enable/disable/status gate end-to-end against the
 //! real binary, and confirms `exec` refuses to fire while disabled — the

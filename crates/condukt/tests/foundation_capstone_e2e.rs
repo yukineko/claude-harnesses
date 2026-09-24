@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Phase-7 "foundation capstone" end-to-end test: proves the autonomy-safety
 //! stack COMPOSES in a single unattended run driven entirely through the REAL
 //! `condukt` binary (`env!("CARGO_BIN_EXE_condukt")`), in one isolated `$HOME`

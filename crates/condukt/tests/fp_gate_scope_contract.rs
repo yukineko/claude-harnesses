@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Black-box contract tests for the SCOPE decision of the Fail→Pass
 //! reproduction-oracle completion gate that guards
 //! `condukt state set --status verified`.

@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! End-to-end coverage for `condukt state reconcile`'s cross-run duplicate
 //! hashkey completion detection (§4.6c). Spawns the real binary against an
 //! isolated HOME so it exercises the actual CLI, the on-disk run-state JSON,

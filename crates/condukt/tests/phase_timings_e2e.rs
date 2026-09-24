@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! End-to-end coverage for the per-phase timestamps on `TaskState` and the
 //! `state timings` subcommand. Spawns the real `condukt` binary against an
 //! isolated HOME so it exercises the ACTUAL orchestrator transitions

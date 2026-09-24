@@ -55,6 +55,10 @@ use crate::verdict::Determination;
 /// "I examined this directory" while silently omitting a member is the exact
 /// failure this module exists to prevent.
 pub fn read_dir_entries(dir: &Path) -> Determination<Vec<PathBuf>> {
+    #[cfg(feature = "fault-injection")]
+    if let Some(why) = fault::injected(fault::Entry::ReadDir, &dir.display()) {
+        return Determination::undetermined(why);
+    }
     let iter = match std::fs::read_dir(dir) {
         Ok(iter) => iter,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Determination::known(Vec::new()),
@@ -118,6 +122,10 @@ where
 /// phrased that way round because it is what the match arms below guarantee
 /// structurally; only the `PermissionDenied` case has a test behind it.
 pub fn read_to_string(path: &Path) -> Determination<Option<String>> {
+    #[cfg(feature = "fault-injection")]
+    if let Some(why) = fault::injected(fault::Entry::ReadFile, &path.display()) {
+        return Determination::undetermined(why);
+    }
     match std::fs::read_to_string(path) {
         Ok(text) => Determination::known(Some(text)),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Determination::known(None),
@@ -227,6 +235,10 @@ pub fn run(cmd: &mut Command) -> Determination<CommandOutput> {
         .map(|a| a.to_string_lossy().into_owned())
         .collect::<Vec<_>>()
         .join(" ");
+    #[cfg(feature = "fault-injection")]
+    if let Some(why) = fault::injected(fault::Entry::Run, &display) {
+        return Determination::undetermined(why);
+    }
     let out = match cmd.output() {
         Ok(out) => out,
         Err(e) => {
@@ -310,6 +322,11 @@ pub fn run_with_timeout_and_stdin(
         .map(|a| a.to_string_lossy().into_owned())
         .collect::<Vec<_>>()
         .join(" ");
+
+    #[cfg(feature = "fault-injection")]
+    if let Some(why) = fault::injected(fault::Entry::RunWithTimeout, &display) {
+        return Determination::undetermined(why);
+    }
 
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(unix)]
@@ -476,6 +493,156 @@ fn read_pipe_bounded<R: io::Read + Send + 'static>(
              arrived is a partial read, and returning it as complete output would be \
              indistinguishable from a process that printed nothing"
         )),
+    }
+}
+
+/// Test-only fault seam: force the boundary IO entries to `Undetermined`
+/// (backlog 8696dd7e).
+///
+/// [`crate::degrade`] states the monotonicity property: blinding a gate must
+/// never make its verdict more permissive. Until now the only way to blind a
+/// gate was to damage real files. That cannot reach a subprocess, and it cannot
+/// reach an entry the test did not think to damage. This seam blinds the gate
+/// at the one place every observation passes through. Under a plan, a
+/// faulted entry returns `Undetermined` before it touches the world, so the
+/// test does not depend on permissions, uid or filesystem behaviour.
+///
+/// Compiled only with the `fault-injection` feature. A crate enables it from
+/// `[dev-dependencies]`, so a shipped plugin binary never contains it.
+///
+/// # Scope
+///
+/// The plan is **thread-local** and **scoped** by [`with_fault_plan`]. Work that
+/// the closure hands to another thread is not faulted, and it is not counted in
+/// [`Faulted::injected`]. That is why [`crate::degrade::assert_fails_closed`]
+/// rejects a run that injected nothing: a gate whose IO happens off-thread is
+/// reported as untested, not as passing.
+#[cfg(feature = "fault-injection")]
+pub mod fault {
+    use std::cell::{Cell, RefCell};
+
+    /// The four boundary IO entries a plan can fault.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum Entry {
+        /// [`super::read_dir_entries`]
+        ReadDir,
+        /// [`super::read_to_string`]
+        ReadFile,
+        /// [`super::run`]
+        Run,
+        /// [`super::run_with_timeout`] and [`super::run_with_timeout_and_stdin`].
+        /// The first delegates to the second, so they are one entry.
+        RunWithTimeout,
+    }
+
+    impl Entry {
+        /// Every entry. [`FaultPlan::blind`] faults exactly this set.
+        pub const ALL: &'static [Entry] = &[
+            Entry::ReadDir,
+            Entry::ReadFile,
+            Entry::Run,
+            Entry::RunWithTimeout,
+        ];
+    }
+
+    /// Which entries to force to `Undetermined`.
+    #[derive(Debug, Clone, Default, PartialEq, Eq)]
+    pub struct FaultPlan {
+        faulted: Vec<Entry>,
+    }
+
+    impl FaultPlan {
+        /// Faults nothing. Use it as the control run beside a faulted one.
+        pub fn none() -> Self {
+            FaultPlan::default()
+        }
+
+        /// Faults every entry, so the gate is fully blind.
+        pub fn blind() -> Self {
+            FaultPlan {
+                faulted: Entry::ALL.to_vec(),
+            }
+        }
+
+        /// Faults exactly `entry`.
+        pub fn only(entry: Entry) -> Self {
+            FaultPlan::none().with(entry)
+        }
+
+        /// Adds `entry` to the plan.
+        pub fn with(mut self, entry: Entry) -> Self {
+            if !self.faulted.contains(&entry) {
+                self.faulted.push(entry);
+            }
+            self
+        }
+
+        /// Does this plan fault `entry`?
+        pub fn faults(&self, entry: Entry) -> bool {
+            self.faulted.contains(&entry)
+        }
+    }
+
+    /// What [`with_fault_plan`] returns.
+    #[derive(Debug)]
+    pub struct Faulted<R> {
+        /// What the closure returned.
+        pub value: R,
+        /// How many boundary calls on this thread were forced to
+        /// `Undetermined` while the closure ran. Zero means the plan never
+        /// bit, and a caller should treat the run as proving nothing.
+        pub injected: usize,
+    }
+
+    thread_local! {
+        static PLAN: RefCell<Option<FaultPlan>> = const { RefCell::new(None) };
+        static INJECTED: Cell<usize> = const { Cell::new(0) };
+    }
+
+    /// Restores the outer plan and count when a scope ends, including by panic.
+    struct Restore {
+        outer_plan: Option<FaultPlan>,
+        outer_injected: usize,
+    }
+
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let inner = INJECTED.with(Cell::get);
+            // Faults injected by an inner scope also happened inside the outer
+            // one, so the outer count keeps them.
+            INJECTED.with(|c| c.set(self.outer_injected + inner));
+            let outer = self.outer_plan.take();
+            PLAN.with(|p| *p.borrow_mut() = outer);
+        }
+    }
+
+    /// Run `f` with `plan` installed on the current thread. The previous plan
+    /// (usually none) is restored afterwards, including when `f` panics.
+    pub fn with_fault_plan<R>(plan: FaultPlan, f: impl FnOnce() -> R) -> Faulted<R> {
+        let outer_plan = PLAN.with(|p| p.borrow_mut().replace(plan));
+        let outer_injected = INJECTED.with(|c| c.replace(0));
+        let restore = Restore {
+            outer_plan,
+            outer_injected,
+        };
+        let value = f();
+        let injected = INJECTED.with(Cell::get);
+        drop(restore);
+        Faulted { value, injected }
+    }
+
+    /// Called at the top of each boundary entry. `Some(reason)` means the
+    /// current plan faults `entry` and the caller must return `Undetermined`
+    /// with that reason before doing any IO.
+    pub(super) fn injected(entry: Entry, target: &dyn std::fmt::Display) -> Option<String> {
+        let hit = PLAN.with(|p| p.borrow().as_ref().is_some_and(|plan| plan.faults(entry)));
+        if !hit {
+            return None;
+        }
+        INJECTED.with(|c| c.set(c.get() + 1));
+        Some(format!(
+            "[fault-injected] {entry:?} on {target} was forced to Undetermined by a test FaultPlan"
+        ))
     }
 }
 

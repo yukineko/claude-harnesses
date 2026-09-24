@@ -20,6 +20,8 @@
 //!     panic falls through to allow, bounded by `stop_hook_active`, so a
 //!     genuinely broken tdd still cannot trap the turn forever.
 
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+
 mod config;
 mod gate;
 mod git;

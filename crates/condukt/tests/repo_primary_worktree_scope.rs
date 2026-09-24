@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! The repo-primary lock must be keyed by the REPO, not by the checkout.
 //!
 //! Regression target: backlog `bcfc5491`. `lock::acquire_repo_primary` used to

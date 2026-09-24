@@ -1,6 +1,6 @@
 [package]
 name = "harness-core"
-version = "0.2.30"
+version = "0.2.31"
 edition = "2021"
 # MSRV: `is_none_or` (store.rs) was stabilized in Rust 1.82.
 rust-version.workspace = true
@@ -17,6 +17,13 @@ chrono = { workspace = true }
 anyhow = { workspace = true }
 wait-timeout = "0.2"
 
+[features]
+# Test-only seam: `boundary::fault` (a thread-local FaultPlan that forces the
+# boundary IO entries to `Undetermined`) and `degrade::assert_fails_closed`.
+# Enable it ONLY from `[dev-dependencies]`; with resolver 3 a dev-dependency
+# feature is not unified into a crate's shipped binary.
+fault-injection = []
+
 [target.'cfg(unix)'.dependencies]
 # Process-group kill for `boundary::run_with_timeout`: a timed-out child may
 # have exec'd or backgrounded a grandchild (e.g. a shell-wrapped checker
@@ -27,6 +34,11 @@ libc = "0.2"
 tempfile = { workspace = true }
 proptest = { version = "1", default-features = false, features = ["std"] }
 trybuild = "1"
+# Self dev-dependency so this crate's own integration tests always build with
+# the fault seam. A `required-features` test target would be skipped silently
+# by a plain `cargo test -p harness-core`, i.e. the suite would pass without
+# ever running.
+harness-core = { path = ".", features = ["fault-injection"] }
 
 [lints]
 workspace = true

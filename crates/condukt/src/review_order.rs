@@ -261,24 +261,22 @@ fn topo_order_cluster(hunks: &[Hunk], members: &[usize], edges: &[(usize, usize)
     let mut remaining: BTreeSet<usize> = member_set;
     let mut order = Vec::with_capacity(members.len());
 
-    while !remaining.is_empty() {
-        let zero_indegree: Vec<usize> = remaining
+    loop {
+        let zero_indegree_pick = remaining
             .iter()
             .copied()
             .filter(|n| *indegree.get(n).unwrap_or(&0) == 0)
-            .collect();
-        let pick = if !zero_indegree.is_empty() {
-            zero_indegree
-                .into_iter()
-                .min_by_key(|&n| hunk_key(hunks, n))
-                .expect("non-empty checked above")
-        } else {
-            // Cycle: no in-degree-zero candidate remains. Break it
-            // deterministically by taking the smallest-key remaining node.
-            *remaining
+            .min_by_key(|&n| hunk_key(hunks, n));
+        // Cycle: no in-degree-zero candidate remains. Break it
+        // deterministically by taking the smallest-key remaining node.
+        // `None` from both means `remaining` is empty, which ends the loop.
+        let Some(pick) = zero_indegree_pick.or_else(|| {
+            remaining
                 .iter()
-                .min_by_key(|&&n| hunk_key(hunks, n))
-                .expect("remaining is non-empty (loop guard)")
+                .copied()
+                .min_by_key(|&n| hunk_key(hunks, n))
+        }) else {
+            break;
         };
         remaining.remove(&pick);
         order.push(pick);
@@ -360,15 +358,16 @@ pub fn order_hunks(
 
     // Sort clusters by their representative's (file, new_start, hunk_index)
     // key so cluster ids / emission order are stable.
+    // A group only exists because a member was pushed into it, so `min()` is
+    // always Some; an (impossible) empty group has no hunk to emit anyway.
     let mut cluster_reps: Vec<((String, usize, usize), usize)> = groups
         .iter()
-        .map(|(root, members)| {
-            let rep_key = members
+        .filter_map(|(root, members)| {
+            members
                 .iter()
                 .map(|&i| hunk_key(hunks, i))
                 .min()
-                .expect("group is non-empty");
-            (rep_key, *root)
+                .map(|rep_key| (rep_key, *root))
         })
         .collect();
     cluster_reps.sort();

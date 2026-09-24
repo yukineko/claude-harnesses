@@ -18328,3 +18328,108 @@ updated_at = 1790253492
 weight = 0.0
 issue_number = 800
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/800"
+
+[[task]]
+id = "b95b0171"
+title = "worktree に未マージのまま 9-64 日放置されたブランチが 12 本ある — 統合されなかった作業が誰にも見えないまま腐っている"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "condukt",
+    "integration",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-24 21:45-21:50、測定点 d0061f9c。ユーザー依頼「不要な worktree は削除してほしい」の
+掃除中に測定。掃除では 53 件を削除したが、以下は未マージのため意図的に残した。
+
+測定方法: 全 worktree について
+  git merge-base --is-ancestor <HEAD> main   -> main の祖先か
+  git status --porcelain                      -> 未コミットの有無
+  git rev-list --count main..<HEAD>           -> main に無いコミット数
+
+main に無いコミットを持つ worktree (age = 配下ファイルの最新 mtime からの日数):
+
+  contract-erasure                                    ahead=1  age=63.7
+  condukt/run-20260804.../audit-reviewgate-verdict-paths ahead=1 age=51.6
+  condukt/run-20260804.../fix-reviewgate-failopens     ahead=1  age=51.5  dirty
+  run-20260805-055008-64104/t2                         ahead=1  age=50.6
+  backlog-repo-store-a5a14d24                          ahead=1  age=50.1
+  condukt/run-20260814.../t2-occupancy-undetermined    ahead=1  age=41.9
+  condukt/run-20260814-025356-78549/t1                 ahead=2  age=41.8  dirty
+  condukt/run-20260814-025356-78549/t2                 ahead=1  age=41.8  dirty
+  condukt/run-20260814-025356-78549/t3                 ahead=1  age=41.8  dirty
+  session-95516008                                     ahead=1  age=14.7
+  session-23af0e35                                     ahead=1  age=11.1
+  condukt/run-20260913-223004-15261/t1-classify        ahead=1  age=9.1
+
+(flow/post-integ-9d349393 と flow/specguard-tests-6de70510 も未マージだが age=0.0 で
+ 現に稼働中のセッションのものなので、この 12 本とは別扱い。)
+
+何が問題か: CLAUDE.md 8 は「分離して同時に進め、統合で決着させる」「統合が本題である」と
+書いている。上の 12 本は分離だけされて統合されなかった作業であり、40-64 日前のものは
+condukt run が途中で死んだ残骸である可能性が高い。どれも main に入っていないので、
+そこで書かれたコードは誰の目にも触れていない。
+
+測ったこと: 上の 3 コマンドの出力のみ。
+測っていないこと: 各ブランチのコミットが「main に入れるべき良いもの」なのか
+「捨ててよい失敗作」なのかは一切読んでいない。ahead=1 が何の変更かも見ていない。
+condukt の run state 上でこれらの run が failed/abandoned のどれになっているかも見ていない。
+
+やるべきこと: 1 本ずつ git log -p で中身を読み、(a) main へ統合する、(b) 価値が無いと
+判断してブランチごと削除する、のどちらかに決着させる。判断せず放置し続けるのが最悪。
+worktree 自体は消してよいが、消してもブランチは残るので、この 12 本の決着は別問題である。"""
+created_at = 1790254126
+updated_at = 1790254126
+weight = 0.0
+issue_number = 804
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/804"
+
+[[task]]
+id = "b0934634"
+title = "worktree の掃除・回収を回す仕組みが無く、手作業のたびに 130 個超まで溜まる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "condukt",
+    "tooling",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-24、測定点 d0061f9c。
+
+掃除前: 136 worktree (main を含む)。内訳:
+  main の祖先 かつ clean          97
+  未コミットの変更あり            24
+  main に無いコミットあり         14
+掃除後: 84 (53 件を git worktree remove、うち refuse 0、ブランチ消失 0)。
+.harness-worktrees は掃除後でも 42G。
+
+`git worktree prune --dry-run -v` は掃除前も掃除後も空 (=git 的には全て「正常」)。
+つまり git の prune はここでは何の役にも立たない — ディレクトリが実在する限り、
+何年前の worktree でも prune 対象にならない。
+
+この掃除は全部手作業で、しかも判定を間違えやすい。実際この回、判定スクリプトに
+`(age_days or 999) < 2` と書いたところ Python で 0.0 が falsy なため、
+**最も新しい 9 件が「最も古い」として削除リストに乗った** (その中には別セッションが
+現に使用中の flow/fix-reviewgate-277440b1 が含まれていた)。実行前に気づいて直したが、
+これは「掃除のたびに人間/LLM が同じ判定を書き直している」ことが原因である。
+
+あるべき形 (未検証の案): worktree の状態判定 (main の祖先か / dirty か / 稼働中か) を
+決定論的なコマンドに出す。crates/condukt/src/wt_reconcile.rs に Occupancy の
+判定ロジックが既にあるので、それを掃除の入口として使えるか確認するのが先。
+
+測っていないこと: condukt worktree reconcile が実際にこの用途で使えるか (今回は
+使わず、git の一次情報だけで判定した)。42G の内訳 (target/ が大半だと推測しているが
+測っていない)。"""
+created_at = 1790254127
+updated_at = 1790254127
+weight = 0.0
+issue_number = 805
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/805"

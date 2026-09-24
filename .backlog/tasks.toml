@@ -18547,3 +18547,71 @@ updated_at = 1790239210
 weight = 0.0
 issue_number = 769
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/769"
+
+[[task]]
+id = "9e8fd854"
+title = "blastguard が heredoc の commit message 本文を command として解析し、ゲートの挙動を記録しようとする commit 自体をブロックする"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+観測 (2026-09-24、実測 2 回。どちらも逐語で宣言済み):
+
+cycle-10 の結果を sink する commit を打とうとして 2 連続でブロックされた。
+コマンドの形は次のとおりで、破壊的な操作は一切含まない:
+
+  git add .backlog/ && git commit -q -F - <<MSG ... MSG
+
+ブロック 1 の逐語:
+  rm disarms a protected gate/config path (~/.claude/settings.json) without
+  writing to it - it controls which hooks, gates or policies run, so blastguard
+  refuses
+
+ブロック 2 の逐語:
+  tee without -a/--append truncates and overwrites its target file(s)
+
+原因: Bash tool はヒアドキュメント本体を含むコマンド文字列全体を渡すので、
+commit message の散文が解析対象に入る。今回ブロックされたのは、
+検証で使った対照コマンドを message 本文に逐語で書いたから。つまり
+「ゲートが正しく動いたことを記録する行為」がそのゲートに止められている。
+
+これは既知クラスの新しい入口である。既存の
+classify-deploy-needle-forcegate (task の散文に deploy needle が入ると
+force-gate される) と同じ「散文をコマンドとして読む」問題だが、
+入口が backlog の notes ではなく git の commit message である点が違う。
+
+実害:
+  (1) ゲートの判定を逐語で記録できない。逐語の記録は 5. が要求しているもの
+      (「黙って迂回せず、見えるところに残す」) なので、これは規範同士が
+      衝突している状態になる。
+  (2) 回避すると message が薄まる。実際この commit では対照コマンドを
+      message から削って ticket 本文へ移した。ticket 側は python の
+      subprocess にリスト引数で渡すので shell を経由せず、同じ文字列が
+      問題なく通る。同じ内容が経路によって通ったり止まったりする。
+  (3) 迂回が「書き換えて通す」なので、5. の「skip 機構を恒常的な迂回に
+      使わない」には触れないが、書き手が学習するのは
+      「ゲートの話を書かない」という誤った適応である。
+
+副次観測: ブロック 2 の理由文 "tee without -a/--append truncates and
+overwrites its target file(s)" は、同じ日に merge した 2acee03f が
+まさに置き換えた旧文言である。つまり稼働中のバイナリは未だ fix 前で、
+repo だけが直っている状態 (rollout していないので当然)。
+memory の rollout-cannot-undark-running-session と整合する。
+
+done_criteria:
+  (1) heredoc 本体 (commit message) をコマンド解析の対象から外すべきか、
+      それとも対象のまま別扱いにすべきかを決めること。
+      判断材料: heredoc 本体に本物のコマンドを埋めて実行させる経路が
+      実在するか。あるなら単純除外は fail-open になるので不可。
+      推測で決めず、実際に到達経路を辿って観測すること。
+  (2) 決めた側を RED 先行で固定すること。除外するなら
+      「heredoc 本体の散文はブロックしない」、しないなら
+      「この形は仕様どおりである」と明記して逐語記録の方法を別に用意する。
+  (3) どちらに倒すにせよ、3. に従い判定不能は制限側に残すこと。"""
+created_at = 1790239305
+updated_at = 1790239305
+weight = 0.0
+issue_number = 770
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/770"

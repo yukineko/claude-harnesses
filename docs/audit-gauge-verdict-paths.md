@@ -1009,9 +1009,19 @@ R8 の逐語（`|` を含むため表の外に置く）— `crates/gauge/src/mai
 「判定を持つ下流に届くか × 起こりやすさ × 修正コスト」で並べた。
 
 1. **P1**（CRITICAL）— sub-agent transcript の**ファイル**単位 read 失敗。
+   **【2026-09-24 実施済み — backlog `fbb3100a`】** 以下の推奨どおりに修正した。
+   `aggregate()` の個別 read は `Err` で `agg.subagent_scan` を `Undetermined` に倒し
+   （残りのファイルは畳み続ける）、`subagent_usage()` は `map` のクロージャから
+   早期 return できないので `match` へ展開したうえで `Undetermined` を返す。
+   `crates/harness-core/tests/subagent_file_read_undetermined.rs` が両方向を固定する
+   （注入 2 本 + 対照 2 本。RED を先に観測: 修正前 2 passed / 2 failed → 修正後 4 passed）。
+   `crates/session-insights/src/record.rs` の docstring も同じコミットで実挙動に合わせた。
+   **以下の引用は修正前のコードであり、現在の実装とは一致しない**（監査時点の記録として残す）。
+
    `{"decision":"block"}` を実測で消す唯一の項目。`crates/harness-core/src/usage.rs:191` の
    `if let Ok` に `Err => agg.subagent_scan = Determination::undetermined(…)` を足すだけで、
    既存の guard（R1）と budgetguard 側の受け口（Probe 4-3 で動作確認済み）がそのまま効く。
+<!-- doc-claim-exempt: 修正前のコードの逐語引用。fbb3100a で当の行を書き換えたので index とは一致しない。監査時点の記録として意図的に残している -->
    併せて `crates/harness-core/src/usage.rs:412` `let Ok(text) = std::fs::read_to_string(&file) else {` も `Undetermined` へ倒し、
    `crates/session-insights/src/record.rs:97-100` の docstring を実挙動へ合わせる。
 2. **P2**（HIGH）— 未知 model の $0 価格付け。`rate_for` を `Determination<Rate>` 化。

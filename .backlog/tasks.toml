@@ -1244,7 +1244,7 @@ Measurement half of 5b33b4cd, split out because it cannot be satisfied by shippi
 
 USER RULING 2026-09-24: run 3+ real Continuous-Audit rounds under the DEFAULT window (no --window 2, no goal redefinition). Each round closes every CONFIRMED with a regression test before record. Record from the MAIN repo root (ledger is keyed by cwd; a worktree cwd writes a different ledger). Round 2026W39 (new=25, confirmed=19, unverified=6, tests=19) is the first of the series; converging still NO."""
 created_at = 1785341708
-updated_at = 1790184608
+updated_at = 1790251611
 weight = 0.0
 issue_number = 94
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/94"
@@ -1601,9 +1601,30 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "計測日 2026-08-02、測定点 a30b323f、測定コマンド: overwatch review-metrics。closure [condukt-gate] 0.00 (0/4) / [continuous-audit] 0.00 (0/36) / [record-audit] 0.00 (0/3)。457b44f1 で closure rate が計測可能になった結果、初めて見えた事実。specguard は ack 経由で disposition を積むようになったが、他の producer には閉じる導線が無い。review-metrics は『1 finding に fix commit が landed しているが disposition 無し』も警告している。"
+notes = """
+計測日 2026-08-02、測定点 a30b323f、測定コマンド: overwatch review-metrics。closure [condukt-gate] 0.00 (0/4) / [continuous-audit] 0.00 (0/36) / [record-audit] 0.00 (0/3)。457b44f1 で closure rate が計測可能になった結果、初めて見えた事実。specguard は ack 経由で disposition を積むようになったが、他の producer には閉じる導線が無い。review-metrics は『1 finding に fix commit が landed しているが disposition 無し』も警告している。
+
+--- 2026-09-24 再測: 起票時の数字が現状と一致しない。着手せず pending に戻す ---
+起票時 (2026-08-02、測定点 a30b323f) は 43 findings が queue 済みで disposition 0 件、
+closure 0.00 だった。今日の再測:
+
+  overwatch review-metrics -> "(no dispositions recorded yet -- run overwatch record-disposition)"
+  overwatch review-queue --json -> entries: 3
+    [systemic] blastguard:protected-path が 2 task / 1 session で 5 回再発
+    [merge-conflict] x2 (どちらも condukt/run-20260913-182640-69073/... 由来)
+
+43 -> 3 に減っているが、これが「閉じられた」のか「compact-findings で畳まれた」のか
+「別ストアへ移った」のかを今日は測っていない。disposition は依然 0 件なので、
+closure が上がったわけではないことだけは確か。
+
+測ったこと: 現在の queue 件数 (3) と disposition 件数 (0)。
+測っていないこと: 40 件がどこへ行ったか。producer 別の closure。
+  reconcile-fixed / compact-findings の実行履歴。
+
+推測で埋めずに pending へ戻す。次に着手する人は、まず 40 件の行方を測ること —
+それが「導線が無い」のか「導線はあるが通っていない」のかを分ける。"""
 created_at = 1785634225
-updated_at = 1790183496
+updated_at = 1790252437
 weight = 0.0
 issue_number = 116
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/116"
@@ -1661,60 +1682,6 @@ issue_number = 122
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/122"
 
 [[task]]
-id = "4b4454ef"
-title = "taintguard (GATE crate) を enabledPlugins に登録する"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1785800423
-updated_at = 1785800423
-weight = 0.0
-issue_number = 123
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/123"
-
-[[task]]
-id = "270f36fa"
-title = "taintguard: trusted region is cwd only, so worktree and scratchpad reads taint every turn"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "injection",
-    "taintguard",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-MEASURED 2026-08-05 against the deployed 0.1.6 binary, isolated TAINTGUARD_STATE_DIR, both postures. Anti-vacuity control in the same run: an in-repo Read stays SILENT, and a Grep stays SILENT, so the probe is not firing on everything.
-
-Interactive (CLAUDECODE=1, CLAUDE_CODE_ENTRYPOINT=cli) -- verdict for a Bash that follows:
-  Read of an in-repo file                    SILENT (allow)     [control]
-  Read of the SESSION WORKTREE               ask   (external-read)
-  Read of the declared SCRATCHPAD            ask   (external-read)
-  Read of the user settings.json             ask   (external-read)
-  WebFetch / WebSearch                       ask   (web)
-  Read with no file_path                     ask   (external-read)  [correct fail-closed]
-  Grep                                       SILENT (allow)     [control, and see 5b0e9fe1]
-
-Headless (CLAUDECODE and CLAUDE_CODE_ENTRYPOINT unset): the same rows harden from ask to DENY.
-
-Impact, stated plainly: CLAUDE.md section 8 makes a worktree read unavoidable, and the harness declares the scratchpad as an additional working directory. So enabling taintguard as it stands taints essentially every session within its first few tool calls. Interactive that means a permission prompt on every Bash/Write/Edit for the rest of each turn; headless it means every write-class tool is DENIED until Stop, which brick-walls an autonomous run.
-
-This is not a bug in the enforcement -- the enforcement is correct for the boundary it was given. The boundary is the defect: classify.rs classify takes trust region = hook cwd, full stop. There is no configuration for additional roots (grepped: no trusted_root, no TAINTGUARD_TRUST, no additional-dir knob anywhere in src/).
-
-Fix shape: trust region = cwd PLUS (a) the additional working directories the harness declares and (b) sibling git worktrees of the SAME repository, resolved via the git common dir so it cannot be spoofed by a path that merely looks like one. Keep Indeterminate meaning untrusted.
-
-RED test to write first: a Read of a linked worktree of the SAME repo classifies Trusted, while a Read of an unrelated repo at a sibling path still classifies Untrusted -- the second assertion is what stops the fix from degenerating into trusting every sibling directory."""
-created_at = 1785844035
-updated_at = 1785875671
-weight = 0.0
-issue_number = 125
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/125"
-
-[[task]]
 id = "3357c2e2"
 title = "reviewgate P1: diff 取得失敗が empty-diff に潰れ無診断で allow (propguard F-2 と同一 shape の横断パターン)"
 project = "/Users/yuki/src/harness"
@@ -1751,40 +1718,6 @@ updated_at = 1785844236
 weight = 0.0
 issue_number = 127
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/127"
-
-[[task]]
-id = "5b0e9fe1"
-title = "taintguard: mark matcher covers Read only, so Grep/Bash/Glob import external content untainted"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "injection",
-    "taintguard",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-Measured 2026-08-05 against the deployed 0.1.6 binary with an isolated TAINTGUARD_STATE_DIR (anti-vacuity control: an in-repo Read stays SILENT in the same run, so the probe is not uniformly firing).
-
-hooks.json PostToolUse matcher is WebFetch|WebSearch|Read, and decide_mark (main.rs:104-118) has a catch-all _ =+ Ok(()). Observed: tool_name Grep produced NO taint, so a following Bash was allowed.
-
-The consequence is an asymmetric boundary. These import external-provenance content into context and do NOT taint:
-  - Grep with output_mode content over a path outside the repo
-  - Bash reading an external file (cat, head, less) -- Bash is in the GATE matcher only, never the MARK matcher
-  - Bash fetching a URL (curl, wget) -- i.e. the exact channel WebFetch is marked for
-  - Glob, NotebookRead, and MCP tools returning remote content
-
-Meanwhile a Read of the session worktree (mandated by CLAUDE.md section 8) DOES taint. So the gate is strict on an internal, trusted, mandated path and open on the external ones it exists to cover. See 270f36fa for the other half.
-
-Not claimed: I did not measure whether an MCP tool result reaches PostToolUse at all -- that is unverified, not refuted.
-
-Done when: a probe shows an external-content Grep and an external-content Bash read both taint the session, with an in-repo Grep and an in-repo Bash read still clean in the same run."""
-created_at = 1785875633
-updated_at = 1785875633
-weight = 0.0
-issue_number = 129
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/129"
 
 [[task]]
 id = "3a8e3b73"
@@ -1846,63 +1779,6 @@ updated_at = 1785876708
 weight = 0.0
 issue_number = 131
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/131"
-
-[[task]]
-id = "233447c8"
-title = "taintguard: TAINTGUARD_TRUSTED_ROOTS can be planted in a shell rc for a future session"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "taintguard",
-    "injection",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Found by skeptic 1 during the 0.1.9 adversarial panel (run-20260805-055008-64104, t1). The env var that widens the trust domain is read via std::env::var in classify.rs. A guarded agent cannot set it mid-turn (hook processes inherit the host CLI env, not the agents transient Bash shells), so the in-session threat is closed. RESIDUAL: an agent with broad Write access could append an export line to a shell rc file, widening the trust domain for a FUTURE launch. Same exposure class as harness-core trust.toml (~/.harness/trust.toml is likewise agent-writable), so not newly introduced here, but it is currently UNDOCUMENTED. Decide: document the limitation honestly in README.ja.md, or move the knob to a file with an integrity check. Do not imply authentication the code does not provide."
-created_at = 1785878518
-updated_at = 1785878518
-weight = 0.0
-issue_number = 132
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/132"
-
-[[task]]
-id = "56991fca"
-title = "taintguard と fetchguard の PreToolUse 入口が parse 不能な payload を沈黙で許可する (blastguard が修正済みのミラーギャップ)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "L5",
-    "scout",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "規範成立(2026-07-21)の後に生まれた2クレートが、blastguard が 6a02670c で直した入口の形をそのまま持って生まれた。PreToolUse で沈黙することは allow を意味する。証拠: crates/taintguard/src/main.rs:74-79 の if let Some(input) = HookInput::parse(and raw) に else 無し、かつ run_hook (判定を持たない hook 専用の exit0 常時経路) に包まれている。同型が crates/fetchguard/src/main.rs:46。修正済みの双子: crates/blastguard/src/main.rs:104-116 が None の腕で emit(Decision::ask(UNREADABLE_PAYLOAD), None) を返す。完了条件: 両クレートが None かつ raw 非空のとき blastguard と同じ ask/警告を出し、壊れた JSON を実バイナリに流すテストが沈黙ではなく decision 行を観測する。あわせて判定を持つ3サブコマンドを run_hook から harness_core::gate::run::run_guarded へ移す。"
-created_at = 1785879181
-updated_at = 1785879181
-weight = 0.0
-issue_number = 133
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/133"
-
-[[task]]
-id = "d03dad3d"
-title = "taintguard classify の canonicalize 失敗が Trusted に潰れ、セッションが tainted にならない"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "L5",
-    "scout",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "同じ関数が ROOT の canonicalize 失敗には Trust::Indeterminate を返しながら、TARGET の同一失敗は lexical fallback に飲み込んでいる。ErrorKind で判別していないので、ELOOP・中間ディレクトリの EACCES・root 外を指す dangling symlink がすべて normalize_lexical を通り starts_with(root) を満たして Trusted になる。証拠: crates/taintguard/src/classify.rs:89-95 の joined.canonicalize().unwrap_or_else(|_| normalize_lexical(and joined))、対照が同関数の :73-75 の let Ok(root_canonical) = root.canonicalize() else return Trust::Indeterminate。消費側 crates/taintguard/src/main.rs:106-113 で Trusted は Ok(()) となり taint marker が書かれず、以後そのターンの Bash/Write/Edit が無制限になる。完了条件: NotFound だけが lexical fallback を取り、他の ErrorKind は Indeterminate を返す。root 内の symlink loop が Indeterminate になる fault injection テストを RED 先行で観測する。"
-created_at = 1785879182
-updated_at = 1785879182
-weight = 0.0
-issue_number = 134
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/134"
 
 [[task]]
 id = "034b6620"
@@ -2279,21 +2155,6 @@ updated_at = 1785966704
 weight = 0.0
 issue_number = 163
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/163"
-
-[[task]]
-id = "9ee7e798"
-title = "taintguard: merge 7bc09647 で落とした TAINTGUARD_TRUSTED_ROOTS を 0.2.0 の上へ移植する — repo 外の信頼ルートをオペレータが宣言する唯一の経路で、HookInput にも CLAUDE_ 系 env にも settings.json にも代替チャネルが無い (旧実装は commit fe13e4cd)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1785967464
-updated_at = 1785967464
-weight = 0.0
-issue_number = 164
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/164"
 
 [[task]]
 id = "87a1d74a"
@@ -5016,46 +4877,6 @@ issue_number = 430
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/430"
 
 [[task]]
-id = "f25839d6"
-title = "taintguard: TAINTGUARD_STATE_DIR が未文書の完全バイパス。かつ block 理由に汚染源の URL/パスが記録されず人間が監査できない"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-crates/taintguard/src/state.rs:93 の TAINTGUARD_STATE_DIR を書き込み可能な新しいディレクトリへ向けると、
-以降の check がすべて Clean を返し、台帳行もメッセージも残らない。完全バイパスだが未文書。
-（TAINTGUARD_OBSERVE_ONLY=1 は observe.rs:107 で Tainted を抑止するだけで、こちらは文書化されている）
-
-理由が部分的にしか引用可能でない: crates/taintguard/src/main.rs:343-347 は desc を補間するが、
-マーカーのスキーマ crates/taintguard/src/state.rs:66-67 の sources は web / external-read /
-internal-error という粗いタグしか保持しない。**turn を汚染した URL やファイルパスが記録も表示もされない**ため、
-人間は「自分が頼んだことに対する発火か」を監査できない。doctrine の逐語引用可能要件に対する不足。
-
-正しくできている点（記録しておく）: 判定不能側は徹底して fail-closed
-（payload パース不能 / panic / Check::Undetermined / マーカー破損 / state dir 書込不可 は
-observe-only でも enforce）。allow を一度も出さない設計（hookio.rs:27-31）。
-ask は対話時のみで非対話は deny（main.rs:212-218、interactive.rs:21-23）。
-
-permissive として報告された点: main.rs:102-109 は mark 側で非空かつパース不能な payload に対し
-何も記録しない（自己申告で「同 turn の後続 gate が Clean を見うる」と述べている）。
-main.rs:191-193 は mark 失敗を eprintln するだけ。一方 state.rs:315-319 は逐語で
-「a lost mark degrades to gate fails closed, never to a silent allow」と主張しており、
-書込可能性プローブが証明するのは dir 書込不可の原因だけ。docstring が実挙動を超えている。
-
-ミラー（doctrine の hack route）: mark の matcher は WebFetch|WebSearch|Read（hooks.json:5）なので
-Bash の cat / curl / Grep / Glob / Task / MCP ツールは一切汚染しない。gate の matcher は
-Bash|Write|Edit|MultiEdit|NotebookEdit（hooks.json:13）なので Task（subagent は新しい session_id を
-持つので Clean）と MCP write ツールは素通し。第1のミラーは readonly.rs:16-19 で既知、残りは未記載。
-親 826c29bf"""
-created_at = 1788792032
-updated_at = 1788792032
-weight = 0.0
-issue_number = 431
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/431"
-
-[[task]]
 id = "03bc578c"
 title = "Stop ゲート4本が block 理由で確かめていないことを主張し、うち3本は他セッションの変更を自分のものとして要求する"
 project = "/Users/yuki/src/harness"
@@ -5201,34 +5022,6 @@ updated_at = 1788792879
 weight = 0.0
 issue_number = 436
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/436"
-
-[[task]]
-id = "793aa283"
-title = "check-fail-open-mutation.py は taintguard のシナリオを1つも持たない — コメントは6と書きながらタプルは7クレート"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-scripts/check-fail-open-mutation.py:65-73 は7クレートを宣言するが、
-grep で crate= のシナリオ定義を数えると **6件**（blastguard / propguard / specguard / stuckguard /
-mutategate / overwatch）。taintguard のシナリオが存在しない。
-:61-63 は逐語「The canonical 6 GATE crates」、:47 は「one more hardcoded copy of the canonical
-6-crate list」と述べているが、対象のタプルは7要素。
-
-帰結: 既定実行は「scenarios run: 6/6」と印字して exit 0 しうるが、**最も新しい GATE クレートは
-一度もミューテーションされていない**。:415-417 の空ガードは --crate 名指し時にしか発火せず、
-既定経路にはクレート単位のカバレッジ assert が無い。
-
-修正: taintguard のシナリオを追加し、コメントの 6 を実数に合わせる（同じコミットで）。
-加えて既定経路に「宣言されたクレート全部にシナリオがあるか」の assert を置き、
-欠けていれば exit 非0 にする（欠落を沈黙で表現しない）。親 826c29bf"""
-created_at = 1788792880
-updated_at = 1788792880
-weight = 0.0
-issue_number = 437
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/437"
 
 [[task]]
 id = "f6919056"
@@ -5740,21 +5533,6 @@ issue_number = 365
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/365"
 
 [[task]]
-id = "6e23d450"
-title = "taintguard: /record (session-insights) の Obsidian vault Read が構造的に turn を tainted にする — observe-only を enforcement 化する前に Trusted 判定か例外を決める"
-project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = []
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1787189188
-updated_at = 1787189188
-weight = 0.0
-issue_number = 366
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/366"
-
-[[task]]
 id = "28b6df2c"
 title = ".backlog/tasks.toml が main 作業ツリーにあるため任意セッションの backlog add が main を dirty にし Stop ゲートを踏む"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
@@ -5972,7 +5750,7 @@ STOPPED FOR HUMAN: 上の SILENT 2 点 (PreToolUse で JSON を返すが permiss
 
 USER RULING 2026-09-24: settle both open points by MEASUREMENT: write a minimal experimental hook and observe in Claude Code (a) what a PreToolUse hook's valid JSON without permissionDecision does, (b) whether a synchronous hook's systemMessage reaches the model. Record observed behaviour with version and date."""
 created_at = 1785310500
-updated_at = 1790184608
+updated_at = 1790251611
 weight = 0.0
 
 [[task]]
@@ -6084,7 +5862,7 @@ The notes' own open design questions remain (glob-loader repos, per-project opt-
 
 USER RULING 2026-09-24: RESUME design (supersedes the 2026-08-17 exclusion for this item). Settle the open design questions (per-project opt-in, registration check for pre-registered-but-absent hook paths, touch/rm asymmetry) and implement."""
 created_at = 1785376257
-updated_at = 1790184609
+updated_at = 1790251612
 weight = 0.0
 
 [[task]]
@@ -6097,7 +5875,7 @@ touched_files = []
 status = "pending"
 notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 21b7b1a7 --status pending"
 created_at = 1785376999
-updated_at = 1787120517
+updated_at = 1790251612
 weight = 0.0
 
 [[task]]
@@ -6112,7 +5890,7 @@ notes = """
 2026-07-30 実測: jq で ~/.claude/settings.json の enabledPlugins を確認したところ fetchguard@yukineko / taintguard@yukineko / mutategate@yukineko の3つが ABSENT。taintguard 分は既存項目 e4687aad が、fetchguard 分は a9ff687e がカバーするので、本項目は mutategate と『そもそも意図的に無効化されているのか』の判断部分に限る。意図なら a9ff687e / e4687aad の前提も崩れる。
 除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 6803bd45 --status pending"""
 created_at = 1785377000
-updated_at = 1787120517
+updated_at = 1790251612
 weight = 0.0
 
 [[task]]
@@ -6125,7 +5903,7 @@ touched_files = []
 status = "pending"
 notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 079b643f --status pending"
 created_at = 1785377010
-updated_at = 1787120517
+updated_at = 1790251612
 weight = 0.0
 
 [[task]]
@@ -6166,7 +5944,7 @@ notes = """
 実測 (2026-08-03, linux-x86_64): バイナリ欠落時、blastguard の launcher だけは permissionDecision:ask + 'NOT evaluated / UNCHECKED, not approved' を stdout に出して fail-CLOSED する。一方 budgetguard / propguard / stuckguard / overwatch / autoflow / harness-status / playbook / runbook / session-insights / ship の launcher は stderr にメッセージを出すだけで exit 0 = hook 的には「異常なし」= ガードが無音で外れる。propguard / stuckguard / overwatch は check-plugin-rollout.py 自身が GATE crate として分類しているのに fail-open。condukt も同様で、condukt state autonomy-check の exit 0 が偽の「自律モード」として読まれ、/flow が human gate を自答し始める寸前だった (exit 1 = 非自律 が正)。対応方針: blastguard/bin/blastguard の launcher が既に持っている fail-closed パターンを全 plugin の launcher に横展開する。特に exit code の意味が「許可」に倒れる hook (PreToolUse/Stop) では絶対に exit 0 で抜けないこと。
 除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 8aeb4cab --status pending"""
 created_at = 1785740425
-updated_at = 1787120517
+updated_at = 1790251612
 weight = 0.0
 
 [[task]]
@@ -6184,7 +5962,7 @@ notes = """
 実測 (2026-08-03): scripts/rollout-plugins.sh --canary は canary stage plan を overwatch バイナリ (overwatch canary-plan) で計算する。しかし overwatch 自身が「linux バイナリ欠落」対象になっていると、launcher が空 stdout + exit 0 を返し、それを json.load して JSONDecodeError: Expecting value: line 2 column 1 で traceback crash する。= 「壊れた状態を直すための道具が、壊れた状態では使えない」ブートストラップ・デッドロック。しかも stage plan が空のまま進みかけるので fail-open でもある。対応方針: (1) canary-plan の stdout が空/非 JSON なら明示的に fail-closed して「overwatch を先に復旧せよ」と案内する (2) gate crate 自身の復旧は canary を要求しない bootstrap 経路を用意する。
 除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit b4947e03 --status pending"""
 created_at = 1785740425
-updated_at = 1787120517
+updated_at = 1790251613
 weight = 0.0
 
 [[task]]
@@ -6210,7 +5988,7 @@ touched_files = []
 status = "pending"
 notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 82ba4a00 --status pending"
 created_at = 1785809526
-updated_at = 1787120517
+updated_at = 1790251613
 weight = 0.0
 
 [[task]]
@@ -6223,7 +6001,7 @@ touched_files = []
 status = "pending"
 notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit dab60741 --status pending"
 created_at = 1785809527
-updated_at = 1787120517
+updated_at = 1790251613
 weight = 0.0
 
 [[task]]
@@ -6279,7 +6057,7 @@ touched_files = []
 status = "pending"
 notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 491f6e94 --status pending"
 created_at = 1785824135
-updated_at = 1787120517
+updated_at = 1790251613
 weight = 0.0
 
 [[task]]
@@ -6297,22 +6075,6 @@ status = "pending"
 notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 9ae938ed --status pending"
 created_at = 1785824136
 updated_at = 1787120517
-weight = 0.0
-
-[[task]]
-id = "ff95f88e"
-title = "taintguard gate が AEGIS の worker ワークフローと構造的に非互換 — Read を 1 回でもした turn は write 系が全滅し、既存実装を読んで踏襲 + pytest で RED 実測 + git commit ができない"
-project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-2026-08-04 実測。taintguard 0.1.10 の hooks.json: PostToolUse(WebFetch|WebSearch|Read) で taint marker、PreToolUse(Bash|Write|Edit|MultiEdit|NotebookEdit) で tainted なら deny、Stop で解除。condukt run-20260804-161341-14604 の worker 3 体 (+ 再投入 2 体) が全滅し実装 0 件。無効化スイッチは TAINTGUARD_OBSERVE_ONLY=1 (README.ja.md:119 が ゲートを無効化する設定である と明記) だが、プロジェクトの settings ファイルへの env 追加は blastguard が gate 設定の編集として拒否するため Claude 側からは設定できない (正しい挙動)。要ユーザー判断: (a) 人手で env を入れる (hook env はプロセス起動時解決なのでセッション再起動が要る可能性) (b) worker に Read を一切させない設計にして回避する (残作業が Write/Bash のみのタスクには有効) (c) taintguard 側に AEGIS worker 向けの例外を入れる。
-
---- 移設 20260820: machine-local ~/.backlog/tasks.toml から repo の .backlog/tasks.toml へ。移設前の project = '' (この値では repo ストアの既定 list に出ない)。 ---"""
-created_at = 1785830074
-updated_at = 1785830074
 weight = 0.0
 
 [[task]]
@@ -6537,41 +6299,6 @@ check-plugin-rollout.py が .deployed-from.json の欠落をどう判定する�
 再キー: 元 id 2dfb54f8 として /mnt/c/Users/hiroyuki_nakayama/src/.harness-worktrees/session-e7948728 のプロジェクトキーで起票されていたものを /mnt/c/Users/hiroyuki_nakayama/src/harness へ移送した (2026-08-18)。理由は backlog b0ff8c74 (worktree から起票すると削除予定のパスに紐づく構造矛盾)。"""
 created_at = 1787033481
 updated_at = 1787033481
-weight = 0.0
-
-[[task]]
-id = "484b01ff"
-title = "condukt Phase 1 の lessons 注入が turn を tainted にし、以降の condukt run 全体が taintguard で ask/deny に降格する"
-project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-実測 2026-08-18, 測定点 01deeab2 (worktree session-e7948728):
-
-condukt SKILL.md の Phase 1 は 'lessons コンテキスト注入' として `condukt lessons record-retrieval --run ... --query ... --k 3` を呼ぶよう指示している。これを実行した直後の Bash 呼び出しで taintguard が発火し、逐語で次を出した:
-
-  [taintguard] OBSERVE-ONLY (measurement mode, TAINTGUARD_OBSERVE_ONLY=1): this turn consumed
-  untrusted-provenance content (lessons). Normally this `Bash` call would be downgraded to ask/deny
-  for the rest of the turn; enforcement was SUPPRESSED because observe-only is active
-
-つまり **TAINTGUARD_OBSERVE_ONLY=1 が外れた瞬間、condukt の Phase 1 を通ったすべての run は Phase 2 以降の Bash/Write/Edit が ask/deny に降格する**。condukt は Phase 2 (validate/schedule)・Phase 4 (state init)・Phase 5 (worker 起動と commit)・Phase 6 (検証) がすべて Bash に依存するので、オーケストレーション全体が停止する。
-
-SKILL.md 側は lessons_context を 'UNTRUSTED LESSONS CONTEXT' マーカーで隔離して prompt injection 対策は取っているが、**taintguard の provenance 追跡は隔離マーカーを見ない**(消費した事実だけを見る)。したがって隔離は injection には効くが taint には効かない。
-
-判定不能な2つの読み:
-(a) 実在の設計衝突 — condukt Phase 1 の lessons 注入と taintguard の provenance ゲートが両立しない。observe-only はこの衝突を計測のために一時的に隠しているだけで、enforcement に戻せば condukt が壊れる。
-(b) 意図的な設計 — lessons は cross-project 由来なので tainted 扱いが正しく、condukt 側が Phase 1 で lessons を諦めるか、taintguard に lessons store を Trusted source として登録すべき。
-
-見分ける方法: crates/taintguard/src/classify.rs が lessons store のパス (~/.fugu-router/ または condukt の lessons store) をどう分類するか読む。Trusted に入っていないなら (a) か (b) の実装選択の問題。また TAINTGUARD_OBSERVE_ONLY が誰によっていつ設定されたか (settings.json か shell env か) を確認し、observe-only 期間の終了予定があるかを見る。観測台帳 (observe-only ledger) に lessons 由来の件数が何件積まれているかも measurable。
-
-影響範囲: condukt を使う全 skill (/condukt, /flow, /condukt-loop, /scout 経由)。
-
----
-再キー: 元 id a0d3cb74 として /mnt/c/Users/hiroyuki_nakayama/src/.harness-worktrees/session-e7948728 のプロジェクトキーで起票されていたものを /mnt/c/Users/hiroyuki_nakayama/src/harness へ移送した (2026-08-18)。理由は backlog b0ff8c74 (worktree から起票すると削除予定のパスに紐づく構造矛盾)。"""
-created_at = 1787033482
-updated_at = 1787033482
 weight = 0.0
 
 [[task]]
@@ -7019,59 +6746,6 @@ worker は hypothesis 0.1.13->0.1.14 と harness-core 0.2.7->0.2.8 を bump し�
 注意: rollout-plugins.sh は全ゲート green 後にユーザー確認を取ってから実行する。"""
 created_at = 1787034065
 updated_at = 1787034065
-weight = 0.0
-
-[[task]]
-id = "a8f0b77f"
-title = "/session-insights:record が repo 外の Obsidian ノートを Read するため taintguard 有効時に保存できない (observe-only に依存している)"
-project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = """
-実測 2026-08-18, セッション e7948728。
-
-/session-insights:record は手順として (1) record-now でノートを生成し repo 外の絶対パスを得る (2) そのパスを Read する (3) 散文を埋めて同じパスに Save する、を要求する。今回のパスは /mnt/c/Users/hiroyuki_nakayama/aegis-obsidian/records/2026-08-18-harness-e7948728.md。
-
-taintguard の分類器 (crates/taintguard/src/classify.rs) が Trusted を返すのは cwd 配下と同一リポジトリの worktree の 2 本だけなので、Obsidian vault は該当しない。したがって手順 (2) の Read で turn が external-read で tainted になり、手順 (3) の Write が本来 deny される。
-
-今回の観測値 (Write の PreToolUse hook が返した逐語):
-  [taintguard] OBSERVE-ONLY (measurement mode, TAINTGUARD_OBSERVE_ONLY=1): this turn consumed untrusted-provenance content (external-read). Normally this Write call would be downgraded to ask/deny for the rest of the turn; enforcement was SUPPRESSED because observe-only is active, and the event was recorded to the observe-only ledger for counting. This is NOT a clean turn.
-
-つまり保存できたのは ~/.claude/settings.json:5 の TAINTGUARD_OBSERVE_ONLY=1 のおかげであり、observe-only を外すと /record は完走できない。これは taintguard の誤検知ではなく仕様どおりの正しい判定であり、直すべきは skill 側かノートの置き場所である。
-
-484b01ff (condukt Phase 1 の lessons 注入が turn を tainted にする) と同クラス。observe-only を外す前に洗い出すべき依存の一覧に加えること。
-
-修正候補: (a) ノートの読み書きを Read/Write ツールではなく session-insights バイナリ側で完結させる (mark の PostToolUse matcher は WebFetch|WebSearch|Read であって Bash を見ていない)。(b) vault を repo 内に置けるようにする。(c) taintguard に vault パスの allowlist を設ける — ただし allowlist は分類器の Trusted 経路を広げるので慎重に。"""
-created_at = 1787034066
-updated_at = 1787034066
-weight = 0.0
-
-[[task]]
-id = "449fc610"
-title = "taintguard の taint は自セッションの Read 以外からも populate される (lessons 源を実測)"
-project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = "実測 2026-08-18, 測定点 01deeab2。observe-only ledger /home/hiroyuki_nakayama/.taintguard/state/session-e7948728-c2f0fa5e/observe-only.jsonl の 55 エントリのうち 14:26:13-14:48:32 の 50 件は sources=lessons であり、当該 subagent は lessons ストアを一度も読んでいない。つまり taint はそのセッションの ID を共有する親セッションまたは hook によっても書かれる。含意: CLAUDE.md の 一時ファイルは worktree の .scratch に置けば Trusted だから安全 という指示は不十分で、自分が外部を一切読まなくても親経由で turn が汚れうる。TAINTGUARD_OBSERVE_ONLY=1 が外れた環境では同じ手順が deny されえる。判定不能として残す点: 15:18:32 に sources が external-read へ切り替わった具体的な原因パスは ledger がツール名と源ラベルとセッション ID しか持たないため特定できていない。見分ける方法: ledger に源となった Read の解決済みパスを記録するフィールドを足せば A(自分の .scratch Read) と B(親の repo 外 Read) を分離できる。関連 a8f0b77f。"
-created_at = 1787034955
-updated_at = 1787034955
-weight = 0.0
-
-[[task]]
-id = "25c5f26a"
-title = "observe-only では taint.json が書かれないため tainted 判定の根拠が観測不能"
-project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "実測 2026-08-18。/home/hiroyuki_nakayama/.taintguard/state/sessions/e7948728-ff5d-448a-a619-74802ac249ef/ は空 (mtime のみ更新)。state 配下の taint.json は 24 個すべて sessions/<id>/taint.json の深さ 3 で、プロジェクト単位のものは無い。observe-only モードでは ledger にのみ追記して taint.json を書かないように見えるが、それでは check 側が何を読んで tainted と判定したのかを外部から追跡できない。これは判定の入力が観測不能という意味で CLAUDE.md 第2節の 判断ではなく観測 に反する。少なくとも observe-only の ledger エントリに、判定に使った state ファイルのパスと読み取った sources の出所を含めるべき。起票時点で これがバグか意図的な設計かは判定できていない ので両方の読みを残す: (a) observe-only は state を汚さない設計で意図的 (b) 判定根拠が消えているので欠陥。見分ける方法: crates/taintguard の check 経路が observe-only 時に taint state をどこから読むかをコードで辿る。"
-created_at = 1787034964
-updated_at = 1787034964
 weight = 0.0
 
 [[task]]
@@ -17470,7 +17144,7 @@ blastguard:interpreter-unrecoverable-write の 2 signature だけ (fix 2acee03f)
 本 item は着手されていない。measured: 何も測っていない。unverified: すべて。
 推測で埋めずに pending のまま残す。"""
 created_at = 1790184320
-updated_at = 1790244863
+updated_at = 1790251610
 weight = 0.0
 issue_number = 720
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/720"
@@ -17533,7 +17207,7 @@ blastguard:interpreter-unrecoverable-write の 2 signature だけ (fix 2acee03f)
 本 item は着手されていない。measured: 何も測っていない。unverified: すべて。
 推測で埋めずに pending のまま残す。"""
 created_at = 1790184342
-updated_at = 1790244864
+updated_at = 1790251610
 weight = 0.0
 issue_number = 729
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/729"
@@ -17554,7 +17228,7 @@ kind:systemic identifier:blastguard:git-config-hookspath occurrences:1
 
 USER RULING 2026-09-24: keep the deny; change the deny message only, so it suggests 'git config --get core.hooksPath'. All ~20 recovered occurrences were the one-argument read."""
 created_at = 1790184346
-updated_at = 1790247474
+updated_at = 1790251611
 weight = 0.0
 issue_number = 731
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/731"
@@ -17575,7 +17249,7 @@ kind:systemic identifier:blastguard:unresolvable-command-word occurrences:1
 
 USER RULING 2026-09-24: safe-reader list. Skip heredoc body analysis only when the delimiter is quoted AND the reader is known not to run the body (git commit -F -, cat, backlog --notes, ...); any other reader keeps analysing (fail closed). 78/465 rows were backticks in quoted-heredoc bodies; 359 variable command words are correct asks. Related c6fe8ca0 / 9e8fd854."""
 created_at = 1790184349
-updated_at = 1790247474
+updated_at = 1790251611
 weight = 0.0
 issue_number = 733
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/733"

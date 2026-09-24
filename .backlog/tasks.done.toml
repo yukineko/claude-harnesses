@@ -13613,3 +13613,150 @@ updated_at = 1790253366
 weight = 0.0
 issue_number = 126
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/126"
+
+[[task]]
+id = "ee08c7c0"
+title = "propguard: diff-read-failed-giveup の ALLOW が violation を残さず escalate もされない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "verified",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+検証者が逐語で追跡。crates/propguard/src/gate.rs:660-673 の give-up は max_attempts 超過で Decision::Allow を返し attempts を 0 にリセットするため、恒久的に読めない diff は 3 stop に 1 回の周期で無期限に素通りする (max_attempts=2 の既定で stop3・stop6・... が ALLOW)。加えて (a) escalate_giveup_on_systemic (gate.rs:478-483) は tag が checker-error-giveup のものだけを拾い diff-read-failed-giveup を拾わない、(b) emit_violation は Decision::Block の腕からしか呼ばれないので give-up の ALLOW は overwatch violation store に何も残さない。唯一の痕跡が eprintln = transcript と共に消える。これは truncated-giveup / git-scan-failed-giveup と同型の crate 継承の設計であり 9a2eb9f0 が持ち込んだ穴ではないが、3 兄弟すべてが同じ盲点を共有している。
+
+2026-09-24 re-measured by an independent sonnet sweep at main 0eea9dbb, key evidence spot-checked by the dispatcher: FIXED. crates/propguard/src/gate.rs:509-513 OUTAGE_GIVEUP_TAGS now includes "diff-read-failed-giveup" alongside checker-error-giveup and git-scan-failed-giveup, and escalate_giveup_on_systemic (gate.rs:545) operates on is_outage_giveup() which checks membership in that full list — no longer checker-error-giveup only. crates/propguard/src/main.rs handle_checker_outage() (comment: 'before CA-propguard-02 only checker-error-giveup was handled here') now runs for every OUTAGE_GIVEUP_TAGS Allow BEFORE the match, records the occurrence via record_and_check_systemic_outage -> overwatch::store::append_violation (so an Allow give-up DOES now leave a violation-store trace, contradicting the item's (b)), and escalates to Decision::Block("checker-outage-systemic") plus overwatch::store::record_finding when systemic. Dedicated tests confirm: gate.rs:1554 ca_propguard_02_git_scan_giveup_also_escalates_when_s"""
+created_at = 1785972083
+updated_at = 1790253408
+weight = 0.0
+issue_number = 185
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/185"
+
+[[task]]
+id = "d8d0778c"
+title = "flow: backlog が空のとき compass/hypothesis を根拠にループを継続せず停止する (停止条件を compass+backlog の2つに絞る)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flow",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+ユーザー要望 2026-08-06: 「flow したときに有効な backlog がないと loop したりしないか? そういうときは backlog をしないで停止してほしい。あるいは compass とって backlog とってなければ停止とかでいい。残件があるなら継続してほしいが、そうでないならタスク終了で停止の方がよかった」「自律モードはタスクあるかぎり続けてほしいが、それでも無理にタスクがないのに繰り返しはいらない」。現状の SKILL.md Step 3-1 の 5 は「compass 主筋・measure・backlog・open 仮説のいずれも実行可能なものが無い」ときにループを抜けると規定しており、backlog が空でも compass 主筋と open 仮説が source として残るため、compass が一手を出し続ける限りループは継続する。これが「有効な backlog が無いのに繰り返す」の実体。要望は停止条件を compass + backlog の2つに絞ること。完了条件: (1) 停止条件を SKILL.md に明記し、backlog が空でかつ compass が右サイズの一手を出さない場合はループを抜けて Step 4 へ行くことを規定する、(2) open 仮説だけを根拠にした新規ループ継続をしない (計測待ちは残課題として報告するのみ) ことを規定する、(3) flow プラグインの version を3ファイル lockstep で micro 上げる。注意: 停止を早めすぎると自律モードで「タスクがあるのに止まる」になるため、pending が残っている場合は継続する側を壊さないこと。
+
+2026-09-24 re-measured by an independent sonnet sweep at main 0eea9dbb, key evidence spot-checked by the dispatcher: FIXED. commit eb127a5b ('fix(flow): the loop kept going with an empty queue because it could invent work', 'Resolves backlog d8d0778c.') rewrote Step 3-1 item 5 in crates/flow/skills/flow/SKILL.md. Current text (line 356): '5. 停止判定 — 仕事が無いなら繰り返さない。継続してよいのは次の 3 つが実際に一手を出したとき だけ: (i) backlog の pending ... (ii) measure step ... 今observable な awaiting-measurement 仮説 ... (iii) compass 主筋 ...'; and (line 363-366): '**`open` 仮説だけを根拠にループを継続してはいけない** ... 残っている open 仮説と、まだ観測不能な awaiting-measurement は、**残課題として報告するだけ**にしてループは終える。' This matches completion criteria (1) and (2) of the item (stop when backlog empty and compass yields no move; open hypotheses alone are never a continuation reason, only reported). Criterion (3), version bump, is confirmed in the same commit's diff: marketplace.json flow entry '"version": "0.2.3"' -> '"version": "0.2.4"' (plugin.json/Cargo.toml bumped in the same commit per its m"""
+created_at = 1786022893
+updated_at = 1790253409
+weight = 0.0
+issue_number = 189
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/189"
+
+[[task]]
+id = "594f4e56"
+title = "blastguard resolve_expanded_command_word: 条件付き実行の代入 (&& / ||) を Literal に落とさない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """2026-09-24 re-measured by an independent sonnet sweep at main 0eea9dbb, key evidence spot-checked by the dispatcher: FIXED. crates/blastguard/src/detect.rs:3088 `resolve_expanded_command_word` calls `assignment_execution_is_unconditional(&segs, assign_idx)` (fn defined at :2446, checks `matches!(s.sep_after, SegmentSep::Conditional)` before the assignment) and returns `CommandWordOrigin::AssignedButUnknowable` when guarded. Dedicated test at :11195 `fn an_assignment_guarded_by_a_conditional_is_never_a_literal()` asserts `!matches!(got, CommandWordOrigin::Literal(_))` for `"foo && BIN=/bin/rm; $BIN -rf /x"` and `"foo || BIN=/bin/rm; $BIN -rf /x"`, plus a companion test `the_conditional_that_disqualifies_precedes_the_assignment_not_the_use` pinning the assign-side-vs-use-side distinction. Introduced in commit 50248d45 (2026-08-07 01:34:47) — the same commit whose log message flags this exact `&&`/`||` gap as an 'unresolved defect handed to the next task / already filed in backlog', but the guard logic and tests"""
+created_at = 1786034097
+updated_at = 1790253410
+weight = 0.0
+issue_number = 205
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/205"
+
+[[task]]
+id = "79ecf4dc"
+title = "backlog canonicalize_project の write 側は判定不能でも未解決ラベルで保存を続ける"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["1"]
+touched_files = []
+status = "done"
+notes = """
+run-20260807-005024-18629 の残課題。store.rs の canonicalize_project は canonical_project_id が Undetermined のとき stderr へ診断を出したうえで resolve_repo_root へフォールバックし write を継続する。add をブロックすると finding 自体が失われるため degrade は正当化されたが、保存されたタスクに判定不能だった痕跡が残らないため別 checkout の既定 filtered list に現れない可能性がある。task に marker を持たせるか list 側で未解決ラベルを別扱いするかを検討する。
+
+2026-09-24 re-measured by an independent sonnet sweep at main 0eea9dbb, key evidence spot-checked by the dispatcher: FIXED. crates/backlog/src/store.rs:2017-2069 `canonicalize_project_with_marker` now returns `CanonicalProject{label, unresolved: bool}` (struct at :1940/:1960) instead of a bare label; on `Determination::Undetermined` it sets `unresolved: true` (with a stderr diagnostic) and every write path persists this onto the task as `Task::project_unresolved` (crates/backlog/src/task.rs:55). crates/backlog/src/main.rs:945 `let scope_str = if t.project_unresolved { format!("  [project unresolved: {}]", t.project) }` renders it distinctly in `list` instead of blending in silently. Fixed by commit d319e27e 'fix(backlog): 判定不能で書かれたタスクに痕跡を残し、既定listから黙って消えないようにする' (2026-08-07 05:29:58), landed after the item's filing commit 9e392942 (03:20:33), confirmed via `git merge-base --is-ancestor`."""
+created_at = 1786040386
+updated_at = 1790253411
+weight = 0.0
+issue_number = 206
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/206"
+
+[[task]]
+id = "ca186c31"
+title = "backlog 軸C オラクルの対照は store 有無で判別しており判定不能性そのものに固定されていない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["2"]
+touched_files = []
+status = "done"
+notes = """
+tests/project_identity.rs の broken_git_link_does_not_silently_hide_an_existing_task は、健全 repo かつ store 無しの対照と、壊れた .git リンクかつ store 有りの側を比較する。したがって store の有無だけを判別子にする修正でも緑になり、判定不能性を一度も参照しない。独立 verifier 2名がこの限界を確認し doc comment にも明記済み。第3の腕 (健全 repo かつ store 有りでフィルタ落ち) を足すと判別子を resolvability に固定できる。
+
+2026-09-24 re-measured by an independent sonnet sweep at main 0eea9dbb, key evidence spot-checked by the dispatcher: FIXED. crates/backlog/tests/project_identity.rs (test renamed to `a_dangling_git_link_no_longer_hides_an_existing_task`, line 407) now includes an 'Observation C' third arm (line ~540 comment '---- Observation C, also inverted: another checkout's label ----') using a HEALTHY repo WITH a store present, asserting `assert_ne!((c_code, c_out...), genuinely_empty_observation, ...)` — pinning the discriminator away from mere store-presence. Fixed by commit 6d538d91 'test(backlog): 軸C オラクルに第3の腕を足し、判別子を resolvability に固定する' (2026-08-07 03:58:14), whose message documents independent fault-injection confirming a kill (replacing the resolvability check with store-presence-only makes the new assert_eq! at project_identity.rs fail with exit 101; reverting is green). Filed at 9e392942 (03:20:33), fix lands after (`git merge-base --is-ancestor` confirms ancestry)."""
+created_at = 1786040415
+updated_at = 1790253413
+weight = 0.0
+issue_number = 207
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/207"
+
+[[task]]
+id = "29a4bcc3"
+title = "backlog next は list と違い cwd 由来の既定 project スコープを持たない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["2"]
+touched_files = []
+status = "done"
+notes = """
+run-20260807-005024-18629 で軸C を list に入れた際に気づいた。main.rs の Next ハンドラは project を Option のまま store::next へ渡すだけで、list のような cwd 解決の既定スコープを持たない。したがって軸C の判定不能経路も通らない。意図的な設計なのか未対応なのかを確認する。意図的ならその旨を docstring に明記する。
+
+2026-09-24 re-measured by an independent sonnet sweep at main 0eea9dbb, key evidence spot-checked by the dispatcher: FIXED. crates/backlog/src/main.rs:965-988, `Command::Next` handler: comment '`next` carries the SAME cwd-derived default project scope as `list` (`default_project_scope`), and for the same two reasons... 2. Fail-closed... `default_project_scope` returns `Err`...' followed by `let effective_project = read_project_scope(&location, project, all, "next")?;` — the exact same helper `list` uses (main.rs:868). Fixed by commit 08fd27ea 'fix(backlog): next に list と同じ cwd 既定 project スコープと判定不能 fail-closed を与える' (2026-08-07 04:31:18), landing after the item's filing commit 9e392942 (03:20:33), confirmed ancestor."""
+created_at = 1786040416
+updated_at = 1790253414
+weight = 0.0
+issue_number = 208
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/208"
+
+[[task]]
+id = "ea6f27b1"
+title = "specguard の spec-map 同期が main の作業ツリーを常時 dirty にする (§8 と構造的に衝突)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = """
+post-merge フックが .specguard/spec-map.toml の last_synced を main の新 HEAD へ書き換えるため、merge のたびに main が dirty になる。CLAUDE.md §8 は main で非 merge commit を禁じているので、この差分を main で commit できない。worktree で commit すると last_synced が worktree HEAD ではなく main HEAD を指す値になり、merge 後にまた drift する（自分の尻尾を追う）。観測 2026-08-07、測定点 b204c4ed。git log に chore(specguard): sync spec-map last_synced to X という commit が複数あり、いずれも main 上で打たれている＝§8 の例外運用が常態化している。
+
+2026-09-24 re-measured by an independent sonnet sweep at main 0eea9dbb, key evidence spot-checked by the dispatcher: FIXED. Commit fe238c59 (2026-08-17, 'chore(specguard): spec-map を git 管理から外す (post-merge stamp が収束しないため)') removed `.specguard/spec-map.toml` from git tracking and added it to .gitignore (current .gitignore:80 `.specguard/spec-map.toml`, confirmed via `git log -S".specguard/spec-map.toml" -- .gitignore` showing only this one commit). `.githooks/post-merge` (current content) still runs `specguard map sync` unconditionally after a real merge, but since the output file is now untracked+ignored, this no longer dirties git status on main: `git status --porcelain -- .specguard/` at current HEAD returns nothing, and `git ls-tree HEAD -- .specguard/` is empty, even though the file physically exists on disk (regenerated locally). The item was filed 2026-08-07, before this fix landed."""
+created_at = 1786046798
+updated_at = 1790253415
+weight = 0.0
+issue_number = 215
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/215"
+
+[[task]]
+id = "5742e1d5"
+title = "specguard spec-map の自己追尾ドリフトは fast-forward merge で止まる（ea6f27b1 の観測結果）"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "done"
+notes = """
+観測 2026-08-07、測定点 main 1b35d662 -> 31f1fe99。.githooks/post-merge は先頭で HEAD^@ の親数を数え、2 未満なら exit 0 する（ファイル冒頭の注記: fast-forward merge はコミットを作らないので certify 対象が無い）。specguard map sync はその early-exit の後段にあるため ff merge では走らない。実測: dirty だった spec-map をワークツリーのブランチへ commit し main へ --ff-only で取り込んだところ git status は clean のままで再ドリフトしなかった。--no-ff で取り込むと post-merge が走り last_synced が新しい merge commit を指して再び dirty になる（これが ea6f27b1 の追尾ループ）。したがって回避策は存在する: spec-map 同期コミットは ff で取り込む。ただし ff できない状況（main が先に進んでいる）では成立しないので恒久策は別途要る。last_synced が常に 1 コミット古くなる点は残る。
+
+2026-09-24 re-measured by an independent sonnet sweep at main 0eea9dbb, key evidence spot-checked by the dispatcher: OBSOLETE. The item documents a workaround (land spec-map sync via fast-forward merge to dodge post-merge's stamp-rewrite) for the ea6f27b1 self-chasing-drift problem, which existed only because `.specguard/spec-map.toml` was a git-tracked file. Commit fe238c59 (2026-08-17) untracked that file entirely (now in .gitignore, confirmed absent from `git ls-tree HEAD`), so there is no longer any tracked artifact for a merge (ff or non-ff) to drift on, and no more 'chore(specguard): sync spec-map last_synced to X' commits are needed on main (git log shows the last such commit, e9f3bd46/69198ea4, only surviving on a side branch that a later merge db1ebe23 on 2026-09-18 resolved AWAY from, per `git show 48436d38:.specguard/spec-map.toml` failing / `git show e57a2ebb:.specguard/spec-map.toml` succeeding, with the merge keeping the no-file side)."""
+created_at = 1786047274
+updated_at = 1790253416
+weight = 0.0
+issue_number = 217
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/217"

@@ -34,10 +34,21 @@ allowed. Lockfiles, `node_modules`, `target`, generated files, etc. are excluded
 A *reviewer* that itself fails is **not** the same as a clean review, so it does
 not silently allow — that would turn a broken reviewer into a bypass:
 
-- A reviewer subprocess that crashes / times out / emits unusable output →
+- A reviewer subprocess that crashes / times out / emits unusable output (empty
+  stdout, non-UTF-8 stdout, or the prompt could not be delivered) →
   **block** (bounded by `max_attempts`), then give up loudly.
 - A diff too large to review whole (truncated to `max_diff_bytes`) has an
   unreviewed tail → **block** (bounded by `max_attempts`), then give up loudly.
+- A diff whose content fetch partly failed (a `git diff` / `git ls-files` call
+  errored, or an untracked file could not be read) is incomplete → **block**
+  (bounded, same path as a failed change scan), never hashed as reviewed.
+- When the independent reviewer still reports findings after `max_attempts`,
+  the stop is allowed with a stderr WARNING, the distinct log tag
+  `review-giveup`, and an overwatch violation event.
+- A malformed `include` glob widens the review to every changed file (a
+  malformed `exclude` glob excludes nothing), with a stderr WARNING. A config
+  file that cannot be read/parsed is reported (stderr WARNING, and `status`
+  shows `FAILED to load`); the built-in defaults are in effect.
 
 In both cases the block reason names every escape hatch (`reviewgate skip
 --reason "<why>"`, `REVIEWGATE_DISABLE=1`, raising `max_diff_bytes`), so a broken

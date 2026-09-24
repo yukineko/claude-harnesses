@@ -60,10 +60,16 @@ pub struct Config {
     /// The review checklist injected into the model / handed to the reviewer.
     pub rubric: String,
     /// subprocess mode: command line that receives the review prompt on stdin
-    /// and prints findings on stdout. "LGTM" (or empty) = no issues.
+    /// and prints findings on stdout. "LGTM" = no issues; empty output is NOT
+    /// clean (it is undetermined and blocks, bounded by `max_attempts`).
     pub reviewer_cmd: String,
     pub reviewer_timeout_secs: u64,
     pub state_dir: PathBuf,
+    /// `Some(why)` when a config file was chosen but could not be read or
+    /// parsed. The built-in defaults are then in effect, NOT that file's
+    /// settings — `status` and the review path must say so rather than report
+    /// the file as adopted (audit P7).
+    pub load_error: Option<String>,
 }
 
 /// On-disk form; every field optional.
@@ -164,6 +170,7 @@ impl Default for Config {
             reviewer_cmd: "claude -p".to_string(),
             reviewer_timeout_secs: 300,
             state_dir: base_dir().join("state"),
+            load_error: None,
         }
     }
 }
@@ -212,46 +219,53 @@ impl Config {
         };
 
         if let Some(path) = chosen {
-            if let Ok(text) = std::fs::read_to_string(&path) {
-                if let Ok(fc) = toml::from_str::<FileConfig>(&text) {
-                    if let Some(v) = fc.enabled {
-                        cfg.enabled = v;
+            let parsed = std::fs::read_to_string(&path)
+                .map_err(|e| format!("read {}: {e}", path.display()))
+                .and_then(|text| {
+                    toml::from_str::<FileConfig>(&text)
+                        .map_err(|e| format!("parse {}: {e}", path.display()))
+                });
+            if let Err(e) = &parsed {
+                cfg.load_error = Some(e.clone());
+            }
+            if let Ok(fc) = parsed {
+                if let Some(v) = fc.enabled {
+                    cfg.enabled = v;
+                }
+                if let Some(v) = fc.mode {
+                    cfg.mode = Mode::parse(&v);
+                }
+                if let Some(v) = fc.max_attempts {
+                    cfg.max_attempts = v;
+                }
+                if let Some(v) = fc.reset_after_secs {
+                    cfg.reset_after_secs = v;
+                }
+                if let Some(v) = fc.min_changed_files {
+                    cfg.min_changed_files = v;
+                }
+                if let Some(v) = fc.max_diff_bytes {
+                    cfg.max_diff_bytes = v;
+                }
+                if let Some(v) = fc.include {
+                    cfg.include = v;
+                }
+                if let Some(v) = fc.exclude {
+                    cfg.exclude = v;
+                }
+                if let Some(v) = fc.rubric {
+                    if !v.trim().is_empty() {
+                        cfg.rubric = v;
                     }
-                    if let Some(v) = fc.mode {
-                        cfg.mode = Mode::parse(&v);
-                    }
-                    if let Some(v) = fc.max_attempts {
-                        cfg.max_attempts = v;
-                    }
-                    if let Some(v) = fc.reset_after_secs {
-                        cfg.reset_after_secs = v;
-                    }
-                    if let Some(v) = fc.min_changed_files {
-                        cfg.min_changed_files = v;
-                    }
-                    if let Some(v) = fc.max_diff_bytes {
-                        cfg.max_diff_bytes = v;
-                    }
-                    if let Some(v) = fc.include {
-                        cfg.include = v;
-                    }
-                    if let Some(v) = fc.exclude {
-                        cfg.exclude = v;
-                    }
-                    if let Some(v) = fc.rubric {
-                        if !v.trim().is_empty() {
-                            cfg.rubric = v;
-                        }
-                    }
-                    if let Some(v) = fc.reviewer_cmd {
-                        cfg.reviewer_cmd = v;
-                    }
-                    if let Some(v) = fc.reviewer_timeout_secs {
-                        cfg.reviewer_timeout_secs = v;
-                    }
-                    if let Some(v) = fc.state_dir {
-                        cfg.state_dir = expand_tilde(&v);
-                    }
+                }
+                if let Some(v) = fc.reviewer_cmd {
+                    cfg.reviewer_cmd = v;
+                }
+                if let Some(v) = fc.reviewer_timeout_secs {
+                    cfg.reviewer_timeout_secs = v;
+                }
+                if let Some(v) = fc.state_dir {
+                    cfg.state_dir = expand_tilde(&v);
                 }
             }
         }

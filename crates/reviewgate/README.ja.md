@@ -25,8 +25,11 @@ reviewgate はレビュー対象の diff をハッシュ化する。最後にレ
 
 *レビュアー*自体の失敗は「レビュー結果クリーン」とは**異なる**ため、無言で許可はしない（壊れたレビュアーがバイパスになってしまうため）：
 
-- レビュアーの subprocess が crash / timeout / 解析不能な出力 → **ブロック**（`max_attempts` で有界）後に警告して通過。
+- レビュアーの subprocess が crash / timeout / 解析不能な出力（stdout が空・非 UTF-8、prompt を渡せなかった場合を含む） → **ブロック**（`max_attempts` で有界）後に警告して通過。
 - diff が大きすぎて丸ごとレビューできず切り詰められた（`max_diff_bytes` で truncate）場合、未レビューの末尾が残る → **ブロック**（`max_attempts` で有界）後に警告して通過。
+- diff 内容の取得が一部でも失敗した（`git diff` / `git ls-files` のエラー、未追跡ファイルが読めない）場合、diff は不完全 → **ブロック**（変更スキャン失敗と同じ有界経路）。レビュー済みとして hash しない。
+- 独立レビュアーが `max_attempts` 回を超えても所見を返し続けた場合は通過させるが、stderr に WARNING を出し、専用タグ `review-giveup` で記録し、overwatch の violation event も残す。
+- `include` の glob が 1 つでも不正なら全変更ファイルをレビュー対象に広げる（`exclude` の不正 glob は何も除外しない）。いずれも stderr に WARNING。設定ファイルが読めない／parse できない場合も WARNING を出し、`status` に `FAILED to load` と表示する（組み込み既定値で動作）。
 
 どちらの場合もブロック理由にすべての抜け道（`reviewgate skip --reason "<理由>"`、`REVIEWGATE_DISABLE=1`、`max_diff_bytes` の引き上げ）が明示されるため、壊れたレビュアーや大きすぎる diff が turn を永久に塞ぐことはない。
 

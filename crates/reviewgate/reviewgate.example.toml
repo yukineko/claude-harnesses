@@ -45,7 +45,8 @@ max_diff_bytes = 200000
 
 # --- subprocess mode only -------------------------------------------------
 # A command that reads the review prompt on stdin and prints findings on
-# stdout. Output that is empty or starts with "LGTM" means "no issues".
+# stdout. Output that starts with "LGTM" means "no issues". EMPTY or non-UTF-8
+# output is NOT clean: it counts as a reviewer failure and blocks (bounded).
 # `claude -p` runs headless on your Claude subscription (no API key).
 # reviewer_cmd = "claude -p"
 # reviewer_timeout_secs = 300

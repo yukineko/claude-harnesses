@@ -1435,9 +1435,30 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "計測日 2026-08-02、測定点 a30b323f、測定コマンド: overwatch review-metrics。closure [condukt-gate] 0.00 (0/4) / [continuous-audit] 0.00 (0/36) / [record-audit] 0.00 (0/3)。457b44f1 で closure rate が計測可能になった結果、初めて見えた事実。specguard は ack 経由で disposition を積むようになったが、他の producer には閉じる導線が無い。review-metrics は『1 finding に fix commit が landed しているが disposition 無し』も警告している。"
+notes = """
+計測日 2026-08-02、測定点 a30b323f、測定コマンド: overwatch review-metrics。closure [condukt-gate] 0.00 (0/4) / [continuous-audit] 0.00 (0/36) / [record-audit] 0.00 (0/3)。457b44f1 で closure rate が計測可能になった結果、初めて見えた事実。specguard は ack 経由で disposition を積むようになったが、他の producer には閉じる導線が無い。review-metrics は『1 finding に fix commit が landed しているが disposition 無し』も警告している。
+
+--- 2026-09-24 再測: 起票時の数字が現状と一致しない。着手せず pending に戻す ---
+起票時 (2026-08-02、測定点 a30b323f) は 43 findings が queue 済みで disposition 0 件、
+closure 0.00 だった。今日の再測:
+
+  overwatch review-metrics -> "(no dispositions recorded yet -- run overwatch record-disposition)"
+  overwatch review-queue --json -> entries: 3
+    [systemic] blastguard:protected-path が 2 task / 1 session で 5 回再発
+    [merge-conflict] x2 (どちらも condukt/run-20260913-182640-69073/... 由来)
+
+43 -> 3 に減っているが、これが「閉じられた」のか「compact-findings で畳まれた」のか
+「別ストアへ移った」のかを今日は測っていない。disposition は依然 0 件なので、
+closure が上がったわけではないことだけは確か。
+
+測ったこと: 現在の queue 件数 (3) と disposition 件数 (0)。
+測っていないこと: 40 件がどこへ行ったか。producer 別の closure。
+  reconcile-fixed / compact-findings の実行履歴。
+
+推測で埋めずに pending へ戻す。次に着手する人は、まず 40 件の行方を測ること —
+それが「導線が無い」のか「導線はあるが通っていない」のかを分ける。"""
 created_at = 1785634225
-updated_at = 1790183496
+updated_at = 1790253336
 weight = 0.0
 issue_number = 116
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/116"
@@ -1493,25 +1514,6 @@ updated_at = 1785798117
 weight = 0.0
 issue_number = 122
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/122"
-
-[[task]]
-id = "3357c2e2"
-title = "reviewgate P1: diff 取得失敗が empty-diff に潰れ無診断で allow (propguard F-2 と同一 shape の横断パターン)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "reviewgate",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "docs/audit-reviewgate-verdict-paths.md の P1。別セッションの監査が fault injection で実測済み: PATH 先頭の fake git が内容取得コマンドだけを exit 1 にすると、reviewgate は exit 0・stdout/stderr 完全無出力・log verdict empty-diff。対照（実 git）は同じ木で decision block を返す。つまり git が壊れた事実が消え、変更なしとして allow される。重要: これは propguard の F-2（backlog 1217fa4f）と同一の shape であり、同じ欠陥が独立に 2 crate で確認された横断パターン。個別修正ではなく、diff/scan 取得の三値化（Determination で取得失敗と空を分ける）を共通で当てるべき候補。監査済み 7 crate を横断で当たれば更に出る見込み。"
-created_at = 1785844223
-updated_at = 1785844223
-weight = 0.0
-issue_number = 126
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/126"
 
 [[task]]
 id = "3a8e3b73"
@@ -4715,34 +4717,6 @@ updated_at = 1788792879
 weight = 0.0
 issue_number = 436
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/436"
-
-[[task]]
-id = "793aa283"
-title = "check-fail-open-mutation.py は taintguard のシナリオを1つも持たない — コメントは6と書きながらタプルは7クレート"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-scripts/check-fail-open-mutation.py:65-73 は7クレートを宣言するが、
-grep で crate= のシナリオ定義を数えると **6件**（blastguard / propguard / specguard / stuckguard /
-mutategate / overwatch）。taintguard のシナリオが存在しない。
-:61-63 は逐語「The canonical 6 GATE crates」、:47 は「one more hardcoded copy of the canonical
-6-crate list」と述べているが、対象のタプルは7要素。
-
-帰結: 既定実行は「scenarios run: 6/6」と印字して exit 0 しうるが、**最も新しい GATE クレートは
-一度もミューテーションされていない**。:415-417 の空ガードは --crate 名指し時にしか発火せず、
-既定経路にはクレート単位のカバレッジ assert が無い。
-
-修正: taintguard のシナリオを追加し、コメントの 6 を実数に合わせる（同じコミットで）。
-加えて既定経路に「宣言されたクレート全部にシナリオがあるか」の assert を置き、
-欠けていれば exit 非0 にする（欠落を沈黙で表現しない）。親 826c29bf"""
-created_at = 1788792880
-updated_at = 1788792880
-weight = 0.0
-issue_number = 437
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/437"
 
 [[task]]
 id = "f6919056"
@@ -18253,3 +18227,136 @@ updated_at = 1790253005
 weight = 0.0
 issue_number = 796
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/796"
+
+[[task]]
+id = "9ee78698"
+title = "backlog done の GitHub issue ミラーが権限不足で片道になり、閉じられなかった issue が警告 1 行だけ残して永久に open のままになる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "github-mirror",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-09-24、測定点 4fc699c3、cycle 13 の sink 中。
+
+backlog done を 15 件走らせたところ、うち 2 件でこの警告が出た (逐語):
+  warning: issue #133 left OPEN: gh issue close failed: GraphQL: Resource not accessible by personal access
+  warning: issue #437 left OPEN: gh issue close failed: GraphQL: Resource not accessible by personal access
+
+backlog 側は done になり、GitHub issue は open のまま残る。2 つのストアが恒久的に食い違う。
+fail-open そのものではない (警告は出ている) が、次の 3 点で実質的に沈黙に近い:
+
+  1. 警告は done の stdout に 1 行混ざるだけで終了コードは 0。スクリプトから回すと
+     検出されない。今回も 15 件を回すループの出力に紛れていた。
+  2. どの issue が閉じ損ねたかを後から列挙する手段が無い。台帳に残らないので
+     「今 backlog done なのに open な issue」の集合は測れない。
+  3. 権限不足は恒久的な状態なので再試行では絶対に解決しない。にもかかわらず
+     再試行を促す形にも、諦めを記録する形にもなっていない。
+
+CLAUDE.md 1 の「判定を持つかは消費のされ方で決まる」に当てはまる:
+下流の人間は backlog done を「issue も閉じた」と読む。
+
+測ったこと: 上記 2 件の逐語警告と、それでも rc=0 で done になること。
+測っていないこと: 過去に同じ経路で open のまま残った issue の総数。
+  PAT にどのスコープが欠けているか (Issues:write と推測されるが未確認)。
+
+考えられる直し方 (どれも未検証):
+  - 閉じ損ねた issue id を台帳へ追記し、後から列挙・再試行できるようにする。
+  - backlog に「issue ミラーが遅れている」を報告するサブコマンドを足す。
+  - 権限が無い環境ではミラーを宣言的に無効化し、黙って片道にしない。"""
+created_at = 1790253336
+updated_at = 1790253336
+weight = 0.0
+issue_number = 797
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/797"
+
+[[task]]
+id = "207d0da6"
+title = "budgetguard: ledger.json が壊れていると当日合計が「自セッション分だけ」に潰れ、既存の day_undetermined_verdict を通らず通常の verdict 比較へ流れる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "budgetguard",
+    "verdict-path",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+crates/budgetguard/src/gate.rs:148-164。
+
+監査の所見 (CONFIRMED): ledger.json が読めない/壊れている場合、当日合計として
+自セッションのコストをそのまま使い、通常の verdict() 比較へ渡している。すぐ上の
+分岐では「ロックが取れなかった」という対称なケースに対して day_undetermined_verdict
+という専用関数を通しているのに、こちらは通っていない。同じ「判定不能」の 2 形が
+別の出口を持っている。
+
+監査者が明示的に注意を促している点: コード自身のコメントは
+「conservative: never under-reports」と書いており、別の sub-agent はこの文言を
+額面どおり受け取って「既に fail-closed」と誤分類した。監査者はソースを読み直して
+その誤分類を訂正している。コメントを根拠にしないこと (CLAUDE.md 4)。
+
+なお本 item の起票にあたり、元の ticket 67e95a19 の前提「budgetguard は
+harness_core::verdict を 1 file でしか使っていない」は誤りであることも測定された
+(実際は 3 file)。budgetguard は 3 クレート中もっとも硬い。
+
+出典: docs/audit-dod9-lowadoption-verdict-paths.md (67e95a19 の監査フェーズ。
+独立した agent が read-only で実施し、CONFIRMED 3 / UNVERIFIED 5 を報告)。
+本 item は CONFIRMED のうち 1 件を実装タスクとして切り出したもの。
+
+重要: 本 item はまだ RED を観測していない。監査の逐語引用と消費経路の追跡までが
+済んだ状態であり、着手する人は「まず注入して赤を見る」ところから始めること
+(CLAUDE.md 2(b))。テストは実装者と別の agent に書かせること (2(a))。
+"""
+created_at = 1790253338
+updated_at = 1790253338
+weight = 0.0
+issue_number = 798
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/798"
+
+[[task]]
+id = "fc0fc220"
+title = "gauge: gauge.toml が壊れていると黙って Config::default() へ戻り、利用者が設定した価格上書きが消えたまま cost_usd が権威値として下流に流れる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "gauge",
+    "verdict-path",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+crates/gauge/src/config.rs。監査の所見 (CONFIRMED)。
+
+config.rs は Determination をまったく採用しておらず、gauge.toml のパース失敗が
+Config::default() に潰れる。既定へ戻ること自体より、戻った結果として
+カスタム価格上書きがゼロになる点が問題で、消費経路は
+condukt::state::resolve_agent_cost — そこで cost_usd は「観測された権威ある値」
+として信頼される。つまり「設定が読めなかった」が「既定価格で計算した正しい値」に
+化けて下流へ渡る。
+
+CLAUDE.md 3 の「パース不能は clean ではない」に該当する。三値化して
+「設定を読めなかった」を表現可能にし、cost_usd を権威値として消費する側が
+それを区別できるようにする必要がある。
+
+出典: docs/audit-dod9-lowadoption-verdict-paths.md (67e95a19 の監査フェーズ。
+独立した agent が read-only で実施し、CONFIRMED 3 / UNVERIFIED 5 を報告)。
+本 item は CONFIRMED のうち 1 件を実装タスクとして切り出したもの。
+
+重要: 本 item はまだ RED を観測していない。監査の逐語引用と消費経路の追跡までが
+済んだ状態であり、着手する人は「まず注入して赤を見る」ところから始めること
+(CLAUDE.md 2(b))。テストは実装者と別の agent に書かせること (2(a))。
+"""
+created_at = 1790253339
+updated_at = 1790253339
+weight = 0.0
+issue_number = 799
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/799"

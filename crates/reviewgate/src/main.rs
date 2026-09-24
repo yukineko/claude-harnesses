@@ -136,7 +136,8 @@ fn exit_on_err(r: anyhow::Result<()>) {
 }
 
 /// The Stop hook. Always exits 0 toward Claude (the `decision` field, not the
-/// exit code, is what blocks a stop). Returns exit 1 only in manual CLI mode.
+/// exit code, is what blocks a stop). Returns exit 1 only in manual CLI mode
+/// (nothing on stdin; a non-empty but unparseable payload stays in hook mode).
 ///
 /// The panic barrier lives in `harness_core::gate::run`. It is deliberately
 /// NOT a "never break the turn" guard — CLAUDE.md §1 names that phrase in a
@@ -149,18 +150,27 @@ fn exit_on_err(r: anyhow::Result<()>) {
 fn review_command() -> ! {
     let raw = read_stdin();
     let hook = HookInput::parse(&raw);
-    let interactive = hook.is_none();
+    // Manual CLI mode only when NOTHING arrived on stdin. A non-empty payload
+    // that fails to parse is still Claude Code calling the hook: treating it
+    // as manual mode would turn a block into stderr + exit 1 instead of the
+    // `decision:block` JSON the hook protocol reads (audit P8).
+    let interactive = raw.trim().is_empty();
+    if hook.is_none() && !interactive {
+        eprintln!(
+            "reviewgate: WARNING hook payload could not be parsed — reviewing the current \
+             directory in hook mode (the verdict is still emitted as hook JSON)."
+        );
+    }
     // On a post-block re-entry Claude Code sets stop_hook_active; the panic guard
     // uses it to bound a fail-closed block to a single occurrence (no turn-trap).
     let stop_hook_active = hook.as_ref().is_some_and(|h| h.stop_hook_active);
     harness_core::gate::run::run_guarded("reviewgate", interactive, stop_hook_active, move || {
-        review_run(hook)
+        review_run(hook, interactive)
     })
 }
 
-fn review_run(hook: Option<HookInput>) -> ! {
+fn review_run(hook: Option<HookInput>, interactive: bool) -> ! {
     let __start = std::time::Instant::now();
-    let interactive = hook.is_none();
     let input = hook.unwrap_or_default();
     let root = input.cwd_or_current();
 
@@ -173,6 +183,12 @@ fn review_run(hook: Option<HookInput>) -> ! {
     }
 
     let cfg = Config::load(&root);
+    if let Some(e) = &cfg.load_error {
+        eprintln!(
+            "reviewgate: WARNING config could not be loaded ({e}) — its settings are NOT in \
+             effect; running with the built-in defaults. Fix the file (see `reviewgate status`)."
+        );
+    }
     if !cfg.enabled {
         if interactive {
             eprintln!("reviewgate: disabled in config");
@@ -223,6 +239,11 @@ fn review_run(hook: Option<HookInput>) -> ! {
                 );
             }
             log_event(&cfg, &session, tag, &[], attempts);
+            // An allow that lets a KNOWN violation through must still reach the
+            // violation stream, or the miss is invisible to its consumers.
+            if tag == review::VIOLATION_GIVEUP_TAG {
+                emit_violation(&root, &session, tag);
+            }
             if interactive {
                 println!("reviewgate: allow ({tag})");
             }
@@ -273,7 +294,8 @@ fn review_run(hook: Option<HookInput>) -> ! {
 }
 
 /// Append one JSONL line per decision. Best effort, local only.
-/// Record a fleet-level violation for a blocking review verdict, for
+/// Record a fleet-level violation for a blocking review verdict (or for the
+/// `review-giveup` allow, which lets a known violation through), for
 /// cross-gate correlated-error detection (`overwatch::violation`). Fail-soft:
 /// never changes the gate's exit code/stdout, never panics if the overwatch
 /// store is unwritable (mirrors donegate's `emit_violations`,
@@ -320,7 +342,13 @@ fn status() {
     } else {
         Path::new("(defaults — no config file)").to_path_buf()
     };
-    println!("config:        {}", src.display());
+    match &cfg.load_error {
+        Some(e) => println!(
+            "config:        {} (FAILED to load: {e} — built-in defaults in effect)",
+            src.display()
+        ),
+        None => println!("config:        {}", src.display()),
+    }
     println!("enabled:       {}", cfg.enabled);
     println!("mode:          {}", cfg.mode.as_str());
     if cfg.mode == Mode::Subprocess {

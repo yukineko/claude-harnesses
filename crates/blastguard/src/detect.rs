@@ -1635,12 +1635,20 @@ primitive, not a filesystem path",
 
     let mut cwd = CwdState::Root;
     let mut aliases: HashMap<String, String> = HashMap::new();
+    // Body lines of a quoted here-document fed to a data-only reader are text,
+    // not commands; see `inert_here_document_body` for the exact conditions.
+    // The index lines up with `split_segments` (pinned by
+    // `separated_segmentation_agrees_with_split_segments`).
+    let inert_body = inert_here_document_body(&split_segments_with_separators(cmd));
     // ENUMERATED, so `unknown_wrapper_ask` can ask `resolve_expanded_command_word`
     // what an expansion-valued command word in THIS segment was assigned by an
     // EARLIER one. `advance_cwd_and_rewrite` below rewrites a segment's text but
     // maps one segment to one segment, so `seg_idx` stays the segment's index in
     // `split_segments(cmd)` — which is what that resolver's parameter means.
     for (seg_idx, seg) in split_segments(cmd).into_iter().enumerate() {
+        if inert_body.get(seg_idx).copied().unwrap_or(false) {
+            continue;
+        }
         // The base for THIS segment's relative operands is the cwd state as it
         // stands BEFORE the segment runs — the same state
         // `advance_cwd_and_rewrite` rewrites the segment against — so it is
@@ -2284,6 +2292,13 @@ enum SegmentSep {
 struct SeparatedSegment {
     text: String,
     sep_after: SegmentSep,
+    /// The separator was a NEWLINE, not a `;`. [`SegmentSep::Sequential`]
+    /// merges the two because they mean the same thing for scope and
+    /// execution. They differ for a here-document: only a newline ends the
+    /// opener's line, so only then is the next segment the first body line
+    /// rather than more code (`cat <<'EOF'; rm x`). See
+    /// [`inert_here_document_body`].
+    ends_at_newline: bool,
 }
 
 /// [`split_segments`] with the separator KEPT.
@@ -2323,6 +2338,7 @@ fn split_segments_with_separators(cmd: &str) -> Vec<SeparatedSegment> {
                 segs.push(SeparatedSegment {
                     text: std::mem::take(&mut cur),
                     sep_after: SegmentSep::Conditional,
+                    ends_at_newline: false,
                 });
                 i += 2;
                 continue;
@@ -2337,6 +2353,7 @@ fn split_segments_with_separators(cmd: &str) -> Vec<SeparatedSegment> {
                 segs.push(SeparatedSegment {
                     text: std::mem::take(&mut cur),
                     sep_after: sep,
+                    ends_at_newline: c == '\n',
                 });
                 i += 1;
                 continue;
@@ -2348,6 +2365,7 @@ fn split_segments_with_separators(cmd: &str) -> Vec<SeparatedSegment> {
     segs.push(SeparatedSegment {
         text: cur,
         sep_after: SegmentSep::EndOfLine,
+        ends_at_newline: false,
     });
     segs
 }
@@ -2718,6 +2736,117 @@ fn here_document_layout(segs: &[SeparatedSegment]) -> (Vec<bool>, Option<usize>)
         }
     }
     (is_body, opener_idx)
+}
+
+/// Which segments are the BODY of a here-document that nothing will execute,
+/// so the per-segment command analysis in [`detect_bash`] must not read them
+/// as commands.
+///
+/// Measured 2026-09-24 (backlog 6cf12ce9 / c6fe8ca0 / 9e8fd854): 78 of 465
+/// `unresolvable-command-word` asks had a backtick inside the "command word".
+/// They were markdown spans at the start of a commit-message line, e.g.
+/// `` `done` is set `` in a `git commit -F - <<'EOF'` body. The shell
+/// substitutes nothing in that body, and git stores it as text.
+///
+/// A body is skipped only when EVERY one of these holds. Anything else keeps
+/// the old, full analysis, which is the restrictive answer:
+///   * the opener segment opens exactly ONE here-document, and its delimiter
+///     is QUOTED ([`here_document_delimiter_is_quoted`]). With an unquoted
+///     delimiter the shell runs `$(…)` and backticks in the body;
+///   * the opener's line ENDS right after it (`ends_at_newline`). With
+///     `cat <<'EOF' | sh` or `cat <<'EOF'; x` the next segment is code, and the
+///     body goes to a shell;
+///   * the body is CLOSED by an exact delimiter line. An unclosed body is
+///     undetermined, so it stays analysed;
+///   * the reader is on [`reads_here_document_as_data`]'s closed list.
+///
+/// Built on [`here_document_layout`], so the body and close rules are the
+/// ones the assignment resolver already uses.
+fn inert_here_document_body(segs: &[SeparatedSegment]) -> Vec<bool> {
+    let (is_body, _) = here_document_layout(segs);
+    let mut inert = vec![false; segs.len()];
+    let mut opener = 0;
+    while opener < segs.len() {
+        if is_body[opener] || !is_body.get(opener + 1).copied().unwrap_or(false) {
+            opener += 1;
+            continue;
+        }
+        // `opener` is followed by the run of body segments `opener + 1 .. end`.
+        let mut end = opener + 1;
+        while end < segs.len() && is_body[end] {
+            end += 1;
+        }
+        let seg = &segs[opener];
+        let openers = here_document_openers(&seg.text);
+        let closed =
+            openers.len() == 1 && segment_closes_here_document(&segs[end - 1].text, &openers[0]);
+        if closed
+            && seg.ends_at_newline
+            && here_document_delimiter_is_quoted(&seg.text)
+            && reads_here_document_as_data(&seg.text)
+        {
+            for flag in &mut inert[opener + 1..end] {
+                *flag = true;
+            }
+        }
+        opener = end;
+    }
+    inert
+}
+
+/// True when the here-document opener segment `seg` hands its body to a
+/// program on a CLOSED list of readers that only store or print it:
+///   * `git commit -F -` / `-F-` / `--file=-` / `--file -`, with git's global
+///     options allowed before `commit`. git records the text as the commit
+///     message and runs none of it;
+///   * a bare `cat` (or `cat -`) with no file operand. It only prints the
+///     body. `cat > f <<'EOF'` is left off on purpose: the file may be run
+///     later, and reading the body is the only look this gate gets at it.
+///
+/// The program word must be spelled exactly `git` or `cat`, with no path and
+/// no leading assignment or wrapper. Any `<` or `>` left after the
+/// here-document operator (a redirect, `2>&1`) also disqualifies the reader.
+/// `backlog add --notes` is not listed because it has no stdin form.
+///
+/// Every other reader, known or not (bash, sh, zsh, python3, node, perl,
+/// eval, xargs, …), answers false. A false here only means the body is
+/// analysed as before.
+fn reads_here_document_as_data(seg: &str) -> bool {
+    let raw = quote_aware_words(seg);
+    let mut words: Vec<&str> = Vec::new();
+    let mut i = 0;
+    while i < raw.len() {
+        let w = raw[i].as_str();
+        if w.starts_with("<<") {
+            // `<< 'EOF'` / `<<- EOF` put the delimiter in the next word.
+            i += if w == "<<" || w == "<<-" { 2 } else { 1 };
+            continue;
+        }
+        words.push(w);
+        i += 1;
+    }
+    if words.iter().any(|w| w.contains('<') || w.contains('>')) {
+        return false;
+    }
+    match words.first().copied() {
+        Some("cat") => words[1..].iter().all(|w| *w == "-"),
+        Some("git") => {
+            let rest = &words[1..];
+            let Some(sub) = git_subcommand_index(rest) else {
+                return false;
+            };
+            if rest[sub] != "commit" {
+                return false;
+            }
+            let args = &rest[sub + 1..];
+            args.iter().enumerate().any(|(j, a)| match *a {
+                "-F-" | "--file=-" => true,
+                "-F" | "--file" => args.get(j + 1) == Some(&"-"),
+                _ => false,
+            })
+        }
+        _ => false,
+    }
 }
 
 /// True when this segment opens a compound command whose body may run zero

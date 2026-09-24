@@ -1142,7 +1142,7 @@ measured: 何も測っていない。unverified: すべて。推測で埋めず�
 なお本サイクルで実施した fbb3100a は harness-core 側の gauge 消費経路であり、
 本 item が対象とする gauge crate 自身の verdict 経路とは別物。重複していない。"""
 created_at = 1785193820
-updated_at = 1790248070
+updated_at = 1790248164
 weight = 0.0
 issue_number = 84
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/84"
@@ -17549,30 +17549,15 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "kind:systemic identifier:blastguard:git-config-hookspath occurrences:1"
+notes = """
+kind:systemic identifier:blastguard:git-config-hookspath occurrences:1
+
+USER RULING 2026-09-24: keep the deny; change the deny message only, so it suggests 'git config --get core.hooksPath'. All ~20 recovered occurrences were the one-argument read."""
 created_at = 1790184346
-updated_at = 1790244864
+updated_at = 1790247474
 weight = 0.0
 issue_number = 731
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/731"
-
-[[task]]
-id = "9e644320"
-title = "systemic signature recurred 11x across 1 task(s)/2 session(s)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "systemic",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "kind:systemic identifier:blastguard:scoped-destructive-confined occurrences:1"
-created_at = 1790184347
-updated_at = 1790244864
-weight = 0.0
-issue_number = 732
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/732"
 
 [[task]]
 id = "6cf12ce9"
@@ -17585,30 +17570,15 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "kind:systemic identifier:blastguard:unresolvable-command-word occurrences:1"
+notes = """
+kind:systemic identifier:blastguard:unresolvable-command-word occurrences:1
+
+USER RULING 2026-09-24: safe-reader list. Skip heredoc body analysis only when the delimiter is quoted AND the reader is known not to run the body (git commit -F -, cat, backlog --notes, ...); any other reader keeps analysing (fail closed). 78/465 rows were backticks in quoted-heredoc bodies; 359 variable command words are correct asks. Related c6fe8ca0 / 9e8fd854."""
 created_at = 1790184349
-updated_at = 1790244864
+updated_at = 1790247474
 weight = 0.0
 issue_number = 733
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/733"
-
-[[task]]
-id = "7614e28e"
-title = "systemic signature recurred 3x across 3 task(s)/2 session(s)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "systemic",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "kind:systemic identifier:blastguard:protected-path occurrences:1"
-created_at = 1790184351
-updated_at = 1790244865
-weight = 0.0
-issue_number = 734
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/734"
 
 [[task]]
 id = "c2f9cc02"
@@ -17633,7 +17603,7 @@ CLAUDE.md 2 の「テストが書けない問題は判断で進めず ask する
 決定論置換の検証も取れない。自分の判断で閉じることは禁止されているので、
 ユーザーに問うている。回答が来るまで pending。"""
 created_at = 1790184361
-updated_at = 1790248070
+updated_at = 1790248164
 weight = 0.0
 issue_number = 740
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/740"
@@ -18562,3 +18532,42 @@ updated_at = 1790239305
 weight = 0.0
 issue_number = 770
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/770"
+
+[[task]]
+id = "b34d4a77"
+title = "blastguard: sed -i '' (BSD 空 suffix) の直後の script 式を -i の target として protected-path 判定する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Measured 2026-09-24 (worktree binary at 98548fda, CLAUDE_CODE_ENTRYPOINT=cli): sed -i '' '/.githooks.x/d' README.md → ask 'sed -i target targets a protected gate/config path (<the sed EXPRESSION>)'. The protected-path check reads the script expression as the in-place target. Field occurrences (session 25763e04, 2026-09-07T18:18/18:19): sed -i '' '<expr containing .githooks>' ~/.claude/settings.json. The ASK was correct (the real target is settings.json) but the reason named the wrong operand, so the underlying defect is latent: any sed -i '' script that mentions a protected path fragment asks on a benign file. Found while triaging 7614e28e (protected-path systemic recurrence)."
+created_at = 1790244856
+updated_at = 1790244856
+weight = 0.0
+issue_number = 771
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/771"
+
+[[task]]
+id = "c6fe8ca0"
+title = "blastguard: quoted-delimiter heredoc の body 行を command segment として unresolvable-command-word 判定する (markdown backtick で Ask)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "needs-ruling",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = '''Measured 2026-09-24 (worktree binary at 98548fda): git commit -F - <<'EOF' / (body line starting with a backtick span, e.g. `done` is set) / EOF → ask 'the command word ``done`` is an expansion…'. The same for python3 - <<'PY' bodies, <<"EOF", <<\EOF and <<-'EOF'. The shell substitutes NOTHING in a quoted-delimiter body. Cause: detect_bash (detect.rs ~1640) runs analyze_segment on every split_segments() segment, heredoc BODY segments included; here_document_layout() already knows which segments are body but is only consulted for assignments (detect.rs:3110). Ledger (violations.jsonl, rule unresolvable-command-word): 78 of 465 rows carry a backtick inside the command word (markdown spans in commit messages or notes, e.g. 9d349393 2026-09-24, a6738634, 79d79a35, 2444be10). The fix needs a design ruling: a body is inert only when its CONSUMER does not execute it (bash/sh <<'EOF' runs the body, so a $X head there is genuinely unresolvable), and choosing between a data-consumer allowlist and a shell-consumer denylist is a policy choice (the file calls flag denylists unsound). Found while triaging 6cf12ce9. Same root cause as 9e8fd854, which was filed concurrently from a field block; this entry adds the rule-level ledger count and the consumer-model ruling question, so merge the two when working either.'''
+created_at = 1790244857
+updated_at = 1790244857
+weight = 0.0
+issue_number = 772
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/772"

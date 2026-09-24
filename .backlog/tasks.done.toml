@@ -12624,6 +12624,48 @@ issue_number = 738
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/738"
 
 [[task]]
+id = "9e644320"
+title = "systemic signature recurred 11x across 1 task(s)/2 session(s)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "systemic",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """
+kind:systemic identifier:blastguard:scoped-destructive-confined occurrences:1
+
+2026-09-24 triage (session 9d349393, main 22a7f223): working as designed. Ledger groups: truncating redirects confined to /private/tmp (13), the project tree (8) or TMPDIR (7); rm -r of /tmp/backlog-*-target (8); Python writes onto scratchpad files (~20) or tracked files (tasks.toml x4, marketplace.json x3). USER RULING 2026-09-24: new files in the session scratchpad still ask (Keep asking); recurrence is the signal."""
+created_at = 1790184347
+updated_at = 1790247474
+weight = 0.0
+issue_number = 732
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/732"
+
+[[task]]
+id = "7614e28e"
+title = "systemic signature recurred 3x across 3 task(s)/2 session(s)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "systemic",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """
+kind:systemic identifier:blastguard:protected-path occurrences:1
+
+2026-09-24 triage (session 9d349393): correct blocks (settings.json/.githooks/gate *.toml via Edit/Write/redirect/cp/tee/chmod/sed -i, and the .claude/x/../ path trick). USER RULING 2026-09-24: gate-config names are protected wherever they live, including scratchpad fixtures (Intended). The sed -i '' mis-parse defect is split out as b34d4a77."""
+created_at = 1790184351
+updated_at = 1790247475
+weight = 0.0
+issue_number = 734
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/734"
+
+[[task]]
 id = "fbb3100a"
 title = "gauge/harness-core P1+P5: sub-agent transcript と session record の「個別ファイルが読めなかった」が無音で落ち、過少計上が正典 record に焼き込まれる"
 project = "/Users/yuki/src/harness"
@@ -12682,7 +12724,7 @@ CLAUDE.md 2(a) の「テストは利害のない Agent が書く」は満たし�
 盲点は残る。独立モデルによる再検証を推奨する (元の監査自身も同じ但し書きを
 持っている)。"""
 created_at = 1790185715
-updated_at = 1790248067
+updated_at = 1790248162
 weight = 0.0
 issue_number = 751
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/751"
@@ -12712,7 +12754,7 @@ title 自体が "held: 0 file(s) [(unknown files)]" であり、衝突ファイ�
 7c776a26 と同型 (cycle 11 で同じ結論)。この形が繰り返し現れることは
 7a842862 に転記済み。"""
 created_at = 1790184359
-updated_at = 1790248069
+updated_at = 1790248163
 weight = 0.0
 issue_number = 739
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/739"

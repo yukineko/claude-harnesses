@@ -18543,3 +18543,40 @@ updated_at = 1790244857
 weight = 0.0
 issue_number = 772
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/772"
+
+[[task]]
+id = "6f1ea1b0"
+title = "backlog: next --claim の先頭に同じ未完 item が居座り、各 /flow サイクルの枠を食う (67e95a19 は 5 回、d186c736/1875f626 は 4 回 claim されて pending のまま)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "flow",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "測定 2026-09-24 / main 30482fc7: ~/.backlog/claims/6ff562fcf3f08467.json は 85 件の claim を持つ。同じ id が繰り返し現れ、どれも pending に戻っている。順序は store.rs queue_order = priority 昇順、次に created_at 昇順。戻す経路は edit --status pending で、fail の backoff (deferred) を通らない。そのため次のサイクルでも同じ item が先頭に来る。未完 item は着手量が大きいか、人の判断待ち (推測で埋めずに pending に戻す)。案: 戻すときは fail の backoff を使う / claim 回数を記録し、N 回戻された item を別の段に落として人に上げる。§3: 戻された理由を失わないこと。"
+created_at = 1790251831
+updated_at = 1790251831
+weight = 0.0
+issue_number = 773
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/773"
+
+[[task]]
+id = "726c32c5"
+title = "08-17 の「harness backlog は当面対象外」注記を持つ 26 件が pending のまま next の対象になっている (除外状態が 3e3a9a48 の移設で消えた疑い)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "測定 2026-09-24 / 30482fc7: notes に '除外 (ユーザー指示 2026-08-17)… 復帰は backlog edit <id> --status pending' を持つ行が 26 件あり、全件 status=pending。3e3a9a48 (2026-08-20、legacy→repo 移設) の追加行はすべて status=pending で、うち 28 行がこの注記を持つ。移設前の legacy での status は git に無く、未検証。要ユーザー裁定: 除外は今も有効か。有効なら defer/cancel し、無効なら注記を外す。26 件のうち 21b7b1a7/6803bd45/079b643f/8aeb4cab/b4947e03/82ba4a00/dab60741 は既に 2 回 claim されている。"
+created_at = 1790251833
+updated_at = 1790251833
+weight = 0.0
+issue_number = 774
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/774"

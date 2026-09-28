@@ -3937,6 +3937,10 @@ fn is_exec_wrapper(cmd: &str) -> bool {
             | "setsid"
             | "flock"
             | "chroot"
+            // Multi-call binaries: `busybox sh -c …` / `busybox rm -rf …` run
+            // the applet named by the next word (daf7611b).
+            | "busybox"
+            | "toybox"
     )
 }
 
@@ -4098,8 +4102,61 @@ fn has_operand(rest: &[&str]) -> bool {
 }
 
 /// Shells that take a command line as a string argument (e.g. `sh -c "…"`).
+///
+/// Every call site asks the same question — "does this program RUN code it is
+/// handed?" (an egress pipe terminal, a `find -exec` target, a stdin program,
+/// a `-c` payload to re-analyse) — so the list is every shell, not only the
+/// POSIX ones this module can parse. daf7611b: with only
+/// `sh|bash|zsh|ksh|dash` here, `fish -c "rm -rf …"`, `pwsh -c …`,
+/// `tcsh -c …` and `csh -c …` matched no arm and were ALLOWED unexamined,
+/// while `curl … | fish` was not an egress sink either. The non-POSIX ones
+/// are additionally [`is_foreign_shell`], which the `-c` arm turns into an Ask
+/// because a POSIX reading of their payload proves nothing.
 fn is_shell(cmd: &str) -> bool {
-    matches!(cmd, "sh" | "bash" | "zsh" | "ksh" | "dash")
+    matches!(
+        cmd,
+        "sh" | "bash"
+            | "rbash"
+            | "zsh"
+            | "ksh"
+            | "mksh"
+            | "lksh"
+            | "oksh"
+            | "pdksh"
+            | "dash"
+            | "ash"
+            | "hush"
+            | "yash"
+            | "posh"
+    ) || is_foreign_shell(cmd)
+}
+
+/// Shells whose command language is NOT POSIX sh, so this module's analyser
+/// cannot read their payloads: fish's `(cmd)` substitution, csh history and
+/// modifiers, PowerShell cmdlets (`Remove-Item -Recurse`), nushell pipelines.
+/// A POSIX pass over the payload can still find a recognisable `rm -rf` (and
+/// Deny), but finding nothing there is "could not analyse", not "clean".
+fn is_foreign_shell(cmd: &str) -> bool {
+    matches!(
+        cmd,
+        "fish" | "csh" | "tcsh" | "pwsh" | "powershell" | "nu" | "elvish" | "xonsh" | "rc" | "es"
+    )
+}
+
+/// True unless a foreign shell's arguments are ONLY informational flags
+/// (`fish --version`). Any other argument — an inline command flag in any
+/// spelling (`-c`, `--command=`, `-C`, `-Command`, `-EncodedCommand`) or a
+/// script path — makes it run code blastguard cannot read. Deliberately not a
+/// list of the code-running flags: that list is per-shell, abbreviable
+/// (PowerShell accepts any unambiguous prefix) and is exactly the kind of list
+/// that goes stale.
+fn foreign_shell_runs_code(rest: &[&str]) -> bool {
+    rest.iter().any(|t| {
+        !matches!(
+            *t,
+            "--version" | "-version" | "-Version" | "--help" | "-help" | "-Help" | "-h" | "-?"
+        )
+    })
 }
 
 /// Non-shell interpreters that run an inline program supplied as a string
@@ -5966,6 +6023,17 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize, ctx: &Ctx<'_>) 
         if is_shell(cmd) {
             for payload in dash_c_payloads(rest) {
                 if let Some(deny) = acc.record(analyze_shell_payload(&payload, depth, ctx)) {
+                    return deny;
+                }
+            }
+            // daf7611b: a shell whose language this module cannot parse. The
+            // POSIX pass above may still Deny; if it did not, that is a
+            // failure to analyse, not a clean result (CLAUDE.md §3).
+            if is_foreign_shell(cmd) && foreign_shell_runs_code(rest) {
+                if let Some(deny) = acc.record(Decision::ask(format!(
+                    "`{cmd}` runs code in a non-POSIX shell language that blastguard cannot \
+analyse — it cannot tell what this would do, so it refuses to guess"
+                ))) {
                     return deny;
                 }
             }

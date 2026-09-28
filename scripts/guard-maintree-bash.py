@@ -295,12 +295,81 @@ def _strip_heredoc_bodies(command: str) -> str:
     return "\n".join(out)
 
 
+_WORD_BREAK = set(" \t\n;&|()<>")
+
+
+def _newlines_to_separators(command: str) -> str:
+    """Rewrite every UNQUOTED newline as an explicit ` ; ` command separator, and
+    drop comments, so each line becomes its own segment.
+
+    A newline ends a simple command exactly like `;` does, but the tokenizer
+    used to turn it into an empty token that no separator check recognised: the
+    lines of `echo hi<NL>rm <main>/f` merged into ONE segment whose program was
+    `echo`, so the second-line `rm` was never judged (9fdb49d8). The reverse
+    also held — a second line's operands became extra operands of the first
+    line's `cp`, refusing a harmless command.
+
+    Only newlines that the shell itself treats as separators are rewritten:
+      * inside '…' or "…" a newline is data and is kept;
+      * backslash-newline (outside '…') is a line CONTINUATION and is removed,
+        joining the two lines, as the shell does;
+      * a `#` at the start of a word begins a comment that runs to the newline;
+        the comment is dropped here (and the tokenizer's own, looser comment
+        rule is switched off), because a comment swallowing a rewritten `;`
+        would hide every later line.
+    Here-document bodies are removed before this runs (_strip_heredoc_bodies).
+    An unbalanced quote leaves the rest of the text untouched, so the tokenizer
+    still fails on it and the command is refused (3.).
+    """
+    out: list[str] = []
+    i, n = 0, len(command)
+    quote: str | None = None
+    while i < n:
+        c = command[i]
+        if quote == "'":
+            out.append(c)
+            if c == "'":
+                quote = None
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            if command[i + 1] == "\n":
+                i += 2  # line continuation: not a separator, join the lines
+                continue
+            out.append(command[i : i + 2])
+            i += 2
+            continue
+        if quote == '"':
+            out.append(c)
+            if c == '"':
+                quote = None
+            i += 1
+            continue
+        if c in ("'", '"'):
+            quote = c
+            out.append(c)
+        elif c == "#" and (not out or out[-1][-1:] in _WORD_BREAK):
+            while i < n and command[i] != "\n":
+                i += 1
+            continue  # the newline (if any) is handled on the next pass
+        elif c == "\n":
+            out.append(" ; ")
+        else:
+            out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def _tokenize(command: str) -> list[str] | None:
-    lexer = shlex.shlex(command, posix=True, punctuation_chars="();<>|&\n\r")
+    lexer = shlex.shlex(
+        _newlines_to_separators(command), posix=True, punctuation_chars="();<>|&"
+    )
     lexer.whitespace_split = True
-    lexer.whitespace = lexer.whitespace.replace("\n", "").replace("\r", "")
+    # Comments were already removed with shell word-start semantics; shlex's own
+    # rule also fires mid-word (`a#b`) and would swallow the rest of the input.
+    lexer.commenters = ""
     try:
-        return [t.lstrip("\r\n") for t in lexer]
+        return list(lexer)
     except ValueError:
         return None
 
@@ -436,9 +505,14 @@ def _first_line(command: str) -> str:
 def decide(payload: dict) -> tuple[int, str]:
     if payload.get("tool_name") != "Bash":
         return 0, ""
-    command = (payload.get("tool_input") or {}).get("command")
-    if not isinstance(command, str) or not command.strip():
-        return 0, ""
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return 2, DENY_BAD_PAYLOAD.format(why="Bash call without a tool_input object")
+    command = tool_input.get("command")
+    if not isinstance(command, str):
+        return 2, DENY_BAD_PAYLOAD.format(why="Bash call without a string command")
+    if not command.strip():
+        return 0, ""  # an empty command runs nothing, so it mutates nothing
 
     state, root = _main_root()
     if state == UNDET:
@@ -466,17 +540,32 @@ def decide(payload: dict) -> tuple[int, str]:
     own_gitdir = _own_worktree_gitdir(root)
     for target in _candidate_targets(tokens, root):
         if _hits_main(root, target, own_gitdir):
-            return 2, DENY.format(cmd=command.strip().splitlines()[0][:120])
+            return 2, DENY.format(cmd=f"{_first_line(command)}` (target `{target}")
     return 0, ""
+
+
+DENY_BAD_PAYLOAD = """Refused: could not read the hook payload ({why}).
+
+This gate received no usable JSON object describing the tool call, so it cannot
+tell which command is about to run or whether it mutates the MAIN working tree.
+A payload this gate could not read is not a command it checked (CLAUDE.md
+最上位の方針 3), so it resolves to a refusal rather than an allow.
+"""
 
 
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
-    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
-        return 0
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as e:
+        sys.stderr.write(DENY_BAD_PAYLOAD.format(why=f"not JSON: {e}"))
+        return 2
     if not isinstance(payload, dict):
-        return 0
+        sys.stderr.write(
+            DENY_BAD_PAYLOAD.format(
+                why=f"JSON {type(payload).__name__}, not an object"
+            )
+        )
+        return 2
     code, reason = decide(payload)
     if code != 0:
         sys.stderr.write(reason)

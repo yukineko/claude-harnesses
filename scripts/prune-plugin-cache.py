@@ -10,6 +10,12 @@ point at. So the rollout now prunes as it deploys.
 
 What is NEVER removed:
   - the plugin's current version dir (read from crates/<name>/plugin.json);
+  - any version dir installed_plugins.json points at (CLAUDE_PLUGIN_REGISTRY,
+    default ~/.claude/plugins/installed_plugins.json). "Not this tree's
+    version" is not "unused": measured 2026-09-07 (backlog e3366b5c), a
+    session whose tree was one version behind pruned the dir another session
+    had just deployed and registered, and specguard/blastguard went dark. An
+    unreadable registry keeps every dir and exits 1;
   - any version dir held by a live session (`.in_use/<pid>` for a live pid);
   - any version dir referenced by an absolute path in settings.json (a
     hardcoded pin the registry repoint never reaches — this is exactly what
@@ -58,6 +64,12 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--repo", default=os.getcwd(), help="repo root (default: cwd)")
     ap.add_argument("--cache", default=None, help="plugin cache root")
+    ap.add_argument(
+        "--registry",
+        default=None,
+        help="installed_plugins.json (default: $CLAUDE_PLUGIN_REGISTRY or "
+        "~/.claude/plugins/installed_plugins.json)",
+    )
     ap.add_argument("--dry-run", action="store_true", help="print, delete nothing")
     args = ap.parse_args(argv)
 
@@ -66,12 +78,25 @@ def main(argv=None):
 
     current, src_problems = plugin_cache.source_versions(crates)
     pins, pins_undetermined = plugin_cache.settings_pinned_versions(cache_root)
+    reg_refs, reg_undetermined = plugin_cache.registry_referenced_versions(
+        cache_root, args.registry
+    )
     stale, scan_problems = plugin_cache.scan(
-        cache_root, current, settings_pins=pins, settings_undetermined=pins_undetermined
+        cache_root,
+        current,
+        settings_pins=pins,
+        settings_undetermined=pins_undetermined,
+        registry_refs=reg_refs,
+        registry_undetermined=reg_undetermined,
     )
     problems = list(src_problems) + list(scan_problems)
     if pins_undetermined:
         problems.append(f"{pins_undetermined} — every cached dir is kept as potentially pinned")
+    if reg_undetermined:
+        problems.append(
+            f"{reg_undetermined} — cannot tell which dirs the registry points at, "
+            "so every cached dir is kept"
+        )
 
     removable = [s for s in stale if s.removable]
     kept = [s for s in stale if not s.removable]

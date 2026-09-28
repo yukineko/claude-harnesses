@@ -41,29 +41,35 @@ _PID_RE = re.compile(r"^[0-9]+$")
 class Holders:
     """Who is holding a version dir. `undetermined` is not "nobody"."""
 
-    __slots__ = ("live_pids", "undetermined", "pinned")
+    __slots__ = ("live_pids", "undetermined", "pinned", "registered")
 
-    def __init__(self, live_pids=(), undetermined=None, pinned=()):
+    def __init__(self, live_pids=(), undetermined=None, pinned=(), registered=()):
         self.live_pids = tuple(live_pids)
         self.undetermined = undetermined
         self.pinned = tuple(pinned)
+        self.registered = tuple(registered)
 
     @property
     def held(self):
-        """True if the dir must not be removed: live holders, unknown, or a
+        """True if the dir must not be removed: live holders, unknown, a
         settings.json pin (a hardcoded absolute path outside the registry's
         current-version pointer, which the pruner has no other visibility
-        into — see settings_pinned_versions)."""
+        into — see settings_pinned_versions), or an installed_plugins.json
+        entry pointing at it (see registry_referenced_versions: deleting the
+        dir the registry points at is, by definition, making the plugin
+        dark)."""
         return (
             bool(self.live_pids)
             or self.undetermined is not None
             or bool(self.pinned)
+            or bool(self.registered)
         )
 
     def __repr__(self):  # pragma: no cover - diagnostics only
         return (
             f"Holders(live_pids={self.live_pids}, "
-            f"undetermined={self.undetermined!r}, pinned={self.pinned})"
+            f"undetermined={self.undetermined!r}, pinned={self.pinned}, "
+            f"registered={self.registered})"
         )
 
 
@@ -215,6 +221,9 @@ class StaleDir:
             base = f"{base} (dangling symlink -> {target})"
         if self.holders.undetermined:
             return f"{base} (undetermined: {self.holders.undetermined})"
+        if self.holders.registered:
+            refs = ", ".join(sorted(self.holders.registered))
+            return f"{base} (referenced by installed_plugins.json: {refs})"
         if self.holders.pinned:
             refs = ", ".join(sorted(self.holders.pinned))
             return f"{base} (pinned by settings.json: {refs})"
@@ -261,7 +270,14 @@ def _link_resolution(path):
     return "other", None
 
 
-def scan(cache_root, current_versions, settings_pins=None, settings_undetermined=None):
+def scan(
+    cache_root,
+    current_versions,
+    settings_pins=None,
+    settings_undetermined=None,
+    registry_refs=None,
+    registry_undetermined=None,
+):
     """Return (stale_dirs, problems) for every plugin dir under `cache_root`.
 
     A plugin present in the cache but absent from `current_versions` is reported
@@ -276,8 +292,24 @@ def scan(cache_root, current_versions, settings_pins=None, settings_undetermined
     could not be read/parsed; every dir is then treated as pinned, because
     "could not check for a pin" must resolve to the same restrictive side as
     "found a pin", not to "found no pins".
+
+    `registry_refs` / `registry_undetermined` (from
+    registry_referenced_versions) are the same contract for
+    installed_plugins.json: a (plugin, version) the registry points at is held,
+    and an unreadable registry holds EVERY dir. "Not the version in THIS tree"
+    is not "nobody uses it" — measured 2026-09-07 (backlog e3366b5c): a
+    session whose tree was at specguard 0.2.55 pruned the 0.2.56 another
+    session had just deployed and registered, and specguard went dark.
+
+    The rollout lock dir (`ROLLOUT_LOCK_NAME`) at the cache root is not a
+    plugin and is skipped by exact name; any other non-plugin entry is still
+    reported.
     """
     settings_pins = settings_pins or {}
+    registry_refs = registry_refs or {}
+    # Either source being unreadable means "could not check for a holder":
+    # every dir is kept, same as a found holder.
+    undetermined_all = settings_undetermined or registry_undetermined
     stale = []
     problems = []
     try:
@@ -297,6 +329,11 @@ def scan(cache_root, current_versions, settings_pins=None, settings_undetermined
         return [], [f"cannot list plugin cache {cache_root}: {exc}"]
 
     for pname in plugin_names:
+        if pname == ROLLOUT_LOCK_NAME:
+            # rollout-plugins.sh's exclusive lock (a dir with a pid file). The
+            # pruner runs INSIDE a locked rollout, so it always sees it; it is
+            # not a plugin and holds no version dirs.
+            continue
         pdir = os.path.join(cache_root, pname)
         if not os.path.isdir(pdir):
             # The same skip the version loop below used to have, one level up,
@@ -383,8 +420,10 @@ def scan(cache_root, current_versions, settings_pins=None, settings_undetermined
                             f"pruned); re-run the rollout for {pname}"
                         )
                         continue
-                    h = Holders(undetermined=settings_undetermined) \
-                        if settings_undetermined else Holders()
+                    h = Holders(
+                        undetermined=undetermined_all,
+                        registered=registry_refs.get((pname, v), ()),
+                    )
                     stale.append(StaleDir(pname, v, vdir, h, kind="dangling-link"))
                 elif link_state == "undetermined":
                     problems.append(
@@ -403,20 +442,76 @@ def scan(cache_root, current_versions, settings_pins=None, settings_undetermined
             if v == cur:
                 continue
             h = holders_of(vdir)
-            if settings_undetermined:
-                h = Holders(
-                    live_pids=h.live_pids,
-                    undetermined=h.undetermined or settings_undetermined,
-                    pinned=h.pinned,
-                )
-            else:
-                raws = settings_pins.get((pname, v))
-                if raws:
-                    h = Holders(
-                        live_pids=h.live_pids, undetermined=h.undetermined, pinned=raws
-                    )
+            h = Holders(
+                live_pids=h.live_pids,
+                undetermined=h.undetermined or undetermined_all,
+                pinned=settings_pins.get((pname, v), ()),
+                registered=registry_refs.get((pname, v), ()),
+            )
             stale.append(StaleDir(pname, v, vdir, h))
     return stale, problems
+
+
+ROLLOUT_LOCK_NAME = ".rollout.lock"
+
+
+def default_registry_path():
+    """installed_plugins.json, honouring the same env var rollout-plugins.sh
+    and check-plugin-rollout.py do."""
+    override = os.environ.get("CLAUDE_PLUGIN_REGISTRY")
+    if override:
+        return override
+    return os.path.expanduser("~/.claude/plugins/installed_plugins.json")
+
+
+def registry_referenced_versions(cache_root, path=None):
+    """Which (plugin, version) dirs under `cache_root` installed_plugins.json
+    points at.
+
+    Returns (refs, undetermined):
+      - refs: dict[(plugin, version) -> tuple of "<key>@<version>" strings].
+        An entry counts if its `installPath` resolves to
+        `<cache_root>/<plugin>/<version>`. A missing registry file (ENOENT)
+        is a determinate "nothing is registered" and contributes no refs.
+      - undetermined: None, or a reason string when the registry exists but
+        could not be read, parsed, or does not have the expected shape. The
+        caller MUST then treat every dir as held (see scan()): "could not
+        read which dir is live" is not "no dir is live", and the action
+        waiting on this answer is an irreversible delete.
+    """
+    import json
+
+    path = path or default_registry_path()
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except FileNotFoundError:
+        return {}, None
+    except (OSError, ValueError) as exc:
+        return {}, f"{path}: unreadable or unparseable ({exc})"
+
+    plugins = data.get("plugins") if isinstance(data, dict) else None
+    if not isinstance(plugins, dict):
+        return {}, f"{path}: no \"plugins\" object"
+    root = os.path.realpath(cache_root)
+    refs = {}
+    for key, entries in plugins.items():
+        if not isinstance(entries, list):
+            return {}, f"{path}: entry {key!r} is not a list"
+        for ent in entries:
+            ip = ent.get("installPath") if isinstance(ent, dict) else None
+            if not isinstance(ip, str) or not ip:
+                return {}, f"{path}: entry {key!r} has no installPath"
+            # Resolve only the cache-root part: the <plugin>/<version> tail is
+            # compared by NAME, so a registry pointing at a version entry that
+            # is itself a symlink holds that entry, not its target.
+            norm = os.path.normpath(ip)
+            ver = os.path.basename(norm)
+            pname = os.path.basename(os.path.dirname(norm))
+            if os.path.realpath(os.path.dirname(os.path.dirname(norm))) != root:
+                continue  # another marketplace's cache, or elsewhere
+            refs.setdefault((pname, ver), set()).add(f"{key}@{ver}")
+    return {k: tuple(sorted(v)) for k, v in refs.items()}, None
 
 
 def default_cache_root():

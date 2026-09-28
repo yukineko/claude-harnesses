@@ -47,7 +47,13 @@
 #   (Problem-2.1); the count is anchored to each stage's deploy time via
 #   --since so pre-deploy violations are not misattributed (Problem-2.2). On a
 #   rollback the just-applied stage is AUTO-ROLLED-BACK (prior version dir
-#   re-pointed) and the rollout halts. Without --canary none of this runs and
+#   re-pointed) and the rollout halts. So is every EARLIER stage that already
+#   passed its gate: host binaries are seeded only by the rebuild after the
+#   last stage, so a passed stage left repointed would be registered with a
+#   launcher-only bin/ (dark; backlog ba5794b3). A halted canary run leaves
+#   the registry as it found it; a plugin it newly introduced is removed from
+#   the registry again. The same rollback runs on any other exit before the
+#   rebuild finishes (set -e abort, INT/TERM). Without --canary none of this runs and
 #   the script behaves exactly as it always has for NON-gate crates. Combine
 #   with --dry-run to preview the staged plan + rollback plan and mutate
 #   nothing.
@@ -292,6 +298,17 @@ release_rollout_lock() {
     lock_held=0
   fi
 }
+# EXIT handler. Canary cleanup runs BEFORE the lock is released, so no other
+# rollout can start between an interrupted canary and its rollback.
+on_rollout_exit() {
+  local rc=$?
+  # canary_abort_cleanup is defined further down; canary_inflight only becomes
+  # 1 after it is, so this guard also covers an exit before that point.
+  if [ "${canary_inflight:-0}" = 1 ]; then
+    canary_abort_cleanup "$rc"
+  fi
+  release_rollout_lock
+}
 acquire_rollout_lock() {
   if ! mkdir -p "$CACHE"; then
     echo "rollout: cannot create plugin cache $CACHE, so cannot take $LOCK_DIR — refusing to proceed" >&2
@@ -299,7 +316,7 @@ acquire_rollout_lock() {
   fi
   if mkdir "$LOCK_DIR" 2>/dev/null; then
     lock_held=1
-    trap release_rollout_lock EXIT
+    trap on_rollout_exit EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
     if ! echo "$$" > "$LOCK_DIR/pid"; then
@@ -582,6 +599,10 @@ copy_plugin_dir() {
 
 # --- registry patch (atomic, backed up, validated) ---------------------------
 # Args: registry_path owner git_sha [--dry-run] name1 version1 target1 name2 version2 target2 ...
+# A triple whose version AND target are both empty REMOVES "<name>@<owner>" —
+# the rollback of a plugin a canary newly introduced (it had no prior entry, so
+# restoring "nothing" means deleting the entry, not leaving it pointed at a dir
+# that has no host binary).
 registry_patch() {
   python3 - "$@" <<'PY'
 import json, os, shutil, sys, tempfile, time
@@ -620,6 +641,14 @@ changes = []
 for u in updates:
     key = f"{u['name']}@{owner}"
     entries = plugins.get(key)
+    if not u["version"] and not u["target"]:
+        if key in plugins:
+            changes.append((key, plugins.pop(key), None))
+        continue
+    if (not u["version"]) != (not u["target"]):
+        print(f"registry_patch: {key}: version and target must both be set "
+              "(or both empty = remove)", file=sys.stderr)
+        sys.exit(2)
     if entries and isinstance(entries, list) and len(entries) > 0:
         entry = entries[0]
         old = dict(entry)
@@ -641,8 +670,15 @@ for u in updates:
         plugins[key] = [entry]
     changes.append((key, old, entry))
 
+if not changes:
+    print("registry: no changes needed")
+    sys.exit(0)
+
 for key, old, entry in changes:
-    if old is None:
+    if entry is None:
+        verb = "would remove" if dry else "removed"
+        print(f"registry {verb} {key} (it had no entry before this run)")
+    elif old is None:
         verb = "would create" if dry else "created"
         print(f"registry {verb} {key}: version={entry['version']} installPath={entry['installPath']}")
     else:
@@ -899,7 +935,19 @@ execute_stage_rollback() {
     if [ -n "$rv" ] && [ -n "$rp" ]; then
       rb_reg_args+=("$pn" "$rv" "$rp")
     else
-      echo "    $pn: newly introduced by canary — nothing to restore (left as-is)" >&2
+      # No prior to restore. If the plan confirms the plugin had NO registry
+      # entry before this run, restoring the prior state means removing the
+      # entry: leaving it would keep it pointed at a fresh version dir that has
+      # no host binary (dark — backlog ba5794b3). Anything else (a prior entry
+      # overwatch did not echo back) cannot be restored safely and is said so.
+      local _r_cur_version="" _r_cur_path=""
+      IFS=$'\t' read -r _ _ _ _ _ _ _ _ _ _r_cur_version _r_cur_path <<<"$(row_for_name "$pn")"
+      if [ -z "$_r_cur_version" ] && [ -z "$_r_cur_path" ]; then
+        echo "    $pn: newly introduced by canary — removing its registry entry" >&2
+        rb_reg_args+=("$pn" "" "")
+      else
+        echo "    $pn: ERROR: had a prior entry ($_r_cur_version @ $_r_cur_path) but the rollback plan gave no restore target — left as-is; restore it from the registry backup" >&2
+      fi
     fi
     # Fail-soft: record an observational rollback event so `overwatch
     # review-queue` can surface it later. This never gates or alters the
@@ -923,6 +971,42 @@ execute_stage_rollback() {
   fi
 }
 
+# Canary run state, read by canary_abort_cleanup (the EXIT handler).
+#   canary_inflight   1 from the first stage's registry write until the rebuild
+#                     that seeds the host binaries has finished.
+#   canary_applied    every plugin name whose stage was applied in this run.
+#   canary_ow / canary_stage   the overwatch binary / current stage index.
+canary_inflight=0 canary_applied="" canary_ow="" canary_stage=0
+
+# Roll back EVERY stage applied in this run (backlog ba5794b3). Host binaries
+# are seeded only by run_rebuild_and_sync AFTER the stage loop, so until it has
+# run, every applied stage's registry entry points at a fresh version dir whose
+# bin/ holds only the launcher: installed, version-consistent, and dark. A run
+# that stops before that point — a health-gate halt (exit 4/5) or any
+# unexpected exit — must therefore not leave the PASSED stages repointed
+# either. Passing the gate does not make a stage live; the rebuild does.
+# $1 = names to roll back, $2 = emit_record (see execute_stage_rollback).
+rollback_applied_stages() {
+  local names="$1" emit="${2:-0}"
+  [ -n "$names" ] || return 0
+  echo "  rolling back the other stage(s) applied in this run: $names" >&2
+  echo "  (the rebuild that seeds their host binaries never ran)" >&2
+  execute_stage_rollback "$canary_ow" "$canary_stage" "$names" "$emit"
+}
+
+# EXIT-path cleanup for a canary run that stopped while in flight without going
+# through a halt branch (set -e abort, a failed rebuild, INT/TERM).
+canary_abort_cleanup() {
+  local rc="$1"
+  [ "$canary_inflight" = 1 ] || return 0
+  canary_inflight=0
+  echo "canary: run ended (rc=$rc) before the host binaries were seeded — rolling back every applied stage" >&2
+  if ! rollback_applied_stages "$canary_applied" 0; then
+    echo "canary: ROLLBACK FAILED — registry entries for [$canary_applied] may point at version dirs with no host binary." >&2
+    echo "        Restore $REGISTRY from its newest .bak-* backup." >&2
+  fi
+}
+
 run_canary() {
   local ow
   if ! ow="$(resolve_overwatch_bin)"; then
@@ -931,6 +1015,7 @@ run_canary() {
     exit 1
   fi
   echo "canary: using overwatch binary: $ow"
+  canary_ow="$ow"
 
   # Ordered plugin list for stage slicing; rows are looked up via row_for_name
   # (name -> PLAN_ROWS entry), which keeps this bash-3.2 compatible.
@@ -977,6 +1062,15 @@ run_canary() {
     stage_names="$(python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin)["stages"]['"$s"']["plugins"]))' <<<"$plan_json")"
     echo
     echo "--- stage $s: $stage_names ---"
+    # Stages applied BEFORE this one (they passed their gate). Recorded before
+    # anything of this stage is touched, so the EXIT handler covers the copy
+    # and the registry write too.
+    local passed_names="$canary_applied"
+    canary_stage="$s"
+    if [ "$dry" != 1 ]; then
+      canary_inflight=1
+      canary_applied="${canary_applied:+$canary_applied }$stage_names"
+    fi
     # Problem-2.2: capture the pre-stage DEPLOY timestamp (epoch seconds) BEFORE
     # this stage is applied, and pass it to the health gate as --since so the
     # gate only counts violations at/after the deploy. Violations that predate
@@ -1107,14 +1201,20 @@ run_canary() {
           echo "  (Known benign cause: overwatch self-upgrade bootstrap-skew, rc=2 against the pre-swap binary. Every stage is gated, including the only stage of a single-stage run, so rolling overwatch out single-stage does NOT avoid this; set ROLLOUT_GATE_EVAL_FAILSOFT=1 to explicitly acknowledge the skew and proceed.)" >&2
           # emit_record=0: there was NO health verdict/violation, so do not
           # write a `raw` violation-rollback event (it would be a false record).
+          canary_inflight=0
           execute_stage_rollback "$ow" "$s" "$stage_names" 0
+          rollback_applied_stages "$passed_names" 0
           echo "canary: HALTED at stage $s — health gate could not evaluate (fail-closed)." >&2
           exit 5
         fi
       fi
       if [ "$gate_rc" -ne 0 ]; then
         echo "  health-gate: ROLLBACK — raw-spike or systemic recurrence detected; rolling back stage $s and halting" >&2
+        canary_inflight=0
         execute_stage_rollback "$ow" "$s" "$stage_names" 1
+        # emit_record=0 for the passed stages: they are rolled back because
+        # the run halted, not because of a violation of their own.
+        rollback_applied_stages "$passed_names" 0
         echo "canary: HALTED at stage $s after auto-rollback." >&2
         exit 4
       fi
@@ -1139,6 +1239,8 @@ run_canary() {
     [ -f "$srcdir2/scripts/sync-plugin-assets.sh" ] && canary_synced+=("$sname:$srcdir2")
   done
   run_rebuild_and_sync ${canary_synced[@]+"${canary_synced[@]}"}
+  # The rebuild seeded the host binaries: the applied stages are live now.
+  canary_inflight=0
 }
 
 # Delete superseded version dirs. This used to be documented non-behaviour ("never

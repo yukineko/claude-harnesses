@@ -1297,6 +1297,46 @@ mod worktree_remove_tests {
         assert!(repo.join("feat.txt").exists());
     }
 
+    /// backlog 617b3112: an overwatch merge-conflict ledger that cannot be READ
+    /// (here: the ledger path is a directory, so the read fails with a non-NotFound
+    /// IO error) is cannot-determine, not "no hold". The merge gate must resolve it
+    /// to the restrictive side: `merge()` must NOT report `Merged` and must NOT
+    /// integrate the branch.
+    #[test]
+    fn worktree_merge_unreadable_overwatch_store_does_not_proceed() {
+        let (tmp, repo) = init_repo();
+        make_branch(&repo, "feat-unreadable", "feat.txt", "feature content\n");
+        let cfg = test_cfg(&repo);
+        let home = tmp.path().join("home-unreadable");
+        fs::create_dir_all(&home).unwrap();
+        let result = with_home(&home, || {
+            let ledger = overwatch::store::merge_conflicts_path(&repo).expect("ledger path");
+            fs::create_dir_all(&ledger).expect("make the ledger path an unreadable directory");
+            merge(&cfg, &repo, "feat-unreadable", "main")
+        });
+        assert!(
+            !matches!(result, Ok(MergeOutcome::Merged)),
+            "an unreadable overwatch store must block/ask, not let the merge through; got {result:?}"
+        );
+        assert!(
+            !repo.join("feat.txt").exists(),
+            "the branch must not have been integrated while the hold state is undeterminable"
+        );
+    }
+
+    /// Control for 617b3112: a readable (absent) store with no conflicts proceeds.
+    #[test]
+    fn worktree_merge_readable_empty_overwatch_store_proceeds() {
+        let (tmp, repo) = init_repo();
+        make_branch(&repo, "feat-readable", "feat.txt", "feature content\n");
+        let cfg = test_cfg(&repo);
+        let home = tmp.path().join("home-readable");
+        fs::create_dir_all(&home).unwrap();
+        let result = with_home(&home, || merge(&cfg, &repo, "feat-readable", "main"));
+        assert_eq!(result.expect("clean merge"), MergeOutcome::Merged);
+        assert!(repo.join("feat.txt").exists());
+    }
+
     /// backlog f14c18be: a branch name that does not resolve is cannot-determine,
     /// not a conflict. It must be a hard error naming the missing branch, and it
     /// must NOT pollute the merge-conflict review surface with a 0-file entry.

@@ -268,11 +268,10 @@ pre-push フックが `PREPUSH_SKIP_CI_RED=1`（ユーザー承認済み）で�
 
 **How to apply**: `gh workflow run` / `gh run watch` / `gh run list` / `gh run view` を含む
 GitHub Actions というゴミサービスへの操作を、理由の如何を問わず一切行わない。ローカルの pre-push
-フックを通過した時点でタスクは完了とみなし、CI の結果を待たない・確認しない。pre-push フックが
-chronic red で再びブロックした場合も、`PREPUSH_SKIP_CI_RED=1` を独断で再使用しない — 必ず
-`AskUserQuestion` で都度ユーザーに確認する（「前回承認されたから今回も」という推測は判断であり、
-2. が禁じる「判断で埋める」そのものなので、このrunfileでは省略しない）。ユーザー自身が CI の状態を
-知りたいと明示的に依頼した場合に限り、その依頼の範囲でのみ調べてよい。
+フックを通過した時点でタスクは完了とみなし、CI の結果を待たない・確認しない。
+（上の Why に出てくる chronic-red-CI チェックと `PREPUSH_SKIP_CI_RED` は、GHA 禁止に伴い
+`.githooks/pre-push` から撤去済みで、今は存在しない。GHA の状態を読むゲートを再導入しない。）
+ユーザー自身が CI の状態を知りたいと明示的に依頼した場合に限り、その依頼の範囲でのみ調べてよい。
 
 ### 8. 作業は worktree で行う — main の作業ツリーを共有編集しない（**絶対義務・例外は統合のみ**）
 
@@ -326,7 +325,7 @@ merge で統合すればよい。統合できないのは**同じ index / 作業
 
 ## context 読み込み戦略（重要 — 盲目的に crate を探索しない）
 
-このリポジトリは 39 クレートある。全体を毎回読むと context を浪費するので、**必要な層だけを
+このリポジトリはクレートが多い（数は `ls crates/` で都度測る）。全体を毎回読むと context を浪費するので、**必要な層だけを
 オンデマンドで**読む:
 
 1. **まず [`docs/GLOSSARY.md`](docs/GLOSSARY.md) を読む** — 全クレートの一言早見表＋頻出ドメイン用語
@@ -341,8 +340,9 @@ merge で統合すればよい。統合できないのは**同じ index / 作業
 
 - ツールチェーンは **rustup 経由**。cargo コマンドの前に `. "$HOME/.cargo/env"` を通す。
 - テストはクレート単位: `cargo test -p <crate>`。
-- CI ゲートは **fmt + clippy を強制**する。コミット前に `cargo fmt` と
-  `cargo clippy -p <crate> --all-targets` を green にする。
+- コミット前に `cargo fmt` と `cargo clippy -p <crate> --all-targets` を**自分で** green にする。
+  これを強制するゲートは無い（CI は撤去済み。`.githooks/pre-commit` の `check-clippy-lints.py` は
+  `[lints]` 設定違反のスキャナであって clippy / fmt を実行しない）。
 - prompt-injection 防御ゲート・Continuous-Audit 自動起動導線など個別ゲートスクリプトの詳細は
   [`docs/repo-operations.md`](docs/repo-operations.md) を参照。
 
@@ -355,13 +355,13 @@ merge で統合すればよい。統合できないのは**同じ index / 作業
 据え置きは禁忌。** さらに `scripts/rollout-plugins.sh` を実行しない限り稼働ハーネスには
 一切反映されない（手動 `cp` は禁止 — cache の version dir が乖離し古い版が配布される）。
 
-**`crates/harness-core/` は例外的に扱いが違う**（plugin ではなく、36 plugin にリンクされる共有
+**`crates/harness-core/` は例外的に扱いが違う**（plugin ではなく、ほぼ全 plugin にリンクされる共有
 クレート）。plugin.json も marketplace.json も持たないので lockstep 3ファイルの対象ではないが、
 リンクされる差分（`tests/` と `*.md` 以外）を触ったら **`crates/harness-core/Cargo.toml` の
-`[package].version` を micro 上げる**。リンク先 36 plugin の bump は要求しない（1 commit あたり
-108 ファイルが動き並行セッションと必ず衝突するため。§8）。`check-version-bumped.py` が強制する。
+`[package].version` を micro 上げる**。リンク先 plugin の bump は要求しない（1 commit あたり
+「リンク先 plugin 数 × 3」ファイルが動き並行セッションと必ず衝突するため。§8）。`check-version-bumped.py` が強制する。
 
-強制ゲート4本（commit 前・push 前・CI で回す）: `check-plugin-versions.py`（lockstep）/
+強制ゲート4本（rollout は `.githooks/pre-push`、他の3本は `.githooks/pre-commit` で回す）: `check-plugin-versions.py`（lockstep）/
 `check-version-bumped.py`（bump-on-change。plugin と harness-core の両方）/
 `check-plugin-rollout.py`（rollout 実行済みか。`.deployed-from.json` の `harness_core_version` も見る）/
 `check-launcher-exec-bit.py`（`crates/<c>/bin/<name>` launcher が git **index** で 100755 か。

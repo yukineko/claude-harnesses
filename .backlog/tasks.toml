@@ -11525,6 +11525,7 @@ updated_at = 1790632223
 weight = 0.0
 issue_number = 810
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/810"
+
 [[task]]
 id = "9443d2e1"
 title = "state を持つ condukt run の file claim も、別 worktree から見ると run state が読めず transcript も消えていると永久に reap されない"

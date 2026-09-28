@@ -19482,9 +19482,38 @@ hook 自身が worktree セッションを設計として allow しており、�
 guard が rm を拒否する)。第8節が main に唯一許す操作が merge である以上、
 d796a630 の本体はここに残る。本項目が解決したのは「ターンを終えられない」方だけ。
 
-[triage 2026-09-29 @546d9fa2] closed without work: DUPLICATE of d796a630 (retest of it)"""
+[triage 2026-09-29 @546d9fa2] closed without work: DUPLICATE of d796a630 (retest of it)
+
+【救出 2026-09-29、未マージ branch session-95516008 9a184ee8 から】---
+実測 2026-09-10 04:43、測定点 c7c4ea49（別セッションからの独立観測、2 例目）。
+本 ticket が「帰属の機械判定手段が無い」と述べる点について、今回 1 つ機能した手順を記録する。
+
+観測: stop-verify-worktree.py が main の dirty を理由に停止を block。汚れは
+.backlog/tasks.toml の 1 ファイルのみ、6 insertions / 6 deletions。
+
+帰属の判定に使えた事実は 3 つで、いずれも観測であり推測ではない:
+ (1) 変更は 3 task の status を pending から claimed へ倒すもので、3 件すべてが
+     同一の updated_at=1788982977 を持つ。単一の atomic な batch claim であり、
+     人手の編集ではありえない形。
+ (2) その epoch は 04:42:57 で、stop が掛かった 04:43:50 の 53 秒前。
+     ファイルの mtime も同一秒で一致する。
+ (3) 当該ターンで自セッションは backlog 系コマンドを 1 つも実行していない
+     (ターンの出力は蒸留テキストのみ、tool_use による書き込みはゼロ)。
+
+つまり「同一 updated_at を共有する複数エントリの batch 遷移」+「自セッションの
+tool-use 履歴に対応する書き込みが無い」の 2 点で、機械的に foreign と判定できた。
+ps では ctxrot distill-bg と 2 本の長命 claude プロセスが同時に走っていた。
+
+この経路は 03bc578c(Stop ゲートが他セッションの変更を自分のものとして要求する) の
+是正で使える可能性がある: ゲートが dirty file の全 hunk について
+「自セッションの tool-use に対応する書き込みが存在するか」を照合できれば、
+帰属を block 理由に含められる。ただし現状のゲートはこの照合を一切行っていない。
+
+なお今回は foreign な claim を commit も revert もしていない。commit は他セッションの
+WIP を横取りし、revert は生きている claim 3 件を剥がして二重 dispatch を招くため
+(どちらも第4節の隠蔽側に倒れる)。停止は block されたまま人間へ返した。"""
 created_at = 1788843347
-updated_at = 1790632207
+updated_at = 1790634680
 weight = 0.0
 
 [[task]]
@@ -21568,6 +21597,7 @@ updated_at = 1790632292
 weight = 0.0
 issue_number = 801
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/801"
+
 [[task]]
 id = "9b7cb342"
 title = "flow が取った task claim は持ち主のセッションが死んでも永久に reap されない（run state が存在しないため claim_progress が常に Undetermined）"

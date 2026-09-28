@@ -11525,3 +11525,340 @@ updated_at = 1790632223
 weight = 0.0
 issue_number = 810
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/810"
+
+[[task]]
+id = "9443d2e1"
+title = "state を持つ condukt run の file claim も、別 worktree から見ると run state が読めず transcript も消えていると永久に reap されない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "claim",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+measured 2026-09-29 @ b325a169: run-20260814-025356-78549 (session b57a58c3) の file claim 10 件 (crates/condukt/tests/worktree_reconcile.rs, crates/flow/skills/flow/SKILL.md, crates/backlog/src/store.rs 等) が heartbeat 1107h 前のまま live。run state は ~/.condukt/state/harness-e77d23c7/ (main の dir) にのみ存在し、session worktree の cwd からは session-34385c9e-... を見るので NotFound。transcript b57a58c3-...jsonl は ~/.claude/projects に存在しない。よって claim_progress の 3 信号がすべて Undetermined で永久保持。9b7cb342 の stateless マーク修正は flow claim 専用なのでこの class は直らない。観測した被害: 9b7cb342 の condukt run の state set --status running が crates/condukt/tests/** の衝突で skipped。
+二つの読み: (a) 欠陥: 死んだ run の claim が 46 日間 condukt tests と flow SKILL.md を占有し続けている。(b) 意図的: 判定不能は保持 (fail-closed)。ただし (b) でも人間が観測できる回収経路 (例: condukt state claims に stale 年齢と判定不能理由を出す、明示 release の案内) が無い。
+見分け方: run state lookup を main_worktree_root 基準にした場合に Known(Stalled) になるかを test で観測。43393ce2 の per-worktree state dir 判断と衝突するので設計判断が要る。"""
+created_at = 1790631165
+updated_at = 1790631165
+weight = 0.0
+issue_number = 811
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/811"
+
+[[task]]
+id = "1426e7b4"
+title = "overwatch status のテキスト表示が live リース 4 件を (none) と報告する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+touched_files = []
+status = "pending"
+notes = "測定点 c39701bc / 2026-09-13、scripts/rollout-plugins.sh --canary が overwatch を harness-core 0.2.24 に対して再ビルドした直後。overwatch status は == Sessions == の次に (none) を出す一方、overwatch status --json は sessions[0].leases に 4 件を返す (00d1160bf294b1af, 052a7668cb486c1f, a192382d08ee3bf7, a4050204859f1c7a)。4 件とも status が空文字で project が null。いずれも数秒前に overwatch begin が rc=0 と possible_duplicate 空・scope_overlap 空で登録したもの。ロールアウト前の同セッションの SessionStart hook は逐語で session 79d79a35-3490-4bbd-9bb4-d501e749e65d と 3 live を出力し 3 件のリースを列挙していた。同じコマンド・同じセッションなので regression が第一仮説。p0 の理由: Sessions ビューは誰が何を作業中かを示す唯一の人間向け表示面であり CLAUDE.md 第8節の別セッションは常に存在するという前提の運用上の土台である。live 4 件あるのに (none) と答えるのは誰も作業していないと読まれる。第1節より沈黙は許容される degrade ではない。読み1 regression: テキスト renderer が project で絞り込んでおり、リースの project が main_worktree_root による project 解決変更 d83b0e8f の巻き添えで null になった。読み2 もとからそう: テキストビューは設計上 project スコープで begin は project を書いたことがない。読み2 なら SessionStart hook の 3 live 出力の出所を説明する必要がある。読み3 キャッシュ陳腐化: status はどちらの呼び出しも aggregate build_cached を通る別プロセスなので、TTL 付きキャッシュが begin より前に作られていれば 1 回目が古いキャッシュ 2 回目が新鮮な結果を返しうる。見分け方: overwatch begin がリースの project を書く経路と、テキスト renderer が絞り込む経路と、build_cached の TTL と無効化規則の 3 つを読む。推測せず読んでどれをコードが支持するか述べること。 【救出 2026-09-29】元 id 7d820338（2026-09-13 に run-20260913-223004-15261 の orch worktree で起票されたが未コミットのまま残っていた。worktree 削除前に再起票。notes 中の関連 id は元 id のまま）"
+created_at = 1790632211
+updated_at = 1790632211
+weight = 0.0
+issue_number = 812
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/812"
+
+[[task]]
+id = "e9262d91"
+title = "condukt lock の待機ループが poll ごとに kill サブプロセスを spawn し、負荷下で自分の獲得を遅らせる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "測定点 c39701bc / 2026-09-13、読み取りのみ。crates/condukt/src/lock.rs:267 acquire_at の待機ループは AlreadyExists のたびに read_info してから pid_alive を呼ぶ。pid_alive は lock.rs:138 付近で std::process::Command::new(kill) に -0 pid を渡して harness_core::boundary::run で実行する。つまりロック待ちの 1 回のポーリングごとに fork+exec が 1 回走る。ポーリング間隔は 10 ミリ秒なので、待機スレッドは 1 秒あたり最大 100 回のプロセス生成を行う。DEADLINE は 10 秒なので 1 回の獲得試行で最大 1000 プロセス。crates/condukt/src/lock.rs:484 の repo_primary_lock_serializes_concurrent_rmw_no_lost_update は 6 スレッド 8 イテレーションで同じロックを奪い合うので、5 スレッドが同時に待機して spawn し続ける構造になる。CPU 飽和時にはこの spawn 自体が遅くなり、待機がさらに長引いて自己増幅する。加えて獲得は FIFO ではなく hard_link に勝った者勝ちなので、負荷下でスレッドが繰り返し負ける飢餓がありうる。Linux では /proc の exists() で先に返るので spawn は回避されるが、macOS では常に spawn する。影響は fail-open ではない (獲得できなければ Err に倒れる、正しい側) が、liveness の問題であり負荷下で condukt の merge やコミットが理由なく拒否されうる。改善案: 保持者の pid が自分自身のときは spawn せずに Known(true) を返す、あるいは liveness 確認を毎ポーリングではなく数回に 1 回に落とす。関連 35d61d23。 【救出 2026-09-29】元 id 680d541a（2026-09-13 に run-20260913-223004-15261 の orch worktree で起票されたが未コミットのまま残っていた。worktree 削除前に再起票。notes 中の関連 id は元 id のまま）"
+created_at = 1790632214
+updated_at = 1790632214
+weight = 0.0
+issue_number = 813
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/813"
+
+[[task]]
+id = "c1641525"
+title = "session worktree に古い .backlog/tasks.toml の未コミット差分が残り、merge すると他セッションの claim を pending へ戻す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "測定点 c39701bc / 2026-09-13 の観測。/Users/yuki/src/.harness-worktrees/session-79d79a35 (branch session-79d79a35) に .backlog/tasks.toml の未コミット変更が 88 挿入 49 削除で残っていた。git log HEAD..main は 0 件なので base は main と同じ。差分の中身は 35d61d23 と 8c5d46fa の status を claimed から pending へ戻し、updated_at を 1789306177 から 1789296911 へ巻き戻すもの。つまりこの worktree の backlog CLI が古いスナップショットからファイル全体を書き直しており、この差分をコミットして main へ merge すると、別セッションが取得済みの claim が黙って解除される。backlog CLI はファイル全体を書き直すので、行単位の merge では衝突として現れず片側が勝つ。CLAUDE.md 第11節が tasks.toml の衝突を UNION で解決せよと定めているのは同じ現象への対処だが、これは衝突にすらならない経路である。影響: 2 セッションが同じタスクを同時に処理する。検証方法: 当該 worktree で git diff .backlog/tasks.toml を見て status 行の claimed から pending への変化を数える。対処案: backlog の書き込みを読み直してからの差分適用にするか、worktree の tasks.toml が base より古いときに書き込みを拒否する。関連 5ba13c3e 7b6bcfe6。 【救出 2026-09-29】元 id c0b0c2ca（2026-09-13 に run-20260913-223004-15261 の orch worktree で起票されたが未コミットのまま残っていた。worktree 削除前に再起票。notes 中の関連 id は元 id のまま）"
+created_at = 1790632215
+updated_at = 1790632215
+weight = 0.0
+issue_number = 814
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/814"
+
+[[task]]
+id = "842d552c"
+title = "maintree guard が overwatch status --json の undetermined 配列を読まず、観測不能な peer roster を peer ゼロとして扱う"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+touched_files = []
+status = "pending"
+notes = "測定点 c39701bc / 2026-09-13、読み取りのみ、逐語引用あり。crates/condukt/src/maintree.rs:588 が run_tool で overwatch status --json を呼び、parse_overwatch_sessions (maintree.rs:625-665) が sessions[].live_count だけを読む。overwatch 側は crates/overwatch/src/aggregate.rs:414-433 の apply_leases が ledger 読み取り失敗を SOURCE_SESSIONS の undetermined として記録し、status --json は undetermined 配列として出力するが、maintree のパーサはこの配列を一切参照しない。したがって overwatch が正直に判定不能と答えても、第8節の main-tree guard には peer ゼロ すなわち他に誰も動いていない として届く。これは CLAUDE.md 第8節が絶対義務と呼ぶ不変条件のまさに fail-open 方向である。さらに同じ入口は aggregate.rs:527-535 の build_cached を通るので、TTL 10 秒 (aggregate.rs:501 STATUS_CACHE_TTL_SECS) 以内の陳腐なキャッシュでも sessions が空になりうる。ledger 書き込みによる無効化は存在せず lease.rs は status_cache に一切触れない。よって peer が begin した直後の 10 秒間、guard は peer ゼロを見る。是正方向: parse_overwatch_sessions が undetermined 配列に SOURCE_SESSIONS の項目があれば Determination::Undetermined へ解決し、guard は制限側へ倒す。関連して crates/condukt/src/maintree.rs:64-67 の散文は apply_leases が今も if let Ok で潰していると書いているが実装は Err を分岐して undetermined を記録しており、散文が実装より古い (第4節の docstring と実挙動の不一致)。同じコミットで直すこと。関連 7d820338。 【救出 2026-09-29】元 id 1df540f8（2026-09-13 に run-20260913-223004-15261 の orch worktree で起票されたが未コミットのまま残っていた。worktree 削除前に再起票。notes 中の関連 id は元 id のまま）"
+created_at = 1790632217
+updated_at = 1790632217
+weight = 0.0
+issue_number = 815
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/815"
+
+[[task]]
+id = "3fc7d232"
+title = "負荷依存テストクラスの生存者一覧 (8c5d46fa の再測定で作成、最も余裕が薄いのは backlog store の bounded_wait)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "測定点 c39701bc / 2026-09-13。8c5d46fa が名指しする compass_invocation_faster_than_timeout_still_returns_output は HEAD に存在しない。crates/autoflow/src/compass.rs ごと 5289312f (feat autoflow flow backlog を flow backlog で処理させる促しを全廃する、2026-08-20 17:09:26 +0900) で削除された。git show 5289312f -- crates/autoflow/src/compass.rs を grep すると 396 行目に削除側として当該テストが出る。したがって当該チケットの主題は削除により解消済み。同じクラス (実時間やプロセス起動遅延に合否が依存する検査) の生存者を機械列挙した結果、余裕が最も薄いのは crates/backlog/src/store.rs:3519 の store::tests::bounded_wait_gives_up_before_stale_reap_window で、待ち 300 ミリ秒に対して上限 1 秒の約 3 倍。次点は crates/blastguard/src/detect.rs:9921 と crates/blastguard/tests/depth_limit_fail_open.rs:498 と crates/ctxrot/src/glob.rs:256 と crates/propguard/src/gate.rs:1661。他の大半は 4 倍から 17 倍の余裕があり、一部は既に負荷を考慮したコメントを持つ。判定不能として残したもの: crates/propguard/src/git.rs:449 付近と、20 秒デッドラインのポーリング型 2 件 (crates/condukt/tests/claim_worktree_scope.rs:356 と crates/specguard/tests/integration.rs:1982)。実測: 最薄の bounded_wait を 8 コア機で yes 16 本による飽和下 (load average 46.46 から 47.25) に 20 回連続実行して 20 回とも green、全実行が running 1 test で非空振りを確認。無負荷の基準は 10 回中 10 回 green。したがって現時点で負荷により赤くなる生存者は観測されていない。未測定: 生存者のうち bounded_wait 以外は負荷下で実行していない。また測定中に cargo プロセス数が 2 から 14 へ増えており他セッションのビルドが同時に走っていたが、これは負荷を増やす方向なので green の結論を弱めない。 【救出 2026-09-29】元 id cd8a7739（2026-09-13 に run-20260913-223004-15261 の orch worktree で起票されたが未コミットのまま残っていた。worktree 削除前に再起票。notes 中の関連 id は元 id のまま）"
+created_at = 1790632218
+updated_at = 1790632218
+weight = 0.0
+issue_number = 816
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/816"
+
+[[task]]
+id = "922f0a96"
+title = "reviewgate: diff 取得失敗 (P1) の配線テストを main に移植する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "reviewgate",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "監査 P1 (git diff 取得失敗が clean に写る経路) は main で修正済み (git.rs の DiffText.fetch_failed、run_diff が Result) だが、main の docs/audit-reviewgate-verdict-paths.md 自身が P1 には専用の回帰テストが無いと書いている。main の tests に fetch_failed / git-scan-failed を突くテストは無い (2026-09-29 grep で確認)。旧ブランチ condukt/run-20260804-074132-25351/.../fix-reviewgate-failopens (3bc9fc20) に crates/reviewgate/tests/diff_fetch_failure_wiring.rs (224 行、偽 git shim を子プロセスで使う) があり、ブランチ削除前に tag archive/reviewgate-diff-fetch-failure-wiring で保全した。取り出し: git show archive/reviewgate-diff-fetch-failure-wiring:crates/reviewgate/tests/diff_fetch_failure_wiring.rs。main の git.rs / main.rs に対してコンパイルできるかは未確認。移植時は修正を一時的に外して RED を観測してから GREEN にすること (実装者と別の agent が行う)。reviewgate の micro bump が要る。"
+created_at = 1790632233
+updated_at = 1790632233
+weight = 0.0
+issue_number = 817
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/817"
+
+[[task]]
+id = "1e04dbbf"
+title = "stop-verify-worktree.py blocks on a foreign in-progress merge on main, which CLAUDE.md 8 explicitly permits"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+Measured 2026-09-13 18:55-18:56 in session 59faffee, which authored ZERO file edits (its whole task was producing a distillation note).
+
+All three Stop gates (stop-verify-worktree, reviewgate, donegate) fired on main-tree dirt owned by a DIFFERENT live session (pid 80124). Evidence: .git/MERGE_HEAD present, MERGE_MSG names the batch5 t5-abandon-dirty-guard branch, and crates/condukt/src/main.rs mtime was 6 seconds before my date call. Conflict marker count was already 0, i.e. the other session was mid conflict-resolution.
+
+Two distinct defects here, both attribution:
+
+1. stop-verify-worktree.py treats "main tree has uncommitted changes" as a violation of CLAUDE.md 8 without checking whether a merge is in progress. But 8 names integration (merge plus conflict resolution) as the ONE thing that IS allowed on main. So the gate blocks the exact activity its own cited rule permits. Suggested predicate: if .git/MERGE_HEAD exists and every dirty path is in the merge conflict set, that is integration, not authoring.
+
+2. The gate has no session attribution at all, so a session that edited nothing cannot clear it without destroying another sessions work. The only exits available to me were to touch their merge (destructive, forbidden) or skip. reviewgate handles this correctly already: its prose tells the reviewer to exclude files it did not write. stop-verify-worktree and donegate have no equivalent.
+
+Consequence chain worth naming: when a gate blocks a session that has no way to comply honestly, the only remaining exit is the skip mechanism. That is structural pressure toward the fail-open that CLAUDE.md 5 is trying to make rare. The gate is not wrong to be fail-closed; it is wrong about WHOSE work it is judging.
+
+Related in-flight: 4b94e371 (false reds from intra-binary test parallelism) is the same theme from a different angle, both make reds less trustworthy and so train the habit of not reading reds. 【救出 2026-09-29】元 id 537a9efe。session-59faffee の未マージ/未コミットの tasks.toml にだけ存在していたため、ブランチ・worktree 整理の前に再起票した。notes 中の関連 id は元 id のまま。"""
+created_at = 1790634571
+updated_at = 1790634571
+weight = 0.0
+issue_number = 818
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/818"
+
+[[task]]
+id = "016c2562"
+title = "backlog: wontfix と裁定された項目が pending のまま next --claim の候補に上がる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "queue-hygiene",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-08-14。966ae7aa は tags に wontfix を持ち、notes に「調査済み・実装不能につき
+guidance-only として close (ユーザー裁定 2026-08-02)」と裁定が書かれているが、status は
+pending のままだった。そのため本日 flow が backlog next --claim の候補として掴み、
+condukt バッチの task 4 として dispatch してしまった (実行中の agent へ停止を指示して取り下げ)。
+
+**タグは選択に一切影響していない。** crates/backlog の next/list は status と project で絞るだけで、
+tags は表示にしか使われない。したがって「人間が実装しないと決めた」項目と
+「まだ誰も見ていない」項目が、キュー上で同じ扱いになる。
+
+これは単なる読み落としの防止策ではなく fail-open の形である: 裁定という**判定済みの情報**が、
+下流の選択器から見えないため「未判定」と同じに写っている。
+
+完了条件: (1) next --claim が wontfix タグ付きの項目を候補から外す (または status を
+自動的に閉じる)。(2) その挙動を固定する回帰テストが RED を観測してから GREEN になっている。
+(3) 既存の wontfix タグ付き pending 項目が他に無いか棚卸しし、あれば同様に処理する。
+
+関連: c4fe6df9 / 0dafa254 (status 語彙に cancelled が無く done しか使えない問題)。
+wontfix を閉じるときに done を使うと「実装した」と読めてしまうのは同じ根。 【救出 2026-09-29】元 id 195bb7c5。session-b57a58c3 の未マージ/未コミットの tasks.toml にだけ存在していたため、ブランチ・worktree 整理の前に再起票した。notes 中の関連 id は元 id のまま。"""
+created_at = 1790634573
+updated_at = 1790634573
+weight = 0.0
+issue_number = 819
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/819"
+
+[[task]]
+id = "c57a600c"
+title = "backlog edit に priority と weight の変更手段が無く、起票時に付けた優先度を訂正できない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "cli",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-08-14: backlog edit --help の Options は --title / --tag / --notes / --status の
+4 つだけで、priority も weight も無い。add には --priority と --weight があるので、
+**優先度は起票の瞬間にしか決められず、以後どの経路でも訂正できない**。
+
+初出は 5a4630a5 の notes で、起票者自身が「INTENDED PRIORITY p3, not the p2 this record still
+shows - backlog edit has no --priority flag, so the field could not be lowered from here」と
+記録している。5a4630a5 本体は前提が反証されて close したが、この残差は本日も真なので独立に起こす。
+
+影響: 誤って高い優先度で起票された項目がキュー先頭に居座り続ける。next --claim は
+(priority, weight, created_at) で並べるので、訂正不能な誤りが**選択順序を恒久的に歪める**。
+tags は edit できるのに priority だけできないのは非対称でもある。
+
+完了条件: (1) backlog edit が --priority と --weight を受け付ける。(2) 変更が next の
+並び順に反映されることを固定する回帰テスト。(3) 不正値 (未知の priority 文字列など) は
+判定不能側＝拒否に倒す (既定値へ黙って落とさない)。 【救出 2026-09-29】元 id a6b126f9。session-b57a58c3 の未マージ/未コミットの tasks.toml にだけ存在していたため、ブランチ・worktree 整理の前に再起票した。notes 中の関連 id は元 id のまま。"""
+created_at = 1790634574
+updated_at = 1790634574
+weight = 0.0
+issue_number = 820
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/820"
+
+[[task]]
+id = "7719038e"
+title = "backlog edit --notes は先頭が - の値を clap が拒否するので、終了ステータスを見ない書き込みが黙って落ちる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "cli",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-08-14。notes の本文が - で始まると (例: 区切り線として --- CLOSED AS DUPLICATE ...)、
+clap が「unexpected argument」として拒否し exit 2 で終わる。値としては渡っていない。
+
+**危険なのは拒否そのものではなく、その組み合わせである**:
+1. edit --notes は notes を追記ではなく **置換**する (73fb8e81)。したがって呼び出し側は必ず
+   read-modify-write を組む。
+2. その書き込みが失敗しても、読み戻した notes には**元の本文がそのまま残っている**。
+3. よって「前の本文が生き残っているか」という素直な assert は**書き込み失敗時にも通る**。
+
+本日これを踏んだ: 重複 close のスクリプトが 5 件の close marker を書けていないのに、
+assert が通り 5 件とも done に落ちた (marker 不在に後から気づいて再実行し修復済み)。
+これは CLAUDE.md 第2節の「何も検証していないテストは常に通る」の実例である。
+
+対処の候補は 2 つあり、片方だけでは足りない:
+(a) clap 側で allow_hyphen_values を付ける (または --notes-file / stdin 経由の入口を用意する)。
+(b) それとは別に、**書き込みが実際に着地したことを検証できる出口**を用意する
+    (edit が変更後の notes を stdout に返す、あるいは --verify で読み戻す)。
+現状は呼び出し側が「置換したはずの文字列が読み戻せるか」を自前で assert するしかなく、
+その assert は上記のとおり失敗を検出できない形に書きやすい。
+
+完了条件: (1) 先頭が - の notes を渡せる経路が存在する。(2) その経路の回帰テストが
+RED を観測してから GREEN になっている。(3) 書き込み失敗が呼び出し側から検出可能である
+(非0終了だけでなく、着地の確認手段があること)。 【救出 2026-09-29】元 id bb3cf28b。session-b57a58c3 の未マージ/未コミットの tasks.toml にだけ存在していたため、ブランチ・worktree 整理の前に再起票した。notes 中の関連 id は元 id のまま。"""
+created_at = 1790634576
+updated_at = 1790634576
+weight = 0.0
+issue_number = 821
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/821"
+
+[[task]]
+id = "e110b1e8"
+title = "PermissionDenied 分岐の unresolved:true を反転しても全テストが緑（kill rate ゼロ）"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "review",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "condukt run run-20260807-035049-79070 の verifier がフォールト注入で実測。crates/backlog/src/store.rs の canonicalize_project_with_marker、存在確認そのものが不能な分岐（PermissionDenied / IO 障害）の unresolved を true から false へ反転しても 187 テストが全部緑のままだった。手動 probe（親を chmod 000）では正しく true になるが、その正しさを守る回帰テストが1本も無い。制限側の分岐が固定されていないので、後から permissive 側へ倒されても検出されない。実行者は f234d93f として起票したと報告したが、backlog list --all で検索しても存在しない。起票自体が失われている。完了条件: フォールト注入で RED を観測してから GREEN 化する回帰テストを、実装者ではない agent が追加する。 【救出 2026-09-29】元 id 68e091b1。session-b9a78b46 の未マージ/未コミットの tasks.toml にだけ存在していたため、ブランチ・worktree 整理の前に再起票した。notes 中の関連 id は元 id のまま。"
+created_at = 1790634577
+updated_at = 1790634577
+weight = 0.0
+issue_number = 822
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/822"
+
+[[task]]
+id = "eb851ba3"
+title = "migrate 実装エージェントが symlink 欠陥の回帰テスト待ちで停止し、欠陥の内容が記録されていない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "review",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "backlog migrate 実装を委譲した agent が、最終報告として Waiting on agent B regression test for the symlink defect とだけ返して停止した。どの symlink 欠陥かの説明が無く、crates/backlog の migrate.rs / tests/migrate.rs を grep しても symlink_metadata の正常な使用箇所（migrate.rs:168 と :220 のコメント）しか見つからない。テストも起票も残っていないので、発見された欠陥が実在するのかどうかを含めて現状は判定不能。fmt / clippy / test は全て exit 0 なので、少なくとも観測可能な形では顕在化していない。完了条件: agent の transcript を独立 agent に読ませて symlink 欠陥の内容を特定し、実在するなら再現テストを書く。実在しないか特定不能なら、そう記録して閉じる。判断で埋めない。 【救出 2026-09-29】元 id 94b023d3。session-b9a78b46 の未マージ/未コミットの tasks.toml にだけ存在していたため、ブランチ・worktree 整理の前に再起票した。notes 中の関連 id は元 id のまま。"
+created_at = 1790634579
+updated_at = 1790634579
+weight = 0.0
+issue_number = 823
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/823"
+
+[[task]]
+id = "b72a01a0"
+title = "tdd 0.1.29 の version dir に tdd-darwin-arm64 が無く Stop ゲートが dark"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = 'observed 2026-09-11: ~/.claude/plugins/cache/yukineko/tdd/0.1.29/bin/ contains ONLY the 4044-byte launcher shim, no tdd-darwin-arm64 host binary. 0.1.24 and 0.1.25 both have it (1852304 bytes, dated Sep 10 04:57). Result: the tdd Stop hook exits with "no bundled binary for darwin-arm64" and reports the stop as UNCHECKED (fail-closed once, then allowed through), so whether implementation changed without a test is NOT being evaluated for this session. This is the known fresh-version-dir seeding class that adf33ef was supposed to have fixed by auto-seeding the host darwin-arm64 bin into a new version dir; either that fix regressed or 0.1.29 was created by a path that bypasses the seeding step. Fix must BUILD from 0.1.29 source (scripts/build-plugin-bin.sh darwin-arm64) rather than copy the stale 0.1.25 binary, otherwise the deployed binary and the version dir disagree. Verify afterwards via .deployed-from.json provenance, never sha256. 【救出 2026-09-29】元 id 6f5f2f6a。session-d562f7dd の未マージ/未コミットの tasks.toml にだけ存在していたため、ブランチ・worktree 整理の前に再起票した。notes 中の関連 id は元 id のまま。'
+created_at = 1790634581
+updated_at = 1790634581
+weight = 0.0
+issue_number = 824
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/824"
+
+[[task]]
+id = "b071f4dd"
+title = "condukt diffrisk_record test is non-hermetic: Config::load() writes into the LIVE ~/.condukt/state"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+Observed 2026-09-13 as a donegate red on the main tree (test-changed-crates.sh): diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded failed with 'one record per invocation' left=1 right=2, i.e. it saw FEWER records than it appended.
+
+Measured, not inferred:
+1. The ledger is APPEND-ONLY jsonl (gatelog::append_diffrisk_outcome), so a lower count cannot come from accumulation-pollution.
+2. The test uses Config::load() (the REAL config) and only tempdirs for cwd/worktree. project_dir resolves to cfg.state_dir joined with project_key(repo_root(cwd)), so every run of this test writes into the user's live ~/.condukt/state tree.
+3. Swept every diffrisk-outcomes.jsonl under ~/.condukt/state modified in the last 60 min: ALL tempdir-keyed ones have exactly 2 parseable lines and 0 corrupt lines. So the per-tempdir project_key IS unique and cross-PROCESS collision is REFUTED by observation. My first hypothesis (interleaved partial appends dropped by the reader) is falsified.
+
+Remaining hypothesis, NOT yet confirmed: an intra-process race. cargo test runs tests as parallel threads in one binary, and env vars plus process cwd are process-global. If a sibling test mutates the environment that Config::load() reads, the two appends in this test can land in two DIFFERENT state dirs, leaving 1 in the dir the assertion then reads. This fits the evidence but I have NOT reproduced it.
+
+Why it was not settled now: three concurrent condukt cargo processes were live (two cargo test -p condukt, one cargo check in another worktree). Adding a fourth run would make the measurement void, so no clean re-run was possible. Per CLAUDE.md section 2 this is left as undetermined rather than judged ok.
+
+Second, INDEPENDENT finding in the same area, a docstring vs behaviour contradiction (CLAUDE.md section 4): append_diffrisk_outcome documents itself as 'Best-effort but never silent ... reported on stderr so a reader can tell this history has a hole in it', but the READER load_diffrisk_outcomes silently drops unparseable lines via filter_map with ok(). A hole in the history therefore reads downstream as 'fewer events happened' instead of 'this history is unreliable' - an Absent vs Undetermined conflation of exactly the class DoD14 was carved for. The writer keeps its promise; the reader breaks it.
+
+Fix direction: give the test an isolated state_dir instead of Config::load(), and make the reader surface corrupt-line counts rather than dropping them. 【救出 2026-09-29】元 id cd4e4f39。branch session-23af0e35 (0d4a93ec) の未マージ/未コミットの tasks.toml にだけ存在していたため、ブランチ・worktree 整理の前に再起票した。notes 中の関連 id は元 id のまま。 【観測 2026-09-29】condukt 0.7.181 の検証中、cargo test -p condukt --no-fail-fast を 3 回回したうち 1 回で diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded が落ち、残り 2 回と単独再実行 3 回は green。変更 (claim.rs) は diffrisk_record.rs に触れていない。負荷下のフレークで、この非密閉性が原因候補。"""
+created_at = 1790634583
+updated_at = 1790634596
+weight = 0.0
+issue_number = 825
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/825"

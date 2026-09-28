@@ -1084,4 +1084,68 @@ mod tests {
 
         let _ = std::fs::remove_file(&tp);
     }
+
+    /// 207d0da6: a corrupt ledger.json makes the day total UNMEASURED. With an
+    /// armed daily limit that must resolve to the day-undetermined Block, not
+    /// fall back to this session's spend and run the normal `verdict()` (which
+    /// reads $30 < $100 as headroom).
+    #[cfg(unix)]
+    #[test]
+    fn a_corrupt_ledger_makes_the_day_undetermined_and_blocks() {
+        let ledger_dir = tempfile::tempdir().unwrap();
+        let garbage = b"{ this is not json";
+        std::fs::write(ledger_dir.path().join("ledger.json"), garbage).unwrap();
+        let (cfg, tp, store) = lock_fixture(
+            "ledger-corrupt",
+            Config {
+                daily_block_usd: 100.0,
+                state_dir: ledger_dir.path().to_path_buf(),
+                ..Config::default()
+            },
+        );
+        let r = evaluate_with_store(
+            &cfg,
+            "ledger-corrupt",
+            tp.to_str().unwrap(),
+            "2026-07-31",
+            store.path(),
+        )
+        .expect("result");
+        assert!(
+            matches!(r.verdict, Verdict::Block(_, "day-total-undetermined")),
+            "an armed daily limit plus a corrupt ledger must block"
+        );
+        assert_eq!(
+            std::fs::read(ledger_dir.path().join("ledger.json")).unwrap(),
+            garbage,
+            "the corrupt ledger must be preserved byte-for-byte"
+        );
+        let _ = std::fs::remove_file(&tp);
+    }
+
+    /// Overshoot guard for the test above: with NO daily limit armed a corrupt
+    /// ledger gates nothing and the session verdict stands (Allow here).
+    #[cfg(unix)]
+    #[test]
+    fn a_corrupt_ledger_with_no_daily_limit_armed_still_allows() {
+        let ledger_dir = tempfile::tempdir().unwrap();
+        std::fs::write(ledger_dir.path().join("ledger.json"), b"{ not json").unwrap();
+        let (cfg, tp, store) = lock_fixture(
+            "ledger-corrupt-nolimit",
+            Config {
+                state_dir: ledger_dir.path().to_path_buf(),
+                ..Config::default()
+            },
+        );
+        let r = evaluate_with_store(
+            &cfg,
+            "ledger-corrupt-nolimit",
+            tp.to_str().unwrap(),
+            "2026-07-31",
+            store.path(),
+        )
+        .expect("result");
+        assert!(matches!(r.verdict, Verdict::Allow));
+        let _ = std::fs::remove_file(&tp);
+    }
 }

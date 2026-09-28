@@ -5465,6 +5465,18 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
                 }
             }
         }
+        // 06345780: a `$(...)`/backtick body is EXECUTED to produce its text,
+        // wherever it stands — command word, operand, assignment value or
+        // inside double quotes. Judge each body with the full analyser, so
+        // `echo $(rm -rf ~/work)` gets the verdict `rm -rf ~/work` gets. The
+        // egress scans (`command_substitution_payloads`) only ever asked
+        // "does it fetch/decode?", which left every other destructive body
+        // unexamined. See `executed_substitution_payloads`.
+        for payload in executed_substitution_payloads(seg) {
+            if let Some(deny) = acc.record(analyze_shell_payload(&payload, depth, ctx)) {
+                return deny;
+            }
+        }
     } else {
         // Cap reached: the recursion above did NOT run, so this segment was not
         // fully analysed. Record the unfinished-analysis Ask into `acc` rather
@@ -7972,6 +7984,62 @@ fn backtick_payloads(stage: &str) -> Vec<String> {
             break;
         }
         i += 1;
+    }
+    out
+}
+
+/// Every command-substitution body in `seg` that the shell will actually RUN,
+/// in source order: `$(...)` and backtick bodies at the top level or inside
+/// double quotes, but NOT inside single quotes (`'$(rm x)'` is literal text).
+/// `$((...))` arithmetic is a `$(` too and is returned like the rest; its
+/// body is an expression, which the analyser finds nothing destructive in.
+///
+/// Unlike [`command_substitution_payloads`] (used by the fetch/decode egress
+/// scans, where over-reporting a single-quoted body is harmless) this one
+/// feeds the FULL rule engine, so literal single-quoted text must not be
+/// mistaken for code. Each body is found with [`scan_balanced`], so quoting
+/// and nesting inside the body cannot end it early. An unterminated
+/// substitution ends the scan: [`split_segments`] can cut a `$(a; b)` apart,
+/// and the pieces after the cut are analysed as segments of their own.
+fn executed_substitution_payloads(seg: &str) -> Vec<String> {
+    let chars: Vec<char> = seg.chars().collect();
+    let mut out = Vec::new();
+    let mut in_double = false;
+    let mut k = 0;
+    while k < chars.len() {
+        match chars[k] {
+            '\\' => {
+                k += 2;
+                continue;
+            }
+            '\'' if !in_double => {
+                let mut j = k + 1;
+                while j < chars.len() && chars[j] != '\'' {
+                    j += 1;
+                }
+                k = j + 1;
+                continue;
+            }
+            '"' => in_double = !in_double,
+            '$' if chars.get(k + 1) == Some(&'(') => {
+                let Some(end) = scan_balanced(&chars, k + 2, Stop::Paren, 0) else {
+                    break;
+                };
+                out.push(chars[k + 2..end].iter().collect());
+                k = end + 1;
+                continue;
+            }
+            '`' => {
+                let Some(end) = scan_balanced(&chars, k + 1, Stop::Backtick, 0) else {
+                    break;
+                };
+                out.push(chars[k + 1..end].iter().collect());
+                k = end + 1;
+                continue;
+            }
+            _ => {}
+        }
+        k += 1;
     }
     out
 }

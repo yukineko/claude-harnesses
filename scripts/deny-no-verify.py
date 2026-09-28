@@ -80,12 +80,23 @@ reader to rediscover:
     reasoning is in `split_commands`. A gate that was verified only against the
     bug it targeted let a wider one in.
 
-  - STILL OPEN, all confirmed to reach git: interpreter wrappers
-    (`sh -c '…'`, `bash -lc`, `eval`), and command prefixes that shift `git` out
-    of argv[0] (`env`, `nohup`, `time`, `xargs`), and shell compound forms
-    (`if … then`, `for … do`, command substitution). `is_bypass` inspects argv[0]
-    of each segment, so anything that makes `git` argv[N>0] is invisible to it.
-    These are known holes, not clean paths.
+  - FIXED (backlog 2cef09c5): interpreter wrappers (`sh -c '…'`, `bash -lc`,
+    `eval`), command prefixes that shift `git` out of argv[0] (`env`, `nohup`,
+    `time`, `xargs`, `nice`, `timeout`, `sudo`, …) and the shell keywords that
+    open a compound form (`if … then`, `for … do`, `while`, `{`, `!`). These were
+    all confirmed to reach git while `is_bypass` inspected only argv[0]. Now a
+    `-c` script / `eval` argument is re-split and judged recursively like a
+    top-level command, a leading keyword is dropped, and after a prefix command
+    EVERY later position is tried as the start of a command (over-matching,
+    e.g. `time echo git commit --no-verify`, is the cheap direction). Nesting
+    deeper than MAX_NESTING, or a nested script that will not tokenize, resolves
+    to DENY when it carries a bypass marker, like the top level.
+
+  - STILL OPEN: command substitution (`$(git commit --no-verify)` or backticks
+    inside another command's argument), an interpreter reading its script from
+    a FILE or stdin (`bash script.sh`, `echo … | sh`), `env -S '…'`, and any
+    prefix program not in PREFIX_COMMANDS. These are known holes, not clean
+    paths.
 
 This hook is therefore a REDUCTION in the ways the gate can be stepped around,
 not a proof that it cannot be. The claim that the marker screen was "a necessary
@@ -256,8 +267,12 @@ def looks_like_bypass(command: str) -> bool:
                                           command) is not None
 
 
-def is_bypass(tokens: list[str]) -> tuple[str, str] | None:
+def is_bypass(tokens: list[str], _depth: int = 0) -> tuple[str, str] | None:
     """Return (subcommand, flag) if these tokens are a gate-skipping git call.
+
+    `git` need not be argv[0]: a leading shell keyword, a prefix command
+    (PREFIX_COMMANDS), an interpreter `-c` script (INTERPRETERS) or an `eval`
+    argument is looked through, recursively (backlog 2cef09c5).
 
     Returns the subcommand rather than leaving the caller to re-derive it: the
     obvious re-derivation (`tokens.index("git")`) raises on an absolute path
@@ -266,14 +281,38 @@ def is_bypass(tokens: list[str]) -> tuple[str, str] | None:
     """
     if not tokens:
         return None
+    if _depth > MAX_NESTING:
+        return _undetermined_nested(" ".join(tokens))
 
-    # Skip leading env assignments (`FOO=1 git commit …`).
+    # Skip leading env assignments (`FOO=1 git commit …`) and shell keywords
+    # that open a compound form (`then git commit …`, `do git commit …`).
     i = 0
-    while i < len(tokens) and "=" in tokens[i] and not tokens[i].startswith("-"):
+    while i < len(tokens) and (
+        tokens[i] in SHELL_KEYWORDS
+        or ("=" in tokens[i] and not tokens[i].startswith("-"))
+    ):
         i += 1
     if i >= len(tokens):
         return None
-    if tokens[i].split("/")[-1] != "git":
+    prog = tokens[i].split("/")[-1]
+
+    if prog in INTERPRETERS:
+        return _interpreter_bypass(tokens[i + 1 :], _depth)
+    if prog == "eval":
+        # eval concatenates its arguments with spaces and runs the result.
+        return _nested_bypass(" ".join(tokens[i + 1 :]), _depth)
+    if prog in PREFIX_COMMANDS:
+        # The prefix's own option grammar (`nice -n 5`, `timeout 5`,
+        # `xargs -I{}`, `env -u NAME`) decides where the wrapped command
+        # starts, and modelling each one is where a gap would hide. Try EVERY
+        # later position instead: a false positive costs a rephrase, a miss
+        # costs the gate.
+        for j in range(i + 1, len(tokens)):
+            hit = is_bypass(tokens[j:], _depth + 1)
+            if hit:
+                return hit
+        return None
+    if prog != "git":
         return None
 
     rest = tokens[i + 1 :]
@@ -338,6 +377,79 @@ def is_bypass(tokens: list[str]) -> tuple[str, str] | None:
         if sub in SHORT_FLAG_SUBCOMMANDS and SHORT_CLUSTER.match(tok):
             return sub, tok
         k += 1
+    return None
+
+
+# Shell reserved words that can precede a command inside a compound form. After
+# the separator split, `if true; then git commit --no-verify; fi` yields the
+# segment ['then', 'git', ...], whose argv[0] is not a program at all.
+SHELL_KEYWORDS = frozenset({"if", "then", "else", "elif", "do", "while", "until",
+                            "!", "{", "}"})
+
+# Programs that run their ARGUMENTS as a command. Their own option grammars
+# differ, so is_bypass tries every later position rather than parsing them.
+PREFIX_COMMANDS = frozenset({"env", "nohup", "time", "command", "builtin", "exec",
+                             "nice", "timeout", "gtimeout", "xargs", "sudo", "doas",
+                             "stdbuf", "caffeinate", "noglob", "nocorrect",
+                             "unbuffer", "setsid", "chronic", "ionice"})
+
+# Shells whose `-c <script>` argument is itself a command line.
+INTERPRETERS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "mksh", "ash"})
+
+# Recursion bound for nested wrappers (`bash -c "eval 'sh -c …'"`). Past it the
+# nesting is not judged, which is cannot-determine and resolves like the
+# top-level untokenizable case: DENY when a bypass marker is present.
+MAX_NESTING = 8
+
+
+def _undetermined_nested(command: str) -> tuple[str, str] | None:
+    if looks_like_bypass(command):
+        return "<nested command>", "<undeterminable text carrying a bypass marker>"
+    return None
+
+
+def _nested_bypass(command: str, depth: int) -> tuple[str, str] | None:
+    """Judge a command string an interpreter or `eval` will run, like a top-level one."""
+    if depth >= MAX_NESTING:
+        return _undetermined_nested(command)
+    segments = split_commands(command)
+    if segments is None:
+        return _undetermined_nested(command)
+    for segment in segments:
+        hit = is_bypass(segment, depth + 1)
+        if hit:
+            return hit
+    return None
+
+
+def _interpreter_bypass(args: list[str], depth: int) -> tuple[str, str] | None:
+    """`sh -c SCRIPT`, `bash -lc SCRIPT`, `bash -e -o pipefail -c SCRIPT`.
+
+    The script is the first operand after an option cluster containing `c`.
+    Without `-c` the interpreter reads a file or stdin, which this hook cannot
+    see (listed as open in the module docstring).
+    """
+    saw_c = False
+    k = 0
+    while k < len(args):
+        tok = args[k]
+        if tok in ("-o", "+o", "-O", "+O"):
+            k += 2
+            continue
+        if tok == "--":
+            k += 1
+            break
+        if tok.startswith("--"):
+            k += 1
+            continue
+        if len(tok) > 1 and tok[0] in "-+":
+            if "c" in tok[1:]:
+                saw_c = True
+            k += 1
+            continue
+        break
+    if saw_c and k < len(args):
+        return _nested_bypass(args[k], depth)
     return None
 
 

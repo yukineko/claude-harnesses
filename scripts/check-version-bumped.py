@@ -16,8 +16,11 @@ Usage (run from repo root):
   python3 scripts/check-version-bumped.py --base origin/main   # CI / pre-push: vs a pushed ref
 
 Exit 0 if every changed plugin was bumped (or nothing relevant changed); exit 1
-lists each plugin that changed without a version bump. New plugins (absent at
-base) are OK. Deleted plugins are ignored.
+lists each plugin that changed without a version bump; exit 2 when a base-side
+fact cannot be observed (git failure, or a plugin.json / shared Cargo.toml that
+exists at base but whose version is unreadable). New plugins (plugin.json absent
+from the base TREE) are OK; "unreadable at base" is NOT "new". Deleted plugins
+are ignored.
 
 It also enforces the SHARED-CRATE half of the same rule: crates/harness-core is
 statically linked into every plugin binary, so a change there changes ~36 shipped
@@ -78,15 +81,55 @@ def semver(v):
     return tuple(out[:3])
 
 
-def plugin_version_at(ref, path):
-    """version string from plugin.json at `ref`, or None if the file/field is absent there."""
+class Undetermined(Exception):
+    """A base-side fact could not be observed. Never read as "absent"."""
+
+
+def blob_at(ref, path):
+    """Content of `path` at `ref`, or None when it genuinely did not exist there.
+
+    Existence is settled against the TREE first (`git ls-tree`), and only a real
+    absence maps to None. Deriving absence from `git show`'s exit code would
+    swallow every other failure (a corrupt object, an unreadable pack, a failed
+    git) as "the plugin is new", which exempts it from the bump rule (backlog
+    2cef09c5). Anything that is neither "present and readable" nor "absent from
+    the tree" raises Undetermined, which main() turns into exit 2 (CLAUDE.md §3).
+    """
+    listed = git("ls-tree", "--name-only", ref, "--", path)
+    if listed.returncode != 0:
+        raise Undetermined(
+            f"cannot list {path} at {ref} (git ls-tree exited "
+            f"{listed.returncode}): {listed.stderr.strip()}"
+        )
+    if not listed.stdout.strip():
+        return None  # absent at `ref`: a real answer ("new")
     r = git("show", f"{ref}:{path}")
     if r.returncode != 0:
+        raise Undetermined(
+            f"{path}@{ref} is in the tree but unreadable (git show exited "
+            f"{r.returncode}): {r.stderr.strip()}"
+        )
+    return r.stdout
+
+
+def plugin_version_at(ref, path):
+    """version string from plugin.json at `ref`, or None ONLY if the file is absent there.
+
+    A plugin.json that exists at `ref` but is not valid JSON, is not an object,
+    or has no string `version` raises Undetermined: the plugin existed, so it is
+    not "new", and its base version is unknown, so no bump can be shown.
+    """
+    text = blob_at(ref, path)
+    if text is None:
         return None
     try:
-        return json.loads(r.stdout).get("version")
-    except json.JSONDecodeError:
-        return None
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise Undetermined(f"{path}@{ref} exists but is not valid JSON: {e}") from e
+    v = data.get("version") if isinstance(data, dict) else None
+    if not isinstance(v, str) or not v.strip():
+        raise Undetermined(f"{path}@{ref} exists but has no readable \"version\" field")
+    return v
 
 
 def plugin_version_worktree(path):
@@ -135,10 +178,17 @@ def package_version_from_toml(text):
 
 
 def crate_version_at(ref, path):
-    r = git("show", f"{ref}:{path}")
-    if r.returncode != 0:
+    """[package].version at `ref`, or None ONLY if the manifest is absent there.
+
+    A manifest present at `ref` whose version cannot be read raises Undetermined.
+    """
+    text = blob_at(ref, path)
+    if text is None:
         return None
-    return package_version_from_toml(r.stdout)
+    v = package_version_from_toml(text)
+    if v is None:
+        raise Undetermined(f"{path}@{ref} exists but [package].version is unreadable")
+    return v
 
 
 def crate_version_worktree(path):
@@ -179,12 +229,15 @@ def check_shared_crate(base):
             f"binary (tests/ or *.md); no bump required"
         )
 
-    base_v = crate_version_at(base, manifest)
+    try:
+        base_v = crate_version_at(base, manifest)
+    except Undetermined as e:
+        # The manifest existed at base but its version could not be read. That
+        # is not "new crate"; the bump cannot be shown, so it is an error.
+        return "error", str(e)
     if base_v is None:
-        # Absent at base (new crate), or its manifest was unreadable there. The
-        # first is legitimately exempt; the second cannot be told apart here, and
-        # a shared crate that did not exist at base cannot have "changed" in the
-        # sense this rule is about.
+        # Absent from the base TREE (new crate): a shared crate that did not
+        # exist at base cannot have "changed" in the sense this rule is about.
         return "ok", None
     cur_v = crate_version_worktree(manifest)
     if cur_v is None:
@@ -254,9 +307,14 @@ def main():
             bin_only.append((name, len(changed)))
             continue
 
-        base_v = plugin_version_at(base, pj_rel)
+        try:
+            base_v = plugin_version_at(base, pj_rel)
+        except Undetermined as e:
+            # Existed at base, version unknown: cannot show a bump (§3).
+            print(f"check-version-bumped: {name}: {e}", file=sys.stderr)
+            return 2
         if base_v is None:
-            continue  # new plugin (absent at base) — no bump required
+            continue  # new plugin (plugin.json absent from the base tree) — no bump required
         cur_v = plugin_version_worktree(pj_rel)
 
         bs, cs = semver(base_v), semver(cur_v)

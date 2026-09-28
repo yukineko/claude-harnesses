@@ -87,10 +87,17 @@
 #                           then target/{release,debug}/overwatch)
 #
 # SAFETY
+#   - Exclusive: a non-dry-run takes the mkdir lock "$CACHE/.rollout.lock"
+#     before reading the registry and releases it on exit. A held lock (live
+#     OR dead holder) makes the run exit 6 before anything is touched; a stale
+#     lock is never stolen — the message prints the `rm -r` to remove it.
 #   - Idempotent: re-running with no version change is a no-op.
 #   - Prunes SUPERSEDED version dirs at the end of the run, but never the
-#     current one, never one held by a live session (`.in_use/<live pid>`), and
-#     never one whose hold status could not be determined. Never touches other
+#     current one, never one held by a live session (`.in_use/<live pid>`),
+#     never one installed_plugins.json points at (another session may have
+#     just deployed and registered a newer version than this tree's; backlog
+#     e3366b5c), and never one whose hold status could not be determined
+#     (an unreadable registry keeps every dir). Never touches other
 #     plugins' registry entries, never touches the registry's top-level
 #     "version" field.
 #   - Excludes target/, .git/, .claude/ (crate-local taskprog progress
@@ -255,6 +262,74 @@ echo "dry-run:     $([ $dry = 1 ] && echo yes || echo no)   force: $([ $force = 
 [ "$no_canary" = 1 ] && echo "canary:      disabled (--no-canary override)"
 [ "${#only_plugins[@]}" -gt 0 ] && echo "plugins:     ${only_plugins[*]}"
 echo
+
+# --- exclusive rollout lock (backlog e3366b5c) ------------------------------
+# The cache and the registry are ONE shared resource under ~/.claude, not in
+# the repo, so worktree isolation does not separate two sessions' rollouts.
+# Measured 2026-09-07: two concurrent rollouts from trees at different versions
+# pruned each other's freshly registered dirs and specguard/blastguard went
+# dark. A mkdir lock at "$CACHE/.rollout.lock" (holder pid in ./pid) makes the
+# whole read-registry -> copy -> repoint -> prune sequence exclusive.
+#
+# Contention fails CLOSED before the registry or the cache is touched, and a
+# lock whose holder pid is dead is NOT stolen: "the holder is dead" is a guess
+# about a pid (it may have been reused, or the holder may be a process on a
+# different pid namespace), and stealing on that guess is how two rollouts end
+# up running at once. The message says how to remove it by hand instead.
+# The lock is released on every exit path by the EXIT trap, and only if this
+# process owns it. --dry-run writes nothing, so it neither takes nor needs it.
+LOCK_DIR="$CACHE/.rollout.lock"
+lock_held=0
+release_rollout_lock() {
+  if [ "$lock_held" = 1 ]; then
+    local owner=""
+    owner="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+    if [ "$owner" = "$$" ]; then
+      rm -r "$LOCK_DIR" || echo "rollout: could not remove $LOCK_DIR — remove it by hand: rm -r \"$LOCK_DIR\"" >&2
+    else
+      echo "rollout: $LOCK_DIR no longer names this process (pid $$, file says '${owner}') — left in place" >&2
+    fi
+    lock_held=0
+  fi
+}
+acquire_rollout_lock() {
+  if ! mkdir -p "$CACHE"; then
+    echo "rollout: cannot create plugin cache $CACHE, so cannot take $LOCK_DIR — refusing to proceed" >&2
+    exit 6
+  fi
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    lock_held=1
+    trap release_rollout_lock EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    if ! echo "$$" > "$LOCK_DIR/pid"; then
+      echo "rollout: took $LOCK_DIR but could not record the pid in it — refusing to proceed" >&2
+      exit 6
+    fi
+    return 0
+  fi
+  local holder="" state
+  holder="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+  if [ -z "$holder" ] || ! [[ "$holder" =~ ^[0-9]+$ ]]; then
+    state="holder pid unknown (no readable $LOCK_DIR/pid)"
+  elif kill -0 "$holder" 2>/dev/null; then
+    state="held by live pid $holder"
+  elif ps -p "$holder" >/dev/null 2>&1; then
+    # kill -0 fails with EPERM for another user's live process; ps still sees it.
+    state="held by live pid $holder (another user)"
+  else
+    state="STALE? holder pid $holder is not running"
+  fi
+  echo "ERROR: another rollout holds $LOCK_DIR — $state." >&2
+  echo "       Refusing to proceed: nothing in the registry or the cache was touched." >&2
+  echo "       Two concurrent rollouts prune each other's deployments (backlog e3366b5c)." >&2
+  echo "       If you have confirmed no rollout is running, remove the lock by hand:" >&2
+  echo "         rm -r \"$LOCK_DIR\"" >&2
+  exit 6
+}
+if [ "$dry" != 1 ]; then
+  acquire_rollout_lock
+fi
 
 # --- fail closed before touching anything if the registry is unparseable ----
 # (don't half-apply: a copy must never happen if we can't safely repoint the
@@ -1138,7 +1213,7 @@ prune_stale_versions() {
   echo
   echo ">>> scripts/prune-plugin-cache.py$([ $dry = 1 ] && echo ' --dry-run')"
   python3 "$REPO/scripts/prune-plugin-cache.py" --repo "$REPO" --cache "$CACHE" \
-    $([ $dry = 1 ] && echo --dry-run) || rc=$?
+    --registry "$REGISTRY" $([ $dry = 1 ] && echo --dry-run) || rc=$?
   if [ "$rc" -ne 0 ]; then
     echo "prune: exited $rc — some dir could not be removed or inspected (kept; see above)" >&2
   fi

@@ -64,12 +64,43 @@ fn normalize(root: &Path) -> PathBuf {
     std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf())
 }
 
+/// Read the trust list for a **membership query** (is this root trusted?).
+///
+/// An unreadable or unparseable file yields an empty list here, and that is
+/// only acceptable because every reader of it answers "not trusted" from an
+/// empty list — the restricted side for a trust decision (a project config's
+/// commands are then not honored). It must never feed a *write*: persisting
+/// the empty default would wipe every existing grant. Writers use
+/// [`read_file_strict`].
 fn load_file() -> TrustFile {
+    read_file_strict().unwrap_or_default()
+}
+
+/// Read the trust list for a **read-modify-write**. Absent file = empty list
+/// (nothing trusted yet). Any other read error, or a file that does not parse,
+/// is an `Err`: the caller must not write, because the only thing it could
+/// write back is a list that has lost the entries it failed to read.
+fn read_file_strict() -> std::io::Result<TrustFile> {
     let path = trust_path();
-    std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| toml::from_str::<TrustFile>(&s).ok())
-        .unwrap_or_default()
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(TrustFile::default()),
+        Err(e) => {
+            return Err(std::io::Error::new(
+                e.kind(),
+                format!("cannot read trust list {}: {e}", path.display()),
+            ))
+        }
+    };
+    toml::from_str::<TrustFile>(&text).map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "trust list {} does not parse; refusing to rewrite it (fix or remove it by hand): {e}",
+                path.display()
+            ),
+        )
+    })
 }
 
 /// Every trusted project root, canonicalized.
@@ -234,13 +265,21 @@ fn main_worktree_of(root: &Path) -> Option<PathBuf> {
 }
 
 /// Add a project root to the trust list (idempotent). Returns the canonical key
-/// that was recorded. Writes atomically (tmp + rename) so a concurrent reader
-/// never sees a truncated file.
+/// that was recorded.
+///
+/// Fails closed: an existing trust file that cannot be read or parsed is an
+/// `Err` and the file is left untouched (rewriting it would drop every entry
+/// that could not be read). The read-modify-write is serialized across
+/// processes by an exclusive lock on a sibling lock file; failing to take that
+/// lock is an `Err`, never an unserialized write (which would lose a
+/// concurrent writer's entry). The new list is written atomically (tmp +
+/// fsync + rename), so a concurrent reader never sees a truncated file.
 pub fn add(root: &Path) -> std::io::Result<PathBuf> {
     let key = normalize(root);
     let key_str = key.to_string_lossy().into_owned();
 
-    let mut file = load_file();
+    let _lock = TrustLock::acquire()?;
+    let mut file = read_file_strict()?;
     if !file.trusted.iter().any(|t| t == &key_str) {
         file.trusted.push(key_str);
         write_file(&file)?;
@@ -249,10 +288,13 @@ pub fn add(root: &Path) -> std::io::Result<PathBuf> {
 }
 
 /// Remove a project root from the trust list (idempotent). Returns `true` if an
-/// entry was actually removed.
+/// entry was actually removed. Same fail-closed read, lock and atomic write as
+/// [`add`]: an unreadable / unparseable file is an `Err`, not "nothing to
+/// remove".
 pub fn remove(root: &Path) -> std::io::Result<bool> {
     let key = normalize(root);
-    let mut file = load_file();
+    let _lock = TrustLock::acquire()?;
+    let mut file = read_file_strict()?;
     let before = file.trusted.len();
     file.trusted.retain(|t| Path::new(t) != key);
     let removed = file.trusted.len() != before;
@@ -262,16 +304,98 @@ pub fn remove(root: &Path) -> std::io::Result<bool> {
     Ok(removed)
 }
 
-fn write_file(file: &TrustFile) -> std::io::Result<()> {
-    let path = trust_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+/// Upper bound on waiting for the trust-list lock. Holders only do one small
+/// read + write, so hitting this means a stuck holder; the caller gets an
+/// `Err` rather than a write that races it.
+const LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const LOCK_BACKOFF: std::time::Duration = std::time::Duration::from_millis(5);
+
+/// Exclusive advisory lock (`flock(2)`) on `trust.toml.lock`, held for the
+/// whole read-modify-write. `flock` belongs to the open file description, so
+/// it serializes threads of one process as well as separate processes, and it
+/// is released by the kernel when the holder exits — no stale-lock stealing.
+struct TrustLock {
+    _file: std::fs::File,
+}
+
+impl TrustLock {
+    #[cfg(unix)]
+    fn acquire() -> std::io::Result<Self> {
+        use std::os::unix::io::AsRawFd;
+        let path = trust_path().with_extension("toml.lock");
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)?;
+        let start = std::time::Instant::now();
+        loop {
+            // SAFETY: `file` owns a valid open descriptor for this call.
+            let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+            if rc == 0 {
+                return Ok(TrustLock { _file: file });
+            }
+            let err = std::io::Error::last_os_error();
+            let contended = err.kind() == std::io::ErrorKind::WouldBlock
+                || err.kind() == std::io::ErrorKind::Interrupted;
+            if !contended {
+                return Err(std::io::Error::new(
+                    err.kind(),
+                    format!("cannot lock trust list {}: {err}", path.display()),
+                ));
+            }
+            if start.elapsed() >= LOCK_TIMEOUT {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!(
+                        "timed out after {LOCK_TIMEOUT:?} waiting for trust list lock {}",
+                        path.display()
+                    ),
+                ));
+            }
+            std::thread::sleep(LOCK_BACKOFF);
+        }
     }
+
+    /// No cross-process lock is implemented off unix, so a write there cannot
+    /// be serialized; refuse it rather than risk a lost update.
+    #[cfg(not(unix))]
+    fn acquire() -> std::io::Result<Self> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "trust list writes need a cross-process lock, which is only implemented on unix",
+        ))
+    }
+}
+
+/// Atomic replace: write a process-unique tmp file, fsync it, rename it over
+/// the trust list, then fsync the directory so the rename itself is durable.
+/// Callers hold [`TrustLock`].
+fn write_file(file: &TrustFile) -> std::io::Result<()> {
+    use std::io::Write;
+    let path = trust_path();
+    let parent = path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    std::fs::create_dir_all(&parent)?;
     let body = toml::to_string(file).map_err(std::io::Error::other)?;
-    let tmp = path.with_extension("toml.tmp");
-    std::fs::write(&tmp, body)?;
-    std::fs::rename(&tmp, &path)?;
-    Ok(())
+    let tmp = path.with_extension(format!("toml.tmp.{}", std::process::id()));
+    let result = (|| {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(body.as_bytes())?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, &path)?;
+        std::fs::File::open(&parent)?.sync_all()
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
 }
 
 #[cfg(test)]

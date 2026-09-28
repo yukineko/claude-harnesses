@@ -43,8 +43,8 @@ CLAUDE.md 第1節は **「判定を持つ」は返り値の型ではなく消費
 
 | # | 下流消費者 | 何を読むか | 何になるか |
 |---|---|---|---|
-| C1 | `crates/budgetguard/src/gate.rs:304` `if let Some(rec) = session::load_one(gauge_state_dir, session_id) {` | gauge が書いた `SessionRecord.models` | `pricing::session_cost` → `verdict()` → **`{"decision":"block"}`（ユーザのターンを実際に止める）** |
-| C2 | `crates/budgetguard/src/gate.rs:184` `let rec = session::load_one(gauge_state_dir, session_id)?;` | 同 record の `models` | cache-health の判定（`additionalContext` として注入） |
+| C1 | `crates/budgetguard/src/gate.rs:326` `if let Some(rec) = session::load_one(gauge_state_dir, session_id) {` | gauge が書いた `SessionRecord.models` | `pricing::session_cost` → `verdict()` → **`{"decision":"block"}`（ユーザのターンを実際に止める）** |
+| C2 | `crates/budgetguard/src/gate.rs:206` `let rec = session::load_one(gauge_state_dir, session_id)?;` | 同 record の `models` | cache-health の判定（`additionalContext` として注入） |
 | C3 | `crates/harness-status/src/sessions.rs:43` `let mut records = match session::load_all(&session::default_state_dir()) {` | store 全体 | `/status` パネル |
 | C4 | `crates/session-insights/src/record.rs:80,114` `session::load_one(&session::default_state_dir(), ctx.session_id)` | record の `models` / `agents` | Obsidian record ノートの `## コスト` ブロック（人間が「このセッションはいくらかかったか」として読む） |
 | C5 | `crates/condukt/src/state.rs:2248` `let out = std::process::Command::new("gauge")` | gauge の stdout | task ごとの実コスト → `record-run --cost` → **fugu-router の routing 方策（どのモデルを使うか）** |

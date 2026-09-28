@@ -623,9 +623,12 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "根拠: retrieval.rs:11 と condukt/src/main.rs は machine-global な lessons ストアを跨repo共有、poison された lesson が別 project の interpreter に注入され worker が実行。防御は SKILL.md:217-220 の prose marker のみ。agent/SKILL .md 自体も Edit 可能で injection がガードを消せる(condukt-researcher.md:32-41, condukt-interpreter.md:25-36)。完了: 各 lesson に origin project + trust marking、別projectへの retrieval を filter/quarantine、agents/*.md と skills/** を protected パス化。北極星として dual-LLM/CaMeL quarantine(arxiv 2503.18813)と subagent 返り値の data-envelope も同 backlog に紐付け。lens L1/L2/L4"
+notes = """
+根拠: retrieval.rs:11 と condukt/src/main.rs は machine-global な lessons ストアを跨repo共有、poison された lesson が別 project の interpreter に注入され worker が実行。防御は SKILL.md:217-220 の prose marker のみ。agent/SKILL .md 自体も Edit 可能で injection がガードを消せる(condukt-researcher.md:32-41, condukt-interpreter.md:25-36)。完了: 各 lesson に origin project + trust marking、別projectへの retrieval を filter/quarantine、agents/*.md と skills/** を protected パス化。北極星として dual-LLM/CaMeL quarantine(arxiv 2503.18813)と subagent 返り値の data-envelope も同 backlog に紐付け。lens L1/L2/L4
+
+【実装途中の WIP を退避 2026-09-29】archive/lessons-provenance-wip (1edd1ca0) は harness-core/src/lessons.rs に Lesson.origin_project (serde default)、append での origin 自動付与、LessonTrust/trust_of を足す +80 行。不明な origin は CrossProject (制限側) に倒す設計。retrieval 側の filter/quarantine と agents/skills の protected 化は未実装で、テストも 1 本も無い。実装者でない agent に、origin 空・不一致・一致の 3 経路と current_dir() 失敗時の RED を書かせること。 取り出しは git show archive/lessons-provenance-wip（worktree 整理で退避、2026-09-29）。マージ前に今のツリーで RED を必ず観測すること。"""
 created_at = 1784912422
-updated_at = 1784912422
+updated_at = 1790635387
 weight = 0.0
 issue_number = 41
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/41"
@@ -1120,9 +1123,11 @@ Done when: every gate crate and every scripts/check-*.py exposes a protection st
 
 2026-09-24 調査: 未実装を確認。提案形式 PROTECTS/AGAINST/GROUNDS (Rust: harness_core::gate::Protection const + --protects、Python: PROTECTION dict)、専用 scripts/check-gate-protection.py で taxonomy 列と逐語一致・ratchet baseline で段階展開。ユーザー裁定待ち: Q1 gate の母集合、Q2 拒否メッセージへの表示方法。
 
-USER RULING 2026-09-24: Q1=新しい正典リスト (harness_core BLOCKING_GATES + scripts/check-* 全件と照合、ratchet baseline で PENDING 表示)。Q2=<gate> --protects で全文、拒否メッセージには 1 行要約。"""
+USER RULING 2026-09-24: Q1=新しい正典リスト (harness_core BLOCKING_GATES + scripts/check-* 全件と照合、ratchet baseline で PENDING 表示)。Q2=<gate> --protects で全文、拒否メッセージには 1 行要約。
+
+【先行テストと実装途中の WIP を退避 2026-09-29】archive/gate-protection-wip (b5c34f92、10 ファイル +2701) は harness_core::gate::protection (Protection 構造体と validate)、scripts/check-gate-protection.py と gate_protection_lib.py、blastguard/donegate の protection_contract.rs、harness-core/tests/gate_protection.rs、check-gate-crates-sync の BLOCKING_GATES 包含テストを含む。fleet.rs の BLOCKING_GATES 本体、各ゲートの protection.rs、docs/gate-taxonomy.md の保護契約表は未実装。 取り出しは git show archive/gate-protection-wip（worktree 整理で退避、2026-09-29）。マージ前に今のツリーで RED を必ず観測すること。"""
 created_at = 1785876697
-updated_at = 1790252679
+updated_at = 1790635387
 weight = 0.0
 issue_number = 130
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/130"
@@ -10086,9 +10091,11 @@ WHY THIS MATTERS MORE THAN A FLAKY TEST: it means a green cargo test -p condukt 
 
 Fix direction: pin HOME (or the state dir) to a per-test temp dir, the way the claim.rs and progress tests already do via make_tmp_dir. Do NOT fix it by loosening the assertion to a range or by serialising the whole binary - one record per invocation is the property under test, and the isolation defect would remain.
 
-Note this was observed again during the 5e62b0eb and 06eb8aa3 merges, so it is live on main now."""
+Note this was observed again during the 5e62b0eb and 06eb8aa3 merges, so it is live on main now.
+
+【関連 WIP を退避 2026-09-29】archive/diffrisk-flake-tests-wip (5cd07264、+178) は claim.rs に run_worktree_head_signal_waits_out_a_path_mutation、diffrisk_record.rs に journaling_tests_do_not_depend_on_process_home (HOME を細工する診断プローブ) を足す。根本原因 (Config::load() が実 ~/.condukt/state を共有) の修正ではない。テストごとに HOME/state_dir を tempdir に固定する修正を先に行い、2 本は修正後も意味があるか判断して採否を決める。 取り出しは git show archive/diffrisk-flake-tests-wip（worktree 整理で退避、2026-09-29）。マージ前に今のツリーで RED を必ず観測すること。"""
 created_at = 1790176562
-updated_at = 1790176562
+updated_at = 1790635388
 weight = 0.0
 issue_number = 700
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/700"
@@ -11747,3 +11754,33 @@ updated_at = 1790634980
 weight = 0.0
 issue_number = 830
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/830"
+
+[[task]]
+id = "67d389bf"
+title = "Result 潰し (contract erasure) を測る ratchet を main に載せるか決める"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "archive/contract-erasure (0a052b11、2026-07-23) は scripts/check-error-erasure.py (レキシカル走査と --clippy の型考慮走査の 2 数値ラチェット)、baseline、scripts/erasure-clippy/clippy.toml、pre-commit の erasure-guard を追加する +1299 行。call site の移行は含まない。main に対応物は無い (raw-io-ratchet は raw std IO を数える別物)。baseline は当時 (rev 9b00284c) の値なので載せる前に測り直すこと。63 日放置で main と乖離している。 取り出しは git show archive/contract-erasure（worktree 整理で退避、2026-09-29）。マージ前に今のツリーで RED を必ず観測すること。"
+created_at = 1790635388
+updated_at = 1790635388
+weight = 0.0
+issue_number = 831
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/831"
+
+[[task]]
+id = "2e05079b"
+title = "backlog migrate サブコマンドと legacy 取り残し警告の要否を決める"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "archive/backlog-migrate-wip (70ad85f8、backlog 0.2.20 相当、main は 0.3.x) は migrate.rs 802 行、--apply しない限り書かない dry-run 既定の backlog migrate、list/next/session-start の stderr 警告、テスト 3 本 (migrate.rs、project_scope_undetermined.rs、session_start_warnings.rs) を含む。main は divergence.rs で検出のみ。d182ed78 (migrate CLI) は LOW_VALUE で閉じられ、eb851ba3 (この migrate.rs の symlink 欠陥) は未解決。store.rs と大きく乖離しておりそのままのマージは不可。要否をまず人間が判断する。 取り出しは git show archive/backlog-migrate-wip（worktree 整理で退避、2026-09-29）。マージ前に今のツリーで RED を必ず観測すること。"
+created_at = 1790635389
+updated_at = 1790635389
+weight = 0.0
+issue_number = 832
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/832"

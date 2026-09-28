@@ -292,21 +292,16 @@ const SYSTEM_DIRS: &[&str] = &[
 /// predicate has no base to answer, and guessing one is how a wrong answer
 /// would get manufactured.
 ///
-/// **This leaves a hole open, and it is open, not handled.** Measured
-/// 2026-09-10 against the deployed 0.2.60 binary:
-///
-/// ```text
-/// cd /etc && echo x > paths.d/zz-evil   -> ALLOW
-/// cd /etc/paths.d && echo x > zz-evil   -> ALLOW
-/// ```
-///
-/// The same two commands were `ALLOW` on a build of the immediately preceding
-/// commit as well, so this predicate did not introduce the hole and does not
-/// close it: closing it needs the relative target resolved against the cwd that
-/// an earlier `cd` segment established, which is the `advance_cwd_and_rewrite`
-/// walk in [`crate::detect`], not a path predicate. Tracked in backlog
-/// `f1c170ab`. Do NOT read the `false` return here as "checked and clean" — it
-/// is "not checked", and the caller supplies whatever verdict it had.
+/// The `false` return for a relative path means "not checked", NEVER "checked
+/// and clean". The caller is responsible for handing this predicate an
+/// absolute path when one exists. For redirect targets that is done by
+/// `place_redirect_target` in [`crate::detect`] (f1c170ab): a relative target
+/// after `cd /etc` is re-expressed as `/etc/<target>` before this runs, and one
+/// after a `cd` that cannot be resolved is an Ask without reaching here.
+/// Before that fix `cd /etc && echo x > paths.d/zz-evil` was ALLOW (measured
+/// 2026-09-10 on the deployed 0.2.60 binary and on the commit preceding it).
+/// A NEW caller that passes a relative path through this predicate reopens
+/// exactly that hole.
 ///
 /// The ABSOLUTE forms this predicate does judge are not fooled by `..`:
 /// [`crate::exclude::normalize`] resolves it, so `/tmp/../etc/paths.d/x` and

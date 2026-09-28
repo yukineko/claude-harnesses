@@ -574,7 +574,11 @@ class PrunerRemoval(unittest.TestCase):
         """
         out, err = io.StringIO(), io.StringIO()
         settings = settings or str(Path(repo) / "no-such-settings.json")
-        env = {"CLAUDE_SETTINGS_JSON": settings}
+        env = {
+            "CLAUDE_SETTINGS_JSON": settings,
+            # Same reason as CLAUDE_SETTINGS_JSON: never read the live registry.
+            "CLAUDE_PLUGIN_REGISTRY": str(Path(repo) / "no-such-registry.json"),
+        }
         with mock.patch.dict(os.environ, env):
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                 rc = prune.main(
@@ -727,7 +731,12 @@ def _run_prune_main(repo, cache, settings=None, extra=()):
     """
     out, err = io.StringIO(), io.StringIO()
     settings = settings or str(Path(repo) / "no-such-settings.json")
-    with mock.patch.dict(os.environ, {"CLAUDE_SETTINGS_JSON": settings}):
+    env = {
+        "CLAUDE_SETTINGS_JSON": settings,
+        # Same reason: never read the user's live installed_plugins.json.
+        "CLAUDE_PLUGIN_REGISTRY": str(Path(repo) / "no-such-registry.json"),
+    }
+    with mock.patch.dict(os.environ, env):
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             rc = prune.main(["--repo", str(repo), "--cache", str(cache), *extra])
     return out.getvalue(), err.getvalue(), rc

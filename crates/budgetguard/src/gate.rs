@@ -14,8 +14,8 @@
 //! * the config that says which limits are armed, via
 //!   [`config_undetermined_result`];
 //! * the day total, when the ledger lock could not be acquired and the
-//!   read-modify-write would therefore be unserialized, via
-//!   [`day_undetermined_verdict`].
+//!   read-modify-write would therefore be unserialized, or when `ledger.json`
+//!   is present but does not parse, via [`day_undetermined_verdict`].
 //!
 //! Only two paths still exit 0 silently, and both are KNOWN answers rather than
 //! give-ups: no transcript data at all to price, and a config that is genuinely
@@ -41,8 +41,9 @@ pub struct GateResult {
     /// `None` when this session's cost could not be determined — printed as
     /// `unknown`, never as a number the gate did not measure.
     pub session_usd: Option<f64>,
-    /// `None` when the day total could not be advanced because this session's
-    /// cost is unknown (the ledger is deliberately left untouched then).
+    /// `None` when the day total is unmeasured: this session's cost is unknown,
+    /// the ledger lock could not be taken, or `ledger.json` is corrupt (the
+    /// ledger is deliberately left untouched in every one of those cases).
     pub day_usd: Option<f64>,
     pub verdict: Verdict,
     /// Cache-hit health for this session. `None` means the check did not RUN
@@ -143,19 +144,40 @@ fn evaluate_with_store(
     let day_usd = match Ledger::load_checked(&cfg.state_dir) {
         Ok(mut ledger) => {
             let day_usd = ledger.record(session_id, today, session_usd);
-            let _ = ledger.save(&cfg.state_dir);
+            if let Err(e) = ledger.save(&cfg.state_dir) {
+                // This Stop's day total was read and advanced in memory, so the
+                // verdict below is on a measured number. What failed is the
+                // persistence: other sessions will read a day total that lacks
+                // this session's spend until a later save succeeds. That is an
+                // under-count downstream, so it is reported, never swallowed.
+                eprintln!(
+                    "budgetguard: failed to save ledger.json in {} ({e}); this session's                      spend is NOT recorded for other sessions' day totals",
+                    cfg.state_dir.display()
+                );
+            }
             day_usd
         }
         Err(_corrupt) => {
             // The on-disk ledger is unparseable. Do NOT overwrite it (that would
-            // erase the day's accumulated spend and fail the budget open). Leave
-            // the file untouched and fall back to this session's own cost as the
-            // day total — conservative: never under-reports below this session.
+            // erase the day's accumulated spend and fail the budget open), and
+            // do NOT substitute this session's own cost for the day total: every
+            // other session's spend is then missing by an unknown amount, and
+            // `verdict()` would read that under-count as headroom. The day total
+            // is unmeasured, which is exactly `day_undetermined_verdict`.
+            drop(_guard);
             eprintln!(
-                "budgetguard: ledger.json is corrupt; preserving it and skipping \
-                 update (day total falls back to this session's cost)"
+                "budgetguard: ledger.json is corrupt; preserving it untouched;                  day total is undetermined"
             );
-            session_usd
+            return Some(GateResult {
+                session_usd: Some(session_usd),
+                day_usd: None,
+                cache: cache_health(cfg, gauge_state_dir, session_id),
+                verdict: day_undetermined_verdict(
+                    cfg,
+                    session_usd,
+                    "ledger.json is corrupt (preserved untouched)",
+                ),
+            });
         }
     };
     drop(_guard);
@@ -1082,6 +1104,70 @@ mod tests {
             Verdict::Block(_, _)
         ));
 
+        let _ = std::fs::remove_file(&tp);
+    }
+
+    /// 207d0da6: a corrupt ledger.json makes the day total UNMEASURED. With an
+    /// armed daily limit that must resolve to the day-undetermined Block, not
+    /// fall back to this session's spend and run the normal `verdict()` (which
+    /// reads $30 < $100 as headroom).
+    #[cfg(unix)]
+    #[test]
+    fn a_corrupt_ledger_makes_the_day_undetermined_and_blocks() {
+        let ledger_dir = tempfile::tempdir().unwrap();
+        let garbage = b"{ this is not json";
+        std::fs::write(ledger_dir.path().join("ledger.json"), garbage).unwrap();
+        let (cfg, tp, store) = lock_fixture(
+            "ledger-corrupt",
+            Config {
+                daily_block_usd: 100.0,
+                state_dir: ledger_dir.path().to_path_buf(),
+                ..Config::default()
+            },
+        );
+        let r = evaluate_with_store(
+            &cfg,
+            "ledger-corrupt",
+            tp.to_str().unwrap(),
+            "2026-07-31",
+            store.path(),
+        )
+        .expect("result");
+        assert!(
+            matches!(r.verdict, Verdict::Block(_, "day-total-undetermined")),
+            "an armed daily limit plus a corrupt ledger must block"
+        );
+        assert_eq!(
+            std::fs::read(ledger_dir.path().join("ledger.json")).unwrap(),
+            garbage,
+            "the corrupt ledger must be preserved byte-for-byte"
+        );
+        let _ = std::fs::remove_file(&tp);
+    }
+
+    /// Overshoot guard for the test above: with NO daily limit armed a corrupt
+    /// ledger gates nothing and the session verdict stands (Allow here).
+    #[cfg(unix)]
+    #[test]
+    fn a_corrupt_ledger_with_no_daily_limit_armed_still_allows() {
+        let ledger_dir = tempfile::tempdir().unwrap();
+        std::fs::write(ledger_dir.path().join("ledger.json"), b"{ not json").unwrap();
+        let (cfg, tp, store) = lock_fixture(
+            "ledger-corrupt-nolimit",
+            Config {
+                state_dir: ledger_dir.path().to_path_buf(),
+                ..Config::default()
+            },
+        );
+        let r = evaluate_with_store(
+            &cfg,
+            "ledger-corrupt-nolimit",
+            tp.to_str().unwrap(),
+            "2026-07-31",
+            store.path(),
+        )
+        .expect("result");
+        assert!(matches!(r.verdict, Verdict::Allow));
         let _ = std::fs::remove_file(&tp);
     }
 }

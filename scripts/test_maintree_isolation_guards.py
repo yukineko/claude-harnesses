@@ -331,6 +331,60 @@ class WorktreeIsolationGuards(unittest.TestCase):
                  self._bash(f"rm -rf {gd}/hooks"), self.env), 2)
 
 
+    # ---- 9fdb49d8: newline is a command separator ------------------------
+    def _bash_rc(self, cmd):
+        return _run("guard-maintree-bash.py", self.main, self._bash(cmd), self.env)
+
+    def test_bash_newline_second_line_rm_main_denies(self):
+        self.assertEqual(
+            self._bash_rc(f"echo hi\nrm {self.main}/tracked.rs"), 2)
+
+    def test_bash_newline_second_line_touch_main_denies(self):
+        self.assertEqual(
+            self._bash_rc(f"true\ntouch {self.main}/zz"), 2)
+
+    def test_bash_newline_first_line_mutates_main_denies(self):
+        self.assertEqual(
+            self._bash_rc(f"rm {self.main}/tracked.rs\necho hi"), 2)
+
+    def test_bash_newline_benign_second_line_does_not_taint_first(self):
+        # Reverse false positive: the 2nd line's operand (a main path) must not
+        # be absorbed as a destination operand of the 1st line's cp, and a
+        # non-mutating 2nd line must not make the 1st line refused.
+        cmd = f"cp {self.wt}/tracked.rs {self.wt}/copy.rs\nls {self.main}"
+        self.assertEqual(self._bash_rc(cmd), 0)
+
+    def test_bash_newline_control_single_line_rm_main_denies(self):
+        self.assertEqual(self._bash_rc(f"rm {self.main}/tracked.rs"), 2)
+
+    def test_bash_newline_control_worktree_only_allows(self):
+        self.assertEqual(
+            self._bash_rc(f"echo hi\nrm {self.wt}/tracked.rs"), 0)
+
+    # ---- 02bdd012: undeterminable payload must not allow -----------------
+    def _raw_rc(self, raw):
+        return subprocess.run(
+            [sys.executable, os.path.join(SCRIPTS, "guard-maintree-bash.py")],
+            cwd=self.main, input=raw, capture_output=True, text=True,
+            env=dict(os.environ, **self.env),
+        ).returncode
+
+    def test_bash_payload_not_json_denies(self):
+        self.assertEqual(self._raw_rc("this is not json {"), 2)
+
+    def test_bash_payload_empty_stdin_denies(self):
+        self.assertEqual(self._raw_rc(""), 2)
+
+    def test_bash_payload_json_list_denies(self):
+        self.assertEqual(self._raw_rc("[1, 2, 3]"), 2)
+
+    def test_bash_payload_json_string_denies(self):
+        self.assertEqual(self._raw_rc('"rm -rf x"'), 2)
+
+    def test_bash_payload_control_valid_dict_allows(self):
+        self.assertEqual(self._raw_rc(json.dumps(self._bash("echo hi"))), 0)
+
+
 class LifecycleHooks(WorktreeIsolationGuards):
     """SessionStart auto-worktree and the Stop verify gate."""
 

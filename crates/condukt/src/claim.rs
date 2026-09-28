@@ -193,6 +193,21 @@ pub struct Claim {
     /// and old registries without the field still load.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Explicit marker: the caller that made this claim NEVER creates run-state
+    /// JSON for `run_id` (a `/flow` run claiming via `state claim-task
+    /// --stateless`). Only when this is `true` may [`claim_progress`] drop the
+    /// run-scoped signals and decide on the transcript alone — see its doc for
+    /// why a missing run state cannot be read as "stateless" by itself.
+    /// Defaulted `false` so legacy registries load unchanged, and skipped when
+    /// `false` so existing claim JSON stays byte-identical. Sticky: a re-claim
+    /// by the same run never clears it, and [`heartbeat`] never touches it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub stateless: bool,
+}
+
+/// serde `skip_serializing_if` helper for [`Claim::stateless`].
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// A file that could not be claimed because a live holder from another run owns
@@ -437,7 +452,8 @@ pub(crate) fn progress_store_dir(cfg: &Config, cwd: &Path) -> Determination<Path
 ///
 /// A heartbeat lapsing past the stuck-TTL proves only that the session went
 /// QUIET, not that it DIED — the reap must not force-steal a holder that is
-/// still doing durable work. This samples three durable signals across the
+/// still doing durable work. This samples three durable signals (only the
+/// transcript for a stateless-marked claim — see below) across the
 /// [`progress`] window and returns: `Known(Stalled)` only when the whole
 /// fingerprint is frozen for the full window; `Known(Progressing)` when any
 /// signal advanced; `Undetermined` when a signal is unreadable, there is no
@@ -468,33 +484,74 @@ pub(crate) fn progress_store_dir(cfg: &Config, cwd: &Path) -> Determination<Path
 /// The run state is loaded ONCE here and feeds both run-scoped signals; a run
 /// state that cannot be read leaves both of them `Undetermined` (the claim is
 /// kept).
+///
+/// # Stateless-marked claims ([`Claim::stateless`])
+///
+/// A `/flow` run claims tasks (`state claim-task --run flow-<SID> --stateless`)
+/// but never writes run-state JSON, so for an unmarked claim the load above
+/// always fails and the claim could never be reaped after its holder died.
+/// Treating a `NotFound` run state as "this run is stateless" is NOT an option:
+/// claims are keyed repo-wide ([`claim_project_root`], the MAIN worktree root)
+/// while run state lives per worktree (`repo_root(cwd)`), so a reaper running
+/// in one worktree gets `NotFound` for a LIVE run whose state sits in another
+/// worktree's dir. `NotFound` cannot distinguish "never existed" from "exists
+/// where I cannot see it", so for an unmarked claim it stays `Undetermined`
+/// (kept), exactly as before.
+///
+/// Only the explicit marker, set by the caller that knows it never creates run
+/// state, drops the run-scoped signals: for a marked claim the run state is not
+/// loaded at all and the fingerprint is the transcript signal alone (sampled
+/// under its own `claim-stateless:<run>` progress key). The transcript's own
+/// "cannot determine" arms still hold — no owning session id or an unreadable
+/// transcript is `Undetermined` (kept), and the first sample / an unelapsed
+/// window is `Undetermined` as for every claim. Only a transcript frozen for
+/// the full window yields `Known(Stalled)`.
 fn claim_progress(cfg: &Config, cwd: &Path, c: &Claim, now: i64) -> Determination<Liveness> {
     #[cfg(test)]
     if let Some(forced) = test_hook::forced_progress() {
         return forced;
     }
-    // One load, both run-scoped signals — and therefore exactly one
-    // load-failure arm: without the run state NEITHER of them can be read.
-    let (head, task_progress) = match crate::state::RunState::load(cfg, cwd, &c.run_id) {
-        Ok(rs) => (run_worktree_head_signal(&rs), run_task_progress_signal(&rs)),
-        Err(e) => {
-            let unreadable: Determination<Vec<u8>> =
-                Determination::undetermined(format!("run state for {} unreadable: {e}", c.run_id));
-            (unreadable.clone(), unreadable)
-        }
-    };
     let transcript = match c.session_id.as_deref() {
         Some(sid) => progress::session_transcript_signal(sid),
         None => Determination::undetermined(
             "claim has no owning session id — transcript progress unreadable",
         ),
     };
-    let current = progress::fingerprint_from_signals(vec![
-        ("run-worktree-heads", head),
-        ("transcript", transcript),
-        ("run-tasks", task_progress),
-    ]);
-    let key = format!("claim:{}", c.run_id);
+    let (current, key) = if c.stateless {
+        // Explicitly marked by a caller that never creates run state: the run
+        // state is NOT loaded at all (its absence is expected, not a failed
+        // read). The transcript is the whole fingerprint, and its own
+        // "cannot read" arms (no session id, unreadable file) stay
+        // Undetermined inside `fingerprint_from_signals`. A separate progress
+        // key keeps this one-signal fingerprint from alternating with an
+        // unmarked claim's three-signal fingerprint for the same run id, which
+        // would read as perpetual churn.
+        (
+            progress::fingerprint_from_signals(vec![("transcript", transcript)]),
+            format!("claim-stateless:{}", c.run_id),
+        )
+    } else {
+        // One load, both run-scoped signals — and therefore exactly one
+        // load-failure arm: without the run state NEITHER of them can be read.
+        let (head, task_progress) = match crate::state::RunState::load(cfg, cwd, &c.run_id) {
+            Ok(rs) => (run_worktree_head_signal(&rs), run_task_progress_signal(&rs)),
+            Err(e) => {
+                let unreadable: Determination<Vec<u8>> = Determination::undetermined(format!(
+                    "run state for {} unreadable: {e}",
+                    c.run_id
+                ));
+                (unreadable.clone(), unreadable)
+            }
+        };
+        (
+            progress::fingerprint_from_signals(vec![
+                ("run-worktree-heads", head),
+                ("transcript", transcript),
+                ("run-tasks", task_progress),
+            ]),
+            format!("claim:{}", c.run_id),
+        )
+    };
     // Fail-CLOSED: without a resolvable store there is nowhere to compare
     // against, so the verdict is Undetermined — and `retain_claim` KEEPS a claim
     // whose progress is Undetermined, so an unresolvable project root can never
@@ -779,6 +836,9 @@ fn claim_files_with_deadline(
                 claimed_at,
                 heartbeat_at: now,
                 title: None,
+                // File claims are never marked: only `claim_tasks` takes the
+                // caller's explicit marker.
+                stateless: false,
             },
         );
         outcome.claimed.push(f.clone());
@@ -792,10 +852,15 @@ fn claim_files_with_deadline(
 /// [`claim_files`] but keyed by exact hashkey rather than glob-aware file overlap,
 /// and running in the SAME reserved-key lock / RMW cycle. Reaps stale claims first.
 /// `title` is stored for the execution-state view; when `None` on a re-claim the
-/// previously recorded title is preserved. Returns the split of claimed vs skipped
+/// previously recorded title is preserved. `stateless` sets the sticky
+/// [`Claim::stateless`] marker (never cleared by a re-claim of the same run).
+/// Returns the split of claimed vs skipped
 /// hashkeys (in [`ClaimOutcome`], where `Skipped::file` carries the hashkey).
 // Wired into the CLI by the follow-up task.
 #[allow(dead_code)]
+// The trailing `stateless` marker is the 8th parameter; kept positional (rather
+// than folded into an options struct) so every caller spells the marker out.
+#[allow(clippy::too_many_arguments)]
 pub fn claim_tasks(
     cfg: &Config,
     cwd: &Path,
@@ -804,6 +869,7 @@ pub fn claim_tasks(
     session_id: Option<&str>,
     now: i64,
     title: Option<&str>,
+    stateless: bool,
 ) -> Result<ClaimOutcome> {
     let ttl = ttl_secs(cfg);
     // Fail-CLOSED: an unresolvable project root means we cannot tell which
@@ -846,11 +912,14 @@ pub fn claim_tasks(
 
         // Free, or already ours: (re)claim and refresh. Preserve the original
         // claimed_at and any prior title when the caller passes none.
-        let (claimed_at, prior_title) = reg
+        // The stateless marker is STICKY: once a run declared it never creates
+        // run state, a later re-claim that omits the flag must not silently
+        // turn the claim back into one that can never be reaped.
+        let (claimed_at, prior_title, prior_stateless) = reg
             .task_claims
             .get(hk)
-            .map(|c| (c.claimed_at, c.title.clone()))
-            .unwrap_or((now, None));
+            .map(|c| (c.claimed_at, c.title.clone(), c.stateless))
+            .unwrap_or((now, None, false));
         reg.task_claims.insert(
             hk.clone(),
             Claim {
@@ -860,6 +929,7 @@ pub fn claim_tasks(
                 claimed_at,
                 heartbeat_at: now,
                 title: title.map(str::to_string).or(prior_title),
+                stateless: stateless || prior_stateless,
             },
         );
         outcome.claimed.push(hk.clone());
@@ -1425,6 +1495,7 @@ mod tests {
                     heartbeat_at: 1_700_000_000 + i as i64,
                     claimed_at: 1_700_000_000,
                     title: Some(format!("task number {i} with a longish title")),
+                    stateless: false,
                 },
             );
         }
@@ -1692,6 +1763,7 @@ mod tests {
                 claimed_at: 0,
                 heartbeat_at: 0,
                 title: None,
+                stateless: false,
             },
         );
         save(&registry_path(&cfg, &tmp), &reg).unwrap();
@@ -1721,6 +1793,7 @@ mod tests {
                 claimed_at: 0,
                 heartbeat_at: 0,
                 title: None,
+                stateless: false,
             },
         );
         save(&registry_path(&cfg, &tmp), &reg).unwrap();
@@ -1750,6 +1823,7 @@ mod tests {
                 claimed_at: 0,
                 heartbeat_at: 0,
                 title: None,
+                stateless: false,
             },
         );
         save(&registry_path(&cfg, &tmp), &reg).unwrap();
@@ -1783,6 +1857,7 @@ mod tests {
                 claimed_at: 100,
                 heartbeat_at: 100,
                 title: None,
+                stateless: false,
             },
         );
         save(&registry_path(&cfg, &tmp), &reg).unwrap();
@@ -1880,7 +1955,7 @@ mod tests {
         );
         assert!(heartbeat(&cfg, &tmp, "runA", 100).is_err(), "heartbeat");
         assert!(
-            claim_tasks(&cfg, &tmp, &files(&["hk1"]), "runA", None, 100, None).is_err(),
+            claim_tasks(&cfg, &tmp, &files(&["hk1"]), "runA", None, 100, None, false).is_err(),
             "claim_tasks"
         );
         assert!(active_claims(&cfg, &tmp, 100).is_err(), "active_claims");
@@ -1910,6 +1985,7 @@ mod tests {
             Some("sessA"),
             100,
             Some("do the thing"),
+            false,
         )
         .unwrap();
         assert_eq!(out.claimed, vec!["hk-1".to_string()]);
@@ -1928,8 +2004,28 @@ mod tests {
     fn same_task_held_by_another_live_run_is_skipped() {
         let tmp = make_tmp_dir("task-conflict");
         let cfg = make_cfg(&tmp);
-        claim_tasks(&cfg, &tmp, &files(&["hk-1"]), "runA", None, 100, None).unwrap();
-        let out = claim_tasks(&cfg, &tmp, &files(&["hk-1"]), "runB", None, 101, None).unwrap();
+        claim_tasks(
+            &cfg,
+            &tmp,
+            &files(&["hk-1"]),
+            "runA",
+            None,
+            100,
+            None,
+            false,
+        )
+        .unwrap();
+        let out = claim_tasks(
+            &cfg,
+            &tmp,
+            &files(&["hk-1"]),
+            "runB",
+            None,
+            101,
+            None,
+            false,
+        )
+        .unwrap();
         assert!(out.claimed.is_empty());
         assert_eq!(out.skipped.len(), 1);
         assert_eq!(out.skipped[0].file, "hk-1");
@@ -1953,6 +2049,7 @@ mod tests {
                 claimed_at: 0,
                 heartbeat_at: 0,
                 title: Some("stale task".into()),
+                stateless: false,
             },
         );
         save(&registry_path(&cfg, &tmp), &reg).unwrap();
@@ -1961,7 +2058,17 @@ mod tests {
         let out = test_hook::with_forced(Determination::Known(Liveness::Stalled), || {
             // The reclaiming acquire AND the observability read both reap under a
             // Stalled verdict, so hold the seam across both.
-            let out = claim_tasks(&cfg, &tmp, &files(&["hk-1"]), "runB", None, now, None).unwrap();
+            let out = claim_tasks(
+                &cfg,
+                &tmp,
+                &files(&["hk-1"]),
+                "runB",
+                None,
+                now,
+                None,
+                false,
+            )
+            .unwrap();
             let live = active_claims(&cfg, &tmp, now).unwrap();
             assert_eq!(live.task_claims["hk-1"].run_id, "runB");
             out
@@ -1984,12 +2091,23 @@ mod tests {
                 claimed_at: 0,
                 heartbeat_at: 0,
                 title: Some("still working".into()),
+                stateless: false,
             },
         );
         save(&registry_path(&cfg, &tmp), &reg).unwrap();
         let now = cfg.stuck_ttl_secs as i64 + 1;
         let out = test_hook::with_forced(Determination::Known(Liveness::Progressing), || {
-            claim_tasks(&cfg, &tmp, &files(&["hk-1"]), "runB", None, now, None).unwrap()
+            claim_tasks(
+                &cfg,
+                &tmp,
+                &files(&["hk-1"]),
+                "runB",
+                None,
+                now,
+                None,
+                false,
+            )
+            .unwrap()
         });
         assert!(
             out.claimed.is_empty(),
@@ -2003,11 +2121,31 @@ mod tests {
     fn release_tasks_frees_the_hashkey() {
         let tmp = make_tmp_dir("task-release");
         let cfg = make_cfg(&tmp);
-        claim_tasks(&cfg, &tmp, &files(&["hk-1"]), "runA", None, 100, None).unwrap();
+        claim_tasks(
+            &cfg,
+            &tmp,
+            &files(&["hk-1"]),
+            "runA",
+            None,
+            100,
+            None,
+            false,
+        )
+        .unwrap();
         let n = release_tasks(&cfg, &tmp, &files(&["hk-1"])).unwrap();
         assert_eq!(n, 1);
         // Now runB can take it.
-        let out = claim_tasks(&cfg, &tmp, &files(&["hk-1"]), "runB", None, 101, None).unwrap();
+        let out = claim_tasks(
+            &cfg,
+            &tmp,
+            &files(&["hk-1"]),
+            "runB",
+            None,
+            101,
+            None,
+            false,
+        )
+        .unwrap();
         assert_eq!(out.claimed, vec!["hk-1".to_string()]);
     }
 
@@ -2016,7 +2154,17 @@ mod tests {
         let tmp = make_tmp_dir("task-release-run");
         let cfg = make_cfg(&tmp);
         claim_files(&cfg, &tmp, "runA", None, &files(&["src/a.rs"]), 100).unwrap();
-        claim_tasks(&cfg, &tmp, &files(&["hk-1"]), "runA", None, 100, None).unwrap();
+        claim_tasks(
+            &cfg,
+            &tmp,
+            &files(&["hk-1"]),
+            "runA",
+            None,
+            100,
+            None,
+            false,
+        )
+        .unwrap();
         let n = release_run(&cfg, &tmp, "runA").unwrap();
         assert_eq!(n, 2, "one file + one task claim released");
         let live = active_claims(&cfg, &tmp, 101).unwrap();
@@ -2029,7 +2177,7 @@ mod tests {
         let tmp = make_tmp_dir("task-hb");
         let cfg = make_cfg(&tmp);
         claim_files(&cfg, &tmp, "runA", None, &files(&["src/a.rs"]), 0).unwrap();
-        claim_tasks(&cfg, &tmp, &files(&["hk-1"]), "runA", None, 0, None).unwrap();
+        claim_tasks(&cfg, &tmp, &files(&["hk-1"]), "runA", None, 0, None, false).unwrap();
         let n = heartbeat(&cfg, &tmp, "runA", 500).unwrap();
         assert_eq!(n, 2, "both the file and the task claim refreshed");
         let live = active_claims(&cfg, &tmp, 500).unwrap();
@@ -2052,6 +2200,7 @@ mod tests {
                 claimed_at: 10,
                 heartbeat_at: 42,
                 title: Some("wire the CLI".into()),
+                stateless: false,
             },
         );
         // An unmatched claim (no backlog row) must still appear, with null backlog.
@@ -2064,6 +2213,7 @@ mod tests {
                 claimed_at: 10,
                 heartbeat_at: 43,
                 title: Some("orphan task".into()),
+                stateless: false,
             },
         );
         let pending = vec![serde_json::json!({
@@ -2106,6 +2256,7 @@ mod tests {
             Some("sessA"),
             100,
             Some("a task"),
+            false,
         )
         .unwrap();
         let rows = write_execution_state(&cfg, &tmp, 100).unwrap();
@@ -2356,6 +2507,7 @@ mod tests {
             claimed_at: 0,
             heartbeat_at: 0,
             title: None,
+            stateless: false,
         };
         (cfg, claim, home)
     }
@@ -3007,6 +3159,259 @@ mod tests {
             file_kept && task_kept,
             "a claim whose run-scoped head signal could not be READ must be KEPT, \
              never force-stolen (file kept={file_kept}, task kept={task_kept})"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    // ── stateless claim marker (flow-* runs have no run-state JSON) ─────────
+    //
+    // These tests deliberately do NOT use `test_hook::forced_progress`: they
+    // drive the REAL signal selection in `claim_progress`, with a real
+    // (temp-HOME) transcript file that is frozen or grown.
+
+    /// Fixture whose claim's run id has NO run-state file at all (the /flow
+    /// situation). Returns `(cfg, claim, home, transcript_path)`.
+    fn stateless_fixture(
+        tmp: &Path,
+        stateless: bool,
+        session: Option<&str>,
+    ) -> (Config, Claim, PathBuf, PathBuf) {
+        // Reuse the existing fixture for repo/home/transcript, then re-point the
+        // claim at a run id for which no state was ever saved.
+        let (cfg, mut claim, home) = progress_fixture(tmp, "some-other-run", None);
+        claim.run_id = "flow-ghost".to_string();
+        claim.session_id = session.map(str::to_string);
+        claim.stateless = stateless;
+        let transcript = home
+            .join(".claude")
+            .join("projects")
+            .join("-fixture")
+            .join(format!("{FIXTURE_SESSION}.jsonl"));
+        assert!(
+            crate::state::RunState::load(&cfg, tmp, "flow-ghost").is_err(),
+            "fixture precondition: no run state may exist for the claim's run id"
+        );
+        (cfg, claim, home, transcript)
+    }
+
+    fn two_samples(cfg: &Config, tmp: &Path, claim: &Claim) -> (i64, Determination<Liveness>) {
+        let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
+        let t0 = 10_000i64;
+        let _ = claim_progress(cfg, tmp, claim, t0);
+        let now = t0 + window;
+        (now, claim_progress(cfg, tmp, claim, now))
+    }
+
+    #[test]
+    fn stateless_marked_frozen_transcript_stale_heartbeat_is_reaped() {
+        let tmp = make_tmp_dir("stateless-reap");
+        let (cfg, claim, home, _t) = stateless_fixture(&tmp, true, Some(FIXTURE_SESSION));
+        let _h = pin_home(&home);
+        let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
+        let t0 = 10_000i64;
+        let v1 = claim_progress(&cfg, &tmp, &claim, t0);
+        assert!(
+            matches!(v1, Determination::Undetermined(_)),
+            "first sample must be Undetermined, got {v1:?}"
+        );
+        let now = t0 + window;
+        let v2 = claim_progress(&cfg, &tmp, &claim, now);
+        assert_eq!(
+            v2,
+            Determination::Known(Liveness::Stalled),
+            "a stateless-marked claim decides on the transcript alone; a transcript \
+             frozen for the full window means the holder is dead"
+        );
+        assert!(
+            is_stale(&claim, now, ttl_secs(&cfg)),
+            "fixture: heartbeat stale"
+        );
+        assert!(
+            !retain_claim(&claim, now, ttl_secs(&cfg), &|c| claim_progress(
+                &cfg, &tmp, c, now
+            )),
+            "retain_claim must drop a confirmed-stalled stateless claim"
+        );
+        let mut reg = Registry::default();
+        reg.task_claims.insert("hk".into(), claim.clone());
+        reg.files.insert("f.rs".into(), claim.clone());
+        reap(&mut reg, now, ttl_secs(&cfg), &|c| {
+            claim_progress(&cfg, &tmp, c, now)
+        });
+        assert!(reg.task_claims.is_empty() && reg.files.is_empty());
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn stateless_unmarked_missing_run_state_is_kept() {
+        let tmp = make_tmp_dir("stateless-unmarked");
+        let (cfg, claim, home, _t) = stateless_fixture(&tmp, false, Some(FIXTURE_SESSION));
+        let _h = pin_home(&home);
+        let (now, v2) = two_samples(&cfg, &tmp, &claim);
+        assert!(
+            matches!(v2, Determination::Undetermined(_)),
+            "an UNMARKED claim with no run state stays Undetermined (got {v2:?})"
+        );
+        assert!(retain_claim(&claim, now, ttl_secs(&cfg), &|c| {
+            claim_progress(&cfg, &tmp, c, now)
+        }));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn stateless_marked_growing_transcript_is_kept() {
+        let tmp = make_tmp_dir("stateless-grow");
+        let (cfg, claim, home, transcript) = stateless_fixture(&tmp, true, Some(FIXTURE_SESSION));
+        let _h = pin_home(&home);
+        let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
+        let t0 = 10_000i64;
+        let _ = claim_progress(&cfg, &tmp, &claim, t0);
+        let mut body = std::fs::read_to_string(&transcript).unwrap();
+        body.push_str("{\"grown\":2}\n");
+        std::fs::write(&transcript, body).unwrap();
+        let now = t0 + window;
+        let v2 = claim_progress(&cfg, &tmp, &claim, now);
+        assert_ne!(
+            v2,
+            Determination::Known(Liveness::Stalled),
+            "a growing transcript is a live holder; it must never read as Stalled"
+        );
+        assert!(retain_claim(&claim, now, ttl_secs(&cfg), &|c| {
+            claim_progress(&cfg, &tmp, c, now)
+        }));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn stateless_marked_unreadable_transcript_is_kept() {
+        let tmp = make_tmp_dir("stateless-untx");
+        let (cfg, claim, home, transcript) = stateless_fixture(&tmp, true, Some(FIXTURE_SESSION));
+        std::fs::remove_file(&transcript).unwrap();
+        let _h = pin_home(&home);
+        let (now, v2) = two_samples(&cfg, &tmp, &claim);
+        assert!(
+            matches!(v2, Determination::Undetermined(_)),
+            "an unreadable transcript is 'cannot determine', not 'frozen' (got {v2:?})"
+        );
+        assert!(retain_claim(&claim, now, ttl_secs(&cfg), &|c| {
+            claim_progress(&cfg, &tmp, c, now)
+        }));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn stateless_marked_no_session_id_is_kept() {
+        let tmp = make_tmp_dir("stateless-nosid");
+        let (cfg, claim, home, _t) = stateless_fixture(&tmp, true, None);
+        let _h = pin_home(&home);
+        let (now, v2) = two_samples(&cfg, &tmp, &claim);
+        assert!(
+            matches!(v2, Determination::Undetermined(_)),
+            "no owning session id means no transcript signal at all (got {v2:?})"
+        );
+        assert!(retain_claim(&claim, now, ttl_secs(&cfg), &|c| {
+            claim_progress(&cfg, &tmp, c, now)
+        }));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn stateless_unmarked_run_with_state_unchanged() {
+        // Same scenario as the existing run-worktree-commits test, spelled with
+        // the marker explicitly false: run signals still apply.
+        let tmp = make_tmp_dir("stateless-unmarked-state");
+        let wt = tmp.join("run-worktree");
+        init_git_repo(&wt);
+        let (cfg, mut claim, home) = progress_fixture(&tmp, "runWithState", Some(&wt));
+        claim.stateless = false;
+        let _h = pin_home(&home);
+        let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
+        let t0 = 10_000i64;
+        let _ = claim_progress(&cfg, &tmp, &claim, t0);
+        git_advance_head(&wt);
+        let v2 = claim_progress(&cfg, &tmp, &claim, t0 + window);
+        assert_eq!(
+            v2,
+            Determination::Known(Liveness::Progressing),
+            "an unmarked claim keeps using the run-scoped signals"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn stateless_legacy_json_without_field_defaults_false() {
+        let legacy = r#"{"run_id":"r","pid":1,"claimed_at":0,"heartbeat_at":0}"#;
+        let c: Claim = serde_json::from_str(legacy).unwrap();
+        assert!(
+            !c.stateless,
+            "a claim JSON lacking the field must default to false"
+        );
+
+        let marked = Claim {
+            run_id: "flow-x".into(),
+            session_id: Some("s".into()),
+            pid: 1,
+            claimed_at: 0,
+            heartbeat_at: 0,
+            title: None,
+            stateless: true,
+        };
+        let mut reg = Registry::default();
+        reg.task_claims.insert("hk".into(), marked);
+        let back: Registry = serde_json::from_str(&serde_json::to_string(&reg).unwrap()).unwrap();
+        assert!(
+            back.task_claims["hk"].stateless,
+            "round-trip must keep true"
+        );
+
+        // And through the on-disk registry path.
+        let path = make_tmp_dir("stateless-rt").join("claims.json");
+        save(&path, &reg).unwrap();
+        assert!(load_known(&path).task_claims["hk"].stateless);
+    }
+
+    /// ASSUMED SIGNATURE: `claim_tasks(cfg, cwd, hashkeys, run_id, session_id,
+    /// now, title, stateless: bool)` — a trailing `stateless` parameter.
+    #[test]
+    fn stateless_marker_survives_reclaim_and_heartbeat() {
+        let tmp = make_tmp_dir("stateless-survive");
+        init_git_repo(&tmp);
+        let cfg = make_cfg(&tmp);
+        let hk = vec!["hk-1".to_string()];
+        let out =
+            claim_tasks(&cfg, &tmp, &hk, "flow-s", Some("sid"), 100, Some("t"), true).unwrap();
+        assert_eq!(out.claimed, hk);
+        let stateless_now = |tag: &str| {
+            let reg = load_known(&registry_path(&cfg, &tmp));
+            assert!(
+                reg.task_claims["hk-1"].stateless,
+                "stateless marker lost after {tag}"
+            );
+        };
+        stateless_now("initial claim");
+
+        claim_tasks(&cfg, &tmp, &hk, "flow-s", Some("sid"), 110, None, true).unwrap();
+        stateless_now("re-claim by the same run");
+
+        assert_eq!(heartbeat(&cfg, &tmp, "flow-s", 120).unwrap(), 1);
+        stateless_now("heartbeat");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// The marker is STICKY: a re-claim by the same run that omits the flag
+    /// (`stateless = false`) must not clear it.
+    #[test]
+    fn stateless_marker_sticky_when_reclaim_omits_flag() {
+        let tmp = make_tmp_dir("stateless-sticky");
+        init_git_repo(&tmp);
+        let cfg = make_cfg(&tmp);
+        let hk = vec!["hk-1".to_string()];
+        claim_tasks(&cfg, &tmp, &hk, "flow-s", Some("sid"), 100, Some("t"), true).unwrap();
+        claim_tasks(&cfg, &tmp, &hk, "flow-s", Some("sid"), 110, None, false).unwrap();
+        let reg = load_known(&registry_path(&cfg, &tmp));
+        assert!(
+            reg.task_claims["hk-1"].stateless,
+            "a /flow re-claim that omits the flag must not silently make the claim unreapable again"
         );
         std::fs::remove_dir_all(&tmp).ok();
     }

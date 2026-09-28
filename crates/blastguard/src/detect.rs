@@ -1432,17 +1432,32 @@ primitive, not a filesystem path",
     // not be corroborated against this line-level one. `None` resolves nothing
     // and judges every raw token exactly as before this existed.
     let redirect_segments = redirect_target_occurrences(cmd);
+    // The cwd in force before each segment, so a RELATIVE redirect target can
+    // be judged where it actually lands (f1c170ab). See `place_redirect_target`.
+    let seg_cwds = segment_cwd_states(cmd);
     for (occurrence, raw_target) in redirect_targets(cmd).into_iter().enumerate() {
+        let seg_idx = redirect_segments
+            .as_ref()
+            .and_then(|occ| occ.get(occurrence))
+            .map(|(seg_idx, _)| *seg_idx);
         // Resolve `> "$P"` to the path it will actually name BEFORE any axis
         // judges it: every check below asks a question about a path, and the
         // unresolved token answers none of them (see
         // `resolve_redirect_target_at`). Falling back to the raw token keeps the
         // pre-existing verdict for everything that cannot be resolved.
-        let target = redirect_segments
-            .as_ref()
-            .and_then(|occ| occ.get(occurrence))
-            .and_then(|(seg_idx, _)| resolve_redirect_target_at(cmd, *seg_idx, &raw_target))
+        let target = seg_idx
+            .and_then(|seg_idx| resolve_redirect_target_at(cmd, seg_idx, &raw_target))
             .unwrap_or(raw_target);
+        let target = match place_redirect_target(cmd, seg_idx, &seg_cwds, target) {
+            Ok(placed) => placed,
+            Err(raw) => {
+                if let Some(deny) = protected_path_block("redirect", &raw) {
+                    return deny;
+                }
+                line_level_asks.push(unplaceable_redirect_ask(">", &raw));
+                continue;
+            }
+        };
         if let Some(deny) = protected_path_block("redirect", &target) {
             return deny;
         }
@@ -1529,20 +1544,18 @@ primitive, not a filesystem path",
             // deny to ask). The distinction is still visible: the reason text
             // says which answer was reached, and `rule_id` files them under
             // different ids.
-            // LOCATION axis. Gated on the line containing no `cd`/`pushd`/
-            // `popd` at all: this scan runs BEFORE the per-segment cwd walk
-            // below, so it has no per-segment base to resolve a relative
-            // target against, and guessing one is how
-            // `cd /usr && echo x > lib/f` would come out "confined".
-            if !line_changes_cwd_before(cmd, usize::MAX) {
-                if let Some(root) = ctx.confined_root("redirect", &[target.as_str()]) {
-                    line_level_asks.push(confined_ask(
-                        "truncating redirect",
-                        &root,
-                        &[target.as_str()],
-                    ));
-                    continue;
-                }
+            // LOCATION axis. Safe to consult for every target that reaches
+            // here: `place_redirect_target` has already re-expressed a relative
+            // target against the cwd its segment runs in (or refused it above),
+            // so `cd /usr && echo x > lib/f` is judged as `/usr/lib/f` and can
+            // no longer come out "confined" to the session tree.
+            if let Some(root) = ctx.confined_root("redirect", &[target.as_str()]) {
+                line_level_asks.push(confined_ask(
+                    "truncating redirect",
+                    &root,
+                    &[target.as_str()],
+                ));
+                continue;
             }
             return Decision::deny(format!(
                 "'> {target}' destroys the file's current contents and {}",
@@ -1558,7 +1571,29 @@ primitive, not a filesystem path",
     //     entry to a settings file or a command to `.githooks/pre-commit`, so a
     //     PROTECTED target is denied regardless of the append/truncate
     //     distinction. Ordinary appends (`echo x >> /tmp/log`) stay allowed.
-    for target in append_redirect_targets(cmd) {
+    //
+    //     The target is resolved exactly like the truncating one above
+    //     (a83802ad): `P=/etc/fstab; echo x >> $P` names `/etc/fstab`, and
+    //     judging the raw `$P` token instead let it through every axis.
+    let append_segments = append_target_occurrences(cmd);
+    for (occurrence, raw_target) in append_redirect_targets(cmd).into_iter().enumerate() {
+        let seg_idx = append_segments
+            .as_ref()
+            .and_then(|occ| occ.get(occurrence))
+            .map(|(seg_idx, _)| *seg_idx);
+        let target = seg_idx
+            .and_then(|seg_idx| resolve_redirect_target_at(cmd, seg_idx, &raw_target))
+            .unwrap_or(raw_target);
+        let target = match place_redirect_target(cmd, seg_idx, &seg_cwds, target) {
+            Ok(placed) => placed,
+            Err(raw) => {
+                if let Some(deny) = protected_path_block("append redirect", &raw) {
+                    return deny;
+                }
+                line_level_asks.push(unplaceable_redirect_ask(">>", &raw));
+                continue;
+            }
+        };
         if let Some(deny) = protected_path_block("append redirect", &target) {
             return deny;
         }
@@ -1568,6 +1603,17 @@ primitive, not a filesystem path",
         // whole payload.
         if let Some(deny) = system_path_block("append redirect", &target, ctx) {
             return deny;
+        }
+        // A target that is STILL an expansion after resolution names no path
+        // either axis above could place, so both answered "not mine" without
+        // having looked (`echo x >> $SOMEWHERE` with `SOMEWHERE` from the
+        // environment). "Could not check" is not "clean" (CLAUDE.md §3): Ask,
+        // recorded rather than returned so a Deny elsewhere on the line wins.
+        if has_unresolvable_expansion(&target) {
+            line_level_asks.push(Decision::ask(format!(
+                "'>> {target}' appends to a path that only exists at run time — blastguard \
+cannot tell whether it is a protected gate/config file or a system directory"
+            )));
         }
     }
 
@@ -1954,6 +2000,82 @@ a protected gate/config path, and refuses to guess"
         }
         CwdState::Root => (seg.to_string(), None, cwd.clone()),
     }
+}
+
+/// The [`CwdState`] in force BEFORE each segment of `split_segments(cmd)`,
+/// replaying exactly the walk [`detect_bash`]'s per-segment loop performs
+/// (same inert here-document skip, same alias table).
+///
+/// The line-level redirect scans run BEFORE that loop, so without this they
+/// had no per-segment base at all and judged `cd /etc && echo x > paths.d/f`
+/// as the relative text `paths.d/f`, which no absolute-path axis can match
+/// (f1c170ab).
+fn segment_cwd_states(cmd: &str) -> Vec<CwdState> {
+    let segs = split_segments(cmd);
+    let inert_body = inert_here_document_body(&split_segments_with_separators(cmd));
+    let mut cwd = CwdState::Root;
+    let mut aliases: HashMap<String, String> = HashMap::new();
+    let mut out = Vec::with_capacity(segs.len());
+    for (seg_idx, seg) in segs.iter().enumerate() {
+        out.push(cwd.clone());
+        if inert_body.get(seg_idx).copied().unwrap_or(false) {
+            continue;
+        }
+        let (_, _, next_cwd) = advance_cwd_and_rewrite(seg, &cwd, &mut aliases);
+        cwd = next_cwd;
+    }
+    out
+}
+
+/// Re-express a redirect target relative to where its segment really runs.
+///
+/// `Ok(target)` is the text every axis should judge: unchanged for an
+/// absolute, `~`, or expansion-valued target and for a relative one in a
+/// segment no `cd` precedes (its base is the line's own starting directory,
+/// `ctx.raw_base`, exactly as before); `<dir>/<target>` normalised for a
+/// relative target after a `cd` this analysis resolved to `dir` — the same
+/// re-expression [`rewrite_relative_operands`] applies to verb operands, so
+/// the result is again relative to the line's starting directory (or
+/// absolute).
+///
+/// `Err(raw)` means the target cannot be placed: it is relative, and either
+/// the cwd before its segment is [`CwdState::Unknown`] (`cd $X`, `popd`) or the
+/// per-segment scan could not be corroborated (`seg_idx` is `None`) on a line
+/// that changes directory. Judging it against the starting directory would
+/// probe and place the WRONG file, so the caller must not (CLAUDE.md §3).
+fn place_redirect_target(
+    cmd: &str,
+    seg_idx: Option<usize>,
+    seg_cwds: &[CwdState],
+    target: String,
+) -> Result<String, String> {
+    if !is_relative_operand(&target) || has_unresolvable_expansion(&target) {
+        return Ok(target);
+    }
+    let state = match seg_idx {
+        Some(idx) => seg_cwds.get(idx).cloned().unwrap_or(CwdState::Unknown),
+        None if line_changes_cwd_before(cmd, usize::MAX) => CwdState::Unknown,
+        None => CwdState::Root,
+    };
+    match state {
+        CwdState::Root => Ok(target),
+        CwdState::Known(dir) => Ok(exclude::normalize(&format!(
+            "{}/{}",
+            dir.trim_end_matches('/'),
+            target
+        ))),
+        CwdState::Unknown => Err(target),
+    }
+}
+
+/// The Ask for a relative redirect target [`place_redirect_target`] could not
+/// place. `op` is the operator as typed (`>` or `>>`).
+fn unplaceable_redirect_ask(op: &str, target: &str) -> Decision {
+    Decision::ask(format!(
+        "'{op} {target}' is a RELATIVE redirect after an earlier cd/pushd/popd whose target \
+directory blastguard could not statically resolve — it cannot tell whether this lands in a \
+system directory or on a protected gate/config path, and refuses to guess"
+    ))
 }
 
 fn redirect_target_is_safe(target: &str) -> bool {
@@ -3396,10 +3518,26 @@ fn resolve_redirect_target_at(cmd: &str, seg_idx: usize, target: &str) -> Option
 /// section 3, a scan that cannot be corroborated is not a permissive scan.
 /// Pinned by tests/redirect_target_resolution.rs.
 fn redirect_target_occurrences(cmd: &str) -> Option<Vec<(usize, String)>> {
-    let line_level = redirect_targets(cmd);
+    target_occurrences_by(cmd, redirect_targets)
+}
+
+/// The APPEND-redirect twin of [`redirect_target_occurrences`], with the same
+/// corroboration contract (`None` = the per-segment scan disagrees with the
+/// line-level one, so resolve nothing).
+///
+/// a83802ad: the append path used to judge the RAW token only, so
+/// `P=/etc/fstab; echo x >> $P` was Allowed while `> $P` on the same line was
+/// denied by the system-directory axis — the defect class
+/// [`resolve_redirect_target_at`] closed for truncation, left open on its twin.
+fn append_target_occurrences(cmd: &str) -> Option<Vec<(usize, String)>> {
+    target_occurrences_by(cmd, append_redirect_targets)
+}
+
+fn target_occurrences_by(cmd: &str, scan: fn(&str) -> Vec<String>) -> Option<Vec<(usize, String)>> {
+    let line_level = scan(cmd);
     let mut per_segment: Vec<(usize, String)> = Vec::new();
     for (seg_idx, seg) in split_segments_with_separators(cmd).iter().enumerate() {
-        for target in redirect_targets(&seg.text) {
+        for target in scan(&seg.text) {
             per_segment.push((seg_idx, target));
         }
     }
@@ -3799,6 +3937,10 @@ fn is_exec_wrapper(cmd: &str) -> bool {
             | "setsid"
             | "flock"
             | "chroot"
+            // Multi-call binaries: `busybox sh -c …` / `busybox rm -rf …` run
+            // the applet named by the next word (daf7611b).
+            | "busybox"
+            | "toybox"
     )
 }
 
@@ -3960,8 +4102,61 @@ fn has_operand(rest: &[&str]) -> bool {
 }
 
 /// Shells that take a command line as a string argument (e.g. `sh -c "…"`).
+///
+/// Every call site asks the same question — "does this program RUN code it is
+/// handed?" (an egress pipe terminal, a `find -exec` target, a stdin program,
+/// a `-c` payload to re-analyse) — so the list is every shell, not only the
+/// POSIX ones this module can parse. daf7611b: with only
+/// `sh|bash|zsh|ksh|dash` here, `fish -c "rm -rf …"`, `pwsh -c …`,
+/// `tcsh -c …` and `csh -c …` matched no arm and were ALLOWED unexamined,
+/// while `curl … | fish` was not an egress sink either. The non-POSIX ones
+/// are additionally [`is_foreign_shell`], which the `-c` arm turns into an Ask
+/// because a POSIX reading of their payload proves nothing.
 fn is_shell(cmd: &str) -> bool {
-    matches!(cmd, "sh" | "bash" | "zsh" | "ksh" | "dash")
+    matches!(
+        cmd,
+        "sh" | "bash"
+            | "rbash"
+            | "zsh"
+            | "ksh"
+            | "mksh"
+            | "lksh"
+            | "oksh"
+            | "pdksh"
+            | "dash"
+            | "ash"
+            | "hush"
+            | "yash"
+            | "posh"
+    ) || is_foreign_shell(cmd)
+}
+
+/// Shells whose command language is NOT POSIX sh, so this module's analyser
+/// cannot read their payloads: fish's `(cmd)` substitution, csh history and
+/// modifiers, PowerShell cmdlets (`Remove-Item -Recurse`), nushell pipelines.
+/// A POSIX pass over the payload can still find a recognisable `rm -rf` (and
+/// Deny), but finding nothing there is "could not analyse", not "clean".
+fn is_foreign_shell(cmd: &str) -> bool {
+    matches!(
+        cmd,
+        "fish" | "csh" | "tcsh" | "pwsh" | "powershell" | "nu" | "elvish" | "xonsh" | "rc" | "es"
+    )
+}
+
+/// True unless a foreign shell's arguments are ONLY informational flags
+/// (`fish --version`). Any other argument — an inline command flag in any
+/// spelling (`-c`, `--command=`, `-C`, `-Command`, `-EncodedCommand`) or a
+/// script path — makes it run code blastguard cannot read. Deliberately not a
+/// list of the code-running flags: that list is per-shell, abbreviable
+/// (PowerShell accepts any unambiguous prefix) and is exactly the kind of list
+/// that goes stale.
+fn foreign_shell_runs_code(rest: &[&str]) -> bool {
+    rest.iter().any(|t| {
+        !matches!(
+            *t,
+            "--version" | "-version" | "-Version" | "--help" | "-help" | "-Help" | "-h" | "-?"
+        )
+    })
 }
 
 /// Non-shell interpreters that run an inline program supplied as a string
@@ -5327,6 +5522,18 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
                 }
             }
         }
+        // 06345780: a `$(...)`/backtick body is EXECUTED to produce its text,
+        // wherever it stands — command word, operand, assignment value or
+        // inside double quotes. Judge each body with the full analyser, so
+        // `echo $(rm -rf ~/work)` gets the verdict `rm -rf ~/work` gets. The
+        // egress scans (`command_substitution_payloads`) only ever asked
+        // "does it fetch/decode?", which left every other destructive body
+        // unexamined. See `executed_substitution_payloads`.
+        for payload in executed_substitution_payloads(seg) {
+            if let Some(deny) = acc.record(analyze_shell_payload(&payload, depth, ctx)) {
+                return deny;
+            }
+        }
     } else {
         // Cap reached: the recursion above did NOT run, so this segment was not
         // fully analysed. Record the unfinished-analysis Ask into `acc` rather
@@ -5816,6 +6023,17 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize, ctx: &Ctx<'_>) 
         if is_shell(cmd) {
             for payload in dash_c_payloads(rest) {
                 if let Some(deny) = acc.record(analyze_shell_payload(&payload, depth, ctx)) {
+                    return deny;
+                }
+            }
+            // daf7611b: a shell whose language this module cannot parse. The
+            // POSIX pass above may still Deny; if it did not, that is a
+            // failure to analyse, not a clean result (CLAUDE.md §3).
+            if is_foreign_shell(cmd) && foreign_shell_runs_code(rest) {
+                if let Some(deny) = acc.record(Decision::ask(format!(
+                    "`{cmd}` runs code in a non-POSIX shell language that blastguard cannot \
+analyse — it cannot tell what this would do, so it refuses to guess"
+                ))) {
                     return deny;
                 }
             }
@@ -7858,6 +8076,62 @@ fn backtick_payloads(stage: &str) -> Vec<String> {
             break;
         }
         i += 1;
+    }
+    out
+}
+
+/// Every command-substitution body in `seg` that the shell will actually RUN,
+/// in source order: `$(...)` and backtick bodies at the top level or inside
+/// double quotes, but NOT inside single quotes (`'$(rm x)'` is literal text).
+/// `$((...))` arithmetic is a `$(` too and is returned like the rest; its
+/// body is an expression, which the analyser finds nothing destructive in.
+///
+/// Unlike [`command_substitution_payloads`] (used by the fetch/decode egress
+/// scans, where over-reporting a single-quoted body is harmless) this one
+/// feeds the FULL rule engine, so literal single-quoted text must not be
+/// mistaken for code. Each body is found with [`scan_balanced`], so quoting
+/// and nesting inside the body cannot end it early. An unterminated
+/// substitution ends the scan: [`split_segments`] can cut a `$(a; b)` apart,
+/// and the pieces after the cut are analysed as segments of their own.
+fn executed_substitution_payloads(seg: &str) -> Vec<String> {
+    let chars: Vec<char> = seg.chars().collect();
+    let mut out = Vec::new();
+    let mut in_double = false;
+    let mut k = 0;
+    while k < chars.len() {
+        match chars[k] {
+            '\\' => {
+                k += 2;
+                continue;
+            }
+            '\'' if !in_double => {
+                let mut j = k + 1;
+                while j < chars.len() && chars[j] != '\'' {
+                    j += 1;
+                }
+                k = j + 1;
+                continue;
+            }
+            '"' => in_double = !in_double,
+            '$' if chars.get(k + 1) == Some(&'(') => {
+                let Some(end) = scan_balanced(&chars, k + 2, Stop::Paren, 0) else {
+                    break;
+                };
+                out.push(chars[k + 2..end].iter().collect());
+                k = end + 1;
+                continue;
+            }
+            '`' => {
+                let Some(end) = scan_balanced(&chars, k + 1, Stop::Backtick, 0) else {
+                    break;
+                };
+                out.push(chars[k + 1..end].iter().collect());
+                k = end + 1;
+                continue;
+            }
+            _ => {}
+        }
+        k += 1;
     }
     out
 }

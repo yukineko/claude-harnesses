@@ -1330,4 +1330,63 @@ mod tests {
             other => panic!("expected Known, got {other:?}"),
         }
     }
+
+    #[test]
+    fn overwatch_undetermined_not_an_array_is_undetermined() {
+        for bad in [
+            r#"{"undetermined":"sessions"}"#,
+            r#"{"undetermined":{"source":"sessions","reason":"x"}}"#,
+            r#"{"undetermined":null}"#,
+            r#"{"sessions":[],"undetermined":true}"#,
+        ] {
+            assert!(
+                matches!(
+                    parse_overwatch_sessions(bad, None),
+                    Determination::Undetermined(_)
+                ),
+                "{bad:?} must be undetermined, got {:?}",
+                parse_overwatch_sessions(bad, None)
+            );
+        }
+    }
+
+    #[test]
+    fn overwatch_undetermined_entry_without_string_source_is_undetermined() {
+        for bad in [
+            r#"{"undetermined":[{"reason":"x"}]}"#,
+            r#"{"undetermined":[{"source":7,"reason":"x"}]}"#,
+            r#"{"undetermined":["sessions"]}"#,
+            r#"{"sessions":[],"undetermined":[{"source":"backlog","reason":"x"},{"reason":"y"}]}"#,
+        ] {
+            assert!(
+                matches!(
+                    parse_overwatch_sessions(bad, None),
+                    Determination::Undetermined(_)
+                ),
+                "{bad:?} must be undetermined, got {:?}",
+                parse_overwatch_sessions(bad, None)
+            );
+        }
+    }
+
+    #[test]
+    fn overwatch_undetermined_for_a_non_sessions_source_does_not_over_block() {
+        // Shape as produced by overwatch's UndeterminedSource {source, reason}.
+        assert_eq!(
+            parse_overwatch_sessions(
+                r#"{"undetermined":[{"source":"backlog","reason":"x"}]}"#,
+                None
+            ),
+            Determination::Known(vec![])
+        );
+        let json = r#"{"sessions":[{"session_id":"other","leases":[],"live_count":1}],
+            "undetermined":[{"source":"backlog","reason":"x"},{"source":"hypotheses","reason":"y"}]}"#;
+        match parse_overwatch_sessions(json, Some("me")) {
+            Determination::Known(p) => {
+                assert_eq!(p.len(), 1);
+                assert_eq!(p[0].session_id, "other");
+            }
+            other => panic!("expected Known roster, got {other:?}"),
+        }
+    }
 }

@@ -260,6 +260,16 @@ fn run() {
 
     let root = resolve_root(args.root);
 
+    // Nothing to audit without a commit: outside any repository, or in one
+    // right after `git init`, there is no HEAD for a pending diff to be
+    // relative to. Both states are positively observed by `head_state`; any
+    // other git failure is `Err` and falls through to the fail-closed
+    // `changed_and_untracked` below.
+    if let Ok(state @ (git::HeadState::NoRepo | git::HeadState::Unborn)) = git::head_state(&root) {
+        eprintln!("precommit-audit: nothing to audit ({state:?}: no commit yet)");
+        exit(0);
+    }
+
     let mode = resolve_mode(args.mode);
     // Exit code that signals "blocking issues found". On the Stop hook, 2 blocks
     // the stop; on a git pre-commit invocation, 1 aborts the commit. But under

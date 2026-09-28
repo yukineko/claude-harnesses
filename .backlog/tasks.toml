@@ -3797,28 +3797,6 @@ issue_number = 432
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/432"
 
 [[task]]
-id = "c66f520d"
-title = "CLAUDE.md が存在しない PREPUSH_SKIP_CI_RED を参照している — check-claudemd-claims は path:line しか検証しないので死んだ機構への言及が通る"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = """
-CLAUDE.md:252,260,272 が PREPUSH_SKIP_CI_RED=1 について指示している（「独断で再使用しない」等）。
-この変数はもう存在しない: .githooks/pre-push:44-51 で CI-red チェックが撤去され、
-scripts/test_prepush_hook.py:20 も「also gone」と記録している。
-scripts/check-claudemd-claims.py は path:line 引用の一致しか検証しないため、
-死んだ機構を指す指示が素通りする。指示ファイル自身の doc-vs-code 漂流。
-修正の判断はユーザー（CLAUDE.md の所有者）に属する。選択肢: (a) 当該記述を現状へ更新する、
-(b) check-claudemd-claims に「言及された env 変数が実在するか」の検査を足す。親 826c29bf"""
-created_at = 1788792036
-updated_at = 1788792036
-weight = 0.0
-issue_number = 433
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/433"
-
-[[task]]
 id = "73c2c089"
 title = "check-plugin-rollout.py はレジストリ/設定が不在なら exit 0（env 変数で選べる）。しかも pre-push が GATE クレート無効化まで advisory へ降格する"
 project = "/Users/yuki/src/harness"
@@ -5254,42 +5232,6 @@ updated_at = 1787033546
 weight = 0.0
 
 [[task]]
-id = "47972db9"
-title = "CLAUDE.md:361 が fmt/clippy の強制点を CI と書いているが §7 で CI は全面禁止され、実際の強制点は donegate.toml (Stop 時) である"
-project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = """
-実測 2026-08-18, 測定点 01deeab2。
-
-CLAUDE.md:361 の逐語: 「CI ゲートは **fmt + clippy を強制**する。コミット前に cargo fmt と cargo clippy -p <crate> --all-targets を green にする。」
-
-しかし CLAUDE.md 第7節は「GitHub Actions のようなゴミサービスは二度と使用しない」として CI を全面禁止しており、gh run list/view/watch の実行も禁じている。したがって「CI ゲートが強制する」は、そのゲートを二度と観測しない前提と両立しない。
-
-測定した実際の強制点:
-  grep -n fmt   .githooks/pre-commit  -> ヒット無し
-  grep -n fmt   .githooks/pre-push    -> ヒット無し
-  grep -n clippy .githooks/pre-commit .githooks/pre-push -> ヒット無し
-  donegate.toml:29-30  name = "fmt"    cmd = cargo fmt --all -- --check
-  donegate.toml:35-36  name = "clippy" cmd = cargo clippy --workspace --all-targets -- -D warnings
-
-つまり fmt/clippy は機械強制されている。強制点は donegate (Stop ゲート) であって CI ではない。
-CLAUDE.md:299 は既に「donegate の required check は workspace 全体 (cargo fmt --all / cargo clippy --workspace) を見る」と正しく書いているので、:361 だけが古い。
-
-実害 (このセッションで観測): テスト著者エージェントが :361 を読んで「fmt は pre-commit に入っていないので強制されていない」と結論しかけた。commit f7b6d149 は fmt 差分を含んだまま全 pre-commit ゲートを通過している (強制点が commit 時ではなく Stop 時なので正常)。読み手が強制点を CI だと思い込むと、CI を見ない規範と組み合わさって「誰も見ていない」と誤読される。
-
-第4節「docstring / コメントで実挙動と違う話を書くな。散文が実装と食い違ったら次のレビュアーを騙す仕掛けになる」に該当する。
-
-付随する構造的な注意点 (別課題になりうる): donegate は Stop 時にセッションの cwd に対して走るので、worktree で実装した変更は「その worktree で donegate が走らない限り」fmt/clippy を見られない。第8節が全作業を worktree で義務づけているため、fmt/clippy の強制と worktree 分離の間に帰属のギャップがある。CLAUDE.md 第8節の実測記録にある「自分が触っていない crate の赤が自分の停止をブロックした」の裏返しの現象である。
-
-修正候補: :361 を「fmt + clippy は donegate (Stop ゲート) が強制する」に書き換える。CI への言及を残すなら第7節との関係を明示する。"""
-created_at = 1787033773
-updated_at = 1787033773
-weight = 0.0
-
-[[task]]
 id = "ff17a108"
 title = "harness 拡張 T1-T4 の実装を完了する (condukt run run-20260818-143719-13654 / t3 はテストのみで実装 0 行)"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
@@ -6004,43 +5946,6 @@ updated_at = 1787542488
 weight = 0.0
 issue_number = 397
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/397"
-
-[[task]]
-id = "0c758844"
-title = "CLAUDE.md の crate / plugin 件数が実測と食い違う (39 クレート → 実測 43、36 plugin / 108 ファイル → 実測 40 / 120)"
-project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = """
-CLAUDE.md 自身の 測定値 の節が「測定点の無い数字は次の著者が転記した瞬間に腐る」と
-書いているのに、同じファイルの件数がまさにそれになっている。
-
-実測 (2026-08-24、session-24b59ce3):
- - `ls -d crates/*/ | wc -l` → **43**。CLAUDE.md の「context 読み込み戦略」節は
-   「このリポジトリは 39 クレートある」と書いている。
- - `ls crates/*/.claude-plugin/plugin.json | wc -l` → **40**。CLAUDE.md の
-   harness-core の節は「36 plugin にリンクされる」「リンク先 36 plugin」「1 commit あたり
-   108 ファイルが動き」と書いている (108 = 36 × 3 の lockstep 3 ファイル)。
-   40 plugin なら 120 ファイルになる。
-
-**この差分は taintguard 撤去では説明できない** — 撤去は 44→43 / 41→40 の 1 件分であり、
-39 / 36 との差 (4 件・4 件) はそれ以前から開いていた。撤去作業中に測って気付いたので
-起票するが、原因はこの作業ではない。
-
-意図的に埋めていないこと: 「39」「36」「108」が何を分母にしていたのかを復元できなかったため、
-勝手に 43 / 40 / 120 へ書き換えていない (harness-core にリンクされる plugin 数は、
-plugin.json を持つ 40 のうち実際に harness-core へ依存する数であって、40 とは限らない)。
-完了条件は (1) それぞれの分母の定義を決める、(2) 測定コマンドを併記した形へ書き換える、
-(3) その定数がずれたら検出されるようにする — scripts/test_check_claudemd_claims.py が
-既に存在するので、そこへ足せる可能性がある (ただし上の別項目のとおり、そのテスト自体が
-どの hook からも走っていない)。"""
-created_at = 1787536539
-updated_at = 1787536539
-weight = 0.0
-issue_number = 399
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/399"
 
 [[task]]
 id = "a8ef3afa"

@@ -1432,17 +1432,32 @@ primitive, not a filesystem path",
     // not be corroborated against this line-level one. `None` resolves nothing
     // and judges every raw token exactly as before this existed.
     let redirect_segments = redirect_target_occurrences(cmd);
+    // The cwd in force before each segment, so a RELATIVE redirect target can
+    // be judged where it actually lands (f1c170ab). See `place_redirect_target`.
+    let seg_cwds = segment_cwd_states(cmd);
     for (occurrence, raw_target) in redirect_targets(cmd).into_iter().enumerate() {
+        let seg_idx = redirect_segments
+            .as_ref()
+            .and_then(|occ| occ.get(occurrence))
+            .map(|(seg_idx, _)| *seg_idx);
         // Resolve `> "$P"` to the path it will actually name BEFORE any axis
         // judges it: every check below asks a question about a path, and the
         // unresolved token answers none of them (see
         // `resolve_redirect_target_at`). Falling back to the raw token keeps the
         // pre-existing verdict for everything that cannot be resolved.
-        let target = redirect_segments
-            .as_ref()
-            .and_then(|occ| occ.get(occurrence))
-            .and_then(|(seg_idx, _)| resolve_redirect_target_at(cmd, *seg_idx, &raw_target))
+        let target = seg_idx
+            .and_then(|seg_idx| resolve_redirect_target_at(cmd, seg_idx, &raw_target))
             .unwrap_or(raw_target);
+        let target = match place_redirect_target(cmd, seg_idx, &seg_cwds, target) {
+            Ok(placed) => placed,
+            Err(raw) => {
+                if let Some(deny) = protected_path_block("redirect", &raw) {
+                    return deny;
+                }
+                line_level_asks.push(unplaceable_redirect_ask(">", &raw));
+                continue;
+            }
+        };
         if let Some(deny) = protected_path_block("redirect", &target) {
             return deny;
         }
@@ -1529,20 +1544,18 @@ primitive, not a filesystem path",
             // deny to ask). The distinction is still visible: the reason text
             // says which answer was reached, and `rule_id` files them under
             // different ids.
-            // LOCATION axis. Gated on the line containing no `cd`/`pushd`/
-            // `popd` at all: this scan runs BEFORE the per-segment cwd walk
-            // below, so it has no per-segment base to resolve a relative
-            // target against, and guessing one is how
-            // `cd /usr && echo x > lib/f` would come out "confined".
-            if !line_changes_cwd_before(cmd, usize::MAX) {
-                if let Some(root) = ctx.confined_root("redirect", &[target.as_str()]) {
-                    line_level_asks.push(confined_ask(
-                        "truncating redirect",
-                        &root,
-                        &[target.as_str()],
-                    ));
-                    continue;
-                }
+            // LOCATION axis. Safe to consult for every target that reaches
+            // here: `place_redirect_target` has already re-expressed a relative
+            // target against the cwd its segment runs in (or refused it above),
+            // so `cd /usr && echo x > lib/f` is judged as `/usr/lib/f` and can
+            // no longer come out "confined" to the session tree.
+            if let Some(root) = ctx.confined_root("redirect", &[target.as_str()]) {
+                line_level_asks.push(confined_ask(
+                    "truncating redirect",
+                    &root,
+                    &[target.as_str()],
+                ));
+                continue;
             }
             return Decision::deny(format!(
                 "'> {target}' destroys the file's current contents and {}",
@@ -1564,11 +1577,23 @@ primitive, not a filesystem path",
     //     judging the raw `$P` token instead let it through every axis.
     let append_segments = append_target_occurrences(cmd);
     for (occurrence, raw_target) in append_redirect_targets(cmd).into_iter().enumerate() {
-        let target = append_segments
+        let seg_idx = append_segments
             .as_ref()
             .and_then(|occ| occ.get(occurrence))
-            .and_then(|(seg_idx, _)| resolve_redirect_target_at(cmd, *seg_idx, &raw_target))
+            .map(|(seg_idx, _)| *seg_idx);
+        let target = seg_idx
+            .and_then(|seg_idx| resolve_redirect_target_at(cmd, seg_idx, &raw_target))
             .unwrap_or(raw_target);
+        let target = match place_redirect_target(cmd, seg_idx, &seg_cwds, target) {
+            Ok(placed) => placed,
+            Err(raw) => {
+                if let Some(deny) = protected_path_block("append redirect", &raw) {
+                    return deny;
+                }
+                line_level_asks.push(unplaceable_redirect_ask(">>", &raw));
+                continue;
+            }
+        };
         if let Some(deny) = protected_path_block("append redirect", &target) {
             return deny;
         }
@@ -1975,6 +2000,82 @@ a protected gate/config path, and refuses to guess"
         }
         CwdState::Root => (seg.to_string(), None, cwd.clone()),
     }
+}
+
+/// The [`CwdState`] in force BEFORE each segment of `split_segments(cmd)`,
+/// replaying exactly the walk [`detect_bash`]'s per-segment loop performs
+/// (same inert here-document skip, same alias table).
+///
+/// The line-level redirect scans run BEFORE that loop, so without this they
+/// had no per-segment base at all and judged `cd /etc && echo x > paths.d/f`
+/// as the relative text `paths.d/f`, which no absolute-path axis can match
+/// (f1c170ab).
+fn segment_cwd_states(cmd: &str) -> Vec<CwdState> {
+    let segs = split_segments(cmd);
+    let inert_body = inert_here_document_body(&split_segments_with_separators(cmd));
+    let mut cwd = CwdState::Root;
+    let mut aliases: HashMap<String, String> = HashMap::new();
+    let mut out = Vec::with_capacity(segs.len());
+    for (seg_idx, seg) in segs.iter().enumerate() {
+        out.push(cwd.clone());
+        if inert_body.get(seg_idx).copied().unwrap_or(false) {
+            continue;
+        }
+        let (_, _, next_cwd) = advance_cwd_and_rewrite(seg, &cwd, &mut aliases);
+        cwd = next_cwd;
+    }
+    out
+}
+
+/// Re-express a redirect target relative to where its segment really runs.
+///
+/// `Ok(target)` is the text every axis should judge: unchanged for an
+/// absolute, `~`, or expansion-valued target and for a relative one in a
+/// segment no `cd` precedes (its base is the line's own starting directory,
+/// `ctx.raw_base`, exactly as before); `<dir>/<target>` normalised for a
+/// relative target after a `cd` this analysis resolved to `dir` — the same
+/// re-expression [`rewrite_relative_operands`] applies to verb operands, so
+/// the result is again relative to the line's starting directory (or
+/// absolute).
+///
+/// `Err(raw)` means the target cannot be placed: it is relative, and either
+/// the cwd before its segment is [`CwdState::Unknown`] (`cd $X`, `popd`) or the
+/// per-segment scan could not be corroborated (`seg_idx` is `None`) on a line
+/// that changes directory. Judging it against the starting directory would
+/// probe and place the WRONG file, so the caller must not (CLAUDE.md §3).
+fn place_redirect_target(
+    cmd: &str,
+    seg_idx: Option<usize>,
+    seg_cwds: &[CwdState],
+    target: String,
+) -> Result<String, String> {
+    if !is_relative_operand(&target) || has_unresolvable_expansion(&target) {
+        return Ok(target);
+    }
+    let state = match seg_idx {
+        Some(idx) => seg_cwds.get(idx).cloned().unwrap_or(CwdState::Unknown),
+        None if line_changes_cwd_before(cmd, usize::MAX) => CwdState::Unknown,
+        None => CwdState::Root,
+    };
+    match state {
+        CwdState::Root => Ok(target),
+        CwdState::Known(dir) => Ok(exclude::normalize(&format!(
+            "{}/{}",
+            dir.trim_end_matches('/'),
+            target
+        ))),
+        CwdState::Unknown => Err(target),
+    }
+}
+
+/// The Ask for a relative redirect target [`place_redirect_target`] could not
+/// place. `op` is the operator as typed (`>` or `>>`).
+fn unplaceable_redirect_ask(op: &str, target: &str) -> Decision {
+    Decision::ask(format!(
+        "'{op} {target}' is a RELATIVE redirect after an earlier cd/pushd/popd whose target \
+directory blastguard could not statically resolve — it cannot tell whether this lands in a \
+system directory or on a protected gate/config path, and refuses to guess"
+    ))
 }
 
 fn redirect_target_is_safe(target: &str) -> bool {

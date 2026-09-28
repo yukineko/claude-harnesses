@@ -1558,7 +1558,17 @@ primitive, not a filesystem path",
     //     entry to a settings file or a command to `.githooks/pre-commit`, so a
     //     PROTECTED target is denied regardless of the append/truncate
     //     distinction. Ordinary appends (`echo x >> /tmp/log`) stay allowed.
-    for target in append_redirect_targets(cmd) {
+    //
+    //     The target is resolved exactly like the truncating one above
+    //     (a83802ad): `P=/etc/fstab; echo x >> $P` names `/etc/fstab`, and
+    //     judging the raw `$P` token instead let it through every axis.
+    let append_segments = append_target_occurrences(cmd);
+    for (occurrence, raw_target) in append_redirect_targets(cmd).into_iter().enumerate() {
+        let target = append_segments
+            .as_ref()
+            .and_then(|occ| occ.get(occurrence))
+            .and_then(|(seg_idx, _)| resolve_redirect_target_at(cmd, *seg_idx, &raw_target))
+            .unwrap_or(raw_target);
         if let Some(deny) = protected_path_block("append redirect", &target) {
             return deny;
         }
@@ -1568,6 +1578,17 @@ primitive, not a filesystem path",
         // whole payload.
         if let Some(deny) = system_path_block("append redirect", &target, ctx) {
             return deny;
+        }
+        // A target that is STILL an expansion after resolution names no path
+        // either axis above could place, so both answered "not mine" without
+        // having looked (`echo x >> $SOMEWHERE` with `SOMEWHERE` from the
+        // environment). "Could not check" is not "clean" (CLAUDE.md §3): Ask,
+        // recorded rather than returned so a Deny elsewhere on the line wins.
+        if has_unresolvable_expansion(&target) {
+            line_level_asks.push(Decision::ask(format!(
+                "'>> {target}' appends to a path that only exists at run time — blastguard \
+cannot tell whether it is a protected gate/config file or a system directory"
+            )));
         }
     }
 
@@ -3396,10 +3417,26 @@ fn resolve_redirect_target_at(cmd: &str, seg_idx: usize, target: &str) -> Option
 /// section 3, a scan that cannot be corroborated is not a permissive scan.
 /// Pinned by tests/redirect_target_resolution.rs.
 fn redirect_target_occurrences(cmd: &str) -> Option<Vec<(usize, String)>> {
-    let line_level = redirect_targets(cmd);
+    target_occurrences_by(cmd, redirect_targets)
+}
+
+/// The APPEND-redirect twin of [`redirect_target_occurrences`], with the same
+/// corroboration contract (`None` = the per-segment scan disagrees with the
+/// line-level one, so resolve nothing).
+///
+/// a83802ad: the append path used to judge the RAW token only, so
+/// `P=/etc/fstab; echo x >> $P` was Allowed while `> $P` on the same line was
+/// denied by the system-directory axis — the defect class
+/// [`resolve_redirect_target_at`] closed for truncation, left open on its twin.
+fn append_target_occurrences(cmd: &str) -> Option<Vec<(usize, String)>> {
+    target_occurrences_by(cmd, append_redirect_targets)
+}
+
+fn target_occurrences_by(cmd: &str, scan: fn(&str) -> Vec<String>) -> Option<Vec<(usize, String)>> {
+    let line_level = scan(cmd);
     let mut per_segment: Vec<(usize, String)> = Vec::new();
     for (seg_idx, seg) in split_segments_with_separators(cmd).iter().enumerate() {
-        for target in redirect_targets(&seg.text) {
+        for target in scan(&seg.text) {
             per_segment.push((seg_idx, target));
         }
     }

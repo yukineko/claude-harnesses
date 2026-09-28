@@ -209,5 +209,83 @@ class CanaryHaltLeavesNoDarkEntry(unittest.TestCase):
                 )
 
 
+class ConcurrentRolloutIsExcluded(unittest.TestCase):
+    """e3366b5c (second half): two rollouts must not run at once. The script
+    takes an exclusive mkdir lock at "$CLAUDE_PLUGIN_CACHE/.rollout.lock" and
+    fails closed (non-zero, before touching registry/cache) on contention,
+    including a STALE lock (holder pid dead): never stolen silently."""
+
+    PLUGIN = "taskprog"  # non-gate crate: no canary requirement
+
+    def _sandbox(self, tmp):
+        tmp = Path(tmp)
+        home, cache = tmp / "home", tmp / "cache" / "yukineko"
+        reg = tmp / "installed_plugins.json"
+        home.mkdir()
+        d = cache / self.PLUGIN / "0.0.1-prior"
+        d.mkdir(parents=True)
+        (d / "marker").write_text("prior")
+        _write_registry(reg, {self.PLUGIN: ("0.0.1-prior", d)})
+        return tmp, home, cache, reg
+
+    def _run(self, home, cache, reg):
+        return subprocess.run(
+            ["bash", str(ROLLOUT), "--plugin", self.PLUGIN, "--no-rebuild", "--no-sync"],
+            env=_env(home, cache, reg), capture_output=True, text=True, cwd=str(REPO),
+        )
+
+    @staticmethod
+    def _listing(cache):
+        return sorted(str(p.relative_to(cache)) for p in cache.rglob("*")
+                      if ".rollout.lock" not in p.parts)
+
+    def _make_lock(self, cache, pid):
+        lock = cache / ".rollout.lock"
+        lock.mkdir()
+        (lock / "pid").write_text(f"{pid}\n")
+        return lock
+
+    def _assert_refused(self, r, reg, before_reg, cache, before_list, lock, pid):
+        log = r.stdout + r.stderr
+        self.assertNotEqual(r.returncode, 0, f"rollout ran despite held lock\n{log}")
+        self.assertEqual(reg.read_bytes(), before_reg, "registry modified under a held lock")
+        self.assertEqual(self._listing(cache), before_list, "cache modified under a held lock")
+        self.assertIn(".rollout.lock", r.stderr, f"stderr does not name the lock\n{log}")
+        self.assertTrue(lock.is_dir(), "another session's lock was removed/stolen")
+        return log
+
+    def test_live_holder_blocks_second_rollout(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp, home, cache, reg = self._sandbox(t)
+            pid = os.getpid()  # a live process
+            lock = self._make_lock(cache, pid)
+            before_reg, before_list = reg.read_bytes(), self._listing(cache)
+            r = self._run(home, cache, reg)
+            log = self._assert_refused(r, reg, before_reg, cache, before_list, lock, pid)
+            self.assertIn(str(pid), r.stderr, f"stderr does not name the holder pid\n{log}")
+
+    def test_stale_lock_is_not_silently_stolen(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp, home, cache, reg = self._sandbox(t)
+            dead = subprocess.Popen([sys.executable, "-c", "pass"])
+            dead.wait()  # reaped: pid is dead
+            lock = self._make_lock(cache, dead.pid)
+            before_reg, before_list = reg.read_bytes(), self._listing(cache)
+            r = self._run(home, cache, reg)
+            log = self._assert_refused(r, reg, before_reg, cache, before_list, lock, dead.pid)
+            self.assertIn("rm -r", log, f"stale-lock message must say how to remove it\n{log}")
+
+    def test_control_without_lock_proceeds_and_releases(self):
+        """Control: 'always refuse' would pass the tests above. Without a lock
+        the run must get past the lock stage and not leave the lock behind."""
+        with tempfile.TemporaryDirectory() as t:
+            tmp, home, cache, reg = self._sandbox(t)
+            r = self._run(home, cache, reg)
+            log = r.stdout + r.stderr
+            self.assertNotIn(".rollout.lock", log, f"refused with no lock present\n{log}")
+            self.assertIn(f"copied {self.PLUGIN} ->", log, f"rollout did not proceed\n{log}")
+            self.assertFalse((cache / ".rollout.lock").exists(), "lock left behind after run")
+
+
 if __name__ == "__main__":
     unittest.main()

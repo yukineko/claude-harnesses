@@ -1229,4 +1229,63 @@ mod tests {
             other => panic!("expected Known, got {other:?}"),
         }
     }
+
+    // 842d552c: overwatch's honest "could not read the lease ledger" arrives as
+    // a top-level `undetermined` array (source "sessions") next to an absent
+    // `sessions` key. It must not be read as "zero peers".
+    #[test]
+    fn overwatch_undetermined_sessions_source_is_undetermined_not_zero_peers() {
+        let json = r#"{"undetermined":[{"source":"sessions","reason":"cannot read leases.json"}]}"#;
+        assert!(
+            matches!(
+                parse_overwatch_sessions(json, None),
+                Determination::Undetermined(_)
+            ),
+            "an unreadable roster must resolve to Undetermined, got {:?}",
+            parse_overwatch_sessions(json, None)
+        );
+    }
+
+    #[test]
+    fn overwatch_undetermined_sessions_source_wins_over_a_partial_roster() {
+        let json = r#"{"sessions":[{"session_id":"idle","leases":[],"live_count":0}],
+            "undetermined":[{"source":"sessions","reason":"partial read"}]}"#;
+        assert!(
+            matches!(
+                parse_overwatch_sessions(json, Some("me")),
+                Determination::Undetermined(_)
+            ),
+            "got {:?}",
+            parse_overwatch_sessions(json, Some("me"))
+        );
+    }
+
+    #[test]
+    fn overwatch_undetermined_sessions_blocks_the_guard() {
+        let mut obs = blocking();
+        obs.peers = parse_overwatch_sessions(
+            r#"{"undetermined":[{"source":"sessions","reason":"cannot read leases.json"}]}"#,
+            None,
+        );
+        let d = decide(obs, None);
+        assert!(d.blocks(), "unreadable roster must block, got {d:?}");
+    }
+
+    #[test]
+    fn overwatch_clean_empty_roster_control_stays_zero_peers() {
+        assert_eq!(
+            parse_overwatch_sessions(r#"{"undetermined":[]}"#, None),
+            Determination::Known(vec![])
+        );
+    }
+
+    #[test]
+    fn overwatch_live_peer_control_still_reports_peer_with_empty_undetermined() {
+        let json =
+            r#"{"sessions":[{"session_id":"other","leases":[],"live_count":1}],"undetermined":[]}"#;
+        match parse_overwatch_sessions(json, Some("me")) {
+            Determination::Known(p) => assert_eq!(p.len(), 1),
+            other => panic!("expected Known, got {other:?}"),
+        }
+    }
 }

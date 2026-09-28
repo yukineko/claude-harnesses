@@ -18253,3 +18253,21 @@ updated_at = 1790253005
 weight = 0.0
 issue_number = 796
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/796"
+
+[[task]]
+id = "400d685b"
+title = ".githooks/pre-push の enablement 助言文が、未観測の hook 挙動を断定したまま残っている (2ae5503f の修正漏れ)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-18、backlog 2ae5503f (commit 3e28dc16) で scripts/check-plugin-rollout.py の per-finding メッセージから「none of its hooks fire, so the gate silently guards nothing」という**観測していない挙動の断定**を撤去した。しかし同一クラスの断定が .githooks/pre-push:252-254 の heredoc にも独立した文字列として存在しており、そちらは直していない。実測: 本日 ee15cd2e を push した際の pre-push 出力に逐語で 'A GATE crate that is installed but not listed in enabledPlugins is inert: its hooks never fire, so the gate reports nothing and guards nothing.' が出た。この文の直前に表示される per-finding 側は既に修正後の「whether its hooks actually fire was NOT observed by this check」に変わっており、**同じ画面で 2 つの文が矛盾している**。しかもこの断定は同じ 2026-09-18 に反証済みである: blastguard@yukineko が false のまま blastguard の hook が実際に発火するのを複数回観測した。CLAUDE.md 第4節「docstring / コメントで実挙動と違う『安全な話』を書く」の禁止に当たり、かつ第1節の「判定を持つ」判定 — この文は人間が『このゲートは死んでいる』と読んで調査を打ち切る根拠になるので、下流消費者が存在する。修正方向: check-plugin-rollout.py 側と同じ文言に揃える。すなわち「enabledPlugins に載っていないので Claude Code はロードしない設定であり inert のはず。ただし hook が実際に発火するかどうかは、このチェックは観測していない (enabledPlugins しか読まない)。known-dead ではなく unverified として扱え」。テスト: scripts/test_prepush_hook.py に、enablement クラス (rc=2) の助言文が 'hooks never fire' / 'guards nothing' を含まないことと、代わりに未観測であることを明示していることを固定するケースを足す。先に RED を観測してから直すこと。教訓: 同一の誤りが複数ファイルに独立した文字列として存在するとき、1 箇所直して『直した』と報告するのは第4節の隠蔽に接続する。grep で全出現を列挙してから直すこと。"
+created_at = 1789719672
+updated_at = 1789719672
+weight = 0.0
+issue_number = 673
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/673"

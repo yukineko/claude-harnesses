@@ -21621,3 +21621,205 @@ updated_at = 1790634553
 weight = 0.0
 issue_number = 808
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/808"
+
+[[task]]
+id = "9fdb49d8"
+title = "guard-maintree-bash.py の SEPARATORS に改行が無く、複数行 Bash の 2 行目以降が 1 行目の mutator の operand として吸収される (main tree 外の cp/rm も refuse)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "worktree-hygiene",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-09-24、測定点 32af5418。~/.claude/settings.json のバックアップを取ろうとして
+ブロックされ、切り分けた結果。
+
+逐語のブロック文言:
+  Refused: `cp /Users/yuki/.claude/settings.json /Users/yuki/.claude/settings.json.bak-20260924-gauge-hook`
+  mutates this project's MAIN working tree.
+しかし source も destination も /Users/yuki/.claude/ 配下で、main tree の外である。
+
+機構 (guard を直接 stdin JSON で叩いて確定させた。コマンドは実行していない):
+  scripts/guard-maintree-bash.py:299 の lexer は
+    shlex.shlex(command, posix=True, punctuation_chars="();<>|&(改行)(復帰)")
+  で改行を独立したトークンとして切り出す。ところが 75 行目の
+    SEPARATORS = frozenset({";", "&&", "||", "|", "&", ";;", "|&", "(", ")"})
+  に改行が入っていない。_candidate_targets の segment 分割 (336 行目 `if tok in SEPARATORS`)
+  は改行を separator と認識せず else 節へ落とすため、**改行は segment を切らない**。
+  結果、複数行コマンドの 2 行目以降の語が、1 行目の mutator の operand として
+  吸収される。TARGET_ALL に cp/rm/mv/touch/tee/mkdir 等が入っているので、
+  それらの後続行の語が main tree root 相対で解決され、not-ignored として refuse される。
+
+決定的コントロール (同一の cp を separator だけ変えて 5 通り):
+  改行区切り                                        -> REFUSE
+  ; 区切り                                          -> allow
+  && 区切り                                         -> allow
+  改行 + 無害な語 1 つ (ls)                          -> REFUSE
+  rm /tmp/zzz (改行) echo done                      -> REFUSE (対象は /tmp なのに)
+cp 単体 (1 行) は allow。つまり cp の target 判定自体は正しく、改行の扱いだけが原因。
+
+影響範囲: 複数行の Bash コマンドに mutator が 1 つでも含まれると、対象が main tree の
+外 (worktree / /tmp / ~/.claude) であっても refuse される。agent は複数行 Bash を
+日常的に書くので、誤検知の頻度は高い。実際このセッションでは worktree 作業中に
+2 回踏んだ。
+
+向きについて: これは over-block であり CLAUDE.md 第3節の安全側ではある。ただし
+『判定不能だから block』ではなく『パースを誤って main tree だと判定した』であって、
+誤検知は第5節が警告する迂回圧力 (共有 skip ファイル・環境変数での無効化) を生む。
+実際このセッションでも separator を変える回避が可能だと分かってしまっている
+(; や && なら通る)。誤検知を放置すると、その回避が常態化する。
+
+修正案: SEPARATORS に改行と復帰を加える。lexer が既に独立トークンとして出している
+ので 1 行で済む。回帰テストは上のコントロール 5 本をそのまま使える
+(特に『rm /tmp/zzz + 改行 + echo done』は対象が main tree 外であることが自明)。
+
+done_criteria: 複数行コマンドで、mutator の対象がすべて main tree 外なら allow される。
+かつ 2 行目に main tree 内への実際の mutation を置いた場合は従来どおり refuse される
+(改行を separator にしたことで検出漏れが生まれないことを RED で先に観測する)。
+
+[triage 2026-09-29 @546d9fa2] p1->p0: probed: guard-maintree-bash.py SEPARATORS (:75) lacks newline; echo hi NEWLINE rm <main>/README.md rc=0 (single-line rc=2); lets a session destroy uncommitted work in main
+
+[p0 fix 2026-09-29] fixed in caef0517 (merged 13fd30d6): unquoted newline becomes a separator; RED tests 5a69791a, 98 tests OK."""
+created_at = 1790217907
+updated_at = 1790634890
+weight = 0.0
+issue_number = 763
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/763"
+
+[[task]]
+id = "02bdd012"
+title = "guard-maintree-bash.py: hook payload が JSON でない / dict でないと exit 0 (allow) する fail-open を直す (:474-479)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+touched_files = []
+status = "done"
+notes = """
+Found by p2 triage subagent 2026-09-29 @b325a169; subagent probed: non-JSON payload gave rc=0. Parse failure must resolve to block (exit 2) per CLAUDE.md 3.
+
+[triage 2026-09-29 @546d9fa2] p1->p0: guard-maintree-bash.py non-JSON / non-dict payload -> return 0 allow (:474-479); blocking gate fail-open against CLAUDE.md 3
+
+[p0 fix 2026-09-29] fixed in caef0517 (merged 13fd30d6): non-JSON / non-dict / empty payload exits 2; non-dict tool_input and non-string command also deny."""
+created_at = 1790631150
+updated_at = 1790634891
+weight = 0.0
+issue_number = 810
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/810"
+
+[[task]]
+id = "c02273d9"
+title = "blastguard: project 内の plain untracked ファイルの rm が allow — git が復元できないのに 2026-09-14 ruling の rule 1 を満たさない"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p0"]
+touched_files = []
+status = "done"
+notes = """
+
+
+[triage 2026-09-29 @546d9fa2] p1->p0: blastguard allows single-file rm of untracked/modified file unattended (detect.rs:6394-6396); irreversible data loss
+
+[triage 2026-09-29] closed without work by user ruling: the 2026-09-18 ruling (worktree-internal rm/grep/edit must not ask; reversible.rs decide_recovery docs ~136-160) supersedes the 2026-09-14 rule 1 this item cited."""
+created_at = 1789349260
+updated_at = 1790634891
+weight = 0.0
+issue_number = 644
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/644"
+
+[[task]]
+id = "10b72c4d"
+title = "trust::add の read-back 検証がノーテスト かつ TOCTOU (F5)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "verified",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """
+mutation M3 (read-back を無効化) が cargo test -p condukt exit 0 で生き残った = kill rate ゼロ。worktree.rs:497-505 の読み戻しには一切テストが無い。加えて trust::add は load_file→push→write_file でクロスプロセスロックが無く (trust.rs:79-90)、read-back 自体も TOCTOU: 読み戻しの後に着地した並行 clobber は Ok(path) を返す。コメント worktree.rs:483-487 の 'a missing one is treated as a failure' はその窓の中に落ちた race についてのみ真。穴を狭めるが塞がない。検証者は負ける race を構成できなかったので有効性は UNVERIFIED。
+
+[triage 2026-09-29 @b325a169] p2->p1: trust::add unlocked load-push-write, and load_file maps unreadable trust.toml to empty then overwrites -> whole list wiped
+
+[triage 2026-09-29 @546d9fa2] p1->p0: trust.rs:67-73 load_file maps read/parse failure to empty list and :239-249 add writes it back, wiping all trust (no lock); donegate then falls to refuse -> allow after cap
+
+[p0 fix 2026-09-29] fixed a1125a36 (merged 7488bf87): strict read + flock + atomic write in trust add/remove; RED 64488925, 4/4 green"""
+created_at = 1785971974
+updated_at = 1790634971
+weight = 0.0
+issue_number = 183
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/183"
+
+[[task]]
+id = "207d0da6"
+title = "budgetguard: ledger.json が壊れていると当日合計が「自セッション分だけ」に潰れ、既存の day_undetermined_verdict を通らず通常の verdict 比較へ流れる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "budgetguard",
+    "verdict-path",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """
+crates/budgetguard/src/gate.rs:148-164。
+
+監査の所見 (CONFIRMED): ledger.json が読めない/壊れている場合、当日合計として
+自セッションのコストをそのまま使い、通常の verdict() 比較へ渡している。すぐ上の
+分岐では「ロックが取れなかった」という対称なケースに対して day_undetermined_verdict
+という専用関数を通しているのに、こちらは通っていない。同じ「判定不能」の 2 形が
+別の出口を持っている。
+
+監査者が明示的に注意を促している点: コード自身のコメントは
+「conservative: never under-reports」と書いており、別の sub-agent はこの文言を
+額面どおり受け取って「既に fail-closed」と誤分類した。監査者はソースを読み直して
+その誤分類を訂正している。コメントを根拠にしないこと (CLAUDE.md 4)。
+
+なお本 item の起票にあたり、元の ticket 67e95a19 の前提「budgetguard は
+harness_core::verdict を 1 file でしか使っていない」は誤りであることも測定された
+(実際は 3 file)。budgetguard は 3 クレート中もっとも硬い。
+
+出典: docs/audit-dod9-lowadoption-verdict-paths.md (67e95a19 の監査フェーズ。
+独立した agent が read-only で実施し、CONFIRMED 3 / UNVERIFIED 5 を報告)。
+本 item は CONFIRMED のうち 1 件を実装タスクとして切り出したもの。
+
+重要: 本 item はまだ RED を観測していない。監査の逐語引用と消費経路の追跡までが
+済んだ状態であり、着手する人は「まず注入して赤を見る」ところから始めること
+(CLAUDE.md 2(b))。テストは実装者と別の agent に書かせること (2(a))。
+
+
+[triage 2026-09-29 @546d9fa2] p1->p0: budgetguard gate.rs:148-160 corrupt ledger -> session_usd used as day_usd in normal verdict; day-budget block cannot fire (blocking Stop gate fail-open)
+
+[p0 fix 2026-09-29] fixed 9384a4e4 (merged 7488bf87): corrupt ledger routes to day_undetermined_verdict; save failure reported on stderr; budgetguard 42+5+5 green"""
+created_at = 1790253338
+updated_at = 1790634973
+weight = 0.0
+issue_number = 798
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/798"
+
+[[task]]
+id = "617b3112"
+title = "condukt merge gate: overwatch store 読み取り失敗を『hold なし』としてマージを通す fail-open を直す (worktree.rs:855 open_merge_conflicts(repo).ok()?)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+touched_files = []
+status = "done"
+notes = """
+Found by p2 triage subagent 2026-09-29 @b325a169, not yet independently verified. crates/condukt/src/worktree.rs:855 does open_merge_conflicts(repo).ok()?; doc at :849-851 says never blocks a merge on a compute error. Undetermined should block/ask per CLAUDE.md 3. Adjacent to 7a1beb86.
+
+[triage 2026-09-29 @546d9fa2] p1->p0: condukt merge gate worktree.rs:855 open_merge_conflicts(repo).ok()? lets merge through when overwatch store is unreadable; docstring states it as intended
+
+[p0 fix 2026-09-29] fixed 3f6fdfa0 (merged 8ddf4504): tri-state scan_open_merge_conflicts; undetermined refuses merge; docstring corrected"""
+created_at = 1790631148
+updated_at = 1790634975
+weight = 0.0
+issue_number = 809
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/809"

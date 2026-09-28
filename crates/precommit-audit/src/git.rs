@@ -174,6 +174,64 @@ pub fn grep_files(cwd: &Path, pattern: &str) -> Result<Vec<String>, String> {
     }
 }
 
+/// Whether `cwd` has a commit to audit against.
+#[derive(Debug, PartialEq, Eq)]
+pub enum HeadState {
+    /// Not inside any git repository.
+    NoRepo,
+    /// A repository whose current branch has no commit yet (right after `git init`).
+    Unborn,
+    /// HEAD resolves to a ref that exists, or is detached.
+    Born,
+}
+
+/// Classify `cwd` as no-repo / unborn / born. Both "no" states are positively
+/// observed, never inferred from a failure: anything git reports that is not
+/// exactly "not a git repository" or "the branch ref does not exist" (dubious
+/// ownership, a corrupt ref, spawn failure) is `Err`, so the caller's
+/// fail-closed path still sees it.
+pub fn head_state(cwd: &Path) -> Result<HeadState, String> {
+    // LC_ALL=C: the not-a-repo check matches git's message, which is localized.
+    let args = &["rev-parse", "--git-dir"];
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("LC_ALL", "C")
+        .output()
+        .map_err(|e| format!("failed to run `git {}`: {e}", args.join(" ")))?;
+    if !out.status.success() {
+        let o = GitOut {
+            code: out.status.code(),
+            stdout: String::new(),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        };
+        if o.code == Some(128) && o.stderr.contains("not a git repository") {
+            return Ok(HeadState::NoRepo);
+        }
+        return Err(exit_reason(args, &o));
+    }
+
+    // Exit 1 = detached HEAD: there is a commit, let the normal diff handle it.
+    let args = &["symbolic-ref", "-q", "HEAD"];
+    let o = run_git(cwd, args)?;
+    let branch = match o.code {
+        Some(0) => o.stdout.trim().to_string(),
+        Some(1) => return Ok(HeadState::Born),
+        _ => return Err(exit_reason(args, &o)),
+    };
+
+    // `show-ref --verify` exits 1 only when the ref is absent; a ref pointing at
+    // a missing object is 128 (whereas `rev-parse --verify HEAD` accepts it).
+    let args = &["show-ref", "--verify", "-q", branch.as_str()];
+    let o = run_git(cwd, args)?;
+    match o.code {
+        Some(0) => Ok(HeadState::Born),
+        Some(1) => Ok(HeadState::Unborn),
+        _ => Err(exit_reason(args, &o)),
+    }
+}
+
 /// `git rev-parse --show-toplevel`: the repo root, or None outside a repo.
 /// (A not-a-repo non-zero exit OR spawn failure both yield None; the caller
 /// falls back to cwd and the real fail-closed gate is `changed_and_untracked`.)
@@ -212,6 +270,86 @@ mod tests {
         let r = changed_and_untracked(&dir);
         let _ = std::fs::remove_dir_all(&dir);
         assert!(r.is_err(), "git failure must fail closed, got {r:?}");
+    }
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("pca-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn git_in(dir: &Path, args: &[&str]) {
+        let o = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(
+            o.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    }
+
+    #[test]
+    fn head_state_outside_a_repo_is_no_repo() {
+        let dir = scratch("hs-norepo");
+        let s = head_state(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(s, Ok(HeadState::NoRepo));
+    }
+
+    #[test]
+    fn head_state_right_after_init_is_unborn() {
+        let dir = scratch("hs-unborn");
+        git_in(&dir, &["init", "-q"]);
+        let s = head_state(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(s, Ok(HeadState::Unborn));
+    }
+
+    #[test]
+    fn head_state_with_a_commit_is_born() {
+        let dir = scratch("hs-born");
+        git_in(&dir, &["init", "-q"]);
+        git_in(
+            &dir,
+            &[
+                "-c",
+                "user.name=T",
+                "-c",
+                "user.email=t@example.com",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "i",
+            ],
+        );
+        let s = head_state(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(s, Ok(HeadState::Born));
+    }
+
+    #[test]
+    fn head_state_with_a_corrupt_branch_ref_is_an_error_not_unborn() {
+        // The branch ref exists but names a missing object: a broken repo, not
+        // an empty one. It must stay on the fail-closed path.
+        let dir = scratch("hs-corrupt");
+        git_in(&dir, &["init", "-q"]);
+        let o = Command::new("git")
+            .args(["symbolic-ref", "HEAD"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let branch = String::from_utf8_lossy(&o.stdout).trim().to_string();
+        let ref_path = dir.join(".git").join(&branch);
+        std::fs::create_dir_all(ref_path.parent().unwrap()).unwrap();
+        std::fs::write(&ref_path, "1111111111111111111111111111111111111111\n").unwrap();
+        let s = head_state(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(s.is_err(), "corrupt ref must be Err, got {s:?}");
     }
 
     #[test]

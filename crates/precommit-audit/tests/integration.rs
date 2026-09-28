@@ -449,3 +449,32 @@ fn line_ending_lf_in_sh_is_fine() {
     let (code, err) = run(&dir);
     assert_eq!(code, 0, "LF .sh is correct; stderr: {err}");
 }
+
+// A repository right after `git init` has no HEAD to diff against, and a plain
+// directory has no repository at all: neither has anything to audit, so the
+// gate stays quiet instead of blocking every stop with a git error. The
+// untested source file is there to prove the exit 0 is the no-commit path, not
+// a clean audit.
+#[test]
+fn unborn_repo_is_not_audited() {
+    let dir = unique_dir();
+    git(&dir, &["init", "-q"]);
+    write(&dir, ".precommit-audit.toml", NO_LINTERS);
+    write(&dir, "app.py", "def add(a, b):\n    return a + b\n");
+    git(&dir, &["add", "-A"]);
+    let (code, err) = run(&dir);
+    assert_eq!(code, 0, "stderr: {err}");
+    assert!(!err.contains("TEST MISSING"), "stderr: {err}");
+    let (code, err) = run_stop_event(&dir, "Stop");
+    assert_eq!(code, 0, "stderr: {err}");
+}
+
+#[test]
+fn directory_outside_any_repo_is_not_audited() {
+    let dir = unique_dir();
+    write(&dir, "app.py", "def add(a, b):\n    return a + b\n");
+    let (code, err) = run(&dir);
+    assert_eq!(code, 0, "stderr: {err}");
+    let (code, err) = run_stop_event(&dir, "Stop");
+    assert_eq!(code, 0, "stderr: {err}");
+}

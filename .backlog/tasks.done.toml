@@ -17256,3 +17256,27 @@ updated_at = 1790631306
 weight = 0.0
 issue_number = 399
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/399"
+
+[[task]]
+id = "9b7cb342"
+title = "flow が取った task claim は持ち主のセッションが死んでも永久に reap されない（run state が存在しないため claim_progress が常に Undetermined）"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "claim",
+    "flow",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """
+measured 2026-09-29 @ b325a169: condukt state claims に flow-2444be10-e07a-4c9a-a785-01f58d3995fa の task claim 2 件 (a84f66653d44ef60=d186c736, 46d79df934a28f2b=1875f626) が heartbeat 114.6h 前のまま live 扱いで残存。保持セッションの transcript 2444be10-...jsonl の mtime は 2026-09-25 16:59 (4 日前)。p0 2 件がこれにより着手不能 (claim-task rc=1)。
+原因の読み: flow skill は condukt state claim-task --run flow-SID を呼ぶが state init をしないので run state JSON が存在しない (find ~/.condukt/state -name flow-2444be10* は circuit-log.jsonl のみ)。crates/condukt/src/claim.rs claim_progress は RunState::load 失敗で run-worktree-heads と run-tasks を Undetermined にし、fingerprint 全体が Undetermined、retain_claim は Undetermined を保持 (fail-closed) — よって flow 由来の claim は構造的に reap 不能。加えて state dir が cwd の worktree ごとに分かれる (session-34385c9e-... vs harness-e77d23c7) ので、仮に run state があっても別 worktree からは読めない可能性 (未検証)。
+二つの読み: (a) 実在の欠陥: 停止した flow セッションの claim が永久にキューを塞ぐ (starvation)。(b) 意図的: 判定不能は保持が正しい。ただし (b) でも永久保持を解消する経路 (run state 不在の claim は transcript 信号だけで判定する、または flow が run state を作る) が無いのは欠陥。
+見分け方: flow-* の claim を作り session transcript を凍結させ、progress window 経過後に reap されるかを test で観測する。"""
+created_at = 1790630824
+updated_at = 1790634553
+weight = 0.0
+issue_number = 808
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/808"

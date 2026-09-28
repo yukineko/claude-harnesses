@@ -1036,6 +1036,13 @@ enum StateAction {
         /// Opaque task hashkey to claim (repeatable, required).
         #[arg(long)]
         hashkey: Vec<String>,
+        /// Mark the claim STATELESS: this run never writes run-state JSON (a
+        /// `/flow` run). Only a marked claim is reaped on transcript evidence
+        /// alone once its heartbeat lapses; an unmarked claim with no readable
+        /// run state is kept forever (cannot determine => keep). Sticky across
+        /// re-claims by the same run.
+        #[arg(long)]
+        stateless: bool,
     },
     /// Release task hashkeys from the task-claim registry (call when a task
     /// reaches a terminal status). Prints the number of claims released.
@@ -4515,6 +4522,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             session,
             title,
             hashkey,
+            stateless,
         } => {
             let session = session.or_else(session_id_from_env);
             let out = claim::claim_tasks(
@@ -4525,6 +4533,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                 session.as_deref(),
                 state::now_secs(),
                 title.as_deref(),
+                stateless,
             )?;
             println!("{}", serde_json::to_string_pretty(&out)?);
             if !out.skipped.is_empty() {

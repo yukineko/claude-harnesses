@@ -186,7 +186,7 @@ mod tests {
     #[test]
     fn ask_available_does_not_panic_in_the_real_environment() {
         // Whatever this test process's environment is, the gate must answer
-        // without panicking (never-break-a-turn).
+        // without panicking (a panic here would make the verdict barrier block every call).
         let _ = ask_available();
     }
 

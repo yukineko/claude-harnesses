@@ -243,9 +243,13 @@ blastguard はこの「破壊的だが不可逆な少数のパターン」だけ
 （`crates/blastguard/src/main.rs` の `analyse` が `std::panic::catch_unwind` で panic を
 捕捉し `Decision::deny(INTERNAL_ERROR_REASON)` を返す）。これは
 `Decision::{Allow, Deny, Ask}` の三値設計（`src/model.rs`）を保つための挙動であり、
-「判定できなかった」を「安全である」に丸め込まない。プロセス自体（stdin 読み取り・
-JSON 出力）がクラッシュしないことは `harness_core::hook::run_hook` が保証するが、
-これは判定を持たない外側の backstop であり、上記の deny-on-panic とは別レイヤーである。
+「判定できなかった」を「安全である」に丸め込まない。`analyse` の外側（stdin 読み取り・
+パース・承認メモリ参照・判定 JSON の出力）で起きた panic も判定経路上の panic であり、
+`main.rs` の `run_verdict_guarded` が捕捉して **exit 2（PreToolUse のブロック）** に
+解決し、panic メッセージを stderr に出す。0.2.75 より前はここが
+`harness_core::hook::run_hook`（panic を握って exit 0 ＝ allow）で、stdout を閉じた状態で
+deny を出力しようとすると EPIPE で panic し、そのまま allow になっていた（backlog 70883137）。
+exit 2 を使うのは、panic したのが stdout 書き込みそのものでありうるためである。
 広く構えすぎて通常作業を妨げるより、明確に危険なものだけを確実に止めることを優先
 している。
 

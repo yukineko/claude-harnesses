@@ -10,7 +10,9 @@ Canonical direction: Cargo.toml == plugin.json is the source of truth; marketpla
 must never lag. This is a repo bug when it drifts — a stale marketplace entry makes
 sync-plugin-assets.sh resolve the wrong cache dir and ships an old version to users.
 
-Exit 0 if fully consistent, 1 if any drift (usable as a pre-commit / pre-rebuild gate).
+Exit 0 if fully consistent, 1 if any drift, 2 if zero plugins were found to check
+(an empty set is "cannot determine", not "consistent"). Usable as a pre-commit /
+pre-rebuild gate.
 Run from the repo root:  python3 scripts/check-plugin-versions.py
 """
 import json
@@ -65,6 +67,18 @@ def main():
             cv = cargo_package_version(cargo)
             if cv != pjv:
                 problems.append(f"{name}: Cargo.toml={cv} != plugin.json={pjv}")
+
+    if checked == 0:
+        # Nothing was compared. "0 plugins consistent" is vacuous, and reading it
+        # as a pass would let a wrong cwd, a moved crates/ layout, or a lost
+        # plugin.json disable the gate while it reports OK (backlog 2cef09c5,
+        # CLAUDE.md §3: an empty set is "cannot determine", not "clean").
+        print(
+            f"check-plugin-versions: no plugin.json found under {CRATES}; "
+            "nothing was checked, refusing to report consistency",
+            file=sys.stderr,
+        )
+        return 2
 
     if problems:
         print(f"VERSION DRIFT ({len(problems)} problem(s) across {checked} plugins):", file=sys.stderr)

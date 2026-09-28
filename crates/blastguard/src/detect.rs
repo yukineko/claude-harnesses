@@ -5853,7 +5853,7 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize, ctx: &Ctx<'_>) 
         // left `cp evil.json .claude/settings.json` as a one-command bypass of
         // the whole protected-path rule. Only the DESTINATION matters here:
         // reading a protected file is harmless, writing one is the hazard.
-        "cp" | "mv" | "install" | "ln" => analyze_copy_move(cmd, rest),
+        "cp" | "mv" | "install" | "ln" => analyze_copy_move(cmd, rest, ctx),
         // Round 2: the single-file and empty-directory twins of `rm`, which had
         // no arm at all. See `analyze_unlink_rmdir`.
         "unlink" | "rmdir" => analyze_unlink_rmdir(cmd, rest),
@@ -6558,7 +6558,15 @@ fn target_directory(rest: &[&str]) -> Option<String> {
 /// model does not describe it (and for a `SRC/` with a trailing slash the model
 /// collapses to `DIR/` itself, which matches nothing). See
 /// [`protected_landing_block`].
-fn analyze_copy_move(cmd: &str, rest: &[&str]) -> Decision {
+///
+/// Every destination shape above is ALSO judged on the system-directory axis
+/// ([`system_path_block`]), after the protected-path axis and in the same order
+/// the redirect rule uses. This function used to consult only the protected
+/// axis, so `cp evil /etc/paths.d/zz`, `install -m755 evil /usr/local/bin/x`
+/// and `mv evil /Library/LaunchDaemons/e.plist` were ALLOW while the redirect
+/// into the very same path was DENY: the same file created, a different
+/// verdict depending only on the verb (backlog d5613105).
+fn analyze_copy_move(cmd: &str, rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     let action = format!("{cmd} destination");
     let operands = positional_operands(rest, COPY_VALUE_FLAGS);
 
@@ -6630,6 +6638,9 @@ path — blastguard cannot tell what it expands to, and mv unlinks it, so it ref
             if let Some(block) = protected_landing_block(&action, &landing) {
                 return block;
             }
+            if let Some(deny) = system_path_block(&action, &landing, ctx) {
+                return deny;
+            }
         }
     }
 
@@ -6647,12 +6658,25 @@ path — blastguard cannot tell what it expands to, and mv unlinks it, so it ref
                 return deny;
             }
         }
+        // SYSTEM-DIRECTORY axis, after the protected one (the redirect rule's
+        // order). The directory itself is judged, and so is each file landed
+        // in it, so `/usr/local/bin/` and `/usr/local/bin/x` cannot disagree.
+        if let Some(deny) = system_path_block(&action, &dir, ctx) {
+            return deny;
+        }
+        for src in sources {
+            let landed = format!("{base}/{}", basename(src));
+            if let Some(deny) = system_path_block(&action, &landed, ctx) {
+                return deny;
+            }
+        }
         return Decision::Allow;
     }
 
     match operands.last() {
         Some(dest) => protected_path_block(&action, dest)
             .or_else(|| protected_glob_deny(&action, dest))
+            .or_else(|| system_path_block(&action, dest, ctx))
             .unwrap_or(Decision::Allow),
         // One operand or none: nothing is being written over (`cp a` is an
         // error, `mv -t DIR` with no source does nothing).

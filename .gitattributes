@@ -48,3 +48,9 @@ crates/*/bin/*-linux-arm64 binary
 crates/*/bin/*-darwin-x86_64 binary
 crates/*/bin/*-darwin-arm64 binary
 crates/*/bin/*-windows-x86_64.exe binary
+
+# backlog task store: id-level 3-way merge (`backlog merge-driver`, backlog
+# 867dde4b). Only effective where `merge.backlog.driver` is configured
+# (`backlog merge-driver --install`); elsewhere git falls back to its text merge.
+.backlog/tasks.toml merge=backlog
+.backlog/tasks.done.toml merge=backlog

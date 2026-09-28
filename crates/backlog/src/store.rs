@@ -239,8 +239,10 @@ pub fn save(path: &Path, tasks: &[Task]) -> Result<()> {
     save_with_syncer(path, tasks, &RealSyncer)
 }
 
-/// Serialize one row set as a `[[task]]` document.
-fn serialize_tasks(tasks: &[Task]) -> Result<String> {
+/// Serialize one row set as a `[[task]]` document. Also the output format of
+/// `backlog merge-driver` (see `crate::merge_driver`), so a merged store is
+/// byte-shaped like one `save` wrote.
+pub(crate) fn serialize_tasks(tasks: &[Task]) -> Result<String> {
     let file = TasksFile {
         task: tasks.to_vec(),
     };
@@ -309,6 +311,12 @@ fn save_with_syncer<S: DurabilitySyncer>(path: &Path, tasks: &[Task], syncer: &S
         write_atomic_with_syncer(&done_file, &text, syncer)?;
     }
     write_atomic_with_syncer(path, &live_text, syncer)
+}
+
+/// Durable atomic write of `text` to `path` with the production syncer. Used
+/// by `crate::merge_driver` to replace git's `%A` file all-or-nothing.
+pub(crate) fn write_atomic(path: &Path, text: &str) -> Result<()> {
+    write_atomic_with_syncer(path, text, &RealSyncer)
 }
 
 /// Durable atomic write of `text` to `path` (temp file, fsync, rename, dir

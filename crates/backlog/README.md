@@ -170,6 +170,48 @@ done file of `<dir>/<stem>.toml` is `<dir>/<stem>.done.toml`.
   moves to the done file the next time any command saves the store under its
   lock.
 
+## Merging the store: `backlog merge-driver`
+
+Both store files are tracked, and every session that works in its own worktree
+edits them, so merges of `.backlog/tasks.toml` / `.backlog/tasks.done.toml` are
+routine. `.gitattributes` marks both files `merge=backlog`, and
+`backlog merge-driver <base> <ours> <theirs>` (git's `%O %A %B`) merges them per
+task id instead of per line:
+
+- the union of ids; a task deleted on one side (relative to base) and left
+  unchanged on the other stays deleted; a task changed on only one side takes
+  that side;
+- the same id changed differently on both sides (edit/edit, edit/delete, or the
+  same new id added with different content) is a **conflict**: no side is
+  picked, the driver exits non-zero, `<ours>` is left untouched and git marks
+  the file unmerged for a human;
+- anything it cannot determine — an input that does not parse, a row without a
+  string `id`, a duplicate id in one input, an unknown top-level key, a result
+  that does not re-parse to exactly the merged rows — is also a non-zero exit
+  with `<ours>` untouched. A clean result is written atomically.
+
+Output is rendered with the same writer `backlog` uses when every row
+round-trips through the task schema, so merging a store with itself is
+byte-identical; rows carrying fields this binary does not know are kept (the
+generic TOML rendering is used then).
+
+**The driver only runs where it is configured.** `.gitattributes` names the
+driver, but its command lives in git config, which is not versioned. In a repo
+(or clone) where `merge.backlog.driver` is not set, git ignores `merge=backlog`
+and falls back to its ordinary line-based text merge — the behaviour before
+this driver existed. Configure it per repository with:
+
+```sh
+backlog merge-driver --install   # run inside the repo
+```
+
+This writes `merge.backlog.name` and `merge.backlog.driver` (the absolute path
+of the running `backlog` binary) into the repo's local git config (shared by all
+of its worktrees). The path is that binary's: if it later moves or is pruned,
+the driver command fails, which git treats as a conflict (not a silent text
+merge) — re-run `--install`. Whether to wire this automatically (e.g. from a
+hook) is not decided here.
+
 ## Cross-checkout claim exclusion (`next --claim`)
 
 The store follows the checkout on purpose: `<repo root>/.backlog/tasks.toml`,

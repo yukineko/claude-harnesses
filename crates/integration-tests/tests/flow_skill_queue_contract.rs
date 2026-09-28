@@ -167,3 +167,73 @@ fn undetermined_liveness_is_not_read_as_free() {
          observation that nobody is driving"
     );
 }
+
+/// Every `condukt state claim-task` invocation in the fenced code blocks must
+/// include the `--stateless` flag (backlog 9b7cb342). `/flow` claims under a
+/// synthetic run id (`flow-<session>`) and never runs `condukt state init`, so
+/// no run-state JSON exists for that run. An UNMARKED claim whose run state is
+/// missing is kept forever (missing run state is "cannot determine", because
+/// claims are repo-wide while run state is per-worktree), so a dead `/flow`
+/// session's claims would never be reaped and would starve the queue. The
+/// marker makes condukt judge the claim on the owning session's transcript
+/// alone. This pins the skill TEXT only; the reaping behaviour itself is tested
+/// in condukt's `claim::tests::stateless_*`.
+#[test]
+fn every_claim_task_invocation_is_marked_stateless() {
+    let md = skill();
+    let fenced = fenced_lines(&md);
+
+    // Collect lines containing 'condukt state claim-task' and handle backslash
+    // continuations to form complete commands.
+    let mut invocations = Vec::new();
+    let mut current_cmd = String::new();
+
+    for line in fenced {
+        // If we're continuing from a previous line, add a space separator
+        if !current_cmd.is_empty() {
+            current_cmd.push(' ');
+        }
+
+        // Check if this line ends with backslash (line continuation)
+        if line.ends_with('\\') {
+            // Remove the trailing backslash and add to accumulator
+            current_cmd.push_str(&line[..line.len() - 1]);
+        } else {
+            // No continuation; this completes the command (or is a single line)
+            current_cmd.push_str(&line);
+
+            // If the completed command contains the invocation, record it
+            if current_cmd.contains("condukt state claim-task") {
+                invocations.push(current_cmd.clone());
+            }
+
+            current_cmd.clear();
+        }
+    }
+
+    // If there's a leftover command being built (shouldn't happen in well-formed
+    // markdown, but handle it anyway), check it too.
+    if !current_cmd.is_empty() && current_cmd.contains("condukt state claim-task") {
+        invocations.push(current_cmd);
+    }
+
+    // Assert we found at least one invocation (if zero, the test data is invalid).
+    assert!(
+        !invocations.is_empty(),
+        "expected to find at least one 'condukt state claim-task' invocation in \
+         the fenced code blocks of SKILL.md, but found none. If this is \
+         correct, the contract test itself may need updating."
+    );
+
+    // Assert every invocation has the --stateless flag.
+    for invocation in &invocations {
+        assert!(
+            invocation.contains("--stateless"),
+            "every 'condukt state claim-task' invocation must include the \
+             '--stateless' flag: /flow has no condukt run state, so an \
+             unmarked claim can never be reaped after its session dies \
+             (backlog 9b7cb342).\n\
+             Offending invocation: {invocation}"
+        );
+    }
+}

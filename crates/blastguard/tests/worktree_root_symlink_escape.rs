@@ -98,7 +98,10 @@ fn assert_not_allow(case: &str, out: &str) {
 }
 #[track_caller]
 fn assert_allow(case: &str, out: &str) {
-    assert!(is_allow(out), "{case}: must be Allow (no output); got {out}");
+    assert!(
+        is_allow(out),
+        "{case}: must be Allow (no output); got {out}"
+    );
 }
 
 // ---- escapes: must NOT be Allow ---------------------------------------------
@@ -164,7 +167,10 @@ fn e5_real_root_swapped_for_symlink_in_same_command() {
         hw.display(),
         hw.display()
     ));
-    assert_not_allow("5: mv root old && ln -s victim root && rm -rf root/precious", &out);
+    assert_not_allow(
+        "5: mv root old && ln -s victim root && rm -rf root/precious",
+        &out,
+    );
 }
 
 #[test]

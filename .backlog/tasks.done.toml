@@ -22479,3 +22479,42 @@ updated_at = 1790719255
 weight = 0.0
 issue_number = 89
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/89"
+
+[[task]]
+id = "7c27050b"
+title = "review queue は事実上 write-only — 43 findings が queue 済みで disposition 0 件 (closure 0.00)。reconcile-fixed の運用導線か、bridge 時の自動 disposition が要る"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "review-queue",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+計測日 2026-08-02、測定点 a30b323f、測定コマンド: overwatch review-metrics。closure [condukt-gate] 0.00 (0/4) / [continuous-audit] 0.00 (0/36) / [record-audit] 0.00 (0/3)。457b44f1 で closure rate が計測可能になった結果、初めて見えた事実。specguard は ack 経由で disposition を積むようになったが、他の producer には閉じる導線が無い。review-metrics は『1 finding に fix commit が landed しているが disposition 無し』も警告している。
+
+--- 2026-09-24 再測: 起票時の数字が現状と一致しない。着手せず pending に戻す ---
+起票時 (2026-08-02、測定点 a30b323f) は 43 findings が queue 済みで disposition 0 件、
+closure 0.00 だった。今日の再測:
+
+  overwatch review-metrics -> "(no dispositions recorded yet -- run overwatch record-disposition)"
+  overwatch review-queue --json -> entries: 3
+    [systemic] blastguard:protected-path が 2 task / 1 session で 5 回再発
+    [merge-conflict] x2 (どちらも condukt/run-20260913-182640-69073/... 由来)
+
+43 -> 3 に減っているが、これが「閉じられた」のか「compact-findings で畳まれた」のか
+「別ストアへ移った」のかを今日は測っていない。disposition は依然 0 件なので、
+closure が上がったわけではないことだけは確か。
+
+測ったこと: 現在の queue 件数 (3) と disposition 件数 (0)。
+測っていないこと: 40 件がどこへ行ったか。producer 別の closure。
+  reconcile-fixed / compact-findings の実行履歴。
+
+推測で埋めずに pending へ戻す。次に着手する人は、まず 40 件の行方を測ること —
+それが「導線が無い」のか「導線はあるが通っていない」のかを分ける。"""
+created_at = 1785634225
+updated_at = 1790719771
+weight = 0.0
+issue_number = 116
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/116"

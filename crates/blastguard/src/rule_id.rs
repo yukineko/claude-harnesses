@@ -89,18 +89,32 @@ pub fn rule_id(reason: &str) -> &'static str {
     if reason.contains("is a command blastguard has no rule for") {
         return "unknown-verb-protected-path";
     }
-    // 0.2.59, gate-disabling axis. Both wordings say the same thing about the
-    // same class — an operation with nothing irreversible in it that
-    // nonetheless names a gate/config path — reached once through an
-    // interpreter's OPERANDS (`perl -i -pe … .githooks/pre-commit`) and once
-    // through the string literals INSIDE its program
-    // (`perl -e "unlink q{.githooks/pre-commit}"`). Same id: a recurring one is
-    // the same signal either way, and splitting it would halve the count that
-    // makes it visible.
-    if reason.contains("no irreversible operation in it, but")
-        || reason.contains("that program names")
-    {
-        return "unknown-verb-protected-path";
+    // The same catch-all reached with a command word that is an unexpanded
+    // expansion (`$B .githooks/pre-commit`). Its content is "blastguard cannot
+    // name the program", the fact `unresolvable-command-word` already stands
+    // for, so it is filed there — and it MUST be tested here, before the
+    // generic protected-path arm, because its wording also contains
+    // "is a protected gate/config path".
+    if reason.contains("whose value only exists at run time, and") {
+        return "unresolvable-command-word";
+    }
+    // 0.2.59, gate-disabling axis: an interpreter with nothing irreversible in
+    // it that nonetheless names a gate/config path. Two ids, and neither is
+    // `unknown-verb-protected-path` (1875f626). These used to share that id,
+    // on the argument that one count is more visible than two. It was the
+    // wrong trade: the three wordings are three different findings with three
+    // different fixes — an unknown VERB is the name of the next rule this
+    // crate needs; an interpreter's OPERAND is an in-place editor pointed at a
+    // gate (`perl -i -pe … .githooks/pre-commit`); a path inside the
+    // interpreter's PROGRAM text (`perl -e "unlink q{.githooks/pre-commit}"`)
+    // is a string literal the program may or may not act on. Filed together, a
+    // recurring signature could not say which of the three was recurring, so
+    // the backlog item it produced could not be scoped to a fix.
+    if reason.contains("no irreversible operation in it, but") {
+        return "interpreter-operand-protected-path";
+    }
+    if reason.contains("that program names") {
+        return "interpreter-program-protected-path";
     }
     // The UNTESTED twin, and it earns its own id for the same reason the
     // `Undetermined` verdicts do: it does not say "this is a gate file", it says
@@ -329,6 +343,12 @@ pub fn rule_id(reason: &str) -> &'static str {
     // going unanalysed — that frequency is only visible if the ids are stable.
     if reason.contains("whose value only exists at run time") {
         return "unresolvable-command-word";
+    }
+    // A `for`/`select` variable with more value combinations than the loop
+    // substitution judges (`detect::loop_variants`). Not a finding about the
+    // command: a recurring one says the cap is too low for real loops.
+    if reason.contains("combinations of values here, more than blastguard evaluates") {
+        return "loop-variable-unexpanded";
     }
     // Kept separate from `unresolvable-command-word` even though both come out
     // of the same arm: this one says the head WAS resolved and the resolution
@@ -696,7 +716,7 @@ mod tests {
             // surfaced anyway on the gate-disabling axis.
             (
                 "perl -e \"unlink q{.githooks/pre-commit}\"",
-                "unknown-verb-protected-path",
+                "interpreter-program-protected-path",
             ),
         ] {
             let d = detect::detect("Bash", Some(&json!({ "command": cmd })));

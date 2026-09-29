@@ -56,18 +56,22 @@
 //! [`Decision::exit_code`] yields 0. So the record of what the gate found is not
 //! rewritten by the bypass, and the caller prints the reason to stderr.
 //!
-//! # Known limit of the liveness input, stated rather than hidden
+//! # How the overwatch liveness input separates "none" from "unknown"
 //!
-//! `overwatch status --json` omits the `sessions` key when the roster is empty,
-//! so an object without that key is read here as "zero live leases". That is
-//! `overwatch`'s serializer contract (`skip_serializing_if = "Vec::is_empty"`),
-//! but upstream of it `overwatch::aggregate::build` binds its lease load with
-//! `if let Ok(..)` — an *unreadable* ledger also produces an empty roster, and
-//! the JSON cannot tell the two apart. This module therefore cannot distinguish
-//! "overwatch saw no leases" from "overwatch could not read its ledger". The
-//! second liveness input (`backlog lock status`) is read independently and is
-//! not subject to that flattening, but it does not fully cover the gap. This is
-//! a real residual hole, not a safe degradation.
+//! `overwatch status --json` omits the `sessions` key when the roster is empty
+//! (`skip_serializing_if = "Vec::is_empty"`), so an empty roster alone cannot
+//! tell "overwatch read its lease ledger and saw no leases" from "overwatch
+//! could not read its ledger". `overwatch::aggregate::apply_leases` keeps that
+//! distinction: on a ledger load `Err` it leaves `sessions` empty AND records a
+//! top-level `undetermined` entry with `source: "sessions"`. That array is
+//! likewise omitted when empty, so its absence is overwatch's "every source was
+//! observed". [`parse_overwatch_sessions`] reads `undetermined` BEFORE
+//! `sessions`: a `sessions` entry resolves the whole observation to
+//! `Undetermined`, and so does an `undetermined` value it cannot interpret (not
+//! an array, or an entry without a string `source`), because it cannot rule out
+//! that the unreadable entry was the roster's. Entries for other sources
+//! (`backlog`, `hypotheses`, `runs`, `compass_gap`) are ignored: none of them
+//! feeds `sessions`, which is built only from the lease ledger.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -83,6 +87,12 @@ pub const OVERRIDE_ENV: &str = "CONDUKT_MAINTREE_OVERRIDE";
 /// The environment variable holding this session's id, used to tell "another
 /// session is live" from "I am live".
 pub const SESSION_ENV: &str = "CLAUDE_CODE_SESSION_ID";
+
+/// `overwatch::aggregate::SOURCE_SESSIONS`: the `undetermined[].source` key
+/// overwatch uses when its lease ledger — the only input to `sessions` — could
+/// not be read. Mirrored as a literal because `aggregate` lives in overwatch's
+/// binary crate, not in the `overwatch` library condukt links.
+const OVERWATCH_SOURCE_SESSIONS: &str = "sessions";
 
 /// Which working tree the commit is being made from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -617,11 +627,18 @@ pub fn observe_peers(repo: &Path, self_session: Option<&str>) -> Determination<V
 
 /// Peers from an `overwatch status --json` document.
 ///
-/// An object with no `sessions` key is `overwatch`'s rendering of an empty
-/// roster (`skip_serializing_if = "Vec::is_empty"`), so it is read as zero
-/// sessions. The module docs record what that cannot distinguish. Anything that
-/// is not a JSON object, or a `sessions` value with the wrong shape, is
-/// `Undetermined`.
+/// The top-level `undetermined` array is consulted first: an entry whose
+/// `source` is `"sessions"` means overwatch could not read its lease ledger, so
+/// the roster (empty or partial) is not an observation and the result is
+/// `Undetermined`. An `undetermined` value that is not an array, or an entry
+/// without a string `source`, is also `Undetermined` — it cannot be ruled out
+/// that the unreadable entry was the roster's. An absent `undetermined` key is
+/// overwatch's rendering of "nothing undetermined" (`skip_serializing_if`), and
+/// entries for other sources do not affect the roster (see the module docs).
+///
+/// Only then is an object with no `sessions` key read as zero sessions, which
+/// is `overwatch`'s rendering of an empty roster. Anything that is not a JSON
+/// object, or a `sessions` value with the wrong shape, is `Undetermined`.
 pub fn parse_overwatch_sessions(
     stdout: &str,
     self_session: Option<&str>,
@@ -639,6 +656,31 @@ pub fn parse_overwatch_sessions(
             "overwatch status --json emitted a non-object; liveness is unknown",
         );
     };
+    if let Some(undet) = obj.get("undetermined") {
+        let Some(entries) = undet.as_array() else {
+            return Determination::undetermined(
+                "overwatch status --json: `undetermined` is not an array; liveness is unknown",
+            );
+        };
+        for entry in entries {
+            let Some(source) = entry.get("source").and_then(serde_json::Value::as_str) else {
+                return Determination::undetermined(
+                    "overwatch status --json: an `undetermined` entry has no string `source`; \
+                     liveness is unknown",
+                );
+            };
+            if source == OVERWATCH_SOURCE_SESSIONS {
+                let reason = entry
+                    .get("reason")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("(no reason given)");
+                return Determination::undetermined(format!(
+                    "overwatch could not observe its session roster ({reason}); \
+                     liveness is unknown"
+                ));
+            }
+        }
+    }
     let Some(sessions) = obj.get("sessions") else {
         return Determination::known(Vec::new());
     };
@@ -1227,6 +1269,124 @@ mod tests {
         match parse_overwatch_sessions(json, None) {
             Determination::Known(p) => assert_eq!(p.len(), 1),
             other => panic!("expected Known, got {other:?}"),
+        }
+    }
+
+    // 842d552c: overwatch's honest "could not read the lease ledger" arrives as
+    // a top-level `undetermined` array (source "sessions") next to an absent
+    // `sessions` key. It must not be read as "zero peers".
+    #[test]
+    fn overwatch_undetermined_sessions_source_is_undetermined_not_zero_peers() {
+        let json = r#"{"undetermined":[{"source":"sessions","reason":"cannot read leases.json"}]}"#;
+        assert!(
+            matches!(
+                parse_overwatch_sessions(json, None),
+                Determination::Undetermined(_)
+            ),
+            "an unreadable roster must resolve to Undetermined, got {:?}",
+            parse_overwatch_sessions(json, None)
+        );
+    }
+
+    #[test]
+    fn overwatch_undetermined_sessions_source_wins_over_a_partial_roster() {
+        let json = r#"{"sessions":[{"session_id":"idle","leases":[],"live_count":0}],
+            "undetermined":[{"source":"sessions","reason":"partial read"}]}"#;
+        assert!(
+            matches!(
+                parse_overwatch_sessions(json, Some("me")),
+                Determination::Undetermined(_)
+            ),
+            "got {:?}",
+            parse_overwatch_sessions(json, Some("me"))
+        );
+    }
+
+    #[test]
+    fn overwatch_undetermined_sessions_blocks_the_guard() {
+        let mut obs = blocking();
+        obs.peers = parse_overwatch_sessions(
+            r#"{"undetermined":[{"source":"sessions","reason":"cannot read leases.json"}]}"#,
+            None,
+        );
+        let d = decide(obs, None);
+        assert!(d.blocks(), "unreadable roster must block, got {d:?}");
+    }
+
+    #[test]
+    fn overwatch_clean_empty_roster_control_stays_zero_peers() {
+        assert_eq!(
+            parse_overwatch_sessions(r#"{"undetermined":[]}"#, None),
+            Determination::Known(vec![])
+        );
+    }
+
+    #[test]
+    fn overwatch_live_peer_control_still_reports_peer_with_empty_undetermined() {
+        let json =
+            r#"{"sessions":[{"session_id":"other","leases":[],"live_count":1}],"undetermined":[]}"#;
+        match parse_overwatch_sessions(json, Some("me")) {
+            Determination::Known(p) => assert_eq!(p.len(), 1),
+            other => panic!("expected Known, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn overwatch_undetermined_not_an_array_is_undetermined() {
+        for bad in [
+            r#"{"undetermined":"sessions"}"#,
+            r#"{"undetermined":{"source":"sessions","reason":"x"}}"#,
+            r#"{"undetermined":null}"#,
+            r#"{"sessions":[],"undetermined":true}"#,
+        ] {
+            assert!(
+                matches!(
+                    parse_overwatch_sessions(bad, None),
+                    Determination::Undetermined(_)
+                ),
+                "{bad:?} must be undetermined, got {:?}",
+                parse_overwatch_sessions(bad, None)
+            );
+        }
+    }
+
+    #[test]
+    fn overwatch_undetermined_entry_without_string_source_is_undetermined() {
+        for bad in [
+            r#"{"undetermined":[{"reason":"x"}]}"#,
+            r#"{"undetermined":[{"source":7,"reason":"x"}]}"#,
+            r#"{"undetermined":["sessions"]}"#,
+            r#"{"sessions":[],"undetermined":[{"source":"backlog","reason":"x"},{"reason":"y"}]}"#,
+        ] {
+            assert!(
+                matches!(
+                    parse_overwatch_sessions(bad, None),
+                    Determination::Undetermined(_)
+                ),
+                "{bad:?} must be undetermined, got {:?}",
+                parse_overwatch_sessions(bad, None)
+            );
+        }
+    }
+
+    #[test]
+    fn overwatch_undetermined_for_a_non_sessions_source_does_not_over_block() {
+        // Shape as produced by overwatch's UndeterminedSource {source, reason}.
+        assert_eq!(
+            parse_overwatch_sessions(
+                r#"{"undetermined":[{"source":"backlog","reason":"x"}]}"#,
+                None
+            ),
+            Determination::Known(vec![])
+        );
+        let json = r#"{"sessions":[{"session_id":"other","leases":[],"live_count":1}],
+            "undetermined":[{"source":"backlog","reason":"x"},{"source":"hypotheses","reason":"y"}]}"#;
+        match parse_overwatch_sessions(json, Some("me")) {
+            Determination::Known(p) => {
+                assert_eq!(p.len(), 1);
+                assert_eq!(p[0].session_id, "other");
+            }
+            other => panic!("expected Known roster, got {other:?}"),
         }
     }
 }

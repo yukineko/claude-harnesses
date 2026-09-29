@@ -52,11 +52,40 @@ pub type LeaseRegistry = BTreeMap<String, Lease>;
 /// TTL for lease staleness in seconds (30 minutes).
 pub const LEASE_TTL_SECS: i64 = 1800;
 
-/// Resolve the storage root directory: `~/.overwatch/<project-key>/overwatch/`
+/// Resolve the storage root directory: `~/.overwatch/<project-key>/overwatch/`,
+/// where `<project-key>` is `projkey::project_key` of the MAIN WORKTREE root
+/// (`projkey::main_worktree_root`), not of the checkout `cwd` sits in.
+///
+/// # Why the main worktree root (user ruling 2026-09-29)
+///
+/// Keying on `projkey::repo_root` partitioned the store per linked worktree
+/// (`repo_root` stops at the worktree's own `.git` FILE), so a lease begun in
+/// `.harness-worktrees/<x>` was invisible to `overwatch status` run from the
+/// main checkout — exactly where condukt's CLAUDE.md §8 main-tree guard runs
+/// it. Every checkout of one repository (main checkout, linked worktrees, and
+/// any subdirectory of either) now shares ONE store.
+///
+/// For the main checkout itself `main_worktree_root` returns the very path
+/// `repo_root` did, so its key — and every ledger already on disk under it —
+/// is unchanged. A cwd outside any git repo still keys on `cwd` itself.
+///
+/// # Undetermined is an error, never a fallback
+///
+/// When the main worktree cannot be resolved (unreadable/unparseable `.git`
+/// file, a worktree of a submodule, a commondir that does not verify), this
+/// returns `Err`. Falling back to `repo_root` would silently re-open the very
+/// partition this function closes: the caller would read a DIFFERENT, possibly
+/// empty store and report "no sessions" as if it had looked at the shared one.
 fn storage_root(cwd: &Path) -> Result<PathBuf> {
     let base = harness_core::config::base_dir("overwatch");
-    let repo_root = harness_core::projkey::repo_root(cwd);
-    let project_key = harness_core::projkey::project_key(&repo_root);
+    let main_root = match harness_core::projkey::main_worktree_root(cwd) {
+        Determination::Known(root) => root,
+        Determination::Undetermined(why) => anyhow::bail!(
+            "overwatch storage root undetermined for cwd {}: {why}",
+            cwd.display()
+        ),
+    };
+    let project_key = harness_core::projkey::project_key(&main_root);
     Ok(base.join(&project_key).join("overwatch"))
 }
 

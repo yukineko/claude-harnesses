@@ -32,7 +32,7 @@ python3 scripts/census-verdict-terminals.py propguard
 数字は継承せず毎回測り直す）。本監査時点の 39 サイトは以下のとおり:
 
 ```
-config.rs:-    parse                        (F-3 修正済み: 未知値は Subprocess + 警告)
+(config.rs の Mode パース: 監査時点の catch-all は F-3 で撤去済み。下記 F-3 参照)
 config.rs:365  disabled_env                 .unwrap_or(false)
 gate.rs:94     checkable_files              inc...unwrap_or(true)
 gate.rs:95     checkable_files              && !exc...unwrap_or(false)
@@ -221,16 +221,21 @@ diff は空文字列になり、`evaluate` が `allow("empty-diff", st)` を返�
 propguard 側だけを直すのは「片側ミラーだけ直す」既知のアンチパターンなので、
 reviewgate 側は別クレート・別 version bump が要るため本コミットでは触っていない。
 
-### F-3（起票 3ca750b9・修正済み: 未知値は Subprocess + 警告）— `mode` の綴り間違いが独立検査を黙って自己申告へ降格させる
+### F-3（起票 backlog 3ca750b9・修正済み、修正コミット 35f2ef54）— `mode` の綴り間違いが独立検査を黙って自己申告へ降格させていた
 
-`Mode::parse` の `_ => Mode::Inject` は、認識できない mode 文字列をすべて `Inject` に写す。
+監査時点の `Mode::parse` は catch-all アームで、認識できない mode 文字列をすべて `Inject` に写していた。
 `Inject` は「1回 block してチェックリストを注入し、同じ diff を次ラウンドは信頼する」
 （trust-after-one-block）モードで、`Subprocess` の**独立した**検査より弱い。
-つまり `mode = "subproces"` のような typo は、独立検査を**無診断で**自己申告へ降格させる。
+つまり `mode = "subproces"` のような typo は、独立検査を**無診断で**自己申告へ降格させた。
 
-未知値に対して安全側の既定を選ぶこと自体は妥当だが、**沈黙が問題**である
-（CLAUDE.md 第3節: 「検査した」と「検査できなかった」を下流から区別不能にしない）。
-announce 1 行で足りるが、テストが `Mode::parse` の private 性と stderr 捕捉を要するため起票した。
+修正（35f2ef54）: 未知値をどちらのモードにも写さない。`Mode::parse_checked` は未知値に
+`Err(値)` を返し、`Config::apply` が `Config::config_invalid` に記録、`gate::evaluate` が
+`config-unreadable` と同じ形（先頭で判定・自動 give-up なし・`propguard skip` /
+`PROPGUARD_DISABLE` と repeat ledger による 2 度目の waive が出口）で `config-invalid` を
+Block する。block reason が不正値と有効値を名指しするので、stderr（exit 0 の Stop hook では
+debug log にしか行かない）に頼らずユーザ/agent に届く。最初の修正案（未知値を `Subprocess` へ
+倒し stderr 警告）は独立検証で棄却された: `checker_cmd` が全 PASS を返すと `Inject` なら block
+する停止が allow になり、strictly stricter ではなく、警告も不可視だったため。
 
 ## 4. 集計
 
@@ -261,8 +266,8 @@ boundary が正しく `Undetermined` を返し、テストが `expected Known` �
   `diff_text_of_an_undecodable_diff_is_undetermined_not_empty` /
   `diff_text_with_one_unreadable_subcommand_is_undetermined_not_a_partial_diff` /
   `diff_text_with_an_unreadable_untracked_scan_is_undetermined_not_an_empty_diff` が
-  この経路を固定している）。**F-3 は 3ca750b9 で修正済み**である（`Mode::parse_checked` は未知値を
-  より厳しい `Subprocess` へ倒し、値を名指しする警告を stderr に出す）。
+  この経路を固定している）。**F-3 は修正済み**である（backlog 3ca750b9、修正コミット 35f2ef54: 未知値は
+  `config-invalid` の Block になる）。
 - CLAUDE.md 第2節(a) の逸脱: テストは修正と同じ agent が書いた（本セッションの system prompt が
   Agent 起動を禁じるため）。RED の先行観測と反空虚対照で代償したが、生成と検証が盲点を共有する
   リスクは残る。独立再監査を推奨する。

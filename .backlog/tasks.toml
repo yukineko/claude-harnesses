@@ -1030,28 +1030,6 @@ issue_number = 130
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/130"
 
 [[task]]
-id = "034b6620"
-title = "どの git hook も cargo を呼んでいない — check-clippy-lints.py を配線し verdict を持つクレートに workspace lints を継承させる"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "L5",
-    "scout",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-workspace の unwrap_used / expect_used / panic の deny は 42 クレート中 8 にしか掛かっていない。condukt donegate reviewgate tdd budgetguard schemaguard harness-core 自身はいずれも verdict 形の判定を持ちながら対象外。さらに .githooks/pre-commit も pre-push も cargo を1回も呼ばない (pre-commit の run リストは :140-153、cargo の出現はコメント散文のみ)。これを直すために書かれた scripts/check-clippy-lints.py:20-24 は自分でそのギャップを docstring に書いた上でどの hook にも配線されていない。trybuild の compile-fail 契約も同様に enforcement site で走らず、.stderr を採取した rustc を固定する rust-toolchain.toml も存在しない。完了条件: check-clippy-lints.py が pre-commit の run リストに入り、上記クレートに lints workspace 継承が入り、rust-toolchain.toml が commit され、各クレートへ unwrap を注入して hook の RED を観測済み。
-
-2026-09-24 progress: the cargo-calling hook part was already wired (.githooks/pre-commit runs check-clippy-lints.py), and condukt+tdd were opted in by 71f6f084. Still open: rust-toolchain.toml pin (waiting on a user decision: 1.97.1 pin vs stable vs trybuild-only) and trybuild compile-fail tests not running at any enforcement point."""
-created_at = 1785879185
-updated_at = 1790254586
-weight = 0.0
-issue_number = 136
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/136"
-
-[[task]]
 id = "8696dd7e"
 title = "fault injection をゲート化する — boundary に FaultPlan、degrade に assert_fails_closed、採用クレート数をラチェット"
 project = "/Users/yuki/src/harness"

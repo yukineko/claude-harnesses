@@ -10,9 +10,21 @@ instruction to `cd` into it. (The Bash tool's cwd persists across calls, so a
 single `cd` moves the whole session in.) The edit/commit guards do the actual
 enforcing; this hook removes the excuse of "there was no worktree".
 
+It also REGISTERS the worktree it creates (backlog 491f6e94, user ruling
+2026-09-30): a `*.driver` record, in the shape `backlog driver` writes and
+condukt's `wt_reconcile::registrations_in` reads, at
+`$HOME/.backlog/drivers/session-worktrees/<fnv1a64(session_id)>.driver`.
+`condukt session-heartbeat` (condukt's PostToolUse / UserPromptSubmit hook)
+refreshes its `heartbeat_at` while the session works; once it ages out and the
+branch is merged and the tree clean, `condukt worktree reap` may remove the
+worktree. The bucket is NOT a backlog project slug on purpose — see
+`SESSION_WORKTREE_BUCKET` in crates/condukt/src/wt_reap.rs.
+
 Fail-soft: this is a setup hook, not a gate. Any error prints a best-effort note
 and exits 0 — the edit-time guards and the pre-commit check still block the main
-tree regardless of whether this hook managed to pre-make the worktree.
+tree regardless of whether this hook managed to pre-make the worktree. A failed
+REGISTRATION is soft in the safe direction: an unregistered worktree is
+undetermined to the reaper and is kept forever; the failure is printed.
 """
 
 from __future__ import annotations
@@ -21,6 +33,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 
 def _git(cwd: str, *args: str) -> str | None:
@@ -31,6 +44,59 @@ def _git(cwd: str, *args: str) -> str | None:
     except (OSError, subprocess.SubprocessError):
         return None
     return out.stdout.strip() if out.returncode == 0 else None
+
+
+SESSION_WORKTREE_BUCKET = "session-worktrees"
+
+
+def _fnv1a64(data: bytes) -> int:
+    """harness_core::hash::fnv1a64 — the hash backlog names driver files by."""
+    h = 0xCBF29CE484222325
+    for b in data:
+        h ^= b
+        h = (h * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return h
+
+
+def _register_worktree(wt_path: str, session_id: str) -> str | None:
+    """Write (or refresh) this session's registration for `wt_path`.
+
+    Returns None on success, else the reason it could not be written.
+    """
+    home = os.environ.get("HOME")
+    if not home:
+        return "$HOME is unset"
+    bucket = os.path.join(home, ".backlog", "drivers", SESSION_WORKTREE_BUCKET)
+    path = os.path.join(bucket, f"{_fnv1a64(session_id.encode()):016x}.driver")
+    now = int(time.time())
+    registered_at = now
+    try:
+        with open(path, encoding="utf-8") as fh:
+            prev = json.load(fh)
+        if isinstance(prev.get("registered_at"), int):
+            registered_at = prev["registered_at"]
+    except (OSError, ValueError, AttributeError):
+        pass
+    record = {
+        "session_id": session_id,
+        "pid": os.getpid(),
+        "project": os.path.realpath(wt_path),
+        "registered_at": registered_at,
+        "heartbeat_at": now,
+    }
+    tmp = f"{path}.tmp.{os.getpid()}"
+    try:
+        os.makedirs(bucket, exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(record, fh, indent=2)
+        os.replace(tmp, path)
+    except OSError as e:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return str(e)
+    return None
 
 
 def _report_rollout_drift(root: str) -> None:
@@ -109,6 +175,12 @@ def main() -> int:
             )
 
     if os.path.isdir(wt_path):
+        err = _register_worktree(wt_path, str(sid))
+        if err is not None:
+            print(
+                f"[worktree-init] could not register {wt_path} ({err}); it stays "
+                "unregistered, so `condukt worktree reap` will never remove it."
+            )
         print(
             "⚠ You started on the MAIN working tree. Direct edits/commits to it "
             "are BLOCKED (CLAUDE.md 8).\n"

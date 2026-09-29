@@ -568,6 +568,22 @@ pub struct Entry {
     /// caller may act on when offering a worktree to a session.
     pub resume: ResumeJudgement,
     pub claims: Vec<Claim>,
+    /// The typed inputs the fields above were rendered from, for in-process
+    /// consumers (`worktree reap`) that must decide on the three-valued answers
+    /// themselves rather than re-parse their JSON rendering.
+    #[serde(skip)]
+    pub(crate) raw: RawJudgement,
+}
+
+/// The typed per-entry judgements behind an [`Entry`].
+#[derive(Debug, Clone)]
+pub(crate) struct RawJudgement {
+    pub path: PathBuf,
+    pub branch: Option<String>,
+    pub role: Role,
+    pub attribution: Determination<Attribution>,
+    pub occupancy: Determination<Occupancy>,
+    pub dirty: Determination<bool>,
 }
 
 /// Whether condukt's run state could be read in full. `readable == false`
@@ -830,7 +846,10 @@ fn git_root_here(path: &Path) -> Option<PathBuf> {
 }
 
 /// Uncommitted work — tracked modifications AND untracked files — as a
-/// three-valued answer. `git status --porcelain` lists both; an unreadable
+/// three-valued answer. `git status --porcelain` lists both, but only while
+/// `status.showUntrackedFiles` is not `no`: with that config an untracked-only
+/// worktree reads clean, so the untracked mode is passed explicitly and a
+/// repository's config cannot turn untracked work into "clean". An unreadable
 /// status (a stale worktree whose admin dir is gone, a directory that is not a
 /// worktree root, a git failure) is `Undetermined`, never "clean".
 pub fn dirtiness(path: &Path) -> Determination<bool> {
@@ -841,7 +860,7 @@ pub fn dirtiness(path: &Path) -> Determination<bool> {
             path.display()
         ));
     }
-    match worktree::git(path, &["status", "--porcelain"]) {
+    match worktree::git(path, &["status", "--porcelain", "--untracked-files=normal"]) {
         Ok(s) => Determination::Known(!s.trim().is_empty()),
         Err(e) => Determination::undetermined(format!(
             "git status --porcelain failed in {}: {e}",
@@ -1153,12 +1172,16 @@ fn driver_registry_root() -> Determination<PathBuf> {
 ///
 /// # Why "no record" is undetermined and not death
 ///
-/// A session doing plain section-8 worktree work registers no driver at all —
-/// only `/flow` and the backlog driver loop do. Measured the same day: one
-/// record for 15 worktrees. Reading absence as death would make the third term
-/// of the death rule hold for every unregistered worktree, which is the
-/// collapse this whole rule exists to prevent. The accepted cost is that
-/// worktrees created before registration became routine stay unreclaimable.
+/// When this rule was written a session doing plain section-8 worktree work
+/// registered no driver at all — only `/flow` and the backlog driver loop did
+/// (measured the same day: one record for 15 worktrees). Since backlog
+/// `491f6e94` `scripts/session-worktree-init.py` registers the `session-*`
+/// worktree it creates, but every other worktree (condukt workers, hand-made
+/// ones, and every worktree created before that change) still has none.
+/// Reading absence as death would make the third term of the death rule hold
+/// for every unregistered worktree, which is the collapse this whole rule
+/// exists to prevent. The accepted cost is that unregistered worktrees stay
+/// unreclaimable.
 ///
 /// Anything unreadable — the root, a bucket, a record, a record whose shape is
 /// not what is expected — is undetermined rather than skipped: a record that
@@ -1265,8 +1288,8 @@ fn registrations_in(root: &Path, path: &Path, now: i64) -> Determination<Registr
         Determination::Known(Registrations::AllStaleHere)
     } else {
         Determination::undetermined(format!(
-            "no session registration names {}, and a session doing ordinary worktree work \
-             registers none — so this is not an observation that nobody is working here",
+            "no session registration names {}, and a worktree not created by the session \
+             hook carries none — so this is not an observation that nobody is working here",
             path.display()
         ))
     }
@@ -1335,9 +1358,10 @@ fn registrations_for(path: &Path, now: i64) -> Determination<Registrations> {
 ///
 /// The cost is deliberate and was accepted by the user on 2026-09-07: the 15
 /// worktrees that predate routine registration are `Undetermined` forever under
-/// this rule, so this rule reclaims nothing until worktree creation starts
-/// writing a registration. That is the restrictive side of an irreversible
-/// operation.
+/// this rule. Since backlog `491f6e94` the SessionStart worktree hook writes a
+/// registration for each `session-*` worktree it creates, and `condukt
+/// worktree reap` acts on this rule for those. That is the restrictive side of
+/// an irreversible operation.
 ///
 /// # Why a frozen transcript is not evidence of death (measured)
 ///
@@ -2008,7 +2032,16 @@ pub fn reconcile(cfg: &Config, cwd: &Path, repo: &Path, preserve_dirty: bool) ->
             unfinished_task.as_ref(),
             &claims,
         );
+        let raw = RawJudgement {
+            path: canon.clone(),
+            branch: branch.clone(),
+            role,
+            attribution: attribution.clone(),
+            occupancy: occupancy.clone(),
+            dirty: dirty.clone(),
+        };
         entries.push(Entry {
+            raw,
             path: canon.to_string_lossy().to_string(),
             role: role.as_str(),
             branch,
@@ -2066,6 +2099,21 @@ pub fn reconcile(cfg: &Config, cwd: &Path, repo: &Path, preserve_dirty: bool) ->
         removable_count,
         dangling_claims,
     })
+}
+
+/// [`reconcile`] without preservation, reduced to the typed judgements — the
+/// input `worktree reap` decides on. Same single reading of the sources as the
+/// GC and resume views, so the three cannot disagree about a directory.
+pub(crate) fn reconcile_judgements(
+    cfg: &Config,
+    cwd: &Path,
+    repo: &Path,
+) -> Result<Vec<RawJudgement>> {
+    Ok(reconcile(cfg, cwd, repo, false)?
+        .entries
+        .into_iter()
+        .map(|e| e.raw)
+        .collect())
 }
 
 /// Human-readable rendering: one line per worktree, always naming the reason a

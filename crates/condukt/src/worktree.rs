@@ -175,6 +175,30 @@ pub fn git(dir: &Path, args: &[&str]) -> Result<String> {
     git_output_to_result(run_git_bounded(dir, args)?, dir, args, GIT_TIMEOUT)
 }
 
+/// `git <args>` in `dir`, returning its exit code for commands whose non-zero
+/// exit is an ANSWER rather than a failure (`merge-base --is-ancestor` exits 1
+/// for "no"). A timeout or a signal death is an `Err`, never a code: the caller
+/// maps codes it recognises and must treat every other outcome as unknown.
+pub fn git_exit_code(dir: &Path, args: &[&str]) -> Result<i32> {
+    let out = run_git_bounded(dir, args)?;
+    if out.timed_out {
+        bail!(
+            "git {:?} in {} timed out after {:?} and was killed",
+            args,
+            dir.display(),
+            GIT_TIMEOUT
+        );
+    }
+    match out.status.and_then(|s| s.code()) {
+        Some(code) => Ok(code),
+        None => bail!(
+            "git {:?} in {} ended without an exit code (killed by a signal)",
+            args,
+            dir.display()
+        ),
+    }
+}
+
 /// Shared formatting step for [`git`]: turn a (possibly timed-out) raw
 /// `GitOutput` into the same `Result<String>` shape, given the timeout that
 /// was actually used (so error messages/tests can use a short override

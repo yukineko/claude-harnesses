@@ -12212,3 +12212,39 @@ updated_at = 1790723957
 weight = 0.0
 issue_number = 901
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/901"
+
+[[task]]
+id = "b280cfa2"
+title = "blastguard: 安全な置き場の confined Ask が、シンボリックリンクの後の .. を文字列で消し、削除先を取り違える"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "873651b9 の修正中（2026-09-30）に観測した。SafeRoots::classify と cwd walk は、シンボリックリンクを解決する前に .. を文字列の上で消す。例: rm -rf <proj>/lnk/../x（lnk は外を指すリンク）は、人がいるときは ask: confined to <proj>、人がいないときは deny になる。しかし実際に消えるのは <lnk の指す先の親>/x。Allow にはならないが、人に見せる削除先が間違っている。truncate、find -delete、git clean、切り詰めるリダイレクト、chmod/chown -R も同じ confined Ask を通るので同様。befcfe06（cd walk による取り違え）と関連する。"
+created_at = 1790724641
+updated_at = 1790724641
+weight = 0.0
+issue_number = 902
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/902"
+
+[[task]]
+id = "ccebda3f"
+title = "blastguard: 削除先を取り違えた Ask を人が承認すると、承認メモリ経由で後の headless 実行が通るか確かめる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "873651b9 の修正中に出た未検証の問い。承認メモリは headless での判定の厳格化より前に走り、解決後の実パスをキーにしている（README）。lnk/.. や cd walk で削除先を取り違えた Ask（上の起票と befcfe06）を人が承認したとき、その承認が後で別の実パスの削除を headless で通してしまわないか。テストで確かめる。"
+created_at = 1790724643
+updated_at = 1790724643
+weight = 0.0
+issue_number = 903
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/903"

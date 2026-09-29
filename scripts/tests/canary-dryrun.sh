@@ -87,8 +87,7 @@ OUT="$(
   CLAUDE_PLUGIN_CACHE="$TEST_CACHE" \
   CLAUDE_PLUGIN_REGISTRY="$TEST_REGISTRY" \
   bash "$SCRIPT" --canary --canary-stage-size 2 --dry-run 2>&1
-)"
-RC=$?
+)" && RC=0 || RC=$?
 echo "$OUT" | sed 's/^/    /'
 echo "(exit code: $RC)"
 [ "$RC" -eq 0 ] || fail "dry-run canary rollout exited non-zero ($RC)"
@@ -108,6 +107,8 @@ grep -Eq '\[dry-run\] would copy' <<<"$OUT" || fail "dry-run did not report woul
 pass "dry-run reported would-copy actions (no real copy)"
 grep -q "done (canary)" <<<"$OUT" || fail "canary path did not complete"
 pass "canary path completed"
+grep -q "verify: skipped (dry-run" <<<"$OUT" || fail "dry-run did not state that verify was skipped"
+pass "dry-run explicitly reports verify skipped (nothing deployed)"
 
 # --- assertion: a SUCCESSFUL canary reaches rebuild + sync (finding 4) --------
 # The canary path used to copy + repoint the registry and then exit 0 without

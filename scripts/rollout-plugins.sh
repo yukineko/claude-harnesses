@@ -1280,6 +1280,15 @@ run_canary() {
 # something it cannot fix. They are printed in full instead.
 verify_rollout_complete() {
   local out rc=0
+  if [ "$dry" = 1 ]; then
+    # A dry run deploys nothing, so "is the fleet current after this run" is
+    # unanswerable; running the check would report the pre-existing drift as a
+    # failure of a run that changed nothing. Say so explicitly instead of
+    # claiming anything about the fleet. Planning errors exit non-zero earlier.
+    echo
+    echo "verify: skipped (dry-run — nothing was deployed)"
+    return 0
+  fi
   if [ "${#only_plugins[@]}" -gt 0 ]; then
     # A filtered run deliberately left the rest of the fleet alone, so a
     # whole-fleet verdict would fail for reasons this run never attempted.

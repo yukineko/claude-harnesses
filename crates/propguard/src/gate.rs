@@ -207,6 +207,22 @@ pub fn evaluate(cfg: &Config, root: &Path, st: &crate::state::SessionState) -> D
         };
     }
 
+    // 0b. A value we read but cannot interpret (unknown `mode`): also
+    //     undetermined, not a mode choice. Same shape as `config-unreadable`
+    //     (unbounded: retrying cannot fix a typo; `propguard skip` /
+    //     PROPGUARD_DISABLE and the repeat-ledger waiver in
+    //     `harness_core::repeat::emit_stop_block` are the bounded exits).
+    if let Some(why) = &cfg.config_invalid {
+        return Decision::Block {
+            reason: config_invalid_reason(why),
+            tag: "config-invalid",
+            files: vec![],
+            properties: Vec::new(),
+            attempts: st.attempts.saturating_add(1),
+            last_hash: String::new(),
+        };
+    }
+
     // 1. Source the task's done_criteria. Genuinely none configured ⇒ nothing
     //    to formalize, allow. Configured but unreadable ⇒ fail closed
     //    (CA-propguard-01) — never the same answer as "none configured".
@@ -783,6 +799,19 @@ fn diff_failed_reason(why: &str, files: &[String], attempt: u32, max: u32) -> St
 fn config_unreadable_reason(why: &str) -> String {
     format!(
         "🚧 propguard: 設定ファイルを読めませんでした — {why}\n\n         設定ファイルは存在するのに読み取り/解析できないため、propguard が従うべき設定 (done_criteria・         mode・threshold など) が判定不能です。組み込みの既定値で代用すると「未設定」と区別できないまま         検査を素通りさせるので、この停止をブロックしています (再試行では解消しないため自動の通過許可は         ありません)。\n\n         前に進むには次のいずれか:\n         - 設定ファイルの権限/内容を直す (`propguard status` で対象ファイルを確認)。\n         - このチェックを1回だけスキップ: `propguard skip --reason ...` を実行 (理由を1行)。\n         - propguard を完全に無効化: 環境変数 PROPGUARD_DISABLE=1。"
+    )
+}
+
+fn config_invalid_reason(why: &str) -> String {
+    format!(
+        "🚧 propguard: config-invalid — 設定値を解釈できません: {why}\n\n\
+         `mode` に指定できる値は \"inject\" または \"subprocess\" (別名: checker / independent) です。\
+         綴り間違いをどちらかのモードに推測で割り当てると、独立検査が自己申告へ黙って降格する\
+         (または不要な checker 起動が走る) ため、この停止をブロックしています。\n\n\
+         前に進むには次のいずれか:\n\
+         - 設定ファイルの `mode` を修正する (`propguard status` で対象ファイルを確認)。\n\
+         - このチェックを1回だけスキップ: `propguard skip --reason ...` を実行 (理由を1行)。\n\
+         - propguard を完全に無効化: 環境変数 PROPGUARD_DISABLE=1。"
     )
 }
 
@@ -2578,6 +2607,30 @@ PROP output-schema: PASS";
                 assert!(reason.contains("/x/propguard.toml"), "{reason}");
             }
             Decision::Allow { tag, .. } => panic!("load_error must block, got Allow {tag}"),
+        }
+    }
+
+    /// An unknown `mode` blocks `config-invalid` before criteria sourcing,
+    /// naming the value; a known mode does not.
+    #[test]
+    fn config_invalid_blocks_naming_the_value_and_known_mode_does_not() {
+        let root = scratch_dir();
+        let bad = Config {
+            config_invalid: Some("unknown mode \"subproces\"".to_string()),
+            ..Config::default()
+        };
+        let d = evaluate(&bad, &root, &fresh_state());
+        let ok = evaluate(&Config::default(), &root, &fresh_state());
+        let _ = std::fs::remove_dir_all(&root);
+        match d {
+            Decision::Block { tag, reason, .. } => {
+                assert_eq!(tag, "config-invalid");
+                assert!(reason.contains("subproces"), "{reason}");
+            }
+            Decision::Allow { tag, .. } => panic!("config_invalid must block, got Allow {tag}"),
+        }
+        if let Decision::Block { tag, .. } = ok {
+            assert_ne!(tag, "config-invalid");
         }
     }
 

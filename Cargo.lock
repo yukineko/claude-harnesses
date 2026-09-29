@@ -939,7 +939,7 @@ dependencies = [
 
 [[package]]
 name = "propguard"
-version = "0.1.46"
+version = "0.1.48"
 dependencies = [
  "anyhow",
  "chrono",

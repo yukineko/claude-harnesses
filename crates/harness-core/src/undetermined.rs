@@ -105,11 +105,17 @@ impl SinkState {
 
 /// Resolve the sink for the current environment and working directory.
 ///
-/// The default path is the overwatch store for this project — the same
-/// `base_dir("overwatch")/<project key>/overwatch/` that overwatch's other four
-/// streams live in — so `overwatch undetermined-metrics` finds it without
-/// configuration and without harness-core depending on overwatch (which would
-/// invert the dependency direction).
+/// The default path is `base_dir("overwatch")/<project key>/overwatch/`, where
+/// `<project key>` is derived from `projkey::repo_root(cwd)` — so
+/// `overwatch undetermined-metrics` (which resolves the same function) finds it
+/// without configuration and without harness-core depending on overwatch
+/// (which would invert the dependency direction).
+///
+/// NOTE: for a cwd inside a LINKED git worktree this is NOT the directory
+/// overwatch's other streams use: `overwatch::store::storage_root` keys on the
+/// MAIN worktree root (`projkey::main_worktree_root`), while this keys on the
+/// linked worktree itself. For the main checkout and for non-repo cwds the two
+/// coincide.
 pub fn sink_state() -> SinkState {
     match std::env::var(SINK_ENV) {
         Ok(v) if v.trim().eq_ignore_ascii_case("off") => return SinkState::DisabledByEnv,
@@ -125,7 +131,9 @@ pub fn sink_state() -> SinkState {
     }
 }
 
-/// The default sink path for a project, mirroring overwatch's `storage_root`.
+/// The default sink path for a project. Keyed on `projkey::repo_root` (per
+/// checkout); see [`sink_state`] for how that diverges from overwatch's
+/// `storage_root` inside a linked worktree.
 pub fn default_sink_path(cwd: &std::path::Path) -> PathBuf {
     let base = crate::config::base_dir("overwatch");
     let repo_root = crate::projkey::repo_root(cwd);

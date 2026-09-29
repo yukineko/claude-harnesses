@@ -155,7 +155,13 @@ judged against a **fixed** heartbeat TTL of **1800 seconds (30 minutes)** —
 ## Storage
 
 State lives under `~/.overwatch/<project-key>/overwatch/` (`leases.json` +
-`events.jsonl`), keyed per repository. There is no config file and no TTL knob;
+`events.jsonl`), keyed per repository on the MAIN worktree root: the main
+checkout, every linked `git worktree`, and any subdirectory of either share one
+store (so `overwatch status` run from the main checkout sees sessions working in
+linked worktrees). If the main worktree root cannot be resolved (unreadable or
+unparseable `.git` file, a worktree of a submodule), commands fail rather than
+fall back to a per-worktree store. A cwd outside any git repo is keyed on the
+cwd itself. There is no config file and no TTL knob;
 the only behaviors above are the ones the binary implements today.
 
 ## Storage layout
@@ -169,7 +175,7 @@ All data lives in version-controlled locations (or user-owned caches):
 ```
 
 - `<base>` defaults to `~/.local/share/claude-harnesses` (configurable in overwatch.toml).
-- `<project-key>` is derived from the project name (e.g., `claude-harnesses`).
+- `<project-key>` is `<basename>-<fnv1a32 of the canonical path>` of the repository's MAIN worktree root (shared by all its linked worktrees).
 - Leases are **not** persisted across full reapers; they are session-scoped ephemeral records.
 
 ## PDO positioning

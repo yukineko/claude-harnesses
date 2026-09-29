@@ -22165,3 +22165,95 @@ updated_at = 1790635963
 weight = 0.0
 issue_number = 425
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/425"
+
+[[task]]
+id = "842d552c"
+title = "maintree guard が overwatch status --json の undetermined 配列を読まず、観測不能な peer roster を peer ゼロとして扱う"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+touched_files = []
+status = "done"
+notes = """
+測定点 c39701bc / 2026-09-13、読み取りのみ、逐語引用あり。crates/condukt/src/maintree.rs:588 が run_tool で overwatch status --json を呼び、parse_overwatch_sessions (maintree.rs:625-665) が sessions[].live_count だけを読む。overwatch 側は crates/overwatch/src/aggregate.rs:414-433 の apply_leases が ledger 読み取り失敗を SOURCE_SESSIONS の undetermined として記録し、status --json は undetermined 配列として出力するが、maintree のパーサはこの配列を一切参照しない。したがって overwatch が正直に判定不能と答えても、第8節の main-tree guard には peer ゼロ すなわち他に誰も動いていない として届く。これは CLAUDE.md 第8節が絶対義務と呼ぶ不変条件のまさに fail-open 方向である。さらに同じ入口は aggregate.rs:527-535 の build_cached を通るので、TTL 10 秒 (aggregate.rs:501 STATUS_CACHE_TTL_SECS) 以内の陳腐なキャッシュでも sessions が空になりうる。ledger 書き込みによる無効化は存在せず lease.rs は status_cache に一切触れない。よって peer が begin した直後の 10 秒間、guard は peer ゼロを見る。是正方向: parse_overwatch_sessions が undetermined 配列に SOURCE_SESSIONS の項目があれば Determination::Undetermined へ解決し、guard は制限側へ倒す。関連して crates/condukt/src/maintree.rs:64-67 の散文は apply_leases が今も if let Ok で潰していると書いているが実装は Err を分岐して undetermined を記録しており、散文が実装より古い (第4節の docstring と実挙動の不一致)。同じコミットで直すこと。関連 7d820338。 【救出 2026-09-29】元 id 1df540f8（2026-09-13 に run-20260913-223004-15261 の orch worktree で起票されたが未コミットのまま残っていた。worktree 削除前に再起票。notes 中の関連 id は元 id のまま）
+
+[p0 fix 2026-09-29] fixed 30a42539 + branch tests 98074841 (mutation-checked). Cache-staleness half was already fixed (cache_is_fresh with leases_mtime)."""
+created_at = 1790632217
+updated_at = 1790678154
+weight = 0.0
+issue_number = 815
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/815"
+
+[[task]]
+id = "daf7611b"
+title = "blastguard: 未知シェルの引用符つきペイロードが allow — fish -c 引用符つき rm -rf が通り、引用符を外した不自然な綴りだけが ask"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+touched_files = []
+status = "done"
+notes = """
+実測（deployed blastguard 0.2.50）:
+  fish -c 引用符つき rm -rf /Users/yuki/src        -- ALLOW
+  fish -c 引用符なし rm -rf /Users/yuki/src        -- ASK  （不自然な綴りだけが止まる）
+  pwsh -c / tcsh -c で同じ引用符つきペイロード     -- ALLOW
+  git -c core.pager=引用符つき rm -rf ... log      -- ALLOW
+  busybox sh -c 引用符つき rm -rf ...              -- ASK  （sh は既知シェルなので通る）
+
+crates/blastguard/src/detect.rs:3330 の unknown_wrapper_ask は
+「head の後の最初の非フラグかつ引用文字列の開始断片でないトークン」しか見ない（opens_unclosed_quote）。
+つまり普通の綴り（引用符つき）が fail-open で、異常な綴りだけが ask になっている。
+
+根因は d5b2e73d と同一: is_shell（detect.rs:2888、sh|bash|zsh|ksh|dash のみ）と
+is_code_interpreter（detect.rs:2902）という形状リストがあるだけで、ペイロード解析器が無い。
+リストに載っていない実行体はすべて不可視。
+
+しかも同じファイルが別の場所では正しく知っている: detect.rs:5021-5027 の
+stage_is_interpreter_terminal は is_shell か is_code_interpreter を stdin のコード実行 sink として
+扱っており、だから curl 経由のパイプは DENY になる。同一 predicate、同一ファイル、逆の結論。
+
+修正: is_shell と is_code_interpreter を ExecKind（Shell / Interpreter(lang) / UnknownExecutor）へ統合し、
+UnknownExecutor がペイロード形状のオペランドを持つ場合は ask（allow にしない）。
+観測された取りこぼし: fish, pwsh, csh, tcsh, deno, bun, osascript, awk（BEGIN block の system 呼び出し）。
+実測: awk の BEGIN block で rm -rf、deno eval の removeSync、bun -e、osascript -e、env -S いずれも ALLOW。
+親 826c29bf
+
+[triage 2026-09-29 @546d9fa2] p1->p0: blastguard is_shell only sh/bash/zsh/ksh/dash (detect.rs:3963-3965): fish/pwsh/tcsh -c rm -rf payload it cannot analyze resolves to Allow
+
+[p0 fix 2026-09-29] PARTIAL: faf9136f closes the shell part (fish/pwsh/tcsh/csh/nu -c, busybox). Still Allow on blastguard 0.2.76, measured: git -c core.pager=..., deno eval, bun -e, osascript -e do shell script, awk system(), env -S. Unified ExecKind/UnknownExecutor not done. Keep open.
+
+[p0 fix 2026-09-29] remaining executors fixed 90ee427c (git -c command keys, awk system/pipes, env -S, deno/bun/osascript, interpreter value flags); 33 behavioural tests 1a2507af."""
+created_at = 1788791577
+updated_at = 1790678156
+weight = 0.0
+issue_number = 418
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/418"
+
+[[task]]
+id = "1875f626"
+title = "systemic signature recurred 14x across 1 task(s)/4 session(s)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "systemic",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """
+kind:systemic identifier:blastguard:unknown-verb-protected-path occurrences:1
+
+--- 2024 cycle-10 の途中終了について ---
+このバッチを回した background agent は stall watchdog により
+"no progress for 600s" で強制終了した。実働は約 11 分で、残りは飢餓状態。
+landed したのは blastguard:tee-truncate と
+blastguard:interpreter-unrecoverable-write の 2 signature だけ (fix 2acee03f)。
+本 item は着手されていない。measured: 何も測っていない。unverified: すべて。
+推測で埋めずに pending のまま残す。
+
+[p0 fix 2026-09-29] re-scoped to false positives after investigation (154 ledger hits, mostly for/do/{ keywords, quoted operands, backlog free text). Fixed d2742c50; rule id split into 4 ids."""
+created_at = 1790184342
+updated_at = 1790678157
+weight = 0.0
+issue_number = 729
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/729"

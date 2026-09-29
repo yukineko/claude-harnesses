@@ -11896,3 +11896,21 @@ updated_at = 1790719289
 weight = 0.0
 issue_number = 879
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/879"
+
+[[task]]
+id = "04c3ca6f"
+title = "circuit check が flow のバッチ間（claim 全解放後）で必ず idle_unmeasured trip する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flow",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "実測 2026-09-30 @ 80db2e7e: sink で claim を全部 release した直後、flow SKILL が指定する 3-4 の位置で condukt circuit check --run flow-<SID> を打つと rc=1, reason=idle_unmeasured, idle_unknown_reason='run state could not be loaded'。d7f2a4ea（condukt 0.7.189）の stateless idle 計測は live な stateless claim がある間しか効かず（NoStatelessClaim は unmeasured）、バッチ間には claim が 0 件なので、/flow は 1 バッチ終えるたびに trip して止まる。claim 保持中は continue/idle 0 を返すことは確認済み。あわせて flow SKILL.md の『信号採取はすべて fail-soft（run 未ロードなどは非 trip に縮退）』は、fail-closed に trip するバイナリと食い違っている（doc↔impl 矛盾）。案: flow run の識別（run id 接頭辞や driver 登録）から transcript を引いて claim 0 件でも idle を測る。または SKILL の check 位置を次バッチの claim 後へ移す。後者はゲート回避に見えるので設計判断が要る。"
+created_at = 1790719344
+updated_at = 1790719344
+weight = 0.0
+issue_number = 880
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/880"

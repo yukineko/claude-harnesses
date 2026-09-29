@@ -11965,3 +11965,18 @@ updated_at = 1790719795
 weight = 0.0
 issue_number = 887
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/887"
+
+[[task]]
+id = "3672737c"
+title = "rust-toolchain.toml で 1.97.1 固定後、クロスビルド target (x86_64-apple-darwin / x86_64-unknown-linux-gnu / wasm32) が未導入"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Found 2026-09-30 after 42a30a26. The pinned toolchain has only aarch64-apple-darwin. scripts/build-plugin-bin.sh <p> <target> now needs rustup target add --toolchain 1.97.1 <target>. Rollout builds only the host target and is unaffected."
+created_at = 1790719841
+updated_at = 1790719841
+weight = 0.0
+issue_number = 888
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/888"

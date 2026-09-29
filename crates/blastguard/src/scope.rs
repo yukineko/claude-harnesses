@@ -54,18 +54,50 @@
 //!     fails, the answer is `Undetermined` — not `Inside`.
 //!
 //! And the outcome differs too. That carve-out produced `Allow`; the placement
-//! this module computes produces at most a `Decision::Ask`, which
-//! [`crate::interactive`] hardens back to a `Deny` everywhere no human can
-//! answer (headless, condukt workers, cron). So the autonomous-agent threat
-//! model is unchanged by this module: it buys an interactive operator a
-//! one-keypress confirmation for a bounded blast radius, and buys an
-//! unattended agent nothing at all.
+//! against the SAFE roots ([`SafeRoots::classify`]) produces at most a
+//! `Decision::Ask`, which [`crate::interactive`] hardens back to a `Deny`
+//! everywhere no human can answer (headless, condukt workers, cron). For those
+//! roots it buys an interactive operator a one-keypress confirmation for a
+//! bounded blast radius, and buys an unattended agent nothing at all. The one
+//! exception is the next section, and it is an exception by user ruling, not
+//! by inference.
+//!
+//! # Worktree storage roots — the one placement that yields `Allow`
+//!
+//! User ruling 2026-09-30 (backlog 873651b9): "worktreeへの削除を制限しているhookを
+//! 排除して" — a recursive rm strictly inside the worktree storage roots is
+//! ALLOWED with no confirmation, headless included. Trigger: a subagent could
+//! not `rm -rf ~/.condukt/worktrees/pgv-target` (flat Deny: that directory was
+//! not a safe root at all).
+//!
+//! The worktree storage roots are a SEPARATE set from the safe roots, built by
+//! [`SafeRoots::new`] from the same inputs and consulted only through
+//! [`SafeRoots::classify_worktree`], which only `detect`'s recursive-`rm` arm
+//! calls (no other verb gains anything from them):
+//!
+//!   * `$HOME/.condukt/worktrees` — only when `HOME` is absolute;
+//!   * for each of the payload `cwd` and `CLAUDE_PROJECT_DIR`: the prefix up to
+//!     and including its last `.harness-worktrees` component when it has one,
+//!     else `dirname(P)/.harness-worktrees`.
+//!
+//! Each is normalised, must pass the derived-root rules ([`NEVER_A_ROOT`], not
+//! `$HOME`, [`MIN_DERIVED_ROOT_COMPONENTS`]) both as spelled and after the
+//! injected resolver canonicalises it, and is dropped when it cannot be
+//! resolved. [`SafeRoots::none`] has none of them.
+//!
+//! The resolution rules are identical to the safe roots': only `Inside` (a
+//! strict descendant, `..` and symlinks resolved) counts; the storage root
+//! itself (`IsRoot`), `Outside`, and every `Undetermined` do not, and the rm
+//! arm then keeps the verdict it had before this rule. Protected-path
+//! precedence runs first in `detect`, so a protected path under a worktree is
+//! still denied.
 //!
 //! # The fail-closed direction
 //!
 //! There are three answers, per CLAUDE.md §3, and only ONE of them may relax a
 //! verdict: [`Placement::Inside`], which means "resolved, and provably a strict
-//! descendant of a root this session is allowed to destroy things in".
+//! descendant of a root this session is allowed to destroy things in" (a safe
+//! root, or — for recursive rm only — a worktree storage root).
 //! [`Placement::Outside`] and every `Undetermined` leave the caller's existing
 //! Deny exactly as it was. [`Placement::IsRoot`] is a fourth statement that
 //! deliberately does NOT collapse into `Inside`: `rm -rf <the project itself>`
@@ -331,6 +363,16 @@ pub struct SafeRoots {
     /// operands entirely (they become `Undetermined`).
     cwd: Option<String>,
     resolver: Option<RealPathResolver>,
+    /// The WORKTREE STORAGE ROOTS (`$HOME/.condukt/worktrees`, and the
+    /// `.harness-worktrees` directory derived from `cwd` / `CLAUDE_PROJECT_DIR`),
+    /// normalised, sanity-checked and resolver-canonicalised exactly like
+    /// `roots`. Consulted ONLY by [`SafeRoots::classify_worktree`], which only
+    /// the recursive-`rm` arm of [`crate::detect`] calls — see the module doc,
+    /// "Worktree storage roots". Kept separate from `roots` on purpose: adding
+    /// these to `roots` would hand every OTHER location-aware verb (`truncate`,
+    /// `find -delete`, `git clean`, `chmod -R`, redirects) a confined `Ask`
+    /// there, which nobody ruled on.
+    worktree_roots: Vec<String>,
 }
 
 impl SafeRoots {
@@ -347,6 +389,7 @@ impl SafeRoots {
             roots: Vec::new(),
             cwd: None,
             resolver: None,
+            worktree_roots: Vec::new(),
         }
     }
 
@@ -367,6 +410,11 @@ impl SafeRoots {
     /// * `tmpdir` — `$TMPDIR`, added to the fixed [`TEMP_ROOTS`] when absolute.
     /// * `resolver` — see [`RealPathResolver`]. `None` means no operand can
     ///   ever be resolved, hence no operand can ever be `Inside`.
+    ///
+    /// The same inputs also derive the worktree storage roots (see
+    /// [`worktree_storage_candidates`]): `home` contributes
+    /// `$HOME/.condukt/worktrees` (only when absolute), and `cwd` /
+    /// `project_dir` each contribute their `.harness-worktrees` directory.
     pub fn new(
         cwd: Option<&str>,
         project_dir: Option<&str>,
@@ -396,6 +444,25 @@ impl SafeRoots {
         // itself an absolute path we could resolve. It does NOT have to be a
         // root: `cd /home/yuki && rm -rf /tmp/x` resolves the operand against
         // `/tmp`, and the home directory being un-rootable is unrelated.
+        let mut worktree_roots: Vec<String> = Vec::new();
+        for candidate in worktree_storage_candidates(cwd, project_dir, home_norm.as_deref()) {
+            // Same sanity rules as a derived root, applied to the lexical
+            // spelling AND to the resolved one: a `.condukt` symlinked to a
+            // system directory must not hand that directory's children out
+            // as delete-freely either.
+            if !is_acceptable_derived_root(&candidate, home_norm.as_deref()) {
+                continue;
+            }
+            let Some(real) = resolve_with(&candidate, resolver) else {
+                continue;
+            };
+            if !is_acceptable_derived_root(&real, home_norm.as_deref()) {
+                continue;
+            }
+            if !worktree_roots.contains(&real) {
+                worktree_roots.push(real);
+            }
+        }
         let cwd = cwd
             .and_then(normalize_abs)
             .and_then(|c| resolve_with(&c, resolver));
@@ -403,6 +470,7 @@ impl SafeRoots {
             roots,
             cwd,
             resolver,
+            worktree_roots,
         }
     }
 
@@ -433,6 +501,31 @@ impl SafeRoots {
                 "blastguard has no safe-root model for this session (no project dir / cwd)",
             );
         }
+        self.classify_against(&self.roots, operand, cwd)
+    }
+
+    /// Where does `operand` land relative to the WORKTREE STORAGE ROOTS?
+    ///
+    /// Identical resolution to [`SafeRoots::classify`] (literal-path check,
+    /// lexical `..`, injected symlink resolver, longest-root match, `IsRoot`
+    /// kept distinct from `Inside`) — only the root set differs. With no
+    /// worktree storage roots (always the case for [`SafeRoots::none`]) the
+    /// answer is `Undetermined`, which the caller must read as "not allowed".
+    pub fn classify_worktree(&self, operand: &str, cwd: Option<&str>) -> Determination<Placement> {
+        if self.worktree_roots.is_empty() {
+            return Determination::undetermined(
+                "blastguard has no worktree storage root for this session (no HOME / cwd / project dir)",
+            );
+        }
+        self.classify_against(&self.worktree_roots, operand, cwd)
+    }
+
+    fn classify_against(
+        &self,
+        roots: &[String],
+        operand: &str,
+        cwd: Option<&str>,
+    ) -> Determination<Placement> {
         if operand.is_empty() {
             return Determination::undetermined("empty operand");
         }
@@ -474,7 +567,7 @@ impl SafeRoots {
                 "real path could not be resolved (no resolver, or the filesystem said no)",
             );
         };
-        for root in &self.roots {
+        for root in roots {
             if &real == root {
                 return Determination::known(Placement::IsRoot { root: root.clone() });
             }
@@ -482,7 +575,7 @@ impl SafeRoots {
         // Longest matching root wins, so a nested root (`/tmp` and a project
         // that happens to live under it) reports the more specific one.
         let mut best: Option<&String> = None;
-        for root in &self.roots {
+        for root in roots {
             let prefix = format!("{}/", root.trim_end_matches('/'));
             if real.starts_with(&prefix) && best.is_none_or(|b| root.len() > b.len()) {
                 best = Some(root);
@@ -497,6 +590,59 @@ impl SafeRoots {
         }
     }
 }
+
+/// The lexical (normalised, not yet resolved) worktree storage root candidates.
+///
+/// * `$HOME/.condukt/worktrees` — only when `home` normalised to an absolute
+///   path; an unset or relative `HOME` contributes nothing.
+/// * for each of `cwd`, `project_dir` that is absolute: if the path has a
+///   component named exactly `.harness-worktrees`, the prefix up to and
+///   including the LAST such component (the last, not the first, so a nested
+///   spelling yields the narrower root — the restrictive choice); otherwise
+///   `dirname(P)/.harness-worktrees`.
+///
+/// No sanity rule is applied here; [`SafeRoots::new`] applies the derived-root
+/// rules to every candidate before it may become a root.
+fn worktree_storage_candidates(
+    cwd: Option<&str>,
+    project_dir: Option<&str>,
+    home_norm: Option<&str>,
+) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    if let Some(home) = home_norm {
+        if let Some(root) = normalize_abs(&format!(
+            "{}/.condukt/worktrees",
+            home.trim_end_matches('/')
+        )) {
+            out.push(root);
+        }
+    }
+    for derived in [cwd, project_dir].into_iter().flatten() {
+        let Some(p) = normalize_abs(derived) else {
+            continue;
+        };
+        let comps: Vec<&str> = p.split('/').filter(|c| !c.is_empty()).collect();
+        let candidate = match comps.iter().rposition(|c| *c == WORKTREE_DIR_NAME) {
+            Some(i) => format!("/{}", comps[..=i].join("/")),
+            None => {
+                let parent = &comps[..comps.len().saturating_sub(1)];
+                if parent.is_empty() {
+                    format!("/{WORKTREE_DIR_NAME}")
+                } else {
+                    format!("/{}/{WORKTREE_DIR_NAME}", parent.join("/"))
+                }
+            }
+        };
+        if !out.contains(&candidate) {
+            out.push(candidate);
+        }
+    }
+    out
+}
+
+/// The directory name the harness keeps session worktrees in, as a sibling of
+/// the main checkout (CLAUDE.md §8).
+const WORKTREE_DIR_NAME: &str = ".harness-worktrees";
 
 /// Push `root` unless an equal one is already present.
 fn push_root(roots: &mut Vec<String>, root: String, resolver: Option<RealPathResolver>) {

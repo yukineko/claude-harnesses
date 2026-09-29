@@ -476,8 +476,10 @@ fn analyse(input: &HookInput) -> Decision {
 ///   * `CLAUDE_PROJECT_DIR` — the project root Claude Code exports to every
 ///     hook, which differs from `cwd` in a worktree session and is equally
 ///     legitimate;
-///   * `HOME` — passed only so [`SafeRoots::new`] can REFUSE to treat the home
-///     directory as a root;
+///   * `HOME` — never a root itself: [`SafeRoots::new`] REFUSES to treat the
+///     home directory as one, and derives from it only the worktree storage
+///     root `$HOME/.condukt/worktrees` (recursive rm strictly inside it is
+///     Allow — user ruling, backlog 873651b9; see `scope`'s module doc);
 ///   * `TMPDIR` — added to the fixed temp roots. Note the asymmetry that makes
 ///     this sound: reading `$TMPDIR` out of the hook's own environment is not
 ///     the same act as expanding the literal string `$TMPDIR` found in a

@@ -110,7 +110,8 @@ rm -rf /        -> deny: recursive rm (-r) can delete an entire directory tree
   `/tmp`・`/var/tmp`（＋環境変数 `TMPDIR`）。`/`・`/usr`・`/mnt/c/Users`・`$HOME`
   などは安全ルートになれない（`NEVER_A_ROOT` と 2 コンポーネント下限）。
 - **緩和される判定**: 対象が**すべて**安全ルートの*厳密な*配下に解決できたときだけ、
-  `deny` → **`ask`** に変わる（`allow` にはならない）。対象コマンドは 再帰/ワイルド
+  `deny` → **`ask`** に変わる（`allow` にはならない。唯一の例外は下の
+  「worktree 置き場」— 再帰 `rm` だけが `allow` になる）。対象コマンドは 再帰/ワイルド
   カード `rm`、`find -delete` / `-exec rm`、`truncate` / `shred`、切り詰め `>`
   リダイレクト、`git clean -f`、`chmod -R` / `chown -R`。
 - **緩和されないもの**（すべて実測でテストに固定済み — `tests/scoped_destructive.rs`）:
@@ -132,6 +133,29 @@ rm -rf /        -> deny: recursive rm (-r) can delete an entire directory tree
   フック本体が注入する resolver（`scope::RealPathResolver`）だけが行うので、
   `detect` は従来どおり純粋関数であり、condukt / specguard / daily の
   `sh -c` 経路の判定は一切変わらない。
+
+### worktree 置き場の中の再帰 `rm` は `allow` — 0.2.82（ユーザー裁定）
+
+2026-09-30 のユーザー裁定（backlog 873651b9、「worktreeへの削除を制限しているhookを
+排除して」）により、**worktree 置き場（worktree storage root）の厳密な内側だけを
+対象とする再帰 `rm`（`-r`/`-R`/`--recursive`）は確認なしで `allow`** になる
+（headless / condukt worker でも `allow`）。契機は subagent が
+`rm -rf ~/.condukt/worktrees/pgv-target` を `recursive rm (-r) can delete an entire
+directory tree` で拒否されたこと。
+
+- **worktree 置き場**: `$HOME/.condukt/worktrees`（`HOME` が絶対パスのときのみ）と、
+  payload の `cwd`・`CLAUDE_PROJECT_DIR` それぞれについて — パスに `.harness-worktrees`
+  というコンポーネントがあればそこまで（最後のもの）、無ければ
+  `dirname(P)/.harness-worktrees`。安全ルートとは**別の集合**で、再帰 `rm` 以外の
+  動詞（`truncate`、`find -delete`、`git clean` …）には何も与えない。正規化・symlink
+  解決・`NEVER_A_ROOT`／`$HOME` 不可／2 コンポーネント下限は派生ルートと同じ。
+- **全オペランド**がリテラルパスで、実パス（`..`・symlink 解決後）が置き場の*厳密な*
+  内側にあるときだけ `allow`。
+- **変わらないもの**: 保護パスの優先（`<置き場>/x/.git/hooks` などは従来どおり deny）
+  ／置き場それ自身とその上（`rm -rf ~/.condukt/worktrees` は deny）／内外混在
+  （従来の判定へ落ちる）／glob（`~/.condukt/worktrees/*`）／`..` で外へ出るもの・
+  symlink で外を指すもの／解決できないパス（`Undetermined` は allow にならない）／
+  ライブラリ利用（`SafeRoots::none()` には置き場が無い）／非再帰 `rm`・`rm -d`。
 
 ## 一度承認した効果は二度聞かない（承認の記憶）— 0.2.53
 

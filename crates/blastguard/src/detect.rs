@@ -7306,6 +7306,19 @@ fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
         return Decision::Allow;
     }
 
+    // WORKTREE STORAGE axis (user ruling 2026-09-30, backlog 873651b9: "remove
+    // the hook that restricts deleting worktrees"). A recursive rm whose EVERY
+    // operand is a literal path resolving strictly inside a worktree storage
+    // root (`$HOME/.condukt/worktrees`, `<parent>/.harness-worktrees`) is
+    // Allow — no confirmation. Placed AFTER the protected-path precedence above
+    // (so `.git/hooks`, `.claude`, … under a worktree still Deny) and only for
+    // `-r`; the root itself, anything above it, a glob, a `..` escape, a
+    // symlink out, and any operand that cannot be resolved all fall through to
+    // the unchanged logic below. See `worktree_confined`.
+    if recursive && worktree_confined(ctx, &operands) {
+        return Decision::Allow;
+    }
+
     // Destructive shape. Exempt only when every operand is a known, *literal*
     // config file. A wildcard operand (`*.toml`, `*.lock`) must never qualify:
     // it self-matches the config globs and would otherwise re-open the gate for
@@ -7343,6 +7356,32 @@ fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     } else {
         Decision::deny("rm with a wildcard can delete many files at once")
     }
+}
+
+/// True only when `operands` is non-empty and EVERY operand is a literal path
+/// (no glob meta, touches no protected path) that [`SafeRoots::classify_worktree`]
+/// places as [`Placement::Inside`] a worktree storage root.
+///
+/// Every other answer — an empty list, a glob, a protected path, `IsRoot`,
+/// `Outside`, and `Undetermined` (unresolvable, no resolver, no roots, an
+/// unknown `cd`) — is `false`, i.e. the caller keeps the verdict it had before
+/// this rule existed. There is no default that answers `true`.
+fn worktree_confined(ctx: &Ctx<'_>, operands: &[&str]) -> bool {
+    if operands.is_empty() {
+        return false;
+    }
+    let base = ctx.base_for("rm");
+    for operand in operands {
+        if has_glob_meta(operand) || exclude::touches_protected(operand) {
+            return false;
+        }
+        match ctx.scope.classify_worktree(operand, base) {
+            Determination::Known(Placement::Inside { .. }) => {}
+            Determination::Known(Placement::IsRoot { .. } | Placement::Outside { .. })
+            | Determination::Undetermined(_) => return false,
+        }
+    }
+    true
 }
 
 /// The operands to hand a placement check, or `None` when at least one of them

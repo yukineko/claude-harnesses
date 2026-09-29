@@ -37,6 +37,7 @@ REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 SCRIPT="$REPO/scripts/rollout-plugins.sh"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib-fingerprint.sh"
 pass() { echo "  ok: $*"; }
 
 # --- locate / build the overwatch binary (deterministic canary core) ---------
@@ -121,7 +122,7 @@ JSON
 REAL_PLUGINS="$HOME/.claude/plugins"
 REAL_BEFORE=""
 if [ -d "$REAL_PLUGINS" ]; then
-  REAL_BEFORE="$(find "$REAL_PLUGINS" -printf '%p|%s|%T@\n' 2>/dev/null | sort | sha256sum | awk '{print $1}')"
+  REAL_BEFORE="$(fingerprint_tree "$REAL_PLUGINS")"
 fi
 
 # =============================================================================
@@ -276,7 +277,7 @@ pass "registry is valid JSON after rollback"
 
 # --- the REAL ~/.claude/plugins tree must be byte-for-byte identical --------
 if [ -n "$REAL_BEFORE" ]; then
-  REAL_AFTER="$(find "$REAL_PLUGINS" -printf '%p|%s|%T@\n' 2>/dev/null | sort | sha256sum | awk '{print $1}')"
+  REAL_AFTER="$(fingerprint_tree "$REAL_PLUGINS")"
   [ "$REAL_BEFORE" = "$REAL_AFTER" ] || fail "REAL ~/.claude/plugins tree changed during the sandboxed rollback test"
   pass "REAL ~/.claude/plugins untouched"
 else

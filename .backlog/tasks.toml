@@ -11795,3 +11795,21 @@ updated_at = 1790678180
 weight = 0.0
 issue_number = 860
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/860"
+
+[[task]]
+id = "63e6b4ac"
+title = "rollout-plugins.sh --dry-run が verify_rollout_complete を走らせ、canary-dryrun.sh が常に drift で落ちる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "rollout",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-29 観測 (0796137b の作業中、branch flow-34385c9e/canary-bsd cdd4aeb4)。BSD 移植後の canary-dryrun.sh は stat と fingerprint を通過したあと、rollout-plugins.sh --canary --dry-run 自体が exit 1 で落ちる。出力は 'ROLLOUT DRIFT (42 problem(s) across 41 plugins checked)' と 'rollout: FAILED — drift remains'。原因候補: rollout-plugins.sh:1327 / 1400 の verify_rollout_complete が dry=1 でも実行され、2 件だけの一時 registry に対して check-plugin-rollout.py が drift を見つける。読み (a): dry-run では verify を skip すべき script のバグ。読み (b): テスト側の registry 構成の不整合。見分け方: dry=1 で verify を skip して canary-dryrun.sh が green になるかを確かめる。skip が fail-open にならないかも確認すること。"
+created_at = 1790678380
+updated_at = 1790678380
+weight = 0.0
+issue_number = 861
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/861"

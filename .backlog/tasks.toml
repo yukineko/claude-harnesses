@@ -978,45 +978,6 @@ issue_number = 115
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/115"
 
 [[task]]
-id = "7c27050b"
-title = "review queue は事実上 write-only — 43 findings が queue 済みで disposition 0 件 (closure 0.00)。reconcile-fixed の運用導線か、bridge 時の自動 disposition が要る"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "review-queue",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-計測日 2026-08-02、測定点 a30b323f、測定コマンド: overwatch review-metrics。closure [condukt-gate] 0.00 (0/4) / [continuous-audit] 0.00 (0/36) / [record-audit] 0.00 (0/3)。457b44f1 で closure rate が計測可能になった結果、初めて見えた事実。specguard は ack 経由で disposition を積むようになったが、他の producer には閉じる導線が無い。review-metrics は『1 finding に fix commit が landed しているが disposition 無し』も警告している。
-
---- 2026-09-24 再測: 起票時の数字が現状と一致しない。着手せず pending に戻す ---
-起票時 (2026-08-02、測定点 a30b323f) は 43 findings が queue 済みで disposition 0 件、
-closure 0.00 だった。今日の再測:
-
-  overwatch review-metrics -> "(no dispositions recorded yet -- run overwatch record-disposition)"
-  overwatch review-queue --json -> entries: 3
-    [systemic] blastguard:protected-path が 2 task / 1 session で 5 回再発
-    [merge-conflict] x2 (どちらも condukt/run-20260913-182640-69073/... 由来)
-
-43 -> 3 に減っているが、これが「閉じられた」のか「compact-findings で畳まれた」のか
-「別ストアへ移った」のかを今日は測っていない。disposition は依然 0 件なので、
-closure が上がったわけではないことだけは確か。
-
-測ったこと: 現在の queue 件数 (3) と disposition 件数 (0)。
-測っていないこと: 40 件がどこへ行ったか。producer 別の closure。
-  reconcile-fixed / compact-findings の実行履歴。
-
-推測で埋めずに pending へ戻す。次に着手する人は、まず 40 件の行方を測ること —
-それが「導線が無い」のか「導線はあるが通っていない」のかを分ける。"""
-created_at = 1785634225
-updated_at = 1790253336
-weight = 0.0
-issue_number = 116
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/116"
-
-[[task]]
 id = "d8d25af9"
 title = "backlog に終端状態『やらない (wontfix)』が無い — done は完了を偽り、fail は defer_until で必ず再キューされる"
 project = "/Users/yuki/src/harness"
@@ -11701,6 +11662,66 @@ updated_at = 1790687716
 weight = 0.0
 issue_number = 866
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/866"
+
+[[task]]
+id = "f81a8197"
+title = "launcher-missing-binary-failclosed.sh にバイナリが存在する場合の対照ケースが無い — 常に失敗する launcher でも green になる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Found 2026-09-30 while verifying 8aeb4cab at main abcd4f2e. The test only runs launchers with the per-platform binary absent. Add a control where <name>-<os>-<arch> is a fake executable that echoes its args and exits 0, then assert the launcher execs it and passes args and exit code through. Only darwin-arm64 branches are exercised on this host."
+created_at = 1790719274
+updated_at = 1790719274
+weight = 0.0
+issue_number = 873
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/873"
+
+[[task]]
+id = "89544915"
+title = "overwatch: condukt-gate / record-audit 由来の finding には閉じる経路が無い (reconcile-fixed は CA-<crate>-<NNN> のみ照合)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Found 2026-09-30 by the 7c27050b investigation at main abcd4f2e on a copy of the live store. closure is continuous-audit 19/44, condukt-gate 0/4, record-audit 0/3. reconcile-fixed only matches CA-<crate>-<NNN> ids, so gate-exec:... and record-audit:... ids are never closed. Needs a ruling on what closed means for escalations and freshness alerts, which have no fix commit."
+created_at = 1790719360
+updated_at = 1790719360
+weight = 0.0
+issue_number = 881
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/881"
+
+[[task]]
+id = "60fe5eed"
+title = "overwatch review-metrics の median latency が finding ts からバッチ auto-reconcile 時刻までを測り約70日と誤誘導する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-09-30 on a copy of the live store: median latency 6055122 s. All 19 dispositions are auto-reconcile stamped 2026-09-24 02:25:05, so the metric measures when the batch ran, not time to fix."
+created_at = 1790719361
+updated_at = 1790719361
+weight = 0.0
+issue_number = 882
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/882"
+
+[[task]]
+id = "ffd62de0"
+title = "overwatch undetermined.jsonl が上限なく肥大 (live store 131k 行、33MB)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-09-29/30: ~/.overwatch/harness-e77d23c7/overwatch/undetermined.jsonl is 33813562 bytes and about 131k lines. No rotation or compaction was found. Check whether overwatch undetermined-metrics still reads it within bounded time."
+created_at = 1790719363
+updated_at = 1790719363
+weight = 0.0
+issue_number = 883
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/883"
 
 [[task]]
 id = "c10bbb8e"

@@ -11,6 +11,21 @@
 /// slices ([`build_queue`]); the CLI shell ([`run`]) reads the stores and
 /// renders either a human-readable list or a JSON array.
 ///
+/// # Findings that were already reviewed leave the queue (7c27050b)
+///
+/// The queue asks a human to review things, so a finding that already has a
+/// disposition in `dispositions.jsonl` (any verdict — written by
+/// `record-disposition` or `reconcile-fixed`) is NOT listed: [`run`] joins the
+/// two ledgers on the exact `finding_id` ([`exclude_dispositioned`]) before the
+/// merge. `compact-findings` is housekeeping for the hot file, not what makes a
+/// dispositioned finding disappear from this view. If the disposition ledger
+/// cannot be read in full, nothing is hidden: the findings are shown unfiltered
+/// behind a `SOURCE NOT FILTERED` marker (see below), never as a clean join.
+///
+/// `review-queue --to-backlog` ([`crate::bridge`]) does NOT apply this join: by
+/// the agreement in `docs/DESIGN-continuous-audit-triage.md`, a disposition is
+/// not a pre-gate for the backlog drain, whose idempotency is its own ledger.
+///
 /// # A source that was READ and held nothing vs one that could not be read
 ///
 /// A missing source contributes nothing — that is a real observation of zero.
@@ -30,6 +45,7 @@
 /// "clean" by any consumer, without breaking the ones that already filter on
 /// `kind`. Those kind-filtering consumers WOULD still skip the marker row, so
 /// the exit code carries the same fact a second way — see [`SourceHealth`].
+use crate::disposition::Disposition;
 use crate::merge_conflict::MergeConflictEntry;
 use crate::review_escalation::{self, ConduktEscalation};
 use crate::review_finding::{AuditVerdict, ReviewFinding};
@@ -172,6 +188,39 @@ pub const SRC_MERGE_RESOLUTION: SourceMeta = SourceMeta {
     file: "merge_conflict_resolutions.jsonl",
     noun: "merge conflicts",
 };
+
+/// The join partner of source 3. Not a source of rows of its own: it only
+/// FILTERS source 3 (a finding a human already dispositioned drops out).
+pub const SRC_DISPOSITION: SourceMeta = SourceMeta {
+    tag: "ai-finding",
+    ledger: "the disposition ledger (dispositions.jsonl)",
+    file: "dispositions.jsonl",
+    noun: "findings",
+};
+
+/// Drop every finding whose `finding_id` already has a disposition (any
+/// verdict: confirmed, dismissed or false-positive — each one is a human having
+/// reviewed it, which is what this queue exists to ask for).
+///
+/// Applied to the RAW records, before [`dedup_findings`], and keyed on the
+/// exact `finding_id` only: a recurring finding re-recorded under a NEW id has
+/// not been dispositioned and stays listed, even when it shares a fingerprint
+/// with a closed one. Filtering after the dedup, by representative, could hide
+/// that newer undispositioned record behind an older closed one.
+///
+/// Pure. The caller decides what to do when the disposition set itself could
+/// not be read (see [`run`]: the list is then shown UNFILTERED and says so).
+pub(crate) fn exclude_dispositioned(
+    findings: Vec<ReviewFinding>,
+    dispositions: &[Disposition],
+) -> Vec<ReviewFinding> {
+    let closed: std::collections::BTreeSet<&str> =
+        dispositions.iter().map(|d| d.finding_id.as_str()).collect();
+    findings
+        .into_iter()
+        .filter(|f| !closed.contains(f.finding_id.as_str()))
+        .collect()
+}
 
 /// What an undetermined read did to the queue. The two are NOT the same event
 /// and must not be reported as one.
@@ -786,6 +835,31 @@ pub fn run(json: bool, since: Option<i64>, limit: Option<usize>) -> Result<Sourc
         }
     };
 
+    // Source 3's join partner: a finding a human already dispositioned
+    // (`record-disposition` / `reconcile-fixed`) has been reviewed and leaves
+    // the queue. Same direction judgement as the merge-resolution ledger below:
+    // a disposition ledger that could not be read in full must NOT hide
+    // anything (that would drop a finding nobody closed), and must NOT be
+    // passed off as a clean join either — the findings are shown UNFILTERED and
+    // an in-band `ShownUnfiltered` marker row + exit 3 say so. Only consulted
+    // when there is something to filter: with no findings, the filter's answer
+    // changes nothing on the queue.
+    let findings: Vec<ReviewFinding> = if findings.is_empty() {
+        findings
+    } else {
+        match store::scan_dispositions(&cwd)? {
+            Determination::Known(dispositions) => exclude_dispositioned(findings, &dispositions),
+            Determination::Undetermined(why) => {
+                undetermined.push(UndeterminedSource {
+                    meta: SRC_DISPOSITION,
+                    effect: SourceEffect::ShownUnfiltered,
+                    why: why.as_str().to_string(),
+                });
+                findings
+            }
+        }
+    };
+
     // Source 4: condukt's durable escalation queue, foreign-read by path. An
     // absent condukt (or no open ask) is a real zero; a queue that could not be
     // read is a HUMAN QUESTION we cannot see, and is announced.
@@ -943,6 +1017,28 @@ mod tests {
     /// unit-separator join is caught. This is the shared key both the dedup
     /// grouping and the to-backlog idempotency contract (CA-overwatch-01) rely
     /// on; drifting it silently would break already-bridged recognition.
+    // 7c27050b, implementer-written: the join is on the exact finding_id, so a
+    // recurring finding re-recorded under a NEW id (same fingerprint) is not
+    // hidden by the older record's disposition.
+    #[test]
+    fn implementer_exclude_dispositioned_keys_on_exact_id_not_fingerprint() {
+        use crate::disposition::DispositionVerdict;
+        let closed = finding_with("CA-x-001", "same text", 10);
+        let recurred = finding_with("CA-x-002", "same text", 20);
+        let other = finding_with("CA-x-003", "other text", 30);
+        let disp = Disposition {
+            finding_id: "CA-x-001".to_string(),
+            verdict: DispositionVerdict::Dismissed,
+            reviewer: "t".to_string(),
+            resolved_ts: 40,
+        };
+        let kept: Vec<String> = exclude_dispositioned(vec![closed, recurred, other], &[disp])
+            .into_iter()
+            .map(|f| f.finding_id)
+            .collect();
+        assert_eq!(kept, vec!["CA-x-002".to_string(), "CA-x-003".to_string()]);
+    }
+
     #[test]
     fn finding_fingerprint_bytes_are_pinned() {
         let sample = ReviewFinding::new(

@@ -844,11 +844,24 @@ run_rebuild_and_sync() {
 # --- capture the plan once (used by both the normal and canary paths) --------
 # One TSV row per plugin. Read into an array so the canary path can slice the
 # ordered plugin set into stages without re-running `plan`.
+#
+# plan() is captured into a variable and its exit status checked BEFORE any row
+# is consumed: `done < <(plan)` discards the producer's status, so a crashed
+# planner would look like an empty (successful) plan.
+plan_or_die() {
+  local rc=0
+  PLAN_TXT="$(plan)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "rollout: FAILED — plan() crashed (exit $rc); aborting, nothing was deployed." >&2
+    exit 1
+  fi
+}
 declare -a PLAN_ROWS=()
+plan_or_die
 while IFS= read -r _row; do
   [ -z "$_row" ] && continue
   PLAN_ROWS+=("$_row")
-done < <(plan)
+done <<<"$PLAN_TXT"
 
 # =============================================================================
 # CANARY STAGED ROLLOUT (opt-in) — only runs with --canary. This block is a
@@ -1284,7 +1297,8 @@ verify_rollout_complete() {
     # A dry run deploys nothing, so "is the fleet current after this run" is
     # unanswerable; running the check would report the pre-existing drift as a
     # failure of a run that changed nothing. Say so explicitly instead of
-    # claiming anything about the fleet. Planning errors exit non-zero earlier.
+    # claiming anything about the fleet. A plan() crash is NOT caught here: it is
+    # caught by plan_or_die, which exits 1 before any row is consumed.
     echo
     echo "verify: skipped (dry-run — nothing was deployed)"
     return 0
@@ -1344,6 +1358,7 @@ declare -a reg_args=()
 declare -a synced_plugins=()
 any_reg_change=0
 
+plan_or_die
 while IFS=$'\t' read -r name version src target needs_copy needs_registry mismatch mpver pjver cur_version cur_path; do
   [ -z "$name" ] && continue
 
@@ -1388,7 +1403,7 @@ while IFS=$'\t' read -r name version src target needs_copy needs_registry mismat
   if [ -f "$srcdir/scripts/sync-plugin-assets.sh" ]; then
     synced_plugins+=("$name:$srcdir")
   fi
-done < <(plan)
+done <<<"$PLAN_TXT"
 
 echo
 if [ "$any_reg_change" = 1 ]; then

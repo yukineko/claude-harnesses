@@ -228,6 +228,85 @@ pub(crate) fn gather_stateless_idle_secs(
     }
 }
 
+/// Which source the idle signal was measured from (or attempted from). Emitted
+/// as the `idle_source` key of the `circuit check` stdout JSON so a consumer can
+/// see WHERE an idle number (or an `idle_unmeasured` trip) came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IdleSource {
+    /// The run's own run-state `updated_at` timestamps (or the run state was
+    /// present-but-unloadable and nothing else was consulted).
+    RunState,
+    /// Run state absent; the claim registry was consulted (a live stateless
+    /// claim measured from its owning transcript, or no claim / an unreadable
+    /// registry → `Undetermined`).
+    ClaimRegistry,
+    /// Run state absent, no stateless claim, and the caller vouched for the
+    /// owning session with `--session S` where the run id is exactly
+    /// `flow-S`: measured from session S's transcript.
+    SessionFlag,
+}
+
+impl IdleSource {
+    /// Stable slug for the stdout JSON.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            IdleSource::RunState => "run_state",
+            IdleSource::ClaimRegistry => "claim_registry",
+            IdleSource::SessionFlag => "session_flag",
+        }
+    }
+}
+
+/// Whether the caller-supplied `--session S` vouches for `run_id`: only when
+/// `S` is non-blank and `run_id` is EXACTLY `flow-S`. The run id alone never
+/// names a session; the explicit flag plus the exact match is the vouch.
+pub(crate) fn session_vouches_for_run(run_id: &str, session: Option<&str>) -> Option<String> {
+    let sid = session?;
+    if sid.trim().is_empty() {
+        return None;
+    }
+    (run_id == format!("flow-{sid}")).then(|| sid.to_string())
+}
+
+/// The idle signal for a run whose run-state file is ABSENT, combining the
+/// claim registry ([`gather_stateless_idle_secs`]) with the caller's optional
+/// `--session` vouch. `transcript_mtime` is injected (production passes
+/// [`crate::claim::session_transcript_mtime_secs`]) so this stays pure.
+///
+/// * Registry has a stateless claim for the run, or is unreadable → exactly
+///   [`gather_stateless_idle_secs`] (the flag is irrelevant; an unreadable
+///   registry is NOT masked by the flag and stays `Undetermined`).
+/// * Registry holds no stateless claim, and [`session_vouches_for_run`] →
+///   `now - transcript_mtime(S)` clamped at 0, or the transcript lookup's
+///   `Undetermined` (HOME unset / transcript not found / mtime unreadable),
+///   which trips `idle_unmeasured` exactly like the claim path.
+/// * Otherwise → the unchanged "run state could not be loaded" `Undetermined`.
+pub(crate) fn gather_absent_run_idle_secs(
+    stateless: crate::claim::StatelessIdle,
+    run_id: &str,
+    session: Option<&str>,
+    now: i64,
+    transcript_mtime: impl FnOnce(&str) -> Determination<i64>,
+) -> (Determination<i64>, IdleSource) {
+    use crate::claim::StatelessIdle;
+    if matches!(stateless, StatelessIdle::NoStatelessClaim) {
+        if let Some(sid) = session_vouches_for_run(run_id, session) {
+            let idle = match transcript_mtime(&sid) {
+                Determination::Known(t) => Determination::known((now - t).max(0)),
+                Determination::Undetermined(why) => Determination::undetermined(format!(
+                    "{} (session {sid} vouched by --session, run {run_id})",
+                    why.as_str()
+                )),
+            };
+            return (idle, IdleSource::SessionFlag);
+        }
+    }
+    (
+        gather_stateless_idle_secs(stateless, now),
+        IdleSource::ClaimRegistry,
+    )
+}
+
 /// The `(verdict, reason slug)` pair shared by the stdout JSON and the journal
 /// record, so the two can never disagree about what was decided.
 fn verdict_fields(verdict: &CircuitVerdict) -> (&'static str, Option<String>) {
@@ -308,6 +387,19 @@ pub(crate) fn circuit_report(
 /// "run state could not be loaded" `IdleUnmeasured` trip. A missing session
 /// id or an unreadable transcript still trips `IdleUnmeasured`, with that
 /// cause named. A corrupt/unreadable run-state file never takes this path.
+///
+/// # `--session S`: the caller vouches for the owning session (backlog 04c3ca6f)
+///
+/// `/flow` runs `circuit check` right after its sink released every claim, so
+/// the registry holds no stateless claim and the path above trips
+/// `idle_unmeasured` after every batch. The run id alone is still NOT trusted
+/// to name a session; instead the caller may pass `session = Some(S)`. Only
+/// when the run state is absent, the registry cleanly reports no stateless
+/// claim, and the run id is EXACTLY `flow-S`, idle is measured from session
+/// S's transcript mtime ([`gather_absent_run_idle_secs`]); an unlocatable or
+/// unreadable transcript still trips `idle_unmeasured`. An unreadable registry
+/// trips regardless of the flag. The stdout JSON's `idle_source` key names the
+/// source used (`run_state` / `claim_registry` / `session_flag`).
 pub fn run_circuit_check(
     cfg: &Config,
     cwd: &Path,
@@ -315,6 +407,7 @@ pub fn run_circuit_check(
     streak_cap: u32,
     idle_ttl_secs: i64,
     budget_cap_usd: Option<f64>,
+    session: Option<&str>,
 ) -> i32 {
     // 1. failure-streak — load the run fail-soft; an unloadable run → streak 0.
     //    Whether the load failed because the file is ABSENT (as opposed to
@@ -354,13 +447,16 @@ pub fn run_circuit_check(
     //    Clock use is allowed HERE (CLI layer); only the pure core is
     //    clock-free, which is why `now` is injected into the gatherer.
     let now = state::now_secs();
-    let idle = if run.is_none() && run_state_absent {
-        gather_stateless_idle_secs(
+    let (idle, idle_source) = if run.is_none() && run_state_absent {
+        gather_absent_run_idle_secs(
             crate::claim::stateless_idle_secs(cfg, cwd, run_id, now),
+            run_id,
+            session,
             now,
+            crate::claim::session_transcript_mtime_secs,
         )
     } else {
-        gather_idle_secs(run.as_ref(), now)
+        (gather_idle_secs(run.as_ref(), now), IdleSource::RunState)
     };
 
     let verdict = decide_circuit(
@@ -373,7 +469,7 @@ pub fn run_circuit_check(
     let (verdict_str, reason) = verdict_fields(&verdict);
 
     // Observable stdout JSON (verdict + reason slug + every gathered signal).
-    let out = circuit_report(
+    let mut out = circuit_report(
         &verdict,
         streak,
         streak_cap,
@@ -381,6 +477,12 @@ pub fn run_circuit_check(
         &idle,
         idle_ttl_secs,
     );
+    if let Some(obj) = out.as_object_mut() {
+        obj.insert(
+            "idle_source".to_string(),
+            serde_json::json!(idle_source.as_str()),
+        );
+    }
     println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
 
     // Journal the same record to the append-only JSONL trail — FAIL-SOFT: a
@@ -668,7 +770,7 @@ mod tests {
             ],
         );
         run.save(&cfg, cwd).unwrap();
-        let code = run_circuit_check(&cfg, cwd, "trip-run", 3, 1800, None);
+        let code = run_circuit_check(&cfg, cwd, "trip-run", 3, 1800, None, None);
         assert_eq!(code, 1, "beyond-cap failure streak must trip (exit 1)");
         // and it journaled a trip record with the failure_streak reason.
         let recs =
@@ -694,7 +796,7 @@ mod tests {
         );
         run.save(&cfg, cwd).unwrap();
         // No cap on budget (None → non-trip); fresh timestamps → no stall.
-        let code = run_circuit_check(&cfg, cwd, "healthy", 3, 1800, None);
+        let code = run_circuit_check(&cfg, cwd, "healthy", 3, 1800, None, None);
         assert_eq!(code, 0, "a healthy run must continue (exit 0)");
     }
 
@@ -709,7 +811,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
         let cfg = test_cfg(cwd);
-        let code = run_circuit_check(&cfg, cwd, "does-not-exist", 3, 1800, None);
+        let code = run_circuit_check(&cfg, cwd, "does-not-exist", 3, 1800, None, None);
         assert_eq!(
             code, 1,
             "an unloadable run's idleness is unmeasurable, which must not exit 0"
@@ -729,7 +831,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
         let cfg = test_cfg(cwd);
-        let code = run_circuit_check(&cfg, cwd, "does-not-exist-either", 3, 0, None);
+        let code = run_circuit_check(&cfg, cwd, "does-not-exist-either", 3, 0, None, None);
         assert_eq!(code, 0);
     }
 
@@ -742,7 +844,7 @@ mod tests {
         // last progress 2h ago, no failures → stall axis (idle_ttl 1800s) trips.
         let run = run_with("stale", vec![task("a", Status::Running, Some(now - 7200))]);
         run.save(&cfg, cwd).unwrap();
-        let code = run_circuit_check(&cfg, cwd, "stale", 3, 1800, None);
+        let code = run_circuit_check(&cfg, cwd, "stale", 3, 1800, None, None);
         assert_eq!(code, 1);
         let recs =
             crate::gatelog::load_circuit_records(&state::project_state_dir(&cfg, cwd), "stale");
@@ -934,7 +1036,7 @@ mod tests {
         // Legacy run-state: tasks exist, none carries `updated_at`.
         let run = run_with("no-ts", vec![task("a", Status::Running, None)]);
         run.save(&cfg, cwd).unwrap();
-        let code = run_circuit_check(&cfg, cwd, "no-ts", 3, 1800, None);
+        let code = run_circuit_check(&cfg, cwd, "no-ts", 3, 1800, None, None);
         assert_eq!(
             code, 1,
             "unmeasurable idleness must not exit 0 (that is the fail-open)"

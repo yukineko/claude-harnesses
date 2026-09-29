@@ -11932,3 +11932,23 @@ updated_at = 1790719503
 weight = 0.0
 issue_number = 884
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/884"
+
+[[task]]
+id = "3aa215e1"
+title = "blastguard: rm の判定を「形」から「壊す対象（資産か・復帰可能か）」へ再設計する（ユーザー裁定）"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+ユーザー原則 2026-09-30:「削除していいがhookのせいで削除できないというのは基本的にまちがっている。削除してはいけないのはシステムの構成、資産の破壊を意味するもの。作業や復帰できるものは削除していい」。AskUserQuestion の回答: project 内は『復帰できるなら許可』。
+設計: 許可（無確認）= temp/scratch、worktree 置き場（873651b9 で先行）、ビルド出力・キャッシュ（target/ 等）、project 内で対象が全部 commit 済み clean か gitignore 済み生成物のもの。拒否 = システムディレクトリ、HOME そのものと home 直下の設定、.git、gate/harness 設定（.claude / .githooks 等の protected path）、project root そのもの、未 commit の変更か untracked な作業を含む project 内パス。git を読めない・判定できない場合は拒否側（CLAUDE.md §3）。現状 project/temp は confined_ask（Ask）、それ以外は形だけで deny（crates/blastguard/src/detect.rs analyze_rm）。wildcard rm、find -delete、git clean など他の削除 verb も同じ原則で見直す。"""
+created_at = 1790719671
+updated_at = 1790719671
+weight = 0.0
+issue_number = 885
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/885"

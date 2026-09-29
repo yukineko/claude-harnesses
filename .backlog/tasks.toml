@@ -9952,26 +9952,6 @@ issue_number = 711
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/711"
 
 [[task]]
-id = "c767cb47"
-title = "gate-bypass ledger は空の staged diff での pre-commit 実行で clear され、未検査の merge commit の diff を検査しないまま push を通す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p0"]
-touched_files = []
-status = "pending"
-notes = """
-Observed 2026-09-24: push of 4331fd90 was blocked by gate-bypass ledger (merge commit made by ff post-merge in main's tree had no certificate). Running .githooks/pre-commit in the integ worktree with an EMPTY staged diff printed 'gates green - cleared 1 ungated commit(s)' and the retry push passed. The commit's own merge diff (tasks.toml only here) was never re-checked. Two readings: (a) fail-open - clearing binds to tree state, not to the ungated commit's diff, so any ungated commit can be laundered by an empty run; (b) by design - the certificate attests the current tree passes all gates, which subsumes the commit. Distinguish: check whether the gates that run on an empty staged diff actually scan the full tree (e.g. check-doc-claims does) or only the staged diff (e.g. test-weakening, secret guard on added lines).
-
-[triage 2026-09-29 @546d9fa2] p1->p0: any green pre-commit (any worktree, any diff) deletes the whole gate-bypassed ledger (.githooks/pre-commit:346-353) without inspecting the ungated commit; launders bypassed commits past the push check; seen live 2026-09-24
-
-[p0 fix 2026-09-29] Patch ready at session scratchpad githooks-c767cb47.patch (applies on p0/gates 0928c6f3); agent-proven in a throwaway clone incl. mutants. RED tests in scripts/test_p0_gate_undetermined.py are on main and stay red until a human applies the .githooks patch."""
-created_at = 1790184142
-updated_at = 1790635964
-weight = 0.0
-issue_number = 714
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/714"
-
-[[task]]
 id = "d186c736"
 title = "record freshness: audit-convergence at 0 exceeds threshold 1 — Continuous-Audit rounds are finding fewer new problems over time"
 project = "/Users/yuki/src/harness"

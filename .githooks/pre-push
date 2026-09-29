@@ -75,7 +75,8 @@ if command -v python3 >/dev/null 2>&1 && [ -f "$REPO/scripts/gate-bypass.py" ]; 
         python3 "$REPO/scripts/gate-bypass.py" >&2
         echo "" >&2
         echo "pre-push: blocked. Push again once the gate has gone green over this" >&2
-        echo "content — a successful pre-commit clears the ledger." >&2
+        echo "content — a successful pre-commit over a non-empty staged diff clears" >&2
+        echo "the entries whose commit is an ancestor of that HEAD." >&2
         exit 1
     fi
 else

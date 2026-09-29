@@ -21,7 +21,9 @@ ledger file that exists but cannot be read or decoded. None of these may collaps
 into 0 — "the ledger could not be read" is not "the ledger is empty", and the
 whole point of this file is that an unexamined commit must not read as examined.
 
-The ledger is cleared by a pre-commit run that goes green, not by this script.
+The ledger is cleared by a pre-commit run that goes green, not by this script —
+and only by a run over a non-empty staged diff, and only for entries whose
+commit is an ancestor of the HEAD that run judged (backlog c767cb47).
 That ordering is deliberate: clearing must be a side effect of actually
 inspecting the content, never an operation a caller can request on its own. A
 `--clear` flag here would be a one-command bypass of the bypass detector.
@@ -147,7 +149,8 @@ def main(argv: list[str]) -> int:
         print("  %s  %s" % (e["commit"][:12], e["subject"]), file=sys.stderr)
     print(
         "\nRun the gate over the current tree and let it go green — the next\n"
-        "successful pre-commit clears the ledger. There is deliberately no\n"
+        "successful pre-commit over a non-empty staged diff clears the entries\n"
+        "contained in its HEAD. There is deliberately no\n"
         "--clear flag: clearing is a side effect of inspection, not a request.",
         file=sys.stderr,
     )

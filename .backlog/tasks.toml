@@ -11952,3 +11952,57 @@ updated_at = 1790719671
 weight = 0.0
 issue_number = 885
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/885"
+
+[[task]]
+id = "282fbb8d"
+title = "condukt autonomy_invariant: flow SKILL の AskUserQuestion 箇所が凍結 allowlist (13) と不一致 (15) で RED"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "test-red",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "04c3ca6f の実装担当が観測（2026-09-30、main dedff14b でも同じく RED、変更無関係）。autonomy_invariant::askuserquestion_sites_match_frozen_allowlist。flow SKILL.md の AskUserQuestion 出現が 15、allowlist は 13。(a) SKILL に新しい human gate が policy answer を通さず増えた欠陥、(b) 散文中の言及が増えただけで allowlist 更新漏れ、のどちらか。増えた2箇所を git log -S で特定して見分ける。凍結テストなので allowlist を黙って更新しない（memory frozen-assert-proxy-vs-named-property）。"
+created_at = 1790720689
+updated_at = 1790720689
+weight = 0.0
+issue_number = 891
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/891"
+
+[[task]]
+id = "866ab9f2"
+title = "condukt fp_gate_scope_contract: decomposition 欠落時に claim-release-not-performed で exit 1 になり RED"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "test-red",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "04c3ca6f の実装担当が観測（2026-09-30、main dedff14b でも RED）。fp_gate_scope_contract::absent_decomposition_file_still_accepts_a_fix_task_with_no_proofs が exit 1。decomposition が無いとき claim-release-not-performed のメッセージで落ちる。claim release 経路の変更（stateless claim 系）で gate の終了コードが変わった可能性。仕様どおり fail-closed なのか回帰なのかを確認する。"
+created_at = 1790720690
+updated_at = 1790720690
+weight = 0.0
+issue_number = 892
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/892"
+
+[[task]]
+id = "b0895996"
+title = "condukt の flaky テスト2件（diffrisk_record journaled / fp_oracle_e2e genuinely_absent_decomposition）"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flaky",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "04c3ca6f の実装担当が観測（2026-09-30）。diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded と fp_oracle_e2e::genuinely_absent_decomposition_still_verifies が1回落ちて再実行で通過。共有状態（固定パスや env）の競合が疑わしい。memory killed-task-leaves-orphan-loop の /tmp fixture 衝突と同型か確認する。"
+created_at = 1790720692
+updated_at = 1790720692
+weight = 0.0
+issue_number = 893
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/893"

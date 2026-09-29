@@ -22321,6 +22321,89 @@ issue_number = 106
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/106"
 
 [[task]]
+id = "d7f2a4ea"
+title = "condukt circuit check は flow の run id では必ず trip する — flow は condukt run state を作らないので idle が構造的に測れない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flow",
+    "condukt",
+    "circuit-breaker",
+    "fail-closed",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-09-24、測定点 9949d349、cycle 13 の終了処理中。
+
+  OUT=$(condukt circuit check --run "flow-<session-id>" 2>&1); rc=$?
+  -> rc=1
+  {"verdict":"trip","reason":"idle_unmeasured","idle_secs":null,
+   "idle_unknown_reason":"run state could not be loaded — time since last progress is unmeasurable",
+   "budget_over_cap":false,"streak":0,"streak_cap":3}
+
+対照 (存在しない run id):
+  condukt circuit check --run "definitely-no-such-run-xyz" -> rc=1、同じ trip / idle_unmeasured
+
+つまり「flow の run id」と「存在しない run id」が同じ出力になる。flow の run id は
+condukt state claim-task が claim を書く先ではあるが、condukt run state (run そのもの) は
+flow が condukt を起動しない限り作られない。したがって condukt を起こさないサイクル
+(backlog item を直接処理して merge するだけのサイクル) では、circuit check は常に trip する。
+
+trip 自体は fail-closed として正しい (測れないなら止める)。問題は、flow SKILL が
+circuit trip を「人にも policy にも聞かない clean stop」と規定していることで、
+これが構造的に必ず起きるなら、ブレーカーは「異常の検出」ではなく「毎回の定型停止」になる。
+ブレーカーが常時 trip していると、本物の trip と区別できない。
+
+あわせて観測した別の欠陥:
+  condukt circuit check   (--run 無し)  -> exit 2 (clap の usage error)
+  exit 2 は flow SKILL の policy-answer routing では escalate に相当する値であり、
+  ブレーカーの結果として解釈すると意味が壊れる。少なくとも「引数不足」と
+  「ブレーカーの判定」が同じ番号空間に乗っているのは危うい。
+
+自己訂正 (CLAUDE.md 4): 本セッションの cycle 11 / 12 の報告で「circuit check exit 0
+(trip していない)」と書いたが、あれは `condukt circuit check | head` の後で $? を読んだ
+もので、パイプ最終要素の終了コードだった。ブレーカーは当時も実際には測っていない。
+同じ形の誤測定を本セッション内で 2 回やっている。
+
+測ったこと: 上記の 3 パターンの exit code と JSON。
+測っていないこと: flow SKILL が実際にどの run id を渡す想定なのか (SKILL の散文は
+`condukt circuit check` としか書いていない)。condukt run state がどこに書かれ、
+flow 由来の claim とどう別管理になっているか。
+
+考えられる直し方 (どれも未検証):
+  - flow 用に「condukt run を持たない driver」を表現できるようにし、その場合の
+    idle を backlog driver の heartbeat から測る。
+  - あるいは flow SKILL 側で、condukt run を起こしていないサイクルでは
+    ブレーカーの対象が無いことを明示し、trip を停止条件に使わない。
+  - 引数不足の exit 2 を判定の番号空間から外す。"""
+created_at = 1790253492
+updated_at = 1790718914
+weight = 0.0
+issue_number = 800
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/800"
+
+[[task]]
+id = "8aeb4cab"
+title = "plugin launcher が per-platform バイナリ欠落時に fail-OPEN する (blastguard だけ fail-closed で非対称)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "plugin-rollout",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+実測 (2026-08-03, linux-x86_64): バイナリ欠落時、blastguard の launcher だけは permissionDecision:ask + 'NOT evaluated / UNCHECKED, not approved' を stdout に出して fail-CLOSED する。一方 budgetguard / propguard / stuckguard / overwatch / autoflow / harness-status / playbook / runbook / session-insights / ship の launcher は stderr にメッセージを出すだけで exit 0 = hook 的には「異常なし」= ガードが無音で外れる。propguard / stuckguard / overwatch は check-plugin-rollout.py 自身が GATE crate として分類しているのに fail-open。condukt も同様で、condukt state autonomy-check の exit 0 が偽の「自律モード」として読まれ、/flow が human gate を自答し始める寸前だった (exit 1 = 非自律 が正)。対応方針: blastguard/bin/blastguard の launcher が既に持っている fail-closed パターンを全 plugin の launcher に横展開する。特に exit code の意味が「許可」に倒れる hook (PreToolUse/Stop) では絶対に exit 0 で抜けないこと。
+除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 8aeb4cab --status pending"""
+created_at = 1785740425
+updated_at = 1790719000
+weight = 0.0
+
+[[task]]
 id = "c767cb47"
 title = "gate-bypass ledger は空の staged diff での pre-commit 実行で clear され、未検査の merge commit の diff を検査しないまま push を通す"
 project = "/Users/yuki/src/harness"
@@ -22341,20 +22424,58 @@ issue_number = 714
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/714"
 
 [[task]]
-id = "8aeb4cab"
-title = "plugin launcher が per-platform バイナリ欠落時に fail-OPEN する (blastguard だけ fail-closed で非対称)"
-project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+id = "63e6b4ac"
+title = "rollout-plugins.sh --dry-run が verify_rollout_complete を走らせ、canary-dryrun.sh が常に drift で落ちる"
+project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = [
-    "fail-open",
-    "plugin-rollout",
+    "rollout",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "2026-09-29 観測 (0796137b の作業中、branch flow-34385c9e/canary-bsd cdd4aeb4)。BSD 移植後の canary-dryrun.sh は stat と fingerprint を通過したあと、rollout-plugins.sh --canary --dry-run 自体が exit 1 で落ちる。出力は 'ROLLOUT DRIFT (42 problem(s) across 41 plugins checked)' と 'rollout: FAILED — drift remains'。原因候補: rollout-plugins.sh:1327 / 1400 の verify_rollout_complete が dry=1 でも実行され、2 件だけの一時 registry に対して check-plugin-rollout.py が drift を見つける。読み (a): dry-run では verify を skip すべき script のバグ。読み (b): テスト側の registry 構成の不整合。見分け方: dry=1 で verify を skip して canary-dryrun.sh が green になるかを確かめる。skip が fail-open にならないかも確認すること。"
+created_at = 1790678380
+updated_at = 1790719253
+weight = 0.0
+issue_number = 861
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/861"
+
+[[task]]
+id = "3ca750b9"
+title = "propguard: mode の綴り間違いが Subprocess を無診断で Inject へ降格させる (Mode::parse の catchall が沈黙)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+Mode::parse の _ => Mode::Inject が未知の mode 文字列を全て Inject に写す。Inject は trust-after-one-block で Subprocess の独立検査より弱いので、typo が独立検査を自己申告へ黙って降格させる。安全側の既定自体は妥当で、問題は沈黙。announce 1行で足りる。docs/audit-propguard-verdict-paths.md の F-3。
+
+[triage 2026-09-29 @b325a169] p2->p1: propguard config.rs:40 unknown mode silently downgrades gate strength to Inject; one-line fix"""
+created_at = 1785798117
+updated_at = 1790719254
+weight = 0.0
+issue_number = 122
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/122"
+
+[[task]]
+id = "0796137b"
+title = "canary テスト2本 (canary-dryrun.sh / canary-rollback.sh) が GNU coreutils 依存で macOS BSD 環境では実行できない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "rollout",
     "p1",
 ]
 touched_files = []
 status = "done"
 notes = """
-実測 (2026-08-03, linux-x86_64): バイナリ欠落時、blastguard の launcher だけは permissionDecision:ask + 'NOT evaluated / UNCHECKED, not approved' を stdout に出して fail-CLOSED する。一方 budgetguard / propguard / stuckguard / overwatch / autoflow / harness-status / playbook / runbook / session-insights / ship の launcher は stderr にメッセージを出すだけで exit 0 = hook 的には「異常なし」= ガードが無音で外れる。propguard / stuckguard / overwatch は check-plugin-rollout.py 自身が GATE crate として分類しているのに fail-open。condukt も同様で、condukt state autonomy-check の exit 0 が偽の「自律モード」として読まれ、/flow が human gate を自答し始める寸前だった (exit 1 = 非自律 が正)。対応方針: blastguard/bin/blastguard の launcher が既に持っている fail-closed パターンを全 plugin の launcher に横展開する。特に exit code の意味が「許可」に倒れる hook (PreToolUse/Stop) では絶対に exit 0 で抜けないこと。
-除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 8aeb4cab --status pending"""
-created_at = 1785740425
-updated_at = 1790719274
+f029190c の真の残渣を分離して起票 (f029190c 自体は health gate 側が 01695cc0 / commit 6302d166 で解決したため close)。実測 2026-07-29 測定点 6302d166、当機は bash 3.2 + BSD coreutils。scripts/tests/canary-dryrun.sh は stat のダッシュ c オプションを使い illegal option でこける。scripts/tests/canary-rollback.sh は find のダッシュ printf を使い同様。両方とも rc=1 になるが、これは canary ロジックの失敗ではなく環境差異。修正前後で同じ落ち方をすることは 6302d166 の作業時に確認済み。canary-gate-crates.sh と canary-gate-eval-failclosed.sh と canary-final-stage-gate.sh は当機で rc=0。/ 完了条件: 2本が macOS BSD 環境でも実行できるよう移植されるか、GNU 依存であることを明示して skip する仕組みを持つ。黙って落ちる状態を解消する。
+
+[triage 2026-09-29 @b325a169] p2->p1: canary tests hash find -printf 2>/dev/null output; on BSD both sides hash empty -> vacuous pass"""
+created_at = 1785280078
+updated_at = 1790719255
 weight = 0.0
+issue_number = 89
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/89"

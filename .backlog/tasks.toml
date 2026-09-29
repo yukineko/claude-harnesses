@@ -3410,21 +3410,6 @@ updated_at = 1787120517
 weight = 0.0
 
 [[task]]
-id = "6803bd45"
-title = "mutategate/fetchguard が ~/.claude/settings.json の enabledPlugins に未登録 — 事故か意図かユーザーに確認する"
-project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-2026-07-30 実測: jq で ~/.claude/settings.json の enabledPlugins を確認したところ fetchguard@yukineko / taintguard@yukineko / mutategate@yukineko の3つが ABSENT。taintguard 分は既存項目 e4687aad が、fetchguard 分は a9ff687e がカバーするので、本項目は mutategate と『そもそも意図的に無効化されているのか』の判断部分に限る。意図なら a9ff687e / e4687aad の前提も崩れる。
-除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 6803bd45 --status pending"""
-created_at = 1785377000
-updated_at = 1787120517
-weight = 0.0
-
-[[task]]
 id = "8aeb4cab"
 title = "plugin launcher が per-platform バイナリ欠落時に fail-OPEN する (blastguard だけ fail-closed で非対称)"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
@@ -11083,9 +11068,11 @@ Two distinct defects here, both attribution:
 
 Consequence chain worth naming: when a gate blocks a session that has no way to comply honestly, the only remaining exit is the skip mechanism. That is structural pressure toward the fail-open that CLAUDE.md 5 is trying to make rare. The gate is not wrong to be fail-closed; it is wrong about WHOSE work it is judging.
 
-Related in-flight: 4b94e371 (false reds from intra-binary test parallelism) is the same theme from a different angle, both make reds less trustworthy and so train the habit of not reading reds. 【救出 2026-09-29】元 id 537a9efe。session-59faffee の未マージ/未コミットの tasks.toml にだけ存在していたため、ブランチ・worktree 整理の前に再起票した。notes 中の関連 id は元 id のまま。"""
+Related in-flight: 4b94e371 (false reds from intra-binary test parallelism) is the same theme from a different angle, both make reds less trustworthy and so train the habit of not reading reds. 【救出 2026-09-29】元 id 537a9efe。session-59faffee の未マージ/未コミットの tasks.toml にだけ存在していたため、ブランチ・worktree 整理の前に再起票した。notes 中の関連 id は元 id のまま。
+
+【再観測 2026-09-29 19:4x】session-34385c9e の Stop で stop-verify-worktree.py が block。main の dirty は UU .backlog/tasks.toml のみで、.git/MERGE_HEAD=82992c23 (MERGE_MSG「Merge origin/main」、19:39:03 作成) は別セッションの進行中 merge。このセッションは main に未コミット変更を持っていない。帰属のバグ (CLAUDE.md 8 末尾) の実例。"""
 created_at = 1790634571
-updated_at = 1790634571
+updated_at = 1790678367
 weight = 0.0
 issue_number = 818
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/818"

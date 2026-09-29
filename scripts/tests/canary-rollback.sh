@@ -25,7 +25,8 @@
 # HARD SAFETY: everything runs against TEMP CLAUDE_PLUGIN_CACHE /
 # CLAUDE_PLUGIN_REGISTRY / HOME (for the overwatch violation store) under
 # mktemp -d, cleaned up on exit. The REAL ~/.claude/plugins tree is
-# snapshotted before/after and asserted byte-for-byte unchanged, exactly like
+# snapshotted before/after and asserted unchanged by a metadata fingerprint (path, size, mtime_ns; see
+# lib-fingerprint.sh), exactly like
 # canary-dryrun.sh. This test NEVER points rollout-plugins.sh's cache or
 # registry at the real ~/.claude/plugins, and NEVER edits marketplace.json /
 # any plugin.json / any crate.
@@ -275,7 +276,7 @@ pass "registry backup created (rollback write path genuinely executed, not a no-
 python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$TEST_REGISTRY" || fail "registry is not valid JSON after rollback"
 pass "registry is valid JSON after rollback"
 
-# --- the REAL ~/.claude/plugins tree must be byte-for-byte identical --------
+# --- the REAL ~/.claude/plugins tree must be unchanged (metadata fingerprint) --
 if [ -n "$REAL_BEFORE" ]; then
   REAL_AFTER="$(fingerprint_tree "$REAL_PLUGINS")"
   [ "$REAL_BEFORE" = "$REAL_AFTER" ] || fail "REAL ~/.claude/plugins tree changed during the sandboxed rollback test"

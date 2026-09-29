@@ -139,7 +139,8 @@ BAKS="$(find "$(dirname "$TEST_REGISTRY")" -name 'installed_plugins.json.bak-*' 
 [ "$BAKS" -eq 0 ] || fail "registry backup files were created during --dry-run"
 pass "no registry backups created"
 
-# The REAL ~/.claude/plugins tree must be byte-for-byte identical.
+# The REAL ~/.claude/plugins tree must be unchanged (metadata fingerprint:
+# path, size, mtime_ns — a same-size same-mtime content rewrite is NOT seen).
 if [ -n "$REAL_BEFORE" ]; then
   REAL_AFTER="$(fingerprint_tree "$REAL_PLUGINS")"
   [ "$REAL_BEFORE" = "$REAL_AFTER" ] || fail "REAL ~/.claude/plugins tree changed during --dry-run"

@@ -902,33 +902,6 @@ issue_number = 104
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/104"
 
 [[task]]
-id = "ea68627b"
-title = "editgate: a shared CARGO_TARGET_DIR can make a broken crate check clean"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-Measured 2026-07-28 on the merge tree. cargo test -p condukt with CARGO_TARGET_DIR pointed at a private dir: editgate::tests::a_non_zero_cargo_exit_is_never_reported_as_clean and ambient_colour_env_cannot_switch_the_gate_off both FAIL, asserting broken:true and getting broken:false. With the variable unset, 17/17 pass. Not caused by the merge - reproduced independently of it.
-
-Mechanism: scratch_crate (crates/condukt/src/editgate.rs:462) names every fixture the SAME package, eg_scratch 0.1.0. check_edit spawns cargo check with the ambient environment inherited, so under one shared target dir the three fixtures - two broken, one compiling - collide on package identity and cargo can answer fresh/exit 0 for a crate that does not compile. editgate then reports broken:false, fallback:false: an affirmative "I checked, it compiles" about code that does not. That is the exact defect the first test was written to pin, resurfacing through a different door.
-
-Two things to settle, and the second matters more than the first:
-1. the tests: give each fixture a unique package name, or pin CARGO_TARGET_DIR per fixture, so they measure editgate rather than cargo cache state.
-2. production: condukt worktrees are checkouts of the SAME repo, so they share package names by construction, and this repo documents a machine with an absolute target-dir override in .cargo/config.toml (see scripts/cap-target-dir.sh). Whether two worktrees sharing one target dir can make editgate pass a broken edit is UNMEASURED - do not assume it cannot. Measure it before closing.
-
-[triage 2026-09-29 @b325a169] p2->p1: editgate fixtures share eg_scratch name + inherited CARGO_TARGET_DIR -> broken:false on non-compiling crate"""
-created_at = 1785494779
-updated_at = 1790631016
-weight = 0.0
-issue_number = 106
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/106"
-
-[[task]]
 id = "5a4630a5"
 title = "gauge collapses the 5m/1h cache-write split (diagnostic only - the TTL is NOT selectable)"
 project = "/Users/yuki/src/harness"
@@ -11843,3 +11816,48 @@ updated_at = 1790686249
 weight = 0.0
 issue_number = 863
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/863"
+
+[[task]]
+id = "f96ab807"
+title = "condukt run_editgate の docstring が「never break a turn」と書き、判定を返す hook が run_hook（panic 握り潰し）経由のまま"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "2026-09-29 ea68627b の worker が指摘。CLAUDE.md 1 節が赤信号と名指しする表現が verdict 経路にある。run_editgate は broken:true/false を返す＝判定を持つので run_guarded 相当（panic は block へ）に移すべきか確認する。見分け方: editgate の panic 時の出力を消費する側（PostToolUse hook の decision）が allow と読むかをテストで観測する。(a) 実在の fail-open (b) 下流が panic 出力を判定に使わない。"
+created_at = 1790687455
+updated_at = 1790687455
+weight = 0.0
+issue_number = 864
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/864"
+
+[[task]]
+id = "25692f6e"
+title = ".githooks/post-commit が存在しない gate-bypass.py --status を案内する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "実測 2026-09-29 main 07804a76。worktree で git merge --ff-only main した直後に post-commit が「python3 scripts/gate-bypass.py --status reports non-zero」を表示。実際に叩くと 'error: unrecognized arguments: --status' (usage: gate-bypass.py [-h] [--repo REPO] [--json])。.githooks/post-commit:47 と :108、scripts/test_gate_bypass.py:1200 が --status を参照。読み (a) フラグが削除/改名されたのに hook とテストの文言が残った (b) --status が別ブランチで未 merge。見分け方: git log -S'--status' -- scripts/gate-bypass.py。"
+created_at = 1790687714
+updated_at = 1790687714
+weight = 0.0
+issue_number = 865
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/865"
+
+[[task]]
+id = "3d97dd01"
+title = "worktree での git merge --ff-only が、main で検査済みのコミットを gate-bypass 台帳に「未検査」として記録する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "実測 2026-09-29。main で --no-ff merge した 07804a76 (pre-commit は main 側の merge で通過) を、2つの worker worktree で git merge --ff-only main したところ、gate-bypass.py が '07804a7612e7 ... gate never inspected (--no-verify, cherry-pick or rebase)' を2行出した。ff は新しいコミットを作らないので pre-commit は走らないが、コミット自体は既に検査済み。読み (a) 台帳が「HEAD の移動」を「未検査コミット」と同一視する誤検知 (b) worktree ごとに検査を要求する意図的設計 (他 worktree の検査証明を信用しない)。見分け方: gate-bypass の certificate が tree+HEAD に束縛される仕組み (memory: amend-always-trips-bypass-ledger) と、ff 先コミットに対する既存 certificate の有無を読む。"
+created_at = 1790687716
+updated_at = 1790687716
+weight = 0.0
+issue_number = 866
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/866"

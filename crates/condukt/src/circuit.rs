@@ -200,6 +200,34 @@ pub(crate) fn gather_idle_secs(run: Option<&RunState>, now: i64) -> Determinatio
     }
 }
 
+/// The idle signal for a run whose run-state file is ABSENT, folded from what
+/// the claim registry says about it ([`crate::claim::stateless_idle_secs`]).
+/// Pure: the registry/transcript reads happen in the caller.
+///
+/// * No stateless claim for the run → exactly [`gather_idle_secs`]`(None)`: a
+///   nonexistent run id and an unknown one keep the unchanged
+///   "run state could not be loaded" `Undetermined` (fail-closed).
+/// * The registry could not be read → `Undetermined`, naming both the missing
+///   run state and the unreadable registry.
+/// * The run owns a stateless claim (a `/flow` driver, which never writes run
+///   state) → the transcript measurement as-is: `Known(idle)` since the owning
+///   session transcript last changed, or `Undetermined` naming the real cause
+///   (no session id, transcript unreadable, no live claim).
+pub(crate) fn gather_stateless_idle_secs(
+    stateless: crate::claim::StatelessIdle,
+    now: i64,
+) -> Determination<i64> {
+    use crate::claim::StatelessIdle;
+    match stateless {
+        StatelessIdle::NoStatelessClaim => gather_idle_secs(None, now),
+        StatelessIdle::RegistryUnreadable(why) => Determination::undetermined(format!(
+            "run state could not be loaded and whether the run is a stateless driver \
+             could not be determined ({why}) — time since last progress is unmeasurable"
+        )),
+        StatelessIdle::Measured(d) => d,
+    }
+}
+
 /// The `(verdict, reason slug)` pair shared by the stdout JSON and the journal
 /// record, so the two can never disagree about what was decided.
 fn verdict_fields(verdict: &CircuitVerdict) -> (&'static str, Option<String>) {
@@ -266,6 +294,20 @@ pub(crate) fn circuit_report(
 /// now exit `1` rather than `0`. Both mean "this gate cannot see whether the
 /// loop is making progress", and a loop that keeps going on that answer is the
 /// runaway the breaker exists to stop.
+///
+/// # Runs without run state: stateless drivers (backlog d7f2a4ea)
+///
+/// A `/flow` run (`flow-<SID>`) never calls `state init`, so it has no run
+/// state, but it owns claims marked [`crate::claim::Claim::stateless`]. When the
+/// run-state file is ABSENT (not merely unreadable), the idle axis asks the
+/// claim registry ([`crate::claim::stateless_idle_secs`], folded by
+/// [`gather_stateless_idle_secs`]): a run with a live stateless claim is
+/// measured from its owning session transcript's mtime — the same transcript
+/// signal the claim reaper uses — so it stall-trips only when that transcript
+/// has been frozen past the TTL. No stateless claim → the unchanged
+/// "run state could not be loaded" `IdleUnmeasured` trip. A missing session
+/// id or an unreadable transcript still trips `IdleUnmeasured`, with that
+/// cause named. A corrupt/unreadable run-state file never takes this path.
 pub fn run_circuit_check(
     cfg: &Config,
     cwd: &Path,
@@ -275,7 +317,17 @@ pub fn run_circuit_check(
     budget_cap_usd: Option<f64>,
 ) -> i32 {
     // 1. failure-streak — load the run fail-soft; an unloadable run → streak 0.
-    let run = RunState::load(cfg, cwd, run_id).ok();
+    //    Whether the load failed because the file is ABSENT (as opposed to
+    //    unreadable/corrupt) is kept: only an absent run state may be a
+    //    stateless /flow driver whose idleness the claim registry can measure.
+    let run_load = RunState::load(cfg, cwd, run_id);
+    let run_state_absent = match &run_load {
+        Err(e) => e
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound),
+        Ok(_) => false,
+    };
+    let run = run_load.ok();
     let streak = run.as_ref().map(trailing_failure_streak).unwrap_or(0);
 
     // 2. budget_over_cap — LEAST-COUPLING source: read budgetguard's on-disk
@@ -301,7 +353,15 @@ pub fn run_circuit_check(
     //    "could not measure" is NOT the same value as "progressed just now".
     //    Clock use is allowed HERE (CLI layer); only the pure core is
     //    clock-free, which is why `now` is injected into the gatherer.
-    let idle = gather_idle_secs(run.as_ref(), state::now_secs());
+    let now = state::now_secs();
+    let idle = if run.is_none() && run_state_absent {
+        gather_stateless_idle_secs(
+            crate::claim::stateless_idle_secs(cfg, cwd, run_id, now),
+            now,
+        )
+    } else {
+        gather_idle_secs(run.as_ref(), now)
+    };
 
     let verdict = decide_circuit(
         streak,

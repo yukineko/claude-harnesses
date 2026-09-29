@@ -11642,66 +11642,6 @@ issue_number = 866
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/866"
 
 [[task]]
-id = "f81a8197"
-title = "launcher-missing-binary-failclosed.sh にバイナリが存在する場合の対照ケースが無い — 常に失敗する launcher でも green になる"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "Found 2026-09-30 while verifying 8aeb4cab at main abcd4f2e. The test only runs launchers with the per-platform binary absent. Add a control where <name>-<os>-<arch> is a fake executable that echoes its args and exits 0, then assert the launcher execs it and passes args and exit code through. Only darwin-arm64 branches are exercised on this host."
-created_at = 1790719274
-updated_at = 1790719274
-weight = 0.0
-issue_number = 873
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/873"
-
-[[task]]
-id = "89544915"
-title = "overwatch: condukt-gate / record-audit 由来の finding には閉じる経路が無い (reconcile-fixed は CA-<crate>-<NNN> のみ照合)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "Found 2026-09-30 by the 7c27050b investigation at main abcd4f2e on a copy of the live store. closure is continuous-audit 19/44, condukt-gate 0/4, record-audit 0/3. reconcile-fixed only matches CA-<crate>-<NNN> ids, so gate-exec:... and record-audit:... ids are never closed. Needs a ruling on what closed means for escalations and freshness alerts, which have no fix commit."
-created_at = 1790719360
-updated_at = 1790719360
-weight = 0.0
-issue_number = 881
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/881"
-
-[[task]]
-id = "60fe5eed"
-title = "overwatch review-metrics の median latency が finding ts からバッチ auto-reconcile 時刻までを測り約70日と誤誘導する"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-09-30 on a copy of the live store: median latency 6055122 s. All 19 dispositions are auto-reconcile stamped 2026-09-24 02:25:05, so the metric measures when the batch ran, not time to fix."
-created_at = 1790719361
-updated_at = 1790719361
-weight = 0.0
-issue_number = 882
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/882"
-
-[[task]]
-id = "ffd62de0"
-title = "overwatch undetermined.jsonl が上限なく肥大 (live store 131k 行、33MB)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-09-29/30: ~/.overwatch/harness-e77d23c7/overwatch/undetermined.jsonl is 33813562 bytes and about 131k lines. No rotation or compaction was found. Check whether overwatch undetermined-metrics still reads it within bounded time."
-created_at = 1790719363
-updated_at = 1790719363
-weight = 0.0
-issue_number = 883
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/883"
-
-[[task]]
 id = "c10bbb8e"
 title = "condukt worktree create が --branch に run prefix を二重に付ける (flow-X/flow-X/topic)"
 project = "/Users/yuki/src/harness"
@@ -11913,6 +11853,212 @@ updated_at = 1790719344
 weight = 0.0
 issue_number = 880
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/880"
+
+[[task]]
+id = "873651b9"
+title = "blastguard: worktree 置き場の内側への rm -r を無確認で許可する（ユーザー裁定）"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "ユーザー裁定 2026-09-30:「worktreeへの削除を制限しているhookを排除して」→ AskUserQuestion で「worktree 置き場は無確認で許可」を選択。対象は ~/.condukt/worktrees と <repo 親>/.harness-worktrees の strict descendant。置き場そのもの・protected path（.git / gate config）の削除は従来どおり deny。symlink 脱出・.. 脱出は Inside にならない。発端: subagent が /Users/yuki/.condukt/worktrees/pgv-target を rm -rf できず、recursive rm deny（crates/blastguard/src/detect.rs analyze_rm）に止められた。"
+created_at = 1790719503
+updated_at = 1790719503
+weight = 0.0
+issue_number = 884
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/884"
+
+[[task]]
+id = "3aa215e1"
+title = "blastguard: rm の判定を「形」から「壊す対象（資産か・復帰可能か）」へ再設計する（ユーザー裁定）"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+ユーザー原則 2026-09-30:「削除していいがhookのせいで削除できないというのは基本的にまちがっている。削除してはいけないのはシステムの構成、資産の破壊を意味するもの。作業や復帰できるものは削除していい」。AskUserQuestion の回答: project 内は『復帰できるなら許可』。
+設計: 許可（無確認）= temp/scratch、worktree 置き場（873651b9 で先行）、ビルド出力・キャッシュ（target/ 等）、project 内で対象が全部 commit 済み clean か gitignore 済み生成物のもの。拒否 = システムディレクトリ、HOME そのものと home 直下の設定、.git、gate/harness 設定（.claude / .githooks 等の protected path）、project root そのもの、未 commit の変更か untracked な作業を含む project 内パス。git を読めない・判定できない場合は拒否側（CLAUDE.md §3）。現状 project/temp は confined_ask（Ask）、それ以外は形だけで deny（crates/blastguard/src/detect.rs analyze_rm）。wildcard rm、find -delete、git clean など他の削除 verb も同じ原則で見直す。"""
+created_at = 1790719671
+updated_at = 1790719671
+weight = 0.0
+issue_number = 885
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/885"
+
+[[task]]
+id = "282fbb8d"
+title = "condukt autonomy_invariant: flow SKILL の AskUserQuestion 箇所が凍結 allowlist (13) と不一致 (15) で RED"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "test-red",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "04c3ca6f の実装担当が観測（2026-09-30、main dedff14b でも同じく RED、変更無関係）。autonomy_invariant::askuserquestion_sites_match_frozen_allowlist。flow SKILL.md の AskUserQuestion 出現が 15、allowlist は 13。(a) SKILL に新しい human gate が policy answer を通さず増えた欠陥、(b) 散文中の言及が増えただけで allowlist 更新漏れ、のどちらか。増えた2箇所を git log -S で特定して見分ける。凍結テストなので allowlist を黙って更新しない（memory frozen-assert-proxy-vs-named-property）。"
+created_at = 1790720689
+updated_at = 1790720689
+weight = 0.0
+issue_number = 891
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/891"
+
+[[task]]
+id = "866ab9f2"
+title = "condukt fp_gate_scope_contract: decomposition 欠落時に claim-release-not-performed で exit 1 になり RED"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "test-red",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "04c3ca6f の実装担当が観測（2026-09-30、main dedff14b でも RED）。fp_gate_scope_contract::absent_decomposition_file_still_accepts_a_fix_task_with_no_proofs が exit 1。decomposition が無いとき claim-release-not-performed のメッセージで落ちる。claim release 経路の変更（stateless claim 系）で gate の終了コードが変わった可能性。仕様どおり fail-closed なのか回帰なのかを確認する。"
+created_at = 1790720690
+updated_at = 1790720690
+weight = 0.0
+issue_number = 892
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/892"
+
+[[task]]
+id = "b0895996"
+title = "condukt の flaky テスト2件（diffrisk_record journaled / fp_oracle_e2e genuinely_absent_decomposition）"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flaky",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "04c3ca6f の実装担当が観測（2026-09-30）。diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded と fp_oracle_e2e::genuinely_absent_decomposition_still_verifies が1回落ちて再実行で通過。共有状態（固定パスや env）の競合が疑わしい。memory killed-task-leaves-orphan-loop の /tmp fixture 衝突と同型か確認する。"
+created_at = 1790720692
+updated_at = 1790720692
+weight = 0.0
+issue_number = 893
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/893"
+
+[[task]]
+id = "dbfc112a"
+title = "blastguard: worktree 置き場の rm 許可が ~ や $HOME 指定の operand では効かない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = '873651b9 の検証（2026-09-30）で観測。rm -rf ~/.condukt/worktrees/x、$HOME/..、"$HOME"/.. はすべて DENY（変数 operand は fail-closed）。ユーザー裁定『worktree 置き場は無確認で許可』は、リテラルの絶対パスでしか実現していない。HOME を既知として先頭の ~/ と $HOME だけを展開するかどうかを検討する。他の変数は deny のままにする。'
+created_at = 1790720868
+updated_at = 1790720868
+weight = 0.0
+issue_number = 894
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/894"
+
+[[task]]
+id = "7271f6e3"
+title = "circuit check --session: 未テストの2経路（registry 読めない＋flag / 生きた claim＋flag）に RED 観測付きテストを足す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "04c3ca6f の検証（2026-09-30）で mutant 2つが生存した。(b) RegistryUnreadable を session 経路へ流す mutant と、(d) flag が生きた stateless claim を上書きする mutant。どちらも circuit.rs の doc は正しく書かれているが、それを縛るテストが無い。書くテストは2つ。1つ目は、registry が読めないときに flag を渡しても idle_unmeasured で trip すること。2つ目は、生きた claim があるときに flag を渡しても claim_registry 経路を通ること。テストは実装者以外が書く。"
+created_at = 1790721222
+updated_at = 1790721222
+weight = 0.0
+issue_number = 899
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/899"
+
+[[task]]
+id = "3487df07"
+title = "circuit check --session: '/' や '..' を含む session id を拒否する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "04c3ca6f の検証で観測。locate_session_transcript_in が entry.path().join(<sid>.jsonl) を使うため、--session ../x に --run flow-../x を組み合わせると projects 外の x.jsonl の mtime を読む。影響は呼び出し元自身の gate 判定に限られる。それでも '/' と '..' は判定不能として trip させる。"
+created_at = 1790721223
+updated_at = 1790721223
+weight = 0.0
+issue_number = 900
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/900"
+
+[[task]]
+id = "f81a8197"
+title = "launcher-missing-binary-failclosed.sh にバイナリが存在する場合の対照ケースが無い — 常に失敗する launcher でも green になる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Found 2026-09-30 while verifying 8aeb4cab at main abcd4f2e. The test only runs launchers with the per-platform binary absent. Add a control where <name>-<os>-<arch> is a fake executable that echoes its args and exits 0, then assert the launcher execs it and passes args and exit code through. Only darwin-arm64 branches are exercised on this host."
+created_at = 1790719274
+updated_at = 1790719274
+weight = 0.0
+issue_number = 873
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/873"
+
+[[task]]
+id = "89544915"
+title = "overwatch: condukt-gate / record-audit 由来の finding には閉じる経路が無い (reconcile-fixed は CA-<crate>-<NNN> のみ照合)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Found 2026-09-30 by the 7c27050b investigation at main abcd4f2e on a copy of the live store. closure is continuous-audit 19/44, condukt-gate 0/4, record-audit 0/3. reconcile-fixed only matches CA-<crate>-<NNN> ids, so gate-exec:... and record-audit:... ids are never closed. Needs a ruling on what closed means for escalations and freshness alerts, which have no fix commit."
+created_at = 1790719360
+updated_at = 1790719360
+weight = 0.0
+issue_number = 881
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/881"
+
+[[task]]
+id = "60fe5eed"
+title = "overwatch review-metrics の median latency が finding ts からバッチ auto-reconcile 時刻までを測り約70日と誤誘導する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-09-30 on a copy of the live store: median latency 6055122 s. All 19 dispositions are auto-reconcile stamped 2026-09-24 02:25:05, so the metric measures when the batch ran, not time to fix."
+created_at = 1790719361
+updated_at = 1790719361
+weight = 0.0
+issue_number = 882
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/882"
+
+[[task]]
+id = "ffd62de0"
+title = "overwatch undetermined.jsonl が上限なく肥大 (live store 131k 行、33MB)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-09-29/30: ~/.overwatch/harness-e77d23c7/overwatch/undetermined.jsonl is 33813562 bytes and about 131k lines. No rotation or compaction was found. Check whether overwatch undetermined-metrics still reads it within bounded time."
+created_at = 1790719363
+updated_at = 1790719363
+weight = 0.0
+issue_number = 883
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/883"
 
 [[task]]
 id = "c6b74ed8"

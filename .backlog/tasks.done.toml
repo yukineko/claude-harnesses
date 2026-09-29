@@ -21823,3 +21823,437 @@ updated_at = 1790634975
 weight = 0.0
 issue_number = 809
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/809"
+
+[[task]]
+id = "867dde4b"
+title = ".backlog/tasks.toml の merge に安全な結合手段が無く、素朴な union が task ブロックを切断してキュー全体をパース不能にした"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-09-09、merge 29e9257b で発生し cbc48b0a で修復。
+
+何が起きたか: このファイルは append-only の台帳なので衝突は union が正解なのだが、衝突ハンクの境界が [[task]] ブロックの内側に落ちると、ours の途中 + theirs の途中が連結されて id を2つ持つ1ブロックになる。TOML 全体がパース不能になり、以後の backlog add が Error: failed to parse で全滅する。恒久キューが黙って行き先を失う形。
+
+さらに罠が2段ある: (1) 修復スクリプト自身も、notes 本文が他 task を引用していて行頭が丁度 [[task]] になっている散文を構造と誤認し、741 ブロックを書いて 742 パースされた。三重引用符のパリティを追跡して直した。(2) 素朴 union は切断だけでなく欠落も起こしうるので、修復は継ぎ目を繕うのではなく両親から id 単位で再構成した (ours=627 / theirs=707 / 共有=592 で union=742)。
+
+提案: backlog 側に id 単位 union を行う merge サブコマンドを持たせ、.gitattributes の merge driver として登録する。手で union するたびに同じ切断が起きる。関連 2fa47b68 (ストアが main のツリーに在ることそのもの)。
+
+[triage 2026-09-29 @546d9fa2] p1->p0: data loss: no merge driver for .backlog/tasks.toml; union merge has already made the queue unparseable and can silently drop tasks
+
+[p0 fix 2026-09-29] fixed in merge driver f769c750 (backlog 0.3.14); RED test by separate agent, verified green on committed HEAD, merged to main, rolled out."""
+created_at = 1788898358
+updated_at = 1790635952
+weight = 0.0
+issue_number = 451
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/451"
+
+[[task]]
+id = "a83802ad"
+title = "blastguard: append redirect (>>) が変数形で silently permissive — P=/etc/fstab; echo x >> $P が Allow (truncate 側で塞いだのと同じ欠陥クラス)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p0"]
+touched_files = []
+status = "done"
+notes = """
+
+
+[triage 2026-09-29 @546d9fa2] p1->p0: probed deployed blastguard 0.2.71: P=/etc/fstab; echo x >> $P allowed while > form denied; live bypass of blocking gate
+
+[p0 fix 2026-09-29] fixed in 7e60c4c6; RED test by separate agent, verified green on committed HEAD, merged to main, rolled out."""
+created_at = 1789350173
+updated_at = 1790635954
+weight = 0.0
+issue_number = 648
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/648"
+
+[[task]]
+id = "f1c170ab"
+title = "blastguard: cd into a system dir then a RELATIVE redirect escapes the system-directory axis"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "security",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """
+Measured 2026-09-10 against the DEPLOYED blastguard 0.2.60 binary
+(~/.claude/plugins/cache/yukineko/blastguard/0.2.60/bin/blastguard), PreToolUse payload on stdin:
+
+  cd /etc && echo x > paths.d/zz-evil   -> ALLOW
+  cd /etc/paths.d && echo x > zz-evil   -> ALLOW
+
+while the equivalent absolute forms are all denied by the system-directory axis 0.2.60 added:
+
+  echo x > /etc/paths.d/zz-evil         -> deny
+  echo x > /tmp/../etc/paths.d/zz-evil  -> deny
+  echo x > /etc/../etc/paths.d/zz-evil  -> deny
+  echo x > /private/etc/paths.d/zz-evil -> deny
+
+NOT A REGRESSION - established with a control, not by reasoning. A disposable worktree at
+c7c4ea49 (the commit immediately BEFORE the 0.2.60 system-dir axis landed) was built and probed:
+both cd forms were already ALLOW there. So 0.2.60 neither introduced nor closed this.
+
+WHY IT IS OPEN. scope::is_inside_system_dir returns false for any operand that is not absolute,
+deliberately - it has no base to resolve a relative path against, and guessing one would
+manufacture wrong answers. The absolute-path axis therefore never sees paths.d/zz-evil. The
+machinery that COULD see it already exists: detect.rs threads cwd through the per-segment walk via
+advance_cwd_and_rewrite, precisely so a cd in an earlier segment is visible to a later one, and the
+BG-cwd comment in detect.rs documents this whole class. The system-dir check simply runs in the
+line-level scan that happens BEFORE that walk, where no per-segment base exists yet.
+
+Note the truncating-redirect loop already guards its confinement check with
+!line_changes_cwd_before(cmd, usize::MAX) for exactly this reason - it refuses to call a relative
+target confined when the line moved the cwd. The system-dir axis needs the mirror of that: when the
+line DOES change cwd, resolve the target against the walked cwd and re-ask.
+
+FIX SHAPE: move or duplicate the system_path_block call into the per-segment path, after
+advance_cwd_and_rewrite has rewritten relative operands against the established cwd.
+
+The false docstring that claimed this case was handled has been corrected in the same area
+(scope.rs, is_inside_system_dir, section Undetermined) and now states plainly that the false return
+means NOT CHECKED rather than checked-and-clean, and cites this ticket.
+
+[triage 2026-09-29 @546d9fa2] p1->p0: probed deployed blastguard 0.2.71: cd /etc && echo x > paths.d/zz-evil allowed while absolute form denied; live bypass of blocking gate
+
+[p0 fix 2026-09-29] fixed in ca04f164; RED test by separate agent, verified green on committed HEAD, merged to main, rolled out."""
+created_at = 1789040755
+updated_at = 1790635955
+weight = 0.0
+issue_number = 490
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/490"
+
+[[task]]
+id = "06345780"
+title = "blastguard: operand 位置の command substitution ($(rm -rf ...) / backtick) を解析せず allow する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """
+Measured 2026-09-24 against the base binary at 564b3676 (built separately by the verifier for 6cf12ce9; CLAUDE_CODE_ENTRYPOINT=cli, CLAUDECODE=1): echo $(rm -rf ~/work) -> allow; cat $(rm -rf ~/work) -> allow; cat <backtick>rm -rf ~/work<backtick> -> allow; cat <<'EOF' $(rm -rf /tmp/x) (heredoc) -> allow. A bare rm -rf ~/work is denied (recursive rm), so the substitution payload in an OPERAND position is never judged. This predates c4682476 and is not caused by it. The adversarial verifier of the 6cf12ce9 heredoc fix found it. Probe script: session 9d349393 scratchpad sysrec/probe3.py.
+
+[triage 2026-09-29 @546d9fa2] p1->p0: blastguard never judges destructive commands inside $(...)/backticks in argument position (detect.rs:7917,8188 scan only fetch/decode); verifier measured echo $(rm -rf ~/work) -> allow; irreversible
+
+[p0 fix 2026-09-29] fixed in 5ea67e36; RED test by separate agent, verified green on committed HEAD, merged to main, rolled out."""
+created_at = 1790252037
+updated_at = 1790635956
+weight = 0.0
+issue_number = 775
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/775"
+
+[[task]]
+id = "d5613105"
+title = "blastguard: cp/mv/install into a system directory are still Allow (same hole 0.2.60 closed for redirects)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "security",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """
+Measured 2026-09-10 against the locally built 0.2.59 binary (worktree agent-a3292f0e8fb2bc7e3), PreToolUse payload on stdin, cwd=/Users/yuki/src/harness:
+  cp evil /etc/paths.d/zz            -> ALLOW (silent)
+  install -m755 evil /usr/local/bin/x -> ALLOW (silent)
+  mv evil /Library/LaunchDaemons/e.plist -> ALLOW (silent)
+  tee /etc/paths.d/zz                -> deny (caught by the tee rule, not by any system-dir axis)
+
+Same root cause as 19c359d0: f18134da (0.2.59) moved the axis to recoverability, and a path that does not exist yet answers NothingToDestroy, so the write is allowed. 0.2.60 added scope::is_inside_system_dir and wired it into the TRUNCATING and APPEND redirect loops only. The cp/mv/install DESTINATION path is a separate rule and was NOT wired up, so the identical payload lands through a different verb.
+
+This is the mirror-gap pattern the repo already records: a fix landed on one path, the twin was left open. Fix = call system_path_block on the destination operand of the copy/move/install rules too.
+
+Note the 0.2.58 behaviour for contrast: all of these were DENIED at f18134da^, for the wrong stated reason (truncates and overwrites an existing file, asserted without any existence check). So the verdict regressed while the reason string was being corrected.
+
+[triage 2026-09-29 @546d9fa2] p1->p0: blastguard allows cp/mv/install into system paths (detect.rs:6653-6656) while redirect is denied; live allow in blocking gate
+
+[p0 fix 2026-09-29] fixed in cab3f91d; RED test by separate agent, verified green on committed HEAD, merged to main, rolled out."""
+created_at = 1789040398
+updated_at = 1790635958
+weight = 0.0
+issue_number = 486
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/486"
+
+[[task]]
+id = "9271d739"
+title = "blastguard: the config exemption covers the deployed-plugin and transcript subtrees of the user's home Claude directory, so recursively deleting every deployed gate binary is auto-allowed"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-09-10、blastguard 0.2.62 のデプロイ済みバイナリに実 PreToolUse payload を投入 (コマンドは実行していない。判定のみ読んだ)。
+
+exclude.rs の ALLOW_GLOBS にある **/.claude/** は $HOME 配下の Claude 設定ツリーにもそのまま一致する。
+その結果、次がいずれも ALLOW (出力なし = 素通り) になる:
+
+  - ホームの Claude ディレクトリ配下 plugins サブツリーの再帰削除 → ALLOW
+    ここには全 gate プラグインのデプロイ済みバイナリ (blastguard 自身を含む) が入っている。
+    消えれば hook は起動せず、全ゲートが同時に無音化する。
+  - ホームの Claude ディレクトリ配下 projects サブツリーの再帰削除 → ALLOW
+    transcripts と memory ノートが入っている。git が複製を持たないので復旧不能。
+
+対照 (同じ測定):
+  - ホームの Claude ディレクトリ「そのもの」の再帰削除は deny になる。
+    理由文は「protected gate/config paths を holding する directory tree」。
+    つまり container ルールは親だけを守り、子ディレクトリは守っていない。
+  - 同じ形でリポジトリ内の .githooks を消す場合は deny。
+
+なぜ重いか: デプロイ済みバイナリの消失は「ゲートが赤くなる」ではなく「ゲートが暗転する」。
+finding が出ないので、無音化したこと自体が観測できない (CLAUDE.md の launcher exec bit の節と同じ失敗様式)。
+
+考えられる直し方 (未検証・判断であって観測ではない): PROTECTED_GLOBS に plugins サブツリーを名前で加える、
+あるいは ALLOW_GLOBS 側の Claude ディレクトリ免除を「設定ファイルそのもの」に限定する。
+b9d1503d (worktrees セグメント) と同じ族だが、直す場所が別なので別票にした。
+
+[triage 2026-09-29 @546d9fa2] p1->p0: probed deployed blastguard 0.2.71: rm -rf ~/.claude/plugins and ~/.claude/projects allowed (exclude.rs:25-28); darkens every gate / destroys transcripts+memory, irreversible
+
+[p0 fix 2026-09-29] fixed in e79d0a31; RED test by separate agent, verified green on committed HEAD, merged to main, rolled out."""
+created_at = 1789047764
+updated_at = 1790635959
+weight = 0.0
+issue_number = 500
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/500"
+
+[[task]]
+id = "70883137"
+title = "blastguard PreToolUse: read_stdin / parse 段の panic が run_hook の無音 exit0 (=allow) に落ちるか確認する (fetchguard 56991fca の双子)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """
+2026-09-24 fetchguard 修正 worker の指摘。未検証。PreToolUse では沈黙は allow を意味する。
+
+[triage 2026-09-29 @546d9fa2] p1->p0: blastguard verdict path still behind run_hook panic->exit0 barrier (main.rs:89-93, never-break-a-turn comment); only analyse is in catch_unwind
+
+[p0 fix 2026-09-29] fixed in 99f1c0ef; RED test by separate agent, verified green on committed HEAD, merged to main, rolled out."""
+created_at = 1790252367
+updated_at = 1790635960
+weight = 0.0
+issue_number = 783
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/783"
+
+[[task]]
+id = "e3366b5c"
+title = "並行セッションの同時 rollout が互いの配備を prune し合い、GATE crate を dark にする — 実測で specguard/blastguard の 2 本が同時に dark 化した"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p0"]
+touched_files = []
+status = "done"
+notes = """
+実測 (2026-09-07, 本 repo):
+
+2 セッションが共有 plugin cache (~/.claude/plugins/cache/yukineko) に対して同時に
+rollout を走らせた結果、両 GATE crate が dark になった:
+
+    plugin      registry が指す版   cache の実体
+    specguard   0.2.56             0.2.55   <- 指す先が存在しない
+    blastguard  0.2.55             0.2.54   <- 同上
+
+機序: rollout-plugins.sh は末尾で prune-plugin-cache.py を走らせ、prune は
+「current 版」を *その実行元ツリーの* crates/<name>/.claude-plugin/plugin.json から
+読む。セッション A のツリーが 0.2.56、セッション B のツリーが 0.2.55 のとき、
+B の rollout は A が配備して registry に登録した 0.2.56 を「stale」と判定して削除する。
+registry (installed_plugins.json) は cache と別ファイルなので、指す先が消えても
+更新されない。結果、hook は存在しないパスを exec しようとして起動せず、finding も
+出ない = red ではなく dark。
+
+なぜ既存ガードで防げないか: prune が保持する 2 条件 (live pid の .in_use マーカー /
+settings.json の絶対パス pin) はどちらも「別セッションが今まさに配備した新しい版」を
+守らない。.in_use は旧版側に付き、settings.json は本機では 0 件
+(`grep -c 'cache/yukineko' ~/.claude/settings.json` -> 0)。
+
+修正案 (どれも未検証の案であって結論ではない):
+- prune が削除前に installed_plugins.json を読み、registry が指す版は絶対に消さない
+  (「current でない」と「誰も使っていない」は別物。指されている版の削除は定義上 dark 化)。
+- cache 全体に対する rollout ロックを取る (worktree 分離では防げない — cache は
+  ~/.claude 配下の単一共有資源であって repo の中に無い)。
+- prune の判定不能を制限側へ倒す: 実行元ツリーの版と registry の版が食い違うときは
+  「どちらが current か判定不能」として何も消さない。
+
+暫定復旧手順 (今回実施したもの): registry が期待する版を main ツリーから
+`scripts/rollout-plugins.sh --plugin <name> --canary` で貼り直し、cache が registry の
+指す先を含む状態に戻す。復旧後は binary の --version 起動まで確認すること
+(ファイル存在の確認だけでは dark と区別できない)。
+
+[triage 2026-09-29 @546d9fa2] p1->p0: concurrent rollouts can prune the version dir the registry points at (plugin_cache.py / prune-plugin-cache.py never read installed_plugins.json, no rollout lock); observed specguard/blastguard going dark; irreversible
+
+[p0 fix 2026-09-29] fixed in 287f865e; RED test by separate agent, verified green on committed HEAD, merged to main, rolled out."""
+created_at = 1788770875
+updated_at = 1790635962
+weight = 0.0
+
+[[task]]
+id = "ba5794b3"
+title = "canary rollout halt leaves already-passed stages deployed with no host binary"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p0"]
+touched_files = []
+status = "done"
+notes = """
+In the --canary path, the per-stage registry pointer is written inside the stage loop (scripts/rollout-plugins.sh:940 registry_patch), but run_rebuild_and_sync — the only thing that seeds host binaries — is at :1066, AFTER the loop. A gate verdict halting the run (exit 5 at :1037 'gate could not evaluate', exit 4 at :1044 'rollback advised') therefore leaves every stage 0..N-1 that already PASSED holding a fresh version dir and a live registry pointer with launcher-only bin/, and execute_stage_rollback (:797-849) restores only the stage just applied. Result: those plugins are installed, version-consistent, and exec nothing — dark, not red. Same class already measured once as backlog 51e6ebc7 (a --force --canary rollout blanked blastguard/overwatch/specguard). Found while closing 8206b09f.
+
+[triage 2026-09-29 @546d9fa2] p1->p0: canary halt leaves passed stages registered with no host binary -> gates such as blastguard/overwatch silently stop running (rollout-plugins.sh:940,1037,1044,1066)
+
+[p0 fix 2026-09-29] fixed in afcb1170 + 94fd2d38 (case B flipped by user ruling 2026-09-29); RED test by separate agent, verified green on committed HEAD, merged to main, rolled out."""
+created_at = 1789118621
+updated_at = 1790635962
+weight = 0.0
+issue_number = 538
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/538"
+
+[[task]]
+id = "2cef09c5"
+title = "check-version-bumped.py / check-plugin-versions.py / deny-no-verify.py の判定不能 to allow（フォールト注入で確認済み）"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+touched_files = []
+status = "done"
+notes = """
+すべて監査エージェントがフォールト注入で確認した観測。
+1. scripts/check-version-bumped.py:81-89 + :257-259 — plugin_version_at が None を返す理由は3つ
+   （base に存在しない / git show 失敗 / JSON 破損）なのに、消費側は
+   if base_v is None: continue  # new plugin -- no bump required で一律 allow。
+   注入: base の blob を破損させたうえで crates/blastguard/src/lib.rs を変更 to rc=0
+   「OK: no changed plugin left un-bumped」。兄弟の check-test-weakening.py:312-323 は
+   同じクラスを ls-tree で存在確認してから判定しており、正解が既に repo 内にある。
+2. scripts/check-version-bumped.py:182-188 — 共有クレート arm が base manifest 読めない時に
+   ok を返す。コメント自身が2ケースを「区別できない」と認めているが git cat-file -e で区別可能。
+   注入: git show rc=128 to ok。
+3. scripts/check-plugin-versions.py:53-54 + :78-79 — 対象が空でも「OK: 0 plugins version-consistent」
+   で exit 0。check-launcher-exec-bit.py:170-181 / check-doc-claims.py:291-299 /
+   check-shell-syntax.py:172-176 はいずれも空集合で exit 2 にしており、この repo 内で極性が割れている。
+4. scripts/deny-no-verify.py:380-388 — no-verify マーカー走査がトークン化失敗時にしか走らない。
+   観測: git commit --no-verify は rc=2、sh -c 経由と env 経由はいずれも rc=0。
+   guard-maintree-bash.py と同じ interpreter ラッパ・ミラー（:83-88 に既知として記載）。
+親 826c29bf
+
+[triage 2026-09-29 @546d9fa2] p1->p0: deny-no-verify bypassed: probed sh -c "git commit --no-verify" rc=0 and env FOO=1 git commit --no-verify rc=0 (bare rc=2); one wrapped commit skips every local pre-commit gate
+
+[p0 fix 2026-09-29] fixed in 0928c6f3; RED test by separate agent, verified green on committed HEAD, merged to main, rolled out."""
+created_at = 1788791799
+updated_at = 1790635963
+weight = 0.0
+issue_number = 425
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/425"
+
+[[task]]
+id = "842d552c"
+title = "maintree guard が overwatch status --json の undetermined 配列を読まず、観測不能な peer roster を peer ゼロとして扱う"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+touched_files = []
+status = "done"
+notes = """
+測定点 c39701bc / 2026-09-13、読み取りのみ、逐語引用あり。crates/condukt/src/maintree.rs:588 が run_tool で overwatch status --json を呼び、parse_overwatch_sessions (maintree.rs:625-665) が sessions[].live_count だけを読む。overwatch 側は crates/overwatch/src/aggregate.rs:414-433 の apply_leases が ledger 読み取り失敗を SOURCE_SESSIONS の undetermined として記録し、status --json は undetermined 配列として出力するが、maintree のパーサはこの配列を一切参照しない。したがって overwatch が正直に判定不能と答えても、第8節の main-tree guard には peer ゼロ すなわち他に誰も動いていない として届く。これは CLAUDE.md 第8節が絶対義務と呼ぶ不変条件のまさに fail-open 方向である。さらに同じ入口は aggregate.rs:527-535 の build_cached を通るので、TTL 10 秒 (aggregate.rs:501 STATUS_CACHE_TTL_SECS) 以内の陳腐なキャッシュでも sessions が空になりうる。ledger 書き込みによる無効化は存在せず lease.rs は status_cache に一切触れない。よって peer が begin した直後の 10 秒間、guard は peer ゼロを見る。是正方向: parse_overwatch_sessions が undetermined 配列に SOURCE_SESSIONS の項目があれば Determination::Undetermined へ解決し、guard は制限側へ倒す。関連して crates/condukt/src/maintree.rs:64-67 の散文は apply_leases が今も if let Ok で潰していると書いているが実装は Err を分岐して undetermined を記録しており、散文が実装より古い (第4節の docstring と実挙動の不一致)。同じコミットで直すこと。関連 7d820338。 【救出 2026-09-29】元 id 1df540f8（2026-09-13 に run-20260913-223004-15261 の orch worktree で起票されたが未コミットのまま残っていた。worktree 削除前に再起票。notes 中の関連 id は元 id のまま）
+
+[p0 fix 2026-09-29] fixed 30a42539 + branch tests 98074841 (mutation-checked). Cache-staleness half was already fixed (cache_is_fresh with leases_mtime)."""
+created_at = 1790632217
+updated_at = 1790678154
+weight = 0.0
+issue_number = 815
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/815"
+
+[[task]]
+id = "daf7611b"
+title = "blastguard: 未知シェルの引用符つきペイロードが allow — fish -c 引用符つき rm -rf が通り、引用符を外した不自然な綴りだけが ask"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+touched_files = []
+status = "done"
+notes = """
+実測（deployed blastguard 0.2.50）:
+  fish -c 引用符つき rm -rf /Users/yuki/src        -- ALLOW
+  fish -c 引用符なし rm -rf /Users/yuki/src        -- ASK  （不自然な綴りだけが止まる）
+  pwsh -c / tcsh -c で同じ引用符つきペイロード     -- ALLOW
+  git -c core.pager=引用符つき rm -rf ... log      -- ALLOW
+  busybox sh -c 引用符つき rm -rf ...              -- ASK  （sh は既知シェルなので通る）
+
+crates/blastguard/src/detect.rs:3330 の unknown_wrapper_ask は
+「head の後の最初の非フラグかつ引用文字列の開始断片でないトークン」しか見ない（opens_unclosed_quote）。
+つまり普通の綴り（引用符つき）が fail-open で、異常な綴りだけが ask になっている。
+
+根因は d5b2e73d と同一: is_shell（detect.rs:2888、sh|bash|zsh|ksh|dash のみ）と
+is_code_interpreter（detect.rs:2902）という形状リストがあるだけで、ペイロード解析器が無い。
+リストに載っていない実行体はすべて不可視。
+
+しかも同じファイルが別の場所では正しく知っている: detect.rs:5021-5027 の
+stage_is_interpreter_terminal は is_shell か is_code_interpreter を stdin のコード実行 sink として
+扱っており、だから curl 経由のパイプは DENY になる。同一 predicate、同一ファイル、逆の結論。
+
+修正: is_shell と is_code_interpreter を ExecKind（Shell / Interpreter(lang) / UnknownExecutor）へ統合し、
+UnknownExecutor がペイロード形状のオペランドを持つ場合は ask（allow にしない）。
+観測された取りこぼし: fish, pwsh, csh, tcsh, deno, bun, osascript, awk（BEGIN block の system 呼び出し）。
+実測: awk の BEGIN block で rm -rf、deno eval の removeSync、bun -e、osascript -e、env -S いずれも ALLOW。
+親 826c29bf
+
+[triage 2026-09-29 @546d9fa2] p1->p0: blastguard is_shell only sh/bash/zsh/ksh/dash (detect.rs:3963-3965): fish/pwsh/tcsh -c rm -rf payload it cannot analyze resolves to Allow
+
+[p0 fix 2026-09-29] PARTIAL: faf9136f closes the shell part (fish/pwsh/tcsh/csh/nu -c, busybox). Still Allow on blastguard 0.2.76, measured: git -c core.pager=..., deno eval, bun -e, osascript -e do shell script, awk system(), env -S. Unified ExecKind/UnknownExecutor not done. Keep open.
+
+[p0 fix 2026-09-29] remaining executors fixed 90ee427c (git -c command keys, awk system/pipes, env -S, deno/bun/osascript, interpreter value flags); 33 behavioural tests 1a2507af."""
+created_at = 1788791577
+updated_at = 1790678156
+weight = 0.0
+issue_number = 418
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/418"
+
+[[task]]
+id = "1875f626"
+title = "systemic signature recurred 14x across 1 task(s)/4 session(s)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "systemic",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """
+kind:systemic identifier:blastguard:unknown-verb-protected-path occurrences:1
+
+--- 2024 cycle-10 の途中終了について ---
+このバッチを回した background agent は stall watchdog により
+"no progress for 600s" で強制終了した。実働は約 11 分で、残りは飢餓状態。
+landed したのは blastguard:tee-truncate と
+blastguard:interpreter-unrecoverable-write の 2 signature だけ (fix 2acee03f)。
+本 item は着手されていない。measured: 何も測っていない。unverified: すべて。
+推測で埋めずに pending のまま残す。
+
+[p0 fix 2026-09-29] re-scoped to false positives after investigation (154 ledger hits, mostly for/do/{ keywords, quoted operands, backlog free text). Fixed d2742c50; rule id split into 4 ids."""
+created_at = 1790184342
+updated_at = 1790678157
+weight = 0.0
+issue_number = 729
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/729"

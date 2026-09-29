@@ -12,6 +12,7 @@ Three cases are *undetermined*, not *safe*, and none of them is a silent allow:
 | case | resolves to |
 |---|---|
 | an internal panic during analysis | **deny** (`catch_unwind`) |
+| a panic anywhere else on the verdict path (stdin read, parse, approval memory, printing the decision) | **block**: exit 2 with the panic on stderr (`run_verdict_guarded`; until 0.2.75 this was `run_hook`'s exit 0, i.e. an allow) |
 | stdin non-empty but unparseable | **ask** → hardened to deny where no human can answer |
 | a matched tool whose operand (`tool_input.command`, `file_path`) is missing or not a string | **ask** → hardened |
 

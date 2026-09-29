@@ -100,8 +100,9 @@ fn pid_alive(pid: u32) -> Determination<bool> {
 }
 
 /// Lock file path for a project's lease registry — sits beside `leases.json`,
-/// so unrelated projects (different `cwd` -> different project-key storage
-/// root) never share a lock.
+/// so unrelated projects (different main worktree root -> different
+/// project-key storage root) never share a lock, while every checkout of ONE
+/// repository (main checkout and its linked worktrees) shares the same one.
 fn lock_path(cwd: &Path) -> anyhow::Result<PathBuf> {
     Ok(store::leases_path(cwd)?.with_extension("lock"))
 }

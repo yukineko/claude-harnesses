@@ -151,7 +151,12 @@ TTL はコンパイル時定数であり、設定変更はできない。
 ## ストレージ
 
 状態はリポジトリごとに `~/.overwatch/<project-key>/overwatch/`（`leases.json` +
-`events.jsonl`）に保存される。設定ファイルや TTL の調整ノブは存在せず、上記の挙動が
+`events.jsonl`）に保存される。キーは MAIN worktree root から導出するため、main
+checkout・全 linked `git worktree`・それらの subdirectory は同一の store を共有する
+（main checkout から `overwatch status` を実行すると linked worktree 側のセッションも見える）。
+main worktree root を解決できない場合（`.git` ファイルが読めない/解釈できない、submodule の
+worktree など）は worktree 単位の store へ fallback せずコマンドがエラーになる。git repo 外の
+cwd は cwd 自身がキーになる。設定ファイルや TTL の調整ノブは存在せず、上記の挙動が
 現在バイナリが実装している唯一のものである。
 
 ## ストレージ構成
@@ -165,7 +170,7 @@ TTL はコンパイル時定数であり、設定変更はできない。
 ```
 
 - `<base>`: 既定は `~/.local/share/claude-harnesses`（overwatch.toml で設定可能）。
-- `<project-key>`: プロジェクト名由来（例: `claude-harnesses`）。
+- `<project-key>`: リポジトリの MAIN worktree root の `<basename>-<正規化パスの fnv1a32>`（linked worktree 間で共有）。
 - Lease は full reaper を超えて persist **しない**。セッション有効期間の ephemeral レコード。
 
 ## fleet 単位の相関エラー検知（gate 違反 signature の再発検知）

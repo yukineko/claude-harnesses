@@ -71,11 +71,11 @@ use crate::wt_reconcile::{self, Attribution, Occupancy, Role};
 /// driver. `wt_reconcile::registrations_in` walks every bucket, so the reaper
 /// sees records here without knowing the name.
 ///
-/// Known side effect, not avoidable while the record lives under
-/// `~/.backlog/drivers`: `backlog lock status` with NO `--project` (the
-/// cross-project scan `daily` uses) walks every bucket too, so while a session
-/// holds a live registration here `daily` reads "a driver is active" and stands
-/// down.
+/// The name must also never be slug-shaped: backlog's cross-project presence
+/// scan (`backlog lock status` with no `--project`, which `daily` reads) only
+/// aggregates buckets named like a project slug, and that rule is what keeps a
+/// live session registration from reading as an active `/flow` driver.
+/// Pinned by `session_bucket_is_not_slug_shaped` below.
 pub const SESSION_WORKTREE_BUCKET: &str = "session-worktrees";
 
 /// A record whose `heartbeat_at` is younger than this is not rewritten. Far
@@ -523,6 +523,17 @@ mod tests {
 
     fn und<T>(m: &str) -> Determination<T> {
         Determination::undetermined(m)
+    }
+
+    #[test]
+    fn session_bucket_is_not_slug_shaped() {
+        // backlog's cross-project scan skips non-slug buckets; a 16-hex name
+        // here would turn every live session into a counted /flow driver.
+        let n = SESSION_WORKTREE_BUCKET;
+        assert!(
+            !(n.len() == 16 && n.bytes().all(|b| b.is_ascii_hexdigit())),
+            "{n} is slug-shaped"
+        );
     }
 
     #[test]

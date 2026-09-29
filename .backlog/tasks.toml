@@ -11861,3 +11861,33 @@ updated_at = 1790687716
 weight = 0.0
 issue_number = 866
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/866"
+
+[[task]]
+id = "c10bbb8e"
+title = "condukt worktree create が --branch に run prefix を二重に付ける (flow-X/flow-X/topic)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "実測 2026-09-29: condukt worktree create --run flow-34385c9e --topic circuit-stateless --branch flow-34385c9e/circuit-stateless → 実 branch は flow-34385c9e/flow-34385c9e/circuit-stateless。他の worktree (rollout-dryrun 等) も同様か未確認。読み (a) --branch に既に prefix がある場合の二重付与バグ (b) --branch は topic 名として解釈する仕様で help の説明不足。見分け方: condukt worktree create --help と worktree.rs の branch 組み立てを読む。"
+created_at = 1790718697
+updated_at = 1790718697
+weight = 0.0
+issue_number = 867
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/867"
+
+[[task]]
+id = "7d56f1e3"
+title = "reviewgate: mode の綴り間違いが Subprocess を無診断で Inject へ降格させる (propguard 3ca750b9 の双子)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """2026-09-30 propguard 3ca750b9 の verifier が発見。crates/reviewgate/src/config.rs:29-30 '"subprocess" | "reviewer" | "independent" => Mode::Subprocess,' / '_ => Mode::Inject,'、呼び出しは :236 'cfg.mode = Mode::parse(&v);'。propguard 側の是正方針 (未知 mode は config-invalid として block、systemMessage で可視化、Subprocess への読み替えは不可 — checker の PASS で初回 stop が通るため厳密に厳しくない) を同じく適用する。"""
+created_at = 1790718724
+updated_at = 1790718724
+weight = 0.0
+issue_number = 868
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/868"

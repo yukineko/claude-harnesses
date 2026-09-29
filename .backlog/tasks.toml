@@ -11891,3 +11891,48 @@ updated_at = 1790718724
 weight = 0.0
 issue_number = 868
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/868"
+
+[[task]]
+id = "dc236085"
+title = "blastguard launcher: バイナリ欠落時 record-approval (PostToolUse) に PreToolUse 形の permissionDecision を返し、retro (CLI) は exit 0"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "2026-09-30 8aeb4cab の worker が実測。record-approval が PreToolUse fallback に落ち hookEventName:PreToolUse を PostToolUse で出す。retro は欠落時に exit 0。GATE crate なので canary 要。"
+created_at = 1790718818
+updated_at = 1790718818
+weight = 0.0
+issue_number = 869
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/869"
+
+[[task]]
+id = "b5e0b543"
+title = "overwatch status が Stop hook で stdout にプレーンテキストを出す — Stop の stdout は表示されないので不可視"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "2026-09-30 8aeb4cab の worker が指摘 (実バイナリも同じで launcher 由来ではない)。Stop の stdout は transcript に出ない (hooks docs)。読み (a) systemMessage で可視化すべき (b) Stop 登録は記録目的のみ。見分け方: overwatch hooks.json の Stop 登録意図と消費者を読む。"
+created_at = 1790718827
+updated_at = 1790718827
+weight = 0.0
+issue_number = 870
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/870"
+
+[[task]]
+id = "537742c7"
+title = "hook の出力チャネル (systemMessage / SessionEnd は stderr のみ / Notification は出力無視) を live session で実測していない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "2026-09-30 8aeb4cab の launcher fail-closed 化は各イベントのチャネル挙動を hooks docs (WebFetch) に依拠して設計した。live で未観測。見分け方: 使い捨て plugin で各イベントに固定出力 hook を登録し、transcript / UI / debug log のどこに出るかを観測する。"
+created_at = 1790718829
+updated_at = 1790718829
+weight = 0.0
+issue_number = 871
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/871"

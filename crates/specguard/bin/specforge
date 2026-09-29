@@ -8,9 +8,10 @@
 #
 # It therefore fails CLOSED — a missing build exits non-zero with the reason on
 # stderr, so the absence of a spec draft can never be read as "the spec was
-# checked and nothing was needed" (CLAUDE.md 3). This deliberately differs from
-# the sibling `specguard` launcher, whose exit 0 on a missing binary is tracked
-# as a fail-open in its own backlog item.
+# checked and nothing was needed" (CLAUDE.md 3). The sibling `specguard`
+# launcher no longer exits 0 on a missing binary either (backlog 8aeb4cab): its
+# SessionStart `pending` hook prints an UNKNOWN notice and every other verb
+# exits 127.
 root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 case "$(uname -s)" in

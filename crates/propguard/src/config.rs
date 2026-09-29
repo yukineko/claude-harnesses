@@ -34,10 +34,18 @@ pub enum Mode {
 }
 
 impl Mode {
-    fn parse(s: &str) -> Mode {
+    /// Parse a configured mode. An unrecognised value is `Err(<the value>)`:
+    /// it is NOT mapped to either mode. Inject (self-report) and Subprocess
+    /// (independent checker) are not ordered by strictness in every case, so
+    /// picking one for a typo is a guess, and CLAUDE.md sec.3 resolves "cannot
+    /// determine" to a block, not to a guess. The caller records the bad value
+    /// in [`Config::config_invalid`] and `gate::evaluate` blocks
+    /// (`config-invalid`), mirroring `config-unreadable`.
+    fn parse_checked(s: &str) -> Result<Mode, String> {
         match s.trim().to_ascii_lowercase().as_str() {
-            "subprocess" | "checker" | "independent" => Mode::Subprocess,
-            _ => Mode::Inject,
+            "subprocess" | "checker" | "independent" => Ok(Mode::Subprocess),
+            "inject" => Ok(Mode::Inject),
+            _ => Err(s.to_string()),
         }
     }
     pub fn as_str(&self) -> &'static str {
@@ -91,6 +99,11 @@ pub struct Config {
     /// resolves it fail-closed (`gate::evaluate` → `config-unreadable` Block).
     /// `None` when a config was read and applied, or none exists.
     pub load_error: Option<String>,
+    /// `Some(description)` when the config was read but holds a value that
+    /// cannot be interpreted (currently: an unrecognised `mode`). Undetermined,
+    /// not a choice: `gate::evaluate` resolves it to a `config-invalid` Block
+    /// whose reason names the value (visible to the user/agent, unlike stderr).
+    pub config_invalid: Option<String>,
 }
 
 /// On-disk form; every field optional.
@@ -195,6 +208,7 @@ impl Default for Config {
             checker_timeout_secs: 300,
             state_dir: base_dir().join("state"),
             load_error: None,
+            config_invalid: None,
         }
     }
 }
@@ -283,7 +297,14 @@ impl Config {
             self.enabled = v;
         }
         if let Some(v) = fc.mode {
-            self.mode = Mode::parse(&v);
+            match Mode::parse_checked(&v) {
+                Ok(mode) => self.mode = mode,
+                Err(bad) => {
+                    let why = format!("unknown mode {bad:?}");
+                    eprintln!("propguard: {why}");
+                    self.config_invalid = Some(why);
+                }
+            }
         }
         if let Some(v) = fc.min_properties {
             self.min_properties = v;
@@ -388,6 +409,35 @@ impl Config {
 #[allow(clippy::panic)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unknown_mode_is_recorded_as_config_invalid_not_mapped() {
+        let mut cfg = Config::default();
+        cfg.apply(FileConfig {
+            mode: Some("subproces".to_string()),
+            ..FileConfig::default()
+        });
+        let why = cfg.config_invalid.expect("unknown mode must be recorded");
+        assert!(why.contains("subproces"), "{why}");
+    }
+
+    #[test]
+    fn known_modes_parse_and_leave_config_valid() {
+        for (s, m) in [
+            ("inject", Mode::Inject),
+            ("subprocess", Mode::Subprocess),
+            (" Checker ", Mode::Subprocess),
+            ("independent", Mode::Subprocess),
+        ] {
+            let mut cfg = Config::default();
+            cfg.apply(FileConfig {
+                mode: Some(s.to_string()),
+                ..FileConfig::default()
+            });
+            assert_eq!(cfg.mode, m, "{s:?}");
+            assert!(cfg.config_invalid.is_none(), "{s:?} is known");
+        }
+    }
 
     #[test]
     fn threshold_is_clamped_to_property_cap() {

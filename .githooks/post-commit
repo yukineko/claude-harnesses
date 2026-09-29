@@ -36,8 +36,11 @@
 # The last three rows of the table above are NOT false positives. cherry-pick and
 # rebase replay content that this working tree never gated, so "never inspected"
 # is the literal truth. Clearing the ledger requires a pre-commit run that goes
-# green, i.e. the content really does get inspected — one green commit clears a
-# whole rebase's worth of entries.
+# green over a non-empty staged diff, i.e. the content really does get inspected
+# — one green commit clears a whole rebase's worth of entries, but only entries
+# whose commit is an ancestor of the HEAD that run was judged against
+# (backlog c767cb47: an empty-diff run, or a run in a worktree that never
+# contained the commit, keeps them).
 #
 # The ledger lives in the common git dir, so every worktree of this repo shares
 # one, while the sentinel is per-worktree so concurrent commits cannot certify
@@ -103,8 +106,9 @@ cat >&2 <<EOF
     The local gate did not inspect this content (--no-verify, cherry-pick or
     rebase). Recorded in the bypass ledger; $count entr(y/ies) outstanding.
 
-    The next pre-commit run that goes green clears the ledger — that run is
-    what actually inspects the content. Until then, \`git push\` is blocked and
+    The next pre-commit run that goes green over a non-empty staged diff, in a
+    worktree whose HEAD contains this commit, clears it — that run is what
+    actually inspects the content. Until then, \`git push\` is blocked and
     \`python3 scripts/gate-bypass.py --status\` reports non-zero.
 EOF
 exit 0

@@ -363,3 +363,58 @@ fn payload_json_is_valid_even_for_windows_style_paths() {
          or this regression test no longer demonstrates anything"
     );
 }
+
+/// Write `~/.propguard/config.toml` (HOME is the isolated test dir) with `mode`.
+fn write_home_mode(home: &Path, mode: &str) {
+    let d = home.join(".propguard");
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join("config.toml"), format!("mode = \"{mode}\"\n")).unwrap();
+}
+
+/// An unrecognised `mode` is a config error, not a mode choice: the Stop hook
+/// must BLOCK with a `config-invalid` verdict whose reason (which is what the
+/// user/agent actually sees) names the bad value and the valid ones. No
+/// criteria and no code change exist here, so anything but the config check
+/// would allow (`no-criteria`) — this pins that the check precedes them.
+#[test]
+fn unknown_mode_blocks_config_invalid_naming_the_value() {
+    let home = temp_home();
+    git_init(&home);
+    write_home_mode(&home, "subproces");
+    let payload = hook_payload("s-badmode", &home);
+    let (code, stdout) = run_in(&home, &["check"], &payload, &[]);
+    assert_eq!(code, 0, "hook exits 0; the decision field blocks");
+    let v: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("hook stdout must be block JSON, got {stdout:?}: {e}"));
+    assert_eq!(v["decision"], "block", "got: {stdout}");
+    let reason = v["reason"].as_str().unwrap_or_default();
+    assert!(
+        reason.contains("subproces"),
+        "reason must name the value: {reason}"
+    );
+    assert!(
+        reason.contains("config-invalid"),
+        "reason must carry the tag: {reason}"
+    );
+    assert!(
+        reason.contains("inject") && reason.contains("subprocess"),
+        "reason must list valid values: {reason}"
+    );
+}
+
+/// Known modes are unaffected: they never produce `config-invalid`.
+#[test]
+fn known_modes_do_not_block_config_invalid() {
+    for mode in ["inject", "subprocess"] {
+        let home = temp_home();
+        git_init(&home);
+        write_home_mode(&home, mode);
+        let payload = hook_payload("s-goodmode", &home);
+        let (code, stdout) = run_in(&home, &["check"], &payload, &[]);
+        assert_eq!(code, 0);
+        assert!(
+            !stdout.contains("config-invalid"),
+            "known mode {mode} must not be config-invalid: {stdout}"
+        );
+    }
+}

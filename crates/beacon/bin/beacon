@@ -1,8 +1,31 @@
 #!/bin/sh
-# beacon plugin launcher — selects the per-platform binary bundled here.
-# Hooks call `${CLAUDE_PLUGIN_ROOT}/bin/beacon <sub>`; this execs the matching
-# `beacon-<os>-<arch>` build, or exits 0 silently if none exists, so a missing
-# binary never breaks a turn.
+# beacon plugin launcher — selects the per-platform binary bundled in this dir.
+#
+# Hooks call `${CLAUDE_PLUGIN_ROOT}/bin/beacon <notify>`; this dispatcher execs the
+# matching `beacon-<os>-<arch>` build.
+#
+# WHEN NO BUILD EXISTS FOR THE HOST, the answer is NOT a blanket "exit 0"
+# (backlog 8aeb4cab). Exit 0 with empty stdout is what the binary itself
+# prints when it ran and had nothing to say, so a silent exit 0 here made
+# "did not run" indistinguishable from "checked, nothing to report" — and for
+# a CLI verb, exit 0 is the success code (CLAUDE.md §1/§3). The fallback is
+# chosen per consumer of each entrypoint:
+#
+#   notify         Stop + Notification. Consumer: the human, via the desktop/webhook ping.
+#                  Notification discards output (docs), so only the Stop
+#                  invocation's systemMessage reaches the user.
+#                  -> stdout JSON systemMessage (the user is the only consumer). exit 0 —
+#                  no verdict to protect, so no block.
+#
+#   anything else  A CLI verb (or a hook verb with extra args, e.g. `--json`).
+#                  Exits 127 ("command not found") with the reason on stderr:
+#                  the result is UNKNOWN, and no caller may read the missing
+#                  output as the success code. 127 is outside every verb's
+#                  exit-code vocabulary in this crate.
+#
+# None of these block: no entrypoint here carries a verdict whose block the
+# binary would issue, so the fallback makes the gap VISIBLE instead.
+# scripts/tests/launcher-missing-binary-failclosed.sh pins this behaviour.
 root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 case "$(uname -s)" in
@@ -21,8 +44,20 @@ ext=""
 [ "$os" = windows ] && ext=".exe"
 
 binary="$root/beacon-$os-$arch$ext"
-if [ ! -x "$binary" ]; then
-  echo "beacon: no bundled binary for $os-$arch ($binary)." >&2
-  exit 0
+if [ -x "$binary" ]; then
+  exec "$binary" "$@"
 fi
-exec "$binary" "$@"
+
+echo "beacon: no bundled binary for $os-$arch ($binary)." >&2
+fix="Build it with scripts/build-plugin-bin.sh for $os-$arch, or remove the beacon plugin."
+
+case "$*" in
+  "notify")
+    msg="beacon notify did NOT run: no bundled binary for $os-$arch, so no turn-finished / needs-input notification was sent. Do not read the absence of a ping as Claude still working. $fix"
+    printf '{"systemMessage":"%s"}\n' "$msg"
+    exit 0
+    ;;
+esac
+
+echo "beacon: '$*' did NOT run (no bundled binary for $os-$arch), so its result is UNKNOWN — not empty and not success. $fix" >&2
+exit 127

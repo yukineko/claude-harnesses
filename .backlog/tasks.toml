@@ -2576,49 +2576,6 @@ issue_number = 414
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/414"
 
 [[task]]
-id = "daf7611b"
-title = "blastguard: 未知シェルの引用符つきペイロードが allow — fish -c 引用符つき rm -rf が通り、引用符を外した不自然な綴りだけが ask"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p0"]
-touched_files = []
-status = "pending"
-notes = """
-実測（deployed blastguard 0.2.50）:
-  fish -c 引用符つき rm -rf /Users/yuki/src        -- ALLOW
-  fish -c 引用符なし rm -rf /Users/yuki/src        -- ASK  （不自然な綴りだけが止まる）
-  pwsh -c / tcsh -c で同じ引用符つきペイロード     -- ALLOW
-  git -c core.pager=引用符つき rm -rf ... log      -- ALLOW
-  busybox sh -c 引用符つき rm -rf ...              -- ASK  （sh は既知シェルなので通る）
-
-crates/blastguard/src/detect.rs:3330 の unknown_wrapper_ask は
-「head の後の最初の非フラグかつ引用文字列の開始断片でないトークン」しか見ない（opens_unclosed_quote）。
-つまり普通の綴り（引用符つき）が fail-open で、異常な綴りだけが ask になっている。
-
-根因は d5b2e73d と同一: is_shell（detect.rs:2888、sh|bash|zsh|ksh|dash のみ）と
-is_code_interpreter（detect.rs:2902）という形状リストがあるだけで、ペイロード解析器が無い。
-リストに載っていない実行体はすべて不可視。
-
-しかも同じファイルが別の場所では正しく知っている: detect.rs:5021-5027 の
-stage_is_interpreter_terminal は is_shell か is_code_interpreter を stdin のコード実行 sink として
-扱っており、だから curl 経由のパイプは DENY になる。同一 predicate、同一ファイル、逆の結論。
-
-修正: is_shell と is_code_interpreter を ExecKind（Shell / Interpreter(lang) / UnknownExecutor）へ統合し、
-UnknownExecutor がペイロード形状のオペランドを持つ場合は ask（allow にしない）。
-観測された取りこぼし: fish, pwsh, csh, tcsh, deno, bun, osascript, awk（BEGIN block の system 呼び出し）。
-実測: awk の BEGIN block で rm -rf、deno eval の removeSync、bun -e、osascript -e、env -S いずれも ALLOW。
-親 826c29bf
-
-[triage 2026-09-29 @546d9fa2] p1->p0: blastguard is_shell only sh/bash/zsh/ksh/dash (detect.rs:3963-3965): fish/pwsh/tcsh -c rm -rf payload it cannot analyze resolves to Allow
-
-[p0 fix 2026-09-29] PARTIAL: faf9136f closes the shell part (fish/pwsh/tcsh/csh/nu -c, busybox). Still Allow on blastguard 0.2.76, measured: git -c core.pager=..., deno eval, bun -e, osascript -e do shell script, awk system(), env -S. Unified ExecKind/UnknownExecutor not done. Keep open."""
-created_at = 1788791577
-updated_at = 1790635964
-weight = 0.0
-issue_number = 418
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/418"
-
-[[task]]
 id = "ae4543d5"
 title = "guard-maintree-bash.py の同一効果ミラー: interpreter ラッパ / チルダ・HOME・PWD / cd による再アンカー / perl -pi -e が main ツリーへの書き込みを素通しする"
 project = "/Users/yuki/src/harness"
@@ -10061,7 +10018,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = [
     "record-audit",
-    "p0",
+    "p2",
 ]
 touched_files = []
 status = "pending"
@@ -10074,39 +10031,14 @@ finding-id:record-audit:audit-convergence file:(none) severity:high | confirmed:
 landed したのは blastguard:tee-truncate と
 blastguard:interpreter-unrecoverable-write の 2 signature だけ (fix 2acee03f)。
 本 item は着手されていない。measured: 何も測っていない。unverified: すべて。
-推測で埋めずに pending のまま残す。"""
+推測で埋めずに pending のまま残す。
+
+[investigated 2026-09-29 @788170cd] metric is correct: converging=false, last 3 rounds new_findings 14,15,25. Not a code defect. Message wording is inverted: record-audit.py:540-543 says 'exceeds threshold' for a floor dimension (:433-441, breach when value<1). Re-scoped to the wording fix; demoted p0->p2."""
 created_at = 1790184320
-updated_at = 1790244863
+updated_at = 1790678162
 weight = 0.0
 issue_number = 720
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/720"
-
-[[task]]
-id = "1875f626"
-title = "systemic signature recurred 14x across 1 task(s)/4 session(s)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "systemic",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = """
-kind:systemic identifier:blastguard:unknown-verb-protected-path occurrences:1
-
---- 2024 cycle-10 の途中終了について ---
-このバッチを回した background agent は stall watchdog により
-"no progress for 600s" で強制終了した。実働は約 11 分で、残りは飢餓状態。
-landed したのは blastguard:tee-truncate と
-blastguard:interpreter-unrecoverable-write の 2 signature だけ (fix 2acee03f)。
-本 item は着手されていない。measured: 何も測っていない。unverified: すべて。
-推測で埋めずに pending のまま残す。"""
-created_at = 1790184342
-updated_at = 1790244864
-weight = 0.0
-issue_number = 729
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/729"
 
 [[task]]
 id = "0ebd3748"
@@ -11055,9 +10987,12 @@ project_unresolved = false
 tags = ["p0"]
 touched_files = []
 status = "pending"
-notes = "測定点 c39701bc / 2026-09-13、scripts/rollout-plugins.sh --canary が overwatch を harness-core 0.2.24 に対して再ビルドした直後。overwatch status は == Sessions == の次に (none) を出す一方、overwatch status --json は sessions[0].leases に 4 件を返す (00d1160bf294b1af, 052a7668cb486c1f, a192382d08ee3bf7, a4050204859f1c7a)。4 件とも status が空文字で project が null。いずれも数秒前に overwatch begin が rc=0 と possible_duplicate 空・scope_overlap 空で登録したもの。ロールアウト前の同セッションの SessionStart hook は逐語で session 79d79a35-3490-4bbd-9bb4-d501e749e65d と 3 live を出力し 3 件のリースを列挙していた。同じコマンド・同じセッションなので regression が第一仮説。p0 の理由: Sessions ビューは誰が何を作業中かを示す唯一の人間向け表示面であり CLAUDE.md 第8節の別セッションは常に存在するという前提の運用上の土台である。live 4 件あるのに (none) と答えるのは誰も作業していないと読まれる。第1節より沈黙は許容される degrade ではない。読み1 regression: テキスト renderer が project で絞り込んでおり、リースの project が main_worktree_root による project 解決変更 d83b0e8f の巻き添えで null になった。読み2 もとからそう: テキストビューは設計上 project スコープで begin は project を書いたことがない。読み2 なら SessionStart hook の 3 live 出力の出所を説明する必要がある。読み3 キャッシュ陳腐化: status はどちらの呼び出しも aggregate build_cached を通る別プロセスなので、TTL 付きキャッシュが begin より前に作られていれば 1 回目が古いキャッシュ 2 回目が新鮮な結果を返しうる。見分け方: overwatch begin がリースの project を書く経路と、テキスト renderer が絞り込む経路と、build_cached の TTL と無効化規則の 3 つを読む。推測せず読んでどれをコードが支持するか述べること。 【救出 2026-09-29】元 id 7d820338（2026-09-13 に run-20260913-223004-15261 の orch worktree で起票されたが未コミットのまま残っていた。worktree 削除前に再起票。notes 中の関連 id は元 id のまま）"
+notes = """
+測定点 c39701bc / 2026-09-13、scripts/rollout-plugins.sh --canary が overwatch を harness-core 0.2.24 に対して再ビルドした直後。overwatch status は == Sessions == の次に (none) を出す一方、overwatch status --json は sessions[0].leases に 4 件を返す (00d1160bf294b1af, 052a7668cb486c1f, a192382d08ee3bf7, a4050204859f1c7a)。4 件とも status が空文字で project が null。いずれも数秒前に overwatch begin が rc=0 と possible_duplicate 空・scope_overlap 空で登録したもの。ロールアウト前の同セッションの SessionStart hook は逐語で session 79d79a35-3490-4bbd-9bb4-d501e749e65d と 3 live を出力し 3 件のリースを列挙していた。同じコマンド・同じセッションなので regression が第一仮説。p0 の理由: Sessions ビューは誰が何を作業中かを示す唯一の人間向け表示面であり CLAUDE.md 第8節の別セッションは常に存在するという前提の運用上の土台である。live 4 件あるのに (none) と答えるのは誰も作業していないと読まれる。第1節より沈黙は許容される degrade ではない。読み1 regression: テキスト renderer が project で絞り込んでおり、リースの project が main_worktree_root による project 解決変更 d83b0e8f の巻き添えで null になった。読み2 もとからそう: テキストビューは設計上 project スコープで begin は project を書いたことがない。読み2 なら SessionStart hook の 3 live 出力の出所を説明する必要がある。読み3 キャッシュ陳腐化: status はどちらの呼び出しも aggregate build_cached を通る別プロセスなので、TTL 付きキャッシュが begin より前に作られていれば 1 回目が古いキャッシュ 2 回目が新鮮な結果を返しうる。見分け方: overwatch begin がリースの project を書く経路と、テキスト renderer が絞り込む経路と、build_cached の TTL と無効化規則の 3 つを読む。推測せず読んでどれをコードが支持するか述べること。 【救出 2026-09-29】元 id 7d820338（2026-09-13 に run-20260913-223004-15261 の orch worktree で起票されたが未コミットのまま残っていた。worktree 削除前に再起票。notes 中の関連 id は元 id のまま）
+
+[p0 2026-09-29] NOT REPRODUCED on current source (25-iteration loop, isolated store): text and JSON come from one view; Lease has no project/status field. Likely cause of the original observation: overwatch store partitioned per linked worktree (fixed baaf9503, user ruling). Kept open pending live evidence."""
 created_at = 1790632211
-updated_at = 1790632211
+updated_at = 1790678162
 weight = 0.0
 issue_number = 812
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/812"
@@ -11091,21 +11026,6 @@ updated_at = 1790632215
 weight = 0.0
 issue_number = 814
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/814"
-
-[[task]]
-id = "842d552c"
-title = "maintree guard が overwatch status --json の undetermined 配列を読まず、観測不能な peer roster を peer ゼロとして扱う"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p0"]
-touched_files = []
-status = "pending"
-notes = "測定点 c39701bc / 2026-09-13、読み取りのみ、逐語引用あり。crates/condukt/src/maintree.rs:588 が run_tool で overwatch status --json を呼び、parse_overwatch_sessions (maintree.rs:625-665) が sessions[].live_count だけを読む。overwatch 側は crates/overwatch/src/aggregate.rs:414-433 の apply_leases が ledger 読み取り失敗を SOURCE_SESSIONS の undetermined として記録し、status --json は undetermined 配列として出力するが、maintree のパーサはこの配列を一切参照しない。したがって overwatch が正直に判定不能と答えても、第8節の main-tree guard には peer ゼロ すなわち他に誰も動いていない として届く。これは CLAUDE.md 第8節が絶対義務と呼ぶ不変条件のまさに fail-open 方向である。さらに同じ入口は aggregate.rs:527-535 の build_cached を通るので、TTL 10 秒 (aggregate.rs:501 STATUS_CACHE_TTL_SECS) 以内の陳腐なキャッシュでも sessions が空になりうる。ledger 書き込みによる無効化は存在せず lease.rs は status_cache に一切触れない。よって peer が begin した直後の 10 秒間、guard は peer ゼロを見る。是正方向: parse_overwatch_sessions が undetermined 配列に SOURCE_SESSIONS の項目があれば Determination::Undetermined へ解決し、guard は制限側へ倒す。関連して crates/condukt/src/maintree.rs:64-67 の散文は apply_leases が今も if let Ok で潰していると書いているが実装は Err を分岐して undetermined を記録しており、散文が実装より古い (第4節の docstring と実挙動の不一致)。同じコミットで直すこと。関連 7d820338。 【救出 2026-09-29】元 id 1df540f8（2026-09-13 に run-20260913-223004-15261 の orch worktree で起票されたが未コミットのまま残っていた。worktree 削除前に再起票。notes 中の関連 id は元 id のまま）"
-created_at = 1790632217
-updated_at = 1790632217
-weight = 0.0
-issue_number = 815
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/815"
 
 [[task]]
 id = "3fc7d232"
@@ -11706,3 +11626,183 @@ updated_at = 1790635986
 weight = 0.0
 issue_number = 848
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/848"
+
+[[task]]
+id = "f0b53ca2"
+title = "record-audit.py: 下限型の次元でも exceeds threshold と表示する文言を直す (d186c736 から分離)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "record-audit.py:540-543 template; audit-convergence breaches when value<1 (:433-441)."
+created_at = 1790678162
+updated_at = 1790678162
+weight = 0.0
+issue_number = 849
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/849"
+
+[[task]]
+id = "814cfbbb"
+title = "harness-core undetermined.jsonl の既定シンクが worktree ごとに分かれている (overwatch は main_worktree_root に統一済み)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "sink_state/default_sink_path key on repo_root; moving needs SinkState/undetermined_metrics change. Found in overwatch worktree-partition fix baaf9503."
+created_at = 1790678163
+updated_at = 1790678163
+weight = 0.0
+issue_number = 850
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/850"
+
+[[task]]
+id = "e034adff"
+title = "overwatch review_escalation.rs:143 と condukt escalations_path が repo_root 基準 — worktree で起票した escalation は main の review-queue から見えない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Left unchanged on purpose in baaf9503; needs to move together with condukt."
+created_at = 1790678165
+updated_at = 1790678165
+weight = 0.0
+issue_number = 851
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/851"
+
+[[task]]
+id = "6a9eb1ed"
+title = "overwatch lease end/run が storage root 判定不能のとき何も出さずに Ok を返す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "acquire_or_skip None path; restrictive side but silent."
+created_at = 1790678166
+updated_at = 1790678166
+weight = 0.0
+issue_number = 852
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/852"
+
+[[task]]
+id = "96051a14"
+title = "overwatch README/SKILL の base dir 記述 (~/.local/share/claude-harnesses, overwatch.toml) が実装 (~/.overwatch) と違う"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Predates baaf9503."
+created_at = 1790678168
+updated_at = 1790678168
+weight = 0.0
+issue_number = 853
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/853"
+
+[[task]]
+id = "9778927f"
+title = "blastguard: (true && reboot) の後段 verb が reboot) と読まれ許可される"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "Found during 1875f626; allow at baseline and after."
+created_at = 1790678170
+updated_at = 1790678170
+weight = 0.0
+issue_number = 854
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/854"
+
+[[task]]
+id = "675eb991"
+title = "blastguard: 環境変数経由の実行経路 (GIT_PAGER / GIT_EDITOR / GIT_SSH_COMMAND / GIT_CONFIG_PARAMETERS / PAGER / EDITOR) を判定しない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "Found during daf7611b; assignments skipped before verb."
+created_at = 1790678171
+updated_at = 1790678171
+weight = 0.0
+issue_number = 855
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/855"
+
+[[task]]
+id = "0f7da221"
+title = "blastguard: find -exec awk / xargs awk が awk の判定に届かない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Found during daf7611b."
+created_at = 1790678173
+updated_at = 1790678173
+weight = 0.0
+issue_number = 856
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/856"
+
+[[task]]
+id = "0acec689"
+title = "blastguard: unknown verb で先頭が glob の保護パス (patch ?githooks/pre-commit) が clean 扱い"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "unwrap_or(false) in unknown_verb_protected_ask; mytool * is common so needs design."
+created_at = 1790678175
+updated_at = 1790678175
+weight = 0.0
+issue_number = 857
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/857"
+
+[[task]]
+id = "6d9f38cb"
+title = "blastguard: protected_operand_ask にも空白分割の断片問題がある"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Twin of 1875f626 root cause 2."
+created_at = 1790678176
+updated_at = 1790678176
+weight = 0.0
+issue_number = 858
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/858"
+
+[[task]]
+id = "65d4fc18"
+title = "blastguard: 1875f626 の loop 変数展開・case・compound の挙動を独立テストで固定する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Implementer probes only: for/do/{/case/if deny-ask verdicts listed in d2742c50 report."
+created_at = 1790678177
+updated_at = 1790678177
+weight = 0.0
+issue_number = 859
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/859"
+
+[[task]]
+id = "0cb1b96d"
+title = "~/.overwatch にテストが残した -tmpXXXX ディレクトリが大量にある"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Test hygiene."
+created_at = 1790678180
+updated_at = 1790678180
+weight = 0.0
+issue_number = 860
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/860"

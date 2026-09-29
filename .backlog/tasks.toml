@@ -11824,3 +11824,18 @@ updated_at = 1789719672
 weight = 0.0
 issue_number = 673
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/673"
+
+[[task]]
+id = "ee273b5e"
+title = "guard-maintree-bash が main での merge conflict 解決の書き込み (cp で解決済みファイルを置く) も拒否する — §8 は conflict 解決を許可している"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-09-29: during a merge of origin/main on main, cp of the merge-driver output into .backlog/tasks.toml was refused. Worked around by doing the merge in the session worktree. Also a variable path in the command was refused because the target could not be resolved (fail-closed, fine)."
+created_at = 1790678420
+updated_at = 1790678420
+weight = 0.0
+issue_number = 862
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/862"

@@ -11831,3 +11831,33 @@ updated_at = 1790687455
 weight = 0.0
 issue_number = 864
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/864"
+
+[[task]]
+id = "25692f6e"
+title = ".githooks/post-commit が存在しない gate-bypass.py --status を案内する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "実測 2026-09-29 main 07804a76。worktree で git merge --ff-only main した直後に post-commit が「python3 scripts/gate-bypass.py --status reports non-zero」を表示。実際に叩くと 'error: unrecognized arguments: --status' (usage: gate-bypass.py [-h] [--repo REPO] [--json])。.githooks/post-commit:47 と :108、scripts/test_gate_bypass.py:1200 が --status を参照。読み (a) フラグが削除/改名されたのに hook とテストの文言が残った (b) --status が別ブランチで未 merge。見分け方: git log -S'--status' -- scripts/gate-bypass.py。"
+created_at = 1790687714
+updated_at = 1790687714
+weight = 0.0
+issue_number = 865
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/865"
+
+[[task]]
+id = "3d97dd01"
+title = "worktree での git merge --ff-only が、main で検査済みのコミットを gate-bypass 台帳に「未検査」として記録する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "実測 2026-09-29。main で --no-ff merge した 07804a76 (pre-commit は main 側の merge で通過) を、2つの worker worktree で git merge --ff-only main したところ、gate-bypass.py が '07804a7612e7 ... gate never inspected (--no-verify, cherry-pick or rebase)' を2行出した。ff は新しいコミットを作らないので pre-commit は走らないが、コミット自体は既に検査済み。読み (a) 台帳が「HEAD の移動」を「未検査コミット」と同一視する誤検知 (b) worktree ごとに検査を要求する意図的設計 (他 worktree の検査証明を信用しない)。見分け方: gate-bypass の certificate が tree+HEAD に束縛される仕組み (memory: amend-always-trips-bypass-ledger) と、ff 先コミットに対する既存 certificate の有無を読む。"
+created_at = 1790687716
+updated_at = 1790687716
+weight = 0.0
+issue_number = 866
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/866"

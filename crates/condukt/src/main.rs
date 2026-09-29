@@ -1706,6 +1706,14 @@ enum CircuitAction {
         /// (fail-soft non-trip).
         #[arg(long)]
         budget_cap_usd: Option<f64>,
+        /// The session id that owns this run. Consulted ONLY when the run has
+        /// no run state, the claim registry cleanly holds no stateless claim
+        /// for it, and `--run` is exactly `flow-<SESSION>`: idle is then
+        /// measured from that session's transcript mtime (unmeasurable →
+        /// `idle_unmeasured` trip). Otherwise ignored. `/flow` passes
+        /// `--session "$CLAUDE_CODE_SESSION_ID"`.
+        #[arg(long)]
+        session: Option<String>,
     },
 }
 
@@ -2231,6 +2239,7 @@ fn run_user(cmd: Command) -> Result<()> {
                 streak_cap,
                 idle_ttl_secs,
                 budget_cap_usd,
+                session,
             } => {
                 // The handler prints the verdict JSON + journals fail-soft and
                 // returns the exit code (0 = continue, 1 = trip). Exit directly
@@ -2242,6 +2251,7 @@ fn run_user(cmd: Command) -> Result<()> {
                     streak_cap,
                     idle_ttl_secs,
                     budget_cap_usd,
+                    session.as_deref(),
                 );
                 std::process::exit(code);
             }

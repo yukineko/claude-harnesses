@@ -634,7 +634,7 @@ stale として reap され、**その project で driver が動いていない�
 
 続けて **決定論の循環ブレーカー**を1本のコマンドで判定する（cost・failure-streak・stall を集約。詳細は「早期脱出」）:
 ```bash
-condukt circuit check --run "flow-$CLAUDE_CODE_SESSION_ID"   # trip なら nonzero、continue なら exit 0
+condukt circuit check --run "flow-$CLAUDE_CODE_SESSION_ID" --session "$CLAUDE_CODE_SESSION_ID"   # trip なら nonzero、continue なら exit 0
 ```
 **nonzero（trip）なら人にも policy にも聞かず即 Step 4 へ**（stop 理由 slug は JSONL に記録）。exit 0 なら 3-1 に戻る。
 `condukt` が無い/失敗する版では fail-soft で従来の散文フォールバック（下記早期脱出表）に落ちる。
@@ -687,11 +687,19 @@ compass pivot-check   # {"recommendation":"persevere"|"pivot","streak":N,"thresh
 ## 早期脱出
 
 **決定論的な循環ブレーカー（cost・failure-streak・stall を1本のゲートに consolidate）**: ループの各イテレーション
-（3-4 の継続判定の一部）で `condukt circuit check --run "flow-$CLAUDE_CODE_SESSION_ID"` を実行する。この 1 コマンドが
+（3-4 の継続判定の一部）で `condukt circuit check --run "flow-$CLAUDE_CODE_SESSION_ID" --session "$CLAUDE_CODE_SESSION_ID"` を実行する。この 1 コマンドが
 **failure-streak がキャップ（既定 3）到達・予算超過・no-progress TTL（既定 1800 秒）超過**の3条件を決定論で判定し、
 どれかが成立すれば **nonzero で trip** する（成立しなければ exit 0＝continue）。trip を観測したら **人にも policy にも
-聞かず即 clean stop** して Step 4 へ（停止理由 slug は JSONL に記録され後から可観測）。信号採取はすべて fail-soft
-（run 未ロード・budgetguard 不在などは非 trip に縮退）で、`condukt` が無い/失敗する版では従来の下表フォールバックに落ちる。
+聞かず即 clean stop** して Step 4 へ（停止理由 slug は JSONL に記録され後から可観測）。信号採取の縮退は軸ごとに違う:
+failure-streak は run state が読めなければ 0（`/flow` は run state を書かないので、この軸は `/flow` では常に 0）、
+予算軸は `--budget-cap-usd` を渡さない限り無効（上のコマンドは渡していない）で、渡した場合も budgetguard の ledger が
+無い/読めない/壊れているときは当日使用額 0 として非 trip に倒れる。一方 **idle 軸は fail-closed**: 測れない idle は
+`idle_unmeasured` で **trip する**。`/flow` には run state が無いため、idle は live な stateless claim があればその所有
+session の transcript の mtime から、claim が無ければ（3-4 は sink が claim を全解放した直後に走るので通常こちら）
+`--session` で渡した session の transcript の mtime から測る（`--run` がちょうど `flow-<SESSION>` のときだけ有効。
+JSON の `idle_source` が `session_flag`）。transcript が見つからない・HOME 未設定・mtime が読めない・claim registry が
+読めない場合は `idle_unmeasured` で trip する。`--session` を付け忘れると毎バッチ後に trip する。
+`condukt` が無い/失敗する版では従来の下表フォールバックに落ちる。
 これで「連続失敗 3 件」という散文だった停止条件が **1つの決定論ゲート**に集約される（散文が唯一の停止機構ではなくなる）。
 
 | 状況 | 対応 |

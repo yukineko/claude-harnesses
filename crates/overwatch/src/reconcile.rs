@@ -2,7 +2,9 @@
 //! (`overwatch reconcile-fixed`).
 //!
 //! Context: findings recorded via `record-finding` only leave the
-//! `review-queue` when a human runs `record-disposition`. If nobody
+//! `review-queue` once they have a disposition in `dispositions.jsonl`
+//! (`review-queue` joins that ledger on `finding_id`), and before this module
+//! the only writer of one was a human running `record-disposition`. If nobody
 //! remembers to run it after the fix commit lands, the finding sits "open"
 //! forever even though the underlying issue is long fixed (see the
 //! Continuous-Audit review-queue stale-backlog incident, 2026-07-17: 18

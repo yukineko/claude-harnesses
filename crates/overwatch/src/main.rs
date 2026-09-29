@@ -380,9 +380,13 @@ enum Command {
     /// The unified human review surface: merge systemic gate violations, canary
     /// rollback events, and AI-review findings into ONE risk-ordered list
     /// (highest normalized severity first, newest-first within a severity
-    /// band), each row tagged with its source kind. Fail-soft: a
-    /// missing/empty source contributes nothing rather than erroring; the
-    /// other sources still render.
+    /// band), each row tagged with its source kind. A finding that already
+    /// has a disposition (dispositions.jsonl) is not listed; if that ledger
+    /// cannot be read, the findings are shown UNFILTERED behind an
+    /// `undetermined-source` row and the command exits 3. A missing/empty
+    /// source contributes nothing; a source that cannot be READ is announced
+    /// (in-band row + exit 3) rather than rendered as empty, and the other
+    /// sources still render.
     ReviewQueue {
         #[arg(long)]
         json: bool,
@@ -414,7 +418,8 @@ enum Command {
     /// cold review_findings_archive.jsonl. Non-lossy (archive, never
     /// delete): `review-metrics` keeps joining archived findings via the
     /// combined hot-plus-archive history, while `review-queue` keeps reading
-    /// the hot file only (now bounded to OPEN items). Atomic (temp+rename)
+    /// the hot file only (it also hides dispositioned findings by itself, by
+    /// joining dispositions.jsonl, whether or not this has run). Atomic (temp+rename)
     /// and idempotent: a run with no newly-resolved findings is a no-op.
     CompactFindings {
         #[arg(long)]

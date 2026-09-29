@@ -1223,7 +1223,7 @@ pub(crate) enum StatelessIdle {
 /// that is harmless inside a fingerprint that is only compared for equality,
 /// but here the value is subtracted from `now`, and a `0` would read as a
 /// fabricated 50-year idle (or, clamped the other way, as "just now").
-fn session_transcript_mtime_secs(session_id: &str) -> Determination<i64> {
+pub(crate) fn session_transcript_mtime_secs(session_id: &str) -> Determination<i64> {
     let Some(home) = std::env::var_os("HOME") else {
         return Determination::undetermined(
             "HOME unset: cannot locate the owning session transcript",

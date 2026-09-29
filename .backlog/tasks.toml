@@ -978,45 +978,6 @@ issue_number = 115
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/115"
 
 [[task]]
-id = "7c27050b"
-title = "review queue は事実上 write-only — 43 findings が queue 済みで disposition 0 件 (closure 0.00)。reconcile-fixed の運用導線か、bridge 時の自動 disposition が要る"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "review-queue",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-計測日 2026-08-02、測定点 a30b323f、測定コマンド: overwatch review-metrics。closure [condukt-gate] 0.00 (0/4) / [continuous-audit] 0.00 (0/36) / [record-audit] 0.00 (0/3)。457b44f1 で closure rate が計測可能になった結果、初めて見えた事実。specguard は ack 経由で disposition を積むようになったが、他の producer には閉じる導線が無い。review-metrics は『1 finding に fix commit が landed しているが disposition 無し』も警告している。
-
---- 2026-09-24 再測: 起票時の数字が現状と一致しない。着手せず pending に戻す ---
-起票時 (2026-08-02、測定点 a30b323f) は 43 findings が queue 済みで disposition 0 件、
-closure 0.00 だった。今日の再測:
-
-  overwatch review-metrics -> "(no dispositions recorded yet -- run overwatch record-disposition)"
-  overwatch review-queue --json -> entries: 3
-    [systemic] blastguard:protected-path が 2 task / 1 session で 5 回再発
-    [merge-conflict] x2 (どちらも condukt/run-20260913-182640-69073/... 由来)
-
-43 -> 3 に減っているが、これが「閉じられた」のか「compact-findings で畳まれた」のか
-「別ストアへ移った」のかを今日は測っていない。disposition は依然 0 件なので、
-closure が上がったわけではないことだけは確か。
-
-測ったこと: 現在の queue 件数 (3) と disposition 件数 (0)。
-測っていないこと: 40 件がどこへ行ったか。producer 別の closure。
-  reconcile-fixed / compact-findings の実行履歴。
-
-推測で埋めずに pending へ戻す。次に着手する人は、まず 40 件の行方を測ること —
-それが「導線が無い」のか「導線はあるが通っていない」のかを分ける。"""
-created_at = 1785634225
-updated_at = 1790253336
-weight = 0.0
-issue_number = 116
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/116"
-
-[[task]]
 id = "d8d25af9"
 title = "backlog に終端状態『やらない (wontfix)』が無い — done は完了を偽り、fail は defer_until で必ず再キューされる"
 project = "/Users/yuki/src/harness"
@@ -1067,28 +1028,6 @@ updated_at = 1790635387
 weight = 0.0
 issue_number = 130
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/130"
-
-[[task]]
-id = "034b6620"
-title = "どの git hook も cargo を呼んでいない — check-clippy-lints.py を配線し verdict を持つクレートに workspace lints を継承させる"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "L5",
-    "scout",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-workspace の unwrap_used / expect_used / panic の deny は 42 クレート中 8 にしか掛かっていない。condukt donegate reviewgate tdd budgetguard schemaguard harness-core 自身はいずれも verdict 形の判定を持ちながら対象外。さらに .githooks/pre-commit も pre-push も cargo を1回も呼ばない (pre-commit の run リストは :140-153、cargo の出現はコメント散文のみ)。これを直すために書かれた scripts/check-clippy-lints.py:20-24 は自分でそのギャップを docstring に書いた上でどの hook にも配線されていない。trybuild の compile-fail 契約も同様に enforcement site で走らず、.stderr を採取した rustc を固定する rust-toolchain.toml も存在しない。完了条件: check-clippy-lints.py が pre-commit の run リストに入り、上記クレートに lints workspace 継承が入り、rust-toolchain.toml が commit され、各クレートへ unwrap を注入して hook の RED を観測済み。
-
-2026-09-24 progress: the cargo-calling hook part was already wired (.githooks/pre-commit runs check-clippy-lints.py), and condukt+tdd were opted in by 71f6f084. Still open: rust-toolchain.toml pin (waiting on a user decision: 1.97.1 pin vs stable vs trybuild-only) and trybuild compile-fail tests not running at any enforcement point."""
-created_at = 1785879185
-updated_at = 1790254586
-weight = 0.0
-issue_number = 136
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/136"
 
 [[task]]
 id = "8696dd7e"
@@ -12060,3 +11999,198 @@ updated_at = 1790721223
 weight = 0.0
 issue_number = 900
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/900"
+
+[[task]]
+id = "f81a8197"
+title = "launcher-missing-binary-failclosed.sh にバイナリが存在する場合の対照ケースが無い — 常に失敗する launcher でも green になる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Found 2026-09-30 while verifying 8aeb4cab at main abcd4f2e. The test only runs launchers with the per-platform binary absent. Add a control where <name>-<os>-<arch> is a fake executable that echoes its args and exits 0, then assert the launcher execs it and passes args and exit code through. Only darwin-arm64 branches are exercised on this host."
+created_at = 1790719274
+updated_at = 1790719274
+weight = 0.0
+issue_number = 873
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/873"
+
+[[task]]
+id = "89544915"
+title = "overwatch: condukt-gate / record-audit 由来の finding には閉じる経路が無い (reconcile-fixed は CA-<crate>-<NNN> のみ照合)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Found 2026-09-30 by the 7c27050b investigation at main abcd4f2e on a copy of the live store. closure is continuous-audit 19/44, condukt-gate 0/4, record-audit 0/3. reconcile-fixed only matches CA-<crate>-<NNN> ids, so gate-exec:... and record-audit:... ids are never closed. Needs a ruling on what closed means for escalations and freshness alerts, which have no fix commit."
+created_at = 1790719360
+updated_at = 1790719360
+weight = 0.0
+issue_number = 881
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/881"
+
+[[task]]
+id = "60fe5eed"
+title = "overwatch review-metrics の median latency が finding ts からバッチ auto-reconcile 時刻までを測り約70日と誤誘導する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-09-30 on a copy of the live store: median latency 6055122 s. All 19 dispositions are auto-reconcile stamped 2026-09-24 02:25:05, so the metric measures when the batch ran, not time to fix."
+created_at = 1790719361
+updated_at = 1790719361
+weight = 0.0
+issue_number = 882
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/882"
+
+[[task]]
+id = "ffd62de0"
+title = "overwatch undetermined.jsonl が上限なく肥大 (live store 131k 行、33MB)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-09-29/30: ~/.overwatch/harness-e77d23c7/overwatch/undetermined.jsonl is 33813562 bytes and about 131k lines. No rotation or compaction was found. Check whether overwatch undetermined-metrics still reads it within bounded time."
+created_at = 1790719363
+updated_at = 1790719363
+weight = 0.0
+issue_number = 883
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/883"
+
+[[task]]
+id = "c6b74ed8"
+title = "overwatch --to-backlog は disposition 済み (dismissed / false-positive) の finding も backlog に起票する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Found 2026-09-30 by the 7c27050b implementer. bridge.rs calls build_queue directly, so the new disposition filter does not apply. docs/DESIGN-continuous-audit-triage.md lines 40 and 116 record an agreement not to make record-disposition a pre-gate for the bridge. Needs a ruling on whether a finding dismissed before bridging should still be filed."
+created_at = 1790719793
+updated_at = 1790719793
+weight = 0.0
+issue_number = 886
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/886"
+
+[[task]]
+id = "27cf0081"
+title = "overwatch main.rs の ReconcileFixed help が『unreadable store は 0 processed に縮退』と書くが reconcile.rs は exit 3 — 散文と実挙動の不一致の疑い"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Noticed 2026-09-30 by the 7c27050b implementer, not verified. Also store::compact_review_findings (around store.rs:1603) uses best-effort read_dispositions, and its report does not say when the ledger was unreadable."
+created_at = 1790719795
+updated_at = 1790719795
+weight = 0.0
+issue_number = 887
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/887"
+
+[[task]]
+id = "3672737c"
+title = "rust-toolchain.toml で 1.97.1 固定後、クロスビルド target (x86_64-apple-darwin / x86_64-unknown-linux-gnu / wasm32) が未導入"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Found 2026-09-30 after 42a30a26. The pinned toolchain has only aarch64-apple-darwin. scripts/build-plugin-bin.sh <p> <target> now needs rustup target add --toolchain 1.97.1 <target>. Rollout builds only the host target and is unaffected."
+created_at = 1790719841
+updated_at = 1790719841
+weight = 0.0
+issue_number = 888
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/888"
+
+[[task]]
+id = "57a98a8f"
+title = "backlog merge-driver --install が版付きプラグインキャッシュのパス (…/backlog/<ver>/bin/…) を git config に焼き込み、旧版ディレクトリの回収で driver が消える"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-09-30: --install wrote /Users/yuki/.claude/plugins/cache/yukineko/backlog/0.3.12/bin/backlog-darwin-arm64 (this session's pinned, superseded version) into merge.backlog.driver. Reset by hand to the bare command: backlog merge-driver %O %A %B. A bare command fails (reported as a conflict, fail-closed) in shells where backlog is not on PATH."
+created_at = 1790719902
+updated_at = 1790719902
+weight = 0.0
+issue_number = 889
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/889"
+
+[[task]]
+id = "1da483dc"
+title = "UNGATED COMMIT の案内が存在しない gate-bypass.py --status を指す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "post-commit 警告 (.githooks/post-commit:112) が gate-bypass.py --status の実行を案内するが、同スクリプトは --status を持たず usage エラーで exit 2 になる。存在するのは --json。2026-09-30 に session-389c3077 で観測。案内文と実装の食い違いを直す。"
+created_at = 1790720274
+updated_at = 1790720274
+weight = 0.0
+issue_number = 890
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/890"
+
+[[task]]
+id = "fc56ed9c"
+title = "condukt editgate が block を返す判定を持ちながら run_hook 経由で panic を握り潰し常に exit 0"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "491f6e94 の実装 agent が報告 (2026-09-30)。CLAUDE.md 1 節: 判定を持つ hook は run_guarded へ。editgate が block 判定を返すことと run_hook を通ることを確認のうえ移行する。"
+created_at = 1790720886
+updated_at = 1790720886
+weight = 0.0
+issue_number = 895
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/895"
+
+[[task]]
+id = "0f0425d5"
+title = "condukt の diffrisk_record every_invocation_is_journaled テストが並列実行で間欠的に落ちる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "2026-09-30 の cargo test -p condukt 全体実行で 1 回失敗 (one record per invocation, left 1 right 2)。直後の全体実行と単独 3 回は通過。共有状態の競合の疑い、未検証。"
+created_at = 1790720888
+updated_at = 1790720888
+weight = 0.0
+issue_number = 896
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/896"
+
+[[task]]
+id = "eea7c61f"
+title = "condukt worktree reap が session-* ブランチを残すため、ブランチが溜まり続ける"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "491f6e94 の裁定は worktree の除去のみ。merge 済みブランチの扱いは未裁定。"
+created_at = 1790720889
+updated_at = 1790720889
+weight = 0.0
+issue_number = 897
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/897"
+
+[[task]]
+id = "3a0ceb58"
+title = "hook payload の cwd が Bash の cd に追従するか未観測 (session-heartbeat の cwd 一致判定)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "491f6e94 の heartbeat は session_id 一致でも更新するので自セッションの worktree は覆われるが、cwd 一致経路が実際に効くかは観測していない。"
+created_at = 1790720891
+updated_at = 1790720891
+weight = 0.0
+issue_number = 898
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/898"

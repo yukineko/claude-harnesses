@@ -874,6 +874,13 @@ const READ_ONLY_COMMANDS: &[&str] = &[
     "true",
     "false",
     "test",
+    // `[` is `test` under another name, and `[[` is bash's conditional
+    // expression: both only evaluate a condition over their operands (a
+    // command substitution inside one is judged on its own). Before the
+    // compound-syntax fix (1875f626) they were reached as the "unknown verb"
+    // of `if [ -f .githooks/pre-commit ]; then …`.
+    "[",
+    "[[",
     "which",
     "type",
     "whereis",
@@ -914,6 +921,26 @@ fn is_read_only_command(cmd: &str) -> bool {
 /// A verb-list version of this rule was rejected on the evidence: the list in
 /// the finding above IS the list somebody would have written in round 1, and it
 /// was assembled by an adversary probing round 1's gaps, not by foresight.
+///
+/// OPERANDS ARE SHELL WORDS, NOT WHITESPACE FRAGMENTS (1875f626). `rest` comes
+/// from the segment tokeniser, which splits on whitespace only, so a quoted
+/// argument arrived here in pieces: `backlog add "harden .githooks/pre-commit"`
+/// yielded the "operand" `.githooks/pre-commit"` (quote attached), and a
+/// quoted multi-line `--notes "…\n.githooks/pre-commit …"` yielded the bare
+/// line fragment as if it were a path argument. Both are FREE TEXT inside one
+/// argument, not a path the program was handed. Whether a fragment matched was
+/// an accident of glob shape: `.githooks/pre-commit"` matched (`.githooks/**`
+/// takes anything below it, stray quote included) while the fragment
+/// `.claude/settings.json"` of `"see .claude/settings.json"` matched nothing
+/// (measured on 0.2.78: the first asked, the second was allowed). So the
+/// operands are re-read here as whole shell words ([`quote_aware_words`]) with
+/// one level of quoting removed ([`first_shell_word`]) before the path test.
+///
+/// A command word that is itself an unexpanded expansion (`$B …`) is not an
+/// unknown VERB — it is an unknown PROGRAM, the refusal
+/// `unresolvable-command-word` already names (`unknown_wrapper_ask`). It still
+/// asks here (the program could be anything, including a writer), worded as
+/// that refusal so the two classes stay separable in `rule_id`.
 fn unknown_verb_protected_ask(cmd: &str, rest: &[&str]) -> Decision {
     if is_read_only_command(cmd)
         || is_shell(cmd)
@@ -922,15 +949,28 @@ fn unknown_verb_protected_ask(cmd: &str, rest: &[&str]) -> Decision {
     {
         return Decision::Allow;
     }
-    for op in positional_operands(rest, &[]) {
-        let hit = if has_glob_meta(op) {
-            glob_literal_prefix(op)
+    if cmd == "backlog" && !backlog_writes_operand_paths(rest) {
+        return Decision::Allow;
+    }
+    let words = quote_aware_words(&rest.join(" "));
+    let raw: Vec<&str> = words.iter().map(String::as_str).collect();
+    for raw_op in positional_operands(&raw, &[]) {
+        let op = first_shell_word(raw_op).unwrap_or_else(|| raw_op.to_string());
+        let hit = if has_glob_meta(&op) {
+            glob_literal_prefix(&op)
                 .map(|p| exclude::touches_protected(&p))
                 .unwrap_or(false)
         } else {
-            exclude::touches_protected(op)
+            exclude::touches_protected(&op)
         };
         if hit {
+            if has_unresolvable_expansion(cmd) {
+                return Decision::ask(format!(
+                    "the command word `{cmd}` is an expansion whose value only exists at run \
+time, and {op} is a protected gate/config path — blastguard cannot tell what program this runs \
+or what it does to that path"
+                ));
+            }
             return Decision::ask(format!(
                 "`{cmd}` is a command blastguard has no rule for, and {op} is a protected \
 gate/config path — blastguard cannot tell whether this reads it, rewrites it or removes it, \
@@ -939,6 +979,37 @@ and refuses to guess"
         }
     }
     Decision::Allow
+}
+
+/// True when a `backlog` invocation may WRITE to a path it was handed as an
+/// operand.
+///
+/// `backlog` is this repository's task-queue CLI (`crates/backlog/src/main.rs`,
+/// clap `Command` enum). Its positional operands and flag values are task
+/// TEXT and ids (`add --title … --notes …`, `done <id>`, `edit <id>`), plus a
+/// `--project` path that only LOCATES the store (the write goes to the store
+/// file under that project's root, never to the path given). Free text that
+/// mentions `.githooks/pre-commit` is a note about the gate, not an operation
+/// on it, and asking about it was pure friction (1875f626: 14 recurrences).
+///
+/// The one exception is `merge-driver BASE OURS THEIRS`, which writes the
+/// merged result INTO `OURS` — a real file operand — so any invocation that
+/// contains that subcommand word keeps the generic unknown-verb rule. Matching
+/// the word ANYWHERE (not only in first position) is deliberate: it keeps the
+/// exception if a global option is ever added in front of the subcommand, at
+/// the cost of a rare ask for free text consisting of exactly that word.
+///
+/// Scope, stated so a reviewer can check it rather than trust it: this is
+/// keyed on the program NAME. A different program installed as `backlog`
+/// would inherit it. Every other subcommand either writes only the store,
+/// writes a fixed file it does not take as an operand (`install` /
+/// `uninstall` edit `~/.claude/settings.json` — not an operand, so this rule
+/// never saw it before either), or is rejected by clap without side effects
+/// (an unknown subcommand such as `show`). If a new subcommand that writes an
+/// operand path is added to `backlog`, it must be added here.
+fn backlog_writes_operand_paths(rest: &[&str]) -> bool {
+    rest.iter()
+        .any(|t| first_shell_word(t).as_deref() == Some("merge-driver"))
 }
 
 /// `unlink` / `rmdir`: the single-file and empty-directory twins of `rm`.
@@ -1691,6 +1762,12 @@ cannot tell whether it is a protected gate/config file or a system directory"
     // EARLIER one. `advance_cwd_and_rewrite` below rewrites a segment's text but
     // maps one segment to one segment, so `seg_idx` stays the segment's index in
     // `split_segments(cmd)` — which is what that resolver's parameter means.
+    // Compound-command syntax (`for … in`, `do`, `then`, `{`, `case` patterns)
+    // separated from the command each segment really runs; see
+    // `compound_views`. Index-aligned with `split_segments(cmd)`.
+    let views = compound_views(cmd);
+    // `for`/`select` variables bound so far on this line; see `loop_variants`.
+    let mut bindings: Vec<LoopBinding> = Vec::new();
     for (seg_idx, seg) in split_segments(cmd).into_iter().enumerate() {
         if inert_body.get(seg_idx).copied().unwrap_or(false) {
             continue;
@@ -1705,8 +1782,62 @@ cannot tell whether it is a protected gate/config file or a system directory"
             CwdState::Known(dir) => ctx.after_cd(dir),
             CwdState::Unknown => ctx.after_unknown_cd(),
         };
-        let (effective_seg, extra, next_cwd) = advance_cwd_and_rewrite(&seg, &cwd, &mut aliases);
+        // A view that does not line up with this segment would mean the two
+        // splitters disagree; judge the raw segment exactly as before rather
+        // than a view of some other text.
+        let (command, data, binding) = match views.get(seg_idx) {
+            Some(v) => (v.command.as_str(), v.data.as_str(), v.binding.clone()),
+            None => (seg.as_str(), "", None),
+        };
+        if !data.trim().is_empty() {
+            if let Some(deny) = acc.record(analyze_expanded_data(data, depth, &seg_ctx)) {
+                return deny;
+            }
+        }
+        if let Some(b) = binding {
+            bindings.push(b);
+        }
+        let cwd_before = cwd.clone();
+        let aliases_before = aliases.clone();
+        let (effective_seg, extra, next_cwd) = advance_cwd_and_rewrite(command, &cwd, &mut aliases);
         cwd = next_cwd;
+        // The same segment once more for every value its loop variables take
+        // (see `loop_variants`), IN ADDITION to the judgement of the text as
+        // written below — so this can only add verdicts, never remove one.
+        match loop_variants(command, &bindings) {
+            LoopVariants::Unbound => {}
+            LoopVariants::TooMany { name, count } => {
+                if let Some(deny) = acc.record(Decision::ask(format!(
+                    "the loop variable `${name}` takes {count} combinations of values here, more \
+than blastguard evaluates ({MAX_LOOP_VARIANTS}) — it cannot tell what path this command reaches \
+through it, and refuses to guess"
+                ))) {
+                    return deny;
+                }
+            }
+            LoopVariants::Variants(variants) => {
+                for variant in variants {
+                    let mut variant_aliases = aliases_before.clone();
+                    let (variant_seg, variant_extra, _) =
+                        advance_cwd_and_rewrite(&variant, &cwd_before, &mut variant_aliases);
+                    if let Some(d) = variant_extra {
+                        if let Some(deny) = acc.record(d) {
+                            return deny;
+                        }
+                    }
+                    if let Some(deny) =
+                        acc.record(analyze_segment(&variant_seg, depth, cmd, seg_idx, &seg_ctx))
+                    {
+                        return deny;
+                    }
+                    if let Some(d) = high_blast_outside_tree_rm(&variant_seg) {
+                        if let Some(deny) = acc.record(d) {
+                            return deny;
+                        }
+                    }
+                }
+            }
+        }
         if let Some(extra_decision) = extra {
             if let Some(deny) = acc.record(extra_decision) {
                 return deny;
@@ -2015,13 +2146,19 @@ fn segment_cwd_states(cmd: &str) -> Vec<CwdState> {
     let inert_body = inert_here_document_body(&split_segments_with_separators(cmd));
     let mut cwd = CwdState::Root;
     let mut aliases: HashMap<String, String> = HashMap::new();
+    // The same compound-syntax view the loop uses, so `do cd .githooks` moves
+    // the directory here exactly as it does there.
+    let views = compound_views(cmd);
     let mut out = Vec::with_capacity(segs.len());
     for (seg_idx, seg) in segs.iter().enumerate() {
         out.push(cwd.clone());
         if inert_body.get(seg_idx).copied().unwrap_or(false) {
             continue;
         }
-        let (_, _, next_cwd) = advance_cwd_and_rewrite(seg, &cwd, &mut aliases);
+        let command = views
+            .get(seg_idx)
+            .map_or(seg.as_str(), |v| v.command.as_str());
+        let (_, _, next_cwd) = advance_cwd_and_rewrite(command, &cwd, &mut aliases);
         cwd = next_cwd;
     }
     out
@@ -5559,6 +5696,417 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
     acc.finish()
 }
 
+/// Reserved words that can stand in COMMAND POSITION in front of the simple
+/// command a segment really runs, or that close a compound command with no
+/// command of their own (1875f626).
+///
+/// [`split_segments`] cuts `for f in x; do patch .githooks/pre-commit y; done`
+/// into `for f in x` / ` do patch .githooks/pre-commit y` / ` done`, and every
+/// rule used to read the FIRST word of each piece as the program. So `do`,
+/// `then`, `{`, `!` … were judged as unknown verbs: `patch` was never examined
+/// by its own rule (a Deny behind `then rm -rf /usr` was softened to the
+/// unknown-wrapper Ask), a `cd` behind `do` moved no tracked directory, and any
+/// protected path anywhere in the segment raised
+/// `unknown-verb-protected-path` against the keyword itself. Removing the
+/// keyword before judging is what makes the real command the one judged.
+///
+/// Only words bash treats as reserved IN COMMAND POSITION are listed, and they
+/// are only removed from the front of a segment, where they are keywords:
+/// `echo done` and `grep -q then` keep their words.
+const COMPOUND_PREFIX_WORDS: &[&str] = &[
+    "if", "then", "elif", "else", "fi", "while", "until", "do", "done", "esac", "{", "}", "!",
+];
+
+/// The first shell word of `s` and the text after it, splitting on whitespace
+/// that is OUTSIDE quotes and not backslash-escaped. `None` for blank text.
+fn split_first_word(s: &str) -> Option<(&str, &str)> {
+    let t = s.trim_start();
+    if t.is_empty() {
+        return None;
+    }
+    let (mut in_s, mut in_d, mut escaped) = (false, false, false);
+    for (i, c) in t.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' if !in_s => escaped = true,
+            '\'' if !in_d => in_s = !in_s,
+            '"' if !in_s => in_d = !in_d,
+            c if c.is_whitespace() && !in_s && !in_d => return Some((&t[..i], &t[i..])),
+            _ => {}
+        }
+    }
+    Some((t, ""))
+}
+
+/// Byte offset just past the `)` that closes a `case` PATTERN at the start of
+/// `s` (`a)`, `(a)`, `*.rs)`, `"x y")`), or `None` when `s` does not start with
+/// a complete pattern. Only called where the grammar says a pattern stands.
+fn case_pattern_end(s: &str) -> Option<usize> {
+    let lead = s.len() - s.trim_start().len();
+    let t = &s[lead..];
+    let mut chars = t.char_indices().peekable();
+    // The optional `(` that may open a pattern.
+    if t.starts_with('(') {
+        chars.next();
+    }
+    let (mut in_s, mut in_d, mut escaped) = (false, false, false);
+    let mut depth: u32 = 0;
+    let mut prev = None;
+    for (i, c) in chars {
+        if escaped {
+            escaped = false;
+            prev = Some(c);
+            continue;
+        }
+        match c {
+            '\\' if !in_s => escaped = true,
+            '\'' if !in_d => in_s = !in_s,
+            '"' if !in_s => in_d = !in_d,
+            // `$(…)` inside a pattern: its `)` is not the pattern's.
+            '(' if !in_s && !in_d && prev == Some('$') => depth += 1,
+            ')' if !in_s && !in_d => {
+                if depth == 0 {
+                    return Some(lead + i + 1);
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+        prev = Some(c);
+    }
+    None
+}
+
+/// A `for NAME in WORDS` / `select NAME in WORDS` header: the loop variable and
+/// every value the text says it takes.
+#[derive(Clone, Debug)]
+struct LoopBinding {
+    name: String,
+    values: Vec<String>,
+}
+
+/// The binding a `for`/`select` header establishes, or `None` for a header
+/// with no variable (`for ((…))`) or one this cannot read.
+///
+/// `for NAME` with no `in` iterates the positional parameters, which is a
+/// value the line does not state; it is bound to the expansion `"$@"` so a
+/// body that uses it is judged exactly like one that wrote `"$@"` itself.
+fn loop_binding(header: &str) -> Option<LoopBinding> {
+    let words = quote_aware_words(header);
+    let name = words.get(1)?;
+    if !is_shell_identifier(name) {
+        return None;
+    }
+    let values = match words.get(2).map(String::as_str) {
+        Some("in") => words[3..]
+            .iter()
+            .map(|w| unquote_literal_value(w).unwrap_or_else(|| w.clone()))
+            .collect(),
+        None => vec!["\"$@\"".to_string()],
+        Some(_) => return None,
+    };
+    Some(LoopBinding {
+        name: name.clone(),
+        values,
+    })
+}
+
+/// One [`split_segments`] segment with its compound-command syntax separated
+/// from the simple command it runs.
+#[derive(Debug, Default)]
+struct SegmentView {
+    /// Text the shell EXPANDS but does not run as a command: a `for`/`select`
+    /// word list, a `case` subject, a `case` pattern. Nothing in it is a
+    /// program or an operand — only the substitutions inside it execute, so
+    /// that is all that is judged of it ([`analyze_expanded_data`]).
+    data: String,
+    /// The simple command the segment runs, with leading reserved words and
+    /// any `case` pattern removed. Empty when the segment runs none.
+    command: String,
+    /// Set when the segment is a `for`/`select` header.
+    binding: Option<LoopBinding>,
+}
+
+/// [`SegmentView`] for every segment of `cmd`, index-aligned with
+/// [`split_segments`] (built from [`split_segments_with_separators`], whose
+/// `text` fields are pinned equal to it).
+///
+/// `case` patterns need state: a word ending in `)` is a pattern only where the
+/// grammar puts one — right after `case WORD in`, or after a `;;`/`;&`/`;;&`
+/// arm terminator while a `case` is open. Everywhere else it is left alone,
+/// because a subshell's closing `)` (`(true && reboot)` splits into
+/// ` reboot)`) has the same shape and removing it would hide the command.
+/// A here-document body is data and never moves that state.
+///
+/// Measured on 0.2.78, before this existed: `case $x in (a) rm -rf /usr;; esac`
+/// was ALLOW (the pattern `(a)` was read as the program) and
+/// `if true; then git push --force origin main; fi` was ALLOW (the high-blast
+/// tier read `then` as the program). Both are judged by their real rule now.
+fn compound_views(cmd: &str) -> Vec<SegmentView> {
+    let segs = split_segments_with_separators(cmd);
+    let inert = inert_here_document_body(&segs);
+    let mut out = Vec::with_capacity(segs.len());
+    let mut case_depth: usize = 0;
+    let mut expect_pattern = false;
+    for (i, seg) in segs.iter().enumerate() {
+        if inert.get(i).copied().unwrap_or(false) {
+            out.push(SegmentView {
+                command: seg.text.clone(),
+                ..SegmentView::default()
+            });
+            continue;
+        }
+        let mut rest: &str = &seg.text;
+        let mut data = String::new();
+        let mut binding = None;
+        while let Some((word, after)) = split_first_word(rest) {
+            if expect_pattern {
+                if word == "esac" {
+                    case_depth = case_depth.saturating_sub(1);
+                    expect_pattern = false;
+                    rest = after;
+                    continue;
+                }
+                if let Some(end) = case_pattern_end(rest) {
+                    data.push_str(&rest[..end]);
+                    data.push(' ');
+                    rest = &rest[end..];
+                    expect_pattern = false;
+                    continue;
+                }
+                if seg.sep_after == SegmentSep::Pipe {
+                    // `a|b)`: the `|` split the pattern, and this piece is one
+                    // alternative of it. The next piece is still the pattern.
+                    data.push_str(rest);
+                    rest = "";
+                    break;
+                }
+                // Not pattern-shaped where a pattern was due: judge it as the
+                // command it looks like rather than guess.
+                expect_pattern = false;
+            }
+            if COMPOUND_PREFIX_WORDS.contains(&word) {
+                if word == "esac" {
+                    case_depth = case_depth.saturating_sub(1);
+                }
+                rest = after;
+                continue;
+            }
+            if word == "for" || word == "select" {
+                binding = loop_binding(rest);
+                data.push_str(rest);
+                rest = "";
+                break;
+            }
+            if word == "case" {
+                let mut header_end = after;
+                let mut saw_in = false;
+                if let Some((_subject, r)) = split_first_word(after) {
+                    header_end = r;
+                    if let Some(("in", r2)) = split_first_word(r) {
+                        header_end = r2;
+                        saw_in = true;
+                    }
+                }
+                data.push_str(&rest[..rest.len() - header_end.len()]);
+                data.push(' ');
+                rest = header_end;
+                if saw_in {
+                    case_depth += 1;
+                    expect_pattern = true;
+                }
+                continue;
+            }
+            break;
+        }
+        // `;;` (and `;&`, `;;&`): an EMPTY segment between a `;` and the next
+        // separator. Inside an open `case` it ends an arm, and a pattern is due.
+        if seg.text.is_empty() && case_depth > 0 && i > 0 {
+            let prev = &segs[i - 1];
+            if prev.sep_after == SegmentSep::Sequential && !prev.ends_at_newline {
+                expect_pattern = true;
+            }
+        }
+        out.push(SegmentView {
+            data,
+            command: rest.to_string(),
+            binding,
+        });
+    }
+    out
+}
+
+/// Judge text the shell expands but does not run as a command (a loop word
+/// list, a `case` subject or pattern): only its command substitutions execute,
+/// and each is judged with the full analyser, exactly as [`analyze_segment`]
+/// judges the substitutions of a command.
+fn analyze_expanded_data(data: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
+    if depth >= MAX_SHELL_DEPTH {
+        return depth_exhausted();
+    }
+    let mut acc = VerdictAcc::default();
+    for payload in executed_substitution_payloads(data) {
+        if let Some(deny) = acc.record(analyze_shell_payload(&payload, depth, ctx)) {
+            return deny;
+        }
+    }
+    acc.finish()
+}
+
+/// Most loop-variable substitutions judged for one segment.
+///
+/// Each variant is one more `analyze_segment` call, so this bounds the work a
+/// loop can cost; the product over several nested loop variables is what can
+/// grow, not a single list. The value is a chosen bound, not a measured one;
+/// past it the segment is an Ask (`LoopVariants::TooMany`), never skipped.
+const MAX_LOOP_VARIANTS: usize = 256;
+
+/// `text` with every reference to the variable `name` (`$name`, `${name}`, and
+/// the operator forms `${name%…}`, `${name:-…}` …) replaced by `value`, or
+/// `None` when `text` does not reference it. A backslash-escaped `$` is
+/// literal and left alone. A reference inside single quotes IS replaced — that
+/// over-approximates (bash would not expand it), which can only add verdicts.
+///
+/// An operator form is replaced by the WHOLE value (`${f%.sh}` by all of
+/// `.githooks/pre-commit.sh`), again an over-approximation: the path the
+/// operator would derive lies inside the one substituted.
+fn substitute_var_refs(text: &str, name: &str, value: &str) -> Option<String> {
+    let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut hit = false;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\\' {
+            out.push(c);
+            if let Some(&n) = chars.get(i + 1) {
+                out.push(n);
+            }
+            i += 2;
+            continue;
+        }
+        if c == '$' {
+            if chars.get(i + 1) == Some(&'{') {
+                if let Some(close) = chars[i + 2..].iter().position(|&d| d == '}') {
+                    let inner: String = chars[i + 2..i + 2 + close].iter().collect();
+                    let names_it = inner
+                        .strip_prefix(name)
+                        .is_some_and(|r| !r.starts_with(is_ident));
+                    if names_it {
+                        out.push_str(value);
+                        hit = true;
+                        i += close + 3;
+                        continue;
+                    }
+                }
+            } else {
+                let end = chars[i + 1..]
+                    .iter()
+                    .position(|&d| !is_ident(d))
+                    .map_or(chars.len(), |p| i + 1 + p);
+                let ident: String = chars[i + 1..end].iter().collect();
+                if ident == name {
+                    out.push_str(value);
+                    hit = true;
+                    i = end;
+                    continue;
+                }
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+    hit.then_some(out)
+}
+
+/// What the loop variables bound earlier on the line make of one segment.
+enum LoopVariants {
+    /// The segment references no bound loop variable.
+    Unbound,
+    /// One text per combination of values, each to be judged like the segment.
+    Variants(Vec<String>),
+    /// More combinations than [`MAX_LOOP_VARIANTS`]: not judged, and the caller
+    /// must not read that as clean.
+    TooMany { name: String, count: usize },
+}
+
+/// Every text `command` becomes once the `for`/`select` variables bound
+/// earlier on the line are replaced by the values the loop header lists.
+///
+/// Why this exists: a loop header's word list is DATA — `for f in
+/// .githooks/pre-commit` modifies nothing — so it is no longer judged as the
+/// operands of an unknown verb `for`. But the list is data only until the body
+/// USES it: `for f in .githooks/pre-commit; do patch "$f" y; done` patches the
+/// gate, and judging ` do patch "$f" y` as written would see only the
+/// placeholder `"$f"`. Substituting the listed values back in is what lets the
+/// body's own rules judge the path it really touches, so the header is not a
+/// way to launder a path past them.
+///
+/// Scope is over-approximated in the restrictive direction: a variable stays
+/// bound for the rest of the line (bash keeps a loop variable's last value
+/// after `done`), and two loops over the same name union their values. A
+/// reassignment of the name is not modelled, so it can only add a variant.
+fn loop_variants(command: &str, bindings: &[LoopBinding]) -> LoopVariants {
+    // Union values per name, latest binding first, so a list that itself
+    // names an earlier loop variable (`for g in $f`) is substituted before
+    // that variable's own values are.
+    let mut names: Vec<(&str, Vec<&str>)> = Vec::new();
+    for b in bindings.iter().rev() {
+        match names.iter_mut().find(|(n, _)| *n == b.name) {
+            Some((_, vals)) => {
+                for v in &b.values {
+                    if !vals.contains(&v.as_str()) {
+                        vals.push(v);
+                    }
+                }
+            }
+            None => {
+                let mut vals: Vec<&str> = Vec::new();
+                for v in &b.values {
+                    if !vals.contains(&v.as_str()) {
+                        vals.push(v);
+                    }
+                }
+                names.push((&b.name, vals));
+            }
+        }
+    }
+    let mut variants = vec![command.to_string()];
+    let mut bound = false;
+    for (name, values) in names {
+        if !variants
+            .iter()
+            .any(|v| substitute_var_refs(v, name, "").is_some())
+        {
+            continue;
+        }
+        bound = true;
+        let count = variants.len() * values.len();
+        if count > MAX_LOOP_VARIANTS {
+            return LoopVariants::TooMany {
+                name: name.to_string(),
+                count,
+            };
+        }
+        let mut next = Vec::with_capacity(count);
+        for v in &variants {
+            for value in &values {
+                next.push(substitute_var_refs(v, name, value).unwrap_or_else(|| v.clone()));
+            }
+        }
+        variants = next;
+    }
+    if bound {
+        LoopVariants::Variants(variants)
+    } else {
+        LoopVariants::Unbound
+    }
+}
+
 /// True when `cmd` is a command word this module has an actual opinion about —
 /// either a rule arm in `analyze_command_at`, a re-analysis arm, or a wrapper
 /// whose payload is already followed.
@@ -8669,8 +9217,10 @@ exfiltration channel"
 /// vs. genuinely uncovered (this tier's actual target).
 fn analyze_high_blast_tier(cmd: &str) -> Decision {
     let mut acc = VerdictAcc::default();
-    for seg in split_segments(cmd) {
-        let tokens: Vec<&str> = seg.split_whitespace().collect();
+    // The command each segment runs with compound syntax removed, so
+    // `then git push --force` is read as `git`, not as the keyword `then`.
+    for view in compound_views(cmd) {
+        let tokens: Vec<&str> = view.command.split_whitespace().collect();
         if tokens.is_empty() {
             continue;
         }
@@ -12124,11 +12674,18 @@ and must not be Allowed: {failing:?}"
     ///
     /// Observed: `BIN=A` / `for BIN in B` / `do` / `true` / `done` /
     /// `$BIN marker` → `PROG_B marker`.
+    ///
+    /// Was `ask` (the resolver refusing to name the program). Since 1875f626
+    /// the loop header's values are substituted into every later segment that
+    /// uses the variable (`loop_variants`), so the program bash really runs —
+    /// `/bin/rm -rf /some/path`, per the observation above — is judged by the
+    /// `rm` rule and denied. Same property (the earlier literal `echo` is not
+    /// believed), reached with the finding instead of the refusal.
     #[test]
     fn a_for_loop_control_variable_rebinds_the_name_after_the_assignment() {
         let cmd = "BIN=/bin/echo\nfor BIN in /bin/rm\ndo\ntrue\ndone\n$BIN -rf /some/path";
         let d = bash(cmd);
-        assert_eq!(verdict_name(&d), "ask", "for {cmd:?}, got {d:?}");
+        assert_eq!(verdict_name(&d), "deny", "for {cmd:?}, got {d:?}");
     }
 
     /// `eval` and `source`/`.` can assign anything, and the name they assign

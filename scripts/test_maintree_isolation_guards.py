@@ -455,14 +455,25 @@ class LifecycleHooks(WorktreeIsolationGuards):
         self.assertEqual(
             _run("stop-verify-worktree.py", outside, {"cwd": outside}), 0)
 
+    def _isolated_home(self) -> dict:
+        # session-worktree-init.py writes a session registration under
+        # $HOME/.backlog/drivers (backlog 491f6e94). Run it against a temp
+        # HOME so the suite never writes into the developer's real registry,
+        # where a live record reads as an active driver.
+        home = os.path.join(self.tmp, "home")
+        os.makedirs(home, exist_ok=True)
+        return {"HOME": home}
+
     def test_sessionstart_in_worktree_noops(self):
         self.assertEqual(
             _run("session-worktree-init.py", self.wt,
-                 {"cwd": self.wt, "session_id": "abcd1234-x"}), 0)
+                 {"cwd": self.wt, "session_id": "abcd1234-x"},
+                 self._isolated_home()), 0)
 
     def test_sessionstart_on_main_creates_worktree(self):
         rc = _run("session-worktree-init.py", self.main,
-                  {"cwd": self.main, "session_id": "abcd1234-x"})
+                  {"cwd": self.main, "session_id": "abcd1234-x"},
+                  self._isolated_home())
         self.assertEqual(rc, 0)
         made = os.path.join(
             os.path.dirname(self.main), ".main-worktrees", "session-abcd1234")

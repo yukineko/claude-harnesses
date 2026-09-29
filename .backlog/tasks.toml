@@ -790,9 +790,11 @@ status = "pending"
 notes = """
 Measurement half of 5b33b4cd, split out because it cannot be satisfied by shipping — it needs two real Continuous-Audit rounds run under the new rules. Shipped in 0558db6f (overwatch 0.2.15, deployed and live-verified): audit-round record refuses regression_tests_added < confirmed, continuous-audit.sh stops on it via run_ow_gate, SKILL.md Step 3.5 mirror sweep is mandatory. What remains is purely observation: run two rounds and check audit-metrics reports converging:true both times. Baseline to beat, from the ledger that motivated the item: new_findings 5,1,13,0,14,15 with converging:false and round 2026W29 at confirmed:10 / regression_tests_added:0. Caveat when reading the result: closure_rate is now an acceptance precondition and will read 1.0 for every new round, so it carries no signal — judge convergence ONLY by the new_findings trend, which is what is_converging actually uses. A rise in new_findings is not automatically failure either: Step 3.5 is expected to surface twins that previously went unharvested, so an early round may legitimately go UP before it comes down.
 
-USER RULING 2026-09-24: run 3+ real Continuous-Audit rounds under the DEFAULT window (no --window 2, no goal redefinition). Each round closes every CONFIRMED with a regression test before record. Record from the MAIN repo root (ledger is keyed by cwd; a worktree cwd writes a different ledger). Round 2026W39 (new=25, confirmed=19, unverified=6, tests=19) is the first of the series; converging still NO."""
+USER RULING 2026-09-24: run 3+ real Continuous-Audit rounds under the DEFAULT window (no --window 2, no goal redefinition). Each round closes every CONFIRMED with a regression test before record. Record from the MAIN repo root (ledger is keyed by cwd; a worktree cwd writes a different ledger). Round 2026W39 (new=25, confirmed=19, unverified=6, tests=19) is the first of the series; converging still NO.
+
+【計測 2026-09-29 @8ddf4504】overwatch audit-metrics: rounds 7。直近 3 ラウンド = 2026W29 (new=14, closure=0.00) / 2026W29b (new=15, closure=1.00) / 2026W39 (new=25, confirmed=19, unverified=6, tests=19, closure=1.00)。converging (last 3 rounds): NO。新規 finding は減っておらず増加。closure=1.00 は 5b33b4cd のルール (tests >= confirmed) と整合するが、完了条件の「2 ラウンド連続 converging:true」は未達。次の Continuous-Audit ラウンド後に再計測する。"""
 created_at = 1785341708
-updated_at = 1790184608
+updated_at = 1790678246
 weight = 0.0
 issue_number = 94
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/94"

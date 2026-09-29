@@ -19,6 +19,7 @@ REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 SCRIPT="$REPO/scripts/rollout-plugins.sh"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib-fingerprint.sh"
 pass() { echo "  ok: $*"; }
 
 # --- locate / build the overwatch binary (deterministic canary core) ---------
@@ -68,14 +69,14 @@ JSON
 
 # Snapshot the temp registry so we can prove the dry run did not mutate it.
 REG_BEFORE_SUM="$(sha256sum "$TEST_REGISTRY" | awk '{print $1}')"
-REG_BEFORE_MTIME="$(stat -c %Y "$TEST_REGISTRY")"
+REG_BEFORE_MTIME="$(file_mtime "$TEST_REGISTRY")"
 
 # --- snapshot the REAL ~/.claude/plugins to prove it's never touched ---------
 REAL_PLUGINS="$HOME/.claude/plugins"
 REAL_BEFORE=""
 if [ -d "$REAL_PLUGINS" ]; then
   # Hash the full listing (names + sizes + mtimes) of the real tree.
-  REAL_BEFORE="$(find "$REAL_PLUGINS" -printf '%p|%s|%T@\n' 2>/dev/null | sort | sha256sum | awk '{print $1}')"
+  REAL_BEFORE="$(fingerprint_tree "$REAL_PLUGINS")"
 fi
 
 # --- run the dry-run canary rollout ------------------------------------------
@@ -123,7 +124,7 @@ pass "canary reaches the asset-sync stage (finding 4)"
 
 # --- assertions (b): NOTHING mutated -----------------------------------------
 REG_AFTER_SUM="$(sha256sum "$TEST_REGISTRY" | awk '{print $1}')"
-REG_AFTER_MTIME="$(stat -c %Y "$TEST_REGISTRY")"
+REG_AFTER_MTIME="$(file_mtime "$TEST_REGISTRY")"
 [ "$REG_BEFORE_SUM" = "$REG_AFTER_SUM" ] || fail "temp registry CONTENT changed during --dry-run"
 [ "$REG_BEFORE_MTIME" = "$REG_AFTER_MTIME" ] || fail "temp registry was rewritten (mtime changed) during --dry-run"
 pass "temp registry unchanged (content + mtime)"
@@ -138,9 +139,10 @@ BAKS="$(find "$(dirname "$TEST_REGISTRY")" -name 'installed_plugins.json.bak-*' 
 [ "$BAKS" -eq 0 ] || fail "registry backup files were created during --dry-run"
 pass "no registry backups created"
 
-# The REAL ~/.claude/plugins tree must be byte-for-byte identical.
+# The REAL ~/.claude/plugins tree must be unchanged (metadata fingerprint:
+# path, size, mtime_ns — a same-size same-mtime content rewrite is NOT seen).
 if [ -n "$REAL_BEFORE" ]; then
-  REAL_AFTER="$(find "$REAL_PLUGINS" -printf '%p|%s|%T@\n' 2>/dev/null | sort | sha256sum | awk '{print $1}')"
+  REAL_AFTER="$(fingerprint_tree "$REAL_PLUGINS")"
   [ "$REAL_BEFORE" = "$REAL_AFTER" ] || fail "REAL ~/.claude/plugins tree changed during --dry-run"
   pass "REAL ~/.claude/plugins untouched"
 else

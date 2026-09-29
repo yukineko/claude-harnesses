@@ -58,6 +58,8 @@ use crate::model::Decision;
 use crate::scope::{Placement, SafeRoots};
 use harness_core::verdict::{Determination, Verdict};
 
+mod executors;
+
 /// Top-level entry WITH a location model: same dispatch as [`detect`], but the
 /// destructive-shape rules may resolve their targets and, for targets provably
 /// confined to a safe root, return an `Ask` instead of a `Deny`.
@@ -4151,8 +4153,9 @@ fn command_candidates(tokens: &[&str]) -> Vec<usize> {
 /// Not a fail-open: excluding these fragments cannot hide a real payload,
 /// because a quoted multi-word string is never a program that exists on disk,
 /// and the ways such a string actually gets EXECUTED — `sh -c '…'`, `eval '…'`,
-/// `flock -c '…'` — are all re-analysed by their own arms
-/// (`dash_c_payloads`, the `eval` arm), which reassemble the full quoted word
+/// `flock -c '…'`, `env -S '…'` — are all re-analysed by their own arms
+/// (`dash_c_payloads`, the `eval` arm, `executors::env_split_string_payloads`),
+/// which reassemble the full quoted word
 /// across token boundaries rather than reading a single fragment. A properly
 /// closed quoted command word (`sudo 'rm' -rf /path`) closes within its token
 /// and therefore remains a candidate.
@@ -4306,10 +4309,27 @@ fn foreign_shell_runs_code(rest: &[&str]) -> bool {
 /// token before matching against the known unversioned stems. Without this, a
 /// versioned interpreter invocation (`find -exec python3.12 -c "…" \;`) slips
 /// past the check entirely.
+///
+/// daf7611b: `deno` (`deno eval …`), `bun` (`bun -e …`) and `osascript`
+/// (`osascript -e '…'`, whose `do shell script "…"` hands a string to `sh`)
+/// run an inline program exactly like `node -e`, and matched no arm at all —
+/// `deno eval "Deno.removeSync(…, {recursive: true})"` was Allow. They are
+/// judged by the same program audit ([`analyze_code_interpreter`]).
 fn is_code_interpreter(cmd: &str) -> bool {
     matches!(
         strip_version_suffix(cmd),
-        "python" | "python2" | "python3" | "perl" | "ruby" | "node" | "nodejs" | "php" | "lua"
+        "python"
+            | "python2"
+            | "python3"
+            | "perl"
+            | "ruby"
+            | "node"
+            | "nodejs"
+            | "php"
+            | "lua"
+            | "deno"
+            | "bun"
+            | "osascript"
     )
 }
 
@@ -4362,7 +4382,43 @@ fn interpreter_eval_flag_letters(cmd: &str) -> &'static str {
         "node" | "nodejs" => "ep",
         "php" => "r",
         "lua" => "e",
+        // Bun: `-e`/`--eval`, and `-p`/`--print` evaluates too.
+        "bun" => "ep",
+        "osascript" => "e",
+        // Deno's inline eval is the `eval` SUBCOMMAND (and `repl --eval`), not
+        // a short flag; see `interpreter_inline_eval_pos`.
         _ => "",
+    }
+}
+
+/// Options of THIS interpreter that take their value as the NEXT token.
+///
+/// The option scan in [`interpreter_inline_eval_pos`] stops at the first
+/// non-flag token, reading it as the script path. A separate-form option
+/// value (`osascript -l JavaScript -e …`, `python3 -W ignore -c …`,
+/// `node -r mod -e …`) is not a script path; stopping there hid the eval flag
+/// behind it and the program went unread. Skipping a value can only extend
+/// the scan, so a miss in this list is the old behaviour, never a new Allow.
+fn interpreter_value_flags(cmd: &str) -> &'static [&'static str] {
+    match strip_version_suffix(cmd) {
+        "python" | "python2" | "python3" => &["-W", "-X", "-Q"],
+        "node" | "nodejs" => &[
+            "-r",
+            "--require",
+            "--import",
+            "--loader",
+            "--experimental-loader",
+            "--input-type",
+            "-C",
+            "--conditions",
+        ],
+        "bun" => &["-r", "--preload", "--cwd", "--config"],
+        "ruby" => &["-I", "-r", "-C", "-E"],
+        "perl" => &["-I"],
+        "php" => &["-c", "-d", "-z"],
+        "lua" => &["-l"],
+        "osascript" => &["-l", "-s"],
+        _ => &[],
     }
 }
 
@@ -4391,29 +4447,55 @@ fn is_inline_eval_flag_for(tok: &str, letters: &str) -> bool {
 /// [`interpreter_eval_flag_letters`] for the measured false Denies.
 fn interpreter_inline_eval_pos(cmd: &str, rest: &[&str]) -> Option<usize> {
     let letters = interpreter_eval_flag_letters(cmd);
-    if letters.is_empty() {
+    // Deno has no eval LETTER: its inline program follows the `eval`
+    // subcommand, or `repl --eval`.
+    let deno = strip_version_suffix(cmd) == "deno";
+    if letters.is_empty() && !deno {
         return None;
     }
-    for (i, tok) in rest.iter().enumerate() {
+    let value_flags = interpreter_value_flags(cmd);
+    let mut i = 0;
+    while i < rest.len() {
+        let tok = rest[i];
         if is_redirect_token(tok) {
+            i += 1;
             continue;
         }
         if is_inline_eval_flag_for(tok, letters) {
             return Some(i);
         }
-        if *tok == "--" || *tok == "-" {
+        if tok == "--" || tok == "-" {
             return None;
         }
+        if value_flags.contains(&tok) {
+            i += 2;
+            continue;
+        }
         if tok.starts_with("--") {
+            i += 1;
             continue;
         }
         if is_short_flag(tok) {
             // `-m` takes a module name; everything after it is that module's
-            // own argv.
-            if tok[1..].contains('m') {
+            // own argv. (Deno and osascript have no `-m`.)
+            if tok[1..].contains('m') && !deno {
                 return None;
             }
+            i += 1;
             continue;
+        }
+        if deno {
+            match tok {
+                // `deno eval <code>`: the operand after the subcommand is the
+                // program.
+                "eval" => return Some(i),
+                // `deno repl --eval <code>`: keep scanning its options.
+                "repl" => {
+                    i += 1;
+                    continue;
+                }
+                _ => return None,
+            }
         }
         // First non-flag token: the script path. The interpreter's own options
         // are over.
@@ -4440,6 +4522,8 @@ const INTERPRETER_DESTRUCTIVE_CALLS: &[&str] = &[
     // names on their own.
     "rmsync",
     "unlinksync",
+    // Deno's `Deno.remove(path, {recursive: true})` / `Deno.removeSync`.
+    "deno.remove",
     "rmdirsync",
     "fs.rm(",
     "file.delete",
@@ -4949,9 +5033,18 @@ fn interpreter_code_verdict(
             // spelling so the join is never invented out of unrelated literals
             // in an ordinary program.
             let lowered = payload.to_ascii_lowercase();
-            if ["subprocess.", "child_process", "spawnsync(", "execfile("]
-                .iter()
-                .any(|m| lowered.contains(m))
+            if [
+                "subprocess.",
+                "child_process",
+                "spawnsync(",
+                "execfile(",
+                // Deno / Bun argv-list spawns (daf7611b).
+                "deno.command(",
+                "deno.run(",
+                "bun.spawn(",
+            ]
+            .iter()
+            .any(|m| lowered.contains(m))
             {
                 if let Decision::Deny(reason) =
                     analyze_shell_payload(&literals.join(" "), depth, ctx)
@@ -5120,6 +5213,28 @@ read, so it cannot tell whether anything here is irreversible"
 text on the command line is not the program that will execute, so blastguard cannot tell whether \
 anything here is irreversible"
             ));
+        }
+    }
+
+    // A SHELL ESCAPE WHOSE COMMAND IS COMPUTED. AppleScript's
+    // `do shell script "…"` and JXA's `doShellScript("…")` hand a string to
+    // `sh -c`; a literal argument was read by the descent above (and a
+    // destructive one denied there), but `do shell script cmd` runs whatever
+    // the variable holds, which is not on the command line (daf7611b).
+    for payload in payloads {
+        let lowered = payload.to_ascii_lowercase();
+        for marker in ["do shell script", "doshellscript("] {
+            let mut from = 0;
+            while let Some(at) = lowered[from..].find(marker) {
+                let after = lowered[from + at + marker.len()..].trim_start();
+                if !after.starts_with(['"', '\'', '`']) {
+                    return Decision::ask(format!(
+                        "{shape}, and that program runs a shell command it computes \
+(`{marker}` with a non-literal argument) — blastguard cannot see what would actually execute"
+                    ));
+                }
+                from += at + marker.len();
+            }
         }
     }
 
@@ -5655,6 +5770,21 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
                 // defeat the structured extraction above (99b506b7, twin of the
                 // shell `-c` arm). See `denoised_eval_rescan`.
                 if let Some(deny) = acc.record(denoised_eval_rescan(&rest.join(" "), depth, ctx)) {
+                    return deny;
+                }
+            }
+        }
+        // daf7611b: `env -S "<line>"` / `--split-string` splits ONE quoted
+        // operand into a command line and execs it. That operand is a
+        // multi-word quoted string, which `command_candidates` deliberately
+        // never reads as a command word, so it must be extracted here — the
+        // same position-independent scan as flock's `-c` above.
+        for (i, t) in tokens.iter().enumerate() {
+            if normalized_command(t) != "env" {
+                continue;
+            }
+            for payload in executors::env_split_string_payloads(&tokens[i + 1..]) {
+                if let Some(deny) = acc.record(analyze_shell_payload(&payload, depth, ctx)) {
                     return deny;
                 }
             }
@@ -6611,7 +6741,21 @@ analyse — it cannot tell what this would do, so it refuses to guess"
         // scan for the `\;` form without depending on where the split fell.
         "-exec" | "-execdir" | "-ok" | "-okdir" => analyze_find(&tokens[idx..], depth, ctx),
         "rm" => analyze_rm(rest, ctx),
-        "git" => analyze_git(rest, ctx),
+        "git" => {
+            // daf7611b: `git -c core.pager="rm -rf ~/x" log` — command-valued
+            // config set for this one command. Either side's Deny wins.
+            let mut git_acc = VerdictAcc::default();
+            if let Some(deny) = git_acc.record(executors::git_exec_config_verdict(rest, depth, ctx))
+            {
+                return deny;
+            }
+            match git_acc.record(analyze_git(rest, ctx)) {
+                Some(deny) => deny,
+                None => git_acc.finish(),
+            }
+        }
+        // daf7611b: awk's `system()` and command pipes run shell lines.
+        awk if executors::is_awk(awk) => executors::analyze_awk(awk, rest, depth, ctx),
         // Round 2 (adversarial verifier): every rule in this dispatch was about
         // DELETING or TRUNCATING, so the ordinary ways of REPLACING a file's
         // contents — copying/moving/linking something over it, or rewriting it

@@ -97,7 +97,7 @@ caller 側は exit code を必ず確認し、exit 1 なら決して先に進ん�
 
 ## ファイル構造
 
-すべてのデータは `<base>/<project-key>/overwatch/` に格納される（`<base>` は設定で決定、既定は `~/.local/share/claude-harnesses`）。
+すべてのデータは `<base>/<project-key>/overwatch/` に格納される（`<base>` は設定で決定、既定は `~/.local/share/claude-harnesses`）。`<project-key>` はリポジトリの MAIN worktree root から導出されるので、main checkout と linked worktree は同じ store を共有する（解決不能ならエラー、worktree 単位への fallback はしない）。
 
 ```
 <base>/<project-key>/overwatch/

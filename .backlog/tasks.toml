@@ -11843,3 +11843,18 @@ updated_at = 1790686249
 weight = 0.0
 issue_number = 863
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/863"
+
+[[task]]
+id = "f96ab807"
+title = "condukt run_editgate の docstring が「never break a turn」と書き、判定を返す hook が run_hook（panic 握り潰し）経由のまま"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "2026-09-29 ea68627b の worker が指摘。CLAUDE.md 1 節が赤信号と名指しする表現が verdict 経路にある。run_editgate は broken:true/false を返す＝判定を持つので run_guarded 相当（panic は block へ）に移すべきか確認する。見分け方: editgate の panic 時の出力を消費する側（PostToolUse hook の decision）が allow と読むかをテストで観測する。(a) 実在の fail-open (b) 下流が panic 出力を判定に使わない。"
+created_at = 1790687455
+updated_at = 1790687455
+weight = 0.0
+issue_number = 864
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/864"

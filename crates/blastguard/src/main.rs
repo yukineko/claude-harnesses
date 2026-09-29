@@ -478,8 +478,11 @@ fn analyse(input: &HookInput) -> Decision {
 ///     legitimate;
 ///   * `HOME` — never a root itself: [`SafeRoots::new`] REFUSES to treat the
 ///     home directory as one, and derives from it only the worktree storage
-///     root `$HOME/.condukt/worktrees` (recursive rm strictly inside it is
-///     Allow — user ruling, backlog 873651b9; see `scope`'s module doc);
+///     root `$HOME/.condukt/worktrees`. Recursive rm strictly inside a
+///     worktree storage root is Allow (user ruling, backlog 873651b9) only
+///     when the root currently exists as a real directory with no symlink
+///     below its anchor, and the whole command is bare `rm`/`cd` segments;
+///     see `scope`'s module doc for the exact rule;
 ///   * `TMPDIR` — added to the fixed temp roots. Note the asymmetry that makes
 ///     this sound: reading `$TMPDIR` out of the hook's own environment is not
 ///     the same act as expanding the literal string `$TMPDIR` found in a

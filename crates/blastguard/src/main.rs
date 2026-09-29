@@ -481,10 +481,13 @@ fn analyse(input: &HookInput) -> Decision {
 ///     root `$HOME/.condukt/worktrees`. Recursive rm strictly inside a
 ///     worktree storage root is Allow (user ruling, backlog 873651b9) only
 ///     when the root currently exists as a real directory with no symlink
-///     below its anchor, the whole command is bare `rm`/`cd` segments, and —
-///     if any `cd` is present — every `rm` operand is absolute (a `cd` may
-///     fail or run in a subshell, so a relative operand after it is not
-///     judged against the runtime cwd). This is not a claim that bare `rm`/`cd`
+///     below its anchor, the whole command is bare `rm`/`cd` segments, no
+///     word of any `rm` segment has a `..` component (`scope` collapses `..`
+///     lexically before resolving symlinks, so `lnk/../x` would be judged
+///     where the kernel does not delete), and — if any `cd` is present —
+///     every `rm` operand is absolute (a `cd` may fail or run in a subshell,
+///     so a relative operand after it is not judged against the runtime cwd).
+///     This is not a claim that bare `rm`/`cd`
 ///     is safe in general; see `scope`'s module doc ("What actually stops
 ///     each escape") for which check closes which case and what stays open;
 ///   * `TMPDIR` — added to the fixed temp roots. Note the asymmetry that makes

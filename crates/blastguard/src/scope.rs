@@ -38,9 +38,16 @@
 //! the reason it is a different proposition from the predicate that was
 //! deleted:
 //!
-//!   * `..` — resolved LEXICALLY here, and any residue (a relative path that
-//!     climbs above its own base) is [`Determination::Undetermined`], never a
-//!     placement;
+//!   * `..` — collapsed LEXICALLY here ([`normalize_abs`]), BEFORE the
+//!     symlink resolver runs, and any residue (a relative path that climbs
+//!     above its own base) is [`Determination::Undetermined`], never a
+//!     placement. Lexical collapse is NOT what the kernel does: it resolves
+//!     `a/lnk/..` to the parent of `lnk`'s TARGET. So a `..` that follows a
+//!     symlinked component is placed at a path the kernel will not touch
+//!     (`<root>/lnk/../x` is classified as `<root>/x`). This module does not
+//!     close that; its callers must not grant anything on the strength of a
+//!     `..`-bearing spelling (the worktree `Allow` refuses any `..` — see
+//!     below; the safe-root `Ask` does NOT, see "Known gap" at the end);
 //!   * `~`, `$VAR`, backticks, `$(…)`, globs, braces, quotes, `{}` (a
 //!     `find -exec` placeholder) — the operand is not a literal path at all, so
 //!     it is `Undetermined`. This module NEVER expands a shell construct and
@@ -137,6 +144,15 @@
 //!     rule of `worktree_rm_eligible`: if the command contains ANY `cd`, every
 //!     `rm` operand must be absolute. With no `cd`, a relative operand is
 //!     judged against the payload cwd, which is the runtime cwd.
+//!   * A `..` after a symlinked component (`<root>/w/lnk/../v2`, relative
+//!     `lnk/../x`, nested `sub/lnk2/../x`, trailing `<root>/w/x/..` with `x` a
+//!     symlink out): NOT stopped here — this module collapses `..` lexically
+//!     before resolving symlinks and would place all four Inside. Stopped by
+//!     the `..` rule of `worktree_rm_eligible`: if any word of any `rm`
+//!     segment has a `..` component, the worktree `Allow` is not available at
+//!     all (even for a `..` that would stay inside). `detect::worktree_confined`
+//!     also refuses a base (payload cwd) with a `..` component; Claude Code
+//!     sends a canonical cwd, so that check is defence in depth.
 //!
 //! NOT closed by this module or by `detect`:
 //!
@@ -149,9 +165,12 @@
 //!     is not Allow: the operand canonicalises Outside.
 //!
 //! The resolution rules for OPERANDS are identical to the safe roots': only
-//! `Inside` (a strict descendant, `..` and symlinks resolved) counts; the
-//! storage root itself (`IsRoot`), `Outside`, and every `Undetermined` do not,
-//! and the rm arm then keeps the verdict it had before this rule.
+//! `Inside` (a strict descendant, after LEXICAL `..` collapse and then symlink
+//! resolution) counts; the storage root itself (`IsRoot`), `Outside`, and every
+//! `Undetermined` do not, and the rm arm then keeps the verdict it had before
+//! this rule. Because that `..` handling is lexical, the worktree `Allow` never
+//! reaches this classification for a `..`-bearing operand (the `..` rule
+//! above).
 //! Protected-path precedence runs first in `detect`, so a protected path under
 //! a worktree is still denied.
 //!
@@ -166,6 +185,19 @@
 //! deliberately does NOT collapse into `Inside`: `rm -rf <the project itself>`
 //! takes `.git` with it, so the root's own directory is not inside the region
 //! this module vouches for.
+//!
+//! # Known gap — lexical `..` on the safe-root `Ask`
+//!
+//! [`SafeRoots::classify`] (the safe roots, used by `detect`'s confined `Ask`
+//! for `rm`, `truncate`, `find`, `git clean`, redirects, …) has the same
+//! lexical-`..`-before-symlink behaviour and NO `..` refusal in front of it:
+//! `rm -rf <project>/lnk/../x` with `lnk` a symlink out is placed Inside the
+//! project and gets an interactive `Ask` (hardened to `Deny` headless) whose
+//! text names the project, while the kernel deletes `<lnk target's
+//! parent>/x`. The cwd walk in `detect` also joins `cd` targets lexically, so
+//! `cd lnk/..` shifts the judged base the same way. The outcome is at most an
+//! `Ask` a human must answer, never an `Allow`, but the question it asks is
+//! wrong. Not fixed here.
 
 use harness_core::verdict::Determination;
 
@@ -561,7 +593,9 @@ impl SafeRoots {
     /// Where does `operand` land relative to the WORKTREE STORAGE ROOTS?
     ///
     /// Identical resolution to [`SafeRoots::classify`] (literal-path check,
-    /// lexical `..`, injected symlink resolver, longest-root match, `IsRoot`
+    /// lexical `..` collapsed BEFORE the injected symlink resolver runs — so a
+    /// `..` after a symlink is misplaced, and callers must refuse `..`
+    /// spellings themselves — longest-root match, `IsRoot`
     /// kept distinct from `Inside`) — only the root set differs. With no
     /// worktree storage roots (always the case for [`SafeRoots::none`]) the
     /// answer is `Undetermined`, which the caller must read as "not allowed".

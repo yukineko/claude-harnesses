@@ -7319,9 +7319,11 @@ fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     // root (`$HOME/.condukt/worktrees`, `<parent>/.harness-worktrees`) is
     // Allow — no confirmation. Placed AFTER the protected-path precedence above
     // (so `.git/hooks`, `.claude`, … under a worktree still Deny) and only for
-    // `-r`; the root itself, anything above it, a glob, a `..` escape, a
-    // symlink out, and any operand that cannot be resolved all fall through to
-    // the unchanged logic below. The root counts only if it is a real,
+    // `-r`; the root itself, anything above it, a glob, a symlink out, ANY
+    // operand spelled with a `..` component (even one that stays inside — see
+    // the `..` rule of `worktree_rm_eligible`), and any operand that cannot be
+    // resolved all fall through to the unchanged logic below. The root counts
+    // only if it is a real,
     // non-symlinked directory at judge time (`scope`), and the Allow is only
     // available when the WHOLE top-level command is bare `rm`/`cd` segments
     // (`worktree_rm_eligible`), so no other segment can swap the root before
@@ -7396,7 +7398,24 @@ fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
 ///     [`rm_words_are_flags_then_absolute`]) or an ABSOLUTE path (starts with
 ///     `/`). A relative `rm` operand is eligible only in a command with no
 ///     `cd` at all, where it is judged against the payload cwd — which is the
-///     runtime cwd.
+///     runtime cwd;
+///   * THE `..` RULE: no word of any `rm` segment after `rm` (option or
+///     operand) has a component that is exactly `..` ([`has_dotdot_component`]:
+///     `..`, `../x`, `a/../b`, `a/..`, `--opt=../x`). `cd` words are not
+///     checked: with a `cd` present every `rm` operand is absolute, so the cwd
+///     does not reach them.
+///
+/// Why the `..` rule exists (verifier finding on 8de9b04b): `scope` collapses
+/// `..` LEXICALLY and only then asks the resolver for the real path, while the
+/// kernel resolves `..` against the REAL parent — i.e. after following any
+/// symlink before it. With `lnk` a symlink inside a worktree pointing outside,
+/// `rm -rf <root>/w/lnk/../v2` was judged as `<root>/w/v2` (Allow) and deletes
+/// `<outside>/v2`; likewise relative `lnk/../x`, nested `sub/lnk2/../x`, and a
+/// trailing `<root>/w/x/..` with `x` a symlink out. Rather than model `..`
+/// physically, any `..` in the raw spelling withholds the Allow — including
+/// spellings that would in fact stay inside. The operand is then judged by the
+/// pre-existing logic, which still collapses `..` lexically (see `scope`'s
+/// module doc); it can at most reach an interactive Ask there, never an Allow.
 ///
 /// Why the cd rule exists (verifier finding on 4af6b960): the cwd walk in
 /// [`detect_bash`] assumes every `cd` SUCCEEDS and APPLIES to the next
@@ -7414,9 +7433,10 @@ fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
 ///
 /// What this function actually guarantees, and nothing more: neither `rm` nor
 /// `cd` can create, link or move a path, so no segment of an eligible command
-/// can turn the judged root into something else before the `rm` runs, and no
-/// `cd` in it can move a relative `rm` operand away from where it was judged.
-/// It does NOT make `rm` safe by itself: every `rm` segment is still judged
+/// can turn the judged root into something else before the `rm` runs, no
+/// `cd` in it can move a relative `rm` operand away from where it was judged,
+/// and no `rm` operand in it is spelled with a `..` whose lexical collapse
+/// could disagree with the kernel's. It does NOT make `rm` safe by itself: every `rm` segment is still judged
 /// per operand (the root itself stays a Deny, a symlink out is placed Outside
 /// by operand canonicalisation). Anything else — `/bin/rm`, `command rm`,
 /// `FOO=1 rm`, `rm -rf x 2>/dev/null`, `sudo rm` — is simply not eligible and
@@ -7454,6 +7474,18 @@ fn worktree_rm_eligible(command: &str) -> bool {
     {
         return false;
     }
+    // THE `..` RULE: no word of any `rm` segment may contain a `..` path
+    // component. Checked here, on the raw spelling, because the cwd walk
+    // rewrites operands and `scope` collapses `..` lexically BEFORE resolving
+    // symlinks, so `<root>/w/lnk/../x` (lnk a symlink out) would be judged as
+    // `<root>/w/x` while the kernel deletes `<lnk target's parent>/x`.
+    if segments
+        .iter()
+        .filter(|w| w.first().copied() == Some("rm"))
+        .any(|w| w[1..].iter().any(|word| has_dotdot_component(word)))
+    {
+        return false;
+    }
     let has_cd = segments.iter().any(|w| w.first().copied() == Some("cd"));
     if !has_cd {
         return true;
@@ -7462,6 +7494,14 @@ fn worktree_rm_eligible(command: &str) -> bool {
         .iter()
         .filter(|w| w.first().copied() == Some("rm"))
         .all(|w| rm_words_are_flags_then_absolute(&w[1..]))
+}
+
+/// True when `word` has a component that is exactly `..` (`..`, `../x`,
+/// `a/../b`, `a/..`). Components are split on `/` and also on `=`, so an
+/// attached option value (`--opt=../x`) counts too — over-matching here only
+/// withholds the worktree `Allow`, which is the restrictive direction.
+fn has_dotdot_component(word: &str) -> bool {
+    word.split(['/', '=']).any(|c| c == "..")
 }
 
 /// The cd rule of [`worktree_rm_eligible`]: the words after `rm` are a run of
@@ -7503,6 +7543,13 @@ fn worktree_confined(ctx: &Ctx<'_>, operands: &[&str]) -> bool {
         return false;
     }
     let base = ctx.base_for("rm");
+    // The payload cwd is the base a relative operand is joined to, and `scope`
+    // collapses `..` lexically. Claude Code sends a getcwd()-style canonical
+    // path, so this never fires in practice; if it ever did, the same
+    // lexical-before-symlink hazard as an operand `..` would apply, so refuse.
+    if base.is_some_and(has_dotdot_component) {
+        return false;
+    }
     for operand in operands {
         if has_glob_meta(operand) || exclude::touches_protected(operand) {
             return false;
@@ -9733,6 +9780,8 @@ mod tests {
             "cd /h/src & rm -rf -- /h/.harness-worktrees/s1",
             "rm -rf /a/b; rm -rf /a/c;",
             "rm -rf src",
+            "rm -rf /h/.condukt/worktrees/a..b /h/.condukt/worktrees/.../x",
+            "cd /h/src/.. && rm -rf /h/.harness-worktrees/s1",
         ] {
             assert!(worktree_rm_eligible(ok), "{ok}");
         }
@@ -9757,6 +9806,17 @@ mod tests {
             "cd /r/s && rm -rf /r/s/a -x",
             "cd /r/s && rm -rf -- -x",
             "cd /r/s && rm -rf - /r/s/a",
+            // The `..` rule: lexical `..` collapse runs before symlink
+            // resolution, so no `..` component is eligible anywhere.
+            "rm -rf /r/w/lnk/../v2",
+            "rm -rf lnk/../x",
+            "rm -rf /r/w/sub/lnk2/../x",
+            "rm -rf /r/w/x/..",
+            "rm -rf ..",
+            "rm -rf ../x",
+            "rm -rf /r/w/a /r/w/lnk/../b",
+            "cd /r/w && rm -rf /r/w/lnk/../x",
+            "rm -rf --opt=../x /r/w/a",
         ] {
             assert!(!worktree_rm_eligible(bad), "{bad}");
         }

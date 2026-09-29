@@ -10967,24 +10967,6 @@ issue_number = 811
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/811"
 
 [[task]]
-id = "1426e7b4"
-title = "overwatch status のテキスト表示が live リース 4 件を (none) と報告する"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p0"]
-touched_files = []
-status = "pending"
-notes = """
-測定点 c39701bc / 2026-09-13、scripts/rollout-plugins.sh --canary が overwatch を harness-core 0.2.24 に対して再ビルドした直後。overwatch status は == Sessions == の次に (none) を出す一方、overwatch status --json は sessions[0].leases に 4 件を返す (00d1160bf294b1af, 052a7668cb486c1f, a192382d08ee3bf7, a4050204859f1c7a)。4 件とも status が空文字で project が null。いずれも数秒前に overwatch begin が rc=0 と possible_duplicate 空・scope_overlap 空で登録したもの。ロールアウト前の同セッションの SessionStart hook は逐語で session 79d79a35-3490-4bbd-9bb4-d501e749e65d と 3 live を出力し 3 件のリースを列挙していた。同じコマンド・同じセッションなので regression が第一仮説。p0 の理由: Sessions ビューは誰が何を作業中かを示す唯一の人間向け表示面であり CLAUDE.md 第8節の別セッションは常に存在するという前提の運用上の土台である。live 4 件あるのに (none) と答えるのは誰も作業していないと読まれる。第1節より沈黙は許容される degrade ではない。読み1 regression: テキスト renderer が project で絞り込んでおり、リースの project が main_worktree_root による project 解決変更 d83b0e8f の巻き添えで null になった。読み2 もとからそう: テキストビューは設計上 project スコープで begin は project を書いたことがない。読み2 なら SessionStart hook の 3 live 出力の出所を説明する必要がある。読み3 キャッシュ陳腐化: status はどちらの呼び出しも aggregate build_cached を通る別プロセスなので、TTL 付きキャッシュが begin より前に作られていれば 1 回目が古いキャッシュ 2 回目が新鮮な結果を返しうる。見分け方: overwatch begin がリースの project を書く経路と、テキスト renderer が絞り込む経路と、build_cached の TTL と無効化規則の 3 つを読む。推測せず読んでどれをコードが支持するか述べること。 【救出 2026-09-29】元 id 7d820338（2026-09-13 に run-20260913-223004-15261 の orch worktree で起票されたが未コミットのまま残っていた。worktree 削除前に再起票。notes 中の関連 id は元 id のまま）
-
-[p0 2026-09-29] NOT REPRODUCED on current source (25-iteration loop, isolated store): text and JSON come from one view; Lease has no project/status field. Likely cause of the original observation: overwatch store partitioned per linked worktree (fixed baaf9503, user ruling). Kept open pending live evidence."""
-created_at = 1790632211
-updated_at = 1790678162
-weight = 0.0
-issue_number = 812
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/812"
-
-[[task]]
 id = "e9262d91"
 title = "condukt lock の待機ループが poll ごとに kill サブプロセスを spawn し、負荷下で自分の獲得を遅らせる"
 project = "/Users/yuki/src/harness"

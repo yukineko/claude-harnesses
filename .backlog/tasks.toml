@@ -11973,3 +11973,18 @@ updated_at = 1790719902
 weight = 0.0
 issue_number = 889
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/889"
+
+[[task]]
+id = "1da483dc"
+title = "UNGATED COMMIT の案内が存在しない gate-bypass.py --status を指す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "post-commit 警告 (.githooks/post-commit:112) が gate-bypass.py --status の実行を案内するが、同スクリプトは --status を持たず usage エラーで exit 2 になる。存在するのは --json。2026-09-30 に session-389c3077 で観測。案内文と実装の食い違いを直す。"
+created_at = 1790720274
+updated_at = 1790720274
+weight = 0.0
+issue_number = 890
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/890"

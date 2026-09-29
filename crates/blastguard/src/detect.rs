@@ -7325,7 +7325,10 @@ fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     // non-symlinked directory at judge time (`scope`), and the Allow is only
     // available when the WHOLE top-level command is bare `rm`/`cd` segments
     // (`worktree_rm_eligible`), so no other segment can swap the root before
-    // this rm runs. See `worktree_confined`.
+    // this rm runs; if the command contains any `cd`, every rm operand must
+    // also be absolute, because a `cd` may fail or run in a subshell (`&`,
+    // `|`) and a relative operand would then name a path that was never
+    // judged. See `worktree_rm_eligible` and `worktree_confined`.
     if recursive && worktree_confined(ctx, &operands) {
         return Decision::Allow;
     }
@@ -7387,18 +7390,46 @@ fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
 ///     newline, tab or any other control character;
 ///   * splitting on `;`, `&` and `|` (exact, because no quoting is possible),
 ///     every segment is empty or its FIRST whitespace-separated word is
-///     exactly `rm` or `cd`.
+///     exactly `rm` or `cd`;
+///   * THE cd RULE: if ANY segment is a `cd`, every word of every `rm` segment
+///     after `rm` is an option word (leading run only, see
+///     [`rm_words_are_flags_then_absolute`]) or an ABSOLUTE path (starts with
+///     `/`). A relative `rm` operand is eligible only in a command with no
+///     `cd` at all, where it is judged against the payload cwd — which is the
+///     runtime cwd.
 ///
-/// Neither `rm` nor `cd` can create, link or move a path, so no segment of an
-/// eligible command can turn the judged root into something else before the
-/// `rm` runs. Every `rm` segment is still judged on its own (the root itself
-/// stays a Deny). Anything else — `/bin/rm`, `command rm`, `FOO=1 rm`,
-/// `rm -rf x 2>/dev/null`, `sudo rm` — is simply not eligible and keeps the
-/// verdict it had before the worktree rule existed. There is no branch that
-/// answers `true` for a command it did not fully read.
+/// Why the cd rule exists (verifier finding on 4af6b960): the cwd walk in
+/// [`detect_bash`] assumes every `cd` SUCCEEDS and APPLIES to the next
+/// segment, and rewrites the next `rm`'s relative operands against it (so by
+/// the time [`worktree_confined`] runs, the operand is already absolute and the
+/// relative spelling is gone — which is why this rule lives here, on the raw
+/// command, and not there). At runtime neither assumption is guaranteed:
+/// `cd <root>/s & rm -rf src` runs the `cd` in a background subshell,
+/// `cd <root>/missing; rm -rf src` and `cd <root>/missing || rm -rf src`
+/// run `rm` after a FAILED `cd`, and `cd X | rm -rf src` runs each side in its
+/// own subshell. In every one of them `rm` deletes `<original cwd>/src`, which
+/// was never judged. An absolute operand names the same path whatever the cwd
+/// is, so it is immune to all four separators and to a failing `cd`. The rule
+/// does not try to tell `&&` apart from the others: blunt and closed wins.
 ///
-/// NOT covered: a DIFFERENT, earlier tool call (e.g. a background job) that
-/// swaps the root after this command was judged.
+/// What this function actually guarantees, and nothing more: neither `rm` nor
+/// `cd` can create, link or move a path, so no segment of an eligible command
+/// can turn the judged root into something else before the `rm` runs, and no
+/// `cd` in it can move a relative `rm` operand away from where it was judged.
+/// It does NOT make `rm` safe by itself: every `rm` segment is still judged
+/// per operand (the root itself stays a Deny, a symlink out is placed Outside
+/// by operand canonicalisation). Anything else — `/bin/rm`, `command rm`,
+/// `FOO=1 rm`, `rm -rf x 2>/dev/null`, `sudo rm` — is simply not eligible and
+/// keeps the verdict it had before the worktree rule existed. There is no
+/// branch that answers `true` for a command it did not fully read.
+///
+/// NOT covered: a DIFFERENT tool call (an earlier background job, a
+/// concurrent session) that creates, moves or links something between this
+/// judgement and the `rm` (cross-call TOCTOU); and anything an EARLIER tool
+/// call already moved into a root (`mv ~/Documents <root>/x` in a previous
+/// command, then `rm -rf <root>/x` here — `x` is now a real directory inside
+/// the root, so it is Allow; a SYMLINK `<root>/x -> ~/Documents` is not,
+/// because operand canonicalisation places it Outside).
 fn worktree_rm_eligible(command: &str) -> bool {
     let plain = |c: char| {
         c.is_alphanumeric()
@@ -7413,12 +7444,47 @@ fn worktree_rm_eligible(command: &str) -> bool {
     {
         return false;
     }
-    command.split([';', '&', '|']).all(|seg| {
-        matches!(
-            seg.split(' ').find(|w| !w.is_empty()),
-            None | Some("rm" | "cd")
-        )
-    })
+    let segments: Vec<Vec<&str>> = command
+        .split([';', '&', '|'])
+        .map(|seg| seg.split(' ').filter(|w| !w.is_empty()).collect())
+        .collect();
+    if !segments
+        .iter()
+        .all(|words| matches!(words.first().copied(), None | Some("rm" | "cd")))
+    {
+        return false;
+    }
+    let has_cd = segments.iter().any(|w| w.first().copied() == Some("cd"));
+    if !has_cd {
+        return true;
+    }
+    segments
+        .iter()
+        .filter(|w| w.first().copied() == Some("rm"))
+        .all(|w| rm_words_are_flags_then_absolute(&w[1..]))
+}
+
+/// The cd rule of [`worktree_rm_eligible`]: the words after `rm` are a run of
+/// option words (start with `-`, length >= 2 -- a lone `-` is an operand)
+/// followed ONLY by words that start with `/`. Once the first non-option word
+/// is seen, every later word must be absolute too: BSD `rm` stops option
+/// parsing at the first operand, so a later `-x` is a relative FILE there, and
+/// after `--` every word is an operand on every `rm`.
+fn rm_words_are_flags_then_absolute(words: &[&str]) -> bool {
+    let mut in_options = true;
+    for w in words {
+        if in_options && w.len() >= 2 && w.starts_with('-') {
+            if *w == "--" {
+                in_options = false;
+            }
+            continue;
+        }
+        in_options = false;
+        if !w.starts_with('/') {
+            return false;
+        }
+    }
+    true
 }
 
 /// True only when `operands` is non-empty and EVERY operand is a literal path
@@ -9663,8 +9729,10 @@ mod tests {
     fn worktree_rm_eligible_is_an_allowlist_of_bare_rm_and_cd() {
         for ok in [
             "rm -rf /h/.condukt/worktrees/wt1",
-            "cd /h/src && rm -r .harness-worktrees/s1",
+            "cd /h/src && rm -r /h/.harness-worktrees/s1",
+            "cd /h/src & rm -rf -- /h/.harness-worktrees/s1",
             "rm -rf /a/b; rm -rf /a/c;",
+            "rm -rf src",
         ] {
             assert!(worktree_rm_eligible(ok), "{ok}");
         }
@@ -9680,6 +9748,15 @@ mod tests {
             "FOO=1 rm -rf /p/w/x",
             "rm -rf $(ln -s a b)",
             "rm -rf \"/p/w/x\"",
+            "cd /h/src && rm -r .harness-worktrees/s1",
+            "cd /r/s & rm -rf src",
+            "cd /r/missing; rm -rf src",
+            "cd /r/missing || rm -rf src",
+            "cd /r/s | rm -rf src",
+            "rm -rf src; cd /r/s",
+            "cd /r/s && rm -rf /r/s/a -x",
+            "cd /r/s && rm -rf -- -x",
+            "cd /r/s && rm -rf - /r/s/a",
         ] {
             assert!(!worktree_rm_eligible(bad), "{bad}");
         }

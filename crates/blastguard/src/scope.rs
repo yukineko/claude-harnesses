@@ -108,14 +108,45 @@
 //! the filesystem-aware hook binary). With no resolver there are no worktree
 //! roots at all; [`SafeRoots::none`] has none of them either.
 //!
-//! This check is made at JUDGE time. It cannot see what the SAME command does
-//! before its `rm` runs (`ln -s X <root> && rm -rf <root>/p`, or
-//! `mv <root> away && ln -s X <root> && rm -rf <root>/x`), so `detect` adds a
-//! whole-command rule on top: the worktree `Allow` is granted only when every
-//! segment of the top-level command is a bare `rm` or `cd` built from plain
-//! word characters (see `worktree_rm_eligible` in `detect.rs`). It also cannot
-//! see a DIFFERENT, earlier tool call that swaps the root later (a background
-//! job): that race is not closed by this module.
+//! # What actually stops each escape (be precise — several checks overlap)
+//!
+//!   * A root that is ALREADY a symlink (or has a symlinked `.condukt` /
+//!     `worktrees`) when the hook runs: rejected by TWO independent checks in
+//!     [`worktree_storage_roots`] — the `lstat` probe ([`is_real_dir`]) and the
+//!     final "the root must be its own real path per the resolver" check. The
+//!     resolver check alone already rejects every such case, and an operand
+//!     reached through the symlink canonicalises to its target, which is not
+//!     inside the (rejected or real) root either. So the `lstat` probe is
+//!     DEFENCE IN DEPTH: the test suite does not isolate it (a mutation that
+//!     makes it follow symlinks survives the tests), and it must not be cited
+//!     as the thing that closes these cases.
+//!   * A root that does not exist yet: rejected by the probe. No root is
+//!     derived via its parent.
+//!   * The SAME command swapping the root before its `rm` runs
+//!     (`ln -s X <root> && rm -rf <root>/p`,
+//!     `mv <root> away && ln -s X <root> && rm -rf <root>/x`): NOT stopped here
+//!     — every check in this module is made at JUDGE time. It is stopped by the
+//!     whole-command rule in `detect` (`worktree_rm_eligible`): the worktree
+//!     `Allow` is granted only when every segment of the top-level command is a
+//!     bare `rm` or `cd` built from plain word characters.
+//!   * A relative `rm` operand after a `cd` that may fail or not apply
+//!     (`cd <root>/s & rm -rf src`, `cd <root>/missing; rm -rf src`,
+//!     `cd <root>/missing || rm -rf src`, `cd <root>/s | rm -rf src`): the cwd
+//!     walk in `detect` assumes every `cd` succeeds and applies, so it would
+//!     judge `<root>/s/src` while `rm` deletes `<cwd>/src`. Stopped by the cd
+//!     rule of `worktree_rm_eligible`: if the command contains ANY `cd`, every
+//!     `rm` operand must be absolute. With no `cd`, a relative operand is
+//!     judged against the payload cwd, which is the runtime cwd.
+//!
+//! NOT closed by this module or by `detect`:
+//!
+//!   * cross-call TOCTOU — a DIFFERENT tool call (an earlier background job, a
+//!     concurrent session) that creates, moves or links something between this
+//!     judgement and the `rm`;
+//!   * things an EARLIER command already MOVED into a real root
+//!     (`mv ~/Documents <root>/x`, then `rm -rf <root>/x` is Allow — `x` is a
+//!     real directory strictly inside the root). A SYMLINK placed there instead
+//!     is not Allow: the operand canonicalises Outside.
 //!
 //! The resolution rules for OPERANDS are identical to the safe roots': only
 //! `Inside` (a strict descendant, `..` and symlinks resolved) counts; the

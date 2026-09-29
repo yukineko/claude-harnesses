@@ -80,7 +80,7 @@ pub fn detect_scoped(tool_name: &str, tool_input: Option<&Value>, scope: &SafeRo
                     // top-level entry point, so each tool call gets a full
                     // budget and no state leaks between calls.
                     ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
-                    detect_bash(c, 0, &Ctx::new(scope))
+                    detect_bash(c, 0, &Ctx::new(scope, c))
                 }
                 // A Bash call IS in jurisdiction, and the command could not be
                 // read out of it (absent key, non-string value, schema drift).
@@ -152,16 +152,21 @@ struct Ctx<'a> {
     rewritten_base: Option<&'a str>,
     /// Base for operands that rewrite left alone. `None` = not known.
     raw_base: Option<String>,
+    /// Whether the TOP-LEVEL command may use the worktree-storage `Allow` at
+    /// all — see [`worktree_rm_eligible`]. Computed once from the whole command
+    /// line in [`Ctx::new`] and carried unchanged into every derived context.
+    worktree_rm_eligible: bool,
 }
 
 impl<'a> Ctx<'a> {
     /// The context for a segment at the start of a command line: no `cd` seen
     /// yet, so both bases are the session's own working directory.
-    fn new(scope: &'a SafeRoots) -> Ctx<'a> {
+    fn new(scope: &'a SafeRoots, command: &str) -> Ctx<'a> {
         Ctx {
             scope,
             rewritten_base: scope.session_cwd(),
             raw_base: scope.session_cwd().map(str::to_string),
+            worktree_rm_eligible: worktree_rm_eligible(command),
         }
     }
 
@@ -177,6 +182,7 @@ impl<'a> Ctx<'a> {
             scope: self.scope,
             rewritten_base: self.rewritten_base,
             raw_base,
+            worktree_rm_eligible: self.worktree_rm_eligible,
         }
     }
 
@@ -189,6 +195,7 @@ impl<'a> Ctx<'a> {
             scope: self.scope,
             rewritten_base: None,
             raw_base: None,
+            worktree_rm_eligible: self.worktree_rm_eligible,
         }
     }
 
@@ -7314,7 +7321,11 @@ fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     // (so `.git/hooks`, `.claude`, … under a worktree still Deny) and only for
     // `-r`; the root itself, anything above it, a glob, a `..` escape, a
     // symlink out, and any operand that cannot be resolved all fall through to
-    // the unchanged logic below. See `worktree_confined`.
+    // the unchanged logic below. The root counts only if it is a real,
+    // non-symlinked directory at judge time (`scope`), and the Allow is only
+    // available when the WHOLE top-level command is bare `rm`/`cd` segments
+    // (`worktree_rm_eligible`), so no other segment can swap the root before
+    // this rm runs. See `worktree_confined`.
     if recursive && worktree_confined(ctx, &operands) {
         return Decision::Allow;
     }
@@ -7358,16 +7369,71 @@ fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     }
 }
 
+/// Whole-command precondition for the worktree-storage `Allow` (backlog
+/// 873651b9, second pass).
+///
+/// The storage roots are checked at JUDGE time (`scope`: real directory, no
+/// symlinked component). Another segment of the SAME command runs before the
+/// `rm` and could create, move, link or replace the root or an ancestor
+/// (`ln -s ~/Documents R && rm -rf R/p`, `mv R away && ln -s X R && rm -rf R/x`,
+/// `mkdir`, `cp`, a redirection, a nested `bash -c`, a function or alias
+/// definition, …). Enumerating the verbs that can do that is a denylist, so
+/// this is an ALLOWLIST instead, and it is deliberately blunt:
+///
+///   * every character of the command is a plain word character — Unicode
+///     alphanumerics, space, and `/ . _ - + , = : @ %` — or one of the segment
+///     separators `;`, `&`, `|`. No quotes, `$`, backticks, parentheses,
+///     braces, redirections (`<`, `>`), globs, `~`, `#`, `!`, backslash,
+///     newline, tab or any other control character;
+///   * splitting on `;`, `&` and `|` (exact, because no quoting is possible),
+///     every segment is empty or its FIRST whitespace-separated word is
+///     exactly `rm` or `cd`.
+///
+/// Neither `rm` nor `cd` can create, link or move a path, so no segment of an
+/// eligible command can turn the judged root into something else before the
+/// `rm` runs. Every `rm` segment is still judged on its own (the root itself
+/// stays a Deny). Anything else — `/bin/rm`, `command rm`, `FOO=1 rm`,
+/// `rm -rf x 2>/dev/null`, `sudo rm` — is simply not eligible and keeps the
+/// verdict it had before the worktree rule existed. There is no branch that
+/// answers `true` for a command it did not fully read.
+///
+/// NOT covered: a DIFFERENT, earlier tool call (e.g. a background job) that
+/// swaps the root after this command was judged.
+fn worktree_rm_eligible(command: &str) -> bool {
+    let plain = |c: char| {
+        c.is_alphanumeric()
+            || matches!(
+                c,
+                ' ' | '/' | '.' | '_' | '-' | '+' | ',' | '=' | ':' | '@' | '%'
+            )
+    };
+    if !command
+        .chars()
+        .all(|c| plain(c) || matches!(c, ';' | '&' | '|'))
+    {
+        return false;
+    }
+    command.split([';', '&', '|']).all(|seg| {
+        matches!(
+            seg.split(' ').find(|w| !w.is_empty()),
+            None | Some("rm" | "cd")
+        )
+    })
+}
+
 /// True only when `operands` is non-empty and EVERY operand is a literal path
 /// (no glob meta, touches no protected path) that [`SafeRoots::classify_worktree`]
 /// places as [`Placement::Inside`] a worktree storage root.
+///
+/// It is also `false` whenever the top-level command is not eligible (see
+/// [`worktree_rm_eligible`]).
 ///
 /// Every other answer — an empty list, a glob, a protected path, `IsRoot`,
 /// `Outside`, and `Undetermined` (unresolvable, no resolver, no roots, an
 /// unknown `cd`) — is `false`, i.e. the caller keeps the verdict it had before
 /// this rule existed. There is no default that answers `true`.
 fn worktree_confined(ctx: &Ctx<'_>, operands: &[&str]) -> bool {
-    if operands.is_empty() {
+    if !ctx.worktree_rm_eligible || operands.is_empty() {
         return false;
     }
     let base = ctx.base_for("rm");
@@ -9592,6 +9658,32 @@ to explain where `..` lands — blastguard cannot confirm the target and refuses
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worktree_rm_eligible_is_an_allowlist_of_bare_rm_and_cd() {
+        for ok in [
+            "rm -rf /h/.condukt/worktrees/wt1",
+            "cd /h/src && rm -r .harness-worktrees/s1",
+            "rm -rf /a/b; rm -rf /a/c;",
+        ] {
+            assert!(worktree_rm_eligible(ok), "{ok}");
+        }
+        for bad in [
+            "ln -s /h/Documents /p/.harness-worktrees && rm -rf /p/.harness-worktrees/x",
+            "mv /p/.harness-worktrees /p/o && ln -s /v /p/.harness-worktrees && rm -rf /p/.harness-worktrees/x",
+            "mkdir -p /p/.harness-worktrees; rm -rf /p/.harness-worktrees/x",
+            "rm -rf /p/w/x 2>/dev/null",
+            "rm -rf /p/w/x\nln -s a b",
+            "rm -rf /p/w/x\tx",
+            "bash -c 'rm -rf /p/w/x'",
+            "/bin/rm -rf /p/w/x",
+            "FOO=1 rm -rf /p/w/x",
+            "rm -rf $(ln -s a b)",
+            "rm -rf \"/p/w/x\"",
+        ] {
+            assert!(!worktree_rm_eligible(bad), "{bad}");
+        }
+    }
     use serde_json::json;
 
     /// `verb_operands_are_rewritten` is a hand-written mirror of which verbs

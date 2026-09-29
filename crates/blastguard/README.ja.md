@@ -147,8 +147,35 @@ directory tree` で拒否されたこと。
   payload の `cwd`・`CLAUDE_PROJECT_DIR` それぞれについて — パスに `.harness-worktrees`
   というコンポーネントがあればそこまで（最後のもの）、無ければ
   `dirname(P)/.harness-worktrees`。安全ルートとは**別の集合**で、再帰 `rm` 以外の
-  動詞（`truncate`、`find -delete`、`git clean` …）には何も与えない。正規化・symlink
-  解決・`NEVER_A_ROOT`／`$HOME` 不可／2 コンポーネント下限は派生ルートと同じ。
+  動詞（`truncate`、`find -delete`、`git clean` …）には何も与えない。`NEVER_A_ROOT`／
+  `$HOME` 不可／2 コンポーネント下限は派生ルートと同じ。
+- **置き場として数えるのは「今、実在する本物のディレクトリ」だけ**（0.2.84、独立
+  検証者が 0.2.83 で `ln -s ~/Documents <親>/.harness-worktrees` → `rm -rf
+  <親>/.harness-worktrees/precious` が `allow` になる脱出を実測したための修正）:
+  - アンカー（`.condukt/worktrees` は `$HOME`、`.harness-worktrees` はその親）は
+    resolver で実パス化してよい（`/tmp` → `/private/tmp` のような**アンカーより上**の
+    symlink は許容）。
+  - **アンカーより下**の各コンポーネント（`.condukt` と `worktrees`、または
+    `.harness-worktrees`）を `lstat` し、**symlink でないディレクトリ**でなければ
+    置き場にしない。symlink の `.condukt`・symlink の `worktrees`・symlink の
+    `.harness-worktrees`・通常ファイル・**存在しない**置き場はすべて置き場ではない
+    （存在しない置き場を親経由で解決して置き場扱いすることはもうない）。
+  - 検査中の IO エラーは「置き場ではない」（＝従来の deny/ask 経路。allow にはならない）。
+    この `lstat` は resolver が渡されたとき（フック本体）だけ行う。
+- **1 コマンド内での差し替えを塞ぐ規則**: 置き場の検査は*判定時*のものなので、
+  同じコマンドの前段（`ln -s X <置き場> && rm -rf <置き場>/p`、
+  `mv <置き場> 退避先 && ln -s X <置き場> && rm -rf <置き場>/x`、`mkdir`、`cp`、
+  リダイレクト、`bash -c` …）が `rm` の実行前に置き場をすり替えうる。そこで
+  **トップレベルのコマンド全体が「素の `rm` / `cd` だけ」でできているときに限り**
+  この `allow` を出す: 全文字が英数字（Unicode 可）・空白・`/ . _ - + , = : @ %`
+  または区切り `;` `&` `|` のいずれかで、`;` `&` `|` で分けた各セグメントが空か、
+  先頭の語がちょうど `rm` か `cd`。引用符・`$`・バッククォート・括弧・波括弧・
+  `<` `>`・glob・`~`・`#`・`!`・バックスラッシュ・改行/タブは 1 つでもあれば対象外
+  （`rm -rf x 2>/dev/null`、`/bin/rm`、`FOO=1 rm`、`sudo rm` も対象外）。対象外の
+  コマンドは従来どおりの判定（deny / ask）になる。
+- **塞いでいないもの**: *別の*（先行する）ツール呼び出し、たとえばバックグラウンド
+  ジョブが、判定後に置き場をすり替える競合。また、実在する本物の置き場へ別コマンドで
+  `mv` して入れたものは、置き場の中身として削除できる。
 - **全オペランド**がリテラルパスで、実パス（`..`・symlink 解決後）が置き場の*厳密な*
   内側にあるときだけ `allow`。
 - **変わらないもの**: 保護パスの優先（`<置き場>/x/.git/hooks` などは従来どおり deny）

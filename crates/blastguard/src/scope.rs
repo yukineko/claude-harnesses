@@ -80,17 +80,49 @@
 //!     and including its last `.harness-worktrees` component when it has one,
 //!     else `dirname(P)/.harness-worktrees`.
 //!
-//! Each is normalised, must pass the derived-root rules ([`NEVER_A_ROOT`], not
-//! `$HOME`, [`MIN_DERIVED_ROOT_COMPONENTS`]) both as spelled and after the
-//! injected resolver canonicalises it, and is dropped when it cannot be
-//! resolved. [`SafeRoots::none`] has none of them.
+//! A candidate becomes a root ONLY if, at the moment the model is built, it
+//! EXISTS as a REAL directory that nothing on the way down to it redirects
+//! (backlog 873651b9, second pass — the first pass accepted a root by its
+//! resolved path alone, and an independent verifier escaped it with
+//! `ln -s ~/Documents <parent>/.harness-worktrees` followed by
+//! `rm -rf <parent>/.harness-worktrees/precious`):
 //!
-//! The resolution rules are identical to the safe roots': only `Inside` (a
-//! strict descendant, `..` and symlinks resolved) counts; the storage root
-//! itself (`IsRoot`), `Outside`, and every `Undetermined` do not, and the rm
-//! arm then keeps the verdict it had before this rule. Protected-path
-//! precedence runs first in `detect`, so a protected path under a worktree is
-//! still denied.
+//!   * the ANCHOR is canonicalised with the injected resolver: `$HOME` for
+//!     `$HOME/.condukt/worktrees`, `dirname(root)` for `.harness-worktrees`.
+//!     Symlinks ABOVE the anchor (`/tmp` -> `/private/tmp`) are resolved and
+//!     accepted — the anchor is an input of the session, not of the command;
+//!   * every component BELOW the anchor (`.condukt` and `worktrees`; or
+//!     `.harness-worktrees`) is `lstat`ed and must be a directory that is NOT a
+//!     symlink. A symlinked `.condukt`, a symlinked `worktrees`, a symlinked
+//!     `.harness-worktrees`, a regular file, or a component that does not exist
+//!     means NO root — a root that does not exist is never resolved via its
+//!     parent any more;
+//!   * any IO error while checking (permission, not-found, a non-UTF-8 path)
+//!     is "not a root";
+//!   * the result must still pass the derived-root rules ([`NEVER_A_ROOT`], not
+//!     `$HOME`, [`MIN_DERIVED_ROOT_COMPONENTS`]) and must be its own real path
+//!     according to the resolver.
+//!
+//! The `lstat` is real filesystem I/O done here, in [`SafeRoots::new`], and only
+//! when a resolver was supplied (the resolver is the signal that the caller is
+//! the filesystem-aware hook binary). With no resolver there are no worktree
+//! roots at all; [`SafeRoots::none`] has none of them either.
+//!
+//! This check is made at JUDGE time. It cannot see what the SAME command does
+//! before its `rm` runs (`ln -s X <root> && rm -rf <root>/p`, or
+//! `mv <root> away && ln -s X <root> && rm -rf <root>/x`), so `detect` adds a
+//! whole-command rule on top: the worktree `Allow` is granted only when every
+//! segment of the top-level command is a bare `rm` or `cd` built from plain
+//! word characters (see `worktree_rm_eligible` in `detect.rs`). It also cannot
+//! see a DIFFERENT, earlier tool call that swaps the root later (a background
+//! job): that race is not closed by this module.
+//!
+//! The resolution rules for OPERANDS are identical to the safe roots': only
+//! `Inside` (a strict descendant, `..` and symlinks resolved) counts; the
+//! storage root itself (`IsRoot`), `Outside`, and every `Undetermined` do not,
+//! and the rm arm then keeps the verdict it had before this rule.
+//! Protected-path precedence runs first in `detect`, so a protected path under
+//! a worktree is still denied.
 //!
 //! # The fail-closed direction
 //!
@@ -365,8 +397,9 @@ pub struct SafeRoots {
     resolver: Option<RealPathResolver>,
     /// The WORKTREE STORAGE ROOTS (`$HOME/.condukt/worktrees`, and the
     /// `.harness-worktrees` directory derived from `cwd` / `CLAUDE_PROJECT_DIR`),
-    /// normalised, sanity-checked and resolver-canonicalised exactly like
-    /// `roots`. Consulted ONLY by [`SafeRoots::classify_worktree`], which only
+    /// kept only when each exists as a real, non-symlinked directory below its
+    /// canonicalised anchor and passes the derived-root rules (see
+    /// [`worktree_storage_roots`]). Consulted ONLY by [`SafeRoots::classify_worktree`], which only
     /// the recursive-`rm` arm of [`crate::detect`] calls — see the module doc,
     /// "Worktree storage roots". Kept separate from `roots` on purpose: adding
     /// these to `roots` would hand every OTHER location-aware verb (`truncate`,
@@ -414,7 +447,10 @@ impl SafeRoots {
     /// The same inputs also derive the worktree storage roots (see
     /// [`worktree_storage_candidates`]): `home` contributes
     /// `$HOME/.condukt/worktrees` (only when absolute), and `cwd` /
-    /// `project_dir` each contribute their `.harness-worktrees` directory.
+    /// `project_dir` each contribute their `.harness-worktrees` directory — each
+    /// ONLY if it currently exists as a real directory with no symlinked
+    /// component below its anchor (checked with `lstat`, real filesystem I/O,
+    /// and only when `resolver` is `Some`; see [`worktree_storage_roots`]).
     pub fn new(
         cwd: Option<&str>,
         project_dir: Option<&str>,
@@ -444,25 +480,12 @@ impl SafeRoots {
         // itself an absolute path we could resolve. It does NOT have to be a
         // root: `cd /home/yuki && rm -rf /tmp/x` resolves the operand against
         // `/tmp`, and the home directory being un-rootable is unrelated.
-        let mut worktree_roots: Vec<String> = Vec::new();
-        for candidate in worktree_storage_candidates(cwd, project_dir, home_norm.as_deref()) {
-            // Same sanity rules as a derived root, applied to the lexical
-            // spelling AND to the resolved one: a `.condukt` symlinked to a
-            // system directory must not hand that directory's children out
-            // as delete-freely either.
-            if !is_acceptable_derived_root(&candidate, home_norm.as_deref()) {
-                continue;
-            }
-            let Some(real) = resolve_with(&candidate, resolver) else {
-                continue;
-            };
-            if !is_acceptable_derived_root(&real, home_norm.as_deref()) {
-                continue;
-            }
-            if !worktree_roots.contains(&real) {
-                worktree_roots.push(real);
-            }
-        }
+        // Worktree storage roots: see the module doc. The directory probe is
+        // real filesystem I/O and is only used when the caller supplied a
+        // resolver (i.e. it is the filesystem-aware hook binary).
+        let probe: Option<DirProbe> = resolver.map(|_| is_real_dir as DirProbe);
+        let worktree_roots =
+            worktree_storage_roots(cwd, project_dir, home_norm.as_deref(), resolver, probe);
         let cwd = cwd
             .and_then(normalize_abs)
             .and_then(|c| resolve_with(&c, resolver));
@@ -591,53 +614,145 @@ impl SafeRoots {
     }
 }
 
-/// The lexical (normalised, not yet resolved) worktree storage root candidates.
+/// A worktree storage root candidate: the trusted ANCHOR (lexically
+/// normalised, not yet resolved) and the components BELOW it that make up the
+/// root. The anchor may be canonicalised; every component below it must be a
+/// real, non-symlink directory (see [`worktree_storage_roots`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WorktreeCandidate {
+    anchor: String,
+    below: Vec<&'static str>,
+}
+
+impl WorktreeCandidate {
+    /// The candidate spelled lexically (anchor + components), unresolved.
+    fn lexical(&self) -> String {
+        let mut out = self.anchor.trim_end_matches('/').to_string();
+        for c in &self.below {
+            out.push('/');
+            out.push_str(c);
+        }
+        out
+    }
+}
+
+/// The worktree storage root candidates.
 ///
-/// * `$HOME/.condukt/worktrees` — only when `home` normalised to an absolute
-///   path; an unset or relative `HOME` contributes nothing.
+/// * `$HOME/.condukt/worktrees` — anchor `$HOME`, components `.condukt`,
+///   `worktrees`; only when `home` normalised to an absolute path (an unset or
+///   relative `HOME` contributes nothing).
 /// * for each of `cwd`, `project_dir` that is absolute: if the path has a
 ///   component named exactly `.harness-worktrees`, the prefix up to and
 ///   including the LAST such component (the last, not the first, so a nested
 ///   spelling yields the narrower root — the restrictive choice); otherwise
-///   `dirname(P)/.harness-worktrees`.
+///   `dirname(P)/.harness-worktrees`. Anchor = the prefix before that
+///   component, component = `.harness-worktrees`.
 ///
-/// No sanity rule is applied here; [`SafeRoots::new`] applies the derived-root
-/// rules to every candidate before it may become a root.
+/// No sanity rule and no filesystem check is applied here;
+/// [`worktree_storage_roots`] applies both before a candidate may become a root.
 fn worktree_storage_candidates(
     cwd: Option<&str>,
     project_dir: Option<&str>,
     home_norm: Option<&str>,
-) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
+) -> Vec<WorktreeCandidate> {
+    let mut out: Vec<WorktreeCandidate> = Vec::new();
     if let Some(home) = home_norm {
-        if let Some(root) = normalize_abs(&format!(
-            "{}/.condukt/worktrees",
-            home.trim_end_matches('/')
-        )) {
-            out.push(root);
-        }
+        out.push(WorktreeCandidate {
+            anchor: home.to_string(),
+            below: vec![".condukt", "worktrees"],
+        });
     }
     for derived in [cwd, project_dir].into_iter().flatten() {
         let Some(p) = normalize_abs(derived) else {
             continue;
         };
         let comps: Vec<&str> = p.split('/').filter(|c| !c.is_empty()).collect();
-        let candidate = match comps.iter().rposition(|c| *c == WORKTREE_DIR_NAME) {
-            Some(i) => format!("/{}", comps[..=i].join("/")),
-            None => {
-                let parent = &comps[..comps.len().saturating_sub(1)];
-                if parent.is_empty() {
-                    format!("/{WORKTREE_DIR_NAME}")
-                } else {
-                    format!("/{}/{WORKTREE_DIR_NAME}", parent.join("/"))
-                }
-            }
+        let parent: &[&str] = match comps.iter().rposition(|c| *c == WORKTREE_DIR_NAME) {
+            Some(i) => &comps[..i],
+            None => &comps[..comps.len().saturating_sub(1)],
+        };
+        let candidate = WorktreeCandidate {
+            anchor: format!("/{}", parent.join("/")),
+            below: vec![WORKTREE_DIR_NAME],
         };
         if !out.contains(&candidate) {
             out.push(candidate);
         }
     }
     out
+}
+
+/// "Does `path` exist, right now, as a directory that is NOT a symlink?"
+///
+/// `false` for a symlink (even one pointing at a directory), a regular file, a
+/// missing path, and any IO error. Injected into [`worktree_storage_roots`] so
+/// the unit tests can model a filesystem without creating one.
+type DirProbe = fn(&str) -> bool;
+
+/// The real [`DirProbe`]: `lstat` (never follows the final symlink). Any IO
+/// error is `false`, i.e. "not a root".
+fn is_real_dir(path: &str) -> bool {
+    std::fs::symlink_metadata(path)
+        .map(|m| m.file_type().is_dir())
+        .unwrap_or(false)
+}
+
+/// Build the worktree storage roots (module doc, "Worktree storage roots").
+///
+/// For each candidate: the lexical spelling must pass the derived-root rules;
+/// the anchor must resolve; each component below the resolved anchor must pass
+/// `probe` (real, non-symlink directory); the result must pass the derived-root
+/// rules again and must be its own real path per the resolver. Any failure —
+/// including no resolver or no probe — drops the candidate. There is no
+/// branch that keeps a candidate it could not check.
+fn worktree_storage_roots(
+    cwd: Option<&str>,
+    project_dir: Option<&str>,
+    home_norm: Option<&str>,
+    resolver: Option<RealPathResolver>,
+    probe: Option<DirProbe>,
+) -> Vec<String> {
+    let mut roots: Vec<String> = Vec::new();
+    let Some(probe) = probe else {
+        return roots;
+    };
+    for candidate in worktree_storage_candidates(cwd, project_dir, home_norm) {
+        if !is_acceptable_derived_root(&candidate.lexical(), home_norm) {
+            continue;
+        }
+        let Some(anchor_real) = resolve_with(&candidate.anchor, resolver) else {
+            continue;
+        };
+        if !anchor_real.starts_with('/') {
+            continue;
+        }
+        let mut cur = anchor_real.trim_end_matches('/').to_string();
+        let mut all_real_dirs = true;
+        for comp in &candidate.below {
+            cur.push('/');
+            cur.push_str(comp);
+            if !probe(&cur) {
+                all_real_dirs = false;
+                break;
+            }
+        }
+        if !all_real_dirs {
+            continue;
+        }
+        if !is_acceptable_derived_root(&cur, home_norm) {
+            continue;
+        }
+        // Belt and braces: a root built from a canonical anchor and non-symlink
+        // components is already its own real path. If the resolver disagrees,
+        // something changed between the two looks — not a root.
+        if resolve_with(&cur, resolver).as_deref() != Some(cur.as_str()) {
+            continue;
+        }
+        if !roots.contains(&cur) {
+            roots.push(cur);
+        }
+    }
+    roots
 }
 
 /// The directory name the harness keeps session worktrees in, as a sibling of
@@ -1044,5 +1159,76 @@ mod tests {
         assert_eq!(normalize_abs("/a/b/../c"), Some("/a/c".to_string()));
         assert_eq!(normalize_abs("/.."), Some("/".to_string()));
         assert_eq!(normalize_abs("/a/"), Some("/a".to_string()));
+    }
+
+    // ---- worktree storage roots: private-helper unit tests -------------------
+    // The probe models `lstat`: only the listed paths are real directories.
+
+    fn probe_real(p: &str) -> bool {
+        matches!(
+            p,
+            "/home/yuki/.condukt"
+                | "/home/yuki/.condukt/worktrees"
+                | "/home/yuki/src/.harness-worktrees"
+        )
+    }
+
+    fn probe_nothing(_p: &str) -> bool {
+        false
+    }
+
+    fn probe_condukt_is_symlink(p: &str) -> bool {
+        // `.condukt` is a symlink (lstat says not-a-dir) even though its
+        // `worktrees` child would look fine through the link.
+        p == "/home/yuki/.condukt/worktrees"
+    }
+
+    #[test]
+    fn worktree_roots_require_real_dirs_below_the_anchor() {
+        let r = worktree_storage_roots(
+            Some("/home/yuki/src/proj"),
+            None,
+            Some("/home/yuki"),
+            Some(identity),
+            Some(probe_real),
+        );
+        assert_eq!(
+            r,
+            vec![
+                "/home/yuki/.condukt/worktrees".to_string(),
+                "/home/yuki/src/.harness-worktrees".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn worktree_roots_absent_or_symlinked_or_unprobed_are_not_roots() {
+        for probe in [Some(probe_nothing as DirProbe), None] {
+            assert!(worktree_storage_roots(
+                Some("/home/yuki/src/proj"),
+                None,
+                Some("/home/yuki"),
+                Some(identity),
+                probe,
+            )
+            .is_empty());
+        }
+        assert!(worktree_storage_roots(
+            None,
+            None,
+            Some("/home/yuki"),
+            Some(identity),
+            Some(probe_condukt_is_symlink),
+        )
+        .is_empty());
+        // No resolver: the anchor cannot be canonicalised, so no root.
+        assert!(worktree_storage_roots(
+            Some("/home/yuki/src/proj"),
+            None,
+            Some("/home/yuki"),
+            None,
+            Some(probe_real),
+        )
+        .is_empty());
     }
 }

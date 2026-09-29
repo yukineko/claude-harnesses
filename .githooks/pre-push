@@ -3,7 +3,9 @@
 #
 #     git config core.hooksPath .githooks
 #
-# This hook has three advisory nudges plus one blocking check:
+# This hook has three advisory nudges plus three blocking checks (the bypass
+# ledger below, `cargo check` over each pushed tip, and the trybuild compile-fail
+# type contracts via scripts/check-compile-fail.py — see the end of this file):
 #   1. GATE crates (advisory) — when the push touches blastguard/propguard/
 #      specguard/stuckguard/mutategate/overwatch (the fleet defense gates),
 #      suggest a Continuous-Audit round (`scripts/continuous-audit.sh --dry-run`).
@@ -378,6 +380,36 @@ for sha in $pushed_shas; do
         echo "pre-push: BLOCKED — commit $(git rev-parse --short "$sha") does not" >&2
         echo "type-check (errors above). This is the only gate in this repo that runs" >&2
         echo "the compiler; fix the errors rather than routing around it." >&2
+        exit 1
+    fi
+
+    # --- the third blocking check: the trybuild type contracts --------------
+    # `cargo check` never builds the trybuild fixtures, so the compile-fail
+    # contracts (harness_core::verdict / scope: "a fail-open is unrepresentable",
+    # pinned by .stderr snapshots in harness-core, blastguard and donegate) were
+    # observed at no enforcement point (backlog 034b6620). Run them against the
+    # SAME pushed tree, using the script as committed in that tree. The rustc
+    # that judges the snapshots is pinned by that tree's rust-toolchain.toml.
+    # rc=1 (a contract test failed) and rc=2 (undetermined: no cargo, wrong
+    # rustc, build error, test count not observed) both block. A pushed tree
+    # without the script (pre-034b6620 commit) also blocks: the contract could
+    # not be checked, which is not "the contract holds".
+    if [ ! -f "$TYPECHECK_TREE/scripts/check-compile-fail.py" ]; then
+        echo "" >&2
+        echo "pre-push: BLOCKED — commit $(git rev-parse --short "$sha") has no" >&2
+        echo "scripts/check-compile-fail.py, so its trybuild type contracts cannot be" >&2
+        echo "checked. Rebase/merge onto a main that has it (backlog 034b6620)." >&2
+        exit 1
+    fi
+    echo "pre-push: trybuild compile-fail contracts at $(git rev-parse --short "$sha") (scripts/check-compile-fail.py)..." >&2
+    ( cd "$TYPECHECK_TREE" && CARGO_TARGET_DIR="$TYPECHECK_TARGET" \
+          python3 scripts/check-compile-fail.py >&2 )
+    compile_fail_rc=$?
+    if [ "$compile_fail_rc" -ne 0 ]; then
+        echo "" >&2
+        echo "pre-push: BLOCKED — trybuild compile-fail check at $(git rev-parse --short "$sha")" >&2
+        echo "exited $compile_fail_rc (1 = a type contract failed, 2 = could not be" >&2
+        echo "determined). See the output above." >&2
         exit 1
     fi
 done

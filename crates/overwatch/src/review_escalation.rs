@@ -8,10 +8,18 @@
 //! blastguard <- condukt`. condukt already depends on overwatch, so
 //! `overwatch` taking a `condukt` crate dependency would be a cycle. Instead
 //! this module reads condukt's `escalations.json` **by path**, as fail-soft
-//! foreign JSON, using ONLY `harness_core` primitives — the SAME
+//! foreign JSON, using ONLY `harness_core` primitives —
 //! `harness_core::config::base_dir` / `harness_core::projkey::{repo_root,
-//! project_key}` symbols [`crate::store`] already uses to derive overwatch's
-//! own storage root.
+//! project_key}`, mirroring condukt's own `escalations_path` keying.
+//!
+//! NOTE: this deliberately does NOT follow [`crate::store`]'s keying. The
+//! overwatch store is keyed on the MAIN worktree root
+//! (`projkey::main_worktree_root`, so linked worktrees share it), whereas
+//! condukt keys `escalations.json` on `projkey::repo_root` — i.e. per linked
+//! worktree. This reader must land on the file condukt actually writes, so it
+//! mirrors condukt, not the overwatch store. Consequence: escalations filed
+//! from a linked worktree are only visible to a review-queue run from that
+//! same worktree.
 //!
 //! # "Could not read" is not "nobody is asking"
 //!
@@ -135,8 +143,8 @@ pub fn parse_open_escalations(txt: &str, source: &str) -> Determination<Vec<Cond
 /// rooted at (or above) `cwd`:
 /// `harness_core::config::base_dir("condukt")/state/<project-key>/escalations.json`
 /// — mirroring condukt's own `escalate.rs::escalations_path` /
-/// `config.rs::base_dir` derivation, and reusing the exact `harness_core`
-/// symbols [`crate::store`] already calls for overwatch's own storage root.
+/// `config.rs::base_dir` derivation (`projkey::repo_root`, i.e. per checkout —
+/// NOT the main-worktree keying [`crate::store`] uses; see the module doc).
 /// See the module doc for the known non-default-`state_dir` limitation.
 pub fn condukt_escalations_path(cwd: &Path) -> PathBuf {
     let base = harness_core::config::base_dir("condukt");

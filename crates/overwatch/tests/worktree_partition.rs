@@ -131,9 +131,18 @@ fn lease_begun_in_linked_worktree_is_visible_from_main_checkout() {
         "lease begun in linked worktree must be listed from main; got {keys:?}"
     );
     let text = status_text(&f.home, &f.main);
+    // Scope to the Sessions section: other sections (Backlog, Condukt runs)
+    // legitimately print `(none)` when empty.
+    let sessions = text
+        .split("== Sessions ==")
+        .nth(1)
+        .unwrap_or_else(|| panic!("no Sessions section in:\n{text}"))
+        .split("\n== ")
+        .next()
+        .unwrap();
     assert!(
-        !text.contains("(none)"),
-        "text status from main must not say (none) when a worktree lease exists:\n{text}"
+        !sessions.contains("(none)") && sessions.contains("wk"),
+        "Sessions section of text status from main must list the worktree lease, not (none):\n{sessions}"
     );
 }
 

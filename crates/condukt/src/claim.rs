@@ -1193,6 +1193,171 @@ pub fn run_liveness(cfg: &Config, cwd: &Path, run_id: &str, now: i64) -> RunLive
     }
 }
 
+/// What the claim registry can say about the idleness of a run that has NO
+/// run-state file — see [`stateless_idle_secs`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum StatelessIdle {
+    /// The registry was read cleanly (or is genuinely absent) and holds no
+    /// [`Claim::stateless`] claim for the run. Nothing in the registry vouches
+    /// that this run id is a stateless driver, so the caller keeps its own
+    /// "run state could not be loaded" answer unchanged.
+    NoStatelessClaim,
+    /// Whether the run owns a stateless claim could not be established: the
+    /// project root is unresolvable or the registry is present but unreadable.
+    /// Carries why. Never collapsed into [`StatelessIdle::NoStatelessClaim`].
+    RegistryUnreadable(String),
+    /// The run owns ≥1 stateless claim, so its progress is judged from the
+    /// owning session transcript(s): `Known(secs)` since the transcript last
+    /// changed, or `Undetermined(why)` naming the actual cause.
+    Measured(Determination<i64>),
+}
+
+/// Unix seconds of the last modification of `session_id`'s transcript, found
+/// under `<HOME>/.claude/projects/*/<id>.jsonl` by the SAME lookup the
+/// transcript progress signal of [`claim_progress`] uses
+/// ([`harness_core::transcript::locate_session_transcript_in`]).
+///
+/// Every failure is `Undetermined`, including an mtime the platform cannot
+/// report. That last arm is deliberately stricter than
+/// [`progress::file_growth_signal`], which folds an unreadable mtime into `0`:
+/// that is harmless inside a fingerprint that is only compared for equality,
+/// but here the value is subtracted from `now`, and a `0` would read as a
+/// fabricated 50-year idle (or, clamped the other way, as "just now").
+fn session_transcript_mtime_secs(session_id: &str) -> Determination<i64> {
+    let Some(home) = std::env::var_os("HOME") else {
+        return Determination::undetermined(
+            "HOME unset: cannot locate the owning session transcript",
+        );
+    };
+    let projects = PathBuf::from(home).join(".claude").join("projects");
+    let path = match harness_core::transcript::locate_session_transcript_in(&projects, session_id) {
+        Determination::Known(p) => p,
+        Determination::Undetermined(why) => {
+            return Determination::undetermined(format!(
+                "owning session transcript unreadable: {}",
+                why.as_str()
+            ))
+        }
+    };
+    let modified = std::fs::metadata(&path).and_then(|m| m.modified());
+    match modified {
+        Ok(t) => match t.duration_since(std::time::UNIX_EPOCH) {
+            Ok(d) => Determination::known(d.as_secs().min(i64::MAX as u64) as i64),
+            Err(_) => Determination::undetermined(format!(
+                "owning session transcript {} has an mtime before the unix epoch",
+                path.display()
+            )),
+        },
+        Err(e) => Determination::undetermined(format!(
+            "owning session transcript {} mtime unreadable: {e}",
+            path.display()
+        )),
+    }
+}
+
+/// Idle seconds for a run that has no run state but may be a stateless
+/// (`/flow`) driver, measured from the owning session transcript — the same
+/// signal [`claim_progress`] uses for a [`Claim::stateless`] claim.
+///
+/// * Registry unresolvable / unreadable → [`StatelessIdle::RegistryUnreadable`].
+/// * No stateless claim for `run_id` → [`StatelessIdle::NoStatelessClaim`].
+/// * Stateless claims exist, but none has a heartbeat within the stuck-TTL
+///   (the same [`is_stale`] test [`run_liveness`] uses) →
+///   `Measured(Undetermined)`: nothing live vouches for the driver. The
+///   heartbeat is used ONLY to decide which claims count as a live driver; it
+///   is never the progress signal.
+/// * Otherwise each live stateless claim's session transcript is read. Any
+///   claim with no session id, or whose transcript cannot be read, makes the
+///   answer `Undetermined` naming that cause (one unreadable signal is enough
+///   to be unable to say the run is idle for less than the TTL). When all are
+///   readable the idle is `now` minus the most recent transcript mtime,
+///   clamped at 0 (a future mtime is clock skew over a real observation).
+///
+/// A pure, lock-free read like [`run_liveness`]: it never reaps or persists.
+pub(crate) fn stateless_idle_secs(
+    cfg: &Config,
+    cwd: &Path,
+    run_id: &str,
+    now: i64,
+) -> StatelessIdle {
+    let path = match registry_path(cfg, cwd) {
+        Determination::Known(p) => p,
+        Determination::Undetermined(why) => {
+            return StatelessIdle::RegistryUnreadable(format!(
+                "claim registry project root unresolvable: {}",
+                why.as_str()
+            ))
+        }
+    };
+    let reg = match read_registry(&path) {
+        Ok(Some(reg)) => reg,
+        Ok(None) => return StatelessIdle::NoStatelessClaim,
+        Err(e) => {
+            return StatelessIdle::RegistryUnreadable(format!(
+                "claim registry {} unreadable: {e}",
+                path.display()
+            ))
+        }
+    };
+    let mine: Vec<&Claim> = reg
+        .files
+        .values()
+        .chain(reg.task_claims.values())
+        .filter(|c| c.run_id == run_id && c.stateless)
+        .collect();
+    if mine.is_empty() {
+        return StatelessIdle::NoStatelessClaim;
+    }
+    let ttl = ttl_secs(cfg);
+    let live: Vec<&Claim> = mine
+        .into_iter()
+        .filter(|c| !is_stale(c, now, ttl))
+        .collect();
+    if live.is_empty() {
+        return StatelessIdle::Measured(Determination::undetermined(format!(
+            "every stateless claim of run {run_id} has a heartbeat older than the stuck-TTL \
+             ({ttl}s) — no live driver to measure progress from"
+        )));
+    }
+    let mut sessions: Vec<&str> = Vec::new();
+    for c in &live {
+        match c.session_id.as_deref() {
+            Some(sid) if !sid.trim().is_empty() => {
+                if !sessions.contains(&sid) {
+                    sessions.push(sid);
+                }
+            }
+            _ => {
+                return StatelessIdle::Measured(Determination::undetermined(format!(
+                    "stateless claim of run {run_id} has no owning session id — \
+                     transcript progress unreadable"
+                )))
+            }
+        }
+    }
+    let mut latest: Option<i64> = None;
+    for sid in sessions {
+        match session_transcript_mtime_secs(sid) {
+            Determination::Known(t) => latest = Some(latest.map_or(t, |l| l.max(t))),
+            Determination::Undetermined(why) => {
+                return StatelessIdle::Measured(Determination::undetermined(format!(
+                    "{} (session {sid}, run {run_id})",
+                    why.as_str()
+                )))
+            }
+        }
+    }
+    match latest {
+        Some(t) => StatelessIdle::Measured(Determination::known((now - t).max(0))),
+        // Unreachable in practice (`live` is non-empty and every claim either
+        // returned above or contributed a session), but stated as a refusal
+        // rather than a fabricated measurement.
+        None => StatelessIdle::Measured(Determination::undetermined(format!(
+            "no owning session transcript could be attributed to run {run_id}"
+        ))),
+    }
+}
+
 /// Read the claim registry distinguishing a genuinely-absent file (`Ok(None)`)
 /// from a present-but-unreadable/corrupt one (`Err`), so a caller that must fail
 /// CLOSED on "cannot determine" can tell the two apart. This is the single

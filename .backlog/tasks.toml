@@ -11813,3 +11813,51 @@ updated_at = 1790678380
 weight = 0.0
 issue_number = 861
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/861"
+
+[[task]]
+id = "400d685b"
+title = ".githooks/pre-push の enablement 助言文が、未観測の hook 挙動を断定したまま残っている (2ae5503f の修正漏れ)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-18、backlog 2ae5503f (commit 3e28dc16) で scripts/check-plugin-rollout.py の per-finding メッセージから「none of its hooks fire, so the gate silently guards nothing」という**観測していない挙動の断定**を撤去した。しかし同一クラスの断定が .githooks/pre-push:252-254 の heredoc にも独立した文字列として存在しており、そちらは直していない。実測: 本日 ee15cd2e を push した際の pre-push 出力に逐語で 'A GATE crate that is installed but not listed in enabledPlugins is inert: its hooks never fire, so the gate reports nothing and guards nothing.' が出た。この文の直前に表示される per-finding 側は既に修正後の「whether its hooks actually fire was NOT observed by this check」に変わっており、**同じ画面で 2 つの文が矛盾している**。しかもこの断定は同じ 2026-09-18 に反証済みである: blastguard@yukineko が false のまま blastguard の hook が実際に発火するのを複数回観測した。CLAUDE.md 第4節「docstring / コメントで実挙動と違う『安全な話』を書く」の禁止に当たり、かつ第1節の「判定を持つ」判定 — この文は人間が『このゲートは死んでいる』と読んで調査を打ち切る根拠になるので、下流消費者が存在する。修正方向: check-plugin-rollout.py 側と同じ文言に揃える。すなわち「enabledPlugins に載っていないので Claude Code はロードしない設定であり inert のはず。ただし hook が実際に発火するかどうかは、このチェックは観測していない (enabledPlugins しか読まない)。known-dead ではなく unverified として扱え」。テスト: scripts/test_prepush_hook.py に、enablement クラス (rc=2) の助言文が 'hooks never fire' / 'guards nothing' を含まないことと、代わりに未観測であることを明示していることを固定するケースを足す。先に RED を観測してから直すこと。教訓: 同一の誤りが複数ファイルに独立した文字列として存在するとき、1 箇所直して『直した』と報告するのは第4節の隠蔽に接続する。grep で全出現を列挙してから直すこと。"
+created_at = 1789719672
+updated_at = 1789719672
+weight = 0.0
+issue_number = 673
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/673"
+
+[[task]]
+id = "ee273b5e"
+title = "guard-maintree-bash が main での merge conflict 解決の書き込み (cp で解決済みファイルを置く) も拒否する — §8 は conflict 解決を許可している"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-09-29: during a merge of origin/main on main, cp of the merge-driver output into .backlog/tasks.toml was refused. Worked around by doing the merge in the session worktree. Also a variable path in the command was refused because the target could not be resolved (fail-closed, fine)."
+created_at = 1790678420
+updated_at = 1790678420
+weight = 0.0
+issue_number = 862
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/862"
+
+[[task]]
+id = "4b6f4aba"
+title = "overwatch status が TTL 切れリースを黙って捨てて Sessions を (none) と表示する — heartbeat が止まっただけの生存セッションと『誰もいない』を区別できない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-09-29 21:50 JST at main 3c051eb1: leases.json holds 2 leases of session 34385c9e with heartbeat_at 1790678195 (19:36, 2h14m old, over LEASE_TTL_SECS 1800); overwatch status prints Sessions (none). reap_stale in store.rs drops them before rendering. Reading (a) correct by design: TTL means dead. Reading (b) fail-open: a live session that simply stopped heartbeating is rendered as nobody working. Distinguish by checking whether session 34385c9e still has a live transcript. Related to p0 1426e7b4, which this does NOT reproduce (those leases were reported live)."
+created_at = 1790686249
+updated_at = 1790686249
+weight = 0.0
+issue_number = 863
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/863"

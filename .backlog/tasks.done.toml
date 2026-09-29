@@ -22257,3 +22257,20 @@ updated_at = 1790678157
 weight = 0.0
 issue_number = 729
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/729"
+
+[[task]]
+id = "6803bd45"
+title = "mutategate/fetchguard が ~/.claude/settings.json の enabledPlugins に未登録 — 事故か意図かユーザーに確認する"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+2026-07-30 実測: jq で ~/.claude/settings.json の enabledPlugins を確認したところ fetchguard@yukineko / taintguard@yukineko / mutategate@yukineko の3つが ABSENT。taintguard 分は既存項目 e4687aad が、fetchguard 分は a9ff687e がカバーするので、本項目は mutategate と『そもそも意図的に無効化されているのか』の判断部分に限る。意図なら a9ff687e / e4687aad の前提も崩れる。
+除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 6803bd45 --status pending
+
+【ユーザー裁定 2026-09-29】fetchguard が enabledPlugins に無いのは意図的な無効化。mutategate は現在 marketplace に plugin として存在しない (論点消滅)。parked-plugins.json への宣言は試したが、非 gate plugin の未有効化は check-plugin-rollout.py 上もともと NOTE (赤ではない) で、park は何も抑止しないと警告されたため入れていない。"""
+created_at = 1785377000
+updated_at = 1790678341
+weight = 0.0

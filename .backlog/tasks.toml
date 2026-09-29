@@ -902,33 +902,6 @@ issue_number = 104
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/104"
 
 [[task]]
-id = "ea68627b"
-title = "editgate: a shared CARGO_TARGET_DIR can make a broken crate check clean"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-Measured 2026-07-28 on the merge tree. cargo test -p condukt with CARGO_TARGET_DIR pointed at a private dir: editgate::tests::a_non_zero_cargo_exit_is_never_reported_as_clean and ambient_colour_env_cannot_switch_the_gate_off both FAIL, asserting broken:true and getting broken:false. With the variable unset, 17/17 pass. Not caused by the merge - reproduced independently of it.
-
-Mechanism: scratch_crate (crates/condukt/src/editgate.rs:462) names every fixture the SAME package, eg_scratch 0.1.0. check_edit spawns cargo check with the ambient environment inherited, so under one shared target dir the three fixtures - two broken, one compiling - collide on package identity and cargo can answer fresh/exit 0 for a crate that does not compile. editgate then reports broken:false, fallback:false: an affirmative "I checked, it compiles" about code that does not. That is the exact defect the first test was written to pin, resurfacing through a different door.
-
-Two things to settle, and the second matters more than the first:
-1. the tests: give each fixture a unique package name, or pin CARGO_TARGET_DIR per fixture, so they measure editgate rather than cargo cache state.
-2. production: condukt worktrees are checkouts of the SAME repo, so they share package names by construction, and this repo documents a machine with an absolute target-dir override in .cargo/config.toml (see scripts/cap-target-dir.sh). Whether two worktrees sharing one target dir can make editgate pass a broken edit is UNMEASURED - do not assume it cannot. Measure it before closing.
-
-[triage 2026-09-29 @b325a169] p2->p1: editgate fixtures share eg_scratch name + inherited CARGO_TARGET_DIR -> broken:false on non-compiling crate"""
-created_at = 1785494779
-updated_at = 1790631016
-weight = 0.0
-issue_number = 106
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/106"
-
-[[task]]
 id = "5a4630a5"
 title = "gauge collapses the 5m/1h cache-write split (diagnostic only - the TTL is NOT selectable)"
 project = "/Users/yuki/src/harness"

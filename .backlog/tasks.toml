@@ -12006,3 +12006,57 @@ updated_at = 1790720692
 weight = 0.0
 issue_number = 893
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/893"
+
+[[task]]
+id = "dbfc112a"
+title = "blastguard: worktree 置き場の rm 許可が ~ や $HOME 指定の operand では効かない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = '873651b9 の検証（2026-09-30）で観測。rm -rf ~/.condukt/worktrees/x、$HOME/..、"$HOME"/.. はすべて DENY（変数 operand は fail-closed）。ユーザー裁定『worktree 置き場は無確認で許可』は、リテラルの絶対パスでしか実現していない。HOME を既知として先頭の ~/ と $HOME だけを展開するかどうかを検討する。他の変数は deny のままにする。'
+created_at = 1790720868
+updated_at = 1790720868
+weight = 0.0
+issue_number = 894
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/894"
+
+[[task]]
+id = "7271f6e3"
+title = "circuit check --session: 未テストの2経路（registry 読めない＋flag / 生きた claim＋flag）に RED 観測付きテストを足す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "04c3ca6f の検証（2026-09-30）で mutant 2つが生存した。(b) RegistryUnreadable を session 経路へ流す mutant と、(d) flag が生きた stateless claim を上書きする mutant。どちらも circuit.rs の doc は正しく書かれているが、それを縛るテストが無い。書くテストは2つ。1つ目は、registry が読めないときに flag を渡しても idle_unmeasured で trip すること。2つ目は、生きた claim があるときに flag を渡しても claim_registry 経路を通ること。テストは実装者以外が書く。"
+created_at = 1790721222
+updated_at = 1790721222
+weight = 0.0
+issue_number = 899
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/899"
+
+[[task]]
+id = "3487df07"
+title = "circuit check --session: '/' や '..' を含む session id を拒否する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "04c3ca6f の検証で観測。locate_session_transcript_in が entry.path().join(<sid>.jsonl) を使うため、--session ../x に --run flow-../x を組み合わせると projects 外の x.jsonl の mtime を読む。影響は呼び出し元自身の gate 判定に限られる。それでも '/' と '..' は判定不能として trip させる。"
+created_at = 1790721223
+updated_at = 1790721223
+weight = 0.0
+issue_number = 900
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/900"

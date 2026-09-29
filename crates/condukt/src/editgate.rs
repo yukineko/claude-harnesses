@@ -165,6 +165,20 @@ pub fn check_edit(file_path: &Path, worktree: Option<&Path>, required: bool) -> 
         // a user's cargo config can do the same locally) and it changes the
         // BYTES this function then parses.
         .env("CARGO_TERM_COLOR", "never")
+        // Pin the target dir to THIS checkout rather than inheriting it. An
+        // ambient `CARGO_TARGET_DIR` or an absolute `build.target-dir` in a
+        // cargo config (this repo documents one: scripts/cap-target-dir.sh)
+        // makes every worktree share one target dir. Worktrees of one repo have
+        // the same package names and the same workspace-relative paths, and
+        // cargo keys a path package's artifacts by that relative path and judges
+        // freshness by mtime — so it answered "fresh, exit 0" for a worktree
+        // whose edit did not compile, because a TWIN worktree had built newer
+        // artifacts under the same key. Measured, not assumed:
+        // `a_twin_checkout_sharing_a_target_dir_cannot_launder_a_broken_edit`
+        // saw `broken:false` for a non-compiling crate, 5 runs out of 5. A
+        // per-checkout target dir makes that key collision impossible; the cost
+        // is that this check does not reuse another worktree's cache.
+        .env("CARGO_TARGET_DIR", worktree.join("target"))
         .current_dir(worktree)
         .output()
     {
@@ -459,13 +473,26 @@ src/lib.rs:3:5: \x1b[1m\x1b[91merror[E0308]\x1b[0m: mismatched types
 
     /// Build a throwaway standalone crate and return its dir (kept alive by the
     /// returned TempDir).
+    ///
+    /// Each fixture gets its own package name. With one shared target dir
+    /// (ambient `CARGO_TARGET_DIR`), identically named fixtures — two broken,
+    /// one compiling — collided on cargo's artifact key and a broken fixture was
+    /// answered "fresh", so the tests measured cargo's cache state instead of
+    /// this gate. `check_edit` now isolates the target dir itself (see
+    /// `a_twin_checkout_sharing_a_target_dir_cannot_launder_a_broken_edit`);
+    /// unique names keep the fixtures independent of that fix as well.
     fn scratch_crate(lib_rs: &str) -> tempfile::TempDir {
+        static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let d = tempfile::tempdir().expect("tempdir");
         std::fs::create_dir_all(d.path().join("src")).unwrap();
         std::fs::write(
             d.path().join("Cargo.toml"),
-            "[package]\nname = \"eg_scratch\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
-[lib]\npath = \"src/lib.rs\"\n",
+            format!(
+                "[package]\nname = \"eg_scratch_{}_{n}\"\nversion = \"0.1.0\"\n\
+edition = \"2021\"\n\n[workspace]\n\n[lib]\npath = \"src/lib.rs\"\n",
+                std::process::id()
+            ),
         )
         .unwrap();
         std::fs::write(d.path().join("src").join("lib.rs"), lib_rs).unwrap();
@@ -523,6 +550,62 @@ src/lib.rs:3:5: \x1b[1m\x1b[91merror[E0308]\x1b[0m: mismatched types
         assert!(
             !diag.contains('\x1b'),
             "diagnostics must carry no colour codes"
+        );
+    }
+
+    /// Two checkouts of the SAME package (as every pair of condukt worktrees of
+    /// one repo is), sharing one target dir through an absolute `target-dir` in
+    /// a parent `.cargo/config.toml` — the machine-local override this repo
+    /// documents in `scripts/cap-target-dir.sh`.
+    ///
+    /// The broken checkout's edit happens BEFORE the other checkout's build
+    /// finishes, which is the ordinary parallel-worker case: the second
+    /// `cargo check` blocks on the shared target-dir lock, then runs. Cargo keys
+    /// a path package's artifacts by its path RELATIVE to the workspace root and
+    /// decides freshness by mtime, so it can find the good checkout's newer
+    /// dep-info and answer "fresh, exit 0" for the broken one. The gate must
+    /// still say broken.
+    #[test]
+    fn a_twin_checkout_sharing_a_target_dir_cannot_launder_a_broken_edit() {
+        let parent = tempfile::tempdir().expect("tempdir");
+        let shared = parent.path().join("shared-target");
+        std::fs::create_dir_all(parent.path().join(".cargo")).unwrap();
+        std::fs::write(
+            parent.path().join(".cargo").join("config.toml"),
+            format!("[build]\ntarget-dir = {:?}\n", shared.to_str().unwrap()),
+        )
+        .unwrap();
+        let mk = |name: &str, lib_rs: &str| {
+            let d = parent.path().join(name);
+            std::fs::create_dir_all(d.join("src")).unwrap();
+            std::fs::write(
+                d.join("Cargo.toml"),
+                "[package]\nname = \"eg_twin\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+[workspace]\n\n[lib]\npath = \"src/lib.rs\"\n",
+            )
+            .unwrap();
+            std::fs::write(d.join("src").join("lib.rs"), lib_rs).unwrap();
+            d
+        };
+        // The broken edit lands first ...
+        let broken = mk("wt-broken", "pub fn f() -> i32 { \"not an int\" }\n");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        // ... then the twin checkout builds (and compiles).
+        let good = mk("wt-good", "pub fn f() -> i32 { 1 }\n");
+        let g = check_edit(&good.join("src/lib.rs"), Some(&good), true);
+        assert_eq!(g["broken"], false, "the good twin compiles: {g}");
+
+        let out = check_edit(&broken.join("src/lib.rs"), Some(&broken), true);
+        assert_eq!(out["fallback"], false, "{out}");
+        assert_eq!(
+            out["broken"], true,
+            "a twin checkout's cached build must not make a non-compiling crate \
+             look clean: {out}"
+        );
+        assert_eq!(
+            crate::state::enforce_edit_gate(&out),
+            crate::state::EditGateDecision::Reject,
+            "{out}"
         );
     }
 

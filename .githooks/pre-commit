@@ -313,7 +313,8 @@ Remediation hints:
 is no longer silent, though: .githooks/post-commit records any commit whose tree
 this hook never certified, `git push` is blocked while such a commit is
 outstanding, and the record is cleared only by a run of this hook that goes
-green — i.e. by the content actually being inspected.
+green over a non-empty staged diff, and only for commits contained in the HEAD
+that run was judged against — i.e. by the content actually being inspected.
 EOF
     exit "$rc"
 fi
@@ -334,7 +335,8 @@ fi
 # Cost of the stricter form, stated rather than discovered later: `git commit
 # --amend` re-parents onto HEAD^, so the recorded HEAD is not among the new
 # commit's parents and the amend is recorded as ungated. That is a false
-# positive which fails CLOSED, and one green pre-commit clears it.
+# positive which fails CLOSED, and one green pre-commit over a non-empty staged
+# diff clears it (the amended commit is an ancestor of the HEAD it runs at).
 GIT_DIR_LOCAL="$(git rev-parse --git-dir 2>/dev/null)"
 GIT_DIR_COMMON="$(git rev-parse --git-common-dir 2>/dev/null)"
 if [ -n "${GIT_DIR_LOCAL:-}" ] && tree="$(git write-tree 2>/dev/null)"; then
@@ -342,14 +344,62 @@ if [ -n "${GIT_DIR_LOCAL:-}" ] && tree="$(git write-tree 2>/dev/null)"; then
     printf '%s %s\n' "$tree" "$head" > "$GIT_DIR_LOCAL/gate-verified-tree"
 fi
 
-# The gate just inspected this tree and found it clean, so any commit sitting in
-# the bypass ledger is now covered. Clearing here — and NOWHERE else — keeps the
-# clearing tied to an actual inspection: there is no command that just empties it.
+# The gate just inspected this tree and found it clean, so a commit sitting in
+# the bypass ledger is covered — but ONLY a commit this run could have seen.
+# Clearing here — and NOWHERE else — keeps the clearing tied to an actual
+# inspection: there is no command that just empties it.
+#
+# Two runs used to clear the whole (repo-wide, git-common-dir) ledger although
+# they inspected nothing that covers the entry (backlog c767cb47, ruled by the
+# repo owner to block exactly these two):
+#   1. an EMPTY staged diff — nothing was inspected (observed live 2026-09-24:
+#      "cleared 1 ungated commit(s)" with nothing staged). The whole ledger is
+#      kept.
+#   2. a run in a worktree whose HEAD does not contain the ungated commit — that
+#      content was never in the tree judged here. Per entry: an entry is cleared
+#      only when `git merge-base --is-ancestor <commit> HEAD` succeeds; every
+#      other entry, including one whose check errors (unknown object, no HEAD),
+#      is kept. Cannot-determine keeps the record (CLAUDE.md §3).
+# A failure to rewrite the ledger leaves it untouched (kept), never emptied.
 LEDGER="${GIT_DIR_COMMON:-}/gate-bypassed"
 if [ -n "${GIT_DIR_COMMON:-}" ] && [ -s "$LEDGER" ]; then
-    cleared="$(wc -l < "$LEDGER" 2>/dev/null | tr -d ' ')"
-    rm -f "$LEDGER"
-    echo "pre-commit: gates green — cleared $cleared ungated commit(s) from the bypass ledger." >&2
+    git diff --cached --quiet 2>/dev/null
+    staged_rc=$?
+    if [ "$staged_rc" -eq 0 ]; then
+        echo "pre-commit: gates green, but the staged diff is empty — nothing was inspected, so the bypass ledger is kept." >&2
+    elif [ "$staged_rc" -ne 1 ]; then
+        echo "pre-commit: could not read the staged diff (git diff --cached exited $staged_rc); the bypass ledger is kept." >&2
+    else
+        ledger_tmp="$LEDGER.tmp.$$"
+        cleared=0
+        kept=0
+        ledger_ok=1
+        : > "$ledger_tmp" 2>/dev/null || ledger_ok=0
+        if [ "$ledger_ok" -eq 1 ]; then
+            while IFS= read -r entry || [ -n "$entry" ]; do
+                [ -n "$entry" ] || continue
+                entry_sha="$(printf '%s\n' "$entry" | cut -f1)"
+                if [ -n "$entry_sha" ] && git merge-base --is-ancestor "$entry_sha" HEAD >/dev/null 2>&1; then
+                    cleared=$((cleared + 1))
+                else
+                    printf '%s\n' "$entry" >> "$ledger_tmp" || ledger_ok=0
+                    kept=$((kept + 1))
+                fi
+            done < "$LEDGER" || ledger_ok=0
+        fi
+        if [ "$ledger_ok" -ne 1 ]; then
+            rm -f "$ledger_tmp"
+            echo "pre-commit: could not rewrite the bypass ledger; it is kept unchanged." >&2
+        elif [ "$kept" -eq 0 ]; then
+            rm -f "$ledger_tmp" "$LEDGER"
+            echo "pre-commit: gates green — cleared $cleared ungated commit(s) from the bypass ledger." >&2
+        elif mv -f "$ledger_tmp" "$LEDGER"; then
+            echo "pre-commit: gates green — cleared $cleared ungated commit(s) from the bypass ledger; kept $kept not contained in this HEAD." >&2
+        else
+            rm -f "$ledger_tmp"
+            echo "pre-commit: could not rewrite the bypass ledger; it is kept unchanged." >&2
+        fi
+    fi
 fi
 
 exit 0

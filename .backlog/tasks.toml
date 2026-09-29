@@ -12194,3 +12194,21 @@ updated_at = 1790720891
 weight = 0.0
 issue_number = 898
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/898"
+
+[[task]]
+id = "befcfe06"
+title = "blastguard: cd の後の相対 rm で、確認画面に実際と違う削除先を出す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "873651b9 の修正中（2026-09-30）に観測した。一時ディレクトリなど削除が安全な置き場の中で 'cd <root>/s & rm -rf src' や、失敗する cd の後に相対パスの rm を書く。confined Ask は削除先を <root>/s/src と表示するが、実際に消えるのは <cwd>/src。原因は detect_bash の cwd walk（Ctx::base_for）で、どの区切りでも cd が成功してそのまま次の区切りに効くと仮定している。今は Allow にはならないが、人が承認する対象を取り違える。"
+created_at = 1790723957
+updated_at = 1790723957
+weight = 0.0
+issue_number = 901
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/901"

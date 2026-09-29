@@ -22540,3 +22540,20 @@ updated_at = 1790720243
 weight = 0.0
 issue_number = 136
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/136"
+
+[[task]]
+id = "491f6e94"
+title = "harness が session ごとに .harness-worktrees/session-<id> を作って回収しない (実測 2026-08-04: worktree 34件・session-* branch 21本・残置dir 22個が蓄積、うち13件はmerged+cleanで即削除可能だった)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "impl-ready",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 491f6e94 --status pending"
+created_at = 1785824135
+updated_at = 1790722710
+weight = 0.0

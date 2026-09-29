@@ -11980,3 +11980,18 @@ updated_at = 1790719841
 weight = 0.0
 issue_number = 888
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/888"
+
+[[task]]
+id = "57a98a8f"
+title = "backlog merge-driver --install が版付きプラグインキャッシュのパス (…/backlog/<ver>/bin/…) を git config に焼き込み、旧版ディレクトリの回収で driver が消える"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-09-30: --install wrote /Users/yuki/.claude/plugins/cache/yukineko/backlog/0.3.12/bin/backlog-darwin-arm64 (this session's pinned, superseded version) into merge.backlog.driver. Reset by hand to the bare command: backlog merge-driver %O %A %B. A bare command fails (reported as a conflict, fail-closed) in shells where backlog is not on PATH."
+created_at = 1790719902
+updated_at = 1790719902
+weight = 0.0
+issue_number = 889
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/889"

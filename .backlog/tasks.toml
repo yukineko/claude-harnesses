@@ -11935,3 +11935,48 @@ updated_at = 1790719344
 weight = 0.0
 issue_number = 880
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/880"
+
+[[task]]
+id = "c6b74ed8"
+title = "overwatch --to-backlog は disposition 済み (dismissed / false-positive) の finding も backlog に起票する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Found 2026-09-30 by the 7c27050b implementer. bridge.rs calls build_queue directly, so the new disposition filter does not apply. docs/DESIGN-continuous-audit-triage.md lines 40 and 116 record an agreement not to make record-disposition a pre-gate for the bridge. Needs a ruling on whether a finding dismissed before bridging should still be filed."
+created_at = 1790719793
+updated_at = 1790719793
+weight = 0.0
+issue_number = 886
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/886"
+
+[[task]]
+id = "27cf0081"
+title = "overwatch main.rs の ReconcileFixed help が『unreadable store は 0 processed に縮退』と書くが reconcile.rs は exit 3 — 散文と実挙動の不一致の疑い"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Noticed 2026-09-30 by the 7c27050b implementer, not verified. Also store::compact_review_findings (around store.rs:1603) uses best-effort read_dispositions, and its report does not say when the ledger was unreadable."
+created_at = 1790719795
+updated_at = 1790719795
+weight = 0.0
+issue_number = 887
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/887"
+
+[[task]]
+id = "3672737c"
+title = "rust-toolchain.toml で 1.97.1 固定後、クロスビルド target (x86_64-apple-darwin / x86_64-unknown-linux-gnu / wasm32) が未導入"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Found 2026-09-30 after 42a30a26. The pinned toolchain has only aarch64-apple-darwin. scripts/build-plugin-bin.sh <p> <target> now needs rustup target add --toolchain 1.97.1 <target>. Rollout builds only the host target and is unaffected."
+created_at = 1790719841
+updated_at = 1790719841
+weight = 0.0
+issue_number = 888
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/888"

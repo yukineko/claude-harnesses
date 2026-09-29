@@ -11988,3 +11988,63 @@ updated_at = 1790720274
 weight = 0.0
 issue_number = 890
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/890"
+
+[[task]]
+id = "fc56ed9c"
+title = "condukt editgate が block を返す判定を持ちながら run_hook 経由で panic を握り潰し常に exit 0"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "491f6e94 の実装 agent が報告 (2026-09-30)。CLAUDE.md 1 節: 判定を持つ hook は run_guarded へ。editgate が block 判定を返すことと run_hook を通ることを確認のうえ移行する。"
+created_at = 1790720886
+updated_at = 1790720886
+weight = 0.0
+issue_number = 895
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/895"
+
+[[task]]
+id = "0f0425d5"
+title = "condukt の diffrisk_record every_invocation_is_journaled テストが並列実行で間欠的に落ちる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "2026-09-30 の cargo test -p condukt 全体実行で 1 回失敗 (one record per invocation, left 1 right 2)。直後の全体実行と単独 3 回は通過。共有状態の競合の疑い、未検証。"
+created_at = 1790720888
+updated_at = 1790720888
+weight = 0.0
+issue_number = 896
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/896"
+
+[[task]]
+id = "eea7c61f"
+title = "condukt worktree reap が session-* ブランチを残すため、ブランチが溜まり続ける"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "491f6e94 の裁定は worktree の除去のみ。merge 済みブランチの扱いは未裁定。"
+created_at = 1790720889
+updated_at = 1790720889
+weight = 0.0
+issue_number = 897
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/897"
+
+[[task]]
+id = "3a0ceb58"
+title = "hook payload の cwd が Bash の cd に追従するか未観測 (session-heartbeat の cwd 一致判定)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "491f6e94 の heartbeat は session_id 一致でも更新するので自セッションの worktree は覆われるが、cwd 一致経路が実際に効くかは観測していない。"
+created_at = 1790720891
+updated_at = 1790720891
+weight = 0.0
+issue_number = 898
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/898"

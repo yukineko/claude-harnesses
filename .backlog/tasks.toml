@@ -11839,3 +11839,18 @@ updated_at = 1790678420
 weight = 0.0
 issue_number = 862
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/862"
+
+[[task]]
+id = "4b6f4aba"
+title = "overwatch status が TTL 切れリースを黙って捨てて Sessions を (none) と表示する — heartbeat が止まっただけの生存セッションと『誰もいない』を区別できない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-09-29 21:50 JST at main 3c051eb1: leases.json holds 2 leases of session 34385c9e with heartbeat_at 1790678195 (19:36, 2h14m old, over LEASE_TTL_SECS 1800); overwatch status prints Sessions (none). reap_stale in store.rs drops them before rendering. Reading (a) correct by design: TTL means dead. Reading (b) fail-open: a live session that simply stopped heartbeating is rendered as nobody working. Distinguish by checking whether session 34385c9e still has a live transcript. Related to p0 1426e7b4, which this does NOT reproduce (those leases were reported live)."
+created_at = 1790686249
+updated_at = 1790686249
+weight = 0.0
+issue_number = 863
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/863"

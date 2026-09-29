@@ -32,7 +32,7 @@ python3 scripts/census-verdict-terminals.py propguard
 数字は継承せず毎回測り直す）。本監査時点の 39 サイトは以下のとおり:
 
 ```
-config.rs:34   parse                        _ => Mode::Inject,
+config.rs:-    parse                        (F-3 修正済み: 未知値は Subprocess + 警告)
 config.rs:365  disabled_env                 .unwrap_or(false)
 gate.rs:94     checkable_files              inc...unwrap_or(true)
 gate.rs:95     checkable_files              && !exc...unwrap_or(false)
@@ -221,7 +221,7 @@ diff は空文字列になり、`evaluate` が `allow("empty-diff", st)` を返�
 propguard 側だけを直すのは「片側ミラーだけ直す」既知のアンチパターンなので、
 reviewgate 側は別クレート・別 version bump が要るため本コミットでは触っていない。
 
-### F-3（起票 3ca750b9・未修正）— `mode` の綴り間違いが独立検査を黙って自己申告へ降格させる
+### F-3（起票 3ca750b9・修正済み: 未知値は Subprocess + 警告）— `mode` の綴り間違いが独立検査を黙って自己申告へ降格させる
 
 `Mode::parse` の `_ => Mode::Inject` は、認識できない mode 文字列をすべて `Inject` に写す。
 `Inject` は「1回 block してチェックリストを注入し、同じ diff を次ラウンドは信頼する」
@@ -261,8 +261,8 @@ boundary が正しく `Undetermined` を返し、テストが `expected Known` �
   `diff_text_of_an_undecodable_diff_is_undetermined_not_empty` /
   `diff_text_with_one_unreadable_subcommand_is_undetermined_not_a_partial_diff` /
   `diff_text_with_an_unreadable_untracked_scan_is_undetermined_not_an_empty_diff` が
-  この経路を固定している）。**F-3 は今も未修正**である（`crates/propguard/src/config.rs:34`
-  の `_ => Mode::Inject` は現存。同日再測定）。「後で見る」ではなく、証拠付きで backlog に載っている。
+  この経路を固定している）。**F-3 は 3ca750b9 で修正済み**である（`Mode::parse_checked` は未知値を
+  より厳しい `Subprocess` へ倒し、値を名指しする警告を stderr に出す）。
 - CLAUDE.md 第2節(a) の逸脱: テストは修正と同じ agent が書いた（本セッションの system prompt が
   Agent 起動を禁じるため）。RED の先行観測と反空虚対照で代償したが、生成と検証が盲点を共有する
   リスクは残る。独立再監査を推奨する。

@@ -34,10 +34,28 @@ pub enum Mode {
 }
 
 impl Mode {
-    fn parse(s: &str) -> Mode {
+    /// Parse a configured mode. An unrecognised value resolves to
+    /// `Subprocess`, NOT `Inject`, and returns a diagnostic naming the value.
+    ///
+    /// Why Subprocess (CLAUDE.md sec.3, "cannot determine" -> restrictive side):
+    /// `Inject` trusts the agent's own self-report after one block, while
+    /// `Subprocess` runs an independent checker and, if that checker is
+    /// unavailable, blocks fail-closed (bounded by `max_attempts`, see
+    /// `gate::decide_from_count`). A typo such as `subproces` must therefore not
+    /// silently downgrade the gate to self-report (audit F-3); the loud failure
+    /// mode is a visible `checker-unavailable` block plus the diagnostic below.
+    fn parse_checked(s: &str) -> (Mode, Option<String>) {
         match s.trim().to_ascii_lowercase().as_str() {
-            "subprocess" | "checker" | "independent" => Mode::Subprocess,
-            _ => Mode::Inject,
+            "subprocess" | "checker" | "independent" => (Mode::Subprocess, None),
+            "inject" => (Mode::Inject, None),
+            _ => (
+                Mode::Subprocess,
+                Some(format!(
+                    "propguard: WARNING unknown mode {s:?} in config — expected \"inject\" or \
+                     \"subprocess\"; resolving to the stricter \"subprocess\" (independent \
+                     checker) rather than silently downgrading to \"inject\". Fix `mode`."
+                )),
+            ),
         }
     }
     pub fn as_str(&self) -> &'static str {
@@ -283,7 +301,11 @@ impl Config {
             self.enabled = v;
         }
         if let Some(v) = fc.mode {
-            self.mode = Mode::parse(&v);
+            let (mode, diag) = Mode::parse_checked(&v);
+            if let Some(d) = diag {
+                eprintln!("{d}");
+            }
+            self.mode = mode;
         }
         if let Some(v) = fc.min_properties {
             self.min_properties = v;
@@ -388,6 +410,45 @@ impl Config {
 #[allow(clippy::panic)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unknown_mode_resolves_to_stricter_subprocess() {
+        let mut cfg = Config::default();
+        cfg.apply(FileConfig {
+            mode: Some("subproces".to_string()),
+            ..FileConfig::default()
+        });
+        assert_eq!(
+            cfg.mode,
+            Mode::Subprocess,
+            "an unrecognised mode must resolve to the stricter independent check"
+        );
+    }
+
+    #[test]
+    fn known_modes_parse_without_diagnostic() {
+        for (s, m) in [
+            ("inject", Mode::Inject),
+            ("subprocess", Mode::Subprocess),
+            (" Checker ", Mode::Subprocess),
+            ("independent", Mode::Subprocess),
+        ] {
+            let (got, diag) = Mode::parse_checked(s);
+            assert_eq!(got, m, "{s:?}");
+            assert!(diag.is_none(), "{s:?} is known, must not warn");
+        }
+    }
+
+    #[test]
+    fn unknown_mode_diagnostic_names_the_bad_value() {
+        let (m, diag) = Mode::parse_checked("subproces");
+        assert_eq!(m, Mode::Subprocess);
+        let d = diag.expect("unknown mode must produce a diagnostic");
+        assert!(
+            d.contains("subproces"),
+            "diagnostic must name the value: {d}"
+        );
+    }
 
     #[test]
     fn threshold_is_clamped_to_property_cap() {

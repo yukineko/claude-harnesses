@@ -11914,3 +11914,21 @@ updated_at = 1790719344
 weight = 0.0
 issue_number = 880
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/880"
+
+[[task]]
+id = "873651b9"
+title = "blastguard: worktree 置き場の内側への rm -r を無確認で許可する（ユーザー裁定）"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "ユーザー裁定 2026-09-30:「worktreeへの削除を制限しているhookを排除して」→ AskUserQuestion で「worktree 置き場は無確認で許可」を選択。対象は ~/.condukt/worktrees と <repo 親>/.harness-worktrees の strict descendant。置き場そのもの・protected path（.git / gate config）の削除は従来どおり deny。symlink 脱出・.. 脱出は Inside にならない。発端: subagent が /Users/yuki/.condukt/worktrees/pgv-target を rm -rf できず、recursive rm deny（crates/blastguard/src/detect.rs analyze_rm）に止められた。"
+created_at = 1790719503
+updated_at = 1790719503
+weight = 0.0
+issue_number = 884
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/884"

@@ -790,9 +790,11 @@ status = "pending"
 notes = """
 Measurement half of 5b33b4cd, split out because it cannot be satisfied by shipping — it needs two real Continuous-Audit rounds run under the new rules. Shipped in 0558db6f (overwatch 0.2.15, deployed and live-verified): audit-round record refuses regression_tests_added < confirmed, continuous-audit.sh stops on it via run_ow_gate, SKILL.md Step 3.5 mirror sweep is mandatory. What remains is purely observation: run two rounds and check audit-metrics reports converging:true both times. Baseline to beat, from the ledger that motivated the item: new_findings 5,1,13,0,14,15 with converging:false and round 2026W29 at confirmed:10 / regression_tests_added:0. Caveat when reading the result: closure_rate is now an acceptance precondition and will read 1.0 for every new round, so it carries no signal — judge convergence ONLY by the new_findings trend, which is what is_converging actually uses. A rise in new_findings is not automatically failure either: Step 3.5 is expected to surface twins that previously went unharvested, so an early round may legitimately go UP before it comes down.
 
-USER RULING 2026-09-24: run 3+ real Continuous-Audit rounds under the DEFAULT window (no --window 2, no goal redefinition). Each round closes every CONFIRMED with a regression test before record. Record from the MAIN repo root (ledger is keyed by cwd; a worktree cwd writes a different ledger). Round 2026W39 (new=25, confirmed=19, unverified=6, tests=19) is the first of the series; converging still NO."""
+USER RULING 2026-09-24: run 3+ real Continuous-Audit rounds under the DEFAULT window (no --window 2, no goal redefinition). Each round closes every CONFIRMED with a regression test before record. Record from the MAIN repo root (ledger is keyed by cwd; a worktree cwd writes a different ledger). Round 2026W39 (new=25, confirmed=19, unverified=6, tests=19) is the first of the series; converging still NO.
+
+【計測 2026-09-29 @8ddf4504】overwatch audit-metrics: rounds 7。直近 3 ラウンド = 2026W29 (new=14, closure=0.00) / 2026W29b (new=15, closure=1.00) / 2026W39 (new=25, confirmed=19, unverified=6, tests=19, closure=1.00)。converging (last 3 rounds): NO。新規 finding は減っておらず増加。closure=1.00 は 5b33b4cd のルール (tests >= confirmed) と整合するが、完了条件の「2 ラウンド連続 converging:true」は未達。次の Continuous-Audit ラウンド後に再計測する。"""
 created_at = 1785341708
-updated_at = 1790184608
+updated_at = 1790678246
 weight = 0.0
 issue_number = 94
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/94"
@@ -3404,21 +3406,6 @@ touched_files = []
 status = "pending"
 notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 7e824e70 --status pending"
 created_at = 1785310502
-updated_at = 1787120517
-weight = 0.0
-
-[[task]]
-id = "6803bd45"
-title = "mutategate/fetchguard が ~/.claude/settings.json の enabledPlugins に未登録 — 事故か意図かユーザーに確認する"
-project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-2026-07-30 実測: jq で ~/.claude/settings.json の enabledPlugins を確認したところ fetchguard@yukineko / taintguard@yukineko / mutategate@yukineko の3つが ABSENT。taintguard 分は既存項目 e4687aad が、fetchguard 分は a9ff687e がカバーするので、本項目は mutategate と『そもそも意図的に無効化されているのか』の判断部分に限る。意図なら a9ff687e / e4687aad の前提も崩れる。
-除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 6803bd45 --status pending"""
-created_at = 1785377000
 updated_at = 1787120517
 weight = 0.0
 
@@ -11063,9 +11050,11 @@ Two distinct defects here, both attribution:
 
 Consequence chain worth naming: when a gate blocks a session that has no way to comply honestly, the only remaining exit is the skip mechanism. That is structural pressure toward the fail-open that CLAUDE.md 5 is trying to make rare. The gate is not wrong to be fail-closed; it is wrong about WHOSE work it is judging.
 
-Related in-flight: 4b94e371 (false reds from intra-binary test parallelism) is the same theme from a different angle, both make reds less trustworthy and so train the habit of not reading reds. 【救出 2026-09-29】元 id 537a9efe。session-59faffee の未マージ/未コミットの tasks.toml にだけ存在していたため、ブランチ・worktree 整理の前に再起票した。notes 中の関連 id は元 id のまま。"""
+Related in-flight: 4b94e371 (false reds from intra-binary test parallelism) is the same theme from a different angle, both make reds less trustworthy and so train the habit of not reading reds. 【救出 2026-09-29】元 id 537a9efe。session-59faffee の未マージ/未コミットの tasks.toml にだけ存在していたため、ブランチ・worktree 整理の前に再起票した。notes 中の関連 id は元 id のまま。
+
+【再観測 2026-09-29 19:4x】session-34385c9e の Stop で stop-verify-worktree.py が block。main の dirty は UU .backlog/tasks.toml のみで、.git/MERGE_HEAD=82992c23 (MERGE_MSG「Merge origin/main」、19:39:03 作成) は別セッションの進行中 merge。このセッションは main に未コミット変更を持っていない。帰属のバグ (CLAUDE.md 8 末尾) の実例。"""
 created_at = 1790634571
-updated_at = 1790634571
+updated_at = 1790678367
 weight = 0.0
 issue_number = 818
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/818"
@@ -11788,6 +11777,24 @@ updated_at = 1790678180
 weight = 0.0
 issue_number = 860
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/860"
+
+[[task]]
+id = "63e6b4ac"
+title = "rollout-plugins.sh --dry-run が verify_rollout_complete を走らせ、canary-dryrun.sh が常に drift で落ちる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "rollout",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "2026-09-29 観測 (0796137b の作業中、branch flow-34385c9e/canary-bsd cdd4aeb4)。BSD 移植後の canary-dryrun.sh は stat と fingerprint を通過したあと、rollout-plugins.sh --canary --dry-run 自体が exit 1 で落ちる。出力は 'ROLLOUT DRIFT (42 problem(s) across 41 plugins checked)' と 'rollout: FAILED — drift remains'。原因候補: rollout-plugins.sh:1327 / 1400 の verify_rollout_complete が dry=1 でも実行され、2 件だけの一時 registry に対して check-plugin-rollout.py が drift を見つける。読み (a): dry-run では verify を skip すべき script のバグ。読み (b): テスト側の registry 構成の不整合。見分け方: dry=1 で verify を skip して canary-dryrun.sh が green になるかを確かめる。skip が fail-open にならないかも確認すること。"
+created_at = 1790678380
+updated_at = 1790678380
+weight = 0.0
+issue_number = 861
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/861"
 
 [[task]]
 id = "400d685b"

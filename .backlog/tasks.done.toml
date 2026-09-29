@@ -22339,3 +22339,22 @@ updated_at = 1790718922
 weight = 0.0
 issue_number = 714
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/714"
+
+[[task]]
+id = "8aeb4cab"
+title = "plugin launcher が per-platform バイナリ欠落時に fail-OPEN する (blastguard だけ fail-closed で非対称)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "plugin-rollout",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+実測 (2026-08-03, linux-x86_64): バイナリ欠落時、blastguard の launcher だけは permissionDecision:ask + 'NOT evaluated / UNCHECKED, not approved' を stdout に出して fail-CLOSED する。一方 budgetguard / propguard / stuckguard / overwatch / autoflow / harness-status / playbook / runbook / session-insights / ship の launcher は stderr にメッセージを出すだけで exit 0 = hook 的には「異常なし」= ガードが無音で外れる。propguard / stuckguard / overwatch は check-plugin-rollout.py 自身が GATE crate として分類しているのに fail-open。condukt も同様で、condukt state autonomy-check の exit 0 が偽の「自律モード」として読まれ、/flow が human gate を自答し始める寸前だった (exit 1 = 非自律 が正)。対応方針: blastguard/bin/blastguard の launcher が既に持っている fail-closed パターンを全 plugin の launcher に横展開する。特に exit code の意味が「許可」に倒れる hook (PreToolUse/Stop) では絶対に exit 0 で抜けないこと。
+除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 8aeb4cab --status pending"""
+created_at = 1785740425
+updated_at = 1790719274
+weight = 0.0

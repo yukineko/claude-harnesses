@@ -3383,25 +3383,6 @@ updated_at = 1787120517
 weight = 0.0
 
 [[task]]
-id = "8aeb4cab"
-title = "plugin launcher が per-platform バイナリ欠落時に fail-OPEN する (blastguard だけ fail-closed で非対称)"
-project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "plugin-rollout",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-実測 (2026-08-03, linux-x86_64): バイナリ欠落時、blastguard の launcher だけは permissionDecision:ask + 'NOT evaluated / UNCHECKED, not approved' を stdout に出して fail-CLOSED する。一方 budgetguard / propguard / stuckguard / overwatch / autoflow / harness-status / playbook / runbook / session-insights / ship の launcher は stderr にメッセージを出すだけで exit 0 = hook 的には「異常なし」= ガードが無音で外れる。propguard / stuckguard / overwatch は check-plugin-rollout.py 自身が GATE crate として分類しているのに fail-open。condukt も同様で、condukt state autonomy-check の exit 0 が偽の「自律モード」として読まれ、/flow が human gate を自答し始める寸前だった (exit 1 = 非自律 が正)。対応方針: blastguard/bin/blastguard の launcher が既に持っている fail-closed パターンを全 plugin の launcher に横展開する。特に exit code の意味が「許可」に倒れる hook (PreToolUse/Stop) では絶対に exit 0 で抜けないこと。
-除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 8aeb4cab --status pending"""
-created_at = 1785740425
-updated_at = 1787120517
-weight = 0.0
-
-[[task]]
 id = "352d2bf6"
 title = "overwatch の mirror 不一致が構造的に再発する: build-plugin-bin.sh は 'cargo build -p <crate>' で crates/*/bin/ に stage、rebuild-plugins.sh は 'cargo build --workspace --bins' で cache に配置し、同一 source から異なるバイト列 (md5/size 相違を実測) を生むため check-plugin-rollout.py の file-for-file 比較が必ず落ちる。どちらかの build 経路に寄せる"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
@@ -11841,3 +11822,18 @@ updated_at = 1790687716
 weight = 0.0
 issue_number = 866
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/866"
+
+[[task]]
+id = "f81a8197"
+title = "launcher-missing-binary-failclosed.sh にバイナリが存在する場合の対照ケースが無い — 常に失敗する launcher でも green になる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Found 2026-09-30 while verifying 8aeb4cab at main abcd4f2e. The test only runs launchers with the per-platform binary absent. Add a control where <name>-<os>-<arch> is a fake executable that echoes its args and exits 0, then assert the launcher execs it and passes args and exit code through. Only darwin-arm64 branches are exercised on this host."
+created_at = 1790719274
+updated_at = 1790719274
+weight = 0.0
+issue_number = 873
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/873"

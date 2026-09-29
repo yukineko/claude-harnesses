@@ -3322,23 +3322,6 @@ updated_at = 1787120517
 weight = 0.0
 
 [[task]]
-id = "491f6e94"
-title = "harness が session ごとに .harness-worktrees/session-<id> を作って回収しない (実測 2026-08-04: worktree 34件・session-* branch 21本・残置dir 22個が蓄積、うち13件はmerged+cleanで即削除可能だった)"
-project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = [
-    "worktree-hygiene",
-    "impl-ready",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 491f6e94 --status pending"
-created_at = 1785824135
-updated_at = 1787120517
-weight = 0.0
-
-[[task]]
 id = "0d6ac50b"
 title = "condukt state set --status verified が worktree 削除後の run を永久に閉じられない (F→P oracle が cwd 消失で必ず fail)"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"

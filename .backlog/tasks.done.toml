@@ -22422,3 +22422,60 @@ updated_at = 1790718922
 weight = 0.0
 issue_number = 714
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/714"
+
+[[task]]
+id = "63e6b4ac"
+title = "rollout-plugins.sh --dry-run が verify_rollout_complete を走らせ、canary-dryrun.sh が常に drift で落ちる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "rollout",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "2026-09-29 観測 (0796137b の作業中、branch flow-34385c9e/canary-bsd cdd4aeb4)。BSD 移植後の canary-dryrun.sh は stat と fingerprint を通過したあと、rollout-plugins.sh --canary --dry-run 自体が exit 1 で落ちる。出力は 'ROLLOUT DRIFT (42 problem(s) across 41 plugins checked)' と 'rollout: FAILED — drift remains'。原因候補: rollout-plugins.sh:1327 / 1400 の verify_rollout_complete が dry=1 でも実行され、2 件だけの一時 registry に対して check-plugin-rollout.py が drift を見つける。読み (a): dry-run では verify を skip すべき script のバグ。読み (b): テスト側の registry 構成の不整合。見分け方: dry=1 で verify を skip して canary-dryrun.sh が green になるかを確かめる。skip が fail-open にならないかも確認すること。"
+created_at = 1790678380
+updated_at = 1790719253
+weight = 0.0
+issue_number = 861
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/861"
+
+[[task]]
+id = "3ca750b9"
+title = "propguard: mode の綴り間違いが Subprocess を無診断で Inject へ降格させる (Mode::parse の catchall が沈黙)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+Mode::parse の _ => Mode::Inject が未知の mode 文字列を全て Inject に写す。Inject は trust-after-one-block で Subprocess の独立検査より弱いので、typo が独立検査を自己申告へ黙って降格させる。安全側の既定自体は妥当で、問題は沈黙。announce 1行で足りる。docs/audit-propguard-verdict-paths.md の F-3。
+
+[triage 2026-09-29 @b325a169] p2->p1: propguard config.rs:40 unknown mode silently downgrades gate strength to Inject; one-line fix"""
+created_at = 1785798117
+updated_at = 1790719254
+weight = 0.0
+issue_number = 122
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/122"
+
+[[task]]
+id = "0796137b"
+title = "canary テスト2本 (canary-dryrun.sh / canary-rollback.sh) が GNU coreutils 依存で macOS BSD 環境では実行できない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "rollout",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+f029190c の真の残渣を分離して起票 (f029190c 自体は health gate 側が 01695cc0 / commit 6302d166 で解決したため close)。実測 2026-07-29 測定点 6302d166、当機は bash 3.2 + BSD coreutils。scripts/tests/canary-dryrun.sh は stat のダッシュ c オプションを使い illegal option でこける。scripts/tests/canary-rollback.sh は find のダッシュ printf を使い同様。両方とも rc=1 になるが、これは canary ロジックの失敗ではなく環境差異。修正前後で同じ落ち方をすることは 6302d166 の作業時に確認済み。canary-gate-crates.sh と canary-gate-eval-failclosed.sh と canary-final-stage-gate.sh は当機で rc=0。/ 完了条件: 2本が macOS BSD 環境でも実行できるよう移植されるか、GNU 依存であることを明示して skip する仕組みを持つ。黙って落ちる状態を解消する。
+
+[triage 2026-09-29 @b325a169] p2->p1: canary tests hash find -printf 2>/dev/null output; on BSD both sides hash empty -> vacuous pass"""
+created_at = 1785280078
+updated_at = 1790719255
+weight = 0.0
+issue_number = 89
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/89"

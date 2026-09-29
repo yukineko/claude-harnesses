@@ -744,27 +744,6 @@ issue_number = 87
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/87"
 
 [[task]]
-id = "0796137b"
-title = "canary テスト2本 (canary-dryrun.sh / canary-rollback.sh) が GNU coreutils 依存で macOS BSD 環境では実行できない"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "rollout",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-f029190c の真の残渣を分離して起票 (f029190c 自体は health gate 側が 01695cc0 / commit 6302d166 で解決したため close)。実測 2026-07-29 測定点 6302d166、当機は bash 3.2 + BSD coreutils。scripts/tests/canary-dryrun.sh は stat のダッシュ c オプションを使い illegal option でこける。scripts/tests/canary-rollback.sh は find のダッシュ printf を使い同様。両方とも rc=1 になるが、これは canary ロジックの失敗ではなく環境差異。修正前後で同じ落ち方をすることは 6302d166 の作業時に確認済み。canary-gate-crates.sh と canary-gate-eval-failclosed.sh と canary-final-stage-gate.sh は当機で rc=0。/ 完了条件: 2本が macOS BSD 環境でも実行できるよう移植されるか、GNU 依存であることを明示して skip する仕組みを持つ。黙って落ちる状態を解消する。
-
-[triage 2026-09-29 @b325a169] p2->p1: canary tests hash find -printf 2>/dev/null output; on BSD both sides hash empty -> vacuous pass"""
-created_at = 1785280078
-updated_at = 1790631015
-weight = 0.0
-issue_number = 89
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/89"
-
-[[task]]
 id = "d34715d8"
 title = "overwatch audit-round record: store-write failure prints recorded:false and exits 0 (empty-set-reads-as-clean)"
 project = "/Users/yuki/src/harness"
@@ -1055,24 +1034,6 @@ updated_at = 1785634523
 weight = 0.0
 issue_number = 117
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/117"
-
-[[task]]
-id = "3ca750b9"
-title = "propguard: mode の綴り間違いが Subprocess を無診断で Inject へ降格させる (Mode::parse の catchall が沈黙)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-Mode::parse の _ => Mode::Inject が未知の mode 文字列を全て Inject に写す。Inject は trust-after-one-block で Subprocess の独立検査より弱いので、typo が独立検査を自己申告へ黙って降格させる。安全側の既定自体は妥当で、問題は沈黙。announce 1行で足りる。docs/audit-propguard-verdict-paths.md の F-3。
-
-[triage 2026-09-29 @b325a169] p2->p1: propguard config.rs:40 unknown mode silently downgrades gate strength to Inject; one-line fix"""
-created_at = 1785798117
-updated_at = 1790631015
-weight = 0.0
-issue_number = 122
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/122"
 
 [[task]]
 id = "3a8e3b73"
@@ -11649,24 +11610,6 @@ issue_number = 860
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/860"
 
 [[task]]
-id = "63e6b4ac"
-title = "rollout-plugins.sh --dry-run が verify_rollout_complete を走らせ、canary-dryrun.sh が常に drift で落ちる"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "rollout",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "2026-09-29 観測 (0796137b の作業中、branch flow-34385c9e/canary-bsd cdd4aeb4)。BSD 移植後の canary-dryrun.sh は stat と fingerprint を通過したあと、rollout-plugins.sh --canary --dry-run 自体が exit 1 で落ちる。出力は 'ROLLOUT DRIFT (42 problem(s) across 41 plugins checked)' と 'rollout: FAILED — drift remains'。原因候補: rollout-plugins.sh:1327 / 1400 の verify_rollout_complete が dry=1 でも実行され、2 件だけの一時 registry に対して check-plugin-rollout.py が drift を見つける。読み (a): dry-run では verify を skip すべき script のバグ。読み (b): テスト側の registry 構成の不整合。見分け方: dry=1 で verify を skip して canary-dryrun.sh が green になるかを確かめる。skip が fail-open にならないかも確認すること。"
-created_at = 1790678380
-updated_at = 1790678380
-weight = 0.0
-issue_number = 861
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/861"
-
-[[task]]
 id = "400d685b"
 title = ".githooks/pre-push の enablement 助言文が、未観測の hook 挙動を断定したまま残っている (2ae5503f の修正漏れ)"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
@@ -11848,3 +11791,108 @@ updated_at = 1790718955
 weight = 0.0
 issue_number = 872
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/872"
+
+[[task]]
+id = "3b790fdb"
+title = "reviewgate の config で未知の値が既定値に倒れる（propguard F-3 と同型）"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "propguard 3ca750b9 の verifier が指摘。crates/reviewgate/src/config.rs:29-30 に、propguard の Mode::parse と同じ「解釈できない設定値を黙って既定値に写す」fail-open がある疑い。propguard は config-invalid block で修正済み（99be994c）。同型の修正を検討する。"
+created_at = 1790719282
+updated_at = 1790719282
+weight = 0.0
+issue_number = 874
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/874"
+
+[[task]]
+id = "b127826e"
+title = "propguard status が不正な mode のとき効いていない既定 mode を表示する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "3ca750b9 の verifier が観測。mode=subproces のとき propguard status は 'mode: inject' と表示し、stderr に unknown mode を出すだけ。config-invalid の block 理由は propguard status を見るよう誘導しているので、status が config-invalid を明示すべき。あわせて docs/audit-propguard-verdict-paths.md F-3 に残る「Inject は Subprocess より弱い」の古い段落と、waiver が CLAUDE_CODE_SESSION_ID を必要とする旨を整理する。"
+created_at = 1790719283
+updated_at = 1790719283
+weight = 0.0
+issue_number = 875
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/875"
+
+[[task]]
+id = "01dc2dca"
+title = "rollout の verify が checker 欠落（python exit 2）を enablement 所見と取り違え成功扱いする"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "63e6b4ac の verifier が sandbox の実 rollout で観測。scripts/rollout-plugins.sh の verify_rollout_complete は rc 0/1 以外を『rollout では直せない所見・非致命』として通す。python の『スクリプトが無い/引数不正』も exit 2 で、checker 自身の『plugin not enabled』exit 2 と区別できない。結果、check-plugin-rollout.py が無い状態でも done. で rc=0 になる。checker 側の exit code を固有値に分離するか、実行前に存在を確認して欠落を fail-closed にする。"
+created_at = 1790719285
+updated_at = 1790719285
+weight = 0.0
+issue_number = 876
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/876"
+
+[[task]]
+id = "d4b85e63"
+title = "rollout の dry-run canary-gate 呼び出しが || true で失敗を隠し、常に would PROCEED と表示する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "63e6b4ac の verifier が指摘。scripts/rollout-plugins.sh の dry-run 経路（旧 1138 行付近）: overwatch canary-gate ... | sed ... || true の直後に必ず '[dry-run] gate would PROCEED' を出す。canary-gate が crash しても dry-run は proceed と報告する。"
+created_at = 1790719286
+updated_at = 1790719286
+weight = 0.0
+issue_number = 877
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/877"
+
+[[task]]
+id = "92e1a0e1"
+title = "rollout の prune 失敗が最終 exit code に反映されない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "63e6b4ac の verifier が観測。prune_stale_versions は || rc=$? で rc を捕まえて stderr に 'prune: exited N ... (kept)' と出すだけで常に 0 を返し、canary 経路・通常経路の呼び出し側も status を見ない。古い版 dir が消せなかった事実が rc に出ない。意図的な非致命なら verify 側で drift として必ず赤になるかを確認し、ならないなら反映させる。"
+created_at = 1790719288
+updated_at = 1790719288
+weight = 0.0
+issue_number = 878
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/878"
+
+[[task]]
+id = "761cf58d"
+title = "rollout --canary が空の plan で PLAN_ROWS[@]: unbound variable により abort する（bash 3.2）"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "63e6b4ac の verifier が観測。marketplace に source 無しの entry だけのとき --canary が set -u の空配列展開で rc=1。fail-closed ではあるが、原因不明のエラーメッセージになる。明示的な『plan が空』メッセージにする。"
+created_at = 1790719289
+updated_at = 1790719289
+weight = 0.0
+issue_number = 879
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/879"

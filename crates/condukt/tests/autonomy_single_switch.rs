@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Black-box tests for the proposed SHARED autonomy switch (backlog 9976b845).
 //!
 //! Today condukt/ctxrot/autoflow each own an independent autonomy signal (see

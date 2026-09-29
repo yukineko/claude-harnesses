@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! End-to-end coverage for the fugu-router learning-signal wiring: `condukt
 //! state set --agent-id/--route-basis/...` followed by `condukt state
 //! record-run --all` must produce a REAL `fugu-router` episode

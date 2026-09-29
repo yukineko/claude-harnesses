@@ -193,9 +193,16 @@ fn git_output_to_result(
             timeout
         );
     }
-    let status = out
-        .status
-        .expect("status is Some when not timed_out (run_git_bounded invariant)");
+    // `status` is None only when the child was killed on timeout, which is
+    // handled above. If that invariant ever breaks, the outcome is unknown, so
+    // it is an error (fail closed), never a success.
+    let Some(status) = out.status else {
+        bail!(
+            "git {:?} in {} reported no exit status without timing out; outcome undetermined",
+            args,
+            dir.display()
+        );
+    };
     if !status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         let stdout = String::from_utf8_lossy(&out.stdout);
@@ -750,9 +757,16 @@ fn git_try(dir: &Path, args: &[&str]) -> Result<(bool, String, String)> {
             ),
         ));
     }
-    let status = out
-        .status
-        .expect("status is Some when not timed_out (run_git_bounded invariant)");
+    // `status` is None only when the child was killed on timeout, which is
+    // handled above. If that invariant ever breaks, the outcome is unknown, so
+    // it is an error (fail closed), never a success.
+    let Some(status) = out.status else {
+        bail!(
+            "git {:?} in {} reported no exit status without timing out; outcome undetermined",
+            args,
+            dir.display()
+        );
+    };
     Ok((
         status.success(),
         String::from_utf8_lossy(&out.stdout).trim().to_string(),
@@ -830,17 +844,39 @@ fn hold_placed_by_live_run(cfg: &Config, repo: &Path, run_id: &str, now: i64) ->
 
 /// Look up an OPEN runtime-overlap merge-hold for `branch` in the overwatch
 /// review surface (decision A). Returns the hold's `conflict_id` when the branch
-/// is held BY A STILL-LIVE holder run. Fail-soft: any read error / absent store
-/// degrades to "no hold" (never blocks a merge on a compute error).
+/// is held BY A STILL-LIVE holder run.
+///
+/// **Fail CLOSED on an unreadable store (backlog 617b3112).** An ABSENT ledger
+/// is a clean "no hold" (`Ok(None)`), but a ledger that exists and cannot be read
+/// in full (IO error, undecodable rows) — or a store path that cannot be resolved
+/// at all — is cannot-determine and returns `Err`, so [`merge`] refuses before
+/// any checkout. Reading it as "no hold" would let a HELD branch merge unnoticed.
+/// The read goes through the tri-state [`overwatch::store::scan_open_merge_conflicts`];
+/// an unreadable RESOLUTION ledger alone is not an error there (every entry is
+/// then treated as open, which can only over-hold, never under-hold).
 ///
 /// Authority is filtered by holder-run LIVENESS, not branch-name match alone
 /// (see [`hold_placed_by_live_run`]): a stale hold from a DEAD condukt run does
 /// not block a task that reuses the branch name, while a hold from a LIVE run
 /// still blocks.
-fn open_runtime_overlap_hold(cfg: &Config, repo: &Path, branch: &str) -> Option<String> {
-    let open = overwatch::store::open_merge_conflicts(repo).ok()?;
+fn open_runtime_overlap_hold(cfg: &Config, repo: &Path, branch: &str) -> Result<Option<String>> {
+    let scan = overwatch::store::scan_open_merge_conflicts(repo).with_context(|| {
+        format!(
+            "could not determine whether '{branch}' is held for review: overwatch \
+             merge-conflict store unreadable; refusing to merge"
+        )
+    })?;
+    let open = match scan.open {
+        Determination::Known(open) => open,
+        Determination::Undetermined(why) => bail!(
+            "could not determine whether '{branch}' is held for review: overwatch \
+             merge-conflict ledger undetermined ({}); refusing to merge",
+            why.as_str()
+        ),
+    };
     let now = crate::state::now_secs();
-    open.into_iter()
+    Ok(open
+        .into_iter()
         .find(|e| {
             e.branch == branch
                 && matches!(
@@ -849,7 +885,7 @@ fn open_runtime_overlap_hold(cfg: &Config, repo: &Path, branch: &str) -> Option<
                 )
                 && hold_placed_by_live_run(cfg, repo, &e.run_id, now)
         })
-        .map(|e| e.conflict_id)
+        .map(|e| e.conflict_id))
 }
 
 /// Parse the unique conflicted paths out of `git ls-files --unmerged` output
@@ -948,8 +984,10 @@ pub fn merge(
 
     // ── Pre-merge hold gate (decision A) ─────────────────────────────────────
     // A detected mid-flight actual-diff overlap HOLDS this branch for review.
-    // Do not merge until it is resolved (the resolution clears the hold).
-    if let Some(conflict_id) = open_runtime_overlap_hold(cfg, repo, branch) {
+    // Do not merge until it is resolved (the resolution clears the hold). An
+    // unreadable hold store is cannot-determine and REFUSES (`?`) before any
+    // checkout, like the lock and branch-resolution checks above.
+    if let Some(conflict_id) = open_runtime_overlap_hold(cfg, repo, branch)? {
         return Ok(MergeOutcome::Held(conflict_id));
     }
 
@@ -1280,6 +1318,46 @@ mod worktree_remove_tests {
         );
 
         // The file should now exist on main
+        assert!(repo.join("feat.txt").exists());
+    }
+
+    /// backlog 617b3112: an overwatch merge-conflict ledger that cannot be READ
+    /// (here: the ledger path is a directory, so the read fails with a non-NotFound
+    /// IO error) is cannot-determine, not "no hold". The merge gate must resolve it
+    /// to the restrictive side: `merge()` must NOT report `Merged` and must NOT
+    /// integrate the branch.
+    #[test]
+    fn worktree_merge_unreadable_overwatch_store_does_not_proceed() {
+        let (tmp, repo) = init_repo();
+        make_branch(&repo, "feat-unreadable", "feat.txt", "feature content\n");
+        let cfg = test_cfg(&repo);
+        let home = tmp.path().join("home-unreadable");
+        fs::create_dir_all(&home).unwrap();
+        let result = with_home(&home, || {
+            let ledger = overwatch::store::merge_conflicts_path(&repo).expect("ledger path");
+            fs::create_dir_all(&ledger).expect("make the ledger path an unreadable directory");
+            merge(&cfg, &repo, "feat-unreadable", "main")
+        });
+        assert!(
+            !matches!(result, Ok(MergeOutcome::Merged)),
+            "an unreadable overwatch store must block/ask, not let the merge through; got {result:?}"
+        );
+        assert!(
+            !repo.join("feat.txt").exists(),
+            "the branch must not have been integrated while the hold state is undeterminable"
+        );
+    }
+
+    /// Control for 617b3112: a readable (absent) store with no conflicts proceeds.
+    #[test]
+    fn worktree_merge_readable_empty_overwatch_store_proceeds() {
+        let (tmp, repo) = init_repo();
+        make_branch(&repo, "feat-readable", "feat.txt", "feature content\n");
+        let cfg = test_cfg(&repo);
+        let home = tmp.path().join("home-readable");
+        fs::create_dir_all(&home).unwrap();
+        let result = with_home(&home, || merge(&cfg, &repo, "feat-readable", "main"));
+        assert_eq!(result.expect("clean merge"), MergeOutcome::Merged);
         assert!(repo.join("feat.txt").exists());
     }
 

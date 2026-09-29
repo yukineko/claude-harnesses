@@ -446,7 +446,7 @@ pub fn decide_replan(
             // Replan classification: check the cap.
             if replan_count < MAX_REPLANS {
                 // Within cap: build the handoff and emit Directive::Replan.
-                let handoff = build_replan_handoff(
+                let handoff = match build_replan_handoff(
                     reason,
                     failed_tests,
                     diff,
@@ -454,8 +454,29 @@ pub fn decide_replan(
                     done_criteria,
                     task_summary,
                     scope_mismatch,
-                )
-                .expect("classification is Replan, so handoff should succeed");
+                ) {
+                    Ok(handoff) => handoff,
+                    Err(disagreeing) => {
+                        // The two classifications of the same input disagree:
+                        // the right directive cannot be determined, so hand the
+                        // task to the user (the most restrictive directive)
+                        // rather than guessing a replan or a model escalation.
+                        let user_escalation = format!(
+                            "internal inconsistency: this failure classified as Replan, but \
+                             building the replan handoff re-classified it as {:?}. The next \
+                             step cannot be determined, so the task is escalated to the user.",
+                            disagreeing.resolution
+                        );
+                        return ReplanDirective {
+                            directive: Directive::EscalateToUser,
+                            classification,
+                            handoff: None,
+                            replan_count,
+                            cap: MAX_REPLANS,
+                            user_escalation: Some(user_escalation),
+                        };
+                    }
+                };
 
                 ReplanDirective {
                     directive: Directive::Replan,

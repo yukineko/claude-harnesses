@@ -2732,11 +2732,31 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
-        let recorded = with_home(tmp.path(), || {
+        let scan = with_home(tmp.path(), || {
             emit_audit_findings(&repo, &[]);
-            overwatch::store::read_review_findings(&repo).unwrap_or_default()
+            overwatch::store::scan_review_findings(&repo)
         });
+        let recorded = recorded_review_findings(scan);
         assert!(recorded.is_empty(), "{recorded:?}");
+    }
+
+    /// The store read behind the "nothing was recorded" assertions in this
+    /// module. It goes through the TRI-STATE scan on purpose:
+    /// `read_review_findings` is best-effort (an unreadable file or an
+    /// undecodable line comes back as an empty `Vec`), and folding its `Err`
+    /// with `unwrap_or_default()` made these assertions unfalsifiable — a store
+    /// the test could not read satisfied `is_empty()` exactly like a store that
+    /// was never written (backlog 6de70510). `Undetermined` must fail the test.
+    fn recorded_review_findings(
+        scan: overwatch::store::ReviewFindingScan,
+    ) -> Vec<overwatch::review_finding::ReviewFinding> {
+        match scan {
+            overwatch::store::ReviewFindingScan::Absent => Vec::new(),
+            overwatch::store::ReviewFindingScan::Findings(recorded) => recorded,
+            overwatch::store::ReviewFindingScan::Undetermined(why) => {
+                panic!("review store could not be read, so 'nothing recorded' is unproven: {why}")
+            }
+        }
     }
 
     // -- the sentinel's covered findings, and their disposition on ack --------
@@ -2907,14 +2927,12 @@ mod tests {
         let repo = tmp.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
         let parsed = vec![shard("logging", false, false, "")];
-        let (covers, recorded) = with_home(tmp.path(), || {
+        let (covers, scan) = with_home(tmp.path(), || {
             let c = emit_drift_findings(&repo, "r.md", &parsed);
-            (
-                c,
-                overwatch::store::read_review_findings(&repo).unwrap_or_default(),
-            )
+            (c, overwatch::store::scan_review_findings(&repo))
         });
         assert!(covers.is_empty(), "{covers:?}");
+        let recorded = recorded_review_findings(scan);
         assert!(recorded.is_empty(), "{recorded:?}");
     }
 
@@ -3057,12 +3075,17 @@ mod tests {
 
         let (code, dispositions) = with_home(tmp.path(), || {
             let c = ack(&paths, &repo, false, None).unwrap();
-            (
-                c,
-                overwatch::store::read_dispositions(&repo).unwrap_or_default(),
-            )
+            (c, overwatch::store::scan_dispositions(&repo))
         });
         assert_eq!(code, EXIT_OK);
+        // Tri-state read (backlog 6de70510): `read_dispositions(..)
+        // .unwrap_or_default()` let an unreadable ledger satisfy `is_empty()`.
+        let dispositions = match dispositions.expect("dispositions path must resolve") {
+            harness_core::verdict::Determination::Known(d) => d,
+            harness_core::verdict::Determination::Undetermined(why) => panic!(
+                "dispositions ledger could not be read, so 'nothing recorded' is unproven: {why}"
+            ),
+        };
         assert!(dispositions.is_empty(), "{dispositions:?}");
         assert!(!paths.sentinel.exists());
     }

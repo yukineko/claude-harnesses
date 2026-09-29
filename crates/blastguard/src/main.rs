@@ -4,17 +4,12 @@
 //! blastguard — a Claude Code PreToolUse hook that denies project-destroying
 //! Bash commands and file operations.
 //!
-//! Contract (shared by every plugin in this repo): a hook must NEVER break the
-//! user's turn. We read the tool call from stdin, decide allow/deny/ask with a
+//! Contract: we read the tool call from stdin, decide allow/deny/ask with a
 //! pure function, and — on anything but an allow — print the single-line
-//! PreToolUse JSON. We always exit 0.
-//!
-//! Two things that look alike but are NOT the same, and whose conflation was a
-//! defect here:
-//!
-//!   * "never break the turn" = never crash the session — REQUIRED, and kept.
-//!   * "never block the command" = allow even when undecided — NOT required,
-//!     and was the bug.
+//! PreToolUse JSON and exit 0. blastguard is a GATE: it has a verdict, so the
+//! repo-wide "a hook must never break the turn" rule does not apply to it
+//! (CLAUDE.md §1). A block is not a broken turn, and "could not decide" is
+//! resolved to the blocking side, never to silence.
 //!
 //! A silent exit 0 with no output IS an allow. So the previous contract ("on
 //! any panic we stay silent and exit 0") meant that a panic anywhere in the
@@ -23,7 +18,17 @@
 //! only, not index-out-of-bounds, non-char-boundary string slicing, arithmetic
 //! overflow or unwrap-on-None. So the analysis now runs inside
 //! `std::panic::catch_unwind` and a caught panic becomes a DENY, which is a
-//! normal, non-breaking outcome.
+//! normal outcome.
+//!
+//! That barrier covers `analyse` only. Everything else on the verdict path —
+//! reading stdin, parsing, the approval-memory lookup, printing the decision —
+//! used to run under `harness_core::hook::run_hook`, whose barrier logs the
+//! panic and exits 0: an allow (backlog 70883137). Measured: with stdout
+//! closed, `println!` of a DENY panicked with EPIPE and the process exited 0.
+//! The verdict path now runs under [`run_verdict_guarded`], where a panic
+//! anywhere exits 2 — the PreToolUse blocking exit — with the panic message on
+//! stderr. Exit 2 is used rather than a JSON deny because the panic may be IN
+//! the stdout write; the exit code is the one channel that still works.
 //!
 //! # What is still a silent allow, and what stopped being one
 //!
@@ -87,10 +92,57 @@ fn main() {
             _ => {}
         }
     }
-    // never-break-a-turn: always exit 0. Panics inside the ANALYSIS are caught
-    // by `run` itself and turned into a deny; `run_hook`'s own catch remains the
-    // outer backstop for anything outside that scope (stdin read, JSON print).
-    hook::run_hook(run);
+    // The verdict path. Panics inside the ANALYSIS are caught by `analyse`
+    // and turned into a deny; a panic anywhere else on this path (stdin read,
+    // parse, approval memory, the decision print) is caught here and BLOCKS
+    // (exit 2). See `run_verdict_guarded`.
+    run_verdict_guarded(run);
+}
+
+/// Run the PreToolUse verdict path under a FAIL-CLOSED panic barrier.
+///
+/// `harness_core::gate::run::run_guarded` is the Stop-hook form of this and
+/// does not fit here: it answers a panic with a `{"decision":"block"}` line on
+/// stdout, which is the Stop protocol (PreToolUse reads
+/// `hookSpecificOutput.permissionDecision`), and it bounds the block with
+/// `stop_hook_active`, which a PreToolUse payload does not carry. More
+/// basically, stdout can be the thing that panicked (EPIPE on the decision
+/// print), so no stdout-based answer is reliable. PreToolUse's exit code 2 is:
+/// Claude Code blocks the tool call and shows stderr to the model.
+///
+/// No bounded-allow counterpart is needed: a blocked tool call does not trap
+/// the session the way a blocked Stop does — the model sees the error and can
+/// do something else.
+fn run_verdict_guarded<F: FnOnce()>(body: F) -> ! {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
+    exit(verdict_exit_code(outcome))
+}
+
+/// Pure core of [`run_verdict_guarded`]: 0 when the verdict path completed
+/// (its decision, if any, is already on stdout), 2 when it panicked. The panic
+/// message goes to stderr; the default panic hook has printed it too, but this
+/// line names the consequence. A failed stderr write is ignored because the
+/// exit code, not the message, carries the block.
+fn verdict_exit_code(outcome: std::thread::Result<()>) -> i32 {
+    match outcome {
+        Ok(()) => 0,
+        Err(payload) => {
+            let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+                (*s).to_string()
+            } else if let Some(s) = payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "(non-string panic payload)".to_string()
+            };
+            use std::io::Write as _;
+            let _ = writeln!(
+                std::io::stderr(),
+                "blastguard: internal error (panic) on the verdict path: {msg} — the tool \
+                 call was not judged, so it is BLOCKED (exit 2), not allowed"
+            );
+            2
+        }
+    }
 }
 
 /// Parsed form of `blastguard retro`'s CLI arguments.
@@ -261,8 +313,10 @@ drifted from what Claude Code sends and needs updating.";
 /// promised the telemetry "must never change the decision, the printed JSON, or
 /// the exit code" — but `let _ =` only neutralises the store write RETURNING an
 /// error, not any of the event-construction steps PANICKING. A panic there
-/// unwinds past this function into `hook::run_hook`, which logs and exits 0
-/// with nothing on stdout, and a silent exit 0 IS an allow. So a crash in
+/// unwound past this function into `hook::run_hook`, which logged and exited 0
+/// with nothing on stdout, and a silent exit 0 IS an allow. (The outer barrier
+/// is now [`run_verdict_guarded`], which blocks on a panic; printing first is
+/// still what keeps telemetry from overriding the verdict it observes.) So a crash in
 /// purely additive telemetry could suppress a deny it was merely observing.
 ///
 /// I could not find a panic reachable in that path today — `rule_id` is
@@ -384,9 +438,9 @@ fn repeat_fingerprint(input: &HookInput, reason: &str) -> String {
 ///
 /// A panic here used to be swallowed into a silent exit 0, and a silent exit 0
 /// IS an allow — so any crash in the analyser allowed the command it had just
-/// failed to analyse. Catching it and returning a deny keeps the never-break-
-/// the-turn contract (a deny is a normal outcome, not a broken turn) while
-/// removing the fail-open.
+/// failed to analyse. Catching it and returning a deny turns the crash into an
+/// ordinary, attributable verdict (a deny with the internal-error reason)
+/// instead of a fail-open.
 ///
 /// `catch_unwind` is sound here because the closure borrows only `input` and the
 /// detector holds no cross-call mutable state that a half-finished analysis
@@ -400,7 +454,7 @@ fn analyse(input: &HookInput) -> Decision {
     // catch_unwind whose job is to convert an ANALYSIS crash into a deny.
     // `safe_roots` itself cannot panic — every fallible step is an
     // `Option`/`Result` resolved to the restrictive side — and if it somehow
-    // did, `hook::run_hook`'s outer barrier still catches it.
+    // did, `run_verdict_guarded`'s outer barrier blocks the call (exit 2).
     let scope = safe_roots(input);
     let result =
         std::panic::catch_unwind(move || detect::detect_scoped(&tool, tool_input.as_ref(), &scope));
@@ -844,8 +898,26 @@ fn probe_directory(root: &std::path::Path) -> harness_core::verdict::Determinati
 }
 
 #[cfg(test)]
+#[allow(clippy::panic)]
 mod tests {
     use super::*;
+
+    /// 70883137: ANY panic on the verdict path resolves to the blocking exit,
+    /// not only the EPIPE one the integration test can induce from outside.
+    #[test]
+    fn a_panic_on_the_verdict_path_maps_to_the_blocking_exit() {
+        let str_panic = std::panic::catch_unwind(|| panic!("boom"));
+        assert_eq!(verdict_exit_code(str_panic.map(|_: ()| ())), 2);
+        let string_panic = std::panic::catch_unwind(|| panic!("{}", String::from("boom")));
+        assert_eq!(verdict_exit_code(string_panic.map(|_: ()| ())), 2);
+        let index_panic = std::panic::catch_unwind(|| {
+            let v: Vec<u8> = Vec::new();
+            let i = v.len() + 1;
+            let _ = v[i];
+        });
+        assert_eq!(verdict_exit_code(index_panic), 2);
+        assert_eq!(verdict_exit_code(Ok(())), 0);
+    }
 
     #[test]
     fn rule_id_alone_implies_listing_mode() {

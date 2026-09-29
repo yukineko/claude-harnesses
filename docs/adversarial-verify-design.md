@@ -90,8 +90,12 @@ exit code 契約(consensus と同型): `adjudicate` は **pass=0 / block・escal
 ## LLM オーケストレーションの継ぎ目(SKILL 側・未配線)
 
 `/condukt` の Phase 6(verifier)で `plan` を叩き、engage なら単一 verifier の代わりに
-**N 体の独立 skeptic subagent を(できれば別モデルで)起動**して「既定 REFUTED。コード上の
-根拠で反証できたら Refute、崩せなければ Pass」を返させ、その票を `adjudicate` に流す。
+**N 体の独立 skeptic subagent を(できれば別モデルで)起動**して「既定は abstain(判定不能)。
+done_criteria 違反をコード上の逐語引用と経路で立証できたら Refute、全 done_criteria を満たすことを
+同水準の逐語引用と経路追跡で立証できたら Pass、どちらも示せなければ abstain」を返させ、その票を
+`adjudicate` に流す。abstain は実効票から外れるため、実効票が `min_voters` 未満なら block に倒れる。
+(旧版は「既定 REFUTED。…崩せなければ Pass」だった — 「崩せなかった」を「問題なし」に写す形で、
+CLAUDE.md §6「反証にも同じ立証責任を課す」により撤回。)
 これは `/overwatch:continuous-audit` の finder→refute-verifier→多数決と同じ思想の、
 **完了判定への内製化**版。
 

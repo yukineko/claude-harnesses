@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Regression coverage for backlog `d83b0e8f`: condukt's cross-session
 //! task-claim registry (`crate::claim`) keys its on-disk store by
 //! `project_key(repo_root(cwd))`. `harness_core::projkey::repo_root` treats

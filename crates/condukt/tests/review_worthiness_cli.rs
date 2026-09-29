@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! End-to-end coverage for `condukt review-worthiness` in its primary,
 //! hermetic flag-driven mode: no git repo, no state dir, no `HOME`
 //! isolation needed — the whole computation is a pure function of the CLI

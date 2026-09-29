@@ -30,7 +30,7 @@ Phase 5.5「Self-consistency 合意形成」（580〜621行目）が同型のfan
    PLAN=$(condukt adversarial plan --touched <changed_file_1> --touched <changed_file_2> ...)
    ```
    exit 0（engage）なら以下のパネル手順へ、exit 1なら**現行の単一verifier手順をそのまま実行**（既存パスは変更しない）。
-2. engage時、`PLAN.size`（N）体の独立skeptic subagentを、Phase 5.5の`samples`個の候補実装と同じ流儀で**1メッセージ内に並列Task起動**する。各Taskのdescriptionは`"<t.id>-skeptic<k>"`のような形式。プロンプトは「既定REFUTED。コード上の具体的根拠で反証できたらrefute、崩せなければpass、判断不能ならabstain」を指示し、`{"skeptic":"<id>","ballot":"refute|pass|abstain","reason":"..."}`のJSONを返させる。
+2. engage時、`PLAN.size`（N）体の独立skeptic subagentを、Phase 5.5の`samples`個の候補実装と同じ流儀で**1メッセージ内に並列Task起動**する。各Taskのdescriptionは`"<t.id>-skeptic<k>"`のような形式。プロンプトは「既定はabstain（判定不能）。done_criteria違反をコード上の逐語引用と経路で立証できたらrefute、全done_criteriaを満たすことを同水準の逐語引用と経路追跡で立証できたらpass、どちらも示せなければabstain」を指示し（旧版の「既定REFUTED。…崩せなければpass」はCLAUDE.md §6により撤回。「崩せなかった」は判定不能であって合格ではない）、`{"skeptic":"<id>","ballot":"refute|pass|abstain","reason":"..."}`のJSONを返させる。
 3. N件のJSONを配列にまとめ、`condukt adversarial adjudicate`にstdin経由で渡す。exit 0（pass）なら`condukt state set --status verified`、exit 1で`outcome=block`なら`--status failed`、`outcome=escalate`なら人間/上位レビューへ引き渡す既存の経路（condukt自体のblocked/GATEDタスク滞留の仕組み、または`overwatch review-queue`の`[escalation]`ストリーム）に接続する。
 
 ### 未確定点（実装前に決める）

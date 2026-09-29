@@ -1171,19 +1171,16 @@ class KnownDefects(GateTestCase):
                     proc.returncode, 2, "%r must be refused" % command
                 )
 
-    def test_DEFECT_deny_hook_misses_an_interpreter_wrapper(self):
-        """DEFECT (severity: medium) — the half of the old nested-shell defect
-        that 5453b4bc did NOT fix, kept separate so the fixed half cannot
-        certify it.
+    def test_FIXED_deny_hook_sees_through_an_interpreter_wrapper(self):
+        """FIXED (backlog 2cef09c5) — formerly
+        test_DEFECT_deny_hook_misses_an_interpreter_wrapper, which pinned
+        `returncode == 0` (allowed) for these forms.
 
-        `is_bypass` inspects argv[0] of each segment.  An interpreter takes the
-        whole command as a single quoted ARGUMENT, so `git` is never argv[0] and
-        the segment is dismissed.  Confirmed reaching real git.
-
-        Not fatal on its own — the ledger still records the resulting commit —
-        but the module docstring used to claim this hook refuses the bypass
-        "outright", and for these forms it does not.  The docstring now names
-        this hole explicitly instead.
+        `is_bypass` used to inspect only argv[0] of each segment.  An
+        interpreter takes the whole command as a single quoted ARGUMENT, so
+        `git` was never argv[0] and the segment was dismissed.  Confirmed
+        reaching real git.  The `-c` script / `eval` argument is now re-split
+        and judged like a top-level command, so these are refused.
         """
         for command in (
             "bash -c 'git commit --no-verify -m x'",
@@ -1193,7 +1190,7 @@ class KnownDefects(GateTestCase):
             with self.subTest(command=command):
                 proc = self._deny_hook(command)
                 self.assertEqual(
-                    proc.returncode, 0, "DEFECT PINNED: %r is allowed" % command
+                    proc.returncode, 2, "%r must be refused" % command
                 )
 
     def test_DEFECT_documented_status_flag_does_not_exist(self):
@@ -1888,13 +1885,17 @@ class KnownDefectsDenyNoVerify(DenyNoVerify):
         self.assertDenied("cargo test\ngit commit --no-verify -m x")
 
 
-    def test_DEFECT_deny_hook_misses_an_interpreter_wrapper_or_prefix(self):
-        """DEFECT (severity: HIGH) — named in the module docstring as open.
+    def test_FIXED_deny_hook_sees_through_an_interpreter_wrapper_or_prefix(self):
+        """FIXED (backlog 2cef09c5) — formerly
+        test_DEFECT_deny_hook_misses_an_interpreter_wrapper_or_prefix, which
+        pinned `returncode == 0` (allowed) for every form below.
 
-        `is_bypass` inspects argv[0] of each segment.  An interpreter takes the
-        command as a single quoted ARGUMENT; a prefix command puts its own name
-        in argv[0].  Either way `git` is argv[N>0] and the segment is dismissed.
-        All confirmed reaching real git.
+        `is_bypass` used to inspect only argv[0] of each segment.  An
+        interpreter takes the command as a single quoted ARGUMENT; a prefix
+        command puts its own name in argv[0]; a compound form puts a shell
+        keyword there.  Either way `git` was argv[N>0] and the segment was
+        dismissed.  All confirmed reaching real git.  Now each is looked
+        through and refused.
 
         The subshell family `( … )` / `$( … )` / `case … )` was the half of this
         that 5453bc4 DID close; it is asserted green in
@@ -1914,13 +1915,7 @@ class KnownDefectsDenyNoVerify(DenyNoVerify):
             "for i in 1; do git commit --no-verify -m ok; done",
         ):
             with self.subTest(command=command):
-                proc = self.bash(command)
-                self.assertEqual(
-                    proc.returncode,
-                    0,
-                    "DEFECT PINNED: %r. When fixed this must become "
-                    "assertDenied." % command,
-                )
+                self.assertDenied(command)
 
 
 
@@ -1943,8 +1938,10 @@ class KnownDefectsDenyNoVerify(DenyNoVerify):
 
         Is it fixable at this layer?  PARTLY, and the argument is worth stating
         because it is not obvious.  A heredoc body is only executable when its
-        consumer is an interpreter (`sh <<EOF`), and interpreter wrappers are
-        ALREADY an open hole pinned above.  So dropping heredoc bodies — tokens
+        consumer is an interpreter (`sh <<EOF`), and an interpreter reading its
+        script from stdin is ALREADY an open hole (deny-no-verify.py's module
+        docstring; `-c` wrappers were closed by 2cef09c5, stdin was not).  So
+        dropping heredoc bodies — tokens
         between `<<DELIM` and `DELIM` — loses no coverage this hook currently
         has, and removes this false positive.  What is NOT fixable here is the
         general case: `$(…)` bodies genuinely are executable, so prose and code

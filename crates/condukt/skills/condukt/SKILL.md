@@ -762,9 +762,13 @@ PLAN_EXIT=$?
    `"<t.id>-skeptic<k>"`。モデルは `condukt state skeptic-model --worker "<worker_model>"
    --index <k>` で決定論的に解決する（worker とは異なる tier を保証し、複数 skeptic がいる
    場合は残り tier に分散させる）。
-2. 各 skeptic のプロンプトは「既定 REFUTED。done_criteria と実装差分を読み、コード上の
-   具体的根拠で反証できたら refute、崩せなければ pass、判断不能なら abstain」を指示し、
-   `{"skeptic":"<id>","ballot":"refute|pass|abstain","reason":"..."}` の JSON のみを返させる。
+2. 各 skeptic のプロンプトは次を指示する（既定は abstain ＝ 判定不能）: 「done_criteria と実装差分を読み、
+   done_criteria 違反をコード上の逐語引用 (file:line) と経路で立証できたら refute、全 done_criteria を
+   満たすことを同水準の逐語引用と経路追跡で立証できたら pass、どちらも示せなければ abstain」。
+   「崩せなかった」「反例を辿れなかった」は判定不能であって合格ではない（CLAUDE.md §6「反証にも同じ
+   立証責任を課す」）。abstain は実効票から外れ、実効票が `min_voters` 未満なら adjudicate は block に倒す。
+   返させるのは
+   `{"skeptic":"<id>","ballot":"refute|pass|abstain","reason":"..."}` の JSON のみ。
    **ballot を返さなかった skeptic (crash・timeout・沈黙) は配列に入れない** — その欠落は
    次の `--expected` が検出する。
 3. 集めた JSON 配列を `condukt adversarial adjudicate` に stdin 経由で渡す。`--expected` には

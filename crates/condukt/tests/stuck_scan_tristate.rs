@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Black-box coverage for the tri-valued stuck scan (backlog `b637936f`).
 //!
 //! `state.rs::stuck_task_ids` filters Running tasks with

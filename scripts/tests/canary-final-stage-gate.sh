@@ -162,7 +162,7 @@ pass "did NOT reach run_rebuild_and_sync after the rollback halt"
 # Case B: TWO STAGES, gate healthy for stage 0 and rc=3 for the FINAL stage.
 # Before the fix the final stage was never gated, so the run completed
 # successfully. Expected now: 2 gate invocations, the final stage rolled back,
-# exit 4, and the already-passed stage 0 left applied (rollback is per-stage).
+# exit 4, and the already-passed stage 0 rolled back as well (its dir was never rebuilt; ba5794b3).
 # =============================================================================
 echo
 echo ">>> case B: 2-stage canary, gate healthy for stage 0 and rc=3 for the FINAL stage — expect rollback, exit 4"
@@ -194,8 +194,8 @@ pass "halted at the final stage (stage 1)"
   || fail "case B: final-stage plugin $PLUGIN_C was NOT rolled back to prior"
 pass "the final stage was rolled back to prior"
 [ "$(reg_field "${PLUGIN_A}@yukineko" version)" = "0.0.1-prior" ] \
-  && fail "case B: stage 0 (which passed its gate) was also rolled back — rollback must be per-stage"
-pass "stage 0 (gate-passed) left applied — rollback stayed scoped to the failing stage"
+  || fail "case B: stage 0 (gate-passed, but never rebuilt) was left repointed at a dir with no host binary (dark, ba5794b3)"
+pass "stage 0 was rolled back too — a halted canary leaves no stage repointed before the rebuild"
 grep -q "rebuild: skipped (--no-rebuild)" <<<"$OUT_B" \
   && fail "case B: reached run_rebuild_and_sync after a ROLLBACK halt"
 pass "did NOT reach run_rebuild_and_sync after the final-stage rollback halt"

@@ -254,9 +254,13 @@ pub fn has_rationale(commit_body: &str) -> bool {
 /// Pure (compiles a fresh, statically-correct regex per call — this is a
 /// low-frequency CLI-boundary check, not a hot loop).
 pub fn has_task_link(commit_message: &str) -> bool {
-    let re = regex::Regex::new(r"(?i)backlog[\s:#/-]*[0-9a-z]{4,}|\brun-[0-9]{8}")
-        .expect("static task-link regex is valid");
-    re.is_match(commit_message)
+    // If the pattern ever fails to compile, the link cannot be established, so
+    // answer `false` (no task link). That is the restrictive side: an absent
+    // link ADDS the review-worthiness penalty rather than removing it.
+    match regex::Regex::new(r"(?i)backlog[\s:#/-]*[0-9a-z]{4,}|\brun-[0-9]{8}") {
+        Ok(re) => re.is_match(commit_message),
+        Err(_) => false,
+    }
 }
 
 #[cfg(test)]

@@ -411,8 +411,12 @@ backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drive
 9. **着手前に claim する（TOCTOU の最終ガード）** — 選んだタスク（バッチなら各 item）について:
    ```bash
    condukt state claim-task --run "flow-$CLAUDE_CODE_SESSION_ID" --session "$CLAUDE_CODE_SESSION_ID" \
-     --title "<title>" --hashkey <hashkey>
+     --stateless --title "<title>" --hashkey <hashkey>
    ```
+   **`--stateless` は必須**（backlog 9b7cb342）。`/flow` は `condukt state init` を呼ばないので
+   `flow-<SESSION_ID>` の run state が存在しない。マーク無しの claim は run state 不在を「判定不能」として
+   永久に保持するため、このセッションが死ぬと claim が回収されずキューを塞ぐ。`--stateless` を付けると
+   condukt は owning session の transcript だけで生死を判定し、凍結していれば回収する。
    **exit 1（別セッションが直前に claim 済み＝スキップされた）→ その item は諦めて 3-1 に戻り次候補へ**
    （3-1 の claim-skip ゲートと 3-2 の condukt 起動の間の隙間を塞ぐ最終ガード）。
    `condukt` が無い/失敗した場合は fail-soft（従来どおり実行を続行）。

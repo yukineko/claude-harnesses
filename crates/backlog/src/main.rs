@@ -8,6 +8,7 @@ mod hooks;
 mod install;
 mod liveness;
 mod lock;
+mod merge_driver;
 mod store;
 mod task;
 
@@ -202,6 +203,27 @@ enum Command {
     Uninstall {
         #[arg(long)]
         dry_run: bool,
+    },
+
+    /// git merge driver for the task store (`.gitattributes`: `merge=backlog`).
+    ///
+    /// Invoked by git as `backlog merge-driver %O %A %B`: an id-level 3-way
+    /// merge written into <OURS>; exit 0 = clean, non-zero = conflict or
+    /// undeterminable input, with <OURS> left untouched. `--install` sets
+    /// `merge.backlog.driver` / `merge.backlog.name` in the current repo.
+    MergeDriver {
+        /// Configure the driver in the current repository's git config.
+        #[arg(long, conflicts_with_all = ["base", "ours", "theirs"])]
+        install: bool,
+        /// Merge base (git `%O`).
+        #[arg(required_unless_present = "install")]
+        base: Option<std::path::PathBuf>,
+        /// Our version (git `%A`); the merged result is written here.
+        #[arg(required_unless_present = "install")]
+        ours: Option<std::path::PathBuf>,
+        /// Their version (git `%B`).
+        #[arg(required_unless_present = "install")]
+        theirs: Option<std::path::PathBuf>,
     },
 
     /// Manage the per-project EXCLUSIVE lock (~/.backlog/locks/<project>.lock).
@@ -1292,6 +1314,24 @@ fn run(cli: Cli) -> Result<()> {
 
         Command::Install { dry_run } => {
             install::install(dry_run)?;
+        }
+
+        Command::MergeDriver {
+            install,
+            base,
+            ours,
+            theirs,
+        } => {
+            if install {
+                merge_driver::install()?;
+            } else {
+                match (base, ours, theirs) {
+                    (Some(b), Some(o), Some(t)) => merge_driver::run(&b, &o, &t)?,
+                    // clap's required_unless_present makes this unreachable;
+                    // refuse rather than report a merge that did not happen.
+                    _ => anyhow::bail!("merge-driver needs <BASE> <OURS> <THEIRS>"),
+                }
+            }
         }
 
         Command::Uninstall { dry_run } => {

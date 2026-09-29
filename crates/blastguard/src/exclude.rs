@@ -9,7 +9,9 @@
 //! happens to sit under a `.claude` directory. A git worktree checked out at
 //! `.claude/worktrees/<name>/` — where CLAUDE.md §8 requires all implementation
 //! work to happen — is source, and [`is_config_file`] judges it by the path it
-//! would have outside. See [`strip_worktree_checkout`].
+//! would have outside. See [`strip_worktree_checkout`]. Nor is the user's
+//! deployed-plugin tree (`.claude/plugins/`) or transcript/memory tree
+//! (`.claude/projects/`): see [`inside_claude_state_tree`].
 
 use std::sync::OnceLock;
 
@@ -21,7 +23,9 @@ const ALLOW_GLOBS: &[&str] = &[
     // The Claude Code project config tree, anywhere in the repo. NOT a licence
     // for whatever else is parked under a `.claude` directory: a worktree
     // checkout under `.claude/worktrees/` is re-rooted first, see
-    // `strip_worktree_checkout`.
+    // `strip_worktree_checkout`, and the deployed-plugin and transcript trees
+    // (`.claude/plugins/`, `.claude/projects/`) are refused the exemption, see
+    // `inside_claude_state_tree`.
     ".claude",
     ".claude/**",
     "**/.claude",
@@ -488,6 +492,49 @@ fn strip_worktree_checkout(norm: &str) -> Option<String> {
     })
 }
 
+/// True when `norm` names, or lies inside, a `.claude/plugins` or
+/// `.claude/projects` directory — STATE that Claude Code keeps under a
+/// `.claude` directory, not config.
+///
+/// The `.claude/**` entries in [`ALLOW_GLOBS`] exist so that editing or
+/// deleting a project's Claude Code settings, agents and skills is never
+/// treated as a destructive blast: those are small, hand-maintained, usually
+/// tracked files. They match the user's home `.claude` directory too, and two
+/// subtrees there are neither small, hand-maintained nor tracked:
+///
+///   * `.claude/plugins/` holds the DEPLOYED binaries of every plugin,
+///     blastguard's own included. Deleting it does not turn a gate red, it
+///     turns every gate DARK at once: no hook starts, so no finding is ever
+///     produced and the loss itself cannot be observed.
+///   * `.claude/projects/` holds session transcripts and memory notes. No git
+///     repository holds a copy, so deleting it is unrecoverable.
+///
+/// Measured (backlog 9271d739, deployed 0.2.62 and again 0.2.71): recursive
+/// deletion of either subtree of `$HOME/.claude` was ALLOW with no output,
+/// while deleting `$HOME/.claude` itself was DENY — the container rule
+/// protected the parent and the allowlist exempted the children.
+///
+/// Refusing the exemption (rather than adding these trees to
+/// [`PROTECTED_GLOBS`]) is deliberate: a protected path turns every WRITE and
+/// EDIT into an Ask, and memory notes under `.claude/projects/*/memory/` are
+/// written routinely. Without the exemption these paths are judged by the
+/// ordinary rules like any other path outside the project: a recursive `rm`
+/// outside a safe root is denied, a single-file `rm` stays below the
+/// destructive bar, and a Write with content stays Allow. So this can only
+/// ever REMOVE an exemption, never add a block to a routine write.
+///
+/// Matched per path component and CASE-INSENSITIVELY, for the same reason as
+/// [`strip_worktree_checkout`]: folding refuses the exemption to MORE
+/// spellings, which is the restrictive direction on this case-insensitive
+/// filesystem (`.CLAUDE/Plugins` is the same directory).
+fn inside_claude_state_tree(norm: &str) -> bool {
+    let comps: Vec<&str> = norm.split('/').filter(|c| !c.is_empty()).collect();
+    comps.windows(2).any(|w| {
+        w[0].eq_ignore_ascii_case(".claude")
+            && (w[1].eq_ignore_ascii_case("plugins") || w[1].eq_ignore_ascii_case("projects"))
+    })
+}
+
 /// True when `path` is a repo config file that must never be blocked.
 ///
 /// A path whose `..` survives resolution returns FALSE — it fails the allowlist.
@@ -499,6 +546,11 @@ fn strip_worktree_checkout(norm: &str) -> Option<String> {
 pub fn is_config_file(path: &str) -> bool {
     let norm = normalize(path);
     if norm.is_empty() || has_unresolved_parent(&norm) {
+        return false;
+    }
+    // Deployed plugin binaries and transcripts are state, not config. See
+    // [`inside_claude_state_tree`] for the measurement this closes.
+    if inside_claude_state_tree(&norm) {
         return false;
     }
     // A repository checked out under `.claude/worktrees/<name>/` is SOURCE, not
@@ -656,6 +708,25 @@ mod tests {
         assert!(is_config_file("settings.local.json"));
         assert!(is_config_file(".config/foo/bar.conf"));
         assert!(is_config_file("home/.config/x.ini"));
+    }
+
+    #[test]
+    fn claude_plugins_and_projects_trees_are_not_config() {
+        for p in [
+            "/home/y/.claude/plugins",
+            "/home/y/.claude/plugins/",
+            "/home/y/.claude/plugins/cache/x/bin/blastguard",
+            "/home/y/.claude/projects",
+            "/home/y/.claude/projects/-home-y-proj/memory/MEMORY.md",
+            "/home/y/.CLAUDE/Plugins",
+            ".claude/projects/x",
+        ] {
+            assert!(!is_config_file(p), "{p} must not be exempt as config");
+        }
+        // Controls: the rest of the Claude config tree keeps its exemption.
+        assert!(is_config_file("/home/y/.claude/agents/a.md"));
+        assert!(is_config_file("/home/y/.claude/plugins.json"));
+        assert!(is_config_file(".claude/skills/x/SKILL.md"));
     }
 
     #[test]

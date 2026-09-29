@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Autonomy stop-invariant machine checks (backlog task a66e4adb, DoD#5).
 //!
 //! Ground truth (established in the condukt SKILL Phase 3 work and restated

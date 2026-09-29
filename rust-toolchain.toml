@@ -1,0 +1,11 @@
+# Pinned toolchain (USER RULING 2026-09-30, backlog 034b6620).
+#
+# The trybuild compile-fail snapshots (crates/{harness-core,blastguard,donegate}/
+# tests/ui/**/*.stderr) record rustc's exact diagnostics, which drift between
+# releases. They were generated against rustc 1.97.1, so the compiler that judges
+# them is pinned to the same release. Bump this together with a
+# `TRYBUILD=overwrite` regeneration of those snapshots, in one commit.
+# Enforced by scripts/check-compile-fail.py.
+[toolchain]
+channel = "1.97.1"
+components = ["clippy", "rustfmt"]

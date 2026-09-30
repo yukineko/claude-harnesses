@@ -124,6 +124,30 @@ pub fn run(input: &HookInput) -> Option<String> {
         }
     };
 
+    // Rows OUTSIDE the workable queue that still need someone: `unconfirmed`
+    // (a suspicion with no reproduced repro test) and `needs-ruling` (waiting
+    // for a human at a TTY). They are not injected as tasks, but their COUNT
+    // is, so leaving the queue never reads as "nothing left".
+    let unconfirmed = tasks
+        .iter()
+        .filter(|t| t.status == crate::task::STATUS_UNCONFIRMED)
+        .count();
+    let needs_ruling = tasks
+        .iter()
+        .filter(|t| t.status == crate::task::STATUS_NEEDS_RULING)
+        .count();
+    let side_queues = if unconfirmed + needs_ruling > 0 {
+        format!(
+            "## Backlog \u{2014} outside the workable queue\n\n\
+             unconfirmed: {unconfirmed} (suspicions; promote with \
+             `backlog confirm ID --repro-test CMD`), needs-ruling: {needs_ruling} (a human \
+             approves with `backlog ruling approve ID` at a TTY). `backlog list` shows them.\n\n"
+        )
+    } else {
+        String::new()
+    };
+    let warnings = warnings + &side_queues;
+
     // pending または failed のタスクのみ対象 (is_pending() で判定)
     let mut pending: Vec<_> = tasks.into_iter().filter(|t| t.is_pending()).collect();
 
@@ -167,7 +191,15 @@ pub fn run(input: &HookInput) -> Option<String> {
         out.push('\n');
     }
 
-    out.push_str("---\n\nTo mark a task done: `backlog done {id}`\nTo mark failed: `backlog fail {id} [--reason \"...\"]`\n");
+    out.push_str(
+        "---\n\nTo mark a task done (evidence is required; a bare `done` is refused):\n\
+         - `backlog done {id} --test CMD --red-rev REV [--reason fixed|already-fixed|obsolete]` \
+         (a committed test, RED at REV and GREEN at HEAD)\n\
+         - `backlog done {id} --doc-only COMMIT` / `backlog done {id} --duplicate-of ID`\n\
+         - untestable or judgment: `backlog ruling request {id} --kind judgment|untestable ...` \
+         (a human approves)\n\
+         To mark failed: `backlog fail {id} [--reason \"...\"]`\n",
+    );
 
     // inject_limit 超なら切り詰め
     if out.len() > cfg.inject_limit {
@@ -182,26 +214,26 @@ pub fn run(input: &HookInput) -> Option<String> {
 fn cycle_tag_instruction(cycle_tag: Option<&str>, id: &str, title: &str) -> String {
     match cycle_tag {
         Some("cycle:test-fix") => format!(
-            "テスト実行 → 失敗解析 → 修正 → 繰り返し。全テストが green になったら `backlog done {}` を呼ぶ",
+            "テスト実行 → 失敗解析 → 修正 → 繰り返し。全テストが green になったら `backlog done {} --test CMD --red-rev REV` を呼ぶ",
             id
         ),
         Some("cycle:tdd") => format!(
-            "RED → GREEN → VERIFY の TDD フロー (/tdd スキル)。VERIFY 完了後に `backlog done {}`",
+            "RED → GREEN → VERIFY の TDD フロー (/tdd スキル)。VERIFY 完了後に `backlog done {} --test CMD --red-rev REV`",
             id
         ),
         Some("cycle:implement") => format!(
-            "`/condukt {}` で実装。検証完了後に `backlog done {}`",
+            "`/condukt {}` で実装。検証完了後に `backlog done {} --test CMD --red-rev REV`",
             title, id
         ),
         Some("cycle:review-fix") => format!(
-            "`/code-review` で差分レビュー → 指摘修正 → 再レビュー。LGTM 後に `backlog done {}`",
+            "`/code-review` で差分レビュー → 指摘修正 → 再レビュー。LGTM 後に `backlog done {} --test CMD --red-rev REV`",
             id
         ),
         Some("cycle:once") => format!(
-            "一度実行して完了したら `backlog done {}`",
+            "一度実行して完了したら `backlog done {} --test CMD --red-rev REV`",
             id
         ),
-        _ => format!("`backlog done {}` で完了を記録してください", id),
+        _ => format!("`backlog done {} --test CMD --red-rev REV` で完了を記録してください", id),
     }
 }
 

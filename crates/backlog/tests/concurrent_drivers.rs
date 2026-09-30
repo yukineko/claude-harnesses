@@ -34,8 +34,51 @@ fn temp_home(tag: &str) -> PathBuf {
         .status()
         .expect("git must be available to run this test — a skip here would report green on a case that never ran");
     assert!(st.success(), "git init failed in {}", dir.display());
+    // This dir is ALSO the children's `$HOME`, so harness state dirs
+    // (`.overwatch/`, `.condukt/`) land inside the repo as untracked files,
+    // and `--repro-test` rightly refuses a dirty tree. Exclude them locally.
+    std::fs::write(dir.join(".git/info/exclude"), ".overwatch/\n.condukt/\n").unwrap();
+    commit_repro_script(&dir);
     dir
 }
+
+/// Close-evidence (2026-10-01): `backlog add` lands `pending` (workable, what
+/// `next` / `next --claim` hand out) only when a committed repro test
+/// REPRODUCES the finding; without one it lands `unconfirmed`. This commits a
+/// repro script (exit 1 = reproduced) into `repo`, which must already be a
+/// real git repo, so the fixture's adds can pass `--repro-test` and exercise
+/// the same queue behaviour as before.
+fn commit_repro_script(repo: &std::path::Path) {
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    std::fs::create_dir_all(repo.join("tests")).unwrap();
+    std::fs::write(
+        repo.join("tests/repro.sh"),
+        "#!/bin/bash\necho 'bug present'\nexit 1\n",
+    )
+    .unwrap();
+    git(&["add", "--", "tests/repro.sh"]);
+    git(&["commit", "-q", "--no-verify", "-m", "repro"]);
+}
+
+/// The `--repro-test` value matching [`commit_repro_script`].
+const REPRO: &str = "bash tests/repro.sh";
 
 fn spawn(args: &[&str], home: &Path) -> Child {
     // Pin the child's cwd to the same isolated `home` dir every call site
@@ -98,6 +141,8 @@ fn two_concurrent_driver_processes_get_disjoint_tasks() {
                 &project,
                 "--priority",
                 "p1",
+                "--repro-test",
+                REPRO,
             ],
             &home,
         );

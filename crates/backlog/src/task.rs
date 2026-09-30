@@ -12,10 +12,142 @@ pub const STATUS_PENDING: &str = "pending";
 pub const STATUS_DONE: &str = "done";
 pub const STATUS_FAILED: &str = "failed";
 
-/// All recognised status values, in lifecycle order. Used to enumerate the
-/// valid `--status` arguments in help/validation so an unknown value is a loud
-/// error instead of a silently-empty result.
+/// The original pending/done/failed core of the lifecycle, in order. Since
+/// the close-evidence change the `--status` filter validates against the wider
+/// [`FILTER_STATUSES`] (the store really holds `cancelled`, the derived
+/// `claimed`, `unconfirmed` and `needs-ruling` too), and `edit --status`
+/// accepts only `pending` / `failed`; this core list is kept for the
+/// vocabulary tests that pin it.
+#[cfg(test)]
 pub const STATUSES: [&str; 3] = [STATUS_PENDING, STATUS_DONE, STATUS_FAILED];
+
+/// A finding whose problem has NOT been observed: filed without a repro test,
+/// or whose repro test did not reproduce it (`not-reproduced`) or could not be
+/// run to a conclusion (`undetermined`). Non-terminal, but NOT workable: it is
+/// excluded from `next` / `next --claim` / requeue and from the pending count,
+/// and `list` shows it in its own section labelled `suspicion`. Only
+/// `backlog confirm ID --repro-test CMD` with a `reproduced` outcome moves it
+/// to `pending` (close-evidence spec, 2026-10-01: an unverified finding in the
+/// workable queue is low quality; the unconfirmed count and the
+/// not-reproduced rate are the quality metrics).
+pub const STATUS_UNCONFIRMED: &str = "unconfirmed";
+
+/// A close that no executed test can justify (a value judgment, or an item
+/// that is genuinely untestable) and that is waiting for a HUMAN ruling.
+/// Non-terminal and not workable (excluded from `next` / claim / requeue).
+/// Only `backlog ruling approve ID` (TTY stdin + the id typed back) closes it;
+/// `backlog ruling withdraw ID` returns it to `pending`.
+pub const STATUS_NEEDS_RULING: &str = "needs-ruling";
+
+/// Every status value a `--status` FILTER may name. Wider than [`STATUSES`]
+/// (the pending/done/failed core the original vocabulary tests pin):
+/// `cancelled` and the derived `claimed` exist in real stores, and
+/// `unconfirmed` / `needs-ruling` are written by this binary. A filter naming
+/// any of these must not warn; a filter naming anything else must.
+pub const FILTER_STATUSES: [&str; 7] = [
+    STATUS_PENDING,
+    STATUS_DONE,
+    STATUS_FAILED,
+    "cancelled",
+    "claimed",
+    STATUS_UNCONFIRMED,
+    STATUS_NEEDS_RULING,
+];
+
+/// How a task reached a terminal status, recorded as `[task.closure]`.
+///
+/// The on-disk shape is fixed by the close-evidence spec and re-checked at
+/// commit time by `scripts/check-closure-evidence.py`, so field names here
+/// must not drift: `reason`, `duplicate_of`, `doc_only_commit`, and the
+/// sub-tables `green`, `red`, `ruling`. Exactly one evidence route is filled:
+///   - `green` + `red`: an executed committed test, RED (behavioural) at
+///     `red.rev` and GREEN at `green.rev` (reason fixed / already-fixed /
+///     obsolete);
+///   - `doc_only_commit`: an ancestor commit touching doc paths only;
+///   - `duplicate_of`: the canonical task id;
+///   - `ruling`: a human approval recorded by `backlog ruling approve`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Closure {
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duplicate_of: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doc_only_commit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub green: Option<GreenRun>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub red: Option<RedRun>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ruling: Option<RulingRecord>,
+}
+
+impl Closure {
+    /// True when this closure carries one of the four evidence routes. A
+    /// `closure` table with none of them (hand-written, or truncated) is not
+    /// evidence, so it is not a valid duplicate anchor either.
+    pub fn has_evidence(&self) -> bool {
+        (self.green.is_some() && self.red.is_some())
+            || self.doc_only_commit.is_some()
+            || self.duplicate_of.is_some()
+            || self.ruling.is_some()
+    }
+}
+
+/// The GREEN run of an F2P close: the committed test, executed at `rev`
+/// (the full 40-hex HEAD the working tree was clean at), exited 0 and reported
+/// at least one passing test.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GreenRun {
+    pub runner: String,
+    pub cmd: String,
+    pub exit: i32,
+    pub passed: u64,
+    pub rev: String,
+    pub observed_at: i64,
+    pub output_digest: String,
+    pub excerpt: String,
+}
+
+/// The RED run of an F2P close: the same command at `rev` (a detached temp
+/// worktree with the test files overlaid from HEAD) exited non-zero with a
+/// BEHAVIOURAL failure. A build/compile failure is never recorded here.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RedRun {
+    pub rev: String,
+    pub exit: i32,
+    pub kind: String,
+}
+
+/// A human ruling, recorded by `backlog ruling approve` only.
+/// `approved_via = "tty"` records that the approval came through an
+/// interactive terminal with the id typed back. That is a barrier against the
+/// non-interactive agent Bash tool, NOT proof of the approver's identity.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RulingRecord {
+    pub kind: String,
+    pub rationale: String,
+    pub approved_by: String,
+    pub approved_at: i64,
+    pub approved_via: String,
+}
+
+/// Outcomes of a finding's repro test (`add --repro-test` / `confirm`).
+pub const REPRO_REPRODUCED: &str = "reproduced";
+pub const REPRO_NOT_REPRODUCED: &str = "not-reproduced";
+pub const REPRO_UNDETERMINED: &str = "undetermined";
+
+/// The latest repro attempt for a finding, recorded as `[task.repro]`.
+/// `outcome` is one of [`REPRO_REPRODUCED`] / [`REPRO_NOT_REPRODUCED`] /
+/// [`REPRO_UNDETERMINED`]; `detail` names why (the cause, for undetermined).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Repro {
+    pub outcome: String,
+    pub cmd: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rev: Option<String>,
+    pub observed_at: i64,
+    pub detail: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
@@ -124,6 +256,27 @@ pub struct Task {
     /// forever.
     #[serde(default)]
     pub issue_closed_at: Option<i64>,
+    /// `needs-ruling` rows only: the kind of ruling requested (`judgment` |
+    /// `untestable`). Flat on the row by spec (overwatch's needs-ruling stream
+    /// reads it there).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ruling_kind: Option<String>,
+    /// `needs-ruling` rows: why the requester believes a judgment close is
+    /// right (required for `judgment`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rationale: Option<String>,
+    /// `needs-ruling` rows of kind `untestable`: why no test can observe it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub untestable_reason: Option<String>,
+    /// The latest repro attempt (`add --repro-test` / `confirm`). Absent on
+    /// legacy rows and on findings filed without a repro test.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repro: Option<Repro>,
+    /// How this task was closed. Present on every row closed by this binary;
+    /// absent on legacy terminal rows (which `audit-closures` classifies but
+    /// never reopens).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closure: Option<Closure>,
 }
 
 impl Task {
@@ -169,9 +322,9 @@ impl Task {
 /// offending value and lists the valid ones.
 pub fn status_warning(status: Option<&str>) -> Option<String> {
     match status {
-        Some(s) if !STATUSES.contains(&s) => Some(format!(
+        Some(s) if !FILTER_STATUSES.contains(&s) => Some(format!(
             "warning: unknown status '{s}'; valid values are {}",
-            STATUSES.join(" | ")
+            FILTER_STATUSES.join(" | ")
         )),
         _ => None,
     }
@@ -231,6 +384,11 @@ mod tests {
             issue_number: None,
             issue_url: None,
             issue_closed_at: None,
+            ruling_kind: None,
+            rationale: None,
+            untestable_reason: None,
+            repro: None,
+            closure: None,
             touched_files: Vec::new(),
         }
     }

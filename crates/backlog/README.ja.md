@@ -60,7 +60,9 @@ cargo install --path .
 backlog add --title "Fix X" --project "$PWD" --priority p1   # 項目をキューに積む
 backlog list --status pending                                # キューを見る
 backlog next                                                 # 次の項目をピック
-backlog done <id>                                            # 解決する
+backlog done <id> --test "cargo test -p x" --red-rev <rev>  # 解決する（REV で RED・HEAD で GREEN を実測）
+backlog done <id> --doc-only <commit>                        # または doc だけの祖先 commit
+backlog done <id> --duplicate-of <id>                        # または重複
 backlog fail <id> --reason "blocked"                         # 2 日先送りする
 backlog lock status                                          # run-lock の保有者を確認
 backlog install                                              # SessionStart フックを settings.json にマージ

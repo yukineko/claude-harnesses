@@ -46,6 +46,64 @@ fn temp_repo(tag: &str) -> PathBuf {
     dir
 }
 
+/// Close-evidence (2026-10-01): `backlog add` lands `pending` (workable, what
+/// `next` / `next --claim` hand out) only when a committed repro test
+/// REPRODUCES the finding; without one it lands `unconfirmed`. This commits a
+/// repro script (exit 1 = reproduced) into `repo`, which must already be a
+/// real git repo, so the fixture's adds can pass `--repro-test` and exercise
+/// the same queue behaviour as before.
+fn commit_repro_script(repo: &std::path::Path) {
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    std::fs::create_dir_all(repo.join("tests")).unwrap();
+    std::fs::write(
+        repo.join("tests/repro.sh"),
+        "#!/bin/bash\necho 'bug present'\nexit 1\n",
+    )
+    .unwrap();
+    git(&["add", "--", "tests/repro.sh"]);
+    git(&["commit", "-q", "--no-verify", "-m", "repro"]);
+}
+
+/// The `--repro-test` value matching [`commit_repro_script`].
+const REPRO: &str = "bash tests/repro.sh";
+
+/// A REAL git repo (unlike [`temp_repo`]) holding a committed repro script:
+/// `add` lands `pending` (what `next --claim` hands out) only when
+/// `--repro-test` reproduces, and running it needs a real HEAD.
+fn evidence_repo(tag: &str) -> PathBuf {
+    let dir = unique_dir(tag);
+    let st = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("git runs");
+    assert!(st.success(), "git init failed in {}", dir.display());
+    commit_repro_script(&dir);
+    dir
+}
+
 /// Run the real binary; returns (exit code, stdout, stderr).
 fn run(args: &[&str], cwd: &Path, home: &Path) -> (i32, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_backlog"))
@@ -118,11 +176,19 @@ fn add_surfaces_the_near_duplicate_peer_id_without_blocking() {
 #[test]
 fn claim_surfaces_the_near_duplicate_peer_id_in_both_channels() {
     let home = unique_dir("claim-home");
-    let repo = temp_repo("claim-repo");
+    let repo = evidence_repo("claim-repo");
     let project = repo.to_string_lossy().into_owned();
 
     let (code, out, err) = run(
-        &["add", "--title", TITLE_A, "--project", &project],
+        &[
+            "add",
+            "--title",
+            TITLE_A,
+            "--project",
+            &project,
+            "--repro-test",
+            REPRO,
+        ],
         &repo,
         &home,
     );
@@ -133,7 +199,15 @@ fn claim_surfaces_the_near_duplicate_peer_id_in_both_channels() {
         .expect("add prints the new id")
         .to_string();
     let (code, _, err) = run(
-        &["add", "--title", TITLE_B, "--project", &project],
+        &[
+            "add",
+            "--title",
+            TITLE_B,
+            "--project",
+            &project,
+            "--repro-test",
+            REPRO,
+        ],
         &repo,
         &home,
     );

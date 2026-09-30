@@ -12718,3 +12718,21 @@ updated_at = 1790794242
 weight = 0.0
 issue_number = 936
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/936"
+
+[[task]]
+id = "e79afdd2"
+title = "harness-core trust::main_worktree_of: 偽造 gitfile で trusted main の trust を継承できる (back-pointer 未検証)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "trust",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "4cacdfae 検証で CONFIRMED。.git=gitdir: <trusted>/.git/worktrees/nonexistent で InheritedFromMainWorktree。worktrees/<name> の実在と <git_dir>/gitdir が root/.git を指すかを検証していない。beacon の command (sh -c) が trust なしで走る経路になる。4cacdfae merge 前に塞ぐ。"
+created_at = 1790794504
+updated_at = 1790794504
+weight = 0.0
+issue_number = 937
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/937"

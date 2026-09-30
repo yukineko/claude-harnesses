@@ -13,10 +13,20 @@
 //!   [`harness_core::fleet::BLOCKING_GATES`] that matches `[map].exclude` is not
 //!   spec-bearing (manifests, docs, …) and is skipped;
 //! * every other changed gate path listed in some entry's `impl_files` triggers
-//!   that entry. A triggered entry passes only with a non-empty `spec_doc` or a
-//!   reasoned ack (`.specguard/spec-doc-acks.toml`, `[[ack]] path/reason`, where
-//!   `path` names the entry key or one of its impl files and `reason` is not
-//!   blank). Otherwise it is a **violation** (exit 1) naming the impl path;
+//!   that entry. A triggered entry passes only with one of:
+//!   - a non-empty map `spec_doc`. The map is a gitignored machine-local cache,
+//!     so this source is invisible to every other clone; the pre-push hook
+//!     builds a fresh map, in which it is always empty;
+//!   - a tracked spec binding (`.specguard/spec-docs.toml`,
+//!     `[[spec]] path/doc/reason`): `path` names the entry key or one of its
+//!     impl files, `reason` is not blank, and `doc` is a relative
+//!     `docs/specs/…/*.md` path with no `.`/`..`/empty component that exists
+//!     under the repo root as a regular file with non-blank content. A binding
+//!     that fails any of these does not count, and the violation says why;
+//!   - a tracked reasoned ack (`.specguard/spec-doc-acks.toml`,
+//!     `[[ack]] path/reason`, same `path` rule, `reason` not blank).
+//!
+//!   Otherwise it is a **violation** (exit 1) naming the impl path;
 //! * a changed, non-deleted gate path that NO entry references (in impl, test or
 //!   client lists) is **undetermined** (exit 2): `map sync` attributes every
 //!   non-excluded path to an entry, so an unreferenced one means the map has not
@@ -28,10 +38,14 @@
 //!   skipped: there is no file left to write a spec for, and treating it as
 //!   unreferenced would block with no available remedy.
 //!
-//! Undetermined — unparseable map or ack file, an unsafe/unresolvable rev, a git
-//! call that failed or exited non-zero, unparseable git output, or an absent map
-//! while a gate path changed — is exit 2, never 0 (CLAUDE.md §3). An absent ack
-//! file is an empty ack set (the restrictive reading: no escapes).
+//! Undetermined — unparseable map, ack or spec-binding file, an
+//! unsafe/unresolvable rev, a git call that failed or exited non-zero,
+//! unparseable git output, a bound doc whose existence or contents could not be
+//! read, or an absent map while a gate path changed — is exit 2, never 0
+//! (CLAUDE.md §3). An absent ack or spec-binding file is an empty set (the
+//! restrictive reading: no escapes). The ack, binding and doc files are read
+//! from the working tree under the repo root; the pre-push hook runs this in a
+//! checkout of the pushed commit, so there they are the pushed files.
 
 use crate::scope::is_safe_ref;
 use crate::specmap::{MapEntry, SpecMap};
@@ -39,12 +53,40 @@ use globset::GlobSet;
 use harness_core::boundary;
 use harness_core::verdict::{Determination, Reason, Required, Verdict};
 use serde::Deserialize;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Command;
 
 /// Repo-root-relative path of the per-entry ack file.
 pub const ACK_PATH: &str = ".specguard/spec-doc-acks.toml";
+
+/// Repo-root-relative path of the tracked spec-doc bindings.
+pub const SPEC_DOCS_PATH: &str = ".specguard/spec-docs.toml";
+
+/// Every bound `doc` must live under this directory.
+const SPEC_DOC_DIR: &str = "docs/specs/";
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SpecFile {
+    #[serde(default)]
+    spec: Vec<SpecBinding>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SpecBinding {
+    path: String,
+    doc: String,
+    /// Optional in the schema for the same reason as [`Ack::reason`]: a
+    /// missing reason parses, and then the binding does not count.
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+/// Reasoned bindings by `path`: `Ok(doc)` for a binding whose doc was observed
+/// valid, `Err(why)` for one that was observed invalid.
+type Bindings = BTreeMap<String, Vec<Result<String, String>>>;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -75,6 +117,7 @@ pub struct GateCheck<'a> {
     pub repo_root: &'a Path,
     pub map_path: &'a Path,
     pub ack_path: &'a Path,
+    pub spec_docs_path: &'a Path,
     pub base: &'a str,
     pub head: &'a str,
     pub exclude: &'a GlobSet,
@@ -89,6 +132,10 @@ pub fn check(gc: &GateCheck<'_>) -> Verdict {
     };
     let acked = match read_acks(gc.ack_path).require() {
         Required::Determined(a) => a,
+        Required::Blocked(v) => return v.into_verdict(),
+    };
+    let specs = match read_specs(gc.spec_docs_path).require() {
+        Required::Determined(s) => s,
         Required::Blocked(v) => return v.into_verdict(),
     };
     let changed = match changed_paths(gc.repo_root, gc.base, gc.head).require() {
@@ -113,11 +160,21 @@ pub fn check(gc: &GateCheck<'_>) -> Verdict {
             gc.map_path.display()
         ));
     };
-    evaluate(&map, &acked, &gate_changed)
+    let bindings = match validate_bindings(gc.repo_root, specs).require() {
+        Required::Determined(b) => b,
+        Required::Blocked(v) => return v.into_verdict(),
+    };
+    evaluate(&map, &acked, &bindings, &gate_changed)
 }
 
-/// Pure judgement over an already-loaded map/ack set and the changed gate paths.
-fn evaluate(map: &SpecMap, acked: &BTreeSet<String>, gate_changed: &[Changed]) -> Verdict {
+/// Pure judgement over an already-loaded map, ack set, validated bindings and
+/// the changed gate paths.
+fn evaluate(
+    map: &SpecMap,
+    acked: &BTreeSet<String>,
+    bindings: &Bindings,
+    gate_changed: &[Changed],
+) -> Verdict {
     let mut unreferenced = Vec::new();
     for c in gate_changed {
         if c.deleted {
@@ -143,9 +200,32 @@ fn evaluate(map: &SpecMap, acked: &BTreeSet<String>, gate_changed: &[Changed]) -
         if hit.is_empty() || has_spec_doc(entry) || is_acked(key, entry, acked) {
             continue;
         }
+        // A set, so a binding whose path is both the key and an impl file (the
+        // per-file entries `map sync` creates) is counted and reported once.
+        let names: BTreeSet<&str> = std::iter::once(key.as_str())
+            .chain(entry.impl_files.iter().map(String::as_str))
+            .collect();
+        let bound: Vec<&Result<String, String>> = names
+            .into_iter()
+            .filter_map(|p| bindings.get(p))
+            .flatten()
+            .collect();
+        if bound.iter().any(|b| b.is_ok()) {
+            continue;
+        }
+        let rejected: Vec<&str> = bound
+            .iter()
+            .filter_map(|b| b.as_ref().err().map(String::as_str))
+            .collect();
+        let why = if rejected.is_empty() {
+            String::new()
+        } else {
+            format!(" (rejected binding: {})", rejected.join("; "))
+        };
         for p in hit {
             missing.push(format!(
-                "{p} (entry '{key}'): no spec_doc and no reasoned ack in {ACK_PATH}"
+                "{p} (entry '{key}'): no spec_doc, no valid [[spec]] binding in \
+                 {SPEC_DOCS_PATH}{why}, and no reasoned ack in {ACK_PATH}"
             ));
         }
     }
@@ -153,8 +233,8 @@ fn evaluate(map: &SpecMap, acked: &BTreeSet<String>, gate_changed: &[Changed]) -
     if !unreferenced.is_empty() {
         let mut msg = format!(
             "{} changed gate path(s) are referenced by no spec-map entry, so their spec-doc \
-             status cannot be determined — run `specguard map sync`, then `map set-spec` or \
-             ack each resulting entry:\n  {}",
+             status cannot be determined — run `specguard map sync`, then bind each \
+             resulting entry in {SPEC_DOCS_PATH} or ack it in {ACK_PATH}:\n  {}",
             unreferenced.len(),
             unreferenced.join("\n  ")
         );
@@ -223,6 +303,84 @@ fn read_acks(path: &Path) -> Determination<BTreeSet<String>> {
                 path.display()
             )),
         },
+        Required::Blocked(v) => v.into_determination(),
+    }
+}
+
+/// The reasoned bindings in the spec-docs file. Absent file → empty list.
+fn read_specs(path: &Path) -> Determination<Vec<SpecBinding>> {
+    match boundary::read_to_string(path).require() {
+        Required::Determined(None) => Determination::known(Vec::new()),
+        Required::Determined(Some(text)) => match toml::from_str::<SpecFile>(&text) {
+            Ok(f) => Determination::known(
+                f.spec
+                    .into_iter()
+                    .filter(|b| b.reason.as_deref().is_some_and(|r| !r.trim().is_empty()))
+                    .collect(),
+            ),
+            Err(e) => Determination::undetermined(format!(
+                "cannot parse spec-doc binding file {}: {e}",
+                path.display()
+            )),
+        },
+        Required::Blocked(v) => v.into_determination(),
+    }
+}
+
+/// Observe each bound doc once and index the bindings by `path`.
+fn validate_bindings(repo_root: &Path, specs: Vec<SpecBinding>) -> Determination<Bindings> {
+    let mut seen: BTreeMap<String, Option<String>> = BTreeMap::new();
+    let mut out = Bindings::new();
+    for b in specs {
+        if !seen.contains_key(&b.doc) {
+            match doc_problem(repo_root, &b.doc).require() {
+                Required::Determined(p) => {
+                    seen.insert(b.doc.clone(), p);
+                }
+                Required::Blocked(v) => return v.into_determination(),
+            }
+        }
+        let verdict = match seen.get(&b.doc) {
+            Some(None) => Ok(b.doc.clone()),
+            Some(Some(why)) => Err(why.clone()),
+            // Inserted just above; absence would be a logic error, never a pass.
+            None => Err(format!("{}: not observed", b.doc)),
+        };
+        out.entry(b.path).or_default().push(verdict);
+    }
+    Determination::known(out)
+}
+
+/// `Known(None)` when `doc` is a usable spec doc, `Known(Some(why))` when it
+/// was observed not to be, `Undetermined` when that could not be observed.
+fn doc_problem(repo_root: &Path, doc: &str) -> Determination<Option<String>> {
+    let well_formed = doc.starts_with(SPEC_DOC_DIR)
+        && doc.ends_with(".md")
+        && !doc.contains('\\')
+        && doc
+            .split('/')
+            .all(|c| !c.is_empty() && c != "." && c != "..");
+    if !well_formed {
+        return Determination::known(Some(format!(
+            "{doc}: not a relative {SPEC_DOC_DIR}**/*.md path"
+        )));
+    }
+    let full = repo_root.join(doc);
+    match std::fs::metadata(&full) {
+        Ok(m) if !m.is_file() => {
+            return Determination::known(Some(format!("{doc}: not a regular file")))
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Determination::known(Some(format!("{doc}: does not exist")))
+        }
+        Err(e) => return Determination::undetermined(format!("cannot stat spec doc {doc}: {e}")),
+    }
+    match boundary::read_to_string(&full).require() {
+        Required::Determined(Some(text)) if !text.trim().is_empty() => Determination::known(None),
+        Required::Determined(Some(_)) => Determination::known(Some(format!("{doc}: is empty"))),
+        // Present a moment ago; gone now. Not a pass either way.
+        Required::Determined(None) => Determination::known(Some(format!("{doc}: does not exist"))),
         Required::Blocked(v) => v.into_determination(),
     }
 }
@@ -369,21 +527,36 @@ mod tests {
     #[test]
     fn test_only_reference_passes_but_counts_as_referenced() {
         let m = map(vec![entry("e", None, &[], &["crates/g/tests/t.rs"])]);
-        let v = evaluate(&m, &BTreeSet::new(), &[ch("crates/g/tests/t.rs", false)]);
+        let v = evaluate(
+            &m,
+            &BTreeSet::new(),
+            &Bindings::new(),
+            &[ch("crates/g/tests/t.rs", false)],
+        );
         assert!(!v.blocks());
     }
 
     #[test]
     fn deleted_path_triggers_the_entry_still_listing_it() {
         let m = map(vec![entry("e", None, &["crates/g/src/a.rs"], &[])]);
-        let v = evaluate(&m, &BTreeSet::new(), &[ch("crates/g/src/a.rs", true)]);
+        let v = evaluate(
+            &m,
+            &BTreeSet::new(),
+            &Bindings::new(),
+            &[ch("crates/g/src/a.rs", true)],
+        );
         assert!(matches!(v, Verdict::Violation(_)));
     }
 
     #[test]
     fn blank_spec_doc_is_not_a_spec_doc() {
         let m = map(vec![entry("e", Some("  "), &["crates/g/src/a.rs"], &[])]);
-        let v = evaluate(&m, &BTreeSet::new(), &[ch("crates/g/src/a.rs", false)]);
+        let v = evaluate(
+            &m,
+            &BTreeSet::new(),
+            &Bindings::new(),
+            &[ch("crates/g/src/a.rs", false)],
+        );
         assert!(matches!(v, Verdict::Violation(_)));
     }
 }

@@ -138,6 +138,15 @@ scripts/rollout-plugins.sh --plugin specguard --canary             # GATE クレ
 
 - バイナリを反映: `scripts/rebuild-plugins.sh`（`--no-clean` で増分）— target のバイナリを live
   キャッシュへ swap する（**既存 dir に swap するだけ。version dir は作らない**）。
+  **書き込むのは各 plugin の current version dir だけ**（current = repo の
+  `crates/<dir>/.claude-plugin/plugin.json` の `version`。plugin 名→crate dir は plugin.json の
+  `name` で解決）。バイナリ・`hooks/*.json`・`.deployed-from.json` のいずれも、**superseded な
+  version dir には一切書かない（byte 単位で凍結）**。以前は `cache/*/*/bin/*` を glob して全 version
+  dir を上書きしており、旧 version に pin されたセッションが黙って新コードを実行し、canary rollback
+  （registry を旧 dir へ repoint）も何も戻せなかった（backlog `8acb117a`）。**帰結として、稼働中の
+  セッションは再起動するまで起動時の version dir の旧コードを実行し続ける**（受容済みの仕様）。
+  current version が決まらない plugin（該当 crate が無い／`version` が読めない）はどの dir も書かず、
+  エラーを出して非0で終わる（「全 dir を書く」へは倒さない。§3）。
 - テキスト資産（skills/agents/hooks）を反映: `crates/<name>/scripts/sync-plugin-assets.sh`
   （`--check` で drift 検出）。
 - **キャッシュを手編集しない**（git 外で黙って乖離する）。必ず repo を編集 → 上記で同期。
@@ -222,9 +231,10 @@ fallback は弱くない（この「弱くない」は仮定ではなく
 - **rebuild は version を上げない**（別工程）。`rebuild-plugins.sh` は正典の version をそのまま
   コンパイルして live cache へ swap するだけ。version bump は 3ファイル編集という別の意図的操作。
 - **cache の version dir が古い**（例: source は 0.7.0 だが `cache/.../<plugin>/0.6.0/` のまま）のは
-  `/plugin update`（ユーザー UI 操作）未実行が原因。rebuild-plugins.sh は既存 dir にバイナリを
-  swap するのでコードは動くが、正式ロールアウトは `/plugin update` → rebuild → sync-plugin-assets.sh
-  の順。
+  `rollout-plugins.sh`（`/plugin update` 相当）未実行が原因。rebuild-plugins.sh は current
+  version dir（0.7.0）にしか書かないので、**0.6.0 dir は凍結されたまま新コードは届かない**
+  （0.7.0 dir が無ければ何も更新されない）。正式ロールアウトは `rollout-plugins.sh`
+  （copy → repoint → rebuild → sync-plugin-assets.sh の順）で行う。
 
 ## 人間のレビュー窓口（統合レビューサーフェス）
 

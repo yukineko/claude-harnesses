@@ -535,7 +535,7 @@ fn decide_scan_failed(cfg: &Config, prior_attempts: u32) -> Decision {
 fn scan_failed_reason(attempt: u32, max: u32) -> String {
     format!(
         "🚧 reviewgate: 変更内容を特定できませんでした — `git` コマンドが失敗しました (round {attempt}/{max}).\n\n\
-         git repo ではあるものの `git diff` / `git status` がエラー (spawn 失敗 / 非ゼロ終了) を返したため、\
+         git repo ではあるものの `git rev-parse` / `git diff` / `git ls-files` がエラー (spawn 失敗 / 非ゼロ終了 / タイムアウト / 出力読み取り不能) を返したため、\
          何が変更されたか判定できません。空の diff を「変更なし」と解釈して無言で通過させると、未レビューの\
          変更が gate をすり抜けてしまいます。判定不能な状態で停止を許可しないため、この停止を一時的に\
          ブロックしています。{max}回連続で解消しなければ警告を出して通過を許可します（永久にはブロックしません）。\n\n\

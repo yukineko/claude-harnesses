@@ -177,6 +177,9 @@ specguard map link <test> <key>    # relate a test file to an entry explicitly (
 # touched entry records reviewed_reason + reviewed_at {commit = HEAD, date}. A blank or missing reason
 # is rejected and the store is left untouched.
 specguard map prune                # drop entries matching [map].exclude (non-spec-bearing paths)
+specguard map gate-check --base <rev>  # gate-crate entries changed since <rev> need a spec_doc or a
+# reasoned [[ack]] in .specguard/spec-doc-acks.toml: exit 0 ok, 1 missing (printed), 2 undetermined
+# (bad map/ack/rev, git failure, absent map, or a changed gate file no entry references)
 specguard --baseline HEAD~5 run    # override the baseline
 specguard --config examples/aegis.toml run
 ```

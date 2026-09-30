@@ -31,6 +31,8 @@ mod proof;
 mod runner;
 mod state;
 mod transition;
+#[cfg(test)]
+mod trust_worktree_tests;
 
 use std::io::Read;
 use std::path::Path;

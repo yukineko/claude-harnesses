@@ -25,4 +25,8 @@ fn verdict_type_contract_compile_fail() {
     // Positive control: the sanctioned paths MUST still compile, so the contract
     // is proven to reject only fabrication, not legitimate use.
     t.pass("tests/ui/verdict_pass/*.rs");
+    // Documented limits: the holes verdict.rs names as NOT sealed must still be
+    // open. If one closes, this goes red and the prose naming it must change in
+    // the same commit (backlog 5b89f0f6).
+    t.pass("tests/ui/verdict_known_holes/*.rs");
 }

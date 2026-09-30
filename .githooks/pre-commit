@@ -27,6 +27,15 @@
 #                                                 committed prompt asset
 #   fail-open-guard    check-fail-open.py         a new fail-open swallow on the
 #                                                 gate surface
+#   fail-open-diff     check-fail-open-diff.py    a staged file whose fail-open
+#                                                 hit count ROSE versus HEAD,
+#                                                 workspace-wide and including
+#                                                 the advisory class. Scoped to
+#                                                 the commit's own files so a
+#                                                 parallel session's change
+#                                                 cannot block this one (the
+#                                                 whole-workspace --ratchet
+#                                                 would); backlog 2133b6fe
 #   doc-claims         check-doc-claims.py        a `path:line` citation in
 #                                                 docs/**/*.md that no longer
 #                                                 describes reality
@@ -76,6 +85,14 @@
 #                                                 not have), during which
 #                                                 taintguard went missing from 3
 #                                                 of them; backlog fb6b1796
+#   gate-protection    check-gate-protection.py   a blocking gate (harness_core
+#                                                 fleet::BLOCKING_GATES) whose
+#                                                 Protection statement (protects /
+#                                                 against / grounds) is empty or
+#                                                 missing without a PENDING entry,
+#                                                 or a PENDING baseline that grew
+#                                                 relative to HEAD (backlog
+#                                                 3a8e3b73)
 #   crossx-constants   check-cross-crate-constants.py a constant hand-copied
 #                                                 from one crate into another
 #                                                 (because the owning crate has
@@ -189,6 +206,7 @@ run() {
 
 run check-prompt-injection.py injectguard
 run check-fail-open.py        fail-open-guard
+run check-fail-open-diff.py   fail-open-diff
 run check-doc-claims.py       doc-claims
 run check-claudemd-claims.py  claudemd-claims
 # check-test-weakening.py is NOT run here: it is run from .githooks/commit-msg
@@ -203,6 +221,7 @@ run check-raw-io-ratchet.py   raw-io-ratchet
 run check-fault-injection-adoption.py fault-injection-adoption
 run check-worktree-isolation.py worktree-isolation
 run check-gate-crates-sync.py gate-crates-sync
+run check-gate-protection.py gate-protection
 run check-cross-crate-constants.py crossx-constants
 run check-launcher-exec-bit.py launcher-exec-bit
 run check-clippy-lints.py     clippy-lints
@@ -308,6 +327,12 @@ Remediation hints:
                     canonical; bring the reported source to match it (or, if you
                     just ADDED a new hardcoded copy, register it in that
                     checker's SOURCES list in this same commit).
+  gate-protection   a gate in BLOCKING_GATES must declare a
+                    harness_core::gate::Protection literal with non-empty
+                    protects / against / grounds, or stay listed in
+                    scripts/check-gate-protection.baseline. Declare it (and
+                    remove it from the baseline in the same commit); never
+                    add a gate to the baseline — it may only shrink.
   crossx-constants  a hand-copied constant disagrees with its canonical
                     declaration in another crate, or a rename made the two
                     incomparable. Make the copy equal the canonical value; if

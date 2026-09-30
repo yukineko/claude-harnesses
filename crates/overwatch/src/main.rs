@@ -288,11 +288,27 @@ enum Command {
         /// by default — a third state reachable only on request is not a third
         /// state. Recording is the moment the verifier knows whether it settled
         /// the claim, so it has to say (user ruling 2026-07-21, backlog
-        /// eda212a0). Only `confirmed` findings are forwarded by
+        /// eda212a0). `refuted` is adjudicated against `--probe` and
+        /// `--signed-off-by` before it is stored (see those flags). Only
+        /// `confirmed` findings are forwarded by
         /// `review-queue --to-backlog`; `unverified` ones stay visible in the
         /// queue, marked, pending re-verification.
         #[arg(long)]
         verdict: String,
+        /// Machine reachability-probe result file for a `refuted` verdict:
+        /// JSON `{"result":"not_reproduced"}` or `{"result":"reproduced"}`.
+        /// A `refuted` verdict is stored as `refuted` ONLY with a
+        /// `not_reproduced` probe AND `--signed-off-by`; otherwise it is stored
+        /// as `unverified` (the missing piece is named on stderr). A
+        /// `reproduced` probe stores a `refuted` claim as `confirmed`. A
+        /// missing, unreadable or unparseable file is never a witness
+        /// (backlog 80a46e9f).
+        #[arg(long)]
+        probe: Option<std::path::PathBuf>,
+        /// The human who signed off on a `refuted` verdict. Required, together
+        /// with a `not_reproduced` `--probe`, for `refuted` to be stored.
+        #[arg(long)]
+        signed_off_by: Option<String>,
     },
     /// Continuous-Audit round metrics ledger (2630b4c5). `record` appends one
     /// round's counts to the convergence ledger that `audit-metrics` reads back.
@@ -724,6 +740,8 @@ fn main() -> Result<()> {
             file,
             rationale,
             verdict,
+            probe,
+            signed_off_by,
         } => {
             rollback_cli::record_finding(
                 &finding_id,
@@ -733,6 +751,8 @@ fn main() -> Result<()> {
                 file.as_deref(),
                 rationale.as_deref(),
                 &verdict,
+                probe.as_deref(),
+                signed_off_by.as_deref(),
             )?;
         }
         Command::AuditRound { action } => match action {

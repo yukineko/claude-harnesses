@@ -15,7 +15,9 @@
 /// render (fail-soft). `overwatch record-finding` is the defined ingestion
 /// point (used by that future loop, and by this crate's integration test to
 /// seed a finding — that is the real write path, not a fabricated source).
+use harness_core::verdict::{Determination, Required};
 use serde::{Deserialize, Deserializer, Serialize};
+use std::path::Path;
 
 /// The adversarial verifier's verdict on a proposed finding.
 ///
@@ -31,16 +33,21 @@ use serde::{Deserialize, Deserializer, Serialize};
 /// [`Unverified`](Self::Unverified) is the RESTRICTIVE resolution: the claim is
 /// neither established nor dismissed, so the item stays pending. Only
 /// [`Confirmed`](Self::Confirmed) findings take the actionable path
-/// (`review-queue --to-backlog`); [`Refuted`](Self::Refuted) requires the
-/// verifier to have enumerated EVERY consumption path with verbatim quotes
-/// (a prompt-side burden of proof — see the `continuous-audit` SKILL.md).
+/// (`review-queue --to-backlog`). An asserted [`Refuted`](Self::Refuted) is
+/// only STORED as `Refuted` when [`adjudicate`] finds both a machine probe
+/// result showing `not_reproduced` and a human sign-off (backlog 80a46e9f);
+/// the prompt-side burden of proof (every consumption path quoted — see the
+/// `continuous-audit` SKILL.md) is necessary but no longer sufficient.
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AuditVerdict {
     /// The verifier reproduced/established the finding in code.
     Confirmed,
-    /// The verifier discharged the finding by tracing ALL consumption paths
-    /// and quoting each one. "I could not find a path" is NOT this verdict.
+    /// The finding is discharged: the verifier traced ALL consumption paths,
+    /// a probe did not reproduce it, AND a human signed off. As a stored
+    /// verdict it arises only through [`adjudicate`]; a witness-less REFUTED
+    /// assertion is stored as `Unverified`. "I could not find a path" is NOT
+    /// this verdict.
     Refuted,
     /// Undetermined: the verifier could neither establish nor discharge the
     /// claim. The default for anything unparseable — undetermined always
@@ -174,11 +181,184 @@ impl ReviewFinding {
     }
 
     /// Set the verifier's verdict on this finding.
+    ///
+    /// This sets the verdict verbatim. It is not an adjudication: the CLI
+    /// ingestion path (`record-finding`) passes the asserted verdict through
+    /// [`adjudicate`] first and hands only the adjudicated verdict here.
     pub fn with_verdict(mut self, verdict: AuditVerdict) -> Self {
         self.verdict = verdict;
         self
     }
 }
+
+/// What a machine reachability probe observed when it tried to reproduce a
+/// finding (backlog 80a46e9f). The probe replaces the claimed-unreachable
+/// branch with a panic, runs the full suite, and records the result as data.
+///
+/// There is deliberately no "inconclusive" variant: a probe result that cannot
+/// be read or parsed is not an outcome, it is an undetermined observation and
+/// is carried as `Determination::Undetermined` (see [`parse_probe`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProbeOutcome {
+    /// The probe ran and did NOT reproduce the finding. This can falsify a
+    /// finding's reachability claim but never establish that no path exists,
+    /// which is why a REFUTED also needs a human sign-off.
+    NotReproduced,
+    /// The probe reproduced the finding: the claimed-unreachable branch was
+    /// reached. A REFUTED claim is overturned by this.
+    Reproduced,
+}
+
+/// Parse a probe result file body. The only accepted shapes are the JSON
+/// objects `{"result":"not_reproduced"}` and `{"result":"reproduced"}` (the
+/// value is matched exactly). Anything else — empty text, invalid JSON, a
+/// missing or non-string `result`, an unknown token such as `probably_fine` —
+/// is `Undetermined`: an unreadable witness is no witness, and it must never
+/// count as `NotReproduced`.
+pub fn parse_probe(text: &str) -> Determination<ProbeOutcome> {
+    let value: serde_json::Value = match serde_json::from_str(text) {
+        Ok(v) => v,
+        Err(e) => {
+            return Determination::undetermined(format!("probe result is not JSON: {e}"));
+        }
+    };
+    match value.get("result").and_then(serde_json::Value::as_str) {
+        Some("not_reproduced") => Determination::known(ProbeOutcome::NotReproduced),
+        Some("reproduced") => Determination::known(ProbeOutcome::Reproduced),
+        Some(other) => Determination::undetermined(format!(
+            "probe result {other:?} is neither \"not_reproduced\" nor \"reproduced\""
+        )),
+        None => Determination::undetermined("probe result has no string `result` field"),
+    }
+}
+
+/// Read and parse a probe result file. A missing file (the recorder named a
+/// probe that is not there) and an unreadable one are both `Undetermined`.
+pub fn read_probe(path: &Path) -> Determination<ProbeOutcome> {
+    match harness_core::boundary::read_to_string(path).require() {
+        Required::Determined(Some(text)) => parse_probe(&text),
+        Required::Determined(None) => {
+            Determination::undetermined(format!("probe result {} does not exist", path.display()))
+        }
+        Required::Blocked(why) => {
+            let detail = match why.reason() {
+                Some(r) => r.as_str().to_string(),
+                None => format!("{why:?}"),
+            };
+            Determination::undetermined(format!(
+                "probe result {} unreadable: {detail}",
+                path.display()
+            ))
+        }
+    }
+}
+
+/// A human sign-off on a REFUTED verdict. A blank name is no sign-off.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SignOff {
+    /// No human signed off (flag omitted, or given as blank).
+    Absent,
+    /// Signed off by the named human.
+    By(String),
+}
+
+impl SignOff {
+    /// From the `--signed-off-by` flag value. `None`, `""` and whitespace-only
+    /// all read as [`Absent`](Self::Absent).
+    pub fn from_flag(raw: Option<&str>) -> Self {
+        match raw.map(str::trim) {
+            Some(name) if !name.is_empty() => Self::By(name.to_string()),
+            Some(_) | None => Self::Absent,
+        }
+    }
+}
+
+/// The verdict to STORE for a finding, plus a human-readable note when it
+/// differs from the verdict the verifier asserted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Adjudication {
+    /// The verdict that is stored.
+    pub stored: AuditVerdict,
+    /// Set when `stored` differs from the asserted verdict: says what was
+    /// missing (demotion) or what overturned it. The CLI prints it on stderr.
+    pub note: Option<String>,
+}
+
+/// Decide the verdict to store from the verifier's asserted verdict, the
+/// machine probe (if any), and the human sign-off (user ruling 2026-10-01,
+/// backlog 80a46e9f).
+///
+/// * `Refuted` stands ONLY with a probe that parsed as `NotReproduced` AND a
+///   human sign-off. Anything less is stored as `Unverified`, and the note
+///   names the missing piece(s). There is no edge from a witness-less REFUTED
+///   to `Refuted`.
+/// * A `Reproduced` probe against a `Refuted` claim is stored as `Confirmed`,
+///   with or without a sign-off.
+/// * A probe that is absent (`None`) or undetermined (unreadable, unparseable)
+///   is never a witness.
+/// * `Confirmed` and `Unverified` are stored as asserted; the probe and
+///   sign-off do not change them. (A `Reproduced` probe does not promote an
+///   `Unverified` claim — the ruling covers REFUTED only.)
+///
+/// `probe` is `None` when no `--probe` was given. Pure: no IO.
+pub fn adjudicate(
+    asserted: AuditVerdict,
+    probe: Option<Determination<ProbeOutcome>>,
+    signoff: &SignOff,
+) -> Adjudication {
+    let as_asserted = |v: AuditVerdict| Adjudication {
+        stored: v,
+        note: None,
+    };
+    let demote = |missing: String| Adjudication {
+        stored: AuditVerdict::Unverified,
+        note: Some(format!(
+            "REFUTED demoted to UNVERIFIED: a REFUTED needs a probe result showing \
+             not_reproduced (--probe) AND a human sign-off (--signed-off-by); missing: {missing}"
+        )),
+    };
+    let signoff_missing = match signoff {
+        SignOff::Absent => true,
+        SignOff::By(_) => false,
+    };
+    match asserted {
+        AuditVerdict::Confirmed => as_asserted(AuditVerdict::Confirmed),
+        AuditVerdict::Unverified => as_asserted(AuditVerdict::Unverified),
+        AuditVerdict::Refuted => match probe {
+            Some(Determination::Known(ProbeOutcome::Reproduced)) => Adjudication {
+                stored: AuditVerdict::Confirmed,
+                note: Some(
+                    "REFUTED overturned to CONFIRMED: the probe reproduced the finding".to_string(),
+                ),
+            },
+            Some(Determination::Known(ProbeOutcome::NotReproduced)) => match signoff {
+                SignOff::By(_) => as_asserted(AuditVerdict::Refuted),
+                SignOff::Absent => demote("human sign-off (--signed-off-by)".to_string()),
+            },
+            Some(Determination::Undetermined(why)) => {
+                let mut missing = format!(
+                    "a readable probe result (--probe was given but is undetermined: {})",
+                    why.as_str()
+                );
+                if signoff_missing {
+                    missing.push_str("; human sign-off (--signed-off-by)");
+                }
+                demote(missing)
+            }
+            None => {
+                let mut missing = "probe result (--probe)".to_string();
+                if signoff_missing {
+                    missing.push_str("; human sign-off (--signed-off-by)");
+                }
+                demote(missing)
+            }
+        },
+    }
+}
+
+#[cfg(test)]
+#[path = "review_finding_adjudicate_tests.rs"]
+mod adjudicate_tests;
 
 #[cfg(test)]
 mod tests {

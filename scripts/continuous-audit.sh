@@ -50,11 +50,14 @@
 #                            It is NOT dropped (it stays on the review-queue
 #                            surface, marked [UNVERIFIED]) and NOT bridged to the
 #                            backlog — it stays pending re-verification.
-#   REFUTED findings are not passed to this script at all, and claiming REFUTED
-#   requires the verifier to have enumerated EVERY consumption path with
-#   verbatim quotes (see the continuous-audit SKILL.md). "I could not find a
-#   permissive path" is UNVERIFIED, not REFUTED — collapsing the two is the
-#   same fail-open this loop audits other crates for.
+#   A verifier REFUTED is passed as --unverified-finding (not dropped): overwatch
+#   stores a REFUTED only with BOTH a machine probe result showing
+#   not_reproduced (--probe) AND a human sign-off (--signed-off-by), and this
+#   loop has no human sign-off (user ruling 2026-10-01, backlog 80a46e9f). The
+#   verifier still has to enumerate EVERY consumption path with verbatim quotes
+#   (see the continuous-audit SKILL.md); that enumeration goes in the rationale.
+#   "I could not find a permissive path" is UNVERIFIED, not REFUTED — collapsing
+#   the two is the same fail-open this loop audits other crates for.
 #   --unverified <N> records the round's undetermined count in the ledger, kept
 #   separate from --confirmed so `new - confirmed` is never read as "refuted".
 # The COUNTS (--new-findings/--confirmed/--regression-tests-added) are recorded

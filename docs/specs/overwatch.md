@@ -223,6 +223,12 @@ append-only なレジストリである。同じ種類の失敗は、発生し�
   既定を置くと `unverified` が既定では決して発生せず、三値が実質二値になるため
   (ユーザー裁定 2026-07-21、backlog eda212a0)。`confirmed` のみが `--to-backlog` で backlog へ橋渡しされ、`unverified` は
   review-queue に `[UNVERIFIED]` マークつきで残り続ける (pending 扱い: 対応済みにも棄却にもしない)。
+  **`refuted` は witness 無しでは保存されない** (ユーザー裁定 2026-10-01、backlog 80a46e9f): 記録時に
+  `review_finding::adjudicate` が、機械 probe の結果 (`--probe <file>`、JSON `{"result":"not_reproduced"|"reproduced"}`)
+  と人間の sign-off (`--signed-off-by <name>`) で裁定する。`not_reproduced` の probe と sign-off の**両方**が
+  揃った時だけ `refuted`、`reproduced` の probe は `confirmed`、それ以外 (probe 無し・読めない/パース不能・
+  sign-off 無し) は `unverified` として保存し、欠けたものを stderr に出す。`confirmed` / `unverified` は
+  witness に関係なくそのまま保存される。
 - **audit-round ledger は per-round メトリクスの append-only 記録** — `audit_round.rs` はラウンドごとに
   `{new_findings, confirmed, unverified, regression_tests_added}` を追記するだけで、finder/verifier は模さない。
   `unverified` は `confirmed` に畳み込まれない (`new_findings - confirmed` を「残りは refuted」と
@@ -235,7 +241,7 @@ append-only なレジストリである。同じ種類の失敗は、発生し�
   （`[systemic]`/`[rollback]`/`[ai-finding]`/`[escalation]` タグ付き・新しい順）または `kind` 判別子付き
   JSON 配列で表示する。`--since`/`--limit` で窓を絞る。`--to-backlog` は CONFIRMED review findings を
   backlog へ橋渡しする。
-- **`overwatch record-finding --source <src> --verdict confirmed|refuted|unverified …`** — AI finding を1件
+- **`overwatch record-finding --source <src> --verdict confirmed|refuted|unverified [--probe <file>] [--signed-off-by <name>] …`** — AI finding を1件
   `review_findings.jsonl` へ追記する（review-queue の ai-finding アームの唯一の書き込み経路）。
   `/continuous-audit` の CONFIRMED subset と UNVERIFIED subset がここへ流れる。`--verdict` は**必須**で、
   省略は入力エラー（記録する側が毎回判断を表明する）。未知の値は `unverified`（判定不能は制限側）。

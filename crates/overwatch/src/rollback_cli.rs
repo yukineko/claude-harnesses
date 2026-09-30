@@ -6,10 +6,11 @@
 /// the rollout. An unwritable store is swallowed (a warning to stderr) rather
 /// than propagated, matching overwatch's observational/never-break-a-turn
 /// invariant.
-use crate::review_finding::{AuditVerdict, ReviewFinding};
+use crate::review_finding::{adjudicate, read_probe, AuditVerdict, ReviewFinding, SignOff};
 use crate::rollback::{RollbackEvent, RollbackReason};
 use crate::store;
 use anyhow::Result;
+use std::path::Path;
 
 /// Record one canary rollback event. Called by the rollout script when the
 /// health gate advises/executes a rollback for a plugin.
@@ -59,18 +60,19 @@ pub fn record(
 
 /// Record one AI-review finding into the overwatch-readable findings store.
 /// This is the defined ingestion point for the Continuous-Audit loop (and for
-/// this crate's integration test). Fail-soft like `record`.
+/// this crate's integration test). A store-write failure is reported (stderr +
+/// `"recorded": false`) and returns `Ok(())`, like `record`.
 ///
-/// `verdict` is the adversarial verifier's tri-state result:
-/// * `Some(raw)` — parsed by [`AuditVerdict::parse`]; anything unrecognized
-///   becomes `Unverified` (undetermined resolves restrictively), never a
-///   silent `Confirmed` and never a rejected/dropped record.
-/// * `None` — the caller stated no verdict. Reads as `Confirmed`, preserving
-///   the pre-tri-state ingestion contract in which `record-finding` was called
-///   ONLY for the verifier's CONFIRMED subset (`scripts/continuous-audit.sh`).
-///   That direction is also the LOUD one: the finding stays actionable on the
-///   review surface instead of being quietly parked. Callers that mean
-///   "undetermined" must say so with `--verdict unverified`.
+/// `verdict` is the verifier's ASSERTED tri-state result, parsed by
+/// [`AuditVerdict::parse`] (anything unrecognized becomes `Unverified`). The
+/// asserted verdict is then passed through [`adjudicate`] together with the
+/// optional probe result file (`probe`) and human sign-off (`signed_off_by`),
+/// and only the adjudicated verdict is stored (backlog 80a46e9f): a REFUTED
+/// without BOTH a `not_reproduced` probe and a sign-off is stored as
+/// `Unverified`; a `reproduced` probe turns a REFUTED into `Confirmed`. When
+/// the stored verdict differs from the asserted one, the reason — naming the
+/// missing piece — is printed on stderr and the asserted verdict is echoed in
+/// the stdout JSON as `asserted`.
 #[allow(clippy::too_many_arguments)]
 pub fn record_finding(
     finding_id: &str,
@@ -80,14 +82,24 @@ pub fn record_finding(
     file: Option<&str>,
     rationale: Option<&str>,
     verdict: &str,
+    probe: Option<&Path>,
+    signed_off_by: Option<&str>,
 ) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let now = store::now();
-    // No `unwrap_or(Confirmed)` here any more: the caller is required to pass a
-    // verdict, so there is no "the recorder said nothing" case left to invent a
-    // value for. An UNRECOGNISED value still resolves to `Unverified` inside
-    // `AuditVerdict::parse` — undetermined to the restrictive side.
-    let verdict = AuditVerdict::parse(verdict);
+    // The caller is required to pass a verdict (no default is invented). An
+    // UNRECOGNISED value resolves to `Unverified` inside `AuditVerdict::parse`
+    // — undetermined to the restrictive side.
+    let asserted = AuditVerdict::parse(verdict);
+    let adjudication = adjudicate(
+        asserted,
+        probe.map(read_probe),
+        &SignOff::from_flag(signed_off_by),
+    );
+    if let Some(note) = &adjudication.note {
+        eprintln!("overwatch: record-finding {finding_id}: {note}");
+    }
+    let verdict = adjudication.stored;
     let finding = ReviewFinding::new(
         finding_id.to_string(),
         source.to_string(),
@@ -107,6 +119,7 @@ pub fn record_finding(
                     "recorded": true,
                     "finding_id": finding_id,
                     "verdict": verdict.label(),
+                    "asserted": asserted.label(),
                 })
             );
         }

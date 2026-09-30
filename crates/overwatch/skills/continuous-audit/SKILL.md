@@ -16,7 +16,8 @@ gate crates への **敵対的レビュー 1 ラウンド**を回し、確認さ
 finder (提案)  →  refute-verifier (反証で篩う)  →  verdict 三値
                                                     ├─ CONFIRMED  → --finding             → queue + backlog
                                                     ├─ UNVERIFIED → --unverified-finding  → queue のみ (pending)
-                                                    └─ REFUTED    → 記録しない (立証責任を満たした場合のみ)
+                                                    └─ REFUTED    → --unverified-finding  → queue のみ (pending)
+                                                                     (REFUTED として成立するのは probe + 人間の sign-off が揃った時だけ。下記)
                                                         │
                         scripts/continuous-audit.sh …  ← 決定論 record
                                                         ▼
@@ -92,6 +93,16 @@ finder の各指摘を、**別の (finder とは独立した) `Task` verifier su
     (「〜のはず」「設計上そうなっていない」は不可)。
   - 「permissive な到達路を示せなかった」は REFUTED **ではない** (それは UNVERIFIED)。
   - 消費者が別 binary/crate にコンパイルされる、呼び出しが動的、という理由で追跡を打ち切った場合も UNVERIFIED。
+  - **verifier の REFUTED はそれだけでは成立しない** (ユーザー裁定 2026-10-01、backlog 80a46e9f)。
+    overwatch は `record-finding --verdict refuted` を、**機械 probe の結果が `not_reproduced`**
+    (`--probe <file>`、JSON `{"result":"not_reproduced"}`) **かつ人間の sign-off** (`--signed-off-by <name>`)
+    の両方が揃った場合にだけ `refuted` として保存する。どちらかが欠ける・probe が読めない/パースできない場合は
+    `unverified` として保存し、欠けたものを stderr に出す。probe が `reproduced` なら `confirmed` として保存する。
+  - このループ (skill + `scripts/continuous-audit.sh`) は人間の sign-off を持たないので、**verifier が REFUTED と
+    判定した指摘は捨てずに `--unverified-finding` で UNVERIFIED として記録する** (UNVERIFIED になることを承知の上で)。
+    rationale の先頭に `verifier: REFUTED (no probe witness / no human sign-off)` と書き、列挙した消費経路と逐語引用を続ける。
+    REFUTED として閉じられるのは、人間が probe を回して `overwatch record-finding --verdict refuted --probe <file>
+    --signed-off-by <name>` を実行した時だけ。この代償 (人間が働くまで queue は単調増加する) は受け入れ済み。
 - **UNVERIFIED**: 上記いずれも満たさない = **判定不能**。立証も反証もできなかった。
   - **捨てない**。項目は pending のまま残す (done にも失敗にもしない)。
   - CONFIRMED と同じ扱い (backlog への自動起票 = 対応済みの作業として流す) にもしない。
@@ -120,7 +131,8 @@ finder の各指摘を、**別の (finder とは独立した) `Task` verifier su
 - **UNVERIFIED** と判定した際も同様に `rationale` を残す。内容は「辿れた経路」と**「辿れなかった経路」**の
   両方 (何が未確認のまま残っているか) を書く。次ラウンドの再検証はここから再開する。
 - **REFUTED** と判定した際は、消費経路の全列挙と各経路の逐語引用を verifier の出力に残す。列挙できない/
-  引用できない場合は REFUTED を名乗らせない (UNVERIFIED に落とす)。
+  引用できない場合は REFUTED を名乗らせない (UNVERIFIED に落とす)。列挙できた場合も、記録は
+  `--unverified-finding` で行い、その列挙を rationale に入れる (上記: REFUTED の成立には probe と人間の sign-off が要る)。
 
 CONFIRMED subset と UNVERIFIED subset をそれぞれ確定し、各件を `finding-id | severity | summary | file` に
 整形する。**finding-id は安定なキー**にする (例: `CA-<crate>-<連番>` や rule id)。同じ指摘が次ラウンドでも
@@ -152,7 +164,9 @@ scripts/continuous-audit.sh --round <round-id> --dry-run
 - **verdict は record 時に記録される**: `--finding` は `overwatch record-finding --verdict confirmed`、
   `--unverified-finding` は `--verdict unverified` として書かれる。overwatch 側では
   **未知の verdict 値は `unverified` に倒れる** (判定不能は制限側。silently confirmed にはならず、
-  行が捨てられることもない)。**REFUTED はスクリプトに渡さない** (載せない)。
+  行が捨てられることもない)。**verifier の REFUTED は `--unverified-finding` として渡す** (捨てない。
+  スクリプトは `--verdict refuted` を書かない — witness 無しの REFUTED は overwatch 側でも UNVERIFIED に倒される)。
+  `--unverified` 件数にも数える。
 - **UNVERIFIED の下流での扱い** (ここが二値との差):
   - `overwatch review-queue` に `[UNVERIFIED]` マークつきで並ぶ = **捨てられない**。
   - `overwatch review-queue --to-backlog` では**流れない** = CONFIRMED のように「対応中の作業」に

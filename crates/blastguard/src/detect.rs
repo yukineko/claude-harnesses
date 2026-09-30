@@ -14281,6 +14281,145 @@ and must not be Allowed: {failing:?}"
     }
 
     #[test]
+    fn deletion_tmpdir_naming_a_system_dir_or_a_home_subtree_is_not_a_root() {
+        // Verifier finding on 566d7717: TMPDIR=/etc made `/private/etc` a
+        // temp deletion root, so `rm -rf /etc/ssh` was an Allow.
+        let f = DelFx::new("tmpdir-sys");
+        let cases = [
+            ("/etc".to_string(), "/etc/ssh".to_string()),
+            ("/private/etc".to_string(), "/private/etc/ssh".to_string()),
+            ("/usr/local".to_string(), "/usr/local/x".to_string()),
+            ("/var/log".to_string(), "/var/log/x".to_string()),
+            (format!("{}/docs", f.home), format!("{}/docs/x", f.home)),
+        ];
+        for (tmpdir, target) in cases {
+            let roots = SafeRoots::new(
+                Some(&f.proj),
+                Some(&f.proj),
+                Some(&f.home),
+                Some(&tmpdir),
+                Some(del_real),
+            );
+            let d = detect_scoped(
+                "Bash",
+                Some(&json!({ "command": format!("rm -rf {target}") })),
+                &roots,
+            );
+            assert_ne!(verdict_name(&d), "allow", "TMPDIR={tmpdir} rm -rf {target}");
+        }
+        // Control: the fixture's own TMPDIR (under the OS temp dir) is a root.
+        assert_eq!(f.run(&format!("rm -rf {}/a", f.tmp)), Decision::Allow);
+    }
+
+    #[test]
+    fn deletion_tmpdir_is_not_a_root_when_home_is_unset() {
+        let f = DelFx::new("tmpdir-nohome");
+        let cmd = format!("rm -rf {}/a", f.tmp);
+        let with_home = f.run(&cmd);
+        assert_eq!(with_home, Decision::Allow, "control: HOME set");
+        let roots = SafeRoots::new(
+            Some(&f.proj),
+            Some(&f.proj),
+            None,
+            Some(&f.tmp),
+            Some(del_real),
+        );
+        let d = detect_scoped("Bash", Some(&json!({ "command": cmd })), &roots);
+        assert_ne!(verdict_name(&d), "allow", "{cmd} with HOME unset: {d:?}");
+    }
+
+    /// Directory holding the fake `git` scripts of
+    /// `deletion_failing_git_probe_never_allows` (set once by that test).
+    static FAKE_GIT_DIR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+    fn fake_git_probe(
+        mode: &str,
+        path: &str,
+        cands: &[String],
+    ) -> Determination<crate::reversible::TreeGitFacts> {
+        let dir = FAKE_GIT_DIR.get().expect("fake git dir set");
+        crate::reversible::probe_tree_with(
+            std::ffi::OsStr::new(&format!("{dir}/git-{mode}")),
+            path,
+            cands,
+        )
+    }
+    fn fake_git_clean(p: &str, c: &[String]) -> Determination<crate::reversible::TreeGitFacts> {
+        fake_git_probe("clean", p, c)
+    }
+    fn fake_git_fail(p: &str, c: &[String]) -> Determination<crate::reversible::TreeGitFacts> {
+        fake_git_probe("fail", p, c)
+    }
+    fn fake_git_garbage(p: &str, c: &[String]) -> Determination<crate::reversible::TreeGitFacts> {
+        fake_git_probe("garbage", p, c)
+    }
+    fn fake_git_hang(p: &str, c: &[String]) -> Determination<crate::reversible::TreeGitFacts> {
+        fake_git_probe("hang", p, c)
+    }
+
+    #[test]
+    fn deletion_failing_git_probe_never_allows() {
+        use std::os::unix::fs::PermissionsExt;
+        // Under /var/tmp: not a temp root and not a system directory, so the
+        // operand reaches the git classes and the probe decides.
+        let f = DelFx::new_in(std::path::Path::new("/var/tmp"), "fakegit");
+        std::fs::create_dir_all(format!("{}/src", f.proj)).unwrap();
+        let bin = format!("{}/bin", f.scratch);
+        std::fs::create_dir_all(&bin).unwrap();
+        let status = [
+            ("clean", "exit 0"),
+            ("fail", "exit 128"),
+            ("garbage", "printf 'x'; exit 0"),
+            ("hang", "exec sleep 5"),
+        ];
+        for (mode, on_status) in status {
+            let script = format!(
+                "#!/bin/sh\ncase \"$*\" in\n  *rev-parse*) echo '{}' ;;\n  *\" status \"*) {on_status} ;;\n  *) exit 0 ;;\nesac\n",
+                f.proj
+            );
+            let p = format!("{bin}/git-{mode}");
+            std::fs::write(&p, script).unwrap();
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let _ = FAKE_GIT_DIR.set(bin);
+        let run = |probe: crate::reversible::GitTreeProbe| {
+            let roots = f.roots_with_cwd(&f.proj.clone()).with_git_tree_probe(probe);
+            detect_scoped(
+                "Bash",
+                Some(&json!({ "command": format!("rm -rf {}/src", f.proj) })),
+                &roots,
+            )
+        };
+        // Control: a git that answers "clean" makes it an Allow (class 5),
+        // so the fixture really reaches the probe.
+        let c = run(fake_git_clean);
+        assert_eq!(
+            c,
+            Decision::Allow,
+            "control: {:?}",
+            fake_git_clean(&format!("{}/src", f.proj), &[])
+        );
+        for (name, probe) in [
+            (
+                "non-zero exit",
+                fake_git_fail as crate::reversible::GitTreeProbe,
+            ),
+            ("unparseable output", fake_git_garbage),
+            ("timeout", fake_git_hang),
+        ] {
+            let d = run(probe);
+            assert_ne!(verdict_name(&d), "allow", "{name}: {d:?}");
+            assert!(
+                matches!(
+                    probe(&format!("{}/src", f.proj), &[]),
+                    Determination::Undetermined(_)
+                ),
+                "{name}: probe must be Undetermined"
+            );
+        }
+    }
+
+    #[test]
     fn deletion_without_a_resolver_changes_nothing() {
         // The library entry (`detect`, SafeRoots::none) keeps the shape Deny.
         assert!(bash("rm -rf /tmp/foo").is_deny());

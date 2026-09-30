@@ -133,10 +133,19 @@ plus `Undetermined` — and **only `Inside` may relax a verdict**.
   build output in a git work tree, or a git subtree with nothing untracked /
   modified / ignored → `allow`; a git subtree where git reports such content →
   `deny` naming it; the root of any of those areas, `$HOME`, anything directly
-  in `$HOME`, a system directory or a git work-tree root → `deny` even inside
-  a safe root (0.2.94); anything it cannot determine keeps the verdicts above.
-  A build-output-named directory git does not report ignored (a tracked
-  `target`) is judged by recoverability like any other git subtree.
+  in `$HOME`, or a system directory → `deny` even inside a safe root (0.2.94).
+  A git work-tree root is `deny` too, EXCEPT a clone root that lies strictly
+  inside `/tmp`, `$TMPDIR`, a cache root or worktree storage: that is an
+  `allow` by the earlier class. Anything it cannot determine keeps the
+  verdicts above. A build-output-named directory git does not report ignored
+  (a tracked `target`) is judged by recoverability like any other git
+  subtree. `/var/tmp` is a departure from the spec's "`/var` outside
+  `$TMPDIR` is a system dir": paths STRICTLY under `/var/tmp` /
+  `/private/var/tmp` are judged by the git classes (and the home / root
+  refusals) like any other path, but `/var/tmp` is NOT a temp root — nothing
+  there is an `allow` merely for being there. `$TMPDIR` is only a temp root
+  when HOME is known and it is not a system directory (e.g. `TMPDIR=/etc`),
+  not `$HOME` or an ancestor, and not below `$HOME` (0.2.95).
   Full table: `src/deletion.rs` and the README.ja.md section
   「再帰 `rm` は「何が消えるか」で判定する」.
 - **What does not** (each pinned by a test in `tests/scoped_destructive.rs`):

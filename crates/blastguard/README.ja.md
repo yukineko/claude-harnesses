@@ -242,7 +242,7 @@ directory tree` で拒否されたこと。
   cwd 追跡も、`<project>/lnk/..` と綴られた payload の cwd も同様にずれる（payload の
   cwd の規則が止めるのは worktree の `allow` だけで、この `ask` は止めない）。`allow` にはならないが、人間に見せる質問が誤っている。
 
-## 再帰 `rm` は「何が消えるか」で判定する — 0.2.93（ユーザー裁定、backlog 3aa215e1）
+## 再帰 `rm` は「何が消えるか」で判定する — 0.2.95（ユーザー裁定、backlog 3aa215e1）
 
 ### 削除の原則
 
@@ -265,7 +265,10 @@ directory tree` で拒否されたこと。
 
 1. **worktree 置き場** — 上の節のとおり（変更なし）。
 2. **一時ディレクトリ** — `/tmp`、`/private/tmp`、`$TMPDIR`（`/var/folders/.../T` など。
-   `/var/tmp` は含まない）。
+   `/var/tmp` は含まない）。`$TMPDIR` は HOME が分かっているときだけ、かつシステム
+   ディレクトリ（`TMPDIR=/etc` → `/private/etc` など。`/var/folders` の下は除く）でも、
+   `$HOME` やその祖先でも、`$HOME` の下（`TMPDIR=$HOME/src`）でもないときだけルートになる
+   （0.2.95）。
 3. **キャッシュ** — `$HOME/.cache`、`$HOME/Library/Caches`。
 4. **ビルド成果物** — git 作業ツリー内で、オペランドが既知のビルド出力名
    （`target` `node_modules` `dist` `build` `out` `.next` `__pycache__`
@@ -288,11 +291,14 @@ uncommitted changes (e.g. `dirty/m`)``）。1 つでもあれば、他のオペ�
 
 **`deny`（削除してはいけないもの。0.2.94 から）** — オペランドが次の*それ自身*であるとき:
 各クラスのルートそれ自身（`rm -rf /tmp`、`rm -rf ~/.cache`、worktree 置き場のルート、
-作業ツリーのルート）、`$HOME` そのもの・`$HOME/<x>` 直下（ホーム直下の設定）・`$HOME` の
+作業ツリーのルート。ただし `/tmp`・`$TMPDIR`・キャッシュ・worktree 置き場の*厳密な内側*に
+ある clone のルートは、先のクラスで `allow`）、`$HOME` そのもの・`$HOME/<x>` 直下（ホーム直下の設定）・`$HOME` の
 祖先、システムディレクトリ（`/`、`/etc`、`/usr`、`/System`、`/Library`、`/bin`、
 `$TMPDIR` 外の `/var` …。ただし `/var/tmp`・`/private/var/tmp` の*厳密な内側*は
-システムディレクトリ扱いしない）。1 つでもあれば全体が `deny`（他のオペランドが
-`allow` 相当でも）。
+システムディレクトリ扱いしない — 仕様の「`$TMPDIR` 外の `/var`」からの意図的な逸脱。
+そこは git のクラスとホーム・ルートの拒否で他のパスと同じに判定するが、`/var/tmp` は
+一時ディレクトリのルートではないので、そこにあるだけでは `allow` にならない）。
+1 つでもあれば全体が `deny`（他のオペランドが `allow` 相当でも）。
 
 0.2.93 ではこれらが従来の判定に落ちていたため、cwd や `/var/tmp` などのセッションの
 安全ルートの内側にあると confined `ask` に弱まっていた（安全ルート内の偽の HOME や git

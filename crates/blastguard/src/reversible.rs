@@ -357,8 +357,8 @@ const GIT_REDIRECT_ENV: &[&str] = &[
 /// magic not supported by this command" — observed), so it is called with
 /// `literal = false`; its arguments are paths this crate built from literal
 /// operands (no glob characters reach here — `scope`'s literal-path check).
-fn tree_git(dir: &Path, literal: bool) -> std::process::Command {
-    let mut cmd = std::process::Command::new("git");
+fn tree_git(git: &std::ffi::OsStr, dir: &Path, literal: bool) -> std::process::Command {
+    let mut cmd = std::process::Command::new(git);
     for var in GIT_REDIRECT_ENV {
         cmd.env_remove(var);
     }
@@ -446,6 +446,17 @@ pub fn parse_ls_files_sv_z(stdout: &str) -> Option<(usize, bool, bool)> {
 /// prints something unparseable. Each invocation is bounded by
 /// [`TREE_GIT_TIMEOUT`].
 pub fn probe_tree(path: &str, build_candidates: &[String]) -> Determination<TreeGitFacts> {
+    probe_tree_with(std::ffi::OsStr::new("git"), path, build_candidates)
+}
+
+/// [`probe_tree`] with the `git` program named explicitly — the seam the
+/// failure-mode tests use to substitute a git that fails, hangs or prints
+/// garbage. Production always passes `git`.
+pub(crate) fn probe_tree_with(
+    git: &std::ffi::OsStr,
+    path: &str,
+    build_candidates: &[String],
+) -> Determination<TreeGitFacts> {
     let p = Path::new(path);
     let meta = match std::fs::symlink_metadata(p) {
         Ok(m) => m,
@@ -464,7 +475,7 @@ pub fn probe_tree(path: &str, build_candidates: &[String]) -> Determination<Tree
         }
     };
     let toplevel = match run_tree_git(
-        tree_git(dir, true).args(["rev-parse", "--show-toplevel"]),
+        tree_git(git, dir, true).args(["rev-parse", "--show-toplevel"]),
         &[0],
     ) {
         Determination::Known((_, out)) => out.trim().to_string(),
@@ -474,7 +485,7 @@ pub fn probe_tree(path: &str, build_candidates: &[String]) -> Determination<Tree
         return Determination::undetermined("git printed a work-tree root that is not absolute");
     }
     let status_out = match run_tree_git(
-        tree_git(dir, true)
+        tree_git(git, dir, true)
             .args([
                 "status",
                 "--porcelain=v1",
@@ -493,7 +504,7 @@ pub fn probe_tree(path: &str, build_candidates: &[String]) -> Determination<Tree
         return Determination::undetermined("git status printed a record blastguard cannot parse");
     };
     let ls_out = match run_tree_git(
-        tree_git(dir, true)
+        tree_git(git, dir, true)
             .args(["ls-files", "-z", "-s", "-v", "--"])
             .arg(path),
         &[0],
@@ -515,7 +526,7 @@ pub fn probe_tree(path: &str, build_candidates: &[String]) -> Determination<Tree
         // `check-ignore` exits 0 = ignored, 1 = not ignored; anything else
         // (128: not a repo, a path outside it, …) is not an answer.
         match run_tree_git(
-            tree_git(dir, false)
+            tree_git(git, dir, false)
                 .args(["check-ignore", "-q", "--"])
                 .arg(cand),
             &[0, 1],
@@ -537,6 +548,31 @@ pub fn probe_tree(path: &str, build_candidates: &[String]) -> Determination<Tree
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_tree_git_only_knows_listed_exit_codes_within_the_timeout() {
+        let sh = |script: &str| {
+            let mut c = std::process::Command::new("sh");
+            c.args(["-c", script]);
+            c
+        };
+        assert_eq!(
+            run_tree_git(&mut sh("printf ok"), &[0]),
+            Determination::known((0, "ok".to_string()))
+        );
+        assert_eq!(
+            run_tree_git(&mut sh("exit 1"), &[0, 1]),
+            Determination::known((1, String::new()))
+        );
+        assert!(matches!(
+            run_tree_git(&mut sh("printf partial; exit 128"), &[0]),
+            Determination::Undetermined(_)
+        ));
+        assert!(matches!(
+            run_tree_git(&mut sh("exec sleep 5"), &[0]),
+            Determination::Undetermined(_)
+        ));
+    }
 
     // --- decide_recovery: one test per row of the documented table ---
 

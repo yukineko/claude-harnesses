@@ -47,6 +47,7 @@ mod store;
 mod subagent_stop;
 mod verify;
 mod worktree;
+mod wt_reap;
 mod wt_reconcile;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -91,6 +92,17 @@ enum Command {
     /// because a fabricated heartbeat makes a dead child look alive. Exits 0
     /// always (observability, not a gate).
     SubagentStop,
+    /// PostToolUse / UserPromptSubmit hook: refresh `heartbeat_at` on this
+    /// session's `session-*` worktree registration (written at creation by
+    /// `scripts/session-worktree-init.py`), at most once per 60s per record.
+    /// Touches only records in the `session-worktrees` registry bucket that
+    /// carry this session's id or name the worktree of the hook's cwd; creates
+    /// nothing. NOT fail-soft: the heartbeat is what keeps `worktree reap` off
+    /// a live session's worktree, so a failed refresh exits 1 with the reason
+    /// on stderr instead of silently letting the registration age out. Ignores
+    /// `CONDUKT_DISABLE` for the same reason — a disabled heartbeat makes a
+    /// live worktree look dead.
+    SessionHeartbeat,
     /// Compute a schedule from a decomposition JSON (stdin or --file).
     Schedule {
         #[arg(long)]
@@ -709,6 +721,21 @@ enum WtAction {
         #[arg(long)]
         preserve: bool,
     },
+    /// Remove finished `session-*` worktrees (user ruling 2026-09-30, backlog
+    /// 491f6e94). A git-registered worktree on a `session-*` branch is removed
+    /// (`git worktree remove`, no --force; the branch is kept) only when its
+    /// session registration has aged out under the reconcile death rule, its
+    /// branch is an ancestor of the default branch, and its tree is clean
+    /// including untracked files. Everything else is kept; every worktree is
+    /// printed as `removed`, `kept` or `kept (undetermined)` with its reason.
+    /// Death needs two probes a window apart, so the first run on a fresh
+    /// worktree removes nothing.
+    ///
+    /// Exit 0 means the pass completed (undetermined worktrees are kept and
+    /// counted in the summary, not an error); exit 1 means an authorised
+    /// removal or its cleanup failed, or the reconciliation could not run.
+    /// Never run automatically.
+    Reap,
     /// List registered worktrees (path<TAB>branch).
     List,
 }
@@ -1815,6 +1842,16 @@ fn main() {
             }
             run_editgate();
         }),
+        Command::SessionHeartbeat => {
+            let code = match wt_reap::run_session_heartbeat_hook(&read_stdin()) {
+                Ok(_) => 0,
+                Err(e) => {
+                    eprintln!("condukt session-heartbeat: {e:#}");
+                    1
+                }
+            };
+            std::process::exit(code);
+        }
         Command::SubagentStop => run_hook(|| {
             if Config::disabled() {
                 return;
@@ -2451,7 +2488,11 @@ fn run_user(cmd: Command) -> Result<()> {
         // These are dispatched as hooks in main() (via run_hook, which exits and
         // never returns here). Reaching this arm would be an internal dispatch
         // bug; return a clean error instead of panicking the process.
-        Command::Restore | Command::Statusline | Command::Editgate | Command::SubagentStop => {
+        Command::Restore
+        | Command::Statusline
+        | Command::Editgate
+        | Command::SubagentStop
+        | Command::SessionHeartbeat => {
             bail!("internal: hook subcommands must be dispatched in main(), not run_user()")
         }
     }
@@ -3530,6 +3571,17 @@ fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
                      which does not exist on disk",
                     c.run_id, c.task_id, c.state_namespace, c.claimed_worktree
                 );
+            }
+        }
+        WtAction::Reap => {
+            // Same repo-scoped lock as `cleanup`, held across judge→remove so
+            // the verdict cannot go stale against a peer's worktree add/remove.
+            let _repo_lock = lock::acquire_repo_primary(cfg, &repo)?;
+            let report = wt_reap::reap(cfg, cwd, &repo)?;
+            print!("{}", report.render());
+            let code = report.exit_code();
+            if code != 0 {
+                std::process::exit(code);
             }
         }
         WtAction::List => {

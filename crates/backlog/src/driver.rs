@@ -188,11 +188,21 @@ pub fn unregister_at(session_id: &str, project: &str, base: Option<&Path>) -> Re
 /// Returns `Undetermined` when the registry cannot be read for any reason other
 /// than "it has never been created". See the module docs: an unreadable
 /// registry is not an empty one.
+///
+/// The cross-project scan reads only buckets in backlog's OWN layout — a
+/// directory named by [`project_slug`] (16 lowercase hex digits), which is the
+/// only kind of bucket [`register_at`] has ever written. The registry root is
+/// shared with records that are not `/flow` drivers (condukt's session-worktree
+/// registrations, backlog 491f6e94, which live in a non-slug bucket so that
+/// condukt can age them out); counting those would make `daily` stand down
+/// whenever any session is open. This is a rule about backlog's own naming, not
+/// a list of other tools' bucket names. A slug-named bucket that cannot be read
+/// is still undetermined.
 pub fn presence_at(project: Option<&str>, base: Option<&Path>) -> Determination<Presence> {
     let dirs: Vec<PathBuf> = match project {
         Some(p) => vec![project_dir(base, p)],
         None => match list_subdirs(&drivers_root(base)) {
-            Determination::Known(d) => d,
+            Determination::Known(d) => d.into_iter().filter(|p| is_project_slug_dir(p)).collect(),
             Determination::Undetermined(why) => return Determination::Undetermined(why),
         },
     };
@@ -254,6 +264,13 @@ fn read_dir_entries(dir: &Path) -> Determination<Vec<PathBuf>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Determination::Known(Vec::new()),
         Err(e) => Determination::undetermined(format!("reading {}: {e}", dir.display())),
     }
+}
+
+/// Is this bucket named the way [`project_slug`] names one?
+fn is_project_slug_dir(p: &Path) -> bool {
+    p.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.len() == 16 && n.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')))
 }
 
 fn list_subdirs(dir: &Path) -> Determination<Vec<PathBuf>> {

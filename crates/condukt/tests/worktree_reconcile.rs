@@ -1635,3 +1635,158 @@ fn git_worktree_list_porcelain_shape_is_as_expected() {
         "primary + one linked worktree expected: {text}"
     );
 }
+
+// -- 9. Reaping merged, clean, aged-out `session-*` worktrees (backlog 491f6e94)
+//
+// USER RULING 2026-09-30 (option A): `session-worktree-init.py` registers a
+// `*.driver` record for the worktree it creates; a reaper (`condukt worktree
+// reap`) removes a REGISTERED `session-*` worktree only when ALL hold:
+//   (1) its registration is aged out by the existing death rule (dead),
+//   (2) its branch is an ancestor of main,
+//   (3) its tree is clean.
+// A worktree with no registration stays Undetermined and is kept.
+//
+// The reaper is a NEW command, so at HEAD `reap` is an unknown subcommand and
+// the reclaim tests are RED. `cleanup --remove` is not the surface under test:
+// it only ever removes unregistered dirs.
+
+impl Fixture {
+    /// A `session-*` worktree whose branch carries one commit that has (or has
+    /// not) been merged into main, mirroring what a finished section-8 session
+    /// leaves behind.
+    fn session_worktree(&self, name: &str, merged: bool) -> PathBuf {
+        let wt = self.add_worktree(name, name);
+        std::fs::write(wt.join(format!("{name}.txt")), "work\n").unwrap();
+        run_git(&wt, &["add", &format!("{name}.txt")]);
+        run_git(&wt, &["commit", "-q", "-m", "session work"]);
+        if merged {
+            run_git(
+                &self.repo,
+                &["merge", "-q", "--no-ff", "-m", "merge session", name],
+            );
+        }
+        wt
+    }
+
+    /// `worktree reap` twice with the progress window collapsed: death needs a
+    /// frozen fingerprint across two probes, exactly like `reconcile_json_settled`.
+    fn reap_settled(&self) -> Output {
+        let env = [("HARNESS_PROGRESS_WINDOW_SECS", "0")];
+        let _ = self.condukt_env_in(&self.repo, &["worktree", "reap"], &env);
+        self.condukt_env_in(&self.repo, &["worktree", "reap"], &env)
+    }
+
+    fn is_git_registered(&self, wt: &Path) -> bool {
+        let list = run_git(&self.repo, &["worktree", "list", "--porcelain"]);
+        let canon = wt.canonicalize().unwrap_or_else(|_| wt.to_path_buf());
+        list.lines().any(|l| {
+            l.strip_prefix("worktree ")
+                .map(|p| Path::new(p) == wt || Path::new(p) == canon)
+                .unwrap_or(false)
+        })
+    }
+}
+
+fn assert_kept(f: &Fixture, wt: &Path, why: &str) {
+    assert!(wt.is_dir(), "{why}: the directory must be kept");
+    assert!(f.is_git_registered(wt), "{why}: git must still list it");
+}
+
+/// The reclaimed case: aged-out registration + merged branch + clean tree.
+#[test]
+fn reap_removes_a_merged_clean_session_worktree_with_an_aged_out_registration() {
+    let f = Fixture::new("reap-reclaim");
+    let wt = f.session_worktree("session-aaaa1111", true);
+    f.write_driver("bucket", "gone", &wt, 0);
+
+    let out = f.reap_settled();
+    assert!(
+        out.status.success(),
+        "`condukt worktree reap` must exist and succeed (exit {:?}):\nstderr:\n{}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !wt.exists(),
+        "aged-out registration + merged + clean must be reaped: {}",
+        wt.display()
+    );
+    assert!(!f.is_git_registered(&wt), "git must no longer list it");
+}
+
+/// Control: a LIVE registration keeps an otherwise reclaimable worktree.
+#[test]
+fn reap_keeps_a_session_worktree_with_a_live_registration() {
+    let f = Fixture::new("reap-live");
+    let wt = f.session_worktree("session-bbbb2222", true);
+    f.write_driver("bucket", "at-work", &wt, now());
+    let _ = f.reap_settled();
+    assert_kept(&f, &wt, "live registration");
+}
+
+/// Control: aged-out + clean but the branch is NOT merged into main.
+#[test]
+fn reap_keeps_an_unmerged_session_worktree() {
+    let f = Fixture::new("reap-unmerged");
+    let wt = f.session_worktree("session-cccc3333", false);
+    f.write_driver("bucket", "gone", &wt, 0);
+    let _ = f.reap_settled();
+    assert_kept(&f, &wt, "unmerged branch");
+}
+
+/// Control: aged-out + merged but the tree has an uncommitted change.
+#[test]
+fn reap_keeps_a_dirty_session_worktree() {
+    let f = Fixture::new("reap-dirty");
+    let wt = f.session_worktree("session-dddd4444", true);
+    f.write_driver("bucket", "gone", &wt, 0);
+    std::fs::write(wt.join("seed.txt"), "edited\n").unwrap();
+    let _ = f.reap_settled();
+    assert_kept(&f, &wt, "dirty tree");
+    assert_eq!(
+        std::fs::read_to_string(wt.join("seed.txt")).unwrap(),
+        "edited\n",
+        "the uncommitted edit must survive"
+    );
+}
+
+/// Control: merged + clean but NO registration (every pre-ruling worktree).
+#[test]
+fn reap_keeps_a_session_worktree_with_no_registration() {
+    let f = Fixture::new("reap-noreg");
+    let wt = f.session_worktree("session-eeee5555", true);
+    let _ = f.reap_settled();
+    assert_kept(&f, &wt, "no registration (Undetermined)");
+}
+
+/// Anti-vacuity: the four controls above also pass at HEAD, where `reap` does
+/// not exist. This test puts all five shapes in ONE repo and requires the
+/// reclaimable one gone and the other four present, so a reaper that does
+/// nothing, and one that removes everything, both fail.
+#[test]
+fn reap_removes_only_the_reclaimable_one_among_mixed_worktrees() {
+    let f = Fixture::new("reap-mixed");
+    let reclaim = f.session_worktree("session-r0000001", true);
+    let live = f.session_worktree("session-r0000002", true);
+    let unmerged = f.session_worktree("session-r0000003", false);
+    let dirty = f.session_worktree("session-r0000004", true);
+    let noreg = f.session_worktree("session-r0000005", true);
+    f.write_driver("bucket", "reclaim", &reclaim, 0);
+    f.write_driver("bucket", "live", &live, now());
+    f.write_driver("bucket", "unmerged", &unmerged, 0);
+    f.write_driver("bucket", "dirty", &dirty, 0);
+    std::fs::write(dirty.join("seed.txt"), "edited\n").unwrap();
+
+    let out = f.reap_settled();
+    assert!(
+        out.status.success(),
+        "reap must succeed (exit {:?}): {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!reclaim.exists(), "the reclaimable worktree must be gone");
+    assert_kept(&f, &live, "live");
+    assert_kept(&f, &unmerged, "unmerged");
+    assert_kept(&f, &dirty, "dirty");
+    assert_kept(&f, &noreg, "no registration");
+}

@@ -2,7 +2,8 @@
 # condukt plugin launcher — selects the per-platform binary bundled in this dir.
 #
 # Hooks call `${CLAUDE_PLUGIN_ROOT}/bin/condukt <sub>` (hooks/hooks.json:
-# SessionStart `restore`, Stop `state record-run --all`, PostToolUse `editgate`);
+# SessionStart `restore`, Stop `state record-run --all`, PostToolUse `editgate`,
+# PostToolUse + UserPromptSubmit `session-heartbeat`);
 # the /condukt skill and worker agents call the much larger CLI surface. This
 # dispatcher execs the matching `condukt-<os>-<arch>` build.
 #
@@ -50,6 +51,12 @@
 #             the restrictive direction. Exiting non-zero here would instead
 #             report a failed hook on every single stop, so the stderr line
 #             above is the "did not run" signal.
+#
+#   session-heartbeat  PostToolUse (every tool) / UserPromptSubmit -> exit 1
+#             via "everything else", on purpose. It refreshes the session
+#             worktree registration that keeps `worktree reap` off a live
+#             worktree; if it cannot run the registration ages out, so the
+#             failure must be visible on every call rather than silent.
 #
 #   everything else -> exit 1.
 root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"

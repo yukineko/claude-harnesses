@@ -110,7 +110,8 @@ rm -rf /        -> deny: recursive rm (-r) can delete an entire directory tree
   `/tmp`・`/var/tmp`（＋環境変数 `TMPDIR`）。`/`・`/usr`・`/mnt/c/Users`・`$HOME`
   などは安全ルートになれない（`NEVER_A_ROOT` と 2 コンポーネント下限）。
 - **緩和される判定**: 対象が**すべて**安全ルートの*厳密な*配下に解決できたときだけ、
-  `deny` → **`ask`** に変わる（`allow` にはならない）。対象コマンドは 再帰/ワイルド
+  `deny` → **`ask`** に変わる（`allow` にはならない。唯一の例外は下の
+  「worktree 置き場」— 再帰 `rm` だけが `allow` になる）。対象コマンドは 再帰/ワイルド
   カード `rm`、`find -delete` / `-exec rm`、`truncate` / `shred`、切り詰め `>`
   リダイレクト、`git clean -f`、`chmod -R` / `chown -R`。
 - **緩和されないもの**（すべて実測でテストに固定済み — `tests/scoped_destructive.rs`）:
@@ -119,7 +120,9 @@ rm -rf /        -> deny: recursive rm (-r) can delete an entire directory tree
   target`）／`cd` で外に出る相対パス（`cd /usr && rm -rf lib`）／**安全ルートそれ自身**
   （`rm -rf .` は `.git` ごと消えるので deny のまま）／**保護パス**（`.git`,
   `.claude/settings.json`, `.githooks/**` は場所で免罪されない）／**symlink で外へ
-  出るもの**（実パスを解決してから判定する）／`find . -delete` のように絞り込み述語を
+  出るもの**（実パスを解決してから判定する。ただし `..` は symlink 解決の*前に*字面で
+  畳むので、`<project>/lnk/../x` のように外向き symlink の後ろに `..` を置いた綴りは
+  ここでは止まらない — 下の「既知の未修正事項」）／`find . -delete` のように絞り込み述語を
   持たない全走査。
 - **`ask` は人間がいる場合のみ**。headless / condukt worker / cron では
   `Decision::hardened` が `deny` へ戻す。**ただし 0.2.53 でこの一文は条件付きになった** —
@@ -132,6 +135,111 @@ rm -rf /        -> deny: recursive rm (-r) can delete an entire directory tree
   フック本体が注入する resolver（`scope::RealPathResolver`）だけが行うので、
   `detect` は従来どおり純粋関数であり、condukt / specguard / daily の
   `sh -c` 経路の判定は一切変わらない。
+
+### worktree 置き場の中の再帰 `rm` は `allow` — 0.2.82（ユーザー裁定）
+
+2026-09-30 のユーザー裁定（backlog 873651b9、「worktreeへの削除を制限しているhookを
+排除して」）により、**worktree 置き場（worktree storage root）の厳密な内側だけを
+対象とする再帰 `rm`（`-r`/`-R`/`--recursive`）は確認なしで `allow`** になる
+（headless / condukt worker でも `allow`）。契機は subagent が
+`rm -rf ~/.condukt/worktrees/pgv-target` を `recursive rm (-r) can delete an entire
+directory tree` で拒否されたこと。
+
+- **worktree 置き場**: `$HOME/.condukt/worktrees`（`HOME` が絶対パスのときのみ）と、
+  payload の `cwd`・`CLAUDE_PROJECT_DIR` それぞれについて — パスに `.harness-worktrees`
+  というコンポーネントがあればそこまで（最後のもの）、無ければ
+  `dirname(P)/.harness-worktrees`。安全ルートとは**別の集合**で、再帰 `rm` 以外の
+  動詞（`truncate`、`find -delete`、`git clean` …）には何も与えない。`NEVER_A_ROOT`／
+  `$HOME` 不可／2 コンポーネント下限は派生ルートと同じ。
+- **置き場として数えるのは「今、実在する本物のディレクトリ」だけ**（0.2.84、独立
+  検証者が 0.2.83 で `ln -s ~/Documents <親>/.harness-worktrees` → `rm -rf
+  <親>/.harness-worktrees/precious` が `allow` になる脱出を実測したための修正）:
+  - アンカー（`.condukt/worktrees` は `$HOME`、`.harness-worktrees` はその親）は
+    resolver で実パス化してよい（`/tmp` → `/private/tmp` のような**アンカーより上**の
+    symlink は許容）。
+  - **アンカーより下**の各コンポーネント（`.condukt` と `worktrees`、または
+    `.harness-worktrees`）を `lstat` し、**symlink でないディレクトリ**でなければ
+    置き場にしない。symlink の `.condukt`・symlink の `worktrees`・symlink の
+    `.harness-worktrees`・通常ファイル・**存在しない**置き場はすべて置き場ではない
+    （存在しない置き場を親経由で解決して置き場扱いすることはもうない）。
+  - 検査中の IO エラーは「置き場ではない」（＝従来の deny/ask 経路。allow にはならない）。
+    この `lstat` は resolver が渡されたとき（フック本体）だけ行う。
+- **1 コマンド内での差し替えを塞ぐ規則**: 置き場の検査は*判定時*のものなので、
+  同じコマンドの前段（`ln -s X <置き場> && rm -rf <置き場>/p`、
+  `mv <置き場> 退避先 && ln -s X <置き場> && rm -rf <置き場>/x`、`mkdir`、`cp`、
+  リダイレクト、`bash -c` …）が `rm` の実行前に置き場をすり替えうる。そこで
+  **トップレベルのコマンド全体が「素の `rm` / `cd` だけ」でできているときに限り**
+  この `allow` を出す: 全文字が英数字（Unicode 可）・空白・`/ . _ - + , = : @ %`
+  または区切り `;` `&` `|` のいずれかで、`;` `&` `|` で分けた各セグメントが空か、
+  先頭の語がちょうど `rm` か `cd`。引用符・`$`・バッククォート・括弧・波括弧・
+  `<` `>`・glob・`~`・`#`・`!`・バックスラッシュ・改行/タブは 1 つでもあれば対象外
+  （`rm -rf x 2>/dev/null`、`/bin/rm`、`FOO=1 rm`、`sudo rm` も対象外）。対象外の
+  コマンドは従来どおりの判定（deny / ask）になる。
+- **`cd` 規則**（0.2.86、独立検証者が 0.2.85 で脱出を実測したための修正）: 判定側の
+  cwd 追跡は「`cd` は必ず成功し、次のセグメントに効く」と仮定して、後続 `rm` の相対
+  オペランドを `cd` 先に対して判定する。実行時はそうならない — `cd <置き場>/s & rm -rf src`
+  （`cd` はバックグラウンドのサブシェル）、`cd <置き場>/存在しない; rm -rf src`、
+  `cd <置き場>/存在しない || rm -rf src`（`cd` 失敗後に元の cwd で `rm`）、
+  `cd X | rm -rf src`（別サブシェル）は、どれも判定されていない `<元の cwd>/src` を
+  消す。そこで**コマンド中に `cd` が 1 つでもあれば、`rm` の全オペランドが絶対パス
+  （`/` 始まり）のときだけ** worktree の `allow` を出す（先頭のオプション語の後は
+  `/` 始まりの語しか許さない。`--` 以降・単独の `-`・オペランド後の `-x` も相対扱い）。
+  `cd` の無いコマンドの相対オペランドは payload の cwd（＝実行時の cwd）で判定される
+  ので従来どおり対象になる。`&&` とそれ以外を区別しない、粗いが閉じた規則。
+- **`..` 規則**（0.2.88、独立検証者が 0.2.87 で脱出を実測したための修正）: 位置判定
+  （`scope`）は `..` を**字面で**畳んでから symlink を解決するが、カーネルは `..` を
+  symlink を辿った**実際の親**に対して解決する。そのため worktree 内に外を指す
+  symlink `lnk` があると、`rm -rf <置き場>/w/lnk/../v2` は `<置き場>/w/v2` と判定されて
+  `allow` になり、実際には `<外>/v2` を消していた（相対の `lnk/../x`、入れ子の
+  `sub/lnk2/../x`、`x` が外向き symlink のときの末尾 `<置き場>/w/x/..` も同様）。
+  そこで **`rm` セグメントの `rm` 以降のどの語にも `..` というパス成分（`..`、`../x`、
+  `a/../b`、`a/..`、`--opt=../x`）が無いときだけ** worktree の `allow` を出す。
+  置き場の内側に留まる `..` も含めて一律に対象外（従来の判定へ落ちる）。判定は
+  cwd 追跡で書き換えられる前の生のコマンド文字列で行う。
+- **payload の cwd の規則**（0.2.90、独立検証者が 0.2.89 で脱出を実測したための修正）:
+  同じ食い違いは判定の*基点*でも起きる。payload の cwd が `<置き場>/w/lnk/..`（`lnk` は
+  外向き symlink）だと、位置判定は字面で畳んだ `<置き場>/w` を基点に `rm -rf sub` を
+  内側と判定し `allow` にしていたが、プロセスは `<lnk の指す先の親>` にいる。0.2.89 にも
+  「基点に `..` があれば対象外」という検査はあったが、畳まれた*後*の値を見ていたので
+  決して発火しない死んだコードだった。今は `SafeRoots::new` が**正規化前の生の値**で
+  判定する: payload の cwd（および絶対パスのときの `CLAUDE_PROJECT_DIR`）に `..` か `.`
+  というパス成分がある、または cwd が絶対パスでない場合、**置き場を 1 つも作らない**
+  （`$HOME/.condukt/worktrees` も含む）ので、そのセッションでは worktree の `allow` は
+  一切出ない（従来の判定へ落ちる）。**検証していないこと**: Claude Code が cwd を
+  論理パス（bash の `cd` が作った文字列）と物理パス（`getcwd()`）のどちらで保持するか。
+  推論としては（テストした保証ではない）、bash の既定の論理 `cd ..` は `$PWD` の最後の
+  成分を字面で落としてからその*字面上の親*へ `chdir` するので、既定では物理的な cwd は
+  論理文字列が指すディレクトリと一致し、`$PWD` に `..` は残らない。`cd -P` は物理パスを
+  返す。いずれにせよ、この規則は届いた文字列そのものに適用される。
+- **どの検査が何を止めているか**（誇張しないための注記）: *判定時点で既に* symlink で
+  ある置き場は、`lstat` 検査と「置き場は resolver 上で自分自身の実パスであること」の
+  検査の**両方**で弾かれ、後者だけで全ケースが弾ける（symlink 経由のオペランドも
+  実パス化で外側になる）。したがって `lstat` は多重防御であり、テストはこれを単独では
+  検証していない（symlink を辿るよう改変してもテストは通る）。*同じコマンド内*の
+  すり替えを止めているのは「素の `rm` / `cd` だけ」規則、`cd` 後の相対オペランドを
+  止めているのは `cd` 規則、`..` と symlink の食い違いを止めているのは `..` 規則
+  （基点側は payload の cwd の規則）で
+  ある（位置判定そのものは `..` を字面で畳むので、これを止めていない）。「素の
+  `rm` / `cd` なら安全」という一般的な保証はしていない。
+- **塞いでいないもの**: *別の*ツール呼び出し（先行するバックグラウンドジョブ、並行
+  セッション）が判定と `rm` の間に置き場やその中身を作る・動かす・リンクする競合
+  （呼び出しをまたぐ TOCTOU）。また、先行するコマンドで実在する本物の置き場へ `mv`
+  して入れたもの（`mv ~/Documents <置き場>/x` の後の `rm -rf <置き場>/x`）は、置き場の
+  中の本物のディレクトリとして `allow` で削除できる（symlink を置いた場合は実パス化で
+  外側になり `allow` にならない）。
+- **全オペランド**が `..` 成分を含まないリテラルパスで、実パス（symlink 解決後）が
+  置き場の*厳密な*内側にあるときだけ `allow`。
+- **変わらないもの**: 保護パスの優先（`<置き場>/x/.git/hooks` などは従来どおり deny）
+  ／置き場それ自身とその上（`rm -rf ~/.condukt/worktrees` は deny）／内外混在
+  （従来の判定へ落ちる）／glob（`~/.condukt/worktrees/*`）／`..` 成分を含む
+  オペランドすべて（外へ出るかどうかに関わらず）・symlink で外を指すもの／解決できないパス（`Undetermined` は allow にならない）／
+  ライブラリ利用（`SafeRoots::none()` には置き場が無い）／非再帰 `rm`・`rm -d`。
+- **既知の未修正事項**: 安全ルート（プロジェクト・一時ディレクトリ）に対する `ask`
+  経路は `..` を字面で畳んだまま判定する。`rm -rf <project>/lnk/../x`（`lnk` が外向き
+  symlink）はプロジェクト内として `ask`（headless では deny）になり、質問文は
+  プロジェクトを名指しするが、実際に消えるのは `<lnk の指す先の親>/x`。`cd lnk/..` による
+  cwd 追跡も、`<project>/lnk/..` と綴られた payload の cwd も同様にずれる（payload の
+  cwd の規則が止めるのは worktree の `allow` だけで、この `ask` は止めない）。`allow` にはならないが、人間に見せる質問が誤っている。
 
 ## 一度承認した効果は二度聞かない（承認の記憶）— 0.2.53
 

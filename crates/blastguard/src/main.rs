@@ -66,7 +66,7 @@ use harness_core::hook::{self, HookInput};
 use std::process::exit;
 
 fn main() {
-    // Minimal CLI surface: version/help/retro short-circuit before touching stdin.
+    // Minimal CLI surface: version/help/protects/retro short-circuit before touching stdin.
     let args: Vec<String> = std::env::args().skip(1).collect();
     for (i, arg) in args.iter().enumerate() {
         match arg.as_str() {
@@ -76,6 +76,15 @@ fn main() {
             }
             "--help" | "-h" => {
                 print_help();
+                exit(0);
+            }
+            "--protects" => {
+                // The protection statement (backlog 3a8e3b73), readable
+                // without triggering the gate. A pure print: no verdict.
+                let p = blastguard::protection::PROTECTION;
+                println!("PROTECTS: {}", p.protects);
+                println!("AGAINST: {}", p.against);
+                println!("GROUNDS: {}", p.grounds);
                 exit(0);
             }
             "retro" => {
@@ -255,7 +264,7 @@ fn print_help() {
     println!(
         "blastguard {ver}\n\
 A Claude Code PreToolUse hook that denies project-destroying operations.\n\n\
-USAGE:\n  blastguard                  read a PreToolUse payload from stdin (normal mode)\n  blastguard record-approval  read a PostToolUse payload from stdin and record\n                              that this exact effect was approved\n  blastguard --version        print version\n  blastguard --help           this help\n\n\
+USAGE:\n  blastguard                  read a PreToolUse payload from stdin (normal mode)\n  blastguard record-approval  read a PostToolUse payload from stdin and record\n                              that this exact effect was approved\n  blastguard --protects       print what this gate protects, from what, and why\n  blastguard --version        print version\n  blastguard --help           this help\n\n\
 It denies recursive/wildcard rm, git reset --hard, git clean -fdx, truncate,\n\
 shred, mkfs, dd of=, recursive chmod/chown, find -delete, and single-> file\n\
 overwrites — while exempting repo CONFIG files (.claude/** config, *.toml,\n\
@@ -476,8 +485,23 @@ fn analyse(input: &HookInput) -> Decision {
 ///   * `CLAUDE_PROJECT_DIR` — the project root Claude Code exports to every
 ///     hook, which differs from `cwd` in a worktree session and is equally
 ///     legitimate;
-///   * `HOME` — passed only so [`SafeRoots::new`] can REFUSE to treat the home
-///     directory as a root;
+///   * `HOME` — never a root itself: [`SafeRoots::new`] REFUSES to treat the
+///     home directory as one, and derives from it only the worktree storage
+///     root `$HOME/.condukt/worktrees`. Recursive rm strictly inside a
+///     worktree storage root is Allow (user ruling, backlog 873651b9) only
+///     when the root currently exists as a real directory with no symlink
+///     below its anchor, the whole command is bare `rm`/`cd` segments, no
+///     word of any `rm` segment has a `..` component (`scope` collapses `..`
+///     lexically before resolving symlinks, so `lnk/../x` would be judged
+///     where the kernel does not delete), the RAW `cwd` below (and the raw
+///     `CLAUDE_PROJECT_DIR`, when absolute) has no `..` / `.` component and
+///     the cwd is absolute — checked by [`SafeRoots::new`] on the value passed
+///     here, before it normalises anything — and — if any `cd` is present —
+///     every `rm` operand is absolute (a `cd` may fail or run in a subshell,
+///     so a relative operand after it is not judged against the runtime cwd).
+///     This is not a claim that bare `rm`/`cd`
+///     is safe in general; see `scope`'s module doc ("What actually stops
+///     each escape") for which check closes which case and what stays open;
 ///   * `TMPDIR` — added to the fixed temp roots. Note the asymmetry that makes
 ///     this sound: reading `$TMPDIR` out of the hook's own environment is not
 ///     the same act as expanding the literal string `$TMPDIR` found in a

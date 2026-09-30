@@ -38,9 +38,16 @@
 //! the reason it is a different proposition from the predicate that was
 //! deleted:
 //!
-//!   * `..` — resolved LEXICALLY here, and any residue (a relative path that
-//!     climbs above its own base) is [`Determination::Undetermined`], never a
-//!     placement;
+//!   * `..` — collapsed LEXICALLY here ([`normalize_abs`]), BEFORE the
+//!     symlink resolver runs, and any residue (a relative path that climbs
+//!     above its own base) is [`Determination::Undetermined`], never a
+//!     placement. Lexical collapse is NOT what the kernel does: it resolves
+//!     `a/lnk/..` to the parent of `lnk`'s TARGET. So a `..` that follows a
+//!     symlinked component is placed at a path the kernel will not touch
+//!     (`<root>/lnk/../x` is classified as `<root>/x`). This module does not
+//!     close that; its callers must not grant anything on the strength of a
+//!     `..`-bearing spelling (the worktree `Allow` refuses any `..` — see
+//!     below; the safe-root `Ask` does NOT, see "Known gap" at the end);
 //!   * `~`, `$VAR`, backticks, `$(…)`, globs, braces, quotes, `{}` (a
 //!     `find -exec` placeholder) — the operand is not a literal path at all, so
 //!     it is `Undetermined`. This module NEVER expands a shell construct and
@@ -54,23 +61,162 @@
 //!     fails, the answer is `Undetermined` — not `Inside`.
 //!
 //! And the outcome differs too. That carve-out produced `Allow`; the placement
-//! this module computes produces at most a `Decision::Ask`, which
-//! [`crate::interactive`] hardens back to a `Deny` everywhere no human can
-//! answer (headless, condukt workers, cron). So the autonomous-agent threat
-//! model is unchanged by this module: it buys an interactive operator a
-//! one-keypress confirmation for a bounded blast radius, and buys an
-//! unattended agent nothing at all.
+//! against the SAFE roots ([`SafeRoots::classify`]) produces at most a
+//! `Decision::Ask`, which [`crate::interactive`] hardens back to a `Deny`
+//! everywhere no human can answer (headless, condukt workers, cron). For those
+//! roots it buys an interactive operator a one-keypress confirmation for a
+//! bounded blast radius, and buys an unattended agent nothing at all. The one
+//! exception is the next section, and it is an exception by user ruling, not
+//! by inference.
+//!
+//! # Worktree storage roots — the one placement that yields `Allow`
+//!
+//! User ruling 2026-09-30 (backlog 873651b9): "worktreeへの削除を制限しているhookを
+//! 排除して" — a recursive rm strictly inside the worktree storage roots is
+//! ALLOWED with no confirmation, headless included. Trigger: a subagent could
+//! not `rm -rf ~/.condukt/worktrees/pgv-target` (flat Deny: that directory was
+//! not a safe root at all).
+//!
+//! The worktree storage roots are a SEPARATE set from the safe roots, built by
+//! [`SafeRoots::new`] from the same inputs and consulted only through
+//! [`SafeRoots::classify_worktree`], which only `detect`'s recursive-`rm` arm
+//! calls (no other verb gains anything from them):
+//!
+//!   * `$HOME/.condukt/worktrees` — only when `HOME` is absolute;
+//!   * for each of the payload `cwd` and `CLAUDE_PROJECT_DIR`: the prefix up to
+//!     and including its last `.harness-worktrees` component when it has one,
+//!     else `dirname(P)/.harness-worktrees`.
+//!
+//! A candidate becomes a root ONLY if, at the moment the model is built, it
+//! EXISTS as a REAL directory that nothing on the way down to it redirects
+//! (backlog 873651b9, second pass — the first pass accepted a root by its
+//! resolved path alone, and an independent verifier escaped it with
+//! `ln -s ~/Documents <parent>/.harness-worktrees` followed by
+//! `rm -rf <parent>/.harness-worktrees/precious`):
+//!
+//!   * the ANCHOR is canonicalised with the injected resolver: `$HOME` for
+//!     `$HOME/.condukt/worktrees`, `dirname(root)` for `.harness-worktrees`.
+//!     Symlinks ABOVE the anchor (`/tmp` -> `/private/tmp`) are resolved and
+//!     accepted — the anchor is an input of the session, not of the command;
+//!   * every component BELOW the anchor (`.condukt` and `worktrees`; or
+//!     `.harness-worktrees`) is `lstat`ed and must be a directory that is NOT a
+//!     symlink. A symlinked `.condukt`, a symlinked `worktrees`, a symlinked
+//!     `.harness-worktrees`, a regular file, or a component that does not exist
+//!     means NO root — a root that does not exist is never resolved via its
+//!     parent any more;
+//!   * any IO error while checking (permission, not-found, a non-UTF-8 path)
+//!     is "not a root";
+//!   * the result must still pass the derived-root rules ([`NEVER_A_ROOT`], not
+//!     `$HOME`, [`MIN_DERIVED_ROOT_COMPONENTS`]) and must be its own real path
+//!     according to the resolver.
+//!
+//! The `lstat` is real filesystem I/O done here, in [`SafeRoots::new`], and only
+//! when a resolver was supplied (the resolver is the signal that the caller is
+//! the filesystem-aware hook binary). With no resolver there are no worktree
+//! roots at all; [`SafeRoots::none`] has none of them either.
+//!
+//! # What actually stops each escape (be precise — several checks overlap)
+//!
+//!   * A root that is ALREADY a symlink (or has a symlinked `.condukt` /
+//!     `worktrees`) when the hook runs: rejected by TWO independent checks in
+//!     [`worktree_storage_roots`] — the `lstat` probe ([`is_real_dir`]) and the
+//!     final "the root must be its own real path per the resolver" check. The
+//!     resolver check alone already rejects every such case, and an operand
+//!     reached through the symlink canonicalises to its target, which is not
+//!     inside the (rejected or real) root either. So the `lstat` probe is
+//!     DEFENCE IN DEPTH: the test suite does not isolate it (a mutation that
+//!     makes it follow symlinks survives the tests), and it must not be cited
+//!     as the thing that closes these cases.
+//!   * A root that does not exist yet: rejected by the probe. No root is
+//!     derived via its parent.
+//!   * The SAME command swapping the root before its `rm` runs
+//!     (`ln -s X <root> && rm -rf <root>/p`,
+//!     `mv <root> away && ln -s X <root> && rm -rf <root>/x`): NOT stopped here
+//!     — every check in this module is made at JUDGE time. It is stopped by the
+//!     whole-command rule in `detect` (`worktree_rm_eligible`): the worktree
+//!     `Allow` is granted only when every segment of the top-level command is a
+//!     bare `rm` or `cd` built from plain word characters.
+//!   * A relative `rm` operand after a `cd` that may fail or not apply
+//!     (`cd <root>/s & rm -rf src`, `cd <root>/missing; rm -rf src`,
+//!     `cd <root>/missing || rm -rf src`, `cd <root>/s | rm -rf src`): the cwd
+//!     walk in `detect` assumes every `cd` succeeds and applies, so it would
+//!     judge `<root>/s/src` while `rm` deletes `<cwd>/src`. Stopped by the cd
+//!     rule of `worktree_rm_eligible`: if the command contains ANY `cd`, every
+//!     `rm` operand must be absolute. With no `cd`, a relative operand is
+//!     judged against the payload cwd, which is the runtime cwd.
+//!   * A `..` after a symlinked component (`<root>/w/lnk/../v2`, relative
+//!     `lnk/../x`, nested `sub/lnk2/../x`, trailing `<root>/w/x/..` with `x` a
+//!     symlink out): NOT stopped here — this module collapses `..` lexically
+//!     before resolving symlinks and would place all four Inside. Stopped by
+//!     the `..` rule of `worktree_rm_eligible`: if any word of any `rm`
+//!     segment has a `..` component, the worktree `Allow` is not available at
+//!     all (even for a `..` that would stay inside).
+//!   * The same hazard in the BASE: a payload cwd `<root>/w/lnk/..` (`lnk` a
+//!     symlink out). [`normalize_abs`] would collapse it to `<root>/w` and
+//!     `rm -rf sub` would be judged Inside while the process sits in
+//!     `<lnk target's parent>` (verifier finding on 0.2.89: the refusal that
+//!     used to sit in `detect::worktree_confined` looked at the base AFTER this
+//!     module had collapsed it, so it could never fire — dead code). Stopped
+//!     by [`SafeRoots::new`], which checks the RAW payload `cwd` (and the raw
+//!     `CLAUDE_PROJECT_DIR` when it is absolute) BEFORE normalising: a `..` or
+//!     `.` component, or a cwd that is not absolute, means NO worktree storage
+//!     root is derived at all (not even `$HOME/.condukt/worktrees`) and
+//!     [`SafeRoots::classify_worktree`] answers `Undetermined` for every
+//!     operand. NOT verified: whether Claude Code persists its cwd logically
+//!     (the string bash's `cd` produced) or physically (`getcwd()`). The
+//!     reasoning, not a tested guarantee: bash's default logical `cd ..`
+//!     strips the last component of `$PWD` and then `chdir`s to that
+//!     LEXICAL parent, so in the default case the physical cwd is the
+//!     directory the logical string names, and a `..` never survives into
+//!     `$PWD`; `cd -P` yields a physical path. Either way this refusal is
+//!     applied to whatever string arrives.
+//!
+//! NOT closed by this module or by `detect`:
+//!
+//!   * cross-call TOCTOU — a DIFFERENT tool call (an earlier background job, a
+//!     concurrent session) that creates, moves or links something between this
+//!     judgement and the `rm`;
+//!   * things an EARLIER command already MOVED into a real root
+//!     (`mv ~/Documents <root>/x`, then `rm -rf <root>/x` is Allow — `x` is a
+//!     real directory strictly inside the root). A SYMLINK placed there instead
+//!     is not Allow: the operand canonicalises Outside.
+//!
+//! The resolution rules for OPERANDS are identical to the safe roots': only
+//! `Inside` (a strict descendant, after LEXICAL `..` collapse and then symlink
+//! resolution) counts; the storage root itself (`IsRoot`), `Outside`, and every
+//! `Undetermined` do not, and the rm arm then keeps the verdict it had before
+//! this rule. Because that `..` handling is lexical, the worktree `Allow` never
+//! reaches this classification for a `..`-bearing operand (the `..` rule
+//! above).
+//! Protected-path precedence runs first in `detect`, so a protected path under
+//! a worktree is still denied.
 //!
 //! # The fail-closed direction
 //!
 //! There are three answers, per CLAUDE.md §3, and only ONE of them may relax a
 //! verdict: [`Placement::Inside`], which means "resolved, and provably a strict
-//! descendant of a root this session is allowed to destroy things in".
+//! descendant of a root this session is allowed to destroy things in" (a safe
+//! root, or — for recursive rm only — a worktree storage root).
 //! [`Placement::Outside`] and every `Undetermined` leave the caller's existing
 //! Deny exactly as it was. [`Placement::IsRoot`] is a fourth statement that
 //! deliberately does NOT collapse into `Inside`: `rm -rf <the project itself>`
 //! takes `.git` with it, so the root's own directory is not inside the region
 //! this module vouches for.
+//!
+//! # Known gap — lexical `..` on the safe-root `Ask`
+//!
+//! [`SafeRoots::classify`] (the safe roots, used by `detect`'s confined `Ask`
+//! for `rm`, `truncate`, `find`, `git clean`, redirects, …) has the same
+//! lexical-`..`-before-symlink behaviour and NO `..` refusal in front of it:
+//! `rm -rf <project>/lnk/../x` with `lnk` a symlink out is placed Inside the
+//! project and gets an interactive `Ask` (hardened to `Deny` headless) whose
+//! text names the project, while the kernel deletes `<lnk target's
+//! parent>/x`. The cwd walk in `detect` also joins `cd` targets lexically, so
+//! `cd lnk/..` shifts the judged base the same way, and so does a payload cwd
+//! spelled `<project>/lnk/..` (the raw-cwd refusal in [`SafeRoots::new`]
+//! withholds only the worktree `Allow`, not this `Ask`). The outcome is at most an
+//! `Ask` a human must answer, never an `Allow`, but the question it asks is
+//! wrong. Not fixed here.
 
 use harness_core::verdict::Determination;
 
@@ -331,6 +477,23 @@ pub struct SafeRoots {
     /// operands entirely (they become `Undetermined`).
     cwd: Option<String>,
     resolver: Option<RealPathResolver>,
+    /// The WORKTREE STORAGE ROOTS (`$HOME/.condukt/worktrees`, and the
+    /// `.harness-worktrees` directory derived from `cwd` / `CLAUDE_PROJECT_DIR`),
+    /// kept only when each exists as a real, non-symlinked directory below its
+    /// canonicalised anchor and passes the derived-root rules (see
+    /// [`worktree_storage_roots`]). Consulted ONLY by [`SafeRoots::classify_worktree`], which only
+    /// the recursive-`rm` arm of [`crate::detect`] calls — see the module doc,
+    /// "Worktree storage roots". Kept separate from `roots` on purpose: adding
+    /// these to `roots` would hand every OTHER location-aware verb (`truncate`,
+    /// `find -delete`, `git clean`, `chmod -R`, redirects) a confined `Ask`
+    /// there, which nobody ruled on.
+    worktree_roots: Vec<String>,
+    /// Why the worktree `Allow` is withheld for this whole session model, read
+    /// off the RAW payload `cwd` / `CLAUDE_PROJECT_DIR` BEFORE [`normalize_abs`]
+    /// collapses them (see [`raw_session_path_refusal`]). `Some` means
+    /// `worktree_roots` is empty and [`SafeRoots::classify_worktree`] answers
+    /// `Undetermined` with this reason.
+    worktree_refusal: Option<String>,
 }
 
 impl SafeRoots {
@@ -347,6 +510,8 @@ impl SafeRoots {
             roots: Vec::new(),
             cwd: None,
             resolver: None,
+            worktree_roots: Vec::new(),
+            worktree_refusal: None,
         }
     }
 
@@ -367,6 +532,14 @@ impl SafeRoots {
     /// * `tmpdir` — `$TMPDIR`, added to the fixed [`TEMP_ROOTS`] when absolute.
     /// * `resolver` — see [`RealPathResolver`]. `None` means no operand can
     ///   ever be resolved, hence no operand can ever be `Inside`.
+    ///
+    /// The same inputs also derive the worktree storage roots (see
+    /// [`worktree_storage_candidates`]): `home` contributes
+    /// `$HOME/.condukt/worktrees` (only when absolute), and `cwd` /
+    /// `project_dir` each contribute their `.harness-worktrees` directory — each
+    /// ONLY if it currently exists as a real directory with no symlinked
+    /// component below its anchor (checked with `lstat`, real filesystem I/O,
+    /// and only when `resolver` is `Some`; see [`worktree_storage_roots`]).
     pub fn new(
         cwd: Option<&str>,
         project_dir: Option<&str>,
@@ -396,6 +569,28 @@ impl SafeRoots {
         // itself an absolute path we could resolve. It does NOT have to be a
         // root: `cd /home/yuki && rm -rf /tmp/x` resolves the operand against
         // `/tmp`, and the home directory being un-rootable is unrelated.
+        // Worktree storage roots: see the module doc. The directory probe is
+        // real filesystem I/O and is only used when the caller supplied a
+        // resolver (i.e. it is the filesystem-aware hook binary).
+        let probe: Option<DirProbe> = resolver.map(|_| is_real_dir as DirProbe);
+        // Decided on the RAW spellings, before `normalize_abs` below erases a
+        // `..` / `.` (module doc, "What actually stops each escape"). A refused
+        // session derives NO worktree storage root at all — not `$HOME`'s
+        // either — so `classify_worktree` can never answer `Inside`.
+        let worktree_refusal = [
+            ("payload cwd", cwd, true),
+            ("CLAUDE_PROJECT_DIR", project_dir, false),
+        ]
+        .into_iter()
+        .find_map(|(name, raw, must_be_absolute)| {
+            raw.and_then(|p| raw_session_path_refusal(p, must_be_absolute))
+                .map(|why| format!("{name} {why}; the worktree Allow is withheld"))
+        });
+        let worktree_roots = if worktree_refusal.is_some() {
+            Vec::new()
+        } else {
+            worktree_storage_roots(cwd, project_dir, home_norm.as_deref(), resolver, probe)
+        };
         let cwd = cwd
             .and_then(normalize_abs)
             .and_then(|c| resolve_with(&c, resolver));
@@ -403,6 +598,8 @@ impl SafeRoots {
             roots,
             cwd,
             resolver,
+            worktree_roots,
+            worktree_refusal,
         }
     }
 
@@ -433,6 +630,36 @@ impl SafeRoots {
                 "blastguard has no safe-root model for this session (no project dir / cwd)",
             );
         }
+        self.classify_against(&self.roots, operand, cwd)
+    }
+
+    /// Where does `operand` land relative to the WORKTREE STORAGE ROOTS?
+    ///
+    /// Identical resolution to [`SafeRoots::classify`] (literal-path check,
+    /// lexical `..` collapsed BEFORE the injected symlink resolver runs — so a
+    /// `..` after a symlink is misplaced, and callers must refuse `..`
+    /// spellings themselves — longest-root match, `IsRoot`
+    /// kept distinct from `Inside`) — only the root set differs. With no
+    /// worktree storage roots (always the case for [`SafeRoots::none`]) the
+    /// answer is `Undetermined`, which the caller must read as "not allowed".
+    pub fn classify_worktree(&self, operand: &str, cwd: Option<&str>) -> Determination<Placement> {
+        if let Some(why) = &self.worktree_refusal {
+            return Determination::undetermined(why.clone());
+        }
+        if self.worktree_roots.is_empty() {
+            return Determination::undetermined(
+                "blastguard has no worktree storage root for this session (no HOME / cwd / project dir)",
+            );
+        }
+        self.classify_against(&self.worktree_roots, operand, cwd)
+    }
+
+    fn classify_against(
+        &self,
+        roots: &[String],
+        operand: &str,
+        cwd: Option<&str>,
+    ) -> Determination<Placement> {
         if operand.is_empty() {
             return Determination::undetermined("empty operand");
         }
@@ -474,7 +701,7 @@ impl SafeRoots {
                 "real path could not be resolved (no resolver, or the filesystem said no)",
             );
         };
-        for root in &self.roots {
+        for root in roots {
             if &real == root {
                 return Determination::known(Placement::IsRoot { root: root.clone() });
             }
@@ -482,7 +709,7 @@ impl SafeRoots {
         // Longest matching root wins, so a nested root (`/tmp` and a project
         // that happens to live under it) reports the more specific one.
         let mut best: Option<&String> = None;
-        for root in &self.roots {
+        for root in roots {
             let prefix = format!("{}/", root.trim_end_matches('/'));
             if real.starts_with(&prefix) && best.is_none_or(|b| root.len() > b.len()) {
                 best = Some(root);
@@ -497,6 +724,182 @@ impl SafeRoots {
         }
     }
 }
+
+/// A worktree storage root candidate: the trusted ANCHOR (lexically
+/// normalised, not yet resolved) and the components BELOW it that make up the
+/// root. The anchor may be canonicalised; every component below it must be a
+/// real, non-symlink directory (see [`worktree_storage_roots`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WorktreeCandidate {
+    anchor: String,
+    below: Vec<&'static str>,
+}
+
+impl WorktreeCandidate {
+    /// The candidate spelled lexically (anchor + components), unresolved.
+    fn lexical(&self) -> String {
+        let mut out = self.anchor.trim_end_matches('/').to_string();
+        for c in &self.below {
+            out.push('/');
+            out.push_str(c);
+        }
+        out
+    }
+}
+
+/// The worktree storage root candidates.
+///
+/// * `$HOME/.condukt/worktrees` — anchor `$HOME`, components `.condukt`,
+///   `worktrees`; only when `home` normalised to an absolute path (an unset or
+///   relative `HOME` contributes nothing).
+/// * for each of `cwd`, `project_dir` that is absolute: if the path has a
+///   component named exactly `.harness-worktrees`, the prefix up to and
+///   including the LAST such component (the last, not the first, so a nested
+///   spelling yields the narrower root — the restrictive choice); otherwise
+///   `dirname(P)/.harness-worktrees`. Anchor = the prefix before that
+///   component, component = `.harness-worktrees`.
+///
+/// No sanity rule and no filesystem check is applied here;
+/// [`worktree_storage_roots`] applies both before a candidate may become a root.
+fn worktree_storage_candidates(
+    cwd: Option<&str>,
+    project_dir: Option<&str>,
+    home_norm: Option<&str>,
+) -> Vec<WorktreeCandidate> {
+    let mut out: Vec<WorktreeCandidate> = Vec::new();
+    if let Some(home) = home_norm {
+        out.push(WorktreeCandidate {
+            anchor: home.to_string(),
+            below: vec![".condukt", "worktrees"],
+        });
+    }
+    for derived in [cwd, project_dir].into_iter().flatten() {
+        let Some(p) = normalize_abs(derived) else {
+            continue;
+        };
+        let comps: Vec<&str> = p.split('/').filter(|c| !c.is_empty()).collect();
+        let parent: &[&str] = match comps.iter().rposition(|c| *c == WORKTREE_DIR_NAME) {
+            Some(i) => &comps[..i],
+            None => &comps[..comps.len().saturating_sub(1)],
+        };
+        let candidate = WorktreeCandidate {
+            anchor: format!("/{}", parent.join("/")),
+            below: vec![WORKTREE_DIR_NAME],
+        };
+        if !out.contains(&candidate) {
+            out.push(candidate);
+        }
+    }
+    out
+}
+
+/// "Does `path` exist, right now, as a directory that is NOT a symlink?"
+///
+/// `false` for a symlink (even one pointing at a directory), a regular file, a
+/// missing path, and any IO error. Injected into [`worktree_storage_roots`] so
+/// the unit tests can model a filesystem without creating one.
+type DirProbe = fn(&str) -> bool;
+
+/// The real [`DirProbe`]: `lstat` (never follows the final symlink). Any IO
+/// error is `false`, i.e. "not a root".
+fn is_real_dir(path: &str) -> bool {
+    std::fs::symlink_metadata(path)
+        .map(|m| m.file_type().is_dir())
+        .unwrap_or(false)
+}
+
+/// Build the worktree storage roots (module doc, "Worktree storage roots").
+///
+/// For each candidate: the lexical spelling must pass the derived-root rules;
+/// the anchor must resolve; each component below the resolved anchor must pass
+/// `probe` (real, non-symlink directory); the result must pass the derived-root
+/// rules again and must be its own real path per the resolver. Any failure —
+/// including no resolver or no probe — drops the candidate. There is no
+/// branch that keeps a candidate it could not check.
+fn worktree_storage_roots(
+    cwd: Option<&str>,
+    project_dir: Option<&str>,
+    home_norm: Option<&str>,
+    resolver: Option<RealPathResolver>,
+    probe: Option<DirProbe>,
+) -> Vec<String> {
+    let mut roots: Vec<String> = Vec::new();
+    let Some(probe) = probe else {
+        return roots;
+    };
+    for candidate in worktree_storage_candidates(cwd, project_dir, home_norm) {
+        if !is_acceptable_derived_root(&candidate.lexical(), home_norm) {
+            continue;
+        }
+        let Some(anchor_real) = resolve_with(&candidate.anchor, resolver) else {
+            continue;
+        };
+        if !anchor_real.starts_with('/') {
+            continue;
+        }
+        let mut cur = anchor_real.trim_end_matches('/').to_string();
+        let mut all_real_dirs = true;
+        for comp in &candidate.below {
+            cur.push('/');
+            cur.push_str(comp);
+            if !probe(&cur) {
+                all_real_dirs = false;
+                break;
+            }
+        }
+        if !all_real_dirs {
+            continue;
+        }
+        if !is_acceptable_derived_root(&cur, home_norm) {
+            continue;
+        }
+        // Belt and braces: a root built from a canonical anchor and non-symlink
+        // components is already its own real path. If the resolver disagrees,
+        // something changed between the two looks — not a root.
+        if resolve_with(&cur, resolver).as_deref() != Some(cur.as_str()) {
+            continue;
+        }
+        if !roots.contains(&cur) {
+            roots.push(cur);
+        }
+    }
+    roots
+}
+
+/// Why a RAW session path disqualifies the worktree `Allow`, or `None`.
+///
+/// `raw` is the value exactly as the caller received it (payload `cwd`,
+/// `CLAUDE_PROJECT_DIR`), BEFORE [`normalize_abs`]. Refused:
+///
+///   * any component that is exactly `..` or `.` — [`normalize_abs`] collapses
+///     them lexically, but the kernel resolves `..` against the REAL parent,
+///     so `<root>/w/lnk/..` (`lnk` a symlink out) would become the base
+///     `<root>/w` while the process actually sits in `<lnk target's parent>`
+///     and `rm -rf sub` would delete `<outside>/sub`. `.` is harmless on its
+///     own; it is refused anyway because a raw spelling this module did not
+///     expect is resolved in the restrictive direction (no `Allow`), and it
+///     costs nothing when the cwd is already `.`-free;
+///   * when `must_be_absolute` (the payload cwd): a path that does not start
+///     with `/`. A relative `CLAUDE_PROJECT_DIR` is NOT refused: it contributes
+///     no root and no base at all (`normalize_abs` drops it).
+///
+/// An empty `//` component is not refused: it names the same directory
+/// lexically and physically. A MISSING cwd (`None`) is not refused either: it
+/// derives no `.harness-worktrees` root and no base, so a relative operand is
+/// `Undetermined` and only an absolute operand can be placed.
+fn raw_session_path_refusal(raw: &str, must_be_absolute: bool) -> Option<&'static str> {
+    if !raw.starts_with('/') {
+        return must_be_absolute.then_some("is not an absolute path");
+    }
+    if raw.split('/').any(|c| c == ".." || c == ".") {
+        return Some("has a `..` or `.` component (collapsed lexically, not physically)");
+    }
+    None
+}
+
+/// The directory name the harness keeps session worktrees in, as a sibling of
+/// the main checkout (CLAUDE.md §8).
+const WORKTREE_DIR_NAME: &str = ".harness-worktrees";
 
 /// Push `root` unless an equal one is already present.
 fn push_root(roots: &mut Vec<String>, root: String, resolver: Option<RealPathResolver>) {
@@ -898,5 +1301,186 @@ mod tests {
         assert_eq!(normalize_abs("/a/b/../c"), Some("/a/c".to_string()));
         assert_eq!(normalize_abs("/.."), Some("/".to_string()));
         assert_eq!(normalize_abs("/a/"), Some("/a".to_string()));
+    }
+
+    // ---- worktree storage roots: private-helper unit tests -------------------
+    // The probe models `lstat`: only the listed paths are real directories.
+
+    fn probe_real(p: &str) -> bool {
+        matches!(
+            p,
+            "/home/yuki/.condukt"
+                | "/home/yuki/.condukt/worktrees"
+                | "/home/yuki/src/.harness-worktrees"
+        )
+    }
+
+    fn probe_nothing(_p: &str) -> bool {
+        false
+    }
+
+    fn probe_condukt_is_symlink(p: &str) -> bool {
+        // `.condukt` is a symlink (lstat says not-a-dir) even though its
+        // `worktrees` child would look fine through the link.
+        p == "/home/yuki/.condukt/worktrees"
+    }
+
+    #[test]
+    fn worktree_roots_require_real_dirs_below_the_anchor() {
+        let r = worktree_storage_roots(
+            Some("/home/yuki/src/proj"),
+            None,
+            Some("/home/yuki"),
+            Some(identity),
+            Some(probe_real),
+        );
+        assert_eq!(
+            r,
+            vec![
+                "/home/yuki/.condukt/worktrees".to_string(),
+                "/home/yuki/src/.harness-worktrees".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn worktree_roots_absent_or_symlinked_or_unprobed_are_not_roots() {
+        for probe in [Some(probe_nothing as DirProbe), None] {
+            assert!(worktree_storage_roots(
+                Some("/home/yuki/src/proj"),
+                None,
+                Some("/home/yuki"),
+                Some(identity),
+                probe,
+            )
+            .is_empty());
+        }
+        assert!(worktree_storage_roots(
+            None,
+            None,
+            Some("/home/yuki"),
+            Some(identity),
+            Some(probe_condukt_is_symlink),
+        )
+        .is_empty());
+        // No resolver: the anchor cannot be canonicalised, so no root.
+        assert!(worktree_storage_roots(
+            Some("/home/yuki/src/proj"),
+            None,
+            Some("/home/yuki"),
+            None,
+            Some(probe_real),
+        )
+        .is_empty());
+    }
+
+    // ---- Raw session-path refusal (verifier finding on 0.2.89) ----
+
+    /// A real, canonical `<home>/.condukt/worktrees/w` on disk, so
+    /// `SafeRoots::new` (which `lstat`s the root for real) derives the root.
+    /// Returns (home, root). The identity resolver is correct for it because
+    /// every component is canonicalised up front.
+    fn real_worktree_fixture(tag: &str) -> (String, String) {
+        let base =
+            std::env::temp_dir().join(format!("bg-scope-rawcwd-{}-{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("home/.condukt/worktrees/w/sub")).unwrap();
+        let base = std::fs::canonicalize(&base).unwrap();
+        let home = base.join("home").to_str().unwrap().to_string();
+        let root = format!("{home}/.condukt/worktrees");
+        (home, root)
+    }
+
+    fn worktree_inside(s: &SafeRoots, operand: &str) -> bool {
+        match s.classify_worktree(operand, s.session_cwd()) {
+            Determination::Known(p) => p.inside_root().is_some(),
+            Determination::Undetermined(_) => false,
+        }
+    }
+
+    #[test]
+    fn raw_cwd_control_is_inside() {
+        // Control for the refusals below: the same fixture with a clean cwd
+        // DOES reach Inside, so their `false` is the refusal, not a broken
+        // fixture.
+        let (home, root) = real_worktree_fixture("control");
+        let cwd = format!("{root}/w");
+        let s = SafeRoots::new(Some(&cwd), None, Some(&home), None, Some(identity));
+        assert!(worktree_inside(&s, "sub"));
+        assert!(worktree_inside(&s, &format!("{root}/w/sub")));
+    }
+
+    #[test]
+    fn raw_cwd_with_dotdot_withholds_every_worktree_inside() {
+        // `<root>/w/lnk/..` collapses lexically to `<root>/w`; with `lnk` a
+        // symlink out the process is really elsewhere. Refused on the RAW value.
+        let (home, root) = real_worktree_fixture("dotdot");
+        let cwd = format!("{root}/w/lnk/..");
+        let s = SafeRoots::new(Some(&cwd), None, Some(&home), None, Some(identity));
+        assert_eq!(s.session_cwd(), Some(format!("{root}/w").as_str()));
+        assert!(!worktree_inside(&s, "sub"), "relative operand");
+        assert!(
+            !worktree_inside(&s, &format!("{root}/w/sub")),
+            "absolute operand: no worktree root at all for this session"
+        );
+        match s.classify_worktree("sub", s.session_cwd()) {
+            Determination::Undetermined(u) => {
+                assert!(u.to_string().contains("payload cwd"), "{u}")
+            }
+            Determination::Known(p) => panic!("expected Undetermined, got {p:?}"),
+        }
+    }
+
+    #[test]
+    fn raw_cwd_with_dot_or_trailing_dotdot_is_refused() {
+        let (home, root) = real_worktree_fixture("dot");
+        for cwd in [
+            format!("{root}/w/."),
+            format!("{root}/./w"),
+            format!("{root}/w/sub/.."),
+            format!("{root}/w/sub/../"),
+        ] {
+            let s = SafeRoots::new(Some(&cwd), None, Some(&home), None, Some(identity));
+            assert!(!worktree_inside(&s, &format!("{root}/w/sub")), "{cwd}");
+        }
+    }
+
+    #[test]
+    fn relative_raw_cwd_is_refused() {
+        let (home, root) = real_worktree_fixture("rel");
+        let s = SafeRoots::new(Some("w"), None, Some(&home), None, Some(identity));
+        assert!(!worktree_inside(&s, &format!("{root}/w/sub")));
+    }
+
+    #[test]
+    fn raw_project_dir_with_dotdot_is_refused_relative_one_is_not() {
+        let (home, root) = real_worktree_fixture("proj");
+        let cwd = format!("{root}/w");
+        let bad = format!("{root}/w/lnk/..");
+        let s = SafeRoots::new(Some(&cwd), Some(&bad), Some(&home), None, Some(identity));
+        assert!(!worktree_inside(&s, "sub"));
+        // A relative CLAUDE_PROJECT_DIR contributes nothing, so it refuses nothing.
+        let s = SafeRoots::new(
+            Some(&cwd),
+            Some("rel/.."),
+            Some(&home),
+            None,
+            Some(identity),
+        );
+        assert!(worktree_inside(&s, "sub"));
+    }
+
+    #[test]
+    fn raw_session_path_refusal_table() {
+        assert!(raw_session_path_refusal("/a/b", true).is_none());
+        assert!(raw_session_path_refusal("/a//b/", true).is_none());
+        assert!(raw_session_path_refusal("/a/..b/c.", true).is_none());
+        assert!(raw_session_path_refusal("/a/../b", true).is_some());
+        assert!(raw_session_path_refusal("/a/b/..", true).is_some());
+        assert!(raw_session_path_refusal("/a/./b", true).is_some());
+        assert!(raw_session_path_refusal("/a/b/.", false).is_some());
+        assert!(raw_session_path_refusal("a/b", true).is_some());
+        assert!(raw_session_path_refusal("", true).is_some());
+        assert!(raw_session_path_refusal("a/../b", false).is_none());
     }
 }

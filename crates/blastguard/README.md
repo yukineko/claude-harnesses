@@ -281,8 +281,9 @@ upstream LLM mislabelled the task.
 
 ## Build
 
-The CLI surface is minimal: `--version` / `-V` and `--help` / `-h` short-circuit
-before stdin is touched; otherwise it reads a hook payload from stdin.
+The CLI surface is minimal: `--version` / `-V`, `--help` / `-h` and `--protects`
+(the gate's protection statement from `src/protection.rs`: PROTECTS / AGAINST /
+GROUNDS lines) short-circuit before stdin is touched; otherwise it reads a hook payload from stdin.
 
 ```sh
 cargo build --release -p blastguard   # -> target/release/blastguard

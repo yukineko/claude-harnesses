@@ -31,6 +31,7 @@ pub mod exclude;
 pub mod hookio;
 pub mod interactive;
 pub mod model;
+pub mod protection;
 pub mod retro;
 pub mod reversible;
 pub mod rule_id;

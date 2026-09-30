@@ -1022,9 +1022,11 @@ Done when: every gate crate and every scripts/check-*.py exposes a protection st
 
 USER RULING 2026-09-24: Q1=新しい正典リスト (harness_core BLOCKING_GATES + scripts/check-* 全件と照合、ratchet baseline で PENDING 表示)。Q2=<gate> --protects で全文、拒否メッセージには 1 行要約。
 
-【先行テストと実装途中の WIP を退避 2026-09-29】archive/gate-protection-wip (b5c34f92、10 ファイル +2701) は harness_core::gate::protection (Protection 構造体と validate)、scripts/check-gate-protection.py と gate_protection_lib.py、blastguard/donegate の protection_contract.rs、harness-core/tests/gate_protection.rs、check-gate-crates-sync の BLOCKING_GATES 包含テストを含む。fleet.rs の BLOCKING_GATES 本体、各ゲートの protection.rs、docs/gate-taxonomy.md の保護契約表は未実装。 取り出しは git show archive/gate-protection-wip（worktree 整理で退避、2026-09-29）。マージ前に今のツリーで RED を必ず観測すること。"""
+【先行テストと実装途中の WIP を退避 2026-09-29】archive/gate-protection-wip (b5c34f92、10 ファイル +2701) は harness_core::gate::protection (Protection 構造体と validate)、scripts/check-gate-protection.py と gate_protection_lib.py、blastguard/donegate の protection_contract.rs、harness-core/tests/gate_protection.rs、check-gate-crates-sync の BLOCKING_GATES 包含テストを含む。fleet.rs の BLOCKING_GATES 本体、各ゲートの protection.rs、docs/gate-taxonomy.md の保護契約表は未実装。 取り出しは git show archive/gate-protection-wip（worktree 整理で退避、2026-09-29）。マージ前に今のツリーで RED を必ず観測すること。
+
+2026-09-30 slice 1 landed (merged 511cee33): harness_core::gate::Protection + fleet::BLOCKING_GATES (= the 7 canary GATE_CRATES, checked as superset by a Rust test and by the checker), blastguard --protects (first adopter), scripts/check-gate-protection.py (0/1/2) + baseline listing the other 6 as PENDING (may only shrink vs HEAD). RED 970d349a by an independent sonnet author; implementer-added checker rules covered by independent tests 435b92c0. Consequence to know: adding a gate to BLOCKING_GATES later requires declaring it in the SAME commit (a new PENDING entry counts as growth). NOT yet wired: pre-commit patch githooks-3a8e3b73.patch in the session scratchpad awaits the user. Remaining: wiring, declarations for the 6 PENDING gates (one per commit), refusal-line one-line summary, taxonomy column."""
 created_at = 1785876697
-updated_at = 1790635387
+updated_at = 1790766410
 weight = 0.0
 issue_number = 130
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/130"
@@ -1044,9 +1046,11 @@ status = "pending"
 notes = """
 型で塞げないクラス (Err の腕が正規の API で Clean を鋳造する形) を捕まえられる唯一の候補。機構は既にある: crates/harness-core/src/degrade.rs:8 が permissiveness(f(d(x))) が permissiveness(f(x)) 以下という単調性オラクルを定義し、Degradation の4種を持つ。にもかかわらず採用は2クレートのみ (crates/stuckguard/src/verdict_monotonicity.rs と crates/overwatch/tests/verdict_monotonicity.rs)。欠けているのは注入の継ぎ目。完了条件: boundary が cfg feature 付きの thread-local FaultPlan を持ち、4つの IO 入口すべてを強制的に Undetermined にできる。degrade が assert_fails_closed を公開し、全盲状態で permissiveness が 0 であることを表明する。少なくとも1つの gate crate で修正前の RED を観測済み。採用クレート数が減らないことを見るラチェット script が pre-commit の run リストに入る (cargo を走らせないので commit 時に成立する)。1コミット1クレートの opt-in なので並行セッションと衝突しない。
 
-2026-09-24 slice 1 landed: a1cbb6ac (merged 041a4c38, harness-core 0.2.31) adds boundary::fault FaultPlan, with_fault_plan, degrade::assert_fails_closed, impl Permissiveness for Verdict; tests/fault_plan.rs 27 tests (independent sonnet author, RED 7/27 on a stub, GREEN 27/27, re-run post-merge). Remaining: slice 2 first gate-crate adoption with observed RED (stuckguard or overwatch), slice 3 pre-commit adoption ratchet scripts/check-fault-injection-adoption.py that also rejects fault-injection outside [dev-dependencies], slice 4 one crate per commit."""
+2026-09-24 slice 1 landed: a1cbb6ac (merged 041a4c38, harness-core 0.2.31) adds boundary::fault FaultPlan, with_fault_plan, degrade::assert_fails_closed, impl Permissiveness for Verdict; tests/fault_plan.rs 27 tests (independent sonnet author, RED 7/27 on a stub, GREEN 27/27, re-run post-merge). Remaining: slice 2 first gate-crate adoption with observed RED (stuckguard or overwatch), slice 3 pre-commit adoption ratchet scripts/check-fault-injection-adoption.py that also rejects fault-injection outside [dev-dependencies], slice 4 one crate per commit.
+
+2026-09-30 slice 3 landed: 103eef5a (merged 530acc71). scripts/check-fault-injection-adoption.py + baseline 0 (harness-core excluded as provider; above-baseline also exits 1 so the pin tracks the real count; feature outside dev-dependencies exits 1; undetermined exits 2). RED 4bf08c5f 13 tests by an independent sonnet author, plus 15 implementer tests. NOT yet wired: pre-commit patch in the session scratchpad (githooks-8696dd7e.patch) awaits the user. Remaining: wiring, slice 2 (first gate-crate adopter with observed RED; the same commit must raise the baseline to 1), slice 4."""
 created_at = 1785879190
-updated_at = 1790254586
+updated_at = 1790766188
 weight = 0.0
 issue_number = 140
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/140"
@@ -11820,42 +11824,6 @@ issue_number = 879
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/879"
 
 [[task]]
-id = "04c3ca6f"
-title = "circuit check が flow のバッチ間（claim 全解放後）で必ず idle_unmeasured trip する"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "flow",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "実測 2026-09-30 @ 80db2e7e: sink で claim を全部 release した直後、flow SKILL が指定する 3-4 の位置で condukt circuit check --run flow-<SID> を打つと rc=1, reason=idle_unmeasured, idle_unknown_reason='run state could not be loaded'。d7f2a4ea（condukt 0.7.189）の stateless idle 計測は live な stateless claim がある間しか効かず（NoStatelessClaim は unmeasured）、バッチ間には claim が 0 件なので、/flow は 1 バッチ終えるたびに trip して止まる。claim 保持中は continue/idle 0 を返すことは確認済み。あわせて flow SKILL.md の『信号採取はすべて fail-soft（run 未ロードなどは非 trip に縮退）』は、fail-closed に trip するバイナリと食い違っている（doc↔impl 矛盾）。案: flow run の識別（run id 接頭辞や driver 登録）から transcript を引いて claim 0 件でも idle を測る。または SKILL の check 位置を次バッチの claim 後へ移す。後者はゲート回避に見えるので設計判断が要る。"
-created_at = 1790719344
-updated_at = 1790719344
-weight = 0.0
-issue_number = 880
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/880"
-
-[[task]]
-id = "873651b9"
-title = "blastguard: worktree 置き場の内側への rm -r を無確認で許可する（ユーザー裁定）"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "ユーザー裁定 2026-09-30:「worktreeへの削除を制限しているhookを排除して」→ AskUserQuestion で「worktree 置き場は無確認で許可」を選択。対象は ~/.condukt/worktrees と <repo 親>/.harness-worktrees の strict descendant。置き場そのもの・protected path（.git / gate config）の削除は従来どおり deny。symlink 脱出・.. 脱出は Inside にならない。発端: subagent が /Users/yuki/.condukt/worktrees/pgv-target を rm -rf できず、recursive rm deny（crates/blastguard/src/detect.rs analyze_rm）に止められた。"
-created_at = 1790719503
-updated_at = 1790719503
-weight = 0.0
-issue_number = 884
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/884"
-
-[[task]]
 id = "3aa215e1"
 title = "blastguard: rm の判定を「形」から「壊す対象（資産か・復帰可能か）」へ再設計する（ユーザー裁定）"
 project = "/Users/yuki/src/harness"
@@ -12177,3 +12145,102 @@ updated_at = 1790720891
 weight = 0.0
 issue_number = 898
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/898"
+
+[[task]]
+id = "befcfe06"
+title = "blastguard: cd の後の相対 rm で、確認画面に実際と違う削除先を出す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "873651b9 の修正中（2026-09-30）に観測した。一時ディレクトリなど削除が安全な置き場の中で 'cd <root>/s & rm -rf src' や、失敗する cd の後に相対パスの rm を書く。confined Ask は削除先を <root>/s/src と表示するが、実際に消えるのは <cwd>/src。原因は detect_bash の cwd walk（Ctx::base_for）で、どの区切りでも cd が成功してそのまま次の区切りに効くと仮定している。今は Allow にはならないが、人が承認する対象を取り違える。"
+created_at = 1790723957
+updated_at = 1790723957
+weight = 0.0
+issue_number = 901
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/901"
+
+[[task]]
+id = "b280cfa2"
+title = "blastguard: 安全な置き場の confined Ask が、シンボリックリンクの後の .. を文字列で消し、削除先を取り違える"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "873651b9 の修正中（2026-09-30）に観測した。SafeRoots::classify と cwd walk は、シンボリックリンクを解決する前に .. を文字列の上で消す。例: rm -rf <proj>/lnk/../x（lnk は外を指すリンク）は、人がいるときは ask: confined to <proj>、人がいないときは deny になる。しかし実際に消えるのは <lnk の指す先の親>/x。Allow にはならないが、人に見せる削除先が間違っている。truncate、find -delete、git clean、切り詰めるリダイレクト、chmod/chown -R も同じ confined Ask を通るので同様。befcfe06（cd walk による取り違え）と関連する。"
+created_at = 1790724641
+updated_at = 1790724641
+weight = 0.0
+issue_number = 902
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/902"
+
+[[task]]
+id = "ccebda3f"
+title = "blastguard: 削除先を取り違えた Ask を人が承認すると、承認メモリ経由で後の headless 実行が通るか確かめる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "873651b9 の修正中に出た未検証の問い。承認メモリは headless での判定の厳格化より前に走り、解決後の実パスをキーにしている（README）。lnk/.. や cd walk で削除先を取り違えた Ask（上の起票と befcfe06）を人が承認したとき、その承認が後で別の実パスの削除を headless で通してしまわないか。テストで確かめる。"
+created_at = 1790724643
+updated_at = 1790724643
+weight = 0.0
+issue_number = 903
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/903"
+
+[[task]]
+id = "be9627da"
+title = "blastguard exclude.rs の is_protected_path の doc が Deny と書くが実挙動は Ask (docstring と実装の食い違い)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "3a8e3b73 実装 agent の報告 (2026-09-30)。protected_path_block は Decision::ask を返す。どちらが正しいかを確認して doc か実装を直す。CLAUDE.md 4 節の対象。"
+created_at = 1790766259
+updated_at = 1790766259
+weight = 0.0
+issue_number = 904
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/904"
+
+[[task]]
+id = "e64027ee"
+title = "blastguard README が Edit/MultiEdit/NotebookEdit を常に allow と書くが、保護パスでは ask する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "3a8e3b73 実装 agent の報告 (2026-09-30)。detect_edit は保護された gate/hook/policy パスで ask。README の散文が古い。"
+created_at = 1790766261
+updated_at = 1790766261
+weight = 0.0
+issue_number = 905
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/905"
+
+[[task]]
+id = "6cbd49e7"
+title = "docs/GLOSSARY.md の .githooks 項がまだ taintguard をゲートクレートに挙げている"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "taintguard はユーザー裁定 0521d013 で撤去済み。3a8e3b73 実装 agent の報告 (2026-09-30)。"
+created_at = 1790766262
+updated_at = 1790766262
+weight = 0.0
+issue_number = 906
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/906"

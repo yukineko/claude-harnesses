@@ -87,6 +87,15 @@ report と（人間レビューが要るときは）sentinel を書く。判定�
   型の隣接ファイル）で決まる impl entry の `test_files` へ統合し（規則で帰属できないテストは test-only のまま残す）、
   `SpecMap::mark_inline_tests` が自身に `#[test]` を持つ `.rs` impl ファイルを `test_files` にも載せる（読めないファイルは
   credit しない＝untested 側）。`link <test> <key>` はその明示版で、以後の sync でも保持される。
+- **`map gate-check --base <rev> [--head <rev>]`（`gate_check` / `gatecheck.rs`）** — gate crate
+  （`harness_core::fleet::BLOCKING_GATES`）の spec-doc ゲート（backlog 0c277117）。`git diff <base> <head>` で変わった
+  `crates/<gate>/` 配下のパスのうち `[map].exclude` 非該当のものについて、それを `impl_files` に持つ entry は空白でない
+  `spec_doc` か、`.specguard/spec-doc-acks.toml` の理由付き ack（`[[ack]] path/reason`、`path` は entry key か impl
+  ファイル、`reason` 空白不可）を要する。欠けた entry があれば impl パスを列挙して exit 1。どの entry からも参照されない
+  変更 gate パス（map が未観測＝spec 状態不明。`map sync` で entry になる）、map/ack の parse 失敗、解決できない/unsafe な
+  rev、git の失敗（終了ステータスで判定）、gate パスが変わったのに map が無い、はすべて exit 2（判定不能。0 にはしない）。
+  削除パスは、まだそれを列挙している entry を通してのみ判定する（sync は削除パスを detach するので、未参照の削除パスは skip）。
+  area 必須の検証は audit 用なので、このコマンドは `Config::load_without_areas` で読む。
 - **`audit [--json] [--filter]`（`run_audit`）** — map store を情報源とする read-only correctness 監査。drift（整合）と
   異なり「実装・仕様が正しいか」を見る。`auditmap::build_envelope` が構造的 findings
   （`StructuralKind::{Undocumented,DanglingReference,Untested}`, `structural_findings`）と per-entry LLM 監査 shard

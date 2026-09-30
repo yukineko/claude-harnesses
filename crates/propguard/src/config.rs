@@ -227,7 +227,9 @@ impl Config {
     /// since its `checker_cmd` is later run as a subprocess from the Stop hook
     /// and an untrusted, repo-shipped value would be arbitrary code execution.
     /// When the project file exists but the root is not trusted we ignore it and
-    /// fall back to the (trusted) home config, then built-in defaults.
+    /// fall back to the (trusted) home config, then built-in defaults. Trust is resolved with
+    /// [`harness_core::trust::resolve`], i.e. including worktree inheritance: a
+    /// linked git worktree of a trusted checkout is trusted (same rule as donegate).
     ///
     /// A chosen file that exists but cannot be read (permission denied, invalid
     /// UTF-8, …) or does not parse as TOML is NOT treated as "no config": the
@@ -239,7 +241,7 @@ impl Config {
 
         let chosen = {
             let p = Config::project_path(root);
-            if p.exists() && harness_core::trust::is_trusted(root) {
+            if p.exists() && harness_core::trust::resolve(root).is_trusted() {
                 Some(p)
             } else {
                 if p.exists() {

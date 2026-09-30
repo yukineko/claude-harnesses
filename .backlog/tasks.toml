@@ -12197,3 +12197,48 @@ updated_at = 1790724643
 weight = 0.0
 issue_number = 903
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/903"
+
+[[task]]
+id = "be9627da"
+title = "blastguard exclude.rs の is_protected_path の doc が Deny と書くが実挙動は Ask (docstring と実装の食い違い)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "3a8e3b73 実装 agent の報告 (2026-09-30)。protected_path_block は Decision::ask を返す。どちらが正しいかを確認して doc か実装を直す。CLAUDE.md 4 節の対象。"
+created_at = 1790766259
+updated_at = 1790766259
+weight = 0.0
+issue_number = 904
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/904"
+
+[[task]]
+id = "e64027ee"
+title = "blastguard README が Edit/MultiEdit/NotebookEdit を常に allow と書くが、保護パスでは ask する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "3a8e3b73 実装 agent の報告 (2026-09-30)。detect_edit は保護された gate/hook/policy パスで ask。README の散文が古い。"
+created_at = 1790766261
+updated_at = 1790766261
+weight = 0.0
+issue_number = 905
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/905"
+
+[[task]]
+id = "6cbd49e7"
+title = "docs/GLOSSARY.md の .githooks 項がまだ taintguard をゲートクレートに挙げている"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "taintguard はユーザー裁定 0521d013 で撤去済み。3a8e3b73 実装 agent の報告 (2026-09-30)。"
+created_at = 1790766262
+updated_at = 1790766262
+weight = 0.0
+issue_number = 906
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/906"

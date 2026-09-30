@@ -14,6 +14,8 @@ mod install;
 mod model;
 mod notify;
 mod transcript;
+#[cfg(test)]
+mod trust_worktree_tests;
 
 use std::path::Path;
 

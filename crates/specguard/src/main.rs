@@ -275,18 +275,45 @@ enum MapAction {
     /// resolution for mapped source files that now have an authored spec.
     /// `selector` is an exact entry key or a glob (e.g. `crates/foo/src/**`), so
     /// one crate-level spec-doc can resolve every per-file entry under it.
+    ///
+    /// Nothing verifies that the doc describes the code, so `tracked` records a
+    /// review CLAIM: a non-blank `--reason` is required and is stored as
+    /// `reviewed_reason` together with `reviewed_at` (HEAD commit + run date)
+    /// on every matched entry. A missing/blank reason is rejected before the
+    /// store is read or written.
     SetSpec {
         /// Exact entry key or glob selecting the entries to attach the doc to.
         selector: String,
         /// Spec-doc path (repo-root-relative) to record on each matched entry.
         doc: String,
+        /// Why these entries are claimed to be described by `doc` (required,
+        /// non-blank; recorded as `reviewed_reason`).
+        #[arg(short = 'm', long = "reason")]
+        reason: String,
     },
-    /// Mark matching entries `tracked` (reviewed; no authored spec needed).
-    /// `selector` is an exact entry key or a glob. Use for entries whose
-    /// `changed` status has been reviewed and reflects no genuine spec drift.
+    /// Relate a test file to a map entry explicitly: move TEST into entry
+    /// KEY's `test_files` (detaching it from any other entry). For relations
+    /// the sync's path heuristic cannot see; later syncs keep the link.
+    Link {
+        /// Repo-root-relative path of the test file (must exist).
+        test: String,
+        /// Exact key of the entry the test exercises.
+        key: String,
+    },
+    /// Mark matching entries `tracked` — a CLAIM that they were reviewed and
+    /// need no authored spec; nothing is verified. `selector` is an exact
+    /// entry key or a glob. Use for entries whose `changed` status has been
+    /// reviewed and reflects no genuine spec drift. A non-blank `--reason` is
+    /// required and is stored as `reviewed_reason` together with `reviewed_at`
+    /// (HEAD commit + run date); a missing/blank reason is rejected before the
+    /// store is read or written.
     Resolve {
         /// Exact entry key or glob selecting the entries to mark tracked.
         selector: String,
+        /// What was reviewed and why it is not spec drift (required,
+        /// non-blank; recorded as `reviewed_reason`).
+        #[arg(short = 'm', long = "reason")]
+        reason: String,
     },
     /// Search the repo through the deterministic indexes and report which map
     /// entries the hits belong to.
@@ -1865,7 +1892,12 @@ fn run_map(cli: &Cli, l: &Loaded, action: &MapAction) -> Result<u8> {
             let baseline = scope::resolve_baseline(&l.cfg, override_ref.as_deref(), last_ref);
             let head = scope::current_head(&l.repo_root).unwrap_or_else(|_| "HEAD".to_string());
 
-            map.sync(&l.repo_root, &baseline, spec_dir, &head, &exclude)?;
+            let unchecked = map.sync(&l.repo_root, &baseline, spec_dir, &head, &exclude)?;
+            // Not an error: those entries keep no inline-test credit (they read
+            // as untested), but say so instead of letting the gap pass silently.
+            for u in &unchecked {
+                eprintln!("specguard map: inline tests not checked (reported untested): {u}");
+            }
             let pruned = map.prune_excluded(&exclude);
             map.save(&map_path)?;
             println!(
@@ -1886,9 +1918,16 @@ fn run_map(cli: &Cli, l: &Loaded, action: &MapAction) -> Result<u8> {
             );
             Ok(EXIT_OK)
         }
-        MapAction::SetSpec { selector, doc } => {
+        MapAction::SetSpec {
+            selector,
+            doc,
+            reason,
+        } => {
+            // Validate the claim BEFORE touching the store: a rejected command
+            // must leave the map byte-identical.
+            let review = map_review(l, reason)?;
             let mut map = specmap::SpecMap::load(&map_path)?;
-            let touched = map.set_spec(selector, doc)?;
+            let touched = map.set_spec(selector, doc, &review)?;
             map.save(&map_path)?;
             if touched.is_empty() {
                 println!("specguard map: no entry matched '{selector}' (nothing set)");
@@ -1901,9 +1940,20 @@ fn run_map(cli: &Cli, l: &Loaded, action: &MapAction) -> Result<u8> {
             }
             Ok(EXIT_OK)
         }
-        MapAction::Resolve { selector } => {
+        MapAction::Link { test, key } => {
+            if !l.repo_root.join(test).is_file() {
+                anyhow::bail!("test file '{test}' does not exist under the repo root");
+            }
             let mut map = specmap::SpecMap::load(&map_path)?;
-            let touched = map.resolve(selector)?;
+            map.link_test(test, key)?;
+            map.save(&map_path)?;
+            println!("specguard map: linked {test} -> {key}");
+            Ok(EXIT_OK)
+        }
+        MapAction::Resolve { selector, reason } => {
+            let review = map_review(l, reason)?;
+            let mut map = specmap::SpecMap::load(&map_path)?;
+            let touched = map.resolve(selector, &review)?;
             map.save(&map_path)?;
             if touched.is_empty() {
                 println!("specguard map: no entry matched '{selector}' (nothing resolved)");
@@ -2321,6 +2371,21 @@ fn format_contract_violations(violations: &[(&'static str, Vec<&'static str>)]) 
         }
     }
     Some(msg)
+}
+
+/// Build the review claim `map resolve` / `map set-spec` stamp on each entry
+/// they mark tracked. Fails (so the caller never loads or saves the store) on a
+/// blank reason, and on an unreadable HEAD: an undated claim is not recorded
+/// under a placeholder commit.
+fn map_review(l: &Loaded, reason: &str) -> Result<specmap::Review> {
+    if reason.trim().is_empty() {
+        anyhow::bail!(
+            "specguard map: a non-blank --reason is required (tracked is a review claim; say what was reviewed)"
+        );
+    }
+    let head = scope::current_head(&l.repo_root)
+        .context("specguard map: cannot record reviewed_at without a HEAD commit")?;
+    specmap::Review::new(reason, &head, &l.date)
 }
 
 /// Ratify the prompt templates (meta-canon): contract-check then pin the
@@ -3184,6 +3249,8 @@ mod tests {
                 symbols: vec![],
                 called_by: vec![],
                 ambiguous_symbols: vec![],
+                reviewed_reason: None,
+                reviewed_at: None,
                 api: None,
             }
         }

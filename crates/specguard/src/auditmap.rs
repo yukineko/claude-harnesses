@@ -104,6 +104,12 @@ pub fn is_undocumented(spec_doc: Option<&str>, impl_files: &[String]) -> bool {
 
 /// Pure: an entry is *untested* when it has implementation files but no
 /// attributed test files. No filesystem access.
+///
+/// "Attributed" is the spec map's relation (see `specmap.rs`): the sync's path
+/// heuristic, inline `#[test]` credit, `specguard map link`, or a consumer.
+/// So `true` means no test was related to the entry — every test of the file
+/// may still live somewhere the heuristic does not look (a crate's
+/// integration tests are related to its root file only).
 pub fn is_untested(impl_files: &[String], test_files: &[String]) -> bool {
     !impl_files.is_empty() && test_files.is_empty()
 }
@@ -347,6 +353,8 @@ mod tests {
             symbols: vec![],
             called_by: vec![],
             ambiguous_symbols: vec![],
+            reviewed_reason: None,
+            reviewed_at: None,
             api: None,
         }
     }

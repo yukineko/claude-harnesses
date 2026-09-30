@@ -35,7 +35,10 @@ map store は **このコマンド専用ではありません**。`.specguard/sp
   baseline から `git log --name-status` の差分だけを増分反映する)。
 
 いずれも Added→新規 entry、Modified→`changed` マーク、Renamed→移動、
-Deleted→detach/`missing` を **決定的に** (LLM 判定なしで) 行います。このコマンド
+Deleted→detach/`missing` を **決定的に** (LLM 判定なしで) 行い、テストファイルを
+パス規則で impl entry の `test_files` に関係付けます (帰属できないテストは test-only の
+まま残る)。規則で見えない関係は、テストコードを読んだうえで
+`specguard map link <test> <key>` で明示的に書き込みます。このコマンド
 は skeleton を **再実装せず**、常にこのサブコマンドに委譲してください。
 
 ## 1.5 ターゲットを解決する ($ARGUMENTS → --filter、コスト有界)

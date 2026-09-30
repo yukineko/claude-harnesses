@@ -1056,26 +1056,6 @@ issue_number = 140
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/140"
 
 [[task]]
-id = "64e52a8d"
-title = "spec-map の impl-test 関係が 562 entry 中 0 件で、構造的に到達不能"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "L4",
-    "scout",
-    "verified",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "実測: specguard map list --json で impl_and_test=0, impl_only=399, test_only=160, neither=3。crates/specguard/src/specmap.rs:7 が「a feature relates to BOTH its impl_files + test_files」と約束しているが一度も成立していない。原因は構造。specmap.rs:462-473 の attribute_path は新パスを必ずそのパス自身をキーとして登録し、key_owning (:410-415) は「そのパスを既に literal に含む entry」しか一致させないので、テストファイルが impl の entry に入る経路が存在しない。doc コメント自身が欠けた一手を認めている (specmap.rs:423-425: a consumer merges it into a real feature or endpoint later) が、map の writer は SetSpec と Resolve と Prune の3つだけでどれも merge しない。その consumer は存在しない。結果 crates/specguard/src/auditmap.rs:107-108 の is_untested が 399 の impl entry すべてに true を返し、spec-audit に渡る coverage 信号が定数になる。しかも verdict.rs は単体テスト12本と trybuild fixture 8本を持ちながら test_files が空と記録される — 欠落より悪く積極的な誤情報。完了条件: map link 相当の決定論 writer とヒューリスティック seeder を入れて 8 area 全 crate で impl_and_test が非ゼロになる、または test_files と client_refs と api を MapEntry と prompt から削除して is_untested も消す。どちらかを選ぶ。"
-created_at = 1785926763
-updated_at = 1785926763
-weight = 0.0
-issue_number = 146
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/146"
-
-[[task]]
 id = "0c277117"
 title = "docs/specs が map からも canon からも外れており、specguard はどこでも block しない"
 project = "/Users/yuki/src/harness"
@@ -1108,9 +1088,12 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "CLAUDE.md:188-197 に記録された実測の失敗 — 既定 REFUTED という指示が検証者を棄却側に倒し、4件の REFUTED を無検証で採用した結果うち1件が実在の欠陥だった (specguard forge gather.rs)。crates/overwatch/src/review_finding.rs:108 は壊れた入力を既に Unverified に倒しているが、整形式の反証を裁定するものが無い。adjudicate(llm_verdict, probe_result) を入れ、(Refuted, NoWitness) から Refuted への辺を持たせない。到達性プローブ P4 (到達不能と主張された分岐の本体を panic に置換して全スイートと proptest を回す) は反証を偽なりと示せるが確立はできない — witness が見つからなかったは witness が無いではない。プローブ機構は新規ではなく scripts/check-fail-open-mutation.py が既に apply して cargo test して exit code を assert して revert しバイト同一を検証する形を持つ。受け入れる代償を明示: REFUTED を閉じられるのは人間だけになるのでキューは人間が働くまで単調増加する。完了条件: adjudicate が唯一の verdict 変更経路になり、refuted_without_a_witness_never_survives_adjudication を先に誤実装 (llm をそのまま返す) に対して RED で観測してから実装する。歴史的に誤棄却された gather.rs の分岐に P4 を当てて Reproduced が出ることを確認し、出なければプローブが弱いという事実をそのまま記録する (プローブを十分と宣言しない)。"
+notes = """
+CLAUDE.md:188-197 に記録された実測の失敗 — 既定 REFUTED という指示が検証者を棄却側に倒し、4件の REFUTED を無検証で採用した結果うち1件が実在の欠陥だった (specguard forge gather.rs)。crates/overwatch/src/review_finding.rs:108 は壊れた入力を既に Unverified に倒しているが、整形式の反証を裁定するものが無い。adjudicate(llm_verdict, probe_result) を入れ、(Refuted, NoWitness) から Refuted への辺を持たせない。到達性プローブ P4 (到達不能と主張された分岐の本体を panic に置換して全スイートと proptest を回す) は反証を偽なりと示せるが確立はできない — witness が見つからなかったは witness が無いではない。プローブ機構は新規ではなく scripts/check-fail-open-mutation.py が既に apply して cargo test して exit code を assert して revert しバイト同一を検証する形を持つ。受け入れる代償を明示: REFUTED を閉じられるのは人間だけになるのでキューは人間が働くまで単調増加する。完了条件: adjudicate が唯一の verdict 変更経路になり、refuted_without_a_witness_never_survives_adjudication を先に誤実装 (llm をそのまま返す) に対して RED で観測してから実装する。歴史的に誤棄却された gather.rs の分岐に P4 を当てて Reproduced が出ることを確認し、出なければプローブが弱いという事実をそのまま記録する (プローブを十分と宣言しない)。
+
+8f5901a7 で取り込み済み: record-finding は adjudicate を通し、REFUTED は probe が not_reproduced かつ人の sign-off がある場合だけ保存される。reproduced なら confirmed、それ以外は unverified。continuous-audit は verifier の REFUTED を捨てずに unverified として記録するよう変更。残り (done 条件未達): gather.rs の誤棄却箇所に対する probe の実行。probe を生成する道具がまだ無い。"""
 created_at = 1785926766
-updated_at = 1785926766
+updated_at = 1790793912
 weight = 0.0
 issue_number = 148
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/148"
@@ -1128,9 +1111,12 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "これは追加要件「仕様は書かれれば drift するので検証され続ける機構が要る」が置き換えるべき当の機構。map set-spec と map resolve は glob を受けて status を Tracked に倒すだけで、その doc がコードを記述しているかの検証がゼロ。resolve の help 自身が reviewed; no authored spec needed と書いており、このビットは「人間がレビューしたと主張した」ことを記録するのであって何かが検査されたことではない。crates/specguard/src/main.rs:1643-1656 は load と save の間に検証を1つも持たない。MapEntry には reviewer も理由も日付も無い。一度 Tracked になった entry がそこを出るのは git がファイルを触ったときだけで、それは陳腐化プロキシであって再検証ではない。実測: tracked 200件はすべて7月の単一バッチ (183件が 8d32025f 2026-07-08、12件が 0d81e7dc、3件が a638d9b9、2件が 9eb57c9e) で、以後一度も再検査されていない。これは「doc があるから数える」を enum で実装したもの。完了条件: MapEntry に reviewed_at (commit と日付) と reviewed_reason を足し、resolve と set-spec に理由を必須にし (check-doc-claims.py:63-70 の doc-claim-exempt が理由必須なのと同じ規律)、N commit より古い tracked を stale-review として扱う。理由なしの resolve が拒否され、8d32025f で tracked された entry が今日 stale-review と報告されることを観測する。"
+notes = """
+これは追加要件「仕様は書かれれば drift するので検証され続ける機構が要る」が置き換えるべき当の機構。map set-spec と map resolve は glob を受けて status を Tracked に倒すだけで、その doc がコードを記述しているかの検証がゼロ。resolve の help 自身が reviewed; no authored spec needed と書いており、このビットは「人間がレビューしたと主張した」ことを記録するのであって何かが検査されたことではない。crates/specguard/src/main.rs:1643-1656 は load と save の間に検証を1つも持たない。MapEntry には reviewer も理由も日付も無い。一度 Tracked になった entry がそこを出るのは git がファイルを触ったときだけで、それは陳腐化プロキシであって再検証ではない。実測: tracked 200件はすべて7月の単一バッチ (183件が 8d32025f 2026-07-08、12件が 0d81e7dc、3件が a638d9b9、2件が 9eb57c9e) で、以後一度も再検査されていない。これは「doc があるから数える」を enum で実装したもの。完了条件: MapEntry に reviewed_at (commit と日付) と reviewed_reason を足し、resolve と set-spec に理由を必須にし (check-doc-claims.py:63-70 の doc-claim-exempt が理由必須なのと同じ規律)、N commit より古い tracked を stale-review として扱う。理由なしの resolve が拒否され、8d32025f で tracked された entry が今日 stale-review と報告されることを観測する。
+
+slice 1 は ed1b9e45 で取り込み済み: map resolve/set-spec は空でない理由を必須とし、reviewed_reason と reviewed_at (HEAD commit と日付) を記録する。残り: stale-review の報告、レビュー記録の無い既存の tracked 約200件を stale 扱いにすること。未テスト: HEAD が読めない経路。serde(default) だけを消す mutant は生き残る (Option は既定で None になるため)。"""
 created_at = 1785926768
-updated_at = 1785926768
+updated_at = 1790793753
 weight = 0.0
 issue_number = 150
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/150"
@@ -12356,3 +12342,158 @@ updated_at = 1790793954
 weight = 0.0
 issue_number = 925
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/925"
+
+[[task]]
+id = "768a6a0c"
+title = "削除ゲート誤検知の疑い: 引数文字列を含む heredoc と null デバイスへのリダイレクトが recoverable 判定不能として止められた"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+6becbf8d の RED agent が報告。heredoc 本文に reason オプション風の文字列と dev null へのリダイレクトを含む Bash が「cannot tell whether these bytes are recoverable」で拒否された。未検証。再現コマンドを作って blastguard の削除判定がどの節で Ask/Deny したかを観測すること。deletion-policy (復元可能な作業物は削除可) に照らして誤検知か判定する。
+
+2件目: 6becbf8d の実装者も heredoc 内の矢印 (ハイフンと大なり) をリダイレクトと解釈され拒否された。condukt schedule の矢印 force-gate と同類。
+
+3件目 (2026-10-01、orchestrator 自身): heredoc で python を流し、続けて for ループで backlog add を回す Bash が、空のパスに対する上書きリダイレクトとして拒否された (メッセージ: relative path の空文字)。コマンド中にファイルへのリダイレクトは無かった。"""
+created_at = 1790793304
+updated_at = 1790793913
+weight = 0.0
+issue_number = 907
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/907"
+
+[[task]]
+id = "f479ba9a"
+title = "specguard classify_path が overwatch/src/test_freshness.rs を名前の test_ 接頭辞だけでテストと誤分類する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "64e52a8d の実装者が観測。spec map に test_only として残る唯一の entry。実装ファイルを test 扱いすると impl 側が untested に見える。"
+created_at = 1790793731
+updated_at = 1790793731
+weight = 0.0
+issue_number = 909
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/909"
+
+[[task]]
+id = "dfd92783"
+title = "specguard spec map: src/foo/tests.rs の inline テストが親 foo.rs の credit にならない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "64e52a8d の実装者が観測。cfg(test) mod tests; で外出しした子モジュールのテストが親を untested に見せる。"
+created_at = 1790793733
+updated_at = 1790793733
+weight = 0.0
+issue_number = 910
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/910"
+
+[[task]]
+id = "034d39a6"
+title = "specguard mark_inline_tests が字句判定: 生文字列内の #[test] 行でも test 有りと数える"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "64e52a8d の実装者が指摘。偽の credit は untested を隠す方向 (permissive) なので fail-open 側の誤り。"
+created_at = 1790793735
+updated_at = 1790793735
+weight = 0.0
+issue_number = 911
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/911"
+
+[[task]]
+id = "d4b7ab1d"
+title = "specguard specmap.rs の entry_matches の doc が AMBIGUOUS_SYMBOL_DECLS の doc に連結されている"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "64e52a8d の実装者が観測 (specmap.rs 253 行付近)。docstring と実体の対応ずれ。"
+created_at = 1790793738
+updated_at = 1790793738
+weight = 0.0
+issue_number = 912
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/912"
+
+[[task]]
+id = "5cff1d65"
+title = "core.hooksPath が main の .githooks を絶対パスで指すため worktree ブランチの commit は main の最新フックで判定される"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "64e52a8d で観測: 古い base のブランチは main が追加したスクリプト欠落で fail-closed に block された。ブランチ自身の tree のフックでは判定されない。worktree で main を先に取り込む運用で回避したが、フックとスクリプトの版ずれが設計上の前提か要判断。"
+created_at = 1790793739
+updated_at = 1790793739
+weight = 0.0
+issue_number = 913
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/913"
+
+[[task]]
+id = "c078bcf4"
+title = "overwatch record-finding が REFUTED の根拠 (probe の path と sign-off した人) を保存しない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "80a46e9f の実装者が指摘。保存された refuted 行に誰が承認したかの監査証跡が残らない。ReviewFinding に公開フィールドを追加する必要がある。"
+created_at = 1790793913
+updated_at = 1790793913
+weight = 0.0
+issue_number = 916
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/916"
+
+[[task]]
+id = "c64191fa"
+title = "overwatch rollback_cli.rs の record_finding が never-break-a-turn を根拠に fail-soft: store 書き込み失敗でも exit 0"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "80a46e9f の実装者が指摘。record-finding は verdict を裁定するようになったので判定を持つ側。書き込み失敗で exit 0 と recorded false は下流が成功と読める。CLAUDE.md 1 節の赤信号。"
+created_at = 1790793914
+updated_at = 1790793914
+weight = 0.0
+issue_number = 917
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/917"
+
+[[task]]
+id = "46cbfaa3"
+title = "overwatch adjudicate の未裁定点: unverified 主張に reproduced probe が付いても unverified のまま"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "80a46e9f の実装者が裁定なしに決めた。ユーザー裁定は REFUTED だけを対象にしている。機械の再現があるのに confirmed に上がらない。confirmed に not_reproduced probe が付いても confirmed のまま、も同様に未裁定。"
+created_at = 1790793917
+updated_at = 1790793917
+weight = 0.0
+issue_number = 918
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/918"
+
+[[task]]
+id = "86c8b8e9"
+title = "probe 生成の道具が無い: REFUTED の反証実験を実行して result JSON を書く手段"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "80a46e9f の done 条件 (gather.rs の過去の誤棄却箇所で probe を回し再現するか記録) を満たすのに必要。record-finding は probe 結果ファイルを読むだけ。"
+created_at = 1790793918
+updated_at = 1790793918
+weight = 0.0
+issue_number = 919
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/919"

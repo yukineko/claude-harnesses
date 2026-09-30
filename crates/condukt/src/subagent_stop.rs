@@ -230,11 +230,7 @@ pub fn run(cfg: &Config, state_cwd: &Path, raw_stdin: &str, now: i64) -> Outcome
 
     let runs = state::all_runs(cfg, state_cwd);
     match resolve_owner(&input.cwd, &runs).require() {
-        Required::Blocked(v) => Outcome::NotWritten(
-            v.reason()
-                .map(|r| r.as_str().to_string())
-                .unwrap_or_else(|| "undetermined owner".to_string()),
-        ),
+        Required::Blocked(v) => Outcome::NotWritten(v.as_str().to_string()),
         Required::Determined(owner) => record_progress(cfg, state_cwd, &owner, now),
     }
 }
@@ -263,10 +259,7 @@ mod tests {
             Required::Determined(v) => {
                 panic!("expected Undetermined, got Known({v:?})")
             }
-            Required::Blocked(verdict) => verdict
-                .reason()
-                .map(|r| r.as_str().to_string())
-                .expect("an Undetermined verdict always carries a reason"),
+            Required::Blocked(verdict) => verdict.as_str().to_string(),
         }
     }
 

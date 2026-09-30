@@ -213,8 +213,8 @@ impl Config {
             // was read and had no overrides".
             let text = match boundary::read_to_string(&path).require() {
                 Required::Determined(text) => text,
-                Required::Blocked(verdict) => {
-                    diag(describe_unreadable_config(&path, &verdict));
+                Required::Blocked(why) => {
+                    diag(describe_unreadable_config(&path, &why.into_verdict()));
                     None
                 }
             };

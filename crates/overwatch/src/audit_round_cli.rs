@@ -284,9 +284,7 @@ fn close_at(cwd: &Path, round: &str, tests: u64) -> Result<CloseOutcome> {
                 "refusing to close round {round:?}: {}. Closing rewrites the \
                  whole ledger, so proceeding from a partial read would drop \
                  every record that failed to parse.",
-                v.reason()
-                    .map(|r| r.as_str())
-                    .unwrap_or("ledger undetermined")
+                v.as_str()
             )
         }
     };
@@ -326,12 +324,7 @@ pub fn metrics(json: bool, window: Option<usize>) -> Result<()> {
     let rounds = match store::read_audit_rounds(&cwd)?.require() {
         Required::Determined(r) => r,
         Required::Blocked(v) => {
-            anyhow::bail!(
-                "cannot report audit metrics: {}",
-                v.reason()
-                    .map(|r| r.as_str())
-                    .unwrap_or("ledger undetermined")
-            )
+            anyhow::bail!("cannot report audit metrics: {}", v.as_str())
         }
     };
     let window = window.unwrap_or(DEFAULT_CONVERGENCE_WINDOW);

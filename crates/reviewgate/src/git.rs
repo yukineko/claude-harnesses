@@ -1,17 +1,85 @@
 //! git helpers: which files changed, and the actual diff text for them. Pure
 //! subprocess calls to `git`. `changed_files` returns a [`ChangeScan`]:
-//! `NotRepo` means "confirmed out of scope" — git said so, or git could not
-//! answer AND no `.git` exists anywhere above the path to contradict it. It
-//! does NOT mean "git unavailable": an unreachable git over a real repo is
-//! `Failed`, not `NotRepo`, via `harness_core::git_probe`. (The caller then has no
-//! diff to review and allows the stop), `Failed` means a git command errored
-//! inside a real repo (the changeset is UNDETERMINED — the caller fails closed
-//! and blocks rather than treat it as clean), and `Files(v)` is the
-//! (possibly-empty) changed set.
+//!
+//! * `NotRepo` means "confirmed out of scope" — git said so, or git could not
+//!   answer AND no `.git` exists anywhere above the path to contradict it. The
+//!   caller then has no diff to review and allows the stop. It does NOT mean
+//!   "git unavailable": an unreachable git over a real repo is `Failed`, not
+//!   `NotRepo`, via `harness_core::git_probe`.
+//! * `Failed` means a git command errored inside a real repo. The changeset is
+//!   UNDETERMINED, so the caller fails closed and blocks rather than treat it
+//!   as clean.
+//! * `Files(v)` is the (possibly-empty) changed set.
+//!
+//! Every `git` subprocess this module spawns goes through [`run_git`], i.e.
+//! `harness_core::boundary::run_with_timeout` with [`git_timeout`] as the
+//! bound (backlog f71ac81a: before, each call was a raw `Command::output()`,
+//! so a hung `git` blocked the Stop hook with no time limit). A timeout,
+//! spawn failure, non-zero exit, signal, or an output stream that could not
+//! be read in full (including non-UTF-8 bytes, which the bounded pipe read
+//! cannot decode) is a FAILURE here: the scan answers `Failed` and
+//! `diff_text` sets `fetch_failed`, both of which `review::evaluate` resolves
+//! to the bounded `git-scan-failed` block.
+//!
+//! Not covered by this module: the repo probe itself
+//! (`harness_core::git_probe::probe_repo`, one `git rev-parse`) still runs as
+//! a raw `Command::output()` inside harness-core with no time limit.
 
+use harness_core::boundary;
 use harness_core::git_probe::{probe_repo, RepoProbe};
+use harness_core::verdict::Determination;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::Duration;
+
+/// Production bound on each `git` sub-command. All of them are local and
+/// read-only and normally finish well under a second; the bound exists so a
+/// hung `git` (lock contention, network mount, corrupted pack) cannot block
+/// the Stop hook indefinitely. Same value as propguard's twin.
+const GIT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Test seam: `REVIEWGATE_GIT_TIMEOUT_MS` may only SHORTEN [`GIT_TIMEOUT`].
+/// Accepted range is `1..=GIT_TIMEOUT` in milliseconds; unset, unparsable,
+/// `0`, or anything larger falls back to [`GIT_TIMEOUT`]. It cannot widen the
+/// bound, and a shorter bound can only turn more calls into failures (which
+/// block), never into an allow, so the seam has no permissive direction.
+const GIT_TIMEOUT_ENV: &str = "REVIEWGATE_GIT_TIMEOUT_MS";
+
+/// The bound applied to every `git` call in this module. See
+/// [`GIT_TIMEOUT_ENV`].
+fn git_timeout() -> Duration {
+    timeout_from(std::env::var(GIT_TIMEOUT_ENV).ok().as_deref())
+}
+
+/// Parse the seam value; anything outside `1..=GIT_TIMEOUT` ms is the
+/// production bound.
+fn timeout_from(raw: Option<&str>) -> Duration {
+    let max_ms = GIT_TIMEOUT.as_millis();
+    match raw.and_then(|v| v.trim().parse::<u64>().ok()) {
+        Some(ms) if ms >= 1 && u128::from(ms) <= max_ms => Duration::from_millis(ms),
+        _ => GIT_TIMEOUT,
+    }
+}
+
+/// Run `git <args>` in `root` under [`git_timeout`]. `Known(stdout)` only
+/// when git exited 0 within the bound AND both output streams were read to
+/// EOF; `Undetermined(why)` on spawn failure, timeout (the boundary kills the
+/// child's process group), signal, non-zero exit, or unreadable output. The
+/// `Undetermined` is forwarded from `harness_core::boundary`, never minted
+/// here, so the give-up telemetry counts each event once.
+fn run_git(root: &Path, args: &[&str]) -> Determination<String> {
+    let mut cmd = Command::new("git");
+    cmd.current_dir(root)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    match boundary::run_with_timeout(&mut cmd, git_timeout()) {
+        // `stdout_on_success` answers `Undetermined` for a non-zero exit.
+        Determination::Known(out) => out.stdout_on_success(),
+        Determination::Undetermined(why) => Determination::Undetermined(why),
+    }
+}
 
 /// Tri-state result of scanning the changed-files set. Distinguishes "no git
 /// scope" (`NotRepo` → allow) from "a git command errored" (`Failed` →
@@ -29,7 +97,7 @@ pub enum ChangeScan {
 /// Changed paths relative to the repo root: tracked changes vs HEAD, staged
 /// changes, and untracked-but-not-ignored files. Returns `NotRepo` when there
 /// is no git repo, `Failed` when any sub-command errored (non-zero exit / spawn
-/// failure) inside a real repo, or `Files(v)` on success (possibly empty).
+/// failure / timeout / unreadable output) inside a real repo, or `Files(v)` on success (possibly empty).
 pub fn changed_files(root: &Path) -> ChangeScan {
     match probe_repo(root) {
         RepoProbe::Repo => {}
@@ -59,13 +127,14 @@ pub fn changed_files(root: &Path) -> ChangeScan {
 }
 
 /// Run one `git` sub-command, appending its trimmed non-empty stdout lines to
-/// `out`. Returns `true` on success (exit 0), `false` on a spawn error or a
-/// non-zero exit — the caller maps `false` to `ChangeScan::Failed`. A
+/// `out`. Returns `true` on success (exit 0 within [`git_timeout`], output
+/// read in full), `false` on a spawn error, timeout, non-zero exit or
+/// unreadable output — the caller maps `false` to `ChangeScan::Failed`. A
 /// successful command with EMPTY stdout still returns `true` (clean ≠ failed).
 fn collect(root: &Path, args: &[&str], out: &mut Vec<String>) -> bool {
-    match Command::new("git").current_dir(root).args(args).output() {
-        Ok(o) if o.status.success() => {
-            for line in String::from_utf8_lossy(&o.stdout).lines() {
+    match run_git(root, args) {
+        Determination::Known(text) => {
+            for line in text.lines() {
                 let line = line.trim();
                 if !line.is_empty() {
                     out.push(line.to_string());
@@ -73,9 +142,12 @@ fn collect(root: &Path, args: &[&str], out: &mut Vec<String>) -> bool {
             }
             true
         }
-        // Spawn error OR non-zero exit: the sub-command did not complete
-        // successfully, so its (empty) output must not be trusted as "clean".
-        _ => false,
+        // The sub-command did not complete successfully, so its (empty)
+        // output must not be trusted as "clean".
+        Determination::Undetermined(why) => {
+            eprintln!("reviewgate: git {} failed: {why}", args.join(" "));
+            false
+        }
     }
 }
 
@@ -104,7 +176,8 @@ pub struct DiffText {
 /// marker so a huge diff can't blow up memory or the reviewer prompt; the
 /// returned `truncated` flag lets the caller refuse to silently allow a stop
 /// whose tail was dropped, and `fetch_failed` reports a content-fetch failure
-/// (spawn error / non-zero exit / unreadable untracked file) so a partial or
+/// (spawn error / timeout / non-zero exit / unreadable git output /
+/// unreadable untracked file) so a partial or
 /// empty diff is never mistaken for the complete change.
 pub fn diff_text(root: &Path, files: &[String], max_bytes: usize) -> DiffText {
     let mut s = String::new();
@@ -119,20 +192,16 @@ pub fn diff_text(root: &Path, files: &[String], max_bytes: usize) -> DiffText {
     let mut others = Vec::new();
     let mut args: Vec<&str> = vec!["ls-files", "--others", "--exclude-standard", "--"];
     args.extend(files.iter().map(String::as_str));
-    match Command::new("git").current_dir(root).args(&args).output() {
-        Ok(o) if o.status.success() => {
-            for line in String::from_utf8_lossy(&o.stdout).lines() {
+    match run_git(root, &args) {
+        Determination::Known(text) => {
+            for line in text.lines() {
                 let line = line.trim();
                 if !line.is_empty() {
                     others.push(line.to_string());
                 }
             }
         }
-        Ok(o) => failures.push(format!(
-            "git ls-files --others exited {:?}",
-            o.status.code()
-        )),
-        Err(e) => failures.push(format!("git ls-files --others: {e}")),
+        Determination::Undetermined(why) => failures.push(format!("git ls-files --others: {why}")),
     }
     for f in others {
         s.push_str(&format!("\n=== new file: {f} ===\n"));
@@ -157,22 +226,19 @@ pub fn diff_text(root: &Path, files: &[String], max_bytes: usize) -> DiffText {
     d
 }
 
-/// Append the stdout of `git <base> <files>` to `out`. `Err` on a spawn error
-/// or non-zero exit: the diff for these files is then UNKNOWN, not empty.
+/// Append the stdout of `git <base> <files>` to `out`. `Err` on a spawn error,
+/// timeout, non-zero exit or unreadable output (including non-UTF-8 diff
+/// bytes, which the bounded pipe read cannot decode): the diff for these
+/// files is then UNKNOWN, not empty.
 fn run_diff(root: &Path, base: &[&str], files: &[String], out: &mut String) -> Result<(), String> {
     let mut args: Vec<&str> = base.to_vec();
     args.extend(files.iter().map(String::as_str));
-    match Command::new("git").current_dir(root).args(&args).output() {
-        Ok(o) if o.status.success() => {
-            out.push_str(&String::from_utf8_lossy(&o.stdout));
+    match run_git(root, &args) {
+        Determination::Known(text) => {
+            out.push_str(&text);
             Ok(())
         }
-        Ok(o) => Err(format!(
-            "git {} exited {:?}",
-            base.join(" "),
-            o.status.code()
-        )),
-        Err(e) => Err(format!("git {}: {e}", base.join(" "))),
+        Determination::Undetermined(why) => Err(format!("git {}: {why}", base.join(" "))),
     }
 }
 
@@ -258,6 +324,40 @@ mod tests {
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).expect("create scratch dir");
         p
+    }
+
+    /// The timeout seam can only shorten the production bound; every
+    /// out-of-range or unparsable value is the production bound.
+    #[test]
+    fn timeout_seam_only_shortens() {
+        assert_eq!(timeout_from(None), GIT_TIMEOUT);
+        assert_eq!(timeout_from(Some("abc")), GIT_TIMEOUT);
+        assert_eq!(timeout_from(Some("0")), GIT_TIMEOUT);
+        assert_eq!(timeout_from(Some("-5")), GIT_TIMEOUT);
+        assert_eq!(timeout_from(Some("10001")), GIT_TIMEOUT);
+        assert_eq!(timeout_from(Some("999999999")), GIT_TIMEOUT);
+        assert_eq!(timeout_from(Some("250")), Duration::from_millis(250));
+        assert_eq!(timeout_from(Some(" 1 ")), Duration::from_millis(1));
+        assert_eq!(timeout_from(Some("10000")), GIT_TIMEOUT);
+    }
+
+    /// A `run_git` failure reaching `run_diff` is `Err`, never an empty `Ok`,
+    /// and leaves `out` untouched. This exercises the non-zero-exit arm only;
+    /// the timeout arm (a hung `git`) is covered by the crate's integration
+    /// tests, which drive the binary with a fake `git` on PATH.
+    #[test]
+    fn run_diff_failure_is_err_not_empty() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let root = scratch_dir();
+        let mut out = String::new();
+        // Not a repo: `git diff --cached` exits non-zero.
+        let r = run_diff(&root, &["diff", "--cached", "--"], &[], &mut out);
+        assert!(r.is_err(), "a failed git diff must be Err, got {r:?}");
+        assert!(out.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// A directory that is not a git repo → `NotRepo` (no scope → allow),

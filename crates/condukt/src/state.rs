@@ -1824,13 +1824,7 @@ pub fn fp_gate_scope(cfg: &Config, cwd: &Path, run_id: &str, task_id: &str) -> F
 
     let raw = match load_decomposition_determined(cfg, cwd, run_id).require() {
         Required::Blocked(verdict) => {
-            let why = verdict
-                .reason()
-                .map(|r| r.as_str().to_string())
-                .unwrap_or_else(|| {
-                    format!("the decomposition for run '{run_id}' could not be read")
-                });
-            return FpGateScope::Undetermined(why);
+            return FpGateScope::Undetermined(verdict.as_str().to_string());
         }
         // ENOENT. Deliberately permissive, and the ONLY permissive arm: the
         // file's absence is itself the observation. A run whose decomposition

@@ -59,10 +59,17 @@ fi
 
 # Temp cache holding one plugin whose per-platform binary name is $BINNAME, so
 # the refresh loop reaches the --stage-repo block for it.
+# The version dir must be the plugin's CURRENT one (repo plugin.json): the
+# refresh loop freezes superseded dirs before reaching --stage-repo (backlog
+# 8acb117a), so a made-up 0.0.1 would leave assertions 1-2 vacuous while
+# "cache bins scanned" (counted before that guard) still reads 1.
+CUR_VER="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+  "$REPO/crates/$BINNAME/.claude-plugin/plugin.json" | head -1)"
+[ -n "$CUR_VER" ] || fail "could not read $BINNAME's current version"
 TEST_CACHE="$TMP/cache/yukineko"
-mkdir -p "$TEST_CACHE/$BINNAME/0.0.1/bin"
-: >"$TEST_CACHE/$BINNAME/0.0.1/bin/$BINNAME-linux-x86_64"
-chmod +x "$TEST_CACHE/$BINNAME/0.0.1/bin/$BINNAME-linux-x86_64"
+mkdir -p "$TEST_CACHE/$BINNAME/$CUR_VER/bin"
+: >"$TEST_CACHE/$BINNAME/$CUR_VER/bin/$BINNAME-linux-x86_64"
+chmod +x "$TEST_CACHE/$BINNAME/$CUR_VER/bin/$BINNAME-linux-x86_64"
 
 OUT="$(cd "$REPO" && CLAUDE_PLUGIN_CACHE="$TEST_CACHE" \
   bash "$REBUILD" --no-clean --dry-run --stage-repo 2>&1)"

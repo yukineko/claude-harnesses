@@ -590,10 +590,10 @@ Claude Code 本体を制御して観測する手段は無い。**判定不能な
 
 | 位置 | 逐語 | なぜ restrictive か |
 |---|---|---|
-| `crates/reviewgate/src/git.rs:41` | `RepoProbe::Undetermined => return ChangeScan::Failed,` | 「git が答えられない（かつ `.git` は在る）」を no-scope ではなく undetermined に写す。`harness_core::git_probe` の三値を正しく消費 |
-| `crates/reviewgate/src/git.rs:46-55` | `if !ok { return ChangeScan::Failed; }` | 3 つの走査コマンドのいずれか 1 つでも失敗したら undetermined。**終了ステータスを判定に使っている** |
-| `crates/reviewgate/src/git.rs:78` | `_ => false,`（`collect`） | spawn 失敗・非ゼロ終了の空 stdout を「clean」と読まない |
-| `crates/reviewgate/src/git.rs:127-129` | `if s.len() > max_bytes { break; }` | 打ち切りは `truncate_on_boundary` で `truncated: true` になり block へ（§3 D の bounded 経路） |
+| `crates/reviewgate/src/git.rs:107` | `RepoProbe::Undetermined => return ChangeScan::Failed,` | 「git が答えられない（かつ `.git` は在る）」を no-scope ではなく undetermined に写す。`harness_core::git_probe` の三値を正しく消費 |
+| `crates/reviewgate/src/git.rs:112-121` | `if !ok { return ChangeScan::Failed; }` | 3 つの走査コマンドのいずれか 1 つでも失敗したら undetermined。**終了ステータスを判定に使っている** |
+| `crates/reviewgate/src/git.rs:145` | `Determination::Undetermined(why) => {`（`collect`、`false` を返す） | spawn 失敗・タイムアウト・非ゼロ終了・出力読み取り不能の空 stdout を「clean」と読まない（f71ac81a で `boundary::run_with_timeout` 経由に変更） |
+| `crates/reviewgate/src/git.rs:216-218` | `if s.len() > max_bytes { break; }` | 打ち切りは `truncate_on_boundary` で `truncated: true` になり block へ（§3 D の bounded 経路） |
 | `crates/reviewgate/src/review.rs:63` |「.unwrap_or(true)」＝ include 側の inc.as_ref().map(...).unwrap_or(true) | include 集合が構築できない＝**全ファイルをレビュー対象にする**方向（Probe H3 で実測） |
 | `crates/reviewgate/src/review.rs:64` |「.unwrap_or(false)」＝ exclude 側の !exc.as_ref().map(...).unwrap_or(false) | exclude が構築できない＝**何も除外しない**方向 |
 | `crates/reviewgate/src/review.rs:179-183` / `128-132` | `if now() - st.last_ts > cfg.reset_after_secs { 0 } else { st.attempts }` | idle 後に attempts を 0 に戻す＝ giveup までの猶予が**増える**＝ block 側 |

@@ -484,7 +484,10 @@ fn analyse(input: &HookInput) -> Decision {
 ///     below its anchor, the whole command is bare `rm`/`cd` segments, no
 ///     word of any `rm` segment has a `..` component (`scope` collapses `..`
 ///     lexically before resolving symlinks, so `lnk/../x` would be judged
-///     where the kernel does not delete), and — if any `cd` is present —
+///     where the kernel does not delete), the RAW `cwd` below (and the raw
+///     `CLAUDE_PROJECT_DIR`, when absolute) has no `..` / `.` component and
+///     the cwd is absolute — checked by [`SafeRoots::new`] on the value passed
+///     here, before it normalises anything — and — if any `cd` is present —
 ///     every `rm` operand is absolute (a `cd` may fail or run in a subshell,
 ///     so a relative operand after it is not judged against the runtime cwd).
 ///     This is not a claim that bare `rm`/`cd`

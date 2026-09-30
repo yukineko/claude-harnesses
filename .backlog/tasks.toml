@@ -12743,3 +12743,21 @@ updated_at = 1790796671
 weight = 0.0
 issue_number = 947
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/947"
+
+[[task]]
+id = "d94d05c3"
+title = "blastguard のテスト/検証実行 (session _local) が live の overwatch violations.jsonl に記録され canary health-gate を誤 rollback させる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "canary",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "2026-10-01 04:44:28、3aa215e1 verifier の cargo test / binary 実行と同時刻に _local の blastguard violation 4件 (rm-recursive, find-exec-shell, shred, protected-path-disarm)。rollout --canary が stage 30 (tracekit, 版不変) で raw=4>2 で HALT。テストが HOME/overwatch store を隔離していないか、_local を canary 計数から除外していない。canary の判定は stage に帰属しない違反で汚染される。"
+created_at = 1790797482
+updated_at = 1790797482
+weight = 0.0
+issue_number = 951
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/951"

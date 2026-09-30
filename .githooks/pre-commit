@@ -59,6 +59,15 @@
 #                                                 north_star "close the
 #                                                 fail-open ENTRANCE with types
 #                                                 and lints")
+#   fault-injection-   check-fault-injection-     the number of crates enabling
+#     adoption         adoption.py              harness-core `fault-injection`
+#                                                 in [dev-dependencies] moving
+#                                                 off the committed baseline, or
+#                                                 the feature enabled outside
+#                                                 dev-dependencies (it would ship
+#                                                 in a binary). harness-core, the
+#                                                 seam's provider, is not counted;
+#                                                 backlog 8696dd7e slice 3
 #   gate-crates-sync   check-gate-crates-sync.py  the GATE_CRATES set disagreeing
 #                                                 across the 11 places it is
 #                                                 hardcoded. Existed unwired for
@@ -191,6 +200,7 @@ run check-plugin-versions.py  version-lockstep
 run check-version-bumped.py   bump-on-change
 run check-hardcoded-secret.py secret-guard
 run check-raw-io-ratchet.py   raw-io-ratchet
+run check-fault-injection-adoption.py fault-injection-adoption
 run check-worktree-isolation.py worktree-isolation
 run check-gate-crates-sync.py gate-crates-sync
 run check-cross-crate-constants.py crossx-constants
@@ -283,6 +293,16 @@ Remediation hints:
                     scripts/check-raw-io-ratchet.py --update-baseline` and
                     commit the updated scripts/check-raw-io-ratchet.baseline
                     (raising the pin is visible in review, not hidden).
+  fault-injection-adoption
+                    fewer crates enable harness-core `fault-injection` in
+                    [dev-dependencies] than the baseline: restore the dropped
+                    opt-in (--list shows the current adopters). MORE than the
+                    baseline also blocks: raise it in THIS commit with
+                    `python3 scripts/check-fault-injection-adoption.py
+                    --update-baseline`, so a later drop cannot pass unseen. The
+                    feature under [dependencies]/[features]/[workspace.
+                    dependencies] blocks at any count: move it to
+                    [dev-dependencies].
   gate-crates-sync  the GATE_CRATES set disagrees across the places it is
                     hardcoded. scripts/rollout-plugins.sh's GATE_CRATES= line is
                     canonical; bring the reported source to match it (or, if you

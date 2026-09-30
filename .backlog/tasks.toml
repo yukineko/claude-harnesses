@@ -12669,3 +12669,48 @@ updated_at = 1790797571
 weight = 0.0
 issue_number = 957
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/957"
+
+[[task]]
+id = "f2ede46c"
+title = "Stop gate の block は repeat ledger により同じ理由の 2 回目が通る。各 gate の文書と表明がこれを書いていない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "3a8e3b73 の引用照合 (2026-10-01) で propguard について確認: check_run の block はすべて harness_core repeat の emit_stop_block 経由で、同じセッションで同じ理由の 2 回目は systemMessage だけになり stop が通る (repeat.rs 329 から 343 付近)。ledger が読めない場合は block のまま、run_guarded の panic block は対象外。propguard の表明は修正中。ほかの Stop gate (donegate, reviewgate, tdd など) の文書が無条件の block と書いていないか、全件の照合が必要。donegate giveup_sentinel が赤なのも同じ仕組み (bdd85e20)。"
+created_at = 1790797765
+updated_at = 1790797765
+weight = 0.0
+issue_number = 958
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/958"
+
+[[task]]
+id = "ec61ea6a"
+title = "stuckguard は stuckguard.toml が読めないと stderr に 1 行出すだけで既定値で動く"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "3a8e3b73 の引用照合で指摘 (config.rs 127 付近)。助言だけの hook なので影響は小さいが、設定で止めたつもりが効いていないことに気づけない。"
+created_at = 1790797766
+updated_at = 1790797766
+weight = 0.0
+issue_number = 959
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/959"
+
+[[task]]
+id = "aba0faae"
+title = "main の作業ツリー内 .claude/worktrees/agent-a6e4c40ebff0c5ebd に登録済み worktree が残っている"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "2026-10-01 に観測。git worktree list に載っており、.git/info/exclude で除外されている。repo 全体を grep するとこの checkout にも当たる。作ったセッションは不明。"
+created_at = 1790797768
+updated_at = 1790797768
+weight = 0.0
+issue_number = 960
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/960"

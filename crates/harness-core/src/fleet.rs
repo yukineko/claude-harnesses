@@ -47,6 +47,35 @@ pub const GATE_CRATES: &[&str] = &[
     "parallelguard",
 ];
 
+/// The canonical list of **blocking gates**: every gate that must carry a
+/// [`crate::gate::Protection`] statement (what it protects, from what, on what
+/// grounds — backlog 3a8e3b73).
+///
+/// A different question from [`GATE_CRATES`], which answers "does this crate
+/// need a canary rollout". Every GATE crate blocks, so this list must always
+/// contain every name in [`GATE_CRATES`]; it may grow beyond it as other
+/// blocking gates adopt a protection statement, which is why it is a separate
+/// literal rather than an alias. Today it holds exactly the canary GATE crates.
+///
+/// The superset relation is enforced twice, never by prose: by the
+/// `blocking_gates_is_superset_of_gate_crates` test in
+/// `crates/harness-core/tests/gate_protection.rs`, and by
+/// `scripts/check-gate-protection.py`, which reads this literal (it must stay
+/// a single `pub const BLOCKING_GATES: &[&str] = &[...];` of plain string
+/// literals for that script to parse it) and exits 1 when it is not a superset
+/// of `GATE_CRATES`. Because `GATE_CRATES` in this file is itself pinned to
+/// every other copy by `scripts/check-gate-crates-sync.py`, that is enough to
+/// keep this list consistent with the canonical rollout set.
+pub const BLOCKING_GATES: &[&str] = &[
+    "blastguard",
+    "propguard",
+    "specguard",
+    "stuckguard",
+    "mutategate",
+    "overwatch",
+    "parallelguard",
+];
+
 #[cfg(test)]
 mod tests {
     use super::GATE_CRATES;

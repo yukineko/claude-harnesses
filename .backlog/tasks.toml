@@ -1010,9 +1010,11 @@ notes = """
 
 51151bed で取り込み済み: specguard map gate-check (変更された gate の map entry に spec_doc か理由付き ack が無ければ exit 1、判定不能は exit 2) と、gate 6 領域の canon への docs/specs 追加。残り: pre-push への配線 (パッチは scratchpad の githooks-0c277117.patch、未適用)。配線前の課題: main の map では gate crate の 44 entry がすべて spec_doc 無しなので、配線した瞬間に gate crate を触る push はすべて止まる。map は gitignore された機械ローカルのキャッシュで、無い worktree や未 sync の map では exit 2 になる。README.ja.md は未更新。
 
-2026-10-01 ユーザー裁定: 先に埋めてから配線する。44 entry に理由付きで docs/specs を紐付けるか理由付き ack を置き、pre-push パッチは map を先に最新化するよう直してから適用する。"""
+2026-10-01 ユーザー裁定: 先に埋めてから配線する。44 entry に理由付きで docs/specs を紐付けるか理由付き ack を置き、pre-push パッチは map を先に最新化するよう直してから適用する。
+
+2026-10-01 phase 2 を 5d37f2f2 で取り込み、specguard 0.2.70 を canary で rollout 済み。spec-map は git 管理外で紐づけが消えるため、git 管理の .specguard/spec-docs.toml (path, doc, reason) を新設し gate-check が読む。gate crate 7 つの対象ファイル 100 件を 68 件の紐づけと 32 件の理由付き ack で埋めた。pre-push パッチ v2 (scratchpad の githooks-0c277117-v2.patch) は push される tree の中で map を作り直してから gate-check する。main の map を写さない。シミュレーションで、紐づけ無しの新ファイルと存在しない doc への紐づけが exit 1、紐づけ済みと ack 済みが 0。残り: 紐づけ 68 件が本当にその doc に書かれているかを別 agent が照合中。照合が済んだらユーザーにパッチ適用を依頼する。"""
 created_at = 1785926764
-updated_at = 1790796466
+updated_at = 1790798388
 weight = 0.0
 issue_number = 147
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/147"
@@ -12714,3 +12716,78 @@ updated_at = 1790797768
 weight = 0.0
 issue_number = 960
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/960"
+
+[[task]]
+id = "e403da24"
+title = "gate crate の 32 ファイルに仕様書が無い (spec-doc-acks に理由付きで登録済み)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "0c277117 の backfill で判明。blastguard (approve, callgraph, detect/executors, interactive, protection, retro, reversible, scope)、specguard (coverage と specforge の src/forge 12 件)、stuckguard verdict_monotonicity、overwatch (lock, gate_outcomes, changeset, merge_conflict, reconcile)、parallelguard 全 3 件 (docs/specs/parallelguard.md が無い)。以前の map は specforge を specguard.md に紐づけていたが、その doc は forge に触れていない。"
+created_at = 1790798388
+updated_at = 1790798388
+weight = 0.0
+issue_number = 961
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/961"
+
+[[task]]
+id = "47356339"
+title = "docs/specs と実装の食い違い: blastguard の判定が Allow/Deny だけと書かれている、overwatch bridge は確定済みだけ backlog に送ると書かれている"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "0c277117 の backfill で KNOWN DRIFT として登録。実装は Ask を持つ / キュー全体を送る。blastguard.md にはターンを決して壊さないという記述も残る (CLAUDE.md 1 節の赤信号の語)。"
+created_at = 1790798389
+updated_at = 1790798389
+weight = 0.0
+issue_number = 962
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/962"
+
+[[task]]
+id = "f4f13e34"
+title = "specguard.toml の map exclude の Cargo.lock が root にしか効かず、crates 配下の Cargo.lock が map entry になる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "0c277117 で観測。今回は ack で済ませた。"
+created_at = 1790798391
+updated_at = 1790798391
+weight = 0.0
+issue_number = 963
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/963"
+
+[[task]]
+id = "67acbe09"
+title = "specguard map set-spec は git 管理外の map にしか書かない。spec-docs.toml にも書くべきか、map の spec_doc を合格扱いし続けるかは未裁定"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "0c277117 phase 2 の実装者が指摘。push 時の検査は作り直した map を使うので、map の spec_doc は常に空で効かない。"
+created_at = 1790798392
+updated_at = 1790798392
+weight = 0.0
+issue_number = 964
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/964"
+
+[[task]]
+id = "9721096f"
+title = "specguard gate-check: merge commit の衝突解消だけで変わったファイルは git log に出ず、未参照扱い (exit 2) になる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "0c277117 phase 2 の実装者が指摘。fail-closed 側なので見逃しではないが、正当な push が止まりうる。ローカル実行では ack と紐づけを作業ツリーから読むため、head の内容と食い違いうる。"
+created_at = 1790798394
+updated_at = 1790798394
+weight = 0.0
+issue_number = 965
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/965"

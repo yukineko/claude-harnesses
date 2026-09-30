@@ -22613,3 +22613,34 @@ updated_at = 1790793730
 weight = 0.0
 issue_number = 146
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/146"
+
+[[task]]
+id = "e269274f"
+title = "Determination を直接 match する 40+ 箇所の Undetermined 腕が全数監査されていない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+敵対的監査 (2026-08-06) が自ら UNVERIFIED として残した項目。棄却ではなく未検証なので、CLAUDE.md 第6節「反証にも同じ立証責任を課す」に従い残す。
+
+監査者の記述をそのまま引く: Determination を直接 match する 40+ 箇所の全数監査はしていない。autoflow/src/lock.rs 2 箇所と autoflow/src/backlog.rs / backlog/src/driver.rs の冒頭のみ読んだ。Undetermined 腕が permissive な箇所が残っている可能性は棄却できない。
+
+読んだ範囲 (autoflow/src/lock.rs:53-58,120-126) はいずれも制限側で、根拠もコメントで明示されていた。つまり「見た分は健全」であって「全部健全」ではない。
+
+この形が危険なのは 2 つの穴が重なるため: (a) Determination::Known が pub variant なので require() を経由しない直接 match という抽出路が存在し、型はそこを見ていない。(b) check-fail-open.py も Required::Blocked 綴りを見ていない (別項目)。型と lexical gate の両方が見ていない領域に 40+ 箇所ある。
+
+対照的に require() 経由の 45 箇所は全件目視され、制限側でない腕は 0 件だった。差は経路であって規律ではない。
+
+完了条件: 直接 match の全箇所を列挙し、各 Undetermined 腕がどちら側へ倒れているかを file:line つきで表にする。permissive な箇所があれば是正。監査は利害のない agent が行う。
+
+[triage 2026-09-29 @b325a169] p2->p1: 281 Determination::Undetermined arms outside harness-core never audited as a whole"""
+created_at = 1785969190
+updated_at = 1790794458
+weight = 0.0
+issue_number = 179
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/179"

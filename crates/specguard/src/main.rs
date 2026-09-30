@@ -139,8 +139,10 @@ enum Command {
     },
     /// Print the active fix-offer block if a sentinel is pending (for the
     /// SessionStart hook). Resolves the sentinel path from `[output].sentinel`,
-    /// so a custom path still works. Never fails the session: any error (missing
-    /// config etc.) prints nothing and exits 0.
+    /// so a custom path still works. Silent (exit 0) only when there is no
+    /// config file at all (not a specguard project). A config that is present
+    /// but cannot be loaded, or a sentinel whose state cannot be read, prints a
+    /// "could not determine" notice on stdout instead of nothing.
     Pending,
     /// Clear the sentinel after a human has handled the pending findings.
     ///
@@ -424,7 +426,8 @@ fn run(cli: &Cli) -> Result<u8> {
         return Ok(EXIT_OK);
     }
 
-    // `pending` is the SessionStart hook entry point: best-effort, never errors.
+    // `pending` is the SessionStart hook entry point. It never returns `Err`:
+    // it prints its own "could not determine" notice on stdout (see `pending`).
     if let Some(Command::Pending) = &cli.command {
         return Ok(pending(cli));
     }
@@ -1366,14 +1369,52 @@ fn emit_brief_json(cov: &harness_core::verdict::Determination<coverage::Coverage
 /// fix-offer block so the host agent surfaces it (read the report, then ask the
 /// human whether to fix). Resolves the sentinel path from config, so a custom
 /// `[output].sentinel` still works (the old hook hardcoded `.specguard-pending`).
-/// Best-effort: any failure (no config, unreadable sentinel) prints nothing and
-/// exits 0, so it can never block a session from starting.
+///
+/// Silence is reserved for exactly one case: the config path does not exist
+/// (`NotFound`), i.e. this is not a specguard project and there is no pending
+/// state to determine. Every other outcome prints on stdout, because stdout is
+/// all the SessionStart consumer sees (`hooks/hooks.json` runs
+/// `specguard pending 2>/dev/null || true`, discarding stderr and the exit
+/// code):
+/// - config present but unloadable (unreadable, unparseable, invalid, template
+///   or `project.root` unresolvable): a "could not determine" notice, exit
+///   [`EXIT_USAGE`] — the same code every other subcommand returns when `load`
+///   fails, so a direct caller cannot read exit 0 as "nothing pending";
+/// - sentinel state unreadable: a "could not determine" notice (see
+///   [`render_pending`]).
 fn pending(cli: &Cli) -> u8 {
-    let Ok(l) = load(cli) else {
-        return EXIT_OK;
-    };
-    let paths = report::paths(&l.cfg, &l.repo_root, &l.date);
-    render_pending(&paths)
+    // Only a definite NotFound counts as "absent". Any other metadata error
+    // (e.g. permission denied on a parent) falls through to `load`, whose
+    // failure is surfaced below rather than read as absence.
+    if let Err(e) = std::fs::symlink_metadata(&cli.config) {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            return EXIT_OK;
+        }
+    }
+    match load(cli) {
+        Ok(l) => {
+            let paths = report::paths(&l.cfg, &l.repo_root, &l.date);
+            render_pending(&paths)
+        }
+        Err(e) => {
+            println!(
+                "{}",
+                pending_unloadable_message(&cli.config, &format!("{e:#}"))
+            );
+            EXIT_USAGE
+        }
+    }
+}
+
+/// The notice [`pending`] prints when the config exists but cannot be loaded.
+/// It must not read as a clean state: whether a finding is pending is unknown.
+fn pending_unloadable_message(config: &Path, why: &str) -> String {
+    format!(
+        "⚠ specguard: 設定 ({}) は存在しますが読み込めないため、未処理の仕様ドリフト指摘の有無を\n\
+         確認できませんでした (UNKNOWN であり「指摘なし」ではありません): {why}\n\
+         設定を修正してから `specguard pending` を再実行し、sentinel の状態を確認してください。",
+        config.display()
+    )
 }
 
 /// The body of [`pending`]'s SessionStart hook, taking `paths` directly (rather

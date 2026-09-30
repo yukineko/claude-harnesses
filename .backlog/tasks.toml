@@ -12244,3 +12244,115 @@ updated_at = 1790766262
 weight = 0.0
 issue_number = 906
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/906"
+
+[[task]]
+id = "8571c337"
+title = "undetermined-arm-empty-fallback が既存 6 サイトを検出: Undetermined/Blocked 腕で空値に潰している"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "実測 2026-10-01 測定点 c7d17849 (f12c2168 で追加した advisory パターン): crates/backlog/src/main.rs:1506,1508 / crates/harness-core/src/store.rs:463 / crates/overwatch/src/store.rs:376 / crates/specguard/src/scope.rs:506 / crates/stuckguard/src/verdict_monotonicity.rs:110。各サイトで (a) 実在の fail-open か (b) 下流が空を unknown と読む正当な縮退か を、消費経路を辿って判定する。直したら scripts/check-fail-open.baseline (現 49) を下げる。"
+created_at = 1790793946
+updated_at = 1790793946
+weight = 0.0
+issue_number = 920
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/920"
+
+[[task]]
+id = "1a6c1c48"
+title = "Required::Blocked(Verdict) を Blocked(Undet) へ狭めて外部から Blocked(Clean) を作れなくする"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "harness-core",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "5b89f0f6 で散文のみ是正 (7306810a)。tests/ui/verdict_known_holes/unsealed_paths.rs の hole 3 が現状を pin している。狭めると 61 call site / 約10 plugin crate の変更と各 3 ファイル bump が要る (測定 2026-10-01: git grep 'Required::Blocked(' 外部 61 件)。並行セッションと衝突しにくい順序・一括方法の設計が先。閉じたら fixture の hole 3 を negative fixture へ移す。"
+created_at = 1790793947
+updated_at = 1790793947
+weight = 0.0
+issue_number = 921
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/921"
+
+[[task]]
+id = "04f58309"
+title = "Required への拡張トレイト (unwrap_or_default/is_ok 再付与) をどのゲートも検出しない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "harness-core",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "5b89f0f6 の hole 1。型では塞げない。check-fail-open.py に impl ... for Required / for Determination を検出する lexical パターンを足すか判断が要る。現在 repo 内に該当 impl があるかは未測定。"
+created_at = 1790793949
+updated_at = 1790793949
+weight = 0.0
+issue_number = 922
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/922"
+
+[[task]]
+id = "71a880a2"
+title = "backlog の起票と作業なし close の両方が、観測済みか未観測かを区別して記録しない — 疑い (未観測) が事実として積まれ・閉じられる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "evidence",
+    "triage",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "実測 2026-10-01 (HEAD b23ee4b0): e5dd6e7a (p1 トリアージ) は 121 件を close。内訳 ALREADY_FIXED 47 / LOW_VALUE 42 / DUPLICATE 18 / OBSOLETE 14。ALREADY_FIXED 47 件のうち、引用 sha が引用ファイルに触れるもの 20、sha 無し 15、sha はあるがファイル引用無し 11、不一致 1 (2353885b)。efff3eff (p2 トリアージ) のメッセージは『main agent による独立の再検証は行っていない』と明記。close の理由は notes 末尾の自由文 [triage ...] 1 行のみで、観測 (実行したコマンドと出力) か推論 (sha/file:line の引用・価値判断) かを区別する欄が無い。起票側 (敵対的監査の finding) も同様に、再現を観測したかどうかが構造化されていない。ユーザー方針 (2026-10-01): 疑いは常に証拠ではない、敵対的監査も証拠を持ち出さなければならない。案: backlog add と作業なし close に evidence 種別 (observed: command+output / inferred / judgment) を必須化し、inferred/judgment の close は UNVERIFIED として人間のレビュー待ちに残す。判定不能の読み: (a) 構造上の欠陥、(b) 自由文 notes で運用上足りている。見分け方: 再検証 (本セッションで進行中、scratchpad result*.json) の CONFIRMED 率と、観測付き close / 引用のみ close の間で結果が分かれるか。p2 の 118 件は未再検証。"
+created_at = 1790793949
+updated_at = 1790793949
+weight = 0.0
+issue_number = 923
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/923"
+
+[[task]]
+id = "f036e218"
+title = "guard-maintree-bash.py がシェル変数 (W/S) を展開せず、未解決パスを main ツリーへの書き込みとして block する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "実測 2026-10-01: 同一行で S=<scratchpad>; W=<worktree> を定義して cp W/... S/... したところ target 'W/.githooks/pre-commit' mutates MAIN と拒否された。06baf54d (cwd 誤検知) / b5358f58 (cp の読み出し元を書き込み対象扱い) とは別の軸: 変数の未展開を main 相対と解釈している。(a) 判定不能を block へ倒す正しい fail-closed か (b) 誤検知か — 変数値が同一行で定義済みなら静的に解決可能なので (b) 寄り。見分け方: 同一行定義と外部 env 由来で挙動を分けて測る。"
+created_at = 1790793951
+updated_at = 1790793951
+weight = 0.0
+issue_number = 924
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/924"
+
+[[task]]
+id = "2240dcdd"
+title = "core.hooksPath が main の絶対パスなので worktree で編集した .githooks は merge まで一度も実行されない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "githooks",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "実測 2026-10-01: git config --get core.hooksPath は /Users/yuki/src/harness/.githooks。2133b6fe の新 pre-commit 行は worktree の commit では走らず、scratch clone で e2e 確認した。hook 変更の検証手順を docs に書くか、pre-commit が自 worktree の .githooks を優先するか要判断。"
+created_at = 1790793954
+updated_at = 1790793954
+weight = 0.0
+issue_number = 925
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/925"

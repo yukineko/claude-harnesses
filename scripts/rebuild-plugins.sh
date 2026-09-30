@@ -10,11 +10,28 @@
 # Steps:
 #   1. cargo clean         (skip with --no-clean)
 #   2. cargo build --release --workspace --bins
-#   3. copy target/release/<name> over every matching <name>-<os>-<arch> in the
-#      live plugin cache   (and, with --stage-repo, the committed crates/*/bin/)
+#   3. copy target/release/<name> over the matching <name>-<os>-<arch> in the
+#      plugin's CURRENT version dir of the live plugin cache (and, with
+#      --stage-repo, the committed crates/*/bin/)
 #   4. copy each plugin's hooks/ manifest config (e.g. hooks.json — NOT compiled
 #      hook binaries, which step 3 already covers) from crates/<name>/hooks/ into
-#      the matching live cache hooks/ dir, so hook config edits also take effect.
+#      the CURRENT version dir's hooks/, so hook config edits also take effect.
+#
+# CURRENT VERSION ONLY — SUPERSEDED VERSION DIRS ARE FROZEN (backlog 8acb117a)
+#   "Current" is the version in the repo's crates/<dir>/.claude-plugin/plugin.json
+#   (plugin name -> crate dir resolved via plugin.json "name", since the two can
+#   differ, e.g. run-book -> runbook). Every other cache/<plugin>/<version>/ dir is
+#   left byte-for-byte untouched: no binary, no hooks config, no
+#   .deployed-from.json. This refresh used to glob "$CACHE"/*/*/bin/* and overwrite
+#   EVERY version dir, so a session pinned to an old version silently ran new code
+#   and a canary rollback (re-pointing the registry at the prior dir) restored
+#   nothing. Accepted consequence: a running session keeps executing the code of
+#   the version dir it started with until it is restarted.
+#   A plugin whose current version cannot be determined (no crate with that
+#   plugin.json "name", or no readable "version") is NOT refreshed at all — never
+#   "refresh every dir" as a fallback — and the run exits non-zero (CLAUDE.md §3).
+#   Pinned by scripts/test_rebuild_preserves_superseded_versions.py and
+#   scripts/test_rebuild_current_version_only.py.
 #
 # Only the HOST platform's binaries are touched. macOS binaries must be built on
 # a Mac (see scripts/build-plugin-bin.sh for the cross/single-crate staging tool).
@@ -43,8 +60,8 @@
 #   required `--canary` staged health-gate. rollout-plugins.sh always passes
 #   --only=<the exact plugin set it is rolling out THIS invocation> so a
 #   rollout can only ever touch the cache for plugins it actually targeted.
-#   Manual/standalone calls (no --only) keep the historic behavior: refresh
-#   every installed plugin's binary.
+#   Manual/standalone calls (no --only) refresh every installed plugin — in its
+#   CURRENT version dir only (see "CURRENT VERSION ONLY" above).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="$PWD"
@@ -56,7 +73,7 @@ for arg in "$@"; do
     --stage-repo) stage_repo=1 ;;
     --dry-run)    dry=1 ;;
     --only=*)     only_filter="${arg#--only=}" ;;
-    -h|--help)    sed -n '2,40p' "$0"; exit 0 ;;
+    -h|--help)    sed -n '2,64p' "$0"; exit 0 ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;
   esac
 done
@@ -141,13 +158,16 @@ echo
 # The cache plugin dirname (from plugin.json's "name") does not always match
 # the crates/ directory name, so resolve via plugin.json rather than assuming
 # they're equal.
-plugin_names=() plugin_dirs=()
+plugin_names=() plugin_dirs=() plugin_versions=()
 shopt -s nullglob
 for pj in "$REPO"/crates/*/.claude-plugin/plugin.json; do
   pname=$(sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$pj" | head -1)
   [ -n "$pname" ] || continue
   plugin_names+=("$pname")
   plugin_dirs+=("$(dirname "$(dirname "$pj")")")
+  # May be empty (no/unreadable "version"); current_version_for reports that
+  # as undetermined rather than letting it match anything.
+  plugin_versions+=("$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$pj" | head -1)")
 done
 shopt -u nullglob
 
@@ -156,6 +176,22 @@ cratedir_for() {
   for i in "${!plugin_names[@]}"; do
     if [ "${plugin_names[$i]}" = "$want" ]; then
       echo "${plugin_dirs[$i]}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# The plugin's CURRENT version = the repo plugin.json "version" of the crate whose
+# plugin.json "name" is $1. Prints it and returns 0; returns 1 (prints nothing)
+# when there is no such crate or its version is empty — "cannot tell which dir is
+# current", which callers must treat as undetermined, never as "every dir".
+current_version_for() {
+  local want="$1" i
+  for i in "${!plugin_names[@]}"; do
+    if [ "${plugin_names[$i]}" = "$want" ]; then
+      [ -n "${plugin_versions[$i]}" ] || return 1
+      echo "${plugin_versions[$i]}"
       return 0
     fi
   done
@@ -243,6 +279,10 @@ write_provenance() {
 
 # --- refresh ---------------------------------------------------------------
 updated_cache=0 updated_repo=0 updated_hooks=0 missing="" checked=0 skipped_filter=0
+# Superseded version dirs deliberately left untouched (see "CURRENT VERSION ONLY"
+# in the header), and plugins whose current version could not be determined.
+# The latter makes the run exit non-zero — see the tail.
+frozen_superseded=0 undetermined_current=""
 # Launchers in a FRESH current-version dir that this run could not seed a host
 # binary for, as "<plugin>/<version>:<launcher>". Separate from `missing` (which
 # the main refresh loop fills for dirs that ALREADY had a host binary) because
@@ -262,6 +302,21 @@ for binfile in "$CACHE"/*/*/bin/*-"$SUF$EXT"; do
   plugin_name="$(basename "$(dirname "$version_dir")")"
   if ! in_only "$plugin_name"; then
     skipped_filter=$((skipped_filter+1))
+    continue
+  fi
+
+  # Only the plugin's CURRENT version dir is written (header: "CURRENT VERSION
+  # ONLY"). Everything below — hooks config, binary, provenance, --stage-repo —
+  # sits behind this guard, so a superseded dir is never touched.
+  if ! cur_ver="$(current_version_for "$plugin_name")"; then
+    case " $undetermined_current " in
+      *" $plugin_name "*) ;;
+      *) undetermined_current="$undetermined_current $plugin_name" ;;
+    esac
+    continue
+  fi
+  if [ "$(basename "$version_dir")" != "$cur_ver" ]; then
+    frozen_superseded=$((frozen_superseded+1))
     continue
   fi
 
@@ -359,8 +414,7 @@ for i in "${!plugin_names[@]}"; do
   if ! in_only "$pname"; then
     continue
   fi
-  pj="${plugin_dirs[$i]}/.claude-plugin/plugin.json"
-  ver=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$pj" | head -1)
+  ver="${plugin_versions[$i]}"   # same "current" as the main refresh loop
   [ -n "$ver" ] || continue
   bindir="$CACHE/$pname/$ver/bin"
   [ -d "$bindir" ] || continue          # current version not rolled out to cache yet
@@ -427,6 +481,7 @@ shopt -u nullglob
 echo "---"
 [ -n "$only_filter" ] && echo "only:        $only_filter (skipped $skipped_filter bin(s) outside this set)"
 echo "cache bins scanned: $checked | cache updated: $updated_cache$([ $stage_repo = 1 ] && echo " | repo bin updated: $updated_repo") | hooks config updated: $updated_hooks"
+echo "superseded version dir bin(s) left frozen (not current per repo plugin.json): $frozen_superseded"
 if [ -n "$missing" ]; then
   echo "WARNING: no release artifact for:$missing" >&2
   echo "(these cache plugins had a $SUF binary but no matching target/release/<name> — a non-workspace or renamed bin?)" >&2
@@ -448,6 +503,19 @@ fi
 # warning does.
 #
 # Pinned by scripts/tests/rebuild-seed-skip-is-silent.sh (cases B and D).
+rc=0
+# A cached plugin whose current version cannot be determined was refreshed in NO
+# version dir. Writing all of them instead is exactly the defect this guard
+# removed (backlog 8acb117a), and staying silent would let "could not decide
+# which dir is current" read as "nothing needed refreshing" (CLAUDE.md §3).
+if [ -n "$undetermined_current" ]; then
+  echo "ERROR: cannot determine the CURRENT version for cached plugin(s):$undetermined_current" >&2
+  echo "  No crates/*/.claude-plugin/plugin.json has that \"name\" with a readable" >&2
+  echo "  \"version\", so no version dir of these plugins was refreshed (superseded" >&2
+  echo "  dirs are frozen, and the current one is unknown). Fix the plugin.json, or" >&2
+  echo "  record a removed plugin in scripts/retired-plugins.json and prune its cache." >&2
+  rc=1
+fi
 if [ -n "$seed_missing" ]; then
   echo "ERROR: could not seed a host binary into a FRESH version dir for:$seed_missing" >&2
   echo "  Each entry is <plugin>/<version>:<launcher>. No $REL/<launcher>$EXT was" >&2
@@ -455,6 +523,6 @@ if [ -n "$seed_missing" ]; then
   echo "  plugin execs NOTHING while looking correctly deployed (dark, not red)." >&2
   echo "  Check that the launcher name matches a workspace bin target, and that" >&2
   echo "  the release build actually wrote to: $REL" >&2
-  exit 1
+  rc=1
 fi
-exit 0
+exit "$rc"

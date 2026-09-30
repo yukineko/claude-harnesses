@@ -23,6 +23,17 @@
 #   rebuild-plugins.sh runs, because rebuild-plugins.sh only *swaps binaries
 #   into existing* cache bin files — it does not create version dirs.
 #
+#   Only the CURRENT version dir (repo plugin.json version) is ever written —
+#   by the copy below, by rebuild-plugins.sh (binary, hooks config,
+#   .deployed-from.json) and by sync-plugin-assets.sh (skills/agents/hooks).
+#   Superseded version dirs are FROZEN byte-for-byte until pruned (backlog
+#   8acb117a): a session that started on an old version keeps running that
+#   version's code until it is restarted, and a canary rollback that re-points
+#   the registry at a prior dir of a DIFFERENT version finds that dir's old
+#   bytes intact. (A same-version --force re-copy has no separate prior dir:
+#   the copy rewrites the current dir in place, so there is nothing frozen to
+#   return to.)
+#
 # USAGE
 #   scripts/rollout-plugins.sh                  # roll out every plugin
 #   scripts/rollout-plugins.sh --dry-run         # show actions, write nothing

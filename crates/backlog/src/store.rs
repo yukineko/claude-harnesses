@@ -1833,12 +1833,23 @@ pub fn add_with_weight_and_github_push<R: Fn(&[&str]) -> Option<(bool, String)>>
 
         // Fail-soft GitHub push: never abort the add on a non-GitHub remote,
         // an absent `gh`, or a failed `gh issue create` — only a genuine
-        // `Created{url}` populates issue_number/issue_url.
-        if let crate::github::IssueOutcome::Created { url } =
-            crate::github::decide_issue_create(remote_url, title, notes, &run)
-        {
-            task.issue_number = crate::github::parse_issue_number(&url);
-            task.issue_url = Some(url);
+        // `Created{url}` populates issue_number/issue_url. On a GitHub remote a
+        // degraded outcome is SAID on stderr: the task exists locally but the
+        // mirror the caller expects does not, and silence would read as
+        // "mirrored". A non-GitHub remote is the expected local-only case.
+        match crate::github::decide_issue_create(remote_url, title, notes, &run) {
+            crate::github::IssueOutcome::Created { url } => {
+                task.issue_number = crate::github::parse_issue_number(&url);
+                task.issue_url = Some(url);
+            }
+            crate::github::IssueOutcome::DegradedLocalOnly { reason } => {
+                if crate::github::is_github_remote(remote_url) {
+                    eprintln!(
+                        "backlog add: GitHub issue NOT created for task {id} ({reason}); \
+                         the task is local-only until `backlog sync --apply` mirrors it"
+                    );
+                }
+            }
         }
 
         tasks.push(task);

@@ -154,11 +154,16 @@ RS_ERR_ARM_EMPTY = re.compile(
 # spelling left that delegation pointing at a detector that could not see it.
 # Forwarding arms (`Blocked(v) => return v`, `Undetermined(why) =>
 # Determination::Undetermined(why)`) substitute nothing and do not match.
+# `None` is an empty value on these arms too (`Blocked(_) => None` tells the
+# caller "nothing there" for "could not determine"). It is added HERE only, not
+# to `_EMPTY_VALUE`: `Err(_) => None` is the ordinary `.ok()` spelling on the
+# `Err` arm and is out of this pattern's scope.
+_UNDET_EMPTY_VALUE = r"(?:" + _EMPTY_VALUE + r"|None\b)"
 RS_UNDET_ARM_EMPTY = re.compile(
     r"\b(?:Required::)?Blocked\s*\(\s*[_A-Za-z]\w*\s*\)\s*=>\s*"
-    r"(?:Ok\s*\(\s*|Some\s*\(\s*)?" + _EMPTY_VALUE
+    r"(?:Ok\s*\(\s*|Some\s*\(\s*)?" + _UNDET_EMPTY_VALUE
     + r"|\b(?:Determination::)?Undetermined\s*\(\s*[_A-Za-z]\w*\s*\)\s*=>\s*"
-    r"(?:Ok\s*\(\s*|Some\s*\(\s*)?" + _EMPTY_VALUE
+    r"(?:Ok\s*\(\s*|Some\s*\(\s*)?" + _UNDET_EMPTY_VALUE
 )
 
 # `.unwrap_or_default()` / `.unwrap_or(false)` / `.unwrap_or(Vec::new())` on the
@@ -250,6 +255,35 @@ ALLOWLIST: list[dict[str, str]] = [
         "pattern": "shell-devnull-capture-swallow",
         "needle": "git ls-files 2>/dev/null",
         "reason": "benign: unborn-branch legitimate-absent (round #6, 231e20e), rc set to 0 intentionally after a verified rev-parse guard",
+    },
+    # `=> None` on undetermined arms (f12c2168 widening). Each entry below was
+    # classified FALSE_POSITIVE by an EXECUTED test, not by reading: the `None`
+    # is an intermediate that a later step still reports as unknown/restrictive.
+    # The test named in each reason is the evidence; if it stops passing, the
+    # entry is unjustified.
+    {
+        "path": "crates/backlog/src/liveness.rs",
+        "pattern": "undetermined-arm-empty-fallback",
+        "needle": "Determination::Undetermined(_) => None",
+        "reason": "verified FP: status_value renders it kind=undetermined (read as active); tests liveness::tests::undetermined_presence_reads_as_active_not_none / undetermined_presence_outranks_a_stale_lock go RED when that branch is removed",
+    },
+    {
+        "path": "crates/backlog/src/main.rs",
+        "pattern": "undetermined-arm-empty-fallback",
+        "needle": "Determination::Undetermined(_) => None",
+        "reason": "verified FP: gh_probe None becomes IssueOutcome::DegradedLocalOnly, which `add` now reports on stderr and `sync --apply` fails on; tests/gh_degraded_mirror_reported.rs (RED before the store.rs report, GREEN after)",
+    },
+    {
+        "path": "crates/stuckguard/src/main.rs",
+        "pattern": "undetermined-arm-empty-fallback",
+        "needle": "anchor::AnchorLookup::Undetermined(_) => None",
+        "reason": "verified FP: the undetermined lookup is labelled on stderr and distinguishable from NoLease; tests/anchor_undetermined_is_labelled.rs",
+    },
+    {
+        "path": "crates/stuckguard/src/verdict_monotonicity.rs",
+        "pattern": "undetermined-arm-empty-fallback",
+        "needle": "Determination::Undetermined(_) => None",
+        "reason": "verified FP: #[cfg(test)] adapter where None is the restrictive side; verdict_monotonicity::the_property_dies_when_the_failclosed_arm_is_reverted",
     },
 ]
 

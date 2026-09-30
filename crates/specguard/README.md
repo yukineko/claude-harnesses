@@ -172,6 +172,7 @@ specguard map sync                 # reflect only the git delta since the baseli
 specguard map list [--json]        # print the current spec↔impl mapping
 specguard map set-spec <key|glob> <doc> --reason "<why>"  # attach a spec-doc to matching entries + mark them tracked
 specguard map resolve <key|glob> --reason "<why>"   # mark matching entries tracked (reviewed; no spec needed)
+specguard map link <test> <key>    # relate a test file to an entry explicitly (kept by later syncs)
 # --reason (-m) is required and non-blank: `tracked` is a review CLAIM (nothing is verified), so each
 # touched entry records reviewed_reason + reviewed_at {commit = HEAD, date}. A blank or missing reason
 # is rejected and the store is left untouched.
@@ -191,7 +192,12 @@ Where `run` / `brief` are **read-only audits**, the `map` subcommand and the
   Renamed→move, Deleted→detach/`missing`) and carries no drift-workflow logic — it is designed as a
   **shared layer that a future `spec-audit` will also consume** (the command never reimplements the
   map; it always delegates to `specguard map`). Each entry has `kind` (Feature|Endpoint), `spec_doc`,
-  `impl_files`, `test_files`, `client_refs`, and `api` ({method, route}). A full-history `map build`
+  `impl_files`, `test_files`, `client_refs`, and `api` ({method, route}). Each sync relates test files
+  to implementation entries deterministically: a test's per-file entry is merged into the entry of the
+  same-named file under `src/`, else the crate root (`src/lib.rs`, then `src/main.rs`), or the
+  affix-named sibling (`foo_test.rs` → `foo.rs`); a `.rs` impl file with its own `#[test]` functions is
+  listed in `test_files` too. A test no rule attributes stays test-only (`map link` relates it
+  explicitly), so an empty `test_files` means "no test attributed". A full-history `map build`
   no longer resurrects deleted sources: because `git log --name-status` emits reverse-chronological
   (newest commit first), changes are folded oldest→newest (last-writer-wins), so a path deleted in a
   newer commit correctly leaves no dangling entry.

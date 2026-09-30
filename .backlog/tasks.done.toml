@@ -22593,3 +22593,23 @@ updated_at = 1790765702
 weight = 0.0
 issue_number = 880
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/880"
+
+[[task]]
+id = "64e52a8d"
+title = "spec-map の impl-test 関係が 562 entry 中 0 件で、構造的に到達不能"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "L4",
+    "scout",
+    "verified",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "実測: specguard map list --json で impl_and_test=0, impl_only=399, test_only=160, neither=3。crates/specguard/src/specmap.rs:7 が「a feature relates to BOTH its impl_files + test_files」と約束しているが一度も成立していない。原因は構造。specmap.rs:462-473 の attribute_path は新パスを必ずそのパス自身をキーとして登録し、key_owning (:410-415) は「そのパスを既に literal に含む entry」しか一致させないので、テストファイルが impl の entry に入る経路が存在しない。doc コメント自身が欠けた一手を認めている (specmap.rs:423-425: a consumer merges it into a real feature or endpoint later) が、map の writer は SetSpec と Resolve と Prune の3つだけでどれも merge しない。その consumer は存在しない。結果 crates/specguard/src/auditmap.rs:107-108 の is_untested が 399 の impl entry すべてに true を返し、spec-audit に渡る coverage 信号が定数になる。しかも verdict.rs は単体テスト12本と trybuild fixture 8本を持ちながら test_files が空と記録される — 欠落より悪く積極的な誤情報。完了条件: map link 相当の決定論 writer とヒューリスティック seeder を入れて 8 area 全 crate で impl_and_test が非ゼロになる、または test_files と client_refs と api を MapEntry と prompt から削除して is_untested も消す。どちらかを選ぶ。"
+created_at = 1785926763
+updated_at = 1790793730
+weight = 0.0
+issue_number = 146
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/146"

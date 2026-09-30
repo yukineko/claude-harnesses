@@ -204,10 +204,75 @@ pub struct MapEntry {
     /// which is a different fact from "nothing calls this".
     #[serde(default)]
     pub ambiguous_symbols: Vec<String>,
+    /// Why a human (or agent) last asserted this entry `tracked` via
+    /// `map resolve` / `map set-spec`. That assertion is a CLAIM that someone
+    /// reviewed the entry — nothing is verified — so the claim must at least
+    /// say what was reviewed. `None` on entries written before this field
+    /// existed (serde default: old stores still load) and on entries never
+    /// resolved by hand; `None` is "no recorded review", never "reviewed".
+    #[serde(default)]
+    pub reviewed_reason: Option<String>,
+    /// When that claim was made: the repo HEAD commit and the run date. Paired
+    /// with [`MapEntry::reviewed_reason`]; `None` under the same conditions.
+    /// A sub-table, so declared after every scalar field.
+    #[serde(default)]
+    pub reviewed_at: Option<ReviewedAt>,
     /// For `Endpoint` entries: the method/route this entry maps to. A sub-table,
     /// declared LAST so TOML emits it after all scalar/array fields.
     #[serde(default)]
     pub api: Option<ApiRef>,
+}
+
+/// When a `tracked` claim was recorded: the HEAD commit it was made against and
+/// the run date (`YYYY-MM-DD`, from `--date` / `SPECGUARD_NOW` / today).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewedAt {
+    /// `git rev-parse HEAD` at the time of the claim.
+    pub commit: String,
+    /// Run date of the claim.
+    pub date: String,
+}
+
+/// A validated review claim — the only way to hand [`SpecMap::resolve`] /
+/// [`SpecMap::set_spec`] the right to mark an entry `tracked`. Its fields are
+/// private and [`Review::new`] rejects a blank reason, commit or date, so an
+/// unexplained / undated `tracked` flip is unrepresentable rather than merely
+/// discouraged (same discipline as `accept-prompt -m`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Review {
+    reason: String,
+    at: ReviewedAt,
+}
+
+impl Review {
+    /// Build a review claim. Errors when `reason`, `commit` or `date` is empty
+    /// or whitespace-only. The reason is stored trimmed.
+    pub fn new(reason: &str, commit: &str, date: &str) -> Result<Review> {
+        let reason = reason.trim();
+        if reason.is_empty() {
+            anyhow::bail!(
+                "a non-blank --reason is required: marking an entry tracked records a review claim, and a claim must say what was reviewed"
+            );
+        }
+        let (commit, date) = (commit.trim(), date.trim());
+        if commit.is_empty() || date.is_empty() {
+            anyhow::bail!("cannot record a review without a commit and a date");
+        }
+        Ok(Review {
+            reason: reason.to_string(),
+            at: ReviewedAt {
+                commit: commit.to_string(),
+                date: date.to_string(),
+            },
+        })
+    }
+
+    /// Stamp this claim onto `entry` and mark it `tracked`.
+    fn apply(&self, entry: &mut MapEntry) {
+        entry.status = Status::Tracked;
+        entry.reviewed_reason = Some(self.reason.clone());
+        entry.reviewed_at = Some(self.at.clone());
+    }
 }
 
 impl MapEntry {
@@ -226,6 +291,8 @@ impl MapEntry {
             symbols: Vec::new(),
             called_by: Vec::new(),
             ambiguous_symbols: Vec::new(),
+            reviewed_reason: None,
+            reviewed_at: None,
             api: None,
         }
     }
@@ -994,11 +1061,14 @@ impl SpecMap {
 
     /// Attach `doc` as the `spec_doc` of every entry whose key matches
     /// `selector` (an exact key or a glob such as `crates/foo/src/**`), marking
-    /// each `Tracked` — the resolution for a mapped source file that now has an
-    /// authored spec. Pure — no I/O. Returns the touched keys (sorted). Errors
-    /// only on an invalid glob; a valid selector that matches nothing returns an
-    /// empty vector (the caller decides whether that is worth reporting).
-    pub fn set_spec(&mut self, selector: &str, doc: &str) -> Result<Vec<String>> {
+    /// each `Tracked` and stamping `review` (reason + commit + date) on it —
+    /// the resolution for a mapped source file that now has an authored spec.
+    /// Nothing checks that `doc` describes the code: `tracked` here records a
+    /// reviewed CLAIM, which is why a [`Review`] is mandatory. Pure — no I/O.
+    /// Returns the touched keys (sorted). Errors only on an invalid glob; a
+    /// valid selector that matches nothing returns an empty vector (the caller
+    /// decides whether that is worth reporting).
+    pub fn set_spec(&mut self, selector: &str, doc: &str, review: &Review) -> Result<Vec<String>> {
         let set = compile_globs(std::slice::from_ref(&selector.to_string()))?;
         let keys: Vec<String> = self
             .entries
@@ -1009,17 +1079,19 @@ impl SpecMap {
         for k in &keys {
             if let Some(e) = self.entries.get_mut(k) {
                 e.spec_doc = Some(doc.to_string());
-                e.status = Status::Tracked;
+                review.apply(e);
             }
         }
         Ok(keys)
     }
 
     /// Mark every entry whose key matches `selector` (exact key or glob) as
-    /// `Tracked` — the "reviewed, no spec drift" resolution for entries that
-    /// need no authored spec-doc. Pure — no I/O. Returns the touched keys.
-    /// Errors only on an invalid glob.
-    pub fn resolve(&mut self, selector: &str) -> Result<Vec<String>> {
+    /// `Tracked`, stamping `review` (reason + commit + date) on each — the
+    /// "reviewed, no spec drift" resolution for entries that need no authored
+    /// spec-doc. Nothing is verified here; the stamp records who-claimed-what
+    /// so the claim can be re-examined later. Pure — no I/O. Returns the
+    /// touched keys. Errors only on an invalid glob.
+    pub fn resolve(&mut self, selector: &str, review: &Review) -> Result<Vec<String>> {
         let set = compile_globs(std::slice::from_ref(&selector.to_string()))?;
         let keys: Vec<String> = self
             .entries
@@ -1029,7 +1101,7 @@ impl SpecMap {
             .collect();
         for k in &keys {
             if let Some(e) = self.entries.get_mut(k) {
-                e.status = Status::Tracked;
+                review.apply(e);
             }
         }
         Ok(keys)
@@ -1182,6 +1254,40 @@ mod tests {
         assert!(map.entries.contains_key("crates/foo/src/lib.rs"));
     }
 
+    fn review() -> Review {
+        Review::new("reviewed in unit test", "cafef00d", "2026-01-01").unwrap()
+    }
+
+    #[test]
+    fn review_rejects_blank_reason_commit_or_date() {
+        assert!(Review::new("", "c", "d").is_err());
+        assert!(Review::new(" \t\n", "c", "d").is_err());
+        assert!(Review::new("why", "  ", "d").is_err());
+        assert!(Review::new("why", "c", "").is_err());
+        assert!(Review::new("why", "c", "d").is_ok());
+    }
+
+    #[test]
+    fn resolve_stamps_reason_commit_and_date_on_touched_entries_only() {
+        let mut map = seeded(&["a/b.rs", "d/e.rs"]);
+        map.resolve(
+            "a/**",
+            &Review::new("  looked at it  ", "abc123", "2026-02-03").unwrap(),
+        )
+        .unwrap();
+        let e = &map.entries["a/b.rs"];
+        assert_eq!(e.reviewed_reason.as_deref(), Some("looked at it"));
+        assert_eq!(
+            e.reviewed_at,
+            Some(ReviewedAt {
+                commit: "abc123".to_string(),
+                date: "2026-02-03".to_string()
+            })
+        );
+        let other = &map.entries["d/e.rs"];
+        assert!(other.reviewed_reason.is_none() && other.reviewed_at.is_none());
+    }
+
     #[test]
     fn set_spec_attaches_doc_and_tracks_on_glob() {
         let mut map = seeded(&[
@@ -1196,7 +1302,11 @@ mod tests {
             .values()
             .all(|e| e.status == Status::Changed && e.spec_doc.is_none()));
         let touched = map
-            .set_spec("crates/benchkit/src/**", "docs/specs/benchkit.md")
+            .set_spec(
+                "crates/benchkit/src/**",
+                "docs/specs/benchkit.md",
+                &review(),
+            )
             .unwrap();
         assert_eq!(touched.len(), 3);
         for k in &touched {
@@ -1214,7 +1324,11 @@ mod tests {
     fn set_spec_exact_key_matches_one() {
         let mut map = seeded(&["crates/difflog/src/main.rs", "crates/ship/src/main.rs"]);
         let touched = map
-            .set_spec("crates/difflog/src/main.rs", "docs/specs/difflog.md")
+            .set_spec(
+                "crates/difflog/src/main.rs",
+                "docs/specs/difflog.md",
+                &review(),
+            )
             .unwrap();
         assert_eq!(touched, vec!["crates/difflog/src/main.rs".to_string()]);
         assert_eq!(
@@ -1226,14 +1340,16 @@ mod tests {
     #[test]
     fn set_spec_no_match_is_empty() {
         let mut map = seeded(&["crates/foo/src/lib.rs"]);
-        let touched = map.set_spec("crates/nope/**", "docs/specs/x.md").unwrap();
+        let touched = map
+            .set_spec("crates/nope/**", "docs/specs/x.md", &review())
+            .unwrap();
         assert!(touched.is_empty());
     }
 
     #[test]
     fn resolve_marks_tracked_without_spec() {
         let mut map = seeded(&["a/b.rs", "a/c.rs", "d/e.rs"]);
-        let touched = map.resolve("a/**").unwrap();
+        let touched = map.resolve("a/**", &review()).unwrap();
         assert_eq!(touched.len(), 2);
         assert_eq!(map.entries["a/b.rs"].status, Status::Tracked);
         assert!(map.entries["a/b.rs"].spec_doc.is_none());
@@ -1261,6 +1377,8 @@ mod tests {
                 symbols: vec![],
                 called_by: vec![],
                 ambiguous_symbols: vec![],
+                reviewed_reason: None,
+                reviewed_at: None,
                 api: Some(ApiRef {
                     method: "GET".to_string(),
                     route: "/api/users/:id".to_string(),
@@ -1364,6 +1482,8 @@ impl_files = [\"src/x.rs\"]
                 symbols: vec![],
                 called_by: vec![],
                 ambiguous_symbols: vec![],
+                reviewed_reason: None,
+                reviewed_at: None,
                 api: None,
             },
         );
@@ -1424,6 +1544,8 @@ impl_files = [\"src/x.rs\"]
                 symbols: vec![],
                 called_by: vec![],
                 ambiguous_symbols: vec![],
+                reviewed_reason: None,
+                reviewed_at: None,
                 api: None,
             },
         );
@@ -1785,6 +1907,8 @@ impl_files = ["src/legacy.rs"]
             symbols: vec![],
             called_by: vec![],
             ambiguous_symbols: vec![],
+            reviewed_reason: None,
+            reviewed_at: None,
             api: None,
         }
     }

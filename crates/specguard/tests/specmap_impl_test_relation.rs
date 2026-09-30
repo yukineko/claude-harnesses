@@ -31,6 +31,7 @@ fn write(repo: &Path, rel: &str, body: &str) {
 ///   * `foo`  — src/foo.rs + tests/foo.rs (same stem) + inline nothing
 ///   * `qux`  — src/lib.rs + tests/integration.rs (differently named test)
 ///   * `bar`  — src/bar.rs, NO test of any kind (control)
+///
 /// Returns the seed sha to use as `--baseline`.
 fn fixture(repo: &Path) -> String {
     git(repo, &["init", "-q"]);

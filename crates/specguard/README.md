@@ -170,9 +170,12 @@ specguard accept-prompt -m "reason"  # ratify the prompt (meta-canon)
 specguard map build                # create the spec-map store (if absent) + seed from the full history window
 specguard map sync                 # reflect only the git delta since the baseline (A/M/R/D)
 specguard map list [--json]        # print the current spec↔impl mapping
-specguard map set-spec <key|glob> <doc>  # attach a spec-doc to matching entries + mark them tracked
-specguard map resolve <key|glob>   # mark matching entries tracked (reviewed; no spec needed)
+specguard map set-spec <key|glob> <doc> --reason "<why>"  # attach a spec-doc to matching entries + mark them tracked
+specguard map resolve <key|glob> --reason "<why>"   # mark matching entries tracked (reviewed; no spec needed)
 specguard map link <test> <key>    # relate a test file to an entry explicitly (kept by later syncs)
+# --reason (-m) is required and non-blank: `tracked` is a review CLAIM (nothing is verified), so each
+# touched entry records reviewed_reason + reviewed_at {commit = HEAD, date}. A blank or missing reason
+# is rejected and the store is left untouched.
 specguard map prune                # drop entries matching [map].exclude (non-spec-bearing paths)
 specguard --baseline HEAD~5 run    # override the baseline
 specguard --config examples/aegis.toml run

@@ -148,3 +148,43 @@ fn real_worktree_of_untrusted_main_is_untrusted() {
     real_worktree(&main, &wt, "wt1");
     assert_eq!(trust::resolve(&wt), Trust::Untrusted);
 }
+
+#[test]
+fn forged_gitfile_naming_symlinked_admin_dir_is_untrusted() {
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _home = pin_home();
+    let base = tempfile::tempdir().unwrap();
+    let main = make_main(base.path());
+    trust::add(&main).unwrap();
+    let main_git = std::fs::canonicalize(main.join(".git")).unwrap();
+    let alias = main_git.join("worktrees").join("alias");
+    // The back-pointer in the outside dir DOES name the forged dir's .git, so
+    // only the "admin dir is a real directory" check can reject this.
+    let outside = base.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    let forged = forged_dir(base.path(), &format!("gitdir: {}\n", alias.display()));
+    let forged_dot_git = std::fs::canonicalize(forged.join(".git")).unwrap();
+    std::fs::write(
+        outside.join("gitdir"),
+        format!("{}\n", forged_dot_git.display()),
+    )
+    .unwrap();
+    std::fs::create_dir_all(alias.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&outside, &alias).unwrap();
+    assert_eq!(trust::resolve(&forged), Trust::Untrusted);
+}
+
+#[test]
+fn forged_gitfile_naming_admin_dir_without_backpointer_file_is_untrusted() {
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _home = pin_home();
+    let base = tempfile::tempdir().unwrap();
+    let main = make_main(base.path());
+    trust::add(&main).unwrap();
+    let main_git = std::fs::canonicalize(main.join(".git")).unwrap();
+    let admin = main_git.join("worktrees").join("x");
+    std::fs::create_dir_all(&admin).unwrap();
+    assert!(!admin.join("gitdir").exists(), "apparatus: no back-pointer");
+    let forged = forged_dir(base.path(), &format!("gitdir: {}\n", admin.display()));
+    assert_eq!(trust::resolve(&forged), Trust::Untrusted);
+}

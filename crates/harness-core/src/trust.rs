@@ -205,7 +205,10 @@ impl Trust {
 ///   `worktrees/<name>` admin dir exists as a real directory, AND git's
 ///   back-pointer `worktrees/<name>/gitdir` resolves to `root/.git` (see
 ///   `main_worktree_of`). Forging those requires write access inside the
-///   trusted repository's `.git`.
+///   trusted repository's `.git` — with one exception: a *stale* admin entry
+///   (the worktree directory was deleted but `git worktree prune` has not
+///   run) still names its original path, so whoever controls that exact path
+///   can place a gitfile there and inherit trust.
 /// * It does not consult `git` as a subprocess: the answer is read from the
 ///   files above, so there is no exit status to ignore and no `PATH` to
 ///   depend on.
@@ -240,7 +243,10 @@ pub fn resolve(root: &Path) -> Trust {
 /// 3 and 4 live inside the trusted repository's `.git`, so a forged gitfile in
 /// an arbitrary directory (naming a nonexistent `worktrees/<name>`, or an
 /// existing one that belongs to a different worktree) cannot satisfy them
-/// without write access to that `.git`. A bare repository (whose worktrees have
+/// without write access to that `.git`. The exception is a stale admin entry
+/// whose worktree directory was deleted without `git worktree prune`: its
+/// back-pointer still names the original path, so a gitfile placed at exactly
+/// that path satisfies 3 and 4. A bare repository (whose worktrees have
 /// no main working tree to inherit from), a `GIT_DIR` in an unusual location,
 /// or any read / parse / canonicalize failure yields `None` — the restricted
 /// side, since the only caller uses `Some` to *grant* trust.

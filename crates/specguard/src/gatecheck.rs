@@ -200,8 +200,13 @@ fn evaluate(
         if hit.is_empty() || has_spec_doc(entry) || is_acked(key, entry, acked) {
             continue;
         }
-        let bound: Vec<&Result<String, String>> = std::iter::once(key.as_str())
+        // A set, so a binding whose path is both the key and an impl file (the
+        // per-file entries `map sync` creates) is counted and reported once.
+        let names: BTreeSet<&str> = std::iter::once(key.as_str())
             .chain(entry.impl_files.iter().map(String::as_str))
+            .collect();
+        let bound: Vec<&Result<String, String>> = names
+            .into_iter()
             .filter_map(|p| bindings.get(p))
             .flatten()
             .collect();
@@ -228,8 +233,8 @@ fn evaluate(
     if !unreferenced.is_empty() {
         let mut msg = format!(
             "{} changed gate path(s) are referenced by no spec-map entry, so their spec-doc \
-             status cannot be determined — run `specguard map sync`, then `map set-spec` or \
-             ack each resulting entry:\n  {}",
+             status cannot be determined — run `specguard map sync`, then bind each \
+             resulting entry in {SPEC_DOCS_PATH} or ack it in {ACK_PATH}:\n  {}",
             unreferenced.len(),
             unreferenced.join("\n  ")
         );

@@ -27,6 +27,15 @@
 #                                                 committed prompt asset
 #   fail-open-guard    check-fail-open.py         a new fail-open swallow on the
 #                                                 gate surface
+#   fail-open-diff     check-fail-open-diff.py    a staged file whose fail-open
+#                                                 hit count ROSE versus HEAD,
+#                                                 workspace-wide and including
+#                                                 the advisory class. Scoped to
+#                                                 the commit's own files so a
+#                                                 parallel session's change
+#                                                 cannot block this one (the
+#                                                 whole-workspace --ratchet
+#                                                 would); backlog 2133b6fe
 #   doc-claims         check-doc-claims.py        a `path:line` citation in
 #                                                 docs/**/*.md that no longer
 #                                                 describes reality
@@ -189,6 +198,7 @@ run() {
 
 run check-prompt-injection.py injectguard
 run check-fail-open.py        fail-open-guard
+run check-fail-open-diff.py   fail-open-diff
 run check-doc-claims.py       doc-claims
 run check-claudemd-claims.py  claudemd-claims
 # check-test-weakening.py is NOT run here: it is run from .githooks/commit-msg

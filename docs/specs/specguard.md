@@ -65,7 +65,7 @@ report と（人間レビューが要るときは）sentinel を書く。判定�
   ratification ゲート対象。
 - **`ingest [--from]`** — subagent が集めた per-shard 出力（JSON, stdin または `--from`）を label で shard に整列し
   （`read_ingest`）、agent を spawn せず `finish` の parse→report→sentinel パイプラインを回す。`run` と同じ exit code。
-- **`map build|sync|list|set-spec|resolve|prune`（`run_map`）** — 独立した spec↔impl↔test↔API マッピング store を保守。`build` は
+- **`map build|sync|list|set-spec|resolve|link|prune`（`run_map`）** — 独立した spec↔impl↔test↔API マッピング store を保守。`build` は
   full window から seed（既存 ref を無視し、`baseline_ref`/`fallback_ref` のみで解決）。`sync` は増分で、baseline precedence は
   override > `baseline_ref` > **map 自身の `last_synced`**（前回この map が同期された ref）> `fallback_ref`。`specguard run`
   監査の `.last-ref`（`reports/spec-audit/.last-ref`）とは無関係な別トラッカーであり、map 専用の運用では監査を一度も
@@ -75,10 +75,18 @@ report と（人間レビューが要るときは）sentinel を書く。判定�
   `[map].exclude` グロブに一致する追加/変更パスを新規 entry として計上せず（`specmap::filter_excluded`。削除/リネームは
   既存 entry の掃除のため残す）、併せて既存の一致 entry を prune するので、config churn ではなく genuine な spec drift だけが
   `changed` に残る。`list [--json] [--filter]` は表示（`filter_map`＋`specmap::entry_matches` の共有述語）。
-  `set-spec <selector> <doc>` は selector（厳密 key or グロブ、例 `crates/foo/src/**`）に一致する entry へ spec-doc を紐付け
-  `tracked` にする（impl があり spec を書き起こした後の解決＝追記の反映）。`resolve <selector>` は spec-doc 不要と判断した
-  entry を `tracked` にする（レビュー済み・drift 無し）。`prune` は `[map].exclude` 一致 entry を除去する（exclude 設定前に
+  `set-spec <selector> <doc> --reason <理由>` は selector（厳密 key or グロブ、例 `crates/foo/src/**`）に一致する entry へ spec-doc を紐付け
+  `tracked` にする（impl があり spec を書き起こした後の解決＝追記の反映）。`resolve <selector> --reason <理由>` は spec-doc 不要と判断した
+  entry を `tracked` にする（レビュー済み・drift 無し）。どちらも doc がコードを記述しているかは**何も検証しない**（tracked は
+  「レビューした」という主張にすぎない）ため、`--reason`/`-m` は必須・空白不可で、理由なし/空白は store を読み書きする前に拒否する。
+  触った各 entry には `reviewed_reason` と `reviewed_at`（`commit` = HEAD、`date` = run 日付）を記録する（`specmap::Review`）。
+  HEAD が読めないときは placeholder を記録せず失敗する。旧 store（両フィールド無し）は serde default で読め、「レビュー記録なし」として扱う。`prune` は `[map].exclude` 一致 entry を除去する（exclude 設定前に
   seed した map の掃除）。永続化は `specmap::SpecMap`。
+  impl↔test 関係は決定論的に書かれる: `build`/`sync` の最後に `SpecMap::relate_tests` がテストファイルの per-file
+  skeleton を、パス規則（`src/` 下の同名ファイル → crate root の `src/lib.rs`→`src/main.rs`、または `foo_test.rs`→`foo.rs`
+  型の隣接ファイル）で決まる impl entry の `test_files` へ統合し（規則で帰属できないテストは test-only のまま残す）、
+  `SpecMap::mark_inline_tests` が自身に `#[test]` を持つ `.rs` impl ファイルを `test_files` にも載せる（読めないファイルは
+  credit しない＝untested 側）。`link <test> <key>` はその明示版で、以後の sync でも保持される。
 - **`audit [--json] [--filter]`（`run_audit`）** — map store を情報源とする read-only correctness 監査。drift（整合）と
   異なり「実装・仕様が正しいか」を見る。`auditmap::build_envelope` が構造的 findings
   （`StructuralKind::{Undocumented,DanglingReference,Untested}`, `structural_findings`）と per-entry LLM 監査 shard

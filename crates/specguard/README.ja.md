@@ -183,6 +183,13 @@ specguard map link <test> <key>    # テストファイルを entry に明示的
 # --reason (-m) は必須・空白不可: tracked は何も検証しない「レビューした」という主張なので、触った各 entry に
 # reviewed_reason と reviewed_at {commit = HEAD, date} を記録する。理由なし/空白は拒否され store は書き換わらない。
 specguard map prune                # [map].exclude 一致 entry を除去 (非 spec-bearing パス)
+specguard map gate-check --base <rev>  # <rev> 以降に変わった gate crate の entry は spec doc 必須:
+# map の spec_doc、追跡対象 .specguard/spec-docs.toml の [[spec]] path/doc/reason (doc は実在し空でない
+# docs/specs/**/*.md)、追跡対象 .specguard/spec-doc-acks.toml の理由付き [[ack]] のいずれか。
+# exit 0 ok / 1 欠落 (列挙。却下された binding はその理由も) / 2 判定不能 (map/ack/spec ファイル不正、
+# doc 読めず、rev 不正、git 失敗、map 無し、どの entry も参照しない gate ファイル)。map は gitignore された
+# 機械ローカルのキャッシュなので、pre-push は検査ツリー内で `map build --baseline <base>` により
+# map を作り直し、追跡ファイルだけが判定に効く。
 specguard --baseline HEAD~5 run    # baseline を上書き
 specguard --config examples/aegis.toml run
 ```

@@ -177,9 +177,13 @@ specguard map link <test> <key>    # relate a test file to an entry explicitly (
 # touched entry records reviewed_reason + reviewed_at {commit = HEAD, date}. A blank or missing reason
 # is rejected and the store is left untouched.
 specguard map prune                # drop entries matching [map].exclude (non-spec-bearing paths)
-specguard map gate-check --base <rev>  # gate-crate entries changed since <rev> need a spec_doc or a
-# reasoned [[ack]] in .specguard/spec-doc-acks.toml: exit 0 ok, 1 missing (printed), 2 undetermined
-# (bad map/ack/rev, git failure, absent map, or a changed gate file no entry references)
+specguard map gate-check --base <rev>  # gate-crate entries changed since <rev> need a spec doc:
+# a map spec_doc, a [[spec]] path/doc/reason binding in the TRACKED .specguard/spec-docs.toml
+# (doc = an existing, non-empty docs/specs/**/*.md), or a reasoned [[ack]] in the TRACKED
+# .specguard/spec-doc-acks.toml. exit 0 ok, 1 missing (printed, with any rejected binding),
+# 2 undetermined (bad map/ack/spec file, unreadable doc, bad rev, git failure, absent map, or a
+# changed gate file no entry references). The map is a gitignored machine-local cache, so the
+# pre-push hook builds a fresh one (`map build --baseline <base>`) and only the tracked files count.
 specguard --baseline HEAD~5 run    # override the baseline
 specguard --config examples/aegis.toml run
 ```

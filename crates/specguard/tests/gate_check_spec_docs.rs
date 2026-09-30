@@ -510,3 +510,83 @@ fn control_empty_spec_docs_file_keeps_violation() {
         all(&o)
     );
 }
+
+// ---- follow-up defects found in simulation ------------------------------------------
+
+/// Real `map sync` maps key each entry by the file path itself, so a binding on
+/// that path matches both the entry key AND the impl file. The rejection reason
+/// for one binding must still be reported once, not once per match route.
+#[test]
+fn rejected_binding_reason_is_reported_once_when_key_equals_impl_path() {
+    let missing = "docs/specs/x.md";
+    let d = tempfile::tempdir().unwrap();
+    let base = fixture(d.path());
+    write(
+        d.path(),
+        ".specguard/spec-map.toml",
+        &format!(
+            "last_synced = \"x\"\n\n[entries.\"{GATE_PATH}\"]\nkey = \"{GATE_PATH}\"\n\
+             status = \"changed\"\nimpl_files = [\"{GATE_PATH}\"]\n\n"
+        ),
+    );
+    write(
+        d.path(),
+        SPEC_DOCS,
+        &binding(GATE_PATH, missing, Some("spec lives here")),
+    );
+    commit_change(d.path());
+    let o = gate_check(d.path(), &base);
+    assert_eq!(
+        code(&o),
+        1,
+        "a binding to a nonexistent doc is still a violation when key == impl path\n{}",
+        all(&o)
+    );
+    let n = all(&o).matches(missing).count();
+    assert_eq!(
+        n,
+        1,
+        "the rejected binding's doc path must be reported exactly once (one binding, \
+         one rejection reason), even though it matches via both the entry key and the \
+         impl file; saw {n} occurrences\n{}",
+        all(&o)
+    );
+}
+
+/// An unreferenced changed gate path is undetermined (exit 2). Its remedy text
+/// must point at the TRACKED pass source: `map set-spec` only writes the
+/// gitignored map, which a push-time check on another machine never sees.
+#[test]
+fn unreferenced_gate_path_remedy_names_tracked_spec_docs_not_map_set_spec() {
+    let d = tempfile::tempdir().unwrap();
+    let base = fixture(d.path());
+    // The map knows only OTHER_IMPL; the changed GATE_PATH is referenced by no entry.
+    write(
+        d.path(),
+        ".specguard/spec-map.toml",
+        &format!(
+            "last_synced = \"x\"\n\n[entries.\"{OTHER_IMPL}\"]\nkey = \"{OTHER_IMPL}\"\n\
+             status = \"changed\"\nimpl_files = [\"{OTHER_IMPL}\"]\n\n"
+        ),
+    );
+    commit_change(d.path());
+    let o = gate_check(d.path(), &base);
+    assert_eq!(
+        code(&o),
+        2,
+        "premise: a changed gate path referenced by no map entry is undetermined\n{}",
+        all(&o)
+    );
+    assert!(
+        all(&o).contains(SPEC_DOCS),
+        "the exit-2 remedy must name {SPEC_DOCS} (the tracked place to bind a spec \
+         doc)\n{}",
+        all(&o)
+    );
+    assert!(
+        !all(&o).contains("map set-spec"),
+        "the exit-2 remedy must not recommend `map set-spec`, which writes only the \
+         untracked map that the push-time check cannot rely on\n{}",
+        all(&o)
+    );
+}

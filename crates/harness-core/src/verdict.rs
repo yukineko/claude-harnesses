@@ -33,22 +33,38 @@
 //!    break every downstream `match` at compile time — that error is the feature
 //!    (every gate is forced to say what the new answer means), so the attribute
 //!    that would suppress it is deliberately absent.
-//! 4. **[`Determination<T>`] has exactly one extractor: [`Determination::require`]**
+//! 4. **[`Determination<T>`]'s one extractor *method* is [`Determination::require`]**
 //!    returning [`Required<T>`] — deliberately **not** `std::Result`. Neither
-//!    type has `unwrap_or`, `ok()`, `unwrap_or_default`, `unwrap_or_else`, or
-//!    `is_ok`, so "could not determine" cannot be swapped for a permissive
-//!    default by any *method call*; the caller has to `match` both arms, and the
-//!    undetermined arm hands over an already-fail-closed [`Verdict`] carrying its
-//!    reason. `Result` was the original return type and it leaked the seal one
+//!    type has an inherent `unwrap_or`, `ok()`, `unwrap_or_default`,
+//!    `unwrap_or_else`, or `is_ok`, so "could not determine" cannot be swapped
+//!    for a permissive default by any method this crate provides; the ordinary
+//!    caller has to `match` both arms, and the undetermined arm hands over an
+//!    already-fail-closed [`Verdict`] carrying its reason. `Result` was the original return type and it leaked the seal one
 //!    call deeper — `.require().unwrap_or_default()` reopened the exact collapse
 //!    `Determination` refuses to grow, using `std`'s inherent methods, which this
 //!    crate cannot remove (pinned red-then-green by
 //!    `tests/ui/verdict/require_result_erasure.rs`).
 //!
 //!    **What this does not seal**, stated plainly so no reader mistakes the
-//!    scope: a hand-written `match d.require() { Determined(v) => v, Blocked(_)
-//!    => Vec::new() }` still substitutes a permissive default, and no type can
-//!    forbid it — the caller wrote that default themselves. The type's job is to
+//!    scope (each is pinned as compiling by
+//!    `tests/ui/verdict_known_holes/unsealed_paths.rs`, backlog 5b89f0f6):
+//!    - a hand-written `match d.require() { Determined(v) => v, Blocked(_)
+//!      => Vec::new() }` still substitutes a permissive default;
+//!    - `Known` and `Undetermined` are pub variants, so a direct `match` on the
+//!      `Determination` is a second extractor beside `require`, with the same
+//!      freedom to default the undetermined arm;
+//!    - an external *extension trait* can give `Required` the very methods it
+//!      withholds (`unwrap_or_default`, `is_ok`), after which
+//!      `.require().unwrap_or_default()` compiles in that crate, spelled exactly
+//!      like the E0599 fixture. "Not expressible as a method call" holds only
+//!      for the methods this crate provides;
+//!    - `Required::Blocked` carries any [`Verdict`], and a `Clean` is obtainable
+//!      through [`Verdict::from_findings`], so a `Blocked` that does not block
+//!      can be built outside this crate. Callers that must not trust it check
+//!      [`Verdict::blocks`] rather than the arm.
+//!
+//!    No type can forbid the first three — the caller wrote the default
+//!    themselves. The type's job is to
 //!    make the collapse unreachable *by accident* and to force the deliberate
 //!    one to appear in a diff as an explicit arm; catching that residue is a
 //!    separate, lexical gate's job (backlog b4baf3d7). There is also no `?`
@@ -381,18 +397,22 @@ impl Verdict {
 /// but one that hit `PermissionDenied` returns `Undetermined` (could not tell) —
 /// never the same empty value for both.
 ///
-/// It has exactly one extractor, [`require`](Determination::require), returning
-/// [`Required<T>`] — this crate's own type, not `std::Result`. There is
-/// intentionally **no** `unwrap_or`, `ok`, `unwrap_or_default`, or `Default` on
-/// *either* type: those are the very APIs that turn "could not determine" into a
+/// Its one extractor *method* is [`require`](Determination::require), returning
+/// [`Required<T>`] — this crate's own type, not `std::Result`. (The variants are
+/// pub, so a direct `match` is a second extraction path; see the module docs.)
+/// There is intentionally **no** inherent `unwrap_or`, `ok`, `unwrap_or_default`,
+/// or `Default` on *either* type: those are the very APIs that turn "could not determine" into a
 /// permissive value, so they do not exist here, and the extractor no longer
 /// hands the caller a `std` type whose inherent methods this crate cannot
 /// remove. Resolving a `Required` therefore means writing both arms, with the
 /// undetermined arm receiving a ready-made fail-closed [`Verdict`].
 ///
-/// The seal is over *method calls*, not over intent: a caller who writes
-/// `Required::Blocked(_) => Vec::new()` by hand still collapses the answer. See
-/// [`Required`] for why that residue is deliberately left to a lexical gate.
+/// The seal is over *the methods this crate provides*, not over intent: a
+/// caller who writes `Required::Blocked(_) => Vec::new()` or
+/// `Determination::Undetermined(_) => Vec::new()` by hand still collapses the
+/// answer, and so does a caller that adds those methods back through its own
+/// extension trait. See [`Required`] for why that residue is left to a lexical
+/// gate, which sees the two hand-written arm spellings but not the trait.
 #[must_use = "a Determination must be resolved with `require`, not dropped"]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Determination<T> {
@@ -431,9 +451,11 @@ impl<T> Determination<T> {
     /// hand the caller `unwrap_or` / `unwrap_or_default` / `ok` / `is_ok`, whose
     /// whole effect is to turn "could not determine" back into a permissive
     /// value one call after `Determination` refused to offer exactly those. The
-    /// permissive path is therefore not expressible as a method call on either
-    /// type; the caller must `match` and say, in the diff, what the undetermined
-    /// answer means.
+    /// permissive path is therefore not expressible through any method this
+    /// crate provides; an ordinary caller must `match` and say, in the diff,
+    /// what the undetermined answer means. (A caller can still add such methods
+    /// through its own extension trait — this crate cannot forbid that; see the
+    /// module docs, "What this does not seal".)
     pub fn require(self) -> Required<T> {
         match self {
             Determination::Known(v) => Required::Determined(v),
@@ -485,7 +507,9 @@ impl<T> Determination<T> {
 /// API stops here on purpose. The type buys two things instead: the collapse is
 /// unreachable *by accident* (no method spells it), and a deliberate one shows
 /// up in a diff as an explicit arm a reviewer or a lexical gate can see
-/// (backlog b4baf3d7).
+/// (backlog b4baf3d7; `scripts/check-fail-open.py`'s
+/// `undetermined-arm-empty-fallback` pattern, advisory). An extension trait
+/// that re-adds `unwrap_or_default` / `is_ok` is not seen by that gate.
 ///
 /// **No `?`.** Implementing `std::ops::Try` would need the unstable trait
 /// (E0658, rust#84277). Nothing is lost: `.require()?` occurs nowhere in this
@@ -495,9 +519,14 @@ impl<T> Determination<T> {
 pub enum Required<T> {
     /// The check ran and observed this value (which may be legitimately empty).
     Determined(T),
-    /// The check could not run to a conclusion. Carries the already fail-closed
+    /// The check could not run to a conclusion. When built by
+    /// [`Determination::require`] it carries the already fail-closed
     /// [`Verdict::Undetermined`], reason intact, so the caller's shortest honest
-    /// move is to return it.
+    /// move is to return it. The payload type is `Verdict`, not the unforgeable
+    /// `Undet`, so code outside this crate can also build `Blocked` around a
+    /// `Clean` obtained from [`Verdict::from_findings`]; a consumer that
+    /// receives a `Required` it did not build should check
+    /// [`Verdict::blocks`] rather than trust the arm.
     Blocked(Verdict),
 }
 

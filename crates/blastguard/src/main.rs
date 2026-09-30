@@ -507,6 +507,15 @@ fn analyse(input: &HookInput) -> Decision {
 ///     the same act as expanding the literal string `$TMPDIR` found in a
 ///     command, which `scope` always refuses to do.
 ///
+/// The same inputs also give the deletion principle (backlog 3aa215e1,
+/// `blastguard::deletion`) its temp roots (`/tmp`, `/private/tmp`, `TMPDIR`)
+/// and cache roots (`$HOME/.cache`, `$HOME/Library/Caches`) — each only when it
+/// is a real, non-symlinked directory right now — and this function attaches
+/// the git work-tree probe (`reversible::probe_tree`) that its project classes
+/// need. Recursive rm strictly inside them is Allow under the same
+/// whole-command conditions as the worktree Allow plus a few more (no `.`
+/// component, plain options-then-operands); see `deletion`'s module doc.
+///
 /// A missing or empty `cwd` yields a model with only the temp roots in it, and
 /// an unresolvable one yields no model at all — both of which simply keep the
 /// pre-0.2.51 verdicts.
@@ -522,6 +531,7 @@ fn safe_roots(input: &HookInput) -> SafeRoots {
         tmpdir.as_deref(),
         Some(real_path),
     )
+    .with_git_tree_probe(blastguard::reversible::probe_tree)
 }
 
 /// Resolve `path` to its real path — symlinked components included — WITHOUT

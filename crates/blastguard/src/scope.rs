@@ -65,11 +65,13 @@
 //! `Decision::Ask`, which [`crate::interactive`] hardens back to a `Deny`
 //! everywhere no human can answer (headless, condukt workers, cron). For those
 //! roots it buys an interactive operator a one-keypress confirmation for a
-//! bounded blast radius, and buys an unattended agent nothing at all. The one
-//! exception is the next section, and it is an exception by user ruling, not
-//! by inference.
+//! bounded blast radius, and buys an unattended agent nothing at all. The
+//! exceptions are the next two sections (worktree storage roots; temp and
+//! cache roots), and both are exceptions by user ruling, not by inference.
+//! They are consulted only by the recursive-`rm` arm of [`crate::detect`]
+//! (through [`crate::deletion`] for temp/cache and the git classes).
 //!
-//! # Worktree storage roots — the one placement that yields `Allow`
+//! # Worktree storage roots — a placement that yields `Allow`
 //!
 //! User ruling 2026-09-30 (backlog 873651b9): "worktreeへの削除を制限しているhookを
 //! 排除して" — a recursive rm strictly inside the worktree storage roots is
@@ -191,12 +193,44 @@
 //! Protected-path precedence runs first in `detect`, so a protected path under
 //! a worktree is still denied.
 //!
+//! # Temp and cache roots — also `Allow`, for recursive `rm` only
+//!
+//! User ruling 2026-09-30 (backlog 3aa215e1): 「作業や復帰できるものは削除していい」.
+//! The principle and the full verdict table live in [`crate::deletion`]; this
+//! module supplies two more root sets, built in [`SafeRoots::new`] only when a
+//! resolver was supplied (so [`SafeRoots::none`] and every resolver-less
+//! consumer have none):
+//!
+//!   * TEMP: `/tmp`, `/private/tmp`, and `$TMPDIR` (read from the hook's own
+//!     environment — refused on its raw spelling if it is relative or has a
+//!     `..`/`.` component, and not used at all when `HOME` is unset).
+//!     `/var/tmp` is NOT one of them (it keeps only the safe-root `Ask`);
+//!   * CACHE: `$HOME/.cache` and `$HOME/Library/Caches` (refused entirely if
+//!     the raw `HOME` is relative or has a `..`/`.` component).
+//!
+//! Each is kept only if it exists, right now, as a real directory with no
+//! symlink below its anchor — the same check the worktree storage roots get
+//! (`real_root_below_anchor`, shared) — and is not `/`, not on
+//! [`NEVER_A_ROOT`], and neither `$HOME` nor an ancestor of it. `$TMPDIR` and
+//! the cache roots must also pass the derived-root rules. A session whose raw
+//! payload cwd / `CLAUDE_PROJECT_DIR` is refused (see above) gets none of
+//! them.
+//!
+//! Operands are placed by [`SafeRoots::classify_disposable`], which is
+//! STRICTER than the worktree classification: after the same lexical
+//! normalisation and symlink resolution, an `Inside` answer additionally
+//! requires that no component between the root and the operand (the operand
+//! included) is a symlink ([`SafeRoots::no_symlink_below`]) — a symlink there
+//! is `Undetermined` even if it points back inside the root. The root itself
+//! is `IsRoot`, never `Inside`.
+//!
 //! # The fail-closed direction
 //!
 //! There are three answers, per CLAUDE.md §3, and only ONE of them may relax a
 //! verdict: [`Placement::Inside`], which means "resolved, and provably a strict
 //! descendant of a root this session is allowed to destroy things in" (a safe
-//! root, or — for recursive rm only — a worktree storage root).
+//! root, or — for recursive rm only — a worktree storage, temp or cache
+//! deletion root).
 //! [`Placement::Outside`] and every `Undetermined` leave the caller's existing
 //! Deny exactly as it was. [`Placement::IsRoot`] is a fourth statement that
 //! deliberately does NOT collapse into `Inside`: `rm -rf <the project itself>`
@@ -494,6 +528,24 @@ pub struct SafeRoots {
     /// `worktree_roots` is empty and [`SafeRoots::classify_worktree`] answers
     /// `Undetermined` with this reason.
     worktree_refusal: Option<String>,
+    /// The TEMP deletion roots (`/tmp`, `/private/tmp`, `$TMPDIR`), canonical,
+    /// each a real non-symlinked directory at build time (see
+    /// [`deletion_roots`]). Consulted ONLY by [`SafeRoots::classify_disposable`],
+    /// i.e. only by the recursive-`rm` arm (module doc, "Temp and cache
+    /// roots"). Kept apart from `roots` for the same reason `worktree_roots` is.
+    temp_roots: Vec<String>,
+    /// The CACHE deletion roots (`$HOME/.cache`, `$HOME/Library/Caches`), same
+    /// discipline as `temp_roots`.
+    cache_roots: Vec<String>,
+    /// The canonicalised home directory, when `HOME` was absolute and
+    /// resolvable. Used only to refuse "directly at `$HOME/<x>`" operands on
+    /// the project-recoverability path ([`crate::deletion`]).
+    home_real: Option<String>,
+    /// The git work-tree probe for the project classes of [`crate::deletion`].
+    /// `None` (the default, and always for [`SafeRoots::none`]) means those
+    /// classes can never answer `Allow`. Set only by the hook binary through
+    /// [`SafeRoots::with_git_tree_probe`].
+    git_tree_probe: Option<crate::reversible::GitTreeProbe>,
 }
 
 impl SafeRoots {
@@ -512,6 +564,10 @@ impl SafeRoots {
             resolver: None,
             worktree_roots: Vec::new(),
             worktree_refusal: None,
+            temp_roots: Vec::new(),
+            cache_roots: Vec::new(),
+            home_real: None,
+            git_tree_probe: None,
         }
     }
 
@@ -591,6 +647,19 @@ impl SafeRoots {
         } else {
             worktree_storage_roots(cwd, project_dir, home_norm.as_deref(), resolver, probe)
         };
+        // Temp and cache DELETION roots (module doc, "Temp and cache roots"):
+        // same real-directory discipline, same raw-cwd refusal (a refused
+        // session gets none of them either, since a relative operand would be
+        // judged against a base the kernel does not use).
+        let (temp_roots, cache_roots) = if worktree_refusal.is_some() {
+            (Vec::new(), Vec::new())
+        } else {
+            deletion_roots(tmpdir, home, resolver, probe)
+        };
+        let home_real = home
+            .filter(|h| raw_session_path_refusal(h, true).is_none())
+            .and_then(normalize_abs)
+            .and_then(|h| resolve_with(&h, resolver));
         let cwd = cwd
             .and_then(normalize_abs)
             .and_then(|c| resolve_with(&c, resolver));
@@ -600,6 +669,188 @@ impl SafeRoots {
             resolver,
             worktree_roots,
             worktree_refusal,
+            temp_roots,
+            cache_roots,
+            home_real,
+            git_tree_probe: None,
+        }
+    }
+
+    /// Attach the git work-tree probe the project deletion classes need
+    /// ([`crate::deletion`]). Only the hook binary does this; without it those
+    /// classes never answer `Allow` (the probe is the only source of the
+    /// observation they rest on).
+    #[must_use]
+    pub fn with_git_tree_probe(mut self, probe: crate::reversible::GitTreeProbe) -> SafeRoots {
+        self.git_tree_probe = Some(probe);
+        self
+    }
+
+    /// The attached git work-tree probe, if any.
+    pub(crate) fn git_tree_probe(&self) -> Option<crate::reversible::GitTreeProbe> {
+        self.git_tree_probe
+    }
+
+    /// The canonical home directory, if known.
+    pub(crate) fn home_real(&self) -> Option<&str> {
+        self.home_real.as_deref()
+    }
+
+    /// Canonicalise an absolute path with the injected resolver. `None` = could
+    /// not resolve (no resolver, or the filesystem said no).
+    pub(crate) fn resolve(&self, path: &str) -> Option<String> {
+        resolve_with(path, self.resolver)
+    }
+
+    /// Why every deletion-class `Allow` is withheld for this session (a raw
+    /// payload cwd / `CLAUDE_PROJECT_DIR` with a `..`/`.` component, or a
+    /// relative cwd), or `None`.
+    pub(crate) fn deletion_refusal(&self) -> Option<&str> {
+        self.worktree_refusal.as_deref()
+    }
+
+    /// Where does `operand` land relative to the TEMP and CACHE deletion roots
+    /// (module doc, "Temp and cache roots")?
+    ///
+    /// Stricter than [`SafeRoots::classify_worktree`]: on top of the same
+    /// literal-path / lexical / resolver pipeline, an `Inside` answer also
+    /// requires that NO component between the root and the operand (the
+    /// operand itself included) is a symlink ([`SafeRoots::no_symlink_below`]).
+    /// A symlink there is `Undetermined`, never `Inside` — even one that points
+    /// back inside the root. The raw-cwd refusal applies here too.
+    pub fn classify_disposable(
+        &self,
+        operand: &str,
+        cwd: Option<&str>,
+    ) -> Determination<Placement> {
+        if let Some(why) = &self.worktree_refusal {
+            return Determination::undetermined(why.clone());
+        }
+        let roots: Vec<String> = self
+            .temp_roots
+            .iter()
+            .chain(self.cache_roots.iter())
+            .cloned()
+            .collect();
+        if roots.is_empty() {
+            return Determination::undetermined(
+                "blastguard has no temp or cache deletion root for this session",
+            );
+        }
+        let lexical = match self.lexical_absolute(operand, cwd) {
+            Determination::Known(l) => l,
+            Determination::Undetermined(u) => return Determination::Undetermined(u),
+        };
+        let placement = match self.classify_against(&roots, operand, cwd) {
+            Determination::Known(p) => p,
+            Determination::Undetermined(u) => return Determination::Undetermined(u),
+        };
+        let Placement::Inside { root, .. } = &placement else {
+            return Determination::known(placement);
+        };
+        match self.no_symlink_below(&lexical, root) {
+            Determination::Known(true) => Determination::known(placement),
+            Determination::Known(false) => Determination::undetermined(format!(
+                "`{operand}` reaches {root} through a symlink below the root, so what it deletes \
+is not decided by where it is spelled"
+            )),
+            Determination::Undetermined(u) => Determination::Undetermined(u),
+        }
+    }
+
+    /// The operand as an absolute, lexically normalised path (no symlink
+    /// resolution), or why it cannot be one. The literal-path, relative-base
+    /// and residual-`..` rules are exactly [`SafeRoots::classify`]'s (it uses
+    /// this function).
+    pub(crate) fn lexical_absolute(
+        &self,
+        operand: &str,
+        cwd: Option<&str>,
+    ) -> Determination<String> {
+        if operand.is_empty() {
+            return Determination::undetermined("empty operand");
+        }
+        if operand
+            .chars()
+            .any(|c| NOT_A_LITERAL_PATH.contains(&c) || c.is_control())
+        {
+            return Determination::undetermined(
+                "operand is not a literal path (expansion, glob, quoting or a find -exec placeholder)",
+            );
+        }
+        let absolute = if operand.starts_with('/') {
+            match normalize_abs(operand) {
+                Some(a) => a,
+                None => return Determination::undetermined("operand did not normalise to a path"),
+            }
+        } else {
+            let Some(base) = cwd else {
+                return Determination::undetermined(
+                    "relative operand with no known working directory",
+                );
+            };
+            if !base.starts_with('/') {
+                return Determination::undetermined("working directory is not absolute");
+            }
+            match normalize_abs(&format!("{}/{}", base.trim_end_matches('/'), operand)) {
+                Some(a) => a,
+                None => return Determination::undetermined("operand did not normalise to a path"),
+            }
+        };
+        // A relative operand that climbed above its base, or an absolute one
+        // whose `..` could not be collapsed, still carries `..` here. Lexical
+        // resolution has run; anything left is a path this module cannot name.
+        if absolute.split('/').any(|c| c == "..") {
+            return Determination::undetermined("operand still contains an unresolved `..`");
+        }
+        Determination::known(absolute)
+    }
+
+    /// "Between `root` and `lexical`, is there no symlink at all?"
+    ///
+    /// `lexical` is an absolute, lexically normalised spelling (see
+    /// [`SafeRoots::lexical_absolute`]); `root` is canonical. Walks the
+    /// prefixes of `lexical` from the top and resolves each one. The first
+    /// prefix whose real path IS `root` is where the root sits in this
+    /// spelling (symlinks ABOVE it, like `/tmp` -> `/private/tmp`, are the
+    /// session's and are accepted). From there on, every longer prefix must
+    /// resolve to exactly `<real path of its parent>/<its own name>` — a
+    /// component that is a symlink resolves somewhere else and fails that.
+    /// The binary's resolver re-attaches non-existent tail components by name,
+    /// so a path that does not exist yet passes.
+    ///
+    /// `Known(false)`: a symlink below the root. `Undetermined`: a prefix that
+    /// does not resolve, or no prefix that resolves to `root` (the spelling
+    /// never passes through it). Callers read both as "not Allow".
+    pub(crate) fn no_symlink_below(&self, lexical: &str, root: &str) -> Determination<bool> {
+        let mut prefix = String::new();
+        let mut prev_real: Option<String> = None;
+        let mut found = false;
+        for comp in lexical.split('/').filter(|c| !c.is_empty()) {
+            prefix.push('/');
+            prefix.push_str(comp);
+            let Some(real) = resolve_with(&prefix, self.resolver) else {
+                return Determination::undetermined(format!(
+                    "`{prefix}` could not be resolved to a real path"
+                ));
+            };
+            if found {
+                let parent = prev_real.as_deref().unwrap_or("");
+                let expected = format!("{}/{comp}", parent.trim_end_matches('/'));
+                if real != expected {
+                    return Determination::known(false);
+                }
+            } else if real == root {
+                found = true;
+            }
+            prev_real = Some(real);
+        }
+        if found {
+            Determination::known(true)
+        } else {
+            Determination::undetermined(format!(
+                "`{lexical}` is not spelled through the root {root}"
+            ))
         }
     }
 
@@ -660,42 +911,10 @@ impl SafeRoots {
         operand: &str,
         cwd: Option<&str>,
     ) -> Determination<Placement> {
-        if operand.is_empty() {
-            return Determination::undetermined("empty operand");
-        }
-        if operand
-            .chars()
-            .any(|c| NOT_A_LITERAL_PATH.contains(&c) || c.is_control())
-        {
-            return Determination::undetermined(
-                "operand is not a literal path (expansion, glob, quoting or a find -exec placeholder)",
-            );
-        }
-        let absolute = if operand.starts_with('/') {
-            match normalize_abs(operand) {
-                Some(a) => a,
-                None => return Determination::undetermined("operand did not normalise to a path"),
-            }
-        } else {
-            let Some(base) = cwd else {
-                return Determination::undetermined(
-                    "relative operand with no known working directory",
-                );
-            };
-            if !base.starts_with('/') {
-                return Determination::undetermined("working directory is not absolute");
-            }
-            match normalize_abs(&format!("{}/{}", base.trim_end_matches('/'), operand)) {
-                Some(a) => a,
-                None => return Determination::undetermined("operand did not normalise to a path"),
-            }
+        let absolute = match self.lexical_absolute(operand, cwd) {
+            Determination::Known(a) => a,
+            Determination::Undetermined(u) => return Determination::Undetermined(u),
         };
-        // A relative operand that climbed above its base, or an absolute one
-        // whose `..` could not be collapsed, still carries `..` here. Lexical
-        // resolution has run; anything left is a path this module cannot name.
-        if absolute.split('/').any(|c| c == "..") {
-            return Determination::undetermined("operand still contains an unresolved `..`");
-        }
         let Some(real) = resolve_with(&absolute, self.resolver) else {
             return Determination::undetermined(
                 "real path could not be resolved (no resolver, or the filesystem said no)",
@@ -831,32 +1050,12 @@ fn worktree_storage_roots(
         if !is_acceptable_derived_root(&candidate.lexical(), home_norm) {
             continue;
         }
-        let Some(anchor_real) = resolve_with(&candidate.anchor, resolver) else {
+        let Some(cur) =
+            real_root_below_anchor(&candidate.anchor, &candidate.below, resolver, probe)
+        else {
             continue;
         };
-        if !anchor_real.starts_with('/') {
-            continue;
-        }
-        let mut cur = anchor_real.trim_end_matches('/').to_string();
-        let mut all_real_dirs = true;
-        for comp in &candidate.below {
-            cur.push('/');
-            cur.push_str(comp);
-            if !probe(&cur) {
-                all_real_dirs = false;
-                break;
-            }
-        }
-        if !all_real_dirs {
-            continue;
-        }
         if !is_acceptable_derived_root(&cur, home_norm) {
-            continue;
-        }
-        // Belt and braces: a root built from a canonical anchor and non-symlink
-        // components is already its own real path. If the resolver disagrees,
-        // something changed between the two looks — not a root.
-        if resolve_with(&cur, resolver).as_deref() != Some(cur.as_str()) {
             continue;
         }
         if !roots.contains(&cur) {
@@ -864,6 +1063,140 @@ fn worktree_storage_roots(
         }
     }
     roots
+}
+
+/// The shared "is this a real root right now" check behind every root class
+/// that can yield an `Allow` (worktree storage, temp, cache).
+///
+/// The ANCHOR is canonicalised with the resolver (symlinks above it — `/tmp`
+/// -> `/private/tmp`, `/var` -> `/private/var` — are the session's, not the
+/// command's, and are accepted). Every component in `below` is appended to the
+/// resolved anchor and must pass `probe` (`lstat`: a real directory that is not
+/// a symlink). With `below` empty the resolved anchor ITSELF must pass `probe`.
+/// Finally the result must be its own real path per the resolver (belt and
+/// braces: if the resolver disagrees, something changed between the two looks).
+///
+/// `None` — "not a root" — for every failure: an unresolvable or relative
+/// anchor, a component that is missing, a file, a symlink or unreadable, and a
+/// resolver disagreement. There is no branch that returns a root it could not
+/// check.
+fn real_root_below_anchor(
+    anchor: &str,
+    below: &[&str],
+    resolver: Option<RealPathResolver>,
+    probe: DirProbe,
+) -> Option<String> {
+    let anchor_real = resolve_with(anchor, resolver)?;
+    if !anchor_real.starts_with('/') {
+        return None;
+    }
+    let mut cur = anchor_real.trim_end_matches('/').to_string();
+    if below.is_empty() && !probe(&cur) {
+        return None;
+    }
+    for comp in below {
+        cur.push('/');
+        cur.push_str(comp);
+        if !probe(&cur) {
+            return None;
+        }
+    }
+    if cur.is_empty() || resolve_with(&cur, resolver).as_deref() != Some(cur.as_str()) {
+        return None;
+    }
+    Some(cur)
+}
+
+/// The fixed temp roots a recursive `rm` may delete inside WITHOUT
+/// confirmation (spec 3aa215e1 class 2). Narrower than [`TEMP_ROOTS`] on
+/// purpose: `/var/tmp` survives reboots and is not listed by the ruling, so it
+/// keeps only the safe-root `Ask`.
+const DELETION_TEMP_ROOTS: &[&str] = &["/tmp", "/private/tmp"];
+
+/// The cache roots below `$HOME` (spec 3aa215e1 class 3), as components below
+/// the canonicalised home directory.
+const DELETION_CACHE_ROOTS: &[&[&str]] = &[&[".cache"], &["Library", "Caches"]];
+
+/// True when `root` is `home` or an ancestor of it — a root that would put the
+/// whole home directory inside a delete-freely region.
+fn contains_home(root: &str, homes: &[&str]) -> bool {
+    homes.iter().any(|h| {
+        *h == root || root == "/" || h.starts_with(&format!("{}/", root.trim_end_matches('/')))
+    })
+}
+
+/// Build the temp and cache DELETION roots (module doc, "Temp and cache
+/// roots"). Same filesystem discipline as the worktree storage roots: each
+/// must exist, right now, as a real directory with no symlink below its
+/// anchor ([`real_root_below_anchor`]). `$TMPDIR` and `$HOME` are refused on
+/// their RAW spelling (a `..`/`.` component, or not absolute) exactly like the
+/// payload cwd ([`raw_session_path_refusal`]). No root may be on
+/// [`NEVER_A_ROOT`], be `/`, or be the home directory or one of its ancestors
+/// (every spelling of HOME counts for that, refused or not), and `$TMPDIR` is
+/// not a root at all when HOME is absent (that check would have nothing to
+/// compare against).
+fn deletion_roots(
+    tmpdir: Option<&str>,
+    home: Option<&str>,
+    resolver: Option<RealPathResolver>,
+    probe: Option<DirProbe>,
+) -> (Vec<String>, Vec<String>) {
+    let mut temp: Vec<String> = Vec::new();
+    let mut cache: Vec<String> = Vec::new();
+    let Some(probe) = probe else {
+        return (temp, cache);
+    };
+    // For EXCLUSION ("no root may contain the home directory") every spelling
+    // of HOME counts, refused or not; for ANCHORING the cache roots only an
+    // unrefused one does.
+    let home_any = home.and_then(normalize_abs);
+    let home_any_real = home_any.as_deref().and_then(|h| resolve_with(h, resolver));
+    let home_norm = home
+        .filter(|h| raw_session_path_refusal(h, true).is_none())
+        .and_then(normalize_abs);
+    let homes: Vec<&str> = [home_any.as_deref(), home_any_real.as_deref()]
+        .into_iter()
+        .flatten()
+        .collect();
+    let acceptable = |root: &str| {
+        root.starts_with('/') && !NEVER_A_ROOT.contains(&root) && !contains_home(root, &homes)
+    };
+    for fixed in DELETION_TEMP_ROOTS {
+        if let Some(r) = real_root_below_anchor(fixed, &[], resolver, probe) {
+            if acceptable(&r) && !temp.contains(&r) {
+                temp.push(r);
+            }
+        }
+    }
+    // `$TMPDIR` is only trusted when it can be checked against a known home
+    // directory: with no HOME at all, "is this TMPDIR the home directory or
+    // above it?" has no answer, so it is not a root (restrictive side).
+    let tmpdir = tmpdir.filter(|_| !homes.is_empty());
+    if let Some(t) = tmpdir.filter(|t| raw_session_path_refusal(t, true).is_none()) {
+        if let Some(norm) = normalize_abs(t) {
+            if let Some(r) = real_root_below_anchor(&norm, &[], resolver, probe) {
+                if acceptable(&r)
+                    && is_acceptable_derived_root(&r, home_norm.as_deref())
+                    && !temp.contains(&r)
+                {
+                    temp.push(r);
+                }
+            }
+        }
+    }
+    if let Some(h) = home_norm.as_deref() {
+        for below in DELETION_CACHE_ROOTS {
+            if let Some(r) = real_root_below_anchor(h, below, resolver, probe) {
+                if acceptable(&r)
+                    && is_acceptable_derived_root(&r, home_norm.as_deref())
+                    && !cache.contains(&r)
+                {
+                    cache.push(r);
+                }
+            }
+        }
+    }
+    (temp, cache)
 }
 
 /// Why a RAW session path disqualifies the worktree `Allow`, or `None`.

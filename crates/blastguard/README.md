@@ -123,9 +123,18 @@ plus `Undetermined` — and **only `Inside` may relax a verdict**.
   `/tmp` / `/var/tmp` (plus `$TMPDIR`). `/`, `/usr`, `/mnt/c/Users`, `$HOME` and
   friends can never become one (`NEVER_A_ROOT`, plus a two-component minimum).
 - **What relaxes**: when EVERY target resolves to a strict descendant of a safe
-  root, the `deny` becomes an **`ask`** — never an `allow`. Covered verbs:
+  root, the `deny` becomes an **`ask`** — not an `allow`. Covered verbs:
   recursive/wildcard `rm`, `find -delete` / `-exec rm`, `truncate` / `shred`,
   truncating `>` redirects, `git clean -f`, `chmod -R` / `chown -R`.
+  **Exception — recursive `rm` of literal operands** (user rulings 873651b9 and
+  3aa215e1: "work products and anything recoverable may be deleted"): it is
+  judged by WHAT it destroys. Strictly inside a worktree storage root, `/tmp`,
+  `/private/tmp`, `$TMPDIR`, `$HOME/.cache`, `$HOME/Library/Caches`, ignored
+  build output in a git work tree, or a git subtree with nothing untracked /
+  modified / ignored → `allow`; a git subtree where git reports such content →
+  `deny` naming it; anything it cannot determine keeps the verdicts above.
+  Full table: `src/deletion.rs` and the README.ja.md section
+  「再帰 `rm` は「何が消えるか」で判定する」.
 - **What does not** (each pinned by a test in `tests/scoped_destructive.rs`):
   anything outside every safe root; anything that is not a literal path (`$VAR`,
   `~`, `` `pwd` ``, `*`, `{}`); an unresolvable `cd`; a relative operand a `cd`

@@ -20,6 +20,7 @@ mod gatecheck;
 mod init;
 mod parse;
 mod prompt;
+mod protection;
 mod ratify;
 mod report;
 mod scope;
@@ -93,7 +94,8 @@ const EXIT_GATE_UNDETERMINED: u8 = 2;
 #[command(
     name = "specguard",
     version,
-    about = "Spec/implementation drift audit harness"
+    about = "Spec/implementation drift audit harness",
+    after_help = "`specguard --protects` prints what this gate protects, from what, and on what grounds."
 )]
 struct Cli {
     /// Path to the config file.
@@ -382,6 +384,16 @@ enum MapAction {
 }
 
 fn main() -> ExitCode {
+    // The protection statement (backlog 3a8e3b73), readable without loading a
+    // config. A pure print: no verdict. Short-circuits before clap because
+    // `Cli` has no such flag and would reject it as a usage error.
+    if std::env::args().nth(1).as_deref() == Some("--protects") {
+        let p = protection::PROTECTION;
+        println!("PROTECTS: {}", p.protects);
+        println!("AGAINST: {}", p.against);
+        println!("GROUNDS: {}", p.grounds);
+        return ExitCode::SUCCESS;
+    }
     let cli = Cli::parse();
     match run(&cli) {
         Ok(code) => ExitCode::from(code),

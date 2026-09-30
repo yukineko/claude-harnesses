@@ -379,6 +379,18 @@ fn validate_agent_command(cfg: &AgentConfig) -> Result<()> {
 impl Config {
     /// Load and validate a config from a TOML file.
     pub fn load(path: &Path) -> Result<Config> {
+        let cfg = Config::load_without_areas(path)?;
+        if cfg.areas.is_empty() && cfg.invariants.is_empty() {
+            anyhow::bail!("config defines no [[area]] and no [[invariant]]; nothing to audit");
+        }
+        Ok(cfg)
+    }
+
+    /// Load and validate a config for a command that audits nothing
+    /// (`map gate-check`): every check of [`Config::load`] except the
+    /// "at least one area or invariant" requirement, which only the audit needs.
+    /// Any read/parse/validation failure is still an `Err`.
+    pub fn load_without_areas(path: &Path) -> Result<Config> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading config {}", path.display()))?;
         let cfg: Config =
@@ -403,9 +415,6 @@ impl Config {
                      (got {t}); e.g. 0.85. 1.0 reproduces the binary gate."
                 );
             }
-        }
-        if self.areas.is_empty() && self.invariants.is_empty() {
-            anyhow::bail!("config defines no [[area]] and no [[invariant]]; nothing to audit");
         }
         for a in &self.areas {
             if a.globs.is_empty() {

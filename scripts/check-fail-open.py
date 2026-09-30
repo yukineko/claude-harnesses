@@ -136,13 +136,29 @@ RS_READDIR = re.compile(r"\bread_dir\s*\(")
 # — the error is discarded and an EMPTY value takes its place. The fixed forms
 # (`Err(e) => Err(e)`, `Err(e) => Determination::undetermined(..)`) do not match:
 # they substitute nothing, they propagate or name the third state.
-RS_ERR_ARM_EMPTY = re.compile(
-    r"\bErr\s*\(\s*[_A-Za-z]\w*\s*\)\s*=>\s*"
-    r"(?:Ok\s*\(\s*|Some\s*\(\s*)?"
+_EMPTY_VALUE = (
     r"(?:Vec::new\s*\(\s*\)|String::new\s*\(\s*\)|HashMap::new\s*\(\s*\)"
     r"|HashSet::new\s*\(\s*\)|BTreeMap::new\s*\(\s*\)|BTreeSet::new\s*\(\s*\)"
     r"|VecDeque::new\s*\(\s*\)|vec!\s*\[\s*\]"
     r"|Default::default\s*\(\s*\)|[A-Za-z_]\w*::default\s*\(\s*\))"
+)
+RS_ERR_ARM_EMPTY = re.compile(
+    r"\bErr\s*\(\s*[_A-Za-z]\w*\s*\)\s*=>\s*"
+    r"(?:Ok\s*\(\s*|Some\s*\(\s*)?" + _EMPTY_VALUE
+)
+
+# The same erasure spelled on the tri-state types (backlog f12c2168). 836a1aa3
+# renamed 47 sites from `Err(..)` to `Required::Blocked(..)`, and
+# `harness_core::verdict` delegates exactly this residue — a hand-written arm
+# that substitutes an empty value — to this scanner. Matching only the `Err`
+# spelling left that delegation pointing at a detector that could not see it.
+# Forwarding arms (`Blocked(v) => return v`, `Undetermined(why) =>
+# Determination::Undetermined(why)`) substitute nothing and do not match.
+RS_UNDET_ARM_EMPTY = re.compile(
+    r"\b(?:Required::)?Blocked\s*\(\s*[_A-Za-z]\w*\s*\)\s*=>\s*"
+    r"(?:Ok\s*\(\s*|Some\s*\(\s*)?" + _EMPTY_VALUE
+    + r"|\b(?:Determination::)?Undetermined\s*\(\s*[_A-Za-z]\w*\s*\)\s*=>\s*"
+    r"(?:Ok\s*\(\s*|Some\s*\(\s*)?" + _EMPTY_VALUE
 )
 
 # `.unwrap_or_default()` / `.unwrap_or(false)` / `.unwrap_or(Vec::new())` on the
@@ -186,7 +202,12 @@ PUSH_WINDOW = 3
 # forces a visible, reviewed edit to the pinned number. Hits are still PRINTED on
 # every run, tagged `advisory`; they are silent nowhere.
 ADVISORY_ONLY_PATTERNS = frozenset(
-    {"err-arm-empty-fallback", "read-unwrap-or-empty", "loop-parse-drop"}
+    {
+        "err-arm-empty-fallback",
+        "undetermined-arm-empty-fallback",
+        "read-unwrap-or-empty",
+        "loop-parse-drop",
+    }
 )
 
 
@@ -343,6 +364,8 @@ def scan_rust(lines: list[str]) -> list[tuple[int, str, str]]:
         # ── advisory class (b0cacd15): an error erased into an EMPTY value ──
         if RS_ERR_ARM_EMPTY.search(c):
             hits.append((idx + 1, lines[idx].rstrip("\n"), "err-arm-empty-fallback"))
+        if RS_UNDET_ARM_EMPTY.search(c):
+            hits.append((idx + 1, lines[idx].rstrip("\n"), "undetermined-arm-empty-fallback"))
         if RS_UNWRAP_OR_EMPTY.search(c):
             lo = max(0, idx - READDIR_WINDOW)
             if any(RS_IO_CALL.search(code[j]) for j in range(lo, idx + 1)):

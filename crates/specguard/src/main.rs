@@ -16,6 +16,7 @@ mod auditmap;
 mod config;
 mod coverage;
 mod decision;
+mod gatecheck;
 mod init;
 mod parse;
 mod prompt;
@@ -79,6 +80,14 @@ const EXIT_INDEX_UNDETERMINED: u8 = 10;
 /// `covered` lets it proceed — both are answers, and "no answer" must be
 /// neither (specs/spec-loop.toml R3, CLAUDE.md §3).
 const EXIT_BRIEF_UNDETERMINED: u8 = 10;
+
+/// `specguard map gate-check`: at least one changed gate-crate map entry has
+/// neither a spec_doc nor a reasoned ack.
+const EXIT_GATE_MISSING_SPEC: u8 = 1;
+/// `specguard map gate-check` could not determine the answer. Same value as
+/// [`EXIT_USAGE`] on purpose: an argument error and an unanswerable check both
+/// block a push, and neither may ever be 0.
+const EXIT_GATE_UNDETERMINED: u8 = 2;
 
 #[derive(Parser)]
 #[command(
@@ -275,18 +284,45 @@ enum MapAction {
     /// resolution for mapped source files that now have an authored spec.
     /// `selector` is an exact entry key or a glob (e.g. `crates/foo/src/**`), so
     /// one crate-level spec-doc can resolve every per-file entry under it.
+    ///
+    /// Nothing verifies that the doc describes the code, so `tracked` records a
+    /// review CLAIM: a non-blank `--reason` is required and is stored as
+    /// `reviewed_reason` together with `reviewed_at` (HEAD commit + run date)
+    /// on every matched entry. A missing/blank reason is rejected before the
+    /// store is read or written.
     SetSpec {
         /// Exact entry key or glob selecting the entries to attach the doc to.
         selector: String,
         /// Spec-doc path (repo-root-relative) to record on each matched entry.
         doc: String,
+        /// Why these entries are claimed to be described by `doc` (required,
+        /// non-blank; recorded as `reviewed_reason`).
+        #[arg(short = 'm', long = "reason")]
+        reason: String,
     },
-    /// Mark matching entries `tracked` (reviewed; no authored spec needed).
-    /// `selector` is an exact entry key or a glob. Use for entries whose
-    /// `changed` status has been reviewed and reflects no genuine spec drift.
+    /// Relate a test file to a map entry explicitly: move TEST into entry
+    /// KEY's `test_files` (detaching it from any other entry). For relations
+    /// the sync's path heuristic cannot see; later syncs keep the link.
+    Link {
+        /// Repo-root-relative path of the test file (must exist).
+        test: String,
+        /// Exact key of the entry the test exercises.
+        key: String,
+    },
+    /// Mark matching entries `tracked` — a CLAIM that they were reviewed and
+    /// need no authored spec; nothing is verified. `selector` is an exact
+    /// entry key or a glob. Use for entries whose `changed` status has been
+    /// reviewed and reflects no genuine spec drift. A non-blank `--reason` is
+    /// required and is stored as `reviewed_reason` together with `reviewed_at`
+    /// (HEAD commit + run date); a missing/blank reason is rejected before the
+    /// store is read or written.
     Resolve {
         /// Exact entry key or glob selecting the entries to mark tracked.
         selector: String,
+        /// What was reviewed and why it is not spec drift (required,
+        /// non-blank; recorded as `reviewed_reason`).
+        #[arg(short = 'm', long = "reason")]
+        reason: String,
     },
     /// Search the repo through the deterministic indexes and report which map
     /// entries the hits belong to.
@@ -321,6 +357,21 @@ enum MapAction {
     /// Fill every entry's `symbols` and `called_by` from the deterministic
     /// indexes, then save. Idempotent; safe to re-run after `sync`.
     Enrich,
+    /// Push-time spec-doc gate for the blocking gate crates
+    /// (`harness_core::fleet::BLOCKING_GATES`). Every map entry whose impl
+    /// files changed in `<base>..<head>` under a gate crate must carry a
+    /// `spec_doc` or a reasoned ack in `.specguard/spec-doc-acks.toml`.
+    /// Exit 0 = all such entries covered, 1 = at least one is not (each is
+    /// printed), 2 = could not determine (unparseable map/ack file, bad rev,
+    /// git failure, absent map, or a changed gate file no entry references).
+    GateCheck {
+        /// Base revision; the changed set is `git diff <base> <head>`.
+        #[arg(long)]
+        base: String,
+        /// Head revision (default `HEAD`).
+        #[arg(long, default_value = "HEAD")]
+        head: String,
+    },
     /// Remove entries whose key matches the configured `[map].exclude` globs —
     /// the non-spec-bearing paths (lockfiles, manifests, generated artifacts,
     /// docs). Idempotent. `build`/`sync` also apply exclusion, so this mainly
@@ -376,6 +427,14 @@ fn run(cli: &Cli) -> Result<u8> {
     // `pending` is the SessionStart hook entry point: best-effort, never errors.
     if let Some(Command::Pending) = &cli.command {
         return Ok(pending(cli));
+    }
+
+    // `map gate-check` audits nothing, so it must not require audit areas.
+    if let Some(Command::Map {
+        action: MapAction::GateCheck { base, head },
+    }) = &cli.command
+    {
+        return gate_check(cli, base, head);
     }
 
     let l = load(cli)?;
@@ -1844,6 +1903,8 @@ fn run_map(cli: &Cli, l: &Loaded, action: &MapAction) -> Result<u8> {
             }
         }
         MapAction::Search { query, k, json } => run_map_search(l, &map_path, query, *k, *json),
+        // Handled in `run` before `load` (it must not require audit areas).
+        MapAction::GateCheck { base, head } => gate_check(cli, base, head),
         MapAction::Build | MapAction::Sync => {
             let override_ref = cli
                 .baseline
@@ -1865,7 +1926,12 @@ fn run_map(cli: &Cli, l: &Loaded, action: &MapAction) -> Result<u8> {
             let baseline = scope::resolve_baseline(&l.cfg, override_ref.as_deref(), last_ref);
             let head = scope::current_head(&l.repo_root).unwrap_or_else(|_| "HEAD".to_string());
 
-            map.sync(&l.repo_root, &baseline, spec_dir, &head, &exclude)?;
+            let unchecked = map.sync(&l.repo_root, &baseline, spec_dir, &head, &exclude)?;
+            // Not an error: those entries keep no inline-test credit (they read
+            // as untested), but say so instead of letting the gap pass silently.
+            for u in &unchecked {
+                eprintln!("specguard map: inline tests not checked (reported untested): {u}");
+            }
             let pruned = map.prune_excluded(&exclude);
             map.save(&map_path)?;
             println!(
@@ -1886,9 +1952,16 @@ fn run_map(cli: &Cli, l: &Loaded, action: &MapAction) -> Result<u8> {
             );
             Ok(EXIT_OK)
         }
-        MapAction::SetSpec { selector, doc } => {
+        MapAction::SetSpec {
+            selector,
+            doc,
+            reason,
+        } => {
+            // Validate the claim BEFORE touching the store: a rejected command
+            // must leave the map byte-identical.
+            let review = map_review(l, reason)?;
             let mut map = specmap::SpecMap::load(&map_path)?;
-            let touched = map.set_spec(selector, doc)?;
+            let touched = map.set_spec(selector, doc, &review)?;
             map.save(&map_path)?;
             if touched.is_empty() {
                 println!("specguard map: no entry matched '{selector}' (nothing set)");
@@ -1901,9 +1974,20 @@ fn run_map(cli: &Cli, l: &Loaded, action: &MapAction) -> Result<u8> {
             }
             Ok(EXIT_OK)
         }
-        MapAction::Resolve { selector } => {
+        MapAction::Link { test, key } => {
+            if !l.repo_root.join(test).is_file() {
+                anyhow::bail!("test file '{test}' does not exist under the repo root");
+            }
             let mut map = specmap::SpecMap::load(&map_path)?;
-            let touched = map.resolve(selector)?;
+            map.link_test(test, key)?;
+            map.save(&map_path)?;
+            println!("specguard map: linked {test} -> {key}");
+            Ok(EXIT_OK)
+        }
+        MapAction::Resolve { selector, reason } => {
+            let review = map_review(l, reason)?;
+            let mut map = specmap::SpecMap::load(&map_path)?;
+            let touched = map.resolve(selector, &review)?;
             map.save(&map_path)?;
             if touched.is_empty() {
                 println!("specguard map: no entry matched '{selector}' (nothing resolved)");
@@ -1930,6 +2014,57 @@ fn run_map(cli: &Cli, l: &Loaded, action: &MapAction) -> Result<u8> {
             Ok(EXIT_OK)
         }
     }
+}
+
+/// `specguard map gate-check` (backlog 0c277117) — see `gatecheck.rs`. Loads
+/// the config without the audit-only area requirement; any load error is an
+/// `Err`, which `main` maps to exit 2 (undetermined), never 0.
+fn gate_check(cli: &Cli, base: &str, head: &str) -> Result<u8> {
+    let cfg = Config::load_without_areas(&cli.config)?;
+    let config_dir = cli
+        .config
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let repo_root = canonicalize(&config_dir.join(&cfg.project.root))
+        .with_context(|| "resolving project.root")?;
+    let map_path = repo_root.join(&cfg.map.path);
+    let exclude = specmap::compile_globs(&cfg.map.exclude)?;
+    let ack_path = repo_root.join(gatecheck::ACK_PATH);
+    let verdict = gatecheck::check(&gatecheck::GateCheck {
+        repo_root: &repo_root,
+        map_path: &map_path,
+        ack_path: &ack_path,
+        base,
+        head,
+        exclude: &exclude,
+        gates: harness_core::fleet::BLOCKING_GATES,
+    });
+    Ok(match &verdict {
+        harness_core::verdict::Verdict::Clean(_) => {
+            println!("specguard map gate-check: ok ({base}..{head})");
+            EXIT_OK
+        }
+        harness_core::verdict::Verdict::Violation(r) => {
+            println!(
+                "specguard map gate-check: BLOCKED — gate map entries changed in \
+                     {base}..{head} without a spec doc:\n  {}\n\
+                     Fix: `specguard map set-spec <entry> docs/specs/<gate>.md --reason \
+                     \"<why>\"`, or add \
+                     [[ack]] path/reason to {} (reason required).",
+                r.as_str(),
+                gatecheck::ACK_PATH
+            );
+            EXIT_GATE_MISSING_SPEC
+        }
+        harness_core::verdict::Verdict::Undetermined(u) => {
+            eprintln!(
+                "specguard map gate-check: cannot determine (blocking): {}",
+                u.as_str()
+            );
+            EXIT_GATE_UNDETERMINED
+        }
+    })
 }
 
 /// Map-driven CORRECTNESS audit (read-only). Loads the persisted spec-map store
@@ -2321,6 +2456,21 @@ fn format_contract_violations(violations: &[(&'static str, Vec<&'static str>)]) 
         }
     }
     Some(msg)
+}
+
+/// Build the review claim `map resolve` / `map set-spec` stamp on each entry
+/// they mark tracked. Fails (so the caller never loads or saves the store) on a
+/// blank reason, and on an unreadable HEAD: an undated claim is not recorded
+/// under a placeholder commit.
+fn map_review(l: &Loaded, reason: &str) -> Result<specmap::Review> {
+    if reason.trim().is_empty() {
+        anyhow::bail!(
+            "specguard map: a non-blank --reason is required (tracked is a review claim; say what was reviewed)"
+        );
+    }
+    let head = scope::current_head(&l.repo_root)
+        .context("specguard map: cannot record reviewed_at without a HEAD commit")?;
+    specmap::Review::new(reason, &head, &l.date)
 }
 
 /// Ratify the prompt templates (meta-canon): contract-check then pin the
@@ -3184,6 +3334,8 @@ mod tests {
                 symbols: vec![],
                 called_by: vec![],
                 ambiguous_symbols: vec![],
+                reviewed_reason: None,
+                reviewed_at: None,
                 api: None,
             }
         }

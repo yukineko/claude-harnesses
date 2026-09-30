@@ -51,8 +51,11 @@ sentinel = ".specguard-pending"
 # map (source file -> spec-doc + status) is reusable by other features and is
 # NOT tied to the drift/audit workflow. `specguard map build|sync|list` manages
 # it; `sync` reflects `git log --name-status <baseline>..HEAD` into the map.
-# Resolve entries with `map set-spec <key|glob> <doc>` (attach a spec-doc + mark
-# tracked) or `map resolve <key|glob>` (mark tracked, no spec), and drop
+# Resolve entries with `map set-spec <key|glob> <doc> --reason <why>` (attach a
+# spec-doc + mark tracked) or `map resolve <key|glob> --reason <why>` (mark
+# tracked, no spec). The reason is required and recorded per entry as
+# `reviewed_reason` + `reviewed_at` (HEAD commit, date), since `tracked` is an
+# unverified review claim. Drop
 # non-spec-bearing entries with `map prune` (or automatically on build/sync).
 #
 # Path (relative to repo root) of the persisted map TOML.

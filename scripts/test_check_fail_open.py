@@ -585,6 +585,52 @@ class EmptyCollectionFallbackFalsePositives(unittest.TestCase):
         self.assertEqual(fo.scan_rust(src), [])
 
 
+class UndeterminedArmSpellings(unittest.TestCase):
+    """backlog f12c2168: 836a1aa3 renamed 47 sites from `Err(..)` to
+    `Required::Blocked(..)`, and verdict.rs delegates the residue the type
+    cannot block (a hand-written arm that substitutes an empty value) to THIS
+    scanner. Before this class the scanner only knew the `Err(_)` spelling, so
+    the same erasure written as `Required::Blocked(_) => Vec::new()` was
+    reported as "gate surface clean"."""
+
+    def test_required_blocked_arm_substitutes_an_empty_vec(self):
+        src = [
+            "    let files = match listing.require() {",
+            "        Required::Determined(v) => v,",
+            "        Required::Blocked(_) => Vec::new(),",
+            "    };",
+        ]
+        self.assertIn("undetermined-arm-empty-fallback", names(fo.scan_rust(src)))
+
+    def test_bare_blocked_arm_substitutes_a_default(self):
+        src = [
+            "        Blocked(_) => Default::default(),",
+        ]
+        self.assertIn("undetermined-arm-empty-fallback", names(fo.scan_rust(src)))
+
+    def test_undetermined_arm_substitutes_an_empty_vec(self):
+        # The direct-match spelling on Determination itself.
+        src = [
+            "    match boundary::read_dir_entries(&dir) {",
+            "        Determination::Known(v) => v,",
+            "        Determination::Undetermined(_) => Vec::new(),",
+            "    }",
+        ]
+        self.assertIn("undetermined-arm-empty-fallback", names(fo.scan_rust(src)))
+
+    def test_blocked_arm_that_forwards_is_not_flagged(self):
+        src = [
+            "        Required::Blocked(verdict) => return verdict, // fail closed",
+            "        Determination::Undetermined(why) => return Determination::Undetermined(why),",
+        ]
+        self.assertEqual(fo.scan_rust(src), [])
+
+    def test_new_pattern_is_advisory_only(self):
+        self.assertIn("undetermined-arm-empty-fallback", fo.ADVISORY_ONLY_PATTERNS)
+        hit = [(1, "Required::Blocked(_) => Vec::new(),", "undetermined-arm-empty-fallback")]
+        self.assertEqual(fo.blocking_hits(hit), [])
+
+
 class NewClassIsAdvisoryOnly(unittest.TestCase):
     """The 2026-08-06 landing decision: the new class enters the ADVISORY /
     `--ratchet` surface only, NOT the merge-blocking gate-surface verdict.
@@ -600,8 +646,8 @@ class NewClassIsAdvisoryOnly(unittest.TestCase):
     def test_new_pattern_names_are_declared_advisory_only(self):
         self.assertEqual(
             fo.ADVISORY_ONLY_PATTERNS,
-            frozenset({"err-arm-empty-fallback", "read-unwrap-or-empty",
-                       "loop-parse-drop"}),
+            frozenset({"err-arm-empty-fallback", "undetermined-arm-empty-fallback",
+                       "read-unwrap-or-empty", "loop-parse-drop"}),
         )
 
     def test_blocking_scan_drops_the_advisory_class(self):

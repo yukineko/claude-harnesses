@@ -959,9 +959,11 @@ USER RULING 2026-09-24: Q1=新しい正典リスト (harness_core BLOCKING_GATES
 
 【先行テストと実装途中の WIP を退避 2026-09-29】archive/gate-protection-wip (b5c34f92、10 ファイル +2701) は harness_core::gate::protection (Protection 構造体と validate)、scripts/check-gate-protection.py と gate_protection_lib.py、blastguard/donegate の protection_contract.rs、harness-core/tests/gate_protection.rs、check-gate-crates-sync の BLOCKING_GATES 包含テストを含む。fleet.rs の BLOCKING_GATES 本体、各ゲートの protection.rs、docs/gate-taxonomy.md の保護契約表は未実装。 取り出しは git show archive/gate-protection-wip（worktree 整理で退避、2026-09-29）。マージ前に今のツリーで RED を必ず観測すること。
 
-2026-09-30 slice 1 landed (merged 511cee33): harness_core::gate::Protection + fleet::BLOCKING_GATES (= the 7 canary GATE_CRATES, checked as superset by a Rust test and by the checker), blastguard --protects (first adopter), scripts/check-gate-protection.py (0/1/2) + baseline listing the other 6 as PENDING (may only shrink vs HEAD). RED 970d349a by an independent sonnet author; implementer-added checker rules covered by independent tests 435b92c0. Consequence to know: adding a gate to BLOCKING_GATES later requires declaring it in the SAME commit (a new PENDING entry counts as growth). NOT yet wired: pre-commit patch githooks-3a8e3b73.patch in the session scratchpad awaits the user. Remaining: wiring, declarations for the 6 PENDING gates (one per commit), refusal-line one-line summary, taxonomy column."""
+2026-09-30 slice 1 landed (merged 511cee33): harness_core::gate::Protection + fleet::BLOCKING_GATES (= the 7 canary GATE_CRATES, checked as superset by a Rust test and by the checker), blastguard --protects (first adopter), scripts/check-gate-protection.py (0/1/2) + baseline listing the other 6 as PENDING (may only shrink vs HEAD). RED 970d349a by an independent sonnet author; implementer-added checker rules covered by independent tests 435b92c0. Consequence to know: adding a gate to BLOCKING_GATES later requires declaring it in the SAME commit (a new PENDING entry counts as growth). NOT yet wired: pre-commit patch githooks-3a8e3b73.patch in the session scratchpad awaits the user. Remaining: wiring, declarations for the 6 PENDING gates (one per commit), refusal-line one-line summary, taxonomy column.
+
+2026-10-01 slice 2 (p1/gateprot2、未取り込み): propguard d83e0788 / stuckguard 7ab0dd0d / parallelguard e3caf2fd で表明。引用は別 agent が検証中。specguard / mutategate / overwatch は各自の文書とコードが矛盾するため未表明のまま (specguard: pending hook が config を読めないと何も出さずに exit 0、文書は何も出さないのが fail-open だと言っている / mutategate: README の viable の定義がコードと違い、どの hook も script も実行しない / overwatch: README の保存先が 3 か所で食い違う)。slice 1 のメモの pre-commit 未配線は古い、9c922365 で配線済み。"""
 created_at = 1785876697
-updated_at = 1790766410
+updated_at = 1790797561
 weight = 0.0
 issue_number = 130
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/130"
@@ -12577,3 +12579,93 @@ updated_at = 1790797466
 weight = 0.0
 issue_number = 950
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/950"
+
+[[task]]
+id = "f49e4a72"
+title = "specguard pending が config を読めないと何も出さずに exit 0 で終わる (自身のコメントが fail-open と呼ぶ挙動)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "3a8e3b73 slice 2 で発見。main.rs 1372 付近の let Ok(l) = load(cli) else return EXIT_OK。1386 付近のコメントは、何も出さないと drift 無しと読まれ fail-open になると書いている。hooks.json は specguard pending 2>/dev/null || true で呼ぶ。"
+created_at = 1790797561
+updated_at = 1790797561
+weight = 0.0
+issue_number = 952
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/952"
+
+[[task]]
+id = "a091b6a9"
+title = "harness-core fleet.rs 55 行のコメント「GATE crate はすべて block する」が事実と違う"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "3a8e3b73 slice 2 で発見。stuckguard は助言のみ、parallelguard は park 中、mutategate はどこからも実行されない。specguard も疑わしい。"
+created_at = 1790797563
+updated_at = 1790797563
+weight = 0.0
+issue_number = 953
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/953"
+
+[[task]]
+id = "bd48a6dd"
+title = "parked-plugins.json は parallelguard が settings.json で false と書くが、実際はキーが無い"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "3a8e3b73 slice 2 で 2026-10-01 に観測 (読み取りのみ)。"
+created_at = 1790797566
+updated_at = 1790797566
+weight = 0.0
+issue_number = 954
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/954"
+
+[[task]]
+id = "2450ba1b"
+title = "mutategate README の Pilot 2 の GATE crate 一覧に parallelguard が無い"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "3a8e3b73 slice 2 で発見。"
+created_at = 1790797568
+updated_at = 1790797568
+weight = 0.0
+issue_number = 955
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/955"
+
+[[task]]
+id = "c4461d98"
+title = "stuckguard は run_hook 経由なので panic すると何も出ず、ループ無しと区別できない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "3a8e3b73 slice 2 で発見。助言だけの hook だが、CLAUDE.md 1 節は消費者が問題なしと読む沈黙を許さない。"
+created_at = 1790797569
+updated_at = 1790797569
+weight = 0.0
+issue_number = 956
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/956"
+
+[[task]]
+id = "5733466a"
+title = "propguard / stuckguard / parallelguard の README に --protects が載っていない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "3a8e3b73 slice 2 で追加したフラグ。"
+created_at = 1790797571
+updated_at = 1790797571
+weight = 0.0
+issue_number = 957
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/957"

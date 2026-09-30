@@ -11820,42 +11820,6 @@ issue_number = 879
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/879"
 
 [[task]]
-id = "04c3ca6f"
-title = "circuit check が flow のバッチ間（claim 全解放後）で必ず idle_unmeasured trip する"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "flow",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "実測 2026-09-30 @ 80db2e7e: sink で claim を全部 release した直後、flow SKILL が指定する 3-4 の位置で condukt circuit check --run flow-<SID> を打つと rc=1, reason=idle_unmeasured, idle_unknown_reason='run state could not be loaded'。d7f2a4ea（condukt 0.7.189）の stateless idle 計測は live な stateless claim がある間しか効かず（NoStatelessClaim は unmeasured）、バッチ間には claim が 0 件なので、/flow は 1 バッチ終えるたびに trip して止まる。claim 保持中は continue/idle 0 を返すことは確認済み。あわせて flow SKILL.md の『信号採取はすべて fail-soft（run 未ロードなどは非 trip に縮退）』は、fail-closed に trip するバイナリと食い違っている（doc↔impl 矛盾）。案: flow run の識別（run id 接頭辞や driver 登録）から transcript を引いて claim 0 件でも idle を測る。または SKILL の check 位置を次バッチの claim 後へ移す。後者はゲート回避に見えるので設計判断が要る。"
-created_at = 1790719344
-updated_at = 1790719344
-weight = 0.0
-issue_number = 880
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/880"
-
-[[task]]
-id = "873651b9"
-title = "blastguard: worktree 置き場の内側への rm -r を無確認で許可する（ユーザー裁定）"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "ユーザー裁定 2026-09-30:「worktreeへの削除を制限しているhookを排除して」→ AskUserQuestion で「worktree 置き場は無確認で許可」を選択。対象は ~/.condukt/worktrees と <repo 親>/.harness-worktrees の strict descendant。置き場そのもの・protected path（.git / gate config）の削除は従来どおり deny。symlink 脱出・.. 脱出は Inside にならない。発端: subagent が /Users/yuki/.condukt/worktrees/pgv-target を rm -rf できず、recursive rm deny（crates/blastguard/src/detect.rs analyze_rm）に止められた。"
-created_at = 1790719503
-updated_at = 1790719503
-weight = 0.0
-issue_number = 884
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/884"
-
-[[task]]
 id = "3aa215e1"
 title = "blastguard: rm の判定を「形」から「壊す対象（資産か・復帰可能か）」へ再設計する（ユーザー裁定）"
 project = "/Users/yuki/src/harness"
@@ -12177,3 +12141,57 @@ updated_at = 1790720891
 weight = 0.0
 issue_number = 898
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/898"
+
+[[task]]
+id = "befcfe06"
+title = "blastguard: cd の後の相対 rm で、確認画面に実際と違う削除先を出す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "873651b9 の修正中（2026-09-30）に観測した。一時ディレクトリなど削除が安全な置き場の中で 'cd <root>/s & rm -rf src' や、失敗する cd の後に相対パスの rm を書く。confined Ask は削除先を <root>/s/src と表示するが、実際に消えるのは <cwd>/src。原因は detect_bash の cwd walk（Ctx::base_for）で、どの区切りでも cd が成功してそのまま次の区切りに効くと仮定している。今は Allow にはならないが、人が承認する対象を取り違える。"
+created_at = 1790723957
+updated_at = 1790723957
+weight = 0.0
+issue_number = 901
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/901"
+
+[[task]]
+id = "b280cfa2"
+title = "blastguard: 安全な置き場の confined Ask が、シンボリックリンクの後の .. を文字列で消し、削除先を取り違える"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "873651b9 の修正中（2026-09-30）に観測した。SafeRoots::classify と cwd walk は、シンボリックリンクを解決する前に .. を文字列の上で消す。例: rm -rf <proj>/lnk/../x（lnk は外を指すリンク）は、人がいるときは ask: confined to <proj>、人がいないときは deny になる。しかし実際に消えるのは <lnk の指す先の親>/x。Allow にはならないが、人に見せる削除先が間違っている。truncate、find -delete、git clean、切り詰めるリダイレクト、chmod/chown -R も同じ confined Ask を通るので同様。befcfe06（cd walk による取り違え）と関連する。"
+created_at = 1790724641
+updated_at = 1790724641
+weight = 0.0
+issue_number = 902
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/902"
+
+[[task]]
+id = "ccebda3f"
+title = "blastguard: 削除先を取り違えた Ask を人が承認すると、承認メモリ経由で後の headless 実行が通るか確かめる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "873651b9 の修正中に出た未検証の問い。承認メモリは headless での判定の厳格化より前に走り、解決後の実パスをキーにしている（README）。lnk/.. や cd walk で削除先を取り違えた Ask（上の起票と befcfe06）を人が承認したとき、その承認が後で別の実パスの削除を headless で通してしまわないか。テストで確かめる。"
+created_at = 1790724643
+updated_at = 1790724643
+weight = 0.0
+issue_number = 903
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/903"

@@ -17,6 +17,7 @@ mod gate_outcomes;
 mod lease;
 mod lock;
 pub mod merge_conflict;
+mod protection;
 mod reconcile;
 mod render;
 mod review_escalation;
@@ -38,7 +39,8 @@ use violation::{RecurrencePolicy, ViolationSource};
 #[derive(Parser)]
 #[command(
     name = "overwatch",
-    about = "Lease & event store for condukt orchestration"
+    about = "Lease & event store for condukt orchestration",
+    after_help = "`overwatch --protects` prints what this gate protects, from what, and on what grounds."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -590,6 +592,16 @@ fn exit_on_undetermined_sources(health: review_queue::SourceHealth) {
 }
 
 fn main() -> Result<()> {
+    // The protection statement (backlog 3a8e3b73), readable without touching
+    // the store. A pure print: no verdict. Short-circuits before clap because
+    // `Cli` requires a subcommand.
+    if std::env::args().nth(1).as_deref() == Some("--protects") {
+        let p = protection::PROTECTION;
+        println!("PROTECTS: {}", p.protects);
+        println!("AGAINST: {}", p.against);
+        println!("GROUNDS: {}", p.grounds);
+        return Ok(());
+    }
     let cli = Cli::parse();
     match cli.command {
         Command::Begin {

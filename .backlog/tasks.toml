@@ -1054,9 +1054,11 @@ status = "pending"
 notes = """
 仕様が2つの互いに素な宇宙に分かれている。(1) specguard.toml の map exclude に glob で md 全体が入っているので、44本の docs/specs 配下の仕様書は全部 map の外。map は「仕様書が変わった」も「古びた」も原理的に観測できず、Status Changed は永久に「git が impl を触った」の意味しか持てない。(2) 同時に grep -c docs/specs specguard.toml は 0 で、8つの area の canon は crates 配下の README や DESIGN や docs/OVERVIEW。監査は README を読み map は docs/specs を指し、両者は交わらない。spec_doc はどの判定の入力にもならないラベル。しかも crate 粒度で 41 doc が 397 entry を覆う。(3) block がどこにも無い: specguard の呼び出しは post-merge (自称 never affects this hook exit code) と SessionStart (render_pending は3分岐すべて EXIT_OK、Undetermined すら警告を print して EXIT_OK) の2箇所だけ。commit 時も push 時も Stop 時も存在しない。(4) 結果、最後の spec 監査レポートは 2026-07-13 で以降 707 commit (うち crates 444)、.specguard-pending は存在せず SessionStart は何も print せず誰も走らせない — 監査自身しか立てられない sentinel が監査を促す唯一の合図という自己沈黙ループ。完了条件: canon と spec_doc を同じファイル集合に向けるか docs/specs を canon に加える。gate crate の glob に一致する entry が changed かつ spec_doc が null のとき push を止める決定論チェックを1本入れる (逃げ道は entry ごとの理由必須 ack のみ、check-claudemd-claims.py の no-bypass 規律に倣う)。実際に block された push を観測する。
 
-51151bed で取り込み済み: specguard map gate-check (変更された gate の map entry に spec_doc か理由付き ack が無ければ exit 1、判定不能は exit 2) と、gate 6 領域の canon への docs/specs 追加。残り: pre-push への配線 (パッチは scratchpad の githooks-0c277117.patch、未適用)。配線前の課題: main の map では gate crate の 44 entry がすべて spec_doc 無しなので、配線した瞬間に gate crate を触る push はすべて止まる。map は gitignore された機械ローカルのキャッシュで、無い worktree や未 sync の map では exit 2 になる。README.ja.md は未更新。"""
+51151bed で取り込み済み: specguard map gate-check (変更された gate の map entry に spec_doc か理由付き ack が無ければ exit 1、判定不能は exit 2) と、gate 6 領域の canon への docs/specs 追加。残り: pre-push への配線 (パッチは scratchpad の githooks-0c277117.patch、未適用)。配線前の課題: main の map では gate crate の 44 entry がすべて spec_doc 無しなので、配線した瞬間に gate crate を触る push はすべて止まる。map は gitignore された機械ローカルのキャッシュで、無い worktree や未 sync の map では exit 2 になる。README.ja.md は未更新。
+
+2026-10-01 ユーザー裁定: 先に埋めてから配線する。44 entry に理由付きで docs/specs を紐付けるか理由付き ack を置き、pre-push パッチは map を先に最新化するよう直してから適用する。"""
 created_at = 1785926764
-updated_at = 1790795044
+updated_at = 1790796466
 weight = 0.0
 issue_number = 147
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/147"
@@ -1343,39 +1345,6 @@ updated_at = 1786021777
 weight = 0.0
 issue_number = 187
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/187"
-
-[[task]]
-id = "801d0bda"
-title = "cargo test --workspace が 3 回中 1 回、テスト結果を出さずに 1 target を落とす (再現せず・原因未特定)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "test",
-    "flaky",
-    "harness-core",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-実測 2026-08-06、worktree session-b9a78b46、HEAD 90385f84 (= origin/main)。
-
-run1: `cargo build --workspace --all-targets` (rc=0) の直後に `cargo test --workspace --no-fail-fast` を実行 → 出力末尾に `error: 1 target failed:`。
-run2: 同じコマンドを単独で実行 → rc=0、`test result: FAILED` も `failures:` も `panicked at` も 0 件。
-
-判定不能として扱う根拠と、そこから読める形:
-run1 の出力には `test result: FAILED` が 1 行も無い。この行は当時のフィルタ `^(error|test result|failures:|---- )` に一致するので、出ていれば残っていたはず。したがって「テストが赤くなった」のではなく、**どのテストバイナリも結果行を出さないまま target が落ちた** — プロセスの異常終了 (abort/シグナル) か、結果を出す前の停止が疑われる。直前の `--all-targets` build は rc=0 なのでリンク失敗ではない。
-
-target 名は当時のフィルタが落としており不明 (`error: 1 target failed:` の次行はインデントされていて一致しなかった)。これは計測側の不備であり、次に測るときはフィルタを掛けない。
-
-疑うべき差分: run1 のテスト実行中に、別プロセスとして `backlog driver register` と `backlog add`、および `cargo fmt --all -- --check` を走らせていた。共有状態 (driver レジストリ / backlog ストア / target ディレクトリ) を読むテストが非 hermetic である可能性がある。ただしこれは仮説であって観測ではない。
-
-完了条件: (1) 落ちた target を特定する (フィルタ無しで反復実行し、`error: 1 target failed:` の次行を読む)。(2) 特定できたら、共有状態への依存を除いて hermetic にする。(3) 反復実行しても再現しない場合は、その事実と試行回数を記録して閉じる — 「再現しなかった」を「問題なし」と書かない。"""
-created_at = 1786025050
-updated_at = 1786025050
-weight = 0.0
-issue_number = 200
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/200"
 
 [[task]]
 id = "b71c72a7"
@@ -12528,3 +12497,48 @@ updated_at = 1790795050
 weight = 0.0
 issue_number = 941
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/941"
+
+[[task]]
+id = "bdd85e20"
+title = "HEAD で cargo test --workspace の 8 target が恒常的に落ちる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "2026-10-01、HEAD d584e981、worktree p1-flaky で 4 回とも失敗: backlog project_scope / blastguard worktree_root_cd_desync, worktree_root_rm, worktree_root_symlink_escape / condukt autonomy_invariant, fp_gate_scope_contract, fp_oracle_e2e / donegate giveup_sentinel。原因は未調査。checkout が .harness-worktrees 配下にあることへの依存が疑われるが未検証。どのフックも cargo test を回さないので赤が放置されている。autonomy_invariant は ec878b2a と重複の可能性。"
+created_at = 1790796467
+updated_at = 1790796467
+weight = 0.0
+issue_number = 942
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/942"
+
+[[task]]
+id = "8b653590"
+title = "負荷に弱いタイミング依存テスト: blastguard d4_exponential_find_exec (2 秒予算) と overwatch test_freshness の run_ignored_test"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "2026-10-01 の 801d0bda 計測の 1 回目だけで失敗。d4 は 3.23 秒で予算 2 秒を超過、test_freshness は 60 秒超えで ExecutionError。並走する別セッションの cargo による負荷と整合するが未証明。"
+created_at = 1790796468
+updated_at = 1790796468
+weight = 0.0
+issue_number = 943
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/943"
+
+[[task]]
+id = "bbca0f83"
+title = "rollout のロックが途中で他プロセスの名前に変わった: no longer names this process"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "2026-10-01、condukt の rollout 終了時に「rollout.lock no longer names this process (pid 34905, file says 空)」と出た。直前に別セッション (34385c9e) の全体 rollout が走っていた。ロックの取得か解放に競合がある疑い。2 つの rollout が同時に走ると互いの配備を消す (e3366b5c)。"
+created_at = 1790796469
+updated_at = 1790796469
+weight = 0.0
+issue_number = 944
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/944"

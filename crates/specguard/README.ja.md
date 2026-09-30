@@ -179,6 +179,7 @@ specguard map sync                 # baseline 以降の git 差分だけ増分�
 specguard map list [--json]        # 現在の spec↔実装マッピングを表示
 specguard map set-spec <key|glob> <doc>  # 一致 entry に spec-doc を紐付け + tracked にする
 specguard map resolve <key|glob>   # 一致 entry を tracked にする (レビュー済み・spec 不要)
+specguard map link <test> <key>    # テストファイルを entry に明示的に関係付ける (以後の sync でも保持)
 specguard map prune                # [map].exclude 一致 entry を除去 (非 spec-bearing パス)
 specguard --baseline HEAD~5 run    # baseline を上書き
 specguard --config examples/aegis.toml run
@@ -229,7 +230,11 @@ finding ÷ 既知 finding）を出せる。verdict は観測から導く — `--
   依存しない。**将来の `spec-audit` 等の別機能からも共有される独立レイヤ**として設計されている
   (このコマンドはマップ実装を再実装せず、常に `specguard map` に委譲する)。各 entry は
   `kind` (Feature|Endpoint) / `spec_doc` / `impl_files` / `test_files` / `client_refs` /
-  `api` ({method, route}) を持つ。全履歴での `map build` は削除済みソースを復活させない:
+  `api` ({method, route}) を持つ。各 sync はテストファイルを impl entry へ決定的に関係付ける: テストの
+  per-file entry を `src/` 下の同名ファイル、なければ crate root (`src/lib.rs`→`src/main.rs`)、または
+  接辞付きの隣接ファイル (`foo_test.rs`→`foo.rs`) の entry に統合し、自身に `#[test]` を持つ `.rs` impl
+  ファイルは `test_files` にも載せる。どの規則でも帰属できないテストは test-only のまま残る (`map link` で
+  明示的に関係付ける) ので、空の `test_files` は「帰属されたテストが無い」を意味する。全履歴での `map build` は削除済みソースを復活させない:
   `git log --name-status` は新しいコミットから逆時系列で出力されるため、変更は
   oldest→newest の順に畳み込まれ (last-writer-wins)、新しいコミットで削除されたパスは
   ダングリング entry として残らない。

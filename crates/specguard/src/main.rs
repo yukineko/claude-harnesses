@@ -281,6 +281,15 @@ enum MapAction {
         /// Spec-doc path (repo-root-relative) to record on each matched entry.
         doc: String,
     },
+    /// Relate a test file to a map entry explicitly: move TEST into entry
+    /// KEY's `test_files` (detaching it from any other entry). For relations
+    /// the sync's path heuristic cannot see; later syncs keep the link.
+    Link {
+        /// Repo-root-relative path of the test file (must exist).
+        test: String,
+        /// Exact key of the entry the test exercises.
+        key: String,
+    },
     /// Mark matching entries `tracked` (reviewed; no authored spec needed).
     /// `selector` is an exact entry key or a glob. Use for entries whose
     /// `changed` status has been reviewed and reflects no genuine spec drift.
@@ -1865,7 +1874,12 @@ fn run_map(cli: &Cli, l: &Loaded, action: &MapAction) -> Result<u8> {
             let baseline = scope::resolve_baseline(&l.cfg, override_ref.as_deref(), last_ref);
             let head = scope::current_head(&l.repo_root).unwrap_or_else(|_| "HEAD".to_string());
 
-            map.sync(&l.repo_root, &baseline, spec_dir, &head, &exclude)?;
+            let unchecked = map.sync(&l.repo_root, &baseline, spec_dir, &head, &exclude)?;
+            // Not an error: those entries keep no inline-test credit (they read
+            // as untested), but say so instead of letting the gap pass silently.
+            for u in &unchecked {
+                eprintln!("specguard map: inline tests not checked (reported untested): {u}");
+            }
             let pruned = map.prune_excluded(&exclude);
             map.save(&map_path)?;
             println!(
@@ -1899,6 +1913,16 @@ fn run_map(cli: &Cli, l: &Loaded, action: &MapAction) -> Result<u8> {
                     if touched.len() == 1 { "y" } else { "ies" },
                 );
             }
+            Ok(EXIT_OK)
+        }
+        MapAction::Link { test, key } => {
+            if !l.repo_root.join(test).is_file() {
+                anyhow::bail!("test file '{test}' does not exist under the repo root");
+            }
+            let mut map = specmap::SpecMap::load(&map_path)?;
+            map.link_test(test, key)?;
+            map.save(&map_path)?;
+            println!("specguard map: linked {test} -> {key}");
             Ok(EXIT_OK)
         }
         MapAction::Resolve { selector } => {

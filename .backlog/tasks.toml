@@ -12415,9 +12415,12 @@ project_unresolved = false
 tags = ["p1"]
 touched_files = []
 status = "pending"
-notes = "b2977afb の実装者が d584e981 で観測。cargo test -p condukt --test autonomy_invariant は 15 passed 1 failed。allowlist の検査ループが flow で止まるため、scout 以降のファイルの検査は現在走っていない。flow に 2 か所が再監査なしで足されたのか、allowlist が古いのかは未判定。flow の該当行を ASK_ALLOWLIST のカテゴリと突き合わせて決めること。どのフックも cargo test を回さないので赤が放置されていた。"
+notes = """
+b2977afb の実装者が d584e981 で観測。cargo test -p condukt --test autonomy_invariant は 15 passed 1 failed。allowlist の検査ループが flow で止まるため、scout 以降のファイルの検査は現在走っていない。flow に 2 か所が再監査なしで足されたのか、allowlist が古いのかは未判定。flow の該当行を ASK_ALLOWLIST のカテゴリと突き合わせて決めること。どのフックも cargo test を回さないので赤が放置されていた。
+
+2026-10-01 bdd85e20 の切り分けで原因を特定: d6ee8110 (2026-09-23 の backlog 優先の裁定) で flow SKILL.md に charter 彫り直し中の AskUserQuestion が 2 か所増え、ASK_ALLOWLIST は 13 のまま。flow 以外のファイルは全件一致。"""
 created_at = 1790795045
-updated_at = 1790795045
+updated_at = 1790797248
 weight = 0.0
 issue_number = 939
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/939"
@@ -12460,9 +12463,12 @@ project_unresolved = false
 tags = ["p1"]
 touched_files = []
 status = "pending"
-notes = "2026-10-01、HEAD d584e981、worktree p1-flaky で 4 回とも失敗: backlog project_scope / blastguard worktree_root_cd_desync, worktree_root_rm, worktree_root_symlink_escape / condukt autonomy_invariant, fp_gate_scope_contract, fp_oracle_e2e / donegate giveup_sentinel。原因は未調査。checkout が .harness-worktrees 配下にあることへの依存が疑われるが未検証。どのフックも cargo test を回さないので赤が放置されている。autonomy_invariant は ec878b2a と重複の可能性。"
+notes = """
+2026-10-01、HEAD d584e981、worktree p1-flaky で 4 回とも失敗: backlog project_scope / blastguard worktree_root_cd_desync, worktree_root_rm, worktree_root_symlink_escape / condukt autonomy_invariant, fp_gate_scope_contract, fp_oracle_e2e / donegate giveup_sentinel。原因は未調査。checkout が .harness-worktrees 配下にあることへの依存が疑われるが未検証。どのフックも cargo test を回さないので赤が放置されている。autonomy_invariant は ec878b2a と重複の可能性。
+
+2026-10-01 切り分け (7ddd47c4、各 target を単独実行し、置き場所を変えた clone でも実行): A 置き場所・環境依存: backlog project_scope (macOS の TMPDIR が /var/folders で symlink、テストは生のパスを書き、バイナリは正規化したパスで照合するので 0 件) / blastguard worktree_root_cd_desync, worktree_root_rm, worktree_root_symlink_escape (fixture が CARGO_TARGET_TMPDIR 配下。.harness-worktrees 配下の checkout では空出力 = Allow、/tmp 配下では Ask。$HOME の clone では全部通る。8 節どおりの置き場所からは緑を観測できない)。 B 仕様が後から変わった: condukt fp_gate_scope_contract, fp_oracle_e2e (306cf008 / 9a4fb884 の裁定で、claim 返却が判定不能なら state set は exit 1。status は verified で入っている) / donegate giveup_sentinel の 2 本 (49fac994 の repeat ledger が同じ理由の 2 回目のブロックを通すため、2 周目の give-up が起きない)。 C allowlist が古い: condukt autonomy_invariant (d6ee8110 で flow SKILL.md の AskUserQuestion が 13 から 15。charter の彫り直し中の 2 か所)。 修正は worktree p1-redfix-bg (blastguard) と p1-redfix (backlog, condukt, donegate) で進行中。donegate は repeat ledger を give-up に適用するかが未裁定なら人に返す。"""
 created_at = 1790796467
-updated_at = 1790796467
+updated_at = 1790797247
 weight = 0.0
 issue_number = 942
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/942"

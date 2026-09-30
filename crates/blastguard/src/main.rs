@@ -66,7 +66,7 @@ use harness_core::hook::{self, HookInput};
 use std::process::exit;
 
 fn main() {
-    // Minimal CLI surface: version/help/retro short-circuit before touching stdin.
+    // Minimal CLI surface: version/help/protects/retro short-circuit before touching stdin.
     let args: Vec<String> = std::env::args().skip(1).collect();
     for (i, arg) in args.iter().enumerate() {
         match arg.as_str() {
@@ -76,6 +76,15 @@ fn main() {
             }
             "--help" | "-h" => {
                 print_help();
+                exit(0);
+            }
+            "--protects" => {
+                // The protection statement (backlog 3a8e3b73), readable
+                // without triggering the gate. A pure print: no verdict.
+                let p = blastguard::protection::PROTECTION;
+                println!("PROTECTS: {}", p.protects);
+                println!("AGAINST: {}", p.against);
+                println!("GROUNDS: {}", p.grounds);
                 exit(0);
             }
             "retro" => {
@@ -255,7 +264,7 @@ fn print_help() {
     println!(
         "blastguard {ver}\n\
 A Claude Code PreToolUse hook that denies project-destroying operations.\n\n\
-USAGE:\n  blastguard                  read a PreToolUse payload from stdin (normal mode)\n  blastguard record-approval  read a PostToolUse payload from stdin and record\n                              that this exact effect was approved\n  blastguard --version        print version\n  blastguard --help           this help\n\n\
+USAGE:\n  blastguard                  read a PreToolUse payload from stdin (normal mode)\n  blastguard record-approval  read a PostToolUse payload from stdin and record\n                              that this exact effect was approved\n  blastguard --protects       print what this gate protects, from what, and why\n  blastguard --version        print version\n  blastguard --help           this help\n\n\
 It denies recursive/wildcard rm, git reset --hard, git clean -fdx, truncate,\n\
 shred, mkfs, dd of=, recursive chmod/chown, find -delete, and single-> file\n\
 overwrites — while exempting repo CONFIG files (.claude/** config, *.toml,\n\

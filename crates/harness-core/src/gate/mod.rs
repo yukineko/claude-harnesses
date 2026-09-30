@@ -14,7 +14,15 @@
 //! * [`state`] — per-session attempt counter (`load`/`save`/`reset`/`bump`).
 //! * [`run`] — the panic guard (`run_guarded`) and skip-marker consumer
 //!   (`consume_skip`).
+//!
+//! Separately from that Stop-gate plumbing, [`protection`] holds the
+//! fleet-wide [`Protection`] statement type every blocking gate (not only the
+//! Stop gates — see [`crate::fleet::BLOCKING_GATES`]) uses to declare what it
+//! protects, from what, and on what grounds.
 
+pub mod protection;
 pub mod run;
 pub mod runner;
 pub mod state;
+
+pub use protection::Protection;

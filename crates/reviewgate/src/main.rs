@@ -35,6 +35,8 @@ mod install;
 mod model;
 mod review;
 mod state;
+#[cfg(test)]
+mod trust_worktree_tests;
 
 use std::path::Path;
 

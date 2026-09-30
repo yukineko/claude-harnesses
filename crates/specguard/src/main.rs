@@ -16,6 +16,7 @@ mod auditmap;
 mod config;
 mod coverage;
 mod decision;
+mod gatecheck;
 mod init;
 mod parse;
 mod prompt;
@@ -79,6 +80,14 @@ const EXIT_INDEX_UNDETERMINED: u8 = 10;
 /// `covered` lets it proceed — both are answers, and "no answer" must be
 /// neither (specs/spec-loop.toml R3, CLAUDE.md §3).
 const EXIT_BRIEF_UNDETERMINED: u8 = 10;
+
+/// `specguard map gate-check`: at least one changed gate-crate map entry has
+/// neither a spec_doc nor a reasoned ack.
+const EXIT_GATE_MISSING_SPEC: u8 = 1;
+/// `specguard map gate-check` could not determine the answer. Same value as
+/// [`EXIT_USAGE`] on purpose: an argument error and an unanswerable check both
+/// block a push, and neither may ever be 0.
+const EXIT_GATE_UNDETERMINED: u8 = 2;
 
 #[derive(Parser)]
 #[command(
@@ -348,6 +357,21 @@ enum MapAction {
     /// Fill every entry's `symbols` and `called_by` from the deterministic
     /// indexes, then save. Idempotent; safe to re-run after `sync`.
     Enrich,
+    /// Push-time spec-doc gate for the blocking gate crates
+    /// (`harness_core::fleet::BLOCKING_GATES`). Every map entry whose impl
+    /// files changed in `<base>..<head>` under a gate crate must carry a
+    /// `spec_doc` or a reasoned ack in `.specguard/spec-doc-acks.toml`.
+    /// Exit 0 = all such entries covered, 1 = at least one is not (each is
+    /// printed), 2 = could not determine (unparseable map/ack file, bad rev,
+    /// git failure, absent map, or a changed gate file no entry references).
+    GateCheck {
+        /// Base revision; the changed set is `git diff <base> <head>`.
+        #[arg(long)]
+        base: String,
+        /// Head revision (default `HEAD`).
+        #[arg(long, default_value = "HEAD")]
+        head: String,
+    },
     /// Remove entries whose key matches the configured `[map].exclude` globs —
     /// the non-spec-bearing paths (lockfiles, manifests, generated artifacts,
     /// docs). Idempotent. `build`/`sync` also apply exclusion, so this mainly
@@ -403,6 +427,14 @@ fn run(cli: &Cli) -> Result<u8> {
     // `pending` is the SessionStart hook entry point: best-effort, never errors.
     if let Some(Command::Pending) = &cli.command {
         return Ok(pending(cli));
+    }
+
+    // `map gate-check` audits nothing, so it must not require audit areas.
+    if let Some(Command::Map {
+        action: MapAction::GateCheck { base, head },
+    }) = &cli.command
+    {
+        return gate_check(cli, base, head);
     }
 
     let l = load(cli)?;
@@ -1871,6 +1903,8 @@ fn run_map(cli: &Cli, l: &Loaded, action: &MapAction) -> Result<u8> {
             }
         }
         MapAction::Search { query, k, json } => run_map_search(l, &map_path, query, *k, *json),
+        // Handled in `run` before `load` (it must not require audit areas).
+        MapAction::GateCheck { base, head } => gate_check(cli, base, head),
         MapAction::Build | MapAction::Sync => {
             let override_ref = cli
                 .baseline
@@ -1980,6 +2014,57 @@ fn run_map(cli: &Cli, l: &Loaded, action: &MapAction) -> Result<u8> {
             Ok(EXIT_OK)
         }
     }
+}
+
+/// `specguard map gate-check` (backlog 0c277117) — see `gatecheck.rs`. Loads
+/// the config without the audit-only area requirement; any load error is an
+/// `Err`, which `main` maps to exit 2 (undetermined), never 0.
+fn gate_check(cli: &Cli, base: &str, head: &str) -> Result<u8> {
+    let cfg = Config::load_without_areas(&cli.config)?;
+    let config_dir = cli
+        .config
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let repo_root = canonicalize(&config_dir.join(&cfg.project.root))
+        .with_context(|| "resolving project.root")?;
+    let map_path = repo_root.join(&cfg.map.path);
+    let exclude = specmap::compile_globs(&cfg.map.exclude)?;
+    let ack_path = repo_root.join(gatecheck::ACK_PATH);
+    let verdict = gatecheck::check(&gatecheck::GateCheck {
+        repo_root: &repo_root,
+        map_path: &map_path,
+        ack_path: &ack_path,
+        base,
+        head,
+        exclude: &exclude,
+        gates: harness_core::fleet::BLOCKING_GATES,
+    });
+    Ok(match &verdict {
+        harness_core::verdict::Verdict::Clean(_) => {
+            println!("specguard map gate-check: ok ({base}..{head})");
+            EXIT_OK
+        }
+        harness_core::verdict::Verdict::Violation(r) => {
+            println!(
+                "specguard map gate-check: BLOCKED — gate map entries changed in \
+                     {base}..{head} without a spec doc:\n  {}\n\
+                     Fix: `specguard map set-spec <entry> docs/specs/<gate>.md --reason \
+                     \"<why>\"`, or add \
+                     [[ack]] path/reason to {} (reason required).",
+                r.as_str(),
+                gatecheck::ACK_PATH
+            );
+            EXIT_GATE_MISSING_SPEC
+        }
+        harness_core::verdict::Verdict::Undetermined(u) => {
+            eprintln!(
+                "specguard map gate-check: cannot determine (blocking): {}",
+                u.as_str()
+            );
+            EXIT_GATE_UNDETERMINED
+        }
+    })
 }
 
 /// Map-driven CORRECTNESS audit (read-only). Loads the persisted spec-map store

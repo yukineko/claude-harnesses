@@ -30,11 +30,27 @@
 //! sync** as the skeleton the consumer refines. The deterministic sync cannot
 //! know feature/endpoint boundaries, so on its own it keys a newly-seen file by
 //! its own path and classifies it into `impl_files`/`test_files` via the simple
-//! documented heuristic [`classify_path`]; a consumer later merges those
-//! per-file skeleton entries into real feature/endpoint entries (multiple files
-//! under one key, an `api` ref, `client_refs`) and sets a `spec_doc`. Once a
-//! consumer has done so, subsequent deterministic syncs find the owning entry by
-//! path and update it in place.
+//! documented heuristic [`classify_path`].
+//!
+//! The impl↔test relation is written deterministically, by three writers:
+//!   * [`SpecMap::relate_tests`] (run on every sync) merges a test file's
+//!     per-file skeleton into the implementation entry that the path heuristic
+//!     [`test_impl_candidates`] names: a same-named file under `src/`
+//!     (`tests/foo.rs` → `src/foo.rs`), else the crate root (`src/lib.rs`, then
+//!     `src/main.rs`) for a Cargo integration test, or the affix-named sibling
+//!     (`foo_test.rs` → `foo.rs`). A test it cannot attribute stays test-only.
+//!   * [`SpecMap::mark_inline_tests`] (run on every sync) lists a `.rs` impl
+//!     file that carries its own `#[test]` functions in `test_files` too.
+//!   * [`SpecMap::link_test`] (`specguard map link`) relates a test to an entry
+//!     explicitly, for relations the heuristic cannot see.
+//!
+//! Because the relation is heuristic, an empty `test_files` means "no test was
+//! attributed", not "no test exists": a crate's integration tests are related
+//! to its root file only, so its other files stay untested until linked.
+//! Merging per-file entries into real feature/endpoint entries (multiple impl
+//! files under one key, an `api` ref, `client_refs`, a `spec_doc`) is still the
+//! consumer's edit; once done, subsequent deterministic syncs find the owning
+//! entry by path and update it in place.
 //!
 //! ## Layers (kept separate so derivation is unit-testable without git)
 //!   * [`SpecMap`] — the TOML-persisted store: [`SpecMap::load`],
@@ -148,7 +164,10 @@ pub struct MapEntry {
     /// Implementation / server-code file paths realizing this entry.
     #[serde(default)]
     pub impl_files: Vec<String>,
-    /// Test file paths exercising this entry.
+    /// Test file paths exercising this entry. Written by the sync's
+    /// deterministic relation (see the module docs), by `specguard map link`,
+    /// or by a consumer. An implementation file that carries its own `#[test]`
+    /// functions is listed here as well as in `impl_files`.
     #[serde(default)]
     pub test_files: Vec<String>,
     /// Client-side call sites (files) that call this entry's api/url.
@@ -239,6 +258,20 @@ impl MapEntry {
     /// True when no implementation or test file remains attributed.
     fn is_orphaned(&self) -> bool {
         self.impl_files.is_empty() && self.test_files.is_empty()
+    }
+
+    /// True when this entry is the untouched per-file skeleton the sync created
+    /// for the test file `key` and nothing else: no impl files, exactly that one
+    /// test file, no spec-doc, no endpoint data. Only such an entry is merged by
+    /// [`SpecMap::relate_tests`]; anything a consumer authored is left alone.
+    fn is_test_skeleton(&self, key: &str) -> bool {
+        self.kind == EntryKind::Feature
+            && self.impl_files.is_empty()
+            && self.test_files.len() == 1
+            && self.test_files[0] == key
+            && self.spec_doc.as_deref().is_none_or(|s| s.trim().is_empty())
+            && self.client_refs.is_empty()
+            && self.api.is_none()
     }
 }
 
@@ -434,6 +467,107 @@ pub fn classify_path(path: &str) -> FileRole {
     FileRole::Impl
 }
 
+/// File names too generic to identify an implementation file by name alone
+/// (every Rust crate has one), so the unique-name rule of
+/// [`test_impl_candidates`] never matches them.
+const GENERIC_FILE_NAMES: &[&str] = &["lib.rs", "main.rs", "mod.rs"];
+
+/// The file name a test file names by affix: `foo_test.rs` / `test_foo.rs` →
+/// `foo.rs`, `foo.test.ts` → `foo.ts`. `None` when the name carries no such
+/// affix (or stripping it leaves nothing).
+fn strip_test_affix(file: &str) -> Option<String> {
+    if let Some(i) = file.find(".test.") {
+        let (stem, rest) = (&file[..i], &file[i + ".test".len()..]);
+        return (!stem.is_empty()).then(|| format!("{stem}{rest}"));
+    }
+    let (stem, ext) = match file.split_once('.') {
+        Some((s, e)) => (s, format!(".{e}")),
+        None => (file, String::new()),
+    };
+    let base = stem
+        .strip_suffix("_test")
+        .or_else(|| stem.strip_prefix("test_"))?;
+    (!base.is_empty()).then(|| format!("{base}{ext}"))
+}
+
+/// A rule of the test→implementation attribution heuristic, most specific
+/// first. [`test_impl_candidates`] returns one of these per test path; the
+/// caller takes the first rule that names exactly one mapped impl file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Candidate {
+    /// This exact impl path.
+    Path(String),
+    /// The unique impl file under `dir` whose file name is `name`.
+    UniqueName { dir: String, name: String },
+}
+
+/// Pure: the ordered candidate implementation files a test path is
+/// attributed to by the deterministic heuristic (no filesystem, no map).
+///
+///   * Test file next to its implementation, named by affix
+///     (`src/foo_test.rs`, `web/button.test.ts`, `pkg/test_foo.py` with no
+///     `tests`/`test` directory in the path): the sibling `src/foo.rs` /
+///     `web/button.ts` / `pkg/foo.py`.
+///   * Test file under a `tests`/`test` directory (`<root>/tests/<rest>`):
+///     1. the mirrored path `<root>/src/<rest>` (`tests/a/foo.rs` →
+///        `src/a/foo.rs`);
+///     2. the unique impl file under `<root>/src/` with the same file name
+///        (never `lib.rs`/`main.rs`/`mod.rs` — see [`GENERIC_FILE_NAMES`]);
+///     3. the crate root `<root>/src/lib.rs`, then `<root>/src/main.rs` — a
+///        Cargo integration test (`tests/*.rs`) exercises the crate through
+///        its root, so it is attributed there rather than dropped.
+///
+/// Anything else yields no candidate and stays a test-only entry: an
+/// unattributable test is never attached to an arbitrary entry.
+fn test_impl_candidates(test_path: &str) -> Vec<Candidate> {
+    let norm = test_path.replace('\\', "/");
+    let segs: Vec<&str> = norm.split('/').collect();
+    let Some(t) = segs.iter().position(|s| *s == "tests" || *s == "test") else {
+        // Affix-named test beside its implementation.
+        let (dir, file) = match norm.rsplit_once('/') {
+            Some((d, f)) => (format!("{d}/"), f),
+            None => (String::new(), norm.as_str()),
+        };
+        return strip_test_affix(file)
+            .map(|impl_name| vec![Candidate::Path(format!("{dir}{impl_name}"))])
+            .unwrap_or_default();
+    };
+    let root: String = segs[..t].iter().map(|s| format!("{s}/")).collect();
+    let rest = segs[t + 1..].join("/");
+    if rest.is_empty() {
+        return Vec::new();
+    }
+    let file = segs[segs.len() - 1];
+    let src = format!("{root}src/");
+    let mut out = vec![Candidate::Path(format!("{src}{rest}"))];
+    if !GENERIC_FILE_NAMES.contains(&file) {
+        out.push(Candidate::UniqueName {
+            dir: src.clone(),
+            name: file.to_string(),
+        });
+    }
+    out.push(Candidate::Path(format!("{src}lib.rs")));
+    out.push(Candidate::Path(format!("{src}main.rs")));
+    out
+}
+
+/// Lexical: does this Rust source carry its own tests — a line-leading
+/// `#[test]` attribute or a `#[<path>::test]` one (`#[tokio::test]`)? Covers
+/// an inline `#[cfg(test)] mod tests { … }` in the implementation file, and a
+/// `tests.rs` submodule file whose functions carry `#[test]`. A mention inside
+/// a comment or doc comment does not start the line and is not counted.
+pub fn has_inline_tests(source: &str) -> bool {
+    source.lines().any(|l| {
+        let l = l.trim_start();
+        l.starts_with("#[test]")
+            || (l.starts_with("#[")
+                && l[2..]
+                    .split([']', '('])
+                    .next()
+                    .is_some_and(|attr| attr.ends_with("::test")))
+    })
+}
+
 /// True when `code` is a git `--name-status` status token: a leading status
 /// letter (`A`/`M`/`D`/`R`/`C`/`T`) optionally followed by a similarity score
 /// (e.g. `R100`). Checked against the *raw* first field (no leading-whitespace
@@ -573,9 +707,11 @@ impl SpecMap {
     /// `last_ref`. Behaviour:
     ///   * `A`/`M`/`T` (added/modified) → attribute the path via
     ///     [`classify_path`]. If an existing entry already owns it, add it to the
-    ///     correct vector there and mark that entry `Changed`. Otherwise create a
-    ///     new skeleton entry keyed by the path itself (a consumer merges it into
-    ///     a real feature/endpoint later), status `Changed`.
+    ///     correct vector there and mark that entry `Changed`. Otherwise create
+    ///     a new skeleton entry keyed by the path itself, status `Changed`.
+    ///   * after the batch, [`SpecMap::relate_tests`] merges every test-only
+    ///     skeleton the heuristic can attribute into its implementation entry,
+    ///     so the relation does not depend on the order git listed the files.
     ///   * `R`/`C` (renamed) → detach the old path from its owning entry and
     ///     attribute the new path.
     ///   * `D` (deleted) → detach the path from its owning entry; if that leaves
@@ -604,14 +740,180 @@ impl SpecMap {
                 Change::Deleted(p) => self.detach_path(p, synced_ref),
             }
         }
+        self.relate_tests();
         if !synced_ref.is_empty() {
             self.last_synced = synced_ref.to_string();
         }
     }
 
+    /// The key of the entry that holds `impl_path` in its `impl_files`.
+    fn key_owning_impl(&self, impl_path: &str) -> Option<String> {
+        self.entries
+            .iter()
+            .find(|(_, e)| e.impl_files.iter().any(|p| p == impl_path))
+            .map(|(k, _)| k.clone())
+    }
+
+    /// The entry a test file is attributed to by the deterministic heuristic
+    /// ([`test_impl_candidates`]): the first candidate rule naming exactly one
+    /// mapped implementation file wins. `None` for a non-test path or when no
+    /// rule resolves — the caller then keeps the test in its own entry.
+    fn heuristic_owner(&self, test_path: &str) -> Option<String> {
+        if classify_path(test_path) != FileRole::Test {
+            return None;
+        }
+        for cand in test_impl_candidates(test_path) {
+            match cand {
+                Candidate::Path(p) => {
+                    if let Some(k) = self.key_owning_impl(&p) {
+                        return Some(k);
+                    }
+                }
+                Candidate::UniqueName { dir, name } => {
+                    let mut hits = self.entries.iter().flat_map(|(k, e)| {
+                        e.impl_files
+                            .iter()
+                            .filter(|p| {
+                                p.strip_prefix(dir.as_str())
+                                    .is_some_and(|r| r == name || r.ends_with(&format!("/{name}")))
+                            })
+                            .map(move |_| k)
+                    });
+                    if let (Some(k), None) = (hits.next(), hits.next()) {
+                        return Some(k.clone());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Relate test files to implementation entries: every test-only skeleton
+    /// entry (see [`MapEntry::is_test_skeleton`]) whose test file the
+    /// heuristic attributes to an implementation entry is merged into that
+    /// entry's `test_files` and removed. A test the heuristic cannot attribute
+    /// keeps its own test-only entry; consumer-authored entries are never
+    /// touched. Pure — no I/O. Returns the merged test paths (sorted).
+    ///
+    /// Run after every sync so the result does not depend on the order in
+    /// which git listed a test and its implementation. Once merged, later syncs
+    /// find the test through [`SpecMap::key_owning`] and update it in place.
+    pub fn relate_tests(&mut self) -> Vec<String> {
+        let skeletons: Vec<String> = self
+            .entries
+            .iter()
+            .filter(|(k, e)| e.is_test_skeleton(k))
+            .map(|(k, _)| k.clone())
+            .collect();
+        let mut merged = Vec::new();
+        for test in skeletons {
+            let Some(owner) = self.heuristic_owner(&test) else {
+                continue;
+            };
+            if owner == test {
+                continue;
+            }
+            let Some(skel) = self.entries.remove(&test) else {
+                continue;
+            };
+            let Some(entry) = self.entries.get_mut(&owner) else {
+                // `heuristic_owner` just returned `owner` from this map, so
+                // this arm is unreachable; put the skeleton back rather than
+                // lose the test.
+                self.entries.insert(test, skel);
+                continue;
+            };
+            entry.add_path(&test, FileRole::Test);
+            if skel.status == Status::Changed {
+                entry.status = Status::Changed;
+            }
+            if skel.last_ref.is_some() {
+                entry.last_ref = skel.last_ref;
+            }
+            merged.push(test);
+        }
+        merged
+    }
+
+    /// Credit implementation files that carry their own tests
+    /// ([`has_inline_tests`]): such a `.rs` file is listed in its entry's
+    /// `test_files` as well as its `impl_files`. Recomputed from disk for every
+    /// entry on each call, so the credit disappears when the tests do. An absent
+    /// file gets no credit (the audit reports it as a dangling reference). A
+    /// file that cannot be read gets NO credit either — "could not check" must
+    /// not read as "tested" (the entry is then reported untested, the
+    /// restrictive side) — and is returned, with the reason, so the caller can
+    /// say which entries were not checked rather than let the gap pass silently.
+    pub fn mark_inline_tests(&mut self, repo_root: &Path) -> Vec<String> {
+        let mut unreadable = Vec::new();
+        for entry in self.entries.values_mut() {
+            let impls = entry.impl_files.clone();
+            for f in impls {
+                let tested = f.ends_with(".rs")
+                    && match harness_core::boundary::read_to_string(&repo_root.join(&f)) {
+                        Determination::Known(src) => src.is_some_and(|s| has_inline_tests(&s)),
+                        Determination::Undetermined(u) => {
+                            unreadable.push(format!("{f}: {}", u.as_str()));
+                            false
+                        }
+                    };
+                let listed = entry.test_files.contains(&f);
+                if tested {
+                    if !listed {
+                        entry.test_files.push(f);
+                        entry.test_files.sort();
+                    }
+                } else if listed {
+                    entry.test_files.retain(|p| *p != f);
+                }
+            }
+        }
+        unreadable
+    }
+
+    /// Explicit writer: relate `test_path` to the entry `key` by moving it into
+    /// that entry's `test_files` (detaching it from any other entry and dropping
+    /// the test-only skeleton that held it). This is the deterministic override
+    /// for a relation the heuristic cannot see; later syncs keep it because
+    /// [`SpecMap::key_owning`] finds the test in `key`. Errors when `key` is not
+    /// in the map. Pure — no I/O; the caller checks the file exists.
+    pub fn link_test(&mut self, test_path: &str, key: &str) -> Result<()> {
+        if !self.entries.contains_key(key) {
+            anyhow::bail!("no map entry with key '{key}'");
+        }
+        let holders: Vec<String> = self
+            .entries
+            .iter()
+            .filter(|(k, e)| k.as_str() != key && e.has_path(test_path))
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in holders {
+            let drop = self
+                .entries
+                .get(&k)
+                .is_some_and(|e| e.is_test_skeleton(&k) && k == test_path);
+            if drop {
+                self.entries.remove(&k);
+            } else if let Some(e) = self.entries.get_mut(&k) {
+                e.remove_path(test_path);
+                if e.is_orphaned() {
+                    e.status = Status::Missing;
+                }
+            }
+        }
+        if let Some(e) = self.entries.get_mut(key) {
+            if !e.test_files.iter().any(|p| p == test_path) {
+                e.test_files.push(test_path.to_string());
+                e.test_files.sort();
+            }
+        }
+        Ok(())
+    }
+
     /// Attribute a changed/added path into the map: into its owning entry if one
     /// exists, else into a fresh path-keyed skeleton entry. Marks the entry
-    /// `Changed`.
+    /// `Changed`. A new test file's skeleton is merged into its implementation
+    /// entry afterwards, by [`SpecMap::relate_tests`] at the end of the batch.
     fn attribute_path(&mut self, path: &str, synced_ref: &str) {
         let role = classify_path(path);
         let last_ref = ref_opt(synced_ref);
@@ -649,8 +951,12 @@ impl SpecMap {
     /// Reconcile the map against `git log --name-status <baseline>..HEAD`, run
     /// from `repo_root`. Parses the name-status output (via [`parse_name_status`])
     /// and reflects it (via [`apply_changes`]). `synced_ref` is stamped onto every
-    /// touched entry (typically the current HEAD). The git invocation is the only
-    /// impure part; the derivation is delegated to the pure helpers above.
+    /// touched entry (typically the current HEAD). Then credits implementation
+    /// files that carry their own tests (via [`SpecMap::mark_inline_tests`],
+    /// which reads the files under `repo_root`). The git invocation and that
+    /// read are the only impure parts; the derivation is delegated to the pure
+    /// helpers above. Returns the impl files whose inline tests could not be
+    /// checked (see [`SpecMap::mark_inline_tests`]).
     ///
     /// [`apply_changes`]: SpecMap::apply_changes
     pub fn sync(
@@ -660,11 +966,11 @@ impl SpecMap {
         spec_dir: &str,
         synced_ref: &str,
         exclude: &GlobSet,
-    ) -> Result<()> {
+    ) -> Result<Vec<String>> {
         let text = git_log_name_status(repo_root, baseline)?;
         let changes = filter_excluded(parse_name_status(&text), exclude);
         self.apply_changes(&changes, spec_dir, synced_ref);
-        Ok(())
+        Ok(self.mark_inline_tests(repo_root))
     }
 
     /// Remove every entry whose key matches one of the `exclude` globs — the

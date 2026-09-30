@@ -42,14 +42,15 @@ use harness_core::interrogate::{ScopeDeclaration, ScopeDraft};
 use harness_core::verdict::{Determination, Required};
 
 /// The sanctioned consumption shape: `require()` forces both arms to be
-/// written, and the blocked arm hands back an already-fail-closed `Verdict`
-/// instead of a permissive empty declaration.
+/// written, and the blocked arm hands back the forwarded give-up (convertible
+/// only to the fail-closed `Verdict::Undetermined`) instead of a permissive
+/// empty declaration.
 fn resolve(draft: ScopeDraft) -> Result<ScopeDeclaration, String> {
     let determination: Determination<ScopeDeclaration> = draft.declare();
     match determination.require() {
         Required::Determined(decl) => Ok(decl),
         // Fail closed: no empty/default declaration is substituted here.
-        Required::Blocked(verdict) => Err(format!("{verdict:?}")),
+        Required::Blocked(why) => Err(format!("{:?}", why.into_verdict())),
     }
 }
 

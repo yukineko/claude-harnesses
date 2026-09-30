@@ -192,12 +192,7 @@ pub fn build_review_brief(
             Required::Determined(false) => {}
             Required::Blocked(verdict) => {
                 if undetermined_why.is_none() {
-                    undetermined_why = Some(
-                        verdict
-                            .reason()
-                            .map(|r| r.as_str().to_string())
-                            .unwrap_or_else(|| "sensitive-path check undetermined".to_string()),
-                    );
+                    undetermined_why = Some(verdict.as_str().to_string());
                 }
                 sensitive_files.push(f.clone());
             }

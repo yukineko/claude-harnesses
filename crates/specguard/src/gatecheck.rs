@@ -128,19 +128,19 @@ pub struct GateCheck<'a> {
 pub fn check(gc: &GateCheck<'_>) -> Verdict {
     let map = match read_map(gc.map_path).require() {
         Required::Determined(m) => m,
-        Required::Blocked(v) => return v,
+        Required::Blocked(v) => return v.into_verdict(),
     };
     let acked = match read_acks(gc.ack_path).require() {
         Required::Determined(a) => a,
-        Required::Blocked(v) => return v,
+        Required::Blocked(v) => return v.into_verdict(),
     };
     let specs = match read_specs(gc.spec_docs_path).require() {
         Required::Determined(s) => s,
-        Required::Blocked(v) => return v,
+        Required::Blocked(v) => return v.into_verdict(),
     };
     let changed = match changed_paths(gc.repo_root, gc.base, gc.head).require() {
         Required::Determined(c) => c,
-        Required::Blocked(v) => return v,
+        Required::Blocked(v) => return v.into_verdict(),
     };
     let gate_changed: Vec<Changed> = changed
         .into_iter()
@@ -162,7 +162,7 @@ pub fn check(gc: &GateCheck<'_>) -> Verdict {
     };
     let bindings = match validate_bindings(gc.repo_root, specs).require() {
         Required::Determined(b) => b,
-        Required::Blocked(v) => return v,
+        Required::Blocked(v) => return v.into_verdict(),
     };
     evaluate(&map, &acked, &bindings, &gate_changed)
 }
@@ -282,7 +282,7 @@ fn read_map(path: &Path) -> Determination<Option<SpecMap>> {
                 path.display()
             )),
         },
-        Required::Blocked(v) => forward(v),
+        Required::Blocked(v) => v.into_determination(),
     }
 }
 
@@ -303,7 +303,7 @@ fn read_acks(path: &Path) -> Determination<BTreeSet<String>> {
                 path.display()
             )),
         },
-        Required::Blocked(v) => forward(v),
+        Required::Blocked(v) => v.into_determination(),
     }
 }
 
@@ -323,7 +323,7 @@ fn read_specs(path: &Path) -> Determination<Vec<SpecBinding>> {
                 path.display()
             )),
         },
-        Required::Blocked(v) => forward(v),
+        Required::Blocked(v) => v.into_determination(),
     }
 }
 
@@ -337,7 +337,7 @@ fn validate_bindings(repo_root: &Path, specs: Vec<SpecBinding>) -> Determination
                 Required::Determined(p) => {
                     seen.insert(b.doc.clone(), p);
                 }
-                Required::Blocked(v) => return forward(v),
+                Required::Blocked(v) => return v.into_determination(),
             }
         }
         let verdict = match seen.get(&b.doc) {
@@ -381,25 +381,14 @@ fn doc_problem(repo_root: &Path, doc: &str) -> Determination<Option<String>> {
         Required::Determined(Some(_)) => Determination::known(Some(format!("{doc}: is empty"))),
         // Present a moment ago; gone now. Not a pass either way.
         Required::Determined(None) => Determination::known(Some(format!("{doc}: does not exist"))),
-        Required::Blocked(v) => forward(v),
-    }
-}
-
-/// Forward a blocked verdict from an inner step as this step's undetermined,
-/// keeping the original payload (forwarding does not re-record the give-up).
-fn forward<T>(v: Verdict) -> Determination<T> {
-    match v {
-        Verdict::Undetermined(u) => Determination::Undetermined(u),
-        // `require()` only ever blocks with `Undetermined`; anything else here is
-        // a contract break, which is still not a pass.
-        other => Determination::undetermined(format!("unexpected blocked verdict {other:?}")),
+        Required::Blocked(v) => v.into_determination(),
     }
 }
 
 fn git(repo_root: &Path, args: &[&str]) -> Determination<String> {
     match boundary::run(Command::new("git").arg("-C").arg(repo_root).args(args)).require() {
         Required::Determined(out) => out.stdout_on_success(),
-        Required::Blocked(v) => forward(v),
+        Required::Blocked(v) => v.into_determination(),
     }
 }
 
@@ -415,18 +404,18 @@ fn resolve_rev(repo_root: &Path, rev: &str) -> Determination<String> {
         Required::Determined(_) => {
             Determination::undetermined(format!("git rev-parse printed nothing for {rev:?}"))
         }
-        Required::Blocked(v) => forward(v),
+        Required::Blocked(v) => v.into_determination(),
     }
 }
 
 fn changed_paths(repo_root: &Path, base: &str, head: &str) -> Determination<Vec<Changed>> {
     let b = match resolve_rev(repo_root, base).require() {
         Required::Determined(s) => s,
-        Required::Blocked(v) => return forward(v),
+        Required::Blocked(v) => return v.into_determination(),
     };
     let h = match resolve_rev(repo_root, head).require() {
         Required::Determined(s) => s,
-        Required::Blocked(v) => return forward(v),
+        Required::Blocked(v) => return v.into_determination(),
     };
     match git(
         repo_root,
@@ -435,7 +424,7 @@ fn changed_paths(repo_root: &Path, base: &str, head: &str) -> Determination<Vec<
     .require()
     {
         Required::Determined(out) => parse_name_status_z(&out),
-        Required::Blocked(v) => forward(v),
+        Required::Blocked(v) => v.into_determination(),
     }
 }
 

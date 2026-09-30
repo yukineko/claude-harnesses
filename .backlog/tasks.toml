@@ -1,52 +1,4 @@
 [[task]]
-id = "8acb117a"
-title = "superseded な plugin version dir の wrapper が新バイナリを実行している疑い — version pin と canary rollback が実効しているか未判定"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "rollout",
-    "deploy-verify",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-実測 2026-08-06、測定点 a4b24edc、rollout 直後: ~/.claude/plugins/cache/yukineko/donegate/0.1.7/bin/donegate status を叩くと、0.1.24 で入れたばかりの新挙動 (trust: trusted (inherited -- this is a worktree of ...)) が出力された。0.1.7 は superseded な version dir であり、live session が掴んでいるため prune 対象外として保持されている (rollout ログ: 83 superseded dir(s) remain, all held by a live session)。つまり version dir 名が、そこで実行されるコードを一意に特定していない可能性がある。考えられる読みは2つで、どちらかは未判定: (a) rebuild-plugins.sh が既存の全 version dir へバイナリを swap しており、0.1.7 に pin された稼働セッションが黙って新コードを実行している。これが本当なら version pin の契約が破れており、canary rollback (前の version dir へ re-point する設計) も実効しないことになる ため GATE crate の安全機構に直結する。(b) bin/<name> が単一の共有バイナリへ解決する shim にすぎず、version dir はアセットのみを持つ。この場合 pin の意味はもともとアセット限定であり、想定内。判定方法: 各 version dir の bin/<name> の実体 (シンボリックリンクか実ファイルか、inode、mtime) を測り、rebuild-plugins.sh が書き込む対象を読むこと。あわせて canary の rollback 経路が実際に旧コードへ戻せるかを、フォールト注入で観測すること (rollback したのに新コードが動くなら、それは rollback したふりである)。注意: check-plugin-rollout.py は rc=0 (41 plugin が file-for-file 一致) を返しており、この検証はこの現象を捕まえていない。
-
-
---- 2026-08-07 追記: 読み (a) が観測で確定した。疑いではない ---
-
-観測手順と値（測定点 b53ef5b2、backlog を --plugin backlog で反映した直後）:
-1. shasum -a 256 を 0.2.13 と 0.2.16 の bin/backlog-darwin-arm64 に対して実行したところ、
-   両者は 1d75986d76f9ef125a9c71150a40605f9a1b52c183232757ad27b79eaa645815 で完全一致した。
-   これは「ビルドが再現可能か」の主張ではなく、ディスク上の 2 ファイルが同一かどうかの同一性比較である。
-2. ls -la ~/.claude/plugins/cache/yukineko/backlog/*/bin/backlog-darwin-arm64 は 4 つの version dir
-   （0.1.6 / 0.2.12 / 0.2.13 / 0.2.16）すべてが size 1238512、mtime Aug 7 03:41 を返した。
-   Aug 7 03:41 は本セッションの rollout の実行時刻である。
-3. したがって rollout は superseded な version dir のバイナリも上書きしている。
-   0.1.6 に pin された稼働セッションは 0.2.16 のコードを実行している。
-
-含意（本チケットの起票時に「これが本当なら」と書かれていた側が成立した）:
-- version dir 名は、そこで実行されるコードを一意に特定していない。version pin の契約は破れている。
-- canary rollback は「前の version dir へ re-point する」設計なので、re-point しても同じ新バイナリを
-  実行することになり、ロールバックしたふりになる。GATE crate の安全機構に直結する。
-- check-plugin-rollout.py は rc=0（41 plugin が file-for-file 一致）を返しており、この現象を
-  捕まえていない。それどころか「全 version dir が同一である」ことが一致条件を満たす方向に働く。
-
-未確認のまま残していること:
-- rebuild-plugins.sh / sync-plugin-assets.sh のどちらが superseded dir へ書いているかは特定していない。
-- backlog 以外の plugin でも同じかは測っていない（backlog 1 本の観測である）。
-- rollback を実際にフォールト注入で試して「旧コードへ戻らない」ことは観測していない。
-  上の 1-3 は「同一バイナリが置かれている」ことの観測であり、rollback 経路そのものの観測ではない。
-
-2026-10-01 ユーザー裁定: 古い version dir は凍結する (rollout は現在の version dir だけに書く。実行中セッションは再起動まで旧コード)。RED は p1/verpin の 13e108fc。現在版は repo の plugin.json の version。"""
-created_at = 1786023356
-updated_at = 1790795045
-weight = 0.0
-issue_number = 190
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/190"
-
-[[task]]
 id = "a498a074"
 title = "blastguard の展開 ask を、同一コマンド内の literal 代入とループ変数だけ解決して減らす (環境由来は Ask 維持)"
 project = "/Users/yuki/src/harness"
@@ -1277,74 +1229,6 @@ updated_at = 1785969188
 weight = 0.0
 issue_number = 177
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/177"
-
-[[task]]
-id = "e269274f"
-title = "Determination を直接 match する 40+ 箇所の Undetermined 腕が全数監査されていない"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-敵対的監査 (2026-08-06) が自ら UNVERIFIED として残した項目。棄却ではなく未検証なので、CLAUDE.md 第6節「反証にも同じ立証責任を課す」に従い残す。
-
-監査者の記述をそのまま引く: Determination を直接 match する 40+ 箇所の全数監査はしていない。autoflow/src/lock.rs 2 箇所と autoflow/src/backlog.rs / backlog/src/driver.rs の冒頭のみ読んだ。Undetermined 腕が permissive な箇所が残っている可能性は棄却できない。
-
-読んだ範囲 (autoflow/src/lock.rs:53-58,120-126) はいずれも制限側で、根拠もコメントで明示されていた。つまり「見た分は健全」であって「全部健全」ではない。
-
-この形が危険なのは 2 つの穴が重なるため: (a) Determination::Known が pub variant なので require() を経由しない直接 match という抽出路が存在し、型はそこを見ていない。(b) check-fail-open.py も Required::Blocked 綴りを見ていない (別項目)。型と lexical gate の両方が見ていない領域に 40+ 箇所ある。
-
-対照的に require() 経由の 45 箇所は全件目視され、制限側でない腕は 0 件だった。差は経路であって規律ではない。
-
-完了条件: 直接 match の全箇所を列挙し、各 Undetermined 腕がどちら側へ倒れているかを file:line つきで表にする。permissive な箇所があれば是正。監査は利害のない agent が行う。
-
-[triage 2026-09-29 @b325a169] p2->p1: 281 Determination::Undetermined arms outside harness-core never audited as a whole"""
-created_at = 1785969190
-updated_at = 1790631015
-weight = 0.0
-issue_number = 179
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/179"
-
-[[task]]
-id = "f71ac81a"
-title = "reviewgate の diff_text はタイムアウト境界を通らない生 Command::output"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "verified",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "検証者が propguard との差分を実測。crates/reviewgate/src/git.rs:135-143 の run_diff は raw Command::output() で、boundary::run_with_timeout を通らない = 時間上限が一切ない (propguard の CA-propguard-006 相当の修正が入っていない)。さらに from_utf8_lossy を使うため propguard が RED テストで固定した『デコード不能バイト』の欠陥はここでは再現しない。reviewgate の実際の穴は if let Ok(o) (spawn 失敗) / if o.status.success() (非ゼロ終了) / git.rs:121 の if let Ok(content) = read_to_string。docs/audit-reviewgate-verdict-paths.md の A4 は記録済みだが『propguard と同型』という理解でテスト群を移植すると空振りする。"
-created_at = 1785972084
-updated_at = 1785972084
-weight = 0.0
-issue_number = 186
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/186"
-
-[[task]]
-id = "4cacdfae"
-title = "harness_core::trust の worktree 継承を残り 5 consumer へ展開するか判定する (reviewgate/precommit-audit/propguard/tdd/beacon)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "trust",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "donegate は abbd2f1b で harness_core::trust::resolve (worktree 継承つき三値) へ移行したが、同じ trust 機構に乗る他 5 consumer は exact-match の is_trusted のままで、CLAUDE.md 8 が作業を義務づける worktree では project config が黙って無視され続ける。実測 2026-08-06 測定点 401821df、grep -rn harness_core::trust --include=*.rs crates/ で確定: reviewgate/src/config.rs:193 / precommit-audit/src/main.rs:241 / propguard/src/config.rs:209 / tdd/src/config.rs:246 / beacon/src/config.rs:150。tdd は同じ穴を逆向きに解決していることが実測済み (tdd.toml is not trusted; ignoring it -> transition unknown -> condukt state set --status verified が拒否)。つまり donegate と tdd は同一入力に対して反対の解決をしていた状態で、donegate 側だけが是正された。各 consumer の untrusted の意味は一律ではない (gate は refusal=block、beacon の command は home config へ fallback で妥当かもしれない) ので、一括置換ではなく consumer ごとに untrusted の意味を判定すること。完了条件: 5 件それぞれについて worktree で project config が読まれるか / untrusted がどちら側に解決すべきかを判定し、判定結果を実測で固定するか、変更しない理由を明記して残すこと。"
-created_at = 1786021777
-updated_at = 1786021777
-weight = 0.0
-issue_number = 187
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/187"
 
 [[task]]
 id = "b71c72a7"
@@ -4122,9 +4006,11 @@ push がブロックされる」ことに限られるが、誤検知であるこ
 ORIG_HEAD と HEAD の関係で判定できる。ORIG_HEAD が HEAD の祖先なら ff であり、
 その場合 HEAD の親の数は今回の操作の産物ではないので判定に使ってはならない。
 
-関連: 36c936bc / d55f406a (同一事象の両起票)。"""
+関連: 36c936bc / d55f406a (同一事象の両起票)。
+
+再現 2026-10-01 (macOS, main 0693e289 -> 87566082): session worktree で gate green だった merge commit 87566082 を main で `git merge --ff-only` すると、ledger に UNGATED として記録されて push が止まった。1098befa でも同じことが起きた。回避は今回も、worktree 側で merge ではない gate 済み commit を 1 つ作り、tip を単一親にしてから ff すること。"""
 created_at = 1787905350
-updated_at = 1790119645
+updated_at = 1790797982
 weight = 0.0
 issue_number = 411
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/411"
@@ -12212,13 +12098,13 @@ project_unresolved = false
 tags = [
     "fail-open",
     "harness-core",
-    "p2",
+    "p0",
 ]
 touched_files = []
 status = "pending"
 notes = "5b89f0f6 で散文のみ是正 (7306810a)。tests/ui/verdict_known_holes/unsealed_paths.rs の hole 3 が現状を pin している。狭めると 61 call site / 約10 plugin crate の変更と各 3 ファイル bump が要る (測定 2026-10-01: git grep 'Required::Blocked(' 外部 61 件)。並行セッションと衝突しにくい順序・一括方法の設計が先。閉じたら fixture の hole 3 を negative fixture へ移す。"
 created_at = 1790793947
-updated_at = 1790793947
+updated_at = 1790794248
 weight = 0.0
 issue_number = 921
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/921"
@@ -12311,9 +12197,11 @@ notes = """
 
 2件目: 6becbf8d の実装者も heredoc 内の矢印 (ハイフンと大なり) をリダイレクトと解釈され拒否された。condukt schedule の矢印 force-gate と同類。
 
-3件目 (2026-10-01、orchestrator 自身): heredoc で python を流し、続けて for ループで backlog add を回す Bash が、空のパスに対する上書きリダイレクトとして拒否された (メッセージ: relative path の空文字)。コマンド中にファイルへのリダイレクトは無かった。"""
+3件目 (2026-10-01、orchestrator 自身): heredoc で python を流し、続けて for ループで backlog add を回す Bash が、空のパスに対する上書きリダイレクトとして拒否された (メッセージ: relative path の空文字)。コマンド中にファイルへのリダイレクトは無かった。
+
+4件目: 8acb117a の実装者も、python に渡す heredoc 本文中の変数を含むリダイレクト風の文字列で止められ、Edit で回避した。"""
 created_at = 1790793304
-updated_at = 1790793913
+updated_at = 1790796668
 weight = 0.0
 issue_number = 907
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/907"
@@ -12454,6 +12342,291 @@ issue_number = 919
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/919"
 
 [[task]]
+id = "33411f25"
+title = "test_precommit_hook.py が 2 件 RED: EXPECTED_SCANNERS に fail-open-diff / fault-injection-adoption / gate-protection が無い"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "再現: python3 scripts/test_precommit_hook.py -> FAILED (failures=2)。2026-10-01、df750b6d 基点の ce-gate worktree で観測。hook は既にこれらを実行しているのに、テスト側のリストが追随していない。closure-evidence を配線するときも同じ箇所を触る。"
+created_at = 1790796672
+updated_at = 1790796672
+weight = 0.0
+issue_number = 948
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/948"
+
+[[task]]
+id = "84383678"
+title = "propguard/tdd/precommit-audit: 信頼されない project config があるとき既定値へ黙って fallback する（donegate の RefusedUntrusted 型へ揃えるか判定）"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "trust",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "4cacdfae 調査 (2026-10-01 @74aad11f) の派生。propguard は untrusted な propguard.toml を無視すると done_criteria が空になり allow(no-criteria) へ到達しうる (config.rs:~233 CA-propguard-03)。precommit-audit も project の追加 rule を落とす = より緩い方向。現状の信号は eprintln のみ。donegate は Declaration::RefusedUntrusted で absence と区別し home config を代用しない。4cacdfae は trust::resolve への移行のみで、この untrusted 時の意味は変えていない。判定方法: 各 consumer で『untrusted な project file あり』の verdict を block/ask にするテストを書き、既存挙動と比較。"
+created_at = 1790793432
+updated_at = 1790793432
+weight = 0.0
+issue_number = 908
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/908"
+
+[[task]]
+id = "f58a303f"
+title = "harness-core git_probe::probe_repo の git rev-parse に timeout が無い (hung git で reviewgate/propguard 等が無期限停止)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "crates/harness-core/src/git_probe.rs:124 raw Command::output()。f71ac81a で reviewgate の diff/ls-files は run_with_timeout 化したが probe が先に走るため hang は残る。boundary::run_with_timeout へ移行し Undetermined を制限側へ。"
+created_at = 1790793819
+updated_at = 1790793819
+weight = 0.0
+issue_number = 914
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/914"
+
+[[task]]
+id = "4f81182f"
+title = "reviewgate: 非UTF-8 の tracked テキスト差分が git-scan-failed block (giveup まで) になる挙動変化を判定する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "reviewgate",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "f71ac81a で boundary が厳密 UTF-8 読みになり、旧 lossy decode でレビューされていた差分が読み取り不能扱いに。制限側だが giveup まで stop が block し続ける。propguard と同挙動。維持か bytes 読みかを決める。"
+created_at = 1790793821
+updated_at = 1790793821
+weight = 0.0
+issue_number = 915
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/915"
+
+[[task]]
+id = "7778b634"
+title = "blastguard reversible.rs:286,288: git status 失敗/timeout の GitState::Undetermined が RecoverableFromGit に潰れる — 2026-09-18 裁定の範囲内かユーザー判断"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "出典: docs/audit-determination-direct-match.md (e269274f, 測定点 74aad11f)。 decide_recovery の let _ = git (:174) / Repo => RecoverableFromGit (:188)。detect.rs:1600 で confined write が無確認許可。git が答えなかった場合を裁定に含めるか要 Ask。"
+created_at = 1790794224
+updated_at = 1790794224
+weight = 0.0
+issue_number = 926
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/926"
+
+[[task]]
+id = "b187ecea"
+title = "autoflow lock.rs:58: backlog 導入判定不能で driver active=true を返し Stop gate の block 判定前に return (main.rs:170)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "出典: docs/audit-determination-direct-match.md (e269274f, 測定点 74aad11f)。 二重駆動には制限側だが Stop gate には permissive。"
+created_at = 1790794226
+updated_at = 1790794226
+weight = 0.0
+issue_number = 927
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/927"
+
+[[task]]
+id = "2deae159"
+title = "propguard derive.rs:185: criteria_file 読み取り不能時に inline done_criteria へ黙ってフォールバック (stderr のみ)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "出典: docs/audit-determination-direct-match.md (e269274f, 測定点 74aad11f)。 別の基準でゲートが走る。"
+created_at = 1790794227
+updated_at = 1790794227
+weight = 0.0
+issue_number = 928
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/928"
+
+[[task]]
+id = "09346035"
+title = "playbook main.rs:148 / runbook main.rs:122: 読み取り不能ストアを空扱いし無言で return"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "出典: docs/audit-determination-direct-match.md (e269274f, 測定点 74aad11f)。 stderr も出ないため model は notes 欠落を知れない。"
+created_at = 1790794229
+updated_at = 1790794229
+weight = 0.0
+issue_number = 929
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/929"
+
+[[task]]
+id = "f450adad"
+title = "overwatch store.rs:376 read_jsonl_best_effort が Undetermined を Vec::new() に潰す (10 pub wrapper)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "出典: docs/audit-determination-direct-match.md (e269274f, 測定点 74aad11f)。 現消費者は全て保守側だがテストで固定されていない latent pattern。"
+created_at = 1790794231
+updated_at = 1790794231
+weight = 0.0
+issue_number = 930
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/930"
+
+[[task]]
+id = "de138f5f"
+title = "backlog main.rs:1506,1508: git remote 失敗を空文字にし 'remote is not github.com' と未観測の事実を記録"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "出典: docs/audit-determination-direct-match.md (e269274f, 測定点 74aad11f)。 "
+created_at = 1790794233
+updated_at = 1790794233
+weight = 0.0
+issue_number = 931
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/931"
+
+[[task]]
+id = "57ab8322"
+title = "backlog main.rs:1643: gh timeout を 'gh CLI not found' と誤ラベル"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p3",
+]
+touched_files = []
+status = "pending"
+notes = "出典: docs/audit-determination-direct-match.md (e269274f, 測定点 74aad11f)。 mirror_close は issue 未 close を警告するので沈黙ではない。"
+created_at = 1790794234
+updated_at = 1790794234
+weight = 0.0
+issue_number = 932
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/932"
+
+[[task]]
+id = "a81911ee"
+title = "condukt circuit.rs:506: 判定不能 idle を journal に 0 と記録 (idle_secs:i64)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p3",
+]
+touched_files = []
+status = "pending"
+notes = "出典: docs/audit-determination-direct-match.md (e269274f, 測定点 74aad11f)。 消費者はテストのみ。"
+created_at = 1790794236
+updated_at = 1790794236
+weight = 0.0
+issue_number = 933
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/933"
+
+[[task]]
+id = "285eddc7"
+title = "session-insights main.rs:203: subagent turn 数読み取り不能で過少計上、本文に unknown 表示なし"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p3",
+]
+touched_files = []
+status = "pending"
+notes = "出典: docs/audit-determination-direct-match.md (e269274f, 測定点 74aad11f)。 "
+created_at = 1790794238
+updated_at = 1790794238
+weight = 0.0
+issue_number = 934
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/934"
+
+[[task]]
+id = "0caa2c51"
+title = "specguard scope.rs:506: code-index 失敗で base file set のみ、advisory の主張にガードなし"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p3",
+]
+touched_files = []
+status = "pending"
+notes = "出典: docs/audit-determination-direct-match.md (e269274f, 測定点 74aad11f)。 "
+created_at = 1790794240
+updated_at = 1790794240
+weight = 0.0
+issue_number = 935
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/935"
+
+[[task]]
+id = "b94e1892"
+title = "context-governor/ctxrot の observability hook 6 arm: stderr に出して skip — hook stderr が人間に届くか未検証"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "出典: docs/audit-determination-direct-match.md (e269274f, 測定点 74aad11f)。 backing.rs:93, distill.rs:133, guard.rs:547, rescue.rs:78, restore.rs:69,82。届かなければ playbook と同じ silent class。"
+created_at = 1790794242
+updated_at = 1790794242
+weight = 0.0
+issue_number = 936
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/936"
+
+[[task]]
+id = "43799228"
+title = "reviewgate git_timeout_boundary: diff --/diff --cached --/ls-files -- を個別に hang させる case が無い"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "test-gap",
+    "p3",
+]
+touched_files = []
+status = "pending"
+notes = "f71ac81a verifier: 1 site の Undetermined arm 削除は既存 partial_* テストが kill するが、timeout 系テストは 3 call をまとめて hang させるので単独 site の timeout 経路を分離検証していない。"
+created_at = 1790794908
+updated_at = 1790794908
+weight = 0.0
+issue_number = 938
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/938"
+
+[[task]]
 id = "ec878b2a"
 title = "condukt autonomy_invariant が赤: flow の SKILL.md の AskUserQuestion が allowlist 13 に対し 15 件"
 project = "/Users/yuki/src/harness"
@@ -12542,3 +12715,66 @@ updated_at = 1790796469
 weight = 0.0
 issue_number = 944
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/944"
+
+[[task]]
+id = "7efbd5c6"
+title = "scripts/tests/rebuild-stage-repo-destination.sh が linux-x86_64 を決め打ちし darwin では 0 件走査で落ちる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "8acb117a で観測、main でも同じく失敗。さらに、走査したバイナリ数による空振り検査がガードより前で数えるので、linux でも古い dir の skip に気づけない。"
+created_at = 1790796668
+updated_at = 1790796668
+weight = 0.0
+issue_number = 945
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/945"
+
+[[task]]
+id = "1dbfea8d"
+title = "ship の rebuild-plugins.sh --stage-repo が --only 無しで走るので、crate か version の無いプラグインが cache にあると exit 1 になる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "8acb117a で fail-closed を入れた結果。意図どおりだが ship はエラーとして報告する。2026-10-01 時点の実 cache には該当なし (読み取りのみで確認)。"
+created_at = 1790796670
+updated_at = 1790796670
+weight = 0.0
+issue_number = 946
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/946"
+
+[[task]]
+id = "490d30cc"
+title = "rollout-plugins.sh の usage が header の 2 から 80 行しか出さず、120 行超の header が途中で切れる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "8acb117a の実装者が指摘。以前からの切り詰め。"
+created_at = 1790796671
+updated_at = 1790796671
+weight = 0.0
+issue_number = 947
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/947"
+
+[[task]]
+id = "d94d05c3"
+title = "blastguard のテスト/検証実行 (session _local) が live の overwatch violations.jsonl に記録され canary health-gate を誤 rollback させる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "canary",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "2026-10-01 04:44:28、3aa215e1 verifier の cargo test / binary 実行と同時刻に _local の blastguard violation 4件 (rm-recursive, find-exec-shell, shred, protected-path-disarm)。rollout --canary が stage 30 (tracekit, 版不変) で raw=4>2 で HALT。テストが HOME/overwatch store を隔離していないか、_local を canary 計数から除外していない。canary の判定は stage に帰属しない違反で汚染される。"
+created_at = 1790797482
+updated_at = 1790797482
+weight = 0.0
+issue_number = 951
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/951"

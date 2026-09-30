@@ -136,10 +136,7 @@ pub fn acquire_repo_primary(cfg: &Config, cwd: &Path) -> Result<RunLock> {
     let root = match repo_primary_project_root(cwd).require() {
         Required::Determined(root) => root,
         Required::Blocked(v) => {
-            let why = match v.reason() {
-                Some(r) => r.as_str().to_string(),
-                None => "no reason recorded".to_string(),
-            };
+            let why = v.as_str();
             bail!(
                 "could not determine the main worktree root for {} ({why}); \
                  refusing to mutate the primary repo unlocked, because the one \

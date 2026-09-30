@@ -347,6 +347,8 @@ mod tests {
             symbols: vec![],
             called_by: vec![],
             ambiguous_symbols: vec![],
+            reviewed_reason: None,
+            reviewed_at: None,
             api: None,
         }
     }

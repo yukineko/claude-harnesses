@@ -1291,24 +1291,6 @@ issue_number = 177
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/177"
 
 [[task]]
-id = "f71ac81a"
-title = "reviewgate の diff_text はタイムアウト境界を通らない生 Command::output"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "verified",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "検証者が propguard との差分を実測。crates/reviewgate/src/git.rs:135-143 の run_diff は raw Command::output() で、boundary::run_with_timeout を通らない = 時間上限が一切ない (propguard の CA-propguard-006 相当の修正が入っていない)。さらに from_utf8_lossy を使うため propguard が RED テストで固定した『デコード不能バイト』の欠陥はここでは再現しない。reviewgate の実際の穴は if let Ok(o) (spawn 失敗) / if o.status.success() (非ゼロ終了) / git.rs:121 の if let Ok(content) = read_to_string。docs/audit-reviewgate-verdict-paths.md の A4 は記録済みだが『propguard と同型』という理解でテスト群を移植すると空振りする。"
-created_at = 1785972084
-updated_at = 1785972084
-weight = 0.0
-issue_number = 186
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/186"
-
-[[task]]
 id = "4cacdfae"
 title = "harness_core::trust の worktree 継承を残り 5 consumer へ展開するか判定する (reviewgate/precommit-audit/propguard/tdd/beacon)"
 project = "/Users/yuki/src/harness"
@@ -12736,3 +12718,21 @@ updated_at = 1790794504
 weight = 0.0
 issue_number = 937
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/937"
+
+[[task]]
+id = "43799228"
+title = "reviewgate git_timeout_boundary: diff --/diff --cached --/ls-files -- を個別に hang させる case が無い"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "test-gap",
+    "p3",
+]
+touched_files = []
+status = "pending"
+notes = "f71ac81a verifier: 1 site の Undetermined arm 削除は既存 partial_* テストが kill するが、timeout 系テストは 3 call をまとめて hang させるので単独 site の timeout 経路を分離検証していない。"
+created_at = 1790794908
+updated_at = 1790794908
+weight = 0.0
+issue_number = 938
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/938"

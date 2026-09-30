@@ -7542,14 +7542,11 @@ fn worktree_confined(ctx: &Ctx<'_>, operands: &[&str]) -> bool {
     if !ctx.worktree_rm_eligible || operands.is_empty() {
         return false;
     }
+    // A `..` / `.` in the payload cwd is NOT checked here: by now `base` is
+    // `SafeRoots::session_cwd`, already collapsed lexically and resolved, so
+    // the raw spelling is gone. `SafeRoots::new` refuses it on the raw value
+    // and `classify_worktree` then answers `Undetermined` for every operand.
     let base = ctx.base_for("rm");
-    // The payload cwd is the base a relative operand is joined to, and `scope`
-    // collapses `..` lexically. Claude Code sends a getcwd()-style canonical
-    // path, so this never fires in practice; if it ever did, the same
-    // lexical-before-symlink hazard as an operand `..` would apply, so refuse.
-    if base.is_some_and(has_dotdot_component) {
-        return false;
-    }
     for operand in operands {
         if has_glob_meta(operand) || exclude::touches_protected(operand) {
             return false;

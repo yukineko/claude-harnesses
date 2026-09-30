@@ -150,9 +150,26 @@
 //!     before resolving symlinks and would place all four Inside. Stopped by
 //!     the `..` rule of `worktree_rm_eligible`: if any word of any `rm`
 //!     segment has a `..` component, the worktree `Allow` is not available at
-//!     all (even for a `..` that would stay inside). `detect::worktree_confined`
-//!     also refuses a base (payload cwd) with a `..` component; Claude Code
-//!     sends a canonical cwd, so that check is defence in depth.
+//!     all (even for a `..` that would stay inside).
+//!   * The same hazard in the BASE: a payload cwd `<root>/w/lnk/..` (`lnk` a
+//!     symlink out). [`normalize_abs`] would collapse it to `<root>/w` and
+//!     `rm -rf sub` would be judged Inside while the process sits in
+//!     `<lnk target's parent>` (verifier finding on 0.2.89: the refusal that
+//!     used to sit in `detect::worktree_confined` looked at the base AFTER this
+//!     module had collapsed it, so it could never fire — dead code). Stopped
+//!     by [`SafeRoots::new`], which checks the RAW payload `cwd` (and the raw
+//!     `CLAUDE_PROJECT_DIR` when it is absolute) BEFORE normalising: a `..` or
+//!     `.` component, or a cwd that is not absolute, means NO worktree storage
+//!     root is derived at all (not even `$HOME/.condukt/worktrees`) and
+//!     [`SafeRoots::classify_worktree`] answers `Undetermined` for every
+//!     operand. NOT verified: whether Claude Code persists its cwd logically
+//!     (the string bash's `cd` produced) or physically (`getcwd()`). The
+//!     reasoning, not a tested guarantee: bash's default logical `cd ..`
+//!     strips the last component of `$PWD` and then `chdir`s to that
+//!     LEXICAL parent, so in the default case the physical cwd is the
+//!     directory the logical string names, and a `..` never survives into
+//!     `$PWD`; `cd -P` yields a physical path. Either way this refusal is
+//!     applied to whatever string arrives.
 //!
 //! NOT closed by this module or by `detect`:
 //!
@@ -195,7 +212,9 @@
 //! project and gets an interactive `Ask` (hardened to `Deny` headless) whose
 //! text names the project, while the kernel deletes `<lnk target's
 //! parent>/x`. The cwd walk in `detect` also joins `cd` targets lexically, so
-//! `cd lnk/..` shifts the judged base the same way. The outcome is at most an
+//! `cd lnk/..` shifts the judged base the same way, and so does a payload cwd
+//! spelled `<project>/lnk/..` (the raw-cwd refusal in [`SafeRoots::new`]
+//! withholds only the worktree `Allow`, not this `Ask`). The outcome is at most an
 //! `Ask` a human must answer, never an `Allow`, but the question it asks is
 //! wrong. Not fixed here.
 
@@ -469,6 +488,12 @@ pub struct SafeRoots {
     /// `find -delete`, `git clean`, `chmod -R`, redirects) a confined `Ask`
     /// there, which nobody ruled on.
     worktree_roots: Vec<String>,
+    /// Why the worktree `Allow` is withheld for this whole session model, read
+    /// off the RAW payload `cwd` / `CLAUDE_PROJECT_DIR` BEFORE [`normalize_abs`]
+    /// collapses them (see [`raw_session_path_refusal`]). `Some` means
+    /// `worktree_roots` is empty and [`SafeRoots::classify_worktree`] answers
+    /// `Undetermined` with this reason.
+    worktree_refusal: Option<String>,
 }
 
 impl SafeRoots {
@@ -486,6 +511,7 @@ impl SafeRoots {
             cwd: None,
             resolver: None,
             worktree_roots: Vec::new(),
+            worktree_refusal: None,
         }
     }
 
@@ -547,8 +573,24 @@ impl SafeRoots {
         // real filesystem I/O and is only used when the caller supplied a
         // resolver (i.e. it is the filesystem-aware hook binary).
         let probe: Option<DirProbe> = resolver.map(|_| is_real_dir as DirProbe);
-        let worktree_roots =
-            worktree_storage_roots(cwd, project_dir, home_norm.as_deref(), resolver, probe);
+        // Decided on the RAW spellings, before `normalize_abs` below erases a
+        // `..` / `.` (module doc, "What actually stops each escape"). A refused
+        // session derives NO worktree storage root at all — not `$HOME`'s
+        // either — so `classify_worktree` can never answer `Inside`.
+        let worktree_refusal = [
+            ("payload cwd", cwd, true),
+            ("CLAUDE_PROJECT_DIR", project_dir, false),
+        ]
+        .into_iter()
+        .find_map(|(name, raw, must_be_absolute)| {
+            raw.and_then(|p| raw_session_path_refusal(p, must_be_absolute))
+                .map(|why| format!("{name} {why}; the worktree Allow is withheld"))
+        });
+        let worktree_roots = if worktree_refusal.is_some() {
+            Vec::new()
+        } else {
+            worktree_storage_roots(cwd, project_dir, home_norm.as_deref(), resolver, probe)
+        };
         let cwd = cwd
             .and_then(normalize_abs)
             .and_then(|c| resolve_with(&c, resolver));
@@ -557,6 +599,7 @@ impl SafeRoots {
             cwd,
             resolver,
             worktree_roots,
+            worktree_refusal,
         }
     }
 
@@ -600,6 +643,9 @@ impl SafeRoots {
     /// worktree storage roots (always the case for [`SafeRoots::none`]) the
     /// answer is `Undetermined`, which the caller must read as "not allowed".
     pub fn classify_worktree(&self, operand: &str, cwd: Option<&str>) -> Determination<Placement> {
+        if let Some(why) = &self.worktree_refusal {
+            return Determination::undetermined(why.clone());
+        }
         if self.worktree_roots.is_empty() {
             return Determination::undetermined(
                 "blastguard has no worktree storage root for this session (no HOME / cwd / project dir)",
@@ -818,6 +864,37 @@ fn worktree_storage_roots(
         }
     }
     roots
+}
+
+/// Why a RAW session path disqualifies the worktree `Allow`, or `None`.
+///
+/// `raw` is the value exactly as the caller received it (payload `cwd`,
+/// `CLAUDE_PROJECT_DIR`), BEFORE [`normalize_abs`]. Refused:
+///
+///   * any component that is exactly `..` or `.` — [`normalize_abs`] collapses
+///     them lexically, but the kernel resolves `..` against the REAL parent,
+///     so `<root>/w/lnk/..` (`lnk` a symlink out) would become the base
+///     `<root>/w` while the process actually sits in `<lnk target's parent>`
+///     and `rm -rf sub` would delete `<outside>/sub`. `.` is harmless on its
+///     own; it is refused anyway because a raw spelling this module did not
+///     expect is resolved in the restrictive direction (no `Allow`), and it
+///     costs nothing when the cwd is already `.`-free;
+///   * when `must_be_absolute` (the payload cwd): a path that does not start
+///     with `/`. A relative `CLAUDE_PROJECT_DIR` is NOT refused: it contributes
+///     no root and no base at all (`normalize_abs` drops it).
+///
+/// An empty `//` component is not refused: it names the same directory
+/// lexically and physically. A MISSING cwd (`None`) is not refused either: it
+/// derives no `.harness-worktrees` root and no base, so a relative operand is
+/// `Undetermined` and only an absolute operand can be placed.
+fn raw_session_path_refusal(raw: &str, must_be_absolute: bool) -> Option<&'static str> {
+    if !raw.starts_with('/') {
+        return must_be_absolute.then_some("is not an absolute path");
+    }
+    if raw.split('/').any(|c| c == ".." || c == ".") {
+        return Some("has a `..` or `.` component (collapsed lexically, not physically)");
+    }
+    None
 }
 
 /// The directory name the harness keeps session worktrees in, as a sibling of
@@ -1295,5 +1372,115 @@ mod tests {
             Some(probe_real),
         )
         .is_empty());
+    }
+
+    // ---- Raw session-path refusal (verifier finding on 0.2.89) ----
+
+    /// A real, canonical `<home>/.condukt/worktrees/w` on disk, so
+    /// `SafeRoots::new` (which `lstat`s the root for real) derives the root.
+    /// Returns (home, root). The identity resolver is correct for it because
+    /// every component is canonicalised up front.
+    fn real_worktree_fixture(tag: &str) -> (String, String) {
+        let base =
+            std::env::temp_dir().join(format!("bg-scope-rawcwd-{}-{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("home/.condukt/worktrees/w/sub")).unwrap();
+        let base = std::fs::canonicalize(&base).unwrap();
+        let home = base.join("home").to_str().unwrap().to_string();
+        let root = format!("{home}/.condukt/worktrees");
+        (home, root)
+    }
+
+    fn worktree_inside(s: &SafeRoots, operand: &str) -> bool {
+        match s.classify_worktree(operand, s.session_cwd()) {
+            Determination::Known(p) => p.inside_root().is_some(),
+            Determination::Undetermined(_) => false,
+        }
+    }
+
+    #[test]
+    fn raw_cwd_control_is_inside() {
+        // Control for the refusals below: the same fixture with a clean cwd
+        // DOES reach Inside, so their `false` is the refusal, not a broken
+        // fixture.
+        let (home, root) = real_worktree_fixture("control");
+        let cwd = format!("{root}/w");
+        let s = SafeRoots::new(Some(&cwd), None, Some(&home), None, Some(identity));
+        assert!(worktree_inside(&s, "sub"));
+        assert!(worktree_inside(&s, &format!("{root}/w/sub")));
+    }
+
+    #[test]
+    fn raw_cwd_with_dotdot_withholds_every_worktree_inside() {
+        // `<root>/w/lnk/..` collapses lexically to `<root>/w`; with `lnk` a
+        // symlink out the process is really elsewhere. Refused on the RAW value.
+        let (home, root) = real_worktree_fixture("dotdot");
+        let cwd = format!("{root}/w/lnk/..");
+        let s = SafeRoots::new(Some(&cwd), None, Some(&home), None, Some(identity));
+        assert_eq!(s.session_cwd(), Some(format!("{root}/w").as_str()));
+        assert!(!worktree_inside(&s, "sub"), "relative operand");
+        assert!(
+            !worktree_inside(&s, &format!("{root}/w/sub")),
+            "absolute operand: no worktree root at all for this session"
+        );
+        match s.classify_worktree("sub", s.session_cwd()) {
+            Determination::Undetermined(u) => {
+                assert!(u.to_string().contains("payload cwd"), "{u}")
+            }
+            Determination::Known(p) => panic!("expected Undetermined, got {p:?}"),
+        }
+    }
+
+    #[test]
+    fn raw_cwd_with_dot_or_trailing_dotdot_is_refused() {
+        let (home, root) = real_worktree_fixture("dot");
+        for cwd in [
+            format!("{root}/w/."),
+            format!("{root}/./w"),
+            format!("{root}/w/sub/.."),
+            format!("{root}/w/sub/../"),
+        ] {
+            let s = SafeRoots::new(Some(&cwd), None, Some(&home), None, Some(identity));
+            assert!(!worktree_inside(&s, &format!("{root}/w/sub")), "{cwd}");
+        }
+    }
+
+    #[test]
+    fn relative_raw_cwd_is_refused() {
+        let (home, root) = real_worktree_fixture("rel");
+        let s = SafeRoots::new(Some("w"), None, Some(&home), None, Some(identity));
+        assert!(!worktree_inside(&s, &format!("{root}/w/sub")));
+    }
+
+    #[test]
+    fn raw_project_dir_with_dotdot_is_refused_relative_one_is_not() {
+        let (home, root) = real_worktree_fixture("proj");
+        let cwd = format!("{root}/w");
+        let bad = format!("{root}/w/lnk/..");
+        let s = SafeRoots::new(Some(&cwd), Some(&bad), Some(&home), None, Some(identity));
+        assert!(!worktree_inside(&s, "sub"));
+        // A relative CLAUDE_PROJECT_DIR contributes nothing, so it refuses nothing.
+        let s = SafeRoots::new(
+            Some(&cwd),
+            Some("rel/.."),
+            Some(&home),
+            None,
+            Some(identity),
+        );
+        assert!(worktree_inside(&s, "sub"));
+    }
+
+    #[test]
+    fn raw_session_path_refusal_table() {
+        assert!(raw_session_path_refusal("/a/b", true).is_none());
+        assert!(raw_session_path_refusal("/a//b/", true).is_none());
+        assert!(raw_session_path_refusal("/a/..b/c.", true).is_none());
+        assert!(raw_session_path_refusal("/a/../b", true).is_some());
+        assert!(raw_session_path_refusal("/a/b/..", true).is_some());
+        assert!(raw_session_path_refusal("/a/./b", true).is_some());
+        assert!(raw_session_path_refusal("/a/b/.", false).is_some());
+        assert!(raw_session_path_refusal("a/b", true).is_some());
+        assert!(raw_session_path_refusal("", true).is_some());
+        assert!(raw_session_path_refusal("a/../b", false).is_none());
     }
 }

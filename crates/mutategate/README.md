@@ -27,10 +27,16 @@ Background: Meta's Automated Compliance Hardening (ACH) and PRIMG
 Kill-rate definition used here:
 
 ```
-viable   = caught + missed + timeout      (unviable mutants excluded — no signal)
-killed   = caught + timeout               (a timeout is a test-exposed misbehaviour)
-kill_rate = killed / viable               (undefined -> gate fails)
+viable   = caught + missed + timeout + unknown   (unviable mutants excluded — no signal)
+killed   = caught + timeout                      (a timeout is a test-exposed misbehaviour)
+kill_rate = killed / viable                      (undefined -> gate fails)
 ```
+
+`unknown` is a mutant whose `summary` state this crate does not recognise (or a
+record with no `summary`). It counts toward `viable` but not toward `killed`, so
+an unrecognised state is scored as a survivor instead of vanishing from the
+denominator and inflating the rate (CA-mutategate-01; `MutationSummary::viable`
+in `src/lib.rs`). A run with any `unknown` also carries a warning in its reason.
 
 ## Usage
 

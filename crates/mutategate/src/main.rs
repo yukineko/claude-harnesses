@@ -19,6 +19,8 @@
 //!   * `1`  — kill-rate below threshold, or no viable mutants (gate failed).
 //!   * `2`  — usage/IO/parse error (could not evaluate the gate at all).
 
+mod protection;
+
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -40,7 +42,8 @@ const DEFAULT_OUTCOMES: &str = "mutants.out/outcomes.json";
 #[derive(Parser, Debug)]
 #[command(
     name = "mutategate",
-    about = "Fail (exit 1) when the cargo-mutants kill-rate of the existing tests is below a threshold."
+    about = "Fail (exit 1) when the cargo-mutants kill-rate of the existing tests is below a threshold.",
+    after_help = "`mutategate --protects` prints what this gate protects, from what, and on what grounds."
 )]
 struct Cli {
     /// Path to the cargo-mutants `outcomes.json`.
@@ -57,6 +60,16 @@ struct Cli {
 }
 
 fn main() -> ExitCode {
+    // The protection statement (backlog 3a8e3b73), readable without running the
+    // gate. A pure print: no verdict. Short-circuits before clap because `Cli`
+    // has no such flag and would reject it as a usage error.
+    if std::env::args().nth(1).as_deref() == Some("--protects") {
+        let p = protection::PROTECTION;
+        println!("PROTECTS: {}", p.protects);
+        println!("AGAINST: {}", p.against);
+        println!("GROUNDS: {}", p.grounds);
+        return ExitCode::SUCCESS;
+    }
     let cli = Cli::parse();
 
     if let Err(why) = mutategate::validate_min_kill_rate(cli.min_kill_rate) {

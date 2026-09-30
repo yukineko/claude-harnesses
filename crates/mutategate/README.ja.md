@@ -27,10 +27,15 @@
 ここで用いる kill-rate の定義:
 
 ```
-viable   = caught + missed + timeout      (unviable な mutant は除外 — シグナルなし)
-killed   = caught + timeout               (timeout はテストが露出させた誤動作)
-kill_rate = killed / viable               (未定義 -> ゲートは失敗)
+viable   = caught + missed + timeout + unknown   (unviable な mutant は除外 — シグナルなし)
+killed   = caught + timeout                      (timeout はテストが露出させた誤動作)
+kill_rate = killed / viable                      (未定義 -> ゲートは失敗)
 ```
+
+`unknown` は、この crate が認識しない `summary` 状態の mutant（`summary` を欠く record を
+含む）。`viable` には数えるが `killed` には数えないので、未知の状態は分母から消えて
+kill-rate を水増しするのではなく、生き残った mutant として扱われる（CA-mutategate-01、
+`src/lib.rs` の `MutationSummary::viable`）。`unknown` が 1 件でもあれば理由文に警告が付く。
 
 ## 使い方
 

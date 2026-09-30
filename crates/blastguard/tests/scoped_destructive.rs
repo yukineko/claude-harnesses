@@ -158,9 +158,16 @@ fn relaxed_recursive_rm_inside_the_project() {
 
 #[test]
 fn relaxed_recursive_rm_inside_a_temp_dir() {
-    for cmd in ["rm -rf /tmp/foo", "rm -rf /var/tmp/build-cache"] {
-        assert_confined_ask(cmd, scoped(cmd));
-    }
+    // `rm -rf /tmp/foo` used to be listed here. Since backlog 3aa215e1 a
+    // recursive rm strictly inside `/tmp` / `/private/tmp` / `$TMPDIR` is an
+    // Allow (deletion class 2) whenever `/tmp` is a REAL directory — which
+    // this fixture's identity resolver cannot model: the verdict then depends
+    // on whether the test host's `/tmp` is a symlink (macOS) or not (Linux).
+    // Class 2 is pinned on a real filesystem in `detect`'s
+    // `deletion_temp_and_cache_subpaths_are_allowed`. `/var/tmp` is not a
+    // deletion root and keeps the confined Ask.
+    let cmd = "rm -rf /var/tmp/build-cache";
+    assert_confined_ask(cmd, scoped(cmd));
 }
 
 #[test]

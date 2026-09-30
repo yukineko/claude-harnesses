@@ -204,7 +204,9 @@
 //!   * TEMP: `/tmp`, `/private/tmp`, and `$TMPDIR` (read from the hook's own
 //!     environment — refused on its raw spelling if it is relative or has a
 //!     `..`/`.` component, and not used at all when `HOME` is unset).
-//!     `/var/tmp` is NOT one of them (it keeps only the safe-root `Ask`);
+//!     `/var/tmp` is NOT one of them: nothing below it is an `Allow` merely
+//!     for being there (the git classes and the refusals of
+//!     [`crate::deletion`] still judge it, like any other path);
 //!   * CACHE: `$HOME/.cache` and `$HOME/Library/Caches` (refused entirely if
 //!     the raw `HOME` is relative or has a `..`/`.` component).
 //!

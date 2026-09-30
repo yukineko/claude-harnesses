@@ -14081,7 +14081,11 @@ and must not be Allowed: {failing:?}"
 
     impl DelFx {
         fn new(tag: &str) -> DelFx {
-            let base = std::env::temp_dir().join(format!("bg-del-{tag}-{}", std::process::id()));
+            DelFx::new_in(&std::env::temp_dir(), tag)
+        }
+
+        fn new_in(parent: &std::path::Path, tag: &str) -> DelFx {
+            let base = parent.join(format!("bg-del-{tag}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&base);
             for d in ["tmp/a/b", "home/.cache/pip", "home/docs", "proj"] {
                 std::fs::create_dir_all(base.join(d)).unwrap();
@@ -14153,6 +14157,44 @@ and must not be Allowed: {failing:?}"
         ] {
             assert_ne!(verdict_name(&f.run(&cmd)), "allow", "{cmd}");
         }
+    }
+
+    #[test]
+    fn deletion_refusals_are_deny_even_inside_a_confined_safe_root() {
+        // cwd = the scratch dir, so home and everything under it sit inside a
+        // confined safe root — which used to soften a recursive rm to Ask.
+        // Under /var/tmp (not a system directory strictly below it), so each
+        // refusal is observed for its own reason, not as "system directory".
+        let f = DelFx::new_in(std::path::Path::new("/var/tmp"), "refused");
+        let roots = f.roots_with_cwd(&f.scratch.clone());
+        for (cmd, why) in [
+            (format!("rm -rf {}", f.home), "home directory"),
+            (format!("rm -rf {}/docs", f.home), "home directory"),
+            (format!("rm -rf {}/.cache", f.home), "itself"),
+            (format!("rm -rf {}", f.tmp), "itself"),
+            (
+                format!("rm -rf {}/a {}/docs", f.tmp, f.home),
+                "home directory",
+            ),
+            (format!("rm -rf {}", f.scratch), "contains the home"),
+        ] {
+            let d = detect_scoped("Bash", Some(&json!({ "command": cmd })), &roots);
+            assert_eq!(verdict_name(&d), "deny", "{cmd}: {d:?}");
+            if let Decision::Deny(reason) = d {
+                assert!(reason.contains(why), "{cmd}: {reason}");
+                assert_eq!(crate::rule_id::rule_id(&reason), "rm-recursive", "{reason}");
+            }
+        }
+        // Undetermined-but-confined stays the confined Ask: an existing
+        // operand that is neither a class member nor a refusal, with no git
+        // probe to judge it.
+        std::fs::create_dir_all(format!("{}/x", f.proj)).unwrap();
+        let d = detect_scoped(
+            "Bash",
+            Some(&json!({ "command": format!("rm -rf {}/x", f.proj) })),
+            &roots,
+        );
+        assert_eq!(verdict_name(&d), "ask");
     }
 
     #[test]
@@ -14310,6 +14352,9 @@ and must not be Allowed: {failing:?}"
             "rm -rf target",
             "rm -rf target/debug",
             "rm -rf src target",
+            // Named like build output but tracked and clean: not class 4,
+            // Allow by class 5 (ruling 2026-10-01, 「復帰できるなら許可」).
+            "rm -rf dist",
         ] {
             assert_eq!(del_project(cmd), Decision::Allow, "{cmd}");
         }
@@ -14337,12 +14382,10 @@ and must not be Allowed: {failing:?}"
 
     #[test]
     fn deletion_project_undetermined_and_refused_keep_the_old_verdict() {
-        // Tracked build-named dir (spec: must not reach Allow), a git probe
-        // that did not answer: the confined Ask, as before this rule.
-        for cmd in ["rm -rf dist", "rm -rf timeout"] {
-            assert_eq!(verdict_name(&del_project(cmd)), "ask", "{cmd}");
-        }
-        // The work-tree root, home-level and system paths: the shape Deny.
+        // A git probe that did not answer: the confined Ask, as before this
+        // rule (undetermined-but-confined).
+        assert_eq!(verdict_name(&del_project("rm -rf timeout")), "ask");
+        // The work-tree root, home-level and system paths: a determined Deny.
         for cmd in [
             "rm -rf /home/yuki/proj",
             "rm -rf /home/yuki/.ssh",

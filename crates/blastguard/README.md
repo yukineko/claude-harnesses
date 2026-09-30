@@ -132,7 +132,11 @@ plus `Undetermined` — and **only `Inside` may relax a verdict**.
   `/private/tmp`, `$TMPDIR`, `$HOME/.cache`, `$HOME/Library/Caches`, ignored
   build output in a git work tree, or a git subtree with nothing untracked /
   modified / ignored → `allow`; a git subtree where git reports such content →
-  `deny` naming it; anything it cannot determine keeps the verdicts above.
+  `deny` naming it; the root of any of those areas, `$HOME`, anything directly
+  in `$HOME`, a system directory or a git work-tree root → `deny` even inside
+  a safe root (0.2.94); anything it cannot determine keeps the verdicts above.
+  A build-output-named directory git does not report ignored (a tracked
+  `target`) is judged by recoverability like any other git subtree.
   Full table: `src/deletion.rs` and the README.ja.md section
   「再帰 `rm` は「何が消えるか」で判定する」.
 - **What does not** (each pinned by a test in `tests/scoped_destructive.rs`):

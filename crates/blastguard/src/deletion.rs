@@ -53,16 +53,29 @@
 //! — untracked, modified / staged / deleted, or ignored-but-not-build-output.
 //! This replaces the confined `Ask` the rm arm used to give such a path.
 //!
-//! A worktree-storage, temp or cache root ITSELF is refused before any later
-//! class is consulted. A git work-tree root is refused by classes 4/5 — but
-//! one that lies strictly inside a worktree-storage / temp / cache root (a
-//! scratch clone in `/tmp`) is an `Allow` by that earlier class.
+//! `Deny` (a determined refusal, [`OperandJudgement::Refused`]) for an
+//! operand that IS: the root of a worktree-storage / temp / cache class
+//! itself; `$HOME` itself, anything directly at `$HOME/<x>` (home-level
+//! config) or an ancestor of `$HOME`; a system directory ([`SYSTEM_PREFIXES`]:
+//! `/`, `/etc`, `/usr`, `/System`, `/Library`, `/var` outside `/var/tmp`, …);
+//! or a git work-tree root. The worktree / temp / cache root is refused before
+//! any later class is consulted. A git work-tree root that lies strictly
+//! inside a worktree-storage / temp / cache root (a scratch clone in `/tmp`)
+//! is an `Allow` by that earlier class.
 //!
-//! Everything else — the root of any class above, `$HOME` itself, anything
-//! directly at `$HOME/<x>`, system directories, `/var` outside `$TMPDIR`, a
-//! git work-tree root — is not an `Allow` from here and falls through to the
-//! rm arm's pre-existing logic (the shape `Deny`, or the confined `Ask` for a
-//! path inside the session's own safe roots).
+//! These refusals are a `Deny` even when the path sits inside one of the
+//! session's confined safe roots (the cwd, `/var/tmp`): being inside a safe
+//! root used to soften a recursive rm to the confined `Ask`, but a known
+//! home, cache root or unrecoverable project tree is determined, not
+//! undetermined, and the confined `Ask` is only for the undetermined case.
+//! `/var/tmp` and `/private/var/tmp` are NOT temp roots here (class 2), but
+//! they are also not system directories: a git work tree under them is judged
+//! by classes 4/5 like any other.
+//!
+//! Anything else not in an allow class — an operand outside every class, or
+//! one this module cannot determine (below) — falls through to the rm arm's
+//! pre-existing logic (the shape `Deny`, or the confined `Ask` for a path
+//! inside the session's own safe roots).
 //!
 //! # 判定不能は拒否側 — cannot determine is never an `Allow`
 //!
@@ -80,12 +93,14 @@
 //! (`deletion_rm_eligible`); the per-operand ones here and in
 //! [`crate::scope`].
 //!
-//! A tracked (not ignored) directory named like build output is ALSO not an
-//! `Allow` from class 5, even when it is clean: the spec lists
-//! `rm -rf target` with `target` tracked as a case that must not reach
-//! `Allow`, so a build-output name that git does not report ignored withholds
-//! both project classes. This is stricter than the recoverability principle
-//! alone would require, deliberately.
+//! A directory named like build output that git does NOT report ignored (it
+//! is tracked, or simply not excluded) is not class 4 — the name alone grants
+//! nothing — and is judged by class 5 like any other path: fully clean →
+//! `Allow` (every byte is in HEAD), anything untracked / modified / ignored
+//! below it → `Deny`. (Ruling 2026-10-01: 「復帰できるなら許可」 outranks
+//! the spec's escape-list line about a tracked `target`; that line meant a
+//! tracked `target` WITH changes.) A candidate git did not answer for at all
+//! is undetermined and withholds both project classes.
 //!
 //! # Known gaps (NOT closed here)
 //!
@@ -126,11 +141,11 @@ pub const BUILD_OUTPUT_NAMES: &[&str] = &[
     ".turbo",
 ];
 
-/// Absolute prefixes the git classes never judge: system configuration and
-/// `/var` (outside the temp roots, which class 2 handles before this is
-/// consulted). A path at or below one of these is not an `Allow` from
-/// classes 4/5 even if a git work tree happens to contain it.
-const NEVER_PROJECT_PREFIXES: &[&str] = &[
+/// System directories: an operand at or below one of these is a
+/// [`OperandJudgement::Refused`] even if a git work tree happens to contain
+/// it — except strictly below [`VAR_TEMP_EXCEPTIONS`]. (`$TMPDIR`, usually
+/// under `/private/var/folders`, is class 2 and is judged before this.)
+pub const SYSTEM_PREFIXES: &[&str] = &[
     "/bin",
     "/boot",
     "/dev",
@@ -152,6 +167,13 @@ const NEVER_PROJECT_PREFIXES: &[&str] = &[
     "/Applications",
 ];
 
+/// World-writable temp directories under `/var` that are not system
+/// configuration. Strictly below them a path is NOT a system directory (it
+/// goes on to the git classes); the directories themselves still are. They are
+/// not class-2 temp roots either: nothing below them is an `Allow` merely for
+/// being there.
+const VAR_TEMP_EXCEPTIONS: &[&str] = &["/var/tmp", "/private/var/tmp"];
+
 /// What one operand of a recursive `rm` is, for the deletion principle.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OperandJudgement {
@@ -160,9 +182,14 @@ pub enum OperandJudgement {
     /// Git POSITIVELY reported content here that no copy holds. The string
     /// names what would be lost. Resolves to `Deny`.
     Loss(String),
-    /// Not an `Allow` from this module — a root, outside every class, or
-    /// undetermined. The rm arm keeps its pre-existing verdict. The string is
-    /// the reason, kept for diagnostics.
+    /// Determined to be a path that must not be deleted: a class root itself,
+    /// `$HOME` / home-level config / an ancestor of `$HOME`, a system
+    /// directory, a git work-tree root. Resolves to `Deny`, even inside a
+    /// confined safe root.
+    Refused(String),
+    /// Not an `Allow` from this module and not a determined refusal — outside
+    /// every class, or undetermined. The rm arm keeps its pre-existing verdict
+    /// (never an `Allow`). The string is the reason, kept for diagnostics.
     NotAllowed(String),
 }
 
@@ -171,7 +198,8 @@ pub enum OperandJudgement {
 pub enum RmJudgement {
     /// Every operand is an `Allow`.
     Allow,
-    /// At least one operand would lose unrecoverable content. `Deny`.
+    /// At least one operand would lose unrecoverable content, or is refused.
+    /// `Deny`.
     Deny(String),
     /// Anything else: the rm arm's pre-existing logic decides.
     FallThrough,
@@ -179,8 +207,9 @@ pub enum RmJudgement {
 
 /// Judge every operand; see the module doc for the table.
 ///
-/// Any `Loss` wins (a `Deny` naming it); otherwise `Allow` only when EVERY
-/// operand is an `Allow` and there is at least one; otherwise `FallThrough`.
+/// Any `Loss` or `Refused` wins (a `Deny` naming it); otherwise `Allow` only
+/// when EVERY operand is an `Allow` and there is at least one; otherwise
+/// `FallThrough`.
 /// An empty operand list is `FallThrough` — "nothing to judge" is not "judged
 /// safe".
 pub fn judge_rm(scope: &SafeRoots, operands: &[&str], cwd: Option<&str>) -> RmJudgement {
@@ -195,14 +224,38 @@ pub fn judge_rm(scope: &SafeRoots, operands: &[&str], cwd: Option<&str>) -> RmJu
         .iter()
         .filter_map(|(o, j)| match j {
             OperandJudgement::Loss(what) => Some(format!("`{o}`: {what}")),
-            OperandJudgement::Allow(_) | OperandJudgement::NotAllowed(_) => None,
+            OperandJudgement::Allow(_)
+            | OperandJudgement::Refused(_)
+            | OperandJudgement::NotAllowed(_) => None,
         })
         .collect();
+    let refused: Vec<String> = judged
+        .iter()
+        .filter_map(|(o, j)| match j {
+            OperandJudgement::Refused(why) => Some(format!("`{o}`: {why}")),
+            OperandJudgement::Allow(_)
+            | OperandJudgement::Loss(_)
+            | OperandJudgement::NotAllowed(_) => None,
+        })
+        .collect();
+    let refused_note = if refused.is_empty() {
+        String::new()
+    } else {
+        format!(" Also refused: {}.", refused.join("; "))
+    };
     if !losses.is_empty() {
         return RmJudgement::Deny(format!(
             "recursive rm would destroy content git cannot restore — {}. Commit, stash or move \
-it first; blastguard allows deleting only what is recoverable or disposable.",
+it first; blastguard allows deleting only what is recoverable or disposable.{refused_note}",
             losses.join("; ")
+        ));
+    }
+    if !refused.is_empty() {
+        return RmJudgement::Deny(format!(
+            "recursive rm (-r) can delete an entire directory tree, and this one must not be \
+deleted — {}. The root of a temp / cache / worktree area, the home directory or anything \
+directly in it, a system directory and a git work-tree root are never deleted from here.",
+            refused.join("; ")
         ));
     }
     if judged
@@ -232,7 +285,7 @@ pub fn judge_operand(scope: &SafeRoots, operand: &str, cwd: Option<&str>) -> Ope
             return OperandJudgement::Allow("worktree storage");
         }
         Determination::Known(Placement::IsRoot { root }) => {
-            return OperandJudgement::NotAllowed(format!(
+            return OperandJudgement::Refused(format!(
                 "`{operand}` is the worktree storage root {root} itself"
             ));
         }
@@ -244,7 +297,7 @@ pub fn judge_operand(scope: &SafeRoots, operand: &str, cwd: Option<&str>) -> Ope
             return OperandJudgement::Allow("temp or cache");
         }
         Determination::Known(Placement::IsRoot { root }) => {
-            return OperandJudgement::NotAllowed(format!("`{operand}` is the root {root} itself"));
+            return OperandJudgement::Refused(format!("`{operand}` is the root {root} itself"));
         }
         // Symlink below a temp/cache root, unresolvable, … — not class 2/3.
         // An operand that is not under any of them goes on to the git classes.
@@ -256,11 +309,8 @@ pub fn judge_operand(scope: &SafeRoots, operand: &str, cwd: Option<&str>) -> Ope
     judge_project_operand(scope, operand, cwd)
 }
 
-/// Classes 4/5: the git work-tree path.
+/// Home-level / system refusals, then classes 4/5: the git work-tree path.
 fn judge_project_operand(scope: &SafeRoots, operand: &str, cwd: Option<&str>) -> OperandJudgement {
-    let Some(probe) = scope.git_tree_probe() else {
-        return OperandJudgement::NotAllowed("no git probe in this session model".to_string());
-    };
     let lexical = match scope.lexical_absolute(operand, cwd) {
         Determination::Known(l) => l,
         Determination::Undetermined(_) => {
@@ -270,9 +320,13 @@ fn judge_project_operand(scope: &SafeRoots, operand: &str, cwd: Option<&str>) ->
     let Some(real) = scope.resolve(&lexical) else {
         return OperandJudgement::NotAllowed(format!("`{operand}` could not be resolved"));
     };
-    if let Some(why) = never_project(&real, scope.home_real()) {
-        return OperandJudgement::NotAllowed(why);
+    if let Some(j) = never_project(&real, scope.home_real()) {
+        return j;
     }
+    // The refusals above need no git; the classes below do.
+    let Some(probe) = scope.git_tree_probe() else {
+        return OperandJudgement::NotAllowed("no git probe in this session model".to_string());
+    };
     let candidates = build_candidates(&real);
     let facts = match probe(&real, &candidates) {
         Determination::Known(f) => f,
@@ -291,29 +345,51 @@ fn judge_project_operand(scope: &SafeRoots, operand: &str, cwd: Option<&str>) ->
     decide_project(&real, &top, no_symlink, &candidates, &facts)
 }
 
-/// Why `real` is never judged by the git classes, or `None`.
-fn never_project(real: &str, home: Option<&str>) -> Option<String> {
-    if !real.starts_with('/') || real == "/" {
-        return Some("not an absolute path below /".to_string());
+/// Whether `real` is a system directory: `/`, or at / below a
+/// [`SYSTEM_PREFIXES`] entry and not strictly below a [`VAR_TEMP_EXCEPTIONS`]
+/// entry.
+pub fn is_system_path(real: &str) -> bool {
+    if real == "/" {
+        return true;
     }
-    if NEVER_PROJECT_PREFIXES
-        .iter()
-        .any(|p| real == *p || real.starts_with(&format!("{p}/")))
-    {
-        return Some(format!("`{real}` is in a system directory"));
+    let under = |p: &str| real == p || real.starts_with(&format!("{p}/"));
+    let strictly_under = |p: &str| real.starts_with(&format!("{p}/"));
+    SYSTEM_PREFIXES.iter().any(|p| under(p))
+        && !VAR_TEMP_EXCEPTIONS.iter().any(|p| strictly_under(p))
+}
+
+/// The judgement for a `real` path the git classes must not judge, or `None`.
+///
+/// `Refused` for a system directory, `$HOME`, `$HOME/<x>` and an ancestor of
+/// `$HOME`; `NotAllowed` (undetermined) for a non-absolute path or an unknown
+/// home — with no home, "is this home-level config?" cannot be answered.
+fn never_project(real: &str, home: Option<&str>) -> Option<OperandJudgement> {
+    if !real.starts_with('/') {
+        return Some(OperandJudgement::NotAllowed(
+            "not an absolute path".to_string(),
+        ));
     }
-    // `$HOME` itself or directly at `$HOME/<x>` (home-level config). An
-    // unknown home cannot be ruled out, so it withholds the class entirely.
+    if is_system_path(real) {
+        return Some(OperandJudgement::Refused(format!(
+            "`{real}` is a system directory"
+        )));
+    }
     let Some(home) = home else {
-        return Some("the home directory is unknown".to_string());
+        return Some(OperandJudgement::NotAllowed(
+            "the home directory is unknown".to_string(),
+        ));
     };
     let parent = real.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
     let parent = if parent.is_empty() { "/" } else { parent };
     if real == home || parent == home {
-        return Some(format!("`{real}` is the home directory or directly in it"));
+        return Some(OperandJudgement::Refused(format!(
+            "`{real}` is the home directory or directly in it (home-level config)"
+        )));
     }
     if home.starts_with(&format!("{}/", real.trim_end_matches('/'))) {
-        return Some(format!("`{real}` contains the home directory"));
+        return Some(OperandJudgement::Refused(format!(
+            "`{real}` contains the home directory"
+        )));
     }
     None
 }
@@ -339,11 +415,13 @@ pub fn build_candidates(real: &str) -> Vec<String> {
 ///   operand's spelling; `candidates` — [`build_candidates`] of `real`;
 ///   `facts` — the probe's observations.
 ///
-/// Order: root/containment/symlink/index-state/submodule refusals
-/// (`NotAllowed`), then the build-output name rule (a candidate below `top`
-/// that git does not report ignored → `NotAllowed`; all ignored + nothing
-/// tracked + only `!!` entries → `Allow`), then recoverability (no status
-/// entry → `Allow`, otherwise `Loss` naming the counts).
+/// Order: the work-tree root itself and a system-directory work tree
+/// (`Refused`); outside the work tree, a symlink, a hidden index state, a
+/// submodule (`NotAllowed`); then class 4 (a candidate below `top` git did not
+/// answer for → `NotAllowed`; every candidate ignored + nothing tracked + only
+/// `!!` entries → `Allow`; a candidate git reports NOT ignored skips class 4),
+/// then class 5 (no status entry → `Allow`, otherwise `Loss` naming the
+/// counts).
 pub fn decide_project(
     real: &str,
     top: &str,
@@ -353,15 +431,15 @@ pub fn decide_project(
 ) -> OperandJudgement {
     let top_prefix = format!("{}/", top.trim_end_matches('/'));
     if real == top {
-        return OperandJudgement::NotAllowed(format!("`{real}` is the git work-tree root itself"));
+        return OperandJudgement::Refused(format!("`{real}` is the git work-tree root itself"));
     }
     if !real.starts_with(&top_prefix) {
         return OperandJudgement::NotAllowed(format!(
             "`{real}` is not strictly inside the work tree {top}"
         ));
     }
-    if top == "/" || NEVER_PROJECT_PREFIXES.contains(&top) {
-        return OperandJudgement::NotAllowed(format!("work tree {top} is a system directory"));
+    if is_system_path(top) {
+        return OperandJudgement::Refused(format!("work tree {top} is a system directory"));
     }
     match no_symlink {
         Determination::Known(true) => {}
@@ -390,21 +468,17 @@ not report its local changes"
         for c in &inside {
             match facts.build_dirs.iter().find(|(p, _)| p == *c) {
                 Some((_, true)) => {}
-                Some((_, false)) => {
+                // Named like build output but not ignored: not class 4. Class
+                // 5 below still applies (clean → Allow, changes → Loss).
+                Some((_, false)) => all_ignored = false,
+                None => {
                     return OperandJudgement::NotAllowed(format!(
-                        "`{c}` is named like build output but git does not report it ignored \
-(it is tracked or not excluded)"
+                        "git did not answer whether `{c}` is ignored"
                     ));
                 }
-                None => all_ignored = false,
             }
         }
-        if !all_ignored {
-            return OperandJudgement::NotAllowed(
-                "git did not answer for every build-output directory".to_string(),
-            );
-        }
-        if facts.tracked == 0 && facts.status.iter().all(|(xy, _)| xy == "!!") {
+        if all_ignored && facts.tracked == 0 && facts.status.iter().all(|(xy, _)| xy == "!!") {
             return OperandJudgement::Allow("ignored build output");
         }
     }
@@ -473,7 +547,7 @@ mod tests {
         let f = facts(&[], 3, &[]);
         assert!(matches!(
             decide_project("/w/p", "/w/p", yes(), &[], &f),
-            OperandJudgement::NotAllowed(_)
+            OperandJudgement::Refused(_)
         ));
         assert!(matches!(
             decide_project("/w/other", "/w/p", yes(), &[], &f),
@@ -524,12 +598,29 @@ mod tests {
     }
 
     #[test]
-    fn a_tracked_build_named_dir_is_not_allowed_even_when_clean() {
+    fn a_tracked_build_named_dir_is_judged_by_recoverability() {
+        // Ruling 2026-10-01: a clean tracked `target` is Allow by class 5 …
         let cands = vec!["/w/p/target".to_string()];
         let f = facts(&[], 2, &[("/w/p/target", false)]);
+        assert_eq!(
+            decide_project("/w/p/target", "/w/p", yes(), &cands, &f),
+            OperandJudgement::Allow("fully recoverable from git")
+        );
+        // … and one with untracked or modified content is a Loss.
+        for st in [vec![("??", "target/p.txt")], vec![(" M", "target/k.txt")]] {
+            let f = facts(&st, 2, &[("/w/p/target", false)]);
+            assert!(matches!(
+                decide_project("/w/p/target", "/w/p", yes(), &cands, &f),
+                OperandJudgement::Loss(_)
+            ));
+        }
+        // Not ignored, empty-but-for `!!` entries and nothing tracked: the
+        // ignored bytes are NOT build output (the dir itself is not ignored),
+        // so class 4 does not apply and class 5 sees a Loss.
+        let f = facts(&[("!!", "target/x.env")], 0, &[("/w/p/target", false)]);
         assert!(matches!(
             decide_project("/w/p/target", "/w/p", yes(), &cands, &f),
-            OperandJudgement::NotAllowed(_)
+            OperandJudgement::Loss(_)
         ));
         // A candidate git did not answer for is not assumed ignored.
         let f = facts(&[("!!", "target/")], 0, &[]);
@@ -584,20 +675,40 @@ mod tests {
 
     #[test]
     fn system_and_home_level_paths_are_never_project_paths() {
+        let refused = |p: &str, h: Option<&str>| {
+            matches!(never_project(p, h), Some(OperandJudgement::Refused(_)))
+        };
         for p in [
             "/etc/x",
             "/usr/local/x",
             "/var/log/x",
             "/private/var/db",
+            "/private/var/folders/x",
+            "/var",
+            "/var/tmp",
+            "/private/var/tmp",
             "/",
         ] {
-            assert!(never_project(p, Some("/Users/u")).is_some(), "{p}");
+            assert!(refused(p, Some("/Users/u")), "{p}");
         }
-        assert!(never_project("/Users/u", Some("/Users/u")).is_some());
-        assert!(never_project("/Users/u/.ssh", Some("/Users/u")).is_some());
-        assert!(never_project("/Users", Some("/Users/u")).is_some());
-        assert!(never_project("/Users/u/src/p/x", None).is_some());
+        assert!(refused("/Users/u", Some("/Users/u")));
+        assert!(refused("/Users/u/.ssh", Some("/Users/u")));
+        assert!(refused("/Users", Some("/Users/u")));
+        // Home inside /var/tmp (a fake HOME): still refused, as home.
+        assert!(refused(
+            "/private/var/tmp/h/.ssh",
+            Some("/private/var/tmp/h")
+        ));
+        assert!(refused("/private/var/tmp/h", Some("/private/var/tmp/h")));
+        // Unknown home: undetermined, not a determined refusal.
+        assert!(matches!(
+            never_project("/Users/u/src/p/x", None),
+            Some(OperandJudgement::NotAllowed(_))
+        ));
         assert!(never_project("/Users/u/src/p/x", Some("/Users/u")).is_none());
+        // Strictly below /var/tmp is not a system directory.
+        assert!(never_project("/private/var/tmp/w/p/x", Some("/Users/u")).is_none());
+        assert!(never_project("/var/tmp/w/p/x", Some("/Users/u")).is_none());
     }
 
     #[test]

@@ -5,11 +5,16 @@
 //! `rm -rf <root>/x` deletes something outside any root. Every such case must be
 //! NOT Allow (Deny or Ask). Positive controls keep real roots Allow.
 //!
-//! Fixtures live under `CARGO_TARGET_TMPDIR` (not `/tmp`, a blastguard safe root).
+//! Fixtures live under [`neutral_base::neutral_base`], a location calibrated so
+//! that neither an enclosing real `.harness-worktrees` nor a blastguard temp
+//! safe root (`/tmp`) decides the verdict.
+
+#[path = "support/neutral_base.rs"]
+mod neutral_base;
 
 use std::io::Write;
 use std::os::unix::fs::symlink;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 struct Fx {
@@ -28,7 +33,7 @@ impl Fx {
     /// `home_rel` is relative to the base; may traverse a symlinked ancestor
     /// (created by the caller before use).
     fn with_home_rel(name: &str, home_rel: &str) -> Fx {
-        let base = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        let base = neutral_base::neutral_base()
             .join("worktree_root_symlink_escape")
             .join(name);
         let _ = std::fs::remove_dir_all(&base);
@@ -202,7 +207,7 @@ fn c8_real_harness_worktrees_dir_allows() {
 #[test]
 fn c9_home_reached_through_symlinked_ancestor_allows() {
     // HOME = <base>/linkparent/home where linkparent -> <base>/realparent.
-    let base = Path::new(env!("CARGO_TARGET_TMPDIR"))
+    let base = neutral_base::neutral_base()
         .join("worktree_root_symlink_escape")
         .join("c9");
     let _ = std::fs::remove_dir_all(&base);

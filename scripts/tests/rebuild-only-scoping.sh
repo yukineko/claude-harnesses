@@ -126,30 +126,44 @@ echo "host suffix: $SUF$EXT"
 # `cargo metadata` to resolve the target dir, which honors this env override).
 FAKE_TARGET="$TMP/fake-target"
 mkdir -p "$FAKE_TARGET/release"
-printf 'FAKE-A-NEW\n' > "$FAKE_TARGET/release/fakepluginA$EXT"
-printf 'FAKE-B-NEW\n' > "$FAKE_TARGET/release/fakepluginB$EXT"
-chmod +x "$FAKE_TARGET/release/fakepluginA$EXT" "$FAKE_TARGET/release/fakepluginB$EXT"
+printf 'FAKE-A-NEW\n' > "$FAKE_TARGET/release/backlog$EXT"
+printf 'FAKE-B-NEW\n' > "$FAKE_TARGET/release/taskprog$EXT"
+chmod +x "$FAKE_TARGET/release/backlog$EXT" "$FAKE_TARGET/release/taskprog$EXT"
+
+# The two fixture plugins must be REAL repo plugins at their CURRENT
+# (crates/*/.claude-plugin/plugin.json) version: rebuild-plugins.sh writes only a
+# plugin's current version dir, and a cached plugin with no crate has no
+# determinable current version, so it is refused and the run exits non-zero
+# (backlog 8acb117a). They used to be invented names (fakepluginA/B at 1.0.0),
+# which that rule now correctly rejects. Non-gate plugins, dry-run only.
+plugin_version() {
+  sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+    "$REPO/crates/$1/.claude-plugin/plugin.json" | head -1
+}
+VER_A="$(plugin_version backlog)"
+VER_B="$(plugin_version taskprog)"
+[ -n "$VER_A" ] && [ -n "$VER_B" ] || fail "could not read fixture plugin versions from crates/"
 
 FAKE_CACHE="$TMP/fake-cache"
-mkdir -p "$FAKE_CACHE/fakepluginA/1.0.0/bin" "$FAKE_CACHE/fakepluginB/1.0.0/bin"
-printf 'FAKE-A-OLD\n' > "$FAKE_CACHE/fakepluginA/1.0.0/bin/fakepluginA-$SUF$EXT"
-printf 'FAKE-B-OLD\n' > "$FAKE_CACHE/fakepluginB/1.0.0/bin/fakepluginB-$SUF$EXT"
-chmod +x "$FAKE_CACHE/fakepluginA/1.0.0/bin/fakepluginA-$SUF$EXT" "$FAKE_CACHE/fakepluginB/1.0.0/bin/fakepluginB-$SUF$EXT"
+mkdir -p "$FAKE_CACHE/backlog/$VER_A/bin" "$FAKE_CACHE/taskprog/$VER_B/bin"
+printf 'FAKE-A-OLD\n' > "$FAKE_CACHE/backlog/$VER_A/bin/backlog-$SUF$EXT"
+printf 'FAKE-B-OLD\n' > "$FAKE_CACHE/taskprog/$VER_B/bin/taskprog-$SUF$EXT"
+chmod +x "$FAKE_CACHE/backlog/$VER_A/bin/backlog-$SUF$EXT" "$FAKE_CACHE/taskprog/$VER_B/bin/taskprog-$SUF$EXT"
 
-# --- with --only=fakepluginA: only A is reported as updatable, B is skipped --
+# --- with --only=backlog: only A is reported as updatable, B is skipped --
 OUT="$(CARGO_TARGET_DIR="$FAKE_TARGET" CLAUDE_PLUGIN_CACHE="$FAKE_CACHE" \
-  bash "$REBUILD" --no-clean --dry-run --only=fakepluginA 2>&1)"
+  bash "$REBUILD" --no-clean --dry-run --only=backlog 2>&1)"
 RC=$?
 echo "$OUT" | sed 's/^/    /'
-[ "$RC" -eq 0 ] || fail "rebuild-plugins.sh --only=fakepluginA --dry-run should exit 0 (got $RC)"
-grep -q "cache  would update fakepluginA-$SUF$EXT" <<<"$OUT" \
-  || fail "expected fakepluginA to be reported as would-update"
-pass "--only=fakepluginA: targeted plugin IS reported as would-update"
-grep -q "fakepluginB" <<<"$OUT" \
-  && fail "--only=fakepluginA must not mention fakepluginB at all (must be filtered out before comparison)"
-pass "--only=fakepluginA: non-targeted plugin (fakepluginB) is fully skipped"
-grep -q "only:.*fakepluginA.*skipped 1 bin" <<<"$OUT" \
-  || fail "expected the summary line to report 'only: fakepluginA (skipped 1 bin(s)...)'"
+[ "$RC" -eq 0 ] || fail "rebuild-plugins.sh --only=backlog --dry-run should exit 0 (got $RC)"
+grep -q "cache  would update backlog-$SUF$EXT" <<<"$OUT" \
+  || fail "expected backlog to be reported as would-update"
+pass "--only=backlog: targeted plugin IS reported as would-update"
+grep -q "taskprog" <<<"$OUT" \
+  && fail "--only=backlog must not mention taskprog at all (must be filtered out before comparison)"
+pass "--only=backlog: non-targeted plugin (taskprog) is fully skipped"
+grep -q "only:.*backlog.*skipped 1 bin" <<<"$OUT" \
+  || fail "expected the summary line to report 'only: backlog (skipped 1 bin(s)...)'"
 pass "summary line reports the --only filter and skip count"
 
 # --- WITHOUT --only: both A and B are reported as updatable (baseline, proves
@@ -159,17 +173,17 @@ OUT2="$(CARGO_TARGET_DIR="$FAKE_TARGET" CLAUDE_PLUGIN_CACHE="$FAKE_CACHE" \
 RC2=$?
 echo "$OUT2" | sed 's/^/    /'
 [ "$RC2" -eq 0 ] || fail "rebuild-plugins.sh --dry-run (no --only) should exit 0 (got $RC2)"
-grep -q "cache  would update fakepluginA-$SUF$EXT" <<<"$OUT2" \
-  || fail "baseline (no --only): fakepluginA should still be would-update"
-grep -q "cache  would update fakepluginB-$SUF$EXT" <<<"$OUT2" \
-  || fail "baseline (no --only): fakepluginB should ALSO be would-update (default = unrestricted, unchanged)"
+grep -q "cache  would update backlog-$SUF$EXT" <<<"$OUT2" \
+  || fail "baseline (no --only): backlog should still be would-update"
+grep -q "cache  would update taskprog-$SUF$EXT" <<<"$OUT2" \
+  || fail "baseline (no --only): taskprog should ALSO be would-update (default = unrestricted, unchanged)"
 pass "no --only (default): BOTH plugins reported as would-update — historic behavior preserved"
 
 # --- nothing under the fake cache was actually mutated (dry-run) ------------
-[ "$(cat "$FAKE_CACHE/fakepluginA/1.0.0/bin/fakepluginA-$SUF$EXT")" = "FAKE-A-OLD" ] \
-  || fail "fakepluginA cache binary was mutated despite --dry-run"
-[ "$(cat "$FAKE_CACHE/fakepluginB/1.0.0/bin/fakepluginB-$SUF$EXT")" = "FAKE-B-OLD" ] \
-  || fail "fakepluginB cache binary was mutated despite --dry-run"
+[ "$(cat "$FAKE_CACHE/backlog/$VER_A/bin/backlog-$SUF$EXT")" = "FAKE-A-OLD" ] \
+  || fail "backlog cache binary was mutated despite --dry-run"
+[ "$(cat "$FAKE_CACHE/taskprog/$VER_B/bin/taskprog-$SUF$EXT")" = "FAKE-B-OLD" ] \
+  || fail "taskprog cache binary was mutated despite --dry-run"
 pass "fake cache binaries untouched (--dry-run never copies)"
 
 echo

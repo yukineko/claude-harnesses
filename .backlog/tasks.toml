@@ -12547,3 +12547,33 @@ updated_at = 1790796671
 weight = 0.0
 issue_number = 947
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/947"
+
+[[task]]
+id = "99825ee8"
+title = "調査用の一時 checkout を、後で消せない場所に作らない (agent への指示の規約)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "2026-10-01、bdd85e20 の切り分け agent が置き場所依存を確かめる対照として $HOME 直下に git clone を作り、rm -r がフックに拒否されて残した (ユーザーが手で削除)。/tmp 配下と .harness-worktrees 配下以外という対照条件は実験上必要だったが、作る前に消せるかを確かめず、置き場所の指定も片付けの義務も指示に無かった。ユーザー指摘: 管理外の場所に置くと、削除の安全性も記録も判断できなくなる。管理下 (worktree) や /tmp 配下なら削除できたか、削除できるようゲートを直せた。対策: 指示に、一時物は scratchpad (/tmp) か worktree 配下だけに置く、管理外が要りそうなら作る前に人に聞く、終了時に片付ける、を入れる。"
+created_at = 1790797464
+updated_at = 1790797464
+weight = 0.0
+issue_number = 949
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/949"
+
+[[task]]
+id = "3c3f5952"
+title = "blastguard が $HOME 配下の使い捨て git clone の rm -r を拒否する (削除方針との食い違いの疑い)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "2026-10-01、/Users/yuki/p1probe-clone (agent が作った一時 clone) の rm -r が agent からは拒否された。ユーザーの ! 経由の rm -fr は通った。削除方針 (作業物・復元可能なものは消せるべき、形だけでの rm 拒否はゲートの欠陥) と食い違う可能性がある。拒否メッセージの原文は未取得なので、まず再現して理由を確認する。"
+created_at = 1790797466
+updated_at = 1790797466
+weight = 0.0
+issue_number = 950
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/950"

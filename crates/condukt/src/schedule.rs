@@ -375,15 +375,9 @@ fn resolve_force_gate(
         harness_core::verdict::Required::Determined(a) => {
             (a.requires_gate() || a.risk >= Risk::Medium, None)
         }
-        harness_core::verdict::Required::Blocked(verdict) => (
-            true,
-            Some(
-                verdict
-                    .reason()
-                    .map(|r| r.as_str().to_string())
-                    .unwrap_or_else(|| "risk classification undetermined".to_string()),
-            ),
-        ),
+        harness_core::verdict::Required::Blocked(verdict) => {
+            (true, Some(verdict.as_str().to_string()))
+        }
     }
 }
 

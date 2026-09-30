@@ -186,10 +186,7 @@ fn resolve_assessment(d: Determination<RiskAssessment>) -> Resolved {
     match d.require() {
         Required::Determined(a) => Resolved::Assessed(a),
         Required::Blocked(verdict) => {
-            let reason = verdict
-                .reason()
-                .map(|r| r.as_str().to_string())
-                .unwrap_or_else(|| "risk classification could not be determined".to_string());
+            let reason = verdict.as_str().to_string();
             Resolved::Undetermined(reason)
         }
     }

@@ -24,12 +24,12 @@ fn main() {
     let _clean2: Verdict = Verdict::adjudicate(Determination::Known(vec![]));
 
     // The one sanctioned extractor for a determined value, resolved the ordinary
-    // way: both arms written out, the blocked one returning the fail-closed
-    // verdict it was handed.
+    // way: both arms written out, the blocked one forwarding the give-up it
+    // was handed as the fail-closed `Verdict::Undetermined`.
     fn judge(d: Determination<u8>) -> Verdict {
         let observed = match d.require() {
             Required::Determined(v) => v,
-            Required::Blocked(verdict) => return verdict, // fail closed
+            Required::Blocked(why) => return why.into_verdict(), // fail closed
         };
         if observed == 5 {
             Verdict::from_findings(vec![])

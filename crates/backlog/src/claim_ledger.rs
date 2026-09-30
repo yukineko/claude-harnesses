@@ -504,13 +504,10 @@ mod tests {
         let out = claim_next(&store_path, None, None, "/proj", Some(&claims)).unwrap();
         match out.require() {
             Required::Determined(t) => panic!("expected a refusal, got {t:?}"),
-            Required::Blocked(v) => match v.reason() {
-                Some(r) => assert!(
-                    r.as_str().contains("ledger"),
-                    "the reason must name the ledger: {r}"
-                ),
-                None => panic!("a refusal must carry a reason: {v:?}"),
-            },
+            Required::Blocked(why) => assert!(
+                why.as_str().contains("ledger"),
+                "the reason must name the ledger: {why}"
+            ),
         }
         // ...and the local store must be untouched: nothing was claimed.
         assert!(crate::store::load(&store_path).unwrap()[0].is_pending());
@@ -629,13 +626,10 @@ mod tests {
         let out = claim_next(&store_path, None, None, "/proj", Some(&claims)).unwrap();
         match out.require() {
             Required::Determined(t) => panic!("expected a refusal, got {t:?}"),
-            Required::Blocked(v) => match v.reason() {
-                Some(r) => assert!(
-                    r.as_str().contains("lock"),
-                    "the reason must name the lock: {r}"
-                ),
-                None => panic!("a refusal must carry a reason: {v:?}"),
-            },
+            Required::Blocked(why) => assert!(
+                why.as_str().contains("lock"),
+                "the reason must name the lock: {why}"
+            ),
         }
         assert!(crate::store::load(&store_path).unwrap()[0].is_pending());
     }

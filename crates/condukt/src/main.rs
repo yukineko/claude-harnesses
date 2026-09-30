@@ -5389,14 +5389,11 @@ fn release_terminal_task_files(
     }
 }
 
-/// The reason carried by a blocking [`harness_core::verdict::Verdict`], for
-/// operator-facing messages. Never empty: a verdict with no stated reason is
-/// reported as such rather than as a blank.
-fn undetermined_why(verdict: &harness_core::verdict::Verdict) -> String {
-    verdict
-        .reason()
-        .map(|r| r.as_str().to_string())
-        .unwrap_or_else(|| format!("{verdict:?} (no reason recorded)"))
+/// The reason carried by a `Required::Blocked` give-up, for operator-facing
+/// messages. An [`harness_core::verdict::Undet`] always carries a reason (the
+/// type has no reason-less form), so this is never a blank.
+fn undetermined_why(verdict: &harness_core::verdict::Undet) -> String {
+    verdict.as_str().to_string()
 }
 
 /// Load and parse a run's decomposition, keeping "could not read it" distinct

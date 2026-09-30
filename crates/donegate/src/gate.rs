@@ -129,16 +129,14 @@ pub fn evaluate(cfg: &Config, root: &Path) -> GateReport {
     // in a `Some(vec![])` "nothing changed" that would silently skip every
     // `when_changed` check and pass the Stop gate on an undetermined tree.
     let scope = scan_scope(crate::git::changed_files(root));
-    // `require()` is the only extractor, and it hands back a blocking
-    // `Verdict::Undetermined` — so the undetermined arm cannot reach the scoping
-    // code at all. Here it resolves to `None` = no scope = every check applies,
-    // which is the restrictive side (widening, never narrowing, the check set).
+    // `require()` is the only extractor method, and its blocked arm carries the
+    // give-up (`Undet`, convertible only to a blocking `Verdict::Undetermined`)
+    // — so the undetermined arm cannot reach the scoping code at all. Here it
+    // resolves to `None` = no scope = every check applies, which is the
+    // restrictive side (widening, never narrowing, the check set).
     let changed: Option<Vec<String>> = match scope.clone().require() {
         Required::Determined(files) => files,
-        Required::Blocked(undetermined) => {
-            debug_assert!(undetermined.blocks(), "an undetermined scope must block");
-            None
-        }
+        Required::Blocked(_undetermined) => None,
     };
     let tmp_dir = cfg.state_dir.join("tmp");
 

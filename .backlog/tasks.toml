@@ -1044,9 +1044,11 @@ status = "pending"
 notes = """
 型で塞げないクラス (Err の腕が正規の API で Clean を鋳造する形) を捕まえられる唯一の候補。機構は既にある: crates/harness-core/src/degrade.rs:8 が permissiveness(f(d(x))) が permissiveness(f(x)) 以下という単調性オラクルを定義し、Degradation の4種を持つ。にもかかわらず採用は2クレートのみ (crates/stuckguard/src/verdict_monotonicity.rs と crates/overwatch/tests/verdict_monotonicity.rs)。欠けているのは注入の継ぎ目。完了条件: boundary が cfg feature 付きの thread-local FaultPlan を持ち、4つの IO 入口すべてを強制的に Undetermined にできる。degrade が assert_fails_closed を公開し、全盲状態で permissiveness が 0 であることを表明する。少なくとも1つの gate crate で修正前の RED を観測済み。採用クレート数が減らないことを見るラチェット script が pre-commit の run リストに入る (cargo を走らせないので commit 時に成立する)。1コミット1クレートの opt-in なので並行セッションと衝突しない。
 
-2026-09-24 slice 1 landed: a1cbb6ac (merged 041a4c38, harness-core 0.2.31) adds boundary::fault FaultPlan, with_fault_plan, degrade::assert_fails_closed, impl Permissiveness for Verdict; tests/fault_plan.rs 27 tests (independent sonnet author, RED 7/27 on a stub, GREEN 27/27, re-run post-merge). Remaining: slice 2 first gate-crate adoption with observed RED (stuckguard or overwatch), slice 3 pre-commit adoption ratchet scripts/check-fault-injection-adoption.py that also rejects fault-injection outside [dev-dependencies], slice 4 one crate per commit."""
+2026-09-24 slice 1 landed: a1cbb6ac (merged 041a4c38, harness-core 0.2.31) adds boundary::fault FaultPlan, with_fault_plan, degrade::assert_fails_closed, impl Permissiveness for Verdict; tests/fault_plan.rs 27 tests (independent sonnet author, RED 7/27 on a stub, GREEN 27/27, re-run post-merge). Remaining: slice 2 first gate-crate adoption with observed RED (stuckguard or overwatch), slice 3 pre-commit adoption ratchet scripts/check-fault-injection-adoption.py that also rejects fault-injection outside [dev-dependencies], slice 4 one crate per commit.
+
+2026-09-30 slice 3 landed: 103eef5a (merged 530acc71). scripts/check-fault-injection-adoption.py + baseline 0 (harness-core excluded as provider; above-baseline also exits 1 so the pin tracks the real count; feature outside dev-dependencies exits 1; undetermined exits 2). RED 4bf08c5f 13 tests by an independent sonnet author, plus 15 implementer tests. NOT yet wired: pre-commit patch in the session scratchpad (githooks-8696dd7e.patch) awaits the user. Remaining: wiring, slice 2 (first gate-crate adopter with observed RED; the same commit must raise the baseline to 1), slice 4."""
 created_at = 1785879190
-updated_at = 1790254586
+updated_at = 1790766188
 weight = 0.0
 issue_number = 140
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/140"

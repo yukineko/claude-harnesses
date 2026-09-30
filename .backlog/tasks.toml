@@ -1231,25 +1231,6 @@ issue_number = 177
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/177"
 
 [[task]]
-id = "4cacdfae"
-title = "harness_core::trust の worktree 継承を残り 5 consumer へ展開するか判定する (reviewgate/precommit-audit/propguard/tdd/beacon)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "trust",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "donegate は abbd2f1b で harness_core::trust::resolve (worktree 継承つき三値) へ移行したが、同じ trust 機構に乗る他 5 consumer は exact-match の is_trusted のままで、CLAUDE.md 8 が作業を義務づける worktree では project config が黙って無視され続ける。実測 2026-08-06 測定点 401821df、grep -rn harness_core::trust --include=*.rs crates/ で確定: reviewgate/src/config.rs:193 / precommit-audit/src/main.rs:241 / propguard/src/config.rs:209 / tdd/src/config.rs:246 / beacon/src/config.rs:150。tdd は同じ穴を逆向きに解決していることが実測済み (tdd.toml is not trusted; ignoring it -> transition unknown -> condukt state set --status verified が拒否)。つまり donegate と tdd は同一入力に対して反対の解決をしていた状態で、donegate 側だけが是正された。各 consumer の untrusted の意味は一律ではない (gate は refusal=block、beacon の command は home config へ fallback で妥当かもしれない) ので、一括置換ではなく consumer ごとに untrusted の意味を判定すること。完了条件: 5 件それぞれについて worktree で project config が読まれるか / untrusted がどちら側に解決すべきかを判定し、判定結果を実測で固定するか、変更しない理由を明記して残すこと。"
-created_at = 1786021777
-updated_at = 1786021777
-weight = 0.0
-issue_number = 187
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/187"
-
-[[task]]
 id = "b71c72a7"
 title = "テストが固定 /tmp パスを使うため、2 本の cargo test が同時に走ると互いを壊す"
 project = "/Users/yuki/src/harness"
@@ -12609,24 +12590,6 @@ updated_at = 1790794242
 weight = 0.0
 issue_number = 936
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/936"
-
-[[task]]
-id = "e79afdd2"
-title = "harness-core trust::main_worktree_of: 偽造 gitfile で trusted main の trust を継承できる (back-pointer 未検証)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "trust",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "4cacdfae 検証で CONFIRMED。.git=gitdir: <trusted>/.git/worktrees/nonexistent で InheritedFromMainWorktree。worktrees/<name> の実在と <git_dir>/gitdir が root/.git を指すかを検証していない。beacon の command (sh -c) が trust なしで走る経路になる。4cacdfae merge 前に塞ぐ。"
-created_at = 1790794504
-updated_at = 1790794504
-weight = 0.0
-issue_number = 937
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/937"
 
 [[task]]
 id = "43799228"

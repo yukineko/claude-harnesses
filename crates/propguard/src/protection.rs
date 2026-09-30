@@ -26,15 +26,26 @@ pub const PROTECTION: Protection = Protection {
         mode an independent checker_cmd must report PROP <id>: PASS lines. It \
         also blocks when it cannot determine: an existing but unreadable or \
         unparseable config (config-unreadable), an unknown mode \
-        (config-invalid), an existing but unreadable criteria_file \
-        (criteria-unreadable), a failed git scan or diff read, a truncated \
-        diff, a failed checker, and a panic in the gate (run_guarded, first \
-        stop only). Limits: with no done_criteria source, no git repo or no \
-        checkable change it allows; below-threshold, checker, git-scan, \
-        diff-read and truncation blocks give up and allow after max_attempts \
-        (default 2), the outage give-ups turning back into a block only when \
-        overwatch's violation ledger shows them recurring; `propguard skip \
-        --reason` and PROPGUARD_DISABLE=1 allow.",
+        (config-invalid), an existing but unreadable criteria_file with no \
+        non-empty inline done_criteria to fall back to (criteria-unreadable; \
+        src/derive.rs source_criteria), a failed git scan or diff read, a \
+        truncated diff, a failed checker, and a panic in the gate \
+        (run_guarded, first stop only). Limits: with no done_criteria source, \
+        no git repo, no checkable change, PROPGUARD_DISABLE=1, `enabled = \
+        false` in config, or a consumed `propguard skip --reason` it allows; \
+        below-threshold, checker, git-scan, diff-read and truncation blocks \
+        give up and allow after max_attempts (default 2), and the outage \
+        give-ups turn back into a block only when overwatch's violation \
+        ledger shows them recurring (checker-outage-systemic) or cannot be \
+        read back (checker-outage-undetermined). In addition, every hook-mode \
+        block goes through harness_core::repeat::emit_stop_block (operator \
+        ruling 2026-09-18): the second time propguard gives a byte-identical \
+        reason in the same CLAUDE_CODE_SESSION_ID, it prints only a \
+        systemMessage naming the unresolved finding and the stop proceeds. \
+        That waiver applies to every tag above, the config and criteria ones \
+        included; the block stays when the repeat ledger cannot answer or \
+        the session id is unset, and the run_guarded panic block is not \
+        waived.",
     grounds: "Rationale, not a recorded incident of a shipped invariant \
         violation: README.md - '`tdd` runs specific test cases; that proves \
         examples but never *formalizes* the semantic invariants the code must \

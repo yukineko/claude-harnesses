@@ -14,8 +14,14 @@
 //!     missing key or `0` falls back to 50 — never "never stale";
 //!   * `review-status` exits 0 when every tracked entry is fresh, 1 when any is
 //!     stale-review, 2 when any is undetermined (same as `map gate-check`);
-//!   * "cannot tell" (unreadable HEAD, a review commit not in history) is never
-//!     `fresh` (CLAUDE.md §3).
+//!   * "cannot tell" is never `fresh` (CLAUDE.md §3). Orchestrator decision
+//!     within that contract (2026-10-02, after b1 verification): when HEAD
+//!     cannot be read at all (no git repo, or an unborn HEAD with no commits)
+//!     the state is exactly `undetermined` and `review-status` exits 2. A
+//!     `reviewed_at.commit` absent from history may be `stale-review` (exit 1)
+//!     or `undetermined` (exit 2), never `fresh`;
+//!   * the boundary is strict: exactly N commits behind is `fresh`, N+1 is
+//!     `stale-review`.
 //!
 //! The `review-status --json` document shape is not fixed by the contract, so
 //! [`state_in`] accepts the two natural shapes (an object keyed by entry key, or
@@ -30,6 +36,9 @@ use std::process::{Command, Output};
 
 fn git(repo: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -99,10 +108,31 @@ fn write_store(repo: &Path, entries: &[String]) {
 }
 
 fn sg(repo: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_specguard"))
+    sg_cmd(repo, args).output().unwrap()
+}
+
+fn sg_cmd(repo: &Path, args: &[&str]) -> Command {
+    let mut c = Command::new(env!("CARGO_BIN_EXE_specguard"));
+    // A test run inside a git hook inherits GIT_DIR / GIT_WORK_TREE, which
+    // would point every git call at the outer repo.
+    c.env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
         .current_dir(repo)
         .args(["--config", "specguard.toml", "--date", "2026-01-01", "map"])
-        .args(args)
+        .args(args);
+    c
+}
+
+/// Like [`sg`], but git discovery cannot climb above `repo`: the tempdir's
+/// parent (both as given and canonicalized — macOS /var vs /private/var) is a
+/// ceiling, so an ancestor repository can never make HEAD readable.
+fn sg_isolated(repo: &Path, args: &[&str]) -> Output {
+    let parent = repo.parent().unwrap();
+    let canon = fs::canonicalize(parent).unwrap();
+    let ceiling = std::env::join_paths([parent.to_path_buf(), canon]).unwrap();
+    sg_cmd(repo, args)
+        .env("GIT_CEILING_DIRECTORIES", ceiling)
         .output()
         .unwrap()
 }
@@ -316,6 +346,35 @@ fn assert_never_fresh(out: &Output, j: &serde_json::Value, key: &str) {
     assert_eq!(out.status.code(), Some(want), "{}", dump(out));
 }
 
+/// HEAD unreadable ⇒ exactly `undetermined` and exit 2 (orchestrator
+/// decision, see the module doc).
+fn assert_undetermined_exit2(out: &Output, key: &str) {
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "unreadable HEAD must exit 2 (undetermined)\n{}",
+        dump(out)
+    );
+    let j = json(out);
+    assert_eq!(
+        state_in(&j, key).as_deref(),
+        Some("undetermined"),
+        "unreadable HEAD: {key} must be exactly undetermined\n{}",
+        dump(out)
+    );
+}
+
+fn fake_review_store(repo: &Path) {
+    write_store(
+        repo,
+        &[entry(
+            "src/old.rs",
+            "tracked",
+            Some("0123456789abcdef0123456789abcdef01234567"),
+        )],
+    );
+}
+
 #[test]
 fn unreadable_head_is_never_fresh() {
     // A git dir with no commits: HEAD is unborn, so "how far behind HEAD" is
@@ -324,40 +383,72 @@ fn unreadable_head_is_never_fresh() {
     let repo = dir.path();
     init_repo(repo);
     write_config(repo, None);
-    write_store(
-        repo,
-        &[entry(
-            "src/old.rs",
-            "tracked",
-            Some("0123456789abcdef0123456789abcdef01234567"),
-        )],
-    );
-    let out = sg(repo, &["review-status", "--json", "--max-commits", "50"]);
-    assert_ne!(out.status.code(), Some(0), "{}", dump(&out));
-    let j = json(&out);
-    assert_never_fresh(&out, &j, "src/old.rs");
+    fake_review_store(repo);
+    let out = sg_isolated(repo, &["review-status", "--json", "--max-commits", "50"]);
+    assert_undetermined_exit2(&out, "src/old.rs");
 }
 
 #[test]
 fn unreadable_head_without_git_at_all_is_never_fresh() {
+    // No git repo at all, and discovery is fenced at the tempdir so an
+    // ancestor repo cannot supply a HEAD.
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     write_config(repo, None);
+    fake_review_store(repo);
+    let out = sg_isolated(repo, &["review-status", "--json"]);
+    assert_undetermined_exit2(&out, "src/old.rs");
+}
+
+// ------------------------------------------------------ exact boundary
+
+#[test]
+fn exactly_n_behind_is_fresh_and_n_plus_one_is_stale_review() {
+    let (d, r0, _head) = repo_with_history(3, None);
+    let n_behind = git(d.path(), &["rev-parse", "HEAD~2"]);
     write_store(
-        repo,
-        &[entry(
-            "src/old.rs",
-            "tracked",
-            Some("0123456789abcdef0123456789abcdef01234567"),
-        )],
+        d.path(),
+        &[
+            entry("src/at_n.rs", "tracked", Some(&n_behind)),
+            entry("src/at_n_plus_1.rs", "tracked", Some(&r0)),
+        ],
     );
-    // No git repo at all: the HEAD distance is unanswerable. The entry must
-    // still be classified (stale-review or undetermined), never fresh, and the
-    // exit code must match that classification.
-    let out = sg(repo, &["review-status", "--json"]);
-    assert_ne!(out.status.code(), Some(0), "{}", dump(&out));
-    let j = json(&out);
-    assert_never_fresh(&out, &j, "src/old.rs");
+    let (out, j) = review_status(d.path(), &["--max-commits", "2"]);
+    assert_eq!(
+        state_in(&j, "src/at_n.rs").as_deref(),
+        Some("fresh"),
+        "exactly N=2 behind is not MORE than N\n{}",
+        dump(&out)
+    );
+    assert_eq!(
+        state_in(&j, "src/at_n_plus_1.rs").as_deref(),
+        Some("stale-review"),
+        "N+1=3 behind\n{}",
+        dump(&out)
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", dump(&out));
+}
+
+#[test]
+fn exactly_n_behind_alone_exits_zero_via_config_key() {
+    let (d, _r0, _head) = repo_with_history(3, Some("review_max_commits = 2"));
+    let n_behind = git(d.path(), &["rev-parse", "HEAD~2"]);
+    write_store(
+        d.path(),
+        &[entry("src/at_n.rs", "tracked", Some(&n_behind))],
+    );
+    let (out, j) = review_status(d.path(), &[]);
+    assert_eq!(
+        state_in(&j, "src/at_n.rs").as_deref(),
+        Some("fresh"),
+        "{}",
+        dump(&out)
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", dump(&out));
+    assert_eq!(
+        list_state(d.path(), "src/at_n.rs").as_deref(),
+        Some("fresh")
+    );
 }
 
 // ------------------------------------------- list --json surface on its own

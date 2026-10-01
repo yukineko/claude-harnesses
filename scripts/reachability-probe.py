@@ -7,8 +7,8 @@
 
 Undetermined (exit 2, no result file): baseline red, anchor not found exactly
 once, build failure after mutation (a compile failure is never a reproduction),
-unreadable target, or restore that cannot be verified byte-identical (non-zero
-exit, no result file). Verdicts come from subprocess exit codes only; the
+unreadable target, restore that cannot be verified byte-identical, or the probe
+being killed by SIGTERM/SIGINT (restore runs first, with signals ignored). Verdicts come from subprocess exit codes only; the
 output is scanned only for the panic marker, which is informational.
 Exit 0 = result written. Result shape is accepted by overwatch parse_probe.
 Test/build commands run in the caller's cwd.
@@ -48,7 +48,7 @@ def git_rev():
     return None
 
 
-def main():
+def _main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--file", required=True)
     ap.add_argument("--anchor", required=True)
@@ -103,6 +103,9 @@ def main():
     except BaseException as e:  # restore still runs below
         err = f"error during probe: {e}"
     finally:
+        # Restore + verify must not be interruptible by a second signal.
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         restored = False
         try:
             target.write_bytes(orig)
@@ -111,7 +114,7 @@ def main():
             restored = False
     if not restored:
         print(f"reachability-probe: FAILED to verify restore of {target}", file=sys.stderr)
-        return 3
+        return 2
     if err or result is None:
         return undetermined(err or "no result")
 
@@ -143,6 +146,13 @@ def main():
     except OSError as e:
         return undetermined(f"cannot write result: {e}")
     return 0
+
+
+def main():
+    try:
+        return _main()
+    except KeyboardInterrupt as e:  # signal before/outside the mutation window: nothing mutated
+        return undetermined(f"interrupted: {e}")
 
 
 if __name__ == "__main__":

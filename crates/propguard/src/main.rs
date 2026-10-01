@@ -43,6 +43,7 @@ mod gate;
 mod git;
 mod install;
 mod model;
+mod protection;
 mod state;
 #[cfg(test)]
 mod trust_worktree_tests;
@@ -77,7 +78,8 @@ fn state_dir_override() -> Option<PathBuf> {
 #[command(
     name = "propguard",
     version,
-    about = "Property gate for Claude Code: derive semantic properties from done_criteria and block on Stop when too few hold."
+    about = "Property gate for Claude Code: derive semantic properties from done_criteria and block on Stop when too few hold.",
+    after_help = "  propguard --protects   print what this gate protects, from what, and why"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -127,6 +129,16 @@ enum Command {
 }
 
 fn main() {
+    // The protection statement (backlog 3a8e3b73), readable without
+    // triggering the gate: handled before clap (which requires a subcommand)
+    // and before anything reads stdin. A pure print: no verdict.
+    if std::env::args().nth(1).as_deref() == Some("--protects") {
+        let p = protection::PROTECTION;
+        println!("PROTECTS: {}", p.protects);
+        println!("AGAINST: {}", p.against);
+        println!("GROUNDS: {}", p.grounds);
+        std::process::exit(0);
+    }
     let cli = Cli::parse();
     match cli.command {
         Command::Check => check_command(),

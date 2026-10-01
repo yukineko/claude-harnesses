@@ -12398,7 +12398,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/915"
 
 [[task]]
 id = "7778b634"
-title = "blastguard reversible.rs:286,288: git status 失敗/timeout の GitState::Undetermined が RecoverableFromGit に潰れる — 2026-09-18 裁定の範囲内かユーザー判断"
+title = "blastguard decide_recovery: git 状態が読めない(Undetermined)なら recoverable にしない — 2026-10-02 ユーザー裁定済み、実装待ち"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = [
@@ -12407,9 +12407,11 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "出典: docs/audit-determination-direct-match.md (e269274f, 測定点 74aad11f)。 decide_recovery の let _ = git (:174) / Repo => RecoverableFromGit (:188)。detect.rs:1600 で confined write が無確認許可。git が答えなかった場合を裁定に含めるか要 Ask。"
+notes = """
+出典: docs/audit-determination-direct-match.md (e269274f, 測定点 74aad11f)。 decide_recovery の let _ = git (:174) / Repo => RecoverableFromGit (:188)。detect.rs:1600 で confined write が無確認許可。git が答えなかった場合を裁定に含めるか要 Ask。
+USER RULING 2026-10-02 (session 34385c9e, AskUserQuestion): 'Can't read -> not recoverable'. An unreadable git state (GitState::Undetermined) must NOT support 'recoverable'; the delete resolves to Deny/Ask (fail closed). Implementation: decide_recovery must forward Undetermined instead of collapsing it (reversible.rs ~176-195 / 286,288 at time of filing). The RED test is ready, independently authored: scratchpad of session 34385c9e, blastguard-recoverability-fault-test.rs (blind_boundary_never_leaves_a_recoverability_probe_permissive); copy it into crates/blastguard/tests/fault_injection.rs, observe RED, then fix. Bump blastguard, canary rollout."""
 created_at = 1790794224
-updated_at = 1790794224
+updated_at = 1790884806
 weight = 0.0
 issue_number = 926
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/926"

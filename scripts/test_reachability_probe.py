@@ -25,7 +25,13 @@ Result JSON: {"result": "reproduced" | "not_reproduced", ...extra keys}.
 Extra keys MUST include "note" (a string stating not_reproduced does not
 establish unreachability) and "panic_marker_seen" (bool: the marker
 "reachability-probe" appeared in the test output).
+  `note` MUST contain the canonical phrase "does not establish unreachability".
 Exit codes: 0 = a result was written; 2 = undetermined (no result file).
+Commands run via `sh -c <cmd>` as a DIRECT child of the probe (so `$PPID` in a
+cmd is the probe's pid), with the caller's cwd. Any non-zero exit of the test
+cmd after mutation, including 127 (command not found), counts as "reproduced".
+The probe MUST restore the target on SIGTERM and SIGINT too (not only on the
+normal path); a probe killed that way writes no result file and exits non-zero.
 The result must be accepted by overwatch's parse_probe
 (crates/overwatch/src/review_finding.rs): a JSON object whose string `result`
 is exactly one of the two tokens; extra keys are allowed.
@@ -121,7 +127,7 @@ class Outcomes(Base):
         self.assertEqual(parse_probe(body), "not_reproduced")
         d = json.loads(body)
         self.assertIsInstance(d.get("note"), str)
-        self.assertIn("unreachab", d["note"].lower())
+        self.assertIn("does not establish unreachability", d["note"].lower())
         self.assertIs(d["panic_marker_seen"], False)
         self.assert_restored()
 
@@ -176,19 +182,33 @@ class Restore(Base):
 
     def test_missing_test_binary_mid_run_restores(self):
         # Baseline must pass, so switch to a missing binary only once mutated.
-        cmd = "if grep -q reachability-probe src.rs; then /nonexistent/binary-xyz; fi; exit 0"
-        self.run_probe(cmd)  # outcome (reproduced via 127) is not pinned here
+        cmd = "if grep -q reachability-probe src.rs; then /nonexistent/binary-xyz; exit $?; fi; exit 0"
+        r = self.run_probe(cmd)
+        # Contract: exit 127 is a non-zero exit after mutation => reproduced, no marker.
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        d = json.loads(self.out.read_text(encoding="utf-8"))
+        self.assertEqual(d["result"], "reproduced")
+        self.assertIs(d["panic_marker_seen"], False)
         self.assert_restored()
 
-    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root ignores permissions")
-    def test_unverifiable_restore_is_nonzero_without_result(self):
-        cmd = (
-            "if grep -q reachability-probe src.rs; then "
-            "chmod a-w src.rs; chmod a-w .; exit 1; fi; exit 0"
-        )
+    def _signal_case(self, sig):
+        cmd = f"if grep -q reachability-probe src.rs; then kill -{sig} $PPID; sleep 5; fi; exit 0"
         r = self.run_probe(cmd)
-        os.chmod(self.dir, 0o755)
-        os.chmod(self.target, 0o644)
+        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse(self.out.exists(), "killed probe must write no result")
+        self.assert_restored()
+
+    def test_sigterm_mid_run_restores(self):
+        self._signal_case("TERM")
+
+    def test_sigint_mid_run_restores(self):
+        self._signal_case("INT")
+
+    def test_unverifiable_restore_is_nonzero_without_result(self):
+        # Target replaced by a directory once mutated: restore cannot succeed.
+        # --out is in the (writable) tempdir, so a result write WOULD succeed.
+        cmd = "if grep -q reachability-probe src.rs; then rm -f src.rs; mkdir src.rs; exit 1; fi; exit 0"
+        r = self.run_probe(cmd)
         self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertFalse(self.out.exists(), "no result file when restore unverified")
 

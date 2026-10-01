@@ -16,8 +16,8 @@ Flow: snapshot target bytes -> baseline test cmd must exit 0 else exit 2, no
 result -> anchor must occur EXACTLY once else exit 2, no result -> replace
 anchor with replacement -> build cmd must exit 0 else exit 2, no result
 (a compile failure is never a reproduction) -> run test cmd -> restore in a
-`finally`, verify byte-identical. If restore cannot be verified, exit non-zero
-and write no result file.
+`finally`, verify byte-identical. If restore cannot be verified, exit EXACTLY 2
+(undetermined) and write no result file.
 
 Result JSON: {"result": "reproduced" | "not_reproduced", ...extra keys}.
   reproduced     <=> test cmd exits non-zero after mutation
@@ -31,7 +31,9 @@ Commands run via `sh -c <cmd>` as a DIRECT child of the probe (so `$PPID` in a
 cmd is the probe's pid), with the caller's cwd. Any non-zero exit of the test
 cmd after mutation, including 127 (command not found), counts as "reproduced".
 The probe MUST restore the target on SIGTERM and SIGINT too (not only on the
-normal path); a probe killed that way writes no result file and exits non-zero.
+normal path); a probe killed that way, at ANY phase (including the baseline test
+run, before anything is mutated), writes no result file and exits EXACTLY 2 --
+not 3, not a signal death (negative returncode), not a Python traceback.
 The result must be accepted by overwatch's parse_probe
 (crates/overwatch/src/review_finding.rs): a JSON object whose string `result`
 is exactly one of the two tokens; extra keys are allowed.
@@ -194,9 +196,20 @@ class Restore(Base):
     def _signal_case(self, sig):
         cmd = f"if grep -q reachability-probe src.rs; then kill -{sig} $PPID; sleep 5; fi; exit 0"
         r = self.run_probe(cmd)
-        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
         self.assertFalse(self.out.exists(), "killed probe must write no result")
         self.assert_restored()
+
+    def _baseline_signal_case(self, sig):
+        # The baseline run sees the UNMUTATED target (no marker), so the signal
+        # lands before anything is changed. The post-mutation run would exit 0,
+        # so a probe that ignored the signal would write a result (and fail).
+        cmd = f"if ! grep -q reachability-probe src.rs; then kill -{sig} $PPID; sleep 5; fi; exit 0"
+        r = self.run_probe(cmd)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertFalse(self.out.exists(), "probe killed during baseline must write no result")
+        self.assert_restored()
+        self.assertNotIn("Traceback", r.stderr)
 
     def test_sigterm_mid_run_restores(self):
         self._signal_case("TERM")
@@ -204,12 +217,18 @@ class Restore(Base):
     def test_sigint_mid_run_restores(self):
         self._signal_case("INT")
 
-    def test_unverifiable_restore_is_nonzero_without_result(self):
+    def test_sigterm_during_baseline_exits_2(self):
+        self._baseline_signal_case("TERM")
+
+    def test_sigint_during_baseline_exits_2(self):
+        self._baseline_signal_case("INT")
+
+    def test_unverifiable_restore_exits_2_without_result(self):
         # Target replaced by a directory once mutated: restore cannot succeed.
         # --out is in the (writable) tempdir, so a result write WOULD succeed.
         cmd = "if grep -q reachability-probe src.rs; then rm -f src.rs; mkdir src.rs; exit 1; fi; exit 0"
         r = self.run_probe(cmd)
-        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
         self.assertFalse(self.out.exists(), "no result file when restore unverified")
 
 

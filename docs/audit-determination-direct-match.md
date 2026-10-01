@@ -246,6 +246,8 @@ prod の `Determination::Known` pattern 行で、前後 25 行に Undetermined �
 凡例: R=RESTRICTIVE / F=FORWARDED / P=PERMISSIVE / U=UNCLEAR。kind は `Determination` または `Verdict`(`Verdict::Undetermined`)。
 `Required::Blocked(Verdict::Undetermined(..))` の destructure(condukt/src/maintree.rs:600,614,782)は require() 経路なので既監査領域だが、Verdict 腕として数えたうえで F にしてある。
 
+> **追記 2026-10-02（測定点 4498c50d）**: 上の行と下の表の maintree.rs:600/614/782 の `Required::Blocked(Verdict::Undetermined(r))` は、本書の監査時点の形である。490f12c6（backlog 1a6c1c48）で `Required::Blocked` のペイロードが `Verdict` から `Undet` に狭まり、これらの腕は今 `Required::Blocked(r)`（maintree.rs:600/611/776）になっている。`Blocked(Clean)` は外部から構築できない（negative fixture `crates/harness-core/tests/ui/verdict/forge_blocked_clean.rs`）。判定 F（転送）は変わらない。行番号と §0 の件数は監査時点の値で、再測定していない。
+
 ### autoflow  (R 3 / F 2 / P 1 / U 0)
 
 | file:line | kind | 分類 | 理由 |

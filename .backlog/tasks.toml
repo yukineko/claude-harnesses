@@ -959,9 +959,11 @@ USER RULING 2026-09-24: Q1=新しい正典リスト (harness_core BLOCKING_GATES
 
 【先行テストと実装途中の WIP を退避 2026-09-29】archive/gate-protection-wip (b5c34f92、10 ファイル +2701) は harness_core::gate::protection (Protection 構造体と validate)、scripts/check-gate-protection.py と gate_protection_lib.py、blastguard/donegate の protection_contract.rs、harness-core/tests/gate_protection.rs、check-gate-crates-sync の BLOCKING_GATES 包含テストを含む。fleet.rs の BLOCKING_GATES 本体、各ゲートの protection.rs、docs/gate-taxonomy.md の保護契約表は未実装。 取り出しは git show archive/gate-protection-wip（worktree 整理で退避、2026-09-29）。マージ前に今のツリーで RED を必ず観測すること。
 
-2026-09-30 slice 1 landed (merged 511cee33): harness_core::gate::Protection + fleet::BLOCKING_GATES (= the 7 canary GATE_CRATES, checked as superset by a Rust test and by the checker), blastguard --protects (first adopter), scripts/check-gate-protection.py (0/1/2) + baseline listing the other 6 as PENDING (may only shrink vs HEAD). RED 970d349a by an independent sonnet author; implementer-added checker rules covered by independent tests 435b92c0. Consequence to know: adding a gate to BLOCKING_GATES later requires declaring it in the SAME commit (a new PENDING entry counts as growth). NOT yet wired: pre-commit patch githooks-3a8e3b73.patch in the session scratchpad awaits the user. Remaining: wiring, declarations for the 6 PENDING gates (one per commit), refusal-line one-line summary, taxonomy column."""
+2026-09-30 slice 1 landed (merged 511cee33): harness_core::gate::Protection + fleet::BLOCKING_GATES (= the 7 canary GATE_CRATES, checked as superset by a Rust test and by the checker), blastguard --protects (first adopter), scripts/check-gate-protection.py (0/1/2) + baseline listing the other 6 as PENDING (may only shrink vs HEAD). RED 970d349a by an independent sonnet author; implementer-added checker rules covered by independent tests 435b92c0. Consequence to know: adding a gate to BLOCKING_GATES later requires declaring it in the SAME commit (a new PENDING entry counts as growth). NOT yet wired: pre-commit patch githooks-3a8e3b73.patch in the session scratchpad awaits the user. Remaining: wiring, declarations for the 6 PENDING gates (one per commit), refusal-line one-line summary, taxonomy column.
+
+2026-10-01 slice 2 landed (merged fb9ba002, pushed, canary-rolled propguard 0.1.51): propguard declares Protection + --protects; PENDING now specguard, stuckguard, mutategate, overwatch, parallelguard. RED by an independent author (exit 2 empty stdout; baseline still listed propguard); an independent verifier traced every AGAINST claim to a block path and confirmed all 4 GROUNDS incidents, and flagged an over-generalised bound that was corrected before merge (config/criteria-unreadable have no give-up; panic is bounded by stop_hook_active). Remaining unchanged: wiring patch awaits the user, 5 PENDING gates (one per commit), refusal one-line summary, taxonomy column."""
 created_at = 1785876697
-updated_at = 1790766410
+updated_at = 1790858038
 weight = 0.0
 issue_number = 130
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/130"
@@ -983,9 +985,11 @@ notes = """
 
 2026-09-24 slice 1 landed: a1cbb6ac (merged 041a4c38, harness-core 0.2.31) adds boundary::fault FaultPlan, with_fault_plan, degrade::assert_fails_closed, impl Permissiveness for Verdict; tests/fault_plan.rs 27 tests (independent sonnet author, RED 7/27 on a stub, GREEN 27/27, re-run post-merge). Remaining: slice 2 first gate-crate adoption with observed RED (stuckguard or overwatch), slice 3 pre-commit adoption ratchet scripts/check-fault-injection-adoption.py that also rejects fault-injection outside [dev-dependencies], slice 4 one crate per commit.
 
-2026-09-30 slice 3 landed: 103eef5a (merged 530acc71). scripts/check-fault-injection-adoption.py + baseline 0 (harness-core excluded as provider; above-baseline also exits 1 so the pin tracks the real count; feature outside dev-dependencies exits 1; undetermined exits 2). RED 4bf08c5f 13 tests by an independent sonnet author, plus 15 implementer tests. NOT yet wired: pre-commit patch in the session scratchpad (githooks-8696dd7e.patch) awaits the user. Remaining: wiring, slice 2 (first gate-crate adopter with observed RED; the same commit must raise the baseline to 1), slice 4."""
+2026-09-30 slice 3 landed: 103eef5a (merged 530acc71). scripts/check-fault-injection-adoption.py + baseline 0 (harness-core excluded as provider; above-baseline also exits 1 so the pin tracks the real count; feature outside dev-dependencies exits 1; undetermined exits 2). RED 4bf08c5f 13 tests by an independent sonnet author, plus 15 implementer tests. NOT yet wired: pre-commit patch in the session scratchpad (githooks-8696dd7e.patch) awaits the user. Remaining: wiring, slice 2 (first gate-crate adopter with observed RED; the same commit must raise the baseline to 1), slice 4.
+
+2026-10-01 slice 2 landed (merged b0a7679f, pushed, canary-rolled overwatch 0.2.47): overwatch is the first adopter. store::read_audit_rounds (the audit-metrics converging verdict) read via std::fs, outside the seam; it now reads through harness_core::boundary::read_to_string, forwarding Undetermined. Test crates/overwatch/tests/fault_injection.rs authored independently; F->P observed by the orchestrator: pre-fix store.rs gives VACUOUS fail-closed check (returned Some(true)), post-fix passes. Adoption baseline 0->1; raw-io ratchet 46->45. Remaining: wiring patch awaits the user, slice 4 (one crate per commit)."""
 created_at = 1785879190
-updated_at = 1790766188
+updated_at = 1790858039
 weight = 0.0
 issue_number = 140
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/140"
@@ -12091,25 +12095,6 @@ issue_number = 920
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/920"
 
 [[task]]
-id = "1a6c1c48"
-title = "Required::Blocked(Verdict) を Blocked(Undet) へ狭めて外部から Blocked(Clean) を作れなくする"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "harness-core",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "5b89f0f6 で散文のみ是正 (7306810a)。tests/ui/verdict_known_holes/unsealed_paths.rs の hole 3 が現状を pin している。狭めると 61 call site / 約10 plugin crate の変更と各 3 ファイル bump が要る (測定 2026-10-01: git grep 'Required::Blocked(' 外部 61 件)。並行セッションと衝突しにくい順序・一括方法の設計が先。閉じたら fixture の hole 3 を negative fixture へ移す。"
-created_at = 1790793947
-updated_at = 1790794248
-weight = 0.0
-issue_number = 921
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/921"
-
-[[task]]
 id = "04f58309"
 title = "Required への拡張トレイト (unwrap_or_default/is_ok 再付与) をどのゲートも検出しない"
 project = "/Users/yuki/src/harness"
@@ -12778,3 +12763,43 @@ updated_at = 1790797482
 weight = 0.0
 issue_number = 951
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/951"
+
+[[task]]
+id = "62000a3a"
+title = "condukt: decomposition 欠落時の state set が非0終了し fp_gate_scope_contract / fp_oracle_e2e の2テストが main で赤"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-01 at 75806721 (detached worktree で再現): absent_decomposition_file_still_accepts_a_fix_task_with_no_proofs (fp_gate_scope_contract.rs:216) と genuinely_absent_decomposition_still_verifies (fp_oracle_e2e.rs:448)。stderr は '1/1 verified' の後に 'claim release NOT PERFORMED ... decomposition could not be loaded' で exit≠0。テストは absent decomposition でも accept(exit 0)を要求。claim 解放の fail-closed 化とテスト契約の矛盾 — どちらが正かを決める必要あり。"
+created_at = 1790822160
+updated_at = 1790822160
+weight = 0.0
+issue_number = 976
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/976"
+
+[[task]]
+id = "96ba636b"
+title = "blastguard: quoted heredoc body の不等号を redirect と誤認して deny する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+Observed 2026-10-02 at 4498c50d (session 34385c9e), reproduced twice in a row. blastguard PreToolUse denied a Bash call whose only redirect-looking text was DATA, never shell syntax:
+1. a python3 heredoc (quoted EOF delimiter) whose Python string literal contained a Markdown blockquote line beginning with a greater-than sign and a space;
+2. a python3 heredoc whose string literal merely QUOTED that two-character sequence inside single quotes (this very backlog note, first attempt).
+Deny text verbatim: "'> ' destroys the file's current contents and `` is a relative path and blastguard does not know which directory it is relative to, so it cannot tell whether these bytes are recoverable".
+The EMPTY target shows the parser took the greater-than sign from data. Inside a quoted heredoc nothing is expanded or redirected.
+Readings: (a) defect: the destructive-redirect scan does not skip quoted heredoc bodies / quoted strings (twin of the egress here-string descent gaps in memory blastguard-egress-substructure-descent); (b) intentional fail-closed on input it cannot parse. Distinguish: minimal repro = quoted heredoc containing a line that starts with greater-than + space, vs the same heredoc without it; check whether the redirect scanner tokenizes heredoc bodies.
+Cost observed: forced switching to the Edit/Write tools for routine doc and backlog edits."""
+created_at = 1790882953
+updated_at = 1790882953
+weight = 0.0
+issue_number = 979
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/979"

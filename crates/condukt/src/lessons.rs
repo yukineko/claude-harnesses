@@ -157,6 +157,7 @@ mod tests {
             paused: false,
             terminal_label: None,
             recorded_at: None,
+            recorded_episodes: Vec::new(),
         };
         run.save(&cfg, cwd).unwrap();
         save_decomposition(
@@ -231,6 +232,7 @@ mod tests {
             paused: false,
             terminal_label: None,
             recorded_at: None,
+            recorded_episodes: Vec::new(),
         };
         run.save(&cfg, cwd).unwrap();
 
@@ -289,6 +291,7 @@ mod tests {
             paused: false,
             terminal_label: None,
             recorded_at: None,
+            recorded_episodes: Vec::new(),
         };
         run.save(&cfg, cwd).unwrap();
         // no save_decomposition → titles/done_criteria fall back to null

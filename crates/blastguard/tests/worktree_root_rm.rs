@@ -13,10 +13,14 @@
 //! must NOT become Allow: the root itself, globs, `..` escapes, symlink escapes,
 //! mixed operands, prefix-lookalike siblings, protected paths.
 //!
-//! The base lives under `CARGO_TARGET_TMPDIR` (not `/tmp`, which is a blastguard
-//! temp safe root and would turn everything into an Ask), and `TMPDIR` is
-//! removed from the hook's environment, so Allow is distinguishable from the
-//! pre-feature Deny.
+//! The base is [`neutral_base::neutral_base`]: a location calibrated so that
+//! neither an enclosing real `.harness-worktrees` (which would turn everything
+//! into Allow) nor a blastguard temp safe root such as `/tmp` (which would turn
+//! everything into an Ask) decides the verdict. `TMPDIR` is removed from the
+//! hook's environment, so Allow is distinguishable from the pre-feature Deny.
+
+#[path = "support/neutral_base.rs"]
+mod neutral_base;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -31,7 +35,7 @@ struct Fixture {
 
 impl Fixture {
     fn new(name: &str) -> Fixture {
-        let base = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        let base = neutral_base::neutral_base()
             .join("worktree_root_rm")
             .join(name);
         let _ = std::fs::remove_dir_all(&base);

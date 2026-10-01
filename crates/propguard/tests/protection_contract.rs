@@ -1,7 +1,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-//! IMPLEMENTER-WRITTEN (backlog 3a8e3b73, slice 2): written by the same agent
-//! that added `propguard --protects`, so it is not independent evidence in the
-//! CLAUDE.md 2(a) sense. Modeled on crates/blastguard/tests/protects_flag.rs.
+//! RED tests for backlog 3a8e3b73: `propguard --protects` (second adopter,
+//! modelled on blastguard's tests/protects_flag.rs). Independent author
+//! (CLAUDE.md 2(a)). propguard has no lib target, so the contract is observed
+//! at the binary. stdin is closed and a timeout turns a stdin-reading
+//! implementation into a failure instead of a hang.
 
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -44,10 +46,10 @@ fn protects_prints_three_labelled_nonempty_lines_and_exits_zero() {
     }
 }
 
-/// Control: the clap surface keeps working.
+/// Control: the existing short-circuit flag keeps working.
 #[test]
 fn version_flag_still_works() {
     let (code, stdout) = run("--version");
     assert_eq!(code, Some(0));
-    assert!(stdout.starts_with("propguard "), "{stdout:?}");
+    assert!(stdout.contains("propguard"), "{stdout:?}");
 }

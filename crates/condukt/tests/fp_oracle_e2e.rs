@@ -338,6 +338,31 @@ fn seed_ungated_fix_run(tag: &str, run: &str) -> (PathBuf, PathBuf, PathBuf, Pat
     (dir, home, tdd_path, dec)
 }
 
+/// The durable status `condukt state show` reports for `task1` — the
+/// observable that says whether the promotion LANDED, independent of the exit
+/// code. `state set` no longer maps "promotion landed" onto exit 0 alone:
+/// since backlog `9a4fb884` (human ruling 2026-09-24, commit `306cf008`) it
+/// exits non-zero AFTER the durable write when the terminal claim release is
+/// `Undetermined`, and a caller that must know whether the transition landed
+/// is told to read `state show` (see the `state set` call site in `main.rs`).
+fn shown_status(dir: &Path, home: &Path, tdd_path: &Path, run: &str) -> String {
+    let (code, out, err) = run_condukt(dir, home, tdd_path, &["state", "show", "--run", run]);
+    assert_eq!(
+        code, 0,
+        "state show must succeed\nstdout: {out}\nstderr: {err}"
+    );
+    let v: serde_json::Value = serde_json::from_str(&out).expect("state show must emit JSON");
+    let tasks = v["tasks"].as_array().expect("state show must list tasks");
+    let t = tasks
+        .iter()
+        .find(|t| t["id"].as_str() == Some("task1"))
+        .unwrap_or_else(|| panic!("task1 missing from state show: {out}"));
+    t["status"]
+        .as_str()
+        .expect("task status must be a string")
+        .to_string()
+}
+
 fn set_verified(dir: &Path, home: &Path, tdd_path: &Path, run: &str) -> (i32, String, String) {
     run_condukt(
         dir,
@@ -445,12 +470,35 @@ fn genuinely_absent_decomposition_still_verifies() {
     std::fs::remove_file(&dec).expect("remove decomposition");
 
     let (code, _stdout, stderr) = set_verified(&dir, &home, &tdd_path, "run-absent");
-    assert_eq!(
-        code, 0,
-        "an absent decomposition must still allow verification\nstderr: {stderr}"
+
+    // The named property — "an absent decomposition must still allow
+    // verification" — observed on durable state, not inferred from the exit
+    // code (which no longer carries it; see below).
+    assert!(
+        !stderr.contains("refusing to verify"),
+        "an absent decomposition must not be refused by the F->P gate\nstderr: {stderr}"
     );
     assert!(
         stderr.contains("1/1 verified"),
         "expected the verified count in stderr, got: {stderr}"
+    );
+    assert_eq!(
+        shown_status(&dir, &home, &tdd_path, "run-absent"),
+        "verified",
+        "an absent decomposition must still allow verification: the task must be \
+         durably verified\nstderr: {stderr}"
+    );
+
+    // The ruled contract after the durable write (backlog `9a4fb884`, commit
+    // `306cf008`): with no decomposition the task's files cannot be
+    // determined, so the terminal claim release is `Undetermined` and
+    // `state set` exits non-zero with the named diagnostic.
+    assert_ne!(
+        code, 0,
+        "an Undetermined claim release must exit non-zero (9a4fb884)\nstderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("claim release NOT PERFORMED"),
+        "the non-zero exit must be the named claim-release diagnostic\nstderr: {stderr}"
     );
 }

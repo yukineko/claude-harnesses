@@ -141,8 +141,9 @@ enum Command {
     },
     /// Print the active fix-offer block if a sentinel is pending (for the
     /// SessionStart hook). Resolves the sentinel path from `[output].sentinel`,
-    /// so a custom path still works. Silent (exit 0) only when there is no
-    /// config file at all (not a specguard project). A config that is present
+    /// so a custom path still works. Silent (exit 0) in exactly two cases: there
+    /// is no config file at all (not a specguard project), or the config loaded
+    /// and no sentinel is raised. A config that is present
     /// but cannot be loaded, or a sentinel whose state cannot be read, prints a
     /// "could not determine" notice on stdout instead of nothing.
     Pending,
@@ -1382,10 +1383,12 @@ fn emit_brief_json(cov: &harness_core::verdict::Determination<coverage::Coverage
 /// human whether to fix). Resolves the sentinel path from config, so a custom
 /// `[output].sentinel` still works (the old hook hardcoded `.specguard-pending`).
 ///
-/// Silence is reserved for exactly one case: the config path does not exist
-/// (`NotFound`), i.e. this is not a specguard project and there is no pending
-/// state to determine. Every other outcome prints on stdout, because stdout is
-/// all the SessionStart consumer sees (`hooks/hooks.json` runs
+/// Silence (exit 0, nothing on stdout) is reserved for exactly two determined
+/// cases: the config path does not exist (`NotFound`), i.e. this is not a
+/// specguard project and there is no pending state to determine; or the config
+/// loaded and no sentinel is raised (`render_pending`'s `Known(false)` arm).
+/// Every other outcome prints on stdout, because stdout is all the SessionStart
+/// consumer sees (`hooks/hooks.json` runs
 /// `specguard pending 2>/dev/null || true`, discarding stderr and the exit
 /// code):
 /// - config present but unloadable (unreadable, unparseable, invalid, template

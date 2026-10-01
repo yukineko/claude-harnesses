@@ -32,7 +32,9 @@ pub const PROTECTION: Protection = Protection {
         (src/main.rs render_pending). A config that is present but \
         unloadable, or a sentinel whose state cannot be read, prints an \
         UNKNOWN notice instead of nothing (src/main.rs pending, \
-        render_pending); only a missing config file is silent. Exit codes a \
+        render_pending). Exactly two cases are silent: no config file at all \
+        (src/main.rs pending, NotFound) and a loaded config with no sentinel \
+        raised (render_pending, Known(false)). Exit codes a \
         direct caller may branch on, none wired to a block: run/ingest 3 (no \
         marker), 4 (agent failed), 5 (prompt unratified); ack 6 (no fix \
         commit since the sentinel) and 9; testaudit 7 and 8; brief 10 \

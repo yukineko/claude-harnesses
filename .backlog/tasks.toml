@@ -1014,9 +1014,11 @@ notes = """
 
 2026-10-01 phase 2 を 5d37f2f2 で取り込み、specguard 0.2.70 を canary で rollout 済み。spec-map は git 管理外で紐づけが消えるため、git 管理の .specguard/spec-docs.toml (path, doc, reason) を新設し gate-check が読む。gate crate 7 つの対象ファイル 100 件を 68 件の紐づけと 32 件の理由付き ack で埋めた。pre-push パッチ v2 (scratchpad の githooks-0c277117-v2.patch) は push される tree の中で map を作り直してから gate-check する。main の map を写さない。シミュレーションで、紐づけ無しの新ファイルと存在しない doc への紐づけが exit 1、紐づけ済みと ack 済みが 0。残り: 紐づけ 68 件が本当にその doc に書かれているかを別 agent が照合中。照合が済んだらユーザーにパッチ適用を依頼する。
 
-2026-10-01 紐づけ 68 件の独立照合 (5d37f2f2): OK 43 / 弱い 7 / 取り違え 0 / 食い違い 18。例外 32 件はすべて妥当。紐づけ先の docs/specs 6 本はすべて冒頭に REVIEW-NEEDED (実装から逆算した下書き、正典として扱わない) とある。gate-check は理由付きで doc に紐づけば内容を見ずに通すため、パッチを当てると下書きの doc を根拠に push が通る。パッチ適用はユーザー判断待ち (先に doc を直すか、記録して当てるか)。crates/propguard/src/trust_worktree_tests.rs は紐づけも ack も無い (末尾 _tests は test 扱いにならない)。"""
+2026-10-01 紐づけ 68 件の独立照合 (5d37f2f2): OK 43 / 弱い 7 / 取り違え 0 / 食い違い 18。例外 32 件はすべて妥当。紐づけ先の docs/specs 6 本はすべて冒頭に REVIEW-NEEDED (実装から逆算した下書き、正典として扱わない) とある。gate-check は理由付きで doc に紐づけば内容を見ずに通すため、パッチを当てると下書きの doc を根拠に push が通る。パッチ適用はユーザー判断待ち (先に doc を直すか、記録して当てるか)。crates/propguard/src/trust_worktree_tests.rs は紐づけも ack も無い (末尾 _tests は test 扱いにならない)。
+
+2026-10-01 ユーザー裁定: 今のまま当てる。チェックの役割は仕様書の無い gate ファイルの変更を止めることとし、仕様書の中身の正しさは b48ad137 などで別に直す。適用前に、slice 2/3 で増えた protection.rs 6 本と trust_worktree_tests.rs の紐づけか ack を入れ、gate-check が main..HEAD で 0 を返すことを確かめる。"""
 created_at = 1785926764
-updated_at = 1790810473
+updated_at = 1790853600
 weight = 0.0
 issue_number = 147
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/147"

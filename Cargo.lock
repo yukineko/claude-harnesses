@@ -819,7 +819,7 @@ checksum = "88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4"
 
 [[package]]
 name = "mutategate"
-version = "0.1.8"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "clap",
@@ -859,7 +859,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "overwatch"
-version = "0.2.47"
+version = "0.2.49"
 dependencies = [
  "anyhow",
  "clap",
@@ -1282,7 +1282,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "specguard"
-version = "0.2.70"
+version = "0.2.71"
 dependencies = [
  "anyhow",
  "blastguard",

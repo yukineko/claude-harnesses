@@ -130,3 +130,35 @@ reason = "parallelguard has no docs/specs/parallelguard.md. Spec debt."
 [[ack]]
 path = "crates/parallelguard/src/store.rs"
 reason = "parallelguard has no docs/specs/parallelguard.md. Spec debt."
+
+[[ack]]
+path = "crates/propguard/src/protection.rs"
+reason = "Protection statement printed by --protects and parsed by scripts/check-gate-protection.py; propguard.md does not describe it."
+
+[[ack]]
+path = "crates/stuckguard/src/protection.rs"
+reason = "Protection statement printed by --protects and parsed by scripts/check-gate-protection.py; stuckguard.md does not describe it."
+
+[[ack]]
+path = "crates/parallelguard/src/protection.rs"
+reason = "Protection statement printed by --protects and parsed by scripts/check-gate-protection.py; parallelguard has no docs/specs/parallelguard.md. Spec debt."
+
+[[ack]]
+path = "crates/mutategate/src/protection.rs"
+reason = "Protection statement printed by --protects and parsed by scripts/check-gate-protection.py; mutategate.md does not describe it."
+
+[[ack]]
+path = "crates/overwatch/src/protection.rs"
+reason = "Protection statement printed by --protects and parsed by scripts/check-gate-protection.py; overwatch.md does not describe it."
+
+[[ack]]
+path = "crates/specguard/src/protection.rs"
+reason = "Protection statement printed by --protects and parsed by scripts/check-gate-protection.py; specguard.md does not describe it."
+
+[[ack]]
+path = "crates/propguard/src/trust_worktree_tests.rs"
+reason = "Test-only module for worktree trust inheritance; propguard.md describes is_trusted and the trust command but not worktree trust inheritance (grep -i worktree docs/specs/propguard.md: 0 hits). Spec debt."
+
+[[ack]]
+path = "crates/blastguard/src/deletion.rs"
+reason = "Recursive rm judged by what it destroys (3aa215e1). blastguard.md does NOT describe it and is STALE against it: its analyze_rm rule still says every recursive -r rm is deny, while deletion.rs allows recoverable operands. Binding would claim coverage the doc contradicts. Spec debt."

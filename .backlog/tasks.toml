@@ -932,43 +932,6 @@ issue_number = 117
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/117"
 
 [[task]]
-id = "3a8e3b73"
-title = "gate protection contract: every gate must state what it protects, from what, on what grounds"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "gates",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-User principle 2026-08-05: a gate must be clear, WITH GROUNDS, about what asset it protects and against what failure -- and must communicate that to the user.
-
-Measured gap: docs/gate-taxonomy.md classifies every gate by the KIND of judgment it makes (implementation-correctness / test-fitness / holistic-judgment) and by trigger type. That is a taxonomy of METHOD, not of THREAT. Nowhere does any gate declare the asset it defends or the adversary it defends against. A user facing a refusal cannot tell from it whether the concern is real.
-
-Concrete symptom: taintguard's refusal says the turn consumed untrusted-provenance content and that write-class tools are downgraded. That is the MECHANISM. It never says that the asset is the filesystem and the shell, and the adversary is instructions embedded in fetched content acting through a write-class tool.
-
-Shape: each gate carries an addressable protection statement (asset, adversary, grounds) that is quotable by the README so check-doc-claims.py can pin it to the code, and that a user can read WITHOUT triggering the gate. taintguard 0.1.9 is doing this for itself first; this item is the generalisation across the gate fleet.
-
-Done when: every gate crate and every scripts/check-*.py exposes a protection statement naming asset and adversary, gate-taxonomy.md gains that column, and the statement is machine-pinned rather than prose that can drift.
-
-2026-09-24 調査: 未実装を確認。提案形式 PROTECTS/AGAINST/GROUNDS (Rust: harness_core::gate::Protection const + --protects、Python: PROTECTION dict)、専用 scripts/check-gate-protection.py で taxonomy 列と逐語一致・ratchet baseline で段階展開。ユーザー裁定待ち: Q1 gate の母集合、Q2 拒否メッセージへの表示方法。
-
-USER RULING 2026-09-24: Q1=新しい正典リスト (harness_core BLOCKING_GATES + scripts/check-* 全件と照合、ratchet baseline で PENDING 表示)。Q2=<gate> --protects で全文、拒否メッセージには 1 行要約。
-
-【先行テストと実装途中の WIP を退避 2026-09-29】archive/gate-protection-wip (b5c34f92、10 ファイル +2701) は harness_core::gate::protection (Protection 構造体と validate)、scripts/check-gate-protection.py と gate_protection_lib.py、blastguard/donegate の protection_contract.rs、harness-core/tests/gate_protection.rs、check-gate-crates-sync の BLOCKING_GATES 包含テストを含む。fleet.rs の BLOCKING_GATES 本体、各ゲートの protection.rs、docs/gate-taxonomy.md の保護契約表は未実装。 取り出しは git show archive/gate-protection-wip（worktree 整理で退避、2026-09-29）。マージ前に今のツリーで RED を必ず観測すること。
-
-2026-09-30 slice 1 landed (merged 511cee33): harness_core::gate::Protection + fleet::BLOCKING_GATES (= the 7 canary GATE_CRATES, checked as superset by a Rust test and by the checker), blastguard --protects (first adopter), scripts/check-gate-protection.py (0/1/2) + baseline listing the other 6 as PENDING (may only shrink vs HEAD). RED 970d349a by an independent sonnet author; implementer-added checker rules covered by independent tests 435b92c0. Consequence to know: adding a gate to BLOCKING_GATES later requires declaring it in the SAME commit (a new PENDING entry counts as growth). NOT yet wired: pre-commit patch githooks-3a8e3b73.patch in the session scratchpad awaits the user. Remaining: wiring, declarations for the 6 PENDING gates (one per commit), refusal-line one-line summary, taxonomy column.
-
-2026-10-01 slice 2 landed (merged fb9ba002, pushed, canary-rolled propguard 0.1.51): propguard declares Protection + --protects; PENDING now specguard, stuckguard, mutategate, overwatch, parallelguard. RED by an independent author (exit 2 empty stdout; baseline still listed propguard); an independent verifier traced every AGAINST claim to a block path and confirmed all 4 GROUNDS incidents, and flagged an over-generalised bound that was corrected before merge (config/criteria-unreadable have no give-up; panic is bounded by stop_hook_active). Remaining unchanged: wiring patch awaits the user, 5 PENDING gates (one per commit), refusal one-line summary, taxonomy column."""
-created_at = 1785876697
-updated_at = 1790858038
-weight = 0.0
-issue_number = 130
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/130"
-
-[[task]]
 id = "8696dd7e"
 title = "fault injection をゲート化する — boundary に FaultPlan、degrade に assert_fails_closed、採用クレート数をラチェット"
 project = "/Users/yuki/src/harness"
@@ -1015,9 +978,15 @@ notes = """
 
 2026-10-01 ユーザー裁定: 先に埋めてから配線する。44 entry に理由付きで docs/specs を紐付けるか理由付き ack を置き、pre-push パッチは map を先に最新化するよう直してから適用する。
 
-2026-10-02 flow (session 64554c4d): 残り6件の reasoned ack を a165c071 (branch condukt/run-20261002-043837-64928/a1, .specguard/spec-doc-acks.toml のみ) に作成、未マージ・独立 verifier 待ち。pre-push 配線パッチ githooks-0c277117-v2.patch (sha256 c27f9973..., session 389c3077 由来) は a165c071 上にクリーン適用可。使い捨て clone で RED 観測: ack/binding 無しの crates/propguard/src/probe_unspecced.rs を足した push が 'pre-push: BLOCKED - gate spec-doc check' exit 1。GREEN: docs/GLOSSARY.md のみの push は 'gate-check: ok' exit 0。未完: settings.json が .githooks/** の Edit/Write を deny しているため、パッチ適用は人間の操作が必要 (git apply で迂回しない)。crates/specguard/README.ja.md:191 は pre-push が map を再構築すると既に書いており、パッチ適用まで実挙動と食い違う。最新裁定 5364fd2d は未マージの session-389c3077 ブランチにのみ存在。"""
+2026-10-02 flow (session 64554c4d): 残り6件の reasoned ack を a165c071 (branch condukt/run-20261002-043837-64928/a1, .specguard/spec-doc-acks.toml のみ) に作成、未マージ・独立 verifier 待ち。pre-push 配線パッチ githooks-0c277117-v2.patch (sha256 c27f9973..., session 389c3077 由来) は a165c071 上にクリーン適用可。使い捨て clone で RED 観測: ack/binding 無しの crates/propguard/src/probe_unspecced.rs を足した push が 'pre-push: BLOCKED - gate spec-doc check' exit 1。GREEN: docs/GLOSSARY.md のみの push は 'gate-check: ok' exit 0。未完: settings.json が .githooks/** の Edit/Write を deny しているため、パッチ適用は人間の操作が必要 (git apply で迂回しない)。crates/specguard/README.ja.md:191 は pre-push が map を再構築すると既に書いており、パッチ適用まで実挙動と食い違う。最新裁定 5364fd2d は未マージの session-389c3077 ブランチにのみ存在。
+
+2026-10-01 phase 2 を 5d37f2f2 で取り込み、specguard 0.2.70 を canary で rollout 済み。spec-map は git 管理外で紐づけが消えるため、git 管理の .specguard/spec-docs.toml (path, doc, reason) を新設し gate-check が読む。gate crate 7 つの対象ファイル 100 件を 68 件の紐づけと 32 件の理由付き ack で埋めた。pre-push パッチ v2 (scratchpad の githooks-0c277117-v2.patch) は push される tree の中で map を作り直してから gate-check する。main の map を写さない。シミュレーションで、紐づけ無しの新ファイルと存在しない doc への紐づけが exit 1、紐づけ済みと ack 済みが 0。残り: 紐づけ 68 件が本当にその doc に書かれているかを別 agent が照合中。照合が済んだらユーザーにパッチ適用を依頼する。
+
+2026-10-01 紐づけ 68 件の独立照合 (5d37f2f2): OK 43 / 弱い 7 / 取り違え 0 / 食い違い 18。例外 32 件はすべて妥当。紐づけ先の docs/specs 6 本はすべて冒頭に REVIEW-NEEDED (実装から逆算した下書き、正典として扱わない) とある。gate-check は理由付きで doc に紐づけば内容を見ずに通すため、パッチを当てると下書きの doc を根拠に push が通る。パッチ適用はユーザー判断待ち (先に doc を直すか、記録して当てるか)。crates/propguard/src/trust_worktree_tests.rs は紐づけも ack も無い (末尾 _tests は test 扱いにならない)。
+
+2026-10-01 ユーザー裁定: 今のまま当てる。チェックの役割は仕様書の無い gate ファイルの変更を止めることとし、仕様書の中身の正しさは b48ad137 などで別に直す。適用前に、slice 2/3 で増えた protection.rs 6 本と trust_worktree_tests.rs の紐づけか ack を入れ、gate-check が main..HEAD で 0 を返すことを確かめる。"""
 created_at = 1785926764
-updated_at = 1790885251
+updated_at = 1790885353
 weight = 0.0
 issue_number = 147
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/147"
@@ -12307,6 +12276,561 @@ issue_number = 919
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/919"
 
 [[task]]
+id = "53897d41"
+title = "docs が condukt の SKILL.md を行番号で引用しているため、上の方に挿入すると引用が 8 件ずれる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "b2977afb で観測。doc-claims ゲートが検出するので壊れたまま入ることはないが、SKILL.md を編集するたびに引用の張り直しが要る。行番号でなく見出しや固定マーカーで引用する形を検討。"
+created_at = 1790795048
+updated_at = 1790795048
+weight = 0.0
+issue_number = 940
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/940"
+
+[[task]]
+id = "f9c5b710"
+title = "flow / condukt / scout のループ不変条件の遵守を自己申告でなく観測する仕組み (advisory)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "b2977afb の実装者の提案。決定論的に測れるもの: condukt worker の変更ファイルが touched_files の部分集合か / worker が notes に書いた 別件 行が worktree 削除前に backlog add されたか / scout 実行中の Edit・Write・変更系 Bash の有無 / scout のレンズ候補数と追加数と棄却数の一致 / 前の claim が終わる前の次の claim。測れないもの: 書き留められなかった気づき、寄り道が本当に必要だったかの判断、transcript が無いセッション (判定不能として扱う)。まず overwatch review-queue に advisory として出す。"
+created_at = 1790795050
+updated_at = 1790795050
+weight = 0.0
+issue_number = 941
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/941"
+
+[[task]]
+id = "8b653590"
+title = "負荷に弱いタイミング依存テスト: blastguard d4_exponential_find_exec (2 秒予算) と overwatch test_freshness の run_ignored_test"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "2026-10-01 の 801d0bda 計測の 1 回目だけで失敗。d4 は 3.23 秒で予算 2 秒を超過、test_freshness は 60 秒超えで ExecutionError。並走する別セッションの cargo による負荷と整合するが未証明。"
+created_at = 1790796468
+updated_at = 1790796468
+weight = 0.0
+issue_number = 943
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/943"
+
+[[task]]
+id = "bbca0f83"
+title = "rollout のロックが途中で他プロセスの名前に変わった: no longer names this process"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "2026-10-01、condukt の rollout 終了時に「rollout.lock no longer names this process (pid 34905, file says 空)」と出た。直前に別セッション (34385c9e) の全体 rollout が走っていた。ロックの取得か解放に競合がある疑い。2 つの rollout が同時に走ると互いの配備を消す (e3366b5c)。"
+created_at = 1790796469
+updated_at = 1790796469
+weight = 0.0
+issue_number = 944
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/944"
+
+[[task]]
+id = "7efbd5c6"
+title = "scripts/tests/rebuild-stage-repo-destination.sh が linux-x86_64 を決め打ちし darwin では 0 件走査で落ちる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "8acb117a で観測、main でも同じく失敗。さらに、走査したバイナリ数による空振り検査がガードより前で数えるので、linux でも古い dir の skip に気づけない。"
+created_at = 1790796668
+updated_at = 1790796668
+weight = 0.0
+issue_number = 945
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/945"
+
+[[task]]
+id = "1dbfea8d"
+title = "ship の rebuild-plugins.sh --stage-repo が --only 無しで走るので、crate か version の無いプラグインが cache にあると exit 1 になる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "8acb117a で fail-closed を入れた結果。意図どおりだが ship はエラーとして報告する。2026-10-01 時点の実 cache には該当なし (読み取りのみで確認)。"
+created_at = 1790796670
+updated_at = 1790796670
+weight = 0.0
+issue_number = 946
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/946"
+
+[[task]]
+id = "490d30cc"
+title = "rollout-plugins.sh の usage が header の 2 から 80 行しか出さず、120 行超の header が途中で切れる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "8acb117a の実装者が指摘。以前からの切り詰め。"
+created_at = 1790796671
+updated_at = 1790796671
+weight = 0.0
+issue_number = 947
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/947"
+
+[[task]]
+id = "99825ee8"
+title = "調査用の一時 checkout を、後で消せない場所に作らない (agent への指示の規約)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "2026-10-01、bdd85e20 の切り分け agent が置き場所依存を確かめる対照として $HOME 直下に git clone を作り、rm -r がフックに拒否されて残した (ユーザーが手で削除)。/tmp 配下と .harness-worktrees 配下以外という対照条件は実験上必要だったが、作る前に消せるかを確かめず、置き場所の指定も片付けの義務も指示に無かった。ユーザー指摘: 管理外の場所に置くと、削除の安全性も記録も判断できなくなる。管理下 (worktree) や /tmp 配下なら削除できたか、削除できるようゲートを直せた。対策: 指示に、一時物は scratchpad (/tmp) か worktree 配下だけに置く、管理外が要りそうなら作る前に人に聞く、終了時に片付ける、を入れる。"
+created_at = 1790797464
+updated_at = 1790797464
+weight = 0.0
+issue_number = 949
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/949"
+
+[[task]]
+id = "3c3f5952"
+title = "blastguard が $HOME 配下の使い捨て git clone の rm -r を拒否する (削除方針との食い違いの疑い)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "2026-10-01、/Users/yuki/p1probe-clone (agent が作った一時 clone) の rm -r が agent からは拒否された。ユーザーの ! 経由の rm -fr は通った。削除方針 (作業物・復元可能なものは消せるべき、形だけでの rm 拒否はゲートの欠陥) と食い違う可能性がある。拒否メッセージの原文は未取得なので、まず再現して理由を確認する。"
+created_at = 1790797466
+updated_at = 1790797466
+weight = 0.0
+issue_number = 950
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/950"
+
+[[task]]
+id = "a091b6a9"
+title = "harness-core fleet.rs 55 行のコメント「GATE crate はすべて block する」が事実と違う"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "3a8e3b73 slice 2 で発見。stuckguard は助言のみ、parallelguard は park 中、mutategate はどこからも実行されない。specguard も疑わしい。"
+created_at = 1790797563
+updated_at = 1790797563
+weight = 0.0
+issue_number = 953
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/953"
+
+[[task]]
+id = "bd48a6dd"
+title = "parked-plugins.json は parallelguard が settings.json で false と書くが、実際はキーが無い"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "3a8e3b73 slice 2 で 2026-10-01 に観測 (読み取りのみ)。"
+created_at = 1790797566
+updated_at = 1790797566
+weight = 0.0
+issue_number = 954
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/954"
+
+[[task]]
+id = "2450ba1b"
+title = "mutategate README の Pilot 2 の GATE crate 一覧に parallelguard が無い"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "3a8e3b73 slice 2 で発見。"
+created_at = 1790797568
+updated_at = 1790797568
+weight = 0.0
+issue_number = 955
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/955"
+
+[[task]]
+id = "c4461d98"
+title = "stuckguard は run_hook 経由なので panic すると何も出ず、ループ無しと区別できない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "3a8e3b73 slice 2 で発見。助言だけの hook だが、CLAUDE.md 1 節は消費者が問題なしと読む沈黙を許さない。"
+created_at = 1790797569
+updated_at = 1790797569
+weight = 0.0
+issue_number = 956
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/956"
+
+[[task]]
+id = "5733466a"
+title = "propguard / stuckguard / parallelguard の README に --protects が載っていない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "3a8e3b73 slice 2 で追加したフラグ。"
+created_at = 1790797571
+updated_at = 1790797571
+weight = 0.0
+issue_number = 957
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/957"
+
+[[task]]
+id = "f2ede46c"
+title = "Stop gate の block は repeat ledger により同じ理由の 2 回目が通る。各 gate の文書と表明がこれを書いていない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "3a8e3b73 の引用照合 (2026-10-01) で propguard について確認: check_run の block はすべて harness_core repeat の emit_stop_block 経由で、同じセッションで同じ理由の 2 回目は systemMessage だけになり stop が通る (repeat.rs 329 から 343 付近)。ledger が読めない場合は block のまま、run_guarded の panic block は対象外。propguard の表明は修正中。ほかの Stop gate (donegate, reviewgate, tdd など) の文書が無条件の block と書いていないか、全件の照合が必要。donegate giveup_sentinel が赤なのも同じ仕組み (bdd85e20)。"
+created_at = 1790797765
+updated_at = 1790797765
+weight = 0.0
+issue_number = 958
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/958"
+
+[[task]]
+id = "ec61ea6a"
+title = "stuckguard は stuckguard.toml が読めないと stderr に 1 行出すだけで既定値で動く"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "3a8e3b73 の引用照合で指摘 (config.rs 127 付近)。助言だけの hook なので影響は小さいが、設定で止めたつもりが効いていないことに気づけない。"
+created_at = 1790797766
+updated_at = 1790797766
+weight = 0.0
+issue_number = 959
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/959"
+
+[[task]]
+id = "aba0faae"
+title = "main の作業ツリー内 .claude/worktrees/agent-a6e4c40ebff0c5ebd に登録済み worktree が残っている"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "2026-10-01 に観測。git worktree list に載っており、.git/info/exclude で除外されている。repo 全体を grep するとこの checkout にも当たる。作ったセッションは不明。"
+created_at = 1790797768
+updated_at = 1790797768
+weight = 0.0
+issue_number = 960
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/960"
+
+[[task]]
+id = "e403da24"
+title = "gate crate の 32 ファイルに仕様書が無い (spec-doc-acks に理由付きで登録済み)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "0c277117 の backfill で判明。blastguard (approve, callgraph, detect/executors, interactive, protection, retro, reversible, scope)、specguard (coverage と specforge の src/forge 12 件)、stuckguard verdict_monotonicity、overwatch (lock, gate_outcomes, changeset, merge_conflict, reconcile)、parallelguard 全 3 件 (docs/specs/parallelguard.md が無い)。以前の map は specforge を specguard.md に紐づけていたが、その doc は forge に触れていない。"
+created_at = 1790798388
+updated_at = 1790798388
+weight = 0.0
+issue_number = 961
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/961"
+
+[[task]]
+id = "47356339"
+title = "docs/specs と実装の食い違い: blastguard の判定が Allow/Deny だけと書かれている、overwatch bridge は確定済みだけ backlog に送ると書かれている"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "0c277117 の backfill で KNOWN DRIFT として登録。実装は Ask を持つ / キュー全体を送る。blastguard.md にはターンを決して壊さないという記述も残る (CLAUDE.md 1 節の赤信号の語)。"
+created_at = 1790798389
+updated_at = 1790798389
+weight = 0.0
+issue_number = 962
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/962"
+
+[[task]]
+id = "f4f13e34"
+title = "specguard.toml の map exclude の Cargo.lock が root にしか効かず、crates 配下の Cargo.lock が map entry になる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "0c277117 で観測。今回は ack で済ませた。"
+created_at = 1790798391
+updated_at = 1790798391
+weight = 0.0
+issue_number = 963
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/963"
+
+[[task]]
+id = "67acbe09"
+title = "specguard map set-spec は git 管理外の map にしか書かない。spec-docs.toml にも書くべきか、map の spec_doc を合格扱いし続けるかは未裁定"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "0c277117 phase 2 の実装者が指摘。push 時の検査は作り直した map を使うので、map の spec_doc は常に空で効かない。"
+created_at = 1790798392
+updated_at = 1790798392
+weight = 0.0
+issue_number = 964
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/964"
+
+[[task]]
+id = "9721096f"
+title = "specguard gate-check: merge commit の衝突解消だけで変わったファイルは git log に出ず、未参照扱い (exit 2) になる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "0c277117 phase 2 の実装者が指摘。fail-closed 側なので見逃しではないが、正当な push が止まりうる。ローカル実行では ack と紐づけを作業ツリーから読むため、head の内容と食い違いうる。"
+created_at = 1790798394
+updated_at = 1790798394
+weight = 0.0
+issue_number = 965
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/965"
+
+[[task]]
+id = "b48ad137"
+title = "docs/specs の 16 件が実装と食い違う (0c277117 の照合で判明、既知の 2 件は別チケット)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "2026-10-01 の独立照合。blastguard main.rs (panic は黙って exit 0 と書くが実装は exit 2)、detect.rs (曖昧は allow と書くが Ask を返す)、classify.rs (段階数)、propguard main.rs / gate.rs / git.rs / config.rs (panic 握りつぶし・環境エラーは許可・parse エラーは黙って既定値、と書くが実装は block)、stuckguard main.rs / config.rs / anchor.rs (静かに return と書くが出力する)、mutategate main.rs (書き込み失敗を握りつぶすと書くが報告する、0.0 の閾値を受けると書くが拒否する)、specguard main.rs (pending はエラー時無出力と書く)、similarity.rs (類似度だけで判定と書くが極性反転も見る)、overwatch store.rs / aggregate.rs / review_queue.rs (欠落や破損を空として扱うと書くが判定不能として扱う)。多くは CLAUDE.md 4 節が禁じる、実装に無い安全な話を doc が書いている形。"
+created_at = 1790810474
+updated_at = 1790810474
+weight = 0.0
+issue_number = 966
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/966"
+
+[[task]]
+id = "46d8b193"
+title = "specguard の map は末尾 _tests のファイルをテストとして扱わない (trust_worktree_tests.rs が実装扱い)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "0c277117 の照合で判明。classify_path は test_ 始まり、_test 終わり、_test_ を含むものだけをテストとする。"
+created_at = 1790810475
+updated_at = 1790810475
+weight = 0.0
+issue_number = 967
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/967"
+
+[[task]]
+id = "60a2d061"
+title = "並行する subagent が scratchpad の同名ファイル (bump.py, mut.py, msg2.txt など) を上書きし合う"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "2026-10-01 に 3 体の agent が報告。1 体は他の agent の worktree 用に書き換えられた bump.py を実行しかけ、スクリプト自身の確認で止まった。対策: agent ごとに scratchpad 内のサブディレクトリを割り当てる。"
+created_at = 1790810477
+updated_at = 1790810477
+weight = 0.0
+issue_number = 968
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/968"
+
+[[task]]
+id = "d52f8935"
+title = "scratchpad の中でも agent の rm が拒否され、一時ファイルを片付けられない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "2026-10-01、4 体の agent が scratchpad 内の rm -r と rm -f を拒否された (blastguard と権限設定)。一時物を scratchpad に置く規則と組み合わせると、片付けが常に人の手作業になる。3c3f5952 と関連。"
+created_at = 1790810478
+updated_at = 1790810478
+weight = 0.0
+issue_number = 969
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/969"
+
+[[task]]
+id = "08a810a3"
+title = "gate を起動するテストが CLAUDE_CODE_SESSION_ID を引き継ぎ、セッション内と外で結果が変わる恐れ"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "donegate giveup_sentinel で判明 (bdd85e20)。harness_core repeat は payload ではなく環境変数のセッション ID で記録するため。HOME を固定しないテストは実際の repeat 記録に書き込む恐れもある。他の crate は未調査。"
+created_at = 1790810480
+updated_at = 1790810480
+weight = 0.0
+issue_number = 970
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/970"
+
+[[task]]
+id = "5e78f082"
+title = "specguard map gate-check の doc は push 時の gate と書くが、どこからも呼ばれていない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "3a8e3b73 slice 3 で判明。0c277117 のパッチ適用で実体化する予定。適用しない場合は doc を直す。"
+created_at = 1790810481
+updated_at = 1790810481
+weight = 0.0
+issue_number = 971
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/971"
+
+[[task]]
+id = "094f841e"
+title = "condukt の claim 返却で分割記録が無い場合と読めない場合を区別していない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "bdd85e20 の修正で判明。どちらも判定不能として exit 1。9a4fb884 の裁定はこの場合を明示していない。制限側なので見逃しではない。"
+created_at = 1790810483
+updated_at = 1790810483
+weight = 0.0
+issue_number = 972
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/972"
+
+[[task]]
+id = "2509909e"
+title = "specguard pending: 設定が読めないと exit 2、sentinel が判定不能だと exit 0 で、どちらも UNKNOWN と表示するのに終了コードが違う"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "3a8e3b73 slice 3 で判明。フックは終了コードを捨てるので実害は小さい。"
+created_at = 1790810484
+updated_at = 1790810484
+weight = 0.0
+issue_number = 973
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/973"
+
+[[task]]
+id = "aa8aaa91"
+title = "overwatch の canary gate は待ち時間が無く、配備直後の数秒の違反しか数えない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "3a8e3b73 slice 3 で判明。overwatch の表明に明記済み。"
+created_at = 1790810486
+updated_at = 1790810486
+weight = 0.0
+issue_number = 974
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/974"
+
+[[task]]
+id = "660d2033"
+title = "blastguard worktree_root_payload_cwd_dotdot / symlink_dotdot も置き場所に依存する fixture を使う"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "bdd85e20 の blastguard 修正で判明。同じ neutral_base に移す必要がある。また一部の防御 (glob 拒否、.. 規則、protected 判定) はそれだけを確かめるテストが無い。"
+created_at = 1790810488
+updated_at = 1790810488
+weight = 0.0
+issue_number = 975
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/975"
+
+[[task]]
+id = "4292df98"
+title = "blastguard tests/approval_memory.rs outside_the_project_is_never_approvable deterministically red on main"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "crates/blastguard/tests/approval_memory.rs:283 outside_the_project_is_never_approvable fails deterministically on main since at least 5d37f2f2 with the assertion message: an outside-reaching effect must never be recorded as approved. Reported by the coordinator session 389c3077 on 2026-10-02; not re-measured by the filer. Re-measure first, then decide whether the code or the test is wrong (do not weaken the assert to pass)."
+created_at = 1790882994
+updated_at = 1790882994
+weight = 0.0
+issue_number = 980
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/980"
+
+[[task]]
+id = "d7c32fdc"
+title = "condukt diffrisk_record every_invocation_is_journaled_even_when_nothing_is_recorded flaky under parallel test runs"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "condukt diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded is flaky when cargo runs tests in parallel: Config::load depends on environment variables that other tests in the same binary mutate. Fix by serializing the env-touching tests (shared lock) or by injecting config, not by retrying. Observed by session 389c3077 on 2026-10-02."
+created_at = 1790883003
+updated_at = 1790883003
+weight = 0.0
+issue_number = 981
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/981"
+
+[[task]]
+id = "328c1bbe"
+title = "claim did not prevent two sessions implementing the 3a8e3b73 propguard protection statement in parallel"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Backlog 3a8e3b73 propguard protection statement was implemented twice in parallel: 09c2f763 (merged on main via fb9ba002) and branch p1/gateprot2 (d83e0788, 95338f6f). The two texts conflicted add/add and had to be reconciled by observation in merge c1ccc33e (landed on main as 92704f80); main text overclaimed (omitted the repeat-ledger waiver, the inject-mode trust-after-one-block, the inline done_criteria fallback). The cross-session claim did not stop the duplicate work; find out why (claim granularity per slice? claim not taken?)."
+created_at = 1790883006
+updated_at = 1790883006
+weight = 0.0
+issue_number = 982
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/982"
+
+[[task]]
+id = "e11e1757"
+title = "fugu-router rollout drift: source 0.1.31 vs registry 0.1.29"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "Seen 2026-10-02 during blastguard rollout (session 389c3077): fugu-router source is 0.1.31 but installed_plugins.json still references fugu-router 0.1.29. Owned by another session; deliberately not rolled out here. Check whether it is intentional (parked-plugins.json has no entry seen) before running rollout-plugins.sh."
+created_at = 1790883012
+updated_at = 1790883012
+weight = 0.0
+issue_number = 983
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/983"
+
+[[task]]
+id = "9ae7609e"
+title = "specguard map keeps stale entries for src/agent.rs and src/prompt.rs after their move into src/forge/"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "specguard map still holds entries for crates/specguard/src/agent.rs and crates/specguard/src/prompt.rs after both files moved into crates/specguard/src/forge/, so specguard map gate-check over the full history returns rc 2 for the forge paths. The per-crate Cargo.lock part of the same rc 2 is already filed as f4f13e34. Reported by the p1/gateprot3 agent via the coordinator, 2026-10-02; not re-measured by the filer."
+created_at = 1790883023
+updated_at = 1790883023
+weight = 0.0
+issue_number = 985
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/985"
+
+[[task]]
 id = "33411f25"
 title = "test_precommit_hook.py が 2 件 RED: EXPECTED_SCANNERS に fail-open-diff / fault-injection-adoption / gate-protection が無い"
 project = "/Users/yuki/src/harness"
@@ -12592,141 +13116,6 @@ updated_at = 1790794908
 weight = 0.0
 issue_number = 938
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/938"
-
-[[task]]
-id = "ec878b2a"
-title = "condukt autonomy_invariant が赤: flow の SKILL.md の AskUserQuestion が allowlist 13 に対し 15 件"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = "b2977afb の実装者が d584e981 で観測。cargo test -p condukt --test autonomy_invariant は 15 passed 1 failed。allowlist の検査ループが flow で止まるため、scout 以降のファイルの検査は現在走っていない。flow に 2 か所が再監査なしで足されたのか、allowlist が古いのかは未判定。flow の該当行を ASK_ALLOWLIST のカテゴリと突き合わせて決めること。どのフックも cargo test を回さないので赤が放置されていた。"
-created_at = 1790795045
-updated_at = 1790795045
-weight = 0.0
-issue_number = 939
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/939"
-
-[[task]]
-id = "53897d41"
-title = "docs が condukt の SKILL.md を行番号で引用しているため、上の方に挿入すると引用が 8 件ずれる"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "b2977afb で観測。doc-claims ゲートが検出するので壊れたまま入ることはないが、SKILL.md を編集するたびに引用の張り直しが要る。行番号でなく見出しや固定マーカーで引用する形を検討。"
-created_at = 1790795048
-updated_at = 1790795048
-weight = 0.0
-issue_number = 940
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/940"
-
-[[task]]
-id = "f9c5b710"
-title = "flow / condukt / scout のループ不変条件の遵守を自己申告でなく観測する仕組み (advisory)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "b2977afb の実装者の提案。決定論的に測れるもの: condukt worker の変更ファイルが touched_files の部分集合か / worker が notes に書いた 別件 行が worktree 削除前に backlog add されたか / scout 実行中の Edit・Write・変更系 Bash の有無 / scout のレンズ候補数と追加数と棄却数の一致 / 前の claim が終わる前の次の claim。測れないもの: 書き留められなかった気づき、寄り道が本当に必要だったかの判断、transcript が無いセッション (判定不能として扱う)。まず overwatch review-queue に advisory として出す。"
-created_at = 1790795050
-updated_at = 1790795050
-weight = 0.0
-issue_number = 941
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/941"
-
-[[task]]
-id = "bdd85e20"
-title = "HEAD で cargo test --workspace の 8 target が恒常的に落ちる"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = "2026-10-01、HEAD d584e981、worktree p1-flaky で 4 回とも失敗: backlog project_scope / blastguard worktree_root_cd_desync, worktree_root_rm, worktree_root_symlink_escape / condukt autonomy_invariant, fp_gate_scope_contract, fp_oracle_e2e / donegate giveup_sentinel。原因は未調査。checkout が .harness-worktrees 配下にあることへの依存が疑われるが未検証。どのフックも cargo test を回さないので赤が放置されている。autonomy_invariant は ec878b2a と重複の可能性。"
-created_at = 1790796467
-updated_at = 1790796467
-weight = 0.0
-issue_number = 942
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/942"
-
-[[task]]
-id = "8b653590"
-title = "負荷に弱いタイミング依存テスト: blastguard d4_exponential_find_exec (2 秒予算) と overwatch test_freshness の run_ignored_test"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "2026-10-01 の 801d0bda 計測の 1 回目だけで失敗。d4 は 3.23 秒で予算 2 秒を超過、test_freshness は 60 秒超えで ExecutionError。並走する別セッションの cargo による負荷と整合するが未証明。"
-created_at = 1790796468
-updated_at = 1790796468
-weight = 0.0
-issue_number = 943
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/943"
-
-[[task]]
-id = "bbca0f83"
-title = "rollout のロックが途中で他プロセスの名前に変わった: no longer names this process"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "2026-10-01、condukt の rollout 終了時に「rollout.lock no longer names this process (pid 34905, file says 空)」と出た。直前に別セッション (34385c9e) の全体 rollout が走っていた。ロックの取得か解放に競合がある疑い。2 つの rollout が同時に走ると互いの配備を消す (e3366b5c)。"
-created_at = 1790796469
-updated_at = 1790796469
-weight = 0.0
-issue_number = 944
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/944"
-
-[[task]]
-id = "7efbd5c6"
-title = "scripts/tests/rebuild-stage-repo-destination.sh が linux-x86_64 を決め打ちし darwin では 0 件走査で落ちる"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "8acb117a で観測、main でも同じく失敗。さらに、走査したバイナリ数による空振り検査がガードより前で数えるので、linux でも古い dir の skip に気づけない。"
-created_at = 1790796668
-updated_at = 1790796668
-weight = 0.0
-issue_number = 945
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/945"
-
-[[task]]
-id = "1dbfea8d"
-title = "ship の rebuild-plugins.sh --stage-repo が --only 無しで走るので、crate か version の無いプラグインが cache にあると exit 1 になる"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "8acb117a で fail-closed を入れた結果。意図どおりだが ship はエラーとして報告する。2026-10-01 時点の実 cache には該当なし (読み取りのみで確認)。"
-created_at = 1790796670
-updated_at = 1790796670
-weight = 0.0
-issue_number = 946
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/946"
-
-[[task]]
-id = "490d30cc"
-title = "rollout-plugins.sh の usage が header の 2 から 80 行しか出さず、120 行超の header が途中で切れる"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p3"]
-touched_files = []
-status = "pending"
-notes = "8acb117a の実装者が指摘。以前からの切り詰め。"
-created_at = 1790796671
-updated_at = 1790796671
-weight = 0.0
-issue_number = 947
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/947"
 
 [[task]]
 id = "d94d05c3"

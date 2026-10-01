@@ -129,6 +129,24 @@ fn has_repo_above(start: &Path) -> bool {
     }
 }
 
+/// The label `backlog add` would record for an EXISTING local path: the
+/// symlink-resolved form. Writes canonicalize (`store::canonicalize_project`,
+/// CA-backlog-006) and so does the read-side filter, so a store row holding
+/// the raw path of a local directory is a shape the binary never produces.
+/// The raw `temp_dir()` is such a path on default macOS (`/var/folders/...`
+/// is a symlink into `/private/var`), and writing it verbatim made the two
+/// pinned-store controls fail with `no tasks` there while passing under a
+/// canonical `TMPDIR` — the controls were measuring the fixture's label
+/// shape, not the scoping property. Fixtures that simulate a local
+/// checkout's row therefore write this form.
+fn local_label(p: &Path) -> String {
+    std::fs::canonicalize(p)
+        .unwrap_or_else(|e| panic!("cannot canonicalize fixture path {}: {e}", p.display()))
+        .to_str()
+        .expect("fixture path is UTF-8")
+        .to_string()
+}
+
 const FOREIGN: &str = "/Users/some-other-machine/src/thing";
 
 // ---- the store is the scope -------------------------------------------------
@@ -316,7 +334,7 @@ fn a_pinned_store_dir_still_scopes_by_project() {
         format!("store_dir = \"{}\"\n", pinned.display()),
     )
     .unwrap();
-    let mut body = task("11111111", "belongs here", root.to_str().unwrap());
+    let mut body = task("11111111", "belongs here", &local_label(&root));
     body.push_str(&task("22222222", "belongs elsewhere", FOREIGN));
     std::fs::write(pinned.join("tasks.toml"), body).unwrap();
 
@@ -353,7 +371,7 @@ fn a_pinned_store_dir_still_works_outside_any_repo() {
         task(
             "33333333",
             "pinned and outside a repo",
-            orphan.to_str().unwrap(),
+            &local_label(&orphan),
         ),
     )
     .unwrap();

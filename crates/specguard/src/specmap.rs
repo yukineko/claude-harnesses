@@ -275,6 +275,237 @@ impl Review {
     }
 }
 
+/// Default review-staleness window: a `tracked` entry whose recorded review is
+/// MORE than this many commits behind HEAD is `stale-review`. Used when
+/// `[map] review_max_commits` is absent or `0` — never "never stale".
+pub const DEFAULT_REVIEW_MAX_COMMITS: u64 = 50;
+
+/// Resolve the configured `[map] review_max_commits` into the window actually
+/// applied: a positive value is used as-is; an absent key or `0` resolves to
+/// [`DEFAULT_REVIEW_MAX_COMMITS`]. `0` is deliberately NOT read as "disable":
+/// a window that can never expire would make every recorded review fresh
+/// forever, which is the permissive reading CLAUDE.md §3 forbids.
+pub fn effective_review_max_commits(configured: Option<u64>) -> u64 {
+    match configured {
+        Some(n) if n > 0 => n,
+        _ => DEFAULT_REVIEW_MAX_COMMITS,
+    }
+}
+
+/// The two DETERMINED answers about a `tracked` entry's review. The third
+/// answer — "cannot tell" — is not a variant here: it is the `Undetermined`
+/// arm of the surrounding [`Determination`] (see [`ReviewState`]), so it can
+/// never be mistaken for, or defaulted to, [`ReviewFreshness::Fresh`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewFreshness {
+    /// `reviewed_at.commit` is an ancestor of HEAD and at most N commits behind.
+    Fresh,
+    /// No review recorded (`reviewed_at` absent — a legacy entry), or the
+    /// recorded review commit is MORE than N commits behind HEAD.
+    StaleReview,
+}
+
+/// A determined review observation: the freshness plus what was measured.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewObservation {
+    /// Fresh or stale-review.
+    pub freshness: ReviewFreshness,
+    /// `git rev-list --count <reviewed_at.commit>..HEAD`, when a review commit
+    /// was recorded; `None` for an entry with no recorded review.
+    pub commits_behind: Option<u64>,
+}
+
+/// The review state of one `tracked` entry: `Known(fresh | stale-review)` or
+/// `Undetermined` ("cannot tell" — unreadable HEAD, a review commit that is not
+/// in HEAD's history, a git failure, an unparsable count). Three-valued by
+/// construction; the undetermined arm is never resolved to fresh.
+pub type ReviewState = Determination<ReviewObservation>;
+
+/// Stable output token for a review state: `"fresh"`, `"stale-review"` or
+/// `"undetermined"` (the values `map review-status` and `map list --json`
+/// report).
+pub fn review_state_token(state: &ReviewState) -> &'static str {
+    match state {
+        Determination::Known(o) => match o.freshness {
+            ReviewFreshness::Fresh => "fresh",
+            ReviewFreshness::StaleReview => "stale-review",
+        },
+        Determination::Undetermined(_) => "undetermined",
+    }
+}
+
+/// Pure classification of one entry's review against a window of
+/// `max_commits`, given a `distance` oracle that answers "how many commits is
+/// this review commit behind HEAD" (`Undetermined` when it cannot say).
+///
+/// * not `tracked` → `None`: only a `tracked` entry carries a review claim, so
+///   `changed` / `missing` entries get no review classification at all;
+/// * `reviewed_at` absent → stale-review (no recorded review is not a fresh
+///   review; this does not consult `distance`, so it holds even when HEAD is
+///   unreadable);
+/// * `distance` Undetermined → Undetermined (forwarded, never fresh);
+/// * `distance > max_commits` → stale-review; otherwise (`<=`, so exactly N
+///   behind is still fresh) → fresh.
+pub fn classify_review(
+    entry: &MapEntry,
+    max_commits: u64,
+    mut distance: impl FnMut(&str) -> Determination<u64>,
+) -> Option<ReviewState> {
+    if entry.status != Status::Tracked {
+        return None;
+    }
+    let Some(at) = entry.reviewed_at.as_ref() else {
+        return Some(Determination::known(ReviewObservation {
+            freshness: ReviewFreshness::StaleReview,
+            commits_behind: None,
+        }));
+    };
+    Some(distance(&at.commit).map(|behind| ReviewObservation {
+        freshness: if behind > max_commits {
+            ReviewFreshness::StaleReview
+        } else {
+            ReviewFreshness::Fresh
+        },
+        commits_behind: Some(behind),
+    }))
+}
+
+/// Git-backed `distance` oracle for [`classify_review`]: answers how many
+/// commits a review commit is behind HEAD, every git call going through
+/// `harness_core::boundary::run_with_timeout` and judged by exit status.
+///
+/// Each answer is `Undetermined` — never a number — when HEAD cannot be read
+/// (not a git repo, unborn HEAD), when the recorded commit is not a plain hex
+/// object name, when it is not an ancestor of HEAD (unknown object, or a commit
+/// outside HEAD's history, e.g. rebased away: "how far behind" has no answer),
+/// when any git call exits non-zero or times out, or when the count does not
+/// parse. Answers are cached per commit, so a commit shared by many entries
+/// costs one pair of git calls and records one give-up.
+pub struct ReviewClock {
+    repo_root: std::path::PathBuf,
+    head: Determination<String>,
+    cache: BTreeMap<String, Determination<u64>>,
+}
+
+/// Per-call bound on the git subprocesses [`ReviewClock`] runs.
+const REVIEW_GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+fn review_git(
+    repo_root: &Path,
+    args: &[&str],
+) -> Determination<harness_core::boundary::CommandOutput> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(repo_root).args(args);
+    harness_core::boundary::run_with_timeout(&mut cmd, REVIEW_GIT_TIMEOUT)
+}
+
+fn is_hex_object_name(s: &str) -> bool {
+    (4..=64).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+impl ReviewClock {
+    /// Read HEAD once (`git rev-parse --verify HEAD^{commit}`). An unreadable
+    /// HEAD is kept as `Undetermined` and makes every distance undetermined.
+    pub fn open(repo_root: &Path) -> ReviewClock {
+        let read = review_git(
+            repo_root,
+            &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
+        );
+        let head = match read {
+            Determination::Known(out) => match out.stdout_on_success() {
+                Determination::Known(s) => {
+                    let s = s.trim().to_string();
+                    if is_hex_object_name(&s) {
+                        Determination::known(s)
+                    } else {
+                        Determination::undetermined(format!(
+                            "git rev-parse HEAD printed an unparsable object name {s:?}"
+                        ))
+                    }
+                }
+                Determination::Undetermined(why) => Determination::Undetermined(why),
+            },
+            Determination::Undetermined(why) => Determination::Undetermined(why),
+        };
+        ReviewClock {
+            repo_root: repo_root.to_path_buf(),
+            head,
+            cache: BTreeMap::new(),
+        }
+    }
+
+    /// The HEAD this clock measures against (`Undetermined` when unreadable).
+    pub fn head(&self) -> &Determination<String> {
+        &self.head
+    }
+
+    /// Commits `commit` is behind HEAD (`git rev-list --count <commit>..HEAD`),
+    /// measured only after `git merge-base --is-ancestor <commit> HEAD` exited 0.
+    pub fn distance(&mut self, commit: &str) -> Determination<u64> {
+        let commit = commit.trim();
+        if let Some(hit) = self.cache.get(commit) {
+            return hit.clone();
+        }
+        let answer = self.measure(commit);
+        self.cache.insert(commit.to_string(), answer.clone());
+        answer
+    }
+
+    fn measure(&self, commit: &str) -> Determination<u64> {
+        let head = match &self.head {
+            Determination::Known(h) => h.clone(),
+            Determination::Undetermined(why) => return Determination::Undetermined(why.clone()),
+        };
+        if !is_hex_object_name(commit) {
+            return Determination::undetermined(format!(
+                "reviewed_at.commit {commit:?} is not a hex object name"
+            ));
+        }
+        let ancestry = review_git(
+            &self.repo_root,
+            &["merge-base", "--is-ancestor", commit, &head],
+        );
+        match ancestry {
+            Determination::Known(out) => match out.code() {
+                0 => {}
+                1 => {
+                    return Determination::undetermined(format!(
+                        "reviewed_at.commit {commit} is not in HEAD's history (not an ancestor \
+                         of {head}); its distance behind HEAD is unknown"
+                    ))
+                }
+                // Any other exit (128: unknown object) is a git that did not
+                // run to a conclusion; `stdout_on_success` mints that give-up
+                // with the exit code and stderr.
+                _ => {
+                    return match out.stdout_on_success() {
+                        Determination::Undetermined(why) => Determination::Undetermined(why),
+                        Determination::Known(_) => Determination::undetermined(format!(
+                            "git merge-base --is-ancestor {commit} {head} exited non-zero"
+                        )),
+                    }
+                }
+            },
+            Determination::Undetermined(why) => return Determination::Undetermined(why),
+        }
+        let range = format!("{commit}..{head}");
+        let stdout = match review_git(&self.repo_root, &["rev-list", "--count", &range]) {
+            Determination::Known(out) => match out.stdout_on_success() {
+                Determination::Known(s) => s,
+                Determination::Undetermined(why) => return Determination::Undetermined(why),
+            },
+            Determination::Undetermined(why) => return Determination::Undetermined(why),
+        };
+        match stdout.trim().parse::<u64>() {
+            Ok(n) => Determination::known(n),
+            Err(e) => Determination::undetermined(format!(
+                "git rev-list --count {range} printed an unparsable count {:?}: {e}",
+                stdout.trim()
+            )),
+        }
+    }
+}
+
 impl MapEntry {
     /// A fresh path-keyed skeleton entry (kind `Feature`, no spec-doc yet),
     /// created by the deterministic sync for a not-yet-attributed file.
@@ -1946,5 +2177,82 @@ impl_files = ["src/legacy.rs"]
         let e = filter_entry("anything", None, &["src/x.rs"], &[]);
         assert!(entry_matches(&e, ""));
         assert!(entry_matches(&e, "   "));
+    }
+
+    fn reviewed_entry(status: Status, commit: Option<&str>) -> MapEntry {
+        let mut e = MapEntry::skeleton("src/x.rs", status, None);
+        e.reviewed_at = commit.map(|c| ReviewedAt {
+            commit: c.to_string(),
+            date: "2026-01-01".to_string(),
+        });
+        e
+    }
+
+    fn token(st: Option<ReviewState>) -> Option<&'static str> {
+        st.as_ref().map(review_state_token)
+    }
+
+    #[test]
+    fn effective_review_max_commits_never_disables() {
+        assert_eq!(effective_review_max_commits(None), 50);
+        assert_eq!(effective_review_max_commits(Some(0)), 50);
+        assert_eq!(effective_review_max_commits(Some(7)), 7);
+    }
+
+    #[test]
+    fn classify_review_window_is_inclusive_of_n() {
+        let e = reviewed_entry(Status::Tracked, Some("abcd"));
+        let at = |n: u64| token(classify_review(&e, 5, |_| Determination::known(n)));
+        assert_eq!(at(5), Some("fresh"), "exactly N behind is fresh");
+        assert_eq!(at(6), Some("stale-review"), "more than N is stale");
+        assert_eq!(at(0), Some("fresh"));
+    }
+
+    #[test]
+    fn classify_review_forwards_undetermined_and_skips_non_tracked() {
+        let e = reviewed_entry(Status::Tracked, Some("abcd"));
+        assert_eq!(
+            token(classify_review(&e, 5, |_| Determination::undetermined(
+                "test: no answer"
+            ))),
+            Some("undetermined")
+        );
+        for s in [Status::Changed, Status::Missing] {
+            let e = reviewed_entry(s, None);
+            assert_eq!(token(classify_review(&e, 5, |_| unreachable!())), None);
+        }
+    }
+
+    #[test]
+    fn classify_review_without_reviewed_at_is_stale_without_asking_git() {
+        let e = reviewed_entry(Status::Tracked, None);
+        let mut asked = false;
+        let st = classify_review(&e, 5, |_| {
+            asked = true;
+            Determination::known(0)
+        });
+        assert_eq!(token(st), Some("stale-review"));
+        assert!(!asked);
+    }
+
+    #[test]
+    fn review_clock_without_repo_is_undetermined() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut clock = ReviewClock::open(tmp.path());
+        // No repo: HEAD is unreadable, so every distance is undetermined.
+        assert!(matches!(clock.head(), Determination::Undetermined(_)));
+        assert!(matches!(
+            clock.distance("abcdef12"),
+            Determination::Undetermined(_)
+        ));
+    }
+
+    #[test]
+    fn review_commit_must_be_a_hex_object_name() {
+        assert!(is_hex_object_name("0123456789abcdef"));
+        assert!(!is_hex_object_name("--all"));
+        assert!(!is_hex_object_name("HEAD"));
+        assert!(!is_hex_object_name("abc"));
+        assert!(!is_hex_object_name(""));
     }
 }

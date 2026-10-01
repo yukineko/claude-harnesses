@@ -161,15 +161,18 @@ cwd は cwd 自身がキーになる。設定ファイルや TTL の調整ノブ
 
 ## ストレージ構成
 
-すべてのデータは version-controlled な場所またはユーザー所有キャッシュに置かれる：
+すべてのデータはリポジトリの外、ユーザーのホームディレクトリ配下に置かれる：
 
 ```
 <base>/<project-key>/overwatch/
   leases.json          # 有効な lease のスナップショット
   events.jsonl         # append-only レジストリ
+  ...                  # 同じディレクトリの他の ledger（violations・review findings・
+                       # audit rounds・status cache など。src/store.rs の *_path 関数を参照）
 ```
 
-- `<base>`: 既定は `~/.local/share/claude-harnesses`（overwatch.toml で設定可能）。
+- `<base>`: `~/.overwatch`（`$HOME/.overwatch`。`src/store.rs` の `storage_root` が呼ぶ
+  `harness_core::config::base_dir("overwatch")`）。設定では変えられない — 設定ファイルは存在しない（上の「ストレージ」参照）。
 - `<project-key>`: リポジトリの MAIN worktree root の `<basename>-<正規化パスの fnv1a32>`（linked worktree 間で共有）。
 - Lease は full reaper を超えて persist **しない**。セッション有効期間の ephemeral レコード。
 

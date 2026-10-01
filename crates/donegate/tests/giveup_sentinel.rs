@@ -69,8 +69,25 @@ impl GateRun {
     fn blocked(&self) -> bool {
         self.stdout.contains("\"decision\"") && self.stdout.contains("block")
     }
+
+    /// The repeat ledger's announced second-occurrence waiver
+    /// (`harness_core::repeat::emit_stop_block`): a `systemMessage`, NOT a
+    /// `decision`, so the stop proceeds while the finding is still reported.
+    fn waived_as_repeat(&self) -> bool {
+        !self.blocked() && self.stdout.contains("systemMessage") && self.stdout.contains("2度目")
+    }
 }
 
+/// One Stop hook invocation for `session`.
+///
+/// `CLAUDE_CODE_SESSION_ID` is set to the SAME `session` as the payload, the
+/// way a real Claude Code session delivers both. It must not be inherited:
+/// the repeat ledger (`harness_core::repeat`, operator ruling 2026-09-18)
+/// keys on this env var, not on the payload, so an inherited value made the
+/// fixture's session boundaries meaningless for it — every "session" in this
+/// file shared whichever session ran `cargo test` (red inside a Claude Code
+/// session, green in a bare shell where the ledger is Undetermined and every
+/// block stands).
 fn run_gate(home: &Path, root: &Path, session: &str) -> GateRun {
     let bin = env!("CARGO_BIN_EXE_donegate");
     let payload = format!(
@@ -81,6 +98,7 @@ fn run_gate(home: &Path, root: &Path, session: &str) -> GateRun {
         .arg("gate")
         .current_dir(root)
         .env("HOME", home)
+        .env("CLAUDE_CODE_SESSION_ID", session)
         .env_remove("DONEGATE_DISABLE")
         .env_remove("HARNESS_TRUST_ALL")
         .stdin(Stdio::piped())
@@ -212,14 +230,52 @@ fn a_normal_green_allow_leaves_no_sentinel() {
     );
 }
 
+/// How the under-cap Stops of a give-up cycle must be answered.
+#[derive(Clone, Copy, Debug)]
+enum UnderCap {
+    /// The session's first cycle: each attempt's reason (`attempt i/3`) is
+    /// new to this session, so the gate blocks at full strength.
+    Blocks,
+    /// A later cycle in the SAME session: the attempt counter was reset by the
+    /// give-up, so `attempt 1/3`, `2/3`, `3/3` are reasons this session has
+    /// already been blocked on. The repeat ledger (operator ruling 2026-09-18,
+    /// 「ユーザの指示を2度やぶるgateはいらない」, applied to every Stop gate
+    /// unconditionally) lets each through with an announced waiver. The
+    /// attempt counter still advances, so the cap is still exhausted and the
+    /// give-up is still recorded — this is the path a real session takes.
+    WaivedAsRepeat,
+}
+
 /// Drive `max_attempts + 1` Stops so the cap is exhausted exactly once.
 /// The give-up branch resets the attempt counter, so calling this N times
-/// produces N give-ups for the same session.
+/// produces N give-ups for the same session. `under_cap` states which answer
+/// the first `max_attempts` Stops must get (see [`UnderCap`]); it is asserted
+/// exactly, so a cycle cannot silently change shape.
 /// Returns the give-up run itself.
-fn one_giveup_cycle(home: &Path, root: &Path, session: &str) -> GateRun {
-    for _ in 0..3 {
+fn one_giveup_cycle(home: &Path, root: &Path, session: &str, under_cap: UnderCap) -> GateRun {
+    for i in 1..=3 {
         let r = run_gate(home, root, session);
-        assert!(r.blocked(), "apparatus: under the cap donegate must block");
+        assert!(
+            !r.stderr.contains("still failing"),
+            "apparatus: attempt {i} is under the cap and must not give up; stderr={:?}",
+            r.stderr
+        );
+        match under_cap {
+            UnderCap::Blocks => assert!(
+                r.blocked(),
+                "apparatus: attempt {i} of a session's first cycle must block; stdout={:?} \
+                 stderr={:?}",
+                r.stdout,
+                r.stderr
+            ),
+            UnderCap::WaivedAsRepeat => assert!(
+                r.waived_as_repeat(),
+                "apparatus: attempt {i} of a repeated cycle in the same session must be the \
+                 announced repeat-ledger waiver; stdout={:?} stderr={:?}",
+                r.stdout,
+                r.stderr
+            ),
+        }
     }
     let r = run_gate(home, root, session);
     assert!(
@@ -257,9 +313,9 @@ fn repeated_giveups_in_one_session_never_become_systemic() {
     use overwatch::violation::{systemic_issues, RecurrencePolicy};
 
     let (home, root) = project("systemic-one", "exit 1");
-    for _ in 0..3 {
-        one_giveup_cycle(&home, &root, "sess-only-one");
-    }
+    one_giveup_cycle(&home, &root, "sess-only-one", UnderCap::Blocks);
+    one_giveup_cycle(&home, &root, "sess-only-one", UnderCap::WaivedAsRepeat);
+    one_giveup_cycle(&home, &root, "sess-only-one", UnderCap::WaivedAsRepeat);
 
     let events = giveup_events(&home);
     assert_eq!(
@@ -294,9 +350,9 @@ fn giveups_across_two_sessions_do_become_systemic() {
     use overwatch::violation::{systemic_issues, RecurrencePolicy};
 
     let (home, root) = project("systemic-two", "exit 1");
-    one_giveup_cycle(&home, &root, "sess-a");
-    one_giveup_cycle(&home, &root, "sess-a");
-    one_giveup_cycle(&home, &root, "sess-b");
+    one_giveup_cycle(&home, &root, "sess-a", UnderCap::Blocks);
+    one_giveup_cycle(&home, &root, "sess-a", UnderCap::WaivedAsRepeat);
+    one_giveup_cycle(&home, &root, "sess-b", UnderCap::Blocks);
 
     let events = giveup_events(&home);
     assert_eq!(events.len(), 3, "apparatus: three give-up events");
@@ -381,7 +437,7 @@ fn a_giveup_that_cannot_be_recorded_says_so() {
 #[test]
 fn a_recordable_giveup_prints_no_failure_warning() {
     let (home, root) = project("recordable", "exit 1");
-    let r = one_giveup_cycle(&home, &root, "sess-ok");
+    let r = one_giveup_cycle(&home, &root, "sess-ok", UnderCap::Blocks);
     assert!(
         !r.stderr.contains("could not record"),
         "a give-up that WAS recorded must not warn about a failed record; stderr={:?}",

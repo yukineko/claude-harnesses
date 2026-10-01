@@ -162,6 +162,7 @@ pre-commit・pre-push フック。`--approval` はそれらに一切触れない
 | **spec-gap divert**（3-1.5・open_questions / confidence:low / brief verdict=not-covered） | **判断要求** | medium | high | low | 付けない | **escalate** | —（「正典が無いまま実装させるか」は設計判断。3値は R4 の acceptance が固定） |
 | **merge conflict の pick-a-side** | **判断要求** | — | — | — | `--conflict` | **escalate** | —（自動 pick は last-writer-wins） |
 | **測れない決定**（CLAUDE.md §2） | **判断要求** | — | — | — | `--untestable` | **escalate** | —（測れないという事実こそ人間が知るべき情報） |
+| **charter 彫り直し**（3-1 の 3・backlog が一手も出さず charter からも一手が引けない） | **判断要求** | — | — | — | 付けない | **人に聞く（自答しない）** | —（ゴールの中身を決めるのは人間。2026-10-01 のユーザー裁定・ec878b2a） |
 | **循環ブレーカー trip**（早期脱出・`condukt circuit check`） | 決定論 stop | — | — | — | — | **人にも policy にも聞かない clean stop** | —（ループを止め Step 4 へ） |
 
 > **種別の見分け方**: 「はい/いいえで答えられ、答えが『はい』だと分かっているもの」＝**権限認可**（`--approval`）。
@@ -176,6 +177,9 @@ pre-commit・pre-push フック。`--approval` はそれらに一切触れない
 **(b) pivot**（genuine な戦略判断）、**(c) merge conflict の pick-a-side と §2 の測れない決定**、
 **(d) spec-gap divert**（3-1.5。「正典が無いまま実装させるか」は設計判断であり、
 risk medium / reversible high / confidence low ＝ pivot と同じプロファイルで escalate する）、
+**(e) charter 彫り直し中の問い**（3-1 の 3。backlog が空で charter から一手が引けないとき。
+charter を彫る問いはゴールの中身を人間に決めてもらう判断要求であり、2026-10-01 のユーザー裁定
+〈ec878b2a〉で自律モードでも残すと確定した）、
 および **policy answer が block を返したゲート**。**deploy/push の GATED 承認は 2026-08-07 の常設許諾により
 auto へ移した**（block が返れば止まる。実際の防護は blastguard 等の deterministic gate が担う）。
 その他の routine な human gate も policy-answer の auto で自答され Yes/No は消える（**全件が
@@ -762,9 +766,11 @@ JSON の `idle_source` が `session_flag`）。transcript が見つからない�
   権限認可（排他ロック競合＝stand down、resume＝優先 pick 先頭、**deploy/push の GATED 承認**、
   condukt Phase 3 の合意）は 2026-08-07 の常設許諾により auto で消える。
   判断要求（**pivot** / **worker blocked** / merge conflict の pick-a-side / §2 の測れない決定 /
-  **spec-gap divert**）は escalate のまま残す。**迷ったら `--approval` を付けない** —
+  **spec-gap divert** / **charter 彫り直し中の問い**）は escalate のまま残す
+  （charter 彫り直しの問いも自答せず人に聞く）。**迷ったら `--approval` を付けない** —
   付け忘れは冗長な質問で済むが、付け間違いは人間の判断を消す。
   自律で残る停止は **(a) worker blocked** **(b) pivot** **(c) conflict/untestable の判断要求**
-  **(d) spec-gap divert（3-1.5）** **(e) budgetguard 早期脱出**、および policy が **block** を返したゲート。
+  **(d) spec-gap divert（3-1.5）** **(e) charter 彫り直し中の問い（3-1 の 3）** **(f) budgetguard 早期脱出**、
+  および policy が **block** を返したゲート。
   exit 1（既定・非自律）は**従来どおり全 Ask を維持**（後方互換。`--approval` もそこでは不活性）。
   存在しない版（exit 127）は非自律とみなす。

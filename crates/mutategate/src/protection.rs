@@ -15,8 +15,11 @@
 use harness_core::gate::Protection;
 
 pub const PROTECTION: Protection = Protection {
-    protects: "INERT: nothing runs this gate automatically, so today it \
-        protects nothing until a human runs it by hand. It ships no plugin.json \
+    protects: "INERT: nothing runs this gate automatically against a real \
+        pilot crate, so today it protects nothing until a human runs it by \
+        hand. (scripts/test_mutation_gate_status.sh does run \
+        scripts/mutation-gate.sh, but under a fake `cargo` PATH shim, to test \
+        the script's own exit-status handling; no mutant is generated.) It ships no plugin.json \
         or hooks (Cargo.toml: 'NOT a distributed Claude Code plugin'); its only \
         trigger, .github/workflows/mutation.yml, was deleted in a572f5ad \
         (GitHub Actions ban) and nothing replaced it (README.md 'TRIGGER: \

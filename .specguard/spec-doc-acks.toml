@@ -130,3 +130,31 @@ reason = "parallelguard has no docs/specs/parallelguard.md. Spec debt."
 [[ack]]
 path = "crates/parallelguard/src/store.rs"
 reason = "parallelguard has no docs/specs/parallelguard.md. Spec debt."
+
+# Added 2026-10-02 for the 0c277117 ruling (cover protection.rs x6 and
+# trust_worktree_tests.rs before wiring the push check). Each reason names the
+# grep that was run against the docs/specs doc at main e70d48dd.
+
+[[ack]]
+path = "crates/blastguard/src/deletion.rs"
+reason = "Recursive rm judged by what it destroys (3aa215e1, user ruling 2026-09-30). blastguard.md still describes the older shape-based analyze_rm rule; grep deletion / 3aa215e1 / by_target / 'class 5' in it: 0 hits each. Spec debt."
+
+[[ack]]
+path = "crates/parallelguard/src/protection.rs"
+reason = "Protection statement printed by --protects and parsed by scripts/check-gate-protection.py. parallelguard has no docs/specs/parallelguard.md. Spec debt."
+
+[[ack]]
+path = "crates/propguard/src/protection.rs"
+reason = "Protection statement printed by --protects and parsed by scripts/check-gate-protection.py; propguard.md does not describe it (grep protects: 0 hits). Same shape as the blastguard/src/protection.rs ack."
+
+[[ack]]
+path = "crates/propguard/src/fault_injection_tests.rs"
+reason = "Unit-test submodule (classified impl by the path heuristic) pinning that a faulted git scan resolves to decide_scan_failed's git-scan-failed BLOCK (8696dd7e). propguard.md has no scan-failure section (grep scan_failed / git-scan: 0 hits). Spec debt."
+
+[[ack]]
+path = "crates/propguard/src/trust_worktree_tests.rs"
+reason = "Unit-test submodule (the _tests suffix is not treated as a test path) pinning that a linked worktree inherits trust from its main worktree (4cacdfae). propguard.md covers is_trusted for untrusted config but not worktree inheritance (grep worktree / inherit: 0 hits). Spec debt."
+
+[[ack]]
+path = "crates/stuckguard/src/protection.rs"
+reason = "Protection statement printed by --protects and parsed by scripts/check-gate-protection.py; stuckguard.md does not describe it (grep protects / protection: 0 hits). Spec debt."

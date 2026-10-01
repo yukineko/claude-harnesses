@@ -490,6 +490,30 @@ mod tests {
         ));
     }
 
+    /// Per-process AND per-call unique scratch dir, removed on drop (best-effort,
+    /// also on panic). Fixed paths raced across concurrent `cargo test` runs.
+    struct TestDir(std::path::PathBuf);
+
+    impl TestDir {
+        fn new(tag: &str) -> Self {
+            static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let dir = std::env::temp_dir().join(format!("{tag}-{}-{n}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            TestDir(dir)
+        }
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn save_all_rewrites_store_with_label() {
         let dir = std::env::temp_dir().join(format!("fugu-saveall-{}", std::process::id()));
@@ -541,8 +565,8 @@ mod tests {
 
     #[test]
     fn import_episodes_deduplicates() {
-        let dir = std::env::temp_dir().join("fugu-router-import-ep-test");
-        let _ = std::fs::create_dir_all(&dir);
+        let guard = TestDir::new("fugu-router-import-ep");
+        let dir = guard.path().to_path_buf();
         let src = dir.join("src.jsonl");
         let dst = dir.join("dst.jsonl");
         let _ = std::fs::remove_file(&src);
@@ -570,8 +594,8 @@ mod tests {
 
     #[test]
     fn import_episodes_dry_run_writes_nothing() {
-        let dir = std::env::temp_dir().join("fugu-router-import-dry-test");
-        let _ = std::fs::create_dir_all(&dir);
+        let guard = TestDir::new("fugu-router-import-dry");
+        let dir = guard.path().to_path_buf();
         let src = dir.join("src.jsonl");
         let dst = dir.join("dst.jsonl");
         let _ = std::fs::remove_file(&src);
@@ -590,8 +614,8 @@ mod tests {
 
     #[test]
     fn dedup_episodes_removes_duplicates_preserves_order() {
-        let dir = std::env::temp_dir().join("fugu-router-dedup-ep-test");
-        let _ = std::fs::create_dir_all(&dir);
+        let guard = TestDir::new("fugu-router-dedup-ep");
+        let dir = guard.path().to_path_buf();
         let path = dir.join("episodes.jsonl");
         let _ = std::fs::remove_file(&path);
 
@@ -614,8 +638,8 @@ mod tests {
 
     #[test]
     fn dedup_playbooks_removes_duplicates() {
-        let dir = std::env::temp_dir().join("fugu-router-dedup-pb-test");
-        let _ = std::fs::create_dir_all(&dir);
+        let guard = TestDir::new("fugu-router-dedup-pb");
+        let dir = guard.path().to_path_buf();
         let path = dir.join("playbooks.jsonl");
         let _ = std::fs::remove_file(&path);
 
@@ -636,8 +660,8 @@ mod tests {
 
     #[test]
     fn playbook_roundtrip() {
-        let dir = std::env::temp_dir().join("fugu-router-playbook-test");
-        let _ = std::fs::create_dir_all(&dir);
+        let guard = TestDir::new("fugu-router-playbook");
+        let dir = guard.path().to_path_buf();
         let path = dir.join("playbooks.jsonl");
         let _ = std::fs::remove_file(&path);
         let pb = Playbook {
@@ -671,8 +695,8 @@ mod tests {
 
     #[test]
     fn skips_malformed_lines() {
-        let dir = std::env::temp_dir().join("fugu-router-store-test");
-        let _ = std::fs::create_dir_all(&dir);
+        let guard = TestDir::new("fugu-router-store");
+        let dir = guard.path().to_path_buf();
         let path = dir.join("episodes.jsonl");
         let _ = std::fs::remove_file(&path);
         let ep = Episode {

@@ -12945,3 +12945,78 @@ updated_at = 1790810488
 weight = 0.0
 issue_number = 975
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/975"
+
+[[task]]
+id = "4292df98"
+title = "blastguard tests/approval_memory.rs outside_the_project_is_never_approvable deterministically red on main"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "crates/blastguard/tests/approval_memory.rs:283 outside_the_project_is_never_approvable fails deterministically on main since at least 5d37f2f2 with the assertion message: an outside-reaching effect must never be recorded as approved. Reported by the coordinator session 389c3077 on 2026-10-02; not re-measured by the filer. Re-measure first, then decide whether the code or the test is wrong (do not weaken the assert to pass)."
+created_at = 1790882994
+updated_at = 1790882994
+weight = 0.0
+issue_number = 980
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/980"
+
+[[task]]
+id = "d7c32fdc"
+title = "condukt diffrisk_record every_invocation_is_journaled_even_when_nothing_is_recorded flaky under parallel test runs"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "condukt diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded is flaky when cargo runs tests in parallel: Config::load depends on environment variables that other tests in the same binary mutate. Fix by serializing the env-touching tests (shared lock) or by injecting config, not by retrying. Observed by session 389c3077 on 2026-10-02."
+created_at = 1790883003
+updated_at = 1790883003
+weight = 0.0
+issue_number = 981
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/981"
+
+[[task]]
+id = "328c1bbe"
+title = "claim did not prevent two sessions implementing the 3a8e3b73 propguard protection statement in parallel"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Backlog 3a8e3b73 propguard protection statement was implemented twice in parallel: 09c2f763 (merged on main via fb9ba002) and branch p1/gateprot2 (d83e0788, 95338f6f). The two texts conflicted add/add and had to be reconciled by observation in merge c1ccc33e (landed on main as 92704f80); main text overclaimed (omitted the repeat-ledger waiver, the inject-mode trust-after-one-block, the inline done_criteria fallback). The cross-session claim did not stop the duplicate work; find out why (claim granularity per slice? claim not taken?)."
+created_at = 1790883006
+updated_at = 1790883006
+weight = 0.0
+issue_number = 982
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/982"
+
+[[task]]
+id = "e11e1757"
+title = "fugu-router rollout drift: source 0.1.31 vs registry 0.1.29"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "Seen 2026-10-02 during blastguard rollout (session 389c3077): fugu-router source is 0.1.31 but installed_plugins.json still references fugu-router 0.1.29. Owned by another session; deliberately not rolled out here. Check whether it is intentional (parked-plugins.json has no entry seen) before running rollout-plugins.sh."
+created_at = 1790883012
+updated_at = 1790883012
+weight = 0.0
+issue_number = 983
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/983"
+
+[[task]]
+id = "9ae7609e"
+title = "specguard map keeps stale entries for src/agent.rs and src/prompt.rs after their move into src/forge/"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "specguard map still holds entries for crates/specguard/src/agent.rs and crates/specguard/src/prompt.rs after both files moved into crates/specguard/src/forge/, so specguard map gate-check over the full history returns rc 2 for the forge paths. The per-crate Cargo.lock part of the same rc 2 is already filed as f4f13e34. Reported by the p1/gateprot3 agent via the coordinator, 2026-10-02; not re-measured by the filer."
+created_at = 1790883023
+updated_at = 1790883023
+weight = 0.0
+issue_number = 985
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/985"

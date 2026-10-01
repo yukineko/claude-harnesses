@@ -276,12 +276,7 @@ pub fn run_cli(json: bool, window_days: Option<i64>) -> anyhow::Result<()> {
     let path = ledger_path(&cwd);
     let records = match load(&path).require() {
         Required::Determined(r) => r,
-        Required::Blocked(v) => anyhow::bail!(
-            "cannot report undetermined metrics: {}",
-            v.reason()
-                .map(harness_core::verdict::Reason::as_str)
-                .unwrap_or("undetermined with no stated reason")
-        ),
+        Required::Blocked(v) => anyhow::bail!("cannot report undetermined metrics: {}", v.as_str()),
     };
     let m = aggregate(
         &records,

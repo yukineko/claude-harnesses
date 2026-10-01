@@ -280,6 +280,12 @@ ALLOWLIST: list[dict[str, str]] = [
         "reason": "verified FP: the undetermined lookup is labelled on stderr and distinguishable from NoLease; tests/anchor_undetermined_is_labelled.rs",
     },
     {
+        "path": "crates/donegate/src/gate.rs",
+        "pattern": "undetermined-arm-empty-fallback",
+        "needle": "Required::Blocked(_undetermined) => None",
+        "reason": "verified FP: None = no scope = every check applies (restrictive); gate::tests::evaluate_failed_scan_sets_scan_failed_not_unscoped goes RED when the arm is mutated to Some(vec![])",
+    },
+    {
         "path": "crates/stuckguard/src/verdict_monotonicity.rs",
         "pattern": "undetermined-arm-empty-fallback",
         "needle": "Determination::Undetermined(_) => None",

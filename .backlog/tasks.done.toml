@@ -22615,6 +22615,55 @@ issue_number = 146
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/146"
 
 [[task]]
+id = "e269274f"
+title = "Determination を直接 match する 40+ 箇所の Undetermined 腕が全数監査されていない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+敵対的監査 (2026-08-06) が自ら UNVERIFIED として残した項目。棄却ではなく未検証なので、CLAUDE.md 第6節「反証にも同じ立証責任を課す」に従い残す。
+
+監査者の記述をそのまま引く: Determination を直接 match する 40+ 箇所の全数監査はしていない。autoflow/src/lock.rs 2 箇所と autoflow/src/backlog.rs / backlog/src/driver.rs の冒頭のみ読んだ。Undetermined 腕が permissive な箇所が残っている可能性は棄却できない。
+
+読んだ範囲 (autoflow/src/lock.rs:53-58,120-126) はいずれも制限側で、根拠もコメントで明示されていた。つまり「見た分は健全」であって「全部健全」ではない。
+
+この形が危険なのは 2 つの穴が重なるため: (a) Determination::Known が pub variant なので require() を経由しない直接 match という抽出路が存在し、型はそこを見ていない。(b) check-fail-open.py も Required::Blocked 綴りを見ていない (別項目)。型と lexical gate の両方が見ていない領域に 40+ 箇所ある。
+
+対照的に require() 経由の 45 箇所は全件目視され、制限側でない腕は 0 件だった。差は経路であって規律ではない。
+
+完了条件: 直接 match の全箇所を列挙し、各 Undetermined 腕がどちら側へ倒れているかを file:line つきで表にする。permissive な箇所があれば是正。監査は利害のない agent が行う。
+
+[triage 2026-09-29 @b325a169] p2->p1: 281 Determination::Undetermined arms outside harness-core never audited as a whole"""
+created_at = 1785969190
+updated_at = 1790794458
+weight = 0.0
+issue_number = 179
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/179"
+
+[[task]]
+id = "f71ac81a"
+title = "reviewgate の diff_text はタイムアウト境界を通らない生 Command::output"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "verified",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "検証者が propguard との差分を実測。crates/reviewgate/src/git.rs:135-143 の run_diff は raw Command::output() で、boundary::run_with_timeout を通らない = 時間上限が一切ない (propguard の CA-propguard-006 相当の修正が入っていない)。さらに from_utf8_lossy を使うため propguard が RED テストで固定した『デコード不能バイト』の欠陥はここでは再現しない。reviewgate の実際の穴は if let Ok(o) (spawn 失敗) / if o.status.success() (非ゼロ終了) / git.rs:121 の if let Ok(content) = read_to_string。docs/audit-reviewgate-verdict-paths.md の A4 は記録済みだが『propguard と同型』という理解でテスト群を移植すると空振りする。"
+created_at = 1785972084
+updated_at = 1790794911
+weight = 0.0
+issue_number = 186
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/186"
+
+[[task]]
 id = "b2977afb"
 title = "condukt と scout の SKILL.md にも逸脱禁止・常時起票の不変条件を入れる (flow は d215649a で完了)"
 project = "/Users/yuki/src/harness"
@@ -22717,3 +22766,40 @@ updated_at = 1790796667
 weight = 0.0
 issue_number = 190
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/190"
+
+[[task]]
+id = "4cacdfae"
+title = "harness_core::trust の worktree 継承を残り 5 consumer へ展開するか判定する (reviewgate/precommit-audit/propguard/tdd/beacon)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "trust",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "donegate は abbd2f1b で harness_core::trust::resolve (worktree 継承つき三値) へ移行したが、同じ trust 機構に乗る他 5 consumer は exact-match の is_trusted のままで、CLAUDE.md 8 が作業を義務づける worktree では project config が黙って無視され続ける。実測 2026-08-06 測定点 401821df、grep -rn harness_core::trust --include=*.rs crates/ で確定: reviewgate/src/config.rs:193 / precommit-audit/src/main.rs:241 / propguard/src/config.rs:209 / tdd/src/config.rs:246 / beacon/src/config.rs:150。tdd は同じ穴を逆向きに解決していることが実測済み (tdd.toml is not trusted; ignoring it -> transition unknown -> condukt state set --status verified が拒否)。つまり donegate と tdd は同一入力に対して反対の解決をしていた状態で、donegate 側だけが是正された。各 consumer の untrusted の意味は一律ではない (gate は refusal=block、beacon の command は home config へ fallback で妥当かもしれない) ので、一括置換ではなく consumer ごとに untrusted の意味を判定すること。完了条件: 5 件それぞれについて worktree で project config が読まれるか / untrusted がどちら側に解決すべきかを判定し、判定結果を実測で固定するか、変更しない理由を明記して残すこと。"
+created_at = 1786021777
+updated_at = 1790797344
+weight = 0.0
+issue_number = 187
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/187"
+
+[[task]]
+id = "e79afdd2"
+title = "harness-core trust::main_worktree_of: 偽造 gitfile で trusted main の trust を継承できる (back-pointer 未検証)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "trust",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "4cacdfae 検証で CONFIRMED。.git=gitdir: <trusted>/.git/worktrees/nonexistent で InheritedFromMainWorktree。worktrees/<name> の実在と <git_dir>/gitdir が root/.git を指すかを検証していない。beacon の command (sh -c) が trust なしで走る経路になる。4cacdfae merge 前に塞ぐ。"
+created_at = 1790794504
+updated_at = 1790797345
+weight = 0.0
+issue_number = 937
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/937"

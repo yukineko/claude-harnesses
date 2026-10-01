@@ -353,10 +353,7 @@ fn load_or_refuse(path: &Path, action: &str) -> Result<Registry> {
     match load(path).require() {
         Required::Determined(reg) => Ok(reg),
         Required::Blocked(v) => {
-            let why = match v.reason() {
-                Some(r) => r.as_str().to_string(),
-                None => "no reason recorded".to_string(),
-            };
+            let why = v.as_str();
             anyhow::bail!(
                 "refusing to {action}: {why}. The registry is NOT empty — its \
                  contents are unknown, so acting on it could double-claim files \
@@ -1605,7 +1602,7 @@ mod tests {
             Required::Blocked(v) => panic!(
                 "registry at {} was undetermined: {:?}",
                 path.display(),
-                v.reason().map(|r| r.as_str().to_string())
+                v.as_str()
             ),
         }
     }

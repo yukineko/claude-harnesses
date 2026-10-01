@@ -240,16 +240,11 @@ pub fn read_probe(path: &Path) -> Determination<ProbeOutcome> {
         Required::Determined(None) => {
             Determination::undetermined(format!("probe result {} does not exist", path.display()))
         }
-        Required::Blocked(why) => {
-            let detail = match why.reason() {
-                Some(r) => r.as_str().to_string(),
-                None => format!("{why:?}"),
-            };
-            Determination::undetermined(format!(
-                "probe result {} unreadable: {detail}",
-                path.display()
-            ))
-        }
+        Required::Blocked(why) => Determination::undetermined(format!(
+            "probe result {} unreadable: {}",
+            path.display(),
+            why.as_str()
+        )),
     }
 }
 

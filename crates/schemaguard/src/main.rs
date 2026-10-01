@@ -266,11 +266,8 @@ fn cmd_metrics(args: MetricsArgs) -> i32 {
     // path is not expressible.
     let counts = match metrics::counts().require() {
         Required::Determined(c) => c,
-        Required::Blocked(verdict) => {
-            let why = verdict
-                .reason()
-                .map(|r| r.as_str().to_string())
-                .unwrap_or_else(|| "reject store could not be read".to_string());
+        Required::Blocked(undet) => {
+            let why = undet.as_str().to_string();
             if args.json {
                 let out = json!({"status": "unknown", "error": why});
                 println!("{}", serde_json::to_string(&out).unwrap_or_default());

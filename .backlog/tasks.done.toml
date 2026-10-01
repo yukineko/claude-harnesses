@@ -22944,3 +22944,53 @@ updated_at = 1790885730
 weight = 0.0
 issue_number = 952
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/952"
+
+[[task]]
+id = "6becbf8d"
+title = "specguard の tracked 200件は7月の単一バッチで、resolve に検証が1つも無い"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "L4",
+    "scout",
+    "verified",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+これは追加要件「仕様は書かれれば drift するので検証され続ける機構が要る」が置き換えるべき当の機構。map set-spec と map resolve は glob を受けて status を Tracked に倒すだけで、その doc がコードを記述しているかの検証がゼロ。resolve の help 自身が reviewed; no authored spec needed と書いており、このビットは「人間がレビューしたと主張した」ことを記録するのであって何かが検査されたことではない。crates/specguard/src/main.rs:1643-1656 は load と save の間に検証を1つも持たない。MapEntry には reviewer も理由も日付も無い。一度 Tracked になった entry がそこを出るのは git がファイルを触ったときだけで、それは陳腐化プロキシであって再検証ではない。実測: tracked 200件はすべて7月の単一バッチ (183件が 8d32025f 2026-07-08、12件が 0d81e7dc、3件が a638d9b9、2件が 9eb57c9e) で、以後一度も再検査されていない。これは「doc があるから数える」を enum で実装したもの。完了条件: MapEntry に reviewed_at (commit と日付) と reviewed_reason を足し、resolve と set-spec に理由を必須にし (check-doc-claims.py:63-70 の doc-claim-exempt が理由必須なのと同じ規律)、N commit より古い tracked を stale-review として扱う。理由なしの resolve が拒否され、8d32025f で tracked された entry が今日 stale-review と報告されることを観測する。
+
+slice 1 は ed1b9e45 で取り込み済み: map resolve/set-spec は空でない理由を必須とし、reviewed_reason と reviewed_at (HEAD commit と日付) を記録する。残り: stale-review の報告、レビュー記録の無い既存の tracked 約200件を stale 扱いにすること。未テスト: HEAD が読めない経路。serde(default) だけを消す mutant は生き残る (Option は既定で None になるため)。
+
+DONE 2026-10-02 (run-20261002-040905-21607, merge 8f50bc4d, specguard 0.2.76 rolled out with canary; deployed-from 8f50bc4d clean). The new command is specguard map review-status [--json] [--max-commits N], and map list --json now carries review_state per entry. N defaults to 50 via [map].review_max_commits, with 0 or absent meaning 50; exactly N behind is fresh. Exit codes: 0 all fresh, 1 any stale-review, 2 any undetermined (2 wins). Unborn HEAD, no repo, a commit not in history, a git failure or an unparsable count all give undetermined. Not wired to any hook. Independent tests (19, crates/specguard/tests/map_stale_review.rs) went RED then GREEN; the adversarial panel passed 3/3. Observed: the last committed map (fe238c59^) gives tracked=196, stale-review=196, exit 1. The live machine-local map has 0 tracked entries (filed separately as 41c98767). Follow-ups: 0bd2402a (map list exit code), e481be8f (deny_unknown_fields with the new key)."""
+created_at = 1785926768
+updated_at = 1790885582
+weight = 0.0
+issue_number = 150
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/150"
+
+[[task]]
+id = "80a46e9f"
+title = "overwatch に決定論の裁定を入れ、REFUTED を witness 無しで成立させない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "L5",
+    "scout",
+    "verified",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+CLAUDE.md:188-197 に記録された実測の失敗 — 既定 REFUTED という指示が検証者を棄却側に倒し、4件の REFUTED を無検証で採用した結果うち1件が実在の欠陥だった (specguard forge gather.rs)。crates/overwatch/src/review_finding.rs:108 は壊れた入力を既に Unverified に倒しているが、整形式の反証を裁定するものが無い。adjudicate(llm_verdict, probe_result) を入れ、(Refuted, NoWitness) から Refuted への辺を持たせない。到達性プローブ P4 (到達不能と主張された分岐の本体を panic に置換して全スイートと proptest を回す) は反証を偽なりと示せるが確立はできない — witness が見つからなかったは witness が無いではない。プローブ機構は新規ではなく scripts/check-fail-open-mutation.py が既に apply して cargo test して exit code を assert して revert しバイト同一を検証する形を持つ。受け入れる代償を明示: REFUTED を閉じられるのは人間だけになるのでキューは人間が働くまで単調増加する。完了条件: adjudicate が唯一の verdict 変更経路になり、refuted_without_a_witness_never_survives_adjudication を先に誤実装 (llm をそのまま返す) に対して RED で観測してから実装する。歴史的に誤棄却された gather.rs の分岐に P4 を当てて Reproduced が出ることを確認し、出なければプローブが弱いという事実をそのまま記録する (プローブを十分と宣言しない)。
+
+8f5901a7 で取り込み済み: record-finding は adjudicate を通し、REFUTED は probe が not_reproduced かつ人の sign-off がある場合だけ保存される。reproduced なら confirmed、それ以外は unverified。continuous-audit は verifier の REFUTED を捨てずに unverified として記録するよう変更。残り (done 条件未達): gather.rs の誤棄却箇所に対する probe の実行。probe を生成する道具がまだ無い。
+
+DONE 2026-10-02 (run-20261002-040905-21607, merge 7fc83001). Tool: scripts/reachability-probe.py, with 18 independent tests in scripts/test_reachability_probe.py. It replaces an anchored arm with panic, builds and tests, restores byte-identically (also on SIGTERM/SIGINT), and exits 2 for every undetermined case. overwatch record-finding --probe consumes the output (checked with deployed overwatch 0.2.47 in a sandbox). Applied to finding 9a5e3c28. Record: docs/probes/2026-10-02-specguard-gather-reachability.md. OLD revision 786c1ce7 is the parent of 02b80c62, which introduced EXIT_INTAKE_INCOMPLETE; HEAD is fc8cc3a6. Results: H1 (walk_suffix read_dir non-NotFound Err) reproduced, exit 101. H2 (walk_suffix per-entry Err), H3 (md_fragments non-NotFound Err), H4 (gather_transcripts non-NotFound Err) and H5 (forge main unreadable-intake exit-8 body) were all not_reproduced, exit 0. O1 (old read_dir catch-all) reproduced, probably via NotFound (inferred, not observed). O2, O3 and O4 were not_reproduced. O5: the branch is absent at OLD. A reached arm does NOT prove a permissive outcome is reachable. not_reproduced only means no test reached the arm, which does not establish unreachability. No ledger write was made via overwatch record-finding. Follow-ups: 3a56ac96 (p1, tests for H2-H5), e3acc324 and 7905a60b (probe marker and rev field), b645e787 (exit 127 counted as reproduced)."""
+created_at = 1785926766
+updated_at = 1790885583
+weight = 0.0
+issue_number = 148
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/148"

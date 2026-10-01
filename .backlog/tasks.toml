@@ -1013,9 +1013,11 @@ notes = """
 
 51151bed で取り込み済み: specguard map gate-check (変更された gate の map entry に spec_doc か理由付き ack が無ければ exit 1、判定不能は exit 2) と、gate 6 領域の canon への docs/specs 追加。残り: pre-push への配線 (パッチは scratchpad の githooks-0c277117.patch、未適用)。配線前の課題: main の map では gate crate の 44 entry がすべて spec_doc 無しなので、配線した瞬間に gate crate を触る push はすべて止まる。map は gitignore された機械ローカルのキャッシュで、無い worktree や未 sync の map では exit 2 になる。README.ja.md は未更新。
 
-2026-10-01 ユーザー裁定: 先に埋めてから配線する。44 entry に理由付きで docs/specs を紐付けるか理由付き ack を置き、pre-push パッチは map を先に最新化するよう直してから適用する。"""
+2026-10-01 ユーザー裁定: 先に埋めてから配線する。44 entry に理由付きで docs/specs を紐付けるか理由付き ack を置き、pre-push パッチは map を先に最新化するよう直してから適用する。
+
+2026-10-02 flow (session 64554c4d): 残り6件の reasoned ack を a165c071 (branch condukt/run-20261002-043837-64928/a1, .specguard/spec-doc-acks.toml のみ) に作成、未マージ・独立 verifier 待ち。pre-push 配線パッチ githooks-0c277117-v2.patch (sha256 c27f9973..., session 389c3077 由来) は a165c071 上にクリーン適用可。使い捨て clone で RED 観測: ack/binding 無しの crates/propguard/src/probe_unspecced.rs を足した push が 'pre-push: BLOCKED - gate spec-doc check' exit 1。GREEN: docs/GLOSSARY.md のみの push は 'gate-check: ok' exit 0。未完: settings.json が .githooks/** の Edit/Write を deny しているため、パッチ適用は人間の操作が必要 (git apply で迂回しない)。crates/specguard/README.ja.md:191 は pre-push が map を再構築すると既に書いており、パッチ適用まで実挙動と食い違う。最新裁定 5364fd2d は未マージの session-389c3077 ブランチにのみ存在。"""
 created_at = 1785926764
-updated_at = 1790796466
+updated_at = 1790885251
 weight = 0.0
 issue_number = 147
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/147"
@@ -1103,29 +1105,6 @@ updated_at = 1785929604
 weight = 0.0
 issue_number = 155
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/155"
-
-[[task]]
-id = "2133b6fe"
-title = "check-fail-open.py の --ratchet がどのフックからも呼ばれていない — 空集合クラスは計測できても強制されていない"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "scout",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-実測 2026-08-06 (測定点 f08fa5f0): grep -rn 'check-fail-open' .githooks/ scripts/ の結果、pre-commit が呼ぶのは引数なしの blocking gate 面のみで、--ratchet は repo 内のどこからも実行されていない。したがって f08fa5f0 で追加した空集合フォールバッククラス (baseline 63) は、計測はされるが増加を止める強制力を今は持たない。
-
-ただし単純に pre-commit へ足すと別の問題が出るので、設計判断が要る: --ratchet は workspace 全体の件数を1つの数と比較するため、CLAUDE.md 第8節が前提とする並行セッション下では、他セッションのコミットで件数が動いた瞬間に自分のコミットが無関係にブロックされる。raw-io-ratchet も同じ構造を持つが、そちらは既に pre-commit に居るので実運用での偽陽性頻度を先に測るべき。
-
-選択肢: (a) pre-commit へ足す (偽陽性リスクを受け入れる)、(b) 変更されたファイルにスコープした差分ベースの ratchet にする、(c) pre-push のみに置く、(d) advisory 出力のみに留め baseline はレビュー用の記録として使う。完了条件: どれを採るかを決め、採ったものが実際に新規混入を1件検出することを RED で確認する。"""
-created_at = 1785967681
-updated_at = 1785967681
-weight = 0.0
-issue_number = 166
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/166"
 
 [[task]]
 id = "f6784177"
@@ -12833,3 +12812,63 @@ updated_at = 1790883430
 weight = 0.0
 issue_number = 989
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/989"
+
+[[task]]
+id = "b304174d"
+title = "specguard map build がマージコミットでのみ入ったファイルを map に入れず、gate-check が判定不能 exit 2 で誤 block する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-02 (fork 経由、main 4498c50d 付近): map build は merge commit を飛ばす。git log --no-merges -- crates/specguard/src/forge/agent.rs は空 (subtree merge 8717f713 で到着)。gate-check は git diff で差分を取るのでこれらを含み、base を root commit にすると path で ack 済みの4パス (specguard/stuckguard の Cargo.lock、forge agent.rs/prompt.rs) で exit 2。fail-closed だが偽 block。読み (a) map build の欠陥 / (b) base 指定が想定外。見分け方: 通常の push range で同じパスが出るか再現する。"
+created_at = 1790885252
+updated_at = 1790885252
+weight = 0.0
+issue_number = 993
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/993"
+
+[[task]]
+id = "8114787e"
+title = "specguard の [map].exclude にある裸の Cargo.lock はリポジトリ直下しか除外せず、crate ごとの lockfile が gate entry になる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-02: exclude の 'Cargo.lock' は root の lockfile にのみ一致。crates/*/Cargo.lock が gate-check の対象 entry になる。読み (a) glob の書き漏れ / (b) 意図的に lockfile も gate 対象。見分け方: specguard.toml の exclude の来歴コミットメッセージを読む。"
+created_at = 1790885253
+updated_at = 1790885253
+weight = 0.0
+issue_number = 994
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/994"
+
+[[task]]
+id = "d3c2f668"
+title = "condukt の force-gate が touched_files の .githooks/pre-push パスだけで発火する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-02 (fork が二分探索): touched_files だけを変えると gate が消えた、つまり prose ではなく touched path が trigger。読み (a) 意図通り (.githooks は保護領域なので Gated) / (b) 過剰。見分け方: classify のルールに .githooks が明示されているか確認する。"
+created_at = 1790885255
+updated_at = 1790885255
+weight = 0.0
+issue_number = 995
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/995"
+
+[[task]]
+id = "0bd25a35"
+title = "condukt worktree create --branch condukt/R/a1 が二重 prefix の condukt/R/R/a1 ブランチを作る"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-02: condukt worktree create --run R --branch condukt/R/a1 の結果ブランチ名が condukt/R/R/a1。空のブランチは fork が削除済み。読み (a) --branch は suffix のみを受ける仕様で help が不明瞭 / (b) prefix 二重付与のバグ。見分け方: --help と worktree.rs のブランチ名組み立てを読む。"
+created_at = 1790885257
+updated_at = 1790885257
+weight = 0.0
+issue_number = 996
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/996"

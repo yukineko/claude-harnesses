@@ -139,6 +139,15 @@ class DiffRatchet(unittest.TestCase):
         self.repo.write("crates/a/src/lib.rs", CLEAN_RS)
         self.assertEqual(fd.evaluate(self.repo.path)[0], 1)
 
+    def test_new_blocked_arm_empty_fallback_blocks(self):
+        self.repo.write("crates/a/src/lib.rs", CLEAN_RS.replace(
+            "        Err(e) => panic!(\"{e}\"),\n",
+            "        Required::Blocked(_) => Vec::new(),\n"))
+        self.repo.stage("crates/a/src/lib.rs")
+        code, rises = fd.evaluate(self.repo.path)
+        self.assertEqual(code, 1)
+        self.assertEqual([r.path for r in rises], ["crates/a/src/lib.rs"])
+
     def test_out_of_scope_file_is_ignored(self):
         self.repo.write("docs/x.rs", OLD_SWALLOW_RS)
         self.repo.stage("docs/x.rs")

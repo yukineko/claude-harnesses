@@ -2659,6 +2659,7 @@ mod tests {
             paused: false,
             terminal_label: None,
             recorded_at: None,
+            recorded_episodes: Vec::new(),
         };
         rs.save(&cfg, tmp).unwrap();
 
@@ -2920,6 +2921,7 @@ mod tests {
             paused: false,
             terminal_label: None,
             recorded_at: None,
+            recorded_episodes: Vec::new(),
         };
         rs.save(cfg, cwd).unwrap();
     }

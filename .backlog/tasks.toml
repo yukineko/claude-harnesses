@@ -987,9 +987,11 @@ notes = """
 
 2026-09-30 slice 3 landed: 103eef5a (merged 530acc71). scripts/check-fault-injection-adoption.py + baseline 0 (harness-core excluded as provider; above-baseline also exits 1 so the pin tracks the real count; feature outside dev-dependencies exits 1; undetermined exits 2). RED 4bf08c5f 13 tests by an independent sonnet author, plus 15 implementer tests. NOT yet wired: pre-commit patch in the session scratchpad (githooks-8696dd7e.patch) awaits the user. Remaining: wiring, slice 2 (first gate-crate adopter with observed RED; the same commit must raise the baseline to 1), slice 4.
 
-2026-10-01 slice 2 landed (merged b0a7679f, pushed, canary-rolled overwatch 0.2.47): overwatch is the first adopter. store::read_audit_rounds (the audit-metrics converging verdict) read via std::fs, outside the seam; it now reads through harness_core::boundary::read_to_string, forwarding Undetermined. Test crates/overwatch/tests/fault_injection.rs authored independently; F->P observed by the orchestrator: pre-fix store.rs gives VACUOUS fail-closed check (returned Some(true)), post-fix passes. Adoption baseline 0->1; raw-io ratchet 46->45. Remaining: wiring patch awaits the user, slice 4 (one crate per commit)."""
+2026-10-01 slice 2 landed (merged b0a7679f, pushed, canary-rolled overwatch 0.2.47): overwatch is the first adopter. store::read_audit_rounds (the audit-metrics converging verdict) read via std::fs, outside the seam; it now reads through harness_core::boundary::read_to_string, forwarding Undetermined. Test crates/overwatch/tests/fault_injection.rs authored independently; F->P observed by the orchestrator: pre-fix store.rs gives VACUOUS fail-closed check (returned Some(true)), post-fix passes. Adoption baseline 0->1; raw-io ratchet 46->45. Remaining: wiring patch awaits the user, slice 4 (one crate per commit).
+
+2026-10-02 slice 4 (2nd adopter) landed (merged 4498c50d, pushed, canary-rolled propguard 0.1.52): crates/propguard/src/fault_injection_tests.rs pins that a faulted git scan (Entry::RunWithTimeout) resolves to Decision::Block tag git-scan-failed, plus assert_fails_closed over evaluate and a FaultPlan::none() control. F->P observed (Failed arm mutated to allow => 2 tests RED; oracle fail_to_pass). Adversarial panel 3/3 pass (one skeptic re-ran the mutation independently). Adoption baseline 1->2. Remaining: wiring patch awaits the user; slice 4 continues one crate per commit (stuckguard/specguard/blastguard/mutategate/parallelguard)."""
 created_at = 1785879190
-updated_at = 1790858039
+updated_at = 1790882318
 weight = 0.0
 issue_number = 140
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/140"
@@ -1018,52 +1020,6 @@ updated_at = 1790796466
 weight = 0.0
 issue_number = 147
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/147"
-
-[[task]]
-id = "80a46e9f"
-title = "overwatch に決定論の裁定を入れ、REFUTED を witness 無しで成立させない"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "L5",
-    "scout",
-    "verified",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-CLAUDE.md:188-197 に記録された実測の失敗 — 既定 REFUTED という指示が検証者を棄却側に倒し、4件の REFUTED を無検証で採用した結果うち1件が実在の欠陥だった (specguard forge gather.rs)。crates/overwatch/src/review_finding.rs:108 は壊れた入力を既に Unverified に倒しているが、整形式の反証を裁定するものが無い。adjudicate(llm_verdict, probe_result) を入れ、(Refuted, NoWitness) から Refuted への辺を持たせない。到達性プローブ P4 (到達不能と主張された分岐の本体を panic に置換して全スイートと proptest を回す) は反証を偽なりと示せるが確立はできない — witness が見つからなかったは witness が無いではない。プローブ機構は新規ではなく scripts/check-fail-open-mutation.py が既に apply して cargo test して exit code を assert して revert しバイト同一を検証する形を持つ。受け入れる代償を明示: REFUTED を閉じられるのは人間だけになるのでキューは人間が働くまで単調増加する。完了条件: adjudicate が唯一の verdict 変更経路になり、refuted_without_a_witness_never_survives_adjudication を先に誤実装 (llm をそのまま返す) に対して RED で観測してから実装する。歴史的に誤棄却された gather.rs の分岐に P4 を当てて Reproduced が出ることを確認し、出なければプローブが弱いという事実をそのまま記録する (プローブを十分と宣言しない)。
-
-8f5901a7 で取り込み済み: record-finding は adjudicate を通し、REFUTED は probe が not_reproduced かつ人の sign-off がある場合だけ保存される。reproduced なら confirmed、それ以外は unverified。continuous-audit は verifier の REFUTED を捨てずに unverified として記録するよう変更。残り (done 条件未達): gather.rs の誤棄却箇所に対する probe の実行。probe を生成する道具がまだ無い。"""
-created_at = 1785926766
-updated_at = 1790793912
-weight = 0.0
-issue_number = 148
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/148"
-
-[[task]]
-id = "6becbf8d"
-title = "specguard の tracked 200件は7月の単一バッチで、resolve に検証が1つも無い"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "L4",
-    "scout",
-    "verified",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-これは追加要件「仕様は書かれれば drift するので検証され続ける機構が要る」が置き換えるべき当の機構。map set-spec と map resolve は glob を受けて status を Tracked に倒すだけで、その doc がコードを記述しているかの検証がゼロ。resolve の help 自身が reviewed; no authored spec needed と書いており、このビットは「人間がレビューしたと主張した」ことを記録するのであって何かが検査されたことではない。crates/specguard/src/main.rs:1643-1656 は load と save の間に検証を1つも持たない。MapEntry には reviewer も理由も日付も無い。一度 Tracked になった entry がそこを出るのは git がファイルを触ったときだけで、それは陳腐化プロキシであって再検証ではない。実測: tracked 200件はすべて7月の単一バッチ (183件が 8d32025f 2026-07-08、12件が 0d81e7dc、3件が a638d9b9、2件が 9eb57c9e) で、以後一度も再検査されていない。これは「doc があるから数える」を enum で実装したもの。完了条件: MapEntry に reviewed_at (commit と日付) と reviewed_reason を足し、resolve と set-spec に理由を必須にし (check-doc-claims.py:63-70 の doc-claim-exempt が理由必須なのと同じ規律)、N commit より古い tracked を stale-review として扱う。理由なしの resolve が拒否され、8d32025f で tracked された entry が今日 stale-review と報告されることを観測する。
-
-slice 1 は ed1b9e45 で取り込み済み: map resolve/set-spec は空でない理由を必須とし、reviewed_reason と reviewed_at (HEAD commit と日付) を記録する。残り: stale-review の報告、レビュー記録の無い既存の tracked 約200件を stale 扱いにすること。未テスト: HEAD が読めない経路。serde(default) だけを消す mutant は生き残る (Option は既定で None になるため)。"""
-created_at = 1785926768
-updated_at = 1790793753
-weight = 0.0
-issue_number = 150
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/150"
 
 [[task]]
 id = "264990c9"
@@ -3247,9 +3203,11 @@ fork 契約は 'No follow-up questions' かつ 'Do NOT spawn subagents with the 
 修正案(未検証): /flow Step 3-2 に 'condukt を起動する場合は fork ではなく main loop から呼ぶ。fork は condukt を含まない単発タスクに限る' を明記する。
 
 ---
-再キー: 元 id df199ddb として /mnt/c/Users/hiroyuki_nakayama/src/.harness-worktrees/session-e7948728 のプロジェクトキーで起票されていたものを /mnt/c/Users/hiroyuki_nakayama/src/harness へ移送した (2026-08-18)。理由は backlog b0ff8c74 (worktree から起票すると削除予定のパスに紐づく構造矛盾)。"""
+再キー: 元 id df199ddb として /mnt/c/Users/hiroyuki_nakayama/src/.harness-worktrees/session-e7948728 のプロジェクトキーで起票されていたものを /mnt/c/Users/hiroyuki_nakayama/src/harness へ移送した (2026-08-18)。理由は backlog b0ff8c74 (worktree から起票すると削除予定のパスに紐づく構造矛盾)。
+
+【実測 2026-10-01 @b4f0df80】/flow の fork 既定に従い /condukt を fork に包んだところ、fork は Agent ツールを持たず interpreter/worker/verifier を起動できないため Phase 2 で停止した（実装 0、5 件のバッチ全体が不成立）。fork 内では §2(a) の独立テスト作者も満たせない。もう一つの両立不能な点として記録: fork 既定は condukt の合意だけでなく subagent dispatch そのものと両立しない。"""
 created_at = 1787033484
-updated_at = 1787033484
+updated_at = 1790859492
 weight = 0.0
 
 [[task]]
@@ -12797,3 +12755,145 @@ updated_at = 1790822160
 weight = 0.0
 issue_number = 976
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/976"
+
+[[task]]
+id = "dc272b08"
+title = "condukt schedule が done_criteria 中の 'specguard.toml;' を irreversible コマンドとして force-gate する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-02 @b4f0df80, condukt 0.7.195: 単一タスクの done_criteria が 'specguard.toml;' だけなら gated=['t']、'the [map] table' や '[map] x' だと gated=[]。また '(injected >= 1)'・'matches => exit 2'・'delete only' を含む done_criteria も force-gate された（言い換えると解除）。散文中の『単語+;』が実行コマンドとして分類されているように見える。(a) classify の過検出（散文をシェルとして読む）/ (b) 意図的な保守側分類。見分け方: condukt schedule が done_criteria をどう tokenize し、どの rule に hit したかを出すようにして確認する。既知の関連メモ: classify deploy-needle force-gate / condukt schedule arrow force-gate。"
+created_at = 1790881738
+updated_at = 1790881738
+weight = 0.0
+issue_number = 977
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/977"
+
+[[task]]
+id = "e481be8f"
+title = "specguard の MapConfig が deny_unknown_fields のため、新キー review_max_commits を持つ specguard.toml を旧バイナリが読めない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "specguard",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-02（condukt run run-20261002-040905-21607 の b1 worktree）: crates/specguard/src/config.rs:224 の MapConfig が #[serde(deny_unknown_fields)]。6becbf8d slice 2 で [map].review_max_commits を足すと、それを書いた specguard.toml は古い specguard バイナリでは読み込みエラーになる。(a) 版ずれのたびに設定読み込みが落ちる実害（rollout されていない session・別マシン）/ (b) 未知キーを弾く意図どおりの厳格さ（typo を検出する）。見分け方: 設定読み込みが落ちたときの下流（fail-closed で止まるのか、黙って既定に倒れるのか）を確認し、旧バイナリ＋新 toml の組で実測する。"
+created_at = 1790882503
+updated_at = 1790882503
+weight = 0.0
+issue_number = 978
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/978"
+
+[[task]]
+id = "b645e787"
+title = "reachability-probe: test exit without panic marker counts as reproduced (overclaim)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-02, run-20261002-040905-21607, c1 re-verifier (opus), at 87d8c64b. scripts/test_reachability_probe.py lines 183-192 pin this: when the test command exits 127 (or any other non-zero) without the panic marker, the result is 'reproduced'. overwatch review_finding.rs adjudicate then overturns REFUTED to CONFIRMED, and parse_probe ignores panic_marker_seen. Restrictive, not fail-open. But exit 2 / undetermined (which demotes to UNVERIFIED) would be more precise. Human decision: I raised it with the user 2026-10-02; the default was to keep the current behaviour. Second gap: the note check at line 130 is a substring check only, so a note with a contradicting sentence still passes."
+created_at = 1790883018
+updated_at = 1790883018
+weight = 0.0
+issue_number = 984
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/984"
+
+[[task]]
+id = "41c98767"
+title = "specguard: live machine-local spec-map has 0 tracked entries (all changed)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-02 by b2 worker in run-20261002-040905-21607: /Users/yuki/src/harness/.specguard/spec-map.toml (mtime 2026-10-02 04:16, 189 entries) has tracked=0, changed=187, missing=2, so map review-status on this machine exits 2 with nothing to classify. The last committed map (fe238c59^) had 196 tracked. Readings: (a) sync moved every tracked entry to changed, a defect or expected drift that needs re-review; (b) intended. To tell them apart, check which command last wrote the file and diff its entries against fe238c59^."
+created_at = 1790883054
+updated_at = 1790883054
+weight = 0.0
+issue_number = 986
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/986"
+
+[[task]]
+id = "7905a60b"
+title = "reachability-probe: result rev is the script's repo HEAD, not the target's"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-02 by the c2 verifier (opus) at a1df25b5 in run-20261002-040905-21607. In scripts/reachability-probe.py, REPO = Path(__file__).parent.parent and rev = git rev-parse HEAD of that repo. A probe run on a file outside this repo recorded rev a1df25b5, which is the wrong origin. Also: a test command that exits 0 having run zero tests (a filter matching nothing) gives not_reproduced. Only the note and panic_marker_seen flag this, and parse_probe ignores panic_marker_seen. Fix options: resolve rev from the target's git root; and refuse not_reproduced unless the test output shows that at least one test ran (or exit 2)."
+created_at = 1790883142
+updated_at = 1790883142
+weight = 0.0
+issue_number = 987
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/987"
+
+[[task]]
+id = "23f9b548"
+title = "tdd green without --cmd runs workspace-wide cargo test and reports failing; cause unidentified"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-02 in the b2 worktree (run-20261002-040905-21607, HEAD 5ed7aad0). tdd green --task b2-specguard-stale-review-impl with no --cmd uses tdd.toml test_cmd = cargo test (whole workspace) rather than the cmd stored in the RED proof. It printed only 'tests still failing', while the RED proof's cmd (cargo test -p specguard --test map_stale_review ...) passes 15/15. Two readings: (a) a real red somewhere in the workspace at this base, which needs locating; (b) a scope mismatch where green should default to the RED proof's cmd, so RED and GREEN measure the same thing. To tell them apart, run cargo test --workspace at 5ed7aad0 and inspect the failures. The silent fallback to a different scope than RED is itself suspect either way."
+created_at = 1790883409
+updated_at = 1790883409
+weight = 0.0
+issue_number = 988
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/988"
+
+[[task]]
+id = "0bd2402a"
+title = "specguard map list --json exits 0 even when entries are undetermined"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-02 by b2 panel voter 2 (run-20261002-040905-21607, specguard 0.2.74, HEAD 5ed7aad0). map list --json carries a per-entry review_state (fresh/stale-review/undetermined) but the command always exits 0, which is the existing list contract. A consumer that checks only the exit code would read undetermined as fine. map review-status is the gate-shaped command (exit 1/2). Readings: (a) by design, needing only docs saying list is a report, not a check; (b) a consumer exists that reads list's exit code. To tell them apart, grep the hooks and scripts for consumers of map list."
+created_at = 1790883802
+updated_at = 1790883802
+weight = 0.0
+issue_number = 990
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/990"
+
+[[task]]
+id = "3a56ac96"
+title = "specguard forge: unreadable-intake paths not exercised by any test (probe 2026-10-02)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "Measured 2026-10-02 by scripts/reachability-probe.py at fc8cc3a6 (record: docs/probes/2026-10-02-specguard-gather-reachability.md, run-20261002-040905-21607 c3). Replacing each arm body with panic did NOT fail cargo test -p specguard for: gather.rs walk_suffix per-entry Err (H2); md_fragments read_to_string non-NotFound Err (H3); gather_transcripts read_to_string non-NotFound Err (H4); forge/main.rs 'if !outcome.unreadable.is_empty()' exit-8 body (H5). Only the walk_suffix read_dir Err (H1) is reached, by unreadable_existing_source_is_surfaced_not_silently_dropped. These are the fail-closed arms for finding 9a5e3c28. A zero-kill-rate forwarding arm can be deleted with the suite staying green. Needed: one behavioural test per arm, including a binary-level test that drives specforge gather to exit 8. This is not evidence that the arms are unreachable in production."
+created_at = 1790884632
+updated_at = 1790884632
+weight = 0.0
+issue_number = 991
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/991"
+
+[[task]]
+id = "e3acc324"
+title = "reachability-probe: panic_marker_seen true from cached compiler warning quoting the mutated line"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-10-02 at c3 (fc8cc3a6, arm H2): cargo test replayed a cached compiler warning containing the mutated source line '130 | Err(e) => panic!("reachability-probe"),'. So panic_marker_seen=true while every test passed (verdict not_reproduced). The field does not affect the verdict, but readers can be misled. Fix: match the runtime panic message form ("panicked at" ... reachability-probe), not the bare token. Related: 7905a60b (rev field taken from the script repo, not the target; all OLD-rev results in that record say fc8cc3a6)."""
+created_at = 1790884636
+updated_at = 1790884636
+weight = 0.0
+issue_number = 992
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/992"

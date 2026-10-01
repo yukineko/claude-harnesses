@@ -3,7 +3,5 @@
 # scripts/check-gate-protection.py: entries may be removed (once the gate
 # declares), never added relative to HEAD. Backlog 3a8e3b73.
 specguard
-stuckguard
 mutategate
 overwatch
-parallelguard

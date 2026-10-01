@@ -47,6 +47,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod model;
+mod protection;
 mod store;
 
 use std::panic::AssertUnwindSafe;
@@ -77,10 +78,19 @@ fn main() {
             print!("{}", render_status());
             std::process::exit(0);
         }
+        "--protects" => {
+            // The protection statement (backlog 3a8e3b73), readable without
+            // triggering the gate. A pure print: no verdict.
+            let p = protection::PROTECTION;
+            println!("PROTECTS: {}", p.protects);
+            println!("AGAINST: {}", p.against);
+            println!("GROUNDS: {}", p.grounds);
+            std::process::exit(0);
+        }
         other => {
             eprintln!(
                 "parallelguard: unknown command {other:?}\n\
-                 usage: parallelguard <acquire|release|reset|status>\n\
+                 usage: parallelguard <acquire|release|reset|status|--protects>\n\
                  acquire/release/reset read a Claude Code hook payload on stdin."
             );
             std::process::exit(1);

@@ -22803,3 +22803,22 @@ updated_at = 1790797345
 weight = 0.0
 issue_number = 937
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/937"
+
+[[task]]
+id = "1a6c1c48"
+title = "Required::Blocked(Verdict) を Blocked(Undet) へ狭めて外部から Blocked(Clean) を作れなくする"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "harness-core",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "5b89f0f6 で散文のみ是正 (7306810a)。tests/ui/verdict_known_holes/unsealed_paths.rs の hole 3 が現状を pin している。狭めると 61 call site / 約10 plugin crate の変更と各 3 ファイル bump が要る (測定 2026-10-01: git grep 'Required::Blocked(' 外部 61 件)。並行セッションと衝突しにくい順序・一括方法の設計が先。閉じたら fixture の hole 3 を negative fixture へ移す。"
+created_at = 1790793947
+updated_at = 1790882944
+weight = 0.0
+issue_number = 921
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/921"

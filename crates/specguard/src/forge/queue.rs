@@ -370,11 +370,7 @@ mod tests {
     fn undetermined(d: Determination<Enqueued>) -> String {
         match d.require() {
             Required::Determined(v) => panic!("expected Undetermined, got Determined({v:?})"),
-            Required::Blocked(verdict) => verdict
-                .reason()
-                .expect("an Undetermined verdict carries a reason")
-                .as_str()
-                .to_string(),
+            Required::Blocked(why) => why.as_str().to_string(),
         }
     }
 

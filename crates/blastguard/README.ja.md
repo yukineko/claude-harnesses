@@ -110,8 +110,9 @@ rm -rf /        -> deny: recursive rm (-r) can delete an entire directory tree
   `/tmp`・`/var/tmp`（＋環境変数 `TMPDIR`）。`/`・`/usr`・`/mnt/c/Users`・`$HOME`
   などは安全ルートになれない（`NEVER_A_ROOT` と 2 コンポーネント下限）。
 - **緩和される判定**: 対象が**すべて**安全ルートの*厳密な*配下に解決できたときだけ、
-  `deny` → **`ask`** に変わる（`allow` にはならない。唯一の例外は下の
-  「worktree 置き場」— 再帰 `rm` だけが `allow` になる）。対象コマンドは 再帰/ワイルド
+  `deny` → **`ask`** に変わる（`allow` にはならない。例外は下の
+  「worktree 置き場」と「再帰 `rm` は消えるものの中身で判定する」— どちらも再帰
+  `rm` だけが `allow` になりうる）。対象コマンドは 再帰/ワイルド
   カード `rm`、`find -delete` / `-exec rm`、`truncate` / `shred`、切り詰め `>`
   リダイレクト、`git clean -f`、`chmod -R` / `chown -R`。
 - **緩和されないもの**（すべて実測でテストに固定済み — `tests/scoped_destructive.rs`）:
@@ -240,6 +241,108 @@ directory tree` で拒否されたこと。
   プロジェクトを名指しするが、実際に消えるのは `<lnk の指す先の親>/x`。`cd lnk/..` による
   cwd 追跡も、`<project>/lnk/..` と綴られた payload の cwd も同様にずれる（payload の
   cwd の規則が止めるのは worktree の `allow` だけで、この `ask` は止めない）。`allow` にはならないが、人間に見せる質問が誤っている。
+
+## 再帰 `rm` は「何が消えるか」で判定する — 0.2.95（ユーザー裁定、backlog 3aa215e1）
+
+### 削除の原則
+
+2026-09-30 のユーザー裁定（原文）:
+
+> 削除していいがhookのせいで削除できないというのは基本的にまちがっている。削除できるか、
+> できないかの問題。削除してはいけないのはシステムの構成、資産の破壊を意味するもの。
+> 作業や復帰できるものは削除していい
+
+プロジェクト内のパスについては「復帰できるなら許可」。したがって再帰 `rm`
+（`-r`/`-R`/`--recursive`、**リテラルなオペランドのみ**）は「形」（`-r` だから木ごと
+消せる）ではなく、**オペランドに何があるか**で判定する。実装と判定表は
+`src/deletion.rs` のモジュール doc、ルート集合は `src/scope.rs`、git の観測は
+`src/reversible.rs` の `probe_tree`。
+
+### 判定表
+
+**`allow`（確認なし。headless でも）** — **全オペランド**が次のいずれかの*厳密な*内側
+（ルートそれ自身は含まない）にあるとき:
+
+1. **worktree 置き場** — 上の節のとおり（変更なし）。
+2. **一時ディレクトリ** — `/tmp`、`/private/tmp`、`$TMPDIR`（`/var/folders/.../T` など。
+   `/var/tmp` は含まない）。`$TMPDIR` は HOME が分かっているときだけ、かつシステム
+   ディレクトリ（`TMPDIR=/etc` → `/private/etc` など。`/var/folders` の下は除く）でも、
+   `$HOME` やその祖先でも、`$HOME` の下（`TMPDIR=$HOME/src`）でもないときだけルートになる
+   （0.2.95）。
+3. **キャッシュ** — `$HOME/.cache`、`$HOME/Library/Caches`。
+4. **ビルド成果物** — git 作業ツリー内で、オペランドが既知のビルド出力名
+   （`target` `node_modules` `dist` `build` `out` `.next` `__pycache__`
+   `.pytest_cache` `.mypy_cache` `.ruff_cache` `.gradle` `coverage` `.turbo`）の
+   ディレクトリそのものかその中にあり、**かつ** `git check-ignore` がそのディレクトリを
+   ignored と答え、オペランド以下に追跡ファイルが無く、`git status` の項目が `!!` だけ。
+   ignored だけでは足りない（`.env` は ignored で、しかも替えが利かない）— 名前と
+   ignored の**両方**を要求する。
+5. **git から完全に復元できるもの** — git 作業ツリー内（作業ツリーのルートそれ自身は
+   除く）で、`git status --ignored=matching --untracked-files=all` がオペランド以下に
+   **何も**報告しない（未追跡・変更/ステージ/削除・ignored のいずれも無い）、かつ
+   submodule（gitlink）も、assume-unchanged / skip-worktree など `H` 以外の状態の
+   index エントリも無いとき。
+
+**`deny`（失われる内容を名指しする）** — git 作業ツリー内のオペランドについて、git が
+**実際に**未追跡・未コミットの変更・ignored（ビルド出力でない）内容を報告したとき
+（例: ``recursive rm would destroy content git cannot restore — `dirty`: 1 with
+uncommitted changes (e.g. `dirty/m`)``）。1 つでもあれば、他のオペランドが `allow`
+相当でもコマンド全体が `deny`。これは従来この経路が出していた confined `ask` を置き換える。
+
+**`deny`（削除してはいけないもの。0.2.94 から）** — オペランドが次の*それ自身*であるとき:
+各クラスのルートそれ自身（`rm -rf /tmp`、`rm -rf ~/.cache`、worktree 置き場のルート、
+作業ツリーのルート。ただし `/tmp`・`$TMPDIR`・キャッシュ・worktree 置き場の*厳密な内側*に
+ある clone のルートは、先のクラスで `allow`）、`$HOME` そのもの・`$HOME/<x>` 直下（ホーム直下の設定）・`$HOME` の
+祖先、システムディレクトリ（`/`、`/etc`、`/usr`、`/System`、`/Library`、`/bin`、
+`$TMPDIR` 外の `/var` …。ただし `/var/tmp`・`/private/var/tmp` の*厳密な内側*は
+システムディレクトリ扱いしない — 仕様の「`$TMPDIR` 外の `/var`」からの意図的な逸脱。
+そこは git のクラスとホーム・ルートの拒否で他のパスと同じに判定するが、`/var/tmp` は
+一時ディレクトリのルートではないので、そこにあるだけでは `allow` にならない）。
+1 つでもあれば全体が `deny`（他のオペランドが `allow` 相当でも）。
+
+0.2.93 ではこれらが従来の判定に落ちていたため、cwd や `/var/tmp` などのセッションの
+安全ルートの内側にあると confined `ask` に弱まっていた（安全ルート内の偽の HOME や git
+リポジトリで、ホーム・キャッシュのルート・復元できない内容の `deny` が `ask` になった）。
+0.2.94 からはこれらは**判定済みの `deny`** で、安全ルートの内側でも `ask` にならない。
+confined `ask` が残るのは「判定不能だが安全ルート内」の場合だけ。
+
+**git が ignored と答えないビルド出力名のディレクトリ**（例: 追跡された `target/`）は
+4. には当たらず（名前だけでは何も与えない）、5. で他のパスと同じに判定する:
+完全に clean なら `allow`、未追跡・変更・ignored の内容があれば `deny`
+（2026-10-01 の裁定: 「復帰できるなら許可」が仕様の脱出例の一行に優先する。その一行が
+指していたのは変更を含む追跡された `target`）。git がそもそも答えなかった候補は判定不能。
+
+### 判定不能は拒否側
+
+次のどれでも `allow` は出ず、従来の判定（`deny`、または headless では `deny` に戻る
+confined `ask`）のままになる（CLAUDE.md §3）:
+git の probe の失敗・タイムアウト（各呼び出し 1.5 秒）・解析不能な出力／存在しない・
+実パス化できないパス／今この瞬間に本物のディレクトリでないルート（symlink の
+`~/.cache`、存在しない `$TMPDIR` など）／**ルートとオペランドの間（オペランド自身を
+含む）のどこかにある symlink**（`/tmp/x -> $HOME` の `rm -rf /tmp/x/`、プロジェクト内の
+`target -> ..`。ルートより上の `/tmp` → `/private/tmp` は許容）／`..` や `.` という
+パス成分を含むオペランド（`rm -rf /tmp/../Users/me/src`、`rm -rf target/../src`、
+`rm -rf ./target`）／正規化されていない payload の cwd／`cd` があるときの相対
+オペランド／`rm`・`cd` 以外のセグメント（`mv $HOME/src /tmp/x && rm -rf /tmp/x`、
+`rm -rf x 2>/dev/null`）／シェル展開・引用符・glob 文字／単独の `-`、`--`、最初の
+オペランドより後ろのオプション風の語。
+
+優先順位は変わらない: 保護パス（`.git`、`.git/hooks`、`.claude`、`.githooks`、ゲート
+設定）の `deny` が最初、次に worktree 置き場の `allow`、次に設定ファイル除外、その後に
+この節の判定。ライブラリ利用（`detect::detect`、`SafeRoots::none()`）には一時・
+キャッシュのルートも git probe も無いので、従来の判定のまま。
+
+### 塞いでいないもの
+
+- 呼び出しをまたぐ TOCTOU（*別の*ツール呼び出し・並行セッションが判定と `rm` の間に
+  木を変える）。
+- *先行する*コマンドが作った状態（前の呼び出しで `mv ~/Documents /tmp/x` した後の
+  `rm -rf /tmp/x` は `allow`。symlink を置いた場合は上の規則で `allow` にならない）。
+  同様に、前の呼び出しでコミットされた内容は「git から復元できる」と判定される。
+- git 自身の見え方に依存する部分（LFS のような内容を変える clean filter の実体など、
+  この probe がモデル化していない方法で `git status` から隠れる内容）。
+- 存在しないパスは 4./5. の `allow` にならない（probe が観測できない）— 何も消えない
+  にもかかわらず従来の判定になる。
 
 ## 一度承認した効果は二度聞かない（承認の記憶）— 0.2.53
 

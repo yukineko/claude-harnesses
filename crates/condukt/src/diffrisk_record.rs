@@ -305,10 +305,7 @@ pub(crate) fn record_post_execution_diff_risk(
         ) => (b, f),
         (harness_core::verdict::Required::Blocked(verdict), _)
         | (_, harness_core::verdict::Required::Blocked(verdict)) => {
-            let why = verdict
-                .reason()
-                .map(|r| r.as_str().to_string())
-                .unwrap_or_else(|| "diff-risk classification undetermined".to_string());
+            let why = verdict.as_str();
             let detail = format!(
                 "post-execution diff-risk UNDETERMINED: {why} — the diff was never \
                  classified (task '{}', run '{}')",

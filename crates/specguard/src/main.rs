@@ -2087,10 +2087,12 @@ fn gate_check(cli: &Cli, base: &str, head: &str) -> Result<u8> {
     let map_path = repo_root.join(&cfg.map.path);
     let exclude = specmap::compile_globs(&cfg.map.exclude)?;
     let ack_path = repo_root.join(gatecheck::ACK_PATH);
+    let spec_docs_path = repo_root.join(gatecheck::SPEC_DOCS_PATH);
     let verdict = gatecheck::check(&gatecheck::GateCheck {
         repo_root: &repo_root,
         map_path: &map_path,
         ack_path: &ack_path,
+        spec_docs_path: &spec_docs_path,
         base,
         head,
         exclude: &exclude,
@@ -2105,10 +2107,13 @@ fn gate_check(cli: &Cli, base: &str, head: &str) -> Result<u8> {
             println!(
                 "specguard map gate-check: BLOCKED — gate map entries changed in \
                      {base}..{head} without a spec doc:\n  {}\n\
-                     Fix: `specguard map set-spec <entry> docs/specs/<gate>.md --reason \
-                     \"<why>\"`, or add \
-                     [[ack]] path/reason to {} (reason required).",
+                     Fix: add [[spec]] path/doc/reason to {} (doc = an existing \
+                     docs/specs/*.md that describes the file, reason required), or \
+                     [[ack]] path/reason to {} (reason required). Both files are \
+                     tracked; `map set-spec` writes only the machine-local map, \
+                     which the pre-push check does not read.",
                 r.as_str(),
+                gatecheck::SPEC_DOCS_PATH,
                 gatecheck::ACK_PATH
             );
             EXIT_GATE_MISSING_SPEC

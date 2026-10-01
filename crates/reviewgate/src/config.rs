@@ -191,13 +191,15 @@ impl Config {
     /// project file exists but the root is not trusted we ignore it and fall back
     /// to the (trusted) home config, then built-in defaults. The home config and
     /// defaults need no trust. Any parse error silently falls back (the gate must
-    /// never crash a turn).
+    /// never crash a turn). Trust is resolved with
+    /// [`harness_core::trust::resolve`], i.e. including worktree inheritance: a
+    /// linked git worktree of a trusted checkout is trusted (same rule as donegate).
     pub fn load(root: &Path) -> Self {
         let mut cfg = Config::default();
 
         let chosen = {
             let p = Config::project_path(root);
-            if p.exists() && harness_core::trust::is_trusted(root) {
+            if p.exists() && harness_core::trust::resolve(root).is_trusted() {
                 Some(p)
             } else {
                 if p.exists() {

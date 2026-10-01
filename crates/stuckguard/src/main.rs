@@ -14,6 +14,7 @@ mod config;
 mod detect;
 mod install;
 mod model;
+mod protection;
 mod sig;
 mod state;
 /// Verdict-monotonicity property (backlog a7d41587). Test-only: stuckguard is a
@@ -40,7 +41,8 @@ use model::HookInput;
 #[command(
     name = "stuckguard",
     version,
-    about = "Stuck-loop detector + escalation for Claude Code (PostToolUse hook)."
+    about = "Stuck-loop detector + escalation for Claude Code (PostToolUse hook).",
+    after_help = "`stuckguard --protects` prints what this gate protects, from what, and on what grounds."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -71,6 +73,16 @@ enum Command {
 }
 
 fn main() {
+    // The protection statement (backlog 3a8e3b73), readable without triggering
+    // the hook. A pure print: no verdict. Short-circuits before clap because
+    // `Cli` requires a subcommand.
+    if std::env::args().nth(1).as_deref() == Some("--protects") {
+        let p = protection::PROTECTION;
+        println!("PROTECTS: {}", p.protects);
+        println!("AGAINST: {}", p.against);
+        println!("GROUNDS: {}", p.grounds);
+        std::process::exit(0);
+    }
     let cli = Cli::parse();
     match cli.command {
         Command::Watch => run_hook(watch),

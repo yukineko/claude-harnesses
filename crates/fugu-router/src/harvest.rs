@@ -137,7 +137,13 @@ fn harvest(
         if cursor.get(&key).is_some_and(|s| s.contains(&sha)) {
             continue;
         }
-        if let Some(ep) = episode_for_merge(&top, branch, &sha, t, &subject, window)? {
+        // A self-sync merge is skipped but still marked harvested below.
+        let episode = if is_self_sync(&subject, branch) {
+            None
+        } else {
+            episode_for_merge(&top, branch, &sha, t, &subject, window)?
+        };
+        if let Some(ep) = episode {
             store::append(&cfg.store_path(), &ep)
                 .with_context(|| format!("appending the episode for merge {sha} to the store"))?;
             recorded += 1;
@@ -309,6 +315,28 @@ fn is_noise(path: &str) -> bool {
         || base == "Cargo.toml"
         || path.ends_with(".claude-plugin/plugin.json")
         || path.ends_with(".claude-plugin/marketplace.json")
+        // Backlog bookkeeping: measured 2026-10-01, 67 of 82 fail labels on
+        // this repo came only from `.backlog/tasks.toml`.
+        || path.starts_with(".backlog/")
+}
+
+/// Whether the merge subject names `branch` itself as the merge source — an
+/// upstream-sync merge (`Merge branch 'main' of <url>`, `Merge
+/// remote-tracking branch 'origin/main'`, `Merge origin/main …`), not a unit
+/// of work. Decided from the subject because no topological test survives a
+/// push: once the sync merge is pushed, the upstream's first-parent chain runs
+/// through it and its second parent is indistinguishable from a side branch.
+fn is_self_sync(subject: &str, branch: &str) -> bool {
+    let s = subject.to_lowercase();
+    let b = branch.to_lowercase();
+    if s.contains(&format!("'{b}'")) {
+        return true;
+    }
+    s.split(|c: char| !(c.is_alphanumeric() || matches!(c, '.' | '_' | '-' | '/')))
+        .any(|tok| {
+            tok.rsplit_once('/')
+                .is_some_and(|(prefix, last)| !prefix.is_empty() && last == b)
+        })
 }
 
 // ---- git -------------------------------------------------------------------

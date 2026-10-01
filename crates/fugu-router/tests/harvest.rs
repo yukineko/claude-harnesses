@@ -535,3 +535,196 @@ fn master_branch_is_used_when_main_is_absent() {
     ok(&fx.harvest(&[]));
     assert_eq!(fx.episodes().len(), 1);
 }
+
+// ---- R1: `.backlog/` bookkeeping is noise ------------------------------------
+
+/// One mature merge touching a.txt and `.backlog/tasks.toml`, then a fix commit
+/// on main touching `fix_files` a day later. Returns the single episode.
+fn pass_after_backlog_merge(name: &str, fix_files: &[&str]) -> serde_json::Value {
+    let fx = Fixture::new(name);
+    let t = now() - 10 * DAY;
+    fx.merge(
+        "feat",
+        "Merge feat",
+        t,
+        &[(
+            t - 3600,
+            msg("feat: a", Some(OPUS)),
+            vec!["a.txt", ".backlog/tasks.toml"],
+        )],
+    );
+    fx.on_main(t + DAY, "fix: follow-up", fix_files);
+    let top = git_at(&fx.repo, t, &["log", "-1", "--format=%s", "main"]);
+    assert_eq!(top, "fix: follow-up");
+    ok(&fx.harvest(&[]));
+    let eps = fx.episodes();
+    assert_eq!(eps.len(), 1, "expected exactly one episode, got {eps:?}");
+    eps[0].clone()
+}
+
+#[test]
+fn fix_overlapping_only_on_backlog_files_is_still_pass() {
+    // control: a fix overlapping on a real file still fails the merge
+    let real = pass_after_backlog_merge("backlog-ctl", &["a.txt"]);
+    assert_eq!(real["pass"], false, "control: real-file overlap must fail");
+    // a fix overlapping on a real file AND .backlog still fails
+    let both = pass_after_backlog_merge("backlog-both", &["a.txt", ".backlog/tasks.toml"]);
+    assert_eq!(both["pass"], false, "real-file overlap alongside .backlog");
+
+    for (i, f) in [".backlog/tasks.toml", ".backlog/sub/dir/other.json"]
+        .into_iter()
+        .enumerate()
+    {
+        let e = pass_after_backlog_merge(&format!("backlog-only-{i}"), &[f]);
+        assert_eq!(
+            e["pass"], true,
+            "overlap only on {f} (bookkeeping under .backlog/) must not fail the merge"
+        );
+    }
+}
+
+// ---- R2': self-sync merges (subject names the branch itself) are skipped -----
+
+fn cursor_text(fx: &Fixture) -> String {
+    std::fs::read_to_string(fx.fr_dir().join("harvest-cursor.json"))
+        .expect("harvest-cursor.json must exist")
+}
+
+#[test]
+fn pushed_pull_sync_merge_is_skipped_and_marked_but_work_merge_is_recorded() {
+    let fx = Fixture::new("pushedsync");
+    let origin = fx.root.join("origin.git");
+    let clone2 = fx.root.join("clone2");
+    std::fs::create_dir_all(&origin).unwrap();
+    git_at(&origin, now(), &["init", "-q", "--bare", "-b", "main"]);
+    let origin_s = origin.to_str().unwrap();
+    git_at(&fx.repo, now(), &["remote", "add", "origin", origin_s]);
+    git_at(&fx.repo, now(), &["push", "-q", "-u", "origin", "main"]);
+
+    let t_work = now() - 20 * DAY;
+    let work = fx.merge(
+        "feat",
+        "Merge feat: real work",
+        t_work,
+        &[(t_work - 60, msg("feat: real", Some(OPUS)), vec!["a.txt"])],
+    );
+    git_at(&fx.repo, t_work, &["push", "-q", "origin", "main"]);
+
+    git_at(
+        &fx.root,
+        now(),
+        &["clone", "-q", origin_s, clone2.to_str().unwrap()],
+    );
+    std::fs::write(clone2.join("c.txt"), "theirs").unwrap();
+    let t_their = now() - 14 * DAY;
+    git_at(&clone2, t_their, &["add", "-A"]);
+    git_at(
+        &clone2,
+        t_their,
+        &["commit", "-q", "-m", &msg("feat: theirs", Some(OPUS))],
+    );
+    git_at(&clone2, t_their, &["push", "-q", "origin", "main"]);
+
+    fx.on_main(now() - 13 * DAY, "local: mine", &["b.txt"]);
+    let t_sync = now() - 12 * DAY;
+    git_at(
+        &fx.repo,
+        t_sync,
+        &["pull", "-q", "--no-rebase", "--no-edit"],
+    );
+    let sync = git_at(&fx.repo, t_sync, &["rev-parse", "HEAD"]);
+    git_at(&fx.repo, t_sync, &["push", "-q", "origin", "main"]);
+
+    // fixture facts: the sync merge is a merge, has been pushed, and names main
+    let parents = git_at(&fx.repo, t_sync, &["rev-list", "--parents", "-1", &sync]);
+    assert_eq!(parents.split_whitespace().count(), 3, "must be a merge");
+    assert_eq!(
+        git_at(&fx.repo, t_sync, &["rev-parse", "origin/main"]),
+        sync,
+        "fixture: the sync merge must have been pushed"
+    );
+    let subj = git_at(&fx.repo, t_sync, &["log", "-1", "--format=%s", &sync]);
+    assert!(subj.contains("'main'"), "fixture: subject was {subj:?}");
+
+    ok(&fx.harvest(&[]));
+    let titles: Vec<String> = fx
+        .episodes()
+        .iter()
+        .map(|e| e["title"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        titles,
+        vec!["Merge feat: real work".to_string()],
+        "only the work merge may be recorded; the pushed pull-sync merge must be skipped"
+    );
+    let cursor = cursor_text(&fx);
+    assert!(cursor.contains(&work), "cursor lacks work merge {work}");
+    assert!(
+        cursor.contains(&sync),
+        "skipped sync merge {sync} must still be marked harvested: {cursor}"
+    );
+    ok(&fx.harvest(&[]));
+    assert_eq!(fx.episodes().len(), 1, "second run changed the store");
+}
+
+#[test]
+fn self_sync_subjects_are_skipped_and_work_subjects_recorded() {
+    let cases: [(&str, bool); 7] = [
+        ("Merge branch 'main' of https://x/y", true),
+        ("Merge remote-tracking branch 'origin/main'", true),
+        ("Merge origin/main (autoflow x)", true),
+        (
+            "merge: integrate origin/main 81e102fd into session-b9a78b46",
+            true,
+        ),
+        ("Merge session-40aa606d — x", false),
+        ("Merge flow-34385c9e/bg-del-impl — y", false),
+        ("Merge feature 'mainline-x'", false),
+    ];
+    for (i, (subject, skipped)) in cases.into_iter().enumerate() {
+        let fx = Fixture::new(&format!("subj-sync-{i}"));
+        let t = now() - 10 * DAY;
+        let sha = fx.merge(
+            "side",
+            subject,
+            t,
+            &[(t - 60, msg("feat: x", Some(OPUS)), vec!["a.txt"])],
+        );
+        ok(&fx.harvest(&[]));
+        if skipped {
+            assert!(
+                fx.episodes().is_empty(),
+                "subject {subject:?} names the branch itself: must be skipped"
+            );
+            assert!(
+                cursor_text(&fx).contains(&sha),
+                "skipped merge {subject:?} must still be marked harvested"
+            );
+        } else {
+            assert_eq!(
+                fx.episodes().len(),
+                1,
+                "subject {subject:?} is a work merge: must be recorded"
+            );
+        }
+    }
+}
+
+#[test]
+fn self_sync_subject_uses_the_actual_branch_name_master() {
+    let fx = Fixture::new("master-sync");
+    let t = now() - 10 * DAY;
+    let sha = fx.merge(
+        "side",
+        "Merge branch 'master' of https://x/y",
+        t,
+        &[(t - 60, msg("feat: x", Some(OPUS)), vec!["a.txt"])],
+    );
+    git_at(&fx.repo, t, &["branch", "-m", "main", "master"]);
+    ok(&fx.harvest(&[]));
+    assert!(
+        fx.episodes().is_empty(),
+        "'master' sync merge on a master repo must be skipped"
+    );
+    assert!(cursor_text(&fx).contains(&sha), "must be marked harvested");
+}

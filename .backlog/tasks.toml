@@ -1225,9 +1225,12 @@ project_unresolved = false
 tags = ["p1"]
 touched_files = []
 status = "pending"
-notes = "2026-08-07 の compass 再オリエンテーションで人間が裁定した次の ONE 右サイズの一手。DoD9 の完了条件の軸（是正完了）を実際に動かす唯一の候補。同一 shape は reviewgate P1（diff 取得失敗が空 diff = 変更なしへ潰れ無診断で allow）と propguard F-2 で2 crate 確認済み。手順: (1) shape を機械検出可能な述語として書き下す（走査/diff/subprocess の取得失敗が空コレクションへ落ち、その空が下流で対象なし=合格と読まれる形）、(2) 監査済み 7 crate を横断で当て逐語引用つきで列挙（辿れなかったは UNVERIFIED であって不在の証明ではない）、(3) 各ヒットを利害のない別 agent が fault injection で RED 先行観測してから是正 (F->P)、(4) 是正後に同じ述語を再実行して単調減少を観測。述語が 0 件を返したときは clean ではなく『この述語では見つからなかった』と報告すること。"
+notes = """
+2026-08-07 の compass 再オリエンテーションで人間が裁定した次の ONE 右サイズの一手。DoD9 の完了条件の軸（是正完了）を実際に動かす唯一の候補。同一 shape は reviewgate P1（diff 取得失敗が空 diff = 変更なしへ潰れ無診断で allow）と propguard F-2 で2 crate 確認済み。手順: (1) shape を機械検出可能な述語として書き下す（走査/diff/subprocess の取得失敗が空コレクションへ落ち、その空が下流で対象なし=合格と読まれる形）、(2) 監査済み 7 crate を横断で当て逐語引用つきで列挙（辿れなかったは UNVERIFIED であって不在の証明ではない）、(3) 各ヒットを利害のない別 agent が fault injection で RED 先行観測してから是正 (F->P)、(4) 是正後に同じ述語を再実行して単調減少を観測。述語が 0 件を返したときは clean ではなく『この述語では見つからなかった』と報告すること。
+
+[re-measured 2026-10-02 @e672436b] Step (1) exists: fail-open-guard's empty-collection fallback class (b0cacd15) is a machine predicate and is advisory, scored on the ratchet. On a 2026-10-02 pre-commit run it listed 5 hits: blastguard/src/scope.rs:1032 (.unwrap_or(false)); overwatch/src/review_gate_decisions.rs:134 (Err(_) maps to Vec::new()); overwatch/src/store.rs:376 (Known(None)/Undetermined map to Vec::new()); specguard/src/scope.rs:506 (Undetermined maps to Vec::new()); stuckguard/src/verdict_monotonicity.rs:110 (Undetermined maps to SessionState::default()). Each hit still needs a downstream-consumer trace before it counts as a fail-open, because an empty fallback is not automatically permissive. Then an independent F->P per GATE crate, one crate per commit."""
 created_at = 1786046693
-updated_at = 1786046693
+updated_at = 1790886024
 weight = 0.0
 issue_number = 214
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/214"
@@ -1261,9 +1264,11 @@ PR #220 のマージ後は (A) が 2 件（ソース 0.2.6 / 配布 0.2.5）に�
 （未マージ branch 由来か）も併せて報告する。判定不能（version を読めない等）は
 CLAUDE.md 第3節どおり制限側に倒し、clean を名乗らせない。
 
-[triage 2026-09-29 @b325a169] p2->p1: check-plugin-rollout.py:1349-1353 direction-less compare prescribes rollout even when deployed is newer (= destructive rollback)"""
+[triage 2026-09-29 @b325a169] p2->p1: check-plugin-rollout.py:1349-1353 direction-less compare prescribes rollout even when deployed is newer (= destructive rollback)
+
+[re-measured 2026-10-02 @e672436b] Still real. scripts/check-plugin-rollout.py around 1349-1355 compares recorded_core != current_core without direction and always prescribes 'rollout-plugins.sh not run since that shared-crate change', even when the deployed version is newer (an orphan, so rolling out would be a rollback)."""
 created_at = 1786048738
-updated_at = 1790631016
+updated_at = 1790886024
 weight = 0.0
 issue_number = 221
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/221"
@@ -1336,9 +1341,11 @@ README が書く「4回で自動停止」ではない。CLAUDE.md 第4節が禁�
 
 なお README.md（英語）側も同様か未確認。直すときは両方を見ること。
 
-[triage 2026-09-29 @b325a169] p2->p1: autoflow README claims a 4-run safety cap that the code does not have (CLAUDE.md 4: safe story in prose)"""
+[triage 2026-09-29 @b325a169] p2->p1: autoflow README claims a 4-run safety cap that the code does not have (CLAUDE.md 4: safe story in prose)
+
+[re-measured 2026-10-02 @e672436b] Still real, but only in one place: crates/autoflow/README.ja.md:18 still has '自動は 4 回まで、5 回目以降はユーザーに確認'. The second ja passage and the English README.md no longer match. A fix is one line plus an autoflow micro bump (3-file lockstep)."""
 created_at = 1786049186
-updated_at = 1790631015
+updated_at = 1790886023
 weight = 0.0
 issue_number = 223
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/223"
@@ -1400,9 +1407,11 @@ item が失敗したら backlog fail で落として次の item へ進む。連�
 condukt 0.7.124 / flow 0.2.5 で入れた policy answer の approval クランプ
 （権限認可は常設許諾・判断要求は Ask を残す）と組み合わせて動く。
 drain 中に残る human stop は pivot / worker blocked / untestable のみ。
-"""
+
+
+[re-measured 2026-10-02 @e672436b, session c6ed7cfd] The precondition is contradictory. This ticket says not to implement until af239090 (deterministic 'related' detection) is decided. af239090 was closed WITHOUT work on 2026-09-29 (@546d9fa2), with the note 'OBSOLETE: flow SKILL.md no longer has the drain/related-scope concept'. Grep finds 0 'drain' hits in crates/flow/skills/flow/SKILL.md. So either this ticket is obsolete too, or af239090 was closed wrongly. That is a human design call (spec gap), not something to implement. Not started."""
 created_at = 1786049824
-updated_at = 1786049826
+updated_at = 1790886023
 weight = 0.0
 issue_number = 224
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/224"
@@ -12871,3 +12880,18 @@ updated_at = 1790885806
 weight = 0.0
 issue_number = 997
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/997"
+
+[[task]]
+id = "6b0823c7"
+title = "orphan cargo target dir /Users/yuki/.condukt/worktrees/pgv-target fails every condukt state gate"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-02 at the run-20261002-040905-21607 completion gate. Every task was verified and all task worktrees had been removed, and condukt state gate still FAILed with exactly one reason: 'orphan worktree on disk: /Users/yuki/.condukt/worktrees/pgv-target'. The directory is not a git worktree. It is a cargo target dir (CACHEDIR.TAG, .rustc_info.json), 481M, mtime 2026-09-29 22:20, probably a parallelguard verify build by another session. I did not create it, so I did not delete it. Readings: (a) a leftover cache that is safe to delete, after which the gate should stop flagging it; (b) the gate should not classify non-git cache dirs as orphan worktrees, or condukt should put target dirs outside worktree_base."
+created_at = 1790885907
+updated_at = 1790885907
+weight = 0.0
+issue_number = 998
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/998"

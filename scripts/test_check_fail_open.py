@@ -206,7 +206,9 @@ class AllowlistSuppression(unittest.TestCase):
         silently suppress a swallow re-introduced at that (path, pattern, needle)
         later on.
         """
-        self.assertTrue(fo.ALLOWLIST, "ALLOWLIST is empty — nothing to vouch for")
+        # (An empty ALLOWLIST is legitimate and vacuously clean: the
+        # undetermined-arm class must have no entries, see
+        # UndeterminedArmSpellingsRemaining.)
         for entry in fo.ALLOWLIST:
             p = fo.REPO / entry["path"]
             with self.subTest(path=entry["path"], pattern=entry["pattern"]):
@@ -469,10 +471,6 @@ class UpdateBaselineRepins(unittest.TestCase):
         self.assertFalse(self._tmp.exists(), "must not write a baseline it cannot trust")
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
-
-
 class EmptyCollectionFallbackClass(unittest.TestCase):
     """The class backlog b0cacd15 filed: 'an error is discarded and an EMPTY
     collection is returned', which downstream reads as 'nothing to inspect →
@@ -631,6 +629,69 @@ class UndeterminedArmSpellings(unittest.TestCase):
         self.assertEqual(fo.blocking_hits(hit), [])
 
 
+class UndeterminedArmSpellingsRemaining(unittest.TestCase):
+    """backlog f12c2168 (second slice): remaining Blocked/Undetermined arm
+    spellings (`return ...`, `Ok(vec![])`, `(..)`, `=> None`, block bodies), the
+    `Err(_) => return Vec::new()` form, and the extension-trait erasure
+    `.require().unwrap_or_default()` / `.require().is_ok()`."""
+
+    def _undet(self, src):
+        self.assertIn("undetermined-arm-empty-fallback", names(fo.scan_rust(src)))
+
+    def test_blocked_arm_return_vec_new(self):
+        self._undet(["        Required::Blocked(_) => return Vec::new(),"])
+
+    def test_bare_blocked_arm_return_ok_vec_macro(self):
+        self._undet(["        Blocked(_) => return Ok(vec![]),"])
+
+    def test_blocked_arm_dotdot_pattern(self):
+        self._undet(["        Required::Blocked(..) => Vec::new(),"])
+
+    def test_undetermined_arm_dotdot_none(self):
+        self._undet(["        Determination::Undetermined(..) => None,"])
+
+    def test_block_bodied_blocked_arm_with_empty_value(self):
+        self._undet([
+            "        Required::Blocked(_) => {",
+            "            Vec::new()",
+            "        }",
+        ])
+
+    def test_err_arm_return_vec_new(self):
+        self.assertIn("err-arm-empty-fallback",
+                      names(fo.scan_rust(["        Err(_) => return Vec::new(),"])))
+
+    def test_require_unwrap_or_default_is_flagged(self):
+        src = ["    let files = listing.require().unwrap_or_default();"]
+        self.assertIn("require-ext-erase", names(fo.scan_rust(src)))
+
+    def test_require_is_ok_is_flagged(self):
+        src = ["    let ok = listing.require().is_ok();"]
+        self.assertIn("require-ext-erase", names(fo.scan_rust(src)))
+
+    def test_require_ext_erase_is_advisory_only(self):
+        self.assertIn("require-ext-erase", fo.ADVISORY_ONLY_PATTERNS)
+
+    def test_forwarding_blocked_arm_return_is_not_flagged(self):
+        src = ["        Blocked(why) => return why.into_verdict(),"]
+        self.assertEqual(fo.scan_rust(src), [])
+
+    def test_block_bodied_forwarding_blocked_arm_is_not_flagged(self):
+        src = [
+            "        Blocked(why) => {",
+            "            return why.into_verdict();",
+            "        }",
+        ]
+        self.assertEqual(fo.scan_rust(src), [])
+
+    def test_undetermined_arm_allowlist_is_empty(self):
+        # User ruling 2026-10-02: the grandfathered entries move to the
+        # baseline; the burn-down pressure is the ratchet, not ALLOWLIST.
+        self.assertEqual(
+            [e for e in fo.ALLOWLIST
+             if e["pattern"] == "undetermined-arm-empty-fallback"], [])
+
+
 class NewClassIsAdvisoryOnly(unittest.TestCase):
     """The 2026-08-06 landing decision: the new class enters the ADVISORY /
     `--ratchet` surface only, NOT the merge-blocking gate-surface verdict.
@@ -667,3 +728,7 @@ class NewClassIsAdvisoryOnly(unittest.TestCase):
         hits = [(1, "Err(_) => Ok(Vec::new()),", "err-arm-empty-fallback")]
         self.assertEqual(len(hits), 1)
         self.assertEqual(fo.blocking_hits(hits), [])
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

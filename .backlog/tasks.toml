@@ -12856,3 +12856,18 @@ updated_at = 1790884636
 weight = 0.0
 issue_number = 992
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/992"
+
+[[task]]
+id = "e3403964"
+title = "backlog merge-driver: same task notes edited on both sides keeps ours, silently drops theirs"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-02 while merging main into session-c6ed7cfd (merge 778e9a26). Task 8696dd7e had notes appended on both sides: ours added the propguard slice note; theirs (another session) added the blastguard slice note and held-back recoverability test. The backlog merge driver produced a parseable file equal to OURS for 8696dd7e, dropping theirs' appended text. git marked it unmerged (UU) but with no conflict markers, so the loss was visible only by a 3-way id-level diff. I fixed it by hand (base + ours suffix + theirs suffix). Expected: when both sides append to notes from a common base, concatenate. Otherwise refuse with an explicit id-level conflict listing the task, never pick a side silently. The UU state was the only signal."
+created_at = 1790885806
+updated_at = 1790885806
+weight = 0.0
+issue_number = 997
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/997"

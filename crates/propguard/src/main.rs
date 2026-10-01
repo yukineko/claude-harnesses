@@ -39,6 +39,8 @@
 
 mod config;
 mod derive;
+#[cfg(test)]
+mod fault_injection_tests;
 mod gate;
 mod git;
 mod install;

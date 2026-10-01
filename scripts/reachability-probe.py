@@ -15,6 +15,7 @@ Test/build commands run in the caller's cwd.
 """
 import argparse
 import json
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -64,6 +65,13 @@ def main():
             return undetermined("--crate required when --test-cmd/--build-cmd omitted")
         test_cmd = test_cmd or f"cargo test -p {a.crate}"
         build_cmd = build_cmd or f"cargo test -p {a.crate} --no-run"
+
+    def _on_signal(signum, _frame):
+        raise KeyboardInterrupt(f"signal {signum}")
+
+    # SIGTERM/SIGINT unwind through the finally below (restore), then exit non-zero, no result.
+    signal.signal(signal.SIGTERM, _on_signal)
+    signal.signal(signal.SIGINT, _on_signal)
 
     target = Path(a.file)
     try:

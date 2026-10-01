@@ -12803,3 +12803,30 @@ updated_at = 1790882953
 weight = 0.0
 issue_number = 979
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/979"
+
+[[task]]
+id = "16d8e01d"
+title = "blastguard worktree_root_* 29件が赤: neutral_base の既定候補が全て target 配下で calibrate が Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+Observed 2026-10-02 at main e70d48dd (session 34385c9e), worktree ~/.condukt/worktrees/p1b-fault2 (blastguard 0.2.97 branch, diff vs main touches NO blastguard src and none of these tests).
+cargo test -p blastguard --no-fail-fast: 752 passed, 29 failed. All 29 are worktree_root_cd_desync (9), worktree_root_rm (11), worktree_root_symlink_escape (9), each panicking at tests/support/neutral_base.rs:78 'no location-neutral fixture base'.
+Calibration result per candidate:
+- default CARGO_TARGET_TMPDIR (worktree target/tmp): Allow
+- BLASTGUARD_TEST_FIXTURE_DIR=/Users/yuki/src/harness/target/bg-fixtures: Allow ('an enclosing worktree root?')
+- BLASTGUARD_TEST_FIXTURE_DIR under scratchpad /private/tmp/...: still fails (temp safe root, expected per module doc)
+Hypothesis (UNVERIFIED): 566d7717 (3aa215e1, 'clean tracked target is class 5') made rm under a cargo target dir Allow, and BOTH default candidates of neutral_base (CARGO_TARGET_TMPDIR, workspace target) are inside target/, so no default candidate can calibrate to Deny. d3b95c43 (bdd85e20 fixture base, authored 05:02) and 566d7717 (04:36) were on parallel branches; check whether worktree_root_* ever passed on a main that has both.
+Also: on a ~/.condukt/worktrees checkout the cwd may itself be an enclosing root. Distinguish: run the 3 binaries on a .harness-worktrees checkout and on a plain clone with FIXTURE_DIR set to a non-target, non-tmp dir.
+No hook runs cargo test, so this red is otherwise invisible (same class as the 2026-10-01 p1-flaky item)."""
+created_at = 1790883430
+updated_at = 1790883430
+weight = 0.0
+issue_number = 989
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/989"

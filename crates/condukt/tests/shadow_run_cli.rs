@@ -123,6 +123,9 @@ fn exec_refuses_to_fire_while_disabled() {
 
 #[test]
 fn exec_creates_worktree_when_enabled() {
+    // Isolate HOME so a real fugu-router (if on PATH) writes into a tempdir,
+    // never the user's real ~/.fugu-router.
+    let home = tempfile::tempdir().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let repo = tempfile::tempdir().unwrap();
     for args in [
@@ -169,6 +172,7 @@ fn exec_creates_worktree_when_enabled() {
             "haiku",
         ])
         .current_dir(repo.path())
+        .env("HOME", home.path())
         .env("CONDUKT_SHADOW_RUN_DIR", dir.path())
         .env("CONDUKT_WORKTREE_BASE", &worktree_base)
         .output()
@@ -204,6 +208,7 @@ fn exec_creates_worktree_when_enabled() {
             "3.2",
         ])
         .current_dir(repo.path())
+        .env("HOME", home.path())
         .env("CONDUKT_SHADOW_RUN_DIR", dir.path())
         .output()
         .unwrap();

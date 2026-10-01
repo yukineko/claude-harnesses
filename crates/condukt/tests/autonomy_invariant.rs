@@ -532,7 +532,7 @@ fn policy_answer_conflict_beats_approval() {
 ///   This IS a new residual stop and is deliberate: a decision that cannot be
 ///   tested has no automated signal to defer to, so the only honest verdict is
 ///   to hand it to a human. Nothing was removed to make room for it.
-/// flow SKILL (13): HDR x1 + PROSE (Step 0.5 documents the policy-answer routing
+/// flow SKILL (15): HDR x1 + PROSE (Step 0.5 documents the policy-answer routing
 ///   contract: the autonomy switch plus the exit 0/2/3 branches that name
 ///   `AskUserQuestion` on escalate/fallback) + DEGRADE (lock gate, 3-failure —
 ///   auto self-answers, escalate/fallback re-Asks) + ESCALATE (pivot: routed to
@@ -576,6 +576,18 @@ fn policy_answer_conflict_beats_approval() {
 ///   and delete exactly the judgment it exists to ask for. flow's own
 ///   residual-stops prose was widened in the same commit to name it (d), so the
 ///   skill does not describe a set of stops smaller than the one it implements.
+///
+///   The 14th and 15th arrived with `d6ee8110` (user ruling 2026-09-23: backlog
+///   before charter; when the backlog yields nothing, /flow re-carves the
+///   charter in place instead of pointing at /compass). They are the carve's
+///   one-question-at-a-time prompt in 3-1 step 3 and the sentence keeping it
+///   ("この carve 中の `AskUserQuestion` は残す"). Human ruling 2026-10-01
+///   (backlog `ec878b2a`): ACCEPTED as category (c), genuine judgment requests
+///   that remain even in autonomous mode — carving the charter decides WHAT the
+///   goal is, which is the human's call; what was automated is only the act of
+///   going to the charter. They are not given `--approval`. flow's
+///   residual-stops prose and Step 0.5 table were widened in the same commit
+///   that raised this count, so the skill names this stop too.
 /// scout SKILL (10): HDR x1 + PROSE x1 (invariant) + heading x1 + DEGRADE (Phase 4
 ///   selection routed through `condukt policy answer`: auto adopts top-N,
 ///   escalate/fallback re-emits the multiSelect prompt; plus auto-handoff and
@@ -601,7 +613,7 @@ fn policy_answer_conflict_beats_approval() {
 const ASK_ALLOWLIST: &[(&str, usize)] = &[
     ("compass/skills/compass/SKILL.md", 3),
     ("condukt/skills/condukt/SKILL.md", 25),
-    ("flow/skills/flow/SKILL.md", 13),
+    ("flow/skills/flow/SKILL.md", 15),
     ("hypothesis/skills/add/SKILL.md", 1),
     ("overwatch/skills/overwatch/SKILL.md", 7),
     ("scout/skills/scout/SKILL.md", 10),

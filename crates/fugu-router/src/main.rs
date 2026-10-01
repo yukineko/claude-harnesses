@@ -12,6 +12,7 @@ mod confidence;
 mod config;
 mod decomp;
 mod fingerprint;
+mod harvest;
 mod inject;
 mod install;
 mod mode;
@@ -267,6 +268,22 @@ enum Command {
         #[arg(long)]
         push_only: bool,
     },
+    /// Turn merges into the repo's `main` (or `master`) into `merge` episodes,
+    /// once each merge's observation window has closed: pass = no `fix`/`revert`
+    /// commit touching the same (non-noise) files landed within the window.
+    /// Idempotent (per-repo cursor in ~/.fugu-router/harvest-cursor.json). Run
+    /// by the SessionEnd hook before `sync`.
+    Harvest {
+        /// Repository to harvest (default: the toplevel of the cwd's checkout).
+        #[arg(long)]
+        repo: Option<PathBuf>,
+        /// Days a merge must age before its outcome is decided and recorded.
+        #[arg(long, default_value_t = 3)]
+        window_days: u64,
+        /// Only consider merges at most this many days old.
+        #[arg(long, default_value_t = 60)]
+        lookback_days: u64,
+    },
     /// Merge another machine's store file(s) into the local stores, deduplicating
     /// by content hash. At least one of --episodes or --playbooks must be given.
     /// With --dedup (and no source path), deduplicates the LOCAL stores in place.
@@ -506,7 +523,11 @@ fn main() {
             // the agent nor the user. Surface it regardless of whether this
             // prompt looks like coding work — a stale store is not a property
             // of the prompt.
-            let notice = syncstate::pending();
+            // Same for a failed `harvest` (also SessionEnd-only).
+            let notice = match (syncstate::pending(), harvest::pending()) {
+                (Some(a), Some(b)) => Some(format!("{a}\n{b}")),
+                (a, b) => a.or(b),
+            };
 
             let summary = if inject::looks_actionable(&input.prompt) {
                 let eps = store::load(&cfg.store_path());
@@ -756,6 +777,11 @@ fn run_user(cmd: Command) -> Result<()> {
             pull_only,
             push_only,
         } => cmd_sync(&cfg, pull_only, push_only),
+        Command::Harvest {
+            repo,
+            window_days,
+            lookback_days,
+        } => harvest::cmd_harvest(&cfg, repo, window_days, lookback_days),
         Command::Fingerprint { dir } => {
             let root = dir.unwrap_or_else(|| PathBuf::from("."));
             let fp = fingerprint::skill_fingerprint(&root).with_context(|| {

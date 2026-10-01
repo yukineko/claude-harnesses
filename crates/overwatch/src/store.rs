@@ -984,9 +984,13 @@ pub fn rewrite_audit_rounds(cwd: &Path, rounds: &[AuditRound]) -> Result<()> {
 ///
 /// * **absent ledger** → `Known(vec![])`. "No rounds recorded yet" is a real
 ///   answer, and a fresh checkout must not read as an error.
-/// * **unreadable ledger** (permissions, IO error) → `Undetermined`. This arm
-///   used to be `Err(_) => Ok(Vec::new())`, which reported "there is no audit
-///   history" for a history the process simply could not open.
+/// * **unreadable ledger** (permissions, non-UTF-8, IO error) → `Undetermined`,
+///   forwarded (not re-minted) from [`harness_core::boundary::read_to_string`],
+///   so the absent/unreadable split is drawn by the shared boundary type and the
+///   read is reachable by the harness-core fault-injection seam
+///   (`tests/fault_injection.rs`). This arm used to be `Err(_) => Ok(Vec::new())`,
+///   which reported "there is no audit history" for a history the process
+///   simply could not open.
 /// * **unparseable record** → `Undetermined`, via [`audit_round::parse_rounds`].
 ///   The old loop skipped bad lines silently and returned the survivors, so a
 ///   single corrupted byte produced a shorter history that looked healthier.
@@ -999,14 +1003,12 @@ pub fn rewrite_audit_rounds(cwd: &Path, rounds: &[AuditRound]) -> Result<()> {
 /// `harness_core::degrade`.
 pub fn read_audit_rounds(cwd: &Path) -> Result<Determination<Vec<AuditRound>>> {
     let path = audit_rounds_path(cwd)?;
-    match std::fs::read_to_string(&path) {
-        Ok(txt) => Ok(audit_round::parse_rounds(&txt)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Determination::Known(Vec::new())),
-        Err(e) => Ok(Determination::undetermined(format!(
-            "cannot read the audit-round ledger at {}: {e}. The round history is \
-             unknown, not empty.",
-            path.display()
-        ))),
+    match harness_core::boundary::read_to_string(&path) {
+        Determination::Known(Some(txt)) => Ok(audit_round::parse_rounds(&txt)),
+        Determination::Known(None) => Ok(Determination::known(Vec::new())),
+        // Forwarded, deliberately not re-minted: the boundary already recorded
+        // this `Undetermined` once, and forwarding must not double-count it.
+        Determination::Undetermined(why) => Ok(Determination::Undetermined(why)),
     }
 }
 

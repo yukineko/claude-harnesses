@@ -48,10 +48,15 @@ pub const PROTECTION: Protection = Protection {
         guard, not overwatch, blocks. (3) Two sessions working one key: \
         `overwatch begin` exits 1 with skip JSON when another live session \
         holds the key or the lease lock is contended (src/lease.rs begin). \
-        Nothing enforces that exit: its one caller in this repo, \
-        crates/flow/skills/flow/SKILL.md step 7, is prose that says to continue \
-        when the call fails, and flow's working dedup is `condukt state \
-        claim-task`. It does not detect prompt injection, spec drift or weak \
+        Nothing enforces that exit: no code, hook or script in this repo \
+        calls `begin` (a grep finds only a comment in crates/backlog/src/main.rs, \
+        a blastguard test string and stuckguard's src/anchor.rs advice text); \
+        its callers are prose read by an agent, and they disagree - \
+        crates/overwatch/skills/overwatch/SKILL.md says 'exit 1 なら決して先に進んではならない', \
+        while crates/flow/skills/flow/SKILL.md step 7 says only that a missing \
+        binary or failed call is skipped ('呼び出し失敗時は skip して続行する') \
+        and does not mention exit 1 (crates/flow/README.md also lists the \
+        step). flow's own dedup is `condukt state claim-task`. It does not detect prompt injection, spec drift or weak \
         tests (crates/harness-core/src/fleet.rs: 'it is not itself a \
         prompt-injection/spec/mutation defense gate').",
     grounds: "Recorded incidents: (1) scripts/rollout-plugins.sh health-gate \

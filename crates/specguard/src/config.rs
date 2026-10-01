@@ -240,6 +240,15 @@ pub struct MapConfig {
     /// drift, not config churn.
     #[serde(default)]
     pub exclude: Vec<String>,
+    /// Review-staleness window for `specguard map review-status` and the
+    /// per-entry `review_state` of `map list --json`: a `tracked` entry whose
+    /// `reviewed_at.commit` is MORE than this many commits behind HEAD is
+    /// `stale-review`. Absent or `0` resolves to 50
+    /// ([`crate::specmap::DEFAULT_REVIEW_MAX_COMMITS`]) via
+    /// [`crate::specmap::effective_review_max_commits`] — `0` never means
+    /// "never stale".
+    #[serde(default)]
+    pub review_max_commits: Option<u64>,
 }
 
 impl Default for MapConfig {
@@ -248,6 +257,7 @@ impl Default for MapConfig {
             path: default_map_path(),
             spec_doc_dir: default_spec_doc_dir(),
             exclude: Vec::new(),
+            review_max_commits: None,
         }
     }
 }

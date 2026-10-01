@@ -79,6 +79,14 @@ exclude = [
     "**/fixtures/**",
     "**/*.json",
 ]
+# Review-staleness window N for `specguard map review-status` and the per-entry
+# `review_state` of `map list --json`. A `tracked` entry is `stale-review` when
+# it has no `reviewed_at` (legacy entry) or its `reviewed_at.commit` is MORE
+# than N commits behind HEAD (exactly N is still `fresh`); it is `undetermined`
+# — never `fresh` — when HEAD is unreadable or the review commit is not in
+# HEAD's history, or a git call fails. Absent or 0 means 50: 0 never disables
+# the window. `--max-commits N` overrides this per run.
+review_max_commits = 50
 
 [decisions]
 # Directory of decision records (ADRs): the *why* behind canon changes, pinned

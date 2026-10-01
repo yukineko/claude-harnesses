@@ -169,7 +169,16 @@ specguard decide "<title>"         # scaffold a decision record (ADR)
 specguard accept-prompt -m "reason"  # ratify the prompt (meta-canon)
 specguard map build                # create the spec-map store (if absent) + seed from the full history window
 specguard map sync                 # reflect only the git delta since the baseline (A/M/R/D)
-specguard map list [--json]        # print the current spec↔impl mapping
+specguard map list [--json]        # print the current spec↔impl mapping (--json adds per-entry review_state)
+specguard map review-status [--json] [--max-commits N]  # classify each tracked entry's recorded review:
+# fresh = reviewed_at.commit is an ancestor of HEAD and at most N commits behind it (exactly N is fresh);
+# stale-review = reviewed_at absent (a legacy entry: no recorded review is not a fresh review) or MORE
+# than N commits behind; undetermined = HEAD unreadable (no git repo, unborn HEAD), the review commit is
+# not in HEAD's history (unknown object or not an ancestor), a git call exited non-zero / timed out, or
+# the count did not parse — never fresh. Non-tracked entries are not classified (review_state = null in
+# `map list --json`). N = --max-commits (>= 1), else [map] review_max_commits; absent or 0 means 50
+# (0 never means "never stale"). exit 0 every tracked entry fresh, 1 any stale-review, 2 any
+# undetermined, an absent map file, or no tracked entry. Read-only; not wired to any hook.
 specguard map set-spec <key|glob> <doc> --reason "<why>"  # attach a spec-doc to matching entries + mark them tracked
 specguard map resolve <key|glob> --reason "<why>"   # mark matching entries tracked (reviewed; no spec needed)
 specguard map link <test> <key>    # relate a test file to an entry explicitly (kept by later syncs)

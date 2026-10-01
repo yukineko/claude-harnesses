@@ -43,9 +43,9 @@ census が permissive 候補から外している。ただし**「三値を受�
 
 | # | 位置 | 逐語引用 | 解決先 | 判定 |
 |---|---|---|---|---|
-| A-1 | `crates/mutategate/src/main.rs:65` | `Determination::Known(Some(j)) => j,` | 読めた本文 | 正常系 |
-| A-2 | `crates/mutategate/src/main.rs:66` | `Determination::Known(None) => {` … `return ExitCode::from(2);` | **exit 2** | **restrictive** |
-| A-3 | `crates/mutategate/src/main.rs:74` | `Determination::Undetermined(why) => {` … `return ExitCode::from(2);` | **exit 2** | **restrictive** |
+| A-1 | `crates/mutategate/src/main.rs:81` | `Determination::Known(Some(j)) => j,` | 読めた本文 | 正常系 |
+| A-2 | `crates/mutategate/src/main.rs:82` | `Determination::Known(None) => {` … `return ExitCode::from(2);` | **exit 2** | **restrictive** |
+| A-3 | `crates/mutategate/src/main.rs:90` | `Determination::Undetermined(why) => {` … `return ExitCode::from(2);` | **exit 2** | **restrictive** |
 
 「ファイルが無い」(A-2) と「読めなかった」(A-3) を**別々のアームで別々のメッセージ**にし、
 どちらも exit 2（＝評価不能）へ落としている。**両者を一つに畳んでいない**点が重要で、
@@ -58,7 +58,7 @@ census が permissive 候補から外している。ただし**「三値を受�
 
 | # | 位置 | 逐語引用 | 解決先 | 判定 |
 |---|---|---|---|---|
-| B-1 | `crates/mutategate/src/main.rs:86` | `Err(e) => {` … `return ExitCode::from(2);` | **exit 2** | **restrictive** |
+| B-1 | `crates/mutategate/src/main.rs:102` | `Err(e) => {` … `return ExitCode::from(2);` | **exit 2** | **restrictive** |
 | B-2 | `crates/mutategate/src/lib.rs:202` | `_ => s.unknown += 1,` | `unknown` へ計上 | **restrictive** |
 
 B-2 は catchall アームだが、**捨てていない**。`unknown` は
@@ -110,7 +110,7 @@ C-2 は「viable mutant がゼロ ＝ 何も測れていない」を `passed: fa
 
 | # | 位置 | 逐語引用 | 判定 |
 |---|---|---|---|
-| D-1 | `crates/mutategate/src/main.rs:106` | `None => println!(` `"  kill-rate: n/a       threshold: {:.1}%",` | display-only |
+| D-1 | `crates/mutategate/src/main.rs:122` | `None => println!(` `"  kill-rate: n/a       threshold: {:.1}%",` | display-only |
 
 `kill_rate` が無いときに `n/a` と**明示表示**する。空欄・0% ではない。第1節が
 statusline の空表示を fail-open と認定した（`3b1eb24`）のと同じ論点で、ここは

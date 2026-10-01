@@ -182,7 +182,7 @@ class Restore(Base):
 
     def test_missing_test_binary_mid_run_restores(self):
         # Baseline must pass, so switch to a missing binary only once mutated.
-        cmd = "if grep -q reachability-probe src.rs; then /nonexistent/binary-xyz; fi; exit 0"
+        cmd = "if grep -q reachability-probe src.rs; then /nonexistent/binary-xyz; exit $?; fi; exit 0"
         r = self.run_probe(cmd)
         # Contract: exit 127 is a non-zero exit after mutation => reproduced, no marker.
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)

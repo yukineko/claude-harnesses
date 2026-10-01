@@ -305,7 +305,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.195"
+version = "0.7.196"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -545,7 +545,7 @@ checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
 name = "fugu-router"
-version = "0.1.29"
+version = "0.1.31"
 dependencies = [
  "anyhow",
  "clap",

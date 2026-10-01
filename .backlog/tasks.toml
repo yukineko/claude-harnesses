@@ -12778,3 +12778,18 @@ updated_at = 1790797482
 weight = 0.0
 issue_number = 951
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/951"
+
+[[task]]
+id = "62000a3a"
+title = "condukt: decomposition 欠落時の state set が非0終了し fp_gate_scope_contract / fp_oracle_e2e の2テストが main で赤"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-01 at 75806721 (detached worktree で再現): absent_decomposition_file_still_accepts_a_fix_task_with_no_proofs (fp_gate_scope_contract.rs:216) と genuinely_absent_decomposition_still_verifies (fp_oracle_e2e.rs:448)。stderr は '1/1 verified' の後に 'claim release NOT PERFORMED ... decomposition could not be loaded' で exit≠0。テストは absent decomposition でも accept(exit 0)を要求。claim 解放の fail-closed 化とテスト契約の矛盾 — どちらが正かを決める必要あり。"
+created_at = 1790822160
+updated_at = 1790822160
+weight = 0.0
+issue_number = 976
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/976"

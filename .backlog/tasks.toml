@@ -12095,25 +12095,6 @@ issue_number = 920
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/920"
 
 [[task]]
-id = "1a6c1c48"
-title = "Required::Blocked(Verdict) を Blocked(Undet) へ狭めて外部から Blocked(Clean) を作れなくする"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "harness-core",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "5b89f0f6 で散文のみ是正 (7306810a)。tests/ui/verdict_known_holes/unsealed_paths.rs の hole 3 が現状を pin している。狭めると 61 call site / 約10 plugin crate の変更と各 3 ファイル bump が要る (測定 2026-10-01: git grep 'Required::Blocked(' 外部 61 件)。並行セッションと衝突しにくい順序・一括方法の設計が先。閉じたら fixture の hole 3 を negative fixture へ移す。"
-created_at = 1790793947
-updated_at = 1790794248
-weight = 0.0
-issue_number = 921
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/921"
-
-[[task]]
 id = "04f58309"
 title = "Required への拡張トレイト (unwrap_or_default/is_ok 再付与) をどのゲートも検出しない"
 project = "/Users/yuki/src/harness"
@@ -12797,3 +12778,28 @@ updated_at = 1790822160
 weight = 0.0
 issue_number = 976
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/976"
+
+[[task]]
+id = "96ba636b"
+title = "blastguard: quoted heredoc body の不等号を redirect と誤認して deny する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+Observed 2026-10-02 at 4498c50d (session 34385c9e), reproduced twice in a row. blastguard PreToolUse denied a Bash call whose only redirect-looking text was DATA, never shell syntax:
+1. a python3 heredoc (quoted EOF delimiter) whose Python string literal contained a Markdown blockquote line beginning with a greater-than sign and a space;
+2. a python3 heredoc whose string literal merely QUOTED that two-character sequence inside single quotes (this very backlog note, first attempt).
+Deny text verbatim: "'> ' destroys the file's current contents and `` is a relative path and blastguard does not know which directory it is relative to, so it cannot tell whether these bytes are recoverable".
+The EMPTY target shows the parser took the greater-than sign from data. Inside a quoted heredoc nothing is expanded or redirected.
+Readings: (a) defect: the destructive-redirect scan does not skip quoted heredoc bodies / quoted strings (twin of the egress here-string descent gaps in memory blastguard-egress-substructure-descent); (b) intentional fail-closed on input it cannot parse. Distinguish: minimal repro = quoted heredoc containing a line that starts with greater-than + space, vs the same heredoc without it; check whether the redirect scanner tokenizes heredoc bodies.
+Cost observed: forced switching to the Edit/Write tools for routine doc and backlog edits."""
+created_at = 1790882953
+updated_at = 1790882953
+weight = 0.0
+issue_number = 979
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/979"

@@ -377,7 +377,7 @@ fn adjudicate(obs: Observations) -> Adjudication {
 
     let role = match tree_role.require() {
         Required::Determined(r) => r,
-        Required::Blocked(v) => return Adjudication::verdict(v),
+        Required::Blocked(v) => return Adjudication::verdict(v.into_verdict()),
     };
     if role == TreeRole::Linked {
         // Exclusion 1: a linked worktree has its own index. This is the
@@ -388,7 +388,7 @@ fn adjudicate(obs: Observations) -> Adjudication {
 
     let integration = match integration.require() {
         Required::Determined(i) => i,
-        Required::Blocked(v) => return Adjudication::verdict(v),
+        Required::Blocked(v) => return Adjudication::verdict(v.into_verdict()),
     };
     if let Some(integration) = integration {
         // Exclusion 2: §8 permits integration in the primary tree, and a gate
@@ -400,7 +400,7 @@ fn adjudicate(obs: Observations) -> Adjudication {
 
     let staged = match staged_paths.require() {
         Required::Determined(s) => s,
-        Required::Blocked(v) => return Adjudication::verdict(v),
+        Required::Blocked(v) => return Adjudication::verdict(v.into_verdict()),
     };
     if staged.is_empty() {
         // Exclusion 3: no shared-index content is being committed.
@@ -409,7 +409,7 @@ fn adjudicate(obs: Observations) -> Adjudication {
 
     let peers = match peers.require() {
         Required::Determined(p) => p,
-        Required::Blocked(v) => return Adjudication::verdict(v),
+        Required::Blocked(v) => return Adjudication::verdict(v.into_verdict()),
     };
 
     // Exclusion 4 is the empty-findings case below: observed, no peer.
@@ -448,7 +448,7 @@ pub fn observe_tree_role(repo: &Path) -> Determination<TreeRole> {
         Required::Blocked(v) => {
             return Determination::undetermined(format!(
                 "cannot resolve --absolute-git-dir ({}); which working tree this is cannot be told",
-                v.reason().map_or("no reason", Reason::as_str)
+                v.as_str()
             ))
         }
     };
@@ -457,7 +457,7 @@ pub fn observe_tree_role(repo: &Path) -> Determination<TreeRole> {
         Required::Blocked(v) => {
             return Determination::undetermined(format!(
                 "cannot resolve --git-common-dir ({}); which working tree this is cannot be told",
-                v.reason().map_or("no reason", Reason::as_str)
+                v.as_str()
             ))
         }
     };
@@ -522,7 +522,7 @@ pub fn observe_integration(
             return Determination::undetermined(format!(
                 "cannot resolve --absolute-git-dir ({}); an in-progress integration cannot be \
                  ruled out",
-                v.reason().map_or("no reason", Reason::as_str)
+                v.as_str()
             ))
         }
     };
@@ -578,7 +578,7 @@ pub fn observe_staged(repo: &Path) -> Determination<Vec<String>> {
         Required::Blocked(v) => Determination::undetermined(format!(
             "`git diff --cached --name-only` did not run to a conclusion ({}); what this \
              commit contains is unknown",
-            v.reason().map_or("no reason", Reason::as_str)
+            v.as_str()
         )),
     }
 }
@@ -597,10 +597,7 @@ pub fn observe_peers(repo: &Path, self_session: Option<&str>) -> Determination<V
 
     let overwatch_json = match run_tool(repo, "overwatch", &["status", "--json"]).require() {
         Required::Determined(s) => s,
-        Required::Blocked(Verdict::Undetermined(r)) => return Determination::Undetermined(r),
-        Required::Blocked(_) => {
-            return Determination::undetermined("overwatch status --json: no result")
-        }
+        Required::Blocked(r) => return Determination::Undetermined(r),
     };
     match parse_overwatch_sessions(&overwatch_json, self_session) {
         Determination::Known(mut found) => peers.append(&mut found),
@@ -611,10 +608,7 @@ pub fn observe_peers(repo: &Path, self_session: Option<&str>) -> Determination<V
     let backlog_json =
         match run_tool(repo, "backlog", &["lock", "status", "--project", &repo_arg]).require() {
             Required::Determined(s) => s,
-            Required::Blocked(Verdict::Undetermined(r)) => return Determination::Undetermined(r),
-            Required::Blocked(_) => {
-                return Determination::undetermined("backlog lock status: no result")
-            }
+            Required::Blocked(r) => return Determination::Undetermined(r),
         };
     match parse_backlog_lock(&backlog_json, self_session) {
         Determination::Known(Some(peer)) => peers.push(peer),
@@ -779,8 +773,7 @@ fn run_tool(repo: &Path, program: &str, args: &[&str]) -> Determination<String> 
     cmd.args(args).current_dir(repo);
     match boundary::run(&mut cmd).require() {
         Required::Determined(out) => out.stdout_on_success(),
-        Required::Blocked(Verdict::Undetermined(r)) => Determination::Undetermined(r),
-        Required::Blocked(_) => Determination::undetermined(format!("{program}: no result")),
+        Required::Blocked(r) => Determination::Undetermined(r),
     }
 }
 
@@ -844,16 +837,14 @@ pub fn run_guard(cwd: &Path, json: bool) -> i32 {
     let override_raw = std::env::var(OVERRIDE_ENV).ok();
     let root = match toplevel(cwd).require() {
         Required::Determined(p) => p,
-        Required::Blocked(verdict) => {
+        Required::Blocked(why) => {
             // Not inside a work tree, or git could not answer: which tree this
             // is cannot be told, which blocks (the override still applies).
+            // `why` converts only to `Verdict::Undetermined`, which always
+            // blocks, so the override is always consulted here.
             let decision = Decision {
-                override_reason: if verdict.blocks() {
-                    sanitize_override(override_raw.as_deref())
-                } else {
-                    None
-                },
-                verdict,
+                override_reason: sanitize_override(override_raw.as_deref()),
+                verdict: why.into_verdict(),
                 pass_note: None,
             };
             eprintln!(

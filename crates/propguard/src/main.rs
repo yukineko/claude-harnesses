@@ -45,6 +45,8 @@ mod install;
 mod model;
 mod protection;
 mod state;
+#[cfg(test)]
+mod trust_worktree_tests;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};

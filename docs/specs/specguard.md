@@ -89,9 +89,13 @@ report と（人間レビューが要るときは）sentinel を書く。判定�
   credit しない＝untested 側）。`link <test> <key>` はその明示版で、以後の sync でも保持される。
 - **`map gate-check --base <rev> [--head <rev>]`（`gate_check` / `gatecheck.rs`）** — gate crate
   （`harness_core::fleet::BLOCKING_GATES`）の spec-doc ゲート（backlog 0c277117）。`git diff <base> <head>` で変わった
-  `crates/<gate>/` 配下のパスのうち `[map].exclude` 非該当のものについて、それを `impl_files` に持つ entry は空白でない
-  `spec_doc` か、`.specguard/spec-doc-acks.toml` の理由付き ack（`[[ack]] path/reason`、`path` は entry key か impl
-  ファイル、`reason` 空白不可）を要する。欠けた entry があれば impl パスを列挙して exit 1。どの entry からも参照されない
+  `crates/<gate>/` 配下のパスのうち `[map].exclude` 非該当のものについて、それを `impl_files` に持つ entry は次のいずれかを要する:
+  空白でない map の `spec_doc`（map は gitignore された機械ローカルのキャッシュなので他の clone からは見えず、pre-push が
+  作り直す map では常に空）、追跡対象 `.specguard/spec-docs.toml` の binding（`[[spec]] path/doc/reason`。`path` は entry
+  key か impl ファイル、`reason` 空白不可、`doc` は `.`/`..`/空要素を含まない相対 `docs/specs/**/*.md` で、repo root 下に
+  空白以外の内容を持つ通常ファイルとして実在すること。満たさない binding は数えず、違反メッセージに理由を出す）、または
+  追跡対象 `.specguard/spec-doc-acks.toml` の理由付き ack（`[[ack]] path/reason`、`path` 規則は同じ、`reason` 空白不可）。
+  欠けた entry があれば impl パスを列挙して exit 1。spec-docs ファイルの parse 失敗・doc の存在/内容が読めない場合も exit 2。どの entry からも参照されない
   変更 gate パス（map が未観測＝spec 状態不明。`map sync` で entry になる）、map/ack の parse 失敗、解決できない/unsafe な
   rev、git の失敗（終了ステータスで判定）、gate パスが変わったのに map が無い、はすべて exit 2（判定不能。0 にはしない）。
   削除パスは、まだそれを列挙している entry を通してのみ判定する（sync は削除パスを detach するので、未参照の削除パスは skip）。

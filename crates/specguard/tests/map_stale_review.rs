@@ -681,3 +681,96 @@ fn config_key_sets_n() {
         Some("stale-review")
     );
 }
+
+// ------------------------------------- exit precedence: undetermined wins
+//
+// Added after an adversarial panel found a surviving mutant that checked
+// `stale > 0` before `undetermined > 0`. No earlier test had both states in one
+// store, an absent map, or a map with no tracked entry.
+
+#[test]
+fn undetermined_takes_precedence_over_stale_review_exit_2() {
+    let (d, _r0, head) = repo_with_history(1, None);
+    write_store(
+        d.path(),
+        &[
+            // stale-review: no recorded review.
+            entry("src/legacy.rs", "tracked", None),
+            // undetermined: not a git object name at all, so its distance
+            // behind HEAD cannot be measured.
+            entry("src/bogus.rs", "tracked", Some("not-a-commit")),
+            entry("src/new.rs", "tracked", Some(&head)),
+        ],
+    );
+    let (out, j) = review_status(d.path(), &["--max-commits", "50"]);
+    assert_eq!(
+        state_in(&j, "src/legacy.rs").as_deref(),
+        Some("stale-review"),
+        "{}",
+        dump(&out)
+    );
+    assert_eq!(
+        state_in(&j, "src/bogus.rs").as_deref(),
+        Some("undetermined"),
+        "{}",
+        dump(&out)
+    );
+    assert_eq!(
+        state_in(&j, "src/new.rs").as_deref(),
+        Some("fresh"),
+        "{}",
+        dump(&out)
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "stale-review AND undetermined present: undetermined (2) must win over stale (1)\n{}",
+        dump(&out)
+    );
+}
+
+#[test]
+fn absent_map_file_exits_2() {
+    let (d, _r0, _head) = repo_with_history(1, None);
+    assert!(!d.path().join(".specguard/spec-map.toml").exists());
+    let out = sg(d.path(), &["review-status", "--json"]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "an absent map is not 'every tracked entry is fresh'\n{}",
+        dump(&out)
+    );
+    let out = sg(d.path(), &["review-status"]);
+    assert_eq!(out.status.code(), Some(2), "{}", dump(&out));
+}
+
+#[test]
+fn map_with_no_tracked_entries_exits_2_and_reports_nothing_fresh() {
+    let (d, r0, head) = repo_with_history(1, None);
+    write_store(
+        d.path(),
+        &[
+            entry("src/changed.rs", "changed", Some(&head)),
+            entry("src/missing.rs", "missing", Some(&r0)),
+            entry("src/changed_legacy.rs", "changed", None),
+        ],
+    );
+    let (out, j) = review_status(d.path(), &["--max-commits", "50"]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "zero tracked entries: nothing was judged, so not exit 0\n{}",
+        dump(&out)
+    );
+    for k in ["src/changed.rs", "src/missing.rs", "src/changed_legacy.rs"] {
+        assert_ne!(
+            state_in(&j, k).as_deref(),
+            Some("fresh"),
+            "{k} is not tracked\n{}",
+            dump(&out)
+        );
+    }
+    if let Some(n) = j.get("counts").and_then(|c| c.get("fresh")) {
+        assert_eq!(n.as_u64(), Some(0), "no entry may be counted fresh: {j}");
+    }
+}

@@ -992,52 +992,6 @@ issue_number = 147
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/147"
 
 [[task]]
-id = "80a46e9f"
-title = "overwatch に決定論の裁定を入れ、REFUTED を witness 無しで成立させない"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "L5",
-    "scout",
-    "verified",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-CLAUDE.md:188-197 に記録された実測の失敗 — 既定 REFUTED という指示が検証者を棄却側に倒し、4件の REFUTED を無検証で採用した結果うち1件が実在の欠陥だった (specguard forge gather.rs)。crates/overwatch/src/review_finding.rs:108 は壊れた入力を既に Unverified に倒しているが、整形式の反証を裁定するものが無い。adjudicate(llm_verdict, probe_result) を入れ、(Refuted, NoWitness) から Refuted への辺を持たせない。到達性プローブ P4 (到達不能と主張された分岐の本体を panic に置換して全スイートと proptest を回す) は反証を偽なりと示せるが確立はできない — witness が見つからなかったは witness が無いではない。プローブ機構は新規ではなく scripts/check-fail-open-mutation.py が既に apply して cargo test して exit code を assert して revert しバイト同一を検証する形を持つ。受け入れる代償を明示: REFUTED を閉じられるのは人間だけになるのでキューは人間が働くまで単調増加する。完了条件: adjudicate が唯一の verdict 変更経路になり、refuted_without_a_witness_never_survives_adjudication を先に誤実装 (llm をそのまま返す) に対して RED で観測してから実装する。歴史的に誤棄却された gather.rs の分岐に P4 を当てて Reproduced が出ることを確認し、出なければプローブが弱いという事実をそのまま記録する (プローブを十分と宣言しない)。
-
-8f5901a7 で取り込み済み: record-finding は adjudicate を通し、REFUTED は probe が not_reproduced かつ人の sign-off がある場合だけ保存される。reproduced なら confirmed、それ以外は unverified。continuous-audit は verifier の REFUTED を捨てずに unverified として記録するよう変更。残り (done 条件未達): gather.rs の誤棄却箇所に対する probe の実行。probe を生成する道具がまだ無い。"""
-created_at = 1785926766
-updated_at = 1790793912
-weight = 0.0
-issue_number = 148
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/148"
-
-[[task]]
-id = "6becbf8d"
-title = "specguard の tracked 200件は7月の単一バッチで、resolve に検証が1つも無い"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "L4",
-    "scout",
-    "verified",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-これは追加要件「仕様は書かれれば drift するので検証され続ける機構が要る」が置き換えるべき当の機構。map set-spec と map resolve は glob を受けて status を Tracked に倒すだけで、その doc がコードを記述しているかの検証がゼロ。resolve の help 自身が reviewed; no authored spec needed と書いており、このビットは「人間がレビューしたと主張した」ことを記録するのであって何かが検査されたことではない。crates/specguard/src/main.rs:1643-1656 は load と save の間に検証を1つも持たない。MapEntry には reviewer も理由も日付も無い。一度 Tracked になった entry がそこを出るのは git がファイルを触ったときだけで、それは陳腐化プロキシであって再検証ではない。実測: tracked 200件はすべて7月の単一バッチ (183件が 8d32025f 2026-07-08、12件が 0d81e7dc、3件が a638d9b9、2件が 9eb57c9e) で、以後一度も再検査されていない。これは「doc があるから数える」を enum で実装したもの。完了条件: MapEntry に reviewed_at (commit と日付) と reviewed_reason を足し、resolve と set-spec に理由を必須にし (check-doc-claims.py:63-70 の doc-claim-exempt が理由必須なのと同じ規律)、N commit より古い tracked を stale-review として扱う。理由なしの resolve が拒否され、8d32025f で tracked された entry が今日 stale-review と報告されることを観測する。
-
-slice 1 は ed1b9e45 で取り込み済み: map resolve/set-spec は空でない理由を必須とし、reviewed_reason と reviewed_at (HEAD commit と日付) を記録する。残り: stale-review の報告、レビュー記録の無い既存の tracked 約200件を stale 扱いにすること。未テスト: HEAD が読めない経路。serde(default) だけを消す mutant は生き残る (Option は既定で None になるため)。"""
-created_at = 1785926768
-updated_at = 1790793753
-weight = 0.0
-issue_number = 150
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/150"
-
-[[task]]
 id = "264990c9"
 title = "blastguard Decision::Allow を Checked 付きにする (敵対的検証で件数と error code を訂正)"
 project = "/Users/yuki/src/harness"
@@ -1364,72 +1318,6 @@ updated_at = 1790886023
 weight = 0.0
 issue_number = 223
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/223"
-
-[[task]]
-id = "58022668"
-title = "flow に drain オプションを新設し、実行スコープを「1つのタスクと関連するタスク」に定義する"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-2026-08-07 の会話でユーザーが確定させた設計。着手前にここへ落とす。
-
-## 何を作るか
-
-/flow に drain オプションを足す。**別コマンドではなくオプション**（ユーザー選択）。
-無印 /flow の既定挙動は変えない。
-
-別コマンドを採らなかった理由: driver register / next --claim / claim-task /
-sink（done と fail）/ release-task / heartbeat という並行性の要を二重に持つことになり、
-片方だけ直る乖離バグの温床になるため。実測前例として marketplace claim の
-over-serialize が同じ型で起きている。
-
-## 実行スコープの定義（2026-08-07 にユーザーが上書きした）
-
-**「1つのタスクと、それに関連するタスクの解決まで」**。
-
-- 関連する残件は **すべて** 処理する。
-- 無関係な残件は **実行しない**。
-
-当初案の「backlog が空になるまで回す」は**破棄**された。pending が 208 件あり、
-毎回それを丸ごと抱え込む形になるため。
-
-## 失敗時の扱い（ユーザー選択）
-
-item が失敗したら backlog fail で落として次の item へ進む。連続失敗で止めない。
-
-根拠: fail も pending を減らすので、関連クラスタは必ず単調減少し無限ループにならない。
-これは autoflow が v0.1.16 で回数上限を progress ベースへ置き換えたのと同じ理屈。
-最後に失敗一覧をまとめて報告する。
-
-## 維持する停止条件（緩めない）
-
-- 予算超過（budgetguard の早期脱出はどのモードでも不変）
-- stall（既定 1800 秒）
-- ユーザー中断
-- condukt circuit check のうち **failure-streak だけ** drain では解除する。
-  budget と stall は維持する。
-
-## 未決（着手前に決める）
-
-「関連」をどう判定するか。散文で LLM が決めると CLAUDE.md 第6節が禁じる自己申告に戻る。
-決定論の判定手段が要るので別 ticket af239090 に切り出した。**それが決まるまで実装に入らない。**
-
-## 前提
-
-condukt 0.7.124 / flow 0.2.5 で入れた policy answer の approval クランプ
-（権限認可は常設許諾・判断要求は Ask を残す）と組み合わせて動く。
-drain 中に残る human stop は pivot / worker blocked / untestable のみ。
-
-
-[re-measured 2026-10-02 @e672436b, session c6ed7cfd] The precondition is contradictory. This ticket says not to implement until af239090 (deterministic 'related' detection) is decided. af239090 was closed WITHOUT work on 2026-09-29 (@546d9fa2), with the note 'OBSOLETE: flow SKILL.md no longer has the drain/related-scope concept'. Grep finds 0 'drain' hits in crates/flow/skills/flow/SKILL.md. So either this ticket is obsolete too, or af239090 was closed wrongly. That is a human design call (spec gap), not something to implement. Not started."""
-created_at = 1786049824
-updated_at = 1790886023
-weight = 0.0
-issue_number = 224
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/224"
 
 [[task]]
 id = "4708069b"

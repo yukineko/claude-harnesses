@@ -326,6 +326,13 @@ pub struct RunState {
     /// episodes so repeated (idempotent) hook firings never double-record.
     #[serde(default)]
     pub recorded_at: Option<i64>,
+    /// Episodes of this run that already landed in fugu-router, keyed
+    /// `"<task_id>:<role>"`. `recorded_at` is only set once every episode of
+    /// the run has landed; until then a retry re-emits exactly the episodes
+    /// missing from this list, so a failed `fugu-router record` is retried
+    /// instead of being marked recorded, and a landed one is never duplicated.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recorded_episodes: Vec<String>,
 }
 
 fn project_dir(cfg: &Config, cwd: &Path) -> PathBuf {
@@ -2089,6 +2096,8 @@ pub fn gate_reasons(cfg: &Config, cwd: &Path, run: &RunState) -> Vec<String> {
 /// spawning the fugu-router binary.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecordSpec {
+    /// The run task id — the stable half of the `recorded_episodes` key.
+    pub task_id: String,
     pub title: String,
     pub files: Vec<String>,
     pub class: String,
@@ -2193,6 +2202,7 @@ pub fn records_for_run(
                 _ => None,
             };
             Some(RecordSpec {
+                task_id: ts.id.clone(),
                 title,
                 files,
                 class,
@@ -2755,6 +2765,7 @@ mod tests {
             paused: false,
             terminal_label: None,
             recorded_at: None,
+            recorded_episodes: Vec::new(),
         };
         assert_eq!(rs.counts(), (1, 2));
     }
@@ -2820,6 +2831,7 @@ mod tests {
             paused: false,
             terminal_label: None,
             recorded_at: None,
+            recorded_episodes: Vec::new(),
         };
         assert_eq!(rs.counts(), (2, 3));
     }
@@ -2946,6 +2958,7 @@ mod tests {
             paused: false,
             terminal_label: None,
             recorded_at: None,
+            recorded_episodes: Vec::new(),
         };
         let expected = rs.tasks.len();
 
@@ -3049,6 +3062,7 @@ mod tests {
             paused: false,
             terminal_label: None,
             recorded_at: None,
+            recorded_episodes: Vec::new(),
         };
         rs.save(&cfg, &tmp).unwrap();
 
@@ -3107,6 +3121,7 @@ mod tests {
             paused: false,
             terminal_label: None,
             recorded_at: None,
+            recorded_episodes: Vec::new(),
         };
         rs.save(cfg, cwd).unwrap();
     }
@@ -3136,6 +3151,7 @@ mod tests {
             paused: false,
             terminal_label: None,
             recorded_at: None,
+            recorded_episodes: Vec::new(),
         };
         rs.save(&cfg, &tmp).unwrap();
 
@@ -3185,6 +3201,7 @@ mod tests {
             paused: false,
             terminal_label: None,
             recorded_at: None,
+            recorded_episodes: Vec::new(),
         };
         rs.save(&cfg, &tmp).unwrap();
 
@@ -3285,6 +3302,7 @@ mod tests {
             paused: false,
             terminal_label: None,
             recorded_at: None,
+            recorded_episodes: Vec::new(),
         };
         rs.save(&cfg, tmp).unwrap();
         (cfg, wt)
@@ -3459,6 +3477,7 @@ mod tests {
             paused: false,
             terminal_label: None,
             recorded_at: None,
+            recorded_episodes: Vec::new(),
         };
         rs.save(&cfg, &tmp).unwrap();
         let a = RunState::load(&cfg, &tmp, "runA").unwrap();
@@ -3509,6 +3528,7 @@ mod tests {
             paused: false,
             terminal_label: None,
             recorded_at: None,
+            recorded_episodes: Vec::new(),
         };
         rs.save(&cfg, &repo).unwrap();
 
@@ -3559,6 +3579,7 @@ mod tests {
             paused: false,
             terminal_label: None,
             recorded_at: None,
+            recorded_episodes: Vec::new(),
         };
         // save must succeed
         let saved_path = rs.save(&cfg, &tmp).unwrap();
@@ -3608,6 +3629,7 @@ mod tests {
             paused: false,
             terminal_label: None,
             recorded_at: None,
+            recorded_episodes: Vec::new(),
         };
         rs.save(&cfg, &tmp).unwrap();
         let loaded = RunState::load(&cfg, &tmp, "run-rt").unwrap();
@@ -3643,6 +3665,7 @@ mod tests {
             paused: false,
             terminal_label: None,
             recorded_at: None,
+            recorded_episodes: Vec::new(),
         }
         .save(&cfg, &tmp)
         .unwrap();
@@ -3738,6 +3761,7 @@ mod tests {
             paused: false,
             terminal_label: None,
             recorded_at: None,
+            recorded_episodes: Vec::new(),
         };
         rs.save(&cfg, &tmp).unwrap();
         let loaded = RunState::load(&cfg, &tmp, "run-sha-rt").unwrap();
@@ -3878,6 +3902,7 @@ mod tests {
             paused: false,
             terminal_label: None,
             recorded_at: None,
+            recorded_episodes: Vec::new(),
         };
         rs.save(&cfg, &tmp).unwrap();
 
@@ -3918,6 +3943,7 @@ mod tests {
             paused: false,
             terminal_label: None,
             recorded_at: None,
+            recorded_episodes: Vec::new(),
         };
         rs.save(&cfg, &tmp).unwrap();
 
@@ -3964,6 +3990,7 @@ mod tests {
             paused: false,
             terminal_label: None,
             recorded_at: None,
+            recorded_episodes: Vec::new(),
         }
     }
 
@@ -5306,6 +5333,7 @@ mod tests {
             paused: false,
             terminal_label: None,
             recorded_at: None,
+            recorded_episodes: Vec::new(),
         };
         // Write the run-state JSON directly into the scan directory.
         std::fs::write(
@@ -5346,6 +5374,7 @@ mod tests {
             paused: false,
             terminal_label: None,
             recorded_at: None,
+            recorded_episodes: Vec::new(),
         };
         std::fs::write(
             tmp.join("run-done.json"),

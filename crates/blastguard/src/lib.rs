@@ -11,7 +11,12 @@
 //! path to decide whether it lands inside this session's own tree — takes an
 //! INJECTED resolver ([`scope::RealPathResolver`]) that only the binary
 //! supplies. A consumer that passes none, or uses [`detect::detect`] rather
-//! than [`detect::detect_scoped`], gets the strict location-blind gate.
+//! than [`detect::detect_scoped`], gets the strict location-blind gate. The
+//! same holds for the git work-tree probe the deletion classes of [`deletion`]
+//! rest on ([`reversible::GitTreeProbe`], attached with
+//! [`scope::SafeRoots::with_git_tree_probe`]): only the binary attaches it.
+//! (Detection is not entirely I/O-free even so: the redirect/`tee` rules call
+//! [`reversible::probe`] directly.)
 //!
 //! [`approve`] is the one module that owns state rather than a judgment: the
 //! trust-on-first-use memory of which effects a human has already approved. Its
@@ -25,6 +30,7 @@
 pub mod approve;
 pub mod callgraph;
 pub mod classify;
+pub mod deletion;
 pub mod detect;
 pub mod diffrisk;
 pub mod exclude;

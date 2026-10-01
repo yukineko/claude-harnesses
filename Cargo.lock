@@ -163,7 +163,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "blastguard"
-version = "0.2.92"
+version = "0.2.95"
 dependencies = [
  "globset",
  "harness-core",
@@ -305,7 +305,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.197"
+version = "0.7.198"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -545,7 +545,7 @@ checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
 name = "fugu-router"
-version = "0.1.29"
+version = "0.1.31"
 dependencies = [
  "anyhow",
  "clap",
@@ -859,7 +859,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "overwatch"
-version = "0.2.46"
+version = "0.2.47"
 dependencies = [
  "anyhow",
  "clap",
@@ -939,7 +939,7 @@ dependencies = [
 
 [[package]]
 name = "propguard"
-version = "0.1.49"
+version = "0.1.51"
 dependencies = [
  "anyhow",
  "chrono",

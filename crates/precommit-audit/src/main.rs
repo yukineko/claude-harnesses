@@ -291,7 +291,9 @@ fn run() {
     // behind `harness_core::trust` (same pattern as donegate/reviewgate/tdd):
     // when the root isn't trusted, ignore the repo file and use built-in
     // defaults. An explicit `--config` is the operator's deliberate choice and
-    // is always honored.
+    // is always honored. Trust is resolved with `harness_core::trust::resolve`
+    // (worktree inheritance): a linked git worktree of a trusted checkout is
+    // trusted, same rule as donegate.
     let explicit_config = args.config.is_some();
     let config_path = args
         .config
@@ -299,7 +301,7 @@ fn run() {
     let cfg = if project_config_blocked(
         explicit_config,
         config_path.exists(),
-        harness_core::trust::is_trusted(&root),
+        harness_core::trust::resolve(&root).is_trusted(),
     ) {
         warn_untrusted_once(&config_path);
         Config::default()

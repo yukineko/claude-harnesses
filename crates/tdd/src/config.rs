@@ -238,12 +238,15 @@ impl Config {
     /// untrusted project `tdd.toml` is ignored (with a one-time notice) and we
     /// fall back to the trusted home config, otherwise built-in defaults. Any
     /// parse error silently falls back (the gate must never crash a turn).
+    /// Trust is resolved with
+    /// [`harness_core::trust::resolve`], i.e. including worktree inheritance: a
+    /// linked git worktree of a trusted checkout is trusted (same rule as donegate).
     pub fn load(root: &Path) -> Self {
         let mut cfg = Config::default();
 
         let chosen = {
             let p = Config::project_path(root);
-            if p.exists() && trust::is_trusted(root) {
+            if p.exists() && trust::resolve(root).is_trusted() {
                 Some(p)
             } else {
                 if p.exists() {

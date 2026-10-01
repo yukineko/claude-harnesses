@@ -1,0 +1,350 @@
+# Tracked spec-doc bindings for gate-crate map entries (backlog 0c277117).
+#
+# `specguard map gate-check` reads this file: a changed gate-crate entry passes
+# when one [[spec]] names its entry key or one of its impl files, carries a
+# non-blank `reason`, and `doc` is an existing, non-empty docs/specs/*.md.
+# The spec map (.specguard/spec-map.toml) is a gitignored machine-local cache,
+# so a binding written there by `map set-spec` never reaches another clone or
+# the pre-push check tree; this file is the durable record.
+# Each reason cites the doc section that describes the file. A file no doc
+# describes goes to spec-doc-acks.toml with its reason instead.
+
+[[spec]]
+path = "crates/blastguard/src/main.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' main: CLI entry, version/help short-circuit, stdin parse -> detect -> deny_json; '振る舞い' opening paragraph."
+
+[[spec]]
+path = "crates/blastguard/src/lib.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' lib: public pure API re-exporting the detector modules for specforge/condukt reuse; 概要 last sentence."
+
+[[spec]]
+path = "crates/blastguard/src/detect.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' detect and the whole '振る舞い' section (detect_write, detect_bash, split_segments, analyze_segment, analyze_rm/git/find, disarm-by-non-write rules)."
+
+[[spec]]
+path = "crates/blastguard/src/exclude.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' exclude (ALLOW_GLOBS, glob_set, normalize, is_config_file, is_git_internal) and the 'config ファイル除外' invariant."
+
+[[spec]]
+path = "crates/blastguard/src/classify.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' classify: RiskAssessment/Risk tiers, requires_gate precedence; 'detect と classify の lockstep' invariant; classify_change in the diffrisk section."
+
+[[spec]]
+path = "crates/blastguard/src/model.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' model names the Decision verdict type. KNOWN DRIFT: the doc lists only Allow/Deny while the code also has Ask (model.rs 'Three answers'); binding recorded so the audit, not this gate, owns that drift."
+
+[[spec]]
+path = "crates/blastguard/src/hookio.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' hookio and the 'PreToolUse deny JSON は単一行' invariant (deny_json shape)."
+
+[[spec]]
+path = "crates/blastguard/src/diffrisk.rs"
+doc = "docs/specs/blastguard.md"
+reason = "Section '一般化リスクスコアリング (diff-level 意味的リスク)': DEFAULT_SENSITIVE_GLOBS, SensitiveConfig, changes_public_symbol, classify_diff, merge rules."
+
+[[spec]]
+path = "crates/blastguard/src/rule_id.rs"
+doc = "docs/specs/blastguard.md"
+reason = "Section '安定 rule id（overwatch 署名の粒度確保）' describes rule_id(reason) -> &'static str and its lockstep with detect wording."
+
+[[spec]]
+path = "crates/propguard/src/main.rs"
+doc = "docs/specs/propguard.md"
+reason = "'振る舞い': clap Command enum and the check/derive/status/install/uninstall/init/trust subcommands."
+
+[[spec]]
+path = "crates/propguard/src/config.rs"
+doc = "docs/specs/propguard.md"
+reason = "'module 責務' config: Config/FileConfig/Mode, trusted-project->home->default load, sanitize clamps; 'untrusted config は無視' invariant."
+
+[[spec]]
+path = "crates/propguard/src/derive.rs"
+doc = "docs/specs/propguard.md"
+reason = "'module 責務' derive: Property, bilingual CATALOG, derive_properties, source_criteria; '導出の決定論と上限' invariant."
+
+[[spec]]
+path = "crates/propguard/src/gate.rs"
+doc = "docs/specs/propguard.md"
+reason = "'module 責務' gate (below_threshold, evaluate, decide_from_count, run_checker, parse_checker_output) and '振る舞い' gate::evaluate steps."
+
+[[spec]]
+path = "crates/propguard/src/git.rs"
+doc = "docs/specs/propguard.md"
+reason = "'module 責務' git: changed_files, diff_text, truncate_on_boundary; 'truncated diff は握りつぶさない' invariant."
+
+[[spec]]
+path = "crates/propguard/src/install.rs"
+doc = "docs/specs/propguard.md"
+reason = "'module 責務' install: Stop hook merge/remove via harness_core::install, marker propguard."
+
+[[spec]]
+path = "crates/propguard/src/model.rs"
+doc = "docs/specs/propguard.md"
+reason = "'module 責務' model: re-export of harness_core::hook::HookInput (matches the file's own //! header)."
+
+[[spec]]
+path = "crates/propguard/src/state.rs"
+doc = "docs/specs/propguard.md"
+reason = "'module 責務' state: re-export of harness_core::gate::state SessionState load/save/reset."
+
+[[spec]]
+path = "crates/stuckguard/src/main.rs"
+doc = "docs/specs/stuckguard.md"
+reason = "'module 責務' main and '振る舞い' watch pipeline, message escalation, log_event 0o600, install/uninstall/init/status."
+
+[[spec]]
+path = "crates/stuckguard/src/config.rs"
+doc = "docs/specs/stuckguard.md"
+reason = "'module 責務' config: thresholds, project>home>default resolution and sanitize floors listed in the ring-buffer invariant."
+
+[[spec]]
+path = "crates/stuckguard/src/detect.rs"
+doc = "docs/specs/stuckguard.md"
+reason = "'module 責務' detect and '検出器（detect.rs）' repeat/oscillation rules, oscillation precedence."
+
+[[spec]]
+path = "crates/stuckguard/src/sig.rs"
+doc = "docs/specs/stuckguard.md"
+reason = "'module 責務' sig and the 'シグネチャ生成（sig::build）' paragraph (per-tool signature, norm, looks_error)."
+
+[[spec]]
+path = "crates/stuckguard/src/state.rs"
+doc = "docs/specs/stuckguard.md"
+reason = "'module 責務' state: per-session ring buffer + nudge ledger (push/record_nudge/in_cooldown/safe/path)."
+
+[[spec]]
+path = "crates/stuckguard/src/install.rs"
+doc = "docs/specs/stuckguard.md"
+reason = "'module 責務' install and '振る舞い' install/uninstall: PostToolUse merge, matcher, idempotent MARKERS strip."
+
+[[spec]]
+path = "crates/stuckguard/src/anchor.rs"
+doc = "docs/specs/stuckguard.md"
+reason = "'module 責務' anchor: PDO session anchor from overwatch lease, heartbeat_piggyback, scope_drift, file_in_scope."
+
+[[spec]]
+path = "crates/stuckguard/src/model.rs"
+doc = "docs/specs/stuckguard.md"
+reason = "'module 責務' model: thin re-export of harness_core::hook::HookInput."
+
+[[spec]]
+path = "crates/mutategate/src/main.rs"
+doc = "docs/specs/mutategate.md"
+reason = "'module 責務' main.rs (CLI, exit-code mapping 0/1/2, emit_violation) and '振る舞い' flow steps 1-6."
+
+[[spec]]
+path = "crates/mutategate/src/lib.rs"
+doc = "docs/specs/mutategate.md"
+reason = "'module 責務' lib.rs: MutationSummary, parse_outcomes, classify_scenario, evaluate, KILL_RATE_EPSILON; kill-rate invariants."
+
+[[spec]]
+path = "crates/specguard/src/main.rs"
+doc = "docs/specs/specguard.md"
+reason = "'振る舞い' documents every subcommand dispatched from main (run/scope/prompt/ingest/map/audit/brief/decide/accept-prompt/testaudit/ack/pending/init) and the exit-code invariant."
+
+[[spec]]
+path = "crates/specguard/src/config.rs"
+doc = "docs/specs/specguard.md"
+reason = "'module 責務' config: Config and all sub-tables, deny_unknown_fields, agent-command trust boundary, MapConfig.exclude."
+
+[[spec]]
+path = "crates/specguard/src/scope.rs"
+doc = "docs/specs/specguard.md"
+reason = "'module 責務' scope: resolve, resolve_baseline precedence, changed_files, classify, fingerprint_files, relevant_file_map; '決定論' invariant."
+
+[[spec]]
+path = "crates/specguard/src/prompt.rs"
+doc = "docs/specs/specguard.md"
+reason = "'module 責務' prompt: Shard, render_shard/render_brief/render_refute/render_completeness, templates, signals_insufficient_context."
+
+[[spec]]
+path = "crates/specguard/src/auditmap.rs"
+doc = "docs/specs/specguard.md"
+reason = "'module 責務' auditmap and '振る舞い' audit: structural findings, render_audit_shard, build_envelope, MAX_AUDIT_SHARDS."
+
+[[spec]]
+path = "crates/specguard/src/specmap.rs"
+doc = "docs/specs/specguard.md"
+reason = "'module 責務' specmap and 'map store は specmap.rs に委譲' invariant; '振る舞い' map build/sync/list/set-spec/resolve/link/prune."
+
+[[spec]]
+path = "crates/specguard/src/gatecheck.rs"
+doc = "docs/specs/specguard.md"
+reason = "'振る舞い' bullet 'map gate-check --base <rev> [--head <rev>]（gate_check / gatecheck.rs）' specifies this file's verdict rules."
+
+[[spec]]
+path = "crates/specguard/src/similarity.rs"
+doc = "docs/specs/specguard.md"
+reason = "Section '段階的 ratification トリアージ (graded ratify)': token-shingle Jaccard similarity, best_similarity, triage purity invariants."
+
+[[spec]]
+path = "crates/specguard/src/ratify.rs"
+doc = "docs/specs/specguard.md"
+reason = "'accept-prompt' bullet (ratify::write_lock) and the graded ratify section (triage_drift, [corpus] persistence)."
+
+[[spec]]
+path = "crates/specguard/src/testaudit.rs"
+doc = "docs/specs/specguard.md"
+reason = "'testaudit の判定不能は fail closed' invariant and 'testaudit [--json]' bullet (scan_repo, exit 7/8)."
+
+[[spec]]
+path = "crates/specguard/src/decision.rs"
+doc = "docs/specs/specguard.md"
+reason = "'decide <title>' bullet (decision::scaffold) and decision::list_files fail-closed doctrine cited in the testaudit invariant."
+
+[[spec]]
+path = "crates/specguard/src/init.rs"
+doc = "docs/specs/specguard.md"
+reason = "'init [--force]' bullet: starter config + SessionStart hook scaffold (init::run), idempotent."
+
+[[spec]]
+path = "crates/specguard/src/report.rs"
+doc = "docs/specs/specguard.md"
+reason = "'baseline hold' invariant and 'ack [--force]' bullet (report::sentinel_raised_at / has_new_commits)."
+
+[[spec]]
+path = "crates/specguard/src/parse.rs"
+doc = "docs/specs/specguard.md"
+reason = "'run' bullet: marker trailer parse::MARKER, missing-marker shard -> EXIT_NO_MARKER; finish parse step."
+
+[[spec]]
+path = "crates/specguard/src/agent.rs"
+doc = "docs/specs/specguard.md"
+reason = "'run' bullet (agent::run_shards read-only dispatch) and 'read-only 監査境界' / 'agent 失敗の隠蔽不可' invariants."
+
+[[spec]]
+path = "crates/specguard/src/verify.rs"
+doc = "docs/specs/specguard.md"
+reason = "'run' bullet names the finish parse/verify/merge stage; config lists VerifyConfig; prompt lists render_refute/render_completeness verify templates. Thin: gate details live in DESIGN-VERIFY.md."
+
+[[spec]]
+path = "crates/overwatch/src/main.rs"
+doc = "docs/specs/overwatch.md"
+reason = "'振る舞い' subcommands (begin/lease/run/heartbeat/end/reap/status/sessions/pause/resume/reassign) plus the violation, canary and review-queue sections' commands."
+
+[[spec]]
+path = "crates/overwatch/src/lib.rs"
+doc = "docs/specs/overwatch.md"
+reason = "'module 責務' lib: thin public surface re-exporting event/store."
+
+[[spec]]
+path = "crates/overwatch/src/store.rs"
+doc = "docs/specs/overwatch.md"
+reason = "'module 責務' store: Lease persistence, is_stale heartbeat TTL; 'liveness = heartbeat TTL' invariant."
+
+[[spec]]
+path = "crates/overwatch/src/event.rs"
+doc = "docs/specs/overwatch.md"
+reason = "'module 責務' event: EventKind Started/Running/Ended lifecycle model."
+
+[[spec]]
+path = "crates/overwatch/src/lease.rs"
+doc = "docs/specs/overwatch.md"
+reason = "'module 責務' lease and 'dedup 契約（ハード不変条件）' (lease::begin load -> reap -> is_held_by_other)."
+
+[[spec]]
+path = "crates/overwatch/src/aggregate.rs"
+doc = "docs/specs/overwatch.md"
+reason = "'module 責務' aggregate: ProgressView projection used by status."
+
+[[spec]]
+path = "crates/overwatch/src/render.rs"
+doc = "docs/specs/overwatch.md"
+reason = "'module 責務' render: human/JSON formatting for status and sessions."
+
+[[spec]]
+path = "crates/overwatch/src/control.rs"
+doc = "docs/specs/overwatch.md"
+reason = "'module 責務' control: pause_cmd/resume_cmd argv builders and run_fail_soft; pause/resume bullets."
+
+[[spec]]
+path = "crates/overwatch/src/violation.rs"
+doc = "docs/specs/overwatch.md"
+reason = "Section 'fleet 相関エラー検知 (violation signatures)': signature recurrence, RecurrencePolicy windowing, is_systemic."
+
+[[spec]]
+path = "crates/overwatch/src/violation_cli.rs"
+doc = "docs/specs/overwatch.md"
+reason = "Same section's record-violation / violations / escalations bullets (violation_cli::print_escalations)."
+
+[[spec]]
+path = "crates/overwatch/src/canary.rs"
+doc = "docs/specs/overwatch.md"
+reason = "Section 'canary 段階展開 (canary rollout)': plan_stages_by_*, evaluate_health_gate, compute_rollback_plan purity."
+
+[[spec]]
+path = "crates/overwatch/src/canary_cli.rs"
+doc = "docs/specs/overwatch.md"
+reason = "Canary section bullets canary-plan / canary-gate / canary-rollback-plan and the canary_cli::gate now_override note."
+
+[[spec]]
+path = "crates/overwatch/src/rollback.rs"
+doc = "docs/specs/overwatch.md"
+reason = "Review-queue section: RollbackEvent as the rollback arm, and 'rollback 事象の記録口' (overwatch record-rollback)."
+
+[[spec]]
+path = "crates/overwatch/src/rollback_cli.rs"
+doc = "docs/specs/overwatch.md"
+reason = "Review-queue section bullets record-finding (--verdict/--probe/--signed-off-by) and 'rollback 事象の記録口' record-rollback."
+
+[[spec]]
+path = "crates/overwatch/src/review_queue.rs"
+doc = "docs/specs/overwatch.md"
+reason = "Section 'Continuous-Audit / 統合レビューサーフェス': build_queue purity, EntryKind tags, review-queue command."
+
+[[spec]]
+path = "crates/overwatch/src/review_finding.rs"
+doc = "docs/specs/overwatch.md"
+reason = "Review-queue section: review_finding.rs persistence and record-finding verdict/probe/sign-off adjudication rules."
+
+[[spec]]
+path = "crates/overwatch/src/review_finding_adjudicate_tests.rs"
+doc = "docs/specs/overwatch.md"
+reason = "Unit-test submodule of review_finding (classified impl by the path heuristic); it pins the record-finding adjudication table the review-queue section specifies."
+
+[[spec]]
+path = "crates/overwatch/src/review_escalation.rs"
+doc = "docs/specs/overwatch.md"
+reason = "Review-queue section names condukt escalations (ConduktEscalation, EntryKind escalation) as a queue input; this file is that reader."
+
+[[spec]]
+path = "crates/overwatch/src/review_gate_decisions.rs"
+doc = "docs/specs/overwatch.md"
+reason = "Review-queue section bullet 'record-disposition / compact-findings / auto-approved': auto-approved population visibility is this module."
+
+[[spec]]
+path = "crates/overwatch/src/audit_round.rs"
+doc = "docs/specs/overwatch.md"
+reason = "Review-queue section 'audit-round ledger は per-round メトリクスの append-only 記録' and audit-metrics converging tri-state."
+
+[[spec]]
+path = "crates/overwatch/src/audit_round_cli.rs"
+doc = "docs/specs/overwatch.md"
+reason = "Review-queue section bullets 'audit-round record/close' and 'audit-metrics' are the CLI this file implements."
+
+[[spec]]
+path = "crates/overwatch/src/disposition.rs"
+doc = "docs/specs/overwatch.md"
+reason = "Review-queue section bullet record-disposition: FP/agreement/latency metrics over finding dispositions."
+
+[[spec]]
+path = "crates/overwatch/src/disposition_cli.rs"
+doc = "docs/specs/overwatch.md"
+reason = "Same bullet (record-disposition / compact-findings): CLI glue for the disposition ledger."
+
+[[spec]]
+path = "crates/overwatch/src/bridge.rs"
+doc = "docs/specs/overwatch.md"
+reason = "review-queue --to-backlog bullet. KNOWN DRIFT: doc says only CONFIRMED findings are bridged; bridge.rs forwards the whole queue. Recorded so the audit owns it."
+
+[[spec]]
+path = "crates/overwatch/src/undetermined_metrics.rs"
+doc = "docs/specs/overwatch.md"
+reason = "Review-queue section bullet 'overwatch undetermined-metrics' (aggregation of harness_core::undetermined telemetry)."

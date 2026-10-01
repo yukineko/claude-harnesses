@@ -22845,3 +22845,102 @@ updated_at = 1790885249
 weight = 0.0
 issue_number = 166
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/166"
+
+[[task]]
+id = "3a8e3b73"
+title = "gate protection contract: every gate must state what it protects, from what, on what grounds"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gates",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+User principle 2026-08-05: a gate must be clear, WITH GROUNDS, about what asset it protects and against what failure -- and must communicate that to the user.
+
+Measured gap: docs/gate-taxonomy.md classifies every gate by the KIND of judgment it makes (implementation-correctness / test-fitness / holistic-judgment) and by trigger type. That is a taxonomy of METHOD, not of THREAT. Nowhere does any gate declare the asset it defends or the adversary it defends against. A user facing a refusal cannot tell from it whether the concern is real.
+
+Concrete symptom: taintguard's refusal says the turn consumed untrusted-provenance content and that write-class tools are downgraded. That is the MECHANISM. It never says that the asset is the filesystem and the shell, and the adversary is instructions embedded in fetched content acting through a write-class tool.
+
+Shape: each gate carries an addressable protection statement (asset, adversary, grounds) that is quotable by the README so check-doc-claims.py can pin it to the code, and that a user can read WITHOUT triggering the gate. taintguard 0.1.9 is doing this for itself first; this item is the generalisation across the gate fleet.
+
+Done when: every gate crate and every scripts/check-*.py exposes a protection statement naming asset and adversary, gate-taxonomy.md gains that column, and the statement is machine-pinned rather than prose that can drift.
+
+2026-09-24 調査: 未実装を確認。提案形式 PROTECTS/AGAINST/GROUNDS (Rust: harness_core::gate::Protection const + --protects、Python: PROTECTION dict)、専用 scripts/check-gate-protection.py で taxonomy 列と逐語一致・ratchet baseline で段階展開。ユーザー裁定待ち: Q1 gate の母集合、Q2 拒否メッセージへの表示方法。
+
+USER RULING 2026-09-24: Q1=新しい正典リスト (harness_core BLOCKING_GATES + scripts/check-* 全件と照合、ratchet baseline で PENDING 表示)。Q2=<gate> --protects で全文、拒否メッセージには 1 行要約。
+
+【先行テストと実装途中の WIP を退避 2026-09-29】archive/gate-protection-wip (b5c34f92、10 ファイル +2701) は harness_core::gate::protection (Protection 構造体と validate)、scripts/check-gate-protection.py と gate_protection_lib.py、blastguard/donegate の protection_contract.rs、harness-core/tests/gate_protection.rs、check-gate-crates-sync の BLOCKING_GATES 包含テストを含む。fleet.rs の BLOCKING_GATES 本体、各ゲートの protection.rs、docs/gate-taxonomy.md の保護契約表は未実装。 取り出しは git show archive/gate-protection-wip（worktree 整理で退避、2026-09-29）。マージ前に今のツリーで RED を必ず観測すること。
+
+2026-09-30 slice 1 landed (merged 511cee33): harness_core::gate::Protection + fleet::BLOCKING_GATES (= the 7 canary GATE_CRATES, checked as superset by a Rust test and by the checker), blastguard --protects (first adopter), scripts/check-gate-protection.py (0/1/2) + baseline listing the other 6 as PENDING (may only shrink vs HEAD). RED 970d349a by an independent sonnet author; implementer-added checker rules covered by independent tests 435b92c0. Consequence to know: adding a gate to BLOCKING_GATES later requires declaring it in the SAME commit (a new PENDING entry counts as growth). NOT yet wired: pre-commit patch githooks-3a8e3b73.patch in the session scratchpad awaits the user. Remaining: wiring, declarations for the 6 PENDING gates (one per commit), refusal-line one-line summary, taxonomy column.
+
+2026-10-01 slice 2 landed (merged fb9ba002, pushed, canary-rolled propguard 0.1.51): propguard declares Protection + --protects; PENDING now specguard, stuckguard, mutategate, overwatch, parallelguard. RED by an independent author (exit 2 empty stdout; baseline still listed propguard); an independent verifier traced every AGAINST claim to a block path and confirmed all 4 GROUNDS incidents, and flagged an over-generalised bound that was corrected before merge (config/criteria-unreadable have no give-up; panic is bounded by stop_hook_active). Remaining unchanged: wiring patch awaits the user, 5 PENDING gates (one per commit), refusal one-line summary, taxonomy column.
+
+2026-10-01 slice 2 (p1/gateprot2、未取り込み): propguard d83e0788 / stuckguard 7ab0dd0d / parallelguard e3caf2fd で表明。引用は別 agent が検証中。specguard / mutategate / overwatch は各自の文書とコードが矛盾するため未表明のまま (specguard: pending hook が config を読めないと何も出さずに exit 0、文書は何も出さないのが fail-open だと言っている / mutategate: README の viable の定義がコードと違い、どの hook も script も実行しない / overwatch: README の保存先が 3 か所で食い違う)。slice 1 のメモの pre-commit 未配線は古い、9c922365 で配線済み。
+
+2026-10-02 完了: gate crate 7 本すべてが protection.rs と --protects を持つ。propguard/stuckguard/parallelguard は 92704f80、mutategate/overwatch/specguard は 8513cc54 で main に入り push 済み。main への merge 時の pre-commit で check-gate-protection.py が 7 本とも DECLARED、OK。全 7 本 canary rollout 済み (specguard 0.2.71 と overwatch 0.2.49 は c7d9cba5 から、配備済みバイナリの --protects 出力を確認)。"""
+created_at = 1785876697
+updated_at = 1790885724
+weight = 0.0
+issue_number = 130
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/130"
+
+[[task]]
+id = "ec878b2a"
+title = "condukt autonomy_invariant が赤: flow の SKILL.md の AskUserQuestion が allowlist 13 に対し 15 件"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+b2977afb の実装者が d584e981 で観測。cargo test -p condukt --test autonomy_invariant は 15 passed 1 failed。allowlist の検査ループが flow で止まるため、scout 以降のファイルの検査は現在走っていない。flow に 2 か所が再監査なしで足されたのか、allowlist が古いのかは未判定。flow の該当行を ASK_ALLOWLIST のカテゴリと突き合わせて決めること。どのフックも cargo test を回さないので赤が放置されていた。
+
+2026-10-01 bdd85e20 の切り分けで原因を特定: d6ee8110 (2026-09-23 の backlog 優先の裁定) で flow SKILL.md に charter 彫り直し中の AskUserQuestion が 2 か所増え、ASK_ALLOWLIST は 13 のまま。flow 以外のファイルは全件一致。
+
+2026-10-02 完了: allowlist 13 から 15 (ユーザー裁定) が main に入っている。condukt --test autonomy_invariant 16 件が .harness-worktrees 配下の checkout で緑。"""
+created_at = 1790795045
+updated_at = 1790885726
+weight = 0.0
+issue_number = 939
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/939"
+
+[[task]]
+id = "bdd85e20"
+title = "HEAD で cargo test --workspace の 8 target が恒常的に落ちる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+2026-10-01、HEAD d584e981、worktree p1-flaky で 4 回とも失敗: backlog project_scope / blastguard worktree_root_cd_desync, worktree_root_rm, worktree_root_symlink_escape / condukt autonomy_invariant, fp_gate_scope_contract, fp_oracle_e2e / donegate giveup_sentinel。原因は未調査。checkout が .harness-worktrees 配下にあることへの依存が疑われるが未検証。どのフックも cargo test を回さないので赤が放置されている。autonomy_invariant は ec878b2a と重複の可能性。
+
+2026-10-01 切り分け (7ddd47c4、各 target を単独実行し、置き場所を変えた clone でも実行): A 置き場所・環境依存: backlog project_scope (macOS の TMPDIR が /var/folders で symlink、テストは生のパスを書き、バイナリは正規化したパスで照合するので 0 件) / blastguard worktree_root_cd_desync, worktree_root_rm, worktree_root_symlink_escape (fixture が CARGO_TARGET_TMPDIR 配下。.harness-worktrees 配下の checkout では空出力 = Allow、/tmp 配下では Ask。$HOME の clone では全部通る。8 節どおりの置き場所からは緑を観測できない)。 B 仕様が後から変わった: condukt fp_gate_scope_contract, fp_oracle_e2e (306cf008 / 9a4fb884 の裁定で、claim 返却が判定不能なら state set は exit 1。status は verified で入っている) / donegate giveup_sentinel の 2 本 (49fac994 の repeat ledger が同じ理由の 2 回目のブロックを通すため、2 周目の give-up が起きない)。 C allowlist が古い: condukt autonomy_invariant (d6ee8110 で flow SKILL.md の AskUserQuestion が 13 から 15。charter の彫り直し中の 2 か所)。 修正は worktree p1-redfix-bg (blastguard) と p1-redfix (backlog, condukt, donegate) で進行中。donegate は repeat ledger を give-up に適用するかが未裁定なら人に返す。
+
+2026-10-02 完了: 8 target すべてを .harness-worktrees 配下の checkout (a4a03806) で再実行し緑: backlog project_scope 8, blastguard worktree_root_cd_desync 9 / worktree_root_rm 11 / worktree_root_symlink_escape 9, condukt fp_gate_scope_contract 16 / fp_oracle_e2e 7 / autonomy_invariant 16, donegate giveup_sentinel 6。別の赤 (blastguard approval_memory) は 4292df98 で別管理。"""
+created_at = 1790796467
+updated_at = 1790885728
+weight = 0.0
+issue_number = 942
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/942"
+
+[[task]]
+id = "f49e4a72"
+title = "specguard pending が config を読めないと何も出さずに exit 0 で終わる (自身のコメントが fail-open と呼ぶ挙動)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+3a8e3b73 slice 2 で発見。main.rs 1372 付近の let Ok(l) = load(cli) else return EXIT_OK。1386 付近のコメントは、何も出さないと drift 無しと読まれ fail-open になると書いている。hooks.json は specguard pending 2>/dev/null || true で呼ぶ。
+
+2026-10-02 完了: 修正 d8036188 が main に入っている。独立 RED の tests/pending_undetermined.rs (4 件) と tests/pending_unloadable_contract.rs (3 件) が session worktree (main a4a03806 相当) で緑。specguard 0.2.71 配備済み。"""
+created_at = 1790797561
+updated_at = 1790885730
+weight = 0.0
+issue_number = 952
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/952"

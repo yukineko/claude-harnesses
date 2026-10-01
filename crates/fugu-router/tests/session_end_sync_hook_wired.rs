@@ -104,6 +104,13 @@ fn every_declared_command_resolves_through_plugin_root() {
 
     for event in events {
         for command in commands_for(&doc, &event) {
+            for part in command.split(';').map(str::trim).filter(|p| !p.is_empty()) {
+                assert!(
+                    part.starts_with("${CLAUDE_PLUGIN_ROOT}/bin/fugu-router"),
+                    "{event} segment {part:?} of {command:?} does not resolve through \
+                     ${{CLAUDE_PLUGIN_ROOT}}"
+                );
+            }
             assert!(
                 command.contains("${CLAUDE_PLUGIN_ROOT}"),
                 "{event} command {command:?} does not resolve through \
@@ -140,25 +147,55 @@ fn every_declared_subcommand_exists_in_the_binary() {
     let mut checked = 0usize;
     for event in events {
         for command in commands_for(&doc, &event) {
-            // `${CLAUDE_PLUGIN_ROOT}/bin/fugu-router <sub> [args...]`
-            let sub = command
-                .split_whitespace()
-                .nth(1)
-                .unwrap_or_else(|| panic!("{event} command {command:?} passes no subcommand"));
-            let out = Command::new(exe)
-                .args([sub, "--help"])
-                .output()
-                .unwrap_or_else(|e| panic!("could not run {exe} {sub} --help: {e}"));
-            assert!(
-                out.status.success(),
-                "{event} declares `fugu-router {sub}`, but `{sub} --help` exited \
-                 {:?}. The wire names a subcommand this binary does not have, so \
-                 the hook is dead: {}",
-                out.status.code(),
-                String::from_utf8_lossy(&out.stderr)
-            );
-            checked += 1;
+            // A command string may chain several commands with `;`
+            // (`harvest; sync`). Validate every one, not just the first.
+            for part in command.split(';').map(str::trim).filter(|p| !p.is_empty()) {
+                // `${CLAUDE_PLUGIN_ROOT}/bin/fugu-router <sub> [args...]`
+                let sub = part
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or_else(|| panic!("{event} command {part:?} passes no subcommand"));
+                let out = Command::new(exe)
+                    .args([sub, "--help"])
+                    .output()
+                    .unwrap_or_else(|e| panic!("could not run {exe} {sub} --help: {e}"));
+                assert!(
+                    out.status.success(),
+                    "{event} declares `fugu-router {sub}`, but `{sub} --help` exited \
+                     {:?}. The wire names a subcommand this binary does not have, so \
+                     the hook is dead: {}",
+                    out.status.code(),
+                    String::from_utf8_lossy(&out.stderr)
+                );
+                checked += 1;
+            }
         }
     }
     assert!(checked > 0, "no declared commands were checked");
+}
+
+/// SessionEnd must run `harvest` (turn merges into episodes) BEFORE `sync`
+/// (push the store), sequentially, in ONE command string: separate hooks run
+/// in parallel and sync could push a store harvest has not yet appended to.
+#[test]
+fn session_end_runs_harvest_before_sync_in_one_command() {
+    let doc = load();
+    let commands = commands_for(&doc, "SessionEnd");
+    let cmd = commands
+        .iter()
+        .find(|c| c.contains("harvest"))
+        .unwrap_or_else(|| panic!("no SessionEnd command runs `harvest`: {commands:?}"));
+    let parts: Vec<&str> = cmd
+        .split(';')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .collect();
+    assert_eq!(
+        parts,
+        vec![
+            "${CLAUDE_PLUGIN_ROOT}/bin/fugu-router harvest",
+            "${CLAUDE_PLUGIN_ROOT}/bin/fugu-router sync",
+        ],
+        "harvest must precede sync in a single `;`-chained command: {cmd:?}"
+    );
 }

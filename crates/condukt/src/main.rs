@@ -1093,7 +1093,9 @@ enum StateAction {
     /// Record completed runs' outcomes to fugu-router (the learning signal).
     /// Deterministic, idempotent: only settled, not-yet-recorded runs are emitted,
     /// and each run is marked so repeated firings (e.g. the Stop hook) never
-    /// double-record. Soft: a no-op when the fugu-router binary is not on PATH.
+    /// double-record. Soft: a no-op when the fugu-router binary is not installed.
+    /// A run with any episode that failed to record stays unrecorded (only the
+    /// missing episodes are retried) and the command exits non-zero.
     RecordRun {
         /// Record one specific run. Omit with --all to sweep every settled run.
         #[arg(long)]
@@ -2560,11 +2562,21 @@ fn run_shadow_run(cfg: &Config, cwd: &Path, action: ShadowRunAction) -> Result<(
                 cost_usd: cost,
                 duration_secs: duration,
             };
-            let recorded = shadow_run::finish(&repo, &path, &branch, run.as_deref(), &outcome)?;
+            let fugu_bin = fugu_router_bin();
+            let recorded = shadow_run::finish(
+                &repo,
+                &path,
+                &branch,
+                run.as_deref(),
+                &outcome,
+                Path::new(&fugu_bin),
+            )?;
             if recorded {
                 println!("shadow-run discarded and recorded to fugu-router");
             } else {
-                println!("shadow-run discarded (fugu-router not on PATH — outcome not recorded)");
+                println!(
+                    "shadow-run discarded (fugu-router at {fugu_bin} unavailable or its record failed — outcome not recorded)"
+                );
             }
         }
     }
@@ -3985,6 +3997,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                 paused: false,
                 terminal_label: resolved_label,
                 recorded_at: None,
+                recorded_episodes: Vec::new(),
             };
             let path = rs.save(cfg, cwd)?;
             // Persist the decomposition so `state resume-context` can reconstruct tasks.
@@ -5389,14 +5402,11 @@ fn release_terminal_task_files(
     }
 }
 
-/// The reason carried by a blocking [`harness_core::verdict::Verdict`], for
-/// operator-facing messages. Never empty: a verdict with no stated reason is
-/// reported as such rather than as a blank.
-fn undetermined_why(verdict: &harness_core::verdict::Verdict) -> String {
-    verdict
-        .reason()
-        .map(|r| r.as_str().to_string())
-        .unwrap_or_else(|| format!("{verdict:?} (no reason recorded)"))
+/// The reason carried by a `Required::Blocked` give-up, for operator-facing
+/// messages. An [`harness_core::verdict::Undet`] always carries a reason (the
+/// type has no reason-less form), so this is never a blank.
+fn undetermined_why(verdict: &harness_core::verdict::Undet) -> String {
+    verdict.as_str().to_string()
 }
 
 /// Load and parse a run's decomposition, keeping "could not read it" distinct
@@ -5589,15 +5599,30 @@ fn fugu_router_bin_from_manifest(manifest_path: &Path) -> Option<String> {
 
 /// Probe whether `fugu-router` (resolved via [`fugu_router_bin`]) is usable
 /// and, if so, return its skill fingerprint (stdout of `fugu-router
-/// fingerprint`, trimmed). `None` means fugu-router is absent → recording is
-/// a soft no-op.
-fn fugu_fingerprint() -> Option<String> {
-    let out = std::process::Command::new(fugu_router_bin())
-        .arg("fingerprint")
-        .output()
-        .ok()?; // spawn failed (not resolvable) → soft-skip
-    let fp = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    Some(fp)
+/// fingerprint`, trimmed).
+///
+/// Three outcomes, not two: `Ok(None)` = fugu-router is not installed at all
+/// (nothing to record into — a soft no-op that marks nothing recorded);
+/// `Ok(Some(fp))` = usable; `Err` = it exists but could not answer (spawn
+/// error other than not-found, or a non-zero exit). The last one is NOT the
+/// soft case: a present-but-broken recorder must not be read as "recorded".
+fn fugu_fingerprint() -> Result<Option<String>> {
+    let bin = fugu_router_bin();
+    let out = match std::process::Command::new(&bin).arg("fingerprint").output() {
+        Ok(out) => out,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => bail!("could not run `{bin} fingerprint`: {e}"),
+    };
+    if !out.status.success() {
+        bail!(
+            "`{bin} fingerprint` exited {}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(Some(
+        String::from_utf8_lossy(&out.stdout).trim().to_string(),
+    ))
 }
 
 /// Wall-clock seconds spanning `[a, b]`, or `None` when the span is unmeasured.
@@ -5672,9 +5697,11 @@ fn print_timings(rs: &state::RunState, json: bool) -> Result<()> {
 /// only settled, not-yet-recorded runs emit episodes, and each is stamped with
 /// `recorded_at` so repeated firings (the Stop hook) never double-record.
 ///
-/// Soft dependency: when fugu-router is not on PATH this is a clean no-op and
+/// Soft dependency: when fugu-router is not installed this is a clean no-op and
 /// does NOT mark runs recorded, so a later invocation (once fugu-router exists)
-/// still captures the signal.
+/// still captures the signal. A failed `fugu-router record` (or a failing
+/// `fingerprint` probe) is not soft: the run stays unrecorded, the episodes
+/// that did land are remembered in `recorded_episodes`, and this returns `Err`.
 fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Result<()> {
     let run_ids: Vec<String> = match (run, all) {
         (Some(r), _) => vec![r],
@@ -5686,10 +5713,13 @@ fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Resu
     };
 
     // Probe fugu-router once. Absent → soft no-op (leave runs unrecorded).
-    let fingerprint = match fugu_fingerprint() {
+    // Present but failing → error: nothing is marked recorded.
+    let fingerprint = match fugu_fingerprint()? {
         Some(fp) => fp,
         None => return Ok(()),
     };
+    // Runs with at least one episode that did not land: `(run_id, "<task>:<role>")`.
+    let mut failures: Vec<(String, String)> = Vec::new();
 
     let mut emitted = 0usize;
     let mut recorded_runs = 0usize;
@@ -5721,8 +5751,14 @@ fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Resu
                 .and_then(state::resolve_agent_cost)
                 .unwrap_or(s.cost_usd);
             let tokens = s.agent_id.as_deref().and_then(state::resolve_agent_tokens);
-            if spawn_fugu_record(s, "worker", &s.model, cost, tokens, &fingerprint) {
-                emitted += 1;
+            let worker_key = format!("{}:worker", s.task_id);
+            if !rs.recorded_episodes.contains(&worker_key) {
+                if spawn_fugu_record(s, "worker", &s.model, cost, tokens, &fingerprint) {
+                    rs.recorded_episodes.push(worker_key);
+                    emitted += 1;
+                } else {
+                    failures.push((rid.clone(), worker_key));
+                }
             }
 
             // Second episode, role=verifier: only when this task carried a
@@ -5731,7 +5767,12 @@ fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Resu
             // it's the same task, judged by a different (verifier) subagent.
             // Measurement only (hypothesis f5f9522a) — never consulted by
             // condukt's own scheduling/routing.
-            if let Some(vm) = &s.verifier_model {
+            let verifier_key = format!("{}:verifier", s.task_id);
+            if let Some(vm) = s
+                .verifier_model
+                .as_ref()
+                .filter(|_| !rs.recorded_episodes.contains(&verifier_key))
+            {
                 let verifier_cost = s
                     .verifier_agent_id
                     .as_deref()
@@ -5749,18 +5790,34 @@ fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Resu
                     verifier_tokens,
                     &fingerprint,
                 ) {
+                    rs.recorded_episodes.push(verifier_key);
                     emitted += 1;
+                } else {
+                    failures.push((rid.clone(), verifier_key));
                 }
             }
         }
-        rs.recorded_at = Some(state::now_secs());
+        // Only a run whose every episode landed is recorded. Otherwise save the
+        // landed subset (so the retry does not duplicate it) and leave
+        // `recorded_at` unset so the next firing retries the rest.
+        if !failures.iter().any(|(r, _)| r == &rid) {
+            rs.recorded_at = Some(state::now_secs());
+            recorded_runs += 1;
+        }
         rs.save(cfg, cwd)?;
-        recorded_runs += 1;
     }
 
     if emitted > 0 {
         eprintln!(
-            "condukt: recorded {emitted} outcome(s) from {recorded_runs} run(s) to fugu-router"
+            "condukt: recorded {emitted} outcome(s); {recorded_runs} run(s) fully recorded to fugu-router"
+        );
+    }
+    if !failures.is_empty() {
+        let list: Vec<String> = failures.iter().map(|(r, k)| format!("{r} ({k})")).collect();
+        bail!(
+            "fugu-router record failed for {} episode(s), left unrecorded for retry: {}",
+            failures.len(),
+            list.join(", ")
         );
     }
     Ok(())
@@ -6350,6 +6407,7 @@ mod state_set_tests {
             paused: false,
             terminal_label: None,
             recorded_at: None,
+            recorded_episodes: Vec::new(),
         }
     }
 

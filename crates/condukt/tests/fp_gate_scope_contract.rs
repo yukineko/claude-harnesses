@@ -28,7 +28,11 @@
 //!   Exactly three such cases: unreadable bytes, unparseable text, and no
 //!   matching entry.
 //! * ABSENCE of the decomposition file (ENOENT) is a real observation, not a
-//!   failure to observe: the gate does not apply and the promotion succeeds.
+//!   failure to observe: the gate does not apply and the promotion succeeds
+//!   (the task is durably `verified`). The command's exit code is NOT that
+//!   observable here: with no decomposition, the terminal claim release cannot
+//!   determine which files the task holds, and since backlog `9a4fb884` that
+//!   `Undetermined` release exits non-zero after the durable write.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -210,6 +214,31 @@ fn verify(
             "state", "set", "--run", run_id, "--task", task_id, "--status", "verified",
         ],
     )
+}
+
+/// The durable status `condukt state show` reports for `task_id` — the
+/// observable that says whether the promotion LANDED, independent of the exit
+/// code. `state set` no longer maps "promotion landed" onto exit 0 alone:
+/// since backlog `9a4fb884` (human ruling 2026-09-24, commit `306cf008`) it
+/// exits non-zero AFTER the durable write when the terminal claim release is
+/// `Undetermined`, and a caller that must know whether the transition landed
+/// is told to read `state show` (see the `state set` call site in `main.rs`).
+fn shown_status(dir: &Path, home: &Path, tdd_path: &Path, run_id: &str, task_id: &str) -> String {
+    let (code, out, err) = run_condukt(dir, home, tdd_path, &["state", "show", "--run", run_id]);
+    assert_eq!(
+        code, 0,
+        "state show must succeed\nstdout: {out}\nstderr: {err}"
+    );
+    let v: serde_json::Value = serde_json::from_str(&out).expect("state show must emit JSON");
+    let tasks = v["tasks"].as_array().expect("state show must list tasks");
+    let t = tasks
+        .iter()
+        .find(|t| t["id"].as_str() == Some(task_id))
+        .unwrap_or_else(|| panic!("task {task_id} missing from state show: {out}"));
+    t["status"]
+        .as_str()
+        .expect("task status must be a string")
+        .to_string()
 }
 
 fn assert_accepted(what: &str, code: i32, stdout: &str, stderr: &str) {
@@ -516,11 +545,35 @@ fn absent_decomposition_file_still_accepts_a_fix_task_with_no_proofs() {
     // The ONLY difference is that the decomposition is absent rather than
     // present-but-broken — and that difference is the deliberate carve-out.
     let (code, out, err) = verify(&dir, &home, &tdd, run, task);
-    assert_accepted(
-        "kind:fix, no proofs, decomposition file deleted (ENOENT)",
-        code,
-        &out,
-        &err,
+    let what = "kind:fix, no proofs, decomposition file deleted (ENOENT)";
+
+    // The named property: the gate ACCEPTED and the promotion LANDED. Read
+    // back from durable state, not inferred from the exit code.
+    assert!(
+        !err.contains("refusing to verify"),
+        "{what}: the F->P gate refused an absent decomposition\nstdout: {out}\nstderr: {err}"
+    );
+    assert!(
+        err.contains("1/1 verified"),
+        "{what}: expected stderr to contain `1/1 verified`\nstdout: {out}\nstderr: {err}"
+    );
+    assert_eq!(
+        shown_status(&dir, &home, &tdd, run, task),
+        "verified",
+        "{what}: the task must be durably verified\nstdout: {out}\nstderr: {err}"
+    );
+
+    // The ruled contract for what follows the durable write (backlog
+    // `9a4fb884`, commit `306cf008`): with no decomposition the files this
+    // task holds cannot be determined, the release is not attempted, and
+    // `state set` says so and exits non-zero rather than reporting a clean 0.
+    assert_ne!(
+        code, 0,
+        "{what}: an Undetermined claim release must exit non-zero (9a4fb884)\nstdout: {out}\nstderr: {err}"
+    );
+    assert!(
+        err.contains("claim release NOT PERFORMED"),
+        "{what}: the non-zero exit must be the named claim-release diagnostic\nstdout: {out}\nstderr: {err}"
     );
 }
 

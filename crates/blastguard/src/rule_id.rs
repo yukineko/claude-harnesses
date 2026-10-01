@@ -185,6 +185,12 @@ pub fn rule_id(reason: &str) -> &'static str {
     }
 
     // Bash: rm.
+    // The deletion principle (`crate::deletion`): git positively reported
+    // content at the operand that no copy holds. Its own id: what recurs here
+    // is "work that was never committed keeps being deleted", not the shape.
+    if reason.contains("recursive rm would destroy content git cannot restore") {
+        return "rm-recursive-unrecoverable";
+    }
     if reason.contains("recursive rm (-r) can delete an entire directory tree") {
         return "rm-recursive";
     }

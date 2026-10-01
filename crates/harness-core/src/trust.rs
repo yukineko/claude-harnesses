@@ -199,9 +199,19 @@ impl Trust {
 /// * It does not walk parent directories. Only the single `worktree ->
 ///   main working tree` hop is followed, and only when the `.git` *gitfile*
 ///   proves the relationship.
+/// * It does not trust the `.git` gitfile's claim. The gitfile is writable by
+///   whoever controls `root`, so the relationship is accepted only when the
+///   main working tree's own `.git` is the named common git dir, the named
+///   `worktrees/<name>` admin dir exists as a real directory, AND git's
+///   back-pointer `worktrees/<name>/gitdir` resolves to `root/.git` (see
+///   `main_worktree_of`). Forging those requires write access inside the
+///   trusted repository's `.git` — with one exception: a *stale* admin entry
+///   (the worktree directory was deleted but `git worktree prune` has not
+///   run) still names its original path, so whoever controls that exact path
+///   can place a gitfile there and inherit trust.
 /// * It does not consult `git` as a subprocess: the answer is read from the
-///   `gitdir:` gitfile and cross-checked against the main working tree's own
-///   `.git`, so there is no exit status to ignore and no `PATH` to depend on.
+///   files above, so there is no exit status to ignore and no `PATH` to
+///   depend on.
 /// * Every unreadable / unrecognized / un-canonicalizable step returns
 ///   [`Trust::Untrusted`] — the restricted side.
 #[must_use]
@@ -219,11 +229,26 @@ pub fn resolve(root: &Path) -> Trust {
 ///
 /// A linked worktree's `.git` is a *file* (never a directory) whose first line
 /// is `gitdir: <path to>/<common-git-dir>/worktrees/<name>` (gitrepository-layout(5)).
-/// The main working tree is the parent of that common git dir. That last step is
-/// an inference, so it is **verified, not assumed**: the candidate's own `.git`
-/// must canonicalize to the same common git dir. A bare repository (whose
-/// worktrees have no main working tree to inherit from), a `GIT_DIR` in an
-/// unusual location, or any IO failure therefore yields `None` — the restricted
+/// The main working tree is the parent of that common git dir. The gitfile is
+/// written by whoever controls `root`, so nothing it says is taken on faith;
+/// `Some` is returned only when ALL of these are verified:
+///
+/// 1. the gitdir path has the shape `<common>/worktrees/<name>`;
+/// 2. the candidate main working tree's own `.git` canonicalizes to `<common>`;
+/// 3. `<common>/worktrees/<name>` exists as a real directory (not a symlink);
+/// 4. git's back-pointer `<common>/worktrees/<name>/gitdir` (absolute, or
+///    relative to that admin dir) canonicalizes to the same path as
+///    `canonicalize(root/.git)`.
+///
+/// 3 and 4 live inside the trusted repository's `.git`, so a forged gitfile in
+/// an arbitrary directory (naming a nonexistent `worktrees/<name>`, or an
+/// existing one that belongs to a different worktree) cannot satisfy them
+/// without write access to that `.git`. The exception is a stale admin entry
+/// whose worktree directory was deleted without `git worktree prune`: its
+/// back-pointer still names the original path, so a gitfile placed at exactly
+/// that path satisfies 3 and 4. A bare repository (whose worktrees have
+/// no main working tree to inherit from), a `GIT_DIR` in an unusual location,
+/// or any read / parse / canonicalize failure yields `None` — the restricted
 /// side, since the only caller uses `Some` to *grant* trust.
 fn main_worktree_of(root: &Path) -> Option<PathBuf> {
     let dot_git = root.join(".git");
@@ -259,6 +284,38 @@ fn main_worktree_of(root: &Path) -> Option<PathBuf> {
     let common_key = std::fs::canonicalize(common).ok()?;
     let candidate_key = std::fs::canonicalize(candidate.join(".git")).ok()?;
     if common_key != candidate_key {
+        return None;
+    }
+
+    // The gitfile is attacker-writable: anyone can drop a `.git` FILE naming
+    // `<trusted-main>/.git/worktrees/<anything>` into any directory, and every
+    // check above would pass. What only git (or someone who can already write
+    // inside the trusted repo's `.git`) can produce is the per-worktree admin
+    // dir and its BACK-POINTER, so both are required:
+    //
+    // 1. `git_dir` (`.../worktrees/<name>`) must exist as a real directory
+    //    (not a symlink, not a file).
+    if !std::fs::symlink_metadata(&git_dir).ok()?.is_dir() {
+        return None;
+    }
+    // 2. `<git_dir>/gitdir` (gitrepository-layout(5): "the path to the .git
+    //    file" of the linked worktree) must canonicalize to THIS root's `.git`.
+    //    git writes it absolute, or relative to `git_dir` under
+    //    `worktree.useRelativePaths`.
+    let back = std::fs::read_to_string(git_dir.join("gitdir")).ok()?;
+    let back = back.lines().next()?.trim();
+    if back.is_empty() {
+        return None;
+    }
+    let back = Path::new(back);
+    let back = if back.is_absolute() {
+        back.to_path_buf()
+    } else {
+        git_dir.join(back)
+    };
+    let back_key = std::fs::canonicalize(back).ok()?;
+    let own_key = std::fs::canonicalize(&dot_git).ok()?;
+    if back_key != own_key {
         return None;
     }
     Some(candidate.to_path_buf())

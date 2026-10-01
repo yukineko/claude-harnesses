@@ -459,11 +459,8 @@ enum ScopeCheck {
 fn check_store_scope(store_root: &std::path::Path, asked: &str) -> ScopeCheck {
     let store_identity = match store::canonical_project_id(store_root).require() {
         Required::Determined(root) => root.to_string_lossy().into_owned(),
-        Required::Blocked(verdict) => {
-            let why = verdict
-                .reason()
-                .map(|r| r.as_str().to_string())
-                .unwrap_or_else(|| "unknown".to_string());
+        Required::Blocked(undet) => {
+            let why = undet.as_str();
             return ScopeCheck::Unverifiable(format!(
                 "cannot determine which project the store at {} belongs to, so `--project \
                  {asked}` could not be checked against it: {why}",
@@ -553,11 +550,8 @@ fn default_project_scope(
     let cwd = std::env::current_dir()?;
     match store::canonical_project_id(&cwd).require() {
         Required::Determined(root) => Ok(Some(root.to_string_lossy().into_owned())),
-        Required::Blocked(verdict) => {
-            let why = verdict
-                .reason()
-                .map(|r| r.as_str().to_string())
-                .unwrap_or_else(|| "unknown".to_string());
+        Required::Blocked(undet) => {
+            let why = undet.as_str();
             Err(anyhow::anyhow!(
                 "cannot determine this checkout's project scope for the default \
                  `backlog {command}` (pass --project explicitly, or --all to bypass \
@@ -593,11 +587,8 @@ fn claim_identity(effective_project: Option<&str>) -> Result<String> {
         let cwd = std::env::current_dir()?;
         return match store::canonical_project_id(&cwd).require() {
             Required::Determined(root) => Ok(root.to_string_lossy().into_owned()),
-            Required::Blocked(verdict) => {
-                let why = match verdict.reason() {
-                    Some(r) => r.as_str().to_string(),
-                    None => "unknown".to_string(),
-                };
+            Required::Blocked(undet) => {
+                let why = undet.as_str();
                 Err(anyhow::anyhow!(
                     "cannot determine this checkout's project identity, so a claim could not be \
                      recorded project-wide and would be invisible to other checkouts; refusing \

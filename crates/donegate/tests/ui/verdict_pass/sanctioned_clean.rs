@@ -19,8 +19,9 @@
 //! * `gate.rs:119` (`scan_scope`, `Failed` arm) —
 //!   `Determination::undetermined("git could not report the changed files …")`.
 //! * `gate.rs:136` (`evaluate`) — `scope.clone().require()`, resolved with a
-//!   `match Required::Determined(..) / Required::Blocked(undetermined)` and
-//!   `undetermined.blocks()`.
+//!   `match Required::Determined(..) / Required::Blocked(_undetermined)`; the
+//!   blocked arm's `Undet` converts only to a blocking verdict
+//!   (`into_verdict().blocks()`, asserted below).
 //! * `gate.rs:231,234,239` (`human_report`) — matching
 //!   `Determination::Known(None)` / `Determination::Undetermined(why)` /
 //!   `Determination::Known(Some(_))` directly, and formatting `why` via its
@@ -74,17 +75,15 @@ fn main() {
     // gate.rs:136 (evaluate) — scope.clone().require().
     let changed: Option<Vec<String>> = match files_scope.clone().require() {
         Required::Determined(files) => files,
-        Required::Blocked(undetermined) => {
-            assert!(undetermined.blocks(), "an undetermined scope must block");
-            None
-        }
+        Required::Blocked(_undetermined) => None,
     };
     assert_eq!(changed, Some(vec!["a.md".to_string()]));
 
     let scope_verdict = match failed_scope.require() {
         Required::Determined(v) => panic!("expected Blocked, got Determined({v:?})"),
-        Required::Blocked(v) => v,
+        Required::Blocked(why) => why.into_verdict(),
     };
+    assert!(scope_verdict.blocks(), "an undetermined scope must block");
     assert!(matches!(scope_verdict, Verdict::Undetermined(_)));
 
     // gate.rs:62-69 (GateReport::verdict) — Verdict::from_findings fed from

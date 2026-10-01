@@ -1,0 +1,164 @@
+# Reasoned acks for gate-crate map entries that no docs/specs doc describes
+# (backlog 0c277117). `specguard map gate-check` lets an entry named here pass
+# without a spec doc. `reason` is required; most entries below are spec debt:
+# the fix is to write the spec and move the entry to spec-docs.toml.
+
+[[ack]]
+path = "crates/blastguard/src/approve.rs"
+reason = "No docs/specs doc describes it: blastguard.md never mentions trust-on-first-use approval memory (grep approve: 0 hits). Spec debt."
+
+[[ack]]
+path = "crates/blastguard/src/callgraph.rs"
+reason = "Thin re-export of harness_core::callgraph; blastguard.md does not mention callgraph. The behaviour belongs to harness-core, not this gate's spec."
+
+[[ack]]
+path = "crates/blastguard/src/detect/executors.rs"
+reason = "blastguard.md's detect section covers shells and eval wrappers but not the awk system()/git -c pager/env -S executor rules this file adds (daf7611b). Spec debt."
+
+[[ack]]
+path = "crates/blastguard/src/interactive.rs"
+reason = "blastguard.md has no Ask-hardening/interactive-terminal section; the doc predates Decision::Ask. Spec debt."
+
+[[ack]]
+path = "crates/blastguard/src/protection.rs"
+reason = "Protection statement printed by --protects and parsed by scripts/check-gate-protection.py; blastguard.md does not describe it."
+
+[[ack]]
+path = "crates/blastguard/src/retro.rs"
+reason = "Retrospective review of gate interventions; blastguard.md has no retro section (grep retro: 0 hits). Spec debt."
+
+[[ack]]
+path = "crates/blastguard/src/reversible.rs"
+reason = "Recoverability-of-destruction axis; blastguard.md does not describe it (only classify's reversible flag, a different concept). Spec debt."
+
+[[ack]]
+path = "crates/blastguard/src/scope.rs"
+reason = "Target-location axis added in 0.2.51; blastguard.md's rm rules still describe shape only. Spec debt."
+
+[[ack]]
+path = "crates/specguard/src/coverage.rs"
+reason = "Canon-coverage tri-state for `specguard brief`; specguard.md's brief bullet mentions only prompt::render_brief. Spec debt."
+
+[[ack]]
+path = "crates/specguard/src/forge/agent.rs"
+reason = "specforge (separate bin, src/forge/*) has no docs/specs doc and specguard.md never mentions forge."
+
+[[ack]]
+path = "crates/specguard/src/forge/config.rs"
+reason = "specforge has no docs/specs doc; specguard.md never mentions forge."
+
+[[ack]]
+path = "crates/specguard/src/forge/evidence.rs"
+reason = "specforge has no docs/specs doc; specguard.md never mentions forge."
+
+[[ack]]
+path = "crates/specguard/src/forge/gather.rs"
+reason = "specforge has no docs/specs doc; specguard.md never mentions forge."
+
+[[ack]]
+path = "crates/specguard/src/forge/impl_prompt.rs"
+reason = "specforge has no docs/specs doc; specguard.md never mentions forge."
+
+[[ack]]
+path = "crates/specguard/src/forge/implement.rs"
+reason = "specforge has no docs/specs doc; specguard.md never mentions forge (the pre-untrack map's crate-wide binding to specguard.md was not accurate)."
+
+[[ack]]
+path = "crates/specguard/src/forge/ir.rs"
+reason = "specforge has no docs/specs doc; specguard.md never mentions forge."
+
+[[ack]]
+path = "crates/specguard/src/forge/main.rs"
+reason = "specforge binary entry; no docs/specs doc and specguard.md never mentions forge."
+
+[[ack]]
+path = "crates/specguard/src/forge/parse.rs"
+reason = "specforge has no docs/specs doc; specguard.md never mentions forge (the pre-untrack map's crate-wide binding to specguard.md was not accurate)."
+
+[[ack]]
+path = "crates/specguard/src/forge/prompt.rs"
+reason = "specforge has no docs/specs doc; specguard.md never mentions forge."
+
+[[ack]]
+path = "crates/specguard/src/forge/queue.rs"
+reason = "specforge has no docs/specs doc; specguard.md never mentions forge."
+
+[[ack]]
+path = "crates/specguard/Cargo.lock"
+reason = "Lockfile, not spec-bearing. It is a map entry only because [map].exclude's bare `Cargo.lock` glob matches the repo-root lockfile alone."
+
+[[ack]]
+path = "crates/specguard/proptest-regressions/scope.txt"
+reason = "proptest regression seed file (test data), not spec-bearing."
+
+[[ack]]
+path = "crates/stuckguard/Cargo.lock"
+reason = "Lockfile, not spec-bearing. It is a map entry only because [map].exclude's bare `Cargo.lock` glob matches the repo-root lockfile alone."
+
+[[ack]]
+path = "crates/stuckguard/src/verdict_monotonicity.rs"
+reason = "Verdict-monotonicity property (backlog a7d41587); stuckguard.md's module list does not include it. Spec debt."
+
+[[ack]]
+path = "crates/overwatch/src/lock.rs"
+reason = "overwatch.md states the dedup contract (load -> reap -> is_held_by_other) but not the file lock that serialises it. Spec debt."
+
+[[ack]]
+path = "crates/overwatch/src/gate_outcomes.rs"
+reason = "`overwatch gate-outcomes` is not described in overwatch.md (grep: 0 hits). Spec debt."
+
+[[ack]]
+path = "crates/overwatch/src/changeset.rs"
+reason = "Mid-flight runtime-conflict registry (design 625aa170 A); overwatch.md does not describe it. Spec debt."
+
+[[ack]]
+path = "crates/overwatch/src/merge_conflict.rs"
+reason = "Consensus merge-conflict resolution (design 625aa170 B); overwatch.md does not describe it. Spec debt."
+
+[[ack]]
+path = "crates/overwatch/src/reconcile.rs"
+reason = "`overwatch reconcile-fixed` is not described in overwatch.md (grep reconcile: 0 hits). Spec debt."
+
+[[ack]]
+path = "crates/parallelguard/src/main.rs"
+reason = "parallelguard has no docs/specs/parallelguard.md and no specguard area (specguard.toml comment). Spec debt."
+
+[[ack]]
+path = "crates/parallelguard/src/model.rs"
+reason = "parallelguard has no docs/specs/parallelguard.md. Spec debt."
+
+[[ack]]
+path = "crates/parallelguard/src/store.rs"
+reason = "parallelguard has no docs/specs/parallelguard.md. Spec debt."
+
+[[ack]]
+path = "crates/propguard/src/protection.rs"
+reason = "Protection statement printed by --protects and parsed by scripts/check-gate-protection.py; propguard.md does not describe it."
+
+[[ack]]
+path = "crates/stuckguard/src/protection.rs"
+reason = "Protection statement printed by --protects and parsed by scripts/check-gate-protection.py; stuckguard.md does not describe it."
+
+[[ack]]
+path = "crates/parallelguard/src/protection.rs"
+reason = "Protection statement printed by --protects and parsed by scripts/check-gate-protection.py; parallelguard has no docs/specs/parallelguard.md. Spec debt."
+
+[[ack]]
+path = "crates/mutategate/src/protection.rs"
+reason = "Protection statement printed by --protects and parsed by scripts/check-gate-protection.py; mutategate.md does not describe it."
+
+[[ack]]
+path = "crates/overwatch/src/protection.rs"
+reason = "Protection statement printed by --protects and parsed by scripts/check-gate-protection.py; overwatch.md does not describe it."
+
+[[ack]]
+path = "crates/specguard/src/protection.rs"
+reason = "Protection statement printed by --protects and parsed by scripts/check-gate-protection.py; specguard.md does not describe it."
+
+[[ack]]
+path = "crates/propguard/src/trust_worktree_tests.rs"
+reason = "Test-only module for worktree trust inheritance; propguard.md describes is_trusted and the trust command but not worktree trust inheritance (grep -i worktree docs/specs/propguard.md: 0 hits). Spec debt."
+
+[[ack]]
+path = "crates/blastguard/src/deletion.rs"
+reason = "Recursive rm judged by what it destroys (3aa215e1). blastguard.md does NOT describe it and is STALE against it: its analyze_rm rule still says every recursive -r rm is deny, while deletion.rs allows recoverable operands. Binding would claim coverage the doc contradicts. Spec debt."

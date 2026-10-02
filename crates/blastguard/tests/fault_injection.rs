@@ -38,3 +38,34 @@ fn blind_boundary_never_leaves_an_approval_lookup_permissive() {
 
     assert_fails_closed(|| store.lookup(&fp).is_approved());
 }
+
+/// Second verdict: is the file a redirect would clobber recoverable from git?
+/// (reversible::probe). true lets the write through; a blind probe must not.
+#[test]
+fn blind_boundary_never_leaves_a_recoverability_probe_permissive() {
+    use std::process::Command;
+    let repo = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        let st = Command::new("git")
+            .args(args)
+            .current_dir(repo.path())
+            .status()
+            .unwrap();
+        assert!(st.success(), "setup: git {args:?}");
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "t@example.invalid"]);
+    git(&["config", "user.name", "t"]);
+    std::fs::write(repo.path().join("tracked.txt"), "x\n").unwrap();
+    git(&["add", "tracked.txt"]);
+    git(&["commit", "-q", "-m", "init"]);
+    let target = repo.path().join("tracked.txt");
+    let target = target.to_str().unwrap();
+
+    let verdict = || blastguard::reversible::probe(target, None).is_recoverable();
+    assert!(
+        verdict(),
+        "control: a clean tracked file must read as recoverable"
+    );
+    assert_fails_closed(verdict);
+}

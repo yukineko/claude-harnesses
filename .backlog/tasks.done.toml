@@ -12,6 +12,7 @@ updated_at = 1788982607
 weight = 0.0
 issue_number = 195
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/195"
+issue_closed_at = 1790983635
 
 [[task]]
 id = "5ba13c3e"
@@ -55,6 +56,7 @@ updated_at = 1786376369
 weight = 0.0
 issue_number = 196
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/196"
+issue_closed_at = 1790983635
 
 [[task]]
 id = "f78490e1"
@@ -73,6 +75,7 @@ updated_at = 1786041386
 weight = 0.0
 issue_number = 204
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/204"
+issue_closed_at = 1790983635
 
 [[task]]
 id = "e840c8b2"

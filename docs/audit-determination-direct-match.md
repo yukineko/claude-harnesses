@@ -645,8 +645,7 @@ prod の `Determination::Known` pattern 行で、前後 25 行に Undetermined �
 
 docs の check-doc-claims.py は、バッククォートで囲んだ パス:行 とその直後の引用を index と照合する。本書の他の箇所は誤検知(短縮パス・複数行指定・同一行の別引用)を避けるためバッククォートを外してあるので、主要な PERMISSIVE 箇所だけをここで機械検証可能な形で固定する。
 
-- `crates/blastguard/src/reversible.rs:174` 「let _ = git;」
-- `crates/blastguard/src/reversible.rs:188` 「RepoProbe::Repo => Recovery::RecoverableFromGit,」
+- crates/blastguard/src/reversible.rs の decide_recovery（旧 :174「let _ = git;」/ 旧 :188「RepoProbe::Repo => Recovery::RecoverableFromGit,」）— backlog 7778b634 で是正済み（読めない git 状態は Undetermined を返す）。機械検証の対象から外した。
 - `crates/autoflow/src/lock.rs:58` 「Determination::Undetermined(_) => return true,」
 - `crates/overwatch/src/store.rs:376` 「Determination::Known(None) | Determination::Undetermined(_) => Vec::new(),」
 - `crates/condukt/src/circuit.rs:506` 「Determination::Undetermined(_) => 0,」

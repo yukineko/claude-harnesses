@@ -100,8 +100,10 @@ enum Command {
         task: String,
     },
     /// Classify the RED→GREEN transition for a task and print an oracle report as
-    /// JSON. Exit 0 only for a valid Fail→Pass oracle, else exit 1 (fail-soft:
-    /// missing/corrupt proofs report `unknown`, never panic).
+    /// JSON. Exit 0: a valid Fail→Pass oracle. Exit 1: the proofs were read but
+    /// do not form a valid Fail→Pass oracle, including missing/corrupt proofs
+    /// (reported as `unknown`). Exit 2: a proof exists but could not be read
+    /// (reported as `undetermined`, `valid_fp_oracle: false`).
     Oracle {
         #[arg(long)]
         task: String,
@@ -348,24 +350,19 @@ fn verify_command(task: &str) -> ! {
 }
 
 /// `tdd oracle`: classify the task's RED→GREEN transition and print a JSON
-/// report. Fail-soft — a missing/unreadable/corrupt proof yields
-/// `has_red/has_green=false`, `transition="unknown"`, `valid_fp_oracle=false`
-/// and still prints valid JSON. Exit 0 only for a valid Fail→Pass oracle.
+/// report. A missing/corrupt proof yields `has_red/has_green=false`,
+/// `transition="unknown"`, `valid_fp_oracle=false`, exit 1. A proof that exists
+/// but cannot be read yields `transition="undetermined"`,
+/// `valid_fp_oracle=false`, exit 2 (see `transition::oracle_report`). Exit 0
+/// only for a valid Fail→Pass oracle.
 fn oracle_command(task: &str) -> ! {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
     let cfg = Config::load(&root);
     let pre = proof::read_passed(&root, &cfg, task, "red");
     let post = proof::read_passed(&root, &cfg, task, "green");
-    let report = transition::oracle_report(pre, post);
-    let valid = report
-        .get("valid_fp_oracle")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    let (report, code) = transition::oracle_report(pre, post);
     println!("{report}");
-    if valid {
-        std::process::exit(0);
-    }
-    std::process::exit(1);
+    std::process::exit(code);
 }
 
 fn log_event(cfg: &Config, session: &str, verdict: &str, attempt: u32) {

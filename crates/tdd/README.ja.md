@@ -40,8 +40,9 @@ harness の他のゲートに対する「test-first の兄弟」にあたる。`
 
 `tdd oracle --task <id>` はタスクの証跡から RED→GREEN の遷移を分類し、JSON レポート
 （`{"transition":"fail_to_pass","valid_fp_oracle":true,…}`）を出力する。有効な
-Fail→Pass のときだけ exit 0（fail-soft: 証跡が無い/壊れている場合は panic せず
-`transition:"unknown"` を報告する）。`/tdd` skill 自体のフェーズには含まれず、`condukt` の
+Fail→Pass のときだけ exit 0。証跡が無い/壊れている場合は `transition:"unknown"`（exit 1）、
+証跡が存在するのに読めない場合は `transition:"undetermined"`・`valid_fp_oracle:false`
+（読み取りエラーを `"undetermined"` に記載、exit 2）を報告し、欠落や有効な証跡としては扱わない。`/tdd` skill 自体のフェーズには含まれず、`condukt` の
 Fail→Pass ゲート（`condukt state check-oracle`）が `fix`/`feature` タスクの RED/GREEN 証跡を
 決定論的に検証するために呼ぶ機械オラクルである。
 

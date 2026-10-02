@@ -206,9 +206,10 @@ class AllowlistSuppression(unittest.TestCase):
         silently suppress a swallow re-introduced at that (path, pattern, needle)
         later on.
         """
-        # (An empty ALLOWLIST is legitimate and vacuously clean: the
-        # undetermined-arm class must have no entries, see
-        # UndeterminedArmSpellingsRemaining.)
+        # The undetermined-arm class must have no entries (see
+        # UndeterminedArmSpellingsRemaining), but other classes still do; an
+        # empty ALLOWLIST would make this loop vacuous, so keep it non-empty.
+        self.assertTrue(fo.ALLOWLIST, "ALLOWLIST is empty — nothing to vouch for")
         for entry in fo.ALLOWLIST:
             p = fo.REPO / entry["path"]
             with self.subTest(path=entry["path"], pattern=entry["pattern"]):
@@ -708,7 +709,10 @@ class NewClassIsAdvisoryOnly(unittest.TestCase):
         self.assertEqual(
             fo.ADVISORY_ONLY_PATTERNS,
             frozenset({"err-arm-empty-fallback", "undetermined-arm-empty-fallback",
-                       "read-unwrap-or-empty", "loop-parse-drop"}),
+                       "read-unwrap-or-empty", "loop-parse-drop",
+                       # user ruling 2026-10-02 (f12c2168): the extension-trait
+                       # call form is advisory only, same as the class above.
+                       "require-ext-erase"}),
         )
 
     def test_blocking_scan_drops_the_advisory_class(self):

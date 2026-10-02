@@ -13173,3 +13173,35 @@ updated_at = 1790885907
 weight = 0.0
 issue_number = 998
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/998"
+
+[[task]]
+id = "381fc8ac"
+title = "condukt: unclaimed-worktree occupancy の Undetermined 裁定待ち RED テストを復帰させる"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "2026-10-02 の origin 掃除で削除した origin/condukt/run-20260814-005232-58819/.../t2-occupancy-undetermined (commit 375587a2, 2026-08-14) が持っていた未決事項。crates/condukt/tests/worktree_reconcile.rs に +231 行の RED テストがあり、コミットメッセージ自身が 'implementation deliberately NOT written — blocked on a ruling' と宣言している。つまり実装ではなく人間の裁定が blocker。origin/main には未マージで、main 側にも同等のテストは無い。オブジェクトはローカル ref refs/archive/condukt-occupancy-red に退避済み (git show refs/archive/condukt-occupancy-red で読める)。やること: (1) 何の裁定が待たれているのかをそのテストとコミット本文から特定する (2) 裁定を人間に求める (3) 裁定に沿って実装するか、テストごと撤去する。測定点 448ff46f / 2026-10-02。"
+created_at = 1790907084
+updated_at = 1790907084
+weight = 0.0
+
+[[task]]
+id = "7e1514de"
+title = "依存更新の棚卸し: 削除した dependabot ブランチ 9 本ぶんの bump を手動で再評価する"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "deps",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "2026-10-02 の origin 掃除で dependabot/* 9 本を削除した (GitHub Actions を §7 で使用禁止にしたため dependabot 由来の経路自体が死んでいる)。削除したので提案内容は失われる。実測で確認した例: dependabot/cargo/sha2-0.11.0 = sha2 0.10.9 -> 0.11.0 (Cargo.toml + Cargo.lock のみ)。他は cargo-minor-patch x2 / dirs-6.0.0 / toml-1.1.2spec-1.1.0 / github_actions 系 4 本 (後者は GHA 撤去済みなので不要)。やること: cargo の依存を手動で棚卸しし、取り込むべき major bump (sha2 0.11 等) を自分で判断して入れる。GHA/dependabot を再導入してはならない (§7)。測定点 448ff46f / 2026-10-02。"
+created_at = 1790907085
+updated_at = 1790907085
+weight = 0.0

@@ -14746,3 +14746,97 @@ weight = 0.0
 issue_number = 1056
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1056"
 rev = 1
+
+[[task]]
+id = "48c58344"
+title = "gate-bypass 台帳が common git dir 共有のため、他セッションの --no-verify 1 件で全 worktree の push が止まる"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+`scripts/gate-bypass.py` の台帳は **common git dir** に 1 本しかないため、あるセッションが `--no-verify` で作った 1 件の commit が、**他の全セッション・全 worktree の push を止める**。
+
+### 実測（2026-10-02、測定点 `bfe967f6`）
+
+```
+git rev-parse --git-common-dir                      # main tree  -> .git
+git -C <session worktree> rev-parse --git-common-dir # worktree   -> /home/.../claude-harnesses/.git
+cat .git/gate-bypassed
+  bfe967f637683ab3269c398ef10a06389645f532<TAB>Merge branch 'main' into fix/e8aad6e6-rollout-direction
+```
+
+`bfe967f6` は branch `fix/e8aad6e6-rollout-direction` 上の別セッションの merge commit（`git log -1 --format='%an'` = t、親は `962f88f8` と `8de76055`）。この 1 件により、自分の 4 commit が pre-commit 全ゲートを通過して merge 済みであるにもかかわらず `git push origin main` が rc=1 で止まった。
+
+### これは CLAUDE.md 第8節が名指しする帰属のバグである
+
+> ゲート（donegate / reviewgate / precommit-audit）が他セッションの変更を自分のものとして要求してきたら、それは**帰属のバグ**であって自分の不備ではない。共有 skip ファイルで黙らせず、記録して報告する。
+
+したがって本票は「記録して報告する」の実行であり、`scripts/gate-bypass.py` を走らせて消すこと（＝台帳の消費）で黙らせてはいけない。
+
+### 台帳共有は意図的である — だから設計判断が必要
+
+`.githooks/post-commit` のヘッダは共有を明示的に意図として書いている:
+
+> The ledger lives in the common git dir, so every worktree of this repo shares one, while the sentinel is per-worktree so concurrent commits cannot certify each other's trees.
+
+つまり見落としではなく**設計の緊張**である。片側（検出の網羅性）を取れば他セッションを巻き込み、他側（セッション分離）を取れば worktree 間で bypass が見逃せる。どちらを選ぶかは人間の裁定なので候補だけ置く:
+
+1. **台帳をそのまま共有し、pre-push の判定だけを「今 push しようとしている ref から到達可能な entry」に絞る。** 自分が送らない commit で止められなくなる。検出自体は失われない（別セッションがその commit を push しようとした時点で止まる）。
+2. **entry ごとに記録元 worktree を書き、pre-push は自 worktree 由来の entry だけで止める。** 1 より弱い（他セッションが main へ merge して来た ungated content を見逃す）。
+3. **現状維持**（他セッションの green commit を待つ）。今回はたまたま `bfe967f6` が main の HEAD なので、同じ checkout で gated commit を 1 本作れば消える。しかし**別セッションの未 merge branch 上の commit だった場合、自分の worktree の HEAD からは到達不能なので消しようがなく、push が恒久的に止まる**（clearing は "entries whose commit is an ancestor of the HEAD that run judged" に限られる、`scripts/gate-bypass.py` の docstring）。この経路は未実測。
+
+### 測って**否定された**仮説（次の著者が繰り返さないために残す）
+
+「`git merge` は pre-commit を走らせないので、第8節が main tree で唯一許している操作（merge）が必ず台帳に載るのではないか」と考えたが**偽**。使い捨てリポジトリでの実測（`scratchpad/meas_merge_hook.py`、2026-10-02）では、clean な `git merge --no-ff` に対して **pre-commit も post-commit も走らない**（通常 commit 3 回で両方 3 回 → merge 後も両方 3 回）。post-commit が走らなければ append も起きないので、clean merge は台帳に載らない。`bfe967f6` が載っているのは `--no-verify` か sentinel 不一致の経路であり、どちらかは未特定。"""
+created_at = 1790922440
+updated_at = 1790922440
+weight = 0.0
+issue_number = 1057
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1057"
+rev = 0
+
+[[task]]
+id = "5e3b13cc"
+title = "gate-bypass.py が台帳の行数を commit 数として報告する（重複 3 行 = 1 commit を 3 件と表示）"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = '''
+`scripts/gate-bypass.py` は台帳の**行数**を commit 数として報告するため、同一 commit が重複追記されると「N 件の ungated commit」と嘘をつく。
+
+### 実測（2026-10-02、測定点 `bfe967f6`）
+
+```
+cat .git/gate-bypassed | sort -u | wc -l   # -> 1
+python3 scripts/gate-bypass.py --json | python3 -c '...'
+  entries: 3   distinct: 1
+```
+
+ledger の現物は**同一 sha の同一行が 3 本**。pre-push の出力は `gate-bypass: 2 ungated commit(s) outstanding`（当時 2 行）と言い、同じ 12 桁 sha を 2 回並べた。
+
+### 原因（確定している部分だけ）
+
+ - `scripts/gate-bypass.py` の `main`: `len(entries)` が行数であり、`entries` は 1 行 1 要素。distinct 化していない。
+ - `.githooks/post-commit`: `printf '%s\t%s\n' "$sha" "$subject" >> "$LEDGER"` に重複判定が無い。
+
+**なぜ同じ HEAD で post-commit が 3 回走ったかは未特定**（sha が同一なので amend では説明できない）。ここを判断で埋めない。
+
+### 影響
+
+数が水増しされるので「2 件も ungated がある」と読め、実際には 1 件。逆に、重複で埋まった台帳は本当の 2 件目を見えにくくする。clearing は sha 単位なので機能には影響しないが、**報告が事実と違う**（第4節: 散文/出力が実挙動と食い違う）。
+
+### 直し方の候補
+
+ - 読み側で sha ごとに畳む（最初の subject を採用）。表示は distinct 数。
+ - append 側で `grep -qF "$sha" "$LEDGER" || printf ...`（競合時の二重書きは読み側の畳み込みで吸収）。
+ - 読み側だけ直すのが安全（append は post-commit で、失敗を握り潰せない経路なので触りたくない）。'''
+created_at = 1790922442
+updated_at = 1790922442
+weight = 0.0
+issue_number = 1058
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1058"
+rev = 0

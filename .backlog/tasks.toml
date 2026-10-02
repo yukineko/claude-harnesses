@@ -1030,33 +1030,6 @@ issue_number = 155
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/155"
 
 [[task]]
-id = "f6784177"
-title = "ctxrot の find_overwatch_binary が stuckguard で直した 2 欠陥をそのまま持っている (mirror gap)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "mirror-gap",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-stuckguard の anchor 修正 (0.1.30) で直した 2 件が、双子である crates/ctxrot/src/hooks/guard.rs:656 の find_overwatch_binary に未修正のまま残っている。片側だけ直った典型的な mirror gap。
-
-(1) 消去 (erasure): guard.rs:666-668 は std::fs::read_dir(&base).ok()? と .filter_map(|e| e.ok()) で、読めない cache dir を「候補ゼロ」へ畳む。絶対的不在と判定不能が同じ出力になる。stuckguard 側は harness_core::boundary::read_dir_entries を通す形へ寄せた (Known(vec![]) と Undetermined を分ける)。
-
-(2) バージョン順序: guard.rs:672-673 の candidates.sort() は full path の辞書順なので、0.3.9 が 0.3.10 より後ろに来る。実測 2026-08-06、この機械の ls ~/.claude/plugins/cache/yukineko/overwatch は 0.1.30 / 0.1.38 / 0.2.18 / 0.2.20 / 0.2.24 の 5 dir を保持しており、二桁 patch は既に存在する。今日 0.2.24 が正しく選ばれるのは 0.2.9 が一度も入らなかったからにすぎず、同一 minor 内で一桁と二桁が並んだ時点で古い方を選ぶ。stuckguard 側は version_sort_key で数値成分比較へ直し、0.3.9 vs 0.3.10 の RED を実測してから GREEN 化した。
-
-影響の非対称性: ctxrot 側は heartbeat を打たず注入 cadence の判定にしか使わないので、lease reap への波及は無い。したがって深刻度は stuckguard 側より低いが、(2) は「古い overwatch を新しい台帳に対して走らせる」ことになる。
-
-完了条件: guard.rs の find_overwatch_binary を boundary::read_dir_entries + 数値バージョン比較へ寄せ、0.3.9 vs 0.3.10 のテストを RED 先行で追加する。ctxrot は 3 ファイル lockstep で micro bump。"""
-created_at = 1785969045
-updated_at = 1785969045
-weight = 0.0
-issue_number = 171
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/171"
-
-[[task]]
 id = "5b75ea9d"
 title = "overwatch の exit 1 が「lease 無し」と内部エラーを併合しているので、呼び手が区別できない"
 project = "/Users/yuki/src/harness"
@@ -1077,33 +1050,6 @@ updated_at = 1785969047
 weight = 0.0
 issue_number = 172
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/172"
-
-[[task]]
-id = "5b89f0f6"
-title = "verdict.rs の「method call としては書けない」は拡張トレイトで反証される (散文が実挙動より強い)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-crates/harness-core/src/verdict.rs:434 は permissive path is therefore not expressible as a method call on either と書いている。敵対的監査 (2026-08-06) が使い捨てクレートを実 harness-core への path dep で作り、実際にビルド・実行して反証した。
-
-外部クレートに 6 行の拡張トレイト (Required に対して unwrap_or_default と is_ok を生やす impl) を置くと、呼び出し側の綴りが trybuild fixture の E0599 として pin しているものとバイト同一のまま通る。実行結果 collapsed=[] を観測 = undetermined が空 Vec へ潰れた。
-
-同時に確認された関連の穴 2 件:
-- Required::Blocked(Verdict) は型として Undetermined を強制していない。外部から Blocked に Clean を積むことができ、正規の Blocked(v) => return v 腕が blocks()==false を返す。Verdict::Clean は private witness で偽造不能なのに Required::Blocked には対応する制約が無い。塞ぐなら Blocked(Undet) + accessor。condukt/src/maintree.rs:805 は verdict.blocks() で既に防御しているので production の実害は現状なし。
-- verdict.rs:36 と :384 の has exactly one extractor は method に限った話で、Determination::Known が pub variant である以上、直接 match という第2の抽出路がある (repo 内 40+ 箇所)。
-
-完了条件: 散文を実挙動へ合わせる (第4節: 実装を変えたら同じコミットで記述も直す。ここでは記述の側が過大)。可能なら Required::Blocked の payload を Undet へ狭める。拡張トレイト経路は型では塞げないので、塞げない事実を書くか、下の lexical gate 側で拾う。"""
-created_at = 1785969187
-updated_at = 1785969187
-weight = 0.0
-issue_number = 176
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/176"
 
 [[task]]
 id = "f12c2168"
@@ -13173,3 +13119,123 @@ updated_at = 1790885907
 weight = 0.0
 issue_number = 998
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/998"
+
+[[task]]
+id = "5e39d0f9"
+title = "ctxrot newest_overwatch_in: bin.exists() が stat エラー (EACCES 等) を false に潰し version dir を黙って落とす (f6784177 の mirror gap, 未テスト)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-02 flow batch2 run-20261002-051756-82319 a-closeout verifier: crates/ctxrot/src/hooks/guard.rs 付近 :689 の bin.exists().then_some((key, bin)) を Some((key, bin)) に置換する mutant で newest_overwatch の 3 テストが全て pass のまま = 被覆なし。読み (a) 判定不能消去 / (b) 意図的。見分け方: try_exists で Undetermined を返す版と unreadable bin dir のテストを書き RED を観測する。"
+created_at = 1790899428
+updated_at = 1790899428
+weight = 0.0
+issue_number = 999
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/999"
+
+[[task]]
+id = "4c269960"
+title = "ctxrot find_overwatch_binary の PATH probe が output().is_ok() で「起動したが非0終了」を found 扱いする"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-02 flow batch2 run-20261002-051756-82319 a-closeout verifier: Command::new(overwatch).arg(--version).output().is_ok() は spawn 成功しか見ず exit status を判定に使わない (CLAUDE.md 3: subprocess は終了ステータスを使う)。テスト無し。見分け方: 非0終了する偽 overwatch を PATH に置くテストで RED を観測する。"
+created_at = 1790899430
+updated_at = 1790899430
+weight = 0.0
+issue_number = 1000
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1000"
+
+[[task]]
+id = "9fa0168b"
+title = "append_violation の Err を let _ で捨てる fail-open が 8 crate にある (ctxrot main.rs:989 は doc で Fail-soft と自称)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-02 flow batch2 run-20261002-051756-82319 d-ctxrot-investigate: crates/ctxrot/src/main.rs:989 let _ = overwatch::store::append_violation(root, &event); doc 969-974 が Fail-soft。同形: autoflow/src/main.rs:462 blastguard/src/main.rs:602 budgetguard/src/main.rs:187 reviewgate/src/main.rs:321 propguard/src/main.rs:441 specguard/src/main.rs:2295 tdd/src/main.rs:402。書き込み失敗は overwatch の correlation/findings で違反なしと読まれる。読み (a) 実在 fail-open / (b) 観測専用で下流消費者なし。見分け方: overwatch の violations.jsonl 消費者を列挙し、append を失敗させる fault injection テストで欠落が clean と読まれるか観測する。"
+created_at = 1790899432
+updated_at = 1790899432
+weight = 0.0
+issue_number = 1001
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1001"
+
+[[task]]
+id = "7f766fde"
+title = "ctxrot emit_violation_with_empty_check_kind_records_nothing のアサーションは別ストアを scan しても通る (検証していないテスト)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-02 flow batch2 run-20261002-051756-82319 d-ctxrot-investigate: crates/ctxrot/src/main.rs:1374 のテストは HOME 競合で別ストアを scan しても空になるので常に pass。見分け方: 同じストアに既知イベントを書いてそれが見えることを先に assert する正対照を足し、HOME を壊す mutant で RED を観測する。"
+created_at = 1790899434
+updated_at = 1790899434
+weight = 0.0
+issue_number = 1002
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1002"
+
+[[task]]
+id = "2ca3c4b3"
+title = "scripts/concurrent-cargo-test.sh は filter が 0 件のテストにしか一致しなくても exit 0 (干渉なしと誤報)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-02 flow batch2 run-20261002-051756-82319 d-tests verifier: bash scripts/concurrent-cargo-test.sh fugu-router zz_no_such_test_zz 1 -> iterations=1 failed_iterations=0 exit 0。また 2 プロセス x20 iter では修正前 fugu-router でも 1/40 程度しか落ちず RED 実証として弱い (6 プロセス直叩きでは 168/180)。見分け方: running 0 tests を検出して非0にする修正を入れ、上の誤 filter で RED を観測する。"
+created_at = 1790899435
+updated_at = 1790899435
+weight = 0.0
+issue_number = 1003
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1003"
+
+[[task]]
+id = "aa4d9614"
+title = "fugu-router のテスト temp dir の一部がプロセス単位で一意だが呼び出し単位では一意でない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-02 flow batch2 run-20261002-051756-82319 d-fugu-impl verifier: store.rs:519 fugu-saveall-pid / :741 fugu-router-concurrent-append-pid / :812 ...-playbook-pid、fingerprint.rs:109、tests/harvest.rs:27、tests/sync_ordering.rs:86。同一プロセス内で同名 dir を 2 テストが使うと競合しうる。読み (a) 実害あり / (b) 各名前が 1 テスト専用で実害なし。見分け方: 各 dir 名の利用テスト数を数え、2 以上なら同一バイナリ並列で RED を観測する。"
+created_at = 1790899437
+updated_at = 1790899437
+weight = 0.0
+issue_number = 1004
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1004"
+
+[[task]]
+id = "114ec321"
+title = "check-fail-open baseline に新規計上された 32 箇所 (f12c2168, 537cd3ef) は数えただけで個別に判定していない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-02 flow batch2 run-20261002-051756-82319 c-impl: 検出拡張で baseline 50->82。サイト一覧は commit 537cd3ef のメッセージ。特に block-bodied undetermined arm 16 件 (overwatch bridge/disposition_cli/review_queue, ctxrot hooks, propguard gate.rs:122, specguard main.rs:1696, stuckguard config.rs:216) は警告出力後に None/Vec::new() で終わる形。読み (a) 判定不能を空へ潰す実在 fail-open / (b) 下流が unknown と表示する正当な degrade。見分け方: サイトごとに下流消費者を列挙し fault injection で空が clean と読まれるか観測する。"
+created_at = 1790899439
+updated_at = 1790899439
+weight = 0.0
+issue_number = 1005
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1005"
+
+[[task]]
+id = "d7cc0692"
+title = "ctxrot の HOME 競合テストが実 ~/.overwatch に test イベント (session-x) を書き込んでいた (約 91 ファイル)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-02 flow batch2 run-20261002-051756-82319 d-ctxrot-investigate: grep -l session-x ~/.overwatch/*/overwatch/violations.jsonl で約 91 件、うち 90 件は ctxrot:budget-threshold-crossed で調査中のストレス実行由来。原因の HOME_ENV_LOCK 欠落は同 batch で修正中。汚染データの掃除はユーザー判断 (未削除)。見分け方: 修正後に同じ grep の件数・mtime が増えないことを観測する。"
+created_at = 1790899440
+updated_at = 1790899440
+weight = 0.0
+issue_number = 1006
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1006"

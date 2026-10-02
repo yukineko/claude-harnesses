@@ -268,14 +268,45 @@ mod tests {
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
-    fn make_tmp_dir(tag: &str) -> PathBuf {
-        let n = SEQ.fetch_add(1, Ordering::Relaxed);
-        let p = std::env::temp_dir().join(format!(
-            "condukt-precedent-{tag}-{}-{n}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&p).unwrap();
-        p
+    /// Unique fixture dir via atomic `mkdtemp` (backlog a6608aa0): never
+    /// re-enters a leftover dir from a recycled pid, and the returned guard
+    /// removes the dir on drop so fixtures no longer pile up in temp.
+    fn make_tmp_dir(tag: &str) -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix(&format!("condukt-precedent-{tag}-"))
+            .tempdir()
+            .expect("tempdir")
+    }
+
+    /// backlog a6608aa0: a fixture dir must never be a leftover from an earlier
+    /// run. The old `<kind>-<tag>-<pid>-<seq>` name re-entered such a dir on pid
+    /// reuse and the stale file inside made `all.len() == 1` flaky. Seed every
+    /// name the old scheme could hand out next, then require an EMPTY dir.
+    #[test]
+    fn make_tmp_dir_never_reenters_a_leftover_dir() {
+        let upto = SEQ.load(Ordering::Relaxed) + 256;
+        let seeded: Vec<PathBuf> = (0..upto)
+            .map(|n| {
+                let d = std::env::temp_dir().join(format!(
+                    "condukt-precedent-collide-{}-{n}",
+                    std::process::id()
+                ));
+                std::fs::create_dir_all(&d).unwrap();
+                std::fs::write(d.join("precedents.json"), "stale-from-a-dead-run").unwrap();
+                d
+            })
+            .collect();
+        let fresh = make_tmp_dir("collide");
+        let p: &Path = fresh.as_ref();
+        let leftovers: Vec<_> = std::fs::read_dir(p).unwrap().flatten().collect();
+        for d in &seeded {
+            let _ = std::fs::remove_dir_all(d);
+        }
+        assert!(
+            leftovers.is_empty(),
+            "fixture dir {} re-entered a leftover dir: {leftovers:?}",
+            p.display()
+        );
     }
 
     fn make_cfg(tmp: &Path) -> Config {
@@ -477,11 +508,12 @@ mod tests {
 
     #[test]
     fn record_persists_and_is_retrievable() {
-        let tmp = make_tmp_dir("record");
-        let cfg = make_cfg(&tmp);
+        let tmp_dir = make_tmp_dir("record");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
         let rec = record_precedent(
             &cfg,
-            &tmp,
+            tmp,
             &v(&["a.rs", "b.rs"]),
             &v(&["foo"]),
             "routine dep bump",
@@ -492,41 +524,44 @@ mod tests {
         assert_eq!(rec.note, "routine dep bump");
         assert_ne!(rec.fingerprint, 0);
 
-        let all = load_precedents(&cfg, &tmp);
+        let all = load_precedents(&cfg, tmp);
         assert_eq!(all.len(), 1);
         assert_eq!(all[0], rec);
-        assert!(precedents_path(&cfg, &tmp).exists());
+        assert!(precedents_path(&cfg, tmp).exists());
     }
 
     #[test]
     fn missing_store_loads_empty() {
-        let tmp = make_tmp_dir("missing");
-        let cfg = make_cfg(&tmp);
-        assert!(load_precedents(&cfg, &tmp).is_empty());
+        let tmp_dir = make_tmp_dir("missing");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
+        assert!(load_precedents(&cfg, tmp).is_empty());
     }
 
     #[test]
     fn corrupt_store_is_treated_as_empty() {
-        let tmp = make_tmp_dir("corrupt");
-        let cfg = make_cfg(&tmp);
-        let path = precedents_path(&cfg, &tmp);
+        let tmp_dir = make_tmp_dir("corrupt");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
+        let path = precedents_path(&cfg, tmp);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, b"not json at all {{{").unwrap();
-        assert!(load_precedents(&cfg, &tmp).is_empty());
+        assert!(load_precedents(&cfg, tmp).is_empty());
         // Fail-soft: record still succeeds (registry read as empty then
         // overwritten with a fresh valid one).
-        let rec = record_precedent(&cfg, &tmp, &v(&["a.rs"]), &v(&["foo"]), "n", 1).unwrap();
-        let all = load_precedents(&cfg, &tmp);
+        let rec = record_precedent(&cfg, tmp, &v(&["a.rs"]), &v(&["foo"]), "n", 1).unwrap();
+        let all = load_precedents(&cfg, tmp);
         assert_eq!(all, vec![rec]);
     }
 
     #[test]
     fn record_appends_multiple() {
-        let tmp = make_tmp_dir("append");
-        let cfg = make_cfg(&tmp);
-        record_precedent(&cfg, &tmp, &v(&["a.rs"]), &v(&["foo"]), "first", 1).unwrap();
-        record_precedent(&cfg, &tmp, &v(&["b.rs"]), &v(&["bar"]), "second", 2).unwrap();
-        let all = load_precedents(&cfg, &tmp);
+        let tmp_dir = make_tmp_dir("append");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
+        record_precedent(&cfg, tmp, &v(&["a.rs"]), &v(&["foo"]), "first", 1).unwrap();
+        record_precedent(&cfg, tmp, &v(&["b.rs"]), &v(&["bar"]), "second", 2).unwrap();
+        let all = load_precedents(&cfg, tmp);
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].note, "first");
         assert_eq!(all[1].note, "second");

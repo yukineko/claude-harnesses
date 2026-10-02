@@ -1052,57 +1052,6 @@ issue_number = 172
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/172"
 
 [[task]]
-id = "f12c2168"
-title = "check-fail-open.py が Required::Blocked への改名で残余の第二層に盲目になった (836a1aa3 が 47 サイトを改名)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-verdict.rs:394 と :487 は、型で塞げない残余 (手書きの match 腕で空値へ潰す形) を lexical gate へ委譲すると宣言している。その gate は実在し pre-commit に配線されている (.githooks/pre-commit の fail-open-guard)。
-
-しかし敵対的監査 (2026-08-06) が同一意味の 2 ファイルを作って実測した結果:
-
-  === OLD spelling (Err 腕で空 Vec) ===
-  old_spelling.rs:4: [err-arm-empty-fallback] (advisory) 検出された
-  === NEW spelling (Required::Blocked 腕で空 Vec) ===
-  fail-open-guard: gate surface clean (no fail-open swallow detected)
-
-836a1aa3 が 47 サイトを Err(...) から Required::Blocked(...) へ改名したことで、型が塞げないと明言した残余の第二層が、まさにその綴りに対して無音になった。現時点で見逃されている実在の残余は 0 件だが、検出器は今後に対して盲目である。
-
-これは委譲の連鎖が切れた形: 型は lexical gate に委譲し、lexical gate はその綴りを見ていない。どちらも単体では嘘をついていないが、合わせると誰も見ていない領域ができている。
-
-完了条件: check-fail-open.py の正規表現に Required::Blocked 腕の空値・既定値フォールバックを足す。追加は advisory 面のみ (b0cacd15 のユーザー裁定に従う)、allowlist は作らない、baseline で burn-down。RED 先行 (新綴りの fixture が現行スクリプトで検出されないことを先に観測してから足す)。"""
-created_at = 1785969188
-updated_at = 1785969188
-weight = 0.0
-issue_number = 177
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/177"
-
-[[task]]
-id = "b71c72a7"
-title = "テストが固定 /tmp パスを使うため、2 本の cargo test が同時に走ると互いを壊す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "test-infra",
-    "worktree-hygiene",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = '実測 2026-08-06、測定点 90385f84 + harness-core 未コミット差分。cargo test --workspace を 2 プロセス同時に走らせたところ、fugu-router の store::tests::import_episodes_deduplicates が summary.read で left 4 / right 2 を出した。原因は固定パス std::env::temp_dir().join("fugu-router-import-ep-test") を両プロセスが共有し、双方が src.jsonl へ append したこと。同様の固定パスは import_episodes_dry_run_writes_nothing と dedup_episodes_removes_duplicates_preserves_order にもある。donegate/tests/integration.rs:13 の isolated_dir は pid を混ぜているのでプロセス間は分離されるが、同一プロセス内で同じ tag を複数テストが使うと remove_dir_all と create_dir_all が競合し AlreadyExists で落ちる（run1 で観測）。ctxrot の violation_emission_tests::emit_violation_records_a_ctxrot_event も 0 対 1 で落ちた（要調査）。これは CLAUDE.md 第8節が並行 worktree セッションを義務づけていることと直接衝突する: 別セッションが別 worktree で cargo test を回すだけで、こちらのスイートが壊れる（target/ は分かれても /tmp は分かれない）。修正案は固定パスをやめて tempfile::tempdir へ寄せること。'
-created_at = 1786027340
-updated_at = 1786027340
-weight = 0.0
-issue_number = 203
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/203"
-
-[[task]]
 id = "bbacb00d"
 title = 'blastguard: 展開 head resolver の UNVERIFIED 2件（rewritten.join(" ") の意味破壊・MAX_SHELL_DEPTH 相互作用）'
 project = "/Users/yuki/src/harness"
@@ -13239,3 +13188,48 @@ updated_at = 1790899440
 weight = 0.0
 issue_number = 1006
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1006"
+
+[[task]]
+id = "d65d6ad6"
+title = "ctxrot config.rs の auto_compact_env_override テストが HOME_ENV_LOCK を取らずに env を変更し Config::load を呼ぶ (load_with_continue_below の lock 付き版の twin)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-02 flow batch2 run-20261002-051756-82319 ctxrot HOME-lock verifier: crates/ctxrot/src/config.rs:669-671 が CTXROT_AUTO_COMPACT_AT_PERCENTAGE を set/remove し Config::load() を呼ぶ。load は HOME 依存の base_dir と autonomy 既定層を読むので他テストの HOME 書き換えと競合しうる。:678 の sibling は lock を取る。見分け方: scripts/ctxrot-home-race-repro.sh と同形の直叩きループに auto_compact_env_override を加えて失敗率を測る。"
+created_at = 1790947613
+updated_at = 1790947613
+weight = 0.0
+issue_number = 1060
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1060"
+
+[[task]]
+id = "a065a59b"
+title = "ctxrot のテストが NO_COLOR を lock 無しで set し remove しない (プロセス全体に残る)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-02 flow batch2 run-20261002-051756-82319 同 verifier: crates/ctxrot/src/usage.rs:193,210,242,257 と main.rs:1248,1284,1308。現状 ANSI 経路を assert するテストが無いので失敗は未観測。読み (a) 将来の色 assert テストで競合 / (b) 実害なし。見分け方: 色出力を assert するテストを足して並列で回す。"
+created_at = 1790947614
+updated_at = 1790947614
+weight = 0.0
+issue_number = 1061
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1061"
+
+[[task]]
+id = "50ff9063"
+title = "ctxrot config.rs:327 の doc が「読み取り・パースエラーは黙って既定値へ fallback」と明記している (設定パース不能の判定不能を既定値へ潰す)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-02 flow batch2 run-20261002-051756-82319 同 verifier: crates/ctxrot/src/config.rs:327-328。CLAUDE.md 3 の判定不能は制限側へ、に照らす監査対象。読み (a) 既定値が permissive なら fail-open / (b) 既定値が制限側か下流消費者なしなら許容。見分け方: 壊れた config で ctxrot の各 hook 判定が変わるかを fault injection で観測する。"
+created_at = 1790947616
+updated_at = 1790947616
+weight = 0.0
+issue_number = 1062
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1062"

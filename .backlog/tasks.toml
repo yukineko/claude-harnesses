@@ -13338,3 +13338,108 @@ updated_at = 1790979238
 weight = 0.0
 issue_number = 1069
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1069"
+
+[[task]]
+id = "586ca525"
+title = "specguard emit_audit_findings / emit_drift_findings collapse an unreadable review-findings ledger into an empty dedup HashSet"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-03 by sonnet verifier of ow-impl (3a29d0ab): specguard main.rs ~2335 and ~2400 match Err(_unreadable) => HashSet::new(). Effect is re-appending duplicates (conservative, documented), but it is a reader-Err-to-empty path; consider scan_review_findings."
+created_at = 1790980365
+updated_at = 1790980365
+weight = 0.0
+issue_number = 1071
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1071"
+
+[[task]]
+id = "dc42ceca"
+title = "condukt worktree.rs test uses open_merge_conflicts(..).unwrap_or_default(), which can mask an Err"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-03 by ow-impl verifier at condukt worktree.rs ~1488 (test code). Suggest unwrap()."
+created_at = 1790980367
+updated_at = 1790980367
+weight = 0.0
+issue_number = 1072
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1072"
+
+[[task]]
+id = "126bd011"
+title = "Reusing a CARGO_TARGET_DIR that held a mutation build produced false test failures (stale artifact) in overwatch/condukt"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-03 by ow-impl verifier: first run on a reused target dir failed se8a61ec3, f450adad and condukt diffrisk_record every_invocation_is_journaled_even_when_nothing_is_recorded; fresh target dir all green. Not diagnosed. Risk: false verdicts in verification."
+created_at = 1790980368
+updated_at = 1790980368
+weight = 0.0
+issue_number = 1073
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1073"
+
+[[task]]
+id = "f74ab541"
+title = "docs/audit-determination-direct-match.md P1 (blastguard decide_recovery) and table rows still describe the defect fixed by 7778b634 without a resolved marker"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "Seen 2026-10-03 at main 859c5213: P6 got a resolved note (e8a61ec3) but P1 section and rows 98-99/303-304 still say RecoverableFromGit is returned."
+created_at = 1790980370
+updated_at = 1790980370
+weight = 0.0
+issue_number = 1074
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1074"
+
+[[task]]
+id = "9947006d"
+title = "check-fail-open _code_of cuts lines at // inside string literals and blanks lines starting with *; affects every line-pattern scan"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-03 by opus verifier of fail-open-paren round 2: re.sub of // to end-of-line truncates http URLs in strings; lines whose first non-blank char is * (deref, multiplication continuation) are dropped as comments. Block-arm lexer was moved to raw lines in 360b36d9, other patterns still use _code_of."
+created_at = 1790980371
+updated_at = 1790980371
+weight = 0.0
+issue_number = 1075
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1075"
+
+[[task]]
+id = "1b915cca"
+title = "check-fail-open test_region_lines treats #[cfg(test)] inside a string or on a brace-less statement as a test region and over-blanks real code"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-03 by opus verifier round 3 (fixtures T2, T2b, T1d in session scratchpad fo/atk3.py): both 01c8c228 and 360b36d9 miss an arm after such a line."
+created_at = 1790980373
+updated_at = 1790980373
+weight = 0.0
+issue_number = 1076
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1076"
+
+[[task]]
+id = "bc837863"
+title = "check-fail-open single-line arms => return Result::Ok(Vec::new()), => Known(Vec::new()), Ok::<_,E>(..) are not matched (_ARM_PREFIX only knows bare Ok(/Some()"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-03 by opus verifier round 3 (S1-S4). Mirror gap: block-bodied path now recognises these wrappers, single-line path does not."
+created_at = 1790980374
+updated_at = 1790980374
+weight = 0.0
+issue_number = 1077
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1077"

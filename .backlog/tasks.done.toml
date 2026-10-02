@@ -23304,3 +23304,22 @@ weight = 0.0
 issue_number = 221
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/221"
 issue_closed_at = 1790981958
+
+[[task]]
+id = "a6608aa0"
+title = "condukt の precedent/escalate テスト fixture が pid 名の共有 temp dir を再入し cargo test -p condukt が確率的に赤くなる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flaky",
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "2026-08-11、独立 verifier が 10 回の full unit-suite 実行のうち 1 回で再現。落ちたのは escalate::tests::add_creates_new_open_record_after_resolve / precedent::tests::record_appends_multiple / precedent::tests::record_persists_and_is_retrievable の 3 本 (735 passed / 3 failed)。原因: crates/condukt/src/precedent.rs:271 と crates/condukt/src/escalate.rs:222 が fixture dir を temp_dir()/condukt-<kind>-<tag>-<pid>-<seq> という pid 由来の名前で create_dir_all しており、既存 dir に黙って再入する。後始末もしないため temp には condukt-precedent-* が 1548 件、condukt-escalate-* が 3092 件残っており、いくつかは古い precedents.json を保持している。pid が再利用されると assert_eq!(all.len(), 1) が残骸を数えて落ちる。state.rs:2266 が mkdtemp で既に直したのと同じハザード。回帰ではない (precedent.rs/escalate.rs は HEAD~1 と byte 同一)。修正方針: mkdtemp 相当のユニーク dir を使い、残骸を掃除する。"
+created_at = 1786451503
+updated_at = 1790982734
+weight = 0.0
+issue_number = 243
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/243"

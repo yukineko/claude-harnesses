@@ -1196,25 +1196,6 @@ issue_number = 234
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/234"
 
 [[task]]
-id = "a6608aa0"
-title = "condukt の precedent/escalate テスト fixture が pid 名の共有 temp dir を再入し cargo test -p condukt が確率的に赤くなる"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "flaky",
-    "condukt",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "2026-08-11、独立 verifier が 10 回の full unit-suite 実行のうち 1 回で再現。落ちたのは escalate::tests::add_creates_new_open_record_after_resolve / precedent::tests::record_appends_multiple / precedent::tests::record_persists_and_is_retrievable の 3 本 (735 passed / 3 failed)。原因: crates/condukt/src/precedent.rs:271 と crates/condukt/src/escalate.rs:222 が fixture dir を temp_dir()/condukt-<kind>-<tag>-<pid>-<seq> という pid 由来の名前で create_dir_all しており、既存 dir に黙って再入する。後始末もしないため temp には condukt-precedent-* が 1548 件、condukt-escalate-* が 3092 件残っており、いくつかは古い precedents.json を保持している。pid が再利用されると assert_eq!(all.len(), 1) が残骸を数えて落ちる。state.rs:2266 が mkdtemp で既に直したのと同じハザード。回帰ではない (precedent.rs/escalate.rs は HEAD~1 と byte 同一)。修正方針: mkdtemp 相当のユニーク dir を使い、残骸を掃除する。"
-created_at = 1786451503
-updated_at = 1786451503
-weight = 0.0
-issue_number = 243
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/243"
-
-[[task]]
 id = "42478392"
 title = "condukt: 実 state root に 2410 個の namespace が溜まっている (大半がテスト由来の -tmpXXXX)"
 project = "/Users/yuki/src/harness"
@@ -13426,15 +13407,19 @@ title = "cargo test -p condukt で 1 件の未特定 flake を観測（4 回中 
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = [
-    "flaky",
     "condukt",
-    "p2",
+    "p1",
 ]
 touched_files = []
 status = "pending"
-notes = "観測 2026-10-03、branch flow-dc66/condukt-fixture (abd9b7c6 + precedent/escalate fixture 修正)。集計で 871 passed / 1 failed が 1 回、その後 4 回連続 0 failed。失敗テスト名は未取得。読み (a) a6608aa0 と同類の pid 名 temp fixture 再入が他モジュールにも残る / (b) 並行セッションの cargo test と固定パス fixture の干渉。見分け方: 20 回回して FAILED 行を保存し、temp_dir()+process::id() 命名の fixture を grep。"
+notes = """
+観測 2026-10-03、branch flow-dc66/condukt-fixture (abd9b7c6 + precedent/escalate fixture 修正)。集計で 871 passed / 1 failed が 1 回、その後 4 回連続 0 failed。失敗テスト名は未取得。読み (a) a6608aa0 と同類の pid 名 temp fixture 再入が他モジュールにも残る / (b) 並行セッションの cargo test と固定パス fixture の干渉。見分け方: 20 回回して FAILED 行を保存し、temp_dir()+process::id() 命名の fixture を grep。
+
+[identified 2026-10-03, independent verifier on flow-dc66/condukt-fixture] cargo test -p condukt --no-fail-fast x3: run1/run2 exit 101, run3 exit 0. Same single failure both times: diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded at crates/condukt/src/diffrisk_record.rs:537 (outcomes.len()==2 'one record per invocation', left 1 right 2). Passes 3/3 when diffrisk_record runs alone. Hypothesis (unverified): process-global env mutation by sibling tests (claim.rs:2567 set_var HOME; lessons.rs:249 LESSONS_STORE_DIR) racing Config::load()/state dir. Not yet run on main to confirm it predates the branch.
+
+[re-measured 2026-10-03 on main-equivalent tree 394c8832 (no condukt-fixture changes)] cargo test -p condukt --bin condukt --no-fail-fast x2: FAILED 2/2, same test diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded (diffrisk_record.rs:537), 875 passed 1 failed. NOT a rare flake: red in nearly every full run (4/5 total observations), green when the module runs alone. Pre-existing on main."""
 created_at = 1790981495
-updated_at = 1790981495
+updated_at = 1790982759
 weight = 0.0
 issue_number = 1084
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1084"
@@ -13483,3 +13468,33 @@ updated_at = 1790981958
 weight = 0.0
 issue_number = 1087
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1087"
+
+[[task]]
+id = "6a74e779"
+title = "condukt subagent_stop.rs:301 tmpdir: 時計エラー時 .unwrap_or(0) で名前が <tag>-<pid>-0 に縮退し、pid 再利用で残骸 dir に create_dir_all 再入する (a6608aa0 の条件付き双子)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "a6608aa0 worker の分類 (2026-10-03 @52e967a2): subagent_stop.rs:301 の test fixture は pid+nanos 名だが nanos 取得失敗時 unwrap_or(0)。時計が正常な限り安全。同形の lock.rs:464/557/639/688/733/838 は now_unix_nanos() を使用 — それ自体が 0 へ fallback するかは未確認 (確認要)。gate_exec.rs:456 は unwrap() で fallback なし。いずれも後始末しないので temp に dir が溜まる。修正案: precedent/escalate/claim と同じ tempfile::Builder guard。別件 (未検証): wt_reconcile.rs:1569 temp_index_path は同一プロセス内の同一 path 並行 content_tree で GIT_INDEX_FILE を共有しうる。"
+created_at = 1790982260
+updated_at = 1790982260
+weight = 0.0
+issue_number = 1088
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1088"
+
+[[task]]
+id = "18fe626f"
+title = "rollout の prune が live session 使用中の version dir を消す: .in_use マーカーが 22 plugin にしか無く condukt/backlog/donegate/blastguard 等は無保護 → 稼働中セッションの CLI が PATH から消え、gate hook が暗転しうる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-03 (session dc66e988, 開始 1790980140): セッション PATH は condukt/0.7.199/bin・backlog/0.3.20/bin 等を指していたが、別セッション 798a05c3 の rollout (condukt 0.7.200 deployed_at 1790980978) 後 0.7.199 dir が消え、condukt/backlog が 'command not found'。main-tree-guard pre-commit も 'no condukt binary found' で block。ls -d ~/.claude/plugins/cache/yukineko/*/*/.in_use は 22 件のみ (autoflow, beacon, compass, ..., tdd, propguard, reviewgate) で condukt/backlog/donegate/blastguard/stuckguard/overwatch に .in_use は無い。prune-plugin-cache.py は '.in_use/<pid> for a live pid' の dir だけを保持する。既存調査 (tasks.toml の orphaned_at 節) によれば .in_use の書き手は Claude Code 本体 (claude.exe)。読み (a) 欠陥: .in_use が書かれない plugin の dir は live でも prune される → 稼働セッションの Stop gate (donegate 等) が暗転 = fail-open / (b) .in_use は別の意味 (例: skills を持つ plugin のみ) で、prune 側が live 判定に不十分なシグナルを使っている。見分け方: .in_use を持つ/持たない plugin の共通項 (bin の有無・hooks の有無) を比較。暫定回避: 自セッションは cache の現存 bin dir を PATH 先頭に足して継続。今回 rollout は保留した (同じ破壊を他セッションに与えるため)。"
+created_at = 1790982810
+updated_at = 1790982810
+weight = 0.0
+issue_number = 1089
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1089"

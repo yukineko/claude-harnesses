@@ -1607,12 +1607,43 @@ mod tests {
         }
     }
 
-    fn make_tmp_dir(tag: &str) -> PathBuf {
-        let n = SEQ.fetch_add(1, Ordering::Relaxed);
-        let p =
-            std::env::temp_dir().join(format!("condukt-claim-{tag}-{}-{n}", std::process::id()));
-        std::fs::create_dir_all(&p).unwrap();
-        p
+    /// Unique fixture dir via atomic `mkdtemp` (backlog a6608aa0): never
+    /// re-enters a leftover dir from a recycled pid, and the returned guard
+    /// removes the dir on drop so fixtures no longer pile up in temp.
+    fn make_tmp_dir(tag: &str) -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix(&format!("condukt-claim-{tag}-"))
+            .tempdir()
+            .expect("tempdir")
+    }
+
+    /// backlog a6608aa0: a fixture dir must never be a leftover from an earlier
+    /// run. The old `condukt-claim-<tag>-<pid>-<seq>` name re-entered such a dir
+    /// on pid reuse and the stale claims.json inside leaked into the test. Seed
+    /// every name the old scheme could hand out next, then require an EMPTY dir.
+    #[test]
+    fn make_tmp_dir_never_reenters_a_leftover_dir() {
+        let upto = SEQ.load(Ordering::Relaxed) + 256;
+        let seeded: Vec<PathBuf> = (0..upto)
+            .map(|n| {
+                let d = std::env::temp_dir()
+                    .join(format!("condukt-claim-collide-{}-{n}", std::process::id()));
+                std::fs::create_dir_all(&d).unwrap();
+                std::fs::write(d.join("claims.json"), "stale-from-a-dead-run").unwrap();
+                d
+            })
+            .collect();
+        let fresh = make_tmp_dir("collide");
+        let p: &Path = fresh.as_ref();
+        let leftovers: Vec<_> = std::fs::read_dir(p).unwrap().flatten().collect();
+        for d in &seeded {
+            let _ = std::fs::remove_dir_all(d);
+        }
+        assert!(
+            leftovers.is_empty(),
+            "fixture dir {} re-entered a leftover dir: {leftovers:?}",
+            p.display()
+        );
     }
 
     // `unique_tmp` must derive a DISTINCT temp path per call even within one
@@ -1622,7 +1653,8 @@ mod tests {
     // half-written registry. RED with the fixed name (all equal), GREEN here.
     #[test]
     fn unique_tmp_names_are_distinct_per_call() {
-        let path = make_tmp_dir("uniq").join("claims.json");
+        let tmp_dir = make_tmp_dir("uniq");
+        let path = tmp_dir.path().join("claims.json");
         let a = unique_tmp(&path, "json");
         let b = unique_tmp(&path, "json");
         let c = unique_tmp(&path, "json");
@@ -1644,7 +1676,8 @@ mod tests {
     // corrupt window).
     #[test]
     fn concurrent_saves_never_publish_corrupt_registry() {
-        let path = make_tmp_dir("concurrent-save").join("claims.json");
+        let tmp_dir = make_tmp_dir("concurrent-save");
+        let path = tmp_dir.path().join("claims.json");
         // A non-trivial registry so a truncated/interleaved write fails to parse.
         let mut reg = Registry::default();
         for i in 0..400 {
@@ -1692,11 +1725,12 @@ mod tests {
     /// A fresh claim ⇒ `Live`. Establishes liveness via the real claim path.
     #[test]
     fn run_liveness_live_for_fresh_claim() {
-        let tmp = make_tmp_dir("live");
-        let cfg = make_cfg(&tmp);
+        let tmp_dir = make_tmp_dir("live");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
         let now = 1_000_000;
-        claim_files(&cfg, &tmp, "run", Some("sess"), &files(&["a.txt"]), now).unwrap();
-        assert_eq!(run_liveness(&cfg, &tmp, "run", now), RunLiveness::Live);
+        claim_files(&cfg, tmp, "run", Some("sess"), &files(&["a.txt"]), now).unwrap();
+        assert_eq!(run_liveness(&cfg, tmp, "run", now), RunLiveness::Live);
     }
 
     /// A genuinely-absent registry ⇒ `Dead` (no claims exist for anyone). This
@@ -1704,26 +1738,25 @@ mod tests {
     /// stay `Dead` so a stale hold from a finished run does not block forever.
     #[test]
     fn run_liveness_dead_when_registry_absent() {
-        let tmp = make_tmp_dir("absent");
-        let cfg = make_cfg(&tmp);
+        let tmp_dir = make_tmp_dir("absent");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
         // No claim ever written → claims.json does not exist.
-        assert!(!registry_path(&cfg, &tmp).exists());
-        assert_eq!(
-            run_liveness(&cfg, &tmp, "run", 1_000_000),
-            RunLiveness::Dead
-        );
+        assert!(!registry_path(&cfg, tmp).exists());
+        assert_eq!(run_liveness(&cfg, tmp, "run", 1_000_000), RunLiveness::Dead);
     }
 
     /// A claim whose heartbeat is past the stuck-TTL ⇒ `Dead` (the placer went
     /// silent — the reaper's own staleness).
     #[test]
     fn run_liveness_dead_when_claim_stale() {
-        let tmp = make_tmp_dir("stale");
-        let cfg = make_cfg(&tmp);
+        let tmp_dir = make_tmp_dir("stale");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
         let claimed_at = 1_000_000;
         claim_files(
             &cfg,
-            &tmp,
+            tmp,
             "run",
             Some("sess"),
             &files(&["a.txt"]),
@@ -1731,7 +1764,7 @@ mod tests {
         )
         .unwrap();
         let now = claimed_at + cfg.stuck_ttl_secs as i64 + 100;
-        assert_eq!(run_liveness(&cfg, &tmp, "run", now), RunLiveness::Dead);
+        assert_eq!(run_liveness(&cfg, tmp, "run", now), RunLiveness::Dead);
     }
 
     /// A present-but-UNREADABLE registry ⇒ `Undetermined`, NOT `Dead`. This is
@@ -1741,13 +1774,14 @@ mod tests {
     /// returned "not live" ⇒ the gate would map it to Dead and merge).
     #[test]
     fn run_liveness_undetermined_when_registry_unreadable() {
-        let tmp = make_tmp_dir("corrupt");
-        let cfg = make_cfg(&tmp);
-        let path = registry_path(&cfg, &tmp);
+        let tmp_dir = make_tmp_dir("corrupt");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
+        let path = registry_path(&cfg, tmp);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, b"{ this is not valid json ]]").unwrap();
         assert_eq!(
-            run_liveness(&cfg, &tmp, "run", 1_000_000),
+            run_liveness(&cfg, tmp, "run", 1_000_000),
             RunLiveness::Undetermined
         );
     }
@@ -1757,10 +1791,11 @@ mod tests {
     /// ambiguous data.
     #[test]
     fn run_liveness_undetermined_for_empty_run_id() {
-        let tmp = make_tmp_dir("empty-id");
-        let cfg = make_cfg(&tmp);
+        let tmp_dir = make_tmp_dir("empty-id");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
         assert_eq!(
-            run_liveness(&cfg, &tmp, "", 1_000_000),
+            run_liveness(&cfg, tmp, "", 1_000_000),
             RunLiveness::Undetermined
         );
     }
@@ -1801,48 +1836,44 @@ mod tests {
 
     #[test]
     fn first_claim_succeeds_and_persists() {
-        let tmp = make_tmp_dir("first");
-        let cfg = make_cfg(&tmp);
-        let out = claim_files(
-            &cfg,
-            &tmp,
-            "runA",
-            Some("sessA"),
-            &files(&["src/a.rs"]),
-            100,
-        )
-        .unwrap();
+        let tmp_dir = make_tmp_dir("first");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
+        let out =
+            claim_files(&cfg, tmp, "runA", Some("sessA"), &files(&["src/a.rs"]), 100).unwrap();
         assert_eq!(out.claimed, vec!["src/a.rs".to_string()]);
         assert!(out.skipped.is_empty());
         // Persisted and visible.
-        let live = active_claims(&cfg, &tmp, 100).unwrap();
+        let live = active_claims(&cfg, tmp, 100).unwrap();
         assert_eq!(live.files.len(), 1);
         assert_eq!(live.files["src/a.rs"].run_id, "runA");
     }
 
     #[test]
     fn conflicting_claim_from_other_run_is_hard_skipped() {
-        let tmp = make_tmp_dir("conflict");
-        let cfg = make_cfg(&tmp);
-        claim_files(&cfg, &tmp, "runA", None, &files(&["src/a.rs"]), 100).unwrap();
+        let tmp_dir = make_tmp_dir("conflict");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
+        claim_files(&cfg, tmp, "runA", None, &files(&["src/a.rs"]), 100).unwrap();
         // Different run tries the same file → skipped, not claimed.
-        let out = claim_files(&cfg, &tmp, "runB", None, &files(&["src/a.rs"]), 101).unwrap();
+        let out = claim_files(&cfg, tmp, "runB", None, &files(&["src/a.rs"]), 101).unwrap();
         assert!(out.claimed.is_empty());
         assert_eq!(out.skipped.len(), 1);
         assert_eq!(out.skipped[0].holder_run, "runA");
         // The file is still owned by runA.
-        let live = active_claims(&cfg, &tmp, 102).unwrap();
+        let live = active_claims(&cfg, tmp, 102).unwrap();
         assert_eq!(live.files["src/a.rs"].run_id, "runA");
     }
 
     #[test]
     fn partial_batch_claims_free_files_only() {
-        let tmp = make_tmp_dir("partial");
-        let cfg = make_cfg(&tmp);
-        claim_files(&cfg, &tmp, "runA", None, &files(&["src/a.rs"]), 100).unwrap();
+        let tmp_dir = make_tmp_dir("partial");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
+        claim_files(&cfg, tmp, "runA", None, &files(&["src/a.rs"]), 100).unwrap();
         let out = claim_files(
             &cfg,
-            &tmp,
+            tmp,
             "runB",
             None,
             &files(&["src/a.rs", "src/b.rs"]),
@@ -1856,60 +1887,65 @@ mod tests {
 
     #[test]
     fn glob_overlap_is_detected() {
-        let tmp = make_tmp_dir("glob");
-        let cfg = make_cfg(&tmp);
-        claim_files(&cfg, &tmp, "runA", None, &files(&["src/*.rs"]), 100).unwrap();
-        let out = claim_files(&cfg, &tmp, "runB", None, &files(&["src/a.rs"]), 101).unwrap();
+        let tmp_dir = make_tmp_dir("glob");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
+        claim_files(&cfg, tmp, "runA", None, &files(&["src/*.rs"]), 100).unwrap();
+        let out = claim_files(&cfg, tmp, "runB", None, &files(&["src/a.rs"]), 101).unwrap();
         assert!(out.claimed.is_empty(), "src/a.rs overlaps src/*.rs");
         assert_eq!(out.skipped.len(), 1);
     }
 
     #[test]
     fn same_run_reclaim_refreshes_heartbeat_and_keeps_claimed_at() {
-        let tmp = make_tmp_dir("reclaim");
-        let cfg = make_cfg(&tmp);
-        claim_files(&cfg, &tmp, "runA", None, &files(&["src/a.rs"]), 100).unwrap();
-        let out = claim_files(&cfg, &tmp, "runA", None, &files(&["src/a.rs"]), 200).unwrap();
+        let tmp_dir = make_tmp_dir("reclaim");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
+        claim_files(&cfg, tmp, "runA", None, &files(&["src/a.rs"]), 100).unwrap();
+        let out = claim_files(&cfg, tmp, "runA", None, &files(&["src/a.rs"]), 200).unwrap();
         assert_eq!(out.claimed, vec!["src/a.rs".to_string()]);
-        let live = active_claims(&cfg, &tmp, 200).unwrap();
+        let live = active_claims(&cfg, tmp, 200).unwrap();
         assert_eq!(live.files["src/a.rs"].claimed_at, 100);
         assert_eq!(live.files["src/a.rs"].heartbeat_at, 200);
     }
 
     #[test]
     fn release_files_frees_the_slot() {
-        let tmp = make_tmp_dir("release");
-        let cfg = make_cfg(&tmp);
-        claim_files(&cfg, &tmp, "runA", None, &files(&["src/a.rs"]), 100).unwrap();
-        let n = release_files(&cfg, &tmp, "runA", &files(&["src/a.rs"])).unwrap();
+        let tmp_dir = make_tmp_dir("release");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
+        claim_files(&cfg, tmp, "runA", None, &files(&["src/a.rs"]), 100).unwrap();
+        let n = release_files(&cfg, tmp, "runA", &files(&["src/a.rs"])).unwrap();
         assert_eq!(n, 1);
         // Now runB can take it.
-        let out = claim_files(&cfg, &tmp, "runB", None, &files(&["src/a.rs"]), 101).unwrap();
+        let out = claim_files(&cfg, tmp, "runB", None, &files(&["src/a.rs"]), 101).unwrap();
         assert_eq!(out.claimed, vec!["src/a.rs".to_string()]);
     }
 
     #[test]
     fn release_run_frees_all_its_files() {
-        let tmp = make_tmp_dir("release-run");
-        let cfg = make_cfg(&tmp);
+        let tmp_dir = make_tmp_dir("release-run");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
         claim_files(
             &cfg,
-            &tmp,
+            tmp,
             "runA",
             None,
             &files(&["src/a.rs", "src/b.rs"]),
             100,
         )
         .unwrap();
-        let n = release_run(&cfg, &tmp, "runA").unwrap();
+        let n = release_run(&cfg, tmp, "runA").unwrap();
         assert_eq!(n, 2);
-        assert!(active_claims(&cfg, &tmp, 101).unwrap().files.is_empty());
+        assert!(active_claims(&cfg, tmp, 101).unwrap().files.is_empty());
     }
 
     #[test]
     fn stale_claim_with_confirmed_stalled_progress_is_reaped_and_reclaimable() {
-        let tmp = make_tmp_dir("stale-hb");
-        let cfg = make_cfg(&tmp);
+        let tmp_dir = make_tmp_dir("stale-hb");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
         // A claim whose heartbeat is far in the past — the holding session went
         // quiet without releasing. Heartbeat-staleness alone is NOT enough to
         // reap now; the run's progress must be CONFIRMED Stalled. Force that
@@ -1928,11 +1964,11 @@ mod tests {
                 stateless: false,
             },
         );
-        save(&registry_path(&cfg, &tmp), &reg).unwrap();
+        save(&registry_path(&cfg, tmp), &reg).unwrap();
         // now = ttl + 1 past the heartbeat → eligible; confirmed Stalled → reaped.
         let now = cfg.stuck_ttl_secs as i64 + 1;
         let out = test_hook::with_forced(Determination::Known(Liveness::Stalled), || {
-            claim_files(&cfg, &tmp, "runB", None, &files(&["src/a.rs"]), now).unwrap()
+            claim_files(&cfg, tmp, "runB", None, &files(&["src/a.rs"]), now).unwrap()
         });
         assert_eq!(out.claimed, vec!["src/a.rs".to_string()]);
         assert!(out.skipped.is_empty());
@@ -1940,8 +1976,9 @@ mod tests {
 
     #[test]
     fn stale_claim_but_progressing_is_not_reaped() {
-        let tmp = make_tmp_dir("stale-hb-progressing");
-        let cfg = make_cfg(&tmp);
+        let tmp_dir = make_tmp_dir("stale-hb-progressing");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
         // Same heartbeat-stale claim, but the run is still doing durable work.
         // The quiet holder must be PRESERVED — reaping it would force-steal a
         // live-but-quiet session (the exact fail-open this gate closes).
@@ -1958,10 +1995,10 @@ mod tests {
                 stateless: false,
             },
         );
-        save(&registry_path(&cfg, &tmp), &reg).unwrap();
+        save(&registry_path(&cfg, tmp), &reg).unwrap();
         let now = cfg.stuck_ttl_secs as i64 + 1;
         let out = test_hook::with_forced(Determination::Known(Liveness::Progressing), || {
-            claim_files(&cfg, &tmp, "runB", None, &files(&["src/a.rs"]), now).unwrap()
+            claim_files(&cfg, tmp, "runB", None, &files(&["src/a.rs"]), now).unwrap()
         });
         assert!(out.claimed.is_empty(), "progressing holder must be kept");
         assert_eq!(out.skipped.len(), 1);
@@ -1970,8 +2007,9 @@ mod tests {
 
     #[test]
     fn stale_claim_with_undetermined_progress_is_not_reaped() {
-        let tmp = make_tmp_dir("stale-hb-undet");
-        let cfg = make_cfg(&tmp);
+        let tmp_dir = make_tmp_dir("stale-hb-undet");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
         // Progress could not be established (unreadable signals / no prior sample
         // / window not elapsed). "Cannot determine" must resolve to the
         // restrictive side: the claim is KEPT, never reaped.
@@ -1988,11 +2026,11 @@ mod tests {
                 stateless: false,
             },
         );
-        save(&registry_path(&cfg, &tmp), &reg).unwrap();
+        save(&registry_path(&cfg, tmp), &reg).unwrap();
         let now = cfg.stuck_ttl_secs as i64 + 1;
         let undet = Determination::undetermined("no sample yet");
         let out = test_hook::with_forced(undet, || {
-            claim_files(&cfg, &tmp, "runB", None, &files(&["src/a.rs"]), now).unwrap()
+            claim_files(&cfg, tmp, "runB", None, &files(&["src/a.rs"]), now).unwrap()
         });
         assert!(
             out.claimed.is_empty(),
@@ -2004,8 +2042,9 @@ mod tests {
 
     #[test]
     fn fresh_heartbeat_is_not_reaped_regardless_of_pid() {
-        let tmp = make_tmp_dir("fresh-hb");
-        let cfg = make_cfg(&tmp);
+        let tmp_dir = make_tmp_dir("fresh-hb");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
         // Hand-write a claim from a pid that is certainly not this process, but
         // with a fresh heartbeat: it must be RETAINED (pid is not a liveness
         // signal — the ephemeral-CLI reality).
@@ -2022,9 +2061,9 @@ mod tests {
                 stateless: false,
             },
         );
-        save(&registry_path(&cfg, &tmp), &reg).unwrap();
+        save(&registry_path(&cfg, tmp), &reg).unwrap();
         // Within TTL of the heartbeat → still held → runB is skipped.
-        let out = claim_files(&cfg, &tmp, "runB", None, &files(&["src/a.rs"]), 200).unwrap();
+        let out = claim_files(&cfg, tmp, "runB", None, &files(&["src/a.rs"]), 200).unwrap();
         assert!(out.claimed.is_empty());
         assert_eq!(out.skipped.len(), 1);
         assert_eq!(out.skipped[0].holder_run, "other");
@@ -2032,14 +2071,15 @@ mod tests {
 
     #[test]
     fn heartbeat_keeps_live_claim_protected() {
-        let tmp = make_tmp_dir("hb-protect");
-        let cfg = make_cfg(&tmp);
-        claim_files(&cfg, &tmp, "runA", None, &files(&["src/a.rs"]), 0).unwrap();
+        let tmp_dir = make_tmp_dir("hb-protect");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
+        claim_files(&cfg, tmp, "runA", None, &files(&["src/a.rs"]), 0).unwrap();
         // Heartbeat just before the TTL window would expire.
         let ttl = cfg.stuck_ttl_secs as i64;
-        heartbeat(&cfg, &tmp, "runA", ttl).unwrap();
+        heartbeat(&cfg, tmp, "runA", ttl).unwrap();
         // A later claim from runB, within TTL of the heartbeat, is still skipped.
-        let out = claim_files(&cfg, &tmp, "runB", None, &files(&["src/a.rs"]), ttl + 1).unwrap();
+        let out = claim_files(&cfg, tmp, "runB", None, &files(&["src/a.rs"]), ttl + 1).unwrap();
         assert!(out.claimed.is_empty());
         assert_eq!(out.skipped.len(), 1);
     }
@@ -2057,14 +2097,15 @@ mod tests {
     /// corruption — is the reason the registry is empty.
     #[test]
     fn corrupt_registry_refuses_the_claim_and_is_not_clobbered() {
-        let tmp = make_tmp_dir("corrupt-refuse");
-        let cfg = make_cfg(&tmp);
-        let path = registry_path(&cfg, &tmp);
+        let tmp_dir = make_tmp_dir("corrupt-refuse");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
+        let path = registry_path(&cfg, tmp);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let corrupt: &[u8] = b"not json at all {{{";
         std::fs::write(&path, corrupt).unwrap();
 
-        let err = claim_files(&cfg, &tmp, "runA", None, &files(&["src/a.rs"]), 100)
+        let err = claim_files(&cfg, tmp, "runA", None, &files(&["src/a.rs"]), 100)
             .expect_err("an unreadable registry must not grant a claim");
         let msg = format!("{err:#}");
         assert!(
@@ -2084,12 +2125,13 @@ mod tests {
     /// above could degrade into a blanket refusal.
     #[test]
     fn absent_registry_is_empty_and_claim_succeeds() {
-        let tmp = make_tmp_dir("absent-ok");
-        let cfg = make_cfg(&tmp);
-        let path = registry_path(&cfg, &tmp);
+        let tmp_dir = make_tmp_dir("absent-ok");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
+        let path = registry_path(&cfg, tmp);
         assert!(!path.exists(), "precondition: no registry yet");
 
-        let out = claim_files(&cfg, &tmp, "runA", None, &files(&["src/a.rs"]), 100).unwrap();
+        let out = claim_files(&cfg, tmp, "runA", None, &files(&["src/a.rs"]), 100).unwrap();
         assert_eq!(out.claimed, vec!["src/a.rs".to_string()]);
         assert!(load_known(&path).files.contains_key("src/a.rs"));
     }
@@ -2099,30 +2141,31 @@ mod tests {
     /// permanent loss of every other session's claims.
     #[test]
     fn corrupt_registry_refuses_release_and_heartbeat_without_clobbering() {
-        let tmp = make_tmp_dir("corrupt-release");
-        let cfg = make_cfg(&tmp);
-        let path = registry_path(&cfg, &tmp);
+        let tmp_dir = make_tmp_dir("corrupt-release");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
+        let path = registry_path(&cfg, tmp);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let corrupt: &[u8] = b"{ truncated";
         std::fs::write(&path, corrupt).unwrap();
 
-        assert!(release_run(&cfg, &tmp, "runA").is_err(), "release_run");
+        assert!(release_run(&cfg, tmp, "runA").is_err(), "release_run");
         assert!(
-            release_files(&cfg, &tmp, "runA", &files(&["src/a.rs"])).is_err(),
+            release_files(&cfg, tmp, "runA", &files(&["src/a.rs"])).is_err(),
             "release_files"
         );
         assert!(
-            release_tasks(&cfg, &tmp, &files(&["hk1"])).is_err(),
+            release_tasks(&cfg, tmp, &files(&["hk1"])).is_err(),
             "release_tasks"
         );
-        assert!(heartbeat(&cfg, &tmp, "runA", 100).is_err(), "heartbeat");
+        assert!(heartbeat(&cfg, tmp, "runA", 100).is_err(), "heartbeat");
         assert!(
-            claim_tasks(&cfg, &tmp, &files(&["hk1"]), "runA", None, 100, None, false).is_err(),
+            claim_tasks(&cfg, tmp, &files(&["hk1"]), "runA", None, 100, None, false).is_err(),
             "claim_tasks"
         );
-        assert!(active_claims(&cfg, &tmp, 100).is_err(), "active_claims");
+        assert!(active_claims(&cfg, tmp, 100).is_err(), "active_claims");
         assert!(
-            write_execution_state(&cfg, &tmp, 100).is_err(),
+            write_execution_state(&cfg, tmp, 100).is_err(),
             "write_execution_state"
         );
 
@@ -2137,11 +2180,12 @@ mod tests {
 
     #[test]
     fn task_claim_succeeds_and_persists_with_title() {
-        let tmp = make_tmp_dir("task-first");
-        let cfg = make_cfg(&tmp);
+        let tmp_dir = make_tmp_dir("task-first");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
         let out = claim_tasks(
             &cfg,
-            &tmp,
+            tmp,
             &files(&["hk-1"]),
             "runA",
             Some("sessA"),
@@ -2152,7 +2196,7 @@ mod tests {
         .unwrap();
         assert_eq!(out.claimed, vec!["hk-1".to_string()]);
         assert!(out.skipped.is_empty());
-        let live = active_claims(&cfg, &tmp, 100).unwrap();
+        let live = active_claims(&cfg, tmp, 100).unwrap();
         assert_eq!(live.task_claims["hk-1"].run_id, "runA");
         assert_eq!(
             live.task_claims["hk-1"].title.as_deref(),
@@ -2164,43 +2208,26 @@ mod tests {
 
     #[test]
     fn same_task_held_by_another_live_run_is_skipped() {
-        let tmp = make_tmp_dir("task-conflict");
-        let cfg = make_cfg(&tmp);
-        claim_tasks(
-            &cfg,
-            &tmp,
-            &files(&["hk-1"]),
-            "runA",
-            None,
-            100,
-            None,
-            false,
-        )
-        .unwrap();
-        let out = claim_tasks(
-            &cfg,
-            &tmp,
-            &files(&["hk-1"]),
-            "runB",
-            None,
-            101,
-            None,
-            false,
-        )
-        .unwrap();
+        let tmp_dir = make_tmp_dir("task-conflict");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
+        claim_tasks(&cfg, tmp, &files(&["hk-1"]), "runA", None, 100, None, false).unwrap();
+        let out =
+            claim_tasks(&cfg, tmp, &files(&["hk-1"]), "runB", None, 101, None, false).unwrap();
         assert!(out.claimed.is_empty());
         assert_eq!(out.skipped.len(), 1);
         assert_eq!(out.skipped[0].file, "hk-1");
         assert_eq!(out.skipped[0].holder_run, "runA");
         // Still owned by runA.
-        let live = active_claims(&cfg, &tmp, 102).unwrap();
+        let live = active_claims(&cfg, tmp, 102).unwrap();
         assert_eq!(live.task_claims["hk-1"].run_id, "runA");
     }
 
     #[test]
     fn stale_task_claim_with_confirmed_stalled_progress_is_reaped_and_reclaimable() {
-        let tmp = make_tmp_dir("task-stale");
-        let cfg = make_cfg(&tmp);
+        let tmp_dir = make_tmp_dir("task-stale");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
         let mut reg = Registry::default();
         reg.task_claims.insert(
             "hk-1".to_string(),
@@ -2214,24 +2241,15 @@ mod tests {
                 stateless: false,
             },
         );
-        save(&registry_path(&cfg, &tmp), &reg).unwrap();
+        save(&registry_path(&cfg, tmp), &reg).unwrap();
         // now past the TTL of the heartbeat → eligible; confirmed Stalled → reaped.
         let now = cfg.stuck_ttl_secs as i64 + 1;
         let out = test_hook::with_forced(Determination::Known(Liveness::Stalled), || {
             // The reclaiming acquire AND the observability read both reap under a
             // Stalled verdict, so hold the seam across both.
-            let out = claim_tasks(
-                &cfg,
-                &tmp,
-                &files(&["hk-1"]),
-                "runB",
-                None,
-                now,
-                None,
-                false,
-            )
-            .unwrap();
-            let live = active_claims(&cfg, &tmp, now).unwrap();
+            let out =
+                claim_tasks(&cfg, tmp, &files(&["hk-1"]), "runB", None, now, None, false).unwrap();
+            let live = active_claims(&cfg, tmp, now).unwrap();
             assert_eq!(live.task_claims["hk-1"].run_id, "runB");
             out
         });
@@ -2241,8 +2259,9 @@ mod tests {
 
     #[test]
     fn stale_task_claim_but_progressing_is_not_reaped() {
-        let tmp = make_tmp_dir("task-stale-progressing");
-        let cfg = make_cfg(&tmp);
+        let tmp_dir = make_tmp_dir("task-stale-progressing");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
         let mut reg = Registry::default();
         reg.task_claims.insert(
             "hk-1".to_string(),
@@ -2256,20 +2275,10 @@ mod tests {
                 stateless: false,
             },
         );
-        save(&registry_path(&cfg, &tmp), &reg).unwrap();
+        save(&registry_path(&cfg, tmp), &reg).unwrap();
         let now = cfg.stuck_ttl_secs as i64 + 1;
         let out = test_hook::with_forced(Determination::Known(Liveness::Progressing), || {
-            claim_tasks(
-                &cfg,
-                &tmp,
-                &files(&["hk-1"]),
-                "runB",
-                None,
-                now,
-                None,
-                false,
-            )
-            .unwrap()
+            claim_tasks(&cfg, tmp, &files(&["hk-1"]), "runB", None, now, None, false).unwrap()
         });
         assert!(
             out.claimed.is_empty(),
@@ -2281,68 +2290,42 @@ mod tests {
 
     #[test]
     fn release_tasks_frees_the_hashkey() {
-        let tmp = make_tmp_dir("task-release");
-        let cfg = make_cfg(&tmp);
-        claim_tasks(
-            &cfg,
-            &tmp,
-            &files(&["hk-1"]),
-            "runA",
-            None,
-            100,
-            None,
-            false,
-        )
-        .unwrap();
-        let n = release_tasks(&cfg, &tmp, &files(&["hk-1"])).unwrap();
+        let tmp_dir = make_tmp_dir("task-release");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
+        claim_tasks(&cfg, tmp, &files(&["hk-1"]), "runA", None, 100, None, false).unwrap();
+        let n = release_tasks(&cfg, tmp, &files(&["hk-1"])).unwrap();
         assert_eq!(n, 1);
         // Now runB can take it.
-        let out = claim_tasks(
-            &cfg,
-            &tmp,
-            &files(&["hk-1"]),
-            "runB",
-            None,
-            101,
-            None,
-            false,
-        )
-        .unwrap();
+        let out =
+            claim_tasks(&cfg, tmp, &files(&["hk-1"]), "runB", None, 101, None, false).unwrap();
         assert_eq!(out.claimed, vec!["hk-1".to_string()]);
     }
 
     #[test]
     fn release_run_drops_both_file_and_task_claims() {
-        let tmp = make_tmp_dir("task-release-run");
-        let cfg = make_cfg(&tmp);
-        claim_files(&cfg, &tmp, "runA", None, &files(&["src/a.rs"]), 100).unwrap();
-        claim_tasks(
-            &cfg,
-            &tmp,
-            &files(&["hk-1"]),
-            "runA",
-            None,
-            100,
-            None,
-            false,
-        )
-        .unwrap();
-        let n = release_run(&cfg, &tmp, "runA").unwrap();
+        let tmp_dir = make_tmp_dir("task-release-run");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
+        claim_files(&cfg, tmp, "runA", None, &files(&["src/a.rs"]), 100).unwrap();
+        claim_tasks(&cfg, tmp, &files(&["hk-1"]), "runA", None, 100, None, false).unwrap();
+        let n = release_run(&cfg, tmp, "runA").unwrap();
         assert_eq!(n, 2, "one file + one task claim released");
-        let live = active_claims(&cfg, &tmp, 101).unwrap();
+        let live = active_claims(&cfg, tmp, 101).unwrap();
         assert!(live.files.is_empty());
         assert!(live.task_claims.is_empty());
     }
 
     #[test]
     fn heartbeat_refreshes_both_file_and_task_claims() {
-        let tmp = make_tmp_dir("task-hb");
-        let cfg = make_cfg(&tmp);
-        claim_files(&cfg, &tmp, "runA", None, &files(&["src/a.rs"]), 0).unwrap();
-        claim_tasks(&cfg, &tmp, &files(&["hk-1"]), "runA", None, 0, None, false).unwrap();
-        let n = heartbeat(&cfg, &tmp, "runA", 500).unwrap();
+        let tmp_dir = make_tmp_dir("task-hb");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
+        claim_files(&cfg, tmp, "runA", None, &files(&["src/a.rs"]), 0).unwrap();
+        claim_tasks(&cfg, tmp, &files(&["hk-1"]), "runA", None, 0, None, false).unwrap();
+        let n = heartbeat(&cfg, tmp, "runA", 500).unwrap();
         assert_eq!(n, 2, "both the file and the task claim refreshed");
-        let live = active_claims(&cfg, &tmp, 500).unwrap();
+        let live = active_claims(&cfg, tmp, 500).unwrap();
         assert_eq!(live.files["src/a.rs"].heartbeat_at, 500);
         assert_eq!(live.task_claims["hk-1"].heartbeat_at, 500);
     }
@@ -2408,11 +2391,12 @@ mod tests {
     fn write_execution_state_is_fail_soft_without_backlog() {
         // With no `backlog` binary on PATH the join yields null backlog fields, but
         // the held claims are still written and returned.
-        let tmp = make_tmp_dir("exec-failsoft");
-        let cfg = make_cfg(&tmp);
+        let tmp_dir = make_tmp_dir("exec-failsoft");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
         claim_tasks(
             &cfg,
-            &tmp,
+            tmp,
             &files(&["hk-1"]),
             "runA",
             Some("sessA"),
@@ -2421,13 +2405,13 @@ mod tests {
             false,
         )
         .unwrap();
-        let rows = write_execution_state(&cfg, &tmp, 100).unwrap();
+        let rows = write_execution_state(&cfg, tmp, 100).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].hashkey, "hk-1");
         assert_eq!(rows[0].claimed_by.run_id, "runA");
         assert_eq!(rows[0].title.as_deref(), Some("a task"));
         // The file was written beside claims.json and round-trips.
-        let path = execution_state_path(&cfg, &tmp);
+        let path = execution_state_path(&cfg, tmp);
         let txt = std::fs::read_to_string(&path).unwrap();
         let parsed: Vec<ExecutionEntry> = serde_json::from_str(&txt).unwrap();
         assert_eq!(parsed.len(), 1);
@@ -2444,11 +2428,12 @@ mod tests {
     #[test]
     fn contended_claims_lock_makes_claim_files_hard_skip_not_double_claim() {
         use std::time::Duration;
-        let tmp = make_tmp_dir("wedge-skip");
-        let cfg = make_cfg(&tmp);
+        let tmp_dir = make_tmp_dir("wedge-skip");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
 
         // Wedge a live holder of the reserved claims lock for the whole test.
-        let held = RunLock::acquire_or_skip(&cfg, &tmp, CLAIMS_LOCK_KEY)
+        let held = RunLock::acquire_or_skip(&cfg, tmp, CLAIMS_LOCK_KEY)
             .expect("precondition: wedge must genuinely hold the claims lock");
         assert!(
             held.held(),
@@ -2460,7 +2445,7 @@ mod tests {
         // unlocked and double-claim.
         let out = claim_files_with_deadline(
             &cfg,
-            &tmp,
+            tmp,
             "runB",
             Some("sessB"),
             &files(&["src/a.rs", "src/b.rs"]),
@@ -2487,7 +2472,7 @@ mod tests {
         );
 
         // Nothing was written to the registry (no unlocked double-claim).
-        let path = registry_path(&cfg, &tmp);
+        let path = registry_path(&cfg, tmp);
         assert!(
             !path.exists() || load_known(&path).files.is_empty(),
             "a contended claim must not persist any claim to the registry"
@@ -2500,16 +2485,17 @@ mod tests {
     fn old_bare_map_claims_json_still_loads() {
         // Backward compat: a pre-task-claims registry was a bare file->claim map.
         // The flattened `files` field must absorb it.
-        let tmp = make_tmp_dir("backcompat");
-        let cfg = make_cfg(&tmp);
-        let path = registry_path(&cfg, &tmp);
+        let tmp_dir = make_tmp_dir("backcompat");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
+        let path = registry_path(&cfg, tmp);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(
             &path,
             br#"{"src/a.rs":{"run_id":"runA","pid":1,"claimed_at":5,"heartbeat_at":5}}"#,
         )
         .unwrap();
-        let live = active_claims(&cfg, &tmp, 6).unwrap();
+        let live = active_claims(&cfg, tmp, 6).unwrap();
         assert_eq!(live.files["src/a.rs"].run_id, "runA");
         assert!(live.task_claims.is_empty());
     }
@@ -2683,10 +2669,11 @@ mod tests {
     /// dead holder's claim ever be reclaimed.
     #[test]
     fn claim_progress_stalled_when_run_worktree_frozen_though_repo_head_advances() {
-        let tmp = make_tmp_dir("claim-scope-stall");
+        let tmp_dir = make_tmp_dir("claim-scope-stall");
+        let tmp = tmp_dir.path();
         let wt = tmp.join("run-worktree");
         init_git_repo(&wt);
-        let (cfg, claim, home) = progress_fixture(&tmp, "runFrozen", Some(&wt));
+        let (cfg, claim, home) = progress_fixture(tmp, "runFrozen", Some(&wt));
         assert_eq!(
             repo_root(&wt),
             wt,
@@ -2699,7 +2686,7 @@ mod tests {
         // Sample 1 anchors the fingerprint. With no prior snapshot this is
         // Undetermined by construction; if it is not, the fixture is broken
         // (e.g. a signal was unreadable in a way the test did not intend).
-        let v1 = claim_progress(&cfg, &tmp, &claim, t0);
+        let v1 = claim_progress(&cfg, tmp, &claim, t0);
         assert!(
             matches!(v1, Determination::Undetermined(_)),
             "first sample (no prior snapshot) must be Undetermined, got {v1:?}"
@@ -2707,14 +2694,14 @@ mod tests {
 
         // A DIFFERENT session commits to the shared project repo.
         let wt_before = head_of(&wt);
-        git_advance_head(&tmp);
+        git_advance_head(tmp);
         assert_eq!(
             wt_before,
             head_of(&wt),
             "fixture precondition: the run's own worktree must stay frozen"
         );
 
-        let v2 = claim_progress(&cfg, &tmp, &claim, t0 + window);
+        let v2 = claim_progress(&cfg, tmp, &claim, t0 + window);
         assert_eq!(
             v2,
             Determination::Known(Liveness::Stalled),
@@ -2722,7 +2709,7 @@ mod tests {
              window; a commit made elsewhere in the shared project repo is not \
              evidence that THIS run advanced"
         );
-        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::remove_dir_all(tmp).ok();
     }
 
     /// (A4-i) The arm where the run HAS a task worktree: that worktree's HEAD
@@ -2732,15 +2719,16 @@ mod tests {
     /// not an acceptable fix, because it would force-steal a live holder.
     #[test]
     fn claim_progress_progressing_when_run_worktree_commits_though_repo_head_frozen() {
-        let tmp = make_tmp_dir("claim-scope-progress");
+        let tmp_dir = make_tmp_dir("claim-scope-progress");
+        let tmp = tmp_dir.path();
         let wt = tmp.join("run-worktree");
         init_git_repo(&wt);
-        let (cfg, claim, home) = progress_fixture(&tmp, "runBusy", Some(&wt));
+        let (cfg, claim, home) = progress_fixture(tmp, "runBusy", Some(&wt));
         let _h = pin_home(&home);
         let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
         let t0 = 10_000i64;
 
-        let v1 = claim_progress(&cfg, &tmp, &claim, t0);
+        let v1 = claim_progress(&cfg, tmp, &claim, t0);
         assert!(
             matches!(v1, Determination::Undetermined(_)),
             "first sample (no prior snapshot) must be Undetermined, got {v1:?}"
@@ -2748,22 +2736,22 @@ mod tests {
 
         // The holder does durable work in its OWN worktree; nothing else
         // commits to the shared project repo.
-        let repo_before = head_of(&tmp);
+        let repo_before = head_of(tmp);
         git_advance_head(&wt);
         assert_eq!(
             repo_before,
-            head_of(&tmp),
+            head_of(tmp),
             "fixture precondition: the shared project repo HEAD must stay frozen"
         );
 
-        let v2 = claim_progress(&cfg, &tmp, &claim, t0 + window);
+        let v2 = claim_progress(&cfg, tmp, &claim, t0 + window);
         assert_eq!(
             v2,
             Determination::Known(Liveness::Progressing),
             "the holder committed inside the run's own worktree, so it is \
              demonstrably alive and its claim must never be reaped"
         );
-        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::remove_dir_all(tmp).ok();
     }
 
     /// (A4-ii) The arm where the run records NO task worktree at all (serial /
@@ -2775,21 +2763,22 @@ mod tests {
     /// steal the claim.
     #[test]
     fn claim_progress_without_run_worktree_is_undetermined_and_keeps_the_claim() {
-        let tmp = make_tmp_dir("claim-scope-no-worktree");
-        let (cfg, claim, home) = progress_fixture(&tmp, "runNoWt", None);
+        let tmp_dir = make_tmp_dir("claim-scope-no-worktree");
+        let tmp = tmp_dir.path();
+        let (cfg, claim, home) = progress_fixture(tmp, "runNoWt", None);
         let _h = pin_home(&home);
         let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
         let t0 = 10_000i64;
 
         // Nothing moves anywhere: the shared repo HEAD is frozen too, so the
         // ONLY thing that can keep this out of `Stalled` is refusing to answer.
-        let repo_head = head_of(&tmp);
-        let _ = claim_progress(&cfg, &tmp, &claim, t0);
+        let repo_head = head_of(tmp);
+        let _ = claim_progress(&cfg, tmp, &claim, t0);
         let now = t0 + window;
-        let v2 = claim_progress(&cfg, &tmp, &claim, now);
+        let v2 = claim_progress(&cfg, tmp, &claim, now);
         assert_eq!(
             repo_head,
-            head_of(&tmp),
+            head_of(tmp),
             "fixture precondition: nothing may commit during this test"
         );
         assert!(
@@ -2800,14 +2789,14 @@ mod tests {
 
         // The safety property, not just the enum value: the reap must not fire.
         let kept = retain_claim(&claim, now, ttl_secs(&cfg), &|c| {
-            claim_progress(&cfg, &tmp, c, now)
+            claim_progress(&cfg, tmp, c, now)
         });
         assert!(
             kept,
             "a heartbeat-stale claim whose run-scoped progress is Undetermined \
              must be KEPT — only a confirmed Known(Stalled) may reap"
         );
-        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::remove_dir_all(tmp).ok();
     }
 
     /// (A3) The protective-Undetermined pin: the run DOES record a worktree, the
@@ -2828,12 +2817,13 @@ mod tests {
     /// asserts the OPPOSITE outcome.
     #[test]
     fn claim_progress_with_unreadable_run_worktree_is_undetermined_and_keeps_the_claim() {
-        let tmp = make_tmp_dir("claim-scope-unreadable-wt");
+        let tmp_dir = make_tmp_dir("claim-scope-unreadable-wt");
+        let tmp = tmp_dir.path();
         // Recorded in run state and really present on disk, but git refuses to
         // answer about it: a genuine failure to observe, not an observation.
         let gone = tmp.join("worktree-that-is-not-a-repo");
         make_unreadable_worktree(&gone);
-        let (cfg, claim, home) = progress_fixture(&tmp, "runGoneWt", Some(&gone));
+        let (cfg, claim, home) = progress_fixture(tmp, "runGoneWt", Some(&gone));
         assert!(
             gone.is_dir(),
             "fixture precondition: the recorded worktree must exist"
@@ -2850,13 +2840,13 @@ mod tests {
         let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
         let t0 = 10_000i64;
 
-        let repo_head = head_of(&tmp);
-        let _ = claim_progress(&cfg, &tmp, &claim, t0);
+        let repo_head = head_of(tmp);
+        let _ = claim_progress(&cfg, tmp, &claim, t0);
         let now = t0 + window;
-        let v2 = claim_progress(&cfg, &tmp, &claim, now);
+        let v2 = claim_progress(&cfg, tmp, &claim, now);
         assert_eq!(
             repo_head,
-            head_of(&tmp),
+            head_of(tmp),
             "fixture precondition: nothing may commit during this test"
         );
         assert!(
@@ -2866,14 +2856,14 @@ mod tests {
         );
 
         let kept = retain_claim(&claim, now, ttl_secs(&cfg), &|c| {
-            claim_progress(&cfg, &tmp, c, now)
+            claim_progress(&cfg, tmp, c, now)
         });
         assert!(
             kept,
             "a heartbeat-stale claim whose run-scoped head signal could not be \
              read must be KEPT, never force-stolen"
         );
-        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::remove_dir_all(tmp).ok();
     }
 
     // ── the run-scoped head signal's two multi-worktree properties ─────────
@@ -2939,7 +2929,8 @@ mod tests {
     /// fail-open this fix exists to close, re-entering through the back door.
     #[test]
     fn claim_progress_head_signal_ignores_run_state_task_ordering() {
-        let tmp = make_tmp_dir("claim-scope-order");
+        let tmp_dir = make_tmp_dir("claim-scope-order");
+        let tmp = tmp_dir.path();
         let wt_a = tmp.join("wt-a");
         let wt_b = tmp.join("wt-b");
         init_git_repo(&wt_a);
@@ -2954,26 +2945,26 @@ mod tests {
             "fixture precondition: the two worktrees must have distinct HEADs, \
              or a reordering could not change the fold even without the sort"
         );
-        let (cfg, claim, home) = progress_fixture(&tmp, "runOrder", Some(&wt_a));
-        save_run_worktrees(&cfg, &tmp, "runOrder", &[("t-a", &wt_a), ("t-b", &wt_b)]);
+        let (cfg, claim, home) = progress_fixture(tmp, "runOrder", Some(&wt_a));
+        save_run_worktrees(&cfg, tmp, "runOrder", &[("t-a", &wt_a), ("t-b", &wt_b)]);
         let _h = pin_home(&home);
         let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
         let t0 = 10_000i64;
 
-        let v1 = claim_progress(&cfg, &tmp, &claim, t0);
+        let v1 = claim_progress(&cfg, tmp, &claim, t0);
         assert!(
             matches!(v1, Determination::Undetermined(_)),
             "first sample (no prior snapshot) must be Undetermined, got {v1:?}"
         );
 
-        let (repo_head, a_head, b_head) = (head_of(&tmp), head_of(&wt_a), head_of(&wt_b));
+        let (repo_head, a_head, b_head) = (head_of(tmp), head_of(&wt_a), head_of(&wt_b));
         // The ONLY change: the same two tasks, written in the opposite order.
-        save_run_worktrees(&cfg, &tmp, "runOrder", &[("t-b", &wt_b), ("t-a", &wt_a)]);
+        save_run_worktrees(&cfg, tmp, "runOrder", &[("t-b", &wt_b), ("t-a", &wt_a)]);
 
-        let v2 = claim_progress(&cfg, &tmp, &claim, t0 + window);
+        let v2 = claim_progress(&cfg, tmp, &claim, t0 + window);
         assert_eq!(
             (repo_head, a_head, b_head),
-            (head_of(&tmp), head_of(&wt_a), head_of(&wt_b)),
+            (head_of(tmp), head_of(&wt_a), head_of(&wt_b)),
             "fixture precondition: no HEAD may move during this test"
         );
         assert_eq!(
@@ -2983,7 +2974,7 @@ mod tests {
              order is an input to the head signal, a frozen holder never reaches \
              Stalled and its claim can never be reclaimed"
         );
-        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::remove_dir_all(tmp).ok();
     }
 
     /// (B2) Property (2): each HEAD is bound to the task id that owns it.
@@ -3001,12 +2992,13 @@ mod tests {
     /// HEAD" is the normal case here, not a contrived one.
     #[test]
     fn claim_progress_head_signal_binds_each_head_to_its_owning_task() {
-        let tmp = make_tmp_dir("claim-scope-identity");
+        let tmp_dir = make_tmp_dir("claim-scope-identity");
+        let tmp = tmp_dir.path();
         let wt_a = tmp.join("wt-a");
         let wt_b = tmp.join("wt-b");
         init_git_repo(&wt_a);
         crate::worktree::git(
-            &tmp,
+            tmp,
             &["clone", &wt_a.to_string_lossy(), &wt_b.to_string_lossy()],
         )
         .unwrap_or_else(|e| panic!("git clone {} -> {}: {e}", wt_a.display(), wt_b.display()));
@@ -3017,28 +3009,28 @@ mod tests {
              or the sha alone would already distinguish the two samples"
         );
 
-        let (cfg, claim, home) = progress_fixture(&tmp, "runIdent", Some(&wt_a));
-        save_run_worktrees(&cfg, &tmp, "runIdent", &[("t-a", &wt_a)]);
+        let (cfg, claim, home) = progress_fixture(tmp, "runIdent", Some(&wt_a));
+        save_run_worktrees(&cfg, tmp, "runIdent", &[("t-a", &wt_a)]);
         let _h = pin_home(&home);
         let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
         let t0 = 10_000i64;
 
-        let v1 = claim_progress(&cfg, &tmp, &claim, t0);
+        let v1 = claim_progress(&cfg, tmp, &claim, t0);
         assert!(
             matches!(v1, Determination::Undetermined(_)),
             "first sample (no prior snapshot) must be Undetermined, got {v1:?}"
         );
 
-        let repo_head = head_of(&tmp);
+        let repo_head = head_of(tmp);
         // The run's work moves to a different task, whose fresh worktree is
         // branched from the same base commit.
-        save_run_worktrees(&cfg, &tmp, "runIdent", &[("t-b", &wt_b)]);
+        save_run_worktrees(&cfg, tmp, "runIdent", &[("t-b", &wt_b)]);
 
         let now = t0 + window;
-        let v2 = claim_progress(&cfg, &tmp, &claim, now);
+        let v2 = claim_progress(&cfg, tmp, &claim, now);
         assert_eq!(
             repo_head,
-            head_of(&tmp),
+            head_of(tmp),
             "fixture precondition: nothing may commit to the shared repo here"
         );
         assert_eq!(
@@ -3051,14 +3043,14 @@ mod tests {
 
         // The consequence, not just the enum value.
         let kept = retain_claim(&claim, now, ttl_secs(&cfg), &|c| {
-            claim_progress(&cfg, &tmp, c, now)
+            claim_progress(&cfg, tmp, c, now)
         });
         assert!(
             kept,
             "a holder whose run-scoped worktree set changed is demonstrably \
              alive; its claim must never be force-stolen"
         );
-        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::remove_dir_all(tmp).ok();
     }
 
     // ── absence is an OBSERVATION, not a failure to observe (5e62b0eb) ──────
@@ -3135,13 +3127,14 @@ mod tests {
     /// immortal in a different way.
     #[test]
     fn claim_with_only_absent_run_worktrees_is_reaped_once_stale() {
-        let tmp = make_tmp_dir("claim-absent-reaped");
+        let tmp_dir = make_tmp_dir("claim-absent-reaped");
+        let tmp = tmp_dir.path();
         let gone_a = tmp.join("wt-gone-a");
         let gone_b = tmp.join("wt-gone-b");
-        let (cfg, claim, home) = progress_fixture(&tmp, "runAllGone", Some(&gone_a));
+        let (cfg, claim, home) = progress_fixture(tmp, "runAllGone", Some(&gone_a));
         save_run_worktrees(
             &cfg,
-            &tmp,
+            tmp,
             "runAllGone",
             &[("t-a", &gone_a), ("t-b", &gone_b)],
         );
@@ -3154,18 +3147,18 @@ mod tests {
         let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
         let t0 = 10_000i64;
 
-        let v1 = claim_progress(&cfg, &tmp, &claim, t0);
+        let v1 = claim_progress(&cfg, tmp, &claim, t0);
         assert!(
             matches!(v1, Determination::Undetermined(_)),
             "first sample (no prior snapshot) must be Undetermined, got {v1:?}"
         );
 
-        let repo_head = head_of(&tmp);
+        let repo_head = head_of(tmp);
         let now = t0 + window;
-        let v2 = claim_progress(&cfg, &tmp, &claim, now);
+        let v2 = claim_progress(&cfg, tmp, &claim, now);
         assert_eq!(
             repo_head,
-            head_of(&tmp),
+            head_of(tmp),
             "fixture precondition: nothing may commit during this test"
         );
         assert_eq!(
@@ -3178,14 +3171,14 @@ mod tests {
         );
 
         // The property, not the enum: the dead run's claim must be reclaimable.
-        let (file_kept, task_kept) = survives_reap(&cfg, &tmp, &claim, now);
+        let (file_kept, task_kept) = survives_reap(&cfg, tmp, &claim, now);
         assert!(
             !file_kept && !task_kept,
             "a heartbeat-stale claim whose run's worktrees are all absent must be \
              REAPED (file kept={file_kept}, task kept={task_kept}); keeping it is \
              how 10 file claims survived 40.4 days against an 1800s TTL"
         );
-        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::remove_dir_all(tmp).ok();
     }
 
     /// (C2) SAFETY SIDE — takes precedence over (C1). The run records one ABSENT
@@ -3202,14 +3195,15 @@ mod tests {
     /// the live HEAD next to it can still move the fingerprint.
     #[test]
     fn claim_with_one_absent_and_one_advancing_worktree_is_not_reaped() {
-        let tmp = make_tmp_dir("claim-absent-plus-live");
+        let tmp_dir = make_tmp_dir("claim-absent-plus-live");
+        let tmp = tmp_dir.path();
         let gone = tmp.join("wt-gone");
         let live = tmp.join("wt-live");
         init_git_repo(&live);
-        let (cfg, claim, home) = progress_fixture(&tmp, "runMixed", Some(&live));
+        let (cfg, claim, home) = progress_fixture(tmp, "runMixed", Some(&live));
         save_run_worktrees(
             &cfg,
-            &tmp,
+            tmp,
             "runMixed",
             &[("t-gone", &gone), ("t-live", &live)],
         );
@@ -3227,7 +3221,7 @@ mod tests {
         let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
         let t0 = 10_000i64;
 
-        let v1 = claim_progress(&cfg, &tmp, &claim, t0);
+        let v1 = claim_progress(&cfg, tmp, &claim, t0);
         assert!(
             matches!(v1, Determination::Undetermined(_)),
             "first sample (no prior snapshot) must be Undetermined, got {v1:?}"
@@ -3236,18 +3230,18 @@ mod tests {
         // The holder does durable work in the worktree it still has. Nothing
         // else moves: the shared project repo stays frozen, and the run's task
         // `updated_at` values are pinned by `save_run_worktrees`.
-        let repo_before = head_of(&tmp);
+        let repo_before = head_of(tmp);
         git_advance_head(&live);
         assert_eq!(
             repo_before,
-            head_of(&tmp),
+            head_of(tmp),
             "fixture precondition: the shared project repo HEAD must stay frozen, \
              so the live worktree's commit is the ONLY thing that can move the \
              fingerprint"
         );
 
         let now = t0 + window;
-        let v2 = claim_progress(&cfg, &tmp, &claim, now);
+        let v2 = claim_progress(&cfg, tmp, &claim, now);
         assert_eq!(
             v2,
             Determination::Known(Liveness::Progressing),
@@ -3256,13 +3250,13 @@ mod tests {
              that evidence (got {v2:?})"
         );
 
-        let (file_kept, task_kept) = survives_reap(&cfg, &tmp, &claim, now);
+        let (file_kept, task_kept) = survives_reap(&cfg, tmp, &claim, now);
         assert!(
             file_kept && task_kept,
             "a live holder's claim must NEVER be reaped (file kept={file_kept}, \
              task kept={task_kept})"
         );
-        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::remove_dir_all(tmp).ok();
     }
 
     /// (C3) SAFETY SIDE — takes precedence over (C1). The run records a worktree
@@ -3278,7 +3272,8 @@ mod tests {
     /// while guarding nothing.
     #[test]
     fn claim_with_existing_but_unreadable_run_worktree_is_not_reaped() {
-        let tmp = make_tmp_dir("claim-unreadable-live");
+        let tmp_dir = make_tmp_dir("claim-unreadable-live");
+        let tmp = tmp_dir.path();
         let wt = tmp.join("wt-present-but-unaskable");
         make_unreadable_worktree(&wt);
         assert!(
@@ -3296,19 +3291,19 @@ mod tests {
              this test would guard nothing"
         );
 
-        let (cfg, claim, home) = progress_fixture(&tmp, "runUnaskable", Some(&wt));
-        save_run_worktrees(&cfg, &tmp, "runUnaskable", &[("t-a", &wt)]);
+        let (cfg, claim, home) = progress_fixture(tmp, "runUnaskable", Some(&wt));
+        save_run_worktrees(&cfg, tmp, "runUnaskable", &[("t-a", &wt)]);
         let _h = pin_home(&home);
         let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
         let t0 = 10_000i64;
 
-        let repo_head = head_of(&tmp);
-        let _ = claim_progress(&cfg, &tmp, &claim, t0);
+        let repo_head = head_of(tmp);
+        let _ = claim_progress(&cfg, tmp, &claim, t0);
         let now = t0 + window;
-        let v2 = claim_progress(&cfg, &tmp, &claim, now);
+        let v2 = claim_progress(&cfg, tmp, &claim, now);
         assert_eq!(
             repo_head,
-            head_of(&tmp),
+            head_of(tmp),
             "fixture precondition: nothing may commit during this test"
         );
         assert!(
@@ -3318,13 +3313,13 @@ mod tests {
              authority to a failed read (got {v2:?})"
         );
 
-        let (file_kept, task_kept) = survives_reap(&cfg, &tmp, &claim, now);
+        let (file_kept, task_kept) = survives_reap(&cfg, tmp, &claim, now);
         assert!(
             file_kept && task_kept,
             "a claim whose run-scoped head signal could not be READ must be KEPT, \
              never force-stolen (file kept={file_kept}, task kept={task_kept})"
         );
-        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::remove_dir_all(tmp).ok();
     }
 
     // ── stateless claim marker (flow-* runs have no run-state JSON) ─────────
@@ -3368,18 +3363,19 @@ mod tests {
 
     #[test]
     fn stateless_marked_frozen_transcript_stale_heartbeat_is_reaped() {
-        let tmp = make_tmp_dir("stateless-reap");
-        let (cfg, claim, home, _t) = stateless_fixture(&tmp, true, Some(FIXTURE_SESSION));
+        let tmp_dir = make_tmp_dir("stateless-reap");
+        let tmp = tmp_dir.path();
+        let (cfg, claim, home, _t) = stateless_fixture(tmp, true, Some(FIXTURE_SESSION));
         let _h = pin_home(&home);
         let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
         let t0 = 10_000i64;
-        let v1 = claim_progress(&cfg, &tmp, &claim, t0);
+        let v1 = claim_progress(&cfg, tmp, &claim, t0);
         assert!(
             matches!(v1, Determination::Undetermined(_)),
             "first sample must be Undetermined, got {v1:?}"
         );
         let now = t0 + window;
-        let v2 = claim_progress(&cfg, &tmp, &claim, now);
+        let v2 = claim_progress(&cfg, tmp, &claim, now);
         assert_eq!(
             v2,
             Determination::Known(Liveness::Stalled),
@@ -3392,7 +3388,7 @@ mod tests {
         );
         assert!(
             !retain_claim(&claim, now, ttl_secs(&cfg), &|c| claim_progress(
-                &cfg, &tmp, c, now
+                &cfg, tmp, c, now
             )),
             "retain_claim must drop a confirmed-stalled stateless claim"
         );
@@ -3400,106 +3396,111 @@ mod tests {
         reg.task_claims.insert("hk".into(), claim.clone());
         reg.files.insert("f.rs".into(), claim.clone());
         reap(&mut reg, now, ttl_secs(&cfg), &|c| {
-            claim_progress(&cfg, &tmp, c, now)
+            claim_progress(&cfg, tmp, c, now)
         });
         assert!(reg.task_claims.is_empty() && reg.files.is_empty());
-        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::remove_dir_all(tmp).ok();
     }
 
     #[test]
     fn stateless_unmarked_missing_run_state_is_kept() {
-        let tmp = make_tmp_dir("stateless-unmarked");
-        let (cfg, claim, home, _t) = stateless_fixture(&tmp, false, Some(FIXTURE_SESSION));
+        let tmp_dir = make_tmp_dir("stateless-unmarked");
+        let tmp = tmp_dir.path();
+        let (cfg, claim, home, _t) = stateless_fixture(tmp, false, Some(FIXTURE_SESSION));
         let _h = pin_home(&home);
-        let (now, v2) = two_samples(&cfg, &tmp, &claim);
+        let (now, v2) = two_samples(&cfg, tmp, &claim);
         assert!(
             matches!(v2, Determination::Undetermined(_)),
             "an UNMARKED claim with no run state stays Undetermined (got {v2:?})"
         );
         assert!(retain_claim(&claim, now, ttl_secs(&cfg), &|c| {
-            claim_progress(&cfg, &tmp, c, now)
+            claim_progress(&cfg, tmp, c, now)
         }));
-        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::remove_dir_all(tmp).ok();
     }
 
     #[test]
     fn stateless_marked_growing_transcript_is_kept() {
-        let tmp = make_tmp_dir("stateless-grow");
-        let (cfg, claim, home, transcript) = stateless_fixture(&tmp, true, Some(FIXTURE_SESSION));
+        let tmp_dir = make_tmp_dir("stateless-grow");
+        let tmp = tmp_dir.path();
+        let (cfg, claim, home, transcript) = stateless_fixture(tmp, true, Some(FIXTURE_SESSION));
         let _h = pin_home(&home);
         let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
         let t0 = 10_000i64;
-        let _ = claim_progress(&cfg, &tmp, &claim, t0);
+        let _ = claim_progress(&cfg, tmp, &claim, t0);
         let mut body = std::fs::read_to_string(&transcript).unwrap();
         body.push_str("{\"grown\":2}\n");
         std::fs::write(&transcript, body).unwrap();
         let now = t0 + window;
-        let v2 = claim_progress(&cfg, &tmp, &claim, now);
+        let v2 = claim_progress(&cfg, tmp, &claim, now);
         assert_ne!(
             v2,
             Determination::Known(Liveness::Stalled),
             "a growing transcript is a live holder; it must never read as Stalled"
         );
         assert!(retain_claim(&claim, now, ttl_secs(&cfg), &|c| {
-            claim_progress(&cfg, &tmp, c, now)
+            claim_progress(&cfg, tmp, c, now)
         }));
-        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::remove_dir_all(tmp).ok();
     }
 
     #[test]
     fn stateless_marked_unreadable_transcript_is_kept() {
-        let tmp = make_tmp_dir("stateless-untx");
-        let (cfg, claim, home, transcript) = stateless_fixture(&tmp, true, Some(FIXTURE_SESSION));
+        let tmp_dir = make_tmp_dir("stateless-untx");
+        let tmp = tmp_dir.path();
+        let (cfg, claim, home, transcript) = stateless_fixture(tmp, true, Some(FIXTURE_SESSION));
         std::fs::remove_file(&transcript).unwrap();
         let _h = pin_home(&home);
-        let (now, v2) = two_samples(&cfg, &tmp, &claim);
+        let (now, v2) = two_samples(&cfg, tmp, &claim);
         assert!(
             matches!(v2, Determination::Undetermined(_)),
             "an unreadable transcript is 'cannot determine', not 'frozen' (got {v2:?})"
         );
         assert!(retain_claim(&claim, now, ttl_secs(&cfg), &|c| {
-            claim_progress(&cfg, &tmp, c, now)
+            claim_progress(&cfg, tmp, c, now)
         }));
-        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::remove_dir_all(tmp).ok();
     }
 
     #[test]
     fn stateless_marked_no_session_id_is_kept() {
-        let tmp = make_tmp_dir("stateless-nosid");
-        let (cfg, claim, home, _t) = stateless_fixture(&tmp, true, None);
+        let tmp_dir = make_tmp_dir("stateless-nosid");
+        let tmp = tmp_dir.path();
+        let (cfg, claim, home, _t) = stateless_fixture(tmp, true, None);
         let _h = pin_home(&home);
-        let (now, v2) = two_samples(&cfg, &tmp, &claim);
+        let (now, v2) = two_samples(&cfg, tmp, &claim);
         assert!(
             matches!(v2, Determination::Undetermined(_)),
             "no owning session id means no transcript signal at all (got {v2:?})"
         );
         assert!(retain_claim(&claim, now, ttl_secs(&cfg), &|c| {
-            claim_progress(&cfg, &tmp, c, now)
+            claim_progress(&cfg, tmp, c, now)
         }));
-        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::remove_dir_all(tmp).ok();
     }
 
     #[test]
     fn stateless_unmarked_run_with_state_unchanged() {
         // Same scenario as the existing run-worktree-commits test, spelled with
         // the marker explicitly false: run signals still apply.
-        let tmp = make_tmp_dir("stateless-unmarked-state");
+        let tmp_dir = make_tmp_dir("stateless-unmarked-state");
+        let tmp = tmp_dir.path();
         let wt = tmp.join("run-worktree");
         init_git_repo(&wt);
-        let (cfg, mut claim, home) = progress_fixture(&tmp, "runWithState", Some(&wt));
+        let (cfg, mut claim, home) = progress_fixture(tmp, "runWithState", Some(&wt));
         claim.stateless = false;
         let _h = pin_home(&home);
         let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
         let t0 = 10_000i64;
-        let _ = claim_progress(&cfg, &tmp, &claim, t0);
+        let _ = claim_progress(&cfg, tmp, &claim, t0);
         git_advance_head(&wt);
-        let v2 = claim_progress(&cfg, &tmp, &claim, t0 + window);
+        let v2 = claim_progress(&cfg, tmp, &claim, t0 + window);
         assert_eq!(
             v2,
             Determination::Known(Liveness::Progressing),
             "an unmarked claim keeps using the run-scoped signals"
         );
-        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::remove_dir_all(tmp).ok();
     }
 
     #[test]
@@ -3529,7 +3530,8 @@ mod tests {
         );
 
         // And through the on-disk registry path.
-        let path = make_tmp_dir("stateless-rt").join("claims.json");
+        let tmp_dir = make_tmp_dir("stateless-rt");
+        let path = tmp_dir.path().join("claims.json");
         save(&path, &reg).unwrap();
         assert!(load_known(&path).task_claims["hk"].stateless);
     }
@@ -3538,15 +3540,15 @@ mod tests {
     /// now, title, stateless: bool)` — a trailing `stateless` parameter.
     #[test]
     fn stateless_marker_survives_reclaim_and_heartbeat() {
-        let tmp = make_tmp_dir("stateless-survive");
-        init_git_repo(&tmp);
-        let cfg = make_cfg(&tmp);
+        let tmp_dir = make_tmp_dir("stateless-survive");
+        let tmp = tmp_dir.path();
+        init_git_repo(tmp);
+        let cfg = make_cfg(tmp);
         let hk = vec!["hk-1".to_string()];
-        let out =
-            claim_tasks(&cfg, &tmp, &hk, "flow-s", Some("sid"), 100, Some("t"), true).unwrap();
+        let out = claim_tasks(&cfg, tmp, &hk, "flow-s", Some("sid"), 100, Some("t"), true).unwrap();
         assert_eq!(out.claimed, hk);
         let stateless_now = |tag: &str| {
-            let reg = load_known(&registry_path(&cfg, &tmp));
+            let reg = load_known(&registry_path(&cfg, tmp));
             assert!(
                 reg.task_claims["hk-1"].stateless,
                 "stateless marker lost after {tag}"
@@ -3554,30 +3556,31 @@ mod tests {
         };
         stateless_now("initial claim");
 
-        claim_tasks(&cfg, &tmp, &hk, "flow-s", Some("sid"), 110, None, true).unwrap();
+        claim_tasks(&cfg, tmp, &hk, "flow-s", Some("sid"), 110, None, true).unwrap();
         stateless_now("re-claim by the same run");
 
-        assert_eq!(heartbeat(&cfg, &tmp, "flow-s", 120).unwrap(), 1);
+        assert_eq!(heartbeat(&cfg, tmp, "flow-s", 120).unwrap(), 1);
         stateless_now("heartbeat");
-        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::remove_dir_all(tmp).ok();
     }
 
     /// The marker is STICKY: a re-claim by the same run that omits the flag
     /// (`stateless = false`) must not clear it.
     #[test]
     fn stateless_marker_sticky_when_reclaim_omits_flag() {
-        let tmp = make_tmp_dir("stateless-sticky");
-        init_git_repo(&tmp);
-        let cfg = make_cfg(&tmp);
+        let tmp_dir = make_tmp_dir("stateless-sticky");
+        let tmp = tmp_dir.path();
+        init_git_repo(tmp);
+        let cfg = make_cfg(tmp);
         let hk = vec!["hk-1".to_string()];
-        claim_tasks(&cfg, &tmp, &hk, "flow-s", Some("sid"), 100, Some("t"), true).unwrap();
-        claim_tasks(&cfg, &tmp, &hk, "flow-s", Some("sid"), 110, None, false).unwrap();
-        let reg = load_known(&registry_path(&cfg, &tmp));
+        claim_tasks(&cfg, tmp, &hk, "flow-s", Some("sid"), 100, Some("t"), true).unwrap();
+        claim_tasks(&cfg, tmp, &hk, "flow-s", Some("sid"), 110, None, false).unwrap();
+        let reg = load_known(&registry_path(&cfg, tmp));
         assert!(
             reg.task_claims["hk-1"].stateless,
             "a /flow re-claim that omits the flag must not silently make the claim unreapable again"
         );
-        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::remove_dir_all(tmp).ok();
     }
 }
 

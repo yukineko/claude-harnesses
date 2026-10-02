@@ -14789,13 +14789,34 @@ cat .git/gate-bypassed
 
 ### 測って**否定された**仮説（次の著者が繰り返さないために残す）
 
-「`git merge` は pre-commit を走らせないので、第8節が main tree で唯一許している操作（merge）が必ず台帳に載るのではないか」と考えたが**偽**。使い捨てリポジトリでの実測（`scratchpad/meas_merge_hook.py`、2026-10-02）では、clean な `git merge --no-ff` に対して **pre-commit も post-commit も走らない**（通常 commit 3 回で両方 3 回 → merge 後も両方 3 回）。post-commit が走らなければ append も起きないので、clean merge は台帳に載らない。`bfe967f6` が載っているのは `--no-verify` か sentinel 不一致の経路であり、どちらかは未特定。"""
+「`git merge` は pre-commit を走らせないので、第8節が main tree で唯一許している操作（merge）が必ず台帳に載るのではないか」と考えたが**偽**。使い捨てリポジトリでの実測（`scratchpad/meas_merge_hook.py`、2026-10-02）では、clean な `git merge --no-ff` に対して **pre-commit も post-commit も走らない**（通常 commit 3 回で両方 3 回 → merge 後も両方 3 回）。post-commit が走らなければ append も起きないので、clean merge は台帳に載らない。`bfe967f6` が載っているのは `--no-verify` か sentinel 不一致の経路であり、どちらかは未特定。
+
+## 追記 2026-10-02 — clearing 側を実測した（候補3の危険ケースは「未実測」ではなくなった）
+
+本票を起票した commit（worktree `session-3d44818d`、HEAD `93d1004b`）の pre-commit が全ゲート green で通り、最後にこう言った:
+
+```
+pre-commit: gates green — cleared 0 ungated commit(s) from the bypass ledger; kept 3 not contained in this HEAD.
+```
+
+**green な gated commit を 1 本作っても、自分の worktree の HEAD が当該 commit を含まないので 1 件も消えない。** docstring の "entries whose commit is an ancestor of the HEAD that run judged" はこのとおり動いている（ゲートは正しい）。問題は、止められている側に消す手段が無いことである。
+
+どの checkout が `bfe967f6` を含むかも測った（`git -C <checkout> merge-base --is-ancestor bfe967f63768 HEAD`、2026-10-02）:
+
+ - 含む: main tree、`fix/e8aad6e6-rollout-direction`（当の作業ブランチ）、`fix/a5bc063a-donegate-refuse`、`fix/afdcfd4d-auto-approved`、`session-1657f99c`、`session-85445158`
+ - 含まない: 残り 16 checkout（`session-3d44818d` を含む）
+
+したがって**今回は所有セッションが自分の次の gated commit で消せる**（候補3が成立する）。一方、含まない 16 checkout のいずれも自力では消せず、push は所有者の作業完了待ちになる。
+
+**まだ埋めてはいけない空白**: 「所有ブランチが削除された／所有セッションが終了した後に entry が残った場合」は未実測。その場合 ancestor 条件を満たす HEAD を作る正当な手段が無くなる可能性がある。
+
+**自分がやらなかったこと（意図的）**: 現 main（`bfe967f6` を含む）から worktree を切って gated commit を 1 本作れば ledger は消え push は通る。だがそれは**赤を消すために commit を作る**行為であり、第4節（通すためだけに緩める）と第5節（黙って迂回しない）が禁じる形なので行わなかった。他セッションの ungated content を自分の手で push 可能にすることにもなる。"""
 created_at = 1790922440
-updated_at = 1790922440
+updated_at = 1790922537
 weight = 0.0
 issue_number = 1057
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1057"
-rev = 0
+rev = 1
 
 [[task]]
 id = "5e3b13cc"

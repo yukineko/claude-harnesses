@@ -1216,10 +1216,26 @@ fn spawn_and_wait_timeout(
 /// Sync the record store with `sync_repo`, and leave a durable trace when it
 /// cannot finish.
 ///
-/// The only caller is the `SessionEnd` hook, whose exit code and stderr reach
-/// nobody, so a bare `Err` here is an invisible signal. Every failure is
-/// therefore also written to `syncstate`, which the `UserPromptSubmit` hook
-/// surfaces; a success clears it.
+/// STREAM CONTRACT — do not "tidy" these back onto a single stream. The only
+/// caller is the `SessionEnd` hook: Claude Code discards a hook's stdout, and
+/// surfaces its stderr to the user. So
+///
+///   * progress and success go to **stdout** — informative when a human runs
+///     `fugu-router sync` by hand, silent at `SessionEnd`;
+///   * failure goes to **stderr** (the `Err` returned here, printed by `main`),
+///     which is the stream the user actually reads.
+///
+/// Measured 2026-10-02: every message, success included, used to go to stderr,
+/// and stdout was empty, so a clean sync emitted three lines at the end of every
+/// single session and was reported as "fugu-router sync がエラーをだしている".
+/// The older claim that a `SessionEnd` hook's "stderr reaches nobody" was wrong
+/// in the direction that matters — it reaches the user — which is exactly why
+/// stderr has to mean failure here.
+///
+/// That stderr line is transient, though: it appears as the session ends and is
+/// gone by the next one, and it never reaches an agent. So a failure is ALSO
+/// written to `syncstate`, which the `UserPromptSubmit` hook surfaces on the
+/// next prompt; a success clears it.
 fn cmd_sync(cfg: &config::Config, pull_only: bool, push_only: bool) -> Result<()> {
     match sync_inner(cfg, pull_only, push_only) {
         Ok(()) => {
@@ -1248,7 +1264,7 @@ fn sync_inner(cfg: &config::Config, pull_only: bool, push_only: bool) -> Result<
              --push-only so it can be cloned from {repo_url} first",
             sync_dir.display()
         );
-        eprintln!("cloning {} → {}…", repo_url, sync_dir.display());
+        println!("cloning {} → {}…", repo_url, sync_dir.display());
         if let Some(parent) = sync_dir.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -1257,7 +1273,7 @@ fn sync_inner(cfg: &config::Config, pull_only: bool, push_only: bool) -> Result<
             let stderr = String::from_utf8_lossy(&out.stderr);
             anyhow::bail!("git clone of {repo_url} failed:\nstderr: {stderr}");
         }
-        eprintln!("cloned; nothing local to push yet.");
+        println!("cloned; nothing local to push yet.");
         return Ok(());
     }
 
@@ -1301,7 +1317,7 @@ fn sync_inner(cfg: &config::Config, pull_only: bool, push_only: bool) -> Result<
     // possible to fast-forward") where --no-rebase auto-merges both JSONL
     // files with no conflict.
     if !push_only {
-        eprintln!("pulling from remote…");
+        println!("pulling from remote…");
         let out = run_git_with_timeout(
             &[
                 "-C",
@@ -1322,7 +1338,7 @@ fn sync_inner(cfg: &config::Config, pull_only: bool, push_only: bool) -> Result<
                  that need resolving by hand):\nstdout: {stdout}\nstderr: {stderr}"
             );
         }
-        eprintln!("pull done.");
+        println!("pull done.");
     }
 
     if pull_only {
@@ -1336,7 +1352,7 @@ fn sync_inner(cfg: &config::Config, pull_only: bool, push_only: bool) -> Result<
     // restrictive choice, and `git push` is a no-op when it is already
     // up to date.
     if !is_ahead_of_upstream(&sync_dir_str).unwrap_or(true) {
-        eprintln!("nothing to push (already up to date with the remote).");
+        println!("nothing to push (already up to date with the remote).");
         return Ok(());
     }
 
@@ -1347,9 +1363,9 @@ fn sync_inner(cfg: &config::Config, pull_only: bool, push_only: bool) -> Result<
     }
 
     if committed {
-        eprintln!("pushed local records.");
+        println!("pushed local records.");
     } else {
-        eprintln!("pushed (no new local records, but the branch was ahead).");
+        println!("pushed (no new local records, but the branch was ahead).");
     }
     Ok(())
 }
@@ -1434,7 +1450,7 @@ fn commit_local_records(sync_dir_str: &str) -> Result<bool> {
         let stdout = String::from_utf8_lossy(&commit.stdout);
         anyhow::bail!("git commit failed:\nstdout: {stdout}\nstderr: {stderr}");
     }
-    eprintln!("committed: {commit_msg}");
+    println!("committed: {commit_msg}");
     Ok(true)
 }
 

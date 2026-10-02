@@ -24578,3 +24578,139 @@ issue_number = 176
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/176"
 issue_closed_at = 1790916470
 rev = 1
+
+[[task]]
+id = "af1565aa"
+title = "blastguard の redirect target 解決は語全体が $NAME のときだけ働き、$VAR/suffix 形は解決されないため、同じ書き込みが接尾辞の有無で allow/deny に分かれる"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+観測 2026-10-02 (測定点 43a392dc、blastguard 0.2.97)。
+
+## 訂正 — この票の最初の診断は間違っていた
+
+起票時、私はこう書いた: 「解決機構は detect.rs:3509 の resolve_expanded_command_word にあり、doc comment が『WIRED INTO EXACTLY ONE DECISION ARM ... No other rule in this file consults anything below』と書いているとおり command word の 1 アームにしか配線されていない。redirect target には解決が試みられていない」。
+
+**これは誤りである。** detect.rs:3638 に `resolve_redirect_target_at(cmd, seg_idx, target)` が存在し、detect.rs:1536 (truncate) と :1672 (append) の両方から呼ばれている。つまり redirect target にも既に配線済みで、その doc は『Every downstream axis a redirect target is judged on ... is a question about a PATH, and `"$P"` is not a path』と目的まで明記している (append 側は a83802ad で後から揃えられた)。私が引用した『EXACTLY ONE DECISION ARM』は `CommandWordOrigin` を**直接**読む箇所の数についての記述で、`resolve_redirect_target_at` という中間層経由の利用を含んでいない。**自分が引いた逐語引用を、それが答えていない問いの答えとして読んだ**のが誤りの中身である。
+
+誤診断のまま実装に入ると『既にあるものをもう一度書く』ことになっていた。実装前に該当関数を読んだことだけが救いである。
+
+## 真の欠陥 — 入口が語全体を要求する
+
+`resolve_redirect_target_at` の 1 行目:
+
+    referenced_variable_name(target)?;
+
+`referenced_variable_name` (detect.rs) は語全体が `$NAME` / `${NAME}` / `"$NAME"` のいずれかであることを要求する (外側の 1 重引用符を剥いだあと `strip_prefix("${")` か `strip_prefix('$')` し、残りが `is_shell_identifier` であること)。したがって **`$P/fstab` のような接尾辞付きは早期に `None` で抜け**、生のトークンがそのまま下流へ流れ、reversible.rs:254 の `contains('$')` で Undetermined になり deny に落ちる。
+
+その関数自身の doc は『a redirect TARGET that is a **bare** variable expansion (`> "$P"`)』と bare と書いており、散文は正直である。欠けているのは機能であって記述ではない。
+
+## 実測 — bare と接尾辞付きの対
+
+blastguard 0.2.97 に PreToolUse payload を直接食わせた (スクリプト: scratchpad/bg_probe3.py)。
+
+  P=/etc/fstab; : > $P      -> deny  『redirect /etc/fstab writes into a system directory』  <- 解決されている
+  P=/etc/fstab; : > ${P}    -> deny  同上
+  P=/etc/fstab; : > "$P"    -> deny  同上
+  P=/etc; : > $P/fstab      -> deny  『`$P/fstab` contains a shell expansion』            <- 解決されていない
+  P=/etc; : > ${P}/fstab    -> deny  同上
+  P=/etc; : > "$P"/fstab    -> deny  同上
+
+無害側 (こちらが実害):
+
+  P=<scratchpad>/p7_absent.txt; : > $P   -> **ALLOW**
+  P=<scratchpad>; : > $P/p8_absent.txt   -> **DENY** 『contains a shell expansion』
+
+同一の filesystem 効果が、接尾辞の有無だけで allow と deny に分かれる。
+
+対照として bash 意味論が守られていることも確認した:
+
+  P=/etc/fstab : > $P   (同一セグメントの代入 = コマンド前置) -> deny のまま
+
+これは正しい。`resolve_expanded_command_word` の doc が `bash -c 'RM=/bin/echo $RM prefixtest'` の実測を引いて『同一セグメントの代入は前置であり束縛しない』と書いているとおりである。
+
+## 修正方針
+
+`resolve_redirect_target_at` の入口を広げる: target が『変数参照 + それ以上の展開を含まないリテラル接尾辞』の形なら、参照部分を `resolve_expanded_command_word` に通し、`Literal` が返ったら接尾辞を連結して返す。解決できなければ従来どおり `None`。
+
+**緩めではない根拠**は既存 doc がそのまま使える: 『It does NOT weaken the gate, because it only ever hands the axes a MORE specific path than the unplaceable token they get today』。実測でも `P=/etc; : > $P/fstab` は解決すると `/etc/fstab` になり system-directory 軸が deny する (P1 行と同一の理由テキストになる) ので、危険側は deny のまま理由が正確になるだけである。
+
+restrictive 側に残すべき形 (テストで固定する):
+ - 接尾辞自体が展開を含む (`$P/$Q`)
+ - 変数の前に前置がある (`pre$P/x`) — 既存の resolver が `pre$BIN` を解決しない方針と揃える
+ - 非識別子参照 (`${P:-/tmp}/x`, `$1/x`, `$$/x`)
+ - 接尾辞が glob メタ文字を含む (`$P/*.log`) — 複数マッチの可能性があるので 1 つのパスに解決できない
+ - 既存の信用規則 (ガードされた代入 / RHS が展開 / 配列 / 後続 rebind / here-doc body / 空値 / 同一セグメント前置) はすべて `resolve_expanded_command_word` に委譲されるので自動的に継承される
+
+## 禁じ手 (起票時の記録を維持)
+
+detect.rs:1618 付近のコメントが『Undetermined と Unrecoverable を deny/ask に分ける』案を実測つきで却下している (2067 コマンド、163 の非 allow のうち 24 だけが移動)。本票は Undetermined の扱いを一切変えない。
+
+## テスト (第2節 (a)(b))
+
+利害関係のない agent に `crates/blastguard/tests/redirect_target_suffix_resolution.rs` を書かせる。既存の `tests/redirect_target_resolution.rs` が同じ規律 (resolved / unresolvable / decoy の三分割、無害値には存在しないパスを使い、誤って信用した resolver が Allow に崩れるようにする) で書かれているのでその idiom に従わせる。group-1 (接尾辞) が RED、group-2 (解決してはいけない形) と bare の対照が最初から GREEN であることを観測してから実装する。
+
+GATE crate なので rollout は `--canary`。
+
+## 完了 2026-10-02 — commit d2c2e5ee (blastguard 0.2.98)
+
+### 入れたもの
+
+`resolve_redirect_target_at` の入口を二段にした。語全体が参照なら従来どおりの経路（渡すトークンもバイト単位で同一）。そうでなければ新設 `reference_with_literal_suffix` が「語頭の参照」と「リテラル接尾辞」に分解し、**参照部分だけ**を `resolve_expanded_command_word` に渡して `Literal` が返ったときだけ接尾辞を連結する。信用規則は委譲なので再実装していない（ガード付き代入・配列・RHS が展開・後続の読めない rebind・here-doc body・同一セグメント前置・空値はすべて `Literal` にならないので従来どおり `None`）。
+
+接尾辞の受理条件（`literal_suffix`）: `$`/backtick・引用符・バックスラッシュ・glob メタ文字・`..` 成分のいずれかを含めば拒否。空の接尾辞も拒否（それは bare 経路の仕事）。
+
+非 brace 形の変数名は**最長識別子走り**にした。`bash -c` の実測（`$Pfoo` は変数 `Pfoo`、`$P_x` も同様、`${P}foo` は `/tmpfoo`）により、接尾辞の先頭が非識別子文字になることが構造的に保証され、別ルールを置く必要がない。
+
+### 実測（scratchpad/verify_live3.py。`CLAUDE_CODE_SESSION_ID` を外し各コマンド 1 回）
+
+patched build と deployed 0.2.97 を同一 payload で比較:
+
+ - **判定が変わったのは 7 件、すべて無害側の Deny/Ask → Allow**（`$P/x` / `${P}/x` / `"$P"/x` / `"$P/x"` / append 形 / 多段接尾辞 / ドット付き接尾辞）
+ - **危険側 5 件は判定を維持し、理由が解決後の実パスを名指しするようになった**: `/etc/fstab`、`/etc/sudoers.d` drop-in、ssh 秘密鍵、`.githooks/pre-commit`、`.claude/settings.json`
+ - **解決してはいけない 12 形は Deny を維持、理由テキストはバイト一致**
+
+危険側が Allow に動いた行は 0。
+
+### テスト（第2節 (a)(b) の両方を満たした）
+
+`crates/blastguard/tests/redirect_target_suffix_resolution.rs`（新規 14 件）は resolver を書いていない agent が書き、group-(1) 6 件の **RED を src 無改変で観測**してから実装した（RED: 785 passed / 7 failed、うち 6 が期待された赤）。`symlink_*` 群 3 件は `identity` resolver ではなく**実 symlink + 実 binary**で測り、`canonicalize` が本当に `/etc/fstab` に届くことを fixture 自身が証明する assert と、binary が全部拒否しているのではないことを示す対照を持つ。
+
+最終 794 passed / 1 failed（残り 1 は既存の `deletion_tmpdir_is_not_a_root_when_home_is_unset` = a3e2261f）。fmt / clippy clean。
+
+### 途中で自分が間違えた 2 点（記録として残す）
+
+**1. 初版パッチは本物の fail-open を入れていた。** 既存 `redirect_target_resolution.rs` の `"$P"/../../../etc/fstab` 行が Deny → Allow に落ちた。テストが正しく、私が間違っていた。原因として最初に書いた機構説明（「軸は `..` を正規化しない」）も**嘘**で、軸は正規化する（`scope::normalize_abs`）。真の理由は `..` をカーネルが実ディレクトリに対して解決することで、symlink が手前にあると字句綴りが別のファイルを名指す（非破壊実測: 書き込みは物理的な親に落ち、字句上の親は無傷）。この欠陥はリテラルと bare 綴りで既に開いており **3ca56588** として起票した。したがって `literal_suffix` の `..` 拒否は**緩和策ではなく「広げないだけ」**で、3ca56588 が閉じたら false positive として撤去を検討する（代償は doc に明記: `P=<dir>/sub; : > $P/../out.log` がリテラルの Allow と食い違って Deny）。
+
+**2. 測定を 3 回間違えた。** repeat 台帳は payload の `session_id` ではなく**環境変数** `CLAUDE_CODE_SESSION_ID` で引かれる。1 回目の出力では 9 行が「Deny→Ask、パッチの影響」に見え、理由テキストがバイト一致していることに気づかなければ回帰として報告していた。さらに probe が「ユーザーが既に見た」マーカーを 22 件作ってしまい、逐語照合して削除した。**d8010ff2** として起票。
+
+### 既存テスト 2 行の訂正（利害関係のない agent が裁定・実施）
+
+自分の実装を通すために既存テストを書き換えるのは第4節が禁じる形なので、両行とも agent に実測を渡して裁定させた。どちらも**理由書きが bash について偽**で、片方は期待値も誤りだった。
+
+ - `> "$P"x`: 理由は「`$Px` is a different file」。非引用の `$Px` については真、引用付き `"$P"x` については偽（閉じ引用符が名前を終わらせる。実測で `ok.logx` が作られた）。resolved 群へ移動し、リテラルと対にした上で**危険な双子 3 件**を追加（`P=/etc/fstab; > "$P".bak`、`P=/etc/fsta; > "$P"b` ← これは `/etc/fstab` 自体に着地する、protected な settings.json）。無害なだけで通ることを防いでいる。
+ - `> "$P"/../../../etc/fstab`: 理由は「escapes the assigned directory」。確かに脱出するが `/home/etc/fstab` であって `/etc/fstab` ではない。**期待値は最初から正しく、理由だけが誤り**だったので、行はそのまま残して理由をカーネル意味論の実測に差し替えた。
+
+agent は一度この行について私と逆の結論（拒否を外せ）を出し、私が symlink の実測を返したところ**独立に再現して撤回**し、さらに「fixture が反証できない性質を pin していた」と自分の criterion 違反を認めて当該テストを削除した。
+
+### 付随して判明した別件（すべて起票済み、本票に混ぜない）
+
+ - **3ca56588** (p1) symlink + `..` の字句判定でリテラル redirect が `/etc/fstab` を Allow
+ - **5f3b2900** (p1) worktree では `worktree_root_*` 29 件が fixture calibration に失敗して暗転
+ - **d8010ff2** (p2) repeat 台帳が実行環境の session id で引かれる
+ - **a3e2261f** (p2) `deletion_tmpdir_is_not_a_root_when_home_is_unset` が赤
+ - **db79df80** (p3) `guard-maintree-bash.py` も同じ欠陥を持つ
+ - **32f89d40** (p2、起票済み) tee アームは解決段そのものが無い。本票の `reference_with_literal_suffix` をそのまま再利用できる"""
+created_at = 1790916935
+updated_at = 1790921576
+weight = 0.0
+issue_number = 1041
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1041"
+issue_closed_at = 1790921578
+rev = 3

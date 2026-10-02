@@ -13205,3 +13205,86 @@ notes = "2026-10-02 の origin 掃除で dependabot/* 9 本を削除した (GitH
 created_at = 1790907085
 updated_at = 1790907085
 weight = 0.0
+
+[[task]]
+id = "02f463df"
+title = "backlog: decide_issue_create が issue 番号を stdout+stderr の連結から parse するため、gh が stderr に何か出すと実在する issue を取り落として次の sync で重複を作る"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "deploy-verify",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = '''
+観測 2026-10-02、測定点 fb910894。main.rs の gh_probe は Some((code==0, format!("{stdout}{stderr}"))) を返し、github::decide_issue_create はその連結文字列を trim して URL として扱い、parse_issue_number に渡す。したがって gh issue create が stderr に1行でも出すと URL が汚れて parse が失敗する。
+
+実測の逐語出力 (tests/sync_only_scope.rs のスタブ gh が stderr を出した状態):
+  pend0001: created issue but could not parse number from "https://github.com/o/r/issues/500\n/tmp/bl-synconly-both-16934/bin/gh: 4: grep: not found"
+
+帰結が重い: gh の exit code は 0 なので issue は GitHub 上に実際に作られているが、number を parse できないため SyncOutcome::Created が積まれず、store には issue_number が記録されない。タスクは pending/issue 無しのまま残るので、次の sync --only create が同じタスクでもう一度 issue を作る = 孤児 issue + 重複。失敗側に倒れているのではなく、作ったものを記録し損ねている。
+
+判定不能の2つの読み: (a) 実在の欠陥。gh は warning/notice を stderr に出すことがあり (認証の警告、新バージョンの告知など)、その都度この経路を踏む。(b) 意図的: create の成否を combined output で見たいだけで、URL は stdout 限定にすべきだった単純な取り違え。
+
+見分け方: gh_probe の返り値を (code, stdout, stderr) の3つ組にし、decide_issue_create は stdout のみから URL を取る。combined は失敗時の reason 文面にだけ使う。先に RED を作れる: スタブ gh に stdout=URL / stderr=何か1行 を出させ、Created{url} が URL だけになることを assert する (今は落ちる)。
+
+close 側は影響なし (成否を exit code で見て stdout を使わない)。'''
+created_at = 1790907262
+updated_at = 1790907262
+weight = 0.0
+
+[[task]]
+id = "8aa7d564"
+title = "pre-commit の Bash ガード2本が正当な編集を fail-closed で止める: guard-maintree-bash.py が repo 外の cp 先を未解決として main-tree 扱い、deny-no-verify.py が heredoc 内のアポストロフィでトークナイズ不能になる"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+観測 2026-10-02、測定点 448ff46f〜fb910894。両方とも判定不能を制限側へ倒す設計どおりの挙動であり (CLAUDE.md 第3節)、ガードを緩める提案ではない。コストが実測できたので記録する。
+
+(1) guard-maintree-bash.py の逐語拒否:
+    Refused: `set -euo pipefail` (target `755` mutates this project's MAIN working tree.
+  実際のコマンドは install -m 755 <tmp>/gh $HOME/.cargo/bin/gh で、repo の外。-m のオペランド 755 を書き込み先と誤読している。シェル変数を使った形 (cp "$SP/.." ..) も $SP を解決できず main-tree 扱いで拒否された。回避できた形: 全パスをリテラル絶対パスで書き、install ではなく cp + chmod を使う。
+
+(2) deny-no-verify.py の逐語拒否:
+    Refused: this command could not be parsed, and it carries a gate-bypass marker.
+    The shell quoting does not close, so whether this is `git commit --no-verify` cannot be determined.
+  発火した実体は python3 - <<'PY' ... PY のヒアドキュメント本文に含まれる英文のアポストロフィ (repo's, plan's 等)。ヒアドキュメントは 'PY' で quote されているのでシェル的には閉じているが、ガードはコマンド文字列全体を素にトークナイズするため閉じないと判定する。回避できた形: パッチを scratchpad の .py ファイルへ Write し、python3 <file> で実行する。
+
+したがって、このリポジトリでは heredoc による複数行編集が事実上使えない。判定不能の2つの読み: (a) トークナイザを heredoc 対応にすれば両方消える実在の欠陥。(b) 意図的な保守性 (heredoc を解析しないことで bypass の抜け道を塞いでいる)。
+
+見分け方: deny-no-verify.py に 'quoted heredoc 本体はトークナイズ対象から除外し、heredoc の外だけを見る' テストを足して RED/GREEN を取る。guard-maintree-bash.py は install -m の -m オペランドを引数として扱うテストと、未解決変数を含む repo 外パスの扱いを決めるテストを足す。どちらも 'ガードを緩める' 前に、何を見ているかを先にテストで固定すること。"""
+created_at = 1790907262
+updated_at = 1790907262
+weight = 0.0
+
+[[task]]
+id = "efcd2534"
+title = "MirrorDrift の mirror_in_use ゲートは、GitHub repo の最初の mirror が失敗した場合に drift を永久に沈黙させる (backlog 0.3.20 で意図的に残した gap)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "deploy-verify",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+観測 2026-10-02、測定点 fb910894。store::mirror_drift は mirror_in_use (store 内に issue_number を持つタスクが1件以上あるか) を anti-noise の witness にしており、SessionStart の drift 報告はこれが true のときだけ出る。
+
+理由は正当: sync_plan は GitHub remote の無い repo でも未リンクの pending を全件 create として数えるので、ゲート無しでは非 GitHub プロジェクト全てで毎セッション発火し、読み手がこの行を無視するように訓練されてしまう。
+
+残る gap: GitHub repo で一番最初の mirror 試行が失敗した場合、issue_number を持つタスクが1件も無いので drift が報告されない = まさに今回の 467 件を生んだ状況の初期段階が dark になる。本リポジトリでは 462 件が issue を持つので現に見える状態だが、新しい repo では見えない。
+
+埋めるには remote 自体を見る必要がある (github::is_github_remote + git config --get remote.origin.url)。mirror_drift は純関数のまま保ちたいので、hook 側で bounded な git 呼び出しを1回行い、三値で扱うのが候補: github remote と確定 -> drift を常に報告 / 非 github と確定 -> 沈黙 / 判定不能 -> 現在の mirror_in_use ヒューリスティックに退避。
+
+MirrorDrift::mirror_in_use の doc comment に KNOWN GAP として明記済みなので、散文と実装は食い違っていない。"""
+created_at = 1790907263
+updated_at = 1790907263
+weight = 0.0

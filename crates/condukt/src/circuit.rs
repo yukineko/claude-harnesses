@@ -719,6 +719,7 @@ mod tests {
             paused: false,
             terminal_label: None,
             recorded_at: None,
+            recorded_episodes: Vec::new(),
         }
     }
 
@@ -1050,5 +1051,152 @@ mod tests {
         // unknown case still writes a `0` there — but never an unlabelled one.
         // This pins the label that keeps that 0 from reading as a measurement.
         assert_eq!(recs[0].reason.as_deref(), Some("idle_unmeasured"));
+    }
+}
+
+#[cfg(test)]
+mod backlog_a81911ee {
+    //! backlog a81911ee: an idleness that could not be measured must not be
+    //! journaled as the number `0` (indistinguishable from "progressed this
+    //! very second"). The stdout report already emits `null`; the JSONL trail
+    //! must carry the same distinction.
+    use super::*;
+    use crate::state::TaskState;
+
+    fn cfg(tmp: &Path) -> Config {
+        Config {
+            worktree_base: tmp.join("worktrees"),
+            default_branch: "main".to_string(),
+            shared_globs: Vec::new(),
+            max_parallel: 4,
+            state_dir: tmp.to_path_buf(),
+            test_command: None,
+            stuck_ttl_secs: 1800,
+            build_command: None,
+            deploy_command: None,
+            loop_max_iters: 10,
+            autonomous: false,
+            autonomy_source: harness_core::autonomy::Source::BuiltinDefault,
+            consensus_enabled: false,
+            consensus_samples: crate::consensus::DEFAULT_SAMPLES,
+            consensus_threshold: crate::consensus::DEFAULT_THRESHOLD,
+            adversarial_enabled: false,
+            adversarial_size: crate::adversarial::DEFAULT_PANEL,
+            adversarial_min_voters: crate::adversarial::DEFAULT_MIN_VOTERS,
+            adversarial_block_ratio: crate::adversarial::DEFAULT_BLOCK_RATIO,
+            single_worktree: false,
+            worker_sandbox_enabled: false,
+            worker_sandbox_image: None,
+            worker_sandbox_memory: None,
+            worker_sandbox_cpus: None,
+            worker_sandbox_pids_limit: None,
+        }
+    }
+
+    fn journal_lines(cfg: &Config, cwd: &Path, run_id: &str) -> Vec<serde_json::Value> {
+        let path = crate::gatelog::circuit_log_path(&state::project_state_dir(cfg, cwd), run_id);
+        let text = std::fs::read_to_string(&path).expect("circuit journal written");
+        text.lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str(l).expect("journal line is JSON"))
+            .collect()
+    }
+
+    #[test]
+    #[ignore = "backlog a81911ee: open defect, remove ignore when fixed"]
+    fn unmeasured_idle_is_not_journaled_as_zero() {
+        for ttl in [1800i64, 0] {
+            let tmp = tempfile::tempdir().unwrap();
+            let cwd = tmp.path();
+            let cfg = cfg(cwd);
+            let run_id = format!("no-ts-{ttl}");
+            // Legacy run state: a task exists but none carries `updated_at`,
+            // so idleness is Undetermined.
+            let run = RunState {
+                run_id: run_id.clone(),
+                goal: "g".to_string(),
+                tasks: vec![TaskState {
+                    id: "a".to_string(),
+                    status: Status::Running,
+                    updated_at: None,
+                    ..Default::default()
+                }],
+                paused: false,
+                terminal_label: None,
+                recorded_at: None,
+                recorded_episodes: Vec::new(),
+            };
+            run.save(&cfg, cwd).unwrap();
+            assert!(
+                matches!(
+                    gather_idle_secs(Some(&run), state::now_secs()),
+                    Determination::Undetermined(_)
+                ),
+                "fixture precondition: idleness must be unmeasurable"
+            );
+            let _ = run_circuit_check(&cfg, cwd, &run_id, 3, ttl, None, None);
+            let lines = journal_lines(&cfg, cwd, &run_id);
+            assert_eq!(lines.len(), 1);
+            assert!(
+                lines[0]["idle_secs"].is_null(),
+                "idle_ttl_secs={ttl}: unmeasured idleness was journaled as {} — a \
+                 cannot-determine written as a measurement",
+                lines[0]["idle_secs"]
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod backlog_7271f6e3 {
+    //! backlog 7271f6e3: two surviving mutants of `gather_absent_run_idle_secs`.
+    //! (b) an unreadable registry must NOT be masked by `--session`;
+    //! (d) a live stateless claim must NOT be overridden by `--session`.
+    //! The transcript closure returns a value the test can recognise, so a
+    //! mutant that consults the flag shows up as `Known(1)` / `SessionFlag`.
+    use super::*;
+    use crate::claim::StatelessIdle;
+
+    const NOW: i64 = 10_000;
+
+    fn vouching_transcript(_sid: &str) -> Determination<i64> {
+        Determination::known(NOW - 1)
+    }
+
+    #[test]
+    fn unreadable_registry_with_session_flag_stays_unmeasured() {
+        let (idle, source) = gather_absent_run_idle_secs(
+            StatelessIdle::RegistryUnreadable("registry corrupt".into()),
+            "flow-S1",
+            Some("S1"),
+            NOW,
+            vouching_transcript,
+        );
+        assert!(
+            matches!(idle, Determination::Undetermined(_)),
+            "an unreadable registry must stay Undetermined even with a vouching \
+             --session; got {idle:?}"
+        );
+        assert_eq!(source, IdleSource::ClaimRegistry);
+        // And end-to-end through the decision: the idle axis trips.
+        let v = decide_circuit(0, 5, false, idle, 1800);
+        assert_eq!(v, CircuitVerdict::Trip(CircuitReason::IdleUnmeasured));
+    }
+
+    #[test]
+    fn live_stateless_claim_with_session_flag_uses_the_claim() {
+        let (idle, source) = gather_absent_run_idle_secs(
+            StatelessIdle::Measured(Determination::known(500)),
+            "flow-S1",
+            Some("S1"),
+            NOW,
+            vouching_transcript,
+        );
+        assert_eq!(
+            idle,
+            Determination::known(500),
+            "a live stateless claim's measurement must win over --session"
+        );
+        assert_eq!(source, IdleSource::ClaimRegistry);
     }
 }

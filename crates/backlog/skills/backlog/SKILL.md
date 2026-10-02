@@ -28,7 +28,8 @@ backlog ruling approve <id>                        # 人間が TTY で id を打
 backlog add ... --repro-test "<cmd>"               # 再現した時だけ pending、それ以外は unconfirmed
 backlog confirm <id> --repro-test "<cmd>"          # unconfirmed を再現テストで pending へ昇格
 backlog audit-closures [--json]                    # 既存 close の証拠クラスを集計（read-only）
-backlog fail <id> --reason "<概要>"                # アイテムを失敗マーク
+backlog fail <id> --reason "<概要>"                # アイテムを失敗マーク（2 日後に再キューされる）
+backlog cancel <id> --reason "<理由>"              # やらないと決めて捨てる（終端。`discard` closure として理由を記録。証明できない推測はこれで捨てる。done と違い完了を主張しない）
 
 # driver の存在通知（非排他。何セッションでも同時に登録できる）
 backlog driver register   --session-id <id> --project <path>
@@ -63,6 +64,7 @@ backlog lock release --project <path>
 | キューを確認したい | `backlog list --status pending` |
 | 次のアイテムだけ確認したい | `backlog next`（覗くだけ。着手するなら `next --claim`） |
 | 手動で完了 / 失敗マークしたい | `backlog done <id> --test ... --red-rev ...`（証拠必須。素の `done` は拒否）/ `backlog fail <id>` |
+| やらないと決めて閉じたい | `backlog cancel <id> --reason "<理由>"`（`discard` として記録。テスト・ruling 不要） |
 | **キューを自動で全件消化したい** | **`/flow` を使う** |
 
 ## 失敗モード

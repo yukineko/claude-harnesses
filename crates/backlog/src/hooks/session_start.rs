@@ -140,7 +140,8 @@ pub fn run(input: &HookInput) -> Option<String> {
         format!(
             "## Backlog \u{2014} outside the workable queue\n\n\
              unconfirmed: {unconfirmed} (suspicions; promote with \
-             `backlog confirm ID --repro-test CMD`), needs-ruling: {needs_ruling} (a human \
+             `backlog confirm ID --repro-test CMD`, or discard with \
+             `backlog cancel ID --reason R`), needs-ruling: {needs_ruling} (a human \
              approves with `backlog ruling approve ID` at a TTY). `backlog list` shows them.\n\n"
         )
     } else {

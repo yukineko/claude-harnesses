@@ -52,14 +52,16 @@ pub enum Recovery {
     /// The path does not exist. Truncating or writing it destroys nothing —
     /// there are no prior bytes to lose.
     NothingToDestroy,
-    /// The path is inside a git work tree.
+    /// The path is inside a git work tree, and `git status` answered for it.
     ///
     /// **This is a wider claim than its name suggests, on purpose.** Since the
-    /// operator ruling of 2026-09-18 ([`decide_recovery`]), *every* path inside
-    /// a checkout lands here — tracked-and-clean, tracked-with-uncommitted-
-    /// changes, untracked, and paths whose `git status` never answered. Only
-    /// the first of those is literally restorable by `git restore`; the rest
-    /// are treated as recoverable by operator decision, not by observation.
+    /// operator ruling of 2026-09-18 ([`decide_recovery`]), every path inside
+    /// a checkout whose git state was *read* lands here — tracked-and-clean,
+    /// tracked-with-uncommitted-changes, and untracked. Only the first of those
+    /// is literally restorable by `git restore`; the rest are treated as
+    /// recoverable by operator decision, not by observation. A path whose
+    /// `git status` did not answer does NOT land here (operator ruling
+    /// 2026-10-02): it is [`Recovery::Undetermined`].
     ///
     /// The variant keeps its name so the diff of that ruling stays legible, but
     /// do not read it as "git holds these bytes" — read it as "inside a work
@@ -123,7 +125,8 @@ pub enum GitState {
 /// | ✗ | — | — | `NothingToDestroy` |
 /// | ✓ | `NotRepo` | — | `Unrecoverable` (no version control holds a copy) |
 /// | ✓ | `Undetermined` | — | `Undetermined` |
-/// | ✓ | `Repo` | **any** | `RecoverableFromGit` |
+/// | ✓ | `Repo` | `TrackedClean` / `TrackedDirty` / `Untracked` | `RecoverableFromGit` |
+/// | ✓ | `Repo` | `Undetermined` | `Undetermined` |
 ///
 /// The `exists = ✗` row is the one that retires the largest single class of
 /// false friction, and it is also a §4 correction: the rule it replaces denied
@@ -163,15 +166,21 @@ pub enum GitState {
 /// one", so it still resolves restrictively (CLAUDE.md §3). Only a *positive*
 /// observation of being inside a checkout relaxes the answer. The control test
 /// `undetermined_repo_probe_never_reports_recoverable` pins that boundary.
+///
+/// # The `Repo` + `GitState::Undetermined` row (operator ruling 2026-10-02)
+///
+/// The 2026-09-18 collapse also swept in a `git status` that did not answer
+/// (spawn failure, timeout, non-zero exit). The operator ruled on that row
+/// separately: *"Can't read -> not recoverable"* (backlog 7778b634). Being
+/// inside a work tree relaxes the answer only for a git state that was
+/// actually read; an unread one is forwarded as `Undetermined` and resolves
+/// restrictively at the call site (CLAUDE.md §3). Pinned by
+/// `unreadable_git_state_inside_a_work_tree_is_undetermined` and the
+/// fault-injection test `blind_boundary_never_leaves_a_recoverability_probe_permissive`.
 pub fn decide_recovery(exists: bool, repo: RepoProbe, git: GitState) -> Recovery {
     if !exists {
         return Recovery::NothingToDestroy;
     }
-    // `git` is deliberately unused for the `Repo` arm: the operator's ruling
-    // makes "inside a work tree" the whole answer. It stays in the signature
-    // because `RepoProbe::NotRepo`/`Undetermined` callers still compute it and
-    // because narrowing the relaxation later must not be an API change.
-    let _ = git;
     match repo {
         RepoProbe::NotRepo => Recovery::Unrecoverable(
             "it exists, and it is not inside a git work tree — nothing holds a second copy of \
@@ -183,9 +192,20 @@ these bytes"
 so whether these bytes are recoverable is unknown"
                 .to_string(),
         ),
-        // Every git state, including Untracked, TrackedDirty and a `git status`
-        // that did not answer. Operator ruling 2026-09-18 — see above.
-        RepoProbe::Repo => Recovery::RecoverableFromGit,
+        // A git status that did not answer is not a read state, and an
+        // unread state supports no recoverability claim (ruling 2026-10-02).
+        RepoProbe::Repo => match git {
+            GitState::Undetermined => Recovery::Undetermined(
+                "it exists inside a git work tree, but `git status` did not answer for it, so \
+whether these bytes are recoverable is unknown"
+                    .to_string(),
+            ),
+            // Every state git actually reported, including Untracked and
+            // TrackedDirty. Operator ruling 2026-09-18 — see above.
+            GitState::TrackedClean | GitState::TrackedDirty | GitState::Untracked => {
+                Recovery::RecoverableFromGit
+            }
+        },
     }
 }
 
@@ -290,9 +310,289 @@ relative to, so it cannot tell whether these bytes are recoverable"
     decide_recovery(true, repo, git)
 }
 
+/// What git said about everything at or below one path, for the project
+/// deletion classes of [`crate::deletion`] (spec 3aa215e1 classes 4 and 5).
+///
+/// Raw observations only; the decision lives in
+/// [`crate::deletion::decide_project`], which is pure and unit-tested row by
+/// row. Every field comes from a git invocation that exited with a code this
+/// module reasoned about — a probe that could not produce ALL of them returns
+/// `Undetermined` instead of a partial value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TreeGitFacts {
+    /// `git rev-parse --show-toplevel`, as git printed it (trimmed).
+    pub toplevel: String,
+    /// `git status --porcelain=v1 -z --ignored=matching --untracked-files=all`
+    /// entries at or below the path: the two-letter `XY` code and the path.
+    /// Empty = every byte at or below the path is in HEAD (with the index and
+    /// ignore rules as git applied them).
+    pub status: Vec<(String, String)>,
+    /// Number of index entries at or below the path (`git ls-files`).
+    pub tracked: usize,
+    /// Some index entry at or below the path is a gitlink (mode `160000`, a
+    /// submodule).
+    pub submodule: bool,
+    /// Some index entry at or below the path carries a tag other than `H`
+    /// (`git ls-files -v`): assume-unchanged (lowercase), skip-worktree (`S`),
+    /// unmerged, … — states in which `git status` may not report a local
+    /// modification, so its silence proves nothing there.
+    pub hidden_index_state: bool,
+    /// For each build-output candidate the caller passed that lies strictly
+    /// inside `toplevel`: whether `git check-ignore` reports it ignored
+    /// (tracked paths are never reported ignored by `check-ignore`).
+    /// Candidates outside `toplevel` are omitted.
+    pub build_dirs: Vec<(String, bool)>,
+}
+
+/// The injected form of [`probe_tree`], so [`crate::scope::SafeRoots`] can
+/// carry it and unit tests can model a repository without creating one.
+///
+/// Arguments: the canonical absolute path of the operand, and the
+/// build-output directory candidates (canonical absolute paths) to ask
+/// `check-ignore` about.
+pub type GitTreeProbe = fn(&str, &[String]) -> Determination<TreeGitFacts>;
+
+/// Timeout for each git invocation of [`probe_tree`].
+const TREE_GIT_TIMEOUT: Duration = Duration::from_millis(1500);
+
+/// Environment variables that would point git at a different repository,
+/// index or object store than the one the path lives in. Removed so the probe
+/// answers about the tree on disk and not about whatever the hook inherited.
+const GIT_REDIRECT_ENV: &[&str] = &[
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_NAMESPACE",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT",
+];
+
+/// A `git` command for `dir` with the settings that can make `git status`
+/// under-report switched off (`core.fsmonitor`, `core.untrackedCache`) and,
+/// when `literal`, pathspec magic disabled (`--literal-pathspecs`).
+/// `check-ignore` rejects `--literal-pathspecs` outright (exit 128, "pathspec
+/// magic not supported by this command" — observed), so it is called with
+/// `literal = false`; its arguments are paths this crate built from literal
+/// operands (no glob characters reach here — `scope`'s literal-path check).
+fn tree_git(git: &std::ffi::OsStr, dir: &Path, literal: bool) -> std::process::Command {
+    let mut cmd = std::process::Command::new(git);
+    for var in GIT_REDIRECT_ENV {
+        cmd.env_remove(var);
+    }
+    if literal {
+        cmd.arg("--literal-pathspecs");
+    }
+    cmd.args([
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.untrackedCache=false",
+    ])
+    .arg("-C")
+    .arg(dir);
+    cmd
+}
+
+/// Run `cmd` bounded by [`TREE_GIT_TIMEOUT`]; stdout only for an exit code in
+/// `ok_codes`, together with the code. Anything else is `Undetermined`.
+fn run_tree_git(cmd: &mut std::process::Command, ok_codes: &[i32]) -> Determination<(i32, String)> {
+    match harness_core::boundary::run_with_timeout(cmd, TREE_GIT_TIMEOUT) {
+        Determination::Known(out) => {
+            let code = out.code();
+            match out.stdout_allowing(ok_codes) {
+                Determination::Known(stdout) => Determination::known((code, stdout)),
+                Determination::Undetermined(u) => Determination::Undetermined(u),
+            }
+        }
+        Determination::Undetermined(u) => Determination::Undetermined(u),
+    }
+}
+
+/// Parse `git status --porcelain=v1 -z` output. `None` = not in the shape
+/// porcelain v1 promises (a record shorter than `XY path`), which the caller
+/// reads as `Undetermined`. A rename/copy record (`R`/`C` in either column)
+/// carries a second NUL-terminated path, which is consumed.
+pub fn parse_status_z(stdout: &str) -> Option<Vec<(String, String)>> {
+    let mut out = Vec::new();
+    let mut fields = stdout.split('\0').filter(|f| !f.is_empty());
+    while let Some(rec) = fields.next() {
+        if rec.len() < 4 || rec.as_bytes()[2] != b' ' || !rec.is_char_boundary(2) {
+            return None;
+        }
+        let xy = rec[..2].to_string();
+        let path = rec[3..].to_string();
+        if xy.contains('R') || xy.contains('C') {
+            fields.next()?;
+        }
+        out.push((xy, path));
+    }
+    Some(out)
+}
+
+/// Parse `git ls-files -z -s -v` output into (entry count, any gitlink, any
+/// tag other than `H`). `None` = a record not shaped `TAG MODE SHA STAGE\tPATH`.
+pub fn parse_ls_files_sv_z(stdout: &str) -> Option<(usize, bool, bool)> {
+    let mut count = 0;
+    let mut submodule = false;
+    let mut hidden = false;
+    for rec in stdout.split('\0').filter(|f| !f.is_empty()) {
+        let (meta, _path) = rec.split_once('\t')?;
+        let mut parts = meta.split(' ');
+        let tag = parts.next()?;
+        let mode = parts.next()?;
+        if tag.is_empty() || mode.is_empty() {
+            return None;
+        }
+        count += 1;
+        if mode == "160000" {
+            submodule = true;
+        }
+        if tag != "H" {
+            hidden = true;
+        }
+    }
+    Some((count, submodule, hidden))
+}
+
+/// The wired [`GitTreeProbe`]. Real filesystem and subprocess I/O; only the
+/// hook binary attaches it ([`crate::scope::SafeRoots::with_git_tree_probe`]).
+///
+/// `Undetermined` — which the caller reads as "not Allow" — when the path does
+/// not exist (`lstat` fails), when it is not inside a git work tree, and when
+/// any git invocation fails, times out, exits with a code not listed here, or
+/// prints something unparseable. Each invocation is bounded by
+/// [`TREE_GIT_TIMEOUT`].
+pub fn probe_tree(path: &str, build_candidates: &[String]) -> Determination<TreeGitFacts> {
+    probe_tree_with(std::ffi::OsStr::new("git"), path, build_candidates)
+}
+
+/// [`probe_tree`] with the `git` program named explicitly — the seam the
+/// failure-mode tests use to substitute a git that fails, hangs or prints
+/// garbage. Production always passes `git`.
+pub(crate) fn probe_tree_with(
+    git: &std::ffi::OsStr,
+    path: &str,
+    build_candidates: &[String],
+) -> Determination<TreeGitFacts> {
+    let p = Path::new(path);
+    let meta = match std::fs::symlink_metadata(p) {
+        Ok(m) => m,
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "`{path}` could not be examined ({e}), so what deleting it would lose is unknown"
+            ))
+        }
+    };
+    let dir: &Path = if meta.file_type().is_dir() {
+        p
+    } else {
+        match p.parent() {
+            Some(d) => d,
+            None => return Determination::undetermined("path has no parent directory"),
+        }
+    };
+    let toplevel = match run_tree_git(
+        tree_git(git, dir, true).args(["rev-parse", "--show-toplevel"]),
+        &[0],
+    ) {
+        Determination::Known((_, out)) => out.trim().to_string(),
+        Determination::Undetermined(u) => return Determination::Undetermined(u),
+    };
+    if !toplevel.starts_with('/') {
+        return Determination::undetermined("git printed a work-tree root that is not absolute");
+    }
+    let status_out = match run_tree_git(
+        tree_git(git, dir, true)
+            .args([
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--ignored=matching",
+                "--untracked-files=all",
+                "--",
+            ])
+            .arg(path),
+        &[0],
+    ) {
+        Determination::Known((_, out)) => out,
+        Determination::Undetermined(u) => return Determination::Undetermined(u),
+    };
+    let Some(status) = parse_status_z(&status_out) else {
+        return Determination::undetermined("git status printed a record blastguard cannot parse");
+    };
+    let ls_out = match run_tree_git(
+        tree_git(git, dir, true)
+            .args(["ls-files", "-z", "-s", "-v", "--"])
+            .arg(path),
+        &[0],
+    ) {
+        Determination::Known((_, out)) => out,
+        Determination::Undetermined(u) => return Determination::Undetermined(u),
+    };
+    let Some((tracked, submodule, hidden_index_state)) = parse_ls_files_sv_z(&ls_out) else {
+        return Determination::undetermined(
+            "git ls-files printed a record blastguard cannot parse",
+        );
+    };
+    let top_prefix = format!("{}/", toplevel.trim_end_matches('/'));
+    let mut build_dirs = Vec::new();
+    for cand in build_candidates {
+        if !cand.starts_with(&top_prefix) {
+            continue;
+        }
+        // `check-ignore` exits 0 = ignored, 1 = not ignored; anything else
+        // (128: not a repo, a path outside it, …) is not an answer.
+        match run_tree_git(
+            tree_git(git, dir, false)
+                .args(["check-ignore", "-q", "--"])
+                .arg(cand),
+            &[0, 1],
+        ) {
+            Determination::Known((code, _)) => build_dirs.push((cand.clone(), code == 0)),
+            Determination::Undetermined(u) => return Determination::Undetermined(u),
+        }
+    }
+    Determination::known(TreeGitFacts {
+        toplevel,
+        status,
+        tracked,
+        submodule,
+        hidden_index_state,
+        build_dirs,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_tree_git_only_knows_listed_exit_codes_within_the_timeout() {
+        let sh = |script: &str| {
+            let mut c = std::process::Command::new("sh");
+            c.args(["-c", script]);
+            c
+        };
+        assert_eq!(
+            run_tree_git(&mut sh("printf ok"), &[0]),
+            Determination::known((0, "ok".to_string()))
+        );
+        assert_eq!(
+            run_tree_git(&mut sh("exit 1"), &[0, 1]),
+            Determination::known((1, String::new()))
+        );
+        assert!(matches!(
+            run_tree_git(&mut sh("printf partial; exit 128"), &[0]),
+            Determination::Undetermined(_)
+        ));
+        assert!(matches!(
+            run_tree_git(&mut sh("exec sleep 5"), &[0]),
+            Determination::Undetermined(_)
+        ));
+    }
 
     // --- decide_recovery: one test per row of the documented table ---
 
@@ -325,21 +625,21 @@ mod tests {
     }
 
     /// **The 2026-09-18 operator ruling, pinned.** Being *inside a git work
-    /// tree* is the whole answer for this axis: every `GitState` row under
-    /// `RepoProbe::Repo` resolves to `RecoverableFromGit`, so nothing in a
-    /// checkout is ever denied or asked about.
+    /// tree* is the whole answer for this axis for every git state that was
+    /// read: each such `GitState` row under `RepoProbe::Repo` resolves to
+    /// `RecoverableFromGit`, so nothing in a checkout is denied or asked about.
     ///
-    /// This replaced three rows that used to answer `Unrecoverable` /
-    /// `Undetermined` — see `tracked_but_dirty_*`, `untracked_*` and
-    /// `undetermined_never_reports_recoverable` below for what each of them
-    /// asserted before, and why it changed.
+    /// This replaced rows that used to answer `Unrecoverable` — see
+    /// `tracked_but_dirty_*` and `untracked_*` below. **CHANGED 2026-10-02**:
+    /// this loop used to include `GitState::Undetermined`; the operator ruled
+    /// that an unreadable git state is not recoverable, so that row moved to
+    /// `unreadable_git_state_inside_a_work_tree_is_undetermined`.
     #[test]
-    fn inside_a_work_tree_is_always_recoverable_regardless_of_git_state() {
+    fn inside_a_work_tree_is_recoverable_for_every_read_git_state() {
         for git in [
             GitState::TrackedClean,
             GitState::TrackedDirty,
             GitState::Untracked,
-            GitState::Undetermined,
         ] {
             let r = decide_recovery(true, RepoProbe::Repo, git);
             assert_eq!(
@@ -350,6 +650,19 @@ mod tests {
             );
             assert!(r.is_recoverable(), "{r:?}");
         }
+    }
+
+    /// **Operator ruling 2026-10-02** (backlog 7778b634): *"Can't read -> not
+    /// recoverable"*. A `git status` that did not answer must be forwarded as
+    /// `Undetermined`, never collapsed into `RecoverableFromGit`.
+    #[test]
+    fn unreadable_git_state_inside_a_work_tree_is_undetermined() {
+        let r = decide_recovery(true, RepoProbe::Repo, GitState::Undetermined);
+        assert!(matches!(r, Recovery::Undetermined(_)), "{r:?}");
+        assert!(
+            !r.is_recoverable(),
+            "git did not answer, yet the path was judged recoverable: {r:?}"
+        );
     }
 
     /// **CHANGED 2026-09-18** (was `tracked_but_dirty_is_unrecoverable`, which
@@ -527,5 +840,122 @@ mod tests {
             probe(&missing.to_string_lossy(), None),
             Recovery::NothingToDestroy
         );
+    }
+
+    // --- probe_tree (deletion classes 4/5) ---
+
+    #[test]
+    fn parse_status_z_reads_records_and_consumes_rename_sources() {
+        assert_eq!(parse_status_z(""), Some(vec![]));
+        assert_eq!(
+            parse_status_z("?? a\0 M b c\0R  new\0old\0!! d/\0"),
+            Some(vec![
+                ("??".to_string(), "a".to_string()),
+                (" M".to_string(), "b c".to_string()),
+                ("R ".to_string(), "new".to_string()),
+                ("!!".to_string(), "d/".to_string()),
+            ])
+        );
+        assert_eq!(parse_status_z("xx\0"), None);
+        assert_eq!(parse_status_z("R  new\0"), None);
+    }
+
+    #[test]
+    fn parse_ls_files_counts_and_flags_non_h_tags_and_gitlinks() {
+        assert_eq!(parse_ls_files_sv_z(""), Some((0, false, false)));
+        let h = "H 100644 e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 0\ta\0";
+        assert_eq!(parse_ls_files_sv_z(h), Some((1, false, false)));
+        let s = "S 100644 e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 0\ta\0";
+        assert_eq!(parse_ls_files_sv_z(s), Some((1, false, true)));
+        let low = "h 100644 e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 0\ta\0";
+        assert_eq!(parse_ls_files_sv_z(low), Some((1, false, true)));
+        let sub = "H 160000 e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 0\tm\0";
+        assert_eq!(parse_ls_files_sv_z(sub), Some((1, true, false)));
+        assert_eq!(parse_ls_files_sv_z("garbage\0"), None);
+    }
+
+    fn git_in(dir: &std::path::Path, args: &[&str]) {
+        let ok = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.email=t@t", "-c", "user.name=t"])
+            .args(args)
+            .status()
+            .expect("git runs")
+            .success();
+        assert!(ok, "git {args:?}");
+    }
+
+    #[allow(clippy::panic)]
+    fn known_facts(d: Determination<TreeGitFacts>) -> TreeGitFacts {
+        match d {
+            Determination::Known(f) => f,
+            Determination::Undetermined(u) => panic!("expected facts, got {u:?}"),
+        }
+    }
+
+    /// Against a REAL repository: what each class of content looks like to
+    /// the probe.
+    #[test]
+    fn probe_tree_observes_a_real_repository() {
+        let base = std::env::temp_dir().join(format!("bg-tree-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let repo = base.join("r");
+        std::fs::create_dir_all(repo.join("src/sub")).unwrap();
+        std::fs::create_dir_all(repo.join("target/debug")).unwrap();
+        std::fs::create_dir_all(repo.join("secrets")).unwrap();
+        std::fs::create_dir_all(base.join("plain")).unwrap();
+        std::fs::write(repo.join(".gitignore"), "/target\nsecrets/\n").unwrap();
+        std::fs::write(repo.join("src/a.rs"), "a").unwrap();
+        std::fs::write(repo.join("src/sub/b.rs"), "b").unwrap();
+        std::fs::write(repo.join("target/debug/x"), "x").unwrap();
+        std::fs::write(repo.join("secrets/k"), "k").unwrap();
+        git_in(&repo, &["init", "-q"]);
+        git_in(&repo, &["add", ".gitignore", "src"]);
+        git_in(&repo, &["commit", "-qm", "i"]);
+        let repo = repo.canonicalize().unwrap();
+        let r = |p: &str| format!("{}/{p}", repo.display());
+
+        let clean = known_facts(probe_tree(&r("src"), &[]));
+        assert!(clean.status.is_empty(), "{clean:?}");
+        assert_eq!(clean.tracked, 2);
+        assert!(!clean.submodule && !clean.hidden_index_state);
+        assert_eq!(
+            std::path::Path::new(&clean.toplevel)
+                .canonicalize()
+                .unwrap(),
+            repo
+        );
+
+        let t = known_facts(probe_tree(&r("target/debug"), &[r("target")]));
+        assert_eq!(t.tracked, 0);
+        assert!(t.status.iter().all(|(xy, _)| xy == "!!"), "{t:?}");
+        assert_eq!(t.build_dirs, vec![(r("target"), true)]);
+        let tracked_build = known_facts(probe_tree(&r("src"), &[r("src")]));
+        assert_eq!(tracked_build.build_dirs, vec![(r("src"), false)]);
+
+        let s = known_facts(probe_tree(&r("secrets"), &[]));
+        assert_eq!(s.status, vec![("!!".to_string(), "secrets/".to_string())]);
+
+        std::fs::write(repo.join("src/a.rs"), "changed").unwrap();
+        std::fs::write(repo.join("src/sub/new.rs"), "n").unwrap();
+        let dirty = known_facts(probe_tree(&r("src"), &[]));
+        let codes: Vec<&str> = dirty.status.iter().map(|(xy, _)| xy.as_str()).collect();
+        assert!(codes.contains(&" M") && codes.contains(&"??"), "{dirty:?}");
+
+        git_in(&repo, &["update-index", "--skip-worktree", "src/sub/b.rs"]);
+        assert!(known_facts(probe_tree(&r("src/sub"), &[])).hidden_index_state);
+
+        // Not a repository, and a path that does not exist: no facts.
+        let plain = base.join("plain").canonicalize().unwrap();
+        assert!(matches!(
+            probe_tree(plain.to_str().unwrap(), &[]),
+            Determination::Undetermined(_)
+        ));
+        assert!(matches!(
+            probe_tree(&r("nope"), &[]),
+            Determination::Undetermined(_)
+        ));
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

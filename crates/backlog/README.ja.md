@@ -63,7 +63,8 @@ backlog next                                                 # 次の項目を�
 backlog done <id> --test "cargo test -p x" --red-rev <rev>  # 解決する（REV で RED・HEAD で GREEN を実測）
 backlog done <id> --doc-only <commit>                        # または doc だけの祖先 commit
 backlog done <id> --duplicate-of <id>                        # または重複
-backlog fail <id> --reason "blocked"                         # 2 日先送りする
+backlog fail <id> --reason "blocked"                         # 2 日先送りする（2 日後に pending へ戻る）
+backlog cancel <id> --reason "やらないと決めた"               # やらないと決めて捨てる（終端。再キューしない。`discard` closure として記録。テスト不要）
 backlog lock status                                          # run-lock の保有者を確認
 backlog install                                              # SessionStart フックを settings.json にマージ
 backlog uninstall                                            # 再び除去する

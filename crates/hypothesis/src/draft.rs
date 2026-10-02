@@ -97,15 +97,10 @@ impl RigorGates for DraftGates {
         // re-worded here, where the two could drift apart.
         match scope_draft_from_bundle(bundle).declare().require() {
             Required::Determined(_declared) => {}
-            Required::Blocked(verdict) => {
-                let gap = match verdict.reason() {
-                    Some(reason) => reason.as_str().to_string(),
-                    // Unreachable: `require`'s blocked arm always carries
-                    // `Verdict::Undetermined`, which always carries a reason.
-                    // Stated non-silently anyway — an empty gap would read as
-                    // "nothing is wrong here", which is the opposite of the truth.
-                    None => format!("scope is undetermined and stated no reason: {verdict:?}"),
-                };
+            Required::Blocked(why) => {
+                // `why` is the give-up's `Undet`, which always carries a reason
+                // (the type has no reason-less form), so the gap is never empty.
+                let gap = why.as_str().to_string();
                 open.push(OpenQuestion {
                     gate: "D1".to_string(),
                     reference: "scope".to_string(),
@@ -346,15 +341,11 @@ pub fn run(cfg: &Config, args: DraftArgs) -> Result<()> {
     // `ScopeDeclaration` and this is the only way to make one.
     let declared: ScopeDeclaration = match scope_draft_from_bundle(&bundle).declare().require() {
         Required::Determined(declared) => declared,
-        Required::Blocked(verdict) => {
+        Required::Blocked(why) => {
             // Unreachable while the D1 gate above returns early on this same
             // answer. Kept as a refusal rather than a substituted empty
             // declaration so that reordering or removing that gate cannot turn
             // "could not determine" into a recorded scope.
-            let why = match verdict.reason() {
-                Some(reason) => reason.as_str().to_string(),
-                None => format!("{verdict:?}"),
-            };
             anyhow::bail!("refusing to record a hypothesis whose scope is undetermined: {why}");
         }
     };

@@ -14,6 +14,9 @@ mod merge_driver;
 mod store;
 mod task;
 
+#[cfg(test)]
+mod audit_b1_0_tests;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use harness_core::boundary;
@@ -222,6 +225,19 @@ enum Command {
         /// Failure reason
         #[arg(long)]
         reason: Option<String>,
+    },
+
+    /// Close a task as "decided not to do it" (discard an item nothing
+    /// demonstrates): terminal, never requeued, and not a claim of completion
+    /// (unlike `done`). Recorded as a `discard` closure; needs no test or ruling
+    Cancel {
+        /// Task ID
+        id: String,
+
+        /// Why it will not be done (required, non-empty; recorded as the
+        /// closure's discard_reason and appended to the notes)
+        #[arg(long)]
+        reason: String,
     },
 
     /// Reconcile this store against its GitHub issues (one-way: local wins)
@@ -562,11 +578,8 @@ enum ScopeCheck {
 fn check_store_scope(store_root: &std::path::Path, asked: &str) -> ScopeCheck {
     let store_identity = match store::canonical_project_id(store_root).require() {
         Required::Determined(root) => root.to_string_lossy().into_owned(),
-        Required::Blocked(verdict) => {
-            let why = verdict
-                .reason()
-                .map(|r| r.as_str().to_string())
-                .unwrap_or_else(|| "unknown".to_string());
+        Required::Blocked(undet) => {
+            let why = undet.as_str();
             return ScopeCheck::Unverifiable(format!(
                 "cannot determine which project the store at {} belongs to, so `--project \
                  {asked}` could not be checked against it: {why}",
@@ -656,11 +669,8 @@ fn default_project_scope(
     let cwd = std::env::current_dir()?;
     match store::canonical_project_id(&cwd).require() {
         Required::Determined(root) => Ok(Some(root.to_string_lossy().into_owned())),
-        Required::Blocked(verdict) => {
-            let why = verdict
-                .reason()
-                .map(|r| r.as_str().to_string())
-                .unwrap_or_else(|| "unknown".to_string());
+        Required::Blocked(undet) => {
+            let why = undet.as_str();
             Err(anyhow::anyhow!(
                 "cannot determine this checkout's project scope for the default \
                  `backlog {command}` (pass --project explicitly, or --all to bypass \
@@ -696,11 +706,8 @@ fn claim_identity(effective_project: Option<&str>) -> Result<String> {
         let cwd = std::env::current_dir()?;
         return match store::canonical_project_id(&cwd).require() {
             Required::Determined(root) => Ok(root.to_string_lossy().into_owned()),
-            Required::Blocked(verdict) => {
-                let why = match verdict.reason() {
-                    Some(r) => r.as_str().to_string(),
-                    None => "unknown".to_string(),
-                };
+            Required::Blocked(undet) => {
+                let why = undet.as_str();
                 Err(anyhow::anyhow!(
                     "cannot determine this checkout's project identity, so a claim could not be \
                      recorded project-wide and would be invisible to other checkouts; refusing \
@@ -1446,6 +1453,16 @@ fn run(cli: Cli) -> Result<()> {
                     plan.len()
                 ));
             }
+        }
+
+        Command::Cancel { id, reason } => {
+            let tasks_path = store_path()?;
+            store::mark_cancelled(&tasks_path, &id, &reason)?;
+            println!("cancelled: {id}");
+            // Same mirror as `done`: a cancelled row's issue closes as "not
+            // planned" (sync_plan's STATUS_CANCELLED arm); a failure warns and
+            // leaves it for `backlog sync`.
+            mirror_close_for(&tasks_path, &id);
         }
 
         Command::Fail { id, reason } => {

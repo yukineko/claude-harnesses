@@ -375,15 +375,9 @@ fn resolve_force_gate(
         harness_core::verdict::Required::Determined(a) => {
             (a.requires_gate() || a.risk >= Risk::Medium, None)
         }
-        harness_core::verdict::Required::Blocked(verdict) => (
-            true,
-            Some(
-                verdict
-                    .reason()
-                    .map(|r| r.as_str().to_string())
-                    .unwrap_or_else(|| "risk classification undetermined".to_string()),
-            ),
-        ),
+        harness_core::verdict::Required::Blocked(verdict) => {
+            (true, Some(verdict.as_str().to_string()))
+        }
     }
 }
 
@@ -1546,5 +1540,59 @@ mod prop_tests {
         assert!(sched.batches.is_empty());
         assert!(sched.serial.is_empty());
         assert!(sched.gated.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod backlog_2afeb849 {
+    //! backlog 2afeb849: the force-gate classifies `touched_files` PATH NAMES
+    //! with the same needles it uses for command-shaped text, so a task that
+    //! only EDITS a checker script whose file name contains a deploy word is
+    //! force-gated as "high-risk irreversible". Title and done-criteria are
+    //! held neutral; only the path differs from the control.
+    use super::*;
+
+    fn edit_task(id: &str, file: &str) -> Task {
+        Task {
+            id: id.into(),
+            title: "neutral title".into(),
+            touched_files: vec![file.to_string()],
+            deps: Vec::new(),
+            class: Class::Parallel,
+            suggested_model: None,
+            done_criteria: Some("none".into()),
+            size: None,
+            target_symbols: Vec::new(),
+            reproduction_tests: None,
+            confidence: None,
+            kind: None,
+            checks: Vec::new(),
+            expected_trajectory: None,
+            is_behavioral: None,
+            mechanical_check: None,
+        }
+    }
+
+    #[test]
+    #[ignore = "backlog 2afeb849: open defect, remove ignore when fixed"]
+    fn editing_a_checker_script_is_not_force_gated_by_its_file_name() {
+        for file in [
+            "scripts/foo.py",
+            "scripts/check-plugin-rollout.py",
+            "scripts/test_check_plugin_rollout.py",
+        ] {
+            let d = Decomposition {
+                goal: "g".into(),
+                tasks: vec![edit_task("t1", file)],
+            };
+            let s = schedule(&d, &[]);
+            assert!(
+                s.gated.is_empty(),
+                "a neutral edit of {file} was force-gated by its path name alone; \
+                 gated={:?} warnings={:?}",
+                s.gated,
+                s.warnings
+            );
+        }
     }
 }

@@ -172,3 +172,37 @@ fn oracle_missing_proofs_is_fail_soft_never_panics() {
     assert_eq!(json["has_red"], false);
     assert_eq!(json["has_green"], false);
 }
+
+#[test]
+fn oracle_unreadable_proof_exits_2_undetermined() {
+    // A proof path that exists but cannot be read (a directory at the GREEN
+    // artifact path => EISDIR, not NotFound) is "could not look", not "looked
+    // and found nothing": exit 2, `undetermined`, never a valid oracle.
+    let bin = env!("CARGO_BIN_EXE_tdd");
+    let dir = unique_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    write_proof(&dir, "demo-unreadable", "red", false);
+    std::fs::create_dir_all(dir.join(".tdd").join("demo-unreadable.green.json")).unwrap();
+    let out = Command::new(bin)
+        .args(["oracle", "--task", "demo-unreadable"])
+        .current_dir(&dir)
+        .env("HOME", &dir)
+        .stdin(Stdio::null())
+        .output()
+        .expect("binary runs");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let json: Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("oracle stdout not valid JSON: {e}\nstdout: {stdout:?}"));
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "unreadable proof must exit 2, got {json}"
+    );
+    assert_eq!(json["transition"], "undetermined");
+    assert_eq!(json["valid_fp_oracle"], false);
+    assert_eq!(json["has_red"], true);
+    assert!(
+        json["has_green"].is_null(),
+        "has_green must be null: {json}"
+    );
+}

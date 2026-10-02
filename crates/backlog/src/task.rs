@@ -4,22 +4,27 @@ use unicode_normalization::UnicodeNormalization;
 /// The task status vocabulary — the single source of truth shared by the store
 /// (which sets these on add/done/fail/restore), the `--status` filter help, and
 /// the CLI's validation of a user-supplied filter. A task moves
-/// `pending → done` (done) or `pending → failed` (fail); a deferred task is
-/// restored to `pending` once its `defer_until` elapses. NB: `backlog` has no
-/// `open` status — that vocabulary belongs to `hypothesis` (open/validated/
-/// rejected), a different binary.
+/// `pending → done` (done), `pending → failed` (fail) or `pending|failed →
+/// cancelled` (cancel); a deferred task is restored to `pending` once its
+/// `defer_until` elapses. `done` and `cancelled` are terminal. NB: `backlog`
+/// has no `open` status — that vocabulary belongs to `hypothesis` (open/
+/// validated/rejected), a different binary.
 pub const STATUS_PENDING: &str = "pending";
 pub const STATUS_DONE: &str = "done";
 pub const STATUS_FAILED: &str = "failed";
+/// Terminal "decided not to do it" (backlog d8d25af9). Unlike `done` it does
+/// not claim the work was completed, and unlike `failed` it is never requeued.
+/// Its GitHub mirror is closed as "not planned".
+pub const STATUS_CANCELLED: &str = "cancelled";
 
-/// The original pending/done/failed core of the lifecycle, in order. Since
-/// the close-evidence change the `--status` filter validates against the wider
-/// [`FILTER_STATUSES`] (the store really holds `cancelled`, the derived
-/// `claimed`, `unconfirmed` and `needs-ruling` too), and `edit --status`
-/// accepts only `pending` / `failed`; this core list is kept for the
-/// vocabulary tests that pin it.
-#[cfg(test)]
-pub const STATUSES: [&str; 3] = [STATUS_PENDING, STATUS_DONE, STATUS_FAILED];
+/// The core STORED lifecycle statuses, in lifecycle order. `stored_status_error`
+/// rejects any `edit --status` value outside this list (so the derived
+/// `claimed` is never persisted), and on top of that the close-evidence rule
+/// in `store::edit` admits only `pending` / `failed`: `done` / `cancelled`
+/// need a recorded closure (`backlog done` / `backlog cancel` with evidence,
+/// or `ruling approve`). `unconfirmed` / `needs-ruling` are stored too but are
+/// entered only through `add`/`confirm` and `ruling`, so they are not here.
+pub const STATUSES: [&str; 4] = [STATUS_PENDING, STATUS_DONE, STATUS_FAILED, STATUS_CANCELLED];
 
 /// A finding whose problem has NOT been observed: filed without a repro test,
 /// or whose repro test did not reproduce it (`not-reproduced`) or could not be
@@ -39,16 +44,17 @@ pub const STATUS_UNCONFIRMED: &str = "unconfirmed";
 /// `backlog ruling withdraw ID` returns it to `pending`.
 pub const STATUS_NEEDS_RULING: &str = "needs-ruling";
 
-/// Every status value a `--status` FILTER may name. Wider than [`STATUSES`]
-/// (the pending/done/failed core the original vocabulary tests pin):
-/// `cancelled` and the derived `claimed` exist in real stores, and
-/// `unconfirmed` / `needs-ruling` are written by this binary. A filter naming
-/// any of these must not warn; a filter naming anything else must.
+/// Every status value a `--status` FILTER may name: the stored
+/// [`STATUSES`], then the DERIVED `claimed` (a pending/failed row holding a
+/// live claim-ledger lease, see `store::STATUS_CLAIMED`; filterable but never
+/// stored, backlog 0dafa254), then `unconfirmed` / `needs-ruling`, which this
+/// binary writes. A filter naming any of these must not warn; a filter naming
+/// anything else must.
 pub const FILTER_STATUSES: [&str; 7] = [
     STATUS_PENDING,
     STATUS_DONE,
     STATUS_FAILED,
-    "cancelled",
+    STATUS_CANCELLED,
     "claimed",
     STATUS_UNCONFIRMED,
     STATUS_NEEDS_RULING,
@@ -59,13 +65,20 @@ pub const FILTER_STATUSES: [&str; 7] = [
 /// The on-disk shape is fixed by the close-evidence spec and re-checked at
 /// commit time by `scripts/check-closure-evidence.py`, so field names here
 /// must not drift: `reason`, `duplicate_of`, `doc_only_commit`, and the
-/// sub-tables `green`, `red`, `ruling`. Exactly one evidence route is filled:
+/// sub-tables `green`, `red`, `ruling`, plus `discard_reason`. Exactly one
+/// route is filled:
 ///   - `green` + `red`: an executed committed test, RED (behavioural) at
 ///     `red.rev` and GREEN at `green.rev` (reason fixed / already-fixed /
 ///     obsolete);
 ///   - `doc_only_commit`: an ancestor commit touching doc paths only;
 ///   - `duplicate_of`: the canonical task id;
-///   - `ruling`: a human approval recorded by `backlog ruling approve`.
+///   - `ruling`: a human approval recorded by `backlog ruling approve`;
+///   - `discard_reason` (with `reason = "discard"`): `backlog cancel ID
+///     --reason R` throwing away an item nothing demonstrates (user ruling
+///     2026-10-03: 「証明できないのであれば、そもそも問題ではない。…捨てる」).
+///     A discard is valid ONLY for `cancelled` — it claims nothing was fixed,
+///     so it is never evidence for `done` and never a duplicate anchor
+///     ([`Closure::has_evidence`] stays false for it).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Closure {
     pub reason: String,
@@ -79,12 +92,18 @@ pub struct Closure {
     pub red: Option<RedRun>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ruling: Option<RulingRecord>,
+    /// Why an unproven item was discarded (`backlog cancel`). Set only with
+    /// `reason = "discard"` on a `cancelled` row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discard_reason: Option<String>,
 }
 
 impl Closure {
     /// True when this closure carries one of the four evidence routes. A
     /// `closure` table with none of them (hand-written, or truncated) is not
-    /// evidence, so it is not a valid duplicate anchor either.
+    /// evidence, so it is not a valid duplicate anchor either. A discard
+    /// (`discard_reason`) is deliberately NOT one of them: it records that
+    /// nothing was demonstrated, so it can never justify `done`.
     pub fn has_evidence(&self) -> bool {
         (self.green.is_some() && self.red.is_some())
             || self.doc_only_commit.is_some()
@@ -330,6 +349,19 @@ pub fn status_warning(status: Option<&str>) -> Option<String> {
     }
 }
 
+/// Like [`status_warning`] but for a status about to be WRITTEN (`edit
+/// --status`): only [`STATUSES`] is accepted, so the derived `claimed` is
+/// refused rather than persisted.
+pub fn stored_status_error(status: Option<&str>) -> Option<String> {
+    match status {
+        Some(s) if !STATUSES.contains(&s) => Some(format!(
+            "unknown status '{s}' (not a storable status); valid values are {}",
+            STATUSES.join(" | ")
+        )),
+        _ => None,
+    }
+}
+
 /// Generate an 8-char hex ID from title and unix timestamp using FNV-1a 32-bit
 /// (the shared `harness_core::hash` implementation).
 pub fn new_id(title: &str, now: i64) -> String {
@@ -396,16 +428,24 @@ mod tests {
     #[test]
     fn status_vocabulary_is_consistent() {
         // The set, lifecycle order, and the values the store actually writes
-        // (add → pending, done → done, fail → failed) must agree, since
-        // STATUSES drives both the `--status` help/validation and `is_pending`.
-        assert_eq!(STATUSES, [STATUS_PENDING, STATUS_DONE, STATUS_FAILED]);
-        assert_eq!(STATUSES, ["pending", "done", "failed"]);
+        // (add → pending, done → done, fail → failed, cancel → cancelled) must
+        // agree, since STATUSES drives `edit --status` validation and `is_pending`.
+        assert_eq!(
+            STATUSES,
+            [STATUS_PENDING, STATUS_DONE, STATUS_FAILED, STATUS_CANCELLED]
+        );
+        assert_eq!(STATUSES, ["pending", "done", "failed", "cancelled"]);
+        // The filter vocabulary is the stored one plus the derived `claimed`.
+        assert_eq!(&FILTER_STATUSES[..4], &STATUSES[..]);
+        assert_eq!(FILTER_STATUSES[4], "claimed");
+        assert!(!STATUSES.contains(&"claimed"));
         // `open` is hypothesis's vocabulary, never backlog's.
         assert!(!STATUSES.contains(&"open"));
         // is_pending agrees with the vocabulary it filters on.
         assert!(make_task(vec![], STATUS_PENDING).is_pending());
         assert!(make_task(vec![], STATUS_FAILED).is_pending());
         assert!(!make_task(vec![], STATUS_DONE).is_pending());
+        assert!(!make_task(vec![], STATUS_CANCELLED).is_pending());
     }
 
     #[test]
@@ -425,6 +465,8 @@ mod tests {
         assert!(status_warning(Some("pending")).is_none());
         assert!(status_warning(Some("done")).is_none());
         assert!(status_warning(Some("failed")).is_none());
+        assert!(status_warning(Some("cancelled")).is_none());
+        assert!(status_warning(Some("claimed")).is_none());
         // No filter at all → no warning (listing everything is legitimate).
         assert!(status_warning(None).is_none());
     }

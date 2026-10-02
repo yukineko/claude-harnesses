@@ -11,6 +11,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
+use harness_core::verdict::{Determination, Required};
 use serde_json::json;
 
 use crate::config::Config;
@@ -241,16 +242,22 @@ pub fn red(
     Ok(())
 }
 
-/// Fail-soft read of a proof artifact's `author` field (`None` if missing,
-/// unreadable, corrupt, or the field is absent/not a string).
-fn read_author(root: &Path, cfg: &Config, task: &str, kind: &str) -> Option<String> {
+/// Read a proof artifact's `author` field through the harness boundary.
+///
+/// `Known(None)` if the artifact is missing, corrupt, or the field is
+/// absent/not a string; `Known(Some(author))` when present. An IO failure other
+/// than not-found is `Undetermined` — it is NOT folded into `Known(None)`:
+/// [`green`] refuses on it with the read error named, so an unreadable RED
+/// proof is reported as unreadable rather than as a missing `--author`.
+fn read_author(root: &Path, cfg: &Config, task: &str, kind: &str) -> Determination<Option<String>> {
     let path = artifact_path(root, cfg, task, kind);
-    let text = std::fs::read_to_string(&path).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
-    value
-        .get("author")?
-        .as_str()
-        .map(std::string::ToString::to_string)
+    harness_core::boundary::read_to_string(&path).map(|text| {
+        let value: serde_json::Value = serde_json::from_str(&text?).ok()?;
+        value
+            .get("author")?
+            .as_str()
+            .map(std::string::ToString::to_string)
+    })
 }
 
 /// `tdd green`: require a RED proof, run the tests, require success, record GREEN.
@@ -290,7 +297,17 @@ pub fn green(
     judge_has_red(has_red)?;
     let author = resolve_author(author);
     if cfg.strict_separation {
-        let test_author = read_author(root, cfg, task, "red");
+        let test_author = match read_author(root, cfg, task, "red").require() {
+            Required::Determined(author) => author,
+            Required::Blocked(why) => {
+                let verdict = why.into_verdict();
+                bail!(
+                    "strict_separation is enabled but the RED proof's author could not be \
+                     read, so separation cannot be verified (refusing GREEN): {}",
+                    verdict.reason().map_or("undetermined", |r| r.as_str())
+                );
+            }
+        };
         judge_separation(true, test_author.as_deref(), Some(&author))?;
     }
     let cmdline = resolve_cmd(cmd, cfg);
@@ -330,15 +347,27 @@ pub fn verify(root: &Path, cfg: &Config, task: &str) -> bool {
         && artifact_path(root, cfg, task, "green").exists()
 }
 
-/// Fail-soft read of a proof artifact's `passed` field. Returns `None` if the
-/// artifact is missing, unreadable, not valid JSON, or lacks a boolean
-/// `passed` field — never panics, so an oracle can report `has_red/has_green`
-/// honestly instead of crashing a turn.
-pub fn read_passed(root: &Path, cfg: &Config, task: &str, kind: &str) -> Option<bool> {
+/// Read a proof artifact's `passed` field through the harness boundary.
+///
+/// - `Known(None)`: the artifact is missing, not valid JSON, or lacks a
+///   boolean `passed` field — "no proof".
+/// - `Known(Some(passed))`: the recorded result.
+/// - `Undetermined`: the artifact exists but could not be read (an IO error
+///   other than not-found). This is NOT folded into `Known(None)`:
+///   `transition::oracle_report` reports it as `transition="undetermined"`,
+///   `valid_fp_oracle=false`, and `tdd oracle` exits non-zero
+///   ([`crate::transition::ORACLE_EXIT_UNDETERMINED`]).
+pub fn read_passed(
+    root: &Path,
+    cfg: &Config,
+    task: &str,
+    kind: &str,
+) -> Determination<Option<bool>> {
     let path = artifact_path(root, cfg, task, kind);
-    let text = std::fs::read_to_string(&path).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
-    value.get("passed")?.as_bool()
+    harness_core::boundary::read_to_string(&path).map(|text| {
+        let value: serde_json::Value = serde_json::from_str(&text?).ok()?;
+        value.get("passed")?.as_bool()
+    })
 }
 
 impl runner::Outcome {
@@ -581,7 +610,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            read_author(&base, &cfg, "t1", "red").as_deref(),
+            read_author(&base, &cfg, "t1", "red")
+                .require()
+                .expect("proof artifact readable")
+                .as_deref(),
             Some("agent-a")
         );
 
@@ -594,7 +626,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            read_author(&base, &cfg, "t1", "green").as_deref(),
+            read_author(&base, &cfg, "t1", "green")
+                .require()
+                .expect("proof artifact readable")
+                .as_deref(),
             Some("agent-a")
         );
 
@@ -627,7 +662,10 @@ mod tests {
         std::env::set_var("CLAUDE_CODE_SESSION_ID", "sess-same-e2e");
         red(&base, &cfg, "t1", &Some("false".to_string()), &None).unwrap();
         assert_eq!(
-            read_author(&base, &cfg, "t1", "red").as_deref(),
+            read_author(&base, &cfg, "t1", "red")
+                .require()
+                .expect("proof artifact readable")
+                .as_deref(),
             Some("sess-same-e2e")
         );
         let err = green(&base, &cfg, "t1", &Some("true".to_string()), &None).unwrap_err();
@@ -641,7 +679,10 @@ mod tests {
         std::env::set_var("CLAUDE_CODE_SESSION_ID", "sess-other-e2e");
         green(&base, &cfg, "t1", &Some("true".to_string()), &None).unwrap();
         assert_eq!(
-            read_author(&base, &cfg, "t1", "green").as_deref(),
+            read_author(&base, &cfg, "t1", "green")
+                .require()
+                .expect("proof artifact readable")
+                .as_deref(),
             Some("sess-other-e2e")
         );
 
@@ -658,7 +699,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            read_author(&base, &cfg, "t2", "red").as_deref(),
+            read_author(&base, &cfg, "t2", "red")
+                .require()
+                .expect("proof artifact readable")
+                .as_deref(),
             Some("explicit-author"),
             "explicit --author must override the CLAUDE_CODE_SESSION_ID default"
         );
@@ -762,7 +806,12 @@ mod tests {
         std::fs::create_dir_all(&base).unwrap();
 
         // missing artifact → None
-        assert_eq!(read_passed(&base, &cfg, "t1", "red"), None);
+        assert_eq!(
+            read_passed(&base, &cfg, "t1", "red")
+                .require()
+                .expect("proof artifact readable"),
+            None
+        );
 
         // well-formed proofs → the recorded `passed` value
         write_artifact(
@@ -775,16 +824,36 @@ mod tests {
             &json!({"passed": true}),
         )
         .unwrap();
-        assert_eq!(read_passed(&base, &cfg, "t1", "red"), Some(false));
-        assert_eq!(read_passed(&base, &cfg, "t1", "green"), Some(true));
+        assert_eq!(
+            read_passed(&base, &cfg, "t1", "red")
+                .require()
+                .expect("proof artifact readable"),
+            Some(false)
+        );
+        assert_eq!(
+            read_passed(&base, &cfg, "t1", "green")
+                .require()
+                .expect("proof artifact readable"),
+            Some(true)
+        );
 
         // corrupt JSON → None (no panic)
         std::fs::write(artifact_path(&base, &cfg, "t2", "red"), "{not json").unwrap();
-        assert_eq!(read_passed(&base, &cfg, "t2", "red"), None);
+        assert_eq!(
+            read_passed(&base, &cfg, "t2", "red")
+                .require()
+                .expect("proof artifact readable"),
+            None
+        );
 
         // valid JSON but no boolean `passed` → None
         write_artifact(&artifact_path(&base, &cfg, "t3", "red"), &json!({"x": 1})).unwrap();
-        assert_eq!(read_passed(&base, &cfg, "t3", "red"), None);
+        assert_eq!(
+            read_passed(&base, &cfg, "t3", "red")
+                .require()
+                .expect("proof artifact readable"),
+            None
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }

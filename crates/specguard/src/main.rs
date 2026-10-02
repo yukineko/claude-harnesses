@@ -16,9 +16,11 @@ mod auditmap;
 mod config;
 mod coverage;
 mod decision;
+mod gatecheck;
 mod init;
 mod parse;
 mod prompt;
+mod protection;
 mod ratify;
 mod report;
 mod scope;
@@ -80,11 +82,20 @@ const EXIT_INDEX_UNDETERMINED: u8 = 10;
 /// neither (specs/spec-loop.toml R3, CLAUDE.md §3).
 const EXIT_BRIEF_UNDETERMINED: u8 = 10;
 
+/// `specguard map gate-check`: at least one changed gate-crate map entry has
+/// neither a spec_doc nor a reasoned ack.
+const EXIT_GATE_MISSING_SPEC: u8 = 1;
+/// `specguard map gate-check` could not determine the answer. Same value as
+/// [`EXIT_USAGE`] on purpose: an argument error and an unanswerable check both
+/// block a push, and neither may ever be 0.
+const EXIT_GATE_UNDETERMINED: u8 = 2;
+
 #[derive(Parser)]
 #[command(
     name = "specguard",
     version,
-    about = "Spec/implementation drift audit harness"
+    about = "Spec/implementation drift audit harness",
+    after_help = "`specguard --protects` prints what this gate protects, from what, and on what grounds."
 )]
 struct Cli {
     /// Path to the config file.
@@ -130,8 +141,11 @@ enum Command {
     },
     /// Print the active fix-offer block if a sentinel is pending (for the
     /// SessionStart hook). Resolves the sentinel path from `[output].sentinel`,
-    /// so a custom path still works. Never fails the session: any error (missing
-    /// config etc.) prints nothing and exits 0.
+    /// so a custom path still works. Silent (exit 0) in exactly two cases: there
+    /// is no config file at all (not a specguard project), or the config loaded
+    /// and no sentinel is raised. A config that is present
+    /// but cannot be loaded, or a sentinel whose state cannot be read, prints a
+    /// "could not determine" notice on stdout instead of nothing.
     Pending,
     /// Clear the sentinel after a human has handled the pending findings.
     ///
@@ -258,7 +272,11 @@ enum MapAction {
     /// (`--baseline`/env override > `baseline_ref` > recorded `.last-ref` >
     /// `fallback_ref`), the same precedence the audit uses.
     Sync,
-    /// Print the current map. `--json` emits the machine-readable store.
+    /// Print the current map. `--json` emits the machine-readable store, with
+    /// each entry carrying a computed `review_state` (`fresh` /
+    /// `stale-review` / `undetermined` for `tracked` entries, `null` for every
+    /// other status) — the same classification as `map review-status`, using
+    /// the configured window (`[map] review_max_commits`, default 50).
     List {
         /// Emit the map as JSON instead of human-readable text.
         #[arg(long)]
@@ -348,6 +366,45 @@ enum MapAction {
     /// Fill every entry's `symbols` and `called_by` from the deterministic
     /// indexes, then save. Idempotent; safe to re-run after `sync`.
     Enrich,
+    /// Push-time spec-doc gate for the blocking gate crates
+    /// (`harness_core::fleet::BLOCKING_GATES`). Every map entry whose impl
+    /// files changed in `<base>..<head>` under a gate crate must carry a
+    /// `spec_doc` or a reasoned ack in `.specguard/spec-doc-acks.toml`.
+    /// Exit 0 = all such entries covered, 1 = at least one is not (each is
+    /// printed), 2 = could not determine (unparseable map/ack file, bad rev,
+    /// git failure, absent map, or a changed gate file no entry references).
+    GateCheck {
+        /// Base revision; the changed set is `git diff <base> <head>`.
+        #[arg(long)]
+        base: String,
+        /// Head revision (default `HEAD`).
+        #[arg(long, default_value = "HEAD")]
+        head: String,
+    },
+    /// Classify every `tracked` entry's recorded review as `fresh`,
+    /// `stale-review` or `undetermined`. Read-only; not wired to any hook.
+    ///
+    /// `stale-review`: no `reviewed_at` (a legacy entry — no recorded review is
+    /// not a fresh review), or `reviewed_at.commit` is MORE than N commits
+    /// behind HEAD (`git rev-list --count`; exactly N behind is fresh).
+    /// `undetermined`: HEAD unreadable (not a git repo, unborn HEAD), the review
+    /// commit is not in HEAD's history (unknown object or not an ancestor), a
+    /// git call failed, or the count did not parse — never `fresh`.
+    /// Non-`tracked` entries are not classified.
+    ///
+    /// Exit 0 = every tracked entry fresh, 1 = at least one stale-review (and
+    /// none undetermined), 2 = at least one undetermined, or nothing could be
+    /// classified (map file absent, or no tracked entry).
+    ReviewStatus {
+        /// Emit JSON: `{map, head, max_commits, counts, entries: {key:
+        /// {review_state, commits_behind, reviewed_commit, reason?}}}`.
+        #[arg(long)]
+        json: bool,
+        /// Window N (must be >= 1). Overrides `[map] review_max_commits`;
+        /// omitted → the config value, whose absence or `0` means 50.
+        #[arg(long = "max-commits", value_parser = clap::value_parser!(u64).range(1..))]
+        max_commits: Option<u64>,
+    },
     /// Remove entries whose key matches the configured `[map].exclude` globs —
     /// the non-spec-bearing paths (lockfiles, manifests, generated artifacts,
     /// docs). Idempotent. `build`/`sync` also apply exclusion, so this mainly
@@ -356,6 +413,16 @@ enum MapAction {
 }
 
 fn main() -> ExitCode {
+    // The protection statement (backlog 3a8e3b73), readable without loading a
+    // config. A pure print: no verdict. Short-circuits before clap because
+    // `Cli` has no such flag and would reject it as a usage error.
+    if std::env::args().nth(1).as_deref() == Some("--protects") {
+        let p = protection::PROTECTION;
+        println!("PROTECTS: {}", p.protects);
+        println!("AGAINST: {}", p.against);
+        println!("GROUNDS: {}", p.grounds);
+        return ExitCode::SUCCESS;
+    }
     let cli = Cli::parse();
     match run(&cli) {
         Ok(code) => ExitCode::from(code),
@@ -400,9 +467,18 @@ fn run(cli: &Cli) -> Result<u8> {
         return Ok(EXIT_OK);
     }
 
-    // `pending` is the SessionStart hook entry point: best-effort, never errors.
+    // `pending` is the SessionStart hook entry point. It never returns `Err`:
+    // it prints its own "could not determine" notice on stdout (see `pending`).
     if let Some(Command::Pending) = &cli.command {
         return Ok(pending(cli));
+    }
+
+    // `map gate-check` audits nothing, so it must not require audit areas.
+    if let Some(Command::Map {
+        action: MapAction::GateCheck { base, head },
+    }) = &cli.command
+    {
+        return gate_check(cli, base, head);
     }
 
     let l = load(cli)?;
@@ -1334,14 +1410,54 @@ fn emit_brief_json(cov: &harness_core::verdict::Determination<coverage::Coverage
 /// fix-offer block so the host agent surfaces it (read the report, then ask the
 /// human whether to fix). Resolves the sentinel path from config, so a custom
 /// `[output].sentinel` still works (the old hook hardcoded `.specguard-pending`).
-/// Best-effort: any failure (no config, unreadable sentinel) prints nothing and
-/// exits 0, so it can never block a session from starting.
+///
+/// Silence (exit 0, nothing on stdout) is reserved for exactly two determined
+/// cases: the config path does not exist (`NotFound`), i.e. this is not a
+/// specguard project and there is no pending state to determine; or the config
+/// loaded and no sentinel is raised (`render_pending`'s `Known(false)` arm).
+/// Every other outcome prints on stdout, because stdout is all the SessionStart
+/// consumer sees (`hooks/hooks.json` runs
+/// `specguard pending 2>/dev/null || true`, discarding stderr and the exit
+/// code):
+/// - config present but unloadable (unreadable, unparseable, invalid, template
+///   or `project.root` unresolvable): a "could not determine" notice, exit
+///   [`EXIT_USAGE`] — the same code every other subcommand returns when `load`
+///   fails, so a direct caller cannot read exit 0 as "nothing pending";
+/// - sentinel state unreadable: a "could not determine" notice (see
+///   [`render_pending`]).
 fn pending(cli: &Cli) -> u8 {
-    let Ok(l) = load(cli) else {
-        return EXIT_OK;
-    };
-    let paths = report::paths(&l.cfg, &l.repo_root, &l.date);
-    render_pending(&paths)
+    // Only a definite NotFound counts as "absent". Any other metadata error
+    // (e.g. permission denied on a parent) falls through to `load`, whose
+    // failure is surfaced below rather than read as absence.
+    if let Err(e) = std::fs::symlink_metadata(&cli.config) {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            return EXIT_OK;
+        }
+    }
+    match load(cli) {
+        Ok(l) => {
+            let paths = report::paths(&l.cfg, &l.repo_root, &l.date);
+            render_pending(&paths)
+        }
+        Err(e) => {
+            println!(
+                "{}",
+                pending_unloadable_message(&cli.config, &format!("{e:#}"))
+            );
+            EXIT_USAGE
+        }
+    }
+}
+
+/// The notice [`pending`] prints when the config exists but cannot be loaded.
+/// It must not read as a clean state: whether a finding is pending is unknown.
+fn pending_unloadable_message(config: &Path, why: &str) -> String {
+    format!(
+        "⚠ specguard: 設定 ({}) は存在しますが読み込めないため、未処理の仕様ドリフト指摘の有無を\n\
+         確認できませんでした (UNKNOWN であり「指摘なし」ではありません): {why}\n\
+         設定を修正してから `specguard pending` を再実行し、sentinel の状態を確認してください。",
+        config.display()
+    )
 }
 
 /// The body of [`pending`]'s SessionStart hook, taking `paths` directly (rather
@@ -1810,9 +1926,11 @@ fn run_map(cli: &Cli, l: &Loaded, action: &MapAction) -> Result<u8> {
             let filter = filter.as_deref().unwrap_or("");
             let map = filter_map(&map, filter);
             if *json {
+                let max = specmap::effective_review_max_commits(l.cfg.map.review_max_commits);
+                let doc = map_list_json(&map, &l.repo_root, max)?;
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&map).context("serializing spec map JSON")?
+                    serde_json::to_string_pretty(&doc).context("serializing spec map JSON")?
                 );
             } else {
                 print_map(&map, &map_path);
@@ -1871,6 +1989,13 @@ fn run_map(cli: &Cli, l: &Loaded, action: &MapAction) -> Result<u8> {
             }
         }
         MapAction::Search { query, k, json } => run_map_search(l, &map_path, query, *k, *json),
+        MapAction::ReviewStatus { json, max_commits } => {
+            let max =
+                specmap::effective_review_max_commits(max_commits.or(l.cfg.map.review_max_commits));
+            review_status(l, &map_path, max, *json)
+        }
+        // Handled in `run` before `load` (it must not require audit areas).
+        MapAction::GateCheck { base, head } => gate_check(cli, base, head),
         MapAction::Build | MapAction::Sync => {
             let override_ref = cli
                 .baseline
@@ -1980,6 +2105,62 @@ fn run_map(cli: &Cli, l: &Loaded, action: &MapAction) -> Result<u8> {
             Ok(EXIT_OK)
         }
     }
+}
+
+/// `specguard map gate-check` (backlog 0c277117) — see `gatecheck.rs`. Loads
+/// the config without the audit-only area requirement; any load error is an
+/// `Err`, which `main` maps to exit 2 (undetermined), never 0.
+fn gate_check(cli: &Cli, base: &str, head: &str) -> Result<u8> {
+    let cfg = Config::load_without_areas(&cli.config)?;
+    let config_dir = cli
+        .config
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let repo_root = canonicalize(&config_dir.join(&cfg.project.root))
+        .with_context(|| "resolving project.root")?;
+    let map_path = repo_root.join(&cfg.map.path);
+    let exclude = specmap::compile_globs(&cfg.map.exclude)?;
+    let ack_path = repo_root.join(gatecheck::ACK_PATH);
+    let spec_docs_path = repo_root.join(gatecheck::SPEC_DOCS_PATH);
+    let verdict = gatecheck::check(&gatecheck::GateCheck {
+        repo_root: &repo_root,
+        map_path: &map_path,
+        ack_path: &ack_path,
+        spec_docs_path: &spec_docs_path,
+        base,
+        head,
+        exclude: &exclude,
+        gates: harness_core::fleet::BLOCKING_GATES,
+    });
+    Ok(match &verdict {
+        harness_core::verdict::Verdict::Clean(_) => {
+            println!("specguard map gate-check: ok ({base}..{head})");
+            EXIT_OK
+        }
+        harness_core::verdict::Verdict::Violation(r) => {
+            println!(
+                "specguard map gate-check: BLOCKED — gate map entries changed in \
+                     {base}..{head} without a spec doc:\n  {}\n\
+                     Fix: add [[spec]] path/doc/reason to {} (doc = an existing \
+                     docs/specs/*.md that describes the file, reason required), or \
+                     [[ack]] path/reason to {} (reason required). Both files are \
+                     tracked; `map set-spec` writes only the machine-local map, \
+                     which the pre-push check does not read.",
+                r.as_str(),
+                gatecheck::SPEC_DOCS_PATH,
+                gatecheck::ACK_PATH
+            );
+            EXIT_GATE_MISSING_SPEC
+        }
+        harness_core::verdict::Verdict::Undetermined(u) => {
+            eprintln!(
+                "specguard map gate-check: cannot determine (blocking): {}",
+                u.as_str()
+            );
+            EXIT_GATE_UNDETERMINED
+        }
+    })
 }
 
 /// Map-driven CORRECTNESS audit (read-only). Loads the persisted spec-map store
@@ -2281,6 +2462,182 @@ fn filter_map(map: &specmap::SpecMap, filter: &str) -> specmap::SpecMap {
             .map(|(k, e)| (k.clone(), e.clone()))
             .collect(),
     }
+}
+
+/// `map review-status`: one tracked entry is stale-review.
+const EXIT_REVIEW_STALE: u8 = 1;
+/// `map review-status`: at least one tracked entry (or the whole run) is
+/// undetermined.
+const EXIT_REVIEW_UNDETERMINED: u8 = 2;
+
+/// Classify every entry of `map` (None for non-tracked), sharing one
+/// [`specmap::ReviewClock`] so each distinct review commit is measured once.
+fn classify_reviews(
+    map: &specmap::SpecMap,
+    repo_root: &Path,
+    max: u64,
+) -> (
+    specmap::ReviewClock,
+    Vec<(String, Option<specmap::ReviewState>)>,
+) {
+    let mut clock = specmap::ReviewClock::open(repo_root);
+    let states = map
+        .entries
+        .iter()
+        .map(|(k, e)| {
+            let st = specmap::classify_review(e, max, |c| clock.distance(c));
+            (k.clone(), st)
+        })
+        .collect();
+    (clock, states)
+}
+
+/// `map list --json` document: the serialized store with a `review_state`
+/// added to each entry — the token for a tracked entry, JSON `null` for any
+/// other status (non-tracked entries are not classified).
+fn map_list_json(map: &specmap::SpecMap, repo_root: &Path, max: u64) -> Result<serde_json::Value> {
+    let mut doc = serde_json::to_value(map).context("serializing spec map JSON")?;
+    let (_clock, states) = classify_reviews(map, repo_root, max);
+    let entries = doc
+        .get_mut("entries")
+        .and_then(|e| e.as_object_mut())
+        .context("serialized spec map has no `entries` object")?;
+    for (key, state) in states {
+        let entry = entries
+            .get_mut(&key)
+            .and_then(|e| e.as_object_mut())
+            .with_context(|| format!("serialized spec map lost entry {key}"))?;
+        let value = match &state {
+            Some(st) => serde_json::Value::from(specmap::review_state_token(st)),
+            None => serde_json::Value::Null,
+        };
+        entry.insert("review_state".to_string(), value);
+    }
+    Ok(doc)
+}
+
+/// `specguard map review-status`. See [`MapAction::ReviewStatus`] for the
+/// classification and exit codes. Restrictive resolution: an absent map file
+/// or a map with no tracked entry has nothing that could be judged fresh, so it
+/// exits 2 rather than reporting "all fresh" over an empty set.
+fn review_status(l: &Loaded, map_path: &Path, max: u64, json: bool) -> Result<u8> {
+    // `SpecMap::load` reads an absent file as an empty map; here absence must
+    // stay distinguishable from "every tracked entry is fresh".
+    let present = match map_path.try_exists() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!(
+                "specguard map review-status: cannot tell whether {} exists: {e}",
+                map_path.display()
+            );
+            return Ok(EXIT_REVIEW_UNDETERMINED);
+        }
+    };
+    if !present {
+        eprintln!(
+            "specguard map review-status: map {} is absent; nothing can be judged fresh (undetermined)",
+            map_path.display()
+        );
+        return Ok(EXIT_REVIEW_UNDETERMINED);
+    }
+    let map = specmap::SpecMap::load(map_path)?;
+    let (clock, states) = classify_reviews(&map, &l.repo_root, max);
+
+    let (mut fresh, mut stale, mut undetermined, mut tracked, mut unreviewed) = (0, 0, 0, 0, 0);
+    let mut rows = serde_json::Map::new();
+    let mut human: Vec<String> = Vec::new();
+    for (key, state) in &states {
+        let Some(st) = state else { continue };
+        tracked += 1;
+        let entry = map.entries.get(key);
+        let reviewed_commit = entry
+            .and_then(|e| e.reviewed_at.as_ref())
+            .map(|a| a.commit.clone());
+        if reviewed_commit.is_none() {
+            unreviewed += 1;
+        }
+        let token = specmap::review_state_token(st);
+        let mut row = serde_json::Map::new();
+        row.insert("review_state".into(), token.into());
+        row.insert(
+            "reviewed_commit".into(),
+            reviewed_commit
+                .clone()
+                .map_or(serde_json::Value::Null, Into::into),
+        );
+        match st {
+            Determination::Known(o) => {
+                row.insert(
+                    "commits_behind".into(),
+                    o.commits_behind.map_or(serde_json::Value::Null, Into::into),
+                );
+                match o.freshness {
+                    specmap::ReviewFreshness::Fresh => fresh += 1,
+                    specmap::ReviewFreshness::StaleReview => {
+                        stale += 1;
+                        human.push(match o.commits_behind {
+                            Some(n) => format!("  [stale-review] {key}: reviewed {n} commits behind HEAD (> {max})"),
+                            None => format!("  [stale-review] {key}: no recorded review (reviewed_at absent)"),
+                        });
+                    }
+                }
+            }
+            Determination::Undetermined(why) => {
+                undetermined += 1;
+                row.insert("commits_behind".into(), serde_json::Value::Null);
+                row.insert("reason".into(), why.as_str().into());
+                human.push(format!("  [undetermined] {key}: {}", why.as_str()));
+            }
+        }
+        rows.insert(key.clone(), serde_json::Value::Object(row));
+    }
+
+    let code = if undetermined > 0 || tracked == 0 {
+        EXIT_REVIEW_UNDETERMINED
+    } else if stale > 0 {
+        EXIT_REVIEW_STALE
+    } else {
+        EXIT_OK
+    };
+    let head = match clock.head() {
+        Determination::Known(h) => serde_json::Value::from(h.as_str()),
+        Determination::Undetermined(_) => serde_json::Value::Null,
+    };
+
+    if json {
+        let doc = serde_json::json!({
+            "map": map_path.display().to_string(),
+            "head": head,
+            "max_commits": max,
+            "counts": {
+                "tracked": tracked,
+                "fresh": fresh,
+                "stale-review": stale,
+                "undetermined": undetermined,
+                "tracked_without_reviewed_at": unreviewed,
+            },
+            "entries": rows,
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&doc).context("serializing review-status JSON")?
+        );
+    } else {
+        println!(
+            "specguard map review-status: {tracked} tracked (N = {max}): {fresh} fresh, \
+             {stale} stale-review, {undetermined} undetermined; {unreviewed} without reviewed_at [{}]",
+            map_path.display()
+        );
+        for line in &human {
+            println!("{line}");
+        }
+    }
+    if tracked == 0 {
+        eprintln!(
+            "specguard map review-status: no tracked entry to classify; nothing can be judged fresh (undetermined)"
+        );
+    }
+    Ok(code)
 }
 
 fn print_map(map: &specmap::SpecMap, map_path: &Path) {

@@ -219,12 +219,45 @@ mod tests {
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
-    fn make_tmp_dir(tag: &str) -> PathBuf {
-        let n = SEQ.fetch_add(1, Ordering::Relaxed);
-        let p =
-            std::env::temp_dir().join(format!("condukt-escalate-{tag}-{}-{n}", std::process::id()));
-        std::fs::create_dir_all(&p).unwrap();
-        p
+    /// Unique fixture dir via atomic `mkdtemp` (backlog a6608aa0): never
+    /// re-enters a leftover dir from a recycled pid, and the returned guard
+    /// removes the dir on drop so fixtures no longer pile up in temp.
+    fn make_tmp_dir(tag: &str) -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix(&format!("condukt-escalate-{tag}-"))
+            .tempdir()
+            .expect("tempdir")
+    }
+
+    /// backlog a6608aa0: a fixture dir must never be a leftover from an earlier
+    /// run. The old `<kind>-<tag>-<pid>-<seq>` name re-entered such a dir on pid
+    /// reuse and the stale file inside made `all.len() == 1` flaky. Seed every
+    /// name the old scheme could hand out next, then require an EMPTY dir.
+    #[test]
+    fn make_tmp_dir_never_reenters_a_leftover_dir() {
+        let upto = SEQ.load(Ordering::Relaxed) + 256;
+        let seeded: Vec<PathBuf> = (0..upto)
+            .map(|n| {
+                let d = std::env::temp_dir().join(format!(
+                    "condukt-escalate-collide-{}-{n}",
+                    std::process::id()
+                ));
+                std::fs::create_dir_all(&d).unwrap();
+                std::fs::write(d.join("escalations.json"), "stale-from-a-dead-run").unwrap();
+                d
+            })
+            .collect();
+        let fresh = make_tmp_dir("collide");
+        let p: &Path = fresh.as_ref();
+        let leftovers: Vec<_> = std::fs::read_dir(p).unwrap().flatten().collect();
+        for d in &seeded {
+            let _ = std::fs::remove_dir_all(d);
+        }
+        assert!(
+            leftovers.is_empty(),
+            "fixture dir {} re-entered a leftover dir: {leftovers:?}",
+            p.display()
+        );
     }
 
     fn make_cfg(tmp: &Path) -> Config {
@@ -263,11 +296,12 @@ mod tests {
 
     #[test]
     fn add_persists_and_is_retrievable() {
-        let tmp = make_tmp_dir("add");
-        let cfg = make_cfg(&tmp);
+        let tmp_dir = make_tmp_dir("add");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
         let rec = add_escalation(
             &cfg,
-            &tmp,
+            tmp,
             "runA",
             "t1",
             "Which approach?",
@@ -287,81 +321,86 @@ mod tests {
         assert!(rec.chosen.is_none());
 
         // Persisted to the durable store and retrievable by id.
-        let got = get_escalation(&cfg, &tmp, &rec.id).unwrap().unwrap();
+        let got = get_escalation(&cfg, tmp, &rec.id).unwrap().unwrap();
         assert_eq!(got, rec);
         // The file lives beside claims.json under the project key.
-        assert!(escalations_path(&cfg, &tmp).exists());
+        assert!(escalations_path(&cfg, tmp).exists());
     }
 
     #[test]
     fn list_shows_only_unresolved_for_the_run() {
-        let tmp = make_tmp_dir("list");
-        let cfg = make_cfg(&tmp);
-        let a = add_escalation(&cfg, &tmp, "runA", "t1", "Q1", &opts(&["x", "y"]), 0, 1).unwrap();
-        let _b = add_escalation(&cfg, &tmp, "runA", "t2", "Q2", &opts(&["x", "y"]), 1, 2).unwrap();
+        let tmp_dir = make_tmp_dir("list");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
+        let a = add_escalation(&cfg, tmp, "runA", "t1", "Q1", &opts(&["x", "y"]), 0, 1).unwrap();
+        let _b = add_escalation(&cfg, tmp, "runA", "t2", "Q2", &opts(&["x", "y"]), 1, 2).unwrap();
         // A different run's escalation must NOT appear.
-        let _c = add_escalation(&cfg, &tmp, "runB", "t9", "Q9", &opts(&["x"]), 0, 3).unwrap();
+        let _c = add_escalation(&cfg, tmp, "runB", "t9", "Q9", &opts(&["x"]), 0, 3).unwrap();
 
-        let open = list_escalations(&cfg, &tmp, "runA").unwrap();
+        let open = list_escalations(&cfg, tmp, "runA").unwrap();
         assert_eq!(open.len(), 2, "two open for runA");
 
         // Resolve one → it drops out of the open list, but the other stays.
-        resolve_escalation(&cfg, &tmp, &a.id, "x").unwrap();
-        let open = list_escalations(&cfg, &tmp, "runA").unwrap();
+        resolve_escalation(&cfg, tmp, &a.id, "x").unwrap();
+        let open = list_escalations(&cfg, tmp, "runA").unwrap();
         assert_eq!(open.len(), 1);
         assert_eq!(open[0].task, "t2");
     }
 
     #[test]
     fn resolve_stores_choice_and_record_remains() {
-        let tmp = make_tmp_dir("resolve");
-        let cfg = make_cfg(&tmp);
-        let rec = add_escalation(&cfg, &tmp, "runA", "t1", "Q", &opts(&["a", "b"]), 0, 10).unwrap();
+        let tmp_dir = make_tmp_dir("resolve");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
+        let rec = add_escalation(&cfg, tmp, "runA", "t1", "Q", &opts(&["a", "b"]), 0, 10).unwrap();
 
-        let updated = resolve_escalation(&cfg, &tmp, &rec.id, "b")
+        let updated = resolve_escalation(&cfg, tmp, &rec.id, "b")
             .unwrap()
             .unwrap();
         assert!(updated.resolved);
         assert_eq!(updated.chosen.as_deref(), Some("b"));
 
         // No longer OPEN...
-        assert!(list_escalations(&cfg, &tmp, "runA").unwrap().is_empty());
+        assert!(list_escalations(&cfg, tmp, "runA").unwrap().is_empty());
         // ...but still in the store, with its answer, for resume.
-        let got = get_escalation(&cfg, &tmp, &rec.id).unwrap().unwrap();
+        let got = get_escalation(&cfg, tmp, &rec.id).unwrap().unwrap();
         assert!(got.resolved);
         assert_eq!(got.chosen.as_deref(), Some("b"));
     }
 
     #[test]
     fn resolve_unknown_id_is_a_soft_noop() {
-        let tmp = make_tmp_dir("resolve-missing");
-        let cfg = make_cfg(&tmp);
-        add_escalation(&cfg, &tmp, "runA", "t1", "Q", &opts(&["a"]), 0, 1).unwrap();
-        let got = resolve_escalation(&cfg, &tmp, "esc-doesnotexist", "a").unwrap();
+        let tmp_dir = make_tmp_dir("resolve-missing");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
+        add_escalation(&cfg, tmp, "runA", "t1", "Q", &opts(&["a"]), 0, 1).unwrap();
+        let got = resolve_escalation(&cfg, tmp, "esc-doesnotexist", "a").unwrap();
         assert!(got.is_none());
         // The real one is untouched / still open.
-        assert_eq!(list_escalations(&cfg, &tmp, "runA").unwrap().len(), 1);
+        assert_eq!(list_escalations(&cfg, tmp, "runA").unwrap().len(), 1);
     }
 
     #[test]
     fn missing_store_lists_empty() {
-        let tmp = make_tmp_dir("missing");
-        let cfg = make_cfg(&tmp);
+        let tmp_dir = make_tmp_dir("missing");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
         // No add has happened → no file → fail-soft empty list, no error/panic.
-        assert!(list_escalations(&cfg, &tmp, "runA").unwrap().is_empty());
-        assert!(get_escalation(&cfg, &tmp, "whatever").unwrap().is_none());
+        assert!(list_escalations(&cfg, tmp, "runA").unwrap().is_empty());
+        assert!(get_escalation(&cfg, tmp, "whatever").unwrap().is_none());
     }
 
     #[test]
     fn corrupt_store_is_treated_as_empty() {
-        let tmp = make_tmp_dir("corrupt");
-        let cfg = make_cfg(&tmp);
-        let path = escalations_path(&cfg, &tmp);
+        let tmp_dir = make_tmp_dir("corrupt");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
+        let path = escalations_path(&cfg, tmp);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, b"not json at all {{{").unwrap();
         // Fail-soft: add still succeeds (registry read as empty then written).
-        let rec = add_escalation(&cfg, &tmp, "runA", "t1", "Q", &opts(&["a"]), 0, 1).unwrap();
-        let got = get_escalation(&cfg, &tmp, &rec.id).unwrap();
+        let rec = add_escalation(&cfg, tmp, "runA", "t1", "Q", &opts(&["a"]), 0, 1).unwrap();
+        let got = get_escalation(&cfg, tmp, &rec.id).unwrap();
         assert!(got.is_some());
     }
 
@@ -380,11 +419,12 @@ mod tests {
 
     #[test]
     fn add_dedups_identical_open_escalation() {
-        let tmp = make_tmp_dir("dedup-open");
-        let cfg = make_cfg(&tmp);
+        let tmp_dir = make_tmp_dir("dedup-open");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
         let first = add_escalation(
             &cfg,
-            &tmp,
+            tmp,
             "runA",
             "t1",
             "Which approach?",
@@ -397,7 +437,7 @@ mod tests {
         // create a second record — it must return the same record/id.
         let second = add_escalation(
             &cfg,
-            &tmp,
+            tmp,
             "runA",
             "t1",
             "Which approach?",
@@ -408,31 +448,31 @@ mod tests {
         .unwrap();
         assert_eq!(first.id, second.id);
 
-        let path = escalations_path(&cfg, &tmp);
+        let path = escalations_path(&cfg, tmp);
         let reg = load(&path);
         assert_eq!(reg.escalations.len(), 1, "must not duplicate an open ask");
     }
 
     #[test]
     fn add_creates_new_open_record_after_resolve() {
-        let tmp = make_tmp_dir("dedup-reask");
-        let cfg = make_cfg(&tmp);
-        let first =
-            add_escalation(&cfg, &tmp, "runA", "t1", "Q", &opts(&["a", "b"]), 0, 1).unwrap();
-        resolve_escalation(&cfg, &tmp, &first.id, "a").unwrap();
+        let tmp_dir = make_tmp_dir("dedup-reask");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
+        let first = add_escalation(&cfg, tmp, "runA", "t1", "Q", &opts(&["a", "b"]), 0, 1).unwrap();
+        resolve_escalation(&cfg, tmp, &first.id, "a").unwrap();
 
         // Re-asking the same (run, task, question) after resolution must
         // create a fresh OPEN record, not dedup against the resolved one.
         let second =
-            add_escalation(&cfg, &tmp, "runA", "t1", "Q", &opts(&["a", "b"]), 0, 2).unwrap();
+            add_escalation(&cfg, tmp, "runA", "t1", "Q", &opts(&["a", "b"]), 0, 2).unwrap();
         assert_ne!(first.id, second.id);
         assert!(!second.resolved);
 
-        let path = escalations_path(&cfg, &tmp);
+        let path = escalations_path(&cfg, tmp);
         let reg = load(&path);
         assert_eq!(reg.escalations.len(), 2, "resolved + new open");
 
-        let open = list_escalations(&cfg, &tmp, "runA").unwrap();
+        let open = list_escalations(&cfg, tmp, "runA").unwrap();
         assert_eq!(open.len(), 1);
         assert_eq!(open[0].id, second.id);
     }

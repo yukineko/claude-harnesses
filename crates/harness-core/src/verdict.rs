@@ -38,8 +38,10 @@
 //!    type has an inherent `unwrap_or`, `ok()`, `unwrap_or_default`,
 //!    `unwrap_or_else`, or `is_ok`, so "could not determine" cannot be swapped
 //!    for a permissive default by any method this crate provides; the ordinary
-//!    caller has to `match` both arms, and the undetermined arm hands over an
-//!    already-fail-closed [`Verdict`] carrying its reason. `Result` was the original return type and it leaked the seal one
+//!    caller has to `match` both arms, and the undetermined arm hands over the
+//!    [`Undet`] it forwarded — convertible only to the fail-closed
+//!    `Verdict::Undetermined` (via [`Undet::into_verdict`]), reason intact.
+//!    `Result` was the original return type and it leaked the seal one
 //!    call deeper — `.require().unwrap_or_default()` reopened the exact collapse
 //!    `Determination` refuses to grow, using `std`'s inherent methods, which this
 //!    crate cannot remove (pinned red-then-green by
@@ -57,19 +59,39 @@
 //!      withholds (`unwrap_or_default`, `is_ok`), after which
 //!      `.require().unwrap_or_default()` compiles in that crate, spelled exactly
 //!      like the E0599 fixture. "Not expressible as a method call" holds only
-//!      for the methods this crate provides;
-//!    - `Required::Blocked` carries any [`Verdict`], and a `Clean` is obtainable
-//!      through [`Verdict::from_findings`], so a `Blocked` that does not block
-//!      can be built outside this crate. Callers that must not trust it check
-//!      [`Verdict::blocks`] rather than the arm.
+//!      for the methods this crate provides.
 //!
-//!    No type can forbid the first three — the caller wrote the default
+//!    No type can forbid these three — the caller wrote the default
 //!    themselves. The type's job is to
 //!    make the collapse unreachable *by accident* and to force the deliberate
 //!    one to appear in a diff as an explicit arm; catching that residue is a
-//!    separate, lexical gate's job (backlog b4baf3d7). There is also no `?`
+//!    separate, lexical gate's job (backlog b4baf3d7). `scripts/check-fail-open.py`
+//!    flags the hand-written arms (`undetermined-arm-empty-fallback`) and the
+//!    extension-trait call form `.require().unwrap_or_default()` /
+//!    `.require().is_ok()` (`require-ext-erase`, backlog f12c2168) — both
+//!    ADVISORY in that script: printed and counted on the `--ratchet` baseline
+//!    and excluded from its blocking verdict, so existing sites do not block.
+//!    A commit that ADDS a site is blocked by `scripts/check-fail-open-diff.py`
+//!    (pre-commit, a rise-ratchet over every pattern). Both are lexical (a
+//!    trait method called under another name is not seen), and neither is
+//!    sealed by the types. There is also no `?`
 //!    support: `std::ops::Try` is unstable (E0658, rust#84277), and `.require()?`
 //!    appears nowhere in this repo, so nothing is lost.
+//!
+//!    **What this does seal that it once did not** (backlog 1a6c1c48): the
+//!    payload of `Required::Blocked` is [`Undet`], not [`Verdict`]. It used to
+//!    be `Verdict`, so an external crate could build
+//!    `Required::Blocked(Verdict::from_findings(vec![]))` — a "blocked" value
+//!    whose ordinary `Blocked(v) => return v` arm returned a `Clean`. `Undet`
+//!    cannot be minted outside this crate (see (6)), so every `Blocked` anyone
+//!    can hold forwards a real give-up, and the only [`Verdict`] it converts to
+//!    is `Undetermined`, which blocks on every channel. Building one from a
+//!    `Verdict` is a type error, pinned by `tests/ui/verdict/forge_blocked_clean.rs`.
+//!    What remains possible is *forwarding*: a caller holding some other
+//!    `Undet` (from a `Determination` or `Verdict` it received) may wrap it in
+//!    `Blocked` — which still converts only to a blocking verdict. What the
+//!    type does NOT do is make a consumer *act* on the arm: a hand-written
+//!    `Blocked(_) => Vec::new()` still discards the block (first bullet above).
 //! 5. **Every channel conversion sends `Undetermined` to the restricted side,**
 //!    and no conversion mapping it to the permissive side exists. The blocking
 //!    channel differs per gate (a Stop hook blocks via a JSON `decision` field
@@ -188,6 +210,21 @@ impl Undet {
     #[must_use]
     pub fn reason(&self) -> &Reason {
         &self.0
+    }
+
+    /// Forward this give-up as the fail-closed [`Verdict::Undetermined`]. This
+    /// is what a `Required::Blocked(why) => return why.into_verdict()` arm
+    /// returns. It is forwarding, not minting, so it does not re-record
+    /// telemetry — the origin already counted it once. There is no conversion
+    /// from `Undet` to any other `Verdict` variant.
+    pub fn into_verdict(self) -> Verdict {
+        Verdict::Undetermined(self)
+    }
+
+    /// Forward this give-up as [`Determination::Undetermined`] of any `T`.
+    /// Like [`Undet::into_verdict`], forwarding does not re-record telemetry.
+    pub fn into_determination<T>(self) -> Determination<T> {
+        Determination::Undetermined(self)
     }
 }
 
@@ -405,14 +442,17 @@ impl Verdict {
 /// permissive value, so they do not exist here, and the extractor no longer
 /// hands the caller a `std` type whose inherent methods this crate cannot
 /// remove. Resolving a `Required` therefore means writing both arms, with the
-/// undetermined arm receiving a ready-made fail-closed [`Verdict`].
+/// undetermined arm receiving the forwarded [`Undet`], which converts only to
+/// the fail-closed `Verdict::Undetermined`.
 ///
 /// The seal is over *the methods this crate provides*, not over intent: a
 /// caller who writes `Required::Blocked(_) => Vec::new()` or
 /// `Determination::Undetermined(_) => Vec::new()` by hand still collapses the
 /// answer, and so does a caller that adds those methods back through its own
 /// extension trait. See [`Required`] for why that residue is left to a lexical
-/// gate, which sees the two hand-written arm spellings but not the trait.
+/// gate, which flags the two hand-written arm spellings and the
+/// `.require().unwrap_or_default()` / `.require().is_ok()` call form — ADVISORY
+/// only, not blocking, and not sealed by these types.
 #[must_use = "a Determination must be resolved with `require`, not dropped"]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Determination<T> {
@@ -442,10 +482,10 @@ impl<T> Determination<T> {
         Determination::Undetermined(Undet(reason))
     }
 
-    /// The one and only extractor. `Known(v)` → [`Required::Determined`]`(v)`;
-    /// `Undetermined(why)` → [`Required::Blocked`] carrying the fail-closed
-    /// `Verdict::Undetermined(why)` — the reason travels with it, so a caller
-    /// that returns the blocked verdict loses nothing.
+    /// The one extractor method. `Known(v)` → [`Required::Determined`]`(v)`;
+    /// `Undetermined(why)` → [`Required::Blocked`]`(why)` — the [`Undet`] is
+    /// forwarded unchanged (no re-record), so a caller that returns
+    /// `why.into_verdict()` loses nothing and returns a blocking verdict.
     ///
     /// The return type is [`Required`], **not** `std::Result`: `Result` would
     /// hand the caller `unwrap_or` / `unwrap_or_default` / `ok` / `is_ok`, whose
@@ -459,7 +499,7 @@ impl<T> Determination<T> {
     pub fn require(self) -> Required<T> {
         match self {
             Determination::Known(v) => Required::Determined(v),
-            Determination::Undetermined(why) => Required::Blocked(Verdict::Undetermined(why)),
+            Determination::Undetermined(why) => Required::Blocked(why),
         }
     }
 
@@ -476,7 +516,8 @@ impl<T> Determination<T> {
 }
 
 /// What [`Determination::require`] returns: the observed value, or the
-/// fail-closed [`Verdict`] that stands in for "could not determine".
+/// forwarded [`Undet`] that stands in for "could not determine" (convertible
+/// only to the fail-closed `Verdict::Undetermined`).
 ///
 /// **Why this is not `std::Result`.** It used to be, and that placed the seal
 /// one call too shallow. [`Determination`] refuses to grow an `unwrap_or` — but
@@ -509,7 +550,13 @@ impl<T> Determination<T> {
 /// up in a diff as an explicit arm a reviewer or a lexical gate can see
 /// (backlog b4baf3d7; `scripts/check-fail-open.py`'s
 /// `undetermined-arm-empty-fallback` pattern, advisory). An extension trait
-/// that re-adds `unwrap_or_default` / `is_ok` is not seen by that gate.
+/// that re-adds `unwrap_or_default` / `is_ok` is flagged at its call sites
+/// (`.require().unwrap_or_default()`, `.require().is_ok()`) by the same
+/// script's `require-ext-erase` pattern — also ADVISORY there: printed and
+/// counted on the `--ratchet` baseline, excluded from that script's blocking
+/// verdict (a newly ADDED site is still blocked at pre-commit by
+/// `scripts/check-fail-open-diff.py`), and lexical only (it cannot see which
+/// trait the method resolves to, nor a method under another name).
 ///
 /// **No `?`.** Implementing `std::ops::Try` would need the unstable trait
 /// (E0658, rust#84277). Nothing is lost: `.require()?` occurs nowhere in this
@@ -519,15 +566,16 @@ impl<T> Determination<T> {
 pub enum Required<T> {
     /// The check ran and observed this value (which may be legitimately empty).
     Determined(T),
-    /// The check could not run to a conclusion. When built by
-    /// [`Determination::require`] it carries the already fail-closed
-    /// [`Verdict::Undetermined`], reason intact, so the caller's shortest honest
-    /// move is to return it. The payload type is `Verdict`, not the unforgeable
-    /// `Undet`, so code outside this crate can also build `Blocked` around a
-    /// `Clean` obtained from [`Verdict::from_findings`]; a consumer that
-    /// receives a `Required` it did not build should check
-    /// [`Verdict::blocks`] rather than trust the arm.
-    Blocked(Verdict),
+    /// The check could not run to a conclusion. Carries the give-up's
+    /// [`Undet`], reason intact, so the caller's shortest honest move is to
+    /// return `why.into_verdict()` — a `Verdict::Undetermined`, which blocks.
+    ///
+    /// The payload is the unforgeable `Undet`, not a `Verdict` (backlog
+    /// 1a6c1c48): code outside this crate cannot mint an `Undet`, only forward
+    /// one it was handed, so it cannot build a `Blocked` around a `Clean` (or
+    /// any other non-undetermined verdict). Every `Blocked` therefore converts
+    /// to a blocking verdict. Pinned by `tests/ui/verdict/forge_blocked_clean.rs`.
+    Blocked(Undet),
 }
 
 impl<T> Required<T> {
@@ -561,13 +609,7 @@ impl<T> Required<T> {
     pub fn expect(self, msg: &str) -> T {
         match self {
             Required::Determined(v) => v,
-            Required::Blocked(verdict) => {
-                let why = match verdict.reason() {
-                    Some(r) => r.as_str().to_string(),
-                    None => format!("{verdict:?}"),
-                };
-                panic!("{msg}: {why}")
-            }
+            Required::Blocked(why) => panic!("{msg}: {why}"),
         }
     }
 }
@@ -628,7 +670,7 @@ mod tests {
         fn use_it(d: Determination<Vec<Reason>>) -> Verdict {
             let found = match d.require() {
                 Required::Determined(v) => v,
-                Required::Blocked(verdict) => return verdict, // fail closed
+                Required::Blocked(why) => return why.into_verdict(), // fail closed
             };
             Verdict::from_findings(found)
         }
@@ -648,8 +690,13 @@ mod tests {
         // otherwise the caller is handed a bare "blocked" with no cause.
         let d: Determination<u8> = Determination::undetermined("perm denied on /x");
         match d.require() {
-            Required::Blocked(v) => {
-                assert!(v.blocks(), "the blocked arm must carry a blocking verdict");
+            Required::Blocked(why) => {
+                assert_eq!(why.as_str(), "perm denied on /x");
+                let v = why.into_verdict();
+                assert!(
+                    v.blocks(),
+                    "the blocked arm must convert to a blocking verdict"
+                );
                 assert_eq!(
                     v.reason().map(Reason::as_str),
                     Some("perm denied on /x"),

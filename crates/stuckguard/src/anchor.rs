@@ -717,3 +717,62 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod backlog_c397cd15 {
+    use super::*;
+
+    /// backlog c397cd15: the lease LOOKUP resolves overwatch via PATH then the
+    /// plugin cache (1e783882), but `heartbeat_piggyback` still spawns a bare
+    /// `overwatch`. With overwatch only in the plugin cache (not on PATH) the
+    /// lookup finds the lease and the heartbeat is silently never delivered
+    /// (`let _ = boundary::run(..)`), so the lease the lookup just found is not
+    /// refreshed.
+    #[test]
+    #[ignore = "backlog c397cd15: open defect, remove ignore when fixed"]
+    fn heartbeat_reaches_overwatch_that_is_only_in_the_plugin_cache() {
+        use std::os::unix::fs::PermissionsExt;
+        let t = std::env::temp_dir().join(format!("sg-c397cd15-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        let bin_dir = t.join(".claude/plugins/cache/yukineko/overwatch/0.1.0/bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let log = t.join("hb.log");
+        let fake = bin_dir.join("overwatch");
+        std::fs::write(
+            &fake,
+            format!("#!/bin/sh\necho \"$@\" >> '{}'\nexit 0\n", log.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let old_home = std::env::var_os("HOME");
+        let old_path = std::env::var_os("PATH");
+        std::env::set_var("HOME", &t);
+        std::env::set_var("PATH", "/usr/bin:/bin");
+        // Precondition: the LOOKUP side does find the cache install.
+        let resolved = resolve_overwatch_binary();
+        heartbeat_piggyback(&SessionAnchor {
+            key: "K-probe".to_string(),
+            run_id: String::new(),
+            scope: vec![],
+        });
+        match old_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        match old_path {
+            Some(v) => std::env::set_var("PATH", v),
+            None => std::env::remove_var("PATH"),
+        }
+        let got = std::fs::read_to_string(&log).unwrap_or_default();
+        let _ = std::fs::remove_dir_all(&t);
+        assert!(
+            matches!(&resolved, Determination::Known(Some(_))),
+            "precondition: lookup must resolve the cache overwatch"
+        );
+        assert!(
+            got.contains("heartbeat --key K-probe"),
+            "lookup resolved overwatch from the plugin cache but the heartbeat never reached it (bare Command::new(\"overwatch\")); log={got:?}"
+        );
+    }
+}

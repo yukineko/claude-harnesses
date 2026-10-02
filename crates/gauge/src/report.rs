@@ -316,3 +316,45 @@ mod tests {
         assert!(out.contains("sub-agent"));
     }
 }
+
+/// backlog 5a4630a5: the report collapses `cache_write_5m` and
+/// `cache_write_1h` into one `w` figure, so a session downgraded to the 5m TTL
+/// (the only local signal of that downgrade) is invisible in `gauge report`.
+/// Property asserted: the per-model line shows the two buckets separately.
+/// Written by an independent auditor, not an implementer.
+#[cfg(test)]
+mod backlog_5a4630a5 {
+    use super::*;
+
+    #[test]
+    #[ignore = "backlog 5a4630a5: open defect, remove ignore when fixed"]
+    fn report_shows_5m_and_1h_cache_writes_separately() {
+        let mut rec = SessionRecord {
+            project: "proj".to_string(),
+            turns: 1,
+            last_ts: Some("2026-06-27T00:00:00Z".to_string()),
+            ..Default::default()
+        };
+        rec.models.insert(
+            "claude-opus-4-8".to_string(),
+            Usage {
+                input: 10,
+                output: 10,
+                cache_write_5m: 12_300,
+                cache_write_1h: 4_560_000,
+                ..Default::default()
+            },
+        );
+        let out = render(&[rec], &[]);
+        let line = out
+            .lines()
+            .find(|l| l.contains("claude-opus-4-8"))
+            .unwrap_or_else(|| panic!("no model line in report:\n{out}"));
+        assert!(
+            line.contains(&tokens_short(12_300)) && line.contains(&tokens_short(4_560_000)),
+            "cache writes are collapsed into one figure ({} = 5m + 1h); the 5m TTL-downgrade \
+             indicator is not visible: {line:?}",
+            tokens_short(12_300 + 4_560_000)
+        );
+    }
+}

@@ -3574,3 +3574,71 @@ PROP output-schema: PASS";
         }
     }
 }
+
+#[cfg(test)]
+mod backlog_b74955f4 {
+    use super::*;
+    use crate::derive::CATALOG;
+
+    /// backlog b74955f4: inject mode passes `findings: None` (nothing evaluated).
+    /// A never-evaluated property is not a fleet violation (CA-propguard-06), yet
+    /// `unsatisfied_prop_ids(.., None)` returns every property id.
+    #[test]
+    #[ignore = "backlog b74955f4: open defect, remove ignore when fixed"]
+    fn inject_mode_none_findings_reports_no_violation() {
+        let props: Vec<Property> = ["error-path", "output-schema", "determinism"]
+            .iter()
+            .map(|id| *CATALOG.iter().find(|p| p.id == *id).unwrap())
+            .collect();
+        let violated = unsatisfied_prop_ids(&props, None);
+        assert!(
+            violated.is_empty(),
+            "nothing was evaluated, yet {violated:?} would be recorded as fleet violations"
+        );
+    }
+}
+
+/// Closure regression test for backlog 5a77b9e4, written by an independent
+/// verifier (backlog-closure audit, batch b1_0). 5a77b9e4 asserts that the
+/// defects of 028f9bc6 (inject-mode block reason renders an unmeasured
+/// `satisfied=0 < threshold=M` as a measurement) and cfd0cc76 (the block
+/// reason presents the unattributed uncommitted diff as the agent's own code)
+/// are fixed. Mounted as a child of `gate` so it can call the private
+/// `block_reason` directly.
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod audit_b1_0_tests {
+    use super::block_reason;
+    use crate::config::Config;
+
+    #[test]
+    fn backlog_5a77b9e4_block_reason_neither_fakes_a_count_nor_claims_authorship() {
+        let cfg = Config::default();
+        let files = vec!["src/someone_elses.rs".to_string()];
+
+        // 028f9bc6 half: nothing was measured (inject mode: findings None).
+        let unmeasured = block_reason(&cfg, "crit", &[], 0, 3, &files, None, 1);
+        assert!(
+            !unmeasured.contains("satisfied="),
+            "028f9bc6: an unmeasured round must not render a `satisfied=` count:\n{unmeasured}"
+        );
+        assert!(
+            unmeasured.contains("未検証"),
+            "028f9bc6: an unmeasured round must say the properties are unverified:\n{unmeasured}"
+        );
+        // Control: when a checker DID produce findings, the measured phrasing is used.
+        let measured = block_reason(&cfg, "crit", &[], 1, 3, &files, Some("p1: ok"), 1);
+        assert!(
+            measured.contains("satisfied=1 < threshold=3"),
+            "control: a checker-measured round reports the count:\n{measured}"
+        );
+
+        // cfd0cc76 half: both phrasings must disclaim authorship of the file list.
+        for reason in [&unmeasured, &measured] {
+            assert!(
+                reason.contains("作成者を検証していません"),
+                "cfd0cc76: the file list must be marked as authorship-unverified:\n{reason}"
+            );
+        }
+    }
+}

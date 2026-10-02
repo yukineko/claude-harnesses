@@ -344,6 +344,71 @@ def _source_core_version():
 SOURCE_CORE_VERSION = _source_core_version
 
 
+def _compare_versions(a, b):
+    """-1/0/1 for dotted-integer versions a vs b; None when not comparable.
+
+    None is not "equal": the caller reports it as undetermined.
+
+    Only ASCII digits count: str.isdigit alone accepts e.g. U+0661 or U+FF19,
+    which int() then silently maps to a number, so a version no Cargo.toml would
+    carry got ordered as if it were one.
+
+    Zero padding orders "0.2.9" against "0.2.9.0" as equal, yet the strings
+    differ, so they are not the same version as far as provenance is concerned.
+    0 is returned only for identical strings; equal-after-padding with unequal
+    strings is None (undetermined), never "newer" and never "same".
+    """
+    def parse(v):
+        parts = str(v).split(".")
+        if not parts or not all(p.isascii() and p.isdigit() for p in parts):
+            return None
+        return tuple(int(p) for p in parts)
+
+    pa, pb = parse(a), parse(b)
+    if pa is None or pb is None:
+        return None
+    width = max(len(pa), len(pb))
+    pa += (0,) * (width - len(pa))
+    pb += (0,) * (width - len(pb))
+    order = (pa > pb) - (pa < pb)
+    if order == 0 and str(a) != str(b):
+        return None
+    return order
+
+
+def _core_version_in_history(version):
+    """Did crates/harness-core/Cargo.toml ever carry `version = "<version>"`?
+
+    True / False, or None when git could not answer (None is not "absent").
+    """
+    import subprocess
+
+    needle = f'version = "{version}"'
+    # REPO is the cwd. From anywhere but the repo root the pathspec matches
+    # nothing and git answers "no commits" with rc 0 — that would read as
+    # "not in history" when the question was never asked.
+    if not os.path.isfile(os.path.join(REPO, "crates", "harness-core", "Cargo.toml")):
+        return None
+    try:
+        proc = subprocess.run(
+            ["git", "log", "--all", "--format=%H", "-S", needle, "--",
+             "crates/harness-core/Cargo.toml"],
+            cwd=REPO,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return bool(proc.stdout.strip())
+
+
+# Rebindable so the orphan report is testable without a git repo.
+CORE_VERSION_IN_HISTORY = _core_version_in_history
+
+
 def _host_suffix():
     """This host's `<os>-<arch>` binary suffix, matching rebuild-plugins.sh's $SUF.
 
@@ -541,6 +606,58 @@ def rollout_hint():
         "\nFix: scripts/rollout-plugins.sh --plugin <name> "
         f"(add --canary for GATE crates: {'/'.join(GATE_CRATES)})."
     )
+
+
+# Phrases that mark a shared-crate finding whose remedy is NOT rollout (backlog
+# e8aad6e6). Both messages are built from these constants, and
+# no_rollout_plugins() keys on them, so the two cannot drift apart.
+ORPHAN_CORE_MARK = "orphan provenance"
+INCOMPARABLE_CORE_MARK = "cannot be ordered"
+
+
+def no_rollout_plugins(problems):
+    """Plugins for which some finding says rollout is NOT the prescription.
+
+    Problem strings for a plugin are built as f"{crate}: ...", so the crate is
+    the prefix before the first ": ". Such a plugin must never be covered by the
+    generic rollout Fix line, even if it also has an ordinary rollout finding:
+    rolling out an orphan is a rollback, and an incomparable one is undetermined.
+    """
+    names = []
+    for p in problems:
+        if ORPHAN_CORE_MARK in p or INCOMPARABLE_CORE_MARK in p:
+            name = p.split(": ", 1)[0]
+            if name not in names:
+                names.append(name)
+    return names
+
+
+def drift_fix_hint(problems):
+    """The Fix block for a ROLLOUT DRIFT report, aware of non-rollout findings.
+
+    - no orphan/incomparable finding: the generic rollout_hint().
+    - some: the rollout Fix (if any OTHER plugin needs it) explicitly excluding
+      those plugins, plus a non-rollout instruction for them.
+    The exit code is not decided here; every one of these stays red.
+    """
+    excluded = no_rollout_plugins(problems)
+    if not excluded:
+        return rollout_hint()
+    others = [p for p in problems if p.split(": ", 1)[0] not in excluded]
+    names = ", ".join(excluded)
+    lines = []
+    if others:
+        lines.append(
+            rollout_hint().rstrip(".")
+            + f" — but NOT for {names}: rollout is not the remedy there."
+        )
+    lines.append(
+        f"\nNo rollout is prescribed for {names}: the deployed shared-crate "
+        "version is newer than source (merge the branch that produced it) or "
+        "cannot be ordered against it (establish which by hand). Do not run "
+        "rollout-plugins.sh for it until that is settled."
+    )
+    return "".join(lines)
 
 
 # _load_json states. ABSENT and MALFORMED must stay distinguishable: collapsing
@@ -1347,10 +1464,49 @@ def _provenance_problem(crate, entry):
                 "undetermined is not 'agrees'"
             )
         if recorded_core != current_core:
+            # The DIRECTION decides the remedy (backlog e8aad6e6). Source newer
+            # is a stale deploy and rollout fixes it; deployed newer means the
+            # bytes came from code this tree does not have (an unmerged branch),
+            # so rollout would be a rollback. Both stay red. An order we cannot
+            # establish is red too, with no prescription in either direction.
+            order = _compare_versions(recorded_core, current_core)
+            if order is None:
+                return (
+                    f"{crate}: deployed binary links harness-core "
+                    f"{recorded_core} and the source tree is at {current_core}, "
+                    f"but the two {INCOMPARABLE_CORE_MARK} (not plain ASCII dotted "
+                    "integers, or equal only after zero padding) — "
+                    "undetermined whether this is a stale deploy or an orphan, "
+                    "so neither rollout nor leaving it is prescribed"
+                )
+            if order < 0:
+                return (
+                    f"{crate}: deployed binary links harness-core "
+                    f"{recorded_core}, but the source tree is now at {current_core} "
+                    "<- rollout-plugins.sh not run since that shared-crate change"
+                )
+            in_history = CORE_VERSION_IN_HISTORY(recorded_core)
+            if in_history is True:
+                where = (
+                    f"version {recorded_core} appears in this repo's history "
+                    "of crates/harness-core/Cargo.toml"
+                )
+            elif in_history is False:
+                where = (
+                    f"version {recorded_core} is NOT in this repo's history "
+                    "of crates/harness-core/Cargo.toml (likely an unmerged branch)"
+                )
+            else:
+                where = (
+                    f"could not determine whether version {recorded_core} "
+                    "exists in this repo's history"
+                )
             return (
-                f"{crate}: deployed binary links harness-core "
-                f"{recorded_core}, but the source tree is now at {current_core} "
-                "<- rollout-plugins.sh not run since that shared-crate change"
+                f"{crate}: {ORPHAN_CORE_MARK} — deployed binary links harness-core "
+                f"{recorded_core}, NEWER than the source tree's {current_core}; "
+                f"{where}. Running rollout for this plugin would be a ROLLBACK "
+                "(do NOT roll it out); merge the branch that "
+                "produced it first"
             )
 
     moved = SOURCE_CHANGED_SINCE(commit, crate)
@@ -2046,7 +2202,7 @@ def main():
         )
         for p in rollout_problems:
             print(f"  - {p}", file=sys.stderr)
-        print(rollout_hint(), file=sys.stderr)
+        print(drift_fix_hint(rollout_problems), file=sys.stderr)
 
     if gate_failures:
         print(

@@ -539,6 +539,17 @@ fn refuse(
         state::reset(&cfg.state_dir, session);
         harness_core::gate::run::concede(&cfg.state_dir, session);
         log_event(cfg, session, "giveup-refusal", &[], attempt);
+        // The durable, cross-tool trace (backlog a5bc063a). There is no failing
+        // check to name — the gate never got to run one — so the discriminator
+        // names WHY it could not judge (`donegate:giveup:refusal:<kind>`). An
+        // empty `failing` slice would record nothing, which is the erasure this
+        // line exists to prevent.
+        emit_violations(
+            root,
+            session,
+            &[format!("refusal:{}", refusal_kind(declaration))],
+            Outcome::GaveUp,
+        );
         eprintln!(
             "donegate: still unable to judge after {} attempts — {}. Allowing stop; NOTHING WAS \
              VERIFIED.",
@@ -567,6 +578,18 @@ fn refuse(
     harness_core::repeat::emit_stop_block("donegate", &reason);
     harness_core::hook_latency::record("donegate", session, start.elapsed().as_millis() as u64);
     std::process::exit(0);
+}
+
+/// Stable slug for a refusal's cause, used in the give-up violation signature.
+/// The non-refusal arms are unreachable from `refuse()` but still get a
+/// distinct, non-empty slug so a future caller cannot mint a blank signature.
+fn refusal_kind(d: &config::Declaration) -> &'static str {
+    match d {
+        config::Declaration::RefusedUntrusted { .. } => "untrusted",
+        config::Declaration::Unreadable { .. } => "unreadable",
+        config::Declaration::Absent => "not-a-refusal-absent",
+        config::Declaration::Loaded(_) => "not-a-refusal-loaded",
+    }
 }
 
 /// Record one fleet-level violation per failing check, for cross-gate

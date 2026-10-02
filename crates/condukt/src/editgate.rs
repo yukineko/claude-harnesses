@@ -638,3 +638,69 @@ edition = \"2021\"\n\n[workspace]\n\n[lib]\npath = \"src/lib.rs\"\n",
         );
     }
 }
+
+#[cfg(test)]
+mod backlog_f7a0cadc {
+    //! backlog f7a0cadc: `editgate::tests::a_clean_crate_still_passes` fails
+    //! whenever a sibling test has swapped the process-wide `HOME` (other
+    //! modules do so under `crate::env_lock::HOME_ENV_LOCK`, which editgate
+    //! never takes): the spawned `cargo` is a rustup proxy that cannot find a
+    //! toolchain under the sandbox HOME, and the gate then reports a CLEAN
+    //! crate as `broken` with a toolchain error as its "diagnostics".
+    //!
+    //! Deterministic reproduction of the interleaving: hold the same lock,
+    //! swap HOME exactly as `with_home` does, and run the same check the
+    //! clean-crate test runs.
+    use super::*;
+
+    #[test]
+    #[ignore = "backlog f7a0cadc: open defect, remove ignore when fixed"]
+    fn clean_crate_is_not_broken_while_a_sibling_has_home_swapped() {
+        let d = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(d.path().join("src")).unwrap();
+        std::fs::write(
+            d.path().join("Cargo.toml"),
+            "[package]\nname = \"eg_f7a0cadc\"\nversion = \"0.1.0\"\n\
+edition = \"2021\"\n\n[workspace]\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            d.path().join("src").join("lib.rs"),
+            "pub fn f() -> i32 { 1 }\n",
+        )
+        .unwrap();
+        let sandbox_home = tempfile::tempdir().expect("sandbox home");
+
+        let out = {
+            let _g = crate::env_lock::HOME_ENV_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // Under `cargo test` the rustup proxy exports RUSTUP_TOOLCHAIN /
+            // RUSTUP_HOME into this process, which masks the HOME dependence;
+            // the item's measurement ran the test binary directly, where they
+            // are absent. Reproduce that environment for the duration.
+            let saved: Vec<(&str, Option<std::ffi::OsString>)> =
+                ["HOME", "RUSTUP_TOOLCHAIN", "RUSTUP_HOME"]
+                    .into_iter()
+                    .map(|k| (k, std::env::var_os(k)))
+                    .collect();
+            std::env::set_var("HOME", sandbox_home.path());
+            std::env::remove_var("RUSTUP_TOOLCHAIN");
+            std::env::remove_var("RUSTUP_HOME");
+            let out = check_edit(&d.path().join("src/lib.rs"), Some(d.path()), true);
+            for (k, v) in saved {
+                match v {
+                    Some(v) => std::env::set_var(k, v),
+                    None => std::env::remove_var(k),
+                }
+            }
+            out
+        };
+        assert_eq!(
+            out["broken"], false,
+            "a compiling crate was reported broken because the process HOME was \
+             swapped by a sibling — the gate's verdict depends on unpinned shared \
+             state, and the toolchain failure is misattributed to the code: {out}"
+        );
+    }
+}

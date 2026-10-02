@@ -7,7 +7,12 @@
 //! In every such spelling the relative operand `src` resolves against the
 //! payload cwd (`<parent>/proj`, which is NOT a root), so it must NOT be Allow.
 //!
-//! Fixtures live under `CARGO_TARGET_TMPDIR` (not `/tmp`, a blastguard safe root).
+//! Fixtures live under [`neutral_base::neutral_base`], a location calibrated so
+//! that neither an enclosing real `.harness-worktrees` nor a blastguard temp
+//! safe root (`/tmp`) decides the verdict.
+
+#[path = "support/neutral_base.rs"]
+mod neutral_base;
 
 use std::io::Write;
 use std::os::unix::fs::symlink;
@@ -25,7 +30,7 @@ impl Fx {
     /// `<parent>/.harness-worktrees/s/src` (real), `<parent>/proj/src` (real),
     /// cwd for `run` defaults to `<parent>/proj`.
     fn new(name: &str) -> Fx {
-        let base = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        let base = neutral_base::neutral_base()
             .join("worktree_root_cd_desync")
             .join(name);
         let _ = std::fs::remove_dir_all(&base);

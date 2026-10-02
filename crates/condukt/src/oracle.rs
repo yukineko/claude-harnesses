@@ -839,3 +839,133 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod backlog_c63f1c23 {
+    //! backlog c63f1c23 (1)/(2): `oracle::tests::no_reproduction_tests_falls_back_even_when_required`
+    //! asserts `valid_fp_oracle == false`, but it spawns whatever `tdd` the
+    //! process `PATH` resolves to — without taking `PATH_ENV_LOCK` and without
+    //! pinning its own PATH. Its sibling
+    //! `oracle_check_oracle_exit_zero_still_trusts_valid_verdict` puts a fake
+    //! `tdd` on PATH that prints `{"valid_fp_oracle":true,...}` and exits 0.
+    //! Whenever the two interleave in a full-suite run, the first test reads
+    //! the sibling's fake and fails at that exact assertion.
+    //!
+    //! Observation: run exactly that test in a child copy of this test binary
+    //! whose PATH resolves `tdd` to such a fake — i.e. the PATH a concurrent
+    //! sibling installs. A test whose spawn target is confined to its own
+    //! fixture is unaffected.
+    use std::process::Command;
+
+    const TARGET: &str = "oracle::tests::no_reproduction_tests_falls_back_even_when_required";
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "backlog c63f1c23: open defect, remove ignore when fixed"]
+    fn no_reproduction_tests_test_is_independent_of_the_tdd_on_path() {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = tempfile::tempdir().expect("fake bin dir");
+        let fake = bin.path().join("tdd");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\necho '{\"valid_fp_oracle\":true,\"transition\":\"fail_to_pass\"}'\nexit 0\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut parts = vec![bin.path().to_path_buf()];
+        if let Some(p) = std::env::var_os("PATH") {
+            parts.extend(std::env::split_paths(&p));
+        }
+        let exe = std::env::current_exe().expect("current test binary");
+        let out = Command::new(&exe)
+            .args([TARGET, "--exact", "--test-threads=1"])
+            .env("PATH", std::env::join_paths(parts).unwrap())
+            .output()
+            .expect("spawn child test binary");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains("running 1 test"),
+            "fixture precondition: the target test must be selected; stdout={stdout}"
+        );
+        assert!(
+            out.status.success(),
+            "{TARGET} changed its verdict because a different `tdd` was first on \
+             PATH — its spawn target escapes its fixture, which is exactly what a \
+             concurrent PATH-mutating sibling triggers. stdout={stdout} stderr={}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+#[cfg(test)]
+mod backlog_e5174b6a {
+    //! backlog e5174b6a: `verdict_from_oracle`'s doc comment says that, per the
+    //! charter DoD, an incomplete proof pair (`transition: "unknown"`) "must
+    //! degrade to the legacy `done_criteria` gate (`fallback: true` ...), NOT
+    //! hard-reject". Through `check_oracle` that branch is unreachable: the real
+    //! `tdd oracle` exits 1 whenever `valid_fp_oracle` is not true, and
+    //! `verdict_from_oracle_output` short-circuits a non-zero exit to
+    //! `fallback: false` before ever reaching `verdict_from_oracle`.
+    //!
+    //! Fixture = the observed protocol, not a guess: the workspace `tdd`
+    //! (`target/debug/tdd oracle --task no-such-task-xyz-e5174b6a`, 2026-10-02)
+    //! printed `{"has_green":false,"has_red":false,"transition":"unknown","valid_fp_oracle":false}`
+    //! and exited 1.
+    //!
+    //! Contract pinned: prose and behaviour agree. While the doc still claims
+    //! the degradation, the live path must deliver it. Either resolution the
+    //! ticket offers (rewrite the prose, or change the exit-code protocol and
+    //! this fixture with it) turns this GREEN.
+    use std::path::Path;
+
+    // Escaped `\n` here, a real newline in the doc: this literal cannot match itself.
+    const CLAIM: &str = "must degrade to the\n/// legacy `done_criteria` gate";
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "backlog e5174b6a: open defect, remove ignore when fixed"]
+    fn documented_unknown_transition_degradation_is_what_check_oracle_delivers() {
+        use std::os::unix::fs::PermissionsExt;
+        let src = include_str!("oracle.rs");
+        let doc_claims_degrade = src.contains(CLAIM);
+
+        let _guard = crate::env_lock::PATH_ENV_LOCK
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::TempDir::new().unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let fake = bin.join("tdd");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\necho '{\"has_green\":false,\"has_red\":false,\"transition\":\"unknown\",\"valid_fp_oracle\":false}'\nexit 1\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let old_path = std::env::var_os("PATH");
+        let mut parts = vec![bin.clone()];
+        if let Some(p) = &old_path {
+            parts.extend(std::env::split_paths(p));
+        }
+        std::env::set_var("PATH", std::env::join_paths(parts).unwrap());
+        let out = super::check_oracle(true, Some("cargo test -p x"), "t1", Path::new(tmp.path()));
+        match old_path {
+            Some(p) => std::env::set_var("PATH", p),
+            None => std::env::remove_var("PATH"),
+        }
+
+        assert!(
+            doc_claims_degrade || out["fallback"] == serde_json::json!(false),
+            "fixture precondition: the claim text moved; re-anchor CLAIM"
+        );
+        if doc_claims_degrade {
+            assert_eq!(
+                out["fallback"],
+                serde_json::json!(true),
+                "oracle.rs documents that an unknown transition degrades to fallback:true \
+                 (charter DoD), but check_oracle on the real tdd protocol (unknown, exit 1) \
+                 returned {out}"
+            );
+        }
+    }
+}

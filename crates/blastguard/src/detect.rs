@@ -156,6 +156,10 @@ struct Ctx<'a> {
     /// all — see [`worktree_rm_eligible`]. Computed once from the whole command
     /// line in [`Ctx::new`] and carried unchanged into every derived context.
     worktree_rm_eligible: bool,
+    /// Whether the TOP-LEVEL command may use the deletion-principle verdicts
+    /// of [`crate::deletion`] at all — see [`deletion_rm_eligible`]. Computed
+    /// once in [`Ctx::new`], carried unchanged like `worktree_rm_eligible`.
+    deletion_rm_eligible: bool,
 }
 
 impl<'a> Ctx<'a> {
@@ -167,6 +171,7 @@ impl<'a> Ctx<'a> {
             rewritten_base: scope.session_cwd(),
             raw_base: scope.session_cwd().map(str::to_string),
             worktree_rm_eligible: worktree_rm_eligible(command),
+            deletion_rm_eligible: deletion_rm_eligible(command),
         }
     }
 
@@ -183,6 +188,7 @@ impl<'a> Ctx<'a> {
             rewritten_base: self.rewritten_base,
             raw_base,
             worktree_rm_eligible: self.worktree_rm_eligible,
+            deletion_rm_eligible: self.deletion_rm_eligible,
         }
     }
 
@@ -196,6 +202,7 @@ impl<'a> Ctx<'a> {
             rewritten_base: None,
             raw_base: None,
             worktree_rm_eligible: self.worktree_rm_eligible,
+            deletion_rm_eligible: self.deletion_rm_eligible,
         }
     }
 
@@ -7347,6 +7354,22 @@ fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
         return Decision::Allow;
     }
 
+    // DELETION PRINCIPLE (backlog 3aa215e1, user ruling 2026-09-30): a
+    // recursive rm of LITERAL operands is judged by WHAT it destroys — see
+    // `crate::deletion` for the class table. Placed after the protected-path
+    // precedence, the worktree-storage Allow and the config-file exemption
+    // (all unchanged), and before the confined Ask / shape Deny it replaces
+    // for the cases it can decide. Only for a command `deletion_rm_eligible`
+    // accepts as a whole; anything else, and every operand it cannot decide,
+    // keeps the logic below.
+    if recursive && !wildcard && ctx.deletion_rm_eligible {
+        match crate::deletion::judge_rm(ctx.scope, &operands, ctx.base_for("rm")) {
+            crate::deletion::RmJudgement::Allow => return Decision::Allow,
+            crate::deletion::RmJudgement::Deny(reason) => return Decision::deny(reason),
+            crate::deletion::RmJudgement::FallThrough => {}
+        }
+    }
+
     // LOCATION axis (see `crate::scope`), placed deliberately:
     //   * AFTER the protected-path precedence at the top of this function, so
     //     deleting a gate config stays a flat Deny wherever it lives;
@@ -7494,6 +7517,59 @@ fn worktree_rm_eligible(command: &str) -> bool {
         .iter()
         .filter(|w| w.first().copied() == Some("rm"))
         .all(|w| rm_words_are_flags_then_absolute(&w[1..]))
+}
+
+/// Whole-command precondition for every deletion-principle verdict of
+/// [`crate::deletion`] (backlog 3aa215e1): [`worktree_rm_eligible`] — bare
+/// `rm`/`cd` segments of plain word characters, no `..` in any `rm` word, and
+/// only absolute `rm` operands when a `cd` is present — AND, for every `rm`
+/// segment:
+///
+///   * no word after `rm` has a component that is exactly `.` or `..`
+///     (split on `/` and `=`): the spec withholds the Allow for any such
+///     spelling, harmless or not;
+///   * the words after `rm` are a run of option words followed only by
+///     operands: no lone `-` (an operand named `-` that the arm's `-`-prefix
+///     filter would drop), no `--`, and no option-looking word after the
+///     first operand (BSD `rm` treats it as a FILE, which the arm's operand
+///     list would never see).
+///
+/// Anything else is `false`, and the rm arm keeps its pre-existing verdict.
+fn deletion_rm_eligible(command: &str) -> bool {
+    if !worktree_rm_eligible(command) {
+        return false;
+    }
+    command
+        .split([';', '&', '|'])
+        .map(|seg| {
+            seg.split(' ')
+                .filter(|w| !w.is_empty())
+                .collect::<Vec<&str>>()
+        })
+        .filter(|w| w.first().copied() == Some("rm"))
+        .all(|w| rm_words_are_plain_options_then_operands(&w[1..]))
+}
+
+/// See [`deletion_rm_eligible`]: options first, then operands; no `-`, no
+/// `--`, no `.`/`..` component anywhere.
+fn rm_words_are_plain_options_then_operands(words: &[&str]) -> bool {
+    let mut in_options = true;
+    for w in words {
+        if w.split(['/', '=']).any(|c| c == "." || c == "..") {
+            return false;
+        }
+        if *w == "-" || *w == "--" {
+            return false;
+        }
+        if w.starts_with('-') {
+            if !in_options {
+                return false;
+            }
+            continue;
+        }
+        in_options = false;
+    }
+    true
 }
 
 /// True when `word` has a component that is exactly `..` (`..`, `../x`,
@@ -13966,5 +14042,532 @@ and must not be Allowed: {failing:?}"
         assert_protected_modify(bash("echo x | tee .githooks/pre-commit"));
 
         let _ = std::fs::remove_file(&real);
+    }
+
+    // ---- deletion principle (backlog 3aa215e1): recursive rm judged by WHAT
+    // it destroys. Classes 2/3 are exercised on a REAL filesystem (the root
+    // check is an lstat); classes 4/5 through an injected git probe, so the
+    // decision wiring is pinned without depending on a repository on disk
+    // (the probe itself is tested against real git in `reversible`).
+
+    /// The binary's resolver (`main::real_path`): canonicalise the deepest
+    /// existing ancestor and re-attach the missing tail.
+    fn del_real(path: &str) -> Option<String> {
+        let mut cur = std::path::PathBuf::from(path);
+        let mut tail: Vec<std::ffi::OsString> = Vec::new();
+        loop {
+            if let Ok(real) = cur.canonicalize() {
+                let mut out = real;
+                for name in tail.iter().rev() {
+                    out.push(name);
+                }
+                return out.to_str().map(str::to_string);
+            }
+            tail.push(cur.file_name()?.to_os_string());
+            if !cur.pop() {
+                return None;
+            }
+        }
+    }
+
+    /// `<scratch>/tmp` (passed as TMPDIR), `<scratch>/home/.cache`,
+    /// `<scratch>/home/docs`, `<scratch>/proj` (the cwd). All canonical.
+    struct DelFx {
+        scratch: String,
+        tmp: String,
+        home: String,
+        proj: String,
+    }
+
+    impl DelFx {
+        fn new(tag: &str) -> DelFx {
+            DelFx::new_in(&std::env::temp_dir(), tag)
+        }
+
+        fn new_in(parent: &std::path::Path, tag: &str) -> DelFx {
+            let base = parent.join(format!("bg-del-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&base);
+            for d in ["tmp/a/b", "home/.cache/pip", "home/docs", "proj"] {
+                std::fs::create_dir_all(base.join(d)).unwrap();
+            }
+            let scratch = del_real(base.to_str().unwrap()).unwrap();
+            DelFx {
+                tmp: format!("{scratch}/tmp"),
+                home: format!("{scratch}/home"),
+                proj: format!("{scratch}/proj"),
+                scratch,
+            }
+        }
+
+        fn roots(&self) -> SafeRoots {
+            self.roots_with_cwd(&self.proj.clone())
+        }
+
+        fn roots_with_cwd(&self, cwd: &str) -> SafeRoots {
+            SafeRoots::new(
+                Some(cwd),
+                Some(&self.proj),
+                Some(&self.home),
+                Some(&self.tmp),
+                Some(del_real),
+            )
+        }
+
+        fn run(&self, cmd: &str) -> Decision {
+            detect_scoped("Bash", Some(&json!({ "command": cmd })), &self.roots())
+        }
+    }
+
+    impl Drop for DelFx {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.scratch);
+        }
+    }
+
+    #[test]
+    fn deletion_temp_and_cache_subpaths_are_allowed() {
+        let f = DelFx::new("allow");
+        for cmd in [
+            format!("rm -rf {}/a", f.tmp),
+            format!("rm -rf {}/a/b", f.tmp),
+            format!("rm -r {}/does-not-exist-yet", f.tmp),
+            format!("rm -rf {}/.cache/pip", f.home),
+            format!("rm -rf {}/a {}/.cache/pip", f.tmp, f.home),
+        ] {
+            assert_eq!(f.run(&cmd), Decision::Allow, "{cmd}");
+        }
+        // A relative operand with no `cd`, judged against the payload cwd.
+        let in_tmp = detect_scoped(
+            "Bash",
+            Some(&json!({ "command": "rm -rf a" })),
+            &f.roots_with_cwd(&f.tmp),
+        );
+        assert_eq!(in_tmp, Decision::Allow);
+    }
+
+    #[test]
+    fn deletion_roots_themselves_are_not_allowed() {
+        let f = DelFx::new("roots");
+        for cmd in [
+            format!("rm -rf {}", f.tmp),
+            format!("rm -rf {}/", f.tmp),
+            format!("rm -rf {}/.cache", f.home),
+            format!("rm -rf {}", f.home),
+            format!("rm -rf {}/docs", f.home),
+        ] {
+            assert_ne!(verdict_name(&f.run(&cmd)), "allow", "{cmd}");
+        }
+    }
+
+    #[test]
+    fn deletion_refusals_are_deny_even_inside_a_confined_safe_root() {
+        // cwd = the scratch dir, so home and everything under it sit inside a
+        // confined safe root — which used to soften a recursive rm to Ask.
+        // Under /var/tmp (not a system directory strictly below it), so each
+        // refusal is observed for its own reason, not as "system directory".
+        let f = DelFx::new_in(std::path::Path::new("/var/tmp"), "refused");
+        let roots = f.roots_with_cwd(&f.scratch.clone());
+        for (cmd, why) in [
+            (format!("rm -rf {}", f.home), "home directory"),
+            (format!("rm -rf {}/docs", f.home), "home directory"),
+            (format!("rm -rf {}/.cache", f.home), "itself"),
+            (format!("rm -rf {}", f.tmp), "itself"),
+            (
+                format!("rm -rf {}/a {}/docs", f.tmp, f.home),
+                "home directory",
+            ),
+            (format!("rm -rf {}", f.scratch), "contains the home"),
+        ] {
+            let d = detect_scoped("Bash", Some(&json!({ "command": cmd })), &roots);
+            assert_eq!(verdict_name(&d), "deny", "{cmd}: {d:?}");
+            if let Decision::Deny(reason) = d {
+                assert!(reason.contains(why), "{cmd}: {reason}");
+                assert_eq!(crate::rule_id::rule_id(&reason), "rm-recursive", "{reason}");
+            }
+        }
+        // Undetermined-but-confined stays the confined Ask: an existing
+        // operand that is neither a class member nor a refusal, with no git
+        // probe to judge it.
+        std::fs::create_dir_all(format!("{}/x", f.proj)).unwrap();
+        let d = detect_scoped(
+            "Bash",
+            Some(&json!({ "command": format!("rm -rf {}/x", f.proj) })),
+            &roots,
+        );
+        assert_eq!(verdict_name(&d), "ask");
+    }
+
+    #[test]
+    fn deletion_escape_spellings_are_not_allowed() {
+        let f = DelFx::new("escape");
+        // A symlink in the temp root pointing OUT (to home) and one pointing
+        // back INSIDE: neither may be an Allow.
+        std::os::unix::fs::symlink(format!("{}/docs", f.home), format!("{}/out", f.tmp)).unwrap();
+        std::os::unix::fs::symlink(format!("{}/a", f.tmp), format!("{}/in", f.tmp)).unwrap();
+        for cmd in [
+            format!("rm -rf {}/out/", f.tmp),
+            format!("rm -rf {}/out", f.tmp),
+            format!("rm -rf {}/in/b", f.tmp),
+            format!("rm -rf {}/../home/docs", f.tmp),
+            format!("rm -rf {}/a/../a", f.tmp),
+            format!("rm -rf {}/./a", f.tmp),
+            format!("rm -rf {}/a {}/docs", f.tmp, f.home),
+            format!("mv {}/docs {}/x && rm -rf {}/x", f.home, f.tmp, f.tmp),
+            format!("rm -rf {}/a -x", f.tmp),
+            format!("rm -rf -- {}/a", f.tmp),
+            format!("rm -rf - {}/a", f.tmp),
+            format!("rm -rf {}/a 2>/dev/null", f.tmp),
+            format!("cd {} && rm -rf a", f.tmp),
+            format!("rm -rf \"{}/a\"", f.tmp),
+        ] {
+            assert_ne!(verdict_name(&f.run(&cmd)), "allow", "{cmd}");
+        }
+        // `.` relative spelling, cwd in the temp root.
+        let dot = detect_scoped(
+            "Bash",
+            Some(&json!({ "command": "rm -rf ./a" })),
+            &f.roots_with_cwd(&f.tmp),
+        );
+        assert_ne!(verdict_name(&dot), "allow");
+        // A non-canonical payload cwd withholds every deletion Allow.
+        let raw = format!("{}/a/..", f.tmp);
+        let d = detect_scoped(
+            "Bash",
+            Some(&json!({ "command": format!("rm -rf {}/a", f.tmp) })),
+            &f.roots_with_cwd(&raw),
+        );
+        assert_ne!(verdict_name(&d), "allow", "payload cwd {raw}");
+    }
+
+    #[test]
+    fn deletion_symlinked_cache_root_is_not_a_root() {
+        let f = DelFx::new("cachelink");
+        std::fs::remove_dir_all(format!("{}/.cache", f.home)).unwrap();
+        std::os::unix::fs::symlink(format!("{}/docs", f.home), format!("{}/.cache", f.home))
+            .unwrap();
+        assert_ne!(
+            verdict_name(&f.run(&format!("rm -rf {}/.cache/x", f.home))),
+            "allow"
+        );
+    }
+
+    #[test]
+    fn deletion_temp_root_must_exist_as_a_real_directory() {
+        let f = DelFx::new("tmpmissing");
+        // TMPDIR naming a directory that does not exist, and one naming a
+        // regular file: neither is a root, so nothing below it is an Allow.
+        std::fs::write(format!("{}/file", f.scratch), b"x").unwrap();
+        // …and TMPDIR naming the home directory or an ancestor of it.
+        for tmpdir in [
+            format!("{}/missing", f.scratch),
+            format!("{}/file", f.scratch),
+            f.home.clone(),
+            f.scratch.clone(),
+        ] {
+            let roots = SafeRoots::new(
+                Some(&f.proj),
+                Some(&f.proj),
+                Some(&f.home),
+                Some(&tmpdir),
+                Some(del_real),
+            );
+            let d = detect_scoped(
+                "Bash",
+                Some(&json!({ "command": format!("rm -rf {tmpdir}/x") })),
+                &roots,
+            );
+            assert_ne!(verdict_name(&d), "allow", "TMPDIR={tmpdir}");
+        }
+    }
+
+    #[test]
+    fn deletion_tmpdir_naming_a_system_dir_or_a_home_subtree_is_not_a_root() {
+        // Verifier finding on 566d7717: TMPDIR=/etc made `/private/etc` a
+        // temp deletion root, so `rm -rf /etc/ssh` was an Allow.
+        let f = DelFx::new("tmpdir-sys");
+        let cases = [
+            ("/etc".to_string(), "/etc/ssh".to_string()),
+            ("/private/etc".to_string(), "/private/etc/ssh".to_string()),
+            ("/usr/local".to_string(), "/usr/local/x".to_string()),
+            ("/var/log".to_string(), "/var/log/x".to_string()),
+            (format!("{}/docs", f.home), format!("{}/docs/x", f.home)),
+        ];
+        for (tmpdir, target) in cases {
+            let roots = SafeRoots::new(
+                Some(&f.proj),
+                Some(&f.proj),
+                Some(&f.home),
+                Some(&tmpdir),
+                Some(del_real),
+            );
+            let d = detect_scoped(
+                "Bash",
+                Some(&json!({ "command": format!("rm -rf {target}") })),
+                &roots,
+            );
+            assert_ne!(verdict_name(&d), "allow", "TMPDIR={tmpdir} rm -rf {target}");
+        }
+        // Control: the fixture's own TMPDIR (under the OS temp dir) is a root.
+        assert_eq!(f.run(&format!("rm -rf {}/a", f.tmp)), Decision::Allow);
+    }
+
+    #[test]
+    fn deletion_tmpdir_is_not_a_root_when_home_is_unset() {
+        let f = DelFx::new("tmpdir-nohome");
+        let cmd = format!("rm -rf {}/a", f.tmp);
+        let with_home = f.run(&cmd);
+        assert_eq!(with_home, Decision::Allow, "control: HOME set");
+        let roots = SafeRoots::new(
+            Some(&f.proj),
+            Some(&f.proj),
+            None,
+            Some(&f.tmp),
+            Some(del_real),
+        );
+        let d = detect_scoped("Bash", Some(&json!({ "command": cmd })), &roots);
+        assert_ne!(verdict_name(&d), "allow", "{cmd} with HOME unset: {d:?}");
+    }
+
+    /// Directory holding the fake `git` scripts of
+    /// `deletion_failing_git_probe_never_allows` (set once by that test).
+    static FAKE_GIT_DIR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+    fn fake_git_probe(
+        mode: &str,
+        path: &str,
+        cands: &[String],
+    ) -> Determination<crate::reversible::TreeGitFacts> {
+        let dir = FAKE_GIT_DIR.get().expect("fake git dir set");
+        crate::reversible::probe_tree_with(
+            std::ffi::OsStr::new(&format!("{dir}/git-{mode}")),
+            path,
+            cands,
+        )
+    }
+    fn fake_git_clean(p: &str, c: &[String]) -> Determination<crate::reversible::TreeGitFacts> {
+        fake_git_probe("clean", p, c)
+    }
+    fn fake_git_fail(p: &str, c: &[String]) -> Determination<crate::reversible::TreeGitFacts> {
+        fake_git_probe("fail", p, c)
+    }
+    fn fake_git_garbage(p: &str, c: &[String]) -> Determination<crate::reversible::TreeGitFacts> {
+        fake_git_probe("garbage", p, c)
+    }
+    fn fake_git_hang(p: &str, c: &[String]) -> Determination<crate::reversible::TreeGitFacts> {
+        fake_git_probe("hang", p, c)
+    }
+
+    #[test]
+    fn deletion_failing_git_probe_never_allows() {
+        use std::os::unix::fs::PermissionsExt;
+        // Under /var/tmp: not a temp root and not a system directory, so the
+        // operand reaches the git classes and the probe decides.
+        let f = DelFx::new_in(std::path::Path::new("/var/tmp"), "fakegit");
+        std::fs::create_dir_all(format!("{}/src", f.proj)).unwrap();
+        let bin = format!("{}/bin", f.scratch);
+        std::fs::create_dir_all(&bin).unwrap();
+        let status = [
+            ("clean", "exit 0"),
+            ("fail", "exit 128"),
+            ("garbage", "printf 'x'; exit 0"),
+            ("hang", "exec sleep 5"),
+        ];
+        for (mode, on_status) in status {
+            let script = format!(
+                "#!/bin/sh\ncase \"$*\" in\n  *rev-parse*) echo '{}' ;;\n  *\" status \"*) {on_status} ;;\n  *) exit 0 ;;\nesac\n",
+                f.proj
+            );
+            let p = format!("{bin}/git-{mode}");
+            std::fs::write(&p, script).unwrap();
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let _ = FAKE_GIT_DIR.set(bin);
+        let run = |probe: crate::reversible::GitTreeProbe| {
+            let roots = f.roots_with_cwd(&f.proj.clone()).with_git_tree_probe(probe);
+            detect_scoped(
+                "Bash",
+                Some(&json!({ "command": format!("rm -rf {}/src", f.proj) })),
+                &roots,
+            )
+        };
+        // Control: a git that answers "clean" makes it an Allow (class 5),
+        // so the fixture really reaches the probe.
+        let c = run(fake_git_clean);
+        assert_eq!(
+            c,
+            Decision::Allow,
+            "control: {:?}",
+            fake_git_clean(&format!("{}/src", f.proj), &[])
+        );
+        for (name, probe) in [
+            (
+                "non-zero exit",
+                fake_git_fail as crate::reversible::GitTreeProbe,
+            ),
+            ("unparseable output", fake_git_garbage),
+            ("timeout", fake_git_hang),
+        ] {
+            let d = run(probe);
+            assert_ne!(verdict_name(&d), "allow", "{name}: {d:?}");
+            assert!(
+                matches!(
+                    probe(&format!("{}/src", f.proj), &[]),
+                    Determination::Undetermined(_)
+                ),
+                "{name}: probe must be Undetermined"
+            );
+        }
+    }
+
+    #[test]
+    fn deletion_without_a_resolver_changes_nothing() {
+        // The library entry (`detect`, SafeRoots::none) keeps the shape Deny.
+        assert!(bash("rm -rf /tmp/foo").is_deny());
+    }
+
+    const DP: &str = "/home/yuki/proj";
+
+    fn del_facts(status: &[(&str, &str)], tracked: usize) -> crate::reversible::TreeGitFacts {
+        crate::reversible::TreeGitFacts {
+            toplevel: DP.to_string(),
+            status: status
+                .iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect(),
+            tracked,
+            submodule: false,
+            hidden_index_state: false,
+            build_dirs: Vec::new(),
+        }
+    }
+
+    /// A fake repository at `/home/yuki/proj`, keyed on the operand path.
+    fn del_git(path: &str, cands: &[String]) -> Determination<crate::reversible::TreeGitFacts> {
+        let rel = path.strip_prefix("/home/yuki/proj/").unwrap_or("");
+        let mut f = match rel.split('/').next().unwrap_or("") {
+            "src" | "" => del_facts(&[], 3),
+            "dirty" => del_facts(&[(" M", "dirty/a.rs")], 1),
+            "untracked" => del_facts(&[("??", "untracked/n.rs")], 0),
+            "secrets" => del_facts(&[("!!", "secrets/")], 0),
+            "target" => del_facts(&[("!!", "target/")], 0),
+            "dist" => del_facts(&[], 2),
+            _ => return Determination::undetermined("git timed out"),
+        };
+        f.build_dirs = cands
+            .iter()
+            .map(|c| (c.clone(), c.ends_with("/target")))
+            .collect();
+        Determination::known(f)
+    }
+
+    fn del_project_roots(probe: bool) -> SafeRoots {
+        let r = SafeRoots::new(
+            Some(DP),
+            Some(DP),
+            Some("/home/yuki"),
+            None,
+            Some(wt_identity),
+        );
+        if probe {
+            r.with_git_tree_probe(del_git)
+        } else {
+            r
+        }
+    }
+
+    fn del_project(cmd: &str) -> Decision {
+        detect_scoped(
+            "Bash",
+            Some(&json!({ "command": cmd })),
+            &del_project_roots(true),
+        )
+    }
+
+    #[test]
+    fn deletion_project_classes_allow_recoverable_and_build_output() {
+        for cmd in [
+            "rm -rf src",
+            "rm -rf /home/yuki/proj/src/sub",
+            "rm -rf target",
+            "rm -rf target/debug",
+            "rm -rf src target",
+            // Named like build output but tracked and clean: not class 4,
+            // Allow by class 5 (ruling 2026-10-01, 「復帰できるなら許可」).
+            "rm -rf dist",
+        ] {
+            assert_eq!(del_project(cmd), Decision::Allow, "{cmd}");
+        }
+    }
+
+    #[test]
+    fn deletion_project_loss_is_a_deny_naming_what_is_lost() {
+        for (cmd, what) in [
+            ("rm -rf dirty", "1 with uncommitted changes"),
+            ("rm -rf untracked", "1 untracked"),
+            ("rm -rf secrets", "1 ignored (not build output)"),
+            ("rm -rf src dirty", "1 with uncommitted changes"),
+        ] {
+            let d = del_project(cmd);
+            assert_eq!(verdict_name(&d), "deny", "{cmd}: {d:?}");
+            if let Decision::Deny(reason) = d {
+                assert!(reason.contains(what), "{cmd}: {reason}");
+                assert_eq!(
+                    crate::rule_id::rule_id(&reason),
+                    "rm-recursive-unrecoverable"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn deletion_project_undetermined_and_refused_keep_the_old_verdict() {
+        // A git probe that did not answer: the confined Ask, as before this
+        // rule (undetermined-but-confined).
+        assert_eq!(verdict_name(&del_project("rm -rf timeout")), "ask");
+        // The work-tree root, home-level and system paths: a determined Deny.
+        for cmd in [
+            "rm -rf /home/yuki/proj",
+            "rm -rf /home/yuki/.ssh",
+            "rm -rf /etc/foo",
+            "rm -rf src /etc/foo",
+        ] {
+            assert_eq!(verdict_name(&del_project(cmd)), "deny", "{cmd}");
+        }
+        // Not eligible as a whole: the probe's findings are not consulted.
+        assert_eq!(verdict_name(&del_project("rm -rf dirty && echo hi")), "ask");
+        // No probe attached: nothing changes.
+        let d = detect_scoped(
+            "Bash",
+            Some(&json!({ "command": "rm -rf src" })),
+            &del_project_roots(false),
+        );
+        assert_eq!(verdict_name(&d), "ask");
+        // Protected paths still resolve on the protected axis first.
+        assert!(del_project("rm -rf .git").is_deny());
+        assert!(del_project("rm -rf .githooks").is_deny());
+    }
+
+    #[test]
+    fn deletion_rm_eligible_requires_plain_operands() {
+        for ok in [
+            "rm -rf /a/b",
+            "rm -rf a b",
+            "rm -r -f a",
+            "cd /x && rm -rf /x/y",
+        ] {
+            assert!(deletion_rm_eligible(ok), "{ok}");
+        }
+        for bad in [
+            "rm -rf ./a",
+            "rm -rf a/./b",
+            "rm -rf a/..",
+            "rm -rf a -x",
+            "rm -rf -- a",
+            "rm -rf - a",
+            "rm -rf a && ls",
+            "cd /x && rm -rf y",
+        ] {
+            assert!(!deletion_rm_eligible(bad), "{bad}");
+        }
     }
 }

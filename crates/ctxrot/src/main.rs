@@ -1398,3 +1398,32 @@ mod violation_emission_tests {
         assert!(events.is_empty());
     }
 }
+
+#[cfg(test)]
+mod backlog_589b250d {
+    use super::*;
+    use harness_core::hook::{ContextWindow, HookInput};
+
+    /// 200k tokens consumed against the default 200k budget window, while Claude
+    /// reports used_percentage=20 (of a 1M window). The statusline must not show a
+    /// green band0 for an exhausted budget.
+    #[test]
+    #[ignore = "backlog 589b250d: open defect, remove ignore when fixed"]
+    fn statusline_budget_exhausted_is_not_band0() {
+        std::env::set_var("NO_COLOR", "1");
+        let cfg = Config::default();
+        let input = HookInput {
+            context_window: Some(ContextWindow {
+                used_percentage: Some(20.0),
+                total_input_tokens: Some(200_000),
+                total_output_tokens: Some(0),
+            }),
+            ..Default::default()
+        };
+        let line = statusline_from(&cfg, &input).unwrap();
+        assert!(
+            !line.contains("band0"),
+            "budget 200k/200k rendered as band0: {line}"
+        );
+    }
+}

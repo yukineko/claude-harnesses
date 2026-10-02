@@ -1478,3 +1478,60 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 }
+
+/// Closure regression for backlog f6784177 (mirror gap of stuckguard's anchor
+/// fix in ctxrot's `find_overwatch_binary`): (1) the overwatch cache dir must
+/// be read through the tri-state boundary so an unreadable dir is not "not
+/// installed"; (2) versions must order numerically so 0.3.10 beats 0.3.9.
+/// Written by an independent closure verifier, not the implementer.
+#[cfg(test)]
+mod backlog_f6784177_regression {
+    use super::newest_overwatch_in;
+    use harness_core::verdict::Determination;
+    use std::path::Path;
+
+    fn install(base: &Path, ver: &str) {
+        let bin = base.join(ver).join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("overwatch"), b"#!/bin/sh\n").unwrap();
+    }
+
+    #[test]
+    fn two_digit_patch_beats_one_digit_patch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("overwatch");
+        for v in ["0.3.9", "0.3.10", "0.2.24"] {
+            install(&base, v);
+        }
+        match newest_overwatch_in(&base) {
+            Determination::Known(Some(p)) => assert!(
+                p.ends_with("0.3.10/bin/overwatch"),
+                "newest must be 0.3.10, got {}",
+                p.display()
+            ),
+            other => panic!("expected Known(Some(..)), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_cache_dir_is_known_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            newest_overwatch_in(&tmp.path().join("nope")),
+            Determination::Known(None)
+        ));
+    }
+
+    #[test]
+    fn unlistable_cache_dir_is_undetermined_not_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A regular file where the cache DIRECTORY should be: it exists, but
+        // cannot be listed. That is not "overwatch is not installed".
+        let base = tmp.path().join("overwatch");
+        std::fs::write(&base, b"not a dir").unwrap();
+        assert!(
+            matches!(newest_overwatch_in(&base), Determination::Undetermined(_)),
+            "an unlistable cache dir must be Undetermined"
+        );
+    }
+}

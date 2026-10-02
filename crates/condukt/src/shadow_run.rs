@@ -126,10 +126,16 @@ fn resolve_discard_branch(
 
 /// Finish a shadow-run: discard the shadow worktree (force-remove + force-
 /// delete its branch — the committed work is never merged) and best-effort
-/// record the outcome to fugu-router. Returns whether the fugu-router record
-/// call actually landed (`false` when fugu-router is absent from PATH — a
-/// soft no-op, matching `record_runs`'s fail-soft posture elsewhere in this
-/// binary).
+/// record the outcome to fugu-router by spawning exactly `fugu_bin`. Returns
+/// whether the fugu-router record call actually landed (`false` when
+/// `fugu_bin` cannot be spawned or exits non-zero — the caller says so on
+/// stdout instead of claiming a record).
+///
+/// The binary is a parameter, not a bare `"fugu-router"` PATH lookup, so the
+/// CLI can hand in the same plugin-cache resolution `record-run` uses and a
+/// test can hand in a path that records nowhere. The bare PATH lookup this
+/// replaced let every `cargo test -p condukt` append fake "shadow attempt"
+/// episodes to the user's real store (1335 observed 2026-10-01).
 ///
 /// `run` is the run namespace the shadow worktree was cut under (`None` for the
 /// legacy, un-namespaced caller). The ref that gets deleted is resolved by
@@ -141,6 +147,7 @@ pub fn finish(
     branch: &str,
     run: Option<&str>,
     outcome: &ShadowOutcome,
+    fugu_bin: &Path,
 ) -> Result<bool> {
     let target = resolve_discard_branch(repo, worktree_path, run, branch)?;
     worktree::discard(repo, worktree_path, Some(&target)).with_context(|| {
@@ -149,11 +156,11 @@ pub fn finish(
             worktree_path.display()
         )
     })?;
-    Ok(record_to_fugu_router(outcome))
+    Ok(record_to_fugu_router(outcome, fugu_bin))
 }
 
-fn record_to_fugu_router(outcome: &ShadowOutcome) -> bool {
-    let mut cmd = std::process::Command::new("fugu-router");
+fn record_to_fugu_router(outcome: &ShadowOutcome, fugu_bin: &Path) -> bool {
+    let mut cmd = std::process::Command::new(fugu_bin);
     cmd.arg("record")
         .args(["--title", &outcome.title])
         .args(["--files", ""])
@@ -164,7 +171,7 @@ fn record_to_fugu_router(outcome: &ShadowOutcome) -> bool {
         .args(["--duration", &outcome.duration_secs.to_string()]);
     match cmd.status() {
         Ok(status) => status.success(),
-        Err(_) => false, // fugu-router not on PATH → soft no-op
+        Err(_) => false, // fugu_bin not spawnable → nothing recorded
     }
 }
 
@@ -263,7 +270,21 @@ mod tests {
             cost_usd: 0.42,
             duration_secs: 12.5,
         };
-        finish(&repo, &path, branch, None, &outcome).expect("finish should succeed");
+        // Explicit nonexistent binary: this test must never reach a real
+        // fugu-router (or the user's real ~/.fugu-router store).
+        let recorded = finish(
+            &repo,
+            &path,
+            branch,
+            None,
+            &outcome,
+            Path::new("/nonexistent/fugu-router"),
+        )
+        .expect("finish should succeed");
+        assert!(
+            !recorded,
+            "a nonexistent fugu-router binary must report not-recorded"
+        );
 
         assert!(!path.exists(), "shadow worktree dir should be removed");
         assert!(
@@ -289,5 +310,93 @@ mod tests {
         // gate depends on.
         let (_tmp, dir) = flag_dir();
         assert!(!is_enabled(&dir));
+    }
+}
+
+#[cfg(test)]
+mod backlog_f31dd957 {
+    //! backlog f31dd957: the `Undetermined` and `Known(None)` refusal arms of
+    //! `resolve_discard_branch` had kill rate 0. Each arm gets its own
+    //! behavioural test; a fall-through to `Ok(expected)` in either arm turns
+    //! the matching test RED.
+    use super::*;
+    use std::process::Command;
+
+    fn git(dir: &Path, args: &[&str]) {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .expect("spawn git");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    #[test]
+    fn undetermined_registered_branch_refuses() {
+        // `repo` is not a git repository, so `git worktree list` fails and
+        // `registered_branch` is Undetermined.
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let repo = tmp.path().join("not-a-repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let wt = tmp.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        assert!(
+            matches!(
+                worktree::registered_branch(&repo, &wt),
+                Determination::Undetermined(_)
+            ),
+            "fixture precondition: registered_branch must be Undetermined for a non-repo"
+        );
+        let r = resolve_discard_branch(&repo, &wt, None, "shadow-b");
+        let err = r.expect_err("Undetermined registered branch must REFUSE, not resolve");
+        assert!(
+            err.to_string().contains("could not be determined"),
+            "refusal must come from the Undetermined arm: {err}"
+        );
+    }
+
+    #[test]
+    fn detached_worktree_known_none_refuses() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-q", "-b", "main"]);
+        git(
+            &repo,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "init",
+            ],
+        );
+        let wt = tmp.path().join("wt-detached");
+        git(
+            &repo,
+            &["worktree", "add", "-q", "--detach", wt.to_str().unwrap()],
+        );
+        assert_eq!(
+            worktree::registered_branch(&repo, &wt),
+            Determination::Known(None),
+            "fixture precondition: a detached worktree registers no branch"
+        );
+        let r = resolve_discard_branch(&repo, &wt, None, "shadow-b");
+        let err = r.expect_err("a worktree naming no branch must REFUSE, not resolve");
+        assert!(
+            err.to_string().contains("registers no branch"),
+            "refusal must come from the Known(None) arm: {err}"
+        );
     }
 }

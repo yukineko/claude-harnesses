@@ -68,6 +68,30 @@ allowed-tools: Task, AskUserQuestion, Bash(condukt:*), Bash(fugu-router:*), Bash
    作る (repo 外・branch 重複拒否を強制)。各子は自分の turn 内で commit。
 5. **完了は `condukt state gate` が判定** — 「全タスク verified かつ worktree 残置・未コミット無し」を
    満たすまで完了宣言しない。
+6. **合意した分解がこの run のスコープであり、途中で見つけた別の問題はそこへ入れない** — executor
+   としての condukt の逸脱は「ついでに直す」の形で起きる。worker は隣の関数のバグ・古いコメント・
+   別 crate の赤いテストに気づき、orchestrator は worker の報告から「こちらの方が重要だ」と別の課題へ
+   run を振り向ける。どちらも Phase 3 の合意を経ていない変更であり、worker が `touched_files` を越えて
+   直せば verifier の done_criteria 照合も per-task の帰属も崩れる。したがって:
+   - **worker** は、自分の task を前に進めるのに**不要な**別問題を見つけても**直さない**。
+     `notes` の `別件:` 行に `file:line`・逐語の観測・気づいた経緯を書いて task に戻り、task は
+     本来の status (`done` 等) で返す。別件があることを理由に `blocked` にしない。worker 自身は
+     `backlog add` しない (backlog のストアは `touched_files` の外であり、worker のスコープではない)。
+   - 別問題が**その task を物理的に止めている**ときだけは既存の経路に乗せる: 原因がスコープ外の
+     ファイルなら `needs-serial`、それ以外なら `blocked`。どちらも `notes` に「何を迂回しようとして
+     止まったか」を書く。worker が自分の判断でスコープを広げて通すことはしない。
+   - **orchestrator** は、受け取った `別件:` を分解へ task として足さない (足すなら Phase 1 からの
+     再合意になる)。別の `/condukt` run にも乗り換えず、`backlog add` して**この run を続ける**。
+     次の課題に移るのは `condukt state gate` が完了を返した後である (順序であって並行ではない)。
+7. **気づいたことは常に起票する。起票に値するかを判断しない** — worker・verifier・orchestrator の
+   誰が気づいたものでも同じ。「自分の task と無関係」「たぶん意図的」「軽微」は、起票を省く理由に
+   ならない。起票を省くかの判断は観測が最も新しく最も未検証な瞬間に下される予測であり、しかも
+   並列 run では**その worktree を消した時点で観測の文脈ごと消える**。落とした 1 件は誰にも見えず、
+   余分な 1 件はキューの 1 行で済む。orchestrator は Phase 5/6 で worker と verifier の返り値を読んだら、
+   `別件:` 行と verifier の reason 中の対象外の指摘を**Phase 7 の worktree 削除より前に**すべて
+   `backlog add` する。書く内容は: 逐語の観測・測定点 (rev と日付・どの task の worktree で見たか)・
+   判定できないときは (a) 実在の欠陥 / (b) 意図どおりの両方の読みと、それを見分ける方法。
+   起票は着手ではない。書いたら元の task に戻る。
 
 ## 手順
 
@@ -605,7 +629,8 @@ condukt state worktree-mode-check   # exit 0 + {"single_worktree":true} → 単�
    --agent-id` に渡し、`gauge subagents` の `agent_id` 完全一致でそのタスクのコストを引く鍵になる
    (description の書式ゆれに影響されない厳密な紐付け)。escalation で worker を再起動した場合は
    **最後に返った agentId** を使う。
-4. worker の返却 status を確認する:
+4. worker の返却 status を確認する。status に関係なく、まず `notes` の `別件:` 行を拾って
+   `backlog add` する (不変条件 6・7。別件は分解に足さず、この run はそのまま続ける):
    - `done`: `condukt state set --run $RID --task <t.id> --status done` し、**他の worker の完了を待たずにその場で Phase 6 の verifier を起動する**（パイプライン化）。
    - `needs-serial`: 分類ミス。worktree を破棄し、タスクを serial として main で直接実装し、commit は
      `condukt repo commit --path ... -m ...` で行う（「主作業ツリーへの commit」参照）。
@@ -680,6 +705,7 @@ fi
 | 作業ディレクトリ | 必須 | 既定=`condukt worktree create` の出力 (`$WP`)／単一 worktree モード=**main repo dir** | worker が作業する起点 |
 | `commit_mode` | 単一 worktree モードで必須 | `no-stage-no-commit`（単一 worktree バッチ）を渡す。既定モード（per-task worktree）では省略＝worktree 内で従来どおり add/commit してよい | 共有 index をロック外で触らせない（staging/commit はオーケストレータが `condukt repo commit` で行う）＋check のバッチ集約を worker に指示する |
 | `touched_files` | 必須 | Decomposition JSON の `t.touched_files` | worker が触れてよいファイルのスコープ |
+| 別件の扱い | 必須 | 固定文 (不変条件 6・7) | 「task に不要な別問題は直さず、`notes` の `別件:` 行に `file:line` と逐語の観測を書いて task に戻る。起票に値するかは判断せず全部書く。task を物理的に止めているときだけ `needs-serial` / `blocked`」を渡す。worker 定義はこの規約を知らないので、毎回プロンプトで渡す |
 | `done_criteria` | 必須 | Decomposition JSON の `t.done_criteria` | verifier が照合する合格条件 |
 | `reproduction_tests` | 省略可 | Decomposition JSON の `t.reproduction_tests` | TDD ループ起点。渡すと worker が red→green サイクルを回す |
 | `target_symbols` | 省略可 | Decomposition JSON の `t.target_symbols` | 編集対象の関数/クラス名。あれば `interface_context` も必須 |

@@ -85,6 +85,16 @@ fn unconfirmed_is_excluded_from_next_claim_and_pending_list() {
     let unconf = unconf.unwrap();
     let pending = f.add("verified");
     let p = f.project();
+    // Checked BEFORE the claim below: once `next --claim` leases `pending`,
+    // `list` derives it as `claimed` (backlog f09db5ce), so a `--status
+    // pending` listing after the claim would drop the positive control for a
+    // reason unrelated to unconfirmed exclusion.
+    let l = f.run(&["list", "--status", "pending", "--project", &p]);
+    assert!(
+        !l.stdout.contains(&unconf) && l.stdout.contains(&pending),
+        "{}",
+        l.stdout
+    );
     for args in [
         vec!["next", "--project", &p],
         vec!["next", "--claim", "--project", &p],
@@ -101,12 +111,6 @@ fn unconfirmed_is_excluded_from_next_claim_and_pending_list() {
             o.both()
         );
     }
-    let l = f.run(&["list", "--status", "pending", "--project", &p]);
-    assert!(
-        !l.stdout.contains(&unconf) && l.stdout.contains(&pending),
-        "{}",
-        l.stdout
-    );
 }
 
 #[test]

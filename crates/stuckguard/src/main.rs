@@ -12,8 +12,11 @@
 mod anchor;
 mod config;
 mod detect;
+#[cfg(test)]
+mod fault_injection_tests;
 mod install;
 mod model;
+mod protection;
 mod sig;
 mod state;
 /// Verdict-monotonicity property (backlog a7d41587). Test-only: stuckguard is a
@@ -40,7 +43,8 @@ use model::HookInput;
 #[command(
     name = "stuckguard",
     version,
-    about = "Stuck-loop detector + escalation for Claude Code (PostToolUse hook)."
+    about = "Stuck-loop detector + escalation for Claude Code (PostToolUse hook).",
+    after_help = "`stuckguard --protects` prints what this gate protects, from what, and on what grounds."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -71,6 +75,16 @@ enum Command {
 }
 
 fn main() {
+    // The protection statement (backlog 3a8e3b73), readable without triggering
+    // the hook. A pure print: no verdict. Short-circuits before clap because
+    // `Cli` requires a subcommand.
+    if std::env::args().nth(1).as_deref() == Some("--protects") {
+        let p = protection::PROTECTION;
+        println!("PROTECTS: {}", p.protects);
+        println!("AGAINST: {}", p.against);
+        println!("GROUNDS: {}", p.grounds);
+        std::process::exit(0);
+    }
     let cli = Cli::parse();
     match cli.command {
         Command::Watch => run_hook(watch),
@@ -969,5 +983,33 @@ mod tests {
         let hard_msg = message(&t, false, 1);
         assert!(hard_msg.contains("同じ操作の繰り返しを検知"));
         assert!(!hard_msg.contains("progress may be stalling"));
+    }
+
+    /// backlog b96e9973: a stored lesson that shares ONE incidental token with
+    /// the trip query is presented to the agent as the relevant "past lesson"
+    /// (harness_core::lessons::search keeps every hit with score > 0.0 — no
+    /// relevance floor). An unrelated lesson must not be retrieved.
+    #[test]
+    #[ignore = "backlog b96e9973: open defect, remove ignore when fixed"]
+    fn single_shared_token_lesson_is_not_presented_as_relevant() {
+        with_isolated_lessons_store(|_dir| {
+            use harness_core::lessons::{self, Kind, Lesson};
+            lessons::append(&Lesson {
+                id: "unrelated-1".to_string(),
+                kind: Kind::Convention,
+                task_summary: "postgres migration ordering for the billing schema".to_string(),
+                lesson_text: "UNRELATED: run migrations in numeric order, bash is not involved"
+                    .to_string(),
+                source_run: "run-x".to_string(),
+                ts: 1,
+            });
+            // Trip detail as built by detect.rs: "<tool> を <n> 回".
+            let trip = repeat_trip("Bash を 4 回");
+            let got = retrieve_lesson(&trip);
+            assert!(
+                got.is_none(),
+                "an unrelated lesson sharing a single token was presented as a relevant past lesson: {got:?}"
+            );
+        });
     }
 }

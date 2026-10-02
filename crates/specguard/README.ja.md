@@ -176,13 +176,29 @@ specguard decide "<title>"         # 決定ログ(ADR)を生成
 specguard accept-prompt -m "理由"  # prompt(メタ正典)を批准
 specguard map build                # spec-map ストアを作成(無ければ) + 全履歴窓で seed
 specguard map sync                 # baseline 以降の git 差分だけ増分反映 (A/M/R/D)
-specguard map list [--json]        # 現在の spec↔実装マッピングを表示
+specguard map list [--json]        # 現在の spec↔実装マッピングを表示 (--json は entry ごとに review_state を付与)
+specguard map review-status [--json] [--max-commits N]  # tracked entry ごとに記録済みレビューを分類:
+# fresh = reviewed_at.commit が HEAD の祖先で、HEAD から N commit 以内 (ちょうど N は fresh)。
+# stale-review = reviewed_at が無い (legacy entry: レビュー記録なしは新しいレビューではない)、または N を
+# 超えて古い。undetermined = HEAD が読めない (git repo でない・unborn HEAD)、レビュー commit が HEAD の履歴に
+# 無い (未知の object・祖先でない)、git 呼び出しが非0終了/timeout、count が parse 不能 — fresh には決してしない。
+# tracked 以外の entry は分類しない (`map list --json` では review_state = null)。N = --max-commits (1 以上)、
+# 無ければ [map] review_max_commits、それも無いか 0 なら 50 (0 は「失効しない」を意味しない)。
+# exit 0 全 tracked が fresh / 1 stale-review あり / 2 undetermined あり・map ファイル無し・tracked が 0 件。
+# 読み取り専用で、どの hook にも接続していない。
 specguard map set-spec <key|glob> <doc> --reason "<理由>"  # 一致 entry に spec-doc を紐付け + tracked にする
 specguard map resolve <key|glob> --reason "<理由>"   # 一致 entry を tracked にする (レビュー済み・spec 不要)
 specguard map link <test> <key>    # テストファイルを entry に明示的に関係付ける (以後の sync でも保持)
 # --reason (-m) は必須・空白不可: tracked は何も検証しない「レビューした」という主張なので、触った各 entry に
 # reviewed_reason と reviewed_at {commit = HEAD, date} を記録する。理由なし/空白は拒否され store は書き換わらない。
 specguard map prune                # [map].exclude 一致 entry を除去 (非 spec-bearing パス)
+specguard map gate-check --base <rev>  # <rev> 以降に変わった gate crate の entry は spec doc 必須:
+# map の spec_doc、追跡対象 .specguard/spec-docs.toml の [[spec]] path/doc/reason (doc は実在し空でない
+# docs/specs/**/*.md)、追跡対象 .specguard/spec-doc-acks.toml の理由付き [[ack]] のいずれか。
+# exit 0 ok / 1 欠落 (列挙。却下された binding はその理由も) / 2 判定不能 (map/ack/spec ファイル不正、
+# doc 読めず、rev 不正、git 失敗、map 無し、どの entry も参照しない gate ファイル)。map は gitignore された
+# 機械ローカルのキャッシュなので、pre-push は検査ツリー内で `map build --baseline <base>` により
+# map を作り直し、追跡ファイルだけが判定に効く。
 specguard --baseline HEAD~5 run    # baseline を上書き
 specguard --config examples/aegis.toml run
 ```

@@ -3952,3 +3952,176 @@ mod worktree_trust_tests {
         });
     }
 }
+
+#[cfg(test)]
+mod backlog_4be23458 {
+    //! backlog 4be23458: `discard` is the mirror of `remove`. `remove` now
+    //! preserves uncommitted work before deleting (DoD12d); `discard` still
+    //! retries a refused `git worktree remove` with `--force`, which removes
+    //! exactly the uncommitted work git was protecting — and nothing records
+    //! that it existed. Either the discard refuses (work left in place) or the
+    //! uncommitted content survives somewhere (a preserved ref).
+    use super::*;
+    use std::fs;
+
+    fn with_home<R>(home: &Path, f: impl FnOnce() -> R) -> R {
+        let _g = crate::env_lock::HOME_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let prev = std::env::var_os("HOME");
+        std::env::set_var("HOME", home);
+        let out = f();
+        match prev {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        out
+    }
+
+    /// Every ref (anywhere) whose tree carries `file` with exactly `content`.
+    fn refs_holding(repo: &Path, file: &str, content: &[u8]) -> Vec<String> {
+        let refs = git(repo, &["for-each-ref", "--format=%(refname)"]).unwrap_or_default();
+        refs.lines()
+            .filter(|r| {
+                Command::new("git")
+                    .arg("-C")
+                    .arg(repo)
+                    .args(["show", &format!("{r}:{file}")])
+                    .output()
+                    .map(|o| o.status.success() && o.stdout == content)
+                    .unwrap_or(false)
+            })
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[test]
+    #[ignore = "backlog 4be23458: open defect, remove ignore when fixed"]
+    fn discard_does_not_silently_destroy_uncommitted_work() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        let home = tmp.path().join("home");
+        fs::create_dir_all(&repo).unwrap();
+        fs::create_dir_all(&home).unwrap();
+        git(&repo, &["init", "-b", "main"]).unwrap();
+        git(&repo, &["config", "user.email", "t@t.t"]).unwrap();
+        git(&repo, &["config", "user.name", "t"]).unwrap();
+        fs::write(repo.join("base.txt"), "base\n").unwrap();
+        git(&repo, &["add", "."]).unwrap();
+        git(&repo, &["commit", "-m", "init"]).unwrap();
+
+        let wt = tmp.path().join("exp-wt");
+        git(
+            &repo,
+            &["worktree", "add", "-b", "exp", "--", wt.to_str().unwrap()],
+        )
+        .unwrap();
+        const UNCOMMITTED: &[u8] = b"work that exists only in the worktree\n";
+        fs::write(wt.join("uncommitted.txt"), UNCOMMITTED).unwrap();
+        assert!(
+            is_dirty(&wt).unwrap(),
+            "fixture precondition: worktree dirty"
+        );
+
+        let res = with_home(&home, || discard(&repo, &wt, Some("exp")));
+        let still_on_disk =
+            fs::read(wt.join("uncommitted.txt")).ok().as_deref() == Some(UNCOMMITTED);
+        let preserved = refs_holding(&repo, "uncommitted.txt", UNCOMMITTED);
+        assert!(
+            (res.is_err() && still_on_disk) || !preserved.is_empty(),
+            "discard of a dirty worktree returned {res:?}; the uncommitted file is \
+             gone from disk (still_on_disk={still_on_disk}) and no ref holds it — \
+             git's refusal was overridden with --force and the work silently destroyed"
+        );
+    }
+}
+
+#[cfg(test)]
+mod backlog_09d17bb6 {
+    //! backlog 09d17bb6: `primary_witnesses` is the UNION of two witnesses
+    //! (`--git-common-dir`'s parent, and the first `git worktree list` entry),
+    //! but every existing test passes with either witness alone. These tests
+    //! build the situations where the two witnesses DISAGREE, so dropping
+    //! either witness turns one of them RED.
+    use super::*;
+    use std::fs;
+
+    /// Real git configuration where the witnesses disagree: a repository made
+    /// with `--separate-git-dir`. `git worktree list` names the separate git
+    /// dir itself as the main entry (observed), while the common-dir witness
+    /// names that git dir's PARENT. Only the listing witness covers the listed
+    /// main entry; without it the repository's own git dir would be listed as
+    /// a NON-primary (reclaimable) worktree.
+    #[test]
+    fn separate_git_dir_listed_main_entry_is_primary() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let gd = tmp.path().join("gitdir-store").join("gd");
+        let wt = tmp.path().join("main-wt");
+        fs::create_dir_all(gd.parent().unwrap()).unwrap();
+        let out = Command::new("git")
+            .args(["init", "-q", "-b", "main", "--separate-git-dir"])
+            .arg(&gd)
+            .arg(&wt)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git init: {out:?}");
+        git(
+            &wt,
+            &[
+                "-c",
+                "user.email=t@t.t",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "init",
+            ],
+        )
+        .unwrap();
+        let common_parent = repo_git_common_dir(&wt)
+            .and_then(|p| p.parent().map(Path::to_path_buf))
+            .expect("common dir resolvable");
+        let entries = list_all(&wt).expect("list_all");
+        let first = entries.first().expect("at least one listed entry");
+        let first_canon = first.0.canonicalize().expect("first entry exists");
+        assert_ne!(
+            common_parent, first_canon,
+            "fixture precondition: the two witnesses must DISAGREE (entries={entries:?})"
+        );
+        assert!(
+            first.2,
+            "git's own main entry must be primary even when the common-dir witness \
+             names a different directory; entries={entries:?}"
+        );
+    }
+
+    /// The listing witness can name a directory other than the one the
+    /// common-dir witness names; the union must still contain the common-dir
+    /// witness (dropping it would un-protect the real main tree).
+    #[test]
+    fn union_keeps_common_dir_witness_when_listing_disagrees() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-q", "-b", "main"]).unwrap();
+        let other = tmp.path().join("elsewhere");
+        fs::create_dir_all(&other).unwrap();
+        let listing = format!(
+            "worktree {}\nHEAD 0000000000000000000000000000000000000000\nbranch refs/heads/x\n\n",
+            other.display()
+        );
+        let w = primary_witnesses(&repo, &listing);
+        let repo_canon = repo.canonicalize().unwrap();
+        let other_canon = other.canonicalize().unwrap();
+        assert!(
+            w.contains(&repo_canon),
+            "common-dir witness (the repo) dropped: {w:?}"
+        );
+        assert!(
+            w.contains(&other_canon),
+            "listing witness (first entry) dropped: {w:?}"
+        );
+    }
+}

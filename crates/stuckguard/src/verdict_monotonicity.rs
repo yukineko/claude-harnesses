@@ -53,7 +53,7 @@ use crate::state::{self, SessionState};
 /// A deterministic detector config: three identical calls in the window trip a
 /// repeat. `state_dir` is per-case, so nothing here touches process-global
 /// state and the cases may run in parallel.
-fn cfg_for(state_dir: &Path) -> Config {
+pub(crate) fn cfg_for(state_dir: &Path) -> Config {
     Config {
         window: 20,
         repeat_threshold: 3,
@@ -64,7 +64,7 @@ fn cfg_for(state_dir: &Path) -> Config {
     }
 }
 
-fn event(tool: &str, sig: &str) -> Event {
+pub(crate) fn event(tool: &str, sig: &str) -> Event {
     Event {
         seq: 0,
         tool: tool.to_string(),
@@ -83,7 +83,12 @@ fn event(tool: &str, sig: &str) -> Event {
 /// `Some(true)` = allowed to carry on (permissive), `Some(false)` = nudged,
 /// `None` = the gate could not reach a verdict. Note the inversion of `detect`'s
 /// own `Option<Trip>`: a `Trip` is the RESTRICTIVE outcome.
-fn allowed_to_carry_on(state_dir: &Path, session: &str, next: Event, cfg: &Config) -> Option<bool> {
+pub(crate) fn allowed_to_carry_on(
+    state_dir: &Path,
+    session: &str,
+    next: Event,
+    cfg: &Config,
+) -> Option<bool> {
     match state::load(state_dir, session) {
         // Mirrors `main::watch`: an unreadable history nudges and stops. The
         // window is never rebuilt from a default.
@@ -114,7 +119,11 @@ fn allowed_to_carry_on_failing_open(
 }
 
 /// Seed a session already deep in a repeat loop, and return its state path.
-fn seed_stuck_session(state_dir: &Path, session: &str, repeats: usize) -> std::path::PathBuf {
+pub(crate) fn seed_stuck_session(
+    state_dir: &Path,
+    session: &str,
+    repeats: usize,
+) -> std::path::PathBuf {
     let cfg = cfg_for(state_dir);
     let mut st = SessionState::default();
     for _ in 0..repeats {

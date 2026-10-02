@@ -535,7 +535,7 @@ fn decide_scan_failed(cfg: &Config, prior_attempts: u32) -> Decision {
 fn scan_failed_reason(attempt: u32, max: u32) -> String {
     format!(
         "🚧 reviewgate: 変更内容を特定できませんでした — `git` コマンドが失敗しました (round {attempt}/{max}).\n\n\
-         git repo ではあるものの `git diff` / `git status` がエラー (spawn 失敗 / 非ゼロ終了) を返したため、\
+         git repo ではあるものの `git rev-parse` / `git diff` / `git ls-files` がエラー (spawn 失敗 / 非ゼロ終了 / タイムアウト / 出力読み取り不能) を返したため、\
          何が変更されたか判定できません。空の diff を「変更なし」と解釈して無言で通過させると、未レビューの\
          変更が gate をすり抜けてしまいます。判定不能な状態で停止を許可しないため、この停止を一時的に\
          ブロックしています。{max}回連続で解消しなければ警告を出して通過を許可します（永久にはブロックしません）。\n\n\
@@ -1378,5 +1378,50 @@ mod tests {
                  --- reason ---\n{reason}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod backlog_repro_s08 {
+    use super::*;
+
+    /// backlog d98465f9: a reviewer answer that merely STARTS with "lgtm" but
+    /// carries a finding must not be Clean.
+    #[test]
+    #[ignore = "backlog d98465f9: open defect, remove ignore when fixed"]
+    fn lgtm_prefix_with_finding_is_not_clean() {
+        for out in [
+            "LGTM, but high: src/x.rs:10 null deref",
+            "lgtm but there is a bug in foo.rs:3",
+            "LGTMish: high: unchecked unwrap",
+        ] {
+            assert!(
+                !matches!(classify(out), Verdict::Clean(_)),
+                "classify({out:?}) returned Clean (finding after an lgtm prefix swallowed)"
+            );
+        }
+    }
+
+    /// backlog d2509f51: a reviewer that writes more than the 64KB pipe buffer
+    /// to stdout blocks on write; run_reviewer only reads stdout AFTER
+    /// wait_timeout returns, so it waits out the whole timeout and reports
+    /// "timed out" for a reviewer that actually finished its work.
+    #[test]
+    #[ignore = "backlog d2509f51: open defect, remove ignore when fixed"]
+    fn large_reviewer_output_does_not_deadlock_until_timeout() {
+        let cfg = Config {
+            reviewer_cmd: "head -c 300000 /dev/zero | tr '\\0' 'a'; echo; echo - high: x"
+                .to_string(),
+            reviewer_timeout_secs: 3,
+            ..Config::default()
+        };
+        let t0 = std::time::Instant::now();
+        let v = run_reviewer(&cfg, "diff --git a/x b/x\n");
+        let dt = t0.elapsed();
+        let timed_out = matches!(&v, Verdict::Undetermined(_)) && dt >= Duration::from_secs(3);
+        assert!(
+            !timed_out,
+            "reviewer with 300KB output deadlocked until the {dt:?} timeout (pipe full, stdout read only after wait_timeout)"
+        );
     }
 }

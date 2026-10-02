@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+pub use crate::task::STATUS_CANCELLED;
 use crate::task::{
     new_id, Closure, Repro, Task, STATUS_DONE, STATUS_FAILED, STATUS_NEEDS_RULING, STATUS_PENDING,
     STATUS_UNCONFIRMED,
@@ -1538,32 +1539,6 @@ pub fn apply_closure(task: &mut Task, status: &str, closure: Closure) -> Result<
     Ok(())
 }
 
-/// The status a task must hold for its GitHub issue to be closed as
-/// "not planned".
-///
-/// **No current CLI path writes this value.** `edit --status` validates
-/// against [`crate::task::STATUSES`] (`pending | done | failed`) and rejects
-/// `cancelled` outright — verified 2026-08-14:
-///
-/// ```text
-/// $ backlog edit 5df88c1d --status cancelled
-/// Error: warning: unknown status 'cancelled'; valid values are pending | done | failed
-/// ```
-///
-/// It is spelled here anyway, and honestly rather than as an import, because
-/// the value nonetheless EXISTS in real stores: this repo's holds 6 such
-/// records (measured the same day, 577 tasks). They predate the current
-/// validation or were hand-written, and `sync_plan` must reconcile records
-/// that are actually there, not only ones the current binary can produce.
-///
-/// So the `NotPlanned` close arm is presently reachable only from a
-/// hand-edited store. That is a gap in the status vocabulary, not in this
-/// module — `task::STATUSES` claims to list "all recognised status values"
-/// while the store demonstrably carries two more (`cancelled`, `claimed`).
-/// Tracked as backlog `0dafa254`; when that is resolved the arm becomes
-/// reachable with no change here.
-pub const STATUS_CANCELLED: &str = "cancelled";
-
 /// One unit of GitHub mirror work, derived from the store's own contents.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SyncAction {
@@ -1764,10 +1739,85 @@ pub fn mark_failed(path: &Path, id: &str, reason: Option<&str>) -> Result<()> {
     })
 }
 
+/// Mark a task `cancelled`: terminal, "decided not to do it" (backlog
+/// d8d25af9). `done` would claim completion and `failed` is always requeued
+/// via `defer_until`, so neither can record this decision.
+///
+/// Close-evidence: a cancel is a DISCARD and records `[task.closure]` with
+/// `reason = "discard"` and `discard_reason = <reason>` (user ruling
+/// 2026-10-03: 「証明できないのであれば、そもそも問題ではない。価値の低い推測で
+/// ある。推測だけで証拠がないならゴミである。捨てる」). Throwing away an item
+/// nothing demonstrates must stay cheap, so no test, ruling or TTY is needed —
+/// but the reason is: an empty / whitespace-only reason is refused, since a
+/// discard with no stated reason records nothing a reviewer can check. The
+/// discard claims nothing was fixed, so it is never evidence for `done`
+/// (`scripts/check-closure-evidence.py` re-checks this at commit time).
+///
+/// `reason` is also appended to the notes and any `defer_until` is cleared.
+/// Idempotent: an already-cancelled task is left untouched (no second copy of
+/// the reason, no re-stamped closure). Refused, with nothing written: a `done`
+/// task (rewriting a completion as a cancellation would erase the record that
+/// the work was done) and a `needs-ruling` task (a human ruling is pending;
+/// `ruling approve --cancel` or `ruling withdraw` resolves it).
+pub fn mark_cancelled(path: &Path, id: &str, reason: &str) -> Result<()> {
+    let reason = reason.trim();
+    if reason.is_empty() {
+        return Err(anyhow!(
+            "refused: `cancel {id}` needs a non-empty --reason (it is recorded as the discard \
+             reason)"
+        ));
+    }
+    with_tasks_lock_required(path, "cancel", || {
+        let mut tasks = load(path)?;
+        let task = tasks
+            .iter_mut()
+            .find(|t| t.id == id)
+            .ok_or_else(|| anyhow!("task not found: {}", id))?;
+        if task.status == STATUS_CANCELLED {
+            return Ok(());
+        }
+        if task.status == STATUS_DONE {
+            return Err(anyhow!(
+                "refused: task {id} is done (terminal); `cancel` would rewrite a completion \
+                 as a cancellation"
+            ));
+        }
+        if task.status == STATUS_NEEDS_RULING {
+            return Err(anyhow!(
+                "refused: task {id} is needs-ruling (a human ruling is pending); a human closes it \
+                 with `backlog ruling approve {id} --cancel`, or `backlog ruling withdraw {id}` \
+                 returns it to pending"
+            ));
+        }
+        // Only the non-terminal workable/suspicion statuses may be discarded;
+        // anything else is refused with its status named.
+        require_closable(task)?;
+        task.status = STATUS_CANCELLED.to_string();
+        task.closure = Some(Closure {
+            reason: "discard".to_string(),
+            duplicate_of: None,
+            doc_only_commit: None,
+            green: None,
+            red: None,
+            ruling: None,
+            discard_reason: Some(reason.to_string()),
+        });
+        if task.notes.is_empty() {
+            task.notes = reason.to_string();
+        } else {
+            task.notes.push('\n');
+            task.notes.push_str(reason);
+        }
+        task.defer_until = None;
+        task.updated_at = now_unix();
+        save(path, &tasks)
+    })
+}
+
 /// フィールドの一部を更新して保存。None のフィールドは変更しない。
 ///
-/// CA-backlog-004: an unknown `status` is REJECTED (validated against the same
-/// [`crate::task::STATUSES`] vocabulary that `list` warns on) BEFORE any write.
+/// CA-backlog-004: an unknown `status` is REJECTED (validated against the
+/// stored [`crate::task::STATUSES`] vocabulary) BEFORE any write.
 /// Previously `edit --status open` wrote the raw typo through, stranding the
 /// task out of `next`/`next_claim` (neither `open` nor any non-vocabulary
 /// value is `is_pending()`) with no path back — `requeue_expired` only rescues
@@ -1782,23 +1832,25 @@ pub fn edit(
     status: Option<&str>,
 ) -> Result<()> {
     with_tasks_lock_required(path, "edit", || {
-        // CA-backlog-004: reject an unknown --status up front (same validation
-        // `list` uses) so a typo can never be persisted and strand the task.
-        if let Some(w) = crate::task::status_warning(status) {
+        // CA-backlog-004: reject an unknown --status up front so a typo can
+        // never be persisted and strand the task. Validated against the STORED
+        // vocabulary, so the derived `claimed` is refused too (0dafa254).
+        if let Some(w) = crate::task::stored_status_error(status) {
             return Err(anyhow!("{w}"));
         }
         // Close-evidence: `edit --status` is not a route to any status that
-        // needs evidence or a ruling. Terminal statuses need a recorded
-        // closure (`backlog done ... --test/--doc-only/--duplicate-of`, or a
-        // human `ruling approve`); `unconfirmed` / `needs-ruling` are entered
+        // needs a recorded closure. Terminal statuses need one (`backlog done
+        // ... --test/--doc-only/--duplicate-of`, `backlog cancel --reason`'s
+        // discard, or a human `ruling approve`); `unconfirmed` / `needs-ruling` are entered
         // and left only through `add`/`confirm` and `ruling`.
         if let Some(v) = status {
             if v != STATUS_PENDING && v != STATUS_FAILED {
                 return Err(anyhow!(
                     "refused: `edit --status {v}` is not allowed. `done` needs evidence: \
                      `backlog done ID --test CMD --red-rev REV`, `--doc-only COMMIT` or \
-                     `--duplicate-of ID`; `cancelled` and judgment/untestable closes need a human \
-                     ruling (`backlog ruling request` then `ruling approve`)"
+                     `--duplicate-of ID`; `cancelled` is `backlog cancel ID --reason R` (a \
+                     recorded discard); judgment/untestable closes need a human ruling \
+                     (`backlog ruling request` then `ruling approve`)"
                 ));
             }
         }
@@ -2030,12 +2082,23 @@ pub fn add_finding<R: Fn(&[&str]) -> Option<(bool, String)>>(
 
         // Fail-soft GitHub push: never abort the add on a non-GitHub remote,
         // an absent `gh`, or a failed `gh issue create` — only a genuine
-        // `Created{url}` populates issue_number/issue_url.
-        if let crate::github::IssueOutcome::Created { url } =
-            crate::github::decide_issue_create(remote_url, title, notes, &run)
-        {
-            task.issue_number = crate::github::parse_issue_number(&url);
-            task.issue_url = Some(url);
+        // `Created{url}` populates issue_number/issue_url. On a GitHub remote a
+        // degraded outcome is SAID on stderr: the task exists locally but the
+        // mirror the caller expects does not, and silence would read as
+        // "mirrored". A non-GitHub remote is the expected local-only case.
+        match crate::github::decide_issue_create(remote_url, title, notes, &run) {
+            crate::github::IssueOutcome::Created { url } => {
+                task.issue_number = crate::github::parse_issue_number(&url);
+                task.issue_url = Some(url);
+            }
+            crate::github::IssueOutcome::DegradedLocalOnly { reason } => {
+                if crate::github::is_github_remote(remote_url) {
+                    eprintln!(
+                        "backlog add: GitHub issue NOT created for task {id} ({reason}); \
+                         the task is local-only until `backlog sync --apply` mirrors it"
+                    );
+                }
+            }
         }
 
         tasks.push(task);
@@ -5795,4 +5858,9 @@ weight = 0.0
     }
 
     // =============================================================================
+}
+
+#[cfg(test)]
+mod backlog_audit_s03 {
+    include!("audit_s03_tests.rs");
 }

@@ -123,9 +123,31 @@ plus `Undetermined` — and **only `Inside` may relax a verdict**.
   `/tmp` / `/var/tmp` (plus `$TMPDIR`). `/`, `/usr`, `/mnt/c/Users`, `$HOME` and
   friends can never become one (`NEVER_A_ROOT`, plus a two-component minimum).
 - **What relaxes**: when EVERY target resolves to a strict descendant of a safe
-  root, the `deny` becomes an **`ask`** — never an `allow`. Covered verbs:
+  root, the `deny` becomes an **`ask`** — not an `allow`. Covered verbs:
   recursive/wildcard `rm`, `find -delete` / `-exec rm`, `truncate` / `shred`,
   truncating `>` redirects, `git clean -f`, `chmod -R` / `chown -R`.
+  **Exception — recursive `rm` of literal operands** (user rulings 873651b9 and
+  3aa215e1: "work products and anything recoverable may be deleted"): it is
+  judged by WHAT it destroys. Strictly inside a worktree storage root, `/tmp`,
+  `/private/tmp`, `$TMPDIR`, `$HOME/.cache`, `$HOME/Library/Caches`, ignored
+  build output in a git work tree, or a git subtree with nothing untracked /
+  modified / ignored → `allow`; a git subtree where git reports such content →
+  `deny` naming it; the root of any of those areas, `$HOME`, anything directly
+  in `$HOME`, or a system directory → `deny` even inside a safe root (0.2.94).
+  A git work-tree root is `deny` too, EXCEPT a clone root that lies strictly
+  inside `/tmp`, `$TMPDIR`, a cache root or worktree storage: that is an
+  `allow` by the earlier class. Anything it cannot determine keeps the
+  verdicts above. A build-output-named directory git does not report ignored
+  (a tracked `target`) is judged by recoverability like any other git
+  subtree. `/var/tmp` is a departure from the spec's "`/var` outside
+  `$TMPDIR` is a system dir": paths STRICTLY under `/var/tmp` /
+  `/private/var/tmp` are judged by the git classes (and the home / root
+  refusals) like any other path, but `/var/tmp` is NOT a temp root — nothing
+  there is an `allow` merely for being there. `$TMPDIR` is only a temp root
+  when HOME is known and it is not a system directory (e.g. `TMPDIR=/etc`),
+  not `$HOME` or an ancestor, and not below `$HOME` (0.2.95).
+  Full table: `src/deletion.rs` and the README.ja.md section
+  「再帰 `rm` は「何が消えるか」で判定する」.
 - **What does not** (each pinned by a test in `tests/scoped_destructive.rs`):
   anything outside every safe root; anything that is not a literal path (`$VAR`,
   `~`, `` `pwd` ``, `*`, `{}`); an unresolvable `cd`; a relative operand a `cd`

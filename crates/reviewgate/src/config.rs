@@ -191,13 +191,15 @@ impl Config {
     /// project file exists but the root is not trusted we ignore it and fall back
     /// to the (trusted) home config, then built-in defaults. The home config and
     /// defaults need no trust. Any parse error silently falls back (the gate must
-    /// never crash a turn).
+    /// never crash a turn). Trust is resolved with
+    /// [`harness_core::trust::resolve`], i.e. including worktree inheritance: a
+    /// linked git worktree of a trusted checkout is trusted (same rule as donegate).
     pub fn load(root: &Path) -> Self {
         let mut cfg = Config::default();
 
         let chosen = {
             let p = Config::project_path(root);
-            if p.exists() && harness_core::trust::is_trusted(root) {
+            if p.exists() && harness_core::trust::resolve(root).is_trusted() {
                 Some(p)
             } else {
                 if p.exists() {
@@ -401,5 +403,50 @@ mod tests {
         std::fs::remove_file(Config::home_path()).unwrap();
         let cfg = Config::load(proj2.path());
         assert_eq!(cfg.reviewer_cmd, "claude -p");
+    }
+}
+
+/// Closure regression for backlog 3b790fdb (closed as DUPLICATE of 7d56f1e3):
+/// both name the same site, `Mode::parse`'s `_ => Mode::Inject` arm — an
+/// unrecognised `mode` value is silently mapped to the default with no
+/// diagnostic. Pins the SHARED open failure; ignored (RED) until 7d56f1e3 lands.
+#[cfg(test)]
+mod backlog_3b790fdb_7d56f1e3_regression {
+    use super::*;
+
+    #[test]
+    #[ignore = "backlog 7d56f1e3 / 3b790fdb OPEN: unknown mode value silently becomes Inject"]
+    fn misspelled_mode_is_surfaced_not_silently_inject() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved_home = std::env::var_os("HOME");
+        let saved_trust = std::env::var_os("HARNESS_TRUST_ALL");
+        let base = std::env::temp_dir().join(format!("reviewgate-3b790fdb-{}", std::process::id()));
+        let home = base.join("home");
+        let proj = base.join("proj");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&proj).unwrap();
+        std::env::set_var("HOME", &home);
+        std::env::remove_var("HARNESS_TRUST_ALL");
+        std::fs::create_dir_all(base_dir()).unwrap();
+        // "subproces" (typo): the operator asked for the independent reviewer.
+        std::fs::write(Config::home_path(), "mode = \"subproces\"\n").unwrap();
+
+        let cfg = Config::load(&proj);
+
+        match saved_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        if let Some(t) = saved_trust {
+            std::env::set_var("HARNESS_TRUST_ALL", t);
+        }
+        let _ = std::fs::remove_dir_all(&base);
+
+        assert!(
+            cfg.load_error.is_some(),
+            "mode = \"subproces\" was accepted with no diagnostic (mode={}, load_error=None): \
+             an unknown value must be surfaced as config-invalid, not mapped to the default",
+            cfg.mode.as_str()
+        );
     }
 }

@@ -59,6 +59,12 @@ exclude = [
     "tests/**",
 ]
 
+# Gate areas (harness_core::fleet::BLOCKING_GATES) list their docs/specs/<gate>.md
+# in canon alongside the README, so the audit reads the same spec docs that the
+# tracked bindings in .specguard/spec-docs.toml point at and
+# `specguard map gate-check` requires (backlog 0c277117). parallelguard has no
+# area and no docs/specs file yet (its files are acked in spec-doc-acks.toml).
+
 # condukt: task decomposition / worktree orchestrator
 [[area]]
 name = "condukt"
@@ -86,6 +92,7 @@ canon = [
     "crates/specguard/DESIGN.md",
     "crates/specguard/DESIGN-VERIFY.md",
     "crates/specguard/INSTALL.md",
+    "docs/specs/specguard.md",
 ]
 
 # harness-core: shared hook/pricing/transcript/config foundation
@@ -103,28 +110,48 @@ canon = ["crates/harness-core/src/hook.rs", "docs/OVERVIEW.md"]
 [[area]]
 name = "blastguard"
 globs = ["crates/blastguard/src/**"]
-canon = ["crates/blastguard/README.md", "crates/blastguard/README.ja.md"]
+canon = [
+    "crates/blastguard/README.md",
+    "crates/blastguard/README.ja.md",
+    "docs/specs/blastguard.md",
+]
 
 # propguard: invariant/property verdict guard
 [[area]]
 name = "propguard"
 globs = ["crates/propguard/src/**"]
-canon = ["crates/propguard/README.md", "crates/propguard/README.ja.md"]
+canon = [
+    "crates/propguard/README.md",
+    "crates/propguard/README.ja.md",
+    "docs/specs/propguard.md",
+]
 
 # stuckguard: repeated-operation / oscillation nudge guard
 [[area]]
 name = "stuckguard"
 globs = ["crates/stuckguard/src/**"]
-canon = ["crates/stuckguard/README.md", "crates/stuckguard/README.ja.md"]
+canon = [
+    "crates/stuckguard/README.md",
+    "crates/stuckguard/README.ja.md",
+    "docs/specs/stuckguard.md",
+]
 
 # mutategate: mutation-testing PASS/fail gate
 [[area]]
 name = "mutategate"
 globs = ["crates/mutategate/src/**"]
-canon = ["crates/mutategate/README.md", "crates/mutategate/README.ja.md"]
+canon = [
+    "crates/mutategate/README.md",
+    "crates/mutategate/README.ja.md",
+    "docs/specs/mutategate.md",
+]
 
 # overwatch: cross-session lease/review-queue observability registry
 [[area]]
 name = "overwatch"
 globs = ["crates/overwatch/src/**"]
-canon = ["crates/overwatch/README.md", "crates/overwatch/README.ja.md"]
+canon = [
+    "crates/overwatch/README.md",
+    "crates/overwatch/README.ja.md",
+    "docs/specs/overwatch.md",
+]

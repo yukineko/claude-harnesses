@@ -123,6 +123,7 @@ pub fn done(tasks_path: &Path, a: DoneArgs) -> Result<()> {
             green: Some(f2p.green),
             red: Some(f2p.red),
             ruling: None,
+            discard_reason: None,
         }
     } else if let Some(commit) = &a.doc_only {
         let root = toplevel()?;
@@ -134,6 +135,7 @@ pub fn done(tasks_path: &Path, a: DoneArgs) -> Result<()> {
             green: None,
             red: None,
             ruling: None,
+            discard_reason: None,
         }
     } else if let Some(target) = &a.duplicate_of {
         Closure {
@@ -143,6 +145,7 @@ pub fn done(tasks_path: &Path, a: DoneArgs) -> Result<()> {
             green: None,
             red: None,
             ruling: None,
+            discard_reason: None,
         }
     } else {
         bail!("refused: no evidence route given; use {DONE_USAGE}");
@@ -321,6 +324,7 @@ pub fn ruling_approve(tasks_path: &Path, id: &str, cancel: bool) -> Result<()> {
                 approved_at: now,
                 approved_via: "tty".to_string(),
             }),
+            discard_reason: None,
         });
         task.status = status.to_string();
         Ok(())
@@ -417,6 +421,9 @@ fn classify(t: &Task) -> &'static str {
         }
         if c.ruling.is_some() {
             return "ruling-approved";
+        }
+        if c.discard_reason.is_some() {
+            return "discard";
         }
     }
     let notes = t.notes.trim();
@@ -567,6 +574,8 @@ fn classify_closure_label(c: &Closure) -> &str {
         "duplicate"
     } else if c.ruling.is_some() {
         "ruling"
+    } else if c.discard_reason.is_some() {
+        "discard"
     } else {
         "none"
     }

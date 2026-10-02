@@ -268,14 +268,45 @@ mod tests {
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
-    fn make_tmp_dir(tag: &str) -> PathBuf {
-        let n = SEQ.fetch_add(1, Ordering::Relaxed);
-        let p = std::env::temp_dir().join(format!(
-            "condukt-precedent-{tag}-{}-{n}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&p).unwrap();
-        p
+    /// Unique fixture dir via atomic `mkdtemp` (backlog a6608aa0): never
+    /// re-enters a leftover dir from a recycled pid, and the returned guard
+    /// removes the dir on drop so fixtures no longer pile up in temp.
+    fn make_tmp_dir(tag: &str) -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix(&format!("condukt-precedent-{tag}-"))
+            .tempdir()
+            .expect("tempdir")
+    }
+
+    /// backlog a6608aa0: a fixture dir must never be a leftover from an earlier
+    /// run. The old `<kind>-<tag>-<pid>-<seq>` name re-entered such a dir on pid
+    /// reuse and the stale file inside made `all.len() == 1` flaky. Seed every
+    /// name the old scheme could hand out next, then require an EMPTY dir.
+    #[test]
+    fn make_tmp_dir_never_reenters_a_leftover_dir() {
+        let upto = SEQ.load(Ordering::Relaxed) + 256;
+        let seeded: Vec<PathBuf> = (0..upto)
+            .map(|n| {
+                let d = std::env::temp_dir().join(format!(
+                    "condukt-precedent-collide-{}-{n}",
+                    std::process::id()
+                ));
+                std::fs::create_dir_all(&d).unwrap();
+                std::fs::write(d.join("precedents.json"), "stale-from-a-dead-run").unwrap();
+                d
+            })
+            .collect();
+        let fresh = make_tmp_dir("collide");
+        let p: &Path = fresh.as_ref();
+        let leftovers: Vec<_> = std::fs::read_dir(p).unwrap().flatten().collect();
+        for d in &seeded {
+            let _ = std::fs::remove_dir_all(d);
+        }
+        assert!(
+            leftovers.is_empty(),
+            "fixture dir {} re-entered a leftover dir: {leftovers:?}",
+            p.display()
+        );
     }
 
     fn make_cfg(tmp: &Path) -> Config {
@@ -477,11 +508,12 @@ mod tests {
 
     #[test]
     fn record_persists_and_is_retrievable() {
-        let tmp = make_tmp_dir("record");
-        let cfg = make_cfg(&tmp);
+        let tmp_dir = make_tmp_dir("record");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
         let rec = record_precedent(
             &cfg,
-            &tmp,
+            tmp,
             &v(&["a.rs", "b.rs"]),
             &v(&["foo"]),
             "routine dep bump",
@@ -492,43 +524,193 @@ mod tests {
         assert_eq!(rec.note, "routine dep bump");
         assert_ne!(rec.fingerprint, 0);
 
-        let all = load_precedents(&cfg, &tmp);
+        let all = load_precedents(&cfg, tmp);
         assert_eq!(all.len(), 1);
         assert_eq!(all[0], rec);
-        assert!(precedents_path(&cfg, &tmp).exists());
+        assert!(precedents_path(&cfg, tmp).exists());
     }
 
     #[test]
     fn missing_store_loads_empty() {
-        let tmp = make_tmp_dir("missing");
-        let cfg = make_cfg(&tmp);
-        assert!(load_precedents(&cfg, &tmp).is_empty());
+        let tmp_dir = make_tmp_dir("missing");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
+        assert!(load_precedents(&cfg, tmp).is_empty());
     }
 
     #[test]
     fn corrupt_store_is_treated_as_empty() {
-        let tmp = make_tmp_dir("corrupt");
-        let cfg = make_cfg(&tmp);
-        let path = precedents_path(&cfg, &tmp);
+        let tmp_dir = make_tmp_dir("corrupt");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
+        let path = precedents_path(&cfg, tmp);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, b"not json at all {{{").unwrap();
-        assert!(load_precedents(&cfg, &tmp).is_empty());
+        assert!(load_precedents(&cfg, tmp).is_empty());
         // Fail-soft: record still succeeds (registry read as empty then
         // overwritten with a fresh valid one).
-        let rec = record_precedent(&cfg, &tmp, &v(&["a.rs"]), &v(&["foo"]), "n", 1).unwrap();
-        let all = load_precedents(&cfg, &tmp);
+        let rec = record_precedent(&cfg, tmp, &v(&["a.rs"]), &v(&["foo"]), "n", 1).unwrap();
+        let all = load_precedents(&cfg, tmp);
         assert_eq!(all, vec![rec]);
     }
 
     #[test]
     fn record_appends_multiple() {
-        let tmp = make_tmp_dir("append");
-        let cfg = make_cfg(&tmp);
-        record_precedent(&cfg, &tmp, &v(&["a.rs"]), &v(&["foo"]), "first", 1).unwrap();
-        record_precedent(&cfg, &tmp, &v(&["b.rs"]), &v(&["bar"]), "second", 2).unwrap();
-        let all = load_precedents(&cfg, &tmp);
+        let tmp_dir = make_tmp_dir("append");
+        let tmp = tmp_dir.path();
+        let cfg = make_cfg(tmp);
+        record_precedent(&cfg, tmp, &v(&["a.rs"]), &v(&["foo"]), "first", 1).unwrap();
+        record_precedent(&cfg, tmp, &v(&["b.rs"]), &v(&["bar"]), "second", 2).unwrap();
+        let all = load_precedents(&cfg, tmp);
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].note, "first");
         assert_eq!(all[1].note, "second");
+    }
+}
+
+#[cfg(test)]
+mod backlog_a6608aa0 {
+    //! backlog a6608aa0: the precedent/escalate test fixtures name their dir
+    //! `temp_dir()/condukt-<kind>-<tag>-<pid>-<seq>`, `create_dir_all` it
+    //! (silently re-entering an existing dir) and never clean up. When an OS
+    //! pid is reused, a later run re-enters an earlier run's residue and its
+    //! count assertions see the stale records.
+    //!
+    //! Pid reuse is made deterministic: a `sh` wrapper reports its own pid,
+    //! waits until this test has seeded the residue a prior process with THAT
+    //! pid would have left, then `exec`s the test binary — keeping the pid.
+    use super::*;
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    fn cfg_at(state_dir: &Path) -> Config {
+        Config {
+            worktree_base: state_dir.join("worktrees"),
+            default_branch: "main".to_string(),
+            shared_globs: Vec::new(),
+            max_parallel: 4,
+            state_dir: state_dir.to_path_buf(),
+            test_command: None,
+            stuck_ttl_secs: 1800,
+            build_command: None,
+            deploy_command: None,
+            loop_max_iters: 10,
+            autonomous: false,
+            autonomy_source: harness_core::autonomy::Source::BuiltinDefault,
+            consensus_enabled: false,
+            consensus_samples: crate::consensus::DEFAULT_SAMPLES,
+            consensus_threshold: crate::consensus::DEFAULT_THRESHOLD,
+            adversarial_enabled: false,
+            adversarial_size: crate::adversarial::DEFAULT_PANEL,
+            adversarial_min_voters: crate::adversarial::DEFAULT_MIN_VOTERS,
+            adversarial_block_ratio: crate::adversarial::DEFAULT_BLOCK_RATIO,
+            single_worktree: false,
+            worker_sandbox_enabled: false,
+            worker_sandbox_image: None,
+            worker_sandbox_memory: None,
+            worker_sandbox_cpus: None,
+            worker_sandbox_pids_limit: None,
+        }
+    }
+
+    /// Run `target` (an exact test name) in a child copy of this test binary
+    /// whose pid is known before it starts; `seed(pid, tmpdir)` plants the
+    /// residue first. Returns (success, stdout).
+    fn run_with_residue(target: &str, seed: impl FnOnce(u32, &Path)) -> (bool, String) {
+        let work = tempfile::tempdir().expect("work dir");
+        let tmpdir = work.path().join("T");
+        std::fs::create_dir_all(&tmpdir).unwrap();
+        let pidf = work.path().join("pid");
+        let fifo = work.path().join("go");
+        let ok = Command::new("mkfifo").arg(&fifo).status().unwrap();
+        assert!(ok.success(), "mkfifo");
+        let exe = std::env::current_exe().expect("current test binary");
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg("echo $$ > \"$PIDF.tmp\" && mv \"$PIDF.tmp\" \"$PIDF\" && read go < \"$FIFO\" && exec \"$EXE\" \"$TARGET\" --exact --test-threads=1")
+            .env("PIDF", &pidf)
+            .env("FIFO", &fifo)
+            .env("EXE", &exe)
+            .env("TARGET", target)
+            .env("TMPDIR", &tmpdir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn wrapper");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let pid: u32 = loop {
+            if let Ok(s) = std::fs::read_to_string(&pidf) {
+                if let Ok(p) = s.trim().parse() {
+                    break p;
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "wrapper never reported its pid"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        seed(pid, &tmpdir);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&fifo)
+            .unwrap()
+            .write_all(b"go\n")
+            .unwrap();
+        let out = child.wait_with_output().expect("wait child");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            stdout.contains("running 1 test"),
+            "fixture precondition: target test must run; stdout={stdout} stderr={}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (out.status.success(), stdout)
+    }
+
+    #[test]
+    #[ignore = "backlog a6608aa0: open defect, remove ignore when fixed"]
+    fn precedent_test_does_not_reenter_a_reused_pid_residue() {
+        let (ok, stdout) = run_with_residue(
+            "precedent::tests::record_persists_and_is_retrievable",
+            |pid, tmpdir| {
+                let d = tmpdir.join(format!("condukt-precedent-record-{pid}-0"));
+                std::fs::create_dir_all(&d).unwrap();
+                record_precedent(&cfg_at(&d), &d, &["old.rs".to_string()], &[], "stale", 1)
+                    .unwrap();
+            },
+        );
+        assert!(
+            ok,
+            "record_persists_and_is_retrievable re-entered a residue left by an \
+             earlier process with the same pid: {stdout}"
+        );
+    }
+
+    #[test]
+    #[ignore = "backlog a6608aa0: open defect, remove ignore when fixed"]
+    fn escalate_test_does_not_reenter_a_reused_pid_residue() {
+        let (ok, stdout) = run_with_residue(
+            "escalate::tests::add_creates_new_open_record_after_resolve",
+            |pid, tmpdir| {
+                let d = tmpdir.join(format!("condukt-escalate-dedup-reask-{pid}-0"));
+                std::fs::create_dir_all(&d).unwrap();
+                crate::escalate::add_escalation(
+                    &cfg_at(&d),
+                    &d,
+                    "runStale",
+                    "tz",
+                    "stale question",
+                    &["x".to_string(), "y".to_string()],
+                    0,
+                    1,
+                )
+                .unwrap();
+            },
+        );
+        assert!(
+            ok,
+            "add_creates_new_open_record_after_resolve re-entered a residue left by \
+             an earlier process with the same pid: {stdout}"
+        );
     }
 }

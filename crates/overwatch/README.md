@@ -166,15 +166,19 @@ the only behaviors above are the ones the binary implements today.
 
 ## Storage layout
 
-All data lives in version-controlled locations (or user-owned caches):
+All data lives under the user's home directory, outside the repository:
 
 ```
 <base>/<project-key>/overwatch/
   leases.json          # snapshot of active leases
   events.jsonl         # append-only ledger
+  ...                  # other ledgers in the same dir (violations, review findings,
+                       # audit rounds, status cache, ...; see the *_path fns in src/store.rs)
 ```
 
-- `<base>` defaults to `~/.local/share/claude-harnesses` (configurable in overwatch.toml).
+- `<base>` is `~/.overwatch` (`$HOME/.overwatch`: `harness_core::config::base_dir("overwatch")`,
+  called by `storage_root` in `src/store.rs`). It is not configurable — there is no
+  config file (see Storage above).
 - `<project-key>` is `<basename>-<fnv1a32 of the canonical path>` of the repository's MAIN worktree root (shared by all its linked worktrees).
 - Leases are **not** persisted across full reapers; they are session-scoped ephemeral records.
 

@@ -132,6 +132,9 @@ fn plan_entry_adds(rows: &[ReviewQueueEntry], already: &HashSet<String>) -> Vec<
         // `review_queue::run` ever mints one (never `build_queue`, which is
         // what feeds this planner), so this filter is a guard, not a live path.
         .filter(|r| r.kind != EntryKind::UndeterminedSource)
+        // A needs-ruling row is a view of backlog's OWN row; re-adding it would
+        // duplicate the task. Display-only stream, never bridged.
+        .filter(|r| r.kind != EntryKind::NeedsRuling)
         .filter_map(|r| {
             let key = format!("{}:{}", r.kind.tag(), r.identifier);
             if already.contains(&key) {
@@ -395,8 +398,15 @@ fn run_in(cwd: &Path) -> Result<SourceHealth> {
         "NO blocked merge was bridged from it",
         &mut undetermined,
     );
-    let entry_rows =
-        review_queue::build_queue(&systemic, &rollbacks, &[], &escalations, &merge_conflicts);
+    let entry_rows = review_queue::build_queue(
+        &systemic,
+        &rollbacks,
+        &[],
+        &escalations,
+        &merge_conflicts,
+        &[],
+        0,
+    );
 
     // 2. Already-bridged sets — findings keyed on bare finding_id (also the
     // review-metrics "resolved" source), non-finding entries keyed on the
@@ -976,5 +986,38 @@ mod tests {
         let planned = plan_finding_bridges(&deduped, &raw, &already);
         assert_eq!(planned.len(), 1);
         assert_eq!(planned[0].finding_id, "F-9");
+    }
+}
+
+/// backlog 7a842862: a condukt gate-check escalation (`source: condukt-gate`,
+/// `file: None`, summary "gate-check escalated: task ...") is bridged to the
+/// backlog as a p0 work item whose notes say only WHAT HAPPENED
+/// (`finding-id:.. file:(none) severity:high | confirmed: N日前 | regression
+/// test: 該当テストなし`) and never what observation would close it. Such an
+/// item cannot be closed by anyone and squats at the head of the queue.
+#[cfg(test)]
+mod backlog_7a842862 {
+    use super::*;
+
+    #[test]
+    #[ignore = "backlog 7a842862: open defect, remove ignore when fixed"]
+    fn bridged_gate_check_escalation_notes_state_a_closing_criterion() {
+        let f = ReviewFinding::new(
+            "gate-exec:run-1:t4".to_string(),
+            "condukt-gate".to_string(),
+            Some("high".to_string()),
+            "gate-check escalated: task t4 risk=high reversible=false policy_is_auto=false"
+                .to_string(),
+            None,
+            None,
+            1_000,
+        );
+        assert_eq!(severity_to_priority(f.severity.as_deref()), "p0");
+        let notes = build_notes(&f, 1_000 + 61 * 86_400, None);
+        assert!(
+            notes.contains("done_criteria") || notes.contains("閉じる条件"),
+            "a bridged gate-check escalation carries no closing criterion \
+             (done_criteria / what to observe to close it): {notes}"
+        );
     }
 }

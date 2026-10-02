@@ -452,8 +452,16 @@ fn duplicate_of_pending_target_is_accepted() {
     assert_eq!(f.row(&b)["closure"]["duplicate_of"], a.as_str());
 }
 
+/// CONTRACT ALIGNMENT (close-evidence port): the third case used to assert that
+/// a legacy `done` row with no closure table is REFUSED as a duplicate target.
+/// That contradicts the spec this file cites (close-evidence-spec.md, DUPLICATE:
+/// "a legacy done row without a closure table counts; user ruling 2026-10-01,
+/// matches gate case P8"), `closecmd::check_duplicate_target`'s doc, and
+/// `scripts/tests/closure-evidence-gate.sh` P8 — and it was RED at the branch
+/// tip 04ea9b35 itself. It now pins the ruled behaviour: accepted, with the
+/// target recorded. The missing-target and self-duplicate refusals are kept.
 #[test]
-fn duplicate_of_missing_self_or_legacy_done_target_is_refused() {
+fn duplicate_of_missing_or_self_is_refused_legacy_done_target_is_accepted() {
     let f = Fixture::new("dupbad");
     let b = f.add("x");
     let o = f.run(&["done", &b, "--duplicate-of", "00000000"]);
@@ -462,12 +470,17 @@ fn duplicate_of_missing_self_or_legacy_done_target_is_refused() {
     assert_refused_unchanged(&f, &b, "pending", &o, "self-duplicate");
     f.plant_legacy_done("a1b2c3d4", "legacy", "done");
     let o = f.run(&["done", &b, "--duplicate-of", "a1b2c3d4"]);
-    assert_refused_unchanged(
-        &f,
-        &b,
-        "pending",
-        &o,
-        "done target WITHOUT evidence is not a valid anchor",
+    assert_eq!(
+        o.code,
+        0,
+        "a legacy done row counts as a duplicate target (user ruling 2026-10-01): {}",
+        o.both()
+    );
+    assert_eq!(f.status(&b), "done");
+    assert_eq!(
+        f.row(&b)["closure"]["duplicate_of"],
+        "a1b2c3d4",
+        "the duplicate target must be recorded"
     );
 }
 

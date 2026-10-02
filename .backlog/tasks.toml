@@ -1059,38 +1059,6 @@ issue_number = 172
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/172"
 
 [[task]]
-id = "f12c2168"
-title = "check-fail-open.py が Required::Blocked への改名で残余の第二層に盲目になった (836a1aa3 が 47 サイトを改名)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-verdict.rs:394 と :487 は、型で塞げない残余 (手書きの match 腕で空値へ潰す形) を lexical gate へ委譲すると宣言している。その gate は実在し pre-commit に配線されている (.githooks/pre-commit の fail-open-guard)。
-
-しかし敵対的監査 (2026-08-06) が同一意味の 2 ファイルを作って実測した結果:
-
-  === OLD spelling (Err 腕で空 Vec) ===
-  old_spelling.rs:4: [err-arm-empty-fallback] (advisory) 検出された
-  === NEW spelling (Required::Blocked 腕で空 Vec) ===
-  fail-open-guard: gate surface clean (no fail-open swallow detected)
-
-836a1aa3 が 47 サイトを Err(...) から Required::Blocked(...) へ改名したことで、型が塞げないと明言した残余の第二層が、まさにその綴りに対して無音になった。現時点で見逃されている実在の残余は 0 件だが、検出器は今後に対して盲目である。
-
-これは委譲の連鎖が切れた形: 型は lexical gate に委譲し、lexical gate はその綴りを見ていない。どちらも単体では嘘をついていないが、合わせると誰も見ていない領域ができている。
-
-完了条件: check-fail-open.py の正規表現に Required::Blocked 腕の空値・既定値フォールバックを足す。追加は advisory 面のみ (b0cacd15 のユーザー裁定に従う)、allowlist は作らない、baseline で burn-down。RED 先行 (新綴りの fixture が現行スクリプトで検出されないことを先に観測してから足す)。"""
-created_at = 1785969188
-updated_at = 1785969188
-weight = 0.0
-issue_number = 177
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/177"
-
-[[task]]
 id = "b71c72a7"
 title = "テストが固定 /tmp パスを使うため、2 本の cargo test が同時に走ると互いを壊す"
 project = "/Users/yuki/src/harness"
@@ -14250,3 +14218,18 @@ updated_at = 1790918761
 weight = 0.0
 issue_number = 1045
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1045"
+
+[[task]]
+id = "23d430c6"
+title = "jev は出荷済みだが二重に不活性 — enabledPlugins 未登録、かつ specs/jev-advisory.toml が draft のまま"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "実測 2026-10-02、測定点 61c71a8e。jev 0.1.1 は rollout 済みで稼働バイナリは正常動作する: /home/hiroyuki_nakayama/.claude/plugins/cache/yukineko/jev/0.1.1/bin/jev check が {availability: not-configured, usable: false, reason: TYPESAFE_API_KEY is not set} を返し exit 1 (設計どおり — 鍵が無ければ構造的 no-op)。check-plugin-rollout.py も exit 0 で、merge 前にあった 'cached but no current version' と 'RETIRED BUT STILL LIVE' は解消済み。残っているのは不活性が 2 重になっている点: (1) jev は ~/.claude/settings.json の enabledPlugins に無い (ゲート上は red ではなく NOTE)。したがって /jev skill は呼べない。(2) specs/jev-advisory.toml は status = 'draft' のままで ratify されていない (ファイル 13 行目に「ratify は人間の儀式なので harness が自分で押さない」と明記)。どちらも機械の欠陥ではなく人間の判断待ちなので、勝手に解消しない: enablement を報告消しのために flip するのは 2026-08-04 の taintguard の失敗 (backlog a6f165cd) と同じ形であり、ratify は定義上 HOTL の同意儀式である。なお TYPESAFE_API_KEY は本機で unset なので、今 enable しても挙動は変わらない (Advice に clean 相当の variant が無いため「jev が承認した」と「jev を呼ばなかった」が同値)。影響: Tier A/B の配線 8 件 (815f21bf / 807d00d7 / cc43f246 / 4cabfc54 / e2abd886 / 5b5d196a / 1bca93f9 / 1f88f236) は、この 2 つが解けるまで実地で確かめようがない。見分け方ではなく判断材料: 鍵を入れて enable するか、ラッパだけ置いて配線は保留にするかはユーザーの選択。是正案: ユーザーに (a) TYPESAFE_API_KEY を入れるか (b) enabledPlugins に jev を足すか (c) spec を ratify するか を確認し、決まったものだけ実行する。"
+created_at = 1790919448
+updated_at = 1790919448
+weight = 0.0
+issue_number = 1047
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1047"

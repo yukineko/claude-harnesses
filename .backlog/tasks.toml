@@ -13535,3 +13535,30 @@ updated_at = 1790910020
 weight = 0.0
 issue_number = 1015
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1015"
+
+[[task]]
+id = "c5eeba97"
+title = "backlog done -> gh issue close (mirror_close_for) の実 GitHub 通過が一度も観測されていない — テストと変異でしか押さえていない"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "deploy-verify",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+2026-10-02、測定点 f34ef216 の時点の事実。
+
+2026-10-02 のセッションで 467 件の close を流したが、**すべて sync 経路**である。mirror_close_for は別経路で、mark_done の後に store を再読みして 1 件だけの plan を組む。したがって sync の成功は mirror_close_for の成功の証拠にならない。
+
+テスト側は 0.3.22 で固定した: crates/backlog/tests/done_closes_issue_inline.rs の2本 (確認された close が issue close <n> --reason completed を自分の issue 番号に対して1回だけ出すこと / gh が非0で終わったとき local 完了は成功しつつ issue_closed_at を打たず次の sync の plan に残ること)。両方とも初回 GREEN だったので、非空虚性は変異で証明した (Done ハンドラから mirror_close_for の呼び出しを外すと両方 RED、戻すと diff 0 で GREEN)。
+
+未観測なのは実環境の経路だけである。測り方: issue を持つタスクを 1 件わざと backlog done し、gh issue view <n> --json state,stateReason で CLOSED/COMPLETED を確認し、store 側に issue_closed_at が打たれたことを確認する。これは 1 分で測れるので、次に mirror 済みタスクを done する機会があれば必ず確認する。
+
+関連: CLAUDE.md 第2節 (判断は予測、テストで決着) は満たしているが、第4節 (やっていないことはやっていないと書く) の側の記録としてこの起票を残す。テストが通ったことと実環境で通ったことを同じ語で報告しないため。"""
+created_at = 1790910537
+updated_at = 1790910537
+weight = 0.0
+issue_number = 1016
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1016"

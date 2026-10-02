@@ -7,6 +7,7 @@
 //! (a test that never failed, one that still fails, or one that regressed) is
 //! not a valid oracle.
 
+use harness_core::verdict::Determination;
 use serde_json::{json, Value};
 
 /// Which RED→GREEN transition a task's proofs represent.
@@ -50,26 +51,82 @@ pub fn classify(pre_passed: bool, post_passed: bool) -> Transition {
     }
 }
 
-/// Build the `tdd oracle` JSON report from the (possibly missing) RED/GREEN
-/// `passed` results. `None` means the artifact was missing/unreadable/corrupt;
-/// when either side is unknown the transition is reported as `"unknown"` and the
-/// oracle is not valid. This is a pure function so it is fully unit-testable.
-pub fn oracle_report(pre_passed: Option<bool>, post_passed: Option<bool>) -> Value {
-    let has_red = pre_passed.is_some();
-    let has_green = post_passed.is_some();
-    let (transition, valid) = match (pre_passed, post_passed) {
-        (Some(pre), Some(post)) => {
-            let t = classify(pre, post);
-            (t.as_snake(), t.is_valid_oracle())
+/// `tdd oracle` exit code for a valid Fail→Pass oracle.
+pub const ORACLE_EXIT_VALID: i32 = 0;
+/// `tdd oracle` exit code for a complete-or-missing proof pair that is not a
+/// valid Fail→Pass oracle (`fail_to_fail` / `pass_to_pass` / `pass_to_fail` /
+/// `unknown`).
+pub const ORACLE_EXIT_INVALID: i32 = 1;
+/// `tdd oracle` exit code when a proof artifact exists but could not be read,
+/// so the transition could not be determined. Distinct from
+/// [`ORACLE_EXIT_INVALID`] so a human can tell "looked and found it invalid"
+/// from "could not look"; both are non-zero, and `condukt state check-oracle`
+/// (`crates/condukt/src/oracle.rs` `verdict_from_oracle_output`) maps every
+/// non-zero exit to `valid_fp_oracle=false, fallback=false` (reject).
+pub const ORACLE_EXIT_UNDETERMINED: i32 = 2;
+
+/// Build the `tdd oracle` JSON report and its exit code from the RED/GREEN
+/// `passed` reads.
+///
+/// - `Known(None)` = the artifact is missing/corrupt: the transition is
+///   `"unknown"` and the oracle is not valid (exit [`ORACLE_EXIT_INVALID`]).
+/// - Either side `Undetermined` (the artifact could not be read): the
+///   transition is `"undetermined"`, `valid_fp_oracle` is `false`, the
+///   unreadable side's `has_*` is `null` (neither "present" nor "absent" was
+///   observed), the reasons are listed under `"undetermined"`, and the exit
+///   code is [`ORACLE_EXIT_UNDETERMINED`].
+///
+/// Pure, so it is fully unit-testable.
+pub fn oracle_report(
+    pre_passed: Determination<Option<bool>>,
+    post_passed: Determination<Option<bool>>,
+) -> (Value, i32) {
+    match (pre_passed, post_passed) {
+        (Determination::Known(pre), Determination::Known(post)) => {
+            let (transition, valid) = match (pre, post) {
+                (Some(pre), Some(post)) => {
+                    let t = classify(pre, post);
+                    (t.as_snake(), t.is_valid_oracle())
+                }
+                _ => ("unknown", false),
+            };
+            let report = json!({
+                "transition": transition,
+                "valid_fp_oracle": valid,
+                "has_red": pre.is_some(),
+                "has_green": post.is_some(),
+            });
+            let code = if valid {
+                ORACLE_EXIT_VALID
+            } else {
+                ORACLE_EXIT_INVALID
+            };
+            (report, code)
         }
-        _ => ("unknown", false),
-    };
-    json!({
-        "transition": transition,
-        "valid_fp_oracle": valid,
-        "has_red": has_red,
-        "has_green": has_green,
-    })
+        (pre, post) => {
+            let side = |d: &Determination<Option<bool>>| -> (Value, Option<String>) {
+                match d {
+                    Determination::Known(v) => (Value::Bool(v.is_some()), None),
+                    Determination::Undetermined(why) => {
+                        (Value::Null, Some(why.as_str().to_string()))
+                    }
+                }
+            };
+            let (has_red, red_why) = side(&pre);
+            let (has_green, green_why) = side(&post);
+            let report = json!({
+                "transition": "undetermined",
+                "valid_fp_oracle": false,
+                "has_red": has_red,
+                "has_green": has_green,
+                "undetermined": {
+                    "red": red_why,
+                    "green": green_why,
+                },
+            });
+            (report, ORACLE_EXIT_UNDETERMINED)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -102,7 +159,10 @@ mod tests {
 
     #[test]
     fn oracle_report_valid_fp() {
-        let r = oracle_report(Some(false), Some(true));
+        let (r, _) = oracle_report(
+            Determination::known(Some(false)),
+            Determination::known(Some(true)),
+        );
         assert_eq!(r["transition"], "fail_to_pass");
         assert_eq!(r["valid_fp_oracle"], true);
         assert_eq!(r["has_red"], true);
@@ -116,7 +176,10 @@ mod tests {
             (true, true, "pass_to_pass"),
             (true, false, "pass_to_fail"),
         ] {
-            let r = oracle_report(Some(pre), Some(post));
+            let (r, _) = oracle_report(
+                Determination::known(Some(pre)),
+                Determination::known(Some(post)),
+            );
             assert_eq!(r["transition"], name);
             assert_eq!(r["valid_fp_oracle"], false);
         }
@@ -129,7 +192,7 @@ mod tests {
             (Some(false), None, true, false),
             (None, Some(true), false, true),
         ] {
-            let r = oracle_report(pre, post);
+            let (r, _) = oracle_report(Determination::known(pre), Determination::known(post));
             assert_eq!(r["transition"], "unknown");
             assert_eq!(r["valid_fp_oracle"], false);
             assert_eq!(r["has_red"], has_red);

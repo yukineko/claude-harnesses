@@ -46,7 +46,7 @@ API キー不要・subscription-native（hooks + binary）。
 ## 振る舞い
 
 hooks は `hooks/hooks.json` が6イベントを同一バイナリへ配線（`PostToolUse` は Read/Bash/Grep 等に
-matcher、`SessionStart` は startup/resume/clear、各 timeout 10s）。`bin/context-governor.rs::dispatch` の分岐:
+matcher、`SessionStart` は startup/resume/clear/compact、各 timeout 10s）。`bin/context-governor.rs::dispatch` の分岐:
 
 - **`PostToolUse` → `groomer()`（★主 size レバー）** — `DefaultGroomer::to_output` が `input.tool_response`
   を読み、live なウィンドウ圧（`harness_core::transcript::last_usage_tokens`）で `budget_for` により

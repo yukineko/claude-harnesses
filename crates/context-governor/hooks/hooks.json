@@ -17,7 +17,7 @@
     ],
     "SessionStart": [
       {
-        "matcher": "startup|resume|clear",
+        "matcher": "startup|resume|clear|compact",
         "hooks": [
           { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/context-governor", "timeout": 10 }
         ]

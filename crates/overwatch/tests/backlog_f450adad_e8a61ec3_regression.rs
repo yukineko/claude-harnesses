@@ -59,7 +59,6 @@ fn control_tri_state_reader_sees_the_fixture_as_undetermined() {
 }
 
 #[test]
-#[ignore = "e8a61ec3 open: read_jsonl_best_effort collapses Undetermined to empty (f450adad duplicate)"]
 fn best_effort_reader_does_not_report_an_unreadable_ledger_as_empty() {
     let _g = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let repo = fixture("pin");

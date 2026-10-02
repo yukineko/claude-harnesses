@@ -13529,3 +13529,33 @@ updated_at = 1790981495
 weight = 0.0
 issue_number = 1084
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1084"
+
+[[task]]
+id = "ad6bd114"
+title = "gate-bypass ledger: rebase で書き換えられ到達不能になった commit は『HEAD の祖先』にならないため永久に outstanding のまま残り、全セッションの push を塞ぐ"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-03 (session dc66e988): worktree で flow-dc66/donegate-refuse を git rebase main したところ post-commit が rebase 生成 commit b7728611 を ledger (.git/gate-bypassed) に記録。直後 reset --soft main で squash し pre-commit 認証付き 33a6c46b として再 commit、main に FF merge。b7728611 はどの branch からも到達不能 (git branch --contains 空) だが gate-bypass.py --json は verdict outstanding を返し続ける。scripts/gate-bypass.py docstring: ledger は pre-commit green run が『commit is an ancestor of the HEAD that run judged』の entry のみ消す (c767cb47) → 到達不能 commit は消える経路が無い。読み (a) 欠陥: 書き換えで捨てられた commit は出荷され得ないので outstanding とすべきでない (ただし内容が別 commit で認証されたかは要確認) / (b) 意図: 未検査 tree を一度でも作った事実を人間が見るまで残す。見分け方: post-commit/pre-commit の設計 doc に unreachable の扱いがあるか。手で ledger を編集しての解消はしていない。"
+created_at = 1790981868
+updated_at = 1790981868
+weight = 0.0
+issue_number = 1085
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1085"
+
+[[task]]
+id = "b2861a37"
+title = ".githooks/pre-push が check-plugin-rollout rc=1 で常に rollout-plugins.sh を処方し、orphan/incomparable (rollout が正解でない) ケースでも巻き戻しを促す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "e8aad6e6 の修正 (flow-dc66/rollout-dir 77ba4d53) で checker 自身の Fix 行は orphan/incomparable で抑止されたが、worker 報告によれば .githooks/pre-push:221-229 は rollout_rc=1 のとき無条件に 'scripts/rollout-plugins.sh --plugin <name>' を出す。未実測 (worker の読みのみ) — 修正前に pre-push を orphan fixture で起動して出力を観測すること。修正案: 'red だが rollout 非処方' の別 exit code、または pre-push が checker の Fix 文言に委譲。.githooks は permission で edit-deny の可能性あり → 人間の作業になりうる。"
+created_at = 1790981870
+updated_at = 1790981870
+weight = 0.0
+issue_number = 1086
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1086"

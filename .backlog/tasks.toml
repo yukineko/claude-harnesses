@@ -13407,9 +13407,8 @@ title = "cargo test -p condukt で 1 件の未特定 flake を観測（4 回中 
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = [
-    "flaky",
     "condukt",
-    "p2",
+    "p1",
 ]
 touched_files = []
 status = "pending"
@@ -13420,7 +13419,7 @@ notes = """
 
 [re-measured 2026-10-03 on main-equivalent tree 394c8832 (no condukt-fixture changes)] cargo test -p condukt --bin condukt --no-fail-fast x2: FAILED 2/2, same test diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded (diffrisk_record.rs:537), 875 passed 1 failed. NOT a rare flake: red in nearly every full run (4/5 total observations), green when the module runs alone. Pre-existing on main."""
 created_at = 1790981495
-updated_at = 1790982736
+updated_at = 1790982759
 weight = 0.0
 issue_number = 1084
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1084"

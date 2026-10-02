@@ -13502,8 +13502,8 @@ issue_number = 1015
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1015"
 
 [[task]]
-id = "c5eeba97"
-title = "backlog done -> gh issue close (mirror_close_for) の実 GitHub 通過が一度も観測されていない — テストと変異でしか押さえていない"
+id = "0c272976"
+title = "issue の body は create 時に一度書かれるだけで、その後の backlog edit --notes が GitHub 側に一切反映されない (片方向ミラーの再同期が create/close の2点しか無い)"
 project = "/home/hiroyuki_nakayama/src/claude-harnesses"
 project_unresolved = false
 tags = [
@@ -13513,17 +13513,57 @@ tags = [
 touched_files = []
 status = "pending"
 notes = """
-2026-10-02、測定点 f34ef216 の時点の事実。
+観測 2026-10-02、測定点 bf432b89。0.3.23 で close 側に内容記載を入れた作業中に気づいたもの。
 
-2026-10-02 のセッションで 467 件の close を流したが、**すべて sync 経路**である。mirror_close_for は別経路で、mark_done の後に store を再読みして 1 件だけの plan を組む。したがって sync の成功は mirror_close_for の成功の証拠にならない。
+sync_plan の Create アームは (STATUS_PENDING, None, _) すなわち issue_number が無いときだけ発火する。したがって issue が一度作られた後にタスクの notes を編集しても、plan には何も現れない。body は create の瞬間のスナップショットのまま固定される。
 
-テスト側は 0.3.22 で固定した: crates/backlog/tests/done_closes_issue_inline.rs の2本 (確認された close が issue close <n> --reason completed を自分の issue 番号に対して1回だけ出すこと / gh が非0で終わったとき local 完了は成功しつつ issue_closed_at を打たず次の sync の plan に残ること)。両方とも初回 GREEN だったので、非空虚性は変異で証明した (Done ハンドラから mirror_close_for の呼び出しを外すと両方 RED、戻すと diff 0 で GREEN)。
+実害: 起票してから長く pending のままのタスク (このキューには数百件ある) は、notes に調査結果や測定値が何度も追記される。GitHub 側の読者が見るのは最初の 1 行だけで、しかも『古い』ことを示すものが body に無いので、更新が無かったのか反映されていないのかを区別できない (CLAUDE.md 第3節の暗転と同じ形: 検査した と 検査できなかった が下流から区別不能)。
 
-未観測なのは実環境の経路だけである。測り方: issue を持つタスクを 1 件わざと backlog done し、gh issue view <n> --json state,stateReason で CLOSED/COMPLETED を確認し、store 側に issue_closed_at が打たれたことを確認する。これは 1 分で測れるので、次に mirror 済みタスクを done する機会があれば必ず確認する。
+0.3.23 で close 側は解決した (close の瞬間の notes が --comment で載る) ので、現状は『作成時の姿』と『終了時の姿』の2点が残り、その間の更新が落ちる。
 
-関連: CLAUDE.md 第2節 (判断は予測、テストで決着) は満たしているが、第4節 (やっていないことはやっていないと書く) の側の記録としてこの起票を残す。テストが通ったことと実環境で通ったことを同じ語で報告しないため。"""
-created_at = 1790910537
-updated_at = 1790910537
+候補 (未判定):
+(a) SyncAction に Update アームを足し、notes のハッシュを store 側に持って差分があるときだけ gh issue edit --body する。issue 本文を上書きするので、GitHub 側で人が body を編集していた場合それを踏む (一方向ミラーなので仕様どおりではあるが、破壊的)。
+(b) 更新を body の上書きではなく comment の追記にする。破壊的でないが、長寿命タスクでコメントが積む。
+(c) body の冒頭に『この本文は作成時点のスナップショットであり、最新は .backlog の <id> を参照』という固定の但し書きを入れるだけ。安く、嘘をつかなくなるが、内容は同期されない。
+
+測り方: issue を持つ pending タスクの notes を編集し、sync の plan が空であることを確認する (今は空になる = RED が取れる)。"""
+created_at = 1790911886
+updated_at = 1790911886
 weight = 0.0
-issue_number = 1016
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1016"
+issue_number = 1017
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1017"
+
+[[task]]
+id = "751b2d1e"
+title = "gh issue create に渡す body が無制限 — notes が GitHub の 65536 文字上限を超えるタスクは issue 作成そのものが失敗して local-only に落ちる (close 側は 0.3.23 で bound 済みなので非対称)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "deploy-verify",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+
+観測 2026-10-02、測定点 bf432b89。
+
+build_issue_close_args 側は 0.3.23 で CLOSE_COMMENT_MAX = 60000 バイトに bound し、超過時は char 境界で切って本文に truncated と書くようにした。build_issue_create_args 側には対応する bound が無く、task.notes をそのまま --body に渡す。
+
+GitHub の issue body 上限は 65536 文字。超えると gh issue create が非0で終わるので decide_issue_create は DegradedLocalOnly になる。これは fail-closed であって暗転ではない (stderr に理由が出る) ため実害は『そのタスクだけ永久に mirror されない』に留まるが、毎 sync で同じ失敗を繰り返し、SessionStart の drift 行の create 件数が永久に減らないノイズ源になる。
+
+このキューの notes は実際に長い (本チケット自身がそうである) ので、仮説ではなく時間の問題として扱うべき。ただし現時点で 65536 を超えるタスクが存在するかは未測定 — それが (a) 実在する問題か (b) まだ起きていない問題かの違いである。
+
+測り方: store の全タスクについて notes のバイト長/文字長の最大値を測る。超過が 0 件なら (b) として優先度を下げてよいが、bound 自体は close 側と対称に入れるのが筋 (片側だけ守られている理由が無い)。
+
+--- 測定済み: 今は (b) である (2026-10-02、測定点 bf432b89) ---
+store の両ファイル (tasks.toml + tasks.done.toml) 全 1311 タスクの notes を測った。最大は 11953 バイト / 7627 文字 (91fa24df)。上位 5 件もすべて 12000 バイト未満で、65536 文字を超えるタスクは **0 件**。
+
+したがってこれは (b)「まだ起きていない問題」である。実害が出ていないので優先度は上げない。ただし bound 自体は入れるべきで、理由は実害ではなく非対称性そのものである: close 側 (CLOSE_COMMENT_MAX) が守られていて create 側が守られていない理由が無く、その非対称は次の読者に『create 側は上限を気にしなくてよい』と誤読される。
+
+測り方を再掲 (次に測る人向け): tasks.toml / tasks.done.toml を [[task]] で割り、notes の値 (basic string か multi-line literal) を取り出して len(v) と len(v.encode()) の最大を見る。この測定自体は 1 コマンドで、GitHub へは一切触らない。"""
+created_at = 1790911888
+updated_at = 1790911947
+weight = 0.0
+issue_number = 1018
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1018"

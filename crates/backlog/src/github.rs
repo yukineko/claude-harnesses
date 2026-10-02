@@ -52,9 +52,62 @@ pub fn is_github_remote(remote_url: &str) -> bool {
     host == "github.com"
 }
 
+/// Upper bound on an issue BODY handed to `gh`, measured in **bytes**
+/// (`str::len`), not characters.
+///
+/// GitHub rejects a body over 65536 *characters*. Bounding bytes is the
+/// conservative side of that limit: for UTF-8, bytes >= characters, so a body
+/// under this many bytes is always under the same number of characters. The
+/// headroom below 65536 covers the truncation marker.
+///
+/// This is the sibling of `store::CLOSE_COMMENT_MAX` and holds the same value
+/// for the same reason. The two live in different modules because they bind at
+/// different points: a closing comment is *rendered* from a task by
+/// `store::build_close_comment`, so its bound belongs with the rendering, while
+/// a body is passed through from the task's notes by several call sites, so its
+/// bound belongs here — at the argv chokepoint every one of them must go
+/// through. Before 0.3.24 only the close side was bounded, which is the
+/// asymmetry filed as backlog `751b2d1e`: an oversized create does not degrade
+/// to "filed without the content", it degrades to `gh issue create` exiting
+/// non-zero and the task never being mirrored at all, retried identically on
+/// every subsequent sync.
+pub const ISSUE_BODY_MAX: usize = 60_000;
+
+/// Appended when a body did not fit. Says so in the body itself: dropping
+/// content silently would make the issue a worse record than an obviously
+/// truncated one, because nothing downstream could tell a short task from a
+/// trimmed one (CLAUDE.md §4 — never make an error invisible).
+const ISSUE_BODY_TRUNCATED: &str = "\n\n*(body truncated here to stay under GitHub's \
+     limit — the full text lives in this repo's `.backlog` store, keyed by this task's id.)*\n";
+
+/// Clamp `body` to [`ISSUE_BODY_MAX`] bytes, marking it when anything was cut.
+/// Pure; never panics.
+///
+/// Keeps the HEAD and drops the TAIL: the start of a task's notes is its
+/// problem statement, while the tail is the accumulated investigation, so a
+/// reader who gets the head can still find the rest by task id.
+///
+/// The cut lands on a **char boundary**, not a byte offset. These notes are
+/// routinely Japanese, so slicing by byte would panic inside a function whose
+/// whole job is to stop an oversized body from failing the invocation.
+pub fn bound_issue_body(body: &str) -> String {
+    if body.len() <= ISSUE_BODY_MAX {
+        return body.to_string();
+    }
+    let room = ISSUE_BODY_MAX.saturating_sub(ISSUE_BODY_TRUNCATED.len());
+    let cut = body
+        .char_indices()
+        .map(|(i, _)| i)
+        .take_while(|i| *i <= room)
+        .last()
+        .unwrap_or(0);
+    format!("{}{ISSUE_BODY_TRUNCATED}", &body[..cut])
+}
+
 /// Deterministically format the argv for `gh issue create`. Pure, no side effects.
 ///
-/// Shape: `["issue","create","--title",<title>,"--body",<body>]`.
+/// Shape: `["issue","create","--title",<title>,"--body",<body>]`, with the body
+/// clamped by [`bound_issue_body`].
 pub fn build_issue_create_args(title: &str, body: &str) -> Vec<String> {
     vec![
         "issue".to_string(),
@@ -62,8 +115,77 @@ pub fn build_issue_create_args(title: &str, body: &str) -> Vec<String> {
         "--title".to_string(),
         title.to_string(),
         "--body".to_string(),
-        body.to_string(),
+        bound_issue_body(body),
     ]
+}
+
+/// Deterministically format the argv for `gh issue edit`, re-pushing a body
+/// whose local source has moved on. Pure, no side effects.
+///
+/// Shape: `["issue","edit",<number>,"--body",<body>]`, with the body clamped by
+/// [`bound_issue_body`].
+///
+/// `--body` REPLACES the body rather than appending a comment. That is the
+/// one-way-mirror contract applied consistently: the local store is
+/// authoritative, so a body edited on GitHub is not an input and is not
+/// preserved. Appending comments instead was considered and rejected — a
+/// long-lived task accumulates many note revisions, and a growing comment chain
+/// makes the current content harder to find, not easier.
+pub fn build_issue_edit_args(number: u64, body: &str) -> Vec<String> {
+    vec![
+        "issue".to_string(),
+        "edit".to_string(),
+        number.to_string(),
+        "--body".to_string(),
+        bound_issue_body(body),
+    ]
+}
+
+/// The outcome of the `gh issue edit --body` step.
+///
+/// Shaped like [`CloseOutcome`] rather than [`IssueOutcome`]: there is no
+/// "degraded, carry on" arm the caller may record as success. The staleness
+/// stamp is written ONLY on [`EditOutcome::Edited`], so a failed push leaves the
+/// task in exactly the shape that put it in the plan and the next
+/// `sync --only body` picks it up again.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "outcome")]
+pub enum EditOutcome {
+    /// gh executed `issue edit` and reported success.
+    Edited,
+    /// The body was NOT updated. The caller must not stamp the task.
+    NotEdited { reason: String },
+}
+
+/// Decide the outcome of a `gh issue edit --body` invocation from its injected
+/// result. Never spawns a process itself; never panics.
+///
+/// Every non-success path — non-GitHub remote, gh absent (`None`), gh ran and
+/// failed (`Some((false, _))`) — resolves to [`EditOutcome::NotEdited`], the
+/// restrictive side: the body is assumed still stale until GitHub says
+/// otherwise.
+pub fn decide_issue_edit<R: Fn(&[&str]) -> Option<(bool, String)>>(
+    remote_url: &str,
+    number: u64,
+    body: &str,
+    run: R,
+) -> EditOutcome {
+    if !is_github_remote(remote_url) {
+        return EditOutcome::NotEdited {
+            reason: "remote is not github.com; nothing to update".to_string(),
+        };
+    }
+    let args = build_issue_edit_args(number, body);
+    let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+    match run(&argv) {
+        None => EditOutcome::NotEdited {
+            reason: "gh CLI not found; issue body left stale".to_string(),
+        },
+        Some((false, output)) => EditOutcome::NotEdited {
+            reason: format!("gh issue edit failed: {}", output.trim()),
+        },
+        Some((true, _)) => EditOutcome::Edited,
+    }
 }
 
 /// The fail-soft outcome of the `gh issue create` step.

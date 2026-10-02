@@ -1167,8 +1167,24 @@ fn run(cli: Cli) -> Result<()> {
                 .iter()
                 .filter(|a| matches!(a, store::SyncAction::Create { .. }))
                 .count();
-            let closes = plan.len() - creates;
+            let closes = plan
+                .iter()
+                .filter(|a| matches!(a, store::SyncAction::Close { .. }))
+                .count();
+            // Counted, not derived as `plan.len() - creates`: once a third
+            // action kind exists, subtraction reports body updates as closes.
+            let bodies = plan
+                .iter()
+                .filter(|a| matches!(a, store::SyncAction::UpdateBody { .. }))
+                .count();
             println!("sync plan: {creates} issue(s) to create, {closes} issue(s) to close");
+            // Printed only when the plan actually holds body updates, which
+            // needs `--only body`. A default run would otherwise gain a
+            // permanent ", 0 issue body(s)" line reporting an arm it never
+            // performs — noise of exactly the kind backlog 7438ea3a records.
+            if bodies > 0 {
+                println!("sync plan: {bodies} issue body(s) to update");
+            }
             if !apply {
                 for action in plan.iter().take(20) {
                     match action {
@@ -1189,6 +1205,17 @@ fn run(cli: Cli) -> Result<()> {
                                 "  close   #{number}  {id}  ({}) + comment ({} chars)",
                                 reason.as_gh_reason(),
                                 comment.chars().count(),
+                            );
+                        }
+                        store::SyncAction::UpdateBody {
+                            id, number, body, ..
+                        } => {
+                            // Says REPLACE, because that is what `--apply`
+                            // does to a public issue; "update" would read as
+                            // an append.
+                            println!(
+                                "  body    #{number}  {id}  replace body ({} chars)",
+                                body.chars().count(),
                             );
                         }
                     }
@@ -1251,6 +1278,26 @@ fn run(cli: Cli) -> Result<()> {
                             }
                             github::CloseOutcome::NotClosed { reason } => {
                                 failures.push(format!("{id}: close #{number} failed: {reason}"));
+                            }
+                        }
+                    }
+                    store::SyncAction::UpdateBody {
+                        id,
+                        number,
+                        body,
+                        rev,
+                    } => {
+                        match github::decide_issue_edit(&remote_url, *number, body, gh_probe) {
+                            github::EditOutcome::Edited => {
+                                println!("updated body of #{number} for {id}");
+                                outcomes.push(store::SyncOutcome::BodySynced {
+                                    id: id.clone(),
+                                    synced_rev: *rev,
+                                });
+                            }
+                            github::EditOutcome::NotEdited { reason } => {
+                                failures
+                                    .push(format!("{id}: body #{number} update failed: {reason}"));
                             }
                         }
                     }
@@ -1317,6 +1364,20 @@ fn run(cli: Cli) -> Result<()> {
                 status.as_deref(),
             )?;
             println!("updated: {id}");
+            // A terminal transition is a terminal transition whichever verb
+            // performed it. `done` mirrored its close from the start while this
+            // path did not, so `edit --status done|cancelled` finished the work
+            // locally and left the issue open with nothing on stdout saying so
+            // — invisible until someone happened to run `backlog sync`. The
+            // mirror belongs to the STATE, not to the command.
+            //
+            // Guarded on the requested status rather than called
+            // unconditionally: a non-terminal edit has no close to mirror, and
+            // `mirror_close_for` would otherwise spawn `git` on every edit to
+            // resolve a remote it has no use for.
+            if status.as_deref().is_some_and(store::is_terminal_status) {
+                mirror_close_for(&tasks_path, &id);
+            }
         }
 
         Command::SessionStart => {

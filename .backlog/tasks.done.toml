@@ -23683,3 +23683,214 @@ weight = 0.0
 issue_number = 147
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/147"
 issue_closed_at = 1790919912
+
+[[task]]
+id = "6a963a6a"
+title = "autonomy_invariant の askuserquestion_sites_match_frozen_allowlist が RED — flow SKILL.md に未監査の 11 個目の human prompt がある"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "cancelled"
+notes = """
+å®æ¸¬ 2026-09-09ãHEAD ã§ RED (ç§ã®å¤æ´ã¨ã¯ç¡é¢ä¿: git status ã§ crates/flow éä¸ã *SKILL.md ãä¸å modified ã§ãªããã¨ãç¢ºèªæ¸ã¿)ãéèª: 'AskUserQuestion count changed in flow/skills/flow/SKILL.md (allowlist 10, found 11). Re-audit the new/removed prompt against the two-stop invariant, then update ASK_ALLOWLIST.' left: 11 / right: 10ãã¤ã¾ãèª°ãã flow ã® SKILL.md ã« 11 åç®ã® AskUserQuestion ãµã¤ããè¶³ããããtwo-stop invariant ã«ç§ãããåç£æ»ã¨ ASK_ALLOWLIST ã®æ´æ°ããã¦ããªããåçµãã¹ãã¯æ­£ããä»äºããã¦ããã®ã«ãèª°ããã®èµ¤ãè¦ã¦ããªããc4321fc2 (fleet::tests::gate_crates_is_the_known_six ã® RED) ã¨åãæ ¹æ¬åå : pre-commit ã pre-push ã cargo test ãåãããCI ã¯ 7. ã«ããä¸ä½¿ç¨ãªã®ã§ãworkspace ã® RED ãè¦ãçµè·¯ãå­å¨ããªããä¿®æ­£ã«ã¯æ°ãã prompt ãæ¨©éèªå¯ãå¤æ­è¦æ±ãã®å¤å®ãè¦ãããå¤æ­ã¿ã¹ã¯ã
+
+--- 退避 2026-10-02 (測定点 61673d0a) ---
+
+本票は 5c6a3b69 (issue #390) と同一の finding の二重起票である。判定根拠は推測ではなく
+逐語一致: 両票が引用しているゲート出力は同じ 'allowlist 10, found 11' であり、落ちている
+テストも同じ askuserquestion_sites_match_frozen_allowlist、対象ファイルも同じ
+crates/condukt/tests/autonomy_invariant.rs と flow の SKILL.md である。
+
+5c6a3b69 を正典として残す。本票は cancelled にする — done ではない。この作業は
+完了していない。残作業は 5c6a3b69 が保持する。
+
+この fold は副産物として 2 つの未観測経路を本番で初めて通す:
+(1) backlog 0.3.24 で入れた edit -> close ミラー (それ以前は edit --status で終了させても
+    issue が開いたまま沈黙していた)
+(2) sync_plan の cancelled -> GitHub 'not planned' クローズ腕。この腕は 2026-08-14 の
+    計測時点で『手編集した store からしか到達できない』状態で、どの CLI 経路でも
+    実行されたことが無かった (backlog 0dafa254)。cancelled を task::STATUSES に
+    入れたのが 0.3.24 なので、本票がその最初の通過になる。"""
+created_at = 1788906753
+updated_at = 1790914918
+weight = 0.0
+issue_number = 464
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/464"
+issue_closed_at = 1790914920
+
+[[task]]
+id = "751b2d1e"
+title = "gh issue create に渡す body が無制限 — notes が GitHub の 65536 文字上限を超えるタスクは issue 作成そのものが失敗して local-only に落ちる (close 側は 0.3.23 で bound 済みなので非対称)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "deploy-verify",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = """
+
+観測 2026-10-02、測定点 bf432b89。
+
+build_issue_close_args 側は 0.3.23 で CLOSE_COMMENT_MAX = 60000 バイトに bound し、超過時は char 境界で切って本文に truncated と書くようにした。build_issue_create_args 側には対応する bound が無く、task.notes をそのまま --body に渡す。
+
+GitHub の issue body 上限は 65536 文字。超えると gh issue create が非0で終わるので decide_issue_create は DegradedLocalOnly になる。これは fail-closed であって暗転ではない (stderr に理由が出る) ため実害は『そのタスクだけ永久に mirror されない』に留まるが、毎 sync で同じ失敗を繰り返し、SessionStart の drift 行の create 件数が永久に減らないノイズ源になる。
+
+このキューの notes は実際に長い (本チケット自身がそうである) ので、仮説ではなく時間の問題として扱うべき。ただし現時点で 65536 を超えるタスクが存在するかは未測定 — それが (a) 実在する問題か (b) まだ起きていない問題かの違いである。
+
+測り方: store の全タスクについて notes のバイト長/文字長の最大値を測る。超過が 0 件なら (b) として優先度を下げてよいが、bound 自体は close 側と対称に入れるのが筋 (片側だけ守られている理由が無い)。
+
+--- 測定済み: 今は (b) である (2026-10-02、測定点 bf432b89) ---
+store の両ファイル (tasks.toml + tasks.done.toml) 全 1311 タスクの notes を測った。最大は 11953 バイト / 7627 文字 (91fa24df)。上位 5 件もすべて 12000 バイト未満で、65536 文字を超えるタスクは **0 件**。
+
+したがってこれは (b)「まだ起きていない問題」である。実害が出ていないので優先度は上げない。ただし bound 自体は入れるべきで、理由は実害ではなく非対称性そのものである: close 側 (CLOSE_COMMENT_MAX) が守られていて create 側が守られていない理由が無く、その非対称は次の読者に『create 側は上限を気にしなくてよい』と誤読される。
+
+測り方を再掲 (次に測る人向け): tasks.toml / tasks.done.toml を [[task]] で割り、notes の値 (basic string か multi-line literal) を取り出して len(v) と len(v.encode()) の最大を見る。この測定自体は 1 コマンドで、GitHub へは一切触らない。"""
+created_at = 1790911888
+updated_at = 1790915251
+weight = 0.0
+issue_number = 1018
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1018"
+issue_closed_at = 1790915253
+
+[[task]]
+id = "0c272976"
+title = "issue の body は create 時に一度書かれるだけで、その後の backlog edit --notes が GitHub 側に一切反映されない (片方向ミラーの再同期が create/close の2点しか無い)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "deploy-verify",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = """
+観測 2026-10-02、測定点 bf432b89。0.3.23 で close 側に内容記載を入れた作業中に気づいたもの。
+
+sync_plan の Create アームは (STATUS_PENDING, None, _) すなわち issue_number が無いときだけ発火する。したがって issue が一度作られた後にタスクの notes を編集しても、plan には何も現れない。body は create の瞬間のスナップショットのまま固定される。
+
+実害: 起票してから長く pending のままのタスク (このキューには数百件ある) は、notes に調査結果や測定値が何度も追記される。GitHub 側の読者が見るのは最初の 1 行だけで、しかも『古い』ことを示すものが body に無いので、更新が無かったのか反映されていないのかを区別できない (CLAUDE.md 第3節の暗転と同じ形: 検査した と 検査できなかった が下流から区別不能)。
+
+0.3.23 で close 側は解決した (close の瞬間の notes が --comment で載る) ので、現状は『作成時の姿』と『終了時の姿』の2点が残り、その間の更新が落ちる。
+
+候補 (未判定):
+(a) SyncAction に Update アームを足し、notes のハッシュを store 側に持って差分があるときだけ gh issue edit --body する。issue 本文を上書きするので、GitHub 側で人が body を編集していた場合それを踏む (一方向ミラーなので仕様どおりではあるが、破壊的)。
+(b) 更新を body の上書きではなく comment の追記にする。破壊的でないが、長寿命タスクでコメントが積む。
+(c) body の冒頭に『この本文は作成時点のスナップショットであり、最新は .backlog の <id> を参照』という固定の但し書きを入れるだけ。安く、嘘をつかなくなるが、内容は同期されない。
+
+測り方: issue を持つ pending タスクの notes を編集し、sync の plan が空であることを確認する (今は空になる = RED が取れる)。"""
+created_at = 1790911886
+updated_at = 1790915253
+weight = 0.0
+issue_number = 1017
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1017"
+issue_closed_at = 1790915256
+
+[[task]]
+id = "0dafa254"
+title = 'task::STATUSES が実際に書かれる "cancelled" / "claimed" を含まず、正しい status が unknown 警告を出す'
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = """
+測定日 2026-08-14、測定点 backlog 0.2.26。
+
+crates/backlog/src/task.rs の STATUSES は 3 値しか持たない:
+
+    pub const STATUSES: [&str; 3] = [STATUS_PENDING, STATUS_DONE, STATUS_FAILED];
+
+しかし実ストア .backlog/tasks.toml には他に 2 つの status が実在する
+(577 件の内訳、同日実測):
+    done 322 / pending 238 / failed 9 / claimed 5 / cancelled 6
+
+`claimed` は `next --claim` が書き、`cancelled` は `edit --status` 経由で入る。
+task::status_warning は STATUSES に無い値を「unknown status」として警告するので、
+`backlog list --status cancelled` や `--status claimed` は**実在する正しい
+status を指定しているのに警告を出す**。逆に言うと、この警告は「タイポの検出」
+という本来の役目に対して偽陽性を出しており、警告の信頼性を下げている。
+
+なお本日の sync 実装ではこの定数を使わず store.rs 側に
+`pub const STATUS_CANCELLED` を別途置いた (STATUSES に足すと
+`--status` の受理集合や list のフィルタ挙動まで同時に変わってしまい、
+sync のスコープを越えるため)。**つまり今、status 語彙の正典が 2 箇所に
+分裂している** — これ自体が本 item で解消すべき対象である。
+
+両方の読みを残す:
+  (a) 実在の欠陥 = STATUSES が語彙の正典を名乗りながら実態を網羅していない。
+  (b) 意図的 = STATUSES は「ライフサイクルの主要3状態」だけを列挙する定数で、
+      claimed/cancelled は補助状態として意図的に外している。
+見分け方: status_warning の docstring と STATUSES の docstring は
+「全ての認識される status 値」(All recognised status values) と書いており、
+(b) の読みとは食い違う。docstring が実態と食い違っている時点で
+どちらにせよ直す対象になる (実装とコメントの食い違いは同一コミットで直す規範)。"""
+created_at = 1786637811
+updated_at = 1790915256
+weight = 0.0
+issue_number = 334
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/334"
+issue_closed_at = 1790915258
+
+[[task]]
+id = "5b89f0f6"
+title = "verdict.rs の「method call としては書けない」は拡張トレイトで反証される (散文が実挙動より強い)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+crates/harness-core/src/verdict.rs:434 は permissive path is therefore not expressible as a method call on either と書いている。敵対的監査 (2026-08-06) が使い捨てクレートを実 harness-core への path dep で作り、実際にビルド・実行して反証した。
+
+外部クレートに 6 行の拡張トレイト (Required に対して unwrap_or_default と is_ok を生やす impl) を置くと、呼び出し側の綴りが trybuild fixture の E0599 として pin しているものとバイト同一のまま通る。実行結果 collapsed=[] を観測 = undetermined が空 Vec へ潰れた。
+
+同時に確認された関連の穴 2 件:
+- Required::Blocked(Verdict) は型として Undetermined を強制していない。外部から Blocked に Clean を積むことができ、正規の Blocked(v) => return v 腕が blocks()==false を返す。Verdict::Clean は private witness で偽造不能なのに Required::Blocked には対応する制約が無い。塞ぐなら Blocked(Undet) + accessor。condukt/src/maintree.rs:805 は verdict.blocks() で既に防御しているので production の実害は現状なし。
+- verdict.rs:36 と :384 の has exactly one extractor は method に限った話で、Determination::Known が pub variant である以上、直接 match という第2の抽出路がある (repo 内 40+ 箇所)。
+
+完了条件: 散文を実挙動へ合わせる (第4節: 実装を変えたら同じコミットで記述も直す。ここでは記述の側が過大)。可能なら Required::Blocked の payload を Undet へ狭める。拡張トレイト経路は型では塞げないので、塞げない事実を書くか、下の lexical gate 側で拾う。"""
+created_at = 1785969187
+updated_at = 1790916468
+weight = 0.0
+issue_number = 176
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/176"
+issue_closed_at = 1790916470
+
+[[task]]
+id = "f12c2168"
+title = "check-fail-open.py が Required::Blocked への改名で残余の第二層に盲目になった (836a1aa3 が 47 サイトを改名)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+verdict.rs:394 と :487 は、型で塞げない残余 (手書きの match 腕で空値へ潰す形) を lexical gate へ委譲すると宣言している。その gate は実在し pre-commit に配線されている (.githooks/pre-commit の fail-open-guard)。
+
+しかし敵対的監査 (2026-08-06) が同一意味の 2 ファイルを作って実測した結果:
+
+  === OLD spelling (Err 腕で空 Vec) ===
+  old_spelling.rs:4: [err-arm-empty-fallback] (advisory) 検出された
+  === NEW spelling (Required::Blocked 腕で空 Vec) ===
+  fail-open-guard: gate surface clean (no fail-open swallow detected)
+
+836a1aa3 が 47 サイトを Err(...) から Required::Blocked(...) へ改名したことで、型が塞げないと明言した残余の第二層が、まさにその綴りに対して無音になった。現時点で見逃されている実在の残余は 0 件だが、検出器は今後に対して盲目である。
+
+これは委譲の連鎖が切れた形: 型は lexical gate に委譲し、lexical gate はその綴りを見ていない。どちらも単体では嘘をついていないが、合わせると誰も見ていない領域ができている。
+
+完了条件: check-fail-open.py の正規表現に Required::Blocked 腕の空値・既定値フォールバックを足す。追加は advisory 面のみ (b0cacd15 のユーザー裁定に従う)、allowlist は作らない、baseline で burn-down。RED 先行 (新綴りの fixture が現行スクリプトで検出されないことを先に観測してから足す)。"""
+created_at = 1785969188
+updated_at = 1790919064
+weight = 0.0
+issue_number = 177
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/177"
+issue_closed_at = 1790919066

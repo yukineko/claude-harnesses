@@ -22,7 +22,6 @@ fn session_start_matchers() -> Vec<String> {
 }
 
 #[test]
-#[ignore = "backlog 23869ff7: open defect, remove ignore when fixed"]
 fn session_start_matcher_covers_compact() {
     let ms = session_start_matchers();
     assert!(

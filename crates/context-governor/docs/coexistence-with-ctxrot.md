@@ -87,8 +87,10 @@ ctxrot surfaces *its own carryover note*; the two read different stores and inje
 side by side. They are also neatly anti-correlated on the trigger: on
 `source == "compact"` CG's rehydrator is *most* active while ctxrot's restore
 deliberately stays silent, so the post-compact handoff is owned by CG; on
-`startup`/`resume`/`clear` ctxrot's carryover leads. Even when both fire, the
-injections are independent text blocks.
+`startup`/`resume`/`clear` ctxrot's carryover leads. ctxrot's hooks.json matcher
+(`startup|resume|clear`) does not even spawn it on `compact`, and its handler also
+returns `None` there, so there is no double injection on `compact`. On
+`startup`/`resume`/`clear` both can fire; the injections are independent text blocks.
 
 ### PreCompact — both are **side effects**, and **neither blocks**
 
@@ -108,7 +110,10 @@ injections are independent text blocks.
 backing-store entry, ctxrot into a markdown note on disk. Neither blocks (CG always
 `Proceed`s; ctxrot only writes a note and exits 0), so compaction proceeds regardless
 of order, and each side's snapshot is independently recoverable afterward (CG via the
-SessionStart rehydrator, ctxrot via its SessionStart restore).
+SessionStart rehydrator, which is routed on `compact` by CG's hooks.json matcher
+`startup|resume|clear|compact`; ctxrot's rescue note is read back by its SessionStart
+restore on a later `startup`/`resume`/`clear`, NOT on `compact` — restore returns `None`
+there and ctxrot's own matcher excludes `compact`).
 
 ## Non-overlapping events (for completeness)
 

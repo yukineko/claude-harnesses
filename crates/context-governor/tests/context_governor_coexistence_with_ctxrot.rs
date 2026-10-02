@@ -187,10 +187,11 @@ fn session_start_emits_valid_envelope_and_exits_zero() {
     );
 }
 
-/// SessionStart on `source == "compact"`: this is exactly where CG's rehydrator
-/// is *most* active and ctxrot's restore deliberately stays silent. CG must
-/// still emit a valid envelope and exit 0. (No snapshot exists here, so the
-/// envelope is the no-op `{}` — the point is that CG never blocks SessionStart.)
+/// SessionStart on `source == "compact"`: crash-freedom only. The binary is
+/// invoked directly (bypassing the hooks.json matcher) against an EMPTY store,
+/// so this proves just that CG emits a valid envelope and exits 0 on a compact
+/// source. It does NOT prove routing or rehydration; those are covered by
+/// `tests/backlog_565fb2a8.rs`.
 #[test]
 fn session_start_on_compact_source_exits_zero() {
     let td = tempfile::tempdir().expect("cwd");

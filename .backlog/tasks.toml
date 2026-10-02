@@ -13432,9 +13432,12 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "観測 2026-10-03、branch flow-dc66/condukt-fixture (abd9b7c6 + precedent/escalate fixture 修正)。集計で 871 passed / 1 failed が 1 回、その後 4 回連続 0 failed。失敗テスト名は未取得。読み (a) a6608aa0 と同類の pid 名 temp fixture 再入が他モジュールにも残る / (b) 並行セッションの cargo test と固定パス fixture の干渉。見分け方: 20 回回して FAILED 行を保存し、temp_dir()+process::id() 命名の fixture を grep。"
+notes = """
+観測 2026-10-03、branch flow-dc66/condukt-fixture (abd9b7c6 + precedent/escalate fixture 修正)。集計で 871 passed / 1 failed が 1 回、その後 4 回連続 0 failed。失敗テスト名は未取得。読み (a) a6608aa0 と同類の pid 名 temp fixture 再入が他モジュールにも残る / (b) 並行セッションの cargo test と固定パス fixture の干渉。見分け方: 20 回回して FAILED 行を保存し、temp_dir()+process::id() 命名の fixture を grep。
+
+[identified 2026-10-03, independent verifier on flow-dc66/condukt-fixture] cargo test -p condukt --no-fail-fast x3: run1/run2 exit 101, run3 exit 0. Same single failure both times: diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded at crates/condukt/src/diffrisk_record.rs:537 (outcomes.len()==2 'one record per invocation', left 1 right 2). Passes 3/3 when diffrisk_record runs alone. Hypothesis (unverified): process-global env mutation by sibling tests (claim.rs:2567 set_var HOME; lessons.rs:249 LESSONS_STORE_DIR) racing Config::load()/state dir. Not yet run on main to confirm it predates the branch."""
 created_at = 1790981495
-updated_at = 1790981495
+updated_at = 1790982063
 weight = 0.0
 issue_number = 1084
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1084"

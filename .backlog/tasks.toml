@@ -14429,3 +14429,65 @@ updated_at = 1790922442
 weight = 0.0
 issue_number = 1058
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1058"
+
+[[task]]
+id = "ca6e5c95"
+title = "donegate:giveup:<check> は project の check 名から偽造できる (a5bc063a の予約と同じ穴が 1 段隣に残っている)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "donegate",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+2026-10-02、a5bc063a (refuse() の give-up に永続痕跡を付ける) の作業中に発見。
+**a5bc063a で広げてはいない既存の穴**であり、そこで一緒に直さずここへ分離した。
+
+事実 (測定済み、利害関係のない独立 agent が実バイナリに対して観測):
+
+`crates/donegate/src/main.rs` の `Outcome::check_kind` は
+  Outcome::Blocked => name.to_string()          -> signature `donegate:<name>`
+  Outcome::GaveUp  => format!("giveup:{name}")  -> signature `donegate:giveup:<name>`
+を作る。`overwatch::violation::normalize_signature` の `norm` は trim + lowercase +
+space->dash しかしないので、**小文字の非空文字列はすべてどこかの check 名から到達可能**。
+したがって `[[check]] name = "giveup:x"` を宣言した project の **block** は、
+check `x` の **give-up** と byte-identical な signature を生む。a5bc063a で
+`undetermined` 名前空間に対して入れた config ロード時の予約 (`RESERVED_DISCRIMINATOR`)
+と同じ対策が、`giveup` 名前空間にはまだ入っていない。
+
+実証: a5bc063a の teeth control
+`the_forgery_detector_catches_a_sentinel_in_the_checks_red_namespace`
+(`crates/donegate/tests/refusal_giveup_sentinel.rs`) が、まさに
+`donegate:giveup:no-verdict` を project の check 名から到達させて検出器が噛むことを
+示している。`no-verdict` は予約名前空間の外なので config は拒否されず、走って block し、
+give-up し、同一 signature に到達する。
+
+**深刻度 — 向きが逆なので a5bc063a より低い**（独立 agent の指摘を採用、再掲）:
+衝突の向きは **over-reporting であって fail-open ではない**。check `giveup:x` の
+*block* が check `x` の *give-up* と混ざるので、強制された block が
+「ゲートが強制をやめた」と読まれうる = **常に警報側**であって、安心側ではない。
+a5bc063a で直したもの (判定していないのに痕跡が無い) は逆向き＝安心側だった。
+だから別起票で妥当であり、a5bc063a をこれで止めるべきではないと判断した。
+
+是正案 (未確定、実装前に測ること):
+`config::RESERVED_DISCRIMINATOR` を単数から集合へ広げ、`giveup` も予約する。
+`reserved_check_name` は既に normalize 済みの名前で判定しているので、
+判定ロジックの形は変えずに済むはず。ただし a5bc063a の
+`Declaration::ReservedCheckName` の doc が明示したコストと同じものが
+`giveup:*` を正当に使っていた project にも掛かるので、
+**どの名前空間を予約するかは観測可能な衝突の有無で決める**こと。
+
+done 条件:
+(1) project の check 名から `donegate:giveup:<...>` へ到達できないことを、
+    利害関係のない agent が書いた property test が RED 先行で示す。
+(2) 予約が silent drop ではなく block に解決する (a5bc063a と同じ fail-closed)。
+(3) 予約名前空間が増えたことを `Declaration::ReservedCheckName` の doc と
+    ユーザー向け remedy 文に同一コミットで反映する (CLAUDE.md 4)。
+"""
+created_at = 1790923505
+updated_at = 1790923505
+weight = 0.0
+issue_number = 1059
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1059"

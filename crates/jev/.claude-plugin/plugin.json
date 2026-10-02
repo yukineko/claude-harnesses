@@ -1,0 +1,16 @@
+{
+  "name": "jev",
+  "version": "0.1.0",
+  "description": "v0.1.0: advisory-only wrapper for jev (TypeSafe AI's \"System One\" model), which returns typed, calibrated decisions — Noul (probability), Choice (option + distribution), Score (rubric) — instead of text. NOT subscription-native: jev is a metered third-party cloud API ($0.042/M input tokens, measured 2026-10-02), so this plugin is INERT BY DEFAULT and does nothing at all without TYPESAFE_API_KEY exported. Two properties are enforced by types rather than promised: (1) the answer type has no \"clean\" variant, so jev can never clear anything and \"jev approved\" is indistinguishable from \"jev never ran\" — which is what makes a missing key a structural no-op rather than a documented intention; (2) no coupling to harness_core::verdict::Verdict in either direction, so an external service structurally cannot hold block/allow authority (CLAUDE.md section 7). With no key the client performs ZERO network calls, pinned by counting transport invocations across four environments (unset / empty / non-UTF-8 / present) and observed RED before GREEN. The credential is read from the environment only (never a flag) and travels to curl through a stdin config, never argv, so it is not visible in ps. Every call is appended to a local usage ledger recording tokens, model and latency — never the evaluated state. Manual: one bundled Rust binary (check / ask / ledger), no hooks.",
+  "author": {
+    "name": "yukineko"
+  },
+  "keywords": [
+    "advisory",
+    "typesafe",
+    "system-one",
+    "calibrated",
+    "classification",
+    "rust"
+  ]
+}

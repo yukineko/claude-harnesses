@@ -1,0 +1,45 @@
+#!/bin/sh
+# jev plugin launcher — selects the per-platform binary bundled in this dir.
+#
+# Exit policy: 127 with a loud message, NOT 1 and NOT 0.
+#
+# curate's launcher exits 1 on a missing binary and beacon's exits 127. jev
+# follows beacon, and the reason is the same reason jev exists in the shape it
+# does: jev is advisory, so a caller is entitled to carry on without it — but
+# it must not be able to mistake "the launcher never ran" for "jev was
+# consulted and had nothing to say".
+#
+# - exit 0 would be the fail-open: a caller reading only the exit code would
+#   record a successful consultation that never happened.
+# - exit 1 is jev's documented code for "observably not configured", which is
+#   a *determined* answer about the environment. A missing binary is not that;
+#   it is "could not determine", and reusing code 1 would collapse the two
+#   (CLAUDE.md §3).
+#
+# 127 is outside jev's own three codes (0 / 1 / 10) and is the conventional
+# "command not found", so it cannot be confused with any verdict this tool
+# produces.
+root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+case "$(uname -s)" in
+  Linux)  os=linux ;;
+  Darwin) os=darwin ;;
+  MINGW*|MSYS*|CYGWIN*) os=windows ;;
+  *)      os="$(uname -s)" ;;
+esac
+case "$(uname -m)" in
+  x86_64|amd64)   arch=x86_64 ;;
+  arm64|aarch64)  arch=arm64 ;;
+  *)              arch="$(uname -m)" ;;
+esac
+
+ext=""
+[ "$os" = windows ] && ext=".exe"
+
+binary="$root/jev-$os-$arch$ext"
+if [ -x "$binary" ]; then
+  exec "$binary" "$@"
+fi
+
+echo "jev: '$*' did NOT run (no bundled binary for $os-$arch at $binary), so its result is UNKNOWN — not 'not configured' and not success. Build it with scripts/build-plugin-bin.sh for $os-$arch, or remove the jev plugin." >&2
+exit 127

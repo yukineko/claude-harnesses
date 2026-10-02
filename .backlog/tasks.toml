@@ -13527,3 +13527,209 @@ updated_at = 1790910537
 weight = 0.0
 issue_number = 1016
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1016"
+
+[[task]]
+id = "815f21bf"
+title = "jev A1: scout の施策スコアリング/タグ分類/重複検出に jev を advisory 配線する"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "jev",
+    "ranking",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "プリミティブ: Score(影響度) + Choice(docs/backlog-tag-taxonomy.md のタグへ分類) + Noul(既存 backlog と同一課題か)。jev に渡す権限は【並び順とタグ候補のみ】— 施策の採否・件数は変えない。jev 不在時の挙動は現状と完全に同一であること(既存 harness_core::scorer の順序そのまま)。配線前に docs/jev-integration-scenes.md の Tier A 共通チェック3点を満たすこと: (1) jev の答えを捨てるコードパスがテストされている (2) 順序が変わるだけで集合の要素数が変わらない (3) キー不在でネットワーク呼び出し0回を消費者側でも RecordingTransport で数える(crates/jev/tests/no_key_no_network.rs が手本)。正典: docs/jev-integration-scenes.md A1。"
+created_at = 1790914389
+updated_at = 1790914389
+weight = 0.0
+issue_number = 1022
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1022"
+
+[[task]]
+id = "807d00d7"
+title = "jev A2: backlog triage の重複検出と weight 提案に jev を advisory 配線する"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "jev",
+    "ranking",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "プリミティブ: Noul(同一課題か) + Score(weight 提案)。権限は【並び順のみ】— priority は上書きしない。pending 552件(測定 2026-10-02 / 5aadf2cf)という規模が動機。jev 不在時は既存の (priority, created_at) 順に戻るだけであること。dedup で消す側は破棄ではなくマージ記録として残す(Tier A 共通チェック2)。正典: docs/jev-integration-scenes.md A2。"
+created_at = 1790914390
+updated_at = 1790914390
+weight = 0.0
+issue_number = 1023
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1023"
+
+[[task]]
+id = "cc43f246"
+title = "jev A3: overwatch review-queue / continuous-audit の finding 意味的重複排除と重大度順に jev を advisory 配線する"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "jev",
+    "ranking",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "プリミティブ: Noul(同じ欠陥か) + Score(重大度)。権限は【並び順のみ】。**CONFIRMED/REFUTED/UNVERIFIED の三値判定には触らない** — jev を verifier 側に置くことは禁止(CLAUDE.md 第6節: continuous-audit は finder と verifier のモデル多様性を MUST とし、生成と検証が盲点を共有すると検証は儀式になる)。dedup とランキングは finding 集合の整理であって検証ではない、という境界を越えないこと。jev 不在時は既存のキーワード一致 dedup のまま。正典: docs/jev-integration-scenes.md A3。"
+created_at = 1790914391
+updated_at = 1790914391
+weight = 0.0
+issue_number = 1024
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1024"
+
+[[task]]
+id = "4cabfc54"
+title = "jev A4: ctxrot / context-governor / playbook の注入候補関連度に jev を advisory 配線する"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "jev",
+    "ranking",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "プリミティブ: Score(関連度)。権限は【予算内で何を先に入れるかの順序のみ】。jev 不在時は既存の harness_core::retrieval / text_index スコアのまま。注意: 注入候補のテキストは外部由来でありうるので、敵対的テキストで答が動く落とし穴(docs/jev-integration-scenes.md §3)が直接効く — 順序だけなので影響は限定されるが、単独で信じないこと。正典: docs/jev-integration-scenes.md A4。"
+created_at = 1790914419
+updated_at = 1790914419
+weight = 0.0
+issue_number = 1025
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1025"
+
+[[task]]
+id = "e2abd886"
+title = "jev A5: stuckguard の near-repeat 検知に jev の追加エスカレーション信号を advisory 配線する"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "jev",
+    "ranking",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "プリミティブ: Noul(同じ試行の繰り返しか)。現状は Jaccard。権限は【上げる方向のみ】— Jaccard が出した警告を jev が消せてはならない(消せると fail-open)。jev 不在時は Jaccard 単独の判定そのまま。正典: docs/jev-integration-scenes.md A5。"
+created_at = 1790914420
+updated_at = 1790914420
+weight = 0.0
+issue_number = 1026
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1026"
+
+[[task]]
+id = "5b5d196a"
+title = "jev B1: blastguard が解析不能で Ask にした時の理由文を jev に書かせる(テキストのみ)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "jev",
+    "annotation",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "プリミティブ: Noul / Choice。権限は【テキストのみ】。**Ask→Allow も Ask→Deny も禁止**: Decision::Ask は crates/blastguard/src/model.rs:9 のとおり『コマンドについての判定ではなく、判定を推測することの拒否』なので、jev に Deny を許すと外部サービスが deny 権限を持つ(第7節違反)、Allow を許すと古典的 fail-open(第3節違反)。残るのは理由文を添えることだけで、それは人間が Ask に答える材料として実際に有用。GATE crate を触るので rollout は --canary が必要。jev 不在時は現在の Ask 文面そのまま。正典: docs/jev-integration-scenes.md B1。"
+created_at = 1790914422
+updated_at = 1790914422
+weight = 0.0
+issue_number = 1027
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1027"
+
+[[task]]
+id = "1bca93f9"
+title = "jev B2: prompt-injection の追加警告を jev で出す(既存警告は消せない)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "jev",
+    "annotation",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "プリミティブ: Noul(これはエージェント宛の命令か)。権限は【警告の追加のみ】— 既存の決定論検出が出した警告を消せてはならない。**.githooks/ 配下からは呼ばない**(あちらは stdlib-only python でネットワーク非依存を維持する。第7節はゲートの実体を local に置きネットワークを前提にしないことも求める)。jev 不在時は既存の決定論検出のみ。注意: injection 検出は入力が本質的に敵対的なので、jev の『敵対的テキストで答が動く』落とし穴が最も強く効く領域 — だからこそ追加警告止まりにする。正典: docs/jev-integration-scenes.md B2。"
+created_at = 1790914423
+updated_at = 1790914423
+weight = 0.0
+issue_number = 1028
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1028"
+
+[[task]]
+id = "1f88f236"
+title = "jev B3: specguard brief の second opinion を jev の注記として添える(verdict は出させない)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "jev",
+    "annotation",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "プリミティブ: Noul(この引用正典ルールはこのタスクを覆うか)。権限は【注記のみ】。**covered も not-covered も出させない**: covered は許容側(divert せず実装へ進む)なので出せると正典が無いのに『ある』と言える=fail-open。not-covered は書き込み側(specforge に spec を起こさせる)なので出せると既に正典がある領域に二重 spec を起こせる。どちらも駄目なので jev は『この引用ルールは関連しそう/しなさそう』という注記だけ。verdict は既存の決定論ロジックと人間が決める。jev 不在時は既存の三値 verdict のみ。正典: docs/jev-integration-scenes.md B3。"
+created_at = 1790914425
+updated_at = 1790914425
+weight = 0.0
+issue_number = 1029
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1029"
+
+[[task]]
+id = "960f40bd"
+title = "backlog notes が成果物を session scratchpad に預けるため、待機中の p1 が存在しないファイルを前提にし続ける"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "process-hygiene",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "実測 2026-10-02、測定点 5aadf2cf。p1 2件が『パッチは scratchpad にある、ユーザーの適用待ち』として待機していたが、参照先はすべて消失している。find /tmp/claude-1000 -name '<name>' が 0 ヒット: githooks-8696dd7e.patch (8696dd7e の notes) / githooks-0c277117.patch / githooks-0c277117-v2.patch (0c277117 の notes、sha256 c27f9973... まで記録されている)。原因は構造的: scratchpad は /tmp/claude-1000/<project>/<session-id>/ で session 固有なので、起票したセッションが終われば別セッションからは到達できない。結果、notes は『あとは人間が当てるだけ』と読めるのに実体が無く、再作成されるまで item は永久に待機する (0c277117 は 2026-10-01 のユーザー裁定『今のまま当てる』から 1 日以上そのまま)。両方の読み: (a) 実在の欠陥 = 成果物の置き場所の選択ミス (b) 意図的 = パッチは一時的な提案で消えてよい。見分け方: notes が『ユーザーの適用待ち』と書いているかどうか。待ちを宣言しているなら成果物は永続化されていなければならない。是正案: git 管理下 (例 docs/pending-patches/ か専用ブランチ) に置く、または scratchpad に置くなら notes に sha256 と再作成手順を必ず併記する。sha256 だけでは再作成できない (今回それが起きた)。"
+created_at = 1790914691
+updated_at = 1790914691
+weight = 0.0
+issue_number = 1030
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1030"
+
+[[task]]
+id = "ab34ec88"
+title = "audit_rounds ledger が cwd キーのため Continuous-Audit の計測系列が復元不能 — 1b525a2c の完了条件が判定できない"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "measurement-integrity",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "実測 2026-10-02、測定点 5aadf2cf。この機械に audit_rounds.jsonl は 1 本だけ存在する (find ~/.overwatch -name audit_rounds.jsonl)。/home/hiroyuki_nakayama/.overwatch/claude-harnesses-cdb75c4d/overwatch/audit_rounds.jsonl、3 行、mtime 2026-07-13 12:46。中身は round='1'/'2'/'3'、ts 1783669089/1783669984/1783913834 (いずれも 2026-07 相当)、new_findings 7/12/0、unverified フィールド自体が無い。main repo root から overwatch audit-metrics を実行すると 'rounds recorded: 3' / 'converging (last 3 rounds): NO'。一方 1b525a2c の notes は【計測 2026-09-29 @8ddf4504】として rounds 7、直近 3 = 2026W29 (new=14) / 2026W29b (new=15) / 2026W39 (new=25, confirmed=19, unverified=6, tests=19) を記録している。この 3 ラウンドは現 ledger に 1 件も存在せず、round の命名規則 (週ラベル vs 連番) も unverified フィールドの有無も違う。7/13 以降 ledger は書かれていない。最も整合的な読みは item 自身の notes が警告していた罠がそのまま起きたというもの: 'ledger は cwd でキーされる。worktree cwd は別 ledger に書く' — worktree から record した結果が worktree ごと reap されて消えた。両方の読み: (a) 実在の欠陥 = ledger の置き場所が cwd 依存で、worktree 運用 (CLAUDE.md 8 が必須としている) と構造的に両立しない (b) 記録側の誤り = 2026-09-29 の数値が tool 出力ではなく手書き。見分け方: overwatch の project key 導出コードを読み、worktree cwd が main と別キーになるかを確認する。別キーになるなら (a)。影響: 1b525a2c の完了条件『2 ラウンド連続 converging:true』は、系列が復元不能なので現状では判定できない (CLAUDE.md 2 の『測れない』ケース)。是正しない限り、何ラウンド回しても worktree から record すれば同じことが起きる。是正案: ledger の project key を git の common-dir (worktree 間で共有される) から導出する。"
+created_at = 1790914693
+updated_at = 1790914693
+weight = 0.0
+issue_number = 1031
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1031"
+
+[[task]]
+id = "9eaa5126"
+title = "~/.overwatch に temp cwd 由来の project dir が 290 個溜まっている (実ユーザーのストアへの書き込み)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "test-hygiene",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "実測 2026-10-02、測定点 5aadf2cf。ls ~/.overwatch | grep -c '^-tmp' = 290。dir 名は -tmp<rand>-<hash> の形で、project key が cwd から導出されるため cwd=/tmp/... で走った何かが実 HOME のストアへ書いている。中身は overwatch/review_findings.jsonl や dispositions.jsonl。mtime は 2026-09-07〜09-09 に集中し、それ以降は増えていない (最新の非 tmp dir は 2026-09-09 の stall-evidence-b62bde0d)。crates/overwatch/tests/ の主要テストは .env('HOME', home) で temp HOME を張っているので (audit_round.rs:48 等)、これらのテストは原因ではない。両方の読み: (a) 実在の欠陥 = HOME を張らない経路 (スクリプト・手動実行・別クレートのテスト) が実ストアを汚している (b) 既に解消済み = 09-09 以降増えていないので原因は既に直っており、残骸の掃除だけが必要。見分け方: HOME を張らずに overwatch を呼ぶ経路を grep する (tests 以外の scripts/ と、HOME を設定しないテスト)。増えていないことは『直った』の証拠ではなく『最近走っていない』とも読めるので、再現を試すこと。影響: 実ストアの肥大 (undetermined.jsonl は 5.5MB、violations.jsonl は 1.5MB)。review_findings が汚染されていれば review-queue の集計にも効く。"
+created_at = 1790914696
+updated_at = 1790914696
+weight = 0.0
+issue_number = 1032
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1032"

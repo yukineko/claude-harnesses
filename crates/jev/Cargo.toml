@@ -1,0 +1,26 @@
+[package]
+rust-version.workspace = true
+name = "jev"
+version = "0.1.0"
+edition = "2021"
+description = "Advisory-only wrapper for jev (TypeSafe AI System One): typed, calibrated decisions used as a hint and never as a gate. Disabled by default — with no TYPESAFE_API_KEY it never opens a socket, and its answer type cannot express \"clean\", so its absence is a structural no-op. NOT subscription-native: jev is a metered third-party cloud API."
+license = "MIT"
+
+[[bin]]
+name = "jev"
+path = "src/main.rs"
+
+[dependencies]
+harness-core = { path = "../harness-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

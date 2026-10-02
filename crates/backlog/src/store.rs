@@ -1555,6 +1555,116 @@ pub fn sync_plan(tasks: &[Task]) -> Vec<SyncAction> {
     plan
 }
 
+/// Which half of the mirror a `sync` run is allowed to touch.
+///
+/// The two arms of [`sync_plan`] do not have the same blast radius, so an
+/// operator cannot always want both. A close is bookkeeping catch-up on an
+/// issue that already exists; a create PUBLISHES a brand-new public issue per
+/// task. Measured 2026-10-02 at measurement point `448ff46f`, this store
+/// planned 58 creates and 467 closes, and the ruling was to reconcile the
+/// closes and leave the pending tasks unmirrored — which the single `--apply`
+/// switch could not express (the plan follows store order, so `--limit`
+/// truncates across both kinds).
+///
+/// [`Both`](SyncOnly::Both) is the default and is exactly what every
+/// pre-existing `backlog sync` invocation already meant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+pub enum SyncOnly {
+    /// Reconcile both arms (the pre-existing behaviour).
+    #[default]
+    Both,
+    /// Only file issues for pending tasks that have none.
+    Create,
+    /// Only close issues whose task is already done/cancelled.
+    Close,
+}
+
+impl SyncOnly {
+    /// Whether `action` is in scope for this selection.
+    ///
+    /// Written as an exhaustive match rather than a `matches!` guard so that
+    /// adding a third [`SyncAction`] variant is a compile error here instead of
+    /// silently defaulting to "in scope" (an unreviewed GitHub-visible write).
+    pub fn allows(self, action: &SyncAction) -> bool {
+        match (self, action) {
+            (SyncOnly::Both, _) => true,
+            (SyncOnly::Create, SyncAction::Create { .. }) => true,
+            (SyncOnly::Close, SyncAction::Close { .. }) => true,
+            (SyncOnly::Create, SyncAction::Close { .. })
+            | (SyncOnly::Close, SyncAction::Create { .. }) => false,
+        }
+    }
+}
+
+/// Narrow a plan to one arm. Pure; preserves the plan order `sync_plan` set.
+///
+/// Applied BEFORE any `--limit` truncation on purpose: `--only close --limit
+/// 50` must mean "fifty closes", not "the first fifty actions, of which some
+/// happen to be closes".
+pub fn filter_sync_plan(plan: Vec<SyncAction>, only: SyncOnly) -> Vec<SyncAction> {
+    plan.into_iter().filter(|a| only.allows(a)).collect()
+}
+
+/// How far this store GitHub mirror has drifted from the store itself.
+///
+/// Reported by the SessionStart hook. Every individual mirror failure is
+/// already surfaced where it happens (`add` prints the degraded push on
+/// stderr, `sync --apply` exits non-zero), but nothing restated the running
+/// total — so a `gh`-absent machine accumulated 467 unclosed issues without a
+/// single visible signal (measured 2026-10-02 at `448ff46f`: 2 confirmed
+/// closes across 800 terminal rows). A hook has no exit code and no stderr the
+/// agent ever sees, which is why this has to reach `additionalContext`
+/// (CLAUDE.md §1: silence is not an acceptable degrade).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MirrorDrift {
+    /// Pending tasks with no issue yet (`sync --only create` would file these).
+    pub creates: usize,
+    /// done/cancelled tasks whose issue was never confirmed closed
+    /// (`sync --only close` would close these).
+    pub closes: usize,
+    /// Whether this store carries ANY linked issue at all.
+    ///
+    /// This is the anti-noise witness, and it is store-only (no git, no
+    /// network, no `gh` invocation). `sync_plan` names every unmirrored pending
+    /// task as a create regardless of whether the repo even has a GitHub
+    /// remote, so an ungated report would fire on every non-GitHub project and
+    /// train the reader to skip the line. One linked issue anywhere in the
+    /// store is deterministic proof that reconciliation means something here.
+    ///
+    /// KNOWN GAP, stated rather than papered over: a GitHub repo whose VERY
+    /// FIRST mirror attempt failed carries no linked issue yet, so it stays
+    /// silent until one succeeds. Closing that gap needs the remote itself (an
+    /// `is_github_remote` check), which this function deliberately does not do
+    /// — it is pure. Tracked in the backlog.
+    pub mirror_in_use: bool,
+}
+
+impl MirrorDrift {
+    /// Whether there is drift worth stating to the operator.
+    pub fn is_reportable(self) -> bool {
+        self.mirror_in_use && (self.creates > 0 || self.closes > 0)
+    }
+}
+
+/// Summarize the mirror drift of `tasks`. Pure: same inputs, same answer.
+///
+/// Derived from [`sync_plan`] rather than re-deriving the shapes, so the report
+/// can never name a different set of work than the command that fixes it.
+pub fn mirror_drift(tasks: &[Task]) -> MirrorDrift {
+    let plan = sync_plan(tasks);
+    MirrorDrift {
+        creates: plan
+            .iter()
+            .filter(|a| matches!(a, SyncAction::Create { .. }))
+            .count(),
+        closes: plan
+            .iter()
+            .filter(|a| matches!(a, SyncAction::Close { .. }))
+            .count(),
+        mirror_in_use: tasks.iter().any(|t| t.issue_number.is_some()),
+    }
+}
+
 /// A mirror action that GitHub actually confirmed. Only confirmations reach
 /// the store — a failed `gh` call produces no `SyncOutcome` at all, so the
 /// corresponding task keeps the exact shape that put it in the plan and the

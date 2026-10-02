@@ -166,6 +166,13 @@ enum Command {
         /// Cap how many actions to perform in one run (0 = no cap).
         #[arg(long, default_value_t = 0)]
         limit: usize,
+
+        /// Which half of the mirror to reconcile. `close` catches up on issues
+        /// whose task is already finished; `create` PUBLISHES a new public
+        /// issue per unmirrored pending task. Defaults to `both`, which is what
+        /// `sync` has always done.
+        #[arg(long, value_enum, default_value = "both")]
+        only: store::SyncOnly,
     },
 
     /// Edit a task's fields
@@ -1147,10 +1154,12 @@ fn run(cli: Cli) -> Result<()> {
             mirror_close_for(&tasks_path, &id);
         }
 
-        Command::Sync { apply, limit } => {
+        Command::Sync { apply, limit, only } => {
             let tasks_path = store_path()?;
             let tasks = store::load(&tasks_path)?;
-            let mut plan = store::sync_plan(&tasks);
+            // Scope BEFORE truncating: `--only close --limit 50` must mean
+            // fifty closes, not the first fifty actions of a mixed plan.
+            let mut plan = store::filter_sync_plan(store::sync_plan(&tasks), only);
             if limit > 0 && plan.len() > limit {
                 plan.truncate(limit);
             }

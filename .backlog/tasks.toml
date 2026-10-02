@@ -13233,3 +13233,18 @@ updated_at = 1790947616
 weight = 0.0
 issue_number = 1062
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1062"
+
+[[task]]
+id = "7d0246a2"
+title = "check-fail-open が #[cfg(test)] で宣言された module のファイルを production として数える (stuckguard verdict_monotonicity.rs:110 の偽陽性)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-03 flow batch3 再測定 (main dbbd3a84): crates/stuckguard/src/verdict_monotonicity.rs は main.rs:25-26 の #[cfg(test)] mod verdict_monotonicity で宣言された test 専用 module。:110 の Undetermined(_) => SessionState::default() は mutation 用の意図的に壊したコピー (allowed_to_carry_on_failing_open) だが、scanner の test 領域除外はファイル内の cfg(test) しか見ないので baseline に計上される。読み (a) scanner の除外漏れ / (b) 意図的に数える。見分け方: mod 宣言側の cfg(test) を辿る fixture テストを書き、scanner が数えるかを観測する。"
+created_at = 1790978584
+updated_at = 1790978584
+weight = 0.0
+issue_number = 1063
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1063"

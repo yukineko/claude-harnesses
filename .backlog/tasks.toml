@@ -1064,9 +1064,63 @@ status = "pending"
 notes = """
 2026-08-07 の compass 再オリエンテーションで人間が裁定した次の ONE 右サイズの一手。DoD9 の完了条件の軸（是正完了）を実際に動かす唯一の候補。同一 shape は reviewgate P1（diff 取得失敗が空 diff = 変更なしへ潰れ無診断で allow）と propguard F-2 で2 crate 確認済み。手順: (1) shape を機械検出可能な述語として書き下す（走査/diff/subprocess の取得失敗が空コレクションへ落ち、その空が下流で対象なし=合格と読まれる形）、(2) 監査済み 7 crate を横断で当て逐語引用つきで列挙（辿れなかったは UNVERIFIED であって不在の証明ではない）、(3) 各ヒットを利害のない別 agent が fault injection で RED 先行観測してから是正 (F->P)、(4) 是正後に同じ述語を再実行して単調減少を観測。述語が 0 件を返したときは clean ではなく『この述語では見つからなかった』と報告すること。
 
-[re-measured 2026-10-02 @e672436b] Step (1) exists: fail-open-guard's empty-collection fallback class (b0cacd15) is a machine predicate and is advisory, scored on the ratchet. On a 2026-10-02 pre-commit run it listed 5 hits: blastguard/src/scope.rs:1032 (.unwrap_or(false)); overwatch/src/review_gate_decisions.rs:134 (Err(_) maps to Vec::new()); overwatch/src/store.rs:376 (Known(None)/Undetermined map to Vec::new()); specguard/src/scope.rs:506 (Undetermined maps to Vec::new()); stuckguard/src/verdict_monotonicity.rs:110 (Undetermined maps to SessionState::default()). Each hit still needs a downstream-consumer trace before it counts as a fail-open, because an empty fallback is not automatically permissive. Then an independent F->P per GATE crate, one crate per commit."""
+[re-measured 2026-10-02 @e672436b] Step (1) exists: fail-open-guard's empty-collection fallback class (b0cacd15) is a machine predicate and is advisory, scored on the ratchet. On a 2026-10-02 pre-commit run it listed 5 hits: blastguard/src/scope.rs:1032 (.unwrap_or(false)); overwatch/src/review_gate_decisions.rs:134 (Err(_) maps to Vec::new()); overwatch/src/store.rs:376 (Known(None)/Undetermined map to Vec::new()); specguard/src/scope.rs:506 (Undetermined maps to Vec::new()); stuckguard/src/verdict_monotonicity.rs:110 (Undetermined maps to SessionState::default()). Each hit still needs a downstream-consumer trace before it counts as a fail-open, because an empty fallback is not automatically permissive. Then an independent F->P per GATE crate, one crate per commit.
+
+--- step (2) 消費経路トレース 完了 (2026-10-02、測定点 cb1d56dc) ---
+述語 (fail-open-guard の empty-collection fallback クラス b0cacd15) が出す 5 ヒットを
+1 件ずつ下流まで辿った。**5 件中 2 件だけが実際の fail-open**で、残り 3 件は空フォールバック
+だが permissive ではない。起票の再計測が言うとおり「空フォールバック = 自動的に fail-open」
+ではなかったので、ここに逐語で残す。
+
+[1] crates/blastguard/src/scope.rs:1032  .unwrap_or(false)  -> fail-open ではない
+    `fn is_real_dir` の IO 失敗が false ＝「root ではない」。この false は
+    `worktree_storage_roots` が候補を worktree_roots から**除外**する向きに働く。
+    worktree_roots は「再帰 rm を確認なしで Allow する」集合 (scope.rs:523-529 および
+    モジュール doc "Worktree storage roots"、ユーザー裁定 2026-09-30 / backlog 873651b9) なので、
+    除外は Allow 集合を**狭める**＝制限側。unwrap_or の既定値は正しく制限側に倒れている。
+
+[2] crates/overwatch/src/review_gate_decisions.rs:134  Err(_) => Vec::new()  -> **実在の fail-open**
+    `read_auto_approved()` の唯一の消費者は crates/overwatch/src/main.rs:899
+    `fn run_auto_approved`。count==0 のとき
+    "auto-approved: 0 decision(s) passed a gate without human review" と
+    "(no auto-approved decisions found)" を印字する。journal が読めなかった場合もここに落ちる
+    ので、**「人間のレビューを経ずに通ったゲートは無かった」と断言した出力**になる。これは
+    自律モードの監査窓口 (ゲートを削除せず記録付きで自答する、その記録を後から読む経路) そのもの
+    なので、CLAUDE.md 1 の「判定を持つかは消費のされ方で決まる」に該当する。
+    加えて同ファイルの `parse_auto_approved` は行ごとに `.ok()` で落とすので、壊れた JSONL は
+    黙って過少報告される (loop-parse-drop)。
+    -> 既存起票 afdcfd4d (p2) が同じ行を指している。そちらで是正する。
+
+[3] crates/overwatch/src/store.rs:376  Known(None) | Undetermined(_) => Vec::new()  -> **実在するが別件**
+    `read_jsonl_best_effort`。doc 自身が「scan_jsonl exists to avoid exactly this collapse」
+    「nothing that makes a DECISION should call one」と認めている既知の負債で、
+    `pub fn read_*` ラッパが 11 本ぶら下がっている (read_events / read_rollbacks /
+    read_review_findings / read_bridged_findings / read_bridged_entries / read_dispositions /
+    read_runtime_conflicts / read_review_findings_all / read_merge_conflicts /
+    read_merge_conflict_resolutions。read_audit_rounds だけ既に Determination を返す)。
+    消費者ごとに「決定に使っているか」を判定する必要があり、この item の範囲を超える。
+    -> 既存起票 f450adad (p2) と e8a61ec3 (p1) が同じ行とその消費者を指している。重複起票はしない。
+
+[4] crates/specguard/src/scope.rs:506  Undetermined(_) => Vec::new()  -> fail-open ではない
+    `relevant_file_map`。doc comment が CLAUDE.md 3 を名指ししたうえで、なぜここでは正当かを
+    書いている: この map は**加算的かつ advisory** で、base set は決して落とされず、この list から
+    verdict を計算するものは無い (監査者の読み順ヒント)。さらに「もし将来この list から何かを
+    結論するコードが出たら Determination を返すよう直せ」と前もって宣言している。
+    消費経路を辿っても verdict へ入る辺は無かった。
+
+[5] crates/stuckguard/src/verdict_monotonicity.rs:110  Undetermined(_) => SessionState::default()
+    -> fail-open ではない (**直してはいけない**)
+    `fn allowed_to_carry_on_failing_open` は "The same gate with the fail-closed arm REMOVED,
+    for the mutation test below" と宣言された**意図的な mutation twin**で、当該行には
+    `// THE DEFECT:` のコメントが付いている。本物のゲートは同ファイルの上の関数側。
+    ここを「直す」と mutation test が無意味になる。
+
+結論: この item の残作業は [2] の是正 1 件のみで、それは afdcfd4d が既に持っている。
+[3] は f450adad / e8a61ec3。[1][4][5] は是正対象ではない (述語の既知の非欠陥ヒットとして
+上の根拠ごと記録した)。step (4) の単調減少は [2] の是正で 5 -> 4 として観測する。
+"""
 created_at = 1786046693
-updated_at = 1790886024
+updated_at = 1790921196
 weight = 0.0
 issue_number = 214
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/214"

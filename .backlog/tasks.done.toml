@@ -23625,3 +23625,61 @@ weight = 0.0
 issue_number = 171
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/171"
 issue_closed_at = 1790917912
+
+[[task]]
+id = "0c277117"
+title = "docs/specs が map からも canon からも外れており、specguard はどこでも block しない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "L4",
+    "scout",
+    "verified",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+仕様が2つの互いに素な宇宙に分かれている。(1) specguard.toml の map exclude に glob で md 全体が入っているので、44本の docs/specs 配下の仕様書は全部 map の外。map は「仕様書が変わった」も「古びた」も原理的に観測できず、Status Changed は永久に「git が impl を触った」の意味しか持てない。(2) 同時に grep -c docs/specs specguard.toml は 0 で、8つの area の canon は crates 配下の README や DESIGN や docs/OVERVIEW。監査は README を読み map は docs/specs を指し、両者は交わらない。spec_doc はどの判定の入力にもならないラベル。しかも crate 粒度で 41 doc が 397 entry を覆う。(3) block がどこにも無い: specguard の呼び出しは post-merge (自称 never affects this hook exit code) と SessionStart (render_pending は3分岐すべて EXIT_OK、Undetermined すら警告を print して EXIT_OK) の2箇所だけ。commit 時も push 時も Stop 時も存在しない。(4) 結果、最後の spec 監査レポートは 2026-07-13 で以降 707 commit (うち crates 444)、.specguard-pending は存在せず SessionStart は何も print せず誰も走らせない — 監査自身しか立てられない sentinel が監査を促す唯一の合図という自己沈黙ループ。完了条件: canon と spec_doc を同じファイル集合に向けるか docs/specs を canon に加える。gate crate の glob に一致する entry が changed かつ spec_doc が null のとき push を止める決定論チェックを1本入れる (逃げ道は entry ごとの理由必須 ack のみ、check-claudemd-claims.py の no-bypass 規律に倣う)。実際に block された push を観測する。
+
+51151bed で取り込み済み: specguard map gate-check (変更された gate の map entry に spec_doc か理由付き ack が無ければ exit 1、判定不能は exit 2) と、gate 6 領域の canon への docs/specs 追加。残り: pre-push への配線 (パッチは scratchpad の githooks-0c277117.patch、未適用)。配線前の課題: main の map では gate crate の 44 entry がすべて spec_doc 無しなので、配線した瞬間に gate crate を触る push はすべて止まる。map は gitignore された機械ローカルのキャッシュで、無い worktree や未 sync の map では exit 2 になる。README.ja.md は未更新。
+
+2026-10-01 ユーザー裁定: 先に埋めてから配線する。44 entry に理由付きで docs/specs を紐付けるか理由付き ack を置き、pre-push パッチは map を先に最新化するよう直してから適用する。
+
+2026-10-02 flow (session 64554c4d): 残り6件の reasoned ack を a165c071 (branch condukt/run-20261002-043837-64928/a1, .specguard/spec-doc-acks.toml のみ) に作成、未マージ・独立 verifier 待ち。pre-push 配線パッチ githooks-0c277117-v2.patch (sha256 c27f9973..., session 389c3077 由来) は a165c071 上にクリーン適用可。使い捨て clone で RED 観測: ack/binding 無しの crates/propguard/src/probe_unspecced.rs を足した push が 'pre-push: BLOCKED - gate spec-doc check' exit 1。GREEN: docs/GLOSSARY.md のみの push は 'gate-check: ok' exit 0。未完: settings.json が .githooks/** の Edit/Write を deny しているため、パッチ適用は人間の操作が必要 (git apply で迂回しない)。crates/specguard/README.ja.md:191 は pre-push が map を再構築すると既に書いており、パッチ適用まで実挙動と食い違う。最新裁定 5364fd2d は未マージの session-389c3077 ブランチにのみ存在。
+
+2026-10-01 phase 2 を 5d37f2f2 で取り込み、specguard 0.2.70 を canary で rollout 済み。spec-map は git 管理外で紐づけが消えるため、git 管理の .specguard/spec-docs.toml (path, doc, reason) を新設し gate-check が読む。gate crate 7 つの対象ファイル 100 件を 68 件の紐づけと 32 件の理由付き ack で埋めた。pre-push パッチ v2 (scratchpad の githooks-0c277117-v2.patch) は push される tree の中で map を作り直してから gate-check する。main の map を写さない。シミュレーションで、紐づけ無しの新ファイルと存在しない doc への紐づけが exit 1、紐づけ済みと ack 済みが 0。残り: 紐づけ 68 件が本当にその doc に書かれているかを別 agent が照合中。照合が済んだらユーザーにパッチ適用を依頼する。
+
+2026-10-01 紐づけ 68 件の独立照合 (5d37f2f2): OK 43 / 弱い 7 / 取り違え 0 / 食い違い 18。例外 32 件はすべて妥当。紐づけ先の docs/specs 6 本はすべて冒頭に REVIEW-NEEDED (実装から逆算した下書き、正典として扱わない) とある。gate-check は理由付きで doc に紐づけば内容を見ずに通すため、パッチを当てると下書きの doc を根拠に push が通る。パッチ適用はユーザー判断待ち (先に doc を直すか、記録して当てるか)。crates/propguard/src/trust_worktree_tests.rs は紐づけも ack も無い (末尾 _tests は test 扱いにならない)。
+
+2026-10-01 ユーザー裁定: 今のまま当てる。チェックの役割は仕様書の無い gate ファイルの変更を止めることとし、仕様書の中身の正しさは b48ad137 などで別に直す。適用前に、slice 2/3 で増えた protection.rs 6 本と trust_worktree_tests.rs の紐づけか ack を入れ、gate-check が main..HEAD で 0 を返すことを確かめる。
+
+2026-10-02 /flow (session c9af4c58) 完了: 8a5cadcc (branch fork/p1-3items) で pre-push へ配線した。完了条件 3 つすべてを満たす。
+
+(1) 配線: .githooks/pre-push の既存の「push される tip ごとの使い捨て detached worktree」ループの中に 4 本目の blocking check を追加した。gate crate に触る range の tip ごとに、そのツリーから specguard を build し、そのツリーの中で `map build --baseline <base>` により map を作り直し、`map gate-check --base <base> --head <sha>` を走らせる。map を読まずに作り直すのは .specguard/spec-map.toml が gitignore された機械ローカルのキャッシュ (.gitignore:80) だからで、判定に効くのは追跡対象の .specguard/spec-docs.toml と .specguard/spec-doc-acks.toml だけ。specguard 自体も plugin cache ではなく push されるツリーから build する (古い cache binary は別の gate ロジックについて答えてしまう)。ループは push される ref ごとに determinate な base を `pushed_pairs` に記録するようにし、既存の変更ファイル収集と同じ range を使う。root commit は git の empty-tree object へ落とし、skip へは決して倒さない。rc=1 も rc=2 も block、specguard が build できないツリー・`map` subcommand を持たないツリーも block。
+
+(2) 埋め: 残っていたのは 2 ファイルだけだった。gate crate の src/**/*.rs 108 件を測ったところ 106 件は既に binding か ack で覆われており、未被覆は crates/overwatch/src/test_freshness.rs と crates/parallelguard/src/fault_injection_tests.rs のみ。両方に理由付き ack を追加した。
+
+(3) 観測 (使い捨て clone から bare remote への実 push。hook 有効、先行する 3 本の blocking check はすべて通過済み):
+- RED: binding も ack も無い新規 gate ファイル crates/propguard/src/probe_unspecced.rs → 「specguard map gate-check: BLOCKED — gate map entries changed in 5f709e6c..4595a2e3 without a spec doc」→「pre-push: BLOCKED — gate spec-doc check ... exited 1」。push 拒否、exit 1。
+- GREEN (チェックが走った方): ack 済みの crates/propguard/src/protection.rs を触る → 「specguard map gate-check: ok (5f709e6c..844bbe0e)」。exit 0。
+- GREEN (チェックが走らない方): docs/GLOSSARY.md のみの push → gate spec-doc 行が 1 行も出ない (grep -c = 0)。exit 0。
+- FAIL-CLOSED: 壊れた .specguard/spec-doc-acks.toml を覆い済み gate 変更と一緒に push → 「cannot determine (blocking): cannot parse ack file .../.git/prepush-typecheck.23791/.specguard/spec-doc-acks.toml」exit 2 で push 拒否。このメッセージ中のパスが使い捨て検査 worktree であること自体が、判定対象がこの machine ではなく push されるツリーである直接の証拠。
+probe commit は clone 側の無関係な pre-commit ゲート (version-bump / worktree-isolation) が観測に干渉しないよう `git commit-tree` で作った。検査対象の pre-push hook は無改変でフル実行している。
+
+【stale prose の訂正 — 2026-10-02 実測】
+(a) 「settings.json が .githooks/** の Edit/Write を deny しているため、パッチ適用は人間の操作が必要」は誤り。実測: ~/.claude/settings.json と .claude/settings.json の双方で 'githooks' のヒットは 0 件 (~/.claude/settings.local.json と .claude/settings.local.json は存在しない)。そういう deny はどの settings ファイルにも無く、人間の操作は不要だった。
+(b) githooks-0c277117.patch / githooks-0c277117-v2.patch (sha256 c27f9973...) はこの machine 上に存在しない。session scratchpad は session 固有なので、起票した session が終わった時点で失われている。配線は書き直した。
+(c) 「残り6件の reasoned ack を a165c071 に作成、未マージ」は古い。a165c071 は main と origin/main の双方の祖先であり、gate crate 7 つの protection.rs と crates/propguard/src/trust_worktree_tests.rs の ack は .specguard/spec-doc-acks.toml に入っている (行 23/135/139/143/147/151/155/159)。
+(d) 「crates/specguard/README.ja.md:191 は pre-push が map を再構築すると既に書いており、パッチ適用まで実挙動と食い違う」はそのとおりだったが、是正は散文ではなく実装側で行った (README の記述が正しく、実装が追いついていなかった)。README.ja.md:191 / README.md:189 / docs/specs/specguard.md:90 はいずれも現在の実装と一致するので無編集。
+(e) 新知見: crates/*/tests/*.rs は構造的にこのゲートの対象外。sync が作る test-only entry は impl_files = [] なので、gate-check の「impl files が変わった entry」に該当しない。実測: 未被覆の 99 件のうち 98 件が tests/ 配下で、7371a4ec~1..7371a4ec (blastguard/tests/fault_injection.rs 追加のみ) に対する gate-check は map を sync した後 exit 0。map が古くてその test ファイルを参照する entry が無い状態では exit 2 になるが、pre-push は push されるツリーの中で map を作り直すのでその経路には入らない。
+
+ついでに docs/gate-taxonomy.md の stale prose 3 件を同じ commit で直した: pre-push の凡例が「push 自体は止めない設計 (fail-soft)」と書いていた (bypass ledger 以降ずっと偽)、check-ci-red.py の行 (スクリプトは存在しない)、.github/workflows/gate-crates-sync.yml を引く備考 (この repo に .github/ は存在しない)。同表の「CI」列全体の棚卸しは別件として起票した。
+
+crate の中身は触っていないので plugin の version bump は無し (.githooks/ と .specguard/ と docs/ のみ)。したがって specguard の 3 ファイル lockstep と canary rollout も不要。"""
+created_at = 1785926764
+updated_at = 1790919910
+weight = 0.0
+issue_number = 147
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/147"
+issue_closed_at = 1790919912

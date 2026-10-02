@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "backlog"
-version = "0.3.22"
+version = "0.3.23"
 dependencies = [
  "anyhow",
  "clap",
@@ -663,7 +663,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.40"
+version = "0.2.41"
 dependencies = [
  "anyhow",
  "chrono",

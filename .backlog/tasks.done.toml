@@ -105,6 +105,7 @@ updated_at = 1786041740
 weight = 0.0
 issue_number = 199
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/199"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "3a0aabd7"
@@ -4304,6 +4305,7 @@ updated_at = 1785279948
 weight = 0.0
 issue_number = 290
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/290"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "7ab39215"
@@ -4408,6 +4410,7 @@ updated_at = 1788859901
 weight = 0.0
 issue_number = 291
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/291"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "50ad2c1e"
@@ -4606,6 +4609,7 @@ updated_at = 1789074802
 weight = 0.0
 issue_number = 292
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/292"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "3fe6612e"
@@ -4708,6 +4712,7 @@ updated_at = 1784611504
 weight = 0.0
 issue_number = 293
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/293"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "32170548"
@@ -4783,6 +4788,7 @@ updated_at = 1789075754
 weight = 0.0
 issue_number = 294
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/294"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "138607bc"
@@ -4864,6 +4870,7 @@ updated_at = 1789273938
 weight = 0.0
 issue_number = 295
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/295"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "210f3e97"
@@ -5002,6 +5009,7 @@ updated_at = 1789075754
 weight = 0.0
 issue_number = 296
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/296"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "7c28a8da"
@@ -5104,6 +5112,7 @@ updated_at = 1789069778
 weight = 0.0
 issue_number = 302
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/302"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "c057c7e7"
@@ -5147,6 +5156,7 @@ updated_at = 1789069778
 weight = 0.0
 issue_number = 304
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/304"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "5d008358"
@@ -5195,6 +5205,7 @@ updated_at = 1789070279
 weight = 0.0
 issue_number = 305
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/305"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "15cee27a"
@@ -5488,6 +5499,7 @@ updated_at = 1789070279
 weight = 0.0
 issue_number = 307
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/307"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "6a9f4ac1"
@@ -5595,6 +5607,7 @@ updated_at = 1789289536
 weight = 0.0
 issue_number = 312
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/312"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "e73a1fd5"
@@ -5614,6 +5627,7 @@ updated_at = 1789289535
 weight = 0.0
 issue_number = 313
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/313"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "68d73e6f"
@@ -5651,6 +5665,7 @@ updated_at = 1789274020
 weight = 0.0
 issue_number = 314
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/314"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "0b6cb4c1"
@@ -5687,6 +5702,7 @@ updated_at = 1789289537
 weight = 0.0
 issue_number = 315
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/315"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "2d3cbda2"
@@ -5734,6 +5750,7 @@ updated_at = 1789279403
 weight = 0.0
 issue_number = 316
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/316"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "167cf55e"
@@ -5753,6 +5770,7 @@ updated_at = 1789278963
 weight = 0.0
 issue_number = 317
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/317"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "67a2275a"
@@ -5775,6 +5793,7 @@ updated_at = 1789290995
 weight = 0.0
 issue_number = 318
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/318"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "2904dc6c"
@@ -5794,6 +5813,7 @@ updated_at = 1789290996
 weight = 0.0
 issue_number = 320
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/320"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "b6a80342"
@@ -5813,6 +5833,7 @@ updated_at = 1789290998
 weight = 0.0
 issue_number = 321
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/321"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "66557497"
@@ -5891,6 +5912,7 @@ updated_at = 1790131160
 weight = 0.0
 issue_number = 323
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/323"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "992667e2"
@@ -5939,6 +5961,7 @@ updated_at = 1790129621
 weight = 0.0
 issue_number = 324
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/324"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "822c7209"
@@ -6013,6 +6036,7 @@ updated_at = 1789296822
 weight = 0.0
 issue_number = 325
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/325"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "0e5e3545"
@@ -6033,6 +6057,7 @@ updated_at = 1789278964
 weight = 0.0
 issue_number = 326
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/326"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "54c56d24"
@@ -6070,6 +6095,7 @@ updated_at = 1789280005
 weight = 0.0
 issue_number = 327
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/327"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "1bac3de6"
@@ -6114,6 +6140,7 @@ updated_at = 1789280006
 weight = 0.0
 issue_number = 328
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/328"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "422d256a"
@@ -6152,6 +6179,7 @@ updated_at = 1789280007
 weight = 0.0
 issue_number = 332
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/332"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "6028507d"
@@ -6171,6 +6199,7 @@ updated_at = 1784901480
 weight = 0.0
 issue_number = 26
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/26"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "910780b0"
@@ -6186,6 +6215,7 @@ updated_at = 1789292106
 weight = 0.0
 issue_number = 28
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/28"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "22b69f6a"
@@ -6205,6 +6235,7 @@ updated_at = 1784911074
 weight = 0.0
 issue_number = 29
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/29"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "44d5af11"
@@ -6224,6 +6255,7 @@ updated_at = 1789280008
 weight = 0.0
 issue_number = 30
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/30"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "7a4f1721"
@@ -6243,6 +6275,7 @@ updated_at = 1784916366
 weight = 0.0
 issue_number = 31
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/31"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "c3b41a93"
@@ -6262,6 +6295,7 @@ updated_at = 1784916366
 weight = 0.0
 issue_number = 32
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/32"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "7d8cff11"
@@ -6281,6 +6315,7 @@ updated_at = 1784916366
 weight = 0.0
 issue_number = 33
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/33"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "3f5eb943"
@@ -6300,6 +6335,7 @@ updated_at = 1785007509
 weight = 0.0
 issue_number = 34
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/34"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "616e2439"
@@ -6319,6 +6355,7 @@ updated_at = 1785073559
 weight = 0.0
 issue_number = 35
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/35"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "a93a4bff"
@@ -6338,6 +6375,7 @@ updated_at = 1785010048
 weight = 0.0
 issue_number = 36
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/36"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "5517842e"
@@ -6357,6 +6395,7 @@ updated_at = 1785080706
 weight = 0.0
 issue_number = 37
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/37"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "18506c09"
@@ -6376,6 +6415,7 @@ updated_at = 1785166377
 weight = 0.0
 issue_number = 38
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/38"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "346c3d20"
@@ -6395,6 +6435,7 @@ updated_at = 1785084958
 weight = 0.0
 issue_number = 40
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/40"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "bee3e5c9"
@@ -6424,6 +6465,7 @@ updated_at = 1784973478
 weight = 0.0
 issue_number = 43
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/43"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "a81061d0"
@@ -6443,6 +6485,7 @@ updated_at = 1784973236
 weight = 0.0
 issue_number = 44
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/44"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "dd3aad81"
@@ -6463,6 +6506,7 @@ updated_at = 1784995869
 weight = 0.0
 issue_number = 45
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/45"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "b637936f"
@@ -6483,6 +6527,7 @@ updated_at = 1789296822
 weight = 0.0
 issue_number = 46
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/46"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "e3fe81d5"
@@ -6503,6 +6548,7 @@ updated_at = 1789306297
 weight = 0.0
 issue_number = 47
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/47"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "9bfa8cf0"
@@ -6523,6 +6569,7 @@ updated_at = 1789306296
 weight = 0.0
 issue_number = 48
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/48"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "81f284c4"
@@ -6543,6 +6590,7 @@ updated_at = 1789306294
 weight = 0.0
 issue_number = 49
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/49"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "5daf0b60"
@@ -6563,6 +6611,7 @@ updated_at = 1789306295
 weight = 0.0
 issue_number = 50
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/50"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "cd624e4c"
@@ -6583,6 +6632,7 @@ updated_at = 1789306276
 weight = 0.0
 issue_number = 51
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/51"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "e8c03e9e"
@@ -6603,6 +6653,7 @@ updated_at = 1789493776
 weight = 0.0
 issue_number = 52
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/52"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "42ad4688"
@@ -6623,6 +6674,7 @@ updated_at = 1789493778
 weight = 0.0
 issue_number = 53
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/53"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "53c825f6"
@@ -6643,6 +6695,7 @@ updated_at = 1789494037
 weight = 0.0
 issue_number = 54
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/54"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "38002446"
@@ -6663,6 +6716,7 @@ updated_at = 1785280078
 weight = 0.0
 issue_number = 55
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/55"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "45f2bb7f"
@@ -6682,6 +6736,7 @@ updated_at = 1785321672
 weight = 0.0
 issue_number = 57
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/57"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "ea1355f5"
@@ -6702,6 +6757,7 @@ updated_at = 1784999425
 weight = 0.0
 issue_number = 58
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/58"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "28acc92b"
@@ -6721,6 +6777,7 @@ updated_at = 1785057138
 weight = 0.0
 issue_number = 60
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/60"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "afcdaf57"
@@ -6739,6 +6796,7 @@ updated_at = 1785279612
 weight = 0.0
 issue_number = 61
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/61"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "92314988"
@@ -6760,6 +6818,7 @@ updated_at = 1785056973
 weight = 0.0
 issue_number = 64
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/64"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "0e5d94f9"
@@ -6780,6 +6839,7 @@ updated_at = 1785193804
 weight = 0.0
 issue_number = 65
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/65"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "2ca03efc"
@@ -6800,6 +6860,7 @@ updated_at = 1788982128
 weight = 0.0
 issue_number = 66
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/66"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "9543cbca"
@@ -6819,6 +6880,7 @@ updated_at = 1785009909
 weight = 0.0
 issue_number = 67
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/67"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "27926f7e"
@@ -6838,6 +6900,7 @@ updated_at = 1790130864
 weight = 0.0
 issue_number = 68
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/68"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "2bf2b023"
@@ -6857,6 +6920,7 @@ updated_at = 1785009909
 weight = 0.0
 issue_number = 69
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/69"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "60b7c0f3"
@@ -6876,6 +6940,7 @@ updated_at = 1785055305
 weight = 0.0
 issue_number = 70
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/70"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "64a79b46"
@@ -6894,6 +6959,7 @@ updated_at = 1785055305
 weight = 0.0
 issue_number = 71
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/71"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "727b41ee"
@@ -6909,6 +6975,7 @@ updated_at = 1785058998
 weight = 0.0
 issue_number = 73
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/73"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "211076d4"
@@ -6930,6 +6997,7 @@ updated_at = 1785060814
 weight = 0.0
 issue_number = 74
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/74"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "64508ec7"
@@ -6949,6 +7017,7 @@ updated_at = 1785062777
 weight = 0.0
 issue_number = 75
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/75"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "9ee2b216"
@@ -6970,6 +7039,7 @@ updated_at = 1785063093
 weight = 0.0
 issue_number = 76
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/76"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "0bcb491e"
@@ -6990,6 +7060,7 @@ updated_at = 1785070560
 weight = 0.0
 issue_number = 77
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/77"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "f1163635"
@@ -7009,6 +7080,7 @@ updated_at = 1785083004
 weight = 0.0
 issue_number = 78
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/78"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "68483cdd"
@@ -7028,6 +7100,7 @@ updated_at = 1785086688
 weight = 0.0
 issue_number = 80
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/80"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "f14c18be"
@@ -7043,6 +7116,7 @@ updated_at = 1790130863
 weight = 0.0
 issue_number = 81
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/81"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "d17107ad"
@@ -7061,6 +7135,7 @@ updated_at = 1790138019
 weight = 0.0
 issue_number = 82
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/82"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "f029190c"
@@ -7076,6 +7151,7 @@ updated_at = 1785280078
 weight = 0.0
 issue_number = 85
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/85"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "1b51115e"
@@ -7094,6 +7170,7 @@ updated_at = 1785280096
 weight = 0.0
 issue_number = 88
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/88"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "b19aad51"
@@ -7122,6 +7199,7 @@ updated_at = 1790184139
 weight = 0.0
 issue_number = 90
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/90"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "3832ba25"
@@ -7141,6 +7219,7 @@ updated_at = 1785332358
 weight = 0.0
 issue_number = 91
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/91"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "b43fe86b"
@@ -7165,6 +7244,7 @@ updated_at = 1785502614
 weight = 1.2375
 issue_number = 107
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/107"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "457b44f1"
@@ -7279,6 +7359,7 @@ updated_at = 1785634217
 weight = 0.675
 issue_number = 110
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/110"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "2dd5180f"
@@ -7365,6 +7446,7 @@ updated_at = 1785636800
 weight = 0.6
 issue_number = 112
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/112"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "09148819"
@@ -7455,6 +7537,7 @@ updated_at = 1788771728
 weight = 0.55
 issue_number = 113
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/113"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "d7330aef"
@@ -7518,6 +7601,7 @@ updated_at = 1788771728
 weight = 0.4
 issue_number = 114
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/114"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "4cbfbbfc"
@@ -7537,6 +7621,7 @@ updated_at = 1790184986
 weight = 0.0
 issue_number = 118
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/118"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "ed941047"
@@ -7557,6 +7642,7 @@ updated_at = 1790184984
 weight = 0.0
 issue_number = 119
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/119"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "1217fa4f"
@@ -7572,6 +7658,7 @@ updated_at = 1790184987
 weight = 0.0
 issue_number = 121
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/121"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "0f876834"
@@ -7587,6 +7674,7 @@ updated_at = 1790185767
 weight = 0.0
 issue_number = 124
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/124"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "edca3d7c"
@@ -7605,6 +7693,7 @@ updated_at = 1785927950
 weight = 0.0
 issue_number = 128
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/128"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "0c3296a5"
@@ -7624,6 +7713,7 @@ updated_at = 1785969283
 weight = 0.0
 issue_number = 135
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/135"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "56df8ad7"
@@ -7643,6 +7733,7 @@ updated_at = 1785966109
 weight = 0.0
 issue_number = 137
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/137"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "a75ad752"
@@ -7662,6 +7753,7 @@ updated_at = 1785968442
 weight = 0.0
 issue_number = 138
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/138"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "5151605e"
@@ -7682,6 +7774,7 @@ updated_at = 1786376730
 weight = 0.0
 issue_number = 144
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/144"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "6aaec283"
@@ -7735,6 +7828,7 @@ updated_at = 1787536115
 weight = 0.0
 issue_number = 153
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/153"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "b4baf3d7"
@@ -7754,6 +7848,7 @@ updated_at = 1785967347
 weight = 0.0
 issue_number = 156
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/156"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "1469673b"
@@ -7796,6 +7891,7 @@ updated_at = 1785969185
 weight = 0.0
 issue_number = 157
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/157"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "6d451627"
@@ -7834,6 +7930,7 @@ updated_at = 1785969662
 weight = 0.0
 issue_number = 158
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/158"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "ebf8c83b"
@@ -7849,6 +7946,7 @@ updated_at = 1785969580
 weight = 0.0
 issue_number = 161
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/161"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "87dbfbb8"
@@ -7864,6 +7962,7 @@ updated_at = 1786374291
 weight = 0.0
 issue_number = 169
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/169"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "d8e22b26"
@@ -7879,6 +7978,7 @@ updated_at = 1788982129
 weight = 0.0
 issue_number = 170
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/170"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "3135ebb9"
@@ -7951,6 +8051,7 @@ updated_at = 1786021778
 weight = 0.0
 issue_number = 175
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/175"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "0ab44b59"
@@ -8018,6 +8119,7 @@ updated_at = 1786048738
 weight = 0.0
 issue_number = 216
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/216"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "a33f644f"
@@ -8033,6 +8135,7 @@ updated_at = 1786438090
 weight = 0.0
 issue_number = 228
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/228"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "709ff549"
@@ -8052,6 +8155,7 @@ updated_at = 1786495012
 weight = 0.0
 issue_number = 229
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/229"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "03d69e1a"
@@ -8070,6 +8174,7 @@ updated_at = 1788982130
 weight = 0.0
 issue_number = 233
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/233"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "e99f61e4"
@@ -8137,6 +8242,7 @@ updated_at = 1788907481
 weight = 0.0
 issue_number = 237
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/237"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "8b871bb1"
@@ -8171,6 +8277,7 @@ updated_at = 1786451907
 weight = 0.0
 issue_number = 241
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/241"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "aa6d6e43"
@@ -8190,6 +8297,7 @@ updated_at = 1786635396
 weight = 0.0
 issue_number = 242
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/242"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "47eedff9"
@@ -8211,6 +8319,7 @@ updated_at = 1788982606
 weight = 0.0
 issue_number = 244
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/244"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "356bd51d"
@@ -8255,6 +8364,7 @@ updated_at = 1786635396
 weight = 0.0
 issue_number = 250
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/250"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "fe84d350"
@@ -8363,6 +8473,7 @@ updated_at = 1787532087
 weight = 0.0
 issue_number = 256
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/256"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "bd6d81df"
@@ -8382,6 +8493,7 @@ updated_at = 1786635396
 weight = 0.0
 issue_number = 260
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/260"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "73fb8e81"
@@ -8413,6 +8525,7 @@ updated_at = 1787536118
 weight = 0.0
 issue_number = 264
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/264"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "a53fd016"
@@ -8485,6 +8598,7 @@ updated_at = 1786512061
 weight = 0.0
 issue_number = 265
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/265"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "d7e1ac30"
@@ -8680,6 +8794,7 @@ updated_at = 1786950274
 weight = 0.0
 issue_number = 272
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/272"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "5aaecbf6"
@@ -8762,6 +8877,7 @@ updated_at = 1787532090
 weight = 0.0
 issue_number = 335
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/335"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "b71984b9"
@@ -8811,6 +8927,7 @@ updated_at = 1787536119
 weight = 0.0
 issue_number = 336
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/336"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "d5b2e73d"
@@ -8877,6 +8994,7 @@ updated_at = 1788820644
 weight = 0.0
 issue_number = 416
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/416"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "4b513086"
@@ -8908,6 +9026,7 @@ updated_at = 1788804746
 weight = 0.0
 issue_number = 417
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/417"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "a8e281f3"
@@ -8940,6 +9059,7 @@ updated_at = 1788804747
 weight = 0.0
 issue_number = 419
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/419"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "b173f2b9"
@@ -8978,6 +9098,7 @@ updated_at = 1788872560
 weight = 0.0
 issue_number = 421
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/421"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "9ec045a1"
@@ -9070,6 +9191,7 @@ updated_at = 1788908491
 weight = 0.0
 issue_number = 422
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/422"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "b5e5c19e"
@@ -9093,6 +9215,7 @@ updated_at = 1788804748
 weight = 0.0
 issue_number = 424
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/424"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "39c05d53"
@@ -9135,6 +9258,7 @@ updated_at = 1788804749
 weight = 0.0
 issue_number = 426
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/426"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "206042f9"
@@ -9179,6 +9303,7 @@ updated_at = 1788907594
 weight = 0.0
 issue_number = 434
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/434"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "0f9ec760"
@@ -9222,6 +9347,7 @@ updated_at = 1788982131
 weight = 0.0
 issue_number = 442
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/442"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "91fa24df"
@@ -9534,6 +9660,7 @@ updated_at = 1786952885
 weight = 0.0
 issue_number = 353
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/353"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "6ab40021"
@@ -9663,6 +9790,7 @@ updated_at = 1788758036
 weight = 0.0
 issue_number = 410
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/410"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "032c1b4b"
@@ -9678,6 +9806,7 @@ updated_at = 1787532126
 weight = 0.0
 issue_number = 388
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/388"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "f232c901"
@@ -9695,6 +9824,7 @@ updated_at = 1788982607
 weight = 0.0
 issue_number = 391
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/391"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "1bf9c22a"
@@ -9771,6 +9901,7 @@ updated_at = 1787544733
 weight = 0.0
 issue_number = 392
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/392"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "5fb3b916"
@@ -9789,6 +9920,7 @@ updated_at = 1787536116
 weight = 0.0
 issue_number = 395
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/395"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "35968776"
@@ -9864,6 +9996,7 @@ updated_at = 1788983841
 weight = 0.0
 issue_number = 398
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/398"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "d3721c8a"
@@ -9879,6 +10012,7 @@ updated_at = 1787542501
 weight = 0.0
 issue_number = 401
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/401"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "9e0e3881"
@@ -9894,6 +10028,7 @@ updated_at = 1788982132
 weight = 0.0
 issue_number = 402
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/402"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "413d88b6"
@@ -9928,6 +10063,7 @@ updated_at = 1788983402
 weight = 0.0
 issue_number = 447
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/447"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "ed3afdd9"
@@ -9976,6 +10112,7 @@ updated_at = 1788983575
 weight = 0.0
 issue_number = 448
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/448"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "0cd69e11"
@@ -10047,6 +10184,7 @@ updated_at = 1788991487
 weight = 0.0
 issue_number = 454
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/454"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "a3ee51c9"
@@ -10062,6 +10200,7 @@ updated_at = 1788982133
 weight = 0.0
 issue_number = 466
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/466"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "0db309dc"
@@ -10861,6 +11000,7 @@ updated_at = 1789044433
 weight = 0.0
 issue_number = 472
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/472"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "b9d1503d"
@@ -10972,6 +11112,7 @@ updated_at = 1789058639
 weight = 0.0
 issue_number = 496
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/496"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "1ff0fcc9"
@@ -11122,6 +11263,7 @@ updated_at = 1790119362
 weight = 0.0
 issue_number = 509
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/509"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "a3ae340d"
@@ -11166,6 +11308,7 @@ updated_at = 1789072944
 weight = 0.0
 issue_number = 533
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/533"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "8206b09f"
@@ -11266,6 +11409,7 @@ updated_at = 1789345754
 weight = 0.0
 issue_number = 535
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/535"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "d83b0e8f"
@@ -11281,6 +11425,7 @@ updated_at = 1789296821
 weight = 0.0
 issue_number = 587
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/587"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "bcfc5491"
@@ -11369,6 +11514,7 @@ updated_at = 1790121087
 weight = 0.0
 issue_number = 605
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/605"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "2c1e54b3"
@@ -11485,6 +11631,7 @@ updated_at = 1789490577
 weight = 0.0
 issue_number = 604
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/604"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "e073bdb1"
@@ -11612,6 +11759,7 @@ updated_at = 1790127688
 weight = 0.0
 issue_number = 628
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/628"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "5e62b0eb"
@@ -11737,6 +11885,7 @@ updated_at = 1790176596
 weight = 0.0
 issue_number = 639
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/639"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "06eb8aa3"
@@ -11805,6 +11954,7 @@ updated_at = 1790176597
 weight = 0.0
 issue_number = 661
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/661"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "a6258cc7"
@@ -11862,6 +12012,7 @@ updated_at = 1789357210
 weight = 0.0
 issue_number = 651
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/651"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "1454ba50"
@@ -11980,6 +12131,7 @@ updated_at = 1790119359
 weight = 0.0
 issue_number = 674
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/674"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "860a78b3"
@@ -12032,6 +12184,7 @@ updated_at = 1790119361
 weight = 0.0
 issue_number = 676
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/676"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "9a4fb884"
@@ -12122,6 +12275,7 @@ updated_at = 1790180029
 weight = 0.0
 issue_number = 699
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/699"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "45c3a699"
@@ -12140,6 +12294,7 @@ updated_at = 1790223292
 weight = 0.0
 issue_number = 712
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/712"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "cfe6d14c"
@@ -12175,6 +12330,7 @@ updated_at = 1790204722
 weight = 0.0
 issue_number = 716
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/716"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "79f1c03b"
@@ -12208,6 +12364,7 @@ updated_at = 1790204724
 weight = 0.0
 issue_number = 717
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/717"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "ab178c4d"
@@ -12244,6 +12401,7 @@ updated_at = 1790204725
 weight = 0.0
 issue_number = 718
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/718"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "4026e1a0"
@@ -12279,6 +12437,7 @@ updated_at = 1790204726
 weight = 0.0
 issue_number = 719
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/719"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "3bc58806"
@@ -12297,6 +12456,7 @@ updated_at = 1790184382
 weight = 0.0
 issue_number = 723
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/723"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "1286de7d"
@@ -12315,6 +12475,7 @@ updated_at = 1790184383
 weight = 0.0
 issue_number = 724
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/724"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "4825a415"
@@ -12333,6 +12494,7 @@ updated_at = 1790184384
 weight = 0.0
 issue_number = 725
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/725"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "0004faf8"
@@ -12351,6 +12513,7 @@ updated_at = 1790184386
 weight = 0.0
 issue_number = 726
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/726"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "7703f6d7"
@@ -12369,6 +12532,7 @@ updated_at = 1790184387
 weight = 0.0
 issue_number = 727
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/727"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "f09db5ce"
@@ -12387,6 +12551,7 @@ updated_at = 1790223293
 weight = 0.0
 issue_number = 708
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/708"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "15274c94"
@@ -12423,6 +12588,7 @@ updated_at = 1790239207
 weight = 0.0
 issue_number = 728
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/728"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "28f5be7f"
@@ -12459,6 +12625,7 @@ updated_at = 1790239208
 weight = 0.0
 issue_number = 730
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/730"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "7c4e8218"
@@ -12495,6 +12662,7 @@ updated_at = 1790245065
 weight = 0.0
 issue_number = 735
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/735"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "7c776a26"
@@ -12534,6 +12702,7 @@ updated_at = 1790245066
 weight = 0.0
 issue_number = 736
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/736"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "d28fb530"
@@ -12574,6 +12743,7 @@ updated_at = 1790245068
 weight = 0.0
 issue_number = 737
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/737"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "3503d99e"
@@ -12625,6 +12795,7 @@ updated_at = 1790245069
 weight = 0.0
 issue_number = 738
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/738"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "9e644320"
@@ -12646,6 +12817,7 @@ updated_at = 1790247474
 weight = 0.0
 issue_number = 732
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/732"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "7614e28e"
@@ -12667,6 +12839,7 @@ updated_at = 1790247475
 weight = 0.0
 issue_number = 734
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/734"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "fbb3100a"
@@ -12731,6 +12904,7 @@ updated_at = 1790248162
 weight = 0.0
 issue_number = 751
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/751"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "d9ced7d3"
@@ -12761,6 +12935,7 @@ updated_at = 1790248163
 weight = 0.0
 issue_number = 739
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/739"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "c2f9cc02"
@@ -12815,6 +12990,7 @@ updated_at = 1790251498
 weight = 0.0
 issue_number = 740
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/740"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "5b0e9fe1"
@@ -12851,6 +13027,7 @@ updated_at = 1790251988
 weight = 0.0
 issue_number = 129
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/129"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "d03dad3d"
@@ -12873,6 +13050,7 @@ updated_at = 1790251989
 weight = 0.0
 issue_number = 134
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/134"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "4b4454ef"
@@ -12888,6 +13066,7 @@ updated_at = 1790252179
 weight = 0.0
 issue_number = 123
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/123"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "270f36fa"
@@ -12929,6 +13108,7 @@ updated_at = 1790252181
 weight = 0.0
 issue_number = 125
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/125"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "233447c8"
@@ -12951,6 +13131,7 @@ updated_at = 1790252183
 weight = 0.0
 issue_number = 132
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/132"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "9ee7e798"
@@ -12966,6 +13147,7 @@ updated_at = 1790252184
 weight = 0.0
 issue_number = 164
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/164"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "f25839d6"
@@ -13008,6 +13190,7 @@ updated_at = 1790252185
 weight = 0.0
 issue_number = 431
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/431"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "6e23d450"
@@ -13023,6 +13206,7 @@ updated_at = 1790252187
 weight = 0.0
 issue_number = 366
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/366"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "ff95f88e"
@@ -13161,6 +13345,7 @@ updated_at = 1790252365
 weight = 0.0
 issue_number = 133
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/133"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "e42cbcb0"
@@ -13194,6 +13379,7 @@ updated_at = 1790252946
 weight = 0.0
 issue_number = 96
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/96"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "1e783882"
@@ -13212,6 +13398,7 @@ updated_at = 1790252947
 weight = 0.0
 issue_number = 97
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/97"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "13596fb6"
@@ -13230,6 +13417,7 @@ updated_at = 1790252948
 weight = 0.0
 issue_number = 105
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/105"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "309c8aca"
@@ -13252,6 +13440,7 @@ updated_at = 1790252949
 weight = 0.0
 issue_number = 141
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/141"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "a5a14d24"
@@ -13274,6 +13463,7 @@ updated_at = 1790252950
 weight = 0.0
 issue_number = 143
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/143"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "03450b7c"
@@ -13295,6 +13485,7 @@ updated_at = 1790252951
 weight = 0.0
 issue_number = 160
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/160"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "7598cd9e"
@@ -13310,6 +13501,7 @@ updated_at = 1790252952
 weight = 0.0
 issue_number = 163
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/163"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "87a1d74a"
@@ -13325,6 +13517,7 @@ updated_at = 1790252954
 weight = 0.0
 issue_number = 165
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/165"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "61e08bca"
@@ -13350,6 +13543,7 @@ updated_at = 1790252955
 weight = 0.0
 issue_number = 167
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/167"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "71ffe552"
@@ -13387,6 +13581,7 @@ updated_at = 1790252957
 weight = 0.0
 issue_number = 284
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/284"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "5ddcc99c"
@@ -13402,6 +13597,7 @@ updated_at = 1790252958
 weight = 0.0
 issue_number = 303
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/303"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "17057070"
@@ -13417,6 +13613,7 @@ updated_at = 1790252959
 weight = 0.0
 issue_number = 311
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/311"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "dd321c52"
@@ -13440,6 +13637,7 @@ updated_at = 1790252960
 weight = 0.0
 issue_number = 329
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/329"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "f5da9422"
@@ -13463,6 +13661,7 @@ updated_at = 1790252961
 weight = 0.0
 issue_number = 63
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/63"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "6cc3c641"
@@ -13509,6 +13708,7 @@ updated_at = 1790252999
 weight = 0.0
 issue_number = 127
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/127"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "793aa283"
@@ -13566,6 +13766,7 @@ updated_at = 1790253335
 weight = 0.0
 issue_number = 437
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/437"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "3357c2e2"
@@ -13616,6 +13817,7 @@ updated_at = 1790253366
 weight = 0.0
 issue_number = 126
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/126"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "ee08c7c0"
@@ -13637,6 +13839,7 @@ updated_at = 1790253408
 weight = 0.0
 issue_number = 185
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/185"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "d8d0778c"
@@ -13658,6 +13861,7 @@ updated_at = 1790253409
 weight = 0.0
 issue_number = 189
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/189"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "594f4e56"
@@ -13673,6 +13877,7 @@ updated_at = 1790253410
 weight = 0.0
 issue_number = 205
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/205"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "79ecf4dc"
@@ -13691,6 +13896,7 @@ updated_at = 1790253411
 weight = 0.0
 issue_number = 206
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/206"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "ca186c31"
@@ -13709,6 +13915,7 @@ updated_at = 1790253413
 weight = 0.0
 issue_number = 207
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/207"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "29a4bcc3"
@@ -13727,6 +13934,7 @@ updated_at = 1790253414
 weight = 0.0
 issue_number = 208
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/208"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "ea6f27b1"
@@ -13745,6 +13953,7 @@ updated_at = 1790253415
 weight = 0.0
 issue_number = 215
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/215"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "5742e1d5"
@@ -13763,6 +13972,7 @@ updated_at = 1790253416
 weight = 0.0
 issue_number = 217
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/217"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "326edfee"
@@ -13786,6 +13996,7 @@ updated_at = 1790253940
 weight = 0.0
 issue_number = 731
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/731"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "6cf12ce9"
@@ -13809,6 +14020,7 @@ updated_at = 1790253941
 weight = 0.0
 issue_number = 733
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/733"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "6de70510"
@@ -13831,6 +14043,7 @@ updated_at = 1790253942
 weight = 0.0
 issue_number = 142
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/142"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "127733e0"
@@ -13853,6 +14066,7 @@ updated_at = 1790254586
 weight = 0.0
 issue_number = 748
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/748"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "2a3b033c"
@@ -13875,6 +14089,7 @@ updated_at = 1790254587
 weight = 0.0
 issue_number = 139
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/139"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "7ad1eb28"
@@ -13913,6 +14128,7 @@ updated_at = 1790631017
 weight = 0.0
 issue_number = 779
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/779"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "df3616e0"
@@ -13931,6 +14147,7 @@ updated_at = 1790631018
 weight = 0.0
 issue_number = 393
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/393"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "d343ecbc"
@@ -13949,6 +14166,7 @@ updated_at = 1790631020
 weight = 0.0
 issue_number = 463
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/463"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "dccd7394"
@@ -13970,6 +14188,7 @@ updated_at = 1790631021
 weight = 0.0
 issue_number = 607
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/607"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "334e878f"
@@ -14012,6 +14231,7 @@ updated_at = 1790631023
 weight = 0.0
 issue_number = 480
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/480"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "7f09a123"
@@ -14030,6 +14250,7 @@ updated_at = 1790631024
 weight = 0.0
 issue_number = 565
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/565"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "82e6a952"
@@ -14071,6 +14292,7 @@ updated_at = 1790631025
 weight = 0.0
 issue_number = 629
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/629"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "f1b36c50"
@@ -14092,6 +14314,7 @@ updated_at = 1790631026
 weight = 0.0
 issue_number = 766
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/766"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "e773be5e"
@@ -14113,6 +14336,7 @@ updated_at = 1790631028
 weight = 0.0
 issue_number = 184
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/184"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "f84a6779"
@@ -14222,6 +14446,7 @@ updated_at = 1790631029
 weight = 0.0
 issue_number = 492
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/492"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "3f6f4bc9"
@@ -14245,6 +14470,7 @@ updated_at = 1790631031
 weight = 0.0
 issue_number = 331
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/331"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "8e565740"
@@ -14269,6 +14495,7 @@ updated_at = 1790631032
 weight = 0.0
 issue_number = 173
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/173"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "2c0d149b"
@@ -14290,6 +14517,7 @@ updated_at = 1790631033
 weight = 0.0
 issue_number = 218
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/218"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "a96d1a5e"
@@ -14324,6 +14552,7 @@ updated_at = 1790631035
 weight = 0.0
 issue_number = 577
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/577"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "3bfc18bf"
@@ -14355,6 +14584,7 @@ updated_at = 1790631036
 weight = 0.0
 issue_number = 693
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/693"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "89fc4fe6"
@@ -14373,6 +14603,7 @@ updated_at = 1790631037
 weight = 0.0
 issue_number = 745
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/745"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "30bd7891"
@@ -14395,6 +14626,7 @@ updated_at = 1790631039
 weight = 0.0
 issue_number = 789
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/789"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "a6f165cd"
@@ -14440,6 +14672,7 @@ updated_at = 1790631040
 weight = 0.0
 issue_number = 455
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/455"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "63316799"
@@ -14461,6 +14694,7 @@ updated_at = 1790631042
 weight = 0.0
 issue_number = 600
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/600"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "55020872"
@@ -14483,6 +14717,7 @@ updated_at = 1790631043
 weight = 0.0
 issue_number = 610
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/610"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "c6fe8ca0"
@@ -14506,6 +14741,7 @@ updated_at = 1790631045
 weight = 0.0
 issue_number = 772
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/772"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "dac6bf50"
@@ -14537,6 +14773,7 @@ updated_at = 1790631046
 weight = 0.0
 issue_number = 638
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/638"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "077617cf"
@@ -14574,6 +14811,7 @@ updated_at = 1790631048
 weight = 0.0
 issue_number = 623
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/623"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "84d9267d"
@@ -14596,6 +14834,7 @@ updated_at = 1790631049
 weight = 0.0
 issue_number = 749
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/749"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "b9f27e00"
@@ -14619,6 +14858,7 @@ updated_at = 1790631050
 weight = 0.0
 issue_number = 289
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/289"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "3ccedd83"
@@ -14640,6 +14880,7 @@ updated_at = 1790631052
 weight = 0.0
 issue_number = 202
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/202"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "86d680ce"
@@ -14658,6 +14899,7 @@ updated_at = 1790631054
 weight = 0.0
 issue_number = 246
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/246"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "710bc8c7"
@@ -14710,6 +14952,7 @@ updated_at = 1790631055
 weight = 0.0
 issue_number = 339
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/339"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "2a15dba6"
@@ -14744,6 +14987,7 @@ updated_at = 1790631056
 weight = 0.0
 issue_number = 385
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/385"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "545a69be"
@@ -14766,6 +15010,7 @@ updated_at = 1790631058
 weight = 0.0
 issue_number = 407
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/407"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "6e30b6fc"
@@ -14966,6 +15211,7 @@ updated_at = 1790631059
 weight = 0.0
 issue_number = 504
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/504"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "87d8c644"
@@ -14994,6 +15240,7 @@ updated_at = 1790631061
 weight = 0.0
 issue_number = 530
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/530"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "d0cc3a5f"
@@ -15015,6 +15262,7 @@ updated_at = 1790631062
 weight = 0.0
 issue_number = 611
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/611"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "c25e8519"
@@ -15078,6 +15326,7 @@ updated_at = 1790631063
 weight = 0.0
 issue_number = 759
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/759"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "9418283f"
@@ -15100,6 +15349,7 @@ updated_at = 1790631065
 weight = 0.0
 issue_number = 782
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/782"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "e8c8a896"
@@ -15121,6 +15371,7 @@ updated_at = 1790631066
 weight = 0.0
 issue_number = 796
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/796"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "287ada8f"
@@ -15139,6 +15390,7 @@ updated_at = 1790631067
 weight = 0.0
 issue_number = 245
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/245"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "7d8ab7fe"
@@ -15157,6 +15409,7 @@ updated_at = 1790631069
 weight = 0.0
 issue_number = 372
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/372"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "9fa6785b"
@@ -15202,6 +15455,7 @@ updated_at = 1790631070
 weight = 0.0
 issue_number = 39
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/39"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "938757e3"
@@ -15294,6 +15548,7 @@ updated_at = 1790631072
 weight = 0.0
 issue_number = 380
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/380"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "19ccedd8"
@@ -15346,6 +15601,7 @@ updated_at = 1790631074
 weight = 0.0
 issue_number = 309
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/309"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "1f922949"
@@ -15364,6 +15620,7 @@ updated_at = 1790631075
 weight = 0.0
 issue_number = 103
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/103"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "1ee8aa12"
@@ -15385,6 +15642,7 @@ updated_at = 1790631077
 weight = 0.0
 issue_number = 120
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/120"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "4eeac10f"
@@ -15416,6 +15674,7 @@ updated_at = 1790631078
 weight = 0.0
 issue_number = 178
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/178"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "8836b370"
@@ -15446,6 +15705,7 @@ updated_at = 1790631080
 weight = 0.0
 issue_number = 201
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/201"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "a66260f7"
@@ -15481,6 +15741,7 @@ updated_at = 1790631081
 weight = 0.0
 issue_number = 469
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/469"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "52862cdd"
@@ -15502,6 +15763,7 @@ updated_at = 1790631082
 weight = 0.0
 issue_number = 485
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/485"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "66a50b8c"
@@ -15544,6 +15806,7 @@ updated_at = 1790631084
 weight = 0.0
 issue_number = 503
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/503"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "ec573200"
@@ -15566,6 +15829,7 @@ updated_at = 1790631085
 weight = 0.0
 issue_number = 705
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/705"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "f5c09303"
@@ -15650,6 +15914,7 @@ updated_at = 1790631086
 weight = 0.0
 issue_number = 758
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/758"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "9efdfabd"
@@ -15713,6 +15978,7 @@ updated_at = 1790631088
 weight = 0.0
 issue_number = 415
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/415"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "397a5c8c"
@@ -15731,6 +15997,7 @@ updated_at = 1790631089
 weight = 0.0
 issue_number = 460
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/460"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "9ec3609e"
@@ -15780,6 +16047,7 @@ updated_at = 1790631090
 weight = 0.0
 issue_number = 625
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/625"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "7c8d891a"
@@ -15798,6 +16066,7 @@ updated_at = 1790631091
 weight = 0.0
 issue_number = 613
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/613"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "314b344a"
@@ -15819,6 +16088,7 @@ updated_at = 1790631092
 weight = 0.0
 issue_number = 686
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/686"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "1c17d5f5"
@@ -15841,6 +16111,7 @@ updated_at = 1790631095
 weight = 0.0
 issue_number = 322
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/322"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "4297c742"
@@ -15859,6 +16130,7 @@ updated_at = 1790631096
 weight = 0.0
 issue_number = 98
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/98"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "6e4c5024"
@@ -15896,6 +16168,7 @@ updated_at = 1790631097
 weight = 0.0
 issue_number = 154
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/154"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "a3cdc2fc"
@@ -15914,6 +16187,7 @@ updated_at = 1790631098
 weight = 0.0
 issue_number = 181
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/181"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "120d7758"
@@ -15935,6 +16209,7 @@ updated_at = 1790631100
 weight = 0.0
 issue_number = 376
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/376"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "33b997e8"
@@ -15953,6 +16228,7 @@ updated_at = 1790631101
 weight = 0.0
 issue_number = 387
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/387"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "a4966045"
@@ -16004,6 +16280,7 @@ updated_at = 1790631102
 weight = 0.0
 issue_number = 340
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/340"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "5a5653f5"
@@ -16055,6 +16332,7 @@ updated_at = 1790631103
 weight = 0.0
 issue_number = 474
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/474"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "eb1f8021"
@@ -16079,6 +16357,7 @@ updated_at = 1790631105
 weight = 0.0
 issue_number = 532
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/532"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "a617ce3f"
@@ -16097,6 +16376,7 @@ updated_at = 1790631106
 weight = 0.0
 issue_number = 575
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/575"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "89001e33"
@@ -16115,6 +16395,7 @@ updated_at = 1790631107
 weight = 0.0
 issue_number = 590
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/590"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "e7c42def"
@@ -16136,6 +16417,7 @@ updated_at = 1790631108
 weight = 0.0
 issue_number = 777
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/777"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "8dfb169a"
@@ -16158,6 +16440,7 @@ updated_at = 1790631110
 weight = 0.0
 issue_number = 785
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/785"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "9ee78698"
@@ -16207,6 +16490,7 @@ updated_at = 1790631111
 weight = 0.0
 issue_number = 797
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/797"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "64ce9501"
@@ -16269,6 +16553,7 @@ updated_at = 1790631112
 weight = 0.0
 issue_number = 621
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/621"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "9ebe11e3"
@@ -16291,6 +16576,7 @@ updated_at = 1790631114
 weight = 0.0
 issue_number = 609
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/609"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "19a12a8e"
@@ -16324,6 +16610,7 @@ updated_at = 1790631115
 weight = 0.0
 issue_number = 682
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/682"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "f38fc59c"
@@ -16379,6 +16666,7 @@ updated_at = 1790631116
 weight = 0.0
 issue_number = 578
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/578"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "9c3c04f6"
@@ -16404,6 +16692,7 @@ updated_at = 1790631117
 weight = 0.0
 issue_number = 240
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/240"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "e4bd99eb"
@@ -16506,6 +16795,7 @@ updated_at = 1790631119
 weight = 0.0
 issue_number = 770
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/770"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "9ae938ed"
@@ -16549,6 +16839,7 @@ updated_at = 1790631121
 weight = 0.0
 issue_number = 62
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/62"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "60466beb"
@@ -16567,6 +16858,7 @@ updated_at = 1790631122
 weight = 0.0
 issue_number = 92
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/92"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "811f10a4"
@@ -16591,6 +16883,7 @@ updated_at = 1790631123
 weight = 0.0
 issue_number = 174
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/174"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "0ba79281"
@@ -16612,6 +16905,7 @@ updated_at = 1790631125
 weight = 0.0
 issue_number = 281
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/281"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "e650d84a"
@@ -16633,6 +16927,7 @@ updated_at = 1790631126
 weight = 0.0
 issue_number = 482
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/482"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "effb2a60"
@@ -16651,6 +16946,7 @@ updated_at = 1790631127
 weight = 0.0
 issue_number = 552
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/552"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "9532de57"
@@ -16673,6 +16969,7 @@ updated_at = 1790631128
 weight = 0.0
 issue_number = 598
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/598"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "548e79dc"
@@ -16722,6 +17019,7 @@ updated_at = 1790631130
 weight = 0.0
 issue_number = 429
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/429"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "81cc27cc"
@@ -16740,6 +17038,7 @@ updated_at = 1790631131
 weight = 0.0
 issue_number = 534
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/534"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "165e4ee2"
@@ -16798,6 +17097,7 @@ updated_at = 1790631133
 weight = 0.0
 issue_number = 603
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/603"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "fcbf7b9c"
@@ -16824,6 +17124,7 @@ updated_at = 1790631134
 weight = 0.0
 issue_number = 679
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/679"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "2fa47b68"
@@ -16865,6 +17166,7 @@ updated_at = 1790631135
 weight = 0.0
 issue_number = 446
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/446"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "38c6ac26"
@@ -16883,6 +17185,7 @@ updated_at = 1790631136
 weight = 0.0
 issue_number = 591
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/591"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "ef00584b"
@@ -16906,6 +17209,7 @@ updated_at = 1790631137
 weight = 0.0
 issue_number = 56
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/56"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "93323c20"
@@ -16934,6 +17238,7 @@ updated_at = 1790631139
 weight = 0.45
 issue_number = 109
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/109"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "2fb05132"
@@ -16952,6 +17257,7 @@ updated_at = 1790631140
 weight = 0.0
 issue_number = 213
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/213"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "abf513e1"
@@ -16973,6 +17279,7 @@ updated_at = 1790631141
 weight = 0.0
 issue_number = 254
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/254"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "407228d6"
@@ -17024,6 +17331,7 @@ updated_at = 1790631142
 weight = 0.0
 issue_number = 462
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/462"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "8025f407"
@@ -17055,6 +17363,7 @@ updated_at = 1790631143
 weight = 0.0
 issue_number = 489
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/489"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "b802a5cf"
@@ -17085,6 +17394,7 @@ updated_at = 1790631145
 weight = 0.0
 issue_number = 507
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/507"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "95a6fc34"
@@ -17117,6 +17427,7 @@ updated_at = 1790631146
 weight = 0.0
 issue_number = 618
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/618"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "21242b8a"
@@ -17158,6 +17469,7 @@ updated_at = 1790631147
 weight = 0.0
 issue_number = 627
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/627"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "c66f520d"
@@ -17182,6 +17494,7 @@ updated_at = 1790631305
 weight = 0.0
 issue_number = 433
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/433"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "47972db9"
@@ -17259,6 +17572,7 @@ updated_at = 1790631306
 weight = 0.0
 issue_number = 399
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/399"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "079b643f"
@@ -17352,6 +17666,7 @@ updated_at = 1790632149
 weight = 0.0
 issue_number = 341
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/341"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "a597b491"
@@ -17392,6 +17707,7 @@ updated_at = 1790632151
 weight = 0.0
 issue_number = 355
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/355"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "27c731a1"
@@ -17522,6 +17838,7 @@ updated_at = 1790632152
 weight = 0.0
 issue_number = 382
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/382"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "0902aa00"
@@ -17540,6 +17857,7 @@ updated_at = 1790632153
 weight = 0.0
 issue_number = 458
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/458"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "02e9e2f3"
@@ -17609,6 +17927,7 @@ updated_at = 1790632154
 weight = 0.0
 issue_number = 491
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/491"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "5319d798"
@@ -17668,6 +17987,7 @@ updated_at = 1790632155
 weight = 0.0
 issue_number = 526
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/526"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "0437f3c5"
@@ -17686,6 +18006,7 @@ updated_at = 1790632156
 weight = 0.0
 issue_number = 548
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/548"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "7f79ae47"
@@ -17707,6 +18028,7 @@ updated_at = 1790632158
 weight = 0.0
 issue_number = 713
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/713"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "572c8640"
@@ -17754,6 +18076,7 @@ updated_at = 1790632159
 weight = 0.0
 issue_number = 470
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/470"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "7816e5be"
@@ -17801,6 +18124,7 @@ updated_at = 1790632160
 weight = 0.0
 issue_number = 597
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/597"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "c69d1b77"
@@ -17822,6 +18146,7 @@ updated_at = 1790632162
 weight = 0.0
 issue_number = 253
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/253"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "687275de"
@@ -17840,6 +18165,7 @@ updated_at = 1790632163
 weight = 0.0
 issue_number = 541
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/541"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "6fb08b03"
@@ -17858,6 +18184,7 @@ updated_at = 1790632164
 weight = 0.0
 issue_number = 556
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/556"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "b0a21d16"
@@ -17890,6 +18217,7 @@ updated_at = 1790632165
 weight = 0.0
 issue_number = 656
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/656"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "dab60741"
@@ -17936,6 +18264,7 @@ updated_at = 1790632167
 weight = 0.0
 issue_number = 239
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/239"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "b0ff8c74"
@@ -18081,6 +18410,7 @@ updated_at = 1790632169
 weight = 0.0
 issue_number = 641
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/641"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "f6efdfa1"
@@ -18099,6 +18429,7 @@ updated_at = 1790632170
 weight = 0.0
 issue_number = 647
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/647"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "cffd9787"
@@ -18132,6 +18463,7 @@ updated_at = 1790632171
 weight = 0.0
 issue_number = 667
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/667"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "6290d67f"
@@ -18260,6 +18592,7 @@ updated_at = 1790632173
 weight = 0.0
 issue_number = 471
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/471"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "12831958"
@@ -18278,6 +18611,7 @@ updated_at = 1790632174
 weight = 0.0
 issue_number = 557
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/557"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "3e2aade5"
@@ -18345,6 +18679,7 @@ updated_at = 1790632176
 weight = 0.0
 issue_number = 145
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/145"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "068337fd"
@@ -18368,6 +18703,7 @@ updated_at = 1790632177
 weight = 0.0
 issue_number = 151
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/151"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "0cf3775c"
@@ -18389,6 +18725,7 @@ updated_at = 1790632178
 weight = 0.0
 issue_number = 257
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/257"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "a8ef3afa"
@@ -18539,6 +18876,7 @@ updated_at = 1790632179
 weight = 0.0
 issue_number = 400
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/400"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "d53e6b35"
@@ -18599,6 +18937,7 @@ updated_at = 1790632181
 weight = 0.0
 issue_number = 444
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/444"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "8491cfa4"
@@ -18617,6 +18956,7 @@ updated_at = 1790632183
 weight = 0.0
 issue_number = 459
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/459"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "a380d2fe"
@@ -18660,6 +19000,7 @@ updated_at = 1790632184
 weight = 0.0
 issue_number = 511
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/511"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "0909c590"
@@ -18719,6 +19060,7 @@ updated_at = 1790632185
 weight = 0.0
 issue_number = 536
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/536"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "f96404f5"
@@ -18737,6 +19079,7 @@ updated_at = 1790632186
 weight = 0.0
 issue_number = 542
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/542"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "91d319d2"
@@ -18755,6 +19098,7 @@ updated_at = 1790632187
 weight = 0.0
 issue_number = 549
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/549"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "aadbd19a"
@@ -18776,6 +19120,7 @@ updated_at = 1790632189
 weight = 0.0
 issue_number = 159
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/159"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "ef806c37"
@@ -18797,6 +19142,7 @@ updated_at = 1790632190
 weight = 0.0
 issue_number = 259
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/259"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "48bdc55b"
@@ -18891,6 +19237,7 @@ updated_at = 1790632191
 weight = 0.0
 issue_number = 280
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/280"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "fb85e502"
@@ -18958,6 +19305,7 @@ updated_at = 1790632193
 weight = 0.0
 issue_number = 423
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/423"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "8d1232ff"
@@ -19034,6 +19382,7 @@ updated_at = 1790632194
 weight = 0.0
 issue_number = 767
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/767"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "6d59e6eb"
@@ -19057,6 +19406,7 @@ updated_at = 1790632195
 weight = 0.0
 issue_number = 282
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/282"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "5f351130"
@@ -19075,6 +19425,7 @@ updated_at = 1790632196
 weight = 0.0
 issue_number = 558
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/558"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "56a2cc7b"
@@ -19111,6 +19462,7 @@ updated_at = 1790632197
 weight = 0.0
 issue_number = 642
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/642"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "a7bc4de5"
@@ -19132,6 +19484,7 @@ updated_at = 1790632199
 weight = 0.0
 issue_number = 721
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/721"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "a82274cb"
@@ -19275,6 +19628,7 @@ updated_at = 1790632201
 weight = 0.0
 issue_number = 573
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/573"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "ef9753be"
@@ -19297,6 +19651,7 @@ updated_at = 1790632203
 weight = 0.0
 issue_number = 606
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/606"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "af239090"
@@ -19348,6 +19703,7 @@ updated_at = 1790632204
 weight = 0.0
 issue_number = 225
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/225"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "b07709f6"
@@ -19369,6 +19725,7 @@ updated_at = 1790632206
 weight = 0.0
 issue_number = 768
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/768"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "6c50e3e5"
@@ -19552,6 +19909,7 @@ updated_at = 1790632208
 weight = 0.0
 issue_number = 594
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/594"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "6af7bcdc"
@@ -19587,6 +19945,7 @@ updated_at = 1790632209
 weight = 0.0
 issue_number = 680
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/680"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "fc0fc220"
@@ -19630,6 +19989,7 @@ updated_at = 1790632210
 weight = 0.0
 issue_number = 799
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/799"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "39c4f200"
@@ -19648,6 +20008,7 @@ updated_at = 1790632211
 weight = 0.0
 issue_number = 162
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/162"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "5700ba25"
@@ -19666,6 +20027,7 @@ updated_at = 1790632214
 weight = 0.0
 issue_number = 210
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/210"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "5df88c1d"
@@ -19750,6 +20112,7 @@ updated_at = 1790632215
 weight = 0.0
 issue_number = 333
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/333"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "d182ed78"
@@ -19768,6 +20131,7 @@ updated_at = 1790632216
 weight = 0.0
 issue_number = 373
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/373"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "e53ea0ad"
@@ -19786,6 +20150,7 @@ updated_at = 1790632217
 weight = 0.0
 issue_number = 386
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/386"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "d693e2f9"
@@ -19808,6 +20173,7 @@ updated_at = 1790632218
 weight = 0.0
 issue_number = 405
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/405"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "8e2627fc"
@@ -19826,6 +20192,7 @@ updated_at = 1790632219
 weight = 0.0
 issue_number = 643
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/643"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "57da511b"
@@ -19864,6 +20231,7 @@ updated_at = 1790632220
 weight = 0.0
 issue_number = 709
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/709"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "6667b13a"
@@ -19885,6 +20253,7 @@ updated_at = 1790632222
 weight = 0.0
 issue_number = 722
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/722"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "21b7b1a7"
@@ -19961,6 +20330,7 @@ updated_at = 1790632224
 weight = 0.0
 issue_number = 131
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/131"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "b16f5465"
@@ -19982,6 +20352,7 @@ updated_at = 1790632225
 weight = 0.0
 issue_number = 180
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/180"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "241e7a47"
@@ -20004,6 +20375,7 @@ updated_at = 1790632226
 weight = 0.0
 issue_number = 188
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/188"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "81dfaae4"
@@ -20022,6 +20394,7 @@ updated_at = 1790632227
 weight = 0.0
 issue_number = 374
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/374"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "6764a51d"
@@ -20070,6 +20443,7 @@ updated_at = 1790632229
 weight = 0.0
 issue_number = 456
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/456"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "d52e2f79"
@@ -20118,6 +20492,7 @@ updated_at = 1790632230
 weight = 0.0
 issue_number = 554
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/554"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "2ae5503f"
@@ -20139,6 +20514,7 @@ updated_at = 1790632231
 weight = 0.0
 issue_number = 671
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/671"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "4d596f6b"
@@ -20208,6 +20584,7 @@ updated_at = 1790632233
 weight = 0.0
 issue_number = 477
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/477"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "d7b19e8d"
@@ -20226,6 +20603,7 @@ updated_at = 1790632234
 weight = 0.0
 issue_number = 262
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/262"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "2634e16c"
@@ -20254,6 +20632,7 @@ updated_at = 1790632235
 weight = 0.0
 issue_number = 467
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/467"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "3753f51c"
@@ -20272,6 +20651,7 @@ updated_at = 1790632238
 weight = 0.0
 issue_number = 563
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/563"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "fd653574"
@@ -20325,6 +20705,7 @@ updated_at = 1790632239
 weight = 0.0
 issue_number = 626
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/626"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "dd80eed1"
@@ -20347,6 +20728,7 @@ updated_at = 1790632240
 weight = 0.0
 issue_number = 230
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/230"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "a2591172"
@@ -20407,6 +20789,7 @@ updated_at = 1790632241
 weight = 0.0
 issue_number = 251
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/251"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "c4fe6df9"
@@ -20431,6 +20814,7 @@ updated_at = 1790632243
 weight = 0.0
 issue_number = 337
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/337"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "122a34d1"
@@ -20449,6 +20833,7 @@ updated_at = 1790632244
 weight = 0.0
 issue_number = 465
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/465"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "ea41fd4b"
@@ -20467,6 +20852,7 @@ updated_at = 1790632245
 weight = 0.0
 issue_number = 650
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/650"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "84b7bca0"
@@ -20560,6 +20946,7 @@ updated_at = 1790632247
 weight = 0.0
 issue_number = 762
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/762"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "67e95a19"
@@ -20620,6 +21007,7 @@ updated_at = 1790632252
 weight = 0.0
 issue_number = 84
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/84"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "7ec6fca5"
@@ -20643,6 +21031,7 @@ updated_at = 1790632253
 weight = 0.0
 issue_number = 235
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/235"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "03e004ec"
@@ -20661,6 +21050,7 @@ updated_at = 1790632255
 weight = 0.0
 issue_number = 665
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/665"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "ab2149c5"
@@ -20679,6 +21069,7 @@ updated_at = 1790632256
 weight = 0.0
 issue_number = 585
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/585"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "c4321fc2"
@@ -20865,6 +21256,7 @@ updated_at = 1790632258
 weight = 0.0
 issue_number = 457
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/457"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "1ab31978"
@@ -20886,6 +21278,7 @@ updated_at = 1790632259
 weight = 0.0
 issue_number = 79
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/79"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "ec3cbca3"
@@ -20907,6 +21300,7 @@ updated_at = 1790632261
 weight = 0.0
 issue_number = 27
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/27"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "0b24bff5"
@@ -20925,6 +21319,7 @@ updated_at = 1790632262
 weight = 0.0
 issue_number = 263
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/263"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "03ed9600"
@@ -20957,6 +21352,7 @@ updated_at = 1790632263
 weight = 0.0
 issue_number = 338
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/338"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "23ea3f77"
@@ -21038,6 +21434,7 @@ updated_at = 1790632265
 weight = 0.0
 issue_number = 381
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/381"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "27ff12fe"
@@ -21076,6 +21473,7 @@ updated_at = 1790632266
 weight = 0.0
 issue_number = 408
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/408"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "e9d1b093"
@@ -21134,6 +21532,7 @@ updated_at = 1790632268
 weight = 0.0
 issue_number = 468
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/468"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "028f9bc6"
@@ -21152,6 +21551,7 @@ updated_at = 1790632269
 weight = 0.0
 issue_number = 478
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/478"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "57c03b14"
@@ -21195,6 +21595,7 @@ updated_at = 1790632270
 weight = 0.0
 issue_number = 505
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/505"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "7357bc96"
@@ -21213,6 +21614,7 @@ updated_at = 1790632272
 weight = 0.0
 issue_number = 567
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/567"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "77ca162f"
@@ -21273,6 +21675,7 @@ updated_at = 1790632273
 weight = 0.0
 issue_number = 579
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/579"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "9c92597c"
@@ -21313,6 +21716,7 @@ updated_at = 1790632275
 weight = 0.0
 issue_number = 655
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/655"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "7ca076f8"
@@ -21334,6 +21738,7 @@ updated_at = 1790632276
 weight = 0.0
 issue_number = 672
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/672"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "d528b314"
@@ -21352,6 +21757,7 @@ updated_at = 1790632277
 weight = 0.0
 issue_number = 612
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/612"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "a6e9512d"
@@ -21375,6 +21781,7 @@ updated_at = 1790632278
 weight = 0.0
 issue_number = 149
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/149"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "3e7d5df8"
@@ -21393,6 +21800,7 @@ updated_at = 1790632280
 weight = 0.0
 issue_number = 168
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/168"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "d5838b6e"
@@ -21414,6 +21822,7 @@ updated_at = 1790632281
 weight = 0.0
 issue_number = 182
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/182"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "691fa4de"
@@ -21435,6 +21844,7 @@ updated_at = 1790632283
 weight = 0.0
 issue_number = 219
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/219"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "874bd03c"
@@ -21456,6 +21866,7 @@ updated_at = 1790632284
 weight = 0.0
 issue_number = 252
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/252"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "34d04c59"
@@ -21474,6 +21885,7 @@ updated_at = 1790632285
 weight = 0.0
 issue_number = 396
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/396"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "f4c91e60"
@@ -21492,6 +21904,7 @@ updated_at = 1790632287
 weight = 0.0
 issue_number = 540
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/540"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "d69f4b23"
@@ -21538,6 +21951,7 @@ updated_at = 1790632288
 weight = 0.0
 issue_number = 636
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/636"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "6bba2c81"
@@ -21556,6 +21970,7 @@ updated_at = 1790632289
 weight = 0.0
 issue_number = 742
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/742"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "6f1ea1b0"
@@ -21578,6 +21993,7 @@ updated_at = 1790632291
 weight = 0.0
 issue_number = 773
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/773"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "cac85c5b"
@@ -21600,6 +22016,7 @@ updated_at = 1790632292
 weight = 0.0
 issue_number = 801
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/801"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "9b7cb342"
@@ -21624,6 +22041,7 @@ updated_at = 1790634553
 weight = 0.0
 issue_number = 808
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/808"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "9fdb49d8"
@@ -21692,6 +22110,7 @@ updated_at = 1790634890
 weight = 0.0
 issue_number = 763
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/763"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "02bdd012"
@@ -21712,6 +22131,7 @@ updated_at = 1790634891
 weight = 0.0
 issue_number = 810
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/810"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "c02273d9"
@@ -21732,6 +22152,7 @@ updated_at = 1790634891
 weight = 0.0
 issue_number = 644
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/644"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "10b72c4d"
@@ -21757,6 +22178,7 @@ updated_at = 1790634971
 weight = 0.0
 issue_number = 183
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/183"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "207d0da6"
@@ -21806,6 +22228,7 @@ updated_at = 1790634973
 weight = 0.0
 issue_number = 798
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/798"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "617b3112"
@@ -21826,6 +22249,7 @@ updated_at = 1790634975
 weight = 0.0
 issue_number = 809
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/809"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "867dde4b"
@@ -21852,6 +22276,7 @@ updated_at = 1790635952
 weight = 0.0
 issue_number = 451
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/451"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "a83802ad"
@@ -21872,6 +22297,7 @@ updated_at = 1790635954
 weight = 0.0
 issue_number = 648
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/648"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "f1c170ab"
@@ -21932,6 +22358,7 @@ updated_at = 1790635955
 weight = 0.0
 issue_number = 490
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/490"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "06345780"
@@ -21956,6 +22383,7 @@ updated_at = 1790635956
 weight = 0.0
 issue_number = 775
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/775"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "d5613105"
@@ -21991,6 +22419,7 @@ updated_at = 1790635958
 weight = 0.0
 issue_number = 486
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/486"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "9271d739"
@@ -22037,6 +22466,7 @@ updated_at = 1790635959
 weight = 0.0
 issue_number = 500
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/500"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "70883137"
@@ -22061,6 +22491,7 @@ updated_at = 1790635960
 weight = 0.0
 issue_number = 783
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/783"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "e3366b5c"
@@ -22132,6 +22563,7 @@ updated_at = 1790635962
 weight = 0.0
 issue_number = 538
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/538"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "2cef09c5"
@@ -22168,6 +22600,7 @@ updated_at = 1790635963
 weight = 0.0
 issue_number = 425
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/425"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "842d552c"
@@ -22186,6 +22619,7 @@ updated_at = 1790678154
 weight = 0.0
 issue_number = 815
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/815"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "daf7611b"
@@ -22231,6 +22665,7 @@ updated_at = 1790678156
 weight = 0.0
 issue_number = 418
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/418"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "1875f626"
@@ -22260,6 +22695,7 @@ updated_at = 1790678157
 weight = 0.0
 issue_number = 729
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/729"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "6803bd45"
@@ -22295,6 +22731,7 @@ updated_at = 1790686354
 weight = 0.0
 issue_number = 812
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/812"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "ea68627b"
@@ -22322,6 +22759,7 @@ updated_at = 1790687683
 weight = 0.0
 issue_number = 106
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/106"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "d7f2a4ea"
@@ -22386,6 +22824,7 @@ updated_at = 1790718914
 weight = 0.0
 issue_number = 800
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/800"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "8aeb4cab"
@@ -22425,6 +22864,7 @@ updated_at = 1790718922
 weight = 0.0
 issue_number = 714
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/714"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "63e6b4ac"
@@ -22443,6 +22883,7 @@ updated_at = 1790719253
 weight = 0.0
 issue_number = 861
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/861"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "3ca750b9"
@@ -22461,6 +22902,7 @@ updated_at = 1790719254
 weight = 0.0
 issue_number = 122
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/122"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "0796137b"
@@ -22482,6 +22924,7 @@ updated_at = 1790719255
 weight = 0.0
 issue_number = 89
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/89"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "7c27050b"
@@ -22521,6 +22964,7 @@ updated_at = 1790719771
 weight = 0.0
 issue_number = 116
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/116"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "034b6620"
@@ -22543,6 +22987,7 @@ updated_at = 1790720243
 weight = 0.0
 issue_number = 136
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/136"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "491f6e94"
@@ -22578,6 +23023,7 @@ updated_at = 1790765701
 weight = 0.0
 issue_number = 884
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/884"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "04c3ca6f"
@@ -22596,6 +23042,7 @@ updated_at = 1790765702
 weight = 0.0
 issue_number = 880
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/880"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "64e52a8d"
@@ -22616,6 +23063,7 @@ updated_at = 1790793730
 weight = 0.0
 issue_number = 146
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/146"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "e269274f"
@@ -22647,6 +23095,7 @@ updated_at = 1790794458
 weight = 0.0
 issue_number = 179
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/179"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "f71ac81a"
@@ -22665,6 +23114,7 @@ updated_at = 1790794911
 weight = 0.0
 issue_number = 186
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/186"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "b2977afb"
@@ -22684,6 +23134,7 @@ updated_at = 1790795042
 weight = 0.0
 issue_number = 191
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/191"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "801d0bda"
@@ -22719,6 +23170,7 @@ updated_at = 1790796465
 weight = 0.0
 issue_number = 200
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/200"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "8acb117a"
@@ -22769,6 +23221,7 @@ updated_at = 1790796667
 weight = 0.0
 issue_number = 190
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/190"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "4cacdfae"
@@ -22788,6 +23241,7 @@ updated_at = 1790797344
 weight = 0.0
 issue_number = 187
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/187"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "e79afdd2"
@@ -22806,6 +23260,7 @@ updated_at = 1790797345
 weight = 0.0
 issue_number = 937
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/937"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "1a6c1c48"
@@ -22825,6 +23280,7 @@ updated_at = 1790882944
 weight = 0.0
 issue_number = 921
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/921"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "2133b6fe"
@@ -22848,6 +23304,7 @@ updated_at = 1790885249
 weight = 0.0
 issue_number = 166
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/166"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "3a8e3b73"
@@ -22889,6 +23346,7 @@ updated_at = 1790885724
 weight = 0.0
 issue_number = 130
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/130"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "ec878b2a"
@@ -22909,6 +23367,7 @@ updated_at = 1790885726
 weight = 0.0
 issue_number = 939
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/939"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "bdd85e20"
@@ -22929,6 +23388,7 @@ updated_at = 1790885728
 weight = 0.0
 issue_number = 942
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/942"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "f49e4a72"
@@ -22947,6 +23407,7 @@ updated_at = 1790885730
 weight = 0.0
 issue_number = 952
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/952"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "6becbf8d"
@@ -22972,6 +23433,7 @@ updated_at = 1790885582
 weight = 0.0
 issue_number = 150
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/150"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "80a46e9f"
@@ -22997,6 +23459,7 @@ updated_at = 1790885583
 weight = 0.0
 issue_number = 148
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/148"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "58022668"
@@ -23065,6 +23528,7 @@ updated_at = 1790886218
 weight = 0.0
 issue_number = 224
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/224"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "f6784177"
@@ -23092,6 +23556,7 @@ updated_at = 1790899425
 weight = 0.0
 issue_number = 171
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/171"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "5b89f0f6"
@@ -23119,6 +23584,7 @@ updated_at = 1790899427
 weight = 0.0
 issue_number = 176
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/176"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "f12c2168"
@@ -23171,6 +23637,7 @@ updated_at = 1790947612
 weight = 0.0
 issue_number = 203
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/203"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "7778b634"
@@ -23191,6 +23658,7 @@ updated_at = 1790980469
 weight = 0.0
 issue_number = 926
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/926"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "e8a61ec3"
@@ -23213,6 +23681,7 @@ updated_at = 1790980470
 weight = 0.0
 issue_number = 802
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/802"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "b63cbdf0"
@@ -23326,6 +23795,7 @@ updated_at = 1790982734
 weight = 0.0
 issue_number = 243
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/243"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "8696dd7e"
@@ -23356,6 +23826,7 @@ updated_at = 1790983551
 weight = 0.0
 issue_number = 140
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/140"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "e88d2e4d"
@@ -23373,6 +23844,7 @@ updated_at = 1790983114
 weight = 0.0
 issue_number = 197
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/197"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "bc25f8f4"
@@ -23390,6 +23862,7 @@ updated_at = 1790983115
 weight = 0.0
 issue_number = 209
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/209"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "7a1beb86"
@@ -23407,6 +23880,7 @@ updated_at = 1790983117
 weight = 0.0
 issue_number = 286
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/286"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "895655c7"
@@ -23443,6 +23917,7 @@ updated_at = 1790983118
 weight = 0.0
 issue_number = 298
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/298"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "a5d9bdd8"
@@ -23458,6 +23933,7 @@ updated_at = 1790983119
 weight = 0.0
 issue_number = 299
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/299"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "7ea9ed81"
@@ -23481,6 +23957,7 @@ updated_at = 1790983121
 weight = 0.0
 issue_number = 41
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/41"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "197c9fa0"
@@ -23519,6 +23996,7 @@ updated_at = 1790983123
 weight = 0.23
 issue_number = 115
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/115"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "45f14716"
@@ -23559,6 +24037,7 @@ updated_at = 1790983125
 weight = 0.0
 issue_number = 222
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/222"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "a2dd1747"
@@ -23580,6 +24059,7 @@ updated_at = 1790983127
 weight = 0.0
 issue_number = 232
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/232"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "09d17bb6"
@@ -23601,6 +24081,7 @@ updated_at = 1790983129
 weight = 0.0
 issue_number = 258
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/258"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "e8cd12de"
@@ -23621,6 +24102,7 @@ updated_at = 1790983131
 weight = 0.0
 issue_number = 261
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/261"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "b6cf486d"
@@ -23653,6 +24135,7 @@ updated_at = 1790983132
 weight = 0.0
 issue_number = 266
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/266"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "22a72fdf"
@@ -23697,6 +24180,7 @@ updated_at = 1790983134
 weight = 0.0
 issue_number = 275
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/275"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "0dc6546f"
@@ -23714,6 +24198,7 @@ updated_at = 1790983135
 weight = 0.0
 issue_number = 278
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/278"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "7ca0336b"
@@ -23732,6 +24217,7 @@ updated_at = 1790983137
 weight = 0.0
 issue_number = 279
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/279"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "310a6d56"
@@ -23916,6 +24402,7 @@ updated_at = 1790983139
 weight = 0.0
 issue_number = 390
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/390"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "282fbb8d"
@@ -23937,6 +24424,7 @@ updated_at = 1790983140
 weight = 0.0
 issue_number = 891
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/891"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "71db801a"
@@ -23954,6 +24442,7 @@ updated_at = 1790983141
 weight = 0.0
 issue_number = 394
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/394"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "a35997cb"
@@ -24003,6 +24492,7 @@ updated_at = 1790983143
 weight = 0.0
 issue_number = 528
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/528"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "d4d74fe2"
@@ -24035,6 +24525,7 @@ updated_at = 1790983145
 weight = 0.0
 issue_number = 688
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/688"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "0f0425d5"
@@ -24053,6 +24544,7 @@ updated_at = 1790983148
 weight = 0.0
 issue_number = 896
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/896"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "0c22c77b"
@@ -24088,6 +24580,7 @@ updated_at = 1790983150
 weight = 0.0
 issue_number = 700
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/700"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "f31dd957"
@@ -24110,6 +24603,7 @@ updated_at = 1790983151
 weight = 0.0
 issue_number = 560
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/560"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "c862300d"
@@ -24131,6 +24625,7 @@ updated_at = 1790983152
 weight = 0.0
 issue_number = 561
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/561"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "0793100b"
@@ -24148,6 +24643,7 @@ updated_at = 1790983153
 weight = 0.0
 issue_number = 564
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/564"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "b0934634"
@@ -24196,6 +24692,7 @@ updated_at = 1790983155
 weight = 0.0
 issue_number = 805
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/805"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "79d631d4"
@@ -24213,6 +24710,7 @@ updated_at = 1790983157
 weight = 0.0
 issue_number = 571
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/571"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "65d0c726"
@@ -24242,6 +24740,7 @@ updated_at = 1790983158
 weight = 0.0
 issue_number = 690
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/690"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "5cc59321"
@@ -24271,6 +24770,7 @@ updated_at = 1790983159
 weight = 0.0
 issue_number = 595
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/595"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "41508876"
@@ -24321,6 +24821,7 @@ updated_at = 1790983161
 weight = 0.0
 issue_number = 659
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/659"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "fe20606f"
@@ -24342,6 +24843,7 @@ updated_at = 1790983162
 weight = 0.0
 issue_number = 684
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/684"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "c10bbb8e"
@@ -24360,6 +24862,7 @@ updated_at = 1790983163
 weight = 0.0
 issue_number = 867
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/867"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "eb445233"
@@ -24391,6 +24894,7 @@ updated_at = 1790983164
 weight = 0.0
 issue_number = 698
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/698"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "9eeffa69"
@@ -24412,6 +24916,7 @@ updated_at = 1790983165
 weight = 0.0
 issue_number = 692
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/692"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "3447ed78"
@@ -24441,6 +24946,7 @@ updated_at = 1790983167
 weight = 0.0
 issue_number = 701
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/701"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "b95b0171"
@@ -24501,6 +25007,7 @@ updated_at = 1790983168
 weight = 0.0
 issue_number = 804
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/804"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "6142e803"
@@ -24523,6 +25030,7 @@ updated_at = 1790983169
 weight = 0.0
 issue_number = 806
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/806"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "866ab9f2"
@@ -24544,6 +25052,7 @@ updated_at = 1790983171
 weight = 0.0
 issue_number = 892
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/892"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "62000a3a"
@@ -24561,6 +25070,7 @@ updated_at = 1790983172
 weight = 0.0
 issue_number = 976
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/976"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "f96ab807"
@@ -24579,6 +25089,7 @@ updated_at = 1790983174
 weight = 0.0
 issue_number = 864
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/864"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "7271f6e3"
@@ -24600,6 +25111,7 @@ updated_at = 1790983175
 weight = 0.0
 issue_number = 899
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/899"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "eea7c61f"
@@ -24617,6 +25129,7 @@ updated_at = 1790983177
 weight = 0.0
 issue_number = 897
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/897"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "bbca0f83"
@@ -24634,6 +25147,7 @@ updated_at = 1790983178
 weight = 0.0
 issue_number = 944
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/944"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "9aced690"
@@ -24651,6 +25165,7 @@ updated_at = 1790983184
 weight = 0.0
 issue_number = 521
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/521"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "0f7da221"
@@ -24668,6 +25183,7 @@ updated_at = 1790983185
 weight = 0.0
 issue_number = 856
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/856"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "21cd115e"
@@ -24683,6 +25199,7 @@ updated_at = 1790983187
 weight = 0.0
 issue_number = 193
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/193"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "65d4fc18"
@@ -24700,6 +25217,7 @@ updated_at = 1790983188
 weight = 0.0
 issue_number = 859
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/859"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "400d3963"
@@ -24735,6 +25253,7 @@ updated_at = 1790983189
 weight = 0.0
 issue_number = 430
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/430"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "6354ae7a"
@@ -24895,6 +25414,7 @@ updated_at = 1790983192
 weight = 0.0
 issue_number = 907
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/907"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "97031994"
@@ -24925,6 +25445,7 @@ updated_at = 1790983193
 weight = 0.0
 issue_number = 212
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/212"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "ed0f8f65"
@@ -24967,6 +25488,7 @@ updated_at = 1790983194
 weight = 0.0
 issue_number = 501
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/501"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "565950fb"
@@ -24982,6 +25504,7 @@ updated_at = 1790983195
 weight = 0.0
 issue_number = 645
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/645"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "2731382e"
@@ -24997,6 +25520,7 @@ updated_at = 1790983196
 weight = 0.0
 issue_number = 646
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/646"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "3e44204b"
@@ -25225,6 +25749,7 @@ updated_at = 1790983198
 weight = 0.0
 issue_number = 649
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/649"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "0ebd3748"
@@ -25242,6 +25767,7 @@ updated_at = 1790983199
 weight = 0.0
 issue_number = 741
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/741"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "1302a69c"
@@ -25263,6 +25789,7 @@ updated_at = 1790983200
 weight = 0.0
 issue_number = 750
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/750"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "264990c9"
@@ -25285,6 +25812,7 @@ updated_at = 1790983202
 weight = 0.0
 issue_number = 152
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/152"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "c6bf41db"
@@ -25300,6 +25828,7 @@ updated_at = 1790983203
 weight = 0.0
 issue_number = 194
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/194"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "260f0774"
@@ -25321,6 +25850,7 @@ updated_at = 1790983204
 weight = 0.0
 issue_number = 778
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/778"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "23a39f9c"
@@ -25341,6 +25871,7 @@ updated_at = 1790983206
 weight = 0.0
 issue_number = 443
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/443"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "bbacb00d"
@@ -25358,6 +25889,7 @@ updated_at = 1790983208
 weight = 0.0
 issue_number = 211
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/211"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "ff17a108"
@@ -25420,6 +25952,7 @@ updated_at = 1790983209
 weight = 0.0
 issue_number = 450
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/450"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "1027d0f9"
@@ -25440,6 +25973,7 @@ updated_at = 1790983211
 weight = 0.0
 issue_number = 234
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/234"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "ba8789e0"
@@ -25458,6 +25992,7 @@ updated_at = 1790983212
 weight = 0.0
 issue_number = 269
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/269"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "73d26006"
@@ -25475,6 +26010,7 @@ updated_at = 1790983214
 weight = 0.0
 issue_number = 270
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/270"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "103e77af"
@@ -25526,6 +26062,7 @@ updated_at = 1790983215
 weight = 0.0
 issue_number = 273
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/273"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "87eda070"
@@ -25544,6 +26081,7 @@ updated_at = 1790983217
 weight = 0.0
 issue_number = 274
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/274"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "582c2ac2"
@@ -25570,6 +26108,7 @@ updated_at = 1790983218
 weight = 0.0
 issue_number = 413
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/413"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "76e9db53"
@@ -25654,6 +26193,7 @@ updated_at = 1790983221
 weight = 0.0
 issue_number = 377
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/377"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "dab43072"
@@ -25673,6 +26213,7 @@ updated_at = 1790983222
 weight = 0.0
 issue_number = 449
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/449"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "f6c5164e"
@@ -25851,6 +26392,7 @@ updated_at = 1790983224
 weight = 0.0
 issue_number = 543
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/543"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "fa54b8ed"
@@ -25872,6 +26414,7 @@ updated_at = 1790983226
 weight = 0.0
 issue_number = 562
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/562"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "840c4a17"
@@ -25895,6 +26438,7 @@ updated_at = 1790983227
 weight = 0.0
 issue_number = 582
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/582"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "44bb7ae9"
@@ -25912,6 +26456,7 @@ updated_at = 1790983228
 weight = 0.0
 issue_number = 584
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/584"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "635c50e5"
@@ -25959,6 +26504,7 @@ updated_at = 1790983229
 weight = 0.0
 issue_number = 586
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/586"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "4d0cffee"
@@ -25994,6 +26540,7 @@ updated_at = 1790983231
 weight = 0.0
 issue_number = 637
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/637"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "b9e09691"
@@ -26052,6 +26599,7 @@ updated_at = 1790983232
 weight = 0.0
 issue_number = 664
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/664"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "1ae35d62"
@@ -26074,6 +26622,7 @@ updated_at = 1790983233
 weight = 0.0
 issue_number = 683
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/683"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "6b3ba543"
@@ -26118,6 +26667,7 @@ updated_at = 1790983235
 weight = 0.0
 issue_number = 711
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/711"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "96072327"
@@ -26136,6 +26686,7 @@ updated_at = 1790983236
 weight = 0.0
 issue_number = 746
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/746"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "876943f1"
@@ -26156,6 +26707,7 @@ updated_at = 1790983237
 weight = 0.0
 issue_number = 765
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/765"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "726c32c5"
@@ -26176,6 +26728,7 @@ updated_at = 1790983238
 weight = 0.0
 issue_number = 774
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/774"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "9443d2e1"
@@ -26199,6 +26752,7 @@ updated_at = 1790983240
 weight = 0.0
 issue_number = 811
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/811"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "c1641525"
@@ -26217,6 +26771,7 @@ updated_at = 1790983241
 weight = 0.0
 issue_number = 814
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/814"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "7719038e"
@@ -26261,6 +26816,7 @@ updated_at = 1790983242
 weight = 0.0
 issue_number = 821
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/821"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "e110b1e8"
@@ -26282,6 +26838,7 @@ updated_at = 1790983244
 weight = 0.0
 issue_number = 822
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/822"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "eb851ba3"
@@ -26302,6 +26859,7 @@ updated_at = 1790983245
 weight = 0.0
 issue_number = 823
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/823"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "2e05079b"
@@ -26319,6 +26877,7 @@ updated_at = 1790983246
 weight = 0.0
 issue_number = 832
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/832"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "745a695a"
@@ -26336,6 +26895,7 @@ updated_at = 1790983247
 weight = 0.0
 issue_number = 833
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/833"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "57a98a8f"
@@ -26354,6 +26914,7 @@ updated_at = 1790983249
 weight = 0.0
 issue_number = 889
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/889"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "f9c5b710"
@@ -26371,6 +26932,7 @@ updated_at = 1790983250
 weight = 0.0
 issue_number = 941
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/941"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "421e7990"
@@ -26392,6 +26954,7 @@ updated_at = 1790983252
 weight = 0.0
 issue_number = 155
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/155"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "352d2bf6"
@@ -26446,6 +27009,7 @@ updated_at = 1790983254
 weight = 0.0
 issue_number = 409
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/409"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "c867ff8e"
@@ -26464,6 +27028,7 @@ updated_at = 1790983256
 weight = 0.0
 issue_number = 559
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/559"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "7182a24c"
@@ -26491,6 +27056,7 @@ updated_at = 1790983257
 weight = 0.0
 issue_number = 694
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/694"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "6a68526b"
@@ -26509,6 +27075,7 @@ updated_at = 1790983259
 weight = 0.0
 issue_number = 744
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/744"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "96051a14"
@@ -26527,6 +27094,7 @@ updated_at = 1790983261
 weight = 0.0
 issue_number = 853
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/853"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "b5e0b543"
@@ -26544,6 +27112,7 @@ updated_at = 1790983263
 weight = 0.0
 issue_number = 870
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/870"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "c6b74ed8"
@@ -26561,6 +27130,7 @@ updated_at = 1790983264
 weight = 0.0
 issue_number = 886
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/886"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "46cbfaa3"
@@ -26578,6 +27148,7 @@ updated_at = 1790983266
 weight = 0.0
 issue_number = 918
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/918"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "f450adad"
@@ -26599,6 +27170,7 @@ updated_at = 1790983267
 weight = 0.0
 issue_number = 930
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/930"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "840449a8"
@@ -26636,6 +27208,7 @@ updated_at = 1790983268
 weight = 0.0
 issue_number = 681
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/681"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "cba17102"
@@ -26651,6 +27224,7 @@ updated_at = 1790983270
 weight = 0.0
 issue_number = 283
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/283"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "032d28a7"
@@ -26666,6 +27240,7 @@ updated_at = 1790983271
 weight = 0.0
 issue_number = 297
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/297"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "c43c6415"
@@ -26705,6 +27280,7 @@ updated_at = 1790983274
 weight = 0.0
 issue_number = 439
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/439"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "926bc95a"
@@ -26722,6 +27298,7 @@ updated_at = 1790983275
 weight = 0.0
 issue_number = 445
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/445"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "06baf54d"
@@ -26768,6 +27345,7 @@ updated_at = 1790983277
 weight = 0.0
 issue_number = 362
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/362"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "2fb49f5c"
@@ -26785,6 +27363,7 @@ updated_at = 1790983278
 weight = 0.0
 issue_number = 371
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/371"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "7dc7d039"
@@ -26816,6 +27395,7 @@ updated_at = 1790983279
 weight = 0.0
 issue_number = 384
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/384"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "32c24a28"
@@ -26833,6 +27413,7 @@ updated_at = 1790983280
 weight = 0.0
 issue_number = 389
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/389"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "1601272b"
@@ -26903,6 +27484,7 @@ updated_at = 1790983281
 weight = 0.0
 issue_number = 397
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/397"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "69fd9a91"
@@ -26962,6 +27544,7 @@ updated_at = 1790983285
 weight = 0.0
 issue_number = 484
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/484"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "2348d3e4"
@@ -27005,6 +27588,7 @@ updated_at = 1790983286
 weight = 0.0
 issue_number = 498
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/498"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "06a9d33f"
@@ -27044,6 +27628,7 @@ updated_at = 1790983287
 weight = 0.0
 issue_number = 494
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/494"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "da4e353d"
@@ -27061,6 +27646,7 @@ updated_at = 1790983289
 weight = 0.0
 issue_number = 527
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/527"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "83b6ec7a"
@@ -27092,6 +27678,7 @@ updated_at = 1790983290
 weight = 0.0
 issue_number = 583
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/583"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "55826e4f"
@@ -27114,6 +27701,7 @@ updated_at = 1790983291
 weight = 0.0
 issue_number = 601
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/601"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "e0342a84"
@@ -27134,6 +27722,7 @@ updated_at = 1790983293
 weight = 0.0
 issue_number = 788
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/788"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "3ff1c172"
@@ -27180,6 +27769,7 @@ updated_at = 1790983295
 weight = 0.0
 issue_number = 662
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/662"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "20e35ba2"
@@ -27233,6 +27823,7 @@ updated_at = 1790983296
 weight = 0.0
 issue_number = 660
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/660"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "67d389bf"
@@ -27250,6 +27841,7 @@ updated_at = 1790983298
 weight = 0.0
 issue_number = 831
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/831"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "ab1328cc"
@@ -27267,6 +27859,7 @@ updated_at = 1790983299
 weight = 0.0
 issue_number = 841
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/841"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "1da483dc"
@@ -27285,6 +27878,7 @@ updated_at = 1790983301
 weight = 0.0
 issue_number = 890
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/890"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "537742c7"
@@ -27302,6 +27896,7 @@ updated_at = 1790983302
 weight = 0.0
 issue_number = 871
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/871"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "3a0ceb58"
@@ -27319,6 +27914,7 @@ updated_at = 1790983304
 weight = 0.0
 issue_number = 898
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/898"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "2240dcdd"
@@ -27339,6 +27935,7 @@ updated_at = 1790983305
 weight = 0.0
 issue_number = 925
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/925"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "5cff1d65"
@@ -27357,6 +27954,7 @@ updated_at = 1790983307
 weight = 0.0
 issue_number = 913
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/913"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "86c8b8e9"
@@ -27374,6 +27972,7 @@ updated_at = 1790983308
 weight = 0.0
 issue_number = 919
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/919"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "2dedd498"
@@ -27393,6 +27992,7 @@ updated_at = 1790983310
 weight = 0.0
 issue_number = 319
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/319"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "35f35d51"
@@ -27414,6 +28014,7 @@ updated_at = 1790983311
 weight = 0.0
 issue_number = 707
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/707"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "76ea3820"
@@ -27441,6 +28042,7 @@ updated_at = 1790983313
 weight = 0.0
 issue_number = 687
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/687"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "3bd68bd3"
@@ -27494,6 +28096,7 @@ updated_at = 1790983314
 weight = 0.0
 issue_number = 475
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/475"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "e664320a"
@@ -27524,6 +28127,7 @@ updated_at = 1790983316
 weight = 0.75
 issue_number = 111
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/111"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "841fb5c8"
@@ -27570,6 +28174,7 @@ updated_at = 1790983318
 weight = 0.0
 issue_number = 547
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/547"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "d038263b"
@@ -27590,6 +28195,7 @@ updated_at = 1790983320
 weight = 0.0
 issue_number = 87
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/87"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "23d35b19"
@@ -27678,6 +28284,7 @@ updated_at = 1790983322
 weight = 0.0
 issue_number = 550
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/550"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "15ef580f"
@@ -27739,6 +28346,7 @@ updated_at = 1790983323
 weight = 0.0
 issue_number = 555
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/555"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "e0269780"
@@ -27773,6 +28381,7 @@ updated_at = 1790983325
 weight = 0.0
 issue_number = 668
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/668"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "b72a01a0"
@@ -27790,6 +28399,7 @@ updated_at = 1790983327
 weight = 0.0
 issue_number = 824
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/824"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "3b790fdb"
@@ -27811,6 +28421,7 @@ updated_at = 1790983329
 weight = 0.0
 issue_number = 874
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/874"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "4f81182f"
@@ -27831,6 +28442,7 @@ updated_at = 1790983331
 weight = 0.0
 issue_number = 915
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/915"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "4a66378d"
@@ -27853,6 +28465,7 @@ updated_at = 1790983333
 weight = 0.0
 issue_number = 704
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/704"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "6f629b2b"
@@ -27888,6 +28501,7 @@ updated_at = 1790983335
 weight = 0.0
 issue_number = 379
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/379"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "c1a7fc04"
@@ -27905,6 +28519,7 @@ updated_at = 1790983336
 weight = 0.0
 issue_number = 572
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/572"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "b187ecea"
@@ -27925,6 +28540,7 @@ updated_at = 1790983338
 weight = 0.0
 issue_number = 927
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/927"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "03bc578c"
@@ -27982,6 +28598,7 @@ updated_at = 1790983339
 weight = 0.0
 issue_number = 432
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/432"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "5b29d11e"
@@ -28036,6 +28653,7 @@ updated_at = 1790983342
 weight = 0.0
 issue_number = 508
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/508"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "39040552"
@@ -28058,6 +28676,7 @@ updated_at = 1790983344
 weight = 0.0
 issue_number = 780
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/780"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "2deae159"
@@ -28078,6 +28697,7 @@ updated_at = 1790983345
 weight = 0.0
 issue_number = 928
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/928"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "60cf39ab"
@@ -28108,6 +28728,7 @@ updated_at = 1790983348
 weight = 0.0
 issue_number = 364
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/364"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "a87189fa"
@@ -28138,6 +28759,7 @@ updated_at = 1790983349
 weight = 0.0
 issue_number = 523
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/523"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "b0cacd15"
@@ -28180,6 +28802,7 @@ updated_at = 1790983351
 weight = 0.0
 issue_number = 301
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/301"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "60a24f9a"
@@ -28201,6 +28824,7 @@ updated_at = 1790983352
 weight = 0.0
 issue_number = 42
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/42"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "4f9516be"
@@ -28221,6 +28845,7 @@ updated_at = 1790983354
 weight = 0.0
 issue_number = 72
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/72"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "6a707b72"
@@ -28244,6 +28869,7 @@ updated_at = 1790983355
 weight = 0.0
 issue_number = 691
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/691"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "2d7fac3d"
@@ -28261,6 +28887,7 @@ updated_at = 1790983357
 weight = 0.0
 issue_number = 101
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/101"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "dc3e2ae9"
@@ -28278,6 +28905,7 @@ updated_at = 1790983359
 weight = 0.0
 issue_number = 829
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/829"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "6a963a6a"
@@ -28314,6 +28942,7 @@ updated_at = 1790983361
 weight = 0.0
 issue_number = 553
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/553"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "4442a2e7"
@@ -28344,6 +28973,7 @@ updated_at = 1790983362
 weight = 0.0
 issue_number = 946
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/946"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "19ebd4a9"
@@ -28365,6 +28995,7 @@ updated_at = 1790983364
 weight = 0.0
 issue_number = 703
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/703"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "b94e1892"
@@ -28385,6 +29016,7 @@ updated_at = 1790983366
 weight = 0.0
 issue_number = 936
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/936"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "ddc2e088"
@@ -28402,6 +29034,7 @@ updated_at = 1790983368
 weight = 0.0
 issue_number = 375
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/375"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "7a1d0ec3"
@@ -28423,6 +29056,7 @@ updated_at = 1790983370
 weight = 0.0
 issue_number = 406
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/406"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "20a9564d"
@@ -28455,6 +29089,7 @@ updated_at = 1790983372
 weight = 0.0
 issue_number = 514
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/514"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "977e7b2a"
@@ -28495,6 +29130,7 @@ updated_at = 1790983374
 weight = 0.0
 issue_number = 653
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/653"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "4ea30ce0"
@@ -28527,6 +29163,7 @@ updated_at = 1790983375
 weight = 0.0
 issue_number = 654
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/654"
+issue_closed_at = 1790984194
 
 [[task]]
 id = "19c237e5"
@@ -28544,3 +29181,113 @@ updated_at = 1790983378
 weight = 0.0
 issue_number = 1079
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1079"
+issue_closed_at = 1790984194
+
+[[task]]
+id = "23869ff7"
+title = "context-governor: the rehydrator never runs on compact, so the pin-survival invariant I1 it exists to deliver is not wired"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "context-governor",
+    "doc-claims",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+Found 2026-08-14 while auditing 966ae7aa applicability (measurement point ee214481). Self-evidencing from the crate itself; no external knowledge needed.
+
+crates/context-governor/hooks/hooks.json registers SessionStart with matcher "startup|resume|clear". The value "compact" is EXCLUDED.
+
+Three docstrings assert the opposite:
+  crates/context-governor/src/defaults/rehydrator.rs:1-3  "so pins survive compaction (I1) ... Most relevant on source == compact"
+  crates/context-governor/src/handlers.rs:63-64            "so pins survive compaction (I1)"
+  crates/context-governor/src/types.rs:20-24               "long-lived pins are re-injected at SessionStart(compact) so they survive compaction"
+
+And the crate documents "compact" as a valid SessionStart source itself:
+  crates/context-governor/src/io.rs:13-14
+
+NET EFFECT: PreCompact snapshots pins to disk, compaction runs, and nothing re-injects them. I1
+(lossless recall of pinned/verbatim content across compaction) is not delivered in-session. The
+mechanism the crate is built around is disconnected at the hook registration, not in the logic.
+
+docs/coexistence-with-ctxrot.md around line 110 repeats the false claim ("recoverable afterward ...
+CG via the SessionStart rehydrator").
+
+This is CLAUDE.md section 4: prose asserting behavior the implementation does not have, in the exact
+shape that deceives the next reviewer. Fix is either to add compact to the matcher (and prove the
+rehydration behaviourally) or to correct all four prose sites in the same commit.
+
+NOT DONE: no fix attempted, no test written. Reported by the t4 investigator of run
+run-20260814-025356-78549; that agent made no source change by design.
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/context-governor/tests/backlog_23869ff7.rs (rev e70d48dd)"""
+created_at = 1786644197
+updated_at = 1790984129
+weight = 0.0
+issue_number = 342
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/342"
+issue_closed_at = 1790984131
+
+[[task]]
+id = "565fb2a8"
+title = "context-governor: the coexistence test for SessionStart(compact) bypasses the hook matcher, so it can never observe that the rehydrator is unwired"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "context-governor",
+    "test-vacuity",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+Found 2026-08-14 alongside the rehydrator wiring gap (measurement point ee214481).
+
+crates/context-governor/tests/context_governor_coexistence_with_ctxrot.rs:190-210,
+test session_start_on_compact_source_exits_zero, is docstringed "this is exactly where CG rehydrator
+is *most* active".
+
+What it actually does: invokes the BINARY DIRECTLY with {"source": "compact"}, which BYPASSES the
+hooks.json matcher entirely, and then asserts only exit == 0, against an EMPTY store.
+
+So the test cannot fail when the matcher excludes compact (the wiring defect), and it cannot fail
+when rehydration emits nothing (empty store + exit-code-only assertion). It is green for reasons
+unrelated to the property its docstring claims.
+
+This is the CLAUDE.md section 2 pattern named in the repo guide: a test that verifies nothing has its
+assert fixed as the specification, and review then reads the green as coverage. The question to ask
+first is "what does this test NOT prove".
+
+Related: the wiring defect this test masks is filed separately in the same batch.
+
+NOT DONE: no fix, no replacement test. Reported by the t4 investigator of run
+run-20260814-025356-78549.
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/context-governor/tests/backlog_565fb2a8.rs (rev 529df3a8): RED cause overlaps 23869ff7 (matcher); this test is the non-vacuous replacement the docstring promises"""
+created_at = 1786644198
+updated_at = 1790984131
+weight = 0.0
+issue_number = 343
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/343"
+issue_closed_at = 1790984132
+
+[[task]]
+id = "d65da48d"
+title = "backlog の status 語彙が表示面と編集面で食い違う: 集計は deferred を数えるが backlog edit は受け付けない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-09-13、測定点 36e3f960。backlog edit c3a98510 --status deferred は次の逐語エラーで拒否した: warning: unknown status deferred; valid values are pending | done | failed。一方 SessionStart の overwatch status が出す Backlog 集計は pending / done / deferred の3行を表示し deferred: 0 と報告する。つまり読み出し面は deferred という状態が存在する前提で書かれているのに、書き込み面にはその状態へ遷移する手段が無い。/ 帰結: 常に 0 を表示し続けるカウンタになっている。0 は 該当なし とも 到達不能 とも読めるが、実際は後者である。これは CLAUDE.md 第3節が問題にする 判定不能と判定済みが下流から区別不能 の小型版であり、集計を読む人間に 保留にした仕事は無い という誤った安心を与える。/ この欠落が実作業を歪めた実例: 本セッションで c3a98510 (hook テスト3本が実行されない) を2度ピックした。このチケットは自分の notes で 独立作業ではなく他の handoff に包含される、かつ wiring すると既知の RED が全 push を block する と述べており、着手すべきでない順序依存を持つ。しかし pending 以外に置く手段が無いため毎ラウンド next --claim に現れ、並列バッチの枠を消費し続ける。/ 判定不能なので両方の読み: (a) 実在の欠陥 = deferred が実装途中で、書き込み側だけ未配線。(b) 意図的 = deferred は defer_until による時限保留の派生表示であり、明示的な状態遷移は設計上持たせていない (Task に defer_until フィールドは実在する)。見分け方: defer_until をセットした task が集計で deferred に数えられるかを測る。数えられるなら (b) で、必要なのは deferred ではなく defer_until を打つ CLI 表面である。/ 関連 c3a98510。
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/backlog/tests/backlog_d65da48d.rs (rev d2e54735): The item's discriminator answered: a defer_until task is NOT counted as deferred by the JSON consumer; the counter is unreachable. Fix shape (json status vs edit surface) is still a design call."""
+created_at = 1789279099
+updated_at = 1790984954
+weight = 0.0
+issue_number = 566
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/566"
+issue_closed_at = 1790984956

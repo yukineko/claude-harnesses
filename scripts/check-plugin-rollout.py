@@ -344,6 +344,59 @@ def _source_core_version():
 SOURCE_CORE_VERSION = _source_core_version
 
 
+def _compare_versions(a, b):
+    """-1/0/1 for dotted-integer versions a vs b; None when not comparable.
+
+    None is not "equal": the caller reports it as undetermined.
+    """
+    def parse(v):
+        parts = str(v).split(".")
+        if not parts or not all(p.isdigit() for p in parts):
+            return None
+        return tuple(int(p) for p in parts)
+
+    pa, pb = parse(a), parse(b)
+    if pa is None or pb is None:
+        return None
+    width = max(len(pa), len(pb))
+    pa += (0,) * (width - len(pa))
+    pb += (0,) * (width - len(pb))
+    return (pa > pb) - (pa < pb)
+
+
+def _core_version_in_history(version):
+    """Did crates/harness-core/Cargo.toml ever carry `version = "<version>"`?
+
+    True / False, or None when git could not answer (None is not "absent").
+    """
+    import subprocess
+
+    needle = f'version = "{version}"'
+    # REPO is the cwd. From anywhere but the repo root the pathspec matches
+    # nothing and git answers "no commits" with rc 0 — that would read as
+    # "not in history" when the question was never asked.
+    if not os.path.isfile(os.path.join(REPO, "crates", "harness-core", "Cargo.toml")):
+        return None
+    try:
+        proc = subprocess.run(
+            ["git", "log", "--all", "--format=%H", "-S", needle, "--",
+             "crates/harness-core/Cargo.toml"],
+            cwd=REPO,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return bool(proc.stdout.strip())
+
+
+# Rebindable so the orphan report is testable without a git repo.
+CORE_VERSION_IN_HISTORY = _core_version_in_history
+
+
 def _host_suffix():
     """This host's `<os>-<arch>` binary suffix, matching rebuild-plugins.sh's $SUF.
 
@@ -1347,10 +1400,48 @@ def _provenance_problem(crate, entry):
                 "undetermined is not 'agrees'"
             )
         if recorded_core != current_core:
+            # The DIRECTION decides the remedy (backlog e8aad6e6). Source newer
+            # is a stale deploy and rollout fixes it; deployed newer means the
+            # bytes came from code this tree does not have (an unmerged branch),
+            # so rollout would be a rollback. Both stay red. An order we cannot
+            # establish is red too, with no prescription in either direction.
+            order = _compare_versions(recorded_core, current_core)
+            if order is None:
+                return (
+                    f"{crate}: deployed binary links harness-core "
+                    f"{recorded_core} and the source tree is at {current_core}, "
+                    "but the two cannot be ordered (not plain dotted integers) — "
+                    "undetermined whether this is a stale deploy or an orphan, "
+                    "so neither rollout nor leaving it is prescribed"
+                )
+            if order < 0:
+                return (
+                    f"{crate}: deployed binary links harness-core "
+                    f"{recorded_core}, but the source tree is now at {current_core} "
+                    "<- rollout-plugins.sh not run since that shared-crate change"
+                )
+            in_history = CORE_VERSION_IN_HISTORY(recorded_core)
+            if in_history is True:
+                where = (
+                    f"version {recorded_core} appears in this repo's history "
+                    "of crates/harness-core/Cargo.toml"
+                )
+            elif in_history is False:
+                where = (
+                    f"version {recorded_core} is NOT in this repo's history "
+                    "of crates/harness-core/Cargo.toml (likely an unmerged branch)"
+                )
+            else:
+                where = (
+                    f"could not determine whether version {recorded_core} "
+                    "exists in this repo's history"
+                )
             return (
-                f"{crate}: deployed binary links harness-core "
-                f"{recorded_core}, but the source tree is now at {current_core} "
-                "<- rollout-plugins.sh not run since that shared-crate change"
+                f"{crate}: orphan provenance — deployed binary links harness-core "
+                f"{recorded_core}, NEWER than the source tree's {current_core}; "
+                f"{where}. Running rollout for this plugin would be a ROLLBACK "
+                "(do NOT apply the Fix line below to it); merge the branch that "
+                "produced it first"
             )
 
     moved = SOURCE_CHANGED_SINCE(commit, crate)

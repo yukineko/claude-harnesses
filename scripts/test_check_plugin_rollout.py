@@ -1730,6 +1730,78 @@ class SharedCrateVersion(_FixtureCase):
         )
 
 
+class SharedCrateVersionDirection(_FixtureCase):
+    """Direction of a harness-core mismatch (backlog e8aad6e6).
+
+    "deployed != source" has two causes with OPPOSITE remedies:
+      (A) source newer   -> stale deploy; rollout is the fix.
+      (B) deployed newer -> orphan provenance (bytes from code not in this tree);
+          rollout would be a ROLLBACK and can destroy a live session's work.
+    Both stay red; what differs is the prescription.
+    """
+
+    def _run(self, recorded, source, in_history=None):
+        had = hasattr(cpr, "CORE_VERSION_IN_HISTORY")
+        saved = getattr(cpr, "CORE_VERSION_IN_HISTORY", None)
+        cpr.CORE_VERSION_IN_HISTORY = lambda v: in_history
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                return self.run_main(
+                    tmp,
+                    provenance={
+                        "condukt": {
+                            "commit": "deadbeef" * 5,
+                            "dirty": False,
+                            "harness_core_version": recorded,
+                        }
+                    },
+                    core_version=source,
+                )
+        finally:
+            if had:
+                cpr.CORE_VERSION_IN_HISTORY = saved
+            else:
+                del cpr.CORE_VERSION_IN_HISTORY
+
+    def test_source_newer_prescribes_rollout_not_rollback(self):
+        rc, out, err = self._run("0.2.9", "0.2.10")
+        text = out + err
+        self.assertNotEqual(rc, 0, text)
+        self.assertIn("rollout-plugins.sh not run", text)
+        self.assertNotIn("ROLLBACK", text)
+
+    def test_deployed_newer_is_orphan_and_warns_rollback(self):
+        rc, out, err = self._run("0.2.10", "0.2.9", in_history=False)
+        text = out + err
+        self.assertNotEqual(rc, 0, f"an orphan must stay red.\n{text}")
+        self.assertIn("ROLLBACK", text)
+        self.assertIn("orphan", text)
+        self.assertNotIn("rollout-plugins.sh not run", text)
+        self.assertIn("NOT in this repo's history", text)
+
+    def test_deployed_newer_reports_when_version_exists_in_history(self):
+        rc, out, err = self._run("0.2.10", "0.2.9", in_history=True)
+        text = out + err
+        self.assertNotEqual(rc, 0, text)
+        self.assertIn("ROLLBACK", text)
+        self.assertIn("appears in this repo's history", text)
+
+    def test_history_lookup_undetermined_is_said_not_guessed(self):
+        rc, out, err = self._run("0.2.10", "0.2.9", in_history=None)
+        text = out + err
+        self.assertNotEqual(rc, 0, text)
+        self.assertIn("ROLLBACK", text)
+        self.assertIn("could not determine whether", text)
+
+    def test_incomparable_versions_fail_closed_without_prescription(self):
+        rc, out, err = self._run("0.2.x-dev", "0.2.9")
+        text = out + err
+        self.assertNotEqual(rc, 0, f"incomparable must not pass.\n{text}")
+        self.assertIn("cannot be ordered", text)
+        self.assertNotIn("rollout-plugins.sh not run", text)
+        self.assertNotIn("ROLLBACK", text)
+
+
 def _park(name="taintguard", **over):
     """A minimal VALID parked declaration for one plugin."""
     entry = {"reason": "false positive under measurement", "parked_at": "2026-08-04"}

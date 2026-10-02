@@ -3603,10 +3603,20 @@ fn resolve_expanded_command_word(cmd: &str, seg_idx: usize, word: &str) -> Comma
     CommandWordOrigin::Literal(value)
 }
 
-/// Resolve a redirect TARGET that is a bare variable expansion (`> "$P"`) to
-/// the literal path it will name, when an assignment EARLIER IN THE SAME
-/// COMMAND determines it. `None` means "not resolvable" and the caller must
-/// keep judging the raw token exactly as before.
+/// Resolve a redirect TARGET that is a variable expansion — alone (`> "$P"`)
+/// or followed by a literal suffix (`> $P/x.log`) — to the literal path it
+/// will name, when an assignment EARLIER IN THE SAME COMMAND determines it.
+/// `None` means "not resolvable" and the caller must keep judging the raw
+/// token exactly as before.
+///
+/// The suffix form was not handled until 0.2.98 (backlog af1565aa), and the
+/// gap was visible in the only place it matters: `P=<dir>/absent.log; : > $P`
+/// reached **Allow** while `P=<dir>; : > $P/absent.log` — the same write —
+/// reached **Deny**, because the second target never cleared
+/// [`referenced_variable_name`], which requires the WHOLE word to be the
+/// reference. The axes then received the unplaceable raw token and the line
+/// fell through to the flat Deny, exactly the "one effect, two verdicts,
+/// decided by spelling" defect the bare form was fixed for.
 ///
 /// `seg_idx` is the segment the occurrence being judged lives in, supplied by
 /// [`redirect_target_occurrences`]. It is NOT derived from the token text:
@@ -3636,14 +3646,169 @@ fn resolve_expanded_command_word(cmd: &str, seg_idx: usize, word: &str) -> Comma
 /// therefore to `None` here. Those are the cases where "which file is this"
 /// has no answer, and per CLAUDE.md §3 no answer is not a permissive answer.
 fn resolve_redirect_target_at(cmd: &str, seg_idx: usize, target: &str) -> Option<String> {
-    // A literal path: nothing to resolve, nothing to change.
-    referenced_variable_name(target)?;
-    match resolve_expanded_command_word(cmd, seg_idx, target) {
-        CommandWordOrigin::Literal(value) => Some(value),
-        // `AssignedButUnknowable` and `NoReachingAssignment` are both "this
-        // token does not name a path I can see" - the restrictive side.
+    // A literal path: nothing to resolve, nothing to change. Checked via the
+    // whole-word form FIRST so the pre-existing bare case keeps reaching
+    // `resolve_expanded_command_word` with the exact token it always did.
+    if referenced_variable_name(target).is_some() {
+        return match resolve_expanded_command_word(cmd, seg_idx, target) {
+            CommandWordOrigin::Literal(value) => Some(value),
+            // `AssignedButUnknowable` and `NoReachingAssignment` are both "this
+            // token does not name a path I can see" - the restrictive side.
+            _ => None,
+        };
+    }
+    // Reference + literal suffix. The believability rules are NOT duplicated:
+    // only the REFERENCE goes to `resolve_expanded_command_word`, so a guarded
+    // assignment, an array, a value that is itself an expansion, a later
+    // unreadable rebind and an empty value all still resolve to something other
+    // than `Literal` and therefore to `None` here.
+    let (reference, suffix) = reference_with_literal_suffix(target)?;
+    match resolve_expanded_command_word(cmd, seg_idx, &reference) {
+        CommandWordOrigin::Literal(value) => Some(format!("{value}{suffix}")),
         _ => None,
     }
+}
+
+/// Split a redirect target into the single variable reference it BEGINS with
+/// and the literal suffix that follows, when the word has exactly that shape.
+///
+/// `None` means "not that shape", which the caller treats as unresolvable —
+/// never as "no suffix". The two are different answers and collapsing them
+/// would hand the caller a path the shell will not produce.
+///
+/// What the suffix may be is deliberately narrow, because the value is
+/// CONCATENATED onto a resolved path and anything the shell would further
+/// transform makes that concatenation a different file:
+///
+/// * no `$` or backtick (via [`has_unresolvable_expansion`]) — a second
+///   expansion is a second unknown, and resolving half of a two-unknown target
+///   would answer about a path that does not exist;
+/// * no quote character and no backslash — `"$P"'/x'` really does concatenate
+///   in bash, but reading alternating quote runs is a second parser and this
+///   function is not it, so the shape is refused rather than guessed at;
+/// * no glob metacharacter (`*`, `?`, `[`) — a glob can name MANY files or
+///   none, so there is no single path to hand the axes. `bash -c 'ls /etc/*'`
+///   expanding to many words is the whole point of a glob; a verdict about one
+///   of them would be a verdict about the wrong file.
+///
+/// The unbraced/braced distinction is not cosmetic and was measured rather than
+/// assumed (`bash -c`, 2026-10-02):
+///
+/// ```text
+/// P=/tmp; echo $Pfoo    -> (empty)    # a reference to `Pfoo`, NOT $P + "foo"
+/// P=/tmp; echo $P_x     -> (empty)    # `_` continues the name too
+/// P=/tmp; echo $P/foo   -> /tmp/foo
+/// P=/tmp; echo $P.bak   -> /tmp.bak
+/// P=/tmp; echo ${P}foo  -> /tmpfoo    # the braces end the name
+/// ```
+///
+/// So for the unbraced form the name is the LONGEST identifier run after `$`,
+/// which makes the suffix start with a non-identifier character by
+/// construction — there is no separate rule to get wrong. For the braced form
+/// the suffix may start with anything, including a letter.
+fn reference_with_literal_suffix(word: &str) -> Option<(String, String)> {
+    // One level of double quoting, stripped the way `referenced_variable_name`
+    // strips it: `"$P/x"` and `"$P"/x` expand identically, so both must reach
+    // the same answer. An interior quote is refused above.
+    if word.len() >= 2 && word.starts_with('"') && word.ends_with('"') {
+        let mid = &word[1..word.len() - 1];
+        if mid.contains('"') {
+            return None;
+        }
+        return reference_with_literal_suffix(mid);
+    }
+    // `"$P"/x`: the reference is quoted and the suffix is not. Split at the
+    // closing quote and let the recursive call above judge the quoted half.
+    if let Some(rest) = word.strip_prefix('"') {
+        let close = rest.find('"')?;
+        let quoted_reference = &word[..close + 2];
+        let suffix = &rest[close + 1..];
+        let name = referenced_variable_name(quoted_reference)?;
+        return literal_suffix(suffix).map(|sfx| (format!("${name}"), sfx));
+    }
+    let after = word.strip_prefix('$')?;
+    if let Some(braced) = after.strip_prefix('{') {
+        let close = braced.find('}')?;
+        let name = &braced[..close];
+        if !is_shell_identifier(name) {
+            return None;
+        }
+        let suffix = &braced[close + 1..];
+        return literal_suffix(suffix).map(|sfx| (format!("${{{name}}}"), sfx));
+    }
+    let end = after
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .unwrap_or(after.len());
+    let name = &after[..end];
+    if !is_shell_identifier(name) {
+        return None;
+    }
+    literal_suffix(&after[end..]).map(|sfx| (format!("${name}"), sfx))
+}
+
+/// The suffix, when it is text the shell will pass through unchanged.
+///
+/// An EMPTY suffix returns `None` on purpose: that is the whole-word case, and
+/// [`resolve_redirect_target_at`] has already handled it with the raw token.
+/// Returning `Some("")` here would send the same word down the suffix path with
+/// a synthesised reference token, which is a second spelling of one case for no
+/// gain.
+///
+/// A `..` COMPONENT is refused because concatenation cannot name the file the
+/// write lands in. `..` is resolved by the KERNEL against the directory a
+/// component REALLY is, not against the text, so one symlink before it makes the
+/// lexical spelling point somewhere else entirely. Measured non-destructively
+/// (`scratchpad/meas_kernel_dotdot.py`, 2026-10-02) with `proj/esc` a symlink to
+/// `other/deep`:
+///
+/// ```text
+/// printf WRITTEN > <base>/proj/esc/../victim.txt
+///   lexical spelling names <base>/proj/victim.txt   -> UNTOUCHED
+///   the write landed in    <base>/other/victim.txt  <- the physical parent
+/// ```
+///
+/// And the gap that follows from it is live, in the LITERAL path, independent of
+/// this function (`scratchpad/meas_symlink_dotdot.py`, same day, deployed 0.2.97
+/// and this build agreeing):
+///
+/// ```text
+/// esc -> /
+/// : > <base>/proj/esc/../../etc/fstab   realpath /etc/fstab  -> Allow   <-- hole
+/// : > <base>/proj/esc/etc/fstab         (no `..`)            -> Deny    <-- caught
+/// ```
+///
+/// So `no_symlink_below` catches a symlink in the spelling but not a symlink
+/// consumed by a following `..`, and resolving a `..` suffix would carry that
+/// Allow onto the variable spelling, turning a Deny into an Allow on a command
+/// that truncates `/etc/fstab` for real. That is the one direction this change
+/// must never move, so the suffix stays unresolved and keeps the verdict the
+/// unexpanded token already earns (backlog 3ca56588 tracks the literal-path
+/// hole; when it is closed this refusal is worth revisiting).
+///
+/// What this paragraph said in its first draft was WRONG and is recorded here
+/// because the wrong version is the more tempting one: it claimed "the
+/// downstream axes compare paths without normalising it". They do normalise —
+/// `scope::normalize_abs` collapses `..`, `SafeRoots::lexical_absolute` answers
+/// `undetermined` on any residue, and a purely lexical `..` is judged
+/// identically whether it is spelled literally or through a variable. The cost
+/// of this refusal is therefore a genuine false positive, not a free win:
+/// `P=<dir>/sub; : > $P/../out.log` stays Deny while the literal is Allow. That
+/// is spelling-dependence in the STRICT direction, which §3 prefers to the
+/// permissive one, and it is the whole of what is being traded away.
+fn literal_suffix(suffix: &str) -> Option<String> {
+    if suffix.is_empty() {
+        return None;
+    }
+    if has_unresolvable_expansion(suffix) {
+        return None;
+    }
+    if suffix.contains(['"', '\'', '\\', '*', '?', '[']) {
+        return None;
+    }
+    if suffix.split('/').any(|component| component == "..") {
+        return None;
+    }
+    Some(suffix.to_string())
 }
 
 /// Pair every truncating-redirect target on the line with the index of the

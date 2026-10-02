@@ -13306,3 +13306,106 @@ updated_at = 1790908646
 weight = 0.0
 issue_number = 1007
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1007"
+
+[[task]]
+id = "dd9f100a"
+title = "fugu-router harvest: 共有ストアに同一 merge の重複 episode が積まれ、ts=now_secs のため import --dedup で修復できない"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+harvest cursor は per-machine (~/.fugu-router/harvest-cursor.json、git common dir キー) だが、収穫した episode は sync_repo 経由で共有される store に書かれる。よって 2 台目のマシン/チェックアウトが同じ repo を harvest すると、相手が既に収穫した merge を全部再収穫する。
+
+さらに episode_for_merge が ts に merge のコミット時刻ではなく store::now_secs() (収穫時刻) を入れる (crates/fugu-router/src/harvest.rs の episode_for_merge, `ts: store::now_secs(),`) ため、再収穫行は内容ハッシュが一致せず、plugin.json / harvest.rs の docstring が修復手段として挙げる `import --dedup` (content hash) では collapse できない。
+
+実測 (2026-10-02、測定点 b478fdcf、fugu-router 0.1.31 の配布バイナリ):
+- 手動 `fugu-router harvest` が「harvested 118 merge episode(s)」。
+- 直前のストア (record-repo の 5d8ee04:episodes.jsonl) の class=merge は 108 行。
+- 追記された 118 行のうち 107 行は、(title, touched_files, duration_secs, model, pass) が既存行と完全一致 = 同一 merge の再収穫。
+- 結果、現在の episodes.jsonl は class=merge 226 行 / distinct identity 119 → 107 行 (約 47%) が重複。
+- 完全一致 (canonical JSON) の重複は 0 件 = ts だけが違うので dedup が効かないことの裏返し。
+
+影響: policy::route / decide_bandit の lexical k-NN が同じ merge を複数回数える。重複が pass=true 側に偏れば pass rate とモデル選択が歪む。
+
+判定不能ではなく実在の欠陥だが、2 つの読みが残る: (a) cursor を共有ストア側へ移す (episodes.jsonl と一緒に sync する) のが正しい、(b) ts を merge のコミット時刻にして収穫を冪等にし dedup を効かせるのが正しい。見分け方: (b) だけだと「同じ merge を別マシンが別の window で評価して pass が変わる」ケースが残るので、(a) か、あるいは episode に merge sha を持たせて sha で dedup する必要があるかを測る。"""
+created_at = 1790909502
+updated_at = 1790909502
+weight = 0.0
+issue_number = 1008
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1008"
+
+[[task]]
+id = "7508b58f"
+title = 'fugu-router launcher: v0.1.30 で hook に入った harvest が case "$*" に無く、バイナリ欠落時 exit 127 になる'
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+crates/fugu-router/bin/fugu-router (launcher) は host 向け build が無いときの fallback を「消費者ごとに」選ぶ設計で、case "$*" に "prompt" と "sync" の 2 つだけ arm を持つ。v0.1.30 (2026-10-01) が SessionEnd hook を `harvest; sync` に変えたが launcher は更新されていないため、build が無い host では harvest が最後の総称 arm に落ちて exit 127 + 「その結果は UNKNOWN」の stderr を出す。
+
+逐語 (crates/fugu-router/bin/fugu-router):
+  case "$*" in
+    "prompt") ... exit 0 ;;
+    "sync")   ... exit 1 ;;
+  esac
+  echo "fugu-router: $* did NOT run (no bundled binary for $os-$arch), so its result is UNKNOWN ..." >&2
+  exit 127
+
+実測 2026-10-02、測定点 b478fdcf: 配布先 bin/ には fugu-router-linux-x86_64 しか無く、crates/fugu-router/bin/ には launcher 本体のみ (per-platform build は rollout 時生成)。Linux では影響なし。
+
+2 つの読み: (a) harvest 専用 arm を足すべき欠落 (sync と同じ exit 1 か、あるいは harvest は routing への供給が止まるだけなので別の扱い)、(b) 総称 arm の 127 が意図どおり。見分け方: scripts/tests/launcher-missing-binary-failclosed.sh が harvest を pin しているか確認する。"""
+created_at = 1790909540
+updated_at = 1790909540
+weight = 0.0
+issue_number = 1010
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1010"
+
+[[task]]
+id = "a10cba69"
+title = "fugu-router: sync が「一度も走らなかった」ことは今も dark — marker は「走って失敗した」しか覆わない"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+syncstate は sync が実行されて Err になったときだけ ~/.fugu-router/sync-error.json を書く。hook が一切発火しなかった場合 (セッションが SessionEnd を踏まずに終わる等) は marker が無く、「同期済みで何も無かった」と区別できない — v0.1.27 が閉じたはずの §1/§3 の暗転が、別の入口で残っている。
+
+実測 2026-10-02、測定点 b478fdcf:
+- ~/.fugu-router/record-repo の reflog: ローカル commit / pull の最後は 2026-09-09 16:59:07 (21eead0)。次のエントリは私が手で打った 2026-10-02 11:44:35 の pull (Fast-forward)。間の約 23 日間、このマシンでは sync が一度も走っていない。
+- その間に remote 側は進んでいた (5c00f83 2026-10-02 10:05、5d8ee04 10:08 を FF で取り込んだ)。
+- にもかかわらず ~/.fugu-router/ の mtime は 2026-07-01 14:18:08 のままで、sync-error.json は一度も作成も削除もされていない (作成/削除があれば親 dir の mtime が動く)。つまり「失敗した」のではなく「走らなかった」。
+
+是正案 (未検証): prompt hook が record-repo の HEAD コミット日時 (または最後に成功した sync の timestamp) の経過日数を見て、閾値超えを surface する。これなら「走って失敗」と「走っていない」の両方を赤にできる。"""
+created_at = 1790909541
+updated_at = 1790909541
+weight = 0.0
+issue_number = 1011
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1011"
+
+[[task]]
+id = "b8b4f702"
+title = "fugu-router sync: pull が remote-tracking ref を更新しないため is_ahead_of_upstream が常に ahead と読み、FF 直後でも push する"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = """
+cmd_sync の pull は `git pull --no-rebase --no-edit origin HEAD` (明示 refspec)。これは origin/main を更新しないので、その後 is_ahead_of_upstream() が比較する @{u} は push だけが進める ref になる。結果、remote が進んでいた場合の fast-forward 直後に ahead > 0 と読み、「nothing to push」の近道が効かず必ず network push が走る。メッセージも実態とずれる。
+
+逐語の実測 2026-10-02、測定点 b478fdcf:
+- `fugu-router sync` の出力: "pulling from remote…" / "pull done." / "pushed (no new local records, but the branch was ahead)." ← 新規ローカル記録は無く、直前の pull は 2 コミットの FF だったのに ahead 扱い。
+- origin/main の reflog は "update by push" しか持たない: 5d8ee04 refs/remotes/origin/main@{2026-10-02 11:44:36} update by push / 21eead0 @{2026-09-09 16:59:10} update by push。11:44:35 の pull では更新されていない。
+- push 後に `git rev-list --left-right --count HEAD...@{u}` が 0 0。
+
+実害は no-op な network push 1 回と誤解を招く文言のみ。是正案: pull を `git pull --no-rebase --no-edit origin main`（または fetch + merge FETCH_HEAD）にして remote-tracking を更新する、あるいは ahead 判定を origin/HEAD ではなく fetch 結果に対して行う。どちらが正しいかは未検証。"""
+created_at = 1790909542
+updated_at = 1790909542
+weight = 0.0
+issue_number = 1012
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1012"

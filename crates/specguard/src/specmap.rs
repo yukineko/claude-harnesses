@@ -2256,3 +2256,110 @@ impl_files = ["src/legacy.rs"]
         assert!(!is_hex_object_name(""));
     }
 }
+
+/// Audit repro tests (backlog f479ba9a / dfd92783 / 034d39a6). Each asserts the
+/// property its ticket says is violated and is `#[ignore]`d while the defect is
+/// open; remove the ignore when fixed.
+#[cfg(test)]
+mod backlog_s07_audit {
+    use super::*;
+
+    #[test]
+    #[ignore = "backlog f479ba9a: open defect, remove ignore when fixed"]
+    fn backlog_f479ba9a_test_prefixed_impl_file_is_not_classified_as_test() {
+        // crates/overwatch/src/test_freshness.rs is an implementation file.
+        assert_eq!(
+            classify_path("crates/overwatch/src/test_freshness.rs"),
+            FileRole::Impl,
+            "name-prefix `test_` alone made an src/ implementation file a test"
+        );
+    }
+
+    #[test]
+    #[ignore = "backlog dfd92783: open defect, remove ignore when fixed"]
+    fn backlog_dfd92783_externalised_tests_module_credits_parent() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("src/foo")).unwrap();
+        std::fs::write(
+            tmp.path().join("src/foo.rs"),
+            "pub fn f() {}\n#[cfg(test)]\nmod tests;\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("src/foo/tests.rs"),
+            "#[test]\nfn t() { assert!(true); }\n",
+        )
+        .unwrap();
+        let mut map = SpecMap::default();
+        map.apply_changes(
+            &[
+                Change::Added("src/foo.rs".to_string()),
+                Change::Added("src/foo/tests.rs".to_string()),
+            ],
+            "docs/specs",
+            "r1",
+        );
+        let _ = map.mark_inline_tests(tmp.path());
+        let owner = map
+            .entries
+            .values()
+            .find(|e| e.impl_files.iter().any(|p| p == "src/foo.rs"))
+            .expect("entry owning src/foo.rs");
+        assert!(
+            !owner.test_files.is_empty(),
+            "src/foo.rs has its tests in src/foo/tests.rs but its entry reads untested: {owner:?}"
+        );
+    }
+
+    // backlog 0fe96299 lives in scope.rs (`classify`); kept here so scope.rs's
+    // existing proptest module is not touched.
+    #[test]
+    #[ignore = "backlog 0fe96299: open defect, remove ignore when fixed"]
+    fn backlog_0fe96299_duplicate_changed_path_appears_once_across_hits() {
+        use crate::config::Area;
+        let area = |n: &str, g: &str| Area {
+            name: n.into(),
+            globs: vec![g.into()],
+            canon: vec![],
+        };
+        let areas = vec![area("a0", "src/a0/**"), area("a1", "src/a1/**")];
+        let changed: Vec<String> = vec![
+            "src/a0/chy.rs".into(),
+            "src/a1/aaa.rs".into(),
+            "src/a0/chy.rs".into(),
+        ];
+        let (hits, _) = crate::scope::classify(&changed, &areas).unwrap();
+        let all: Vec<String> = hits
+            .iter()
+            .flat_map(|h| h.matched_files.iter().cloned())
+            .collect();
+        let uniq: std::collections::HashSet<&String> = all.iter().collect();
+        assert_eq!(all.len(), uniq.len(), "a file appeared twice: {all:?}");
+    }
+
+    #[test]
+    #[ignore = "backlog d4b7ab1d: open defect, remove ignore when fixed"]
+    fn backlog_d4b7ab1d_doc_comments_are_not_fused_mid_line() {
+        // A `///` that does not start its line fuses two doc blocks: here
+        // entry_matches' doc ended up glued onto AMBIGUOUS_SYMBOL_DECLS' doc.
+        let fused: Vec<(usize, &str)> = include_str!("specmap.rs")
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| {
+                let t = l.trim_start();
+                t.starts_with("///") && t[3..].contains("`./// ")
+            })
+            .collect();
+        assert!(fused.is_empty(), "doc comments fused mid-line: {fused:?}");
+    }
+
+    #[test]
+    #[ignore = "backlog 034d39a6: open defect, remove ignore when fixed"]
+    fn backlog_034d39a6_test_attr_inside_raw_string_is_not_a_test() {
+        let src = "pub fn f() -> &'static str {\n    r#\"\n#[test]\nfn fake() {}\n\"#\n}\n";
+        assert!(
+            !has_inline_tests(src),
+            "a `#[test]` line inside a raw string literal was counted as a real test"
+        );
+    }
+}

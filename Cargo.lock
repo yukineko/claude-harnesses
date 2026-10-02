@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "backlog"
-version = "0.3.19"
+version = "0.3.20"
 dependencies = [
  "anyhow",
  "clap",
@@ -163,7 +163,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "blastguard"
-version = "0.2.97"
+version = "0.2.98"
 dependencies = [
  "globset",
  "harness-core",
@@ -196,7 +196,7 @@ dependencies = [
 
 [[package]]
 name = "budgetguard"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "anyhow",
  "chrono",
@@ -291,7 +291,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "compass"
-version = "0.1.18"
+version = "0.1.19"
 dependencies = [
  "anyhow",
  "clap",
@@ -305,7 +305,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.198"
+version = "0.7.199"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -328,7 +328,7 @@ dependencies = [
 
 [[package]]
 name = "context-governor"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "anyhow",
  "harness-core",
@@ -365,7 +365,7 @@ dependencies = [
 
 [[package]]
 name = "ctxrot"
-version = "0.5.28"
+version = "0.5.29"
 dependencies = [
  "anyhow",
  "chrono",
@@ -395,7 +395,7 @@ dependencies = [
 
 [[package]]
 name = "daily"
-version = "0.3.13"
+version = "0.3.14"
 dependencies = [
  "blastguard",
  "chrono",
@@ -545,7 +545,7 @@ checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
 name = "fugu-router"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "anyhow",
  "clap",
@@ -585,7 +585,7 @@ dependencies = [
 
 [[package]]
 name = "gauge"
-version = "0.3.15"
+version = "0.3.16"
 dependencies = [
  "anyhow",
  "chrono",
@@ -859,7 +859,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "overwatch"
-version = "0.2.49"
+version = "0.2.50"
 dependencies = [
  "anyhow",
  "clap",
@@ -892,7 +892,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "playbook"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "anyhow",
  "chrono",
@@ -939,7 +939,7 @@ dependencies = [
 
 [[package]]
 name = "propguard"
-version = "0.1.53"
+version = "0.1.54"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1091,7 +1091,7 @@ dependencies = [
 
 [[package]]
 name = "reviewgate"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1109,7 +1109,7 @@ dependencies = [
 
 [[package]]
 name = "runbook"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1226,7 +1226,7 @@ dependencies = [
 
 [[package]]
 name = "session-insights"
-version = "0.2.19"
+version = "0.2.20"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1282,7 +1282,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "specguard"
-version = "0.2.76"
+version = "0.2.77"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -1306,7 +1306,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "stuckguard"
-version = "0.1.35"
+version = "0.1.36"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1341,7 +1341,7 @@ checksum = "c3a6bfce3d99adfa72d24750a61f782f3036a81e7f86d8841ee1326deaebd171"
 
 [[package]]
 name = "taskprog"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "clap",
@@ -1354,7 +1354,7 @@ dependencies = [
 
 [[package]]
 name = "tdd"
-version = "0.1.36"
+version = "0.1.37"
 dependencies = [
  "anyhow",
  "chrono",

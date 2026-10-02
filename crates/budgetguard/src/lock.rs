@@ -197,3 +197,76 @@ mod tests {
         assert!(LedgerLock::is_stale(&dir.path().join("nope.lock")));
     }
 }
+
+/// Reproduction tests for backlog 2ae3fa29 (mirror of parallelguard
+/// CA-parallelguard-01/02). RED while the O_EXCL + mtime-steal scheme is in use.
+#[cfg(test)]
+mod backlog_2ae3fa29 {
+    use super::*;
+    use std::time::SystemTime;
+
+    #[test]
+    #[ignore = "backlog 2ae3fa29: open defect, remove ignore when fixed"]
+    fn guard_drop_never_removes_a_different_holders_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = LedgerLock::acquire(dir.path());
+        assert!(a.held(), "control: uncontended lock is held");
+        let lock_path = LedgerLock::lock_path(dir.path());
+        // A second, live holder now occupies the same path.
+        std::fs::remove_file(&lock_path).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+            .unwrap();
+        drop(a);
+        assert!(
+            lock_path.exists(),
+            "dropping guard A deleted a lockfile belonging to a different live holder"
+        );
+    }
+
+    #[test]
+    #[ignore = "backlog 2ae3fa29: open defect, remove ignore when fixed"]
+    fn concurrent_contenders_never_both_hold_an_abandoned_lock() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Barrier};
+        const THREADS: usize = 24;
+        for iteration in 0..40 {
+            let dir = tempfile::tempdir().unwrap();
+            let lock_path = LedgerLock::lock_path(dir.path());
+            std::fs::write(&lock_path, b"").unwrap();
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&lock_path)
+                .unwrap()
+                .set_modified(SystemTime::now() - Duration::from_secs(3600))
+                .unwrap();
+            let concurrent = Arc::new(AtomicUsize::new(0));
+            let max_concurrent = Arc::new(AtomicUsize::new(0));
+            let barrier = Arc::new(Barrier::new(THREADS));
+            std::thread::scope(|s| {
+                for _ in 0..THREADS {
+                    let (c, m, b) = (concurrent.clone(), max_concurrent.clone(), barrier.clone());
+                    let d = dir.path().to_path_buf();
+                    s.spawn(move || {
+                        b.wait();
+                        let g = LedgerLock::acquire_with_timeout(&d, Duration::from_secs(5));
+                        if g.held() {
+                            let now = c.fetch_add(1, Ordering::SeqCst) + 1;
+                            m.fetch_max(now, Ordering::SeqCst);
+                            std::thread::sleep(Duration::from_millis(20));
+                            c.fetch_sub(1, Ordering::SeqCst);
+                        }
+                        drop(g);
+                    });
+                }
+            });
+            let observed = max_concurrent.load(Ordering::SeqCst);
+            assert!(
+                observed <= 1,
+                "over-admission on iteration {iteration}: {observed} guards held the lock at once"
+            );
+        }
+    }
+}

@@ -982,4 +982,32 @@ mod tests {
         assert!(hard_msg.contains("同じ操作の繰り返しを検知"));
         assert!(!hard_msg.contains("progress may be stalling"));
     }
+
+    /// backlog b96e9973: a stored lesson that shares ONE incidental token with
+    /// the trip query is presented to the agent as the relevant "past lesson"
+    /// (harness_core::lessons::search keeps every hit with score > 0.0 — no
+    /// relevance floor). An unrelated lesson must not be retrieved.
+    #[test]
+    #[ignore = "backlog b96e9973: open defect, remove ignore when fixed"]
+    fn single_shared_token_lesson_is_not_presented_as_relevant() {
+        with_isolated_lessons_store(|_dir| {
+            use harness_core::lessons::{self, Kind, Lesson};
+            lessons::append(&Lesson {
+                id: "unrelated-1".to_string(),
+                kind: Kind::Convention,
+                task_summary: "postgres migration ordering for the billing schema".to_string(),
+                lesson_text: "UNRELATED: run migrations in numeric order, bash is not involved"
+                    .to_string(),
+                source_run: "run-x".to_string(),
+                ts: 1,
+            });
+            // Trip detail as built by detect.rs: "<tool> を <n> 回".
+            let trip = repeat_trip("Bash を 4 回");
+            let got = retrieve_lesson(&trip);
+            assert!(
+                got.is_none(),
+                "an unrelated lesson sharing a single token was presented as a relevant past lesson: {got:?}"
+            );
+        });
+    }
 }

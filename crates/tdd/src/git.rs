@@ -525,3 +525,44 @@ diff --git a/old.rs b/old.rs
         );
     }
 }
+
+#[cfg(test)]
+mod backlog_845475af {
+    use super::*;
+    use std::process::Command;
+
+    fn sh(root: &Path, args: &[&str]) {
+        let st = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .status()
+            .expect("git runs");
+        assert!(st.success(), "git {args:?} failed");
+    }
+
+    /// backlog 845475af: an untracked file that `git ls-files --others` lists
+    /// but that cannot be read must not be silently dropped (under-count ->
+    /// the gate may allow untested code). Expected (fail-closed): AddedScan::Failed,
+    /// or at minimum the file is still represented.
+    #[test]
+    #[ignore = "backlog 845475af: open defect, remove ignore when fixed"]
+    fn unreadable_untracked_file_is_not_silently_dropped() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        sh(root, &["init", "-q"]);
+        let f = root.join("secret_impl.rs");
+        std::fs::write(&f, "fn added() {}\n").unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let got = added_lines(root);
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o644)).unwrap();
+        match got {
+            AddedScan::Failed => {}
+            AddedScan::Lines(l) => assert!(
+                l.iter().any(|a| a.file == "secret_impl.rs"),
+                "unreadable untracked file silently dropped: Lines({l:?})"
+            ),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+}

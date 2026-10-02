@@ -1678,3 +1678,133 @@ mod tests {
         );
     }
 }
+
+/// Closure regression for backlog e0269780: independent verification of the
+/// 1ff0fcc9 narrowing (`marker_hit && (is_impl_file || is_test_file)`), written
+/// by a verifier that did not write 1ff0fcc9.
+///   1. EVERY default marker, added in a path that is neither an impl glob nor
+///      a test glob, is not test evidence (the stop still blocks);
+///   2. no false-positive: the SAME marker line in an impl file (inline test)
+///      or a test file is still evidence and does not block;
+///   3. anti-vacuity: each sample line is shown to match the marker set (2.),
+///      and each "other" path is shown to be neither impl nor test.
+#[cfg(test)]
+mod backlog_e0269780_regression {
+    use super::*;
+
+    /// One sample line per entry of `config::default_test_markers`, in order.
+    const MARKER_SAMPLES: &[&str] = &[
+        "#[test] fn adds() {}",
+        "fn test_adds() {}",
+        "def test_adds(): pass",
+        "func TestAdds(t *testing.T) {}",
+        "test(\"adds\", () => {})",
+        "@Test public void adds() {}",
+    ];
+
+    /// Paths matched by neither the default impl globs nor the test globs.
+    const OTHER_PATHS: &[&str] = &[
+        "Cargo.toml",
+        "CHANGELOG.md",
+        "fixtures/data.json",
+        "scripts/run.sh",
+        "config/settings.yaml",
+        "docs/notes.txt",
+    ];
+
+    const IMPL_LINE: &str = "pub fn add(a: i32, b: i32) -> i32 { a + b }";
+
+    fn run(paths: &[&str], lines: Vec<(&str, &str)>) -> Report {
+        let cfg = Config::default();
+        let changed = ChangeScan::Files(paths.iter().map(|s| s.to_string()).collect());
+        let added = AddedScan::Lines(
+            lines
+                .into_iter()
+                .map(|(f, t)| AddedLine {
+                    file: f.to_string(),
+                    text: t.to_string(),
+                })
+                .collect(),
+        );
+        classify(&cfg, &changed, &added)
+    }
+
+    fn marker_added(r: &Report) -> bool {
+        match &r.scan {
+            Determination::Known(Some(f)) => f.test_marker_added,
+            _ => panic!("expected a known, scoped scan"),
+        }
+    }
+
+    #[test]
+    fn sample_lines_cover_every_default_marker() {
+        assert_eq!(
+            MARKER_SAMPLES.len(),
+            Config::default().test_markers.len(),
+            "one sample per default marker"
+        );
+        let cfg = Config::default();
+        for (i, pat) in cfg.test_markers.iter().enumerate() {
+            let re = regex::Regex::new(pat).unwrap();
+            assert!(
+                re.is_match(MARKER_SAMPLES[i]),
+                "sample {i} must match marker {pat}"
+            );
+        }
+    }
+
+    #[test]
+    fn other_paths_are_neither_impl_nor_test() {
+        let cfg = Config::default();
+        let impl_set = build_globset(&cfg.impl_globs);
+        let test_set = build_globset(&cfg.test_path_globs);
+        for p in OTHER_PATHS {
+            assert!(
+                !impl_set.is_match(p) && !test_set.is_match(p),
+                "{p} is classified"
+            );
+        }
+    }
+
+    #[test]
+    fn every_marker_in_every_other_path_is_not_evidence() {
+        let cfg = Config::default();
+        for sample in MARKER_SAMPLES {
+            for other in OTHER_PATHS {
+                let r = run(
+                    &["src/lib.rs", other],
+                    vec![("src/lib.rs", IMPL_LINE), (other, sample)],
+                );
+                assert!(
+                    !marker_added(&r),
+                    "marker {sample:?} in {other} was counted as test evidence"
+                );
+                assert!(
+                    r.blocks(&cfg),
+                    "impl without a test must block ({sample:?} in {other})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_marker_in_an_impl_or_test_file_is_still_evidence() {
+        let cfg = Config::default();
+        for sample in MARKER_SAMPLES {
+            for where_ in ["src/lib.rs", "tests/add_test.rs"] {
+                let r = run(
+                    &["src/lib.rs", where_],
+                    vec![("src/lib.rs", IMPL_LINE), (where_, sample)],
+                );
+                assert!(
+                    marker_added(&r),
+                    "marker {sample:?} in {where_} must be evidence"
+                );
+                assert!(
+                    !r.blocks(&cfg),
+                    "a real test ({sample:?} in {where_}) must not block"
+                );
+            }
+        }
+    }
+}

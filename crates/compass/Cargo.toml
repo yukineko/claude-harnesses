@@ -1,6 +1,6 @@
 [package]
 name = "compass"
-version = "0.1.18"
+version = "0.1.19"
 edition = "2021"
 rust-version.workspace = true
 description = "Goal re-grounding + next-move derivation upstream of condukt; subscription-native."

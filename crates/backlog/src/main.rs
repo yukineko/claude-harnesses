@@ -12,6 +12,9 @@ mod merge_driver;
 mod store;
 mod task;
 
+#[cfg(test)]
+mod audit_b1_0_tests;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use harness_core::boundary;

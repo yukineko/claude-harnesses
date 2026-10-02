@@ -61,7 +61,8 @@ backlog add --title "Fix X" --project "$PWD" --priority p1   # 項目をキュ�
 backlog list --status pending                                # キューを見る
 backlog next                                                 # 次の項目をピック
 backlog done <id>                                            # 解決する
-backlog fail <id> --reason "blocked"                         # 2 日先送りする
+backlog fail <id> --reason "blocked"                         # 2 日先送りする（2 日後に pending へ戻る）
+backlog cancel <id> --reason "やらないと決めた"               # やらないと決めて閉じる（終端。再キューしない）
 backlog lock status                                          # run-lock の保有者を確認
 backlog install                                              # SessionStart フックを settings.json にマージ
 backlog uninstall                                            # 再び除去する

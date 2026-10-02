@@ -16,7 +16,6 @@
 use std::process::{Command, Stdio};
 
 #[test]
-#[ignore = "backlog 0dafa254: open defect, remove ignore when fixed"]
 fn list_status_cancelled_is_a_recognised_status() {
     let root = std::env::temp_dir().join(format!(
         "backlog-0dafa254-{}-{}",

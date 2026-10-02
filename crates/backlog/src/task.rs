@@ -4,18 +4,34 @@ use unicode_normalization::UnicodeNormalization;
 /// The task status vocabulary — the single source of truth shared by the store
 /// (which sets these on add/done/fail/restore), the `--status` filter help, and
 /// the CLI's validation of a user-supplied filter. A task moves
-/// `pending → done` (done) or `pending → failed` (fail); a deferred task is
-/// restored to `pending` once its `defer_until` elapses. NB: `backlog` has no
-/// `open` status — that vocabulary belongs to `hypothesis` (open/validated/
-/// rejected), a different binary.
+/// `pending → done` (done), `pending → failed` (fail) or `pending|failed →
+/// cancelled` (cancel); a deferred task is restored to `pending` once its
+/// `defer_until` elapses. `done` and `cancelled` are terminal. NB: `backlog`
+/// has no `open` status — that vocabulary belongs to `hypothesis` (open/
+/// validated/rejected), a different binary.
 pub const STATUS_PENDING: &str = "pending";
 pub const STATUS_DONE: &str = "done";
 pub const STATUS_FAILED: &str = "failed";
+/// Terminal "decided not to do it" (backlog d8d25af9). Unlike `done` it does
+/// not claim the work was completed, and unlike `failed` it is never requeued.
+/// Its GitHub mirror is closed as "not planned".
+pub const STATUS_CANCELLED: &str = "cancelled";
 
-/// All recognised status values, in lifecycle order. Used to enumerate the
-/// valid `--status` arguments in help/validation so an unknown value is a loud
-/// error instead of a silently-empty result.
-pub const STATUSES: [&str; 3] = [STATUS_PENDING, STATUS_DONE, STATUS_FAILED];
+/// All STORED status values, in lifecycle order — what `edit --status` accepts.
+/// An unknown value is a loud error instead of a silently-stranded task.
+pub const STATUSES: [&str; 4] = [STATUS_PENDING, STATUS_DONE, STATUS_FAILED, STATUS_CANCELLED];
+
+/// The `--status` FILTER vocabulary: every stored status plus the DERIVED
+/// `claimed` (a pending/failed row holding a live claim-ledger lease, see
+/// `store::STATUS_CLAIMED`). `claimed` is filterable but never stored, so it
+/// is in this list and not in [`STATUSES`] (backlog 0dafa254).
+pub const FILTER_STATUSES: [&str; 5] = [
+    STATUS_PENDING,
+    STATUS_DONE,
+    STATUS_FAILED,
+    STATUS_CANCELLED,
+    "claimed",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
@@ -169,8 +185,21 @@ impl Task {
 /// offending value and lists the valid ones.
 pub fn status_warning(status: Option<&str>) -> Option<String> {
     match status {
-        Some(s) if !STATUSES.contains(&s) => Some(format!(
+        Some(s) if !FILTER_STATUSES.contains(&s) => Some(format!(
             "warning: unknown status '{s}'; valid values are {}",
+            FILTER_STATUSES.join(" | ")
+        )),
+        _ => None,
+    }
+}
+
+/// Like [`status_warning`] but for a status about to be WRITTEN (`edit
+/// --status`): only [`STATUSES`] is accepted, so the derived `claimed` is
+/// refused rather than persisted.
+pub fn stored_status_error(status: Option<&str>) -> Option<String> {
+    match status {
+        Some(s) if !STATUSES.contains(&s) => Some(format!(
+            "unknown status '{s}' (not a storable status); valid values are {}",
             STATUSES.join(" | ")
         )),
         _ => None,
@@ -238,16 +267,24 @@ mod tests {
     #[test]
     fn status_vocabulary_is_consistent() {
         // The set, lifecycle order, and the values the store actually writes
-        // (add → pending, done → done, fail → failed) must agree, since
-        // STATUSES drives both the `--status` help/validation and `is_pending`.
-        assert_eq!(STATUSES, [STATUS_PENDING, STATUS_DONE, STATUS_FAILED]);
-        assert_eq!(STATUSES, ["pending", "done", "failed"]);
+        // (add → pending, done → done, fail → failed, cancel → cancelled) must
+        // agree, since STATUSES drives `edit --status` validation and `is_pending`.
+        assert_eq!(
+            STATUSES,
+            [STATUS_PENDING, STATUS_DONE, STATUS_FAILED, STATUS_CANCELLED]
+        );
+        assert_eq!(STATUSES, ["pending", "done", "failed", "cancelled"]);
+        // The filter vocabulary is the stored one plus the derived `claimed`.
+        assert_eq!(&FILTER_STATUSES[..4], &STATUSES[..]);
+        assert_eq!(FILTER_STATUSES[4], "claimed");
+        assert!(!STATUSES.contains(&"claimed"));
         // `open` is hypothesis's vocabulary, never backlog's.
         assert!(!STATUSES.contains(&"open"));
         // is_pending agrees with the vocabulary it filters on.
         assert!(make_task(vec![], STATUS_PENDING).is_pending());
         assert!(make_task(vec![], STATUS_FAILED).is_pending());
         assert!(!make_task(vec![], STATUS_DONE).is_pending());
+        assert!(!make_task(vec![], STATUS_CANCELLED).is_pending());
     }
 
     #[test]
@@ -267,6 +304,8 @@ mod tests {
         assert!(status_warning(Some("pending")).is_none());
         assert!(status_warning(Some("done")).is_none());
         assert!(status_warning(Some("failed")).is_none());
+        assert!(status_warning(Some("cancelled")).is_none());
+        assert!(status_warning(Some("claimed")).is_none());
         // No filter at all → no warning (listing everything is legitimate).
         assert!(status_warning(None).is_none());
     }

@@ -159,6 +159,17 @@ enum Command {
         reason: Option<String>,
     },
 
+    /// Close a task as "decided not to do it": terminal, never requeued, and
+    /// not a claim of completion (unlike `done`)
+    Cancel {
+        /// Task ID
+        id: String,
+
+        /// Why it will not be done (required; appended to the notes)
+        #[arg(long)]
+        reason: String,
+    },
+
     /// Reconcile this store against its GitHub issues (one-way: local wins)
     Sync {
         /// Perform the reconciliation. Without this flag `sync` only reports
@@ -1246,6 +1257,16 @@ fn run(cli: Cli) -> Result<()> {
                     plan.len()
                 ));
             }
+        }
+
+        Command::Cancel { id, reason } => {
+            let tasks_path = store_path()?;
+            store::mark_cancelled(&tasks_path, &id, &reason)?;
+            println!("cancelled: {id}");
+            // Same mirror as `done`: a cancelled row's issue closes as "not
+            // planned" (sync_plan's STATUS_CANCELLED arm); a failure warns and
+            // leaves it for `backlog sync`.
+            mirror_close_for(&tasks_path, &id);
         }
 
         Command::Fail { id, reason } => {

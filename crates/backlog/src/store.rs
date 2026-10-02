@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+pub use crate::task::STATUS_CANCELLED;
 use crate::task::{new_id, Task, STATUS_DONE, STATUS_FAILED, STATUS_PENDING};
 
 /// The DERIVED claim status (backlog f09db5ce). It is never written to the
@@ -1451,32 +1452,6 @@ pub fn mark_done(path: &Path, id: &str) -> Result<()> {
     })
 }
 
-/// The status a task must hold for its GitHub issue to be closed as
-/// "not planned".
-///
-/// **No current CLI path writes this value.** `edit --status` validates
-/// against [`crate::task::STATUSES`] (`pending | done | failed`) and rejects
-/// `cancelled` outright — verified 2026-08-14:
-///
-/// ```text
-/// $ backlog edit 5df88c1d --status cancelled
-/// Error: warning: unknown status 'cancelled'; valid values are pending | done | failed
-/// ```
-///
-/// It is spelled here anyway, and honestly rather than as an import, because
-/// the value nonetheless EXISTS in real stores: this repo's holds 6 such
-/// records (measured the same day, 577 tasks). They predate the current
-/// validation or were hand-written, and `sync_plan` must reconcile records
-/// that are actually there, not only ones the current binary can produce.
-///
-/// So the `NotPlanned` close arm is presently reachable only from a
-/// hand-edited store. That is a gap in the status vocabulary, not in this
-/// module — `task::STATUSES` claims to list "all recognised status values"
-/// while the store demonstrably carries two more (`cancelled`, `claimed`).
-/// Tracked as backlog `0dafa254`; when that is resolved the arm becomes
-/// reachable with no change here.
-pub const STATUS_CANCELLED: &str = "cancelled";
-
 /// One unit of GitHub mirror work, derived from the store's own contents.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SyncAction {
@@ -1667,10 +1642,47 @@ pub fn mark_failed(path: &Path, id: &str, reason: Option<&str>) -> Result<()> {
     })
 }
 
+/// Mark a task `cancelled`: terminal, "decided not to do it" (backlog
+/// d8d25af9). `done` would claim completion and `failed` is always requeued
+/// via `defer_until`, so neither can record this decision.
+///
+/// `reason` is appended to the notes and any `defer_until` is cleared.
+/// Idempotent: an already-cancelled task is left untouched (no second copy of
+/// the reason). A `done` task is refused — rewriting a completion as a
+/// cancellation would erase the record that the work was done.
+pub fn mark_cancelled(path: &Path, id: &str, reason: &str) -> Result<()> {
+    with_tasks_lock_required(path, "cancel", || {
+        let mut tasks = load(path)?;
+        let task = tasks
+            .iter_mut()
+            .find(|t| t.id == id)
+            .ok_or_else(|| anyhow!("task not found: {}", id))?;
+        if task.status == STATUS_CANCELLED {
+            return Ok(());
+        }
+        if task.status == STATUS_DONE {
+            return Err(anyhow!(
+                "refused: task {id} is done (terminal); `cancel` would rewrite a completion \
+                 as a cancellation"
+            ));
+        }
+        task.status = STATUS_CANCELLED.to_string();
+        if task.notes.is_empty() {
+            task.notes = reason.to_string();
+        } else {
+            task.notes.push('\n');
+            task.notes.push_str(reason);
+        }
+        task.defer_until = None;
+        task.updated_at = now_unix();
+        save(path, &tasks)
+    })
+}
+
 /// フィールドの一部を更新して保存。None のフィールドは変更しない。
 ///
-/// CA-backlog-004: an unknown `status` is REJECTED (validated against the same
-/// [`crate::task::STATUSES`] vocabulary that `list` warns on) BEFORE any write.
+/// CA-backlog-004: an unknown `status` is REJECTED (validated against the
+/// stored [`crate::task::STATUSES`] vocabulary) BEFORE any write.
 /// Previously `edit --status open` wrote the raw typo through, stranding the
 /// task out of `next`/`next_claim` (neither `open` nor any non-vocabulary
 /// value is `is_pending()`) with no path back — `requeue_expired` only rescues
@@ -1685,9 +1697,10 @@ pub fn edit(
     status: Option<&str>,
 ) -> Result<()> {
     with_tasks_lock_required(path, "edit", || {
-        // CA-backlog-004: reject an unknown --status up front (same validation
-        // `list` uses) so a typo can never be persisted and strand the task.
-        if let Some(w) = crate::task::status_warning(status) {
+        // CA-backlog-004: reject an unknown --status up front so a typo can
+        // never be persisted and strand the task. Validated against the STORED
+        // vocabulary, so the derived `claimed` is refused too (0dafa254).
+        if let Some(w) = crate::task::stored_status_error(status) {
             return Err(anyhow!("{w}"));
         }
         let mut tasks = load(path)?;

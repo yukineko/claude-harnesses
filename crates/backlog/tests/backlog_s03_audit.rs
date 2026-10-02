@@ -151,7 +151,6 @@ fn next_claim_skips_wontfix_tagged_tasks() {
 /// backlog 0dafa254: `claimed` is a real (derived) status but the status
 /// vocabulary lacks it, so a correct `--status claimed` filter warns "unknown".
 #[test]
-#[ignore = "backlog 0dafa254: open defect, remove ignore when fixed"]
 fn list_status_claimed_is_a_recognised_status() {
     let f = fx("0dafa254");
     let _ = add(&f, "claim me", &[]);

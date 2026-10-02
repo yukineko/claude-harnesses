@@ -63,7 +63,8 @@ backlog add --title "Fix X" --project "$PWD" --priority p1   # queue an item
 backlog list --status pending                                # see the queue
 backlog next                                                 # pick the next item
 backlog done <id>            # resolve it
-backlog fail <id> --reason "blocked"   # defer it 2 days
+backlog fail <id> --reason "blocked"   # defer it 2 days (it comes back as pending)
+backlog cancel <id> --reason "won't do"   # close it as not planned (terminal, never requeued)
 backlog lock status         # who holds the run-lock
 backlog install             # merge the SessionStart hook into settings.json
 backlog uninstall           # remove it again

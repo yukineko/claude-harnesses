@@ -21,7 +21,8 @@ backlog list --status pending [--project <path>]   # キュー一覧（純粋な
 backlog next [--project <path>]                    # 次のアイテムを覗く（予約しない）
 backlog next --claim [--project <path>]            # 次のアイテムを予約して取る（driver はこちら）
 backlog done <id>                                  # アイテムを完了マーク
-backlog fail <id> --reason "<概要>"                # アイテムを失敗マーク
+backlog fail <id> --reason "<概要>"                # アイテムを失敗マーク（2 日後に再キューされる）
+backlog cancel <id> --reason "<理由>"              # やらないと決めて閉じる（終端。done と違い完了を主張しない）
 
 # driver の存在通知（非排他。何セッションでも同時に登録できる）
 backlog driver register   --session-id <id> --project <path>
@@ -56,6 +57,7 @@ backlog lock release --project <path>
 | キューを確認したい | `backlog list --status pending` |
 | 次のアイテムだけ確認したい | `backlog next`（覗くだけ。着手するなら `next --claim`） |
 | 手動で完了 / 失敗マークしたい | `backlog done <id>` / `backlog fail <id>` |
+| やらないと決めて閉じたい | `backlog cancel <id> --reason "<理由>"` |
 | **キューを自動で全件消化したい** | **`/flow` を使う** |
 
 ## 失敗モード

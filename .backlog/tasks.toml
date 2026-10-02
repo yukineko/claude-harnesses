@@ -951,9 +951,11 @@ notes = """
 2026-09-30 slice 3 landed: 103eef5a (merged 530acc71). scripts/check-fault-injection-adoption.py + baseline 0 (harness-core excluded as provider; above-baseline also exits 1 so the pin tracks the real count; feature outside dev-dependencies exits 1; undetermined exits 2). RED 4bf08c5f 13 tests by an independent sonnet author, plus 15 implementer tests. NOT yet wired: pre-commit patch in the session scratchpad (githooks-8696dd7e.patch) awaits the user. Remaining: wiring, slice 2 (first gate-crate adopter with observed RED; the same commit must raise the baseline to 1), slice 4.
 
 2026-10-01 slice 2 landed (merged b0a7679f, pushed, canary-rolled overwatch 0.2.47): overwatch is the first adopter. store::read_audit_rounds (the audit-metrics converging verdict) read via std::fs, outside the seam; it now reads through harness_core::boundary::read_to_string, forwarding Undetermined. Test crates/overwatch/tests/fault_injection.rs authored independently; F->P observed by the orchestrator: pre-fix store.rs gives VACUOUS fail-closed check (returned Some(true)), post-fix passes. Adoption baseline 0->1; raw-io ratchet 46->45. Remaining: wiring patch awaits the user, slice 4 (one crate per commit).
-2026-10-02 slice 4 (blastguard) landed: 7371a4ec, merged 9b6d8dbe, pushed, canary-rolled blastguard 0.2.97. Third adopter (propguard aadc0ef4 was #2); adoption baseline 2->3. Test blind_boundary_never_leaves_an_approval_lookup_permissive (approve.rs Store::lookup) authored independently; vacuity observed: swapping boundary::read_to_string for std::fs gives VACUOUS panic. HELD BACK: recoverability-probe test (scratchpad blastguard-recoverability-fault-test.rs) is RED because decide_recovery discards GitState::Undetermined (reversible.rs ~176-195) - that is user-ruled permissive territory, pending 7778b634. Unrelated pre-existing red filed as 16d8e01d (worktree_root_* calibration)."""
+2026-10-02 slice 4 (blastguard) landed: 7371a4ec, merged 9b6d8dbe, pushed, canary-rolled blastguard 0.2.97. Third adopter (propguard aadc0ef4 was #2); adoption baseline 2->3. Test blind_boundary_never_leaves_an_approval_lookup_permissive (approve.rs Store::lookup) authored independently; vacuity observed: swapping boundary::read_to_string for std::fs gives VACUOUS panic. HELD BACK: recoverability-probe test (scratchpad blastguard-recoverability-fault-test.rs) is RED because decide_recovery discards GitState::Undetermined (reversible.rs ~176-195) - that is user-ruled permissive territory, pending 7778b634. Unrelated pre-existing red filed as 16d8e01d (worktree_root_* calibration).
+
+2026-10-03: slice 4 done - stuckguard adopted (43b974e4, merged 51853b00, 0.1.37, baseline 3->4); opus verifier pass (vacuity + mutations observed). Gap: new tests drive the allowed_to_carry_on mirror, not watch (filed separately). Remains pending for further adopters."""
 created_at = 1785879190
-updated_at = 1790884119
+updated_at = 1790980479
 weight = 0.0
 issue_number = 140
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/140"
@@ -10071,28 +10073,6 @@ issue_number = 795
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/795"
 
 [[task]]
-id = "e8a61ec3"
-title = "overwatch read_review_findings / read_dispositions は best-effort 二値 reader (read_jsonl_best_effort が unreadable/undecodable を空 Vec にする) — これで is_empty を assert する他のテスト・呼び出し元も同様に反証不能の疑い"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "overwatch",
-    "test-vacuity",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-2026-09-24 6de70510 worker の指摘。crates/overwatch/src/store.rs:344。未監査。
-
-[triage 2026-09-29 @b325a169] p2->p1: overwatch store.rs:344-349 unreadable -> empty Vec feeds review bridge/compact/dispositions; stale docstring :597"""
-created_at = 1790253717
-updated_at = 1790631017
-weight = 0.0
-issue_number = 802
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/802"
-
-[[task]]
 id = "b03811d5"
 title = "blastguard: python3 - <<'PY' 本文中の文字列リテラル '>' を空 target の truncating redirect として deny する"
 project = "/Users/yuki/src/harness"
@@ -12692,26 +12672,6 @@ issue_number = 915
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/915"
 
 [[task]]
-id = "7778b634"
-title = "blastguard decide_recovery: git 状態が読めない(Undetermined)なら recoverable にしない — 2026-10-02 ユーザー裁定済み、実装待ち"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-出典: docs/audit-determination-direct-match.md (e269274f, 測定点 74aad11f)。 decide_recovery の let _ = git (:174) / Repo => RecoverableFromGit (:188)。detect.rs:1600 で confined write が無確認許可。git が答えなかった場合を裁定に含めるか要 Ask。
-USER RULING 2026-10-02 (session 34385c9e, AskUserQuestion): 'Can't read -> not recoverable'. An unreadable git state (GitState::Undetermined) must NOT support 'recoverable'; the delete resolves to Deny/Ask (fail closed). Implementation: decide_recovery must forward Undetermined instead of collapsing it (reversible.rs ~176-195 / 286,288 at time of filing). The RED test is ready, independently authored: scratchpad of session 34385c9e, blastguard-recoverability-fault-test.rs (blind_boundary_never_leaves_a_recoverability_probe_permissive); copy it into crates/blastguard/tests/fault_injection.rs, observe RED, then fix. Bump blastguard, canary rollout."""
-created_at = 1790794224
-updated_at = 1790884806
-weight = 0.0
-issue_number = 926
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/926"
-
-[[task]]
 id = "b187ecea"
 title = "autoflow lock.rs:58: backlog 導入判定不能で driver active=true を返し Stop gate の block 判定前に return (main.rs:170)"
 project = "/Users/yuki/src/harness"
@@ -13443,3 +13403,18 @@ updated_at = 1790980374
 weight = 0.0
 issue_number = 1077
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1077"
+
+[[task]]
+id = "41d7bd26"
+title = "check-fail-open ARM_BLOCK_WINDOW: a block-bodied Undetermined arm still open after 12 lines is never flagged"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Reported 2026-10-03 by fail-open-paren round-4 worker (2426c15a): pre-existing window cut-off resolves an unfinished scan to clean; listed as a limit, not changed."
+created_at = 1790980480
+updated_at = 1790980480
+weight = 0.0
+issue_number = 1078
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1078"

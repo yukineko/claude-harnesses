@@ -13409,3 +13409,35 @@ updated_at = 1790909542
 weight = 0.0
 issue_number = 1012
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1012"
+
+[[task]]
+id = "7438ea3a"
+title = "SessionStart の mirror drift が、意図的に mirror しないと裁定された 63 件を毎セッション永久に報告し続ける (0.3.20 で作り込んだ問題)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "deploy-verify",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+観測 2026-10-02、測定点 a3cf25fc。close 側は reconcile 済みで drift は 0 件になったが、create 側は 63 件残っており、これはユーザー裁定 (2026-10-02) で「既存の未リンク pending は作らない」と決めた分である。
+
+したがって 0.3.20 で追加した SessionStart の drift 行は、今後ずっと 63 issue(s) to create と出し続ける。store は未リンクであることだけを持ち、それが未着手なのか裁定済みなのかを区別できないため、この行は『対処すべき drift』ではなく定常ノイズになる。
+
+これは実在の設計欠陥であり、しかも自分が作り込んだもの: MirrorDrift は mirror_in_use で非 GitHub repo のノイズは消したが、同じ repo 内の『意図的に mirror しない』は表現できない。CLAUDE.md が警告するとおり、読み手がこの行を無視するよう訓練されると、467 件を dark にした当の仕組みが戻る。
+
+候補の直し方 (どれが正しいかは未判定):
+(a) Task に no_mirror 相当のフラグを足し、sync_plan の create 腕と mirror_drift の両方から除外する。drift 行には『うち N 件は no-mirror 宣言済み』を併記する (scripts/parked-plugins.json の PARKED ON PURPOSE と同じ思想。宣言されたものは red ではなく宣言として表示する)。
+(b) drift 行を close 側だけに絞る。create 側は backlog sync の dry run でだけ見せる。close は『issue が実在して開いている』という曖昧さの無い事実なので報告価値が高く、create は方針依存。
+(c) 何もしない。63 という数が増えなければノイズとして許容する。ただし増減が見えないので、新規の未リンクが積まれても気づけない = 元の暗転に戻る。
+
+(a) が parked-plugins の既存思想に最も沿うが、store schema を触るので影響範囲が広い。(b) は小さいが、create 側の暗転を受け入れることになる。判定には『63 が今後どう動くか』の観測が要る (build != validate)。
+
+このチケット自体が、gh 認証後に backlog add が issue を自動作成するかの実測サンプルにもなっている。"""
+created_at = 1790909539
+updated_at = 1790909539
+weight = 0.0
+issue_number = 1009
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1009"

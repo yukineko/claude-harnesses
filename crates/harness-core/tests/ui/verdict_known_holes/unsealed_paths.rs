@@ -19,7 +19,14 @@
 //! that shows up in a diff. The hand-written default arms (inside hole 1's
 //! trait impl, and hole 2's match) are what scripts/check-fail-open.py's
 //! `undetermined-arm-empty-fallback` pattern exists to see; the extension-trait
-//! call form (`.require().unwrap_or_default()`) is not caught by any gate today.
+//! call form (`.require().unwrap_or_default()`, `.require().is_ok()`) is flagged
+//! by the same script's `require-ext-erase` pattern (backlog f12c2168). Both are
+//! ADVISORY in that script: printed and counted on the `--ratchet` baseline and
+//! excluded from its blocking verdict (a commit that ADDS such a site under
+//! `crates/*/src/` is blocked by scripts/check-fail-open-diff.py), and not
+//! sealed by the types — this fixture still compiles. (This file sits under
+//! `tests/`, outside the scanner's `crates/*/src/` surface, so its own spellings
+//! are not counted.)
 
 use harness_core::verdict::{Determination, Required};
 

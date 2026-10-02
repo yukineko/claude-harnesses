@@ -23062,3 +23062,57 @@ updated_at = 1790886218
 weight = 0.0
 issue_number = 224
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/224"
+
+[[task]]
+id = "f6784177"
+title = "ctxrot の find_overwatch_binary が stuckguard で直した 2 欠陥をそのまま持っている (mirror gap)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "mirror-gap",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+stuckguard の anchor 修正 (0.1.30) で直した 2 件が、双子である crates/ctxrot/src/hooks/guard.rs:656 の find_overwatch_binary に未修正のまま残っている。片側だけ直った典型的な mirror gap。
+
+(1) 消去 (erasure): guard.rs:666-668 は std::fs::read_dir(&base).ok()? と .filter_map(|e| e.ok()) で、読めない cache dir を「候補ゼロ」へ畳む。絶対的不在と判定不能が同じ出力になる。stuckguard 側は harness_core::boundary::read_dir_entries を通す形へ寄せた (Known(vec![]) と Undetermined を分ける)。
+
+(2) バージョン順序: guard.rs:672-673 の candidates.sort() は full path の辞書順なので、0.3.9 が 0.3.10 より後ろに来る。実測 2026-08-06、この機械の ls ~/.claude/plugins/cache/yukineko/overwatch は 0.1.30 / 0.1.38 / 0.2.18 / 0.2.20 / 0.2.24 の 5 dir を保持しており、二桁 patch は既に存在する。今日 0.2.24 が正しく選ばれるのは 0.2.9 が一度も入らなかったからにすぎず、同一 minor 内で一桁と二桁が並んだ時点で古い方を選ぶ。stuckguard 側は version_sort_key で数値成分比較へ直し、0.3.9 vs 0.3.10 の RED を実測してから GREEN 化した。
+
+影響の非対称性: ctxrot 側は heartbeat を打たず注入 cadence の判定にしか使わないので、lease reap への波及は無い。したがって深刻度は stuckguard 側より低いが、(2) は「古い overwatch を新しい台帳に対して走らせる」ことになる。
+
+完了条件: guard.rs の find_overwatch_binary を boundary::read_dir_entries + 数値バージョン比較へ寄せ、0.3.9 vs 0.3.10 のテストを RED 先行で追加する。ctxrot は 3 ファイル lockstep で micro bump。"""
+created_at = 1785969045
+updated_at = 1790899425
+weight = 0.0
+issue_number = 171
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/171"
+
+[[task]]
+id = "5b89f0f6"
+title = "verdict.rs の「method call としては書けない」は拡張トレイトで反証される (散文が実挙動より強い)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+crates/harness-core/src/verdict.rs:434 は permissive path is therefore not expressible as a method call on either と書いている。敵対的監査 (2026-08-06) が使い捨てクレートを実 harness-core への path dep で作り、実際にビルド・実行して反証した。
+
+外部クレートに 6 行の拡張トレイト (Required に対して unwrap_or_default と is_ok を生やす impl) を置くと、呼び出し側の綴りが trybuild fixture の E0599 として pin しているものとバイト同一のまま通る。実行結果 collapsed=[] を観測 = undetermined が空 Vec へ潰れた。
+
+同時に確認された関連の穴 2 件:
+- Required::Blocked(Verdict) は型として Undetermined を強制していない。外部から Blocked に Clean を積むことができ、正規の Blocked(v) => return v 腕が blocks()==false を返す。Verdict::Clean は private witness で偽造不能なのに Required::Blocked には対応する制約が無い。塞ぐなら Blocked(Undet) + accessor。condukt/src/maintree.rs:805 は verdict.blocks() で既に防御しているので production の実害は現状なし。
+- verdict.rs:36 と :384 の has exactly one extractor は method に限った話で、Determination::Known が pub variant である以上、直接 match という第2の抽出路がある (repo 内 40+ 箇所)。
+
+完了条件: 散文を実挙動へ合わせる (第4節: 実装を変えたら同じコミットで記述も直す。ここでは記述の側が過大)。可能なら Required::Blocked の payload を Undet へ狭める。拡張トレイト経路は型では塞げないので、塞げない事実を書くか、下の lexical gate 側で拾う。"""
+created_at = 1785969187
+updated_at = 1790899427
+weight = 0.0
+issue_number = 176
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/176"

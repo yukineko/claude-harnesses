@@ -13567,3 +13567,114 @@ updated_at = 1790911947
 weight = 0.0
 issue_number = 1018
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1018"
+
+[[task]]
+id = "5990f479"
+title = "全文索引 / call graph (a11c714d で計測まで済んだ部分) が本番に一切届いていない — specguard relevant_file_map は env default-OFF でどこからも立たず、map enrich/search/callers は呼び出し元ゼロ、.fugu に text-index.jsonl も callgraph.jsonl も存在しない"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "deploy-verify",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = '''
+観測 2026-10-02 (測定点 a6db258e)。「spec-map / ファイル調査のコスト削減・速度改善に全文検索を入れる」施策の現状調査で判明。
+
+出荷済みのもの (実在し、テストもある):
+- harness-core/src/code_index.rs (symbol/declaration 索引。slice-1)
+- harness-core/src/text_index.rs (逐語: 'Deterministic **full-text** inverted index over source files — the body-level counterpart to [crate::code_index], which only ever sees *declaration* lines.')
+- harness-core/src/callgraph.rs (永続 caller->callee)
+- harness-core/src/index_store.rs (3つの façade。全 query が Determination を返し Undetermined != 空 を守っている)
+landed: a11c714d (2026-09-07) 'feat(spec-map): 全文索引と永続 call graph を足し、fugu-router subprocess を除去する'、merge 090914c0。
+
+実際に動いている消費者は 2 本だけで、どちらも **古い symbol-only slice-1 経路**:
+- condukt SKILL.md:318-319,686-689,970-972 が 'fugu-router code-index build --if-stale' / 'code-index search' を bash で叩き、code_context として worker/verifier に渡す
+- condukt review-order (in-process の extract_symbols、main.rs:2911)
+
+**計測された新しい半分 (全文索引 + call graph) の唯一の本番経路である specguard relevant_file_map は default-OFF**:
+- specguard/src/main.rs:667 relevant_map_enabled()、doc 逐語: 'SPECGUARD_RELEVANT_MAP ... Default OFF: with it unset the harness renders and dispatches exactly as it did before this feature existed'
+- SPECGUARD_RELEVANT_MAP の repo 全体 grep は main.rs / 自分のテスト / docs/specs/specguard.md:48 のみ。settings.json・hook・command には **1 件も無い**。
+- specguard 'map enrich' / 'map search' / 'map callers' は commands/drift-map.md から呼ばれない (drift-map.md は build|sync|list|link|set-spec|prune のみ)。
+
+ディスク上の裏付け (推測ではなく観測):
+- /home/hiroyuki_nakayama/src/claude-harnesses/.fugu/ には code-index.jsonl と code-index.meta.json だけがあり、どちらも **Jul 13** 付。text-index.jsonl と callgraph.jsonl は **一度も書かれていない**。
+- .specguard/spec-map.toml は 195 entry 中 **195 件**が symbols = [] / called_by = [] (grep -c '^symbols = \[\]' → 195)。map enrich が実 map に対して一度も走っていない。
+
+これは build != validate の典型形である。a11c714d 自身が 'rollout は実行していない' と書いており、以後 2026-09-07 より後にこの施策を進めた commit は無い。
+
+完了条件 (案、未裁定): (1) 全文索引/call graph を実際に消費する経路を 1 本 live にする。(2) 立てた後に **まず索引を build させて赤を観測する** — 195/195 が空なのは enrich が走っていないからであり、走らせたら別の赤が出る可能性が高い (CLAUDE.md 2(b))。(3) default-OFF の env flag を本番経路に使うなら、立っていないことを検出するものを同時に置く (今は立っていないことが完全に沈黙している)。
+
+関連: 3f3a0e90 (code-index search の空配列 fail-open — 上記 live 経路が今も抱えている)、0caa2c51 (scope.rs:506 の code-index 失敗で base file set のみ)、4ffc77b5 (per-run temp dir 蓄積)。2997f08f は tree-sitter repo map 案で 2026-07-07 に 'speculative/oversized/no-consumer' として cancelled 済み。'''
+created_at = 1790913820
+updated_at = 1790913820
+weight = 0.0
+issue_number = 1019
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1019"
+
+[[task]]
+id = "6fc10692"
+title = "context-governor codesearch::grep_substitute が Decline::NotEnabled を返すだけのスタブで、hook にも handlers にも配線されていない — 『Grep を索引照会で短絡する』という施策の実体が存在しない"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "deploy-verify",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+観測 2026-10-02 (測定点 a6db258e)。
+
+crates/context-governor/src/codesearch.rs:260-262 逐語:
+  pub fn grep_substitute(...) -> Lookup { Lookup::Decline(Decline::NotEnabled) }
+
+参照元は src/lib.rs:31 と tests/codesearch_contract.rs のみ。src/bin/context-governor.rs からも handlers.rs からも呼ばれていない。landed 時 (71337356、2026-08-24、'feat(context-governor): 記号索引で Grep を短絡する primitive を型で安全側に固定する') の commit message 自身が 'hook 配線もまだ入れていない。' と書いており、意図的な保留である。merge は f9a1e2c6 (2026-09-18)。
+
+型 (Lookup / Decline の三値) は正しく、CLAUDE.md 3 の形を満たしている。欠けているのは配線だけ。ただし現状は『Grep の token/時間を索引で削る』という施策の **効果が構造的に 0** である。context-governor プラグインは settings.json で enabled:true なので、有効だが何もしていない状態。
+
+測り方: PreToolUse(Grep) で grep_substitute を呼び、Lookup が hit を返した回数と、その際に節約されたバイト数を ledger (既に 4bddfd4a で saved-token metrics の配線がある) に記録する。配線前に『何回 decline されるか』を測ると、索引が無いことによる decline と本当に該当なしの decline が区別できる (3f3a0e90 と同型の問題がここにもある)。"""
+created_at = 1790913822
+updated_at = 1790913822
+weight = 0.0
+issue_number = 1020
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1020"
+
+[[task]]
+id = "40a9e774"
+title = "索引のコスト削減効果が a11c714d の commit message にしか無く、再測定するスクリプトも doc も無いため回帰を検出できない (harness-core の spec にも text_index/callgraph/index_store の節が無い)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "deploy-verify",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+観測 2026-10-02 (測定点 a6db258e)。
+
+唯一の計測は a11c714d (2026-09-07) の commit message 内にあり、逐語:
+  on-disk: text 9.8MB / callgraph 7.0MB / symbols 1.9MB。
+  freshness を meta sidecar のみで判定するようにして 355ms → 121ms
+  返却バイト数 (grep 対 索引、6 クエリ):
+    append_line        3,093 →  1,319  (0.43x)
+    enumerate_callers  3,014 →  1,089  (0.36x)
+    Determination    164,385 →  1,259  (0.01x)
+    toml::from_str     6,054 →  1,363  (0.23x)
+    DEFAULT_MAP_PATH     182 →  1,298  (7.13x)  <- 改善しなかった
+    extract_symbols    2,722 →  1,436  (0.53x)
+負の結果も残してある点は良い (逐語: 'DEFAULT_MAP_PATH は**悪化した**。... 稀な完全一致の識別子では grep が今も安い。')。
+
+問題は次の 3 点:
+(1) これは **1 クエリあたりの返却バイト数**であって end-to-end の token/コスト削減ではない。実際のセッションで何 token 減ったかは未測定。
+(2) 再現する手段が無い。harness-core に benches/ は無く、benchkit / integration-tests には索引への参照が 0。commit message の数字は誰も再測定できないので、回帰しても気付けない。
+(3) docs に運ばれていない。docs/context-optimization.md と docs/context-optimization-flow.md は索引に 0 ヒット (index/全文/code-RAG/retrieval いずれも)。設計は commit message と module header にしか存在しない。docs/specs/harness-core.md:75-76 は code_index の節だけを持ち、**text_index / callgraph / index_store の節が無い** (この施策の新しい半分が未仕様)。
+
+完了条件 (案): 上の 6 クエリ表を再生成する committed なスクリプトを置き、grep 対 索引のバイト数を回帰として固定する。end-to-end の token 削減は別件 (そちらは 93323c20 の『injected context の 1 token に値段が付いていない』と接続する)。"""
+created_at = 1790913823
+updated_at = 1790913823
+weight = 0.0
+issue_number = 1021
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1021"

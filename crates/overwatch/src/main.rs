@@ -24,6 +24,7 @@ mod review_escalation;
 pub mod review_finding;
 mod review_gate_decisions;
 mod review_queue;
+mod review_ruling;
 pub mod rollback;
 mod rollback_cli;
 pub mod store;

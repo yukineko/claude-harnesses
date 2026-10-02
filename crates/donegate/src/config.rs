@@ -154,6 +154,31 @@ pub enum Declaration {
     /// Previously this fell through to `checks: 0` — the same fail-open as the
     /// refusal, reachable by shipping a `donegate.toml` with a typo in it.
     Unreadable { path: PathBuf, why: String },
+    /// A config file exists, was read, and parsed — but declares a `[[check]]`
+    /// whose name is inside the namespace donegate reserves for its own
+    /// "could not judge" sentinel ([`RESERVED_DISCRIMINATOR`]). donegate will
+    /// not run it, because recording its result would make a red project check
+    /// indistinguishable, in the overwatch ledger, from donegate having judged
+    /// nothing at all.
+    ///
+    /// Kept apart from [`Declaration::Unreadable`] rather than folded into it,
+    /// even though both resolve the same way (refuse, bounded, block). The
+    /// remedy differs — "rename the check" vs "fix the broken TOML" — and the
+    /// ledger discriminator is derived from the variant, so folding them would
+    /// correlate two unrelated systemic issues into one recurrence bucket.
+    /// That is the same collapse this sentinel was added to end
+    /// (backlog a5bc063a), and re-creating it one level down inside the fix
+    /// would be the fix conceding the point.
+    ///
+    /// **The cost, stated rather than left for a reader to find**: a project
+    /// that legitimately named a check `undetermined:*` previously had that
+    /// check RUN. It now never runs, and after `max_attempts` consecutive
+    /// blocks the cap allows the stop having verified nothing. That is a real,
+    /// narrow loss of verification for that project — bounded, loud, blocking
+    /// first, and fixable by the operator in one rename, with the name printed
+    /// in the block message. It is the same trade the refusal path above
+    /// already makes.
+    ReservedCheckName { path: PathBuf, why: String },
 }
 
 impl Declaration {
@@ -164,7 +189,9 @@ impl Declaration {
     pub fn is_refusal(&self) -> bool {
         match self {
             Declaration::Absent | Declaration::Loaded(_) => false,
-            Declaration::RefusedUntrusted { .. } | Declaration::Unreadable { .. } => true,
+            Declaration::RefusedUntrusted { .. }
+            | Declaration::Unreadable { .. }
+            | Declaration::ReservedCheckName { .. } => true,
         }
     }
 }
@@ -256,7 +283,65 @@ fn load_from(path: Option<PathBuf>) -> (Config, Declaration) {
         },
     };
     sanitize(&mut cfg);
+    // Checked AFTER sanitize so the names judged here are the ones that
+    // survive into the run (sanitize drops blank ones), and BEFORE the config
+    // is handed back so a reserved name can still change the declaration.
+    if let Some(why) = reserved_check_name(&cfg) {
+        if let Declaration::Loaded(path) = declaration {
+            // Not a silent drop. Dropping the offending `[[check]]` would
+            // remove a check the operator declared — a gate that got weaker
+            // because of a naming collision, which is the fail-open this whole
+            // sentinel exists to prevent. A config donegate cannot use without
+            // corrupting its own ledger is a config it cannot use, so this
+            // routes to the bounded refusal path and BLOCKS rather than
+            // allowing — under its own variant, so the ledger does not
+            // correlate "rename the check" with "fix the broken TOML".
+            return (cfg, Declaration::ReservedCheckName { path, why });
+        }
+    }
     (cfg, declaration)
+}
+
+/// The discriminator namespace donegate reserves for its own
+/// "could not judge" sentinel, as it appears in an overwatch signature
+/// (`donegate:undetermined:<kind>`).
+///
+/// It has to be reserved explicitly, because nothing else reserves it:
+/// `overwatch::violation::normalize_signature` only trims, lowercases and
+/// turns spaces into dashes, so EVERY lowercase non-blank string is reachable
+/// from some check name. Without this rule a project could declare
+/// `[[check]] name = "undetermined:untrusted"` and its red check would land in
+/// the same recurrence bucket as "donegate could not judge at all" — the exact
+/// collapse this sentinel was added to end, one level down.
+pub const RESERVED_DISCRIMINATOR: &str = "undetermined";
+
+/// Normalize a check name the way `normalize_signature` will, so the reserved
+/// check is made against the string that actually reaches the ledger rather
+/// than against the spelling in the file.
+fn normalized_name(name: &str) -> String {
+    name.trim().to_lowercase().replace(' ', "-")
+}
+
+/// `Some(why)` when some declared check name would collide with donegate's
+/// reserved discriminator namespace.
+fn reserved_check_name(cfg: &Config) -> Option<String> {
+    let reserved_prefix = format!("{RESERVED_DISCRIMINATOR}:");
+    cfg.checks.iter().find_map(|c| {
+        let n = normalized_name(&c.name);
+        if n == RESERVED_DISCRIMINATOR || n.starts_with(&reserved_prefix) {
+            Some(format!(
+                "[[check]] name '{}' normalizes to '{n}', which is inside the \
+                 '{RESERVED_DISCRIMINATOR}' discriminator namespace donegate \
+                 reserves for its own 'could not judge' sentinel. A red check \
+                 with this name would be indistinguishable in the overwatch \
+                 ledger from donegate having judged nothing at all. Rename the \
+                 check.",
+                c.name
+            ))
+        } else {
+            None
+        }
+    })
 }
 
 /// Overlay the on-disk fields that were actually present.

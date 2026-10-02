@@ -403,20 +403,66 @@ fn gate_run(hook: Option<HookInput>) -> ! {
 enum Outcome {
     Blocked,
     GaveUp,
+    /// The gate gave up WITHOUT HAVING JUDGED ANYTHING: it could not read or
+    /// was not allowed to run the project's declaration at all, and the
+    /// attempt cap ran out ([`refuse`]). The `name` passed alongside it is not
+    /// a check name — no check ran — but the refusal KIND
+    /// ([`refusal_kind_slug`]), because the two kinds have different remedies
+    /// (`donegate trust` vs fixing a broken file) and must not correlate as one
+    /// systemic issue.
+    ///
+    /// This is the heavier of the two give-ups and used to be the one with no
+    /// durable trace at all: the checks-red arm recorded `donegate:giveup:<check>`
+    /// while this arm only wrote donegate's own private JSONL and a stderr line,
+    /// neither of which any other tool reads (backlog a5bc063a).
+    GaveUpUndetermined,
 }
 
 impl Outcome {
-    /// The `check_kind` discriminator recorded for check `name`. The give-up
-    /// prefix rides inside the discriminator (yielding `donegate:giveup:<name>`
-    /// vs `donegate:<name>`) rather than in a separate field, because
+    /// The `check_kind` discriminator recorded for `name`. The outcome prefix
+    /// rides inside the discriminator (yielding `donegate:giveup:<name>` vs
+    /// `donegate:<name>`) rather than in a separate field, because
     /// `overwatch`'s recurrence detection buckets purely by signature: a
     /// separate field would be invisible to it, and a check that keeps
     /// exhausting the cap would never escalate as its own systemic issue.
+    ///
+    /// [`Outcome::GaveUpUndetermined`]'s `undetermined:` namespace is reserved
+    /// against project check names at config load
+    /// ([`config::RESERVED_DISCRIMINATOR`]). That reservation is what makes
+    /// this bucket un-forgeable — `normalize_signature` itself reserves
+    /// nothing, so without it a check named `undetermined:untrusted` would
+    /// produce a byte-identical signature.
     fn check_kind(self, name: &str) -> String {
         match self {
             Outcome::Blocked => name.to_string(),
             Outcome::GaveUp => format!("giveup:{name}"),
+            Outcome::GaveUpUndetermined => {
+                format!("{}:{name}", config::RESERVED_DISCRIMINATOR)
+            }
         }
+    }
+}
+
+/// Which kind of "could not judge" this is, as the ledger discriminator.
+///
+/// Only the three refusal arms are reachable here — [`refuse`] is called
+/// behind `declaration.is_refusal()`. The other two are still given their own
+/// slug rather than being folded into one of the refusal kinds: a future
+/// reordering that routed them here must show up in the ledger as something
+/// unexplained, not quietly as "untrusted".
+///
+/// One slug per REMEDY, not per outcome. `unreadable-config` and
+/// `reserved-check-name` both block and both come from a file donegate
+/// declined to act on, but one is fixed by repairing the TOML and the other by
+/// renaming a check — correlating them as one recurring systemic issue would
+/// point the operator at the wrong thing.
+fn refusal_kind_slug(d: &config::Declaration) -> &'static str {
+    match d {
+        config::Declaration::RefusedUntrusted { .. } => "untrusted",
+        config::Declaration::Unreadable { .. } => "unreadable-config",
+        config::Declaration::ReservedCheckName { .. } => "reserved-check-name",
+        config::Declaration::Absent => "unexpected-absent",
+        config::Declaration::Loaded(_) => "unexpected-loaded",
     }
 }
 
@@ -442,6 +488,13 @@ fn declaration_note(root: &Path, d: &config::Declaration) -> String {
                 path.display()
             )
         }
+        config::Declaration::ReservedCheckName { path, why } => {
+            format!(
+                "REFUSING to judge: {} declares a check in donegate's reserved \
+                 namespace ({why})",
+                path.display()
+            )
+        }
     }
 }
 
@@ -464,6 +517,15 @@ fn refusal_reason(d: &config::Declaration, attempt: u32, max: u32) -> String {
              \n    {why}\n\n\
              A config donegate cannot read is not a config that declares zero checks — it may \
              declare ten required ones. Fix (or remove) the file, then finish.",
+            path.display()
+        ),
+        config::Declaration::ReservedCheckName { path, why } => format!(
+            "🚦 donegate: REFUSING TO JUDGE — {} declares a check donegate cannot record \
+             (attempt {attempt}/{max}).\n\
+             \n    {why}\n\n\
+             The check is NOT being skipped quietly: donegate will not run a check whose \
+             result it cannot tell apart from its own 'could not judge' sentinel, so until \
+             the name changes nothing here is being verified. Rename the check, then finish.",
             path.display()
         ),
         // Unreachable: only `is_refusal()` answers reach here. Resolved to the
@@ -539,6 +601,19 @@ fn refuse(
         state::reset(&cfg.state_dir, session);
         harness_core::gate::run::concede(&cfg.state_dir, session);
         log_event(cfg, session, "giveup-refusal", &[], attempt);
+        // The durable half. `log_event` writes donegate's own private JSONL and
+        // the `eprintln!` below writes stderr; no other tool reads either, so
+        // before this call the heavier give-up — the gate could not judge AT
+        // ALL — left nothing an external reader could find, while the lighter
+        // one (checks judged and still red) left `donegate:giveup:<check>`.
+        // Exactly ONE event: a give-up is one occurrence, and emitting several
+        // would inflate `detect_recurrence`'s count for a single event.
+        emit_violations(
+            root,
+            session,
+            &[refusal_kind_slug(declaration).to_string()],
+            Outcome::GaveUpUndetermined,
+        );
         eprintln!(
             "donegate: still unable to judge after {} attempts — {}. Allowing stop; NOTHING WAS \
              VERIFIED.",
@@ -660,6 +735,12 @@ fn status() {
                 path.display()
             )
         }
+        config::Declaration::ReservedCheckName { path, .. } => {
+            println!(
+                "config:        (defaults — {} declares a RESERVED check name)",
+                path.display()
+            )
+        }
     }
     match harness_core::trust::resolve(&root) {
         harness_core::trust::Trust::Direct => println!("trust:         trusted (explicit)"),
@@ -685,6 +766,9 @@ fn status() {
                  is a worktree)"
             ),
             config::Declaration::Unreadable { why, .. } => println!("  parse error: {why}"),
+            config::Declaration::ReservedCheckName { why, .. } => {
+                println!("  reserved name: {why}")
+            }
             _ => {}
         }
         println!(

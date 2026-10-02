@@ -22,6 +22,71 @@
 //!   * `decoy_*` — an earlier redirect through the SAME token must not decide
 //!     the verdict for a later one. THESE CURRENTLY FAIL; see the module
 //!     comment on `decoy_rebinding_must_not_excuse_the_later_redirect`.
+//!
+//! TWO ROWS WERE RE-EXAMINED on 2026-10-02, by an agent that wrote neither this
+//! file nor the suffix resolver that exposed them. Both sat in the
+//! `unresolvable_*` list, and both were written when NO suffixed target
+//! resolved, so neither expectation had ever been separable from "the resolver
+//! does not reach this shape". Measured against bash, each justification turned
+//! out to be a true statement about a DIFFERENT token than the row held — but
+//! only ONE of the two rows was actually wrong:
+//!
+//!   * `> "$P"x` was justified by "`$Px` is a different file". True of the
+//!     unquoted `$Px`; false of `"$P"x`, where the closing quote ends the name.
+//!     The row WAS wrong: moved to the resolved list, and the unquoted spelling
+//!     took its place in the unresolvable list, where that justification is the
+//!     measured truth.
+//!   * `> "$P"/../../../etc/fstab` was justified by "a suffixed expansion
+//!     escapes the assigned directory". That reason does not hold either — the
+//!     text lands on `/home/etc/fstab`, which this gate Allows when spelled
+//!     literally — but the row's EXPECTATION was right for a reason nobody had
+//!     written down, so it stays. See the retraction below.
+//!
+//! The lesson is the group's own criterion, applied to itself: a row belongs in
+//! `unresolvable_*` only when the shell would NOT use the readable value, or
+//! when reading it is a guess. "The resolver happens not to handle this
+//! spelling" is neither. Note the second row shows the converse trap too — a
+//! right expectation resting on a wrong reason is still a liability, because the
+//! next reader checks the reason.
+//!
+//! ONE OF THOSE TWO CORRECTIONS WAS ITSELF WRONG, and the retraction belongs
+//! here rather than in a commit message nobody will read again. The row
+//!
+//!     P=/home/yuki/proj/ok.log; echo hi > "$P"/../../../etc/fstab
+//!
+//! was briefly replaced by a test asserting pair-equality with the literal, on
+//! the ground that `..` is purely lexical and that `normalize_abs` plus
+//! `no_symlink_below` already judge both spellings alike. The arithmetic and
+//! the `normalize_abs` reading were right; the conclusion was wrong, because
+//! `..` is NOT purely lexical to the kernel. `open()` resolves `..` against the
+//! directory a component REALLY is, so a single symlink before a `..` makes the
+//! text name one file and the syscall open another — and `no_symlink_below`
+//! cannot see it, because `normalize_abs` deletes the symlink component before
+//! the walk begins. Measured, and reproduced independently on both the deployed
+//! 0.2.97 and this worktree's build:
+//!
+//!     printf WRITTEN > <proj>/lnk/../victim.txt        ( lnk -> other/deep )
+//!       lexical parent <proj>/victim.txt       -> LEXICAL-PARENT-UNTOUCHED
+//!       the write hit  <proj>/other/victim.txt -> WRITTEN
+//!     : > <proj>/esc/../../etc/fstab   -> ALLOW   ( esc -> `/` ; truncates
+//!                                                   /etc/fstab for real )
+//!     : > <proj>/esc/etc/fstab         -> DENY    ( no `..`, so the symlink
+//!                                                   component survives )
+//!
+//! The row is therefore RESTORED to the `unresolvable_*` list, with the
+//! justification it should always have carried. The group's criterion is
+//! satisfied after all — "reading it is a guess" — just not for the reason the
+//! original annotation gave.
+//!
+//! Note what the fixture can and cannot show: the `identity` resolver below
+//! models "no symlinks", so pair-equality for a `..` suffix is SATISFIABLE here
+//! and the retracted test was honest about what it measured. It was still the
+//! wrong rule to pin, because the property that decides it is invisible to this
+//! fixture. A test for that property needs real symlinks and the real resolver
+//! — see `redirect_target_suffix_resolution.rs`'s `symlink_*` group, which
+//! spawns the binary the way `worktree_root_symlink_dotdot.rs` does. The
+//! literal and bare-`> $P` spellings of the same escape are still Allow and are
+//! filed as backlog 3ca56588 (p1); refusing the suffix does not close them.
 
 use blastguard::detect;
 use blastguard::model::Decision;
@@ -134,6 +199,39 @@ fn resolved_variable_spelling_answers_exactly_as_the_literal_spelling() {
         (
             "echo x > /home/other/secret.txt",
             "P=/home/other/secret.txt; echo x > \"$P\"",
+        ),
+        // A LITERAL SUFFIX that does not begin with `/`. Corrected on
+        // 2026-10-02: this shape used to sit in the `unresolvable_*` list
+        // justified as "`$Px` is a different file", which is a true statement
+        // about the UNQUOTED `$Px` and a false one about the quoted `"$P"x`.
+        // The closing quote ends the name, so the value IS used. Measured:
+        //   bash -c 'P=<dir>/ok.log; printf ORIG > $P; printf NEW > "$P"x'
+        //     -> rc=0, ok.log still ORIG, ok.logx created holding NEW
+        //   bash -c 'P=/aa; Px=/bb; printf "%s %s" $Px "$P"x'  ->  /bb /aax
+        // The unquoted spelling kept its row in the unresolvable list, where
+        // its justification is the measured truth.
+        (
+            "echo hi > /home/yuki/proj/ok.logx",
+            "P=/home/yuki/proj/ok.log; echo hi > \"$P\"x",
+        ),
+        (
+            "echo hi > /home/yuki/proj/ok.logx",
+            "P=/home/yuki/proj/ok.log; echo hi > ${P}x",
+        ),
+        // …and the same shape in the RESTRICTIVE direction, so the rows above
+        // cannot be satisfied by a resolver that merely collapses everything to
+        // Allow. `.bak`/`.tmp`/`.1` siblings are the reason this shape matters
+        // at all, and a sibling of a system file is still a system file.
+        // Measured: `P=/etc/fstab; printf "%s" "$P".bak` -> /etc/fstab.bak and
+        // `P=/etc/fsta; printf "%s" "$P"b` -> /etc/fstab.
+        (
+            "echo x > /etc/fstab.bak",
+            "P=/etc/fstab; echo x > \"$P\".bak",
+        ),
+        ("echo x > /etc/fstab", "P=/etc/fsta; echo x > \"$P\"b"),
+        (
+            "echo x > /home/yuki/.claude/settings.json",
+            "P=/home/yuki/.claude/settings; echo x > \"$P\".json",
         ),
     ] {
         assert_eq!(
@@ -258,13 +356,44 @@ fn unresolvable_shapes_keep_the_unresolved_verdict() {
             "echo hi > \"$P\"; P=/home/yuki/proj/ok.log",
             "the assignment is AFTER the redirect and cannot reach it",
         ),
+        // These two rows replace a pair that was CORRECTED on 2026-10-02 (see
+        // the module header). The claim "`$Px` is a different file" is true —
+        // but only of the UNQUOTED spelling, which is what now stands here.
+        // Measured side by side on one line, so the two cannot be conflated:
+        //   bash -c 'P=/aa; Px=/bb; printf "%s %s" $Px "$P"x'  ->  /bb /aax
         (
-            "P=/home/yuki/proj/ok.log; echo hi > \"$P\"x",
-            "the token is not a bare expansion — `$Px` is a different file",
+            "P=/home/yuki/proj/ok.log; echo hi > $Px",
+            "unquoted: the name continues through `x`, so this references `Px` \
+             — a different variable, unset here (measured: expands to nothing)",
         ),
         (
-            "P=/home/yuki/proj/ok.log; echo hi > \"$P\"/../../../etc/fstab",
-            "a suffixed expansion escapes the assigned directory",
+            "P=/home/yuki/proj/ok.log; echo hi > $P_x",
+            "unquoted: `_` continues an identifier too, so this references `P_x`",
+        ),
+        // RESTORED on 2026-10-02 after the correction below was itself shown to
+        // be wrong, and with the justification the row should always have had.
+        // `..` is not unreadable because it is unreadable — it is unreadable
+        // because ONE SYMLINK anywhere before it makes the concatenated text
+        // name a different file than the kernel opens. Measured
+        // non-destructively (`lnk` -> a real dir inside the project):
+        //   printf WRITTEN > <proj>/lnk/../victim.txt
+        //     lexical parent <proj>/victim.txt       -> LEXICAL-PARENT-UNTOUCHED
+        //     the write hit  <proj>/other/victim.txt -> WRITTEN
+        // and with `esc` -> `/`, realpath(<proj>/esc/../../etc/fstab) is
+        // `/etc/fstab` while lexical normalisation gives `<base>/src/etc/fstab`.
+        // `no_symlink_below` cannot save this: `normalize_abs` DELETES the
+        // symlink component before the walk ever sees it. Measured on the
+        // deployed 0.2.97 and on this worktree's build, session id stripped:
+        //   : > <proj>/esc/../../etc/fstab   -> ALLOW   (truncates /etc/fstab)
+        //   : > <proj>/esc/etc/fstab         -> DENY    (component survives)
+        // The literal and BARE `> $P` spellings are both still Allow — filed as
+        // backlog 3ca56588 (p1), NOT closed by refusing the suffix. When that
+        // closes, this row is the one to revisit.
+        (
+            "P=/home/yuki/proj; echo hi > \"$P\"/../../../etc/fstab",
+            "a `..` in the suffix is resolved by the KERNEL against what each \
+             component really is, so one symlink makes the concatenated text \
+             name a different file (measured)",
         ),
         (
             "P=$OTHER; echo hi > \"$P\"",

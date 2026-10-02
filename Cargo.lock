@@ -163,7 +163,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "blastguard"
-version = "0.2.98"
+version = "0.2.99"
 dependencies = [
  "globset",
  "harness-core",
@@ -365,7 +365,7 @@ dependencies = [
 
 [[package]]
 name = "ctxrot"
-version = "0.5.30"
+version = "0.5.31"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1306,7 +1306,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "stuckguard"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "anyhow",
  "chrono",

@@ -46,6 +46,8 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+#[cfg(test)]
+mod fault_injection_tests;
 mod model;
 mod protection;
 mod store;
@@ -171,14 +173,29 @@ fn decide() -> Decision {
             "the hook payload on stdin was empty or did not parse as JSON",
         ));
     };
+    decide_with(
+        &input,
+        &store::state_dir(),
+        harness_core::parallel::session_cap(),
+    )
+}
+
+/// The verdict itself, given an already-parsed payload and an explicit state
+/// root, so the ledger-read seam is reachable from a test.
+///
+/// [`decide`] keeps the two things a test cannot supply — stdin and the real
+/// per-user state directory — and everything that decides ALLOW vs DENY lives
+/// here. `src/fault_injection_tests.rs` blinds `boundary::read_to_string`
+/// underneath this function and asserts the verdict stays DENY (backlog
+/// 8696dd7e). Extracting it changes no behaviour: `decide` passes exactly the
+/// `root` and `cap` it used to compute inline.
+fn decide_with(input: &HookInput, root: &std::path::Path, cap: usize) -> Decision {
     let Some(class) = SlotClass::of_tool(&input.tool_name) else {
         // Not a metered tool. Not a verdict about it either — pass it through.
         return Decision::Allow;
     };
 
-    let cap = harness_core::parallel::session_cap();
-    let root = store::state_dir();
-    let path = store::session_path(&root, &input.session_key());
+    let path = store::session_path(root, &input.session_key());
 
     let _guard = match store::lock(&path) {
         Determination::Known(g) => g,
@@ -198,12 +215,12 @@ fn decide() -> Decision {
         }
     };
 
-    let key = slot_key(&input);
+    let key = slot_key(input);
     let now = store::now_secs();
     match ledger.acquire(class, &key, now, cap) {
         Decision::Deny(reason) => {
             log_event(
-                &root,
+                root,
                 &format!(
                     "deny {} session={} live={} cap={}",
                     class.tag(),

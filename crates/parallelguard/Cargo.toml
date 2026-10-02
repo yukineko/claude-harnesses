@@ -3,7 +3,7 @@
 # since 1.89), so this crate's true MSRV is above the workspace's 1.85.
 rust-version = "1.89"
 name = "parallelguard"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 description = "Per-session concurrency cap for Claude Code: a PreToolUse hook that counts in-flight Bash calls and subagents and denies the one that would exceed the cap."
 license = "MIT"
@@ -19,6 +19,10 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# Fault-injection adopter (backlog 8696dd7e, slice 4): test-only feature, never
+# in [dependencies]. `src/fault_injection_tests.rs` blinds the boundary under
+# `decide_with` and asserts the PreToolUse verdict stays Deny.
+harness-core = { path = "../harness-core", features = ["fault-injection"] }
 
 # ワークスペースの [workspace.lints.clippy] を継承する（unwrap_used / expect_used /
 # panic = deny）。判定を持つ crate では panic は判定不能そのもの — この crate では

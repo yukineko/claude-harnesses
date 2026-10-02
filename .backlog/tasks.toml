@@ -931,45 +931,18 @@ notes = """
 2026-09-30 slice 3 landed: 103eef5a (merged 530acc71). scripts/check-fault-injection-adoption.py + baseline 0 (harness-core excluded as provider; above-baseline also exits 1 so the pin tracks the real count; feature outside dev-dependencies exits 1; undetermined exits 2). RED 4bf08c5f 13 tests by an independent sonnet author, plus 15 implementer tests. NOT yet wired: pre-commit patch in the session scratchpad (githooks-8696dd7e.patch) awaits the user. Remaining: wiring, slice 2 (first gate-crate adopter with observed RED; the same commit must raise the baseline to 1), slice 4.
 
 2026-10-01 slice 2 landed (merged b0a7679f, pushed, canary-rolled overwatch 0.2.47): overwatch is the first adopter. store::read_audit_rounds (the audit-metrics converging verdict) read via std::fs, outside the seam; it now reads through harness_core::boundary::read_to_string, forwarding Undetermined. Test crates/overwatch/tests/fault_injection.rs authored independently; F->P observed by the orchestrator: pre-fix store.rs gives VACUOUS fail-closed check (returned Some(true)), post-fix passes. Adoption baseline 0->1; raw-io ratchet 46->45. Remaining: wiring patch awaits the user, slice 4 (one crate per commit).
-2026-10-02 slice 4 (blastguard) landed: 7371a4ec, merged 9b6d8dbe, pushed, canary-rolled blastguard 0.2.97. Third adopter (propguard aadc0ef4 was #2); adoption baseline 2->3. Test blind_boundary_never_leaves_an_approval_lookup_permissive (approve.rs Store::lookup) authored independently; vacuity observed: swapping boundary::read_to_string for std::fs gives VACUOUS panic. HELD BACK: recoverability-probe test (scratchpad blastguard-recoverability-fault-test.rs) is RED because decide_recovery discards GitState::Undetermined (reversible.rs ~176-195) - that is user-ruled permissive territory, pending 7778b634. Unrelated pre-existing red filed as 16d8e01d (worktree_root_* calibration)."""
+2026-10-02 slice 4 (blastguard) landed: 7371a4ec, merged 9b6d8dbe, pushed, canary-rolled blastguard 0.2.97. Third adopter (propguard aadc0ef4 was #2); adoption baseline 2->3. Test blind_boundary_never_leaves_an_approval_lookup_permissive (approve.rs Store::lookup) authored independently; vacuity observed: swapping boundary::read_to_string for std::fs gives VACUOUS panic. HELD BACK: recoverability-probe test (scratchpad blastguard-recoverability-fault-test.rs) is RED because decide_recovery discards GitState::Undetermined (reversible.rs ~176-195) - that is user-ruled permissive territory, pending 7778b634. Unrelated pre-existing red filed as 16d8e01d (worktree_root_* calibration).
+
+2026-10-02 slice 4 (parallelguard) landed: 544bd65d (branch fork/p1-3items), adoption baseline 3->4、parallelguard 0.1.4 (3 ファイル lockstep)。4 番目の採用クレート。parallelguard は bin-only の GATE crate で、in-flight ledger が読めないときに PreToolUse の verdict が制限側に留まることを示すものが無かった。注入の継ぎ目として src/main.rs から decide_with(&HookInput, &Path, usize) を切り出した (decide() は stdin と実際の per-user state dir だけを保持し、ALLOW/DENY を決める全部が decide_with に移る。挙動は不変 — decide は以前インラインで算出していた root と cap をそのまま渡す)。src/fault_injection_tests.rs は decide_with の下で boundary::read_to_string を盲目化し、verdict が Deny に留まることを harness_core::degrade::assert_fails_closed で表明する (5 tests)。harness-core の fault-injection feature は [dev-dependencies] のみ。
+
+空虚でないことを両方向で観測 (CLAUDE.md 2b): (a) boundary を迂回して std::fs で ledger を読む版では VACUOUS — "the closure made no boundary IO call on this thread, so blinding it changed nothing and proves nothing (it returned Allow)"。(b) fail-closed の腕を戻して読めない ledger を空として扱う版では FAIL-OPEN — "with every boundary entry forced to Undetermined (1 call(s) faulted) the gate still returned a permissive verdict: Allow"。(c) 無故障時は "test result: ok. 5 passed"。全体 32+12+2 tests green、cargo clippy -p parallelguard --all-targets clean (切り出しで生じた needless_borrow 2 件は allow ではなく修正した)。parallelguard は enablement が PARKED (scripts/parked-plugins.json、2026-08-28 のユーザー裁定) のままで、この commit はそれを変えない。
+
+【stale prose の訂正 — 2026-10-02 実測】上の 2026-09-30 / 2026-10-01 の notes にある「wiring patch awaits the user」「NOT yet wired: pre-commit patch in the session scratchpad (githooks-8696dd7e.patch)」は既に古い。実測: scripts/check-fault-injection-adoption.py は .githooks/pre-commit:221 で `run check-fault-injection-adoption.py fault-injection-adoption` として配線済みで、:315 と :320 の説明文にも載っている。実際に commit 544bd65d の pre-commit がこのチェックを走らせて green を出している。また githooks-8696dd7e.patch は machine 上に存在しない (scratchpad は session 固有なので、起票時の session が終わった時点で失われている) — 存在しないパッチの適用を待つ記述は次の著者を誤らせるので無効と記録する。したがって残りは slice 4 の継続 (1 commit 1 クレート) だけで、配線は done。"""
 created_at = 1785879190
-updated_at = 1790884119
+updated_at = 1790917905
 weight = 0.0
 issue_number = 140
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/140"
-
-[[task]]
-id = "0c277117"
-title = "docs/specs が map からも canon からも外れており、specguard はどこでも block しない"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "L4",
-    "scout",
-    "verified",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-仕様が2つの互いに素な宇宙に分かれている。(1) specguard.toml の map exclude に glob で md 全体が入っているので、44本の docs/specs 配下の仕様書は全部 map の外。map は「仕様書が変わった」も「古びた」も原理的に観測できず、Status Changed は永久に「git が impl を触った」の意味しか持てない。(2) 同時に grep -c docs/specs specguard.toml は 0 で、8つの area の canon は crates 配下の README や DESIGN や docs/OVERVIEW。監査は README を読み map は docs/specs を指し、両者は交わらない。spec_doc はどの判定の入力にもならないラベル。しかも crate 粒度で 41 doc が 397 entry を覆う。(3) block がどこにも無い: specguard の呼び出しは post-merge (自称 never affects this hook exit code) と SessionStart (render_pending は3分岐すべて EXIT_OK、Undetermined すら警告を print して EXIT_OK) の2箇所だけ。commit 時も push 時も Stop 時も存在しない。(4) 結果、最後の spec 監査レポートは 2026-07-13 で以降 707 commit (うち crates 444)、.specguard-pending は存在せず SessionStart は何も print せず誰も走らせない — 監査自身しか立てられない sentinel が監査を促す唯一の合図という自己沈黙ループ。完了条件: canon と spec_doc を同じファイル集合に向けるか docs/specs を canon に加える。gate crate の glob に一致する entry が changed かつ spec_doc が null のとき push を止める決定論チェックを1本入れる (逃げ道は entry ごとの理由必須 ack のみ、check-claudemd-claims.py の no-bypass 規律に倣う)。実際に block された push を観測する。
-
-51151bed で取り込み済み: specguard map gate-check (変更された gate の map entry に spec_doc か理由付き ack が無ければ exit 1、判定不能は exit 2) と、gate 6 領域の canon への docs/specs 追加。残り: pre-push への配線 (パッチは scratchpad の githooks-0c277117.patch、未適用)。配線前の課題: main の map では gate crate の 44 entry がすべて spec_doc 無しなので、配線した瞬間に gate crate を触る push はすべて止まる。map は gitignore された機械ローカルのキャッシュで、無い worktree や未 sync の map では exit 2 になる。README.ja.md は未更新。
-
-2026-10-01 ユーザー裁定: 先に埋めてから配線する。44 entry に理由付きで docs/specs を紐付けるか理由付き ack を置き、pre-push パッチは map を先に最新化するよう直してから適用する。
-
-2026-10-02 flow (session 64554c4d): 残り6件の reasoned ack を a165c071 (branch condukt/run-20261002-043837-64928/a1, .specguard/spec-doc-acks.toml のみ) に作成、未マージ・独立 verifier 待ち。pre-push 配線パッチ githooks-0c277117-v2.patch (sha256 c27f9973..., session 389c3077 由来) は a165c071 上にクリーン適用可。使い捨て clone で RED 観測: ack/binding 無しの crates/propguard/src/probe_unspecced.rs を足した push が 'pre-push: BLOCKED - gate spec-doc check' exit 1。GREEN: docs/GLOSSARY.md のみの push は 'gate-check: ok' exit 0。未完: settings.json が .githooks/** の Edit/Write を deny しているため、パッチ適用は人間の操作が必要 (git apply で迂回しない)。crates/specguard/README.ja.md:191 は pre-push が map を再構築すると既に書いており、パッチ適用まで実挙動と食い違う。最新裁定 5364fd2d は未マージの session-389c3077 ブランチにのみ存在。
-
-2026-10-01 phase 2 を 5d37f2f2 で取り込み、specguard 0.2.70 を canary で rollout 済み。spec-map は git 管理外で紐づけが消えるため、git 管理の .specguard/spec-docs.toml (path, doc, reason) を新設し gate-check が読む。gate crate 7 つの対象ファイル 100 件を 68 件の紐づけと 32 件の理由付き ack で埋めた。pre-push パッチ v2 (scratchpad の githooks-0c277117-v2.patch) は push される tree の中で map を作り直してから gate-check する。main の map を写さない。シミュレーションで、紐づけ無しの新ファイルと存在しない doc への紐づけが exit 1、紐づけ済みと ack 済みが 0。残り: 紐づけ 68 件が本当にその doc に書かれているかを別 agent が照合中。照合が済んだらユーザーにパッチ適用を依頼する。
-
-2026-10-01 紐づけ 68 件の独立照合 (5d37f2f2): OK 43 / 弱い 7 / 取り違え 0 / 食い違い 18。例外 32 件はすべて妥当。紐づけ先の docs/specs 6 本はすべて冒頭に REVIEW-NEEDED (実装から逆算した下書き、正典として扱わない) とある。gate-check は理由付きで doc に紐づけば内容を見ずに通すため、パッチを当てると下書きの doc を根拠に push が通る。パッチ適用はユーザー判断待ち (先に doc を直すか、記録して当てるか)。crates/propguard/src/trust_worktree_tests.rs は紐づけも ack も無い (末尾 _tests は test 扱いにならない)。
-
-2026-10-01 ユーザー裁定: 今のまま当てる。チェックの役割は仕様書の無い gate ファイルの変更を止めることとし、仕様書の中身の正しさは b48ad137 などで別に直す。適用前に、slice 2/3 で増えた protection.rs 6 本と trust_worktree_tests.rs の紐づけか ack を入れ、gate-check が main..HEAD で 0 を返すことを確かめる。"""
-created_at = 1785926764
-updated_at = 1790885353
-weight = 0.0
-issue_number = 147
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/147"
 
 [[task]]
 id = "264990c9"
@@ -1008,33 +981,6 @@ updated_at = 1785929604
 weight = 0.0
 issue_number = 155
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/155"
-
-[[task]]
-id = "f6784177"
-title = "ctxrot の find_overwatch_binary が stuckguard で直した 2 欠陥をそのまま持っている (mirror gap)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "mirror-gap",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-stuckguard の anchor 修正 (0.1.30) で直した 2 件が、双子である crates/ctxrot/src/hooks/guard.rs:656 の find_overwatch_binary に未修正のまま残っている。片側だけ直った典型的な mirror gap。
-
-(1) 消去 (erasure): guard.rs:666-668 は std::fs::read_dir(&base).ok()? と .filter_map(|e| e.ok()) で、読めない cache dir を「候補ゼロ」へ畳む。絶対的不在と判定不能が同じ出力になる。stuckguard 側は harness_core::boundary::read_dir_entries を通す形へ寄せた (Known(vec![]) と Undetermined を分ける)。
-
-(2) バージョン順序: guard.rs:672-673 の candidates.sort() は full path の辞書順なので、0.3.9 が 0.3.10 より後ろに来る。実測 2026-08-06、この機械の ls ~/.claude/plugins/cache/yukineko/overwatch は 0.1.30 / 0.1.38 / 0.2.18 / 0.2.20 / 0.2.24 の 5 dir を保持しており、二桁 patch は既に存在する。今日 0.2.24 が正しく選ばれるのは 0.2.9 が一度も入らなかったからにすぎず、同一 minor 内で一桁と二桁が並んだ時点で古い方を選ぶ。stuckguard 側は version_sort_key で数値成分比較へ直し、0.3.9 vs 0.3.10 の RED を実測してから GREEN 化した。
-
-影響の非対称性: ctxrot 側は heartbeat を打たず注入 cadence の判定にしか使わないので、lease reap への波及は無い。したがって深刻度は stuckguard 側より低いが、(2) は「古い overwatch を新しい台帳に対して走らせる」ことになる。
-
-完了条件: guard.rs の find_overwatch_binary を boundary::read_dir_entries + 数値バージョン比較へ寄せ、0.3.9 vs 0.3.10 のテストを RED 先行で追加する。ctxrot は 3 ファイル lockstep で micro bump。"""
-created_at = 1785969045
-updated_at = 1785969045
-weight = 0.0
-issue_number = 171
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/171"
 
 [[task]]
 id = "5b75ea9d"
@@ -13361,6 +13307,29 @@ updated_at = 1790910020
 weight = 0.0
 issue_number = 1015
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1015"
+
+[[task]]
+id = "6580bb1c"
+title = "docs/gate-taxonomy.md の「CI」列が存在しない GitHub Actions を参照したまま"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "stale-prose",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+実測 2026-10-02、測定点 5f709e6c: `ls .github/workflows/` は No such file or directory。この repo に GitHub Actions のワークフローは1つも存在せず、CLAUDE.md 第7節により使用も禁止されている。にもかかわらず docs/gate-taxonomy.md のスクリプトゲート表の「トリガー」列には CI / `gate-crates-sync.yml` / `bench-regression.yml` といった駆動元が複数行に残っており、読者には「CI でも回っている」と読める。実際の駆動元はすべて .githooks/pre-commit か .githooks/pre-push。
+
+8a5cadcc (backlog 0c277117) で隣接する 3 件だけは直した: pre-push の凡例 (「push 自体は止めない設計 (fail-soft)」が偽だった)、check-ci-red.py の行 (スクリプトは存在しない)、`.github/workflows/gate-crates-sync.yml` を引く備考。残りの表全体の棚卸しは手を付けていない。
+
+完了条件: 表の各行の「トリガー」列を実在する駆動元 (.githooks/pre-commit の run リスト、.githooks/pre-push、Stop hook) に照合し、存在しない CI 参照を落とすか過去形へ直す。照合は機械的にできる — pre-commit の `run <script>` 行と pre-push の呼び出しを grep して表の行と突き合わせる。駆動元の無いスクリプトが見つかったら、それは散文の問題ではなくゲートが dark になっている可能性があるので別途起票する。"""
+created_at = 1790919945
+updated_at = 1790919945
+weight = 0.0
+issue_number = 1051
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1051"
 
 [[task]]
 id = "5990f479"

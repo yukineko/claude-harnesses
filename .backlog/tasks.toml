@@ -14293,7 +14293,7 @@ rev = 0
 
 [[task]]
 id = "af1565aa"
-title = "blastguard の truncating-redirect は target が展開を含むと一律 deny するが、同一コマンド内のリテラル代入を解決する機構は既に crate 内にあり command word の 1 アームにしか配線されていない (同じ書き込みが綴り方だけで allow/deny に分かれる)"
+title = "blastguard の redirect target 解決は語全体が $NAME のときだけ働き、$VAR/suffix 形は解決されないため、同じ書き込みが接尾辞の有無で allow/deny に分かれる"
 project = "/home/hiroyuki_nakayama/src/claude-harnesses"
 project_unresolved = false
 tags = [
@@ -14302,117 +14302,79 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = '''
-観測 2026-10-02 (測定点 2b7778cc、blastguard 0.2.97)。自分が実際に踏んだ拒否を起点に、実装を読み blastguard を直接走らせて測った。
+notes = """
+観測 2026-10-02 (測定点 43a392dc、blastguard 0.2.97)。
 
-## 症状
+## 訂正 — この票の最初の診断は間違っていた
 
-`: > $S/resolved.txt` が deny される。逐語:
+起票時、私はこう書いた: 「解決機構は detect.rs:3509 の resolve_expanded_command_word にあり、doc comment が『WIRED INTO EXACTLY ONE DECISION ARM ... No other rule in this file consults anything below』と書いているとおり command word の 1 アームにしか配線されていない。redirect target には解決が試みられていない」。
 
-  '> $S/resolved.txt' destroys the file's current contents and `$S/resolved.txt` contains a shell expansion, so blastguard cannot tell which file this names, let alone whether its contents are recoverable
+**これは誤りである。** detect.rs:3638 に `resolve_redirect_target_at(cmd, seg_idx, target)` が存在し、detect.rs:1536 (truncate) と :1672 (append) の両方から呼ばれている。つまり redirect target にも既に配線済みで、その doc は『Every downstream axis a redirect target is judged on ... is a question about a PATH, and `"$P"` is not a path』と目的まで明記している (append 側は a83802ad で後から揃えられた)。私が引用した『EXACTLY ONE DECISION ARM』は `CommandWordOrigin` を**直接**読む箇所の数についての記述で、`resolve_redirect_target_at` という中間層経由の利用を含んでいない。**自分が引いた逐語引用を、それが答えていない問いの答えとして読んだ**のが誤りの中身である。
 
-拒否そのものは正しい向き (判定不能 -> 制限側、第3節)。問題は **判定不能ではないケースまで同じ扱いになっている**ことである。
+誤診断のまま実装に入ると『既にあるものをもう一度書く』ことになっていた。実装前に該当関数を読んだことだけが救いである。
 
-## 実測 — 同じ書き込みが綴り方だけで verdict が変わる
+## 真の欠陥 — 入口が語全体を要求する
 
-blastguard バイナリに PreToolUse payload を直接食わせて測った (スクリプト: scratchpad/bg_probe.py, bg_probe2.py)。
+`resolve_redirect_target_at` の 1 行目:
 
-展開を含む形 (すべて **deny**、理由テキストは 8 件すべて同一):
-  A  cd <repo>; S=<scratchpad>\n : > $S/probe_a.txt     <- 同一コマンドでリテラル代入。解決可能
-  C  S=<scratchpad>; : > $S/probe_c.txt                 <- 同上 (1 行)
-  D  : > $S/probe_d.txt                                 <- 代入がどこにも無い。真に不明
-  E  true && S=<scratchpad>; : > $S/probe_e.txt         <- && でガードされた代入
-  F  S=$(mktemp -d); : > $S/probe_f.txt                 <- RHS 自体が展開
-  G  cd <repo>; S=<scratchpad>\n : > $S/bg_probe.py     <- 既存の untracked ファイル
-  H  S=/etc; : > $S/sudoers.d/evil                      <- **危険なケース**
-  I  : > $HOME/.ssh/id_ed25519                          <- guard の doc が引く回帰ケース
+    referenced_variable_name(target)?;
 
-同じ対象を手で展開した形:
-  K  : > <scratchpad>/probe_k_absent.txt   -> **ALLOW**  (A の解決後の姿)
-  L  : > <scratchpad>/bg_probe.py          -> **ASK**    (G の解決後の姿。confined to /tmp、blast radius bounded)
-  M  : > /etc/sudoers.d/evil               -> **DENY**   (H の解決後。理由が 'writes into a system directory' に改善)
-  N  : > /home/.../.ssh/id_ed25519         -> **DENY**   (I の解決後。理由が 'it exists, and it is not inside a git work tree' に改善)
-  O  cd <repo>; : > README.md              -> **ALLOW**  (tracked clean + 自分のツリー)
+`referenced_variable_name` (detect.rs) は語全体が `$NAME` / `${NAME}` / `"$NAME"` のいずれかであることを要求する (外側の 1 重引用符を剥いだあと `strip_prefix("${")` か `strip_prefix('$')` し、残りが `is_shell_identifier` であること)。したがって **`$P/fstab` のような接尾辞付きは早期に `None` で抜け**、生のトークンがそのまま下流へ流れ、reversible.rs:254 の `contains('$')` で Undetermined になり deny に落ちる。
 
-つまり **A と K は同一の filesystem 効果でありながら deny と allow に分かれる**。verdict が効果ではなく綴りに依存している。向きは安全側なので fail-open ではないが、「検査した」と「検査できなかった」を区別するという model.rs の主題からすると、ここは『解決できたのに解決しようとしなかった』ケースが『解決できない』と同じ箱に入っている。
+その関数自身の doc は『a redirect TARGET that is a **bare** variable expansion (`> "$P"`)』と bare と書いており、散文は正直である。欠けているのは機能であって記述ではない。
 
-## 原因 — 機構は既にあり、1 アームにしか配線されていない
+## 実測 — bare と接尾辞付きの対
 
-crates/blastguard/src/reversible.rs:254 が IO の前に打ち切る:
+blastguard 0.2.97 に PreToolUse payload を直接食わせた (スクリプト: scratchpad/bg_probe3.py)。
 
-  if target.contains('$') || target.contains('`') {
-      return Recovery::Undetermined(...)
-  }
+  P=/etc/fstab; : > $P      -> deny  『redirect /etc/fstab writes into a system directory』  <- 解決されている
+  P=/etc/fstab; : > ${P}    -> deny  同上
+  P=/etc/fstab; : > "$P"    -> deny  同上
+  P=/etc; : > $P/fstab      -> deny  『`$P/fstab` contains a shell expansion』            <- 解決されていない
+  P=/etc; : > ${P}/fstab    -> deny  同上
+  P=/etc; : > "$P"/fstab    -> deny  同上
 
-この早期 return 自体は正当で、doc がその理由を書いている (逐語): 「AN UNEXPANDED TARGET IS NOT AN ABSENT ONE. `$HOME/.ssh/id_ed25519` names a real file, but the literal text with `$HOME` still in it names nothing, so `symlink_metadata` fails and the absence row would report `NothingToDestroy`」。filesystem に聞くと「無い」= 安全、に化ける回帰を塞いだもの。**撤去してはいけない。**
+無害側 (こちらが実害):
 
-欠けているのは、その手前で **解決を試みる段**である。そしてその解決器は既に同じ crate にある:
+  P=<scratchpad>/p7_absent.txt; : > $P   -> **ALLOW**
+  P=<scratchpad>; : > $P/p8_absent.txt   -> **DENY** 『contains a shell expansion』
 
-  crates/blastguard/src/detect.rs:3509  fn resolve_expanded_command_word(cmd, seg_idx, word) -> CommandWordOrigin
-  detect.rs:2739  fn assignment_execution_is_unconditional(segs, idx) -> bool
-  detect.rs:2812  fn opens_here_document(seg) -> bool
-  detect.rs:3254  fn unquote_literal_value(raw) -> Option<String>
-  detect.rs:3351  fn segment_may_rebind(seg, name) -> bool
-  detect.rs:2589  fn split_segments_with_separators(cmd) -> Vec<SeparatedSegment>
+同一の filesystem 効果が、接尾辞の有無だけで allow と deny に分かれる。
 
-`CommandWordOrigin` は既に三値 (Literal / NoReachingAssignment / AssignedButUnknowable) で、doc が『Three answers, not two — the same reason `Decision::Ask` exists』と model.rs を引いている。E (ガードされた代入)・F (RHS が展開)・配列・here-doc body・後続の rebind まで全部モデル済み。
+対照として bash 意味論が守られていることも確認した:
 
-**配線が 1 本だけである事実は doc comment が自分で書いている** (detect.rs:2434 付近、逐語):
+  P=/etc/fstab : > $P   (同一セグメントの代入 = コマンド前置) -> deny のまま
 
-  // WIRED INTO EXACTLY ONE DECISION ARM: the CA-blastguard-017 head check in
-  // [`unknown_wrapper_ask`]. ... No other rule in this file consults anything below.
+これは正しい。`resolve_expanded_command_word` の doc が `bash -c 'RM=/bin/echo $RM prefixtest'` の実測を引いて『同一セグメントの代入は前置であり束縛しない』と書いているとおりである。
 
-そして正しい使い方も明文化されている (逐語):
+## 修正方針
 
-  // That arm uses the answer SUBSTITUTIVELY, never as a skip: a
-  // [`CommandWordOrigin::Literal`] replaces the expansion token and the rewritten
-  // segment is re-judged by the full rule engine, so a head that resolves to a
-  // destructive program comes out DENY. Merely suppressing the ask on finding a
-  // literal would re-open CA-blastguard-017 in a new place
+`resolve_redirect_target_at` の入口を広げる: target が『変数参照 + それ以上の展開を含まないリテラル接尾辞』の形なら、参照部分を `resolve_expanded_command_word` に通し、`Literal` が返ったら接尾辞を連結して返す。解決できなければ従来どおり `None`。
 
-**この機構が実際に動いていることの実測** (ケース J): `BIN=/bin/rm; $BIN -rf /tmp/whatever` は `$BIN` を `/bin/rm` へ解決し、再判定して recursive rm として扱い、confinement 解析つきの **ask** に到達した。command word では動いている。redirect target では試みられていない。
+**緩めではない根拠**は既存 doc がそのまま使える: 『It does NOT weaken the gate, because it only ever hands the axes a MORE specific path than the unplaceable token they get today』。実測でも `P=/etc; : > $P/fstab` は解決すると `/etc/fstab` になり system-directory 軸が deny する (P1 行と同一の理由テキストになる) ので、危険側は deny のまま理由が正確になるだけである。
 
-## なぜこれは緩めではないか
+restrictive 側に残すべき形 (テストで固定する):
+ - 接尾辞自体が展開を含む (`$P/$Q`)
+ - 変数の前に前置がある (`pre$P/x`) — 既存の resolver が `pre$BIN` を解決しない方針と揃える
+ - 非識別子参照 (`${P:-/tmp}/x`, `$1/x`, `$$/x`)
+ - 接尾辞が glob メタ文字を含む (`$P/*.log`) — 複数マッチの可能性があるので 1 つのパスに解決できない
+ - 既存の信用規則 (ガードされた代入 / RHS が展開 / 配列 / 後続 rebind / here-doc body / 空値 / 同一セグメント前置) はすべて `resolve_expanded_command_word` に委譲されるので自動的に継承される
 
-substitutive 規律のおかげで、解決は危険側を通さない。実測が示すとおり H は解決すると `/etc/sudoers.d/evil` になり `system_path_block` が発火して **deny のまま、理由はより正確になる**。N も `/home/.../.ssh/id_ed25519` として「存在し、git work tree の外」で deny。D と F は解決できないので従来どおり deny。**allow/ask へ動くのは『解決できて、かつ解決先が安全と判定された』ものだけ** である。
+## 禁じ手 (起票時の記録を維持)
 
-## 既に裁定済みで、やってはいけないこと
+detect.rs:1618 付近のコメントが『Undetermined と Unrecoverable を deny/ask に分ける』案を実測つきで却下している (2067 コマンド、163 の非 allow のうち 24 だけが移動)。本票は Undetermined の扱いを一切変えない。
 
-detect.rs:1618 付近の逐語コメントが、安易な代替案を実測つきで却下している:
+## テスト (第2節 (a)(b))
 
-  // NOT SPLIT THREE WAYS HERE, deliberately. `Undetermined` and `Unrecoverable`
-  // both fall through to the Deny below ... Splitting them was tried and backed
-  // out. ... every relative target in an unscoped `detect::detect` call is
-  // undetermined for want of a cwd, so the split moved about a dozen established
-  // denies to asks ... (2067 real commands: 163 non-allow either way, the split
-  // only shifting 24 of them from deny to ask)
+利害関係のない agent に `crates/blastguard/tests/redirect_target_suffix_resolution.rs` を書かせる。既存の `tests/redirect_target_resolution.rs` が同じ規律 (resolved / unresolvable / decoy の三分割、無害値には存在しないパスを使い、誤って信用した resolver が Allow に崩れるようにする) で書かれているのでその idiom に従わせる。group-1 (接尾辞) が RED、group-2 (解決してはいけない形) と bare の対照が最初から GREEN であることを観測してから実装する。
 
-つまり **「Undetermined を Ask に落とす」という修正は禁じ手**。この票が提案しているのは三値化ではなく **解決の前置** であり、Undetermined の扱いは一切変えない (解決できなければ今と同じ Undetermined -> deny)。
-
-## 候補 (未裁定)
-
-(1) **推奨**: redirect target 抽出の段 (detect.rs:1580 の `reversible::probe` 呼び出しの手前、`place_redirect_target` が相対パスを cwd で再表現しているのと同じ位置) で、target が単一変数参照なら `resolve_expanded_command_word` と同じ解決器に通し、`Literal` が返ったらそのテキストに置換してから従来の全判定を流す。`NoReachingAssignment` / `AssignedButUnknowable` は現状どおり reversible.rs:254 の Undetermined に落ちる。reversible.rs の早期 return は **残す** (解決できなかった target はそこで止まるべき)。
-(2) 解決器を `pub(crate)` にして reversible.rs 側から呼ぶ。実装は小さいが、reversible.rs は「このパスの bytes は戻せるか」だけを答えるモジュールなので、shell 構文の解釈を持ち込むのは責務違反。(1) の方が層が正しい。
-(3) target が `$` を含む場合に限り `--scope` 相当の情報から解決する。却下: 情報源が増えるだけで、同一コマンド内の代入という最も多いケースを拾えない。
-
-## 別軸として記録 (この票の範囲外)
-
-ケース L が示すとおり、解決後も **session scratchpad 内の既存ファイルの truncate は ask になる**。blastguard には scratchpad の概念が無い (`grep -rn 'scratchpad\|claude-1000' crates/blastguard/src/` は **0 ヒット**)。ask は妥当 (未コミットの作業を本当に壊す) が、scratchpad は harness が「permission prompt なしに使える」と宣言している領域なので、別票で扱う価値がある。本票では scratchpad の扱いを変えない。
-
-## 測り方 (RED -> GREEN)
-
-利害関係のない agent に、上の A〜O を behavioural test として書かせる (第2節 (a))。RED として固定すべきは:
- - A/C/G が deny であること (現状) -> 修正後は K/L と同じ verdict になること
- - H が deny のまま、かつ理由が 'writes into a system directory' に変わること
- - D/F/E/I が deny のまま、理由が現状のまま変わらないこと (回帰の有無を見る本体)
- - J (command word 経路) が一切変わらないこと
-対照として、detect.rs の既存 2067-command コーパスで allow/ask/deny の分布が『A 型が deny から外れる分』以外は変わらないことを確認する。GATE crate なので rollout は `--canary` が必要。'''
+GATE crate なので rollout は `--canary`。"""
 created_at = 1790916935
-updated_at = 1790916935
+updated_at = 1790918831
 weight = 0.0
 issue_number = 1041
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1041"
-rev = 0
+rev = 1
 
 [[task]]
 id = "1d8cf44e"
@@ -14521,3 +14483,351 @@ weight = 0.0
 issue_number = 1043
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1043"
 rev = 0
+
+[[task]]
+id = "32f89d40"
+title = "blastguard の tee アームは target トークンの変数展開を一切解決しないため、bare な $P でさえ汎用の tee 理由で deny され、system-directory 軸など 下流の軸が到達しない (redirect アームより 1 段遅れている)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+観測 2026-10-02 (測定点 43a392dc、blastguard 0.2.97)。af1565aa の実装前調査で、`reversible::probe` の 3 つの呼び出し点を確認した際に見つけた。
+
+## 実測 (スクリプト: scratchpad/bg_probe4.py)
+
+  T1  echo x | tee <scratchpad>/t1_absent.txt          -> **ALLOW**
+  T2  P=<scratchpad>/t2_absent.txt; echo x | tee $P    -> **DENY** 『tee without -a/--append truncates and overwrites its target file(s)』
+  T3  P=<scratchpad>; echo x | tee $P/t3_absent.txt    -> **DENY** 同じ汎用理由
+  T4  echo x | tee /etc/fstab                          -> DENY 『'tee target /etc/fstab' writes into a system directory』
+  T5  P=/etc/fstab; echo x | tee $P                    -> DENY 『tee without -a/--append truncates...』 (system-directory 軸に到達していない)
+
+T1 と T2 が同一の filesystem 効果でありながら allow と deny に分かれる。T4 と T5 の比較が情報損失の方を示している: 解決されないので『システムディレクトリへの書き込み』という具体的な理由ではなく『tee は truncate する』という汎用理由にしか到達しない。
+
+## 原因
+
+detect.rs:6930 付近で tee の target が
+
+    let targets = positional_operands(rest, &[]);
+
+として**生トークンのまま**取られ、そのまま detect.rs:6989 の `crate::reversible::probe(t, ...)` に渡る。redirect アームが detect.rs:1536 / :1672 で `resolve_redirect_target_at` を通しているのに対し、tee アームには対応する解決段が無い。
+
+当該アームのコメント自身が『this arm is handed tokens only』と書いており、散文は正直である (欠けているのは機能)。
+
+## af1565aa との関係
+
+af1565aa は redirect アームの解決が『語全体が $NAME のときだけ』という**入口の狭さ**の話。本票は tee アームに**解決段そのものが無い**という話で、1 段手前である。したがって:
+ - af1565aa を直しても本票は直らない (別の呼び出し点)
+ - 本票を直すときは af1565aa の成果 (接尾辞対応版の解決器) をそのまま再利用できるので、**af1565aa を先に入れる方が安い**
+
+a83802ad が append redirect を truncate redirect に揃えた前例があるので、同じ形の揃え作業になる。
+
+## 判定不能として両方の読みを残す
+
+(a) 実在の欠陥 = redirect で解決しているのに tee でしていないのは単なる取りこぼし。『同じ効果が綴りで分かれる』という af1565aa と同じ論法がそのまま当てはまる。
+(b) 意図的 = tee は複数 target を取れるので (`tee a b c`)、1 つでも解決できないものがあると全体の判定が揺れる。全部解決できたときだけ進む設計にする必要があり、その複雑さを避けて生トークンで一律 deny に倒している可能性がある。この場合『deny に倒す』こと自体は第3節に沿っており、欠陥ではなく保守的な選択になる。
+
+見分ける方法: `tee` の rule arm (detect.rs:6930 付近) と git log を読み、複数 target の扱いについて裁定が記録されているかを確認する。記録があれば (b)、無ければ (a)。
+
+## 測り方 (RED -> GREEN)
+
+利害関係のない agent に T1〜T5 と、複数 target の組み合わせ (全部解決可能 / 一部だけ解決可能 / 全部不可) を behavioural test として書かせる。RED は T2/T3/T5 が汎用理由の deny であること。GREEN 後は T2 が ALLOW (T1 と一致)、T5 が system-directory 理由の deny (T4 と一致)。
+
+**一部だけ解決可能な場合は、解決できた分だけで allow を出してはいけない** — 解決できなかった target が危険である可能性が残るので、1 つでも未解決なら今の verdict を維持する (第3節)。これをテストで固定することが本票の一番重要な対照。
+
+GATE crate なので rollout は `--canary`。"""
+created_at = 1790918952
+updated_at = 1790918952
+weight = 0.0
+issue_number = 1046
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1046"
+rev = 0
+
+[[task]]
+id = "5f3b2900"
+title = "blastguard の worktree_root_* テスト 29 件は worktree チェックアウトではfixture calibration に失敗して全件 panic する — CLAUDE.md 第8節が作業を強制する場所で、この suite が構造的に暗転している"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+観測 2026-10-02（測定点 43a392dc + session-3d44818d、blastguard 0.2.97）。af1565aa の実装でベースラインを取ろうとして判明した。
+
+## 症状
+
+worktree（`/home/hiroyuki_nakayama/src/.claude-harnesses-worktrees/session-3d44818d`）で `cargo test -p blastguard --no-fail-fast` を回すと、`worktree_root_rm.rs` / `worktree_root_cd_desync.rs` / `worktree_root_symlink_escape.rs` の **29 件が全件 panic** する。panic メッセージ（逐語）:
+
+    no location-neutral fixture base: every candidate lets its location decide the verdict. Set BLASTGUARD_TEST_FIXTURE_DIR to a directory whose real path is outside the blastguard temp roots.
+      CARGO_TARGET_TMPDIR (.../session-3d44818d/target/tmp): calibration `rm -rf <outside>/victim` was Allow (an enclosing worktree root?)
+      <workspace>/target (.../session-3d44818d/crates/blastguard/../../target): calibration `rm -rf <outside>/victim` was Allow (an enclosing worktree root?)
+
+## 原因
+
+`tests/support/neutral_base.rs` の既定候補は `CARGO_TARGET_TMPDIR` と `<workspace>/target` の 2 つだけで、**どちらも必ずチェックアウトの内側**にある。チェックアウトが `.claude-harnesses-worktrees/` 配下にあると blastguard がそこを worktree storage root と導出するので、fixture の victim も含めて全部が root の内側に入り calibration が Allow になる。この失敗モードは neutral_base.rs の module doc 自身が先頭で説明している（`A checkout under <parent>/.harness-worktrees/<wt>（the layout CLAUDE.md §8 mandates）therefore makes the REAL <parent>/.harness-worktrees a root, and every fixture path — victims included — sits inside it: Allow.`）。**散文は正しく、既定候補リストだけが散文に追いついていない。**
+
+## なぜ重いか
+
+CLAUDE.md 第8節は crate コードの編集・stage・commit を **worktree でしか**許さない。つまり blastguard を変更する人は必ずこの 29 件が暗転した状態でテストを回す。そして panic は「赤」として見えるので「元から赤いのだろう」と読み飛ばされやすい — 実際に af1565aa の実装でテストを書いた agent も「environment fixture problem」として横に置いていた。**ゲートが仕事をしている場所では走らない**という形の暗転であり、第1節の「黙る degrade は許容されない」に該当する。
+
+fixture 自身が calibration 失敗時に allow へ倒さず panic しているのは**正しい設計**であって、そこは変えてはいけない。欠けているのは候補の 3 本目。
+
+## 実測した修正候補
+
+`BLASTGUARD_TEST_FIXTURE_DIR=$HOME/.cache/blastguard-fixture` を与えると **29 件すべて緑**になった（`worktree_root_rm` 単体で 11 passed / 0 failed、全体で 785 passed / 7 failed、残り 7 は af1565aa の RED 6 + 別件 1）。したがって既定候補に「チェックアウトの外で、かつ temp safe root の外」を 1 つ足せば直る。`$HOME/.cache/<crate>/` 系が有力（`XDG_CACHE_HOME` も見るべきか要検討）。
+
+注意: `/tmp` 配下は blastguard の temp safe root なので候補にできない（recursive rm が Ask になり calibration が落ちる）。scratchpad も同じ理由で使えない。
+
+## 測り方
+
+利害関係のない agent に、候補選択ロジックの単体テストを書かせる。RED は「チェックアウト内の候補しか無い状態で pick() が panic すること」、GREEN は「チェックアウト外候補が追加され、worktree からの実行で 29 件が走ること」。**calibration を緩める方向の変更は禁止**（それは第4節の『通すためだけに緩める』にあたる）。"""
+created_at = 1790920290
+updated_at = 1790920290
+weight = 0.0
+issue_number = 1052
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1052"
+rev = 0
+
+[[task]]
+id = "a3e2261f"
+title = "blastguard の detect::tests::deletion_tmpdir_is_not_a_root_when_home_is_unset が赤 — HOME 未設定時に /tmp 配下の recursive rm が allow になる"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+観測 2026-10-02（session-3d44818d、blastguard 0.2.97、src 無改変の状態で 2 度のベースライン採取で再現）。af1565aa の実装前ベースラインで見つけた。af1565aa とは無関係（redirect target ではなく deletion 軸）。
+
+## 症状（逐語）
+
+    thread 'detect::tests::deletion_tmpdir_is_not_a_root_when_home_is_unset' panicked at crates/blastguard/src/detect.rs:14328:9:
+    assertion `left != right` failed: rm -rf /tmp/bg-del-tmpdir-nohome-24755/tmp/a with HOME unset: Allow
+      left: "allow"
+     right: "allow"
+
+テストは「HOME が未設定のとき、fixture 内の `tmp/a` を root とみなして allow してはならない」を主張しており、実際は allow になっている。
+
+## 判定不能として両方の読みを残す
+
+(a) 実在の fail-open = HOME 未設定時に safe-root 導出が緩み、recursive rm が通る。HOME 未設定は hook が cron / systemd / 最小環境から起動されたときに現実に起きるので、放置すると「環境次第でゲートが外れる」形になる。第3節の「判定不能は制限側」に反する。
+
+(b) テスト側の環境依存 = fixture を `/tmp` 配下に作っており、`/tmp` は blastguard の temp safe root そのものなので、HOME に関係なく allow になるのが仕様どおり。この場合テストが主張を観測できていない（第2節の「何も検証していないテスト」の逆で、観測できない主張を固定している）。`TMPDIR` が設定されている環境かどうかでも結果が変わりうる。
+
+見分ける方法: fixture を temp safe root の外（例 `$HOME/.cache/...`、ただし HOME 未設定テストなので要工夫）に作り直して同じ主張を測る。それでも allow なら (a)。
+
+## 注意
+
+この票を「テストを緩めて緑にする」で閉じてはいけない（第4節）。(b) だと判明した場合も、テストは**観測できる形に作り直す**のであって主張を下げるのではない。
+
+同じベースラインで暗転していた worktree_root_* 29 件とは別件（あちらは fixture calibration の候補不足）。"""
+created_at = 1790920292
+updated_at = 1790920292
+weight = 0.0
+issue_number = 1053
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1053"
+rev = 0
+
+[[task]]
+id = "d8010ff2"
+title = "harness_core の repeat 台帳は payload ではなく実行環境の CLAUDE_CODE_SESSION_ID で引かれるため、gate binary を直接叩く計測ハーネスがセッションの『初回』枠を黙って消費し、以後の本物の拒否が Ask に落ちる"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = '''
+観測 2026-10-02（session-3d44818d）。af1565aa の実装効果を実測しようとして、**3 回連続で誤った測定結果を出した**末に判明した。
+
+## 何が起きたか
+
+blastguard の `downgrade_on_repeat`（`crates/blastguard/src/main.rs`）は、同一セッションで同じ拒否が 2 度目になると Deny を Ask へ落とす。この「同一セッション」は `harness_core::repeat::must_yield` → `session_id()` → **`std::env::var("CLAUDE_CODE_SESSION_ID")`** で決まる。PreToolUse payload の `session_id` フィールドは**一切読まれない**。
+
+その結果:
+
+1. 旧 binary と新 binary に同じコマンドを食わせて比較すると、**2 本目が必ず Ask に落ちる**。理由テキストはバイト一致。
+2. fingerprint は `tool_name \x01 command \x01 reason` なので、**異なるコマンドでも理由テキストが同じなら衝突**する（`P=/etc : > $P/fstab` と `true && P=/etc; : > $P/fstab` は同じ汎用理由を出すので互いを隠す）。
+3. payload の `session_id` を毎回 uuid にしても**直らない**（読まれていないため）。実際にそれで 2 度目の誤測定をした。
+
+1 回目の測定では 9 行が「DENY→ASK に変わった、パッチの影響だ」と見え、**理由テキストが同一であることに気づかなければ回帰として報告していた**。env を外して測り直すと、真の答えは「変化は 7 件、すべて無害側の DENY/ASK→ALLOW。危険側 11 形は DENY のまま理由もバイト一致」だった。
+
+## 逆方向の害（こちらの方が重い）
+
+計測ハーネスが本物のセッション id を継承して走ると、`~/.claude/harness-state/repeat/<session>/` に `.seen` マーカーが作られる。マーカーの意味は「**ユーザーはこの拒否を既に見た**」である。見ていない。したがってそのセッションで同じ拒否が本当に起きたとき、ユーザーが一度も見ていないものが Ask に落ちる。**ゲートが実際に弱くなる。** 今回 22 件を自分の probe 由来と逐語照合して削除したが、それ以前の probe（別ターン・subagent 由来）のマーカーは残っている。
+
+## 対策候補（どれも要裁定）
+
+(a) **計測側の規約**: gate binary を直接叩くときは `CLAUDE_CODE_SESSION_ID` を環境から外す。空文字は `Undetermined` に解決し `must_yield` は false を返すので Deny が維持される（`repeat.rs` の doc が『"I did not check" never reads as "the user already saw this"』と明記しているとおり、この縮退は正しい側）。最も安いが自己申告に依存する（第6節が嫌う形）。
+
+(b) **hook 起動と直接起動を区別する**: payload が stdin から来たかどうか等で「本物の hook 呼び出し」だけが台帳に書く。`harness_core` に既に `is_headless()` / `read_stdin_if_piped()` がある（memory: ship-sessionend-pollutes-headless）ので材料はある。
+
+(c) **payload の session_id を優先する**: 環境より payload を信用する。ただし payload は上流から来る値なので、偽装で台帳を分離できてしまう（downgrade を封じる方向なので安全側だが、逆に waiver を使い回す経路になるかは要検討）。
+
+(d) **マーカーに「どう観測されたか」を残す**: 台帳のレコードに起動経路を書き、直接起動由来のマーカーは downgrade の根拠にしない。
+
+## 測り方
+
+利害関係のない agent に、`observe`/`must_yield` レベルで「同一環境・異セッション payload」「異環境・同一 payload」の 4 象限を固定させる。RED は現状の挙動（payload が効かないこと）を観測すること。そのうえで (a)〜(d) のどれを採るかは**人間の裁定**（計測規約で足りるのか、型/経路で強制すべきか）。
+
+## 波及
+
+blastguard だけの話ではない。`must_yield` は harness-core の共有関数なので、同じ台帳を使う全 gate が同じ性質を持つ。既存テストが binary を叩いて Deny を固定している箇所は、同じ理由で汚染の疑いがある（`tests/repeat_downgrade.rs` は逆にこの機構そのものを検査しているので別枠）。'''
+created_at = 1790920293
+updated_at = 1790920293
+weight = 0.0
+issue_number = 1054
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1054"
+rev = 0
+
+[[task]]
+id = "db79df80"
+title = 'scripts/guard-maintree-bash.py も未解決の変数参照で拒否するため、同一コマンド内で直前に代入された変数（S=/tmp/...; ... > "$S/x"）が使えない — af1565aa の姉妹欠陥が python 側のガードにもある'
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = """
+観測 2026-10-02（session-3d44818d）。af1565aa の作業中に自分が 2 度ブロックされて気づいた。
+
+## 症状（逐語、2 件とも実際に拒否された）
+
+    S=/tmp/.../scratchpad; grep ... > "$S/after_failed.txt"
+    -> Refused: `S=/tmp/.../scratchpad; grep -E` (target `$S/after_failed.txt` mutates this project's MAIN working tree.
+
+    D="$HOME/src/blastguard-fixture-base"; ... rm -rf "$D"
+    -> Refused: (target `$D` mutates this project's MAIN working tree.
+
+どちらも代入が**同じコマンドの直前のセグメント**にあり、`;` 区切りなので bash では確実に束縛されている。ガードは変数を解決できないので「main tree を触る可能性がある」と読んで fail-closed に倒している。
+
+## 評価 — 方向は正しい、粒度が粗い
+
+fail-closed 自体は第3節どおりで**正しい**。問題は「解決できない」と「main tree を触る」を同じ出力に写していることで、これは blastguard 側の af1565aa / 32f89d40 とまったく同じ形である:
+
+ - blastguard redirect アーム: 語全体が `$NAME` のときだけ解決（af1565aa、修正中）
+ - blastguard tee アーム: 一切解決しない（32f89d40）
+ - **guard-maintree-bash.py: 一切解決しない（本票）**
+
+実害は「measurement / patch スクリプトを書くたびにリテラル絶対パスへ展開し直す」という作業コストで、安全側に倒れているので危険ではない。ただし第4節の観点では、**迂回の圧力を作る**ことが問題である（実際に私はリテラルへ書き換えて通した。今回は正当だが、同じ圧力が別の場面では「黙らせる」方向に働きうる）。
+
+## 修正方針
+
+blastguard 側の `resolve_expanded_command_word` と同じ規律を python で小さく再現する: 直前のセグメント群に純粋な代入があり、値に展開が含まれず、ガード付き実行でなく、後続の再代入が無いときだけリテラルへ解決して、**そのうえで main-tree 判定をやり直す**。解決できなければ現状どおり拒否。
+
+**解決を『拒否の抑止』に使ってはいけない** — 解決したら必ず解決後のパスで再判定する（blastguard の substitutive resolution 規律と同じ）。
+
+## 優先度
+
+p3。安全側に倒れており、回避策（リテラル絶対パス）が常に存在する。af1565aa / 32f89d40 が先。ただし **3 本揃って同じ欠陥**なので、どれかを直すときに他も見ること。"""
+created_at = 1790920295
+updated_at = 1790920295
+weight = 0.0
+issue_number = 1055
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1055"
+rev = 0
+
+[[task]]
+id = "3ca56588"
+title = "blastguard は symlink の直後に .. が来るパスを字句正規化で判定するため、realpath が /etc/fstab になるリテラル redirect を ALLOW する — no_symlink_below は綴りの中の symlink は捕まえるが .. に食われた symlink は捕まえない"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+観測 2026-10-02（測定点 43a392dc、deployed blastguard 0.2.97 と worktree ビルドの両方で一致）。af1565aa の実装中、`..` を含む接尾辞を解決してよいかを詰めていて見つけた。**af1565aa とは独立の、リテラルパス側の既存欠陥**であり、変数展開は一切関与しない。
+
+## 実測（スクリプト: scratchpad/meas_symlink_dotdot.py、`CLAUDE_CODE_SESSION_ID` を外して各コマンド 1 回のみ）
+
+fixture: `<base>/proj/esc` が `/` への symlink。
+
+    : > <base>/proj/esc/../../etc/fstab     realpath = /etc/fstab   -> **ALLOW**   <-- 欠陥
+    : > <base>/proj/esc/etc/fstab           (.. なし、同じ symlink) -> DENY        <-- 正しく捕まる
+    : > <base>/proj/../../../../../../etc/fstab  (symlink なし)     -> DENY 『writes into a system directory』
+
+1 行目と 2 行目の差は `..` の有無だけで、realpath はどちらも `/etc` 配下に落ちる。
+
+## カーネルの意味論（非破壊で確認。スクリプト: scratchpad/meas_kernel_dotdot.py）
+
+`proj/esc` を `other/deep` への symlink にして:
+
+    printf WRITTEN > <base>/proj/esc/../victim.txt
+      字句上の親 <base>/proj/victim.txt   -> 'LEXICAL-PARENT-UNTOUCHED'（無傷）
+      実際に落ちた <base>/other/victim.txt -> 'WRITTEN'                （物理的な親）
+
+`..` はカーネルが**実際のディレクトリ**に対して解決するので、symlink が 1 つでも手前にあると字句正規化は**別のファイルを名指しする**。
+
+## 原因
+
+`scope::normalize_abs` は `..` を字句的に畳む（`/a/b/../c` → `/a/c`）。`SafeRoots::lexical_absolute` は残留 `..` を `undetermined` にするが、`normalize_abs` が全部畳んでしまうので残留しない。symlink 対策は別機構 `SafeRoots::no_symlink_below` が持っており、その doc は『Walks the prefixes of `lexical` from the top and resolves each one … every longer prefix must resolve to exactly `<real path of its parent>/<its own name>`』と書いている。問題は**この walk が字句正規化の後の文字列に対して行われる**ことで、`esc/..` は正規化の段階で消えているため `esc` という成分がもう存在せず、symlink チェックに掛からない。
+
+つまり散文は嘘をついていない（それぞれの機構は書いてあるとおりに動く）。欠けているのは**正規化が symlink 成分を消すことと symlink チェックの順序**である。
+
+## なぜ重いか
+
+`/etc/fstab` を実際に truncate できるリテラルコマンドが allow される。攻撃的な意図を仮定しなくても、worktree や plugin cache のように symlink が日常的に存在するツリーで `..` を含むパスを書けば、ゲートの判定対象と実際の書き込み先がずれる。第3節の「判定不能は制限側」に照らすと、**symlink を跨いだ `..` の解決先は判定不能**であり、allow に倒してはいけない。
+
+## 修正方針の候補（要裁定）
+
+(a) **正規化の前に symlink チェックを走らせる** — `..` を畳む前の綴りに対して各成分を解決し、`..` の直前の成分が symlink なら `Undetermined`。正しいが、既存の順序を入れ替えるので影響範囲が広い。
+
+(b) **`..` を含む絶対パスは `normalize_abs` で畳まず `realpath` に委ねる** — 実在する部分は実解決し、末尾の非実在成分だけ名前で再付加する（binary 側の resolver は既にこれをやっていると `no_symlink_below` の doc が書いている: `The binary's resolver re-attaches non-existent tail components by name`）。TOCTOU は残るが、字句の嘘は消える。
+
+(c) **`..` を含むパスは `Undetermined` に倒す** — 最も安全だが、`proj/sub/../out.log` のような無害な常用形まで塞ぐので false positive が大きい。
+
+(a) と (b) の混成が現実的に見えるが、どれを採るかは**人間の裁定**。
+
+## 測り方（第2節 (a)(b)）
+
+利害関係のない agent に、上の 3 行 + 無害対照（symlink なしの `proj/sub/../out.log` は Allow のまま）+ 物理/字句の食い違いを固定する behavioural test を書かせる。RED は 1 行目が Allow であること。**fixture の symlink resolver を `identity`（symlink 無しモデル）にしてはこの性質が観測できない** — 既存の `redirect_target_resolution.rs` が `identity` を使っているのは別の性質を測るためなので、この票のテストは実 `real_path` 側（binary を叩く形）か、symlink を模した resolver を渡す形にする必要がある。
+
+## af1565aa との関係（混ぜないこと）
+
+af1565aa（接尾辞付き参照の解決）では、この欠陥が原因で `literal_suffix` が `..` 成分を**拒否している**。拒否を外すと `P=<base>/proj; : > $P/esc/../../etc/fstab` が DENY → ALLOW に緩み、本票の欠陥が変数綴りにも広がる。したがって:
+
+ - **本票が閉じるまで af1565aa の `..` 拒否は外さない**（af1565aa 側の doc にその旨と本票 id を記載済み）
+ - 本票が閉じたら af1565aa の `..` 拒否は false positive として撤去を検討する（`P=<dir>/sub; : > $P/../out.log` がリテラルと食い違って Deny になっているのがその代償）
+
+GATE crate なので rollout は `--canary`。
+
+## 追記 2026-10-02 — 穴は bare 変数綴りでも開いている（起票時より広い）
+
+起票時はリテラル綴りの欠陥として書いたが、af1565aa のテストを書いた agent の指摘を受けて自分で測り直したところ、**既に出荷済みの bare resolver 経由でも開いている**。スクリプト: scratchpad/verify_bare_hole.py（`CLAUDE_CODE_SESSION_ID` を外し、deployed 0.2.97 と af1565aa パッチ版の両方で各コマンド 1 回）。
+
+fixture: `<base>/proj/esc` が `/` への symlink。`realpath` は `/etc/fstab`、字句 normpath は `<base>/etc/fstab`。
+
+    : > <base>/proj/esc/../../etc/fstab                 リテラル    -> ALLOW  (0.2.97 / patched 両方)
+    P=<base>/proj/esc/../../etc/fstab; : > $P           bare        -> ALLOW  (両方)
+    P=<base>/proj/esc/../../etc/fstab; : > ${P}         bare braced -> ALLOW  (両方)
+    P=<base>/proj/esc/../../etc/fstab; : > "$P"         bare quoted -> ALLOW  (両方)
+    P=<base>/proj; : > $P/esc/../../etc/fstab           接尾辞      -> DENY   (両方)
+    : > <base>/proj/../../../../../../etc/fstab         symlink なし-> DENY   (両方、対照)
+
+つまり **4 つの綴りのうち 3 つが既に通る**。接尾辞形だけが DENY なのは af1565aa で `literal_suffix` が `..` 成分を拒否しているからであって、欠陥が塞がっているからではない。
+
+### 結論の訂正
+
+af1565aa の `..` 拒否は **緩和策（mitigation）ではなく、広げないだけの措置（non-widening）**である。本票を「af1565aa で部分的に対処済み」と読んではいけない。リテラルと bare の扉は開いたままで、**変数を使わない 1 行で `/etc/fstab` が truncate できる**。
+
+優先度は p1 のままだが、この追記は「リテラル経路の話だから緊急ではない」という読みを塞ぐためのものである。むしろ逆で、変数展開を一切使わないので最も素朴な形である。
+
+### テスト側の進展（本票の RED は未達のまま）
+
+af1565aa の作業で `crates/blastguard/tests/redirect_target_suffix_resolution.rs` に `symlink_*` 群 3 件が入った（実 symlink + 実 binary、`identity` resolver を使わない形）。これは**接尾辞経路が解決しないこと**を固定するもので、本票の欠陥そのものは固定していない。起票時に書いた「fixture の identity resolver ではこの性質が観測できない」という障害はこれで解消しており、同じ形を literal / bare に広げれば本票の RED が書ける。
+
+あわせて判明した死角: `crates/blastguard/tests/worktree_root_symlink_dotdot.rs` はこの危険クラスを **`rm -rf` についてだけ** 6 件固定しており、redirect については 1 件も無い。だから redirect 側が見逃されていた。本票の修正時はこの非対称も埋めること。
+
+**現状の verdict を固定するテストを書いてはいけない** — 今の ALLOW を pin すればバグが仕様になる（第2節の『検証していないテストの assert が仕様として固定されうる』の実例になる）。Deny を pin するのは上の修正候補 (a)(b)(c) のどれを採るかという人間の裁定を先取りするので、それも裁定後にする。"""
+created_at = 1790920711
+updated_at = 1790921363
+weight = 0.0
+issue_number = 1056
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1056"
+rev = 1

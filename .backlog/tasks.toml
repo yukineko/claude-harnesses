@@ -951,9 +951,15 @@ notes = """
 2026-09-30 slice 3 landed: 103eef5a (merged 530acc71). scripts/check-fault-injection-adoption.py + baseline 0 (harness-core excluded as provider; above-baseline also exits 1 so the pin tracks the real count; feature outside dev-dependencies exits 1; undetermined exits 2). RED 4bf08c5f 13 tests by an independent sonnet author, plus 15 implementer tests. NOT yet wired: pre-commit patch in the session scratchpad (githooks-8696dd7e.patch) awaits the user. Remaining: wiring, slice 2 (first gate-crate adopter with observed RED; the same commit must raise the baseline to 1), slice 4.
 
 2026-10-01 slice 2 landed (merged b0a7679f, pushed, canary-rolled overwatch 0.2.47): overwatch is the first adopter. store::read_audit_rounds (the audit-metrics converging verdict) read via std::fs, outside the seam; it now reads through harness_core::boundary::read_to_string, forwarding Undetermined. Test crates/overwatch/tests/fault_injection.rs authored independently; F->P observed by the orchestrator: pre-fix store.rs gives VACUOUS fail-closed check (returned Some(true)), post-fix passes. Adoption baseline 0->1; raw-io ratchet 46->45. Remaining: wiring patch awaits the user, slice 4 (one crate per commit).
-2026-10-02 slice 4 (blastguard) landed: 7371a4ec, merged 9b6d8dbe, pushed, canary-rolled blastguard 0.2.97. Third adopter (propguard aadc0ef4 was #2); adoption baseline 2->3. Test blind_boundary_never_leaves_an_approval_lookup_permissive (approve.rs Store::lookup) authored independently; vacuity observed: swapping boundary::read_to_string for std::fs gives VACUOUS panic. HELD BACK: recoverability-probe test (scratchpad blastguard-recoverability-fault-test.rs) is RED because decide_recovery discards GitState::Undetermined (reversible.rs ~176-195) - that is user-ruled permissive territory, pending 7778b634. Unrelated pre-existing red filed as 16d8e01d (worktree_root_* calibration)."""
+2026-10-02 slice 4 (blastguard) landed: 7371a4ec, merged 9b6d8dbe, pushed, canary-rolled blastguard 0.2.97. Third adopter (propguard aadc0ef4 was #2); adoption baseline 2->3. Test blind_boundary_never_leaves_an_approval_lookup_permissive (approve.rs Store::lookup) authored independently; vacuity observed: swapping boundary::read_to_string for std::fs gives VACUOUS panic. HELD BACK: recoverability-probe test (scratchpad blastguard-recoverability-fault-test.rs) is RED because decide_recovery discards GitState::Undetermined (reversible.rs ~176-195) - that is user-ruled permissive territory, pending 7778b634. Unrelated pre-existing red filed as 16d8e01d (worktree_root_* calibration).
+
+2026-10-02 slice 4 (parallelguard) landed: 544bd65d (branch fork/p1-3items), adoption baseline 3->4、parallelguard 0.1.4 (3 ファイル lockstep)。4 番目の採用クレート。parallelguard は bin-only の GATE crate で、in-flight ledger が読めないときに PreToolUse の verdict が制限側に留まることを示すものが無かった。注入の継ぎ目として src/main.rs から decide_with(&HookInput, &Path, usize) を切り出した (decide() は stdin と実際の per-user state dir だけを保持し、ALLOW/DENY を決める全部が decide_with に移る。挙動は不変 — decide は以前インラインで算出していた root と cap をそのまま渡す)。src/fault_injection_tests.rs は decide_with の下で boundary::read_to_string を盲目化し、verdict が Deny に留まることを harness_core::degrade::assert_fails_closed で表明する (5 tests)。harness-core の fault-injection feature は [dev-dependencies] のみ。
+
+空虚でないことを両方向で観測 (CLAUDE.md 2b): (a) boundary を迂回して std::fs で ledger を読む版では VACUOUS — "the closure made no boundary IO call on this thread, so blinding it changed nothing and proves nothing (it returned Allow)"。(b) fail-closed の腕を戻して読めない ledger を空として扱う版では FAIL-OPEN — "with every boundary entry forced to Undetermined (1 call(s) faulted) the gate still returned a permissive verdict: Allow"。(c) 無故障時は "test result: ok. 5 passed"。全体 32+12+2 tests green、cargo clippy -p parallelguard --all-targets clean (切り出しで生じた needless_borrow 2 件は allow ではなく修正した)。parallelguard は enablement が PARKED (scripts/parked-plugins.json、2026-08-28 のユーザー裁定) のままで、この commit はそれを変えない。
+
+【stale prose の訂正 — 2026-10-02 実測】上の 2026-09-30 / 2026-10-01 の notes にある「wiring patch awaits the user」「NOT yet wired: pre-commit patch in the session scratchpad (githooks-8696dd7e.patch)」は既に古い。実測: scripts/check-fault-injection-adoption.py は .githooks/pre-commit:221 で `run check-fault-injection-adoption.py fault-injection-adoption` として配線済みで、:315 と :320 の説明文にも載っている。実際に commit 544bd65d の pre-commit がこのチェックを走らせて green を出している。また githooks-8696dd7e.patch は machine 上に存在しない (scratchpad は session 固有なので、起票時の session が終わった時点で失われている) — 存在しないパッチの適用を待つ記述は次の著者を誤らせるので無効と記録する。したがって残りは slice 4 の継続 (1 commit 1 クレート) だけで、配線は done。"""
 created_at = 1785879190
-updated_at = 1790884119
+updated_at = 1790917905
 weight = 0.0
 issue_number = 140
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/140"
@@ -1028,33 +1034,6 @@ updated_at = 1785929604
 weight = 0.0
 issue_number = 155
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/155"
-
-[[task]]
-id = "f6784177"
-title = "ctxrot の find_overwatch_binary が stuckguard で直した 2 欠陥をそのまま持っている (mirror gap)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "mirror-gap",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-stuckguard の anchor 修正 (0.1.30) で直した 2 件が、双子である crates/ctxrot/src/hooks/guard.rs:656 の find_overwatch_binary に未修正のまま残っている。片側だけ直った典型的な mirror gap。
-
-(1) 消去 (erasure): guard.rs:666-668 は std::fs::read_dir(&base).ok()? と .filter_map(|e| e.ok()) で、読めない cache dir を「候補ゼロ」へ畳む。絶対的不在と判定不能が同じ出力になる。stuckguard 側は harness_core::boundary::read_dir_entries を通す形へ寄せた (Known(vec![]) と Undetermined を分ける)。
-
-(2) バージョン順序: guard.rs:672-673 の candidates.sort() は full path の辞書順なので、0.3.9 が 0.3.10 より後ろに来る。実測 2026-08-06、この機械の ls ~/.claude/plugins/cache/yukineko/overwatch は 0.1.30 / 0.1.38 / 0.2.18 / 0.2.20 / 0.2.24 の 5 dir を保持しており、二桁 patch は既に存在する。今日 0.2.24 が正しく選ばれるのは 0.2.9 が一度も入らなかったからにすぎず、同一 minor 内で一桁と二桁が並んだ時点で古い方を選ぶ。stuckguard 側は version_sort_key で数値成分比較へ直し、0.3.9 vs 0.3.10 の RED を実測してから GREEN 化した。
-
-影響の非対称性: ctxrot 側は heartbeat を打たず注入 cadence の判定にしか使わないので、lease reap への波及は無い。したがって深刻度は stuckguard 側より低いが、(2) は「古い overwatch を新しい台帳に対して走らせる」ことになる。
-
-完了条件: guard.rs の find_overwatch_binary を boundary::read_dir_entries + 数値バージョン比較へ寄せ、0.3.9 vs 0.3.10 のテストを RED 先行で追加する。ctxrot は 3 ファイル lockstep で micro bump。"""
-created_at = 1785969045
-updated_at = 1785969045
-weight = 0.0
-issue_number = 171
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/171"
 
 [[task]]
 id = "5b75ea9d"

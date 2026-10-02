@@ -23593,3 +23593,35 @@ weight = 0.0
 issue_number = 1016
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1016"
 issue_closed_at = 1790911822
+
+[[task]]
+id = "f6784177"
+title = "ctxrot の find_overwatch_binary が stuckguard で直した 2 欠陥をそのまま持っている (mirror gap)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "mirror-gap",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+stuckguard の anchor 修正 (0.1.30) で直した 2 件が、双子である crates/ctxrot/src/hooks/guard.rs:656 の find_overwatch_binary に未修正のまま残っている。片側だけ直った典型的な mirror gap。
+
+(1) 消去 (erasure): guard.rs:666-668 は std::fs::read_dir(&base).ok()? と .filter_map(|e| e.ok()) で、読めない cache dir を「候補ゼロ」へ畳む。絶対的不在と判定不能が同じ出力になる。stuckguard 側は harness_core::boundary::read_dir_entries を通す形へ寄せた (Known(vec![]) と Undetermined を分ける)。
+
+(2) バージョン順序: guard.rs:672-673 の candidates.sort() は full path の辞書順なので、0.3.9 が 0.3.10 より後ろに来る。実測 2026-08-06、この機械の ls ~/.claude/plugins/cache/yukineko/overwatch は 0.1.30 / 0.1.38 / 0.2.18 / 0.2.20 / 0.2.24 の 5 dir を保持しており、二桁 patch は既に存在する。今日 0.2.24 が正しく選ばれるのは 0.2.9 が一度も入らなかったからにすぎず、同一 minor 内で一桁と二桁が並んだ時点で古い方を選ぶ。stuckguard 側は version_sort_key で数値成分比較へ直し、0.3.9 vs 0.3.10 の RED を実測してから GREEN 化した。
+
+影響の非対称性: ctxrot 側は heartbeat を打たず注入 cadence の判定にしか使わないので、lease reap への波及は無い。したがって深刻度は stuckguard 側より低いが、(2) は「古い overwatch を新しい台帳に対して走らせる」ことになる。
+
+完了条件: guard.rs の find_overwatch_binary を boundary::read_dir_entries + 数値バージョン比較へ寄せ、0.3.9 vs 0.3.10 のテストを RED 先行で追加する。ctxrot は 3 ファイル lockstep で micro bump。
+
+2026-10-02 /flow (session c9af4c58): 完了条件は a97c60e6 (2026-10-01 03:34:46 +0900、main / origin/main の双方に merge 済み) で既に満たされていた。実測 (測定点 544bd65d、測定日 2026-10-02): (1) 消去 — crates/ctxrot/src/hooks/guard.rs:679 の newest_overwatch_in が harness_core::boundary::read_dir_entries を通し、cache dir の不在 Known(vec![]) と読めない Undetermined を分けて返す。find_overwatch_binary (:661) の戻りも Determination<Option<PathBuf>> で、.ok()? による畳み込みは残っていない。(2) バージョン順序 — guard.rs:699 の version_sort_key が数値成分の Vec<u64> で比較し、辞書順ではない。テストは guard.rs:1403 に 0.3.9 と 0.3.10 の両方を置き 0.3.10 が選ばれることを表明する ("0.3.10 is newer than 0.3.9; a lexicographic sort picks the older install")。ctxrot は同 commit で 3 ファイル lockstep bump 済み (現在 0.5.28)。cargo test -p ctxrot は 165+3+9+5 = 182 tests green。
+
+したがって残っていたのは起票の side だけで、この notes 以前の description は a97c60e6 以前の実装を指す stale prose。実装は正しいので起票を閉じる (CLAUDE.md 第4節: 散文が実装と食い違ったら散文を直す)。"""
+created_at = 1785969045
+updated_at = 1790917910
+weight = 0.0
+issue_number = 171
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/171"
+issue_closed_at = 1790917912

@@ -13486,3 +13486,18 @@ updated_at = 1790981958
 weight = 0.0
 issue_number = 1087
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1087"
+
+[[task]]
+id = "6a74e779"
+title = "condukt subagent_stop.rs:301 tmpdir: 時計エラー時 .unwrap_or(0) で名前が <tag>-<pid>-0 に縮退し、pid 再利用で残骸 dir に create_dir_all 再入する (a6608aa0 の条件付き双子)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "a6608aa0 worker の分類 (2026-10-03 @52e967a2): subagent_stop.rs:301 の test fixture は pid+nanos 名だが nanos 取得失敗時 unwrap_or(0)。時計が正常な限り安全。同形の lock.rs:464/557/639/688/733/838 は now_unix_nanos() を使用 — それ自体が 0 へ fallback するかは未確認 (確認要)。gate_exec.rs:456 は unwrap() で fallback なし。いずれも後始末しないので temp に dir が溜まる。修正案: precedent/escalate/claim と同じ tempfile::Builder guard。別件 (未検証): wt_reconcile.rs:1569 temp_index_path は同一プロセス内の同一 path 並行 content_tree で GIT_INDEX_FILE を共有しうる。"
+created_at = 1790982260
+updated_at = 1790982260
+weight = 0.0
+issue_number = 1088
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1088"

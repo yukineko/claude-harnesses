@@ -23978,3 +23978,42 @@ weight = 0.0
 issue_number = 223
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/223"
 issue_closed_at = 1790920713
+
+[[task]]
+id = "e8aad6e6"
+title = "rollout ゲートが stale と orphan provenance を区別できない（巻き戻しが正解のケースと危険なケースが同じ赤に潰れる）"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "deploy-verify",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+0ab44b59 から派生。check-plugin-rollout.py は配布済みバイナリがリンクする
+harness-core version とソースツリーの version を比較するだけなので、次の 2 つを同じ赤として報告する:
+
+  (A) ソースのほうが新しい = 配布が追いついていない → rollout が正解。
+  (B) 配布物のほうが新しい = ソースに存在しないコードを配っている（orphan provenance）
+      → rollout は巻き戻しであり、稼働中セッションの成果物を破壊しうる。危険。
+
+2026-08-07 に両方が実際に観測された。同日午前は (B) が 42 件（配布 0.2.6 / ソース 0.2.5、
+0.2.6 は未マージ branch session-b9a78b46 にのみ存在）で、ユーザーは「打たずに起票」を選んだ。
+PR #220 のマージ後は (A) が 2 件（ソース 0.2.6 / 配布 0.2.5）になり、処方が逆転した。
+**赤の見た目は同じで、正しい対処が正反対である。**
+
+やること: version の大小関係を判定に入れ、(A) と (B) を別のメッセージ・別の推奨アクションとして
+報告する。(B) では「rollout は巻き戻しになる」と明示し、その version がソース履歴に存在するか
+（未マージ branch 由来か）も併せて報告する。判定不能（version を読めない等）は
+CLAUDE.md 第3節どおり制限側に倒し、clean を名乗らせない。
+
+[triage 2026-09-29 @b325a169] p2->p1: check-plugin-rollout.py:1349-1353 direction-less compare prescribes rollout even when deployed is newer (= destructive rollback)
+
+[re-measured 2026-10-02 @e672436b] Still real. scripts/check-plugin-rollout.py around 1349-1355 compares recorded_core != current_core without direction and always prescribes 'rollout-plugins.sh not run since that shared-crate change', even when the deployed version is newer (an orphan, so rolling out would be a rollback)."""
+created_at = 1786048738
+updated_at = 1790921798
+weight = 0.0
+issue_number = 221
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/221"
+issue_closed_at = 1790921800

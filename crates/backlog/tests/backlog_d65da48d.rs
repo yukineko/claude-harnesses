@@ -35,7 +35,6 @@ fn run(args: &[&str], cwd: &Path, home: &Path) -> (i32, String, String) {
 }
 
 #[test]
-#[ignore = "backlog d65da48d: open defect, remove ignore when fixed"]
 fn a_task_listed_as_deferred_is_deferred_in_the_json_feed_too() {
     let tmp = tempfile::tempdir().unwrap();
     let base = tmp.path().canonicalize().unwrap();

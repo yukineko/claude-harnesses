@@ -1491,6 +1491,14 @@ pub enum SyncAction {
         id: String,
         number: u64,
         reason: crate::github::CloseReason,
+        /// The content recorded on the issue as it closes, already rendered by
+        /// [`build_close_comment`]. Carried IN the action rather than looked up
+        /// again at the call site: `sync` reconciles a whole store in one pass
+        /// and `mirror_close_for` builds its own one-item plan, so a
+        /// by-id lookup at each call site is two chances to pair a close with
+        /// the wrong task's content. Here the pairing is made once, where the
+        /// task is already in hand, and is a function of the store alone.
+        comment: String,
     },
 }
 
@@ -1543,16 +1551,80 @@ pub fn sync_plan(tasks: &[Task]) -> Vec<SyncAction> {
                 id: t.id.clone(),
                 number: n,
                 reason: crate::github::CloseReason::Completed,
+                comment: build_close_comment(t, crate::github::CloseReason::Completed),
             }),
             (STATUS_CANCELLED, Some(n), None) => plan.push(SyncAction::Close {
                 id: t.id.clone(),
                 number: n,
                 reason: crate::github::CloseReason::NotPlanned,
+                comment: build_close_comment(t, crate::github::CloseReason::NotPlanned),
             }),
             _ => {}
         }
     }
     plan
+}
+
+/// Upper bound on the rendered body handed to `gh issue close --comment`,
+/// measured in **bytes** (`str::len`), not characters.
+///
+/// GitHub rejects a comment body over 65536 *characters*, which would fail the
+/// whole close — the content and the close ride one invocation, so an oversized
+/// body does not degrade to "closed without the record", it degrades to "not
+/// closed at all". Bounding bytes is deliberately the conservative side of that
+/// limit: for UTF-8, bytes >= characters, so a body under this many bytes is
+/// always under the same number of characters. Measured 2026-10-02: 45000
+/// Japanese characters of notes render to a 59999-byte / 20301-character body,
+/// i.e. the bound binds on bytes long before GitHub's character limit is near.
+/// The headroom below 65536 also covers the header lines and the truncation
+/// marker.
+const CLOSE_COMMENT_MAX: usize = 60_000;
+
+/// Appended when `notes` did not fit. Says so in the body itself: dropping
+/// content silently would make the comment a worse record than no comment,
+/// because nothing downstream could tell a short task from a trimmed one
+/// (CLAUDE.md §4 — never make an error invisible).
+const CLOSE_COMMENT_TRUNCATED: &str = "\n\n*(notes truncated here to stay under GitHub's comment \
+     limit — the full text lives in this repo's `.backlog` store, keyed by the task id above.)*\n";
+
+/// Render what a closing comment should say about `task`. Pure: no IO, no clock
+/// (the timestamp comes from the task's own `updated_at`), no panics.
+///
+/// Never returns a blank string, so `build_issue_close_args` never has to drop
+/// it: even a task with no notes yields the id and the terminal state, which is
+/// the minimum needed for a reader on GitHub to find the local record. The
+/// notes are reproduced verbatim rather than summarized — a summary would be
+/// this function's judgment about someone else's content, and the store's text
+/// is the only authoritative account of what was actually resolved.
+pub fn build_close_comment(task: &Task, reason: crate::github::CloseReason) -> String {
+    let head = format!(
+        "Closed by `backlog`: this task reached its terminal state locally. The local store is \
+         authoritative and this issue is a one-way mirror of it.\n\n- task id: `{id}`\n- local \
+         status: `{status}`\n- GitHub close reason: `{reason}`\n- last updated locally: \
+         {when}\n\n### Notes at close\n\n",
+        id = task.id,
+        status = task.status,
+        reason = reason.as_gh_reason(),
+        when = crate::format_unix_datetime(task.updated_at.max(0) as u64),
+    );
+    let notes = task.notes.trim();
+    if notes.is_empty() {
+        return format!("{head}(this task carried no notes)\n");
+    }
+    let room = CLOSE_COMMENT_MAX.saturating_sub(head.len() + CLOSE_COMMENT_TRUNCATED.len());
+    if notes.len() <= room {
+        return format!("{head}{notes}\n");
+    }
+    // Cut on a char boundary: `notes` is arbitrary UTF-8 (these notes are
+    // routinely Japanese), and slicing mid-codepoint would panic inside a
+    // function whose whole job is to not fail a close.
+    let cut = notes
+        .char_indices()
+        .map(|(i, _)| i)
+        .take_while(|i| *i <= room)
+        .last()
+        .unwrap_or(0);
+    format!("{head}{}{CLOSE_COMMENT_TRUNCATED}", &notes[..cut])
 }
 
 /// Which half of the mirror a `sync` run is allowed to touch.
@@ -5269,15 +5341,28 @@ mod tests {
     /// reason is swapped to NotPlanned, or if sync_plan returns empty.
     #[test]
     fn sync_plan_closes_done_as_completed() {
-        let plan = sync_plan(&[sync_task("bbb", STATUS_DONE, Some(42), None)]);
+        let task = sync_task("bbb", STATUS_DONE, Some(42), None);
+        let plan = sync_plan(std::slice::from_ref(&task));
         assert_eq!(
             plan,
             vec![SyncAction::Close {
                 id: "bbb".to_string(),
                 number: 42,
                 reason: crate::github::CloseReason::Completed,
+                comment: build_close_comment(&task, crate::github::CloseReason::Completed),
             }],
             "a done task with an open issue must be planned for a `completed` close"
+        );
+        // The `comment` above is built by the very function that filled it, so
+        // that field of the equality witnesses nothing about its CONTENT. Pin
+        // the content separately: a close that posts a record which does not
+        // identify the task is not a record.
+        let SyncAction::Close { comment, .. } = &plan[0] else {
+            panic!("expected a Close action, got {:?}", plan[0]);
+        };
+        assert!(
+            comment.contains("bbb") && comment.trim().len() > 20,
+            "the close comment must name the task and carry content; got {comment:?}"
         );
     }
 
@@ -5287,15 +5372,27 @@ mod tests {
     /// GitHub as completed.
     #[test]
     fn sync_plan_closes_cancelled_as_not_planned() {
-        let plan = sync_plan(&[sync_task("ccc", STATUS_CANCELLED, Some(7), None)]);
+        let task = sync_task("ccc", STATUS_CANCELLED, Some(7), None);
+        let plan = sync_plan(std::slice::from_ref(&task));
         assert_eq!(
             plan,
             vec![SyncAction::Close {
                 id: "ccc".to_string(),
                 number: 7,
                 reason: crate::github::CloseReason::NotPlanned,
+                comment: build_close_comment(&task, crate::github::CloseReason::NotPlanned),
             }],
             "a cancelled task's issue must be closed as `not planned`, not `completed`"
+        );
+        // Same caveat as the `done` case: the equality cannot witness the
+        // comment's content. An abandoned task's record must say it was
+        // abandoned, not borrow the `completed` wording.
+        let SyncAction::Close { comment, .. } = &plan[0] else {
+            panic!("expected a Close action, got {:?}", plan[0]);
+        };
+        assert!(
+            comment.contains("ccc") && comment.contains("not planned"),
+            "a cancelled task's close comment must name the task and its reason; got {comment:?}"
         );
     }
 
@@ -5623,13 +5720,16 @@ mod tests {
         // gh failed → the caller pushes NO outcome.
         assert_eq!(record_sync_outcomes(&path, &[], 1_800_000_000).unwrap(), 0);
 
-        let replan = sync_plan(&load(&path).unwrap());
+        let reloaded = load(&path).unwrap();
+        assert_eq!(reloaded.len(), 1, "fixture must hold exactly the one task");
+        let replan = sync_plan(&reloaded);
         assert_eq!(
             replan,
             vec![SyncAction::Close {
                 id: "hhh".to_string(),
                 number: 42,
                 reason: crate::github::CloseReason::Completed,
+                comment: build_close_comment(&reloaded[0], crate::github::CloseReason::Completed),
             }],
             "a close that was never confirmed must be retried"
         );

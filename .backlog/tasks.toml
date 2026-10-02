@@ -14810,13 +14810,34 @@ pre-commit: gates green — cleared 0 ungated commit(s) from the bypass ledger; 
 
 **まだ埋めてはいけない空白**: 「所有ブランチが削除された／所有セッションが終了した後に entry が残った場合」は未実測。その場合 ancestor 条件を満たす HEAD を作る正当な手段が無くなる可能性がある。
 
-**自分がやらなかったこと（意図的）**: 現 main（`bfe967f6` を含む）から worktree を切って gated commit を 1 本作れば ledger は消え push は通る。だがそれは**赤を消すために commit を作る**行為であり、第4節（通すためだけに緩める）と第5節（黙って迂回しない）が禁じる形なので行わなかった。他セッションの ungated content を自分の手で push 可能にすることにもなる。"""
+**自分がやらなかったこと（意図的）**: 現 main（`bfe967f6` を含む）から worktree を切って gated commit を 1 本作れば ledger は消え push は通る。だがそれは**赤を消すために commit を作る**行為であり、第4節（通すためだけに緩める）と第5節（黙って迂回しない）が禁じる形なので行わなかった。他セッションの ungated content を自分の手で push 可能にすることにもなる。
+
+## 訂正 2026-10-02 — 台帳は消えた。消したのは「統合 merge」であって細工ではない
+
+上の追記で「止められている側に消す手段が無い」と書いたが、**これは自分の worktree についてしか真でなかった**。その直後、本票を含む 2 commit を main へ統合する merge（`session-3d44818d` → main、第8節が main tree で唯一許す操作）を実行したところ、その merge commit の pre-commit が走り最後にこう言った:
+
+```
+main-tree-guard: allowed — Merge in progress (declared by .githooks/pre-merge-commit and corroborated by GIT_REFLOG_ACTION) (CLAUDE.md §8 permits this in the main tree)
+pre-commit: gates green — cleared 3 ungated commit(s) from the bypass ledger.
+```
+
+**3 件すべてが消え、pre-push は通る状態になった。** 機構は docstring のとおり: main の HEAD は `bfe967f6` を含むので ancestor 条件を満たし、clearing は「検査の副作用」として起きた。
+
+ここで区別が要る。自分が避けたのは**赤を消すためだけに commit を作ること**であって、**元々やる予定だった統合 merge が結果として台帳を消すこと**は迂回ではない（full pre-commit suite が green で content を実際に検査している＝ gate の設計どおり）。
+
+### それでも本票は閉じない — 構造は残っている
+
+今回消えたのは「自分が main へ統合する用事を持っていた」からであり、以下はいずれも未解決:
+
+ - main へ merge する用事が無いセッション（自分の branch 上で作業中で、他セッションの ungated commit を含まない HEAD しか持たない）は、**自分の push を通す手段を持たない**。実測済み: `session-3d44818d` HEAD `93d1004b` での green な gated commit は `cleared 0 ... kept 3`。
+ - clearing が merge に依存するなら、**pre-push の block は実質「他セッターの content を自分が統合するまで待て」**になる。候補1（push する ref から到達可能な entry だけで止める）が効くのはこの点。
+ - なお clean な `git merge` では pre-commit も post-commit も走らない（`scratchpad/meas_merge_hook.py` の実測）が、**この repo では `.githooks/pre-merge-commit` が居るため merge でも pre-commit が走る**。上の「否定された仮説」節と合わせて読むこと（素の git と この repo で挙動が違う）。"""
 created_at = 1790922440
-updated_at = 1790922537
+updated_at = 1790922627
 weight = 0.0
 issue_number = 1057
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1057"
-rev = 1
+rev = 2
 
 [[task]]
 id = "5e3b13cc"

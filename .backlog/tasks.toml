@@ -13492,9 +13492,29 @@ project_unresolved = false
 tags = ["p1"]
 touched_files = []
 status = "pending"
-notes = "観測 2026-10-03 (session dc66e988, 開始 1790980140): セッション PATH は condukt/0.7.199/bin・backlog/0.3.20/bin 等を指していたが、別セッション 798a05c3 の rollout (condukt 0.7.200 deployed_at 1790980978) 後 0.7.199 dir が消え、condukt/backlog が 'command not found'。main-tree-guard pre-commit も 'no condukt binary found' で block。ls -d ~/.claude/plugins/cache/yukineko/*/*/.in_use は 22 件のみ (autoflow, beacon, compass, ..., tdd, propguard, reviewgate) で condukt/backlog/donegate/blastguard/stuckguard/overwatch に .in_use は無い。prune-plugin-cache.py は '.in_use/<pid> for a live pid' の dir だけを保持する。既存調査 (tasks.toml の orphaned_at 節) によれば .in_use の書き手は Claude Code 本体 (claude.exe)。読み (a) 欠陥: .in_use が書かれない plugin の dir は live でも prune される → 稼働セッションの Stop gate (donegate 等) が暗転 = fail-open / (b) .in_use は別の意味 (例: skills を持つ plugin のみ) で、prune 側が live 判定に不十分なシグナルを使っている。見分け方: .in_use を持つ/持たない plugin の共通項 (bin の有無・hooks の有無) を比較。暫定回避: 自セッションは cache の現存 bin dir を PATH 先頭に足して継続。今回 rollout は保留した (同じ破壊を他セッションに与えるため)。"
+notes = """
+観測 2026-10-03 (session dc66e988, 開始 1790980140): セッション PATH は condukt/0.7.199/bin・backlog/0.3.20/bin 等を指していたが、別セッション 798a05c3 の rollout (condukt 0.7.200 deployed_at 1790980978) 後 0.7.199 dir が消え、condukt/backlog が 'command not found'。main-tree-guard pre-commit も 'no condukt binary found' で block。ls -d ~/.claude/plugins/cache/yukineko/*/*/.in_use は 22 件のみ (autoflow, beacon, compass, ..., tdd, propguard, reviewgate) で condukt/backlog/donegate/blastguard/stuckguard/overwatch に .in_use は無い。prune-plugin-cache.py は '.in_use/<pid> for a live pid' の dir だけを保持する。既存調査 (tasks.toml の orphaned_at 節) によれば .in_use の書き手は Claude Code 本体 (claude.exe)。読み (a) 欠陥: .in_use が書かれない plugin の dir は live でも prune される → 稼働セッションの Stop gate (donegate 等) が暗転 = fail-open / (b) .in_use は別の意味 (例: skills を持つ plugin のみ) で、prune 側が live 判定に不十分なシグナルを使っている。見分け方: .in_use を持つ/持たない plugin の共通項 (bin の有無・hooks の有無) を比較。暫定回避: 自セッションは cache の現存 bin dir を PATH 先頭に足して継続。今回 rollout は保留した (同じ破壊を他セッションに与えるため)。
+再観測 2026-10-03: 別セッションの rollout が backlog/0.3.21・condukt/0.7.200・donegate/0.1.36・overwatch/0.2.53 の bin dir を prune。本セッションの PATH 上の backlog/condukt が消え、main-tree-guard (pre-commit) が 'no condukt binary found' で fail-closed block した。"""
 created_at = 1790982810
-updated_at = 1790982810
+updated_at = 1790983328
 weight = 0.0
 issue_number = 1089
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1089"
+
+[[task]]
+id = "4a1a2919"
+title = "tdd: green の has_red (proof.rs:283) と verify (proof.rs:346-347) が Path::exists() で boundary を通らない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "fault-injection",
+]
+touched_files = []
+status = "pending"
+notes = "8696dd7e 検証時の verifier 観測。exists() は IO エラーを false に潰す。現状 false=拒否なので制限側だが、fault injection から不可視で Undetermined と absent が区別できない（拒否理由が『RED proof が無い』と誤報される）。boundary 経由の三値化＋blind テストで固定するか判断する。"
+created_at = 1790983319
+updated_at = 1790983319
+weight = 0.0
+issue_number = 1090
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1090"

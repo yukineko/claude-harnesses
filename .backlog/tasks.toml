@@ -1126,34 +1126,6 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/172"
 rev = 0
 
 [[task]]
-id = "5b89f0f6"
-title = "verdict.rs の「method call としては書けない」は拡張トレイトで反証される (散文が実挙動より強い)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-crates/harness-core/src/verdict.rs:434 は permissive path is therefore not expressible as a method call on either と書いている。敵対的監査 (2026-08-06) が使い捨てクレートを実 harness-core への path dep で作り、実際にビルド・実行して反証した。
-
-外部クレートに 6 行の拡張トレイト (Required に対して unwrap_or_default と is_ok を生やす impl) を置くと、呼び出し側の綴りが trybuild fixture の E0599 として pin しているものとバイト同一のまま通る。実行結果 collapsed=[] を観測 = undetermined が空 Vec へ潰れた。
-
-同時に確認された関連の穴 2 件:
-- Required::Blocked(Verdict) は型として Undetermined を強制していない。外部から Blocked に Clean を積むことができ、正規の Blocked(v) => return v 腕が blocks()==false を返す。Verdict::Clean は private witness で偽造不能なのに Required::Blocked には対応する制約が無い。塞ぐなら Blocked(Undet) + accessor。condukt/src/maintree.rs:805 は verdict.blocks() で既に防御しているので production の実害は現状なし。
-- verdict.rs:36 と :384 の has exactly one extractor は method に限った話で、Determination::Known が pub variant である以上、直接 match という第2の抽出路がある (repo 内 40+ 箇所)。
-
-完了条件: 散文を実挙動へ合わせる (第4節: 実装を変えたら同じコミットで記述も直す。ここでは記述の側が過大)。可能なら Required::Blocked の payload を Undet へ狭める。拡張トレイト経路は型では塞げないので、塞げない事実を書くか、下の lexical gate 側で拾う。"""
-created_at = 1785969187
-updated_at = 1785969187
-weight = 0.0
-issue_number = 176
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/176"
-rev = 0
-
-[[task]]
 id = "f12c2168"
 title = "check-fail-open.py が Required::Blocked への改名で残余の第二層に盲目になった (836a1aa3 が 47 サイトを改名)"
 project = "/Users/yuki/src/harness"
@@ -14168,4 +14140,153 @@ updated_at = 1790915385
 weight = 0.0
 issue_number = 1035
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1035"
+rev = 0
+
+[[task]]
+id = "357dc659"
+title = "resolving 形のコミットが backlog id を subject で名乗っているのに ticket が pending のまま残る — 実測 7 件 (閉じ漏れを機械検出する導線が無い)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+観測 2026-10-02 (測定点 cde0b6a6)。5b89f0f6 を /flow で着手したところ、既に解決済みだったことから測った。
+
+5b89f0f6 の実体: 完了条件 3 つすべてが landed 済みだった。
+ - 散文を実挙動へ合わせる -> 7306810a (docs(harness-core): verdict.rs names the holes its types do not seal (5b89f0f6))。現在の verdict.rs は『"Not expressible as a method call" holds only for the methods this crate provides.』と書いており、拡張トレイト経路を明示的に認めている。
+ - Required::Blocked の payload を Undet へ狭める -> 490f12c6 (fix(harness-core): Required::Blocked carries Undet, not Verdict (1a6c1c48))。
+ - 塞げない事実を書く -> 『What this does not seal』ブロックが 3 つの穴を列挙し、tests/ui/verdict_known_holes/unsealed_paths.rs が **compile する側** として pin している (穴が穴のままであることをテストが固定しているので、将来誰かが塞いだらこのテストが落ちて散文の更新を強制する)。
+cargo test -p harness-core は 497 passed / 0 failed (bare rc=0)、forge_blocked_clean.rs は should-fail-to-compile で ok。
+
+**測定 — 広いパターンと狭い主張を分ける (第3節)**:
+  pending ids total:           531
+  recent subject に名前が出る: 105  <- 広い。根拠にしてはいけない
+    filing/closing 形:          98  (`chore(backlog): file <id>` 等、起票したから id を名乗っているだけ)
+    resolving 形:                 7  <- done-but-unclosed の候補
+測り方: git log --since='60 days ago' --format='%s' の subject に pending id が出るものを拾い、subject が conventional-commit の fix/feat/docs/refactor/perf/test/build で始まり、かつ file/close/fold/起票 の語を含まないものだけを resolving 形とした (スクリプト: scratchpad/classify.py)。
+
+resolving 形の 7 件 (いずれも **候補であって確定ではない**。部分対応のコミットが id を名乗っている可能性がある):
+  0dc6546f  fix(condukt): abandon --all-stuck は未コミット作業のある worktree を戻さない (5daf0b60 / 0dc6546f)
+  22a72fdf  test(condukt): run スコープ head シグナルの複数 worktree 決定論を behavioural test で固定する (22a72fdf)
+  3aa215e1  fix(blastguard): TMPDIR naming a system dir or a home subtree is not a deletion root (3aa215e1)
+  6267bfbe  test(gate-bypass): amend が ledger に載ることを RED として固定する (6267bfbe)
+  826c29bf  fix(gates): resolve five undetermined->allow paths to deny/ask (826c29bf)
+  c3a98510  feat(donegate): git hook のテスト 3 本を実際に走る場所へ配線する (c3a98510)
+  f12c2168  fix(check-fail-open): flag None on undetermined arms; verify every new hit by test (f12c2168)
+
+実害: /flow が着手してから『既に終わっていた』と分かるので、claim・worktree 同期・テスト実行のコストが空振りする。今回は 1 件で済んだが、候補が 7 件あるということは最大 7 回繰り返す。さらに悪いのは逆方向の誤読で、**pending に残っている件数がキューの実際の残量より多く見える** (533 件という数字が信用できなくなる)。
+
+判定不能として両方の読みを残す:
+ (a) 実在の欠陥 = 閉じ忘れ。commit が id を名乗った時点で ticket を閉じる/報告する導線が無い。
+ (b) 意図的 = コミットは部分対応で、ticket は残りを指している。この場合 ticket の notes に『どこまで landed したか』が書かれているべきだが、書かれているかは未確認。
+見分ける方法: 7 件それぞれについて ticket の完了条件と naming commit の diff を突き合わせる。(b) なら notes に残作業が書かれているはずで、書かれていなければ (a)。
+
+候補 (未裁定):
+ (1) post-commit が subject から 8 桁 hex を拾い、それが pending な backlog id なら『この commit は <id> を名乗っているが ticket は pending のまま』と **報告する** (閉じない)。自動 close は部分対応を done にするので危険。
+ (2) `backlog audit --named-in-commits` のような read-only サブコマンドで候補を列挙する。SessionStart には出さない (533 件規模のノイズになる。7438ea3a の形)。
+ (3) 何もしない。起票規約で『部分対応なら notes に残作業を書く』を徹底する方向。
+
+**この票は閉じ漏れの自動 close を提案していない** — 上記 (b) が実在しうる限り、自動 close は done の嘘になる。"""
+created_at = 1790916464
+updated_at = 1790916464
+weight = 0.0
+issue_number = 1038
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1038"
+rev = 0
+
+[[task]]
+id = "89700493"
+title = "condukt state is-claimed は自分が保持している場合も exit 0 を返すが、flow SKILL は exit 0 を『他セッションが保持 -> 諦めろ』と読む (自分の claim で自分を弾く)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+観測 2026-10-02 (測定点 cde0b6a6、condukt 0.7.198)。/flow を回している最中に踏んだ。
+
+flow SKILL (0.2.17) の 3-1 の a『claim-skip ゲート』は次を指示している:
+  condukt state is-claimed --hashkey <hashkey>
+  **exit 0 (他セッションが既に claim 中) -> その item は諦めて次候補へ**
+
+実測した挙動は『他セッションが』を区別しない。同一 hashkey に対して:
+ - claim 前: {"claimed": false, "hashkey": "a58ccde2f02f39ab", "holder_run": null} / bare rc=0
+ - 自分が claim-task した後: {"claimed": true, "hashkey": "...", "holder_run": "flow-3d44818d-..."} / bare rc=0
+つまり **exit code 0 は『claimed かどうか』ではなく『問い合わせが成功したか』** を表しており、保持者が誰かは stdout の holder_run にしか無い。
+
+実害 2 つ:
+ (1) SKILL を逐語に従う実装は、claim 直後に is-claimed を呼ぶと **自分の claim を他人の claim と誤認して自分の item を諦める**。今回の順序 (is-claimed -> claim-task) では claim 前に呼ぶので助かったが、2 周目や resume 経路で順序が入れ替わると空回りする。
+ (2) 逆に『exit 0 = 空いている』と読む実装を書くと、他セッションが保持している item を奪う。どちらの誤読も exit code だけを見た場合に起きる。
+
+同時に観測した別件 (本票の主題ではないが記録): `is-claimed | tail -2; echo rc=$?` と書くと tail の exit code が出て常に 0 になる。memory verify-gate-exit-codes-directly と同じ形で、ここでも実際に一度踏んだ。
+
+判定不能として両方の読みを残す:
+ (a) 実在の欠陥 = SKILL の散文が実挙動より強い (第4節: 散文↔実装の食い違い)。exit 0 に『他セッションが』という意味は無い。
+ (b) 意図的 = is-claimed は純粋な問い合わせで、保持者の判定は呼び出し側が holder_run を見てやる設計。この場合 **直すべきは SKILL の散文**。
+
+どちらにしても片方は直す必要がある。(b) が正なら flow SKILL 3-1 の a を『exit 0 かつ holder_run が自分の run でないなら諦める』へ書き換える。(a) なら condukt 側で『他者が保持』専用の非 0 を返す (ただし exit code に 3 値以上を載せるのは判定不能との衝突に注意 — 問い合わせ失敗も非 0 なので、失敗と『他者保持』が同じになると第3節の二値問題を再生産する。holder_run を見る (b) の方が筋が良い)。
+
+測り方: 使い捨て project で (1) 未 claim の hashkey、(2) 自分が claim 済み、(3) 別 run が claim 済み の 3 状態を作り、bare exit code と holder_run を記録する。(2) と (3) が exit code で区別できないことが RED。"""
+created_at = 1790916465
+updated_at = 1790916465
+weight = 0.0
+issue_number = 1039
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1039"
+rev = 0
+
+[[task]]
+id = "ff79684e"
+title = "specguard brief は specs/ に spec-loop.toml 1 本しか無いため実質全課題で not-covered を返し、flow の spec-gap ゲートが毎回 escalate して人を止める"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+観測 2026-10-02 (測定点 cde0b6a6、specguard 0.2.76、flow 0.2.17)。5b89f0f6 の着手時に踏んだ。
+
+flow SKILL 3-1.5 の trigger 3 (プリフライト) を実行した結果:
+  specguard brief --json "<課題文の要約>"
+  -> {"matched_without_spec":[],"verdict":"not-covered"} / bare rc=0
+
+rc=0 なので『判定できた上で正典が無い』= divert 候補となり、SKILL の指示どおり condukt policy answer (--approval なし) に掛けると escalate (rc=2) が返り、AskUserQuestion で人を止めた。
+
+ここで測った事実: **specs/ ディレクトリには spec-loop.toml の 1 ファイルしか存在しない**。
+  ls specs/  ->  spec-loop.toml
+  ls specs/*harness-core*  ->  (無し)
+  grep -rl verdict specs/  ->  specs/spec-loop.toml のみ
+つまり per-crate の specforge corpus は実質空であり、`not-covered` は **このリポジトリのほぼ全課題について真**である。specguard の drift-map ストア (specguard map) は別物で、そちらは全 42 crate を spec 化済み (memory drift-map-goal-no-parking) だが、brief はそれを見ていないか、見ていても課題文に対して not-covered を返している。
+
+実害: spec-gap ゲートは『正典が無い課題を盲目投入しない』ための装置だが、corpus が空だと **全件で発火する**。全件で発火するゲートは信号ではなく定常ノイズであり、2 つの悪い方向がある:
+ (1) 毎回 AskUserQuestion が出るので、人間が条件反射で『このまま実装する』を押すようになる。ゲートが儀式化する (CLAUDE.md 第6節が『検証が儀式になる』と呼ぶ形)。
+ (2) 逆に真面目に divert すると、doc comment 1 箇所の修正のために specforge spec の第1号を起こすことになる。これは 2997f08f が speculative/oversized でキャンセルされたのと同じ形。
+今回はユーザー裁定で (1) 側 =『このまま実装する』を選んだ。
+
+判定不能として両方の読みを残す:
+ (a) 実在の欠陥 = brief が参照すべきストアを見ていない。specguard map には 42 crate 分の spec があるのに specs/*.toml だけを見ているなら、covered を返せるはずのものを not-covered と答えている。
+ (b) 意図的 = specforge corpus は本当に空で、brief は正しく『specforge の正典は無い』と答えている。この場合ゲートの設計は正しく、問題は『corpus が空の repo でこのゲートを有効にしている』運用の側。
+
+見分ける方法: specguard brief の実装が読むパスを確認する (specs/*.toml か、specguard map のストアか、両方か)。map 側に harness-core の spec があるのに brief が not-covered を返すなら (a)。
+
+候補 (未裁定):
+ (1) brief が specguard map も参照する。map に spec があれば covered。
+ (2) corpus が空 (= spec-loop.toml のみ) のときは spec-gap ゲートを発火させない。ただし『corpus が空』を『spec が無い』と読むのは判定不能を permissive に倒す向きなので、黙って skip せず『corpus が未配線』として報告する形にする。
+ (3) flow SKILL 側で『この repo は specforge 未配線』を一度だけ宣言して以後 skip する (parked-plugins.json と同じ思想の宣言ファイル)。
+
+**注意**: ここでの安全側は『divert しない』であって『divert する』ではない (SKILL 3-1.5 が明記)。divert は書き込み側の動作なので、判定不能や corpus 空で起こしてはならない。したがって (2)(3) は緩めではない。"""
+created_at = 1790916467
+updated_at = 1790916467
+weight = 0.0
+issue_number = 1040
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1040"
 rev = 0

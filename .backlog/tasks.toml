@@ -13353,3 +13353,37 @@ updated_at = 1790980211
 weight = 0.0
 issue_number = 1070
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1070"
+
+[[task]]
+id = "9dab71f8"
+title = "test_check_plugin_rollout.py の ParkedRealDeclaration / RetiredRealDeclaration が cwd=scripts/ で実行すると赤になる（repo root からは緑）"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-03 @abd9b7c6: cd scripts && python3 -m unittest test_check_plugin_rollout で 2 failed (test_the_shipped_declaration_is_valid x2)。repo root から python3 -m unittest discover -s scripts -p test_check_plugin_rollout.py は全件 OK。読み (a) REPO=os.getcwd() 依存でテストが実ファイルを見つけられない＝cwd で赤緑が変わるテスト基盤の欠陥 / (b) repo root 実行が規約で仕様どおり。見分け方: 該当テストが参照するパスが REPO 由来か確認。"
+created_at = 1790981488
+updated_at = 1790981488
+weight = 0.0
+issue_number = 1083
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1083"
+
+[[task]]
+id = "f92a600d"
+title = "cargo test -p condukt で 1 件の未特定 flake を観測（4 回中 1 回、名前未取得）"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flaky",
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-03、branch flow-dc66/condukt-fixture (abd9b7c6 + precedent/escalate fixture 修正)。集計で 871 passed / 1 failed が 1 回、その後 4 回連続 0 failed。失敗テスト名は未取得。読み (a) a6608aa0 と同類の pid 名 temp fixture 再入が他モジュールにも残る / (b) 並行セッションの cargo test と固定パス fixture の干渉。見分け方: 20 回回して FAILED 行を保存し、temp_dir()+process::id() 命名の fixture を grep。"
+created_at = 1790981495
+updated_at = 1790981495
+weight = 0.0
+issue_number = 1084
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1084"

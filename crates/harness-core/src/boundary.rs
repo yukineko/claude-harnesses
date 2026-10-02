@@ -20,7 +20,7 @@
 //!
 //! | situation | answer |
 //! |---|---|
-//! | the path is not there | `Known` (empty / `None`) — a real observation |
+//! | the path is not there | `Known` (empty / `None`) — a real observation; [`read_dir_entries_checked`] keeps it apart from an empty directory |
 //! | the path is there but unreadable | `Undetermined` — carries why |
 //! | the process ran and exited non-zero | `Known` — the code is the caller's to judge |
 //! | the process could not be run, or was killed by a signal | `Undetermined` |
@@ -72,6 +72,52 @@ pub fn read_dir_entries(dir: &Path) -> Determination<Vec<PathBuf>> {
     };
 
     collect_dir_entries(dir, iter.map(|entry| entry.map(|entry| entry.path())))
+}
+
+/// [`read_dir_entries`], but an absent directory is `Known(None)` instead of
+/// `Known(vec![])`.
+///
+/// The three answers are distinguishable from the return value alone:
+///
+/// | situation | answer |
+/// |---|---|
+/// | `dir` does not exist (`NotFound`) | `Known(None)` |
+/// | `dir` exists; zero or more entries were all read | `Known(Some(entries))` |
+/// | anything else, or one entry failed mid-iteration | `Undetermined` |
+///
+/// [`read_dir_entries`] folds the first two rows into `Known(vec![])`, which is
+/// right for a caller that only walks the entries and wrong for one that must
+/// tell a mistyped path from an empty directory (backlog 66fb376a: blastguard
+/// retro's `--dir` re-derived it with a separate `is_dir()` probe, which is a
+/// second observation racing the first). The `Option` mirrors
+/// [`read_to_string`]: absence is a real observation, and the caller decides
+/// what it means for its own check. `read_dir_entries` and its callers are
+/// unchanged; this is an additional entry, not a replacement.
+///
+/// Sorting and the all-or-nothing treatment of a mid-iteration error are the
+/// same as [`read_dir_entries`] (they share `collect_dir_entries`). Under the
+/// `fault-injection` feature it honours `fault::Entry::ReadDir`: it is the
+/// same observation as `read_dir_entries`, so a plan that blinds directory
+/// listings blinds both, and `fault::FaultPlan::blind` reaches it without a
+/// new `Entry` variant.
+pub fn read_dir_entries_checked(dir: &Path) -> Determination<Option<Vec<PathBuf>>> {
+    #[cfg(feature = "fault-injection")]
+    if let Some(why) = fault::injected(fault::Entry::ReadDir, &dir.display()) {
+        return Determination::undetermined(why);
+    }
+    let iter = match std::fs::read_dir(dir) {
+        Ok(iter) => iter,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Determination::known(None),
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "cannot list {}: {e} — treating this as an absent or empty directory \
+                 would report an unexamined path as examined",
+                dir.display()
+            ))
+        }
+    };
+
+    collect_dir_entries(dir, iter.map(|entry| entry.map(|entry| entry.path()))).map(Some)
 }
 
 /// The mid-iteration half of [`read_dir_entries`], split out so the per-entry
@@ -524,7 +570,9 @@ pub mod fault {
     /// The four boundary IO entries a plan can fault.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub enum Entry {
-        /// [`super::read_dir_entries`]
+        /// [`super::read_dir_entries`] and [`super::read_dir_entries_checked`].
+        /// Both are the same directory-listing observation, so they are one
+        /// entry.
         ReadDir,
         /// [`super::read_to_string`]
         ReadFile,
@@ -740,6 +788,72 @@ mod tests {
         let denied = fs::read_dir(&locked).is_err();
         let result = read_dir_entries(&locked);
         chmod(&locked, 0o755); // restore before any assert so tempdir can clean up
+        assert!(
+            denied,
+            "precondition: chmod 000 must deny this uid (running as root?)"
+        );
+
+        let why = expect_undetermined(result);
+        assert!(
+            why.contains("locked"),
+            "the reason must name the path it could not read: {why}"
+        );
+    }
+
+    // ---- read_dir_entries_checked ----------------------------------------
+
+    #[test]
+    fn read_dir_entries_checked_missing_path_is_known_none() {
+        let dir = tempdir().unwrap();
+        let missing = dir.path().join("no-such-subdir");
+        assert!(!missing.exists());
+        assert_eq!(
+            expect_known(read_dir_entries_checked(&missing)),
+            None,
+            "an absent directory must be Known(None), not an empty listing"
+        );
+    }
+
+    #[test]
+    fn read_dir_entries_checked_existing_empty_dir_is_known_some_empty() {
+        let dir = tempdir().unwrap();
+        assert_eq!(
+            expect_known(read_dir_entries_checked(dir.path())),
+            Some(Vec::new()),
+            "an existing empty directory must be Known(Some([])), not absence"
+        );
+    }
+
+    #[test]
+    fn read_dir_entries_checked_lists_the_same_entries_as_read_dir_entries() {
+        let dir = tempdir().unwrap();
+        for name in ["zeta.txt", "alpha.txt"] {
+            fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        fs::create_dir(dir.path().join("beta-dir")).unwrap();
+        let checked = expect_known(read_dir_entries_checked(dir.path()));
+        let plain = expect_known(read_dir_entries(dir.path()));
+        assert_eq!(checked, Some(plain.clone()));
+        let names: Vec<String> = plain
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["alpha.txt", "beta-dir", "zeta.txt"]);
+    }
+
+    /// An existing-but-unreadable directory is neither absent nor empty.
+    #[cfg(unix)]
+    #[test]
+    fn read_dir_entries_checked_unreadable_dir_is_undetermined() {
+        let dir = tempdir().unwrap();
+        let locked = dir.path().join("locked");
+        fs::create_dir(&locked).unwrap();
+        fs::write(locked.join("secret.txt"), b"contents").unwrap();
+        chmod(&locked, 0o000);
+
+        let denied = fs::read_dir(&locked).is_err();
+        let result = read_dir_entries_checked(&locked);
+        chmod(&locked, 0o755);
         assert!(
             denied,
             "precondition: chmod 000 must deny this uid (running as root?)"

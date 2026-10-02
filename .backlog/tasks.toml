@@ -13473,3 +13473,65 @@ updated_at = 1790909988
 weight = 0.0
 issue_number = 1013
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1013"
+
+[[task]]
+id = "d47af80e"
+title = "fugu-router sync: 成功時の出力も全て stderr なので、SessionEnd で毎回エラーのように見える"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+ユーザー報告「fugu-router sync がエラーをだしている (このマシンで SessionEnd したとき)」の最有力原因。
+
+実測 2026-10-02、測定点 b478fdcf、配布版 0.1.31:
+  $ fugu-router sync 2>/dev/null       → stdout は空
+  $ fugu-router sync 2>&1 >/dev/null   → stderr:
+      pulling from remote…
+      pull done.
+      nothing to push (already up to date with the remote).
+  exit 0
+
+つまり成功した sync も毎回 SessionEnd で stderr に 3 行書く (cmd_sync / sync_inner の eprintln!: "pulling from remote…" / "pull done." / "pushed local records." / "pushed (no new local records, but the branch was ahead)." / "committed: {msg}" / "nothing to push (…)" 全て eprintln!)。SessionEnd hook の stderr が表示される環境では、正常動作が「エラー」として毎セッション見える。
+
+これが stderr である理由は launcher の docstring に明示されている: 「sync SessionEnd: Claude Code discards stdout/JSON; stderr is the only channel」。stdout が捨てられるので stderr を選んだのは正しいが、その結果「成功」と「失敗」が同じ stream・同じ見た目になった。
+
+裏付け (同一調査で確定した事実):
+- ~/.fugu-router/ の mtime は 2026-07-01 14:18:08 のままで sync-error.json が一度も作成/削除されていない = cmd_sync が Err を返したことは 7/1 以降一度も無い。よって報告されたエラーは失敗ではない。
+- 手動実行は exit 0、harvest+sync で 2.3 秒 (cold cursor でも 3.1 秒) = timeout でもない。
+- 全 transcript を grep しても surface された失敗通知は 0 件。
+
+是正案 (未検証・要判断): 成功時は黙る (verbose/-v で出す)、あるいは成功行だけ stdout に出して stderr は失敗専用にする。ただし「stdout は捨てられる」制約があるので、成功時は何も出さないのが最も素直。いずれにせよ「毎回出る stderr」は §1 の逆 — 常時出る警告は読まれなくなる。"""
+created_at = 1790910018
+updated_at = 1790910018
+weight = 0.0
+issue_number = 1014
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1014"
+
+[[task]]
+id = "e19b2d0a"
+title = "fugu-router sync: hook の 60s 予算が sync 自身の内部予算 (pull 30s + push 30s + local 10s×4) より小さく、外部 kill されると marker を一切残さない"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+syncstate の marker は cmd_sync が Err を返す経路でしか書かれない (match の Err arm)。hook が timeout で外部から kill された場合・panic した場合は record() に到達しないので、ストア側に痕跡がゼロになり「走って失敗した」ことが観測不能になる。これは v0.1.27/v0.1.28 が閉じたはずの §1/§3 の暗転の、kill 経路版。
+
+予算の算術 (crates/fugu-router/src/main.rs:1176-1178 と hooks/hooks.json):
+- GIT_NETWORK_TIMEOUT = 30s (pull, push, clone)
+- GIT_LOCAL_TIMEOUT = 10s (add ×2, diff, commit, rev-list)
+- SessionEnd hook の timeout = 60s、しかもコマンドは `harvest; sync` で harvest と共有
+
+→ pull と push が両方「遅いが成功する」場合 sync 単体で最大 60s 近く使い、harvest (実測 3.1s) と local ops を足すと 60s を超える。超えた時点で Claude Code が hook を kill → ユーザーには失敗した hook として見えるが、marker は書かれない。
+
+実測 2026-10-02、測定点 b478fdcf: 正常時は harvest+sync で 2.3s、cold cursor の harvest 単体で 3.1s なので平常は余裕がある。遅延時の挙動は未観測 (ネットワークを細らせる実験はしていない)。
+
+是正案 (未検証): (a) 作業開始前に「sync started at <ts>」の breadcrumb を書き、成功時に消す → kill されても痕跡が残る。(b) hook の timeout を内部予算の合計より大きくする。(c) 内部 timeout を hook 予算に収まるよう縮める。どれが正しいかは、まず (a) で kill が実際に起きているかを観測してから決める。"""
+created_at = 1790910020
+updated_at = 1790910020
+weight = 0.0
+issue_number = 1015
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1015"

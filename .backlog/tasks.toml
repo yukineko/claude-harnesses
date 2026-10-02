@@ -694,26 +694,6 @@ issue_number = 93
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/93"
 
 [[task]]
-id = "1b525a2c"
-title = "5b33b4cd の効果測定: 2 ラウンド連続で converging:true を観測する (build != validate)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-Measurement half of 5b33b4cd, split out because it cannot be satisfied by shipping — it needs two real Continuous-Audit rounds run under the new rules. Shipped in 0558db6f (overwatch 0.2.15, deployed and live-verified): audit-round record refuses regression_tests_added < confirmed, continuous-audit.sh stops on it via run_ow_gate, SKILL.md Step 3.5 mirror sweep is mandatory. What remains is purely observation: run two rounds and check audit-metrics reports converging:true both times. Baseline to beat, from the ledger that motivated the item: new_findings 5,1,13,0,14,15 with converging:false and round 2026W29 at confirmed:10 / regression_tests_added:0. Caveat when reading the result: closure_rate is now an acceptance precondition and will read 1.0 for every new round, so it carries no signal — judge convergence ONLY by the new_findings trend, which is what is_converging actually uses. A rise in new_findings is not automatically failure either: Step 3.5 is expected to surface twins that previously went unharvested, so an early round may legitimately go UP before it comes down.
-
-USER RULING 2026-09-24: run 3+ real Continuous-Audit rounds under the DEFAULT window (no --window 2, no goal redefinition). Each round closes every CONFIRMED with a regression test before record. Record from the MAIN repo root (ledger is keyed by cwd; a worktree cwd writes a different ledger). Round 2026W39 (new=25, confirmed=19, unverified=6, tests=19) is the first of the series; converging still NO.
-
-【計測 2026-09-29 @8ddf4504】overwatch audit-metrics: rounds 7。直近 3 ラウンド = 2026W29 (new=14, closure=0.00) / 2026W29b (new=15, closure=1.00) / 2026W39 (new=25, confirmed=19, unverified=6, tests=19, closure=1.00)。converging (last 3 rounds): NO。新規 finding は減っておらず増加。closure=1.00 は 5b33b4cd のルール (tests >= confirmed) と整合するが、完了条件の「2 ラウンド連続 converging:true」は未達。次の Continuous-Audit ラウンド後に再計測する。"""
-created_at = 1785341708
-updated_at = 1790678246
-weight = 0.0
-issue_number = 94
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/94"
-
-[[task]]
 id = "8fe62654"
 title = "overwatch audit-round ledger has no integrity check: a boundary truncation reads as a shorter history"
 project = "/Users/yuki/src/harness"
@@ -13751,3 +13731,39 @@ updated_at = 1790915326
 weight = 0.0
 issue_number = 1034
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1034"
+
+[[task]]
+id = "d9821158"
+title = "claim を取った driver が task を辞退できない — backlog に lease 解放の CLI が無く、最大 1 時間キューが塞がる"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "queue-liveness",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "実測 2026-10-02、測定点 61673d0a。flow session c9af4c58 で 1b525a2c を next --claim で取得したのち、計測不能と判定してユーザー裁定で pending へ戻した。backlog edit 1b525a2c --status pending は 'updated: 1b525a2c' を返すが、直後の backlog list は依然 '1b525a2c p1 claimed' と表示する。原因: lease は ~/.backlog/claims/<project-slug>.json にしか存在し (実測: c91e8ef8d914352d.json に entries[] として id/hashkey/title/project/claimed_at/checkout/store/pid が残る)、status 表示はそこから導出されるため、tracked store 側の status を pending にしても解放されない。backlog --help のサブコマンド一覧に release / unclaim / claim 相当は存在しない (add overlap list next done fail sync edit session-start install uninstall merge-driver lock driver help)。condukt state release-task は別 ledger (condukt 側) を見るので無効 — 実測で 'released 0 task claim(s)' を返した。結果、lease は CLAIM_STALE_SECS=1 時間で自然失効するまで他の driver にも自分にも配られない。両方の読み: (a) 実在の欠陥 = 辞退経路が設計から漏れている (b) 意図的 = 辞退は稀で TTL 失効で十分という判断。見分け方: flow SKILL.md が sink で condukt state release-task を解放手段として指定している点を読む — 選択の lease は backlog next --claim が作るのに、解放は condukt 側の ledger を叩くよう書かれており、2 つの ledger を混同している。これは散文側の誤りでもあるので (ユーザー常設裁定 2026-10-02: 実装が正しければ散文を直す) どちらを直すかの判断が必要。影響: 自律ループが『この task は今やれない』と正しく判断するたびに、その task が最大 1 時間ダークになる。1b525a2c は 2026-10-02 のユーザー裁定で ab34ec88 待ちになったので、1 時間後に再度 driver へ配られて同じ判定を繰り返す可能性がある。是正案: backlog claim release --hashkey <hk> (または next --unclaim) を足し、flow SKILL の sink 手順をそれに合わせる。"
+created_at = 1790915564
+updated_at = 1790915564
+weight = 0.0
+issue_number = 1036
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1036"
+
+[[task]]
+id = "704dde46"
+title = "specforge draft が marker 欠落で exit 3 — nested claude が無出力終了しても draft 不能の原因が報告されない"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "specforge",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """実測 2026-10-02、測定点 5aadf2cf、flow session c9af4c58。specforge draft --id jev-advisory を実行したところ 4 分 34 秒以上 無出力のまま走り続け、最終的に stderr へ "specforge: WARN marker '<<<SPEC_DRAFT>>>' missing in agent output; cannot assess. No draft, no sentinel." / "draft exit=3" を出して終了した。specs/jev-advisory.toml は生成されなかった。nested claude は --print --allowedTools Read Glob Grep Bash(git diff *) --disallowedTools Edit Write NotebookEdit WebFetch で起動されている。問題は 2 つ: (1) agent の出力が空だったのか、出力はあったが marker が無かったのかを呼び出し側が区別できない — WARN 文面は後者を前提にしているが、前者 (nested claude が無出力終了) でも同じ経路に落ちるので、判定不能と観測済みの marker 欠落が同じメッセージに潰れている (CLAUDE.md 第3節)。(2) agent の生出力が保存されないので事後診断ができない。是正案: nested claude の stdout/stderr を生で落とし、空出力・非0終了・marker 欠落を別メッセージ (できれば別 exit code) に分ける。回避策として本件の spec は手書きした (specs/jev-advisory.toml 冒頭にその事実を記載)。"""
+created_at = 1790915800
+updated_at = 1790915800
+weight = 0.0
+issue_number = 1037
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1037"

@@ -14529,3 +14529,234 @@ title = "specforge draft が marker 欠落で exit 3 — nested claude が無出
 touched_files = []
 updated_at = 1790915800
 weight = 0.0
+
+[[task]]
+created_at = 1790916935
+id = "af1565aa"
+issue_number = 1041
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1041"
+notes = '''
+観測 2026-10-02 (測定点 2b7778cc、blastguard 0.2.97)。自分が実際に踏んだ拒否を起点に、実装を読み blastguard を直接走らせて測った。
+
+## 症状
+
+`: > $S/resolved.txt` が deny される。逐語:
+
+  '> $S/resolved.txt' destroys the file's current contents and `$S/resolved.txt` contains a shell expansion, so blastguard cannot tell which file this names, let alone whether its contents are recoverable
+
+拒否そのものは正しい向き (判定不能 -> 制限側、第3節)。問題は **判定不能ではないケースまで同じ扱いになっている**ことである。
+
+## 実測 — 同じ書き込みが綴り方だけで verdict が変わる
+
+blastguard バイナリに PreToolUse payload を直接食わせて測った (スクリプト: scratchpad/bg_probe.py, bg_probe2.py)。
+
+展開を含む形 (すべて **deny**、理由テキストは 8 件すべて同一):
+  A  cd <repo>; S=<scratchpad>\n : > $S/probe_a.txt     <- 同一コマンドでリテラル代入。解決可能
+  C  S=<scratchpad>; : > $S/probe_c.txt                 <- 同上 (1 行)
+  D  : > $S/probe_d.txt                                 <- 代入がどこにも無い。真に不明
+  E  true && S=<scratchpad>; : > $S/probe_e.txt         <- && でガードされた代入
+  F  S=$(mktemp -d); : > $S/probe_f.txt                 <- RHS 自体が展開
+  G  cd <repo>; S=<scratchpad>\n : > $S/bg_probe.py     <- 既存の untracked ファイル
+  H  S=/etc; : > $S/sudoers.d/evil                      <- **危険なケース**
+  I  : > $HOME/.ssh/id_ed25519                          <- guard の doc が引く回帰ケース
+
+同じ対象を手で展開した形:
+  K  : > <scratchpad>/probe_k_absent.txt   -> **ALLOW**  (A の解決後の姿)
+  L  : > <scratchpad>/bg_probe.py          -> **ASK**    (G の解決後の姿。confined to /tmp、blast radius bounded)
+  M  : > /etc/sudoers.d/evil               -> **DENY**   (H の解決後。理由が 'writes into a system directory' に改善)
+  N  : > /home/.../.ssh/id_ed25519         -> **DENY**   (I の解決後。理由が 'it exists, and it is not inside a git work tree' に改善)
+  O  cd <repo>; : > README.md              -> **ALLOW**  (tracked clean + 自分のツリー)
+
+つまり **A と K は同一の filesystem 効果でありながら deny と allow に分かれる**。verdict が効果ではなく綴りに依存している。向きは安全側なので fail-open ではないが、「検査した」と「検査できなかった」を区別するという model.rs の主題からすると、ここは『解決できたのに解決しようとしなかった』ケースが『解決できない』と同じ箱に入っている。
+
+## 原因 — 機構は既にあり、1 アームにしか配線されていない
+
+crates/blastguard/src/reversible.rs:254 が IO の前に打ち切る:
+
+  if target.contains('$') || target.contains('`') {
+      return Recovery::Undetermined(...)
+  }
+
+この早期 return 自体は正当で、doc がその理由を書いている (逐語): 「AN UNEXPANDED TARGET IS NOT AN ABSENT ONE. `$HOME/.ssh/id_ed25519` names a real file, but the literal text with `$HOME` still in it names nothing, so `symlink_metadata` fails and the absence row would report `NothingToDestroy`」。filesystem に聞くと「無い」= 安全、に化ける回帰を塞いだもの。**撤去してはいけない。**
+
+欠けているのは、その手前で **解決を試みる段**である。そしてその解決器は既に同じ crate にある:
+
+  crates/blastguard/src/detect.rs:3509  fn resolve_expanded_command_word(cmd, seg_idx, word) -> CommandWordOrigin
+  detect.rs:2739  fn assignment_execution_is_unconditional(segs, idx) -> bool
+  detect.rs:2812  fn opens_here_document(seg) -> bool
+  detect.rs:3254  fn unquote_literal_value(raw) -> Option<String>
+  detect.rs:3351  fn segment_may_rebind(seg, name) -> bool
+  detect.rs:2589  fn split_segments_with_separators(cmd) -> Vec<SeparatedSegment>
+
+`CommandWordOrigin` は既に三値 (Literal / NoReachingAssignment / AssignedButUnknowable) で、doc が『Three answers, not two — the same reason `Decision::Ask` exists』と model.rs を引いている。E (ガードされた代入)・F (RHS が展開)・配列・here-doc body・後続の rebind まで全部モデル済み。
+
+**配線が 1 本だけである事実は doc comment が自分で書いている** (detect.rs:2434 付近、逐語):
+
+  // WIRED INTO EXACTLY ONE DECISION ARM: the CA-blastguard-017 head check in
+  // [`unknown_wrapper_ask`]. ... No other rule in this file consults anything below.
+
+そして正しい使い方も明文化されている (逐語):
+
+  // That arm uses the answer SUBSTITUTIVELY, never as a skip: a
+  // [`CommandWordOrigin::Literal`] replaces the expansion token and the rewritten
+  // segment is re-judged by the full rule engine, so a head that resolves to a
+  // destructive program comes out DENY. Merely suppressing the ask on finding a
+  // literal would re-open CA-blastguard-017 in a new place
+
+**この機構が実際に動いていることの実測** (ケース J): `BIN=/bin/rm; $BIN -rf /tmp/whatever` は `$BIN` を `/bin/rm` へ解決し、再判定して recursive rm として扱い、confinement 解析つきの **ask** に到達した。command word では動いている。redirect target では試みられていない。
+
+## なぜこれは緩めではないか
+
+substitutive 規律のおかげで、解決は危険側を通さない。実測が示すとおり H は解決すると `/etc/sudoers.d/evil` になり `system_path_block` が発火して **deny のまま、理由はより正確になる**。N も `/home/.../.ssh/id_ed25519` として「存在し、git work tree の外」で deny。D と F は解決できないので従来どおり deny。**allow/ask へ動くのは『解決できて、かつ解決先が安全と判定された』ものだけ** である。
+
+## 既に裁定済みで、やってはいけないこと
+
+detect.rs:1618 付近の逐語コメントが、安易な代替案を実測つきで却下している:
+
+  // NOT SPLIT THREE WAYS HERE, deliberately. `Undetermined` and `Unrecoverable`
+  // both fall through to the Deny below ... Splitting them was tried and backed
+  // out. ... every relative target in an unscoped `detect::detect` call is
+  // undetermined for want of a cwd, so the split moved about a dozen established
+  // denies to asks ... (2067 real commands: 163 non-allow either way, the split
+  // only shifting 24 of them from deny to ask)
+
+つまり **「Undetermined を Ask に落とす」という修正は禁じ手**。この票が提案しているのは三値化ではなく **解決の前置** であり、Undetermined の扱いは一切変えない (解決できなければ今と同じ Undetermined -> deny)。
+
+## 候補 (未裁定)
+
+(1) **推奨**: redirect target 抽出の段 (detect.rs:1580 の `reversible::probe` 呼び出しの手前、`place_redirect_target` が相対パスを cwd で再表現しているのと同じ位置) で、target が単一変数参照なら `resolve_expanded_command_word` と同じ解決器に通し、`Literal` が返ったらそのテキストに置換してから従来の全判定を流す。`NoReachingAssignment` / `AssignedButUnknowable` は現状どおり reversible.rs:254 の Undetermined に落ちる。reversible.rs の早期 return は **残す** (解決できなかった target はそこで止まるべき)。
+(2) 解決器を `pub(crate)` にして reversible.rs 側から呼ぶ。実装は小さいが、reversible.rs は「このパスの bytes は戻せるか」だけを答えるモジュールなので、shell 構文の解釈を持ち込むのは責務違反。(1) の方が層が正しい。
+(3) target が `$` を含む場合に限り `--scope` 相当の情報から解決する。却下: 情報源が増えるだけで、同一コマンド内の代入という最も多いケースを拾えない。
+
+## 別軸として記録 (この票の範囲外)
+
+ケース L が示すとおり、解決後も **session scratchpad 内の既存ファイルの truncate は ask になる**。blastguard には scratchpad の概念が無い (`grep -rn 'scratchpad\|claude-1000' crates/blastguard/src/` は **0 ヒット**)。ask は妥当 (未コミットの作業を本当に壊す) が、scratchpad は harness が「permission prompt なしに使える」と宣言している領域なので、別票で扱う価値がある。本票では scratchpad の扱いを変えない。
+
+## 測り方 (RED -> GREEN)
+
+利害関係のない agent に、上の A〜O を behavioural test として書かせる (第2節 (a))。RED として固定すべきは:
+ - A/C/G が deny であること (現状) -> 修正後は K/L と同じ verdict になること
+ - H が deny のまま、かつ理由が 'writes into a system directory' に変わること
+ - D/F/E/I が deny のまま、理由が現状のまま変わらないこと (回帰の有無を見る本体)
+ - J (command word 経路) が一切変わらないこと
+対照として、detect.rs の既存 2067-command コーパスで allow/ask/deny の分布が『A 型が deny から外れる分』以外は変わらないことを確認する。GATE crate なので rollout は `--canary` が必要。'''
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+rev = 0
+status = "pending"
+tags = [
+    "worktree-hygiene",
+    "p1",
+]
+title = "blastguard の truncating-redirect は target が展開を含むと一律 deny するが、同一コマンド内のリテラル代入を解決する機構は既に crate 内にあり command word の 1 アームにしか配線されていない (同じ書き込みが綴り方だけで allow/deny に分かれる)"
+touched_files = []
+updated_at = 1790916935
+weight = 0.0
+
+[[task]]
+created_at = 1790916972
+id = "1d8cf44e"
+issue_number = 1042
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1042"
+notes = '''
+観測 2026-10-02 (測定点 2b7778cc、blastguard 0.2.97)。af1565aa の調査中に別軸として分離したもの。
+
+harness の環境宣言は session scratchpad を次のように述べている (逐語): 'it is session-specific, isolated from the project, and can generally be used without permission prompts'。
+
+一方 blastguard のソースに scratchpad の概念は存在しない:
+  grep -rn 'scratchpad\|claude-1000' crates/blastguard/src/*.rs   ->  **0 ヒット**
+
+実測 (スクリプト: scratchpad/bg_probe2.py、ケース L):
+  : > /tmp/claude-1000/<project slug>/<session id>/scratchpad/bg_probe.py
+  -> **ask**
+  逐語: 'truncating redirect is confined to /tmp — a safe root for this session (its project tree, its worktree, or a temp dir), and every target (...) resolved to a real path strictly inside it, symlinks included. The blast radius is bounded, so this is a question rather than a refusal'
+
+対照 (ケース K): 同じディレクトリの **存在しない** ファイルへの truncate は **allow**。つまり違いは『既存の bytes を壊すか』だけで、判定自体は筋が通っている。
+
+判定不能として両方の読みを残す:
+ (a) 実在の欠陥 = scratchpad は harness が ephemeral と宣言した領域であり、そこに置いた中間ファイルを上書きするたびに ask が出るのは、ゲートが守るべきものを守っていない (壊れるのは自分が 5 分前に書いた中間ファイルだけ)。実害として、スクリプトを書き直して再実行する通常の反復が毎回 prompt を出す。
+ (b) 意図的な仕様 = ask はすでに『refusal ではなく question』として最も弱い形になっており、/tmp confined の説明文を出している。未コミットの作業を壊す可能性は scratchpad でも真なので (長時間かけて組んだ中間結果が入っていることはある)、question のままにしておくのが正しい。
+
+見分ける方法: scratchpad 内の既存ファイル truncate が実運用で何回 ask を出しているかを数える。blastguard の approval memory (approve.rs) と retro (retro.rs) に記録があるなら、そこから『scratchpad パスへの truncating redirect の ask 回数』と『そのうち拒否された回数』を出す。**拒否が 0 ならそれは ask が何も判定していない証拠**であり (a) に寄る。拒否が出ているなら (b)。
+
+候補 (未裁定):
+ (1) scratchpad を『confined かつ ephemeral』な第 3 の root として扱い、truncating redirect を allow にする。scratchpad のパスは環境から与えられるので推測ではない。ただし blastguard は現在 cwd と project root からしか root を導いていないので、入力の増設が必要。
+ (2) 何もしない。ask は最も弱い形であり、頻度が問題なら approval memory が同じ shape を記憶して 2 回目以降を黙らせる設計が既にある (approve.rs) — それが効いているかを先に測る。
+ (3) ask の理由文に『これは scratchpad なので失うのは中間ファイルだけ』という一文を足すだけにする。判定は変えず、人間の判断材料を増やす。
+
+**af1565aa とは独立**: あちらは『展開を解決しないので判定が綴りに依存する』という話で、こちらは『解決した後の判定が妥当か』という話。af1565aa を直すとこのケースが ask として可視化される (今は deny に隠れている) ので、順序は af1565aa が先。'''
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+rev = 0
+status = "pending"
+tags = [
+    "worktree-hygiene",
+    "p3",
+]
+title = "blastguard は session scratchpad を知らないため、harness が 'permission prompt なしに使える' と宣言している領域の既存ファイル truncate が ask になる"
+touched_files = []
+updated_at = 1790916972
+weight = 0.0
+
+[[task]]
+created_at = 1790917448
+id = "f39025e6"
+issue_number = 1043
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1043"
+notes = '''
+観測 2026-10-02 13:58 JST (測定点 2b7778cc)。別セッション c9af4c58 の進行中 merge を、自分の merge が `error: Merging is not possible because you have unmerged files.` で弾かれたことをきっかけに観測した。**介入はしていない** (condukt policy answer --conflict が risk=high / reversible=low で block を返したため)。
+
+## 観測した状態 (すべて read-only で確認)
+
+  .git/MERGE_HEAD      = de31fa0e  (branch session-c9af4c58)
+  .git/MERGE_MSG       = "Merge session-c9af4c58: jev advisory wrapper (0.1.1) + spec + 統合シーン計画、1b525a2c 削除"
+  MERGE_HEAD の mtime  = 2026-10-02 13:55:33  (観測時刻との差 2分47秒 = 進行中)
+  unmerged path        = .backlog/tasks.toml  (git diff --diff-filter=U)
+  index stages         = stage1/stage2/stage3 すべて存在
+  conflict markers     = **0 本**  (grep -c '^<<<<<<<\|^=======\|^>>>>>>>' が 0)
+  TOML として          = 正常に parse する (task エントリ 538 件)
+
+決定的な照合:
+  作業ツリーの .backlog/tasks.toml は **stage2 (ours) とバイト同一** (diff -q が一致)
+  stage3 (theirs) には d9821158 が 1 箇所、704dde46 が 1 箇所 存在する
+  作業ツリーには d9821158 が **0 箇所**、704dde46 が **0 箇所**
+
+つまり **theirs 側の起票 2 件が解決結果から完全に落ちている**。さらに MERGE_MSG が削除したと書いている 1b525a2c は作業ツリーに 1 箇所残っている (ただし他チケットの notes からの参照である可能性があるので、これ単独を欠陥の証拠にはしない。stage3 には 3 箇所ある)。
+
+## なぜこれが fail-open か (第1節)
+
+conflict marker が 1 本も無く、TOML として正常に parse し、見た目に壊れていない。人間がファイルを開いて確認しても『解決済み』に見えるし、`git add .backlog/tasks.toml` は何の警告も出さない。**沈黙が『問題なし』と読める**形であり、CLAUDE.md 第1節が「沈黙は許容される degrade ではない」と名指しするものそのもの。
+
+実害: その commit が landed した瞬間、session-c9af4c58 が起票した 2 件は **どこにも残らない**。backlog は起票を唯一の永続記録として扱う設計 (flow のハードルール「気づいたことは常に起票する」) なので、起票が消えることはその観測が永久に失われることを意味する。
+
+## 判定不能として両方の読みを残す
+
+(a) **実在の欠陥 = merge driver が片側を落としている。** `.gitattributes:55` が `.backlog/tasks.toml merge=backlog` を宣言し、`merge.backlog.driver` は設定されている (下記)。driver が走って marker 無しの出力を出し、かつ非 0 で終了したなら git は path を unmerged のまま残すので、観測された状態と整合する。既存票 e3403964 (「merge-driver drops one side's notes」) と同じクラスだが、あちらは notes の欠落、こちらは **task 行そのものの欠落**。
+(b) **意図的ではないが driver のせいでもない = 相手セッションが手で解決途中。** marker を消して片側を採用した直後で、まだ theirs をマージし戻していない状態かもしれない。この場合 driver は無罪で、観測は単に「作業途中を覗いた」だけになる。
+
+**見分ける方法**: 使い捨て repo で `.gitattributes` と `merge.backlog.driver` を同じに配線し、両ブランチが tasks.toml の末尾に別のタスクを append した状態で merge する。(1) driver の bare exit code、(2) 出力に両側の id が含まれるか、(3) git が path を unmerged に残すか、を記録する。両側が残れば (b)、ours のみなら (a) で、それが本票の RED。
+
+## 併せて観測した driver の版ずれ (5cd736b6 の腐食が再発している)
+
+  git config --get merge.backlog.driver
+  -> '/home/hiroyuki_nakayama/.claude/plugins/cache/yukineko/backlog/0.3.22/bin/backlog-linux-x86_64' merge-driver %O %A %B
+
+2026-10-02 の前半に 0.3.24 へ張り替えたはずのものが **0.3.22 を指している**。0.3.22 のバイナリは prune されずに残っているので driver は起動はする (ls で存在確認済み、Oct 2 11:56)。したがって『動かない』のではなく『古い版が動く』。本票の (a) が正なら、0.3.22 の driver 実装が原因である可能性があり、0.3.24 で直っているかどうかを上の測り方で確認する価値がある。
+
+誰が 0.3.22 へ戻したかは観測できていない (`backlog merge-driver --install` を古い版のバイナリから打てばこうなる)。版をパスに焼き込む設計そのものが 5cd736b6 の主題。
+
+## やってはいけないこと
+
+**他セッションの進行中 merge を解決しない。** 本票の起票者はそれを試みず、理由を記録した: `condukt policy answer --conflict --risk high --reversible low --confidence low` が **exit 3 = block** を返した (risk=high かつ reversible=low は --approval でも緩まない無条件 block)。CLAUDE.md 第8節が「main の index を 2 セッションが共有した場合」を git が救えない唯一の競合と呼んでいるのがこの状態であり、横から作業ファイルを書き換えれば相手がいま編集している内容を壊す。'''
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+rev = 0
+status = "pending"
+tags = [
+    "worktree-hygiene",
+    "p1",
+]
+title = "tasks.toml の merge が conflict marker を 1 本も残さずに ours のみへ解決され、unmerged のまま放置されるため git add した側が theirs の起票を黙って失う (marker 不在が『解決済み』に読める fail-open)"
+touched_files = []
+updated_at = 1790917448
+weight = 0.0

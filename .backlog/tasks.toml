@@ -13441,3 +13441,35 @@ updated_at = 1790909539
 weight = 0.0
 issue_number = 1009
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1009"
+
+[[task]]
+id = "5cd736b6"
+title = "backlog merge-driver --install が plugin-cache の version 付きパスを git config に焼き込むため、次の rollout が prune した瞬間にぶら下がり、tasks.toml の競合として現れる (欠落は報告されない)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "deploy-verify",
+    "worktree-hygiene",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+
+
+--- 併記: 未再現の観測 (2026-10-02、測定点 f6650362) ---
+driver を 0.3.22 へ貼り替えた直後の `git merge --no-edit main` (worktree 側) で、以下が一度だけ stderr に出た:
+  error: the following required arguments were not provided:
+    <BASE> <OURS> <THEIRS>
+  Usage: backlog-linux-x86_64 merge-driver <BASE> <OURS> <THEIRS>
+つまり driver が %O %A %B 無しで起動された形跡である。ただしその merge 自体は成功し (f6650362)、競合マーカーは残らず、両側の task id は全件保存された (531 件、6 id を個別に確認済み)。
+
+その後、同じ git config の値をコピーした使い捨て repo で append-append の 3-way を作って再現を試みたが、**再現しなかった**: driver は正しく起動し、3 id すべてが union され、競合マーカー 0 で merge rc=0。
+
+したがってこれは判定不能として残す。2つの読み: (a) 実在の間欠欠陥 (worktree 文脈や貼り替え直後のタイミングで引数置換が落ちる経路がある)。(b) 貼り替え前の 0.3.20 ぶら下がり状態の残骸が同一 merge 内で一度だけ観測された。
+見分け方: driver を wrapper script に差し替えて argv をログに落とし、worktree からの merge を複数回回して引数欠落が再発するか数える。再発しなければ (b) として棄却してよいが、**再現を試みずに (b) と断定してはいけない** (CLAUDE.md 第6節: 辿れなかったことは無いことではない)。"""
+created_at = 1790909884
+updated_at = 1790909988
+weight = 0.0
+issue_number = 1013
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1013"

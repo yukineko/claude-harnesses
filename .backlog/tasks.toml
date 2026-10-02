@@ -13733,3 +13733,21 @@ updated_at = 1790914696
 weight = 0.0
 issue_number = 1032
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1032"
+
+[[task]]
+id = "e5b6496e"
+title = "GLOSSARY が pre-push を『advisory な fail-soft（常に exit 0、push を止めない）』と書いているが、実際は 3 本のブロッキングチェックを持つ"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "doc-drift",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "実測 2026-10-02、測定点 61673d0a (main) / f56497bf (worktree)。docs/GLOSSARY.md の `.githooks/` 項 (line 21) は pre-push を『advisory な fail-soft（常に exit 0、push を止めない）』と書き、続けて『両者を混同しない: pre-commit はブロッキング、pre-push はアドバイザリ』と対比している。これは hook 自身の冒頭コメントと正面から矛盾する。.githooks/pre-push:6-8 は 'This hook has three advisory nudges plus three blocking checks (the bypass ledger below, cargo check over each pushed tip, and the trybuild compile-fail type contracts via scripts/check-compile-fail.py)' と書いている。grep -n 'exit 1' .githooks/pre-push は 11 箇所にヒットし、うち 3 箇所は明示的に 'pre-push: BLOCKED' を出力する (line 380 type-check / 399 / 410 trybuild compile-fail)。さらに line 64-65 は cwd が git work tree の外なら exit 1 で push を拒否する。実装側は正しい (CLAUDE.md 7 のとおり block/allow の権限を local に置くのが正) ので、ユーザー常設裁定 2026-10-02『実装がおかしくなければ常に散文を直す』に従い GLOSSARY を直すべき。影響: この散文を信じた読者は『pre-push では止められない』と誤解し、ブロッキングチェックを advisory として扱う。CLAUDE.md 4 が禁じる『実挙動と違う安全な話』の doc 版。是正案: advisory 3 本とブロッキング 3 本を分けて書き、正典は .githooks/pre-push 冒頭コメントだと明記する。あわせて GATE crate の列挙を GLOSSARY から削るか scripts/check-gate-crates-sync.py の SOURCES に登録する — 現状 GLOSSARY は SOURCES に未登録のコピーであり (SOURCES には docs/OVERVIEW.md と CLAUDE.md はあるが GLOSSARY は無い)、機械照合の外で drift する。実際 main の GLOSSARY は 2026-08-24 に撤去された taintguard を含む 8 crate を列挙したままで、7 crate への是正は未マージの f56497bf にしか無い。注意: この修正を入れるとき docs/GLOSSARY.md は複数セッションが同時に触る (jev 統合が同ファイルに crate 行と用語を追加している) ので、worktree を分けて統合で決着させること。"
+created_at = 1790915326
+updated_at = 1790915326
+weight = 0.0
+issue_number = 1034
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1034"

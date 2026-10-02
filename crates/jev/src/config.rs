@@ -62,8 +62,7 @@ impl Config {
             Some(p) if p.exists() => {
                 let text = std::fs::read_to_string(&p)
                     .map_err(|e| format!("reading {}: {e}", p.display()))?;
-                toml::from_str::<Config>(&text)
-                    .map_err(|e| format!("parsing {}: {e}", p.display()))?
+                parse(&text).map_err(|e| format!("in {}: {e}", p.display()))?
             }
             _ => Config::default(),
         };
@@ -82,10 +81,8 @@ impl Config {
             // A malformed value keeps the current ceiling rather than removing
             // it: clamping a timeout to "unlimited" on bad input would be the
             // floorless clamp CLAUDE.md §3 calls out.
-            if let Ok(n) = raw.trim().parse::<u64>() {
-                if n > 0 {
-                    self.max_time_secs = n;
-                }
+            if let Some(n) = raw.trim().parse::<u64>().ok().and_then(acceptable_ceiling) {
+                self.max_time_secs = n;
             }
         }
         if let Ok(p) = std::env::var(LEDGER_ENV) {
@@ -127,9 +124,37 @@ impl Config {
     }
 }
 
+/// `Some(n)` when `n` is an acceptable wall-clock ceiling, `None` when it must
+/// be rejected.
+///
+/// Zero is the only rejected value, and it is rejected because `curl
+/// --max-time 0` means *no* ceiling: sanitizing a timeout down to unlimited is
+/// the floorless clamp CLAUDE.md §3 names, i.e. it removes the guarantee the
+/// setting exists to provide. Both the config file and the environment route
+/// through here so neither can take the ceiling away.
+pub(crate) fn acceptable_ceiling(n: u64) -> Option<u64> {
+    if n == 0 {
+        None
+    } else {
+        Some(n)
+    }
+}
+
 /// Parse a config from a string, for tests and for `jev check`.
+///
+/// Validation is part of parsing, not a separate step a caller can forget: a
+/// rejected value is an `Err` rather than a silent substitution, because the
+/// operator wrote a value and honouring a different one quietly is what
+/// CLAUDE.md §4 forbids.
 pub fn parse(text: &str) -> Result<Config, String> {
-    toml::from_str::<Config>(text).map_err(|e| format!("parsing config: {e}"))
+    let cfg = toml::from_str::<Config>(text).map_err(|e| format!("parsing config: {e}"))?;
+    if acceptable_ceiling(cfg.max_time_secs).is_none() {
+        return Err(format!(
+            "max_time_secs = {} removes the wall-clock ceiling; set a positive number of seconds",
+            cfg.max_time_secs
+        ));
+    }
+    Ok(cfg)
 }
 
 /// Read a config from an explicit path, bypassing the environment.
@@ -166,15 +191,23 @@ mod tests {
     }
 
     #[test]
+    fn zero_timeout_in_the_config_file_is_rejected() {
+        // The env path guards for a positive value, but the file path
+        // deserializes straight into the struct. A 0 ceiling is "no ceiling"
+        // -- the floorless clamp CLAUDE.md §3 names -- so the file route must
+        // refuse it too.
+        let err = parse("model = \"jev-1.13.0\"\nmax_time_secs = 0\n").unwrap_err();
+        assert!(err.contains("ceiling"), "err: {err}");
+    }
+
+    #[test]
     fn zero_timeout_is_rejected_so_the_ceiling_cannot_be_removed() {
-        let mut c = Config::default();
-        // Simulate the env path's guard directly: 0 must not be accepted.
-        let before = c.max_time_secs;
-        if let Ok(n) = "0".parse::<u64>() {
-            if n > 0 {
-                c.max_time_secs = n;
-            }
-        }
-        assert_eq!(c.max_time_secs, before);
+        // This calls the production guard. The previous version of this test
+        // re-implemented the `if n` check inline and asserted against its own
+        // copy, so it stayed green no matter what the real code did -- the
+        // "test that proves nothing" CLAUDE.md §2 describes.
+        assert_eq!(acceptable_ceiling(0), None);
+        assert_eq!(acceptable_ceiling(1), Some(1));
+        assert_eq!(acceptable_ceiling(8), Some(8));
     }
 }

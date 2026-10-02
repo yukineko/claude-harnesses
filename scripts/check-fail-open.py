@@ -142,9 +142,14 @@ _EMPTY_VALUE = (
     r"|VecDeque::new\s*\(\s*\)|vec!\s*\[\s*\]"
     r"|Default::default\s*\(\s*\)|[A-Za-z_]\w*::default\s*\(\s*\))"
 )
+# The arm binding: `_`, a name (`e`, `_why`), or the rest pattern `..`.
+_ARM_BINDING = r"(?:[_A-Za-z]\w*|\.\.)"
+# What may sit between `=>` and the substituted value: an optional `return`
+# (`Err(_) => return Vec::new(),` is the same erasure spelled as an early exit)
+# and an optional `Ok(` / `Some(` wrapper.
+_ARM_PREFIX = r"(?:return\s+)?(?:Ok\s*\(\s*|Some\s*\(\s*)?"
 RS_ERR_ARM_EMPTY = re.compile(
-    r"\bErr\s*\(\s*[_A-Za-z]\w*\s*\)\s*=>\s*"
-    r"(?:Ok\s*\(\s*|Some\s*\(\s*)?" + _EMPTY_VALUE
+    r"\bErr\s*\(\s*" + _ARM_BINDING + r"\s*\)\s*=>\s*" + _ARM_PREFIX + _EMPTY_VALUE
 )
 
 # The same erasure spelled on the tri-state types (backlog f12c2168). 836a1aa3
@@ -152,19 +157,76 @@ RS_ERR_ARM_EMPTY = re.compile(
 # `harness_core::verdict` delegates exactly this residue — a hand-written arm
 # that substitutes an empty value — to this scanner. Matching only the `Err`
 # spelling left that delegation pointing at a detector that could not see it.
-# Forwarding arms (`Blocked(v) => return v`, `Undetermined(why) =>
-# Determination::Undetermined(why)`) substitute nothing and do not match.
+#
+# Spellings covered (f12c2168, both slices), each pinned by a case in
+# scripts/test_check_fail_open.py:
+#   * `Blocked(_) => Vec::new()` / `Required::Blocked(_) => ..` /
+#     `Determination::Undetermined(_) => ..` — bare or path-qualified;
+#   * binding `_`, a name (`_undetermined`), or the rest pattern `(..)`;
+#   * an optional `return` before the value (`=> return Vec::new(),`) and an
+#     optional `Ok(` / `Some(` wrapper (`=> return Ok(vec![]),`);
+#   * a BLOCK-bodied arm (`Blocked(_) => {` then `Vec::new()` on a later line):
+#     the line ends at `{`, so the single-line regex cannot see the value;
+#     `scan_rust` brace-matches the body (RS_UNDET_ARM_BLOCK_OPEN) and flags it
+#     when some top-level body line consists of nothing but an empty value
+#     (RS_EMPTY_VALUE_LINE).
+# Forwarding arms (`Blocked(v) => return v.into_verdict()`, `Undetermined(why)
+# => Determination::Undetermined(why)`, and the block-bodied
+# `Blocked(why) => { return why.into_verdict(); }`) substitute nothing and do
+# not match. Still lexical: a body that computes its empty value through a
+# helper call, or an arm split across lines other than at `{`, is not seen.
 # `None` is an empty value on these arms too (`Blocked(_) => None` tells the
 # caller "nothing there" for "could not determine"). It is added HERE only, not
 # to `_EMPTY_VALUE`: `Err(_) => None` is the ordinary `.ok()` spelling on the
 # `Err` arm and is out of this pattern's scope.
+#
+# No ALLOWLIST entry for this pattern (user ruling 2026-10-02): the five sites
+# once grandfathered there (each with an executed-test FP argument) are now
+# COUNTED in the ratchet baseline instead, like every other advisory-class hit.
+# The burn-down pressure is the pinned number, not a per-site exemption.
 _UNDET_EMPTY_VALUE = r"(?:" + _EMPTY_VALUE + r"|None\b)"
-RS_UNDET_ARM_EMPTY = re.compile(
-    r"\b(?:Required::)?Blocked\s*\(\s*[_A-Za-z]\w*\s*\)\s*=>\s*"
-    r"(?:Ok\s*\(\s*|Some\s*\(\s*)?" + _UNDET_EMPTY_VALUE
-    + r"|\b(?:Determination::)?Undetermined\s*\(\s*[_A-Za-z]\w*\s*\)\s*=>\s*"
-    r"(?:Ok\s*\(\s*|Some\s*\(\s*)?" + _UNDET_EMPTY_VALUE
+_UNDET_ARM_HEAD = (
+    r"\b(?:(?:Required::)?Blocked|(?:Determination::)?Undetermined)"
+    r"\s*\(\s*" + _ARM_BINDING + r"\s*\)\s*=>\s*"
 )
+RS_UNDET_ARM_EMPTY = re.compile(_UNDET_ARM_HEAD + _ARM_PREFIX + _UNDET_EMPTY_VALUE)
+# A block-bodied undetermined arm: the head followed by `{` and nothing else on
+# the line (`Blocked(_) => {`). Its body is inspected by `_block_yields_empty`.
+RS_UNDET_ARM_BLOCK_OPEN = re.compile(_UNDET_ARM_HEAD + r"\{\s*$")
+# A body line that is ONLY an empty value — a tail expression or a `return`
+# statement (`Vec::new()`, `return Ok(vec![]);`, `None`). Anchored at both ends
+# so `return why.into_verdict();` and `Vec::new().into_iter()…` do not match.
+RS_EMPTY_VALUE_LINE = re.compile(
+    r"^\s*" + _ARM_PREFIX + _UNDET_EMPTY_VALUE + r"[\s)]*[;,]?\s*$"
+)
+# How far a block-bodied arm's body is followed before giving up (a bounded
+# brace match; a longer body is not this idiom).
+ARM_BLOCK_WINDOW = 12
+
+# The EXTENSION-TRAIT form of the same erasure (backlog f12c2168, user ruling
+# 2026-10-02: ADVISORY only). `Required` deliberately has no `unwrap_or_default`
+# / `is_ok`, but a crate can add them back with its own trait
+# (crates/harness-core/tests/ui/verdict_known_holes/unsealed_paths.rs pins that
+# this compiles), and then `d.require().unwrap_or_default()` collapses "could
+# not determine" into an empty value with no hand-written arm for the pattern
+# above to see. Matched LEXICALLY on the call chain: `.require()` immediately
+# followed by one of the collapsing method names — on the same line, or with the
+# method opening the next code line after a line ending in `.require()`. A
+# lexical scan cannot see which trait the method resolves to (an unrelated type
+# with its own `require()` returning a `Result` is flagged too), nor a trait
+# method called under another name; that is why this is advisory HERE (printed
+# on every run, counted on `--ratchet`, excluded from this script's blocking
+# verdict). It is not unblocked everywhere: scripts/check-fail-open-diff.py
+# (pre-commit) is a rise-ratchet over every pattern, advisory ones included, so
+# a commit that ADDS an occurrence is still blocked there.
+_REQUIRE_ERASE_METHODS = (
+    r"(?:unwrap_or_default|unwrap_or_else|unwrap_or|ok|is_ok|is_err)\s*\("
+)
+RS_REQUIRE_EXT_ERASE = re.compile(
+    r"\.require\s*\(\s*\)\s*\.\s*" + _REQUIRE_ERASE_METHODS
+)
+RS_REQUIRE_TAIL = re.compile(r"\.require\s*\(\s*\)\s*$")
+RS_ERASE_METHOD_HEAD = re.compile(r"^\s*\.\s*" + _REQUIRE_ERASE_METHODS)
 
 # `.unwrap_or_default()` / `.unwrap_or(false)` / `.unwrap_or(Vec::new())` on the
 # result of a filesystem read — flagged only when one of the IO calls below sits
@@ -212,6 +274,10 @@ ADVISORY_ONLY_PATTERNS = frozenset(
         "undetermined-arm-empty-fallback",
         "read-unwrap-or-empty",
         "loop-parse-drop",
+        # Extension-trait erasure (f12c2168): advisory by user ruling
+        # 2026-10-02 — a lexical match cannot tell which trait the method
+        # after `.require()` resolves to; see RS_REQUIRE_EXT_ERASE.
+        "require-ext-erase",
     }
 )
 
@@ -256,41 +322,11 @@ ALLOWLIST: list[dict[str, str]] = [
         "needle": "git ls-files 2>/dev/null",
         "reason": "benign: unborn-branch legitimate-absent (round #6, 231e20e), rc set to 0 intentionally after a verified rev-parse guard",
     },
-    # `=> None` on undetermined arms (f12c2168 widening). Each entry below was
-    # classified FALSE_POSITIVE by an EXECUTED test, not by reading: the `None`
-    # is an intermediate that a later step still reports as unknown/restrictive.
-    # The test named in each reason is the evidence; if it stops passing, the
-    # entry is unjustified.
-    {
-        "path": "crates/backlog/src/liveness.rs",
-        "pattern": "undetermined-arm-empty-fallback",
-        "needle": "Determination::Undetermined(_) => None",
-        "reason": "verified FP: status_value renders it kind=undetermined (read as active); tests liveness::tests::undetermined_presence_reads_as_active_not_none / undetermined_presence_outranks_a_stale_lock go RED when that branch is removed",
-    },
-    {
-        "path": "crates/backlog/src/main.rs",
-        "pattern": "undetermined-arm-empty-fallback",
-        "needle": "Determination::Undetermined(_) => None",
-        "reason": "verified FP: gh_probe None becomes IssueOutcome::DegradedLocalOnly, which `add` now reports on stderr and `sync --apply` fails on; tests/gh_degraded_mirror_reported.rs (RED before the store.rs report, GREEN after)",
-    },
-    {
-        "path": "crates/stuckguard/src/main.rs",
-        "pattern": "undetermined-arm-empty-fallback",
-        "needle": "anchor::AnchorLookup::Undetermined(_) => None",
-        "reason": "verified FP: the undetermined lookup is labelled on stderr and distinguishable from NoLease; tests/anchor_undetermined_is_labelled.rs",
-    },
-    {
-        "path": "crates/donegate/src/gate.rs",
-        "pattern": "undetermined-arm-empty-fallback",
-        "needle": "Required::Blocked(_undetermined) => None",
-        "reason": "verified FP: None = no scope = every check applies (restrictive); gate::tests::evaluate_failed_scan_sets_scan_failed_not_unscoped goes RED when the arm is mutated to Some(vec![])",
-    },
-    {
-        "path": "crates/stuckguard/src/verdict_monotonicity.rs",
-        "pattern": "undetermined-arm-empty-fallback",
-        "needle": "Determination::Undetermined(_) => None",
-        "reason": "verified FP: #[cfg(test)] adapter where None is the restrictive side; verdict_monotonicity::the_property_dies_when_the_failclosed_arm_is_reverted",
-    },
+    # (No `undetermined-arm-empty-fallback` entries: user ruling 2026-10-02
+    # moved the five grandfathered `=> None` sites — backlog liveness.rs and
+    # main.rs, stuckguard main.rs and verdict_monotonicity.rs, donegate
+    # gate.rs — into the counted ratchet baseline. Do not re-add them here;
+    # the burn-down pressure for that class is the pinned number.)
 ]
 
 # Sentinel line number for a whole-file finding (unreadable / undecodable), so a
@@ -387,6 +423,35 @@ def _code_of(line: str) -> str:
     return re.sub(r"//.*$", "", line)
 
 
+def _block_yields_empty(code: list[str], idx: int) -> bool:
+    """True when the block opened at the end of `code[idx]` (a block-bodied
+    undetermined arm) has a TOP-LEVEL body line that is nothing but an empty
+    value — its tail expression or a `return` of one. Brace-matched and bounded
+    by ARM_BLOCK_WINDOW; a body longer than the window is not inspected past it
+    (a lexical limit, not a verdict that the rest is clean)."""
+    depth = 1
+    for j in range(idx + 1, min(len(code), idx + 1 + ARM_BLOCK_WINDOW)):
+        body = code[j]
+        if depth == 1 and RS_EMPTY_VALUE_LINE.match(body):
+            return True
+        for ch in _strip_for_braces(body):
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+        if depth <= 0:
+            return False
+    return False
+
+
+def _prev_code_line(code: list[str], idx: int) -> str:
+    """The nearest non-empty code line above idx ('' if none)."""
+    for j in range(idx - 1, -1, -1):
+        if code[j].strip():
+            return code[j]
+    return ""
+
+
 def scan_rust(lines: list[str]) -> list[tuple[int, str, str]]:
     """Return [(1-based lineno, code, pattern_name)] for read_dir-walk swallows."""
     hits: list[tuple[int, str, str]] = []
@@ -404,8 +469,15 @@ def scan_rust(lines: list[str]) -> list[tuple[int, str, str]]:
         # ── advisory class (b0cacd15): an error erased into an EMPTY value ──
         if RS_ERR_ARM_EMPTY.search(c):
             hits.append((idx + 1, lines[idx].rstrip("\n"), "err-arm-empty-fallback"))
-        if RS_UNDET_ARM_EMPTY.search(c):
+        if RS_UNDET_ARM_EMPTY.search(c) or (
+            RS_UNDET_ARM_BLOCK_OPEN.search(c) and _block_yields_empty(code, idx)
+        ):
             hits.append((idx + 1, lines[idx].rstrip("\n"), "undetermined-arm-empty-fallback"))
+        if RS_REQUIRE_EXT_ERASE.search(c) or (
+            RS_ERASE_METHOD_HEAD.search(c)
+            and RS_REQUIRE_TAIL.search(_prev_code_line(code, idx))
+        ):
+            hits.append((idx + 1, lines[idx].rstrip("\n"), "require-ext-erase"))
         if RS_UNWRAP_OR_EMPTY.search(c):
             lo = max(0, idx - READDIR_WINDOW)
             if any(RS_IO_CALL.search(code[j]) for j in range(lo, idx + 1)):

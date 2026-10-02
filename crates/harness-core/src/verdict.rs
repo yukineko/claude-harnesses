@@ -65,7 +65,16 @@
 //!    themselves. The type's job is to
 //!    make the collapse unreachable *by accident* and to force the deliberate
 //!    one to appear in a diff as an explicit arm; catching that residue is a
-//!    separate, lexical gate's job (backlog b4baf3d7). There is also no `?`
+//!    separate, lexical gate's job (backlog b4baf3d7). `scripts/check-fail-open.py`
+//!    flags the hand-written arms (`undetermined-arm-empty-fallback`) and the
+//!    extension-trait call form `.require().unwrap_or_default()` /
+//!    `.require().is_ok()` (`require-ext-erase`, backlog f12c2168) — both
+//!    ADVISORY in that script: printed and counted on the `--ratchet` baseline
+//!    and excluded from its blocking verdict, so existing sites do not block.
+//!    A commit that ADDS a site is blocked by `scripts/check-fail-open-diff.py`
+//!    (pre-commit, a rise-ratchet over every pattern). Both are lexical (a
+//!    trait method called under another name is not seen), and neither is
+//!    sealed by the types. There is also no `?`
 //!    support: `std::ops::Try` is unstable (E0658, rust#84277), and `.require()?`
 //!    appears nowhere in this repo, so nothing is lost.
 //!
@@ -441,7 +450,9 @@ impl Verdict {
 /// `Determination::Undetermined(_) => Vec::new()` by hand still collapses the
 /// answer, and so does a caller that adds those methods back through its own
 /// extension trait. See [`Required`] for why that residue is left to a lexical
-/// gate, which sees the two hand-written arm spellings but not the trait.
+/// gate, which flags the two hand-written arm spellings and the
+/// `.require().unwrap_or_default()` / `.require().is_ok()` call form — ADVISORY
+/// only, not blocking, and not sealed by these types.
 #[must_use = "a Determination must be resolved with `require`, not dropped"]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Determination<T> {
@@ -539,7 +550,13 @@ impl<T> Determination<T> {
 /// up in a diff as an explicit arm a reviewer or a lexical gate can see
 /// (backlog b4baf3d7; `scripts/check-fail-open.py`'s
 /// `undetermined-arm-empty-fallback` pattern, advisory). An extension trait
-/// that re-adds `unwrap_or_default` / `is_ok` is not seen by that gate.
+/// that re-adds `unwrap_or_default` / `is_ok` is flagged at its call sites
+/// (`.require().unwrap_or_default()`, `.require().is_ok()`) by the same
+/// script's `require-ext-erase` pattern — also ADVISORY there: printed and
+/// counted on the `--ratchet` baseline, excluded from that script's blocking
+/// verdict (a newly ADDED site is still blocked at pre-commit by
+/// `scripts/check-fail-open-diff.py`), and lexical only (it cannot see which
+/// trait the method resolves to, nor a method under another name).
 ///
 /// **No `?`.** Implementing `std::ops::Try` would need the unstable trait
 /// (E0658, rust#84277). Nothing is lost: `.require()?` occurs nowhere in this

@@ -1179,44 +1179,6 @@ issue_number = 222
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/222"
 
 [[task]]
-id = "b63cbdf0"
-title = "autoflow README.ja.md が撤去済みの回数上限（4回/5回目で確認）を今も仕様として書いている"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-観測 2026-08-07、測定点 a8533493。
-
-crates/autoflow/README.ja.md は2箇所で回数ベースの上限を仕様として記述する:
-「block → /condukt（自動は 4 回まで、5 回目以降はユーザーに確認）」および
-「暴走防止として、ブロックは自動では 4 回までで、5 回目のプロンプト以降は続行前にユーザーへ確認する」。
-
-実装にその上限は無い。plugin.json の v0.1.16 の記述どおり count-proxy は撤去され、
-progress ベースの継続に置き換わっている。実測:
-grep -rn 'stuck_threshold|max_backlog_prompts' crates/autoflow/src/*.rs は
-max_backlog_prompts に1件もヒットせず、stuck_threshold（既定3）だけが存在する
-（config.rs:18,44 / state.rs:52,65 / main.rs:241）。
-
-つまり現在の挙動は「残作業集合が縮む限り継続し、縮まない回数が stuck_threshold に
-達したら可視的にエスカレートする。停止条件は pending/open が空になること」であり、
-README が書く「4回で自動停止」ではない。CLAUDE.md 第4節が禁じる
-「docstring/コメントで実挙動と違う安全な話を書く」に該当する — 読者は
-暴走上限があると誤解する。
-
-なお README.md（英語）側も同様か未確認。直すときは両方を見ること。
-
-[triage 2026-09-29 @b325a169] p2->p1: autoflow README claims a 4-run safety cap that the code does not have (CLAUDE.md 4: safe story in prose)
-
-[re-measured 2026-10-02 @e672436b] Still real, but only in one place: crates/autoflow/README.ja.md:18 still has '自動は 4 回まで、5 回目以降はユーザーに確認'. The second ja passage and the English README.md no longer match. A fix is one line plus an autoflow micro bump (3-file lockstep)."""
-created_at = 1786049186
-updated_at = 1790886023
-weight = 0.0
-issue_number = 223
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/223"
-
-[[task]]
 id = "4708069b"
 title = "condukt の run state が checkout ごとに分かれる — orchestrator と worker で cwd が違うと run が見えない"
 project = "/Users/yuki/src/harness"
@@ -1270,21 +1232,6 @@ updated_at = 1786375538
 weight = 0.0
 issue_number = 234
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/234"
-
-[[task]]
-id = "a5bc063a"
-title = "donegate の refuse() 側 give-up (attempt cap 到達) が durable な外部痕跡を残さない — checks-red 側だけ 538a8ac8 で強化され、判定不能側が取り残された"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = "独立検証者が指摘し main agent が再現確認した (2026-08-11、測定点 a0865475)。donegate には give-up が2経路ある。(1) checks が赤いまま attempt cap に達した経路は crates/donegate/src/main.rs:276 で emit_violations(&root, &session, &failing, Outcome::GaveUp) を呼び、giveup: プレフィクス付きの独自 signature で overwatch へ durable に記録する (538a8ac8 が入れた強化)。(2) 判定不能 (untrusted / config 読めず) で refuse() に入り attempt cap に達した経路は log_event(cfg, session, giveup-refusal, &[], attempt) を呼ぶだけで exit 0 する。実測: grep -n emit_violations crates/donegate/src/main.rs のヒットは 276 と 295 (と定義 501・テスト) のみで、refuse() の本体には1件も無い。refuse() は stop を許可しつつ Allowing stop; NOTHING WAS VERIFIED. を stderr へ出すが、それは donegate 自身の private JSONL と stderr だけで、どのツールも読まない。これは 538a8ac8 が明示的に問題視した状態そのものである — 強化が checks-red 側だけに入り、判定不能側 (本来より重い方) が取り残された。既知クラス gate-crate-audit-mirror-gaps (直前に landed した修正の双子を必ず監査する) の実例。注意 (一行では直せない): emit_violations は check 名の配列を要求し、refuse() には失敗した check が存在しない。空配列を渡すと emit_violations_with_no_failures_records_nothing のとおり何も記録されないので、判定不能を表現する signature (例 giveup-refusal:<declaration kind>) の設計が要る。完了条件: (1) refuse() の attempt-cap 到達が overwatch から観測可能な durable 痕跡を残すこと、(2) その経路を空ブロックへ戻すと赤くなる behavioural test があること (RED を先に観測)、(3) 空の failing で何も記録しない既存の不変条件を壊さないこと。関連 5151605e。"
-created_at = 1786376688
-updated_at = 1786376688
-weight = 0.0
-issue_number = 236
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/236"
 
 [[task]]
 id = "a6608aa0"

@@ -671,7 +671,21 @@ class UndeterminedArmSpellingsRemaining(unittest.TestCase):
         self.assertIn("require-ext-erase", names(fo.scan_rust(src)))
 
     def test_require_ext_erase_is_advisory_only(self):
+        # Must be BOTH detected and kept out of the blocking verdict; asserting
+        # set membership alone passes even with the pattern deleted.
+        src = ["    let files = listing.require().unwrap_or_default();"]
+        hits = fo.scan_rust(src)
+        self.assertIn("require-ext-erase", names(hits))
         self.assertIn("require-ext-erase", fo.ADVISORY_ONLY_PATTERNS)
+        self.assertNotIn("require-ext-erase", names(fo.blocking_hits(hits)))
+
+    def test_require_erase_method_on_next_line_is_flagged(self):
+        src = [
+            "    let files = listing",
+            "        .require()",
+            "        .unwrap_or_default();",
+        ]
+        self.assertIn("require-ext-erase", names(fo.scan_rust(src)))
 
     def test_forwarding_blocked_arm_return_is_not_flagged(self):
         src = ["        Blocked(why) => return why.into_verdict(),"]

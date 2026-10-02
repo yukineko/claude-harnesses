@@ -214,8 +214,11 @@ ARM_BLOCK_WINDOW = 12
 # method opening the next code line after a line ending in `.require()`. A
 # lexical scan cannot see which trait the method resolves to (an unrelated type
 # with its own `require()` returning a `Result` is flagged too), nor a trait
-# method called under another name; that is why this is advisory (printed on
-# every run, counted on `--ratchet`, never merge-blocking on its own).
+# method called under another name; that is why this is advisory HERE (printed
+# on every run, counted on `--ratchet`, excluded from this script's blocking
+# verdict). It is not unblocked everywhere: scripts/check-fail-open-diff.py
+# (pre-commit) is a rise-ratchet over every pattern, advisory ones included, so
+# a commit that ADDS an occurrence is still blocked there.
 _REQUIRE_ERASE_METHODS = (
     r"(?:unwrap_or_default|unwrap_or_else|unwrap_or|ok|is_ok|is_err)\s*\("
 )

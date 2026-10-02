@@ -13418,3 +13418,63 @@ updated_at = 1790980480
 weight = 0.0
 issue_number = 1078
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1078"
+
+[[task]]
+id = "19c237e5"
+title = "ctxrot preguard: deny decision lost on broken stdout pipe (println! panic -> run_hook exit 0 = allow)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-03 by backlog-audit phase-3 agent nt_F at f764bfeb: preguard decides deny on a 2 MB Read; with stdout a broken pipe, println! panics, harness_core::hook::run_hook catches it and exits 0, which PreToolUse reads as allow. A deciding hook routed through run_hook (CLAUDE.md 1: run_hook is for non-deciding hooks only). Repro test: crates/ctxrot (backlog dc7a3bc3 test). Fix direction: route preguard through a fail-closed barrier."
+created_at = 1790980658
+updated_at = 1790980658
+weight = 0.0
+issue_number = 1079
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1079"
+
+[[task]]
+id = "4e9551f9"
+title = "overwatch append_merge_conflict returns Ok(()) on a contended lock without appending; callers only warn on Err, so the blocked-merge record is lost silently"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-03 at 7cc10aff: crates/overwatch/src/store.rs:1706-1709 'let _lock = match LeaseLock::acquire_or_skip(cwd) { Some(l) => l, None => return Ok(()) }'. Callers crates/condukt/src/runtime_conflict.rs:188 and worktree.rs:1079 act only on Err. The sibling at store.rs:1780 already returns AppendOutcome::SkippedContended, so the skip is representable. Reported by phase-3 agent nt_A, verified first-hand by the coordinator. Distinguish: (a) defect, contention erases the record; (b) intended idempotent skip — then the doc and callers must say not-recorded. Test: hold the lease, call append_merge_conflict, assert it is not Ok(()) or that the outcome says skipped."
+created_at = 1790980726
+updated_at = 1790980726
+weight = 0.0
+issue_number = 1080
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1080"
+
+[[task]]
+id = "d46edbf0"
+title = "condukt leaves __claims__.lock.tmp.* files behind in ~/.condukt/state/session-*/ (2180 present)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-03: find ~/.condukt -maxdepth 4 -name '*__claims__*' gives 2180 files, oldest from 1785927037 (2026-08-05), e.g. session-b9a78b46-e56b248f/__claims__.lock.tmp.<pid>.<ns>.0. Temp files of the claim lock write are never renamed or removed on some path. Distinguish: (a) leak on an error or kill path; (b) leftovers of killed processes only. Test: kill a claim-task mid-write, or a failing rename, then assert no tmp remains."
+created_at = 1790980728
+updated_at = 1790980728
+weight = 0.0
+issue_number = 1081
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1081"
+
+[[task]]
+id = "065ab57c"
+title = "check-test-weakening cfg_test_modules: a bodyless 'mod x;' at end of file gives undetermined, and a mid-file mount reads the wrong span (verifier-reported, unverified)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Reported 2026-10-02 by backlog-audit closure verifier b1_0 (7bf4a2c7); not reproduced first-hand. Phase-3 agents were told to inline test-module bodies for this reason. Distinguish via a test of scripts/check-test-weakening.py on two fixtures: a src file ending in '#[cfg(test)] mod tests;', and the same mount mid-file followed by code."
+created_at = 1790980729
+updated_at = 1790980729
+weight = 0.0
+issue_number = 1082
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1082"

@@ -24288,3 +24288,67 @@ weight = 0.0
 issue_number = 214
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/214"
 issue_closed_at = 1790923210
+
+[[task]]
+id = "a5bc063a"
+title = "donegate の refuse() 側 give-up (attempt cap 到達) が durable な外部痕跡を残さない — checks-red 側だけ 538a8ac8 で強化され、判定不能側が取り残された"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+独立検証者が指摘し main agent が再現確認した (2026-08-11、測定点 a0865475)。donegate には give-up が2経路ある。(1) checks が赤いまま attempt cap に達した経路は crates/donegate/src/main.rs:276 で emit_violations(&root, &session, &failing, Outcome::GaveUp) を呼び、giveup: プレフィクス付きの独自 signature で overwatch へ durable に記録する (538a8ac8 が入れた強化)。(2) 判定不能 (untrusted / config 読めず) で refuse() に入り attempt cap に達した経路は log_event(cfg, session, giveup-refusal, &[], attempt) を呼ぶだけで exit 0 する。実測: grep -n emit_violations crates/donegate/src/main.rs のヒットは 276 と 295 (と定義 501・テスト) のみで、refuse() の本体には1件も無い。refuse() は stop を許可しつつ Allowing stop; NOTHING WAS VERIFIED. を stderr へ出すが、それは donegate 自身の private JSONL と stderr だけで、どのツールも読まない。これは 538a8ac8 が明示的に問題視した状態そのものである — 強化が checks-red 側だけに入り、判定不能側 (本来より重い方) が取り残された。既知クラス gate-crate-audit-mirror-gaps (直前に landed した修正の双子を必ず監査する) の実例。注意 (一行では直せない): emit_violations は check 名の配列を要求し、refuse() には失敗した check が存在しない。空配列を渡すと emit_violations_with_no_failures_records_nothing のとおり何も記録されないので、判定不能を表現する signature (例 giveup-refusal:<declaration kind>) の設計が要る。完了条件: (1) refuse() の attempt-cap 到達が overwatch から観測可能な durable 痕跡を残すこと、(2) その経路を空ブロックへ戻すと赤くなる behavioural test があること (RED を先に観測)、(3) 空の failing で何も記録しない既存の不変条件を壊さないこと。関連 5151605e。
+
+--- 完了 2026-10-02 (donegate 0.1.36、commit c0409623、rollout 済み) ---
+`refuse()` の attempt-cap 腕に第三の `Outcome::GaveUpUndetermined` を足し、
+`donegate:undetermined:<refusal kind>` を overwatch へ 1 事象 1 回だけ残すようにした。
+`<kind>` は check 名ではなく refusal の種類 (untrusted / unreadable-config /
+reserved-check-name) で、remedy が違うものを同じ再発バケツに入れない。
+
+偽造不能性は文字クラスではなく **config ロード時の名前予約** で担保した:
+`overwatch::violation::normalize_signature` の norm は trim + lowercase +
+space->dash だけなので小文字の非空文字列はすべて check 名から到達可能であり、
+predicate 側で弾くことはできない。予約違反は silent drop ではなく block に解決する
+(捨てると operator の宣言した check が命名衝突で消え、宣言ゼロ = allow になる)。
+
+無利害 agent の指摘で追加した分岐: 予約拒否を `Declaration::Unreadable` に
+相乗りさせると本物の TOML パースエラーと同じ台帳バケツに落ちる。remedy が違う以上
+これは本 item の規則を 1 段下で破るので、第 5 variant
+`Declaration::ReservedCheckName` を切り出した
+(`donegate:undetermined:reserved-check-name`)。コスト —
+`undetermined:*` を正当に使っていた project はその check が走らなくなる — は
+variant の doc に明記した。
+
+検証 (CLAUDE.md 2a/2b):
+- テストは利害関係のない独立 agent が作成 (tests/refusal_giveup_sentinel.rs、8 件)。
+- 当初テスト 1 件の apparatus 前提が予約により成立しなくなった件は、自分で
+  assertion を書き換えず測定結果を作者へ返して判断を仰いだ。
+- mutant 2 種に対する RED を作者が実測 (scratch コピー + 別 CARGO_TARGET_DIR):
+  fold (予約拒否を Unreadable に相乗り) -> 他 7 件 green のまま 1 件だけ落ちる。
+  swap (refusal_kind_slug の 2 リテラル入れ替え) -> disjointness assert は green の
+  まま literal assert だけ落ちる。donegate 全体でも他 65 件 green。
+  分離は分割を、リテラルは対応付けを pin する。
+- 自分でも RED を観測: 実装 2 ファイルだけ HEAD へ戻して `1 passed; 7 failed`
+  (残 1 件は定義上 green な anti-vacuity control)。戻すと 73 ok / 0 failed。
+- fmt / clippy clean。
+
+**稼働バイナリ (0.1.36 rollout 後) で 2 原因の分離を実測**:
+  reserved    -> "config: ... declares a RESERVED check name" /
+                 "verdict: BLOCK — REFUSING to judge: ... declares a check in
+                  donegate's reserved namespace" / "reserved name: ..."
+  brokentoml  -> "config: ... is UNREADABLE" /
+                 "verdict: BLOCK — ... could not be read" / "parse error: TOML parse
+                  error at line 1, column 8"
+どちらも BLOCK のままで、操作者面でも台帳でも別物として出る。
+
+残した穴 (別起票 ca6e5c95, p2): `donegate:giveup:<check>` は project の check 名から
+依然として偽造できる。ここで広げてはいない既存の穴であり、衝突の向きが
+over-reporting (常に警報側) で fail-open ではないため深刻度が低く、分離した。
+"""
+created_at = 1786376688
+updated_at = 1790924145
+weight = 0.0
+issue_number = 236
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/236"
+issue_closed_at = 1790924147

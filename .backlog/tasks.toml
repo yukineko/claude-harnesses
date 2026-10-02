@@ -1149,44 +1149,6 @@ issue_number = 222
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/222"
 
 [[task]]
-id = "b63cbdf0"
-title = "autoflow README.ja.md が撤去済みの回数上限（4回/5回目で確認）を今も仕様として書いている"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-観測 2026-08-07、測定点 a8533493。
-
-crates/autoflow/README.ja.md は2箇所で回数ベースの上限を仕様として記述する:
-「block → /condukt（自動は 4 回まで、5 回目以降はユーザーに確認）」および
-「暴走防止として、ブロックは自動では 4 回までで、5 回目のプロンプト以降は続行前にユーザーへ確認する」。
-
-実装にその上限は無い。plugin.json の v0.1.16 の記述どおり count-proxy は撤去され、
-progress ベースの継続に置き換わっている。実測:
-grep -rn 'stuck_threshold|max_backlog_prompts' crates/autoflow/src/*.rs は
-max_backlog_prompts に1件もヒットせず、stuck_threshold（既定3）だけが存在する
-（config.rs:18,44 / state.rs:52,65 / main.rs:241）。
-
-つまり現在の挙動は「残作業集合が縮む限り継続し、縮まない回数が stuck_threshold に
-達したら可視的にエスカレートする。停止条件は pending/open が空になること」であり、
-README が書く「4回で自動停止」ではない。CLAUDE.md 第4節が禁じる
-「docstring/コメントで実挙動と違う安全な話を書く」に該当する — 読者は
-暴走上限があると誤解する。
-
-なお README.md（英語）側も同様か未確認。直すときは両方を見ること。
-
-[triage 2026-09-29 @b325a169] p2->p1: autoflow README claims a 4-run safety cap that the code does not have (CLAUDE.md 4: safe story in prose)
-
-[re-measured 2026-10-02 @e672436b] Still real, but only in one place: crates/autoflow/README.ja.md:18 still has '自動は 4 回まで、5 回目以降はユーザーに確認'. The second ja passage and the English README.md no longer match. A fix is one line plus an autoflow micro bump (3-file lockstep)."""
-created_at = 1786049186
-updated_at = 1790886023
-weight = 0.0
-issue_number = 223
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/223"
-
-[[task]]
 id = "4708069b"
 title = "condukt の run state が checkout ごとに分かれる — orchestrator と worker で cwd が違うと run が見えない"
 project = "/Users/yuki/src/harness"

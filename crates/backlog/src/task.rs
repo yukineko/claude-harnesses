@@ -4,7 +4,8 @@ use unicode_normalization::UnicodeNormalization;
 /// The task status vocabulary — the single source of truth shared by the store
 /// (which sets these on add/done/fail/restore), the `--status` filter help, and
 /// the CLI's validation of a user-supplied filter. A task moves
-/// `pending → done` (done) or `pending → failed` (fail); a deferred task is
+/// `pending → done` (done), `pending → cancelled` (abandoned, see
+/// [`STATUS_CANCELLED`]) or `pending → failed` (fail); a deferred task is
 /// restored to `pending` once its `defer_until` elapses. NB: `backlog` has no
 /// `open` status — that vocabulary belongs to `hypothesis` (open/validated/
 /// rejected), a different binary.
@@ -12,10 +13,40 @@ pub const STATUS_PENDING: &str = "pending";
 pub const STATUS_DONE: &str = "done";
 pub const STATUS_FAILED: &str = "failed";
 
+/// The status for work that is over WITHOUT having been finished — a duplicate
+/// folded into its canonical ticket, a plan that was dropped, a question a
+/// later measurement already answered. Terminal
+/// ([`crate::store::is_terminal_status`]), so a cancelled row lives in the done
+/// file and can never be reopened, and it is what makes a mirrored issue close
+/// as GitHub's `not planned` rather than `completed`.
+///
+/// **This value was missing from [`STATUSES`] until backlog 0.3.24 while the
+/// store already carried it.** Measured 2026-08-14 (577 tasks): 6 such records
+/// existed — written before the current validation, or by hand — and
+/// `edit --status cancelled` was rejected outright:
+///
+/// ```text
+/// $ backlog edit 5df88c1d --status cancelled
+/// Error: warning: unknown status 'cancelled'; valid values are pending | done | failed
+/// ```
+///
+/// That split the vocabulary this module claims to be the single source of
+/// truth for, and it had a consequence beyond tidiness: the `NotPlanned` arm of
+/// [`crate::store::sync_plan`] was reachable only from a hand-edited store, so
+/// no supported path could exercise it and the arm was never once observed in
+/// production. Admitting the value here is the resolution of backlog
+/// `0dafa254`.
+///
+/// `claimed` is deliberately NOT added alongside it: that one is derived from
+/// the untracked claim ledger for display and is never persisted as a task's
+/// status, so listing it here would make `--status claimed` *settable*, which
+/// is a different and wrong thing from being filterable.
+pub const STATUS_CANCELLED: &str = "cancelled";
+
 /// All recognised status values, in lifecycle order. Used to enumerate the
 /// valid `--status` arguments in help/validation so an unknown value is a loud
 /// error instead of a silently-empty result.
-pub const STATUSES: [&str; 3] = [STATUS_PENDING, STATUS_DONE, STATUS_FAILED];
+pub const STATUSES: [&str; 4] = [STATUS_PENDING, STATUS_DONE, STATUS_CANCELLED, STATUS_FAILED];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
@@ -124,6 +155,54 @@ pub struct Task {
     /// forever.
     #[serde(default)]
     pub issue_closed_at: Option<i64>,
+    /// The value of [`rev`](Task::rev) at the moment this task's issue BODY was
+    /// last confirmed pushed to GitHub, or `None` if it never has been.
+    ///
+    /// **This was `updated_at`-based first, and that was wrong.** The reasoning
+    /// was that `store::edit` always re-stamps `updated_at`, so comparing it
+    /// against a recorded value could only OVER-report staleness (a title-only
+    /// edit re-pushes an unchanged body — one redundant, idempotent write) and
+    /// never UNDER-report a notes change. The flaw is resolution: `updated_at`
+    /// counts whole seconds, so an edit landing in the SAME second as the push
+    /// leaves it bit-identical and the change becomes invisible. Observed
+    /// 2026-10-02 by `tests/mirror_gaps_after_0323.rs`
+    /// (`a_pushed_body_goes_quiet_until_the_notes_change_again`): push, edit the
+    /// notes, re-run — and the re-run planned nothing. That is a systematic,
+    /// reproducible fail-open, not an unlikely one.
+    ///
+    /// A hash of the notes was the other candidate and is still rejected: a
+    /// collision SKIPS a needed update, which is the same failure direction,
+    /// and this crate carries no digest dependency. [`rev`](Task::rev) is exact
+    /// and clock-independent, so it is the witness used here.
+    ///
+    /// Compared with `!=`, not `>`: a store merged from two checkouts can carry
+    /// a lower `rev` than the stamp, and "the revision is not the one we pushed"
+    /// must resolve to stale rather than to current (CLAUDE.md §3).
+    ///
+    /// Absent for every task that predates it, so every already-mirrored task
+    /// reads as stale the first time it is examined — measured 2026-10-02: 471
+    /// of 535 pending tasks hold an issue. That is why the body arm is opt-in
+    /// (`sync --only body`) and is deliberately NOT part of
+    /// [`crate::store::mirror_drift`]: wiring it into the default would
+    /// manufacture a 471-item rewrite and a permanent SessionStart noise
+    /// source, which is the exact shape already filed as backlog `7438ea3a`.
+    #[serde(default)]
+    pub issue_body_synced_rev: Option<u64>,
+    /// How many times this task has been mutated, counting from 0 at creation.
+    ///
+    /// A logical clock, not a timestamp: it exists because `updated_at` cannot
+    /// distinguish two changes inside one second (see
+    /// [`issue_body_synced_rev`](Task::issue_body_synced_rev) for the measured
+    /// failure that forced this field into existence). Every store mutator that
+    /// re-stamps `updated_at` also bumps this, through the single helper
+    /// `store::touch`, so the two can never drift apart.
+    ///
+    /// Saturating, so a long-lived task cannot wrap to 0 and read as fresh.
+    /// Defaults to 0 for tasks written before it existed, which is why the
+    /// stamp above is an `Option` — "rev 0" means "never mutated", not "never
+    /// pushed", and conflating the two would mark an untouched task as synced.
+    #[serde(default)]
+    pub rev: u64,
 }
 
 impl Task {
@@ -231,6 +310,8 @@ mod tests {
             issue_number: None,
             issue_url: None,
             issue_closed_at: None,
+            issue_body_synced_rev: None,
+            rev: 0,
             touched_files: Vec::new(),
         }
     }
@@ -238,16 +319,34 @@ mod tests {
     #[test]
     fn status_vocabulary_is_consistent() {
         // The set, lifecycle order, and the values the store actually writes
-        // (add → pending, done → done, fail → failed) must agree, since
-        // STATUSES drives both the `--status` help/validation and `is_pending`.
-        assert_eq!(STATUSES, [STATUS_PENDING, STATUS_DONE, STATUS_FAILED]);
-        assert_eq!(STATUSES, ["pending", "done", "failed"]);
+        // (add → pending, done → done, edit --status cancelled → cancelled,
+        // fail → failed) must agree, since STATUSES drives both the `--status`
+        // help/validation and `is_pending`.
+        //
+        // `cancelled` joined the list in 0.3.24. It was NOT added to make a
+        // failing assertion pass: the store already held such rows (6 of 577,
+        // measured 2026-08-14) that no CLI path could write, which left
+        // `store::sync_plan`'s NotPlanned close arm reachable only from a
+        // hand-edited file. Backlog `0dafa254`.
+        assert_eq!(
+            STATUSES,
+            [STATUS_PENDING, STATUS_DONE, STATUS_CANCELLED, STATUS_FAILED]
+        );
+        assert_eq!(STATUSES, ["pending", "done", "cancelled", "failed"]);
         // `open` is hypothesis's vocabulary, never backlog's.
         assert!(!STATUSES.contains(&"open"));
-        // is_pending agrees with the vocabulary it filters on.
+        // `claimed` is DERIVED from the untracked claim ledger for display and
+        // is never persisted as a status. Listing it here would make
+        // `--status claimed` settable, which is a different thing from being
+        // filterable — so its absence is load-bearing, not an oversight.
+        assert!(!STATUSES.contains(&"claimed"));
+        // is_pending agrees with the vocabulary it filters on. `cancelled` is
+        // terminal, so it must NOT be pending — a cancelled task is off the
+        // queue, not waiting on it.
         assert!(make_task(vec![], STATUS_PENDING).is_pending());
         assert!(make_task(vec![], STATUS_FAILED).is_pending());
         assert!(!make_task(vec![], STATUS_DONE).is_pending());
+        assert!(!make_task(vec![], STATUS_CANCELLED).is_pending());
     }
 
     #[test]

@@ -935,6 +935,8 @@ pub fn add_with_weight(
             issue_number: None,
             issue_url: None,
             issue_closed_at: None,
+            issue_body_synced_rev: None,
+            rev: 0,
             touched_files: Vec::new(),
         };
         tasks.push(task);
@@ -1413,7 +1415,7 @@ pub fn requeue_expired(path: &Path, now: i64) -> Result<usize> {
                 }
             }
             if changed {
-                task.updated_at = now;
+                touch(task, now);
                 count += 1;
             }
         }
@@ -1446,36 +1448,22 @@ pub fn mark_done(path: &Path, id: &str) -> Result<()> {
         }
         task.status = STATUS_DONE.to_string();
         // updated_at はシステム時刻で更新（呼び出し元が now を持たないため現在時刻を使う）
-        task.updated_at = now_unix();
+        touch(task, now_unix());
         save(path, &tasks)
     })
 }
 
 /// The status a task must hold for its GitHub issue to be closed as
-/// "not planned".
+/// "not planned". Re-exported from [`crate::task`], which owns the status
+/// vocabulary; see [`crate::task::STATUS_CANCELLED`] for the history of why it
+/// was once settable only by hand.
 ///
-/// **No current CLI path writes this value.** `edit --status` validates
-/// against [`crate::task::STATUSES`] (`pending | done | failed`) and rejects
-/// `cancelled` outright — verified 2026-08-14:
-///
-/// ```text
-/// $ backlog edit 5df88c1d --status cancelled
-/// Error: warning: unknown status 'cancelled'; valid values are pending | done | failed
-/// ```
-///
-/// It is spelled here anyway, and honestly rather than as an import, because
-/// the value nonetheless EXISTS in real stores: this repo's holds 6 such
-/// records (measured the same day, 577 tasks). They predate the current
-/// validation or were hand-written, and `sync_plan` must reconcile records
-/// that are actually there, not only ones the current binary can produce.
-///
-/// So the `NotPlanned` close arm is presently reachable only from a
-/// hand-edited store. That is a gap in the status vocabulary, not in this
-/// module — `task::STATUSES` claims to list "all recognised status values"
-/// while the store demonstrably carries two more (`cancelled`, `claimed`).
-/// Tracked as backlog `0dafa254`; when that is resolved the arm becomes
-/// reachable with no change here.
-pub const STATUS_CANCELLED: &str = "cancelled";
+/// Until 0.3.24 this was spelled out here with a doc recording that no CLI path
+/// could write it, which made the `NotPlanned` arm of [`sync_plan`] below
+/// reachable only from a hand-edited store. `edit --status cancelled` now
+/// accepts the value (backlog `0dafa254`), so the arm is reachable through a
+/// supported path and this is an import again.
+pub use crate::task::STATUS_CANCELLED;
 
 /// One unit of GitHub mirror work, derived from the store's own contents.
 #[derive(Debug, Clone, PartialEq)]
@@ -1491,6 +1479,36 @@ pub enum SyncAction {
         id: String,
         number: u64,
         reason: crate::github::CloseReason,
+        /// The content recorded on the issue as it closes, already rendered by
+        /// [`build_close_comment`]. Carried IN the action rather than looked up
+        /// again at the call site: `sync` reconciles a whole store in one pass
+        /// and `mirror_close_for` builds its own one-item plan, so a
+        /// by-id lookup at each call site is two chances to pair a close with
+        /// the wrong task's content. Here the pairing is made once, where the
+        /// task is already in hand, and is a function of the store alone.
+        comment: String,
+    },
+    /// Live work whose issue exists but whose BODY is older than the task.
+    ///
+    /// The third arm, added in 0.3.24. The first two run on every default
+    /// `sync`; this one does NOT — it is reachable only through
+    /// [`SyncOnly::Body`]. See that type for why, and
+    /// [`crate::task::Task::issue_body_synced_at`] for how staleness is decided.
+    UpdateBody {
+        id: String,
+        number: u64,
+        /// The notes as they stand now, to REPLACE the issue body.
+        body: String,
+        /// The task's [`Task::rev`] at the moment this action was planned, and
+        /// the value stamped onto the task when GitHub confirms the push.
+        ///
+        /// Carried through the plan rather than re-read at record time: a task
+        /// edited between the plan and the confirmation would otherwise be
+        /// stamped as though its NEW content had been pushed, and the mirror
+        /// would then quietly show superseded text forever. Using the planned
+        /// value means such a task simply stays stale and is picked up by the
+        /// next run — the restrictive side (CLAUDE.md §3).
+        rev: u64,
     },
 }
 
@@ -1498,7 +1516,9 @@ impl SyncAction {
     /// The task id this action operates on.
     pub fn task_id(&self) -> &str {
         match self {
-            SyncAction::Create { id, .. } | SyncAction::Close { id, .. } => id,
+            SyncAction::Create { id, .. }
+            | SyncAction::Close { id, .. }
+            | SyncAction::UpdateBody { id, .. } => id,
         }
     }
 }
@@ -1543,16 +1563,117 @@ pub fn sync_plan(tasks: &[Task]) -> Vec<SyncAction> {
                 id: t.id.clone(),
                 number: n,
                 reason: crate::github::CloseReason::Completed,
+                comment: build_close_comment(t, crate::github::CloseReason::Completed),
             }),
             (STATUS_CANCELLED, Some(n), None) => plan.push(SyncAction::Close {
                 id: t.id.clone(),
                 number: n,
                 reason: crate::github::CloseReason::NotPlanned,
+                comment: build_close_comment(t, crate::github::CloseReason::NotPlanned),
             }),
+            (STATUS_PENDING | STATUS_FAILED, Some(n), None) if body_is_stale(t) => {
+                plan.push(SyncAction::UpdateBody {
+                    id: t.id.clone(),
+                    number: n,
+                    body: t.notes.clone(),
+                    rev: t.rev,
+                })
+            }
             _ => {}
         }
     }
     plan
+}
+
+/// Whether `task`'s issue body is older than the task itself.
+///
+/// Pure, and deliberately NOT a content comparison — see
+/// [`crate::task::Task::issue_body_synced_at`] for why a stamp beats a hash
+/// here. An unstamped task is stale: the body may well match, but we have no
+/// observation saying so, and "not known to be current" must not resolve to
+/// "current" (CLAUDE.md §3). That is also why this never gates on the notes
+/// being non-empty — a task whose notes were emptied needs the push most.
+fn body_is_stale(task: &Task) -> bool {
+    match task.issue_body_synced_rev {
+        None => true,
+        Some(stamp) => task.rev != stamp,
+    }
+}
+
+/// Record that `task` just changed: advance its wall-clock `updated_at` to `now`
+/// AND its logical [`Task::rev`].
+///
+/// The single place either field is written after creation, so they cannot
+/// drift. `rev` exists because `updated_at` has one-second resolution and
+/// therefore cannot witness two changes inside one second — the failure that
+/// made a `updated_at`-based body stamp silently skip edits (see
+/// [`Task::issue_body_synced_rev`]). Saturating: a task cannot wrap its
+/// revision counter back to a value it already published.
+pub(crate) fn touch(task: &mut Task, now: i64) {
+    task.updated_at = now;
+    task.rev = task.rev.saturating_add(1);
+}
+
+/// Upper bound on the rendered body handed to `gh issue close --comment`,
+/// measured in **bytes** (`str::len`), not characters.
+///
+/// GitHub rejects a comment body over 65536 *characters*, which would fail the
+/// whole close — the content and the close ride one invocation, so an oversized
+/// body does not degrade to "closed without the record", it degrades to "not
+/// closed at all". Bounding bytes is deliberately the conservative side of that
+/// limit: for UTF-8, bytes >= characters, so a body under this many bytes is
+/// always under the same number of characters. Measured 2026-10-02: 45000
+/// Japanese characters of notes render to a 59999-byte / 20301-character body,
+/// i.e. the bound binds on bytes long before GitHub's character limit is near.
+/// The headroom below 65536 also covers the header lines and the truncation
+/// marker.
+const CLOSE_COMMENT_MAX: usize = 60_000;
+
+/// Appended when `notes` did not fit. Says so in the body itself: dropping
+/// content silently would make the comment a worse record than no comment,
+/// because nothing downstream could tell a short task from a trimmed one
+/// (CLAUDE.md §4 — never make an error invisible).
+const CLOSE_COMMENT_TRUNCATED: &str = "\n\n*(notes truncated here to stay under GitHub's comment \
+     limit — the full text lives in this repo's `.backlog` store, keyed by the task id above.)*\n";
+
+/// Render what a closing comment should say about `task`. Pure: no IO, no clock
+/// (the timestamp comes from the task's own `updated_at`), no panics.
+///
+/// Never returns a blank string, so `build_issue_close_args` never has to drop
+/// it: even a task with no notes yields the id and the terminal state, which is
+/// the minimum needed for a reader on GitHub to find the local record. The
+/// notes are reproduced verbatim rather than summarized — a summary would be
+/// this function's judgment about someone else's content, and the store's text
+/// is the only authoritative account of what was actually resolved.
+pub fn build_close_comment(task: &Task, reason: crate::github::CloseReason) -> String {
+    let head = format!(
+        "Closed by `backlog`: this task reached its terminal state locally. The local store is \
+         authoritative and this issue is a one-way mirror of it.\n\n- task id: `{id}`\n- local \
+         status: `{status}`\n- GitHub close reason: `{reason}`\n- last updated locally: \
+         {when}\n\n### Notes at close\n\n",
+        id = task.id,
+        status = task.status,
+        reason = reason.as_gh_reason(),
+        when = crate::format_unix_datetime(task.updated_at.max(0) as u64),
+    );
+    let notes = task.notes.trim();
+    if notes.is_empty() {
+        return format!("{head}(this task carried no notes)\n");
+    }
+    let room = CLOSE_COMMENT_MAX.saturating_sub(head.len() + CLOSE_COMMENT_TRUNCATED.len());
+    if notes.len() <= room {
+        return format!("{head}{notes}\n");
+    }
+    // Cut on a char boundary: `notes` is arbitrary UTF-8 (these notes are
+    // routinely Japanese), and slicing mid-codepoint would panic inside a
+    // function whose whole job is to not fail a close.
+    let cut = notes
+        .char_indices()
+        .map(|(i, _)| i)
+        .take_while(|i| *i <= room)
+        .last()
+        .unwrap_or(0);
+    format!("{head}{}{CLOSE_COMMENT_TRUNCATED}", &notes[..cut])
 }
 
 /// Which half of the mirror a `sync` run is allowed to touch.
@@ -1567,31 +1688,58 @@ pub fn sync_plan(tasks: &[Task]) -> Vec<SyncAction> {
 /// truncates across both kinds).
 ///
 /// [`Both`](SyncOnly::Both) is the default and is exactly what every
-/// pre-existing `backlog sync` invocation already meant.
+/// pre-existing `backlog sync` invocation already meant — which is why it does
+/// NOT include [`Body`](SyncOnly::Body), the arm added in 0.3.24. "Both" names
+/// the two arms that have always run, not "everything available".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
 pub enum SyncOnly {
-    /// Reconcile both arms (the pre-existing behaviour).
+    /// Reconcile the create and close arms (the pre-existing behaviour).
     #[default]
     Both,
     /// Only file issues for pending tasks that have none.
     Create,
     /// Only close issues whose task is already done/cancelled.
     Close,
+    /// Only re-push issue bodies whose task has been edited since the body was
+    /// last pushed.
+    ///
+    /// Opt-in, and excluded from [`Both`](SyncOnly::Both), because the stamp it
+    /// reads is absent on every task that predates it: measured 2026-10-02, 471
+    /// of 535 pending tasks hold an issue, so the first default run would have
+    /// rewritten 471 issue bodies with no operator ever asking for it. Keeping
+    /// it out of the default is the same ruling that produced
+    /// [`Close`](SyncOnly::Close) — a create PUBLISHES, a body edit OVERWRITES,
+    /// and neither belongs in a switch whose existing meaning was narrower.
+    Body,
 }
 
 impl SyncOnly {
     /// Whether `action` is in scope for this selection.
     ///
-    /// Written as an exhaustive match rather than a `matches!` guard so that
-    /// adding a third [`SyncAction`] variant is a compile error here instead of
-    /// silently defaulting to "in scope" (an unreviewed GitHub-visible write).
+    /// Every (scope, action) pair is spelled out — no `_` arm on either side —
+    /// so adding a [`SyncAction`] variant or a scope is a compile error here
+    /// rather than silently defaulting to "in scope", which for this type means
+    /// an unreviewed GitHub-visible write.
+    ///
+    /// Before 0.3.24 this match DID carry a `(Both, _)` catch-all while its doc
+    /// claimed a new variant would be a compile error. The claim was false and
+    /// the consequence was exactly the one the doc warned about: `UpdateBody`
+    /// would have fallen into the default scope and every `sync --apply` would
+    /// have started rewriting issue bodies.
     pub fn allows(self, action: &SyncAction) -> bool {
         match (self, action) {
-            (SyncOnly::Both, _) => true,
-            (SyncOnly::Create, SyncAction::Create { .. }) => true,
-            (SyncOnly::Close, SyncAction::Close { .. }) => true,
-            (SyncOnly::Create, SyncAction::Close { .. })
-            | (SyncOnly::Close, SyncAction::Create { .. }) => false,
+            (SyncOnly::Both, SyncAction::Create { .. })
+            | (SyncOnly::Both, SyncAction::Close { .. })
+            | (SyncOnly::Create, SyncAction::Create { .. })
+            | (SyncOnly::Close, SyncAction::Close { .. })
+            | (SyncOnly::Body, SyncAction::UpdateBody { .. }) => true,
+            (SyncOnly::Both, SyncAction::UpdateBody { .. })
+            | (SyncOnly::Create, SyncAction::Close { .. })
+            | (SyncOnly::Create, SyncAction::UpdateBody { .. })
+            | (SyncOnly::Close, SyncAction::Create { .. })
+            | (SyncOnly::Close, SyncAction::UpdateBody { .. })
+            | (SyncOnly::Body, SyncAction::Create { .. })
+            | (SyncOnly::Body, SyncAction::Close { .. }) => false,
         }
     }
 }
@@ -1650,6 +1798,15 @@ impl MirrorDrift {
 ///
 /// Derived from [`sync_plan`] rather than re-deriving the shapes, so the report
 /// can never name a different set of work than the command that fixes it.
+///
+/// [`SyncAction::UpdateBody`] is deliberately NOT counted. Both reported
+/// numbers name work the DEFAULT `sync --apply` performs, so adding a third
+/// number would point at an arm that `--only body` alone reaches — and it would
+/// read as 471 outstanding items on this store every session forever, which is
+/// the permanent-noise failure already filed as backlog `7438ea3a`. The counts
+/// are filtered by variant rather than by subtraction for the same reason: a
+/// `plan.len() - creates` would have silently folded body updates into the close
+/// total the moment the third arm existed.
 pub fn mirror_drift(tasks: &[Task]) -> MirrorDrift {
     let plan = sync_plan(tasks);
     MirrorDrift {
@@ -1679,13 +1836,23 @@ pub enum SyncOutcome {
     Closed {
         id: String,
     },
+    /// GitHub accepted a `issue edit --body` for this task.
+    BodySynced {
+        id: String,
+        /// The [`Task::rev`] whose content was actually pushed — copied from
+        /// the [`SyncAction::UpdateBody`] that produced this, never re-read.
+        /// See that field for why.
+        synced_rev: u64,
+    },
 }
 
 impl SyncOutcome {
     /// The task id this outcome belongs to.
     pub fn task_id(&self) -> &str {
         match self {
-            SyncOutcome::Created { id, .. } | SyncOutcome::Closed { id } => id,
+            SyncOutcome::Created { id, .. }
+            | SyncOutcome::Closed { id }
+            | SyncOutcome::BodySynced { id, .. } => id,
         }
     }
 }
@@ -1723,6 +1890,14 @@ pub fn record_sync_outcomes(path: &Path, outcomes: &[SyncOutcome], now: i64) -> 
                 }
                 SyncOutcome::Closed { .. } => {
                     task.issue_closed_at = Some(now);
+                }
+                // The PLANNED rev, never the task's current one: the stamp
+                // records which revision was pushed. A task edited between the
+                // gh call and this write therefore stays stale and is re-pushed
+                // next run, instead of being marked current while GitHub holds
+                // the older text.
+                SyncOutcome::BodySynced { synced_rev, .. } => {
+                    task.issue_body_synced_rev = Some(*synced_rev);
                 }
             }
             updated += 1;
@@ -1772,7 +1947,7 @@ pub fn mark_failed(path: &Path, id: &str, reason: Option<&str>) -> Result<()> {
         }
         let now = now_unix();
         task.defer_until = Some(now + 172_800);
-        task.updated_at = now;
+        touch(task, now);
         save(path, &tasks)
     })
 }
@@ -1828,7 +2003,7 @@ pub fn edit(
         if let Some(v) = status {
             task.status = v.to_string();
         }
-        task.updated_at = now_unix();
+        touch(task, now_unix());
         save(path, &tasks)
     })
 }
@@ -1938,6 +2113,8 @@ pub fn add_with_weight_and_github_push<R: Fn(&[&str]) -> Option<(bool, String)>>
             issue_number: None,
             issue_url: None,
             issue_closed_at: None,
+            issue_body_synced_rev: None,
+            rev: 0,
             touched_files: Vec::new(),
         };
 
@@ -2907,6 +3084,8 @@ mod tests {
             issue_number: None,
             issue_url: None,
             issue_closed_at: None,
+            issue_body_synced_rev: None,
+            rev: 0,
             touched_files: Vec::new(),
         };
         let seed = vec![
@@ -2993,6 +3172,8 @@ mod tests {
                     issue_number: None,
                     issue_url: None,
                     issue_closed_at: None,
+                    issue_body_synced_rev: None,
+                    rev: 0,
                     touched_files: Vec::new(),
                 });
             }
@@ -3580,6 +3761,8 @@ mod tests {
                     issue_number: None,
                     issue_url: None,
                     issue_closed_at: None,
+                    issue_body_synced_rev: None,
+                    rev: 0,
                     touched_files: Vec::new(),
                 });
             }
@@ -4034,6 +4217,8 @@ mod tests {
                             issue_number: None,
                             issue_url: None,
                             issue_closed_at: None,
+                            issue_body_synced_rev: None,
+                            rev: 0,
                             touched_files: Vec::new(),
                         });
                     }
@@ -4109,6 +4294,8 @@ mod tests {
                 issue_number: None,
                 issue_url: None,
                 issue_closed_at: None,
+                issue_body_synced_rev: None,
+                rev: 0,
                 touched_files: Vec::new(),
             }],
             &rec,
@@ -4220,6 +4407,8 @@ mod tests {
             issue_number: None,
             issue_url: None,
             issue_closed_at: None,
+            issue_body_synced_rev: None,
+            rev: 0,
             touched_files: Vec::new(),
         };
         // Persisted as an old binary would have left them.
@@ -5120,6 +5309,8 @@ mod tests {
                 issue_number: None,
                 issue_url: None,
                 issue_closed_at: None,
+                issue_body_synced_rev: None,
+                rev: 0,
                 touched_files: Vec::new(),
             }],
         )
@@ -5242,6 +5433,8 @@ mod tests {
             issue_number,
             issue_url: None,
             issue_closed_at,
+            issue_body_synced_rev: None,
+            rev: 0,
             touched_files: Vec::new(),
         }
     }
@@ -5269,15 +5462,28 @@ mod tests {
     /// reason is swapped to NotPlanned, or if sync_plan returns empty.
     #[test]
     fn sync_plan_closes_done_as_completed() {
-        let plan = sync_plan(&[sync_task("bbb", STATUS_DONE, Some(42), None)]);
+        let task = sync_task("bbb", STATUS_DONE, Some(42), None);
+        let plan = sync_plan(std::slice::from_ref(&task));
         assert_eq!(
             plan,
             vec![SyncAction::Close {
                 id: "bbb".to_string(),
                 number: 42,
                 reason: crate::github::CloseReason::Completed,
+                comment: build_close_comment(&task, crate::github::CloseReason::Completed),
             }],
             "a done task with an open issue must be planned for a `completed` close"
+        );
+        // The `comment` above is built by the very function that filled it, so
+        // that field of the equality witnesses nothing about its CONTENT. Pin
+        // the content separately: a close that posts a record which does not
+        // identify the task is not a record.
+        let SyncAction::Close { comment, .. } = &plan[0] else {
+            panic!("expected a Close action, got {:?}", plan[0]);
+        };
+        assert!(
+            comment.contains("bbb") && comment.trim().len() > 20,
+            "the close comment must name the task and carry content; got {comment:?}"
         );
     }
 
@@ -5287,15 +5493,27 @@ mod tests {
     /// GitHub as completed.
     #[test]
     fn sync_plan_closes_cancelled_as_not_planned() {
-        let plan = sync_plan(&[sync_task("ccc", STATUS_CANCELLED, Some(7), None)]);
+        let task = sync_task("ccc", STATUS_CANCELLED, Some(7), None);
+        let plan = sync_plan(std::slice::from_ref(&task));
         assert_eq!(
             plan,
             vec![SyncAction::Close {
                 id: "ccc".to_string(),
                 number: 7,
                 reason: crate::github::CloseReason::NotPlanned,
+                comment: build_close_comment(&task, crate::github::CloseReason::NotPlanned),
             }],
             "a cancelled task's issue must be closed as `not planned`, not `completed`"
+        );
+        // Same caveat as the `done` case: the equality cannot witness the
+        // comment's content. An abandoned task's record must say it was
+        // abandoned, not borrow the `completed` wording.
+        let SyncAction::Close { comment, .. } = &plan[0] else {
+            panic!("expected a Close action, got {:?}", plan[0]);
+        };
+        assert!(
+            comment.contains("ccc") && comment.contains("not planned"),
+            "a cancelled task's close comment must name the task and its reason; got {comment:?}"
         );
     }
 
@@ -5327,6 +5545,14 @@ mod tests {
     /// added (the anti-vacuity mutation "failed tasks included in the close
     /// set"), and also if `failed` were routed to Create (its issue already
     /// exists).
+    ///
+    /// The assertion was `plan.is_empty()` until 0.3.24. It is now "no Create
+    /// and no Close" — the same claim, stated as what it always meant. A failed
+    /// task with an OPEN issue is live work whose notes keep changing (`fail`
+    /// itself appends its reason to them), so it legitimately earns an
+    /// `UpdateBody`. The CLOSE claim this test exists to protect is untouched,
+    /// and is now asserted directly rather than via emptiness, which would have
+    /// silently started covering a third arm it was never written to judge.
     #[test]
     fn sync_plan_never_touches_failed_tasks() {
         let plan = sync_plan(&[
@@ -5334,8 +5560,23 @@ mod tests {
             sync_task("fail-closed-stamp", STATUS_FAILED, Some(98), Some(123)),
         ]);
         assert!(
-            plan.is_empty(),
-            "a failed task's issue must stay open (unfinished work); got {plan:?}"
+            !plan
+                .iter()
+                .any(|a| matches!(a, SyncAction::Close { .. } | SyncAction::Create { .. })),
+            "a failed task's issue must stay open and must never be re-created \
+             (unfinished work); got {plan:?}"
+        );
+        // And the body arm must not reach a failed task whose issue is already
+        // closed: nothing is served by rewriting a closed issue's body.
+        let body_ids: Vec<&str> = plan
+            .iter()
+            .filter(|a| matches!(a, SyncAction::UpdateBody { .. }))
+            .map(|a| a.task_id())
+            .collect();
+        assert_eq!(
+            body_ids,
+            vec!["fail-with-issue"],
+            "only the failed task with an OPEN issue may get a body update; got {plan:?}"
         );
     }
 
@@ -5345,6 +5586,11 @@ mod tests {
     /// Dies if `(STATUS_PENDING, None, _)` is loosened to `(STATUS_PENDING, _, _)`
     /// (duplicate issue per task on every run), or if the close arms drop
     /// their `Some(n)` requirement.
+    ///
+    /// As with `sync_plan_never_touches_failed_tasks`, the emptiness assertion
+    /// became an explicit "no Create, no Close" in 0.3.24: an already-mirrored
+    /// pending task is exactly the shape the body arm is FOR, so emptiness
+    /// would now be asserting the opposite of the intended design.
     #[test]
     fn sync_plan_skips_already_mirrored_pending_and_issueless_done() {
         let plan = sync_plan(&[
@@ -5353,8 +5599,21 @@ mod tests {
             sync_task("cancelled-no-issue", STATUS_CANCELLED, None, None),
         ]);
         assert!(
-            plan.is_empty(),
-            "already-mirrored pending / issueless done must yield no action; got {plan:?}"
+            !plan
+                .iter()
+                .any(|a| matches!(a, SyncAction::Close { .. } | SyncAction::Create { .. })),
+            "an already-mirrored pending task must not be created again and an \
+             issueless done/cancelled task has nothing to close; got {plan:?}"
+        );
+        let body_ids: Vec<&str> = plan
+            .iter()
+            .filter(|a| matches!(a, SyncAction::UpdateBody { .. }))
+            .map(|a| a.task_id())
+            .collect();
+        assert_eq!(
+            body_ids,
+            vec!["pending-mirrored"],
+            "a task with NO issue can have no body to update; got {plan:?}"
         );
     }
 
@@ -5377,15 +5636,25 @@ mod tests {
             sync_task("create-2", STATUS_PENDING, None, None),
         ];
         let plan = sync_plan(&tasks);
-        let ids: Vec<&str> = plan.iter().map(|a| a.task_id()).collect();
+        // The create/close selection is judged on its own, with body actions
+        // filtered out, so every mutation this test killed before 0.3.24 it
+        // still kills: an empty Vec, every task, a dropped closed-stamp guard
+        // (`skip-closed` appears), `failed` added to the close set
+        // (`skip-failed` appears as a Close), or a plan regrouped by kind.
+        let cc: Vec<&SyncAction> = plan
+            .iter()
+            .filter(|a| !matches!(a, SyncAction::UpdateBody { .. }))
+            .collect();
+        let cc_ids: Vec<&str> = cc.iter().map(|a| a.task_id()).collect();
         assert_eq!(
-            ids,
+            cc_ids,
             vec!["create-1", "close-cancelled", "close-done", "create-2"],
-            "plan must be exactly the actionable tasks, in store order; got {plan:?}"
+            "the create/close plan must be exactly the actionable tasks, in store \
+             order; got {plan:?}"
         );
         assert!(
             matches!(
-                plan[1],
+                cc[1],
                 SyncAction::Close {
                     number: 3,
                     reason: crate::github::CloseReason::NotPlanned,
@@ -5393,11 +5662,11 @@ mod tests {
                 }
             ),
             "cancelled → not planned, number carried through; got {:?}",
-            plan[1]
+            cc[1]
         );
         assert!(
             matches!(
-                plan[2],
+                cc[2],
                 SyncAction::Close {
                     number: 5,
                     reason: crate::github::CloseReason::Completed,
@@ -5405,7 +5674,25 @@ mod tests {
                 }
             ),
             "done → completed, number carried through; got {:?}",
-            plan[2]
+            cc[2]
+        );
+        // And the WHOLE plan — body actions included — still follows store
+        // order. Added with the third arm: a body action appearing in a
+        // kind-grouped batch at the end would pass the filtered check above
+        // while breaking the ordering guarantee this test is named for.
+        let all_ids: Vec<&str> = plan.iter().map(|a| a.task_id()).collect();
+        assert_eq!(
+            all_ids,
+            vec![
+                "skip-failed",
+                "create-1",
+                "close-cancelled",
+                "skip-mirrored",
+                "close-done",
+                "create-2"
+            ],
+            "the full plan must follow store order; the two tasks holding an open \
+             issue with an unsynced body appear in place, not grouped; got {plan:?}"
         );
     }
 
@@ -5623,13 +5910,16 @@ mod tests {
         // gh failed → the caller pushes NO outcome.
         assert_eq!(record_sync_outcomes(&path, &[], 1_800_000_000).unwrap(), 0);
 
-        let replan = sync_plan(&load(&path).unwrap());
+        let reloaded = load(&path).unwrap();
+        assert_eq!(reloaded.len(), 1, "fixture must hold exactly the one task");
+        let replan = sync_plan(&reloaded);
         assert_eq!(
             replan,
             vec![SyncAction::Close {
                 id: "hhh".to_string(),
                 number: 42,
                 reason: crate::github::CloseReason::Completed,
+                comment: build_close_comment(&reloaded[0], crate::github::CloseReason::Completed),
             }],
             "a close that was never confirmed must be retried"
         );

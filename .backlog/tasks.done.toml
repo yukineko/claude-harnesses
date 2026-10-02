@@ -25120,12 +25120,12 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p2"]
 touched_files = []
-status = "cancelled"
+status = "done"
 notes = """
 491f6e94 の裁定は worktree の除去のみ。merge 済みブランチの扱いは未裁定。
 unproven (backlog audit 2026-10-02 (session 798a05c3)): no written test reproduces it; closed per user rule. phase-3 UNTESTABLE (rev 596108b9): Pure design question: branch deletion is explicitly outside the current ruling, and the code documents that choice. A test needs a ruling first. | crates/condukt/src/wt_reap.rs:29 module doc states verbatim "It does NOT delete the branch: the ruling authorises removing the worktree, and a branch that is an ancestor of main costs nothing to keep". Ticket notes: '491f6e94 の裁定は worktree の除去のみ。merge 済みブランチの扱いは未裁定。'"""
 created_at = 1790720889
-updated_at = 1790983177
+updated_at = 1790985254
 weight = 0.0
 issue_number = 897
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/897"

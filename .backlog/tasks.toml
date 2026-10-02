@@ -9274,3 +9274,18 @@ updated_at = 1790983319
 weight = 0.0
 issue_number = 1090
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1090"
+
+[[task]]
+id = "b982f232"
+title = "condukt diffrisk_record::every_invocation_is_journaled_even_when_nothing_is_recorded が並列実行時のみ落ちる (test isolation)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "observed 2026-10-03 (session 798a05c3 subagent): on base 1f9c594b, cargo test -p condukt parallel: 2/3 runs fail 'one record per invocation' left 1 right 2; passes alone 5/5 and with --test-threads=1. Likely shared journal path between tests."
+created_at = 1790985255
+updated_at = 1790985255
+weight = 0.0
+issue_number = 1120
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1120"

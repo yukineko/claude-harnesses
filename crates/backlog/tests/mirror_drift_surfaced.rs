@@ -136,6 +136,22 @@ fn drift_counts_are_injected_into_additional_context() {
         ctx.to_lowercase().contains("creat"),
         "the unfiled-issue count must be stated: {ctx:?}"
     );
+    // The injected text must read as prose, not as source indentation.
+    // Observed 2026-10-02 in the shipped 0.3.20 build: the section was authored
+    // as one `format!` with `\`-continued lines, and `cargo fmt` collapsed it
+    // onto a single line, which turns each continuation's leading indentation
+    // into LITERAL content — runs of 13 spaces mid-sentence. The escape only
+    // strips whitespace while the newline is still there, so the formatter
+    // silently changed the rendered string. Assert the rendered shape instead
+    // of trusting the escape, since the thing that broke it was a tool nobody
+    // was going to re-read the output after.
+    for line in ctx.lines() {
+        assert!(
+            !line.trim_start().contains("  "),
+            "injected prose must not carry runs of spaces from source \
+             indentation; offending line: {line:?}"
+        );
+    }
 }
 
 /// ANTI-NOISE CONTROL. A store that has never produced a single issue is not

@@ -140,11 +140,14 @@ pub fn run(input: &HookInput) -> Option<String> {
     // gap it knowingly leaves open.
     let drift = store::mirror_drift(&tasks);
     if drift.is_reportable() {
+        warnings.push_str("## Backlog \u{2014} GitHub mirror drift\n\n");
         warnings.push_str(&format!(
-            "## Backlog \u{2014} GitHub mirror drift\n\n             This store is out of sync with its GitHub issues:              **{closes} issue(s) to close** (the task is already done/cancelled) and              **{creates} issue(s) to create** (pending, never mirrored).\n\n             Reconcile with `backlog sync` (dry run), then `backlog sync --apply`.              The two arms are selectable: `backlog sync --only close --apply` catches up              the closes without publishing any new issue.\n\n             If these counts keep growing, the mirror itself is not running \u{2014} check              that `gh` is installed and authenticated (`gh auth status`). Every failed              `gh issue create`/`close` leaves the task exactly as it was, so nothing is              lost, but nothing is pushed either.\n\n",
+            "This store is out of sync with its GitHub issues: **{closes} issue(s) to close** (the task is already done/cancelled) and **{creates} issue(s) to create** (pending, never mirrored).\n\n",
             closes = drift.closes,
             creates = drift.creates,
         ));
+        warnings.push_str("Reconcile with `backlog sync` (dry run), then `backlog sync --apply`. The two arms are selectable: `backlog sync --only close --apply` catches up the closes without publishing any new issue.\n\n");
+        warnings.push_str("If these counts keep growing, the mirror itself is not running \u{2014} check that `gh` is installed and authenticated (`gh auth status`). Every failed `gh issue create`/`close` leaves the task exactly as it was, so nothing is lost, but nothing is pushed either.\n\n");
     }
 
     // pending または failed のタスクのみ対象 (is_pending() で判定)

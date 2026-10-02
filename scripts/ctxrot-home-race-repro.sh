@@ -2,7 +2,8 @@
 # Repro for the ctxrot HOME env race (backlog b71c72a7).
 # usage: ctxrot-home-race-repro.sh [N=200]
 # Prints `runs=N failed=K`; exit 1 if K>0, 0 if K==0, non-zero on build
-# failure or if a run executed fewer than 2 tests (mistyped filter guard).
+# failure, 3 if any run did not execute all three race participants by name
+# (mistyped filter guard).
 set -u
 N="${1:-200}"
 . "$HOME/.cargo/env" 2>/dev/null || true
@@ -16,9 +17,14 @@ failed=0
 for i in $(seq 1 "$N"); do
   o="$("$B" emit_violation find_transcript --test-threads=4 2>&1)"
   rc=$?
-  n="$(printf '%s\n' "$o" | sed -n 's/^running \([0-9]*\) test.*/\1/p' | head -n 1)"
-  if [ -z "$n" ] || [ "$n" -lt 2 ]; then
-    echo "run $i: fewer than 2 tests ran (n=${n:-none}); filter broken"
+  # Both sides of the race must have run: the HOME-locked emit test AND the
+  # HOME-mutating find_transcript tests. A count floor alone is not enough —
+  # `emit_violation` by itself already matches 2 tests, so a typo in the
+  # find_transcript half would pass a `-lt 2` check with the racer absent.
+  if ! printf '%s\n' "$o" | grep -q '^test .*emit_violation_records_a_ctxrot_event ' ||
+     ! printf '%s\n' "$o" | grep -q '^test .*find_transcript_absent_projects_dir_returns_none ' ||
+     ! printf '%s\n' "$o" | grep -q '^test .*find_transcript_unreadable_projects_dir_does_not_panic '; then
+    echo "run $i: a race participant did not run; filter broken"
     exit 3
   fi
   [ "$rc" -eq 0 ] || failed=$((failed + 1))

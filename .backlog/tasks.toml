@@ -7361,9 +7361,11 @@ notes = """
 
 **完了条件**: 並列で走れない実行体から condukt の並列 run が要求されたとき、**非0 か明示的な警告で「直列に縮退した」と宣言される**ことを観測する。宣言せずに直列完走しないことを対照として同時に観測する (第3節: 判定不能・能力不足は沈黙ではなく制限側の明示へ倒す)。縮退そのものを禁じる必要は無い — 見えれば flow 側が別の実行体を選べる。
 
-関連: 91d319d2 (隔離実行規約)、4b94e371 (並列下の偽の赤)。並列度を上げる方針は、上げたつもりが上がっていない経路と、上げると嘘の赤が出るテストの両方を潰さないと成立しない。"""
+関連: 91d319d2 (隔離実行規約)、4b94e371 (並列下の偽の赤)。並列度を上げる方針は、上げたつもりが上がっていない経路と、上げると嘘の赤が出るテストの両方を潰さないと成立しない。
+
+[re-observed 2026-10-03 @abd9b7c6, session dc66e988] 並列度の縮退に加え生成/検証分離も消える: fork が 4 item の実装とテストを両方自分で書いた (branches flow-dc66/*)。CLAUDE.md 2(a) 違反。親が別途 sonnet verifier を4体起動して補い、autoflow-doc では実装者が見落とした stale 記述 (README.ja.md:33) を独立 verifier が検出した。"""
 created_at = 1789291263
-updated_at = 1789291263
+updated_at = 1790981652
 weight = 0.0
 issue_number = 595
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/595"
@@ -13478,3 +13480,52 @@ updated_at = 1790980729
 weight = 0.0
 issue_number = 1082
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1082"
+
+[[task]]
+id = "4d51c05e"
+title = "specguard brief が repo のほぼ全 crate を matched_without_spec として not-covered を返すため、flow 3-1.5 の spec-gap divert ゲートがほぼ全バッチで escalate する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-03 @abd9b7c6: specguard brief --json に4種の異なる課題文(rollout gate / autoflow README / donegate refuse / condukt fixture)を渡すと全て verdict=not-covered, rc=0。matched_without_spec に autoflow/backlog/blastguard/condukt/donegate 等ほぼ全 src が並ぶ。読み (a) spec カバレッジが実際に薄く、ゲートは正しく機能している -> spec を起こすべき / (b) brief の not-covered 判定が粗く(キーワード不問で全一致)ゲートが常時発火するノイズになっている。見分け方: 明らかに無関係な課題文(例 'xyz unrelated') でも同じ matched_without_spec 集合が返るか測る。"
+created_at = 1790980211
+updated_at = 1790980211
+weight = 0.0
+issue_number = 1070
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1070"
+
+[[task]]
+id = "9dab71f8"
+title = "test_check_plugin_rollout.py の ParkedRealDeclaration / RetiredRealDeclaration が cwd=scripts/ で実行すると赤になる（repo root からは緑）"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-03 @abd9b7c6: cd scripts && python3 -m unittest test_check_plugin_rollout で 2 failed (test_the_shipped_declaration_is_valid x2)。repo root から python3 -m unittest discover -s scripts -p test_check_plugin_rollout.py は全件 OK。読み (a) REPO=os.getcwd() 依存でテストが実ファイルを見つけられない＝cwd で赤緑が変わるテスト基盤の欠陥 / (b) repo root 実行が規約で仕様どおり。見分け方: 該当テストが参照するパスが REPO 由来か確認。"
+created_at = 1790981488
+updated_at = 1790981488
+weight = 0.0
+issue_number = 1083
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1083"
+
+[[task]]
+id = "f92a600d"
+title = "cargo test -p condukt で 1 件の未特定 flake を観測（4 回中 1 回、名前未取得）"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flaky",
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-03、branch flow-dc66/condukt-fixture (abd9b7c6 + precedent/escalate fixture 修正)。集計で 871 passed / 1 failed が 1 回、その後 4 回連続 0 failed。失敗テスト名は未取得。読み (a) a6608aa0 と同類の pid 名 temp fixture 再入が他モジュールにも残る / (b) 並行セッションの cargo test と固定パス fixture の干渉。見分け方: 20 回回して FAILED 行を保存し、temp_dir()+process::id() 命名の fixture を grep。"
+created_at = 1790981495
+updated_at = 1790981495
+weight = 0.0
+issue_number = 1084
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1084"

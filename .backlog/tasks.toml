@@ -14124,3 +14124,48 @@ weight = 0.0
 issue_number = 1033
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1033"
 rev = 0
+
+[[task]]
+id = "c4c46e88"
+title = "git commit --amend は常に gate-bypass ledger に ungated として記録され push をブロックする — tree は実際に検査済みなのに、certified_head と amend 後の parent が構造的に一致しないため (36c936bc の fast-forward FP とは別のトリガ)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+観測 2026-10-02 (測定点 6781f0cd)。backlog 0.3.24 の出荷中に踏んだ。
+
+再現: worktree で commit し、その後 git commit --amend -F <file> でメッセージだけを差し替える。amend 時にも pre-commit は走り green になる (BLOCK 0 件) が、直後の git push が次を出して落ちる:
+
+  gate-bypass: 1 ungated commit(s) outstanding — content that the local
+  gate never inspected (--no-verify, cherry-pick or rebase):
+    6781f0cdf94a  chore(backlog): close 751b2d1e / ...
+
+原因は .githooks/post-commit:74-82 の二段照合である。pre-commit は (検査した tree, 検査時の HEAD) を sentinel に書く。amend の場合:
+ - certified_tree  = amend 後の tree と **一致する** (メッセージだけ変えたので tree は同一)
+ - certified_head  = amend 前の commit (本件では 51420466)
+ - amend 後の parents = 61673d0a (amend は 51420466 を置き換えるので、その親を引き継ぐ)
+したがって for p in $parents の照合が必ず外れ、tree が一致していても exit 0 に到達しない。
+
+**これは実体としては偽陽性である**: ledger の見出しは 'content that the local gate never inspected' と書くが、この content は検査されている (tree が一致していることが post-commit 自身の計算で分かっている)。嘘をついているのは HEAD 側の半分だけで、amend では『検査時の HEAD』と『commit の parent』が一致しないのが正常な挙動である。
+
+36c936bc は同じ ledger の別トリガ (main での fast-forward merge が ungated として記録される) を記録している。本件は amend であり、トリガが違うので別票にする。両方とも『rewrite-after-certification』という同じクラスではあるので、修正は共通になる可能性がある。
+
+実害: push が 1 回ブロックされる。設計上の出口は『次の pre-commit が非空の staged diff に対して green になると、その HEAD に含まれる entry が消える』なので、別の実作業を commit すれば解消する (本票の起票自体がそれを兼ねた)。だが **commit を 1 個でっち上げれば消える** という形なので、急いでいる人間が中身の無い commit で黙らせる圧力がかかる — CLAUDE.md 第5節が禁じる迂回に構造的に誘導している。
+
+候補 (未裁定):
+(a) tree が一致している場合は parent 照合を免除する。amend と rebase -i の reword はこれで通る。ただし『別の親の上に同じ tree を載せた』cherry-pick も通ってしまうので、差分を判定する 2 つのゲート (pre-commit がそう書いている) の観点では緩い。
+(b) pre-commit が sentinel に certified_head として HEAD ではなく『この commit の親になる予定の commit』を書く。amend 中かどうかは pre-commit から判定できる (git rev-parse --verify MERGE_HEAD は使えないが、$GIT_AUTHOR_DATE や amend 時の環境では判定材料が限られる) ので要調査。
+(c) post-commit が amend を検出して (reflog の直前 entry が同じ parent を指す) 専用の扱いをする。
+
+測り方: 使い捨て repo で .githooks を配線し、(1) 通常 commit → ledger 空、(2) --amend でメッセージのみ変更 → 現状は ledger 1 件 (これが RED)、(3) 修正後は ledger 空、(4) 対照として --no-verify commit は今も ledger 1 件に残ること、(5) 対照として cherry-pick が (a) を採用した場合に通ってしまわないか、を確認する。"""
+created_at = 1790915385
+updated_at = 1790915385
+weight = 0.0
+issue_number = 1035
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1035"
+rev = 0

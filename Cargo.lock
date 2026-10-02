@@ -365,7 +365,7 @@ dependencies = [
 
 [[package]]
 name = "ctxrot"
-version = "0.5.29"
+version = "0.5.30"
 dependencies = [
  "anyhow",
  "chrono",

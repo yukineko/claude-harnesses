@@ -265,6 +265,9 @@ mod tests {
     /// (`None`, which callers already render as an honest "unknown" state).
     #[test]
     fn find_transcript_absent_projects_dir_returns_none() {
+        let _guard = crate::config::HOME_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().expect("tempdir");
         let old_home = std::env::var_os("HOME");
         std::env::set_var("HOME", tmp.path());
@@ -289,6 +292,9 @@ mod tests {
         let mut perms = std::fs::metadata(&projects).unwrap().permissions();
         perms.set_mode(0o000);
         std::fs::set_permissions(&projects, perms.clone()).unwrap();
+        let _guard = crate::config::HOME_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let old_home = std::env::var_os("HOME");
         std::env::set_var("HOME", tmp.path());
         let result = std::panic::catch_unwind(|| find_transcript_for_session("some-session"));

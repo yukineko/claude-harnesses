@@ -13288,3 +13288,21 @@ MirrorDrift::mirror_in_use の doc comment に KNOWN GAP として明記済み�
 created_at = 1790907263
 updated_at = 1790907263
 weight = 0.0
+
+[[task]]
+id = "a943e914"
+title = "guard-maintree-bash.py: 未展開シェル変数のリダイレクト先を main への書き込みとして deny する挙動を文書化する"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "実測 2026-10-02 (測定点 448ff46f): scratchpad へ書くだけの 'cd <main tree> && ... > $S/to-delete.txt' が 'target $S/to-delete.txt mutates this project MAIN working tree' で拒否された。scripts/guard-maintree-bash.py はリダイレクト先をテキストとして取り出すため (_strip_heredoc_bodies 周辺の語切り) 未展開の $VAR を解決できず、cwd が main なので cwd 相対と見なして deny する。読み 2 つ: (a) 実在の欠陥ではなく CLAUDE.md 3 の 'judgment 不能は制限側へ' の正しい fail-closed であり、必要なのは文書化とリテラルパスを使う運用規約だけ / (b) agent がこれを '誤検知' と読んで bypass に走る誘因になるので、エラー文に 'リテラルの絶対パスで書き直せ' という逃げ道を明記すべき。見分け方: 他の guard 系 script が未展開変数をどう扱っているか (deny か skip か) を census し、この repo の既定方針と一致しているかを見る。自分は実際に (a) と判定する前に一度 '誤検知' と報告しており、その読み違い自体がこのチケットの動機。"
+created_at = 1790908646
+updated_at = 1790908646
+weight = 0.0
+issue_number = 1007
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1007"

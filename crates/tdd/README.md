@@ -63,8 +63,10 @@ comes from `--cmd`, else `tdd.toml`'s `test_cmd` (default `cargo test`).
 
 `tdd oracle --task <id>` classifies the task's RED→GREEN transition from its
 proofs and prints a JSON report (`{"transition":"fail_to_pass","valid_fp_oracle":true,…}`);
-it exits 0 only for a valid Fail→Pass oracle (fail-soft: a missing/corrupt
-proof reports `transition:"unknown"` rather than panicking). It isn't part of
+it exits 0 only for a valid Fail→Pass oracle. A missing/corrupt proof reports
+`transition:"unknown"` (exit 1); a proof that exists but cannot be read reports
+`transition:"undetermined"`, `valid_fp_oracle:false` with the read error under
+`"undetermined"` (exit 2) — never as a missing or valid proof. It isn't part of
 the `/tdd` skill's own phases — it's the machine oracle `condukt`'s Fail→Pass
 gate (`condukt state check-oracle`) calls to verify a `fix`/`feature` task's
 RED/GREEN proofs deterministically.

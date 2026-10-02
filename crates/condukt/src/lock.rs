@@ -953,3 +953,80 @@ mod tests {
         std::fs::remove_dir_all(&base).ok();
     }
 }
+
+#[cfg(test)]
+mod backlog_e9262d91 {
+    //! backlog e9262d91: while waiting on a held lock, every 10ms poll calls
+    //! `pid_alive`, which (off Linux) spawns `kill -0 <pid>` — ~100 fork+exec
+    //! per second per waiter, up to ~1000 per acquisition, self-amplifying
+    //! under load. Both fixes the ticket proposes (short-circuit a holder pid
+    //! equal to our own; or check liveness only every few polls) bound the
+    //! spawn rate.
+    //!
+    //! Observation: hold the lock under THIS process's pid (the in-process
+    //! contention of `repo_primary_lock_serializes_concurrent_rmw_no_lost_update`),
+    //! put a counting `kill` first on PATH, wait 1s, count spawns. The bound
+    //! (at most 10 in 1s, i.e. at most one liveness probe per ~10 polls) is
+    //! the contract chosen here; today it is ~one per poll.
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "backlog e9262d91: open defect, remove ignore when fixed"]
+    fn lock_wait_does_not_spawn_kill_on_every_poll() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let count = tmp.path().join("kill.count");
+        let fake = bin.join("kill");
+        std::fs::write(
+            &fake,
+            format!(
+                "#!/bin/sh\necho x >> '{}'\nexec /bin/kill \"$@\"\n",
+                count.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let lock = tmp.path().join("held.lock");
+        let info = LockInfo {
+            pid: std::process::id(),
+            run_id: "held".into(),
+            acquired_at: now_unix(),
+        };
+        std::fs::write(&lock, serde_json::to_string(&info).unwrap()).unwrap();
+
+        let _guard = crate::env_lock::PATH_ENV_LOCK
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        let old_path = std::env::var_os("PATH");
+        let mut parts = vec![bin.clone()];
+        if let Some(p) = &old_path {
+            parts.extend(std::env::split_paths(p));
+        }
+        std::env::set_var("PATH", std::env::join_paths(parts).unwrap());
+        let got = RunLock::acquire_at(lock.clone(), Duration::from_secs(1));
+        match old_path {
+            Some(p) => std::env::set_var("PATH", p),
+            None => std::env::remove_var("PATH"),
+        }
+
+        assert!(
+            !got.held(),
+            "fixture precondition: a live holder must not be stolen"
+        );
+        assert!(
+            lock.exists(),
+            "fixture precondition: the held lock must survive the wait"
+        );
+        let spawns = std::fs::read_to_string(&count)
+            .map(|s| s.lines().count())
+            .unwrap_or(0);
+        assert!(
+            spawns <= 10,
+            "waiting 1s on a held lock spawned `kill` {spawns} times (one fork+exec per 10ms poll)"
+        );
+    }
+}

@@ -978,3 +978,36 @@ mod tests {
         assert_eq!(planned[0].finding_id, "F-9");
     }
 }
+
+/// backlog 7a842862: a condukt gate-check escalation (`source: condukt-gate`,
+/// `file: None`, summary "gate-check escalated: task ...") is bridged to the
+/// backlog as a p0 work item whose notes say only WHAT HAPPENED
+/// (`finding-id:.. file:(none) severity:high | confirmed: N日前 | regression
+/// test: 該当テストなし`) and never what observation would close it. Such an
+/// item cannot be closed by anyone and squats at the head of the queue.
+#[cfg(test)]
+mod backlog_7a842862 {
+    use super::*;
+
+    #[test]
+    #[ignore = "backlog 7a842862: open defect, remove ignore when fixed"]
+    fn bridged_gate_check_escalation_notes_state_a_closing_criterion() {
+        let f = ReviewFinding::new(
+            "gate-exec:run-1:t4".to_string(),
+            "condukt-gate".to_string(),
+            Some("high".to_string()),
+            "gate-check escalated: task t4 risk=high reversible=false policy_is_auto=false"
+                .to_string(),
+            None,
+            None,
+            1_000,
+        );
+        assert_eq!(severity_to_priority(f.severity.as_deref()), "p0");
+        let notes = build_notes(&f, 1_000 + 61 * 86_400, None);
+        assert!(
+            notes.contains("done_criteria") || notes.contains("閉じる条件"),
+            "a bridged gate-check escalation carries no closing criterion \
+             (done_criteria / what to observe to close it): {notes}"
+        );
+    }
+}

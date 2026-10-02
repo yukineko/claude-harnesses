@@ -3580,3 +3580,47 @@ mod tests {
         std::fs::remove_dir_all(&tmp).ok();
     }
 }
+
+#[cfg(test)]
+mod backlog_cf58e2fc {
+    //! backlog cf58e2fc: a run state that loads cleanly but whose tasks carry
+    //! NO `updated_at` has observed nothing about task progress. That absence
+    //! must be `Undetermined`, never a `Known` frozen value (`unwrap_or(0)`),
+    //! because a Known signal helps the fingerprint reach `Known(Stalled)` —
+    //! the only verdict that reaps a claim (CLAUDE.md §3).
+    use super::*;
+
+    #[test]
+    #[ignore = "backlog cf58e2fc: open defect, remove ignore when fixed"]
+    fn absent_updated_at_is_undetermined_not_known_zero() {
+        let rs = crate::state::RunState {
+            run_id: "run-cf58e2fc".into(),
+            goal: "g".into(),
+            tasks: vec![
+                crate::state::TaskState {
+                    id: "t1".into(),
+                    status: crate::state::Status::Running,
+                    updated_at: None,
+                    ..Default::default()
+                },
+                crate::state::TaskState {
+                    id: "t2".into(),
+                    status: crate::state::Status::Pending,
+                    updated_at: None,
+                    ..Default::default()
+                },
+            ],
+            paused: false,
+            terminal_label: None,
+            recorded_at: None,
+            recorded_episodes: Vec::new(),
+        };
+        match run_task_progress_signal(&rs) {
+            Determination::Undetermined(_) => {}
+            Determination::Known(v) => panic!(
+                "no task carries updated_at, yet the signal is Known({:?}) — an absence minted as an observation",
+                String::from_utf8_lossy(&v)
+            ),
+        }
+    }
+}

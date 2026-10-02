@@ -485,3 +485,35 @@ mod tests {
         assert_eq!(commits[1].hash, "cafefeed");
     }
 }
+
+/// backlog 89544915: `reconcile-fixed` is the only automatic close path for a
+/// review finding, and it only recognises `CA-<crate>-<NNN>` ids. Findings
+/// produced by condukt's gate-exec escalation (`gate-exec:<run>:<task>`) and by
+/// `scripts/record-audit.py` (`record-audit:...`) can therefore never be
+/// closed by a fix commit that names them; the live ledger shows
+/// `[condukt-gate]: 0.00 (0/5)` and `[record-audit]: 0.00 (0/3)` closure.
+/// (What "closed" should mean for an escalation still needs a ruling; this
+/// pins the observable fact that a commit naming the id closes nothing.)
+#[cfg(test)]
+mod backlog_89544915 {
+    use super::*;
+
+    #[test]
+    #[ignore = "backlog 89544915: open defect, remove ignore when fixed"]
+    fn a_fix_commit_naming_a_non_ca_finding_id_reconciles_it() {
+        let ids = ["gate-exec:run-20260913-1:t4", "record-audit:freshness:x"];
+        let commits = vec![CommitRef {
+            hash: "abc123".to_string(),
+            message: format!("fix: resolve {} and {}", ids[0], ids[1]),
+        }];
+        let known: BTreeSet<String> = ids.iter().map(|s| s.to_string()).collect();
+        let out = compute_reconcile_dispositions(&commits, &known, &BTreeSet::new(), 1000);
+        let closed: Vec<&str> = out.iter().map(|d| d.finding_id.as_str()).collect();
+        assert_eq!(
+            closed,
+            ids.to_vec(),
+            "no automatic close path for gate-exec / record-audit finding ids: a fix \
+             commit naming them reconciles {closed:?}"
+        );
+    }
+}

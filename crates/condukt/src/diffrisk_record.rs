@@ -589,3 +589,59 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod backlog_e494a8a3 {
+    //! backlog e494a8a3 / 42478392 / c63f1c23(3): the unit test
+    //! `diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded`
+    //! isolates `cwd` and the worktree in TempDirs, but derives its ledger from
+    //! `Config::load()` + `project_state_dir`, i.e. from the process `$HOME`.
+    //! Its ledger — and a fresh `-tmpXXXX` project namespace per run — escape
+    //! the TempDir into the shared state root (42478392 counted 2410, later
+    //! 6145, such namespaces under the real `~/.condukt/state`).
+    //!
+    //! Observation without touching the real HOME: run exactly that test in a
+    //! child copy of this test binary with `$HOME` pointed at an empty temp
+    //! dir, and look for anything it wrote under `$HOME/.condukt/state`. A test
+    //! that keeps its ledger inside its own TempDir leaves that dir absent.
+    use std::process::Command;
+
+    const TARGET: &str =
+        "diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded";
+
+    #[test]
+    #[ignore = "backlog e494a8a3: open defect, remove ignore when fixed"]
+    fn journaling_test_does_not_write_into_the_home_state_root() {
+        let home = tempfile::tempdir().expect("temp home");
+        let exe = std::env::current_exe().expect("current test binary");
+        let out = Command::new(&exe)
+            .args([TARGET, "--exact", "--test-threads=1", "--nocapture"])
+            .env("HOME", home.path())
+            .env_remove("CONDUKT_DISABLE")
+            .output()
+            .expect("spawn child test binary");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success() && stdout.contains("1 passed"),
+            "fixture precondition: the target test must run and pass in the child; \
+             stdout={stdout} stderr={}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let state_root = home.path().join(".condukt").join("state");
+        let leaked: Vec<String> = std::fs::read_dir(&state_root)
+            .map(|rd| {
+                rd.flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert!(
+            leaked.is_empty(),
+            "the journaling test wrote {} namespace(s) into $HOME's state root \
+             ({}): {leaked:?} — its ledger is not confined to its TempDir, so \
+             concurrent runs share it and every run leaves a namespace behind",
+            leaked.len(),
+            state_root.display()
+        );
+    }
+}

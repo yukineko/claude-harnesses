@@ -312,3 +312,91 @@ mod tests {
         assert!(!is_enabled(&dir));
     }
 }
+
+#[cfg(test)]
+mod backlog_f31dd957 {
+    //! backlog f31dd957: the `Undetermined` and `Known(None)` refusal arms of
+    //! `resolve_discard_branch` had kill rate 0. Each arm gets its own
+    //! behavioural test; a fall-through to `Ok(expected)` in either arm turns
+    //! the matching test RED.
+    use super::*;
+    use std::process::Command;
+
+    fn git(dir: &Path, args: &[&str]) {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .expect("spawn git");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    #[test]
+    fn undetermined_registered_branch_refuses() {
+        // `repo` is not a git repository, so `git worktree list` fails and
+        // `registered_branch` is Undetermined.
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let repo = tmp.path().join("not-a-repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let wt = tmp.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        assert!(
+            matches!(
+                worktree::registered_branch(&repo, &wt),
+                Determination::Undetermined(_)
+            ),
+            "fixture precondition: registered_branch must be Undetermined for a non-repo"
+        );
+        let r = resolve_discard_branch(&repo, &wt, None, "shadow-b");
+        let err = r.expect_err("Undetermined registered branch must REFUSE, not resolve");
+        assert!(
+            err.to_string().contains("could not be determined"),
+            "refusal must come from the Undetermined arm: {err}"
+        );
+    }
+
+    #[test]
+    fn detached_worktree_known_none_refuses() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-q", "-b", "main"]);
+        git(
+            &repo,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "init",
+            ],
+        );
+        let wt = tmp.path().join("wt-detached");
+        git(
+            &repo,
+            &["worktree", "add", "-q", "--detach", wt.to_str().unwrap()],
+        );
+        assert_eq!(
+            worktree::registered_branch(&repo, &wt),
+            Determination::Known(None),
+            "fixture precondition: a detached worktree registers no branch"
+        );
+        let r = resolve_discard_branch(&repo, &wt, None, "shadow-b");
+        let err = r.expect_err("a worktree naming no branch must REFUSE, not resolve");
+        assert!(
+            err.to_string().contains("registers no branch"),
+            "refusal must come from the Known(None) arm: {err}"
+        );
+    }
+}

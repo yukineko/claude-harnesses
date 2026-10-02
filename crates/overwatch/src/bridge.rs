@@ -132,6 +132,9 @@ fn plan_entry_adds(rows: &[ReviewQueueEntry], already: &HashSet<String>) -> Vec<
         // `review_queue::run` ever mints one (never `build_queue`, which is
         // what feeds this planner), so this filter is a guard, not a live path.
         .filter(|r| r.kind != EntryKind::UndeterminedSource)
+        // A needs-ruling row is a view of backlog's OWN row; re-adding it would
+        // duplicate the task. Display-only stream, never bridged.
+        .filter(|r| r.kind != EntryKind::NeedsRuling)
         .filter_map(|r| {
             let key = format!("{}:{}", r.kind.tag(), r.identifier);
             if already.contains(&key) {
@@ -395,8 +398,15 @@ fn run_in(cwd: &Path) -> Result<SourceHealth> {
         "NO blocked merge was bridged from it",
         &mut undetermined,
     );
-    let entry_rows =
-        review_queue::build_queue(&systemic, &rollbacks, &[], &escalations, &merge_conflicts);
+    let entry_rows = review_queue::build_queue(
+        &systemic,
+        &rollbacks,
+        &[],
+        &escalations,
+        &merge_conflicts,
+        &[],
+        0,
+    );
 
     // 2. Already-bridged sets — findings keyed on bare finding_id (also the
     // review-metrics "resolved" source), non-finding entries keyed on the

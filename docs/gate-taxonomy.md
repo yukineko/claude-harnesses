@@ -46,23 +46,34 @@
 | `check-launcher-exec-bit.py`（launcher-exec-bit） | 実装正しさ | pre-commit | `crates/<crate>/bin/<name>` launcher が git **index** で 100755 かを検査する。working tree の mode は `core.fileMode=false` のため信用できない。100644 で配布された launcher は `Permission denied` で暗転し、hook が起動しないので finding も出ない = red ではなく dark になる（backlog 8cb3bc22） |
 | `check-cross-crate-constants.py`（crossx-constants） | 実装正しさ | pre-commit（2026-09-08 に配線） | 「lib target が無いので link できず手で写した」定数が、正典の宣言とずれていないかを機械照合する。テーブル駆動で、現在の登録は driver registry の stale TTL 1 件（正典 `crates/backlog/src/lock.rs` の `LOCK_STALE_TTL_SECS`、写しは `crates/condukt/src/wt_reconcile.rs` の `DRIVER_STALE_TTL_SECS`）。**rename を「ドリフト無し」と読まない**のが要点で、0 ヒットも複数ヒットも判定不能として block する。ドリフトは非対称で、危険側（condukt が短い＝live な worktree を dead と判定する）を作るのは「reap を急がない」という安全に見える編集である（backlog 6e30b6fc） |
 | `check-plugin-rollout.py` | 実装正しさ | pre-push（advisory）/ CI（`gate-crates-sync.yml` はテストのみ実行、本体は pre-push 駆動） | source version と registry version の文字列比較のみの機械判定。「意図的に parked」という第3状態を `scripts/parked-plugins.json` で宣言でき、宣言済み plugin の rollout/enablement 所見は red ではなく「PARKED ON PURPOSE」として（抑止した所見を逐語表示したうえで）報告される（backlog a6f165cd） |
-| `check-ci-red.py` | 実装正しさ | pre-push（advisory）/ CI（`gate-crates-sync.yml` はテストのみ実行、本体は pre-push 駆動） | GitHub Actions の run 履歴から連続 red 回数を数えるだけの機械判定 |
 
 ## トリガー種別の凡例
 
 - **Stop hook** — condukt worker/agent のターン終了（Stop イベント）時に発火し、条件未達なら停止を延長する。
 - **pre-commit** — `.githooks/pre-commit`（`git config core.hooksPath .githooks` で opt-in）。
   ローカルの advisory 速報層。fail-soft（python3/スクリプト不在時は素通り）。
-- **pre-push** — `.githooks/pre-push`。GATE_CRATES 変更検知・rollout drift・chronically-red CI の
-  advisory 通知。push 自体は止めない設計（fail-soft）。
+- **pre-push** — `.githooks/pre-push`。**4 本のブロックするチェック**と 3 本の advisory を持つ。
+  ブロックするのは (1) bypass ledger に未ゲート commit が残っていないか（`scripts/gate-bypass.py`）、
+  (2) push される各 tip の `cargo check --workspace --all-targets`（使い捨て worktree に checkout して
+  判定する。作業ツリーではない）、(3) 同じ tip に対する `scripts/check-compile-fail.py`（trybuild の
+  compile-fail 型契約）、(4) 同じ tip に対する `specguard map gate-check`（gate crate の変更が spec-doc
+  binding か理由付き ack で覆われているか。backlog 0c277117、2026-10-02 配線）。いずれも判定不能は
+  block に倒す。advisory は GATE_CRATES 変更検知・rollout drift・autonomy chain の 3 本で、これらは
+  push を止めない。
+  この行はかつて「push 自体は止めない設計（fail-soft）」と書いていたが、bypass ledger 以降の実装と
+  食い違っていた（CLAUDE.md 第4節: 散文が実装と食い違ったら散文を直す）。chronically-red CI の
+  チェックは GitHub Actions 禁止（CLAUDE.md 第7節）に伴い撤去済みで、もう存在しない。
 - **CI** — GitHub Actions ワークフロー。多くは pre-commit と同じスクリプトを再実行する非バイパスの本ゲート。
 
 ## 備考
 
-- `check-plugin-rollout.py` と `check-ci-red.py` は CI ワークフロー
-  (`.github/workflows/gate-crates-sync.yml`) では対応する `test_check_plugin_rollout.py` /
-  `test_check_ci_red.py`（ユニットテスト）のみが実行され、本体スクリプト自体の実運用駆動は
-  `.githooks/pre-push` に限られる（測定日 2026-07-23、`.github/workflows/` grep による）。
+- `check-plugin-rollout.py` の実運用駆動は `.githooks/pre-push` だけである。この箇条書きはかつて
+  「CI ワークフロー (`.github/workflows/gate-crates-sync.yml`) ではユニットテストのみが実行される」
+  とも書いていたが、`.github/` 自体がこの repo に存在しない（測定 2026-10-02、測定点 `5f709e6c`:
+  `ls .github/workflows/` は No such file or directory）。GitHub Actions は CLAUDE.md 第7節により
+  使用禁止で、`check-ci-red.py` とその `test_check_ci_red.py` も同じ撤去で消えている
+  （`ls scripts/check-ci-red.py scripts/test_check_ci_red.py` も同日 No such file or directory）。
+  本表の「CI」列に残る記述も同じ理由で過去形として読むこと（表全体の棚卸しは別件）。
 - Continuous-Audit（audit target crate の敵対的レビュー）は本表のような常時ゲートではなく opt-in の
   別ループなので、この一覧には含めない（`docs/OVERVIEW.md` の該当節を参照）。**ここに crate 名を
   列挙しない**のは意図的: かつて 5 件を書き並べていて `overwatch` と `taintguard` を落としたまま

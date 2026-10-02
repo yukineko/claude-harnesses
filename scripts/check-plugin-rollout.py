@@ -344,6 +344,147 @@ def _source_core_version():
 SOURCE_CORE_VERSION = _source_core_version
 
 
+def _version_tuple(v):
+    """`"0.2.10"` -> `(0, 2, 10)`, or None when it cannot be ordered.
+
+    None is NOT "equal" and NOT "smaller". A version string this cannot parse
+    (`"0.2.x"`, `"0.3.0-rc1"`, `""`) has no place on the number line, and
+    guessing one would be the silent resolution CLAUDE.md 3 forbids — the
+    caller reports the pair as undetermined instead.
+
+    Components are compared as INTEGERS, not as text: `0.2.10` is newer than
+    `0.2.9`, which a string compare gets backwards.
+    """
+    if not isinstance(v, str):
+        return None
+    parts = v.split(".")
+    if not parts:
+        return None
+    out = []
+    for p in parts:
+        if not p.isdigit():
+            return None
+        out.append(int(p))
+    return tuple(out)
+
+
+def _core_version_direction(recorded, current):
+    """Which side of a shared-crate version mismatch is the newer one?
+
+    Returns "stale" (the SOURCE is ahead; the deployment has not caught up),
+    "orphan" (the DEPLOYED bytes are ahead; they came from something this tree
+    does not contain), or None when the two cannot be ordered at all.
+
+    Callers must only ask once they know the two differ. None is undetermined,
+    never a third verdict about the fleet.
+    """
+    a, b = _version_tuple(recorded), _version_tuple(current)
+    if a is None or b is None:
+        return None
+    # Pad to a common length so "0.2" and "0.2.0" order EQUAL. Comparing the
+    # raw tuples would make them differ, and the shorter one would sort first —
+    # reporting a direction for two spellings of the same version.
+    width = max(len(a), len(b))
+    a = a + (0,) * (width - len(a))
+    b = b + (0,) * (width - len(b))
+    if a == b:
+        # Different strings that order equal ("0.2" vs "0.2.0"). The mismatch is
+        # real but the direction is not, so it is undetermined, not "stale".
+        return None
+    return "stale" if a < b else "orphan"
+
+
+def _core_version_in_history(version):
+    """Does `version` appear anywhere in this tree's history of the shared crate?
+
+    True  — some reachable commit's `crates/harness-core/Cargo.toml` carried it,
+            so an orphan deployment plausibly came from a branch that was never
+            merged into the checked-out line.
+    False — it appears in no reachable commit.
+    None  — could not look (git missing, erroring, or not a repository). An
+            unanswered question is not a "no": the caller says it could not
+            look rather than reporting the version as unknown to the repo.
+
+    Searched over ALL refs rather than the current branch's ancestry — the whole
+    point of the question is to find versions living on a branch that was never
+    merged, and `HEAD`-only history would answer False for exactly the case this
+    exists to detect.
+
+    `--diff-merges=first-parent` is load-bearing, not decoration: `git log -S`
+    does not diff merge commits at all by default, and in this repository every
+    version bump reaches the mainline through a merge. Without it the query
+    answered False for the version sitting in HEAD (measured 2026-10-02 at
+    `cb1d56dc`: plain `-S 'version = "0.2.38"'` found 0 commits, and
+    `--full-history` alone still found 0, while this form finds 112 — the first
+    being a4a03806, whose diff is `-version = "0.2.35"` / `+version = "0.2.38"`).
+    A history query that answers False for the checked-out version is worse than
+    no query at all, because the caller would report the live version as
+    unknown to the repo.
+    """
+    import subprocess
+
+    if not isinstance(version, str) or not version:
+        return None
+    try:
+        proc = subprocess.run(
+            [
+                "git",
+                "log",
+                "--all",
+                "--full-history",
+                "--diff-merges=first-parent",
+                "-n",
+                "1",
+                "--format=%H",
+                "-S",
+                'version = "%s"' % version,
+                "--",
+                os.path.join("crates", "harness-core", "Cargo.toml"),
+            ],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        # The exit code is the verdict, not just stdout: a git that failed did
+        # not answer "no commits matched".
+        return None
+    return bool(proc.stdout.strip())
+
+
+# Rebindable at a fixture the same way SOURCE_CHANGED_SINCE is, so the orphan
+# dimension is testable without building a real git history.
+CORE_VERSION_IN_HISTORY = _core_version_in_history
+
+
+def _history_note(version):
+    """One clause saying whether `version` is known to this repo's history.
+
+    Three renderings for three answers — an undetermined lookup must not read
+    like either a hit or a miss.
+    """
+    answer = CORE_VERSION_IN_HISTORY(version)
+    if answer is True:
+        return (
+            f"harness-core {version} DOES appear in this repository's history, "
+            "so the deployed bytes most likely came from a branch that was "
+            "never merged into the checked-out line"
+        )
+    if answer is False:
+        return (
+            f"harness-core {version} appears NOWHERE in this repository's "
+            "history, so the deployed bytes came from a tree this clone has "
+            "never seen"
+        )
+    return (
+        f"whether harness-core {version} exists in this repository's history "
+        "could not be determined (git unavailable or erroring) — that is an "
+        "unanswered question, not a 'no'"
+    )
+
+
 def _host_suffix():
     """This host's `<os>-<arch>` binary suffix, matching rebuild-plugins.sh's $SUF.
 
@@ -1347,10 +1488,44 @@ def _provenance_problem(crate, entry):
                 "undetermined is not 'agrees'"
             )
         if recorded_core != current_core:
+            # The mismatch alone does not say which side is behind, and the two
+            # directions have OPPOSITE remedies (backlog e8aad6e6; both were
+            # observed on 2026-08-07, hours apart, looking identical):
+            #
+            #   stale  - the source is ahead. Running rollout-plugins.sh is the
+            #            fix.
+            #   orphan - the DEPLOYED bytes are ahead. Rolling out here is a
+            #            rollback: it would overwrite newer running artifacts
+            #            with older ones. Prescribing it would be actively
+            #            destructive, so this arm does not.
+            #
+            # A pair that cannot be ordered resolves to neither (CLAUDE.md 3):
+            # it stays a problem, and says the direction is undetermined rather
+            # than picking the convenient one.
+            direction = _core_version_direction(recorded_core, current_core)
+            if direction == "stale":
+                return (
+                    f"{crate}: deployed binary links harness-core "
+                    f"{recorded_core}, but the source tree is now at "
+                    f"{current_core} "
+                    "<- rollout-plugins.sh not run since that shared-crate change"
+                )
+            if direction == "orphan":
+                return (
+                    f"{crate}: ORPHAN PROVENANCE - the deployed binary links "
+                    f"harness-core {recorded_core}, which is NEWER than the "
+                    f"source tree's {current_core}. Rolling out would go "
+                    "BACKWARDS and overwrite the newer deployed artifacts, so "
+                    "do not treat this as a missed rollout; reconcile the "
+                    f"source first. {_history_note(recorded_core)}"
+                )
             return (
                 f"{crate}: deployed binary links harness-core "
-                f"{recorded_core}, but the source tree is now at {current_core} "
-                "<- rollout-plugins.sh not run since that shared-crate change"
+                f"{recorded_core} and the source tree is at {current_core}; "
+                "these differ but cannot be ordered, so which side is ahead is "
+                "UNDETERMINED - the remedy (roll forward vs reconcile the "
+                "source) cannot be chosen from this alone, and guessing one "
+                "risks a destructive rollback"
             )
 
     moved = SOURCE_CHANGED_SINCE(commit, crate)

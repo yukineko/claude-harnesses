@@ -701,7 +701,6 @@ fn repo_root() -> std::path::PathBuf {
 
 // ---------------------------------------------------------------- 7778b634
 #[test]
-#[ignore = "backlog 7778b634: open defect, remove ignore when fixed"]
 fn backlog_7778b634_unreadable_git_state_is_not_recoverable() {
     use blastguard::reversible::{decide_recovery, GitState};
     use harness_core::git_probe::RepoProbe;

@@ -13233,3 +13233,108 @@ updated_at = 1790947616
 weight = 0.0
 issue_number = 1062
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1062"
+
+[[task]]
+id = "7d0246a2"
+title = "check-fail-open が #[cfg(test)] で宣言された module のファイルを production として数える (stuckguard verdict_monotonicity.rs:110 の偽陽性)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-03 flow batch3 再測定 (main dbbd3a84): crates/stuckguard/src/verdict_monotonicity.rs は main.rs:25-26 の #[cfg(test)] mod verdict_monotonicity で宣言された test 専用 module。:110 の Undetermined(_) => SessionState::default() は mutation 用の意図的に壊したコピー (allowed_to_carry_on_failing_open) だが、scanner の test 領域除外はファイル内の cfg(test) しか見ないので baseline に計上される。読み (a) scanner の除外漏れ / (b) 意図的に数える。見分け方: mod 宣言側の cfg(test) を辿る fixture テストを書き、scanner が数えるかを観測する。"
+created_at = 1790978584
+updated_at = 1790978584
+weight = 0.0
+issue_number = 1063
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1063"
+
+[[task]]
+id = "91607685"
+title = "stuckguard fault_injection_tests drive the allowed_to_carry_on mirror, not main.rs watch; watch Undetermined arm guarded only by tests/faultinject_state.rs"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-03 by opus verifier of run-20261003-070228-90008 stuck-fi (43b974e4): mutating watch Undetermined arm to SessionState::default() leaves all 3 new fault tests green; only faultinject_state.rs unreadable/unsearchable/corrupt tests fail. Mirror and watch can drift. A subprocess cannot see a thread-local FaultPlan."
+created_at = 1790979231
+updated_at = 1790979231
+weight = 0.0
+issue_number = 1064
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1064"
+
+[[task]]
+id = "11a523cc"
+title = "blastguard detect.rs interpreter-write path acts only on Recovery::Unrecoverable; Undetermined recoverability passes silently"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-03 at 94c65439 by sonnet verifier (recov): detect.rs ~5111 matches only Unrecoverable, so RepoProbe::Undetermined, shell expansion, unplaceable relative path all fall through without Ask. Pre-existing. Needs a test that an interpreter write to an Undetermined-recoverability path is not Allow."
+created_at = 1790979232
+updated_at = 1790979232
+weight = 0.0
+issue_number = 1065
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1065"
+
+[[task]]
+id = "bf378ea4"
+title = "blastguard worktree_root_cd_desync and worktree_root_rm suites fail by default under ~/.condukt worktrees (need BLASTGUARD_TEST_FIXTURE_DIR)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-03 on base dbbd3a84: cd_desync 9/9 fail, rm 11/11 fail, panic in tests/support/neutral_base.rs:78 (calibration rm -rf came back Allow under ~/.condukt; Ask under /private/tmp). Only ~/.cache/... worked. Red by default in condukt worktrees."
+created_at = 1790979234
+updated_at = 1790979234
+weight = 0.0
+issue_number = 1066
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1066"
+
+[[task]]
+id = "91ddbaf9"
+title = "check-fail-open misses nested-match sub-arm None and return Vec::new() inside nested block/closure in an Undetermined arm"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-03 by opus verifier of fail-open-paren (fixtures B, B3, G, G2 in session scratchpad fo/); missed by both 01c8c228 and 158cd262. Pre-existing false negatives."
+created_at = 1790979235
+updated_at = 1790979235
+weight = 0.0
+issue_number = 1067
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1067"
+
+[[task]]
+id = "8944e900"
+title = "stuckguard config.rs:216 Required::Blocked block arm is flagged by check-fail-open; unclassified (true fail-open or another FP)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Reported 2026-10-03 by fo-paren worker from pre-commit output; body not read. Read the arm and either fix or add a FP test."
+created_at = 1790979237
+updated_at = 1790979237
+weight = 0.0
+issue_number = 1068
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1068"
+
+[[task]]
+id = "9b43cf67"
+title = "doc-claims: many exempt quote-not-found / line-drifted citations in audit docs (autoflow-verdict-audit.md, mutategate, reviewgate, schemaguard)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "Seen 2026-10-03 in pre-commit output of two workers; non-blocking because exempt, but citations are stale."
+created_at = 1790979238
+updated_at = 1790979238
+weight = 0.0
+issue_number = 1069
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1069"

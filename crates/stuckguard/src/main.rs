@@ -12,6 +12,8 @@
 mod anchor;
 mod config;
 mod detect;
+#[cfg(test)]
+mod fault_injection_tests;
 mod install;
 mod model;
 mod protection;

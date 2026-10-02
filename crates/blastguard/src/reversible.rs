@@ -52,14 +52,16 @@ pub enum Recovery {
     /// The path does not exist. Truncating or writing it destroys nothing —
     /// there are no prior bytes to lose.
     NothingToDestroy,
-    /// The path is inside a git work tree.
+    /// The path is inside a git work tree, and `git status` answered for it.
     ///
     /// **This is a wider claim than its name suggests, on purpose.** Since the
-    /// operator ruling of 2026-09-18 ([`decide_recovery`]), *every* path inside
-    /// a checkout lands here — tracked-and-clean, tracked-with-uncommitted-
-    /// changes, untracked, and paths whose `git status` never answered. Only
-    /// the first of those is literally restorable by `git restore`; the rest
-    /// are treated as recoverable by operator decision, not by observation.
+    /// operator ruling of 2026-09-18 ([`decide_recovery`]), every path inside
+    /// a checkout whose git state was *read* lands here — tracked-and-clean,
+    /// tracked-with-uncommitted-changes, and untracked. Only the first of those
+    /// is literally restorable by `git restore`; the rest are treated as
+    /// recoverable by operator decision, not by observation. A path whose
+    /// `git status` did not answer does NOT land here (operator ruling
+    /// 2026-10-02): it is [`Recovery::Undetermined`].
     ///
     /// The variant keeps its name so the diff of that ruling stays legible, but
     /// do not read it as "git holds these bytes" — read it as "inside a work
@@ -123,7 +125,8 @@ pub enum GitState {
 /// | ✗ | — | — | `NothingToDestroy` |
 /// | ✓ | `NotRepo` | — | `Unrecoverable` (no version control holds a copy) |
 /// | ✓ | `Undetermined` | — | `Undetermined` |
-/// | ✓ | `Repo` | **any** | `RecoverableFromGit` |
+/// | ✓ | `Repo` | `TrackedClean` / `TrackedDirty` / `Untracked` | `RecoverableFromGit` |
+/// | ✓ | `Repo` | `Undetermined` | `Undetermined` |
 ///
 /// The `exists = ✗` row is the one that retires the largest single class of
 /// false friction, and it is also a §4 correction: the rule it replaces denied
@@ -163,15 +166,21 @@ pub enum GitState {
 /// one", so it still resolves restrictively (CLAUDE.md §3). Only a *positive*
 /// observation of being inside a checkout relaxes the answer. The control test
 /// `undetermined_repo_probe_never_reports_recoverable` pins that boundary.
+///
+/// # The `Repo` + `GitState::Undetermined` row (operator ruling 2026-10-02)
+///
+/// The 2026-09-18 collapse also swept in a `git status` that did not answer
+/// (spawn failure, timeout, non-zero exit). The operator ruled on that row
+/// separately: *"Can't read -> not recoverable"* (backlog 7778b634). Being
+/// inside a work tree relaxes the answer only for a git state that was
+/// actually read; an unread one is forwarded as `Undetermined` and resolves
+/// restrictively at the call site (CLAUDE.md §3). Pinned by
+/// `unreadable_git_state_inside_a_work_tree_is_undetermined` and the
+/// fault-injection test `blind_boundary_never_leaves_a_recoverability_probe_permissive`.
 pub fn decide_recovery(exists: bool, repo: RepoProbe, git: GitState) -> Recovery {
     if !exists {
         return Recovery::NothingToDestroy;
     }
-    // `git` is deliberately unused for the `Repo` arm: the operator's ruling
-    // makes "inside a work tree" the whole answer. It stays in the signature
-    // because `RepoProbe::NotRepo`/`Undetermined` callers still compute it and
-    // because narrowing the relaxation later must not be an API change.
-    let _ = git;
     match repo {
         RepoProbe::NotRepo => Recovery::Unrecoverable(
             "it exists, and it is not inside a git work tree — nothing holds a second copy of \
@@ -183,9 +192,20 @@ these bytes"
 so whether these bytes are recoverable is unknown"
                 .to_string(),
         ),
-        // Every git state, including Untracked, TrackedDirty and a `git status`
-        // that did not answer. Operator ruling 2026-09-18 — see above.
-        RepoProbe::Repo => Recovery::RecoverableFromGit,
+        // A git status that did not answer is not a read state, and an
+        // unread state supports no recoverability claim (ruling 2026-10-02).
+        RepoProbe::Repo => match git {
+            GitState::Undetermined => Recovery::Undetermined(
+                "it exists inside a git work tree, but `git status` did not answer for it, so \
+whether these bytes are recoverable is unknown"
+                    .to_string(),
+            ),
+            // Every state git actually reported, including Untracked and
+            // TrackedDirty. Operator ruling 2026-09-18 — see above.
+            GitState::TrackedClean | GitState::TrackedDirty | GitState::Untracked => {
+                Recovery::RecoverableFromGit
+            }
+        },
     }
 }
 
@@ -605,21 +625,21 @@ mod tests {
     }
 
     /// **The 2026-09-18 operator ruling, pinned.** Being *inside a git work
-    /// tree* is the whole answer for this axis: every `GitState` row under
-    /// `RepoProbe::Repo` resolves to `RecoverableFromGit`, so nothing in a
-    /// checkout is ever denied or asked about.
+    /// tree* is the whole answer for this axis for every git state that was
+    /// read: each such `GitState` row under `RepoProbe::Repo` resolves to
+    /// `RecoverableFromGit`, so nothing in a checkout is denied or asked about.
     ///
-    /// This replaced three rows that used to answer `Unrecoverable` /
-    /// `Undetermined` — see `tracked_but_dirty_*`, `untracked_*` and
-    /// `undetermined_never_reports_recoverable` below for what each of them
-    /// asserted before, and why it changed.
+    /// This replaced rows that used to answer `Unrecoverable` — see
+    /// `tracked_but_dirty_*` and `untracked_*` below. **CHANGED 2026-10-02**:
+    /// this loop used to include `GitState::Undetermined`; the operator ruled
+    /// that an unreadable git state is not recoverable, so that row moved to
+    /// `unreadable_git_state_inside_a_work_tree_is_undetermined`.
     #[test]
-    fn inside_a_work_tree_is_always_recoverable_regardless_of_git_state() {
+    fn inside_a_work_tree_is_recoverable_for_every_read_git_state() {
         for git in [
             GitState::TrackedClean,
             GitState::TrackedDirty,
             GitState::Untracked,
-            GitState::Undetermined,
         ] {
             let r = decide_recovery(true, RepoProbe::Repo, git);
             assert_eq!(
@@ -630,6 +650,19 @@ mod tests {
             );
             assert!(r.is_recoverable(), "{r:?}");
         }
+    }
+
+    /// **Operator ruling 2026-10-02** (backlog 7778b634): *"Can't read -> not
+    /// recoverable"*. A `git status` that did not answer must be forwarded as
+    /// `Undetermined`, never collapsed into `RecoverableFromGit`.
+    #[test]
+    fn unreadable_git_state_inside_a_work_tree_is_undetermined() {
+        let r = decide_recovery(true, RepoProbe::Repo, GitState::Undetermined);
+        assert!(matches!(r, Recovery::Undetermined(_)), "{r:?}");
+        assert!(
+            !r.is_recoverable(),
+            "git did not answer, yet the path was judged recoverable: {r:?}"
+        );
     }
 
     /// **CHANGED 2026-09-18** (was `tracked_but_dirty_is_unrecoverable`, which

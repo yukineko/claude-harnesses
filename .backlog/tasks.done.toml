@@ -23894,3 +23894,48 @@ weight = 0.0
 issue_number = 177
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/177"
 issue_closed_at = 1790919066
+
+[[task]]
+id = "704dde46"
+title = "specforge draft が marker 欠落で exit 3 — nested claude が無出力終了しても draft 不能の原因が報告されない"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "specforge",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-10-02、測定点 5aadf2cf、flow session c9af4c58。specforge draft --id jev-advisory を実行したところ 4 分 34 秒以上 無出力のまま走り続け、最終的に stderr へ "specforge: WARN marker '<<<SPEC_DRAFT>>>' missing in agent output; cannot assess. No draft, no sentinel." / "draft exit=3" を出して終了した。specs/jev-advisory.toml は生成されなかった。nested claude は --print --allowedTools Read Glob Grep Bash(git diff *) --disallowedTools Edit Write NotebookEdit WebFetch で起動されている。問題は 2 つ: (1) agent の出力が空だったのか、出力はあったが marker が無かったのかを呼び出し側が区別できない — WARN 文面は後者を前提にしているが、前者 (nested claude が無出力終了) でも同じ経路に落ちるので、判定不能と観測済みの marker 欠落が同じメッセージに潰れている (CLAUDE.md 第3節)。(2) agent の生出力が保存されないので事後診断ができない。是正案: nested claude の stdout/stderr を生で落とし、空出力・非0終了・marker 欠落を別メッセージ (できれば別 exit code) に分ける。回避策として本件の spec は手書きした (specs/jev-advisory.toml 冒頭にその事実を記載)。
+
+--- 完了 (2026-10-02) ---
+specguard 0.2.77 / commit 32e9275e, main 0a337040 で出荷・canary rollout 済み。
+
+修正前の実測 (測定点 4efa9de4): 偽 agent 3 種 (silent / nomarker / badbody) が
+いずれも exit 3。silent と nomarker は stderr までバイト一致で、文面は 3 件とも
+"specforge: draft agent output missing marker"。
+
+修正後の実測 (測定点 0a337040、リポジトリビルドではなく配布済みバイナリ
+~/.claude/plugins/cache/yukineko/specguard/0.2.77/bin/specforge-linux-x86_64):
+  silent   -> exit 10 "判定不能 — normalize agent は exit 0 で終了したが stdout が空だった"
+  nomarker -> exit 3  "marker ... missing in agent output" + 観測バイト数 39
+  badbody  -> exit 11 "rigor:pass but body is not valid requirement TOML"
+3 件それぞれ .scratch/specforge/<id>-<unix>-agent.txt に生 stdout/stderr を保存。
+
+テストは利害関係のない独立 agent が作成 (CLAUDE.md 2a):
+crates/specguard/tests/forge_agent_diagnosability.rs 8 件。修正前コードに対して
+5/8 が RED になることを先に観測した (2b)。cargo test -p specguard は 18 バイナリ
+すべて 0 failed、fmt/clippy とも exit 0、cargo build --workspace exit 0。
+
+棄却: テスト著者 agent の「EXIT_INDEX_UNDETERMINED と EXIT_BRIEF_UNDETERMINED が
+どちらも 10 で衝突」という指摘は、crates/specguard/src/main.rs:68-95 を読むと
+別サブコマンドの判定不能であり、同ファイルが EXIT_GATE_UNDETERMINED = 2 について
+同種の先例を明文化しているため欠陥ではない。起票しない。
+"""
+created_at = 1790915800
+updated_at = 1790920360
+weight = 0.0
+issue_number = 1037
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1037"
+issue_closed_at = 1790920362

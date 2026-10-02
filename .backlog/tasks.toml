@@ -13913,24 +13913,6 @@ issue_number = 1036
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1036"
 
 [[task]]
-id = "704dde46"
-title = "specforge draft が marker 欠落で exit 3 — nested claude が無出力終了しても draft 不能の原因が報告されない"
-project = "/home/hiroyuki_nakayama/src/claude-harnesses"
-project_unresolved = false
-tags = [
-    "specforge",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = """実測 2026-10-02、測定点 5aadf2cf、flow session c9af4c58。specforge draft --id jev-advisory を実行したところ 4 分 34 秒以上 無出力のまま走り続け、最終的に stderr へ "specforge: WARN marker '<<<SPEC_DRAFT>>>' missing in agent output; cannot assess. No draft, no sentinel." / "draft exit=3" を出して終了した。specs/jev-advisory.toml は生成されなかった。nested claude は --print --allowedTools Read Glob Grep Bash(git diff *) --disallowedTools Edit Write NotebookEdit WebFetch で起動されている。問題は 2 つ: (1) agent の出力が空だったのか、出力はあったが marker が無かったのかを呼び出し側が区別できない — WARN 文面は後者を前提にしているが、前者 (nested claude が無出力終了) でも同じ経路に落ちるので、判定不能と観測済みの marker 欠落が同じメッセージに潰れている (CLAUDE.md 第3節)。(2) agent の生出力が保存されないので事後診断ができない。是正案: nested claude の stdout/stderr を生で落とし、空出力・非0終了・marker 欠落を別メッセージ (できれば別 exit code) に分ける。回避策として本件の spec は手書きした (specs/jev-advisory.toml 冒頭にその事実を記載)。"""
-created_at = 1790915800
-updated_at = 1790915800
-weight = 0.0
-issue_number = 1037
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1037"
-
-[[task]]
 id = "af1565aa"
 title = "blastguard の truncating-redirect は target が展開を含むと一律 deny するが、同一コマンド内のリテラル代入を解決する機構は既に crate 内にあり command word の 1 アームにしか配線されていない (同じ書き込みが綴り方だけで allow/deny に分かれる)"
 project = "/home/hiroyuki_nakayama/src/claude-harnesses"

@@ -167,7 +167,7 @@ let notes = match store.load_visible(&root) {
 
 UserPromptSubmit 注入 hook。読めない store を『空と同じ』と自認し、**stderr すら出さず**無言で return。消費者は model のコンテキストで、注入されるはずだったノート/runbook の欠落を知り得ない。同じ crate の CLI 側(main.rs:215,242,152,181,337,320)は `unknown — store could not be read` と明示して exit 1 しているので、hook 側だけが沈黙。コメントの『must never fail a turn』は CLAUDE.md §1 が撤去した正当化と同型。ただし hook は verdict を返さないので、少なくとも stderr での unknown 表明が最低線。
 
-**P6 crates/overwatch/src/store.rs:376 — `read_jsonl_best_effort`**
+**P6 crates/overwatch/src/store.rs:376 — `read_jsonl_best_effort`** (解消済み: backlog e8a61ec3 で `Result<Vec<T>>` 化し、読めない台帳は `Err`。以下は修正前の記録)
 
 ```rust
 Determination::Known(None) | Determination::Undetermined(_) => Vec::new(),
@@ -647,7 +647,7 @@ docs の check-doc-claims.py は、バッククォートで囲んだ パス:行 
 
 - crates/blastguard/src/reversible.rs の decide_recovery（旧 :174「let _ = git;」/ 旧 :188「RepoProbe::Repo => Recovery::RecoverableFromGit,」）— backlog 7778b634 で是正済み（読めない git 状態は Undetermined を返す）。機械検証の対象から外した。
 - `crates/autoflow/src/lock.rs:58` 「Determination::Undetermined(_) => return true,」
-- `crates/overwatch/src/store.rs:376` 「Determination::Known(None) | Determination::Undetermined(_) => Vec::new(),」
+- `crates/overwatch/src/store.rs:388` 「Determination::Undetermined(why) => Err(anyhow::anyhow!(」 (P6 は backlog e8a61ec3 で解消。旧引用 `Known(None) | Undetermined(_) => Vec::new()` は撤去済み)
 - `crates/condukt/src/circuit.rs:506` 「Determination::Undetermined(_) => 0,」
 - `crates/playbook/src/main.rs:148` 「Determination::Undetermined(_) => return,」
 - `crates/runbook/src/main.rs:122` 「Determination::Undetermined(_) => return,」

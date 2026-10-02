@@ -222,7 +222,6 @@ fn safdcfd4d_auto_approved_unreadable_journal_is_not_a_zero() {
 /// never-written one (`Ok(vec![])`), so `is_empty()` asserted on them cannot
 /// falsify anything and `compact`'s resolved-id join consumes the collapse.
 #[test]
-#[ignore = "backlog e8a61ec3: open defect, remove ignore when fixed"]
 fn se8a61ec3_best_effort_reader_distinguishes_unreadable_from_absent() {
     let home = TempDir::new().unwrap();
     std::env::set_var("HOME", home.path());

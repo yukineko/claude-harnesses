@@ -13338,3 +13338,18 @@ updated_at = 1790979238
 weight = 0.0
 issue_number = 1069
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1069"
+
+[[task]]
+id = "4d51c05e"
+title = "specguard brief が repo のほぼ全 crate を matched_without_spec として not-covered を返すため、flow 3-1.5 の spec-gap divert ゲートがほぼ全バッチで escalate する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-03 @abd9b7c6: specguard brief --json に4種の異なる課題文(rollout gate / autoflow README / donegate refuse / condukt fixture)を渡すと全て verdict=not-covered, rc=0。matched_without_spec に autoflow/backlog/blastguard/condukt/donegate 等ほぼ全 src が並ぶ。読み (a) spec カバレッジが実際に薄く、ゲートは正しく機能している -> spec を起こすべき / (b) brief の not-covered 判定が粗く(キーワード不問で全一致)ゲートが常時発火するノイズになっている。見分け方: 明らかに無関係な課題文(例 'xyz unrelated') でも同じ matched_without_spec 集合が返るか測る。"
+created_at = 1790980211
+updated_at = 1790980211
+weight = 0.0
+issue_number = 1070
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1070"

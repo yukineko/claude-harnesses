@@ -140,15 +140,39 @@ impl CloseReason {
 
 /// Deterministically format the argv for `gh issue close`. Pure, no side effects.
 ///
-/// Shape: `["issue","close","<number>","--reason",<reason>]`.
-pub fn build_issue_close_args(number: u64, reason: CloseReason) -> Vec<String> {
-    vec![
+/// Shape: `["issue","close","<number>","--reason",<reason>]`, followed by
+/// `["--comment",<body>]` when `comment` carries a non-blank body.
+///
+/// The comment is what makes a close record **what** was finished instead of
+/// only that something was: a bare close leaves an issue whose entire history
+/// is "opened" and "closed", and the store that holds the actual resolution is
+/// not visible from GitHub. `gh issue close --comment` is the documented way to
+/// leave that record in the same call (verified against gh 2.102.0:
+/// `-c, --comment string   Leave a closing comment`), so recording the content
+/// costs no extra round trip and cannot half-succeed independently of the
+/// close.
+///
+/// A blank body is **dropped rather than passed through**: `--comment ""` posts
+/// an empty comment, which reads on the issue as "someone had something to say
+/// and it was lost" — strictly worse than no comment. Callers with content build
+/// it via `store::build_close_comment`, which never renders blank.
+pub fn build_issue_close_args(
+    number: u64,
+    reason: CloseReason,
+    comment: Option<&str>,
+) -> Vec<String> {
+    let mut args = vec![
         "issue".to_string(),
         "close".to_string(),
         number.to_string(),
         "--reason".to_string(),
         reason.as_gh_reason().to_string(),
-    ]
+    ];
+    if let Some(body) = comment.filter(|b| !b.trim().is_empty()) {
+        args.push("--comment".to_string());
+        args.push(body.to_string());
+    }
+    args
 }
 
 /// The outcome of the `gh issue close` step.
@@ -179,10 +203,17 @@ pub enum CloseOutcome {
 /// failed (`Some((false, _))`) — resolves to [`CloseOutcome::NotClosed`], i.e.
 /// the restrictive side: the mirror is assumed still open until GitHub says
 /// otherwise. Only an affirmative `Some((true, _))` yields `Closed`.
+///
+/// `comment` is the content recorded on the issue as it closes (see
+/// [`build_issue_close_args`]). It rides the SAME invocation as the close on
+/// purpose: a separate `gh issue comment` call could succeed while the close
+/// failed, or the reverse, and there is no third state here to represent
+/// "closed but the record of why is missing".
 pub fn decide_issue_close<R: Fn(&[&str]) -> Option<(bool, String)>>(
     remote_url: &str,
     number: u64,
     reason: CloseReason,
+    comment: Option<&str>,
     run: R,
 ) -> CloseOutcome {
     if !is_github_remote(remote_url) {
@@ -190,7 +221,7 @@ pub fn decide_issue_close<R: Fn(&[&str]) -> Option<(bool, String)>>(
             reason: "remote is not github.com; nothing to close".to_string(),
         };
     }
-    let args = build_issue_close_args(number, reason);
+    let args = build_issue_close_args(number, reason, comment);
     let argv: Vec<&str> = args.iter().map(String::as_str).collect();
     match run(&argv) {
         None => CloseOutcome::NotClosed {
@@ -392,7 +423,7 @@ mod tests {
     #[test]
     fn build_issue_close_args_is_deterministic() {
         assert_eq!(
-            build_issue_close_args(42, CloseReason::Completed),
+            build_issue_close_args(42, CloseReason::Completed, None),
             vec![
                 "issue".to_string(),
                 "close".to_string(),
@@ -402,7 +433,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            build_issue_close_args(7, CloseReason::NotPlanned),
+            build_issue_close_args(7, CloseReason::NotPlanned, None),
             vec![
                 "issue".to_string(),
                 "close".to_string(),
@@ -411,6 +442,42 @@ mod tests {
                 "not planned".to_string(),
             ]
         );
+    }
+
+    /// A supplied body is appended as `--comment <body>` AFTER the reason, and
+    /// is passed through byte-for-byte: the body is multi-line prose, so any
+    /// trimming/escaping here would silently alter what gets recorded on the
+    /// issue. Dies if the flag is dropped, renamed, or if the body is mangled.
+    #[test]
+    fn build_issue_close_args_appends_a_supplied_comment_verbatim() {
+        let body = "line one\n\nline two with  spaces and \"quotes\" and 日本語";
+        assert_eq!(
+            build_issue_close_args(42, CloseReason::Completed, Some(body)),
+            vec![
+                "issue".to_string(),
+                "close".to_string(),
+                "42".to_string(),
+                "--reason".to_string(),
+                "completed".to_string(),
+                "--comment".to_string(),
+                body.to_string(),
+            ]
+        );
+    }
+
+    /// A blank body yields NO `--comment` at all, rather than `--comment ""`.
+    /// An empty comment posted on the issue would read as a lost message; the
+    /// absence of a comment at least does not assert anything false.
+    #[test]
+    fn build_issue_close_args_drops_a_blank_comment_instead_of_passing_it() {
+        let bare = build_issue_close_args(42, CloseReason::Completed, None);
+        for blank in ["", "   ", "\n\t "] {
+            assert_eq!(
+                build_issue_close_args(42, CloseReason::Completed, Some(blank)),
+                bare,
+                "a blank comment ({blank:?}) must not reach the argv"
+            );
+        }
     }
 
     /// A non-GitHub remote must resolve to NotClosed WITHOUT invoking `run`
@@ -423,6 +490,7 @@ mod tests {
             "https://gitlab.com/owner/repo.git",
             42,
             CloseReason::Completed,
+            None,
             |_argv| panic!("run must not be called for a non-github remote"),
         );
         match outcome {
@@ -446,6 +514,7 @@ mod tests {
             "git@gitlab.com:owner/repo.git",
             42,
             CloseReason::NotPlanned,
+            None,
             |_argv| {
                 calls.set(calls.get() + 1);
                 Some((true, String::new()))
@@ -473,6 +542,7 @@ mod tests {
             "https://github.com/owner/repo.git",
             42,
             CloseReason::Completed,
+            None,
             |_argv| None,
         );
         match outcome {
@@ -495,6 +565,7 @@ mod tests {
             "https://github.com/owner/repo.git",
             42,
             CloseReason::Completed,
+            None,
             |_argv| Some((false, "HTTP 403: resource not accessible\n".to_string())),
         );
         match outcome {
@@ -522,6 +593,7 @@ mod tests {
             "https://github.com/owner/repo.git",
             42,
             CloseReason::Completed,
+            None,
             |argv| {
                 assert_eq!(argv, ["issue", "close", "42", "--reason", "completed"]);
                 Some((
@@ -544,6 +616,7 @@ mod tests {
             "git@github.com:owner/repo.git",
             7,
             CloseReason::NotPlanned,
+            None,
             |argv| {
                 assert_eq!(argv, ["issue", "close", "7", "--reason", "not planned"]);
                 Some((true, String::new()))

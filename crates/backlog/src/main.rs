@@ -1175,8 +1175,21 @@ fn run(cli: Cli) -> Result<()> {
                         store::SyncAction::Create { id, title, .. } => {
                             println!("  create  {id}  {title}");
                         }
-                        store::SyncAction::Close { id, number, reason } => {
-                            println!("  close   #{number}  {id}  ({})", reason.as_gh_reason());
+                        store::SyncAction::Close {
+                            id,
+                            number,
+                            reason,
+                            comment,
+                        } => {
+                            // Say that content will be posted, and how much. A
+                            // dry run that printed only the close would
+                            // understate what `--apply` writes to a public
+                            // issue.
+                            println!(
+                                "  close   #{number}  {id}  ({}) + comment ({} chars)",
+                                reason.as_gh_reason(),
+                                comment.chars().count(),
+                            );
                         }
                     }
                 }
@@ -1219,8 +1232,19 @@ fn run(cli: Cli) -> Result<()> {
                             }
                         }
                     }
-                    store::SyncAction::Close { id, number, reason } => {
-                        match github::decide_issue_close(&remote_url, *number, *reason, gh_probe) {
+                    store::SyncAction::Close {
+                        id,
+                        number,
+                        reason,
+                        comment,
+                    } => {
+                        match github::decide_issue_close(
+                            &remote_url,
+                            *number,
+                            *reason,
+                            Some(comment.as_str()),
+                            gh_probe,
+                        ) {
                             github::CloseOutcome::Closed => {
                                 println!("closed #{number} for {id}");
                                 outcomes.push(store::SyncOutcome::Closed { id: id.clone() });
@@ -1583,8 +1607,20 @@ fn mirror_close_for(tasks_path: &Path, id: &str) {
         .collect();
     let remote_url = git_remote_origin_url(&store_repo_root(tasks_path));
     for action in plan {
-        if let store::SyncAction::Close { number, reason, .. } = action {
-            match github::decide_issue_close(&remote_url, number, reason, gh_probe) {
+        if let store::SyncAction::Close {
+            number,
+            reason,
+            comment,
+            ..
+        } = action
+        {
+            match github::decide_issue_close(
+                &remote_url,
+                number,
+                reason,
+                Some(comment.as_str()),
+                gh_probe,
+            ) {
                 github::CloseOutcome::Closed => {
                     match store::record_sync_outcomes(
                         tasks_path,

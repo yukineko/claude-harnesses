@@ -23062,3 +23062,39 @@ updated_at = 1790886218
 weight = 0.0
 issue_number = 224
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/224"
+
+[[task]]
+id = "d47af80e"
+title = "fugu-router sync: 成功時の出力も全て stderr なので、SessionEnd で毎回エラーのように見える"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+ユーザー報告「fugu-router sync がエラーをだしている (このマシンで SessionEnd したとき)」の最有力原因。
+
+実測 2026-10-02、測定点 b478fdcf、配布版 0.1.31:
+  $ fugu-router sync 2>/dev/null       → stdout は空
+  $ fugu-router sync 2>&1 >/dev/null   → stderr:
+      pulling from remote…
+      pull done.
+      nothing to push (already up to date with the remote).
+  exit 0
+
+つまり成功した sync も毎回 SessionEnd で stderr に 3 行書く (cmd_sync / sync_inner の eprintln!: "pulling from remote…" / "pull done." / "pushed local records." / "pushed (no new local records, but the branch was ahead)." / "committed: {msg}" / "nothing to push (…)" 全て eprintln!)。SessionEnd hook の stderr が表示される環境では、正常動作が「エラー」として毎セッション見える。
+
+これが stderr である理由は launcher の docstring に明示されている: 「sync SessionEnd: Claude Code discards stdout/JSON; stderr is the only channel」。stdout が捨てられるので stderr を選んだのは正しいが、その結果「成功」と「失敗」が同じ stream・同じ見た目になった。
+
+裏付け (同一調査で確定した事実):
+- ~/.fugu-router/ の mtime は 2026-07-01 14:18:08 のままで sync-error.json が一度も作成/削除されていない = cmd_sync が Err を返したことは 7/1 以降一度も無い。よって報告されたエラーは失敗ではない。
+- 手動実行は exit 0、harvest+sync で 2.3 秒 (cold cursor でも 3.1 秒) = timeout でもない。
+- 全 transcript を grep しても surface された失敗通知は 0 件。
+
+是正案 (未検証・要判断): 成功時は黙る (verbose/-v で出す)、あるいは成功行だけ stdout に出して stderr は失敗専用にする。ただし「stdout は捨てられる」制約があるので、成功時は何も出さないのが最も素直。いずれにせよ「毎回出る stderr」は §1 の逆 — 常時出る警告は読まれなくなる。"""
+created_at = 1790910018
+updated_at = 1790911044
+weight = 0.0
+issue_number = 1014
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1014"
+issue_closed_at = 1790911046

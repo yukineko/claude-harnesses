@@ -938,6 +938,8 @@ notes = "[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/te
 created_at = 1786070195
 updated_at = 1790983253
 weight = 0.0
+issue_number = 1091
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1091"
 
 [[task]]
 id = "3b9f1665"
@@ -951,6 +953,8 @@ notes = "[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/te
 created_at = 1786070195
 updated_at = 1790983273
 weight = 0.0
+issue_number = 1092
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1092"
 
 [[task]]
 id = "23869ff7"
@@ -1550,6 +1554,8 @@ notes = """
 created_at = 1786944196
 updated_at = 1790983181
 weight = 0.0
+issue_number = 1093
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1093"
 
 [[task]]
 id = "787922b3"
@@ -1736,6 +1742,8 @@ notes = """
 created_at = 1785303114
 updated_at = 1790983220
 weight = 0.0
+issue_number = 1094
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1094"
 
 [[task]]
 id = "aaff04c5"
@@ -1752,6 +1760,8 @@ notes = """
 created_at = 1785310501
 updated_at = 1790983182
 weight = 0.0
+issue_number = 1095
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1095"
 
 [[task]]
 id = "3611eb66"
@@ -1768,6 +1778,8 @@ notes = """
 created_at = 1785809905
 updated_at = 1790983221
 weight = 0.0
+issue_number = 1096
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1096"
 
 [[task]]
 id = "0d6ac50b"
@@ -1810,6 +1822,8 @@ notes = """
 created_at = 1785899678
 updated_at = 1790983138
 weight = 0.0
+issue_number = 1097
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1097"
 
 [[task]]
 id = "5e5cf0a9"
@@ -1847,6 +1861,8 @@ condukt SKILL.md (0.7.138) は serial の実装方法を逐語で 'serial タス
 created_at = 1787033491
 updated_at = 1790983138
 weight = 0.0
+issue_number = 1098
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1098"
 
 [[task]]
 id = "c6ae7851"
@@ -2163,6 +2179,8 @@ notes = "[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/te
 created_at = 1788756375
 updated_at = 1790983283
 weight = 0.0
+issue_number = 1099
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1099"
 
 [[task]]
 id = "e4a1d386"
@@ -2208,6 +2226,8 @@ main (e018fe91) でも同一に 4 件失敗するので、既存不良であっ�
 created_at = 1788756933
 updated_at = 1790983283
 weight = 0.0
+issue_number = 1100
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1100"
 
 [[task]]
 id = "c33e3af4"
@@ -2221,6 +2241,8 @@ notes = "[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/con
 created_at = 1788760198
 updated_at = 1790983283
 weight = 0.0
+issue_number = 1101
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1101"
 
 [[task]]
 id = "b8b003da"
@@ -2262,6 +2284,8 @@ changed set に入ったため。
 created_at = 1788770875
 updated_at = 1790983318
 weight = 0.0
+issue_number = 1102
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1102"
 
 [[task]]
 id = "fbf93b81"
@@ -2346,6 +2370,8 @@ POSIX で atomic なので、hook から見えるのは常に「旧版の完全�
 created_at = 1788771846
 updated_at = 1790983255
 weight = 0.0
+issue_number = 1103
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1103"
 
 [[task]]
 id = "3b056c02"
@@ -2398,6 +2424,8 @@ begin/end の対応漏れが検出されない。
 created_at = 1788771923
 updated_at = 1790983255
 weight = 0.0
+issue_number = 1104
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1104"
 
 [[task]]
 id = "666b6704"
@@ -2494,6 +2522,8 @@ launcher-exec-bit と同じクラス)。所見が出ないので、何も間違�
 created_at = 1788843085
 updated_at = 1790983283
 weight = 0.0
+issue_number = 1105
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1105"
 
 [[task]]
 id = "ab736bac"
@@ -2507,6 +2537,8 @@ notes = "[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/te
 created_at = 1788843710
 updated_at = 1790983284
 weight = 0.0
+issue_number = 1106
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1106"
 
 [[task]]
 id = "388737f1"
@@ -2520,6 +2552,8 @@ notes = "[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/dif
 created_at = 1788843710
 updated_at = 1790983372
 weight = 0.0
+issue_number = 1107
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1107"
 
 [[task]]
 id = "d796a630"
@@ -2569,6 +2603,8 @@ main のツリーに残したまま (削除していない)。
 created_at = 1788842261
 updated_at = 1790983284
 weight = 0.0
+issue_number = 1108
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1108"
 
 [[task]]
 id = "65bfb279"
@@ -2752,6 +2788,8 @@ Edit(//Users/yuki/**/.githooks/**) と Write(...) を禁じている)。人間�
 created_at = 1788849812
 updated_at = 1790983284
 weight = 0.0
+issue_number = 1109
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1109"
 
 [[task]]
 id = "9b64f427"
@@ -2819,6 +2857,8 @@ prune が恒常的に exit 1 になる可能性があるので、実際の cache
 created_at = 1788849813
 updated_at = 1790983284
 weight = 0.0
+issue_number = 1110
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1110"
 
 [[task]]
 id = "a078ddb2"
@@ -2933,6 +2973,8 @@ orphaned-version GC が「registry がもう指していない版 dir」に付�
 created_at = 1788913542
 updated_at = 1790983328
 weight = 0.0
+issue_number = 1111
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1111"
 
 [[task]]
 id = "649d15f6"
@@ -2970,6 +3012,8 @@ built from, so it is not verifiable as current」を報告した（実行前は 
 created_at = 1788913542
 updated_at = 1790983284
 weight = 0.0
+issue_number = 1112
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1112"
 
 [[task]]
 id = "9c57995e"
@@ -3017,6 +3061,8 @@ post-commit が消す（post-commit は commit が成立したときだけ走る
 created_at = 1788923641
 updated_at = 1790983372
 weight = 0.0
+issue_number = 1113
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1113"
 
 [[task]]
 id = "c8c11add"
@@ -3060,6 +3106,8 @@ commit 側は merge を許すのに、edit 側はその merge を完成させる
 created_at = 1788923641
 updated_at = 1790983284
 weight = 0.0
+issue_number = 1114
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1114"
 
 [[task]]
 id = "963d0d09"
@@ -3073,6 +3121,8 @@ notes = "[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crat
 created_at = 1788930715
 updated_at = 1790983284
 weight = 0.0
+issue_number = 1115
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1115"
 
 [[task]]
 id = "873a2621"
@@ -3091,6 +3141,8 @@ notes = """
 created_at = 1788930715
 updated_at = 1790983309
 weight = 0.0
+issue_number = 1116
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1116"
 
 [[task]]
 id = "1b82a049"
@@ -3107,6 +3159,8 @@ notes = """
 created_at = 1788947185
 updated_at = 1790983180
 weight = 0.0
+issue_number = 1117
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1117"
 
 [[task]]
 id = "1440e7a0"
@@ -3123,6 +3177,8 @@ notes = """
 created_at = 1788947185
 updated_at = 1790983180
 weight = 0.0
+issue_number = 1118
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1118"
 
 [[task]]
 id = "7c56feb1"
@@ -3139,6 +3195,8 @@ notes = """
 created_at = 1788947185
 updated_at = 1790983180
 weight = 0.0
+issue_number = 1119
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1119"
 
 [[task]]
 id = "881d7933"

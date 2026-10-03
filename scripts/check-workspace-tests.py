@@ -134,9 +134,9 @@ the thing CLAUDE.md 4 forbids.
       its summary line.
   5 — ENVIRONMENT. The run could not be set up at all: cwd is not a directory
       that looks like this repository (crates/ missing, OR scripts/ missing —
-      EITHER ONE is enough, they are not required together), or an argument was
-      passed (this script takes none — an unrecognized argument is refused
-      rather than ignored, per the no-bypass note above). Ranked highest because
+      EITHER ONE is enough, they are not required together), or an argument
+      other than a lone `--python-only` was passed (an unrecognized argument is
+      refused rather than ignored, per the no-bypass note above). Ranked highest because
       nothing below it was computed. A repo with crates/ but no scripts/ must
       NOT fall through to the python body and surface as a discovery problem:
       the remedy for "you are not in the repo" is not the remedy for "the suites
@@ -145,6 +145,23 @@ the thing CLAUDE.md 4 forbids.
       code because its remedy is neither "fix a test" nor "install a tool":
       something is HANGING, and the reader needs to be sent to the hang, with
       the deadline and the last announced target named.
+
+MODES
+-----
+With no argument both bodies run, as described above. With exactly one
+argument, `--python-only`, the cargo body is NOT run: cargo is not even
+resolved, and the output says so on both streams. Only the scripts/test_*.py
+body runs, under exactly the same verdict rules, so the exit code is 0 only
+when every discovered suite ran and passed, 2 on a named failure, 4 when the
+python body could not be judged (no suites found, a suite killed by a signal
+or failing to import, an unparseable or contradictory result), 6 on a deadline
+and 5 on an environment problem. This mode exists because .githooks/pre-push
+wires the python body alone (user ruling 2026-10-04, backlog eca8dea7): the
+cargo body measured over 600s on 2026-10-03 and its wiring is decided
+separately. A green from this mode is a statement about the python suites
+only, never about `cargo test`. It is a SCOPE, not a bypass: it narrows what
+is judged and says so; it never turns a red into a green. Any other argument,
+or `--python-only` combined with anything, is refused (exit 5).
 
 RANKING when several classes fire at once: 5 > 6 > 3 > 4 > 1 > 2. Undetermined
 outranks failure deliberately — "3 tests failed" printed over a body that never
@@ -970,23 +987,29 @@ def _print_block(header, items, fix):
     print("\nFix: %s" % fix, file=sys.stderr)
 
 
+PYTHON_ONLY_FLAG = "--python-only"
+
+
 def main(argv=None, runner=None, repo=None):
-    """Run both bodies, print everything, return the highest-ranked class."""
+    """Run both bodies (or, with exactly `--python-only`, only the python body),
+    print everything, return the highest-ranked class."""
     argv = [] if argv is None else list(argv)
     runner = run_process if runner is None else runner
     repo = REPO if repo is None else repo
 
-    if argv:
+    python_only = argv == [PYTHON_ONLY_FLAG]
+    if argv and not python_only:
         print(
-            "check-workspace-tests: BLOCKED — this script takes no arguments, "
-            "and %r was passed. It has no skip switch, no warn-only mode and no "
-            "environment variable that weakens its verdict: a gate with an off "
-            "switch is not a gate (CLAUDE.md 4). If a commit genuinely must go "
-            "out ahead of a red, this repo already has exactly one mechanism "
-            "for that (the bypass ledger, scripts/gate-bypass.py) and it is not "
-            "this script. The argument is REFUSED rather than ignored, because "
-            "an ignored argument is indistinguishable from an honoured one."
-            % (argv,),
+            "check-workspace-tests: BLOCKED — this script accepts no arguments "
+            "except a lone %s, and %r was passed. It has no skip switch, no "
+            "warn-only mode and no environment variable that weakens its "
+            "verdict: a gate with an off switch is not a gate (CLAUDE.md 4). If "
+            "a commit genuinely must go out ahead of a red, this repo already "
+            "has exactly one mechanism for that (the bypass ledger, "
+            "scripts/gate-bypass.py) and it is not this script. The argument is "
+            "REFUSED rather than ignored, because an ignored argument is "
+            "indistinguishable from an honoured one."
+            % (PYTHON_ONLY_FLAG, argv),
             file=sys.stderr,
         )
         return RC_ENVIRONMENT
@@ -1006,7 +1029,20 @@ def main(argv=None, runner=None, repo=None):
 
     # Called through the module globals on purpose — see the docstring's
     # testability note. A local alias here would remove the injection point.
-    cargo_report = run_cargo_body(repo, runner, resolve_cargo(repo=repo))
+    if python_only:
+        # The cargo body is NOT run, and that is said out loud on both streams:
+        # the exit code of this mode is a verdict about the python suites only,
+        # and must never be read as "the workspace tests passed".
+        notice = (
+            "check-workspace-tests: %s — the cargo body was NOT run (cargo "
+            "test --workspace was not launched). The verdict below covers the "
+            "scripts/test_*.py suites ONLY." % PYTHON_ONLY_FLAG
+        )
+        print(notice, file=sys.stderr)
+        print(notice)
+        cargo_report = Report((), (), (), 0)
+    else:
+        cargo_report = run_cargo_body(repo, runner, resolve_cargo(repo=repo))
     python_report = run_python_body(repo, runner, resolve_python())
 
     # Everything that fired is printed, whatever the ranking below decides the
@@ -1059,7 +1095,7 @@ def main(argv=None, runner=None, repo=None):
     # Green lines are claims about a POPULATION, so each names the size of the
     # population it covers and is printed only when that population was fully
     # inspected.
-    if not (
+    if not python_only and not (
         cargo_report.failures or cargo_report.undetermined or cargo_report.deadline
     ):
         print(

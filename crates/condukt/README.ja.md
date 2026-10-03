@@ -82,7 +82,7 @@ LLM 単体で大きな課題をオーケストレーションさせると、決�
 | `condukt state test --run <id>` | リポジトリルートからプロジェクトのテストスイートを実行し、終了コードを伝播する。優先順位は `[test].command` → 自動検出（`cargo test` / `npm test` / `pytest`、最後は `cargo test` にフォールバック）。`sh -c` 経由のためパイプ・クォート・環境変数展開が使える。 |
 | `condukt loop --module <server\|client\|e2e>` | 指定モジュールのテスト修正サイクルを 1 イテレーション実行し JSON を返す。`/condukt-loop` が修正ステップを挟んで繰り返す。 |
 | `condukt knowledge` | インタープリター/ワーカープロンプトへ注入するプロジェクト固有の規約/落とし穴を出力する（ソフト、無ければ空）。 |
-| `condukt editgate` | PostToolUse フック: worker が live worktree 内の Rust ファイルを Edit/Write した直後、**edit-time コンパイルゲート**がその編集でクレートが壊れたかを決定論的に判定する。本当に壊れた判定のときだけ `{"decision":"block","reason":<診断>}` を出力し、worker が同じターンで直せるようにする。それ以外はすべて fail-soft（何も出力せず exit 0）。 |
+| `condukt editgate` | PostToolUse フック: worker が live worktree 内の Rust ファイルを Edit/Write した直後、**edit-time コンパイルゲート**がその編集でクレートが壊れたかを決定論的に判定する。壊れた判定のとき `{"decision":"block","reason":<診断>}` を出力し、worker が同じターンで直せるようにする。`cargo check` がコードを判定できなかった場合（cargo を起動できない、rustup が toolchain を解決できない）は判定不能として同じく block し、verdict の `reason` はコンパイルエラーではなくその原因（toolchain/環境）を明示する。`cargo` 子プロセスの `HOME`/`RUSTUP_HOME`/`CARGO_HOME`/`RUSTUP_TOOLCHAIN` はプロセスごとに一度だけ取ったスナップショットで固定する。スコープ外の編集（非 Rust ファイル、live worktree 外）は何も出力せず exit 0。 |
 | `condukt restore` | SessionStart フック: 未完了の実行や孤立した worktree を通知する。 |
 | `condukt statusline` | `statusLine` 設定用の 1 行実行進捗表示。 |
 | `condukt status [--all]` | open run とそのタスクを ASCII ツリーで表示する（`--all` でクローズ済み run も含む）。 |

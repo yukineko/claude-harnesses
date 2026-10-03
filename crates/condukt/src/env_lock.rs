@@ -55,16 +55,66 @@ pub(crate) static PATH_ENV_LOCK: std::sync::RwLock<()> = std::sync::RwLock::new(
 /// `PATH_ENV_LOCK`'s doc comment describes. Hoisted here so every `$HOME`
 /// mutator in this crate takes ONE lock.
 ///
-/// A plain `Mutex`, not an `RwLock`: unlike PATH there is no set of pure
-/// *consumers* that would benefit from shared access — every user of this lock
-/// mutates `$HOME`.
+/// A plain `Mutex` underneath, not an `RwLock`: unlike PATH there is no set of
+/// pure *consumers* that would benefit from shared access — every user of this
+/// lock mutates `$HOME`.
+///
+/// Acquiring it also pins [`toolchain_env_snapshot`] BEFORE the guard is handed
+/// out (see [`HomeEnvLock::lock`]). That is what makes the snapshot pristine:
+/// every `$HOME` mutation in this crate happens under a guard, and no guard
+/// exists before the snapshot does.
 ///
 /// Ungated (no cfg(test) attribute) for the same reason as `PATH_ENV_LOCK`: an
 /// uncontended static lock costs nothing outside tests, and a bare cfg(test) on
 /// a non-module item is the shape this repo's test-weakening scanner correctly
-/// refuses to guess about. Unlike `PATH_ENV_LOCK` — which has a real non-test
-/// consumer in `worktree::run_git_bounded_with` — every user of this one is a
-/// test, so the non-test build sees it as dead. The allow below is narrow and
-/// suppresses only that: it is not a lint waiver on any judging code path.
+/// refuses to guess about. Every user of the lock itself is a test, so the
+/// non-test build sees it as dead. The allow below is narrow and suppresses
+/// only that: it is not a lint waiver on any judging code path.
 #[allow(dead_code)]
-pub(crate) static HOME_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) static HOME_ENV_LOCK: HomeEnvLock = HomeEnvLock(std::sync::Mutex::new(()));
+
+/// See [`HOME_ENV_LOCK`]. A thin wrapper so that acquisition can pin the
+/// toolchain-env snapshot first; `lock()` keeps `Mutex::lock`'s signature so
+/// every existing `HOME_ENV_LOCK.lock().unwrap_or_else(PoisonError::into_inner)`
+/// call site is unchanged.
+pub(crate) struct HomeEnvLock(std::sync::Mutex<()>);
+
+impl HomeEnvLock {
+    #[allow(dead_code)]
+    pub(crate) fn lock(&self) -> std::sync::LockResult<std::sync::MutexGuard<'_, ()>> {
+        // Pin first. If a guard is currently held by someone else (HOME
+        // possibly swapped), that holder's own `lock()` already pinned the
+        // snapshot, so this is a no-op read of the pinned value — it can never
+        // be the call that observes a swapped HOME.
+        let _ = toolchain_env_snapshot();
+        self.0.lock()
+    }
+}
+
+/// The env vars that decide which Rust toolchain a spawned `cargo` (a rustup
+/// proxy on a rustup-managed machine) runs with, and where it reads its config.
+pub(crate) const TOOLCHAIN_ENV_KEYS: [&str; 4] =
+    ["HOME", "RUSTUP_HOME", "CARGO_HOME", "RUSTUP_TOOLCHAIN"];
+
+/// The process's toolchain env ([`TOOLCHAIN_ENV_KEYS`]), read ONCE — at the
+/// first of: the first call to this function, or the first acquisition of
+/// [`HOME_ENV_LOCK`]. `None` means the var was unset at that point.
+///
+/// Production consumer: `editgate::check_edit` pins these on its `cargo check`
+/// child instead of letting the child inherit whatever the process env holds at
+/// spawn time. In production (the one-shot `condukt editgate` hook process)
+/// nothing ever mutates them, so the snapshot equals what the child would have
+/// inherited anyway. In the test binary, sibling tests swap `$HOME` under
+/// `HOME_ENV_LOCK`; the snapshot is pinned before any such swap can exist, so a
+/// `cargo check` spawned mid-swap still resolves the real toolchain
+/// (backlog f7a0cadc).
+pub(crate) fn toolchain_env_snapshot() -> &'static [(&'static str, Option<std::ffi::OsString>)] {
+    static SNAPSHOT: std::sync::OnceLock<Vec<(&'static str, Option<std::ffi::OsString>)>> =
+        std::sync::OnceLock::new();
+    SNAPSHOT.get_or_init(|| {
+        TOOLCHAIN_ENV_KEYS
+            .iter()
+            .map(|k| (*k, std::env::var_os(k)))
+            .collect()
+    })
+}

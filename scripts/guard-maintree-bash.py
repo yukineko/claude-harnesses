@@ -167,8 +167,11 @@ changing its spelling; each of these is now followed to the path it writes:
     destination and sources are not targets) when the destination, resolved
     against the tracked cwd, does not exist or is not a directory. It is
     judged as usual when it is an existing directory or when that cannot be
-    determined (an unresolvable word, an unknown cwd, a stat error other
-    than ENOENT / ENOTDIR). With ONE source the last operand is created, so
+    determined: a word the shell could expand into something other than its
+    literal text (any of `$ \` * ? { } [ ] \\ ~ ( ) < > ^ #` in the word as
+    written or after variable expansion, or a `(` right after it — the
+    tokenizer splits an extglob such as `-@(v)` into `-@` and `(`), an
+    unknown cwd, or a stat error other than ENOENT / ENOTDIR. With ONE source the last operand is created, so
     `gcp <wt>/f -v` from a main cwd is refused regardless. The permuting GNU
     reading never takes this exemption. The BSD reading is dropped when the command uses a target-directory
     option (a `t` in a short bundle, or a `--t…` prefix of target-directory),
@@ -268,7 +271,8 @@ decidable, and only then denies what is left:
     shell syntax) — but only when the terminator is actually found, so a `<<`
     inside a quoted string cannot swallow later lines;
   * `~`, `$HOME`, `$PWD` and same-command assignments are expanded;
-  * for a target still holding `$`, a glob or a brace, and no `..` after the
+  * for a target still holding `$`, a glob (`*`, `?`, `[`) or a brace, and
+    no `..` after the
     first such component (that is refused), the longest LITERAL path prefix is
     resolved: if that prefix and the main root are on the same ancestor chain
     the expansion could land on main, so it is refused; if they are on disjoint
@@ -501,7 +505,15 @@ def _resolve(root: str, path: str) -> str:
 
 # Constructs this process cannot expand from the command string alone. `~` is
 # NOT here: it expands deterministically, so it is expanded and then judged.
-_UNRESOLVABLE = set("$`*?{}")
+# `[` is a glob like `?` (b5358f58: `<parent>/mai[n]/f` IS `<main>/f`, and
+# used to be judged as the literal, non-main name).
+_UNRESOLVABLE = set("$`*?{}[")
+# Characters that can make the shell turn a word into something other than
+# its literal text beyond _UNRESOLVABLE: bracket / extglob / zsh glob syntax,
+# tilde forms (`~+`, `~user`, after `=`), backslash escapes. Used where a word
+# is statted to EXEMPT it (the several-sources rule): any of them makes the
+# stat meaningless, so the word is undetermined there.
+_SHELL_EXPANDS = set("[]\\~()<>^#")
 
 # Stand-in values. Each contains `$`, so a path built from one is unresolvable
 # and is judged on its literal prefix (see _hit) — never silently resolved.
@@ -2687,6 +2699,13 @@ class _Walk:
             # is the sanctioned way to bring a file into a worktree); see
             # _dest_write_targets for what is judged.
             def dest_is_dir(word: str, st: _State = st) -> bool | None:
+                # A word the shell may expand is not the path statted. The
+                # tokenizer splits `(` off, so an extglob glued to the last
+                # word (`-@(v)`) arrives as `-@` followed by `(`: after a
+                # command's arguments `(` parses only as such a pattern.
+                if nxt == "(" or any(c in w for w in (word, _expand(word, st))
+                                     for c in _SHELL_EXPANDS):
+                    return None
                 return _dir_state(_abs_target(word, st, self.an.root))
             for a in _dest_write_targets(prog, rest, dest_is_dir):
                 self.an.check(a, st)
@@ -3807,9 +3826,17 @@ if __name__ == "__main__":
 #     judged (paths are resolved with realpath).
 #   * the several-sources exemption of the non-permuting readings checks the
 #     destination's existence when the call is JUDGED (TOCTOU): a directory
-#     created after that — by a later command in the same line (`mkdir -- -v
-#     && cp a b -v`), another process, or another session — is not seen, and
-#     the copy then writes into it.
+#     created after that — by another process, another session, or an
+#     EARLIER command of the same line — is not seen, and the copy then
+#     writes into it. `mkdir -- -v && cp a b -v` from a main cwd is allowed
+#     outright (observed): the mkdir is not judged either, because the
+#     TARGET_ALL operand list drops every word that starts with `-`, even
+#     after `--`, so `-v` is never a mkdir target; and when the cp is judged
+#     `<main>/-v` does not exist yet, so the cp reading is exempted.
+#   * an extglob glued into a path component (`rm <parent>/harnes@(s)/f`,
+#     observed allowed) is split by the tokenizer at `(` into separate words,
+#     so the path judged is `<parent>/harnes@`, not main. Only the
+#     several-sources exemption treats a following `(` as undetermined.
 #   * IFS: word splitting is on blanks only; a command that changes IFS
 #     (`IFS=/; set -- $P`) is split as if IFS were the default.
 #   * ruby Pathname tracking is by direct `v = Pathname(…)` assignment only; a

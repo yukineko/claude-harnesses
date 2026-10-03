@@ -280,6 +280,39 @@ class DestinationOnly(unittest.TestCase):
         # an unresolvable trailing destination stays refused (undetermined)
         self._expect([f"gcp {W}/f.txt {W}/y $UNSET_B535/x"], 2, cwds=main)
 
+    def test_expandable_trailing_destination_is_not_exempted(self):
+        # The several-sources exemption stats the destination. A word the
+        # shell can expand into something other than its literal text (a
+        # bracket glob, an extglob, a tilde form, a backslash escape) is not
+        # what would be statted, so it is undetermined and judged.
+        M, W = self.M, self.W
+        (self.f.main / "-v").mkdir()
+        main = (self.f.main,)
+        self._expect([
+            f"cp {W}/f.txt {W}/g.txt -[v]",
+            f"gcp {W}/f.txt {W}/g.txt -[v]",
+            f"mv {W}/f.txt {W}/g.txt -[v]",
+            f"cp {W}/f.txt {W}/g.txt [-]v",
+            f"cp {W}/f.txt {W}/g.txt -\\v",
+            f"cp {W}/f.txt {W}/g.txt ~+/-v",
+            f"cp {W}/f.txt {W}/g.txt -@(v)",
+        ], 2, cwds=main)
+
+    def test_bracket_glob_component_naming_main_is_refused(self):
+        # `[` expands like `?` does: `<parent>/mai[n]/f` IS `<main>/f`.
+        M, W = self.M, self.W
+        parent = str(self.f.main.parent)
+        self._expect([
+            f"rm {parent}/mai[n]/f.txt",
+            f"cp {W}/f.txt {parent}/[m]ain/g.txt",
+            f"echo x > {parent}/mai[n]/p.txt",
+        ], 2)
+        # a bracket glob outside main stays allowed
+        self._expect([
+            f"cp {M}/f.txt {W}/[x]",
+            f"rm {W}/[f].txt",
+        ], 0)
+
     def test_posixly_correct_non_permuting_gnu_reading(self):
         # Under POSIXLY_CORRECT (as a prefix, through env, or inherited from
         # the session where the command text does not show it) GNU getopt

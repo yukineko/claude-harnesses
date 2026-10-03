@@ -96,13 +96,24 @@ for d in $dirs; do
     # Read `name` from the [package] section ONLY. A bare `head -1` on every
     # `name =` line picks up [[bin]]/[[bench]] entries too, which can differ from
     # the package name and would make `cargo test -p` fail or test the wrong thing.
-    name="$(awk '
+    # A manifest that exists but cannot be read, or whose [package] name cannot be
+    # extracted, is UNDETERMINED — not "skill-only". Dropping it silently used to
+    # turn "could not tell which package to test" into "nothing to test", exit 0
+    # (backlog f6919056). The git side above already fails closed the same way.
+    if ! name="$(awk '
         /^[[:space:]]*\[/ { in_pkg = ($0 ~ /^[[:space:]]*\[package\]/) ; next }
         in_pkg && /^[[:space:]]*name[[:space:]]*=/ {
             if (match($0, /"[^"]*"/)) { print substr($0, RSTART + 1, RLENGTH - 2); exit }
         }
-    ' "$manifest")"
-    [ -n "$name" ] && pkgs="$pkgs $name"
+    ' "$manifest")"; then
+        echo "test-changed-crates: cannot read $manifest — refusing to treat crate '$d' as untested-by-design" >&2
+        exit 1
+    fi
+    if [ -z "$name" ]; then
+        echo "test-changed-crates: no [package] name in $manifest — cannot tell which package to test" >&2
+        exit 1
+    fi
+    pkgs="$pkgs $name"
 done
 
 if [ -z "$pkgs" ]; then

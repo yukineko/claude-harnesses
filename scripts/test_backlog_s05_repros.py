@@ -310,7 +310,6 @@ class RolloutProvenance(unittest.TestCase):
 
 
 class ScriptGates(unittest.TestCase):
-    @open_defect("f6919056")
     def test_f6919056_check_versions_without_crates_dir_is_not_ok(self):
         tmp = Path(tempfile.mkdtemp(prefix="s05v-")).resolve()
         try:
@@ -321,7 +320,6 @@ class ScriptGates(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
-    @open_defect("f6919056")
     def test_f6919056_bench_gate_with_floorless_threshold_still_flags_a_regression(self):
         tmp = Path(tempfile.mkdtemp(prefix="s05b-")).resolve()
         try:

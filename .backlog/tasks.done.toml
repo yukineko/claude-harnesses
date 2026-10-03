@@ -32559,3 +32559,66 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "79667521fa3057f3ce9d0c006ca00c02d6d82d4e"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "873a2621"
+title = "peer footprint: 24h window は liveness ではない — 2時間前に終了したセッションが今も自分のファイルを除外しうる。heartbeat-TTL claim registry(condukt/overwatch)から peer を導出する"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+
+
+[triage 2026-09-29 @b325a169] p2->p1: live self-documented fail-open: harness-core transcript.rs:474-488 peer window excludes files from secrets/missing-test gate sets
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/harness-core/tests/backlog_s07_audit.rs (rev e70d48dd)
+
+[ruling 2026-10-04, user via AskUserQuestion, session 33de4c25] Design D: a session is a peer only if it holds a live entry in condukt's claim registry (claims.json, heartbeat TTL); its footprint still comes from its transcript. Registry unreadable -> no exclusion (restrictive). The user approved re-anchoring the frozen assertions in crates/harness-core/tests/change_attribution.rs (~l.700-735) and peer_concurrency_window.rs (~l.175) to "fresh transcript + live registry entry". RED observed at fb3d3b2a: cargo test -p harness-core --test backlog_s07_audit -- --include-ignored backlog_873a2621. Needs rebuild+rollout of linking plugins once fixed."""
+created_at = 1788930715
+updated_at = 1791046267
+weight = 0.0
+issue_number = 1116
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1116"
+issue_closed_at = 1791046271
+rev = 2
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p harness-core --test backlog_873a2621_liveness"
+exit = 0
+passed = 6
+rev = "bfae2b4eeb226ef1dbf4ecabd633f9d89ac5e38c"
+observed_at = 1791046235
+output_digest = "sha256:4c94db10cfd75874ca8dda82f5a184e1ac24b8615c1e8401802b67d442b43840"
+excerpt = """
+
+running 6 tests
+test corrupt_registry_yields_no_exclusion ... ok
+test fresh_transcript_with_no_registry_file_is_not_a_peer ... ok
+test fresh_transcript_without_registry_entry_is_not_a_peer ... ok
+test live_registry_entry_makes_a_fresh_transcript_a_peer ... ok
+test stale_heartbeat_registry_entry_is_not_a_peer ... ok
+test unreadable_registry_yields_no_exclusion ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+   Compiling serde v1.0.228
+   Compiling toml_datetime v0.6.11
+   Compiling serde_spanned v0.6.9
+   Compiling trybuild v1.0.118
+   Compiling toml_edit v0.22.27
+   Compiling toml v0.8.23
+   Compiling harness-core v0.2.45 (/Users/yuki/src/.harness-worktrees/session-33de4c25/crates/harness-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.28s
+     Running tests/backlog_873a2621_liveness.rs (target/debug/deps/backlog_873a2621_liveness-44dbaaee4f350f8e)
+"""
+
+[task.closure.red]
+rev = "33fd9c8f858d60a1eca5b48e9a736e887a9fc2b8"
+exit = 101
+kind = "behavioural"

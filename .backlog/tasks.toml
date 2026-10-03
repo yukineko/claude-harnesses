@@ -12179,3 +12179,22 @@ weight = 0.0
 issue_number = 1232
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1232"
 rev = 0
+
+[[task]]
+id = "bf581a6b"
+title = "READDIR_WINDOW=7 で新たに見えた readdir-flatten-swallow 4件（playbook/runbook/session-insights/ship）"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "failopen",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Measured 2026-10-04 at 2793ca11 (881d7933 widened READDIR_WINDOW 6->7): python3 scripts/check-fail-open.py --all newly reports crates/playbook/src/store.rs:173, crates/runbook/src/store.rs:126, crates/session-insights/src/metrics.rs:184, crates/ship/src/stale.rs:29 as [readdir-flatten-swallow] (for e in entries.flatten()), plus 6 advisory read-unwrap-or-empty (difflog state.rs:41, fugu-router main.rs:862, harness-core index_store.rs:122, progress.rs:364, playbook store.rs:185, precommit-audit review.rs:82). Readings: (a) real swallows of read_dir entry errors that were invisible at window 6; (b) false positives where read_dir and flatten are unrelated. Tell apart by reading each site: does the flatten consume the read_dir result 7 lines above?"
+created_at = 1791044461
+updated_at = 1791044461
+weight = 0.0
+issue_number = 1231
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1231"
+rev = 0

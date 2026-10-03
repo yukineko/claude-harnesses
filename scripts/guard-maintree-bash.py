@@ -160,8 +160,17 @@ changing its spelling; each of these is now followed to the path it writes:
     inherited from the session's environment, which this hook cannot see. A
     plain name may also be the BSD (macOS) tool rather than the GNU
     (gnubin) one, so it is read a third way, as BSD: getopt makes every word
-    after the first operand an operand (`cp a b -v` copies into `-v`). The
-    BSD reading is dropped when the command uses a target-directory
+    after the first operand an operand (`cp a b -v` copies into `-v`). In
+    the two non-permuting readings, with no target-directory option and two
+    or more sources, the last operand must be an existing directory or the
+    tool fails before writing: that reading then writes nothing (its
+    destination and sources are not targets) when the destination, resolved
+    against the tracked cwd, does not exist or is not a directory. It is
+    judged as usual when it is an existing directory or when that cannot be
+    determined (an unresolvable word, an unknown cwd, a stat error other
+    than ENOENT / ENOTDIR). With ONE source the last operand is created, so
+    `gcp <wt>/f -v` from a main cwd is refused regardless. The permuting GNU
+    reading never takes this exemption. The BSD reading is dropped when the command uses a target-directory
     option (a `t` in a short bundle, or a `--t…` prefix of target-directory),
     because no BSD cp / mv / ln / install has one and it fails before
     writing;
@@ -377,6 +386,7 @@ import os
 import posixpath
 import re
 import shlex
+import stat as stat_mod
 import subprocess
 import sys
 
@@ -2006,7 +2016,25 @@ def _dest_reading(tool: str, args: list[str], gnu: bool,
             "dirs": dirs}
 
 
-def _dest_write_targets(prog: str, args: list[str]) -> list[str]:
+def _dir_state(path: str | None) -> bool | None:
+    """True: `path` is an existing directory. False: it does not exist
+    (ENOENT / ENOTDIR) or exists as something else. None: undetermined (no
+    resolvable path, or any other stat error)."""
+    if path is None:
+        return None
+    try:
+        st = os.stat(path)
+    except FileNotFoundError:
+        return False
+    except NotADirectoryError:
+        return False
+    except OSError:
+        return None
+    return stat_mod.S_ISDIR(st.st_mode)
+
+
+def _dest_write_targets(prog: str, args: list[str],
+                        dest_is_dir=lambda word: None) -> list[str]:
     """The operands cp / mv / ln / install (and the g-prefixed GNU names)
     WRITE, judged under every reading the name can have, their targets
     united: GNU with argument permutation, GNU without it (POSIXLY_CORRECT,
@@ -2024,7 +2052,12 @@ def _dest_write_targets(prog: str, args: list[str]) -> list[str]:
       * every operand for `install -d` (each is a directory it creates);
       * every operand and target directory when the reading is undetermined
         (an unknown or ambiguous GNU long option, or a value option with no
-        value), because the destination cannot be placed."""
+        value), because the destination cannot be placed;
+      * nothing from a NON-permuting reading with no target directory and
+        two or more sources whose last operand `dest_is_dir` reports False
+        (absent, or not a directory): the tool fails before writing.
+        `dest_is_dir` returns None when it cannot tell, and that is judged
+        as usual."""
     tool = prog[1:] if prog.startswith("g") and prog[1:] in _DEST_TOOLS else prog
     # (gnu, permute). The non-permuting GNU reading is POSIXLY_CORRECT, which
     # may be inherited from the session's environment without appearing in
@@ -2043,6 +2076,13 @@ def _dest_write_targets(prog: str, args: list[str]) -> list[str]:
             continue
         if tdirs:
             dests, srcs = tdirs, ops
+        elif len(ops) >= 3 and not permute and dest_is_dir(ops[-1]) is False:
+            # Two or more sources make the last operand a destination
+            # DIRECTORY; one that does not exist (or is not a directory)
+            # makes the tool fail before writing anything, so this reading
+            # writes nothing (`cp a b -v` read without permutation, where
+            # `-v` is an option under the permuting reading).
+            continue
         elif len(ops) >= 2:
             dests, srcs = ops[-1:], ops[:-1]
         elif tool == "ln" and ops:
@@ -2646,7 +2686,9 @@ class _Walk:
             # b5358f58: a SOURCE is read, not written (`cp <main>/f <wt>/`
             # is the sanctioned way to bring a file into a worktree); see
             # _dest_write_targets for what is judged.
-            for a in _dest_write_targets(prog, rest):
+            def dest_is_dir(word: str, st: _State = st) -> bool | None:
+                return _dir_state(_abs_target(word, st, self.an.root))
+            for a in _dest_write_targets(prog, rest, dest_is_dir):
                 self.an.check(a, st)
         elif prog in TARGET_ALL:
             for a in _operands(rest):
@@ -3763,6 +3805,11 @@ if __name__ == "__main__":
 #     symlink that points into main is allowed, and a later write THROUGH it
 #     is judged only if the link already exists when that later call is
 #     judged (paths are resolved with realpath).
+#   * the several-sources exemption of the non-permuting readings checks the
+#     destination's existence when the call is JUDGED (TOCTOU): a directory
+#     created after that — by a later command in the same line (`mkdir -- -v
+#     && cp a b -v`), another process, or another session — is not seen, and
+#     the copy then writes into it.
 #   * IFS: word splitting is on blanks only; a command that changes IFS
 #     (`IFS=/; set -- $P`) is split as if IFS were the default.
 #   * ruby Pathname tracking is by direct `v = Pathname(…)` assignment only; a

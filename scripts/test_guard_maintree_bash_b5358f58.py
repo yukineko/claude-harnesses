@@ -245,17 +245,50 @@ class DestinationOnly(unittest.TestCase):
             f"cp --s {M}/f.txt {W}/x",
             f"cp {M}/f.txt {W}/x -t",
         ], 2)
-        # BSD reading: every word after the first operand is an operand, so
-        # the destination of `cp a b -v` is `-v` (here: inside main's cwd).
-        self._expect([f"cp {W}/f.txt {W}/g.txt -v"], 2, cwds=(self.f.main,))
-        self._expect([f"cp {W}/f.txt {W}/g.txt -v"], 0, cwds=(self.f.wt,))
+
+    def test_trailing_option_destination_with_several_sources(self):
+        # Non-permuting GNU and BSD readings: in `cp a b -v` every word after
+        # the first operand is an operand, so `-v` is the destination
+        # DIRECTORY. With two or more sources the tool fails before writing
+        # unless that directory exists, so that reading writes main only when
+        # `<main>/-v` exists as a directory (or its existence is unknown).
+        M, W, O = self.M, self.W, self.O
+        three = [
+            f"gcp {W}/f.txt {W}/y -v",
+            f"gmv {W}/f.txt {O}/m -v",
+            f"gcp -r {W}/sub {O}/s --verbose",
+            f"cp {W}/f.txt {W}/y -v",
+            f"mv {W}/f.txt {O}/m -v",
+            f"ln -f {W}/f.txt {W}/y -v",
+            f"ln -s {W}/f.txt {W}/y -v",
+            f"ginstall {W}/f.txt {W}/y -v",
+        ]
+        main = (self.f.main,)
+        self._expect(three + [f"gcp {W}/f.txt {W}/y --preserve=mode"], 0, cwds=main)
+        # a non-directory there: the multi-source copy still fails first
+        (self.f.main / "--verbose").write_text("")
+        self._expect([f"gcp -r {W}/sub {O}/s --verbose"], 0, cwds=main)
+        # the directory exists: the trailing word IS a write into main
+        (self.f.main / "--verbose").unlink()
+        (self.f.main / "--verbose").mkdir()
+        (self.f.main / "-v").mkdir()
+        self._expect(three, 2, cwds=main)
+        # two operands: `-v` is created as a FILE in main, refused regardless
+        (self.f.main / "-v").rmdir()
+        self._expect([f"gcp {W}/f.txt -v", f"cp {W}/f.txt -v",
+                      f"gmv {W}/f.txt -v"], 2, cwds=main)
+        # an unresolvable trailing destination stays refused (undetermined)
+        self._expect([f"gcp {W}/f.txt {W}/y $UNSET_B535/x"], 2, cwds=main)
 
     def test_posixly_correct_non_permuting_gnu_reading(self):
         # Under POSIXLY_CORRECT (as a prefix, through env, or inherited from
         # the session where the command text does not show it) GNU getopt
         # stops at the first operand: `-t <W>` after it are operands and
         # `<M>/d` is the destination. Judged for every name, unconditionally.
+        # With three sources `<M>/d` must be an existing directory for the
+        # copy to write (see the several-sources test), so it is created.
         M, W, O = self.M, self.W, self.O
+        (self.f.main / "d").mkdir()
         cmds = []
         for prog in ("gcp", "ginstall", "gln -s", "gmv", "cp", "install"):
             cmds += [

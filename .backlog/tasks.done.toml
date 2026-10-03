@@ -33307,3 +33307,121 @@ scripts/test_backlog_5461ba1c.py .                                       [100%]
 rev = "4027a8dcac83a9e2910e6ddd9f07c8780825aeb8"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "230c34ec"
+title = "specguard brief の verdict が構造的に covered を返せない (spec-map 134/134 が no spec-doc) — flow 3-1.5 の spec-gap trigger 3 が空虚に発火する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-09-13、測定点 37cc0be1 (specguard map の last synced と同一)。
+
+観測: specguard brief --json はどの課題文に対しても verdict=not-covered を返す。
+対照実験 (アンチ空虚): 正典に確実に存在する 3 topic を投げても全て not-covered だった。
+  判定不能は clean ではなく block か ask に解決する      -- rc=0 verdict=not-covered
+  main の作業ツリーで編集せず worktree で作業する          -- rc=0 verdict=not-covered
+  plugin を触ったら version を 3 ファイル lockstep で bump -- rc=0 verdict=not-covered
+これらは CLAUDE.md 第3節・第8節・禁忌ルールの逐語内容なので、covered が返らないのは
+「正典が無い」ではなく「判定面が機能していない」ことを意味する。
+
+原因 (測定): specguard map list は 134 entries を持つが、そのうち spec-doc を持つ entry は 0 件。
+  total entries: 134
+  with (no spec-doc): 134
+  with a spec-doc: (0 行)
+つまり covered を返しうる入力が構造的に存在しない。verdict は二値的に not-covered へ固定されている。
+
+なぜ問題か: flow SKILL.md の Step 3-1.5 は trigger 3 として
+verdict=not-covered を spec-gap divert (specforge へ差し戻し) の発火条件にしている。
+現状この trigger は全課題で発火するので、(a) 全タスクが divert 候補になり、
+(b) その escalate が常時発生して人間の判断が儀式化する。
+さらに divert は書き込み側 (specforge draft が新しい spec を起こす) なので、
+判定面が死んでいる状態での発火は「読めなかった」を「仕様が無い」へ写す —
+3-1.5 自身が明示的に禁じている置換であり、CLAUDE.md 第3節の
+「判定不能を permissive/誤った側へ潰す」の一形態。
+
+判定不能なので両方の読みを残す:
+  (a) 実在の欠陥 = spec-map に spec-doc を結び付ける経路 (drift-map) が未実行/未配線で、
+      brief が三値のうち covered を出せない。この場合 brief は not-covered ではなく
+      undetermined (exit 10) を返すべきで、二値へ潰れているのが欠陥。
+  (b) 意図的な仕様 = spec-doc がまだ 1 件も無いのは事実なので not-covered は正しい、
+      という読み。ただしその場合でも trigger 3 は全件発火するので flow 側の運用が破綻する。
+
+見分ける方法: spec-doc を 1 件だけ作って map の当該 entry に結び付け、
+その領域の課題文で brief が covered を返すか観測する。
+返るなら (a) は「未配線」であり配線すれば解ける。返らないなら brief の判定経路自体の欠陥。
+併せて specguard brief が undetermined (exit 10) を実際に返す入力が存在するかも確認する
+(存在しないなら三値は名目だけで実体は二値)。
+
+発見経緯: /flow の Step 3-1.5 プリフライトで 3 件全部が not-covered になり、
+divert する前に対照実験を掛けて空虚さが判明した。divert は実行していない。
+
+--- サイクル7 追記 ---
+
+再測定 2026-09-16 (現在の main): 230c34ec の症状は未修正のまま。
+サイクル7 の 4 件の課題文すべてが rc=0 verdict=not-covered。
+アンチ空虚の対照として、正典に確実に存在する 3 topic を投げても全て not-covered:
+  "spec loop R4 flow spec gap source"      -- rc=0 verdict=not-covered
+  "blastguard three-valued decision ask"   -- rc=0 verdict=not-covered
+  "fail-closed gate invariant"             -- rc=0 verdict=not-covered
+したがって flow 3-1.5 の trigger 3 は依然として判別能力を持たない。
+coordinator は not-covered を spec-gap の証拠として扱わず、undetermined として
+divert せずに続行した (第3節: 測れないことを測れたことに写さない)。
+
+サイクル7 が追加で観測した事実 (再測定の副産物、測定点 main 72995339):
+spec-map は .gitignore:80 で .specguard/spec-map.toml として ignore されており、
+main の作業ツリーにしか実体が無い。同じ 7 本の probe を CLAUDE.md 第8節が義務づける
+worktree (測定点 778155e4) から実行すると、verdict は not-covered ではなく
+rc=10 verdict=undetermined になる (spec-map が空と読まれるため)。
+つまり brief の verdict は cwd がどちらの作業ツリーかで変わる。第8節は全作業を
+worktree で行うことを義務づけているので、規範どおりに働く実行主体から見た
+brief は構造的に常に undetermined である。これは本チケットの読み (a)/(b) とは
+別の第3の経路であり、not-covered と undetermined のどちらを見るかが
+測定場所に依存するという意味で、判定面の問題をさらに一段深くする。
+measure コマンド: specguard brief --json <topic> を cwd=main と cwd=worktree で各7本。
+spec-map 規模 (cwd=main, 測定日 2026-09-16): specguard map list は 184 行、
+うち "(no spec-doc)" を含む行 183。covered を返しうる entry は依然ほぼ皆無。
+
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/specguard/tests/backlog_230c34ec.rs (rev 34b1a083): reading (a): covered reachable, tracked bindings not applied by brief"""
+created_at = 1789272899
+updated_at = 1791047861
+weight = 0.0
+issue_number = 544
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/544"
+issue_closed_at = 1791047865
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p specguard --test backlog_230c34ec"
+exit = 0
+passed = 2
+rev = "0e44ff2829ad1fe862a8c3ef2e4cd7169f07885e"
+observed_at = 1791047719
+output_digest = "sha256:eb34d8496f06343f0de74be1b8d8edf6a31c73e3bf6668e1902e734ef5960044"
+excerpt = """
+
+running 2 tests
+test backlog_230c34ec_map_spec_doc_control ... ok
+test backlog_230c34ec_tracked_spec_docs_binding_makes_brief_covered ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.25s
+
+   Compiling harness-core v0.2.45 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/harness-core)
+   Compiling overwatch v0.2.59 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/overwatch)
+   Compiling blastguard v0.2.105 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/blastguard)
+   Compiling specguard v0.2.86 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/specguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 02s
+     Running tests/backlog_230c34ec.rs (target/debug/deps/backlog_230c34ec-9ce2380f6591b19d)
+"""
+
+[task.closure.red]
+rev = "d8dccdac6daac02fb10238191ddf3e2182b434d5"
+exit = 101
+kind = "behavioural"

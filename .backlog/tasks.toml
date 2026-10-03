@@ -855,7 +855,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 観測 2026-09-07。grep で clippy を .githooks/ 全体に当てると **ヒット無し**。
 
@@ -880,11 +880,13 @@ scripts/parked-plugins.json 相当の宣言（理由・parked_at・再検討起�
 
 [flow 2026-10-03 session 33de4c25 @b90c0132] Picked and returned unworked: wiring these scripts into hooks means editing .githooks/pre-commit or pre-push, and ~/.claude/settings.json denies Edit/Write on //Users/yuki/**/.githooks/** to agents (a Bash cp touching .githooks was refused by the same rule). Not routed around. Needs a human to apply the wiring, or a ruling on where the wiring should live outside .githooks."""
 created_at = 1788792879
-updated_at = 1791024532
+updated_at = 1791048015
 weight = 0.0
 issue_number = 436
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/436"
-rev = 1
+rev = 2
+ruling_kind = "judgment"
+rationale = "Flow p1 driver 2026-10-04 (session 64554c4d): both resolutions need a human. (a) Wiring the dark scripts into hooks means editing .githooks/pre-commit or pre-push, and my standing instructions forbid agents editing .githooks (patches go to the human). (b) Declaring them intentionally unwired needs the human's decision per script, since an undeclared unwired gate must not be read as 'probably intentional'. Note: check-versions.sh was removed by eca8dea7 (6acdb6b7) and check-bench-regression.py was renamed; re-run scripts/test_backlog_5eb1f127.py to get the current dark list before deciding. Human: per script, choose wire (and apply the hook patch) or declare-parked (reason, parked_at, revisit)."
 
 [[task]]
 id = "b5358f58"
@@ -1331,7 +1333,7 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 実測 2026-08-28。手順: (1) session worktree 側で conflict を解決して merge commit 79b385b2 を作成 — pre-commit は green (「check-test-weakening: no unacknowledged test weakening」まで通過) で、post-commit が worktree の gate-verified-tree sentinel を消費して静かに終了した。(2) main の作業ツリーで `git merge --ff-only session-9aff7bf8`。ff は commit を 1 つも作らないが、.githooks/post-merge の判定は `parents="$(git rev-parse HEAD^@ | grep -c .)"; [ "$parents" -lt 2 ] && exit 0` であり、HEAD が「たまたま merge commit」になった ff もここを通過して post-commit へ exec される。main の git-dir には sentinel が無い (per-worktree なので当然) ため、既に検査済みの 79b385b2 が gate-bypassed ledger へ「UNGATED COMMIT」として記録され、pre-push が push を止めた。post-merge のコメント自身が「A fast-forward merge creates no commit, so there is nothing to certify and the absent sentinel must not be read as a bypass — that would fire on every `git pull`」と意図を宣言しているので、実装がその意図を満たしていない (parent 数は「この操作が commit を作ったか」の代理変数になっていない)。CLAUDE.md 8 が worktree で実装して main へ merge することを絶対義務にしている以上、main 側は常に ff になり、この誤判定は定常的に発生する = 他 worktree の正当な作業を自分の bypass として記録する帰属のバグ。修正案: post-merge が ff を判定するには HEAD の parent 数ではなく「この操作の前後で HEAD が commit を新規作成したか」を見る必要がある。git は post-merge に squash フラグしか渡さないので、ORIG_HEAD と HEAD の関係 (`git merge-base --is-ancestor ORIG_HEAD HEAD` かつ HEAD の親に ORIG_HEAD が含まれない = ff) を使うか、pre-merge-commit が置いた marker の有無で「実際に merge commit を作った」経路だけを post-commit へ渡す。判定不能は block 側 (ledger へ記録) に倒したままでよいが、ff を「不能」に分類しないこと。回避策 (今回採った): worktree 側で別の green な pre-commit を 1 回走らせて ledger を消す — 設計どおり「検査の副作用としてのクリア」なので bypass ではないが、毎回 1 commit を要求するのは代償である。
 
@@ -1501,11 +1503,13 @@ ORIG_HEAD と HEAD の関係で判定できる。ORIG_HEAD が HEAD の祖先な
 
 [reproduced again 2026-10-03, session 33de4c25] main ff (merge --ff-only) onto bc4433a7, a merge commit created in the session worktree with pre-merge-commit green; post-merge recorded it in the bypass ledger (gate-bypass.py --json listed bc4433a7, subject: Merge branch main into session-33de4c25). Same mechanism as the earlier entries. The commit carrying this note is the green non-empty pre-commit that clears it."""
 created_at = 1787905350
-updated_at = 1791024361
+updated_at = 1791048001
 weight = 0.0
 issue_number = 411
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/411"
-rev = 2
+rev = 3
+ruling_kind = "judgment"
+rationale = "Flow p1 driver 2026-10-04 (session 64554c4d): the fix lives in .githooks/post-merge, and my standing instructions are never to edit .githooks; githooks changes go to scratchpad patches for a human. A patch already exists (scratchpad 36c936bc-post-merge.patch from session 33de4c25: exit 0 only when the newest HEAD reflog entry points at HEAD and ends in ': Fast-forward', otherwise fall through to post-commit). It was reproduced again today: ff-merging session branches onto main produced duplicate gate-bypassed entries for 6acdb6b7. Human: apply the patch (or allow an agent to edit .githooks in a worktree), then remove expectedFailure from scripts/test_backlog_6267bfbe_36c936bc.py::FastForwardOntoGatedMerge and run it."
 
 [[task]]
 id = "32706d14"
@@ -1862,7 +1866,7 @@ project = "/home/hiroyuki_nakayama/src/claude-harnesses"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 ## 観測 (2026-09-08、測定点 cc2f4219 / b962d5d9)
 
@@ -2039,11 +2043,13 @@ Edit(//Users/yuki/**/.githooks/**) と Write(...) を禁じている)。人間�
 ( cd "$TYPECHECK_TREE" && CARGO_TARGET_DIR="$TYPECHECK_TARGET" python3 scripts/check-workspace-tests.py </dev/null >&2 ) || { echo "pre-push: BLOCKED — scripts/check-workspace-tests.py failed at $(git rev-parse --short "$sha")" >&2; exit 1; }
 Cost about 346s per push (measured 2026-09-10). After wiring: remove expectedFailure, then backlog done 65bfb279 --test 'python3 -m pytest scripts/test_backlog_65bfb279.py' --red-rev 4bc312db."""
 created_at = 1788849812
-updated_at = 1791028006
+updated_at = 1791048025
 weight = 0.0
 issue_number = 1109
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1109"
-rev = 1
+rev = 2
+ruling_kind = "judgment"
+rationale = "Flow p1 driver 2026-10-04 (session 64554c4d): the remaining step is wiring a runner into .githooks (pre-push most likely), which my standing instructions forbid agents to edit. The runner now exists: eca8dea7 (main 6acdb6b7) added scripts/check-workspace-tests.py --python-only. Fresh evidence that the gap still bites, measured today on main 6acdb6b7: test_gate_bypass 44 failures, test_precommit_hook 2, test_p0_gate_undetermined 4, test_check_launcher_exec_bit 1 (filed df307ea6, 292b6a07), all red with nobody told. Wiring now would make every push red until those are fixed. Human: decide (a) wire check-workspace-tests --python-only into pre-push now and accept the red until df307ea6/292b6a07 land, or (b) fix those first and then wire; then apply the hook patch."
 
 [[task]]
 id = "9c57995e"
@@ -3070,91 +3076,6 @@ updated_at = 1790983224
 weight = 0.0
 issue_number = 531
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/531"
-rev = 0
-
-[[task]]
-id = "230c34ec"
-title = "specguard brief の verdict が構造的に covered を返せない (spec-map 134/134 が no spec-doc) — flow 3-1.5 の spec-gap trigger 3 が空虚に発火する"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-実測 2026-09-13、測定点 37cc0be1 (specguard map の last synced と同一)。
-
-観測: specguard brief --json はどの課題文に対しても verdict=not-covered を返す。
-対照実験 (アンチ空虚): 正典に確実に存在する 3 topic を投げても全て not-covered だった。
-  判定不能は clean ではなく block か ask に解決する      -- rc=0 verdict=not-covered
-  main の作業ツリーで編集せず worktree で作業する          -- rc=0 verdict=not-covered
-  plugin を触ったら version を 3 ファイル lockstep で bump -- rc=0 verdict=not-covered
-これらは CLAUDE.md 第3節・第8節・禁忌ルールの逐語内容なので、covered が返らないのは
-「正典が無い」ではなく「判定面が機能していない」ことを意味する。
-
-原因 (測定): specguard map list は 134 entries を持つが、そのうち spec-doc を持つ entry は 0 件。
-  total entries: 134
-  with (no spec-doc): 134
-  with a spec-doc: (0 行)
-つまり covered を返しうる入力が構造的に存在しない。verdict は二値的に not-covered へ固定されている。
-
-なぜ問題か: flow SKILL.md の Step 3-1.5 は trigger 3 として
-verdict=not-covered を spec-gap divert (specforge へ差し戻し) の発火条件にしている。
-現状この trigger は全課題で発火するので、(a) 全タスクが divert 候補になり、
-(b) その escalate が常時発生して人間の判断が儀式化する。
-さらに divert は書き込み側 (specforge draft が新しい spec を起こす) なので、
-判定面が死んでいる状態での発火は「読めなかった」を「仕様が無い」へ写す —
-3-1.5 自身が明示的に禁じている置換であり、CLAUDE.md 第3節の
-「判定不能を permissive/誤った側へ潰す」の一形態。
-
-判定不能なので両方の読みを残す:
-  (a) 実在の欠陥 = spec-map に spec-doc を結び付ける経路 (drift-map) が未実行/未配線で、
-      brief が三値のうち covered を出せない。この場合 brief は not-covered ではなく
-      undetermined (exit 10) を返すべきで、二値へ潰れているのが欠陥。
-  (b) 意図的な仕様 = spec-doc がまだ 1 件も無いのは事実なので not-covered は正しい、
-      という読み。ただしその場合でも trigger 3 は全件発火するので flow 側の運用が破綻する。
-
-見分ける方法: spec-doc を 1 件だけ作って map の当該 entry に結び付け、
-その領域の課題文で brief が covered を返すか観測する。
-返るなら (a) は「未配線」であり配線すれば解ける。返らないなら brief の判定経路自体の欠陥。
-併せて specguard brief が undetermined (exit 10) を実際に返す入力が存在するかも確認する
-(存在しないなら三値は名目だけで実体は二値)。
-
-発見経緯: /flow の Step 3-1.5 プリフライトで 3 件全部が not-covered になり、
-divert する前に対照実験を掛けて空虚さが判明した。divert は実行していない。
-
---- サイクル7 追記 ---
-
-再測定 2026-09-16 (現在の main): 230c34ec の症状は未修正のまま。
-サイクル7 の 4 件の課題文すべてが rc=0 verdict=not-covered。
-アンチ空虚の対照として、正典に確実に存在する 3 topic を投げても全て not-covered:
-  "spec loop R4 flow spec gap source"      -- rc=0 verdict=not-covered
-  "blastguard three-valued decision ask"   -- rc=0 verdict=not-covered
-  "fail-closed gate invariant"             -- rc=0 verdict=not-covered
-したがって flow 3-1.5 の trigger 3 は依然として判別能力を持たない。
-coordinator は not-covered を spec-gap の証拠として扱わず、undetermined として
-divert せずに続行した (第3節: 測れないことを測れたことに写さない)。
-
-サイクル7 が追加で観測した事実 (再測定の副産物、測定点 main 72995339):
-spec-map は .gitignore:80 で .specguard/spec-map.toml として ignore されており、
-main の作業ツリーにしか実体が無い。同じ 7 本の probe を CLAUDE.md 第8節が義務づける
-worktree (測定点 778155e4) から実行すると、verdict は not-covered ではなく
-rc=10 verdict=undetermined になる (spec-map が空と読まれるため)。
-つまり brief の verdict は cwd がどちらの作業ツリーかで変わる。第8節は全作業を
-worktree で行うことを義務づけているので、規範どおりに働く実行主体から見た
-brief は構造的に常に undetermined である。これは本チケットの読み (a)/(b) とは
-別の第3の経路であり、not-covered と undetermined のどちらを見るかが
-測定場所に依存するという意味で、判定面の問題をさらに一段深くする。
-measure コマンド: specguard brief --json <topic> を cwd=main と cwd=worktree で各7本。
-spec-map 規模 (cwd=main, 測定日 2026-09-16): specguard map list は 184 行、
-うち "(no spec-doc)" を含む行 183。covered を返しうる entry は依然ほぼ皆無。
-
-
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/specguard/tests/backlog_230c34ec.rs (rev 34b1a083): reading (a): covered reachable, tracked bindings not applied by brief"""
-created_at = 1789272899
-updated_at = 1790983318
-weight = 0.0
-issue_number = 544
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/544"
 rev = 0
 
 [[task]]
@@ -12381,3 +12302,98 @@ weight = 0.0
 issue_number = 1276
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1276"
 rev = 1
+
+[[task]]
+id = "df307ea6"
+title = "test_gate_bypass (44) and test_precommit_hook (2) fail on main: the repo's pre-commit gates refuse the commits the tests make in scratch repos"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "p1",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04 by the 05726f9f worker at 34747778 (= main 6acdb6b7 plus test-loader changes, identical before/after): 44 failures in scripts/test_gate_bypass.py (GateBypassExitCodes, KnownDefects, MergeCommits, NoVerifyIsRecorded, PlainCommitIsClean, PrePushBlocks, GreenRunClearsTheLedger, AmendIsNotABypass, CertificateBindsTheDiffNotTheOperation, SentinelIsPerWorktree) and 2 in scripts/test_precommit_hook.py (CleanTreePasses, EveryScannerIsRun). Captured output shows the pre-commit gates refusing the fixture commits. Likely the same cause as 292b6a07 (test_p0_gate_undetermined seed commit exit 1). The gate-bypass ledger's own suite is red, so its behaviour is currently unverified."
+created_at = 1791047745
+updated_at = 1791047745
+weight = 0.0
+issue_number = 1277
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1277"
+rev = 0
+
+[[task]]
+id = "f0b5b19f"
+title = "overwatch: once library record_finding stores Unverified, nothing promotes a gate-exec escalation or specguard drift row to bridgeable work"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "overwatch",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "From the 7f07228e worker 2026-10-04 (commit e6a856b2). bridge.rs plan_finding_bridges only bridges f.verdict.is_actionable() (Confirmed). A human record-disposition confirmed does not change f.verdict, so the only route to the backlog is re-recording via the record-finding CLI with an adjudicated verdict. Design question: who promotes these rows? Also docs/repo-operations.md:269 says --to-backlog forwards the whole queue without saying Unverified/Refuted findings are skipped (that was already true before)."
+created_at = 1791047750
+updated_at = 1791047750
+weight = 0.0
+issue_number = 1278
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1278"
+rev = 0
+
+[[task]]
+id = "636842cd"
+title = "specguard doc_problem follows symlinks: a docs/specs/x.md symlink to a file outside the repo counts as a valid binding (gate-check, and now brief covered)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "specguard",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "From the 230c34ec verifier 2026-10-04: gatecheck.rs doc_problem uses std::fs::metadata (follows symlinks). Pre-existing in gate-check; brief now inherits it as a source of covered. Not tested."
+created_at = 1791047755
+updated_at = 1791047755
+weight = 0.0
+issue_number = 1279
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1279"
+rev = 0
+
+[[task]]
+id = "fc9e3487"
+title = "scripts/tests/rebuild-stage-repo-destination.sh hardcodes backlog-linux-x86_64, so on darwin-arm64 it fails its own vacuity check"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "scripts",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "From the a0525604 worker 2026-10-04: 'FAIL: the refresh loop scanned no cache binary' with or without its change. The scripts/tests/*.sh shell tests are not wired into any hook, so nobody sees the red."
+created_at = 1791047761
+updated_at = 1791047761
+weight = 0.0
+issue_number = 1280
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1280"
+rev = 0
+
+[[task]]
+id = "1421caad"
+title = "guard-maintree-bash PostToolUse refuses a read-only command with 'no Pre snapshot' while another session is mid-merge on main"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04 (session 64554c4d): the PostToolUse hook refused '~/.claude/.../condukt worktree remove --help' (read-only) with: Refused: cannot determine whether this command modified the MAIN working tree (CLAUDE.md 3: undetermined is not clean): no Pre snapshot /Users/yuki/src/harness/.git/maintree-guard/1ecccabeb70368502d38d56eb923eff2.json for this call. At that moment session-521ce4dd had an in-progress merge on main (MERGE_HEAD f7f095ac, UU marketplace.json). Fail-closed direction is right; the question is why the Pre snapshot was missing (Pre hook skipped? key mismatch?)."
+created_at = 1791047768
+updated_at = 1791047768
+weight = 0.0
+issue_number = 1281
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1281"
+rev = 0

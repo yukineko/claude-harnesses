@@ -749,6 +749,29 @@ class Round3Findings(_Fixture):
         self.assertEqual(self.clear().returncode, 0)
         self.assertTrue(os.path.exists(victim))
 
+    def test_value_options_before_patch_mode_from_both_cwds(self):
+        # The verifier's exact command, plus the glued / `=` value spellings,
+        # with cwd and project anchor at main and at the worktree.
+        cmds = ("git restore -s HEAD~1 -p .githooks",
+                "git restore -sHEAD~1 -p .githooks",
+                "git restore --source=HEAD~1 -p .githooks",
+                "git restore --source HEAD~1 -p .githooks",
+                "git checkout -b nb -p .githooks",
+                "git checkout --orphan nb -- .githooks",
+                "git checkout --conflict merge -p .githooks",
+                "git stash push -m wip -p .githooks",
+                "git stash push --message=wip -p .githooks",
+                "git clean -e x -f .githooks")
+        for where in (self.main, self.wt):
+            for i, cmd in enumerate(cmds):
+                with self.subTest(cwd=where, cmd=cmd):
+                    r = self.bash(cmd, sid=f"v{i}x{len(where)}", cwd=where,
+                                  project=where)
+                    self.assertEqual(r.returncode, 2, r.stderr)
+        for cmd in ("git restore -s HEAD~1 -p src", "git rm --cached -r -q build",
+                    "git mv -k a.rs b.rs", "git clean -e x.keep -fd out"):
+            self._allowed_in_wt(cmd)
+
 
 if __name__ == "__main__":
     unittest.main()

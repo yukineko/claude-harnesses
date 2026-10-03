@@ -16,7 +16,9 @@ as test_maintree_isolation_guards.py):
 It also pins the small second gate the ticket asks for: rewiring
 `core.hooksPath` from the main tree must not be exit 0.
 
-Open defect -> expectedFailure.
+Both are fixed: the interpreter retry since ae4543d5 (judged by effect), the
+core.hooksPath rewiring since e033c406. The deny-ledger behaviour itself is
+pinned in test_deny_ledger_e033c406.py.
 
     python3 scripts/test_backlog_e033c406.py
 """
@@ -88,7 +90,8 @@ class RetryAfterDenyIsDetected(unittest.TestCase):
             "and allowed (rc=0); stderr=%r" % retry.stderr,
         )
 
-    @unittest.expectedFailure  # backlog e033c406: open defect, remove when fixed
+    # Passes since e033c406: guard-maintree-bash.py refuses rewiring the hook
+    # directory (git config / -c / GIT_CONFIG_*), from any tree.
     def test_rewiring_core_hookspath_from_main_is_not_allowed(self):
         r = self._guard("git config core.hooksPath /dev/null")
         self.assertNotEqual(

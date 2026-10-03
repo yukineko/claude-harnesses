@@ -11937,3 +11937,51 @@ weight = 0.0
 issue_number = 1174
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1174"
 rev = 0
+
+[[task]]
+id = "c5df8fad"
+title = "docs/gate-taxonomy.md:44 still lists check-bench-regression.py as a CI (bench-regression.yml) gate; that workflow does not exist and GHA is banned, so the bench gate is unwired"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Seen 2026-10-03 by the f6919056 fork (session 33de4c25) at 0f7571fb. Two readings: (a) stale doc for a gate with no runner, i.e. dark; (b) intended advisory left unwired. To tell them apart, grep .githooks and scripts for check-bench-regression invocations."
+created_at = 1791027466
+updated_at = 1791027466
+weight = 0.0
+issue_number = 1188
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1188"
+rev = 0
+
+[[task]]
+id = "d058b22a"
+title = "mutation-gate.sh validates MIN_KILL_RATE only after the full cargo-mutants run (late validation, not fail-open)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "unconfirmed"
+notes = "Seen 2026-10-03 by the f6919056 fork at 0f7571fb. mutategate rejects MIN_KILL_RATE=0 (f276fc8d), but only after the expensive run. Efficiency only. Check by running with MIN_KILL_RATE=0 and timing until rejection."
+created_at = 1791027467
+updated_at = 1791027467
+weight = 0.0
+issue_number = 1189
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1189"
+rev = 0
+
+[[task]]
+id = "945a10ad"
+title = "a PreToolUse gate refuses a Bash command whose heredoc BODY (data written to a file) contains the text git config core.hooksPath"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-03, session 33de4c25, main 0f7571fb: a cat-heredoc appending a requirement document to a scratchpad file was refused with: git config core.hooksPath repoints every git hook at once, disabling the repo's hook gates. The heredoc was quoted data, not executed. Two readings: (a) defect: heredoc bodies are scanned as commands; (b) intended conservative scan. Repro: a quoted heredoc into /tmp containing that phrase."
+created_at = 1791027469
+updated_at = 1791027469
+weight = 0.0
+issue_number = 1190
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1190"
+rev = 0

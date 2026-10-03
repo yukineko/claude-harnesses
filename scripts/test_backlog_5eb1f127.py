@@ -13,6 +13,13 @@ check-bench-regression.py as CI-triggered, but CI is gone (no .github/ directory
 CLAUDE.md 7), so that prose is not a declaration of anything current.
 
 Open defect at f764bfeb: all five are unwired and undeclared. expectedFailure.
+
+eca8dea7 (2026-10-04): check-versions.sh was removed (check-plugin-versions.py
+covers it) and check-bench-regression.py was renamed to bench-regression.py, a
+hand-run tool outside the check-* scanner prefix. Both entries now settle as
+"removed". check-unwind.sh and check-fail-open-mutation.py are wired only by the
+human-applied .githooks patch (stage A), and validate-manifests.py is untouched,
+so the pin stays expectedFailure until those land.
 """
 
 import json

@@ -1372,6 +1372,165 @@ class RunProcess(unittest.TestCase):
 
 
 # ==========================================================================
+# --python-only mode (backlog eca8dea7, user ruling 2026-10-04): the pre-push
+# hook wires ONLY the scripts/test_*.py body; the cargo body is decided later.
+#
+# These cases launch the REAL script as a subprocess against throwaway fixture
+# repositories whose suites are tiny real unittest files — a passing one, a
+# failing one, none at all, one that crashes the interpreter, one whose output
+# cannot be parsed. A fake `cargo` that only drops a marker file is put first
+# on PATH (and HOME is pointed into the fixture), so "cargo was not run" is
+# OBSERVED (marker absent) rather than inferred from the output text.
+# ==========================================================================
+
+_PASSING_SUITE = """\
+import unittest
+
+
+class Passes(unittest.TestCase):
+    def test_passes(self):
+        self.assertTrue(True)
+"""
+
+_FAILING_SUITE = """\
+import unittest
+
+
+class Fails(unittest.TestCase):
+    def test_this_one_fails_on_purpose(self):
+        self.assertEqual(1, 2)
+"""
+
+# Killed by SIGKILL while being imported: the runner gets a signal, no summary.
+_CRASHING_SUITE = """\
+import os
+import signal
+
+os.kill(os.getpid(), signal.SIGKILL)
+"""
+
+# Exits 0 while being imported, before unittest prints anything: rc 0 with no
+# `Ran N tests` / OK line, i.e. an unparseable result that must not read green.
+_UNPARSEABLE_SUITE = """\
+import os
+
+os._exit(0)
+"""
+
+
+class PythonOnlyMode(unittest.TestCase):
+    FLAG = "--python-only"
+
+    def _repo(self, tmp, suites):
+        root = Path(tmp) / "repo"
+        (root / "crates" / "x" / "src").mkdir(parents=True)
+        (root / "crates" / "x" / "src" / "lib.rs").write_text("// fixture\n")
+        (root / "scripts").mkdir()
+        for name, body in suites.items():
+            (root / "scripts" / f"{name}.py").write_text(body, encoding="utf-8")
+        return root
+
+    def _run(self, tmp, suites, argv=None):
+        import subprocess
+
+        root = self._repo(tmp, suites)
+        bindir = Path(tmp) / "bin"
+        bindir.mkdir()
+        marker = Path(tmp) / "cargo-was-run"
+        fake = bindir / "cargo"
+        fake.write_text("#!/bin/sh\n: > '%s'\nexit 0\n" % marker)
+        fake.chmod(0o755)
+        home = Path(tmp) / "home"
+        home.mkdir()
+        env = dict(os.environ)
+        env["PATH"] = str(bindir) + os.pathsep + env.get("PATH", "")
+        env["HOME"] = str(home)
+        p = subprocess.run(
+            [sys.executable, str(_SRC_PATH)] + list(argv if argv is not None else [self.FLAG]),
+            cwd=str(root),
+            env=env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        return p.returncode, p.stdout, p.stderr, marker.exists()
+
+    def _assert_cargo_not_run(self, out, err, cargo_ran):
+        self.assertFalse(cargo_ran, "python-only mode launched cargo")
+        self.assertNotIn("cargo body green", out + err,
+                         "a cargo verdict was printed for a body that never ran")
+        self.assertRegex(
+            out + err, r"(?i)cargo[^\n]*\bNOT (?:been )?run\b",
+            "the output must state that the cargo body was not run",
+        )
+
+    def test_passing_suite_exits_zero_without_running_cargo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err, cargo_ran = self._run(tmp, {"test_ok": _PASSING_SUITE})
+        self.assertEqual(rc, 0, f"out={out}\nerr={err}")
+        self._assert_cargo_not_run(out, err, cargo_ran)
+        self.assertIn("1 suite(s)", out + err)
+
+    def test_a_failing_suite_exits_nonzero_and_names_the_test(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err, cargo_ran = self._run(
+                tmp, {"test_ok": _PASSING_SUITE, "test_bad": _FAILING_SUITE}
+            )
+        self.assertNotEqual(rc, 0, f"out={out}\nerr={err}")
+        self.assertEqual(rc, cws.RC_PYTHON_FAILURE, f"out={out}\nerr={err}")
+        self.assertIn("test_this_one_fails_on_purpose", out + err)
+        self._assert_cargo_not_run(out, err, cargo_ran)
+
+    def test_no_suites_found_exits_nonzero(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err, cargo_ran = self._run(tmp, {"helper": "# not a suite\n"})
+        self.assertNotEqual(rc, 0, f"out={out}\nerr={err}")
+        self.assertEqual(rc, cws.RC_PYTHON_UNDETERMINED, f"out={out}\nerr={err}")
+        self.assertNotIn("python body green", out + err)
+        self._assert_cargo_not_run(out, err, cargo_ran)
+
+    def test_a_crashed_runner_exits_nonzero(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err, cargo_ran = self._run(
+                tmp, {"test_ok": _PASSING_SUITE, "test_crash": _CRASHING_SUITE}
+            )
+        self.assertNotEqual(rc, 0, f"out={out}\nerr={err}")
+        self.assertEqual(rc, cws.RC_PYTHON_UNDETERMINED, f"out={out}\nerr={err}")
+        self.assertIn("test_crash", out + err)
+        self._assert_cargo_not_run(out, err, cargo_ran)
+
+    def test_an_unparseable_result_exits_nonzero(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err, cargo_ran = self._run(
+                tmp, {"test_ok": _PASSING_SUITE, "test_silent": _UNPARSEABLE_SUITE}
+            )
+        self.assertNotEqual(rc, 0, f"out={out}\nerr={err}")
+        self.assertEqual(rc, cws.RC_PYTHON_UNDETERMINED, f"out={out}\nerr={err}")
+        self.assertIn("test_silent", out + err)
+        self._assert_cargo_not_run(out, err, cargo_ran)
+
+    def test_the_mode_flag_does_not_open_the_door_to_other_arguments(self):
+        for argv in ([self.FLAG, "--skip"], ["--skip", self.FLAG], [self.FLAG, self.FLAG]):
+            with self.subTest(argv=argv), tempfile.TemporaryDirectory() as tmp:
+                rc, out, err, cargo_ran = self._run(
+                    tmp, {"test_ok": _PASSING_SUITE}, argv=argv
+                )
+                self.assertEqual(rc, cws.RC_ENVIRONMENT, f"out={out}\nerr={err}")
+                self.assertFalse(cargo_ran)
+
+    def test_default_mode_still_runs_the_cargo_body(self):
+        """Control: without the flag the fake cargo IS launched, so the marker
+        assertion above can observe a cargo run when one happens."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err, cargo_ran = self._run(tmp, {"test_ok": _PASSING_SUITE}, argv=[])
+        self.assertTrue(cargo_ran, f"out={out}\nerr={err}")
+        # The fake cargo prints no `test result:` line, so the full mode must
+        # not call that green either.
+        self.assertEqual(rc, cws.RC_CARGO_UNDETERMINED, f"out={out}\nerr={err}")
+
+
+# ==========================================================================
 # Source-level property tests
 # ==========================================================================
 

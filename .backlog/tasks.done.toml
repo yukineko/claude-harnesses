@@ -32559,3 +32559,159 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "79667521fa3057f3ce9d0c006ca00c02d6d82d4e"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "873a2621"
+title = "peer footprint: 24h window は liveness ではない — 2時間前に終了したセッションが今も自分のファイルを除外しうる。heartbeat-TTL claim registry(condukt/overwatch)から peer を導出する"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+
+
+[triage 2026-09-29 @b325a169] p2->p1: live self-documented fail-open: harness-core transcript.rs:474-488 peer window excludes files from secrets/missing-test gate sets
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/harness-core/tests/backlog_s07_audit.rs (rev e70d48dd)
+
+[ruling 2026-10-04, user via AskUserQuestion, session 33de4c25] Design D: a session is a peer only if it holds a live entry in condukt's claim registry (claims.json, heartbeat TTL); its footprint still comes from its transcript. Registry unreadable -> no exclusion (restrictive). The user approved re-anchoring the frozen assertions in crates/harness-core/tests/change_attribution.rs (~l.700-735) and peer_concurrency_window.rs (~l.175) to "fresh transcript + live registry entry". RED observed at fb3d3b2a: cargo test -p harness-core --test backlog_s07_audit -- --include-ignored backlog_873a2621. Needs rebuild+rollout of linking plugins once fixed."""
+created_at = 1788930715
+updated_at = 1791046267
+weight = 0.0
+issue_number = 1116
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1116"
+issue_closed_at = 1791046271
+rev = 2
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p harness-core --test backlog_873a2621_liveness"
+exit = 0
+passed = 6
+rev = "bfae2b4eeb226ef1dbf4ecabd633f9d89ac5e38c"
+observed_at = 1791046235
+output_digest = "sha256:4c94db10cfd75874ca8dda82f5a184e1ac24b8615c1e8401802b67d442b43840"
+excerpt = """
+
+running 6 tests
+test corrupt_registry_yields_no_exclusion ... ok
+test fresh_transcript_with_no_registry_file_is_not_a_peer ... ok
+test fresh_transcript_without_registry_entry_is_not_a_peer ... ok
+test live_registry_entry_makes_a_fresh_transcript_a_peer ... ok
+test stale_heartbeat_registry_entry_is_not_a_peer ... ok
+test unreadable_registry_yields_no_exclusion ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+   Compiling serde v1.0.228
+   Compiling toml_datetime v0.6.11
+   Compiling serde_spanned v0.6.9
+   Compiling trybuild v1.0.118
+   Compiling toml_edit v0.22.27
+   Compiling toml v0.8.23
+   Compiling harness-core v0.2.45 (/Users/yuki/src/.harness-worktrees/session-33de4c25/crates/harness-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.28s
+     Running tests/backlog_873a2621_liveness.rs (target/debug/deps/backlog_873a2621_liveness-44dbaaee4f350f8e)
+"""
+
+[task.closure.red]
+rev = "33fd9c8f858d60a1eca5b48e9a736e887a9fc2b8"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "e5174b6a"
+title = "condukt oracle.rs の fallback:true 3分岐が check_oracle 経由では到達不能 — 散文は charter DoD の縮退契約と書いているが実挙動は Reject"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-09-11、測定点 5b3251a1。crates/condukt/src/oracle.rs には run 由来の fallback:true が 3 経路ある: (1) verdict_from_oracle の transition unknown 分岐 (oracle.rs:70 付近)、(2) verdict_from_oracle_output の stdout 空 分岐、(3) 同 stdout が JSON パース不能 分岐。いずれも check_oracle 経由では到達しない。理由: crates/tdd/src/main.rs:349 の oracle_command は valid_fp_oracle が true でない限り exit 1 で終了する。deployed の tdd 0.1.29 で直接確認した -- tdd oracle --task no-such-task-xyz は {has_green:false,has_red:false,transition:unknown,valid_fp_oracle:false} を印字して exit=1。verdict_from_oracle_output は exit_ok=false を先頭で短絡して fallback:false を返すので、(1) には決して降りない。(2)(3) も tdd が exit 0 のときは必ず整形済み JSON を印字するため到達しない。問題は挙動そのものではなく散文との食い違いである: verdict_from_oracle の doc comment は逐語で「Per the charter DoD (オラクル生成不能時の fallback) that is a can't-generate condition and must degrade to the legacy done_criteria gate (fallback: true -- enforce_fp_gate Allows), NOT hard-reject」と書いており、charter の DoD が実装されているかのように読める。実際には charter が要求した縮退は起きず hard-reject される。CLAUDE.md 第4節 (散文が実挙動と食い違ったら次のレビュアーを騙す仕掛けになる) に該当。要判断: charter DoD の縮退契約を本当に実現したいのか (その場合 tdd oracle の exit code 設計を変える必要がある。ただし縮退は fail-open なので第3節と衝突する)、それとも縮退契約自体を撤回して散文を実挙動に合わせるのか。後者が妥当に見えるが、これは仕様判断なので人間に返す。付随して、到達不能な 3 分岐にユニットテストが付いている場合、それらは pure function の契約テストであって gate 経路の証明ではないことを doc に明記すべき。
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/condukt/src/oracle.rs (mod backlog_e5174b6a) (rev 596108b9): Contract pinned = prose and behaviour agree; GREEN under either resolution (rewrite doc, or change exit protocol + fixture)."""
+created_at = 1789070218
+updated_at = 1791046555
+weight = 0.0
+issue_number = 525
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/525"
+issue_closed_at = 1791046558
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --bin condukt backlog_e5174b6a -- --include-ignored"
+exit = 0
+passed = 1
+rev = "0dce774f64c2493114eb426c8e351b19f11aa139"
+observed_at = 1791046421
+output_digest = "sha256:353cd6acb370b9b9bad07f27a79ee19cef08f1cf8fabd3bb7292189cd4e114c5"
+excerpt = """
+
+running 1 test
+test oracle::backlog_e5174b6a::documented_unknown_transition_degradation_is_what_check_oracle_delivers ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 886 filtered out; finished in 0.04s
+
+   Compiling harness-core v0.2.45 (/Users/yuki/src/.harness-worktrees/session-33de4c25/crates/harness-core)
+   Compiling overwatch v0.2.59 (/Users/yuki/src/.harness-worktrees/session-33de4c25/crates/overwatch)
+   Compiling schemaguard v0.1.18 (/Users/yuki/src/.harness-worktrees/session-33de4c25/crates/schemaguard)
+   Compiling blastguard v0.2.105 (/Users/yuki/src/.harness-worktrees/session-33de4c25/crates/blastguard)
+   Compiling condukt v0.7.211 (/Users/yuki/src/.harness-worktrees/session-33de4c25/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 42.39s
+     Running unittests src/main.rs (target/debug/deps/condukt-2d3d773171de6eea)
+"""
+
+[task.closure.red]
+rev = "4027a8dcac83a9e2910e6ddd9f07c8780825aeb8"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "c9373b92"
+title = "rollout-plugins.sh --plugin runs skip the verification that would catch a dark deploy"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+scripts/rollout-plugins.sh:1106-1113 returns 0 early for any filtered run: 'verify: skipped — this run was filtered to: ...'. check-plugin-rollout.py DOES detect 'installed but execs nothing' (check-plugin-rollout.py:1147-1153, ROLLOUT-class fatal at rollout-plugins.sh:1120-1125), but the single most common invocation shape — scripts/rollout-plugins.sh --plugin <name> — never runs it. So the one path an operator uses to roll out one plugin has ZERO post-hoc check that the host binary actually landed. The stated reason (a whole-fleet verdict would fail for plugins this run never touched) argues for a SCOPED verification of the targeted plugins, not for skipping verification entirely. Found while closing 8206b09f.
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_rollout_nt_e_repros.py::VerifyRolloutComplete.test_filtered_run_still_verifies_the_targeted_plugins (rev e128c13b): verify_rollout_complete() extracted verbatim from rollout-plugins.sh and run in a sandbox with a stub checker; the script itself was not executed."""
+created_at = 1789118611
+updated_at = 1791046795
+weight = 0.0
+issue_number = 537
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/537"
+issue_closed_at = 1791046797
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest -q scripts/test_backlog_c9373b92.py"
+exit = 0
+passed = 10
+rev = "4cb1fc0106cd6caf7274efe70e5d76dad80aa355"
+observed_at = 1791046783
+output_digest = "sha256:925660f2db6d44219fe7417b85db0f44987aecc11872ee887b8db4596a3f96e4"
+excerpt = """
+..........                                                               [100%]
+10 passed in 4.90s
+"""
+
+[task.closure.red]
+rev = "418c82e2e428a7e1ac163615e116a65d00adb999"
+exit = 1
+kind = "behavioural"

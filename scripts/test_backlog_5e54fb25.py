@@ -52,7 +52,6 @@ class FilteredRolloutVerify(unittest.TestCase):
         self.assertNotEqual(rc, 0, out)
         self.assertIn("drift remains", out)
 
-    @unittest.expectedFailure  # backlog 5e54fb25: open defect, remove when fixed
     def test_filtered_run_with_drift_in_the_filtered_plugin_fails(self):
         rc, out = call("tdd")
         self.assertNotEqual(rc, 0, f"--plugin tdd returned 0 while tdd drift remains:\n{out}")

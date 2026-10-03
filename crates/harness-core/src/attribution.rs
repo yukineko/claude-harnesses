@@ -182,6 +182,11 @@ pub fn attribute_with_footprints(
 /// FALSE EXCLUSIONS: files dropped from the gate on the strength of a stranger's
 /// footprint. That failure is permissive, so the shape is checked rather than
 /// assumed, and a mismatch yields no peers at all.
+///
+/// A transcript there is only a peer's FOOTPRINT. Whether its session is a peer
+/// at all is decided by condukt's claim registry for the repository at `root`
+/// (a live heartbeat), and an unreadable registry yields no peers — see
+/// [`crate::transcript::peer_edit_footprint_in`].
 pub fn attribute_from_transcript(
     root: &Path,
     transcript_path: &str,
@@ -202,7 +207,14 @@ pub fn attribute_from_transcript(
         .unwrap_or_default();
     let peers = match path.parent().and_then(Path::parent) {
         Some(projects) if projects.file_name().is_some_and(|n| n == "projects") => {
-            crate::transcript::peer_edit_footprint_in(projects, &my_id)
+            // Liveness comes from condukt's claim registry for the repo at
+            // `root` (backlog 873a2621); transcripts supply only footprints.
+            crate::transcript::peer_edit_footprint_for(
+                projects,
+                &my_id,
+                crate::transcript::PEER_ACTIVE_WINDOW,
+                root,
+            )
         }
         _ => BTreeSet::new(),
     };

@@ -3400,53 +3400,6 @@ ruling_kind = "judgment"
 rationale = "Blocked on a human-only edit: wiring scripts/check-projkey-store-classification.py into .githooks/pre-commit. .githooks is deny-listed for the assistant and the notes record the user ruling of 2026-09-23 that the user applies the patch. The script may already be covered by the eca8dea7 stage A/B/C .githooks patches in the driver scratchpad; check before applying."
 
 [[task]]
-id = "55fb3861"
-title = "condukt の fugu 記録で cost 解決失敗が 0.0 に潰れ、未計測がコスト 0 として記録される"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-backlog 53c825f6 の evidence 2。crates/condukt/src/main.rs:5218 付近:
-
-    let cost = s
-        .agent_id
-        .as_deref()
-        .and_then(state::resolve_agent_cost)
-        .unwrap_or(s.cost_usd);
-
-resolve_agent_cost が解決できなかった場合 s.cost_usd に落ちるが、SKILL.md の
-prose は description 文字列照合が脆いためこれを 0.0 の既定値のまま残すことが
-多いと同じ箇所のコメント自身が認めている。結果として「コストを解決できなかった」
-が「このタスクはコスト 0 だった」として fugu に記録され、下流の routing 計測が
-未計測を無料として集計する。CLAUDE.md #3 の判定不能を permissive 側へ倒す形。
-
-既に同一ファイル内に正しい先例がある: spawn_fugu_record (main.rs:5299 付近) の
-duration_secs は三値で、0.0 を「未計測」として扱い --duration を省略する。
-cost も同じ形に揃えればよい (約 4 行)。
-
-done_criteria:
-- cost を Option<f64> の三値にし、解決失敗時に 0.0 を捏造せず --cost を省略する
-  (もしくは fugu-router 側が未計測を表現できるキーへ渡す)
-- verifier 側の同型の unwrap_or_else(|| s.verifier_cost_usd.unwrap_or(0.0))
-  (main.rs:5230 付近) も同時に直す。片側だけの修正は gate-crate audit mirror gap
-  と同じ再発パターンになる
-- 解決失敗時に 0.0 が記録されないことを固定する挙動テストを追加する
-  (先に RED を観測すること)
-
-依存: このファイルは run-20260913-223733-78880-t1 (backlog e8c03e9e) が
-main.rs を触るため、そのマージ後に着手すること。
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/condukt/tests/backlog_s03_audit.rs (rev e70d48dd)"""
-created_at = 1789490424
-updated_at = 1790983232
-weight = 0.0
-issue_number = 657
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/657"
-rev = 0
-
-[[task]]
 id = "fa86a52f"
 title = "session-insights の files touched が Bash 編集を数えず 0 と報告する (無言の過少計上)"
 project = "/Users/yuki/src/harness"
@@ -3505,7 +3458,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 観測 2026-09-22、測定点 414be4f1、session 79d79a35。/flow 実行中に発生。
 
@@ -3557,11 +3510,13 @@ backlog requeue lock scoping (SessionStart requeue の TOCTOU)。
 
 [backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Claims moved out of the tracked store (f09db5ce), but the item's stated problem is the WRITE DESTINATION ('問題は中身ではなく書き込み先'; fix (b) 'main を dirty にしないことを要件にする'). SessionStart still calls store::requeu; test - (rev e70d48dd)"""
 created_at = 1790114712
-updated_at = 1790983233
+updated_at = 1791054870
 weight = 0.0
 issue_number = 675
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/675"
-rev = 0
+rev = 1
+ruling_kind = "judgment"
+rationale = "Same root decision as 19ed3ae9 (also needs-ruling): where the backlog queue's canonical store lives, given that .backlog/tasks.toml is a tracked file and any write from the main working tree dirties main (section 8). Reading (a) pin the SessionStart stale-claim requeue to the main worktree root still dirties main; reading (b) defer the requeue to the next write, or keep claim/requeue state outside the tracked tree (claims already moved out in f09db5ce). Recommend deciding 19ed3ae9 and bf2de0ad together: requeue becomes a derived view (a claim older than TTL reads as pending) computed at read time, so SessionStart writes nothing tracked."
 
 [[task]]
 id = "fc6b48d2"
@@ -3570,17 +3525,19 @@ project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 実測 2026-09-18 linux-x86_64。稼働 cache の host binary が全 41 plugin で欠落した状態から `scripts/rollout-plugins.sh --canary --dry-run` を実行すると、canary 健全性ゲートが overwatch を使うため即座に `overwatch: no bundled binary for linux-x86_64 (.../overwatch/0.2.35/bin/overwatch-linux-x86_64)` で rc=1 終了する。GATE クレートは canary 必須 (docs/repo-operations.md) なので、overwatch のバイナリを配るには canary が要り、canary を回すには overwatch のバイナリが要る、という循環になる。今回は `scripts/rebuild-plugins.sh --no-clean` を先に手で回して cache へ seed することで抜けたが、この回避手順はどこにも書かれていない。Stop hook / SessionStart hook が出すメッセージは `scripts/build-plugin-bin.sh` を案内するが、これは crates/<name>/bin/ へ stage するだけで稼働 cache には配らないため、案内どおりに実行しても hook は復旧しない (案内が実挙動と食い違っている = CLAUDE.md 4)。修正案: (a) canary ゲートが overwatch を実行できないときの bootstrap 経路を rollout-plugins.sh に持たせる、(b) hook のメッセージを rebuild-plugins.sh へ直す、の両方。
 
 [backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/overwatch/tests/backlog_fc6b48d2.rs (rev d2e54735): Covers the misleading hook-message half; the rollout --canary bootstrap half is not exercised (rollout script)."""
 created_at = 1789702622
-updated_at = 1790983257
+updated_at = 1791054852
 weight = 0.0
 issue_number = 666
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/666"
-rev = 0
+rev = 1
+ruling_kind = "judgment"
+rationale = "Scope decision. The same misleading advice ('Build it with scripts/build-plugin-bin.sh', which only stages into crates/<name>/bin and never restores the live-cache binary the hook runs from) is not only in overwatch: grep finds it in 38 plugin launchers (crates/*/bin/*), each worded differently. Fixing only overwatch (what the repro test pins) leaves 37 mirror copies; fixing all means 38 plugin micro bumps x 3 files + 38 rollouts, colliding with every parallel session on marketplace.json. The second half (rollout --canary cannot bootstrap without an overwatch binary) is in scripts/rollout-plugins.sh. Options: (A) fix all 38 launchers in one task with the 38 bumps and a scan test that no launcher names build-plugin-bin.sh as the recovery; (B) overwatch only now, the rest batched into the next fleet-wide bump; (C) also add the canary bootstrap path (rebuild-plugins.sh --no-clean seeding when overwatch has no binary). Recommended: A + C in one task."
 
 [[task]]
 id = "126d038a"
@@ -5276,17 +5233,19 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 2026-09-18、backlog 2ae5503f (commit 3e28dc16) で scripts/check-plugin-rollout.py の per-finding メッセージから「none of its hooks fire, so the gate silently guards nothing」という**観測していない挙動の断定**を撤去した。しかし同一クラスの断定が .githooks/pre-push:252-254 の heredoc にも独立した文字列として存在しており、そちらは直していない。実測: 本日 ee15cd2e を push した際の pre-push 出力に逐語で 'A GATE crate that is installed but not listed in enabledPlugins is inert: its hooks never fire, so the gate reports nothing and guards nothing.' が出た。この文の直前に表示される per-finding 側は既に修正後の「whether its hooks actually fire was NOT observed by this check」に変わっており、**同じ画面で 2 つの文が矛盾している**。しかもこの断定は同じ 2026-09-18 に反証済みである: blastguard@yukineko が false のまま blastguard の hook が実際に発火するのを複数回観測した。CLAUDE.md 第4節「docstring / コメントで実挙動と違う『安全な話』を書く」の禁止に当たり、かつ第1節の「判定を持つ」判定 — この文は人間が『このゲートは死んでいる』と読んで調査を打ち切る根拠になるので、下流消費者が存在する。修正方向: check-plugin-rollout.py 側と同じ文言に揃える。すなわち「enabledPlugins に載っていないので Claude Code はロードしない設定であり inert のはず。ただし hook が実際に発火するかどうかは、このチェックは観測していない (enabledPlugins しか読まない)。known-dead ではなく unverified として扱え」。テスト: scripts/test_prepush_hook.py に、enablement クラス (rc=2) の助言文が 'hooks never fire' / 'guards nothing' を含まないことと、代わりに未観測であることを明示していることを固定するケースを足す。先に RED を観測してから直すこと。教訓: 同一の誤りが複数ファイルに独立した文字列として存在するとき、1 箇所直して『直した』と報告するのは第4節の隠蔽に接続する。grep で全出現を列挙してから直すこと。
 
 [backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test scripts/test_audit_s03_gates.py (rev e70d48dd)"""
 created_at = 1789719672
-updated_at = 1790983249
+updated_at = 1791054852
 weight = 0.0
 issue_number = 673
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/673"
-rev = 0
+rev = 1
+ruling_kind = "judgment"
+rationale = "Human-only edit: the fix is the advice heredoc in .githooks/pre-push (around lines 252-254), and .githooks is deny-listed for the assistant. Proposed wording (same as check-plugin-rollout.py after 2ae5503f): not listed in enabledPlugins, so Claude Code is configured not to load it and it should be inert; whether its hooks actually fire was NOT observed by this check (it reads enabledPlugins only) - treat as unverified, not known-dead. The pinning test belongs in scripts/test_prepush_hook.py; I can write the patch file plus the RED-first test in a worktree if you approve."
 
 [[task]]
 id = "4b6f4aba"
@@ -13007,4 +12966,194 @@ updated_at = 1791054805
 weight = 0.0
 issue_number = 1330
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1330"
+rev = 0
+
+[[task]]
+id = "e44e233f"
+title = "condukt shadow-run finish requires --cost and --duration, so a caller with no measurement must invent values (and --duration 0 is rejected by fugu-router record)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Worker side finding on 55fb3861: ShadowRunAction::Finish in crates/condukt/src/main.rs and shadow_run.rs record_to_fugu_router always forward both. Same fabricated-measurement class as 55fb3861."
+created_at = 1791055121
+updated_at = 1791055121
+weight = 0.0
+issue_number = 1331
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1331"
+rev = 0
+
+[[task]]
+id = "2ce8e9fa"
+title = "condukt SKILL.md Phase 6 tracekit snippets pass --cost GAUGE_COST:-0, fabricating a zero cost for trace spans"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Worker side finding on 55fb3861: SKILL.md around lines 1134/1138 still uses the defaulted-zero form that 55fb3861 removed from the fugu record snippet."
+created_at = 1791055123
+updated_at = 1791055123
+weight = 0.0
+issue_number = 1332
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1332"
+rev = 0
+
+[[task]]
+id = "60ecd6ff"
+title = "fugu-router delegation-stats avg_duration_secs prints 0.0 when there are no duration samples"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fugu-router",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Worker side finding on 55fb3861: no-data shown as zero, same class the ticket fixed for cost."
+created_at = 1791055124
+updated_at = 1791055124
+weight = 0.0
+issue_number = 1333
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1333"
+rev = 0
+
+[[task]]
+id = "67f82dde"
+title = "fugu-router duration-outliers text output reads values with as_f64().unwrap_or(0.0)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fugu-router",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Worker side finding on 55fb3861: display path in cmd_duration_outliers; consumers not traced."
+created_at = 1791055126
+updated_at = 1791055126
+weight = 0.0
+issue_number = 1334
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1334"
+rev = 0
+
+[[task]]
+id = "02e5a922"
+title = "condukt state set --status done took over 2 minutes on a 20-file two-crate diff, spawning git diff children one after another"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04 with condukt 0.7.220: state set --run run-20261004-035627-41010 --task 55fb3861 --status done --worktree <wt> --branch <br> ran >140s; ps showed successive children 'git diff c4928d36...HEAD' (likely diffrisk caller-site scan). Exit 0. No progress output, so a caller cannot tell slow from hung. Needs a timing measurement and a repro."
+created_at = 1791055143
+updated_at = 1791055143
+weight = 0.0
+issue_number = 1335
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1335"
+rev = 0
+
+[[task]]
+id = "183bb46a"
+title = "condukt run_editgate block reason falls back to 'edit left the crate not compiling' when cargo could not even be spawned"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Worker side finding on f7a0cadc (4f0dace5): main.rs run_editgate uses only verdict.diagnostics; a spawn failure has none, so the hook blames the edited code for an environment failure (section 4)."
+created_at = 1791055673
+updated_at = 1791055673
+weight = 0.0
+issue_number = 1336
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1336"
+rev = 0
+
+[[task]]
+id = "13254573"
+title = "condukt state.rs enforce_edit_gate doc and tests cite stale editgate.rs line numbers (134,147,208,221) as the verdict emission sites"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Worker side finding on f7a0cadc: the citations were stale before the change and drift further after it."
+created_at = 1791055675
+updated_at = 1791055675
+weight = 0.0
+issue_number = 1337
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1337"
+rev = 0
+
+[[task]]
+id = "096f80f4"
+title = "condukt run_editgate doc comment still says the hook is fail-soft and swallows panics via run_hook (main.rs ~1895-1902)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Worker side finding on f7a0cadc: the editgate hook returns block verdicts, so per CLAUDE.md section 1 it is a verdict path and must not go through run_hook's panic-to-allow barrier; at minimum the prose contradicts the fail-closed contract. Verify which barrier it actually uses."
+created_at = 1791055676
+updated_at = 1791055676
+weight = 0.0
+issue_number = 1338
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1338"
+rev = 0
+
+[[task]]
+id = "2f740852"
+title = "cargo fmt --all --check reports a diff in crates/backlog/src/lib.rs line 1 on main"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Worker side finding on f7a0cadc 2026-10-04: pre-existing fmt drift in crates/backlog/src/lib.rs:1."
+created_at = 1791055677
+updated_at = 1791055677
+weight = 0.0
+issue_number = 1339
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1339"
+rev = 0
+
+[[task]]
+id = "4fc130d3"
+title = "fugu-router record accepts --cost 0 and stores 0.0 but reads it back as unmeasured, so a genuinely measured zero cost cannot be recorded (duration rejects 0 at write instead)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fugu-router",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Verifier side finding on 55fb3861 (branch run-20261004-035627-41010/55fb3861, fugu-router 0.1.41): read rule mirrors duration_secs (non-positive -> None) but the write rule does not (duration rejects non-positive with non-zero exit; cost accepts 0). Either reject 0 at write like duration, or give cost a representation for a measured zero."
+created_at = 1791055719
+updated_at = 1791055719
+weight = 0.0
+issue_number = 1340
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1340"
 rev = 0

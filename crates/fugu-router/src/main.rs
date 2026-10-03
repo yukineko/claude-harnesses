@@ -82,8 +82,14 @@ enum Command {
         status: String,
         #[arg(long, default_value = "worker")]
         role: String,
-        #[arg(long, default_value_t = 0.0)]
-        cost: f64,
+        /// Observed USD cost of the worker/verifier task, if the caller
+        /// resolved it. OMIT the flag to record the episode's cost as
+        /// unmeasured (`Episode.cost_usd = None`, excluded from every cost
+        /// aggregate). A negative or non-finite value is REJECTED (exit
+        /// non-zero). `0` is accepted but, like a legacy `0.0`, reads back as
+        /// unmeasured (see `store::Episode::cost_usd`).
+        #[arg(long)]
+        cost: Option<f64>,
         /// Acceptance criteria for this task (persisted to playbook store when pass).
         #[arg(long, default_value = "")]
         done_criteria: String,
@@ -561,9 +567,18 @@ fn main() {
                 );
             }
 
-            // `additionalContext` reaches the model, `systemMessage` reaches
-            // the user; a sync that has stopped working needs both.
-            let mut out = json!({ "additionalContext": ctx });
+            // `hookSpecificOutput.additionalContext` reaches the model,
+            // top-level `systemMessage` reaches the user; a sync that has
+            // stopped working needs both. A *top-level* `additionalContext`
+            // is silently dropped by Claude Code for UserPromptSubmit
+            // (observed with `claude -p`, backlog ceb0a9bf), so it must be
+            // nested with `hookEventName` per the hooks schema.
+            let mut out = json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": ctx,
+                }
+            });
             if let Some(n) = notice {
                 out["systemMessage"] = json!(n);
             }
@@ -627,6 +642,16 @@ fn run_user(cmd: Command) -> Result<()> {
                 ),
                 None => None,
             };
+            // A supplied --cost must be a real, finite, non-negative amount.
+            // An unresolved cost is represented by OMITTING the flag
+            // (Episode.cost_usd = None), never by a fabricated 0.0.
+            let cost_usd = match cost {
+                Some(c) if c.is_finite() && c >= 0.0 => Some(c),
+                Some(c) => anyhow::bail!(
+                    "--cost must be a finite, non-negative USD amount (got {c}); omit --cost to record the cost as unmeasured"
+                ),
+                None => None,
+            };
             let raw_touched = split_files(&files);
             // Normalise absolute paths to repo-relative so stored paths are
             // portable across machines (no username / mount-point leakage).
@@ -641,7 +666,7 @@ fn run_user(cmd: Command) -> Result<()> {
                 model,
                 role,
                 pass,
-                cost_usd: cost,
+                cost_usd,
                 human_label: None,
                 labeled_by: None,
                 skill_fingerprint: if skill_fingerprint.is_empty() {
@@ -1605,21 +1630,64 @@ fn is_ahead_of_upstream(sync_dir_str: &str) -> Option<bool> {
     Some(count > 0)
 }
 
-fn cmd_stats(cfg: &config::Config, as_json: bool) -> Result<()> {
-    use std::collections::BTreeMap;
-    let eps = store::load(&cfg.store_path());
-    let mut agg: BTreeMap<String, (usize, usize, f64)> = BTreeMap::new();
-    for e in &eps {
-        let s = agg.entry(e.model.clone()).or_insert((0, 0, 0.0));
+/// Running sum of MEASURED costs only (backlog 55fb3861). An episode whose
+/// `cost_usd` is `None` (unmeasured) never enters it — folding it in as `0.0`
+/// would pull the average toward "free". `avg()` is `None` when nothing was
+/// measured, so no aggregate can report an unmeasured bucket as `$0`.
+#[derive(Default, Clone, Copy)]
+struct CostSum {
+    n: usize,
+    total: f64,
+}
+
+impl CostSum {
+    fn add(&mut self, cost: Option<f64>) {
+        if let Some(c) = cost {
+            self.n += 1;
+            self.total += c;
+        }
+    }
+    fn avg(&self) -> Option<f64> {
+        (self.n > 0).then(|| self.total / self.n as f64)
+    }
+}
+
+/// Human rendering of a [`CostSum`] average: `$x.xxxx (n=k)` or `unmeasured`.
+fn fmt_avg_cost(c: &CostSum) -> String {
+    match c.avg() {
+        Some(a) => format!("${a:.4} (n={})", c.n),
+        None => "unmeasured".to_string(),
+    }
+}
+
+/// Per-model `(count, passes, measured cost)` for `stats`.
+fn model_stats(
+    eps: &[store::Episode],
+) -> std::collections::BTreeMap<String, (usize, usize, CostSum)> {
+    let mut agg: std::collections::BTreeMap<String, (usize, usize, CostSum)> =
+        std::collections::BTreeMap::new();
+    for e in eps {
+        let s = agg
+            .entry(e.model.clone())
+            .or_insert((0, 0, CostSum::default()));
         s.0 += 1;
         if e.pass {
             s.1 += 1;
         }
-        s.2 += e.cost_usd;
+        s.2.add(e.cost_usd);
     }
+    agg
+}
+
+fn cmd_stats(cfg: &config::Config, as_json: bool) -> Result<()> {
+    let eps = store::load(&cfg.store_path());
+    let agg = model_stats(&eps);
     // Duration coverage: how many episodes carry a real (Some) measurement out
     // of the total — surfaced so the low recording rate is visible.
     let measured_n = eps.iter().filter(|e| e.duration_secs.is_some()).count();
+    // Cost coverage, same shape: unmeasured costs are excluded from every
+    // average, so how many were measured must be visible next to it.
+    let cost_measured_n = eps.iter().filter(|e| e.cost_usd.is_some()).count();
     let total_n = eps.len();
     if as_json {
         let obj: serde_json::Map<String, serde_json::Value> = agg
@@ -1631,7 +1699,9 @@ fn cmd_stats(cfg: &config::Config, as_json: bool) -> Result<()> {
                         "count": n,
                         "passes": p,
                         "pass_rate": if *n > 0 { *p as f64 / *n as f64 } else { 0.0 },
-                        "avg_cost_usd": if *n > 0 { c / *n as f64 } else { 0.0 },
+                        // `null` when no episode of this model has a measured cost.
+                        "avg_cost_usd": c.avg(),
+                        "cost_samples": c.n,
                     }),
                 )
             })
@@ -1641,21 +1711,23 @@ fn cmd_stats(cfg: &config::Config, as_json: bool) -> Result<()> {
             serde_json::to_string_pretty(&json!({
                 "episodes": eps.len(),
                 "duration_coverage": {"recorded": measured_n, "total": total_n},
+                "cost_coverage": {"recorded": cost_measured_n, "total": total_n},
                 "models": obj,
             }))?
         );
     } else {
         println!("episodes: {}", eps.len());
         println!("duration coverage: {measured_n}/{total_n} episodes measured");
+        println!("cost coverage: {cost_measured_n}/{total_n} episodes measured");
         for (m, (n, p, c)) in &agg {
             println!(
-                "  {m:<6} {p}/{n} pass ({:.0}%)  avg ${:.4}",
+                "  {m:<6} {p}/{n} pass ({:.0}%)  avg {}",
                 if *n > 0 {
                     *p as f64 / *n as f64 * 100.0
                 } else {
                     0.0
                 },
-                if *n > 0 { c / *n as f64 } else { 0.0 }
+                fmt_avg_cost(c)
             );
         }
     }
@@ -1681,18 +1753,22 @@ fn normalize_delegation(raw: &str) -> String {
 /// episodes predate the duration feature entirely, and averaging their
 /// untracked `0.0` in with real measurements would silently pull the mean
 /// toward zero. `avg_duration_secs` is only ever computed over `duration_n`.
+/// Cost follows the same rule (backlog 55fb3861): `cost` sums MEASURED costs
+/// only, so an unmeasured episode is not averaged in as free.
 struct DelegationBucket {
     count: usize,
     passes: usize,
-    cost_total: f64,
+    cost: CostSum,
     duration_n: usize,
     duration_total: f64,
 }
 
-fn cmd_delegation_stats(cfg: &config::Config, as_json: bool) -> Result<()> {
-    use std::collections::BTreeMap;
-    let eps = store::load(&cfg.store_path());
-    let mut agg: BTreeMap<String, DelegationBucket> = BTreeMap::new();
+/// Bucket `flow-delegation` episodes by normalized delegation strategy.
+fn delegation_buckets(
+    eps: &[store::Episode],
+) -> std::collections::BTreeMap<String, DelegationBucket> {
+    let mut agg: std::collections::BTreeMap<String, DelegationBucket> =
+        std::collections::BTreeMap::new();
     for e in eps.iter().filter(|e| e.class == "flow-delegation") {
         let Some(raw) = &e.delegation else {
             continue; // unrecorded delegation is meaningless for this comparison
@@ -1702,7 +1778,7 @@ fn cmd_delegation_stats(cfg: &config::Config, as_json: bool) -> Result<()> {
             .or_insert(DelegationBucket {
                 count: 0,
                 passes: 0,
-                cost_total: 0.0,
+                cost: CostSum::default(),
                 duration_n: 0,
                 duration_total: 0.0,
             });
@@ -1710,12 +1786,18 @@ fn cmd_delegation_stats(cfg: &config::Config, as_json: bool) -> Result<()> {
         if e.pass {
             bucket.passes += 1;
         }
-        bucket.cost_total += e.cost_usd;
+        bucket.cost.add(e.cost_usd);
         if let Some(d) = e.duration_secs {
             bucket.duration_n += 1;
             bucket.duration_total += d;
         }
     }
+    agg
+}
+
+fn cmd_delegation_stats(cfg: &config::Config, as_json: bool) -> Result<()> {
+    let eps = store::load(&cfg.store_path());
+    let agg = delegation_buckets(&eps);
 
     let total: usize = agg.values().map(|b| b.count).sum();
 
@@ -1729,7 +1811,9 @@ fn cmd_delegation_stats(cfg: &config::Config, as_json: bool) -> Result<()> {
                         "count": b.count,
                         "passes": b.passes,
                         "pass_rate": if b.count > 0 { b.passes as f64 / b.count as f64 } else { 0.0 },
-                        "avg_cost_usd": if b.count > 0 { b.cost_total / b.count as f64 } else { 0.0 },
+                        // `null` when no episode in the bucket has a measured cost.
+                        "avg_cost_usd": b.cost.avg(),
+                        "cost_samples": b.cost.n,
                         "avg_duration_secs": if b.duration_n > 0 { b.duration_total / b.duration_n as f64 } else { 0.0 },
                         "duration_samples": b.duration_n,
                     }),
@@ -1757,7 +1841,7 @@ fn cmd_delegation_stats(cfg: &config::Config, as_json: bool) -> Result<()> {
                 "no duration data".to_string()
             };
             println!(
-                "  {k:<6} {}/{} pass ({:.0}%)  avg ${:.4}  avg duration {avg_dur}",
+                "  {k:<6} {}/{} pass ({:.0}%)  avg {}  avg duration {avg_dur}",
                 b.passes,
                 b.count,
                 if b.count > 0 {
@@ -1765,11 +1849,7 @@ fn cmd_delegation_stats(cfg: &config::Config, as_json: bool) -> Result<()> {
                 } else {
                     0.0
                 },
-                if b.count > 0 {
-                    b.cost_total / b.count as f64
-                } else {
-                    0.0
-                }
+                fmt_avg_cost(&b.cost)
             );
         }
     }
@@ -1961,7 +2041,7 @@ mod delegation_stats_tests {
             model: "sonnet".to_string(),
             role: "worker".to_string(),
             pass,
-            cost_usd: cost,
+            cost_usd: (cost > 0.0).then_some(cost),
             human_label: None,
             labeled_by: None,
             skill_fingerprint: None,
@@ -1989,29 +2069,7 @@ mod delegation_stats_tests {
             ep("worker", Some("fork"), true, 100.0, 999.0), // wrong class → excluded
             ep("flow-delegation", None, true, 1.0, 1.0),    // no delegation → excluded
         ];
-        let mut agg: std::collections::BTreeMap<String, DelegationBucket> =
-            std::collections::BTreeMap::new();
-        for e in eps.iter().filter(|e| e.class == "flow-delegation") {
-            let Some(raw) = &e.delegation else { continue };
-            let b = agg
-                .entry(normalize_delegation(raw))
-                .or_insert(DelegationBucket {
-                    count: 0,
-                    passes: 0,
-                    cost_total: 0.0,
-                    duration_n: 0,
-                    duration_total: 0.0,
-                });
-            b.count += 1;
-            if e.pass {
-                b.passes += 1;
-            }
-            b.cost_total += e.cost_usd;
-            if let Some(d) = e.duration_secs {
-                b.duration_n += 1;
-                b.duration_total += d;
-            }
-        }
+        let agg = delegation_buckets(&eps);
         assert_eq!(agg.get("fork").unwrap().count, 2);
         assert_eq!(agg.get("inline").unwrap().count, 1);
         assert!(!agg.contains_key("other"));
@@ -2062,7 +2120,7 @@ mod duration_outliers_tests {
             model: model.to_string(),
             role: "worker".to_string(),
             pass,
-            cost_usd: 0.0,
+            cost_usd: None,
             human_label,
             labeled_by: None,
             skill_fingerprint: None,
@@ -2195,7 +2253,7 @@ mod label_tests {
             model: "sonnet".into(),
             role: "worker".into(),
             pass: true,
-            cost_usd: 0.0,
+            cost_usd: None,
             human_label: None,
             labeled_by: None,
             skill_fingerprint: None,

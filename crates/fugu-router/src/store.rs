@@ -26,8 +26,25 @@ pub struct Episode {
     #[serde(default = "default_role")]
     pub role: String,
     pub pass: bool,
-    #[serde(default)]
-    pub cost_usd: f64,
+    /// Observed USD cost of the worker/verifier task. Tri-state exactly like
+    /// [`Episode::duration_secs`]: `None` = **unmeasured** (the caller could
+    /// not resolve a cost and omitted `record --cost`), `Some(x)` = a recorded
+    /// cost. Unmeasured is never conflated with "this task cost nothing"
+    /// (backlog 55fb3861): every cost aggregate skips `None`.
+    ///
+    /// Back-compat: the OLD writer always serialized this field, writing `0.0`
+    /// for an unmeasured task (`record --cost` defaulted to `0.0`), so a legacy
+    /// `0.0` cannot be told apart from a measured zero. [`de_cost_usd`] reads a
+    /// present `0.0` (and any non-positive / `null`) back as `None`, the same
+    /// rule `de_duration_secs` applies. Consequence: a NEW `record --cost 0`
+    /// is accepted and written as `0.0`, but also reads back as unmeasured.
+    /// The NEW writer omits the field for `None` (`skip_serializing_if`).
+    #[serde(
+        default,
+        deserialize_with = "de_cost_usd",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub cost_usd: Option<f64>,
     /// Human correction of the verifier's self-label, if any. `Some(true)` =
     /// human says good, `Some(false)` = human says bad. `None` = unlabeled, so
     /// the verifier's `pass` stands. Overrides `pass` in policy aggregation —
@@ -130,6 +147,18 @@ where
 {
     let v = Option::<f64>::deserialize(d)?;
     Ok(v.filter(|x| *x > 0.0))
+}
+
+/// Deserialize `Episode::cost_usd` with the same legacy rule as
+/// [`de_duration_secs`]: a present `0.0` (the old writer's encoding of an
+/// unmeasured cost), a present `null`, or any non-positive / non-finite value
+/// maps to `None`; only a present strictly-positive finite number is a cost.
+fn de_cost_usd<'de, D>(d: D) -> Result<Option<f64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<f64>::deserialize(d)?;
+    Ok(v.filter(|x| x.is_finite() && *x > 0.0))
 }
 
 impl Episode {
@@ -442,7 +471,7 @@ mod tests {
             model: model.into(),
             role: "worker".into(),
             pass: true,
-            cost_usd: 0.01,
+            cost_usd: Some(0.01),
             human_label: None,
             labeled_by: None,
             skill_fingerprint: None,
@@ -707,7 +736,7 @@ mod tests {
             model: "sonnet".into(),
             role: "worker".into(),
             pass: true,
-            cost_usd: 0.12,
+            cost_usd: Some(0.12),
             human_label: None,
             labeled_by: None,
             skill_fingerprint: None,
@@ -765,7 +794,7 @@ mod tests {
                             model: "sonnet".into(),
                             role: "worker".into(),
                             pass: true,
-                            cost_usd: 0.0,
+                            cost_usd: None,
                             human_label: None,
                             labeled_by: None,
                             skill_fingerprint: None,

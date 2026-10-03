@@ -69,7 +69,7 @@ fugu-router record --title "<task title>" --files "<touched_files>" \
   --class parallel --model sonnet --status verified --cost 0.09
 ```
 
-`--status` が合格語（`verified|pass|passed|ok|true`）以外なら非合格として数える。`--cost` は任意（gauge から読めばコスト考慮ルーティングになる）。`--files` に絶対パスを渡すと記録時にリポジトリ相対パスへ正規化され（`/Users/yuki/src/harness/crates/x.rs` → `crates/x.rs`）、マシン固有のパスがストアに混入しないので k-NN の精度が落ちない。`--skill-fingerprint "$(fugu-router fingerprint)"` を渡すと、その実績を生んだ SKILL.md コーパスのバージョンで刻印できる。
+`--status` が合格語（`verified|pass|passed|ok|true`）以外なら非合格として数える。`--cost` は任意（gauge から読めばコスト考慮ルーティングになる）。省略するとその episode のコストは **未計測**（`cost_usd` なし）として記録され、`$0` として平均に混ぜられることなく全てのコスト集計（`stats`・`delegation-stats`・prompt summary・cost-per-pass ルーティング）から除外される。負値・非有限値の `--cost` は拒否される。保存済みの `0.0`（0.1.41 より前の writer が未計測を表していた形）は未計測として読み戻すため、`--cost 0` も未計測扱いになる。`--files` に絶対パスを渡すと記録時にリポジトリ相対パスへ正規化され（`/Users/yuki/src/harness/crates/x.rs` → `crates/x.rs`）、マシン固有のパスがストアに混入しないので k-NN の精度が落ちない。`--skill-fingerprint "$(fugu-router fingerprint)"` を渡すと、その実績を生んだ SKILL.md コーパスのバージョンで刻印できる。
 
 `--duration <秒>`（任意）はタスクの実測 wall-clock 所要時間を記録する（計測目的のみで routing/scoring からは一切参照されない）。`Episode.duration_secs` は**三値**で、`None` = 未計測（計測された `0.0` とは決して混同しない）、`Some(x)` = 実測値 `x > 0`。**未計測にしたいときは `--duration` を省略する**。非正の値（`0` や負値）は「未計測」を意味し表現不能なので、渡すと**非0終了で拒否**する（黙って `normal` ならぬ `0.0` を書かない）。ディスク上は未計測エピソードでフィールド自体を省略する。後方互換として、旧エンコーディング（未計測を `duration_secs: 0.0` と書いていた既存行）は未計測（`None`）として読み戻し、計測された `0.0` とは扱わない。未計測エピソードはあらゆる所要時間の平均から除外される（`0.0` として混ぜ込まない）。`fugu-router stats` と `fugu-router duration`（`duration-outliers` のエイリアス）はどちらも **duration coverage** を `recorded/total` で表示し、（歴史的に低い）記録率を平均の裏に隠さず可視化する。
 
@@ -102,7 +102,7 @@ fugu-router suggest --files src/auth/login.ts "fix login validation"  # 単発�
 fugu-router confidence --files src/auth/login.ts "fix login validation"  # [0,1] の較正済み合格確率
 fugu-router procedures search --query "fix login validation" --files a,b --k 3
                                              # 似た検証済みタスクの解き方を k-NN で引く
-fugu-router stats [--json]                  # モデル別 pass率 / 平均コスト + 計測カバレッジ（HOTL 可視化）
+fugu-router stats [--json]                  # モデル別 pass率 / 平均コスト（計測済みのみ） + duration/cost 計測カバレッジ（HOTL 可視化）
 fugu-router duration [--json]               # duration-outliers の別名: 計測カバレッジ + class 別の外れ値
 fugu-router label "add login" --verdict bad --by human   # 人間が実績を訂正（--latest も可）
 fugu-router fingerprint [--dir crates]      # SKILL.md コーパスのバージョンスタンプ

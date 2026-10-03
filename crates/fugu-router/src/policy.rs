@@ -207,7 +207,21 @@ pub fn downgrade_for_budget(d: Decision) -> Decision {
 struct ModelStat {
     count: usize,
     passes: usize,
+    /// Sum of MEASURED costs only (episodes with `cost_usd = Some`).
     total_cost_usd: f64,
+    /// Passes among the cost-MEASURED episodes — the denominator that matches
+    /// `total_cost_usd`. Dividing measured cost by ALL passes would count an
+    /// unmeasured pass as free (backlog 55fb3861).
+    cost_measured_passes: usize,
+}
+
+impl ModelStat {
+    /// Cost per pass over cost-measured episodes; `None` = no measured cost
+    /// data for this tier (unknown — never `0`, which would read as free).
+    fn cost_per_pass(&self) -> Option<f64> {
+        (self.cost_measured_passes > 0 && self.total_cost_usd > 0.0)
+            .then(|| self.total_cost_usd / self.cost_measured_passes as f64)
+    }
 }
 
 fn aggregate(neighbors: &[Neighbor]) -> BTreeMap<String, ModelStat> {
@@ -217,12 +231,19 @@ fn aggregate(neighbors: &[Neighbor]) -> BTreeMap<String, ModelStat> {
             count: 0,
             passes: 0,
             total_cost_usd: 0.0,
+            cost_measured_passes: 0,
         });
         s.count += 1;
-        s.total_cost_usd += n.ep.cost_usd;
         // Learn from the human label when present, else the verifier's self-pass.
-        if n.ep.effective_pass() {
+        let pass = n.ep.effective_pass();
+        if pass {
             s.passes += 1;
+        }
+        if let Some(c) = n.ep.cost_usd {
+            s.total_cost_usd += c;
+            if pass {
+                s.cost_measured_passes += 1;
+            }
         }
     }
     m
@@ -249,9 +270,18 @@ pub fn decide(
 
     let stats = aggregate(neighbors);
     // Among tiers that clear the pass threshold with enough samples, prefer the
-    // one with the lowest cost-per-success (total_cost_usd / passes). When cost
-    // data is absent (all zeros) this degenerates to the original cheapest-first
-    // ordering (TIERS is haiku→sonnet→opus, so the first qualifying tier wins).
+    // one with the lowest cost-per-success (`ModelStat::cost_per_pass`). When cost
+    // data is absent this degenerates to the original cheapest-first ordering
+    // (TIERS is haiku→sonnet→opus, so the first qualifying tier wins).
+    // Cost-per-pass is computed over cost-MEASURED episodes only. A tier with
+    // no measured cost is NOT free: it takes the most expensive measured cpp
+    // (the same pessimistic prior `decide_bandit` uses for untested tiers), so
+    // it can tie but never undercut a tier whose cost was actually observed.
+    let max_known_cpp = TIERS
+        .iter()
+        .filter_map(|t| stats.get(*t))
+        .filter_map(ModelStat::cost_per_pass)
+        .fold(0.0f64, f64::max);
     let mut chosen: Option<(String, f64, f64)> = None; // (model, pass_rate, cost_per_pass)
     for tier in TIERS {
         if let Some(s) = stats.get(*tier) {
@@ -259,7 +289,7 @@ pub fn decide(
                 let rate = s.passes as f64 / s.count as f64;
                 if rate >= pass_threshold {
                     let cpp = if s.passes > 0 {
-                        s.total_cost_usd / s.passes as f64
+                        s.cost_per_pass().unwrap_or(max_known_cpp)
                     } else {
                         f64::INFINITY
                     };
@@ -276,18 +306,25 @@ pub fn decide(
     }
 
     let (worker, basis, confidence, rationale) = match chosen {
-        Some((m, rate, cpp)) => (
-            m.clone(),
-            "learned",
-            "high",
-            format!(
-                "{} similar task(s): {} passed {:.0}% cost/pass=${:.4} → cheapest qualifying tier",
-                neighbors.len(),
-                m,
-                rate * 100.0,
-                cpp,
-            ),
-        ),
+        Some((m, rate, cpp)) => {
+            // `cpp` may be the pessimistic stand-in for an unmeasured tier;
+            // say so instead of printing it as an observed cost.
+            let cpp_txt = match stats.get(&m).and_then(ModelStat::cost_per_pass) {
+                Some(_) => format!("${cpp:.4}"),
+                None => "unmeasured".to_string(),
+            };
+            (
+                m.clone(),
+                "learned",
+                "high",
+                format!(
+                    "{} similar task(s): {} passed {:.0}% cost/pass={cpp_txt} → cheapest qualifying tier",
+                    neighbors.len(),
+                    m,
+                    rate * 100.0,
+                ),
+            )
+        }
         None => {
             let p = prior_model(title, files.len());
             let why = if neighbors.is_empty() {
@@ -362,13 +399,14 @@ pub fn decide_bandit(
     // Cost-efficiency posterior sampling: sample a pass rate from each tier's
     // Beta posterior, then adjust by the tier's cost-per-pass relative to the
     // cheapest observed tier. A tier 4× more expensive per pass must sample 4×
-    // higher to win. When no cost data is recorded (all zeros), the adjustment
-    // is 1.0 everywhere and this degenerates to cheapest-first sampling.
+    // higher to win. When no cost data is recorded, the adjustment is 1.0
+    // everywhere and this degenerates to cheapest-first sampling. Cost-per-pass
+    // is over cost-MEASURED episodes only (`ModelStat::cost_per_pass`), so an
+    // unmeasured pass never dilutes a tier's cost toward free.
     let cpps: Vec<f64> = TIERS
         .iter()
         .filter_map(|t| stats.get(*t))
-        .filter(|s| s.passes > 0 && s.total_cost_usd > 0.0)
-        .map(|s| s.total_cost_usd / s.passes as f64)
+        .filter_map(ModelStat::cost_per_pass)
         .collect();
     let min_cpp = cpps.iter().cloned().fold(f64::INFINITY, f64::min);
     let max_cpp = cpps.iter().cloned().fold(0.0f64, f64::max);
@@ -393,13 +431,7 @@ pub fn decide_bandit(
             // qualifying tiers (not just cheapest-first).
             let cpp = stats
                 .get(*tier)
-                .and_then(|s| {
-                    if s.passes > 0 && s.total_cost_usd > 0.0 {
-                        Some(s.total_cost_usd / s.passes as f64)
-                    } else {
-                        None
-                    }
-                })
+                .and_then(ModelStat::cost_per_pass)
                 .unwrap_or(default_cpp); // untested → pessimistic max-cpp prior
             let efficiency = if cpp > 0.0 {
                 sample / (cpp / min_cpp)
@@ -489,7 +521,7 @@ mod tests {
                 model: model.into(),
                 role: "worker".into(),
                 pass,
-                cost_usd: 0.0,
+                cost_usd: None,
                 human_label: None,
                 labeled_by: None,
                 skill_fingerprint: None,
@@ -775,7 +807,7 @@ mod tests {
     // Helper: build a Neighbor with explicit cost_usd.
     fn nb_cost(model: &str, pass: bool, cost_usd: f64) -> Neighbor {
         let mut n = nb(model, pass);
-        n.ep.cost_usd = cost_usd;
+        n.ep.cost_usd = Some(cost_usd);
         n
     }
 
@@ -817,9 +849,50 @@ mod tests {
         );
     }
 
+    /// backlog 55fb3861: neighbours whose cost was never measured (`nb`) must
+    /// not enter the cost-per-pass as $0. haiku's only MEASURED pass cost
+    /// $3.00, sonnet's cost $1.00 each — folding haiku's two unmeasured passes
+    /// in as free would give haiku $1.00/pass (a tie it wins on tier order).
+    fn mixed_measured_unmeasured() -> Vec<Neighbor> {
+        vec![
+            nb_cost("haiku", true, 3.00),
+            nb("haiku", true),
+            nb("haiku", true),
+            nb_cost("sonnet", true, 1.00),
+            nb_cost("sonnet", true, 1.00),
+            nb_cost("sonnet", true, 1.00),
+        ]
+    }
+
+    #[test]
+    fn cost_per_pass_excludes_unmeasured_episodes() {
+        let d = decide(
+            "test task",
+            &[],
+            "parallel",
+            &mixed_measured_unmeasured(),
+            0.7,
+            3,
+        );
+        assert_eq!(
+            d.worker_model, "sonnet",
+            "haiku's measured cost/pass is $3.00 vs sonnet's $1.00: {d:?}"
+        );
+    }
+
+    #[test]
+    fn bandit_cost_adj_excludes_unmeasured_episodes() {
+        let t = tally_picks(&mixed_measured_unmeasured(), 300);
+        assert!(
+            t.get("sonnet").copied().unwrap_or(0) > t.get("haiku").copied().unwrap_or(0),
+            "haiku's measured cost/pass is 3× sonnet's; unmeasured passes must not dilute it: {t:?}"
+        );
+    }
+
     #[test]
     fn cost_per_pass_skips_tier_with_no_cost_data_gracefully() {
-        // All cost_usd = 0.0 → cost/pass = 0 for all tiers that pass.
+        // No cost measured anywhere (cost_usd = None) → every tier's cost/pass
+        // is unknown and takes the same stand-in.
         // Should degrade to original cheapest-first (haiku wins).
         let neighbors = vec![
             nb("haiku", true),

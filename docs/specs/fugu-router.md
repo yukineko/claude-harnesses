@@ -37,7 +37,10 @@
 - **パス正規化** — `record` は `--files` の絶対パスを `pathutil::normalise_paths` で repo 相対へ正規化し、
   マシン固有パスがストアに混入して k-NN 精度を落とすのを防ぐ。
 - **コスト最安化** — `policy::decide` はしきい値・最小サンプルを満たすティアのうち cost-per-success
-  （`total_cost_usd / passes`）が最小のものを選ぶ。コスト全ゼロ時は TIERS（haiku→sonnet→opus）順で
+  （`ModelStat::cost_per_pass` = コスト計測済み episode の合計コスト / その中の pass 数）が最小のものを選ぶ。
+  コスト未計測（`cost_usd = None`）の episode は分子にも分母にも入らない（$0 扱いしない、backlog 55fb3861）。
+  計測コストが無いティアは観測された最大 cost-per-pass を代入され（decide_bandit の未検証ティアと同じ悲観側）、
+  計測済みティアと同点にはなっても下回らない。どのティアにも計測コストが無ければ TIERS（haiku→sonnet→opus）順で
   最初に適格なティア＝最安に退化する。
 
 ## 振る舞い

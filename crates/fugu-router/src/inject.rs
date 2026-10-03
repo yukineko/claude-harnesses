@@ -33,28 +33,38 @@ pub fn summary(episodes: &[Episode], limit: usize) -> Option<String> {
     if episodes.is_empty() {
         return None;
     }
-    let mut agg: BTreeMap<String, (usize, usize, f64)> = BTreeMap::new();
+    // (count, passes, cost-measured count, measured cost total). The average
+    // cost covers MEASURED episodes only (backlog 55fb3861): an episode with
+    // `cost_usd = None` is unmeasured, not free.
+    let mut agg: BTreeMap<String, (usize, usize, usize, f64)> = BTreeMap::new();
     for e in episodes {
-        let s = agg.entry(e.model.clone()).or_insert((0, 0, 0.0));
+        let s = agg.entry(e.model.clone()).or_insert((0, 0, 0, 0.0));
         s.0 += 1;
         if e.pass {
             s.1 += 1;
         }
-        s.2 += e.cost_usd;
+        if let Some(c) = e.cost_usd {
+            s.2 += 1;
+            s.3 += c;
+        }
     }
     let mut lines = vec![format!(
         "[fugu-router] {} routing episode(s) recorded — per-model outcomes:",
         episodes.len()
     )];
-    for (m, (n, p, cost)) in &agg {
+    for (m, (n, p, cn, cost)) in &agg {
+        let avg = if *cn > 0 {
+            format!("avg ${:.4} (n={cn})", cost / *cn as f64)
+        } else {
+            "cost unmeasured".to_string()
+        };
         lines.push(format!(
-            "  {m}: {p}/{n} pass ({:.0}%), avg ${:.4}",
+            "  {m}: {p}/{n} pass ({:.0}%), {avg}",
             if *n > 0 {
                 *p as f64 / *n as f64 * 100.0
             } else {
                 0.0
             },
-            if *n > 0 { cost / *n as f64 } else { 0.0 },
         ));
     }
     lines.push(
@@ -74,6 +84,38 @@ mod tests {
     #[test]
     fn empty_store_injects_nothing() {
         assert!(summary(&[], 1500).is_none());
+    }
+
+    /// backlog 55fb3861: an episode with no recorded cost is unmeasured, not
+    /// free — the injected per-model average covers measured episodes only.
+    #[test]
+    fn summary_average_excludes_unmeasured_cost() {
+        let eps: Vec<Episode> = [
+            r#"{"title":"a","model":"sonnet","pass":true,"cost_usd":2.0}"#,
+            r#"{"title":"b","model":"sonnet","pass":true}"#,
+        ]
+        .iter()
+        .map(|l| serde_json::from_str(l).expect("episode json"))
+        .collect();
+        let s = summary(&eps, 0).expect("summary");
+        assert!(
+            s.contains("avg $2.0000"),
+            "unmeasured episode averaged in as $0 (would give $1.0000): {s}"
+        );
+    }
+
+    #[test]
+    fn summary_reports_unmeasured_instead_of_zero_average() {
+        let eps: Vec<Episode> =
+            vec![
+                serde_json::from_str(r#"{"title":"b","model":"sonnet","pass":true}"#)
+                    .expect("episode json"),
+            ];
+        let s = summary(&eps, 0).expect("summary");
+        assert!(
+            !s.contains("avg $0.0000") && s.contains("cost unmeasured"),
+            "no measured cost must be shown as unmeasured, not $0: {s}"
+        );
     }
 
     #[test]

@@ -286,7 +286,6 @@ fn abandon_all_stuck_dirtiness_undetermined_exits_3() {
 /// `--cost-usd` set) `record-run` still forwards `--cost 0` to fugu-router, so
 /// "unmeasured" is recorded as "this task cost nothing".
 #[test]
-#[ignore = "backlog 55fb3861: open defect, remove ignore when fixed"]
 fn record_run_does_not_fabricate_zero_cost_for_an_unmeasured_task() {
     let fx = Fx::new("55fb3861");
     let shim = fx.home.join("shim");
@@ -344,5 +343,117 @@ fn record_run_does_not_fabricate_zero_cost_for_an_unmeasured_task() {
     assert!(
         !record_line.contains("--cost 0"),
         "an unresolved cost was recorded as 0: {record_line}"
+    );
+}
+
+/// Run `record-run` for one failed task whose state carried the extra `set`
+/// flags `extra`, against a logging `fugu-router` shim; return the shim's
+/// `record` argv lines. Shared by the 55fb3861 mirror tests below.
+fn record_lines_for(tag: &str, extra: &[&str]) -> Vec<String> {
+    let fx = Fx::new(tag);
+    let shim = fx.home.join("shim");
+    std::fs::create_dir_all(&shim).unwrap();
+    let log = fx.home.join("fugu.log");
+    let sh = shim.join("fugu-router");
+    std::fs::write(
+        &sh,
+        format!(
+            "#!/bin/sh\necho \"$@\" >> '{}'\necho fp123\nexit 0\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&sh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let decomp = fx.repo.join("decomp.json");
+    std::fs::write(
+        &decomp,
+        r#"{"goal":"g","tasks":[{"id":"t1","title":"x","touched_files":["a.rs"],"deps":[],"class":"serial","done_criteria":"d"}]}"#,
+    )
+    .unwrap();
+    let init = fx.run(&["state", "init", "--file", decomp.to_str().unwrap()], None);
+    assert!(init.status.success(), "state init failed: {init:?}");
+    let text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&init.stdout),
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let rid = text
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|l| l.starts_with("run-"))
+        .expect("run id")
+        .to_string();
+    for st in ["running", "failed"] {
+        let mut args = vec![
+            "state", "set", "--run", &rid, "--task", "t1", "--status", st,
+        ];
+        if st == "failed" {
+            args.extend_from_slice(extra);
+        }
+        let o = fx.run(&args, None);
+        assert!(o.status.success(), "state set {st} failed: {o:?}");
+    }
+    let rec = fx.run(&["state", "record-run", "--run", &rid], Some(&shim));
+    assert!(rec.status.success(), "precondition: record-run: {rec:?}");
+    std::fs::read_to_string(&log)
+        .expect("fugu-router was invoked")
+        .lines()
+        .filter(|l| l.starts_with("record "))
+        .map(str::to_string)
+        .collect()
+}
+
+/// backlog 55fb3861, verifier mirror: the verifier episode used
+/// `verifier_cost_usd.unwrap_or(0.0)`, the same fabricated zero as the worker
+/// side. A verifier with no agent id and no `--verifier-cost` must omit
+/// `--cost` too.
+#[test]
+fn record_run_does_not_fabricate_zero_cost_for_an_unmeasured_verifier() {
+    let lines = record_lines_for("55fb3861-v", &["--verifier-model", "opus"]);
+    let verifier = lines
+        .iter()
+        .find(|l| l.contains("--role verifier"))
+        .unwrap_or_else(|| panic!("no verifier `record` call in {lines:?}"));
+    assert!(
+        !verifier.contains("--cost"),
+        "an unresolved verifier cost must omit --cost: {verifier}"
+    );
+}
+
+/// backlog 55fb3861: an explicitly set cost — including exactly 0 — is a
+/// value the caller supplied and is forwarded unchanged; only an UNSET cost is
+/// omitted.
+#[test]
+fn record_run_forwards_an_explicitly_set_cost_unchanged() {
+    let lines = record_lines_for(
+        "55fb3861-set",
+        &[
+            "--cost",
+            "0",
+            "--verifier-model",
+            "opus",
+            "--verifier-cost",
+            "1.25",
+        ],
+    );
+    let worker = lines
+        .iter()
+        .find(|l| l.contains("--role worker"))
+        .unwrap_or_else(|| panic!("no worker `record` call in {lines:?}"));
+    let verifier = lines
+        .iter()
+        .find(|l| l.contains("--role verifier"))
+        .unwrap_or_else(|| panic!("no verifier `record` call in {lines:?}"));
+    assert!(
+        worker.contains("--cost 0 "),
+        "explicit 0 forwarded: {worker}"
+    );
+    assert!(
+        verifier.contains("--cost 1.25 "),
+        "explicit verifier cost forwarded: {verifier}"
     );
 }

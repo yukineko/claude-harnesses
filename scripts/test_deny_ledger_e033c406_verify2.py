@@ -13,10 +13,10 @@ match `.githooks`"):
     of `git restore -s OLD -p .githooks` / `git stash push -p .githooks`
     (observed with real git: restore -p with "y" on stdin rewrites the hook).
 
-Also pins the brick-bound trade the round-2 fix made: a corrupt ledger older
-than 20 minutes is moved aside, and the valid deny lines in it are dropped, so
-Stop no longer sees a refused-then-changed target. That one documents the
-current behaviour (it is the requested bound), stated so a change is visible.
+Also pins the brick bound: a corrupt ledger older than 20 minutes is moved
+aside, and (since e2399b08, by the coordinator's instruction) its valid deny
+lines are salvaged into a fresh active ledger, so Stop still blocks on a
+refused-then-changed target.
 
 Hooks run as subprocesses against a throwaway repo; HOME and TMPDIR point at a
 temp dir, so the real ~/.claude/state and the shared temp dir are not touched.
@@ -125,7 +125,7 @@ class CorruptBound(_Fixture):
             f.write("garbage\n")
         self.assertEqual(self.bash("ls").returncode, 2)
 
-    def test_stale_corrupt_ledger_is_moved_aside_and_its_denies_dropped(self):
+    def test_stale_corrupt_ledger_is_moved_aside_and_its_denies_salvaged(self):
         self.assertEqual(self.bash(f"echo x > {self.target}").returncode, 2)
         with open(self._ledger(), "a") as f:
             f.write("garbage\n")
@@ -133,13 +133,18 @@ class CorruptBound(_Fixture):
         os.utime(self._ledger(), (old, old))
         with open(self.target, "a") as f:
             f.write("changed\n")
-        self.assertEqual(self.bash("ls").returncode, 0)
-        self.assertFalse(os.path.exists(self._ledger()))
-        r = self.run_hook(STOP, {"session_id": "v2", "hook_event_name": "Stop", "cwd": self.wt})
-        # Current (requested) behaviour: the refused-then-changed target is no
-        # longer seen. If this starts failing because Stop blocks, the valid
-        # lines are being salvaged — update this pin.
+        r = self.bash("ls")
         self.assertEqual(r.returncode, 0, r.stderr)
+        d = os.path.dirname(self._ledger())
+        self.assertTrue(any(".corrupt-" in n for n in os.listdir(d)), os.listdir(d))
+        # the valid deny survives in a fresh active ledger …
+        with open(self._ledger()) as f:
+            entries = [json.loads(line) for line in f if line.strip()]
+        denies = [e for e in entries if e.get("kind") == "deny"]
+        self.assertEqual([e["target_abs"] for e in denies], [self.target])
+        # … so Stop still blocks on the refused-then-changed target.
+        r = self.run_hook(STOP, {"session_id": "v2", "hook_event_name": "Stop", "cwd": self.wt})
+        self.assertEqual(r.returncode, 2, r.stderr)
 
     def test_fallback_ledger_used_when_home_unwritable(self):
         os.chmod(self.home, 0o500)

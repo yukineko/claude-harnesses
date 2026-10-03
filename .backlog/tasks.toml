@@ -12083,3 +12083,159 @@ weight = 0.0
 issue_number = 1247
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1247"
 rev = 0
+
+[[task]]
+id = "a70d83f7"
+title = "scripts/test_gate_bypass.py が 46 件 RED (python-only 本体の最大の赤)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04 by the eca8dea7 worker: one run of `python3 scripts/check-workspace-tests.py --python-only` on branch run-20261004-011114-7349/eca8dea7 (base f51e281e) took 1055 s over 153 suites and exited 4. Full log: session 64554c4d scratchpad eca8dea7-w-pyonly-worktree.log. None of the red files is in that branch's diff. USER RULING 2026-10-04: fix the reds first; the --python-only pre-push patch (scratchpad eca8dea7-workspace-prepush.patch) is applied only after the body is green. 46 failing tests in test_gate_bypass. Cause not investigated. Re-measure first with `python3 -m unittest scripts.test_gate_bypass`; reading (a) real gate-bypass.py regression, (b) test fixture drift vs current hooks."
+created_at = 1791045920
+updated_at = 1791045960
+weight = 0.0
+issue_number = 1248
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1248"
+rev = 1
+
+[task.repro]
+outcome = "undetermined"
+cmd = "python3 -m pytest scripts/test_gate_bypass.py"
+rev = "8d94c8f9b9ce8a5a2f96eec35efc52be47910ef9"
+observed_at = 1791045959
+detail = "the working tree has uncommitted changes outside .backlog (M  .claude-plugin/marketplace.json, M  Cargo.lock, M  crates/propguard/.claude-plugin/plugin.json, M  crates/propguard/Cargo.toml, M  crates/propguard/src/gate.rs); tests must run against committed content — commit or stash them first"
+
+[[task]]
+id = "d3716b21"
+title = "scripts/test_p0_gate_undetermined.py が 4 件 RED"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04 by the eca8dea7 worker: one run of `python3 scripts/check-workspace-tests.py --python-only` on branch run-20261004-011114-7349/eca8dea7 (base f51e281e) took 1055 s over 153 suites and exited 4. Full log: session 64554c4d scratchpad eca8dea7-w-pyonly-worktree.log. None of the red files is in that branch's diff. USER RULING 2026-10-04: fix the reds first; the --python-only pre-push patch (scratchpad eca8dea7-workspace-prepush.patch) is applied only after the body is green. 4 failing tests. Cause not investigated. Re-measure with `python3 -m unittest scripts.test_p0_gate_undetermined`."
+created_at = 1791045924
+updated_at = 1791045961
+weight = 0.0
+issue_number = 1249
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1249"
+rev = 1
+
+[task.repro]
+outcome = "undetermined"
+cmd = "python3 -m pytest scripts/test_p0_gate_undetermined.py"
+rev = "8d94c8f9b9ce8a5a2f96eec35efc52be47910ef9"
+observed_at = 1791045960
+detail = "the working tree has uncommitted changes outside .backlog (M  .claude-plugin/marketplace.json, M  Cargo.lock, M  crates/propguard/.claude-plugin/plugin.json, M  crates/propguard/Cargo.toml, M  crates/propguard/src/gate.rs); tests must run against committed content — commit or stash them first"
+
+[[task]]
+id = "6cb94bff"
+title = "scripts/test_prepush_hook.py 4 件 / test_precommit_hook.py 2 件が RED (hook と fixture の drift)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04 by the eca8dea7 worker: one run of `python3 scripts/check-workspace-tests.py --python-only` on branch run-20261004-011114-7349/eca8dea7 (base f51e281e) took 1055 s over 153 suites and exited 4. Full log: session 64554c4d scratchpad eca8dea7-w-pyonly-worktree.log. None of the red files is in that branch's diff. USER RULING 2026-10-04: fix the reds first; the --python-only pre-push patch (scratchpad eca8dea7-workspace-prepush.patch) is applied only after the body is green. test_precommit_hook EveryScannerIsRun and CleanTreePasses fail because the expected scanner list no longer matches .githooks/pre-commit (worker re-checked directly). test_prepush_hook 4 failures not investigated. Stage A (eca8dea7-githooks.patch) moves the scanner list again; fix these together with or after stage A is applied."
+created_at = 1791045928
+updated_at = 1791045961
+weight = 0.0
+issue_number = 1250
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1250"
+rev = 1
+
+[task.repro]
+outcome = "undetermined"
+cmd = "python3 -m pytest scripts/test_precommit_hook.py"
+rev = "8d94c8f9b9ce8a5a2f96eec35efc52be47910ef9"
+observed_at = 1791045961
+detail = "the working tree has uncommitted changes outside .backlog (M  .claude-plugin/marketplace.json, M  Cargo.lock, M  crates/propguard/.claude-plugin/plugin.json, M  crates/propguard/Cargo.toml, M  crates/propguard/src/gate.rs); tests must run against committed content — commit or stash them first"
+
+[[task]]
+id = "26f6dd72"
+title = "test_check_launcher_exec_bit が launcher 39 件を期待し 40 件を見つけて RED (test_backlog_audit_b1_0 Backlog06a9d33f も同因)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04 by the eca8dea7 worker: one run of `python3 scripts/check-workspace-tests.py --python-only` on branch run-20261004-011114-7349/eca8dea7 (base f51e281e) took 1055 s over 153 suites and exited 4. Full log: session 64554c4d scratchpad eca8dea7-w-pyonly-worktree.log. None of the red files is in that branch's diff. USER RULING 2026-10-04: fix the reds first; the --python-only pre-push patch (scratchpad eca8dea7-workspace-prepush.patch) is applied only after the body is green. Red on base f51e281e too. A new launcher was added without updating the expected count, or the count is hardcoded. Reading (a) the pin should derive the count, (b) the 40th launcher is unintended. Also 1 failure each in test_backlog_53897d41 and test_check_projkey_store_classification (not investigated; check whether they share a cause)."
+created_at = 1791045934
+updated_at = 1791045963
+weight = 0.0
+issue_number = 1251
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1251"
+rev = 1
+
+[task.repro]
+outcome = "undetermined"
+cmd = "python3 -m pytest scripts/test_check_launcher_exec_bit.py"
+rev = "8d94c8f9b9ce8a5a2f96eec35efc52be47910ef9"
+observed_at = 1791045962
+detail = "the working tree has uncommitted changes outside .backlog (M  .claude-plugin/marketplace.json, M  Cargo.lock, M  crates/propguard/.claude-plugin/plugin.json, M  crates/propguard/Cargo.toml, M  crates/propguard/src/gate.rs); tests must run against committed content — commit or stash them first"
+
+[[task]]
+id = "69e34456"
+title = "python-only 本体で 4 suite が判定不能 (0c277117 / b63cbdf0 は FAILED だが test 名が読めない、1116bee1 / f6c60f58 は Ran 0 tests)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04 by the eca8dea7 worker: one run of `python3 scripts/check-workspace-tests.py --python-only` on branch run-20261004-011114-7349/eca8dea7 (base f51e281e) took 1055 s over 153 suites and exited 4. Full log: session 64554c4d scratchpad eca8dea7-w-pyonly-worktree.log. None of the red files is in that branch's diff. USER RULING 2026-10-04: fix the reds first; the --python-only pre-push patch (scratchpad eca8dea7-workspace-prepush.patch) is applied only after the body is green. test_backlog_0c277117 and test_backlog_b63cbdf0: FAILED but check-workspace-tests could not parse a test name. test_backlog_1116bee1 and test_backlog_f6c60f58: Ran 0 tests. Each is either a broken suite or a parser gap in check-workspace-tests.py; distinguish by running each with `python3 -m unittest -v scripts.<module>`."
+created_at = 1791045938
+updated_at = 1791045938
+weight = 0.0
+issue_number = 1252
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1252"
+rev = 0
+
+[[task]]
+id = "396b6089"
+title = "check-plugin-versions.py は crates/ 不在で FileNotFoundError traceback (exit 1) になり、判定不能の exit 2 を返さない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04 by the eca8dea7 worker: one run of `python3 scripts/check-workspace-tests.py --python-only` on branch run-20261004-011114-7349/eca8dea7 (base f51e281e) took 1055 s over 153 suites and exited 4. Full log: session 64554c4d scratchpad eca8dea7-w-pyonly-worktree.log. None of the red files is in that branch's diff. USER RULING 2026-10-04: fix the reds first; the --python-only pre-push patch (scratchpad eca8dea7-workspace-prepush.patch) is applied only after the body is green. Still blocks (non-zero), but the documented 'cannot determine' code is not produced; found by the eca8dea7 worker while mutating it for the replacement test test_f6919056_plugin_versions_without_crates_dir_is_not_ok."
+created_at = 1791045941
+updated_at = 1791045941
+weight = 0.0
+issue_number = 1253
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1253"
+rev = 0
+
+[[task]]
+id = "52f85060"
+title = "check-unlisted-gates.py に hook dir を core.hooksPath 以外で指定する手段が無く、scratch clone を CLI で検査できない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04 by the eca8dea7 worker: one run of `python3 scripts/check-workspace-tests.py --python-only` on branch run-20261004-011114-7349/eca8dea7 (base f51e281e) took 1055 s over 153 suites and exited 4. Full log: session 64554c4d scratchpad eca8dea7-w-pyonly-worktree.log. None of the red files is in that branch's diff. USER RULING 2026-10-04: fix the reds first; the --python-only pre-push patch (scratchpad eca8dea7-workspace-prepush.patch) is applied only after the body is green. `--repo <clone>` gives UNDETERMINED rc 2 when core.hooksPath is unset in the clone; setting hooksPath in the clone is refused by guard-maintree-bash. A --hooks-dir option would make the clone check possible."
+created_at = 1791045944
+updated_at = 1791045944
+weight = 0.0
+issue_number = 1254
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1254"
+rev = 0
+
+[[task]]
+id = "aca0fb3f"
+title = "donegate.toml:71 の『check-workspace-tests.py を呼ぶものは無い』は pre-push patch 適用まで真、適用時に同時更新が必要"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04 by the eca8dea7 worker: one run of `python3 scripts/check-workspace-tests.py --python-only` on branch run-20261004-011114-7349/eca8dea7 (base f51e281e) took 1055 s over 153 suites and exited 4. Full log: session 64554c4d scratchpad eca8dea7-w-pyonly-worktree.log. None of the red files is in that branch's diff. USER RULING 2026-10-04: fix the reds first; the --python-only pre-push patch (scratchpad eca8dea7-workspace-prepush.patch) is applied only after the body is green. Keep the prose in sync with the eca8dea7-workspace-prepush.patch application (CLAUDE.md §4)."
+created_at = 1791045947
+updated_at = 1791045947
+weight = 0.0
+issue_number = 1255
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1255"
+rev = 0

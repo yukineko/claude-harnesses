@@ -483,16 +483,21 @@ pub fn decide_from_count(
     }
 }
 
-/// Which property ids are actually violated (did not receive an explicit PASS
-/// verdict), for reporting to overwatch on a below-threshold block. In
-/// subprocess mode `findings` carries the checker's per-property `PROP <id>:
-/// PASS|FAIL` text; only ids that were NOT confirmed PASS on their own
-/// anchored verdict line are considered violated (CA-propguard-01). In inject
-/// mode there is no per-property verdict yet (satisfied is always 0 on the
-/// first pass), so every derived property is still open and all are reported.
+/// Which property ids are actually violated (checked and FAILED), for
+/// reporting to overwatch's fleet-correlation store on a below-threshold
+/// block. In subprocess mode `findings` carries the checker's per-property
+/// `PROP <id>: PASS|FAIL` text; only ids whose own anchored verdict line says
+/// FAIL are violated — a PASSed id is not (CA-propguard-01) and an id with no
+/// verdict line was never evaluated, so it is not either (CA-propguard-06).
+///
+/// `findings == None` means no checker evaluated anything (inject mode: the
+/// hook cannot judge properties, `satisfied = 0` is "unmeasured", not "all
+/// failed"), so NO property is reported violated (backlog b74955f4). This only
+/// affects the fleet-violation record; the block decision itself is made by
+/// the caller and is unchanged — inject still blocks the unverified diff.
 fn unsatisfied_prop_ids(props: &[Property], findings: Option<&str>) -> Vec<&'static str> {
     let Some(out) = findings else {
-        return props.iter().map(|p| p.id).collect();
+        return Vec::new();
     };
     let lower = out.to_lowercase();
     props
@@ -3584,7 +3589,6 @@ mod backlog_b74955f4 {
     /// A never-evaluated property is not a fleet violation (CA-propguard-06), yet
     /// `unsatisfied_prop_ids(.., None)` returns every property id.
     #[test]
-    #[ignore = "backlog b74955f4: open defect, remove ignore when fixed"]
     fn inject_mode_none_findings_reports_no_violation() {
         let props: Vec<Property> = ["error-path", "output-schema", "determinism"]
             .iter()

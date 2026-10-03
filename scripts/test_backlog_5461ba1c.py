@@ -9,7 +9,6 @@ from scripts import test_check_plugin_rollout as T
 
 
 class OrphanCacheRemedy(T._FixtureCase):
-    @unittest.skip("backlog 5461ba1c: open defect, remove skip when fixed")
     def test_orphan_cache_dir_is_not_told_to_rollout(self):
         with tempfile.TemporaryDirectory() as tmp:
             rc, _out, err = self.run_main(tmp, cached_versions={T.GHOST: ["0.1.0"]})

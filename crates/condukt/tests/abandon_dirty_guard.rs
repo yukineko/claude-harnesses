@@ -237,12 +237,16 @@ fn running_task_past_ttl(fx: &Fixture) -> (String, PathBuf) {
 /// The two `--all-stuck` invocations the multi-sample engine needs, returning
 /// the SECOND one's output (the one whose verdict is `Known(Stalled)` and thus
 /// the only one in which the guard under test can fire).
+///
+/// The second call's exit status is deliberately NOT asserted here: it is the
+/// property under test and each caller pins it explicitly (backlog `d65110df`:
+/// an observed-dirty keep exits 0, a cannot-determine keep exits 3). The first
+/// call is still required to succeed — every fixture is HEAD-readable, so its
+/// verdict is an in-progress `AwaitingSample`, which is not an exit-3 failure.
 fn abandon_all_stuck_twice(fx: &Fixture, rid: &str) -> std::process::Output {
     let a1 = fx.condukt(&["state", "abandon", "--run", rid, "--all-stuck"]);
     assert!(a1.status.success(), "abandon #1 failed: {a1:?}");
-    let a2 = fx.condukt(&["state", "abandon", "--run", rid, "--all-stuck"]);
-    assert!(a2.status.success(), "abandon #2 failed: {a2:?}");
-    a2
+    fx.condukt(&["state", "abandon", "--run", rid, "--all-stuck"])
 }
 
 fn stderr_of(out: &std::process::Output) -> String {
@@ -309,6 +313,21 @@ fn all_stuck_does_not_abandon_a_task_whose_worktree_has_uncommitted_work() {
         err.contains("t1") && err.contains("uncommitted"),
         "the skipped task and the reason must be reported on stderr; stderr was:\n{err}"
     );
+
+    // CONTROL for the exit-code asymmetry (backlog d65110df): a worktree
+    // OBSERVED dirty is a determination — the worker is alive — so the scan is
+    // clean and exits 0. Exiting 3 here would make a healthy editing worker
+    // indistinguishable from a scan that could not read anything.
+    assert_eq!(
+        a2.status.code(),
+        Some(0),
+        "an OBSERVED dirty worktree is not an undetermination and must exit 0; \
+         a2={a2:?}"
+    );
+    assert!(
+        !err.contains("UNDETERMINED"),
+        "an observed-dirty keep must not be filed as undetermined; stderr was:\n{err}"
+    );
 }
 
 /// (ii) FAIL-CLOSED ON CANNOT-DETERMINE (CLAUDE.md §3). A TTL-stale task whose
@@ -363,6 +382,27 @@ fn all_stuck_does_not_abandon_a_task_whose_dirtiness_cannot_be_determined() {
         "the skipped task and the cannot-determine reason must be reported on \
          stderr, not folded into a silently smaller result set; stderr was:\n{err}"
     );
+    // The veto line itself stays (it is what tells the human the task was KEPT).
+    assert!(
+        err.contains("NOT abandoning running task 't1'"),
+        "the veto's KEEP line must still be printed; stderr was:\n{err}"
+    );
+
+    // Re-anchored (backlog d65110df): a stderr line alone is not a status a
+    // script can read. "Could not read dirtiness" is the same cannot-determine
+    // as an unreadable worktree HEAD, and must exit 3 like it — not 0, which
+    // reads downstream as "scanned clean" (CLAUDE.md §3).
+    assert_eq!(
+        a2.status.code(),
+        Some(3),
+        "dirtiness cannot-determine must make --all-stuck exit 3 (Unobservable), \
+         the same as an unreadable HEAD; a2={a2:?}"
+    );
+    assert!(
+        err.contains("UNDETERMINED") && err.contains("uncommitted-work-undetermined"),
+        "the cannot-determine keep must be listed among the undetermined tasks; \
+         stderr was:\n{err}"
+    );
 }
 
 /// (iii) **ANTI-VACUITY CONTROL — not a RED probe.** Green before and after; it
@@ -383,7 +423,12 @@ fn all_stuck_still_abandons_a_stale_task_whose_worktree_is_clean_control() {
         "fixture precondition: the control's worktree must be CLEAN"
     );
 
-    abandon_all_stuck_twice(&fx, &rid);
+    let a2 = abandon_all_stuck_twice(&fx, &rid);
+    assert_eq!(
+        a2.status.code(),
+        Some(0),
+        "a clean, confirmed-stalled scan must exit 0; a2={a2:?}"
+    );
 
     assert_eq!(
         head_before,

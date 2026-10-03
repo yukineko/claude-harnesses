@@ -1686,7 +1686,9 @@ def check_stale_version_dirs():
     versions deep for one plugin.
 
     A stale dir held by a LIVE session is not reported — it is expected and
-    transient, and the session that holds it will release it. A dir whose hold
+    transient, and the session that holds it will release it. "Live session"
+    includes the session-age hold (plugin_cache.session_age_holds): a live
+    `claude` process that started before the dir was superseded. A dir whose hold
     status could not be determined IS reported: the pruner deliberately keeps
     such a dir (deletion is irreversible), so if the gate stayed quiet about it
     nothing would ever surface a cache it cannot inspect.
@@ -1694,6 +1696,13 @@ def check_stale_version_dirs():
     cache_root = PLUGIN_CACHE_ROOT
     current, src_problems = plugin_cache.source_versions(CRATES)
     stale, scan_problems = plugin_cache.scan(cache_root, current)
+    # Same session-age hold the pruner applies (18fe626f): a superseded dir a
+    # live `claude` older than its supersession may still run from is HELD,
+    # not "removable" — otherwise every rollout would leave this check red
+    # for as long as the session that ran it lives, demanding a prune the
+    # pruner (correctly) refuses. An unreadable process list or an unknown
+    # superseded-at lands in `undetermined` below and IS reported.
+    stale, _session_blanket = plugin_cache.session_age_holds(stale, cache_root)
 
     problems = list(src_problems) + list(scan_problems)
     removable = [s for s in stale if s.removable]

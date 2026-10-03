@@ -18,7 +18,6 @@ use serde::Deserialize;
 use wait_timeout::ChildExt;
 
 use crate::config::Config;
-use harness_core::boundary;
 use harness_core::hook::HookInput;
 use harness_core::store::Store;
 use harness_core::transcript;
@@ -652,57 +651,20 @@ fn render_session_anchor(lease: &SessionLease) -> Option<String> {
     ))
 }
 
-/// Locate the `overwatch` binary: PATH first, then the plugin cache (newest
-/// version). `Known(None)` when overwatch is not installed (no PATH hit, no
-/// cache dir, or no versioned candidate); `Undetermined` when the cache dir
+/// Locate the `overwatch` binary via [`harness_core::plugin_bin::resolve`]:
+/// plugin cache first (newest version by numeric order, so `0.3.10` beats
+/// `0.3.9`), `$PATH` second. `Known(None)` when overwatch is not installed (no
+/// cache candidate and nothing on `$PATH`); `Undetermined` when the cache dir
 /// exists but could not be listed — the caller must not read that as "not
-/// installed". Twin of stuckguard's `resolve_overwatch_binary`
-/// (`crates/stuckguard/src/anchor.rs`), which fixed the same two defects first.
+/// installed", and the resolver does not fall back to `$PATH` then.
+///
+/// This used to be a local resolver that probed `$PATH` first (a bare-name
+/// spawn), so a stale standalone copy on the login `$PATH` shadowed the
+/// rolled-out one; hook processes do not inherit the plugin `bin/` dirs on
+/// `$PATH` (backlog abba6f0d). Shared with stuckguard's
+/// `resolve_overwatch_binary` (`crates/stuckguard/src/anchor.rs`).
 fn find_overwatch_binary() -> Determination<Option<PathBuf>> {
-    if Command::new("overwatch").arg("--version").output().is_ok() {
-        return Determination::known(Some(PathBuf::from("overwatch")));
-    }
-    let base = harness_core::config::home()
-        .join(".claude")
-        .join("plugins")
-        .join("cache")
-        .join("yukineko")
-        .join("overwatch");
-    newest_overwatch_in(&base)
-}
-
-/// Newest `<base>/<version>/bin/overwatch`, ordered by numeric version
-/// components so `0.3.10` beats `0.3.9` (a path sort picks the older one).
-/// The directory read goes through `boundary::read_dir_entries`, which keeps a
-/// missing cache dir (`Known(vec![])`) apart from an unreadable one
-/// (`Undetermined`).
-fn newest_overwatch_in(base: &Path) -> Determination<Option<PathBuf>> {
-    let entries = match boundary::read_dir_entries(base) {
-        Determination::Known(entries) => entries,
-        Determination::Undetermined(why) => return Determination::Undetermined(why),
-    };
-    let mut candidates: Vec<(Vec<u64>, PathBuf)> = entries
-        .into_iter()
-        .filter_map(|version_dir| {
-            let key = version_sort_key(&version_dir)?;
-            let bin = version_dir.join("bin").join("overwatch");
-            bin.exists().then_some((key, bin))
-        })
-        .collect();
-    candidates.sort();
-    Determination::known(candidates.pop().map(|(_, bin)| bin))
-}
-
-/// Numeric components of a `<version>` dir name. `None` for a name that is
-/// not purely numeric-dotted: it is not a version, so it is dropped from the
-/// candidate set rather than ranked by default.
-fn version_sort_key(version_dir: &Path) -> Option<Vec<u64>> {
-    version_dir
-        .file_name()?
-        .to_str()?
-        .split('.')
-        .map(|part| part.parse::<u64>().ok())
-        .collect()
+    harness_core::plugin_bin::resolve("overwatch")
 }
 
 /// Max time to wait on `overwatch lease` before giving up. This call sits on
@@ -1391,64 +1353,6 @@ mod tests {
     }
 
     #[test]
-    fn newest_overwatch_orders_versions_numerically() {
-        let base = std::env::temp_dir().join(format!(
-            "ctxrot-ow-order-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        for v in ["0.3.9", "0.3.10"] {
-            let bin = base.join(v).join("bin");
-            std::fs::create_dir_all(&bin).unwrap();
-            std::fs::write(bin.join("overwatch"), b"").unwrap();
-        }
-        let got = newest_overwatch_in(&base);
-        let _ = std::fs::remove_dir_all(&base);
-        assert_eq!(
-            got.require().expect("cache dir is readable"),
-            Some(base.join("0.3.10").join("bin").join("overwatch")),
-            "0.3.10 is newer than 0.3.9; a lexicographic sort picks the older install"
-        );
-    }
-
-    #[test]
-    fn newest_overwatch_unreadable_cache_is_undetermined_not_absent() {
-        use std::os::unix::fs::PermissionsExt;
-        let base = std::env::temp_dir().join(format!(
-            "ctxrot-ow-unreadable-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(base.join("0.1.0").join("bin")).unwrap();
-        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o000)).unwrap();
-        let got = newest_overwatch_in(&base);
-        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let _ = std::fs::remove_dir_all(&base);
-        assert!(
-            matches!(got, Determination::Undetermined(_)),
-            "an unlistable cache dir must not read as 'overwatch not installed': {got:?}"
-        );
-    }
-
-    #[test]
-    fn newest_overwatch_missing_cache_is_known_absent() {
-        let base = std::env::temp_dir().join(format!(
-            "ctxrot-ow-missing-{}-never-created",
-            std::process::id()
-        ));
-        assert!(matches!(
-            newest_overwatch_in(&base),
-            Determination::Known(None)
-        ));
-    }
-
-    #[test]
     fn session_anchor_parse_json() {
         let l = parse_session_lease(
             br#"{"key":"k","title":"T","session_id":"s","done_criteria":"D","scope":["a/**"]}"#,
@@ -1476,62 +1380,5 @@ mod tests {
             "uncapped output exceeds the default cap"
         );
         let _ = std::fs::remove_dir_all(&base);
-    }
-}
-
-/// Closure regression for backlog f6784177 (mirror gap of stuckguard's anchor
-/// fix in ctxrot's `find_overwatch_binary`): (1) the overwatch cache dir must
-/// be read through the tri-state boundary so an unreadable dir is not "not
-/// installed"; (2) versions must order numerically so 0.3.10 beats 0.3.9.
-/// Written by an independent closure verifier, not the implementer.
-#[cfg(test)]
-mod backlog_f6784177_regression {
-    use super::newest_overwatch_in;
-    use harness_core::verdict::Determination;
-    use std::path::Path;
-
-    fn install(base: &Path, ver: &str) {
-        let bin = base.join(ver).join("bin");
-        std::fs::create_dir_all(&bin).unwrap();
-        std::fs::write(bin.join("overwatch"), b"#!/bin/sh\n").unwrap();
-    }
-
-    #[test]
-    fn two_digit_patch_beats_one_digit_patch() {
-        let tmp = tempfile::tempdir().unwrap();
-        let base = tmp.path().join("overwatch");
-        for v in ["0.3.9", "0.3.10", "0.2.24"] {
-            install(&base, v);
-        }
-        match newest_overwatch_in(&base) {
-            Determination::Known(Some(p)) => assert!(
-                p.ends_with("0.3.10/bin/overwatch"),
-                "newest must be 0.3.10, got {}",
-                p.display()
-            ),
-            other => panic!("expected Known(Some(..)), got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn missing_cache_dir_is_known_absent() {
-        let tmp = tempfile::tempdir().unwrap();
-        assert!(matches!(
-            newest_overwatch_in(&tmp.path().join("nope")),
-            Determination::Known(None)
-        ));
-    }
-
-    #[test]
-    fn unlistable_cache_dir_is_undetermined_not_absent() {
-        let tmp = tempfile::tempdir().unwrap();
-        // A regular file where the cache DIRECTORY should be: it exists, but
-        // cannot be listed. That is not "overwatch is not installed".
-        let base = tmp.path().join("overwatch");
-        std::fs::write(&base, b"not a dir").unwrap();
-        assert!(
-            matches!(newest_overwatch_in(&base), Determination::Undetermined(_)),
-            "an unlistable cache dir must be Undetermined"
-        );
     }
 }

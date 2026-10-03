@@ -49,7 +49,6 @@ class NoBareNameHarnessSpawns(unittest.TestCase):
     def test_precondition_plugin_bin_resolver_exists(self):
         self.assertTrue((REPO / "crates/harness-core/src/plugin_bin.rs").is_file())
 
-    @unittest.expectedFailure
     def test_listed_sites_do_not_spawn_harness_binaries_by_bare_name(self):
         """backlog abba6f0d: open defect (RED observed)."""
         hits = [h for rel, name in SITES for h in bare_spawns(rel, name)]

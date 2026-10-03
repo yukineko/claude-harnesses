@@ -2644,9 +2644,22 @@ fn parse_policy_levels(
 /// title is a POSITIONAL argument (no `--title` flag), passed LAST after the
 /// flags. `--files` is comma-joined (fugu splits on `,`).
 ///
-/// Every failure mode falls through to `None` (never a hard error), mirroring
-/// the `fugu_fingerprint` / `record_runs` soft-probe precedent:
-/// - fugu-router not on PATH → `Command::output` errors → `None`
+/// `fugu-router` is located with [`harness_core::plugin_bin::resolve`] (plugin
+/// cache first, `$PATH` second), not by bare name: a hook-spawned process does
+/// not inherit the plugin `bin/` dirs on `$PATH` (backlog abba6f0d).
+///
+/// One answer is NOT soft: when the plugin cache could not be read to locate
+/// fugu-router (`Undetermined`), this returns `Some(Level::Low)` — the most
+/// restrictive confidence — with a warning on stderr. "Could not look" must
+/// not fall back to the self-reported `--confidence`, which may be higher than
+/// a calibration would have allowed (CLAUDE.md §3: cannot-determine resolves
+/// to the restrictive side).
+///
+/// Every other failure mode falls through to `None` (never a hard error),
+/// mirroring the `fugu_fingerprint` / `record_runs` soft-probe precedent — so
+/// the caller keeps the self-reported `--confidence`:
+/// - fugu-router not installed (no plugin-cache copy, not on PATH) → `None`
+/// - spawn failure → `None`
 /// - non-zero exit (e.g. insufficient history) → `None`
 /// - empty / unparseable / non-finite stdout → `None`
 fn calibrated_confidence(
@@ -2654,11 +2667,38 @@ fn calibrated_confidence(
     files: &[String],
     class: &Option<String>,
 ) -> Option<policy::Level> {
-    // Gate: no new flags → the calibrated path is entirely inert (no shell-out).
+    use harness_core::verdict::Determination;
+    // Gate: no new flags → the calibrated path is entirely inert (no shell-out,
+    // not even the resolver's `$PATH` probe).
     if title.is_none() && files.is_empty() && class.is_none() {
         return None;
     }
-    let mut cmd = std::process::Command::new("fugu-router");
+    match harness_core::plugin_bin::resolve("fugu-router") {
+        Determination::Known(Some(program)) => {
+            calibrated_confidence_via(&program, title, files, class)
+        }
+        Determination::Known(None) => None, // not installed → soft-skip
+        Determination::Undetermined(why) => {
+            eprintln!(
+                "condukt: fugu-router could not be located ({}); calibrated confidence \
+                 could not be determined, so confidence is clamped to low",
+                why.as_str()
+            );
+            Some(policy::Level::Low)
+        }
+    }
+}
+
+/// The shell-out half of [`calibrated_confidence`], run against an already
+/// resolved `program`. Split out so the soft-skip mapping is testable against
+/// a bare name and a controlled `$PATH`, independent of the host's plugin cache.
+fn calibrated_confidence_via(
+    program: &Path,
+    title: &Option<String>,
+    files: &[String],
+    class: &Option<String>,
+) -> Option<policy::Level> {
+    let mut cmd = std::process::Command::new(program);
     cmd.arg("confidence");
     if !files.is_empty() {
         cmd.args(["--files", &files.join(",")]);
@@ -2671,7 +2711,7 @@ fn calibrated_confidence(
     if let Some(t) = title {
         cmd.arg(t);
     }
-    let out = cmd.output().ok()?; // spawn failed (not on PATH) → soft-skip
+    let out = cmd.output().ok()?; // spawn failed → soft-skip
     if !out.status.success() {
         return None; // error / insufficient history → fall back
     }
@@ -6116,7 +6156,7 @@ fn read_stdin() -> String {
 
 #[cfg(test)]
 mod calibrated_confidence_tests {
-    use super::calibrated_confidence;
+    use super::{calibrated_confidence, calibrated_confidence_via};
 
     /// The legacy invocation supplies none of the new flags: the calibrated
     /// path must be entirely inert (return `None`, no shell-out) so `decide`
@@ -6192,8 +6232,14 @@ mod calibrated_confidence_tests {
         let title = Some("some task".to_string());
         // With fugu-router unresolvable on PATH, `Command::output()` fails
         // to spawn → soft-skip → `None`, regardless of any ambient
-        // fugu-router install / episode history on the host.
-        assert_eq!(calibrated_confidence(&title, &[], &None), None);
+        // fugu-router install / episode history on the host. Goes through
+        // `calibrated_confidence_via` on the bare name: `calibrated_confidence`
+        // resolves the host's plugin cache first, which this PATH filter
+        // cannot hide.
+        assert_eq!(
+            calibrated_confidence_via(std::path::Path::new("fugu-router"), &title, &[], &None),
+            None
+        );
     }
 }
 

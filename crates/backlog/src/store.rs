@@ -1084,7 +1084,9 @@ enum ClaimCheck {
 // Test seam: in unit tests the claim check never spawns the machine's real
 // `condukt` (whose behaviour depends on what is installed). It answers from a
 // per-thread override, defaulting to `NotClaimed`; tests of the real
-// subprocess path call [`is_claimed_elsewhere`] directly with a PATH shim.
+// subprocess path call [`is_claimed_via`] directly with a bare `condukt` and a
+// PATH shim (calling [`is_claimed_elsewhere`] would resolve the host's plugin
+// cache first and so spawn whatever `condukt` is installed here).
 #[cfg(test)]
 thread_local! {
     static CLAIM_CHECK_OVERRIDE: std::cell::RefCell<Option<ClaimCheck>> =
@@ -1107,7 +1109,9 @@ fn claim_check(_hashkey: &str) -> ClaimCheck {
 /// was unreadable), so the stdout JSON is part of the contract: exit 0 with
 /// `"claimed": true` = claimed, exit 1 with `"claimed": false` = not claimed.
 /// Every other outcome — exit 0/1 without that matching field, `condukt`
-/// missing from PATH, spawn failure, unexpected exit code or signal, OR the
+/// not installed (no plugin-cache copy and not on `$PATH`), the plugin cache
+/// being unreadable so `condukt` could not be located at all, spawn failure,
+/// unexpected exit code or signal, OR the
 /// subprocess failing to exit within [`IS_CLAIMED_TIMEOUT`] (CA-backlog-002) —
 /// is [`ClaimCheck::Undetermined`], which `check_duplicate` refuses. The
 /// timeout is one total deadline of 2.5s shared by the exit wait and the
@@ -1116,10 +1120,49 @@ fn claim_check(_hashkey: &str) -> ClaimCheck {
 /// on the final read plus the kill-and-reap after a timeout — a quarter of
 /// the stale-reap window, enforced by the const assertions on
 /// [`IS_CLAIMED_TIMEOUT`].
+///
+/// `condukt` is located plugin-cache first, `$PATH` second — the
+/// [`harness_core::plugin_bin`] order — not by bare name alone: a hook-spawned
+/// process does not inherit the plugin `bin/` dirs on `$PATH`, so a bare-name
+/// spawn saw only the login `$PATH` (backlog abba6f0d).
+///
+/// It deliberately uses [`harness_core::plugin_bin::cache_lookup_in`] rather
+/// than `plugin_bin::resolve`: `resolve`'s `$PATH` fallback probes the binary
+/// with an UNBOUNDED `condukt --version`, and this call runs inside the
+/// tasks-file critical section, where every subprocess must stay under
+/// [`IS_CLAIMED_TIMEOUT`] (a hung probe would hold the lock past the stale-reap
+/// window — measured: the `claim_check_slow_helper` tests took 13-33s through
+/// `resolve`). With no cache copy, the `$PATH` fallback is the bounded spawn
+/// itself: a missing binary surfaces there as "condukt not found".
+///
+/// A cache that could not be read is refused (`Undetermined`), not treated as
+/// "no cache copy": falling back to `$PATH` then would pick a binary of unknown
+/// provenance because the known-good copy was unreadable.
+#[cfg_attr(test, allow(dead_code))]
 fn is_claimed_elsewhere(hashkey: &str) -> ClaimCheck {
+    use harness_core::plugin_bin::{cache_lookup_in, cache_root};
+    use harness_core::verdict::Determination;
+    let program = match cache_lookup_in(&cache_root(), "condukt") {
+        Determination::Known(Some(p)) => p,
+        Determination::Known(None) => std::path::PathBuf::from("condukt"),
+        Determination::Undetermined(why) => {
+            return ClaimCheck::Undetermined(format!(
+                "condukt could not be located: {}",
+                why.as_str()
+            ))
+        }
+    };
+    is_claimed_via(&program, hashkey)
+}
+
+/// The subprocess half of [`is_claimed_elsewhere`]: run
+/// `<program> state is-claimed --hashkey <h>` under the bounded wait and map
+/// its exit code + stdout three-valued. Split out so the mapping is testable
+/// against a shim without depending on what the host's plugin cache holds.
+fn is_claimed_via(program: &std::path::Path, hashkey: &str) -> ClaimCheck {
     use std::io::Read;
     let started = std::time::Instant::now();
-    let mut child = match std::process::Command::new("condukt")
+    let mut child = match std::process::Command::new(program)
         .arg("state")
         .arg("is-claimed")
         .arg("--hashkey")
@@ -4542,7 +4585,7 @@ mod tests {
     }
 
     /// End-to-end version of the same oracle through the real subprocess
-    /// surface: `is_claimed_elsewhere` shells out to a `condukt` binary that,
+    /// surface: `is_claimed_via` shells out to a `condukt` binary that,
     /// in this test, we make resolve (via PATH override) to a slow/hanging
     /// script instead of the real `condukt`. The call must return
     /// `Undetermined` (a timeout is "cannot determine", never "not claimed")
@@ -4574,7 +4617,7 @@ mod tests {
         std::env::set_var("PATH", &new_path);
 
         let start = std::time::Instant::now();
-        let claimed = is_claimed_elsewhere("deadbeefcafef00d");
+        let claimed = is_claimed_via(std::path::Path::new("condukt"), "deadbeefcafef00d");
         let elapsed = start.elapsed();
 
         std::env::set_var("PATH", old_path);
@@ -4602,7 +4645,8 @@ mod tests {
         dir
     }
 
-    /// Run `is_claimed_elsewhere` with PATH replaced by `path` (restored after).
+    /// Run `is_claimed_via` on a bare `condukt` with PATH replaced by `path`
+    /// (restored after).
     fn claim_with_path(path: &str) -> ClaimCheck {
         let _g = PROBE_PATH_ENV_LOCK
             .lock()
@@ -4612,12 +4656,12 @@ mod tests {
         // The claim-check bound can legitimately trip while the whole suite is
         // loading the machine; retry ONLY a timeout (the mapping under test is
         // about exit codes), never any other outcome.
-        let mut r = is_claimed_elsewhere("deadbeefcafef00d");
+        let mut r = is_claimed_via(std::path::Path::new("condukt"), "deadbeefcafef00d");
         for _ in 0..20 {
             if !matches!(&r, ClaimCheck::Undetermined(m) if m.starts_with("timed out")) {
                 break;
             }
-            r = is_claimed_elsewhere("deadbeefcafef00d");
+            r = is_claimed_via(std::path::Path::new("condukt"), "deadbeefcafef00d");
         }
         std::env::set_var("PATH", old);
         r

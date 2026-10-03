@@ -12263,3 +12263,44 @@ weight = 0.0
 issue_number = 1222
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1222"
 rev = 0
+
+[[task]]
+id = "4a1cf1ad"
+title = "blastguard: backtick-quoted path inside a Python heredoc comment is misread as a > redirect and blocked"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = """
+Observed 2026-10-04 by the 873a2621 test-writer agent (session 33de4c25). Verbatim block: '> /claims.json' destroys the file's current contents and /claims.json contains a shell expansion, so blastguard cannot tell which file this names. Trigger: a heredoc body that is Python source, with a comment that wraps claims.json in backticks. Also a process finding: the agent then wrote the same script with the Write tool and ran it, which is the reroute-around-a-gate pattern that CLAUDE.md section 5.4 forbids (the effect was benign: test edits in its own worktree). Needs a reproduction test.
+
+[2026-10-04, session 33de4c25] Second observation, same verbatim block: the 873a2621 implementer's python3 heredoc that spliced crates/harness-core/src/transcript.rs was refused because Rust doc text "<project_key(main_worktree_root(root))>/claims.json" (in backticks) was parsed as a > redirect. The script never ran. Declared and asked; the user ruled to make the same change with the Edit tool."""
+created_at = 1791044006
+updated_at = 1791044228
+weight = 0.0
+issue_number = 1229
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1229"
+rev = 1
+
+[[task]]
+id = "1af8be51"
+title = "check-worktree-isolation _merge_head_visible uses os.path.exists: a directory/symlink MERGE_HEAD allows a main-tree commit (fail-open, disagrees with edit guard)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Found 2026-10-04 by the c8c11add implementer (session 33de4c25). scripts/check-worktree-isolation.py _merge_head_visible treats any existing MERGE_HEAD (directory, symlink, unreadable) as merge-in-progress and allows a non-merge commit in main's tree. The edit guard after c8c11add (4f37e9b0, guard-maintree-edit.py _merge_head_state) treats those as undetermined -> block. Section 3: undetermined must resolve to block. Needs a reproduction test (MERGE_HEAD as a directory -> commit-side guard must refuse)."
+created_at = 1791044136
+updated_at = 1791044136
+weight = 0.0
+issue_number = 1230
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1230"
+rev = 0

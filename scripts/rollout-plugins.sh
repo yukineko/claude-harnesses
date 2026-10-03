@@ -41,6 +41,22 @@
 #   scripts/rollout-plugins.sh --plugin condukt  # limit to one plugin (repeatable)
 #   scripts/rollout-plugins.sh --no-rebuild      # copy + registry only, skip rebuild
 #   scripts/rollout-plugins.sh --no-sync         # copy + registry only, skip asset sync
+#   scripts/rollout-plugins.sh --allow-downgrade # permit re-pointing the registry
+#                                                # at an OLDER version (see below)
+#
+# REGISTRY MONOTONICITY (backlog a078ddb2)
+#   installed_plugins.json is ONE file shared by every session. A rollout run
+#   from a tree whose plugin version is OLDER than what the registry already
+#   points at (another session rolled out a newer base) would silently demote
+#   that pointer, last-writer-wins; the newer version dir then becomes
+#   unreferenced and Claude Code's orphaned-version sweep marks it
+#   .orphaned_at for GC. So a demotion is REFUSED (non-zero exit, nothing
+#   copied) unless --allow-downgrade is given. A version pair that cannot be
+#   compared (either side not a SemVer version) is undetermined and
+#   is refused the same way (CLAUDE.md section 3). The check runs at plan time
+#   (before any copy) and again inside the registry write, against the
+#   registry as re-read at write time. Canary rollback (restoring the prior
+#   pointer this run itself replaced) is exempt by construction.
 #
 # CANARY (opt-in for non-gate crates — default behavior is UNCHANGED without
 #         --canary; REQUIRED when the target set includes a GATE crate)
@@ -165,13 +181,14 @@ is_gate_crate() {
   return 1
 }
 
-dry=0 force=0 no_rebuild=0 no_sync=0
+dry=0 force=0 no_rebuild=0 no_sync=0 allow_downgrade=0
 canary=0 canary_stage_size=1 canary_threshold=2 canary_systemic_threshold=0 no_canary=0
 declare -a only_plugins=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run)    dry=1; shift ;;
     --force)      force=1; shift ;;
+    --allow-downgrade) allow_downgrade=1; shift ;;
     --plugin)     [ $# -ge 2 ] || { echo "--plugin requires a name" >&2; exit 2; }
                   only_plugins+=("$2"); shift 2 ;;
     --no-rebuild) no_rebuild=1; shift ;;
@@ -191,6 +208,12 @@ while [ $# -gt 0 ]; do
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
+# Forwarded to every FORWARD registry_patch call so --allow-downgrade reaches
+# the write-time monotonicity re-check, not only plan() (backlog a078ddb2).
+declare -a ALLOW_DOWNGRADE_FLAG=()
+if [ "$allow_downgrade" = 1 ]; then
+  ALLOW_DOWNGRADE_FLAG=(--allow-downgrade)
+fi
 
 # --- locate the overwatch binary (canary planning/gating) --------------------
 # Only needed for --canary. Prefer an explicit override, then PATH, then a
@@ -435,7 +458,7 @@ fi
 # --- plan: one TSV row per plugin --------------------------------------------
 # name  version  src  target  needs_copy  needs_registry  mismatch  mpver  pjver  cur_version  cur_path
 plan() {
-  python3 - "$REPO" "$CACHE" "$OWNER" "$REGISTRY" "$force" ${only_plugins[@]+"${only_plugins[@]}"} <<'PY'
+  python3 - "$REPO" "$CACHE" "$OWNER" "$REGISTRY" "$force" "$allow_downgrade" ${only_plugins[@]+"${only_plugins[@]}"} <<'PY'
 import json, os, sys
 # See the matching comment in all_names' heredoc above: force LF so the TSV
 # rows this prints (each `read -r`'d by callers, and split into fields via
@@ -443,7 +466,38 @@ import json, os, sys
 sys.stdout.reconfigure(newline="\n")
 
 repo, cache, owner, registry_path, force = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5] == "1"
-only = set(sys.argv[6:])
+allow_downgrade = sys.argv[6] == "1"
+import re
+only = set(sys.argv[7:])
+
+
+def vkey(v):
+    # SemVer 2.0 precedence key (build metadata ignored), or None when the
+    # string is not a semver version, i.e. not comparable (undetermined).
+    m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?", v or "")
+    if not m:
+        return None
+    core = tuple(int(x) for x in m.group(1, 2, 3))
+    pre = m.group(4)
+    if pre is None:
+        return (core, 1, ())
+    ids = tuple((0, int(i), "") if i.isdigit() else (1, 0, i) for i in pre.split("."))
+    return (core, 0, ids)
+
+
+def demotion(cur_version, new_version):
+    # None = fine; otherwise a reason string. Undetermined is a refusal.
+    if not cur_version or cur_version == new_version:
+        return None
+    a, b = vkey(cur_version), vkey(new_version)
+    if a is None or b is None:
+        return "versions are not comparable (undetermined)"
+    if a > b:
+        return "registry already points at a NEWER version"
+    return None
+
+
+refused = []
 
 mp = json.load(open(os.path.join(repo, ".claude-plugin", "marketplace.json"), encoding="utf-8"))
 reg_plugins = {}
@@ -483,8 +537,24 @@ for p in mp.get("plugins", []):
     cur_path = (cur or {}).get("installPath", "")
     needs_registry = "1" if (force or cur is None or cur_version != version or cur_path != target) else "0"
 
+    if cur is not None and needs_registry == "1" and not allow_downgrade:
+        why = demotion(cur_version, version)
+        if why:
+            refused.append(f"{key}: {why}: registry has {cur_version!r} "
+                           f"({cur_path}), this tree would write {version!r}")
+
     print("\t".join([name, version, src, target, needs_copy, needs_registry, mismatch,
                       mpver or "", pjver or "", cur_version, cur_path]))
+
+if refused:
+    print("rollout: REFUSING to demote the shared registry (backlog a078ddb2):",
+          file=sys.stderr)
+    for r in refused:
+        print(f"  {r}", file=sys.stderr)
+    print("  Another session most likely rolled out a newer base. Merge it into this "
+          "tree and retry, or pass --allow-downgrade if the demotion is intended. "
+          "Nothing was copied and the registry was not touched.", file=sys.stderr)
+    sys.exit(5)
 PY
 }
 
@@ -616,12 +686,13 @@ copy_plugin_dir() {
 # that has no host binary).
 registry_patch() {
   python3 - "$@" <<'PY'
-import json, os, shutil, sys, tempfile, time
+import json, os, re, shutil, sys, tempfile, time
 sys.stdout.reconfigure(newline="\n")
 
 args = sys.argv[1:]
 dry = "--dry-run" in args
-args = [a for a in args if a != "--dry-run"]
+allow_downgrade = "--allow-downgrade" in args
+args = [a for a in args if a not in ("--dry-run", "--allow-downgrade")]
 registry_path, owner, git_sha = args[0], args[1], args[2]
 rest = args[3:]
 if len(rest) % 3 != 0:
@@ -646,6 +717,46 @@ def now_iso():
     t = time.time()
     return time.strftime("%Y-%m-%dT%H:%M:%S.", time.gmtime(t)) + f"{int((t % 1) * 1000):03d}Z"
 
+
+def vkey(v):
+    # SemVer 2.0 precedence key (build metadata ignored), or None when the
+    # string is not a semver version, i.e. not comparable (undetermined).
+    m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?", v or "")
+    if not m:
+        return None
+    core = tuple(int(x) for x in m.group(1, 2, 3))
+    pre = m.group(4)
+    if pre is None:
+        return (core, 1, ())
+    ids = tuple((0, int(i), "") if i.isdigit() else (1, 0, i) for i in pre.split("."))
+    return (core, 0, ids)
+
+
+# Monotonicity re-check against the registry AS READ NOW (backlog a078ddb2):
+# plan() checked the registry earlier, but another writer may have moved a
+# pointer forward since. Refuse the whole write (nothing is changed) rather
+# than demote; an uncomparable pair is undetermined and refused too.
+if not allow_downgrade:
+    refused = []
+    for u in updates:
+        if not u["version"]:
+            continue
+        key = f"{u['name']}@{owner}"
+        entries = plugins.get(key)
+        if not (entries and isinstance(entries, list)):
+            continue
+        cur_v = entries[0].get("version") or ""
+        if not cur_v or cur_v == u["version"]:
+            continue
+        a, b = vkey(cur_v), vkey(u["version"])
+        if a is None or b is None or a > b:
+            refused.append(f"{key}: registry has {cur_v!r}, refusing to write {u['version']!r}")
+    if refused:
+        print("registry_patch: REFUSING to demote the shared registry (backlog a078ddb2); "
+              "nothing was written:", file=sys.stderr)
+        for r in refused:
+            print(f"  {r}", file=sys.stderr)
+        sys.exit(5)
 
 ts = now_iso()
 changes = []
@@ -928,7 +1039,7 @@ plan_or_die() {
   local rc=0
   PLAN_TXT="$(plan)" || rc=$?
   if [ "$rc" -ne 0 ]; then
-    echo "rollout: FAILED — plan() crashed (exit $rc); aborting, nothing was deployed." >&2
+    echo "rollout: FAILED — plan() exited $rc (crash, or a refused registry demotion reported above); aborting, nothing was deployed." >&2
     exit 1
   fi
 }
@@ -1056,7 +1167,9 @@ execute_stage_rollback() {
     fi
   done
   if [ "${#rb_reg_args[@]}" -gt 0 ]; then
-    registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" "${rb_reg_args[@]}" | sed 's/^/    /'
+    # --allow-downgrade: a rollback restores the pointer THIS run replaced,
+    # which is by definition older than the canary version it undoes.
+    registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" --allow-downgrade "${rb_reg_args[@]}" | sed 's/^/    /'
   fi
 }
 
@@ -1193,9 +1306,9 @@ run_canary() {
     done
     if [ "${#stage_reg_args[@]}" -gt 0 ]; then
       if [ "$dry" = 1 ]; then
-        registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" --dry-run "${stage_reg_args[@]}" | sed 's/^/  /'
+        registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" --dry-run ${ALLOW_DOWNGRADE_FLAG[@]+"${ALLOW_DOWNGRADE_FLAG[@]}"} "${stage_reg_args[@]}" | sed 's/^/  /'
       else
-        registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" "${stage_reg_args[@]}" | sed 's/^/  /'
+        registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" ${ALLOW_DOWNGRADE_FLAG[@]+"${ALLOW_DOWNGRADE_FLAG[@]}"} "${stage_reg_args[@]}" | sed 's/^/  /'
       fi
     fi
 
@@ -1484,9 +1597,9 @@ done <<<"$PLAN_TXT"
 echo
 if [ "$any_reg_change" = 1 ]; then
   if [ "$dry" = 1 ]; then
-    registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" --dry-run "${reg_args[@]}"
+    registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" --dry-run ${ALLOW_DOWNGRADE_FLAG[@]+"${ALLOW_DOWNGRADE_FLAG[@]}"} "${reg_args[@]}"
   else
-    registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" "${reg_args[@]}"
+    registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" ${ALLOW_DOWNGRADE_FLAG[@]+"${ALLOW_DOWNGRADE_FLAG[@]}"} "${reg_args[@]}"
   fi
 else
   echo "registry: no changes needed"

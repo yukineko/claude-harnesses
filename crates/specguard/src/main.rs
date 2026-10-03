@@ -2398,7 +2398,10 @@ fn emit_audit_violations(repo_root: &Path, findings: &[auditmap::StructuralFindi
 /// across separate SESSIONS before it surfaces. A first-time structural drift
 /// therefore never appears in the queue at all, and nothing carries a
 /// per-finding disposition. The review-finding stream is per-item and shows up
-/// immediately, and `review-queue --to-backlog` can bridge it.
+/// immediately. `store::record_finding` stores the row `Unverified` (overwatch
+/// backlog 7f07228e: nothing here adversarially verified the finding), so it is
+/// shown on the review surface with an `UNVERIFIED` marker and
+/// `review-queue --to-backlog` does NOT bridge it to the backlog.
 ///
 /// Idempotency and recurrence: `finding_id` is the EPISODE id
 /// `specguard:<kind>:<key>:<epoch>` (see `reconcile.rs` "Episodes" and

@@ -407,11 +407,12 @@ fn subagent_transcripts(transcript_path: &Path) -> Vec<PathBuf> {
 /// union only ever grows the set of files credited to this session, and 第3節's
 /// restrictive side here is "credit fewer files to me", not "credit none".
 ///
-/// Sidechains carry no freshness check of their own; a peer's are folded in
-/// once its PARENT clears [`PEER_ACTIVE_WINDOW`]. That asymmetry is deliberate,
-/// not an oversight: a live parent implies live subagents, and the converse
-/// case — a stale parent with a fresh sidechain — drops a real peer, which
-/// costs an exclusion rather than safety.
+/// Sidechains carry no liveness or freshness check of their own; a peer's are
+/// folded in once its PARENT session holds a live claim-registry entry and its
+/// transcript clears [`PEER_ACTIVE_WINDOW`]. That asymmetry is deliberate, not
+/// an oversight: a live parent implies live subagents, and the converse case —
+/// a dead parent with a fresh sidechain — drops a real peer, which costs an
+/// exclusion rather than safety.
 pub fn files_edited_by_session_and_subagents(path: &str) -> Determination<BTreeSet<String>> {
     let mut out = match files_edited_by_session(path) {
         Determination::Known(v) => v,
@@ -425,7 +426,7 @@ pub fn files_edited_by_session_and_subagents(path: &str) -> Determination<BTreeS
     Determination::Known(out)
 }
 
-/// The union of every **other** session's edit footprint under `projects_dir`.
+/// The union of every **live peer** session's edit footprint under `projects_dir`.
 ///
 /// `projects_dir` is the projects ROOT (`~/.claude/projects`), not a project
 /// slug directory: transcripts live two levels down, at
@@ -440,63 +441,189 @@ pub fn files_edited_by_session_and_subagents(path: &str) -> Determination<BTreeS
 /// `crate::attribution`), so an exclusion has to be a positive observation
 /// about a peer.
 ///
+/// # Who counts as a peer (backlog `873a2621`, user ruling 2026-10-04, design D)
+///
+/// A session is a peer only if it holds a **live entry in condukt's claim
+/// registry** — see [`live_claim_sessions`]. The transcript supplies the peer's
+/// FOOTPRINT, never evidence that the peer is running: a transcript mtime says
+/// when a file was last written, not that its session shares this tree now, and
+/// the previous mtime-as-liveness rule let a session that ended hours ago
+/// exclude my files. Here the registry is keyed by the process cwd;
+/// [`peer_edit_footprint_for`] takes the repo root explicitly.
+///
+/// If the registry cannot be read or parsed, liveness is UNDETERMINED and the
+/// answer is an empty footprint — **no exclusion**. That is an explicit arm in
+/// [`peer_edit_footprint_for`], not a side effect of an empty set.
+///
 /// Returns a plain `BTreeSet`, **not** a `Determination`, and this is
 /// deliberate: everything that can go wrong here — an unreadable projects dir,
-/// an unreadable peer transcript, a peer whose transcript is half-written —
-/// shrinks the returned set, and a smaller peer footprint means *fewer*
-/// exclusions, which is the restrictive direction. An empty set is the safe
-/// answer, so there is nothing for a third value to express. Do not "fix" this
-/// into a `Determination`; doing so would invite a caller to treat a read
-/// failure as a reason to exclude.
+/// an unreadable peer transcript, a peer whose transcript is half-written, an
+/// unreadable claim registry — shrinks the returned set, and a smaller peer
+/// footprint means *fewer* exclusions, which is the restrictive direction. An
+/// empty set is the safe answer, so there is nothing for a third value to
+/// express. Do not "fix" this into a `Determination`; doing so would invite a
+/// caller to treat a read failure as a reason to exclude.
 ///
 /// [`Attribution`]: crate::attribution::Attribution
 pub fn peer_edit_footprint_in(projects_dir: &Path, my_session_id: &str) -> BTreeSet<String> {
     peer_edit_footprint_within(projects_dir, my_session_id, PEER_ACTIVE_WINDOW)
 }
 
-/// How recently a transcript must have been written for its session to count as
-/// a peer.
+/// An upper bound on how recently a live peer's transcript must have been
+/// written for its footprint to be read at all.
 ///
-/// A "peer" is a session sharing this working tree **now**; concurrency is a
-/// property of time, and without a bound every session that ever ran is a peer
-/// forever. That is not academic: my own finished sessions edited these same
-/// absolute paths, so a file I touch today through the shell — invisible in my
-/// current footprint — could be excluded on the strength of a footprint I
-/// myself left last week. The fail-open this module closes, arriving through
-/// the other door.
+/// This is NOT the liveness test — the claim registry is (see
+/// [`peer_edit_footprint_in`]). An earlier version used this window AS liveness,
+/// which let a session that ended two hours ago exclude my files (backlog
+/// `873a2621`). It stays as an additional, independent filter: both conditions
+/// must hold, so it can only remove peers, never add them. Erring long is the
+/// unsafe direction (a stale footprint can cause a false exclusion), so this is
+/// a knob to tighten, never to widen for comfort.
 ///
-/// **Erring long is the UNSAFE direction**, and an earlier version of this
-/// comment claimed the opposite. A stale transcript that slips inside the
-/// window causes a false exclusion — a changed file deleted from a gate that
-/// blocks on secrets and missing tests — which is precisely the failure this
-/// module argues is worse than over-including. So this window is a knob to
-/// tighten, never to widen for comfort.
+/// Known limit: mtime is a property of the FILE, not of the session. `rsync`, a
+/// restore or a plain `touch` re-dates the whole store to "now". Since the
+/// registry decides liveness, that can only let a LIVE peer's older transcript
+/// contribute, not resurrect a dead session as a peer.
+pub(crate) const PEER_ACTIVE_WINDOW: std::time::Duration =
+    std::time::Duration::from_secs(24 * 60 * 60);
+
+/// Heartbeat TTL of condukt's claim registry, in seconds: a claim whose
+/// `heartbeat_at` is more than this far in the past belongs to a holder that
+/// went quiet, and is not evidence of a live session.
 ///
-/// 24h is therefore a floor on the improvement, not a claim of correctness. It
-/// ends the "peer forever" case; it does NOT establish liveness. A session that
-/// ended two hours ago is not sharing this tree, yet still excludes my files —
-/// so the original fail-open survives intact *inside* the window, and for a
-/// session working the same repo the same day that is the common case, not the
-/// rare one. Backlog: derive peers from the heartbeat-TTL claim registry
-/// (`condukt` / `overwatch`), which observes concurrency instead of proxying it.
+/// Mirrors condukt's DEFAULT `stuck_ttl_secs` (1800), which condukt's
+/// `claim.rs::is_stale` uses. harness-core cannot depend on condukt (dependency
+/// direction), so the value is restated here.
 ///
-/// A second limit, same class: mtime is a property of the FILE, not of the
-/// session. `rsync`, a restore, a machine migration or a plain `touch` re-dates
-/// the whole store to "now" and silently reinstates "peer forever" wholesale.
-/// The per-record `"timestamp"` field inside each transcript is content-derived
-/// and survives a copy; moving to it is tracked in the backlog.
-const PEER_ACTIVE_WINDOW: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+/// **Limitation:** the user's condukt config is NOT read. A configured
+/// `stuck_ttl_secs` is ignored — a LONGER one leaves this bound tighter (fewer
+/// peers, fewer exclusions: restrictive), but a SHORTER one keeps a claim live
+/// here that condukt already treats as stale (more exclusions: permissive). A
+/// configured `state_dir` is ignored too; the registry is looked for under the
+/// default `~/.condukt/state`, so a relocated registry reads as absent (no live
+/// peers, no exclusions: restrictive).
+pub const CLAIM_HEARTBEAT_TTL_SECS: i64 = 1800;
+
+/// The session ids holding a **live** claim in condukt's claim registry for the
+/// repository containing `root`.
+///
+/// The registry is `<HOME>/.condukt/state/<key>/claims.json`, where `<key>` is
+/// `project_key(main_worktree_root(root))` — the same path condukt's `claim.rs`
+/// derives (keyed by the MAIN worktree root, so every linked worktree of a repo
+/// shares one registry). Its format is condukt's `Registry`: file claims
+/// flattened at the top level as `"<path>": Claim`, plus a `"task_claims"` map
+/// of `hashkey: Claim`. Both tables carry the same `Claim` (`session_id`,
+/// `heartbeat_at`, ...), and BOTH count as liveness: a `/flow` session usually
+/// holds only task claims, and a fresh heartbeat on either proves the session is
+/// alive.
+///
+/// - No registry file: `Known(empty)` — nobody holds a claim, so nobody is a
+///   live peer.
+/// - A claim with no `session_id` is skipped: it cannot name a session.
+/// - Unresolvable root, unreadable file, unparseable JSON, a malformed entry or
+///   a clock before the epoch: `Undetermined`. Callers must read that as
+///   "liveness unknown" and exclude nothing.
+pub fn live_claim_sessions(root: &Path) -> Determination<BTreeSet<String>> {
+    let main_root = match crate::projkey::main_worktree_root(root) {
+        Determination::Known(p) => p,
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
+    let path = crate::config::base_dir("condukt")
+        .join("state")
+        .join(crate::projkey::project_key(&main_root))
+        .join("claims.json");
+    let text = match crate::boundary::read_to_string(&path) {
+        Determination::Known(Some(t)) => t,
+        Determination::Known(None) => return Determination::known(BTreeSet::new()),
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
+    let now = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(d) => i64::try_from(d.as_secs()).unwrap_or(i64::MAX),
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "claim-registry: clock-before-epoch: cannot age heartbeats in {} ({e})",
+                path.display()
+            ))
+        }
+    };
+    let unparseable = |what: &str| {
+        Determination::undetermined(format!(
+            "claim-registry: unparseable: {} ({what}); peer liveness cannot be decided",
+            path.display()
+        ))
+    };
+    let top = match serde_json::from_str::<Value>(&text) {
+        Ok(Value::Object(m)) => m,
+        Ok(_) => return unparseable("top level is not a JSON object"),
+        Err(e) => return unparseable(&format!("invalid JSON: {e}")),
+    };
+    let mut claims: Vec<(&str, &Value)> = Vec::new();
+    for (k, v) in &top {
+        if k == "task_claims" {
+            let Value::Object(tasks) = v else {
+                return unparseable("`task_claims` is not an object");
+            };
+            claims.extend(tasks.iter().map(|(k, v)| (k.as_str(), v)));
+        } else {
+            claims.push((k.as_str(), v));
+        }
+    }
+    let mut live = BTreeSet::new();
+    for (key, c) in claims {
+        let Some(hb) = c.get("heartbeat_at").and_then(Value::as_i64) else {
+            return unparseable(&format!("claim `{key}` has no integer heartbeat_at"));
+        };
+        let session = match c.get("session_id") {
+            None | Some(Value::Null) => continue,
+            Some(Value::String(s)) if s.trim().is_empty() => continue,
+            Some(Value::String(s)) => s.trim(),
+            Some(_) => return unparseable(&format!("claim `{key}` has a non-string session_id")),
+        };
+        // condukt's `is_stale` is `now - heartbeat_at > ttl`; live is its negation.
+        if now.saturating_sub(hb) <= CLAIM_HEARTBEAT_TTL_SECS {
+            live.insert(session.to_string());
+        }
+    }
+    Determination::known(live)
+}
 
 /// [`peer_edit_footprint_in`] with an explicit activity window, so the bound is
-/// testable without waiting a day or back-dating the system clock.
+/// testable without waiting a day or back-dating the system clock. The claim
+/// registry is keyed by the process cwd; an unreadable cwd excludes nothing.
 pub fn peer_edit_footprint_within(
     projects_dir: &Path,
     my_session_id: &str,
     window: std::time::Duration,
 ) -> BTreeSet<String> {
-    let mine = format!("{}.jsonl", my_session_id.trim());
-    let cutoff = std::time::SystemTime::now().checked_sub(window);
+    match std::env::current_dir() {
+        Ok(cwd) => peer_edit_footprint_for(projects_dir, my_session_id, window, &cwd),
+        // No cwd, no registry key: liveness undetermined, so no exclusion.
+        Err(_) => BTreeSet::new(),
+    }
+}
+
+/// The live-peer footprint, with the claim registry keyed by the repository
+/// containing `registry_root` (a repo root or any path inside it).
+pub fn peer_edit_footprint_for(
+    projects_dir: &Path,
+    my_session_id: &str,
+    window: std::time::Duration,
+    registry_root: &Path,
+) -> BTreeSet<String> {
+    let live = match live_claim_sessions(registry_root) {
+        Determination::Known(live) => live,
+        // Ruling D (backlog 873a2621): liveness cannot be decided, so NO
+        // exclusion. This arm IS the decision, stated on purpose; it does not
+        // rely on a later loop happening to find nothing.
+        Determination::Undetermined(_) => return BTreeSet::new(),
+    };
+    let me = my_session_id.trim();
     let mut out = BTreeSet::new();
+    if live.iter().all(|s| s == me) {
+        // No live session other than (possibly) me: nobody can claim my files.
+        return out;
+    }
+    let cutoff = std::time::SystemTime::now().checked_sub(window);
     let Ok(slugs) = std::fs::read_dir(projects_dir) else {
         return out;
     };
@@ -509,17 +636,22 @@ pub fn peer_edit_footprint_within(
             if p.extension().is_none_or(|x| x != "jsonl") {
                 continue;
             }
+            let Some(session) = p.file_stem().map(|s| s.to_string_lossy().into_owned()) else {
+                continue;
+            };
             // Skip THIS session under every slug: the same id can appear under
             // more than one project directory, and crediting my own edits to a
             // peer would exclude my own files from my own gate.
-            if p.file_name().is_some_and(|n| n == mine.as_str()) {
+            if session == me {
                 continue;
             }
-            // Outside the activity window this session cannot be sharing my
-            // tree right now, so its footprint must not claim my files. An
-            // unreadable mtime drops the transcript rather than admitting it:
-            // "I cannot tell when this ran" is not "it is running now", and
-            // dropping costs an exclusion, never safety.
+            // Liveness comes from the registry, never from the transcript.
+            if !live.contains(&session) {
+                continue;
+            }
+            // Independent upper bound (see PEER_ACTIVE_WINDOW). An unreadable
+            // mtime drops the transcript rather than admitting it: dropping
+            // costs an exclusion, never safety.
             let fresh = std::fs::metadata(&p)
                 .and_then(|m| m.modified())
                 .ok()

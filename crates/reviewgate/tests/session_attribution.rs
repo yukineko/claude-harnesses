@@ -211,6 +211,34 @@ impl Fixture {
         self.transcript_named("peer-session", edited, read_only)
     }
 
+    /// Register `session` as a LIVE peer in condukt's claim registry (user
+    /// ruling D, backlog 873a2621): a session counts as a peer only if it holds
+    /// a live entry in the registry file `claims.json` under
+    /// `$HOME/.condukt/state/<project_key(main_worktree_root(root))>/`. The
+    /// reviewgate binary runs with `HOME=self.home` (see `run_in`) and passes
+    /// the repo root (the payload `cwd`) to `attribute_from_transcript`, so the
+    /// registry is written under this fixture's HOME, keyed on the fixture
+    /// repo. The peer's edit footprint still comes from its transcript.
+    fn register_live_peer(&self, session: &str) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_secs();
+        let body = format!(
+            r#"{{"/work/claimed-0.rs":{{"run_id":"run-{session}","session_id":"{session}","pid":1,"claimed_at":{now},"heartbeat_at":{now}}}}}"#
+        );
+        let root = match harness_core::projkey::main_worktree_root(&self.repo) {
+            harness_core::verdict::Determination::Known(k) => k,
+            _ => panic!("fixture repo must resolve to a main worktree root"),
+        };
+        let dir = self
+            .home
+            .join(".condukt/state")
+            .join(harness_core::projkey::project_key(&root));
+        std::fs::create_dir_all(&dir).expect("create the registry dir");
+        std::fs::write(dir.join("claims.json"), body).expect("write claims.json");
+    }
+
     /// Write a transcript whose assistant turns record an `Edit` of each of
     /// `edited` (absolute paths) plus a `Read` of each of `read_only`.
     fn transcript_named(&self, session: &str, edited: &[String], read_only: &[String]) -> PathBuf {
@@ -399,6 +427,7 @@ fn peer_written_file_is_excluded_from_the_review_set() {
     f.dirty("peer.rs", "fn peer() {}\n");
     let tp = f.transcript(&[f.abs("mine.rs")], &[]);
     let peer = f.peer_transcript(&[f.abs("peer.rs")], &[]);
+    f.register_live_peer("peer-session");
     assert!(
         peer.exists() && peer.parent() == tp.parent(),
         "fixture precondition: a CONCURRENT session's transcript must exist \
@@ -451,6 +480,7 @@ fn a_file_this_session_only_read_is_not_attributed_to_it() {
     let tp = f.transcript(&[f.abs("mine.rs")], &[f.abs("peer.rs")]);
     // ...and the session that actually WROTE peer.rs is on disk saying so.
     f.peer_transcript(&[f.abs("peer.rs")], &[]);
+    f.register_live_peer("peer-session");
 
     let o = f.run("s-readonly", tp.to_str().unwrap());
 
@@ -480,6 +510,7 @@ fn a_file_a_peer_only_read_is_not_excluded() {
     f.dirty("nobodys.rs", "fn nobodys() {}\n");
     let tp = f.transcript(&[f.abs("mine.rs")], &[]);
     f.peer_transcript(&[], &[f.abs("nobodys.rs")]);
+    f.register_live_peer("peer-session");
 
     let o = f.run("s-peer-read", tp.to_str().unwrap());
 

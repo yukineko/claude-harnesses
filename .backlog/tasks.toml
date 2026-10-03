@@ -11987,3 +11987,19 @@ weight = 0.0
 issue_number = 1190
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1190"
 rev = 0
+
+[[task]]
+id = "8ae9ec87"
+title = "pytest が venv に入ったので、pytest 不在を理由に needs-ruling にした項目を done --test で close し直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "2026-10-03 session 33de4c25: pytest 9.1.1 was installed in ~/venv. Candidates whose ruling rationale says that pytest is not installed: ae4543d5, e4a1d386, e033c406 (as of 4a7fcb1e) and others; find them with backlog ruling list and grep pytest. Withdraw each ruling and close with done --test 'python3 -m pytest ...' --red-rev <rev>."
+created_at = 1791027826
+updated_at = 1791027826
+weight = 0.0
+issue_number = 1192
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1192"
+rev = 0

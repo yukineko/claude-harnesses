@@ -890,7 +890,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 ユーザーが明示的に追加を許可した「hack route を閉じる gate」。設計のみ、実装は未着手。
 
@@ -1177,11 +1177,13 @@ CLAUDE.md §5.3 が共有 skip ファイルを禁じる理由「一度だけ消�
 
 ```"""
 created_at = 1788791851
-updated_at = 1791027447
+updated_at = 1791027619
 weight = 0.0
 issue_number = 427
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/427"
-rev = 2
+rev = 3
+ruling_kind = "judgment"
+rationale = "Fixed by merge 4b0e5ab3 (branch tip 1da8e60f). F2P evidence is python unittest, which the done --test runner allowlist does not accept without pytest: independent verifier files scripts/test_deny_ledger_e033c406_verify{,2,3,4,5}.py were observed RED on earlier tips (verify3 on cf3a0e5c, verify4 on 2b5ce63b, verify5 on 7e7cc650) and GREEN on 1da8e60f; tdd oracle {transition: fail_to_pass, valid_fp_oracle: true}. 279 guard tests OK after merging main (HOME in scratch). Approve, or install pytest so done --test can run them."
 
 [[task]]
 id = "73c2c089"

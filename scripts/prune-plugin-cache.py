@@ -17,6 +17,32 @@ What is NEVER removed:
     had just deployed and registered, and specguard/blastguard went dark. An
     unreadable registry keeps every dir and exits 1;
   - any version dir held by a live session (`.in_use/<pid>` for a live pid);
+  - any version dir V that a still-live `claude` process started on
+    (backlog 18fe626f, user rulings 2026-10-03). A session pins
+    CLAUDE_PLUGIN_ROOT when it starts and Claude Code writes `.in_use` for
+    only some plugins, so the absence of a marker proved nothing and prune
+    darkened running sessions. Another process's env cannot be read on
+    macOS, so the hold is by start time S (`ps -A -o pid=,etime=,comm=`,
+    comm basename == "claude"): V is held iff
+        activated_at(V) <= S < superseded_at(V)
+    read from `<cache>/<plugin>/.version-history.jsonl`, which the rollout
+    repoint appends one line to per version change (see
+    plugin_cache.read_version_history / version_intervals). A session that
+    started before V was activated, or after it was superseded, does not
+    hold V — v1 used the registry `lastUpdated` for every old version and
+    so held ALL of them while any session older than the latest rollout
+    lived. A LEGACY dir (no ledger line names it) falls back to that upper
+    bound: kept iff a live claude started before the plugin's registry
+    `lastUpdated`, and then named on stderr as `KEPT <plugin>/<ver>: ...
+    no version history ...` (exit unaffected: the hold is determinate,
+    just conservative). (Not the newer dir's birthtime/mtime: `rsync -a`
+    backdates both; see plugin_cache.registry_state_by_plugin.) A process
+    list that cannot be read in full (ps non-zero, an unparseable line, an
+    empty list) keeps EVERY dir and exits 1; a ledger that exists but cannot
+    be read or parsed keeps every superseded dir of THAT plugin and exits 1;
+    a dir whose window cannot be determined is kept and named on stderr.
+    Test seams: PLUGIN_CACHE_PROC_LIST_PROBE and
+    PLUGIN_CACHE_SUPERSEDED_AT_OVERRIDE (see plugin_cache);
   - any version dir referenced by an absolute path in settings.json (a
     hardcoded pin the registry repoint never reaches — this is exactly what
     broke on 2026-07-27: prune deleted ctxrot/0.5.18 and stuckguard/0.1.21
@@ -49,7 +75,9 @@ Entries in the cache that are NOT version dirs:
 
 Exit codes:
   0 — pruned cleanly (or nothing to prune), no undetermined state
-  1 — at least one dir could not be removed, or the cache could not be scanned
+  1 — at least one dir could not be removed, or the cache could not be scanned,
+      or some hold (including the session-age hold) could not be determined
+      (also under --dry-run)
 """
 import argparse
 import os
@@ -89,7 +117,15 @@ def main(argv=None):
         registry_refs=reg_refs,
         registry_undetermined=reg_undetermined,
     )
-    problems = list(src_problems) + list(scan_problems)
+    stale, session_undetermined, ledger_problems = plugin_cache.session_age_holds(
+        stale, cache_root, args.registry
+    )
+    problems = list(src_problems) + list(scan_problems) + list(ledger_problems)
+    if session_undetermined:
+        problems.append(
+            f"{session_undetermined} — cannot tell which live claude session "
+            "may still be running from a superseded dir, so every cached dir is kept"
+        )
     if pins_undetermined:
         problems.append(f"{pins_undetermined} — every cached dir is kept as potentially pinned")
     if reg_undetermined:
@@ -143,6 +179,20 @@ def main(argv=None):
         print(f"kept {s.describe()}")
     for p in problems + failed:
         print(f"PROBLEM {p}", file=sys.stderr)
+    if not session_undetermined:
+        # A blanket undetermined is already one PROBLEM line above; a per-dir
+        # one (window unknown, ledger unreadable) is said here, on stderr, per
+        # dir — and so is a LEGACY hold, which is determinate but rests on
+        # the registry lastUpdated upper bound rather than recorded history,
+        # so the operator can see why an old dir survived.
+        for s in kept:
+            h = s.holders
+            if (h.undetermined and h.undetermined.startswith("session-age hold:")) or (
+                not h.undetermined
+                and not (h.live_pids or h.pinned or h.registered)
+                and h.session_basis == plugin_cache.SESSION_BASIS_LEGACY
+            ):
+                print(s.kept_line(), file=sys.stderr)
 
     # An undetermined hold is kept by the pruner but must not read as success:
     # something in the cache could not be inspected.

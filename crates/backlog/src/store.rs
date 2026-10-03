@@ -10,7 +10,10 @@ use std::time::Duration;
 /// `NotPlanned` arm was once reachable only from a hand-edited store
 /// (backlog `0dafa254`).
 pub use crate::task::STATUS_CANCELLED;
-use crate::task::{new_id, Task, STATUS_DONE, STATUS_FAILED, STATUS_PENDING};
+use crate::task::{
+    new_id, Closure, Repro, Task, STATUS_DONE, STATUS_FAILED, STATUS_NEEDS_RULING, STATUS_PENDING,
+    STATUS_UNCONFIRMED,
+};
 
 /// The DERIVED claim status (backlog f09db5ce). It is never written to the
 /// tracked store by this binary: a claim lease lives only in the untracked,
@@ -943,6 +946,11 @@ pub fn add_with_weight(
             issue_closed_at: None,
             issue_body_synced_rev: None,
             rev: 0,
+            ruling_kind: None,
+            rationale: None,
+            untestable_reason: None,
+            repro: None,
+            closure: None,
             touched_files: Vec::new(),
         };
         tasks.push(task);
@@ -995,10 +1003,13 @@ fn check_duplicate(tasks: &[Task], title: &str, project: &str) -> Result<()> {
 
     if tasks.iter().any(|t| {
         crate::task::hashkey(&t.title, &t.project) == hk
-            && matches!(t.status.as_str(), STATUS_PENDING | STATUS_FAILED)
+            && matches!(
+                t.status.as_str(),
+                STATUS_PENDING | STATUS_FAILED | STATUS_UNCONFIRMED | STATUS_NEEDS_RULING
+            )
     }) {
         return Err(anyhow!(
-            "duplicate task rejected: an existing pending/failed/claimed task already has this content (hashkey {hk}); use --force to add anyway"
+            "duplicate task rejected: an existing pending/failed/claimed/unconfirmed/needs-ruling task already has this content (hashkey {hk}); use --force to add anyway"
         ));
     }
 
@@ -1413,8 +1424,12 @@ pub fn requeue_expired(path: &Path, now: i64) -> Result<usize> {
             // retry-later path, and its expiry returning to `pending` is the
             // whole point (`requeue_expired_restores_pending`).
             let terminal = task.status == STATUS_DONE || task.status == STATUS_CANCELLED;
+            // `unconfirmed` / `needs-ruling` are not queue states either: a
+            // stale `defer_until` on one of them must not promote it into the
+            // workable queue without its repro / ruling.
+            let requeueable = matches!(task.status.as_str(), STATUS_PENDING | STATUS_FAILED);
             if let Some(defer_until) = task.defer_until {
-                if defer_until <= now && !terminal {
+                if defer_until <= now && !terminal && requeueable {
                     task.defer_until = None;
                     task.status = STATUS_PENDING.to_string();
                     changed = true;
@@ -1441,6 +1456,12 @@ pub fn requeue_expired(path: &Path, now: i64) -> Result<usize> {
 /// re-stamping the completion time. This makes at-least-once callers
 /// (retry-on-timeout, `/flow` re-driving a step after a partial failure) safe
 /// to call twice for the same id without side effects.
+///
+/// Test-only since the close-evidence change: the shipped `done` never marks a
+/// task done without a recorded [`Closure`] — it goes through
+/// [`update_task`] from `main.rs`. This fixture keeps the store-level
+/// split/monotonic/lock tests able to produce a terminal row.
+#[cfg(test)]
 pub fn mark_done(path: &Path, id: &str) -> Result<()> {
     with_tasks_lock_required(path, "done", || {
         let mut tasks = load(path)?;
@@ -1457,6 +1478,76 @@ pub fn mark_done(path: &Path, id: &str) -> Result<()> {
         touch(task, now_unix());
         save(path, &tasks)
     })
+}
+
+/// Read-modify-write ONE task under the tasks-file lock (fail-closed: no lock,
+/// no write — see [`with_tasks_lock_required`]). `f` receives the task to
+/// change and a snapshot of the whole store as it was loaded under the lock
+/// (for cross-row checks such as a duplicate target). If `f` returns `Err`,
+/// nothing is written. On success the row is [`touch`]ed (`updated_at` and `rev`) and the store saved.
+///
+/// Unknown id and an unreadable store are `Err` naming the cause.
+pub fn update_task(
+    path: &Path,
+    op: &str,
+    id: &str,
+    f: impl FnOnce(&mut Task, &[Task]) -> Result<()>,
+) -> Result<()> {
+    with_tasks_lock_required(path, op, || {
+        let mut tasks = load(path)?;
+        let snapshot = tasks.clone();
+        let task = tasks
+            .iter_mut()
+            .find(|t| t.id == id)
+            .ok_or_else(|| anyhow!("task not found: {}", id))?;
+        f(task, &snapshot)?;
+        // Through `touch`, not a bare `updated_at` write: every closure,
+        // confirm and ruling transition rewrites the row (status, notes,
+        // closure), and the body re-sync arm reads `rev`, which only `touch`
+        // advances (see `Task::issue_body_synced_rev`).
+        touch(task, now_unix());
+        save(path, &tasks)
+    })
+}
+
+/// Refuse unless `task` is in a status an evidence close may start from:
+/// `pending`, `failed` or `unconfirmed`. A `needs-ruling` row is closed only
+/// by `backlog ruling approve`; a terminal row is final.
+pub fn require_closable(task: &Task) -> Result<()> {
+    match task.status.as_str() {
+        STATUS_PENDING | STATUS_FAILED | STATUS_UNCONFIRMED => Ok(()),
+        STATUS_NEEDS_RULING => Err(anyhow!(
+            "refused: task {} is needs-ruling; only `backlog ruling approve {}` (a human, at a \
+             TTY) closes it — or `backlog ruling withdraw {}` returns it to pending, after which \
+             an evidence-gated `done` applies",
+            task.id,
+            task.id,
+            task.id
+        )),
+        s if is_terminal_status(s) => Err(anyhow!(
+            "refused: task {} is already {s} (terminal status is final)",
+            task.id
+        )),
+        s => Err(anyhow!(
+            "refused: task {} has status {s:?}, which is not a closable status",
+            task.id
+        )),
+    }
+}
+
+/// Close `task` as `status` with `closure`, after [`require_closable`].
+pub fn apply_closure(task: &mut Task, status: &str, closure: Closure) -> Result<()> {
+    require_closable(task)?;
+    if !closure.has_evidence() {
+        return Err(anyhow!(
+            "refused: the closure for {} carries no evidence route",
+            task.id
+        ));
+    }
+    task.status = status.to_string();
+    task.closure = Some(closure);
+    task.defer_until = None;
+    Ok(())
 }
 
 /// One unit of GitHub mirror work, derived from the store's own contents.
@@ -1487,7 +1578,7 @@ pub enum SyncAction {
     /// The third arm, added in 0.3.24. The first two run on every default
     /// `sync`; this one does NOT — it is reachable only through
     /// [`SyncOnly::Body`]. See that type for why, and
-    /// [`crate::task::Task::issue_body_synced_at`] for how staleness is decided.
+    /// [`crate::task::Task::issue_body_synced_rev`] for how staleness is decided.
     UpdateBody {
         id: String,
         number: u64,
@@ -1582,7 +1673,7 @@ pub fn sync_plan(tasks: &[Task]) -> Vec<SyncAction> {
 /// Whether `task`'s issue body is older than the task itself.
 ///
 /// Pure, and deliberately NOT a content comparison — see
-/// [`crate::task::Task::issue_body_synced_at`] for why a stamp beats a hash
+/// [`crate::task::Task::issue_body_synced_rev`] for why a stamp beats a hash
 /// here. An unstamped task is stale: the body may well match, but we have no
 /// observation saying so, and "not known to be current" must not resolve to
 /// "current" (CLAUDE.md §3). That is also why this never gates on the notes
@@ -1921,6 +2012,16 @@ pub fn mark_failed(path: &Path, id: &str, reason: Option<&str>) -> Result<()> {
             // Already failed — idempotent no-op, nothing to persist.
             return Ok(());
         }
+        // `failed` is a QUEUE status (`next` retries it). An unconfirmed
+        // finding or a row awaiting a human ruling must not reach the queue
+        // through `fail`.
+        if task.status == STATUS_UNCONFIRMED || task.status == STATUS_NEEDS_RULING {
+            return Err(anyhow!(
+                "refused: task {id} is {} and `fail` would move it into the workable queue; use \
+                 `backlog confirm` (unconfirmed) or `backlog ruling withdraw` (needs-ruling)",
+                task.status
+            ));
+        }
         // backlog 45c3a699: terminal is monotonic — `fail` must not reopen a
         // done/cancelled task (failed is a retryable, non-terminal status).
         if is_terminal_status(&task.status) {
@@ -1950,11 +2051,30 @@ pub fn mark_failed(path: &Path, id: &str, reason: Option<&str>) -> Result<()> {
 /// d8d25af9). `done` would claim completion and `failed` is always requeued
 /// via `defer_until`, so neither can record this decision.
 ///
-/// `reason` is appended to the notes and any `defer_until` is cleared.
+/// Close-evidence: a cancel is a DISCARD and records `[task.closure]` with
+/// `reason = "discard"` and `discard_reason = <reason>` (user ruling
+/// 2026-10-03: 「証明できないのであれば、そもそも問題ではない。価値の低い推測で
+/// ある。推測だけで証拠がないならゴミである。捨てる」). Throwing away an item
+/// nothing demonstrates must stay cheap, so no test, ruling or TTY is needed —
+/// but the reason is: an empty / whitespace-only reason is refused, since a
+/// discard with no stated reason records nothing a reviewer can check. The
+/// discard claims nothing was fixed, so it is never evidence for `done`
+/// (`scripts/check-closure-evidence.py` re-checks this at commit time).
+///
+/// `reason` is also appended to the notes and any `defer_until` is cleared.
 /// Idempotent: an already-cancelled task is left untouched (no second copy of
-/// the reason). A `done` task is refused — rewriting a completion as a
-/// cancellation would erase the record that the work was done.
+/// the reason, no re-stamped closure). Refused, with nothing written: a `done`
+/// task (rewriting a completion as a cancellation would erase the record that
+/// the work was done) and a `needs-ruling` task (a human ruling is pending;
+/// `ruling approve --cancel` or `ruling withdraw` resolves it).
 pub fn mark_cancelled(path: &Path, id: &str, reason: &str) -> Result<()> {
+    let reason = reason.trim();
+    if reason.is_empty() {
+        return Err(anyhow!(
+            "refused: `cancel {id}` needs a non-empty --reason (it is recorded as the discard \
+             reason)"
+        ));
+    }
     with_tasks_lock_required(path, "cancel", || {
         let mut tasks = load(path)?;
         let task = tasks
@@ -1970,7 +2090,26 @@ pub fn mark_cancelled(path: &Path, id: &str, reason: &str) -> Result<()> {
                  as a cancellation"
             ));
         }
+        if task.status == STATUS_NEEDS_RULING {
+            return Err(anyhow!(
+                "refused: task {id} is needs-ruling (a human ruling is pending); a human closes it \
+                 with `backlog ruling approve {id} --cancel`, or `backlog ruling withdraw {id}` \
+                 returns it to pending"
+            ));
+        }
+        // Only the non-terminal workable/suspicion statuses may be discarded;
+        // anything else is refused with its status named.
+        require_closable(task)?;
         task.status = STATUS_CANCELLED.to_string();
+        task.closure = Some(Closure {
+            reason: "discard".to_string(),
+            duplicate_of: None,
+            doc_only_commit: None,
+            green: None,
+            red: None,
+            ruling: None,
+            discard_reason: Some(reason.to_string()),
+        });
         if task.notes.is_empty() {
             task.notes = reason.to_string();
         } else {
@@ -2010,6 +2149,22 @@ pub fn edit(
         if let Some(w) = crate::task::stored_status_error(status) {
             return Err(anyhow!("{w}"));
         }
+        // Close-evidence: `edit --status` is not a route to any status that
+        // needs a recorded closure. Terminal statuses need one (`backlog done
+        // ... --test/--doc-only/--duplicate-of`, `backlog cancel --reason`'s
+        // discard, or a human `ruling approve`); `unconfirmed` / `needs-ruling` are entered
+        // and left only through `add`/`confirm` and `ruling`.
+        if let Some(v) = status {
+            if v != STATUS_PENDING && v != STATUS_FAILED {
+                return Err(anyhow!(
+                    "refused: `edit --status {v}` is not allowed. `done` needs evidence: \
+                     `backlog done ID --test CMD --red-rev REV`, `--doc-only COMMIT` or \
+                     `--duplicate-of ID`; `cancelled` is `backlog cancel ID --reason R` (a \
+                     recorded discard); judgment/untestable closes need a human ruling \
+                     (`backlog ruling request` then `ruling approve`)"
+                ));
+            }
+        }
         let mut tasks = load(path)?;
         let task = tasks
             .iter_mut()
@@ -2018,6 +2173,14 @@ pub fn edit(
         // backlog 45c3a699: terminal is monotonic. Refuse BEFORE touching any
         // field so a refused edit leaves the task exactly as it was.
         if let Some(v) = status {
+            if task.status == STATUS_UNCONFIRMED || task.status == STATUS_NEEDS_RULING {
+                return Err(anyhow!(
+                    "refused: task {id} is {} and `edit --status {v}` would move it into the \
+                     workable queue without its repro / ruling; use `backlog confirm` or \
+                     `backlog ruling withdraw`",
+                    task.status
+                ));
+            }
             if is_terminal_status(&task.status) && !is_terminal_status(v) {
                 return Err(anyhow!(
                     "refused: task {id} is {} (terminal) and terminal status is final; \
@@ -2082,6 +2245,14 @@ pub fn edit(
 ///
 /// Both errors name what actually happened so the caller can retry; neither is
 /// collapsed into a bool.
+///
+/// Test-only since the close-evidence change: it files the task straight into
+/// the workable queue (`pending`) with no repro evidence, which the shipped
+/// binary never does any more. The production entry point is
+/// [`add_finding`], which takes the [`Intake`] (status + observed repro)
+/// decided by `main.rs`; this wrapper exists so the locking/verify-the-write
+/// tests above keep driving that SAME body.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub fn add_with_weight_and_github_push<R: Fn(&[&str]) -> Option<(bool, String)>>(
     path: &Path,
@@ -2094,6 +2265,70 @@ pub fn add_with_weight_and_github_push<R: Fn(&[&str]) -> Option<(bool, String)>>
     now: i64,
     remote_url: &str,
     run: R,
+) -> Result<String> {
+    add_finding(
+        path,
+        title,
+        project,
+        tags,
+        notes,
+        weight,
+        force,
+        now,
+        remote_url,
+        run,
+        Intake {
+            status: STATUS_PENDING,
+            repro: None,
+        },
+    )
+}
+
+/// Where a new finding lands and what was observed about it.
+///
+/// Only a `reproduced` repro outcome may land in `pending` (the workable
+/// queue); everything else lands in [`STATUS_UNCONFIRMED`]. `main.rs` builds
+/// this from the repro run via [`Intake::from_repro`], which is the only
+/// production constructor.
+pub struct Intake {
+    pub status: &'static str,
+    pub repro: Option<Repro>,
+}
+
+impl Intake {
+    /// `pending` exactly when `repro` observed the problem; `unconfirmed`
+    /// otherwise (no repro test, not reproduced, or undetermined).
+    pub fn from_repro(repro: Option<Repro>) -> Self {
+        let reproduced = repro
+            .as_ref()
+            .is_some_and(|r| r.outcome == crate::task::REPRO_REPRODUCED);
+        Intake {
+            status: if reproduced {
+                STATUS_PENDING
+            } else {
+                STATUS_UNCONFIRMED
+            },
+            repro,
+        }
+    }
+}
+
+/// The production `add` (see [`add_with_weight_and_github_push`]'s docs for
+/// the two bd6d81df belts, which live here). The task is written with
+/// `intake.status` and `intake.repro`.
+#[allow(clippy::too_many_arguments)]
+pub fn add_finding<R: Fn(&[&str]) -> Option<(bool, String)>>(
+    path: &Path,
+    title: &str,
+    project: &str,
+    tags: Vec<String>,
+    notes: &str,
+    weight: f64,
+    force: bool,
+    now: i64,
+    remote_url: &str,
+    run: R,
+    intake: Intake,
 ) -> Result<String> {
     let is_bare =
         !(project.starts_with('/') || project.starts_with('.') || project.starts_with('~'));
@@ -2139,7 +2374,7 @@ pub fn add_with_weight_and_github_push<R: Fn(&[&str]) -> Option<(bool, String)>>
             // point (this one) would be the fail-open hole.
             project_unresolved,
             tags,
-            status: STATUS_PENDING.to_string(),
+            status: intake.status.to_string(),
             notes: notes.to_string(),
             created_at: now,
             updated_at: now,
@@ -2150,6 +2385,11 @@ pub fn add_with_weight_and_github_push<R: Fn(&[&str]) -> Option<(bool, String)>>
             issue_closed_at: None,
             issue_body_synced_rev: None,
             rev: 0,
+            ruling_kind: None,
+            rationale: None,
+            untestable_reason: None,
+            repro: intake.repro,
+            closure: None,
             touched_files: Vec::new(),
         };
 
@@ -3121,6 +3361,11 @@ mod tests {
             issue_closed_at: None,
             issue_body_synced_rev: None,
             rev: 0,
+            ruling_kind: None,
+            rationale: None,
+            untestable_reason: None,
+            repro: None,
+            closure: None,
             touched_files: Vec::new(),
         };
         let seed = vec![
@@ -3209,6 +3454,11 @@ mod tests {
                     issue_closed_at: None,
                     issue_body_synced_rev: None,
                     rev: 0,
+                    ruling_kind: None,
+                    rationale: None,
+                    untestable_reason: None,
+                    repro: None,
+                    closure: None,
                     touched_files: Vec::new(),
                 });
             }
@@ -3798,6 +4048,11 @@ mod tests {
                     issue_closed_at: None,
                     issue_body_synced_rev: None,
                     rev: 0,
+                    ruling_kind: None,
+                    rationale: None,
+                    untestable_reason: None,
+                    repro: None,
+                    closure: None,
                     touched_files: Vec::new(),
                 });
             }
@@ -4254,6 +4509,11 @@ mod tests {
                             issue_closed_at: None,
                             issue_body_synced_rev: None,
                             rev: 0,
+                            ruling_kind: None,
+                            rationale: None,
+                            untestable_reason: None,
+                            repro: None,
+                            closure: None,
                             touched_files: Vec::new(),
                         });
                     }
@@ -4331,6 +4591,11 @@ mod tests {
                 issue_closed_at: None,
                 issue_body_synced_rev: None,
                 rev: 0,
+                ruling_kind: None,
+                rationale: None,
+                untestable_reason: None,
+                repro: None,
+                closure: None,
                 touched_files: Vec::new(),
             }],
             &rec,
@@ -4407,9 +4672,18 @@ mod tests {
             "the task must not be stranded out of the queue by a rejected edit"
         );
 
+        // Close-evidence (2026-10-01): `done`/`cancelled` are no longer valid
+        // EDIT targets — a close must go through `done`/`ruling` and record
+        // evidence — so the positive control moved from "done" to "failed".
+        let err = edit(&path, &id, None, None, None, Some("done"))
+            .expect_err("edit --status done must be refused");
+        assert!(err.to_string().contains("done"), "got: {err}");
+        assert_eq!(load(&path).unwrap()[0].status, "pending");
+
         // A VALID status still edits fine (fix must not over-reject).
-        edit(&path, &id, None, None, None, Some("done")).expect("a valid status must be accepted");
-        assert_eq!(load(&path).unwrap()[0].status, "done");
+        edit(&path, &id, None, None, None, Some("failed"))
+            .expect("a valid status must be accepted");
+        assert_eq!(load(&path).unwrap()[0].status, "failed");
     }
 
     // --- CA-backlog-005, re-anchored for backlog f09db5ce ----------------------
@@ -4444,6 +4718,11 @@ mod tests {
             issue_closed_at: None,
             issue_body_synced_rev: None,
             rev: 0,
+            ruling_kind: None,
+            rationale: None,
+            untestable_reason: None,
+            repro: None,
+            closure: None,
             touched_files: Vec::new(),
         };
         // Persisted as an old binary would have left them.
@@ -5346,6 +5625,11 @@ mod tests {
                 issue_closed_at: None,
                 issue_body_synced_rev: None,
                 rev: 0,
+                ruling_kind: None,
+                rationale: None,
+                untestable_reason: None,
+                repro: None,
+                closure: None,
                 touched_files: Vec::new(),
             }],
         )
@@ -5470,6 +5754,11 @@ mod tests {
             issue_closed_at,
             issue_body_synced_rev: None,
             rev: 0,
+            ruling_kind: None,
+            rationale: None,
+            untestable_reason: None,
+            repro: None,
+            closure: None,
             touched_files: Vec::new(),
         }
     }

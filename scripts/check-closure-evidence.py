@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Pre-commit gate: a backlog row may only become terminal WITH observed evidence.
 
-Rule (user-ratified 2026-10-01): suspicion is never evidence. A terminal
-transition (`done`, `cancelled`) needs an EXECUTED, COMMITTED test, a doc-only
-commit, a duplicate target, or a human TTY ruling. The backlog CLI records that
+Rule (user-ratified 2026-10-01): suspicion is never evidence. A `done`
+transition needs an EXECUTED, COMMITTED test, a doc-only commit, a duplicate
+target, or a human TTY ruling. A `cancelled` transition needs a human TTY
+ruling OR a recorded discard (user ruling 2026-10-03: an item nothing
+demonstrates is not a problem and is thrown away cheaply; a discard claims
+nothing was fixed, so it is never evidence for `done`). The backlog CLI records that
 evidence as a `[task.closure]` table; this gate is the commit-time check that
 the table is well formed AND that its tests really behave as recorded. It
 re-runs them: shape alone is a claim, and a claim is not an observation.
@@ -37,8 +40,12 @@ Evidence classes (every class present is validated; at least one is required)
   duplicate closure.duplicate_of: an existing row (not itself) whose status is
             pending/claimed/done.
   ruling    [task.closure.ruling]: kind judgment|untestable with its rationale,
-            approved_by, approved_at and approved_via = "tty". `cancelled`
-            ALWAYS requires this class.
+            approved_by, approved_at and approved_via = "tty".
+  discard   closure.reason = "discard" + a non-empty closure.discard_reason,
+            written by `backlog cancel ID --reason R`. Valid ONLY on a
+            `cancelled` row and only as the sole class (a discard mixed with
+            another class is refused, so it cannot dress up a `done`).
+`cancelled` requires the ruling or the discard class.
 
 Runner allowlist (same rule as the backlog CLI): `cargo test ...`,
 `pytest ...`, `python3 -m pytest ...`, `bash|sh <script under a tests/ dir>`.
@@ -594,8 +601,25 @@ def judge_row(row: dict, ctx: Ctx) -> list[str]:
     has_doc = "doc_only_commit" in cl or "doc" in reason
     has_dup = "duplicate_of" in cl or reason == "duplicate"
     has_ruling = "ruling" in cl or reason in ("ruling", "ruling-approved", "judgment", "untestable")
+    has_discard = "discard_reason" in cl or reason == "discard"
+    if has_discard:
+        # A discard records that nothing was demonstrated: valid only as the
+        # sole class of a `cancelled` row, and only with a stated reason.
+        if status != "cancelled":
+            errs.append(f"closure is a discard but status = {status!r}; a discard claims nothing was "
+                        "fixed and is valid only for \"cancelled\" (`done` needs evidence)")
+        if has_f2p or has_doc or has_dup or has_ruling:
+            errs.append("closure mixes a discard with another evidence class; a discard must be the only class")
+        if not _nonempty_str(cl.get("discard_reason")):
+            errs.append(f"closure.discard_reason = {cl.get('discard_reason')!r} is missing or empty "
+                        "(a discard must state its reason)")
+        if reason != "discard":
+            errs.append(f"closure.discard_reason is set but closure.reason = {reason!r} (expected \"discard\")")
+        return errs
     if status == "cancelled" and "ruling" not in cl:
-        errs.append("status = \"cancelled\" requires closure.ruling (a human TTY ruling), which is absent")
+        errs.append("status = \"cancelled\" requires closure.ruling (a human TTY ruling) or a discard "
+                    "(closure.reason = \"discard\" + discard_reason, from `backlog cancel --reason`), "
+                    "and has neither")
         has_ruling = False  # already reported; nothing further to validate
     elif not (has_f2p or has_doc or has_dup or has_ruling):
         errs.append(f"closure.reason = {reason!r} with no evidence "
@@ -663,7 +687,8 @@ def main(argv: list[str]) -> int:
     print(
         f"\n{TAG}: a backlog row became terminal (or its closure changed) without observed "
         "evidence. Close it through the backlog CLI (`backlog done --test ... --red-rev ...`, "
-        "`--doc-only`, `--duplicate-of`), or request a human ruling (`backlog ruling request`). "
+        "`--doc-only`, `--duplicate-of`), discard an unproven item (`backlog cancel ID --reason R`), "
+        "or request a human ruling (`backlog ruling request`). "
         "Suspicion, citations and code reading are not evidence.",
         file=sys.stderr,
     )

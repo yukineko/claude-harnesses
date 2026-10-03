@@ -47,8 +47,8 @@ CLAUDE.md 第1節は **「判定を持つ」は返り値の型ではなく消費
 | C2 | `crates/budgetguard/src/gate.rs:206` `let rec = session::load_one(gauge_state_dir, session_id)?;` | 同 record の `models` | cache-health の判定（`additionalContext` として注入） |
 | C3 | `crates/harness-status/src/sessions.rs:43` `let mut records = match session::load_all(&session::default_state_dir()) {` | store 全体 | `/status` パネル |
 | C4 | `crates/session-insights/src/record.rs:80,114` `session::load_one(&session::default_state_dir(), ctx.session_id)` | record の `models` / `agents` | Obsidian record ノートの `## コスト` ブロック（人間が「このセッションはいくらかかったか」として読む） |
-| C5 | `crates/condukt/src/state.rs:2248` `let out = std::process::Command::new("gauge")` | gauge の stdout | task ごとの実コスト → `record-run --cost` → **fugu-router の routing 方策（どのモデルを使うか）** |
-| C6 | `crates/condukt/src/state.rs:2281` `let out = std::process::Command::new("gauge")` | 同上（`tokens_input`/`tokens_output`） | 同上 |
+| C5 | `crates/condukt/src/state.rs:2259` `let out = std::process::Command::new("gauge")` | gauge の stdout | task ごとの実コスト → `record-run --cost` → **fugu-router の routing 方策（どのモデルを使うか）** |
+| C6 | `crates/condukt/src/state.rs:2292` `let out = std::process::Command::new("gauge")` | 同上（`tokens_input`/`tokens_output`） | 同上 |
 | C7 | `crates/condukt/skills/condukt/SKILL.md:1036` `AGENT_ID=$(gauge subagents --json ${SID:+--session "$SID"} 2>/dev/null` | stdout | worker の transcript 特定 |
 | C8 | condukt SKILL.md の `record-run` フォールバック（逐語は下の箇条書き） | stdout | task の記録コスト |
 | C9 | 人間 | `gauge report` / `gauge status` / `gauge session` | 支出の判断 |

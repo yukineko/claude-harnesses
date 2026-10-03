@@ -121,6 +121,26 @@ fn setup(tag: &str) -> Env {
     e
 }
 
+/// Close-evidence (main 04ea9b35): a bare `backlog done ID` is refused, so the
+/// close these tests mirror goes through the cheapest evidence route,
+/// `--duplicate-of`, naming a canonical row seeded here as `done` with NO
+/// issue. That row contributes nothing to any sync plan (`sync_plan` only acts
+/// on a terminal row that HOLDS an unclosed issue), so every count asserted
+/// below is about the task under test alone.
+const DUP_TARGET: &str = "d0p0cafe";
+
+fn seed_duplicate_target(done_file: &Path) {
+    let block = format!(
+        "[[task]]\nid = \"{DUP_TARGET}\"\ntitle = \"canonical ticket\"\nproject = \"/repo\"\ntags = []\nstatus = \"done\"\nnotes = \"\"\ncreated_at = 1\nupdated_at = 1\nweight = 0.0\n\n"
+    );
+    let mut cur = std::fs::read_to_string(done_file).unwrap_or_default();
+    if !cur.contains(DUP_TARGET) {
+        cur.push_str(&block);
+        std::fs::create_dir_all(done_file.parent().unwrap()).unwrap();
+        std::fs::write(done_file, cur).unwrap();
+    }
+}
+
 fn bl(e: &Env, args: &[&str]) -> (i32, String, String) {
     let o = Command::new(env!("CARGO_BIN_EXE_backlog"))
         .args(args)
@@ -370,7 +390,8 @@ fn done_close_carries_the_tasks_notes_and_id_in_a_comment() {
         ),
     );
 
-    let (c, o, er) = bl(&e, &["done", "aaaa0001"]);
+    seed_duplicate_target(&e.repo.join(".backlog/tasks.done.toml"));
+    let (c, o, er) = bl(&e, &["done", "aaaa0001", "--duplicate-of", DUP_TARGET]);
     let invs = invocations(&e);
     eprintln!(
         "code={c}\nstdout={o}\nstderr={er}\ngh invocations:\n{}",
@@ -587,7 +608,8 @@ fn empty_notes_still_close_with_a_nonempty_comment_naming_id_and_state() {
         ),
     );
 
-    let (c, o, er) = bl(&e, &["done", "eeee0088"]);
+    seed_duplicate_target(&e.repo.join(".backlog/tasks.done.toml"));
+    let (c, o, er) = bl(&e, &["done", "eeee0088", "--duplicate-of", DUP_TARGET]);
     let invs = invocations(&e);
     eprintln!(
         "code={c}\nstdout={o}\nstderr={er}\ngh invocations:\n{}",
@@ -653,7 +675,8 @@ fn oversized_notes_are_truncated_with_a_marker_and_a_bounded_body() {
         &task_block("ffff0099", "enormous notes", "pending", &notes, Some(99), 7),
     );
 
-    let (c, o, er) = bl(&e, &["done", "ffff0099"]);
+    seed_duplicate_target(&e.repo.join(".backlog/tasks.done.toml"));
+    let (c, o, er) = bl(&e, &["done", "ffff0099", "--duplicate-of", DUP_TARGET]);
     let invs = invocations(&e);
     eprintln!(
         "code={c}\nstdout={o}\nstderr={er}\ngh invocations:\n{}",
@@ -755,7 +778,8 @@ fn a_failed_close_is_not_recorded_and_stays_in_the_next_sync_plan() {
     );
     install_stub(&e, false);
 
-    let (c, o, er) = bl(&e, &["done", "gggg0100"]);
+    seed_duplicate_target(&e.repo.join(".backlog/tasks.done.toml"));
+    let (c, o, er) = bl(&e, &["done", "gggg0100", "--duplicate-of", DUP_TARGET]);
     let invs = invocations(&e);
     eprintln!(
         "code={c}\nstdout={o}\nstderr={er}\ngh invocations:\n{}",

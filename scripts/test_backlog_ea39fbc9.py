@@ -39,13 +39,20 @@ class Fixture:
             (d / "bin" / "p").write_text("#!/bin/sh\n")
         self.registry = self.root / "installed_plugins.json"
         self.registry.write_text(json.dumps({"version": 2, "plugins": {"p@yukineko": [
-            {"scope": "user", "installPath": str(self.current), "version": "2.0.0"}]}}))
+            {"scope": "user", "installPath": str(self.current), "version": "2.0.0",
+             # what rollout-plugins.sh writes on every repoint; the session-age
+             # hold (18fe626f) reads it as the superseded-at of 1.0.0
+             "lastUpdated": "2026-01-01T00:00:00.000Z"}]}}))
         self.settings = self.root / "settings.json"
         self.settings.write_text("{}")
         self.env = dict(os.environ, HOME=str(self.root / "home"),
                         CLAUDE_PLUGIN_CACHE=str(self.cache),
                         CLAUDE_PLUGIN_REGISTRY=str(self.registry),
-                        CLAUDE_SETTINGS_JSON=str(self.settings))
+                        CLAUDE_SETTINGS_JSON=str(self.settings),
+                        # 18fe626f: a fixed process list with no `claude` in it,
+                        # so the session-age hold neither reads nor depends on
+                        # the real sessions on this machine
+                        PLUGIN_CACHE_PROC_LIST_PROBE="echo '1 1 python3'")
         (self.root / "home").mkdir()
 
     def hold_lock(self):

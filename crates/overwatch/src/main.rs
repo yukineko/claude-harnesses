@@ -354,20 +354,30 @@ enum Command {
         #[arg(long)]
         window: Option<usize>,
     },
-    /// Record a human disposition (confirmed|dismissed|false-positive) of an
-    /// AI/adversarial review finding (join key: `--finding-id`, resolved
+    /// Record a disposition (confirmed|dismissed|false-positive, or the
+    /// automated observation-based `resolved`) of an AI/adversarial review
+    /// finding. First writer wins: a second disposition for the same id is an
+    /// idempotent no-op (join key: `--finding-id`, resolved
     /// against `record-finding`). `review-metrics` reads these back to
     /// compute false-positive rate / agreement rate / median latency.
     RecordDisposition {
         /// The finding_id this disposition resolves (joins to `record-finding`).
         #[arg(long = "finding-id")]
         finding_id: String,
-        /// The human verdict: confirmed | dismissed | false-positive.
+        /// The verdict: confirmed | dismissed | false-positive (human), or
+        /// resolved (automated re-observation; excluded from human rates).
         #[arg(long)]
         verdict: String,
         /// Free-text identifier of who resolved it.
         #[arg(long)]
         reviewer: String,
+        /// What was observed to justify the disposition (free text / JSON).
+        /// Expected for an automated `resolved` closure.
+        #[arg(long)]
+        evidence: Option<String>,
+        /// Which source was re-observed (e.g. `condukt run-state`).
+        #[arg(long = "observed-source")]
+        observed_source: Option<String>,
     },
     /// Read the disposition ledger (joined against the review-findings
     /// store) and print review-effectiveness metrics: false-positive rate,
@@ -805,8 +815,17 @@ fn main() -> Result<()> {
             finding_id,
             verdict,
             reviewer,
+            evidence,
+            observed_source,
         } => {
-            disposition_cli::record(finding_id, &verdict, reviewer, store::now())?;
+            disposition_cli::record(
+                finding_id,
+                &verdict,
+                reviewer,
+                evidence,
+                observed_source,
+                store::now(),
+            )?;
         }
         Command::ReviewMetrics { json } => {
             exit_on_undetermined_sources(disposition_cli::metrics(json)?);

@@ -17,6 +17,11 @@
 //! accumulate. A terminal transition is a terminal transition whichever verb
 //! performed it.
 //!
+//! *Merge note (main 04ea9b35, close-evidence):* `edit --status` can no longer
+//! reach a terminal state at all, so Gap 1 is now pinned as "refused, nothing
+//! written, nothing sent" for `edit` plus "closes inline and records it" for
+//! the verbs that can (`done` with evidence, `cancel --reason`).
+//!
 //! **Gap 2 — the create-side body is unbounded while the close side is
 //! bounded.** `store::CLOSE_COMMENT_MAX` bounds the close comment to 60000
 //! bytes and marks the cut. `github::build_issue_create_args` has no bound at
@@ -106,6 +111,8 @@ fn setup(tag: &str) -> Env {
     // `bl()` runs the binary with env_clear() + PATH=bin, so every tool the
     // stub itself shells out to has to live in that same dir.
     symlink(tool_path("grep"), bin.join("grep")).unwrap();
+    // The repro runner (`add --repro-test bash tests/...`) executes `bash`.
+    symlink(tool_path("bash"), bin.join("bash")).unwrap();
 
     let e = Env {
         home,
@@ -130,6 +137,26 @@ fn setup(tag: &str) -> Env {
 
     std::fs::create_dir_all(e.repo.join(".backlog")).unwrap();
     e
+}
+
+/// Close-evidence (main 04ea9b35): a bare `backlog done ID` is refused, so the
+/// close these tests mirror goes through the cheapest evidence route,
+/// `--duplicate-of`, naming a canonical row seeded here as `done` with NO
+/// issue. That row contributes nothing to any sync plan (`sync_plan` only acts
+/// on a terminal row that HOLDS an unclosed issue), so every count asserted
+/// below is about the task under test alone.
+const DUP_TARGET: &str = "d0p0cafe";
+
+fn seed_duplicate_target(done_file: &Path) {
+    let block = format!(
+        "[[task]]\nid = \"{DUP_TARGET}\"\ntitle = \"canonical ticket\"\nproject = \"/repo\"\ntags = []\nstatus = \"done\"\nnotes = \"\"\ncreated_at = 1\nupdated_at = 1\nweight = 0.0\n\n"
+    );
+    let mut cur = std::fs::read_to_string(done_file).unwrap_or_default();
+    if !cur.contains(DUP_TARGET) {
+        cur.push_str(&block);
+        std::fs::create_dir_all(done_file.parent().unwrap()).unwrap();
+        std::fs::write(done_file, cur).unwrap();
+    }
 }
 
 fn bl(e: &Env, args: &[&str]) -> (i32, String, String) {
@@ -372,6 +399,67 @@ fn add(e: &Env, title: &str, notes: &str) -> String {
         .unwrap_or_else(|| panic!("add must print `added: <id>`; stdout was {o:?}"))
 }
 
+/// Like [`add`], but the task lands `pending`: since close-evidence (main
+/// 04ea9b35) a finding filed without a REPRODUCED repro test lands
+/// `unconfirmed`, and the body re-sync arm deliberately acts only on workable
+/// rows (`pending` / `failed`). The repro script exits 1 (= reproduced) and is
+/// committed, because only a git-tracked script at HEAD is evidence.
+fn add_pending(e: &Env, title: &str, notes: &str) -> String {
+    let script = e.repo.join("tests/repro_yes.sh");
+    if !script.exists() {
+        std::fs::create_dir_all(script.parent().unwrap()).unwrap();
+        std::fs::write(&script, "#!/bin/bash\necho 'bug present'\nexit 1\n").unwrap();
+        for a in [
+            &["add", "--", "tests/repro_yes.sh"][..],
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.com",
+                "commit",
+                "-q",
+                "--no-verify",
+                "-m",
+                "repro",
+            ][..],
+        ] {
+            assert!(Command::new("git")
+                .args(a)
+                .current_dir(&e.repo)
+                .env("PATH", std::env::var("PATH").unwrap())
+                .env("HOME", &e.home)
+                .status()
+                .unwrap()
+                .success());
+        }
+    }
+    let project = e.repo.display().to_string();
+    let (c, o, er) = bl(
+        e,
+        &[
+            "add",
+            "--title",
+            title,
+            "--project",
+            &project,
+            "--notes",
+            notes,
+            "--repro-test",
+            "bash tests/repro_yes.sh",
+        ],
+    );
+    assert_eq!(c, 0, "backlog add must succeed\nstdout={o}\nstderr={er}");
+    assert!(
+        live_file(e).contains("status = \"pending\""),
+        "fixture: a reproduced repro must land the task pending:\n{}",
+        live_file(e)
+    );
+    o.lines()
+        .find_map(|l| l.strip_prefix("added: "))
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| panic!("add must print `added: <id>`; stdout was {o:?}"))
+}
+
 /// A notes blob well over 80000 BYTES made of MULTI-BYTE characters, with a
 /// marker at each end. Japanese on purpose: a naive `&notes[..60_000]` byte
 /// slice panics on a split codepoint, so the bound has to be taken on a char
@@ -456,99 +544,131 @@ fn the_argv_log_round_trips_multibyte_and_huge_arguments() {
 }
 
 // ===========================================================================
-// GAP 1 — `edit --status <terminal>` must mirror the close.
+// GAP 1 — a terminal transition must mirror the close, whichever verb made it.
 // ===========================================================================
+//
+// When these tests were written (local line, v0.3.24) `edit --status done|
+// cancelled` was a supported terminal transition and Gap 1 was that it left
+// the issue open. main's close-evidence change (04ea9b35) then removed that
+// route entirely: `edit --status` may only name `pending` / `failed`, and a
+// terminal state needs a recorded closure (`done` with evidence, `cancel
+// --reason`, or a human `ruling approve`). The merge of the two lines keeps
+// the stricter rule, so Gap 1 is now closed from BOTH ends and is pinned that
+// way:
+//   * `edit --status <terminal>` is refused with nothing written and nothing
+//     sent to GitHub — so it can never again finish work locally while the
+//     issue stays open;
+//   * every verb that CAN reach a terminal state closes the issue inline, with
+//     the reason the state implies and a comment carrying id + notes, and
+//     records the close so the next sync plans nothing.
 
-/// GAP 1, THE CORE CASE. `edit --status done` on a task holding issue #51 must
-/// close #51 exactly as `done` would: `--reason completed` plus a `--comment`
-/// carrying the task id and its notes.
-///
-/// RED today: `Command::Edit` never calls `mirror_close_for`, so the gh log is
-/// empty and #51 stays open forever.
+/// GAP 1, THE EDIT ROUTE. `edit --status done` and `edit --status cancelled` on
+/// a task holding an issue must be REFUSED, leave the task exactly where it
+/// was (live, not in the done file), and invoke `gh` not at all. A refusal
+/// that still closed the issue, or an acceptance that did not, would both
+/// reopen the silent divergence Gap 1 is about.
 #[test]
-fn edit_status_done_closes_the_issue_like_done_does() {
-    let e = setup("editdone");
+fn edit_status_terminal_is_refused_and_leaves_store_and_issue_untouched() {
+    let e = setup("editrefused");
     write_live(
         &e,
         &task_block(
             "aaaa0051",
             "terminal via edit, not via done",
             "pending",
-            "EDIT-NOTES-ALPHA: reached the terminal state through `edit --status`.",
+            "EDIT-NOTES-ALPHA: tried to reach the terminal state through `edit --status`.",
             Some(51),
             1,
         ),
     );
 
-    let (c, o, er) = bl(&e, &["edit", "aaaa0051", "--status", "done"]);
-    let invs = invocations(&e);
-    eprintln!(
-        "code={c}\nstdout={o}\nstderr={er}\ngh invocations:\n{}",
-        render(&invs)
-    );
-    assert_eq!(c, 0, "the edit must succeed: stdout={o:?} stderr={er:?}");
-    assert!(
-        done_file(&e).contains("aaaa0051"),
-        "harness/precondition: the task must actually have moved to the terminal \
-         file, else this test is about something else; done file was:\n{}",
-        done_file(&e)
-    );
-
-    let cl = closes(&invs);
-    assert_eq!(
-        cl.len(),
-        1,
-        "a terminal transition performed through `edit --status done` must close \
-         the task's issue exactly as `done` does; gh was invoked with:\n{}",
-        render(&invs)
-    );
-    let args = cl[0];
-    assert_eq!(
-        args.get(2).map(String::as_str),
-        Some("51"),
-        "the close must target the task's OWN issue number; argv was {args:?}"
-    );
-    assert_eq!(
-        flag_value(args, "--reason").as_deref(),
-        Some("completed"),
-        "a task edited to `done` closes as completed; argv was {args:?}"
-    );
-    let body = flag_value(args, "--comment").unwrap_or_else(|| {
-        panic!("the close must carry --comment (v0.3.23's contract); argv was {args:?}")
-    });
-    assert!(
-        body.contains("aaaa0051"),
-        "the comment must name the task id; body was {body:?}"
-    );
-    assert!(
-        body.contains("EDIT-NOTES-ALPHA: reached the terminal state through `edit --status`."),
-        "the comment must carry the task's notes verbatim; body was {body:?}"
-    );
+    for status in ["done", "cancelled"] {
+        let (c, o, er) = bl(&e, &["edit", "aaaa0051", "--status", status]);
+        let invs = invocations(&e);
+        eprintln!(
+            "edit --status {status}: code={c}\nstdout={o}\nstderr={er}\ngh invocations:\n{}",
+            render(&invs)
+        );
+        assert_ne!(
+            c, 0,
+            "`edit --status {status}` must be refused (a terminal state needs a recorded \
+             closure): stdout={o:?} stderr={er:?}"
+        );
+        assert!(
+            er.contains("refused"),
+            "the refusal must say so on stderr, naming the route that does work; \
+             stderr was {er:?}"
+        );
+        assert!(
+            invs.is_empty(),
+            "a refused `edit --status {status}` must not touch GitHub; gh was invoked \
+             with:\n{}",
+            render(&invs)
+        );
+        assert!(
+            !done_file(&e).contains("aaaa0051"),
+            "a refused edit must not move the task to the terminal file:\n{}",
+            done_file(&e)
+        );
+        let live = live_file(&e);
+        assert!(
+            live.contains("aaaa0051") && live.contains("status = \"pending\""),
+            "a refused edit must leave the task live and pending:\n{live}"
+        );
+    }
 }
 
-/// GAP 1, THE RECORDING HALF. A close performed by `edit` must be RECORDED, or
-/// the drift it was supposed to remove is still there: the next `sync` would
-/// plan the same close again and the SessionStart drift count never falls.
-///
-/// RED today: no close happens at all, so the stale-close plan stays at 1.
+/// GAP 1, `done`. Closing through the evidence-gated `done` must close the
+/// task's OWN issue as `completed`, with a `--comment` carrying the id and the
+/// notes, and RECORD the close so the next `sync --only close` plans zero.
 #[test]
-fn a_close_mirrored_by_edit_is_recorded_so_the_next_sync_plans_nothing() {
-    let e = setup("editrecord");
+fn done_closes_the_issue_and_records_it_so_the_next_sync_plans_nothing() {
+    let e = setup("donerecord");
     write_live(
         &e,
         &task_block(
             "bbbb0052",
-            "recorded close via edit",
+            "recorded close via done",
             "pending",
-            "EDIT-NOTES-BRAVO: the close must be stamped.",
+            "DONE-NOTES-BRAVO: the close must be stamped.",
             Some(52),
             2,
         ),
     );
 
-    let (c, o, er) = bl(&e, &["edit", "bbbb0052", "--status", "done"]);
-    eprintln!("edit: code={c}\nstdout={o}\nstderr={er}");
-    assert_eq!(c, 0, "the edit must succeed: {er}");
+    seed_duplicate_target(&e.repo.join(".backlog/tasks.done.toml"));
+    let (c, o, er) = bl(&e, &["done", "bbbb0052", "--duplicate-of", DUP_TARGET]);
+    let invs = invocations(&e);
+    eprintln!(
+        "done: code={c}\nstdout={o}\nstderr={er}\ngh invocations:\n{}",
+        render(&invs)
+    );
+    assert_eq!(c, 0, "the evidence-bearing done must succeed: {er}");
+    assert!(
+        done_file(&e).contains("bbbb0052"),
+        "harness/precondition: the task must actually be terminal:\n{}",
+        done_file(&e)
+    );
+
+    let cl = closes(&invs);
+    assert_eq!(cl.len(), 1, "exactly one close; gh:\n{}", render(&invs));
+    let args = cl[0];
+    assert_eq!(
+        args.get(2).map(String::as_str),
+        Some("52"),
+        "the close must target the task's OWN issue number; argv was {args:?}"
+    );
+    assert_eq!(
+        flag_value(args, "--reason").as_deref(),
+        Some("completed"),
+        "a done task closes as completed; argv was {args:?}"
+    );
+    let body = flag_value(args, "--comment")
+        .unwrap_or_else(|| panic!("the close must carry --comment; argv was {args:?}"));
+    assert!(
+        body.contains("bbbb0052") && body.contains("DONE-NOTES-BRAVO: the close must be stamped."),
+        "the comment must name the task and carry its notes; body was {body:?}"
+    );
 
     let (c2, o2, er2) = bl(&e, &["sync", "--only", "close"]);
     eprintln!(
@@ -558,27 +678,22 @@ fn a_close_mirrored_by_edit_is_recorded_so_the_next_sync_plans_nothing() {
     assert_eq!(c2, 0, "{er2}");
     assert!(
         o2.contains("0 issue(s) to close"),
-        "the close `edit` performed must be recorded, so the next sync plans \
+        "the close `done` performed must be recorded, so the next sync plans \
          ZERO closes; the plan said: {o2:?}"
     );
 }
 
-/// GAP 1, THE OTHER TERMINAL STATE. `edit --status cancelled` must close as
-/// `not planned` — abandoned work must never be filed on GitHub as completed.
-///
-/// RED today in TWO ways, and both are part of this contract: `cancelled` is
-/// not in `task::STATUSES`, so `store::edit`'s `status_warning` check rejects
-/// the value outright (`store::STATUS_CANCELLED`'s own doc comment says the arm
-/// is unreachable, tracked as backlog `0dafa254`); and even if it were
-/// accepted, `Command::Edit` would not mirror the close.
+/// GAP 1, `cancel`. Abandoned work must close as `not planned` — never
+/// `completed` — with the comment carrying the id and the notes (which now
+/// include the recorded discard reason), and the close must be recorded.
 #[test]
-fn edit_status_cancelled_closes_the_issue_as_not_planned() {
-    let e = setup("editcancel");
+fn cancel_closes_the_issue_as_not_planned_and_records_it() {
+    let e = setup("cancelclose");
     write_live(
         &e,
         &task_block(
             "cccc0053",
-            "abandoned via edit",
+            "abandoned",
             "pending",
             "EDIT-NOTES-CHARLIE: superseded; not doing this.",
             Some(53),
@@ -586,7 +701,15 @@ fn edit_status_cancelled_closes_the_issue_as_not_planned() {
         ),
     );
 
-    let (c, o, er) = bl(&e, &["edit", "cccc0053", "--status", "cancelled"]);
+    let (c, o, er) = bl(
+        &e,
+        &[
+            "cancel",
+            "cccc0053",
+            "--reason",
+            "CANCEL-REASON-CHARLIE: superseded",
+        ],
+    );
     let invs = invocations(&e);
     eprintln!(
         "code={c}\nstdout={o}\nstderr={er}\ngh invocations:\n{}",
@@ -594,15 +717,14 @@ fn edit_status_cancelled_closes_the_issue_as_not_planned() {
     );
     assert_eq!(
         c, 0,
-        "`edit --status cancelled` must be ACCEPTED (it is one of the two \
-         terminal states the mirror closes for): stdout={o:?} stderr={er:?}"
+        "`cancel --reason` must succeed: stdout={o:?} stderr={er:?}"
     );
 
     let cl = closes(&invs);
     assert_eq!(
         cl.len(),
         1,
-        "cancelling through `edit` must close the issue; gh was invoked with:\n{}",
+        "cancel must close the issue; gh:\n{}",
         render(&invs)
     );
     let args = cl[0];
@@ -620,8 +742,17 @@ fn edit_status_cancelled_closes_the_issue_as_not_planned() {
         .unwrap_or_else(|| panic!("the close must carry --comment; argv was {args:?}"));
     assert!(
         body.contains("cccc0053")
-            && body.contains("EDIT-NOTES-CHARLIE: superseded; not doing this."),
-        "the comment must name the task and carry its notes; body was {body:?}"
+            && body.contains("EDIT-NOTES-CHARLIE: superseded; not doing this.")
+            && body.contains("CANCEL-REASON-CHARLIE: superseded"),
+        "the comment must name the task and carry its notes and the discard reason; \
+         body was {body:?}"
+    );
+
+    let (c2, o2, er2) = bl(&e, &["sync", "--only", "close"]);
+    assert_eq!(c2, 0, "{er2}");
+    assert!(
+        o2.contains("0 issue(s) to close"),
+        "the close `cancel` performed must be recorded; the plan said: {o2:?}"
     );
 }
 
@@ -885,7 +1016,7 @@ fn a_body_that_fits_is_passed_through_verbatim_and_unmarked() {
 ///
 /// Returns `(stale_id, issue_number)`.
 fn stale_body_fixture(e: &Env, marker: &str) -> (String, String) {
-    let id = add(
+    let id = add_pending(
         e,
         "task whose notes will change",
         "ORIGINAL-NOTES-INDIA: first draft.",

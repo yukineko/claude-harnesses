@@ -1732,16 +1732,32 @@ def check_stale_version_dirs():
     versions deep for one plugin.
 
     A stale dir held by a LIVE session is not reported — it is expected and
-    transient, and the session that holds it will release it. A dir whose hold
-    status could not be determined IS reported: the pruner deliberately keeps
-    such a dir (deletion is irreversible), so if the gate stayed quiet about it
+    transient, and the session that holds it will release it. "Live session"
+    includes the session-age hold (plugin_cache.session_age_holds), the SAME
+    rule the pruner applies: a live `claude` process that started while that
+    version was current (activated_at <= start < superseded_at, from the
+    plugin's `.version-history.jsonl`; for a legacy dir no ledger line names,
+    start < registry lastUpdated). A dir whose hold status could not be
+    determined IS reported, and so is a plugin whose version-history ledger
+    exists but cannot be read: the pruner deliberately keeps such dirs
+    (deletion is irreversible), so if the gate stayed quiet about them
     nothing would ever surface a cache it cannot inspect.
     """
     cache_root = PLUGIN_CACHE_ROOT
     current, src_problems = plugin_cache.source_versions(CRATES)
     stale, scan_problems = plugin_cache.scan(cache_root, current)
+    # Same session-age hold the pruner applies (18fe626f v2): a superseded dir
+    # a live `claude` started on may still be run from, so it is HELD, not
+    # "removable" — otherwise every rollout would leave this check red for as
+    # long as the session that ran it lives, demanding a prune the pruner
+    # (correctly) refuses. An unreadable process list or an unknown window
+    # lands in `undetermined` below and IS reported; an unreadable ledger is
+    # reported per plugin via `ledger_problems`.
+    stale, _session_blanket, ledger_problems = plugin_cache.session_age_holds(
+        stale, cache_root
+    )
 
-    problems = list(src_problems) + list(scan_problems)
+    problems = list(src_problems) + list(scan_problems) + list(ledger_problems)
     removable = [s for s in stale if s.removable]
     undetermined = [s for s in stale if s.holders.undetermined]
 

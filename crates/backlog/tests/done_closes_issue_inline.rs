@@ -18,7 +18,7 @@
 //! Drives the real binary against a stub `gh` that records every argv, so what
 //! is asserted is the GitHub-visible write actually attempted.
 use std::os::unix::fs::symlink;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn tool_path(name: &str) -> PathBuf {
@@ -87,6 +87,26 @@ fn setup(tag: &str) -> Env {
     }
 }
 
+/// Close-evidence (main 04ea9b35): a bare `backlog done ID` is refused, so the
+/// close these tests mirror goes through the cheapest evidence route,
+/// `--duplicate-of`, naming a canonical row seeded here as `done` with NO
+/// issue. That row contributes nothing to any sync plan (`sync_plan` only acts
+/// on a terminal row that HOLDS an unclosed issue), so every count asserted
+/// below is about the task under test alone.
+const DUP_TARGET: &str = "d0p0cafe";
+
+fn seed_duplicate_target(done_file: &Path) {
+    let block = format!(
+        "[[task]]\nid = \"{DUP_TARGET}\"\ntitle = \"canonical ticket\"\nproject = \"/repo\"\ntags = []\nstatus = \"done\"\nnotes = \"\"\ncreated_at = 1\nupdated_at = 1\nweight = 0.0\n\n"
+    );
+    let mut cur = std::fs::read_to_string(done_file).unwrap_or_default();
+    if !cur.contains(DUP_TARGET) {
+        cur.push_str(&block);
+        std::fs::create_dir_all(done_file.parent().unwrap()).unwrap();
+        std::fs::write(done_file, cur).unwrap();
+    }
+}
+
 fn bl(e: &Env, args: &[&str]) -> (i32, String, String) {
     let o = Command::new(env!("CARGO_BIN_EXE_backlog"))
         .args(args)
@@ -138,7 +158,8 @@ fn done_closes_the_issue_inline_and_records_it() {
     // The number the stub handed back is the one `done` has to close.
     let number = 701;
 
-    let (c, o, er) = bl(&e, &["done", &id]);
+    seed_duplicate_target(&e.repo.join(".backlog/tasks.done.toml"));
+    let (c, o, er) = bl(&e, &["done", &id, "--duplicate-of", DUP_TARGET]);
     eprintln!("done code={c} stdout={o:?} stderr={er:?}");
     assert_eq!(c, 0, "done failed: {er}");
 
@@ -201,7 +222,8 @@ fn a_failed_inline_close_is_not_recorded_and_stays_in_the_sync_plan() {
     )
     .unwrap();
 
-    let (c, o, er) = bl(&e, &["done", &id]);
+    seed_duplicate_target(&e.repo.join(".backlog/tasks.done.toml"));
+    let (c, o, er) = bl(&e, &["done", &id, "--duplicate-of", DUP_TARGET]);
     eprintln!("done code={c} stdout={o:?} stderr={er:?}");
     assert_eq!(
         c, 0,

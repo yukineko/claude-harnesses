@@ -146,7 +146,36 @@ fn add_mirrored(f: &Fx) -> String {
 fn control_done_closes_the_issue_when_the_remote_is_readable() {
     let f = fx("control");
     let id = add_mirrored(&f);
-    let (rc, out, err) = run(&f, &["done", &id], &f.ok_bin);
+    // Close-evidence fixture: a bare `done` is refused, so close through an
+    // evidence route. A doc-only commit (non-root, touches only docs/) is the
+    // cheapest one that needs no extra task.
+    let git = real_git();
+    std::fs::create_dir_all(f.repo.join("docs")).unwrap();
+    std::fs::write(f.repo.join("docs/note.md"), "note\n").unwrap();
+    let ident = [
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t.t",
+        "-c",
+        "commit.gpgsign=false",
+    ];
+    for a in [
+        &["commit", "-q", "--allow-empty", "-m", "root"][..],
+        &["add", "docs/note.md"],
+        &["commit", "-q", "-m", "doc only"],
+    ] {
+        let ok = Command::new(&git)
+            .args(ident)
+            .args(a)
+            .current_dir(&f.repo)
+            .env("HOME", &f.home)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "git {a:?} failed: fixture is void");
+    }
+    let (rc, out, err) = run(&f, &["done", &id, "--doc-only", "HEAD"], &f.ok_bin);
     assert_eq!(rc, 0, "done failed: out={out} err={err}");
     assert!(
         out.contains("closed issue #7"),

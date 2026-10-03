@@ -59,8 +59,15 @@ python3 scripts/record-audit.py --no-escalate        # 手で1回だけ測る（
 > `effective_tasks`）。record-audit だけを書いた config を作ると **cargo-deny 監査が黙って退役する**。
 > 現行 config は security を明示的に引き継いでいる。
 
-**記録は 2 箇所に残る**: breach は `overwatch review-queue`（`record-audit:<次元>` という finding id。
-既に open なら重複記録しない — `record-finding` は単純 append なので毎日積むと面それ自体が読めなくなる）、
+**記録は 2 箇所に残る**: breach は `overwatch review-queue`（`record-audit:<次元>:<初回 breach の epoch>`
+という episode 付き finding id。既に open なら重複記録しない — `record-finding` は単純 append なので
+毎日積むと面それ自体が読めなくなる。episode は `episodes.json` に永続化され、close 後の再 breach は
+新しい id になるので queue に再び見える。episode 無しの旧 id `record-audit:<次元>` も open のまま扱う）。
+**close は観測で行う**（backlog 89544915）: その実行が次元を `ok` と実測できたときだけ、open な
+`record-audit:` finding に `overwatch record-disposition --verdict resolved`（人間の判定ではない自動
+verdict。review-metrics の agreement/false-positive 率から除外し `auto_resolved` に別計上）を evidence
+付きで記録する。breach 中・測定不能・queue 読めない・disposition 書き込み失敗はどれも close せず、
+`NOT closed` を stderr に出して exit 2。
 全実行の数値は `~/.record-audit/observations.jsonl`（append-only の trend 台帳。
 `RECORD_AUDIT_STATE_DIR` で差し替え可）。**台帳への追記に失敗した実行は exit 2** — 記録を残さなかった
 実行は、この job が生む唯一の成果物である trend に穴を空けている。

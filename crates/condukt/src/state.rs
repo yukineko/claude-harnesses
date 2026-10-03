@@ -357,6 +357,13 @@ fn run_path(cfg: &Config, cwd: &Path, run_id: &str) -> PathBuf {
     ))
 }
 
+/// The path a run's state file lives at (whether or not it exists). Exposed so
+/// an observer can tell ABSENT from UNREADABLE itself (see
+/// `finding_reconcile`), which [`RunState::load`]'s single `Err` folds together.
+pub fn run_state_path(cfg: &Config, cwd: &Path, run_id: &str) -> PathBuf {
+    run_path(cfg, cwd, run_id)
+}
+
 impl RunState {
     pub fn load(cfg: &Config, cwd: &Path, run_id: &str) -> Result<Self> {
         let path = run_path(cfg, cwd, run_id);

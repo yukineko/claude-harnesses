@@ -1,8 +1,10 @@
 mod claim_ledger;
+mod closecmd;
 mod config;
 mod dedup;
 mod divergence;
 mod driver;
+mod evidence;
 mod github;
 mod hooks;
 mod install;
@@ -68,6 +70,46 @@ enum Command {
         /// this title+project's content hashkey.
         #[arg(long)]
         force: bool,
+
+        /// A committed test that REPRODUCES the finding (runner allowlist:
+        /// `cargo test ...`, `pytest ...`, `python3 -m pytest ...`, `bash|sh
+        /// <tracked script under a tests dir>`). It is run at HEAD before the
+        /// add: a behavioural FAILURE means reproduced and the task lands
+        /// `pending`; anything else (no repro test, exit 0 = not-reproduced,
+        /// or undetermined) lands `unconfirmed`, outside the workable queue.
+        /// The add itself always succeeds — a finding is never lost.
+        #[arg(long = "repro-test")]
+        repro_test: Option<String>,
+    },
+
+    /// Re-run a repro test for an `unconfirmed` finding. Promotes it to
+    /// `pending` only when the outcome is `reproduced`; the attempt is
+    /// recorded either way, and a non-reproduced/undetermined outcome exits
+    /// non-zero.
+    Confirm {
+        /// Task ID
+        id: String,
+
+        /// The repro test command (same allowlist as `add --repro-test`).
+        #[arg(long = "repro-test")]
+        repro_test: String,
+    },
+
+    /// Request / approve / withdraw / list human rulings for closes that no
+    /// executed test can justify (value judgments, genuinely untestable items).
+    Ruling {
+        #[command(subcommand)]
+        action: RulingAction,
+    },
+
+    /// Read-only classification of every terminal row's closure evidence
+    /// (observed-f2p, doc-only, duplicate, ruling-approved, cited-only,
+    /// judgment, none) plus untestable reasons grouped by crate. Never
+    /// reopens anything; the store is not written.
+    AuditClosures {
+        /// Emit JSON instead of the human report.
+        #[arg(long)]
+        json: bool,
     },
 
     /// Group the queued tasks by DECLARED file scope (`touched_files`), so two
@@ -144,10 +186,36 @@ enum Command {
         claim: bool,
     },
 
-    /// Mark a task as done
+    /// Mark a task as done WITH evidence. Exactly one of: `--test CMD
+    /// --red-rev REV` (an executed committed test that FAILS behaviourally at
+    /// REV and PASSES at HEAD; `--reason fixed|already-fixed|obsolete`),
+    /// `--doc-only COMMIT` (an ancestor commit touching doc paths only), or
+    /// `--duplicate-of ID`. A bare `done ID` is refused. Judgment/untestable
+    /// closes go through `backlog ruling request` + a human `ruling approve`.
     Done {
         /// Task ID
         id: String,
+
+        /// The committed test command (runner allowlist; argv, no shell).
+        #[arg(long)]
+        test: Option<String>,
+
+        /// The revision at which the test must FAIL behaviourally (RED).
+        #[arg(long = "red-rev")]
+        red_rev: Option<String>,
+
+        /// fixed (default) | already-fixed | obsolete
+        #[arg(long)]
+        reason: Option<String>,
+
+        /// Close as a duplicate of this task id (pending, or done WITH evidence).
+        #[arg(long = "duplicate-of")]
+        duplicate_of: Option<String>,
+
+        /// Close with a doc-only commit (ancestor of HEAD, non-root, non-merge,
+        /// doc paths only; SKILL.md and .md under agents/commands/skills are code).
+        #[arg(long = "doc-only")]
+        doc_only: Option<String>,
     },
 
     /// Mark a task as failed
@@ -160,13 +228,15 @@ enum Command {
         reason: Option<String>,
     },
 
-    /// Close a task as "decided not to do it": terminal, never requeued, and
-    /// not a claim of completion (unlike `done`)
+    /// Close a task as "decided not to do it" (discard an item nothing
+    /// demonstrates): terminal, never requeued, and not a claim of completion
+    /// (unlike `done`). Recorded as a `discard` closure; needs no test or ruling
     Cancel {
         /// Task ID
         id: String,
 
-        /// Why it will not be done (required; appended to the notes)
+        /// Why it will not be done (required, non-empty; recorded as the
+        /// closure's discard_reason and appended to the notes)
         #[arg(long)]
         reason: String,
     },
@@ -271,6 +341,41 @@ enum Command {
         #[command(subcommand)]
         action: DriverAction,
     },
+}
+
+#[derive(Subcommand)]
+enum RulingAction {
+    /// Put a task in `needs-ruling` (non-terminal, not workable).
+    Request {
+        /// Task ID
+        id: String,
+        /// judgment | untestable
+        #[arg(long)]
+        kind: String,
+        /// Why a judgment close is right (required for judgment).
+        #[arg(long)]
+        rationale: Option<String>,
+        /// Why no test can observe it (required for untestable).
+        #[arg(long = "untestable-reason")]
+        untestable_reason: Option<String>,
+    },
+    /// Close a needs-ruling task. Requires an interactive TTY on stdin and the
+    /// id typed back — a barrier against the non-interactive agent Bash tool,
+    /// NOT proof of identity. An LLM never runs this.
+    Approve {
+        /// Task ID
+        id: String,
+        /// Close as `cancelled` instead of `done`.
+        #[arg(long)]
+        cancel: bool,
+    },
+    /// Return a needs-ruling task to pending (evidence-gated `done` applies).
+    Withdraw {
+        /// Task ID
+        id: String,
+    },
+    /// List the tasks awaiting a ruling.
+    List,
 }
 
 #[derive(Subcommand)]
@@ -769,6 +874,7 @@ fn run(cli: Cli) -> Result<()> {
             notes,
             weight,
             force,
+            repro_test,
         } => {
             let tasks_path = store_path()?;
             // With the store as the scope (see `read_project_scope`), a task
@@ -794,7 +900,20 @@ fn run(cli: Cli) -> Result<()> {
             // `store::add_with_weight_and_github_push`) never runs a process
             // itself, so unit tests exercise it with fake closures only.
             let remote_url = git_remote_origin_url(&project);
-            let id = store::add_with_weight_and_github_push(
+            // The repro runs BEFORE the store lock is taken (a test can run
+            // for up to BACKLOG_TEST_TIMEOUT_SECS). Its outcome decides where
+            // the finding lands; it never decides WHETHER it lands.
+            let repro = match &repro_test {
+                Some(cmd) => Some(evidence::run_repro(&std::env::current_dir()?, cmd, now)),
+                None => None,
+            };
+            let intake = store::Intake::from_repro(repro);
+            let landed = intake.status;
+            let outcome = intake
+                .repro
+                .as_ref()
+                .map(|r| (r.outcome.clone(), r.detail.clone()));
+            let id = store::add_finding(
                 &tasks_path,
                 &title,
                 &project,
@@ -805,8 +924,16 @@ fn run(cli: Cli) -> Result<()> {
                 now,
                 &remote_url,
                 gh_probe,
+                intake,
             )?;
             println!("added: {id}");
+            match outcome {
+                Some((o, d)) => eprintln!("repro: {o} ({d}); filed as {landed}"),
+                None => eprintln!(
+                    "repro: none given; filed as {landed} (suspicion, outside the workable \
+                     queue) — promote with `backlog confirm {id} --repro-test CMD`"
+                ),
+            }
             // (f7b018f8) The store's own duplicate guard is an EXACT hashkey
             // match, so a differently-phrased filing of the same work is filed
             // silently. Surface the near-duplicate peers here. This is
@@ -938,6 +1065,14 @@ fn run(cli: Cli) -> Result<()> {
                 // (not stored) so callers like `/flow` can gate on
                 // `condukt state is-claimed --hashkey <h>` without recomputing the
                 // normalization themselves.
+                //
+                // `status` carries the SAME derived value the text renderer
+                // shows: a task whose `defer_until` is still in the future is
+                // `deferred` (backlog d65da48d). `deferred` is never stored —
+                // it is computed from `defer_until` (still present in the row)
+                // — so overwatch's `status == "deferred"` counter is reachable
+                // only through this derivation.
+                let now = now_unix();
                 let with_hashkey: Vec<serde_json::Value> = tasks
                     .iter()
                     .map(|t| {
@@ -947,6 +1082,12 @@ fn run(cli: Cli) -> Result<()> {
                                 "hashkey".to_string(),
                                 serde_json::Value::String(task::hashkey(&t.title, &t.project)),
                             );
+                            if t.is_deferred(now) {
+                                obj.insert(
+                                    "status".to_string(),
+                                    serde_json::Value::String("deferred".to_string()),
+                                );
+                            }
                         }
                         v
                     })
@@ -956,8 +1097,26 @@ fn run(cli: Cli) -> Result<()> {
                 println!("no tasks");
             } else {
                 let now = now_unix();
-                println!("{:<10} {:<10} {:<10} TITLE", "ID", "PRIORITY", "STATUS");
-                for t in &tasks {
+                // Unconfirmed findings are SUSPICION, not queued work: they
+                // get their own section and count, never mixed into the rows
+                // a driver works from.
+                let (unconfirmed, tasks): (Vec<task::Task>, Vec<task::Task>) = tasks
+                    .into_iter()
+                    .partition(|t| t.status == task::STATUS_UNCONFIRMED);
+                println!(
+                    "{:<10} {:<10} {:<12} {:<22} TITLE",
+                    "ID", "PRIORITY", "STATUS", "EVIDENCE"
+                );
+                for t in tasks.iter().chain(unconfirmed.iter()) {
+                    if t.status == task::STATUS_UNCONFIRMED
+                        && unconfirmed.first().is_some_and(|u| u.id == t.id)
+                    {
+                        println!(
+                            "--- unconfirmed: {} finding(s) — suspicion, NOT in the workable \
+                             queue (promote with `backlog confirm ID --repro-test CMD`) ---",
+                            unconfirmed.len()
+                        );
+                    }
                     let priority_str = match t.priority() {
                         0 => "p0",
                         1 => "p1",
@@ -983,8 +1142,13 @@ fn run(cli: Cli) -> Result<()> {
                         String::new()
                     };
                     println!(
-                        "{:<10} {:<10} {:<10} {}{}",
-                        t.id, priority_str, status_str, t.title, scope_str
+                        "{:<10} {:<10} {:<12} {:<22} {}{}",
+                        t.id,
+                        priority_str,
+                        status_str,
+                        closecmd::evidence_label(t),
+                        t.title,
+                        scope_str
                     );
                 }
             }
@@ -1157,16 +1321,62 @@ fn run(cli: Cli) -> Result<()> {
             }
         }
 
-        Command::Done { id } => {
+        Command::Done {
+            id,
+            test,
+            red_rev,
+            reason,
+            duplicate_of,
+            doc_only,
+        } => {
             let tasks_path = store_path()?;
-            store::mark_done(&tasks_path, &id)?;
-            println!("done: {id}");
+            closecmd::done(
+                &tasks_path,
+                closecmd::DoneArgs {
+                    id: id.clone(),
+                    test,
+                    red_rev,
+                    reason,
+                    duplicate_of,
+                    doc_only,
+                },
+            )?;
             // Mirror the completion to GitHub. `mark_done` above has already
             // committed the local truth, so this cannot fail the command — but
             // it also must not fail SILENTLY, which is precisely how 60 done
             // tasks ended up behind 60 open issues. A failure prints and
             // leaves `issue_closed_at` unset, so `backlog sync` retries it.
             mirror_close_for(&tasks_path, &id);
+        }
+
+        Command::Confirm { id, repro_test } => {
+            let tasks_path = store_path()?;
+            closecmd::confirm(&tasks_path, &id, &repro_test)?;
+        }
+
+        Command::Ruling { action } => {
+            let tasks_path = store_path()?;
+            match action {
+                RulingAction::Request {
+                    id,
+                    kind,
+                    rationale,
+                    untestable_reason,
+                } => {
+                    closecmd::ruling_request(&tasks_path, &id, &kind, rationale, untestable_reason)?
+                }
+                RulingAction::Approve { id, cancel } => {
+                    closecmd::ruling_approve(&tasks_path, &id, cancel)?;
+                    mirror_close_for(&tasks_path, &id);
+                }
+                RulingAction::Withdraw { id } => closecmd::ruling_withdraw(&tasks_path, &id)?,
+                RulingAction::List => closecmd::ruling_list(&tasks_path)?,
+            }
+        }
+
+        Command::AuditClosures { json } => {
+            let tasks_path = store_path()?;
+            closecmd::audit_closures(&tasks_path, json)?;
         }
 
         Command::Sync { apply, limit, only } => {
@@ -1389,20 +1599,16 @@ fn run(cli: Cli) -> Result<()> {
                 status.as_deref(),
             )?;
             println!("updated: {id}");
-            // A terminal transition is a terminal transition whichever verb
-            // performed it. `done` mirrored its close from the start while this
-            // path did not, so `edit --status done|cancelled` finished the work
-            // locally and left the issue open with nothing on stdout saying so
-            // — invisible until someone happened to run `backlog sync`. The
-            // mirror belongs to the STATE, not to the command.
-            //
-            // Guarded on the requested status rather than called
-            // unconditionally: a non-terminal edit has no close to mirror, and
-            // `mirror_close_for` would otherwise spawn `git` on every edit to
-            // resolve a remote it has no use for.
-            if status.as_deref().is_some_and(store::is_terminal_status) {
-                mirror_close_for(&tasks_path, &id);
-            }
+            // No mirror close here, and none is needed: a terminal transition
+            // mirrors its close whichever verb performed it, and since
+            // close-evidence `edit` is not such a verb — `store::edit` refuses
+            // every `--status` but `pending` / `failed`, with nothing written,
+            // so `edit --status done|cancelled` can no longer finish work
+            // locally while the issue stays open (the gap that once made this
+            // arm call `mirror_close_for`). The verbs that CAN reach a terminal
+            // state — `done`, `cancel`, `ruling approve` — each mirror inline.
+            // Pinned by tests/mirror_gaps_after_0323.rs
+            // (`edit_status_terminal_is_refused_and_leaves_store_and_issue_untouched`).
         }
 
         Command::SessionStart => {

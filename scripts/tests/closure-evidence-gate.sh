@@ -18,7 +18,8 @@
 # test pins them):  [task.closure] reason, duplicate_of, doc_only_commit;
 # [task.closure.green] runner cmd exit passed rev observed_at output_digest excerpt;
 # [task.closure.red] rev exit kind; [task.closure.ruling] kind rationale
-# approved_by approved_at approved_via.
+# approved_by approved_at approved_via; discard closure: [task.closure]
+# reason = "discard" + discard_reason (cancelled only; never justifies done).
 #
 # Exit 0 iff every expectation holds; otherwise non-zero naming each failed case.
 set -uo pipefail
@@ -36,7 +37,7 @@ ZERO40=0000000000000000000000000000000000000000
 
 # ---------------------------------------------------------------- fixtures
 reset_vars() {
-  unset G_RUNNER G_CMD G_EXIT G_PASSED G_REV R_REV R_EXIT R_KIND NO_RED NO_GREEN \
+  unset DISCARD_REASON G_RUNNER G_CMD G_EXIT G_PASSED G_REV R_REV R_EXIT R_KIND NO_RED NO_GREEN \
         FORGED_RED DOC_FILE DOC_COMMIT_SRC R_REV_NONANC NO_FEATURE DUP_OF STATUS RK_BY RK_AT RK_VIA NO_TEST_STAGE
 }
 
@@ -159,6 +160,20 @@ stage_ruling() { # STATUS default cancelled; RK_* overrides
   ( cd "$D" && git add .backlog/tasks.toml .backlog/tasks.done.toml ) || exit 1
 }
 
+stage_discard() { # STATUS default cancelled; DISCARD_REASON unset -> default text, DROP -> omit, else literal
+  new_repo
+  {
+    echo '[task.closure]'
+    echo 'reason = "discard"'
+    case "${DISCARD_REASON-unset}" in
+      DROP) ;;
+      unset) echo 'discard_reason = "unproven speculation"' ;;
+      *) echo "discard_reason = \"${DISCARD_REASON}\"" ;;
+    esac
+  } | stage_done_row "${STATUS:-cancelled}"
+  ( cd "$D" && git add .backlog/tasks.toml .backlog/tasks.done.toml ) || exit 1
+}
+
 # ---------------------------------------------------------------- runner
 run_gate() { # sets RC OUT
   OUT="$( cd "$D" && BACKLOG_TEST_TIMEOUT_SECS=60 python3 "$GATE" 2>&1 )"; RC=$?
@@ -202,6 +217,8 @@ case_; STATUS=cancelled; stage_ruling; expect "P7 cancelled with full TTY ruling
 case_; new_repo
   { printf '[task.closure]\nreason = "duplicate"\nduplicate_of = "legacy01"\n' ; } | stage_done_row done
   ( cd "$D" && git add .backlog/tasks.toml .backlog/tasks.done.toml ); expect "P8 duplicate_of existing done row" pass
+case_; stage_discard; expect "P9 cancelled with discard closure + non-empty discard_reason" pass
+case_; DISCARD_REASON="no evidence, speculation only"; stage_discard; expect "P10 cancelled discard with a different non-empty reason" pass
 
 # ---------------------------------------------------------------- BLOCK: no / malformed evidence
 case_; new_repo
@@ -248,6 +265,16 @@ case_; stage_f2p; ( cd "$D" && git commit -q -m closed ) || exit 1
 case_; stage_f2p; ( cd "$D" && git commit -q -m closed ) || exit 1
   sed 's/^passed = 1/passed = 0/' "$D/.backlog/tasks.done.toml" >"$D/t.new" && mv "$D/t.new" "$D/.backlog/tasks.done.toml"
   ( cd "$D" && git add .backlog/tasks.done.toml ); expect "B25 terminal row's closure table altered in the index" block
+
+# ---------------------------------------------------------------- BLOCK: discard
+case_; DISCARD_REASON=DROP; stage_discard; expect "B26 cancelled discard row lacking discard_reason" block
+case_; DISCARD_REASON=""; stage_discard; expect "B27 cancelled discard row with empty discard_reason" block
+case_; DISCARD_REASON="   "; stage_discard; expect "B28 cancelled discard row with whitespace-only discard_reason" block
+case_; STATUS=done; stage_discard; expect "B29 done row closed by a discard (discard never justifies done)" block
+case_; new_repo
+  printf '' >"$D/.backlog/tasks.toml"
+  printf '[[task]]\nid = "legacy01"\ntitle = "x"\nstatus = "done"\n\n[[task]]\nid = "aaaa1111"\ntitle = "target"\nstatus = "cancelled"\n' >"$D/.backlog/tasks.done.toml"
+  ( cd "$D" && git add -A ); expect "B30 cancelled row with no closure table" block
 
 echo
 if [ "${#FAILED[@]}" -ne 0 ]; then

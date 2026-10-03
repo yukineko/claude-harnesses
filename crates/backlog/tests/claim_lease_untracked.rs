@@ -158,6 +158,20 @@ fn fixture_with(tag: &str, seed: impl FnOnce(&Path, &Path)) -> Fixture {
     git(&["config", "user.email", "t@example.invalid"], &a, &home);
     git(&["commit", "-q", "--allow-empty", "-m", "init"], &a, &home);
 
+    // Close-evidence (2026-10-01): `add` lands `pending` (the queue `next
+    // --claim` hands out) only when a committed repro test REPRODUCES the
+    // finding; without one it lands `unconfirmed`. Commit a repro script
+    // (exit 1 = reproduced) so the fixture's adds can pass `--repro-test`
+    // and exercise the same queue as before.
+    std::fs::create_dir_all(a.join("tests")).unwrap();
+    std::fs::write(
+        a.join("tests/repro.sh"),
+        "#!/bin/bash\necho 'bug present'\nexit 1\n",
+    )
+    .unwrap();
+    git(&["add", "--", "tests/repro.sh"], &a, &home);
+    git(&["commit", "-q", "-m", "repro"], &a, &home);
+
     seed(&a, &home);
 
     git(&["add", ".backlog/tasks.toml"], &a, &home);
@@ -199,6 +213,8 @@ fn fixture(tag: &str) -> Fixture {
                     &project,
                     "--priority",
                     prio,
+                    "--repro-test",
+                    "bash tests/repro.sh",
                 ],
                 a,
                 home,

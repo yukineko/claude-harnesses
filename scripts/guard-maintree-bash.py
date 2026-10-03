@@ -2,12 +2,16 @@
 """PreToolUse hook: refuse a Bash command that MUTATES this project's main tree.
 
 The Edit/Write tools are not the only way to change a file — `sed -i`, `rm`,
-`mv`, `cp`, `tee`, a `>` redirection, `git apply`, `git checkout -- <path>` all
-mutate the working tree from a Bash call, and guard-maintree-edit.py never sees
-them. This hook closes those routes at edit time, for the main checkout of
+`mv`, `cp`, `tee`, a `>` redirection, an interpreter one-liner all mutate the
+working tree from a Bash call, and guard-maintree-edit.py never sees them. This
+hook closes those routes at edit time, for the main checkout of
 $CLAUDE_PROJECT_DIR: a mutation whose resolved target lands under the main tree
 (and is not git-ignored) is refused, with the same instruction — do it in a
-worktree.
+worktree. `git` subcommands (`git apply`, `git checkout -- <path>`, `git
+merge`, …) also mutate the tree but are deliberately NOT judged here: merges
+and conflict resolution on main must stay possible, and the commit-time gate
+check-worktree-isolation.py is what stops a git-made change from landing (see
+the NOTE in _Walk.judge and the KNOWN HOLES list).
 
 HONESTY ABOUT WHAT THIS IS (CLAUDE.md 4, and modelled on deny-no-verify.py). The
 shell is Turing-complete; a sound "does this command mutate the main tree"
@@ -20,7 +24,13 @@ holes are listed at the bottom of this file rather than left for the next reader
 to rediscover.
 
 Resolution rule per candidate target:
-  * relative paths resolve against the main tree root (the session's cwd);
+  * relative paths — and `$PWD` — resolve against the session's cwd: the hook
+    payload's `cwd` field, or this process's own cwd when the field is absent.
+    A `cwd` field that is present but unusable (not an absolute path to an
+    existing directory) makes the cwd UNKNOWN, and every relative write is
+    then refused; absolute targets are still judged normally;
+  * on macOS (darwin) the comparison with the main root folds case, because
+    the default APFS volume is case-insensitive (`…/Harness` IS main);
   * a target that resolves OUTSIDE the main tree (a worktree, /tmp scratchpad,
     ~/.claude memory) is allowed;
   * a target under the main tree that is git-ignored is allowed (local scratch);
@@ -40,25 +50,42 @@ changing its spelling; each of these is now followed to the path it writes:
     `exec`, `find -exec`, a quoted `"$( … )"` or backquote — the payload is
     tokenized and judged by this same procedure, recursively (depth-capped);
   * interpreters whose payload is NOT shell — `python -c` / `python - <<EOF`,
-    `node -e`, `perl -e`, `ruby -e`, an awk program: if the payload contains a
-    write primitive (open(…,'w'), write_text, writeFileSync, `print > "f"`,
-    os.system, …) then every literal path in it — and every operand handed to
-    it — is a write-target candidate. A payload that writes but names no
-    literal path at all is REFUSED (cannot determine). A literal that begins
-    with a trailing run of the main root's components (`'/src/harness/x'`,
-    the shape of `$HOME + '/src/harness/x'`) counts as main;
+    `node -e`, `perl -e`, `ruby -e`, an awk program. If the payload contains
+    a FILE-WRITE primitive (open(…,'w'), write_text, shutil.copy,
+    writeFileSync, an awk print/printf `>` redirection, …), a PROCESS-SPAWN
+    primitive (os.system/popen, subprocess, child_process, perl/ruby
+    backticks, system(), an awk `| "cmd"`), or ANY mutation-capable word
+    (remove, unlink, rmtree, write, rename, replace, copy, move, mkdir,
+    chmod, symlink, truncate, … — no module prefix needed, so `from os import
+    remove`, `import os as o`, `__import__`, getattr, `{writeFileSync: w}` and
+    `fs['writeFileSync']` are all seen), then every literal path in it — and
+    every operand handed to it — is judged, and one that lands on main is
+    refused. Only a FILE WRITE that names no literal path at all is refused
+    for that reason alone (cannot determine); a spawn without a literal path
+    runs an unknown program (residual). A payload with none of these is a read
+    and is allowed, even of main. awk is parsed, not grepped: string literals
+    are blanked first and only a `>`/`|` at parenthesis depth 0 inside a
+    print/printf counts (`print ($1 > 3)` and `"|"` are not writes). A literal
+    that begins with a trailing run of the main root's components
+    (`'/src/harness/x'`, the shape of `$HOME + '/src/harness/x'`) counts as
+    main;
   * in-place flags in any spelling: `-i`, `-i.bak`, `-pi`, `-Ei`,
     `--in-place[=sfx]`, BSD `-i ''`, gawk `-i inplace`;
   * downloaders and extractors: `curl -o/--output/-O/--output-dir`,
     `wget -O/-P` (and plain `wget`, which writes into the cwd), `tar -x`
     (`-C`/`--directory` or the cwd), `tar -c` (the archive), `unzip` (`-d` or
-    the cwd), `find -delete`, `chmod/chown/chgrp`, `rsync/scp/ditto`.
+    the cwd), `find -delete`, `chmod/chown/chgrp`, `rsync/scp/ditto`, and
+    `cp/mv/install/ln --target-directory=DIR` / `-tDIR` / `-t DIR`;
+  * an UNKNOWN PROGRAM (`$CMD …`, `sh -c "$CMD"`, the text `eval "$(brew
+    shellenv)"` runs) is the same class as make/cargo/an arbitrary binary:
+    it is not refused, but the command that PRODUCES it (`brew shellenv`
+    inside the `$( … )`) and every redirection around it are judged.
 
 CWD AND VARIABLES ARE TRACKED THROUGH THE COMMAND, not used as a blanket
 excuse. `cd <dir>` changes what a RELATIVE path resolves against for the
 commands after it; an ABSOLUTE path into main is a hit no matter what was
 `cd`-ed to before it, and `git -C <dir>` re-anchors only that one git command.
-Relative paths start out resolving against the main root. A `cd` inside a
+Relative paths start out resolving against the session's cwd. A `cd` inside a
 subshell `( … )` / `$( … )`, a pipeline stage or a backgrounded job does not
 change the cwd seen afterwards. A `cd` whose success is uncertain — one that
 ran conditionally (after `&&`/`||`, or before `||`), one inside
@@ -71,18 +98,23 @@ cwd is refused.
 Variables are handled the same way. `S=<dir>`, `export S=<dir>`, `declare`,
 `local`, `readonly` and `unset` earlier in the SAME command line are tracked
 and expanded (`$S`, `${S}`, `"$S"`), with the same uncertainty rules as `cd`.
-A value only known at runtime (`S=$(…)`, `read S`, a loop variable, two
-branches that disagree) becomes unresolvable. A `S=x cmd` PREFIX assignment
+A value only known at runtime (`S=$(…)`, `read S`, two branches that
+disagree) becomes unresolvable. A `for f in A B …` variable stands for the
+longest literal prefix its listed values share plus a glob (`for f in
+<wt>/*.txt` -> under the worktree; a list mixing <wt> and <main> -> their
+common parent, refused); a list holding `$(…)` or an unknown variable, or no
+`in` list at all, makes it unknown. A `S=x cmd` PREFIX assignment
 only reaches cmd's environment and does not expand `$S` in its own arguments.
 What is chosen for a variable that is NOT assigned in the command and is
 therefore inherited from the session's shell: only `$HOME` (and `~`) is taken
 from this hook's environment, because it is the one value the hook reliably
-shares with the session. `$PWD` is the TRACKED cwd (initially this hook's own
-cwd). Every other inherited variable is treated as unknown — this hook's
+shares with the session. `$PWD` is the TRACKED cwd (initially the session's cwd,
+as above). Every other inherited variable is treated as unknown — this hook's
 environment is not the Bash tool's shell, so reading it would judge a value
 that may not be the one used. An unknown variable is refused only if it could
-point into main: the path is judged on its longest LITERAL prefix, so
-`$X/f`, `~user/f` and `<parent-of-main>/$X` are refused, while
+point into main: a path that BEGINS with an unknown value (`$X/f`,
+`~user/f`, `$(…)/f`) may be absolute and is refused; otherwise the path is
+judged on its longest LITERAL prefix, so `<parent-of-main>/$X` is refused, while
 `/tmp/$X/f` and `<worktree>/$X` provably cannot reach main and are allowed.
 
 UNDECIDABLE INPUT RESOLVES TO DENY (CLAUDE.md 3), as it always has in the twin
@@ -98,7 +130,7 @@ decidable, and only then denies what is left:
   * here-document BODIES are stripped before tokenizing (they are data, not
     shell syntax) — but only when the terminator is actually found, so a `<<`
     inside a quoted string cannot swallow later lines;
-  * `~`, `$HOME` and `$PWD` are expanded, because they are deterministic;
+  * `~`, `$HOME`, `$PWD` and same-command assignments are expanded;
   * for a target still holding `$`, a glob or a brace, the longest LITERAL path
     prefix is resolved: if that prefix and the main root are on the same ancestor
     chain the expansion could land on main, so it is refused; if they are on
@@ -194,6 +226,22 @@ def _main_root() -> tuple[str, str | None]:
 def _under(child: str, parent: str) -> bool:
     parent = parent.rstrip("/")
     return child == parent or child.startswith(parent + "/")
+
+
+# macOS's default APFS volume is case-INsensitive: `/Users/u/src/Harness` and
+# `/USERS/u/src/harness` name the main tree too, and realpath does not
+# canonicalise the case of a path. So on darwin, comparisons against the main
+# root fold case on both sides. (On a case-sensitive APFS volume this can only
+# over-refuse a sibling whose name differs from main's by case alone.)
+_FOLD_CASE = sys.platform == "darwin"
+
+
+def _fold(p: str) -> str:
+    return p.casefold() if _FOLD_CASE else p
+
+
+def _under_main(child: str, root: str) -> bool:
+    return _under(_fold(child), _fold(root))
 
 
 def _resolve(root: str, path: str) -> str:
@@ -325,17 +373,22 @@ def _hits_main(root: str, path: str, own_gitdir: str | None, st: _State) -> bool
         # branches) and is allowed; `<parent-of-root>/*` and a bare `*.rs` both
         # can, and are refused.
         prefix = _literal_prefix(path)
+        if not prefix and path[0] in "$`":
+            # The path BEGINS with a value this process does not know, which
+            # may itself be absolute (`$X/f`, `~user/f`, `$(…)`): it could be
+            # anywhere, main included. Only a leading glob/brace is relative.
+            return True
         if not os.path.isabs(prefix):
             if st.rel is None:
                 return True  # relative to a cwd we could not determine
             anchor = _resolve(st.rel, prefix)
         else:
             anchor = os.path.realpath(prefix)
-        return _under(anchor, root) or _under(root, anchor)
+        return _under_main(anchor, root) or _under_main(root, anchor)
     if not os.path.isabs(path) and st.rel is None:
         return True  # relative to a cwd we could not determine (3.)
     resolved = _resolve(st.rel or root, path)
-    if not _under(resolved, root):
+    if not _under_main(resolved, root):
         return False
     # Narrow carve-out: the calling worktree's OWN `.git/worktrees/<name>/`
     # administrative directory (e.g. a stale index.lock) is not main's tracked
@@ -366,8 +419,8 @@ def _fragment_of_root(root: str, path: str) -> bool:
     `harness/x`. That is the shape of a main-tree path rebuilt at runtime from
     a value this process cannot see (`os.environ['HOME'] + '/src/harness/x'`).
     Applied to interpreter payload literals only."""
-    rc = [c for c in root.split("/") if c]
-    pc = [c for c in os.path.normpath(path).split("/") if c and c != "."]
+    rc = [c for c in _fold(root).split("/") if c]
+    pc = [c for c in _fold(os.path.normpath(path)).split("/") if c and c != "."]
     for k in range(1, len(rc) + 1):
         if pc[:k] == rc[-k:]:
             return True
@@ -587,34 +640,89 @@ SAME_SHELL_WRAPPERS = {"command", "builtin", "exec", "time"}
 # Write primitives per interpreter. Over-inclusive on purpose: a match only
 # means "this payload may write", and its literal paths are then judged.
 _PY_MODE = re.compile(r"""['"](?:[rbtU]*[wax][rbt+]*|[rbt]*\+[rbt]*)['"]""")
+# FILE-WRITE primitives per interpreter: a match means "this payload writes a
+# file", so its literal paths are write targets, and a write that names no
+# literal path at all cannot be placed (refused).
 _WRITE = {
     "python": re.compile(
         r"\.write_(?:text|bytes)\s*\(|\.(?:touch|mkdir|unlink|rmdir|rename|symlink_to|"
         r"hardlink_to|chmod|extractall|extract)\s*\(|\b(?:os|shutil)\.(?:remove|unlink|"
         r"rename|replace|renames|makedirs|mkdir|rmdir|removedirs|symlink|link|truncate|"
-        r"chmod|system|popen|exec\w*|spawn\w*|copy\w*|move|rmtree|make_archive|"
-        r"unpack_archive)\b|\bsubprocess\b|\bpty\b|\bsqlite3\.connect\b|"
-        r"\binplace\s*=\s*(?:True|1)\b"
+        r"chmod|copy\w*|move|rmtree|make_archive|unpack_archive)\b|"
+        r"\bsqlite3\.connect\b|\binplace\s*=\s*(?:True|1)\b"
     ),
     "node": re.compile(
         r"\b(?:writeFile|appendFile|createWriteStream|mkdir|mkdtemp|rmdir|rm|unlink|"
         r"rename|copyFile|cp|symlink|link|truncate|chmod|utimes|open)(?:Sync)?\s*\(|"
-        r"\bchild_process\b|\b(?:exec|execFile|spawn)(?:Sync)?\s*\(|"
-        r"\bBun\.write\b|\bDeno\.\w+"
+        r"\bBun\.write\b|\bDeno\.(?:write\w*|remove|mkdir|rename|create|copyFile|"
+        r"symlink|link|truncate|chmod)\b"
     ),
     "perl": re.compile(
-        r"""\bopen\b[^;]*?['"]\s*(?:\+?>|\+<|\|)|['"]\s*(?:>>?|\+<)\s*['"]|"""
-        r"\b(?:unlink|rename|mkdir|rmdir|symlink|link|truncate|chmod|system|exec|utime|"
-        r"sysopen|qx|copy|move|make_path|mkpath|remove_tree|rmtree)\b|`"
+        r"""\bopen\b[^;]*?['"]\s*(?:\+?>|\+<)|['"]\s*(?:>>?|\+<)\s*['"]|"""
+        r"\b(?:unlink|rename|mkdir|rmdir|symlink|link|truncate|chmod|utime|"
+        r"sysopen|copy|move|make_path|mkpath|remove_tree|rmtree)\b"
     ),
     "ruby": re.compile(
         r"\bFile\.(?:write|open|new|delete|unlink|rename|symlink|link|truncate|chmod|"
-        r"binwrite)\b|\bIO\.(?:write|binwrite|popen|sysopen)\b|\bFileUtils\b|"
-        r"\bDir\.(?:mkdir|rmdir|delete|unlink)\b|\bPathname\b|\bOpen3\b|"
-        r"\b(?:system|exec|spawn)\b|`|%x|\.write\s*\("
+        r"binwrite)\b|\bIO\.(?:write|binwrite|sysopen)\b|\bFileUtils\b|"
+        r"\bDir\.(?:mkdir|rmdir|delete|unlink)\b|\bPathname\b|\.write\s*\("
     ),
-    "awk": re.compile(r"\bprintf?\b[^;}\n]*?(?:>|\|)|\bsystem\s*\("),
 }
+# PROCESS-SPAWN primitives: they run another program, not a file write. Only
+# the literal paths in the payload are judged (refused if one lands on main);
+# a spawn that names no literal path is an unknown program, like make/cargo,
+# and is allowed (residual).
+_SPAWN = {
+    "python": re.compile(
+        r"\bos\.(?:system|popen|exec\w*|spawn\w*|posix_spawn\w*)\b|\bsubprocess\b|"
+        r"\bpty\b"
+    ),
+    "node": re.compile(
+        r"\bchild_process\b|\b(?:exec|execFile|spawn|fork)(?:Sync)?\s*\(|"
+        r"\bBun\.spawn\w*|\bDeno\.(?:run|Command)\b"
+    ),
+    "perl": re.compile(r"""\b(?:system|exec|qx)\b|`|\bopen\b[^;]*?['"]\s*\||\|\s*['"]"""),
+    "ruby": re.compile(r"\b(?:system|exec|spawn)\b|`|%x|\bOpen3\b|\bIO\.popen\b"),
+}
+# Mutation-capable WORDS, with no module prefix required, so aliasing
+# (`from os import remove`, `import os as o`, `__import__('os')`, getattr,
+# `{writeFileSync: w}`, `fs['writeFileSync']`) cannot hide the call. A payload
+# that contains one of these AND a literal path landing on main is refused;
+# merely reading main (no such word) stays allowed.
+_MUTATION_TOKEN = re.compile(
+    r"remove|unlink|rmtree|rmdir|write|rename|replace|copy|move|mkdir|chmod|chown|"
+    r"symlink|link|truncate|appendFile|\brm(?:Sync)?\b|\bcp(?:Sync)?\b"
+)
+
+
+def _awk_effects(program: str) -> tuple[bool, bool]:
+    """(writes, spawns) for an awk program, judged on its SYNTAX rather than on
+    any `>`/`|` character: string literals are blanked first, and only a `>`,
+    `>>` or `|` at parenthesis depth 0 inside a print/printf statement is an
+    output redirection (`print ($1 > 3)` is a comparison). `system(…)` and
+    `"cmd" | getline` spawn a program."""
+    sk = re.sub(r'"(?:[^"\\\n]|\\.)*"', '""', program)
+    spawns = bool(re.search(r"\bsystem\s*\(|\|\s*getline\b", sk))
+    writes = False
+    for m in re.finditer(r"\bprintf?\b", sk):
+        depth = 0
+        i = m.end()
+        while i < len(sk) and not (depth == 0 and sk[i] in ";}\n"):
+            ch = sk[i]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth = max(0, depth - 1)
+            elif depth == 0 and ch == ">":
+                writes = True
+            elif depth == 0 and ch == "|":
+                if sk[i + 1 : i + 2] == "|" or sk[i - 1 : i] == "|":
+                    i += 1  # `||` is a logical or
+                else:
+                    spawns = True
+            i += 1
+    return writes, spawns
+
 
 _ABS_LIT = re.compile(r"(?<![\w.:/~}$\\-])/[\w.@%+=,:~/-]+")
 _VAR_LIT = re.compile(r"(?<![\w$])(?:~|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?)/[\w.@%+=,:~/${}-]*")
@@ -871,8 +979,12 @@ class _Walk:
 
         word = _expand(argv[0].lstrip("`"), st)
         if any(c in word for c in "$`"):
-            if self.depth > 0 or any(re.match(r"^-\w*[ce]$", a) for a in argv[1:]):
-                raise _Undet(f"cannot tell which program `{argv[0]}` runs")
+            # An unknown PROGRAM (`$CMD`, the output of `eval "$(brew
+            # shellenv)"`): the same class as make/cargo/an arbitrary binary,
+            # which this hook cannot see into (residual). Its redirections were
+            # judged above and any `$( … )` that produced it was judged as a
+            # command of its own; its operands are not write targets of a known
+            # tool, so nothing more can be decided here.
             return None
         prog = os.path.basename(word)
         rest = argv[1:]
@@ -893,13 +1005,13 @@ class _Walk:
             for a in _operands(rest):
                 new.vars[a] = ""
             return new
-        if prog in ("read", "mapfile", "readarray", "getopts", "for", "select"):
+        if prog in ("for", "select"):
+            return self.loop_var(rest, st)
+        if prog in ("read", "mapfile", "readarray", "getopts"):
             new = st.copy()
             for a in _operands(rest):
                 if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", a):
                     new.vars[a] = UNKNOWN_VAL
-                if prog in ("for", "select"):
-                    break  # only the loop variable
             return new
         if prog == "case":
             return None
@@ -929,6 +1041,17 @@ class _Walk:
         if prog in TARGET_ALL:
             for a in _operands(rest):
                 self.an.check(a, st)
+            if prog in ("cp", "mv", "install", "ln", "gcp", "gmv", "ginstall", "gln"):
+                # `--target-directory=DIR` / `-tDIR` / `-vtDIR` name the
+                # destination inside a flag word (`-t DIR` already leaves DIR
+                # as an operand, judged above).
+                for a in rest:
+                    if a.startswith("--target-directory="):
+                        self.an.check(a.split("=", 1)[1], st)
+                    elif not a.startswith("--"):
+                        m = re.match(r"^-[A-Za-z]*?t(.+)$", a)
+                        if m:
+                            self.an.check(m.group(1), st)
         elif prog in TARGET_AFTER_FIRST:
             for a in _operands(rest)[1:]:
                 self.an.check(a, st)
@@ -975,6 +1098,33 @@ class _Walk:
         return None
 
     # -- state changers --------------------------------------------------------
+    def loop_var(self, rest: list[str], st: _State) -> _State:
+        """`for f in A B …`: $f takes each listed value in turn. Its stand-in
+        value is the longest literal prefix the values share, followed by a
+        glob, so `for f in <wt>/*.txt` resolves under the worktree while a list
+        mixing <wt> and <main> resolves to their common parent (refused). A
+        list item this process cannot know (`$(…)`, an unknown variable) — or
+        no `in` list at all (`"$@"`) — makes $f unknown."""
+        new = st.copy()
+        if not rest or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", rest[0]):
+            return new
+        name = rest[0]
+        if len(rest) < 3 or rest[1] != "in":
+            new.vars[name] = UNKNOWN_VAL
+            return new
+        items = [_expand(i, st) for i in rest[2:]]
+        if not items or any(c in i for i in items for c in "$`"):
+            new.vars[name] = UNKNOWN_VAL
+        elif len(items) == 1:
+            new.vars[name] = items[0]
+        else:
+            common = os.path.commonprefix(items)
+            if any(os.path.isabs(i) for i in items) and not common.startswith("/"):
+                new.vars[name] = UNKNOWN_VAL  # absolute and relative mixed
+            else:
+                new.vars[name] = common[: common.rfind("/") + 1] + "*"
+        return new
+
     def cd(self, rest: list[str], st: _State, nxt: str | None) -> _State:
         ops = [a for a in rest if a not in ("-P", "-L", "-e", "-@", "--")]
         if not ops:
@@ -1098,17 +1248,26 @@ class _Walk:
             self.an.analyze(code, st.copy(), self.depth + 1)
 
     def scan(self, lang: str, code: str, args: list[str], st: _State) -> None:
-        """Judge interpreter source that cannot be parsed as shell: if it
-        contains a write primitive, every literal path in it (and every operand
-        passed to it) is a write-target candidate. A write with no literal path
-        at all cannot be placed, so it is refused (3.)."""
-        writes = bool(_WRITE[lang].search(code))
-        if lang == "python" and re.search(r"\bopen\s*\(", code) and _PY_MODE.search(code):
-            writes = True
-        if not writes:
-            return
+        """Judge interpreter source that cannot be parsed as shell. If it
+        contains a file-write primitive, a process-spawn primitive, or any
+        mutation-capable word, every literal path in it (and every operand
+        passed to it) is a write-target candidate and is refused if it lands on
+        main. Only a FILE WRITE with no literal path at all is refused for that
+        reason alone (it cannot be placed, 3.); a spawn without one is an
+        unknown program (residual)."""
+        if lang == "awk":
+            writes, spawns = _awk_effects(code)
+            token = False
+        else:
+            writes = bool(_WRITE[lang].search(code))
+            if lang == "python" and re.search(r"\bopen\s*\(", code) and _PY_MODE.search(code):
+                writes = True
+            spawns = bool(_SPAWN[lang].search(code))
+            token = bool(_MUTATION_TOKEN.search(code))
+        if not (writes or spawns or token):
+            return  # nothing in it can change a file: a read
         cands = _payload_paths(code) + _operands(args)
-        if not cands:
+        if writes and not cands:
             raise _Undet(f"a {lang} payload writes files, but names no literal path")
         for c in cands:
             if _fragment_of_root(self.an.root, c):
@@ -1558,6 +1717,25 @@ def _first_line(command: str) -> str:
     return stripped[0][:120] if stripped else ""
 
 
+def _start_state(payload: dict) -> _State:
+    """The shell's cwd when the command starts: the hook payload's `cwd`
+    (the session's working directory), else this process's own cwd. Relative
+    paths and `$PWD` both resolve against it, so they always agree.
+
+    A `cwd` field that is present but unusable (not a string, not absolute, not
+    an existing directory) is NOT replaced by a guess: the cwd is unknown, so
+    every relative write is refused while absolute targets are still judged
+    normally (3.)."""
+    if "cwd" not in payload:
+        here = os.path.realpath(os.getcwd())
+        return _State(here, here, {})
+    cwd = payload.get("cwd")
+    if isinstance(cwd, str) and os.path.isabs(cwd) and os.path.isdir(cwd):
+        here = os.path.realpath(cwd)
+        return _State(here, here, {})
+    return _State(None, None, {})
+
+
 def decide(payload: dict) -> tuple[int, str]:
     if payload.get("tool_name") != "Bash":
         return 0, ""
@@ -1583,7 +1761,7 @@ def decide(payload: dict) -> tuple[int, str]:
     assert root is not None
 
     an = _Analyzer(root)
-    start = _State(root, os.getcwd(), {})
+    start = _start_state(payload)
     try:
         an.analyze(command, start, 0)
     except _Unparseable:
@@ -1639,19 +1817,30 @@ if __name__ == "__main__":
 #     unrelated literal path outside main is judged on that literal and
 #     allowed. Single-quoted shell text inside a payload (`'$S'`) is expanded
 #     as if the shell had expanded it.
+#   * an UNKNOWN PROGRAM is not judged: the text `eval "$(cmd)"` evaluates
+#     (only `cmd` itself is), `sh -c "$CMD"` / `$CMD …` with CMD not assigned
+#     in the command, and any program whose name is unresolvable. Its
+#     redirections and the command producing it are still judged.
+#   * an interpreter payload that spawns a program (os.system, subprocess,
+#     child_process, backticks, awk system()/`| "cmd"`) with no literal path
+#     in it: the spawned command is not parsed.
+#   * the mutation-word rule OVER-refuses a payload that both names a main
+#     path and merely mentions such a word (`open(<main>/x).read().replace(…)`,
+#     `sys.stdout.write(open(<main>/x).read())`); that is the accepted price of
+#     seeing through aliasing.
+#   * git subcommands (`git apply`, `git checkout -- <path>`, `git restore`,
+#     `git stash`, `git merge`, …) — deliberately, so merges on main stay
+#     possible; the commit-time gate is the backstop.
 #   * code this hook cannot read: a script FILE (`bash x.sh`, `python3 x.py`,
 #     `node x.js`, `source x`, `python3 -m mod`), code piped on stdin
 #     (`curl … | sh`, `cat x | python3`), `osascript -e`, `php -r`, and any
 #     other interpreter not listed in the module docstring.
-#   * a program whose NAME is unresolvable at the top level (`$PY -c …`, unless
-#     its arguments look like `-c`/`-e`) — inside a nested payload it is refused.
-#   * write primitives this hook does not list (Python's `Path.replace`, a
-#     write through a library call, `sed 's/a/b/w file'`, a here-string fed to
+#   * write primitives this hook does not list and that carry no mutation
+#     word (a write through an arbitrary library call, `sed 's/a/b/w file'`, a here-string fed to
 #     an unlisted interpreter), and `xargs` / `find -exec` targets that arrive
 #     ABSOLUTE on stdin (relative ones are judged against the cwd).
-#   * a tool that resolves its own paths (a Makefile, cargo, `git` subcommands
-#     — see the NOTE in _Walk.judge), and a function body or alias defined and
-#     called in the same command.
+#   * a tool that resolves its own paths (a Makefile, cargo), and a function
+#     body or alias defined and called in the same command.
 #   * shlex loses quoting, so a quoted `';'`, `'>'` or `'$(…)'` is read as shell
 #     syntax: that only ever OVER-refuses (an extra separator / redirect /
 #     payload), it cannot hide a write that is spelled literally.

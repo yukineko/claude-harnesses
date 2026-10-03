@@ -6,9 +6,10 @@ tree root ($CLAUDE_PROJECT_DIR) even when the session's cwd is a linked
 worktree, so an edit of the worktree's own file (`sed -i ... crates/x`) is
 refused as a main-tree mutation.
 
-The ignored test is RED while cc809395 is open (run with RUN_IGNORED=1). The
-control (a relative write while cwd IS the main tree) must stay refused, so a
-fix cannot pass by simply allowing every relative path.
+Fixed by ae4543d5 (the guard now resolves relative paths against the hook
+payload's `cwd`), so the former skips were removed. The control (a relative
+write while cwd IS the main tree) must stay refused, so a fix cannot pass by
+simply allowing every relative path.
 """
 
 from __future__ import annotations
@@ -22,9 +23,6 @@ import unittest
 
 SCRIPTS = os.path.dirname(os.path.abspath(__file__))
 GUARD = os.path.join(SCRIPTS, "guard-maintree-bash.py")
-IGNORED = unittest.skipUnless(
-    os.environ.get("RUN_IGNORED"), "cc809395 open: relative path judged against main"
-)
 
 
 def _run(cmd: str, cwd: str, main: str) -> tuple[int, str]:
@@ -56,14 +54,12 @@ class Backlog06baf54dCc809395(unittest.TestCase):
             cwd=self.main, check=True,
         )
 
-    @IGNORED
     def test_relative_sed_in_worktree_cwd_is_allowed(self):
         rc, out = _run(
             "sed -i '' 's/0.1.0/0.1.1/' crates/x/Cargo.toml", self.wt, self.main
         )
         self.assertEqual(rc, 0, out)
 
-    @IGNORED
     def test_relative_redirect_in_worktree_cwd_is_allowed(self):
         rc, out = _run("echo x > crates/x/new.txt", self.wt, self.main)
         self.assertEqual(rc, 0, out)

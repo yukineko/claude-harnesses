@@ -64,8 +64,10 @@ class Fixture:
     def close(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def run(self, command, cwd=None):
+    def run(self, command, cwd=None, payload_cwd=None):
         payload = {"tool_name": "Bash", "tool_input": {"command": command}}
+        if payload_cwd is not None:
+            payload["cwd"] = payload_cwd
         env = _env(CLAUDE_PROJECT_DIR=str(self.main), HOME=str(self.home))
         env.pop("PWD", None)
         r = subprocess.run(
@@ -184,9 +186,90 @@ class SameEffectIntoMainIsRefused(unittest.TestCase):
         cmd = "python3 -c \"import sys; open(sys.argv[1] + sys.argv[2], 'w')\""
         self.assertEqual(self.f.run(cmd)[0], 2)
 
-    def test_eval_of_unknown_text_refused(self):
-        self.assertEqual(self.f.run('eval "$CMD"')[0], 2)
-        self.assertEqual(self.f.run("sh -c \"$CMD\"")[0], 2)
+    def test_eval_of_unknown_program_is_allowed_but_its_producer_is_judged(self):
+        # The text `eval` runs is an unknown program (same class as make /
+        # cargo: a documented residual). The command that PRODUCES it is still
+        # judged, and so is any redirection around it.
+        for cmd in ('eval "$CMD"', 'sh -c "$CMD"', 'eval "$(brew shellenv)"',
+                    'eval "$(ssh-agent -s)"', 'eval "$(pyenv init -)"'):
+            with self.subTest(cmd=cmd):
+                rc, err = self.f.run(cmd)
+                self.assertEqual(rc, 0, f"{cmd}: {err[:300]}")
+        m = self.f.main
+        for cmd in (f'eval "$(rm {m}/f.txt)"', f'sh -c "$CMD > {m}/p.txt"',
+                    f'eval "$(brew shellenv)" > {m}/env.txt'):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self.f.run(cmd)[0], 2, cmd)
+
+    # --- start cwd comes from the hook payload ----------------------------
+    RELATIVE_WRITES = (
+        "echo x > out.txt", "touch a.rs", "echo x | tee out.log", "tar xzf a.tgz",
+        "find . -delete", "curl -o out.tgz https://example.invalid/x",
+        "python3 -c \"open('out.json','w')\"", "unzip a.zip", "wget https://example.invalid/x",
+    )
+
+    def test_relative_write_follows_payload_cwd(self):
+        for cmd in self.RELATIVE_WRITES:
+            with self.subTest(cmd=cmd, cwd="worktree"):
+                # process cwd is main; the session's cwd (payload) is the worktree
+                rc, err = self.f.run(cmd, cwd=self.f.main, payload_cwd=str(self.f.wt))
+                self.assertEqual(rc, 0, f"{cmd}: {err[:300]}")
+            with self.subTest(cmd=cmd, cwd="main"):
+                rc, _ = self.f.run(cmd, cwd=self.f.wt, payload_cwd=str(self.f.main))
+                self.assertEqual(rc, 2, cmd)
+
+    def test_pwd_and_relative_agree(self):
+        rc, err = self.f.run("echo x > $PWD/a; echo y > b", cwd=self.f.main,
+                             payload_cwd=str(self.f.wt))
+        self.assertEqual(rc, 0, err[:300])
+        rc, _ = self.f.run("echo x > $PWD/a", cwd=self.f.wt, payload_cwd=str(self.f.main))
+        self.assertEqual(rc, 2)
+
+    def test_unusable_payload_cwd_refuses_only_relative_writes(self):
+        for bad in ("relative/dir", "/no/such/dir", 7):
+            with self.subTest(cwd=bad):
+                self.assertEqual(
+                    self.f.run("echo x > out.txt", cwd=self.f.wt, payload_cwd=bad)[0], 2)
+                rc, err = self.f.run(f"echo x > {self.f.wt}/out.txt", cwd=self.f.wt,
+                                     payload_cwd=bad)
+                self.assertEqual(rc, 0, err[:300])
+                self.assertEqual(
+                    self.f.run(f"echo x > {self.f.main}/out.txt", cwd=self.f.wt,
+                               payload_cwd=bad)[0], 2)
+
+    # --- write detection is not over-broad --------------------------------
+    def test_spawn_and_awk_without_main_literal_allowed(self):
+        m = self.f.main
+        for cmd in (
+            "python3 -c \"import subprocess; subprocess.run(['make'])\"",
+            "python3 -c \"import os; print(os.popen('git status').read())\"",
+            "node -e \"require('child_process').execSync('cargo build')\"",
+            "perl -e 'print `date`'",
+            f"awk '{{ print ($1 > 3) }}' {m}/f.txt",
+            f"awk '{{ print $1 | \"sort\" }}' {m}/f.txt",
+            f"awk '{{ if ($1 > 0 || $2 > 0) print $1 }}' {m}/f.txt",
+            f"for f in {self.f.wt}/a {self.f.wt}/b; do rm \"$f\"; done",
+        ):
+            with self.subTest(cmd=cmd):
+                rc, err = self.f.run(cmd)
+                self.assertEqual(rc, 0, f"{cmd}: {err[:300]}")
+
+    def test_spawn_alias_and_loop_into_main_refused(self):
+        m, w = self.f.main, self.f.wt
+        for cmd in (
+            f"python3 -c \"import subprocess; subprocess.run(['rm', '{m}/f.txt'])\"",
+            f"python3 -c \"import os as o; o.unlink('{m}/f.txt')\"",
+            f"python3 -c \"getattr(__import__('shutil'), 'rmtree')('{m}')\"",
+            f"node -e \"const f = require('fs').writeFileSync; f('{m}/p.txt', 'x')\"",
+            f"awk '{{ print | \"cat > {m}/p.txt\" }}'",
+            f"for f in {w}/a {m}/b; do rm \"$f\"; done",
+            f"for f in {m}/*.txt; do rm \"$f\"; done",
+            f"for f in $(ls {w}); do rm \"$f\"; done",
+            f"cp -vt{m} /etc/hosts",
+            f"ln --target-directory={m} -s /etc/hosts",
+        ):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self.f.run(cmd)[0], 2, cmd)
 
     # --- variables assigned earlier in the same command -------------------
     def test_same_command_variable_outside_main_allowed(self):

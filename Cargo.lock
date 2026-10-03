@@ -84,7 +84,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "autoflow"
-version = "0.1.28"
+version = "0.1.29"
 dependencies = [
  "clap",
  "harness-core",
@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "backlog"
-version = "0.3.29"
+version = "0.3.32"
 dependencies = [
  "anyhow",
  "clap",
@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.205"
+version = "0.7.209"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -366,7 +366,7 @@ dependencies = [
 
 [[package]]
 name = "ctxrot"
-version = "0.5.31"
+version = "0.5.33"
 dependencies = [
  "anyhow",
  "chrono",
@@ -396,7 +396,7 @@ dependencies = [
 
 [[package]]
 name = "daily"
-version = "0.3.14"
+version = "0.3.17"
 dependencies = [
  "blastguard",
  "chrono",
@@ -546,7 +546,7 @@ checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
 name = "fugu-router"
-version = "0.1.39"
+version = "0.1.40"
 dependencies = [
  "anyhow",
  "clap",
@@ -664,7 +664,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.43"
+version = "0.2.44"
 dependencies = [
  "anyhow",
  "chrono",
@@ -683,7 +683,7 @@ dependencies = [
 
 [[package]]
 name = "harness-status"
-version = "0.1.15"
+version = "0.1.18"
 dependencies = [
  "anyhow",
  "clap",
@@ -874,7 +874,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "overwatch"
-version = "0.2.56"
+version = "0.2.58"
 dependencies = [
  "anyhow",
  "clap",
@@ -1297,7 +1297,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "specguard"
-version = "0.2.84"
+version = "0.2.85"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -1321,7 +1321,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "stuckguard"
-version = "0.1.38"
+version = "0.1.40"
 dependencies = [
  "anyhow",
  "chrono",

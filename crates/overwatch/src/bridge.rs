@@ -28,9 +28,15 @@
 /// with their kind tag, so the backlog stays filterable (`backlog list --tag
 /// rollback`).
 ///
-/// **Fail-soft:** an absent `backlog` binary or a non-zero `backlog add` are
-/// each warned and skipped — the drain never errors out mid-way, so one bad
-/// item cannot strand the rest.
+/// **Fail-soft:** a `backlog` binary observed to be absent, or a non-zero
+/// `backlog add`, are each warned and skipped — the drain never errors out
+/// mid-way, so one bad item cannot strand the rest. Nothing skipped is marked
+/// bridged, so a later run forwards it.
+///
+/// **A `backlog` binary whose presence could not be determined** (the plugin
+/// cache exists but is unreadable, …; see `harness_core::plugin_bin`) is NOT
+/// the absent case: it bridges nothing, is named in `undetermined_sources`, and
+/// makes the command exit 3, exactly like an unreadable source ledger below.
 ///
 /// **A source that could not be READ is not fail-soft into silence (t3).** Every
 /// ledger here is read with its tri-state `scan_*` reader, and an `Undetermined`
@@ -49,26 +55,25 @@ use crate::violation::{self, RecurrencePolicy};
 use anyhow::Result;
 use harness_core::verdict::Determination;
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-/// Resolve the `backlog` binary: an explicit `OVERWATCH_BACKLOG_BIN` override
-/// (used to wire a specific binary, and by tests) wins; otherwise the first
-/// `backlog` on `PATH`. Returns `None` when neither resolves (fail-soft: the
-/// caller then skips the bridge without erroring).
-fn resolve_backlog_bin() -> Option<String> {
+/// Resolve the `backlog` binary: an explicit, non-empty `OVERWATCH_BACKLOG_BIN`
+/// override (used to wire a specific binary, and by tests) wins; otherwise
+/// `harness_core::plugin_bin::resolve("backlog")` (plugin cache first, numeric
+/// version order, `$PATH` second — a hook-spawned overwatch does not inherit
+/// the plugin `bin/` dirs on `$PATH`, backlog abba6f0d).
+///
+/// Three answers, forwarded unchanged from the resolver: `Known(Some(path))`,
+/// `Known(None)` = observed not installed (the caller skips the bridge,
+/// fail-soft), `Undetermined` = could not tell (the caller bridges nothing and
+/// reports the run undetermined — never the absent case).
+fn resolve_backlog_bin() -> Determination<Option<PathBuf>> {
     if let Ok(p) = std::env::var("OVERWATCH_BACKLOG_BIN") {
         if !p.is_empty() {
-            return Some(p);
+            return Determination::Known(Some(PathBuf::from(p)));
         }
     }
-    let path = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path) {
-        let cand = dir.join("backlog");
-        if cand.is_file() {
-            return Some(cand.to_string_lossy().into_owned());
-        }
-    }
-    None
+    harness_core::plugin_bin::resolve("backlog")
 }
 
 /// Map a reviewer severity to a backlog priority tier: `high` → p0, `medium`/
@@ -442,12 +447,34 @@ fn run_in(cwd: &Path) -> Result<SourceHealth> {
         SourceHealth::SomeUndetermined
     };
 
-    // 3. Backlog binary (fail-soft when absent).
+    // 3. Backlog binary (fail-soft when observed absent; undetermined when we
+    // could not tell — that is surfaced and makes the run exit 3).
     let backlog = match resolve_backlog_bin() {
-        Some(b) => b,
-        None => {
+        Determination::Known(Some(b)) => b,
+        Determination::Undetermined(why) => {
             eprintln!(
-                "overwatch: WARNING backlog binary not found (OVERWATCH_BACKLOG_BIN unset, none on PATH) — skipping bridge, continuing"
+                "overwatch --to-backlog: WARNING — could not determine whether the backlog binary \
+                 is installed ({why}); NOTHING is bridged this run. This is NOT a report that \
+                 there was nothing to bridge; re-run once the plugin cache is readable."
+            );
+            undetermined.push("backlog binary");
+            health = SourceHealth::SomeUndetermined;
+            println!(
+                "{}",
+                serde_json::json!({
+                    "bridged": 0,
+                    "considered": deduped.len(),
+                    "entries_bridged": 0,
+                    "entries_considered": planned.len(),
+                    "skipped": "backlog-undetermined",
+                    "undetermined_sources": undetermined,
+                })
+            );
+            return Ok(health);
+        }
+        Determination::Known(None) => {
+            eprintln!(
+                "overwatch: WARNING backlog binary not found (OVERWATCH_BACKLOG_BIN unset, no plugin-cache copy, none on PATH) — skipping bridge, continuing"
             );
             println!(
                 "{}",
@@ -661,7 +688,10 @@ mod tests {
     #[test]
     fn backlog_bin_override_env_wins() {
         std::env::set_var("OVERWATCH_BACKLOG_BIN", "/some/fake/backlog");
-        assert_eq!(resolve_backlog_bin().as_deref(), Some("/some/fake/backlog"));
+        assert_eq!(
+            resolve_backlog_bin(),
+            Determination::Known(Some(PathBuf::from("/some/fake/backlog")))
+        );
         std::env::remove_var("OVERWATCH_BACKLOG_BIN");
     }
 

@@ -22,8 +22,10 @@
 //!
 //! # Resolution order: cache first, `$PATH` second
 //!
-//! Deliberately the reverse of the ad-hoc resolver this generalises
-//! (`autoflow::backlog::find_backlog_binary`, which probes `$PATH` first).
+//! Deliberately the reverse of the ad-hoc resolvers this replaced: autoflow's
+//! `find_backlog_binary` used to probe `$PATH` first (with a lexical version
+//! sort), as did ctxrot's and stuckguard's overwatch lookups. Since `43780aa1`
+//! all three delegate to [`resolve`]; none probes `$PATH` first any more.
 //! `scripts/rollout-plugins.sh` is the only sanctioned distributor of these
 //! binaries (CLAUDE.md forbids hand-`cp`), so the plugin cache is the copy whose
 //! version is *known*; anything on `$PATH` is of unknown provenance and was
@@ -37,8 +39,9 @@
 //! - `Known(None)` — the plugin is genuinely **not installed** here: no cache
 //!   directory and nothing on `$PATH`. An observation.
 //! - `Undetermined(reason)` — we did not get to look: the cache directory exists
-//!   but could not be enumerated, an entry could not be read, or a candidate's
-//!   existence could not be tested. Collapsing this into `Known(None)` is the
+//!   but could not be enumerated, an entry could not be read or stat'ed, a
+//!   candidate's existence could not be tested, or (no cache copy) a `$PATH`
+//!   entry of that name exists but could not be spawned. Collapsing this into `Known(None)` is the
 //!   fail-open this module exists to refuse (CLAUDE.md §3) — "I could not tell
 //!   whether backlog is installed" is not "backlog is not installed", and one
 //!   level up it is not "the backlog is empty".
@@ -82,6 +85,30 @@ fn pick_highest(mut names: Vec<String>) -> Option<String> {
 ///
 /// `root` is a parameter so the enumeration — including both of its failure
 /// arms — is testable without touching the real `$HOME`.
+///
+/// # How each entry of `<root>/<name>/` is classified
+///
+/// The plugin cache dir does not hold only version dirs: `rollout-plugins.sh`
+/// also writes a plain file `.version-history.jsonl` there. Each entry is
+/// classified by `std::fs::metadata` on its path — which **follows symlinks**,
+/// so a symlink to a version dir is judged as the dir it points at — before
+/// any `bin/<name>` probe:
+///
+/// - **directory** (or a symlink to one) → a version-dir candidate; probe
+///   `<entry>/bin/<name>` with `try_exists`. `Ok(true)` keeps it, `Ok(false)`
+///   drops it (observed: no binary there), `Err` (e.g. `EACCES` inside the
+///   version dir) makes the whole lookup `Undetermined`.
+/// - **not a directory** (a regular file such as `.version-history.jsonl`, a
+///   symlink to a file, …) → observed to be unable to hold `bin/<name>`, so it
+///   is not a candidate and is skipped. No probe is made.
+/// - **metadata `NotFound`** (a dangling symlink, or an entry removed between
+///   `read_dir` and `metadata`) → there is nothing there to hold a binary; not
+///   a candidate, skipped.
+/// - **any other metadata error** (`EACCES`, IO error, …) → we could not tell
+///   what the entry is ⇒ `Undetermined`.
+///
+/// The skip decisions come only from that metadata classification; an error
+/// from the `bin/<name>` probe itself is never reinterpreted as "absent".
 pub fn cache_lookup_in(root: &Path, name: &str) -> Determination<Option<PathBuf>> {
     let base = root.join(name);
 
@@ -110,7 +137,24 @@ pub fn cache_lookup_in(root: &Path, name: &str) -> Determination<Option<PathBuf>
                 ))
             }
         };
-        let candidate = entry.path().join("bin").join(name);
+        let entry_path = entry.path();
+        // Follows symlinks on purpose (NOT `entry.file_type()`), so a symlinked
+        // version dir is still a candidate. See the doc comment's table.
+        match std::fs::metadata(&entry_path) {
+            Ok(meta) if meta.is_dir() => {}
+            // A plain file (e.g. rollout's `.version-history.jsonl`) or a
+            // symlink to one: cannot contain `bin/<name>`. Observation, skip.
+            Ok(_) => continue,
+            // Dangling symlink / vanished entry: nothing there. Observation, skip.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "could not stat {}: {e}",
+                    entry_path.display()
+                ))
+            }
+        }
+        let candidate = entry_path.join("bin").join(name);
         // `exists()` folds "not there" and "cannot tell" into one `false`;
         // `try_exists()` keeps them apart.
         match candidate.try_exists() {
@@ -136,16 +180,57 @@ pub fn cache_lookup_in(root: &Path, name: &str) -> Determination<Option<PathBuf>
     Determination::Known(pick_highest(versions).map(|v| base.join(v).join("bin").join(name)))
 }
 
+/// Upper bound on how long [`on_path`] waits for `<name> --version` to exit.
+///
+/// [`resolve`] is called from hooks and inside lock-held critical sections, so
+/// the probe must never block for as long as the child chooses to run.
+const PATH_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// Is `name` spawnable through the ambient `$PATH`?
 ///
 /// Spawn success is the whole test; the child's exit status is irrelevant (a
-/// plugin whose `--version` exits non-zero is still present). `Err` here is
-/// `ENOENT` in every practical case, i.e. "not on `$PATH`".
-fn on_path(name: &str) -> bool {
-    std::process::Command::new(name)
+/// plugin whose `--version` exits non-zero is still present). The child gets
+/// null stdin/stdout/stderr and is waited on for at most `timeout`:
+///
+/// - spawn `Ok` → `Known(true)`, whether the child exits in time or not. On
+///   timeout (or a `try_wait` error) the child is killed and then reaped with
+///   `wait`, so no zombie is left behind. A slow `--version` does not make an
+///   existing binary absent.
+/// - spawn `Err(NotFound)` → `Known(false)`: nothing named `name` on `$PATH`.
+/// - any other spawn error (e.g. `PermissionDenied` for a non-executable file
+///   of that name on `$PATH`) → `Undetermined`: something is there but we could
+///   not run it, which is neither "installed" nor an observed absence.
+fn on_path(name: &str, timeout: std::time::Duration) -> Determination<bool> {
+    use std::process::{Command, Stdio};
+    let mut child = match Command::new(name)
         .arg("--version")
-        .output()
-        .is_ok()
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Determination::Known(false),
+        Err(e) => {
+            return Determination::undetermined(format!("could not spawn {name} from $PATH: {e}"))
+        }
+    };
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return Determination::Known(true),
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            // Timed out, or try_wait failed: the spawn already proved presence.
+            // Kill and reap so the probe never outlives this call.
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Determination::Known(true);
+            }
+        }
+    }
 }
 
 /// Resolve a harness plugin's executable: plugin cache first, `$PATH` second.
@@ -156,13 +241,11 @@ pub fn resolve(name: &str) -> Determination<Option<PathBuf>> {
     match cache_lookup_in(&cache_root(), name) {
         Determination::Known(Some(p)) => Determination::Known(Some(p)),
         // No cache copy — a standalone install on `$PATH` is still a real find.
-        Determination::Known(None) => {
-            if on_path(name) {
-                Determination::Known(Some(PathBuf::from(name)))
-            } else {
-                Determination::Known(None)
-            }
-        }
+        Determination::Known(None) => match on_path(name, PATH_PROBE_TIMEOUT) {
+            Determination::Known(true) => Determination::Known(Some(PathBuf::from(name))),
+            Determination::Known(false) => Determination::Known(None),
+            Determination::Undetermined(r) => Determination::Undetermined(r),
+        },
         // We could not look in the cache. A `$PATH` hit here would be a binary of
         // unknown provenance chosen *because* the known-good copy was unreadable
         // — exactly the stale-shadow shape this module refuses. Stay undetermined.
@@ -257,6 +340,76 @@ mod tests {
             }
             other => panic!("an unreadable cache dir must not read as absent: {other:?}"),
         }
+    }
+
+    /// Write an executable shell script at `<dir>/<file>` and return its path.
+    #[cfg(unix)]
+    fn script(dir: &Path, file: &str, body: &str, mode: u32) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let p = dir.join(file);
+        std::fs::write(&p, body).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode)).unwrap();
+        p
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn on_path_is_bounded_and_counts_a_hung_binary_as_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = script(tmp.path(), "hang", "#!/bin/sh\nsleep 30\n", 0o755);
+        let start = std::time::Instant::now();
+        let got = on_path(p.to_str().unwrap(), std::time::Duration::from_millis(200));
+        let took = start.elapsed();
+        assert!(
+            took < std::time::Duration::from_secs(5),
+            "probe must be bounded, took {took:?}"
+        );
+        assert!(matches!(got, Determination::Known(true)), "got {got:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn on_path_present_even_if_version_exits_nonzero() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = script(tmp.path(), "bad", "#!/bin/sh\nexit 7\n", 0o755);
+        let got = on_path(p.to_str().unwrap(), PATH_PROBE_TIMEOUT);
+        assert!(matches!(got, Determination::Known(true)), "got {got:?}");
+    }
+
+    #[test]
+    fn on_path_missing_binary_is_known_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("no-such-binary");
+        let got = on_path(p.to_str().unwrap(), PATH_PROBE_TIMEOUT);
+        assert!(matches!(got, Determination::Known(false)), "got {got:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn on_path_unspawnable_existing_file_is_undetermined() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = script(tmp.path(), "noexec", "#!/bin/sh\n", 0o644);
+        let got = on_path(p.to_str().unwrap(), PATH_PROBE_TIMEOUT);
+        assert!(
+            matches!(got, Determination::Undetermined(_)),
+            "a non-executable file is neither installed nor absent: {got:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_symlink_entry_is_skipped_not_undetermined() {
+        let tmp = tempfile::tempdir().unwrap();
+        plant(tmp.path(), "backlog", &["0.3.1"]);
+        std::os::unix::fs::symlink(
+            tmp.path().join("gone"),
+            tmp.path().join("backlog").join("0.9.9"),
+        )
+        .unwrap();
+        assert_eq!(
+            expect_known(cache_lookup_in(tmp.path(), "backlog")),
+            Some(tmp.path().join("backlog/0.3.1/bin/backlog"))
+        );
     }
 
     #[test]

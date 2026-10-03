@@ -589,13 +589,24 @@ pub fn observe_staged(repo: &Path) -> Determination<Vec<String>> {
 /// output that does not parse — makes the whole observation `Undetermined`.
 /// A missing `overwatch` is not "nobody is live" (§3).
 ///
+/// Both binaries are located with `harness_core::plugin_bin::resolve` (plugin
+/// cache first, `$PATH` second; backlog abba6f0d). An observed absence
+/// (`Known(None)`) is mapped to `Undetermined` too, keeping the pre-migration
+/// semantics where a bare-name spawn failing with not-found was undetermined:
+/// with no liveness source there is no observation, so the guard blocks.
+///
 /// `self_session` of `None` means this process cannot name itself, so no
 /// reported session can be attributed to it and every live session counts as a
 /// peer. That is the fail-closed direction.
 pub fn observe_peers(repo: &Path, self_session: Option<&str>) -> Determination<Vec<PeerSession>> {
     let mut peers = Vec::new();
 
-    let overwatch_json = match run_tool(repo, "overwatch", &["status", "--json"]).require() {
+    let overwatch =
+        match located(harness_core::plugin_bin::resolve("overwatch"), "overwatch").require() {
+            Required::Determined(p) => p,
+            Required::Blocked(r) => return Determination::Undetermined(r),
+        };
+    let overwatch_json = match run_located(repo, &overwatch, &["status", "--json"]).require() {
         Required::Determined(s) => s,
         Required::Blocked(r) => return Determination::Undetermined(r),
     };
@@ -605,8 +616,12 @@ pub fn observe_peers(repo: &Path, self_session: Option<&str>) -> Determination<V
     }
 
     let repo_arg = repo.display().to_string();
+    let backlog = match located(harness_core::plugin_bin::resolve("backlog"), "backlog").require() {
+        Required::Determined(p) => p,
+        Required::Blocked(r) => return Determination::Undetermined(r),
+    };
     let backlog_json =
-        match run_tool(repo, "backlog", &["lock", "status", "--project", &repo_arg]).require() {
+        match run_located(repo, &backlog, &["lock", "status", "--project", &repo_arg]).require() {
             Required::Determined(s) => s,
             Required::Blocked(r) => return Determination::Undetermined(r),
         };
@@ -767,7 +782,32 @@ pub fn parse_backlog_lock(
     }))
 }
 
-/// Run a tool and take its stdout only when it exited 0.
+/// Narrow a `plugin_bin::resolve` answer to "a program to spawn". An observed
+/// absence (`Known(None)`) is `Undetermined` here, not a skip: a liveness source
+/// that is not installed observes nothing, and "nothing observed" must not read
+/// as "nobody is live" (§3).
+fn located(resolved: Determination<Option<PathBuf>>, name: &str) -> Determination<PathBuf> {
+    match resolved {
+        Determination::Known(Some(p)) => Determination::Known(p),
+        Determination::Known(None) => Determination::undetermined(format!(
+            "{name} is not installed (no plugin-cache copy, not on $PATH); liveness is unknown"
+        )),
+        Determination::Undetermined(r) => Determination::Undetermined(r),
+    }
+}
+
+/// Run an already-resolved program and take its stdout only when it exited 0.
+fn run_located(repo: &Path, program: &Path, args: &[&str]) -> Determination<String> {
+    let mut cmd = Command::new(program);
+    cmd.args(args).current_dir(repo);
+    match boundary::run(&mut cmd).require() {
+        Required::Determined(out) => out.stdout_on_success(),
+        Required::Blocked(r) => Determination::Undetermined(r),
+    }
+}
+
+/// Run a tool and take its stdout only when it exited 0. Only for non-plugin
+/// tools (`git`); harness plugins go through [`located`] + [`run_located`].
 fn run_tool(repo: &Path, program: &str, args: &[&str]) -> Determination<String> {
     let mut cmd = Command::new(program);
     cmd.args(args).current_dir(repo);

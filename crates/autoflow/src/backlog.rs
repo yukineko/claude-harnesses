@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use harness_core::config::home;
 use harness_core::projkey::repo_root;
 use harness_core::verdict::Determination;
 
@@ -14,73 +13,24 @@ use harness_core::verdict::Determination;
 // way of failing to ask) is preserved where it is still load-bearing:
 // `condukt::find_pending` and `find_backlog_binary` below.
 
-/// Locate the `backlog` binary: PATH first, then the plugin cache.
+/// Locate the `backlog` binary via [`harness_core::plugin_bin::resolve`]:
+/// plugin cache first (newest version by numeric order), `$PATH` second.
+///
+/// This used to be an ad-hoc resolver that probed `$PATH` first — so a stale
+/// standalone copy on the login `$PATH` shadowed the rolled-out one — and then
+/// picked a cache version with a lexical `sort()` (`0.1.9` above `0.1.12`).
+/// Both are what `plugin_bin` exists to refuse (backlog abba6f0d).
 ///
 /// `Known(None)` is the *observation* that backlog is not installed (no plugin
-/// cache directory at all). An enumerable-but-failing cache directory — the
-/// read denied, an entry unreadable, a candidate whose existence cannot be
-/// tested — is `Undetermined`: collapsing it into the same `None` is what let a
-/// merely unreadable directory read as "backlog is not installed" and start an
-/// unattended auto-loop next to a live driver (audit §4.5, the one permissive-A
-/// path).
+/// cache directory and nothing on `$PATH`). An enumerable-but-failing cache
+/// directory — the read denied, an entry unreadable, a candidate whose
+/// existence cannot be tested — is `Undetermined`, and `resolve` does NOT fall
+/// back to `$PATH` in that case: collapsing it into `None` (or into a `$PATH`
+/// copy of unknown provenance) is what let a merely unreadable directory read
+/// as "backlog is not installed" and start an unattended auto-loop next to a
+/// live driver (audit §4.5, the one permissive-A path).
 pub(crate) fn find_backlog_binary() -> Determination<Option<PathBuf>> {
-    if std::process::Command::new("backlog")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        return Determination::Known(Some(PathBuf::from("backlog")));
-    }
-
-    // ~/.claude/plugins/cache/yukineko/backlog/<version>/bin/backlog
-    let base = home()
-        .join(".claude")
-        .join("plugins")
-        .join("cache")
-        .join("yukineko")
-        .join("backlog");
-
-    let dir = match std::fs::read_dir(&base) {
-        Ok(d) => d,
-        // No cache dir ⇒ backlog was never installed here. An observation.
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Determination::Known(None),
-        // Anything else (permission denied, IO error) ⇒ we did not get to look.
-        Err(e) => {
-            return Determination::undetermined(format!(
-                "could not enumerate {}: {e}",
-                base.display()
-            ))
-        }
-    };
-
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    for entry in dir {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(e) => {
-                return Determination::undetermined(format!(
-                    "could not read an entry of {}: {e}",
-                    base.display()
-                ))
-            }
-        };
-        let candidate = entry.path().join("bin").join("backlog");
-        // `exists()` folds "not there" and "cannot tell" into one `false`;
-        // `try_exists()` keeps them apart.
-        match candidate.try_exists() {
-            Ok(true) => candidates.push(candidate),
-            Ok(false) => {}
-            Err(e) => {
-                return Determination::undetermined(format!(
-                    "could not test {}: {e}",
-                    candidate.display()
-                ))
-            }
-        }
-    }
-
-    candidates.sort();
-    Determination::Known(candidates.pop())
+    harness_core::plugin_bin::resolve("backlog")
 }
 
 /// The repo root as a stable, *unique* project filter for `backlog list`.

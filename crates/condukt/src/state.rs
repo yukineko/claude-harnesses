@@ -2247,23 +2247,58 @@ fn parse_agent_cost(json: &str, agent_id: &str) -> Option<f64> {
         .and_then(|v| v.as_f64())
 }
 
-/// Soft dependency: resolve the real USD cost of a Task-tool subagent by exact
-/// `agentId` match against `gauge subagents --json`, replacing the fragile
-/// description-string matching the SKILL.md prose used previously. Mirrors the
-/// `fugu_fingerprint` / `record_runs` soft-probe precedent in `main.rs`: any
-/// failure (gauge absent, non-zero exit, unparseable/empty stdout, no matching
-/// id) falls through to `None` so the caller can fall back to the manually
-/// recorded `cost_usd` — never a hard error.
-pub fn resolve_agent_cost(agent_id: &str) -> Option<f64> {
-    let out = std::process::Command::new("gauge")
+/// Run `gauge subagents --json` and return its stdout, in three answers.
+///
+/// `gauge` is located with `harness_core::plugin_bin::resolve` (plugin cache
+/// first, `$PATH` second), not by bare name: a hook-spawned process does not
+/// inherit the plugin `bin/` dirs on `$PATH` (backlog abba6f0d).
+///
+/// - `Known(Some(stdout))` — gauge ran and exited 0.
+/// - `Known(None)` — gauge is observed **not installed** (`resolve` →
+///   `Known(None)`, or the resolved program is `NotFound` at spawn). "No data".
+/// - `Undetermined` — we could not tell whether gauge is installed (`resolve` →
+///   `Undetermined`), or it is there but could not be run (any other spawn
+///   error) or exited non-zero. Not "no data": a present-but-broken source.
+fn gauge_subagents_json() -> Determination<Option<String>> {
+    let program = match harness_core::plugin_bin::resolve("gauge") {
+        Determination::Known(Some(p)) => p,
+        Determination::Known(None) => return Determination::Known(None),
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
+    let out = match std::process::Command::new(&program)
         .args(["subagents", "--json"])
         .output()
-        .ok()?; // spawn failed (not on PATH) → soft-skip
+    {
+        Ok(out) => out,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Determination::Known(None),
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "could not run `{} subagents --json`: {e}",
+                program.display()
+            ))
+        }
+    };
     if !out.status.success() {
-        return None;
+        return Determination::undetermined(format!(
+            "`{} subagents --json` exited {}",
+            program.display(),
+            out.status
+        ));
     }
-    let raw = String::from_utf8_lossy(&out.stdout);
-    parse_agent_cost(&raw, agent_id)
+    Determination::Known(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
+}
+
+/// Resolve the real USD cost of a Task-tool subagent by exact `agentId` match
+/// against `gauge subagents --json`, replacing the fragile description-string
+/// matching the SKILL.md prose used previously.
+///
+/// `Known(Some(cost))` = matched. `Known(None)` = "no data": gauge is not
+/// installed, or its output is unparseable/empty or has no matching id — the
+/// caller may fall back to the manually recorded `cost_usd`. `Undetermined` =
+/// gauge could not be located or run (see [`gauge_subagents_json`]); the caller
+/// must NOT substitute the manual fallback as if gauge had nothing to say.
+pub fn resolve_agent_cost(agent_id: &str) -> Determination<Option<f64>> {
+    gauge_subagents_json().map(|raw| raw.and_then(|raw| parse_agent_cost(&raw, agent_id)))
 }
 
 /// Pure core of [`resolve_agent_tokens`]: given the raw `gauge subagents --json`
@@ -2282,21 +2317,15 @@ fn parse_agent_tokens(json: &str, agent_id: &str) -> Option<(u64, u64)> {
     Some((input, output))
 }
 
-/// Soft dependency: resolve the real token usage of a Task-tool subagent by
-/// exact `agentId` match against `gauge subagents --json`, mirroring
-/// `resolve_agent_cost`. Any failure (gauge absent, non-zero exit,
-/// unparseable/empty stdout, no matching id, or an older `gauge` without the
-/// token fields) falls through to `None` — never a hard error.
-pub fn resolve_agent_tokens(agent_id: &str) -> Option<(u64, u64)> {
-    let out = std::process::Command::new("gauge")
-        .args(["subagents", "--json"])
-        .output()
-        .ok()?; // spawn failed (not on PATH) → soft-skip
-    if !out.status.success() {
-        return None;
-    }
-    let raw = String::from_utf8_lossy(&out.stdout);
-    parse_agent_tokens(&raw, agent_id)
+/// Resolve the real token usage of a Task-tool subagent by exact `agentId`
+/// match against `gauge subagents --json`, mirroring [`resolve_agent_cost`].
+///
+/// `Known(None)` = "no data" (gauge not installed, unparseable/empty stdout, no
+/// matching id, or an older `gauge` without the token fields). `Undetermined` =
+/// gauge could not be located or run, kept distinct so the caller can surface
+/// it instead of recording "no tokens".
+pub fn resolve_agent_tokens(agent_id: &str) -> Determination<Option<(u64, u64)>> {
+    gauge_subagents_json().map(|raw| raw.and_then(|raw| parse_agent_tokens(&raw, agent_id)))
 }
 
 /// Run the project's test suite (from the repo root) and propagate its result.

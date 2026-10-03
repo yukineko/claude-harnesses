@@ -75,6 +75,10 @@ impl Fx {
         std::fs::write(repo.join("a.txt"), "a\n").unwrap();
         git(&repo, &["add", "."]);
         git(&repo, &["commit", "-q", "-m", "init"]);
+        // `worktree merge` refuses a branch with no recorded creation base
+        // (backlog 51595c41); record the one `worktree create` would have.
+        let base_sha = git(&repo, &["rev-parse", "HEAD"]);
+        git(&repo, &["config", "branch.feat.conduktBase", &base_sha]);
         git(&repo, &["checkout", "-q", "-b", "feat"]);
         std::fs::write(repo.join("b.txt"), "b\n").unwrap();
         git(&repo, &["add", "."]);

@@ -244,7 +244,17 @@ class DenyNoVerifyWrapped(unittest.TestCase):
 _spec = importlib.util.spec_from_file_location(
     "tgb", _HERE / "test_gate_bypass.py")
 tgb = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(tgb)
+# Compiled from the SOURCE TEXT, deliberately not via the spec loader's
+# exec_module: SourceFileLoader reuses a __pycache__ .pyc validated only by
+# (source mtime at 1 s granularity, size), so a same-second size-preserving
+# edit (e.g. a reordering mutant) would run stale bytecode -- a false GREEN /
+# false mutation SURVIVOR, never a false red. Backlog 05726f9f; do not
+# "simplify" this back. get_source() reads the .py, never the cache;
+# dont_inherit keeps this file's __future__ flags off the subject.
+exec(  # noqa: S102
+    compile(_spec.loader.get_source(_spec.name), _spec.origin, "exec", dont_inherit=True),
+    tgb.__dict__,
+)
 
 
 class LedgerClearedOnlyByInspection(tgb.GateTestCase):

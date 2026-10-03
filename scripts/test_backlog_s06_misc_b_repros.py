@@ -75,7 +75,7 @@ def _bash(cmd):
 
 
 class Backlog05726f9f(unittest.TestCase):
-    @open_defect("05726f9f")
+    # Fixed: every scripts/test_*.py now compiles its subject from source text.
     def test_no_script_test_loads_its_subject_through_stale_pyc_prone_exec_module(self):
         offenders = []
         for p in sorted(HERE.glob("test_*.py")):

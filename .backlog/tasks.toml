@@ -12003,6 +12003,358 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/1282"
 rev = 0
 
 [[task]]
+id = "22e03c5c"
+title = "crates/overwatch/src/observed_close.rs: gate behaviour has no docs/specs doc (acked to unblock push 2026-10-04)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Acked in .specguard/spec-doc-acks.toml (commit 98312703) to unblock push; fix = write the docs/specs section and move the entry to spec-docs.toml."
+created_at = 1791048186
+updated_at = 1791048186
+weight = 0.0
+issue_number = 1283
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1283"
+rev = 0
+
+[[task]]
+id = "a24ffa82"
+title = "crates/overwatch/src/review_ruling.rs: gate behaviour has no docs/specs doc (acked to unblock push 2026-10-04)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Acked in .specguard/spec-doc-acks.toml (commit 98312703) to unblock push; fix = write the docs/specs section and move the entry to spec-docs.toml."
+created_at = 1791048189
+updated_at = 1791048189
+weight = 0.0
+issue_number = 1284
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1284"
+rev = 0
+
+[[task]]
+id = "55965e08"
+title = "crates/specguard/src/observed.rs: gate behaviour has no docs/specs doc (acked to unblock push 2026-10-04)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Acked in .specguard/spec-doc-acks.toml (commit 98312703) to unblock push; fix = write the docs/specs section and move the entry to spec-docs.toml."
+created_at = 1791048191
+updated_at = 1791048191
+weight = 0.0
+issue_number = 1285
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1285"
+rev = 0
+
+[[task]]
+id = "f58cb6fa"
+title = "crates/specguard/src/reconcile.rs: gate behaviour has no docs/specs doc (acked to unblock push 2026-10-04)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Acked in .specguard/spec-doc-acks.toml (commit 98312703) to unblock push; fix = write the docs/specs section and move the entry to spec-docs.toml."
+created_at = 1791048193
+updated_at = 1791048193
+weight = 0.0
+issue_number = 1286
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1286"
+rev = 0
+
+[[task]]
+id = "c1e9aa3f"
+title = "crates/stuckguard/src/fault_injection_tests.rs: gate behaviour has no docs/specs doc (acked to unblock push 2026-10-04)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Acked in .specguard/spec-doc-acks.toml (commit 98312703) to unblock push; fix = write the docs/specs section and move the entry to spec-docs.toml."
+created_at = 1791048195
+updated_at = 1791048195
+weight = 0.0
+issue_number = 1287
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1287"
+rev = 0
+
+[[task]]
+id = "849cd729"
+title = "セッション異常終了への耐性: 生死不明という状態そのものを減らす (worktree と condukt と main の照合) + 再開 + fail-closed GC"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Issue summary: user request 2026-08-10/11 to survive abnormal session termination: (a) resume without losing work, (b) safe GC of leftovers, and reduce the unknown-liveness state itself by reconciling worktree, condukt and main (convert unknown to known, not just fail-closed). Measured 2026-08-11 at 023305c8: all 35 session-* worktrees had HEAD reachable from main, so commit-reachability GC would delete all 35, yet session-b9a78b46 held 2404 lines of untracked, never-landed backlog migrate work plus 374 tracked insertions. The loss surface is the working tree, not the branch. recreated 2026-10-04 from issue #238; original task lost (cause unidentified, see backlog 68fb7237)"
+created_at = 1791048119
+updated_at = 1791048119
+weight = 0.0
+issue_number = 238
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/238"
+rev = 0
+
+[[task]]
+id = "3f7a305a"
+title = "condukt の subagent が完了通知も残骸も残さず沈黙死する — orchestrator 側に生死判定手段が無い"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Issue summary: observed 2026-08-12 in run-20260811-230435-19389: an opus worker (t2-condukt-reconcile) and a sonnet verifier (t1-backlog-claim) went silent with no completion notification. Four converging indirect signals: worktree mtimes stalled about 2h, zero cargo/rustc processes, 9 minutes of SendMessage probes with no tool round, no Task completion notice. t2 left an untracked 27KB tests/worktree_reconcile.rs with zero commits. The orchestrator has no primary means to judge subagent liveness and cannot distinguish death from long thinking; same shape as the session-liveness problem (e99f61e4). Re-dispatch risks a duplicate worker. recreated 2026-10-04 from issue #249; original task lost (cause unidentified, see backlog 68fb7237)"
+created_at = 1791048119
+updated_at = 1791048119
+weight = 0.0
+issue_number = 249
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/249"
+rev = 0
+
+[[task]]
+id = "2821738c"
+title = "condukt: state set --status cancelled performs the verified-to-cancelled transition that state cancel explicitly refuses"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Issue summary: observed 2026-08-14 at ee214481. condukt state cancel refuses a verified task (exit 1), but condukt state set --status cancelled performs the same transition (exit 0). The guard that verified is terminal is enforced on one of two paths (gate-crate mirror-gap class). verified feeds the completion gate and the fugu-router learning signal, so it can be rewritten without doing the work. To determine: enumerate every transition state set allows that the dedicated subcommand refuses; route both through one shared validator; keep a legitimate, explicit path for coordinator reclassification. recreated 2026-10-04 from issue #345; original task lost (cause unidentified, see backlog 68fb7237)"
+created_at = 1791048119
+updated_at = 1791048119
+weight = 0.0
+issue_number = 345
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/345"
+rev = 0
+
+[[task]]
+id = "f8240219"
+title = "condukt policy answer: the escalate arm never journals, so condukt policy answers cannot distinguish gate-fired-and-escalated from gate-never-fired"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Issue summary: measured 2026-08-14 on the deployed binary. policy answer at risk medium / reversible high / confidence low exits 2 with policy escalate, and policy answers on that journal dir prints nothing (dir never created). Cause: crates/condukt/src/main.rs (around 3001-3018) calls gatelog::append_decision only in the Answered arm; the Escalate arm prints and returns. Empty audit output is read as no gate fired but is equally produced by fired-and-escalated: a fail-open in the audit surface (same class as the statusline empty-display, 3b1eb24). Escalations are the most audit-worthy outcomes. recreated 2026-10-04 from issue #346; original task lost (cause unidentified, see backlog 68fb7237)"
+created_at = 1791048119
+updated_at = 1791048119
+weight = 0.0
+issue_number = 346
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/346"
+rev = 0
+
+[[task]]
+id = "60b1e065"
+title = "spec-loop R4 acceptance clause 2 is unsatisfiable as written: the grading it mandates produces escalate, and escalate leaves no record"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Issue summary: found 2026-08-14 at ee214481. specs/spec-loop.toml R4-flow-spec-gap-source clause 2 (line 138) requires the divert gate to run at risk medium / reversible high / confidence low AND leave a record in condukt policy answers. At that grading the verdict is escalate and escalate does not journal (see #346), so both hold only with --approval, which turns a judgment request into a self-answer. Human question (not for an agent to decide): is the spec-gap divert a permission approval or a judgment request? Ways out: make the escalate arm journal (#346), or amend clause 2. Do NOT resolve by adding --approval. recreated 2026-10-04 from issue #347; original task lost (cause unidentified, see backlog 68fb7237)"
+created_at = 1791048119
+updated_at = 1791048119
+weight = 0.0
+issue_number = 347
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/347"
+rev = 0
+
+[[task]]
+id = "7b88aa9a"
+title = "docs/DESIGN-spec-loop.md is stale: it asserts no ratified-spec-to-backlog path exists, but forge/queue.rs implements one"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Issue summary: found 2026-08-14 at ee214481. docs/DESIGN-spec-loop.md:15-17 says no path from a ratified spec into the backlog queue exists (measured at 0ad0d055), but crates/specguard/src/forge/queue.rs implements it, forge/main.rs:435 ratify calls enqueue_and_report, and queue.rs:453-490 has tests including undetermined arms. R1 landed without updating the doc; readers may rebuild the leg (R4 clause 4 was scoped untestable partly because of this). Fix: correct the sections predating R1 and check whether the R0 termination and R3 descriptions are also stale. recreated 2026-10-04 from issue #348; original task lost (cause unidentified, see backlog 68fb7237)"
+created_at = 1791048119
+updated_at = 1791048119
+weight = 0.0
+issue_number = 348
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/348"
+rev = 0
+
+[[task]]
+id = "b0a044c4"
+title = "e2e contract_a_pending_item_is_announced が base 01deeab2 で恒常 fail — workspace cargo test を使う全 tdd green をブロック"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Issue summary: measured 2026-08-18 at 01deeab2. After cargo build -p flow -p backlog -p fugu-router -p condukt, cargo test -p integration-tests --test e2e fails contract_a_pending_item_is_announced (propose must report the pending count, got empty string; crates/integration-tests/tests/e2e.rs:196). In a fresh worktree without built binaries bin() returns None and the test SKIPs, so it looks green. Persistent fail only where binaries exist; blocks tdd green (workspace cargo test) and therefore F-to-P oracle recording. recreated 2026-10-04 from issue #356; original task lost (cause unidentified, see backlog 68fb7237)"
+created_at = 1791048119
+updated_at = 1791048119
+weight = 0.0
+issue_number = 356
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/356"
+rev = 0
+
+[[task]]
+id = "f20af32a"
+title = "backlog store add_and_claim_no_lost_update_under_heavy_contention が間欠的に fail (4 回中 1 回)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Issue summary: measured 2026-08-18 at 8e901056. cargo test -p backlog --bin backlog add_and_claim_no_lost_update_under_heavy_contention failed 1 of 4 runs: iter 6 concurrently-added task concurrent-add-6-4 was lost (lost-update race) at crates/backlog/src/store.rs:3169. Failing run took 35.71s vs 11.55-14.67s for passes. Not yet separated: load-dependent timing flake vs real lost-update race. If lock acquisition timeout overflows under load, that is a fail-open defect, so it must be triaged rather than ignored. recreated 2026-10-04 from issue #357; original task lost (cause unidentified, see backlog 68fb7237)"
+created_at = 1791048119
+updated_at = 1791048119
+weight = 0.0
+issue_number = 357
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/357"
+rev = 0
+
+[[task]]
+id = "9e0c9106"
+title = "hypothesis_field_set_has_no_metric_surface のコメントが serde default の効果を誤記 — 実際の罠は文書より強い"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Issue summary: measured 2026-08-18 at 8e901056. The comment on the test in crates/hypothesis/src/hypothesis.rs claims a field added with serde(default) keeps the struct literal compiling. Wrong: serde attributes affect only deserialization and a struct literal must list every field; adding scope_write_paths / scope_read_paths broke the literal with missing field regardless of serde(default). The trap is stronger than documented (catches any added field). Docstring vs behaviour mismatch (CLAUDE.md 6 duty 1); fix the comment. recreated 2026-10-04 from issue #358; original task lost (cause unidentified, see backlog 68fb7237)"
+created_at = 1791048119
+updated_at = 1791048119
+weight = 0.0
+issue_number = 358
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/358"
+rev = 0
+
+[[task]]
+id = "cedf6dad"
+title = "t3 契約 4 のフォールト注入手順は Option 型フィールドに対して空虚 (serde が暗黙に default する)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Issue summary: measured 2026-08-18 at 8e901056. .scratch/t3-scope-api-contract.md item 4 says adding a field without serde(default) makes existing TOML fixtures RED, but for Option fields serde supplies None: adding Option<Vec<String>> fields without serde(default) left cargo test -p hypothesis at 84 passed. Injecting a non-Option scope_declared_at: String turned 3 backward-compat tests RED (missing field) and GREEN again with serde(default), so the tests have teeth, but the contract procedure is vacuous for Option fields. Correct the contract to specify a different observation for Option-typed fields. recreated 2026-10-04 from issue #359; original task lost (cause unidentified, see backlog 68fb7237)"
+created_at = 1791048119
+updated_at = 1791048119
+weight = 0.0
+issue_number = 359
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/359"
+rev = 0
+
+[[task]]
+id = "e23580cd"
+title = "interrogate.rs の純粋性主張と Determination::undetermined の間接 telemetry IO が食い違う"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Issue summary: measured 2026-08-18 at 8e901056. t3 done_criteria item 4 requires no IO added to interrogate.rs, guarded lexically by tests/interrogate_purity.rs. But ScopeDraft::declare's Undetermined path goes through harness_core::verdict::Determination::undetermined, which calls crate::undetermined::record and writes a file (self-suppressed under cargo, writes in production). The purity test doc admits it does not detect indirect IO. Needs a decision: narrow item 4 to no direct IO, or document telemetry as an IO exception. recreated 2026-10-04 from issue #360; original task lost (cause unidentified, see backlog 68fb7237)"
+created_at = 1791048119
+updated_at = 1791048119
+weight = 0.0
+issue_number = 360
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/360"
+rev = 0
+
+[[task]]
+id = "40408d7f"
+title = "crates/hypothesis/src/draft.rs の unit test は実装者自身が書いた — 独立検証が未実施 (CLAUDE.md 2(a))"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Issue summary: measured 2026-08-18 at 8e901056. The 8 tests in draft.rs mod tests were written by the implementing agent (impl-worker-opus), violating CLAUDE.md 2(a), and none observed RED first (2(b)). The module header says so, but disclosure does not substitute for independent verification. Needs tests by an independent agent, especially fail-closed directions: nothing is written to the store while unresolved items remain, and Store::add_draft accepts only ScopeDeclaration. recreated 2026-10-04 from issue #361; original task lost (cause unidentified, see backlog 68fb7237)"
+created_at = 1791048119
+updated_at = 1791048119
+weight = 0.0
+issue_number = 361
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/361"
+rev = 0
+
+[[task]]
+id = "5c7f01a8"
+title = "condukt: RED-only タスク (TDD 分割の前半) は F→P オラクルゲートを構造的に通れず verified にできない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Issue summary: measured 2026-08-26 at bab9e4df, run-20260826-100239-22891. CLAUDE.md 2(a) splits TDD into t1 = write RED test, t2 = implement. Registering t1 as kind feature or fix makes state set --status verified refuse with no valid fail-to-pass reproduction oracle. The gate is right (t1 has no F-to-P transition); the gap is vocabulary for a RED-only task. Stopping t1 at done fails state gate (all verified required). Two readings kept open: (a) real gap, needs a red-only/test-only kind; (b) intentional, RED and GREEN belong in one task, which conflicts with 2(a). recreated 2026-10-04 from issue #404; original task lost (cause unidentified, see backlog 68fb7237)"
+created_at = 1791048119
+updated_at = 1791048119
+weight = 0.0
+issue_number = 404
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/404"
+rev = 0
+
+[[task]]
+id = "86d0dc62"
+title = "condukt worktree reconcile: transcript witness が参照不能でも occupancy が undetermined にならない (session-f25995af から移植した RED)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Issue summary: measured 2026-09-18 at main 1e79dc4b. Of 27 tests from session-f25995af, only stalled_unclaimed_worktree_with_unconsultable_transcript_is_undetermined had not landed on main. Ported onto main's reconcile_json_settled helper it FAILED (27 passed; 1 failed, panicked at crates/condukt/tests/worktree_reconcile.rs:1537). Property: when ~/.claude/projects is absent (transcript witness unconsultable), an unclaimed stalled worktree's occupancy must be undetermined; collapsing could-not-consult into consulted-and-empty reopens the CLAUDE.md 3 hole. Sibling tests exist on main. Branch session-f25995af kept; RED not committed to main. recreated 2026-10-04 from issue #670; original task lost (cause unidentified, see backlog 68fb7237)"
+created_at = 1791048119
+updated_at = 1791048119
+weight = 0.0
+issue_number = 670
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/670"
+rev = 0
+
+[[task]]
+id = "3bfe0d7a"
+title = "backlog list は他マシンで起票された pending 6 件を --all でも落とす (cross-machine 不可視)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Issue summary: measured 2026-10-02 at cde0b6a6 (worktree session-6a90e737). tomllib parse of .backlog/tasks.toml gave 536 pending rows; backlog list --status pending --json gave 530, unchanged with --all. The 6 missing (8696dd7e 0c277117 f6784177 5b89f0f6 f12c2168 b71c72a7) all have the macOS project path and arrived by merge from another machine. Mechanism: store.rs:2224 filter project_unresolved || project_matches; on the Mac the project resolved, so the exemption does not apply on Linux. Why --all does not remove the filter is unidentified (see #1049). Impact: a quarantine ledger inheriting this filter would not converge cross-machine; a third state, readable but filtered out, is reported silently as a smaller number. recreated 2026-10-04 from issue #1048; original task lost (cause unidentified, see backlog 68fb7237)"
+created_at = 1791048119
+updated_at = 1791048119
+weight = 0.0
+issue_number = 1048
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1048"
+rev = 0
+
+[[task]]
+id = "b5b5d34e"
+title = "list --all / next --all の散文がフィルタを外すと約束しているが実測では外れない (散文>実挙動)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Issue summary: measured 2026-10-02 at cde0b6a6. backlog list --status pending --json and the same with --all both return 530 while the store has 536 pending rows (tomllib); the 6 are other-machine project tickets. main.rs:119-127 Next::all doc says rank over every project in this store, not just the cwd-resolved one, and list --all is described the same way. Prose claims more than behaviour (CLAUDE.md 4). Undetermined: whether --all is not wired into the json listing path or a second filter exists; investigate, do not guess. recreated 2026-10-04 from issue #1049; original task lost (cause unidentified, see backlog 68fb7237)"
+created_at = 1791048119
+updated_at = 1791048119
+weight = 0.0
+issue_number = 1049
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1049"
+rev = 0
+
+[[task]]
+id = "63e2690d"
+title = "check-test-weakening がコメント内の #[ignore] 言及を属性追加として数える (帰属バグ)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Issue summary: measured 2026-10-02 at cde0b6a6. A commit adding only a new test file was blocked: crates/overwatch/tests/bridge_supplies_evidence.rs ignore-added (0 to 1), though the only occurrence is inside a line comment at :200 and cargo test reports 0 ignored. Mechanism: scripts/check-test-weakening.py:110 IGNORE_ATTR_RE counted at :502 over test_surface (:447-450), which returns raw src for tests/ files; the comment masker _mask_noncode (:314) is used only by test_fn_assertions (:476). Same blindness affects TEST_ATTR_RE / SHOULD_PANIC_RE / ASSERT_RE; the reverse polarity is worse (doc-comment assert mentions can offset a real assertion removal). Proposal: strip Rust comments and string literals symmetrically on both before and after surfaces. That commit was approved via test-weakening-justified in d01ad822. recreated 2026-10-04 from issue #1050; original task lost (cause unidentified, see backlog 68fb7237)"
+created_at = 1791048119
+updated_at = 1791048119
+weight = 0.0
+issue_number = 1050
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1050"
+rev = 0
+
+[[task]]
 id = "07bfdca0"
 title = "stuckguard の anchor heartbeat テストが process-wide HOME/PATH を書き換えるため並列実行で間欠的に落ちる"
 project = "/Users/yuki/src/harness"

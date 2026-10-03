@@ -291,6 +291,12 @@ pub fn run(key: &str, note: Option<&str>) -> Result<()> {
 }
 
 /// End a lease and release it.
+///
+/// Three outcomes, never collapsed (backlog 3b056c02 / 6a9eb1ed): a held
+/// lease is released -> `Ok` and `released lease <key>` on stdout; no lease
+/// under `key` -> `Err` ("not released"), nothing is written; the lease lock
+/// cannot be taken -> `Err` (undetermined, the lease is untouched). A write
+/// that did nothing must not exit 0 — callers record a 0 as "released".
 pub fn end(key: &str, status: &str) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let now = store::now();
@@ -299,12 +305,14 @@ pub fn end(key: &str, status: &str) -> Result<()> {
     // exactly as begin() does, so a concurrent begin() can never have its fresh
     // claim clobbered by this end() saving a stale pre-begin snapshot (TOCTOU).
     // HARD-SKIP on contention: skip rather than proceed to an unlocked
-    // load->mutate->save. A skipped end() leaves the lease to age out via the
-    // stale reap, which is safer than an unlocked write clobbering a peer's
-    // fresh claim. The old fail-soft `acquire` left that window open.
+    // load->mutate->save, and REPORT the skip as a failure — the lease is
+    // still held (it ages out via the stale reap), so this is not a release.
     let _lock = match LeaseLock::acquire_or_skip(&cwd) {
         Some(l) => l,
-        None => return Ok(()),
+        None => anyhow::bail!(
+            "overwatch end: could not take the lease lock; lease `{key}` was NOT released \
+             (undetermined — it remains held until released or reaped)"
+        ),
     };
 
     // Load leases
@@ -313,15 +321,17 @@ pub fn end(key: &str, status: &str) -> Result<()> {
     artificial_mutator_delay();
 
     // Get lease info before removing it (for the event)
-    let (session_id, run_id, title) = if let Some(lease) = leases.get(key) {
-        (
-            lease.session_id.clone(),
-            lease.run_id.clone(),
-            lease.title.clone(),
-        )
-    } else {
-        (resolve_session_id(None), resolve_run_id(), key.to_string())
+    let Some(lease) = leases.get(key) else {
+        anyhow::bail!(
+            "overwatch end: no lease held under key `{key}` (never begun, already ended, \
+             or reaped as stale); nothing was released"
+        );
     };
+    let (session_id, run_id, title) = (
+        lease.session_id.clone(),
+        lease.run_id.clone(),
+        lease.title.clone(),
+    );
 
     // Append Ended event
     let event = LifecycleEvent::ended(
@@ -340,6 +350,7 @@ pub fn end(key: &str, status: &str) -> Result<()> {
     // Save updated leases
     store::save_leases(&cwd, &leases)?;
 
+    println!("released lease {key}");
     Ok(())
 }
 

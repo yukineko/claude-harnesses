@@ -11856,3 +11856,19 @@ weight = 0.0
 issue_number = 1171
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1171"
 rev = 0
+
+[[task]]
+id = "40733fac"
+title = "Two /flow sessions implemented ae4543d5 concurrently despite next --claim + claim-task: duplicated work and a merge conflict"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-03. Session 521ce4dd claimed ae4543d5 (hashkey b822dbff8f4f7085) via backlog next --claim, then condukt state is-claimed returned claimed:false and condukt state claim-task --stateless returned rc 0, all before ~15:40 local. A different run, run-20261003-155809-33509, then worked the same item from 15:58 (commits cd130363 .. a855f4fe, merged as c0d4701c at 18:07), while this session landed 05943d1d at 15:58. The two implementations conflicted in scripts/guard-maintree-bash.py at merge; main-side was taken (2a76658e). Readings: (a) the other run picked the item through a path that does not consult the claim ledger / claim registry (e.g. condukt run started from a prompt naming the id, or a backlog list read), (b) the claim expired or was reaped (CLAIM_STALE_SECS = 1h; this session started ~15:35), (c) the claim registry key differs between the two paths. Distinguish: inspect ~/.backlog/claims/<project-slug>.json history and the other run transcript for how ae4543d5 was selected."
+created_at = 1791023759
+updated_at = 1791023759
+weight = 0.0
+issue_number = 1172
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1172"
+rev = 0

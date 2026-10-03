@@ -12891,3 +12891,19 @@ weight = 0.0
 issue_number = 1050
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1050"
 rev = 0
+
+[[task]]
+id = "7fbaa1ae"
+title = "prune: test_prune_env_pin test_3 RED — registry entry without parseable lastUpdated holds dir as undetermined"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04 session 33de4c25: scripts/test_prune_env_pin.py (committed 18fa478a on branch tests-18fe626f, NOT in main) gives 1 failed 3 passed. test_3_guard_unreferenced_dir_is_pruned: KEPT backlog/0.3.21: undetermined: session-age hold ... registry entry backlog@yukineko has no parseable lastUpdated (None). Decide: fixture defect (registry fixture lacks lastUpdated) vs product defect. Merge was backed out of session-33de4c25."
+created_at = 1791048452
+updated_at = 1791048452
+weight = 0.0
+issue_number = 1289
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1289"
+rev = 0

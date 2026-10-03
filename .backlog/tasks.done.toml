@@ -34375,3 +34375,77 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "6acdb6b7716193b8716cdc72604acd4b1940b7cc"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "d470a478"
+title = "donegate を crate scoped にした結果、共有 crate を変更したときの依存先 fmt/clippy が誰にも検査されない (CI 禁止のため canon の backstop が存在しない)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "coverage",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-09-13、測定点 1235d60d。15eb3f94 の実装 (donegate の fmt/clippy を触った crate だけに絞る) で顕在化した、リポジトリ全体の被覆欠落。15eb3f94 自体は正しい修正であり、これはその副作用を独立の事実として残すもの。
+
+【欠落の内容】
+harness-core のように広く依存される crate を変更しても、lint されるのはその crate 自身だけで、~39 の依存先の clippy/fmt 状態は検査されない。
+
+写経元の scripts/test-changed-crates.sh は同じ制約を KNOWN LIMITATION (deliberate, not an oversight) として明記し、fan-out を捕まえるのは CI の仕事だと書いている。しかし CLAUDE.md 第7節により GitHub Actions はこのリポジトリで使用禁止なので、その逃げ道は存在しない。つまり canon のコメントが前提にしている backstop が、このリポジトリには無い。
+
+【実測した backstop の有無】
+自動で workspace 全体に効くのは .githooks/pre-push の cargo check --workspace --all-targets だけ。これは型検査であって lint でも fmt でもない。
+scripts/check-clippy-lints.py (pre-commit) も変更 crate scoped なので backstop にならない。
+したがって広く依存される crate を変更したあと、依存先の clippy/fmt 状態は手動 sweep まで UNKNOWN のままになる。
+
+【なぜ fail-open と呼ぶか】
+沈黙が検査済みと読まれる形だから。donegate が緑を返したとき、それは「触った crate は緑」であって「workspace が緑」ではない。下流 (人間) はその区別を出力から読み取れない。CLAUDE.md 第1節が statusline の例 (3b1eb24) で名指しした型と同じである。
+
+【候補の解】
+(a) 依存先を cargo metadata の逆依存グラフで求め、直接の依存先までは lint する。第1近似で fan-out の大半を拾えるはずで、コストは測る必要がある。
+(b) Stop ゲートではなく pre-push に workspace 全体の lint を足す。頻度が低いので latency 予算が違う。
+(c) 何もしないが、donegate の緑の意味を出力で明示する (触った crate のみ検査した、と毎回書く)。最低限これは要る。
+
+どれを採るかは latency の実測が要る。判断ではなく測定で決めること。
+
+関連 15eb3f94 / 91e503c8。
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_d470a478.py (rev 34b1a083): neither reverse-dep lint (a) nor scope wording (c) exists"""
+created_at = 1789287938
+updated_at = 1791050089
+weight = 0.0
+issue_number = 581
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/581"
+issue_closed_at = 1791050091
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_verifier_d470a478.py"
+exit = 0
+passed = 5
+rev = "3eb9803fd692f94833130cff2cdaf5ffc7e593f6"
+observed_at = 1791050072
+output_digest = "sha256:86a4d1c65ee77caae1a4a451ae3ba7d50aa51f8efb2f5ce6e36ba689877b8e5c"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-64554c4d
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 5 items
+
+scripts/test_verifier_d470a478.py .....                                  [100%]
+
+============================== 5 passed in 8.80s ===============================
+"""
+
+[task.closure.red]
+rev = "7e05ab454eb28204d05471f3402b859d8bbfcec6"
+exit = 1
+kind = "behavioural"

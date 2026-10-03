@@ -33769,3 +33769,156 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 47 filtered out; fin
 rev = "f51e281e939680fb09866da6a6ff4a0acafc47f0"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "05726f9f"
+title = "scripts/test_*.py の import shim (spec_from_file_location + exec_module) は __pycache__ 越しに古いコードを検証しうる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-09-10、worktree agent-aa54b994b297e4963。mutation kill-rate 実施中に発見。
+
+## 何が起きたか (観測)
+
+check-workspace-tests.py に mutation を注入して kill されるか確かめる作業中、
+main() の ranking chain を **並べ替えるだけ** の mutation (return 文の順序入れ替え、
+バイト長は不変) を注入したところ、テストが緑のままで「SURVIVED」と判定された。
+しかし実際にはその mutation は **一度もロードされていなかった**。
+
+原因: テスト側の import shim が
+    _SPEC = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(_SPEC)
+    _SPEC.loader.exec_module(mod)
+という形で、SourceFileLoader 経由で読んでいる。SourceFileLoader は __pycache__ の
+.pyc を **(source の mtime, source の size)** で検証する。mtime の粒度は **1 秒**。
+したがって「直前の compile と同じ壁時計秒の中で行われた、バイト長を変えない編集」は
+検証をすり抜け、インタプリタは古い bytecode を配る。
+
+## なぜ重要か (これは fail-open の一種)
+
+古いキャッシュが作れるのは **偽の GREEN / 偽の SURVIVOR だけ**で、偽の RED は作れない。
+つまりこの経路は常に「テストが実際には何も見ていない」側に倒れる。CLAUDE.md 2.(b)
+「落ちることを確認していないテストは何も証明しない」の機械的な裏口にあたる。
+
+## 影響範囲 (未確認 — ここは調べていない)
+
+scripts/test_*.py は 23 本あり、ハイフン入りのスクリプト名を import するために
+どれも同種の shim を持っている可能性が高い。**実際に何本がこの形かは数えていない**
+(この起票時点で確認したのは新規の test_check_workspace_tests.py のみ)。
+まず `grep -ln exec_module scripts/test_*.py` で母数を出すこと。
+
+## 対処 (新規 suite では適用済み)
+
+scripts/test_check_workspace_tests.py はキャッシュ経路を使わない形へ変更済み:
+    exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), mod.__dict__)
+理由をコメントで残してある (後で「単純化」して戻されないように)。
+再確認: __pycache__ を消さずに同じ mutation を注入したところ、今度は正しく
+kill された (AssertionError: 1 != 4)。
+
+他の 22 本にも同じ変更を入れるか、あるいは mutation を扱う手順側で
+毎回 __pycache__ を消すことを必須にするか、どちらかを決めること。
+前者の方が良い — 手順の遵守を人間の記憶に置かない (CLAUDE.md 6.)。
+
+--- 母数を実測 2026-09-11 (起票時に「調べていない」と書いた部分の補完) ---
+
+  grep -ln exec_module scripts/test_*.py | wc -l  -> 15
+  ls scripts/test_*.py | wc -l                    -> 24 (新規の1本を含む)
+
+つまり **15 本**が SourceFileLoader.exec_module 経由で被検証スクリプトを読んでおり、
+同じ偽 GREEN / 偽 SURVIVOR の経路を持つ。うち 1 本 (test_check_workspace_tests.py) は
+対処済みなので、残り **14 本**が未対処。
+
+なお対処が効いていることは実測済み: __pycache__ を消さずに ranking mutation
+(バイト長不変の並べ替え) を注入したところ、対処後の suite は正しく kill した
+(AssertionError: 1 != 4)。対処前は同じ条件で SURVIVED と誤判定していた。
+
+
+[triage 2026-09-29 @b325a169] p2->p1: 16 scripts/test_*.py still use exec_module stale-bytecode path -> false greens / false mutation survivors
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_s06_misc_b_repros.py::Backlog05726f9f (rev e128c13b): Pre-existing committed repro (skip-by-default), RED re-observed at HEAD; it is a static proxy (counts .loader.exec_module shims), not a live stale-pyc demonstration. New nt_E tests load subjects via exec(compile()) so they do not add offenders."""
+created_at = 1789047296
+updated_at = 1791048578
+weight = 0.0
+issue_number = 499
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/499"
+issue_closed_at = 1791048581
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_verifier_05726f9f.py"
+exit = 0
+passed = 4
+rev = "a7308876b7d8b177efaa231106c77ee5f7440e4e"
+observed_at = 1791048575
+output_digest = "sha256:38796864c922a1e95bc6074efa1da5a5c9031f11fd0b12bbbd7276dd5357f186"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-64554c4d
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 4 items
+
+scripts/test_verifier_05726f9f.py ....                                   [100%]
+
+============================== 4 passed in 0.40s ===============================
+"""
+
+[task.closure.red]
+rev = "6acdb6b7716193b8716cdc72604acd4b1940b7cc"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "a0525604"
+title = "rebuild-plugins.sh masks cargo metadata failure and can no-op the whole run at rc 0"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+scripts/rebuild-plugins.sh:81-82: TARGET_DIR="$(cargo metadata --no-deps --format-version=1 | sed -n '...')" — the pipeline's exit status is sed's, which is always 0, so a failed or empty cargo metadata silently yields an empty TARGET_DIR and REL falls back to $REPO/target/release. Measured on this machine: .cargo/config.toml sets target-dir=/tmp/condukt-build, so $REPO/target/release does not exist at all; under that fallback [ -x "$src" ] is false for EVERY plugin, the main loop takes its 'missing' branch (:282-284) and the seed pass takes its silent continue (:379), and the script still exits 0 at :401 with a green summary. $REPO is $(dirname $0)/.. i.e. the worktree, which makes the fallback wrong more often, not less. CLAUDE.md §3: the exit status must be part of the verdict. Found while closing 8206b09f.
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Half fixed. pipefail half: python3 scripts/test_backlog_audit_b1_0.py BacklogA0525604CargoMetadataFailureIsNotMasked -> ok (fake cargo exit 101 -> rebuild-plugins.sh --dry-run rc!=0); mutation P3 (set; test - (rev e70d48dd)"""
+created_at = 1789118631
+updated_at = 1791048585
+weight = 0.0
+issue_number = 539
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/539"
+issue_closed_at = 1791048587
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_verifier_a0525604_empty_metadata_real_run.py"
+exit = 0
+passed = 1
+rev = "a7308876b7d8b177efaa231106c77ee5f7440e4e"
+observed_at = 1791048581
+output_digest = "sha256:b45449b10356c0bc597cb0e876aff44e76ffd8f3c245cbfa0c47af3156714ada"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-64554c4d
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 1 item
+
+scripts/test_verifier_a0525604_empty_metadata_real_run.py .              [100%]
+
+============================== 1 passed in 0.49s ===============================
+"""
+
+[task.closure.red]
+rev = "6acdb6b7716193b8716cdc72604acd4b1940b7cc"
+exit = 1
+kind = "behavioural"

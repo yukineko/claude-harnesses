@@ -86,7 +86,41 @@ struct SpecBinding {
 
 /// Reasoned bindings by `path`: `Ok(doc)` for a binding whose doc was observed
 /// valid, `Err(why)` for one that was observed invalid.
-type Bindings = BTreeMap<String, Vec<Result<String, String>>>;
+pub(crate) type Bindings = BTreeMap<String, Vec<Result<String, String>>>;
+
+/// Read the tracked spec-doc binding file and observe every bound doc, for
+/// `brief` (backlog 230c34ec). It composes the same `read_specs` +
+/// `validate_bindings` that `map gate-check`'s `check()` calls directly, so the
+/// two apply one validation; `check()` itself does not go through this function.
+///
+/// Absent file → `Known(empty)`. Unreadable or unparseable file, or a bound doc
+/// whose existence/contents could not be observed → `Undetermined`. A binding
+/// with a blank reason is dropped; one whose doc is malformed, missing, not a
+/// regular file or empty is kept as `Err(why)` and never counts as a binding.
+pub(crate) fn load_bindings(repo_root: &Path, spec_docs_path: &Path) -> Determination<Bindings> {
+    match read_specs(spec_docs_path).require() {
+        Required::Determined(specs) => validate_bindings(repo_root, specs),
+        Required::Blocked(v) => v.into_determination(),
+    }
+}
+
+/// The bindings that apply to `entry`: those whose `path` is the entry key or
+/// one of its impl files. A set of names, so a binding whose path is both the
+/// key and an impl file (the per-file entries `map sync` creates) counts once.
+pub(crate) fn entry_bindings<'b>(
+    key: &str,
+    entry: &MapEntry,
+    bindings: &'b Bindings,
+) -> Vec<&'b Result<String, String>> {
+    let names: BTreeSet<&str> = std::iter::once(key)
+        .chain(entry.impl_files.iter().map(String::as_str))
+        .collect();
+    names
+        .into_iter()
+        .filter_map(|p| bindings.get(p))
+        .flatten()
+        .collect()
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -200,16 +234,7 @@ fn evaluate(
         if hit.is_empty() || has_spec_doc(entry) || is_acked(key, entry, acked) {
             continue;
         }
-        // A set, so a binding whose path is both the key and an impl file (the
-        // per-file entries `map sync` creates) is counted and reported once.
-        let names: BTreeSet<&str> = std::iter::once(key.as_str())
-            .chain(entry.impl_files.iter().map(String::as_str))
-            .collect();
-        let bound: Vec<&Result<String, String>> = names
-            .into_iter()
-            .filter_map(|p| bindings.get(p))
-            .flatten()
-            .collect();
+        let bound = entry_bindings(key, entry, bindings);
         if bound.iter().any(|b| b.is_ok()) {
             continue;
         }

@@ -26,7 +26,21 @@
 //!     would divert *every* task, which is CLAUDE.md §3's "empty set is read as
 //!     a verdict" in its other direction;
 //!   * the task text yields no usable query token, so "nothing matched" was
-//!     never actually tested.
+//!     never actually tested;
+//!   * the tracked spec-doc binding file (`.specguard/spec-docs.toml`) cannot be
+//!     read or parsed, or a doc it binds could not be observed — it may hold
+//!     the binding that would make the task covered.
+//!
+//! An entry is covered when it carries a non-blank map `spec_doc`, OR when the
+//! tracked binding file holds a reasoned `[[spec]]` binding for its key or one
+//! of its impl files whose `doc` is observed to be an existing, non-empty
+//! `docs/specs/**/*.md` file (backlog 230c34ec: the map is a gitignored cache
+//! whose `spec_doc` is in practice always empty, so without the tracked
+//! bindings `covered` was unreachable for real topics). A binding to a missing,
+//! malformed or empty doc does not count. The binding file is read and
+//! validated by [`gatecheck::load_bindings`], which composes the same
+//! `read_specs` + `validate_bindings` that `map gate-check` calls; an absent
+//! binding file is an empty set.
 //!
 //! Entry targeting reuses [`specmap::entry_matches`], the same predicate behind
 //! `specguard audit --filter` and `specguard map list --filter`, so a task is
@@ -36,6 +50,7 @@ use std::path::Path;
 
 use harness_core::verdict::Determination;
 
+use crate::gatecheck;
 use crate::specmap::{self, MapEntry, SpecMap};
 
 /// Stable verdict tokens. These are a machine contract — `/flow` branches on
@@ -57,15 +72,18 @@ const MIN_TOKEN_LEN: usize = 3;
 /// pattern-match its way past it or default it into one of these two.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Coverage {
-    /// At least one matching entry names a spec document.
+    /// At least one matching entry names a spec document: a non-blank map
+    /// `spec_doc`, or a valid tracked binding in `.specguard/spec-docs.toml`.
     Covered {
-        /// Entry keys that matched AND carry a `spec_doc`, sorted.
+        /// Entry keys that matched AND carry a spec document (map `spec_doc` or
+        /// valid tracked binding), sorted.
         entries: Vec<String>,
     },
     /// The store was read and nothing in it governs this task: either no entry
     /// matched, or the ones that matched have no spec document yet.
     NotCovered {
-        /// Entry keys that matched but carry no `spec_doc`, sorted. Empty when
+        /// Entry keys that matched but carry neither a map `spec_doc` nor a
+        /// valid tracked binding, sorted. Empty when
         /// nothing matched at all.
         matched_without_spec: Vec<String>,
     },
@@ -97,12 +115,13 @@ pub fn tokens(task: &str) -> Vec<String> {
     out
 }
 
-/// Resolve whether the spec map already governs the area `task` touches.
+/// Resolve whether the spec map (plus the tracked spec-doc bindings under
+/// `repo_root`) already governs the area `task` touches.
 ///
 /// Every failure to observe returns `Undetermined` with the reason attached;
 /// nothing here falls back to `NotCovered`, because that verdict makes `/flow`
 /// draft a new spec (R4).
-pub fn resolve(map_path: &Path, task: &str) -> Determination<Coverage> {
+pub fn resolve(repo_root: &Path, map_path: &Path, task: &str) -> Determination<Coverage> {
     if !map_path.exists() {
         return Determination::undetermined(format!(
             "spec map {} does not exist — `specguard map build` has not run here, \
@@ -134,6 +153,14 @@ pub fn resolve(map_path: &Path, task: &str) -> Determination<Coverage> {
         ));
     }
 
+    let spec_docs_path = repo_root.join(gatecheck::SPEC_DOCS_PATH);
+    let bindings = match gatecheck::load_bindings(repo_root, &spec_docs_path) {
+        Determination::Known(b) => b,
+        // Forwarded, not re-minted: the reason already names the file or doc
+        // that could not be observed.
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
+
     let matched: Vec<&MapEntry> = map
         .entries
         .values()
@@ -142,7 +169,12 @@ pub fn resolve(map_path: &Path, task: &str) -> Determination<Coverage> {
 
     let mut with_spec: Vec<String> = matched
         .iter()
-        .filter(|e| e.spec_doc.as_deref().is_some_and(|d| !d.trim().is_empty()))
+        .filter(|e| {
+            e.spec_doc.as_deref().is_some_and(|d| !d.trim().is_empty())
+                || gatecheck::entry_bindings(&e.key, e, &bindings)
+                    .iter()
+                    .any(|b| b.is_ok())
+        })
         .map(|e| e.key.clone())
         .collect();
     if !with_spec.is_empty() {
@@ -168,7 +200,7 @@ pub fn block(d: &Determination<Coverage>) -> String {
     match d {
         Determination::Known(Coverage::Covered { entries }) => format!(
             "判定: **covered** — spec-map に、このタスクに一致し spec ドキュメントを持つ\n\
-             エントリがある。以下を正典として実際に Read すること。\n{}",
+             エントリがある (map の spec_doc か .specguard/spec-docs.toml の束縛)。以下を正典として実際に Read すること。\n{}",
             bullets(entries)
         ),
         Determination::Known(Coverage::NotCovered {
@@ -268,7 +300,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join(".specguard/spec-map.toml");
         assert!(!path.exists());
-        let d = resolve(&path, "rework the coverage resolver in specguard");
+        let d = resolve(
+            tmp.path(),
+            &path,
+            "rework the coverage resolver in specguard",
+        );
         assert_eq!(
             verdict_token(&d),
             UNDETERMINED,
@@ -293,7 +329,11 @@ mod tests {
         let path = tmp.path().join(".specguard/spec-map.toml");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, "this is not TOML [[[ entries = ??\n").unwrap();
-        let d = resolve(&path, "rework the coverage resolver in specguard");
+        let d = resolve(
+            tmp.path(),
+            &path,
+            "rework the coverage resolver in specguard",
+        );
         assert_eq!(
             verdict_token(&d),
             UNDETERMINED,
@@ -329,7 +369,11 @@ mod tests {
              not be reported as passing",
             current_uid()
         );
-        let d = resolve(&path, "rework the coverage resolver in specguard");
+        let d = resolve(
+            tmp.path(),
+            &path,
+            "rework the coverage resolver in specguard",
+        );
         let token = verdict_token(&d);
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
         assert_eq!(
@@ -348,7 +392,11 @@ mod tests {
     fn empty_map_resolves_undetermined_never_not_covered() {
         let tmp = tempfile::tempdir().unwrap();
         let path = map_with(tmp.path(), &[]);
-        let d = resolve(&path, "rework the coverage resolver in specguard");
+        let d = resolve(
+            tmp.path(),
+            &path,
+            "rework the coverage resolver in specguard",
+        );
         assert_eq!(
             verdict_token(&d),
             UNDETERMINED,
@@ -376,7 +424,7 @@ mod tests {
             &[entry_toml("some-feature", Some("docs/x.md"), &["src/x.rs"])],
         );
         assert!(tokens("a of を !! -").is_empty(), "precondition: no token");
-        let d = resolve(&path, "a of を !! -");
+        let d = resolve(tmp.path(), &path, "a of を !! -");
         assert_eq!(
             verdict_token(&d),
             UNDETERMINED,
@@ -403,7 +451,11 @@ mod tests {
                 &["crates/specguard/src/coverage.rs"],
             )],
         );
-        let d = resolve(&path, "make coverage.rs emit a tri-state verdict");
+        let d = resolve(
+            tmp.path(),
+            &path,
+            "make coverage.rs emit a tri-state verdict",
+        );
         assert_eq!(verdict_token(&d), COVERED, "got {d:?}");
         assert_eq!(
             d,
@@ -428,7 +480,11 @@ mod tests {
                 &["crates/specguard/src/coverage.rs"],
             )],
         );
-        let d = resolve(&path, "make coverage.rs emit a tri-state verdict");
+        let d = resolve(
+            tmp.path(),
+            &path,
+            "make coverage.rs emit a tri-state verdict",
+        );
         assert_eq!(verdict_token(&d), NOT_COVERED, "got {d:?}");
         assert_eq!(
             d,
@@ -439,7 +495,11 @@ mod tests {
         );
 
         // (b) nothing in a populated store matches the task at all.
-        let d = resolve(&path, "rewrite the kubernetes ingress controller");
+        let d = resolve(
+            tmp.path(),
+            &path,
+            "rewrite the kubernetes ingress controller",
+        );
         assert_eq!(verdict_token(&d), NOT_COVERED, "got {d:?}");
         assert_eq!(
             d,
@@ -463,7 +523,11 @@ mod tests {
                 &["crates/specguard/src/coverage.rs"],
             )],
         );
-        let d = resolve(&path, "make coverage.rs emit a tri-state verdict");
+        let d = resolve(
+            tmp.path(),
+            &path,
+            "make coverage.rs emit a tri-state verdict",
+        );
         assert_eq!(
             verdict_token(&d),
             NOT_COVERED,

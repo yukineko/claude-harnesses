@@ -367,7 +367,6 @@ fn backlog_126d038a_bare_gt_in_prose_does_not_force_gate() {
 
 // ---------------------------------------------------------------- 7037df97 / fa1fce21
 #[test]
-#[ignore = "backlog 7037df97: open defect, remove ignore when fixed"]
 fn backlog_7037df97_quoted_heredoc_body_is_inert_on_the_fetch_exec_axis() {
     // Control: the destructive-rm axis already treats a quoted body as data.
     assert_eq!(verdict("cat <<'EOF'\nrm -rf /usr/lib\nEOF").0, "allow");
@@ -787,7 +786,6 @@ fn backlog_d186c736_floor_dimension_breach_wording_is_not_exceeds_threshold() {
 
 // ---------------------------------------------------------------- fa1fce21
 #[test]
-#[ignore = "backlog fa1fce21: open defect, remove ignore when fixed"]
 fn backlog_fa1fce21_quoted_heredoc_body_text_is_data_for_every_rule() {
     // Control: a prose body is allowed.
     assert_eq!(verdict("cat <<'EOF'\nhello world\nEOF").0, "allow");

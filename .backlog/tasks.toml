@@ -1021,13 +1021,167 @@ hook.rs のフィールド集合や guard-maintree-*.py の挙動は、実装事
 - 既知の残余 (未捕捉): 断片から再構成したパス, $HOME/$PWD 経由のパス
 ```
 
+```
+
+[flow 2026-10-03 session 33de4c25] User answered specforge rigor questions Q1-Q19 over 4 rounds (decisions below, verbatim as fed to specforge). GLOSSARY ask-hardening canon landed in dc5fd4f1. specforge draft still fails rigor at round 5; to resume, append the decisions below plus answers to the round-5 sentinel to the requirement, then rerun: specforge draft --id e033c406-retry-evasion-gate --canon CLAUDE.md --canon docs/GLOSSARY.md --canon crates/blastguard/src/interactive.rs
+
+## Decisions (user, 2026-10-03, answering specforge rigor sentinel Q1-Q6)
+- Q1: taintguard is removed (0521d013) and is dropped. Deniers that record denies: scripts/guard-maintree-bash.py, scripts/guard-maintree-edit.py, blastguard. The precedent for hardening ask to deny is crates/blastguard/src/interactive.rs. Deny state lives in a per-gate directory under $HOME, keyed by session_id, never in the project root.
+- Q2: The detection window runs from the deny until the next UserPromptSubmit (one turn). There is no N/T parameter.
+- Q3: The non-interactive hardening rule (ask is kept only when CLAUDE_CODE_ENTRYPOINT=cli, otherwise it hardens to deny) gets a docs/GLOSSARY.md entry citing crates/blastguard/src/interactive.rs, and that entry is the canon.
+- Q4: The deny ledger is cleared only on UserPromptSubmit. No "same effect landed somewhere allowed" clearing.
+- Q5: The Stop-time signal lives in the existing scripts/stop-verify-worktree.py. Verdict: at PostToolUse, a verbatim notice via additionalContext; at Stop, block. A second consecutive block falls through via stop_hook_active (bounded).
+- Q6: Self-edit denier paths: ~/.claude/settings*.json, project .claude/settings*.json, crates/*/hooks/*.json (plugin hook definitions), .githooks/**. chmod is a target only on those paths and on plugin launchers (crates/*/bin/*). Pointing the hooks path setting at the repo's .githooks directory is allowed (the documented opt-in in CLAUDE.md section 7); pointing it anywhere else is denied.
+
+## Decisions (round 2, user, 2026-10-03)
+- Q7: The canon for ask hardening is docs/GLOSSARY.md's "ask の非対話 hardening" entry, which states interactive.rs `resolve` in full: BLASTGUARD_ASK never/always/auto (unset = auto; any other value = never); under auto, ask only when CLAUDECODE=1 AND CLAUDE_CODE_ENTRYPOINT=cli. The new gate shares BLASTGUARD_ASK and adds no new override variable. The Python guards do not port `resolve`; they query the blastguard binary (adding that query entry point is part of this work).
+- Q8: Only blastguard denies whose target is a path are recorded. Denies with no path (egress, fetched-code, etc.) are not recorded by this gate. The Stop-time recheck covers the main tree only.
+- Q9: effect_verb vocabulary = write, delete, move, chmod, config. Reads (cat, less, grep, git diff, git show, etc.) of a denied target never trigger. Only an effect_verb in the vocabulary, on a target that contains the denied target_abs, triggers.
+- Q10: The self-edit denier's verdict is ask when interactive and deny when not (via the hardening rule above). This keeps the open override CLAUDE.md section 5.4 allows. It is a NEW PreToolUse script (it must cover paths outside the main tree, e.g. ~/.claude/settings*.json), not an extension of guard-maintree-*. The hooks-path setting is allowed when its value resolves to the .githooks directory of the main checkout or of the calling session's own worktree, whether written relative (".githooks") or absolute. Any other value goes to the ask/deny verdict.
+- Q11: In scripts/stop-verify-worktree.py, the ledger check runs BEFORE the "in a worktree" early return (the evasion is typically a worktree session writing into main). A Stop payload that cannot be parsed resolves to block, which changes the current behavior of continuing with {} (CLAUDE.md section 3).
+
+## Decisions (round 3, user, 2026-10-03)
+- Q12a: The read set is closed and exactly: cat, less, more, head, tail, wc, file, stat, ls, grep, rg, diff, git diff, git show, git log, git status, git blame. A command in this set whose arguments contain target_abs does not trigger.
+- Q12b: An invocation whose verb cannot be classified (interpreter wrappers: python3 -c, sh -c, bash -c, eval, awk, node -e, perl -e, ed, and any command outside both the read set and the effect_verb vocabulary) that contains target_abs resolves to ask, and to deny when not interactive (GLOSSARY ask hardening). Reads through an interpreter therefore also ask. This is intended (CLAUDE.md section 3).
+- Q13: A Stop payload that cannot be parsed blocks, bounded by a consecutive-parse-failure counter under $HOME/.retry-evasion-gate/: the 1st consecutive failure blocks, the 2nd consecutive failure allows, and a successful parse resets the counter to 0. If the counter itself cannot be read or written, the hook blocks (no allow on an unreadable counter).
+- Q14: Recorded blastguard denies are those of the path-targeted rules: write, overwrite (including redirect overwrite), delete (rm family) and move of a protected path. Decision::Deny gains a target: Option<PathBuf>. Only denies with Some(target) are recorded; None is never recorded.
+- Q15a: The PostToolUse handling is a new script, scripts/retry-evasion-notice.py.
+- Q15b: Registering hooks in .claude/settings.json is a human task. Acceptance for this item stops at the script plus a presented registration diff; the agent does not edit settings.json.
+
+## Decisions (round 4, user, 2026-10-03)
+- Q16: blastguard's protected-path write/overwrite is Ask (detect.rs:595). It IS recorded, at the moment the Ask is emitted (the hook cannot observe the human's answer). Decision::Ask also gains target: Option<PathBuf>. When hardened() converts Ask to Deny, the target is carried over unchanged and the deny is recorded. Only Some(target) is recorded. This amends Q14: recorded = path-targeted Deny AND path-targeted Ask.
+- Q17: The PreToolUse comparator is a new script, scripts/retry-evasion-gate.py. Matchers: Bash, Edit, Write, MultiEdit, NotebookEdit. Whether it may emit ask is decided by querying the blastguard binary (the Q7 entry point); if that query fails, it resolves to deny. This script is the entry point the tests drive (the GUARD of test_backlog_e033c406.py).
+- Q18: There is one ledger: $HOME/.retry-evasion-gate/<session_id>.jsonl, one JSON object per line per recorded deny/ask (fields: ts, session_id, denier, target_abs, effect_verb, reason). Every writer (Python guards and blastguard in Rust) appends under an exclusive flock on that file. A read failure, lock failure or unparseable line in the comparator resolves to ask, or deny when not interactive (fail-closed).
+- Q19: Clearing on UserPromptSubmit is a mode of the same script (scripts/retry-evasion-gate.py, UserPromptSubmit event): it truncates the calling session's ledger under the same flock. Its registration is part of the human-applied settings.json diff (Q15b).
+
+### specforge round-5 sentinel (verbatim)
+date: 2026-10-03
+spec: e033c406-retry-evasion-gate
+summary: read集合の書き込み穴(git diff --output等/redirect/複合分割)、台帳書込失敗時、Python guardの記録範囲、自己編集denierの名前と検出範囲、RED証跡不在(ae4543d5以降)、共有パース失敗カウンタ、Stop述語の順序が未決
+
+# e033c406-retry-evasion-gate の正規化結果：rigor fail（draft は出していません）
+
+7つの論点で厳格化ゲートを通りませんでした。決定ラウンド1〜4（Q1–Q19）のおかげで大半の分岐は決まっていますが、その決定を現行コードと照らすと、未決の点・決定と実体の矛盾・観測できていない RED が残っています。推測で埋めずに人間へ返します。
+
+## 確認済みの事実（requirement の土台として使える部分）
+
+- **ask 判定の正典**：`docs/GLOSSARY.md:21` の「ask の非対話 hardening」項と、`crates/blastguard/src/interactive.rs:122-135` の `resolve` は一致しています（`Some("auto") | None => claudecode == Some("1") && entrypoint == Some(INTERACTIVE_ENTRYPOINT)`, `Some(_) => false`）。GLOSSARY には「問い合わせ口は未実装」と書かれており、Q7 の作業範囲と矛盾しません。
+- **hook 入力**：`crates/harness-core/src/hook.rs:48-50` に `/// UserPromptSubmit` → `pub prompt: String` があります。deny 履歴を表すフィールドは存在しません。
+- **blastguard の現状**：
+  - `model.rs:34,42` は `Deny(String)` / `Ask(String)` で、target を持っていません（Q14/Q16 の型変更が要る）。
+  - `detect.rs:595` の `protected_path_block` は `Decision::ask(...)` を返します。
+  - `grep session_id crates/blastguard/src/*.rs` は 0 件です。台帳を書くには session_id のパース追加が必要です。
+- **Stop hook の現状**：`scripts/stop-verify-worktree.py:103-105` は `except Exception: payload = {}` です。Q11/Q13 で挙動変更の対象になります。
+- **taintguard**：`crates/taintguard` は存在しません。Q1 と一致します。
+
+## 不足と Ask
+
+### 1. 【G3＋G2】Q12a の読み取り集合に「書き込める読み取り」が混ざっている
+
+Q9 は「Reads … of a denied target never trigger」、Q12a は「A command in this set whose arguments contain target_abs does not trigger」としています。ところが集合内のコマンドで、拒否された対象そのものを上書きできます。
+
+- **観測済み（このホストで実行）**：`git diff --output=/dev/stdout --stat HEAD~1 HEAD` と `git log -1 --output=/dev/stdout` はどちらも受理され、指定したファイルへ書き込みました。したがって `git diff --output=<target_abs>` は「read 集合のコマンドで、引数に target_abs を含む」に当たり、発火しないまま対象を上書きします。
+- **未検証の予測**：
+  - `cat /dev/null > <target_abs>`：redirect を「引数」に数えるかが未定です。
+  - `cat <target_abs>; rm <target_abs>`：複合コマンドをどう分割するかが未定です。
+  - `rg --pre=<cmd>`：任意コマンドを実行するオプションです。
+- CLAUDE.md §3 は「判定不能 … は `clean` ではない。必ず `block` か `ask` に解決する」と定めています。上の形を read とみなすと、§3 に反して clean 側に倒れます。
+
+**Ask：**
+- read 集合への所属は、`;` `&&` `||` `|` `$( )` で分割した単純コマンドごとに判定しますか。
+- redirect 演算子（`>` `>>` `>|`）や、書き込み・実行オプション（`--output` `--pre` 等）を持つものは集合から外しますか。外す場合、オプションの列挙は閉じた集合にしますか。
+
+### 2. 【G2】台帳の書き込み側が失敗したときの扱いが未定
+
+Q18 が fail-closed を定めているのは比較側（comparator）の失敗だけです（「A read failure, lock failure or unparseable line in the comparator resolves to ask」）。
+
+- denier が追記に失敗した場合（flock 失敗、`$HOME` に書けない、payload の session_id が空）、台帳は空のまま残ります。
+- 比較側はこれを「deny 無し」と区別できません。§3 の「エラー時に空の集合を返さない」に当たります。
+
+**Ask：** 書き込み失敗時の振る舞いを決めてください。例：
+- 失敗マーカーを残し、そのセッションの以後の呼び出しをすべて ask にする。
+- 当該 deny の reason に失敗を併記するだけにする（この場合は fail-open が残ることを明記）。
+
+### 3. 【G2】Python guard のどの deny を記録するかが未定
+
+Q8/Q14/Q16 が記録対象を定めているのは blastguard だけです。`guard-maintree-bash.py` の deny のうち、target を持つのは `:2629` の `DENY.format(... target ...)` だけです。次の deny は target を持ちません。
+
+- `:2599`/`:2602` `DENY_BAD_PAYLOAD`
+- `:2611` `DENY_NO_ROOT`
+- `:2627` `DENY_UNPARSEABLE`
+- `:2631` `DENY_UNDETERMINED`
+
+また、guard が記録すべき `effect_verb`（write/delete/move/chmod/config）を、guard 側がどう判定するかも決まっていません。
+
+**Ask：**
+- Python guard でも記録は「path を持つ deny のみ」でよいですか。
+- effect_verb を判定できない deny は何として記録しますか。
+
+### 4. 【G3＋G4】RED テストの記述が Q17/Q10 と食い違っていて、現在は RED が観測できない
+
+- `scripts/test_backlog_e033c406.py:35` は `GUARD = os.path.join(SCRIPTS, "guard-maintree-bash.py")` です。Q17 の「the GUARD of test_backlog_e033c406.py」は retry-evasion-gate.py を指しており、一致しません。
+- `:80-81` は同じ GUARD に `rm` の deny（rc=2）を要求しています。比較子は denier ではないので、この形のままでは repoint できません。
+- `:76-77` には「Passes since ae4543d5: the guard now judges `python3 -c` payloads by effect … (no deny ledger involved)」とあります。interpreter による再試行の経路は既存 guard が閉じており、**台帳比較子の F→P（先に RED を見て GREEN）の候補が現時点で観測されていません**。CLAUDE.md §2(b)「落ちることを確認していないテストは、何も証明しない」に当たります。
+- `:92-93` の hooksPath テストも同じ guard-maintree-bash.py を叩いています。しかし Q10 は「a NEW PreToolUse script … not an extension of guard-maintree-*」としていて、**その新スクリプトの名前は決まっていません**。
+
+**Ask：**
+1. 自己編集 denier のスクリプト名。retry-evasion-gate.py に同居させるか、別ファイルにするか。
+2. 比較子が捕らえ、既存 guard は捕らえない具体的な再試行の綴りを1つ。ae4543d5 以降の main ツリー対象で RED になるもの。候補は guard の KNOWN HOLES か、main ツリー外にある blastguard の protected path です。
+3. テストを「denier を叩く → 比較子を叩く」の2段構成に書き換えてよいか。その際、`BLASTGUARD_ASK=never` で環境を固定するか。現行の `_guard` は `os.environ` を継承しており、cli セッションから流すと ask（rc=0）になって結果が揺れます。
+
+### 5. 【G2/G3】自己編集 denier の検出範囲が決まっていない
+
+- 要望の原文は「.git/hooks 配下への書き込み」を挙げていますが、Q6 のパス列挙にはありません。意図的に落としたのか、漏れなのかが不明です。
+- hooksPath の経路として、`git config core.hooksPath X` 以外の扱いが未定です。
+  - `git -c core.hooksPath=/dev/null commit`：1回だけ hook を外す。
+  - `.git/config` の直接編集。
+  - `git config --global core.hooksPath`。
+  - `GIT_CONFIG_*` 環境変数。
+- Bash 経由で settings*.json に書く綴り（interpreter・redirect）を、どの粒度で捕らえるかも未定です。
+
+**Ask：** 上の各経路を対象に含めるか、残余として明記するか。
+
+### 6. 【G3】Q13 の連続パース失敗カウンタがセッション間で共有される
+
+`$HOME/.retry-evasion-gate/` 直下のカウンタは、payload をパースできない以上 session_id で分けられません。そのため次のことが起きます。
+
+- セッション A の失敗のあと、セッション B の初回失敗が「2回目」として allow される。
+- 別セッションのパース成功でカウンタが 0 に戻る。
+
+CLAUDE.md §5.3 が共有 skip ファイルを禁じる理由「一度だけ消費されるため、他セッションの正当なゲートを素通りさせる」と同じ仕組みです。§5.3 の文言は project root 限定なので字義上の違反ではありませんが、趣旨には反します。
+
+**Ask：** この共有を承知の上で採用しますか。それとも別の鍵（例：transcript_path を部分的に取れた場合など）にしますか。
+
+### 7. 【G2】Stop 時の判定条件が細部で未定
+
+- **スナップショットの扱い**：Q18 の台帳フィールドには、原文にあった `git status --porcelain -z` と mtime/size のスナップショットがありません。deny 前から dirty だったパスも Stop で block されます（制限側の誤検出）。この述語でよいか確認したいです。
+- **チェックの順序**：Q11 は「worktree の早期 return より前」とだけ定めています。`:124-125` の `NO_REPO → return 0`（cwd がリポジトリ外のとき）より前に置くかが未定です。
+
+**Ask：** 台帳チェックは `stop_hook_active` 以外のすべての allow return より前、でよいですか。
+
+## 回答用の雛形
+
+人間が埋めて、要望末尾に追記する想定です。
+
+```
+## Decisions (round 5, user, 2026-10-03)
+- Q20 (read-set segmentation): <per simple command after splitting on ; && || | $( ) — yes/no>; redirect operators remove read-set membership: <yes/no>; options that remove membership (closed list): <--output, --pre, ...>
+- Q21 (writer failure): on ledger append/flock failure or empty session_id at deny time: <behavior>
+- Q22 (python guard recording): recorded guard-maintree-bash denies = <DENY at :2629 only / ...>; effect_verb for guard denies = <rule>
+- Q23 (self-edit denier script name): <scripts/....py>
+- Q24 (F→P witness): RED retry spelling that guard-maintree-bash allows today: <command>; test layout = <denier then comparator>; test env pins BLASTGUARD_ASK=<never>
+- Q25 (self-edit coverage): .git/hooks/** <in/out>; git -c core.hooksPath=… <in/out>; direct .git/config edit <in/out>; --global <in/out>; GIT_CONFIG_* <in/out>
+- Q26 (parse-failure counter scope): <global under $HOME accepted / keyed by ...>
+- Q27 (Stop predicate): dirty-at-Stop without baseline accepted: <yes/no>; ledger check precedes every allow return except stop_hook_active: <yes/no>
+```
+
 ```"""
 created_at = 1788791851
-updated_at = 1791024756
+updated_at = 1791027447
 weight = 0.0
 issue_number = 427
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/427"
-rev = 1
+rev = 2
 
 [[task]]
 id = "73c2c089"

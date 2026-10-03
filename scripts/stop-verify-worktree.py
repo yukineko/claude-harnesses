@@ -21,9 +21,22 @@ That distinction is the whole point: the earlier version collapsed "git said no
 repo" and "git could not answer" into one `return 0`, so any git malfunction
 silently waved through the exact case this gate exists to catch.
 
+Refused-then-changed (e033c406, signal 2 of scripts/deny_ledger.py). BEFORE the
+cwd checks above — so it applies whether the session sits on main or in a
+worktree — every target that guard-maintree-bash.py / guard-maintree-edit.py
+refused in this session (the per-session ledger
+`~/.claude/state/maintree-deny/<session_id>.jsonl`) is re-snapshotted. If one
+that is still under main has changed since its refusal (its `git status
+--porcelain` line differs, or it is dirty now and its existence / type / mtime /
+size differ), the stop is BLOCKED, quoting the refusal: the refused change was
+made anyway by another spelling. An unreadable or corrupt ledger, a target whose
+state cannot be read, or an unusable session_id also blocks. A payload without
+a session_id key has no ledger (deny_ledger.py, RESIDUALS).
+
 Bounded allow: `stop_hook_active` (a re-entrant stop after this hook already
 fired) resolves to allow, so a genuinely stuck state cannot trap the turn — the
-same bounded-allow the repo's other Stop gates use.
+same bounded-allow the repo's other Stop gates use. It applies to the ledger
+check too.
 
     exit 0   allow the stop
     exit 2   block the stop; stderr is the reason shown to the model
@@ -35,6 +48,14 @@ import json
 import os
 import subprocess
 import sys
+
+try:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import deny_ledger  # noqa: E402
+    _LEDGER_IMPORT_ERROR = ""
+except Exception as _e:  # noqa: BLE001 — resolves to a block in main()
+    deny_ledger = None
+    _LEDGER_IMPORT_ERROR = f"{type(_e).__name__}: {_e}"
 
 
 def _git(cwd: str, *args: str):
@@ -106,6 +127,16 @@ def main() -> int:
     if isinstance(payload, dict) and payload.get("stop_hook_active"):
         return 0  # bounded allow — never trap the turn
 
+    if deny_ledger is None:
+        sys.stderr.write(UNDETERMINED.format(
+            what=f"loading scripts/deny_ledger.py ({_LEDGER_IMPORT_ERROR})"))
+        return 2
+    if isinstance(payload, dict):
+        changed = deny_ledger.stop_check(payload)
+        if changed is not None:
+            sys.stderr.write(changed)
+            return 2
+
     cwd = (payload.get("cwd") if isinstance(payload, dict) else None) or os.getcwd()
 
     st_git, git_dir = _probe(cwd, "rev-parse", "--absolute-git-dir")
@@ -139,4 +170,14 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        _rc = main()
+    except Exception as _crash:  # noqa: BLE001
+        # An uncaught exception exits 1, which Claude Code treats as a
+        # non-blocking error, i.e. the call proceeds. A check that crashed has
+        # not passed (CLAUDE.md 3), so it resolves to exit 2 (e033c406).
+        sys.stderr.write(
+            f"Do not stop yet: stop-verify-worktree.py crashed ({type(_crash).__name__}: {_crash}); "
+            "a check that could not run has not passed.\n")
+        _rc = 2
+    sys.exit(_rc)

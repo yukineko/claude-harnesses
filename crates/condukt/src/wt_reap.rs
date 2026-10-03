@@ -26,9 +26,30 @@
 //!
 //! The reaper removes the worktree with `git worktree remove` WITHOUT
 //! `--force`, so git re-checks cleanliness at the moment of removal and refuses
-//! a tree that became dirty after it was judged. It does NOT delete the branch:
-//! the ruling authorises removing the worktree, and a branch that is an
-//! ancestor of main costs nothing to keep.
+//! a tree that became dirty after it was judged.
+//!
+//! # The branch of a removed worktree (user ruling, backlog `eea7c61f`)
+//!
+//! After it REMOVED a worktree, the reaper also deletes that worktree's branch
+//! when the branch is merged into the default branch, and only then:
+//!
+//! - "merged" is re-established after the removal with `git merge-base
+//!   --is-ancestor <branch> <default>` ([`is_merged`]). Not an ancestor: the
+//!   branch is kept and reported as kept. Undetermined: the branch is kept and
+//!   the attempt is reported as a FAILURE (the verdict authorised a delete that
+//!   could not be checked).
+//! - the delete is the safe `git branch -d`, never the forcing variant. `-d`
+//!   re-checks the merge against git's own notion (HEAD / upstream), a second
+//!   safety net; if it refuses although `--is-ancestor` said merged (e.g. the
+//!   primary tree's HEAD is not the default branch), that refusal is surfaced,
+//!   never forced.
+//! - branches of worktrees the reaper did not remove (kept, undetermined, or
+//!   failed removals, and branches with no worktree at all) are never touched.
+//!
+//! A branch delete that fails is never silent: the report prints
+//! `FAILED to delete branch <name>` with the reason, the summary line counts
+//! it, and the command exits non-zero. The worktree removal itself still
+//! counts as `removed`, because it happened.
 //!
 //! Nothing runs this automatically. It is an operator command.
 //!
@@ -192,6 +213,22 @@ pub struct ReapLine {
     pub path: String,
     pub branch: Option<String>,
     pub outcome: ReapOutcome,
+    /// What happened to the branch. `Some` only when the worktree was
+    /// [`ReapOutcome::Removed`] and it had a branch; every other worktree's
+    /// branch is never touched.
+    pub branch_delete: Option<BranchDelete>,
+}
+
+/// The fate of a removed worktree's branch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BranchDelete {
+    /// `git branch -d` succeeded.
+    Deleted,
+    /// Positively not merged into the default branch: kept.
+    Kept(String),
+    /// The delete was attempted (or could not be decided) and did not happen.
+    /// Fails the command.
+    Failed(String),
 }
 
 #[derive(Debug, Clone)]
@@ -229,11 +266,23 @@ impl ReapReport {
     /// is clean"; the summary line is where undetermined is counted.
     pub fn exit_code(&self) -> i32 {
         let failed = self.count(|o| matches!(o, ReapOutcome::Failed(_)));
-        if failed > 0 || !self.warnings.is_empty() {
+        if failed > 0 || self.branch_delete_failed() > 0 || !self.warnings.is_empty() {
             1
         } else {
             0
         }
+    }
+
+    fn count_branch(&self, pred: impl Fn(&BranchDelete) -> bool) -> usize {
+        self.lines
+            .iter()
+            .filter(|l| l.branch_delete.as_ref().is_some_and(&pred))
+            .count()
+    }
+
+    /// Branch deletes that were authorised and did not happen.
+    pub fn branch_delete_failed(&self) -> usize {
+        self.count_branch(|b| matches!(b, BranchDelete::Failed(_)))
     }
 
     pub fn render(&self) -> String {
@@ -256,16 +305,34 @@ impl ReapReport {
                     l.path
                 )),
             }
+            match &l.branch_delete {
+                None => {}
+                Some(BranchDelete::Deleted) => {
+                    out.push_str(&format!("deleted branch {branch} (merged)\n"));
+                }
+                Some(BranchDelete::Kept(why)) => {
+                    out.push_str(&format!("kept branch {branch}\n  reason: {why}\n"));
+                }
+                Some(BranchDelete::Failed(why)) => {
+                    out.push_str(&format!(
+                        "FAILED to delete branch {branch}\n  reason: {why}\n"
+                    ));
+                }
+            }
         }
         for w in &self.warnings {
             out.push_str(&format!("warning: {w}\n"));
         }
         out.push_str(&format!(
-            "reap: removed {}, kept {} ({} undetermined), failed {}\n",
+            "reap: removed {}, kept {} ({} undetermined), failed {}; branches deleted {}, kept {}, \
+             delete failed {}\n",
             self.count(|o| matches!(o, ReapOutcome::Removed)),
             self.count(|o| matches!(o, ReapOutcome::Kept(_) | ReapOutcome::KeptUndetermined(_))),
             self.count(|o| matches!(o, ReapOutcome::KeptUndetermined(_))),
             self.count(|o| matches!(o, ReapOutcome::Failed(_))),
+            self.count_branch(|b| matches!(b, BranchDelete::Deleted)),
+            self.count_branch(|b| matches!(b, BranchDelete::Kept(_))),
+            self.branch_delete_failed(),
         ));
         out
     }
@@ -300,6 +367,7 @@ pub fn reap(cfg: &Config, cwd: &Path, repo: &Path) -> Result<ReapReport> {
             merged.as_ref(),
         );
         let path = j.path.to_string_lossy().to_string();
+        let mut branch_delete = None;
         let outcome = match verdict {
             Reap::Keep(why) => ReapOutcome::Kept(why),
             Reap::Undetermined(why) => ReapOutcome::KeptUndetermined(why),
@@ -322,6 +390,10 @@ pub fn reap(cfg: &Config, cwd: &Path, repo: &Path) -> Result<ReapReport> {
                                 }
                             }
                         }
+                        branch_delete = j
+                            .branch
+                            .as_deref()
+                            .map(|b| delete_merged_branch(repo, b, &cfg.default_branch));
                         ReapOutcome::Removed
                     }
                     Err(e) => ReapOutcome::Failed(format!("git worktree remove: {e:#}")),
@@ -332,9 +404,34 @@ pub fn reap(cfg: &Config, cwd: &Path, repo: &Path) -> Result<ReapReport> {
             path,
             branch: j.branch,
             outcome,
+            branch_delete,
         });
     }
     Ok(out)
+}
+
+/// Delete `branch` (the branch of a worktree that was just removed) iff it is
+/// merged into `default_branch`. The merge is decided by [`is_merged`]; the
+/// delete is the safe `git branch -d`, never the forcing variant. Its own
+/// merge check is a second safety net, and its refusal is a
+/// [`BranchDelete::Failed`], not a reason to retry with force.
+pub fn delete_merged_branch(repo: &Path, branch: &str, default_branch: &str) -> BranchDelete {
+    match is_merged(repo, branch, default_branch) {
+        Determination::Known(false) => BranchDelete::Kept(format!(
+            "branch {branch} is not an ancestor of {default_branch}"
+        )),
+        Determination::Undetermined(why) => BranchDelete::Failed(format!(
+            "could not establish that {branch} is merged into {default_branch}, so it was kept: \
+             {}",
+            why.as_str()
+        )),
+        Determination::Known(true) => {
+            match crate::worktree::git(repo, &["branch", "-d", "--", branch]) {
+                Ok(_) => BranchDelete::Deleted,
+                Err(e) => BranchDelete::Failed(format!("git branch -d: {e:#}")),
+            }
+        }
+    }
 }
 
 // ── Registration records in the session bucket ─────────────────────────────

@@ -50,6 +50,21 @@ fn run(args: &[&str], cwd: &Path, home: &Path) -> (i32, String, String) {
     run_with_stdin(args, cwd, home, "")
 }
 
+/// Close-evidence fixture: `add` lands `pending` only with a REPRODUCED repro
+/// test (otherwise `unconfirmed`, outside the workable queue). Commit a repro
+/// script that fails (= reproduced) so the fixture rows are `pending` as before.
+const REPRO: &str = "bash tests/repro_yes.sh";
+fn commit_repro_script(cwd: &Path, home: &Path) {
+    std::fs::create_dir_all(cwd.join("tests")).unwrap();
+    std::fs::write(
+        cwd.join("tests/repro_yes.sh"),
+        "echo 'bug present'; exit 1\n",
+    )
+    .unwrap();
+    git(&["add", "tests/repro_yes.sh"], cwd, home);
+    git(&["commit", "-q", "-m", "repro script"], cwd, home);
+}
+
 fn git(args: &[&str], cwd: &Path, home: &Path) -> String {
     let out = Command::new("git")
         .args(args)
@@ -89,6 +104,7 @@ fn repo(tag: &str) -> Repo {
     std::fs::create_dir_all(&a).unwrap();
     git(&["init", "-q", "-b", "main"], &a, &home);
     git(&["commit", "-q", "--allow-empty", "-m", "init"], &a, &home);
+    commit_repro_script(&a, &home);
     let project = a.to_str().unwrap().to_string();
     for (title, prio) in [("first", "p0"), ("second", "p1")] {
         let (code, out, err) = run(
@@ -100,6 +116,8 @@ fn repo(tag: &str) -> Repo {
                 &project,
                 "--priority",
                 prio,
+                "--repro-test",
+                REPRO,
             ],
             &a,
             &home,
@@ -209,6 +227,7 @@ fn backlog_96072327_pinned_store_dir_scopes_by_project_under_default_tmpdir() {
     let pinned = unique("96072327-pinned");
     let root = unique("96072327-repo");
     git(&["init", "-q"], &root, &home);
+    commit_repro_script(&root, &home);
     std::fs::create_dir_all(home.join(".backlog")).unwrap();
     std::fs::write(
         home.join(".backlog").join("config.toml"),
@@ -231,6 +250,8 @@ fn backlog_96072327_pinned_store_dir_scopes_by_project_under_default_tmpdir() {
             "belongs here",
             "--project",
             root.to_str().unwrap(),
+            "--repro-test",
+            REPRO,
         ],
         &root,
         &home,

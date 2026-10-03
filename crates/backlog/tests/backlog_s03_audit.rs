@@ -43,6 +43,39 @@ fn fx(tag: &str) -> Fx {
         .expect("git runs")
         .success();
     assert!(ok, "git init failed: fixture is void");
+    // Close-evidence fixture: `add` lands `pending` only with a REPRODUCED
+    // repro test from a committed script (otherwise `unconfirmed`, which
+    // `next` never hands out — that would make every claim-based test here
+    // vacuous). Commit one so `add` below files pending rows as before.
+    std::fs::create_dir_all(repo.join("tests")).unwrap();
+    std::fs::write(
+        repo.join("tests/repro_yes.sh"),
+        "echo 'bug present'; exit 1\n",
+    )
+    .unwrap();
+    for args in [
+        &["add", "tests/repro_yes.sh"][..],
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t.t",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "-m",
+            "repro",
+        ],
+    ] {
+        let ok = Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .status()
+            .expect("git runs")
+            .success();
+        assert!(ok, "git {args:?} failed: fixture is void");
+    }
     Fx { home, repo }
 }
 
@@ -69,7 +102,15 @@ fn run(f: &Fx, args: &[&str], path_prefix: Option<&Path>) -> (i32, String, Strin
 /// Add a task and return its id (precondition: add must succeed).
 fn add(f: &Fx, title: &str, extra: &[&str]) -> String {
     let proj = f.repo.to_str().unwrap();
-    let mut args = vec!["add", "--title", title, "--project", proj];
+    let mut args = vec![
+        "add",
+        "--title",
+        title,
+        "--project",
+        proj,
+        "--repro-test",
+        "bash tests/repro_yes.sh",
+    ];
     args.extend_from_slice(extra);
     let (rc, out, err) = run(f, &args, None);
     assert_eq!(rc, 0, "precondition: add must succeed; out={out} err={err}");

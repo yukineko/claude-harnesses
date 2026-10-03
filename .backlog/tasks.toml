@@ -2867,72 +2867,6 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/545"
 rev = 0
 
 [[task]]
-id = "7f07228e"
-title = "overwatch store::record_finding (library 経路) が verdict を引数に持たず ReviewFinding::new が無条件 Confirmed を刻む — CLI 側を必須化しても 3 producer がここを通る"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-実測 2026-09-13、測定点 f667897d の worktree (backlog eda212a0 の作業中に発見)。
-
-eda212a0 は CLI (`overwatch record-finding --verdict`) の省略時 confirmed 既定を廃止したが、
-**同じ欠陥が library 経路に残る**。
-
-逐語 crates/overwatch/src/review_finding.rs:155-174:
-    pub fn new(
-        finding_id: String, source: String, severity: Option<String>,
-        summary: String, file: Option<String>, rationale: Option<String>, ts: i64,
-    ) -> Self {
-        Self { ..., verdict: AuditVerdict::Confirmed, ts }
-    }
-
-逐語 crates/overwatch/src/store.rs:514-532 — `pub fn record_finding(...)` の引数に
-**verdict が無い**。`ReviewFinding::new(...)` をそのまま `append_review_finding` する
-(`.with_verdict(..)` を呼ばない) ので、この経路で記録された finding は
-**常に Confirmed** になる。呼び出し側が unverified を表明する手段が型に存在しない。
-
-実 producer は 3 本 (いずれも `let _ =` で戻り値も捨てている):
-  crates/specguard/src/main.rs:2116
-  crates/specguard/src/main.rs:2200
-  crates/propguard/src/main.rs:372
-  crates/condukt/src/gate_exec.rs:319
-
-なぜ問題か: eda212a0 のユーザー裁定は「UNVERIFIED が既定では決して発生しない」ことを
-問題視したものだった。CLI を必須化しても、この 4 箇所が通る経路では
-UNVERIFIED は**表現すら不可能**なままなので、裁定の意図は半分しか達成されていない。
-`confirmed` のみが `review-queue --to-backlog` で backlog へ橋渡しされるため、
-「検証していない finding が actionable work として queue に入る」経路が残る。
-
-判定不能なので両方の読みを残す:
-  (a) 実在の欠陥 = library 経路も verdict を要求すべきで、new() の
-      hardcoded Confirmed は CLI 側と同じ「確実性の捏造」。
-  (b) 意図的な仕様 = これらの producer (gate escalate / spec drift / prop violation) は
-      「ゲートが実際に検出した事実」なので confirmed で正しい、という読み。
-      その場合でも new() が既定を握るのではなく、各 producer が明示すべき
-      (eda212a0 の裁定理由がまさにそれ)。
-
-見分ける方法: 4 producer それぞれについて、記録している事実が
-「敵対的検証を経た CONFIRMED」なのか「ゲートが観測しただけの raw signal」なのかを読む。
-後者が 1 つでもあれば (a)。gate_exec の escalate は「人間の判断が要る」状態なので
-unverified 寄りに見えるが未確認。
-
-あわせて: 4 producer は全て `let _ =` で Result を捨てている。fail-soft の意図は
-docstring に書かれているが、記録失敗が完全に不可視なのが妥当かは別途要検討。
-
-スコープ外として起票: eda212a0 の完了条件は CLI の --verdict 必須化なので、
-本件はそこに含めず別チケットにした。
-
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/overwatch/tests/backlog_7f07228e.rs (rev d2e54735): Asserts reading (a) (audit found gate-exec/specguard are raw signals)."""
-created_at = 1789273494
-updated_at = 1790983255
-weight = 0.0
-issue_number = 546
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/546"
-rev = 0
-
-[[task]]
 id = "233f819c"
 title = "帰属のバグ: stop-verify-worktree.py が他セッションの未コミット変更で私の停止をブロックする (CLAUDE.md 8 が名指しする形)"
 project = "/Users/yuki/src/harness"
@@ -12109,49 +12043,6 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/1289"
 rev = 0
 
 [[task]]
-id = "b74955f4"
-title = "propguard inject mode records EVERY derived property as a fleet violation, contradicting the CA-propguard-06 comment in the same function"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-Reported by an adversarial audit 2026-09-11 at HEAD 2abf8dea. Verdict CONFIRMED by the auditor with verbatim quotes; I have NOT independently re-verified the overwatch write path, so treat the consumption half as UNVERIFIED until someone traces it.
-
-crates/propguard/src/gate.rs:442-445 verbatim:
-
-    fn unsatisfied_prop_ids(props: &[Property], findings: Option<&str>) -> Vec<&static str> {
-        let Some(out) = findings else {
-            return props.iter().map(|p| p.id).collect();
-        };
-
-The early return fires whenever findings is None. Inject mode constructs exactly that: gate.rs around :273-279 builds Determination::Known(Verified { satisfied: 0, findings: None }). So in inject mode ALL 3-5 derived properties are returned as violated and appended as ViolationSource::Propguard events (main.rs around :306 and :485-497), read later by overwatch violations / overwatch review-queue.
-
-Nothing evaluated any of them. The same function guards against precisely this, but only inside the Some(out) branch. gate.rs:451-457 verbatim:
-
-    // None means the checker emitted NO verdict line for it - it was
-    // never evaluated, which is NOT the same as checked-and-failed. Only
-    // a property that was checked and FAILED (Some(false)) is a fleet
-    // violation; a never-evaluated (unchecked) property must not be
-    // reported violated / pollute the fleet-correlation store, per
-    // property (CA-propguard-06).
-
-and main.rs:446 verbatim: "Record a fleet-level overwatch violation for each failing PROP-* property on a Block decision." In inject mode none of them is failing; none was checked.
-
-The sibling path gets this right - decide_diff_failed doc (gate.rs around :649-652) says NO per-property violation is attributed because nothing was checked. Same defect class as the satisfied=0 headline that b61d68b4 fixed, surviving on the durable-record surface instead of the message surface.
-
-Currently latent in THIS repo: there is no propguard.toml and no criteria file at the repo root, so derive.rs source_criteria returns None and gate.rs allows at the no-criteria arm before any of this runs. It is not latent for any project that configures propguard, and inject is the mode the shipped starter template writes.
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/propguard/src/gate.rs (rev e70d48dd)"""
-created_at = 1789064369
-updated_at = 1790983255
-weight = 0.0
-issue_number = 510
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/510"
-rev = 0
-
-[[task]]
 id = "07bfdca0"
 title = "stuckguard の anchor heartbeat テストが process-wide HOME/PATH を書き換えるため並列実行で間欠的に落ちる"
 project = "/Users/yuki/src/harness"
@@ -12833,4 +12724,42 @@ updated_at = 1791048919
 weight = 0.0
 issue_number = 1292
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1292"
+rev = 0
+
+[[task]]
+id = "8231b822"
+title = "backlog merge driver is configured as bare 'backlog' which is not on PATH: every task-store merge conflicts with NO markers, so git add silently keeps only our side"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04 (session 64554c4d), several times: git config merge.backlog.driver = 'backlog merge-driver %O %A %B' (f769c750, 867dde4b); git merge prints 'backlog merge-driver .merge_file_X ...: backlog: command not found' and marks .backlog/tasks.toml / tasks.done.toml UU, but the working file holds OUR side verbatim with no conflict markers (it parses as valid TOML). A git add + commit then silently discards the other side's backlog changes; I did exactly that once in the session worktree (commit 2fb2c4cb, reset before it left the branch). Fail-open: a failed merge driver looks like a clean resolution. Also, git ran the merge with uncommitted changes to those files present and did not refuse. Fix directions: resolve the driver binary via an absolute plugin-cache path or a repo-local wrapper that exits non-zero loudly; write markers (or a sentinel line that breaks TOML) when the driver can't run; a pre-commit check that a merge commit's task-store files contain every id present on both parents unless closed."
+created_at = 1791049229
+updated_at = 1791049229
+weight = 0.0
+issue_number = 1293
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1293"
+rev = 0
+
+[[task]]
+id = "6b5971e4"
+title = "guard-maintree-bash refuses git merge --abort on main as a non-integration modification"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04: after a conflicted 'git merge --no-ff <branch>' on main, 'git merge --abort' was refused by the PostToolUse guard as 'modified this project MAIN working tree outside integration' listing the files the abort restored. Aborting one's own conflicted merge is part of integration and leaves main exactly at HEAD. The refusal arrives after the fact, so nothing was blocked, but it is a false alarm on the documented integration path."
+created_at = 1791049231
+updated_at = 1791049231
+weight = 0.0
+issue_number = 1294
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1294"
 rev = 0

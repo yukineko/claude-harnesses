@@ -215,8 +215,11 @@ tdd oracle --task <id>                    # {"transition":"fail_to_pass","valid_
 - **発火条件**: `kind` が fix / feature のときだけ必須（`Task::requires_fp_oracle()`）。
   chore / 未設定は免除。`kind` はスケジュール後
   `~/.condukt/state/<proj>/<run>.decomposition.json` に保存される（`state set` に `--kind` フラグは無い）。
-- **fail-soft（never break a turn）**: tdd バイナリ不在・オラクル生成不能・baseline 取得失敗 →
-  従来の done_criteria ゲートに縮退する。
+- **判定不能は拒否（fail-closed）**: fix/feature タスクで有効な Fail→Pass オラクルが得られない場合は、
+  従来の done_criteria ゲートに縮退せず `verified` 昇格を拒否する。具体的には、proof 未記録・不完全
+  （`tdd oracle` が `transition:"unknown"` で exit 1）、proof 読み取り不能（`"undetermined"` で exit 2）、
+  tdd バイナリ不在・起動不能のいずれも Reject になる。done_criteria ゲートへ委ねる（`fallback:true`）のは
+  fix/feature 以外のタスクだけ（backlog e5174b6a）。
 - **落とし穴（実地で確認済み）**: 追加専用の内部モジュールは自然な F→P を持たない。condukt は
   bin crate なので、新規モジュールの unit test は変更前ツリーに存在せず「失敗」ではなく
   「不在＝素通り」になり、赤を記録できない。この種のタスクは `kind:"chore"` にし、実際の F→P は
@@ -252,7 +255,7 @@ drift を放置したまま実装を続けると次回の監査でも同じ指�
 | Phase 1 (interpreter 前) | `hypothesis list --status open` | open 仮説を interpreter に注入 |
 | Phase 1 (interpreter 前) | `.deepwiki/*.md` 一覧 | アーキテクチャ wiki ページを interpreter に渡す |
 | Phase 2 | `fugu-router route` | 過去実績から最安モデルを選択 |
-| verified 昇格時 | `tdd oracle`（F→P 再現ゲート） | fix/feature タスクの Fail→Pass 再現を機械検証し、無効なら `verified` 昇格を拒否（fail-soft で done_criteria ゲートに縮退） |
+| verified 昇格時 | `tdd oracle`（F→P 再現ゲート） | fix/feature タスクの Fail→Pass 再現を機械検証し、無効・判定不能なら `verified` 昇格を拒否（done_criteria ゲートへは縮退しない） |
 | worker の Edit/Write 時 | `condukt editgate`（edit-time compile ゲート） | worktree 内 `.rs` の broken edit を PostToolUse で弾き、同一ターンで修正させる（fail-soft） |
 | Phase 8 (gate PASS 後) | `hypothesis validate` | linked_hypotheses を自動クローズ |
 | Phase 8 (gate PASS 後) | `specguard ingest` | drift 監査 (non-blocking) |
@@ -431,7 +434,7 @@ hypothesis reject <id> --run <RID>   # 仮説を棄却
 | TDD ライフサイクル | `/tdd red` / `/tdd green` / `/tdd verify` |
 | F→P の赤/緑 proof を記録 | `tdd red --task <id> --cmd "<test>"` / `tdd green --task <id>` |
 | 赤→緑遷移を分類し valid_fp_oracle を判定 | `tdd oracle --task <id>` |
-| worktree で F→P オラクルを実行 (fail-soft) | `condukt state check-oracle --run <RID> --task <id>` |
+| worktree で F→P オラクルを実行 (判定不能は拒否) | `condukt state check-oracle --run <RID> --task <id>` |
 | edit-time gate 本体 (PostToolUse hook が呼ぶ・手動実行は通常不要) | `condukt editgate` |
 | 仕様変更を ADR 記録 | `/specguard:decide <title>` |
 | アーキテクチャ wiki 更新 | `/deepwiki` |

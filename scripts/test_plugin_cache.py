@@ -21,7 +21,17 @@ _spec = importlib.util.spec_from_file_location(
     "plugin_cache", os.path.join(_HERE, "plugin_cache.py")
 )
 pc = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(pc)
+# Compiled from the SOURCE TEXT, deliberately not via the spec loader's
+# exec_module: SourceFileLoader reuses a __pycache__ .pyc validated only by
+# (source mtime at 1 s granularity, size), so a same-second size-preserving
+# edit (e.g. a reordering mutant) would run stale bytecode -- a false GREEN /
+# false mutation SURVIVOR, never a false red. Backlog 05726f9f; do not
+# "simplify" this back. get_source() reads the .py, never the cache;
+# dont_inherit keeps this file's __future__ flags off the subject.
+exec(  # noqa: S102
+    compile(_spec.loader.get_source(_spec.name), _spec.origin, "exec", dont_inherit=True),
+    pc.__dict__,
+)
 
 # The pruner is the other consumer of the same facts: scan() only says what is
 # removable, and "removable" is only half the contract -- a dangling symlink
@@ -31,7 +41,17 @@ _prune_spec = importlib.util.spec_from_file_location(
     "prune_plugin_cache", os.path.join(_HERE, "prune-plugin-cache.py")
 )
 prune = importlib.util.module_from_spec(_prune_spec)
-_prune_spec.loader.exec_module(prune)
+# Compiled from the SOURCE TEXT, deliberately not via the spec loader's
+# exec_module: SourceFileLoader reuses a __pycache__ .pyc validated only by
+# (source mtime at 1 s granularity, size), so a same-second size-preserving
+# edit (e.g. a reordering mutant) would run stale bytecode -- a false GREEN /
+# false mutation SURVIVOR, never a false red. Backlog 05726f9f; do not
+# "simplify" this back. get_source() reads the .py, never the cache;
+# dont_inherit keeps this file's __future__ flags off the subject.
+exec(  # noqa: S102
+    compile(_prune_spec.loader.get_source(_prune_spec.name), _prune_spec.origin, "exec", dont_inherit=True),
+    prune.__dict__,
+)
 
 
 def _plugin(crates, name, version):

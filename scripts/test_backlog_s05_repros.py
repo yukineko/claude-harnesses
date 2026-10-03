@@ -304,13 +304,19 @@ class RolloutProvenance(unittest.TestCase):
 
 
 class ScriptGates(unittest.TestCase):
-    def test_f6919056_check_versions_without_crates_dir_is_not_ok(self):
+    def test_f6919056_plugin_versions_without_crates_dir_is_not_ok(self):
+        # f6919056 was filed against scripts/check-versions.sh, removed under
+        # eca8dea7 (2026-10-04) because the wired check-plugin-versions.py checks
+        # the same parity and more. The property moves to the surviving gate:
+        # a tree with no crates/ at all must not read as "versions consistent".
         tmp = Path(tempfile.mkdtemp(prefix="s05v-")).resolve()
         try:
-            (tmp / "scripts").mkdir()
-            shutil.copy2(SCRIPTS / "check-versions.sh", tmp / "scripts" / "check-versions.sh")
-            r = subprocess.run(["bash", str(tmp / "scripts" / "check-versions.sh")], capture_output=True, text=True)
+            (tmp / ".claude-plugin").mkdir()
+            (tmp / ".claude-plugin" / "marketplace.json").write_text('{"plugins": []}\n')
+            r = subprocess.run([sys.executable, str(SCRIPTS / "check-plugin-versions.py")],
+                               cwd=str(tmp), capture_output=True, text=True)
             self.assertNotEqual(r.returncode, 0, "parity 'OK' with zero crates inspected: " + r.stdout)
+            self.assertNotIn("OK", r.stdout, r.stdout)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -319,7 +325,7 @@ class ScriptGates(unittest.TestCase):
         try:
             d = tmp / "d.jsonl"
             d.write_text('{"resolution_rate":0.9}\n{"resolution_rate":0.1}\n')
-            r = subprocess.run([sys.executable, str(SCRIPTS / "check-bench-regression.py"),
+            r = subprocess.run([sys.executable, str(SCRIPTS / "bench-regression.py"),
                                 "--dashboard", str(d), "--threshold", "1.0"], capture_output=True, text=True)
             self.assertNotEqual(r.returncode, 0, "threshold 1.0 disabled the gate: " + r.stdout)
         finally:

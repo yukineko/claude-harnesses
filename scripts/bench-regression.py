@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""CI regression gate for the benchkit SWE-bench dashboard.
+"""Regression check for the benchkit SWE-bench dashboard — a tool run by hand.
+
+Not a hook gate. It was named check-bench-regression.py and driven by a CI
+workflow (bench-regression.yml); CI is gone (CLAUDE.md 7), and it judges a
+benchkit `runs.jsonl` rather than a commit, so no hook can call it with a
+determinate argument. It was renamed out of the `check-*` prefix that
+scripts/check-unlisted-gates.py treats as "a scanner some hook must run"
+(user ruling 2026-10-04, backlog eca8dea7). Run it by hand against a dashboard.
 
 The benchkit dashboard appends one JSON line per harness run to a `runs.jsonl`
 store (see crates/benchkit/src/dashboard.rs). Each line is a RunRecord with the
@@ -27,7 +34,7 @@ silently disabled the gate; a non-finite threshold is rejected as UNDETERMINED.
 Exit 0 = compared, no regression; exit 1 = regression detected;
 exit 2 = undetermined (nothing could be compared).
 Stdlib only (argparse, json, sys). Run from the repo root:
-  python3 scripts/check-bench-regression.py --dashboard <path> --threshold 0.05
+  python3 scripts/bench-regression.py --dashboard <path> --threshold 0.05
 """
 import argparse
 import json

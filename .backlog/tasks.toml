@@ -4448,13 +4448,15 @@ crates/*/bin/*-darwin-arm64 は .gitignore:45 で無視されており、リポ�
 
 削除はしていない。未追跡かつ gitignore なので git から復元できず、2026-08-04 の a6f165cd と同じく 宣言のない red を意図的と解釈して消す ことになるため。
 
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_5e54fb25.py (rev 529df3a8): no rollout executed; function tested in isolation"""
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_5e54fb25.py (rev 529df3a8): no rollout executed; function tested in isolation
+
+[2026-10-04, session 33de4c25] The main defect (a --plugin run skipped verification and returned rc 0) is fixed by c9373b92 (fix 4bc8c975, tests 418c82e2/131e987d). This item's own repro, test_filtered_run_with_drift_in_the_filtered_plugin_fails, now passes, and its expectedFailure marker was removed. Still open here: the second issue in these notes (a stale untracked crates/tdd/bin/tdd-darwin-arm64 appearing in the mirror comparison) is not addressed. Close this item once that part has its own test, or narrow the item to that part."""
 created_at = 1789297053
-updated_at = 1790983325
+updated_at = 1791046807
 weight = 0.0
 issue_number = 624
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/624"
-rev = 0
+rev = 1
 
 [[task]]
 id = "29b08fc7"
@@ -4833,25 +4835,6 @@ updated_at = 1790983233
 weight = 0.0
 issue_number = 675
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/675"
-rev = 0
-
-[[task]]
-id = "c9373b92"
-title = "rollout-plugins.sh --plugin runs skip the verification that would catch a dark deploy"
-project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-scripts/rollout-plugins.sh:1106-1113 returns 0 early for any filtered run: 'verify: skipped — this run was filtered to: ...'. check-plugin-rollout.py DOES detect 'installed but execs nothing' (check-plugin-rollout.py:1147-1153, ROLLOUT-class fatal at rollout-plugins.sh:1120-1125), but the single most common invocation shape — scripts/rollout-plugins.sh --plugin <name> — never runs it. So the one path an operator uses to roll out one plugin has ZERO post-hoc check that the host binary actually landed. The stated reason (a whole-fleet verdict would fail for plugins this run never touched) argues for a SCOPED verification of the targeted plugins, not for skipping verification entirely. Found while closing 8206b09f.
-
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_rollout_nt_e_repros.py::VerifyRolloutComplete.test_filtered_run_still_verifies_the_targeted_plugins (rev e128c13b): verify_rollout_complete() extracted verbatim from rollout-plugins.sh and run in a sandbox with a stub checker; the script itself was not executed."""
-created_at = 1789118611
-updated_at = 1790983297
-weight = 0.0
-issue_number = 537
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/537"
 rev = 0
 
 [[task]]

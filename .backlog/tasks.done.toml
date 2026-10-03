@@ -32674,3 +32674,44 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 886 filtered out; fi
 rev = "4027a8dcac83a9e2910e6ddd9f07c8780825aeb8"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "c9373b92"
+title = "rollout-plugins.sh --plugin runs skip the verification that would catch a dark deploy"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+scripts/rollout-plugins.sh:1106-1113 returns 0 early for any filtered run: 'verify: skipped — this run was filtered to: ...'. check-plugin-rollout.py DOES detect 'installed but execs nothing' (check-plugin-rollout.py:1147-1153, ROLLOUT-class fatal at rollout-plugins.sh:1120-1125), but the single most common invocation shape — scripts/rollout-plugins.sh --plugin <name> — never runs it. So the one path an operator uses to roll out one plugin has ZERO post-hoc check that the host binary actually landed. The stated reason (a whole-fleet verdict would fail for plugins this run never touched) argues for a SCOPED verification of the targeted plugins, not for skipping verification entirely. Found while closing 8206b09f.
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_rollout_nt_e_repros.py::VerifyRolloutComplete.test_filtered_run_still_verifies_the_targeted_plugins (rev e128c13b): verify_rollout_complete() extracted verbatim from rollout-plugins.sh and run in a sandbox with a stub checker; the script itself was not executed."""
+created_at = 1789118611
+updated_at = 1791046795
+weight = 0.0
+issue_number = 537
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/537"
+issue_closed_at = 1791046797
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest -q scripts/test_backlog_c9373b92.py"
+exit = 0
+passed = 10
+rev = "4cb1fc0106cd6caf7274efe70e5d76dad80aa355"
+observed_at = 1791046783
+output_digest = "sha256:925660f2db6d44219fe7417b85db0f44987aecc11872ee887b8db4596a3f96e4"
+excerpt = """
+..........                                                               [100%]
+10 passed in 4.90s
+"""
+
+[task.closure.red]
+rev = "418c82e2e428a7e1ac163615e116a65d00adb999"
+exit = 1
+kind = "behavioural"

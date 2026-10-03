@@ -174,3 +174,23 @@ reason = "Reverse-looks up a `#[ignore = \"<finding-id>: …\"]` regression test
 [[ack]]
 path = "crates/parallelguard/src/fault_injection_tests.rs"
 reason = "Unit-test submodule (classified impl by the path heuristic) blinding boundary::read_to_string under decide_with and pinning that the PreToolUse verdict stays Deny (8696dd7e slice 4). parallelguard has no docs/specs doc at all — docs/specs/parallelguard.md does not exist, which specguard.toml's gate-area comment already records — so there is nothing to bind to. Spec debt."
+
+[[ack]]
+path = "crates/overwatch/src/observed_close.rs"
+reason = "Observation-based closure plumbing for review findings (open_findings tri-state, close_observed appends `resolved` only on Known(Resolved), ReconcileReport exit 0/3; backlog 89544915). No docs/specs doc describes it: overwatch.md has no observation-closure or reconcile section (grep -ci on docs/specs/overwatch.md, 2026-10-04 @5af9693e: reconcile 0, observed_close 0, episode 0; its one `resolved` hit is compact-findings rotation, a different behaviour). Spec debt."
+
+[[ack]]
+path = "crates/overwatch/src/review_ruling.rs"
+reason = "Bridges .backlog/tasks.toml rows with status needs-ruling into the review-queue as EntryKind::NeedsRuling, read tri-state (absent -> Known(empty), unreadable/unparseable -> Undetermined). No docs/specs doc describes it: overwatch.md's review-queue section enumerates only systemic/rollback/ai-finding/escalation (grep -ci 'needs.ruling' docs/specs/overwatch.md, 2026-10-04 @5af9693e: 0) and its fail-soft bullet ('破損でも、そのソースは何も寄与せず') states the opposite of this file's Undetermined-on-corruption read. Binding would claim coverage the doc contradicts. Spec debt."
+
+[[ack]]
+path = "crates/specguard/src/observed.rs"
+reason = "The 'observed gone' JSONL ledger (specguard_observed_gone.jsonl) that lets a HUMAN-closed structural finding recur as a new episode only after an audit run observed the gap gone (user ruling 2026-10-03). No docs/specs doc describes it: specguard.md's audit bullet covers structural findings but not episodes or the ledger (grep -ci on docs/specs/specguard.md, 2026-10-04 @5af9693e: observed 0, episode 0, reconcile 0). Spec debt."
+
+[[ack]]
+path = "crates/specguard/src/reconcile.rs"
+reason = "`specguard reconcile-findings`: closes structural findings by re-running detection (resolved / removed-entry resolved / still open / UNDETERMINED exit 3) and assigns episode ids specguard:<kind>:<key>:<epoch> (backlog 89544915, ruling R4). No docs/specs doc describes it: specguard.md has no reconcile-findings subcommand or episode rule (grep -ci on docs/specs/specguard.md, 2026-10-04 @5af9693e: reconcile 0, episode 0, resolved 0). Spec debt."
+
+[[ack]]
+path = "crates/stuckguard/src/fault_injection_tests.rs"
+reason = "Unit-test submodule (classified impl by the path heuristic) blinding boundary::read_to_string under state::load and pinning that an unreadable history yields allowed_to_carry_on == None (nudge out of caution), never the permissive Some(true) (8696dd7e slice 4). stuckguard.md describes the watch pipeline through state::load but not what an unreadable history resolves to; its fail-soft bullet covers only stdin/sig/config (grep -ci on docs/specs/stuckguard.md, 2026-10-04 @5af9693e: caution 0, unread 0, fault_injection 0; the only 'fault' hits are DefaultHasher). Spec debt."

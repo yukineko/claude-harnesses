@@ -352,6 +352,8 @@ mod tests {
             issue_number: None,
             issue_url: None,
             issue_closed_at: None,
+            issue_body_synced_rev: None,
+            rev: 0,
             ruling_kind: None,
             rationale: None,
             untestable_reason: None,

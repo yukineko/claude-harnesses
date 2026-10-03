@@ -1,0 +1,189 @@
+#
+# specforge Spec IR — 手書き。`specforge draft --id jev-advisory` は
+# 2026-10-02 に exit 3 / `<<<SPEC_DRAFT>>>` marker 欠落で draft を出せなかった
+# （nested claude が 4 分以上無出力のまま終了）ので、ユーザー裁定
+# 「divert しないが、同じタスク内で spec も書く」に従いこのファイルを手書きした。
+# 「agent が draft した」とは書かない（CLAUDE.md 第4節）。
+#
+# この spec は crates/jev の**既に実装・計測済み**の不変条件を固定するものであり、
+# 未実行の作業を記述していない。したがって ratify は --no-queue で行う
+# （requirement を backlog へ積むと完了済みの作業が待ち行列に入る）。
+# jev を実際に消費側へ配線する作業は別途 backlog 8 件として分割済み。
+#
+# status = "draft"。ratify は人間の儀式なので harness が自分で押さない。
+#   specforge ratify --id jev-advisory -m "<理由>" --no-queue
+#
+
+[spec]
+id = "jev-advisory"
+title = "jev (TypeSafe AI System One) を advisory に閉じ込め、API Key 不在を構造的 no-op にする"
+status = "draft"
+provenance_commit = "f56497bff96b8d158feb256ebaf511579dccde60"
+date = "2026-10-02"
+canon = [
+  "CLAUDE.md#3",
+  "CLAUDE.md#4",
+  "CLAUDE.md#7",
+  "docs/jev-integration-scenes.md",
+  "crates/jev/src/advice.rs",
+  "crates/jev/src/availability.rs",
+  "crates/jev/src/client.rs",
+]
+
+# ---------------------------------------------------------------------------
+# R0 — 最上位。他の requirement より先に読むこと。
+#      外部サービスへ block/allow 権限を渡さない（第7節）。
+# ---------------------------------------------------------------------------
+[[requirement]]
+id = "R0-advisory-only-no-verdict"
+statement = """
+jev は参考意見（advisory）までしか持たない。block/allow を決める権限を
+一切持たず、harness_core::verdict::Verdict を鋳造する経路を持たない。
+Determination<T> は三値の運搬子であって verdict ではないので使用してよいが、
+Verdict 型そのもの・verdict を鋳造する関数（into_verdict / from_findings /
+adjudicate）は crates/jev/src/ に現れてはならない。
+"""
+acceptance = [
+  "crates/jev/src/**.rs のいずれにも `Verdict` 型トークンが現れない（行コメントを除去した上で機械走査する。crates/jev/tests/no_verdict_coupling.rs が強制）",
+  "into_verdict / from_findings / adjudicate のいずれも crates/jev/src/ に現れない",
+  "この走査が空虚でないことを確認済み: `use harness_core::verdict::Verdict;` を注入すると当該テストが RED になり、該当行を名指しする",
+  "jev は .githooks/ のどこからも呼ばれない（呼ばれた時点でゲートの block 権限が外部サービスへ移るため）",
+]
+canon = [
+  "CLAUDE.md#7",
+  "crates/jev/tests/no_verdict_coupling.rs",
+  "crates/harness-core/src/verdict.rs",
+]
+falsifiable = true
+
+# ---------------------------------------------------------------------------
+# R1 — ユーザー要求の本体「API Key が無いときはつかわない」。
+# ---------------------------------------------------------------------------
+[[requirement]]
+id = "R1-no-key-means-no-network-call"
+statement = """
+API Key が観測可能に不在のとき、jev はネットワーク呼び出しを 1 回も行わない。
+これを「呼ばないよう気をつける」ではなく、Client::ask のガードが
+Availability を解決してから初めて transport に触る構造で担保し、
+呼び出し回数を数える Transport 実装で計測する。
+"""
+acceptance = [
+  "TYPESAFE_API_KEY が unset のとき Availability::NotConfigured / exit 1 / transport 呼び出し 0 回",
+  "TYPESAFE_API_KEY が \"\" または空白のみのとき Availability::NotConfigured / exit 1 / transport 呼び出し 0 回",
+  "TYPESAFE_API_KEY が非 UTF-8 のとき Availability::Undetermined / exit 10 / transport 呼び出し 0 回",
+  "TYPESAFE_API_KEY が実 key のとき Availability::Configured / exit 0 / transport 呼び出し 1 回（走査が空虚でないことの対照）",
+  "F→P オラクル: crates/jev/src/client.rs の Availability ガードを除去すると上記 4 行のうち不在側 4 ケースが RED になる（実測: left: 1, right: 0）",
+  "cargo test -p jev がネットワーク到達なしで green（CurlTransport がテスト中に一度も構築されないことを機械走査で確認）",
+]
+canon = [
+  "crates/jev/src/client.rs#ask",
+  "crates/jev/src/availability.rs",
+  "crates/jev/tests/no_key_no_network.rs",
+]
+falsifiable = true
+
+# ---------------------------------------------------------------------------
+# R2 — advisory 版の fail-closed。第3節の鏡像。
+# ---------------------------------------------------------------------------
+[[requirement]]
+id = "R2-absent-advisor-is-structurally-silent"
+statement = """
+advisor にとっての危険は第3節の鏡像である:「jev に相談しなかった」が
+「jev が承認した」と読まれること。したがって Advice は clean 相当の
+variant を持たない二値型とし、「jev が escalate しなかった」と
+「jev が一度も走っていない」を**同じ値**（Advice::NoSignal）にする。
+key の不在は条件分岐ではなく構造的な no-op になる。
+"""
+acceptance = [
+  "Advice の variant は Escalate と NoSignal の 2 つだけで、clean / ok / pass / approved / allow に相当する variant が存在しない（crates/jev/tests/no_verdict_coupling.rs が綴りを機械走査する）",
+  "is_escalation() は存在するが is_clean() は存在しない",
+  "Advice::render() は NoSignal に対し空文字列を返すので、advisor 不在は出力に何も足さない",
+  "key 不在の Advice と「安心させる答えが返ってきた」場合の Advice が == で等しい（crates/jev/tests/no_key_no_network.rs::an_absent_key_and_a_reassuring_answer_are_the_same_value）",
+  "非 2xx の HTTP 応答は答えではなく Determination::undetermined に写る（401 / 422 / 429 / 529 を含む）",
+  "Advice に Clean variant を注入すると render() の網羅 match が E0004 non-exhaustive patterns でコンパイルエラーになる（実測。型による強制が字句テストより先に発火する）",
+]
+canon = [
+  "CLAUDE.md#3",
+  "crates/jev/src/advice.rs",
+  "crates/jev/tests/no_key_no_network.rs",
+]
+falsifiable = true
+
+# ---------------------------------------------------------------------------
+# R3 — 判定不能を観測済みの不在と同じ値に写さない（第3節そのもの）。
+# ---------------------------------------------------------------------------
+[[requirement]]
+id = "R3-undetermined-is-not-not-configured"
+statement = """
+Availability は三値（Configured / NotConfigured / Undetermined）であり、
+「key が無いと観測できた」と「key の有無を判定できなかった」を
+別の値・別の exit code に分ける。非 UTF-8 の環境変数は後者である。
+config のパース不能も既定値への暗黙フォールバックではなく Err にする。
+"""
+acceptance = [
+  "非 UTF-8 の環境変数は NotConfigured ではなく Undetermined になり、exit code が 1 ではなく 10 になる",
+  "~/.jev/config.toml がパース不能なとき Config::load は Err を返し、既定値で黙って続行しない",
+  "max_time_secs = 0 は config ファイル経路でも環境変数経路でも拒否される（0 は curl --max-time 上での上限撤去を意味し、床なし clamp と同じ形になるため）。両経路が config::acceptable_ceiling を通る",
+  "F→P オラクル: ファイル経路の拒否が無い状態では parse(\"max_time_secs = 0\") が Ok(Config { max_time_secs: 0 }) を返して当該テストが RED になる（実測 2026-10-02）",
+  "jev check の JSON は availability の三値と config エラーを別フィールドで出し、config エラーを availability 判定へ混ぜない",
+  "launcher crates/jev/bin/jev はバイナリ欠落時に exit 127 を返す（0 は fail-open、1 は jev 自身の「観測可能に未設定」なので再利用すると判定可能と不能が潰れる）",
+]
+canon = [
+  "CLAUDE.md#3",
+  "crates/jev/src/availability.rs#from_env_os",
+  "crates/jev/src/config.rs",
+  "crates/jev/bin/jev",
+]
+falsifiable = true
+
+# ---------------------------------------------------------------------------
+# R4 — credential と評価対象の秘匿。
+# ---------------------------------------------------------------------------
+[[requirement]]
+id = "R4-credential-and-state-never-leak"
+statement = """
+API Key は環境変数 TYPESAFE_API_KEY のみから読む。CLI フラグを置かない
+（shell history に残る）。subprocess の argv にも載せない
+（ps / /proc/<pid>/cmdline から読める）。crate から出る全文字列を
+値一致とパターンの両方で redact する。使用台帳は評価対象の state を書かない。
+"""
+acceptance = [
+  "crates/jev/src/ に key を受け取る CLI フラグが存在しない（--api-key 等）",
+  "key は curl の argv ではなく `curl -K -` の stdin config 経由で渡る",
+  "401 応答の body が key をそのまま echo しても、jev の出力に canary 文字列が現れない",
+  "台帳レコードに key が現れず、評価対象の state も現れない（質問キーのみ記録される）",
+  "Credential の Debug 表示は末尾 4 文字までしか出さず、Display も Serialize も実装しない",
+  "この走査が空虚でないことの対照: redact を通さない生テキストには canary が実在することを同じテストが assert する",
+]
+canon = [
+  "crates/jev/src/redact.rs",
+  "crates/jev/src/transport.rs",
+  "crates/jev/src/ledger.rs",
+  "crates/jev/tests/no_credential_leak.rs",
+]
+falsifiable = true
+
+# ---------------------------------------------------------------------------
+# R5 — 配線の範囲。ラッパだけが実装済みであることを仕様として固定する。
+# ---------------------------------------------------------------------------
+[[requirement]]
+id = "R5-wiring-is-tiered-and-not-yet-done"
+statement = """
+jev を消費側へ配線する作業は Tier A（順序付けのみ）/ Tier B（人間向け注記のみ）/
+Tier C（恒久的除外）に分類し、どの Tier でも jev が block/allow を決めない。
+この spec の時点で Tier A/B は 1 つも配線されていない。
+散文が「配線済み」と読めてはならない（第4節）。
+"""
+acceptance = [
+  "docs/jev-integration-scenes.md が Tier A / B / C を列挙し、各項目に jev が何を決めてよいか（順序か注記か）を明記している",
+  "Tier B の blastguard 連携は Ask→Allow と Ask→Deny の両方を禁止する（後者は外部サービスに deny 権限を渡すため）",
+  "Tier A の overwatch 連携は verifier 側に jev を置くことを禁止する（finder≠verifier のモデル多様性を壊すため）",
+  "docs/jev-integration-scenes.md の status 節が「ラッパのみ実装、Tier A/B は未配線」と明記し、grep で配線済みと誤読できる記述が無い",
+  "Tier A/B の各項目が backlog に 1 件ずつ分割されている（8 件）",
+]
+canon = [
+  "CLAUDE.md#4",
+  "CLAUDE.md#6",
+  "docs/jev-integration-scenes.md",
+]
+falsifiable = true

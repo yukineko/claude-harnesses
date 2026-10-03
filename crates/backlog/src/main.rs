@@ -136,8 +136,9 @@ enum Command {
         #[arg(long)]
         project: Option<String>,
 
-        /// Filter by status: pending | done | failed (NB: not "open" — that is
-        /// hypothesis's vocabulary, a different binary)
+        /// Filter by status: pending | done | failed | cancelled | claimed
+        /// (`task::FILTER_STATUSES`; `claimed` is derived, never stored. NB:
+        /// not "open" — that is hypothesis's vocabulary, a different binary)
         #[arg(long)]
         status: Option<String>,
 
@@ -250,6 +251,13 @@ enum Command {
         /// Cap how many actions to perform in one run (0 = no cap).
         #[arg(long, default_value_t = 0)]
         limit: usize,
+
+        /// Which half of the mirror to reconcile. `close` catches up on issues
+        /// whose task is already finished; `create` PUBLISHES a new public
+        /// issue per unmirrored pending task. Defaults to `both`, which is what
+        /// `sync` has always done.
+        #[arg(long, value_enum, default_value = "both")]
+        only: store::SyncOnly,
     },
 
     /// Edit a task's fields
@@ -1371,10 +1379,12 @@ fn run(cli: Cli) -> Result<()> {
             closecmd::audit_closures(&tasks_path, json)?;
         }
 
-        Command::Sync { apply, limit } => {
+        Command::Sync { apply, limit, only } => {
             let tasks_path = store_path()?;
             let tasks = store::load(&tasks_path)?;
-            let mut plan = store::sync_plan(&tasks);
+            // Scope BEFORE truncating: `--only close --limit 50` must mean
+            // fifty closes, not the first fifty actions of a mixed plan.
+            let mut plan = store::filter_sync_plan(store::sync_plan(&tasks), only);
             if limit > 0 && plan.len() > limit {
                 plan.truncate(limit);
             }
@@ -1382,16 +1392,56 @@ fn run(cli: Cli) -> Result<()> {
                 .iter()
                 .filter(|a| matches!(a, store::SyncAction::Create { .. }))
                 .count();
-            let closes = plan.len() - creates;
+            let closes = plan
+                .iter()
+                .filter(|a| matches!(a, store::SyncAction::Close { .. }))
+                .count();
+            // Counted, not derived as `plan.len() - creates`: once a third
+            // action kind exists, subtraction reports body updates as closes.
+            let bodies = plan
+                .iter()
+                .filter(|a| matches!(a, store::SyncAction::UpdateBody { .. }))
+                .count();
             println!("sync plan: {creates} issue(s) to create, {closes} issue(s) to close");
+            // Printed only when the plan actually holds body updates, which
+            // needs `--only body`. A default run would otherwise gain a
+            // permanent ", 0 issue body(s)" line reporting an arm it never
+            // performs — noise of exactly the kind backlog 7438ea3a records.
+            if bodies > 0 {
+                println!("sync plan: {bodies} issue body(s) to update");
+            }
             if !apply {
                 for action in plan.iter().take(20) {
                     match action {
                         store::SyncAction::Create { id, title, .. } => {
                             println!("  create  {id}  {title}");
                         }
-                        store::SyncAction::Close { id, number, reason } => {
-                            println!("  close   #{number}  {id}  ({})", reason.as_gh_reason());
+                        store::SyncAction::Close {
+                            id,
+                            number,
+                            reason,
+                            comment,
+                        } => {
+                            // Say that content will be posted, and how much. A
+                            // dry run that printed only the close would
+                            // understate what `--apply` writes to a public
+                            // issue.
+                            println!(
+                                "  close   #{number}  {id}  ({}) + comment ({} chars)",
+                                reason.as_gh_reason(),
+                                comment.chars().count(),
+                            );
+                        }
+                        store::SyncAction::UpdateBody {
+                            id, number, body, ..
+                        } => {
+                            // Says REPLACE, because that is what `--apply`
+                            // does to a public issue; "update" would read as
+                            // an append.
+                            println!(
+                                "  body    #{number}  {id}  replace body ({} chars)",
+                                body.chars().count(),
+                            );
                         }
                     }
                 }
@@ -1434,14 +1484,45 @@ fn run(cli: Cli) -> Result<()> {
                             }
                         }
                     }
-                    store::SyncAction::Close { id, number, reason } => {
-                        match github::decide_issue_close(&remote_url, *number, *reason, gh_probe) {
+                    store::SyncAction::Close {
+                        id,
+                        number,
+                        reason,
+                        comment,
+                    } => {
+                        match github::decide_issue_close(
+                            &remote_url,
+                            *number,
+                            *reason,
+                            Some(comment.as_str()),
+                            gh_probe,
+                        ) {
                             github::CloseOutcome::Closed => {
                                 println!("closed #{number} for {id}");
                                 outcomes.push(store::SyncOutcome::Closed { id: id.clone() });
                             }
                             github::CloseOutcome::NotClosed { reason } => {
                                 failures.push(format!("{id}: close #{number} failed: {reason}"));
+                            }
+                        }
+                    }
+                    store::SyncAction::UpdateBody {
+                        id,
+                        number,
+                        body,
+                        rev,
+                    } => {
+                        match github::decide_issue_edit(&remote_url, *number, body, gh_probe) {
+                            github::EditOutcome::Edited => {
+                                println!("updated body of #{number} for {id}");
+                                outcomes.push(store::SyncOutcome::BodySynced {
+                                    id: id.clone(),
+                                    synced_rev: *rev,
+                                });
+                            }
+                            github::EditOutcome::NotEdited { reason } => {
+                                failures
+                                    .push(format!("{id}: body #{number} update failed: {reason}"));
                             }
                         }
                     }
@@ -1518,6 +1599,16 @@ fn run(cli: Cli) -> Result<()> {
                 status.as_deref(),
             )?;
             println!("updated: {id}");
+            // No mirror close here, and none is needed: a terminal transition
+            // mirrors its close whichever verb performed it, and since
+            // close-evidence `edit` is not such a verb — `store::edit` refuses
+            // every `--status` but `pending` / `failed`, with nothing written,
+            // so `edit --status done|cancelled` can no longer finish work
+            // locally while the issue stays open (the gap that once made this
+            // arm call `mirror_close_for`). The verbs that CAN reach a terminal
+            // state — `done`, `cancel`, `ruling approve` — each mirror inline.
+            // Pinned by tests/mirror_gaps_after_0323.rs
+            // (`edit_status_terminal_is_refused_and_leaves_store_and_issue_untouched`).
         }
 
         Command::SessionStart => {
@@ -1808,8 +1899,20 @@ fn mirror_close_for(tasks_path: &Path, id: &str) {
         .collect();
     let remote_url = git_remote_origin_url(&store_repo_root(tasks_path));
     for action in plan {
-        if let store::SyncAction::Close { number, reason, .. } = action {
-            match github::decide_issue_close(&remote_url, number, reason, gh_probe) {
+        if let store::SyncAction::Close {
+            number,
+            reason,
+            comment,
+            ..
+        } = action
+        {
+            match github::decide_issue_close(
+                &remote_url,
+                number,
+                reason,
+                Some(comment.as_str()),
+                gh_probe,
+            ) {
                 github::CloseOutcome::Closed => {
                     match store::record_sync_outcomes(
                         tasks_path,

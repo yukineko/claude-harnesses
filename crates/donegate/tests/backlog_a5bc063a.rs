@@ -61,7 +61,6 @@ fn violation_ledger(dir: &Path, out: &mut String) {
 }
 
 #[test]
-#[ignore = "backlog a5bc063a: open defect, remove ignore when fixed"]
 fn refusal_giveup_at_the_attempt_cap_leaves_a_durable_trace() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
@@ -99,7 +98,7 @@ fn refusal_giveup_at_the_attempt_cap_leaves_a_durable_trace() {
     let mut ledger = String::new();
     violation_ledger(&home, &mut ledger);
     assert!(
-        ledger.contains("giveup"),
+        ledger.contains("donegate:undetermined:untrusted"),
         "refuse() gave up at the attempt cap (attempt {gave_up:?}) and allowed the stop, but \
          left nothing in the overwatch violation ledger; ledger={ledger:?}"
     );

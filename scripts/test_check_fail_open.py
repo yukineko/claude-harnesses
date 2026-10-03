@@ -212,22 +212,35 @@ class AllowlistSuppression(unittest.TestCase):
         self.assertTrue(fo.ALLOWLIST, "ALLOWLIST is empty — nothing to vouch for")
         for entry in fo.ALLOWLIST:
             p = fo.REPO / entry["path"]
+            needle = entry["needle"]
             with self.subTest(path=entry["path"], pattern=entry["pattern"]):
                 self.assertTrue(
                     p.exists(),
                     f"allowlist entry points at a missing file: {entry['path']}")
-                # With the allowlist in force, this entry's pattern is suppressed.
-                self.assertNotIn(entry["pattern"], names(fo.scan_file(p)),
-                                 "allowlisted hit must be suppressed")
-                # …and only because of the allowlist: emptied, the hit comes back.
+
+                def hit_at_needle(hits):
+                    # Scoped to (pattern, needle) — NOT "is this pattern absent
+                    # from the whole file". A file may hold several hits of the
+                    # same pattern with only one allowlisted; asserting on the
+                    # whole file would fail on the OTHER, legitimately-unlisted
+                    # hits even though this entry suppresses exactly what it
+                    # claims.
+                    return any(nm == entry["pattern"] and needle in txt
+                               for _, txt, nm in hits)
+
+                # With the allowlist in force, the hit AT THIS NEEDLE is suppressed.
+                self.assertFalse(
+                    hit_at_needle(fo.scan_file(p)),
+                    "allowlisted hit (at the entry's needle) must be suppressed")
+                # …and only because of the allowlist: emptied, that hit comes back.
                 saved = fo.ALLOWLIST[:]
                 try:
                     fo.ALLOWLIST.clear()
-                    self.assertIn(
-                        entry["pattern"], names(fo.scan_file(p)),
-                        "without the allowlist the real hit must show — a "
-                        "suppression that masks nothing is a dead entry and "
-                        "must be deleted, not kept")
+                    self.assertTrue(
+                        hit_at_needle(fo.scan_file(p)),
+                        "without the allowlist the real hit (at the entry's "
+                        "needle) must show — a suppression that masks nothing "
+                        "is a dead entry and must be deleted, not kept")
                 finally:
                     fo.ALLOWLIST.clear()
                     fo.ALLOWLIST.extend(saved)

@@ -728,3 +728,71 @@ fn self_sync_subject_uses_the_actual_branch_name_master() {
     );
     assert!(cursor_text(&fx).contains(&sha), "must be marked harvested");
 }
+
+// ---------------------------------------------------------------------------
+// Which stream the messages go to. `harvest` is run by the same `SessionEnd`
+// hook as `sync` (`hooks/hooks.json`: `fugu-router harvest; fugu-router sync`),
+// and a SessionEnd hook's stderr is surfaced to the user while its stdout is
+// discarded. So the stream is the user-visible behaviour, not a detail.
+//
+// Measured 2026-10-02 at rev b478fdcf (fugu-router 0.1.31): the success line
+// `fugu-router: harvested {n} merge episode(s)` was an `eprintln!`
+// (`src/harvest.rs:51`), so a harvest that worked perfectly printed to stderr
+// and showed up as an error at the end of a session. The fix is a split, not a
+// silencing: success/progress on stdout, stderr reserved for failures —
+// silencing both would convert a noisy success into an invisible failure, the
+// fail-open this repository forbids (CLAUDE.md §1/§3).
+// ---------------------------------------------------------------------------
+
+/// A harvest that succeeded must put NOTHING on stderr — and must still report
+/// what it harvested, on stdout. Both halves are asserted on purpose: an empty
+/// stderr alone would be satisfied by a command that went mute.
+#[test]
+fn a_successful_harvest_is_silent_on_stderr_and_reports_on_stdout() {
+    let fx = Fixture::new("stream-success");
+    let t = now() - 10 * DAY;
+    fx.merge(
+        "feat",
+        "Merge feat: add thing",
+        t,
+        &[(
+            t - 7200,
+            msg("feat: add thing", Some(OPUS)),
+            vec!["a.txt", "new.txt"],
+        )],
+    );
+
+    let out = fx.harvest(&[]);
+    ok(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+
+    // Precondition: there is something to report. The success line is only
+    // printed when n > 0, so a harvest of zero episodes would make the stdout
+    // assertion below vacuous.
+    let eps = fx.episodes();
+    assert_eq!(
+        eps.len(),
+        1,
+        "precondition failed: expected exactly one harvested episode, got \
+         {eps:?}\nstdout: {stdout:?}\nstderr: {stderr:?}"
+    );
+
+    assert_eq!(
+        stderr.trim(),
+        "",
+        "a SUCCESSFUL `fugu-router harvest` wrote to stderr. It runs from the \
+         SessionEnd hook, whose stderr is surfaced to the user, so this text is \
+         part of why a clean session end looked like an error. stderr must be \
+         reserved for failures.\n\
+         observed stderr: {stderr:?}\nobserved stdout: {stdout:?}"
+    );
+
+    assert!(
+        stdout.contains("harvested 1 merge episode(s)"),
+        "harvest's success line is on neither stream. It must move to stdout — \
+         discarded at SessionEnd, but still informative when a human runs \
+         `fugu-router harvest` by hand — not disappear.\n\
+         observed stdout: {stdout:?}\nobserved stderr: {stderr:?}"
+    );
+}

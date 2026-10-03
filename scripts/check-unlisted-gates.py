@@ -47,12 +47,21 @@ A regular file directly in `<toplevel>/scripts/` whose name matches
 
 What counts as an invocation
 ----------------------------
-Parsed from shell text, outside comments, heredoc bodies and quoted string
-literals (so a remediation hint that merely *mentions* `python3 scripts/x.py`
-does not list x), at a command position (line start, after ; & | ( ) { } `$(`
-or a backtick, after `then/do/else/if/...`, after leading VAR=value words):
+Each hook body is walked as ONE stream with shell quote state carried across
+lines (`command_starts`): single quotes, double quotes with backslash escapes,
+backslash-newline continuations, `${...}`, `$(...)`, backticks, subshells,
+comments (only outside quotes) and heredoc bodies (skipped as data). So a
+remediation hint that merely *mentions* `python3 scripts/x.py` — on one line or
+on the continuation line of a multi-line "..." / '...' string — does not list x.
+A `$(...)` or backtick inside a double-quoted string really executes, so a
+command there still counts. An unbalanced quote / `$(` / backtick / `(` / `${`
+or an unterminated heredoc at EOF means the body could not be parsed: exit 2.
+
+Recognised at a command position (start of the body or a line, after ; & | ( )
+{ } `$(` or a backtick, after `then/do/else/if/...`, after a leading VAR=value
+word):
   1. `run <check-name>` — only in a hook that defines a `run()` function (the
-     pre-commit helper);
+     pre-commit helper) somewhere outside quotes/comments;
   2. `python3|python|bash|sh [-opts] <...>scripts/<check-name>`;
   3. a direct exec of `<...>scripts/<check-name>`;
   4. `VAR=<...>scripts/<check-name>` followed elsewhere in the same hook by
@@ -60,12 +69,22 @@ or a backtick, after `then/do/else/if/...`, after leading VAR=value words):
 Anything this parser does not recognise is NOT counted, so an unrecognised
 invocation style reads as unlisted (red), never as listed.
 
+KNOWN LIMITATION (fail-open, not fixed): reachability is not analysed. A
+recognised invocation is counted even if it can never execute — inside a
+function that is defined but never called, under `if false`, after an
+unconditional `exit 0`, behind a `case` arm no value reaches, and so on. Such a
+scanner reads as listed while no commit ever runs it. Closing this would need
+control-flow analysis of the hook; it is left open on purpose and stated here
+rather than implied away.
+
 Exit codes
 ----------
   0  every gate scanner in scripts/ is invoked; prints one OK line with the count
   1  one or more scanners are not invoked by any active hook; each is named
   2  undetermined: not a git work tree, hooksPath unreadable, active pre-commit
-     missing/unreadable/not executable, a sibling hook unreadable, scripts/
+     missing/unreadable/not executable, a sibling hook unreadable, a hook body
+     that cannot be parsed (unbalanced quoting / nesting, unterminated or
+     unparseable heredoc), scripts/
      unreadable or missing, zero gate scanners found, or zero invocations parsed
      from the hooks (an empty set is not a clean set).
 """
@@ -94,7 +113,7 @@ GIT_HOOKS = (
     "post-index-change",
 )
 
-INTERP = r"(?:exec\s+|command\s+)?(?:python3|python|bash|sh)\s+(?:-[A-Za-z]+\s+)*"
+INTERP = r"(?:exec[ \t]+|command[ \t]+)?(?:python3|python|bash|sh)[ \t]+(?:-[A-Za-z]+[ \t]+)*"
 # An operand word: optionally quoted, no whitespace / shell metachar inside.
 OPERAND = r"([\"']?)([^\s\"';|&()<>`]+)\1"
 SCRIPT_PATH_RE = re.compile(r"^(?:\$\{?\w+\}?/|\./|[^\s\"']*/)?scripts/(" + CHECK_NAME + r")$")
@@ -102,11 +121,14 @@ VAR_REF_RE = re.compile(r"^\$\{?(\w+)\}?$")
 
 INTERP_RE = re.compile(INTERP + OPERAND)
 DIRECT_RE = re.compile(OPERAND)
-RUN_RE = re.compile(r"run\s+(" + CHECK_NAME + r")(?=[\s;&|)]|$)")
+RUN_RE = re.compile(r"run[ \t]+(" + CHECK_NAME + r")(?=[\s;&|)]|$)")
+RUN_DEF_RE = re.compile(r"(?:function[ \t]+run\b|run[ \t]*\([ \t]*\))")
 ASSIGN_RE = re.compile(r"([A-Za-z_]\w*)=")
-KEYWORD_RE = re.compile(r"(?:then|do|else|elif|if|while|until|time|!)(?=\s)")
-HEREDOC_RE = re.compile(r"<<-?\s*([\"']?)([A-Za-z_]\w*)\1")
-RUN_DEF_RE = re.compile(r"^\s*(?:function\s+run\b|run\s*\(\s*\))", re.M)
+KEYWORD_RE = re.compile(r"(?:then|do|else|elif|if|while|until|time|!)(?=[ \t\n])")
+HEREDOC_RE = re.compile(
+    r"<<(-?)[ \t]*(?:'([^'\n]*)'|\"([^\"\n]*)\"|\\?([A-Za-z0-9_.-]+))"
+)
+REDIR_RE = re.compile(r"[<>]+&?[ \t]*[^\s;&|()<>\"'`]*")
 
 
 class Undetermined(Exception):
@@ -179,130 +201,208 @@ def read_hooks(hook_dir):
     return bodies
 
 
-def logical_lines(text):
-    """Yield shell lines with heredoc bodies removed and continuations joined."""
-    lines = text.split("\n")
-    i = 0
-    buf = ""
-    while i < len(lines):
-        line = lines[i]
-        i += 1
-        if line.endswith("\\") and not line.endswith("\\\\"):
-            buf += line[:-1] + " "
-            continue
-        logical = buf + line
-        buf = ""
-        yield logical
-        # Heredoc bodies are data (remediation text etc.), never commands.
-        for delim in _heredoc_delims(logical):
-            while i < len(lines) and lines[i].strip() != delim:
-                i += 1
-            i += 1  # the delimiter line
-    if buf:
-        yield buf
+def _skip_heredocs(src, i, heredocs):
+    """Skip the bodies of the heredocs opened on the line that ended at i-1.
 
-
-def _heredoc_delims(line):
-    out = []
-    for kind, pos, _ in _unquoted_positions(line):
-        if kind == "<<":
-            m = HEREDOC_RE.match(line, pos)
-            if m:
-                out.append(m.group(2))
-    return out
-
-
-def _unquoted_positions(line):
-    """Yield (kind, index, cmd_pos) markers by walking the line quote-aware.
-
-    kind is "cmd" for a command-position start, "<<" for an unquoted heredoc
-    operator. Stops at an unquoted comment.
+    Heredoc bodies are data (remediation text etc.), never commands; this also
+    applies to an unquoted delimiter, whose body could expand `$(...)` — not
+    counting that is the conservative (red) direction.
     """
-    in_single = False
-    in_double = False
+    n = len(src)
+    for strip_tabs, delim in heredocs:
+        while True:
+            if i >= n:
+                raise Undetermined("heredoc <<%s is never terminated" % delim)
+            j = src.find("\n", i)
+            line = src[i:] if j < 0 else src[i:j]
+            i = n if j < 0 else j + 1
+            if (line.lstrip("\t") if strip_tabs else line) == delim:
+                break
+    return i
+
+
+def _skip_param(src, i):
+    """i is at `${`; return the index after the matching `}`."""
+    depth = 0
+    j = i + 1
+    while j < len(src):
+        if src[j] == "{":
+            depth += 1
+        elif src[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return j + 1
+        j += 1
+    raise Undetermined("unterminated ${ at offset %d" % i)
+
+
+def command_starts(body):
+    """Return (src, starts): the indices in src where a simple command begins.
+
+    src is body with backslash-newline continuations replaced by two spaces (same
+    length). Quote state is tracked across the WHOLE body, not per line: a
+    single- or double-quoted string spanning lines stays a string, so a scanner
+    path on its continuation line is data. Inside double quotes only `$(` and a
+    backtick open a command (they really execute there). Comments are only
+    recognised outside quotes; heredoc bodies are skipped. An unbalanced quote,
+    `$(`, backtick, `(`, `${` or an unterminated heredoc at EOF raises
+    Undetermined: the body could not be parsed.
+    """
+    src = body.replace("\\\n", "  ")
+    n = len(src)
+    stack = ["top"]  # top | paren | cmdsub | bq | dq | sq
+    starts = []
     cmd_pos = True
-    assign_word = False  # inside a leading VAR=value word
+    assign_depth = None  # stack depth of a leading VAR=value word being walked
+    heredocs = []
     i = 0
-    n = len(line)
     while i < n:
-        c = line[i]
-        if in_single:
+        ctx = stack[-1]
+        c = src[i]
+        if ctx == "sq":
             if c == "'":
-                in_single = False
+                stack.pop()
+            i += 1
+            continue
+        if ctx == "dq":
+            if c == "\\":
+                i += 2
+            elif c == '"':
+                stack.pop()
+                cmd_pos = False
+                i += 1
+            elif src.startswith("$(", i):
+                stack.append("cmdsub")
+                cmd_pos = True
+                assign_depth = None
+                i += 2
+            elif c == "`":
+                stack.append("bq")
+                cmd_pos = True
+                assign_depth = None
+                i += 1
+            elif src.startswith("${", i):
+                i = _skip_param(src, i)
+            else:
+                i += 1
+            continue
+        # Unquoted shell code: top level, (subshell), $(...), `...`.
+        if c == "\n":
+            i += 1
+            if heredocs:
+                i = _skip_heredocs(src, i, heredocs)
+                heredocs = []
+            cmd_pos = True
+            assign_depth = None
+            continue
+        if c in " \t":
+            if assign_depth is not None and len(stack) == assign_depth:
+                # `VAR=value cmd`: the word after an assignment is a command.
+                cmd_pos = True
+                assign_depth = None
             i += 1
             continue
         if c == "\\":
             i += 2
             cmd_pos = False
             continue
-        if c in " \t":
-            if assign_word and not in_double:
-                # `VAR=value cmd`: the word after an assignment is a command.
-                assign_word = False
-                cmd_pos = True
+        if c == "#" and (i == 0 or src[i - 1] in " \t\n;&|()`"):
+            j = src.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        if ctx == "bq" and c == "`":
+            stack.pop()
+            cmd_pos = False
             i += 1
             continue
-        if line.startswith("$(", i) and not line.startswith("$((", i):
-            i += 2
+        if src.startswith("<<", i) and not src.startswith("<<<", i):
+            m = HEREDOC_RE.match(src, i)
+            if not m:
+                raise Undetermined("unparseable heredoc operator at offset %d" % i)
+            delim = m.group(2) if m.group(2) is not None else (
+                m.group(3) if m.group(3) is not None else m.group(4)
+            )
+            heredocs.append((m.group(1) == "-", delim))
+            i = m.end()
+            continue
+        if c in "<>":
+            i = REDIR_RE.match(src, i).end()
+            continue
+        if src.startswith("${", i):
+            i = _skip_param(src, i)
+            cmd_pos = False
+            continue
+        if src.startswith("$(", i):
+            stack.append("cmdsub")
             cmd_pos = True
+            assign_depth = None
+            i += 2
             continue
         if c == "`":
-            i += 1
+            stack.append("bq")
             cmd_pos = True
-            continue
-        if in_double and (c == '"' or not cmd_pos):
-            # Inside "...": only a `$(`/backtick (handled above) starts a
-            # command; everything else is string data.
-            if c == '"':
-                in_double = False
-            cmd_pos = False
+            assign_depth = None
             i += 1
             continue
-        if c == "#" and (i == 0 or line[i - 1] in " \t;&|()"):
-            return
-        if line.startswith("<<", i) and not line.startswith("<<<", i):
-            yield ("<<", i, False)
-            i += 2
-            cmd_pos = False
-            continue
-        if c in ";&|(){}":
-            i += 1
+        if c == "(":
+            stack.append("paren")
             cmd_pos = True
-            assign_word = False
+            assign_depth = None
+            i += 1
+            continue
+        if c == ")":
+            if ctx in ("paren", "cmdsub"):
+                stack.pop()
+                cmd_pos = False
+            else:
+                # Unmatched at this level: a `case` pattern terminator.
+                cmd_pos = True
+            assign_depth = None
+            i += 1
+            continue
+        if c in ";&|{}":
+            cmd_pos = True
+            assign_depth = None
+            i += 1
             continue
         if cmd_pos:
-            yield ("cmd", i, True)
-            kw = KEYWORD_RE.match(line, i)
+            starts.append(i)
+            kw = KEYWORD_RE.match(src, i)
             if kw:
                 i = kw.end()
                 continue
-            asg = ASSIGN_RE.match(line, i)
+            asg = ASSIGN_RE.match(src, i)
             if asg:
                 # Walk INTO the value: `x="$(python3 scripts/y.py)"` runs y.
                 i = asg.end()
                 cmd_pos = False
-                assign_word = True
+                assign_depth = len(stack)
                 continue
             cmd_pos = False
         if c == '"':
-            in_double = True
+            stack.append("dq")
         elif c == "'":
-            in_single = True
+            stack.append("sq")
         i += 1
+    if len(stack) != 1:
+        raise Undetermined("unbalanced shell quoting/nesting at EOF (open: %s)" % "/".join(stack[1:]))
+    if heredocs:
+        raise Undetermined("heredoc <<%s is never terminated" % heredocs[0][1])
+    return src, starts
 
 
-def _skip_word(line, i):
+def _skip_word(src, i):
     """Skip one shell word starting at i (quote-aware); return the index after."""
-    n = len(line)
+    n = len(src)
     in_single = in_double = False
     depth = 0
     while i < n:
-        c = line[i]
+        c = src[i]
         if in_single:
             in_single = c != "'"
         elif c == "\\":
             i += 1
-        elif line.startswith("$(", i):
+        elif src.startswith("$(", i):
             depth += 1
             i += 1
         elif c == ")" and depth:
@@ -313,7 +413,7 @@ def _skip_word(line, i):
             in_double = True
         elif c == "'":
             in_single = True
-        elif c in " \t;&|" and not depth:
+        elif c in " \t\n;&|" and not depth:
             break
         i += 1
     return i
@@ -325,43 +425,49 @@ def _script_name(operand):
 
 
 def invoked_by(text):
-    """Return the set of check-* scanner names a hook body invokes."""
-    has_run = bool(RUN_DEF_RE.search(text))
+    """Return the set of check-* scanner names a hook body invokes.
+
+    Raises Undetermined when the body cannot be parsed (see command_starts).
+    """
+    src, starts = command_starts(text)
+    has_run = False
+    run_calls = set()
     found = set()
     bindings = {}
     refs = set()
-    for line in logical_lines(text):
-        for kind, i, _ in _unquoted_positions(line):
-            if kind != "cmd":
+    for i in starts:
+        if RUN_DEF_RE.match(src, i):
+            has_run = True
+            continue
+        asg = ASSIGN_RE.match(src, i)
+        if asg:
+            val = src[asg.end():_skip_word(src, asg.end())].strip("\"'")
+            name = _script_name(val)
+            if name:
+                bindings[asg.group(1)] = name
+            continue
+        m = RUN_RE.match(src, i)
+        if m:
+            run_calls.add(m.group(1))
+            continue
+        m = INTERP_RE.match(src, i)
+        if m:
+            operand = m.group(2)
+            name = _script_name(operand)
+            if name:
+                found.add(name)
                 continue
-            asg = ASSIGN_RE.match(line, i)
-            if asg:
-                val = line[asg.end():_skip_word(line, asg.end())].strip("\"'")
-                name = _script_name(val)
-                if name:
-                    bindings[asg.group(1)] = name
-                continue
-            if has_run:
-                m = RUN_RE.match(line, i)
-                if m:
-                    found.add(m.group(1))
-                    continue
-            m = INTERP_RE.match(line, i)
-            if m:
-                operand = m.group(2)
-                name = _script_name(operand)
-                if name:
-                    found.add(name)
-                    continue
-                v = VAR_REF_RE.match(operand)
-                if v:
-                    refs.add(v.group(1))
-                continue
-            m = DIRECT_RE.match(line, i)
-            if m:
-                name = _script_name(m.group(2))
-                if name:
-                    found.add(name)
+            v = VAR_REF_RE.match(operand)
+            if v:
+                refs.add(v.group(1))
+            continue
+        m = DIRECT_RE.match(src, i)
+        if m:
+            name = _script_name(m.group(2))
+            if name:
+                found.add(name)
+    if has_run:
+        found |= run_calls
     for var in refs:
         if var in bindings:
             found.add(bindings[var])
@@ -396,8 +502,11 @@ def main(argv):
         toplevel, hook_dir, how = resolve_hook_dir(cwd)
         bodies = read_hooks(hook_dir)
         invoked = set()
-        for text in bodies.values():
-            invoked |= invoked_by(text)
+        for hook_name, text in sorted(bodies.items()):
+            try:
+                invoked |= invoked_by(text)
+            except Undetermined as e:
+                raise Undetermined("cannot parse hook %s: %s" % (os.path.join(hook_dir, hook_name), e))
         if not invoked:
             raise Undetermined(
                 "parsed zero scanner invocations from the active hooks in %s (%s); "

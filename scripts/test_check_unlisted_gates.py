@@ -262,6 +262,50 @@ class Unlisted(unittest.TestCase):
         for n in ("check-c.py", "check-d.py", "check-e.py", "check-f.py"):
             self.assertIn(n, text, out(p))
 
+    def test_multiline_quoted_mentions_are_not_invocations(self):
+        # Quote state must carry across lines: the continuation line of a
+        # multi-line "..." or '...' string is data, not a command.
+        fx = Fx(self)
+        body = hook(
+            [
+                "run check-a.py a",
+                'echo "blocked. Fix with:',
+                '    python3 scripts/check-b.py --update',
+                '" >&2',
+                "printf '%s\\n' 'or:",
+                "    python3 scripts/check-c.py",
+                "' >&2",
+                'x="first; ${HOME:-}',
+                '    python3 scripts/check-d.py"',
+            ]
+        )
+        fx.write_hook(fx.main, "pre-commit", body)
+        for n in ("check-a.py", "check-b.py", "check-c.py", "check-d.py"):
+            fx.add_scanner(fx.main, n)
+        fx.set_hooks_path("absolute")
+        p = fx.check(fx.main)
+        self.assertEqual(p.returncode, 1, out(p))
+        for n in ("check-b.py", "check-c.py", "check-d.py"):
+            self.assertIn(n, p.stdout + p.stderr)
+
+    def test_command_substitution_inside_double_quotes_counts(self):
+        # "$(...)" and `...` inside double quotes really execute.
+        fx = Fx(self)
+        body = hook(
+            [
+                "run check-a.py a",
+                'msg="result:',
+                '$(python3 scripts/check-b.py)"',
+                'echo "also `sh scripts/check-c.sh`"',
+            ]
+        )
+        fx.write_hook(fx.main, "pre-commit", body)
+        for n in ("check-a.py", "check-b.py", "check-c.sh"):
+            fx.add_scanner(fx.main, n)
+        fx.set_hooks_path("absolute")
+        p = fx.check(fx.main)
+        self.assertEqual(p.returncode, 0, out(p))
+
     def test_invocation_from_non_executable_hook_does_not_count(self):
         # git does not run a hook without the exec bit.
         fx = Fx(self)
@@ -345,6 +389,27 @@ class Undetermined(unittest.TestCase):
         fx.set_hooks_path("absolute")
         p = fx.check(fx.main)
         self.assertUndetermined(p)
+
+    def _assert_unparseable(self, extra):
+        fx = Fx(self)
+        fx.write_hook(fx.main, "pre-commit", hook(["run check-a.py a"] + extra))
+        fx.add_scanner(fx.main, "check-a.py")
+        fx.set_hooks_path("absolute")
+        p = fx.check(fx.main)
+        self.assertEqual(p.returncode, 2, out(p))
+        self.assertIn("parse", p.stderr, out(p))
+
+    def test_unbalanced_double_quote_is_undetermined(self):
+        self._assert_unparseable(['echo "never closed'])
+
+    def test_unbalanced_single_quote_is_undetermined(self):
+        self._assert_unparseable(["echo 'never closed"])
+
+    def test_unbalanced_command_substitution_is_undetermined(self):
+        self._assert_unparseable(['x=$(python3 scripts/check-a.py'])
+
+    def test_unterminated_heredoc_is_undetermined(self):
+        self._assert_unparseable(["cat <<'EOF'", "python3 scripts/check-a.py"])
 
     def test_zero_scanners_in_scripts_is_undetermined(self):
         fx = Fx(self)

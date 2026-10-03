@@ -33721,3 +33721,51 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "d8dccdac6daac02fb10238191ddf3e2182b434d5"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "1b82a049"
+title = "blastguard: chmod -x <plugin cache binary> が ALLOW — ゲート無効化が dark に失敗する"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-09-09 (blastguard 0.2.59)。chmod -x /home/hiroyuki_nakayama/.claude/plugins/cache/yukineko/blastguard/0.2.58/bin/blastguard が ALLOW。実行ビットを落とされた hook は Permission denied で起動せず、finding を一切出さない。つまり red ではなく dark に落ちる — 沈黙が「問題なし」と読まれる典型的な fail-open (CLAUDE.md 3)。plugin cache のパスが exclude.rs の PROTECTED_GLOBS に無いのが原因。可逆性の軸とは独立 (chmod は完全に可逆だが、無効化されたゲートは以後のすべての verdict を無意味にする)。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/blastguard/tests/backlog_audit_s02.rs (rev e70d48dd)"""
+created_at = 1788947185
+updated_at = 1791048299
+weight = 0.0
+issue_number = 1117
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1117"
+issue_closed_at = 1791048301
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_audit_s02 backlog_1b82a049"
+exit = 0
+passed = 1
+rev = "fcb44641b989e5da8d05ddf5292684c81bd69c47"
+observed_at = 1791048252
+output_digest = "sha256:2141b9bf7b42b6f684b4ad7a5a26769c67c4d7b6f3ccd44e851405f702f71f82"
+excerpt = """
+
+running 1 test
+test backlog_1b82a049_chmod_x_off_plugin_cache_binary_is_not_allowed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 47 filtered out; finished in 0.60s
+
+   Compiling blastguard v0.2.108 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.52s
+     Running tests/backlog_audit_s02.rs (target/debug/deps/backlog_audit_s02-07ef0c208a2fab93)
+"""
+
+[task.closure.red]
+rev = "f51e281e939680fb09866da6a6ff4a0acafc47f0"
+exit = 101
+kind = "behavioural"

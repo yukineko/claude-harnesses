@@ -2118,25 +2118,6 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/1115"
 rev = 0
 
 [[task]]
-id = "1b82a049"
-title = "blastguard: chmod -x <plugin cache binary> が ALLOW — ゲート無効化が dark に失敗する"
-project = "/home/hiroyuki_nakayama/src/claude-harnesses"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-実測 2026-09-09 (blastguard 0.2.59)。chmod -x /home/hiroyuki_nakayama/.claude/plugins/cache/yukineko/blastguard/0.2.58/bin/blastguard が ALLOW。実行ビットを落とされた hook は Permission denied で起動せず、finding を一切出さない。つまり red ではなく dark に落ちる — 沈黙が「問題なし」と読まれる典型的な fail-open (CLAUDE.md 3)。plugin cache のパスが exclude.rs の PROTECTED_GLOBS に無いのが原因。可逆性の軸とは独立 (chmod は完全に可逆だが、無効化されたゲートは以後のすべての verdict を無意味にする)。
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/blastguard/tests/backlog_audit_s02.rs (rev e70d48dd)"""
-created_at = 1788947185
-updated_at = 1790983180
-weight = 0.0
-issue_number = 1117
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1117"
-rev = 0
-
-[[task]]
 id = "1440e7a0"
 title = "blastguard: $VAR 先頭のコマンド語が実トラフィック非 allow の最大クラス (69/151)"
 project = "/home/hiroyuki_nakayama/src/claude-harnesses"
@@ -12626,3 +12607,24 @@ weight = 0.0
 issue_number = 1281
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1281"
 rev = 0
+
+[[task]]
+id = "f597cbbd"
+title = "observing main-tree guard が他セッションの main への fast-forward merge を並行する無関係な Bash call に帰属させた"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = """
+Observed 2026-10-04 (session 64554c4d, reported by its p1 driver sub-agent and re-checked): main carries two single-parent commits, 98312703 (2026-10-04 02:22:02 +0900, 'specguard: ack 5 gate files with no docs/specs coverage (unblock push)', parent 5af9693e) and dfd7357d (02:23:21, 'backlog: file 5 p2 spec-debt items for gate files acked in 98312703'), followed by f2e3e057 'Merge branch flow-orphan-issues'. The sub-agent also saw a staged .backlog/tasks.toml in main's tree at the time; by the time this was filed main's tree was clean. Neither commit came from session 64554c4d. The main-tree guard attributed the change to the sub-agent's call (whose commands all ran in the session-64554c4d worktree).
+Reading (a): another session committed directly in main's working tree, so scripts/check-worktree-isolation.py (pre-commit, blocks non-merge commits from main's tree) did not fire: bypassed, not wired, or the commit ran with a different hooksPath. (b): the commits were made in a worktree and reached main by a fast-forward merge, which leaves only single-parent commits on main; §8 is satisfied but history cannot show it.
+Distinguish: find the session whose transcript contains 'unblock push' / the commit hash and check its cwd at commit time; check the reflog of main (`git reflog show main` around 02:22) for 'commit' vs 'merge ... Fast-forward'. Also: the guard's attribution of a foreign mutation to whichever call happened to run next is a separate defect (false attribution).
+
+SETTLED 2026-10-04 right after filing: reading (b). `git reflog show main` shows 'dfd7357d main@{2026-10-04 02:23:55 +0900}: merge flow-specdoc: Fast-forward' — the two commits were made on branch flow-specdoc and fast-forwarded onto main; no §8 violation. What remains open is only the false attribution: the main-tree guard (observing guard) attributed main's change (the fast-forward / a transient staged .backlog/tasks.toml during it) to an unrelated concurrent Bash call of session 64554c4d's sub-agent."""
+created_at = 1791048270
+updated_at = 1791048283
+weight = 0.0
+issue_number = 1288
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1288"
+rev = 1

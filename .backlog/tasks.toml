@@ -12238,3 +12238,35 @@ weight = 0.0
 issue_number = 1234
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1234"
 rev = 0
+
+[[task]]
+id = "eba15868"
+title = "blastguard: 非再帰の rm <linked worktree>/.git (gitdir ファイル) が Allow — worktree の git 接続を切る削除を止めない (0.2.105 以前から。test adv_checkout_own_dotgit_file_is_not_allowed が RED)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = ""
+created_at = 1791046776
+updated_at = 1791046776
+weight = 0.0
+issue_number = 1264
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1264"
+rev = 0
+
+[[task]]
+id = "c089699f"
+title = "c63f1c23 残余: lock を取らない HOME reader (claim.rs:1458 / maintree.rs:605,619 / main.rs:2585 / harness_core::config::home()) と LESSONS_STORE_DIR の二重 lock (lessons.rs:207, replan.rs:1302)、repo_commit.rs:229-237 の無 lock env、runtime_conflict.rs:200 の実 HOME + 固定 /tmp"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = ""
+created_at = 1791046778
+updated_at = 1791046778
+weight = 0.0
+issue_number = 1265
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1265"
+rev = 0

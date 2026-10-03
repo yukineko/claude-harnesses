@@ -249,6 +249,15 @@ backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drive
 
 「source が尽きる / 予算超過 / ユーザー中断」まで以下を繰り返す。
 
+> **cwd は常にこのセッションの linked worktree**（backlog 1e6f00ae）。`backlog`（add / done / fail /
+> edit / cancel / confirm / ruling request・approve・withdraw / `sync --apply`）と `compass`（charter --write / gap --write / outcome / opportunity add /
+> apply / evaluate / carve-reset / route）の **store 書き込みは、main（primary checkout）の作業ツリー内では
+> 拒否される**（非 0 終了・何も書かない。CLAUDE.md §8: main の作業ツリーは merge だけを受け取る）。
+> 判定不能（git が答えない）も拒否に倒れる。したがって以下の `backlog` / `compass` はすべて
+> **セッションの worktree を cwd にして**実行する（`git worktree add …` で作った linked worktree）。
+> 読み取り（list / next（--claim なし）/ pivot-check / `compass charter`（--write なし）/ `compass gap`
+> （--write なし））は main からでも動く。
+
 #### 3-1. 次のタスクを優先度順にピック
 
 > **順序は backlog 優先**（2026-09-23 のユーザー裁定）。compass / charter は **1 と 2 が
@@ -272,7 +281,8 @@ backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drive
    condukt が判定し、非衝突タスクだけを並列バッチに、衝突・危険なものは自動で直列に落とす
    （**「並列が危険/高コストなら直列」はこの層で保証**される＝conservative: 迷えば直列）。
 
-   a. **バッチを取り出す**（**1 件ずつ `--claim` で予約**しながら最大 N 件）:
+   a. **バッチを取り出す**（**1 件ずつ `--claim` で予約**しながら最大 N 件。**cwd = このセッションの linked worktree**。
+      `--claim` の lease は repo 外の `~/.backlog/claims` に書かれ main でも拒否はされないが、worktree で打つ）:
       ```bash
       backlog next --claim --project "$PWD"   # 選択と予約が同一クリティカルセクション。N 回繰り返す
       ```
@@ -304,7 +314,7 @@ backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drive
       - budgetguard が予算逼迫を示す → バッチ幅を絞る（極端なら N=1＝従来の直列に縮退）。
       - notes から明らかに **相互依存**／同一領域・同一ファイルを触る／deploy・push（Gated 相当）を含むと読める。
       判断に迷うものは**バッチに入れてよい**（condukt が衝突を検出して自動で直列化するため二重の安全網になる）。
-   c. **backlog に積む側**（このループが `backlog add` する場合）— compass opportunity 由来なら **その weight を供給**する
+   c. **backlog に積む側**（このループが `backlog add` する場合。**cwd = このセッションの linked worktree**＝main では拒否される）— compass opportunity 由来なら **その weight を供給**する
       こと（weight が compass→backlog→flow と流れ、影響度の高い機会が先頭に来て同じ並列バッチに乗りやすくなる）:
       ```bash
       W=$(compass gap | jq -r '.opportunities[0].weight // empty')   # active outcome の最重要 opportunity の weight
@@ -581,7 +591,8 @@ fugu-router audit-recent --class "flow-delegation" --within 60
 
 #### 3-3. 検証 → sink（結果の書き戻し）
 
-condukt の完了ゲートを通ったら結果を source に書き戻す:
+condukt の完了ゲートを通ったら結果を source に書き戻す（**`backlog done` / `backlog fail` / `compass outcome` は
+cwd = このセッションの linked worktree で実行**する。main の作業ツリーでは store 書き込みが拒否される）:
 
 **バッチ（複数 backlog item を 1 run に束ねた場合）は item ごとに個別 sink する**: condukt の完了ゲートは
 タスク単位なので、6 で控えた **item id ↔ condukt タスク**の対応を使い、**通ったタスクの item は `done`、
@@ -650,7 +661,8 @@ condukt circuit check --run "flow-$CLAUDE_CODE_SESSION_ID" --session "$CLAUDE_CO
 
 ### Step 4 — driver 登録の解除とサマリ
 
-source が尽きた / ユーザー中断 / 予算超過のいずれかで:
+source が尽きた / ユーザー中断 / 予算超過のいずれかで（**ここでも cwd = このセッションの linked worktree**。
+Step 4 で `backlog` / `compass` が store を書く操作を打つ場合は main の作業ツリーでは拒否される）:
 
 ```bash
 backlog driver unregister --session-id "$CLAUDE_CODE_SESSION_ID" --project "$PWD"

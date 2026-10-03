@@ -109,6 +109,9 @@ fn repo(tag: &str) -> Repo {
     git(&["commit", "-q", "--allow-empty", "-m", "init"], &a, &home);
     commit_repro_script(&a, &home);
     let project = a.to_str().unwrap().to_string();
+    // 1e6f00ae: seed through a throwaway linked worktree (primary writes are
+    // refused), then adopt the store into `a`.
+    let sw = common::seed_worktree(&a);
     for (title, prio) in [("first", "p0"), ("second", "p1")] {
         let (code, out, err) = run(
             &[
@@ -122,11 +125,12 @@ fn repo(tag: &str) -> Repo {
                 "--repro-test",
                 REPRO,
             ],
-            &a,
+            &sw,
             &home,
         );
         assert_eq!(code, 0, "fixture add: out={out} err={err}");
     }
+    common::adopt_store(&sw, &a);
     git(&["add", ".backlog/tasks.toml"], &a, &home);
     git(&["commit", "-q", "-m", "seed"], &a, &home);
     let b = root.join("wt");

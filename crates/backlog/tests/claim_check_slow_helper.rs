@@ -8,6 +8,8 @@
 //! `exit_then_pipe_held_open_shares_one_deadline` warms its shim, because it
 //! must reach the exit-then-read path before the deadline (its own doc says why).
 
+mod common;
+
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -81,12 +83,13 @@ impl Fx {
         let proj = self.linked.to_str().unwrap();
         let mut args = vec!["add", "--title", TITLE, "--project", proj];
         args.extend_from_slice(extra);
-        let old = std::env::var("PATH").unwrap_or_default();
         let t0 = Instant::now();
         let out = Command::new(env!("CARGO_BIN_EXE_backlog"))
             .args(&args)
             .env("HOME", &self.home)
-            .env("PATH", format!("{}:{old}", self.shim.display()))
+            // Shim + minimal system dirs only: an inherited PATH could hold a
+            // real `condukt` that answers in the shim's place.
+            .env("PATH", common::isolated_path_with(&self.shim))
             .current_dir(&self.linked)
             .stdin(Stdio::null())
             .output()

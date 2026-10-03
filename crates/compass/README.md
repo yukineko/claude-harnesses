@@ -46,7 +46,7 @@ altitude than a specguard canon:
 | `definition_of_done` | observable done conditions (same vocabulary as condukt's `done_criteria`) | re-carved when blurry |
 | `measuring_stick` | how to measure the next move (default: *defensibility × closeness-to-goal ÷ cost*) | project-fixed |
 | `current_gap` | goal − reality summary (regenerated each round) | recomputed every round |
-| `next_action` | the first physical step on resume (written by the Stop breadcrumb) | updated each Stop |
+| `next_action` | the first physical step on resume (written by the Stop breadcrumb) | updated each Stop (not in the primary working tree, see below) |
 | `parked` | pointers to deferred work (the bodies live in taskprog progress.md) | appended by routing |
 
 ## The C1–C5 freshness gates
@@ -134,6 +134,14 @@ never break a turn):
 |---|---|---|
 | **`compass nudge`** | `SessionStart` (startup/resume/clear) | runs the C1/C2 deterministic floor only (no LLM) and prints a one-line nudge if the charter is absent, blurry, or drift-suspect — "run `/compass` to re-ground." |
 | **`compass breadcrumb`** | `Stop` | reads the assistant's final message, extracts an explicit ```` ```compass-next ```` block, and writes it into `charter.next_action`. No LLM, never guesses; if there's no explicit block it does nothing. |
+
+**Store writes need a linked worktree.** `charter --write`, `gap --write`, `outcome`,
+`opportunity add`, `apply`, `evaluate`, `carve-reset` and `route` are refused (non-zero exit,
+nothing written) when the cwd is inside the *primary* working tree of a git repo, because
+main's tree only receives merges (CLAUDE.md §8); run them from a linked worktree
+(`git worktree add …`). If git cannot say which kind of checkout it is, they are refused too.
+Reads still work anywhere, and a cwd outside any git repo behaves as before. In the primary
+tree `compass breadcrumb` does not write and says so on stderr.
 
 ## Subcommand surface
 

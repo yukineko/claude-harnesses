@@ -43,6 +43,14 @@ backlog はこの失敗モードを潰す。一度キューに積めば、
 | `install` / `uninstall` | `~/.claude/settings.json` の SessionStart フックを配線/除去 |
 | `lock {acquire,release,status}` | `~/.backlog/run.lock` 排他ロックの管理 |
 
+### store 書き込みは linked worktree で
+
+`add` / `done` / `fail` / `edit` / `cancel` / `confirm` / `ruling request|approve|withdraw` / `sync --apply` は、store が git リポジトリの **primary（main）作業ツリー**内にある場合
+**拒否**される（非 0 終了・何も書かない）。main の作業ツリーは merge だけを受け取る（CLAUDE.md §8）ので、
+linked worktree（`git worktree add …`）から実行すること。git が checkout の種別を答えられない場合も拒否する。
+読み取り（`list` / `next` / `ruling list` / `audit-closures` / `--apply` なしの `sync`）はどこでも動き、`next --claim` は repo 外のリース（`~/.backlog/claims`）だけを書くので primary でも許可される、git リポジトリ外の cwd は従来どおり。
+SessionStart フックは primary では requeue をスキップし、その旨を表示する。
+
 ### slash command
 
 `/backlog` は queue・state 操作（`list` / `next` / `done` / `fail` / `lock`）を呼ぶ薄いエントリポイント。引数でサブコマンドを渡す。

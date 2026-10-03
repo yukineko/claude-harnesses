@@ -53,7 +53,26 @@ pub fn run(input: &HookInput) -> Option<String> {
     // out of the queue until something rescues them. stderr never reaches the
     // agent, so the failure is carried into `additionalContext` (CA-backlog-02).
     let mut warnings = String::new();
-    match store::requeue_expired(&tasks_path, now) {
+    // Backlog 1e6f00ae: the requeue WRITES the store, and a session started in
+    // the primary working tree must not write there (CLAUDE.md §8). Skip the
+    // write and SAY so (stderr + additionalContext); a silent skip would read
+    // as "requeue ran, 0 tasks". An undetermined boundary skips too (§3).
+    let requeue = match harness_core::primary_tree::refuse_if_primary(
+        &tasks_path,
+        "backlog session-start requeue",
+    ) {
+        Ok(()) => store::requeue_expired(&tasks_path, now),
+        Err(why) => {
+            eprintln!("backlog session-start: {why} \u{2014} requeue SKIPPED");
+            warnings.push_str(&format!(
+                "## Backlog \u{2014} requeue SKIPPED\n\n{why}\n\nExpired deferrals and stale \
+                 claims were NOT returned to the queue; the pending list below may be \
+                 incomplete.\n\n"
+            ));
+            Ok(0)
+        }
+    };
+    match requeue {
         Ok(count) => {
             if count >= 1 {
                 eprintln!("{} 件の保留タスクが再キューされました", count);

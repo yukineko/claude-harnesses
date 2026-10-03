@@ -35,12 +35,7 @@ impl Fx {
         std::fs::create_dir_all(&home).unwrap();
         std::fs::create_dir_all(&repo).unwrap();
         let repo = std::fs::canonicalize(&repo).unwrap();
-        assert!(Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(&repo)
-            .status()
-            .unwrap()
-            .success());
+        common::linked_checkout(&repo);
         // Close-evidence fixture: `add` without a reproduced repro test lands
         // `unconfirmed` (outside the workable queue). Commit a repro script
         // that FAILS (= the problem is reproduced) so `add` lands `pending`,

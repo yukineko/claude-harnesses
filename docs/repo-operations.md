@@ -271,3 +271,5 @@ overwatch review-queue --to-backlog    # キュー全体を backlog に流し込
   自動修復できるようにする。冪等 — findings は `bridged_findings.jsonl`（bare finding-id。review-metrics の
   「解消済み」判定源でもある）、他3ストリームは `bridged_entries.jsonl`（`<kind>:<identifier>`）で二重投入を防ぐ。
   fail-soft: store 欠落 / backlog バイナリ不在 / `backlog add` 失敗はいずれも warn してスキップし、コマンドは常に成功する。
+  **cwd は linked worktree で実行する**（backlog 1e6f00ae: `backlog add` は primary〈main〉作業ツリーでは拒否されるため、
+  main から走らせると全件が「`backlog add` failed」の warn でスキップされる）。

@@ -168,10 +168,28 @@ fn fixture_with(tag: &str, seed: impl FnOnce(&Path, &Path)) -> Fixture {
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&a).unwrap();
 
-    git(&["init", "-q", "-b", "main"], &a, &home);
-    git(&["config", "user.name", "t"], &a, &home);
-    git(&["config", "user.email", "t@example.invalid"], &a, &home);
-    git(&["commit", "-q", "--allow-empty", "-m", "init"], &a, &home);
+    // 1e6f00ae: store writes are refused in a PRIMARY checkout, and these tests
+    // write from A (fail / done / add). So A is itself a LINKED worktree of a
+    // hidden primary tree; B is a second linked worktree cut from A's commit.
+    let primary = root.join("primary");
+    std::fs::create_dir_all(&primary).unwrap();
+    git(&["init", "-q", "-b", "main"], &primary, &home);
+    git(&["config", "user.name", "t"], &primary, &home);
+    git(
+        &["config", "user.email", "t@example.invalid"],
+        &primary,
+        &home,
+    );
+    git(
+        &["commit", "-q", "--allow-empty", "-m", "init"],
+        &primary,
+        &home,
+    );
+    git(
+        &["worktree", "add", "-q", "-b", "trunk", a.to_str().unwrap()],
+        &primary,
+        &home,
+    );
 
     // Close-evidence (2026-10-01): `add` lands `pending` (the queue `next
     // --claim` hands out) only when a committed repro test REPRODUCES the

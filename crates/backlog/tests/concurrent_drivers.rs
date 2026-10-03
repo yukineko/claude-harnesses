@@ -27,19 +27,30 @@ fn temp_home(tag: &str) -> PathBuf {
     // also meant the test drove a shape no real driver has. `git init` puts it
     // back on the real path, and the subject of the test (two processes, one
     // queue, disjoint tasks) is untouched either way.
-    let st = Command::new("git")
-        .args(["init", "-q"])
-        .current_dir(&dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .expect("git must be available to run this test — a skip here would report green on a case that never ran");
-    assert!(st.success(), "git init failed in {}", dir.display());
+    common::linked_checkout(&dir);
     // This dir is ALSO the children's `$HOME`, so harness state dirs
     // (`.overwatch/`, `.condukt/`) land inside the repo as untracked files,
     // and `--repro-test` rightly refuses a dirty tree. Exclude them locally.
-    std::fs::write(dir.join(".git/info/exclude"), ".overwatch/\n.condukt/\n").unwrap();
+    // `dir` is a LINKED worktree (store writes are refused in a primary tree,
+    // 1e6f00ae), so `.git` is a file: ask git where `info/exclude` lives.
+    let out = Command::new("git")
+        .args([
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "info/exclude",
+        ])
+        .current_dir(&dir)
+        .output()
+        .expect("git runs");
+    assert!(
+        out.status.success(),
+        "git rev-parse --git-path failed in {}",
+        dir.display()
+    );
+    let exclude = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+    std::fs::create_dir_all(exclude.parent().unwrap()).unwrap();
+    std::fs::write(&exclude, ".overwatch/\n.condukt/\n").unwrap();
     commit_repro_script(&dir);
     dir
 }

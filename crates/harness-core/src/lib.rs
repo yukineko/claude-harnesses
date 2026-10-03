@@ -56,6 +56,7 @@ pub mod metrics;
 pub mod parallel;
 pub mod plugin_bin;
 pub mod pricing;
+pub mod primary_tree;
 pub mod progress;
 pub mod projkey;
 pub mod repeat;

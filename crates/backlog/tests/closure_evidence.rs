@@ -372,13 +372,20 @@ fn red_run_leaves_no_temp_worktree_behind() {
     let f = Fixture::new("wtclean");
     let (red, _) = f.bug_then_fix();
     let id = f.add("t");
+    // The fixture repo is itself a linked worktree, so the baseline is not
+    // "1"; the property is that the RED run changes NOTHING in the list.
+    let before = f.git(&["worktree", "list", "--porcelain"]);
     let o = fix_done(&f, &id, &red);
     assert_eq!(o.code, 0, "{}", o.both());
-    let wts = f.git(&["worktree", "list", "--porcelain"]);
+    let after = f.git(&["worktree", "list", "--porcelain"]);
     assert_eq!(
-        wts.matches("worktree ").count(),
-        1,
-        "temp worktree leaked: {wts}"
+        before.matches("worktree ").count(),
+        after.matches("worktree ").count(),
+        "RED run must leave no temp worktree behind (count changed); before: {before}\nafter: {after}"
+    );
+    assert_eq!(
+        before, after,
+        "RED run must leave no temp worktree behind (worktree list differs)"
     );
     assert_eq!(
         f.git(&["status", "--porcelain", "--", ".", ":!.backlog"]),

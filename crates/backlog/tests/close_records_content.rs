@@ -24,6 +24,8 @@
 //! records **one argument per record with explicit delimiters**: the comment
 //! body is multi-line and contains spaces, so a `"$*"`-style log cannot be
 //! taken apart again into individual argument values.
+mod common;
+
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -114,7 +116,8 @@ fn setup(tag: &str) -> Env {
             .unwrap()
             .success());
     };
-    g(&["init", "-q", "."]);
+    // A LINKED worktree: store writes are refused in a PRIMARY working tree (1e6f00ae).
+    common::linked_checkout(&e.repo);
     g(&["remote", "add", "origin", "https://github.com/o/r.git"]);
 
     std::fs::create_dir_all(e.repo.join(".backlog")).unwrap();

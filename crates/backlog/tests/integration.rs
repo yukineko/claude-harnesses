@@ -31,12 +31,13 @@ fn temp_home(tag: &str) -> PathBuf {
 /// refuses instead of falling back to the cross-project `~/.backlog`. These
 /// tests pinned a bare temp dir precisely to stay out of the real repo's
 /// tracked store, so they now need a repo of their own rather than the absence
-/// of one. A `.git` DIRECTORY is enough for both the ancestor scan that picks
-/// the store and the identity scan that reads it as a main working tree, so no
-/// `git` binary is needed.
+/// of one. `common::linked_checkout` makes the dir a LINKED worktree (store
+/// writes are refused in a primary tree, and an empty `.git` directory is
+/// refused as Undetermined), which also satisfies the ancestor scan that picks
+/// the store.
 fn temp_repo(tag: &str) -> PathBuf {
     let dir = temp_home(tag);
-    std::fs::create_dir_all(dir.join(".git")).unwrap();
+    common::linked_checkout(&dir);
     dir
 }
 
@@ -83,17 +84,8 @@ const REPRO: &str = "bash tests/repro.sh";
 /// needs a real HEAD.
 fn evidence_repo(tag: &str) -> PathBuf {
     let dir = temp_home(tag);
-    let st = Command::new("git")
-        .args(["init", "-q"])
-        .current_dir(&dir)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .expect("git runs");
-    assert!(st.success(), "git init failed in {}", dir.display());
+    // A LINKED worktree: store writes are refused in a PRIMARY working tree (1e6f00ae).
+    common::linked_checkout(&dir);
     commit_repro_script(&dir);
     dir
 }

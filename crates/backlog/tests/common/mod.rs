@@ -21,6 +21,11 @@
 //!   backlog audit-closures [--json]
 //! A closed row is read back with `list --all --json`; its recorded closure is
 //! the JSON object under the key `closure`.
+//!
+//! Store WRITES are refused in the primary working tree of a git repo (backlog
+//! 1e6f00ae), so every fixture that drives `add` / `done` / ... runs the
+//! binary in a LINKED worktree: [`Fixture`] builds its repo as one, and
+//! [`linked_checkout`] turns a plain dir into one for the other tests.
 #![allow(dead_code)]
 
 use std::io::Write;
@@ -90,7 +95,29 @@ impl Fixture {
         let shim = unique_dir(&format!("{tag}-shim"));
         let repo = repo.canonicalize().unwrap();
         let f = Fixture { home, repo, shim };
-        f.git(&["init", "-q", "-b", "main"]);
+        // Store writes are refused in a PRIMARY working tree (backlog
+        // 1e6f00ae), so `repo` is a LINKED worktree of a sibling
+        // `<repo>.main` repository. It is created with an orphan `main`
+        // branch, so it starts exactly where `git init -b main` used to: on an
+        // unborn `main` with no commits (the commit below is still the root).
+        let primary = f.repo.with_file_name(format!(
+            "{}.main",
+            f.repo.file_name().unwrap().to_string_lossy()
+        ));
+        std::fs::create_dir_all(&primary).unwrap();
+        f.git_in(&primary, &["init", "-q", "-b", "primary"]);
+        f.git_in(
+            &primary,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "--orphan",
+                "-b",
+                "main",
+                f.repo.to_str().unwrap(),
+            ],
+        );
         f.write("README.txt", "x\n");
         f.write_exec_shim("cargo", FAKE_CARGO);
         // `add` runs the cross-session claim check (`condukt state is-claimed`),
@@ -152,6 +179,23 @@ impl Fixture {
             .env("GIT_COMMITTER_NAME", "t")
             .env("GIT_COMMITTER_EMAIL", "t@example.com");
         c
+    }
+
+    /// Run git with this fixture's isolated env in `cwd` instead of the repo.
+    fn git_in(&self, cwd: &Path, args: &[&str]) -> String {
+        let out = self
+            .git_cmd()
+            .current_dir(cwd)
+            .args(args)
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?} in {} failed: {}",
+            cwd.display(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
     }
 
     pub fn git(&self, args: &[&str]) -> String {
@@ -376,4 +420,173 @@ pub fn condukt_shim_dir() -> &'static std::path::Path {
 pub fn path_with_condukt_shim() -> String {
     let old = std::env::var("PATH").unwrap_or_default();
     format!("{}:{}", condukt_shim_dir().display(), old)
+}
+
+// ---- Linked-worktree checkouts (backlog 1e6f00ae) ----
+
+/// Turn the (empty or not-yet-existing) `dir` into a linked worktree of a
+/// sibling `<dir>.main` repo, so `dir` keeps meaning "the checkout under test".
+pub fn linked_checkout(dir: &Path) -> PathBuf {
+    let mut name = dir.file_name().expect("dir has a name").to_os_string();
+    name.push(".main");
+    let main = dir.with_file_name(name);
+    std::fs::create_dir_all(&main).expect("mkdir main");
+    let git = |cwd: &Path, args: &[&str]| {
+        let out = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+            .args(args)
+            .current_dir(cwd)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&main, &["init", "-q", "-b", "main"]);
+    git(&main, &["commit", "-q", "--allow-empty", "-m", "init"]);
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--detach",
+            dir.to_str().expect("utf8"),
+        ],
+    );
+    dir.to_path_buf()
+}
+
+/// Make `dir` a linked worktree of a BARE repo (sibling `<dir>.bare`). git
+/// resolves it fine (so the store-write boundary is determined: linked), but
+/// the repo has no main working tree, so backlog's project IDENTITY cannot be
+/// derived from the `.git` file — the "undetermined scope" fixture that used to
+/// be a dangling `.git` link (a dangling link now makes the WRITE boundary
+/// itself undetermined, which refuses by design).
+pub fn linked_checkout_of_bare(dir: &Path) -> PathBuf {
+    let seed = linked_checkout(&dir.with_file_name(format!(
+        "{}.seed",
+        dir.file_name().unwrap().to_string_lossy()
+    )));
+    let bare = dir.with_file_name(format!(
+        "{}.bare",
+        dir.file_name().unwrap().to_string_lossy()
+    ));
+    let run = |cwd: &Path, args: &[&str]| {
+        let out = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+            .args(args)
+            .current_dir(cwd)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    run(
+        &seed,
+        &[
+            "clone",
+            "-q",
+            "--bare",
+            seed.to_str().unwrap(),
+            bare.to_str().unwrap(),
+        ],
+    );
+    run(
+        &bare,
+        &["worktree", "add", "-q", "--detach", dir.to_str().unwrap()],
+    );
+    dir.to_path_buf()
+}
+
+/// For fixtures that seed a PRIMARY checkout's tracked store by running the
+/// real CLI: store writes are refused in a primary tree, so seed in a
+/// throwaway linked worktree of `primary` (returned), then call
+/// [`adopt_store`] to copy the resulting `.backlog/` into `primary`.
+pub fn seed_worktree(primary: &Path) -> PathBuf {
+    let seed = primary.with_file_name(format!(
+        "{}.seed",
+        primary.file_name().unwrap().to_string_lossy()
+    ));
+    let out = Command::new("git")
+        .args(["worktree", "add", "-q", "--detach", seed.to_str().unwrap()])
+        .current_dir(primary)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .expect("git runs");
+    assert!(
+        out.status.success(),
+        "seed worktree: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    seed
+}
+
+/// Copy `seed/.backlog` into `primary/.backlog` (files only) and drop the seed
+/// worktree. The primary's store is then written by file copy, not by the CLI.
+pub fn adopt_store(seed: &Path, primary: &Path) {
+    let dst = primary.join(".backlog");
+    std::fs::create_dir_all(&dst).expect("mkdir .backlog");
+    for e in std::fs::read_dir(seed.join(".backlog")).expect("seed store") {
+        let e = e.expect("entry");
+        if e.path().is_file() {
+            std::fs::copy(e.path(), dst.join(e.file_name())).expect("copy");
+        }
+    }
+    let out = Command::new("git")
+        .args(["worktree", "remove", "--force", seed.to_str().unwrap()])
+        .current_dir(primary)
+        .output()
+        .expect("git runs");
+    assert!(
+        out.status.success(),
+        "remove seed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+// ---- PATH with no inherited condukt (claim-check contract tests) ----
+
+/// A `PATH` of exactly: `shim` (the test's own `condukt`), a sibling `tools`
+/// dir holding only a symlink to the inherited `git`, then `/usr/bin:/bin`.
+///
+/// The inherited PATH is deliberately NOT passed through. Command lookup skips
+/// a non-executable file, so with the inherited PATH a real `condukt` later on
+/// it (e.g. a plugin `bin/` dir) answers instead of the shim, and a test that
+/// relies on "the shim is the only condukt" observes the machine, not the
+/// shim. `git` is carried over by symlink because the system `/usr/bin/git`
+/// may be unusable on its own (Xcode license); the first executable `git` on
+/// the inherited PATH is the one the caller already runs.
+pub fn isolated_path_with(shim: &Path) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let tools = shim.with_file_name(format!(
+        "{}.tools",
+        shim.file_name().unwrap().to_string_lossy()
+    ));
+    std::fs::create_dir_all(&tools).expect("create tools dir");
+    let link = tools.join("git");
+    if std::fs::symlink_metadata(&link).is_err() {
+        let inherited = std::env::var("PATH").unwrap_or_default();
+        let git = inherited
+            .split(':')
+            .filter(|d| !d.is_empty())
+            .map(|d| Path::new(d).join("git"))
+            .find(|p| {
+                std::fs::metadata(p)
+                    .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+                    .unwrap_or(false)
+            })
+            .expect("no executable `git` on the inherited PATH: the fixture cannot run");
+        std::os::unix::fs::symlink(&git, &link).expect("symlink git");
+    }
+    format!("{}:{}:/usr/bin:/bin", shim.display(), tools.display())
 }

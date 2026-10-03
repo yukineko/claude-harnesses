@@ -67,6 +67,12 @@ evaluate ─► carve ループ ─► charter ─► gap ─► (condukt 分解
 - **SessionStart = `compass nudge`** — C1/C2 の決定的 floor のみ（LLM 不使用）。charter が無い/霞む/drift 疑いなら「`/compass` で再接地を」と一行 nudge する。
 - **Stop = `compass breadcrumb`** — 本体の最終応答から明示的な ```` ```compass-next ```` ブロックを抽出し `charter.next_action` へ書き戻す。推測はせず、ブロックが無ければ何もしない。
 
+**store 書き込みは linked worktree で。** `charter --write` / `gap --write` / `outcome` / `opportunity add` / `apply` /
+`evaluate` / `carve-reset` / `route` は、cwd が git リポジトリの **primary（main）作業ツリー**内なら拒否される
+（非 0 終了・何も書かない）。main の作業ツリーは merge だけを受け取る（CLAUDE.md §8）ので、linked worktree
+（`git worktree add …`）で実行する。git が種別を答えられない場合も拒否。読み取りはどこでも動き、git 外の cwd は従来どおり。
+primary では `compass breadcrumb` は書き込まず、stderr にその旨を出す（Stop 毎の `next_action` 更新は primary では行われない）。
+
 ### サブコマンド
 
 | サブコマンド | 目的 |

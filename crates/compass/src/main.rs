@@ -291,6 +291,16 @@ fn project_root() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf())
 }
 
+/// Refuse a state-store WRITE (backlog 1e6f00ae) when `root` is inside the
+/// PRIMARY working tree of a git repo (CLAUDE.md section 8: main's tree only
+/// receives merges) or when that cannot be determined (section 3). Outside any
+/// git repo this is a no-op, so the cwd/.compass behaviour there is unchanged.
+/// Call BEFORE any side effect. Reads never call this.
+fn guard_write(root: &Path, what: &str) -> Result<()> {
+    harness_core::primary_tree::refuse_if_primary(&root.join(".compass"), what)
+        .map_err(|why| anyhow::anyhow!(why))
+}
+
 /// The composed C1/C2 freshness verdict for the current project's charter.
 ///
 /// `fresh` is the single bit a downstream driver needs ("is the charter sharp
@@ -409,6 +419,14 @@ fn breadcrumb_command() -> Result<()> {
 
     let root = input.cwd_or_current();
     let path = Charter::project_path(&root);
+    // backlog 1e6f00ae: a Stop hook in the primary working tree must not write
+    // the charter (CLAUDE.md section 8). The write is not performed and that is
+    // said on stderr; it never pretends it ran. An undetermined boundary also
+    // declines the write (section 3).
+    if let Err(why) = guard_write(&root, "compass breadcrumb") {
+        eprintln!("compass breadcrumb: next_action NOT recorded: {why}");
+        return Ok(());
+    }
     // Best-effort write; swallow errors so the hook never breaks a turn.
     let _ = breadcrumb::write_next_action(&path, &next_action);
     Ok(())
@@ -462,6 +480,7 @@ fn last_assistant_message(transcript_path: &str) -> Option<String> {
 /// floor and ADDS its own C3–C5 questions on top.
 fn evaluate_command() -> Result<()> {
     let root = project_root();
+    guard_write(&root, "compass evaluate")?;
     let cfg = Config::load(&root);
     let path = Charter::project_path(&root);
     let charter = Charter::load(&path).unwrap_or_default();
@@ -519,6 +538,7 @@ fn evaluate_command() -> Result<()> {
 /// fragments); only C1/C2 are re-evaluated by Rust — that's expected.
 fn apply_command(args: ApplyArgs) -> Result<()> {
     let root = project_root();
+    guard_write(&root, "compass apply")?;
     let cfg = Config::load(&root);
     let path = Charter::project_path(&root);
     let charter = Charter::load(&path).unwrap_or_default();
@@ -555,6 +575,7 @@ fn apply_command(args: ApplyArgs) -> Result<()> {
 /// Clear the persisted [`CarveState`] (start fresh). Small helper for the skill.
 fn carve_reset_command() -> Result<()> {
     let root = project_root();
+    guard_write(&root, "compass carve-reset")?;
     carve::reset(&root)?;
     println!("compass: carve state cleared.");
     Ok(())
@@ -581,6 +602,7 @@ fn charter_command(args: CharterArgs) -> Result<()> {
     let root = project_root();
 
     if let Some(json) = args.write {
+        guard_write(&root, "compass charter --write")?;
         let json = read_arg_or_stdin(json)?;
         let charter: Charter =
             serde_json::from_str(&json).context("parsing charter JSON for --write")?;
@@ -616,6 +638,9 @@ fn charter_command(args: CharterArgs) -> Result<()> {
 /// No LLM, no semantic derivation here.
 fn gap_command(args: GapArgs) -> Result<()> {
     let root = project_root();
+    if args.write.is_some() {
+        guard_write(&root, "compass gap --write")?;
+    }
     let path = Charter::project_path(&root);
     let mut charter = Charter::load(&path)
         .with_context(|| "loading .compass/charter.md (run `/compass` to carve one)")?;
@@ -661,6 +686,7 @@ fn gap_command(args: GapArgs) -> Result<()> {
 /// (`last_outcome`). No LLM — the verdict/evidence are the human's judgment.
 fn outcome_command(args: OutcomeArgs) -> Result<()> {
     let root = project_root();
+    guard_write(&root, "compass outcome")?;
     let path = Charter::project_path(&root);
     let charter = Charter::load(&path)
         .with_context(|| "loading .compass/charter.md (run `/compass` to carve one)")?;
@@ -773,6 +799,7 @@ fn opportunity_command(args: OpportunityArgs) -> Result<()> {
             outcome,
             weight,
         } => {
+            guard_write(&root, "compass opportunity add")?;
             let outcome_ref = outcome.unwrap_or(active_outcome);
             let weight = weight.unwrap_or(opportunity::DEFAULT_WEIGHT);
             let rec = opportunity::record(&root, &title, &outcome_ref, weight)?;
@@ -834,6 +861,9 @@ fn discovery_command(args: DiscoveryArgs) -> Result<()> {
 /// parked tasks to taskprog, and prints the condukt handoff text. No LLM.
 fn route_command(args: RouteArgs) -> Result<()> {
     let root = project_root();
+    // route appends parked tasks to <root>/.claude/progress.md.
+    harness_core::primary_tree::refuse_if_primary(&root.join(".claude"), "compass route")
+        .map_err(|why| anyhow::anyhow!(why))?;
     let cfg = Config::load(&root);
 
     // Read the decomposition from --file or stdin.

@@ -73,10 +73,11 @@ fn fixture_git(repo: &std::path::Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
-/// `git init` + a committed repro script (exit 1 = reproduced) + one doc-only
-/// commit. Returns the doc-only commit id.
+/// A committed repro script (exit 1 = reproduced) + one doc-only commit, in
+/// `repo`, which is already a LINKED worktree (`common::linked_checkout`;
+/// store writes are refused in a primary tree, 1e6f00ae). Returns the
+/// doc-only commit id.
 fn init_evidence_repo(repo: &std::path::Path) -> String {
-    fixture_git(repo, &["init", "-q", "-b", "main"]);
     std::fs::create_dir_all(repo.join("tests")).unwrap();
     std::fs::write(
         repo.join("tests/repro.sh"),
@@ -96,6 +97,7 @@ impl Fixture {
     fn new(tag: &str) -> Self {
         let home = unique_dir(&format!("{tag}-home"));
         let repo = unique_dir(&format!("{tag}-repo"));
+        common::linked_checkout(&repo);
         // Canonicalize so the project label matches what the binary resolves
         // (macOS temp dirs sit behind the /var -> /private/var symlink).
         let repo = repo.canonicalize().unwrap();

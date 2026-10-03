@@ -14,6 +14,8 @@
 //! argv it is handed, so what is asserted is the set of GitHub-visible writes
 //! actually attempted — not an internal predicate that could agree with a
 //! broken filter.
+mod common;
+
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -85,7 +87,8 @@ fn setup(tag: &str) -> Env {
             .unwrap()
             .success());
     };
-    g(&["init", "-q", "."]);
+    // A LINKED worktree: store writes are refused in a PRIMARY working tree (1e6f00ae).
+    common::linked_checkout(&repo);
     g(&["remote", "add", "origin", "https://github.com/o/r.git"]);
 
     std::fs::create_dir_all(repo.join(".backlog")).unwrap();

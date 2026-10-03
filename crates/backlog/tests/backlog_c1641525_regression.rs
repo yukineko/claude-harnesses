@@ -112,6 +112,9 @@ fn a_stale_worktree_store_merged_into_main_does_not_release_a_claim() {
     git(&["add", "tests/repro_yes.sh"], &a, &home);
     git(&["commit", "-q", "-m", "repro script"], &a, &home);
     let project = a.to_str().unwrap().to_string();
+    // 1e6f00ae: seed through a throwaway linked worktree (primary writes are
+    // refused), then adopt the store into `a`.
+    let sw = common::seed_worktree(&a);
     let (code, _, err) = run_in(
         &[
             "add",
@@ -122,11 +125,12 @@ fn a_stale_worktree_store_merged_into_main_does_not_release_a_claim() {
             "--repro-test",
             REPRO,
         ],
-        &a,
+        &sw,
         &home,
         "",
     );
     assert_eq!(code, 0, "seed add: {err}");
+    common::adopt_store(&sw, &a);
     git(&["add", ".backlog/tasks.toml"], &a, &home);
     git(&["commit", "-q", "-m", "seed"], &a, &home);
     let b = root.join("wt");

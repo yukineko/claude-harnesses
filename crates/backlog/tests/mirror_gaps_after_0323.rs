@@ -40,6 +40,8 @@
 //! `gh` that records **one argument per delimited record**, because the values
 //! under test are multi-line and tens of thousands of bytes long and a
 //! `"$*"`-joined log cannot be taken apart again.
+mod common;
+
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -145,7 +147,8 @@ fn setup(tag: &str) -> Env {
             .unwrap()
             .success());
     };
-    g(&["init", "-q", "."]);
+    // A LINKED worktree: store writes are refused in a PRIMARY working tree (1e6f00ae).
+    common::linked_checkout(&e.repo);
     g(&["remote", "add", "origin", "https://github.com/o/r.git"]);
 
     std::fs::create_dir_all(e.repo.join(".backlog")).unwrap();

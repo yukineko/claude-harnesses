@@ -182,6 +182,9 @@ fn fixture(tag: &str) -> Fixture {
     );
 
     let project = repo.to_str().unwrap().to_string();
+    // 1e6f00ae: seed through a throwaway linked worktree (primary writes are
+    // refused), then adopt the store into `repo`.
+    let sw = common::seed_worktree(&repo);
     for (title, prio) in [("First task", "p0"), ("Second task", "p1")] {
         let (code, _, err) = run(
             &[
@@ -195,11 +198,12 @@ fn fixture(tag: &str) -> Fixture {
                 "--repro-test",
                 REPRO,
             ],
-            &repo,
+            &sw,
             &home,
         );
         assert_eq!(code, 0, "add must succeed: {err}");
     }
+    common::adopt_store(&sw, &repo);
 
     // The divergence itself: the worktree's own store starts as a COPY of the
     // main tree's, so both checkouts hold the same ids (what a merge, or a

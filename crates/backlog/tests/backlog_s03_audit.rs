@@ -38,13 +38,7 @@ fn fx(tag: &str) -> Fx {
     let repo = root.join("repo");
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&repo).unwrap();
-    let ok = Command::new("git")
-        .args(["init", "-q"])
-        .current_dir(&repo)
-        .status()
-        .expect("git runs")
-        .success();
-    assert!(ok, "git init failed: fixture is void");
+    common::linked_checkout(&repo);
     // Close-evidence fixture: `add` lands `pending` only with a REPRODUCED
     // repro test from a committed script (otherwise `unconfirmed`, which
     // `next` never hands out — that would make every claim-based test here

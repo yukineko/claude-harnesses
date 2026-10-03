@@ -864,6 +864,15 @@ fn run(cli: Cli) -> Result<()> {
     let store_path = || -> Result<std::path::PathBuf> {
         location.tasks_path().map_err(|why| anyhow::anyhow!(why))
     };
+    // WRITE entry (backlog 1e6f00ae): the same path, but refused when it lies in
+    // the PRIMARY working tree of a git repo (CLAUDE.md §8) or when that cannot
+    // be determined (§3). Called BEFORE any side effect (lease, lock, file).
+    let write_store_path = |what: &str| -> Result<std::path::PathBuf> {
+        let p = store_path()?;
+        harness_core::primary_tree::refuse_if_primary(&p, what)
+            .map_err(|why| anyhow::anyhow!(why))?;
+        Ok(p)
+    };
 
     match cli.command {
         Command::Add {
@@ -876,7 +885,7 @@ fn run(cli: Cli) -> Result<()> {
             force,
             repro_test,
         } => {
-            let tasks_path = store_path()?;
+            let tasks_path = write_store_path("backlog add")?;
             // With the store as the scope (see `read_project_scope`), a task
             // written here under ANOTHER repo's label would be listed as this
             // repo's work — the same fault mirrored onto the write side. So
@@ -1160,6 +1169,11 @@ fn run(cli: Cli) -> Result<()> {
             claim,
             all,
         } => {
+            // `next --claim` is NOT a store write: it records its lease under
+            // ~/.backlog/claims (outside any repo) and never runs the issue
+            // sync (measured by the oracle author), so it stays allowed from
+            // the primary checkout. Do not add a write guard here without a
+            // test showing it writes tasks.toml.
             let tasks_path = store_path()?;
             // `next` carries the SAME cwd-derived default project scope as
             // `list` (`default_project_scope`), and for the same two reasons.
@@ -1329,7 +1343,7 @@ fn run(cli: Cli) -> Result<()> {
             duplicate_of,
             doc_only,
         } => {
-            let tasks_path = store_path()?;
+            let tasks_path = write_store_path("backlog done")?;
             closecmd::done(
                 &tasks_path,
                 closecmd::DoneArgs {
@@ -1350,12 +1364,19 @@ fn run(cli: Cli) -> Result<()> {
         }
 
         Command::Confirm { id, repro_test } => {
-            let tasks_path = store_path()?;
+            let tasks_path = write_store_path("backlog confirm")?;
             closecmd::confirm(&tasks_path, &id, &repro_test)?;
         }
 
         Command::Ruling { action } => {
-            let tasks_path = store_path()?;
+            // `ruling list` is a read; request / approve / withdraw write the
+            // store (closecmd -> store::update_task), so only they are guarded.
+            let tasks_path = match &action {
+                RulingAction::List => store_path()?,
+                RulingAction::Request { .. } => write_store_path("backlog ruling request")?,
+                RulingAction::Approve { .. } => write_store_path("backlog ruling approve")?,
+                RulingAction::Withdraw { .. } => write_store_path("backlog ruling withdraw")?,
+            };
             match action {
                 RulingAction::Request {
                     id,
@@ -1380,7 +1401,12 @@ fn run(cli: Cli) -> Result<()> {
         }
 
         Command::Sync { apply, limit, only } => {
-            let tasks_path = store_path()?;
+            // The dry run is a read; only `--apply` writes (and calls `gh`).
+            let tasks_path = if apply {
+                write_store_path("backlog sync --apply")?
+            } else {
+                store_path()?
+            };
             let tasks = store::load(&tasks_path)?;
             // Scope BEFORE truncating: `--only close --limit 50` must mean
             // fifty closes, not the first fifty actions of a mixed plan.
@@ -1551,7 +1577,7 @@ fn run(cli: Cli) -> Result<()> {
         }
 
         Command::Cancel { id, reason } => {
-            let tasks_path = store_path()?;
+            let tasks_path = write_store_path("backlog cancel")?;
             store::mark_cancelled(&tasks_path, &id, &reason)?;
             println!("cancelled: {id}");
             // Same mirror as `done`: a cancelled row's issue closes as "not
@@ -1561,7 +1587,7 @@ fn run(cli: Cli) -> Result<()> {
         }
 
         Command::Fail { id, reason } => {
-            let tasks_path = store_path()?;
+            let tasks_path = write_store_path("backlog fail")?;
             store::mark_failed(&tasks_path, &id, reason.as_deref())?;
             // mark_failed は defer_until を now + 172800 (2日後) に設定する。
             // 設定した defer_until を読み取って表示する。
@@ -1588,7 +1614,7 @@ fn run(cli: Cli) -> Result<()> {
             notes,
             status,
         } => {
-            let tasks_path = store_path()?;
+            let tasks_path = write_store_path("backlog edit")?;
             let tags_opt = if tags.is_empty() { None } else { Some(tags) };
             store::edit(
                 &tasks_path,

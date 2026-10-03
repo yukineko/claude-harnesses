@@ -41,7 +41,7 @@ fn setup(tag: &str) -> Env {
             .unwrap()
             .success());
     };
-    g(&["init", "-q", "."]);
+    common::linked_checkout(&repo);
     g(&["remote", "add", "origin", "https://github.com/o/r.git"]);
     // Close-evidence fixture: only a `pending` row (a REPRODUCED, committed
     // repro test) is live work that `sync` mirrors; an `unconfirmed` one is

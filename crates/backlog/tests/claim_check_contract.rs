@@ -8,6 +8,8 @@
 //! Each test drives the BUILT `backlog` binary with a PATH shim named
 //! `condukt`, from a LINKED git worktree, and asserts on the stored file.
 
+mod common;
+
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -92,11 +94,12 @@ impl Fx {
         let proj = self.linked.to_str().unwrap();
         let mut args = vec!["add", "--title", TITLE, "--project", proj];
         args.extend_from_slice(extra);
-        let old = std::env::var("PATH").unwrap_or_default();
         let out = Command::new(env!("CARGO_BIN_EXE_backlog"))
             .args(&args)
             .env("HOME", &self.home)
-            .env("PATH", format!("{}:{old}", self.shim.display()))
+            // Shim + minimal system dirs only: an inherited PATH could hold a
+            // real `condukt` that answers in the shim's place.
+            .env("PATH", common::isolated_path_with(&self.shim))
             .current_dir(&self.linked)
             .stdin(Stdio::null())
             .output()

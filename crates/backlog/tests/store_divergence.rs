@@ -80,17 +80,23 @@ fn init_repo(tag: &str) -> PathBuf {
         "git is required for store-divergence tests but is not available in PATH"
     );
     let repo = temp_dir(tag);
-    assert!(Command::new("git")
-        .args(["init", "-q"])
-        .current_dir(&repo)
-        .status()
-        .unwrap()
-        .success());
+    common::linked_checkout(&repo);
     std::fs::canonicalize(&repo).unwrap()
 }
 
 /// One `[[task]]` block, pending, scoped to `project`.
 fn task_block(id: &str, title: &str, project: &Path, status: &str) -> String {
+    // 1e6f00ae: the fixture repo is now a LINKED worktree (store writes are
+    // refused in a primary tree), and a linked worktree's project identity is
+    // its main tree (`<name>.main`, see `common::linked_checkout`). A task
+    // "belonging to this repo" must carry that identity as its label.
+    let project = if project.join(".git").is_file() {
+        let name = project.file_name().unwrap().to_string_lossy().into_owned();
+        std::fs::canonicalize(project.with_file_name(format!("{name}.main"))).unwrap()
+    } else {
+        project.to_path_buf()
+    };
+    let project = project.as_path();
     format!(
         "[[task]]\nid = \"{id}\"\ntitle = \"{title}\"\nproject = \"{}\"\ntags = []\nstatus = \"{status}\"\nnotes = \"\"\ncreated_at = 1000\nupdated_at = 1000\n\n",
         project.display()

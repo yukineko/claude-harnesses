@@ -39,12 +39,12 @@ fn unique_dir(tag: &str) -> PathBuf {
     std::fs::canonicalize(&dir).unwrap()
 }
 
-/// A temp dir that IS a repo root (a `.git` DIRECTORY is enough for both the
-/// store's ancestor scan and the main-working-tree identity scan, so no `git`
-/// binary is needed).
+/// A temp dir that IS a repo root, built by `common::linked_checkout` as a
+/// LINKED worktree (store writes are refused in a primary tree, and an empty
+/// `.git` directory is refused as Undetermined).
 fn temp_repo(tag: &str) -> PathBuf {
     let dir = unique_dir(tag);
-    std::fs::create_dir_all(dir.join(".git")).unwrap();
+    common::linked_checkout(&dir);
     dir
 }
 
@@ -91,17 +91,8 @@ const REPRO: &str = "bash tests/repro.sh";
 /// `--repro-test` reproduces, and running it needs a real HEAD.
 fn evidence_repo(tag: &str) -> PathBuf {
     let dir = unique_dir(tag);
-    let st = Command::new("git")
-        .args(["init", "-q"])
-        .current_dir(&dir)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .expect("git runs");
-    assert!(st.success(), "git init failed in {}", dir.display());
+    // A LINKED worktree: store writes are refused in a PRIMARY working tree (1e6f00ae).
+    common::linked_checkout(&dir);
     commit_repro_script(&dir);
     dir
 }

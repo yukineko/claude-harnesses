@@ -69,10 +69,9 @@ fn fx(tag: &str) -> Fx {
         std::fs::create_dir_all(d).unwrap();
     }
     let git = real_git();
-    for a in [
-        &["init", "-q", "-b", "main"][..],
-        &["remote", "add", "origin", "https://github.com/o/r.git"],
-    ] {
+    common::linked_checkout(&f.repo);
+    {
+        let a = &["remote", "add", "origin", "https://github.com/o/r.git"][..];
         let ok = Command::new(&git)
             .args(a)
             .current_dir(&f.repo)

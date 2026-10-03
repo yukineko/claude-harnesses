@@ -31,12 +31,7 @@ fn list_status_cancelled_is_a_recognised_status() {
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&repo).unwrap();
     let repo = std::fs::canonicalize(&repo).unwrap();
-    assert!(Command::new("git")
-        .args(["init", "-q"])
-        .current_dir(&repo)
-        .status()
-        .unwrap()
-        .success());
+    common::linked_checkout(&repo);
     // Close-evidence fixture: `add` lands `pending` only with a REPRODUCED,
     // committed repro test (otherwise `unconfirmed`); commit a failing repro
     // script so the row this test rewrites starts `pending` as before.

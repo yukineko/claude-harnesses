@@ -855,8 +855,13 @@ fn seed_tasks_toml_raw(store_dir: &std::path::Path, body: &str) {
 /// project identity could not be determined, the task that gets written must
 /// CARRY that fact.
 ///
-/// `add` deliberately does not block on an undetermined scope — blocking
-/// would lose the finding being filed, which is worse. But the degrade
+/// `add` deliberately does not block on an undetermined project IDENTITY —
+/// blocking would lose the finding being filed, which is worse. (That is about
+/// identity only: a dangling `.git` link, the fixture this test used to use,
+/// is now refused outright by the store-WRITE boundary, backlog 1e6f00ae,
+/// because git cannot say whether the checkout is primary or linked. The
+/// fixture is therefore a linked worktree of a bare repo, where git answers
+/// but the main working tree — and so the identity — is still undeterminable.) But the degrade
 /// currently leaves no trace on the stored task: the fallback label is
 /// written into `project` and is indistinguishable from a label that was
 /// genuinely resolved. A later reader (this checkout once its `.git` link is
@@ -873,11 +878,7 @@ fn add_under_an_undetermined_scope_marks_the_stored_task() {
 
     let home = temp_home("undetermined-write-marker");
     let broken_dir = temp_dir("undetermined-write-marker-dir");
-    std::fs::write(
-        broken_dir.join(".git"),
-        "gitdir: /definitely/nonexistent-xyz-q7f3k9z2/.git/worktrees/broken\n",
-    )
-    .unwrap();
+    common::linked_checkout_of_bare(&broken_dir);
 
     let broken_str = broken_dir.to_string_lossy().into_owned();
     let (add_code, _add_out, add_err) = run_in(

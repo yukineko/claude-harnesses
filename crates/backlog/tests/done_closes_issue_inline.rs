@@ -17,6 +17,8 @@
 //!
 //! Drives the real binary against a stub `gh` that records every argv, so what
 //! is asserted is the GitHub-visible write actually attempted.
+mod common;
+
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -89,7 +91,8 @@ fn setup(tag: &str) -> Env {
             .unwrap()
             .success());
     };
-    g(&["init", "-q", "."]);
+    // A LINKED worktree: store writes are refused in a PRIMARY working tree (1e6f00ae).
+    common::linked_checkout(&repo);
     g(&["remote", "add", "origin", "https://github.com/o/r.git"]);
 
     Env {

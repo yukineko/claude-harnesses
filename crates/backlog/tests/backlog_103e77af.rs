@@ -83,15 +83,7 @@ fn fx(tag: &str) -> Fx {
     let (home, repo) = (root.join("home"), root.join("repo"));
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&repo).unwrap();
-    assert!(
-        Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(&repo)
-            .status()
-            .unwrap()
-            .success(),
-        "git init failed: fixture is void"
-    );
+    common::linked_checkout(&repo);
     let lib = build_shim(&root);
     Fx { home, repo, lib }
 }

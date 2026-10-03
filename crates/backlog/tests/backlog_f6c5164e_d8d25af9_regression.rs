@@ -48,10 +48,13 @@ impl Fixture {
     fn new(tag: &str) -> Self {
         let home = unique_dir(&format!("{tag}-home"));
         let repo = unique_dir(&format!("{tag}-repo"));
+        common::linked_checkout(&repo);
         let repo = repo.canonicalize().unwrap();
         // Close-evidence fixture: `add` lands `pending` (the state `fail` acts
         // on) only with a REPRODUCED repro test run from a committed script,
-        // so this is a real git repo (was a bare `.git` dir) with one commit.
+        // so this is a real git repo (was a bare `.git` dir) with one commit — a
+        // LINKED worktree, since store writes are refused in a primary tree
+        // (1e6f00ae).
         std::fs::create_dir_all(repo.join("tests")).unwrap();
         std::fs::write(
             repo.join("tests/repro_yes.sh"),
@@ -59,8 +62,7 @@ impl Fixture {
         )
         .unwrap();
         for args in [
-            &["init", "-q"][..],
-            &["add", "tests/repro_yes.sh"],
+            &["add", "tests/repro_yes.sh"][..],
             &[
                 "-c",
                 "user.name=t",

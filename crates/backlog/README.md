@@ -55,6 +55,15 @@ immediately. The SessionStart hook is registered by running `backlog install`,
 which merges a `SessionStart` group into `~/.claude/settings.json` (idempotent,
 ownership-marked) so pending work shows up at every session open.
 
+## Store writes need a linked worktree
+
+`add` / `done` / `fail` / `edit` / `cancel` / `confirm` / `ruling request|approve|withdraw` / `sync --apply` are **refused** (non-zero exit,
+nothing written) when the store lies inside the *primary* working tree of a git repo: main's
+tree only receives merges (CLAUDE.md §8), so run them from a linked worktree
+(`git worktree add …`). If git cannot say which kind of checkout this is, the write is
+refused too. Reads (`list`, `next`, `ruling list`, `audit-closures`, `sync` without `--apply`) work anywhere, and `next --claim` writes only an out-of-repo lease (`~/.backlog/claims`), so it is allowed in the primary tree too, and a cwd outside any git
+repo behaves as before. The SessionStart hook skips its requeue in the primary tree and says so.
+
 ## Standalone (cargo)
 
 ```sh

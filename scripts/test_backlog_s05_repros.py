@@ -282,7 +282,6 @@ class PluginCacheResidue(unittest.TestCase):
 
 
 class RolloutProvenance(unittest.TestCase):
-    @open_defect("649d15f6")
     def test_649d15f6_recopy_keeps_deployed_from_json(self):
         tmp = Path(tempfile.mkdtemp(prefix="s05r-")).resolve()
         try:

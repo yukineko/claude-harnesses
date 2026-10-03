@@ -9292,3 +9292,18 @@ updated_at = 1790983319
 weight = 0.0
 issue_number = 1090
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1090"
+
+[[task]]
+id = "dea7ed1d"
+title = "overwatch review-queue --to-backlog: from the primary tree every backlog add is refused but only warn-skipped — verify whether the bridge ledger then records findings as bridged (silent loss)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1790986949
+updated_at = 1790986949
+weight = 0.0
+issue_number = 1121
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1121"

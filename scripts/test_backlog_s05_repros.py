@@ -82,10 +82,24 @@ class EditGuardDuringMerge(unittest.TestCase):
             cwd=str(self.m), env=_env(CLAUDE_PROJECT_DIR=str(self.m)),
         ).returncode
 
-    def test_control_unrelated_file_stays_refused_during_merge(self):
-        self.assertEqual(self._edit(self.m / "other.txt"), 2)
+    def test_unrelated_file_edit_allowed_during_merge(self):
+        self.assertEqual(
+            self._edit(self.m / "other.txt"), 0,
+            "user ruling 2026-10-04 (c8c11add): while MERGE_HEAD exists, an edit of ANY path "
+            "in main's tree is allowed, not only conflicted paths",
+        )
 
-    @open_defect("ac2ba31d")
+    def test_control_unrelated_file_refused_after_merge_abort(self):
+        # anti-vacuity control: the allowance above must come from MERGE_HEAD, not from a
+        # guard that allows everything.
+        subprocess.run(["git", "merge", "--abort"], cwd=self.m, env=_env(), capture_output=True)
+        self.assertFalse((self.m / ".git" / "MERGE_HEAD").exists(), "merge --abort did not clear MERGE_HEAD")
+        self.assertEqual(
+            self._edit(self.m / "other.txt"), 2,
+            "user ruling 2026-10-04 (c8c11add): the any-path allowance applies only while "
+            "MERGE_HEAD exists; after abort the edit must be refused again",
+        )
+
     def test_ac2ba31d_unmerged_path_edit_allowed_during_merge(self):
         self.assertEqual(self._edit(self.m / "f.txt"), 0)
 

@@ -32738,3 +32738,203 @@ scripts/test_backlog_s05_repros.py .                                     [100%]
 rev = "aac65881de67df8e119f29238ece5f65f3d12068"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "c8c11add"
+title = "guard-maintree-edit.py が main のツリーでの conflict 解決を止める（pre-commit の main-tree-guard は merge を許すのに、Edit 側だけ MERGE_HEAD を見ていない）"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "failpositive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+observed 2026-09-09（測定点 f17bbba3、session e9ebfcb6）。
+
+【手順と観測】
+1. ユーザーが main の作業ツリーで `git pull origin main` を実行し、28 ファイルが
+   conflict した状態（`.git/MERGE_HEAD` あり）になった。
+2. conflict 解決のために Edit ツールを使ったところ、`scripts/guard-maintree-edit.py`
+   が PreToolUse で拒否した。
+3. しかし CLAUDE.md 第8節は「main の作業ツリーで許されるのは統合（merge・conflict
+   解決）だけ」と明記しており、pre-commit の `main-tree-guard` も **merge commit は
+   通す**（block するのは非 merge commit だけ）。
+
+つまり **同じ不変条件を守る 2 つのゲートが、許可範囲について食い違っている**。
+commit 側は merge を許すのに、edit 側はその merge を完成させる編集を拒む。
+
+【影響】
+`git pull` が conflict した瞬間、main のツリーは「解決できないが abort もしにくい」
+状態になる。今回は `git merge --abort` -> 専用 worktree で `git merge origin/main` を
+やり直す、という迂回で通した（結果的に §8 に沿ってはいるが、迂回であって設計ではない）。
+より悪いのは、この不整合が **共有 skip ファイルや --no-verify への圧力**になること。
+
+【完了条件】
+`guard-maintree-edit.py` が `.git/MERGE_HEAD`（および `REBASE_HEAD` /
+`CHERRY_PICK_HEAD` を含めるかは要判断）の存在を見て、進行中の統合に属する編集を
+許可する。**判定不能は従来どおり block 側**へ倒すこと。回帰テストを添え、
+`main-tree-guard` と許可範囲が一致することを機械照合できる形にすること。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Not a duplicate. It has an extra done-criterion that ac2ba31d lacks: machine-check that the edit guard and the main-tree guard allow the same scope.; test scratchpad/s05/mergeedit.sh (rev e70d48dd)
+
+[ruling 2026-10-04, user via AskUserQuestion, session 33de4c25] Edit guard scope = same as the commit-side guard: while MERGE_HEAD exists in main's git dir, any edit in main's tree is allowed (no conflicted-path restriction). Only MERGE_HEAD counts; REBASE_HEAD and CHERRY_PICK_HEAD stay blocked. Undetermined (git dir unresolvable, marker unreadable) stays block. No independent repro test existed (the cited scratchpad/s05/mergeedit.sh is not in the repo); one is being written by an independent agent. Covers ac2ba31d too."""
+created_at = 1788923641
+updated_at = 1791044352
+weight = 0.0
+issue_number = 1114
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1114"
+issue_closed_at = 1791044355
+rev = 2
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_backlog_c8c11add.py"
+exit = 0
+passed = 9
+rev = "6440360278ded1dd0fa7e4519b34a85a4484a3e1"
+observed_at = 1791044336
+output_digest = "sha256:a917d6c7b6499869cf1536ee489a9b97e08affcba8bd2f2ca303ece05f05f483"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-33de4c25
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 9 items
+
+scripts/test_backlog_c8c11add.py .........                               [100%]
+
+============================== 9 passed in 5.98s ===============================
+"""
+
+[task.closure.red]
+rev = "5c9b727eba024b01a73d2ed58deb26fe4e543320"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "ac2ba31d"
+title = "guard-maintree-edit.py needs a MERGE_HEAD carve-out"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = """
+CLAUDE.md 8 permits exactly one operation on the main working tree: merge / conflict resolution. But scripts/guard-maintree-edit.py (PreToolUse) refuses ALL Edit/Write to the main tree with no exception, including while a merge is in progress. Its own deny message says merge/conflict-resolution are the ONLY operations allowed on main, so prose and behaviour disagree (CLAUDE.md 4). Observed 2026-07-28 resolving the budgetguard merge: the only way to resolve a semantic conflict was to write the file from a python script run via Bash, which the hook does not inspect. That path is worse than the one it blocks - unreviewed, and it trains the author to route edits through Bash. Fix: allow Edit/Write when .git/MERGE_HEAD (or CHERRY_PICK_HEAD / REBASE_HEAD) exists AND the target is an unmerged path per git diff --name-only --diff-filter=U, keeping cannot-determine on the deny side as now. Note the pre-commit backstop check-worktree-isolation.py already has the merge carve-out, so the two gates currently disagree about what main permits.
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test scripts/test_backlog_s05_repros.py (rev e70d48dd)"""
+created_at = 1785453157
+updated_at = 1791044369
+weight = 0.0
+issue_number = 104
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/104"
+issue_closed_at = 1791044372
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_backlog_s05_repros.py -k ac2ba31d"
+exit = 0
+passed = 1
+rev = "6440360278ded1dd0fa7e4519b34a85a4484a3e1"
+observed_at = 1791044359
+output_digest = "sha256:c93233b17377521a778e3cb04345ac79cb0f9ba7c3af96938e432a476b123e96"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-33de4c25
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 23 items / 22 deselected / 1 selected
+
+scripts/test_backlog_s05_repros.py .                                     [100%]
+
+======================= 1 passed, 22 deselected in 0.70s =======================
+"""
+
+[task.closure.red]
+rev = "5c9b727eba024b01a73d2ed58deb26fe4e543320"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "b74955f4"
+title = "propguard inject mode records EVERY derived property as a fleet violation, contradicting the CA-propguard-06 comment in the same function"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+Reported by an adversarial audit 2026-09-11 at HEAD 2abf8dea. Verdict CONFIRMED by the auditor with verbatim quotes; I have NOT independently re-verified the overwatch write path, so treat the consumption half as UNVERIFIED until someone traces it.
+
+crates/propguard/src/gate.rs:442-445 verbatim:
+
+    fn unsatisfied_prop_ids(props: &[Property], findings: Option<&str>) -> Vec<&static str> {
+        let Some(out) = findings else {
+            return props.iter().map(|p| p.id).collect();
+        };
+
+The early return fires whenever findings is None. Inject mode constructs exactly that: gate.rs around :273-279 builds Determination::Known(Verified { satisfied: 0, findings: None }). So in inject mode ALL 3-5 derived properties are returned as violated and appended as ViolationSource::Propguard events (main.rs around :306 and :485-497), read later by overwatch violations / overwatch review-queue.
+
+Nothing evaluated any of them. The same function guards against precisely this, but only inside the Some(out) branch. gate.rs:451-457 verbatim:
+
+    // None means the checker emitted NO verdict line for it - it was
+    // never evaluated, which is NOT the same as checked-and-failed. Only
+    // a property that was checked and FAILED (Some(false)) is a fleet
+    // violation; a never-evaluated (unchecked) property must not be
+    // reported violated / pollute the fleet-correlation store, per
+    // property (CA-propguard-06).
+
+and main.rs:446 verbatim: "Record a fleet-level overwatch violation for each failing PROP-* property on a Block decision." In inject mode none of them is failing; none was checked.
+
+The sibling path gets this right - decide_diff_failed doc (gate.rs around :649-652) says NO per-property violation is attributed because nothing was checked. Same defect class as the satisfied=0 headline that b61d68b4 fixed, surviving on the durable-record surface instead of the message surface.
+
+Currently latent in THIS repo: there is no propguard.toml and no criteria file at the repo root, so derive.rs source_criteria returns None and gate.rs allows at the no-criteria arm before any of this runs. It is not latent for any project that configures propguard, and inject is the mode the shipped starter template writes.
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/propguard/src/gate.rs (rev e70d48dd)"""
+created_at = 1789064369
+updated_at = 1791045760
+weight = 0.0
+issue_number = 510
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/510"
+issue_closed_at = 1791045763
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p propguard --test backlog_b74955f4"
+exit = 0
+passed = 2
+rev = "e7d8d2119ac648718fe94a53343ffe7b5566e244"
+observed_at = 1791045699
+output_digest = "sha256:32f1942fae40db589fcbbc43dc985deebaba9fcd035825d74f8a9fcb80387449"
+excerpt = """
+
+running 2 tests
+test inject_block_records_no_propguard_violations ... ok
+test subprocess_block_records_only_the_failed_property ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.98s
+
+   Compiling harness-core v0.2.44 (/Users/yuki/src/.harness-worktrees/session-33de4c25/crates/harness-core)
+   Compiling overwatch v0.2.59 (/Users/yuki/src/.harness-worktrees/session-33de4c25/crates/overwatch)
+   Compiling propguard v0.1.57 (/Users/yuki/src/.harness-worktrees/session-33de4c25/crates/propguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 19.61s
+     Running tests/backlog_b74955f4.rs (target/debug/deps/backlog_b74955f4-b21326ac0ae4037d)
+"""
+
+[task.closure.red]
+rev = "79667521fa3057f3ce9d0c006ca00c02d6d82d4e"
+exit = 101
+kind = "behavioural"

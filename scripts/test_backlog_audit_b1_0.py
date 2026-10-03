@@ -191,10 +191,9 @@ class BacklogA0525604CargoMetadataFailureIsNotMasked(unittest.TestCase):
                          "a0525604: the run continued past a failed cargo metadata")
 
 
-@unittest.skipUnless(OPEN_PINS, OPEN_PIN_REASON + " (a0525604, empty-metadata half)")
-class OpenPinA0525604EmptyMetadataIsNotGreen(unittest.TestCase):
-    """a0525604 (second half, STILL OPEN): `cargo metadata` that exits 0 but
-    yields no target_directory silently falls back to $REPO/target."""
+class BacklogA0525604EmptyMetadataIsNotGreen(unittest.TestCase):
+    """a0525604 (second half): `cargo metadata` that exits 0 but yields no
+    target_directory must not silently fall back to $REPO/target and exit 0."""
 
     def test_empty_metadata_does_not_fall_back_silently(self):
         r = _run_rebuild_dry("echo '{\"packages\":[]}'\nexit 0\n")

@@ -33957,3 +33957,421 @@ scripts/test_check_unlisted_gates_verify.py ........................     [100%]
 rev = "85448a68817931c6a8a2d599ec28d06979b1e746"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "5461ba1c"
+title = "orphan cache dir の finding が ROLLOUT クラスに畳まれ remedy が誤誘導になる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "rollout-gate",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+plugin_cache.scan は crates/ に無い plugin の cache dir を '<name>: cached but no current version known from crates/' として報告し、check-plugin-rollout.py の main() はこれを stale_problems 経由で rollout_problems に畳む。その結果 ROLLOUT DRIFT ブロックの Fix 行 'scripts/rollout-plugins.sh --plugin <name>' が出るが、crate が存在しない plugin にこのコマンドは効かない。さらに悪いことに、読み手を『撤去された plugin を rollout し直す』方向へ向ける = 2026-08-04 の taintguard 事案 (a6f165cd) と同じ形。今回追加した RETIRED クラス (rc=5) 側へ回すのが正しい可能性がある。今回は検出そのものは既に fail-closed で効いているため remedy 文言の再配置は手を付けていない。測定: 2026-09-10, worktree-agent-ad28c375730ca93e4, fixture で rc=1 と逐語出力を確認済み (test_cache_dir_with_no_crate_is_already_a_hard_failure が pin)。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test scripts/test_backlog_5461ba1c.py (rev e70d48dd)"""
+created_at = 1788984267
+updated_at = 1791046020
+weight = 0.0
+issue_number = 483
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/483"
+issue_closed_at = 1791046024
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_backlog_5461ba1c.py"
+exit = 0
+passed = 1
+rev = "0f8f7c19414c396ef0c5683c3b4ab5621439b89d"
+observed_at = 1791046009
+output_digest = "sha256:8f8d0d0490bbd1f94846eccbd171db877af3e6e29399e0c124830b7ae57f7dec"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-64554c4d
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 1 item
+
+scripts/test_backlog_5461ba1c.py .                                       [100%]
+
+============================== 1 passed in 0.33s ===============================
+"""
+
+[task.closure.red]
+rev = "4027a8dcac83a9e2910e6ddd9f07c8780825aeb8"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "230c34ec"
+title = "specguard brief の verdict が構造的に covered を返せない (spec-map 134/134 が no spec-doc) — flow 3-1.5 の spec-gap trigger 3 が空虚に発火する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-09-13、測定点 37cc0be1 (specguard map の last synced と同一)。
+
+観測: specguard brief --json はどの課題文に対しても verdict=not-covered を返す。
+対照実験 (アンチ空虚): 正典に確実に存在する 3 topic を投げても全て not-covered だった。
+  判定不能は clean ではなく block か ask に解決する      -- rc=0 verdict=not-covered
+  main の作業ツリーで編集せず worktree で作業する          -- rc=0 verdict=not-covered
+  plugin を触ったら version を 3 ファイル lockstep で bump -- rc=0 verdict=not-covered
+これらは CLAUDE.md 第3節・第8節・禁忌ルールの逐語内容なので、covered が返らないのは
+「正典が無い」ではなく「判定面が機能していない」ことを意味する。
+
+原因 (測定): specguard map list は 134 entries を持つが、そのうち spec-doc を持つ entry は 0 件。
+  total entries: 134
+  with (no spec-doc): 134
+  with a spec-doc: (0 行)
+つまり covered を返しうる入力が構造的に存在しない。verdict は二値的に not-covered へ固定されている。
+
+なぜ問題か: flow SKILL.md の Step 3-1.5 は trigger 3 として
+verdict=not-covered を spec-gap divert (specforge へ差し戻し) の発火条件にしている。
+現状この trigger は全課題で発火するので、(a) 全タスクが divert 候補になり、
+(b) その escalate が常時発生して人間の判断が儀式化する。
+さらに divert は書き込み側 (specforge draft が新しい spec を起こす) なので、
+判定面が死んでいる状態での発火は「読めなかった」を「仕様が無い」へ写す —
+3-1.5 自身が明示的に禁じている置換であり、CLAUDE.md 第3節の
+「判定不能を permissive/誤った側へ潰す」の一形態。
+
+判定不能なので両方の読みを残す:
+  (a) 実在の欠陥 = spec-map に spec-doc を結び付ける経路 (drift-map) が未実行/未配線で、
+      brief が三値のうち covered を出せない。この場合 brief は not-covered ではなく
+      undetermined (exit 10) を返すべきで、二値へ潰れているのが欠陥。
+  (b) 意図的な仕様 = spec-doc がまだ 1 件も無いのは事実なので not-covered は正しい、
+      という読み。ただしその場合でも trigger 3 は全件発火するので flow 側の運用が破綻する。
+
+見分ける方法: spec-doc を 1 件だけ作って map の当該 entry に結び付け、
+その領域の課題文で brief が covered を返すか観測する。
+返るなら (a) は「未配線」であり配線すれば解ける。返らないなら brief の判定経路自体の欠陥。
+併せて specguard brief が undetermined (exit 10) を実際に返す入力が存在するかも確認する
+(存在しないなら三値は名目だけで実体は二値)。
+
+発見経緯: /flow の Step 3-1.5 プリフライトで 3 件全部が not-covered になり、
+divert する前に対照実験を掛けて空虚さが判明した。divert は実行していない。
+
+--- サイクル7 追記 ---
+
+再測定 2026-09-16 (現在の main): 230c34ec の症状は未修正のまま。
+サイクル7 の 4 件の課題文すべてが rc=0 verdict=not-covered。
+アンチ空虚の対照として、正典に確実に存在する 3 topic を投げても全て not-covered:
+  "spec loop R4 flow spec gap source"      -- rc=0 verdict=not-covered
+  "blastguard three-valued decision ask"   -- rc=0 verdict=not-covered
+  "fail-closed gate invariant"             -- rc=0 verdict=not-covered
+したがって flow 3-1.5 の trigger 3 は依然として判別能力を持たない。
+coordinator は not-covered を spec-gap の証拠として扱わず、undetermined として
+divert せずに続行した (第3節: 測れないことを測れたことに写さない)。
+
+サイクル7 が追加で観測した事実 (再測定の副産物、測定点 main 72995339):
+spec-map は .gitignore:80 で .specguard/spec-map.toml として ignore されており、
+main の作業ツリーにしか実体が無い。同じ 7 本の probe を CLAUDE.md 第8節が義務づける
+worktree (測定点 778155e4) から実行すると、verdict は not-covered ではなく
+rc=10 verdict=undetermined になる (spec-map が空と読まれるため)。
+つまり brief の verdict は cwd がどちらの作業ツリーかで変わる。第8節は全作業を
+worktree で行うことを義務づけているので、規範どおりに働く実行主体から見た
+brief は構造的に常に undetermined である。これは本チケットの読み (a)/(b) とは
+別の第3の経路であり、not-covered と undetermined のどちらを見るかが
+測定場所に依存するという意味で、判定面の問題をさらに一段深くする。
+measure コマンド: specguard brief --json <topic> を cwd=main と cwd=worktree で各7本。
+spec-map 規模 (cwd=main, 測定日 2026-09-16): specguard map list は 184 行、
+うち "(no spec-doc)" を含む行 183。covered を返しうる entry は依然ほぼ皆無。
+
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/specguard/tests/backlog_230c34ec.rs (rev 34b1a083): reading (a): covered reachable, tracked bindings not applied by brief"""
+created_at = 1789272899
+updated_at = 1791047861
+weight = 0.0
+issue_number = 544
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/544"
+issue_closed_at = 1791047865
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p specguard --test backlog_230c34ec"
+exit = 0
+passed = 2
+rev = "0e44ff2829ad1fe862a8c3ef2e4cd7169f07885e"
+observed_at = 1791047719
+output_digest = "sha256:eb34d8496f06343f0de74be1b8d8edf6a31c73e3bf6668e1902e734ef5960044"
+excerpt = """
+
+running 2 tests
+test backlog_230c34ec_map_spec_doc_control ... ok
+test backlog_230c34ec_tracked_spec_docs_binding_makes_brief_covered ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.25s
+
+   Compiling harness-core v0.2.45 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/harness-core)
+   Compiling overwatch v0.2.59 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/overwatch)
+   Compiling blastguard v0.2.105 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/blastguard)
+   Compiling specguard v0.2.86 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/specguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 02s
+     Running tests/backlog_230c34ec.rs (target/debug/deps/backlog_230c34ec-9ce2380f6591b19d)
+"""
+
+[task.closure.red]
+rev = "d8dccdac6daac02fb10238191ddf3e2182b434d5"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "05726f9f"
+title = "scripts/test_*.py の import shim (spec_from_file_location + exec_module) は __pycache__ 越しに古いコードを検証しうる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-09-10、worktree agent-aa54b994b297e4963。mutation kill-rate 実施中に発見。
+
+## 何が起きたか (観測)
+
+check-workspace-tests.py に mutation を注入して kill されるか確かめる作業中、
+main() の ranking chain を **並べ替えるだけ** の mutation (return 文の順序入れ替え、
+バイト長は不変) を注入したところ、テストが緑のままで「SURVIVED」と判定された。
+しかし実際にはその mutation は **一度もロードされていなかった**。
+
+原因: テスト側の import shim が
+    _SPEC = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(_SPEC)
+    _SPEC.loader.exec_module(mod)
+という形で、SourceFileLoader 経由で読んでいる。SourceFileLoader は __pycache__ の
+.pyc を **(source の mtime, source の size)** で検証する。mtime の粒度は **1 秒**。
+したがって「直前の compile と同じ壁時計秒の中で行われた、バイト長を変えない編集」は
+検証をすり抜け、インタプリタは古い bytecode を配る。
+
+## なぜ重要か (これは fail-open の一種)
+
+古いキャッシュが作れるのは **偽の GREEN / 偽の SURVIVOR だけ**で、偽の RED は作れない。
+つまりこの経路は常に「テストが実際には何も見ていない」側に倒れる。CLAUDE.md 2.(b)
+「落ちることを確認していないテストは何も証明しない」の機械的な裏口にあたる。
+
+## 影響範囲 (未確認 — ここは調べていない)
+
+scripts/test_*.py は 23 本あり、ハイフン入りのスクリプト名を import するために
+どれも同種の shim を持っている可能性が高い。**実際に何本がこの形かは数えていない**
+(この起票時点で確認したのは新規の test_check_workspace_tests.py のみ)。
+まず `grep -ln exec_module scripts/test_*.py` で母数を出すこと。
+
+## 対処 (新規 suite では適用済み)
+
+scripts/test_check_workspace_tests.py はキャッシュ経路を使わない形へ変更済み:
+    exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), mod.__dict__)
+理由をコメントで残してある (後で「単純化」して戻されないように)。
+再確認: __pycache__ を消さずに同じ mutation を注入したところ、今度は正しく
+kill された (AssertionError: 1 != 4)。
+
+他の 22 本にも同じ変更を入れるか、あるいは mutation を扱う手順側で
+毎回 __pycache__ を消すことを必須にするか、どちらかを決めること。
+前者の方が良い — 手順の遵守を人間の記憶に置かない (CLAUDE.md 6.)。
+
+--- 母数を実測 2026-09-11 (起票時に「調べていない」と書いた部分の補完) ---
+
+  grep -ln exec_module scripts/test_*.py | wc -l  -> 15
+  ls scripts/test_*.py | wc -l                    -> 24 (新規の1本を含む)
+
+つまり **15 本**が SourceFileLoader.exec_module 経由で被検証スクリプトを読んでおり、
+同じ偽 GREEN / 偽 SURVIVOR の経路を持つ。うち 1 本 (test_check_workspace_tests.py) は
+対処済みなので、残り **14 本**が未対処。
+
+なお対処が効いていることは実測済み: __pycache__ を消さずに ranking mutation
+(バイト長不変の並べ替え) を注入したところ、対処後の suite は正しく kill した
+(AssertionError: 1 != 4)。対処前は同じ条件で SURVIVED と誤判定していた。
+
+
+[triage 2026-09-29 @b325a169] p2->p1: 16 scripts/test_*.py still use exec_module stale-bytecode path -> false greens / false mutation survivors
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_s06_misc_b_repros.py::Backlog05726f9f (rev e128c13b): Pre-existing committed repro (skip-by-default), RED re-observed at HEAD; it is a static proxy (counts .loader.exec_module shims), not a live stale-pyc demonstration. New nt_E tests load subjects via exec(compile()) so they do not add offenders."""
+created_at = 1789047296
+updated_at = 1791048578
+weight = 0.0
+issue_number = 499
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/499"
+issue_closed_at = 1791048581
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_verifier_05726f9f.py"
+exit = 0
+passed = 4
+rev = "a7308876b7d8b177efaa231106c77ee5f7440e4e"
+observed_at = 1791048575
+output_digest = "sha256:38796864c922a1e95bc6074efa1da5a5c9031f11fd0b12bbbd7276dd5357f186"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-64554c4d
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 4 items
+
+scripts/test_verifier_05726f9f.py ....                                   [100%]
+
+============================== 4 passed in 0.40s ===============================
+"""
+
+[task.closure.red]
+rev = "6acdb6b7716193b8716cdc72604acd4b1940b7cc"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "a0525604"
+title = "rebuild-plugins.sh masks cargo metadata failure and can no-op the whole run at rc 0"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+scripts/rebuild-plugins.sh:81-82: TARGET_DIR="$(cargo metadata --no-deps --format-version=1 | sed -n '...')" — the pipeline's exit status is sed's, which is always 0, so a failed or empty cargo metadata silently yields an empty TARGET_DIR and REL falls back to $REPO/target/release. Measured on this machine: .cargo/config.toml sets target-dir=/tmp/condukt-build, so $REPO/target/release does not exist at all; under that fallback [ -x "$src" ] is false for EVERY plugin, the main loop takes its 'missing' branch (:282-284) and the seed pass takes its silent continue (:379), and the script still exits 0 at :401 with a green summary. $REPO is $(dirname $0)/.. i.e. the worktree, which makes the fallback wrong more often, not less. CLAUDE.md §3: the exit status must be part of the verdict. Found while closing 8206b09f.
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Half fixed. pipefail half: python3 scripts/test_backlog_audit_b1_0.py BacklogA0525604CargoMetadataFailureIsNotMasked -> ok (fake cargo exit 101 -> rebuild-plugins.sh --dry-run rc!=0); mutation P3 (set; test - (rev e70d48dd)"""
+created_at = 1789118631
+updated_at = 1791048585
+weight = 0.0
+issue_number = 539
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/539"
+issue_closed_at = 1791048587
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_verifier_a0525604_empty_metadata_real_run.py"
+exit = 0
+passed = 1
+rev = "a7308876b7d8b177efaa231106c77ee5f7440e4e"
+observed_at = 1791048581
+output_digest = "sha256:b45449b10356c0bc597cb0e876aff44e76ffd8f3c245cbfa0c47af3156714ada"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-64554c4d
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 1 item
+
+scripts/test_verifier_a0525604_empty_metadata_real_run.py .              [100%]
+
+============================== 1 passed in 0.49s ===============================
+"""
+
+[task.closure.red]
+rev = "6acdb6b7716193b8716cdc72604acd4b1940b7cc"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "7f07228e"
+title = "overwatch store::record_finding (library 経路) が verdict を引数に持たず ReviewFinding::new が無条件 Confirmed を刻む — CLI 側を必須化しても 3 producer がここを通る"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-09-13、測定点 f667897d の worktree (backlog eda212a0 の作業中に発見)。
+
+eda212a0 は CLI (`overwatch record-finding --verdict`) の省略時 confirmed 既定を廃止したが、
+**同じ欠陥が library 経路に残る**。
+
+逐語 crates/overwatch/src/review_finding.rs:155-174:
+    pub fn new(
+        finding_id: String, source: String, severity: Option<String>,
+        summary: String, file: Option<String>, rationale: Option<String>, ts: i64,
+    ) -> Self {
+        Self { ..., verdict: AuditVerdict::Confirmed, ts }
+    }
+
+逐語 crates/overwatch/src/store.rs:514-532 — `pub fn record_finding(...)` の引数に
+**verdict が無い**。`ReviewFinding::new(...)` をそのまま `append_review_finding` する
+(`.with_verdict(..)` を呼ばない) ので、この経路で記録された finding は
+**常に Confirmed** になる。呼び出し側が unverified を表明する手段が型に存在しない。
+
+実 producer は 3 本 (いずれも `let _ =` で戻り値も捨てている):
+  crates/specguard/src/main.rs:2116
+  crates/specguard/src/main.rs:2200
+  crates/propguard/src/main.rs:372
+  crates/condukt/src/gate_exec.rs:319
+
+なぜ問題か: eda212a0 のユーザー裁定は「UNVERIFIED が既定では決して発生しない」ことを
+問題視したものだった。CLI を必須化しても、この 4 箇所が通る経路では
+UNVERIFIED は**表現すら不可能**なままなので、裁定の意図は半分しか達成されていない。
+`confirmed` のみが `review-queue --to-backlog` で backlog へ橋渡しされるため、
+「検証していない finding が actionable work として queue に入る」経路が残る。
+
+判定不能なので両方の読みを残す:
+  (a) 実在の欠陥 = library 経路も verdict を要求すべきで、new() の
+      hardcoded Confirmed は CLI 側と同じ「確実性の捏造」。
+  (b) 意図的な仕様 = これらの producer (gate escalate / spec drift / prop violation) は
+      「ゲートが実際に検出した事実」なので confirmed で正しい、という読み。
+      その場合でも new() が既定を握るのではなく、各 producer が明示すべき
+      (eda212a0 の裁定理由がまさにそれ)。
+
+見分ける方法: 4 producer それぞれについて、記録している事実が
+「敵対的検証を経た CONFIRMED」なのか「ゲートが観測しただけの raw signal」なのかを読む。
+後者が 1 つでもあれば (a)。gate_exec の escalate は「人間の判断が要る」状態なので
+unverified 寄りに見えるが未確認。
+
+あわせて: 4 producer は全て `let _ =` で Result を捨てている。fail-soft の意図は
+docstring に書かれているが、記録失敗が完全に不可視なのが妥当かは別途要検討。
+
+スコープ外として起票: eda212a0 の完了条件は CLI の --verdict 必須化なので、
+本件はそこに含めず別チケットにした。
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/overwatch/tests/backlog_7f07228e.rs (rev d2e54735): Asserts reading (a) (audit found gate-exec/specguard are raw signals)."""
+created_at = 1789273494
+updated_at = 1791049263
+weight = 0.0
+issue_number = 546
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/546"
+issue_closed_at = 1791049266
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test backlog_7f07228e"
+exit = 0
+passed = 1
+rev = "7e05ab454eb28204d05471f3402b859d8bbfcec6"
+observed_at = 1791049237
+output_digest = "sha256:8466056665ea0be860440677a1a34186675859fb7c6ff775919e059ce179a516"
+excerpt = """
+
+running 1 test
+test library_record_finding_does_not_stamp_an_unverified_gate_signal_as_confirmed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling harness-core v0.2.45 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/harness-core)
+   Compiling overwatch v0.2.60 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.02s
+     Running tests/backlog_7f07228e.rs (target/debug/deps/backlog_7f07228e-991d25ec8f68a8f7)
+"""
+
+[task.closure.red]
+rev = "6acdb6b7716193b8716cdc72604acd4b1940b7cc"
+exit = 101
+kind = "behavioural"

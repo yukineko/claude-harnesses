@@ -827,67 +827,6 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/344"
 rev = 0
 
 [[task]]
-id = "826c29bf"
-title = "gate の mission を「明瞭な指示に照らした Audit」に揃える: 不明瞭なら明確化 Ask 必須、正当な根拠があれば block+Ask、根拠が無ければ通す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "needs-ruling"
-notes = """
-ユーザー指示（2026-09-07、5メッセージにわたる確定形）。
-
-## Gate の mission
-明瞭な指示にもとづいて Audit し判定することが Gate の mission。指示は gate の入力である。
-指示を参照せずに発火する gate（純粋な形状マッチ、要求が含意していない作業を要求する Stop hook）は
-mission を果たしていない。それが欠陥であって、block すること自体は欠陥ではない。
-
-## 各 gate が従うべき判定手順
-1. 指示は明瞭か。不明瞭なら明確化のための Ask は必須。仕様が無いものは audit できない。
-2. 明瞭なら、行為を指示に照らして audit する。
-   - 正当と思う根拠がある: block し、かつ Ask する（根拠を逐語で申告）。
-   - 根拠が無い: 通す。止めない。
-3. Ask で却下されたら却下でよい。蒸し返さない、再質問しない、別ルートを探さない。
-
-## Ask は万能既定ではない
-何でも Ask だと自律しない。Ask の対象は (a) 不明瞭な指示 (b) 正当な根拠のある block の2つだけ。
-それ以外は自律的に進む。
-
-## 既存の規範との接続
-明確な指示が破壊的でないなら実行する。破壊的なら Ask。自律時は gate を完全に機能させる。
-block されたら理由を逐語で申告して Ask。指示に明確に反する block は公然と無効化してよい。
-黙って迂回する、あるいは別構文で同じ効果を得るのがバグ。
-fail-closed は弱めない。CLAUDE.md 3 は判定不能を block または ask と明記しており、
-blastguard の Decision::Ask がその制限側の第三の答え。作業は block 側の callsite のうち
-本来 ask であるべきものを移すことであって、permissive な既定を作ることではない。
-
-## done_criteria
-1. gate を (a) コードを判定するもの（fail-closed 維持）と (b) 指示・意図を判定するものに分類する。
-2. 一律 advisory 化はしない。すべての block が逐語引用可能な理由を返し、公然の override 経路を持つ。
-3. 自律時の判定不能は ask に解決する（block 一択にしない）。
-4. 本当に block すべきケースが依然止まることを RED 先行の behavioural test で固定する。
-5. autoflow の compass gate は、自分が宣言した前提が成立するときだけ block する
-   （観測: 前提が成立していないのに before automatically draining the backlog と述べて block した）。
-6. agent 側の規範（申告して Ask、別構文で再試行しない）を SKILL / CLAUDE.md に書く。
-7. 不明瞭な指示に対する明確化 Ask を、gate が省略できない経路として実装する。
-
-## 観測されたコスト
-シェルの redirect が拒否されたので同一の書き込みを python 経由に迂回した。書き込みは結局成立したので
-gate は何も守っておらず、回避だけを学習させた。本セッションでも同じ形が再発している（python3 の
-インライン eval が blastguard に止められた）。そのときは heredoc へ書き換えず、インタプリタを使わない
-経路へ落とし、block 理由を逐語で申告した。これが正しい形。
-
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_826c29bf.py (rev 2ff60f58): Pins the umbrella's own criterion 6; children carry their own repros; criterion 5 obsolete (autoflow compass gate RETIRED 2026-08-20, crates/autoflow/src/main.rs:343)."""
-created_at = 1788789695
-updated_at = 1791024191
-weight = 0.0
-issue_number = 412
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/412"
-rev = 1
-ruling_kind = "untestable"
-untestable_reason = "Criterion 6 (the only one this umbrella owns; children ae4543d5/b5358f58/ad524af9/cc809395/73c2c089/5eb1f127 carry the rest, criterion 5 obsolete) is fixed in 7927324f (CLAUDE.md section 5 item 4). Evidence: python3 scripts/test_backlog_826c29bf.py, expectedFailure removed, OK at aceee2e1 (observed 2026-10-03); RED before 7927324f as the expectedFailure. The backlog evidence runner allowlists only cargo test / pytest / bash, pytest is not installed, and --doc-only is refused because 7927324f also edits the test file. Approve to close."
-
-[[task]]
 id = "ae4543d5"
 title = "guard-maintree-bash.py の同一効果ミラー: interpreter ラッパ / チルダ・HOME・PWD / cd による再アンカー / perl -pi -e が main ツリーへの書き込みを素通しする"
 project = "/Users/yuki/src/harness"

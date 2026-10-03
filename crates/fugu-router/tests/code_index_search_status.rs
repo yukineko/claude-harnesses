@@ -285,3 +285,104 @@ fn blank_lines_in_valid_index_are_tolerated() {
     assert_eq!(code, 0, "stdout={out:?} stderr={err:?}");
     assert!(!parse_array(&out).is_empty(), "expected a hit, got {out:?}");
 }
+
+// ---- build-meta consistency (1a18b8c7) ----
+
+const ALPHA: &str =
+    r#"{"name":"alpha_widget","kind":"fn","file":"a.rs","line":1,"signature":"fn alpha_widget()"}"#;
+
+/// A hand-written index: `.fugu/code-index.jsonl` holding exactly one valid
+/// symbol, plus the given meta body (or no meta file at all).
+fn one_symbol_index(tag: &str, meta: Option<&str>) -> PathBuf {
+    let root = temp_dir(tag);
+    std::fs::create_dir_all(root.join(".fugu")).unwrap();
+    std::fs::write(index_path(&root), format!("{ALPHA}\n")).unwrap();
+    if let Some(m) = meta {
+        std::fs::write(meta_path(&root), m).unwrap();
+    }
+    root
+}
+
+#[test]
+fn meta_count_exceeds_body_count_exits_4_naming_both_counts() {
+    // Truncated body: one valid line survives, meta says the build wrote two.
+    // A query for the lost symbol must not read as "read, nothing matched".
+    let root = one_symbol_index(
+        "meta2-body1",
+        Some(r#"{"fingerprint":"x","files":1,"symbols":2}"#),
+    );
+    let (code, out, err) = search(&root, "beta");
+    assert_failed_with(code, EXIT_UNREADABLE, &out, &err, "meta 2 vs body 1");
+    assert!(
+        err.contains('1') && err.contains('2'),
+        "diagnostic must name both counts (body 1, meta 2): {err:?}"
+    );
+    assert!(
+        err.contains("holds 1 symbols") && err.contains("records 2"),
+        "diagnostic must attribute each count: {err:?}"
+    );
+}
+
+#[test]
+fn truncated_real_build_exits_4() {
+    // Same shape produced by the real build path: drop the last record.
+    let root = rust_repo("trunc-real");
+    build(&root);
+    let body = std::fs::read_to_string(index_path(&root)).unwrap();
+    let lines: Vec<&str> = body.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert!(
+        lines.len() >= 2,
+        "sanity: build produced >=2 symbols: {body}"
+    );
+    std::fs::write(index_path(&root), format!("{}\n", lines[0])).unwrap();
+    let (code, out, err) = search(&root, "zzzqqq_nonexistent");
+    assert_failed_with(code, EXIT_UNREADABLE, &out, &err, "truncated real build");
+}
+
+#[test]
+fn unparseable_meta_with_valid_body_exits_4() {
+    let root = one_symbol_index("meta-garbage", Some("{not json"));
+    let (code, out, err) = search(&root, "alpha widget");
+    assert_failed_with(code, EXIT_UNREADABLE, &out, &err, "unparseable meta");
+}
+
+#[test]
+fn meta_matching_body_with_hit_exits_0() {
+    let root = one_symbol_index(
+        "meta1-hit",
+        Some(r#"{"fingerprint":"x","files":1,"symbols":1}"#),
+    );
+    let (code, out, err) = search(&root, "alpha widget");
+    assert_eq!(code, 0, "stdout={out:?} stderr={err:?}");
+    let arr = parse_array(&out);
+    assert!(
+        arr.iter().any(|h| h["name"] == "alpha_widget"),
+        "expected alpha_widget hit: {out}"
+    );
+}
+
+#[test]
+fn meta_matching_body_no_match_is_empty_array_exit_0() {
+    let root = one_symbol_index(
+        "meta1-nomatch",
+        Some(r#"{"fingerprint":"x","files":1,"symbols":1}"#),
+    );
+    let (code, out, err) = search(&root, "zzzqqq_nonexistent");
+    assert_eq!(code, 0, "stdout={out:?} stderr={err:?}");
+    assert!(parse_array(&out).is_empty(), "expected [], got {out:?}");
+}
+
+#[test]
+fn no_meta_nonempty_body_is_accepted_exit_0() {
+    // Documented limit: with no meta there is nothing to compare against,
+    // so a fully parseable non-empty body is served as read.
+    let root = one_symbol_index("nometa-body1", None);
+    let (code, out, err) = search(&root, "alpha widget");
+    assert_eq!(code, 0, "stdout={out:?} stderr={err:?}");
+    assert!(
+        parse_array(&out)
+            .iter()
+            .any(|h| h["name"] == "alpha_widget"),
+        "expected alpha_widget hit: {out}"
+    );
+}

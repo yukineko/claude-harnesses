@@ -11669,3 +11669,35 @@ weight = 0.0
 issue_number = 1173
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1173"
 rev = 0
+
+[[task]]
+id = "4a64e6ff"
+title = "guard-maintree-bash: a heredoc BODY that merely contains the text REPO/scripts/x.py is judged as a write target in main and refused"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-03 at 4601daaa+ (session 521ce4dd), twice. Command: cd <session worktree> then python3 - with a quoted heredoc whose body is a python patch script; the body contains the string literal of a shell line referencing the REPO variable plus scripts/gate-bypass.py. The guard refused with: target (REPO var)/scripts/gate-bypass.py mutates this project's MAIN working tree. The python script only wrote files inside the worktree (.githooks/pre-push in worktree, and a scratchpad file). Two readings: (a) defect: heredoc body text is data, not a redirect/argv target; (b) intended conservative undetermined-tokenization for interpreter payloads (ae4543d5 added interpreter-payload recursion). Distinguish: replay the exact command through scripts/guard-maintree-bash.py with a body that writes only to the scratchpad. Related 8b7659cc, 2a775bea, ad524af9."
+created_at = 1791025460
+updated_at = 1791025460
+weight = 0.0
+issue_number = 1175
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1175"
+rev = 0
+
+[[task]]
+id = "8584c975"
+title = "test_gate_bypass AmendIsNotABypass: amend of a gated commit is still recorded in the bypass ledger (suite red on main)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-03 at 56c6fa5b: python3 -m pytest scripts/test_gate_bypass.py fails test_amend_of_a_gated_commit_is_not_recorded_as_ungated with ledger still holding first after amend. Also reported independently by the a7bf3cca test author; failure predates a7bf3cca (present at 4601daaa with only test additions). Memory notes amend always trips the bypass ledger by design of the certificate (tree AND judged HEAD) - reading (a) the test pins an unfixed defect, (b) the test is stale vs the current design. Distinguish by reading post-commit certificate logic. Also: before a7bf3cca the whole suite was 15-red because the harness lacked three scanners pre-commit now runs (check-fail-open-diff, check-fault-injection-adoption, check-gate-protection) and check-compile-fail; nothing runs scripts test suites, so this went unseen (cf 65bfb279)."
+created_at = 1791025463
+updated_at = 1791025463
+weight = 0.0
+issue_number = 1176
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1176"
+rev = 0

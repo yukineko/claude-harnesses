@@ -11,7 +11,7 @@
 #
 # Version-parity note: release-plz only edits Cargo.toml. Each plugin carries
 # the SAME version a second time in .claude-plugin/plugin.json, and
-# check-versions.sh gates the two being equal. The release-plz workflow runs
+# scripts/check-plugin-versions.py gates the two being equal. The release-plz workflow runs
 # scripts/sync-plugin-versions.sh on the release PR branch, so plugin.json is
 # bumped in lockstep with Cargo.toml and BOTH files land in the one PR.
 # release-plz itself never touches plugin.json.

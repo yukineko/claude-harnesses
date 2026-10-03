@@ -41,7 +41,7 @@
 | `check-test-weakening.py`（test-weakening） | テスト適合性 | pre-commit / CI（`test-weakening.yml`） | 同一 commit 内で実装とテストが変化した際、テスト側のアサーション削除等の「弱体化」を検出する |
 | `check-plugin-versions.py`（version-lockstep） | 実装正しさ | pre-commit / CI（`version-lockstep.yml`） | 3ファイルの version 文字列が一致するかだけを見る機械的整合チェック |
 | `check-version-bumped.py`（bump-on-change） | 実装正しさ | pre-commit / CI（`version-lockstep.yml`） | base ref との version 比較という機械的な bump-on-change チェック |
-| `check-bench-regression.py` | テスト適合性 | CI（`bench-regression.yml`） | benchkit の SWE-bench 実行結果から回帰（regression）を検出する、テスト実行結果ベースの判定 |
+| `bench-regression.py`（旧 `check-bench-regression.py`） | テスト適合性 | **hook なし・手動実行ツール**（旧 CI `bench-regression.yml` は CI 撤去で消滅。commit ではなく benchkit の `runs.jsonl` を判定するので hook から決定的な引数で呼べない。2026-10-04 のユーザー裁定で `check-*` 接頭辞から外して改名、backlog eca8dea7） | benchkit の SWE-bench 実行結果から回帰（regression）を検出する、テスト実行結果ベースの判定 |
 | `check-gate-crates-sync.py`（gate-crates-sync） | 実装正しさ | **pre-commit**（2026-08-04 に配線。それまで駆動元は実在しない `gate-crates-sync.yml` の記述だけで、実質どこからも実行されていなかった。だから捕まえるはずのドリフトが在庫として残り続けた。backlog fb6b1796） | GATE_CRATES 集合が 11 ソース間で一致するかを機械照合する。正典は `scripts/rollout-plugins.sh` の `GATE_CRATES=` 行 |
 | `check-launcher-exec-bit.py`（launcher-exec-bit） | 実装正しさ | pre-commit | `crates/<crate>/bin/<name>` launcher が git **index** で 100755 かを検査する。working tree の mode は `core.fileMode=false` のため信用できない。100644 で配布された launcher は `Permission denied` で暗転し、hook が起動しないので finding も出ない = red ではなく dark になる（backlog 8cb3bc22） |
 | `check-cross-crate-constants.py`（crossx-constants） | 実装正しさ | pre-commit（2026-09-08 に配線） | 「lib target が無いので link できず手で写した」定数が、正典の宣言とずれていないかを機械照合する。テーブル駆動で、現在の登録は driver registry の stale TTL 1 件（正典 `crates/backlog/src/lock.rs` の `LOCK_STALE_TTL_SECS`、写しは `crates/condukt/src/wt_reconcile.rs` の `DRIVER_STALE_TTL_SECS`）。**rename を「ドリフト無し」と読まない**のが要点で、0 ヒットも複数ヒットも判定不能として block する。ドリフトは非対称で、危険側（condukt が短い＝live な worktree を dead と判定する）を作るのは「reap を急がない」という安全に見える編集である（backlog 6e30b6fc） |
@@ -147,7 +147,7 @@
   すべて機械的。下記「グレーゾーン設計」節の理由により、束ねて total verdict とする設計自体は
   混在とみなさずリファクタリングしない。
 - スクリプトゲート（`check-doc-claims.py`, `check-test-weakening.py`, `check-plugin-versions.py`,
-  `check-version-bumped.py`, `check-bench-regression.py`,
+  `check-version-bumped.py`, `bench-regression.py`,
   `check-gate-crates-sync.py`, `check-plugin-rollout.py`, `check-ci-red.py`, `check-fail-open.py`）
   — いずれも実装を確認し、文字列/バージョン比較・path:line 照合・数値閾値・run 履歴カウントなど
   決定論的な判定のみで構成されていることを確認した。分類（実装正しさ or テスト適合性）と実装は一致。

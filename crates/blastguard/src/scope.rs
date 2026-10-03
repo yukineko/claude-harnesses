@@ -961,10 +961,13 @@ is not decided by where it is spelled"
     ///     `.git` FILE whose content starts with `gitdir:` — what `git worktree
     ///     add` writes; a main checkout has a `.git` DIRECTORY and never
     ///     qualifies;
-    ///   * the operand's own spelling passes through the checkout with no
-    ///     symlink below it ([`SafeRoots::no_symlink_below`]), so a
-    ///     `<checkout>/.githooks` symlinked into the main tree, or a checkout
-    ///     entry that is itself a symlink, is never `Inside`.
+    ///   * the operand's own spelling passes through the worktree STORAGE
+    ///     ROOT with no symlink below it ([`SafeRoots::no_symlink_below`]
+    ///     anchored at the storage root, not at the checkout), so a
+    ///     `<checkout>/.githooks` symlinked into the main tree, a checkout
+    ///     entry that is itself a symlink (`<root>/<link> -> <root>/<checkout>`),
+    ///     and a spelling through a symlink outside every storage root that
+    ///     lands in a checkout are never `Inside`.
     pub fn classify_worktree_checkout(
         &self,
         operand: &str,
@@ -1016,13 +1019,17 @@ is not decided by where it is spelled"
             }
             Determination::Undetermined(u) => return Determination::Undetermined(u),
         }
-        match self.no_symlink_below(&lexical, &checkout) {
+        // Anchored at the storage root: the checkout entry is a component
+        // BELOW it, so an entry that is itself a symlink fails here. Anchored
+        // at `checkout`, a prefix like `<root>/<link>` would resolve to the
+        // checkout and be accepted as the anchor.
+        match self.no_symlink_below(&lexical, &root) {
             Determination::Known(true) => Determination::known(Placement::Inside {
                 root: checkout,
                 path: real,
             }),
             Determination::Known(false) => Determination::undetermined(format!(
-                "`{operand}` reaches {checkout} through a symlink below it"
+                "`{operand}` reaches {checkout} through a symlink below its storage root {root}"
             )),
             Determination::Undetermined(u) => Determination::Undetermined(u),
         }

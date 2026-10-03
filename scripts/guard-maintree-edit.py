@@ -45,14 +45,30 @@ A payload that does not decode as a JSON object is likewise refused (exit 2):
 the deny ledger below cannot be consulted for a call it cannot read.
 
 HOOK MACHINERY (e033c406, second gate). Before any of the above, an edit whose
-target — as written or after realpath — is inside `.githooks`, inside
-`.git/hooks`, is a `.git/config`, or is a `config.worktree` under `.git` is
-refused, in ANY tree (main, a worktree, another repo) and regardless of
-CLAUDE_PROJECT_DIR: those files hold or wire the local gates, and rewriting them
-disarms every gate at once. Likewise an edit whose realpath is inside either deny
+target — as written or after realpath — is inside `.git/hooks`, is a
+`.git/config`, or is a `config.worktree` under `.git` is refused, in ANY tree
+(main, a worktree, another repo) and regardless of CLAUDE_PROJECT_DIR: those
+files are git's own untracked hook/config plumbing (no reviewable commit), and
+rewriting them disarms every gate at once.
+
+The tracked `.githooks` directory is NOT in that set (user rulings 2026-10-03
+"refusing edits/deletes in a worktree is itself the defect" and 2026-10-04
+"remove what stops wiring into .githooks"). An edit to `.githooks` inside a
+linked worktree is ordinary, reviewable work and is allowed like any other
+worktree file. An edit to the `.githooks` of a PRIMARY checkout (a git work
+tree whose `.git` is a directory — the main tree) is still refused, in ANY
+primary checkout and regardless of CLAUDE_PROJECT_DIR (so a session anchored on
+a worktree cannot reach main's `.githooks` either). The path is judged both as
+written and by its realpath, so a worktree path that symlinks into main's
+`.githooks` is refused the same way. A `.git` beside the `.githooks` that
+cannot be stat'ed is undetermined and refused. Only a merge in progress in
+that checkout (a readable MERGE_HEAD, as in the main-tree rule) lifts this
+refusal; an unreadable MERGE_HEAD is refused. Likewise an edit whose realpath is inside either deny
 ledger directory (`~/.claude/state/maintree-deny`, `<tmp>/maintree-deny-<uid>`)
-is refused in any tree: editing it would erase or forge the record below. The
-twin rules for Bash live in guard-maintree-bash.py.
+is refused in any tree: editing it would erase or forge the record below.
+There are no twin rules for Bash: guard-maintree-bash.py observes main's state
+instead of parsing commands, and does not record into or consult the ledger
+(user ruling 2026-10-04).
 
 DENY LEDGER (e033c406, scripts/deny_ledger.py). Every refusal is appended to the
 per-session ledger `~/.claude/state/maintree-deny/<session_id>.jsonl` — or, when that cannot be
@@ -145,13 +161,14 @@ _FOLD_CASE = sys.platform == "darwin"
 
 
 def _hook_protected(path: str) -> bool:
-    """Same shape rule as guard-maintree-bash.py's: inside `.githooks`, inside
-    `.git/hooks`, a `.git/config`, or a `config.worktree` under `.git`."""
+    """Inside `.git/hooks`, a `.git/config`, or a `config.worktree` under
+    `.git`. Unlike guard-maintree-bash.py's shape rule this deliberately does
+    NOT include `.githooks` (user rulings 2026-10-03/04): the tracked
+    `.githooks` is editable in a linked worktree, and a primary checkout's copy
+    is refused by _primary_githooks_root in _judge."""
     p = path.casefold() if _FOLD_CASE else path
     comps = [c for c in p.split("/") if c]
     for i, c in enumerate(comps):
-        if c == ".githooks":
-            return True
         if c == ".git" and i + 1 < len(comps):
             if comps[i + 1] == "hooks":
                 return True
@@ -160,6 +177,30 @@ def _hook_protected(path: str) -> bool:
         if c == "config.worktree" and ".git" in comps[:i]:
             return True
     return False
+
+
+def _primary_githooks_root(path: str) -> tuple[str, str | None]:
+    """Is `path` inside the `.githooks` of a PRIMARY checkout?
+
+    For every `.githooks` component, the directory P holding it is a primary
+    checkout when `P/.git` is a directory (a linked worktree's `.git` is a
+    file). Returns ("primary", P) for the first such P, ("undetermined", P)
+    when `P/.git` exists-or-not cannot be told (an lstat/stat error other than
+    not-found), and ("none", None) otherwise."""
+    comps = [c for c in os.path.normpath(path).split("/") if c]
+    for i, c in enumerate(comps):
+        if (c.casefold() if _FOLD_CASE else c) != ".githooks":
+            continue
+        parent = "/" + "/".join(comps[:i])
+        try:
+            st = os.stat(os.path.join(parent, ".git"))
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        except OSError:
+            return "undetermined", parent
+        if stat.S_ISDIR(st.st_mode):
+            return "primary", parent
+    return "none", None
 
 
 def decide(payload: dict) -> tuple[int, str]:
@@ -187,6 +228,24 @@ def _judge(payload: dict) -> tuple[int, str, dict]:
     for d in (deny_ledger.protected_dirs() if deny_ledger is not None else []):
         if _under(*(x.casefold() if _FOLD_CASE else x for x in (target, d))):
             return 2, DENY_LEDGER_DIR.format(path=raw, dir=d), meta
+
+    # A primary checkout's `.githooks`, in any repo and under any project
+    # anchor, judged as written and by realpath.
+    for cand in (os.path.abspath(raw), target):
+        kind, root = _primary_githooks_root(cand)
+        if kind == "none":
+            continue
+        meta["target_abs"] = target
+        meta["root"] = os.path.realpath(root)
+        if kind == "undetermined":
+            return 2, DENY_UNDETERMINED, meta
+        merge = _merge_head_state(os.path.realpath(os.path.join(root, ".git")))
+        if merge == "undetermined":
+            return 2, DENY_MERGE_HEAD_UNDETERMINED.format(
+                path=raw, marker=os.path.join(root, ".git", "MERGE_HEAD")), meta
+        if merge != "present":
+            return 2, DENY_PRIMARY_GITHOOKS.format(path=raw, root=root), meta
+    meta = {"target_abs": None, "root": None}
 
     proj_env = os.environ.get("CLAUDE_PROJECT_DIR")
     if not proj_env:
@@ -319,13 +378,26 @@ main" (refused). Under CLAUDE.md 3 cannot-determine resolves to the restricted
 side. Inspect that path; if no merge is in progress, make the edit in a worktree.
 """
 
+DENY_PRIMARY_GITHOOKS = """Refused: editing `{path}` writes to the `.githooks` of a MAIN working tree (`{root}`).
+
+`{root}` is a primary checkout (its `.git` is a directory). CLAUDE.md 最上位の方針 8:
+the main working tree is never edited directly, and its tracked `.githooks` is
+what `core.hooksPath` runs for every commit. This is refused whatever
+CLAUDE_PROJECT_DIR is, and the path is judged by its realpath too, so a symlink
+from a worktree into it is refused the same way. Edit `.githooks` inside a
+linked worktree and commit it there; only a merge in progress in that checkout
+(a readable MERGE_HEAD) lifts this.
+"""
+
 DENY_HOOKS = """Refused: editing `{path}` would rewrite this repository's git hook machinery.
 
-The local gates live in `.githooks` and are wired through `core.hooksPath` in
-`.git/config` (CLAUDE.md 最上位の方針 7). Writing into `.githooks`, `.git/hooks`
-or `.git/config` can disarm every one of them at once, so it is refused in any
-tree (backlog e033c406). Reading them is allowed. If the hooks genuinely need to
-change, hand it to the human.
+The local gates are wired through `core.hooksPath` in `.git/config` and git's
+own `.git/hooks` (CLAUDE.md 最上位の方針 7). Those are untracked plumbing:
+writing into `.git/hooks`, `.git/config` or a `config.worktree` can disarm every
+gate at once without leaving a reviewable commit, so it is refused in any tree
+(backlog e033c406). Reading them is allowed. If they genuinely need to change,
+hand it to the human. (The tracked `.githooks` directory is different: edit it
+inside a linked worktree and commit it there.)
 """
 
 DENY_LEDGER_DIR = """Refused: editing `{path}` writes into the maintree deny ledger directory `{dir}`.

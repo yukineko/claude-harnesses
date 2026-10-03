@@ -55,7 +55,17 @@ class FilteredRolloutLeavesOthersAlone(unittest.TestCase):
                 env=env, capture_output=True, text=True, cwd=str(REPO),
             )
             log = r.stdout + r.stderr
-            self.assertEqual(r.returncode, 0, log)
+            # c9373b92 contract: a filtered rollout verifies the TARGETED plugin.
+            # --no-rebuild leaves taskprog deployed dark (no binary), so the run
+            # must fail on exactly that, and must report the bystander's drift
+            # as out of scope (not fatal, not enforced) rather than fail on it.
+            self.assertEqual(r.returncode, 1, log)
+            self.assertRegex(
+                log, rf"{TARGET}: crates/{TARGET} declares a binary target.*execs nothing", log
+            )
+            self.assertIn("OUT OF SCOPE", log)
+            oos = log.split("OUT OF SCOPE", 1)[1]
+            self.assertRegex(oos, rf"- {BYSTANDER}: ", log)
             after = json.loads(reg.read_text())["plugins"]
             # control arm: the targeted plugin WAS repointed (the run did something)
             self.assertNotEqual(

@@ -22,7 +22,12 @@
 //!
 //! Only `rm` with `-r`/`-R`/`--recursive` and LITERAL operands, reached from
 //! [`crate::detect`]'s rm arm AFTER protected-path precedence (`.git`,
-//! `.git/hooks`, `.claude`, `.githooks`, gate configs stay a flat Deny), AFTER
+//! `.git/hooks`, `.claude`, `.githooks`, gate configs stay a flat Deny —
+//! except strictly inside a linked worktree checkout under a worktree storage
+//! root, where they are the checkout's own files and the precedence is lifted:
+//! see [`crate::scope`], "Protected-named paths inside a linked worktree
+//! checkout"; this module's own `touches_protected` refusal in
+//! [`judge_operand`] is unchanged), AFTER
 //! the worktree-storage `Allow` (backlog 873651b9) and AFTER the literal
 //! config-file exemption. Wildcards, `find -delete`, `git clean`, `truncate`,
 //! redirects and `~`/`$HOME` operands are not judged here and keep their

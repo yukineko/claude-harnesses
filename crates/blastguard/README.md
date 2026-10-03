@@ -72,6 +72,17 @@ shape looks destructive:
 
 Truncating redirects to `/dev/null`, `/dev/stdout`, `/dev/stderr` are also fine.
 
+Protected gate paths outrank this exemption and are never exempt: Claude Code settings
+and hook wiring, `.githooks/**`, `.git/hooks/**`, the gate config tomls, and the
+deployed plugin cache's executables and hook wiring
+(`.claude/plugins/cache/**/bin/**`, `.claude/plugins/cache/**/hooks/**`). A
+deployed launcher without its exec bit dies with `Permission denied` and
+emits no finding, so the gate goes dark rather than red (backlog 1b82a049).
+For the plugin cache paths, removing read/exec (`chmod -x`, `chmod 644`), `rm` and
+`mv` are denied; a write (a truncating redirect, `cp` onto, Write/Edit) resolves
+to `ask`, which hardens to deny where no human can answer. Reads and `chmod +x`
+stay allowed.
+
 ## Design bias
 
 The detector only **denies** *clearly* destructive, hard-to-undo patterns, and
@@ -153,7 +164,11 @@ plus `Undetermined` — and **only `Inside` may relax a verdict**.
   `~`, `` `pwd` ``, `*`, `{}`); an unresolvable `cd`; a relative operand a `cd`
   takes out of the tree; **a safe root itself** (`rm -rf .` takes `.git` with
   it); **protected gate paths** (`.git`, `.claude/settings.json`,
-  `.githooks/**` are not excused by being nearby); **a symlink that leaves the
+  `.githooks/**` are not excused by being nearby — the one exception is a
+  copy strictly inside a linked git worktree checkout under a worktree storage
+  root, named by an absolute path in a single plain command or a
+  Write/Edit, which is that checkout's own work, per the 2026-10-03 user
+  ruling); **a symlink that leaves the
   tree** (real paths are resolved first); and an unfiltered whole-tree walk such
   as `find . -delete`.
 - **`ask` only where a human can answer.** In headless runs, condukt workers and

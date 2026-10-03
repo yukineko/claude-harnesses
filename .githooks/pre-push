@@ -71,11 +71,25 @@ cd "$REPO" 2>/dev/null || { echo "pre-push: cannot enter the repository work tre
 # exit 1 = outstanding, exit 2 = the ledger could not be read; both block, since
 # "could not determine" is not "clean". A missing python3 or missing script also
 # blocks: this check has teeth or it is theatre.
+#
+# Ledger entries no ref or worktree HEAD contains are non-blocking (they can
+# never reach a remote), EXCEPT the sha being pushed: passing it as --pushing
+# keeps `git push origin <sha>:main` of an orphaned ungated commit blocked.
+PUSH_INPUT="$(cat)"
+set --
+while read -r _lr _ls _rr _rs; do
+    case "${_ls:-}" in
+        ""|0000000000000000000000000000000000000000) ;;
+        *) set -- "$@" --pushing "$_ls" ;;
+    esac
+done <<EOF
+$PUSH_INPUT
+EOF
 if command -v python3 >/dev/null 2>&1 && [ -f "$REPO/scripts/gate-bypass.py" ]; then
-    python3 "$REPO/scripts/gate-bypass.py" >/dev/null
+    python3 "$REPO/scripts/gate-bypass.py" "$@" >/dev/null
     bypass_rc=$?
     if [ "$bypass_rc" -ne 0 ]; then
-        python3 "$REPO/scripts/gate-bypass.py" >&2
+        python3 "$REPO/scripts/gate-bypass.py" "$@" >&2
         echo "" >&2
         echo "pre-push: blocked. Push again once the gate has gone green over this" >&2
         echo "content — a successful pre-commit over a non-empty staged diff clears" >&2
@@ -143,7 +157,9 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     pushed_pairs="$pushed_pairs $local_sha:$push_base"
     changed="$changed
 $diff_out"
-done
+done <<EOF
+$PUSH_INPUT
+EOF
 
 if [ "$saw_ref" = "0" ]; then
     # No ref-update lines were readable from stdin at all (likely a manual/

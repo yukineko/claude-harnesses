@@ -23,8 +23,8 @@ silently waved through the exact case this gate exists to catch.
 
 Refused-then-changed (e033c406, signal 2 of scripts/deny_ledger.py). BEFORE the
 cwd checks above — so it applies whether the session sits on main or in a
-worktree — every target that guard-maintree-bash.py / guard-maintree-edit.py
-refused in this session (the per-session ledger
+worktree — every target that guard-maintree-edit.py refused in this session
+(guard-maintree-bash.py records nothing in the ledger since the 2026-10-04 ruling) (the per-session ledger
 `~/.claude/state/maintree-deny/<session_id>.jsonl` — or, when that cannot be
 written, the temp-dir fallback `<tmp>/maintree-deny-<uid>/<session_id>.jsonl`
 (both are always read)) is re-snapshotted. If one

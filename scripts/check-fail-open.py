@@ -107,8 +107,11 @@ GATE_CRATES = (
 
 # How many code lines above a `.flatten()` we look for the `read_dir(` that makes
 # it a directory-walk swallow (the idiom is `let Ok(x)=read_dir(..) else {..};
-# for e in x.flatten()` — read_dir and flatten sit within a few lines).
-READDIR_WINDOW = 6
+# for e in x.flatten()` — read_dir and flatten sit within a few lines). The same
+# look-back pairs a `read_dir(` with a later `.unwrap_or*`; 7 because
+# harness-status path_shadow.rs list_binary_names (8c056f05:100 -> :107) sat 7
+# lines apart and 6 missed it (backlog 881d7933).
+READDIR_WINDOW = 7
 
 # ── Rust patterns ───────────────────────────────────────────────────────────
 

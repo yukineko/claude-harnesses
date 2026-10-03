@@ -1741,13 +1741,15 @@ ORIG_HEAD と HEAD の関係で判定できる。ORIG_HEAD が HEAD の祖先な
 再現 2026-10-01 (macOS, main 0693e289 -> 87566082): session worktree で gate green だった merge commit 87566082 を main で `git merge --ff-only` すると、ledger に UNGATED として記録されて push が止まった。1098befa でも同じことが起きた。回避は今回も、worktree 側で merge ではない gate 済み commit を 1 つ作り、tip を単一親にしてから ff すること。
 
 [backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_6267bfbe_36c936bc.py::FastForwardOntoGatedMerge (rev 2ff60f58): post-merge still uses HEAD parent count as the 'created a merge commit' proxy.
-[flow 2026-10-03 session 33de4c25 @7db4a861] BLOCKED for agents, not unfixed by choice: the fix lives in .githooks/post-merge, and ~/.claude/settings.json denies Edit/Write on //Users/yuki/**/.githooks/** (a Bash cp FROM .githooks was refused by the same rule). Not routed around (826c29bf norm). Proposed patch, written but NOT executed against the repro test because the hooks cannot be copied out: scratchpad 36c936bc-post-merge.patch (session 33de4c25) — keeps the parent-count early exit, then exits 0 only when the newest HEAD reflog entry points at the current HEAD and its subject ends in ": Fast-forward"; anything else (unreadable reflog, stale entry, other subject) falls through to post-commit (fail closed). Observed on git 2.50.1: ff subjects are "merge feat: Fast-forward", "pull -q --no-rebase . f3: Fast-forward", and ja_JP gives the same text; a created merge is "merge main: Merge made by the 'ort' strategy.". Needs a human to apply, then run python3 scripts/test_backlog_6267bfbe_36c936bc.py with the expectedFailure removed from FastForwardOntoGatedMerge."""
+[flow 2026-10-03 session 33de4c25 @7db4a861] BLOCKED for agents, not unfixed by choice: the fix lives in .githooks/post-merge, and ~/.claude/settings.json denies Edit/Write on //Users/yuki/**/.githooks/** (a Bash cp FROM .githooks was refused by the same rule). Not routed around (826c29bf norm). Proposed patch, written but NOT executed against the repro test because the hooks cannot be copied out: scratchpad 36c936bc-post-merge.patch (session 33de4c25) — keeps the parent-count early exit, then exits 0 only when the newest HEAD reflog entry points at the current HEAD and its subject ends in ": Fast-forward"; anything else (unreadable reflog, stale entry, other subject) falls through to post-commit (fail closed). Observed on git 2.50.1: ff subjects are "merge feat: Fast-forward", "pull -q --no-rebase . f3: Fast-forward", and ja_JP gives the same text; a created merge is "merge main: Merge made by the 'ort' strategy.". Needs a human to apply, then run python3 scripts/test_backlog_6267bfbe_36c936bc.py with the expectedFailure removed from FastForwardOntoGatedMerge.
+
+[reproduced again 2026-10-03, session 33de4c25] main ff (merge --ff-only) onto bc4433a7, a merge commit created in the session worktree with pre-merge-commit green; post-merge recorded it in the bypass ledger (gate-bypass.py --json listed bc4433a7, subject: Merge branch main into session-33de4c25). Same mechanism as the earlier entries. The commit carrying this note is the green non-empty pre-commit that clears it."""
 created_at = 1787905350
-updated_at = 1791023516
+updated_at = 1791024361
 weight = 0.0
 issue_number = 411
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/411"
-rev = 1
+rev = 2
 
 [[task]]
 id = "32706d14"

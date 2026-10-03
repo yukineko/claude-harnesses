@@ -22,8 +22,9 @@
   `lessons search` はバイト同一の出力を返す（各コマンド doc-comment が明記）。唯一の非決定要素は
   探索（bandit）用の PRNG シードで、`seed_rng` が wall-clock nanos ⊕ store size から採る。
 - **ソフト依存・fail-soft** — `budget::under_pressure` は budgetguard を欠いても偽を返す（`budget.rs`）。
-  空ストア・空クエリ・重複なしは `procedures search`/`lessons search`/`code-index search` すべて空
-  JSON 配列＋exit 0 を返す。`code-index build` は読めない tracked file を fatal にせずスキップする。
+  空ストア・空クエリ・重複なしは `procedures search`/`lessons search` とも空 JSON 配列＋exit 0 を返す。
+  `code-index search` は例外で、空配列は「索引を読めた上でヒットなし」に限る（索引欠落は exit 3、
+  読めない/壊れた索引は exit 4。いずれも stdout 無し・stderr に診断）。`code-index build` は読めない tracked file を fatal にせずスキップする。
 - **gated は自動ルーティングしない** — `class == "gated"` のタスクは worker/verifier とも `opus` 固定・
   basis=`gated` で、`cmd_route` は `basis != "gated"` のときだけ `suggested_model` を書き換える。
   interpreter が選んだ値を保存する（人間承認の対象）。
@@ -61,8 +62,12 @@
   からシンボルを抽出し per-repo JSONL（`<root>/.fugu/code-index.jsonl`）を再構築。`--if-stale` は
   path+size+mtime の安価な fingerprint（内容は読まない）を sidecar meta と比較し、不変なら no-op
   （`rebuilt:false`）。実体スキャナ/ストアは `harness_core::code_index`。
-- **`code-index search --query [--root] [--k]`** — 構築済み index への決定論的字句 top-K 検索。JSON 配列を
-  返し、index 欠落/空は `[]`＋exit 0。
+- **`code-index search --query [--root] [--k]`** — 構築済み index への決定論的字句 top-K 検索。索引を
+  読めたときだけ JSON 配列＋exit 0 を返す（`[]` はヒットなしの意味）。索引欠落は exit 3、IO 失敗・
+  symbol として parse できない行・読めない build meta・build meta の `symbols` 件数と本体の件数の
+  不一致（切り詰められた索引、または meta 書き込み失敗で古いままの meta）・meta の無い空索引は exit 4
+  （どちらも stdout 無し・stderr に診断）。meta の無い非空索引は件数照合できないので読めたものとして扱う。`$(... 2>/dev/null || true)` の呼び出し側は「ヒットなし」
+  ではなく「文脈なし」に落ちる。
 - **`suggest` / `confidence`** — 単発でモデルの当たり（worker/verifier/basis）／較正済み合格確率 [0,1] を
   出す。`confidence` は近傍が `min_samples` 未満なら中立 prior 0.5 に退化（`confidence::calibrated_confidence`）。
 - **`procedures search`（別名 `playbook`）** — 似た検証済みタスクの解き方を k-NN で引き interpreter を seed。

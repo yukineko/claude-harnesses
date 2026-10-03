@@ -61,7 +61,7 @@ fn run(args: &[&str]) -> (i32, String) {
 }
 
 #[test]
-fn search_before_build_is_fail_soft_empty_array() {
+fn search_before_build_reports_absent_index_not_empty_array() {
     let dir = seeded_repo("presearch");
     let root = dir.to_string_lossy().into_owned();
     let (code, stdout) = run(&[
@@ -72,15 +72,15 @@ fn search_before_build_is_fail_soft_empty_array() {
         "--root",
         &root,
     ]);
+    // backlog 3f3a0e90: `[]` means "index read, nothing matched". A
+    // never-built index must not claim that; it exits 3 with no stdout.
     assert_eq!(
-        code, 0,
-        "search on a never-built index must exit 0, got {code}: {stdout}"
+        code, 3,
+        "search on a never-built index must exit 3 (index absent), got {code}: {stdout}"
     );
-    let v: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is JSON");
-    assert_eq!(
-        v,
-        serde_json::json!([]),
-        "missing index must yield []: {stdout}"
+    assert!(
+        stdout.trim().is_empty(),
+        "missing index must not print a result array: {stdout}"
     );
 }
 

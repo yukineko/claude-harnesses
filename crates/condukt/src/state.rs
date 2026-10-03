@@ -257,7 +257,7 @@ pub struct TaskState {
     /// Completion of the MERGE phase — stamped set-once when this task's branch
     /// is successfully merged into the integration branch (`worktree merge
     /// --run --task`). Same contract as `worker_started_at`; `None` for tasks
-    /// never merged (small-task fast path, or not yet merged) — rendered as an
+    /// never merged (legacy runs from the retired small-task fast path, or not yet merged) — rendered as an
     /// explicit unmeasured marker, never 0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub merge_completed_at: Option<i64>,
@@ -1557,7 +1557,7 @@ const PROBE_PROGRESS_KEY_PREFIX: &str = "probe";
 ///   moves for reasons having nothing to do with this task.
 /// * `task-updated-at` — that task's `updated_at`.
 ///
-/// A task with **no worktree** (serial / fast-path / single-worktree mode) has
+/// A task with **no worktree** (legacy runs only: serial-in-main / fast-path / single-worktree mode were retired 2026-10-03, backlog 5e5cf0a9) has
 /// no task-scoped durable signal at all: that is `Undetermined` (§3), and it
 /// deliberately does NOT fall back to the repo-wide HEAD, which would resolve
 /// "I cannot see this task" into a signal somebody else controls. Because
@@ -1633,8 +1633,7 @@ fn task_progress(
 ///
 /// # A task with no worktree is `undetermined` (CLAUDE.md §3)
 ///
-/// A RUNNING task whose `worktree` is `None` (serial / fast-path /
-/// single-worktree mode) has **no task-scoped durable signal at all**. That is
+/// A RUNNING task whose `worktree` is `None` (legacy runs only: serial-in-main / fast-path / single-worktree mode were retired 2026-10-03, backlog 5e5cf0a9) has **no task-scoped durable signal at all**. That is
 /// "cannot determine", so `task-worktree-head` is `Undetermined` and — since
 /// [`progress::fingerprint_from_signals`] is fail-closed on any unreadable
 /// signal — the task's verdict is `undetermined`. It deliberately does NOT fall
@@ -2248,23 +2247,58 @@ fn parse_agent_cost(json: &str, agent_id: &str) -> Option<f64> {
         .and_then(|v| v.as_f64())
 }
 
-/// Soft dependency: resolve the real USD cost of a Task-tool subagent by exact
-/// `agentId` match against `gauge subagents --json`, replacing the fragile
-/// description-string matching the SKILL.md prose used previously. Mirrors the
-/// `fugu_fingerprint` / `record_runs` soft-probe precedent in `main.rs`: any
-/// failure (gauge absent, non-zero exit, unparseable/empty stdout, no matching
-/// id) falls through to `None` so the caller can fall back to the manually
-/// recorded `cost_usd` — never a hard error.
-pub fn resolve_agent_cost(agent_id: &str) -> Option<f64> {
-    let out = std::process::Command::new("gauge")
+/// Run `gauge subagents --json` and return its stdout, in three answers.
+///
+/// `gauge` is located with `harness_core::plugin_bin::resolve` (plugin cache
+/// first, `$PATH` second), not by bare name: a hook-spawned process does not
+/// inherit the plugin `bin/` dirs on `$PATH` (backlog abba6f0d).
+///
+/// - `Known(Some(stdout))` — gauge ran and exited 0.
+/// - `Known(None)` — gauge is observed **not installed** (`resolve` →
+///   `Known(None)`, or the resolved program is `NotFound` at spawn). "No data".
+/// - `Undetermined` — we could not tell whether gauge is installed (`resolve` →
+///   `Undetermined`), or it is there but could not be run (any other spawn
+///   error) or exited non-zero. Not "no data": a present-but-broken source.
+fn gauge_subagents_json() -> Determination<Option<String>> {
+    let program = match harness_core::plugin_bin::resolve("gauge") {
+        Determination::Known(Some(p)) => p,
+        Determination::Known(None) => return Determination::Known(None),
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
+    let out = match std::process::Command::new(&program)
         .args(["subagents", "--json"])
         .output()
-        .ok()?; // spawn failed (not on PATH) → soft-skip
+    {
+        Ok(out) => out,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Determination::Known(None),
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "could not run `{} subagents --json`: {e}",
+                program.display()
+            ))
+        }
+    };
     if !out.status.success() {
-        return None;
+        return Determination::undetermined(format!(
+            "`{} subagents --json` exited {}",
+            program.display(),
+            out.status
+        ));
     }
-    let raw = String::from_utf8_lossy(&out.stdout);
-    parse_agent_cost(&raw, agent_id)
+    Determination::Known(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
+}
+
+/// Resolve the real USD cost of a Task-tool subagent by exact `agentId` match
+/// against `gauge subagents --json`, replacing the fragile description-string
+/// matching the SKILL.md prose used previously.
+///
+/// `Known(Some(cost))` = matched. `Known(None)` = "no data": gauge is not
+/// installed, or its output is unparseable/empty or has no matching id — the
+/// caller may fall back to the manually recorded `cost_usd`. `Undetermined` =
+/// gauge could not be located or run (see [`gauge_subagents_json`]); the caller
+/// must NOT substitute the manual fallback as if gauge had nothing to say.
+pub fn resolve_agent_cost(agent_id: &str) -> Determination<Option<f64>> {
+    gauge_subagents_json().map(|raw| raw.and_then(|raw| parse_agent_cost(&raw, agent_id)))
 }
 
 /// Pure core of [`resolve_agent_tokens`]: given the raw `gauge subagents --json`
@@ -2283,21 +2317,15 @@ fn parse_agent_tokens(json: &str, agent_id: &str) -> Option<(u64, u64)> {
     Some((input, output))
 }
 
-/// Soft dependency: resolve the real token usage of a Task-tool subagent by
-/// exact `agentId` match against `gauge subagents --json`, mirroring
-/// `resolve_agent_cost`. Any failure (gauge absent, non-zero exit,
-/// unparseable/empty stdout, no matching id, or an older `gauge` without the
-/// token fields) falls through to `None` — never a hard error.
-pub fn resolve_agent_tokens(agent_id: &str) -> Option<(u64, u64)> {
-    let out = std::process::Command::new("gauge")
-        .args(["subagents", "--json"])
-        .output()
-        .ok()?; // spawn failed (not on PATH) → soft-skip
-    if !out.status.success() {
-        return None;
-    }
-    let raw = String::from_utf8_lossy(&out.stdout);
-    parse_agent_tokens(&raw, agent_id)
+/// Resolve the real token usage of a Task-tool subagent by exact `agentId`
+/// match against `gauge subagents --json`, mirroring [`resolve_agent_cost`].
+///
+/// `Known(None)` = "no data" (gauge not installed, unparseable/empty stdout, no
+/// matching id, or an older `gauge` without the token fields). `Undetermined` =
+/// gauge could not be located or run, kept distinct so the caller can surface
+/// it instead of recording "no tokens".
+pub fn resolve_agent_tokens(agent_id: &str) -> Determination<Option<(u64, u64)>> {
+    gauge_subagents_json().map(|raw| raw.and_then(|raw| parse_agent_tokens(&raw, agent_id)))
 }
 
 /// Run the project's test suite (from the repo root) and propagate its result.
@@ -4259,8 +4287,7 @@ mod tests {
     }
 
     /// Fail-closed (CLAUDE.md §3), second Undetermined arm: a RUNNING task past
-    /// the TTL that records NO worktree at all (serial / fast-path /
-    /// single-worktree mode) has no task-scoped durable signal to read, so its
+    /// the TTL that records NO worktree at all (legacy runs only: serial-in-main / fast-path / single-worktree mode were retired 2026-10-03, backlog 5e5cf0a9) has no task-scoped durable signal to read, so its
     /// progress is `Undetermined` and it must NOT be selected as stuck.
     ///
     /// This is the same reading `state::probe_run` and `claim::claim_progress`

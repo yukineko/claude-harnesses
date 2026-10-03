@@ -111,9 +111,14 @@ pub fn verdict_from_oracle(valid: bool, transition: Option<&str>) -> serde_json:
 /// - the run exited non-zero, so there is no verdict to reflect and
 ///   `valid_fp_oracle` is `false` because nothing was established — see
 ///   [`verdict_from_oracle_output`], or
-/// - `tdd` could not be spawned at all (not installed / not executable). Also
-///   nothing established; the `reason` says so and asks for `tdd` to be
-///   installed.
+/// - `tdd` could not be spawned at all (not installed / not executable / the
+///   plugin cache could not be read to locate it). Also nothing established;
+///   the `reason` says so and asks for `tdd` to be installed.
+///
+/// `tdd` is located with [`harness_core::plugin_bin::resolve`] (plugin cache
+/// first, `$PATH` second), not by bare name: a hook-spawned process does not
+/// inherit the plugin `bin/` dirs on `$PATH` (backlog abba6f0d). Both
+/// non-`Known(Some)` answers reject, with distinct reasons.
 ///
 /// The `reason` field is what distinguishes the three; do not read
 /// `valid_fp_oracle: false` here as "tdd looked and found the proofs invalid".
@@ -136,7 +141,42 @@ pub fn check_oracle(
         });
     }
 
-    match Command::new("tdd")
+    use harness_core::verdict::Determination;
+    match harness_core::plugin_bin::resolve("tdd") {
+        Determination::Known(Some(program)) => spawn_oracle(&program, task_id, run_dir),
+        // Same shape as a spawn failure below: nothing looked at the proofs.
+        Determination::Known(None) => serde_json::json!({
+            "required": true,
+            "valid_fp_oracle": false,
+            "fallback": false,
+            "reason": "could not spawn tdd: it is not installed (no plugin-cache copy and not \
+                       on PATH) — the F→P oracle could not be determined. Install/provide the \
+                       `tdd` binary on PATH or via the plugin cache; a missing checker is not a passing checker, so this blocks \
+                       rather than degrading to the legacy gate",
+        }),
+        // We do not know whether a usable `tdd` exists: the cache could not be
+        // read (`resolve` then deliberately does not fall back to `$PATH`), or
+        // there is no cache copy and a `tdd` on `$PATH` cannot be spawned.
+        Determination::Undetermined(why) => serde_json::json!({
+            "required": true,
+            "valid_fp_oracle": false,
+            "fallback": false,
+            "reason": format!(
+                "could not spawn tdd: it could not be located ({}) — the F→P oracle could \
+                 not be determined. Make the `tdd` plugin install readable/provide it; this \
+                 blocks rather than degrading to the legacy gate",
+                why.as_str()
+            ),
+        }),
+    }
+}
+
+/// Spawn `<program> oracle --task <id>` in `run_dir` and turn the outcome into
+/// the verdict JSON [`check_oracle`] documents. Split out so the exit-status
+/// wiring is testable against a shim without depending on what the host's
+/// plugin cache holds.
+fn spawn_oracle(program: &Path, task_id: &str, run_dir: &Path) -> serde_json::Value {
+    match Command::new(program)
         .args(["oracle", "--task", task_id])
         .current_dir(run_dir)
         .output()
@@ -158,9 +198,10 @@ pub fn check_oracle(
             "valid_fp_oracle": false,
             "fallback": false,
             "reason": format!(
-                "failed to spawn tdd ({e}) — the F→P oracle could not be determined. \
-                 Install/provide the `tdd` binary on PATH; a missing checker is not a \
-                 passing checker, so this blocks rather than degrading to the legacy gate"
+                "failed to spawn tdd ({e}) at {} — the F→P oracle could not be determined. \
+                 Install/provide the `tdd` binary on PATH or via the plugin cache; a missing checker is not a \
+                 passing checker, so this blocks rather than degrading to the legacy gate",
+                program.display()
             ),
         }),
     }
@@ -577,7 +618,10 @@ mod tests {
     // non-zero exit as undetermined. They say nothing about whether
     // `check_oracle` *passes* the real exit status: a caller hardcoding `true`
     // would keep every unit test green while the live gate stayed fail-open.
-    // These tests close that seam by spawning a fake `tdd` off a prepended PATH.
+    // These tests close that seam by spawning a fake `tdd` off a prepended PATH
+    // through `spawn_oracle` (the half of `check_oracle` after resolution;
+    // `check_oracle` itself resolves the host's plugin cache first, which would
+    // spawn whatever `tdd` is installed here instead of the fake).
 
     /// Write an executable `tdd` into `dir` that prints `stdout` and exits with
     /// `code`. Returns nothing; the caller prepends `dir` to `PATH`.
@@ -590,7 +634,7 @@ mod tests {
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
-    /// Run `check_oracle` with a fake `tdd` on PATH that exits `code` printing
+    /// Run `spawn_oracle` on a bare `tdd` with a fake `tdd` on PATH that exits `code` printing
     /// `stdout`. PATH is restored before returning.
     #[cfg(unix)]
     fn check_oracle_with_fake_tdd(stdout: &str, code: i32) -> serde_json::Value {
@@ -609,7 +653,7 @@ mod tests {
         }
         std::env::set_var("PATH", std::env::join_paths(parts).unwrap());
 
-        let out = check_oracle(true, Some("cargo test -p x"), "t1", tmp.path());
+        let out = spawn_oracle(Path::new("tdd"), "t1", tmp.path());
 
         match old_path {
             Some(p) => std::env::set_var("PATH", p),
@@ -666,7 +710,7 @@ mod tests {
         );
     }
 
-    /// Run `check_oracle` with a PATH that contains nothing at all (a single
+    /// Run `spawn_oracle` on a bare `tdd` with a PATH that contains nothing at all (a single
     /// empty temp dir), so `tdd` is genuinely unreachable and the spawn fails.
     /// PATH is restored before returning. Returns the verdict plus the run dir's
     /// guard so it outlives the call.
@@ -688,7 +732,7 @@ mod tests {
         let old_path = std::env::var_os("PATH");
         std::env::set_var("PATH", &empty_bin);
 
-        let out = check_oracle(true, Some("cargo test -p x"), "t1", &run_dir);
+        let out = spawn_oracle(Path::new("tdd"), "t1", &run_dir);
 
         match old_path {
             Some(p) => std::env::set_var("PATH", p),

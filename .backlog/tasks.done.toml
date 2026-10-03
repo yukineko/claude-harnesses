@@ -31297,3 +31297,198 @@ test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fin
 rev = "a91e1d557d81ea1006a3073f9a6e24987b15dba3"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "abba6f0d"
+title = "hook から harness バイナリを bare 名で spawn する残り 10 箇所 (overwatch status と同じ PATH 非継承の欠陥)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-08-21、測定点 cd2576bd、WSL2 linux-x86_64。親: overwatch 0.2.28 (commit e2a22f3b) で overwatch status の 4 source を harness_core::plugin_bin::resolve へ移した。同じ欠陥形が他に 10 箇所ある。機構: hook 子プロセスは plugin の bin dir を PATH に継承しない (claude プロセスの /proc/PID/environ に plugins/cache/yukineko が 0 件。PATH 追加は Bash tool の shell 内だけ)。したがって hook 経路の bare 名 spawn は login PATH だけを見る。~/.cargo/bin の 2026-07-23 版コピーが偶然支えていたが 91fa24df と bb046648 で削除済み。残る箇所 (Command::new で harness バイナリ名を直に渡している箇所を機械列挙): crates/autoflow/src/main.rs:345 condukt / crates/backlog/src/store.rs:816 condukt / crates/condukt/src/claim.rs:888 backlog / crates/ctxrot/src/hooks/guard.rs:657 overwatch / crates/daily/src/main.rs:219 backlog / crates/specguard/src/forge/queue.rs:171 backlog / crates/stuckguard/src/anchor.rs:130 overwatch / crates/stuckguard/src/anchor.rs:288 condukt / crates/stuckguard/src/anchor.rs:293 overwatch / crates/autoflow/src/backlog.rs:26 find_backlog_binary (これは cache fallback を持つが順序が PATH 優先で、91fa24df の stale shadow を勝たせる向き。また candidates.sort() が字句順なので 0.1.9 を 0.1.12 より新しいと判定する — この欠陥は plugin_bin の RED として実測済み)。判定不能な点: この 10 箇所それぞれの実害は測っていない (overwatch の実測を外挿していない)。特に stuckguard/anchor.rs の overwatch probe と ctxrot guard の overwatch probe は spawn 失敗時の既定値が permissive 側かどうかを個別に読む必要がある — sentinel 無しの allow に潰れているなら p0 へ昇格。見分ける方法: 各箇所の Err アームが何に解決するかを読み、restrictive でなければ昇格する。修正は harness_core::plugin_bin::resolve への置換 (三値を消さずに消費する)。各 crate の version bump と rollout が必要なので crate 単位で分割してよい。
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_abba6f0d.py (rev d2e54735): Static (code-shape) repro; per-site hook harm not measured. Also seen but not in the item: condukt/src/oracle.rs:139 Command::new("tdd"), condukt/src/main.rs:2640 Command::new("fugu-router")."""
+created_at = 1787279003
+updated_at = 1791009892
+weight = 0.0
+issue_number = 383
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/383"
+issue_closed_at = 1791009895
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p daily --test driver_lookup_undetermined"
+exit = 0
+passed = 2
+rev = "de758da0f2731f705bc62bb203c14d34823db256"
+observed_at = 1791009876
+output_digest = "sha256:f7c63ade8ef2c7e2a70b228d9a1ef71be79f001c892fe28adb6e0e90c74f6d19"
+excerpt = """
+
+running 2 tests
+test unreadable_backlog_cache_dir_stands_daily_down ... ok
+test absent_backlog_still_runs_the_task ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+
+   Compiling harness-core v0.2.44 (/Users/yuki/.condukt/worktrees/run-20261003-141339-41881-abba6f0d/crates/harness-core)
+   Compiling overwatch v0.2.58 (/Users/yuki/.condukt/worktrees/run-20261003-141339-41881-abba6f0d/crates/overwatch)
+   Compiling blastguard v0.2.100 (/Users/yuki/.condukt/worktrees/run-20261003-141339-41881-abba6f0d/crates/blastguard)
+   Compiling daily v0.3.17 (/Users/yuki/.condukt/worktrees/run-20261003-141339-41881-abba6f0d/crates/daily)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.53s
+     Running tests/driver_lookup_undetermined.rs (target/debug/deps/driver_lookup_undetermined-a4cb8a96058a3aa9)
+"""
+
+[task.closure.red]
+rev = "82ee4a782add20440391fbc642021e94d46a3bbd"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "3f3a0e90"
+title = "fugu-router code-index search が「索引が無い」と「該当なし」を同じ空配列で返す"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "code-index",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+観測 (2026-08-24, 測定点 71337356): crates/fugu-router/src/main.rs:884-887 の doc 逐語『Fail-soft: a missing/empty index yields [] and exit 0, never an error.』。実装 (main.rs:889-893) も load_index が missing→空 Vec なので、下流は『索引が無い』『索引が壊れている』『該当なし』を区別できない。CLAUDE.md 3.『エラー時に空の集合を返さない』に直接該当し、索引が未構築なだけのときに『そのシンボルは存在しない』と読まれる。対照として同じ store を読む context-governor codesearch.rs は三値 (IndexAbsent / Unreadable(String) / NoSymbolMatch) で答えており、そちらが正典側の形。案: search の JSON に status を足して index-absent / unreadable / no-match / hits を区別する。未測定: 現在の呼び出し側が誰かは未調査で、exit code を変えたときの互換性影響はこの起票では測っていない。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/fugu-router/tests/backlog_s10_repro.rs (rev 7e635343)"""
+created_at = 1787550771
+updated_at = 1791005182
+weight = 0.0
+issue_number = 403
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/403"
+issue_closed_at = 1791005184
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p fugu-router --test code_index_search_status"
+exit = 0
+passed = 18
+rev = "ffccc49b487bd22e4f35c1acd5001f5d4cd68c0a"
+observed_at = 1791005166
+output_digest = "sha256:094b823c670d2ce968de93e8fd4e99bfcfcf1ad38e155cc703b3c3d0b57ee711"
+excerpt = """
+
+running 18 tests
+test empty_index_with_meta_claiming_symbols_exits_4 ... ok
+test empty_index_without_meta_exits_4 ... ok
+test empty_index_with_meta_symbols_zero_is_empty_array_exit_0 ... ok
+test meta_count_exceeds_body_count_exits_4_naming_both_counts ... ok
+test index_path_is_a_directory_exits_4 ... ok
+test absent_index_exits_3_with_empty_stdout ... ok
+test only_corrupt_line_exits_4_not_empty_array ... ok
+test meta_matching_body_with_hit_exits_0 ... ok
+test meta_matching_body_no_match_is_empty_array_exit_0 ... ok
+test no_meta_nonempty_body_is_accepted_exit_0 ... ok
+test non_utf8_index_exits_4 ... ok
+test unparseable_meta_with_valid_body_exits_4 ... ok
+test corrupt_line_in_built_index_exits_4 ... ok
+test blank_lines_in_valid_index_are_tolerated ... ok
+test real_build_of_repo_without_rust_is_empty_array_exit_0 ... ok
+test truncated_real_build_exits_4 ... ok
+test valid_index_with_hit_is_nonempty_array_exit_0 ... ok
+test valid_index_no_match_is_empty_array_exit_0 ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.95s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/code_index_search_status.rs (target/debug/deps/code_index_search_status-ee3d751b31fce278)
+"""
+
+[task.closure.red]
+rev = "82ee4a782add20440391fbc642021e94d46a3bbd"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "5e5cf0a9"
+title = "condukt の serial 経路 (main tree で実装) は CLAUDE.md 第8節に反し、pre-commit の worktree-isolation ゲートで機械的にブロックされて完走不能"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-08-18, 測定点 01deeab2。
+
+再現: 4 タスクの decomposition (各タスクが自分の plugin の version を bump するため全員が .claude-plugin/marketplace.json を touched_files に持つ) を condukt schedule に掛けると全タスクが serial に降格する:
+  condukt schedule --file .scratch/decomp.json
+  -> {"batches":[],"serial":["t3","t1","t2","t4"],"warnings":["task 't1' file-overlaps another parallel task -> serial (overlap is authoritative over class)", ... 4件]}
+
+condukt SKILL.md (0.7.138) は serial の実装方法を逐語で 'serial タスクは worktree に出さず main で順に実装する' と規定し、commit は condukt repo commit で main の作業ツリーに行う。
+
+しかし:
+1. CLAUDE.md 第8節が逐語で 'condukt の実装タスクは worktree 経由で行う。single_worktree モードや serial タスクを「main で直接実装する」経路として使わない' と**この経路を名指しで禁止**している。
+2. さらに機械的にも通らない: git config の hooksPath が設定済み (git-common-dir/config:7 -> hooksPath = /mnt/c/Users/hiroyuki_nakayama/src/harness/.githooks) なので .githooks/pre-commit が発火し、scripts/check-worktree-isolation.py が main working tree からの非 merge commit を拒否する。condukt repo commit が作るのは merge ではなく通常 commit なので拒否対象。
+
+帰結: このリポジトリでは **ファイル重複を持つ decomposition (= plugin version bump を伴うほぼ全ての実装タスク) が condukt の文書化された経路で完走できない**。今回は CLAUDE.md が skill 指示を override する前提で、serial 4 タスクをそれぞれ専用 worktree に出して順次実行する回避を採った (並列化は捨て、順序だけ serial を守る)。
+
+判定不能な2つの読み: (a) condukt の serial 実装方法がこのリポジトリの第8節と非互換な実在の欠陥 / (b) serial は元々 shared-file を守るための直列化であり、実装場所が main であることは本質ではないので SKILL.md の記述を 'serial は順序の制約であって場所の制約ではない。各タスクは専用 worktree で順に実行する' に改めるだけでよい。
+
+見分ける方法: crates/condukt/src/ で serial タスクの実行経路が worktree 生成をスキップする実装になっているか (schedule の serial 配列を消費する側) を読む。バイナリ側が worktree を作らない前提で state を持つなら (a) に近い設計上の結合、SKILL.md の散文だけが main tree を指しているなら (b) で散文修正で済む。
+
+併せて要検討: この降格の根本原因は '各 plugin の version bump が単一の marketplace.json を共有する' ことなので、marketplace.json を shared_globs として明示し version bump を別レイヤに切り出す設計も選択肢 (ただし CLAUDE.md の禁忌ルールが bump を同一変更に要求するため単純ではない)。
+
+---
+再キー: 元 id d592bf28 として /mnt/c/Users/hiroyuki_nakayama/src/.harness-worktrees/session-e7948728 のプロジェクトキーで起票されていたものを /mnt/c/Users/hiroyuki_nakayama/src/harness へ移送した (2026-08-18)。理由は backlog b0ff8c74 (worktree から起票すると削除予定のパスに紐づく構造矛盾)。
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_5e5cf0a9.py (rev 596108b9): SKILL.md serial route contradicts CLAUDE.md section 8."""
+created_at = 1787033491
+updated_at = 1791006429
+weight = 0.0
+issue_number = 1098
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1098"
+issue_closed_at = 1791006431
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test single_worktree_retired"
+exit = 0
+passed = 7
+rev = "b350a4af28eebbb52052d6c70bc8ddab20768306"
+observed_at = 1791006399
+output_digest = "sha256:26041b3830ff86a1514f0c4cc2e5e5de62afda62deedaaaca0070da20ef38763"
+excerpt = """
+
+running 7 tests
+test control_notice_matcher_rejects_unrelated_stderr ... ok
+test control_default_is_per_task_and_silent ... ok
+test config_true_with_env_false_is_still_per_task_and_config_is_called_retired ... ok
+test env_beats_nothing_both_set_still_per_task ... ok
+test config_file_cannot_turn_single_worktree_on_and_is_called_retired ... ok
+test control_unrelated_config_key_gives_no_notice ... ok
+test env_switch_cannot_turn_single_worktree_on_and_is_called_retired ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.79s
+
+   Compiling condukt v0.7.205 (/Users/yuki/src/.harness-worktrees/session-dc66e988/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.04s
+     Running tests/single_worktree_retired.rs (target/debug/deps/single_worktree_retired-17407484c988b654)
+"""
+
+[task.closure.red]
+rev = "82ee4a782add20440391fbc642021e94d46a3bbd"
+exit = 101
+kind = "behavioural"

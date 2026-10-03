@@ -561,15 +561,15 @@ enum EscalateAction {
 
 #[derive(Subcommand)]
 enum RepoAction {
-    /// Stage the named paths and commit them IN THE PRIMARY WORKING TREE, with
-    /// the repo-scoped primary lock (`lock::REPO_PRIMARY_LOCK_KEY`) held across
-    /// the whole read-modify-write, so two concurrent condukt executions can
-    /// never interleave content in the one shared index.
+    /// Stage the named paths and commit them in the working tree you run it
+    /// from (cwd's toplevel; never the main tree: CLAUDE.md §8), with `lock::REPO_PRIMARY_LOCK_KEY` held (keyed on that checkout)
+    /// across the whole read-modify-write, so concurrent condukt executions
+    /// sharing that worktree's index can never interleave content in it.
     ///
-    /// This is the ONLY sanctioned way for the `/condukt` skill to commit in the
-    /// primary tree (single-worktree mode, the small-task fast path, and serial
-    /// tasks). Raw `git add ... && git commit` from the skill's shell holds no
-    /// lock and is exactly the hazard this replaces.
+    /// NOT required by the `/condukt` skill any more: single-worktree mode and
+    /// the small-task fast path were retired (2026-10-03, backlog 5e5cf0a9) and
+    /// every task commits in its own worktree. Kept for callers that share one
+    /// worktree's index: raw `git add ... && git commit` holds no lock there.
     ///
     /// Restrictive on every cannot-determine: no `--path`, a widening pathspec
     /// (`.`, a glob, `:` magic), foreign content already staged in the shared
@@ -1277,22 +1277,16 @@ enum StateAction {
         #[arg(long)]
         to: Option<u64>,
     },
-    /// Report whether condukt is in single-worktree mode (config.toml
-    /// `single_worktree` + `CONDUKT_SINGLE_WORKTREE` env). Prints
-    /// `{"single_worktree":<bool>}` and exits 0 when single-worktree, 1 when not
-    /// — so the /condukt skill branches on the exit code to run all tasks in the
-    /// main tree (selective staging, no per-task worktree/merge) only when on.
-    ///
-    /// NOTE (repo-primary serialization): the single-worktree main-tree commit
-    /// IS an in-process site — `condukt repo commit` ([`RepoAction::Commit`] →
-    /// [`repo_commit::commit`]). It holds `lock::REPO_PRIMARY_LOCK_KEY` across
-    /// the whole index-check → `git add` → `git commit` cycle, joining the same
-    /// serialization as the other primary-repo mutators (`worktree::merge`,
-    /// `worktree::resolve_merge`, `git worktree prune`). The `/condukt` skill
-    /// must NOT hand-roll `git add && git commit` in the primary tree: that
-    /// holds no lock, and two sessions sharing one index is the one conflict git
-    /// cannot resolve by merging. Pinned by
-    /// `tests/repo_commit_index_isolation.rs`.
+    /// Always reports per-task worktree mode: prints `{"single_worktree":false}`
+    /// and exits 1. Single-worktree mode (and the small-task fast path) were
+    /// RETIRED by user ruling 2026-10-03 (backlog 5e5cf0a9): every task runs in
+    /// its own worktree and nothing runs in the main tree (CLAUDE.md §8). The
+    /// subcommand is kept so older skills that still call it get a definite
+    /// answer. If the retired `single_worktree` config key or
+    /// `CONDUKT_SINGLE_WORKTREE` env var is set truthy, a stderr notice says it
+    /// is retired and ignored, so the setting is never silently swallowed. The
+    /// notice fires when EITHER source is truthy, independent of which value
+    /// wins the merged Config (`config::retired_single_worktree_sources`).
     WorktreeModeCheck,
     /// Resolve the verifier model so it never equals the worker model (shared
     /// blind-spot guard). Prints the chosen model on stdout. A distinct
@@ -2583,21 +2577,48 @@ fn run_shadow_run(cfg: &Config, cwd: &Path, action: ShadowRunAction) -> Result<(
                 cost_usd: cost,
                 duration_secs: duration,
             };
-            let fugu_bin = fugu_router_bin();
-            let recorded = shadow_run::finish(
-                &repo,
-                &path,
-                &branch,
-                run.as_deref(),
-                &outcome,
-                Path::new(&fugu_bin),
-            )?;
-            if recorded {
-                println!("shadow-run discarded and recorded to fugu-router");
-            } else {
-                println!(
-                    "shadow-run discarded (fugu-router at {fugu_bin} unavailable or its record failed — outcome not recorded)"
-                );
+            // Resolve fugu-router (plugin cache first, `$PATH` second). The
+            // worktree is discarded regardless; only recording depends on it.
+            // Not installed (`Known(None)`) and could-not-look
+            // (`Undetermined`) are reported as different things — neither is
+            // ever read as "recorded".
+            match harness_core::plugin_bin::resolve("fugu-router") {
+                Determination::Known(Some(p)) => {
+                    let recorded = shadow_run::finish(
+                        &repo,
+                        &path,
+                        &branch,
+                        run.as_deref(),
+                        &outcome,
+                        Some(&p),
+                    )?;
+                    if recorded {
+                        println!("shadow-run discarded and recorded to fugu-router");
+                    } else {
+                        println!(
+                            "shadow-run discarded (fugu-router at {} unavailable or its record failed — outcome not recorded)",
+                            p.display()
+                        );
+                    }
+                }
+                Determination::Known(None) => {
+                    // No program ⇒ `finish` only discards; it returns `false`.
+                    shadow_run::finish(&repo, &path, &branch, run.as_deref(), &outcome, None)?;
+                    println!(
+                        "shadow-run discarded (fugu-router is not installed — outcome not recorded)"
+                    );
+                }
+                Determination::Undetermined(why) => {
+                    // Discard still happens; the outcome is NOT recorded and the
+                    // could-not-look is surfaced on both streams.
+                    shadow_run::finish(&repo, &path, &branch, run.as_deref(), &outcome, None)?;
+                    eprintln!(
+                        "condukt: could not determine whether fugu-router is installed: {why}"
+                    );
+                    println!(
+                        "shadow-run discarded (fugu-router could not be located: {why} — outcome not recorded)"
+                    );
+                }
             }
         }
     }
@@ -2644,9 +2665,23 @@ fn parse_policy_levels(
 /// title is a POSITIONAL argument (no `--title` flag), passed LAST after the
 /// flags. `--files` is comma-joined (fugu splits on `,`).
 ///
-/// Every failure mode falls through to `None` (never a hard error), mirroring
-/// the `fugu_fingerprint` / `record_runs` soft-probe precedent:
-/// - fugu-router not on PATH → `Command::output` errors → `None`
+/// `fugu-router` is located with [`harness_core::plugin_bin::resolve`] (plugin
+/// cache first, `$PATH` second), not by bare name: a hook-spawned process does
+/// not inherit the plugin `bin/` dirs on `$PATH` (backlog abba6f0d).
+///
+/// One answer is NOT soft: when fugu-router could not be located
+/// (`Undetermined`: the plugin cache could not be read, or — with no cache
+/// copy — a `fugu-router` on `$PATH` exists but cannot be spawned), this returns `Some(Level::Low)` — the most
+/// restrictive confidence — with a warning on stderr. "Could not look" must
+/// not fall back to the self-reported `--confidence`, which may be higher than
+/// a calibration would have allowed (CLAUDE.md §3: cannot-determine resolves
+/// to the restrictive side).
+///
+/// Every other failure mode falls through to `None` (never a hard error),
+/// mirroring the `fugu_fingerprint` / `record_runs` soft-probe precedent — so
+/// the caller keeps the self-reported `--confidence`:
+/// - fugu-router not installed (no plugin-cache copy, not on PATH) → `None`
+/// - spawn failure → `None`
 /// - non-zero exit (e.g. insufficient history) → `None`
 /// - empty / unparseable / non-finite stdout → `None`
 fn calibrated_confidence(
@@ -2654,11 +2689,38 @@ fn calibrated_confidence(
     files: &[String],
     class: &Option<String>,
 ) -> Option<policy::Level> {
-    // Gate: no new flags → the calibrated path is entirely inert (no shell-out).
+    use harness_core::verdict::Determination;
+    // Gate: no new flags → the calibrated path is entirely inert (no shell-out,
+    // not even the resolver's `$PATH` probe).
     if title.is_none() && files.is_empty() && class.is_none() {
         return None;
     }
-    let mut cmd = std::process::Command::new("fugu-router");
+    match harness_core::plugin_bin::resolve("fugu-router") {
+        Determination::Known(Some(program)) => {
+            calibrated_confidence_via(&program, title, files, class)
+        }
+        Determination::Known(None) => None, // not installed → soft-skip
+        Determination::Undetermined(why) => {
+            eprintln!(
+                "condukt: fugu-router could not be located ({}); calibrated confidence \
+                 could not be determined, so confidence is clamped to low",
+                why.as_str()
+            );
+            Some(policy::Level::Low)
+        }
+    }
+}
+
+/// The shell-out half of [`calibrated_confidence`], run against an already
+/// resolved `program`. Split out so the soft-skip mapping is testable against
+/// a bare name and a controlled `$PATH`, independent of the host's plugin cache.
+fn calibrated_confidence_via(
+    program: &Path,
+    title: &Option<String>,
+    files: &[String],
+    class: &Option<String>,
+) -> Option<policy::Level> {
+    let mut cmd = std::process::Command::new(program);
     cmd.arg("confidence");
     if !files.is_empty() {
         cmd.args(["--files", &files.join(",")]);
@@ -2671,7 +2733,7 @@ fn calibrated_confidence(
     if let Some(t) = title {
         cmd.arg(t);
     }
-    let out = cmd.output().ok()?; // spawn failed (not on PATH) → soft-skip
+    let out = cmd.output().ok()?; // spawn failed → soft-skip
     if !out.status.success() {
         return None; // error / insufficient history → fall back
     }
@@ -5228,11 +5290,16 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             );
         }
         StateAction::WorktreeModeCheck => {
-            let single = cfg.single_worktree;
-            println!("{{\"single_worktree\":{single}}}");
-            if !single {
-                std::process::exit(1);
+            let retired = config::retired_single_worktree_sources();
+            if !retired.is_empty() {
+                eprintln!(
+                    "condukt: the `single_worktree` setting ({}) is retired (user ruling \
+                     2026-10-03, backlog 5e5cf0a9) and ignored: every task runs in its own worktree",
+                    retired.join(", ")
+                );
             }
+            println!("{{\"single_worktree\":false}}");
+            std::process::exit(1);
         }
     }
     Ok(())
@@ -5593,68 +5660,41 @@ fn run_mechanical(cmd: &[String], run_dir: &Path) -> (bool, String) {
     }
 }
 
-/// Resolve the `fugu-router` binary to invoke.
+/// Locate `fugu-router` with [`harness_core::plugin_bin::resolve`] (plugin
+/// cache first, numeric version order; `$PATH` second) and, if it is usable,
+/// return the resolved program together with its skill fingerprint (stdout of
+/// `fugu-router fingerprint`, trimmed).
 ///
-/// Prefers the plugin-cache absolute path resolved from
-/// `~/.claude/plugins/installed_plugins.json` (the
-/// `plugins["fugu-router@yukineko"][0]["installPath"]` entry, joined with
-/// `bin/fugu-router`), so a stale or shadowing `fugu-router` earlier on
-/// `PATH` (for example an old `~/.cargo/bin/fugu-router` without
-/// `--duration` support) never wins over the actually-installed plugin
-/// version. Falls back to the bare name `"fugu-router"` (PATH resolution)
-/// whenever the manifest is missing, malformed, or lacks the expected keys
-/// — this is a fail-soft resolution, never a hard error.
-fn fugu_router_bin() -> String {
-    fugu_router_bin_from_manifest(
-        &harness_core::config::home().join(".claude/plugins/installed_plugins.json"),
-    )
-    .unwrap_or_else(|| "fugu-router".to_string())
-}
-
-/// Pure helper (unit-testable): given a path to an `installed_plugins.json`
-/// manifest, return the absolute `<installPath>/bin/fugu-router` path for the
-/// `fugu-router@yukineko` plugin, or `None` on any resolution failure (file
-/// missing, invalid JSON, missing keys, empty array, etc).
-fn fugu_router_bin_from_manifest(manifest_path: &Path) -> Option<String> {
-    let raw = std::fs::read_to_string(manifest_path).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    let install_path = value
-        .get("plugins")?
-        .get("fugu-router@yukineko")?
-        .as_array()?
-        .first()?
-        .get("installPath")?
-        .as_str()?;
-    let bin = Path::new(install_path).join("bin").join("fugu-router");
-    Some(bin.to_string_lossy().into_owned())
-}
-
-/// Probe whether `fugu-router` (resolved via [`fugu_router_bin`]) is usable
-/// and, if so, return its skill fingerprint (stdout of `fugu-router
-/// fingerprint`, trimmed).
-///
-/// Three outcomes, not two: `Ok(None)` = fugu-router is not installed at all
-/// (nothing to record into — a soft no-op that marks nothing recorded);
-/// `Ok(Some(fp))` = usable; `Err` = it exists but could not answer (spawn
-/// error other than not-found, or a non-zero exit). The last one is NOT the
-/// soft case: a present-but-broken recorder must not be read as "recorded".
-fn fugu_fingerprint() -> Result<Option<String>> {
-    let bin = fugu_router_bin();
+/// Three outcomes, not two: `Ok(None)` = fugu-router is observed not installed
+/// (`resolve` → `Known(None)`, or the resolved program vanished before spawn
+/// with `NotFound`) — nothing to record into, a soft no-op that marks nothing
+/// recorded; `Ok(Some(..))` = usable; `Err` = we could not tell whether it is
+/// installed (`resolve` → `Undetermined`), or it exists but could not answer
+/// (spawn error other than not-found, or a non-zero exit). The `Err` cases are
+/// NOT soft: they surface as an error and nothing is marked recorded.
+fn fugu_fingerprint() -> Result<Option<(PathBuf, String)>> {
+    let bin = match harness_core::plugin_bin::resolve("fugu-router") {
+        Determination::Known(Some(p)) => p,
+        Determination::Known(None) => return Ok(None),
+        Determination::Undetermined(why) => {
+            bail!("could not determine whether fugu-router is installed: {why}")
+        }
+    };
     let out = match std::process::Command::new(&bin).arg("fingerprint").output() {
         Ok(out) => out,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => bail!("could not run `{bin} fingerprint`: {e}"),
+        Err(e) => bail!("could not run `{} fingerprint`: {e}", bin.display()),
     };
     if !out.status.success() {
         bail!(
-            "`{bin} fingerprint` exited {}: {}",
+            "`{} fingerprint` exited {}: {}",
+            bin.display(),
             out.status,
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
-    Ok(Some(
-        String::from_utf8_lossy(&out.stdout).trim().to_string(),
-    ))
+    let fp = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    Ok(Some((bin, fp)))
 }
 
 /// Wall-clock seconds spanning `[a, b]`, or `None` when the span is unmeasured.
@@ -5745,9 +5785,9 @@ fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Resu
     };
 
     // Probe fugu-router once. Absent → soft no-op (leave runs unrecorded).
-    // Present but failing → error: nothing is marked recorded.
-    let fingerprint = match fugu_fingerprint()? {
-        Some(fp) => fp,
+    // Present but failing, or undeterminable → error: nothing is marked recorded.
+    let (fugu_bin, fingerprint) = match fugu_fingerprint()? {
+        Some(found) => found,
         None => return Ok(()),
     };
     // Runs with at least one episode that did not land: `(run_id, "<task>:<role>")`.
@@ -5776,20 +5816,36 @@ fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Resu
             // agentId, prefer the real cost from `gauge subagents` over the
             // manually-set `cost_usd` (which SKILL.md prose often leaves at the
             // 0.0 default because description-string matching is fragile).
-            // Fail-soft — any resolution miss falls back to `s.cost_usd`.
-            let cost = s
-                .agent_id
-                .as_deref()
-                .and_then(state::resolve_agent_cost)
-                .unwrap_or(s.cost_usd);
-            let tokens = s.agent_id.as_deref().and_then(state::resolve_agent_tokens);
+            // "No data" (gauge absent / no matching id) falls back to
+            // `s.cost_usd`; an UNDETERMINED gauge does not — the episode is
+            // left unrecorded (retried next firing) and surfaced as a failure,
+            // so a fabricated fallback cost never lands in fugu-router.
             let worker_key = format!("{}:worker", s.task_id);
             if !rs.recorded_episodes.contains(&worker_key) {
-                if spawn_fugu_record(s, "worker", &s.model, cost, tokens, &fingerprint) {
-                    rs.recorded_episodes.push(worker_key);
-                    emitted += 1;
-                } else {
-                    failures.push((rid.clone(), worker_key));
+                match gauge_accounting(s.agent_id.as_deref()) {
+                    Determination::Known((cost, tokens)) => {
+                        if spawn_fugu_record(
+                            &fugu_bin,
+                            s,
+                            "worker",
+                            &s.model,
+                            cost.unwrap_or(s.cost_usd),
+                            tokens,
+                            &fingerprint,
+                        ) {
+                            rs.recorded_episodes.push(worker_key);
+                            emitted += 1;
+                        } else {
+                            failures.push((rid.clone(), worker_key));
+                        }
+                    }
+                    Determination::Undetermined(why) => {
+                        eprintln!(
+                            "condukt: '{}' (worker): cost/token accounting undetermined ({why}); episode left unrecorded",
+                            s.title
+                        );
+                        failures.push((rid.clone(), worker_key));
+                    }
                 }
             }
 
@@ -5805,27 +5861,32 @@ fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Resu
                 .as_ref()
                 .filter(|_| !rs.recorded_episodes.contains(&verifier_key))
             {
-                let verifier_cost = s
-                    .verifier_agent_id
-                    .as_deref()
-                    .and_then(state::resolve_agent_cost)
-                    .unwrap_or_else(|| s.verifier_cost_usd.unwrap_or(0.0));
-                let verifier_tokens = s
-                    .verifier_agent_id
-                    .as_deref()
-                    .and_then(state::resolve_agent_tokens);
-                if spawn_fugu_record(
-                    s,
-                    "verifier",
-                    vm,
-                    verifier_cost,
-                    verifier_tokens,
-                    &fingerprint,
-                ) {
-                    rs.recorded_episodes.push(verifier_key);
-                    emitted += 1;
-                } else {
-                    failures.push((rid.clone(), verifier_key));
+                match gauge_accounting(s.verifier_agent_id.as_deref()) {
+                    Determination::Known((cost, tokens)) => {
+                        let verifier_cost =
+                            cost.unwrap_or_else(|| s.verifier_cost_usd.unwrap_or(0.0));
+                        if spawn_fugu_record(
+                            &fugu_bin,
+                            s,
+                            "verifier",
+                            vm,
+                            verifier_cost,
+                            tokens,
+                            &fingerprint,
+                        ) {
+                            rs.recorded_episodes.push(verifier_key);
+                            emitted += 1;
+                        } else {
+                            failures.push((rid.clone(), verifier_key));
+                        }
+                    }
+                    Determination::Undetermined(why) => {
+                        eprintln!(
+                            "condukt: '{}' (verifier): cost/token accounting undetermined ({why}); episode left unrecorded",
+                            s.title
+                        );
+                        failures.push((rid.clone(), verifier_key));
+                    }
                 }
             }
         }
@@ -5847,7 +5908,7 @@ fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Resu
     if !failures.is_empty() {
         let list: Vec<String> = failures.iter().map(|(r, k)| format!("{r} ({k})")).collect();
         bail!(
-            "fugu-router record failed for {} episode(s), left unrecorded for retry: {}",
+            "fugu-router record failed (or its gauge cost/token accounting was undetermined) for {} episode(s), left unrecorded for retry: {}",
             failures.len(),
             list.join(", ")
         );
@@ -5855,13 +5916,37 @@ fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Resu
     Ok(())
 }
 
-/// Spawn one `fugu-router record --role <role>` for `s`, reusing its
+/// `(cost_usd, (tokens_input, tokens_output))` from gauge; each `None` = no data.
+type GaugeAccounting = (Option<f64>, Option<(u64, u64)>);
+
+/// Cost and token usage of one Task-tool subagent from `gauge subagents
+/// --json`, for one fugu-router episode.
+///
+/// `agent_id` `None` (the task recorded no agentId) → `Known((None, None))`:
+/// nothing to look up, the caller uses its manual fallback. Otherwise the
+/// two lookups' answers are combined; either one `Undetermined` makes the
+/// whole result `Undetermined` (gauge could not be located or run), which the
+/// caller must keep distinct from "no data".
+fn gauge_accounting(agent_id: Option<&str>) -> Determination<GaugeAccounting> {
+    let Some(id) = agent_id else {
+        return Determination::Known((None, None));
+    };
+    let cost = match state::resolve_agent_cost(id) {
+        Determination::Known(c) => c,
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
+    state::resolve_agent_tokens(id).map(|tokens| (cost, tokens))
+}
+
+/// Spawn one `<fugu_bin> record --role <role>` for `s` (`fugu_bin` is the
+/// program [`fugu_fingerprint`] resolved), reusing its
 /// title/files/class/done_criteria/status/duration/route-provenance/
 /// lines-changed, but with the given `role`/`model`/`cost`/`tokens` (which
 /// differ between the worker episode and the optional verifier episode).
 /// Best-effort: a spawn failure or non-zero exit is logged and returns
 /// `false` (never aborts the caller's sweep over other specs/runs).
 fn spawn_fugu_record(
+    fugu_bin: &Path,
     s: &state::RecordSpec,
     role: &str,
     model: &str,
@@ -5869,7 +5954,7 @@ fn spawn_fugu_record(
     tokens: Option<(u64, u64)>,
     fingerprint: &str,
 ) -> bool {
-    let mut cmd = std::process::Command::new(fugu_router_bin());
+    let mut cmd = std::process::Command::new(fugu_bin);
     cmd.arg("record")
         .args(["--title", &s.title])
         .args(["--files", &s.files.join(",")])
@@ -6116,7 +6201,7 @@ fn read_stdin() -> String {
 
 #[cfg(test)]
 mod calibrated_confidence_tests {
-    use super::calibrated_confidence;
+    use super::{calibrated_confidence, calibrated_confidence_via};
 
     /// The legacy invocation supplies none of the new flags: the calibrated
     /// path must be entirely inert (return `None`, no shell-out) so `decide`
@@ -6192,87 +6277,14 @@ mod calibrated_confidence_tests {
         let title = Some("some task".to_string());
         // With fugu-router unresolvable on PATH, `Command::output()` fails
         // to spawn → soft-skip → `None`, regardless of any ambient
-        // fugu-router install / episode history on the host.
-        assert_eq!(calibrated_confidence(&title, &[], &None), None);
-    }
-}
-
-#[cfg(test)]
-mod fugu_router_bin_tests {
-    use super::fugu_router_bin_from_manifest;
-    use std::path::Path;
-
-    /// A well-formed manifest resolves to `<installPath>/bin/fugu-router` —
-    /// this is the PATH-shadowing fix: the plugin-cache absolute path must
-    /// win over whatever `fugu-router` a bare-name PATH lookup would find
-    /// (e.g. a stale `~/.cargo/bin/fugu-router`).
-    #[test]
-    fn resolves_install_path_from_valid_manifest() {
-        let dir = tempfile::tempdir().unwrap();
-        let manifest = dir.path().join("installed_plugins.json");
-        std::fs::write(
-            &manifest,
-            r#"{
-                "version": 2,
-                "plugins": {
-                    "fugu-router@yukineko": [
-                        {
-                            "scope": "user",
-                            "installPath": "/home/u/.claude/plugins/cache/yukineko/fugu-router/0.1.19",
-                            "version": "0.1.19"
-                        }
-                    ]
-                }
-            }"#,
-        )
-        .unwrap();
-
-        let resolved = fugu_router_bin_from_manifest(&manifest).unwrap();
+        // fugu-router install / episode history on the host. Goes through
+        // `calibrated_confidence_via` on the bare name: `calibrated_confidence`
+        // resolves the host's plugin cache first, which this PATH filter
+        // cannot hide.
         assert_eq!(
-            resolved,
-            "/home/u/.claude/plugins/cache/yukineko/fugu-router/0.1.19/bin/fugu-router"
+            calibrated_confidence_via(std::path::Path::new("fugu-router"), &title, &[], &None),
+            None
         );
-    }
-
-    /// A missing manifest file must fail soft (`None`), never panic/error,
-    /// so the caller can fall back to the bare `"fugu-router"` PATH name.
-    #[test]
-    fn missing_manifest_falls_back_to_none() {
-        let missing = Path::new("/nonexistent/path/installed_plugins.json");
-        assert_eq!(fugu_router_bin_from_manifest(missing), None);
-    }
-
-    /// Malformed JSON must fail soft (`None`), not panic.
-    #[test]
-    fn invalid_json_falls_back_to_none() {
-        let dir = tempfile::tempdir().unwrap();
-        let manifest = dir.path().join("installed_plugins.json");
-        std::fs::write(&manifest, "not valid json {{{").unwrap();
-        assert_eq!(fugu_router_bin_from_manifest(&manifest), None);
-    }
-
-    /// A manifest missing the `fugu-router@yukineko` key (e.g. the plugin
-    /// isn't installed) must fail soft (`None`).
-    #[test]
-    fn missing_key_falls_back_to_none() {
-        let dir = tempfile::tempdir().unwrap();
-        let manifest = dir.path().join("installed_plugins.json");
-        std::fs::write(&manifest, r#"{"version": 2, "plugins": {}}"#).unwrap();
-        assert_eq!(fugu_router_bin_from_manifest(&manifest), None);
-    }
-
-    /// An empty install-list array for the key must fail soft (`None`)
-    /// rather than panicking on an out-of-bounds `[0]` access.
-    #[test]
-    fn empty_install_list_falls_back_to_none() {
-        let dir = tempfile::tempdir().unwrap();
-        let manifest = dir.path().join("installed_plugins.json");
-        std::fs::write(
-            &manifest,
-            r#"{"version": 2, "plugins": {"fugu-router@yukineko": []}}"#,
-        )
-        .unwrap();
-        assert_eq!(fugu_router_bin_from_manifest(&manifest), None);
     }
 }
 

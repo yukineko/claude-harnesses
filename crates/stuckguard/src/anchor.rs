@@ -92,88 +92,21 @@ pub enum AnchorLookup {
     Undetermined(String),
 }
 
-/// Where the plugin cache stores versioned overwatch installs:
-/// `~/.claude/plugins/cache/yukineko/overwatch/<version>/bin/overwatch`.
-/// Mirrors `crates/ctxrot/src/hooks/guard.rs`'s `find_overwatch_binary` cache
-/// path.
-fn overwatch_cache_dir() -> PathBuf {
-    harness_core::config::home()
-        .join(".claude")
-        .join("plugins")
-        .join("cache")
-        .join("yukineko")
-        .join("overwatch")
-}
-
-/// Resolve the `overwatch` binary: PATH first, then the newest versioned
-/// install under the plugin cache. Distinguishes "genuinely not installed"
-/// (`Known(None)` — no PATH entry and no cache dir/candidate: a real
-/// observation) from "could not tell" (`Undetermined` — the cache dir exists
-/// but could not be listed, e.g. permission denied).
+/// Resolve the `overwatch` binary via [`harness_core::plugin_bin::resolve`]:
+/// the newest versioned install under the plugin cache first (numeric version
+/// order, so `0.3.10` beats `0.3.9`), `$PATH` second. Distinguishes
+/// "genuinely not installed" (`Known(None)` — no cache dir/candidate and no
+/// `$PATH` entry: a real observation) from "could not tell" (`Undetermined` —
+/// the cache dir exists but could not be listed, e.g. permission denied, and
+/// the resolver deliberately does not fall back to `$PATH` then; or there is no
+/// cache copy and an `overwatch` on `$PATH` exists but cannot be spawned).
 ///
-/// Mirrors `crates/ctxrot/src/hooks/guard.rs`'s `find_overwatch_binary`
-/// shape (PATH probe, then newest versioned cache dir) but deliberately does
-/// NOT copy its directory read: that function's
-/// `std::fs::read_dir(&base).ok()?.filter_map(|e| e.ok())` folds an
-/// unreadable cache dir into "zero candidates" — the exact absence/opacity
-/// conflation `harness_core::boundary` exists to prevent (see its own module
-/// doc). This routes the read through `boundary::read_dir_entries`, which
-/// keeps a missing directory (`Known(vec![])`, legitimately empty) apart
-/// from an unreadable one (`Undetermined`, carries why).
+/// This used to be a local resolver that probed `$PATH` first, so a stale
+/// standalone copy on the login `$PATH` shadowed the rolled-out one; hook
+/// processes do not inherit the plugin `bin/` dirs on `$PATH` (backlog
+/// abba6f0d).
 fn resolve_overwatch_binary() -> Determination<Option<PathBuf>> {
-    // PATH probe. A failure to even start the process here is overwhelmingly
-    // "overwatch is not on PATH" — the ordinary case — but could also mean a
-    // PATH entry exists yet is not executable. Either way there is still a
-    // second place to look (the plugin cache) before giving up, so a PATH
-    // miss alone is not folded into Undetermined here; it only decides
-    // whether to short-circuit with a PATH hit.
-    let mut probe = Command::new("overwatch");
-    probe.arg("--version");
-    if let Determination::Known(_) = boundary::run(&mut probe) {
-        return Determination::known(Some(PathBuf::from("overwatch")));
-    }
-
-    let base = overwatch_cache_dir();
-    let entries = match boundary::read_dir_entries(&base) {
-        Determination::Known(entries) => entries,
-        Determination::Undetermined(why) => return Determination::Undetermined(why),
-    };
-    let mut candidates: Vec<(Vec<u64>, PathBuf)> = entries
-        .into_iter()
-        .filter_map(|version_dir| {
-            let key = version_sort_key(&version_dir)?;
-            let bin = version_dir.join("bin").join("overwatch");
-            bin.exists().then_some((key, bin))
-        })
-        .collect();
-    candidates.sort();
-    Determination::known(candidates.pop().map(|(_, bin)| bin))
-}
-
-/// Ordering key for a `<version>` directory under the plugin cache: its name
-/// split into numeric components, so `0.3.10` sorts *after* `0.3.9`.
-///
-/// The obvious `candidates.sort()` on the paths compares version dirs as
-/// strings, where `"0.3.9" > "0.3.10"` and the older install wins. That is not
-/// a hypothetical ordering: the cache retains every version dir ever rolled
-/// out (measured 2026-08-06: `ls ~/.claude/plugins/cache/yukineko/overwatch`
-/// → `0.1.30 0.1.38 0.2.18 0.2.20 0.2.24`), and two-digit patch numbers are
-/// already present there.
-///
-/// `None` for a name that is not purely numeric-dotted — an unparseable dir is
-/// not silently ranked below the real ones (which would let a stray directory
-/// decide the winner by default); it is dropped from the candidate set
-/// entirely. This is the one place where dropping is right rather than a
-/// fail-open: the directory is not a version, so it is not an answer to
-/// "which version is newest", and the caller still sees `Known(None)` if it
-/// was the only entry.
-fn version_sort_key(version_dir: &std::path::Path) -> Option<Vec<u64>> {
-    version_dir
-        .file_name()?
-        .to_str()?
-        .split('.')
-        .map(|part| part.parse::<u64>().ok())
-        .collect()
+    harness_core::plugin_bin::resolve("overwatch")
 }
 
 /// Diagnostic text for the `AnchorLookup::Undetermined` branch. Pure — unit
@@ -281,18 +214,44 @@ pub fn fetch_session_anchor(session_id: &str) -> AnchorLookup {
 }
 
 /// Keep this session's claim/lease alive (§4.6b). Fires a `condukt` and an
-/// `overwatch` heartbeat; both are best-effort — errors and missing binaries are
-/// ignored (the nudge path must never be blocked by this side effect).
+/// `overwatch` heartbeat; both are best-effort — spawn/exit errors and a binary
+/// that is genuinely not installed are ignored (the nudge path must never be
+/// blocked by this side effect).
+///
+/// Both binaries are located with [`harness_core::plugin_bin::resolve`]
+/// (plugin cache first, `$PATH` second), the same resolver the lease lookup
+/// uses — a bare-name spawn here missed an overwatch that lived only in the
+/// plugin cache, so the lease the lookup had just found was never refreshed
+/// (backlog c397cd15 / abba6f0d). A lookup that could not tell whether the
+/// binary exists (`Undetermined`) is reported on stderr rather than dropped
+/// silently, since a skipped heartbeat can let the lease be reaped.
 pub fn heartbeat_piggyback(anchor: &SessionAnchor) {
     if !anchor.run_id.is_empty() {
-        let mut cmd = Command::new("condukt");
-        cmd.args(["state", "heartbeat", "--run", &anchor.run_id]);
-        let _ = boundary::run(&mut cmd);
+        heartbeat_via("condukt", &["state", "heartbeat", "--run", &anchor.run_id]);
     }
     if !anchor.key.is_empty() {
-        let mut cmd = Command::new("overwatch");
-        cmd.args(["heartbeat", "--key", &anchor.key]);
-        let _ = boundary::run(&mut cmd);
+        heartbeat_via("overwatch", &["heartbeat", "--key", &anchor.key]);
+    }
+}
+
+/// Resolve `name` and fire one best-effort heartbeat with `args`. Not
+/// installed (`Known(None)`) is silent — there is no lease system to refresh.
+/// A lookup that could not be completed (`Undetermined`: the cache could not be
+/// read, or a `$PATH` copy exists but cannot be spawned) is reported on stderr:
+/// the heartbeat was NOT sent, and nothing here pretends otherwise.
+fn heartbeat_via(name: &str, args: &[&str]) {
+    match harness_core::plugin_bin::resolve(name) {
+        Determination::Known(Some(bin)) => {
+            let mut cmd = Command::new(&bin);
+            cmd.args(args);
+            let _ = boundary::run(&mut cmd);
+        }
+        Determination::Known(None) => {}
+        Determination::Undetermined(why) => eprintln!(
+            "stuckguard: could not locate `{name}` ({}); heartbeat piggyback (§4.6b) \
+             to {name} was NOT sent this call",
+            why.as_str()
+        ),
     }
 }
 
@@ -471,9 +430,9 @@ mod tests {
     // cross-module guarantee the code does not provide.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    /// A `PATH` guaranteed to contain no `overwatch` binary, so
-    /// `resolve_overwatch_binary`'s PATH probe genuinely misses and falls
-    /// through to the plugin-cache search — even on a dev machine (like this
+    /// A `PATH` guaranteed to contain no `overwatch` binary, so when the
+    /// (temp-`HOME`) plugin cache has no candidate, `resolve_overwatch_binary`'s
+    /// `$PATH` fallback genuinely misses too — even on a dev machine (like this
     /// one) whose real `PATH` includes a real installed overwatch via its
     /// plugin-cache `bin/` dir.
     const PATH_WITHOUT_OVERWATCH: &str = "/usr/bin:/bin";
@@ -646,8 +605,9 @@ mod tests {
         }
     }
 
-    /// Test-only helper mirroring `overwatch_cache_dir()`'s path shape but
-    /// rooted at an explicit `home` (rather than `harness_core::config::home()`
+    /// Test-only helper mirroring `harness_core::plugin_bin::cache_root()`'s
+    /// overwatch path shape but rooted at an explicit `home` (rather than
+    /// `harness_core::config::home()`
     /// reading the process-global `HOME`), so a test can build fixtures at the
     /// same relative path it is about to point `HOME` at.
     fn overwatch_cache_dir_under(home: &std::path::Path) -> PathBuf {
@@ -729,7 +689,6 @@ mod backlog_c397cd15 {
     /// (`let _ = boundary::run(..)`), so the lease the lookup just found is not
     /// refreshed.
     #[test]
-    #[ignore = "backlog c397cd15: open defect, remove ignore when fixed"]
     fn heartbeat_reaches_overwatch_that_is_only_in_the_plugin_cache() {
         use std::os::unix::fs::PermissionsExt;
         let t = std::env::temp_dir().join(format!("sg-c397cd15-{}", std::process::id()));

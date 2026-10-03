@@ -585,7 +585,7 @@ const ABSENT_WORKTREE_MARKER: &[u8] = b"<absent-worktree>";
 ///
 /// Two "cannot determine" arms, both protective (CLAUDE.md §3):
 ///
-/// * **No task records a worktree** (serial / fast-path / single-worktree mode) ⇒
+/// * **No task records a worktree** (legacy runs only: serial-in-main / fast-path / single-worktree mode were retired 2026-10-03, backlog 5e5cf0a9) ⇒
 ///   `Undetermined`. There is no run-scoped durable head signal to read at all.
 ///   It deliberately does NOT fall back to the repo-wide HEAD — that fallback is
 ///   the defect described on [`claim_progress`], and it resolves "I cannot see
@@ -1441,19 +1441,39 @@ fn json_id(v: Option<&serde_json::Value>) -> Option<String> {
 }
 
 /// Shell out to `backlog list --status pending --json` and return the pending
-/// tasks as a list of JSON objects. Fail-soft: a missing binary, non-zero exit, or
-/// unparseable output yields an empty list rather than an error (never panics).
-/// Accepts either a top-level array or a `{ "tasks": [..] }` envelope.
+/// tasks as a list of JSON objects. Fail-soft: a missing binary, non-zero exit,
+/// or unparseable output yields an empty list rather than an error (never
+/// panics). Accepts either a top-level array or a `{ "tasks": [..] }` envelope.
+///
+/// `backlog` is located with [`harness_core::plugin_bin::resolve`] (plugin
+/// cache first, `$PATH` second), not by bare name: a hook-spawned process does
+/// not inherit the plugin `bin/` dirs on `$PATH` (backlog abba6f0d). The one
+/// answer that is NOT soft is a lookup that could not be completed
+/// (`Undetermined`: the plugin cache could not be read, or — with no cache copy
+/// — a `backlog` on `$PATH` exists but cannot be spawned): that is `Err`,
+/// because "could not look for backlog" is not "backlog has no pending tasks" —
+/// the caller does not publish a view built on it.
 #[allow(dead_code)]
-fn backlog_pending() -> Vec<serde_json::Value> {
-    let output = std::process::Command::new("backlog")
+fn backlog_pending() -> Result<Vec<serde_json::Value>> {
+    let program = match harness_core::plugin_bin::resolve("backlog") {
+        Determination::Known(Some(p)) => p,
+        Determination::Known(None) => return Ok(Vec::new()),
+        Determination::Undetermined(why) => {
+            anyhow::bail!(
+                "backlog could not be located ({}); refusing to build the \
+                 execution-state view without it",
+                why.as_str()
+            )
+        }
+    };
+    let output = std::process::Command::new(&program)
         .args(["list", "--status", "pending", "--json"])
         .output();
     let stdout = match output {
         Ok(o) if o.status.success() => o.stdout,
-        _ => return Vec::new(),
+        _ => return Ok(Vec::new()),
     };
-    match serde_json::from_slice::<serde_json::Value>(&stdout) {
+    Ok(match serde_json::from_slice::<serde_json::Value>(&stdout) {
         Ok(serde_json::Value::Array(a)) => a,
         Ok(serde_json::Value::Object(mut m)) => m
             .remove("tasks")
@@ -1463,7 +1483,7 @@ fn backlog_pending() -> Vec<serde_json::Value> {
             })
             .unwrap_or_default(),
         _ => Vec::new(),
-    }
+    })
 }
 
 /// Pure JOIN of live task claims against backlog pending tasks, keyed on title
@@ -1515,8 +1535,9 @@ fn join_execution_state(
 /// `claims.json`): reap stale claims, JOIN the survivors against the backlog's
 /// pending tasks, and atomically write the rows. Fail-soft on the backlog (see
 /// [`backlog_pending`]) — the claims we hold are always written, with
-/// `backlog_id`/`status`/`project` left absent when unjoinable. Returns the rows
-/// written.
+/// `backlog_id`/`status`/`project` left absent when unjoinable — EXCEPT when the
+/// `backlog` binary could not even be located (unreadable plugin cache), which
+/// is an error. Returns the rows written.
 // Wired into the CLI by the follow-up task.
 #[allow(dead_code)]
 pub fn write_execution_state(cfg: &Config, cwd: &Path, now: i64) -> Result<Vec<ExecutionEntry>> {
@@ -1544,7 +1565,7 @@ pub fn write_execution_state(cfg: &Config, cwd: &Path, now: i64) -> Result<Vec<E
             let mut reg = load_or_refuse(&path, "write the execution-state view")?;
             reap(&mut reg, now, ttl, &|c| claim_progress(cfg, cwd, c, now));
             save(&path, &reg)?;
-            let pending = backlog_pending();
+            let pending = backlog_pending()?;
             let entries = join_execution_state(&reg.task_claims, &pending);
             save(
                 &project_dir(cfg, &root).join("execution-state.json"),
@@ -1557,7 +1578,7 @@ pub fn write_execution_state(cfg: &Config, cwd: &Path, now: i64) -> Result<Vec<E
             // same "empty means nothing is running" misreading applies.
             let mut reg = load_or_refuse(&path, "write the execution-state view")?;
             reap(&mut reg, now, ttl, &|c| claim_progress(cfg, cwd, c, now));
-            let pending = backlog_pending();
+            let pending = backlog_pending()?;
             Ok(join_execution_state(&reg.task_claims, &pending))
         }
     }
@@ -2755,8 +2776,9 @@ mod tests {
         std::fs::remove_dir_all(tmp).ok();
     }
 
-    /// (A4-ii) The arm where the run records NO task worktree at all (serial /
-    /// fast-path / single-worktree mode). There is no run-scoped durable head
+    /// (A4-ii) The arm where the run records NO task worktree at all (legacy
+    /// runs from the retired fast-path / single-worktree modes, backlog
+    /// 5e5cf0a9, or any run state that simply lacks the field). There is no run-scoped durable head
     /// signal to read, which is "cannot determine" — NOT "frozen", and NOT a
     /// fall back to the repo-wide HEAD (that fallback is the defect itself).
     /// Asserted behaviourally at the reap layer too, because `Stalled` is the

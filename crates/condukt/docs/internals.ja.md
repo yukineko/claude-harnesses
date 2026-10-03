@@ -286,21 +286,7 @@ BASELINE_EXIT=$?
 
 ---
 
-### Phase 4.5.5 — Small-task fast path（省略可）
-
-以下のいずれかを満たす場合、worktree 作成を省略して main で直接実装します。
-
-- タスクが 1 つのみかつ `class: serial`
-- 全タスクが serial で合計 2 つ以下
-
-fast path 手順:
-
-1. `condukt state set --run $RID --task <t.id> --status running`（worktree/branch なし）
-2. main 上で直接実装・`git add && git commit`
-3. `condukt state set --run $RID --task <t.id> --status done`
-4. Phase 6（verifier）へ。Phase 7 の worktree merge/remove はスキップ。
-
-parallel タスクが 1 つでも存在する場合、または serial タスクが 3 つ以上ある場合は通常フローになります。
+> 小タスク fast path（旧 Phase 4.5.5）と単一 worktree モードは 2026-10-03 のユーザー裁定で廃止された（backlog 5e5cf0a9）。全タスクが専用 worktree で実装される。
 
 ---
 
@@ -315,12 +301,12 @@ parallel タスクが 1 つでも存在する場合、または serial タスク
 3. `Task` で `condukt-worker` を起動（model=`t.suggested_model`）
 4. worker の返却 status を確認する:
    - `done`: `condukt state set --run $RID --task <t.id> --status done` し、即座に Phase 6 の verifier を起動（パイプライン化）
-   - `needs-serial`: 分類ミス。worktree を破棄してタスクを serial として main で実装し commit
+   - `needs-serial`: 分類ミス。worktree を破棄し、タスクを serial として新しい専用 worktree で再実装する（main では実装しない）
    - `blocked`: AskUserQuestion でユーザーにエスカレーション
 
 バッチ内は 1 メッセージで複数 `Task` を同時発行して並列化します。worker が完了するたびに
 即 verifier を起動し、worker 完了の待ち合わせはしません（後続 worker が動いている間に先行タスクの
-検証が進む）。`serial` タスクは worktree に出さず main で順に実装します。
+検証が進む）。`serial` タスクは並列バッチから外して 1 件ずつ、それぞれ専用 worktree で実装し、verifier 通過後にその場で `condukt worktree merge` → `worktree remove` してから次の serial タスクの worktree を作ります（順序の制約であって場所の制約ではない）。
 
 **worker に渡すフィールド一覧**:
 
@@ -567,7 +553,7 @@ pending
                         |                                    |
                         |                                    +--(opus で fail / ユーザーエスカレーション)
                         |
-                        +--(needs-serial / serial 降格)--> (main で直接実装)
+                        +--(needs-serial / serial 降格)--> (新しい専用 worktree で実装 → verifier 通過後に mid-run merge)
                         |
                         +--(blocked / ユーザーエスカレーション)
 
@@ -705,7 +691,7 @@ failed の場合は recording されません。
 
 2. **GATED は子に実行も承認もさせない** — `class: "gated"` のタスクは `condukt schedule` が `gated` に分離します。実装フェーズの対象外です。承認はユーザーから main で得ます。
 
-3. **共有ファイルは直列** — `condukt schedule` が `shared_globs` 設定と file 衝突解析で `serial` に落とします。serial タスクは worktree に出さず main で順に実装します。
+3. **共有ファイルは直列** — `condukt schedule` が `shared_globs` 設定と file 衝突解析で `serial` に落とします。serial は順序の制約であって場所の制約ではありません: 各 serial タスクは専用 worktree で実装し、verifier 通過後にその場で mid-run merge してから次の serial タスクの worktree を作ります。
 
 4. **並列実装の子は専用 worktree、1 dir = 1 branch** — worktree は `condukt worktree create` が作ります（repo 外・branch 重複拒否を強制）。各子は自分の turn 内で commit します。
 

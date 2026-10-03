@@ -215,17 +215,42 @@ fn session_start_cmd() -> ! {
 /// True if a `/flow` / `/backlog` driver is *actively* driving a queue (soft
 /// dependency on the `backlog` binary). See [`driver_active_from_output`] for
 /// how a failure to get an answer is resolved.
+///
+/// `backlog` is located with [`harness_core::plugin_bin::resolve`] (plugin
+/// cache first, `$PATH` second), not by bare name: this runs as a hook, and
+/// hook processes do not inherit the plugin `bin/` dirs on `$PATH` (backlog
+/// abba6f0d) — a bare-name spawn read an installed-but-not-on-login-PATH
+/// backlog as "not installed", i.e. "no driver".
 fn driver_active() -> bool {
-    match Command::new("backlog").args(["lock", "status"]).output() {
+    use harness_core::verdict::Determination;
+    let program = match harness_core::plugin_bin::resolve("backlog") {
+        Determination::Known(Some(p)) => p,
+        // Observed: `backlog` is not installed, so there is no queue and no
+        // driver to collide with. That is an observation, not a failure to
+        // observe.
+        Determination::Known(None) => return driver_active_from_output(false, false, ""),
+        // Could not tell (the plugin cache could not be read, or — with no
+        // cache copy — a `backlog` on $PATH exists but cannot be spawned): we
+        // do not know whether a driver exists. Treat as active — skip the run.
+        Determination::Undetermined(why) => {
+            eprintln!(
+                "daily: could not locate `backlog` ({}); treating a driver as \
+                 possibly active and skipping this session's run",
+                why.as_str()
+            );
+            return driver_active_from_output(true, false, "");
+        }
+    };
+    match Command::new(&program).args(["lock", "status"]).output() {
         Ok(out) => driver_active_from_output(
             true,
             out.status.success(),
             &String::from_utf8_lossy(&out.stdout),
         ),
-        // Could not spawn at all: `backlog` is not installed, so there is no
-        // queue and no driver to collide with. That is an observation, not a
-        // failure to observe.
-        Err(_) => driver_active_from_output(false, false, ""),
+        // `backlog` was located but could not be started: that is a failure to
+        // get an answer, not an observation that it is absent. Same resolution
+        // as "ran and failed" — active.
+        Err(_) => driver_active_from_output(true, false, ""),
     }
 }
 

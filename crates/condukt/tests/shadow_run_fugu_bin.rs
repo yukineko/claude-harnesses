@@ -1,7 +1,8 @@
 // このファイルは丸ごと integration test なので unwrap/expect/panic を許可する。
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! `condukt shadow-run finish` must spawn the fugu-router resolved by
-//! `fugu_router_bin()` (installed_plugins.json installPath first, PATH
+//! `harness_core::plugin_bin::resolve` (plugin cache
+//! `~/.claude/plugins/cache/yukineko/fugu-router/<version>/bin/` first, PATH
 //! second), not a bare `fugu-router` from PATH. HOME is isolated and both
 //! fugu-routers are stubs, so the user's real `~/.fugu-router` is never
 //! touched.
@@ -36,7 +37,7 @@ fn finish_spawns_the_resolved_plugin_binary_not_the_path_one() {
     let flag = tmp.path().join("flag");
     let repo = tmp.path().join("repo");
     let wt_base = tmp.path().join("wt-base");
-    let plugin_dir = tmp.path().join("plugin");
+    let plugin_dir = home.join(".claude/plugins/cache/yukineko/fugu-router/0.1.19");
     let path_dir = tmp.path().join("pathbin");
     let log_a = tmp.path().join("log-a.txt"); // plugin-resolved stub
     let log_b = tmp.path().join("log-b.txt"); // PATH stub
@@ -45,16 +46,6 @@ fn finish_spawns_the_resolved_plugin_binary_not_the_path_one() {
     }
     write_stub(&plugin_dir.join("bin/fugu-router"), &log_a);
     write_stub(&path_dir.join("fugu-router"), &log_b);
-
-    let manifest = serde_json::json!({
-        "plugins": {"fugu-router@yukineko": [{"installPath": plugin_dir.to_str().unwrap()}]}
-    });
-    std::fs::create_dir_all(home.join(".claude/plugins")).unwrap();
-    std::fs::write(
-        home.join(".claude/plugins/installed_plugins.json"),
-        manifest.to_string(),
-    )
-    .unwrap();
 
     git(&repo, &["init", "-b", "main"]);
     git(&repo, &["config", "user.email", "t@example.com"]);

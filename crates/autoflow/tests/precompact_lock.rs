@@ -53,7 +53,8 @@ fn temp_home(tag: &str) -> PathBuf {
 }
 
 /// The built `backlog` binary's containing directory, prepended to PATH so
-/// the `autoflow` subprocess's `find_backlog_binary()` (PATH-first lookup)
+/// the `autoflow` subprocess's `find_backlog_binary()` (cache first, then PATH;
+/// the temp HOME has no plugin cache, so the PATH copy is the one found)
 /// resolves it deterministically regardless of the host's own PATH.
 fn path_with_backlog_bin() -> std::ffi::OsString {
     let dir = backlog_bin()

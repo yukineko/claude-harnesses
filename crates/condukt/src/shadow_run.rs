@@ -128,12 +128,14 @@ fn resolve_discard_branch(
 /// delete its branch — the committed work is never merged) and best-effort
 /// record the outcome to fugu-router by spawning exactly `fugu_bin`. Returns
 /// whether the fugu-router record call actually landed (`false` when
-/// `fugu_bin` cannot be spawned or exits non-zero — the caller says so on
-/// stdout instead of claiming a record).
+/// `fugu_bin` is `None` — the caller could not locate fugu-router, or observed
+/// it absent — or cannot be spawned or exits non-zero; the caller says which
+/// on stdout instead of claiming a record). The worktree is discarded either
+/// way.
 ///
 /// The binary is a parameter, not a bare `"fugu-router"` PATH lookup, so the
-/// CLI can hand in the same plugin-cache resolution `record-run` uses and a
-/// test can hand in a path that records nowhere. The bare PATH lookup this
+/// CLI can hand in the same `harness_core::plugin_bin::resolve` result
+/// `record-run` uses and a test can hand in a path that records nowhere. The bare PATH lookup this
 /// replaced let every `cargo test -p condukt` append fake "shadow attempt"
 /// episodes to the user's real store (1335 observed 2026-10-01).
 ///
@@ -147,7 +149,7 @@ pub fn finish(
     branch: &str,
     run: Option<&str>,
     outcome: &ShadowOutcome,
-    fugu_bin: &Path,
+    fugu_bin: Option<&Path>,
 ) -> Result<bool> {
     let target = resolve_discard_branch(repo, worktree_path, run, branch)?;
     worktree::discard(repo, worktree_path, Some(&target)).with_context(|| {
@@ -156,7 +158,11 @@ pub fn finish(
             worktree_path.display()
         )
     })?;
-    Ok(record_to_fugu_router(outcome, fugu_bin))
+    Ok(match fugu_bin {
+        Some(bin) => record_to_fugu_router(outcome, bin),
+        // No program to spawn ⇒ nothing was recorded.
+        None => false,
+    })
 }
 
 fn record_to_fugu_router(outcome: &ShadowOutcome, fugu_bin: &Path) -> bool {
@@ -278,7 +284,7 @@ mod tests {
             branch,
             None,
             &outcome,
-            Path::new("/nonexistent/fugu-router"),
+            Some(Path::new("/nonexistent/fugu-router")),
         )
         .expect("finish should succeed");
         assert!(

@@ -262,6 +262,7 @@ autoflow 監査の `crates/autoflow/src/lock.rs:81` と同じ、**grep の見た
 |---|---|---|
 | `crates/budgetguard/src/install.rs:12-13` `dirs::home_dir().unwrap_or_else(\|\| PathBuf::from("."))` | **未是正・backlog 済み** | home 解決失敗時に `./.claude/settings.json` を書き、`Installed Stop hook` と**成功を報告**する。ゲートが設置されない＝fleet 規模の fail-open だが、verdict 経路ではなく**設置経路**なので本監査の完了条件の外。別項目として起票 |
 | `crates/budgetguard/src/install.rs:19-22` `current_exe().ok()...unwrap_or_else(\|\| "budgetguard")` | **未是正・backlog 済み** | PATH 上の裸名へフォールバック。既存 backlog `1e783882`（`crates/harness-core/src/boundary.rs:186` の裸 `overwatch`）と**同一クラス** |
+<!-- doc-claim-exempt: 監査時点の逐語引用。abba6f0d で budget.rs は `harness_core::plugin_bin::resolve("budgetguard")` に移行し、所在が判定不能（Undetermined）のときは `pressure:false` ではなく pressured（一段 downgrade）に倒すよう変更した。「未変更」は監査時点の状態 -->
 | `crates/fugu-router/src/budget.rs:27` | **別 crate・未変更** | `when budgetguard is absent/errors (soft dep` と宣言されている。**宣言済みの soft dependency** であり advisory な routing（block/allow 判定ではない）。本監査は budgetguard 側が `pressure:false` を**断定しない**ようにするに留めた |
 | `crates/budgetguard/src/config.rs:161-182` の `try_exists` `Err` 経路 | **テスト無し** | 移植性のある fault injection を構成できなかった（権限依存で root 実行時に成立しない）。mutation では覆えていない**既知の穴**として記す |
 

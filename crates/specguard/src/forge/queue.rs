@@ -163,12 +163,29 @@ pub trait BacklogRunner {
     fn run(&mut self, args: &[&str]) -> Determination<CommandOutput>;
 }
 
-/// Calls the real `backlog` binary on PATH.
+/// Calls the real `backlog` binary, located with
+/// [`harness_core::plugin_bin::resolve`] (plugin cache first, `$PATH` second)
+/// rather than by bare name: a hook-spawned process does not inherit the plugin
+/// `bin/` dirs on `$PATH` (backlog abba6f0d).
+///
+/// Every non-`Known(Some)` resolution is `Undetermined` — as a failed spawn
+/// already was — so the queue is never read as empty because `backlog` could
+/// not be found. "Not installed" and "could not look" carry different reasons.
 pub struct CliRunner;
 
 impl BacklogRunner for CliRunner {
     fn run(&mut self, args: &[&str]) -> Determination<CommandOutput> {
-        boundary::run(std::process::Command::new("backlog").args(args))
+        match harness_core::plugin_bin::resolve("backlog") {
+            Determination::Known(Some(program)) => {
+                boundary::run(std::process::Command::new(program).args(args))
+            }
+            Determination::Known(None) => Determination::undetermined(
+                "`backlog` is not installed (no plugin-cache copy, not on $PATH); \
+                 the queue is unknown, not empty",
+            ),
+            // Forwarded, not re-minted: the resolver already recorded it.
+            Determination::Undetermined(why) => Determination::Undetermined(why),
+        }
     }
 }
 

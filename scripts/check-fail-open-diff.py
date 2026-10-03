@@ -32,7 +32,18 @@ the user). The rule, exactly:
 So a pre-existing swallow in an untouched file, one carried unchanged through
 an edit, or one that arrives unchanged from the other side of a merge
 (measured 2026-10-03: crates/jev/src/client.rs existed only on MERGE_HEAD's
-side and was blamed on the merge) does not fire.
+side and was blamed on the merge) does not fire — when the gate runs from
+`pre-commit` while MERGE_HEAD exists (`git merge --no-commit`, or a merge
+that stopped on conflicts, then `git commit`).
+
+Limit, observed 2026-10-03 with git 2.50.1: when `git merge` creates the
+merge commit itself, it runs the `pre-merge-commit` hook (which
+`.githooks/pre-merge-commit` turns into pre-commit) BEFORE it writes
+MERGE_HEAD — only AUTO_MERGE and ORIG_HEAD exist then. The gate therefore
+sees no merge, judges against HEAD alone, and a swallow carried in from the
+other side DOES fire there. That is a false block (stricter), not a
+fail-open; git leaves MERGE_HEAD behind on the block, and finishing with
+`git commit` judges the merge as described above.
 
 Why the INDEPENDENT heads (observed with git 2.50.1 in a scratch repo,
 2026-10-03, by writing MERGE_HEAD/MERGE_MODE by hand and running `git
@@ -346,7 +357,11 @@ def main(argv: list[str]) -> int:
         "judged parents are HEAD, or during a merge the independent heads "
         "`git merge-base --independent HEAD <MERGE_HEAD...>` (what git "
         "records; under MERGE_MODE=no-ff git also records non-independent "
-        "heads, which are deliberately not credited). Counts are per file, "
+        "heads, which are deliberately not credited). If this fired from "
+        "`git merge` itself (pre-merge-commit), MERGE_HEAD did not exist yet "
+        "and only HEAD was judged: the hit may come from the other side — "
+        "finish the merge with `git commit` to be judged against every "
+        "parent. Counts are per file, "
         "not per hit, so which hit is the new one is for you to read — all "
         "current hits are listed. Fix it by failing "
         "closed (propagate the error / name the undetermined state), or, if it "

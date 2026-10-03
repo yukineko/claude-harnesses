@@ -295,13 +295,69 @@ class MergeAttribution(unittest.TestCase):
         self._merge()
         self.assertEqual(fd.evaluate(self.repo.path), (0, []))
 
-    def test_unreadable_merge_head_is_undetermined(self):
+    def test_unresolvable_merge_head_line_is_undetermined(self):
         self._merge()
         git_dir = git(self.repo.path, "rev-parse", "--git-dir").strip()
         (self.repo.path / git_dir / "MERGE_HEAD").write_text(
             "not-a-commit\n", encoding="utf-8")
         with self.assertRaises(fd.Undetermined):
             fd.evaluate(self.repo.path)
+
+
+class GitFailureIsUndetermined(unittest.TestCase):
+    """Round-3 verifier of ee045867: two Undetermined checks survived their
+    deletion as mutants (M17, M5), and the unreadable-MERGE_HEAD claim had
+    no test that actually made the file unreadable (M16)."""
+
+    def setUp(self) -> None:
+        self.repo = Repo()
+        self.repo.write("crates/a/src/lib.rs", CLEAN_RS)
+        self.repo.stage("crates")
+        self.repo.commit()
+        self._real_git = fd._git
+
+    def tearDown(self) -> None:
+        fd._git = self._real_git
+        self.repo.close()
+
+    def _fail_on(self, subcommand, stdout="", rc=1):
+        real = self._real_git
+
+        def fake(repo, *args):
+            if args and args[0] == subcommand:
+                return subprocess.CompletedProcess(
+                    ["git", *args], rc, stdout=stdout, stderr="injected")
+            return real(repo, *args)
+        fd._git = fake
+
+    def test_failing_diff_cached_is_undetermined(self):
+        self.repo.write("crates/a/src/lib.rs", CLEAN_RS + "// edit\n")
+        self.repo.stage("crates/a/src/lib.rs")
+        self._fail_on("diff")
+        with self.assertRaises(fd.Undetermined):
+            fd.evaluate(self.repo.path)
+
+    def test_empty_merge_base_output_is_undetermined(self):
+        sha = git(self.repo.path, "rev-parse", "HEAD").strip()
+        git_dir = git(self.repo.path, "rev-parse", "--git-dir").strip()
+        (self.repo.path / git_dir / "MERGE_HEAD").write_text(
+            sha + "\n", encoding="utf-8")
+        self._fail_on("merge-base", stdout="", rc=0)
+        with self.assertRaises(fd.Undetermined):
+            fd.evaluate(self.repo.path)
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads a mode-000 file")
+    def test_merge_head_that_cannot_be_read_is_undetermined(self):
+        git_dir = git(self.repo.path, "rev-parse", "--git-dir").strip()
+        mh = self.repo.path / git_dir / "MERGE_HEAD"
+        mh.write_text(git(self.repo.path, "rev-parse", "HEAD"),
+                      encoding="utf-8")
+        mh.chmod(0)
+        try:
+            with self.assertRaises(fd.Undetermined):
+                fd.evaluate(self.repo.path)
+        finally:
+            mh.chmod(0o644)
 
 
 class ObjectTypes(unittest.TestCase):

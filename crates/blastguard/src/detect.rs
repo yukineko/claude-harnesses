@@ -1487,16 +1487,14 @@ fn detect_bash(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
         );
     }
 
-    // 0. A here-document body fed to a data-only reader (`cat > notes.txt
-    // <<'EOF'`, `git commit -F - <<'EOF'`) is removed before EVERY rule below —
-    // the line-level scans as much as the per-segment loop — so its text is not
-    // judged as a command (backlog fa1fce21 / 7037df97). Bodies fed to an
-    // interpreter, or to anything not provably a data reader, stay in; so does a
-    // body written to a file whose name appears anywhere else on this command
-    // line. RESIDUAL, not covered: a data file written here can still be
-    // executed by a LATER, separate tool call, which this gate judges on its own
-    // text and never re-reads the file for. See
-    // `strip_data_here_document_bodies` for the exact conditions.
+    // 0. When the command is effectively ONE here-document fed to a data-only
+    // reader (`cat > notes.txt <<'EOF'`, `git commit -F - <<'EOF'`), with no
+    // other command before or after it, its body is removed before EVERY rule
+    // below — the line-level scans as much as the per-segment loop — so its
+    // text is not judged as a command (backlog fa1fce21 / 7037df97). In every
+    // other shape the body stays and is judged as code. RESIDUAL, not covered:
+    // a data file written here can still be executed by a LATER, separate tool
+    // call. See `strip_data_here_document_bodies` for the exact shape rule.
     let stripped = strip_data_here_document_bodies(cmd);
     let cmd: &str = &stripped;
 
@@ -3014,224 +3012,152 @@ fn here_document_layout(segs: &[SeparatedSegment]) -> (Vec<bool>, Option<usize>)
     (is_body, opener_idx)
 }
 
-/// The command line with the BODY of every here-document that is fed to a
-/// data-only consumer removed, so no rule in [`detect_bash`] reads that body as
-/// code (backlog fa1fce21 / 7037df97).
+/// The command with the BODY of its here-document removed, when — and only
+/// when — that here-document is effectively the WHOLE command and its body is
+/// fed to a data-only reader (backlog fa1fce21 / 7037df97). Otherwise `cmd` is
+/// returned unchanged, so every rule judges the body as code, exactly as it
+/// would any other line.
 ///
-/// The opener line and the closing delimiter line are kept, so what is left is
-/// an EMPTY, closed here-document: the opener (its program, its redirects, its
-/// redirect targets) is judged exactly as before, and so is every line before
-/// the opener and after the close. Only the lines the shell hands to the
-/// consumer as stdin disappear.
+/// This is an ALLOWLIST of command shapes, not a list of dangers. Earlier
+/// versions tried to name the ways a body could still run (a later `sh x.txt`,
+/// a redefined `cat`) and each list was bypassed by a spelling it did not
+/// model (`sh *.txt`, `sh x''.txt`, `eval 'ca''t() …'`, `. ./defs.sh`). The
+/// shape rule needs no model of spelling: if anything else runs in the same
+/// command, the body is not removed.
 ///
-/// Why this replaced the per-segment skip that used to live here: that skip
-/// worked on [`split_segments`] output, and the splitter tracks quotes ACROSS
-/// body lines. A body line holding an apostrophe (`it's`) opened a phantom
-/// quote that swallowed the real delimiter line, so the "body" ran on to a
-/// LATER line equal to the delimiter and every command in between was skipped.
-/// Measured before this change: `cat <<'EOF'` / `it's` / `EOF` /
-/// `rm -rf /usr/lib` / `x'` / `EOF` was ALLOWED. The shell reads a body as raw
-/// lines with no quote processing, so this scan does too: code lines are
-/// tracked with quotes, body lines are matched raw against the delimiter.
-///
-/// A body is removed only when ALL of these hold; otherwise it stays in the
-/// text and is judged as code, which is the restrictive answer:
-///   * the opener's logical line opens exactly ONE here-document, with a
-///     readable delimiter ([`here_document_openers`]);
-///   * the consumer is a closed data reader ([`here_document_consumer_is_data`]):
-///     `cat`, `tee` or `git commit -F -`, with no pipe, no `;`/`&&`, no
-///     substitution and no redirect other than an output redirect to a DATA
-///     file. An interpreter (`bash`, `sh`, `python3`, `eval`, …) or any
-///     unknown program is never a data reader, so its body is still code;
-///   * the body is CLOSED by an exact delimiter line before the input ends;
+/// The body is removed only when ALL of these hold:
+///   * every line BEFORE the opener is blank, a comment (`#` first), `set -e`,
+///     `set -eu`, `set -euo pipefail`, `cd <literal path>` or
+///     `mkdir -p <literal path>…`. A literal path is letters, digits and
+///     `/ . _ - + , @ % : =`, with `~` allowed only as its first character.
+///     Anything else — an assignment, `eval`, `source`, `.`, a function, an
+///     alias, `PATH`, any other command — keeps the body;
+///   * the opener line is one physical line with balanced quotes, no `$`, no
+///     backtick, a single here-document with a plain delimiter
+///     ([`plain_here_document_delimiter`]) and a data-only consumer
+///     ([`here_document_consumer_is_data`]: `cat`, `tee` to data files,
+///     `git commit -F -`, with output redirects only to data files);
+///   * the body is CLOSED by an exact delimiter line
+///     ([`segment_closes_here_document`]);
 ///   * the delimiter is quoted, OR the body contains no `$`, backtick or
-///     backslash — with an unquoted delimiter the shell expands `$(…)` and
-///     backticks in the body, so only a body with nothing to expand is data;
-///   * when the consumer writes to a file (an output redirect, a `tee`
-///     operand), that file's BASENAME occurs nowhere in the command outside
-///     the opener line and the body — not before the opener, not in the
-///     closing line, not after it. A substring test, so it is independent of
-///     how a later line spells the path (`sh x.txt`, `. ./x.txt`,
-///     `sh < x.txt`, `mv x.txt x.sh`, `chmod +x x.txt`): any mention keeps the
-///     body judged. `/dev/null` is exempt.
+///     backslash (with an unquoted delimiter the shell expands those);
+///   * every line AFTER the closing delimiter is blank or a comment. A later
+///     line could reach the written file by any spelling, so no later command
+///     is allowed at all;
+///   * no line outside the body contains whitespace other than space, tab and
+///     newline. A carriage return in particular: bash keeps a `\r` in the
+///     delimiter word, so `<<'EOF'\r` is closed only by a line `EOF\r`, while
+///     [`here_document_openers`] ends the word at it.
 ///
-/// Nothing is removed at all when the command could change what the consumer
-/// word runs: it defines a function named `cat`, `tee` or `git` (`NAME()`
-/// with or without spaces), or contains the word `function`, `alias`,
-/// `unalias`, `hash` or `enable`, or assigns `PATH` (`PATH=`, `PATH+=`, or
-/// `PATH` together with `export`/`declare`/`typeset`/`readonly`/`local`).
-/// The test is over the whole command text, so it is coarse in the
-/// restrictive direction.
+/// What is kept when the body is removed: the opener line and the closing
+/// delimiter line, plus the permitted lines around them. So the opener's
+/// redirect targets are still judged, with the `cd` in force.
 ///
-/// The scan STOPS — and leaves everything from the current line onwards
-/// untouched, i.e. judged — the moment it meets text whose quoting it does not
-/// model exactly: a backslash (other than the `<<\TAG` delimiter spelling), a
-/// backtick, `$(`, `$'`, a `${…}` that is not a plain `${NAME}`, a `#` glued to
-/// an operator, any whitespace character other than space, tab and newline on a
-/// code line (a carriage return in particular: bash keeps a `\r` in the
-/// delimiter word, so `<<'EOF'\r` is closed only by a line `EOF\r`, while
-/// [`here_document_openers`] ends the word at it), an unclosed body, or a
-/// here-document it will not remove.
-/// Losing track of where code ends and a body begins is the one way this scan
-/// could hide a command, so it never continues past a point where it might
-/// have lost track.
+/// OVER-BLOCKS, accepted: anything after the close (`…EOF` then
+/// `git add notes.md`) or before the opener (`X=1`) makes the body judged as
+/// code, so a body that merely mentions a destructive command is denied or
+/// asked there. That is the restrictive direction.
+///
+/// RESIDUALS, not covered:
+///   * a data file written here can be executed by a LATER, separate tool
+///     call. That call is judged on its own text, and this gate never re-reads
+///     the file;
+///   * the Bash tool starts every call in a fresh shell, so a function or alias
+///     from an earlier call does not persist, but that shell IS initialised
+///     from the user's profile. A profile that redefines `cat`, `tee` or `git`
+///     is trusted, and out of scope here.
 fn strip_data_here_document_bodies(cmd: &str) -> std::borrow::Cow<'_, str> {
-    if !cmd.contains("<<") || may_redefine_here_document_consumer(cmd) {
-        return std::borrow::Cow::Borrowed(cmd);
+    let unchanged = std::borrow::Cow::Borrowed(cmd);
+    if !cmd.contains("<<") {
+        return unchanged;
     }
-    let chars: Vec<(usize, char)> = cmd.char_indices().collect();
-    let mut out = String::with_capacity(cmd.len());
-    let mut stripped = false;
-    // Byte offset where the current logical line starts in `cmd`, and that
-    // line's text with any comment removed.
-    let mut line_start = 0usize;
-    let mut code = String::new();
+    let lines: Vec<&str> = cmd.split_inclusive('\n').collect();
+    let text = |l: &str| l.strip_suffix('\n').unwrap_or(l).to_string();
+    let odd_whitespace = |l: &str| {
+        l.chars()
+            .any(|c| c.is_whitespace() && !matches!(c, ' ' | '\t' | '\n'))
+    };
+    let inert = |l: &str| {
+        let t = l.trim_matches([' ', '\t']);
+        t.is_empty() || t.starts_with('#')
+    };
+    // Lines before the opener.
+    let mut idx = 0;
+    while idx < lines.len() {
+        let l = text(lines[idx]);
+        if odd_whitespace(&l) {
+            return unchanged;
+        }
+        if !(inert(&l) || permitted_prefix_line(&l)) {
+            break;
+        }
+        idx += 1;
+    }
+    let Some(opener_line) = lines.get(idx).map(|l| text(l)) else {
+        return unchanged;
+    };
+    let openers = here_document_openers(&opener_line);
+    if openers.len() != 1
+        || openers[0].delimiter.is_empty()
+        || opener_line.contains(['$', '`'])
+        || !quotes_balance(&opener_line)
+        || !here_document_consumer_is_data(&opener_line)
+    {
+        return unchanged;
+    }
+    // The body, up to the first exact delimiter line.
+    let Some(close) = (idx + 1..lines.len())
+        .find(|&j| segment_closes_here_document(&text(lines[j]), &openers[0]))
+    else {
+        return unchanged;
+    };
+    let body: String = lines[idx + 1..close].concat();
+    if !here_document_delimiter_is_quoted(&opener_line) && body.contains(['$', '`', '\\']) {
+        return unchanged;
+    }
+    // Lines after the close.
+    if lines[close + 1..]
+        .iter()
+        .any(|l| odd_whitespace(&text(l)) || !inert(&text(l)))
+    {
+        return unchanged;
+    }
+    let mut out: String = lines[..=idx].concat();
+    out.push_str(&lines[close..].concat());
+    std::borrow::Cow::Owned(out)
+}
+
+/// True when `line` has no unterminated `'` or `"` quote.
+fn quotes_balance(line: &str) -> bool {
     let (mut in_s, mut in_d) = (false, false);
-    let mut i = 0;
-    let stop = |out: &mut String, line_start: usize| out.push_str(&cmd[line_start..]);
-    while i < chars.len() {
-        let (pos, c) = chars[i];
-        if c.is_whitespace() && !matches!(c, ' ' | '\t' | '\n') {
-            stop(&mut out, line_start);
-            return std::borrow::Cow::Owned(out);
-        }
-        if in_s {
-            code.push(c);
-            if c == '\'' {
-                in_s = false;
-            }
-            i += 1;
-            continue;
-        }
-        let next = chars.get(i + 1).map(|&(_, n)| n);
+    for c in line.chars() {
         match c {
-            '\'' if !in_d => {
-                in_s = true;
-                code.push(c);
-            }
-            '"' => {
-                in_d = !in_d;
-                code.push(c);
-            }
-            '\\' => {
-                let trimmed = code.trim_end_matches(['-', ' ', '\t']);
-                if !in_d && trimmed.ends_with("<<") && !trimmed.ends_with("<<<") {
-                    // `<<\TAG`: the backslash quotes the delimiter.
-                    code.push(c);
-                    if let Some(n) = next {
-                        code.push(n);
-                        i += 1;
-                    }
-                } else {
-                    stop(&mut out, line_start);
-                    return std::borrow::Cow::Owned(out);
-                }
-            }
-            '`' => {
-                stop(&mut out, line_start);
-                return std::borrow::Cow::Owned(out);
-            }
-            '$' if matches!(next, Some('(' | '\'')) => {
-                stop(&mut out, line_start);
-                return std::borrow::Cow::Owned(out);
-            }
-            '$' if next == Some('{') => {
-                // Only a plain `${NAME}` is passed over; anything else
-                // (`${x:-"a b"}`, nested quotes) is not modelled.
-                let mut j = i + 2;
-                while chars
-                    .get(j)
-                    .is_some_and(|&(_, ch)| ch.is_ascii_alphanumeric() || ch == '_')
-                {
-                    j += 1;
-                }
-                if j == i + 2 || chars.get(j).map(|&(_, ch)| ch) != Some('}') {
-                    stop(&mut out, line_start);
-                    return std::borrow::Cow::Owned(out);
-                }
-                for &(_, ch) in &chars[i..=j] {
-                    code.push(ch);
-                }
-                i = j;
-            }
-            '#' if !in_d && (code.is_empty() || code.ends_with(char::is_whitespace)) => {
-                // A comment: nothing up to the newline is code, so a `<<` in
-                // it opens nothing. The newline itself is handled next round.
-                while chars.get(i + 1).is_some_and(|&(_, ch)| ch != '\n') {
-                    i += 1;
-                }
-            }
-            '#' if !in_d && code.ends_with([';', '&', '|', '(', ')', '<', '>']) => {
-                stop(&mut out, line_start);
-                return std::borrow::Cow::Owned(out);
-            }
-            '\n' if !in_d => {
-                let line_end = pos + 1;
-                let openers = here_document_openers(&code);
-                if openers.is_empty() {
-                    out.push_str(&cmd[line_start..line_end]);
-                    line_start = line_end;
-                    code.clear();
-                    i += 1;
-                    continue;
-                }
-                let opener = &openers[0];
-                let targets = match here_document_consumer_is_data(&code) {
-                    Some(targets) if openers.len() == 1 && !opener.delimiter.is_empty() => targets,
-                    _ => {
-                        stop(&mut out, line_start);
-                        return std::borrow::Cow::Owned(out);
-                    }
-                };
-                let mut close: Option<(usize, usize)> = None;
-                let mut off = line_end;
-                for raw in cmd[line_end..].split_inclusive('\n') {
-                    let text = raw.strip_suffix('\n').unwrap_or(raw);
-                    if segment_closes_here_document(text, opener) {
-                        close = Some((off, off + raw.len()));
-                        break;
-                    }
-                    off += raw.len();
-                }
-                let Some((close_start, close_end)) = close else {
-                    stop(&mut out, line_start);
-                    return std::borrow::Cow::Owned(out);
-                };
-                let body = &cmd[line_end..close_start];
-                if !here_document_delimiter_is_quoted(&code) && body.contains(['$', '`', '\\']) {
-                    stop(&mut out, line_start);
-                    return std::borrow::Cow::Owned(out);
-                }
-                // A file the body is written to must not be named anywhere
-                // else on the line: a later `sh x.txt` would run the body.
-                let (before, after) = (&cmd[..line_start], &cmd[close_start..]);
-                let mentioned_elsewhere = targets.iter().any(|t| {
-                    let base = t.rsplit('/').next().unwrap_or(t);
-                    base.is_empty() || before.contains(base) || after.contains(base)
-                });
-                if mentioned_elsewhere {
-                    stop(&mut out, line_start);
-                    return std::borrow::Cow::Owned(out);
-                }
-                out.push_str(&cmd[line_start..line_end]);
-                out.push_str(&cmd[close_start..close_end]);
-                stripped |= !body.is_empty();
-                line_start = close_end;
-                code.clear();
-                while i < chars.len() && chars[i].0 < close_end {
-                    i += 1;
-                }
-                continue;
-            }
-            _ => code.push(c),
+            '\'' if !in_d => in_s = !in_s,
+            '"' if !in_s => in_d = !in_d,
+            _ => {}
         }
-        i += 1;
     }
-    out.push_str(&cmd[line_start..]);
-    if stripped {
-        std::borrow::Cow::Owned(out)
-    } else {
-        std::borrow::Cow::Borrowed(cmd)
+    !in_s && !in_d
+}
+
+/// The lines [`strip_data_here_document_bodies`] permits BEFORE the opener:
+/// `set -e`, `set -eu`, `set -euo pipefail`, `cd <literal path>`, and
+/// `mkdir -p <literal path>…`. Nothing else.
+fn permitted_prefix_line(line: &str) -> bool {
+    let literal = |w: &str| {
+        let rest = w.strip_prefix('~').unwrap_or(w);
+        !w.is_empty()
+            && rest.chars().all(|c| {
+                c.is_ascii_alphanumeric()
+                    || matches!(c, '/' | '.' | '_' | '-' | '+' | ',' | '@' | '%' | ':' | '=')
+            })
+    };
+    let words: Vec<&str> = line.split([' ', '\t']).filter(|w| !w.is_empty()).collect();
+    match words.as_slice() {
+        ["set", "-e"] | ["set", "-eu"] | ["set", "-euo", "pipefail"] => true,
+        ["cd", path] => literal(path),
+        ["mkdir", "-p", paths @ ..] => !paths.is_empty() && paths.iter().all(|p| literal(p)),
+        _ => false,
     }
 }
 
@@ -3243,10 +3169,10 @@ fn strip_data_here_document_bodies(cmd: &str) -> std::borrow::Cow<'_, str> {
 /// 6cf12ce9 ruling `cat > run.sh <<'EOF'`): a body headed there stays judged.
 ///
 /// This is a statement about the NAME only. Any file can be executed
-/// (`sh notes.txt`). Within one command line that is covered by the
-/// mentioned-elsewhere rule in [`strip_data_here_document_bodies`]; a LATER,
-/// separate command that executes the file is NOT covered and is a known
-/// residual of treating these bodies as data.
+/// (`sh notes.txt`). Within one command that is covered by the shape rule in
+/// [`strip_data_here_document_bodies`], which allows no command after the
+/// here-document at all; a LATER, separate command that executes the file is
+/// NOT covered and is a known residual of treating these bodies as data.
 const DATA_FILE_EXTENSIONS: &[&str] =
     &["txt", "md", "markdown", "rst", "adoc", "csv", "tsv", "log"];
 
@@ -3258,40 +3184,6 @@ fn unquote_data_file_target(target: &str) -> &str {
         }
         _ => target,
     }
-}
-
-/// True when the command could make the consumer word of a here-document
-/// (`cat`, `tee`, `git`) run something other than the real program: a function
-/// definition with that name (`cat()`, `cat ()`), or any of the words
-/// `function`, `alias`, `unalias`, `hash`, `enable`, or a `PATH` assignment
-/// (`PATH=`, `PATH+=`, or `PATH` next to `export`/`declare`/`typeset`/
-/// `readonly`/`local`). Coarse on purpose: a true here only means bodies stay
-/// judged as code.
-fn may_redefine_here_document_consumer(cmd: &str) -> bool {
-    let compact: String = cmd.chars().filter(|c| !c.is_whitespace()).collect();
-    if ["cat()", "tee()", "git()"]
-        .iter()
-        .any(|f| compact.contains(f))
-    {
-        return true;
-    }
-    let words: Vec<&str> = cmd
-        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-        .filter(|w| !w.is_empty())
-        .collect();
-    if words
-        .iter()
-        .any(|w| matches!(*w, "function" | "alias" | "unalias" | "hash" | "enable"))
-    {
-        return true;
-    }
-    if compact.contains("PATH=") || compact.contains("PATH+=") {
-        return true;
-    }
-    words.contains(&"PATH")
-        && words
-            .iter()
-            .any(|w| matches!(*w, "export" | "declare" | "typeset" | "readonly" | "local"))
 }
 
 /// True when `target` (one shell word, quotes still on) names a file whose
@@ -3355,11 +3247,8 @@ fn strip_output_redirect_operator(word: &str) -> Option<&str> {
     None
 }
 
-/// `Some(files)` when the logical line `line` (comments already removed) hands
-/// its one here-document body to a program on a CLOSED list of readers that
-/// only store or print it; `files` are the (unquoted) files it writes the body
-/// to, `/dev/null` excluded, for the caller's mentioned-elsewhere check. `None`
-/// for every other line. The readers:
+/// True when the opener line `line` hands its one here-document body to a
+/// program on a CLOSED list of readers that only store or print it:
 ///   * a bare `cat` (or `cat -`) with no file operand. It prints the body, or
 ///     writes it to its output redirect;
 ///   * `tee`, whose only operands are `-a`/`--append` and DATA files
@@ -3381,29 +3270,31 @@ fn strip_output_redirect_operator(word: &str) -> Option<&str> {
 /// `cat <<'EOF'; x` and `cat <<'EOF' && x` are never data.
 ///
 /// Every other reader, known or not (bash, sh, zsh, python3, node, perl,
-/// eval, xargs, …), answers `None`. A `None` here only means the body is
-/// judged as code, as it always was.
-fn here_document_consumer_is_data(line: &str) -> Option<Vec<String>> {
+/// eval, xargs, …), answers false. A false here only means the body is judged
+/// as code, as it always was.
+fn here_document_consumer_is_data(line: &str) -> bool {
     let raw = quote_aware_words(line);
     let mut words: Vec<&str> = Vec::new();
-    let mut targets: Vec<String> = Vec::new();
     let mut saw_here_document = false;
     let mut i = 0;
     while i < raw.len() {
         let w = raw[i].as_str();
         if let Some(rest) = w.strip_prefix("<<") {
             if rest.starts_with('<') || saw_here_document {
-                return None;
+                return false;
             }
             let rest = rest.strip_prefix('-').unwrap_or(rest);
             let spelling = if rest.is_empty() {
                 i += 1;
-                raw.get(i)?.as_str()
+                match raw.get(i) {
+                    Some(w) => w.as_str(),
+                    None => return false,
+                }
             } else {
                 rest
             };
             if !plain_here_document_delimiter(spelling) {
-                return None;
+                return false;
             }
             saw_here_document = true;
             i += 1;
@@ -3412,14 +3303,16 @@ fn here_document_consumer_is_data(line: &str) -> Option<Vec<String>> {
         if let Some(glued) = strip_output_redirect_operator(w) {
             let target = if glued.is_empty() {
                 i += 1;
-                raw.get(i)?.as_str()
+                match raw.get(i) {
+                    Some(w) => w.as_str(),
+                    None => return false,
+                }
             } else {
                 glued
             };
             if !is_data_file_target(target) {
-                return None;
+                return false;
             }
-            targets.push(unquote_data_file_target(target).to_string());
             i += 1;
             continue;
         }
@@ -3431,25 +3324,20 @@ fn here_document_consumer_is_data(line: &str) -> Option<Vec<String>> {
             .iter()
             .any(|w| w.contains(['<', '>', '\\', '`', '(', ')', ';', '&', '|']))
     {
-        return None;
+        return false;
     }
-    let is_data = match words.first().copied() {
+    match words.first().copied() {
         Some("cat") => words[1..].iter().all(|w| *w == "-"),
-        Some("tee") => words[1..].iter().all(|w| {
-            if matches!(*w, "-a" | "--append") {
-                return true;
-            }
-            let ok = is_data_file_target(w);
-            if ok {
-                targets.push(unquote_data_file_target(w).to_string());
-            }
-            ok
-        }),
+        Some("tee") => words[1..]
+            .iter()
+            .all(|w| matches!(*w, "-a" | "--append") || is_data_file_target(w)),
         Some("git") => {
             let rest = &words[1..];
-            let sub = git_subcommand_index(rest)?;
+            let Some(sub) = git_subcommand_index(rest) else {
+                return false;
+            };
             if rest[sub] != "commit" {
-                return None;
+                return false;
             }
             let args = &rest[sub + 1..];
             args.iter().enumerate().any(|(j, a)| match *a {
@@ -3459,11 +3347,7 @@ fn here_document_consumer_is_data(line: &str) -> Option<Vec<String>> {
             })
         }
         _ => false,
-    };
-    is_data.then(|| {
-        targets.retain(|t| t != "/dev/null");
-        targets
-    })
+    }
 }
 
 /// True when this segment opens a compound command whose body may run zero
@@ -13835,10 +13719,14 @@ and must not be Allowed: {failing:?}"
     #[test]
     fn strip_data_here_document_bodies_keeps_opener_and_close() {
         assert_eq!(
-            strip_data_here_document_bodies("cat <<'EOF' > a.txt\nrm -rf /x\nmore\nEOF\nls"),
-            "cat <<'EOF' > a.txt\nEOF\nls"
+            strip_data_here_document_bodies(
+                "cd /w\ncat <<'EOF' > a.txt\nrm -rf /x\nmore\nEOF\n# c\n"
+            ),
+            "cd /w\ncat <<'EOF' > a.txt\nEOF\n# c\n"
         );
         for untouched in [
+            "cat <<'EOF' > a.txt\nrm -rf /x\nEOF\nls",
+            "X=1\ncat <<'EOF' > a.txt\nrm -rf /x\nEOF",
             "bash <<'EOF'\nrm -rf /x\nEOF",
             "cat <<'EOF' | sh\nrm -rf /x\nEOF",
             "cat <<'EOF' > run.sh\nrm -rf /x\nEOF",

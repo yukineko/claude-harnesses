@@ -82,7 +82,7 @@ fn data_reader_bodies_are_not_judged_as_commands() {
         // Unquoted delimiter, but nothing in the body for the shell to expand.
         format!("cat <<EOF > a.txt\n{RM}\nEOF"),
         // A comment before the opener and an apostrophe in the body.
-        format!("# write the fixture\ncat <<'EOF' > a.txt\nit's {RM}\nEOF\necho done"),
+        format!("# write the fixture\nset -e\ncd /private/tmp\ncat <<'EOF' > a.txt\nit's {RM}\nEOF\n# done\n"),
     ];
     let mut wrong = Vec::new();
     for cmd in &cases {
@@ -124,6 +124,10 @@ fn bodies_that_may_run_stay_judged() {
         format!("enable -n cat\ncat <<'EOF'\n{RM}\nEOF"),
         // The data file is fed to an interpreter later on the same line.
         format!("cat <<'EOF' > x.txt\n{RM}\nEOF\nxargs -a x.txt sh -c"),
+        // Anything but the permitted shapes before or after the here-document.
+        format!("cat <<'EOF' > a.txt\n{RM}\nEOF\necho done"),
+        format!("X=1\ncat <<'EOF' > a.txt\n{RM}\nEOF"),
+        format!("cd $D\ncat <<'EOF' > a.txt\n{RM}\nEOF"),
         // Formats that commonly hold executable configuration are not data.
         format!("cat <<'EOF' > a.json\n{RM}\nEOF"),
         format!("cat <<'EOF' > a.toml\n{RM}\nEOF"),

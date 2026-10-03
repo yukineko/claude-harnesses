@@ -35019,3 +35019,118 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 887 filtered out; fi
 rev = "f51e281e939680fb09866da6a6ff4a0acafc47f0"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "51595c41"
+title = "condukt: worktree の作成基点(current HEAD)とマージ先(default_branch)の非対称を解消する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+iro 0bb8dcfd で実測・判定済み。worktree.rs:726-729 は start-point 無しの 'git worktree add -b' ＝着手時の HEAD から切る。main.rs:3174 の merge は常に cfg.default_branch へ。この2つが食い違うと、feature ブランチ上で走らせた run が **feature の履歴ごと default_branch へ統合する**（2026-09-13 run-20260913-130340-73812 で iro の main が実機A/B未の広角補正を抱えたまま進んだ）。SKILL.md/README.md はこの組み合わせに一切触れていない（'feature ブランチ'/'start-point'/'base branch'/'基点' で 0 ヒット）。
+
+取り得る決着は3つで、どれを選ぶかが本チケットの判断:
+(a) 作成側を default_branch 基点に揃える（worktree add -b <branch> <default_branch>）— マージ先と一致するが、feature ブランチ上のコードに依存するタスクが土台を失う。
+(b) マージ先を『着手時の HEAD のブランチ』にする — create 時に基点 ref を記録する状態追加が要る。意図（元の場所へ戻す）を保つのはこちら。
+(c) 作成時の基点 sha を記録し、**merge 時にそれが default_branch の祖先でなければ止めて報告する**（統合はせず人へ返す）。ハッピーパスを変えずに『黙って main が動く』だけを潰す最小案。
+
+いずれにせよ SKILL.md Phase 7 に『どのブランチへマージされるか』を明記すること。注意: 現在 harness の配備バイナリは 35 件が harness-core 0.2.17 のまま（7357bc96）なので、source を直しても rollout するまで挙動は変わらない。
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/condukt/tests/backlog_51595c41.rs (rev 596108b9): Create base (HEAD) vs merge target (default_branch) asymmetry; test is GREEN under any of fixes a/b/c."""
+created_at = 1789291438
+updated_at = 1791053097
+weight = 0.0
+issue_number = 596
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/596"
+issue_closed_at = 1791053099
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test verifier_51595c41"
+exit = 0
+passed = 5
+rev = "c8c654241238c3dbef3bffbd75fc1431ed2b60ea"
+observed_at = 1791053067
+output_digest = "sha256:68abda84d93764f679bc305099d6d423939bb6e4f42570d71fdf4e5f0fef3725"
+excerpt = """
+
+running 5 tests
+test ancestry_probe_error_exit_is_refused_and_main_unchanged ... ok
+test resolve_merge_refuses_base_off_main_and_main_unchanged ... ok
+test record_pointing_at_a_blob_is_refused_and_main_unchanged ... ok
+test hand_cut_branch_without_record_is_refused_and_main_unchanged ... ok
+test create_from_main_then_main_advances_still_merges ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.20s
+
+   Compiling condukt v0.7.218 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.52s
+     Running tests/verifier_51595c41.rs (target/debug/deps/verifier_51595c41-ac585c3b662d652f)
+"""
+
+[task.closure.red]
+rev = "387cb95c5c9d2dc619abdbc9640a738a33c6b167"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "43393ce2"
+title = "condukt の run-state も worktree ごとに別ストアへ分裂している (claims だけでなく project_dir 全体)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p1",
+    "fail-open",
+    "condukt",
+]
+touched_files = []
+status = "done"
+notes = """
+測定点 main 874d6d47 / 2026-09-13. d83b0e8f (claim registry の worktree 分裂) を調査中に発見した同型の別件。crates/condukt/src/state.rs:331 の project_dir も cfg.state_dir.join(project_key(repo_root(cwd))) であり、claim registry と同じく linked worktree では repo_root が worktree 自身を返すため別キーになる。実測: /Users/yuki/.condukt/state/ 配下に session- で始まるキーのディレクトリが多数あり、そのうち session-2444be10-d7db0410 は run-20260913-133807-77531.json と .decomposition.json と .journal.jsonl と .checkpoints.json を、session-b57a58c3-3fcd5268 は run-20260811-230435-19389 一式を、session-b9a78b46-e56b248f は run-20260805-224954-26962 ほか 2 run を保持している。つまり worktree を cwd にして作られた run は main から見えない。読み 1 (実在の欠陥): run-state も main worktree root で addressing すべきで、condukt status や state list が cwd 次第で別集合を返すのは二重着手と孤児 run の温床。読み 2 (意図どおり): run は作った tree に属するローカル状態であり分裂は無害。見分け方: condukt state list を main の cwd と /Users/yuki/src/.harness-worktrees/session-2444be10 の cwd の両方で実行し run-20260913-133807-77531 が前者に出るかを見る。両方に出れば読み 2、片方だけなら読み 1。注意: d83b0e8f では claim 経路のみを局所修正し project_dir は意図的に触っていない。repo_root を全体で変えると既存の run-state が孤児化するため。関連 d83b0e8f
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Still open: RED pin --include-ignored backlog_43393ce2_4708069b -> FAILED (run created in worktree listed from main: got ""; worktree control listed it). Not a duplicate of 4708069b: harness-core/src/; test crates/condukt/tests/backlog_audit_s01.rs (rev e70d48dd)"""
+created_at = 1789290713
+updated_at = 1791053122
+weight = 0.0
+issue_number = 592
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/592"
+issue_closed_at = 1791053124
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test verifier_43393ce2"
+exit = 0
+passed = 5
+rev = "c8c654241238c3dbef3bffbd75fc1431ed2b60ea"
+observed_at = 1791053103
+output_digest = "sha256:b0d71ba4ce8b605685806af8bc32dac5fba45d1a80fc55b29005e35f0294c473"
+excerpt = """
+
+running 5 tests
+test verifier_garbage_gitfile_is_nonzero_for_list_and_show ... ok
+test verifier_main_tree_run_is_shown_and_listed_from_worktree ... ok
+test verifier_unreadable_legacy_dir_is_an_error_not_a_canonical_fork ... ok
+test verifier_worktree_run_set_from_main_tree_has_one_canonical_copy ... ok
+test verifier_legacy_run_write_back_never_forks ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.79s
+
+   Compiling condukt v0.7.218 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running tests/verifier_43393ce2.rs (target/debug/deps/verifier_43393ce2-913066a6de4f9bdc)
+"""
+
+[task.closure.red]
+rev = "bffb0f8b0d92443588822d0bf46523d8c6be2cde"
+exit = 101
+kind = "behavioural"

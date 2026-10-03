@@ -3008,29 +3008,6 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/574"
 rev = 0
 
 [[task]]
-id = "43393ce2"
-title = "condukt の run-state も worktree ごとに別ストアへ分裂している (claims だけでなく project_dir 全体)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p1",
-    "fail-open",
-    "condukt",
-]
-touched_files = []
-status = "pending"
-notes = """
-測定点 main 874d6d47 / 2026-09-13. d83b0e8f (claim registry の worktree 分裂) を調査中に発見した同型の別件。crates/condukt/src/state.rs:331 の project_dir も cfg.state_dir.join(project_key(repo_root(cwd))) であり、claim registry と同じく linked worktree では repo_root が worktree 自身を返すため別キーになる。実測: /Users/yuki/.condukt/state/ 配下に session- で始まるキーのディレクトリが多数あり、そのうち session-2444be10-d7db0410 は run-20260913-133807-77531.json と .decomposition.json と .journal.jsonl と .checkpoints.json を、session-b57a58c3-3fcd5268 は run-20260811-230435-19389 一式を、session-b9a78b46-e56b248f は run-20260805-224954-26962 ほか 2 run を保持している。つまり worktree を cwd にして作られた run は main から見えない。読み 1 (実在の欠陥): run-state も main worktree root で addressing すべきで、condukt status や state list が cwd 次第で別集合を返すのは二重着手と孤児 run の温床。読み 2 (意図どおり): run は作った tree に属するローカル状態であり分裂は無害。見分け方: condukt state list を main の cwd と /Users/yuki/src/.harness-worktrees/session-2444be10 の cwd の両方で実行し run-20260913-133807-77531 が前者に出るかを見る。両方に出れば読み 2、片方だけなら読み 1。注意: d83b0e8f では claim 経路のみを局所修正し project_dir は意図的に触っていない。repo_root を全体で変えると既存の run-state が孤児化するため。関連 d83b0e8f
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Still open: RED pin --include-ignored backlog_43393ce2_4708069b -> FAILED (run created in worktree listed from main: got ""; worktree control listed it). Not a duplicate of 4708069b: harness-core/src/; test crates/condukt/tests/backlog_audit_s01.rs (rev e70d48dd)"""
-created_at = 1789290713
-updated_at = 1790983127
-weight = 0.0
-issue_number = 592
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/592"
-rev = 0
-
-[[task]]
 id = "b53bc124"
 title = "flow の sink が backlog の status だけを閉じて condukt の run-state を閉じないため deploy タスクが running で残る"
 project = "/Users/yuki/src/harness"
@@ -3145,32 +3122,6 @@ updated_at = 1790983182
 weight = 0.0
 issue_number = 589
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/589"
-rev = 0
-
-[[task]]
-id = "51595c41"
-title = "condukt: worktree の作成基点(current HEAD)とマージ先(default_branch)の非対称を解消する"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-iro 0bb8dcfd で実測・判定済み。worktree.rs:726-729 は start-point 無しの 'git worktree add -b' ＝着手時の HEAD から切る。main.rs:3174 の merge は常に cfg.default_branch へ。この2つが食い違うと、feature ブランチ上で走らせた run が **feature の履歴ごと default_branch へ統合する**（2026-09-13 run-20260913-130340-73812 で iro の main が実機A/B未の広角補正を抱えたまま進んだ）。SKILL.md/README.md はこの組み合わせに一切触れていない（'feature ブランチ'/'start-point'/'base branch'/'基点' で 0 ヒット）。
-
-取り得る決着は3つで、どれを選ぶかが本チケットの判断:
-(a) 作成側を default_branch 基点に揃える（worktree add -b <branch> <default_branch>）— マージ先と一致するが、feature ブランチ上のコードに依存するタスクが土台を失う。
-(b) マージ先を『着手時の HEAD のブランチ』にする — create 時に基点 ref を記録する状態追加が要る。意図（元の場所へ戻す）を保つのはこちら。
-(c) 作成時の基点 sha を記録し、**merge 時にそれが default_branch の祖先でなければ止めて報告する**（統合はせず人へ返す）。ハッピーパスを変えずに『黙って main が動く』だけを潰す最小案。
-
-いずれにせよ SKILL.md Phase 7 に『どのブランチへマージされるか』を明記すること。注意: 現在 harness の配備バイナリは 35 件が harness-core 0.2.17 のまま（7357bc96）なので、source を直しても rollout するまで挙動は変わらない。
-
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/condukt/tests/backlog_51595c41.rs (rev 596108b9): Create base (HEAD) vs merge target (default_branch) asymmetry; test is GREEN under any of fixes a/b/c."""
-created_at = 1789291438
-updated_at = 1790983160
-weight = 0.0
-issue_number = 596
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/596"
 rev = 0
 
 [[task]]
@@ -12846,4 +12797,175 @@ updated_at = 1791052321
 weight = 0.0
 issue_number = 1313
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1313"
+rev = 0
+
+[[task]]
+id = "50158d9d"
+title = "condukt worktree merge accepts a conduktBase read from global/system gitconfig, not only the repo-local branch record"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "verifier side finding on 51595c41 (merge 8730b720): the base is read via git config without --local, so a branch.<b>.conduktBase in ~/.gitconfig is honoured as if worktree create had recorded it. Unverified whether reachable in practice; needs a repro test."
+created_at = 1791053141
+updated_at = 1791053141
+weight = 0.0
+issue_number = 1314
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1314"
+rev = 0
+
+[[task]]
+id = "08aad783"
+title = "condukt merge-base-undetermined on git timeout does not name which git call timed out"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "verifier side finding on 51595c41: the timeout path of the conduktBase/merge-base probe surfaces merge-base-undetermined without the diagnostic naming the subprocess, so a human cannot tell what to retry."
+created_at = 1791053143
+updated_at = 1791053143
+weight = 0.0
+issue_number = 1315
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1315"
+rev = 0
+
+[[task]]
+id = "df3c986c"
+title = "condukt worktree merge drops rollback errors with let underscore after a merge-base refusal"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "verifier side finding on 51595c41: on the refusal path the restore of the original branch is done with a discarded Result, so a failed rollback leaves the repo on default_branch silently. Possible fail-open on the cleanup path; needs a repro."
+created_at = 1791053144
+updated_at = 1791053144
+weight = 0.0
+issue_number = 1316
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1316"
+rev = 0
+
+[[task]]
+id = "135af7af"
+title = "condukt merge-base gate does not cover a feature branch merged INTO a task branch after create"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "verifier side finding on 51595c41: the gate checks only the recorded creation base; commits from an off-default feature branch merged into the task branch later still ride onto default_branch. Scope question: is this in the ticket's threat model."
+created_at = 1791053146
+updated_at = 1791053146
+weight = 0.0
+issue_number = 1317
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1317"
+rev = 0
+
+[[task]]
+id = "d87b4305"
+title = "condukt state init in the main tree with a legacy run id shadows the legacy run"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "verifier side finding on 43393ce2 (merge bc90c229): run_dir prefers the canonical dir, so creating a canonical run with the same id as a legacy (session-root-keyed) run hides the legacy one."
+created_at = 1791053147
+updated_at = 1791053147
+weight = 0.0
+issue_number = 1318
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1318"
+rev = 0
+
+[[task]]
+id = "beae70df"
+title = "condukt run_dir: an unreadable legacy state dir blocks creating new runs"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "verifier side finding on 43393ce2: an IO error probing the legacy dir is propagated on the create path too, so a permission problem in an old dir stops all new runs. Fail-closed but over-broad."
+created_at = 1791053148
+updated_at = 1791053148
+weight = 0.0
+issue_number = 1319
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1319"
+rev = 0
+
+[[task]]
+id = "33a8f5fb"
+title = "condukt run-state keying by main worktree root is untested for a symlinked main root"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "verifier side finding on 43393ce2: no test covers a main worktree reached via a symlink, where canonicalisation could split one repo into two state roots."
+created_at = 1791053150
+updated_at = 1791053150
+weight = 0.0
+issue_number = 1320
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1320"
+rev = 0
+
+[[task]]
+id = "1eae7cb9"
+title = "autoflow still keys its state off repo_root rather than the main worktree root"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "verifier side finding on 43393ce2: condukt moved to main_worktree_root but autoflow did not, so the two disagree when invoked from a linked worktree."
+created_at = 1791053152
+updated_at = 1791053152
+weight = 0.0
+issue_number = 1321
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1321"
+rev = 0
+
+[[task]]
+id = "d5efedb7"
+title = "condukt state show from the main tree cannot see runs created from a session worktree before 0.7.217"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "observed 2026-10-04 after rolling out 0.7.218: state show --run run-20261004-025611-67375 from /Users/yuki/src/harness fails with no run at .condukt/state/harness-e77d23c7/...; the same command from the session worktree succeeds. Legacy fallback only resolves from the tree that created the run."
+created_at = 1791053154
+updated_at = 1791053154
+weight = 0.0
+issue_number = 1322
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1322"
 rev = 0

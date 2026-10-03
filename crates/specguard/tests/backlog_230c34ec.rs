@@ -120,7 +120,6 @@ fn backlog_230c34ec_map_spec_doc_control() {
 }
 
 #[test]
-#[ignore = "backlog 230c34ec: open defect, remove ignore when fixed"]
 fn backlog_230c34ec_tracked_spec_docs_binding_makes_brief_covered() {
     let dir = repo("tracked", false);
     let (verdict, out) = brief_verdict(&dir);

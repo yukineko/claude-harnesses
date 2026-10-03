@@ -1,22 +1,14 @@
 """Verifier round 2 for backlog e033c406 (on 55769b61). Written by the condukt
 verifier, not the implementer.
 
-Pins two bypasses of the hook-machinery gate in classes its docstring claims to
-handle ("git subcommands that write working-tree paths named by a pathspec …
-when a pathspec … as a git glob (whose `*` crosses `/` and leading dots) can
-match `.githooks`"):
-
-  * a git glob pathspec that matches a FILE under .githooks without matching
-    the stand-in `.githooks/x` (`'*pre-commit'`): observed with real git to
-    restore an old `.githooks/pre-commit` (checkout) or delete it (rm);
-  * `-p` treated as an option that takes a value, so it swallows the pathspec
-    of `git restore -s OLD -p .githooks` / `git stash push -p .githooks`
-    (observed with real git: restore -p with "y" on stdin rewrites the hook).
-
-Also pins the brick bound: a corrupt ledger older than 20 minutes is moved
-aside, and (since e2399b08, by the coordinator's instruction) its valid deny
-lines are salvaged into a fresh active ledger, so Stop still blocks on a
+Pins the brick bound: a corrupt ledger older than 20 minutes is moved aside,
+and (since e2399b08, by the coordinator's instruction) its valid deny lines are
+salvaged into a fresh active ledger, so Stop still blocks on a
 refused-then-changed target.
+
+User ruling 2026-10-04: the Bash side of e033c406 is dropped with the observing
+guard-maintree-bash.py. The git-pathspec-into-hooks Bash tests were removed;
+the denies below are created through guard-maintree-edit.py.
 
 Hooks run as subprocesses against a throwaway repo; HOME and TMPDIR point at a
 temp dir, so the real ~/.claude/state and the shared temp dir are not touched.
@@ -36,7 +28,7 @@ import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-BASH = os.path.join(HERE, "guard-maintree-bash.py")
+EDIT = os.path.join(HERE, "guard-maintree-edit.py")
 STOP = os.path.join(HERE, "stop-verify-worktree.py")
 
 
@@ -75,65 +67,33 @@ class _Fixture(unittest.TestCase):
                               text=True, capture_output=True, env=env,
                               cwd=self.main, timeout=60)
 
-    def bash(self, cmd, sid="v2", cwd=None, proj=None):
-        return self.run_hook(BASH, {"session_id": sid, "tool_name": "Bash",
-                                    "tool_input": {"command": cmd},
-                                    "cwd": cwd or self.main}, proj=proj)
-
-
-class GitPathspecIntoHooks(_Fixture):
-    def _refused_everywhere(self, cmd):
-        for cwd in (self.main, self.wt):
-            with self.subTest(cwd=cwd):
-                r = self.bash(cmd, cwd=cwd, proj=cwd)
-                self.assertEqual(r.returncode, 2, r.stderr)
-
-    def test_named_pathspecs_refused(self):
-        # already closed by 55769b61: guards against regression
-        for cmd in ("git checkout HEAD~1 -- .githooks",
-                    "git restore -s HEAD~1 .githooks",
-                    "git stash push -m x -- .githooks",
-                    "git checkout HEAD~1 -- '*/pre-commit'"):
-            self._refused_everywhere(cmd)
-
-    def test_glob_matching_a_hook_file_is_refused(self):
-        self._refused_everywhere("git checkout HEAD~1 -- '*pre-commit'")
-
-    def test_glob_rm_matching_a_hook_file_is_refused(self):
-        self._refused_everywhere("git rm '*pre-commit'")
-
-    def test_restore_patch_mode_pathspec_is_refused(self):
-        self._refused_everywhere("git restore -s HEAD~1 -p .githooks")
-
-    def test_stash_push_patch_mode_pathspec_is_refused(self):
-        self._refused_everywhere("git stash push -p .githooks")
-
-    def test_ordinary_pathspecs_unaffected(self):
-        for cmd in ("git checkout -- src/f.txt", "git restore .", "git stash push -m wip",
-                    "git rm '*.orig'", "git checkout HEAD~1 -- '*.rs'", "git apply -p1 x.patch"):
-            with self.subTest(cmd=cmd):
-                self.assertEqual(self.bash(cmd, cwd=self.wt, proj=self.wt).returncode, 0)
+    def write(self, path, content="x", sid="v2"):
+        return self.run_hook(EDIT, {"session_id": sid, "tool_name": "Write",
+                                    "tool_input": {"file_path": path, "content": content}})
 
 
 class CorruptBound(_Fixture):
     def _ledger(self, sid="v2"):
         return os.path.join(self.home, ".claude", "state", "maintree-deny", sid + ".jsonl")
 
+    def _unrelated(self):
+        return self.write(os.path.join(self.wt, "n.md"))
+
     def test_fresh_corrupt_ledger_refuses(self):
-        self.assertEqual(self.bash(f"echo x > {self.target}").returncode, 2)
+        self.assertEqual(self.write(self.target).returncode, 2)
         with open(self._ledger(), "a") as f:
             f.write("garbage\n")
-        self.assertEqual(self.bash("ls").returncode, 2)
+        self.assertEqual(self._unrelated().returncode, 2)
 
     def test_stale_corrupt_ledger_is_moved_aside_and_its_denies_salvaged(self):
-        self.assertEqual(self.bash(f"echo x > {self.target}").returncode, 2)
+        self.assertEqual(self.write(self.target).returncode, 2)
         with open(self._ledger(), "a") as f:
             f.write("garbage\n")
         old = time.time() - 21 * 60
         os.utime(self._ledger(), (old, old))
         with open(self.target, "a") as f:
             f.write("changed\n")
-        r = self.bash("ls")
+        r = self._unrelated()
         self.assertEqual(r.returncode, 0, r.stderr)
         d = os.path.dirname(self._ledger())
         self.assertTrue(any(".corrupt-" in n for n in os.listdir(d)), os.listdir(d))
@@ -149,8 +109,9 @@ class CorruptBound(_Fixture):
     def test_fallback_ledger_used_when_home_unwritable(self):
         os.chmod(self.home, 0o500)
         self.addCleanup(os.chmod, self.home, 0o700)
-        self.assertEqual(self.bash(f"echo x > {self.target}").returncode, 2)
-        self.assertEqual(self.bash(f"cat {self.target}").returncode, 2)
+        self.assertEqual(self.write(self.target).returncode, 2)
+        self.assertEqual(self.write(os.path.join(self.wt, "n.md"),
+                                    content=f"see {self.target}").returncode, 2)
 
 
 if __name__ == "__main__":

@@ -4,12 +4,25 @@
 //! **not uniformly fail-soft** — two different failures mean two different
 //! things:
 //!
-//! - **The check does not apply, or ran but had nothing to report**: not a
-//!   fix/feature task, or `tdd` ran and produced missing/corrupt stdout.
+//! - **The check does not apply**: not a fix/feature task (`!requires_oracle`).
 //!   `fallback:true`, which `state::enforce_fp_gate` Allows — the legacy
-//!   `done_criteria` gate takes over. (A fix/feature task that merely did not
-//!   *declare* `reproduction_tests` is NOT in this bucket: it still consults
-//!   `tdd`. The only exemption is `!requires_oracle`.)
+//!   `done_criteria` gate takes over. This is the ONLY `fallback:true` that the
+//!   live gate path produces against the real `tdd`. (A fix/feature task that
+//!   merely did not *declare* `reproduction_tests` is NOT in this bucket: it
+//!   still consults `tdd`.)
+//!
+//!   [`verdict_from_oracle_output`] also returns `fallback:true` for an
+//!   exit-0 run whose stdout is empty or not JSON, and [`verdict_from_oracle`]
+//!   for `transition:"unknown"`. **The real `tdd` never takes those paths**:
+//!   `tdd oracle` exits 0 only for a valid Fail→Pass oracle and then always
+//!   prints well-formed JSON with `transition:"fail_to_pass"`; every other
+//!   outcome (missing proofs = `"unknown"`, exit 1; unreadable proofs =
+//!   `"undetermined"`, exit 2) exits non-zero and is rejected below. Those
+//!   branches are reachable only from a `tdd` that breaks that exit protocol.
+//!   Their unit tests pin the pure functions, not the gate path.
+//!
+//!   In particular, a fix/feature task with **no recorded proofs is
+//!   rejected**, not degraded to the legacy gate.
 //! - **The oracle could not be determined**: `tdd` exited non-zero, or `tdd`
 //!   could not be spawned at all (not installed, not executable, a gone
 //!   worktree). Nothing was established, and that is *undetermined*, not
@@ -48,24 +61,33 @@ pub fn interpret_oracle_stdout(stdout: &str) -> (bool, Option<String>) {
 
 /// Build the `check_oracle` verdict from a parsed `(valid, transition)` pair.
 ///
-/// The crux of the Fail→Pass gate's fallback contract: a `tdd oracle` run that
-/// completes and parses is *not* automatically a trustworthy reject signal.
-/// `transition == "unknown"` means the proof pair was incomplete (missing RED
-/// or GREEN artifact — `has_red`/`has_green` false), i.e. an oracle *could not
-/// be generated* for this task. Per the charter DoD ("オラクル生成不能時の
-/// fallback") that is a *can't-generate* condition and must degrade to the
-/// legacy `done_criteria` gate (`fallback: true` → `enforce_fp_gate` Allows),
-/// NOT hard-reject. Only a *complete* proof pair that ran the wrong direction
-/// (`fail_to_fail` / `pass_to_pass` / `pass_to_fail` — a real, trustworthy
-/// verdict) keeps `fallback: false` so the gate rejects it.
+/// Only reached from [`verdict_from_oracle_output`] after `tdd oracle` exited 0
+/// with well-formed JSON stdout.
 ///
-/// Split out as a pure function so the unknown→fallback vs wrong-direction→
-/// reject distinction is unit-testable without spawning `tdd`.
+/// As a pure function it maps `transition == "unknown"` (incomplete proof pair:
+/// missing RED or GREEN artifact) to `fallback: true`, and every other
+/// non-valid transition (`fail_to_fail` / `pass_to_pass` / `pass_to_fail`) to
+/// `fallback: false`.
+///
+/// **The `"unknown"` → `fallback: true` arm is unreachable through
+/// [`check_oracle`] against the real `tdd`.** `tdd oracle` (crates/tdd
+/// `oracle_command`) exits 1 whenever the transition is `"unknown"` — it exits
+/// 0 only for a valid Fail→Pass oracle — and [`verdict_from_oracle_output`]
+/// turns any non-zero exit into `fallback: false` before calling this
+/// function. So on the gate path a task with no (or incomplete) proofs is
+/// **rejected** by `state::enforce_fp_gate`; it does NOT degrade to the legacy
+/// `done_criteria` gate. (Backlog b209f2d9 / 69bed43e originally added this
+/// arm to make no-proofs degrade; the later fail-closed fix for non-zero exits
+/// (f650ddd5) superseded that on the live path, and backlog e5174b6a ruled
+/// that Reject is the intended contract.) The arm is reachable only from a
+/// `tdd` that breaks the exit protocol by exiting 0 with `"unknown"`.
+///
+/// The unit tests on this function pin the pure mapping, not gate behaviour.
 pub fn verdict_from_oracle(valid: bool, transition: Option<&str>) -> serde_json::Value {
-    // "unknown" == incomplete proofs == oracle could not be generated. Degrade
-    // to the legacy gate rather than treating "no proofs" as a definitive
-    // "invalid oracle" reject. (A valid FailToPass is never "unknown", so the
-    // `!valid` guard is belt-and-suspenders.)
+    // "unknown" == incomplete proofs. Unreachable on the gate path with the
+    // real `tdd` (it exits 1 for "unknown", which is rejected upstream — see
+    // the doc above). (A valid FailToPass is never "unknown", so the `!valid`
+    // guard is belt-and-suspenders.)
     let is_unknown = transition == Some("unknown");
     if is_unknown && !valid {
         return serde_json::json!({
@@ -100,8 +122,13 @@ pub fn verdict_from_oracle(valid: bool, transition: Option<&str>) -> serde_json:
 /// real tdd proofs can exist for a task that never declared them.
 ///
 /// Always returns a JSON object with a `fallback` bool. `true` means "the
-/// oracle check does not apply, or `tdd` ran but had nothing usable to say —
-/// degrade to the legacy gate".
+/// oracle check does not apply — defer to the legacy gate". Against the real
+/// `tdd` the only source of `true` is `!requires_oracle`: the other
+/// `fallback: true` arms in [`verdict_from_oracle_output`] /
+/// [`verdict_from_oracle`] need `tdd oracle` to exit 0 without a valid oracle,
+/// which the real `tdd` never does (it exits 1 for `"unknown"`, 2 for
+/// `"undetermined"`). A fix/feature task without valid proofs is therefore
+/// rejected, not degraded.
 ///
 /// `false` means the gate must decide on this verdict rather than defer, and it
 /// arises three ways that are **not** interchangeable:
@@ -132,6 +159,23 @@ pub fn check_oracle(
     task_id: &str,
     run_dir: &Path,
 ) -> serde_json::Value {
+    check_oracle_with(requires_oracle, task_id, run_dir, || {
+        harness_core::plugin_bin::resolve("tdd")
+    })
+}
+
+/// [`check_oracle`] with the `tdd` lookup injected. Production always passes
+/// [`harness_core::plugin_bin::resolve`]; the seam exists so a test can pin
+/// which `tdd` is consulted without depending on process-global `$HOME`
+/// (plugin cache) or `$PATH`, which sibling tests swap in-process (backlog
+/// c63f1c23). The resolver is called only for a fix/feature task, exactly
+/// where `check_oracle` consults `tdd`.
+fn check_oracle_with(
+    requires_oracle: bool,
+    task_id: &str,
+    run_dir: &Path,
+    resolve_tdd: impl FnOnce() -> harness_core::verdict::Determination<Option<std::path::PathBuf>>,
+) -> serde_json::Value {
     if !requires_oracle {
         return serde_json::json!({
             "required": false,
@@ -142,7 +186,7 @@ pub fn check_oracle(
     }
 
     use harness_core::verdict::Determination;
-    match harness_core::plugin_bin::resolve("tdd") {
+    match resolve_tdd() {
         Determination::Known(Some(program)) => spawn_oracle(&program, task_id, run_dir),
         // Same shape as a spawn failure below: nothing looked at the proofs.
         Determination::Known(None) => serde_json::json!({
@@ -236,6 +280,10 @@ pub fn verdict_from_oracle_output(stdout: &str, exit_ok: bool) -> serde_json::Va
                        determined, which is not the same as it being unavailable",
         });
     }
+    // The two `fallback: true` arms below (empty stdout, non-JSON stdout) are
+    // unreachable with the real `tdd`: it exits 0 only for a valid Fail→Pass
+    // oracle and then always prints well-formed JSON. They fire only for a
+    // `tdd` that breaks that exit protocol (backlog e5174b6a).
     if stdout.trim().is_empty() {
         return serde_json::json!({
             "required": true,
@@ -245,9 +293,9 @@ pub fn verdict_from_oracle_output(stdout: &str, exit_ok: bool) -> serde_json::Va
         });
     }
     // Confirm the stdout is well-formed JSON before trusting the verdict;
-    // `interpret_oracle_stdout` already defaults missing fields to false/None,
-    // but corrupt/non-JSON stdout must degrade to fallback rather than silently
-    // reporting `valid_fp_oracle:false`.
+    // `interpret_oracle_stdout` already defaults missing fields to false/None;
+    // this arm returns `fallback: true` for corrupt/non-JSON stdout on an
+    // exit-0 run (unreachable with the real `tdd`, see above).
     if serde_json::from_str::<serde_json::Value>(stdout).is_err() {
         return serde_json::json!({
             "required": true,
@@ -278,10 +326,25 @@ mod tests {
     /// with no recorded proofs the result is `required: true` in both worlds
     /// (tdd present-but-no-proofs → unknown fallback, or tdd absent → spawn
     /// Err), never the old `required: false` exemption.
+    ///
+    /// Hermetic (backlog c63f1c23): the `tdd` it consults is pinned to a path
+    /// inside its own TempDir via [`check_oracle_with`], so neither the plugin
+    /// cache under process-global `$HOME` nor a sibling's fake `tdd` on
+    /// `$PATH` can change its verdict. The pinned path does not exist, i.e.
+    /// the "tdd not spawnable" world above.
     #[test]
     fn no_reproduction_tests_falls_back_even_when_required() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let out = check_oracle(true, None, "t1", tmp.path());
+        let tdd = tmp.path().join("no-such-tdd");
+        let mut consulted = 0;
+        let out = check_oracle_with(true, "t1", tmp.path(), || {
+            consulted += 1;
+            harness_core::verdict::Determination::Known(Some(tdd.clone()))
+        });
+        assert_eq!(
+            consulted, 1,
+            "tdd must be looked up exactly once — got {out}"
+        );
         assert_eq!(
             out["required"], true,
             "a fix/feature task without reproduction_tests must still consult tdd — got {out}"
@@ -394,6 +457,11 @@ mod tests {
     /// (incomplete proofs = oracle could-not-be-generated) must degrade to the
     /// legacy gate (`fallback:true`), which `enforce_fp_gate` then Allows —
     /// rather than being treated as a definitive invalid-oracle reject.
+    ///
+    /// NOTE (backlog e5174b6a): this pins the PURE function only. Through
+    /// `check_oracle` the real `tdd` exits 1 for `"unknown"`, which is rejected
+    /// before `verdict_from_oracle` runs, so a no-proofs task is Rejected on
+    /// the gate path. This test does not prove gate behaviour.
     #[test]
     fn unknown_transition_degrades_to_fallback_not_reject() {
         let v = verdict_from_oracle(false, Some("unknown"));
@@ -899,13 +967,23 @@ mod backlog_c63f1c23 {
     //! whose PATH resolves `tdd` to such a fake — i.e. the PATH a concurrent
     //! sibling installs. A test whose spawn target is confined to its own
     //! fixture is unaffected.
+    //!
+    //! The child's `$HOME` is ALSO pointed at an empty temp dir. `check_oracle`
+    //! resolves `tdd` via `harness_core::plugin_bin::resolve` (plugin cache
+    //! under `$HOME` first, `$PATH` second), so with the real `$HOME` the
+    //! installed plugin-cache `tdd` wins and the fake on PATH is never spawned
+    //! — the previous version of this repro kept the real `$HOME` and was
+    //! therefore GREEN on the defective code (observed 2026-10-04). An empty
+    //! `$HOME` is exactly what a concurrent `$HOME`-swapping sibling
+    //! (`claim::tests::pin_home`, the stateless-* tests) exposes in-process.
+    //! Running in a child means this test mutates no process-global env, so it
+    //! needs neither `HOME_ENV_LOCK` nor `PATH_ENV_LOCK` and adds no new race.
     use std::process::Command;
 
     const TARGET: &str = "oracle::tests::no_reproduction_tests_falls_back_even_when_required";
 
     #[cfg(unix)]
     #[test]
-    #[ignore = "backlog c63f1c23: open defect, remove ignore when fixed"]
     fn no_reproduction_tests_test_is_independent_of_the_tdd_on_path() {
         use std::os::unix::fs::PermissionsExt;
         let bin = tempfile::tempdir().expect("fake bin dir");
@@ -920,10 +998,17 @@ mod backlog_c63f1c23 {
         if let Some(p) = std::env::var_os("PATH") {
             parts.extend(std::env::split_paths(&p));
         }
+        // Empty HOME: no plugin cache, so resolution reaches `$PATH`.
+        let home = tempfile::tempdir().expect("empty temp home");
+        assert!(
+            !home.path().join(".claude").exists(),
+            "fixture precondition: the temp HOME must hold no plugin cache"
+        );
         let exe = std::env::current_exe().expect("current test binary");
         let out = Command::new(&exe)
             .args([TARGET, "--exact", "--test-threads=1"])
             .env("PATH", std::env::join_paths(parts).unwrap())
+            .env("HOME", home.path())
             .output()
             .expect("spawn child test binary");
         let stdout = String::from_utf8_lossy(&out.stdout);
@@ -933,9 +1018,10 @@ mod backlog_c63f1c23 {
         );
         assert!(
             out.status.success(),
-            "{TARGET} changed its verdict because a different `tdd` was first on \
-             PATH — its spawn target escapes its fixture, which is exactly what a \
-             concurrent PATH-mutating sibling triggers. stdout={stdout} stderr={}",
+            "{TARGET} changed its verdict because $HOME held no plugin cache and a \
+             different `tdd` was first on PATH — its spawn target escapes its \
+             fixture, which is exactly what a concurrent HOME/PATH-mutating sibling \
+             triggers. stdout={stdout} stderr={}",
             String::from_utf8_lossy(&out.stderr)
         );
     }
@@ -967,7 +1053,6 @@ mod backlog_e5174b6a {
 
     #[cfg(unix)]
     #[test]
-    #[ignore = "backlog e5174b6a: open defect, remove ignore when fixed"]
     fn documented_unknown_transition_degradation_is_what_check_oracle_delivers() {
         use std::os::unix::fs::PermissionsExt;
         let src = include_str!("oracle.rs");

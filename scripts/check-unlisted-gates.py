@@ -38,8 +38,9 @@ A regular file directly in `<toplevel>/scripts/` whose name matches
   * every scanner the hooks call today is `scripts/check-*.py` (pre-commit's
     `run` helper hard-codes `$REPO/scripts/$scanner`; commit-msg and pre-push
     name `scripts/check-*.py` directly);
-  * `.sh` is included because `check-unwind.sh` and `check-versions.sh` exist
-    under the same prefix; excluding them would let a shell scanner stay dark;
+  * `.sh` is included because `check-unwind.sh` exists under the same prefix
+    (as did `check-versions.sh`, removed under eca8dea7); excluding them would
+    let a shell scanner stay dark;
   * not included: `test_check_*.py` (tests of scanners), `check-*.baseline`
     (scanner data), anything under `scripts/tests/` (shell test harnesses),
     and helpers without the `check-` prefix (`gate-bypass.py` etc.), none of

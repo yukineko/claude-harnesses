@@ -70,6 +70,8 @@ fixes and a caller that conflates them sends the reader to the wrong command —
       trusted (unparseable, wrong shape, an entry with no reason/retired_at, or
       a name that STILL matches a plugin under crates/). Fix: repair that file.
       Same standing as PARKED_CONFIG, one file over.
+  7 — USAGE: the command line could not be parsed (see --only below). Nothing
+      was checked; never a pass.
 
   Neither 5 nor 6 has its own branch in .githooks/pre-push, which is not
   editable from a Claude session here (Edit/Write on .githooks/** is denied in
@@ -193,7 +195,21 @@ override with PARKED_PLUGINS / RETIRED_PLUGINS. Every one of these overrides
 exists to point the checker at a FIXTURE — none of them relaxes a verdict, and
 none of them may grow into one.
 
-Run from the repo root:  python3 scripts/check-plugin-rollout.py
+Run from the repo root:  python3 scripts/check-plugin-rollout.py [--only <name>]...
+
+--only <name> (repeatable; a plugin name or a crate dir) SCOPES the ROLLOUT
+verdict to the named plugins. It exists for scripts/rollout-plugins.sh
+--plugin <name>, which used to skip verification entirely (backlog c9373b92 /
+5e54fb25) because a whole-fleet verdict would fail for plugins that run never
+touched. Scoping moves only one kind of finding: a ROLLOUT-class line whose
+"<plugin>: " or "<plugin>/<version>: " prefix names a KNOWN plugin that is NOT
+in the --only set. Those are printed verbatim under OUT OF SCOPE and do not set
+rc 1. Everything else keeps its exit code - findings for the named plugins, and
+every line that cannot be attributed to a known plugin (fleet-wide lines, an
+absent or malformed registry). An --only name that matches no plugin under
+crates/ is rc 1: a plugin that cannot be found cannot be verified, and that is
+not clean. A usage error (--only with no name, an unknown argument) is
+RC_USAGE (7), which is never a pass. With no --only the behaviour is unchanged.
 """
 import json
 import os
@@ -228,6 +244,10 @@ RC_RETIRED = 5
 # reasoning as RC_PARKED_CONFIG one file over: while it cannot be read, an
 # intentional leftover and a real one are indistinguishable in both directions.
 RC_RETIRED_CONFIG = 6
+# The command line itself could not be understood (see parse_args). Nothing was
+# verified, so it must not read as any pass; its own code so that a caller
+# cannot mistake it for a fleet-state class with a fleet-state remedy.
+RC_USAGE = 7
 
 REPO = os.getcwd()
 CRATES = os.path.join(REPO, "crates")
@@ -1970,7 +1990,87 @@ def cpr_eol_only():
     return EOL_ONLY
 
 
-def main():
+def parse_args(argv):
+    """Return (only_names, error). `only_names` is [] for an unscoped run."""
+    only, i = [], 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--only":
+            if i + 1 >= len(argv) or not argv[i + 1] or argv[i + 1].startswith("--"):
+                return None, "--only requires a plugin name"
+            only.append(argv[i + 1])
+            i += 2
+            continue
+        if arg.startswith("--only="):
+            name = arg[len("--only="):]
+            if not name:
+                return None, "--only requires a plugin name"
+            only.append(name)
+            i += 1
+            continue
+        return None, f"unknown argument: {arg!r}"
+    return only, None
+
+
+def _attributed_plugin(problem, known):
+    """The known plugin a finding belongs to, or None when it names none.
+
+    Findings for one plugin are built as "<crate>: ..." (check_rollout and
+    friends) or "<plugin>/<version>: ..." (a cache dir, check_stale_version_dirs).
+    Anything else - fleet-wide counts, registry/settings problems - is
+    attributable to no plugin and therefore can never be scoped away.
+    """
+    head = problem.split(": ", 1)[0]
+    if head in known:
+        return head
+    if "/" in head:
+        base = head.split("/", 1)[0]
+        if base in known:
+            return base
+    return None
+
+
+def scope_problems(problems, only, plugins):
+    """Split ROLLOUT-class `problems` for an --only run.
+
+    Returns (still_red, out_of_scope, unknown_only). still_red keeps every
+    finding that belongs to an --only plugin or to no known plugin at all;
+    out_of_scope holds the findings of known plugins not named by --only;
+    unknown_only lists --only names that match no plugin (the caller turns them
+    into red findings - an unfindable target is unverifiable, not clean).
+    """
+    known = _known_plugin_names(plugins)
+    in_scope, unknown_only = set(), []
+    for name in only:
+        hit = [(c, p) for c, p, _v in plugins if name in (c, p)]
+        if not hit:
+            unknown_only.append(name)
+            continue
+        for crate, pname in hit:
+            in_scope.add(crate)
+            if pname:
+                in_scope.add(pname)
+    still_red, out_of_scope = [], []
+    for problem in problems:
+        owner = _attributed_plugin(problem, known)
+        if owner is not None and owner not in in_scope:
+            out_of_scope.append(problem)
+        else:
+            still_red.append(problem)
+    return still_red, out_of_scope, unknown_only
+
+
+def main(argv=None):
+    """`argv` None (in-process callers) means unscoped; __main__ passes sys.argv[1:]."""
+    only, usage_error = parse_args(list(argv or []))
+    if usage_error:
+        print(f"check-plugin-rollout: usage error: {usage_error}", file=sys.stderr)
+        print(
+            "usage: check-plugin-rollout.py [--only <name>]... - nothing was "
+            "verified, so this is not a pass",
+            file=sys.stderr,
+        )
+        return RC_USAGE
     EOL_ONLY.clear()
     plugins, unverifiable = scan_plugins()
     # Unconditional, before either dimension can decide to skip itself.
@@ -2087,6 +2187,42 @@ def main():
         rollout_problems = list(rollout_problems or []) + pin_problems
     if launcher_problems:
         rollout_problems = list(rollout_problems or []) + launcher_problems
+
+    # --only scoping (backlog c9373b92). Applied after every ROLLOUT-class
+    # finding has been folded in, so no dimension can slip past it; it only
+    # MOVES findings of known, non-targeted plugins to a report - unattributable
+    # ones and an absent registry keep their red.
+    out_of_scope = []
+    if only:
+        unknown_only = []
+        if rollout_problems is not None:
+            rollout_problems, moved, unknown_only = scope_problems(
+                rollout_problems, only, plugins
+            )
+            out_of_scope.extend(moved)
+        else:
+            _r, _m, unknown_only = scope_problems([], only, plugins)
+        orphan_cache_problems, moved, _u = scope_problems(
+            orphan_cache_problems, only, plugins
+        )
+        out_of_scope.extend(moved)
+        if unknown_only:
+            rollout_problems = list(rollout_problems or []) + [
+                f"{n}: --only names no plugin under crates/ (neither a crate dir "
+                "nor a plugin.json name) - it cannot be verified, so this is not "
+                "clean"
+                for n in unknown_only
+            ]
+        if out_of_scope:
+            print(
+                f"\nOUT OF SCOPE ({len(out_of_scope)} finding(s) for plugins not "
+                f"named by --only {' '.join(only)} - NOT fatal for this scoped "
+                "run, and NOT verified clean either; run without --only to "
+                "enforce them):",
+                file=sys.stderr,
+            )
+            for p in out_of_scope:
+                print(f"  - {p}", file=sys.stderr)
 
     if gate_failures is None:
         print(f"settings.json not found: {SETTINGS_PATH}", file=sys.stderr)
@@ -2208,11 +2344,22 @@ def main():
             if cpr_eol_only()
             else "and file-for-file identical to their crate"
         )
-        print(
-            f"OK: {shown} plugins deployed at their source version "
-            f"{identical} (no rollout drift){held}"
-            f"{parked_note}"
-        )
+        if only:
+            # A scoped green is a claim about the --only plugins and nothing
+            # else; printing the fleet count here would launder the OUT OF
+            # SCOPE findings above into a fleet-wide pass.
+            print(
+                f"OK (scoped to --only {' '.join(only)}): no rollout drift for "
+                f"the targeted plugin(s); {len(out_of_scope)} finding(s) for "
+                "other plugins were NOT enforced (see OUT OF SCOPE above)"
+                f"{parked_note}"
+            )
+        else:
+            print(
+                f"OK: {shown} plugins deployed at their source version "
+                f"{identical} (no rollout drift){held}"
+                f"{parked_note}"
+            )
     # The orphan dimension's own verdict line. Printed only when something was
     # actually enumerated (an absent settings.json / registry leaves nothing to
     # be green about) and only when no orphan finding - including the
@@ -2416,4 +2563,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

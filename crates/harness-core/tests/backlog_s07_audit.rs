@@ -8,7 +8,6 @@ use std::time::{Duration, Instant, SystemTime};
 
 // --- 873a2621: a peer transcript 2h old still excludes files (no liveness) ---
 #[test]
-#[ignore = "backlog 873a2621: open defect, remove ignore when fixed"]
 fn backlog_873a2621_two_hour_old_transcript_is_not_a_live_peer() {
     let root = tempfile::tempdir().unwrap();
     let slug = root.path().join("slug");

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for scripts/check-bench-regression.py.
+"""Unit tests for scripts/bench-regression.py.
 
 Stdlib-only (`unittest`), no network. Exercises the three required cases against
 tempdir JSONL fixtures, plus the pure helper directly:
@@ -21,10 +21,20 @@ from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
 _SPEC = importlib.util.spec_from_file_location(
-    "check_bench_regression", _HERE / "check-bench-regression.py"
+    "bench_regression", _HERE / "bench-regression.py"
 )
 cbr = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(cbr)
+# Compiled from the SOURCE TEXT, deliberately not via the spec loader's
+# exec_module: SourceFileLoader reuses a __pycache__ .pyc validated only by
+# (source mtime at 1 s granularity, size), so a same-second size-preserving
+# edit (e.g. a reordering mutant) would run stale bytecode -- a false GREEN /
+# false mutation SURVIVOR, never a false red. Backlog 05726f9f; do not
+# "simplify" this back. get_source() reads the .py, never the cache;
+# dont_inherit keeps this file's __future__ flags off the subject.
+exec(  # noqa: S102
+    compile(_SPEC.loader.get_source(_SPEC.name), _SPEC.origin, "exec", dont_inherit=True),
+    cbr.__dict__,
+)
 
 
 def _write_jsonl(path: Path, rates: list[float]) -> None:

@@ -190,9 +190,11 @@ enum Command {
         /// Emit the deterministic canon-coverage verdict as JSON and skip the
         /// agent entirely. The `verdict` field is three-valued — `covered`,
         /// `not-covered`, `undetermined` — because `not-covered` makes /flow
-        /// divert a task to `specforge`, so "could not read the spec map" must
-        /// not arrive there disguised as "no spec exists"
-        /// (specs/spec-loop.toml R3). Exits 0 for a resolved verdict and
+        /// divert a task to `specforge`, so "could not read the spec map (or
+        /// the tracked `.specguard/spec-docs.toml` bindings)" must not arrive
+        /// there disguised as "no spec exists" (specs/spec-loop.toml R3). A
+        /// matched entry is `covered` by a non-blank map `spec_doc` or by a
+        /// valid tracked binding (backlog 230c34ec). Exits 0 for a resolved verdict and
         /// EXIT_BRIEF_UNDETERMINED for `undetermined`, so a caller that reads
         /// only the exit status still cannot mistake it for a clean answer.
         ///
@@ -1370,7 +1372,7 @@ fn brief(l: &Loaded, task: &str, prompt_only: bool, json: bool) -> Result<u8> {
     // makes them incapable of disagreeing, which specs/spec-loop.toml R3
     // acceptance 3 requires ("並走する第2実装ではない").
     let map_path = l.repo_root.join(&l.cfg.map.path);
-    let cov = coverage::resolve(&map_path, task);
+    let cov = coverage::resolve(&l.repo_root, &map_path, task);
     if json {
         return Ok(emit_brief_json(&cov));
     }

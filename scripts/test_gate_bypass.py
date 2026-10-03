@@ -71,14 +71,17 @@ HOOKS = (
 SCANNERS = [
     "check-prompt-injection.py",
     "check-fail-open.py",
+    "check-fail-open-diff.py",
     "check-doc-claims.py",
     "check-claudemd-claims.py",
     "check-plugin-versions.py",
     "check-version-bumped.py",
     "check-hardcoded-secret.py",
     "check-raw-io-ratchet.py",
+    "check-fault-injection-adoption.py",
     "check-worktree-isolation.py",
     "check-gate-crates-sync.py",
+    "check-gate-protection.py",
     "check-cross-crate-constants.py",
     "check-launcher-exec-bit.py",
     "check-clippy-lints.py",
@@ -187,6 +190,10 @@ class GateHarness:
             shutil.copy2(_SCRIPTS_DIR / "gate-bypass.py", scripts / "gate-bypass.py")
         for scanner in SCANNERS:
             self.set_stub(scanner, 0)
+        # pre-push refuses any pushed commit whose TREE lacks
+        # scripts/check-compile-fail.py (backlog 034b6620), so the stub has to
+        # be committed by the seed commit below, not merely present on disk.
+        self.set_stub("check-compile-fail.py", 0)
 
         condukt_stub = scripts / "condukt-stub"
         condukt_stub.write_text(_CONDUKT_STUB)
@@ -1222,7 +1229,7 @@ class KnownDefects(GateTestCase):
             "the hook still prints an invocation that does not exist",
         )
 
-    def test_DEFECT_a_ledger_line_with_no_commit_id_reads_as_a_commit(self):
+    def test_FIXED_a_ledger_line_with_no_commit_id_is_undetermined(self):
         """DEFECT (severity: low, but it is a dead fail-closed branch).
         `scripts/gate-bypass.py` has an explicit guard:
 
@@ -1239,17 +1246,20 @@ class KnownDefects(GateTestCase):
         Not exploitable on its own (1 blocks as hard as 2 does), but it is a
         guard the author believes exists and does not, and it mis-identifies the
         commit in the message a human is meant to act on.
+
+        FIXED by backlog a7bf3cca: every entry's commit id is now validated as
+        hex before reachability is judged, so the subject-as-sha line is
+        reported as undetermined (exit 2), as this pin said it must become.
         """
         h = self.harness()
         h.ledger.write_text("\tsubject with no sha\n")
         proc = h.gate_bypass()
         self.assertEqual(
             proc.returncode,
-            1,
-            "DEFECT PINNED: reported as an ordinary entry, not as undetermined. "
-            "When fixed, this must become assertEqual(..., 2).",
+            2,
+            "a ledger line with no commit id must be undetermined, not an ordinary entry",
         )
-        self.assertIn("subject with", proc.stderr, "the subject is printed AS the sha")
+        self.assertIn("is not a commit id", proc.stderr)
 
     def test_DEFECT_the_backstop_does_not_hold_for_a_hooksPath_bypass(self):
         """DEFECT (severity: HIGH — it falsifies the stated justification for a
@@ -2268,6 +2278,272 @@ class CertificateBindsTheDiffNotTheOperation(GateTestCase):
             "the ledger must name the commit that was made",
         )
 
+
+
+# ---------------------------------------------------------------------------
+# Unreachable ledger entries (backlog a7bf3cca).
+#
+# A ledger entry whose commit is reachable from NO ref (a pre-rebase commit
+# kept alive only by the reflog — observed instance b77286119dc3) can never be
+# cleared, because clearing needs a green pre-commit whose HEAD contains it, and
+# it can never be pushed either.  It blocked every push forever.
+#
+# Contract under test (written independently of the fix):
+#   1. reachable from >=1 ref (for-each-ref: heads/remotes/tags, NOT reflogs)
+#      -> outstanding, exit 1                               [control]
+#   2. present in the object store, reachable from no ref -> NOT outstanding;
+#      exit 0 when it is the only entry; still LISTED as unreachable in the
+#      human and --json output; NOT removed from the ledger file
+#   3. reachability cannot be determined (git fails, malformed sha, object
+#      missing) -> never exit 0
+#   4. made reachable again -> outstanding again
+#   5. one reachable + one unreachable -> exit 1
+# ---------------------------------------------------------------------------
+class UnreachableLedgerEntries(GateTestCase):
+    # --- fixtures ---------------------------------------------------------
+    def _bypass_commit(self, h, name, subject):
+        h.write(name, subject + "\n")
+        h.git("add", "-A")
+        proc = h.commit(subject, "--no-verify")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return h.git("rev-parse", "HEAD").stdout.strip()
+
+    def _orphaned_bypass(self, h, subject="orphaned-bypass"):
+        """A --no-verify commit on a branch that is then deleted: it lands in
+        the ledger, survives in the object store and the HEAD reflog, and is
+        reachable from no ref — the shape of b77286119dc3."""
+        h.git("checkout", "-q", "-b", "doomed")
+        sha = self._bypass_commit(h, "orphan.txt", subject)
+        h.git("checkout", "-q", "main")
+        h.git("branch", "-q", "-D", "doomed")
+        self.assertUnreachableButPresent(h, sha)
+        self.assertIn(sha, self._ledger_shas(h), "precondition: the bypass was recorded")
+        return sha
+
+    def _ledger_shas(self, h):
+        return [ln.split("\t")[0] for ln in h.ledger_lines()]
+
+    # --- anti-vacuity -------------------------------------------------------
+    def assertUnreachableButPresent(self, h, sha):
+        self.assertEqual(
+            h.git("cat-file", "-e", sha + "^{commit}", check=False).returncode,
+            0,
+            "anti-vacuity: the commit must still exist in the object store, "
+            "otherwise this is the missing-object case, not the unreachable one",
+        )
+        contains = h.git("for-each-ref", "--contains", sha).stdout.strip()
+        self.assertEqual(
+            contains, "", "anti-vacuity: no ref may contain %s, got:\n%s" % (sha, contains)
+        )
+        # It must be reflog-reachable, like the real instance — otherwise the
+        # fixture would not reproduce the "kept alive only by the reflog" shape.
+        reflog = h.git("reflog", "--format=%H").stdout.split()
+        self.assertIn(sha, reflog, "anti-vacuity: the commit survives in the reflog")
+
+    def assertReachable(self, h, sha):
+        contains = h.git("for-each-ref", "--contains", sha).stdout.strip()
+        self.assertNotEqual(contains, "", "anti-vacuity: some ref must contain %s" % sha)
+
+    def _out(self, proc):
+        return "--- exit %d ---\n--- stdout ---\n%s\n--- stderr ---\n%s" % (
+            proc.returncode, proc.stdout, proc.stderr)
+
+    # --- 1. control: reachable stays outstanding ----------------------------
+    def test_reachable_from_a_branch_stays_outstanding(self):
+        h = self.harness()
+        sha = self._bypass_commit(h, "a.txt", "on-main")
+        self.assertReachable(h, sha)
+        proc = h.gate_bypass()
+        self.assertEqual(proc.returncode, 1, self._out(proc))
+        self.assertIn(sha[:12], proc.stderr)
+
+    def test_reachable_only_from_a_non_current_branch_stays_outstanding(self):
+        h = self.harness()
+        h.git("checkout", "-q", "-b", "side")
+        sha = self._bypass_commit(h, "a.txt", "on-side")
+        h.git("checkout", "-q", "main")
+        self.assertReachable(h, sha)
+        self.assertNotEqual(
+            h.git("merge-base", "--is-ancestor", sha, "HEAD", check=False).returncode,
+            0, "precondition: NOT an ancestor of HEAD — only of another branch")
+        proc = h.gate_bypass()
+        self.assertEqual(proc.returncode, 1, self._out(proc))
+
+    def test_reachable_only_from_a_tag_stays_outstanding(self):
+        h = self.harness()
+        sha = self._orphaned_bypass(h)
+        h.git("tag", "keep", sha)
+        self.assertReachable(h, sha)
+        proc = h.gate_bypass()
+        self.assertEqual(proc.returncode, 1, self._out(proc))
+
+    def test_reachable_only_from_a_remote_tracking_ref_stays_outstanding(self):
+        h = self.harness()
+        sha = self._orphaned_bypass(h)
+        h.git("update-ref", "refs/remotes/origin/doomed", sha)
+        self.assertReachable(h, sha)
+        proc = h.gate_bypass()
+        self.assertEqual(proc.returncode, 1, self._out(proc))
+
+    def test_reachable_only_from_a_detached_HEAD_stays_outstanding(self):
+        """Not spelled out by the contract (for-each-ref does not list HEAD),
+        but a commit made on a detached HEAD IS pushable
+        (`git push origin HEAD:main`); clearing it would be a fail-open."""
+        h = self.harness()
+        h.git("checkout", "-q", "--detach")
+        sha = self._bypass_commit(h, "a.txt", "detached-bypass")
+        self.assertEqual(h.git("for-each-ref", "--contains", sha).stdout.strip(), "",
+                         "precondition: only HEAD reaches it")
+        proc = h.gate_bypass()
+        self.assertEqual(
+            proc.returncode, 1,
+            "a commit reachable from the checked-out detached HEAD is pushable "
+            "and must stay outstanding\n" + self._out(proc))
+
+    # --- 2. unreachable is not outstanding, but stays visible ---------------
+    def test_unreachable_only_entry_exits_zero(self):
+        h = self.harness()
+        self._orphaned_bypass(h)
+        proc = h.gate_bypass()
+        self.assertEqual(
+            proc.returncode, 0,
+            "an entry reachable from no ref cannot be pushed and must not block "
+            "every push forever (a7bf3cca)\n" + self._out(proc))
+
+    def test_unreachable_only_entry_lets_pre_push_through(self):
+        """End-to-end form of the defect: the push hook itself."""
+        h = self.harness()
+        self._orphaned_bypass(h)
+        proc = h.pre_push()
+        self.assertEqual(proc.returncode, 0, self._out(proc))
+
+    def test_unreachable_entry_is_still_listed_in_human_output(self):
+        h = self.harness()
+        sha = self._orphaned_bypass(h)
+        proc = h.gate_bypass()
+        text = proc.stdout + proc.stderr
+        self.assertIn(sha[:12], text, "must stay visible, not silently dropped\n" + self._out(proc))
+        self.assertIn("unreachable", text.lower(), self._out(proc))
+
+    def test_unreachable_entry_is_listed_separately_in_json(self):
+        h = self.harness()
+        sha = self._orphaned_bypass(h, subject="orphan-json")
+        proc = h.gate_bypass("--json")
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["verdict"], "clean", self._out(proc))
+        self.assertEqual(payload["entries"], [],
+                         "outstanding `entries` must not hold the unreachable one")
+        unreachable_keys = [k for k in payload if "unreachable" in k.lower()]
+        self.assertEqual(len(unreachable_keys), 1,
+                         "exactly one key naming the unreachable entries: %r" % payload)
+        listed = payload[unreachable_keys[0]]
+        self.assertIsInstance(listed, list)
+        self.assertEqual([e["commit"] for e in listed], [sha])
+        self.assertEqual(listed[0]["subject"], "orphan-json")
+
+    def test_unreachable_entry_is_not_deleted_from_the_ledger(self):
+        h = self.harness()
+        sha = self._orphaned_bypass(h)
+        before = h.ledger.read_bytes()
+        h.gate_bypass()
+        h.gate_bypass("--json")
+        self.assertEqual(h.ledger.read_bytes(), before,
+                         "gate-bypass.py is a reader; it must not rewrite the ledger")
+        self.assertIn(sha, self._ledger_shas(h))
+
+    # --- 3. undetermined is never clean -------------------------------------
+    def test_missing_commit_object_is_not_clean(self):
+        h = self.harness()
+        ghost = "0123456789abcdef0123456789abcdef01234567"
+        self.assertNotEqual(h.git("cat-file", "-e", ghost, check=False).returncode, 0,
+                            "anti-vacuity: the object must really be absent")
+        h.ledger.write_text(ghost + "\tghost\n")
+        proc = h.gate_bypass()
+        self.assertIn(proc.returncode, (1, 2), self._out(proc))
+        proc = h.gate_bypass("--json")
+        self.assertIn(proc.returncode, (1, 2), self._out(proc))
+        self.assertNotEqual(json.loads(proc.stdout)["verdict"], "clean")
+
+    def test_malformed_sha_is_not_clean(self):
+        h = self.harness()
+        for bad in ("not-a-sha", "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", "--all", "HEAD~0x"):
+            h.ledger.write_text(bad + "\tmalformed\n")
+            proc = h.gate_bypass()
+            self.assertIn(proc.returncode, (1, 2), "ledger sha %r\n%s" % (bad, self._out(proc)))
+
+    def test_non_commit_object_is_not_clean(self):
+        """A sha that exists but names a blob is not a commit whose
+        reachability can be judged."""
+        h = self.harness()
+        blob = h.git("rev-parse", "HEAD:seed.txt").stdout.strip()
+        self.assertEqual(h.git("cat-file", "-t", blob).stdout.strip(), "blob")
+        h.ledger.write_text(blob + "\tblob\n")
+        proc = h.gate_bypass()
+        self.assertIn(proc.returncode, (1, 2), self._out(proc))
+
+    def test_failing_git_reachability_check_is_not_clean(self):
+        """Every git call except locating the ledger fails: reachability cannot
+        be determined, so the (truly unreachable) entry must not read as clean."""
+        h = self.harness()
+        self._orphaned_bypass(h)
+        real_git = _which("git")
+        wrapper = h.root / ".stub-bin" / "git"
+        wrapper.write_text(
+            "#!/bin/sh\n"
+            'case " $* " in\n'
+            '  *" rev-parse "*"--git-common-dir"*) exec "%s" "$@" ;;\n'
+            "esac\n"
+            "echo 'injected git failure' >&2\n"
+            "exit 128\n" % real_git
+        )
+        wrapper.chmod(0o755)
+        proc = h.gate_bypass()
+        self.assertIn(proc.returncode, (1, 2), self._out(proc))
+        proc = h.gate_bypass("--json")
+        self.assertIn(proc.returncode, (1, 2), self._out(proc))
+
+    # --- 4. reachable again -> outstanding again -----------------------------
+    def test_becoming_reachable_again_is_outstanding_again(self):
+        h = self.harness()
+        sha = self._orphaned_bypass(h)
+        h.git("branch", "revived", sha)
+        self.assertReachable(h, sha)
+        proc = h.gate_bypass()
+        self.assertEqual(proc.returncode, 1, self._out(proc))
+        self.assertIn(sha[:12], proc.stderr)
+
+    # --- 5. mixed ledger -------------------------------------------------------
+    def test_mixed_reachable_and_unreachable_exits_one(self):
+        h = self.harness()
+        orphan = self._orphaned_bypass(h)
+        live = self._bypass_commit(h, "live.txt", "live-bypass")
+        self.assertReachable(h, live)
+        self.assertUnreachableButPresent(h, orphan)
+        proc = h.gate_bypass()
+        self.assertEqual(proc.returncode, 1, self._out(proc))
+        proc = h.gate_bypass("--json")
+        self.assertEqual(proc.returncode, 1, self._out(proc))
+        self.assertEqual(json.loads(proc.stdout)["verdict"], "outstanding")
+
+    def test_mixed_ledger_separates_the_two_in_json(self):
+        h = self.harness()
+        orphan = self._orphaned_bypass(h)
+        live = self._bypass_commit(h, "live.txt", "live-bypass")
+        payload = json.loads(h.gate_bypass("--json").stdout)
+        self.assertEqual([e["commit"] for e in payload["entries"]], [live], payload)
+        unreachable_keys = [k for k in payload if "unreachable" in k.lower()]
+        self.assertEqual(len(unreachable_keys), 1, payload)
+        self.assertEqual([e["commit"] for e in payload[unreachable_keys[0]]], [orphan])
+
+    def test_mixed_ledger_lists_both_in_human_output(self):
+        h = self.harness()
+        orphan = self._orphaned_bypass(h)
+        live = self._bypass_commit(h, "live.txt", "live-bypass")
+        proc = h.gate_bypass()
+        text = proc.stdout + proc.stderr
+        self.assertIn(live[:12], text)
+        self.assertIn(orphan[:12], text)
+        self.assertIn("unreachable", text.lower(), self._out(proc))
 
 
 if __name__ == "__main__":

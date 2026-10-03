@@ -833,7 +833,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 ユーザー指示（2026-09-07、5メッセージにわたる確定形）。
 
@@ -879,40 +879,13 @@ gate は何も守っておらず、回避だけを学習させた。本セッシ
 
 [backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_826c29bf.py (rev 2ff60f58): Pins the umbrella's own criterion 6; children carry their own repros; criterion 5 obsolete (autoflow compass gate RETIRED 2026-08-20, crates/autoflow/src/main.rs:343)."""
 created_at = 1788789695
-updated_at = 1790983273
+updated_at = 1791024191
 weight = 0.0
 issue_number = 412
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/412"
-rev = 0
-
-[[task]]
-id = "4be23458"
-title = "condukt worktree::discard also force-discards uncommitted work — the twin of the remove() fail-open (DoD12d)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-測定点 47d02894 / 測定日 2026-09-07。crates/condukt/src/worktree.rs:1951 の pub fn discard は remove と同一の blanket パターンを持つ: plain worktree remove が失敗したら無条件で --force へ retry する。git はまさに未コミット作業があるときに拒否するので、この retry は git 自身の安全弁を外している。
-
-production の到達経路は2本あり、どちらも未コミット内容を保全していない:
-(1) crates/condukt/src/state.rs:1007 discard_experiment。直前の capture は branch_sha (rev-parse branch) と diff_stat (diff --stat default_branch branch) の2つだけで、どちらも COMMIT 済みの状態からしか導かれない。docstring も callers MUST capture the branch SHA / diff before calling this と書くが、これは commit の話であって worktree の未コミット内容には一切触れていない。
-(2) crates/condukt/src/shadow_run.rs:73 finish。discard の前に何も capture していない。
-
-discard は repo-primary lock 取得失敗には既に fail-closed で refuse する (worktree.rs:1865 のテスト)。硬化されているのは lock 軸だけで、未コミット作業の軸は素通り。
-
-本タスク (DoD12d) の remedy は charter の指定どおり remove() と worktree_remove_force_removes_dirty_worktree に限定したので、discard は意図的に手を付けていない。discard は experiment worktree の廃棄経路であり throwing away が意図なので、保全すべきか否かは人間の判断が要る。ただし現状は「意図的に捨てる」と「捨てたことに気づかない」が区別不能である。
-
-参考: mirror-gap の再発クラス。fix が片側のミラーにだけ着地するのを避けること。
-
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/condukt/src/worktree.rs (mod backlog_4be23458) (rev 596108b9): worktree discard force-destroys uncommitted work; discard's doc calls force intentional, so a human ruling may change the contract."""
-created_at = 1788790462
-updated_at = 1790983138
-weight = 0.0
-issue_number = 414
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/414"
-rev = 0
+rev = 1
+ruling_kind = "untestable"
+untestable_reason = "Criterion 6 (the only one this umbrella owns; children ae4543d5/b5358f58/ad524af9/cc809395/73c2c089/5eb1f127 carry the rest, criterion 5 obsolete) is fixed in 7927324f (CLAUDE.md section 5 item 4). Evidence: python3 scripts/test_backlog_826c29bf.py, expectedFailure removed, OK at aceee2e1 (observed 2026-10-03); RED before 7927324f as the expectedFailure. The backlog evidence runner allowlists only cargo test / pytest / bash, pytest is not installed, and --doc-only is refused because 7927324f also edits the test file. Approve to close."
 
 [[task]]
 id = "ae4543d5"
@@ -2054,61 +2027,6 @@ updated_at = 1790983255
 weight = 0.0
 issue_number = 1103
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1103"
-rev = 0
-
-[[task]]
-id = "3b056c02"
-title = "overwatch end が存在しない key に exit 0 + 空出力を返し、解放できた場合と区別できない"
-project = "/home/hiroyuki_nakayama/src/claude-harnesses"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-実測 (2026-09-07, overwatch 0.2.32, cache の bin を直接実行):
-
-    $ overwatch end --key "definitely-not-a-real-key-12345" --status done
-    out=[]
-    rc=0
-
-`overwatch status` は同じ瞬間に `== Sessions ==  (none)` を返しており、この key の
-lease は **存在しない**。それでも end は「解放した」ときと**同一の出力・同一の
-終了ステータス**を返す。呼び出し側 (flow SKILL.md Step 4、および /flow を回す
-LLM) は fail-soft で扱えと書かれているので、この 0 を見て「解放できた」と記録する。
-
-なぜこれが fail-open か: これは ledger write である。同じ plugin の launcher
-(crates/overwatch/bin/overwatch:38) は自分の missing-binary 経路について
-まさにこの形を名指しで禁じている —
-
-    * begin / end / heartbeat / record-* -> ledger writes; reporting success
-      for a write that never happened is what leaves a stale lease behind.
-
-launcher は binary が無い場合を exit 1 で塞いでいるが、**binary 自身**が key の
-不在に対して同じ穴を開けている。守られているのは 1 段上だけである。
-
-観測される害: begin した key を typo などで取り違えて end すると、実 lease は
-解放されないまま「解放済み」と報告される。overwatch status には残り続け、TTL で
-reap されるまで他セッションからは「そのスコープは担当者あり」に見える。
-逆に一度も begin していない key を end しても何も言わないので、
-begin/end の対応漏れが検出されない。
-
-あるべき形 (CLAUDE.md 第3節): 三値にする。
-  - 実在する lease を解放した -> exit 0、解放した旨を出力
-  - key が存在しない        -> 非0 (「解放していない」は「解放した」ではない)
-  - 台帳が読めない          -> 非0、判定不能として理由を出力
-少なくとも「存在しなかった」と「解放した」を出力で区別できること。
-
-帰属メモ: 本セッションの変更ではない。/flow Step 4 の anchor 解放を実行する過程で
-観測した。
-
-[triage 2026-09-29 @b325a169] p2->p1: overwatch lease end reports success on missing key and on lock contention (lease.rs:305-307, 316-323) - write that did nothing exits 0
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/overwatch/tests/backlog_s04_audit.rs (rev e70d48dd)"""
-created_at = 1788771923
-updated_at = 1790983255
-weight = 0.0
-issue_number = 1104
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1104"
 rev = 0
 
 [[task]]
@@ -6778,25 +6696,6 @@ updated_at = 1790983261
 weight = 0.0
 issue_number = 851
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/851"
-rev = 0
-
-[[task]]
-id = "6a9eb1ed"
-title = "overwatch lease end/run が storage root 判定不能のとき何も出さずに Ok を返す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = """
-acquire_or_skip None path; restrictive side but silent.
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/overwatch/tests/backlog_s04_audit.rs (rev e70d48dd)"""
-created_at = 1790678166
-updated_at = 1790983261
-weight = 0.0
-issue_number = 852
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/852"
 rev = 0
 
 [[task]]

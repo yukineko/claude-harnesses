@@ -1931,25 +1931,6 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/453"
 rev = 0
 
 [[task]]
-id = "7037df97"
-title = "blastguard: 単一引用符つき heredoc 本体はシェルが一切解釈しないのに redirect 検出器が走る (fa1fce21 の精密化)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-2026-09-09 の 1 セッションで 4 回再発。逐語: (1) '> .scratch/commit-msg-gates.txt' truncates and overwrites an existing file / (2) '> f,' (Ok(f) => f, が heredoc 内) / (3) '> 1]' (if v>=2 が <<'PY' 内) / (4) '> ' (=> が python -c の引用符内)。いずれも respell せず別ツールへ迂回し逐語申告した。ルールとして精密に言える: <<'DELIM' のように delimiter が quote されている heredoc の本体は、シェルが展開も解釈も一切行わない純粋なバイト列である。したがって本体を shell 構文として走査すること自体が誤り。fa1fce21 は「散文データがコードとして判定される」と広く書かれているが、この quoted-heredoc の一点は inert であることが仕様で保証されており、決定論的に除外できる。関連: aaff04c5 (=> の force-gate), 079b643f (2>&1) の同族。over-block は 5./6. の意味で hack route への圧力になる (別ツールへの迂回が常態化すると、迂回そのものが無感覚になる)。
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/blastguard/tests/backlog_audit_s02.rs (rev e70d48dd)"""
-created_at = 1788902903
-updated_at = 1790983182
-weight = 0.0
-issue_number = 461
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/461"
-rev = 0
-
-[[task]]
 id = "4f3a653b"
 title = "CA-config-parse-001: toml::from_str の no-else fail-open が14 crate 横断 — 個別修正か Determination<FileConfig> 共通ローダかを決める"
 project = "/home/hiroyuki_nakayama/src/claude-harnesses"
@@ -2523,13 +2504,17 @@ cargo 側も測りなおしており (c4321fc2 参照)、warm 152.8 秒。
 Edit(//Users/yuki/**/.githooks/**) と Write(...) を禁じている)。人間の操作が要る。
 
 
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_65bfb279.py (rev 2ff60f58): Wiring needs a human .githooks edit."""
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_65bfb279.py (rev 2ff60f58): Wiring needs a human .githooks edit.
+
+[flow 2026-10-03 session 33de4c25 @4bc312db] BLOCKED on a human .githooks edit (agents are denied). The runner scripts/check-workspace-tests.py exists (324be018); nothing in .githooks calls it. RED observed: scripts/test_backlog_65bfb279.py with expectedFailure off gives 'no .githooks file (outside comments) invokes check-workspace-tests.py or unittest'. Proposed wiring in .githooks/pre-push, right after the compile_fail_rc block inside the per-sha loop:
+( cd "$TYPECHECK_TREE" && CARGO_TARGET_DIR="$TYPECHECK_TARGET" python3 scripts/check-workspace-tests.py </dev/null >&2 ) || { echo "pre-push: BLOCKED — scripts/check-workspace-tests.py failed at $(git rev-parse --short "$sha")" >&2; exit 1; }
+Cost about 346s per push (measured 2026-09-10). After wiring: remove expectedFailure, then backlog done 65bfb279 --test 'python3 -m pytest scripts/test_backlog_65bfb279.py' --red-rev 4bc312db."""
 created_at = 1788849812
-updated_at = 1790983284
+updated_at = 1791028006
 weight = 0.0
 issue_number = 1109
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1109"
-rev = 0
+rev = 1
 
 [[task]]
 id = "9b64f427"
@@ -11979,14 +11964,16 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p2"]
 touched_files = []
-status = "unconfirmed"
+status = "needs-ruling"
 notes = "Observed 2026-10-03, session 33de4c25, main 0f7571fb: a cat-heredoc appending a requirement document to a scratchpad file was refused with: git config core.hooksPath repoints every git hook at once, disabling the repo's hook gates. The heredoc was quoted data, not executed. Two readings: (a) defect: heredoc bodies are scanned as commands; (b) intended conservative scan. Repro: a quoted heredoc into /tmp containing that phrase."
 created_at = 1791027469
-updated_at = 1791027469
+updated_at = 1791028282
 weight = 0.0
 issue_number = 1190
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1190"
-rev = 0
+rev = 1
+ruling_kind = "judgment"
+rationale = "blastguard (not a Python guard) denies a compound command: git merge/log/cp before a quoted heredoc whose body mentions core.hooksPath, plus specforge draft reading that file after the close. c0f7bd9b strips heredoc bodies only when the heredoc is the whole command and accepts this over-block on purpose. Widening the rule is a design call (agent replay 2026-10-03)."
 
 [[task]]
 id = "8ae9ec87"
@@ -12002,4 +11989,42 @@ updated_at = 1791027826
 weight = 0.0
 issue_number = 1192
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1192"
+rev = 0
+
+[[task]]
+id = "45ea74b5"
+title = "blastguard: interpreter -c/-e program text with > denies with empty target (python3 -c 'print(1 > 0)', node -e arrow fn)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Found by the 7037df97 agent on 2026-10-03. Cause: interpreter_code_verdict (crates/blastguard/src/detect.rs:5362) runs program text through analyze_shell_payload. The reason reads: the empty-target redirect destroys the file contents. Comments near detect.rs:5700 require a ruling before that layer changes. Unverified by a test."
+created_at = 1791028278
+updated_at = 1791028278
+weight = 0.0
+issue_number = 1205
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1205"
+rev = 0
+
+[[task]]
+id = "116678da"
+title = "blastguard: no test pins the redirect axis inside a quoted heredoc data body"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p3",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "The 7037df97 test covers only the fetch-exec axis. Proposed case: cat into a.txt with a quoted EOF heredoc whose body is foo > bar.txt should allow. Found 2026-10-03."
+created_at = 1791028280
+updated_at = 1791028280
+weight = 0.0
+issue_number = 1206
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1206"
 rev = 0

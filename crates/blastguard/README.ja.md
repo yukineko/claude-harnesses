@@ -55,7 +55,11 @@ blastguard は Claude Code の **PreToolUse** フックである。エージェ�
 `.claude/**`、`**/package.json`、`**/*.toml` / `*.yaml` / `*.yml` / `*.lock`、
 `.config/**` などは除外（allow）する。**ただし `.claude/settings.json` /
 `.claude/settings.local.json` / `.claude/hooks.json` / `.claude/hooks/**` /
-`.githooks/**` など、どのゲート・フックが動くか自体を決めるファイルはこの除外の
+`.githooks/**`、デプロイ済みプラグインの実行ファイルと hook 配線（`.claude/plugins/cache/**/bin/**`・
+`.claude/plugins/cache/**/hooks/**`。exec bit を外された launcher は `Permission denied` で起動せず、
+finding も出ないので gate が赤ではなく暗転する — backlog 1b82a049。ここでは読み/実行権の剥奪・`rm`・`mv` は deny、
+書き込みは ask〈人間が答えられない場では deny に硬化〉、読み取りと `chmod +x` は allow）
+など、どのゲート・フックが動くか自体を決めるファイルはこの除外の
 **対象外**であり、常に deny になる（守護者自身を無効化する経路を塞ぐため、
 この一群は設定ファイル除外より優先される）。
 

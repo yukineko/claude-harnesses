@@ -93,6 +93,21 @@ const PROTECTED_GLOBS: &[&str] = &[
     "**/.githooks/**",
     ".git/hooks/**",
     "**/.git/hooks/**",
+    // ---- deployed plugin executables & hook wiring (backlog 1b82a049) ----
+    // The plugin cache is where every hook actually runs FROM: `bin/` holds
+    // the launcher and the per-platform binaries, `hooks/` the `hooks.json`
+    // that wires them. A launcher without its exec bit dies with
+    // "Permission denied" and emits no finding — the gate goes DARK, not red.
+    // Measured (blastguard 0.2.59): `chmod -x
+    // $HOME/.claude/plugins/cache/yukineko/blastguard/0.2.58/bin/blastguard`
+    // was ALLOW. Scoped to `bin/` and `hooks/` only: the rest of a version dir
+    // (skills, docs, plugin.json) keeps the ordinary rules. Reads and
+    // `chmod +x` stay allowed; the chmod arm denies only modes that remove
+    // read or exec.
+    ".claude/plugins/cache/**/bin/**",
+    "**/.claude/plugins/cache/**/bin/**",
+    ".claude/plugins/cache/**/hooks/**",
+    "**/.claude/plugins/cache/**/hooks/**",
     // ---- shell startup files (startup-persistence vector) ----
     // Matched by basename anywhere, so both the literal unexpanded `~/.zshrc`
     // and an absolute `/Users/x/.zshrc` are covered.

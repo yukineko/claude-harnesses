@@ -35301,3 +35301,88 @@ test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "9e8e0a90fe7c4a977d058b31139ec7f57132dea9"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "55fb3861"
+title = "condukt の fugu 記録で cost 解決失敗が 0.0 に潰れ、未計測がコスト 0 として記録される"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+backlog 53c825f6 の evidence 2。crates/condukt/src/main.rs:5218 付近:
+
+    let cost = s
+        .agent_id
+        .as_deref()
+        .and_then(state::resolve_agent_cost)
+        .unwrap_or(s.cost_usd);
+
+resolve_agent_cost が解決できなかった場合 s.cost_usd に落ちるが、SKILL.md の
+prose は description 文字列照合が脆いためこれを 0.0 の既定値のまま残すことが
+多いと同じ箇所のコメント自身が認めている。結果として「コストを解決できなかった」
+が「このタスクはコスト 0 だった」として fugu に記録され、下流の routing 計測が
+未計測を無料として集計する。CLAUDE.md #3 の判定不能を permissive 側へ倒す形。
+
+既に同一ファイル内に正しい先例がある: spawn_fugu_record (main.rs:5299 付近) の
+duration_secs は三値で、0.0 を「未計測」として扱い --duration を省略する。
+cost も同じ形に揃えればよい (約 4 行)。
+
+done_criteria:
+- cost を Option<f64> の三値にし、解決失敗時に 0.0 を捏造せず --cost を省略する
+  (もしくは fugu-router 側が未計測を表現できるキーへ渡す)
+- verifier 側の同型の unwrap_or_else(|| s.verifier_cost_usd.unwrap_or(0.0))
+  (main.rs:5230 付近) も同時に直す。片側だけの修正は gate-crate audit mirror gap
+  と同じ再発パターンになる
+- 解決失敗時に 0.0 が記録されないことを固定する挙動テストを追加する
+  (先に RED を観測すること)
+
+依存: このファイルは run-20260913-223733-78880-t1 (backlog e8c03e9e) が
+main.rs を触るため、そのマージ後に着手すること。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/condukt/tests/backlog_s03_audit.rs (rev e70d48dd)"""
+created_at = 1789490424
+updated_at = 1791056650
+weight = 0.0
+issue_number = 657
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/657"
+issue_closed_at = 1791056655
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p fugu-router --test verifier_55fb3861"
+exit = 0
+passed = 7
+rev = "27612ed6e5dda8d4d159502c065b97e606f2812e"
+observed_at = 1791056540
+output_digest = "sha256:d6c58ac4371ce8d754b427c2ee8b88ee598b42101340e6b5d1554ff5bdc71582"
+excerpt = """
+
+running 7 tests
+test v_legacy_zero_and_explicit_zero_read_back_as_unmeasured ... ok
+test v_unmeasured_is_not_stored_or_averaged_as_zero ... ok
+test v_measured_costs_are_averaged ... ok
+test v_negative_or_non_finite_cost_rejected_and_nothing_written ... ok
+test v_decide_does_not_treat_unmeasured_passes_as_free ... ok
+test v_decide_all_measured_unchanged ... ok
+test v_decide_nothing_measured_is_cheapest_first ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.54s
+
+   Compiling bitflags v2.13.0
+   Compiling harness-core v0.2.45 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/harness-core)
+   Compiling proptest v1.11.0
+   Compiling fugu-router v0.1.42 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/fugu-router)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.77s
+     Running tests/verifier_55fb3861.rs (target/debug/deps/verifier_55fb3861-0e8a14d1cad29f46)
+"""
+
+[task.closure.red]
+rev = "c4928d36e7195808d9b8324ecd1d1c5ff17e7f71"
+exit = 101
+kind = "behavioural"

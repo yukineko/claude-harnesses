@@ -3400,53 +3400,6 @@ ruling_kind = "judgment"
 rationale = "Blocked on a human-only edit: wiring scripts/check-projkey-store-classification.py into .githooks/pre-commit. .githooks is deny-listed for the assistant and the notes record the user ruling of 2026-09-23 that the user applies the patch. The script may already be covered by the eca8dea7 stage A/B/C .githooks patches in the driver scratchpad; check before applying."
 
 [[task]]
-id = "55fb3861"
-title = "condukt の fugu 記録で cost 解決失敗が 0.0 に潰れ、未計測がコスト 0 として記録される"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-backlog 53c825f6 の evidence 2。crates/condukt/src/main.rs:5218 付近:
-
-    let cost = s
-        .agent_id
-        .as_deref()
-        .and_then(state::resolve_agent_cost)
-        .unwrap_or(s.cost_usd);
-
-resolve_agent_cost が解決できなかった場合 s.cost_usd に落ちるが、SKILL.md の
-prose は description 文字列照合が脆いためこれを 0.0 の既定値のまま残すことが
-多いと同じ箇所のコメント自身が認めている。結果として「コストを解決できなかった」
-が「このタスクはコスト 0 だった」として fugu に記録され、下流の routing 計測が
-未計測を無料として集計する。CLAUDE.md #3 の判定不能を permissive 側へ倒す形。
-
-既に同一ファイル内に正しい先例がある: spawn_fugu_record (main.rs:5299 付近) の
-duration_secs は三値で、0.0 を「未計測」として扱い --duration を省略する。
-cost も同じ形に揃えればよい (約 4 行)。
-
-done_criteria:
-- cost を Option<f64> の三値にし、解決失敗時に 0.0 を捏造せず --cost を省略する
-  (もしくは fugu-router 側が未計測を表現できるキーへ渡す)
-- verifier 側の同型の unwrap_or_else(|| s.verifier_cost_usd.unwrap_or(0.0))
-  (main.rs:5230 付近) も同時に直す。片側だけの修正は gate-crate audit mirror gap
-  と同じ再発パターンになる
-- 解決失敗時に 0.0 が記録されないことを固定する挙動テストを追加する
-  (先に RED を観測すること)
-
-依存: このファイルは run-20260913-223733-78880-t1 (backlog e8c03e9e) が
-main.rs を触るため、そのマージ後に着手すること。
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/condukt/tests/backlog_s03_audit.rs (rev e70d48dd)"""
-created_at = 1789490424
-updated_at = 1790983232
-weight = 0.0
-issue_number = 657
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/657"
-rev = 0
-
-[[task]]
 id = "fa86a52f"
 title = "session-insights の files touched が Bash 編集を数えず 0 と報告する (無言の過少計上)"
 project = "/Users/yuki/src/harness"
@@ -13013,4 +12966,194 @@ updated_at = 1791054805
 weight = 0.0
 issue_number = 1330
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1330"
+rev = 0
+
+[[task]]
+id = "e44e233f"
+title = "condukt shadow-run finish requires --cost and --duration, so a caller with no measurement must invent values (and --duration 0 is rejected by fugu-router record)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Worker side finding on 55fb3861: ShadowRunAction::Finish in crates/condukt/src/main.rs and shadow_run.rs record_to_fugu_router always forward both. Same fabricated-measurement class as 55fb3861."
+created_at = 1791055121
+updated_at = 1791055121
+weight = 0.0
+issue_number = 1331
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1331"
+rev = 0
+
+[[task]]
+id = "2ce8e9fa"
+title = "condukt SKILL.md Phase 6 tracekit snippets pass --cost GAUGE_COST:-0, fabricating a zero cost for trace spans"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Worker side finding on 55fb3861: SKILL.md around lines 1134/1138 still uses the defaulted-zero form that 55fb3861 removed from the fugu record snippet."
+created_at = 1791055123
+updated_at = 1791055123
+weight = 0.0
+issue_number = 1332
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1332"
+rev = 0
+
+[[task]]
+id = "60ecd6ff"
+title = "fugu-router delegation-stats avg_duration_secs prints 0.0 when there are no duration samples"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fugu-router",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Worker side finding on 55fb3861: no-data shown as zero, same class the ticket fixed for cost."
+created_at = 1791055124
+updated_at = 1791055124
+weight = 0.0
+issue_number = 1333
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1333"
+rev = 0
+
+[[task]]
+id = "67f82dde"
+title = "fugu-router duration-outliers text output reads values with as_f64().unwrap_or(0.0)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fugu-router",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Worker side finding on 55fb3861: display path in cmd_duration_outliers; consumers not traced."
+created_at = 1791055126
+updated_at = 1791055126
+weight = 0.0
+issue_number = 1334
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1334"
+rev = 0
+
+[[task]]
+id = "02e5a922"
+title = "condukt state set --status done took over 2 minutes on a 20-file two-crate diff, spawning git diff children one after another"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04 with condukt 0.7.220: state set --run run-20261004-035627-41010 --task 55fb3861 --status done --worktree <wt> --branch <br> ran >140s; ps showed successive children 'git diff c4928d36...HEAD' (likely diffrisk caller-site scan). Exit 0. No progress output, so a caller cannot tell slow from hung. Needs a timing measurement and a repro."
+created_at = 1791055143
+updated_at = 1791055143
+weight = 0.0
+issue_number = 1335
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1335"
+rev = 0
+
+[[task]]
+id = "183bb46a"
+title = "condukt run_editgate block reason falls back to 'edit left the crate not compiling' when cargo could not even be spawned"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Worker side finding on f7a0cadc (4f0dace5): main.rs run_editgate uses only verdict.diagnostics; a spawn failure has none, so the hook blames the edited code for an environment failure (section 4)."
+created_at = 1791055673
+updated_at = 1791055673
+weight = 0.0
+issue_number = 1336
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1336"
+rev = 0
+
+[[task]]
+id = "13254573"
+title = "condukt state.rs enforce_edit_gate doc and tests cite stale editgate.rs line numbers (134,147,208,221) as the verdict emission sites"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Worker side finding on f7a0cadc: the citations were stale before the change and drift further after it."
+created_at = 1791055675
+updated_at = 1791055675
+weight = 0.0
+issue_number = 1337
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1337"
+rev = 0
+
+[[task]]
+id = "096f80f4"
+title = "condukt run_editgate doc comment still says the hook is fail-soft and swallows panics via run_hook (main.rs ~1895-1902)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Worker side finding on f7a0cadc: the editgate hook returns block verdicts, so per CLAUDE.md section 1 it is a verdict path and must not go through run_hook's panic-to-allow barrier; at minimum the prose contradicts the fail-closed contract. Verify which barrier it actually uses."
+created_at = 1791055676
+updated_at = 1791055676
+weight = 0.0
+issue_number = 1338
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1338"
+rev = 0
+
+[[task]]
+id = "2f740852"
+title = "cargo fmt --all --check reports a diff in crates/backlog/src/lib.rs line 1 on main"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Worker side finding on f7a0cadc 2026-10-04: pre-existing fmt drift in crates/backlog/src/lib.rs:1."
+created_at = 1791055677
+updated_at = 1791055677
+weight = 0.0
+issue_number = 1339
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1339"
+rev = 0
+
+[[task]]
+id = "4fc130d3"
+title = "fugu-router record accepts --cost 0 and stores 0.0 but reads it back as unmeasured, so a genuinely measured zero cost cannot be recorded (duration rejects 0 at write instead)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fugu-router",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Verifier side finding on 55fb3861 (branch run-20261004-035627-41010/55fb3861, fugu-router 0.1.41): read rule mirrors duration_secs (non-positive -> None) but the write rule does not (duration rejects non-positive with non-zero exit; cost accepts 0). Either reject 0 at write like duration, or give cost a representation for a measured zero."
+created_at = 1791055719
+updated_at = 1791055719
+weight = 0.0
+issue_number = 1340
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1340"
 rev = 0

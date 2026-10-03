@@ -72,9 +72,9 @@ fn data_reader_bodies_are_not_judged_as_commands() {
         format!("cat <<'EOF' > notes.txt\nrecursive rm (-r) can delete a tree: {RM}\nEOF"),
         format!("cat > notes.md <<'EOF'\n{RM}\nEOF"),
         format!("cat <<'EOF' >> log.txt\n{RM}\nEOF"),
-        format!("cat <<\"EOF\" > a.json\n{RM}\nEOF"),
-        format!("cat <<\\EOF > a.toml\n{RM}\nEOF"),
-        format!("cat <<-'EOF' > a.yaml\n\t{RM}\n\tEOF"),
+        format!("cat <<\"EOF\" > a.csv\n{RM}\nEOF"),
+        format!("cat <<\\EOF > a.log\n{RM}\nEOF"),
+        format!("cat <<-'EOF' > a.rst\n\t{RM}\n\tEOF"),
         format!("tee a.md <<'EOF'\n{RM}\nEOF"),
         format!("tee -a a.md <<'EOF' > /dev/null\n{RM}\nEOF"),
         format!("git commit -F - <<'EOF'\nfix: {RM} was allowed\nEOF"),
@@ -116,6 +116,18 @@ fn bodies_that_may_run_stay_judged() {
         format!("cat <<'EOF' > run.sh\n{RM}\nEOF"),
         format!("cat <<'EOF' > run\n{RM}\nEOF"),
         format!("tee run.sh <<'EOF'\n{RM}\nEOF"),
+        // Something on the line can change what `cat` runs.
+        format!("hash -p /bin/sh cat\ncat <<'EOF'\n{RM}\nEOF"),
+        format!("PATH=/tmp/evil:$PATH\ncat <<'EOF'\n{RM}\nEOF"),
+        format!("export PATH\ncat <<'EOF'\n{RM}\nEOF"),
+        format!("alias cat=sh\ncat <<'EOF'\n{RM}\nEOF"),
+        format!("enable -n cat\ncat <<'EOF'\n{RM}\nEOF"),
+        // The data file is fed to an interpreter later on the same line.
+        format!("cat <<'EOF' > x.txt\n{RM}\nEOF\nxargs -a x.txt sh -c"),
+        // Formats that commonly hold executable configuration are not data.
+        format!("cat <<'EOF' > a.json\n{RM}\nEOF"),
+        format!("cat <<'EOF' > a.toml\n{RM}\nEOF"),
+        format!("cat <<'EOF' > a.yaml\n{RM}\nEOF"),
         // Code after the opener on its own line.
         format!("cat <<'EOF' > a.txt; {RM}\nx\nEOF"),
         // Unclosed body: undetermined, so judged.

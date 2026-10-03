@@ -117,7 +117,6 @@ fn c64191fa_record_finding_store_write_failure_is_not_success() {
 /// backlog 3b056c02: ending a lease that does not exist must be distinguishable
 /// from releasing a real one.
 #[test]
-#[ignore = "backlog 3b056c02: open defect, remove ignore when fixed"]
 fn s3b056c02_end_of_missing_key_is_distinguishable_from_release() {
     let home = TempDir::new().unwrap();
     let project = TempDir::new().unwrap();
@@ -255,7 +254,6 @@ fn se8a61ec3_best_effort_reader_distinguishes_unreadable_from_absent() {
 /// taken, `end` skips the release but exits 0 — the lease is still held.
 #[cfg(unix)]
 #[test]
-#[ignore = "backlog 6a9eb1ed: open defect, remove ignore when fixed"]
 fn s6a9eb1ed_end_that_could_not_lock_is_not_reported_as_release() {
     use std::os::unix::fs::PermissionsExt;
     let home = TempDir::new().unwrap();

@@ -2487,6 +2487,33 @@ mod worktree_remove_tests {
 /// Returns `Some(branch_name)` when the branch was NOT deleted (unmerged or
 /// any other error), `None` when no branch was requested or deletion succeeded.
 pub fn remove(repo: &Path, path: &Path, branch: Option<&str>) -> Result<Option<String>> {
+    remove_worktree_preserving(repo, path)?;
+    if let Some(b) = branch {
+        match git(repo, &["branch", "-d", b]) {
+            Ok(_) => {}
+            Err(e) => {
+                // The branch still exists — most likely it was not fully merged.
+                // Warn on stderr and surface the branch name to the caller so it
+                // can display a more actionable message.
+                eprintln!(
+                    "warning: branch '{}' was not deleted (not fully merged). \
+                     Use `git branch -D {}` to force-delete, or merge it first.",
+                    b, b
+                );
+                eprintln!("  (git said: {e})");
+                return Ok(Some(b.to_string()));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// The worktree-directory half shared by [`remove`] and [`discard`]: a plain
+/// `git worktree remove`, and on git's refusal a `--force` retry authorized
+/// ONLY by a verified [`crate::wt_reconcile::preserve`] capture or a provably
+/// clean tree (see [`remove`] for the full contract). One body for both
+/// callers so a fix cannot land on one mirror only (backlog 4be23458).
+fn remove_worktree_preserving(repo: &Path, path: &Path) -> Result<()> {
     let path_str = path.to_string_lossy().to_string();
     // Try a clean remove first: when git accepts it, nothing was ever at risk.
     if git(repo, &["worktree", "remove", &path_str]).is_err() {
@@ -2523,24 +2550,7 @@ pub fn remove(repo: &Path, path: &Path, branch: Option<&str>) -> Result<Option<S
         git(repo, &["worktree", "remove", "--force", &path_str])
             .with_context(|| format!("could not force-remove worktree {}", path.display()))?;
     }
-    if let Some(b) = branch {
-        match git(repo, &["branch", "-d", b]) {
-            Ok(_) => {}
-            Err(e) => {
-                // The branch still exists — most likely it was not fully merged.
-                // Warn on stderr and surface the branch name to the caller so it
-                // can display a more actionable message.
-                eprintln!(
-                    "warning: branch '{}' was not deleted (not fully merged). \
-                     Use `git branch -D {}` to force-delete, or merge it first.",
-                    b, b
-                );
-                eprintln!("  (git said: {e})");
-                return Ok(Some(b.to_string()));
-            }
-        }
-    }
-    Ok(None)
+    Ok(())
 }
 
 /// Discard the worktree at `path` (force-remove) and FORCE-DELETE its `branch`
@@ -2551,6 +2561,14 @@ pub fn remove(repo: &Path, path: &Path, branch: Option<&str>) -> Result<Option<S
 /// disposal path for an experiment worktree whose value is the learning
 /// artifact, not the code. Callers MUST capture the branch SHA / diff before
 /// calling this — once the branch is `-D`'d the commits are unreferenced.
+///
+/// Throwing away COMMITS is the intent; throwing away UNCOMMITTED work is not
+/// something any caller captures (the branch SHA / diff only see commits). So
+/// the worktree directory goes through the same path as [`remove`]: git's
+/// refusal is answered by preserving the work to `refs/preserved/<name>`
+/// first, and when that capture fails on a dirty or undeterminable tree the
+/// discard REFUSES (directory and branch left in place) rather than forcing
+/// (backlog 4be23458).
 ///
 /// If the worktree dir is already gone we `worktree prune` first so the stale
 /// admin entry does not make `branch -D` refuse ("checked out").
@@ -2567,12 +2585,8 @@ pub fn discard(repo: &Path, path: &Path, branch: Option<&str>) -> Result<()> {
     // The cost of refusing is bounded and reversible: the experiment worktree
     // stays on disk (visible to `worktree cleanup`) and the discard is retried.
     let _repo_lock = lock::acquire_repo_primary_loaded(repo)?;
-    let path_str = path.to_string_lossy().to_string();
     if path.exists() {
-        if git(repo, &["worktree", "remove", &path_str]).is_err() {
-            git(repo, &["worktree", "remove", "--force", &path_str])
-                .with_context(|| format!("could not force-remove worktree {}", path.display()))?;
-        }
+        remove_worktree_preserving(repo, path)?;
     } else {
         // Dir already removed out-of-band — drop the stale worktree registration
         // so the branch is no longer considered checked out.
@@ -3996,7 +4010,6 @@ mod backlog_4be23458 {
     }
 
     #[test]
-    #[ignore = "backlog 4be23458: open defect, remove ignore when fixed"]
     fn discard_does_not_silently_destroy_uncommitted_work() {
         let tmp = tempfile::TempDir::new().unwrap();
         let repo = tmp.path().join("repo");

@@ -68,6 +68,8 @@ overwatch は、複数セッション間で共有される **プロジェクト�
 #### `overwatch end --key <key>`
 
 指定したキー（`--key <key>`）のリースを明示的に終了・解放する。
+解放できたときだけ exit 0 + `released lease <key>`。key に lease が無い（未 begin・解放済み・stale reap 済み）
+ときと、lease ロックが取れず判定不能のときは非 0（いずれも「解放した」ではない）。
 
 **HOTL gate**: 実行前に AskUserQuestion で確認。
 

@@ -31492,3 +31492,75 @@ test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "82ee4a782add20440391fbc642021e94d46a3bbd"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "fa1fce21"
+title = "blastguard: heredoc 本体と散文データがコードとして判定される — 監査エージェント自身が本文にコマンド文字列を含むテキストを書こうとして3回止められた"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+実測（deployed 0.2.50）。detect_bash は生のコマンド文字列を走査し、rule 2 が
+redirect_targets(cmd) を文字列全体に当て（crates/blastguard/src/detect.rs:1015）、split_segments は
+**改行で分割**するため、here-document の**本体**がコマンドセグメントになる。
+opens_here_document（detect.rs:1860）は存在するが、代入解決器からしか参照されず、
+本体を判定対象から除外する用途には使われていない。
+
+観測: 監査エージェントが、本文に以下の文字列を含むだけの**プレーンなテキスト fixture** を書こうとして
+3回 block された（本体は definitionally データであり実行されない）:
+  - a code interpreter invoked with an inline-eval flag ...
+  - 単一ファイルへの truncate リダイレクトが既存ファイルを上書きする、という理由文
+  - recursive rm (-r) can delete an entire directory tree
+  - recursive chown re-owns a whole tree
+これは内容が完全に手元にあり、かつ実行されないことが証明可能な、最大級の形状判定ケース。
+
+同一クラスが1層上にもある: crates/blastguard/src/classify.rs:213-219 が
+detect::detect を task の title + done_criteria + ファイル一覧という**英語の散文**に当てている。
+破壊的コマンドを**記述する**散文は、たとえ「実行するな」と書いてあっても High/irreversible へ force-gate される。
+（memory classify-deploy-needle-forcegate として既知だが、根が同じなのでここに併記）
+
+修正: opens_here_document を述語から**抽出器**へ格上げし、本体をデータとして全ルールから除外する
+（これは inline-eval 修正でペイロードを取り出す際にも要る同じ関数）。
+classify 側は detect を散文に当てるのをやめ、コマンド形状の抽出を経由させる。
+親 826c29bf
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/blastguard/tests/backlog_audit_s02.rs (rev e70d48dd)"""
+created_at = 1788791893
+updated_at = 1791018512
+weight = 0.0
+issue_number = 428
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/428"
+issue_closed_at = 1791018514
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test heredoc_data_body_verify2"
+exit = 0
+passed = 3
+rev = "c0d4701c00887a75a191ef5b7b5d2b5d009baaaa"
+observed_at = 1791018493
+output_digest = "sha256:4e28f1374101a4266479a19a953dcea79efd0a93f4dbce55c6fbd4b82403232b"
+excerpt = """
+
+running 3 tests
+test contract_data_body_still_allowed ... ok
+test smuggle_consumer_redefined_out_of_sight ... ok
+test smuggle_written_file_reached_by_another_spelling ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+
+   Compiling blastguard v0.2.105 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.66s
+     Running tests/heredoc_data_body_verify2.rs (target/debug/deps/heredoc_data_body_verify2-5bae4d1947d5ded5)
+"""
+
+[task.closure.red]
+rev = "1e3998f9a15d33b8a72476f932e66d119c3f889e"
+exit = 101
+kind = "behavioural"

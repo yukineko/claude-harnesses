@@ -119,18 +119,52 @@ class BashGuard(unittest.TestCase):
         rc, err = self.w.bash_guard("sed -i '' 's/a/b/' f.txt", cwd=self.w.wt)
         self.assertEqual(rc, 0, "relative operand resolved under main root: " + err[:200])
 
-    @open_defect("ae4543d5")
     def test_ae4543d5_interpreter_wrapper_write_into_main_is_refused(self):
+        M, W = self.w.main, self.w.wt
         for cmd in (
-            f"sh -c 'echo hi > {self.w.main}/p.txt'",
-            f"python3 -c \"open('{self.w.main}/p.txt','w').write('x')\"",
-            f"cd /tmp && echo hi > {self.w.main}/p.txt",
-            f"perl -pi -e 's/a/b/' {self.w.main}/f.txt",
-            f"sed --in-place 's/a/b/' {self.w.main}/f.txt",
+            f"sh -c 'echo hi > {M}/p.txt'",
+            f"python3 -c \"open('{M}/p.txt','w').write('x')\"",
+            f"cd /tmp && echo hi > {M}/p.txt",
+            f"perl -pi -e 's/a/b/' {M}/f.txt",
+            f"sed --in-place 's/a/b/' {M}/f.txt",
+            # further mirrors named in the item notes
+            f"bash -lc 'echo hi > {M}/p.txt'",
+            f"eval 'echo hi > {M}/p.txt'",
+            f"node -e \"require('fs').writeFileSync('{M}/p.txt','x')\"",
+            f"awk 'BEGIN{{print \"x\" > \"{M}/p.txt\"}}'",
+            f"ruby -pi -e 'gsub(/a/,\"b\")' {M}/f.txt",
+            f"git -C /tmp status && echo hi > {M}/p.txt",
+            f"env FOO=1 rm {M}/f.txt",
+            "(cd /tmp) && echo hi > f.txt",
+            f"python3 -c \"import os; os.remove('{M}/f.txt')\"",
+            "python3 -c \"import sys; open(sys.argv[1],'w')\" f.txt",
+            f"sh -c \"cd {W} && echo > {M}/f.txt\"",
         ):
             with self.subTest(cmd=cmd):
-                rc, _ = self.w.bash_guard(cmd)
+                rc, _ = self.w.bash_guard(cmd, cwd=M)
                 self.assertEqual(rc, 2, "same-effect write into main was allowed")
+
+    def test_ae4543d5_control_equivalent_forms_outside_main_stay_allowed(self):
+        # Anti-vacuity: the fix must not refuse the same shapes aimed at a
+        # worktree, nor read-only one-liners against main.
+        M, W = self.w.main, self.w.wt
+        for cmd in (
+            f"cd {W} && sed -i '' 's/a/b/' f.txt",
+            f"cd {W} && echo hi > out.txt",
+            f"python3 -c \"print(open('{M}/f.txt').read())\"",
+            f"perl -pi -e 's/a/b/' {W}/f.txt",
+            f"sed --in-place 's/a/b/' {W}/f.txt",
+            f"bash -c 'echo hi > {W}/p.txt'",
+            f"python3 -c \"open('{W}/p.txt','w').write('x')\"",
+            f"git -C {W} commit -m 'x > y'",
+            "python3 -c 'print(1)'",
+            f"awk '{{print $1}}' {M}/f.txt",
+            f"node -e \"console.log(require('fs').readFileSync('{M}/f.txt','utf8'))\"",
+            f"cd {W} && python3 -c \"import subprocess; subprocess.run(['ls'])\"",
+        ):
+            with self.subTest(cmd=cmd):
+                rc, err = self.w.bash_guard(cmd, cwd=M)
+                self.assertEqual(rc, 0, err[:200])
 
 
 class EditGuardDuringMerge(unittest.TestCase):

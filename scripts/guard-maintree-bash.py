@@ -32,8 +32,15 @@ Resolution rule per candidate target:
   * a target under the main tree that is not ignored, and not inside that own
     admin dir, is REFUSED — this still covers `.git/config`, `.git/hooks/*`,
     `.git/refs/**`, and every OTHER worktree's `.git/worktrees/<other>/`.
-When a command re-anchors into a worktree (`cd <wt> && …`, `git -C <wt> …`) the
-command is allowed, since its mutations land in that worktree, not on main.
+A `cd <dir>` re-anchors RELATIVE targets of the segments after it (so
+`cd <wt> && sed -i … f` resolves `f` in the worktree); an absolute target that
+still names main is judged as such, and a `( … )` subshell's `cd` does not leak
+out. The judgement follows the EFFECT, not argv[0] (backlog ae4543d5):
+`sh -c` / `bash -lc` / `eval` payloads are re-tokenized and judged by these same
+rules, `env` / `nohup` / `time` / `nice` / `sudo` prefixes are peeled off, and
+inline interpreter programs (`python -c`, `node -e`, `ruby -e`, `perl -e`, `awk`)
+that write, delete, or spawn a shell make their path literals targets — with no
+nameable path, that is "cannot determine" and is refused under main.
 
 UNDECIDABLE INPUT RESOLVES TO DENY (CLAUDE.md 3), as it always has in the twin
 guard-maintree-edit.py. Three sites used to answer "I could not tell" with ALLOW:
@@ -221,8 +228,24 @@ def _own_worktree_gitdir(root: str) -> str | None:
     return gd
 
 
-def _hits_main(root: str, path: str, own_gitdir: str | None) -> bool:
-    """True if `path` lands on a non-ignored location under the main tree."""
+def _hits_main(
+    root: str, path: str | None, own_gitdir: str | None, anchor: str | None = None
+) -> bool:
+    """True if `path` lands on a non-ignored location under the main tree.
+
+    Relative paths resolve against `anchor` (the directory the command has
+    `cd`-ed into; the main root by default). `path` None — an interpreter that
+    writes through a path it computes — and a relative path whose anchor could
+    not be resolved are both "cannot determine": they count as hitting main
+    unless the anchor is provably outside it (CLAUDE.md 3)."""
+    if anchor is None and (path is None or not os.path.isabs(_expand(path))):
+        return True
+    base = anchor if anchor is not None else root
+    if path is None:
+        return _under(base, root)
+    if base != root and not os.path.isabs(_expand(path)):
+        # Re-anchored: judge the anchor-resolved absolute path below.
+        path = os.path.join(base, _expand(path))
     path = _expand(path)
     if any(c in path for c in _UNRESOLVABLE):
         # A shell variable this process does not know ($WT), a glob, or a brace
@@ -374,62 +397,169 @@ def _tokenize(command: str) -> list[str] | None:
         return None
 
 
-def _reanchored_outside(tokens: list[str], root: str) -> bool:
-    """Command steps into a worktree (`cd <wt>` or `git -C <wt>`) whose path is
-    not the main tree — its mutations land there, so allow."""
-    for i, tok in enumerate(tokens):
-        if tok == "cd" and i + 1 < len(tokens):
-            dest = _resolve(root, tokens[i + 1])
-            if not _under(dest, root):
-                return True
-        if tok == "-C" and i + 1 < len(tokens):
-            dest = _resolve(root, tokens[i + 1])
-            if not _under(dest, root):
-                return True
-    return False
+# A target is (path, anchor): `path` None means "writes somewhere this process
+# cannot name" (an interpreter that writes through a computed path); `anchor` is
+# the directory relative paths resolve against, None when a `cd` went somewhere
+# this process cannot resolve (`cd -`, `cd $X`).
+
+# Shells whose `-c <string>` payload is itself shell, judged by the same rules.
+SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
+# Prefix commands that run their argv as the real command (`env X=1 rm f`).
+PASSTHROUGH = {"env", "nohup", "time", "nice", "command", "exec", "sudo", "stdbuf"}
+AWKS = {"awk", "gawk", "mawk", "nawk"}
+
+# Inline interpreter code that may write, delete, or spawn a shell (ae4543d5).
+# A read-only one-liner (`open(p)`, `json.load`) matches none of these, so the
+# common "inspect a file on main" form stays allowed. A match makes every
+# path-like string literal (and positional operand) a write target; a match with
+# no nameable path is "cannot determine", which resolves to deny when it runs
+# against the main tree (CLAUDE.md 3).
+_WRITE_MARKER = re.compile(
+    r"""open\s*\([^)]*['"][rbt]*[wax+][bt+]*['"]"""  # python open(p, 'w'/'a'/'x'/'r+')
+    r"""|open\s*\(?[^;]*['"]\s*\+?[>|]"""  # perl open(F, '>f') / ">>f"
+    r"""|write_text|write_bytes|\.touch\(|\bunlink|\brmdir|\brmtree|\bshutil\."""
+    r"""|\bos\.(?:remove|rename|replace|makedirs|mkdir|truncate|system|popen|exec)"""
+    r"""|\bsubprocess\b|\bsystem\s*\(|\bexec[lv]?p?\s*\("""
+    r"""|\b(?:writeFile|appendFile|rm|rename|mkdir|copyFile|cp|truncate|symlink|chmod)(?:Sync)?\s*\("""
+    r"""|createWriteStream|\bFileUtils\b|\bFile\.(?:write|open|delete|rename)"""
+    r"""|\brename\s*\(|\bprintf?\b[^;]*>|`""",
+)
+_STR_LIT = re.compile(r"""'([^']*)'|"([^"]*)\"""")
+_PATHISH = re.compile(r"^[\w.~$/{}@+:-]+$")
 
 
-def _candidate_targets(tokens: list[str], root: str) -> list[str]:
-    """Filesystem targets this command would mutate (best effort)."""
-    targets: list[str] = []
+def _code_targets(code: str, operands: list[str], anchor: str | None) -> list:
+    """Targets of an inline interpreter program: none unless it can write."""
+    if not _WRITE_MARKER.search(code):
+        return []
+    lits = [m.group(1) if m.group(1) is not None else m.group(2) for m in _STR_LIT.finditer(code)]
+    paths = [s for s in lits if s and _PATHISH.match(s) and ("/" in s or "." in s.strip("."))]
+    found = [(p, anchor) for p in paths + operands]
+    # Writes, but through nothing this process can name: cannot determine.
+    return found or [(None, anchor)]
 
-    # Redirection targets, anywhere in the command.
-    for i, tok in enumerate(tokens):
-        if (tok in REDIR or REDIR_NUM.match(tok)) and i + 1 < len(tokens):
-            targets.append(tokens[i + 1])
 
-    # Per-segment command analysis.
-    segments: list[list[str]] = []
-    cur: list[str] = []
-    for tok in tokens:
-        if tok in SEPARATORS:
-            if cur:
-                segments.append(cur)
-            cur = []
-        elif tok in REDIR or REDIR_NUM.match(tok):
-            cur.append("\0redir")  # placeholder so the next token is skipped
-        else:
-            cur.append(tok)
-
-    if cur:
-        segments.append(cur)
-
-    for seg in segments:
-        # Drop redirection targets already captured, and env assignments.
-        argv = [t for t in seg if t != "\0redir"]
-        k = 0
-        while k < len(argv) and "=" in argv[k] and not argv[k].startswith("-"):
-            k += 1
-        argv = argv[k:]
-        if not argv:
+def _interp_targets(prog: str, rest: list[str], anchor: str | None) -> list:
+    """python -c / node -e / ruby -e / perl -e / awk 'prog' (ae4543d5)."""
+    codes: list[str] = []
+    operands: list[str] = []
+    targets: list = []
+    in_place = False
+    i = 0
+    if prog.startswith("python"):
+        code_flag = lambda a: a.startswith("-") and not a.startswith("--") and a.endswith("c")  # noqa: E731
+    elif prog in ("node", "nodejs"):
+        code_flag = lambda a: a in ("-e", "--eval", "-p", "--print")  # noqa: E731
+    elif prog in AWKS:
+        code_flag = None
+    else:  # perl, ruby: -e / -E, also bundled (-pe, -ne, -pie)
+        code_flag = lambda a: a.startswith("-") and not a.startswith("--") and a[-1:] in ("e", "E")  # noqa: E731
+    while i < len(rest):
+        a = rest[i]
+        if prog in AWKS:
+            if a in ("-v", "-F") and i + 1 < len(rest):
+                i += 2
+                continue
+            if a.startswith("-f"):
+                return targets  # program from a file: not visible here (known hole)
+            if not a.startswith("-") and not codes:
+                codes.append(a)
+            elif not a.startswith("-"):
+                operands.append(a)
+            i += 1
             continue
-        prog = argv[0].split("/")[-1]
-        rest = argv[1:]
+        if prog in ("perl", "ruby") and a.startswith("-") and not a.startswith("--") and "i" in a[1:].split(".")[0]:
+            in_place = True  # -i, -pi, -pie, -i.bak — the flag-bundle scan
+        if code_flag(a) and i + 1 < len(rest):
+            codes.append(rest[i + 1])
+            i += 2
+            if prog.startswith("python"):
+                operands += rest[i:]  # everything after `-c code` is sys.argv
+                break
+            continue
+        if not a.startswith("-"):
+            operands.append(a)
+        i += 1
+    if in_place:
+        targets += [(p, anchor) for p in operands]
+    for code in codes:
+        targets += _code_targets(code, [] if in_place else operands, anchor)
+    return targets
 
+
+def _collect(tokens: list[str], root: str, anchor: str | None, depth: int = 0):
+    """Filesystem targets this command would mutate (best effort), each paired
+    with the directory it resolves against. None = cannot determine (deny).
+
+    `cd <dir>` moves the anchor for the segments AFTER it (and a `( … )`
+    subshell restores it), so `cd <wt> && sed -i … f` resolves `f` inside the
+    worktree, while `cd /tmp && echo > <main>/p` still lands on main — the old
+    rule allowed the WHOLE command once any `cd`/`-C` left the main tree.
+    """
+    if depth > 8:
+        return None  # nesting this deep is not something to guess about
+    targets: list = []
+    stack: list[str | None] = []
+    seg: list[str] = []
+
+    def flush(seg: list[str]):
+        nonlocal anchor
+        argv = list(seg)
+        while True:
+            k = 0
+            while k < len(argv) and "=" in argv[k] and not argv[k].startswith("-"):
+                k += 1
+            argv = argv[k:]
+            if not argv:
+                return []
+            prog = argv[0].split("/")[-1]
+            if prog not in PASSTHROUGH:
+                break
+            argv = argv[1:]
+            while argv and argv[0].startswith("-"):
+                flag = argv.pop(0)
+                if flag in ("-n", "-u", "-C", "-g", "-o", "-e") and argv:
+                    argv.pop(0)  # nice -n N / sudo -u U / env -u VAR / stdbuf -o L
+        rest = argv[1:]
+        out: list = []
+        if prog in ("cd", "pushd"):
+            ops = [a for a in rest if not a.startswith("-")]
+            if not ops:
+                anchor = os.environ.get("HOME") or None
+            else:
+                dest = _expand(ops[0])
+                if any(c in dest for c in _UNRESOLVABLE) or (
+                    anchor is None and not os.path.isabs(dest)
+                ):
+                    anchor = None
+                else:
+                    anchor = _resolve(anchor, dest)
+            return out
+        if prog in SHELLS:
+            for j, a in enumerate(rest):
+                if not a.startswith("-"):
+                    break  # a script file / stdin: not visible here (known hole)
+                if not a.startswith("--") and "c" in a[1:]:
+                    if j + 1 >= len(rest):
+                        return None
+                    inner = _tokenize(_strip_heredoc_bodies(rest[j + 1]))
+                    if inner is None:
+                        return None
+                    return _collect(inner, root, anchor, depth + 1)
+            return out
+        if prog == "eval":
+            inner = _tokenize(_strip_heredoc_bodies(" ".join(rest)))
+            if inner is None:
+                return None
+            return _collect(inner, root, anchor, depth + 1)
+        if prog.startswith("python") or prog in ("node", "nodejs", "perl", "ruby") or prog in AWKS:
+            return _interp_targets(prog, rest, anchor)
         if prog in TARGET_ALL:
-            targets += [a for a in rest if not a.startswith("-")]
+            out += [(a, anchor) for a in rest if not a.startswith("-")]
         elif prog in ("sed", "gsed") and any(
-            a == "-i" or a.startswith("-i") for a in rest
+            a == "-i" or a.startswith("-i") or a.startswith("--in-place")
+            or re.match(r"^-[nErsuz]+i", a)
+            for a in rest
         ):
             ops = [a for a in rest if not a.startswith("-")]
             # `sed -i 's/a/b/' f1 f2` — the FIRST operand is the script, not a
@@ -438,17 +568,12 @@ def _candidate_targets(tokens: list[str], root: str) -> list[str]:
             # root and wrongly refused a legitimate worktree sed.
             has_expr = any(
                 a in ("-e", "-f") or a.startswith("-e") or a.startswith("-f")
+                or a.startswith("--expression") or a.startswith("--file")
                 for a in rest
             )
-            targets += ops if has_expr else ops[1:]
-        elif prog in ("perl", "ruby") and any(
-            a == "-i" or a.startswith("-i") for a in rest
-        ):
-            # perl/ruby one-liners carry the script in -e/-pe, so operands are
-            # files.
-            targets += [a for a in rest if not a.startswith("-")]
+            out += [(a, anchor) for a in (ops if has_expr else ops[1:])]
         elif prog == "dd":
-            targets += [a[3:] for a in rest if a.startswith("of=")]
+            out += [(a[3:], anchor) for a in rest if a.startswith("of=")]
         # NOTE: git subcommands (rm/mv/apply/checkout/restore/stash/reset/clean)
         # are deliberately NOT handled here. Their effect depends on the cwd they
         # run in (often a worktree), they are frequently RECOVERY or move-to-
@@ -459,8 +584,34 @@ def _candidate_targets(tokens: list[str], root: str) -> list[str]:
         # reaches main is caught by check-worktree-isolation.py at commit time,
         # which is the sound, route-independent gate. `patch` is likewise left to
         # the commit chokepoint rather than over-matched to the whole tree.
+        return out
 
-    return targets
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in REDIR or REDIR_NUM.match(tok):
+            if i + 1 < len(tokens):
+                targets.append((tokens[i + 1], anchor))
+            i += 2
+            continue
+        if tok in SEPARATORS:
+            got = flush(seg) if seg else []
+            if got is None:
+                return None
+            targets += got
+            seg = []
+            if tok == "(":
+                stack.append(anchor)
+            elif tok == ")" and stack:
+                anchor = stack.pop()
+            i += 1
+            continue
+        seg.append(tok)
+        i += 1
+    got = flush(seg) if seg else []
+    if got is None:
+        return None
+    return targets + got
 
 
 DENY = """Refused: `{cmd}` mutates this project's MAIN working tree.
@@ -534,13 +685,17 @@ def decide(payload: dict) -> tuple[int, str]:
         # main straight past the gate.
         return 2, DENY_UNPARSEABLE.format(cmd=_first_line(command))
 
-    if _reanchored_outside(tokens, root):
-        return 0, ""
+    targets = _collect(tokens, root, root)
+    if targets is None:
+        # A nested `sh -c` / `eval` payload that does not tokenize: its targets
+        # are unknown, which is not "it has none" (3.).
+        return 2, DENY_UNPARSEABLE.format(cmd=_first_line(command))
 
     own_gitdir = _own_worktree_gitdir(root)
-    for target in _candidate_targets(tokens, root):
-        if _hits_main(root, target, own_gitdir):
-            return 2, DENY.format(cmd=f"{_first_line(command)}` (target `{target}")
+    for target, anchor in targets:
+        if _hits_main(root, target, own_gitdir, anchor):
+            shown = target if target is not None else "<a path the inline program computes>"
+            return 2, DENY.format(cmd=f"{_first_line(command)}` (target `{shown}")
     return 0, ""
 
 
@@ -576,11 +731,12 @@ if __name__ == "__main__":
     sys.exit(main())
 
 # KNOWN, UNCLOSED HOLES (recorded, not hidden — CLAUDE.md 4):
-#   * interpreter wrappers hide the mutation: `sh -c '…'`, `bash -lc`, `eval`,
-#     `python3 -c "open(p,'w')"`, `xargs`, `env`, `nohup`, `time` — argv[0] is
-#     not a known mutator, so the command is allowed.
-#   * a `cd <worktree>` earlier in the command re-anchors and allows the WHOLE
-#     command, including a later `>` back into the main tree by absolute path.
+#   * programs this process cannot see: a script FILE (`bash x.sh`,
+#     `python3 x.py`, `awk -f p`), an interpreter reading its program from stdin
+#     or a here-document (`python3 - <<EOF`; the body is stripped as data), and
+#     `xargs` (its operands arrive on stdin).
+#   * inline interpreter code is matched on a write-marker regex, not parsed: a
+#     write spelled in a way the regex does not know is allowed.
 #   * moving/copying INTO the main tree from an outside source is caught (dest is
 #     scanned) but a tool that resolves its own paths (a Makefile, cargo) is not.
 #   All of these are caught at the durable moment by check-worktree-isolation.py,

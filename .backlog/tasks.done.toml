@@ -31297,3 +31297,71 @@ test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fin
 rev = "a91e1d557d81ea1006a3073f9a6e24987b15dba3"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "3f3a0e90"
+title = "fugu-router code-index search が「索引が無い」と「該当なし」を同じ空配列で返す"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "code-index",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+観測 (2026-08-24, 測定点 71337356): crates/fugu-router/src/main.rs:884-887 の doc 逐語『Fail-soft: a missing/empty index yields [] and exit 0, never an error.』。実装 (main.rs:889-893) も load_index が missing→空 Vec なので、下流は『索引が無い』『索引が壊れている』『該当なし』を区別できない。CLAUDE.md 3.『エラー時に空の集合を返さない』に直接該当し、索引が未構築なだけのときに『そのシンボルは存在しない』と読まれる。対照として同じ store を読む context-governor codesearch.rs は三値 (IndexAbsent / Unreadable(String) / NoSymbolMatch) で答えており、そちらが正典側の形。案: search の JSON に status を足して index-absent / unreadable / no-match / hits を区別する。未測定: 現在の呼び出し側が誰かは未調査で、exit code を変えたときの互換性影響はこの起票では測っていない。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/fugu-router/tests/backlog_s10_repro.rs (rev 7e635343)"""
+created_at = 1787550771
+updated_at = 1791005182
+weight = 0.0
+issue_number = 403
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/403"
+issue_closed_at = 1791005184
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p fugu-router --test code_index_search_status"
+exit = 0
+passed = 18
+rev = "ffccc49b487bd22e4f35c1acd5001f5d4cd68c0a"
+observed_at = 1791005166
+output_digest = "sha256:094b823c670d2ce968de93e8fd4e99bfcfcf1ad38e155cc703b3c3d0b57ee711"
+excerpt = """
+
+running 18 tests
+test empty_index_with_meta_claiming_symbols_exits_4 ... ok
+test empty_index_without_meta_exits_4 ... ok
+test empty_index_with_meta_symbols_zero_is_empty_array_exit_0 ... ok
+test meta_count_exceeds_body_count_exits_4_naming_both_counts ... ok
+test index_path_is_a_directory_exits_4 ... ok
+test absent_index_exits_3_with_empty_stdout ... ok
+test only_corrupt_line_exits_4_not_empty_array ... ok
+test meta_matching_body_with_hit_exits_0 ... ok
+test meta_matching_body_no_match_is_empty_array_exit_0 ... ok
+test no_meta_nonempty_body_is_accepted_exit_0 ... ok
+test non_utf8_index_exits_4 ... ok
+test unparseable_meta_with_valid_body_exits_4 ... ok
+test corrupt_line_in_built_index_exits_4 ... ok
+test blank_lines_in_valid_index_are_tolerated ... ok
+test real_build_of_repo_without_rust_is_empty_array_exit_0 ... ok
+test truncated_real_build_exits_4 ... ok
+test valid_index_with_hit_is_nonempty_array_exit_0 ... ok
+test valid_index_no_match_is_empty_array_exit_0 ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.95s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/code_index_search_status.rs (target/debug/deps/code_index_search_status-ee3d751b31fce278)
+"""
+
+[task.closure.red]
+rev = "82ee4a782add20440391fbc642021e94d46a3bbd"
+exit = 101
+kind = "behavioural"

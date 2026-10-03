@@ -98,7 +98,6 @@ fn seeded_repo(tag: &str) -> PathBuf {
 /// 3f3a0e90: "no index exists" and "index exists, nothing matched" must be
 /// distinguishable by a downstream reader.
 #[test]
-#[ignore = "backlog 3f3a0e90: open defect, remove ignore when fixed"]
 fn backlog_3f3a0e90_missing_index_differs_from_no_match() {
     let home = temp_dir("3f3a-home");
     // Case A: index never built.

@@ -17,12 +17,26 @@ GATE="$(cd "$(dirname "$0")/.." && pwd)/check-shell-syntax.py"
 fails=0
 pass() { echo "  ok   — $1"; }
 fail() { echo "  FAIL — $1" >&2; fails=$((fails + 1)); }
+# Setup failures are not case failures: a case that runs against a fixture that
+# was never built proves nothing, so abort the whole test instead of continuing.
+die() { echo "ABORT: $1" >&2; exit 2; }
+
+# Portable temp dir. The BSD "-t prefix" form (a bare name after -t, no X's) is
+# BSD-only: GNU mktemp treats that argument as a template and rejects it with
+# "too few X's", leaving $d empty (backlog e4a1d386). An explicit path template ending in XXXXXX means the same
+# thing to both. Prints the directory, or returns non-zero with a message.
+make_tmpdir() {
+  tmproot="${TMPDIR:-/tmp}"; tmproot="${tmproot%/}"
+  t="$(mktemp -d "$tmproot/$1.XXXXXX")" || { echo "mktemp failed for $1" >&2; return 1; }
+  { [ -n "$t" ] && [ -d "$t" ]; } || { echo "mktemp returned no directory for $1: '$t'" >&2; return 1; }
+  printf '%s' "$t"
+}
 
 new_repo() {
-  d="$(mktemp -d -t shellsyntax)"
-  git -C "$d" init -q
-  git -C "$d" config user.email t@example.com
-  git -C "$d" config user.name t
+  d="$(make_tmpdir shellsyntax)" || return 1
+  git -C "$d" init -q || { echo "git init failed in $d" >&2; return 1; }
+  git -C "$d" config user.email t@example.com || return 1
+  git -C "$d" config user.name t || return 1
   printf '%s' "$d"
 }
 
@@ -39,28 +53,28 @@ write_case() {
       printf '# the exact-match pattern in in_only()\n'
     fi
     printf 'hello\nPY\n)"\necho "$x"\n'
-  } >"$d/s.sh"
-  git -C "$d" add s.sh
+  } >"$d/s.sh" || die "could not write $d/s.sh"
+  git -C "$d" add s.sh || die "git add failed in $d"
 }
 
 echo "check-shell-syntax.py"
 
 # --- A: the defect is caught (this is the RED case) --------------------------
-d="$(new_repo)"; write_case "$d" bad
+d="$(new_repo)" || die "could not create fixture repo (case A)"; write_case "$d" bad
 (cd "$d" && python3 "$GATE" >/dev/null 2>&1); rc=$?
 [ "$rc" -eq 1 ] && pass "unbalanced quote in a heredoc inside \$( ) is blocked (exit 1)" \
                 || fail "expected exit 1 for the broken script, got $rc"
 
 # --- B: anti-vacuity — the same script minus the apostrophe passes -----------
-d="$(new_repo)"; write_case "$d" good
+d="$(new_repo)" || die "could not create fixture repo (case B)"; write_case "$d" good
 (cd "$d" && python3 "$GATE" >/dev/null 2>&1); rc=$?
 [ "$rc" -eq 0 ] && pass "the same heredoc without the apostrophe passes (exit 0)" \
                 || fail "expected exit 0 for the clean script, got $rc"
 
 # --- C: a shebang script with no .sh suffix is still checked -----------------
-d="$(new_repo)"
-printf '#!/usr/bin/env bash\nif true; then\n' >"$d/hook"
-git -C "$d" add hook
+d="$(new_repo)" || die "could not create fixture repo (case C)"
+printf '#!/usr/bin/env bash\nif true; then\n' >"$d/hook" || die "could not write $d/hook"
+git -C "$d" add hook || die "git add failed in $d"
 (cd "$d" && python3 "$GATE" >/dev/null 2>&1); rc=$?
 [ "$rc" -eq 1 ] && pass "an extensionless shebang script is in scope (exit 1)" \
                 || fail "expected exit 1 for the extensionless broken script, got $rc"
@@ -68,21 +82,23 @@ git -C "$d" add hook
 # --- D: a repo with no shell scripts is UNDETERMINED, not clean --------------
 # CLAUDE.md 3: an empty set is not a verdict. This repo has never had zero
 # shell scripts, so zero means the listing failed.
-d="$(new_repo)"
-printf 'hi\n' >"$d/readme.md"
-git -C "$d" add readme.md
+d="$(new_repo)" || die "could not create fixture repo (case D)"
+printf 'hi\n' >"$d/readme.md" || die "could not write $d/readme.md"
+git -C "$d" add readme.md || die "git add failed in $d"
 (cd "$d" && python3 "$GATE" >/dev/null 2>&1); rc=$?
 [ "$rc" -eq 2 ] && pass "an empty script set resolves to undetermined (exit 2), not clean" \
                 || fail "expected exit 2 for an empty script set, got $rc"
 
 # --- E: outside a git repo it is UNDETERMINED, not clean ---------------------
-d="$(mktemp -d -t shellsyntax-nogit)"
+d="$(make_tmpdir shellsyntax-nogit)" || die "could not create temp dir (case E)"
 (cd "$d" && python3 "$GATE" >/dev/null 2>&1); rc=$?
 [ "$rc" -eq 2 ] && pass "no git repo resolves to undetermined (exit 2), not clean" \
                 || fail "expected exit 2 outside a git repo, got $rc"
 
 # --- F: the real tree parses -------------------------------------------------
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+# An empty $REPO would make `cd ""` a no-op and silently check the caller's cwd.
+{ [ -n "$REPO" ] && [ -d "$REPO" ]; } || die "could not resolve the repository root"
 (cd "$REPO" && python3 "$GATE" >/dev/null 2>&1); rc=$?
 [ "$rc" -eq 0 ] && pass "this repository's tracked shell scripts all parse (exit 0)" \
                 || fail "expected exit 0 for this repository, got $rc"

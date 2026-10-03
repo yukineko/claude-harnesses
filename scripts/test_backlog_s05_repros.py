@@ -309,7 +309,6 @@ class ScriptGates(unittest.TestCase):
             self.skipTest("tree not clean vs HEAD for crates/: precondition absent")
         self.assertTrue("scanned" not in out or "nothing was verified" in out, out)
 
-    @open_defect("e4a1d386")
     def test_e4a1d386_shell_syntax_test_does_not_use_templateless_mktemp(self):
         src = (SCRIPTS / "tests" / "check-shell-syntax.sh").read_text()
         import re

@@ -850,5 +850,50 @@ class DirGlobPathspecs(_Fixture):
         self.assertEqual(r.returncode, 0, r.stderr)
 
 
+class SourceRevisionForms(_Fixture):
+    """Round 5 (verify5): revision spellings git resolves itself — `-`,
+    `:/msg`, `@{-1}` — are resolved bare, then listed by sha."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        # branch `old` carries .githooks/oldhook; the worktree is back on
+        # `feat` (which lacks it), so @{-1} == old.
+        self.git("checkout", "-q", "-b", "old", cwd=self.wt)
+        with open(os.path.join(self.wt, ".githooks", "oldhook"), "w") as f:
+            f.write("#!/bin/sh\n")
+        self.git("add", "-A", cwd=self.wt)
+        self.git("commit", "-qm", "add oldhook", cwd=self.wt)
+        self.git("checkout", "-q", "feat", cwd=self.wt)
+
+    def _r(self, cmd: str, sid: str, cwd: str | None = None):
+        return self.bash(cmd, sid=sid, cwd=cwd or self.wt, project=self.wt)
+
+    def test_revision_forms_reaching_an_old_hook_are_refused(self):
+        for i, cmd in enumerate(("git checkout - -- '*oldhook'",
+                                 "git checkout - '*oldhook'",
+                                 "git checkout '@{-1}' -- '*oldhook'",
+                                 "git checkout ':/add oldhook' -- '*oldhook'",
+                                 "git checkout ':/add oldhook' '*oldhook'",
+                                 "git restore -s ':/add oldhook' '*oldhook'",
+                                 "git restore --source=':/add oldhook' '*oldhook'",
+                                 "git restore -s old '*oldhook'")):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self._r(cmd, f"f{i}").returncode, 2)
+        r = self._r("git checkout - -- 'src/*'", "fok")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_a_revision_that_is_not_a_tree_is_refused(self):
+        r = self._r("git checkout HEAD:tracked.rs -- 'src/*'", "blob")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_unborn_head_keeps_a_fresh_repo_usable(self):
+        fresh = os.path.join(self.tmp, "fresh")
+        self.git("init", "-q", fresh, cwd=self.tmp)
+        r = self._r("git restore 'src/*'", "fresh", cwd=fresh)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = self._r("git rm --cached 'build/*'", "fresh2", cwd=fresh)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

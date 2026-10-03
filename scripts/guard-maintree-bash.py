@@ -264,18 +264,20 @@ mode that judges nothing else):
     `.githooks/x`, `.git/hooks/x` or a real hook entry: everything under
     `<toplevel>/.githooks` and `<git-common-dir>/hooks`, the index's
     `.githooks` files (`git ls-files`), and the `.githooks` tree of the source
-    revision the command names (`checkout REV -- …`, `restore -s REV`, and
-    HEAD for restore) via `git ls-tree`. The pattern is repo-relative:
+    revision the command names (`checkout REV -- …`, `checkout -` = @{-1},
+    `restore -s REV`, and HEAD for restore), resolved bare with `git
+    rev-parse --verify` and listed by sha via `git ls-tree`. The pattern is repo-relative:
     prefixed with the cwd's path in the repo unless `:(top)` / `:/`, with
     `./` and `../` resolved as git does; case folded under `:(icase)` and on
     darwin; `:(literal)` is not a glob. A glob COMPONENT is not itself read
     as "may be .githooks", so `src/*`, `*/Cargo.toml`, `crates/*/src/x` are
     allowed. A glob whose entries cannot be listed (unknown cwd, a git
-    listing that fails or exits non-zero, an unreadable directory, a source
-    revision this walk cannot know), or whose normalised pattern climbs
-    above the toplevel, is refused as undetermined; a named revision that
-    does not exist (`rev-parse --verify` exits 1) makes git fail before
-    writing and is skipped. Options that take a
+    listing or revision resolution that fails or exits non-zero — restore's
+    implicit HEAD included — an unreadable directory, a source revision this
+    walk cannot know), or whose normalised pattern climbs above the
+    toplevel, is refused as undetermined; a revision that does not exist
+    (`rev-parse --verify -q` exits 1 with no output, e.g. an unborn HEAD)
+    makes git fail before writing and is skipped. Options that take a
     value are known per subcommand: `-p` / `-C` take one only for apply / am
     (`-p<n>`); for restore / checkout / stash `-p` is `--patch` and the next
     word is a pathspec. `:!` / `:(exclude)` pathspecs write nothing and are
@@ -1965,12 +1967,17 @@ class _Analyzer:
         `:(literal)` is not a glob, `:(top)` / `:/` anchor at the toplevel. A
         glob whose entries cannot be listed (unknown cwd, a git listing that
         fails or exits non-zero, an unreadable directory, a named revision
-        whose listing fails for a reason other than "no such revision") is
-        refused. A named name that is no revision at all (`rev-parse --verify`
-        exits 1) makes git fail before writing, so it is skipped and the
-        stand-ins and the other listings decide. `revs` = (revisions the
-        command names explicitly, revisions it may name — a checkout operand
-        without `--`)."""
+        whose resolution or listing fails for a reason other than "no such
+        revision") is refused. Each revision is resolved BARE with `git
+        rev-parse --verify -q --end-of-options REV` (so `:/msg`, `@{-1}`,
+        `@{u}`, `HEAD@{date}` resolve as git resolves them) and its tree is
+        listed by sha; a sha whose tree cannot be listed (a blob) refuses.
+        A name that is no revision at all (that rev-parse exits 1 with no
+        output — an unborn HEAD included) makes git fail before writing, so
+        it is skipped and the stand-ins and the other listings decide. `revs`
+        = (revisions the command names explicitly, revisions it may name —
+        restore's HEAD, a checkout operand without `--`); both are listed the
+        same way."""
         magic = ""
         top = False
         if spec.startswith(":(") and ")" in spec:
@@ -2068,29 +2075,31 @@ class _Analyzer:
         if got is None or got[0] != 0:
             return "git ls-files failed", None
         out.extend(got[1])
-        # ... and each source revision the command names.
+        # ... and each source revision the command names (or may name). The
+        # revision text is resolved BARE (`:/msg`, `@{-1}`, `@{u}`,
+        # `HEAD@{date}` take no suffix), then its tree is listed by sha.
+        # Only "no such revision" (`rev-parse --verify -q` exits 1, silently)
+        # is skipped: git then fails before writing, or reads the operand as
+        # a pathspec. Every other failure is undetermined and refuses —
+        # including for the possible revisions (restore's implicit HEAD).
         required, maybe = revs
-        for rev, must in [(r, True) for r in required] + [(r, False) for r in maybe]:
-            if any(c in rev for c in "$`") or rev.startswith("-"):
-                if must:
-                    return f"the source revision {rev!r} cannot be determined", None
-                continue
+        for rev in required + maybe:
+            if any(c in rev for c in "$`"):
+                return f"the source revision {rev!r} cannot be determined", None
+            chk = self._git_lines(top, ["rev-parse", "--verify", "-q",
+                                        "--end-of-options", rev])
+            if chk is None:
+                return f"git rev-parse of {rev!r} could not run", None
+            if chk[0] == 1 and not "".join(chk[1]).strip():
+                continue  # no such revision (an unborn HEAD included)
+            sha = "".join(chk[1]).strip()
+            if chk[0] != 0 or not re.fullmatch(r"[0-9a-f]{7,64}", sha):
+                return f"git rev-parse of {rev!r} exited {chk[0]}", None
             got = self._git_lines(top, ["ls-tree", "-r", "-t", "-z", "--full-tree",
-                                        "--name-only", rev + "^{tree}", "--",
+                                        "--name-only", sha + "^{tree}", "--",
                                         ".githooks"])
             if got is None or got[0] != 0:
-                # `rev-parse --verify -q` exits 1, silently, exactly when the
-                # name is not a revision: git's checkout / restore then fails
-                # before writing anything (or, without `--`, reads the operand
-                # as a pathspec), so the stand-ins and the other listings stand.
-                # Any other failure is undetermined.
-                chk = self._git_lines(top, ["rev-parse", "--verify", "-q",
-                                            "--end-of-options", rev + "^{tree}"])
-                if chk is not None and chk[0] == 1 and not chk[1]:
-                    continue
-                if must:
-                    return f"git ls-tree of {rev!r} failed", None
-                continue
+                return f"git ls-tree of {rev!r} ({sha}) failed", None
             out.extend(got[1])
         return prefix, out
 
@@ -2567,7 +2576,8 @@ class _Walk:
         operands that may be one). restore: `-s` / `--source` (separate,
         `=` or glued), and HEAD as a possible source (`--staged`). checkout:
         the operand before `--` (explicit), or the first operand when there
-        is no `--` (possible: git reads it as a revision only if it is one)."""
+        is no `--` (possible: git reads it as a revision only if it is one). A
+        bare `-` is `@{-1}`, as git reads it."""
         args = [_expand(a, st) for a in args]
         required: list[str] = []
         maybe: list[str] = []
@@ -2581,6 +2591,7 @@ class _Walk:
                     required.append(a.split("=", 1)[1])
                 elif a.startswith("-s") and len(a) > 2:
                     required.append(a[2:])
+            required = ["@{-1}" if r == "-" else r for r in required]
             maybe.append("HEAD")
         elif sub == "checkout":
             ops: list[str] = []
@@ -2594,7 +2605,9 @@ class _Walk:
                 if a in _GIT_SUB_VALUE_OPTS["checkout"]:
                     j += 2
                     continue
-                if not a.startswith("-"):
+                if a == "-":
+                    ops.append("@{-1}")  # git reads a bare `-` as @{-1}
+                elif not a.startswith("-"):
                     ops.append(a)
                 j += 1
             if dashdash:
@@ -3567,9 +3580,11 @@ if __name__ == "__main__":
 #     expansion (`.git{hooks,x}`); a hook file created after this call's
 #     listing (glob pathspecs are matched against the entries that exist when
 #     the call is judged), or present only in a revision the same command
-#     creates before the checkout (`git fetch && git checkout FETCH_HEAD --
-#     '*hook'`: the revision does not resolve when judged, so only the
-#     working tree, the index and the stand-ins are matched); a hook
+#     creates or MOVES before the checkout (`git fetch && git checkout
+#     FETCH_HEAD -- '*hook'`, `git checkout x && git checkout - -- '*hook'`:
+#     revisions are resolved when the call is judged, so a revision that
+#     does not exist yet is skipped and one that will point elsewhere is
+#     listed as it points now); a hook
 #     directory other than <toplevel>/.githooks and <common-dir>/hooks (a
 #     nested `.githooks` is caught only when a pathspec names it literally);
 #     a git glob with `**` / `:(glob)` semantics is matched with fnmatch,

@@ -1,11 +1,12 @@
 // このファイルは丸ごと integration test なので unwrap/expect/panic を許可する。
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-// RECURRENCE (claim from the 89544915 implementer, tested black-box): a
-// structural finding `specguard:<kind>:<key>` has no episode id. After
-// `reconcile-findings` closes it `resolved`, if the same gap returns, a fresh
-// `specguard audit` must surface a NEW OPEN finding in `overwatch review-queue
-// --json`. record-audit solved this with episode ids; specguard must too.
-// Independent test (author != implementer).
+#![allow(dead_code)] // fixture helpers shared with backlog_89544915.rs; not every one is used here
+                     // RECURRENCE (claim from the 89544915 implementer, tested black-box): a
+                     // structural finding `specguard:<kind>:<key>` has no episode id. After
+                     // `reconcile-findings` closes it `resolved`, if the same gap returns, a fresh
+                     // `specguard audit` must surface a NEW OPEN finding in `overwatch review-queue
+                     // --json`. record-audit solved this with episode ids; specguard must too.
+                     // Independent test (author != implementer).
 
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -215,7 +216,6 @@ fn stderr(o: &Output) -> String {
     String::from_utf8_lossy(&o.stderr).to_string()
 }
 
-
 fn overwatch_bin() -> PathBuf {
     static BUILT: std::sync::Once = std::sync::Once::new();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -284,7 +284,10 @@ fn recurrence_after_resolved_is_a_new_open_finding_in_review_queue() {
 
     // Precondition 1: audit surfaces alpha as an open queue row.
     let q0 = fx.queue();
-    assert!(rows_mentioning(&q0, "alpha") >= 1, "alpha must be visible after first audit: {q0}");
+    assert!(
+        rows_mentioning(&q0, "alpha") >= 1,
+        "alpha must be visible after first audit: {q0}"
+    );
 
     // Fix, reconcile => resolved; precondition 2: it left the queue.
     fx.set_map(MAP_ALPHA_FIXED);

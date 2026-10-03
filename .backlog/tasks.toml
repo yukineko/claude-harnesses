@@ -2896,17 +2896,19 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 実測 2026-09-13、測定点 36e3f960。2d3cbda2 (死んだセッションの worktree/branch を回収する GC が無い) を再測した結果、literal な主張は HEAD では偽だったので done にした。その実測と、残った本当の gap を記録する。/ 存在する側 (逐語): crates/condukt/src/main.rs:684 が delete the ones the reconcile gate says are safe (--remove) と書き、:686 が Deletion is reachable ONLY through wt_reconcile::is_removable と書く。判定側は crates/condukt/src/wt_reconcile.rs の module doc が conjunction of three positively observed terms (:58) / window elapsed, and no Claude session transcript bound to its path at all (:60) / Not merely a transcript that stopped growing that was the first cut (:61) と 3条件連言を明記し、Stalled therefore resolves to Undetermined occupancy, i.e. keep (:42) と unreadable transcript store is not an absence of sessions (:66) で判定不能を保全側へ倒している。つまり GC は存在し、しかも向きが正しい (削除側へ倒れない)。/ 存在しない側 = 本チケットの中身: 自動駆動する経路が無い。grep -rn reconcile crates/condukt/hooks/ crates/condukt/skills/ .githooks/ は worktree reconcile --remove の呼び出しを 1 件も返さない (SKILL.md がヒットするのは condukt state reconcile という別コマンドで、task 状態の昇格であって worktree の回収ではない)。したがって回収は人間が手で打つまで起きない。/ なぜこれが問題か: CLAUDE.md 第8節が全作業の worktree 化を絶対義務にした以上、worktree は毎セッション生成される。回収が手動なら残渣は単調増加する。元チケットの副題 worktree 義務化の前提として必須 はこの点を指していた。/ 完了条件: 死んだセッションの worktree が人手を介さずに回収される。ただし GC は向きが反転するゲートなので、自動化しても判定不能が削除へ倒れないこと (is_removable の現在の向きを壊さないこと) を対照として同時に観測すること。起動点の候補は SessionStart / SessionEnd / pre-commit のいずれかだが、どれが正しいかは測ってから決める (SessionStart なら自セッションの worktree を消しかねない順序問題がある)。
 
 [backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_7100bb4e.py (rev 596108b9): Dead-session worktree GC is never driven automatically."""
 created_at = 1789279404
-updated_at = 1790983155
+updated_at = 1791052009
 weight = 0.0
 issue_number = 570
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/570"
-rev = 0
+rev = 1
+ruling_kind = "judgment"
+rationale = "Parked by the p1 loop (session 64554c4d, 2026-10-04) without implementation: the fix wires an automatic worktree DELETION path (condukt worktree reconcile --remove) into a hook, and the ticket itself says the trigger point (SessionStart / SessionEnd / pre-commit) must be chosen after measurement because SessionStart can delete the session's own worktree. Needs a human ruling: (1) which trigger, (2) whether automatic deletion is acceptable at all versus a reported list the human runs, (3) any paths that must never be reaped (e.g. pgv-target). Repro: scripts/test_backlog_7100bb4e.py."
 
 [[task]]
 id = "73b167d3"
@@ -3003,31 +3005,6 @@ updated_at = 1790983293
 weight = 0.0
 issue_number = 574
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/574"
-rev = 0
-
-[[task]]
-id = "057fa13c"
-title = "condukt の diffrisk_record every_invocation_is_journaled テストが並列実行で 2/4 の確率で落ちる (共有 ledger の分離漏れ)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p1",
-    "flaky-test",
-    "condukt",
-]
-touched_files = []
-status = "pending"
-notes = """
-測定点 main 874d6d47 / 2026-09-13. サイクル5 の b637936f 実装中に検出。crates/condukt/src/diffrisk_record.rs:540 の assertion left == right one record per invocation が cargo test -p condukt のフル実行で落ちる。実測: 変更を stash して branch point 874d6d47 の素の状態で 4 回連続実行し FAILED / FAILED / ok / ok。単体 (--test 名指し・単一スレッド) では通る。したがって当該変更とは無関係の既存 flake であり、共有 ledger か固定パスの fixture が並列テスト間で干渉している疑いが濃い。memory の killed task leaves orphan loop と同型 (固定 /tmp fixture の相互破壊) の可能性。完了条件: ledger のパスをテストごとに分離し 10 回連続で green を観測すること。注意: この flake があるかぎり cargo test -p condukt のフル green は判定不能であり、他タスクの検証結果を汚染する。
-
-[triage 2026-09-29 @b325a169] p2->p1: diffrisk_record flake makes full cargo test -p condukt green unreliable; condukt verifies other tasks
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Shares the failure with e494a8a3 (RED pin --include-ignored -> FAILED, body uses Config::load()), but 057fa13c carries an extra done criterion ('10 consecutive greens') absent from e494a8a3's notes ->; test - (rev e70d48dd)"""
-created_at = 1789291716
-updated_at = 1790983144
-weight = 0.0
-issue_number = 599
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/599"
 rev = 0
 
 [[task]]
@@ -12817,4 +12794,56 @@ updated_at = 1791051853
 weight = 0.0
 issue_number = 1310
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1310"
+rev = 0
+
+[[task]]
+id = "3ebc42d1"
+title = "condukt run を backlog lease / claim-task 無しで回すセッションがあり、/flow の next --claim が同じ item を配って重複着手する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04: session 6fcd99df run run-20261004-023737-16648 implemented backlog 56eb3f9a, 233f819c, 7100bb4e, 7b6bcfe6 without a backlog lease or condukt claim-task; session 64554c4d's p1 loop received the same items from next --claim, started a 56eb3f9a worker (stopped as duplicate) and parked 7100bb4e for a ruling while 6fcd99df was implementing it. Reading (a): condukt state init / the /condukt skill should take claim-task (and a backlog lease) for each backlog-derived task, so a direct /condukt run is visible to next --claim; (b): intended that only /flow claims, then /condukt must refuse or warn when its tasks carry backlog ids with no lease. Distinguish by reading condukt state init and the /condukt SKILL for claim-task calls."
+created_at = 1791052079
+updated_at = 1791052079
+weight = 0.0
+issue_number = 1311
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1311"
+rev = 0
+
+[[task]]
+id = "8d8846fa"
+title = "After the 56eb3f9a scope tri-state fix, flow SKILL.md (~417: empty scope is outside collision detection) and docs/specs/overwatch.md (54-60, 91: summary only scope_overlap/possible_duplicate, names scopes_overlap) describe the old binary behaviour"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Found by the (stopped, duplicate) 56eb3f9a worker of session 64554c4d; the landing fix is session 6fcd99df run-20261004-023737-16648 t1. Check its docs once merged; flow SKILL change needs a flow version bump."
+created_at = 1791052102
+updated_at = 1791052102
+weight = 0.0
+issue_number = 1312
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1312"
+rev = 0
+
+[[task]]
+id = "a13399ac"
+title = "condukt lock::tests::repo_primary_lock_is_one_lock_across_a_repo_and_its_linked_worktree failed 1 of 10 full --bin condukt runs (panic at lock.rs:783, the git fixture helper)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flaky-test",
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04 at session-64554c4d HEAD 8c159fd6 while measuring 057fa13c: 10 sequential runs of cargo test -p condukt --bin condukt; runs 1-9 881 passed/0 failed, run 10 880/1 with this test panicking at crates/condukt/src/lock.rs:783:33 (fixture git() helper: a git command in the fixture exited non-zero). Two condukt verifiers were running cargo test in other worktrees concurrently (machine load). diffrisk_record (057fa13c) passed all 10. Full panic text not captured (script grepped only the test name and panic line)."
+created_at = 1791052321
+updated_at = 1791052321
+weight = 0.0
+issue_number = 1313
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1313"
 rev = 0

@@ -34966,3 +34966,56 @@ test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "bffb0f8b0d92443588822d0bf46523d8c6be2cde"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "057fa13c"
+title = "condukt の diffrisk_record every_invocation_is_journaled テストが並列実行で 2/4 の確率で落ちる (共有 ledger の分離漏れ)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p1",
+    "flaky-test",
+    "condukt",
+]
+touched_files = []
+status = "done"
+notes = """
+測定点 main 874d6d47 / 2026-09-13. サイクル5 の b637936f 実装中に検出。crates/condukt/src/diffrisk_record.rs:540 の assertion left == right one record per invocation が cargo test -p condukt のフル実行で落ちる。実測: 変更を stash して branch point 874d6d47 の素の状態で 4 回連続実行し FAILED / FAILED / ok / ok。単体 (--test 名指し・単一スレッド) では通る。したがって当該変更とは無関係の既存 flake であり、共有 ledger か固定パスの fixture が並列テスト間で干渉している疑いが濃い。memory の killed task leaves orphan loop と同型 (固定 /tmp fixture の相互破壊) の可能性。完了条件: ledger のパスをテストごとに分離し 10 回連続で green を観測すること。注意: この flake があるかぎり cargo test -p condukt のフル green は判定不能であり、他タスクの検証結果を汚染する。
+
+[triage 2026-09-29 @b325a169] p2->p1: diffrisk_record flake makes full cargo test -p condukt green unreliable; condukt verifies other tasks
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Shares the failure with e494a8a3 (RED pin --include-ignored -> FAILED, body uses Config::load()), but 057fa13c carries an extra done criterion ('10 consecutive greens') absent from e494a8a3's notes ->; test - (rev e70d48dd)"""
+created_at = 1789291716
+updated_at = 1791052307
+weight = 0.0
+issue_number = 599
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/599"
+issue_closed_at = 1791052310
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --bin condukt -- --exact --include-ignored diffrisk_record::backlog_e494a8a3::journaling_test_does_not_write_into_the_home_state_root"
+exit = 0
+passed = 1
+rev = "8c159fd6d9dabada6d3210fd344e3bfb7e5e9777"
+observed_at = 1791052288
+output_digest = "sha256:6c2d1b88f6175c5a4b2d76b5e52dda80fbee031753c50a5d627def09348ac6aa"
+excerpt = """
+
+running 1 test
+test diffrisk_record::backlog_e494a8a3::journaling_test_does_not_write_into_the_home_state_root ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 887 filtered out; finished in 0.07s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running unittests src/main.rs (target/debug/deps/condukt-ae479190a6341130)
+"""
+
+[task.closure.red]
+rev = "f51e281e939680fb09866da6a6ff4a0acafc47f0"
+exit = 101
+kind = "behavioural"

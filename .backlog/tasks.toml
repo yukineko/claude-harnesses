@@ -2112,29 +2112,6 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/1115"
 rev = 0
 
 [[task]]
-id = "873a2621"
-title = "peer footprint: 24h window は liveness ではない — 2時間前に終了したセッションが今も自分のファイルを除外しうる。heartbeat-TTL claim registry(condukt/overwatch)から peer を導出する"
-project = "/home/hiroyuki_nakayama/src/claude-harnesses"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-
-
-[triage 2026-09-29 @b325a169] p2->p1: live self-documented fail-open: harness-core transcript.rs:474-488 peer window excludes files from secrets/missing-test gate sets
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/harness-core/tests/backlog_s07_audit.rs (rev e70d48dd)
-
-[ruling 2026-10-04, user via AskUserQuestion, session 33de4c25] Design D: a session is a peer only if it holds a live entry in condukt's claim registry (claims.json, heartbeat TTL); its footprint still comes from its transcript. Registry unreadable -> no exclusion (restrictive). The user approved re-anchoring the frozen assertions in crates/harness-core/tests/change_attribution.rs (~l.700-735) and peer_concurrency_window.rs (~l.175) to "fresh transcript + live registry entry". RED observed at fb3d3b2a: cargo test -p harness-core --test backlog_s07_audit -- --include-ignored backlog_873a2621. Needs rebuild+rollout of linking plugins once fixed."""
-created_at = 1788930715
-updated_at = 1791043710
-weight = 0.0
-issue_number = 1116
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1116"
-rev = 1
-
-[[task]]
 id = "1b82a049"
 title = "blastguard: chmod -x <plugin cache binary> が ALLOW — ゲート無効化が dark に失敗する"
 project = "/home/hiroyuki_nakayama/src/claude-harnesses"
@@ -2925,17 +2902,47 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 実測 2026-09-11、測定点 89b31bb4。scripts/mutation-gate.sh / scripts/mutation-pilots.sh を実行する箇所が repo 内に存在しない (scripts/ .githooks/ を grep してヒットするのは自身の usage 例と scripts/test_mutation_pilots.sh のみ。後者は pilot の MAPPING を試すだけでゲートを走らせない)。唯一の起動契機だった .github/workflows/mutation.yml は a572f5ad で削除された (CLAUDE.md 第7節の GHA 全面禁止)。結果として、テストが欠陥を検出できるかを測る唯一のゲートが完全に INERT である — mutation-pilots.sh 自身の WHY コメントが閉じるために書かれたと述べている当の fail-open。散文は 6af3eb30 で実態に合わせて是正済み (INERT と明記) だが結線そのものは未解決。第7節により代替は local (pre-push か明示スクリプト) でなければならない。pre-push は既に約 346s/push で mutation 実行は分単位なので、置き場所と費用はユーザー裁定が要る。
 
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_de721e5e_df49f872.py::BacklogDe721e5e (rev e128c13b): Static wiring test: no .githooks file invokes mutation-gate.sh/mutation-pilots.sh. Placement (pre-push cost) still needs a human ruling; the test accepts any hook."""
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_de721e5e_df49f872.py::BacklogDe721e5e (rev e128c13b): Static wiring test: no .githooks file invokes mutation-gate.sh/mutation-pilots.sh. Placement (pre-push cost) still needs a human ruling; the test accepts any hook.
+
+[2026-10-04, session 33de4c25, measured at main 4027a8dc under load avg 35-100; logs in that session's scratchpad de721e5e-measure/]
+
+Still open: nothing in .githooks calls scripts/mutation-gate.sh or mutation-pilots.sh. Repro test: scripts/test_backlog_de721e5e_df49f872.py, red-rev e128c13b. The de721e5e case is @expectedFailure; remove that once it is wired.
+
+Ran PILOT=<p> scripts/mutation-gate.sh for each pilot. All 4 exited 2 (fail-closed) at the BASELINE stage, so not one mutant was tested:
+
+| pilot | mutants | wall time | baseline failure |
+|---|---|---|---|
+| harness-core | 1616 (no --file scope) | 197s | hit the 120s MUTANTS_TIMEOUT (trybuild scope_type_contract_positive_control ran over 60s) |
+| specguard | 87 | 72s | ack_blocks_when_raised_at_poisoned_even_with_healthy_head and ack_succeeds_when_new_commit_exists fail only in the non-git scratch copy (14/14 pass in the real worktree); the script's skip list is incomplete |
+| condukt | 77 | 99s | diffrisk_record every_invocation_is_journaled (same flake as e494a8a3) |
+| blastguard | 26 | 48s | detect d4_exponential_find_exec_is_bounded_and_denies: wall-clock <2s assert; also fails in the real worktree under load (2.95s) |
+
+Blockers for any wiring:
+- (a) mutation-gate.sh never runs mkdir -p target. cargo-mutants exits 1 on a fresh checkout ("create output parent directory target/mutants-<pilot> ... No such file or directory"). The pre-push detached worktree has no target/, so every push would be blocked.
+- (b) The specguard skip list is incomplete for the non-git copy.
+- (c) The harness-core fallback pilot is unscoped (1616 mutants) and its baseline times out.
+- (d) The blastguard D4 timing assert is load-sensitive and red at main under load.
+
+Cost per push is UNVERIFIED: no baseline passed, so no full run could be measured.
+
+Options for the user ruling:
+- A. pre-push runs the mapped pilots for the changed crates, with harness-core as the fallback.
+- B. pre-push runs a pilot only when that pilot crate changes; no fallback. This reintroduces the passthrough for machinery-only changes.
+- C. A manual or Stop trigger only, with no push gate (advisory).
+- D. pre-push runs only blastguard and condukt, once their baselines are green.
+The .githooks edit is human-applied (deny rule)."""
 created_at = 1789068956
-updated_at = 1790983289
+updated_at = 1791046167
 weight = 0.0
 issue_number = 517
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/517"
-rev = 0
+rev = 2
+ruling_kind = "judgment"
+rationale = "Which trigger for the mutation gate (A/B/C/D in notes 2026-10-04); and blockers a-d in mutation-gate.sh baseline must be fixed first. .githooks edit is human-applied."
 
 [[task]]
 id = "1116bee1"
@@ -3011,25 +3018,6 @@ updated_at = 1790983224
 weight = 0.0
 issue_number = 522
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/522"
-rev = 0
-
-[[task]]
-id = "e5174b6a"
-title = "condukt oracle.rs の fallback:true 3分岐が check_oracle 経由では到達不能 — 散文は charter DoD の縮退契約と書いているが実挙動は Reject"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-実測 2026-09-11、測定点 5b3251a1。crates/condukt/src/oracle.rs には run 由来の fallback:true が 3 経路ある: (1) verdict_from_oracle の transition unknown 分岐 (oracle.rs:70 付近)、(2) verdict_from_oracle_output の stdout 空 分岐、(3) 同 stdout が JSON パース不能 分岐。いずれも check_oracle 経由では到達しない。理由: crates/tdd/src/main.rs:349 の oracle_command は valid_fp_oracle が true でない限り exit 1 で終了する。deployed の tdd 0.1.29 で直接確認した -- tdd oracle --task no-such-task-xyz は {has_green:false,has_red:false,transition:unknown,valid_fp_oracle:false} を印字して exit=1。verdict_from_oracle_output は exit_ok=false を先頭で短絡して fallback:false を返すので、(1) には決して降りない。(2)(3) も tdd が exit 0 のときは必ず整形済み JSON を印字するため到達しない。問題は挙動そのものではなく散文との食い違いである: verdict_from_oracle の doc comment は逐語で「Per the charter DoD (オラクル生成不能時の fallback) that is a can't-generate condition and must degrade to the legacy done_criteria gate (fallback: true -- enforce_fp_gate Allows), NOT hard-reject」と書いており、charter の DoD が実装されているかのように読める。実際には charter が要求した縮退は起きず hard-reject される。CLAUDE.md 第4節 (散文が実挙動と食い違ったら次のレビュアーを騙す仕掛けになる) に該当。要判断: charter DoD の縮退契約を本当に実現したいのか (その場合 tdd oracle の exit code 設計を変える必要がある。ただし縮退は fail-open なので第3節と衝突する)、それとも縮退契約自体を撤回して散文を実挙動に合わせるのか。後者が妥当に見えるが、これは仕様判断なので人間に返す。付随して、到達不能な 3 分岐にユニットテストが付いている場合、それらは pure function の契約テストであって gate 経路の証明ではないことを doc に明記すべき。
-
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/condukt/src/oracle.rs (mod backlog_e5174b6a) (rev 596108b9): Contract pinned = prose and behaviour agree; GREEN under either resolution (rewrite doc, or change exit protocol + fixture)."""
-created_at = 1789070218
-updated_at = 1790983151
-weight = 0.0
-issue_number = 525
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/525"
 rev = 0
 
 [[task]]
@@ -3982,13 +3970,15 @@ crates/*/bin/*-darwin-arm64 は .gitignore:45 で無視されており、リポ�
 
 削除はしていない。未追跡かつ gitignore なので git から復元できず、2026-08-04 の a6f165cd と同じく 宣言のない red を意図的と解釈して消す ことになるため。
 
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_5e54fb25.py (rev 529df3a8): no rollout executed; function tested in isolation"""
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_5e54fb25.py (rev 529df3a8): no rollout executed; function tested in isolation
+
+[2026-10-04, session 33de4c25] The main defect (a --plugin run skipped verification and returned rc 0) is fixed by c9373b92 (fix 4bc8c975, tests 418c82e2/131e987d). This item's own repro, test_filtered_run_with_drift_in_the_filtered_plugin_fails, now passes, and its expectedFailure marker was removed. Still open here: the second issue in these notes (a stale untracked crates/tdd/bin/tdd-darwin-arm64 appearing in the mirror comparison) is not addressed. Close this item once that part has its own test, or narrow the item to that part."""
 created_at = 1789297053
-updated_at = 1790983325
+updated_at = 1791046807
 weight = 0.0
 issue_number = 624
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/624"
-rev = 0
+rev = 1
 
 [[task]]
 id = "29b08fc7"
@@ -4367,25 +4357,6 @@ updated_at = 1790983233
 weight = 0.0
 issue_number = 675
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/675"
-rev = 0
-
-[[task]]
-id = "c9373b92"
-title = "rollout-plugins.sh --plugin runs skip the verification that would catch a dark deploy"
-project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-scripts/rollout-plugins.sh:1106-1113 returns 0 early for any filtered run: 'verify: skipped — this run was filtered to: ...'. check-plugin-rollout.py DOES detect 'installed but execs nothing' (check-plugin-rollout.py:1147-1153, ROLLOUT-class fatal at rollout-plugins.sh:1120-1125), but the single most common invocation shape — scripts/rollout-plugins.sh --plugin <name> — never runs it. So the one path an operator uses to roll out one plugin has ZERO post-hoc check that the host binary actually landed. The stated reason (a whole-fleet verdict would fail for plugins this run never touched) argues for a SCOPED verification of the targeted plugins, not for skipping verification entirely. Found while closing 8206b09f.
-
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_rollout_nt_e_repros.py::VerifyRolloutComplete.test_filtered_run_still_verifies_the_targeted_plugins (rev e128c13b): verify_rollout_complete() extracted verbatim from rollout-plugins.sh and run in a sandbox with a stub checker; the script itself was not executed."""
-created_at = 1789118611
-updated_at = 1790983297
-weight = 0.0
-issue_number = 537
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/537"
 rev = 0
 
 [[task]]
@@ -11847,6 +11818,57 @@ updated_at = 1791043800
 weight = 0.0
 issue_number = 1228
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1228"
+rev = 0
+
+[[task]]
+id = "eb93be49"
+title = "Red at main 9e9d8db3: blastguard redirect_target_suffix_resolution (2 symlink tests) and specguard forge_integration ratify_promotes_draft_and_pins_consent"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04 (session 33de4c25) in the session worktree at main 9e9d8db3. cargo test -p blastguard --test redirect_target_suffix_resolution: symlink_before_dotdot_in_a_suffix_must_not_be_resolved and symlink_without_a_dotdot_is_caught_by_the_symlink_axis FAILED (12 passed, 2 failed). cargo test -p specguard --test forge_integration ratify_promotes_draft_and_pins_consent FAILED. Both are pre-existing, not caused by 873a2621. Possibly related: 3ca56588 and b280cfa2 (blastguard symlink + ..). Also, stuckguard anchor::backlog_c397cd15::heartbeat_reaches_overwatch_that_is_only_in_the_plugin_cache failed in a full cargo test --workspace run but passed 3/3 in isolation: a parallel-run flake."
+created_at = 1791046280
+updated_at = 1791046280
+weight = 0.0
+issue_number = 1259
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1259"
+rev = 0
+
+[[task]]
+id = "2becbabe"
+title = "condukt oracle: exit-0 tdd with empty/garbled stdout, and the unknown transition, map to fallback:true (Allow) — latent fail-open, unreachable with today's tdd"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Found 2026-10-04 by the e5174b6a implementer (session 33de4c25). The branches in verdict_from_oracle_output (empty or non-JSON stdout with exit 0) and in verdict_from_oracle (unknown) return fallback:true. Real tdd exits 1 for unknown, so the gate path does not reach them today (e28ac2a9 documents this). A tdd or wrapper that exits 0 with bad stdout would get Allow. Section 3 says to turn these into Reject or delete them. That changes gate behaviour, so it needs a repro test with a fake tdd (exit 0, empty stdout) asserting Reject."
+created_at = 1791046569
+updated_at = 1791046569
+weight = 0.0
+issue_number = 1262
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1262"
+rev = 0
+
+[[task]]
+id = "5ad99d92"
+title = "docs/USAGE.md:256 and :270-271 describe editgate as fail-soft / exit 0 when the checker cannot start, contradicting 3e77acaa (spawn failure -> broken:true)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Found 2026-10-04 by the e5174b6a implementer (session 33de4c25); not verified further. Compare docs/USAGE.md:256 and :270-271 against crates/condukt editgate after 3e77acaa. A doc-vs-behaviour test can pin it."
+created_at = 1791046571
+updated_at = 1791046571
+weight = 0.0
+issue_number = 1263
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1263"
 rev = 0
 
 [[task]]

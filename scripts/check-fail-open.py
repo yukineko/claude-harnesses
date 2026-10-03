@@ -327,6 +327,24 @@ ALLOWLIST: list[dict[str, str]] = [
     # main.rs, stuckguard main.rs and verdict_monotonicity.rs, donegate
     # gate.rs — into the counted ratchet baseline. Do not re-add them here;
     # the burn-down pressure for that class is the pinned number.)
+    # REVIEWED (backlog 873a2621, user-approved 2026-10-04): the two empty-set
+    # arms below return an empty PEER footprint, which excludes NO file from a
+    # gate's audit set — the restrictive direction. Ruling D requires exactly
+    # this when peer liveness cannot be determined (claim registry unreadable /
+    # unparseable, or no cwd to key it on). These two sites only; the other
+    # transcript.rs hits stay counted.
+    {
+        "path": "crates/harness-core/src/transcript.rs",
+        "pattern": "err-arm-empty-fallback",
+        "needle": "Err(_) => BTreeSet::new(),",
+        "reason": "peer_edit_footprint_within: no cwd -> no registry key -> empty PEER footprint = no file excluded from the audit set (restrictive); user ruling D 873a2621 (2026-10-04) requires no exclusion when liveness can't be determined; allowlisting user-approved 2026-10-04",
+    },
+    {
+        "path": "crates/harness-core/src/transcript.rs",
+        "pattern": "undetermined-arm-empty-fallback",
+        "needle": "Determination::Undetermined(_) => return BTreeSet::new(),",
+        "reason": "peer_edit_footprint_for: claim registry Undetermined -> empty PEER footprint = no file excluded from the audit set (restrictive); user ruling D 873a2621 (2026-10-04) requires no exclusion when liveness can't be determined; allowlisting user-approved 2026-10-04",
+    },
 ]
 
 # Sentinel line number for a whole-file finding (unreadable / undecodable), so a

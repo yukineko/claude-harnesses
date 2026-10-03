@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for scripts/check-bench-regression.py.
+"""Unit tests for scripts/bench-regression.py.
 
 Stdlib-only (`unittest`), no network. Exercises the three required cases against
 tempdir JSONL fixtures, plus the pure helper directly:
@@ -21,7 +21,7 @@ from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
 _SPEC = importlib.util.spec_from_file_location(
-    "check_bench_regression", _HERE / "check-bench-regression.py"
+    "bench_regression", _HERE / "bench-regression.py"
 )
 cbr = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(cbr)

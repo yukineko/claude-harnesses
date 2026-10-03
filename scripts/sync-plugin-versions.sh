@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
 # Sync every plugin.json version to its crate's Cargo.toml version — the
-# WRITE companion to check-versions.sh (which only *verifies* parity, read-only).
+# WRITE companion to check-plugin-versions.py (which only *verifies* parity,
+# read-only, and also compares .claude-plugin/marketplace.json).
 #
 # The Cargo.toml [package] version is the source of truth; each
 # .claude-plugin/plugin.json is rewritten to match. Run this after a tool bumps
 # Cargo.toml (e.g. release-plz) so the distributed manifest (plugin.json) stays
-# in lockstep and the version-parity gate (check-versions.sh) stays green.
+# in lockstep and the version-lockstep gate (check-plugin-versions.py, run by
+# .githooks/pre-commit) stays green. marketplace.json is NOT touched here.
 #
 # Idempotent: a crate already in sync is skipped with no file write, so running
 # it repeatedly (or when nothing changed) is a clean no-op. A crate that is not
-# BOTH a cargo crate and a plugin is skipped (same scope as check-versions.sh).
-# Exit 0 always — this is a fix-up step, not a gate; use check-versions.sh to
-# assert parity.
+# BOTH a cargo crate and a plugin is skipped.
+# Exit 0 always — this is a fix-up step, not a gate; use
+# check-plugin-versions.py to assert parity.
 #
 # Portable across GNU (CI/ubuntu) and BSD (macOS) userlands: the in-place edit
 # uses awk match()/substr() rather than sed's non-portable `0,/re/` address, and

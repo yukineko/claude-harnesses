@@ -3499,25 +3499,6 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/522"
 rev = 0
 
 [[task]]
-id = "e5174b6a"
-title = "condukt oracle.rs の fallback:true 3分岐が check_oracle 経由では到達不能 — 散文は charter DoD の縮退契約と書いているが実挙動は Reject"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-実測 2026-09-11、測定点 5b3251a1。crates/condukt/src/oracle.rs には run 由来の fallback:true が 3 経路ある: (1) verdict_from_oracle の transition unknown 分岐 (oracle.rs:70 付近)、(2) verdict_from_oracle_output の stdout 空 分岐、(3) 同 stdout が JSON パース不能 分岐。いずれも check_oracle 経由では到達しない。理由: crates/tdd/src/main.rs:349 の oracle_command は valid_fp_oracle が true でない限り exit 1 で終了する。deployed の tdd 0.1.29 で直接確認した -- tdd oracle --task no-such-task-xyz は {has_green:false,has_red:false,transition:unknown,valid_fp_oracle:false} を印字して exit=1。verdict_from_oracle_output は exit_ok=false を先頭で短絡して fallback:false を返すので、(1) には決して降りない。(2)(3) も tdd が exit 0 のときは必ず整形済み JSON を印字するため到達しない。問題は挙動そのものではなく散文との食い違いである: verdict_from_oracle の doc comment は逐語で「Per the charter DoD (オラクル生成不能時の fallback) that is a can't-generate condition and must degrade to the legacy done_criteria gate (fallback: true -- enforce_fp_gate Allows), NOT hard-reject」と書いており、charter の DoD が実装されているかのように読める。実際には charter が要求した縮退は起きず hard-reject される。CLAUDE.md 第4節 (散文が実挙動と食い違ったら次のレビュアーを騙す仕掛けになる) に該当。要判断: charter DoD の縮退契約を本当に実現したいのか (その場合 tdd oracle の exit code 設計を変える必要がある。ただし縮退は fail-open なので第3節と衝突する)、それとも縮退契約自体を撤回して散文を実挙動に合わせるのか。後者が妥当に見えるが、これは仕様判断なので人間に返す。付随して、到達不能な 3 分岐にユニットテストが付いている場合、それらは pure function の契約テストであって gate 経路の証明ではないことを doc に明記すべき。
-
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/condukt/src/oracle.rs (mod backlog_e5174b6a) (rev 596108b9): Contract pinned = prose and behaviour agree; GREEN under either resolution (rewrite doc, or change exit protocol + fixture)."""
-created_at = 1789070218
-updated_at = 1790983151
-weight = 0.0
-issue_number = 525
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/525"
-rev = 0
-
-[[task]]
 id = "2d143236"
 title = "docs/gate-taxonomy.md names 18 CI workflow files that do not exist (GHA is banned repo-wide)"
 project = "/Users/yuki/src/harness"
@@ -12367,4 +12348,39 @@ updated_at = 1791046280
 weight = 0.0
 issue_number = 1259
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1259"
+rev = 0
+
+[[task]]
+id = "2becbabe"
+title = "condukt oracle: exit-0 tdd with empty/garbled stdout, and the unknown transition, map to fallback:true (Allow) — latent fail-open, unreachable with today's tdd"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Found 2026-10-04 by the e5174b6a implementer (session 33de4c25). The branches in verdict_from_oracle_output (empty or non-JSON stdout with exit 0) and in verdict_from_oracle (unknown) return fallback:true. Real tdd exits 1 for unknown, so the gate path does not reach them today (e28ac2a9 documents this). A tdd or wrapper that exits 0 with bad stdout would get Allow. Section 3 says to turn these into Reject or delete them. That changes gate behaviour, so it needs a repro test with a fake tdd (exit 0, empty stdout) asserting Reject."
+created_at = 1791046569
+updated_at = 1791046569
+weight = 0.0
+issue_number = 1262
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1262"
+rev = 0
+
+[[task]]
+id = "5ad99d92"
+title = "docs/USAGE.md:256 and :270-271 describe editgate as fail-soft / exit 0 when the checker cannot start, contradicting 3e77acaa (spawn failure -> broken:true)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Found 2026-10-04 by the e5174b6a implementer (session 33de4c25); not verified further. Compare docs/USAGE.md:256 and :270-271 against crates/condukt editgate after 3e77acaa. A doc-vs-behaviour test can pin it."
+created_at = 1791046571
+updated_at = 1791046571
+weight = 0.0
+issue_number = 1263
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1263"
 rev = 0

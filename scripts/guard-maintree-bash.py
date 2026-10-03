@@ -100,8 +100,11 @@ changing its spelling; each of these is now followed to the path it writes:
         the word scan (`print if /copy/` is a read) — only where perl itself
         expects a term, and never one that can run code (an `e` flag,
         `(?{…})`, `@{[…]}` / `${…}`). perl literals are read with backslash
-        escapes removed (backslash-slash reads as a slash) when extracting
-        paths, and a regex-flag-shaped `/e` / `/gi` is not taken for a path.
+        slash and backslash escapes removed (backslash-slash reads as a slash)
+        when extracting paths, and a regex-flag-shaped `/e` / `/gi` is not
+        taken for a path. A character-code escape (`\\x2f`, `\\057`,
+        `\\x{…}`, `\\o{…}`, `\\N{…}`, `\\cX`) in a payload that mutates is
+        undetermined and refused.
       - ruby: a write method (`write`, `delete`, `rename`, `mkpath`, …) on a
         variable bound to `Pathname(…)` / `Pathname.new(…)` anywhere earlier
         in the payload is a write, as is File/IO.open|new with a mode that is
@@ -118,7 +121,10 @@ changing its spelling; each of these is now followed to the path it writes:
   * downloaders and extractors: `curl -o/--output/-O/--output-dir`,
     `wget -O/-P` (and plain `wget`, which writes into the cwd), `tar -x`
     (`-C`/`--directory` or the cwd), `tar -c` (the archive), `unzip` (`-d` or
-    the cwd), `find -delete`, `chmod/chown/chgrp`, `rsync/scp/ditto`, and
+    the cwd), `find -delete`, `find -exec/-execdir/-ok` (`{}` replaced by the
+    start path wherever it appears in a word), `chmod/chown/chgrp`,
+    `rsync/scp/ditto` (the last non-option operand; for rsync and scp,
+    options and option values may also follow the operands), and
     `cp/mv/install/ln --target-directory=DIR` / `-tDIR` / `-t DIR` — and the
     GNU coreutils `g`-prefixed names Homebrew installs (grm, gcp, gmv,
     ginstall, gln, gtouch, gmkdir, grmdir) like the plain ones;
@@ -1413,6 +1419,60 @@ def _replace_quoted_mktemp(word: str, st: _State, root: str) -> str:
     return word
 
 
+# Options that take a separate value, for the tools whose destination is the
+# LAST operand. rsync (popt) and scp accept options after the operands, so the
+# value of such an option must not be taken for the destination.
+_VALUE_OPTS = {
+    "rsync": ({"e", "f", "T", "B", "M"}, {
+        "--rsh", "--exclude", "--include", "--filter", "--exclude-from",
+        "--include-from", "--files-from", "--rsync-path", "--log-file",
+        "--log-file-format", "--partial-dir", "--temp-dir", "--backup-dir",
+        "--suffix", "--chmod", "--chown", "--usermap", "--groupmap",
+        "--compare-dest", "--copy-dest", "--link-dest", "--timeout",
+        "--contimeout", "--port", "--bwlimit", "--max-size", "--min-size",
+        "--block-size", "--password-file", "--out-format", "--sockopts",
+        "--skip-compress", "--iconv", "--protocol", "--checksum-seed",
+        "--modify-window", "--max-delete", "--info", "--debug", "--outbuf",
+        "--remote-option", "--address", "--max-alloc", "--stop-after",
+        "--stop-at", "--write-batch", "--only-write-batch", "--read-batch",
+        "--early-input", "--compress-choice", "--checksum-choice",
+        "--compress-level", "--zc", "--zl", "--cc", "--old-args",
+    }),
+    "scp": ({"i", "F", "o", "P", "c", "l", "S", "J", "D", "X"}, set()),
+}
+
+
+def _copy_operands(prog: str, args: list[str]) -> list[str]:
+    """Non-option operands of rsync / scp / ditto, skipping every option and
+    the value of an option that takes one, wherever they appear (`rsync -a SRC
+    DST --exclude zz` -> [SRC, DST]). ditto stops at the first operand
+    (BSD getopt) and is read with _operands."""
+    if prog not in _VALUE_OPTS:
+        return _operands(args)
+    short, long_ = _VALUE_OPTS[prog]
+    out: list[str] = []
+    j = 0
+    while j < len(args):
+        a = args[j]
+        j += 1
+        if a == "--":
+            out += args[j:]
+            break
+        if a.startswith("--"):
+            if "=" not in a and a in long_:
+                j += 1
+            continue
+        if a.startswith("-") and len(a) > 1:
+            for q, ch in enumerate(a[1:], 1):
+                if ch in short:
+                    if q == len(a) - 1:
+                        j += 1  # the value is the next word
+                    break  # the rest of the bundle is the value
+            continue
+        out.append(a)
+    return out
+
+
 def _operands(args: list[str]) -> list[str]:
     return [a for a in args if not a.startswith("-")]
 
@@ -1769,7 +1829,7 @@ class _Walk:
             for a in _operands(rest)[1:]:
                 self.an.check(a, st)
         elif prog in TARGET_LAST:
-            ops = _operands(rest)
+            ops = _copy_operands(prog, rest)
             if ops:
                 self.an.check(ops[-1], st)
         elif prog in ("sed", "gsed"):
@@ -2032,10 +2092,18 @@ class _Walk:
         if not (writes or spawns or token):
             return  # nothing in it can change a file: a read
         if lang == "perl":
-            # `\/` is `/` inside a perl string or s///e replacement; read the
-            # literals unescaped, and drop the `/e`-style regex flags that the
-            # absolute-path pattern would otherwise take for a path.
-            cands = [c for c in _payload_paths(re.sub(r"\\(.)", r"\1", code))
+            # `\/` is `/` (and `\\` is `\`) inside a perl string or s///e
+            # replacement; read the literals with exactly those two unescaped,
+            # and drop the `/e`-style regex flags that the absolute-path
+            # pattern would otherwise take for a path. A CHARACTER-CODE escape
+            # (`\x2f`, `\x{2f}`, `\057`, `\o{57}`, `\N{…}`, `\cX`) can spell a
+            # path this scan cannot read, so in a payload that mutates it is
+            # undetermined (refused), never a harmless relative literal.
+            plain = re.sub(r"\\([/\\])", r"\1", code)
+            if re.search(r"\\(?:x|[0-7]|o\{|N\{|c.)", plain):
+                raise _Undet("a perl payload that mutates spells a literal with a "
+                             "character-code escape")
+            cands = [c for c in _payload_paths(plain)
                      if not re.fullmatch(r"/[msixpodualngcer]{1,8}", c)]
         else:
             cands = _payload_paths(code)
@@ -2435,7 +2503,9 @@ class _Walk:
                 j += 1
                 if inner:
                     for s in starts:
-                        self.judge([s if w == "{}" else w for w in inner], st, None)
+                        # `{}` is replaced wherever it appears in a word
+                        # (`{}/p.txt`), by BSD and GNU find alike.
+                        self.judge([w.replace("{}", s) for w in inner], st, None)
 
 
 DENY = """Refused: `{cmd}` mutates this project's MAIN working tree.
@@ -2617,6 +2687,18 @@ if __name__ == "__main__":
 #     only such a path and no literal one is refused as undetermined).
 #   * perl backslash unescaping is applied to the whole payload text at once;
 #     a path spelled with other perl escapes (`\x2f`, `chr(47)`) is not read.
+#   * `env`: the separate-word `-C DIR` / `--chdir DIR` re-anchor is applied,
+#     but the glued GNU spellings (`--chdir=DIR`, `-CDIR`) are not, and
+#     `env VAR=value cmd` assignments (e.g. `env TMPDIR=<main> mktemp`) do not
+#     reach the command's judged environment.
+#   * GNU mktemp's TMPDIR as seen inside a nested `bash -c` / `sh -c` is the
+#     tracked value at the point of the call; an assignment made only inside
+#     the outer process's environment by other means (a profile, `env -S`)
+#     is not.
+#   * GNU long-option abbreviations (`cp --target=DIR`, `--targ=DIR`, `rsync
+#     --exc zz`) are not expanded: only the full option names are recognised.
+#   * IFS: word splitting is on blanks only; a command that changes IFS
+#     (`IFS=/; set -- $P`) is split as if IFS were the default.
 #   * ruby Pathname tracking is by direct `v = Pathname(…)` assignment only; a
 #     Pathname reached through a method chain on another variable, a block
 #     parameter, or `Pathname(…).join(…)` held in a second variable is not.

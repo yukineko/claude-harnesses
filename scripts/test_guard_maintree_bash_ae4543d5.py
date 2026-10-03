@@ -601,5 +601,49 @@ class Round4ProducersMktempAndEscapes(unittest.TestCase):
                 self.assertEqual(rc, 0, f"{c}: {err[:300]}")
 
 
+
+class Round5OperandOrderBracesAndPerlEscapes(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.f = Fixture()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.f.close()
+
+    def test_refused(self):
+        f = self.f
+        m, w, o = f.main, f.wt, f.out
+        for c in (
+            f"rsync -a {o}/ {m}/ --exclude zz",
+            f"rsync {o}/ {m}/ -e ssh --filter 'P x'",
+            f"scp {o}/x {m}/x -P 22",
+            f"find {m} -maxdepth 0 -execdir touch {{}}/p.txt \\;",
+            f"find {m} -maxdepth 0 -exec sh -c 'echo x > {{}}/x.new' \\;",
+            f"perl -e 'unlink \"\\x{{2f}}{str(m)[1:]}/f.txt\"'",
+            f"perl -e 'open(my $h, \">\", \"\\x2f{str(m)[1:]}/x\")'",
+            f"export TMPDIR={m}; bash -c 'mktemp'",
+        ):
+            with self.subTest(cmd=c):
+                self.assertEqual(f.run(c, payload_cwd=str(w))[0], 2, f"write into main allowed: {c}")
+
+    def test_allowed(self):
+        f = self.f
+        m, w, o = f.main, f.wt, f.out
+        for c in (
+            f"rsync -a {m}/ {w}/ --exclude zz",
+            f"rsync -av -e ssh {m}/ {o}/",
+            f"rsync {m}/ {o}/ --exclude {m}",
+            f"scp -P 22 {m}/f.txt {o}/x",
+            f"find {w} -maxdepth 0 -exec touch {{}}/p.txt \\;",
+            f"find {m} -name '*.txt' -exec grep -l a {{}} \\;",
+            f"perl -e 'open(my $h, \">\", \"{o}/x\"); print $h \"a\\tb\\n\"'",
+            f"perl -e 'print \"\\x41\\n\"'",
+        ):
+            with self.subTest(cmd=c):
+                rc, err = f.run(c, payload_cwd=str(w))
+                self.assertEqual(rc, 0, f"{c}: {err[:300]}")
+
+
 if __name__ == "__main__":
     unittest.main()

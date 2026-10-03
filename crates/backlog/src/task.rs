@@ -17,21 +17,156 @@ pub const STATUS_FAILED: &str = "failed";
 /// Its GitHub mirror is closed as "not planned".
 pub const STATUS_CANCELLED: &str = "cancelled";
 
-/// All STORED status values, in lifecycle order — what `edit --status` accepts.
-/// An unknown value is a loud error instead of a silently-stranded task.
+/// The core STORED lifecycle statuses, in lifecycle order. `stored_status_error`
+/// rejects any `edit --status` value outside this list (so the derived
+/// `claimed` is never persisted), and on top of that the close-evidence rule
+/// in `store::edit` admits only `pending` / `failed`: `done` / `cancelled`
+/// need a recorded closure (`backlog done` / `backlog cancel` with evidence,
+/// or `ruling approve`). `unconfirmed` / `needs-ruling` are stored too but are
+/// entered only through `add`/`confirm` and `ruling`, so they are not here.
 pub const STATUSES: [&str; 4] = [STATUS_PENDING, STATUS_DONE, STATUS_FAILED, STATUS_CANCELLED];
 
-/// The `--status` FILTER vocabulary: every stored status plus the DERIVED
-/// `claimed` (a pending/failed row holding a live claim-ledger lease, see
-/// `store::STATUS_CLAIMED`). `claimed` is filterable but never stored, so it
-/// is in this list and not in [`STATUSES`] (backlog 0dafa254).
-pub const FILTER_STATUSES: [&str; 5] = [
+/// A finding whose problem has NOT been observed: filed without a repro test,
+/// or whose repro test did not reproduce it (`not-reproduced`) or could not be
+/// run to a conclusion (`undetermined`). Non-terminal, but NOT workable: it is
+/// excluded from `next` / `next --claim` / requeue and from the pending count,
+/// and `list` shows it in its own section labelled `suspicion`. Only
+/// `backlog confirm ID --repro-test CMD` with a `reproduced` outcome moves it
+/// to `pending` (close-evidence spec, 2026-10-01: an unverified finding in the
+/// workable queue is low quality; the unconfirmed count and the
+/// not-reproduced rate are the quality metrics).
+pub const STATUS_UNCONFIRMED: &str = "unconfirmed";
+
+/// A close that no executed test can justify (a value judgment, or an item
+/// that is genuinely untestable) and that is waiting for a HUMAN ruling.
+/// Non-terminal and not workable (excluded from `next` / claim / requeue).
+/// Only `backlog ruling approve ID` (TTY stdin + the id typed back) closes it;
+/// `backlog ruling withdraw ID` returns it to `pending`.
+pub const STATUS_NEEDS_RULING: &str = "needs-ruling";
+
+/// Every status value a `--status` FILTER may name: the stored
+/// [`STATUSES`], then the DERIVED `claimed` (a pending/failed row holding a
+/// live claim-ledger lease, see `store::STATUS_CLAIMED`; filterable but never
+/// stored, backlog 0dafa254), then `unconfirmed` / `needs-ruling`, which this
+/// binary writes. A filter naming any of these must not warn; a filter naming
+/// anything else must.
+pub const FILTER_STATUSES: [&str; 7] = [
     STATUS_PENDING,
     STATUS_DONE,
     STATUS_FAILED,
     STATUS_CANCELLED,
     "claimed",
+    STATUS_UNCONFIRMED,
+    STATUS_NEEDS_RULING,
 ];
+
+/// How a task reached a terminal status, recorded as `[task.closure]`.
+///
+/// The on-disk shape is fixed by the close-evidence spec and re-checked at
+/// commit time by `scripts/check-closure-evidence.py`, so field names here
+/// must not drift: `reason`, `duplicate_of`, `doc_only_commit`, and the
+/// sub-tables `green`, `red`, `ruling`, plus `discard_reason`. Exactly one
+/// route is filled:
+///   - `green` + `red`: an executed committed test, RED (behavioural) at
+///     `red.rev` and GREEN at `green.rev` (reason fixed / already-fixed /
+///     obsolete);
+///   - `doc_only_commit`: an ancestor commit touching doc paths only;
+///   - `duplicate_of`: the canonical task id;
+///   - `ruling`: a human approval recorded by `backlog ruling approve`;
+///   - `discard_reason` (with `reason = "discard"`): `backlog cancel ID
+///     --reason R` throwing away an item nothing demonstrates (user ruling
+///     2026-10-03: 「証明できないのであれば、そもそも問題ではない。…捨てる」).
+///     A discard is valid ONLY for `cancelled` — it claims nothing was fixed,
+///     so it is never evidence for `done` and never a duplicate anchor
+///     ([`Closure::has_evidence`] stays false for it).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Closure {
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duplicate_of: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doc_only_commit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub green: Option<GreenRun>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub red: Option<RedRun>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ruling: Option<RulingRecord>,
+    /// Why an unproven item was discarded (`backlog cancel`). Set only with
+    /// `reason = "discard"` on a `cancelled` row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discard_reason: Option<String>,
+}
+
+impl Closure {
+    /// True when this closure carries one of the four evidence routes. A
+    /// `closure` table with none of them (hand-written, or truncated) is not
+    /// evidence, so it is not a valid duplicate anchor either. A discard
+    /// (`discard_reason`) is deliberately NOT one of them: it records that
+    /// nothing was demonstrated, so it can never justify `done`.
+    pub fn has_evidence(&self) -> bool {
+        (self.green.is_some() && self.red.is_some())
+            || self.doc_only_commit.is_some()
+            || self.duplicate_of.is_some()
+            || self.ruling.is_some()
+    }
+}
+
+/// The GREEN run of an F2P close: the committed test, executed at `rev`
+/// (the full 40-hex HEAD the working tree was clean at), exited 0 and reported
+/// at least one passing test.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GreenRun {
+    pub runner: String,
+    pub cmd: String,
+    pub exit: i32,
+    pub passed: u64,
+    pub rev: String,
+    pub observed_at: i64,
+    pub output_digest: String,
+    pub excerpt: String,
+}
+
+/// The RED run of an F2P close: the same command at `rev` (a detached temp
+/// worktree with the test files overlaid from HEAD) exited non-zero with a
+/// BEHAVIOURAL failure. A build/compile failure is never recorded here.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RedRun {
+    pub rev: String,
+    pub exit: i32,
+    pub kind: String,
+}
+
+/// A human ruling, recorded by `backlog ruling approve` only.
+/// `approved_via = "tty"` records that the approval came through an
+/// interactive terminal with the id typed back. That is a barrier against the
+/// non-interactive agent Bash tool, NOT proof of the approver's identity.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RulingRecord {
+    pub kind: String,
+    pub rationale: String,
+    pub approved_by: String,
+    pub approved_at: i64,
+    pub approved_via: String,
+}
+
+/// Outcomes of a finding's repro test (`add --repro-test` / `confirm`).
+pub const REPRO_REPRODUCED: &str = "reproduced";
+pub const REPRO_NOT_REPRODUCED: &str = "not-reproduced";
+pub const REPRO_UNDETERMINED: &str = "undetermined";
+
+/// The latest repro attempt for a finding, recorded as `[task.repro]`.
+/// `outcome` is one of [`REPRO_REPRODUCED`] / [`REPRO_NOT_REPRODUCED`] /
+/// [`REPRO_UNDETERMINED`]; `detail` names why (the cause, for undetermined).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Repro {
+    pub outcome: String,
+    pub cmd: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rev: Option<String>,
+    pub observed_at: i64,
+    pub detail: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
@@ -140,6 +275,27 @@ pub struct Task {
     /// forever.
     #[serde(default)]
     pub issue_closed_at: Option<i64>,
+    /// `needs-ruling` rows only: the kind of ruling requested (`judgment` |
+    /// `untestable`). Flat on the row by spec (overwatch's needs-ruling stream
+    /// reads it there).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ruling_kind: Option<String>,
+    /// `needs-ruling` rows: why the requester believes a judgment close is
+    /// right (required for `judgment`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rationale: Option<String>,
+    /// `needs-ruling` rows of kind `untestable`: why no test can observe it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub untestable_reason: Option<String>,
+    /// The latest repro attempt (`add --repro-test` / `confirm`). Absent on
+    /// legacy rows and on findings filed without a repro test.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repro: Option<Repro>,
+    /// How this task was closed. Present on every row closed by this binary;
+    /// absent on legacy terminal rows (which `audit-closures` classifies but
+    /// never reopens).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closure: Option<Closure>,
 }
 
 impl Task {
@@ -260,6 +416,11 @@ mod tests {
             issue_number: None,
             issue_url: None,
             issue_closed_at: None,
+            ruling_kind: None,
+            rationale: None,
+            untestable_reason: None,
+            repro: None,
+            closure: None,
             touched_files: Vec::new(),
         }
     }

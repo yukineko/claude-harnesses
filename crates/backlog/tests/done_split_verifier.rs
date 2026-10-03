@@ -28,6 +28,7 @@ struct Out {
 struct Fixture {
     home: PathBuf,
     repo: PathBuf,
+    doc_commit: String,
 }
 
 fn unique_dir(tag: &str) -> PathBuf {
@@ -44,15 +45,64 @@ fn unique_dir(tag: &str) -> PathBuf {
     dir
 }
 
+/// Close-evidence (2026-10-01): `add` lands `pending` only with a REPRODUCED
+/// repro test, and `done` needs recorded evidence. These fixtures are
+/// therefore REAL git repos (not a bare `.git` dir) holding a committed repro
+/// script and a committed doc-only commit; `add` passes the repro and `done`
+/// closes with `--doc-only`. What these tests pin (the done-file split) is
+/// unchanged.
+fn fixture_git(repo: &std::path::Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(repo)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@example.com")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@example.com")
+        .output()
+        .expect("git runs");
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// `git init` + a committed repro script (exit 1 = reproduced) + one doc-only
+/// commit. Returns the doc-only commit id.
+fn init_evidence_repo(repo: &std::path::Path) -> String {
+    fixture_git(repo, &["init", "-q", "-b", "main"]);
+    std::fs::create_dir_all(repo.join("tests")).unwrap();
+    std::fs::write(
+        repo.join("tests/repro.sh"),
+        "#!/bin/bash\necho 'bug present'\nexit 1\n",
+    )
+    .unwrap();
+    fixture_git(repo, &["add", "--", "tests/repro.sh"]);
+    fixture_git(repo, &["commit", "-q", "--no-verify", "-m", "repro"]);
+    std::fs::create_dir_all(repo.join("docs")).unwrap();
+    std::fs::write(repo.join("docs/closed.md"), "# closed\n").unwrap();
+    fixture_git(repo, &["add", "--", "docs/closed.md"]);
+    fixture_git(repo, &["commit", "-q", "--no-verify", "-m", "doc"]);
+    fixture_git(repo, &["rev-parse", "HEAD"])
+}
+
 impl Fixture {
     fn new(tag: &str) -> Self {
         let home = unique_dir(&format!("{tag}-home"));
         let repo = unique_dir(&format!("{tag}-repo"));
-        std::fs::create_dir_all(repo.join(".git")).unwrap();
         // Canonicalize so the project label matches what the binary resolves
         // (macOS temp dirs sit behind the /var -> /private/var symlink).
         let repo = repo.canonicalize().unwrap();
-        Fixture { home, repo }
+        let doc_commit = init_evidence_repo(&repo);
+        Fixture {
+            home,
+            repo,
+            doc_commit,
+        }
     }
 
     fn project(&self) -> String {
@@ -83,7 +133,15 @@ impl Fixture {
 
     fn add(&self, title: &str) -> String {
         let project = self.project();
-        let out = self.run(&["add", "--title", title, "--project", &project]);
+        let out = self.run(&[
+            "add",
+            "--title",
+            title,
+            "--project",
+            &project,
+            "--repro-test",
+            "bash tests/repro.sh",
+        ]);
         assert_eq!(
             out.code, 0,
             "add {title:?} must succeed; stdout={} stderr={}",
@@ -98,7 +156,7 @@ impl Fixture {
     }
 
     fn done(&self, id: &str) {
-        let out = self.run(&["done", id]);
+        let out = self.run(&["done", id, "--doc-only", &self.doc_commit]);
         assert_eq!(
             out.code, 0,
             "done {id} must succeed; stdout={} stderr={}",

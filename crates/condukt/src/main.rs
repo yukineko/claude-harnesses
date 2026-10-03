@@ -724,17 +724,22 @@ enum WtAction {
     },
     /// Remove finished `session-*` worktrees (user ruling 2026-09-30, backlog
     /// 491f6e94). A git-registered worktree on a `session-*` branch is removed
-    /// (`git worktree remove`, no --force; the branch is kept) only when its
-    /// session registration has aged out under the reconcile death rule, its
-    /// branch is an ancestor of the default branch, and its tree is clean
-    /// including untracked files. Everything else is kept; every worktree is
-    /// printed as `removed`, `kept` or `kept (undetermined)` with its reason.
-    /// Death needs two probes a window apart, so the first run on a fresh
-    /// worktree removes nothing.
+    /// (`git worktree remove`, no --force) only when its session registration
+    /// has aged out under the reconcile death rule, its branch is an ancestor
+    /// of the default branch, and its tree is clean including untracked files.
+    /// Everything else is kept; every worktree is printed as `removed`, `kept`
+    /// or `kept (undetermined)` with its reason. Death needs two probes a
+    /// window apart, so the first run on a fresh worktree removes nothing.
+    /// After a removal, the removed worktree's branch is deleted with the safe
+    /// `git branch -d` iff it is still an ancestor of the default branch
+    /// (backlog eea7c61f); branches of worktrees it did not remove are never
+    /// touched.
     ///
     /// Exit 0 means the pass completed (undetermined worktrees are kept and
     /// counted in the summary, not an error); exit 1 means an authorised
-    /// removal or its cleanup failed, or the reconciliation could not run.
+    /// removal, its cleanup, or an authorised branch delete (printed as
+    /// `FAILED to delete branch <name>`) failed, or the reconciliation could
+    /// not run.
     /// Never run automatically.
     Reap,
     /// List registered worktrees (path<TAB>branch).

@@ -41,6 +41,30 @@ fn setup(tag: &str) -> Env {
     };
     g(&["init", "-q", "."]);
     g(&["remote", "add", "origin", "https://github.com/o/r.git"]);
+    // Close-evidence fixture: only a `pending` row (a REPRODUCED, committed
+    // repro test) is live work that `sync` mirrors; an `unconfirmed` one is
+    // not, which would leave sync with nothing to do. Commit a failing repro
+    // script and expose `bash` (the allowlisted runner) on PATH — still no `gh`.
+    std::fs::create_dir_all(repo.join("tests")).unwrap();
+    std::fs::write(
+        repo.join("tests/repro_yes.sh"),
+        "echo 'bug present'; exit 1\n",
+    )
+    .unwrap();
+    g(&["add", "tests/repro_yes.sh"]);
+    g(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t.t",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-q",
+        "-m",
+        "repro",
+    ]);
+    symlink("/bin/bash", bin.join("bash")).unwrap();
     Env { home, bin, repo }
 }
 
@@ -65,7 +89,15 @@ fn gh_absent_on_sync_apply_is_nonzero() {
     let e = setup("sync");
     let (c, o, er) = bl(
         &e,
-        &["add", "--title", "verify gh absent sync", "--project", "."],
+        &[
+            "add",
+            "--title",
+            "verify gh absent sync",
+            "--project",
+            ".",
+            "--repro-test",
+            "bash tests/repro_yes.sh",
+        ],
     );
     eprintln!("ADD code={c} stdout={o:?} stderr={er:?}");
     let (c, o, er) = bl(&e, &["sync", "--apply"]);

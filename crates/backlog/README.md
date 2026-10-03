@@ -62,9 +62,11 @@ cargo install --path .
 backlog add --title "Fix X" --project "$PWD" --priority p1   # queue an item
 backlog list --status pending                                # see the queue
 backlog next                                                 # pick the next item
-backlog done <id>            # resolve it
+backlog done <id> --test "cargo test -p x" --red-rev <rev>  # resolve it (RED at rev, GREEN at HEAD)
+backlog done <id> --doc-only <commit>   # or: a doc-only ancestor commit
+backlog done <id> --duplicate-of <id>   # or: a duplicate
 backlog fail <id> --reason "blocked"   # defer it 2 days (it comes back as pending)
-backlog cancel <id> --reason "won't do"   # close it as not planned (terminal, never requeued)
+backlog cancel <id> --reason "won't do"   # discard it (terminal, never requeued; recorded as a `discard` closure, no test needed)
 backlog lock status         # who holds the run-lock
 backlog install             # merge the SessionStart hook into settings.json
 backlog uninstall           # remove it again

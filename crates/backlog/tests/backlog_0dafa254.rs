@@ -35,6 +35,37 @@ fn list_status_cancelled_is_a_recognised_status() {
         .status()
         .unwrap()
         .success());
+    // Close-evidence fixture: `add` lands `pending` only with a REPRODUCED,
+    // committed repro test (otherwise `unconfirmed`); commit a failing repro
+    // script so the row this test rewrites starts `pending` as before.
+    std::fs::create_dir_all(repo.join("tests")).unwrap();
+    std::fs::write(
+        repo.join("tests/repro_yes.sh"),
+        "echo 'bug present'; exit 1\n",
+    )
+    .unwrap();
+    for args in [
+        vec!["add", "tests/repro_yes.sh"],
+        vec![
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t.t",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "-m",
+            "repro",
+        ],
+    ] {
+        assert!(Command::new("git")
+            .args(&args)
+            .current_dir(&repo)
+            .status()
+            .unwrap()
+            .success());
+    }
     let run = |args: &[&str]| {
         let o = Command::new(env!("CARGO_BIN_EXE_backlog"))
             .args(args)
@@ -55,6 +86,8 @@ fn list_status_cancelled_is_a_recognised_status() {
         "abandoned work",
         "--project",
         repo.to_str().unwrap(),
+        "--repro-test",
+        "bash tests/repro_yes.sh",
     ]);
     assert_eq!(rc, 0, "precondition: add; out={out} err={err}");
     let id = out

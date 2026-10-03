@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "backlog"
-version = "0.3.22"
+version = "0.3.24"
 dependencies = [
  "anyhow",
  "clap",
@@ -108,6 +108,7 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "toml 0.8.23",
  "unicode-normalization",
@@ -305,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.202"
+version = "0.7.203"
 dependencies = [
  "anyhow",
  "blastguard",

@@ -25120,12 +25120,12 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p2"]
 touched_files = []
-status = "cancelled"
+status = "done"
 notes = """
 491f6e94 の裁定は worktree の除去のみ。merge 済みブランチの扱いは未裁定。
 unproven (backlog audit 2026-10-02 (session 798a05c3)): no written test reproduces it; closed per user rule. phase-3 UNTESTABLE (rev 596108b9): Pure design question: branch deletion is explicitly outside the current ruling, and the code documents that choice. A test needs a ruling first. | crates/condukt/src/wt_reap.rs:29 module doc states verbatim "It does NOT delete the branch: the ruling authorises removing the worktree, and a branch that is an ancestor of main costs nothing to keep". Ticket notes: '491f6e94 の裁定は worktree の除去のみ。merge 済みブランチの扱いは未裁定。'"""
 created_at = 1790720889
-updated_at = 1790983177
+updated_at = 1790985254
 weight = 0.0
 issue_number = 897
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/897"
@@ -29272,3 +29272,40 @@ weight = 0.0
 issue_number = 343
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/343"
 issue_closed_at = 1790984132
+
+[[task]]
+id = "d65da48d"
+title = "backlog の status 語彙が表示面と編集面で食い違う: 集計は deferred を数えるが backlog edit は受け付けない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-09-13、測定点 36e3f960。backlog edit c3a98510 --status deferred は次の逐語エラーで拒否した: warning: unknown status deferred; valid values are pending | done | failed。一方 SessionStart の overwatch status が出す Backlog 集計は pending / done / deferred の3行を表示し deferred: 0 と報告する。つまり読み出し面は deferred という状態が存在する前提で書かれているのに、書き込み面にはその状態へ遷移する手段が無い。/ 帰結: 常に 0 を表示し続けるカウンタになっている。0 は 該当なし とも 到達不能 とも読めるが、実際は後者である。これは CLAUDE.md 第3節が問題にする 判定不能と判定済みが下流から区別不能 の小型版であり、集計を読む人間に 保留にした仕事は無い という誤った安心を与える。/ この欠落が実作業を歪めた実例: 本セッションで c3a98510 (hook テスト3本が実行されない) を2度ピックした。このチケットは自分の notes で 独立作業ではなく他の handoff に包含される、かつ wiring すると既知の RED が全 push を block する と述べており、着手すべきでない順序依存を持つ。しかし pending 以外に置く手段が無いため毎ラウンド next --claim に現れ、並列バッチの枠を消費し続ける。/ 判定不能なので両方の読み: (a) 実在の欠陥 = deferred が実装途中で、書き込み側だけ未配線。(b) 意図的 = deferred は defer_until による時限保留の派生表示であり、明示的な状態遷移は設計上持たせていない (Task に defer_until フィールドは実在する)。見分け方: defer_until をセットした task が集計で deferred に数えられるかを測る。数えられるなら (b) で、必要なのは deferred ではなく defer_until を打つ CLI 表面である。/ 関連 c3a98510。
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/backlog/tests/backlog_d65da48d.rs (rev d2e54735): The item's discriminator answered: a defer_until task is NOT counted as deferred by the JSON consumer; the counter is unreachable. Fix shape (json status vs edit surface) is still a design call."""
+created_at = 1789279099
+updated_at = 1790984954
+weight = 0.0
+issue_number = 566
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/566"
+issue_closed_at = 1790984956
+
+[[task]]
+id = "b982f232"
+title = "condukt diffrisk_record::every_invocation_is_journaled_even_when_nothing_is_recorded が並列実行時のみ落ちる (test isolation)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "cancelled"
+notes = """
+observed 2026-10-03 (session 798a05c3 subagent): on base 1f9c594b, cargo test -p condukt parallel: 2/3 runs fail 'one record per invocation' left 1 right 2; passes alone 5/5 and with --test-threads=1. Likely shared journal path between tests.
+duplicate of d7c32fdc (same flake, already filed; re-observed 2026-10-03 on 1f9c594b, 2/3 parallel runs fail)"""
+created_at = 1790985255
+updated_at = 1790985272
+weight = 0.0
+issue_number = 1120
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1120"
+issue_closed_at = 1790985274

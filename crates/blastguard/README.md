@@ -153,7 +153,11 @@ plus `Undetermined` — and **only `Inside` may relax a verdict**.
   `~`, `` `pwd` ``, `*`, `{}`); an unresolvable `cd`; a relative operand a `cd`
   takes out of the tree; **a safe root itself** (`rm -rf .` takes `.git` with
   it); **protected gate paths** (`.git`, `.claude/settings.json`,
-  `.githooks/**` are not excused by being nearby); **a symlink that leaves the
+  `.githooks/**` are not excused by being nearby — the one exception is a
+  copy strictly inside a linked git worktree checkout under a worktree storage
+  root, named by an absolute path in a single plain command or a
+  Write/Edit, which is that checkout's own work, per the 2026-10-03 user
+  ruling); **a symlink that leaves the
   tree** (real paths are resolved first); and an unfiltered whole-tree walk such
   as `find . -delete`.
 - **`ask` only where a human can answer.** In headless runs, condukt workers and

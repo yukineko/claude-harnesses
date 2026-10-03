@@ -1591,46 +1591,6 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/1097"
 rev = 0
 
 [[task]]
-id = "5e5cf0a9"
-title = "condukt の serial 経路 (main tree で実装) は CLAUDE.md 第8節に反し、pre-commit の worktree-isolation ゲートで機械的にブロックされて完走不能"
-project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-実測 2026-08-18, 測定点 01deeab2。
-
-再現: 4 タスクの decomposition (各タスクが自分の plugin の version を bump するため全員が .claude-plugin/marketplace.json を touched_files に持つ) を condukt schedule に掛けると全タスクが serial に降格する:
-  condukt schedule --file .scratch/decomp.json
-  -> {"batches":[],"serial":["t3","t1","t2","t4"],"warnings":["task 't1' file-overlaps another parallel task -> serial (overlap is authoritative over class)", ... 4件]}
-
-condukt SKILL.md (0.7.138) は serial の実装方法を逐語で 'serial タスクは worktree に出さず main で順に実装する' と規定し、commit は condukt repo commit で main の作業ツリーに行う。
-
-しかし:
-1. CLAUDE.md 第8節が逐語で 'condukt の実装タスクは worktree 経由で行う。single_worktree モードや serial タスクを「main で直接実装する」経路として使わない' と**この経路を名指しで禁止**している。
-2. さらに機械的にも通らない: git config の hooksPath が設定済み (git-common-dir/config:7 -> hooksPath = /mnt/c/Users/hiroyuki_nakayama/src/harness/.githooks) なので .githooks/pre-commit が発火し、scripts/check-worktree-isolation.py が main working tree からの非 merge commit を拒否する。condukt repo commit が作るのは merge ではなく通常 commit なので拒否対象。
-
-帰結: このリポジトリでは **ファイル重複を持つ decomposition (= plugin version bump を伴うほぼ全ての実装タスク) が condukt の文書化された経路で完走できない**。今回は CLAUDE.md が skill 指示を override する前提で、serial 4 タスクをそれぞれ専用 worktree に出して順次実行する回避を採った (並列化は捨て、順序だけ serial を守る)。
-
-判定不能な2つの読み: (a) condukt の serial 実装方法がこのリポジトリの第8節と非互換な実在の欠陥 / (b) serial は元々 shared-file を守るための直列化であり、実装場所が main であることは本質ではないので SKILL.md の記述を 'serial は順序の制約であって場所の制約ではない。各タスクは専用 worktree で順に実行する' に改めるだけでよい。
-
-見分ける方法: crates/condukt/src/ で serial タスクの実行経路が worktree 生成をスキップする実装になっているか (schedule の serial 配列を消費する側) を読む。バイナリ側が worktree を作らない前提で state を持つなら (a) に近い設計上の結合、SKILL.md の散文だけが main tree を指しているなら (b) で散文修正で済む。
-
-併せて要検討: この降格の根本原因は '各 plugin の version bump が単一の marketplace.json を共有する' ことなので、marketplace.json を shared_globs として明示し version bump を別レイヤに切り出す設計も選択肢 (ただし CLAUDE.md の禁忌ルールが bump を同一変更に要求するため単純ではない)。
-
----
-再キー: 元 id d592bf28 として /mnt/c/Users/hiroyuki_nakayama/src/.harness-worktrees/session-e7948728 のプロジェクトキーで起票されていたものを /mnt/c/Users/hiroyuki_nakayama/src/harness へ移送した (2026-08-18)。理由は backlog b0ff8c74 (worktree から起票すると削除予定のパスに紐づく構造矛盾)。
-
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_5e5cf0a9.py (rev 596108b9): SKILL.md serial route contradicts CLAUDE.md section 8."""
-created_at = 1787033491
-updated_at = 1790983138
-weight = 0.0
-issue_number = 1098
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1098"
-rev = 0
-
-[[task]]
 id = "c6ae7851"
 title = "fugu-router: PDO 仮説 f5f9522a を閉じるための計測装備が 4 項目のうち 2 項目で未実装のまま (+766 episodes 経過後も 0 件)"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
@@ -11407,3 +11367,64 @@ weight = 0.0
 issue_number = 1144
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1144"
 rev = 0
+
+[[task]]
+id = "c525182c"
+title = "condukt-worker.md staged-no-commit says git add touched_files; SKILL.md mode B says workers never stage (no-stage-no-commit)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-03 by the 5e5cf0a9 implementer at main 82ee4a78: crates/condukt/agents/condukt-worker.md:38 (staged-no-commit) tells the worker to git add its touched_files, while crates/condukt/skills/condukt/SKILL.md Phase 5 B passes commit_mode no-stage-no-commit and forbids any git add by workers (peer repo commit refuses foreign staged content). The two documents name different modes and contradict each other on who stages. Pre-existing; not changed by 5e5cf0a9."
+created_at = 1791002855
+updated_at = 1791002855
+weight = 0.0
+issue_number = 1137
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1137"
+rev = 0
+
+[[task]]
+id = "41c837ab"
+title = "condukt reconcile promotes failed/running tasks to Verified when the recorded branch_sha is an ancestor of main (fork-point = merged)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "unconfirmed"
+notes = """
+Observed 2026-10-03 by the 5e5cf0a9 verifier with the condukt binary built from flow-dc66/serial-wt (main 82ee4a78, reconcile code unchanged). state set --branch records branch_sha at that moment (main.rs ~4291-4297). If that is still the fork point (main tip), reconcile_run (state.rs ~824-851) treats "ancestor of main" as merged. Observed: reconcile right after worktree create printed Running -> Verified for both tasks; after merging, a task explicitly set failed went Failed -> Verified. Also: worktree remove of a non-existent branch exits 0 and reconcile then promotes with reason "branch no longer exists and worktree is gone". Phase 7 runs reconcile on any gate FAIL, so a failed task can come back verified. Affects per-task mode too (any branch with no commits yet). Fail-open: "cannot tell whether work was merged" resolves to Verified. Scratch evidence: scratchpad e2e2.sh / e2e3.sh / swt-e2e.
+
+Escalation 2026-10-03 (5e5cf0a9 round-3 verifier, serial e2e with the 0.7.205 worktree build): a FAILED, unmerged serial task t3 was promoted by state reconcile ([t3] Failed -> Verified, "branch condukt/s1/t3 is merged into main", because its recorded branch_sha was main tip at create). Reconcile also cleared its worktree path, so the next state gate printed "gate PASS: run s1 complete". state cancel then refused ("already verified") and worktree discard could not delete the branch (still checked out), orphaning the s1-t3 worktree and branch. The failed code did not reach main, but the run was reported complete and verified. Phase 7 runs reconcile on every gate FAIL, so any per-task run with a failed task can hit this. Evidence: scratchpad r3-serial.sh."""
+created_at = 1791003391
+updated_at = 1791005846
+weight = 0.0
+issue_number = 1138
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1138"
+rev = 1
+
+[[task]]
+id = "9b7c4d79"
+title = "condukt diffrisk_record journaling unit test fails deterministically in the full bin run (order/shared-state dependent), passes alone"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-03 by the 5e5cf0a9 verifier: diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded (crates/condukt/src/diffrisk_record.rs ~537, expects 2 records, gets 1) failed 5/5 inside cargo test -p condukt --bin condukt, and also fails at main 82ee4a78 (git archive into scratchpad). Run alone it passes (I re-ran it: 1 passed). It had been labelled a flake in this session; it is not, it depends on test order or shared state (likely a shared journal path / env var with a sibling test). A red that everyone calls a flake is a hidden red."
+created_at = 1791004322
+updated_at = 1791004322
+weight = 0.0
+issue_number = 1147
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1147"
+rev = 0
+
+[task.repro]
+outcome = "undetermined"
+cmd = "cargo test -p condukt --bin condukt"
+rev = "82ee4a782add20440391fbc642021e94d46a3bbd"
+observed_at = 1791004322
+detail = "the repro run did not complete: cargo test -p condukt --bin condukt timed out after 1800s — a checker that did not finish has not passed"

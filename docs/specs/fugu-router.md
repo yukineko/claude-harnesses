@@ -64,8 +64,9 @@
   （`rebuilt:false`）。実体スキャナ/ストアは `harness_core::code_index`。
 - **`code-index search --query [--root] [--k]`** — 構築済み index への決定論的字句 top-K 検索。索引を
   読めたときだけ JSON 配列＋exit 0 を返す（`[]` はヒットなしの意味）。索引欠落は exit 3、IO 失敗・
-  symbol として parse できない行・build meta が `symbols: 0` を記録していない空索引は exit 4
-  （どちらも stdout 無し・stderr に診断）。`$(... 2>/dev/null || true)` の呼び出し側は「ヒットなし」
+  symbol として parse できない行・読めない build meta・build meta の `symbols` 件数と本体の件数の
+  不一致（切り詰められた索引、または meta 書き込み失敗で古いままの meta）・meta の無い空索引は exit 4
+  （どちらも stdout 無し・stderr に診断）。meta の無い非空索引は件数照合できないので読めたものとして扱う。`$(... 2>/dev/null || true)` の呼び出し側は「ヒットなし」
   ではなく「文脈なし」に落ちる。
 - **`suggest` / `confidence`** — 単発でモデルの当たり（worker/verifier/basis）／較正済み合格確率 [0,1] を
   出す。`confidence` は近傍が `min_samples` 未満なら中立 prior 0.5 に退化（`confidence::calibrated_confidence`）。

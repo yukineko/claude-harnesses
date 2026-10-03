@@ -968,9 +968,27 @@ enum CodeIndexLoadError {
 /// * any other IO error, or any non-blank line that is not a valid symbol
 ///   record → [`CodeIndexLoadError::Unreadable`] (a partially corrupt index
 ///   would otherwise silently under-report matches);
-/// * an index with zero symbols → `Ok(vec![])` only when the build sidecar
-///   meta records `symbols: 0` (a repo with no `.rs` symbols); otherwise the
-///   empty body is unvouched-for and reported as `Unreadable`.
+/// * build sidecar meta present but unparseable → `Unreadable`;
+/// * build sidecar meta present and its `symbols` count differs from the
+///   number of records parsed from the body → `Unreadable`, naming both
+///   counts (a truncated body that still holds valid lines would otherwise
+///   be served as a complete index and turn a lost symbol into a false
+///   "read, no match");
+/// * an index with zero symbols → `Ok(vec![])` only when the meta records
+///   `symbols: 0` (a repo with no `.rs` symbols); with no meta the empty body
+///   is unvouched-for and reported as `Unreadable`;
+/// * a non-empty body with **no** meta file → accepted as read. There is no
+///   count to compare against, every line already parsed as a symbol, and
+///   indexes built before the meta sidecar existed have no meta. This is the
+///   one case where truncation at a line boundary cannot be detected here.
+///
+/// `build` writes the body and the meta separately and both writes are
+/// fail-soft (`harness_core::code_index::{write_index, write_meta}` drop IO
+/// errors). If the body is rewritten but the meta write fails, the stale meta
+/// will disagree with the body and search reports `Unreadable` (exit 4) until
+/// the next successful build. That is deliberate: a body and meta that
+/// disagree cannot be told apart from a truncated body, and "cannot
+/// determine" resolves to the restrictive side, not to a served result.
 fn load_code_index_strict(
     root: &Path,
 ) -> std::result::Result<Vec<harness_core::code_index::Symbol>, CodeIndexLoadError> {
@@ -1006,16 +1024,34 @@ fn load_code_index_strict(
             }
         }
     }
-    if symbols.is_empty() {
-        let vouched = read_meta(&code_index_meta_path(root)).is_some_and(|m| m.symbols == 0);
-        if !vouched {
-            return Err(CodeIndexLoadError::Unreadable(format!(
-                "{} holds zero symbols and its build meta does not record an empty build",
-                path.display()
-            )));
+    let meta_path = code_index_meta_path(root);
+    let meta = if meta_path.exists() {
+        match read_meta(&meta_path) {
+            Some(m) => Some(m),
+            None => {
+                return Err(CodeIndexLoadError::Unreadable(format!(
+                    "build meta {} exists but cannot be read as index meta",
+                    meta_path.display()
+                )));
+            }
         }
+    } else {
+        None
+    };
+    match meta {
+        Some(m) if m.symbols != symbols.len() => Err(CodeIndexLoadError::Unreadable(format!(
+            "{} holds {} symbols but its build meta {} records {} (truncated index or stale meta; rebuild with `fugu-router code-index build`)",
+            path.display(),
+            symbols.len(),
+            meta_path.display(),
+            m.symbols
+        ))),
+        None if symbols.is_empty() => Err(CodeIndexLoadError::Unreadable(format!(
+            "{} holds zero symbols and has no build meta recording an empty build",
+            path.display()
+        ))),
+        _ => Ok(symbols),
     }
-    Ok(symbols)
 }
 
 /// `code-index search --query <q> [--root] [--k]`: load the index for `root`

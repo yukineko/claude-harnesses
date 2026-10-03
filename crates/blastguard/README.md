@@ -72,6 +72,17 @@ shape looks destructive:
 
 Truncating redirects to `/dev/null`, `/dev/stdout`, `/dev/stderr` are also fine.
 
+Protected gate paths outrank this exemption and are never exempt: Claude Code settings
+and hook wiring, `.githooks/**`, `.git/hooks/**`, the gate config tomls, and the
+deployed plugin cache's executables and hook wiring
+(`.claude/plugins/cache/**/bin/**`, `.claude/plugins/cache/**/hooks/**`). A
+deployed launcher without its exec bit dies with `Permission denied` and
+emits no finding, so the gate goes dark rather than red (backlog 1b82a049).
+For the plugin cache paths, removing read/exec (`chmod -x`, `chmod 644`), `rm` and
+`mv` are denied; a write (a truncating redirect, `cp` onto, Write/Edit) resolves
+to `ask`, which hardens to deny where no human can answer. Reads and `chmod +x`
+stay allowed.
+
 ## Design bias
 
 The detector only **denies** *clearly* destructive, hard-to-undo patterns, and

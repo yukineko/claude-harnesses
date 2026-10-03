@@ -12225,13 +12225,15 @@ status = "unconfirmed"
 notes = """
 Observed 2026-10-04 by the 873a2621 test-writer agent (session 33de4c25). Verbatim block: '> /claims.json' destroys the file's current contents and /claims.json contains a shell expansion, so blastguard cannot tell which file this names. Trigger: a heredoc body that is Python source, with a comment that wraps claims.json in backticks. Also a process finding: the agent then wrote the same script with the Write tool and ran it, which is the reroute-around-a-gate pattern that CLAUDE.md section 5.4 forbids (the effect was benign: test edits in its own worktree). Needs a reproduction test.
 
-[2026-10-04, session 33de4c25] Second observation, same verbatim block: the 873a2621 implementer's python3 heredoc that spliced crates/harness-core/src/transcript.rs was refused because Rust doc text "<project_key(main_worktree_root(root))>/claims.json" (in backticks) was parsed as a > redirect. The script never ran. Declared and asked; the user ruled to make the same change with the Edit tool."""
+[2026-10-04, session 33de4c25] Second observation, same verbatim block: the 873a2621 implementer's python3 heredoc that spliced crates/harness-core/src/transcript.rs was refused because Rust doc text "<project_key(main_worktree_root(root))>/claims.json" (in backticks) was parsed as a > redirect. The script never ran. Declared and asked; the user ruled to make the same change with the Edit tool.
+
+[2026-10-04, session 33de4c25] Third observation, same block text: the reviewgate test re-anchor agent's python heredoc that edited crates/reviewgate/tests/session_attribution.rs was refused on backtick-wrapped "/claims.json" in text. Nothing ran (git status clean). The agent redid the edit with the Edit tool, under the user's ruling for the 873a2621 implementer. Three hits in one session: any heredoc whose body mentions a path with > before it, inside backticks, is refused."""
 created_at = 1791044006
-updated_at = 1791044228
+updated_at = 1791044448
 weight = 0.0
 issue_number = 1229
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1229"
-rev = 1
+rev = 2
 
 [[task]]
 id = "1af8be51"
@@ -12366,4 +12368,23 @@ updated_at = 1791043800
 weight = 0.0
 issue_number = 1228
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1228"
+rev = 0
+
+[[task]]
+id = "86471e94"
+title = "check-fail-open ALLOWLIST needle is a per-file substring: an identical later line in the same file is silently exempt"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p3",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04 (session 33de4c25) while adding two user-approved entries for transcript.rs (873a2621, commit 42b5b567). The ALLOWLIST matches path + rule + a needle substring of the flagged line, so a second, unreviewed line with the same text in that file would be exempt too, and the reviewed-exception count would not grow. Needs a reproduction test: add a duplicate of an allowlisted line and assert that fail-open-diff still counts it."
+created_at = 1791044675
+updated_at = 1791044675
+weight = 0.0
+issue_number = 1232
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1232"
 rev = 0

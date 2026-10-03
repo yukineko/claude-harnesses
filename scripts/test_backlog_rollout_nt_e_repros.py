@@ -197,7 +197,6 @@ class VerifyRolloutComplete(Base):
         self.assertTrue(marker.exists())
         self.assertIn("VERIFY_RC=1", r.stdout, r.stdout + r.stderr)
 
-    @unittest.expectedFailure  # backlog c9373b92: open defect, remove when fixed
     def test_filtered_run_still_verifies_the_targeted_plugins(self):
         marker = self.checker_stub(1)
         r = self.verify("declare -a only_plugins=(p)")

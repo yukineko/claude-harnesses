@@ -258,16 +258,24 @@ mode that judges nothing else):
     `mv`, `checkout`, `restore`, `clean`, `stash push` / `stash -- …`, and
     `apply` / `am` through `--directory` / `--include` — when a pathspec
     (expanded, `:(top)` / `:/` magic stripped, resolved against the tracked
-    cwd or `git -C DIR`) names, lies under, or as a git glob (whose `*`
-    crosses `/` and leading dots) can match `.githooks` or `.git/hooks`: the
-    glob is matched against stand-ins AND against every entry that exists
-    under `<toplevel>/.githooks` and `<git-common-dir>/hooks` (repo-relative,
-    prefixed with the cwd's path in the repo unless `:(top)` / `:/`; case
-    folded under `:(icase)` and on darwin; `:(literal)` is not a glob; `./`
-    and `../` resolved as git does, by normalising the cwd-prefixed pattern).
-    A glob whose hook directories cannot be listed (unknown cwd, git failing,
-    an unreadable directory), or whose normalised pattern climbs above the
-    toplevel, is refused as undetermined. Options that take a
+    cwd or `git -C DIR`) has a LITERAL component naming `.githooks` or
+    `.git` + `hooks` (any depth), or is a git glob (whose `*` crosses `/` and
+    leading dots) that matches the top-level stand-ins `.githooks`,
+    `.githooks/x`, `.git/hooks/x` or a real hook entry: everything under
+    `<toplevel>/.githooks` and `<git-common-dir>/hooks`, the index's
+    `.githooks` files (`git ls-files`), and the `.githooks` tree of the source
+    revision the command names (`checkout REV -- …`, `restore -s REV`, and
+    HEAD for restore) via `git ls-tree`. The pattern is repo-relative:
+    prefixed with the cwd's path in the repo unless `:(top)` / `:/`, with
+    `./` and `../` resolved as git does; case folded under `:(icase)` and on
+    darwin; `:(literal)` is not a glob. A glob COMPONENT is not itself read
+    as "may be .githooks", so `src/*`, `*/Cargo.toml`, `crates/*/src/x` are
+    allowed. A glob whose entries cannot be listed (unknown cwd, a git
+    listing that fails or exits non-zero, an unreadable directory, a source
+    revision this walk cannot know), or whose normalised pattern climbs
+    above the toplevel, is refused as undetermined; a named revision that
+    does not exist (`rev-parse --verify` exits 1) makes git fail before
+    writing and is skipped. Options that take a
     value are known per subcommand: `-p` / `-C` take one only for apply / am
     (`-p<n>`); for restore / checkout / stash `-p` is `--patch` and the next
     word is a pathspec. `:!` / `:(exclude)` pathspecs write nothing and are
@@ -890,22 +898,27 @@ def _comp_may_be(comp: str, name: str, dotglob: bool = False) -> bool:
     return fnmatch.fnmatchcase(name, comp)
 
 
-def _hook_protected(path: str, dotglob: bool = False) -> bool:
+def _hook_protected(path: str, dotglob: bool = False, literal: bool = False) -> bool:
     """True if `path` (any form; folded for case on darwin) is — or, through a
     glob component (`.githook*`, `.git/hoo*`), may be — inside `.githooks`,
     inside `.git/hooks`, a `.git/config`, or a `config.worktree` under a
-    `.git` directory."""
+    `.git` directory. `literal`: only components that ARE those names count
+    (no glob reading) — git pathspecs, whose globs are matched against the
+    real hook entries instead."""
     comps = [c for c in _fold(path).split("/") if c]
+
+    def may(comp: str, name: str) -> bool:
+        return comp == name if literal else _comp_may_be(comp, name, dotglob)
+
     for i, c in enumerate(comps):
-        if _comp_may_be(c, ".githooks", dotglob):
+        if may(c, ".githooks"):
             return True
-        if _comp_may_be(c, ".git", dotglob) and i + 1 < len(comps):
-            if _comp_may_be(comps[i + 1], "hooks", dotglob):
+        if may(c, ".git") and i + 1 < len(comps):
+            if may(comps[i + 1], "hooks"):
                 return True
-            if _comp_may_be(comps[i + 1], "config", dotglob) and i + 2 == len(comps):
+            if may(comps[i + 1], "config") and i + 2 == len(comps):
                 return True
-        if _comp_may_be(c, "config.worktree", dotglob) and any(
-                _comp_may_be(x, ".git", dotglob) for x in comps[:i]):
+        if may(c, "config.worktree") and any(may(x, ".git") for x in comps[:i]):
             return True
     return False
 
@@ -1932,16 +1945,32 @@ class _Analyzer:
 
         return _QUOTED_SUBST.sub(sub, word)
 
-    def check_git_pathspec(self, spec: str, st: _State) -> None:
-        """A pathspec of a git subcommand that writes the working tree: refuse
-        one that names, lies under, or (as a git glob, whose `*` crosses `/`
-        and leading dots) can match `.githooks` or `.git/hooks` — matched
-        against stand-ins AND against the entries that actually exist under
-        `<toplevel>/.githooks` and `<git-common-dir>/hooks` (`'*pre-commit'`
-        matches `.githooks/pre-commit` but no stand-in). The cwd-prefixed
-        pattern is normalised as git does (`./`, `../`); one that climbs above
-        the toplevel is refused. `:(icase)` folds case; a glob whose hook
-        directories cannot be listed is refused."""
+    def check_git_pathspec(self, spec: str, st: _State,
+                           revs: tuple[list[str], list[str]] = ([], [])) -> None:
+        """A pathspec of a git subcommand that writes the working tree.
+
+        Refused when, after `./` / `../` are resolved as git does (the
+        cwd-prefixed pattern is normalised; one that climbs above the
+        toplevel is refused as undetermined):
+          * a LITERAL component names `.githooks`, or `.git` + `hooks`, or a
+            `.git/config` / `config.worktree` (any depth, the shape rule); or
+          * it is a git glob (whose `*` crosses `/` and leading dots) that
+            matches one of the top-level stand-ins `.githooks`, `.githooks/x`,
+            `.git/hooks/x`, or a real entry the hook wiring reads: what exists
+            under `<toplevel>/.githooks` and `<git-common-dir>/hooks`, the
+            index's `.githooks` files, and the `.githooks` tree of each source
+            revision the command names (`checkout REV -- …`, `restore -s REV`).
+        A glob component is NOT itself read as "may be .githooks": `src/*`
+        matches none of the above and is allowed. `:(icase)` folds case,
+        `:(literal)` is not a glob, `:(top)` / `:/` anchor at the toplevel. A
+        glob whose entries cannot be listed (unknown cwd, a git listing that
+        fails or exits non-zero, an unreadable directory, a named revision
+        whose listing fails for a reason other than "no such revision") is
+        refused. A named name that is no revision at all (`rev-parse --verify`
+        exits 1) makes git fail before writing, so it is skipped and the
+        stand-ins and the other listings decide. `revs` = (revisions the
+        command names explicitly, revisions it may name — a checkout operand
+        without `--`)."""
         magic = ""
         top = False
         if spec.startswith(":(") and ")" in spec:
@@ -1960,15 +1989,12 @@ class _Analyzer:
         p = _expand(self.gitdir_substs(spec), st)
         fold = (lambda x: x.casefold()) if icase else _fold
         why = "a git pathspec writes into the repository's hook machinery"
-        if _hook_protected(fold(p), dotglob=True):
+        if _hook_protected(fold(p), literal=True):
             raise _HookHit(spec, why)
         if "literal" in words or not any(ch in p for ch in _GLOB):
             return
         pat = fold(p)
-        if any(fnmatch.fnmatchcase(rep, pat)
-               for rep in (".githooks", ".githooks/x", ".git/hooks/x")):
-            raise _HookHit(spec, why)
-        prefix, entries = self.hook_entries(st)
+        prefix, entries = self.hook_entries(st, revs)
         if entries is None:
             raise _HookHit(spec, "a git glob pathspec could not be matched against "
                                  f"the hook files ({prefix}); undetermined is refused")
@@ -1984,13 +2010,27 @@ class _Analyzer:
         if any(fnmatch.fnmatchcase(rep, full)
                for rep in (".githooks", ".githooks/x", ".git/hooks/x")) or any(
                 fnmatch.fnmatchcase(fold(e), full) for e in entries):
-            raise _HookHit(spec, why + " (the glob matches an existing hook file)")
+            raise _HookHit(spec, why + " (the glob matches a hook file)")
 
-    def hook_entries(self, st: _State) -> tuple[str, list[str] | None]:
-        """(cwd relative to the toplevel, repo-relative names of everything
-        under `<toplevel>/.githooks` and `<git-common-dir>/hooks`), or
-        (reason, None) when they cannot be listed. Only reached for a glob
-        pathspec, so ordinary commands pay no subprocess."""
+    def _git_lines(self, cwd: str, args: list[str]) -> tuple[int, list[str]] | None:
+        """(exit status, NUL-separated output entries) of `git -C cwd ARGS`, or
+        None when git could not be run."""
+        try:
+            r = subprocess.run(["git", "-C", cwd, *args], capture_output=True,
+                               timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        out = r.stdout.decode("utf-8", "surrogateescape")
+        return r.returncode, [x for x in out.split("\0") if x]
+
+    def hook_entries(self, st: _State, revs: tuple[list[str], list[str]] = ([], [])
+                     ) -> tuple[str, list[str] | None]:
+        """(cwd relative to the toplevel, repo-relative names of the hook
+        entries: everything under `<toplevel>/.githooks` and
+        `<git-common-dir>/hooks`, the index's `.githooks` files, and the
+        `.githooks` tree of each revision in `revs`), or (reason, None) when
+        they cannot be listed. Only reached for a glob pathspec, so ordinary
+        commands pay no subprocess."""
         if st.rel is None:
             return "the git cwd is unknown", None
         try:
@@ -2022,6 +2062,36 @@ class _Analyzer:
                 out.extend(stem + "/" + x for x in dirs + files)
             if errs:
                 return f"{base}: {errs[0]}", None
+        # The index (a hook file deleted from the working tree is still
+        # restored from it) ...
+        got = self._git_lines(top, ["ls-files", "-z", "--full-name", "--", ".githooks"])
+        if got is None or got[0] != 0:
+            return "git ls-files failed", None
+        out.extend(got[1])
+        # ... and each source revision the command names.
+        required, maybe = revs
+        for rev, must in [(r, True) for r in required] + [(r, False) for r in maybe]:
+            if any(c in rev for c in "$`") or rev.startswith("-"):
+                if must:
+                    return f"the source revision {rev!r} cannot be determined", None
+                continue
+            got = self._git_lines(top, ["ls-tree", "-r", "-t", "-z", "--full-tree",
+                                        "--name-only", rev + "^{tree}", "--",
+                                        ".githooks"])
+            if got is None or got[0] != 0:
+                # `rev-parse --verify -q` exits 1, silently, exactly when the
+                # name is not a revision: git's checkout / restore then fails
+                # before writing anything (or, without `--`, reads the operand
+                # as a pathspec), so the stand-ins and the other listings stand.
+                # Any other failure is undetermined.
+                chk = self._git_lines(top, ["rev-parse", "--verify", "-q",
+                                            "--end-of-options", rev + "^{tree}"])
+                if chk is not None and chk[0] == 1 and not chk[1]:
+                    continue
+                if must:
+                    return f"git ls-tree of {rev!r} failed", None
+                continue
+            out.extend(got[1])
         return prefix, out
 
     # -- text ---------------------------------------------------------------
@@ -2485,8 +2555,53 @@ class _Walk:
             if sub not in ("apply", "am"):  # their operands are patch files
                 specs.append(a)
             j += 1
+        revs = self.git_source_revs(sub, args, gst) if any(
+            ch in s_ for s_ in specs for ch in _GLOB) else ([], [])
         for spec in specs:
-            self.an.check_git_pathspec(spec, gst)
+            self.an.check_git_pathspec(spec, gst, revs)
+
+    @staticmethod
+    def git_source_revs(sub: str, args: list[str], st: _State
+                        ) -> tuple[list[str], list[str]]:
+        """(revisions `git SUB ARGS` names as the source of what it writes,
+        operands that may be one). restore: `-s` / `--source` (separate,
+        `=` or glued), and HEAD as a possible source (`--staged`). checkout:
+        the operand before `--` (explicit), or the first operand when there
+        is no `--` (possible: git reads it as a revision only if it is one)."""
+        args = [_expand(a, st) for a in args]
+        required: list[str] = []
+        maybe: list[str] = []
+        if sub == "restore":
+            for j, a in enumerate(args):
+                if a == "--":
+                    break
+                if a in ("-s", "--source") and j + 1 < len(args):
+                    required.append(args[j + 1])
+                elif a.startswith("--source="):
+                    required.append(a.split("=", 1)[1])
+                elif a.startswith("-s") and len(a) > 2:
+                    required.append(a[2:])
+            maybe.append("HEAD")
+        elif sub == "checkout":
+            ops: list[str] = []
+            dashdash = False
+            j = 0
+            while j < len(args):
+                a = args[j]
+                if a == "--":
+                    dashdash = True
+                    break
+                if a in _GIT_SUB_VALUE_OPTS["checkout"]:
+                    j += 2
+                    continue
+                if not a.startswith("-"):
+                    ops.append(a)
+                j += 1
+            if dashdash:
+                required.extend(ops[:1])
+            elif ops and not any(ch in ops[0] for ch in _GLOB):
+                maybe.append(ops[0])
+        return required, maybe
 
     # -- state changers --------------------------------------------------------
     def loop_var(self, rest: list[str], st: _State) -> _State:
@@ -3451,8 +3566,14 @@ if __name__ == "__main__":
 #     unknown variable stands for `.githooks` (`rm $X/pre-commit`); brace
 #     expansion (`.git{hooks,x}`); a hook file created after this call's
 #     listing (glob pathspecs are matched against the entries that exist when
-#     the call is judged); a git glob with `**` / `:(glob)` semantics is
-#     matched with fnmatch, whose `*` crosses `/` (over-refuses only).
+#     the call is judged), or present only in a revision the same command
+#     creates before the checkout (`git fetch && git checkout FETCH_HEAD --
+#     '*hook'`: the revision does not resolve when judged, so only the
+#     working tree, the index and the stand-ins are matched); a hook
+#     directory other than <toplevel>/.githooks and <common-dir>/hooks (a
+#     nested `.githooks` is caught only when a pathspec names it literally);
+#     a git glob with `**` / `:(glob)` semantics is matched with fnmatch,
+#     whose `*` crosses `/` (over-refuses only).
 #   * git subcommands that rewrite hook files WITHOUT a pathspec naming them —
 #     deliberately, so merges and resets on main keep working: `git reset
 #     --hard`, `git checkout .` / `git checkout <branch>`, `git switch`, `git

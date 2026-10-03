@@ -787,5 +787,68 @@ class Round3Findings(_Fixture):
             self._allowed_in_wt(cmd)
 
 
+class DirGlobPathspecs(_Fixture):
+    """Round 4 (verify4 DirGlobOverBlock): a glob component is not read as
+    "may be .githooks"; the decision is the real hook entries (working tree,
+    index, named source revision) plus the top-level stand-ins."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        os.makedirs(os.path.join(self.wt, "src"), exist_ok=True)
+
+    def _r(self, cmd: str, sid: str):
+        return self.bash(cmd, sid=sid, cwd=self.wt, project=self.wt)
+
+    def test_ordinary_directory_globs_are_allowed(self):
+        for cmd in ("git restore 'src/*'", "git checkout -- 'src/*'",
+                    "git rm --cached 'build/*'",
+                    "git checkout HEAD -- 'tests/fixtures/*'",
+                    "git checkout -- '*/Cargo.toml'", "git rm -r 'docs/*'",
+                    "git stash push -- 'src/*'",
+                    "git restore 'crates/*/src/main.rs'",
+                    "cd src && git checkout -- '*'"):
+            with self.subTest(cmd=cmd):
+                r = self._r(cmd, "ok")
+                self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_hook_reaching_globs_stay_refused(self):
+        for i, cmd in enumerate(("git checkout HEAD -- '*pre-commit'",
+                                 "git checkout HEAD -- '*'",
+                                 "git checkout HEAD -- ':(glob)**/pre-commit'",
+                                 "git checkout HEAD -- '?githooks'",
+                                 "git checkout HEAD -- ':(icase)*PRE-COMMIT'",
+                                 "cd src && git checkout HEAD -- ':/*pre-commit'",
+                                 "git restore 'src/.githooks/*'")):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self._r(cmd, f"h{i}").returncode, 2)
+
+    def test_hook_file_only_in_the_source_revision_is_seen(self):
+        old = os.path.join(self.wt, ".githooks", "oldhook")
+        with open(old, "w") as f:
+            f.write("#!/bin/sh\n")
+        self.git("add", "-A", cwd=self.wt)
+        self.git("commit", "-qm", "add oldhook", cwd=self.wt)
+        self.git("rm", "-q", ".githooks/oldhook", cwd=self.wt)
+        self.git("commit", "-qm", "drop oldhook", cwd=self.wt)
+        for i, cmd in enumerate(("git checkout HEAD~1 -- '*oldhook'",
+                                 "git restore -s HEAD~1 '*oldhook'",
+                                 "git restore -sHEAD~1 '*oldhook'",
+                                 "git restore --source=HEAD~1 '*oldhook'")):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self._r(cmd, f"t{i}").returncode, 2)
+        self.assertEqual(self._r("git checkout HEAD -- '*oldhook'", "t9").returncode, 0)
+
+    def test_hook_file_only_in_the_index_is_seen(self):
+        os.remove(os.path.join(self.wt, ".githooks", "pre-commit"))
+        self.assertEqual(self._r("git checkout -- '*pre-commit'", "i").returncode, 2)
+
+    def test_unknown_or_missing_revision(self):
+        # A revision this gate cannot know: undetermined -> refused.
+        self.assertEqual(self._r("git checkout $X -- 'src/*'", "u").returncode, 2)
+        # A name that is no revision: git fails before writing.
+        r = self._r("git checkout no-such-rev -- 'src/*'", "m")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

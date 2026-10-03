@@ -3755,6 +3755,15 @@ def main() -> int:
         return code
     if payload.get("tool_name") != "Bash":
         return 0
+    # Attribution (edit_ledger.py, 233f819c): this guard allows no write to the
+    # main tree today, so this normally never fires; if _judge ever flags an
+    # allowed main write it is recorded. Recording cannot change the decision.
+    if meta.get("allowed_main_write") and meta.get("target_abs") and meta.get("root"):
+        try:
+            import edit_ledger  # noqa: PLC0415
+            edit_ledger.record(payload.get("session_id"), meta["root"], [meta["target_abs"]])
+        except Exception as e:  # noqa: BLE001
+            sys.stderr.write(f"note: edit ledger write failed ({type(e).__name__}: {e}).\n")
     # This guard's own judgement allowed the call; now the deny ledger
     # (signal 1): the same session re-reaching a refused target.
     rc = deny_ledger.gate(payload)

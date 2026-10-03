@@ -193,7 +193,6 @@ fn execution_state_reports_an_unreadable_backlog() {
 /// exit statuses. Here the worktree's index is corrupt: HEAD reads, `git
 /// status` fails.
 #[test]
-#[ignore = "backlog d65110df: open defect, remove ignore when fixed"]
 fn abandon_all_stuck_dirtiness_undetermined_exits_3() {
     let fx = Fx::new("d65110df");
     let decomp = fx.repo.join("decomp.json");

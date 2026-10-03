@@ -11,7 +11,8 @@
 (b) .githooks/pre-push demotes rc=2 (a GATE crate installed but not enabled = an
     inert gate) to "advisory only — the push is not blocked."
 
-Both open; marked expectedFailure. The control tests (unparseable registry exits
+(a) is CLOSED (check-plugin-rollout now exits 1/2 on absence; test is a plain
+test). (b) is still open and marked expectedFailure. The control tests (unparseable registry exits
 non-zero) are plain tests and must stay green.
 """
 
@@ -54,7 +55,6 @@ class AbsentIsNotAPass(unittest.TestCase):
             p = run_check(reg, Path(d) / "absent-settings.json")
             self.assertNotEqual(p.returncode, 0, p.stdout + p.stderr)
 
-    @unittest.expectedFailure
     def test_absent_registry_and_settings_is_not_exit_zero(self):
         with tempfile.TemporaryDirectory(prefix="bl-73c2c089-") as d:
             p = run_check(Path(d) / "no-such-registry.json", Path(d) / "no-such-settings.json")

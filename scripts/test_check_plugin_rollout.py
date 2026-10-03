@@ -6,11 +6,11 @@ checks, against synthetic fixture repos/registries/settings (never the real
 ~/.claude state):
 
   1. ROLLOUT — source plugin.json version vs the deployed registry version.
-     Drift and never-installed are hard failures; an absent registry is a
-     fail-soft skip.
+     Drift and never-installed are hard failures; an absent registry is
+     undetermined and also fails (rc 1), never a pass.
   2. ENABLEMENT — the demonstrated hole. A GATE crate missing from (or set
      false in) `enabledPlugins` is a hard failure; a non-gate plugin is a
-     warning only; an absent settings.json is a fail-soft skip.
+     warning only; an absent settings.json is undetermined and fails (rc 2), never a pass.
 
 The script reads its paths from module-level constants resolved at import
 time, so each test rebinds them (rather than setting env vars) and restores
@@ -557,13 +557,13 @@ class Enablement(_FixtureCase):
             self.assertEqual(rc, 0, err)
             self.assertIn("GATE plugin(s) enabled", out)
 
-    def test_absent_settings_file_skips_the_dimension(self):
-        """Fail-soft, exactly as an absent registry skips the rollout check: a
-        machine with no settings.json is not a failure."""
+    def test_absent_settings_file_is_enablement_failure(self):
+        """backlog 73c2c089: absent settings cannot be checked against, so it
+        resolves like an unparseable one (RC_ENABLEMENT), never exit 0."""
         with tempfile.TemporaryDirectory() as tmp:
             rc, out, _err = self.run_main(tmp, write_settings=False)
-            self.assertEqual(rc, 0)
-            self.assertIn("SKIP: no settings", out)
+            self.assertEqual(rc, 2)
+            self.assertIn("FAIL: no settings", out)
 
     def test_absent_settings_does_not_mask_rollout_drift(self):
         """Skipping one dimension must not soften the other."""
@@ -607,11 +607,12 @@ class RolloutDrift(_FixtureCase):
             self.assertEqual(rc, 1)
             self.assertIn("never installed", err)
 
-    def test_absent_registry_skips_the_dimension(self):
+    def test_absent_registry_is_rollout_failure(self):
+        """backlog 73c2c089: absent registry resolves like an unparseable one."""
         with tempfile.TemporaryDirectory() as tmp:
             rc, out, _err = self.run_main(tmp, write_registry=False)
-            self.assertEqual(rc, 0)
-            self.assertIn("SKIP: no registry", out)
+            self.assertEqual(rc, 1)
+            self.assertIn("FAIL: no registry", out)
 
     def test_clean_fixture_passes(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -648,7 +649,7 @@ class MalformedInputs(_FixtureCase):
             self.assertEqual(rc, cpr.RC_ROLLOUT)
             self.assertIn("present but unparseable", err)
             self.assertIn("unreadable or unparseable", err)
-            self.assertNotIn("SKIP: no settings", out)
+            self.assertNotIn("FAIL: no settings", out)
             self.assertNotIn("settings.json not found", err)
 
     def test_malformed_registry_is_a_hard_failure_not_a_skip(self):
@@ -656,7 +657,7 @@ class MalformedInputs(_FixtureCase):
             rc, out, err = self.run_main(tmp, registry_text="[[[")
             self.assertEqual(rc, cpr.RC_ROLLOUT)
             self.assertIn("present but unparseable", err)
-            self.assertNotIn("SKIP: no registry", out)
+            self.assertNotIn("FAIL: no registry", out)
             self.assertNotIn("installed_plugins.json not found", err)
 
     def test_non_dict_enabled_plugins_is_a_failure_not_a_traceback(self):
@@ -2459,15 +2460,15 @@ class RetiredPlugins(_FixtureCase):
             self.assertNotIn("OK: every ", out)
             self.assertIn("cannot enumerate installed plugins", err)
 
-    def test_absent_inputs_skip_the_dimension_without_claiming_a_verdict(self):
-        """Fail-soft on ABSENT, exactly as both existing dimensions do: nothing
-        configured and nothing deployed is not a failure. But with no source to
-        enumerate there is also nothing to be green about, so no OK line."""
+    def test_absent_inputs_are_rollout_failure_and_claim_no_verdict(self):
+        """Absent inputs are undetermined (backlog 73c2c089): rc is the rollout
+        class (registry absent outranks enablement), never RC_OK, and there is
+        no OK line to be green about."""
         with tempfile.TemporaryDirectory() as tmp:
             rc, out, _err = self.run_main(
                 tmp, write_settings=False, write_registry=False
             )
-            self.assertEqual(rc, cpr.RC_OK)
+            self.assertEqual(rc, cpr.RC_ROLLOUT)
             self.assertNotIn("OK: every ", out)
 
     def test_the_clean_case_states_the_population_it_inspected(self):

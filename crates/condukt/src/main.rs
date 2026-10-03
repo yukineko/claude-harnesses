@@ -2675,8 +2675,9 @@ fn parse_policy_levels(
 /// cache first, `$PATH` second), not by bare name: a hook-spawned process does
 /// not inherit the plugin `bin/` dirs on `$PATH` (backlog abba6f0d).
 ///
-/// One answer is NOT soft: when the plugin cache could not be read to locate
-/// fugu-router (`Undetermined`), this returns `Some(Level::Low)` — the most
+/// One answer is NOT soft: when fugu-router could not be located
+/// (`Undetermined`: the plugin cache could not be read, or — with no cache
+/// copy — a `fugu-router` on `$PATH` exists but cannot be spawned), this returns `Some(Level::Low)` — the most
 /// restrictive confidence — with a warning on stderr. "Could not look" must
 /// not fall back to the self-reported `--confidence`, which may be higher than
 /// a calibration would have allowed (CLAUDE.md §3: cannot-determine resolves

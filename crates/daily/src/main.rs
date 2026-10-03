@@ -229,8 +229,9 @@ fn driver_active() -> bool {
         // driver to collide with. That is an observation, not a failure to
         // observe.
         Determination::Known(None) => return driver_active_from_output(false, false, ""),
-        // The plugin cache could not be read: we do not know whether backlog
-        // (and so a driver) exists. Treat as active — skip today's run.
+        // Could not tell (the plugin cache could not be read, or — with no
+        // cache copy — a `backlog` on $PATH exists but cannot be spawned): we
+        // do not know whether a driver exists. Treat as active — skip the run.
         Determination::Undetermined(why) => {
             eprintln!(
                 "daily: could not locate `backlog` ({}); treating a driver as \

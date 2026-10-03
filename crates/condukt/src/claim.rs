@@ -1448,9 +1448,11 @@ fn json_id(v: Option<&serde_json::Value>) -> Option<String> {
 /// `backlog` is located with [`harness_core::plugin_bin::resolve`] (plugin
 /// cache first, `$PATH` second), not by bare name: a hook-spawned process does
 /// not inherit the plugin `bin/` dirs on `$PATH` (backlog abba6f0d). The one
-/// answer that is NOT soft is a plugin cache that could not be read: that is
-/// `Err`, because "could not look for backlog" is not "backlog has no pending
-/// tasks" — the caller does not publish a view built on it.
+/// answer that is NOT soft is a lookup that could not be completed
+/// (`Undetermined`: the plugin cache could not be read, or — with no cache copy
+/// — a `backlog` on `$PATH` exists but cannot be spawned): that is `Err`,
+/// because "could not look for backlog" is not "backlog has no pending tasks" —
+/// the caller does not publish a view built on it.
 #[allow(dead_code)]
 fn backlog_pending() -> Result<Vec<serde_json::Value>> {
     let program = match harness_core::plugin_bin::resolve("backlog") {

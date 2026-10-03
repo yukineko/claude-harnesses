@@ -154,8 +154,9 @@ pub fn check_oracle(
                        `tdd` binary on PATH or via the plugin cache; a missing checker is not a passing checker, so this blocks \
                        rather than degrading to the legacy gate",
         }),
-        // The cache could not be read, so we do not know whether `tdd` exists;
-        // `resolve` deliberately does not fall back to `$PATH` here.
+        // We do not know whether a usable `tdd` exists: the cache could not be
+        // read (`resolve` then deliberately does not fall back to `$PATH`), or
+        // there is no cache copy and a `tdd` on `$PATH` cannot be spawned.
         Determination::Undetermined(why) => serde_json::json!({
             "required": true,
             "valid_fp_oracle": false,

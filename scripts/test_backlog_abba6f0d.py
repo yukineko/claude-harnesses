@@ -291,6 +291,98 @@ class RemainingAdHocResolvers(unittest.TestCase):
             "ad-hoc plugin-binary resolution (not via harness_core::plugin_bin):\n"
             + "\n".join(sorted(set(hits))))
 
+    def test_no_plugin_name_literal_into_a_bare_spawn_helper(self):
+        """backlog abba6f0d (missed site, found by the independent verifier):
+        a helper `fn f(.., program: &str, ..)` whose body does
+        `Command::new(program)` spawns its argument by bare name, so a caller
+        passing a harness plugin name literal (`run_tool(repo, "overwatch",
+        ..)`) is the same bare-name spawn the sweep above forbids, hidden one
+        call deep. Open defect (RED observed): condukt maintree.rs
+        observe_peers."""
+        helpers = spawn_param_helpers()
+        # Anti-vacuity: the detector must see maintree's run_tool, and must NOT
+        # flag helpers that resolve first (overwatch shell_source, stuckguard
+        # heartbeat_via spawn a resolved local, not their name parameter).
+        self.assertIn("run_tool", helpers)
+        self.assertNotIn("shell_source", helpers)
+        self.assertNotIn("heartbeat_via", helpers)
+
+        hits = plugin_literal_calls(helpers)
+        # Concrete pin for the known site: maintree must locate both binaries
+        # through plugin_bin.
+        rel = "crates/condukt/src/maintree.rs"
+        code = "\n".join(c for _, c in non_test_lines(rel))
+        for binary in ("overwatch", "backlog"):
+            if not re.search(r'plugin_bin::(resolve|cache_lookup_in)\([^;]*"%s"'
+                             % re.escape(binary), code):
+                hits.append(f"{rel}: [missing] no harness_core::plugin_bin "
+                            f"lookup of {binary!r} in non-test code")
+        self.assertEqual(
+            sorted(set(hits)), [],
+            "harness plugin name literal passed to a helper that spawns its "
+            "parameter by bare name (not via harness_core::plugin_bin):\n"
+            + "\n".join(sorted(set(hits))))
+
+
+def spawn_param_helpers():
+    """{fn_name: [(rel, lineno, param)]} for non-test fns that pass one of
+    their OWN `&str` parameters straight to `Command::new` (and do not call
+    plugin_bin themselves)."""
+    out = {}
+    for p in sorted(REPO.glob("crates/*/src/**/*.rs")):
+        rel = str(p.relative_to(REPO))
+        kept = non_test_lines(rel)
+        src = "\n".join(c for _, c in kept)
+        lnos = [n for n, _ in kept]
+        scan = _lex(src)[1]
+        for m in re.finditer(r'\bfn\s+([A-Za-z_][A-Za-z0-9_]*)\s*(<[^>]*>)?\s*\(', scan):
+            start = scan.find("{", m.end())
+            semi = scan.find(";", m.end())
+            if start < 0 or (0 <= semi < start):
+                continue
+            sig = scan[m.end():start]
+            params = set(re.findall(r'\b([a-z_][a-z0-9_]*)\s*:\s*&\s*str\b', sig))
+            depth, k = 0, start
+            while k < len(scan):
+                if scan[k] == "{":
+                    depth += 1
+                elif scan[k] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                k += 1
+            body = src[start:k + 1]
+            if "plugin_bin::" in body:
+                continue
+            for arg in re.findall(r'Command::new\(\s*&?\s*([a-z_][a-z0-9_]*)\s*\)', body):
+                if arg in params:
+                    out.setdefault(m.group(1), []).append(
+                        (rel, lnos[src.count("\n", 0, m.start())], arg))
+    return out
+
+
+def plugin_literal_calls(helpers):
+    """Non-test call sites `helper(.., "<plugin>", ..)` for each helper."""
+    names = _names_alt()
+    lit = re.compile(r'"(%s)"' % names)
+    hits = []
+    for p in sorted(REPO.glob("crates/*/src/**/*.rs")):
+        rel = str(p.relative_to(REPO))
+        for n, c in non_test_lines(rel):
+            if c.lstrip().startswith("#["):
+                continue
+            for fname, defs in helpers.items():
+                for m in re.finditer(r'(?<![A-Za-z0-9_])%s\(([^;]*)' % re.escape(fname), c):
+                    if re.search(r'\bfn\s+$', c[:m.start()]):
+                        continue  # the definition itself
+                    found = lit.search(m.group(1))
+                    if found:
+                        d = defs[0]
+                        hits.append(
+                            f"{rel}:{n}: [{fname}({found.group(0)}) -> "
+                            f"Command::new({d[2]}) at {d[0]}:{d[1]}] {c.strip()}")
+    return hits
+
 
 if __name__ == "__main__":
     unittest.main()

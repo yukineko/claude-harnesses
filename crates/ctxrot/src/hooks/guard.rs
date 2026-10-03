@@ -655,8 +655,10 @@ fn render_session_anchor(lease: &SessionLease) -> Option<String> {
 /// plugin cache first (newest version by numeric order, so `0.3.10` beats
 /// `0.3.9`), `$PATH` second. `Known(None)` when overwatch is not installed (no
 /// cache candidate and nothing on `$PATH`); `Undetermined` when the cache dir
-/// exists but could not be listed — the caller must not read that as "not
-/// installed", and the resolver does not fall back to `$PATH` then.
+/// exists but could not be listed (the resolver then does not fall back to
+/// `$PATH`), or when there is no cache copy and an `overwatch` on `$PATH`
+/// exists but cannot be spawned — the caller must not read either as "not
+/// installed".
 ///
 /// This used to be a local resolver that probed `$PATH` first (a bare-name
 /// spawn), so a stale standalone copy on the login `$PATH` shadowed the
@@ -689,8 +691,9 @@ fn fetch_session_lease(session_id: &str) -> Option<SessionLease> {
     let binary = match find_overwatch_binary() {
         Determination::Known(found) => found?,
         Determination::Undetermined(why) => {
-            // Not "overwatch is absent": the cache could not be read. The
-            // anchor is still skipped, but say so instead of going silent.
+            // Not "overwatch is absent": the cache could not be read, or a
+            // `$PATH` copy exists but cannot be spawned. The anchor is still
+            // skipped, but say so instead of going silent.
             eprintln!(
                 "ctxrot: could not resolve the overwatch binary ({why}); \
                  session-anchor re-inject skipped this prompt"

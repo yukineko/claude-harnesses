@@ -97,8 +97,9 @@ pub enum AnchorLookup {
 /// order, so `0.3.10` beats `0.3.9`), `$PATH` second. Distinguishes
 /// "genuinely not installed" (`Known(None)` — no cache dir/candidate and no
 /// `$PATH` entry: a real observation) from "could not tell" (`Undetermined` —
-/// the cache dir exists but could not be listed, e.g. permission denied; the
-/// resolver deliberately does not fall back to `$PATH` then).
+/// the cache dir exists but could not be listed, e.g. permission denied, and
+/// the resolver deliberately does not fall back to `$PATH` then; or there is no
+/// cache copy and an `overwatch` on `$PATH` exists but cannot be spawned).
 ///
 /// This used to be a local resolver that probed `$PATH` first, so a stale
 /// standalone copy on the login `$PATH` shadowed the rolled-out one; hook
@@ -235,8 +236,9 @@ pub fn heartbeat_piggyback(anchor: &SessionAnchor) {
 
 /// Resolve `name` and fire one best-effort heartbeat with `args`. Not
 /// installed (`Known(None)`) is silent — there is no lease system to refresh.
-/// A cache that could not be read (`Undetermined`) is reported on stderr: the
-/// heartbeat was NOT sent, and nothing here pretends otherwise.
+/// A lookup that could not be completed (`Undetermined`: the cache could not be
+/// read, or a `$PATH` copy exists but cannot be spawned) is reported on stderr:
+/// the heartbeat was NOT sent, and nothing here pretends otherwise.
 fn heartbeat_via(name: &str, args: &[&str]) {
     match harness_core::plugin_bin::resolve(name) {
         Determination::Known(Some(bin)) => {

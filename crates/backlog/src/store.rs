@@ -1128,11 +1128,12 @@ fn claim_check(_hashkey: &str) -> ClaimCheck {
 ///
 /// It deliberately uses [`harness_core::plugin_bin::cache_lookup_in`] rather
 /// than `plugin_bin::resolve`: `resolve`'s `$PATH` fallback probes the binary
-/// with an UNBOUNDED `condukt --version`, and this call runs inside the
-/// tasks-file critical section, where every subprocess must stay under
-/// [`IS_CLAIMED_TIMEOUT`] (a hung probe would hold the lock past the stale-reap
-/// window — measured: the `claim_check_slow_helper` tests took 13-33s through
-/// `resolve`). With no cache copy, the `$PATH` fallback is the bounded spawn
+/// with a `condukt --version` bounded only by plugin_bin's own 3s probe
+/// timeout (since ab7ce91d), and this call runs inside the tasks-file critical
+/// section, where every subprocess must stay under [`IS_CLAIMED_TIMEOUT`]
+/// (2.5s). A 3s probe followed by the 2.5s check itself would still exceed that
+/// budget (before the bound existed, the `claim_check_slow_helper` tests were
+/// measured at 13-33s through `resolve`). With no cache copy, the `$PATH` fallback is the bounded spawn
 /// itself: a missing binary surfaces there as "condukt not found".
 ///
 /// A cache that could not be read is refused (`Undetermined`), not treated as

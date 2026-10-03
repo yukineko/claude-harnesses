@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "backlog"
-version = "0.3.31"
+version = "0.3.32"
 dependencies = [
  "anyhow",
  "clap",
@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.206"
+version = "0.7.207"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -366,7 +366,7 @@ dependencies = [
 
 [[package]]
 name = "ctxrot"
-version = "0.5.32"
+version = "0.5.33"
 dependencies = [
  "anyhow",
  "chrono",
@@ -396,7 +396,7 @@ dependencies = [
 
 [[package]]
 name = "daily"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "blastguard",
  "chrono",
@@ -683,7 +683,7 @@ dependencies = [
 
 [[package]]
 name = "harness-status"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "anyhow",
  "clap",
@@ -1321,7 +1321,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "stuckguard"
-version = "0.1.39"
+version = "0.1.40"
 dependencies = [
  "anyhow",
  "chrono",

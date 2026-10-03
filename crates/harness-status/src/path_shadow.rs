@@ -132,7 +132,10 @@ fn list_binary_names(dir: &Path) -> Determination<Vec<String>> {
 /// `harness_core::plugin_bin::cache_lookup_in` (numeric version order, the
 /// newest version dir that holds `bin/<plugin>`), and every file in that
 /// `bin/` dir is listed. A plugin with no `bin/<plugin>` in any version
-/// (`Known(None)`: a skill-only plugin) has nothing to shadow and is skipped.
+/// (`Known(None)`) is skipped: that covers skill-only plugins, but ALSO a
+/// `bin/` that holds only differently-named binaries — those are not scanned,
+/// so their shadowing is not detected. Only plugins whose `bin/` contains a
+/// binary named after the plugin are scanned.
 ///
 /// Every cannot-determine — the root or a plugin dir unreadable, an entry that
 /// cannot be read or stat'ed, a non-UTF-8 name, an unreadable `bin/` dir —

@@ -38,8 +38,10 @@ target — as written or after realpath — is inside `.githooks`, inside
 `.git/hooks`, is a `.git/config`, or is a `config.worktree` under `.git` is
 refused, in ANY tree (main, a worktree, another repo) and regardless of
 CLAUDE_PROJECT_DIR: those files hold or wire the local gates, and rewriting them
-disarms every gate at once. The twin rule for Bash lives in
-guard-maintree-bash.py.
+disarms every gate at once. Likewise an edit whose realpath is inside either deny
+ledger directory (`~/.claude/state/maintree-deny`, `<tmp>/maintree-deny-<uid>`)
+is refused in any tree: editing it would erase or forge the record below. The
+twin rules for Bash live in guard-maintree-bash.py.
 
 DENY LEDGER (e033c406, scripts/deny_ledger.py). Every refusal is appended to the
 per-session ledger `~/.claude/state/maintree-deny/<session_id>.jsonl` — or, when that cannot be
@@ -54,8 +56,9 @@ ask quoting the earlier refusal — hardened to a deny unless the session is an
 interactive terminal (CLAUDECODE=1 and CLAUDE_CODE_ENTRYPOINT=cli). An
 unreadable or corrupt ledger, or an unusable session_id, refuses the same way —
 a corrupt or unreadable ledger file only for 20 minutes from its mtime, after
-which it is renamed aside to `<name>.corrupt-<ts>` with a stderr notice and the
-call proceeds. See deny_ledger.py for the exact rules and residuals.
+which it is renamed aside to `<name>.corrupt-<ts>`, its valid deny lines are
+carried into a fresh ledger file, the unparseable lines are dropped (named in a
+stderr notice) and the call proceeds. See deny_ledger.py for the exact rules and residuals.
 
 Protocol: reads the PreToolUse JSON payload on stdin.
 
@@ -167,6 +170,10 @@ def _judge(payload: dict) -> tuple[int, str, dict]:
     target = os.path.realpath(raw)
     if _hook_protected(raw) or _hook_protected(target):
         return 2, DENY_HOOKS.format(path=raw), meta
+    # The deny ledger's own directories, in any tree (e033c406 round 3).
+    for d in (deny_ledger.protected_dirs() if deny_ledger is not None else []):
+        if _under(*(x.casefold() if _FOLD_CASE else x for x in (target, d))):
+            return 2, DENY_LEDGER_DIR.format(path=raw, dir=d), meta
 
     proj_env = os.environ.get("CLAUDE_PROJECT_DIR")
     if not proj_env:
@@ -243,6 +250,13 @@ The local gates live in `.githooks` and are wired through `core.hooksPath` in
 or `.git/config` can disarm every one of them at once, so it is refused in any
 tree (backlog e033c406). Reading them is allowed. If the hooks genuinely need to
 change, hand it to the human.
+"""
+
+DENY_LEDGER_DIR = """Refused: editing `{path}` writes into the maintree deny ledger directory `{dir}`.
+
+That directory records this session's refusals (backlog e033c406); editing it
+would erase or forge the record that the retry and Stop checks rely on. It is
+refused from any tree. Reading it is allowed; a new user prompt clears it.
 """
 
 DENY_BAD_PAYLOAD = """Refused: could not read the hook payload ({why}).

@@ -34,8 +34,12 @@ size differ), the stop is BLOCKED, quoting the refusal: the refused change was
 made anyway by another spelling. An unreadable or corrupt ledger, a target whose
 state cannot be read, or an unusable session_id also blocks — a bad ledger file
 only for 20 minutes from its mtime, after which it is renamed aside to
-`<name>.corrupt-<ts>` with a stderr notice and the stop proceeds without it. A
-payload without a session_id key has no ledger (deny_ledger.py, RESIDUALS).
+`<name>.corrupt-<ts>`, its valid deny lines are carried into a fresh ledger
+file (and still judged here), the unparseable lines are dropped (named in a
+stderr notice) and the stop proceeds. A deny whose recorded main root no longer
+exists cannot be re-snapshotted and blocks as undetermined until the ledger is
+cleared or pruned. A payload without a session_id key has no ledger
+(deny_ledger.py, RESIDUALS).
 
 Bounded allow: `stop_hook_active` (a re-entrant stop after this hook already
 fired) resolves to allow, so a genuinely stuck state cannot trap the turn — the

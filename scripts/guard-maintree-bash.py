@@ -247,7 +247,9 @@ mode that judges nothing else):
     forms (`git config core.hooksPath`, `--get`, `get`) are allowed;
   * GIT_CONFIG_* environment assignments, judged on the PARSED, quote-removed
     and expanded words — as a command prefix, a bare assignment, `export` /
-    `declare` / `local` / `readonly`, or `env NAME=V`: a GIT_CONFIG_KEY_n whose
+    `declare` / `local` / `readonly`, `env NAME=V`, or a variable filled by
+    `printf -v NAME …` / `read NAME` (a value this walk cannot know is
+    unknown, and refused): a GIT_CONFIG_KEY_n whose
     value is core.hooksPath (any case) or unknown, and a GIT_CONFIG_PARAMETERS
     that is unknown or names core.hooksPath (single quotes removed, as git
     dequotes it), are refused. Separately, any GIT_CONFIG_* name in the raw
@@ -257,19 +259,27 @@ mode that judges nothing else):
     `apply` / `am` through `--directory` / `--include` — when a pathspec
     (expanded, `:(top)` / `:/` magic stripped, resolved against the tracked
     cwd or `git -C DIR`) names, lies under, or as a git glob (whose `*`
-    crosses `/` and leading dots) can match `.githooks` or `.git/hooks`.
-    `:!` / `:(exclude)` pathspecs write nothing and are skipped. Broad forms
-    with NO pathspec stay allowed (see KNOWN HOLES);
+    crosses `/` and leading dots) can match `.githooks` or `.git/hooks`: the
+    glob is matched against stand-ins AND against every entry that exists
+    under `<toplevel>/.githooks` and `<git-common-dir>/hooks` (repo-relative,
+    prefixed with the cwd's path in the repo unless `:(top)` / `:/`; case
+    folded under `:(icase)` and on darwin; `:(literal)` is not a glob). A glob
+    whose hook directories cannot be listed (unknown cwd, git failing, an
+    unreadable directory) is refused as undetermined. Options that take a
+    value are known per subcommand: `-p` / `-C` take one only for apply / am
+    (`-p<n>`); for restore / checkout / stash `-p` is `--patch` and the next
+    word is a pathspec. `:!` / `:(exclude)` pathspecs write nothing and are
+    skipped. Broad forms with NO pathspec stay allowed (see KNOWN HOLES);
   * every write target — the same targets judged for main above, `chmod -x
     FILE` included (a mode starting with `-` is the mode, not an option) —
     that, as written or resolved, is inside `.githooks`, inside `.git/hooks`,
     is a `.git/config`, or is a `config.worktree` under `.git`, or that has a
     glob component that can match one of those (`.githook*`, `.git/hoo*`; a
     glob not starting with `.` does not match a dot-name, as in the shell). A
-    `$( … )` / backquote that prints a git directory (`git rev-parse
-    --git-dir` / `--git-common-dir` / `--absolute-git-dir` / `--git-path X`)
-    stands for `.git` (`.git/X`), so `$(git rev-parse --git-dir)/config` is
-    `.git/config`. Reading them is allowed; `cp` FROM them is judged as a
+    `$( … )` / backquote whose text runs, ANYWHERE in it, `git … rev-parse
+    --git-dir` / `--git-common-dir` / `--absolute-git-dir` / `--git-path X`
+    stands for `.git` (`.git/X`), so `$(git rev-parse --git-dir)/config` and
+    `$(cd . && git rev-parse --git-dir)/config` are `.git/config`. Reading them is allowed; `cp` FROM them is judged as a
     write like every `cp` operand. In the hooks-only mode a command this walk
     cannot tokenize or place is refused only if its text names `.githooks`,
     `.git/hooks`, `.git/config`, `config.worktree` or core.hooksPath.
@@ -289,7 +299,11 @@ terminal session (CLAUDECODE=1 and CLAUDE_CODE_ENTRYPOINT=cli); anywhere else
 it is hardened to a deny (exit 2). An unreadable or corrupt ledger, or an
 unusable session_id, refuses the same way — a bad ledger file only for 20
 minutes from its mtime, after which it is renamed aside to
-`<name>.corrupt-<ts>` with a stderr notice and the call proceeds.
+`<name>.corrupt-<ts>`, its valid deny lines are carried into a fresh ledger
+file, the unparseable lines are dropped (named in a stderr notice) and the call
+proceeds. Every write target inside a ledger directory (or an ancestor of one
+below $HOME, or at/below the temp dir) is refused from any tree; reads are
+allowed.
 scripts/stop-verify-worktree.py
 re-checks the refused targets at Stop, and scripts/deny-ledger-clear.py
 (UserPromptSubmit) empties the session's ledger. See deny_ledger.py for the
@@ -895,9 +909,12 @@ def _hook_protected(path: str, dotglob: bool = False) -> bool:
 
 # The text of a `$( … )` / backquote that prints a git directory: its output
 # stands for a `.git` directory (`$(git rev-parse --git-common-dir)/hooks`).
+# Searched ANYWHERE in the text (e033c406 round 3): `$(cd . && git rev-parse
+# --git-dir)` prints a git directory as much as the bare form does.
 _GITDIR_PRODUCER = re.compile(
-    r"^\s*git\b.*\brev-parse\b.*--(?:absolute-git-dir|git-dir|git-common-dir)\b")
-_GITPATH_PRODUCER = re.compile(r"^\s*git\b.*\brev-parse\b.*--git-path\s+(\S+)")
+    r"(?:^|[^\w.-])git\b.*\brev-parse\b.*--(?:absolute-git-dir|git-dir|git-common-dir)\b")
+_GITPATH_PRODUCER = re.compile(
+    r"(?:^|[^\w.-])git\b.*\brev-parse\b.*--git-path\s+([^\s;&|)]+)")
 _QUOTED_SUBST = re.compile(r"\$\(([^()]*)\)|`([^`]*)`")
 
 
@@ -921,10 +938,10 @@ def _gitdir_substs_to_literal(text: str) -> str:
 def _gitdir_text(text: str) -> str | None:
     """`.git` (or `.git/<path>`) when `text` is a command printing a git
     directory, else None."""
-    m = _GITPATH_PRODUCER.match(text)
+    m = _GITPATH_PRODUCER.search(text)
     if m:
         return ".git/" + m.group(1).strip("'\"")
-    if _GITDIR_PRODUCER.match(text):
+    if _GITDIR_PRODUCER.search(text):
         return ".git"
     return None
 
@@ -972,10 +989,20 @@ _CONFIG_VERBS = {"get", "list", "set", "unset", "rename-section",
 # git subcommands that write working-tree paths named by a pathspec.
 _GIT_TREE_WRITERS = {"rm", "mv", "checkout", "restore", "clean", "stash",
                      "apply", "am"}
-# Their options that take a separate value (not a pathspec).
-_GIT_SUB_VALUE_OPTS = {"-m", "--message", "-b", "-B", "--orphan", "-s",
-                       "--source", "-e", "--exclude", "-p", "-C",
-                       "--pathspec-from-file", "--conflict"}
+# Their options that take a separate value (not a pathspec), PER SUBCOMMAND:
+# `-p` is a value option (`-p<n>`, strip count) only for apply / am; for
+# restore / checkout / stash it is `--patch` and the next word is a pathspec.
+_GIT_SUB_VALUE_OPTS = {
+    "rm": {"--pathspec-from-file"},
+    "mv": set(),
+    "checkout": {"-b", "-B", "--orphan", "--pathspec-from-file", "--conflict"},
+    "restore": {"-s", "--source", "--pathspec-from-file", "--conflict"},
+    "clean": {"-e", "--exclude", "--pathspec-from-file"},
+    "stash": {"-m", "--message", "--pathspec-from-file"},
+    "apply": {"-p", "-C", "--exclude", "--whitespace", "--build-fake-ancestor"},
+    "am": {"-p", "-C", "--exclude", "--whitespace", "--patch-format",
+           "--resolvemsg", "--quoted-cr", "--empty"},
+}
 
 
 def _git_rewires_hooks(args: list[str]) -> str | None:
@@ -1805,6 +1832,7 @@ class _Analyzer:
         self._own: tuple[bool, str | None] = (False, None)
         # marker word -> the command text of an unquoted `$( … )` it replaced
         self.substs: dict[str, str] = {}
+        self._ledger: list[tuple[list[str], int]] | None = None
 
     # -- target judgement ---------------------------------------------------
     def own_gitdir(self) -> str | None:
@@ -1822,9 +1850,55 @@ class _Analyzer:
             self.hit_abs = _abs_target(target, st, self.root)
             raise _Hit(target)
 
+    def ledger_dirs(self) -> list[tuple[list[str], int]]:
+        """(components of a deny-ledger directory, how many leading components
+        are the anchor it lives in) — the anchor being $HOME (exclusive: `rm
+        -r ~/.claude` erases it, `rm -r ~` is not this gate's business) or the
+        temp dir (inclusive: `rm -rf $TMPDIR` erases the fallback)."""
+        if self._ledger is None:
+            self._ledger = []
+            dirs = deny_ledger.protected_dirs() if deny_ledger is not None else []
+            home = os.environ.get("HOME")
+            tmp = deny_ledger._tempdir() if deny_ledger is not None else None
+            for d in dirs:
+                comps = [c for c in _fold(d).split("/") if c]
+                n = len(comps)
+                for anchor, extra in ((home, 1), (tmp, 0)):
+                    if anchor:
+                        a = [c for c in _fold(os.path.realpath(anchor)).split("/") if c]
+                        if comps[:len(a)] == a:
+                            n = min(n, len(a) + extra)
+                self._ledger.append((comps, n))
+        return self._ledger
+
+    def check_ledger(self, target: str, st: _State) -> None:
+        """Refuse a write / delete / chmod / move whose target is inside a deny
+        ledger directory, or is one of its ancestors below its anchor (a glob
+        or unknown component may be either). Erasing the ledger erases the
+        signals it records, from any tree (e033c406 round 3)."""
+        p = _expand(target, st)
+        p = re.sub(r"\$\{?(TMPDIR|TEMP|TMP)\}?(?![A-Za-z0-9_])",
+                   lambda m: os.environ.get(m.group(1)) or m.group(0), p)
+        if not os.path.isabs(p):
+            if st.rel is None:
+                return  # relative to an unknown cwd (residual)
+            p = os.path.join(st.rel, p)
+        comps = [c for c in _fold(os.path.realpath(p)).split("/") if c]
+        for dcomps, anchor in self.ledger_dirs():
+            k = min(len(comps), len(dcomps))
+            if len(comps) < anchor:
+                continue
+            if all(c == d or (c.startswith("$") and c != MKTEMP_MARK)
+                   or _comp_may_be(c, d) for c, d in zip(comps[:k], dcomps[:k])):
+                self.hit_abs = _abs_target(target, st, self.root)
+                raise _HookHit(target, "it writes into this session's deny "
+                                       "ledger directory (" + "/" + "/".join(dcomps) + ")")
+
     def check_hooks(self, target: str, st: _State) -> None:
         """Refuse a write into hook machinery in any tree (e033c406): the
-        target as written (after expansion), then its resolved literal part."""
+        target as written (after expansion), then its resolved literal part.
+        Also refuses writes into the deny ledger's directories (check_ledger)."""
+        self.check_ledger(target, st)
         p = _expand(self.gitdir_substs(target), st)
         if _hook_protected(p):
             self.hit_abs = _abs_target(target, st, self.root)
@@ -1858,22 +1932,82 @@ class _Analyzer:
     def check_git_pathspec(self, spec: str, st: _State) -> None:
         """A pathspec of a git subcommand that writes the working tree: refuse
         one that names, lies under, or (as a git glob, whose `*` crosses `/`
-        and leading dots) can match `.githooks` or `.git/hooks`."""
+        and leading dots) can match `.githooks` or `.git/hooks` — matched
+        against stand-ins AND against the entries that actually exist under
+        `<toplevel>/.githooks` and `<git-common-dir>/hooks` (`'*pre-commit'`
+        matches `.githooks/pre-commit` but no stand-in). `:(icase)` folds
+        case; a glob whose hook directories cannot be listed is refused."""
+        magic = ""
+        top = False
         if spec.startswith(":(") and ")" in spec:
             magic, spec = spec[2:spec.index(")")], spec[spec.index(")") + 1:]
-            if "exclude" in magic:
+            words = {w.strip() for w in magic.split(",")}
+            if "exclude" in words:
                 return
+            top = "top" in words
         elif spec.startswith((":!", ":^")):
             return  # an exclusion writes nothing
         elif spec.startswith(":/"):
-            spec = spec[2:]
+            spec, top = spec[2:], True
+        words = {w.strip() for w in magic.split(",")} if magic else set()
+        icase = "icase" in words
         self.check_hooks(spec, st)
         p = _expand(self.gitdir_substs(spec), st)
-        if _hook_protected(p, dotglob=True) or (any(ch in p for ch in _GLOB) and any(
-                fnmatch.fnmatchcase(rep, _fold(p))
-                for rep in (".githooks", ".githooks/x", ".git/hooks/x"))):
-            raise _HookHit(spec, "a git pathspec writes into the repository's "
-                                 "hook machinery")
+        fold = (lambda x: x.casefold()) if icase else _fold
+        why = "a git pathspec writes into the repository's hook machinery"
+        if _hook_protected(fold(p), dotglob=True):
+            raise _HookHit(spec, why)
+        if "literal" in words or not any(ch in p for ch in _GLOB):
+            return
+        pat = fold(p)
+        if any(fnmatch.fnmatchcase(rep, pat)
+               for rep in (".githooks", ".githooks/x", ".git/hooks/x")):
+            raise _HookHit(spec, why)
+        prefix, entries = self.hook_entries(st)
+        if entries is None:
+            raise _HookHit(spec, "a git glob pathspec could not be matched against "
+                                 f"the hook files ({prefix}); undetermined is refused")
+        full = pat if (top or not prefix) else fold(prefix) + "/" + pat
+        if any(fnmatch.fnmatchcase(fold(e), full) for e in entries):
+            raise _HookHit(spec, why + " (the glob matches an existing hook file)")
+
+    def hook_entries(self, st: _State) -> tuple[str, list[str] | None]:
+        """(cwd relative to the toplevel, repo-relative names of everything
+        under `<toplevel>/.githooks` and `<git-common-dir>/hooks`), or
+        (reason, None) when they cannot be listed. Only reached for a glob
+        pathspec, so ordinary commands pay no subprocess."""
+        if st.rel is None:
+            return "the git cwd is unknown", None
+        try:
+            r = subprocess.run(
+                ["git", "-C", st.rel, "rev-parse", "--path-format=absolute",
+                 "--show-toplevel", "--git-common-dir"],
+                capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError) as e:
+            return f"git rev-parse failed: {e}", None
+        lines = r.stdout.splitlines()
+        if r.returncode != 0 or len(lines) != 2:
+            return f"git rev-parse exited {r.returncode}", None
+        top, common = (os.path.realpath(x) for x in lines)
+        prefix = os.path.relpath(os.path.realpath(st.rel), top)
+        prefix = "" if prefix == "." or prefix.startswith("..") else prefix
+        out: list[str] = []
+        for base, name in ((os.path.join(top, ".githooks"), ".githooks"),
+                           (os.path.join(common, "hooks"), ".git/hooks")):
+            try:
+                os.lstat(base)
+            except FileNotFoundError:
+                continue
+            except OSError as e:
+                return f"{base}: {e}", None
+            errs: list[OSError] = []
+            for d, dirs, files in os.walk(base, onerror=errs.append):
+                rel = os.path.relpath(d, base)
+                stem = name if rel == "." else name + "/" + rel
+                out.extend(stem + "/" + x for x in dirs + files)
+            if errs:
+                return f"{base}: {errs[0]}", None
+        return prefix, out
 
     # -- text ---------------------------------------------------------------
     def analyze(self, text: str, st: _State, depth: int) -> _State:
@@ -2142,12 +2276,14 @@ class _Walk:
                     new.vars[a] = _expand(src.strip(), st)
                 else:
                     new.vars[a] = self.producer(src)
+                self.git_env(a, new.vars[a])  # GIT_CONFIG_KEY_n / _PARAMETERS
             return new
         if prog == "printf" and rest[:1] == ["-v"] and len(rest) > 1:
             new = st.copy()
             if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", rest[1]):
                 new.vars[rest[1]] = self.producer(
                     " ".join(_expand(a, st) for a in rest[2:]))
+                self.git_env(rest[1], new.vars[rest[1]])
             return new
         if prog == "set" and rest and (rest[0] == "--" or rest[0][:1] not in "-+"):
             new = st.copy()
@@ -2325,7 +2461,7 @@ class _Walk:
                 specs.append(a.split("=", 1)[1])
                 j += 1
                 continue
-            if a in _GIT_SUB_VALUE_OPTS:
+            if a in _GIT_SUB_VALUE_OPTS[sub]:
                 j += 2
                 continue
             if a.startswith("-"):
@@ -3298,7 +3434,10 @@ if __name__ == "__main__":
 #     not a literal; a relative write into `.githooks` against a cwd this walk
 #     could not track while in the hooks-only mode; a write target whose
 #     unknown variable stands for `.githooks` (`rm $X/pre-commit`); brace
-#     expansion (`.git{hooks,x}`).
+#     expansion (`.git{hooks,x}`); a hook file created after this call's
+#     listing (glob pathspecs are matched against the entries that exist when
+#     the call is judged); a git glob with `**` / `:(glob)` semantics is
+#     matched with fnmatch, whose `*` crosses `/` (over-refuses only).
 #   * git subcommands that rewrite hook files WITHOUT a pathspec naming them —
 #     deliberately, so merges and resets on main keep working: `git reset
 #     --hard`, `git checkout .` / `git checkout <branch>`, `git switch`, `git
@@ -3309,4 +3448,7 @@ if __name__ == "__main__":
 #   * deny ledger (e033c406): see the RESIDUALS in deny_ledger.py (no
 #     session_id key; a retry spelled relatively / through a symlink is not
 #     matched at PreToolUse, though its effect on main is still seen at Stop
-#     and, if committed, by the commit gate).
+#     and, if committed, by the commit gate; ledger self-protection only sees
+#     a target it can expand and place — a relative target against an unknown
+#     cwd or a symlink made in the same command is not matched; a deny whose
+#     recorded root vanished blocks Stop until clear / prune, on purpose).

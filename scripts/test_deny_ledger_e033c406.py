@@ -581,5 +581,174 @@ class LedgerFallbackAndBounds(_Fixture):
         self.assertNotIn("\n", e["reason"])
 
 
+class Round3Findings(_Fixture):
+    """Verifier round 3 (verify2 / 0de9f3c0) and the coordinator's items 1-6."""
+
+    def _refused_in_wt(self, cmd: str, sid: str = "r3") -> None:
+        r = self.bash(cmd, sid=sid, cwd=self.wt, project=self.wt)
+        self.assertEqual(r.returncode, 2, f"{cmd!r} must be refused: {r.stderr}")
+
+    def _allowed_in_wt(self, cmd: str, sid: str = "r3ok") -> None:
+        r = self.bash(cmd, sid=sid, cwd=self.wt, project=self.wt)
+        self.assertEqual(r.returncode, 0, f"{cmd!r} must be allowed: {r.stderr}")
+
+    # item 1
+    def test_glob_pathspec_matching_a_real_hook_file_is_refused(self):
+        for i, cmd in enumerate(("git checkout HEAD -- '*pre-commit'",
+                                 "git rm '*pre-commit'",
+                                 "git checkout HEAD -- ':(icase)*PRE-COMMIT'",
+                                 "git restore -s HEAD ':(top)*commit'")):
+            self._refused_in_wt(cmd, sid=f"g{i}")
+        for cmd in ("git rm '*.orig'", "git checkout HEAD -- '*.rs'",
+                    "git checkout HEAD -- ':(literal)*pre-commit'"):
+            self._allowed_in_wt(cmd)
+
+    def test_glob_pathspec_with_unlistable_hook_dir_is_refused(self):
+        hooks = os.path.join(self.wt, ".githooks")
+        os.chmod(hooks, 0)
+        self.addCleanup(os.chmod, hooks, 0o755)
+        self._refused_in_wt("git rm '*.orig'")
+        self._allowed_in_wt("git rm tracked.rs")  # not a glob: nothing to list
+
+    # item 2
+    def test_patch_mode_dash_p_takes_no_value(self):
+        for i, cmd in enumerate(("git restore -s HEAD -p .githooks",
+                                 "git stash push -p .githooks",
+                                 "git checkout -p .githooks")):
+            self._refused_in_wt(cmd, sid=f"p{i}")
+        self._allowed_in_wt("git apply -p1 x.patch")
+        self._allowed_in_wt("git apply -p 1 x.patch")
+
+    # item 3
+    def test_stale_corrupt_ledger_salvages_its_valid_denies(self):
+        self.deny_rm()
+        with open(self.ledger, "a") as f:
+            f.write("{garbage\n")
+        with open(self.ledger) as f:
+            n_lines = sum(1 for _ in f)
+        old = time.time() - 21 * 60
+        os.utime(self.ledger, (old, old))
+        r = self.bash("ls /")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("moved it aside", r.stderr)
+        self.assertIn(f"dropped unparseable line(s): {n_lines}", r.stderr)
+        denies = [e for e in self.entries() if e["kind"] == "deny"]
+        self.assertEqual([e["target_abs"] for e in denies], [self.target])
+        # The salvaged deny still refuses a retry and still feeds Stop.
+        self.assertEqual(self.bash("cat " + self.target).returncode, 2)
+        with open(self.target, "a") as f:
+            f.write("changed\n")
+        self.assertEqual(self.stop().returncode, 2)
+
+    # item 4
+    def test_writes_into_the_ledger_dirs_are_refused_from_any_tree(self):
+        led = "~/.claude/state/maintree-deny"
+        fb = "$TMPDIR/maintree-deny-%d" % os.getuid()
+        for i, cmd in enumerate((f"rm -rf {led}", f"rm {led}/x.jsonl",
+                                 f"touch {led}/x.jsonl", f"chmod 600 {led}/x.jsonl",
+                                 f"mv {led} {self.wt}/y", f"echo x > {led}/x.jsonl",
+                                 "rm -rf ~/.claude", "rm -rf ~/.claude/stat*",
+                                 f"rm -rf {fb}", "rm -rf $TMPDIR/*",
+                                 f"echo x > {fb}/x.jsonl")):
+            self._refused_in_wt(cmd, sid=f"L{i}")
+        os.makedirs(os.path.join(self.home, ".claude", "state", "maintree-deny"),
+                    exist_ok=True)
+        for cmd in (f"cat {led}/x.jsonl", f"ls {led}", "rm -rf ~/.claude/other",
+                    "touch $TMPDIR/scratch.txt"):
+            self._allowed_in_wt(cmd)
+        r = self.edit(os.path.join(self.home, ".claude", "state", "maintree-deny",
+                                   "x.jsonl"), sid="Le", project=self.wt)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("deny ledger directory", r.stderr)
+        r = self.edit(os.path.join(self.wt, "tracked.rs"), sid="Le2", project=self.wt)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    # item 5
+    def _fallback_dir(self) -> str:
+        return os.path.join(self.tmpdir, "maintree-deny-%d" % os.getuid())
+
+    def _home_unwritable(self) -> None:
+        shutil.rmtree(self.home)
+        with open(self.home, "w") as f:
+            f.write("not a directory\n")
+
+    def test_fallback_dir_not_0700_is_not_used(self):
+        self._home_unwritable()
+        os.mkdir(self._fallback_dir(), 0o755)
+        os.chmod(self._fallback_dir(), 0o755)
+        r = self.bash("rm " + self.target)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("could NOT be written to the deny ledger", r.stderr)
+        self.assertEqual(os.listdir(self._fallback_dir()), [])
+
+    def test_symlinked_fallback_dir_is_not_used(self):
+        self._home_unwritable()
+        elsewhere = os.path.join(self.tmp, "elsewhere")
+        os.mkdir(elsewhere, 0o700)
+        os.symlink(elsewhere, self._fallback_dir())
+        r = self.bash("rm " + self.target)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("could NOT be written to the deny ledger", r.stderr)
+        self.assertEqual(os.listdir(elsewhere), [])
+
+    def test_symlinked_ledger_file_is_not_followed(self):
+        os.makedirs(os.path.dirname(self.ledger))
+        decoy = os.path.join(self.tmp, "decoy.jsonl")
+        open(decoy, "w").close()
+        os.symlink(decoy, self.ledger)
+        r = self.bash("ls /")
+        self.assertEqual(r.returncode, 2, "an unreadable ledger refuses")
+        self.assertEqual(os.path.getsize(decoy), 0)
+
+    def test_tempdir_never_falls_back_to_the_cwd(self):
+        sys.path.insert(0, SCRIPTS)
+        self.addCleanup(sys.path.remove, SCRIPTS)
+        import deny_ledger
+        from unittest import mock
+        with mock.patch.object(deny_ledger.os.path, "isdir", return_value=False):
+            self.assertIsNone(deny_ledger._tempdir())
+            self.assertIsNone(deny_ledger.fallback_dir())
+            self.assertIsNone(deny_ledger.fallback_path("s"))
+
+    # item 6
+    def test_git_dir_substitution_anywhere_in_the_text(self):
+        for i, cmd in enumerate((
+                'echo x > "$(cd . && git rev-parse --git-dir)/config"',
+                "echo x > $(cd . && git rev-parse --git-common-dir)/hooks/pre-commit",
+                'touch "$(true; git rev-parse --git-path hooks)/post-commit"')):
+            self._refused_in_wt(cmd, sid=f"s{i}")
+
+    # GIT_CONFIG_KEY_n filled by printf -v / read
+    def test_printf_v_and_read_into_git_config_key_are_judged(self):
+        for i, cmd in enumerate((
+                "printf -v GIT_CONFIG_KEY_0 %s core.hooksPath; git status",
+                "read GIT_CONFIG_KEY_0 <<< core.hooksPath; git status",
+                "read GIT_CONFIG_PARAMETERS; git status")):
+            self._refused_in_wt(cmd, sid=f"k{i}")
+        self._allowed_in_wt("printf -v FOO %s bar; read BAR <<< baz; git status")
+
+    # RESIDUAL kept on purpose: a vanished root blocks Stop until clear.
+    def test_deny_whose_root_vanished_blocks_stop_until_clear(self):
+        self.deny_rm()
+        shutil.rmtree(self.main)
+        r = self.stop(cwd=self.tmp)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("cannot be read now", r.stderr)
+        r = self.run_hook(CLEAR, {"hook_event_name": "UserPromptSubmit",
+                                  "session_id": SID, "cwd": self.tmp,
+                                  "prompt": "next"}, cwd=self.tmp)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.stop(cwd=self.tmp).returncode, 0)
+
+    def test_clear_does_not_reach_through_a_symlinked_fallback_dir(self):
+        elsewhere = os.path.join(self.tmp, "elsewhere")
+        os.mkdir(elsewhere, 0o700)
+        victim = os.path.join(elsewhere, SID + ".jsonl")
+        open(victim, "w").close()
+        os.symlink(elsewhere, self._fallback_dir())
+        self.assertEqual(self.clear().returncode, 0)
+        self.assertTrue(os.path.exists(victim))
+
+
 if __name__ == "__main__":
     unittest.main()

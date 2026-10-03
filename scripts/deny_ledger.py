@@ -19,13 +19,27 @@ some other session's name.
 
 FALLBACK. When the home ledger cannot be written (an unwritable or
 non-absolute HOME), the line goes to the fallback ledger
-`<tmp>/maintree-deny-<uid>/<session_id>.jsonl`, where <tmp> is the directory
-tempfile.gettempdir() would pick (computed by _tempdir without importing
-tempfile, for latency) (same format,
-also per session). Readers always consult BOTH files and merge their lines by
-`epoch`, so a deny that could only be recorded in the fallback is still seen by
-later calls and at Stop. A refusal that can be written to neither keeps its
-deny and says so in its message (RESIDUALS).
+`<tmp>/maintree-deny-<uid>/<session_id>.jsonl` (same format, also per
+session), where <tmp> is the first writable absolute directory among $TMPDIR,
+$TEMP, $TMP, /tmp, /var/tmp, /usr/tmp (tempfile.gettempdir()'s order, computed
+by _tempdir without importing tempfile, for latency). There is NO cwd fallback:
+when none of those is usable there is no fallback ledger at all. <tmp> is
+shared with other users, so the fallback directory is used only when lstat
+shows a real directory (not a symlink) owned by this uid with mode 0700; it is
+created that way when missing, and anything else is skipped for both reading
+and writing. Every ledger file (home and fallback) is opened with O_NOFOLLOW,
+so a symlink planted at the file's path is an unreadable ledger (refused), never
+a redirect. Readers always consult BOTH files and merge their lines by `epoch`,
+so a deny that could only be recorded in the fallback is still seen by later
+calls and at Stop. A refusal that can be written to neither keeps its deny and
+says so in its message (RESIDUALS).
+
+SELF-PROTECTION. Writing, deleting, touching, chmod-ing or moving anything
+inside either ledger directory (protected_dirs) is refused from any tree, by
+guard-maintree-bash.py (including an ancestor of a ledger directory below
+$HOME, or at/below the temp dir — `rm -rf ~/.claude`, `rm -rf $TMPDIR/*` — and
+glob or unknown components that may name one) and by guard-maintree-edit.py.
+Reading them stays allowed.
 
 FORMAT. JSON lines, each an object with `"v": 1` and a `kind`:
 
@@ -95,10 +109,16 @@ RETRY_WINDOW_SECS (20 minutes) measured from that file's mtime — otherwise a
 non-interactive run, which never submits a prompt, would be refused on every
 Bash/Edit call and every Stop for the rest of the run. Once the file is older
 than that, it is renamed aside to `<name>.corrupt-<unix-ts>` (left for a human
-to inspect), a notice naming the new path is written to stderr, and the call
-proceeds as if that file did not exist. A file whose mtime cannot be read is
-refused without a bound. If the rename fails, the notice says so and the stale
-file is ignored for this call (and re-examined on the next).
+to inspect) and SALVAGED: its lines that are valid `deny` entries are written
+into a fresh active file at the original path (O_CREAT|O_EXCL|O_NOFOLLOW, 0600),
+so those refusals keep feeding signals 1 and 2; only the lines that are not
+valid entries are dropped (ticks are not carried over: the call count restarts).
+A stderr notice names the aside path, how many deny lines were carried over,
+and the dropped line numbers. A file with no valid deny line leaves no active
+file. If writing the salvaged lines fails, the notice says so and they are used
+for this call only. A file whose mtime cannot be read is refused without a
+bound. If the rename fails, the notice says so and the salvaged lines are used
+for this call only (the stale file is re-examined on the next).
 
 RESIDUALS (recorded, not hidden — CLAUDE.md 4):
   * a payload with NO session_id key has no ledger: nothing is recorded or
@@ -123,6 +143,16 @@ RESIDUALS (recorded, not hidden — CLAUDE.md 4):
     failure itself does not refuse the call.
   * a deny recorded while its ledger file is corrupt is appended to that file
     and refreshes its mtime, which restarts the brick bound for that file.
+  * a deny whose recorded root no longer exists (the main checkout was moved
+    or deleted) cannot be re-snapshotted, so Stop blocks as undetermined for
+    it until the ledger is cleared (the next UserPromptSubmit) or pruned (a
+    file older than 7 days, at a later clear). This is deliberate: a vanished
+    root is not evidence that the refused path was left alone.
+  * ledger self-protection judges the target as the Bash guard can expand it
+    ($HOME, ~, $TMPDIR/$TEMP/$TMP from the environment, variables set earlier
+    in the same command). A target relative to an unknown cwd, or reached
+    through a symlink created in the same command, is not matched. A
+    tampered or deleted ledger FILE is not detected after the fact.
 """
 
 from __future__ import annotations
@@ -130,6 +160,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import time
@@ -176,39 +207,90 @@ def ledger_path(session_id: str) -> str:
     return os.path.join(ledger_dir(), session_id + ".jsonl")
 
 
-def _tempdir() -> str:
+def _tempdir() -> str | None:
     """The directory tempfile.gettempdir() picks, by its candidate order
-    ($TMPDIR, $TEMP, $TMP, /tmp, /var/tmp, /usr/tmp, the cwd; the first that
-    is a writable directory) — without importing tempfile, whose import costs
+    ($TMPDIR, $TEMP, $TMP, /tmp, /var/tmp, /usr/tmp; the first that is a
+    writable directory) — without importing tempfile, whose import costs
     several milliseconds on every hook call. Its write probe is replaced by
-    os.access(W_OK|X_OK)."""
+    os.access(W_OK|X_OK). Unlike tempfile it NEVER falls back to the cwd (a
+    project tree): None means there is no fallback location."""
     cands = [os.environ.get(k) for k in ("TMPDIR", "TEMP", "TMP")]
     cands += ["/tmp", "/var/tmp", "/usr/tmp"]
     for c in cands:
-        if c and os.path.isdir(c) and os.access(c, os.W_OK | os.X_OK):
+        if c and os.path.isabs(c) and os.path.isdir(c) and os.access(c, os.W_OK | os.X_OK):
             return os.path.abspath(c)
-    return os.path.abspath(os.getcwd())
+    return None
 
 
-def fallback_dir() -> str:
+def fallback_dir() -> str | None:
+    t = _tempdir()
+    if t is None:
+        return None
     uid = os.getuid() if hasattr(os, "getuid") else "u"
-    return os.path.join(_tempdir(), f"maintree-deny-{uid}")
+    return os.path.join(t, f"maintree-deny-{uid}")
 
 
-def fallback_path(session_id: str) -> str:
-    return os.path.join(fallback_dir(), session_id + ".jsonl")
+def _fallback_dir_safe(d: str, create: bool) -> bool:
+    """The fallback dir lives in a SHARED temp dir, so it is used only when it
+    is a real directory (not a symlink) owned by this uid with mode 0700.
+    `create` makes it (0700) when it is missing. Anything else: not used."""
+    try:
+        st = os.lstat(d)
+    except FileNotFoundError:
+        if not create:
+            return False
+        try:
+            os.mkdir(d, 0o700)
+            os.chmod(d, 0o700)  # the umask may have narrowed it; never widened
+            st = os.lstat(d)
+        except OSError:
+            return False
+    except OSError:
+        return False
+    if not stat.S_ISDIR(st.st_mode):
+        return False
+    if hasattr(os, "getuid") and st.st_uid != os.getuid():
+        return False
+    return stat.S_IMODE(st.st_mode) == 0o700
+
+
+def fallback_path(session_id: str) -> str | None:
+    d = fallback_dir()
+    return None if d is None else os.path.join(d, session_id + ".jsonl")
 
 
 def ledger_paths(session_id: str) -> list[str]:
     """Where this session's lines may live: the home ledger (when HOME is
-    usable) and the temp-dir fallback, in write-preference order."""
+    usable) and the temp-dir fallback (when there is one), in
+    write-preference order."""
     paths = []
     try:
         paths.append(ledger_path(session_id))
     except Undetermined:
         pass  # no usable HOME: the fallback below is the only location
-    paths.append(fallback_path(session_id))
+    fb = fallback_path(session_id)
+    if fb is not None:
+        paths.append(fb)
     return paths
+
+
+def _is_fallback(path: str) -> bool:
+    d = fallback_dir()
+    return d is not None and os.path.dirname(path) == d
+
+
+def protected_dirs() -> list[str]:
+    """The ledger directories a TOOL CALL must not write into (realpaths):
+    erasing or back-dating the ledger would erase signals 1 and 2."""
+    out = []
+    try:
+        out.append(os.path.realpath(ledger_dir()))
+    except Undetermined:
+        pass
+    fb = fallback_dir()
+    if fb is not None:
+        out.append(os.path.realpath(fb))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -239,37 +321,74 @@ def _valid_entry(obj) -> bool:
     return True
 
 
-def _read_file(path: str) -> list[dict]:
-    """Entries of one ledger file. [] when it does not exist; Undetermined for
-    anything else that is not a clean read."""
+def _read_bytes(path: str) -> bytes | None:
+    """The file's bytes; None when it does not exist (or, for the fallback,
+    when its directory is not a safe one). O_NOFOLLOW: a symlink planted at
+    the ledger path is an error, not a redirect."""
+    if _is_fallback(path) and not _fallback_dir_safe(os.path.dirname(path), create=False):
+        return None
     try:
-        with open(path, "rb") as f:
-            data = f.read()
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except FileNotFoundError:
-        return []
+        return None
     except OSError as e:
         raise Undetermined(f"the deny ledger {path} could not be read ({e})") from e
     try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError as e:
-        raise Undetermined(f"the deny ledger {path} is not UTF-8") from e
+        chunks = []
+        while True:
+            b = os.read(fd, 1 << 16)
+            if not b:
+                break
+            chunks.append(b)
+    except OSError as e:
+        raise Undetermined(f"the deny ledger {path} could not be read ({e})") from e
+    finally:
+        os.close(fd)
+    return b"".join(chunks)
+
+
+def _parse(path: str, data: bytes) -> tuple[list[dict], list[int]]:
+    """(valid entries, numbers of the lines that are not valid entries)."""
+    text = data.decode("utf-8", "replace")
     out: list[dict] = []
+    bad: list[int] = []
     for n, line in enumerate(text.splitlines(), 1):
         if not line.strip():
             continue
         try:
             obj = json.loads(line)
-        except ValueError as e:
-            raise Undetermined(f"the deny ledger {path} line {n} is not JSON") from e
-        if not _valid_entry(obj):
-            raise Undetermined(f"the deny ledger {path} line {n} is not a valid entry")
-        out.append(obj)
-    return out
+        except ValueError:
+            bad.append(n)
+            continue
+        if _valid_entry(obj):
+            out.append(obj)
+        else:
+            bad.append(n)
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError:
+        bad.append(0)  # 0: the file as a whole is not UTF-8
+    return out, bad
+
+
+def _read_file(path: str) -> list[dict]:
+    """Entries of one ledger file. [] when it does not exist; Undetermined for
+    anything else that is not a clean read."""
+    data = _read_bytes(path)
+    if data is None:
+        return []
+    entries, bad = _parse(path, data)
+    if bad:
+        where = "is not UTF-8" if bad == [0] else f"line {bad[0] or bad[-1]} is not a valid entry"
+        raise Undetermined(f"the deny ledger {path} {where}")
+    return entries
 
 
 def _read_bounded(path: str, now: float) -> list[dict]:
     """_read_file, with the BRICK BOUND: a bad file refuses for
-    RETRY_WINDOW_SECS from its mtime, then is renamed aside and ignored."""
+    RETRY_WINDOW_SECS from its mtime; after that it is renamed aside, its
+    valid DENY lines are salvaged into a fresh active file, and only the
+    unparseable lines are dropped (named in a stderr notice)."""
     try:
         return _read_file(path)
     except Undetermined as bad:
@@ -282,19 +401,41 @@ def _read_bounded(path: str, now: float) -> list[dict]:
                 now - age + RETRY_WINDOW_SECS))
             raise Undetermined(f"{bad}; refused until {until}, when the file "
                                "is moved aside") from bad
+        try:
+            data = _read_bytes(path) or b""
+            salvaged, dropped = _parse(path, data)
+        except Undetermined:
+            salvaged, dropped = [], ["all (unreadable)"]
+        salvaged = [e for e in salvaged if e["kind"] == "deny"]
         aside = f"{path}.corrupt-{int(now)}"
+        head = (f"maintree deny ledger: {path} was unreadable or corrupt for "
+                f"more than {RETRY_WINDOW_SECS // 60} minutes ({bad})")
+        lines = ", ".join("whole file not UTF-8" if n == 0 else str(n) for n in dropped)
         try:
             os.rename(path, aside)
-            sys.stderr.write(
-                f"maintree deny ledger: {path} was unreadable or corrupt for "
-                f"more than {RETRY_WINDOW_SECS // 60} minutes ({bad}); moved it "
-                f"aside to {aside} and proceeding without it.\n")
         except OSError as e:
-            sys.stderr.write(
-                f"maintree deny ledger: {path} was unreadable or corrupt for "
-                f"more than {RETRY_WINDOW_SECS // 60} minutes ({bad}); could NOT "
-                f"move it aside ({e}); ignoring it for this call.\n")
-        return []
+            sys.stderr.write(f"{head}; could NOT move it aside ({e}); using its "
+                             f"{len(salvaged)} valid deny line(s) for this call; "
+                             f"dropped line(s): {lines}.\n")
+            return salvaged
+        note = ""
+        if salvaged:
+            try:
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                             | getattr(os, "O_NOFOLLOW", 0), 0o600)
+                try:
+                    os.write(fd, "".join(
+                        json.dumps(e, ensure_ascii=False, sort_keys=True) + "\n"
+                        for e in salvaged).encode("utf-8"))
+                finally:
+                    os.close(fd)
+                note = f"; {len(salvaged)} valid deny line(s) carried into a fresh {path}"
+            except OSError as e:
+                note = (f"; its {len(salvaged)} valid deny line(s) could NOT be "
+                        f"written back ({e}) and are used for this call only")
+        sys.stderr.write(f"{head}; moved it aside to {aside}{note}; dropped "
+                         f"unparseable line(s): {lines}.\n")
+        return salvaged
 
 
 def read(session_id: str, now: float | None = None) -> list[dict]:
@@ -316,10 +457,17 @@ def _append(session_id: str, obj: dict) -> None:
     errors = []
     for path in ledger_paths(session_id):
         try:
-            os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+            if _is_fallback(path):
+                if not _fallback_dir_safe(os.path.dirname(path), create=True):
+                    errors.append(f"{os.path.dirname(path)}: not a 0700 directory "
+                                  "owned by this user")
+                    continue
+            else:
+                os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
             # One write() on an O_APPEND descriptor: concurrent hook processes
             # of the same session interleave whole lines, not fragments.
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND
+                         | getattr(os, "O_NOFOLLOW", 0), 0o600)
             try:
                 os.write(fd, line)
             finally:
@@ -618,19 +766,26 @@ PRUNE_AFTER_SECS = 7 * 24 * 3600
 
 def clear(payload: dict) -> str | None:
     """Remove this session's ledgers (home and fallback) and prune any ledger
-    file, of any session, older than a week in either directory. None on success; otherwise a note describing what failed."""
+    file, of any session, older than a week in either directory. A fallback
+    directory that is not a 0700 directory owned by this uid is not touched
+    (it is not read either). None on success; otherwise a note describing
+    what failed."""
     try:
         sid = session_of(payload)
     except Undetermined as e:
         return str(e)
     notes = []
-    dirs = [fallback_dir()]
+    fb = fallback_dir()
+    fb_ok = fb is not None and _fallback_dir_safe(fb, create=False)
+    dirs = [fb] if fb_ok else []
     try:
         dirs.insert(0, ledger_dir())
     except Undetermined as e:
         notes.append(str(e))
     if sid is not None:
         for path in ledger_paths(sid):
+            if _is_fallback(path) and not fb_ok:
+                continue
             try:
                 os.remove(path)
             except FileNotFoundError:

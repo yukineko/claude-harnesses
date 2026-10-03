@@ -106,7 +106,13 @@ fixes and a caller that conflates them sends the reader to the wrong command —
    time: the settings and registry directions each returned rc=0 with the name
    appearing NOWHERE in the output; the cache direction already returned rc=1 via
    plugin_cache.scan ("<name>: cached but no current version known from
-   crates/"), so it is left where it is rather than given a second exit code.
+   crates/"), so it keeps that exit code (RC_ROLLOUT) rather than being given a
+   second one. It is NOT reported under ROLLOUT DRIFT, though: it has its own
+   ORPHAN CACHE DIR block whose remedy is "delete the orphan cache dir, or
+   declare the retirement in scripts/retired-plugins.json". Until backlog
+   5461ba1c it was folded into ROLLOUT DRIFT, whose Fix line prescribes
+   rollout-plugins.sh --plugin <name> - impossible without a crate, and for a
+   removed plugin a push toward re-arming it (the a6f165cd shape).
    Scoped strictly to "<name>@yukineko" keys — both files are machine-global and
    legitimately carry other marketplaces' plugins. A deliberate leftover is
    declared in scripts/retired-plugins.json (the inverse of parked-plugins.json:
@@ -652,6 +658,12 @@ def rollout_hint():
 # e8aad6e6). Both messages are built from these constants, and
 # no_rollout_plugins() keys on them, so the two cannot drift apart.
 ORPHAN_CORE_MARK = "orphan provenance"
+# plugin_cache.scan's line for a cache dir whose plugin has no crate under
+# crates/. Matched by substring because scan() owns the wording; if that wording
+# ever changes, test_backlog_5461ba1c goes red (it asserts the verbatim line AND
+# that no rollout Fix line is printed for it), so the coupling cannot drift
+# silently into the rollout block again.
+ORPHAN_CACHE_MARK = "cached but no current version known from crates/"
 INCOMPARABLE_CORE_MARK = "cannot be ordered"
 
 
@@ -2037,6 +2049,17 @@ def main():
         for name, items in suppressed.items():
             retired_suppressed[name].extend(items)
 
+    # An orphan cache dir (backlog 5461ba1c) is split OUT of stale_problems
+    # here - after the retirement partition above, so a declared retirement
+    # still covers it exactly as before - and given its own block and remedy.
+    # It used to be folded into ROLLOUT DRIFT, whose Fix line prescribes
+    # scripts/rollout-plugins.sh --plugin <name>: that cannot work for a plugin
+    # with no crate, and for a removed plugin it steers toward re-rolling-out
+    # the thing that was removed (the a6f165cd / taintguard shape). It stays a
+    # hard failure with the SAME exit code (RC_ROLLOUT): only the remedy moves.
+    orphan_cache_problems = [p for p in stale_problems if ORPHAN_CACHE_MARK in p]
+    stale_problems = [p for p in stale_problems if ORPHAN_CACHE_MARK not in p]
+
     parked_suppressed = {name: [] for name in parked}
     if parked:
         if rollout_problems:
@@ -2163,7 +2186,12 @@ def main():
         return total - len(hit), f" ({len(hit)} parked, reported above: {', '.join(hit)})"
 
     all_names = [n for crate, pname, _v in plugins for n in (crate, pname) if n]
-    if rollout_problems is not None and not rollout_problems and not unverifiable:
+    if (
+        rollout_problems is not None
+        and not rollout_problems
+        and not orphan_cache_problems
+        and not unverifiable
+    ):
         held = (
             f"; {stale_checked} superseded dir(s) remain, all held by a live session"
             if stale_checked
@@ -2276,6 +2304,26 @@ def main():
             print(f"  - {p}", file=sys.stderr)
         print(drift_fix_hint(rollout_problems), file=sys.stderr)
 
+    if orphan_cache_problems:
+        print(
+            f"\nORPHAN CACHE DIR ({len(orphan_cache_problems)} problem(s)): the "
+            "plugin cache holds dirs for a plugin that has no crate under crates/:",
+            file=sys.stderr,
+        )
+        for p in orphan_cache_problems:
+            print(f"  - {p}", file=sys.stderr)
+        print(
+            "\nFix: this is NOT fixed by a rollout - with no crate there is "
+            "nothing to roll out, and re-creating the crate to clear this red "
+            "would re-arm a plugin that was removed. Either delete the orphan "
+            f"cache dir (<cache>/<name>, under {PLUGIN_CACHE_ROOT}), or, if the "
+            f"leftover is deliberate and known, declare the retirement in "
+            f"{RETIRED_PATH} with a reason, a retired_at and a revisit trigger; "
+            "that moves it to a RETIRED ON PURPOSE report which still prints the "
+            "finding verbatim.",
+            file=sys.stderr,
+        )
+
     if gate_failures:
         print(
             # The class now covers three shapes — disabled, unverifiable (no
@@ -2356,7 +2404,9 @@ def main():
         return RC_RETIRED_CONFIG
     if unverifiable:
         return RC_UNVERIFIABLE
-    if rollout_problems or registry_absent:
+    # orphan_cache_problems keeps the exit code it had while it was folded into
+    # rollout_problems (backlog 5461ba1c moved only its block and remedy).
+    if rollout_problems or orphan_cache_problems or registry_absent:
         return RC_ROLLOUT
     if gate_failures or settings_absent:
         return RC_ENABLEMENT

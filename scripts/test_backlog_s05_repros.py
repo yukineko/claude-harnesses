@@ -119,7 +119,6 @@ class BashGuard(unittest.TestCase):
         rc, err = self.w.bash_guard("sed -i '' 's/a/b/' f.txt", cwd=self.w.wt)
         self.assertEqual(rc, 0, "relative operand resolved under main root: " + err[:200])
 
-    @open_defect("ae4543d5")
     def test_ae4543d5_interpreter_wrapper_write_into_main_is_refused(self):
         for cmd in (
             f"sh -c 'echo hi > {self.w.main}/p.txt'",

@@ -31564,3 +31564,190 @@ test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "1e3998f9a15d33b8a72476f932e66d119c3f889e"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "3b056c02"
+title = "overwatch end が存在しない key に exit 0 + 空出力を返し、解放できた場合と区別できない"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+実測 (2026-09-07, overwatch 0.2.32, cache の bin を直接実行):
+
+    $ overwatch end --key "definitely-not-a-real-key-12345" --status done
+    out=[]
+    rc=0
+
+`overwatch status` は同じ瞬間に `== Sessions ==  (none)` を返しており、この key の
+lease は **存在しない**。それでも end は「解放した」ときと**同一の出力・同一の
+終了ステータス**を返す。呼び出し側 (flow SKILL.md Step 4、および /flow を回す
+LLM) は fail-soft で扱えと書かれているので、この 0 を見て「解放できた」と記録する。
+
+なぜこれが fail-open か: これは ledger write である。同じ plugin の launcher
+(crates/overwatch/bin/overwatch:38) は自分の missing-binary 経路について
+まさにこの形を名指しで禁じている —
+
+    * begin / end / heartbeat / record-* -> ledger writes; reporting success
+      for a write that never happened is what leaves a stale lease behind.
+
+launcher は binary が無い場合を exit 1 で塞いでいるが、**binary 自身**が key の
+不在に対して同じ穴を開けている。守られているのは 1 段上だけである。
+
+観測される害: begin した key を typo などで取り違えて end すると、実 lease は
+解放されないまま「解放済み」と報告される。overwatch status には残り続け、TTL で
+reap されるまで他セッションからは「そのスコープは担当者あり」に見える。
+逆に一度も begin していない key を end しても何も言わないので、
+begin/end の対応漏れが検出されない。
+
+あるべき形 (CLAUDE.md 第3節): 三値にする。
+  - 実在する lease を解放した -> exit 0、解放した旨を出力
+  - key が存在しない        -> 非0 (「解放していない」は「解放した」ではない)
+  - 台帳が読めない          -> 非0、判定不能として理由を出力
+少なくとも「存在しなかった」と「解放した」を出力で区別できること。
+
+帰属メモ: 本セッションの変更ではない。/flow Step 4 の anchor 解放を実行する過程で
+観測した。
+
+[triage 2026-09-29 @b325a169] p2->p1: overwatch lease end reports success on missing key and on lock contention (lease.rs:305-307, 316-323) - write that did nothing exits 0
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/overwatch/tests/backlog_s04_audit.rs (rev e70d48dd)"""
+created_at = 1788771923
+updated_at = 1791024103
+weight = 0.0
+issue_number = 1104
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1104"
+issue_closed_at = 1791024106
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test backlog_s04_audit s3b056c02 -- --include-ignored"
+exit = 0
+passed = 1
+rev = "aceee2e13bee8c0f82b0a3fa236084758e4b9c32"
+observed_at = 1791024085
+output_digest = "sha256:df1643b3aad677cbd20c747bd28fe0e29788207ce2f2ed2f2a29c12ff0e973d2"
+excerpt = """
+
+running 1 test
+test s3b056c02_end_of_missing_key_is_distinguishable_from_release ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.59s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/backlog_s04_audit.rs (target/debug/deps/backlog_s04_audit-b2a8e76c1b539b6d)
+"""
+
+[task.closure.red]
+rev = "7927324f7f7b8ebd670b8fb2fb07f866065308df"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "6a9eb1ed"
+title = "overwatch lease end/run が storage root 判定不能のとき何も出さずに Ok を返す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = """
+acquire_or_skip None path; restrictive side but silent.
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/overwatch/tests/backlog_s04_audit.rs (rev e70d48dd)"""
+created_at = 1790678166
+updated_at = 1791024134
+weight = 0.0
+issue_number = 852
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/852"
+issue_closed_at = 1791024137
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test backlog_s04_audit s6a9eb1ed -- --include-ignored"
+exit = 0
+passed = 1
+rev = "aceee2e13bee8c0f82b0a3fa236084758e4b9c32"
+observed_at = 1791024110
+output_digest = "sha256:469354e599120ea22e50ddd1135c0d387879dd00345883896d6761fe600bb1ca"
+excerpt = """
+
+running 1 test
+test s6a9eb1ed_end_that_could_not_lock_is_not_reported_as_release ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.45s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/backlog_s04_audit.rs (target/debug/deps/backlog_s04_audit-b2a8e76c1b539b6d)
+"""
+
+[task.closure.red]
+rev = "7927324f7f7b8ebd670b8fb2fb07f866065308df"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "4be23458"
+title = "condukt worktree::discard also force-discards uncommitted work — the twin of the remove() fail-open (DoD12d)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+測定点 47d02894 / 測定日 2026-09-07。crates/condukt/src/worktree.rs:1951 の pub fn discard は remove と同一の blanket パターンを持つ: plain worktree remove が失敗したら無条件で --force へ retry する。git はまさに未コミット作業があるときに拒否するので、この retry は git 自身の安全弁を外している。
+
+production の到達経路は2本あり、どちらも未コミット内容を保全していない:
+(1) crates/condukt/src/state.rs:1007 discard_experiment。直前の capture は branch_sha (rev-parse branch) と diff_stat (diff --stat default_branch branch) の2つだけで、どちらも COMMIT 済みの状態からしか導かれない。docstring も callers MUST capture the branch SHA / diff before calling this と書くが、これは commit の話であって worktree の未コミット内容には一切触れていない。
+(2) crates/condukt/src/shadow_run.rs:73 finish。discard の前に何も capture していない。
+
+discard は repo-primary lock 取得失敗には既に fail-closed で refuse する (worktree.rs:1865 のテスト)。硬化されているのは lock 軸だけで、未コミット作業の軸は素通り。
+
+本タスク (DoD12d) の remedy は charter の指定どおり remove() と worktree_remove_force_removes_dirty_worktree に限定したので、discard は意図的に手を付けていない。discard は experiment worktree の廃棄経路であり throwing away が意図なので、保全すべきか否かは人間の判断が要る。ただし現状は「意図的に捨てる」と「捨てたことに気づかない」が区別不能である。
+
+参考: mirror-gap の再発クラス。fix が片側のミラーにだけ着地するのを避けること。
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/condukt/src/worktree.rs (mod backlog_4be23458) (rev 596108b9): worktree discard force-destroys uncommitted work; discard's doc calls force intentional, so a human ruling may change the contract."""
+created_at = 1788790462
+updated_at = 1791024178
+weight = 0.0
+issue_number = 414
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/414"
+issue_closed_at = 1791024180
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --bins discard_does_not_silently_destroy_uncommitted_work -- --include-ignored"
+exit = 0
+passed = 1
+rev = "aceee2e13bee8c0f82b0a3fa236084758e4b9c32"
+observed_at = 1791024138
+output_digest = "sha256:cc14672fa869b96ee0a879f72e74961795c7cdf5484bf9161f022562afcadf1f"
+excerpt = """
+
+running 1 test
+test worktree::backlog_4be23458::discard_does_not_silently_destroy_uncommitted_work ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 886 filtered out; finished in 0.51s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/main.rs (target/debug/deps/condukt-d5b35b37885b8452)
+"""
+
+[task.closure.red]
+rev = "d2e8b728994c9dd9b94e7074cf0ac18418b8ee2e"
+exit = 101
+kind = "behavioural"

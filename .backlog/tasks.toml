@@ -11701,3 +11701,51 @@ weight = 0.0
 issue_number = 1176
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1176"
 rev = 0
+
+[[task]]
+id = "ab741aef"
+title = "observing main-tree Bash guard cannot see writes inside main's .git (config, hooks, core.hooksPath)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Since 2026-10-03 (user ruling) scripts/guard-maintree-bash.py observes git status of main before/after each Bash call instead of parsing command text. git status does not show .git internals, so rm or edits of main .git/config or .git/hooks and git config core.hooksPath changes are invisible to it. Mitigations that exist today: user permission deny rules for git config core.hooksPath and Edit/Write of .githooks. Reading (a) real gap worth a dedicated check (e.g. hash .git/config and .git/hooks in the snapshot), (b) acceptable since permission rules already cover the dangerous spellings. Distinguish by listing which .git-internal mutations remain reachable without matching a deny rule. Old tests that pinned the static form: test_maintree_isolation_guards rm-of-.git/config and .git/hooks, test_backlog_e033c406 core.hooksPath (expectedFailure)."
+created_at = 1791027805
+updated_at = 1791027805
+weight = 0.0
+issue_number = 1191
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1191"
+rev = 0
+
+[[task]]
+id = "2d41fd49"
+title = "observing main-tree Bash guard: an EMPTY directory created in main is invisible to git status"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Reported 2026-10-03 by the test author of the observing guard (session 521ce4dd). mkdir or mktemp -d producing an empty dir under main does not appear in git status --untracked-files=all, so the guard allows it. Reading (a) real gap (empty dirs are harmless to index/donegate but clutter main), (b) acceptable since git ignores empty dirs entirely. Distinguish by whether any gate or session is affected by an empty untracked dir in main."
+created_at = 1791029248
+updated_at = 1791029248
+weight = 0.0
+issue_number = 1210
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1210"
+rev = 0
+
+[[task]]
+id = "2a5db2d9"
+title = "observing main-tree Bash guard blocks the documented recovery: moving stray dirt out of main (stash, worktree add, apply) is reported as a modification"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = "Reported 2026-10-03 by the test author of the observing guard. When main is already dirty, the recovery that REMOVES the dirt (git stash in main, then apply in a worktree) changes main status, so Post refuses (case d) although the change makes main cleaner. Reading (a) defect: a change that only removes pre-existing dirt (after-dirt subset of before-dirt with unchanged remaining hashes, HEAD unchanged) should be allowed; (b) intended: any non-integration change is surfaced and the human confirms. Distinguish by user ruling; a test should pin whichever is chosen."
+created_at = 1791029250
+updated_at = 1791029250
+weight = 0.0
+issue_number = 1211
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1211"
+rev = 0

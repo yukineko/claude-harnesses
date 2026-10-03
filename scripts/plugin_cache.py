@@ -397,7 +397,9 @@ def scan(
     The rollout lock dir (`ROLLOUT_LOCK_NAME`) at the cache root is not a
     plugin and is skipped by exact name, as is the version-history ledger
     (`VERSION_HISTORY_NAME`) inside a plugin dir; any other non-plugin /
-    non-version entry is still reported.
+    non-version entry is still reported — including a DIRECTORY whose name is
+    not a version (`_VERSION_RE`), which is never handed to the pruner. A
+    cache root that exists but does not resolve is a problem, not "no cache".
     """
     settings_pins = settings_pins or {}
     registry_refs = registry_refs or {}

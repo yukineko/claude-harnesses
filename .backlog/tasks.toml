@@ -2165,7 +2165,7 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 47eedff9 / f232c901 / 572c8640 の統合。3 件は別々に起票されていたが、同一クラスである。
 いずれも「単独実行では通り、full-suite 並列でのみ落ちる」= テストがプロセス外の共有状態に依存している。
@@ -2221,11 +2221,13 @@ f232c901 の指摘どおり、間欠 fail を放置すると F to P オラクル
 
 [backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/condukt/src/oracle.rs (mod backlog_c63f1c23) (rev 596108b9): Target test takes no PATH_ENV_LOCK and spawns whatever tdd PATH resolves; sibling installs exactly that fake."""
 created_at = 1788982587
-updated_at = 1790983143
+updated_at = 1791049809
 weight = 0.0
 issue_number = 476
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/476"
-rev = 0
+rev = 1
+ruling_kind = "judgment"
+rationale = "Fixed on main by 7ae375a7 (session 521ce4dd). done --test refused (verbatim): 'the test PASSES at --red-rev f51e281e…; a test that passes before the fix is not RED' — the corrected backlog_c63f1c23 repro landed in the same commit as the fix, and the older repro version passes on the defective code, so no revision in history shows the corrected test RED. Options: approve on the fix commit, or withdraw and build a side commit (corrected test on top of 7ae375a7^) to use as --red-rev."
 
 [[task]]
 id = "6108a7fa"
@@ -12762,4 +12764,52 @@ updated_at = 1791049231
 weight = 0.0
 issue_number = 1294
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1294"
+rev = 0
+
+[[task]]
+id = "495e414e"
+title = "lint-changed-crates: a Cargo.lock-only or root Cargo.toml-only change triggers the check but prints 'no crate touched - nothing to lint' and exits 0, though a lockfile change can affect every crate"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Found by the d470a478 worker (2026-10-04), not yet observed by a test. Same wording class as d470a478: silence/nothing-to-lint read as checked. Pre-existing behaviour."
+created_at = 1791049861
+updated_at = 1791049861
+weight = 0.0
+issue_number = 1295
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1295"
+rev = 0
+
+[[task]]
+id = "70dc002a"
+title = "cargo metadata lists harness-core as its own path dev-dependency; any reverse-dependency computation must exclude the self edge"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Found by the d470a478 worker (2026-10-04). lint-changed-crates.sh already drops changed crates from the dependent list, so its output is unaffected; other tools computing reverse deps from metadata may count harness-core as its own dependent."
+created_at = 1791049863
+updated_at = 1791049863
+weight = 0.0
+issue_number = 1296
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1296"
+rev = 0
+
+[[task]]
+id = "6f2540ba"
+title = "donegate.toml lint-changed comment (lines 54-56) does not mention that the green line now names the unlinted dependents (d470a478)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Doc follow-up from d470a478; donegate.toml was out of scope for that task (gate config force-gates condukt schedule)."
+created_at = 1791049864
+updated_at = 1791049864
+weight = 0.0
+issue_number = 1297
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1297"
 rev = 0

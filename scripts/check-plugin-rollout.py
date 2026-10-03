@@ -169,13 +169,14 @@ drift (a fresh version dir missing its host binary makes the launcher exec
 nothing and silently no-op), and a binary sitting on disk must be verifiable
 whatever the source says.
 
-Both dimensions fail SOFT on a MISSING input file: an absent registry skips the
-rollout check, an absent settings.json skips the enablement check, and neither
-absence is a failure (nothing is deployed / nothing is configured yet). A
-PRESENT-but-unparseable file is the opposite of that and fails HARD: settings
-Claude Code cannot parse is a state where NO plugin is enabled — every gate
-inert — so reporting it as "not found ... SKIP (not a failure)" would be both a
-lie about the file and fail-open on the exact hole this script exists to close.
+Both dimensions fail CLOSED on a MISSING input file as well as an unparseable
+one: an absent registry cannot be checked against, so it is RC_ROLLOUT (1); an
+absent settings.json likewise is RC_ENABLEMENT (2). Neither is ever a pass
+(backlog 73c2c089) - "could not look" must not print as "nothing wrong". A
+PRESENT-but-unparseable file fails HARD too: settings Claude Code cannot parse
+is a state where NO plugin is enabled - every gate inert - and reporting it as
+"not found ... SKIP (not a failure)" would be both a lie about the file and
+fail-open on the exact hole this script exists to close.
 
 Registry path defaults to ~/.claude/plugins/installed_plugins.json; override
 with CLAUDE_PLUGIN_REGISTRY (same env var rollout-plugins.sh honors) so this
@@ -701,7 +702,7 @@ def drift_fix_hint(problems):
 
 # _load_json states. ABSENT and MALFORMED must stay distinguishable: collapsing
 # them (both -> None) made a corrupt registry/settings print "not found: <path>"
-# — a lie, the file is right there — and then SKIP with rc=0, i.e. fail OPEN on
+# — a lie, the file is right there — and then exit rc=0, i.e. fail OPEN on
 # a state where nothing is enabled at all.
 ABSENT = "absent"
 MALFORMED = "malformed"
@@ -711,9 +712,10 @@ OK = "ok"
 def _load_json(path):
     """Read a JSON file. Returns (state, data) with state in ABSENT/MALFORMED/OK.
 
-    `data` is None unless state is OK. A missing file is fail-soft (the caller
-    skips its dimension); a present-but-unparseable one is a hard failure with
-    the parse error attached, so the message names what is actually wrong.
+    `data` is None unless state is OK. A missing file is UNDETERMINED (main() turns
+    it into rc 1 / rc 2, never a pass); a present-but-unparseable one is a hard
+    failure with the parse error attached, so the message names what is
+    actually wrong.
     """
     if not os.path.isfile(path):
         return ABSENT, None
@@ -1087,8 +1089,8 @@ def check_orphans(plugins):
     swift-lsp@claude-plugins-official, vrm-pipeline@vrm-pipeline). Reporting
     those would make this red permanent and unclearable.
 
-    ABSENT settings / registry contribute nothing and are not failures — the same
-    fail-soft both existing dimensions apply. A PRESENT-but-unreadable one, or an
+    ABSENT settings / registry contribute no orphans HERE, but the absence itself
+    is not a pass: main() resolves it to rc 1 / rc 2 via the owning dimension. A PRESENT-but-unreadable one, or an
     enabledPlugins/plugins value of the wrong shape, is reported as its own
     problem rather than yielding an empty orphan set: "found no orphan" and
     "could not look" must not print as the same thing. Those messages duplicate a
@@ -1271,8 +1273,9 @@ def unaccounted_gate_plugins(plugins):
 def check_rollout(plugins):
     """Return (problems, checked) comparing source version to the deployed one.
 
-    `problems is None` means the dimension was SKIPPED (registry absent). A
-    malformed registry is not a skip — it is a problem, reported as such.
+    `problems is None` means the registry is ABSENT, i.e. the dimension could not
+    be checked; main() resolves that to RC_ROLLOUT, never a pass. A malformed
+    registry is likewise a problem, reported as such.
     """
     load_state, registry = _load_json(REGISTRY_PATH)
     if load_state == ABSENT:
@@ -1793,8 +1796,8 @@ def check_settings_pins():
     settings.json. This dimension closes that: every cache-dir path
     settings.json mentions must actually exist, or it is drift, not clean.
 
-    An absent settings.json contributes nothing here (fail-soft, same as
-    check_enabled's own skip). An unreadable/unparseable one is reported as
+    An absent settings.json contributes nothing here (this function adds no
+    problem for it; absence is resolved to rc 2 by main()). An unreadable/unparseable one is reported as
     a problem rather than read as "zero paths pinned" — undetermined must
     not collapse to clean ahead of a green "OK" line.
     """
@@ -1871,8 +1874,9 @@ def check_bin_launchers(plugins):
 def check_enabled(plugins):
     """Return (gate_failures, warnings, checked) for the enabledPlugins dimension.
 
-    Returns (None, None, (0, 0)) when settings.json is absent — skipped
-    fail-soft, exactly as an absent registry skips the rollout dimension. That
+    Returns (None, None, (0, 0)) when settings.json is absent - the
+    dimension could not run; main() resolves that to RC_ENABLEMENT, never a pass
+    (as an absent registry is RC_ROLLOUT). That
     early return is why the "GATE crate has no readable plugin.json"
     reconciliation no longer lives here: behind this return it never ran, so an
     unreadable GATE plugin.json on a machine with no settings.json was a fully
@@ -2052,8 +2056,8 @@ def main():
         print("FAIL: no registry to check against — rollout cannot be verified (treated like an unparseable registry)")
         registry_absent = True
 
-    # Folded in only after the SKIP notice above, so an absent registry still
-    # reports itself as a skip rather than being masked by a cache finding.
+    # Folded in only after the FAIL notice above, so an absent registry still
+    # reports itself as absent rather than being masked by a cache finding.
     if stale_problems:
         rollout_problems = list(rollout_problems or []) + stale_problems
     if pin_problems:

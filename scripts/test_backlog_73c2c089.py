@@ -11,7 +11,8 @@
 (b) .githooks/pre-push demotes rc=2 (a GATE crate installed but not enabled = an
     inert gate) to "advisory only — the push is not blocked."
 
-Both open; marked expectedFailure. The control tests (unparseable registry exits
+(a) is CLOSED (check-plugin-rollout now exits 1/2 on absence; test is a plain
+test). (b) is still open and marked expectedFailure. The control tests (unparseable registry exits
 non-zero) are plain tests and must stay green.
 """
 

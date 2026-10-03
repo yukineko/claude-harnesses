@@ -6,11 +6,11 @@ checks, against synthetic fixture repos/registries/settings (never the real
 ~/.claude state):
 
   1. ROLLOUT — source plugin.json version vs the deployed registry version.
-     Drift and never-installed are hard failures; an absent registry is a
-     fail-soft skip.
+     Drift and never-installed are hard failures; an absent registry is
+     undetermined and also fails (rc 1), never a pass.
   2. ENABLEMENT — the demonstrated hole. A GATE crate missing from (or set
      false in) `enabledPlugins` is a hard failure; a non-gate plugin is a
-     warning only; an absent settings.json is a fail-soft skip.
+     warning only; an absent settings.json is undetermined and fails (rc 2), never a pass.
 
 The script reads its paths from module-level constants resolved at import
 time, so each test rebinds them (rather than setting env vars) and restores
@@ -2460,7 +2460,7 @@ class RetiredPlugins(_FixtureCase):
             self.assertNotIn("OK: every ", out)
             self.assertIn("cannot enumerate installed plugins", err)
 
-    def test_absent_inputs_skip_the_dimension_without_claiming_a_verdict(self):
+    def test_absent_inputs_are_rollout_failure_and_claim_no_verdict(self):
         """Absent inputs are undetermined (backlog 73c2c089): rc is the rollout
         class (registry absent outranks enablement), never RC_OK, and there is
         no OK line to be green about."""

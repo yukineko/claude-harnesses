@@ -56,11 +56,12 @@ fn now_epoch() -> Determination<i64> {
 
 /// Where the first-absence stamps live: a sub-directory of the per-project
 /// state dir (a sub-directory, so `state::all_runs`'s top-level `*.json` scan
-/// never mistakes it for a run).
-fn absence_ledger_path(cfg: &Config, cwd: &Path) -> PathBuf {
-    state::project_state_dir(cfg, cwd)
+/// never mistakes it for a run). Project-wide, so it lives in the CANONICAL
+/// (main worktree root) dir; `Err` when that root cannot be determined.
+fn absence_ledger_path(cfg: &Config, cwd: &Path) -> anyhow::Result<PathBuf> {
+    Ok(state::project_state_dir(cfg, cwd)?
         .join("finding-reconcile")
-        .join("absence.json")
+        .join("absence.json"))
 }
 
 /// `finding_id -> first observed-absent epoch`. Tri-state: absent file =
@@ -96,7 +97,12 @@ enum RunObservation {
 }
 
 fn observe_run(cfg: &Config, cwd: &Path, run_id: &str) -> Determination<RunObservation> {
-    let path = state::run_state_path(cfg, cwd, run_id);
+    let path = match state::run_state_path(cfg, cwd, run_id) {
+        Ok(p) => p,
+        // The store could not be located: not "absent" (which would age the
+        // finding toward closure) but undetermined.
+        Err(e) => return Determination::undetermined(format!("{e:#}")),
+    };
     match harness_core::boundary::read_to_string(&path) {
         Determination::Known(None) => Determination::known(RunObservation::Absent),
         Determination::Known(Some(txt)) => match serde_json::from_str::<RunState>(&txt) {
@@ -154,7 +160,10 @@ pub fn reconcile(cfg: &Config, cwd: &Path) -> ReconcileReport {
         return ReconcileReport::default();
     }
     let now = now_epoch();
-    let ledger_path = absence_ledger_path(cfg, cwd);
+    let ledger_path = match absence_ledger_path(cfg, cwd) {
+        Ok(p) => p,
+        Err(e) => return ReconcileReport::store_undetermined(format!("{e:#}")),
+    };
     let mut ledger = load_absence(&ledger_path);
     // Ids whose stamp this pass ADDED (first sighting) or CLEARED (state
     // reappeared). Both changes must be persisted for the judgement to stand.

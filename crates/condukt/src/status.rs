@@ -28,7 +28,11 @@ fn status_label(s: Status) -> &'static str {
 }
 
 fn load_titles(cfg: &Config, cwd: &Path, run_id: &str) -> HashMap<String, String> {
-    let path = state::decomposition_path(cfg, cwd, run_id);
+    // Display-only titles: an unlocatable or unreadable decomposition renders
+    // the task without a title (the run list itself already resolved).
+    let Ok(path) = state::decomposition_path(cfg, cwd, run_id) else {
+        return HashMap::new();
+    };
     let Ok(text) = std::fs::read_to_string(&path) else {
         return HashMap::new();
     };
@@ -48,16 +52,18 @@ fn load_titles(cfg: &Config, cwd: &Path, run_id: &str) -> HashMap<String, String
         .collect()
 }
 
-pub fn render(cfg: &Config, cwd: &Path, all: bool) {
+/// `Err` when the main worktree root cannot be determined: printing "no open
+/// runs" there would claim an absence nobody observed.
+pub fn render(cfg: &Config, cwd: &Path, all: bool) -> anyhow::Result<()> {
     let runs = if all {
-        state::all_runs(cfg, cwd)
+        state::all_runs(cfg, cwd)?
     } else {
-        state::open_runs(cfg, cwd)
+        state::open_runs(cfg, cwd)?
     };
 
     if runs.is_empty() {
         println!("{}", if all { "no runs found" } else { "no open runs" });
-        return;
+        return Ok(());
     }
 
     for run in &runs {
@@ -94,4 +100,5 @@ pub fn render(cfg: &Config, cwd: &Path, all: bool) {
             );
         }
     }
+    Ok(())
 }

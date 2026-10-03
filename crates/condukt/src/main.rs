@@ -1066,8 +1066,10 @@ enum StateAction {
         /// Human-readable task title, recorded for the execution-state view.
         #[arg(long)]
         title: Option<String>,
-        /// Opaque task hashkey to claim (repeatable, required).
-        #[arg(long)]
+        /// Opaque task hashkey to claim (repeatable, at least one required).
+        /// An empty or whitespace-only hashkey is rejected as a usage error
+        /// (exit 2, nothing claimed) — it is never recorded as a claim key.
+        #[arg(long, required = true, value_parser = parse_task_hashkey)]
         hashkey: Vec<String>,
         /// Mark the claim STATELESS: this run never writes run-state JSON (a
         /// `/flow` run). Only a marked claim is reaped on transcript evidence
@@ -1082,15 +1084,19 @@ enum StateAction {
     ReleaseTask {
         #[arg(long)]
         run: String,
-        /// Opaque task hashkey to release (repeatable, required).
-        #[arg(long)]
+        /// Opaque task hashkey to release (repeatable, at least one required).
+        /// An empty or whitespace-only hashkey is rejected as a usage error (exit 2).
+        #[arg(long, required = true, value_parser = parse_task_hashkey)]
         hashkey: Vec<String>,
     },
     /// Exit 0 if a live claim (from any run) holds the given task hashkey, else
     /// exit 1. Prints a small JSON `{hashkey, claimed, holder_run}` for humans,
-    /// but the exit code is the contract other tools should rely on.
+    /// but the exit code is the contract other tools should rely on. Exit 3 =
+    /// the claim registry could not be read (undetermined). Exit 2 = invalid
+    /// input (e.g. an empty or whitespace-only hashkey): no lookup happened and
+    /// nothing is printed on stdout, so it can never be read as "not claimed".
     IsClaimed {
-        #[arg(long)]
+        #[arg(long, value_parser = parse_task_hashkey)]
         hashkey: String,
     },
     /// Join the live task-claim registry against the project backlog and write
@@ -1917,13 +1923,31 @@ fn run_editgate() {
         Err(_) => return,
     };
 
-    // Resolve the project's run-state directory the same way CheckOracle does
-    // (Config.state_dir keyed by the repo root under `cwd`), then ask which
-    // live worktree — if any — this edited path falls under.
-    let run_dir = cfg
-        .state_dir
-        .join(store::project_key(&store::repo_root(&cwd)));
-    let wt = state::active_worktree_for_path(&file_path, &run_dir);
+    // Resolve the project's run-state directories the same way every run-state
+    // reader does (the canonical main-worktree-root dir, then this checkout's
+    // legacy per-checkout dir — see `state::project_state_dirs`), then ask which
+    // live worktree — if any — this edited path falls under. If the main
+    // worktree root cannot be determined, whether this edit is inside a live
+    // condukt worktree is unknown: that blocks (stated), it is not "out of scope".
+    let dirs = match state::project_state_dirs(&cfg, &cwd) {
+        Ok(d) => d,
+        Err(e) => {
+            let out = serde_json::json!({
+                "decision": "block",
+                "reason": format!(
+                    "condukt editgate could not locate this project's run state, so \
+                     whether this edit is inside a live condukt worktree is unknown: {e:#}"
+                ),
+            });
+            if let Ok(line) = serde_json::to_string(&out) {
+                println!("{line}");
+            }
+            return;
+        }
+    };
+    let wt = dirs
+        .iter()
+        .find_map(|dir| state::active_worktree_for_path(&file_path, dir));
 
     // BLOCK enforcement: only a real (non-fallback) broken verdict rejects.
     let verdict = editgate::check_edit(&file_path, wt.as_deref(), true);
@@ -2201,7 +2225,7 @@ fn run_user(cmd: Command) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&directive)?);
             }
             ReplanAction::Stats { run } => {
-                let records = state::load_replan_records(&cfg, &cwd, &run);
+                let records = state::load_replan_records(&cfg, &cwd, &run)?;
                 let stats = state::aggregate_replan_stats(&records);
                 println!("{}", serde_json::to_string_pretty(&stats)?);
             }
@@ -2279,7 +2303,7 @@ fn run_user(cmd: Command) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&decision)?);
             }
             RunPolicyAction::Stats { run } => {
-                let records = state::load_run_policy_records(&cfg, &cwd, &run);
+                let records = state::load_run_policy_records(&cfg, &cwd, &run)?;
                 let stats = state::aggregate_run_policy_stats(&records);
                 println!("{}", serde_json::to_string_pretty(&stats)?);
             }
@@ -2424,7 +2448,7 @@ fn run_user(cmd: Command) -> Result<()> {
             }
         },
         Command::LearningSignal => {
-            let sig = learning_signal::compute(&cfg, &cwd);
+            let sig = learning_signal::compute(&cfg, &cwd)?;
             #[derive(serde::Serialize)]
             struct Out {
                 metric: &'static str,
@@ -2474,7 +2498,7 @@ fn run_user(cmd: Command) -> Result<()> {
         Command::Policy { action } => run_policy(action),
         Command::Escalate { action } => run_escalate(&cfg, &cwd, action)?,
         Command::Precedent { action } => run_precedent(&cfg, &cwd, action)?,
-        Command::Status { all } => status::render(&cfg, &cwd, all),
+        Command::Status { all } => status::render(&cfg, &cwd, all)?,
         Command::ReviewBrief { run, task, format } => {
             run_review_brief(&cfg, &cwd, &run, &task, &format)?
         }
@@ -2493,7 +2517,7 @@ fn run_user(cmd: Command) -> Result<()> {
         } => run_review_worthiness(
             &cwd, files, insertions, deletions, rationale, task_link, json, from_git, &base, &head,
         )?,
-        Command::DiffriskReport { json } => run_diffrisk_report(&cfg, &cwd, json),
+        Command::DiffriskReport { json } => run_diffrisk_report(&cfg, &cwd, json)?,
         Command::ReviewOrder {
             diff_file,
             from_git,
@@ -2804,7 +2828,12 @@ fn run_review_brief(
     // Fail-soft: an unreadable/absent precedent store simply means no
     // precedent-downgrade signal is available (never a hard error for this
     // read-only digest command) — empty store => identical brief to today.
-    let precedents = precedent::load_precedents(cfg, cwd);
+    // Missing precedents only withhold a DOWNGRADE, so the degrade is the
+    // restrictive side; an unlocatable store is still said out loud.
+    let precedents = precedent::load_precedents(cfg, cwd).unwrap_or_else(|e| {
+        eprintln!("condukt: warning: no precedent-downgrade signal: {e:#}");
+        Vec::new()
+    });
 
     let brief = review_brief::build_review_brief(
         intent,
@@ -3125,6 +3154,20 @@ fn run_escalate(cfg: &Config, cwd: &Path, action: EscalateAction) -> Result<()> 
     Ok(())
 }
 
+/// clap value parser for task-claim `--hashkey` (backlog 55f55932): an empty
+/// or whitespace-only key is not a key. Accepting it let `claim-task` exit 0
+/// with `"claimed": [""]` — a claim nobody's real key matches — and let
+/// `is-claimed` answer `claimed: false` for a lookup that never happened.
+/// Rejected here, clap reports a usage error (exit 2) before any registry IO.
+/// A non-blank key is passed through verbatim (no trimming), so existing keys
+/// keep their identity.
+fn parse_task_hashkey(raw: &str) -> std::result::Result<String, String> {
+    if raw.trim().is_empty() {
+        return Err("task hashkey must not be empty or whitespace-only".to_string());
+    }
+    Ok(raw.to_string())
+}
+
 /// Split a `--files`/`--symbols` comma-separated CLI flag into a `Vec<String>`,
 /// trimming whitespace and dropping empty entries (so `""`, `"a,,b"`, and
 /// `"a, b"` all behave sanely).
@@ -3157,7 +3200,7 @@ fn run_precedent(cfg: &Config, cwd: &Path, action: PrecedentAction) -> Result<()
             println!("{}", serde_json::to_string_pretty(&rec)?);
         }
         PrecedentAction::List { json } => {
-            let all = precedent::load_precedents(cfg, cwd);
+            let all = precedent::load_precedents(cfg, cwd)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&all)?);
             } else if all.is_empty() {
@@ -3179,7 +3222,7 @@ fn run_precedent(cfg: &Config, cwd: &Path, action: PrecedentAction) -> Result<()
             let files = parse_csv_list(&files);
             let symbols = parse_csv_list(&symbols);
             let tolerance = tolerance.unwrap_or(DEFAULT_PRECEDENT_TOLERANCE);
-            let all = precedent::load_precedents(cfg, cwd);
+            let all = precedent::load_precedents(cfg, cwd)?;
             let m = precedent::match_precedent(&files, &symbols, &all, tolerance);
             println!("{}", serde_json::to_string_pretty(&m)?);
         }
@@ -3232,8 +3275,10 @@ fn resolve_policy_verdict(
 /// An ABSENT journal is reported as `unknown`, not as zero: no file means the
 /// hook has not run since journaling landed, which is not the same fact as
 /// "ran and found nothing".
-fn run_diffrisk_report(cfg: &Config, cwd: &Path, json: bool) {
-    let dir = state::project_state_dir(cfg, cwd);
+fn run_diffrisk_report(cfg: &Config, cwd: &Path, json: bool) -> Result<()> {
+    // `Err` (non-zero) when the main worktree root cannot be determined: the
+    // journal could not even be located, which is not "absent".
+    let dir = state::project_state_dir(cfg, cwd)?;
     let path = gatelog::diffrisk_outcomes_path(&dir);
     let present = path.exists();
     let recs = gatelog::load_diffrisk_outcomes(&dir);
@@ -3261,7 +3306,7 @@ fn run_diffrisk_report(cfg: &Config, cwd: &Path, json: bool) {
             "caller_sites_total": caller_sites,
         });
         println!("{v}");
-        return;
+        return Ok(());
     }
 
     println!("diff-risk journal: {}", path.display());
@@ -3270,7 +3315,7 @@ fn run_diffrisk_report(cfg: &Config, cwd: &Path, json: bool) {
         println!("  This is NOT the same as zero findings: it means the post-execution");
         println!("  diff-risk hook has not run here since journaling landed. Nothing");
         println!("  has been inspected, so nothing can be called clean.");
-        return;
+        return Ok(());
     }
     println!("  invocations : {total}");
     println!("  inspected   : {inspected}  (the call graph actually ran)");
@@ -3284,6 +3329,7 @@ fn run_diffrisk_report(cfg: &Config, cwd: &Path, json: bool) {
     for (k, n) in &by_outcome {
         println!("    {k:<20} {n}");
     }
+    Ok(())
 }
 
 fn run_policy(action: PolicyAction) -> ! {
@@ -4096,7 +4142,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             };
             let dec: model::Decomposition =
                 serde_json::from_str(&raw).context("parsing decomposition JSON")?;
-            let report = state::cross_run_conflicts(cfg, cwd, &dec);
+            let report = state::cross_run_conflicts(cfg, cwd, &dec)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
             if report.has_conflicts {
                 std::process::exit(1);
@@ -4129,7 +4175,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             // surface an error rather than proceed to an unlocked RMW that could
             // silently drop this transition. The old fail-soft `acquire` returned
             // an unlocked guard here, leaving the double-write window open.
-            let _lock = match lock::RunLock::acquire_or_skip(cfg, cwd, &run) {
+            let _lock = match lock::RunLock::acquire_run_state_or_skip(cfg, cwd, &run)? {
                 Some(l) => l,
                 None => anyhow::bail!(
                     "run '{run}' state lock is contended; skipping `state set` to \
@@ -4468,8 +4514,17 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             // that makes unattended proceeding reversible. Fail-soft: a missing
             // checkpoint or any restore error is logged, never breaks the turn.
             if st == state::Status::Failed && prior_status == state::Status::Verified {
-                let dir = checkpoint_project_dir(cfg, cwd, &run);
-                if let Some(cp) = checkpoint::latest_checkpoint(&dir, &run) {
+                let dir = match checkpoint_project_dir(cfg, cwd, &run) {
+                    Ok(d) => Some(d),
+                    Err(e) => {
+                        eprintln!("auto-rollback: NOT attempted, checkpoints unlocatable: {e:#}");
+                        None
+                    }
+                };
+                if let Some((dir, cp)) = dir.and_then(|d| {
+                    let cp = checkpoint::latest_checkpoint(&d, &run)?;
+                    Some((d, cp))
+                }) {
                     restore_checkpoint(
                         cfg,
                         cwd,
@@ -4753,7 +4808,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             // completed one of this run's hashkeys after we claimed it. If so, we
             // neither auto-merge nor auto-discard — the choice of which
             // implementation to keep needs a human (fail-closed, exit 2/escalate).
-            let dups = state::detect_duplicate_completions(cfg, cwd, &rs);
+            let dups = state::detect_duplicate_completions(cfg, cwd, &rs)?;
             if !dups.is_empty() {
                 let payload = serde_json::json!({ "duplicate_completion": dups });
                 println!("{}", serde_json::to_string(&payload)?);
@@ -4836,7 +4891,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             }
         }
         StateAction::List => {
-            for rs in state::open_runs(cfg, cwd) {
+            for rs in state::open_runs(cfg, cwd)? {
                 let (done, total) = rs.counts();
                 let paused_tag = if rs.paused { " [paused]" } else { "" };
                 let label_tag = rs
@@ -4851,7 +4906,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             }
         }
         StateAction::Stats => {
-            let all = state::compute_stats(cfg, cwd);
+            let all = state::compute_stats(cfg, cwd)?;
             if all.is_empty() {
                 eprintln!("no runs found");
                 return Ok(());
@@ -5068,7 +5123,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             state::resume_run(cfg, cwd, &run)?;
         }
         StateAction::ListTasks => {
-            let tasks = state::list_cancellable_tasks(cfg, cwd);
+            let tasks = state::list_cancellable_tasks(cfg, cwd)?;
             println!("{}", serde_json::to_string_pretty(&tasks)?);
         }
         StateAction::Cancel { run, task } => {
@@ -5260,7 +5315,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
         }
         StateAction::Checkpoint { run, label } => {
             let rs = state::RunState::load(cfg, cwd, &run)?;
-            let dir = checkpoint_project_dir(cfg, cwd, &run);
+            let dir = checkpoint_project_dir(cfg, cwd, &run)?;
             let shas = capture_branch_shas(cwd, &rs);
             let seq = checkpoint::write_checkpoint(
                 &dir,
@@ -5273,7 +5328,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             eprintln!("checkpoint {seq} recorded for run '{run}'");
         }
         StateAction::Rollback { run, to } => {
-            let dir = checkpoint_project_dir(cfg, cwd, &run);
+            let dir = checkpoint_project_dir(cfg, cwd, &run)?;
             let cp = match to {
                 Some(seq) => checkpoint::checkpoint_at(&dir, &run, seq),
                 None => checkpoint::latest_checkpoint(&dir, &run),
@@ -5325,11 +5380,12 @@ pub(crate) fn policy_is_autonomous(cfg: &Config) -> bool {
         == policy::Decision::Auto
 }
 
-fn checkpoint_project_dir(cfg: &Config, cwd: &Path, run_id: &str) -> PathBuf {
-    state::decomposition_path(cfg, cwd, run_id)
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| cwd.to_path_buf())
+/// The dir a run's checkpoints and checkpoint journal live in: the run's own
+/// dir ([`state::run_dir`] — canonical, or the legacy per-checkout dir a
+/// pre-`43393ce2` run still lives in). `Err` when the main worktree root
+/// cannot be determined; there is no fallback dir.
+fn checkpoint_project_dir(cfg: &Config, cwd: &Path, run_id: &str) -> Result<PathBuf> {
+    state::run_dir(cfg, cwd, run_id)
 }
 
 /// The owning Claude session id from the environment, if set — recorded on
@@ -5777,7 +5833,7 @@ fn print_timings(rs: &state::RunState, json: bool) -> Result<()> {
 fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Result<()> {
     let run_ids: Vec<String> = match (run, all) {
         (Some(r), _) => vec![r],
-        (None, true) => state::all_runs(cfg, cwd)
+        (None, true) => state::all_runs(cfg, cwd)?
             .into_iter()
             .map(|rs| rs.run_id)
             .collect(),

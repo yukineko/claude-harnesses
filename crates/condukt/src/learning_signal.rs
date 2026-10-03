@@ -20,7 +20,8 @@
 //!
 //! Aggregation is split into a PURE function ([`aggregate`]) that takes
 //! already-loaded data, and an I/O wrapper ([`compute`]) that loads both
-//! ledgers fail-soft (any error → empty) and calls the pure fn. Tests feed
+//! ledgers fail-soft (missing/corrupt data → empty; an unlocatable run-state
+//! store → `Err`) and calls the pure fn. Tests feed
 //! the pure fn synthetic data directly — no real store required.
 
 use crate::config::Config;
@@ -118,17 +119,27 @@ fn mean(values: impl Iterator<Item = usize> + Clone) -> Option<f64> {
 /// I/O wrapper: load the retrieval ledger (`harness_core::retrieval::load`)
 /// and, for each distinct run_id found there, sum `replan_count` across that
 /// run's replan-log records (`state::load_replan_records`), then call
-/// [`aggregate`]. Fail-soft throughout: both underlying loaders already
-/// degrade to empty on missing/corrupt data, so `compute` never panics and
-/// never errors — an absent store simply yields the empty-ledger zero shape.
-pub fn compute(cfg: &Config, cwd: &Path) -> LearningSignal {
+/// [`aggregate`]. Both underlying loaders degrade to empty on missing/corrupt
+/// data, so an absent store simply yields the empty-ledger zero shape. The one
+/// `Err` is a run-state store that cannot even be LOCATED (the main worktree
+/// root is undeterminable, backlog `43393ce2`): counting every run as zero
+/// replans there would publish a ratio computed from data never looked at.
+pub fn compute(cfg: &Config, cwd: &Path) -> anyhow::Result<LearningSignal> {
     let events = harness_core::retrieval::load();
-    aggregate(&events, |run_id| {
-        state::load_replan_records(cfg, cwd, run_id)
-            .iter()
-            .map(|r| r.replan_count)
-            .sum()
-    })
+    let mut first_err: Option<anyhow::Error> = None;
+    let sig = aggregate(&events, |run_id| {
+        match state::load_replan_records(cfg, cwd, run_id) {
+            Ok(recs) => recs.iter().map(|r| r.replan_count).sum(),
+            Err(e) => {
+                first_err.get_or_insert(e);
+                0
+            }
+        }
+    });
+    match first_err {
+        Some(e) => Err(e),
+        None => Ok(sig),
+    }
 }
 
 #[cfg(test)]

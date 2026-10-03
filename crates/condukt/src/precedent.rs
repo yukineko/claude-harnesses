@@ -34,7 +34,6 @@
 //! layer, never read inside these functions.
 
 use crate::config::Config;
-use crate::store::{project_key, repo_root};
 use anyhow::Result;
 use harness_core::hash::Fnv1a64;
 use serde::{Deserialize, Serialize};
@@ -196,13 +195,18 @@ pub fn match_precedent(
     })
 }
 
-/// `<state_dir>/<project-key>/precedents.json` — beside `escalations.json` /
-/// `claims.json`, so it is per-project and unrelated projects never share a
-/// precedent store.
-fn precedents_path(cfg: &Config, cwd: &Path) -> PathBuf {
-    cfg.state_dir
-        .join(project_key(&repo_root(cwd)))
-        .join("precedents.json")
+const FILE: &str = "precedents.json";
+
+/// Reserved lock key serializing every read-modify-write of the store.
+const PRECEDENTS_LOCK_KEY: &str = "__precedents__";
+
+/// `<state_dir>/<project-key of the main worktree root>/precedents.json` —
+/// beside `escalations.json` / `claims.json`, so it is per-project and
+/// unrelated projects never share a precedent store, while every checkout of
+/// ONE repo shares it (backlog `43393ce2`). `Err` when the main worktree root
+/// cannot be determined.
+fn precedents_path(cfg: &Config, cwd: &Path) -> Result<PathBuf> {
+    Ok(crate::state::project_state_dir(cfg, cwd)?.join(FILE))
 }
 
 /// Fail-soft load: a missing or corrupt registry is treated as empty rather
@@ -230,6 +234,9 @@ fn save(path: &Path, reg: &Registry) -> Result<()> {
 /// and persist it. Returns the stored record (with its derived fingerprint).
 /// Atomic write; fail-soft load. `now` is the ratification timestamp (unix
 /// seconds) injected by the CLI layer — never read from wall-clock here.
+/// Always written to the CANONICAL store, under the `__precedents__` lock
+/// (the file is shared by every checkout of the repo); `Err` when the main
+/// worktree root cannot be determined or the lock cannot be acquired.
 pub fn record_precedent(
     cfg: &Config,
     cwd: &Path,
@@ -238,7 +245,17 @@ pub fn record_precedent(
     note: &str,
     now: i64,
 ) -> Result<Precedent> {
-    let path = precedents_path(cfg, cwd);
+    let root = crate::state::project_root(cwd)?;
+    let Some(_guard) =
+        crate::lock::RunLock::acquire_or_skip_in_project(cfg, &root, PRECEDENTS_LOCK_KEY)
+    else {
+        anyhow::bail!(
+            "precedent store lock for {} is contended; refusing an unlocked \
+             read-modify-write (retry shortly)",
+            root.display()
+        );
+    };
+    let path = precedents_path(cfg, cwd)?;
     let mut reg = load(&path);
 
     let rec = Precedent {
@@ -253,12 +270,17 @@ pub fn record_precedent(
     Ok(rec)
 }
 
-/// Load ALL ratified precedents for this project, in ratification order.
-/// Fail-soft: a missing or corrupt store returns an empty vec, never an
-/// error.
-pub fn load_precedents(cfg: &Config, cwd: &Path) -> Vec<Precedent> {
-    let path = precedents_path(cfg, cwd);
-    load(&path).precedents
+/// Load ALL ratified precedents for this project: the canonical store, then a
+/// store a pre-`43393ce2` condukt left under this checkout's own per-checkout
+/// key (so precedents ratified from a linked worktree are not lost by the
+/// re-keying). A missing or corrupt store contributes nothing; an
+/// undeterminable main worktree root is an `Err`.
+pub fn load_precedents(cfg: &Config, cwd: &Path) -> Result<Vec<Precedent>> {
+    let mut all = Vec::new();
+    for dir in crate::state::project_state_dirs(cfg, cwd)? {
+        all.extend(load(&dir.join(FILE)).precedents);
+    }
+    Ok(all)
 }
 
 #[cfg(test)]
@@ -524,10 +546,10 @@ mod tests {
         assert_eq!(rec.note, "routine dep bump");
         assert_ne!(rec.fingerprint, 0);
 
-        let all = load_precedents(&cfg, tmp);
+        let all = load_precedents(&cfg, tmp).unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0], rec);
-        assert!(precedents_path(&cfg, tmp).exists());
+        assert!(precedents_path(&cfg, tmp).unwrap().exists());
     }
 
     #[test]
@@ -535,7 +557,7 @@ mod tests {
         let tmp_dir = make_tmp_dir("missing");
         let tmp = tmp_dir.path();
         let cfg = make_cfg(tmp);
-        assert!(load_precedents(&cfg, tmp).is_empty());
+        assert!(load_precedents(&cfg, tmp).unwrap().is_empty());
     }
 
     #[test]
@@ -543,14 +565,14 @@ mod tests {
         let tmp_dir = make_tmp_dir("corrupt");
         let tmp = tmp_dir.path();
         let cfg = make_cfg(tmp);
-        let path = precedents_path(&cfg, tmp);
+        let path = precedents_path(&cfg, tmp).unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, b"not json at all {{{").unwrap();
-        assert!(load_precedents(&cfg, tmp).is_empty());
+        assert!(load_precedents(&cfg, tmp).unwrap().is_empty());
         // Fail-soft: record still succeeds (registry read as empty then
         // overwritten with a fresh valid one).
         let rec = record_precedent(&cfg, tmp, &v(&["a.rs"]), &v(&["foo"]), "n", 1).unwrap();
-        let all = load_precedents(&cfg, tmp);
+        let all = load_precedents(&cfg, tmp).unwrap();
         assert_eq!(all, vec![rec]);
     }
 
@@ -561,7 +583,7 @@ mod tests {
         let cfg = make_cfg(tmp);
         record_precedent(&cfg, tmp, &v(&["a.rs"]), &v(&["foo"]), "first", 1).unwrap();
         record_precedent(&cfg, tmp, &v(&["b.rs"]), &v(&["bar"]), "second", 2).unwrap();
-        let all = load_precedents(&cfg, tmp);
+        let all = load_precedents(&cfg, tmp).unwrap();
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].note, "first");
         assert_eq!(all[1].note, "second");

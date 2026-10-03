@@ -265,7 +265,6 @@ fn backlog_866ab9f2_absent_decomposition_verifies_durably_and_names_the_release(
 /// run created from a worktree is invisible to `state list` from the main tree.
 /// RED while the split exists.
 #[test]
-#[ignore = "pins OPEN backlog 4708069b/43393ce2 (run-state split per checkout); un-ignore when fixed"]
 fn backlog_43393ce2_4708069b_run_created_in_worktree_is_listed_from_main_tree() {
     let (repo, home) = git_repo("43393ce2");
     let wt = repo.parent().unwrap().join("wt");

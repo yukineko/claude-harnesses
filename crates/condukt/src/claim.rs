@@ -55,9 +55,10 @@
 //! * **Migration**: claims written under the old worktree-derived key are not
 //!   moved. They are orphaned, and age out via the heartbeat TTL like any other
 //!   unreleased claim.
-//! * **Scope**: run state, precedent and autoflow's stores still key off
-//!   `repo_root` and are untouched here — relocating them would orphan live
-//!   on-disk state. That wider migration is backlog `43393ce2`.
+//! * **Scope**: run state, the escalation registry and the precedent store
+//!   were re-keyed the same way later (backlog `43393ce2`, see
+//!   `state::run_dir`, which keeps legacy per-checkout runs readable in
+//!   place); autoflow's store still keys off `repo_root`.
 //!
 //! # Concurrency & safety
 //!
@@ -252,15 +253,14 @@ pub struct Registry {
 /// The root this registry is keyed by: the MAIN worktree root of the repo
 /// containing `cwd`, so all of that repo's linked worktrees address ONE store.
 ///
-/// Why claims use this while run state does not: the module contract above says
-/// this registry "stops two condukt sessions on the SAME machine from processing
-/// overlapping work". "The same machine" is a REPO-wide scope, not a
-/// per-checkout one, and under CLAUDE.md §8 the sessions it must separate are
-/// each in their own linked worktree — so a per-worktree key makes the guard
-/// answer "free" exactly when two sessions collide. Run state is the opposite
-/// case: it is per-run bookkeeping that already lives on disk under
-/// `repo_root`-derived keys, and re-keying it would orphan those files (backlog
-/// `43393ce2`).
+/// Why: the module contract above says this registry "stops two condukt
+/// sessions on the SAME machine from processing overlapping work". "The same
+/// machine" is a REPO-wide scope, not a per-checkout one, and under CLAUDE.md
+/// §8 the sessions it must separate are each in their own linked worktree — so
+/// a per-worktree key makes the guard answer "free" exactly when two sessions
+/// collide. Run state has since been re-keyed the same way (backlog
+/// `43393ce2`, `state::project_root`), with runs a pre-fix condukt stored under
+/// a per-checkout key kept readable in place by `state::run_dir`.
 ///
 /// `Undetermined` is a legitimate answer and is never collapsed into a path: see
 /// [`harness_core::projkey::main_worktree_root`] for the arms.
@@ -489,8 +489,9 @@ pub(crate) fn progress_store_dir(cfg: &Config, cwd: &Path) -> Determination<Path
 /// always fails and the claim could never be reaped after its holder died.
 /// Treating a `NotFound` run state as "this run is stateless" is NOT an option:
 /// claims are keyed repo-wide ([`claim_project_root`], the MAIN worktree root)
-/// while run state lives per worktree (`repo_root(cwd)`), so a reaper running
-/// in one worktree gets `NotFound` for a LIVE run whose state sits in another
+/// while a LEGACY run (stored by a pre-`43393ce2` condukt under a linked
+/// worktree's own key) is only visible from that worktree, so a reaper running
+/// elsewhere gets `NotFound` for a LIVE run whose state sits in another
 /// worktree's dir. `NotFound` cannot distinguish "never existed" from "exists
 /// where I cannot see it", so for an unmarked claim it stays `Undetermined`
 /// (kept), exactly as before.

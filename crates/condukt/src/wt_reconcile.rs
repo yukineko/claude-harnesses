@@ -69,10 +69,12 @@
 //!
 //! # Cross-checkout scan
 //!
-//! condukt's run state is namespaced per checkout (`<state_dir>/<project-key>/`),
-//! so a run created from checkout A is invisible from checkout B (backlog
-//! `4708069b`). A worktree can be claimed by a run from any checkout, so this
-//! scans **every namespace under the state root**, not just this checkout's.
+//! condukt's run state is namespaced per project (`<state_dir>/<project-key>/`).
+//! Since backlog `4708069b`/`43393ce2` the key is the MAIN worktree root's, but
+//! runs a pre-fix condukt created from a linked worktree still sit under that
+//! checkout's own key, invisible from every other checkout. A worktree can be
+//! claimed by a run from any checkout, so this scans **every namespace under
+//! the state root**, not just this checkout's.
 //! If the state root is absent or unreadable, or any run file inside it cannot
 //! be read or parsed, the scan is INCOMPLETE: nothing may then be concluded
 //! dead, and every entry that is not positively live becomes `Undetermined`.

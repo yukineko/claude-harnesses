@@ -7393,24 +7393,6 @@ issue_number = 873
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/873"
 
 [[task]]
-id = "89544915"
-title = "overwatch: condukt-gate / record-audit 由来の finding には閉じる経路が無い (reconcile-fixed は CA-<crate>-<NNN> のみ照合)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = """
-Found 2026-09-30 by the 7c27050b investigation at main abcd4f2e on a copy of the live store. closure is continuous-audit 19/44, condukt-gate 0/4, record-audit 0/3. reconcile-fixed only matches CA-<crate>-<NNN> ids, so gate-exec:... and record-audit:... ids are never closed. Needs a ruling on what closed means for escalations and freshness alerts, which have no fix commit.
-
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/overwatch/src/reconcile.rs (mod backlog_89544915) (rev d2e54735): Pins 'a fix commit naming the id closes it'; the item still needs a ruling on what 'closed' means for escalations (manual record-disposition does exist)."""
-created_at = 1790719360
-updated_at = 1790983264
-weight = 0.0
-issue_number = 881
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/881"
-
-[[task]]
 id = "60fe5eed"
 title = "overwatch review-metrics の median latency が finding ts からバッチ auto-reconcile 時刻までを測り約70日と誤誘導する"
 project = "/Users/yuki/src/harness"

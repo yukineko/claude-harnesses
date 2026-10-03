@@ -22,6 +22,7 @@ mod parse;
 mod prompt;
 mod protection;
 mod ratify;
+mod reconcile;
 mod report;
 mod scope;
 mod similarity;
@@ -236,6 +237,19 @@ enum Command {
     Map {
         #[command(subcommand)]
         action: MapAction,
+    },
+    /// Close specguard STRUCTURAL review findings
+    /// (`specguard:<undocumented|dangling-reference|untested>:<key>`) by
+    /// re-running the same deterministic structural detection `audit` uses: a
+    /// finding the detection no longer reports is closed with the non-human
+    /// verdict `resolved`. Never closes shard-audit kinds (spec-drift,
+    /// spec-doc-stale, audit-indeterminate). When the detection cannot run
+    /// (spec map absent/unparseable) every finding stays open and is reported
+    /// undetermined. Exit 0, or 3 when anything is undetermined.
+    ReconcileFindings {
+        /// Print `{"resolved":[..],"undetermined":[{"finding_id","why"}]}`.
+        #[arg(long)]
+        json: bool,
     },
     /// Map-driven CORRECTNESS audit (read-only). Distinct from the drift audit:
     /// drift checks whether spec and impl AGREE (consistency); `audit` checks
@@ -473,6 +487,12 @@ fn run(cli: &Cli) -> Result<u8> {
         return Ok(pending(cli));
     }
 
+    // `reconcile-findings` must report even when the config cannot be loaded
+    // (then nothing can be re-detected: every finding is undetermined).
+    if let Some(Command::ReconcileFindings { json }) = &cli.command {
+        return Ok(reconcile_findings(cli, *json));
+    }
+
     // `map gate-check` audits nothing, so it must not require audit areas.
     if let Some(Command::Map {
         action: MapAction::GateCheck { base, head },
@@ -571,6 +591,7 @@ fn run(cli: &Cli) -> Result<u8> {
         | Some(Command::AcceptPrompt { .. })
         | Some(Command::Map { .. })
         | Some(Command::Audit { .. })
+        | Some(Command::ReconcileFindings { .. })
         | Some(Command::TestAudit { .. }) => unreachable!("handled above"),
         Some(Command::Run) | None => {}
     }
@@ -1632,7 +1653,21 @@ fn ack(
 ) -> Result<u8> {
     // Parsed up front so a typo is rejected before anything is cleared.
     let verdict_override = match verdict_override {
-        Some(raw) => Some(overwatch::disposition::DispositionVerdict::parse_cli(raw)?),
+        Some(raw) => {
+            let v = overwatch::disposition::DispositionVerdict::parse_cli(raw)?;
+            // `resolved` is the AUTOMATED observation verdict (backlog
+            // 89544915 R3), kept out of the human-agreement metrics. `ack` is a
+            // human acting on shard-audit findings, which are never
+            // auto-closed (R4), so recording `resolved` here would mislabel a
+            // human disposition as an observation.
+            if !v.is_human() {
+                anyhow::bail!(
+                    "--verdict {raw:?} is the automated observation verdict and cannot be \
+                     given to `ack`: expected confirmed | dismissed | false-positive"
+                );
+            }
+            Some(v)
+        }
         None => None,
     };
     // If the sentinel exists, check whether a fix commit was made since it was raised.
@@ -2162,6 +2197,38 @@ fn gate_check(cli: &Cli, base: &str, head: &str) -> Result<u8> {
         }
     })
 }
+
+/// `specguard reconcile-findings`: close structural review findings the
+/// re-run detection no longer reports (see `reconcile.rs`). Returns 0, or 3
+/// when anything stayed open for lack of a determination.
+fn reconcile_findings(cli: &Cli, json: bool) -> u8 {
+    const TOOL: &str = "specguard reconcile-findings";
+    let report = match load(cli) {
+        Ok(l) => {
+            let map_path = l.repo_root.join(&l.cfg.map.path);
+            reconcile::reconcile(&l.repo_root, Determination::known(map_path.as_path()))
+        }
+        Err(e) => {
+            // No config → no repo root from it; the store is still keyed by the
+            // cwd's repo, so judge (as undetermined) the findings found there.
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            reconcile::reconcile(
+                &cwd,
+                Determination::undetermined(format!(
+                    "specguard config could not be loaded ({e:#}), so the structural \
+                     detection cannot run"
+                )),
+            )
+        }
+    };
+    match report.emit(TOOL, json) {
+        0 => EXIT_OK,
+        _ => EXIT_RECONCILE_UNDETERMINED,
+    }
+}
+
+/// `reconcile-findings`: at least one finding stayed open undetermined.
+const EXIT_RECONCILE_UNDETERMINED: u8 = 3;
 
 /// Map-driven CORRECTNESS audit (read-only). Loads the persisted spec-map store
 /// (built by `map build`/`sync`), computes deterministic structural findings

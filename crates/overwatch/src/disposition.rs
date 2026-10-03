@@ -33,6 +33,26 @@ pub enum DispositionVerdict {
     Dismissed,
     /// The human determined the finding was NOT real (the AI was wrong).
     FalsePositive,
+    /// NOT a human verdict: an automated re-observation of the finding's own
+    /// condition showed it no longer holds (backlog 89544915, ruling R3). The
+    /// finding is closed, but it says nothing about whether the AI was right,
+    /// so it is kept OUT of every human-agreement figure
+    /// ([`false_positive_rate`], [`agreement_rate`], the `by_verdict` counts)
+    /// and reported separately (`auto_resolved`). It still counts as closed in
+    /// [`closure_rate`] — the finding did leave the queue.
+    Resolved,
+}
+
+impl DispositionVerdict {
+    /// Whether this verdict was given by a human reviewer (and so belongs in
+    /// the human-agreement denominators). Exhaustive on purpose: a new
+    /// variant must decide this explicitly.
+    pub fn is_human(&self) -> bool {
+        match self {
+            Self::Confirmed | Self::Dismissed | Self::FalsePositive => true,
+            Self::Resolved => false,
+        }
+    }
 }
 
 impl DispositionVerdict {
@@ -44,8 +64,9 @@ impl DispositionVerdict {
             "confirmed" => Ok(Self::Confirmed),
             "dismissed" => Ok(Self::Dismissed),
             "false-positive" | "false_positive" => Ok(Self::FalsePositive),
+            "resolved" => Ok(Self::Resolved),
             other => Err(anyhow!(
-                "unknown disposition verdict {other:?}: expected confirmed | dismissed | false-positive"
+                "unknown disposition verdict {other:?}: expected confirmed | dismissed | false-positive | resolved"
             )),
         }
     }
@@ -56,6 +77,7 @@ impl DispositionVerdict {
             Self::Confirmed => "confirmed",
             Self::Dismissed => "dismissed",
             Self::FalsePositive => "false_positive",
+            Self::Resolved => "resolved",
         }
     }
 }
@@ -75,6 +97,16 @@ pub struct Disposition {
     pub reviewer: String,
     /// Unix timestamp when the disposition was recorded.
     pub resolved_ts: i64,
+    /// What was observed to justify the disposition (free text / JSON) —
+    /// required in practice for an automated `resolved` closure so the
+    /// closure is auditable. Optional and serde-default so rows written
+    /// before this field existed still deserialize.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<String>,
+    /// Which source was re-observed (e.g. `condukt run-state`). Same
+    /// back-compat rule as `evidence`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_source: Option<String>,
 }
 
 impl Disposition {
@@ -90,8 +122,26 @@ impl Disposition {
             verdict,
             reviewer,
             resolved_ts,
+            evidence: None,
+            observed_source: None,
         }
     }
+
+    /// Attach the observation that justified this disposition.
+    pub fn with_evidence(
+        mut self,
+        evidence: Option<String>,
+        observed_source: Option<String>,
+    ) -> Self {
+        self.evidence = evidence;
+        self.observed_source = observed_source;
+        self
+    }
+}
+
+/// Only the dispositions a HUMAN gave (drops automated `resolved` closures).
+fn human(dispositions: &[Disposition]) -> impl Iterator<Item = &Disposition> {
+    dispositions.iter().filter(|d| d.verdict.is_human())
 }
 
 /// `numer / denom` as a fraction in `[0,1]`, or `None` when `denom == 0`
@@ -104,37 +154,39 @@ fn rate(numer: usize, denom: usize) -> Option<f64> {
     }
 }
 
-/// False-positive rate = count(FalsePositive) / total dispositions, in
-/// `[0,1]`. `None` on an empty ledger (undefined, not zero — there is no rate
-/// to report yet).
+/// False-positive rate = count(FalsePositive) / HUMAN dispositions, in
+/// `[0,1]`. Automated `Resolved` closures are excluded from both sides.
+/// `None` when there is no human disposition (undefined, not zero — there is
+/// no rate to report yet).
 pub fn false_positive_rate(dispositions: &[Disposition]) -> Option<f64> {
-    let fp = dispositions
-        .iter()
+    let fp = human(dispositions)
         .filter(|d| d.verdict == DispositionVerdict::FalsePositive)
         .count();
-    rate(fp, dispositions.len())
+    rate(fp, human(dispositions).count())
 }
 
-/// Human-agreement rate = count(Confirmed) / total dispositions, in `[0,1]`.
+/// Human-agreement rate = count(Confirmed) / HUMAN dispositions, in `[0,1]`
+/// (automated `Resolved` closures are not a human verdict and are excluded).
 ///
 /// Definition: this measures how often a human, upon reviewing an
 /// AI/adversarial finding, CONFIRMS it was a real, actionable finding (i.e.
 /// the human agrees with the AI). `Dismissed` (reviewed but not acted on,
 /// without disputing accuracy) and `FalsePositive` (the AI was wrong) both
 /// count against agreement in this denominator-inclusive definition — only
-/// an explicit `Confirmed` counts as agreement. `None` on an empty ledger.
+/// an explicit `Confirmed` counts as agreement. `None` when there is no human
+/// disposition.
 pub fn agreement_rate(dispositions: &[Disposition]) -> Option<f64> {
-    let confirmed = dispositions
-        .iter()
+    let confirmed = human(dispositions)
         .filter(|d| d.verdict == DispositionVerdict::Confirmed)
         .count();
-    rate(confirmed, dispositions.len())
+    rate(confirmed, human(dispositions).count())
 }
 
 /// Closure counts per finding `source`: `source -> (closed, total)`.
 ///
 /// A finding is CLOSED when a disposition exists for its `finding_id` — any
-/// verdict, since `dismissed` and `false_positive` are resolutions too. Every
+/// verdict, since `dismissed`, `false_positive` and the automated `resolved`
+/// are resolutions too. Every
 /// other finding is OPEN. The denominator is the DISTINCT finding ids in
 /// `findings`, and the numerator is computed by INTERSECTION rather than by
 /// counting dispositions: a disposition whose `finding_id` joins to no known

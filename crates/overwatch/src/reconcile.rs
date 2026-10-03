@@ -486,34 +486,41 @@ mod tests {
     }
 }
 
-/// backlog 89544915: `reconcile-fixed` is the only automatic close path for a
-/// review finding, and it only recognises `CA-<crate>-<NNN>` ids. Findings
-/// produced by condukt's gate-exec escalation (`gate-exec:<run>:<task>`) and by
-/// `scripts/record-audit.py` (`record-audit:...`) can therefore never be
-/// closed by a fix commit that names them; the live ledger shows
-/// `[condukt-gate]: 0.00 (0/5)` and `[record-audit]: 0.00 (0/3)` closure.
-/// (What "closed" should mean for an escalation still needs a ruling; this
-/// pins the observable fact that a commit naming the id closes nothing.)
+/// backlog 89544915, ruling R2: `reconcile-fixed` closes findings by
+/// commit-message matching, which is SELF-REPORT, so it is restricted to
+/// Continuous-Audit `CA-<crate>-<NNN>` ids. Findings produced by condukt's
+/// gate-exec escalation (`gate-exec:<run>:<task>`), by
+/// `scripts/record-audit.py` (`record-audit:...`) and by specguard's
+/// structural detection (`specguard:...`) must NEVER be closed by a commit
+/// that names them: they are closed by RE-OBSERVING their condition
+/// (`condukt gate reconcile-findings`, record-audit's `resolve()`,
+/// `specguard reconcile-findings`) with the non-human verdict `resolved`.
+/// This replaces an earlier `#[ignore]`d test that asserted the opposite
+/// (overruled contract). Control: the CA id in the same commit IS reconciled,
+/// so a reconcile that closes nothing at all cannot pass.
 #[cfg(test)]
 mod backlog_89544915 {
     use super::*;
 
     #[test]
-    #[ignore = "backlog 89544915: open defect, remove ignore when fixed"]
-    fn a_fix_commit_naming_a_non_ca_finding_id_reconciles_it() {
-        let ids = ["gate-exec:run-20260913-1:t4", "record-audit:freshness:x"];
+    fn a_fix_commit_naming_non_ca_finding_ids_reconciles_only_the_ca_id() {
+        let ids = [
+            "gate-exec:run-20260913-1:t4",
+            "record-audit:freshness:1000",
+            "specguard:untested:foo",
+        ];
         let commits = vec![CommitRef {
             hash: "abc123".to_string(),
-            message: format!("fix: resolve {} and {}", ids[0], ids[1]),
+            message: format!("fix: resolve {} and CA-overwatch-901", ids.join(" and ")),
         }];
-        let known: BTreeSet<String> = ids.iter().map(|s| s.to_string()).collect();
+        let mut known: BTreeSet<String> = ids.iter().map(|s| s.to_string()).collect();
+        known.insert("CA-overwatch-901".to_string());
         let out = compute_reconcile_dispositions(&commits, &known, &BTreeSet::new(), 1000);
         let closed: Vec<&str> = out.iter().map(|d| d.finding_id.as_str()).collect();
         assert_eq!(
             closed,
-            ids.to_vec(),
-            "no automatic close path for gate-exec / record-audit finding ids: a fix \
-             commit naming them reconciles {closed:?}"
+            vec!["CA-overwatch-901"],
+            "only the CA id may be closed by commit message (R2): {closed:?}"
         );
     }
 }

@@ -39,6 +39,25 @@
 # That is a latency-for-coverage trade made in a gate that fires on every Stop.
 # Do not let this comment drift into claiming the fan-out is covered.
 #
+# THE OUTPUT SAYS SO TOO (backlog d470a478): a bare "all green" was read as "the
+# workspace is green" — silence-read-as-checked, the statusline fail-open class
+# (CLAUDE.md #1). So the success line always states its scope, and names the
+# workspace members that depend (transitively, via path dependencies of any kind
+# — normal/dev/build, since clippy runs --all-targets) on a changed crate but
+# were NOT linted, computed from `cargo metadata --no-deps --format-version=1`:
+#
+#   lint-changed-crates: all green for the changed crates only (core); dependents NOT linted: app
+#   lint-changed-crates: all green for the changed crates only (leaf); no workspace dependents
+#   lint-changed-crates: all green for the changed crates only (core); dependents UNDETERMINED (<why>) — NOT linted
+#
+# If the metadata cannot be obtained or parsed, the dependent set is reported as
+# UNDETERMINED — never as "no dependents". The exit status is NOT changed by the
+# dependent set (determined or not): it remains the verdict on the CHANGED
+# crates' fmt/clippy only, which is this check's declared contract (donegate.toml
+# documents that the fan-out is given up by design). The scope line is the
+# disclosure; it does not lint the dependents (run the sweep above for that).
+# On a red run the same scope note is printed after the FAILED lines.
+#
 # Exit 0 when no crate changed, so a docs- or script-only turn pays nothing.
 #
 # WHERE THIS DIVERGES FROM test-changed-crates.sh (both stricter, neither looser):
@@ -160,6 +179,53 @@ if [ -z "$pkgs" ]; then
     exit 0
 fi
 
+# Workspace reverse-dependents of the changed packages that this run does NOT
+# lint. Computed BEFORE linting so a cargo failure later cannot hide it. Any
+# failure (cargo metadata non-zero, empty/unparseable JSON, python3 absent)
+# yields an explicit UNDETERMINED note — never an empty "no dependents" set.
+scope_note=""
+meta_rc=0
+meta_json="$(cargo metadata --no-deps --format-version=1 2>/dev/null)" || meta_rc=$?
+if [ "$meta_rc" -ne 0 ]; then
+    scope_note="dependents UNDETERMINED (cargo metadata exited $meta_rc) — NOT linted"
+elif ! command -v python3 >/dev/null 2>&1; then
+    scope_note="dependents UNDETERMINED (python3 not found to parse cargo metadata) — NOT linted"
+else
+    rdeps=""
+    rdeps_rc=0
+    # shellcheck disable=SC2086
+    rdeps="$(printf '%s' "$meta_json" | python3 -c '
+import json, sys
+changed = set(sys.argv[1:])
+meta = json.load(sys.stdin)
+pkgs = meta["packages"]
+members = {p["name"] for p in pkgs}
+if not changed <= members:
+    sys.exit("changed package(s) not in cargo metadata: %s" % " ".join(sorted(changed - members)))
+rev = {}
+for p in pkgs:
+    for d in p["dependencies"]:
+        if d.get("path") is not None and d["name"] in members:
+            rev.setdefault(d["name"], set()).add(p["name"])
+seen, todo = set(), list(changed)
+while todo:
+    for r in rev.get(todo.pop(), ()):
+        if r not in seen:
+            seen.add(r)
+            todo.append(r)
+print(" ".join(sorted(seen - changed)))
+' $pkgs 2>&1)" || rdeps_rc=$?
+    if [ "$rdeps_rc" -ne 0 ]; then
+        why="$(printf '%s\n' "$rdeps" | tail -1)"
+        scope_note="dependents UNDETERMINED (cannot parse cargo metadata: ${why:-no output}) — NOT linted"
+    elif [ -n "$rdeps" ]; then
+        scope_note="dependents NOT linted: $rdeps"
+    else
+        scope_note="no workspace dependents"
+    fi
+fi
+changed_list="$(printf '%s' "$pkgs" | sed 's/^ //')"
+
 # clippy BUILDS, so this gate is a frequent writer into the target-dir (which
 # .cargo/config.toml may redirect to one fixed absolute path that nothing
 # reclaims). Cap it BEFORE clippy compiles anything — cleaning after would throw
@@ -199,8 +265,10 @@ if [ -n "$clippy_failed" ]; then
     rc=1
 fi
 if [ "$rc" -ne 0 ]; then
+    echo "lint-changed-crates: scope was the changed crates only ($changed_list); $scope_note" >&2
     exit "$rc"
 fi
 
-echo "lint-changed-crates: all green"
+# Never a bare "all green": that was read as "the workspace is green" (d470a478).
+echo "lint-changed-crates: all green for the changed crates only ($changed_list); $scope_note"
 exit 0

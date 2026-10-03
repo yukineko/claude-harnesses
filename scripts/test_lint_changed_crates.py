@@ -442,6 +442,92 @@ class FailsClosedWhenItCannotDetermine(unittest.TestCase):
         self.assertIn("not a git repo", proc.stderr)
 
 
+# scratch-beta depends on scratch-alpha (dev-dependency on purpose: clippy runs
+# --all-targets, so a dev-dep consumer is a real lint dependent too).
+BETA_DEPENDS_ON_ALPHA = BETA_MANIFEST + """
+[dev-dependencies]
+scratch-alpha = { path = "../alpha" }
+"""
+
+# A `cargo` whose `metadata` subcommand fails; everything else is the real one.
+FAILING_METADATA_CARGO = """#!/bin/sh
+if [ "$1" = "metadata" ]; then
+    echo "stub: metadata unavailable" >&2
+    exit 3
+fi
+exec "%s" "$@"
+"""
+
+
+class GreenLineStatesItsScope(unittest.TestCase):
+    """backlog d470a478: a bare `all green` was read as "the workspace is
+    green" while a changed crate's dependents were never linted. The success
+    line must state that only the changed crates were linted, and name the
+    workspace dependents that were not — or say the set is UNDETERMINED.
+
+    NOTE: written by the implementer of the fix (not independent per CLAUDE.md
+    §2a); the independent repro is scripts/test_backlog_d470a478.py. These were
+    observed RED against the pre-fix script via LINT_CHANGED_CRATES_SCRIPT."""
+
+    @classmethod
+    def setUpClass(cls):
+        _require_cargo_toolchain()
+
+    def setUp(self):
+        self.ws = Workspace()
+        self.addCleanup(self.ws.cleanup)
+
+    def _green_line(self, proc):
+        lines = [l for l in proc.stdout.splitlines() if "all green" in l]
+        self.assertEqual(1, len(lines), _detail(proc))
+        return lines[0]
+
+    def test_unlinted_dependent_is_named(self):
+        self.ws.write("crates/beta/Cargo.toml", BETA_DEPENDS_ON_ALPHA)
+        self.ws.commit_all("beta depends on alpha")
+        self.ws.write("crates/alpha/src/lib.rs", CLEAN_ADDITION)
+        proc = self.ws.run_script()
+        self.assertEqual(0, proc.returncode, _detail(proc))
+        line = self._green_line(proc)
+        self.assertIn("changed crates only (scratch-alpha)", line)
+        self.assertIn("dependents NOT linted: scratch-beta", line)
+
+    def test_leaf_crate_says_no_dependents(self):
+        self.ws.write("crates/beta/Cargo.toml", BETA_DEPENDS_ON_ALPHA)
+        self.ws.commit_all("beta depends on alpha")
+        self.ws.write("crates/beta/src/lib.rs", CLEAN_ADDITION)
+        proc = self.ws.run_script()
+        self.assertEqual(0, proc.returncode, _detail(proc))
+        line = self._green_line(proc)
+        self.assertIn("changed crates only (scratch-beta)", line)
+        self.assertIn("no workspace dependents", line)
+        self.assertNotIn("NOT linted", line)
+
+    def test_failing_metadata_is_undetermined_not_no_dependents(self):
+        bindir = self.ws.root.parent / (self.ws.root.name + "-bin")
+        bindir.mkdir()
+        self.addCleanup(shutil.rmtree, str(bindir), True)
+        stub = bindir / "cargo"
+        stub.write_text(FAILING_METADATA_CARGO % _which("cargo"))
+        stub.chmod(0o755)
+        self.ws.write("crates/alpha/src/lib.rs", CLEAN_ADDITION)
+        proc = self.ws.run_script(
+            {"PATH": str(bindir) + os.pathsep + self.ws.env["PATH"]})
+        # Exit status stays the verdict on the changed crates (they are clean).
+        self.assertEqual(0, proc.returncode, _detail(proc))
+        line = self._green_line(proc)
+        self.assertIn("UNDETERMINED", line)
+        self.assertNotIn("no workspace dependents", line)
+
+    def test_red_run_also_states_scope(self):
+        self.ws.write("crates/beta/Cargo.toml", BETA_DEPENDS_ON_ALPHA)
+        self.ws.commit_all("beta depends on alpha")
+        self.ws.write("crates/alpha/src/lib.rs", FMT_VIOLATION)
+        proc = self.ws.run_script()
+        self.assertNotEqual(0, proc.returncode, _detail(proc))
+        self.assertIn("dependents NOT linted: scratch-beta", proc.stderr)
+
+
 class DonegateWiresItAsOneCheck(unittest.TestCase):
     """Pins HOW donegate.toml calls the script — the repository's real file, not
     a scratch copy.

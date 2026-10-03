@@ -304,6 +304,45 @@ class MergeAttribution(unittest.TestCase):
             fd.evaluate(self.repo.path)
 
 
+class ObjectTypes(unittest.TestCase):
+    """Round-2 worker 別件 of ee045867: a path whose TYPE changes is listed as
+    `T`, which ACMR never judged, and `git show <rev>:<gitlink>` prints a
+    commit plus its patch, which was scanned as Rust."""
+
+    def setUp(self) -> None:
+        self.repo = Repo()
+        self.repo.write("crates/a/src/lib.rs", CLEAN_RS)
+        self.repo.stage("crates")
+        self.repo.commit()
+
+    def tearDown(self) -> None:
+        self.repo.close()
+
+    def test_gitlink_replaced_by_a_file_is_undetermined(self):
+        sha = git(self.repo.path, "rev-parse", "HEAD").strip()
+        git(self.repo.path, "update-index", "--add", "--cacheinfo",
+            f"160000,{sha},crates/a/src/sub.rs")
+        self.repo.commit()
+        git(self.repo.path, "rm", "-q", "--cached", "crates/a/src/sub.rs")
+        self.repo.write("crates/a/src/sub.rs", OLD_SWALLOW_RS)
+        self.repo.stage("crates/a/src/sub.rs")
+        with self.assertRaises(fd.Undetermined):
+            fd.evaluate(self.repo.path)
+
+    def test_directory_replaced_by_a_file_with_a_swallow_blocks(self):
+        self.repo.write("crates/a/src/d.rs/x.txt", "x\n")
+        self.repo.stage("crates")
+        self.repo.commit()
+        git(self.repo.path, "rm", "-q", "-r", "--cached", "crates/a/src/d.rs")
+        (self.repo.path / "crates/a/src/d.rs/x.txt").unlink()
+        (self.repo.path / "crates/a/src/d.rs").rmdir()
+        self.repo.write("crates/a/src/d.rs", OLD_SWALLOW_RS)
+        self.repo.stage("crates/a/src/d.rs")
+        code, rises = fd.evaluate(self.repo.path)
+        self.assertEqual(code, 1)
+        self.assertEqual([r.path for r in rises], ["crates/a/src/d.rs"])
+
+
 class Undetermined(unittest.TestCase):
     def test_no_head_is_undetermined_not_clean(self):
         repo = Repo()

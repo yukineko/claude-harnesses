@@ -1371,21 +1371,27 @@ pub struct UndeterminedTask {
 /// a set of findings to report, and the two are independent — tasks that ARE
 /// stuck are still abandoned when other tasks are undetermined.
 ///
-/// # A THIRD way to appear in neither list (known gap, stated not hidden)
+/// # The uncommitted-work veto: kept tasks are split by WHY they were kept
 ///
-/// A task held back by the uncommitted-work veto in [`scan_stuck`] also lands in
-/// neither list. It is reported — [`scan_stuck`] names it and its reason on
-/// stderr — but only there, so [`Self::has_unobservable`] stays `false` and
-/// `state abandon --all-stuck` exits 0 for it. For a worktree OBSERVED dirty
-/// that is correct: the worker is determined to be alive, which is not an
-/// undetermination. For the veto's `Err(_)` / no-worktree readings it is NOT
-/// correct — those are cannot-determine and belong in `undetermined` with
-/// [`Undetermination::Unobservable`], the same as an unreadable worktree HEAD.
-/// The two landed in the same run from independent branches and the exit-code
-/// contract was never reconciled; the current one is pinned by
-/// `tests/abandon_dirty_guard.rs`. Tracked as backlog `d65110df`. The abandon
-/// DECISION is fail-closed in both readings (the task is kept either way) — it
-/// is the status handed downstream that is split.
+/// A task held back by the uncommitted-work veto in [`scan_stuck`] is always
+/// KEPT and always named on stderr with its reason. Where it lands in this
+/// struct depends on what the veto observed (backlog `d65110df`):
+///
+/// * worktree OBSERVED dirty (`Known(Some(reason))`) → **neither list**, so
+///   `state abandon --all-stuck` exits 0 for it. That is an observation, not an
+///   undetermination: the worker is determined to be alive (there is work on
+///   disk that no commit accounts for). Exiting 3 here would make a healthy
+///   editing worker indistinguishable from a broken scan.
+/// * dirtiness UNREADABLE (`git status` failed) or no worktree recorded
+///   (`Undetermined`) → **`undetermined` with [`Undetermination::Unobservable`]**,
+///   the same class as an unreadable worktree HEAD, so
+///   [`Self::has_unobservable`] is `true` and the exit is 3. "Could not read
+///   whether there is uncommitted work" is never "scanned clean".
+///
+/// The asymmetry is deliberate and pinned end-to-end by
+/// `tests/abandon_dirty_guard.rs` (dirty → 0, cannot-determine → 3). The abandon
+/// DECISION is the same in both readings (the task is kept); what differs is
+/// whether the scan may be reported downstream as clean.
 #[derive(Debug, Clone, Default)]
 pub struct StuckScan {
     /// Task ids the bulk re-dispatch path may abandon: Running, TTL-stale, a
@@ -1435,11 +1441,17 @@ impl StuckScan {
 /// * `updated_at < threshold`, `Known(Stalled)`, **and** a worktree observed to
 ///   hold no uncommitted work → **stuck**.
 /// * `updated_at < threshold`, `Known(Stalled)`, but
-///   [`uncommitted_work_keep_reason`] returns a reason (uncommitted work is
-///   present, or dirtiness could not be read at all) → **neither list**: the
-///   task is KEPT and named on stderr with that reason. See the known gap on
-///   [`StuckScan`] for why the `could not read` half of that arm ought to be in
-///   `undetermined` and is not yet (backlog `d65110df`).
+///   [`uncommitted_work_keep_reason`] OBSERVED uncommitted work
+///   (`Known(Some(_))`) → **neither list**: the task is KEPT and named on stderr
+///   with that reason. The worker is observed alive, so this is not an
+///   undetermination and does not make the scan non-clean.
+/// * `updated_at < threshold`, `Known(Stalled)`, but
+///   [`uncommitted_work_keep_reason`] could not read dirtiness at all
+///   (`Undetermined`: `git status` failed, or no worktree recorded) →
+///   **undetermined / [`Undetermination::Unobservable`]**
+///   (`uncommitted-work-undetermined`). The task is KEPT and ALSO named on
+///   stderr with the same veto line; see [`StuckScan`] for the asymmetry
+///   (backlog `d65110df`).
 /// * `updated_at < threshold` and `Known(Progressing)` → **healthy**: a
 ///   demonstrably live worker.
 /// * `updated_at < threshold` and `Undetermined(why)` → **undetermined**, split
@@ -1521,21 +1533,39 @@ pub fn scan_stuck(
             // authorises clears the task's worktree reference and re-dispatches
             // a SECOND worker into that worktree.
             Determination::Known(progress::Liveness::Stalled) => {
-                match uncommitted_work_keep_reason(t) {
-                    None => scan.stuck.push(t.id.clone()),
-                    Some(reason) => {
-                        // CLAUDE.md §3: a silently smaller result set makes
-                        // "checked" and "could not check" indistinguishable
-                        // downstream, so the kept task is named here with the
-                        // reason it was kept, plus the ungated override that
-                        // reclaims it if the human disagrees.
-                        eprintln!("condukt: NOT abandoning running task '{}': {reason}", t.id);
-                        eprintln!(
-                            "condukt:   override with `condukt state abandon --run {} --task {}` \
-                             if you know this worker is dead",
-                            run.run_id, t.id
-                        );
+                // Exhaustive, no wildcard: a dirty worktree is an OBSERVATION
+                // (the worker is alive) and stays out of both lists; a failed
+                // read is cannot-determine and goes into `undetermined` as
+                // `Unobservable`, so the exit code cannot report it as clean.
+                let keep_reason = match uncommitted_work_keep_reason(t) {
+                    Determination::Known(None) => {
+                        scan.stuck.push(t.id.clone());
+                        None
                     }
+                    Determination::Known(Some(reason)) => Some(reason),
+                    Determination::Undetermined(why) => {
+                        let reason = why.as_str().to_string();
+                        scan.undetermined.push(UndeterminedTask {
+                            id: t.id.clone(),
+                            class: Undetermination::Unobservable,
+                            reason: format!("uncommitted-work-undetermined: {reason}"),
+                        });
+                        Some(reason)
+                    }
+                };
+                if let Some(reason) = keep_reason {
+                    // CLAUDE.md §3: a silently smaller result set makes
+                    // "checked" and "could not check" indistinguishable
+                    // downstream, so the kept task is named here with the
+                    // reason it was kept, plus the ungated override that
+                    // reclaims it if the human disagrees. Printed for BOTH the
+                    // dirty and the cannot-determine readings.
+                    eprintln!("condukt: NOT abandoning running task '{}': {reason}", t.id);
+                    eprintln!(
+                        "condukt:   override with `condukt state abandon --run {} --task {}` \
+                         if you know this worker is dead",
+                        run.run_id, t.id
+                    );
                 }
             }
             Determination::Known(progress::Liveness::Progressing) => {}
@@ -1549,9 +1579,14 @@ pub fn scan_stuck(
     scan
 }
 
-/// Would bulk-abandoning `t` ORPHAN work that is not in any commit? `None` =
-/// nothing of the sort was observed and the abandon may proceed; `Some(reason)`
-/// = keep the task, and this is what to tell the human.
+/// Would bulk-abandoning `t` ORPHAN work that is not in any commit?
+/// `Known(None)` = the worktree was observed clean and the abandon may proceed;
+/// `Known(Some(reason))` = uncommitted work was observed, keep the task and tell
+/// the human `reason`; `Undetermined(why)` = dirtiness could not be read, keep
+/// the task AND report the scan as not clean (the caller, [`scan_stuck`], files
+/// it as [`Undetermination::Unobservable`]). The tri-state is returned rather
+/// than collapsed to `Option<String>` because the collapse is exactly what made
+/// "could not read" exit 0 like "observed dirty" (backlog `d65110df`).
 ///
 /// # Why this is a veto here, and not a third progress SIGNAL
 ///
@@ -1583,8 +1618,8 @@ pub fn scan_stuck(
 /// all, so its verdict is already `Undetermined` and it never reaches the
 /// `Stalled` arm); it is written fail-closed rather than omitted so that a
 /// future change upstream cannot make this function permissive by accident.
-fn uncommitted_work_keep_reason(t: &TaskState) -> Option<String> {
-    let observed: Determination<Option<String>> = match t.worktree.as_deref() {
+fn uncommitted_work_keep_reason(t: &TaskState) -> Determination<Option<String>> {
+    match t.worktree.as_deref() {
         Some(wt) => match worktree::is_dirty(Path::new(wt)) {
             Ok(true) => Determination::Known(Some(format!(
                 "worktree {wt} has uncommitted changes — abandoning would clear the \
@@ -1601,10 +1636,6 @@ fn uncommitted_work_keep_reason(t: &TaskState) -> Option<String> {
             "cannot determine whether this task holds uncommitted work — no worktree \
              is recorded for it",
         ),
-    };
-    match observed {
-        Determination::Known(keep) => keep,
-        Determination::Undetermined(why) => Some(why.as_str().to_string()),
     }
 }
 
@@ -4530,13 +4561,21 @@ mod tests {
     #[test]
     fn uncommitted_work_keep_reason_keeps_a_task_with_no_worktree() {
         let t = running_task("serial-task", None, Some(now_secs()));
-        let reason = uncommitted_work_keep_reason(&t);
+        // Sharpened from `is_some()` (backlog d65110df): the reading must be
+        // `Undetermined`, not merely "some keep reason" — an observed-dirty
+        // `Known(Some(_))` would also keep the task but would let the scan
+        // report itself clean (exit 0).
+        let observed = uncommitted_work_keep_reason(&t);
         assert!(
-            reason.is_some(),
+            matches!(observed, Determination::Undetermined(_)),
             "a task with no worktree gives the veto nothing to read; that is \
-             cannot-determine and must KEEP the task, not permit the abandon"
+             cannot-determine (Undetermined) and must KEEP the task AND mark the \
+             scan not clean — got {observed:?}"
         );
-        let reason = reason.unwrap_or_default();
+        let reason = match observed {
+            Determination::Undetermined(why) => why.as_str().to_string(),
+            Determination::Known(_) => String::new(),
+        };
         assert!(
             reason.contains("cannot determine"),
             "the kept task's reason is what the human is told on stderr, so it \
@@ -4555,7 +4594,7 @@ mod tests {
         let t = running_task("clean", Some(&wt), Some(now_secs()));
         assert_eq!(
             uncommitted_work_keep_reason(&t),
-            None,
+            Determination::Known(None),
             "a worktree OBSERVED clean has nothing to orphan and is the one \
              reading that lets the bulk abandon proceed"
         );

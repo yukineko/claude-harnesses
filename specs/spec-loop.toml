@@ -135,7 +135,7 @@ specforge へ戻す。人間ゲートは condukt policy answer 経由にして�
 """
 acceptance = [
   "open_questions が出た task について、flow が condukt 実装フェーズへ進まず specforge draft を起動する",
-  "divert の可否は `condukt policy answer`（risk medium / reversible high / confidence low）を通り、`condukt policy answers` に記録が残る。素の AskUserQuestion は使わない",
+  "divert の可否は `condukt policy answer`（risk medium / reversible high / confidence low）を通り、`condukt policy answers` に記録が残る。素の AskUserQuestion は使わない。この divert は権限認可ではなく**判断要求**であり `--approval` を付けない（2026-10-04 ユーザー裁定、backlog 60b1e065）。したがって既定 verdict は escalate で、escalate も journal されるので記録は残る（crates/condukt/tests/backlog_f8240219.rs）",
   "verdict=undetermined（R3）では divert しない",
   "divert 後に ratify が通れば、その spec 由来の項目が backlog に現れ、flow が次の周回でそれを拾う（R0 の停止基準がここで効く）",
 ]

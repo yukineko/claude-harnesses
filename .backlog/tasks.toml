@@ -12539,3 +12539,83 @@ weight = 0.0
 issue_number = 1282
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1282"
 rev = 0
+
+[[task]]
+id = "22e03c5c"
+title = "crates/overwatch/src/observed_close.rs: gate behaviour has no docs/specs doc (acked to unblock push 2026-10-04)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Acked in .specguard/spec-doc-acks.toml (commit 98312703) to unblock push; fix = write the docs/specs section and move the entry to spec-docs.toml."
+created_at = 1791048186
+updated_at = 1791048186
+weight = 0.0
+issue_number = 1283
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1283"
+rev = 0
+
+[[task]]
+id = "a24ffa82"
+title = "crates/overwatch/src/review_ruling.rs: gate behaviour has no docs/specs doc (acked to unblock push 2026-10-04)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Acked in .specguard/spec-doc-acks.toml (commit 98312703) to unblock push; fix = write the docs/specs section and move the entry to spec-docs.toml."
+created_at = 1791048189
+updated_at = 1791048189
+weight = 0.0
+issue_number = 1284
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1284"
+rev = 0
+
+[[task]]
+id = "55965e08"
+title = "crates/specguard/src/observed.rs: gate behaviour has no docs/specs doc (acked to unblock push 2026-10-04)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Acked in .specguard/spec-doc-acks.toml (commit 98312703) to unblock push; fix = write the docs/specs section and move the entry to spec-docs.toml."
+created_at = 1791048191
+updated_at = 1791048191
+weight = 0.0
+issue_number = 1285
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1285"
+rev = 0
+
+[[task]]
+id = "f58cb6fa"
+title = "crates/specguard/src/reconcile.rs: gate behaviour has no docs/specs doc (acked to unblock push 2026-10-04)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Acked in .specguard/spec-doc-acks.toml (commit 98312703) to unblock push; fix = write the docs/specs section and move the entry to spec-docs.toml."
+created_at = 1791048193
+updated_at = 1791048193
+weight = 0.0
+issue_number = 1286
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1286"
+rev = 0
+
+[[task]]
+id = "c1e9aa3f"
+title = "crates/stuckguard/src/fault_injection_tests.rs: gate behaviour has no docs/specs doc (acked to unblock push 2026-10-04)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Acked in .specguard/spec-doc-acks.toml (commit 98312703) to unblock push; fix = write the docs/specs section and move the entry to spec-docs.toml."
+created_at = 1791048195
+updated_at = 1791048195
+weight = 0.0
+issue_number = 1287
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1287"
+rev = 0

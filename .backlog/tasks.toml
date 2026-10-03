@@ -9307,3 +9307,33 @@ updated_at = 1790986949
 weight = 0.0
 issue_number = 1121
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1121"
+
+[[task]]
+id = "f10382f2"
+title = "check-test-weakening: default base origin/main is stale, so assertion removals in files newer than origin/main are invisible to the commit-msg hook (seen on 1e6f00ae: 4 unacked removals passed)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1790987689
+updated_at = 1790987689
+weight = 0.0
+issue_number = 1122
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1122"
+
+[[task]]
+id = "9bffff37"
+title = "primary_tree: a hand-forged gitfile in a primary subdir pointing at an existing worktree gitdir classifies as Linked and allows store writes — decide whether in scope"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1790987690
+updated_at = 1790987690
+weight = 0.0
+issue_number = 1123
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1123"

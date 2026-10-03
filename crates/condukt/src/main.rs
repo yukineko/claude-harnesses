@@ -19,6 +19,7 @@ mod diffrisk_record;
 mod editgate;
 mod env_lock;
 mod escalate;
+mod finding_reconcile;
 mod gate_exec;
 mod gatelog;
 mod hooks;
@@ -1765,6 +1766,18 @@ enum GateAction {
         #[arg(long)]
         task: String,
     },
+    /// Close condukt-gate review findings (`gate-exec:<run>:<task>`) by
+    /// OBSERVING the run state (never by commit message): a terminal task
+    /// (done|verified|cancelled|discarded) closes with the non-human verdict
+    /// `resolved`; pending/running/failed stay open; unreadable state or a
+    /// missing task is undetermined (open); an absent run state closes only
+    /// after its absence has been observed for 30 days. Exit 0, or 3 when any
+    /// finding is undetermined (`NOT closed <id>: <why>` on stderr).
+    ReconcileFindings {
+        /// Print `{"resolved":[..],"undetermined":[{"finding_id","why"}]}`.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2302,6 +2315,9 @@ fn run_user(cmd: Command) -> Result<()> {
                 // escalate). Exit directly so a caller can branch on the status.
                 let code = gate_exec::run_gate_check(&cfg, &cwd, &run, &task);
                 std::process::exit(code);
+            }
+            GateAction::ReconcileFindings { json } => {
+                std::process::exit(finding_reconcile::run_cli(&cfg, &cwd, json));
             }
         },
         Command::Guard { action } => match action {

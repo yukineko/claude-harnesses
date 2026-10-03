@@ -508,17 +508,18 @@ def render(dims, now, escalated, escalation_note):
     return "\n".join(lines)
 
 
-def already_open(finding_id):
-    """Is this finding already unresolved on the queue?
+def open_queue_ids():
+    """The identifiers currently OPEN on the review queue, as a set.
 
     Delegates "open" to overwatch rather than re-deriving it from the raw
     ledgers: `record-finding` is a plain append, so a daily re-record of an
     unchanged condition would otherwise stack a duplicate row every day and bury
     the surface this job exists to keep readable.
 
-    Returns True / False / None, where None means the queue could not be read.
-    The caller does NOT record on None: appending on an unreadable queue is the
-    duplicate-stacking failure with no evidence it was needed.
+    Returns None when the queue could not be read. None is never an empty set:
+    the caller does NOT record on None (appending on an unreadable queue is the
+    duplicate-stacking failure with no evidence it was needed) and does NOT
+    close on None (an unread queue is not one with nothing to close).
     """
     try:
         rows = _run_json(["overwatch", "review-queue", "--json"], cwd=_store_cwd())
@@ -526,30 +527,126 @@ def already_open(finding_id):
         return None
     if not isinstance(rows, list):
         return None
-    return any(r.get("identifier") == finding_id for r in rows)
+    return {r.get("identifier") for r in rows if isinstance(r, dict)}
 
 
-def escalate(dims, dry_run):
-    """Record each breach onto the review queue. Returns (ids, note)."""
+def already_open(finding_id):
+    """Is this finding already unresolved on the queue? True / False / None
+    (None = the queue could not be read; see `open_queue_ids`)."""
+    ids = open_queue_ids()
+    if ids is None:
+        return None
+    return finding_id in ids
+
+
+# --- episodes (backlog 89544915) ------------------------------------------
+# A finding id carries an EPISODE: `record-audit:<dim>:<first-breach epoch>`.
+# The review queue joins dispositions on the exact id, so without an episode a
+# re-breach after the finding was closed would re-record the SAME id and stay
+# hidden behind the old disposition. The open episode of each dimension is
+# persisted here; it is cleared when the dimension is measured ok again (or
+# its finding is found closed), so the next breach starts a new, visible one.
+def episodes_path():
+    return os.path.join(os.path.dirname(observation_path()), "episodes.json")
+
+
+def load_episodes():
+    """`{dim: first_breach_epoch}`, or None when the file exists but cannot be
+    read/decoded (None is never "no episodes": guessing would mint a fresh id
+    for a still-open episode and duplicate its finding)."""
+    path = episodes_path()
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or not all(
+        isinstance(k, str) and isinstance(v, int) for k, v in data.items()
+    ):
+        return None
+    return data
+
+
+def save_episodes(episodes):
+    """Returns None on success or a reason string on failure."""
+    path = episodes_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f"{path}.tmp.{os.getpid()}"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(episodes, fh)
+        os.replace(tmp, path)
+    except OSError as e:
+        return f"could not write the episode state {path}: {e}"
+    return None
+
+
+def legacy_id(dim_key):
+    """The pre-episode id shape, still present on live ledgers."""
+    return f"{FINDING_SOURCE}:{dim_key}"
+
+
+def ids_for_dim(dim_key, ids):
+    """Every id in `ids` that belongs to `dim_key`: the legacy episode-less id
+    and every `record-audit:<dim>:<epoch>` episode id."""
+    legacy = legacy_id(dim_key)
+    prefix = legacy + ":"
+    return sorted(
+        i for i in ids
+        if isinstance(i, str)
+        and (i == legacy or (i.startswith(prefix) and i[len(prefix):].isdigit()))
+    )
+
+
+def escalate(dims, dry_run, now=None):
+    """Record each breach onto the review queue. Returns (ids, note).
+
+    The id carries the dimension's open EPISODE (see above): a still-open
+    episode is not re-recorded; a breach with no open episode starts one at
+    `now` and persists it. A breach whose episode state cannot be read is not
+    recorded (its id cannot be known) — `main` turns that into exit 2 via
+    `episode_consistency`.
+    """
     recorded, skipped, failures = [], [], []
+    now = int(time.time()) if now is None else now
+    episodes = None
+    episodes_loaded = False
+    dirty = False
     for d in dims:
         if d.state != "breach":
             continue
-        finding_id = f"{FINDING_SOURCE}:{d.key}"
         summary = (
             f"record freshness: {d.key} at {d.m.value} exceeds threshold "
             f"{d.threshold} — {d.title}"
         )
         if dry_run:
-            recorded.append(finding_id + " (dry-run)")
+            recorded.append(f"{legacy_id(d.key)}:<episode> (dry-run)")
             continue
-        open_already = already_open(finding_id)
+        if not episodes_loaded:
+            episodes, episodes_loaded = load_episodes(), True
+        if episodes is None:
+            failures.append(
+                f"{legacy_id(d.key)} (episode state {episodes_path()} unreadable; not "
+                "recorded, since the open episode's id cannot be known)"
+            )
+            continue
+        # The id that would already be open for this dimension, if any: its
+        # persisted episode, else (pre-episode ledgers) the legacy id.
+        current = (
+            f"{legacy_id(d.key)}:{episodes[d.key]}" if d.key in episodes else legacy_id(d.key)
+        )
+        open_already = already_open(current)
         if open_already is None:
-            failures.append(f"{finding_id} (review-queue unreadable; not recorded)")
+            failures.append(f"{current} (review-queue unreadable; not recorded)")
             continue
         if open_already:
-            skipped.append(finding_id)
+            skipped.append(current)
             continue
+        # Nothing open for this breach (never recorded, or closed while the
+        # breach persisted): a new, visible episode.
+        finding_id = f"{legacy_id(d.key)}:{now}"
         rc, out, err = _run([
             "overwatch", "record-finding",
             "--finding-id", finding_id,
@@ -564,6 +661,13 @@ def escalate(dims, dry_run):
             failures.append(f"{finding_id} (record-finding exited {rc}: {err.strip()[:120]})")
         else:
             recorded.append(finding_id)
+            episodes[d.key] = now
+            dirty = True
+
+    if dirty:
+        why = save_episodes(episodes)
+        if why:
+            failures.append(why)
 
     note = ""
     if skipped:
@@ -571,6 +675,138 @@ def escalate(dims, dry_run):
     if failures:
         note = (note + "; " if note else "") + "COULD NOT RECORD: " + "; ".join(failures)
     return recorded, note
+
+
+def episode_consistency(dims, escalated):
+    """Lines describing a breach whose episode is NOT consistently persisted
+    (empty when consistent). Observed from the episode file itself rather than
+    trusted from `escalate`'s return: a recorded episode id that the state
+    does not hold would make the next run mint a second id for the same
+    breach."""
+    breached = [d.key for d in dims if d.state == "breach"]
+    if not breached:
+        return []
+    episodes = load_episodes()
+    if episodes is None:
+        return [
+            f"record-audit: episode state {episodes_path()} is unreadable; breach "
+            f"episodes for {', '.join(breached)} cannot be tracked"
+        ]
+    out = []
+    for fid in escalated:
+        head, _, epoch = fid.rpartition(":")
+        if not epoch.isdigit() or not head.startswith(FINDING_SOURCE + ":"):
+            continue
+        dim = head[len(FINDING_SOURCE) + 1:]
+        if episodes.get(dim) != int(epoch):
+            out.append(
+                f"record-audit: recorded {fid} but its episode is not persisted in "
+                f"{episodes_path()}; the next run may duplicate it"
+            )
+    return out
+
+
+RESOLVE_REVIEWER = "record-audit"
+RESOLVE_OBSERVED_SOURCE = "scripts/record-audit.py measurement"
+
+
+def resolve(dims, dry_run, now=None, rev=None):
+    """Close open `record-audit:` findings by OBSERVATION (backlog 89544915).
+
+    A finding closes only when THIS run measured its dimension, successfully,
+    as `ok`: the verdict is `resolved` (the automated, non-human verdict), with
+    the measured value as evidence. A breached dimension closes nothing; an
+    unmeasurable one closes nothing and says so; an unreadable queue closes
+    nothing and says so. Never by commit message, never because a probe went
+    quiet.
+
+    Returns (resolved_ids, not_closed_lines). Any `not_closed` line makes the
+    run exit 2.
+    """
+    resolved, not_closed = [], []
+    if dry_run:
+        return resolved, not_closed
+    open_ids = open_queue_ids()
+    if open_ids is None:
+        not_closed.append(
+            "record-audit: NOT closed: the review queue could not be read, so no "
+            "record-audit finding could be judged"
+        )
+        return resolved, not_closed
+    now = int(time.time()) if now is None else now
+    episodes = load_episodes()
+    if episodes is None:
+        not_closed.append(
+            f"record-audit: NOT closed (episode state): {episodes_path()} is unreadable, "
+            "so closed episodes cannot be cleared"
+        )
+    episodes_dirty = False
+    for d in dims:
+        targets = ids_for_dim(d.key, open_ids)
+        if d.state == "undetermined":
+            for fid in targets:
+                not_closed.append(
+                    f"record-audit: NOT closed {fid}: dimension {d.key} could not be "
+                    f"measured ({d.m.why})"
+                )
+            continue
+        if d.state != "ok":
+            continue
+        all_closed = True
+        for fid in targets:
+            evidence = (
+                f"{d.key} measured ok at {now}"
+                + (f" (rev {rev})" if rev else "")
+                + f": value {d.m.value} within threshold {d.threshold}"
+            )
+            try:
+                rc, out, err = _run([
+                    "overwatch", "record-disposition",
+                    "--finding-id", fid,
+                    "--verdict", "resolved",
+                    "--reviewer", RESOLVE_REVIEWER,
+                    "--evidence", evidence,
+                    "--observed-source", RESOLVE_OBSERVED_SOURCE,
+                ], cwd=_store_cwd())
+            except RuntimeError as e:
+                not_closed.append(f"record-audit: NOT closed {fid}: {e}")
+                all_closed = False
+                continue
+            if rc != 0:
+                tail = (err or out).strip().splitlines()
+                not_closed.append(
+                    f"record-audit: NOT closed {fid}: record-disposition exited {rc}"
+                    + (f": {tail[-1][:160]}" if tail else "")
+                )
+                all_closed = False
+                continue
+            # `record-disposition` reports a failed store write as
+            # `recorded:false` on stdout; a first-writer-wins no-op as
+            # `written:false` (closed, but not by us).
+            try:
+                reply = json.loads(out) if out.strip() else {}
+            except ValueError:
+                reply = {}
+            if isinstance(reply, dict) and reply.get("recorded") is False:
+                not_closed.append(
+                    f"record-audit: NOT closed {fid}: record-disposition did not persist "
+                    f"({reply.get('reason')})"
+                )
+                all_closed = False
+                continue
+            if isinstance(reply, dict) and reply.get("written") is False:
+                continue
+            resolved.append(fid)
+        if all_closed and episodes is not None and d.key in episodes:
+            del episodes[d.key]
+            episodes_dirty = True
+    if episodes_dirty:
+        why = save_episodes(episodes)
+        if why:
+            # The closed episode would be reused by the next breach, hiding it
+            # behind this run's disposition.
+            not_closed.append(f"record-audit: NOT closed (episode not cleared): {why}")
+    return resolved, not_closed
 
 
 def observation_path():
@@ -648,22 +884,31 @@ def main(argv=None):
     }
 
     dims = collect(now, thresholds)
+    rev = _head_rev()
 
+    resolved, not_closed, episode_problems = [], [], []
     if args.no_escalate:
         escalated, esc_note = [], "escalation suppressed (--no-escalate)"
     else:
-        escalated, esc_note = escalate(dims, args.dry_run)
+        escalated, esc_note = escalate(dims, args.dry_run, now=now)
+        if not args.dry_run:
+            episode_problems = episode_consistency(dims, escalated)
+        resolved, not_closed = resolve(dims, args.dry_run, now=now, rev=rev)
+    for line in episode_problems + not_closed:
+        print(line, file=sys.stderr)
 
     breaches = [d.key for d in dims if d.state == "breach"]
     undetermined = [d.key for d in dims if d.state == "undetermined"]
 
     record = {
         "ts": now,
-        "rev": _head_rev(),
+        "rev": rev,
         "dimensions": [d.as_dict() for d in dims],
         "breached": breaches,
         "undetermined": undetermined,
         "escalated": escalated,
+        "resolved": resolved,
+        "not_closed": not_closed + episode_problems,
     }
     write_err = None
     if not args.dry_run and not args.no_escalate:
@@ -677,12 +922,16 @@ def main(argv=None):
         note = esc_note
         if write_err:
             note = (note + "; " if note else "") + write_err
+        if resolved:
+            note = (note + "; " if note else "") + "resolved by observation: " + ", ".join(resolved)
         print(render(dims, now, escalated, note))
 
     # A failed observation write is itself undetermined territory: the run
     # happened but left no record, so the trend this job exists to produce has a
     # hole in it. Resolve to the restrictive side.
-    if undetermined or write_err:
+    # A finding that could not be judged/closed, or a breach whose episode
+    # could not be recorded consistently, is undetermined too.
+    if undetermined or write_err or not_closed or episode_problems:
         return 2
     return 1 if breaches else 0
 

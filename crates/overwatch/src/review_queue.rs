@@ -1080,6 +1080,8 @@ mod tests {
             verdict: DispositionVerdict::Dismissed,
             reviewer: "t".to_string(),
             resolved_ts: 40,
+            evidence: None,
+            observed_source: None,
         };
         let kept: Vec<String> = exclude_dispositioned(vec![closed, recurred, other], &[disp])
             .into_iter()

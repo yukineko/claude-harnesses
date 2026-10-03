@@ -305,7 +305,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.201"
+version = "0.7.202"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -859,7 +859,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "overwatch"
-version = "0.2.54"
+version = "0.2.55"
 dependencies = [
  "anyhow",
  "clap",
@@ -1282,7 +1282,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "specguard"
-version = "0.2.78"
+version = "0.2.79"
 dependencies = [
  "anyhow",
  "blastguard",

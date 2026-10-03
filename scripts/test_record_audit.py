@@ -50,6 +50,7 @@ class _Patched(unittest.TestCase):
     def setUp(self):
         self._saved = {name: getattr(ra, name) for name in self.PROBES}
         self._saved["escalate"] = ra.escalate
+        self._saved["resolve"] = ra.resolve
         self._saved["_head_rev"] = ra._head_rev
         # Clean by default, so any failure in a case is caused by what that case
         # changed rather than inherited from the real repo.
@@ -58,7 +59,11 @@ class _Patched(unittest.TestCase):
         ra.measure_open_review_queue = lambda: M(0)
         ra.measure_stale_undisposed = lambda: M(0)
         ra.measure_backlog_rot = lambda now, stale_days: M(0)
-        ra.escalate = lambda dims, dry_run: ([], "")
+        ra.escalate = lambda dims, dry_run, now=None: ([], "")
+        # The resolve step shells out to the REAL overwatch (it would close
+        # findings on the live ledger); these cases measure the exit/ledger
+        # contract only. Its own contract is test_record_audit_resolve.py.
+        ra.resolve = lambda dims, dry_run, now=None, rev=None: ([], [])
         ra._head_rev = lambda: "testrev"
         self._tmp = tempfile.TemporaryDirectory()
         self._saved_env = os.environ.get("RECORD_AUDIT_STATE_DIR")
@@ -469,10 +474,20 @@ class Escalation(unittest.TestCase):
         self._saved_run = ra._run
         self._saved_open = ra.already_open
         self.calls = []
+        # escalate() now reads/writes the episode state (backlog 89544915);
+        # keep it off the real ~/.record-audit.
+        self._tmp = tempfile.TemporaryDirectory()
+        self._saved_env = os.environ.get("RECORD_AUDIT_STATE_DIR")
+        os.environ["RECORD_AUDIT_STATE_DIR"] = self._tmp.name
 
     def tearDown(self):
         ra._run = self._saved_run
         ra.already_open = self._saved_open
+        if self._saved_env is None:
+            os.environ.pop("RECORD_AUDIT_STATE_DIR", None)
+        else:
+            os.environ["RECORD_AUDIT_STATE_DIR"] = self._saved_env
+        self._tmp.cleanup()
 
     def _dims(self):
         return [ra.Dimension("audit-convergence", "t", M(0), 1, True, "high")]
@@ -486,8 +501,11 @@ class Escalation(unittest.TestCase):
     def test_a_breach_is_recorded_to_the_review_queue(self):
         ra.already_open = lambda fid: False
         self._record_stub()
-        ids, note = ra.escalate(self._dims(), dry_run=False)
-        self.assertEqual(ids, ["record-audit:audit-convergence"], note)
+        ids, note = ra.escalate(self._dims(), dry_run=False, now=NOW)
+        # Backlog 89544915 (user ruling): the id carries the breach EPISODE
+        # (`record-audit:<dim>:<first-breach --now>`) so a re-breach after a
+        # closure is a new, visible finding.
+        self.assertEqual(ids, [f"record-audit:audit-convergence:{NOW}"], note)
         self.assertEqual(len(self.calls), 1)
         self.assertIn("record-finding", self.calls[0])
         self.assertIn("--verdict", self.calls[0])

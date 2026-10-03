@@ -46,6 +46,8 @@ mod state;
 mod status;
 mod store;
 mod subagent_stop;
+#[cfg(test)]
+mod verifier_f7a0cadc;
 mod verify;
 mod worktree;
 mod wt_reap;

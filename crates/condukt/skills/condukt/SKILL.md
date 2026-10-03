@@ -1044,7 +1044,9 @@ snippet を打つのではなく **condukt バイナリが決定論的に発火�
    # 慣習通りでなくても取りこぼさない。agentId が引けない/gauge にデータが無い場合は condukt 側が
    # 手で渡した --cost にフォールバックし、それも無ければ **未計測** として fugu-router record の
    # --cost を省略する (0 を捏造しない — backlog 55fb3861)。**コストが分からないのに --cost 0 を
-   # 渡さない**: 明示した 0 は「計測値 0」として素通しで転送される。
+   # 渡さない**: condukt は明示した 0 をそのまま `--cost 0` として転送するが、fugu-router >= 0.1.41
+   # は保存された 0 を duration と同じく **未計測** として読み戻す。したがって本当に $0 だった
+   # コストを「計測値 0」として記録する手段は無い (0 は常に未計測扱い)。
    condukt state set --run "$RID" --task "<t.id>" --status verified \
      --model <worker に使ったモデル> --agent-id "<Task tool が返した agentId>"
    # fail 時も同様に --status failed --model <試したモデル> --agent-id <同上> を残す (失敗も学習信号)
@@ -1066,7 +1068,8 @@ snippet を打つのではなく **condukt バイナリが決定論的に発火�
    `--model` を省略すると decomposition の `suggested_model` にフォールバックし、`--agent-id`/`--cost`
    の省略は unchanged (未設定のまま) になる。**agent-id 経由の実コスト解決には gauge >= 0.3.0
    (`gauge subagents --json` に `agent_id`/`cost_usd` が乗っている版) が必要**。それ未満、または
-   agentId が解決できない場合は `--cost` に渡した値がそのまま記録され、`--cost` も無ければ
+   agentId が解決できない場合は `--cost` に渡した値がそのまま転送され (ただし 0 は fugu-router
+   >= 0.1.41 で未計測として読み戻される)、`--cost` も無ければ
    fugu-router には **未計測** (`--cost` 省略、fugu-router >= 0.1.41 で cost の集計から除外) として記録される。
 
    **verifier 側も対になる形で記録する** (計測専用。route.rs/decide_bandit 等の自動ルーティング

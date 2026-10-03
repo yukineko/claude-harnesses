@@ -284,6 +284,9 @@ fn a_file_only_a_stale_session_claims_stays_in_the_audit_set() {
     let tmp = Tmp::new("endtoend");
     let projects = tmp.path().join("projects");
     let repo = tmp.path().join("repo");
+    // project_key canonicalizes only paths that EXIST; create the repo first so the
+    // fixture and the lookup hash the same (canonical) path.
+    std::fs::create_dir_all(&repo).unwrap();
     // Re-anchored (design D): both peers are registered live; only the 48h-old
     // transcript distinguishes them, preserving this test's window property.
     let _live = LiveRegistry::with(&[&repo], &["peer-fresh", "peer-stale"]);
@@ -336,6 +339,8 @@ fn a_file_only_a_stale_session_claims_stays_in_the_audit_set() {
 fn peers_are_only_read_from_a_real_projects_root() {
     let tmp = Tmp::new("root");
     let repo = tmp.path().join("repo");
+    // project_key canonicalizes only paths that EXIST; create the repo first.
+    std::fs::create_dir_all(&repo).unwrap();
     // Re-anchored (design D): "peer" is a live registered session in both layouts.
     let _live = LiveRegistry::with(&[&repo], &["peer"]);
     let their_file = touch(&repo, "theirs.rs");

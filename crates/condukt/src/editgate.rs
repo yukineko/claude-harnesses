@@ -11,8 +11,9 @@
 //! is rejected). It never panics and never unwraps on an error path; blocking
 //! an edit on an undetermined verdict is the gate working, not a broken turn.
 //!
-//! The public items here are consumed by the PostToolUse hook subcommand added
-//! in the follow-up task; until then they are exercised only by unit tests.
+//! `check_edit` is consumed by the `condukt editgate` PostToolUse hook
+//! (main.rs `run_editgate`), which prints the verdict's `reason` followed by
+//! its `diagnostics` as the block reason the operator sees.
 #![allow(dead_code)]
 
 use std::path::Path;
@@ -551,9 +552,13 @@ src/lib.rs:3:5: \x1b[1m\x1b[91merror[E0308]\x1b[0m: mismatched types
         );
     }
 
-    /// The spawn-failure `reason` is the only thing the operator sees. It must
-    /// name `cargo`, say the compile gate could not be determined, and ask for
-    /// cargo to be installed/made available. Stable substrings only.
+    /// The spawn-failure `reason` is what the operator sees: `condukt editgate`
+    /// leads its block line with the verdict's `reason` (main.rs
+    /// `editgate_block_reason`), and a spawn failure has no diagnostics to
+    /// follow it. It must name `cargo`, say the compile gate could not be
+    /// determined, and ask for cargo to be installed/made available. Stable
+    /// substrings only. The binary-level observation is
+    /// tests/editgate_hook_reason_f7a0cadc.rs.
     #[test]
     fn spawn_failure_reason_names_cargo_and_demands_it_be_installed() {
         let bogus_dir =

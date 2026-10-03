@@ -1894,14 +1894,48 @@ fn run_hook<F: FnOnce() + std::panic::UnwindSafe>(f: F) -> ! {
     std::process::exit(0);
 }
 
+/// The text the operator sees when the edit gate blocks: the verdict's `reason`
+/// (WHY it rejected — compile errors, toolchain unresolvable, cargo
+/// unspawnable), then `cargo check`'s diagnostics on the following lines when
+/// there are any. It used to be the diagnostics alone, falling back to "edit
+/// left the crate not compiling (see cargo check)" — so a `cargo` missing from
+/// PATH was reported to the operator as a compile failure (backlog f7a0cadc).
+/// A verdict without a readable `reason` is a producer malfunction and says so;
+/// it does not claim anything about whether the crate compiles.
+fn editgate_block_reason(verdict: &serde_json::Value) -> String {
+    let reason = verdict
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(
+            "condukt editgate rejected this edit, but its verdict carried no reason; \
+             whether the edit compiles was not established",
+        );
+    match verdict
+        .get("diagnostics")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        Some(diag) => format!("{reason}\n{diag}"),
+        None => reason.to_string(),
+    }
+}
+
 /// PostToolUse edit-time compile gate. Reads a PostToolUse payload from stdin,
-/// and — only for an Edit/Write/MultiEdit to a Rust file inside a live condukt
-/// worktree that a real (non-fallback) `cargo check` finds broken — prints one
-/// line of JSON `{"decision":"block","reason":<diagnostics>}` so the worker
-/// fixes it in the same turn. Every other path (non-edit tool, no file, non-Rust
-/// file, out-of-worktree edit, clean build, fallback, empty/invalid stdin, or
-/// any error) prints nothing. Called under [`run_hook`], so it exits 0 and a
-/// panic is swallowed — it can never break a turn.
+/// and — for an Edit/Write/MultiEdit to a Rust file inside a live condukt
+/// worktree whose verdict `state::enforce_edit_gate` rejects (a failed
+/// `cargo check`, or one that could not run: cargo unspawnable, toolchain
+/// unresolvable) — prints one line of JSON
+/// `{"decision":"block","reason":<verdict reason, then diagnostics>}` (see
+/// [`editgate_block_reason`]) so the worker fixes it in the same turn. It also
+/// blocks, with a stated reason, when the project's run state cannot be
+/// located. Out-of-scope paths (non-edit tool, no file, non-Rust file,
+/// out-of-worktree edit), a clean build, and empty/invalid stdin print nothing.
+/// Called under [`run_hook`], so the process exits 0 — exit status is not this
+/// hook's verdict channel; the printed block line is. Note that `run_hook`
+/// swallows a panic, and a panic before the block line is printed therefore
+/// leaves stdout empty, which the harness reads as "no block": that path is
+/// NOT fail-closed today.
 fn run_editgate() {
     // Parse the PostToolUse payload; empty/invalid stdin → stay silent.
     let input = match harness_core::hook::HookInput::parse(&read_stdin()) {
@@ -1954,12 +1988,8 @@ fn run_editgate() {
     // BLOCK enforcement: only a real (non-fallback) broken verdict rejects.
     let verdict = editgate::check_edit(&file_path, wt.as_deref(), true);
     if let state::EditGateDecision::Reject = state::enforce_edit_gate(&verdict) {
-        let reason = verdict
-            .get("diagnostics")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .unwrap_or("edit left the crate not compiling (see cargo check)");
-        let out = serde_json::json!({ "decision": "block", "reason": reason });
+        let out =
+            serde_json::json!({ "decision": "block", "reason": editgate_block_reason(&verdict) });
         if let Ok(line) = serde_json::to_string(&out) {
             println!("{line}");
         }

@@ -3556,13 +3556,15 @@ the live ledger」(cg injector dedup env-session の件)。
 実際この 5 本目は、手で 2 回まわした測定では 2 回とも見えず、
 ゲート (scripts/check-workspace-tests.py) の初回実行で初めて見えた。
 
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/condukt/src/diffrisk_record.rs (mod backlog_e494a8a3) (rev 596108b9): every_invocation_is_journaled test journals into the real HOME state root.'''
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/condukt/src/diffrisk_record.rs (mod backlog_e494a8a3) (rev 596108b9): every_invocation_is_journaled test journals into the real HOME state root.
+
+[2026-10-03, session 64554c4d] Observed failing in 3 of 3 full `cargo test -p condukt` runs on macOS at 82ee4a78 baseline and on branch fix/run-20261003-141339-41881/abba6f0d (left: 1 right: 2, one record per invocation), passing when run alone. Deterministic in full runs on this host, not intermittent.'''
 created_at = 1789057581
-updated_at = 1790983143
+updated_at = 1791008104
 weight = 0.0
 issue_number = 502
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/502"
-rev = 0
+rev = 1
 
 [[task]]
 id = "49a457c8"
@@ -11406,4 +11408,99 @@ updated_at = 1791005259
 weight = 0.0
 issue_number = 1144
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1144"
+rev = 0
+
+[[task]]
+id = "a2c171dd"
+title = "stuckguard backlog_c397cd15 heartbeat test mutates HOME and PATH without the module ENV_LOCK"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "test-flake",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Seen 2026-10-03 by the abba6f0d worker (run-20261003-141339-41881, commit 43780aa1 un-ignored it). crates/stuckguard/src/anchor.rs backlog_c397cd15::heartbeat_reaches_overwatch_that_is_only_in_the_plugin_cache sets HOME and PATH without taking the module ENV_LOCK used by the with_env tests, so it can race them under the parallel test runner. Passed in all observed runs; not reproduced as a failure. Verify by running cargo test -p stuckguard many times with --test-threads high, or read the lock usage."
+created_at = 1791006066
+updated_at = 1791006066
+weight = 0.0
+issue_number = 1145
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1145"
+rev = 0
+
+[[task]]
+id = "966da0dd"
+title = "cargo fmt -p backlog --check fails on crates/backlog/src/lib.rs (empty file wants a trailing newline)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fmt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Seen 2026-10-03 by the abba6f0d worker on its worktree (base 82ee4a78): cargo fmt -p backlog -- --check reports a diff in crates/backlog/src/lib.rs, which is empty. Not touched by that task. Check whether lib.rs is meant to exist at all."
+created_at = 1791006067
+updated_at = 1791006067
+weight = 0.0
+issue_number = 1146
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1146"
+rev = 0
+
+[[task]]
+id = "bf6b1aba"
+title = "fugu-router budget under_pressure reads a budgetguard spawn error, non-zero exit or unparseable status --json as no pressure"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Seen 2026-10-03 by the abba6f0d implementer (run-20261003-141339-41881, branch fix/run-20261003-141339-41881/abba6f0d commit 27824792), read not tested. crates/fugu-router/src/budget.rs: after abba6f0d the lookup Undetermined arm returns true (pressure), but once budgetguard is found, a spawn failure, non-zero exit or unparseable output still returns false = full-price routing (the permissive side). parse_pressure tests pin unparseable as no pressure. Readings: (a) fail-open per CLAUDE.md 3; (b) intended - budget is advisory. Check whether any consumer treats routing as a gate."
+created_at = 1791008100
+updated_at = 1791008100
+weight = 0.0
+issue_number = 1148
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1148"
+rev = 0
+
+[[task]]
+id = "18ebbfe6"
+title = "condukt state parse_agent_cost / parse_agent_tokens treat malformed gauge JSON as no matching id, so broken gauge output becomes no data and the manual cost is recorded"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Seen 2026-10-03 by the abba6f0d implementer (run-20261003-141339-41881, branch fix/run-20261003-141339-41881/abba6f0d commit 27824792), read not tested. crates/condukt/src/state.rs: resolve_agent_cost/tokens now return Determination<Option<..>> and lookup/spawn/exit failures are Undetermined (episode not recorded), but parse_agent_cost/parse_agent_tokens still map malformed JSON to None (= no data). Also record_runs uses s.verifier_cost_usd.unwrap_or(0.0), which can record a 0.0 verifier cost when none is known."
+created_at = 1791008101
+updated_at = 1791008101
+weight = 0.0
+issue_number = 1149
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1149"
+rev = 0
+
+[[task]]
+id = "5578f97b"
+title = "overwatch bridge returns existing health (possibly AllRead, exit 0) when backlog is absent even with items to bridge"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Seen 2026-10-03 by the abba6f0d implementer (run-20261003-141339-41881, branch fix/run-20261003-141339-41881/abba6f0d commit 27824792), read not tested. crates/overwatch/src/bridge.rs: Known(None) for the backlog binary skips the bridge and the run keeps its prior health; JSON says skipped: backlog-unavailable but exit can be 0 with unbridged items. Readings: (a) absent backlog with pending items should not read as clean; (b) intended: overwatch works without backlog installed."
+created_at = 1791008102
+updated_at = 1791008102
+weight = 0.0
+issue_number = 1150
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1150"
 rev = 0

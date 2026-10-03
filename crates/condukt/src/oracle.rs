@@ -132,6 +132,23 @@ pub fn check_oracle(
     task_id: &str,
     run_dir: &Path,
 ) -> serde_json::Value {
+    check_oracle_with(requires_oracle, task_id, run_dir, || {
+        harness_core::plugin_bin::resolve("tdd")
+    })
+}
+
+/// [`check_oracle`] with the `tdd` lookup injected. Production always passes
+/// [`harness_core::plugin_bin::resolve`]; the seam exists so a test can pin
+/// which `tdd` is consulted without depending on process-global `$HOME`
+/// (plugin cache) or `$PATH`, which sibling tests swap in-process (backlog
+/// c63f1c23). The resolver is called only for a fix/feature task, exactly
+/// where `check_oracle` consults `tdd`.
+fn check_oracle_with(
+    requires_oracle: bool,
+    task_id: &str,
+    run_dir: &Path,
+    resolve_tdd: impl FnOnce() -> harness_core::verdict::Determination<Option<std::path::PathBuf>>,
+) -> serde_json::Value {
     if !requires_oracle {
         return serde_json::json!({
             "required": false,
@@ -142,7 +159,7 @@ pub fn check_oracle(
     }
 
     use harness_core::verdict::Determination;
-    match harness_core::plugin_bin::resolve("tdd") {
+    match resolve_tdd() {
         Determination::Known(Some(program)) => spawn_oracle(&program, task_id, run_dir),
         // Same shape as a spawn failure below: nothing looked at the proofs.
         Determination::Known(None) => serde_json::json!({
@@ -278,10 +295,25 @@ mod tests {
     /// with no recorded proofs the result is `required: true` in both worlds
     /// (tdd present-but-no-proofs → unknown fallback, or tdd absent → spawn
     /// Err), never the old `required: false` exemption.
+    ///
+    /// Hermetic (backlog c63f1c23): the `tdd` it consults is pinned to a path
+    /// inside its own TempDir via [`check_oracle_with`], so neither the plugin
+    /// cache under process-global `$HOME` nor a sibling's fake `tdd` on
+    /// `$PATH` can change its verdict. The pinned path does not exist, i.e.
+    /// the "tdd not spawnable" world above.
     #[test]
     fn no_reproduction_tests_falls_back_even_when_required() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let out = check_oracle(true, None, "t1", tmp.path());
+        let tdd = tmp.path().join("no-such-tdd");
+        let mut consulted = 0;
+        let out = check_oracle_with(true, "t1", tmp.path(), || {
+            consulted += 1;
+            harness_core::verdict::Determination::Known(Some(tdd.clone()))
+        });
+        assert_eq!(
+            consulted, 1,
+            "tdd must be looked up exactly once — got {out}"
+        );
         assert_eq!(
             out["required"], true,
             "a fix/feature task without reproduction_tests must still consult tdd — got {out}"
@@ -899,13 +931,23 @@ mod backlog_c63f1c23 {
     //! whose PATH resolves `tdd` to such a fake — i.e. the PATH a concurrent
     //! sibling installs. A test whose spawn target is confined to its own
     //! fixture is unaffected.
+    //!
+    //! The child's `$HOME` is ALSO pointed at an empty temp dir. `check_oracle`
+    //! resolves `tdd` via `harness_core::plugin_bin::resolve` (plugin cache
+    //! under `$HOME` first, `$PATH` second), so with the real `$HOME` the
+    //! installed plugin-cache `tdd` wins and the fake on PATH is never spawned
+    //! — the previous version of this repro kept the real `$HOME` and was
+    //! therefore GREEN on the defective code (observed 2026-10-04). An empty
+    //! `$HOME` is exactly what a concurrent `$HOME`-swapping sibling
+    //! (`claim::tests::pin_home`, the stateless-* tests) exposes in-process.
+    //! Running in a child means this test mutates no process-global env, so it
+    //! needs neither `HOME_ENV_LOCK` nor `PATH_ENV_LOCK` and adds no new race.
     use std::process::Command;
 
     const TARGET: &str = "oracle::tests::no_reproduction_tests_falls_back_even_when_required";
 
     #[cfg(unix)]
     #[test]
-    #[ignore = "backlog c63f1c23: open defect, remove ignore when fixed"]
     fn no_reproduction_tests_test_is_independent_of_the_tdd_on_path() {
         use std::os::unix::fs::PermissionsExt;
         let bin = tempfile::tempdir().expect("fake bin dir");
@@ -920,10 +962,17 @@ mod backlog_c63f1c23 {
         if let Some(p) = std::env::var_os("PATH") {
             parts.extend(std::env::split_paths(&p));
         }
+        // Empty HOME: no plugin cache, so resolution reaches `$PATH`.
+        let home = tempfile::tempdir().expect("empty temp home");
+        assert!(
+            !home.path().join(".claude").exists(),
+            "fixture precondition: the temp HOME must hold no plugin cache"
+        );
         let exe = std::env::current_exe().expect("current test binary");
         let out = Command::new(&exe)
             .args([TARGET, "--exact", "--test-threads=1"])
             .env("PATH", std::env::join_paths(parts).unwrap())
+            .env("HOME", home.path())
             .output()
             .expect("spawn child test binary");
         let stdout = String::from_utf8_lossy(&out.stdout);
@@ -933,9 +982,10 @@ mod backlog_c63f1c23 {
         );
         assert!(
             out.status.success(),
-            "{TARGET} changed its verdict because a different `tdd` was first on \
-             PATH — its spawn target escapes its fixture, which is exactly what a \
-             concurrent PATH-mutating sibling triggers. stdout={stdout} stderr={}",
+            "{TARGET} changed its verdict because $HOME held no plugin cache and a \
+             different `tdd` was first on PATH — its spawn target escapes its \
+             fixture, which is exactly what a concurrent HOME/PATH-mutating sibling \
+             triggers. stdout={stdout} stderr={}",
             String::from_utf8_lossy(&out.stderr)
         );
     }

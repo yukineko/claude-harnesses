@@ -3078,13 +3078,29 @@ the live ledger」(cg injector dedup env-session の件)。
 
 [backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/condukt/src/diffrisk_record.rs (mod backlog_e494a8a3) (rev 596108b9): every_invocation_is_journaled test journals into the real HOME state root.
 
-[2026-10-03, session 64554c4d] Observed failing in 3 of 3 full `cargo test -p condukt` runs on macOS at 82ee4a78 baseline and on branch fix/run-20261003-141339-41881/abba6f0d (left: 1 right: 2, one record per invocation), passing when run alone. Deterministic in full runs on this host, not intermittent.'''
+[2026-10-03, session 64554c4d] Observed failing in 3 of 3 full `cargo test -p condukt` runs on macOS at 82ee4a78 baseline and on branch fix/run-20261003-141339-41881/abba6f0d (left: 1 right: 2, one record per invocation), passing when run alone. Deterministic in full runs on this host, not intermittent.
+
+[2026-10-04, session 33de4c25] FIX COMMITTED, NOT MERGED.
+- Fix: f9218851 on branch flow/e494a8a3 (worktree /Users/yuki/src/.harness-worktrees/flow-e494a8a3).
+- Root cause (observed with temporary diagnostics, since removed): the journaling test called Config::load(), which read $HOME without HOME_ENV_LOCK. A claim:: test had swapped $HOME to a temp dir and deleted it between the test's two appends. Result: left 1 right 2, with no LOST warning.
+- Change: the tests use hermetic_cfg(), whose state_dir is inside their own TempDir. The repro's #[ignore] is removed.
+- Close: red-rev 596108b9, test command: cargo test -p condukt --bin condukt diffrisk_record::backlog_e494a8a3 -- --include-ignored
+- TO DO BEFORE MERGE:
+  (1) Rebase or merge onto main. main already has condukt 0.7.211 from e5174b6a, so bump the version again (0.7.212) in lockstep.
+  (2) Read the repeated-run loop results at the session-33de4c25 scratchpad e494-after/summary.txt. Before the fix, 3 of 6 full runs failed; after it, 2 of 2 passed so far.
+- Also covered: 057fa13c, and the diffrisk parts of 7c798579 and 347db98f.
+- Not covered:
+  - c63f1c23 part 1 (oracle no_reproduction_tests_falls_back_even_when_required, a PATH/tdd race). It reproduced after the fix.
+  - runtime_conflict::tests::no_op_when_worktree_absent: same $HOME exposure.
+  - gatelog.rs:448: filter_map(ok()) silently skips lines.
+  - diffrisk_record.rs:209-210: the docstring says "Fully fail-soft ... silent no-op", which contradicts the journaling.
+- Separate finding: the maintree-guard PostToolUse hook refused a read-only command that had timed out into the background ("no Pre snapshot ... for this call").'''
 created_at = 1789057581
-updated_at = 1791008104
+updated_at = 1791047916
 weight = 0.0
 issue_number = 502
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/502"
-rev = 1
+rev = 2
 
 [[task]]
 id = "49a457c8"
@@ -12506,4 +12522,20 @@ updated_at = 1791047075
 weight = 0.0
 issue_number = 1275
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1275"
+rev = 0
+
+[[task]]
+id = "3dd71160"
+title = "maintree-guard PostToolUse refuses a read-only command that timed out into the background (no Pre snapshot for this call)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04 by the e494a8a3 agent (session 33de4c25). Verbatim: Refused: cannot determine whether this command modified the MAIN working tree (CLAUDE.md 3: undetermined is not clean): no Pre snapshot /Users/yuki/src/harness/.git/maintree-guard/<hash>.json for this call. The command only read a scratchpad file. Needs a repro test: a Bash call that is backgrounded after timeout."
+created_at = 1791047917
+updated_at = 1791047917
+weight = 0.0
+issue_number = 1282
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1282"
 rev = 0

@@ -12393,3 +12393,43 @@ weight = 0.0
 issue_number = 1228
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1228"
 rev = 0
+
+[[task]]
+id = "725dd715"
+title = "blastguard redirect_target_suffix_resolution の2テストが /etc/fstab の無い macOS で必ず落ちる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "flaky-test",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04 at main f51e281e, failing identically with the unchanged exclude.rs: symlink_before_dotdot_in_a_suffix_must_not_be_resolved (fixture esc/../../etc/fstab must resolve: No such file or directory) and symlink_without_a_dotdot_is_caught_by_the_symlink_axis. /etc/fstab is absent on this Mac. Readings: (a) fixture depends on a host file -> create its own target; (b) intended Linux-only -> explicit skip with reason. Tell apart from the test comments and git log."
+created_at = 1791044755
+updated_at = 1791044755
+weight = 0.0
+issue_number = 1233
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1233"
+rev = 0
+
+[[task]]
+id = "471453dd"
+title = "blastguard が heredoc 本文や python 文字列内の > を redirect と判定して拒否する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "failpositive",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04 by the 1b82a049 implementer: a heredoc writing a probe script was refused as a redirect to a path with a shell expansion although the > was text inside the heredoc body; a python3 heredoc editing READMEs was refused as a redirect to an empty relative path because a string literal contained >. Readings: (a) heredoc bodies scanned as shell = false positive; (b) deliberate conservative scan of interpreter input. Repro: feed both commands to the blastguard binary as PreToolUse payloads."
+created_at = 1791044758
+updated_at = 1791044758
+weight = 0.0
+issue_number = 1234
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1234"
+rev = 0

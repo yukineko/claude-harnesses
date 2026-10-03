@@ -1057,6 +1057,14 @@ fn run(cli: Cli) -> Result<()> {
                 // (not stored) so callers like `/flow` can gate on
                 // `condukt state is-claimed --hashkey <h>` without recomputing the
                 // normalization themselves.
+                //
+                // `status` carries the SAME derived value the text renderer
+                // shows: a task whose `defer_until` is still in the future is
+                // `deferred` (backlog d65da48d). `deferred` is never stored —
+                // it is computed from `defer_until` (still present in the row)
+                // — so overwatch's `status == "deferred"` counter is reachable
+                // only through this derivation.
+                let now = now_unix();
                 let with_hashkey: Vec<serde_json::Value> = tasks
                     .iter()
                     .map(|t| {
@@ -1066,6 +1074,12 @@ fn run(cli: Cli) -> Result<()> {
                                 "hashkey".to_string(),
                                 serde_json::Value::String(task::hashkey(&t.title, &t.project)),
                             );
+                            if t.is_deferred(now) {
+                                obj.insert(
+                                    "status".to_string(),
+                                    serde_json::Value::String("deferred".to_string()),
+                                );
+                            }
                         }
                         v
                     })

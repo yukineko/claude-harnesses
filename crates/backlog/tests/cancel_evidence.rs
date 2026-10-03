@@ -92,7 +92,9 @@ fn cancel_failed_task_records_a_discard_closure() {
     let id = f.add("t");
     let r = f.run(&["fail", &id, "--reason", "x"]);
     assert_eq!(r.code, 0, "{}", r.both());
-    assert_eq!(f.status(&id), "failed");
+    // `fail` defers the row (defer_until = now+2d); since d65da48d the JSON
+    // feed reports that derived status as `deferred` (stored status: failed).
+    assert_eq!(f.status(&id), "deferred");
     assert_discards(&f, &id);
 }
 

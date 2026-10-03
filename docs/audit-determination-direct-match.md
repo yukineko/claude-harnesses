@@ -652,7 +652,7 @@ docs の check-doc-claims.py は、バッククォートで囲んだ パス:行 
 - `crates/playbook/src/main.rs:148` 「Determination::Undetermined(_) => return,」
 - `crates/runbook/src/main.rs:122` 「Determination::Undetermined(_) => return,」
 - `crates/specguard/src/scope.rs:506` 「Determination::Undetermined(_) => Vec::new(),」
-- `crates/backlog/src/main.rs:1717` 「Determination::Undetermined(_) => String::new(),」
-- `crates/backlog/src/main.rs:1719` 「Determination::Undetermined(_) => String::new(),」
-- `crates/backlog/src/main.rs:1854` 「Determination::Undetermined(_) => None,」
+- `crates/backlog/src/main.rs:1731` 「Determination::Undetermined(_) => String::new(),」
+- `crates/backlog/src/main.rs:1733` 「Determination::Undetermined(_) => String::new(),」
+- `crates/backlog/src/main.rs:1868` 「Determination::Undetermined(_) => None,」
 

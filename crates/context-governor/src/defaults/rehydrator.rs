@@ -1,6 +1,7 @@
 //! Default [`StateRehydrator`] — SessionStart restore. Re-injects normative core
 //! / verbatim from the backing store so pins survive compaction (I1) and resume
-//! reseeds durably. Most relevant on `source == "compact"`.
+//! reseeds durably. Most relevant on `source == "compact"`, which the shipped hooks.json SessionStart
+//! matcher (`startup|resume|clear|compact`) routes to this handler.
 //!
 //! Lane-aware re-injection (backlog b9ab97a7): the raw snapshot is no longer
 //! re-injected verbatim and whole. Instead the rehydrator recomputes the

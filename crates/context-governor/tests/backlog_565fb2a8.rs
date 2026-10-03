@@ -111,7 +111,6 @@ fn control_direct_invocation_rehydrates_the_pin() {
 }
 
 #[test]
-#[ignore = "backlog 565fb2a8: open defect, remove ignore when fixed"]
 fn compact_session_start_through_shipped_matcher_rehydrates_the_pin() {
     match compact_cycle(true) {
         None => panic!(

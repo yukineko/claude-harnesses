@@ -8,11 +8,13 @@
 //!
 //! Note: the ticket leaves type-change vs docstring-guidance to the owner; a
 //! docstring-only resolution would leave this test red by design.
+//!
+//! Re-targeted per the user's ruling B: `read_dir_entries` keeps its contract
+//! and callers, and the property moved to the added `read_dir_entries_checked`.
 
-use harness_core::boundary::read_dir_entries;
+use harness_core::boundary::read_dir_entries_checked;
 
 #[test]
-#[ignore = "backlog 66fb376a: open defect, remove ignore when fixed"]
 fn backlog_66fb376a_absent_dir_is_distinguishable_from_empty_dir() {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -25,8 +27,8 @@ fn backlog_66fb376a_absent_dir_is_distinguishable_from_empty_dir() {
     let empty = root.join("empty");
     std::fs::create_dir_all(&empty).unwrap();
     let absent = root.join("does-not-exist");
-    let e = read_dir_entries(&empty);
-    let a = read_dir_entries(&absent);
+    let e = read_dir_entries_checked(&empty);
+    let a = read_dir_entries_checked(&absent);
     let _ = std::fs::remove_dir_all(&root);
     assert_ne!(
         a, e,

@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "backlog"
-version = "0.3.23"
+version = "0.3.24"
 dependencies = [
  "anyhow",
  "clap",
@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.201"
+version = "0.7.202"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -329,7 +329,7 @@ dependencies = [
 
 [[package]]
 name = "context-governor"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "anyhow",
  "harness-core",
@@ -664,7 +664,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.40"
+version = "0.2.41"
 dependencies = [
  "anyhow",
  "chrono",

@@ -1337,7 +1337,8 @@ pub fn next_excluding(
 ///
 /// Display-only: exclusion is NOT decided here. Nothing releases a lease, so a
 /// failed row whose claimant just failed it stays excluded from `next` /
-/// `next --claim` until the lease ages out at [`CLAIM_STALE_SECS`]. The
+/// `next --claim` until the lease ages out ([`CLAIM_STALE_SECS`] after its
+/// holder was last seen alive). The
 /// result must never be saved.
 pub fn derive_claimed(tasks: &mut [Task], leases: &std::collections::HashMap<String, i64>) {
     for t in tasks.iter_mut() {
@@ -1394,11 +1395,13 @@ fn pick_next<'a>(
     candidates.into_iter().next()
 }
 
-/// CA-backlog-001: a claim lease older than this (by the ledger entry's
-/// `claimed_at`) is treated as abandoned (the claimant crashed or was killed
-/// before calling `done`/`fail`): it stops excluding its task, so a fresh
-/// claim can take it again and a dead claimant never permanently removes a
-/// task from the queue.
+/// CA-backlog-001: a claim lease whose holder has not been seen alive for this
+/// long (measured from the NEWER of the ledger entry's `claimed_at` and its
+/// `heartbeat_at`, which `backlog driver heartbeat` refreshes for the holder
+/// session — backlog 486e83ca) is treated as abandoned (the claimant crashed or
+/// was killed before calling `done`/`fail`): it stops excluding its task, so a
+/// fresh claim can take it again and a dead claimant never permanently removes
+/// a task from the queue.
 pub const CLAIM_STALE_SECS: i64 = 3600;
 
 /// Select the next eligible task under the tasks-file lock and reserve it via
@@ -1414,8 +1417,9 @@ pub const CLAIM_STALE_SECS: i64 = 3600;
 /// `excluded` names task ids holding a LIVE lease in the project-wide ledger
 /// (see [`crate::claim_ledger`]) — claimed by this or any other checkout of
 /// the project; they are dropped from the candidate pool even though the
-/// store still shows them pending. A lease older than [`CLAIM_STALE_SECS`] is
-/// not in `excluded`, so a crashed claimer can't strand a task forever.
+/// store still shows them pending. A lease whose holder has not been seen alive
+/// (claim or heartbeat) for [`CLAIM_STALE_SECS`] is not in `excluded`, so a
+/// crashed claimer can't strand a task forever.
 ///
 /// `reserve` is invoked INSIDE the critical section, after a candidate has
 /// been selected. A reservation that fails refuses the claim: an unrecorded
@@ -1467,7 +1471,14 @@ pub fn next_claim(
     project_filter: Option<&str>,
 ) -> Result<Determination<Option<Task>>> {
     let (dir, identity) = test_ledger(path);
-    crate::claim_ledger::claim_next(path, tag_filter, project_filter, &identity, Some(&dir))
+    crate::claim_ledger::claim_next(
+        path,
+        tag_filter,
+        project_filter,
+        &identity,
+        None,
+        Some(&dir),
+    )
 }
 
 /// Test-only: the (claims dir, project identity) a test store's claims are
@@ -1571,8 +1582,8 @@ fn queue_order(a: &Task, b: &Task) -> std::cmp::Ordering {
 /// 変更したタスクの件数を返す。
 ///
 /// Claims are NOT touched here (backlog f09db5ce): a claim is a lease in the
-/// untracked claim ledger that simply stops excluding after
-/// [`CLAIM_STALE_SECS`], so there is nothing in the tracked store to rescue
+/// untracked claim ledger that simply stops excluding once its holder has not
+/// been seen alive for [`CLAIM_STALE_SECS`], so there is nothing in the tracked store to rescue
 /// (the old CA-backlog-005 stale-`claimed` rescue rewrote the tracked file on
 /// every SessionStart). A legacy stored `claimed` row is read as `pending` by
 /// [`load`] and is not counted.

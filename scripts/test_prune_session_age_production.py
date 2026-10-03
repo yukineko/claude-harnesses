@@ -11,9 +11,14 @@ when neither seam is set, plus the override's own validation:
      D-HH:MM:SS; older claude holds, newer does not; ps failure / garbage /
      empty output are undetermined (nothing removed, exit non-zero); comm is
      matched by basename (`/usr/local/bin/claude` yes, `Claude` no).
-  2. superseded-at is the `lastUpdated` of the plugin's installed_plugins.json
-     entry.  Missing / unparseable / plugin absent => the dir is KEPT and
-     `KEPT` is named on stderr.  `installedAt` is never a fallback.
+  2. LEGACY upper bound (v2, 18fe626f): with no version-history ledger line
+     naming the dir (none of these fixtures writes a ledger), superseded-at
+     is bounded by the `lastUpdated` of the plugin's installed_plugins.json
+     entry and activated-at is -inf.  Missing / unparseable / plugin absent
+     => the dir is KEPT and `KEPT` is named on stderr.  `installedAt` is
+     never a fallback.  (In v1 this was the rule for EVERY superseded dir;
+     v2 keeps it only for legacy dirs — exact intervals from the ledger are
+     covered by test_prune_version_history.py.)
   3. PLUGIN_CACHE_SUPERSEDED_AT_OVERRIDE malformed / non-object / non-numeric
      => the whole run is undetermined (nothing removed, exit non-zero).
 
@@ -219,7 +224,9 @@ class DefaultPsProbe(Base):
 
 
 class SupersededAtDerivation(Base):
-    """Group 2: superseded-at = registry `lastUpdated` of the plugin's entry."""
+    """Group 2: legacy upper bound — for a dir no version-history ledger line
+    names, superseded-at is bounded by the registry `lastUpdated` of the
+    plugin's entry (activated-at -inf)."""
 
     def setUp(self):
         super().setUp()

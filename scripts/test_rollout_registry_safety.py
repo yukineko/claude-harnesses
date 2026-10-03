@@ -38,7 +38,7 @@ def _env(home, cache, registry, **extra):
         CLAUDE_PLUGIN_REGISTRY=str(registry),
         CLAUDE_SETTINGS_JSON=str(Path(home) / "settings.json"),  # absent: no pins
         # 18fe626f: the pruner now asks the process table which `claude`
-        # sessions are older than a dir's supersession. Pin it to a fixed
+        # sessions started while a dir's version was current. Pin it to a fixed
         # answer with no claude in it, so these registry tests neither read
         # nor depend on the real sessions running on this machine.
         PLUGIN_CACHE_PROC_LIST_PROBE="echo '1 1 python3'",
@@ -56,7 +56,9 @@ def _write_registry(path, entries):
                 "installPath": str(p),
                 "version": v,
                 # what rollout-plugins.sh writes on every repoint; the
-                # session-age hold (18fe626f) reads it as superseded-at
+                # session-age hold (18fe626f v2) reads it only as the legacy
+                # upper bound on superseded-at for a dir no
+                # .version-history.jsonl line names
                 "lastUpdated": "2026-01-01T00:00:00.000Z",
             }
         ]

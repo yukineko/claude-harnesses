@@ -729,6 +729,71 @@ except Exception as e:
         print(f"registry write failed before backup completed (original left untouched): {e}", file=sys.stderr)
     sys.exit(1)
 
+# --- version-history ledger (backlog 18fe626f v2) ----------------------------
+# One line per ACTUAL version change, appended to
+# <cache>/<plugin>/.version-history.jsonl (the dir above installPath):
+#   {"version": <new>, "activated_at": <epoch s>, "previous": <old>|null}
+# plugin_cache.session_age_holds reads it to hold a superseded dir only for
+# the sessions that started while it was current. Written AFTER the registry
+# swap: a line written before a swap that then failed would claim the old
+# version was superseded while new sessions were still loading it (a release
+# of a held dir). activated_at is taken after the swap and rounded UP, so as
+# the old version's superseded_at it is never earlier than the swap. If any
+# append fails, the lines already appended are truncated away and the
+# registry is restored from the backup, so registry and ledger never
+# disagree in the releasing direction; the rollout then fails (exit 1).
+import math
+
+ledger_writes = []
+for key, old, entry in changes:
+    if entry is None:
+        continue
+    prev = None
+    if old is not None:
+        prev = old.get("version") or os.path.basename(
+            os.path.normpath(old.get("installPath") or "")) or None
+    if prev == entry["version"]:
+        continue  # repointed at the same version: no version change
+    plugin_dir = os.path.dirname(os.path.normpath(entry["installPath"]))
+    ledger_writes.append(
+        (os.path.join(plugin_dir, ".version-history.jsonl"), entry["version"], prev))
+
+if ledger_writes:
+    activated_at = math.ceil(time.time())
+    appended = []  # (path, size before append or None if it did not exist)
+    try:
+        for lpath, ver, prev in ledger_writes:
+            size = os.path.getsize(lpath) if os.path.lexists(lpath) else None
+            line = json.dumps({"version": ver, "activated_at": activated_at,
+                               "previous": prev}) + "\n"
+            fd = os.open(lpath, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+            appended.append((lpath, size))
+            try:
+                data = line.encode("utf-8")
+                while data:
+                    data = data[os.write(fd, data):]
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            print(f"version history: {lpath}: {prev!r} -> {ver!r} at {activated_at}")
+    except Exception as e:
+        undo_failed = []
+        for lpath, size in appended:
+            try:
+                if size is None:
+                    os.unlink(lpath)
+                else:
+                    os.truncate(lpath, size)
+            except OSError as ue:
+                undo_failed.append(f"{lpath}: {ue}")
+        shutil.copy2(backup, registry_path)
+        print(f"version-history write failed, registry restored from backup: {e}",
+              file=sys.stderr)
+        for u in undo_failed:
+            print(f"version-history undo FAILED (ledger may name a repoint that "
+                  f"was rolled back): {u}", file=sys.stderr)
+        sys.exit(1)
+
 print(f"registry patched: {registry_path}")
 PY
 }

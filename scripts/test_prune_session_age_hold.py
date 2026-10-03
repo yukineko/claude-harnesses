@@ -53,6 +53,11 @@ CLAUDE_PLUGIN_REGISTRY and CLAUDE_SETTINGS_JSON pointed at temp paths.
    new seam. In production the implementer derives/records the value however it
    likes; the override only replaces that derivation for the named dirs.
    "Started before" is compared as start_epoch < superseded_at (strict).
+   v2 (18fe626f, exact per-version hold): production now derives the exact
+   interval activated_at <= start < superseded_at from the rollout's
+   version-history ledger (see test_prune_version_history.py). This seam
+   keeps the meaning "superseded_at known, activated_at -inf", which is
+   exactly the contract the cases below assert.
 
 Fixture: backlog/0.3.21 (old) and backlog/0.3.22 (current in crates/ and in the
 registry), no `.in_use`, no settings pin.

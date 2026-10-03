@@ -19,7 +19,9 @@ nothing — measured 2026-07-26: scout 0.1.0 carried 64 markers and every pid in
 it was dead. Liveness has to be asked of the OS, per pid. The ABSENCE of a
 marker proves nothing either: Claude Code writes `.in_use` for only some
 plugins, so a superseded dir is also held by any live `claude` process that
-started before it was superseded (session_age_holds, backlog 18fe626f).
+started while that version was the one the registry pointed at — the interval
+recorded in `<cache>/<plugin>/.version-history.jsonl` (session_age_holds,
+backlog 18fe626f v2).
 
 Undetermined is resolved to each consumer's OWN restrictive side, which is not
 the same side for both:
@@ -44,19 +46,38 @@ _PID_RE = re.compile(r"^[0-9]+$")
 class Holders:
     """Who is holding a version dir. `undetermined` is not "nobody"."""
 
-    __slots__ = ("live_pids", "undetermined", "pinned", "registered", "sessions")
+    __slots__ = (
+        "live_pids",
+        "undetermined",
+        "pinned",
+        "registered",
+        "sessions",
+        "session_basis",
+    )
 
     def __init__(
-        self, live_pids=(), undetermined=None, pinned=(), registered=(), sessions=()
+        self,
+        live_pids=(),
+        undetermined=None,
+        pinned=(),
+        registered=(),
+        sessions=(),
+        session_basis=None,
     ):
         self.live_pids = tuple(live_pids)
         self.undetermined = undetermined
         self.pinned = tuple(pinned)
         self.registered = tuple(registered)
-        # pids of live `claude` processes that STARTED BEFORE this dir was
-        # superseded (see session_age_holds): they may have pinned it as their
+        # pids of live `claude` processes that started while this version was
+        # (or, for a legacy dir, may have been) the registry's current one
+        # (see session_age_holds): they may have pinned it as their
         # CLAUDE_PLUGIN_ROOT, with or without an `.in_use` marker.
         self.sessions = tuple(sessions)
+        # Which rule produced `sessions`: SESSION_BASIS_HISTORY (the exact
+        # interval from the version-history ledger), SESSION_BASIS_LEGACY (no
+        # ledger line names this version; the registry lastUpdated upper
+        # bound was used) or SESSION_BASIS_OVERRIDE (test seam).
+        self.session_basis = session_basis
 
     @property
     def held(self):
@@ -66,8 +87,8 @@ class Holders:
         into — see settings_pinned_versions), or an installed_plugins.json
         entry pointing at it (see registry_referenced_versions: deleting the
         dir the registry points at is, by definition, making the plugin
-        dark), or a live `claude` process older than the dir's supersession
-        (see session_age_holds)."""
+        dark), or a live `claude` process that started while this version was
+        current (see session_age_holds)."""
         return (
             bool(self.live_pids)
             or self.undetermined is not None
@@ -80,7 +101,8 @@ class Holders:
         return (
             f"Holders(live_pids={self.live_pids}, "
             f"undetermined={self.undetermined!r}, pinned={self.pinned}, "
-            f"registered={self.registered}, sessions={self.sessions})"
+            f"registered={self.registered}, sessions={self.sessions}, "
+            f"session_basis={self.session_basis!r})"
         )
 
 
@@ -243,11 +265,29 @@ class StaleDir:
             return f"{base} (in use by pid {pids})"
         if self.holders.sessions:
             pids = ",".join(str(p) for p in self.holders.sessions)
-            return (
-                f"{base} (held by live claude pid {pids}, started before this "
-                "version was superseded)"
-            )
+            if self.holders.session_basis == SESSION_BASIS_LEGACY:
+                why = (
+                    "no version history names this version, so the registry "
+                    "lastUpdated is used as the upper bound on when it was "
+                    "superseded, and this claude started before it"
+                )
+            elif self.holders.session_basis == SESSION_BASIS_OVERRIDE:
+                why = f"started before the {SUPERSEDED_AT_OVERRIDE_ENV} superseded-at"
+            else:
+                why = "started while this version was current (version history)"
+            return f"{base} (held by live claude pid {pids}: {why})"
         return base
+
+    def kept_line(self):
+        """`KEPT <plugin>/<version>: <reason>` — the stderr form of describe()
+        for a dir the session-age hold kept for a reason the operator should
+        see (a legacy upper-bound hold, or an undetermined one)."""
+        d = self.describe()
+        head = f"{self.plugin}/{self.version}"
+        tail = d[len(head):].strip() if d.startswith(head) else d
+        if tail.startswith("(") and tail.endswith(")"):
+            tail = tail[1:-1]
+        return f"KEPT {head}: {tail}"
 
 
 def _link_resolution(path):
@@ -319,8 +359,9 @@ def scan(
     session had just deployed and registered, and specguard went dark.
 
     The rollout lock dir (`ROLLOUT_LOCK_NAME`) at the cache root is not a
-    plugin and is skipped by exact name; any other non-plugin entry is still
-    reported.
+    plugin and is skipped by exact name, as is the version-history ledger
+    (`VERSION_HISTORY_NAME`) inside a plugin dir; any other non-plugin /
+    non-version entry is still reported.
     """
     settings_pins = settings_pins or {}
     registry_refs = registry_refs or {}
@@ -378,6 +419,12 @@ def scan(
             problems.append(f"{pname}: cannot list {pdir}: {exc}")
             continue
         for v in vers:
+            if v == VERSION_HISTORY_NAME:
+                # The rollout's per-plugin version-history ledger (see
+                # read_version_history), skipped by EXACT name like the lock
+                # dir above. It is not a version and is never pruned; any
+                # other non-version entry is still reported below.
+                continue
             vdir = os.path.join(pdir, v)
             # The non-dir check comes BEFORE the `v == cur` skip on purpose. A
             # broken pointer sitting on the CURRENT version is the worst case of
@@ -629,25 +676,42 @@ def cache_command_paths(cache_root, paths=None):
 
 
 # ---------------------------------------------------------------------------
-# Session-age hold (backlog 18fe626f, user ruling 2026-10-03)
+# Session-age hold (backlog 18fe626f, user rulings 2026-10-03)
 #
 # A running Claude Code session pins CLAUDE_PLUGIN_ROOT when it STARTS, and
 # Claude Code writes `.in_use/<pid>` for only some plugins. So "no live marker"
 # is not "no live user": prune used to delete a dir a live session was still
 # executing hooks from, and that session went dark. The environment of another
-# process cannot be read on macOS, so the hold is by PROCESS START TIME:
+# process cannot be read on macOS, so the hold is by PROCESS START TIME S:
 #
-#     a superseded dir is held while any live `claude` process that started
-#     strictly before the dir was superseded is alive.
+#     a live `claude` holds version dir V iff
+#         activated_at(V) <= S < superseded_at(V)
+#     i.e. V was the version the registry pointed at when the session started.
 #
-# Both inputs have a test seam, read from os.environ at CALL time:
+# v1 (825f3381) used the registry `lastUpdated` — the LATEST repoint — as
+# superseded_at for every old version, so one session older than the newest
+# rollout held EVERY old version and continuous rollouts never freed anything
+# (over-holding; ruled not acceptable). v2 reads the exact interval from the
+# per-plugin ledger the rollout repoint appends to (VERSION_HISTORY_NAME, see
+# read_version_history). `lastUpdated` survives only as the LEGACY upper bound
+# for a version no ledger line names (a dir superseded before the ledger
+# existed), which lasts only until the pre-ledger sessions exit.
+#
+# Test seams, read from os.environ at CALL time:
 #   PLUGIN_CACHE_PROC_LIST_PROBE        shell command printing
 #                                       `<pid> <start_epoch> <comm>` lines
-#   PLUGIN_CACHE_SUPERSEDED_AT_OVERRIDE JSON {"<plugin>/<version>": epoch}
+#   PLUGIN_CACHE_SUPERSEDED_AT_OVERRIDE JSON {"<plugin>/<version>": epoch}:
+#                                       superseded_at known, activated_at
+#                                       -inf (replaces ledger and legacy
+#                                       derivation for the named dirs)
 # ---------------------------------------------------------------------------
 
 PROC_LIST_PROBE_ENV = "PLUGIN_CACHE_PROC_LIST_PROBE"
 SUPERSEDED_AT_OVERRIDE_ENV = "PLUGIN_CACHE_SUPERSEDED_AT_OVERRIDE"
+VERSION_HISTORY_NAME = ".version-history.jsonl"
+SESSION_BASIS_HISTORY = "history"
+SESSION_BASIS_LEGACY = "legacy"
+SESSION_BASIS_OVERRIDE = "override"
 _CLAUDE_COMM = "claude"
 _INT_RE = re.compile(r"^[0-9]+$")
 _ETIME_RE = re.compile(r"^(?:(?:([0-9]+)-)?([0-9]{1,2}):)?([0-9]{1,2}):([0-9]{2})$")
@@ -688,17 +752,26 @@ def _etime_seconds(etime):
 
 
 def _ps_process_list():
-    """Production probe: `ps -A -o pid=,etime=,comm=`, start = now - etime.
+    """Production probe: `ps -A -o pid=,etime=,comm=` -> (pid, lo, hi, comm).
 
     etime (elapsed wall time) is used instead of lstart because it carries no
     locale or timezone: converting lstart back to an epoch needs the local
-    zone and is ambiguous across a DST change. The derived start is rounded
-    DOWN by one extra second, so the error can only make a process look OLDER
-    (more holding), never younger. The exit status is checked: a ps that
-    failed is not a ps that found no sessions."""
+    zone and is ambiguous across a DST change. ps samples the clock at some
+    instant between our `before` and `after` reads, and etime is truncated to
+    whole seconds, so the true start s lies in
+    (before - etime - 1, after - etime + 1): the probe returns that BRACKET
+    [lo, hi] rather than one number. v1 only
+    compared against superseded_at and rounded the start down (older = more
+    holding); v2 also compares against activated_at, where "older" is the
+    RELEASING direction, so each side of the interval test uses the end of the
+    bracket that holds more (see _interval_holds). The exit status is
+    checked: a ps that failed is not a ps that found no sessions."""
     import subprocess
     import time
 
+    # ps samples the clock somewhere between these two reads: `before` bounds
+    # the lower end of the bracket, `after` the upper.
+    before = int(time.time())
     try:
         p = subprocess.run(
             ["ps", "-A", "-o", "pid=,etime=,comm="],
@@ -710,7 +783,7 @@ def _ps_process_list():
         return None, f"cannot run ps: {exc}"
     if p.returncode != 0:
         return None, f"ps exited {p.returncode}: {p.stderr.strip()[:200]}"
-    now = int(time.time())
+    after = int(time.time())
     procs = []
     for raw in p.stdout.splitlines():
         if not raw.strip():
@@ -719,14 +792,18 @@ def _ps_process_list():
         secs = _etime_seconds(parts[1]) if len(parts) == 3 else None
         if secs is None or not _INT_RE.match(parts[0]) or not parts[2].strip():
             return None, f"unparseable ps line {raw!r}"
-        procs.append((int(parts[0]), now - secs - 1, parts[2].strip()))
+        procs.append(
+            (int(parts[0]), before - secs - 1, after - secs + 1, parts[2].strip())
+        )
     if not procs:
         return None, "ps listed no processes (it always lists at least itself)"
     return procs, None
 
 
 def live_claude_processes():
-    """Live `claude` processes as (pid, start_epoch) pairs.
+    """Live `claude` processes as (pid, start_lo, start_hi) triples: the
+    process started somewhere in [start_lo, start_hi]. The probe seam gives an
+    exact start (lo == hi); `ps` gives a two-second bracket (_ps_process_list).
 
     Returns (procs, undetermined). `undetermined` is a reason string whenever
     the process list could not be read in full — non-zero exit, any
@@ -746,16 +823,17 @@ def live_claude_processes():
             return None, f"{PROC_LIST_PROBE_ENV}: cannot run probe: {exc}"
         if p.returncode != 0:
             return None, f"{PROC_LIST_PROBE_ENV}: probe exited {p.returncode}"
-        procs, why = _parse_probe_lines(p.stdout)
+        parsed, why = _parse_probe_lines(p.stdout)
         if why:
             return None, f"{PROC_LIST_PROBE_ENV}: {why}"
+        procs = [(pid, start, start, comm) for pid, start, comm in parsed]
     else:
         procs, why = _ps_process_list()
         if why:
             return None, why
     return [
-        (pid, start)
-        for pid, start, comm in procs
+        (pid, lo, hi)
+        for pid, lo, hi, comm in procs
         if os.path.basename(comm) == _CLAUDE_COMM
     ], None
 
@@ -783,22 +861,27 @@ def _iso_epoch(value):
     return int(math.ceil(calendar.timegm(t) + frac))
 
 
-def superseded_at_by_plugin(cache_root, path=None):
-    """When each plugin's registry entry was last repointed, as epoch seconds.
+def registry_state_by_plugin(cache_root, path=None):
+    """Per plugin under `cache_root`: the registry `lastUpdated` (epoch) and
+    the version(s) its installed_plugins.json entries point at.
 
-    Returns (by_plugin, reasons): by_plugin maps plugin -> epoch; reasons maps
-    plugin -> why it could not be derived. A plugin in neither has no registry
-    entry under `cache_root`.
+    Returns (last_updated, reasons, registered):
+      - last_updated: plugin -> epoch (max over that plugin's entries);
+      - reasons: plugin -> why `lastUpdated` could not be derived;
+      - registered: plugin -> set of version names its entries point at.
+    A plugin in none of them has no registry entry under `cache_root`.
 
-    WHY THIS SOURCE. A session pins the dir that installed_plugins.json points
-    at when it starts, so a version dir stops being picked up by new sessions
-    exactly when the registry is repointed away from it, and the registry entry
-    records that instant as `lastUpdated` (rollout-plugins.sh writes it on every
-    repoint; so does `claude plugin`). For every non-registered version dir of
-    that plugin the TRUE superseded-at is at or before the CURRENT entry's
-    `lastUpdated`, so using it is an upper bound: it can over-hold an older
-    version (kept until every session older than the LATEST repoint has
-    exited) but cannot release a dir a live session may still be using.
+    ROLE IN v2. `lastUpdated` is no longer anybody's superseded-at by default:
+    it is the LEGACY UPPER BOUND, used only where the version-history ledger
+    cannot answer (a version no ledger line names, or the open tail of the
+    ledger when the registry was repointed outside the rollout). A session
+    pins the dir installed_plugins.json points at when it starts, and the
+    registry entry records the instant of the latest repoint as `lastUpdated`
+    (rollout-plugins.sh writes it on every repoint; so does `claude plugin`),
+    so for every non-registered version dir the TRUE superseded-at is at or
+    before it. Using it alone (v1) cannot release a held dir, but it holds
+    EVERY old version while any session older than the LATEST repoint lives —
+    the over-holding v2 removes for every dir the ledger names.
 
     WHY NOT THE NEWER SIBLING DIR'S birthtime / mtime. Measured 2026-10-03 on
     APFS: `rsync -a src/ dst/` — the rollout's copy — sets dst's mtime AND
@@ -808,10 +891,10 @@ def superseded_at_by_plugin(cache_root, path=None):
 
     `installedAt` is NOT used as a fallback: it is the FIRST install, earlier
     than any repoint, i.e. the unsafe direction. A missing or unparseable
-    `lastUpdated` is a per-plugin reason, and every superseded dir of that
-    plugin is kept as undetermined. An unreadable registry yields empty maps
-    here, so every dir falls to "cannot tell when superseded" (kept); it is
-    also independently held by registry_referenced_versions' undetermined."""
+    `lastUpdated` is a per-plugin reason: any dir whose hold needs the bound
+    is then kept as undetermined. An unreadable registry yields empty maps
+    here, so every such dir falls to "cannot tell when superseded" (kept); it
+    is also independently held by registry_referenced_versions' undetermined."""
     import json
 
     path = path or default_registry_path()
@@ -819,13 +902,14 @@ def superseded_at_by_plugin(cache_root, path=None):
         with open(path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
     except (OSError, ValueError):
-        return {}, {}
+        return {}, {}, {}
     plugins = data.get("plugins") if isinstance(data, dict) else None
     if not isinstance(plugins, dict):
-        return {}, {}
+        return {}, {}, {}
     root = os.path.realpath(cache_root)
     by_plugin = {}
     reasons = {}
+    registered = {}
     for key, entries in plugins.items():
         if not isinstance(entries, list):
             continue
@@ -837,6 +921,7 @@ def superseded_at_by_plugin(cache_root, path=None):
             pname = os.path.basename(os.path.dirname(norm))
             if os.path.realpath(os.path.dirname(os.path.dirname(norm))) != root:
                 continue
+            registered.setdefault(pname, set()).add(os.path.basename(norm))
             epoch = _iso_epoch(ent.get("lastUpdated"))
             if epoch is None:
                 reasons[pname] = (
@@ -847,9 +932,119 @@ def superseded_at_by_plugin(cache_root, path=None):
             by_plugin[pname] = max(epoch, by_plugin.get(pname, epoch))
     for pname in list(reasons):
         # One entry without a usable time is enough to make the plugin's
-        # superseded-at unknown: the max over the others could be too early.
+        # bound unknown: the max over the others could be too early.
         by_plugin.pop(pname, None)
-    return by_plugin, reasons
+    return by_plugin, reasons, registered
+
+
+def read_version_history(cache_root, plugin):
+    """Read `<cache_root>/<plugin>/.version-history.jsonl`.
+
+    The ledger is appended by the rollout repoint (registry_patch in
+    scripts/rollout-plugins.sh) — one line per ACTUAL version change, after
+    the registry swap succeeded:
+
+        {"version": "<new>", "activated_at": <int epoch s>, "previous": "<old>"|null}
+
+    Returns (lines, reason):
+      - (None, None)   no ledger (ENOENT): a determinate "no history"; every
+                       superseded dir of the plugin is legacy;
+      - (list, None)   every non-blank line is a JSON object with a non-empty
+                       string `version`, an integer (not bool) `activated_at`
+                       and a `previous` that is null or a non-empty string, and
+                       activated_at never decreases in file order;
+      - (None, reason) anything else — unreadable (EACCES, a directory in its
+                       place, EIO), one unparseable or ill-shaped line (a good
+                       line next to it does not launder it), or time going
+                       backwards. The caller keeps every superseded dir of
+                       THIS plugin and reports it: a history that cannot be
+                       read is not "no history".
+    """
+    import json
+
+    path = os.path.join(cache_root, plugin, VERSION_HISTORY_NAME)
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            text = fh.read()
+    except FileNotFoundError:
+        return None, None
+    except (OSError, ValueError) as exc:
+        return None, f"{path}: unreadable ({exc})"
+    lines = []
+    last_at = None
+    for n, raw in enumerate(text.splitlines(), 1):
+        if not raw.strip():
+            continue
+        try:
+            obj = json.loads(raw)
+        except ValueError as exc:
+            return None, f"{path}:{n}: not JSON ({exc})"
+        if not isinstance(obj, dict):
+            return None, f"{path}:{n}: not a JSON object"
+        ver, at, prev = obj.get("version"), obj.get("activated_at"), obj.get("previous")
+        if not isinstance(ver, str) or not ver:
+            return None, f"{path}:{n}: `version` is not a non-empty string"
+        if isinstance(at, bool) or not isinstance(at, int):
+            return None, f"{path}:{n}: `activated_at` is not an integer epoch"
+        if "previous" not in obj or not (
+            prev is None or (isinstance(prev, str) and prev)
+        ):
+            return None, f"{path}:{n}: `previous` is not null or a non-empty string"
+        if last_at is not None and at < last_at:
+            return None, (
+                f"{path}:{n}: activated_at {at} is earlier than the line before "
+                f"it ({last_at}) — the order of repoints cannot be trusted"
+            )
+        last_at = at
+        lines.append((ver, at, prev))
+    return lines, None
+
+
+def version_intervals(lines):
+    """Ledger lines -> (intervals, gaps, tail, tail_at).
+
+      - intervals: version -> list of [activated_at, superseded_at] where
+        superseded_at is None while still open;
+      - gaps: [(start|None, end)] periods in which the registry's version is
+        NOT known from the ledger, so ANY version may have been current
+        (start None = -inf);
+      - tail, tail_at: the version the last line activated and when (None, None
+        if there are no lines).
+
+    A line closes whatever was open at its activated_at — only one version is
+    current at a time — so a line whose `previous` is not the version the line
+    before activated reveals a repoint the ledger did not record (another tool
+    rewrote the registry): the time between the two lines becomes a gap. The
+    first line's `previous` (when not null) was current for an unknown time
+    before it, as may have been any other version: (-inf, first) is a gap.
+    This is why missing activation reads as -inf. Losing lines can therefore
+    only WIDEN what is held, never narrow it.
+    """
+    intervals = {}
+    gaps = []
+    tail = None
+    tail_at = None
+    for i, (ver, at, prev) in enumerate(lines):
+        if i == 0:
+            if prev is not None:
+                gaps.append((None, at))
+        else:
+            if prev != tail:
+                gaps.append((tail_at, at))
+            for ivs in intervals.values():
+                for iv in ivs:
+                    if iv[1] is None:
+                        iv[1] = at
+        intervals.setdefault(ver, []).append([at, None])
+        tail, tail_at = ver, at
+    return intervals, gaps, tail, tail_at
+
+
+def _interval_holds(lo, hi, act, sup):
+    """Can a process that started somewhere in [lo, hi] have started in
+    [act, sup)? act None = -inf. Each side uses the bracket end that holds
+    more: lo against sup, hi against act."""
+    return lo < sup and (act is None or hi >= act)
 
 
 def superseded_at_override():
@@ -876,57 +1071,153 @@ def superseded_at_override():
     return out, None
 
 
+def _hold_windows(plugin, version, history, override, last_updated, reasons, registered):
+    """The start-time windows in which a session would hold plugin/version.
+
+    Returns (windows, undetermined_reason, basis); windows is a list of
+    (act|None, sup) half-open intervals [act, sup)."""
+    at = override.get((plugin, version))
+    if at is not None:
+        # Test seam: superseded_at known, activated_at -inf.
+        return [(None, at)], None, SESSION_BASIS_OVERRIDE
+    bound = last_updated.get(plugin)
+    bound_why = reasons.get(plugin, "no installed_plugins.json entry for this plugin")
+    named = bool(history) and any(
+        version == ver or version == prev for ver, _at, prev in history
+    )
+    if not named:
+        # LEGACY: superseded before the ledger existed (or the ledger never
+        # recorded it). The registry lastUpdated is an upper bound on when it
+        # was superseded; activated_at is unknown (-inf). Bounded: it only
+        # holds while sessions older than that bound live.
+        if bound is None:
+            return None, (
+                "no version history names this version and cannot tell when "
+                f"it was superseded — {bound_why}"
+            ), None
+        if history:
+            # The ledger's last line is a repoint too; never bound below it.
+            bound = max(bound, history[-1][1])
+        return [(None, bound)], None, SESSION_BASIS_LEGACY
+    intervals, gaps, tail, tail_at = version_intervals(history)
+    windows = list(gaps)
+    reg = registered.get(plugin, set())
+    if tail not in reg:
+        # The registry no longer points at the version the ledger last
+        # activated: it was repointed (or the entry removed) by something that
+        # did not write the ledger. From tail_at until that repoint ANY version
+        # may have been current, and the open interval ends no later than it.
+        if bound is None or bound < tail_at:
+            return None, (
+                f"the registry no longer points at {tail!r}, the version the "
+                f"version history last activated (at {tail_at}), and when it "
+                "was repointed away is unknown — "
+                + (
+                    bound_why
+                    if bound is None
+                    else f"registry lastUpdated {bound} is earlier than that line"
+                )
+            ), None
+        windows.append((tail_at, bound))
+        for ivs in intervals.values():
+            for iv in ivs:
+                if iv[1] is None:
+                    iv[1] = bound
+    for act, sup in intervals.get(version, []):
+        if sup is None:
+            # Only the tail can be open, and the tail is registered here
+            # (held before reaching this function); reaching it means the
+            # inputs disagree — do not guess.
+            return None, (
+                f"version history says {version!r} is still current but it is "
+                "not registered"
+            ), None
+        windows.append((act, sup))
+    return windows, None, SESSION_BASIS_HISTORY
+
+
 def session_age_holds(stale, cache_root, registry_path=None):
-    """Apply the session-age hold to `stale` (from scan). Returns (stale, problem).
+    """Apply the session-age hold to `stale` (from scan).
 
-    Each version dir gets `sessions` = the live `claude` pids that started
-    strictly before its superseded-at. A dir whose superseded-at is unknown is
-    marked undetermined (kept, reported). If the process list itself is
-    undetermined, every entry not already held — dangling links included — is
-    marked undetermined and `problem` says why: nothing may be removed on a
-    process list that could not be read. An entry already held for another
-    reason keeps that reason (it is kept either way).
+    Returns (stale, blanket, ledger_problems).
 
-    Dangling links are otherwise exempt: they address nothing, so no session
-    can be executing from them."""
+    Each version dir gets `sessions` = the live `claude` pids that may have
+    started while that version was the registry's current one
+    (_hold_windows): the exact [activated_at, superseded_at) intervals from
+    the plugin's version-history ledger, widened by any period the ledger
+    shows it did not observe; for a version no ledger line names (legacy),
+    (-inf, registry lastUpdated). PLUGIN_CACHE_SUPERSEDED_AT_OVERRIDE replaces
+    both with (-inf, override) for the dirs it names.
+
+    Undetermined, all kept:
+      - `blanket` (process list or override unreadable): every entry not
+        already held — dangling links included — is marked undetermined;
+        nothing may be removed on a process list that could not be read;
+      - a plugin whose ledger exists but cannot be read or parsed: every
+        superseded dir of THAT plugin is undetermined, and the plugin is named
+        in `ledger_problems` (even when its dirs are held for other reasons)
+        so the caller exits non-zero; other plugins are unaffected;
+      - a dir whose window needs the legacy bound and it is unknown.
+    An entry already held for another reason keeps that reason (it is kept
+    either way). Dangling links are otherwise exempt: they address nothing,
+    so no session can be executing from them."""
     procs, proc_why = live_claude_processes()
     override, override_why = superseded_at_override()
-    by_plugin, reasons = superseded_at_by_plugin(cache_root, registry_path)
+    last_updated, reasons, registered = registry_state_by_plugin(
+        cache_root, registry_path
+    )
     blanket = proc_why or override_why
+    histories = {}
+    for s in stale:
+        if s.kind == "dir" and s.plugin not in histories:
+            histories[s.plugin] = read_version_history(cache_root, s.plugin)
+    ledger_problems = [
+        f"{p}: version history unreadable ({why}) — every superseded dir of "
+        f"{p} is kept"
+        for p, (_lines, why) in sorted(histories.items())
+        if why
+    ]
     out = []
     for s in stale:
         h = s.holders
         und = h.undetermined
         sessions = ()
+        basis = None
         if h.held:
             # Already kept for a DETERMINATE reason (live marker, settings pin,
             # registry ref) or an existing undetermined one. Adding a session-age
             # undetermined on top would change nothing about the keep and would
-            # mask the real reason in describe(); a blanket probe failure is
-            # still reported by the caller as a problem (exit 1).
+            # mask the real reason in describe(); a blanket probe failure or an
+            # unreadable ledger is still reported by the caller (exit 1).
             pass
         elif blanket:
             und = und or f"session-age hold: {blanket}"
         elif s.kind == "dir":
-            at = override.get((s.plugin, s.version))
-            if at is None:
-                at = by_plugin.get(s.plugin)
-            if at is None:
-                und = und or (
-                    "session-age hold: cannot tell when this version was "
-                    "superseded — "
-                    + reasons.get(
-                        s.plugin, "no installed_plugins.json entry for this plugin"
-                    )
-                )
+            history, led_why = histories[s.plugin]
+            if led_why:
+                und = und or f"session-age hold: version history unreadable — {led_why}"
             else:
-                sessions = tuple(sorted(pid for pid, start in procs if start < at))
+                windows, why, basis = _hold_windows(
+                    s.plugin, s.version, history, override, last_updated,
+                    reasons, registered,
+                )
+                if why:
+                    und = und or f"session-age hold: {why}"
+                else:
+                    sessions = tuple(
+                        sorted(
+                            pid
+                            for pid, lo, hi in procs
+                            if any(_interval_holds(lo, hi, a, b) for a, b in windows)
+                        )
+                    )
         nh = Holders(
             live_pids=h.live_pids,
             undetermined=und,
             pinned=h.pinned,
             registered=h.registered,
             sessions=sessions,
+            session_basis=basis if sessions else None,
         )
         out.append(StaleDir(s.plugin, s.version, s.path, nh, kind=s.kind))
-    return out, blanket
+    return out, blanket, ledger_problems

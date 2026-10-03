@@ -180,13 +180,24 @@ pub fn run(input: &HookInput) -> Option<String> {
         .iter()
         .filter(|t| t.status == crate::task::STATUS_NEEDS_RULING)
         .count();
+    let expiring = tasks.iter().filter(|t| t.is_expiry_candidate(now)).count();
+    let expiry_note = if expiring > 0 {
+        format!(
+            " {expiring} unconfirmed row(s) are expiry candidates (older than 7 days): confirm \
+             them or close with `backlog cancel ID --reason \"unproven: ...\"` \u{2014} nothing \
+             is auto-closed."
+        )
+    } else {
+        String::new()
+    };
     let side_queues = if unconfirmed + needs_ruling > 0 {
         format!(
             "## Backlog \u{2014} outside the workable queue\n\n\
              unconfirmed: {unconfirmed} (suspicions; promote with \
              `backlog confirm ID --repro-test CMD`, or discard with \
              `backlog cancel ID --reason R`), needs-ruling: {needs_ruling} (a human \
-             approves with `backlog ruling approve ID` at a TTY). `backlog list` shows them.\n\n"
+             approves with `backlog ruling approve ID` at a TTY). `backlog list` shows \
+             them.{expiry_note}\n\n"
         )
     } else {
         String::new()

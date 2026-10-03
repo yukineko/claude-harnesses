@@ -678,8 +678,9 @@ fn run_in_temp_worktree(
 /// Run a finding's repro test at HEAD and record the outcome. Polarity: a
 /// repro that FAILS behaviourally reproduces the bug (same as a RED test);
 /// exit 0 is not-reproduced; everything that cannot be run to a conclusion is
-/// undetermined, with the cause in `detail`. Never returns an error: a finding
-/// is never lost because its repro could not run.
+/// undetermined, with the cause in `detail`. Never returns an error: the
+/// caller (`add`) files a task only on `reproduced` and records every other
+/// outcome in the considered-unproven record (`crate::unproven`).
 pub fn run_repro(cwd: &Path, text: &str, now: i64) -> Repro {
     let undetermined = |detail: String, rev: Option<String>| Repro {
         outcome: REPRO_UNDETERMINED.to_string(),

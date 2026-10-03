@@ -371,37 +371,51 @@ pub fn ruling_list(tasks_path: &Path) -> Result<()> {
 
 // ---- confirm -----------------------------------------------------------------
 
-/// `confirm ID --repro-test CMD`: record the attempt; promote to pending only
-/// on `reproduced`. Anything else leaves it unconfirmed and exits non-zero.
+/// `confirm ID --repro-test CMD`: record the attempt. An `unconfirmed` finding
+/// is promoted to pending only on `reproduced`. A legacy `pending`/`failed`
+/// task (filed before the repro requirement; `next` marks it
+/// `repro_required`) keeps its status and gains the reproduced repro. Any
+/// other outcome leaves the status unchanged, records the attempt, and exits
+/// non-zero.
 pub fn confirm(tasks_path: &Path, id: &str, repro_test: &str) -> Result<()> {
+    let confirmable =
+        |s: &str| s == STATUS_UNCONFIRMED || s == STATUS_PENDING || s == STATUS_FAILED;
     let tasks = store::load(tasks_path)?;
     let t = find(&tasks, id)?;
-    if t.status != STATUS_UNCONFIRMED {
-        bail!("refused: task {id} is {}, not unconfirmed", t.status);
+    if !confirmable(&t.status) {
+        bail!(
+            "refused: task {id} is {}, not unconfirmed/pending/failed",
+            t.status
+        );
     }
     let now = now_unix()?;
     let cwd = std::env::current_dir()?;
     let repro = evidence::run_repro(&cwd, repro_test, now);
     let outcome = repro.outcome.clone();
     let detail = repro.detail.clone();
+    let mut status_after = String::new();
     store::update_task(tasks_path, "confirm", id, |task, _| {
-        if task.status != STATUS_UNCONFIRMED {
+        if !confirmable(&task.status) {
             bail!(
-                "refused: task {id} is no longer unconfirmed (now {})",
+                "refused: task {id} is no longer confirmable (now {})",
                 task.status
             );
         }
-        if repro.outcome == REPRO_REPRODUCED {
+        if repro.outcome == REPRO_REPRODUCED && task.status == STATUS_UNCONFIRMED {
             task.status = STATUS_PENDING.to_string();
         }
+        status_after = task.status.clone();
         task.repro = Some(repro);
         Ok(())
     })?;
     if outcome == REPRO_REPRODUCED {
-        println!("confirmed: {id} (reproduced; now pending)");
+        println!("confirmed: {id} (reproduced; now {status_after})");
         Ok(())
     } else {
-        bail!("not confirmed: {id} stays unconfirmed — repro outcome {outcome}: {detail}")
+        bail!(
+            "not confirmed: {id} stays {status_after} — repro outcome {outcome}: {detail} \
+             (attempt recorded)"
+        )
     }
 }
 

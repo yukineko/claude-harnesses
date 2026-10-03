@@ -1,3 +1,4 @@
+mod audit_open;
 mod claim_ledger;
 mod closecmd;
 mod config;
@@ -13,6 +14,7 @@ mod lock;
 mod merge_driver;
 mod store;
 mod task;
+mod unproven;
 
 #[cfg(test)]
 mod audit_b1_0_tests;
@@ -74,18 +76,22 @@ enum Command {
         /// A committed test that REPRODUCES the finding (runner allowlist:
         /// `cargo test ...`, `pytest ...`, `python3 -m pytest ...`, `bash|sh
         /// <tracked script under a tests dir>`). It is run at HEAD before the
-        /// add: a behavioural FAILURE means reproduced and the task lands
-        /// `pending`; anything else (no repro test, exit 0 = not-reproduced,
-        /// or undetermined) lands `unconfirmed`, outside the workable queue.
-        /// The add itself always succeeds — a finding is never lost.
+        /// add: ONLY a behavioural FAILURE (reproduced) files the task, as
+        /// `pending`. Anything else (no repro test, exit 0 = not-reproduced,
+        /// or undetermined) files NO task and exits 2; the finding is instead
+        /// appended to the considered-unproven record `.backlog/unproven.toml`
+        /// (outside the queue; see `backlog unproven`). Every add first reports
+        /// prior unproven records that match (`unproven-match:` lines).
         #[arg(long = "repro-test")]
         repro_test: Option<String>,
     },
 
-    /// Re-run a repro test for an `unconfirmed` finding. Promotes it to
-    /// `pending` only when the outcome is `reproduced`; the attempt is
-    /// recorded either way, and a non-reproduced/undetermined outcome exits
-    /// non-zero.
+    /// Re-run a repro test for an `unconfirmed` finding, or for a legacy
+    /// `pending`/`failed` task that has no reproduced repro (`next` marks it
+    /// `repro_required`). An unconfirmed finding is promoted to `pending` only
+    /// when the outcome is `reproduced`; a legacy task keeps its status and
+    /// gains the reproduced repro. The attempt is recorded either way, and a
+    /// non-reproduced/undetermined outcome exits non-zero.
     Confirm {
         /// Task ID
         id: String,
@@ -93,6 +99,15 @@ enum Command {
         /// The repro test command (same allowlist as `add --repro-test`).
         #[arg(long = "repro-test")]
         repro_test: String,
+    },
+
+    /// Read the considered-unproven record (`.backlog/unproven.toml`):
+    /// findings that `add` did NOT file because no test reproduced them.
+    /// Read-only. An unreadable record exits 3 with nothing on stdout — it is
+    /// never rendered as "no records".
+    Unproven {
+        #[command(subcommand)]
+        action: UnprovenAction,
     },
 
     /// Request / approve / withdraw / list human rulings for closes that no
@@ -107,6 +122,21 @@ enum Command {
     /// judgment, none) plus untestable reasons grouped by crate. Never
     /// reopens anything; the store is not written.
     AuditClosures {
+        /// Emit JSON instead of the human report.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Does each OPEN queue row (pending / failed / unconfirmed; a claimed row
+    /// is a leased pending row) carry a recorded reproducing test? Reads only
+    /// the repro recorded at add/confirm time — NO test is run, and closed
+    /// rows are not audited (their evidence was audited at close time by
+    /// done / cancel / ruling approve). Each row is checked ONCE: determined
+    /// results (has-test / no-test) go to an untracked ledger
+    /// ~/.backlog/audit-open/<project-slug>.json and the row is skipped on
+    /// later runs; undetermined is reported and re-examined next run. An
+    /// unreadable ledger fails the command and nothing counts as checked.
+    AuditOpen {
         /// Emit JSON instead of the human report.
         #[arg(long)]
         json: bool,
@@ -340,6 +370,25 @@ enum Command {
     Driver {
         #[command(subcommand)]
         action: DriverAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum UnprovenAction {
+    /// Every record in this store.
+    List {
+        /// Emit JSON (`{"records": [...]}`).
+        #[arg(long)]
+        json: bool,
+    },
+    /// Records whose title or notes contain TEXT (case-insensitive), or whose
+    /// title scores >= 0.6 against TEXT. Use before re-investigating a
+    /// finding.
+    Search {
+        text: String,
+        /// Emit JSON (`{"matches": [...]}`).
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -909,15 +958,71 @@ fn run(cli: Cli) -> Result<()> {
             // `store::add_with_weight_and_github_push`) never runs a process
             // itself, so unit tests exercise it with fake closures only.
             let remote_url = git_remote_origin_url(&project);
+            // Re-examination guard (user ruling 2026-10-04: 「記録はのこし同一の
+            // 内容を検討しないようにする」): before anything else, say whether
+            // this content was already considered and NOT filed. An unreadable
+            // record is UNDETERMINED, never "no prior record" (CLAUDE.md §3).
+            let record_label = store::canonicalize_project_with_marker(&project).label;
+            let unproven_path = unproven::path_for(&tasks_path);
+            let scan = unproven::load(&unproven_path)
+                .map(|rs| unproven::matches_for(&title, &record_label, &rs));
+            eprintln!("{}", unproven::scan_report(&scan, &unproven_path));
             // The repro runs BEFORE the store lock is taken (a test can run
-            // for up to BACKLOG_TEST_TIMEOUT_SECS). Its outcome decides where
-            // the finding lands; it never decides WHETHER it lands.
+            // for up to BACKLOG_TEST_TIMEOUT_SECS). Its outcome decides
+            // WHETHER the finding is filed: only `reproduced` is
+            // (「testがないなら起票してはならない」).
             let repro = match &repro_test {
                 Some(cmd) => Some(evidence::run_repro(&std::env::current_dir()?, cmd, now)),
                 None => None,
             };
-            let intake = store::Intake::from_repro(repro);
-            let landed = intake.status;
+            let intake = match repro.clone().and_then(store::Intake::reproduced) {
+                Some(i) => i,
+                None => {
+                    // NOT filed. Keep the record so the finding is not lost and
+                    // the same content is not re-investigated.
+                    let (outcome, detail, rev) = match &repro {
+                        Some(r) => (r.outcome.clone(), r.detail.clone(), r.rev.clone()),
+                        None => (
+                            unproven::OUTCOME_NO_REPRO_TEST.to_string(),
+                            "no --repro-test was given".to_string(),
+                            None,
+                        ),
+                    };
+                    if let Err(e) = &scan {
+                        anyhow::bail!(
+                            "backlog add: NOT filed (repro outcome {outcome}: {detail}), and the \
+                             unproven record {} is UNDETERMINED ({e:#}), so this finding was NOT \
+                             recorded either and the file was left untouched — repair it by hand \
+                             and retry",
+                            unproven_path.display()
+                        );
+                    }
+                    let rec = unproven::Record {
+                        id: unproven::new_id(&title, now),
+                        title: title.clone(),
+                        project: record_label.clone(),
+                        notes: notes.clone(),
+                        tags,
+                        repro_test: repro_test.clone(),
+                        outcome: outcome.clone(),
+                        detail: detail.clone(),
+                        rev,
+                        recorded_at: now,
+                    };
+                    let rid = rec.id.clone();
+                    unproven::append(&tasks_path, rec)?;
+                    println!("unproven: {rid}");
+                    eprintln!(
+                        "backlog add: NOT filed — no test reproduced this finding (repro outcome \
+                         {outcome}: {detail}). A task is filed only when --repro-test FAILS \
+                         behaviourally at HEAD. Recorded as {rid} in {} (outside the queue) so it \
+                         is not lost and not re-investigated; write a RED test and re-run \
+                         `backlog add ... --repro-test CMD` to file it.",
+                        unproven_path.display()
+                    );
+                    std::process::exit(2);
+                }
+            };
             let outcome = intake
                 .repro
                 .as_ref()
@@ -936,12 +1041,8 @@ fn run(cli: Cli) -> Result<()> {
                 intake,
             )?;
             println!("added: {id}");
-            match outcome {
-                Some((o, d)) => eprintln!("repro: {o} ({d}); filed as {landed}"),
-                None => eprintln!(
-                    "repro: none given; filed as {landed} (suspicion, outside the workable \
-                     queue) — promote with `backlog confirm {id} --repro-test CMD`"
-                ),
+            if let Some((o, d)) = outcome {
+                eprintln!("repro: {o} ({d}); filed as pending");
             }
             // (f7b018f8) The store's own duplicate guard is an EXACT hashkey
             // match, so a differently-phrased filing of the same work is filed
@@ -1097,6 +1198,10 @@ fn run(cli: Cli) -> Result<()> {
                                     serde_json::Value::String("deferred".to_string()),
                                 );
                             }
+                            obj.insert(
+                                "expiry_candidate".to_string(),
+                                serde_json::Value::Bool(t.is_expiry_candidate(now)),
+                            );
                         }
                         v
                     })
@@ -1120,10 +1225,18 @@ fn run(cli: Cli) -> Result<()> {
                     if t.status == task::STATUS_UNCONFIRMED
                         && unconfirmed.first().is_some_and(|u| u.id == t.id)
                     {
+                        let expiring = unconfirmed
+                            .iter()
+                            .filter(|u| u.is_expiry_candidate(now))
+                            .count();
                         println!(
                             "--- unconfirmed: {} finding(s) — suspicion, NOT in the workable \
-                             queue (promote with `backlog confirm ID --repro-test CMD`) ---",
-                            unconfirmed.len()
+                             queue (promote with `backlog confirm ID --repro-test CMD`); {} \
+                             expiry candidate(s) older than 7 days: confirm, or close with \
+                             `backlog cancel ID --reason \"unproven: ...\"` (nothing is \
+                             auto-closed) ---",
+                            unconfirmed.len(),
+                            expiring
                         );
                     }
                     let priority_str = match t.priority() {
@@ -1145,11 +1258,14 @@ fn run(cli: Cli) -> Result<()> {
                     // guess and names the label that was guessed. Rendered
                     // ONLY for marked tasks: a legacy store (no marker field)
                     // therefore looks exactly as it did before.
-                    let scope_str = if t.project_unresolved {
+                    let mut scope_str = if t.project_unresolved {
                         format!("  [project unresolved: {}]", t.project)
                     } else {
                         String::new()
                     };
+                    if t.is_expiry_candidate(now) {
+                        scope_str.push_str("  [expiry candidate: unconfirmed > 7 days]");
+                    }
                     println!(
                         "{:<10} {:<10} {:<12} {:<22} {}{}",
                         t.id,
@@ -1276,7 +1392,28 @@ fn run(cli: Cli) -> Result<()> {
                     // for its `overwatch begin --key`; without it, picking this
                     // way would silently lose those keys.
                     let mut v = serde_json::to_value(&t)?;
+                    // Legacy items get their repro at claim time (user ruling
+                    // 2026-10-04: no bulk demotion). A task without a
+                    // REPRODUCED repro is handed out but flagged, in both
+                    // channels, so nobody works it before a RED test exists.
+                    let repro_required = !t
+                        .repro
+                        .as_ref()
+                        .is_some_and(|r| r.outcome == task::REPRO_REPRODUCED);
+                    if repro_required {
+                        eprintln!(
+                            "repro_required: {id} has no reproduced repro test — write the RED \
+                             test first and run `backlog confirm {id} --repro-test CMD` before \
+                             working it (no test, no ticket: if none can be written, close it with \
+                             `backlog cancel {id} --reason \"unproven: ...\"`)",
+                            id = t.id
+                        );
+                    }
                     if let Some(obj) = v.as_object_mut() {
+                        obj.insert(
+                            "repro_required".to_string(),
+                            serde_json::Value::Bool(repro_required),
+                        );
                         obj.insert(
                             "hashkey".to_string(),
                             serde_json::Value::String(task::hashkey(&t.title, &t.project)),
@@ -1366,6 +1503,51 @@ fn run(cli: Cli) -> Result<()> {
             mirror_close_for(&tasks_path, &id);
         }
 
+        Command::Unproven { action } => {
+            let tasks_path = store_path()?;
+            let path = unproven::path_for(&tasks_path);
+            let records = match unproven::load(&path) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!(
+                        "backlog unproven: the record {} is UNDETERMINED ({e:#}) — this is NOT \
+                         \"no records\"",
+                        path.display()
+                    );
+                    std::process::exit(3);
+                }
+            };
+            match action {
+                UnprovenAction::List { json } => {
+                    if json {
+                        println!("{}", serde_json::to_string(&json!({ "records": records }))?);
+                    } else if records.is_empty() {
+                        println!("no unproven records in {}", path.display());
+                    } else {
+                        for r in &records {
+                            println!("{:<12} {:<16} {}", r.id, r.outcome, r.title);
+                        }
+                    }
+                }
+                UnprovenAction::Search { text, json } => {
+                    let hits = unproven::search(&text, &records);
+                    if json {
+                        println!("{}", serde_json::to_string(&json!({ "matches": hits }))?);
+                    } else if hits.is_empty() {
+                        println!(
+                            "no unproven record matches {text:?} in {} ({} record(s) scanned)",
+                            path.display(),
+                            records.len()
+                        );
+                    } else {
+                        for r in hits {
+                            println!("{:<12} {:<16} {}", r.id, r.outcome, r.title);
+                        }
+                    }
+                }
+            }
+        }
+
         Command::Confirm { id, repro_test } => {
             let tasks_path = write_store_path("backlog confirm")?;
             closecmd::confirm(&tasks_path, &id, &repro_test)?;
@@ -1396,6 +1578,13 @@ fn run(cli: Cli) -> Result<()> {
                 RulingAction::Withdraw { id } => closecmd::ruling_withdraw(&tasks_path, &id)?,
                 RulingAction::List => closecmd::ruling_list(&tasks_path)?,
             }
+        }
+
+        Command::AuditOpen { json } => {
+            let tasks_path = store_path()?;
+            let scope = read_project_scope(&location, None, false, "audit-open")?;
+            let identity = claim_identity(scope.as_deref())?;
+            audit_open::run(&tasks_path, &identity, json, now_unix())?;
         }
 
         Command::AuditClosures { json } => {

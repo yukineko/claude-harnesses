@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 const TITLE: &str = "claim contract probe";
+const REPRO_SCRIPT: &str = "tests/repro.sh";
+const REPRO_CMD: &str = "bash tests/repro.sh";
 
 struct Fx {
     home: PathBuf,
@@ -53,7 +55,11 @@ fn fx(tag: &str) -> Fx {
     git(&main, &["config", "user.email", "t@t.t"]);
     git(&main, &["config", "user.name", "t"]);
     std::fs::write(main.join("README"), "x").unwrap();
-    git(&main, &["add", "README"]);
+    // `add` files only a REPRODUCED finding (intake contract v2), and the
+    // claim check runs on that path only: commit a repro that exits 1.
+    std::fs::create_dir_all(main.join("tests")).unwrap();
+    std::fs::write(main.join(REPRO_SCRIPT), "#!/bin/bash\nexit 1\n").unwrap();
+    git(&main, &["add", "README", REPRO_SCRIPT]);
     git(&main, &["commit", "-q", "-m", "init"]);
     git(
         &main,
@@ -92,7 +98,15 @@ impl Fx {
 
     fn add(&self, extra: &[&str]) -> (i32, String, String) {
         let proj = self.linked.to_str().unwrap();
-        let mut args = vec!["add", "--title", TITLE, "--project", proj];
+        let mut args = vec![
+            "add",
+            "--title",
+            TITLE,
+            "--project",
+            proj,
+            "--repro-test",
+            REPRO_CMD,
+        ];
         args.extend_from_slice(extra);
         let out = Command::new(env!("CARGO_BIN_EXE_backlog"))
             .args(&args)
@@ -111,13 +125,17 @@ impl Fx {
         )
     }
 
-    /// Concatenated text of every `.toml` under the linked checkout's store.
+    /// Concatenated text of every TASK `.toml` under the linked checkout's
+    /// store. `unproven.toml` is excluded: it holds considered-but-unfiled
+    /// findings (intake contract v2), so a title there is not a stored task.
     fn stored(&self) -> String {
         let mut s = String::new();
         let dir = self.linked.join(".backlog");
         if let Ok(rd) = std::fs::read_dir(&dir) {
             for e in rd.flatten() {
-                if e.path().extension().and_then(|x| x.to_str()) == Some("toml") {
+                if e.path().extension().and_then(|x| x.to_str()) == Some("toml")
+                    && e.file_name() != "unproven.toml"
+                {
                     s.push_str(&std::fs::read_to_string(e.path()).unwrap_or_default());
                 }
             }

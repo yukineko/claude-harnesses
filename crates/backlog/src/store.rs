@@ -821,6 +821,16 @@ fn with_tasks_lock<T>(path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
 ///
 /// The guard drops (releasing the lock) on every exit path, including `f`
 /// returning `Err` or unwinding.
+/// Crate-visible entry to [`with_tasks_lock_required`] for files that live
+/// next to the store and share its lock (`crate::unproven`).
+pub(crate) fn with_store_lock_required<T>(
+    path: &Path,
+    op: &str,
+    f: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    with_tasks_lock_required(path, op, f)
+}
+
 fn with_tasks_lock_required<T>(path: &Path, op: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
     let Some(_guard) = try_acquire_tasks_lock(path) else {
         return Err(anyhow!(
@@ -2462,30 +2472,25 @@ pub fn add_with_weight_and_github_push<R: Fn(&[&str]) -> Option<(bool, String)>>
 
 /// Where a new finding lands and what was observed about it.
 ///
-/// Only a `reproduced` repro outcome may land in `pending` (the workable
-/// queue); everything else lands in [`STATUS_UNCONFIRMED`]. `main.rs` builds
-/// this from the repro run via [`Intake::from_repro`], which is the only
-/// production constructor.
+/// Only a `reproduced` repro outcome may be filed at all (user rulings
+/// 2026-10-04: 「testがないなら起票してはならない」). Every other outcome is NOT a
+/// task: `main.rs` appends it to the considered-unproven record
+/// (`crate::unproven`) instead. [`Intake::reproduced`] is the only production
+/// constructor and returns `None` for anything that did not reproduce.
 pub struct Intake {
     pub status: &'static str,
     pub repro: Option<Repro>,
 }
 
 impl Intake {
-    /// `pending` exactly when `repro` observed the problem; `unconfirmed`
-    /// otherwise (no repro test, not reproduced, or undetermined).
-    pub fn from_repro(repro: Option<Repro>) -> Self {
-        let reproduced = repro
-            .as_ref()
-            .is_some_and(|r| r.outcome == crate::task::REPRO_REPRODUCED);
-        Intake {
-            status: if reproduced {
-                STATUS_PENDING
-            } else {
-                STATUS_UNCONFIRMED
-            },
-            repro,
-        }
+    /// `Some(pending)` exactly when `repro` observed the problem; `None`
+    /// otherwise (not reproduced, or undetermined) — such a finding is not
+    /// filed.
+    pub fn reproduced(repro: Repro) -> Option<Self> {
+        (repro.outcome == crate::task::REPRO_REPRODUCED).then_some(Intake {
+            status: STATUS_PENDING,
+            repro: Some(repro),
+        })
     }
 }
 

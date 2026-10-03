@@ -39,15 +39,6 @@ fn unique_dir(tag: &str) -> PathBuf {
     std::fs::canonicalize(&dir).unwrap()
 }
 
-/// A temp dir that IS a repo root, built by `common::linked_checkout` as a
-/// LINKED worktree (store writes are refused in a primary tree, and an empty
-/// `.git` directory is refused as Undetermined).
-fn temp_repo(tag: &str) -> PathBuf {
-    let dir = unique_dir(tag);
-    common::linked_checkout(&dir);
-    dir
-}
-
 /// Close-evidence (2026-10-01): `backlog add` lands `pending` (workable, what
 /// `next` / `next --claim` hand out) only when a committed repro test
 /// REPRODUCES the finding; without one it lands `unconfirmed`. This commits a
@@ -86,7 +77,8 @@ fn commit_repro_script(repo: &std::path::Path) {
 /// The `--repro-test` value matching [`commit_repro_script`].
 const REPRO: &str = "bash tests/repro.sh";
 
-/// A REAL git repo (unlike [`temp_repo`]) holding a committed repro script:
+/// A REAL git repo (a LINKED worktree built by `common::linked_checkout`;
+/// store writes are refused in a primary tree) holding a committed repro script:
 /// `add` lands `pending` (what `next --claim` hands out) only when
 /// `--repro-test` reproduces, and running it needs a real HEAD.
 fn evidence_repo(tag: &str) -> PathBuf {
@@ -126,11 +118,21 @@ const TITLE_B: &str = "add touched files field to the backlog task record and gr
 #[test]
 fn add_surfaces_the_near_duplicate_peer_id_without_blocking() {
     let home = unique_dir("add-home");
-    let repo = temp_repo("add-repo");
+    // `add` files only a reproduced finding (intake contract v2), and the
+    // near-duplicate scan runs on that path: the adds carry a reproducing repro.
+    let repo = evidence_repo("add-repo");
     let project = repo.to_string_lossy().into_owned();
 
     let (code, out, err) = run(
-        &["add", "--title", TITLE_A, "--project", &project],
+        &[
+            "add",
+            "--title",
+            TITLE_A,
+            "--project",
+            &project,
+            "--repro-test",
+            REPRO,
+        ],
         &repo,
         &home,
     );
@@ -142,7 +144,15 @@ fn add_surfaces_the_near_duplicate_peer_id_without_blocking() {
         .to_string();
 
     let (code, out, err) = run(
-        &["add", "--title", TITLE_B, "--project", &project],
+        &[
+            "add",
+            "--title",
+            TITLE_B,
+            "--project",
+            &project,
+            "--repro-test",
+            REPRO,
+        ],
         &repo,
         &home,
     );
@@ -232,11 +242,21 @@ fn claim_surfaces_the_near_duplicate_peer_id_in_both_channels() {
 #[test]
 fn an_empty_peer_set_is_still_reported_with_its_limitation() {
     let home = unique_dir("solo-home");
-    let repo = temp_repo("solo-repo");
+    // `add` files only a reproduced finding (intake contract v2), and the
+    // near-duplicate scan runs on that path: the adds carry a reproducing repro.
+    let repo = evidence_repo("solo-repo");
     let project = repo.to_string_lossy().into_owned();
 
     let (code, _, err) = run(
-        &["add", "--title", TITLE_A, "--project", &project],
+        &[
+            "add",
+            "--title",
+            TITLE_A,
+            "--project",
+            &project,
+            "--repro-test",
+            REPRO,
+        ],
         &repo,
         &home,
     );

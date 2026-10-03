@@ -65,7 +65,9 @@ SessionStart フックは primary では requeue をスキップし、その旨�
 
 ```sh
 cargo install --path .
-backlog add --title "Fix X" --project "$PWD" --priority p1   # 項目をキューに積む
+backlog add --title "Fix X" --project "$PWD" --priority p1 \
+  --repro-test "bash tests/repro_fix_x.sh"                  # コミット済みテストが HEAD で落ちた時だけ起票
+backlog unproven search "Fix X"                              # 起票されずに記録された既検討の内容か確認
 backlog list --status pending                                # キューを見る
 backlog next                                                 # 次の項目をピック
 backlog done <id> --test "cargo test -p x" --red-rev <rev>  # 解決する（REV で RED・HEAD で GREEN を実測）
@@ -79,6 +81,35 @@ backlog uninstall                                            # 再び除去す�
 ```
 
 > 補足: `backlog list` の status 語彙は `pending` であり `open` ではない。`list --status open` は何も表示しない。
+
+### テストが無ければ起票しない（2026-10-04 ユーザー裁定）
+
+> 「testがないなら起票してはならない」 / 「見つけたら テストを実装する、検証されたときには起票する、テストがかけない、証拠がない場合は起票はしてはいけない。ただし記録はのこし同一の内容を検討しないようにする」
+
+- `add` は `--repro-test CMD`（allowlist: `cargo test …` / `pytest …` / `python3 -m pytest …` /
+  `bash|sh <tests 配下の追跡済みスクリプト>`）が clean な HEAD で振る舞いとして失敗した時**だけ** task を
+  `pending` で書く（再現記録つき）。
+- `--repro-test` 無し・exit 0（再現せず）・判定不能（未追跡/dirty・allowlist 外・タイムアウト・ビルド失敗等）は
+  **task を書かず exit 2**。代わりに **`.backlog/unproven.toml`**（`tasks.toml` の隣、キューの外）へ
+  title・notes・tags・repro コマンド・結果（`no-repro-test` / `not-reproduced` / `undetermined`）・detail・rev・時刻を
+  追記し `unproven: u-…` を出す。記録が読めない場合は add 自体が失敗（非 0、2 ではない）し、ファイルは触らない。
+- 再検討ガード: `add` は毎回、同じ project の過去の未実証記録でタイトルが一致（正規化一致または類似度 ≥ 0.6）
+  するものを stderr に `unproven-match: <id>` で出す。一致なしは `no prior unproven record` と明示し、読めない
+  記録は `UNDETERMINED`（「一致なし」ではない）。`backlog unproven search TEXT [--json]`（title/notes の部分一致
+  または類似度 ≥ 0.6）と `backlog unproven list [--json]` で読む。読めない記録は exit 3・stdout 空。
+- 旧データは一括降格しない。`next` / `next --claim` は reproduced な repro の無い task に `repro_required: true`
+  （stderr にも `repro_required: <id>`）を付ける。着手前に RED テストを書き `backlog confirm <id> --repro-test CMD`
+  （`pending`/`failed` も受け付け、status は変えずに repro を記録する）。
+- 旧仕様で作られた `unconfirmed` のうち 7 日を超えたものは失効候補: `list` が `expiry candidate`（JSON は
+  `expiry_candidate: true`）と表示し、SessionStart が件数を出す。`confirm` するか
+  `backlog cancel <id> --reason "unproven: …"` で閉じる。自動では閉じない。
+- `backlog audit-open [--json]` は open 行（pending / failed / unconfirmed。claimed はリース中の pending）だけを
+  1 行 1 回監査する: 記録済み repro から `has-test` / `no-test` / `undetermined`（テストは実行しない）。判定済みは
+  untracked な `~/.backlog/audit-open/<project-slug>.json` に記録し以後読み飛ばす（後から repro が付いても再確認しない）。
+  undetermined は次回また見る。記録が読めなければ失敗し何も確認済みにしない。closed 行は記録として扱い監査しない —
+  代わりにすべての close 経路が close 時に監査する（`done --test` の F→P 実測、`--doc-only` の commit 検証、
+  `--duplicate-of` の相手の存在、`cancel` の空でない理由、判断・テスト不能は人間の `ruling approve`。
+  `edit --status done|cancelled` は拒否）。
 
 ### 重複タスクの拒否 (content hashkey)
 

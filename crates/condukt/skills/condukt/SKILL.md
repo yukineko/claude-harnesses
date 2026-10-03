@@ -91,7 +91,7 @@ allowed-tools: Task, AskUserQuestion, Bash(condukt:*), Bash(fugu-router:*), Bash
    並列 run では**その worktree を消した時点で観測の文脈ごと消える**。落とした 1 件は誰にも見えず、
    余分な 1 件はキューの 1 行で済む。orchestrator は Phase 5/6 で worker と verifier の返り値を読んだら、
    `別件:` 行と verifier の reason 中の対象外の指摘を**Phase 7 の worktree 削除より前に**すべて
-   `backlog add` する。書く内容は: 逐語の観測・測定点 (rev と日付・どの task の worktree で見たか)・
+   `backlog add` する（**再現テスト（RED）を書いて `--repro-test` を付ける**。2026-10-04 裁定「testがないなら起票してはならない」により、テスト無し・再現しないものは task にならず exit 2 で `.backlog/unproven.toml` に記録されるだけ。テストが書けなければ Ask）。書く内容は: 逐語の観測・測定点 (rev と日付・どの task の worktree で見たか)・
    判定できないときは (a) 実在の欠陥 / (b) 意図どおりの両方の読みと、それを見分ける方法。
    起票は着手ではない。書いたら元の task に戻る。
 

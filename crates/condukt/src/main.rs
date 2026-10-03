@@ -5873,9 +5873,11 @@ fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Resu
             // manually-set `cost_usd` (which SKILL.md prose often leaves at the
             // 0.0 default because description-string matching is fragile).
             // "No data" (gauge absent / no matching id) falls back to
-            // `s.cost_usd`; an UNDETERMINED gauge does not — the episode is
-            // left unrecorded (retried next firing) and surfaced as a failure,
-            // so a fabricated fallback cost never lands in fugu-router.
+            // `s.cost_usd`; when that was never set either, the cost is
+            // UNMEASURED and `--cost` is omitted (never sent as 0 — backlog
+            // 55fb3861). An UNDETERMINED gauge does not fall back — the episode
+            // is left unrecorded (retried next firing) and surfaced as a
+            // failure, so a fabricated fallback cost never lands in fugu-router.
             let worker_key = format!("{}:worker", s.task_id);
             if !rs.recorded_episodes.contains(&worker_key) {
                 match gauge_accounting(s.agent_id.as_deref()) {
@@ -5885,7 +5887,7 @@ fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Resu
                             s,
                             "worker",
                             &s.model,
-                            cost.unwrap_or(s.cost_usd),
+                            cost.or(s.cost_usd),
                             tokens,
                             &fingerprint,
                         ) {
@@ -5919,8 +5921,9 @@ fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Resu
             {
                 match gauge_accounting(s.verifier_agent_id.as_deref()) {
                     Determination::Known((cost, tokens)) => {
-                        let verifier_cost =
-                            cost.unwrap_or_else(|| s.verifier_cost_usd.unwrap_or(0.0));
+                        // Same rule as the worker episode: unresolved and
+                        // never set → `None` → `--cost` omitted (unmeasured).
+                        let verifier_cost = cost.or(s.verifier_cost_usd);
                         if spawn_fugu_record(
                             &fugu_bin,
                             s,
@@ -6006,7 +6009,7 @@ fn spawn_fugu_record(
     s: &state::RecordSpec,
     role: &str,
     model: &str,
-    cost: f64,
+    cost: Option<f64>,
     tokens: Option<(u64, u64)>,
     fingerprint: &str,
 ) -> bool {
@@ -6017,8 +6020,15 @@ fn spawn_fugu_record(
         .args(["--class", &s.class])
         .args(["--model", model])
         .args(["--status", &s.status])
-        .args(["--role", role])
-        .args(["--cost", &cost.to_string()]);
+        .args(["--role", role]);
+    // Forward a resolved or manually-set cost unchanged (an explicit 0 is sent
+    // as 0). `None` = the cost could not be resolved: OMIT `--cost`, which
+    // fugu-router (0.1.41+) records as unmeasured and excludes from every cost
+    // aggregate, instead of sending a fabricated 0 that reads as "this task
+    // was free" (backlog 55fb3861).
+    if let Some(c) = cost {
+        cmd.args(["--cost", &c.to_string()]);
+    }
     if let Some(dc) = &s.done_criteria {
         cmd.args(["--done-criteria", dc]);
     }

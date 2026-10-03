@@ -23,6 +23,17 @@ Scope, stated precisely so the ALLOW paths are not accidents:
   * Files OUTSIDE the project main tree are allowed: the memory dir under
     ~/.claude, the session scratchpad under /tmp, any other repo. Those are not
     the shared index this rule protects.
+  * MERGE IN PROGRESS (backlog c8c11add, user ruling 2026-10-04): while
+    `MERGE_HEAD` exists in the main checkout's git dir, an edit to ANY path in
+    the main tree is ALLOWED — conflict resolution is the integration step §8
+    permits on main, and the commit-side guard (check-worktree-isolation.py)
+    already allows the commit whenever MERGE_HEAD exists. The probe mirrors that
+    guard's bounded retry for the marker's visibility lag. Only MERGE_HEAD
+    counts: REBASE_HEAD / CHERRY_PICK_HEAD alone stay refused. A MERGE_HEAD that
+    exists but is not a readable regular file (a directory, a symlink, an
+    unreadable file, an lstat error) is undetermined and refused (CLAUDE.md 3).
+    The hook-machinery and deny-ledger-directory refusals below are checked
+    first and are NOT lifted by a merge in progress.
   * git-ignored paths under the main tree are allowed (personal, uncommitted
     scratch such as settings.local.json). They never enter the shared history,
     so editing them on main creates none of the index-sharing harm.
@@ -70,8 +81,10 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import subprocess
 import sys
+import time
 
 try:
     # A failed import must not crash the hook (exit 1 is a non-blocking error,
@@ -224,7 +237,58 @@ def _judge(payload: dict) -> tuple[int, str, dict]:
     meta["target_abs"] = target
     meta["root"] = proj if proj is not None else (
         os.path.realpath(toplevel) if toplevel is not None else None)
+
+    # Integration carve-out (backlog c8c11add): while a merge is in progress on
+    # main, editing main's tree IS the allowed operation (conflict resolution).
+    merge = _merge_head_state(git_dir)
+    if merge == "present":
+        return 0, "", meta
+    if merge == "undetermined":
+        return 2, DENY_MERGE_HEAD_UNDETERMINED.format(
+            path=raw, marker=os.path.join(git_dir, "MERGE_HEAD")), meta
     return 2, DENY_MAINTREE.format(path=raw), meta
+
+
+# Same bounded retry budget as check-worktree-isolation.py's
+# MERGE_HEAD_RETRY_* (the visibility lag between git writing MERGE_HEAD and a
+# hook observing it). Only an ABSENT marker is retried; giving up answers
+# "absent" (-> deny), never "present".
+MERGE_HEAD_RETRY_ATTEMPTS = 5
+MERGE_HEAD_RETRY_DELAY_S = 0.1
+
+
+def _merge_head_state(git_dir: str) -> str:
+    """Tri-state MERGE_HEAD probe in the main checkout's git dir.
+
+    "present"      MERGE_HEAD is a regular file this process can open and read.
+    "absent"       MERGE_HEAD does not exist (after the bounded retry).
+    "undetermined" anything else: a directory, a symlink or other non-regular
+                   file, an unreadable file, or an lstat error other than
+                   ENOENT. Resolves to deny (CLAUDE.md 3).
+
+    Only MERGE_HEAD counts. REBASE_HEAD / CHERRY_PICK_HEAD are deliberately not
+    consulted: the user ruling (2026-10-04) scopes the carve-out to the same
+    signal the commit-side guard honours.
+    """
+    marker = os.path.join(git_dir, "MERGE_HEAD")
+    for attempt in range(MERGE_HEAD_RETRY_ATTEMPTS):
+        try:
+            st = os.lstat(marker)
+        except FileNotFoundError:
+            if attempt < MERGE_HEAD_RETRY_ATTEMPTS - 1:
+                time.sleep(MERGE_HEAD_RETRY_DELAY_S)
+            continue
+        except OSError:
+            return "undetermined"
+        if not stat.S_ISREG(st.st_mode):
+            return "undetermined"
+        try:
+            with open(marker, "rb") as f:
+                f.read(1)
+        except OSError:
+            return "undetermined"
+        return "present"
+    return "absent"
 
 
 DENY_MAINTREE = """Refused: editing `{path}` writes to this project's MAIN working tree.
@@ -240,7 +304,19 @@ Do this instead:
 
 then make the edit against the file inside that worktree, commit there, and merge
 into main. Merge / conflict-resolution are the ONLY operations allowed on the
-main tree.
+main tree: while a merge is in progress on main (a readable MERGE_HEAD regular
+file in main's git dir) edits to main's tree are allowed so the conflicts can be
+resolved. A rebase or cherry-pick in progress (REBASE_HEAD / CHERRY_PICK_HEAD)
+does not unlock this.
+"""
+
+DENY_MERGE_HEAD_UNDETERMINED = """Refused: editing `{path}` writes to this project's MAIN working tree, and
+whether a merge is in progress could not be determined.
+
+`{marker}` exists but is not a readable regular file, so this guard cannot tell
+"conflict resolution of a merge in progress" (allowed) from "an ordinary edit on
+main" (refused). Under CLAUDE.md 3 cannot-determine resolves to the restricted
+side. Inspect that path; if no merge is in progress, make the edit in a worktree.
 """
 
 DENY_HOOKS = """Refused: editing `{path}` would rewrite this repository's git hook machinery.

@@ -939,13 +939,95 @@ git config core.hooksPath を別パスへ / chmod / .git/hooks 配下への書�
 guard-maintree-bash.py で rc=0（実測）。ゲートを無効化するのが最も安い hack route である。
 親 826c29bf
 
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_e033c406.py (rev 34b1a083): gate not built; both the retry-after-deny and the hooksPath self-disable routes are rc=0"""
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_e033c406.py (rev 34b1a083): gate not built; both the retry-after-deny and the hooksPath self-disable routes are rc=0
+
+[flow 2026-10-03 session 33de4c25 @b90c0132] spec-gap divert (specguard brief: not-covered; user chose divert). specforge draft --id e033c406-retry-evasion-gate FAILED the rigor gate, so no draft was written and ratify is impossible. Returned to the human with the sentinel below verbatim. Answer Q1-Q6, then rerun the specforge draft.
+
+date: 2026-10-03
+spec: e033c406-retry-evasion-gate
+summary: taintguard が撤去済み(0521d013)なのに要望が denier と前例に使っている矛盾、N/T 窓・非対話 hardening の根拠・台帳消去の判定・Stop verdict・自己編集 denier の対象範囲で canon が沈黙
+
+# e033c406-retry-evasion-gate の正規化結果: rigor fail（Spec IR は出していません）
+
+1 件でも厳格化できない requirement があるため、draft は出さずに人間へ上げます。このセッションでは読み取り操作だけを行い、編集はしていません。
+
+## 観測した事実
+
+- **`crates/taintguard` は存在しない。** `ls crates/taintguard` の結果は `No such file or directory` でした。`git log -1 0521d013` は「feat(taintguard)!: crate をリポジトリから撤去する — 判定が厳しすぎて実害が出たため (ユーザー裁定)」です。
+- `crates/harness-core/src/hook.rs:39-81` のフィールド一覧は要望の記述と一致しました。`prompt` には `/// UserPromptSubmit` という注釈があり、deny を表すフィールドはありません。
+- `scripts/guard-maintree-bash.py`、`guard-maintree-edit.py`、`stop-verify-worktree.py`、`test_backlog_e033c406.py` はいずれも存在します。test_backlog_e033c406.py は expectedFailure 付きの RED 再現テストで、中身は確認しましたが実行はしていません。
+
+## CLAUDE.md で裏付けられた点（逐語引用）
+
+- 判定不能は制限側へ倒す（§3）:「**判定不能 — IO 失敗 / ロック取得失敗 / subprocess の異常終了 / パース不能 / panic / 空集合 — は `clean` ではない。必ず `block` か `ask` に解決する。**」
+- project root の skip ファイルは使わない（§5.3）:「**並行セッションがあるときは project root の共有 skip ファイルを使わない**（一度だけ消費されるため…）」
+- 状態はローカルに置く（§7）:「**ゲートの実体（block/allow を決める部分）は local に置く。**」
+- block 理由の逐語申告と、別構文での再試行の禁止（§5.4）:「**ゲートに block されたら、block 理由を逐語で申告して Ask する。** 別構文で同じ効果を得る再試行（redirect が止められた → `python3 -c "open(...)"` で同じ書き込み、等）は禁止。」
+
+ここまでは要望の方針と矛盾しません。足りないのは、以下の個別の決定点です。
+
+## 不足と確認したいこと
+
+### Q1 [G3 矛盾 / G1 接地不能] taintguard が撤去済み
+要望は taintguard を次の 3 か所で使っています:
+- 変更対象の denier の 1 つ
+- 状態の置き場の前例（`crates/taintguard/src/state.rs:93,161-168`）
+- ask を deny へ hardening する前例（`crates/taintguard/src/main.rs:212-218`）
+
+この 3 つはどれも存在しないファイルを指しています。どれが正しいかを機械は決められません。
+- **Ask:** denier から taintguard を外してよいですか。
+- **Ask:** 2 つの前例を何に付け替えますか。候補は hardening 側の `crates/blastguard/src/interactive.rs` です（CLAUDE_CODE_ENTRYPOINT による判別がここにあることは観測済み）。状態の置き場側の候補は未特定です。
+
+### Q2 [G2 沈黙] 予防信号の窓「N 呼び出し / T 分以内」の値がない
+CLAUDE.md にも要望にも値がありません。値が無いと「窓の外なら発火しない」という acceptance を反証可能な形にできません。
+- **Ask:** N と T の値を決めてください。
+- **Ask:** 窓の外へ出たときの扱いも決めてください。黙って解除するのか、引き続き Stop 時の dirty 比較だけで捕捉するのか。
+
+### Q3 [G2 沈黙] 非対話 entrypoint で ask を deny に hardening する規則が canon にない
+CLAUDE.md を `grep '非対話'` しても 0 件でした。G1 の根拠になる文書がありません。
+- **Ask:** この規則の根拠文書を canon に追加してください（例: blastguard の interactive.rs、または GLOSSARY の該当項目）。
+
+### Q4 [G2 沈黙] 台帳の消去条件「許可された場所に同一効果が着地したとき」の判定方法がない
+「同一効果」をどう観測するのかが決まっていません。tuple が一致するのか、effect_verb と basename が一致するのか、などです。
+- **Ask:** 判定式を決めてください。決められないなら、消去条件を UserPromptSubmit だけに縮めてよいかを決めてください。
+
+### Q5 [G2 沈黙] 健全な検出信号を Stop で使うときの verdict と所有者
+Stop には ask がありません。block しかない前提でよいかを確認したいです。
+- **Ask:** 既存の `scripts/stop-verify-worktree.py` に組み込みますか、それとも新しい Stop hook にしますか。
+- **Ask:** PostToolUse で dirty を検出したときの出力を決めてください。block ですか、それとも additionalContext で通知するだけですか。
+
+### Q6 [G2 沈黙 / G4] 第二のゲート（自己編集 denier）の対象範囲
+次の点が列挙されていません:
+- 「フック設定」に含まれるパス（`~/.claude/settings.json`、project の `.claude/settings*.json`、`.githooks/**` など）
+- `chmod` の対象を限るのか（全 chmod か、hook や launcher のパスだけか）
+- `core.hooksPath` を `.githooks` に設定するのは許すのか（CLAUDE.md §7 は opt-in の正規手順として `git config core.hooksPath .githooks` を挙げています）
+
+範囲が決まらないと、正しい手順まで deny する誤検知と、取りこぼしの境界を反証できません。
+
+### Q7 [G1] canon ポインタが CLAUDE.md だけ
+hook.rs のフィールド集合や guard-maintree-*.py の挙動は、実装事実であって canon ではありません。
+
+## 埋めてほしい雛形（canon への追記案）
+
+```markdown
+## retry-evasion gate 決定事項 (e033c406)
+- deniers: [guard-maintree-bash.py, guard-maintree-edit.py, blastguard]   # taintguard 除外の是非
+- ledger_path: ~/.<gate>/state/<session_id>.jsonl                        # ホーム配下・session keyed
+- window: { calls: <N>, minutes: <T> }; 窓外の扱い: <解除 | Stop 比較のみ継続>
+- noninteractive_hardening: 根拠 = <file:line>; 判別子 = CLAUDE_CODE_ENTRYPOINT != "cli"
+- ledger_clear: [UserPromptSubmit, <同一効果着地の判定式 or 削除>]
+- sound_detector: owner = <stop-verify-worktree.py | 新 hook>; PostToolUse verdict = <block|context>
+- self_edit_denier.targets: [<paths>]; chmod 範囲: <...>; hooksPath=.githooks は <allow|deny>
+- 既知の残余 (未捕捉): 断片から再構成したパス, $HOME/$PWD 経由のパス
+```
+
+```"""
 created_at = 1788791851
-updated_at = 1790983314
+updated_at = 1791024756
 weight = 0.0
 issue_number = 427
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/427"
-rev = 0
+rev = 1
 
 [[task]]
 id = "73c2c089"
@@ -1016,13 +1098,15 @@ verdict は returncode のみ、独立した exit 2 の状態が6つ）なので
 scripts/parked-plugins.json 相当の宣言（理由・parked_at・再検討起点）を置く、のどちらかへ決着させる。
 宣言の無い未配線を「たぶん意図的」と解釈しない（CLAUDE.md の明文）。親 826c29bf
 
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_5eb1f127.py (rev 2ff60f58): 5 of the original 6 still dark; docs/gate-taxonomy.md still claims CI triggers for two of them though .github/ no longer exists."""
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_5eb1f127.py (rev 2ff60f58): 5 of the original 6 still dark; docs/gate-taxonomy.md still claims CI triggers for two of them though .github/ no longer exists.
+
+[flow 2026-10-03 session 33de4c25 @b90c0132] Picked and returned unworked: wiring these scripts into hooks means editing .githooks/pre-commit or pre-push, and ~/.claude/settings.json denies Edit/Write on //Users/yuki/**/.githooks/** to agents (a Bash cp touching .githooks was refused by the same rule). Not routed around. Needs a human to apply the wiring, or a ruling on where the wiring should live outside .githooks."""
 created_at = 1788792879
-updated_at = 1790983274
+updated_at = 1791024532
 weight = 0.0
 issue_number = 436
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/436"
-rev = 0
+rev = 1
 
 [[task]]
 id = "f6919056"

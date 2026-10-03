@@ -1,19 +1,20 @@
-//! The in-process site for the PRIMARY working tree's staging+commit.
+//! The in-process site for a working tree's staging+commit (`condukt repo commit`).
 //!
-//! condukt has two execution shapes that implement work directly in the primary
-//! working tree instead of a per-task worktree: single-worktree mode
-//! (`config.single_worktree`) and the small-task fast path. Both used to stage
-//! and commit from the `/condukt` skill's own shell (`git add <paths> && git
-//! commit`), so there was NO in-process site that could hold
-//! [`crate::lock::REPO_PRIMARY_LOCK_KEY`] — that path was serialized only by the
-//! coarse upstream `/flow` backlog run.lock. Two sessions sharing ONE index and
-//! working tree is the one conflict git cannot resolve by merging: branch
-//! isolation and merge-conflict resolution simply do not apply, and the loser's
-//! staged content silently lands inside the winner's commit.
+//! Since the 2026-10-03 user ruling (backlog 5e5cf0a9) retired single-worktree
+//! mode and the small-task fast path, every task commits in its OWN worktree
+//! and `repo commit` is no longer required by the `/condukt` skill. The
+//! subcommand is kept as a locked, selective-staging commit for any caller that
+//! does share one worktree's index. The main working tree is never an
+//! implementation site (CLAUDE.md §8: only merges and conflict resolution
+//! happen there). When peers do share ONE index and working tree, git cannot
+//! resolve it by merging: branch isolation does not apply and the loser's
+//! staged content silently lands inside the winner's commit. `repo commit`
+//! resolves the repo from the caller's cwd toplevel.
 //!
 //! This module moves that read-modify-write into condukt so it can be
-//! serialized like every other primary-repo mutator (`worktree::merge`,
-//! `git worktree prune`).
+//! serialized per checkout: the lock is keyed on the worktree it is run from, so
+//! it serializes commits that share ONE worktree index. It does not contend with
+//! `worktree::merge` / `git worktree prune` on main (a different index).
 //!
 //! Cannot-determine resolves to the RESTRICTIVE side throughout: an unheld lock,
 //! an empty path set, foreign content already staged in the shared index, or a
@@ -38,7 +39,7 @@ pub const RACE_DELAY_ENV: &str = "CONDUKT_REPO_COMMIT_RACE_DELAY_MS";
 
 /// Reject a pathspec we cannot treat as one concrete, task-owned file.
 ///
-/// The whole point of this command is that the primary tree is SHARED, so the
+/// The whole point of this command is that the worktree's index is SHARED, so the
 /// commit must carry only this task's files. Anything that could widen the set
 /// beyond what the caller literally named — `.`, `..`, a glob, a leading `-`
 /// (an option) or `:` (git pathspec magic like `:/` = whole repo) — is refused
@@ -88,13 +89,13 @@ fn race_delay() -> Option<Duration> {
         .map(Duration::from_millis)
 }
 
-/// Stage `paths` and commit them in the primary working tree, holding the
-/// repo-scoped primary lock across the WHOLE read-modify-write. Returns the new
+/// Stage `paths` and commit them in the shared working tree at `repo`, holding the
+/// primary lock (keyed on this checkout) across the WHOLE read-modify-write. Returns the new
 /// commit sha.
 pub fn commit(cfg: &Config, repo: &Path, paths: &[String], message: &str) -> Result<String> {
     if paths.is_empty() {
         bail!(
-            "refusing to commit with no --path: the primary working tree is shared, \
+            "refusing to commit with no --path: the working tree's index is shared, \
              so the files belonging to this task must be named explicitly"
         );
     }
@@ -105,9 +106,10 @@ pub fn commit(cfg: &Config, repo: &Path, paths: &[String], message: &str) -> Res
         bail!("refusing to commit with an empty message");
     }
 
-    // Serialize the WHOLE read-modify-write against every other primary-repo
-    // mutator (a peer `repo commit`, `worktree::merge`, `git worktree prune`) on
-    // the one repo-scoped lock.
+    // Serialize the WHOLE read-modify-write against every peer `repo commit`
+    // sharing this checkout's index. The lock is keyed on `repo` (the checkout
+    // this was run from) via `acquire_or_skip`, so it does NOT contend with
+    // `worktree::merge` / `git worktree prune`, which lock the main worktree root.
     //
     // `acquire_or_skip` is FALLIBLE on purpose: the fail-soft `RunLock::acquire`
     // this crate used to expose handed back an unheld guard on timeout/IO error,

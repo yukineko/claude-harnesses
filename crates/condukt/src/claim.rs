@@ -585,7 +585,7 @@ const ABSENT_WORKTREE_MARKER: &[u8] = b"<absent-worktree>";
 ///
 /// Two "cannot determine" arms, both protective (CLAUDE.md §3):
 ///
-/// * **No task records a worktree** (serial / fast-path / single-worktree mode) ⇒
+/// * **No task records a worktree** (legacy runs only: serial-in-main / fast-path / single-worktree mode were retired 2026-10-03, backlog 5e5cf0a9) ⇒
 ///   `Undetermined`. There is no run-scoped durable head signal to read at all.
 ///   It deliberately does NOT fall back to the repo-wide HEAD — that fallback is
 ///   the defect described on [`claim_progress`], and it resolves "I cannot see
@@ -2755,8 +2755,9 @@ mod tests {
         std::fs::remove_dir_all(tmp).ok();
     }
 
-    /// (A4-ii) The arm where the run records NO task worktree at all (serial /
-    /// fast-path / single-worktree mode). There is no run-scoped durable head
+    /// (A4-ii) The arm where the run records NO task worktree at all (legacy
+    /// runs from the retired fast-path / single-worktree modes, backlog
+    /// 5e5cf0a9, or any run state that simply lacks the field). There is no run-scoped durable head
     /// signal to read, which is "cannot determine" — NOT "frozen", and NOT a
     /// fall back to the repo-wide HEAD (that fallback is the defect itself).
     /// Asserted behaviourally at the reap layer too, because `Stalled` is the

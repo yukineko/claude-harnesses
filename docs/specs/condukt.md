@@ -35,7 +35,7 @@
 - **exit code 契約（決定論ゲート）** — `policy decide` は `Decision::{Auto→0, Escalate→2, Block→3}`（不正入力=1）。
   `policy::decide` のハード不変条件: high risk × irreversible は confidence に依らず必ず `Block`。`circuit check`/
   `gate check` は breaker/escalate 作動時に非ゼロ終了（`if ! condukt … ; then stop; fi`）。`state autonomy-check`/
-  `worktree-mode-check`/`is-claimed` も exit code を契約とする。
+  `worktree-mode-check`（常に exit 1 = per-task モード。single-worktree は 2026-10-03 廃止）/`is-claimed` も exit code を契約とする。
 - **クロスセッション占有（PDO 衝突ガード）** — `state claim/heartbeat/release`（`claims.json`）は
   `conflict-check` の一度きり助言スナップショットを live な強制リースに変える。`state set --status running` が
   自動占有し、別 run の live 保有者と衝突すれば **skip JSON を出して exit 1**、terminal 遷移で自動解放。liveness
@@ -120,7 +120,7 @@
   token 境界一致）。
 - **`worktree`** — git worktree ライフサイクル（repo 外・1 dir=1 branch 強制、`is_dirty`）。
 - **`config`** — `Config`（`worktree_base`/`default_branch`/`max_parallel`/`shared_globs`/`autonomous`/
-  `single_worktree`/`[test]`/`[consensus]`/`[worker]`/`[loop]`）を TOML から `load`。`CONDUKT_*` 環境変数で上書き。
+  `single_worktree`（廃止・無効、parse のみ）/`[test]`/`[consensus]`/`[worker]`/`[loop]`）を TOML から `load`。`CONDUKT_*` 環境変数で上書き。
 - **`editgate`** — PostToolUse: worktree 内 Rust ファイル編集後の edit-time コンパイルゲート（broken 判定のみ block）。
 - **`oracle` / `checkpoint` / `escalate` / `gatelog` / `lessons` / `pr` / `ci` / `lock` / `install` /
   `status` / `store` / `hooks`** — F→P オラクル判定・可逆スナップショット・非同期エスカレーション・decision

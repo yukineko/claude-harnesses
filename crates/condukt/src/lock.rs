@@ -71,9 +71,13 @@ impl Drop for RunLock {
 /// (`<project>/__repo_primary__.lock`). A FIXED key (independent of any run_id)
 /// yields ONE per-repo/project lock, so every condukt process that mutates the
 /// single primary repo's default branch — `worktree::merge` (checkout
-/// default_branch + merge), the main-tree selective-staging commit, and
-/// `git worktree prune` — serializes on it instead of racing on `main` (which
-/// today is only serialized by the upstream flow backlog lock). Mirrors
+/// default_branch + merge) and `git worktree prune` — serializes on it instead
+/// of racing on `main` (which today is only serialized by the upstream flow
+/// backlog lock). NOTE: `repo_commit::commit` also uses this KEY but takes it
+/// through `RunLock::acquire_or_skip` (keyed on the current checkout via
+/// `repo_root`), NOT [`acquire_repo_primary`]; so it serializes commits that
+/// share one worktree index and does not contend with merge/prune on main,
+/// which touch a different index. Mirrors
 /// `claim::CLAIMS_LOCK_KEY`; it never names a real run so cannot collide with one.
 ///
 /// The fixed key alone is not sufficient for that "ONE per-repo lock": the
@@ -619,7 +623,7 @@ mod tests {
     // of the repo's MAIN worktree root, so its lock file lands at
     // `<state_dir>/<project-key of the main worktree root>/__repo_primary__.lock`
     // regardless of any run id — the single shared path every primary-repo
-    // mutator (merge / main-tree commit / prune) contends, from whichever
+    // mutator (merge / prune) contends, from whichever
     // checkout it happens to stand in. It is genuinely HELD and distinct from
     // the claims registry lock.
     //
@@ -819,8 +823,9 @@ mod tests {
     // add` gives the main tree a `.git` DIRECTORY and the linked worktree a
     // `.git` FILE; both share ONE git index, ONE `.git/worktrees` admin dir and
     // ONE default branch, which is exactly what every holder of this lock
-    // mutates (`worktree::merge`'s checkout+merge, the main-tree commit,
-    // `git worktree prune`). So a mutator whose cwd is the main tree and a
+    // mutates (`worktree::merge`'s checkout+merge and `git worktree prune`;
+    // `repo commit` is NOT one of them: it locks per checkout, see
+    // `REPO_PRIMARY_LOCK_KEY`). So a mutator whose cwd is the main tree and a
     // mutator whose cwd is a linked worktree of the SAME repo must contend the
     // SAME lock file, and the second must be REFUSED while the first holds it.
     //

@@ -561,15 +561,15 @@ enum EscalateAction {
 
 #[derive(Subcommand)]
 enum RepoAction {
-    /// Stage the named paths and commit them IN THE PRIMARY WORKING TREE, with
-    /// the repo-scoped primary lock (`lock::REPO_PRIMARY_LOCK_KEY`) held across
-    /// the whole read-modify-write, so two concurrent condukt executions can
-    /// never interleave content in the one shared index.
+    /// Stage the named paths and commit them in the working tree you run it
+    /// from (cwd's toplevel; never the main tree: CLAUDE.md §8), with `lock::REPO_PRIMARY_LOCK_KEY` held (keyed on that checkout)
+    /// across the whole read-modify-write, so concurrent condukt executions
+    /// sharing that worktree's index can never interleave content in it.
     ///
-    /// This is the ONLY sanctioned way for the `/condukt` skill to commit in the
-    /// primary tree (single-worktree mode, the small-task fast path, and serial
-    /// tasks). Raw `git add ... && git commit` from the skill's shell holds no
-    /// lock and is exactly the hazard this replaces.
+    /// NOT required by the `/condukt` skill any more: single-worktree mode and
+    /// the small-task fast path were retired (2026-10-03, backlog 5e5cf0a9) and
+    /// every task commits in its own worktree. Kept for callers that share one
+    /// worktree's index: raw `git add ... && git commit` holds no lock there.
     ///
     /// Restrictive on every cannot-determine: no `--path`, a widening pathspec
     /// (`.`, a glob, `:` magic), foreign content already staged in the shared
@@ -1277,22 +1277,16 @@ enum StateAction {
         #[arg(long)]
         to: Option<u64>,
     },
-    /// Report whether condukt is in single-worktree mode (config.toml
-    /// `single_worktree` + `CONDUKT_SINGLE_WORKTREE` env). Prints
-    /// `{"single_worktree":<bool>}` and exits 0 when single-worktree, 1 when not
-    /// — so the /condukt skill branches on the exit code to run all tasks in the
-    /// main tree (selective staging, no per-task worktree/merge) only when on.
-    ///
-    /// NOTE (repo-primary serialization): the single-worktree main-tree commit
-    /// IS an in-process site — `condukt repo commit` ([`RepoAction::Commit`] →
-    /// [`repo_commit::commit`]). It holds `lock::REPO_PRIMARY_LOCK_KEY` across
-    /// the whole index-check → `git add` → `git commit` cycle, joining the same
-    /// serialization as the other primary-repo mutators (`worktree::merge`,
-    /// `worktree::resolve_merge`, `git worktree prune`). The `/condukt` skill
-    /// must NOT hand-roll `git add && git commit` in the primary tree: that
-    /// holds no lock, and two sessions sharing one index is the one conflict git
-    /// cannot resolve by merging. Pinned by
-    /// `tests/repo_commit_index_isolation.rs`.
+    /// Always reports per-task worktree mode: prints `{"single_worktree":false}`
+    /// and exits 1. Single-worktree mode (and the small-task fast path) were
+    /// RETIRED by user ruling 2026-10-03 (backlog 5e5cf0a9): every task runs in
+    /// its own worktree and nothing runs in the main tree (CLAUDE.md §8). The
+    /// subcommand is kept so older skills that still call it get a definite
+    /// answer. If the retired `single_worktree` config key or
+    /// `CONDUKT_SINGLE_WORKTREE` env var is set truthy, a stderr notice says it
+    /// is retired and ignored, so the setting is never silently swallowed. The
+    /// notice fires when EITHER source is truthy, independent of which value
+    /// wins the merged Config (`config::retired_single_worktree_sources`).
     WorktreeModeCheck,
     /// Resolve the verifier model so it never equals the worker model (shared
     /// blind-spot guard). Prints the chosen model on stdout. A distinct
@@ -5228,11 +5222,16 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             );
         }
         StateAction::WorktreeModeCheck => {
-            let single = cfg.single_worktree;
-            println!("{{\"single_worktree\":{single}}}");
-            if !single {
-                std::process::exit(1);
+            let retired = config::retired_single_worktree_sources();
+            if !retired.is_empty() {
+                eprintln!(
+                    "condukt: the `single_worktree` setting ({}) is retired (user ruling \
+                     2026-10-03, backlog 5e5cf0a9) and ignored: every task runs in its own worktree",
+                    retired.join(", ")
+                );
             }
+            println!("{{\"single_worktree\":false}}");
+            std::process::exit(1);
         }
     }
     Ok(())

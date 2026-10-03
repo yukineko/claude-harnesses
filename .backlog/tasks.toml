@@ -9337,3 +9337,18 @@ updated_at = 1790987690
 weight = 0.0
 issue_number = 1123
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1123"
+
+[[task]]
+id = "df3d6243"
+title = "continuous-audit.sh prints PASS when overwatch review-queue --to-backlog itself fails (run_ow fail-soft line :225 is not counted; grep read error collapses to 0) — a failed bridge reads as a clean round"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1790995917
+updated_at = 1790995917
+weight = 0.0
+issue_number = 1124
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1124"

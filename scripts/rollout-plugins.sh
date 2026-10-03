@@ -652,6 +652,18 @@ copy_plugin_dir() {
       esac
     done
   done
+  # .deployed-from.json is the ONLY provenance record of the protected binaries
+  # above, and it is written by rebuild-plugins.sh, not by this copy. A recopy
+  # (needs_copy or --force) that dropped it would leave the deployed binary with
+  # no provenance whenever the rebuild step does not run afterwards
+  # (`--force --no-rebuild`, backlog 649d15f6: 37 plugins lost it). The binary
+  # survives the recopy, so the record describing it survives with it; a later
+  # rebuild overwrites it with the new provenance. Both branches below keep it.
+  local keep_prov=0
+  if [ -e "$dst/.deployed-from.json" ]; then
+    keep_prov=1
+    protect+=("--filter=P /.deployed-from.json")
+  fi
   if command -v rsync >/dev/null 2>&1; then
     rsync -a --delete ${protect[@]+"${protect[@]}"} --exclude '/target/' --exclude '/.git/' \
           --exclude '/.in_use/' --exclude '/.claude/' "$src/" "$dst/"
@@ -667,6 +679,14 @@ copy_plugin_dir() {
       [ -n "$keep" ] || keep="$(mktemp -d)"
       cp -a "$dst/bin/$base" "$keep/$base"
     done
+    # Provenance rides in its own aside dir (it lives at the root, not bin/).
+    # Like rsync's P rule it only stops the DELETE: a source that ships its own
+    # copy still wins, so the restore is skipped then.
+    local keep_prov_dir=""
+    if [ "$keep_prov" = 1 ]; then
+      keep_prov_dir="$(mktemp -d)"
+      cp -a "$dst/.deployed-from.json" "$keep_prov_dir/.deployed-from.json"
+    fi
     find "$dst" -mindepth 1 -maxdepth 1 ! -name '.in_use' -exec rm -rf {} +
     cp -a "$src/." "$dst/"
     rm -rf "${dst:?}/target" "${dst:?}/.git" "${dst:?}/.claude"
@@ -674,6 +694,11 @@ copy_plugin_dir() {
       mkdir -p "$dst/bin"
       cp -a "$keep"/. "$dst/bin/"
       rm -rf "$keep"
+    fi
+    if [ -n "$keep_prov_dir" ]; then
+      [ -e "$dst/.deployed-from.json" ] ||
+        cp -a "$keep_prov_dir/.deployed-from.json" "$dst/.deployed-from.json"
+      rm -rf "$keep_prov_dir"
     fi
   fi
 }

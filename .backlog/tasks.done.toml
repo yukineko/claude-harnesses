@@ -29309,3 +29309,55 @@ weight = 0.0
 issue_number = 1120
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1120"
 issue_closed_at = 1790985274
+
+[[task]]
+id = "89544915"
+title = "overwatch: condukt-gate / record-audit 由来の finding には閉じる経路が無い (reconcile-fixed は CA-<crate>-<NNN> のみ照合)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = """
+Found 2026-09-30 by the 7c27050b investigation at main abcd4f2e on a copy of the live store. closure is continuous-audit 19/44, condukt-gate 0/4, record-audit 0/3. reconcile-fixed only matches CA-<crate>-<NNN> ids, so gate-exec:... and record-audit:... ids are never closed. Needs a ruling on what closed means for escalations and freshness alerts, which have no fix commit.
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/overwatch/src/reconcile.rs (mod backlog_89544915) (rev d2e54735): Pins 'a fix commit naming the id closes it'; the item still needs a ruling on what 'closed' means for escalations (manual record-disposition does exist)."""
+created_at = 1790719360
+updated_at = 1790987457
+weight = 0.0
+issue_number = 881
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/881"
+issue_closed_at = 1790987460
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test backlog_89544915"
+exit = 0
+passed = 7
+rev = "73009592cbd198daeb381d7ffa873da5c69786da"
+observed_at = 1790987439
+output_digest = "sha256:5f206e38cbd2aa2aa74d5177a865bfde0eb8b3fce0cfd5a1bdeaa4ee40d768a0"
+excerpt = """
+
+running 7 tests
+test t6_manual_first_then_auto_resolved_leaves_single_human_row ... ok
+test t6_auto_resolved_first_then_manual_leaves_single_resolved_row ... ok
+test resolved_disposition_persists_evidence_and_observed_source_and_closes ... ok
+test t9_resolved_only_is_not_a_human_verdict ... ok
+test legacy_disposition_row_without_evidence_fields_still_reads ... ok
+test t9_resolved_excluded_from_human_rate_denominator ... ok
+test t8_commit_naming_non_ca_ids_does_not_close_them ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.11s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_89544915.rs (target/debug/deps/backlog_89544915-d1673c0b5ab73b7d)
+"""
+
+[task.closure.red]
+rev = "6bc6ed1fd903acd3995cb90ca59dfe8b9f07e1b7"
+exit = 101
+kind = "behavioural"

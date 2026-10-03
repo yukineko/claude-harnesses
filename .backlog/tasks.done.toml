@@ -33100,3 +33100,54 @@ scripts/test_check_unlisted_gates_verify.py ........................     [100%]
 rev = "85448a68817931c6a8a2d599ec28d06979b1e746"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "5461ba1c"
+title = "orphan cache dir の finding が ROLLOUT クラスに畳まれ remedy が誤誘導になる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "rollout-gate",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+plugin_cache.scan は crates/ に無い plugin の cache dir を '<name>: cached but no current version known from crates/' として報告し、check-plugin-rollout.py の main() はこれを stale_problems 経由で rollout_problems に畳む。その結果 ROLLOUT DRIFT ブロックの Fix 行 'scripts/rollout-plugins.sh --plugin <name>' が出るが、crate が存在しない plugin にこのコマンドは効かない。さらに悪いことに、読み手を『撤去された plugin を rollout し直す』方向へ向ける = 2026-08-04 の taintguard 事案 (a6f165cd) と同じ形。今回追加した RETIRED クラス (rc=5) 側へ回すのが正しい可能性がある。今回は検出そのものは既に fail-closed で効いているため remedy 文言の再配置は手を付けていない。測定: 2026-09-10, worktree-agent-ad28c375730ca93e4, fixture で rc=1 と逐語出力を確認済み (test_cache_dir_with_no_crate_is_already_a_hard_failure が pin)。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test scripts/test_backlog_5461ba1c.py (rev e70d48dd)"""
+created_at = 1788984267
+updated_at = 1791046020
+weight = 0.0
+issue_number = 483
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/483"
+issue_closed_at = 1791046024
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_backlog_5461ba1c.py"
+exit = 0
+passed = 1
+rev = "0f8f7c19414c396ef0c5683c3b4ab5621439b89d"
+observed_at = 1791046009
+output_digest = "sha256:8f8d0d0490bbd1f94846eccbd171db877af3e6e29399e0c124830b7ae57f7dec"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-64554c4d
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 1 item
+
+scripts/test_backlog_5461ba1c.py .                                       [100%]
+
+============================== 1 passed in 0.33s ===============================
+"""
+
+[task.closure.red]
+rev = "4027a8dcac83a9e2910e6ddd9f07c8780825aeb8"
+exit = 1
+kind = "behavioural"

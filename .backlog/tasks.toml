@@ -678,27 +678,6 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/255"
 rev = 0
 
 [[task]]
-id = "420f1eec"
-title = "backlog 重複ガードが condukt claim 確認の失敗を『未 claim』に倒す fail-open を直す (store.rs:1036-1041) — あわせて test seam を入れる"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-store::check_duplicate → is_claimed_elsewhere は PATH 上の実 condukt を spawn する。HOME を差し替えても隔離されないため、unit test の add がマシン状態に依存しうる (fail-soft なので現状は false negative 方向)。709ff549 の作業中に、同一 title+project を使う並列テストが互いの一時 store を踏む flake を観測し (自作テスト側を修正済み)、その調査中に気付いた。テスト用に is_claimed_elsewhere の seam を切るのが望ましい。
-
-[triage 2026-09-29 @b325a169] p2->p1: backlog/src/store.rs:1036-1041 treats any condukt claim-check failure as not-claimed: production fail-open in duplicate guard
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/backlog/tests/backlog_s03_audit.rs (rev e70d48dd)"""
-created_at = 1786459308
-updated_at = 1790983212
-weight = 0.0
-issue_number = 247
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/247"
-rev = 0
-
-[[task]]
 id = "cf58e2fc"
 title = "condukt claim.rs: run_task_progress_signal maps an ABSENT updated_at to Known(0) instead of Undetermined"
 project = "/Users/yuki/src/harness"
@@ -4808,29 +4787,6 @@ updated_at = 1790983230
 weight = 0.0
 issue_number = 619
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/619"
-rev = 0
-
-[[task]]
-id = "c603605c"
-title = "condukt state is-claimed が「未 claim」と「registry 判定不能」を同じ exit 1 に潰す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "condukt",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-2026-09-13、t3-claim-parse-undetermined (backlog 9bfa8cf0) の実装中に worker が発見し報告。claim::load の三値化により claims.json が読めない場合は Undetermined として claim 取得が Err になったが、main.rs の StateAction::IsClaimed は active_claims(..) の結果をそのまま使うため、「claim されていない」と「registry が判定不能」がどちらも exit 1 になる。shell の consumer が exit 1 を「空いている」と読んで先へ進む設計だと、判定不能が空きとして読まれる。実害は一段先の state claim-task が hard-fail するので double-claim の窓は閉じているが、exit code の意味としては 3 の「検査した」と「検査できなかった」を下流から区別不能にする形が残っている。要検討: is-claimed に三値目の exit code (例: 判定不能 = exit 2) を与えるか、少なくとも stderr で理由を明示する。
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/condukt/tests/backlog_s03_audit.rs (rev e70d48dd)"""
-created_at = 1789292668
-updated_at = 1790983230
-weight = 0.0
-issue_number = 608
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/608"
 rev = 0
 
 [[task]]
@@ -9463,6 +9419,86 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/1090"
 rev = 0
 
 [[task]]
+id = "dea7ed1d"
+title = "overwatch review-queue --to-backlog: from the primary tree every backlog add is refused but only warn-skipped — verify whether the bridge ledger then records findings as bridged (silent loss)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1790986949
+updated_at = 1790986949
+weight = 0.0
+issue_number = 1121
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1121"
+rev = 0
+
+[[task]]
+id = "f10382f2"
+title = "check-test-weakening: default base origin/main is stale, so assertion removals in files newer than origin/main are invisible to the commit-msg hook (seen on 1e6f00ae: 4 unacked removals passed)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1790987689
+updated_at = 1790987689
+weight = 0.0
+issue_number = 1122
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1122"
+rev = 0
+
+[[task]]
+id = "9bffff37"
+title = "primary_tree: a hand-forged gitfile in a primary subdir pointing at an existing worktree gitdir classifies as Linked and allows store writes — decide whether in scope"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1790987690
+updated_at = 1790987690
+weight = 0.0
+issue_number = 1123
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1123"
+rev = 0
+
+[[task]]
+id = "df3d6243"
+title = "continuous-audit.sh prints PASS when overwatch review-queue --to-backlog itself fails (run_ow fail-soft line :225 is not counted; grep read error collapses to 0) — a failed bridge reads as a clean round"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1790995917
+updated_at = 1790995917
+weight = 0.0
+issue_number = 1124
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1124"
+rev = 0
+
+[[task]]
+id = "1a7afde2"
+title = "backlog claim_check_slow_helper: force_bypasses_a_never_answering_helper once took 30.19s (1/9 under a mutant, 0/5 at HEAD) — something waited on a sibling's sleep 30; cause unconfirmed, needs a looped repro"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1790997807
+updated_at = 1790997807
+weight = 0.0
+issue_number = 1125
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1125"
+rev = 0
+
+[[task]]
 id = "381fc8ac"
 title = "condukt: unclaimed-worktree occupancy の Undetermined 裁定待ち RED テストを復帰させる"
 project = "/home/hiroyuki_nakayama/src/claude-harnesses"
@@ -11265,3 +11301,37 @@ weight = 0.0
 issue_number = 1132
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1132"
 rev = 0
+
+[[task]]
+id = "1a4d26d1"
+title = "backlog claim_check_contract::non_executable_condukt_is_refused fails when a real condukt is later on PATH (lookup skips the non-exec shim) — fixture must not inherit PATH; fix is in the 1e6f00ae integration"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1791000564
+updated_at = 1791000564
+weight = 0.0
+issue_number = 1133
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1133"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test claim_check_contract non_executable_condukt_is_refused"
+rev = "38a0d0c8b857f1b6d80c3c4739e9d16aa8b1e03a"
+observed_at = 1791000564
+detail = """
+exit 101: e
+
+
+failures:
+    non_executable_condukt_is_refused
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.60s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/claim_check_contract.rs (target/debug/deps/claim_check_contract-31b1a59fd334b40f)
+error: test failed, to rerun pass `-p backlog --test claim_check_contract`"""

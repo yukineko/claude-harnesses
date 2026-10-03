@@ -1750,6 +1750,25 @@ fn reap_keeps_a_dirty_session_worktree() {
     );
 }
 
+/// backlog 849cd729's measured loss shape: HEAD reachable from main (so a
+/// commit-reachability GC would call it reclaimable) but the only unlanded work
+/// is an UNTRACKED file. Regression guard written while triaging 849cd729; it
+/// passed at the triage rev, i.e. the claimed loss is not reproduced by `reap`.
+#[test]
+fn reap_keeps_a_merged_session_worktree_with_only_untracked_work() {
+    let f = Fixture::new("reap-untracked");
+    let wt = f.session_worktree("session-ffff6666", true);
+    f.write_driver("bucket", "gone", &wt, 0);
+    std::fs::write(wt.join("never-landed.rs"), "fn migrate() {}\n").unwrap();
+    let _ = f.reap_settled();
+    assert_kept(&f, &wt, "untracked-only work");
+    assert_eq!(
+        std::fs::read_to_string(wt.join("never-landed.rs")).unwrap(),
+        "fn migrate() {}\n",
+        "the untracked file must survive"
+    );
+}
+
 /// Control: merged + clean but NO registration (every pre-ruling worktree).
 #[test]
 fn reap_keeps_a_session_worktree_with_no_registration() {

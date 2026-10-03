@@ -326,6 +326,77 @@ class PosixlyCorrectNonPermuting(Base):
         ], cwds=(self.r.wt,))
 
 
+class SeveralSourcesExistenceExemption(Base):
+    """eb67faab: in the non-permuting readings (POSIXLY_CORRECT GNU, BSD),
+    `cp a b WORD` with two or more sources writes into WORD only when WORD
+    is an existing directory, so an absent WORD exempts that reading. These
+    pin that an EXISTING destination in main stays refused however it is
+    reached, and that the exemption holds only where the tool really fails
+    (observed with bash + /bin/cp: `cp a b -z` with -z a dangling symlink and
+    `cp a b -f` with -f a regular file both exit 1, `-f: Not a directory`)."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        m = cls.r.main
+        (m / "-v").mkdir()
+        (m / "-k").symlink_to(m / "sub")
+        (m / "-q").symlink_to(cls.r.out)
+        (m / "-z").symlink_to(m / "nonexistent")
+        (m / "-f").write_text("")
+        (cls.r.wt / "-k").symlink_to(m / "sub")
+
+    def test_existing_directory_in_main_is_refused_under_every_spelling(self):
+        A = f"{self.W}/f.txt {self.W}/g.txt"
+        M, W = self.M, self.W
+        self.expect(DENY, [
+            f"cp {A} -v", f"gcp {A} -v", f"mv {A} -v", f"ln -s {A} -v",
+            f"cp {A} -v/", f"cp {A} -k", f"cp {A} -k/..", f"cp {A} -v/../sub",
+        ], cwds=(self.r.main,))
+        self.expect(DENY, [
+            f"cp {A} -k",
+            f"cd {M} && cp {A} -v",
+            f"pushd {M} && cp {A} -v",
+            f"(cd {M} && cp {A} -v)",
+            f"cd {M}; cd {W}; cd - && cp {A} -v",
+            f"D={M}; cd $D && cp {A} -v",
+            f"cp {A} {M}/-v",
+            f"POSIXLY_CORRECT=1 gcp {self.O}/x -t {W} {M}/sub",
+        ], cwds=(self.r.wt,))
+
+    def test_case_folded_existing_directory_is_refused(self):
+        if sys.platform != "darwin":
+            self.skipTest("case folding is darwin-only")
+        self.expect(DENY, [f"cp {self.W}/f.txt {self.W}/g.txt -V"],
+                    cwds=(self.r.main,))
+
+    def test_absent_or_non_directory_destination_is_exempt(self):
+        A = f"{self.W}/f.txt {self.W}/g.txt"
+        self.expect(ALLOW, [
+            f"cp {A} -z",          # dangling symlink: cp fails
+            f"cp {A} -f",          # regular file: cp fails
+            f"cp {A} -q",          # symlink to a scratch dir: writes scratch
+            f"cp {A} -k/../d0",    # resolves to an absent <main>/d0
+            f"gcp {A} --verbose",
+        ], cwds=(self.r.main,))
+        self.expect(ALLOW, [
+            f"POSIXLY_CORRECT=1 gcp {self.O}/x -t {self.W} {self.M}/nodir",
+        ], cwds=(self.r.wt,))
+
+    @unittest.expectedFailure
+    def test_bracket_glob_reaching_an_existing_directory_is_refused(self):
+        # OPEN DEFECT found by this verifier (round 3). `-[v]` is a bash
+        # bracket glob; with <main>/-v an existing directory bash expands it
+        # to `-v` and BSD cp copies into it (observed: `cp a b -[v]; ls -- -v`
+        # -> exit 0, `a b`). `[` is not in _UNRESOLVABLE, so the guard stats
+        # the LITERAL `<main>/-[v]`, gets ENOENT, and exempts the reading.
+        # d8426c4e and d4abf935 refused this; 4a7fcb1e allowed it (it judged
+        # no `-` word at all).
+        A = f"{self.W}/f.txt {self.W}/g.txt"
+        self.expect(DENY, [f"cp {A} -[v]", f"gcp {A} -[v]"],
+                    cwds=(self.r.main,))
+
+
 class NoOverBlock(Base):
     def test_worktree_and_readonly_commands_stay_allowed(self):
         W, O = self.W, self.O

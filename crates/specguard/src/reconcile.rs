@@ -29,6 +29,11 @@
 //! [`next_episode`]); legacy episode-less ids recorded before this change are
 //! still recognised, reused while open, and closed here.
 //!
+//! A HUMAN-closed episode (confirmed / dismissed / false-positive) is never
+//! closed or reopened here; `specguard audit` re-raises it as a new episode
+//! only after an audit run recorded the gap as observed gone
+//! ([`crate::observed`], user ruling 2026-10-03).
+//!
 //! Shard-audit kinds (`spec-drift`, `spec-doc-stale`, `audit-indeterminate`)
 //! are agent judgment, not re-detectable, and are never selected.
 use crate::auditmap::{self, StructuralKind};
@@ -95,6 +100,58 @@ pub(crate) enum Episode {
     Start(String),
 }
 
+/// `(epoch, id)` of every recorded row belonging to `(kind, key)`, sorted,
+/// legacy (episode-less) first. A row whose `file` names a different key is
+/// not this finding even if its id shape matches (keys may contain `:`).
+fn episodes_of<'a>(
+    kind: StructuralKind,
+    key: &str,
+    rows: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
+) -> Vec<(i64, &'a str)> {
+    let mut mine: Vec<(i64, &str)> = rows
+        .into_iter()
+        .filter(|(_, file)| file.is_none_or(|f| f == key))
+        .filter_map(|(id, _)| episode_of(id, kind, key).map(|e| (e.unwrap_or(i64::MIN), id)))
+        .collect();
+    mine.sort();
+    mine.dedup();
+    mine
+}
+
+/// The latest episode id of `(kind, key)` IF every episode is closed and the
+/// latest was closed by a HUMAN verdict (confirmed / dismissed /
+/// false-positive); `None` otherwise (no row, an open episode, or the latest
+/// closed `resolved`). This is the episode an audit that sees the gap gone
+/// records in the "observed gone" ledger (see [`crate::observed`]).
+pub(crate) fn human_closed_latest<'a>(
+    kind: StructuralKind,
+    key: &str,
+    rows: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
+    verdict_of: impl Fn(&str) -> Option<DispositionVerdict>,
+) -> Option<&'a str> {
+    let mine = episodes_of(kind, key, rows);
+    if mine.iter().any(|(_, id)| verdict_of(id).is_none()) {
+        return None;
+    }
+    let &(_, latest) = mine.last()?;
+    verdict_of(latest)
+        .is_some_and(|v| v.is_human())
+        .then_some(latest)
+}
+
+/// The structural `(kind, key)` a recorded row is about, read from its id and
+/// its recorded key (`file`). Rows without `file`, or whose id does not belong
+/// to that key, are `None` — an audit never records an observation for a row
+/// whose key it cannot tell for certain.
+pub(crate) fn row_kind_key<'a>(
+    id: &str,
+    file: Option<&'a str>,
+) -> Option<(StructuralKind, &'a str)> {
+    let (kind, _) = parse_id(id)?;
+    let key = file?;
+    episode_of(id, kind, key).map(|_| (kind, key))
+}
+
 /// Decide the id for a structural finding detected now, from the recorded
 /// rows and their dispositions (the episode is persisted as the id itself).
 ///
@@ -105,42 +162,46 @@ pub(crate) enum Episode {
 ///   automated observation that the gap went away) → the gap RECURRED: `Start`
 ///   a new episode, so the recurrence is visible rather than hidden behind the
 ///   old disposition;
-/// * every row closed and the latest by a human verdict (confirmed /
-///   dismissed / false-positive) → `Open`: the human verdict on this gap
-///   stands (the pre-episode behaviour for human closures).
+/// * every row closed, the latest by a human verdict (confirmed / dismissed /
+///   false-positive), and an audit run has since OBSERVED the gap gone
+///   (`observed_gone(latest_id)`, the [`crate::observed`] ledger; user ruling
+///   2026-10-03) → the gap RECURRED after the human verdict: `Start`;
+/// * every row closed and the latest by a human verdict with no recorded
+///   observation of the gap gone → `Open`: the gap never went away (or came
+///   back before any audit saw it gone), so the human verdict stands.
 ///
-/// `rows` is `(finding_id, file)`; a row whose `file` names a different key is
-/// not this finding even if its id shape matches (keys may contain `:`). The
-/// new epoch is `max(now, latest + 1)` so a recurrence within the same second
+/// `observed_gone` must answer `true` when the ledger could not be read (see
+/// [`crate::observed`]: a visible duplicate over a hidden recurrence). The new
+/// epoch is `max(now, latest + 1)` so a recurrence within the same second
 /// still gets a fresh id.
 pub(crate) fn next_episode<'a>(
     kind: StructuralKind,
     key: &str,
     rows: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
     verdict_of: impl Fn(&str) -> Option<DispositionVerdict>,
+    observed_gone: impl Fn(&str) -> bool,
     now: i64,
 ) -> Episode {
-    // (epoch, id) of every row belonging to this finding; legacy sorts first.
-    let mut mine: Vec<(i64, &str)> = rows
-        .into_iter()
-        .filter(|(_, file)| file.is_none_or(|f| f == key))
-        .filter_map(|(id, _)| episode_of(id, kind, key).map(|e| (e.unwrap_or(i64::MIN), id)))
-        .collect();
-    mine.sort();
-    mine.dedup();
+    let mine = episodes_of(kind, key, rows);
     if let Some((_, id)) = mine.iter().find(|(_, id)| verdict_of(id).is_none()) {
         return Episode::Open((*id).to_string());
     }
     let Some(&(latest_epoch, latest_id)) = mine.last() else {
         return Episode::Start(episode_id(kind, key, now));
     };
-    match verdict_of(latest_id) {
-        Some(DispositionVerdict::Resolved) => Episode::Start(episode_id(
+    let recurred = match verdict_of(latest_id) {
+        Some(DispositionVerdict::Resolved) => true,
+        Some(v) if v.is_human() => observed_gone(latest_id),
+        _ => false,
+    };
+    if recurred {
+        Episode::Start(episode_id(
             kind,
             key,
             now.max(latest_epoch.saturating_add(1)),
-        )),
-        _ => Episode::Open(latest_id.to_string()),
+        ))
+    } else {
+        Episode::Open(latest_id.to_string())
     }
 }
 
@@ -324,11 +385,15 @@ mod tests {
         None
     }
 
+    fn never(_: &str) -> bool {
+        false
+    }
+
     #[test]
     fn next_episode_starts_one_when_nothing_is_recorded() {
         let rows: [(&str, Option<&str>); 0] = [];
         assert_eq!(
-            next_episode(U, "k", rows, no_disposition, 100),
+            next_episode(U, "k", rows, no_disposition, never, 100),
             Episode::Start("specguard:untested:k:100".into())
         );
     }
@@ -337,12 +402,12 @@ mod tests {
     fn next_episode_keeps_an_open_episode_or_legacy_id() {
         let rows = [("specguard:untested:k:50", Some("k"))];
         assert_eq!(
-            next_episode(U, "k", rows, no_disposition, 100),
+            next_episode(U, "k", rows, no_disposition, never, 100),
             Episode::Open("specguard:untested:k:50".into())
         );
         let rows = [("specguard:untested:k", Some("k"))];
         assert_eq!(
-            next_episode(U, "k", rows, no_disposition, 100),
+            next_episode(U, "k", rows, no_disposition, never, 100),
             Episode::Open("specguard:untested:k".into())
         );
     }
@@ -352,13 +417,13 @@ mod tests {
         let resolved = |_: &str| Some(DispositionVerdict::Resolved);
         let rows = [("specguard:untested:k:100", Some("k"))];
         assert_eq!(
-            next_episode(U, "k", rows, resolved, 100),
+            next_episode(U, "k", rows, resolved, never, 100),
             Episode::Start("specguard:untested:k:101".into())
         );
         // A resolved LEGACY id recurs as an episode at `now`.
         let rows = [("specguard:untested:k", Some("k"))];
         assert_eq!(
-            next_episode(U, "k", rows, resolved, 100),
+            next_episode(U, "k", rows, resolved, never, 100),
             Episode::Start("specguard:untested:k:100".into())
         );
     }
@@ -368,7 +433,7 @@ mod tests {
         let dismissed = |_: &str| Some(DispositionVerdict::Dismissed);
         let rows = [("specguard:untested:k:40", Some("k"))];
         assert_eq!(
-            next_episode(U, "k", rows, dismissed, 100),
+            next_episode(U, "k", rows, dismissed, never, 100),
             Episode::Open("specguard:untested:k:40".into())
         );
     }
@@ -379,8 +444,87 @@ mod tests {
         // episode 5 of key "k".
         let rows = [("specguard:untested:k:5", Some("k:5"))];
         assert_eq!(
-            next_episode(U, "k", rows, no_disposition, 100),
+            next_episode(U, "k", rows, no_disposition, never, 100),
             Episode::Start("specguard:untested:k:100".into())
         );
+    }
+
+    #[test]
+    fn next_episode_restarts_after_a_human_closure_only_once_observed_gone() {
+        let rows = [("specguard:untested:k:40", Some("k"))];
+        for v in [
+            DispositionVerdict::Confirmed,
+            DispositionVerdict::Dismissed,
+            DispositionVerdict::FalsePositive,
+        ] {
+            let verdict = |_: &str| Some(v);
+            assert_eq!(
+                next_episode(
+                    U,
+                    "k",
+                    rows,
+                    verdict,
+                    |id| id == "specguard:untested:k:40",
+                    100
+                ),
+                Episode::Start("specguard:untested:k:100".into()),
+                "{v:?}"
+            );
+            // An observation of ANOTHER episode does not count.
+            assert_eq!(
+                next_episode(
+                    U,
+                    "k",
+                    rows,
+                    verdict,
+                    |id| id == "specguard:untested:k:39",
+                    100
+                ),
+                Episode::Open("specguard:untested:k:40".into()),
+                "{v:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn human_closed_latest_names_only_a_fully_closed_human_latest() {
+        let rows = [
+            ("specguard:untested:k:10", Some("k")),
+            ("specguard:untested:k:20", Some("k")),
+        ];
+        let human_latest = |id: &str| {
+            Some(if id.ends_with(":20") {
+                DispositionVerdict::Dismissed
+            } else {
+                DispositionVerdict::Resolved
+            })
+        };
+        assert_eq!(
+            human_closed_latest(U, "k", rows, human_latest),
+            Some("specguard:untested:k:20")
+        );
+        let resolved_latest = |id: &str| {
+            Some(if id.ends_with(":20") {
+                DispositionVerdict::Resolved
+            } else {
+                DispositionVerdict::Dismissed
+            })
+        };
+        assert_eq!(human_closed_latest(U, "k", rows, resolved_latest), None);
+        let one_open = |id: &str| id.ends_with(":20").then_some(DispositionVerdict::Dismissed);
+        assert_eq!(human_closed_latest(U, "k", rows, one_open), None);
+        let none: [(&str, Option<&str>); 0] = [];
+        assert_eq!(human_closed_latest(U, "k", none, human_latest), None);
+    }
+
+    #[test]
+    fn row_kind_key_requires_a_recorded_key_matching_the_id() {
+        assert!(matches!(
+            row_kind_key("specguard:untested:a::B:7", Some("a::B")),
+            Some((StructuralKind::Untested, "a::B"))
+        ));
+        assert!(row_kind_key("specguard:untested:a::B:7", None).is_none());
+        assert!(row_kind_key("specguard:untested:a::B:7", Some("x")).is_none());
+        assert!(row_kind_key("specguard:spec-drift:src", Some("src")).is_none());
     }
 }

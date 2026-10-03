@@ -168,7 +168,7 @@ changing its spelling; each of these is now followed to the path it writes:
     against the tracked cwd, does not exist or is not a directory. It is
     judged as usual when it is an existing directory or when that cannot be
     determined: a word the shell could expand into something other than its
-    literal text (any of `$ \` * ? { } [ ] \\ ~ ( ) < > ^ #` in the word as
+    literal text (any of `$ \\` * ? { } [ ] \\ ~ ( ) < > ^ #` in the word as
     written or after variable expansion, or a `(` right after it — the
     tokenizer splits an extglob such as `-@(v)` into `-@` and `(`), an
     unknown cwd, or a stat error other than ENOENT / ENOTDIR. With ONE source the last operand is created, so

@@ -95,8 +95,30 @@ CACHE="${CLAUDE_PLUGIN_CACHE:-$HOME/.claude/plugins/cache/yukineko}"
 # $REPO/target/release — CARGO_TARGET_DIR or a target-dir override in
 # .cargo/config.toml (e.g. redirecting off a full C: drive under WSL) changes
 # this without changing where cargo build itself writes.
+#
+# cargo metadata is the ONLY authority for the build dir; there is no
+# "$REPO/target" fallback (backlog a0525604). Two ways to not get an answer:
+#   - cargo metadata exits non-zero: `set -o pipefail` aborts the script on
+#     this assignment (pinned by BacklogA0525604CargoMetadataFailureIsNotMasked).
+#   - cargo metadata exits 0 but yields no "target_directory" (empty or
+#     unparsable output): TARGET_DIR is empty. This used to fall back to
+#     $REPO/target/release, which on a machine whose .cargo/config.toml redirects
+#     target-dir does not hold this build's artifacts — every plugin then took
+#     the 'missing' branch and the run still exited 0 with a green summary.
+#     "Could not determine the build dir" is not "nothing to refresh"
+#     (CLAUDE.md §3), so it aborts here, before anything is built or copied.
+#     Pinned by BacklogA0525604EmptyMetadataIsNotGreen in
+#     scripts/test_backlog_audit_b1_0.py.
 TARGET_DIR="$(cargo metadata --no-deps --format-version=1 | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')"
-REL="${TARGET_DIR:-$REPO/target}/release"
+if [ -z "$TARGET_DIR" ]; then
+  echo "ERROR: cargo metadata succeeded but reported no \"target_directory\"." >&2
+  echo "  Cannot determine where cargo writes release artifacts, so nothing can be" >&2
+  echo "  refreshed. Refusing to guess \$REPO/target (wrong whenever CARGO_TARGET_DIR" >&2
+  echo "  or .cargo/config.toml redirects target-dir)." >&2
+  echo "  Check: cargo metadata --no-deps --format-version=1" >&2
+  exit 1
+fi
+REL="$TARGET_DIR/release"
 
 # host <os>-<arch>, matching the launcher's `uname` dispatch and build-plugin-bin.sh
 triple="$(rustc -vV | sed -n 's/^host: //p')"
@@ -283,11 +305,16 @@ updated_cache=0 updated_repo=0 updated_hooks=0 missing="" checked=0 skipped_filt
 # in the header), and plugins whose current version could not be determined.
 # The latter makes the run exit non-zero — see the tail.
 frozen_superseded=0 undetermined_current=""
+# In-scope current-version bins (main loop) and fresh-dir launchers (seed pass)
+# for which a release artifact WAS found. Zero, with `missing` non-empty, on a
+# real (non --dry-run) run means the build deployed nothing — see the tail.
+found_src=0
 # Launchers in a FRESH current-version dir that this run could not seed a host
 # binary for, as "<plugin>/<version>:<launcher>". Separate from `missing` (which
 # the main refresh loop fills for dirs that ALREADY had a host binary) because
 # the two states have different severities: `missing` is a warning about a
-# possibly-renamed non-workspace bin, whereas an unseeded fresh dir is a plugin
+# possibly-renamed non-workspace bin (fatal only when NOTHING was found — see
+# `found_src`), whereas an unseeded fresh dir is a plugin
 # that is installed, version-consistent and execs NOTHING. Non-empty makes this
 # script exit non-zero — see the tail.
 seed_missing=""
@@ -346,6 +373,7 @@ for binfile in "$CACHE"/*/*/bin/*-"$SUF$EXT"; do
     missing="$missing $binname"
     continue
   fi
+  found_src=$((found_src+1))
   # 1) live cache copy — what the running harness actually execs
   if ! cmp -s "$src" "$binfile"; then
     if [ $dry = 1 ]; then
@@ -466,6 +494,7 @@ for i in "${!plugin_names[@]}"; do
       continue
     fi
     checked=$((checked+1))
+    found_src=$((found_src+1))
     if [ $dry = 1 ]; then
       echo "cache  would seed $binname-$SUF$EXT (fresh version dir $pname/$ver)"
     else
@@ -514,6 +543,22 @@ if [ -n "$undetermined_current" ]; then
   echo "  \"version\", so no version dir of these plugins was refreshed (superseded" >&2
   echo "  dirs are frozen, and the current one is unknown). Fix the plugin.json, or" >&2
   echo "  record a removed plugin in scripts/retired-plugins.json and prune its cache." >&2
+  rc=1
+fi
+# Every in-scope plugin took the main loop's `missing` branch and nothing was
+# found to seed either: the build produced NOT ONE artifact this refresh needs,
+# so nothing was deployed. A partial miss stays the warning above (a renamed or
+# non-workspace bin), but "zero of N" is not that — it is a build dir that does
+# not hold this build's output (the empty-metadata half of backlog a0525604
+# produced exactly this) or a build that wrote nothing, and exiting 0 would
+# report "deployed nothing" as a green run (CLAUDE.md §3). --dry-run is exempt:
+# it builds nothing, so absent artifacts say nothing about the real run; it
+# still prints the WARNING. Pinned by
+# scripts/test_rebuild_zero_artifacts_not_green.py.
+if [ $dry = 0 ] && [ -n "$missing" ] && [ "$found_src" = 0 ]; then
+  echo "ERROR: no release artifact found for ANY in-scope plugin (missing:$missing)." >&2
+  echo "  Nothing was deployed. Looked in: $REL" >&2
+  echo "  Check that cargo metadata's target_directory is where cargo build wrote." >&2
   rc=1
 fi
 if [ -n "$seed_missing" ]; then

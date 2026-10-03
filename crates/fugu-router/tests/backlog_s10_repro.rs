@@ -39,9 +39,9 @@ fn run_in(home: &Path, cwd: &Path, args: &[&str], payload: &str) -> (i32, String
 /// ceb0a9bf: the UserPromptSubmit hook must put `additionalContext` inside
 /// `hookSpecificOutput` (with hookEventName). Observed 2026-10-02 with a real
 /// `claude -p` run: a top-level `additionalContext` never reaches the model,
-/// the nested form does.
+/// the nested form does. Re-observed 2026-10-04 (claude 2.1.284): top-level
+/// form -> model answered NONE; nested form -> model echoed the marker.
 #[test]
-#[ignore = "backlog ceb0a9bf: open defect, remove ignore when fixed"]
 fn backlog_ceb0a9bf_prompt_hook_nests_additional_context() {
     let home = temp_dir("ceb0");
     for title in ["add login api", "add logout api", "fix api bug"] {

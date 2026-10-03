@@ -567,9 +567,18 @@ fn main() {
                 );
             }
 
-            // `additionalContext` reaches the model, `systemMessage` reaches
-            // the user; a sync that has stopped working needs both.
-            let mut out = json!({ "additionalContext": ctx });
+            // `hookSpecificOutput.additionalContext` reaches the model,
+            // top-level `systemMessage` reaches the user; a sync that has
+            // stopped working needs both. A *top-level* `additionalContext`
+            // is silently dropped by Claude Code for UserPromptSubmit
+            // (observed with `claude -p`, backlog ceb0a9bf), so it must be
+            // nested with `hookEventName` per the hooks schema.
+            let mut out = json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": ctx,
+                }
+            });
             if let Some(n) = notice {
                 out["systemMessage"] = json!(n);
             }

@@ -42,14 +42,20 @@ disarms every gate at once. The twin rule for Bash lives in
 guard-maintree-bash.py.
 
 DENY LEDGER (e033c406, scripts/deny_ledger.py). Every refusal is appended to the
-per-session ledger `~/.claude/state/maintree-deny/<session_id>.jsonl` (target,
-reason, and a snapshot of the target's state). A call this guard's own rules
+per-session ledger `~/.claude/state/maintree-deny/<session_id>.jsonl` — or, when that cannot be
+written, the temp-dir fallback `<tmp>/maintree-deny-<uid>/<session_id>.jsonl`
+(both are always read) — target, `raw` truncated to 120 characters,
+the reason's first line truncated to 300, and a snapshot of the target's state.
+A refusal that can be written to neither location keeps its deny and says so.
+A call this guard's own rules
 ALLOW is then checked against that ledger: if it names a target refused earlier
 in the same session (within 25 guarded calls / 20 minutes), it is refused as an
 ask quoting the earlier refusal — hardened to a deny unless the session is an
 interactive terminal (CLAUDECODE=1 and CLAUDE_CODE_ENTRYPOINT=cli). An
-unreadable or corrupt ledger, or an unusable session_id, refuses the same way.
-See deny_ledger.py for the exact rules and residuals.
+unreadable or corrupt ledger, or an unusable session_id, refuses the same way —
+a corrupt or unreadable ledger file only for 20 minutes from its mtime, after
+which it is renamed aside to `<name>.corrupt-<ts>` with a stderr notice and the
+call proceeds. See deny_ledger.py for the exact rules and residuals.
 
 Protocol: reads the PreToolUse JSON payload on stdin.
 

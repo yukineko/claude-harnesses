@@ -17,6 +17,16 @@ A session_id that is not a plain `[A-Za-z0-9._-]{1,128}` word (and not `.` /
 `..`) cannot name a file safely, so it is UNDETERMINED, never sanitised into
 some other session's name.
 
+FALLBACK. When the home ledger cannot be written (an unwritable or
+non-absolute HOME), the line goes to the fallback ledger
+`<tmp>/maintree-deny-<uid>/<session_id>.jsonl`, where <tmp> is the directory
+tempfile.gettempdir() would pick (computed by _tempdir without importing
+tempfile, for latency) (same format,
+also per session). Readers always consult BOTH files and merge their lines by
+`epoch`, so a deny that could only be recorded in the fallback is still seen by
+later calls and at Stop. A refusal that can be written to neither keeps its
+deny and says so in its message (RESIDUALS).
+
 FORMAT. JSON lines, each an object with `"v": 1` and a `kind`:
 
   deny  {ts, epoch, session_id, denier, target_abs, raw_target, root, raw,
@@ -27,6 +37,11 @@ FORMAT. JSON lines, each an object with `"v": 1` and a `kind`:
         snapshot is the target's state at deny time: exists / is_dir /
         mtime_ns / size, and `git status --porcelain -z -- <target>` run at
         `root` (status null when git could not answer).
+        raw and reason are TRUNCATED: raw to its first RAW_LIMIT (120)
+        characters (the guards pass the command's first line / "<Tool>
+        <path>"), reason to the first non-blank line of the refusal, at most
+        REASON_LIMIT (300) characters. The quote shown on a later refusal is
+        built from these truncated fields.
   tick  {epoch}  one guarded tool call seen while some deny was still in its
         window; used to count calls since a deny.
 
@@ -40,7 +55,8 @@ it, whichever ends first. "Guarded calls" are the PreToolUse calls of the two
 guards (Bash, Edit/Write/MultiEdit/NotebookEdit) in the same session that reach
 this check (calls the guard itself refused are recorded as denies instead); they
 are counted by tick lines, which are only written while at least one deny is active
-(so a session with no recent refusal pays one failed `open` and no write). If
+(so a session with no recent refusal pays two failed `open`s — home and
+fallback — and no write). If
 an active entry's target_abs is still under its recorded main root and appears
 in any string of the new call's tool_input — as a substring that is not
 continued by another file-name character, so `<main>/f` does not match
@@ -70,8 +86,19 @@ ask to a deny (exit 2, reason on stderr). There is no override variable.
 
 UNDETERMINED RESOLVES TO REFUSAL (CLAUDE.md 3). An unreadable ledger, a corrupt
 line, a session_id that is present but unusable, or a target / root in an entry
-that is not an absolute path refuses (ask, hardened as above) — never allows.
-The ONE exception: a ledger FILE that does not exist means "no prior denies".
+that is not an absolute path refuses (ask, hardened as above; at Stop, a block)
+— never allows. The ONE exception: a ledger FILE that does not exist means "no
+prior denies".
+
+BRICK BOUND. An unreadable or corrupt ledger file refuses only for
+RETRY_WINDOW_SECS (20 minutes) measured from that file's mtime — otherwise a
+non-interactive run, which never submits a prompt, would be refused on every
+Bash/Edit call and every Stop for the rest of the run. Once the file is older
+than that, it is renamed aside to `<name>.corrupt-<unix-ts>` (left for a human
+to inspect), a notice naming the new path is written to stderr, and the call
+proceeds as if that file did not exist. A file whose mtime cannot be read is
+refused without a bound. If the rename fails, the notice says so and the stale
+file is ignored for this call (and re-examined on the next).
 
 RESIDUALS (recorded, not hidden — CLAUDE.md 4):
   * a payload with NO session_id key has no ledger: nothing is recorded or
@@ -88,6 +115,14 @@ RESIDUALS (recorded, not hidden — CLAUDE.md 4):
     (scripts/deny-ledger-clear.py): a new human instruction is new authority.
     A non-interactive session never submits a prompt, so its entries age out
     of the prevention window only; signal 2 keeps them for the whole session.
+  * a refusal that can be written to NEITHER the home ledger NOR the fallback
+    is not remembered: later calls and Stop cannot see it. The deny itself
+    stands, and its message says the record failed.
+  * when a tick cannot be written (both locations fail), the call count does
+    not advance; the window then ends by RETRY_WINDOW_SECS alone. The tick
+    failure itself does not refuse the call.
+  * a deny recorded while its ledger file is corrupt is appended to that file
+    and refreshes its mtime, which restarts the brick bound for that file.
 """
 
 from __future__ import annotations
@@ -102,6 +137,8 @@ import time
 LEDGER_SUBDIR = os.path.join(".claude", "state", "maintree-deny")
 RETRY_WINDOW_CALLS = 25
 RETRY_WINDOW_SECS = 20 * 60
+RAW_LIMIT = 120
+REASON_LIMIT = 300
 _SESSION_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 _FOLD_CASE = sys.platform == "darwin"
 # characters that continue a file name: a match followed by one of these is a
@@ -139,6 +176,41 @@ def ledger_path(session_id: str) -> str:
     return os.path.join(ledger_dir(), session_id + ".jsonl")
 
 
+def _tempdir() -> str:
+    """The directory tempfile.gettempdir() picks, by its candidate order
+    ($TMPDIR, $TEMP, $TMP, /tmp, /var/tmp, /usr/tmp, the cwd; the first that
+    is a writable directory) — without importing tempfile, whose import costs
+    several milliseconds on every hook call. Its write probe is replaced by
+    os.access(W_OK|X_OK)."""
+    cands = [os.environ.get(k) for k in ("TMPDIR", "TEMP", "TMP")]
+    cands += ["/tmp", "/var/tmp", "/usr/tmp"]
+    for c in cands:
+        if c and os.path.isdir(c) and os.access(c, os.W_OK | os.X_OK):
+            return os.path.abspath(c)
+    return os.path.abspath(os.getcwd())
+
+
+def fallback_dir() -> str:
+    uid = os.getuid() if hasattr(os, "getuid") else "u"
+    return os.path.join(_tempdir(), f"maintree-deny-{uid}")
+
+
+def fallback_path(session_id: str) -> str:
+    return os.path.join(fallback_dir(), session_id + ".jsonl")
+
+
+def ledger_paths(session_id: str) -> list[str]:
+    """Where this session's lines may live: the home ledger (when HOME is
+    usable) and the temp-dir fallback, in write-preference order."""
+    paths = []
+    try:
+        paths.append(ledger_path(session_id))
+    except Undetermined:
+        pass  # no usable HOME: the fallback below is the only location
+    paths.append(fallback_path(session_id))
+    return paths
+
+
 # ---------------------------------------------------------------------------
 # reading
 # ---------------------------------------------------------------------------
@@ -167,10 +239,9 @@ def _valid_entry(obj) -> bool:
     return True
 
 
-def read(session_id: str) -> list[dict]:
-    """Every entry of the session's ledger, in order. [] when the file does not
-    exist. Raises Undetermined for anything else that is not a clean read."""
-    path = ledger_path(session_id)
+def _read_file(path: str) -> list[dict]:
+    """Entries of one ledger file. [] when it does not exist; Undetermined for
+    anything else that is not a clean read."""
     try:
         with open(path, "rb") as f:
             data = f.read()
@@ -196,17 +267,67 @@ def read(session_id: str) -> list[dict]:
     return out
 
 
-def _append(session_id: str, obj: dict) -> None:
-    d = ledger_dir()
-    os.makedirs(d, mode=0o700, exist_ok=True)
-    line = json.dumps(obj, ensure_ascii=False, sort_keys=True) + "\n"
-    # One write() on an O_APPEND descriptor: concurrent hook processes of the
-    # same session interleave whole lines, not fragments.
-    fd = os.open(ledger_path(session_id), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+def _read_bounded(path: str, now: float) -> list[dict]:
+    """_read_file, with the BRICK BOUND: a bad file refuses for
+    RETRY_WINDOW_SECS from its mtime, then is renamed aside and ignored."""
     try:
-        os.write(fd, line.encode("utf-8"))
-    finally:
-        os.close(fd)
+        return _read_file(path)
+    except Undetermined as bad:
+        try:
+            age = now - os.lstat(path).st_mtime
+        except OSError:
+            raise bad  # cannot measure its age: refuse, unbounded
+        if age <= RETRY_WINDOW_SECS:
+            until = time.strftime("%H:%M:%S", time.localtime(
+                now - age + RETRY_WINDOW_SECS))
+            raise Undetermined(f"{bad}; refused until {until}, when the file "
+                               "is moved aside") from bad
+        aside = f"{path}.corrupt-{int(now)}"
+        try:
+            os.rename(path, aside)
+            sys.stderr.write(
+                f"maintree deny ledger: {path} was unreadable or corrupt for "
+                f"more than {RETRY_WINDOW_SECS // 60} minutes ({bad}); moved it "
+                f"aside to {aside} and proceeding without it.\n")
+        except OSError as e:
+            sys.stderr.write(
+                f"maintree deny ledger: {path} was unreadable or corrupt for "
+                f"more than {RETRY_WINDOW_SECS // 60} minutes ({bad}); could NOT "
+                f"move it aside ({e}); ignoring it for this call.\n")
+        return []
+
+
+def read(session_id: str, now: float | None = None) -> list[dict]:
+    """Every entry of the session's ledgers (home + fallback), merged in epoch
+    order. [] when neither file exists. Raises Undetermined for a bad file
+    still inside its brick bound."""
+    now = time.time() if now is None else now
+    out: list[dict] = []
+    for path in ledger_paths(session_id):
+        out.extend(_read_bounded(path, now))
+    out.sort(key=lambda e: e["epoch"])  # stable: same-epoch lines keep order
+    return out
+
+
+def _append(session_id: str, obj: dict) -> None:
+    """Append one line to the first ledger location that accepts it. Raises
+    OSError when none does."""
+    line = (json.dumps(obj, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
+    errors = []
+    for path in ledger_paths(session_id):
+        try:
+            os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+            # One write() on an O_APPEND descriptor: concurrent hook processes
+            # of the same session interleave whole lines, not fragments.
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            try:
+                os.write(fd, line)
+            finally:
+                os.close(fd)
+            return
+        except OSError as e:
+            errors.append(f"{path}: {e}")
+    raise OSError("no deny ledger location is writable (" + "; ".join(errors) + ")")
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +363,7 @@ def snapshot(target_abs: str, root: str | None) -> dict:
 # ---------------------------------------------------------------------------
 # recording
 # ---------------------------------------------------------------------------
-def _first_line(text: str, limit: int = 300) -> str:
+def _first_line(text: str, limit: int = REASON_LIMIT) -> str:
     for line in (text or "").splitlines():
         if line.strip():
             return line.strip()[:limit]
@@ -270,7 +391,7 @@ def record_deny(payload: dict, denier: str, target_abs: str | None,
             "epoch": now, "session_id": sid, "denier": denier,
             "target_abs": target_abs, "root": root,
             "raw_target": raw_target if isinstance(raw_target, str) else None,
-            "raw": raw[:500], "reason": _first_line(reason),
+            "raw": raw[:RAW_LIMIT], "reason": _first_line(reason),
             "snapshot": snap,
         })
         return None
@@ -362,12 +483,17 @@ def check_retry(payload: dict, now: float | None = None) -> str | None:
             hit = e
             break
     # This call is one more guarded call inside the window of every live deny.
-    _append(sid, {"v": 1, "kind": "tick", "epoch": now})
+    # A tick that cannot be written leaves the count where it is; the time
+    # bound still ends the window (RESIDUALS), so it does not refuse the call.
+    try:
+        _append(sid, {"v": 1, "kind": "tick", "epoch": now})
+    except OSError as e:
+        sys.stderr.write(f"maintree deny ledger: could not count this call ({e}).\n")
     if hit is None:
         return None
     return RETRY.format(quote=quote(hit), target=hit["target_abs"],
                         n=RETRY_WINDOW_CALLS, mins=RETRY_WINDOW_SECS // 60,
-                        path=ledger_path(sid))
+                        path=" / ".join(ledger_paths(sid)))
 
 
 RETRY = """{quote}. This call reaches the same target {target} by another spelling; confirm it is genuinely a different approach.
@@ -384,7 +510,8 @@ Earlier refusals in this session are recorded so that the same target cannot be
 re-reached by another spelling (backlog e033c406). A ledger this gate could not
 read is not a ledger that says "no prior refusals" (CLAUDE.md 最上位の方針 3), so
 this call is refused rather than allowed. A human can inspect or remove the file;
-a new user prompt clears this session's ledger.
+a new user prompt clears this session's ledger. A corrupt or unreadable file is
+refused only for {mins} minutes from its last change, then moved aside.
 """
 
 
@@ -418,7 +545,7 @@ def gate(payload: dict) -> int | None:
     try:
         msg = check_retry(payload)
     except (Undetermined, OSError) as e:
-        return emit_ask(UNDETERMINED.format(why=e))
+        return emit_ask(UNDETERMINED.format(why=e, mins=RETRY_WINDOW_SECS // 60))
     if msg is None:
         return None
     return emit_ask(msg)
@@ -490,39 +617,43 @@ PRUNE_AFTER_SECS = 7 * 24 * 3600
 
 
 def clear(payload: dict) -> str | None:
-    """Remove this session's ledger and prune other sessions' ledgers older than
-    a week. None on success; otherwise a note describing what failed."""
+    """Remove this session's ledgers (home and fallback) and prune any ledger
+    file, of any session, older than a week in either directory. None on success; otherwise a note describing what failed."""
     try:
         sid = session_of(payload)
     except Undetermined as e:
         return str(e)
     notes = []
+    dirs = [fallback_dir()]
     try:
-        d = ledger_dir()
+        dirs.insert(0, ledger_dir())
     except Undetermined as e:
-        return str(e)
+        notes.append(str(e))
     if sid is not None:
-        try:
-            os.remove(ledger_path(sid))
-        except FileNotFoundError:
-            pass
-        except OSError as e:
-            notes.append(f"could not clear {ledger_path(sid)}: {e}")
-    try:
-        names = os.listdir(d)
-    except FileNotFoundError:
-        names = []
-    except OSError as e:
-        names = []
-        notes.append(f"could not list {d}: {e}")
+        for path in ledger_paths(sid):
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                continue
+            except OSError as e:
+                notes.append(f"could not clear {path}: {e}")
     now = time.time()
-    for name in names:
-        if not name.endswith(".jsonl"):
-            continue
-        p = os.path.join(d, name)
+    for dd in dirs:
         try:
-            if now - os.stat(p).st_mtime > PRUNE_AFTER_SECS:
-                os.remove(p)
-        except OSError:
-            pass  # pruning another session's stale file is housekeeping only
+            names = os.listdir(dd)
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            notes.append(f"could not list {dd}: {e}")
+            continue
+        for name in names:
+            if ".jsonl" not in name:
+                continue
+            p = os.path.join(dd, name)
+            try:
+                if now - os.stat(p).st_mtime > PRUNE_AFTER_SECS:
+                    os.remove(p)
+            except OSError as e:
+                # pruning another session's stale file is housekeeping only
+                notes.append(f"could not prune {p}: {e}")
     return "; ".join(notes) or None

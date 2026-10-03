@@ -2,12 +2,14 @@
 """UserPromptSubmit hook: clear this session's maintree deny ledger (e033c406).
 
 guard-maintree-bash.py / guard-maintree-edit.py record every refusal in
-`~/.claude/state/maintree-deny/<session_id>.jsonl` (scripts/deny_ledger.py), and
-both the PreToolUse retry check and the Stop-time change check read it. A new
-human instruction is new authority: what the human now asks for may be exactly
-the thing refused earlier, so the ledger starts empty again for the next turn.
-Ledgers of other sessions untouched for more than 7 days are pruned (housekeeping
-only; a failure there is ignored).
+`~/.claude/state/maintree-deny/<session_id>.jsonl`, or in the temp-dir fallback
+`<tmp>/maintree-deny-<uid>/<session_id>.jsonl` when HOME is unwritable
+(scripts/deny_ledger.py), and both the PreToolUse retry check and the Stop-time
+change check read both. A new human instruction is new authority: what the
+human now asks for may be exactly the thing refused earlier, so both files are
+removed and the ledger starts empty again for the next turn. Ledger files (any
+session, either directory, `.corrupt-*` copies included) untouched for more than
+7 days are pruned; a pruning failure is reported like a clearing failure.
 
 This hook judges nothing and never blocks the prompt: it always exits 0. If the
 session's ledger could NOT be cleared, it says so on stdout (which Claude Code

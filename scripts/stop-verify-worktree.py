@@ -25,13 +25,17 @@ Refused-then-changed (e033c406, signal 2 of scripts/deny_ledger.py). BEFORE the
 cwd checks above — so it applies whether the session sits on main or in a
 worktree — every target that guard-maintree-bash.py / guard-maintree-edit.py
 refused in this session (the per-session ledger
-`~/.claude/state/maintree-deny/<session_id>.jsonl`) is re-snapshotted. If one
+`~/.claude/state/maintree-deny/<session_id>.jsonl` — or, when that cannot be
+written, the temp-dir fallback `<tmp>/maintree-deny-<uid>/<session_id>.jsonl`
+(both are always read)) is re-snapshotted. If one
 that is still under main has changed since its refusal (its `git status
 --porcelain` line differs, or it is dirty now and its existence / type / mtime /
 size differ), the stop is BLOCKED, quoting the refusal: the refused change was
 made anyway by another spelling. An unreadable or corrupt ledger, a target whose
-state cannot be read, or an unusable session_id also blocks. A payload without
-a session_id key has no ledger (deny_ledger.py, RESIDUALS).
+state cannot be read, or an unusable session_id also blocks — a bad ledger file
+only for 20 minutes from its mtime, after which it is renamed aside to
+`<name>.corrupt-<ts>` with a stderr notice and the stop proceeds without it. A
+payload without a session_id key has no ledger (deny_ledger.py, RESIDUALS).
 
 Bounded allow: `stop_hook_active` (a re-entrant stop after this hook already
 fired) resolves to allow, so a genuinely stuck state cannot trap the turn — the

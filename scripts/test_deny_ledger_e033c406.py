@@ -42,6 +42,8 @@ class _Fixture(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.home = os.path.join(self.tmp, "home")
         os.makedirs(self.home)
+        self.tmpdir = os.path.join(self.tmp, "tmpdir")
+        os.makedirs(self.tmpdir)
         self.main = os.path.join(self.tmp, "main")
         os.makedirs(self.main)
         self.git("init", "-q", "-b", "main", self.main, cwd=self.tmp)
@@ -66,6 +68,9 @@ class _Fixture(unittest.TestCase):
         env = dict(os.environ, **GIT_ENV)
         env["CLAUDE_PROJECT_DIR"] = project or self.main
         env["HOME"] = self.home
+        # The fallback ledger lives under tempfile.gettempdir(): keep it in
+        # this fixture too.
+        env["TMPDIR"] = self.tmpdir
         env["CLAUDECODE"] = "1"
         env["CLAUDE_CODE_ENTRYPOINT"] = "cli" if interactive else "sdk-cli"
         return env
@@ -388,6 +393,192 @@ class HookMachineryIsProtected(_Fixture):
                 r = self.edit(path, project=self.wt)
                 self.assertEqual(r.returncode, 2, r.stderr)
                 self.assertIn("hook machinery", r.stderr)
+
+
+
+class VerifierFindingsClosed(_Fixture):
+    """Defects the independent verifier found on 9a756509, plus the
+    coordinator's follow-ups (variable-held keys, parsed GIT_CONFIG_* words,
+    git subcommands writing hook dirs, hooks-only substitutions and globs)."""
+
+    def _refused(self, cmds, cwd=None, project=None):
+        for cmd in cmds:
+            with self.subTest(cmd=cmd, project=project, cwd=cwd):
+                r = self.bash(cmd, cwd=cwd or self.wt, project=project)
+                self.assertEqual(r.returncode, 2, r.stderr)
+
+    def _allowed(self, cmds, cwd=None, project=None):
+        for cmd in cmds:
+            with self.subTest(cmd=cmd, project=project, cwd=cwd):
+                r = self.bash(cmd, cwd=cwd or self.wt, project=project)
+                self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_variable_and_unknown_config_keys_are_refused(self):
+        for project in (None, self.wt):
+            self._refused([
+                'k=core.hooksPath; git config "$k" /dev/null',
+                'k=core.hooksPath; git config set "$k" /dev/null',
+                'git config "$UNKNOWN_KEY" /dev/null',
+                'k=core.hooksPath; git -c "$k=/dev/null" status',
+                'git -c "$UNKNOWN=/dev/null" status',
+                'git -c "core.hooks""Path=/dev/null" status',
+                'git --config-env=core.hooksPath=EVIL status',
+                'git --config-env "$K=EVIL" status',
+            ], project=project)
+        self._allowed(['k=core.hooksPath; git config --get "$k"',
+                       'k=user.name; git config "$k" me'])
+
+    def test_git_config_env_words_are_judged_parsed(self):
+        self._refused([
+            'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooks""Path '
+            'GIT_CONFIG_VALUE_0=/dev/null git commit -m a',
+            'export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooks""Path '
+            'GIT_CONFIG_VALUE_0=/dev/null; git commit -m a',
+            'GIT_CONFIG_KEY_0=core.hooks""Path; export GIT_CONFIG_KEY_0',
+            'env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooks""Path '
+            'GIT_CONFIG_VALUE_0=/dev/null git commit -m a',
+            'GIT_CONFIG_KEY_0="$K" git commit -m a',
+            "GIT_CONFIG_PARAMETERS=\"'core.hooks''Path'='/dev/null'\" git commit -m a",
+        ])
+        self._allowed(['GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.name '
+                       'GIT_CONFIG_VALUE_0=me git commit -m a',
+                       'GIT_CONFIG_GLOBAL=/dev/null git status'])
+
+    def test_git_subcommands_writing_hook_dirs_are_refused(self):
+        for project, cwd in ((None, self.wt), (self.wt, self.wt), (None, self.main)):
+            self._refused([
+                "git rm .githooks/pre-commit",
+                "git rm -r .githooks",
+                "git checkout -- .githooks/pre-commit",
+                "git checkout HEAD -- .githooks",
+                "git restore .githooks/pre-commit",
+                "git restore --source HEAD~1 -- .githooks/pre-commit",
+                "git mv .githooks/pre-commit x",
+                "git clean -fdx .githooks",
+                "git stash push -- .githooks",
+                "git stash -- .githooks/pre-commit",
+                "git apply --directory=.githooks p.diff",
+                "git am --directory .git/hooks p.mbox",
+                "git checkout -- '.githook*'",
+                "git checkout -- ':(top).githooks/pre-commit'",
+                "cd .githooks && git rm pre-commit",
+                "git -C .githooks rm pre-commit",
+            ], cwd=cwd, project=project)
+
+    def test_broad_git_forms_stay_allowed(self):
+        for cwd in (self.wt, self.main):
+            self._allowed([
+                "git checkout .",
+                "git reset --hard",
+                "git reset --hard HEAD~0",
+                "git stash",
+                "git stash pop",
+                "git merge feat",
+                "git apply p.diff",
+                "git checkout feat -- tracked.rs",
+                "git restore tracked.rs",
+                "git stash push -m 'fix .githooks wording' -- tracked.rs",
+                "git checkout -- ':!.githooks'",
+            ], cwd=cwd)
+
+    def test_hooks_only_mode_sees_git_dir_substitutions_and_globs(self):
+        self._refused([
+            'echo x > "$(git rev-parse --git-common-dir)/hooks/pre-commit"',
+            "cp /dev/null $(git rev-parse --git-dir)/config",
+            "echo x >> `git rev-parse --absolute-git-dir`/config",
+            'rm "$(git rev-parse --git-path hooks)/pre-commit"',
+            "rm .githook*/pre-commit",
+            "rm -rf .git/hoo*",
+            "chmod -x .githook?/*",
+        ], project=self.wt)
+        self._allowed([
+            "cat $(git rev-parse --git-dir)/config",
+            "rm -rf ./*",
+            "echo x > $(git rev-parse --show-toplevel)/notes.txt",
+        ], project=self.wt)
+
+
+class LedgerFallbackAndBounds(_Fixture):
+    def _fallback(self) -> str:
+        return os.path.join(self.tmpdir, "maintree-deny-%d" % os.getuid(),
+                            SID + ".jsonl")
+
+    def _unwritable_home(self) -> None:
+        # HOME is a regular FILE: `<HOME>/.claude/...` can never be created.
+        shutil.rmtree(self.home)
+        with open(self.home, "w") as f:
+            f.write("not a directory\n")
+
+    def test_unwritable_home_records_to_the_fallback_and_still_refuses(self):
+        self._unwritable_home()
+        self.deny_rm()
+        self.assertTrue(os.path.exists(self._fallback()))
+        retry = self.bash("cat " + self.target)
+        self.assertEqual(retry.returncode, 2, retry.stderr)
+        self.assertIn("by another spelling", retry.stderr)
+        os.remove(self.target)
+        self.assertEqual(self.stop().returncode, 2)
+        self.clear()
+        self.assertFalse(os.path.exists(self._fallback()))
+
+    def test_both_ledgers_are_read(self):
+        # A deny that landed in the fallback is seen even once HOME works.
+        self._unwritable_home()
+        self.deny_rm()
+        os.remove(self.home)
+        os.makedirs(self.home)
+        self.assertEqual(self.bash("cat " + self.target).returncode, 2)
+
+    def test_no_writable_location_keeps_the_deny_and_says_so(self):
+        self._unwritable_home()
+        # The fallback DIRECTORY is a regular file, so it cannot be created.
+        # (A read-only TMPDIR would not do: tempfile.gettempdir() then falls
+        # back to /tmp on its own.)
+        with open(os.path.dirname(self._fallback()), "w") as f:
+            f.write("not a directory\n")
+        r = self.bash("rm " + self.target)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("could NOT be written to the deny ledger", r.stderr)
+
+    def _corrupt(self, age_secs: float) -> None:
+        os.makedirs(os.path.dirname(self.ledger), exist_ok=True)
+        with open(self.ledger, "w") as f:
+            f.write("{garbage\n")
+        t = time.time() - age_secs
+        os.utime(self.ledger, (t, t))
+
+    def test_corrupt_ledger_refuses_inside_the_bound(self):
+        self._corrupt(19 * 60)
+        r = self.bash("ls /")
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("refused until", r.stderr)
+        self.assertEqual(self.stop().returncode, 2)
+
+    def test_corrupt_ledger_is_moved_aside_after_the_bound(self):
+        self._corrupt(21 * 60)
+        r = self.bash("ls /")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("moved it aside", r.stderr)
+        self.assertFalse(os.path.exists(self.ledger))
+        aside = [n for n in os.listdir(os.path.dirname(self.ledger))
+                 if n.startswith(SID + ".jsonl.corrupt-")]
+        self.assertEqual(len(aside), 1)
+        self.assertIn(aside[0], r.stderr)
+        self.assertEqual(self.stop().returncode, 0)
+
+    def test_stale_corrupt_ledger_is_moved_aside_at_stop_too(self):
+        self._corrupt(21 * 60)
+        r = self.stop()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("moved it aside", r.stderr)
+
+    def test_raw_and_reason_are_truncated(self):
+        long_cmd = "rm " + self.target + " " + " ".join(["x"] * 200)
+        self.assertEqual(self.bash(long_cmd).returncode, 2)
+        e = [x for x in self.entries() if x["kind"] == "deny"][0]
+        self.assertLessEqual(len(e["raw"]), 120)
+        self.assertLessEqual(len(e["reason"]), 300)
+        self.assertNotIn("\n", e["reason"])
 
 
 if __name__ == "__main__":

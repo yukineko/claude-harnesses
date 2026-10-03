@@ -214,18 +214,15 @@ class HookMachinery(_Fixture):
                 with self.subTest(cwd=cwd, cmd=cmd):
                     self.assertEqual(self.bash(cmd, cwd=cwd, sid="h", proj=cwd).returncode, 0)
 
-    @unittest.expectedFailure  # verifier finding on 9a756509: variable-held key
     def test_variable_held_key_is_refused(self):
         r = self.bash('k=core.hooksPath; git config "$k" /dev/null', cwd=self.wt, proj=self.wt)
         self.assertEqual(r.returncode, 2, r.stderr)
 
-    @unittest.expectedFailure  # verifier finding on 9a756509: quote-split env key
     def test_quote_split_env_key_is_refused(self):
         r = self.bash('GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooks""Path '
                       'GIT_CONFIG_VALUE_0=/dev/null git commit -m a')
         self.assertEqual(r.returncode, 2, r.stderr)
 
-    @unittest.expectedFailure  # verifier finding on 9a756509: git rm into .githooks
     def test_git_rm_of_githooks_is_refused(self):
         r = self.bash("git rm .githooks/pre-commit", cwd=self.wt, proj=self.wt)
         self.assertEqual(r.returncode, 2, r.stderr)

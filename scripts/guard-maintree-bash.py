@@ -238,29 +238,59 @@ linked worktree (no main tree to guard: the walk then runs in a hooks-only
 mode that judges nothing else):
   * `git … config` that sets core.hooksPath to anything but `.githooks`,
     unsets it (`--unset`, `unset`), removes / renames the `core` section, or
-    opens `--edit`; `git -c core.hooksPath=X …` / `--config-env` on any git
-    command (X = `.githooks` allowed); any GIT_CONFIG_* variable (KEY_n,
-    PARAMETERS, GLOBAL, …) in a command that also names core.hooksPath. Read
+    opens `--edit`; `git -c core.hooksPath=X …` (separate or glued `-cK=V`) /
+    `--config-env` on any git command (X = `.githooks` allowed). git's words
+    are expanded with the variables tracked through the command first, so
+    `k=core.hooksPath; git config "$k" X` is the same write; a key position
+    (config key, `-c` key, `--config-env` key) holding a value this walk cannot
+    know is undetermined and refused, except under an explicit read flag. Read
     forms (`git config core.hooksPath`, `--get`, `get`) are allowed;
+  * GIT_CONFIG_* environment assignments, judged on the PARSED, quote-removed
+    and expanded words — as a command prefix, a bare assignment, `export` /
+    `declare` / `local` / `readonly`, or `env NAME=V`: a GIT_CONFIG_KEY_n whose
+    value is core.hooksPath (any case) or unknown, and a GIT_CONFIG_PARAMETERS
+    that is unknown or names core.hooksPath (single quotes removed, as git
+    dequotes it), are refused. Separately, any GIT_CONFIG_* name in the raw
+    text of a command that also names core.hooksPath is refused;
+  * git subcommands that write working-tree paths named by a pathspec — `rm`,
+    `mv`, `checkout`, `restore`, `clean`, `stash push` / `stash -- …`, and
+    `apply` / `am` through `--directory` / `--include` — when a pathspec
+    (expanded, `:(top)` / `:/` magic stripped, resolved against the tracked
+    cwd or `git -C DIR`) names, lies under, or as a git glob (whose `*`
+    crosses `/` and leading dots) can match `.githooks` or `.git/hooks`.
+    `:!` / `:(exclude)` pathspecs write nothing and are skipped. Broad forms
+    with NO pathspec stay allowed (see KNOWN HOLES);
   * every write target — the same targets judged for main above, `chmod -x
     FILE` included (a mode starting with `-` is the mode, not an option) —
     that, as written or resolved, is inside `.githooks`, inside `.git/hooks`,
-    is a `.git/config`, or is a `config.worktree` under `.git`. Reading them is
-    allowed; `cp` FROM them is judged as a write like every `cp` operand. In
-    the hooks-only mode a command this walk cannot tokenize or place is refused
-    only if its text names `.githooks`, `.git/hooks`, `.git/config`,
-    `config.worktree` or core.hooksPath.
+    is a `.git/config`, or is a `config.worktree` under `.git`, or that has a
+    glob component that can match one of those (`.githook*`, `.git/hoo*`; a
+    glob not starting with `.` does not match a dot-name, as in the shell). A
+    `$( … )` / backquote that prints a git directory (`git rev-parse
+    --git-dir` / `--git-common-dir` / `--absolute-git-dir` / `--git-path X`)
+    stands for `.git` (`.git/X`), so `$(git rev-parse --git-dir)/config` is
+    `.git/config`. Reading them is allowed; `cp` FROM them is judged as a
+    write like every `cp` operand. In the hooks-only mode a command this walk
+    cannot tokenize or place is refused only if its text names `.githooks`,
+    `.git/hooks`, `.git/config`, `config.worktree` or core.hooksPath.
 
 DENY LEDGER (e033c406, scripts/deny_ledger.py). Every refusal above is appended
-to the per-session ledger `~/.claude/state/maintree-deny/<session_id>.jsonl`
-(target realpath, reason, and a snapshot of the target's state). A call this
+to the per-session ledger `~/.claude/state/maintree-deny/<session_id>.jsonl` — or, when that cannot be
+written, the temp-dir fallback `<tmp>/maintree-deny-<uid>/<session_id>.jsonl`
+(both are always read) — target realpath, `raw` (the
+command's first line) truncated to 120 characters, the reason's first line
+truncated to 300, and a snapshot of the target's state. A refusal that can be
+written to neither location keeps its deny and says so. A call this
 guard's own rules ALLOW is then checked against that ledger: if it names a main
 target refused earlier in the same session (within 25 guarded calls / 20
 minutes), it is refused quoting the earlier refusal. That refusal is an ASK
 (`permissionDecision: "ask"` JSON on stdout, exit 0) only in an interactive
 terminal session (CLAUDECODE=1 and CLAUDE_CODE_ENTRYPOINT=cli); anywhere else
 it is hardened to a deny (exit 2). An unreadable or corrupt ledger, or an
-unusable session_id, refuses the same way. scripts/stop-verify-worktree.py
+unusable session_id, refuses the same way — a bad ledger file only for 20
+minutes from its mtime, after which it is renamed aside to
+`<name>.corrupt-<ts>` with a stderr notice and the call proceeds.
+scripts/stop-verify-worktree.py
 re-checks the refused targets at Stop, and scripts/deny-ledger-clear.py
 (UserPromptSubmit) empties the session's ledger. See deny_ledger.py for the
 exact rules and residuals.
@@ -276,6 +306,7 @@ deny_ledger.py that fails to import.
 from __future__ import annotations
 
 import ast
+import fnmatch
 import json
 import os
 import re
@@ -826,28 +857,103 @@ SANCTIONED_HOOKS_PATHS = {".githooks", ".githooks/"}
 _NO_MAIN = "/nonexistent/.maintree-guard-no-main-tree"
 
 
-def _hook_protected(path: str) -> bool:
-    """True if `path` (any form; folded for case on darwin) is inside
-    `.githooks`, inside `.git/hooks`, is a `.git/config`, or is a
-    `config.worktree` under a `.git` directory."""
+_GLOB = set("*?[")
+
+
+def _comp_may_be(comp: str, name: str, dotglob: bool = False) -> bool:
+    """`comp` names `name`, or is a glob that can match it. Like the shell, a
+    glob only matches a leading-dot name when the pattern itself starts with
+    `.` — unless `dotglob` (git pathspecs, whose `*` matches dots)."""
+    if comp == name:
+        return True
+    if not any(ch in comp for ch in _GLOB):
+        return False
+    if name.startswith(".") and not comp.startswith(".") and not dotglob:
+        return False
+    return fnmatch.fnmatchcase(name, comp)
+
+
+def _hook_protected(path: str, dotglob: bool = False) -> bool:
+    """True if `path` (any form; folded for case on darwin) is — or, through a
+    glob component (`.githook*`, `.git/hoo*`), may be — inside `.githooks`,
+    inside `.git/hooks`, a `.git/config`, or a `config.worktree` under a
+    `.git` directory."""
     comps = [c for c in _fold(path).split("/") if c]
     for i, c in enumerate(comps):
-        if c == ".githooks":
+        if _comp_may_be(c, ".githooks", dotglob):
             return True
-        if c == ".git" and i + 1 < len(comps):
-            if comps[i + 1] == "hooks":
+        if _comp_may_be(c, ".git", dotglob) and i + 1 < len(comps):
+            if _comp_may_be(comps[i + 1], "hooks", dotglob):
                 return True
-            if comps[i + 1] == "config" and i + 2 == len(comps):
+            if _comp_may_be(comps[i + 1], "config", dotglob) and i + 2 == len(comps):
                 return True
-        if c == "config.worktree" and ".git" in comps[:i]:
+        if _comp_may_be(c, "config.worktree", dotglob) and any(
+                _comp_may_be(x, ".git", dotglob) for x in comps[:i]):
             return True
     return False
 
 
+# The text of a `$( … )` / backquote that prints a git directory: its output
+# stands for a `.git` directory (`$(git rev-parse --git-common-dir)/hooks`).
+_GITDIR_PRODUCER = re.compile(
+    r"^\s*git\b.*\brev-parse\b.*--(?:absolute-git-dir|git-dir|git-common-dir)\b")
+_GITPATH_PRODUCER = re.compile(r"^\s*git\b.*\brev-parse\b.*--git-path\s+(\S+)")
+_QUOTED_SUBST = re.compile(r"\$\(([^()]*)\)|`([^`]*)`")
+
+
+_GITDIR_SUBST = re.compile(r"\$\(([^()]*)\)")
+
+
+def _gitdir_substs_to_literal(text: str) -> str:
+    """Rewrite each `$( … )` that prints a git directory (`git rev-parse
+    --git-dir` / `--git-common-dir` / `--absolute-git-dir` / `--git-path X`)
+    as the literal `.git` / `.git/X`, BEFORE tokenizing. The tokenizer splits
+    `$(…)/config` into two words, so the path suffix would otherwise be judged
+    on its own; as `.git/config` the hook-machinery shape rule sees it. What
+    the substitution runs is a read (rev-parse), so nothing is lost."""
+    def sub(m: re.Match) -> str:
+        g = _gitdir_text(m.group(1))
+        return g if g is not None else m.group(0)
+
+    return _GITDIR_SUBST.sub(sub, text)
+
+
+def _gitdir_text(text: str) -> str | None:
+    """`.git` (or `.git/<path>`) when `text` is a command printing a git
+    directory, else None."""
+    m = _GITPATH_PRODUCER.match(text)
+    if m:
+        return ".git/" + m.group(1).strip("'\"")
+    if _GITDIR_PRODUCER.match(text):
+        return ".git"
+    return None
+
+
+def _git_env_rewires(name: str, value: str) -> str | None:
+    """A GIT_CONFIG_* environment assignment (parsed and quote-removed, value
+    already expanded): the reason it can rewire core.hooksPath, or None."""
+    unknown = any(ch in value for ch in "$`")
+    # git dequotes GIT_CONFIG_PARAMETERS itself ('core.hooks''Path'): match
+    # with its single quotes removed.
+    value = value.replace("'", "")
+    if re.fullmatch(r"GIT_CONFIG_KEY_\d+", name):
+        if unknown:
+            return f"{name} is set to a value this gate cannot determine"
+        if value.strip().casefold() == HOOKS_KEY:
+            return f"{name}={value} injects core.hooksPath through the environment"
+    if name == "GIT_CONFIG_PARAMETERS":
+        if unknown or HOOKS_KEY in value.casefold():
+            return "GIT_CONFIG_PARAMETERS can carry core.hooksPath"
+    return None
+
+
 def _hookspath_assignment(kv: str) -> str | None:
-    """`core.hooksPath=VALUE` (a `git -c` operand): the reason it rewires the
-    hooks, or None."""
+    """`core.hooksPath=VALUE` (a `git -c` operand, already expanded): the
+    reason it rewires the hooks, or None. A key this gate cannot read (an
+    unknown variable) is undetermined and refused."""
     key, eq, val = kv.partition("=")
+    if any(ch in key for ch in "$`"):
+        return f"`-c {kv}` sets a config key this gate cannot determine"
     if key.strip().casefold() != HOOKS_KEY:
         return None
     if eq and val.strip() in SANCTIONED_HOOKS_PATHS:
@@ -863,6 +969,13 @@ _CONFIG_READ_OPTS = {"--get", "--get-all", "--get-regexp", "--get-urlmatch",
                      "--list", "-l", "--get-color", "--get-colorbool"}
 _CONFIG_VERBS = {"get", "list", "set", "unset", "rename-section",
                  "remove-section", "edit"}
+# git subcommands that write working-tree paths named by a pathspec.
+_GIT_TREE_WRITERS = {"rm", "mv", "checkout", "restore", "clean", "stash",
+                     "apply", "am"}
+# Their options that take a separate value (not a pathspec).
+_GIT_SUB_VALUE_OPTS = {"-m", "--message", "-b", "-B", "--orphan", "-s",
+                       "--source", "-e", "--exclude", "-p", "-C",
+                       "--pathspec-from-file", "--conflict"}
 
 
 def _git_rewires_hooks(args: list[str]) -> str | None:
@@ -874,16 +987,21 @@ def _git_rewires_hooks(args: list[str]) -> str | None:
     i = 0
     while i < len(args):
         a = args[i]
-        if a == "-c":
-            why = _hookspath_assignment(args[i + 1] if i + 1 < len(args) else "")
+        if a == "-c" or (a.startswith("-c") and len(a) > 2 and "=" in a):
+            glued = a != "-c"
+            why = _hookspath_assignment(a[2:] if glued else (
+                args[i + 1] if i + 1 < len(args) else ""))
             if why:
                 return why
-            i += 2
+            i += 1 if glued else 2
             continue
         if a.startswith("--config-env"):
             spec = a.split("=", 1)[1] if "=" in a else (
                 args[i + 1] if i + 1 < len(args) else "")
-            if spec.split("=", 1)[0].strip().casefold() == HOOKS_KEY:
+            key = spec.split("=", 1)[0]
+            if any(ch in key for ch in "$`"):
+                return "`--config-env` sets a config key this gate cannot determine"
+            if key.strip().casefold() == HOOKS_KEY:
                 return "`--config-env` sets core.hooksPath from the environment"
             i += 1 if "=" in a else 2
             continue
@@ -910,6 +1028,10 @@ def _git_rewires_hooks(args: list[str]) -> str | None:
         else:
             ops.append(a)
         j += 1
+    if ops and any(ch in ops[0] for ch in "$`"):
+        # The verb or key position holds a value this gate cannot read.
+        if not (flags & _CONFIG_READ_OPTS):
+            return "`git config` writes a key this gate cannot determine"
     verb = ops.pop(0) if ops and ops[0] in _CONFIG_VERBS else None
     if verb == "edit" or flags & {"--edit", "-e"}:
         return "`git config --edit` opens the repository config for arbitrary edits"
@@ -918,9 +1040,12 @@ def _git_rewires_hooks(args: list[str]) -> str | None:
         if ops and ops[0].strip().casefold() == "core":
             return "it removes or renames the [core] section that holds core.hooksPath"
         return None
+    reading = verb in ("get", "list") or bool(flags & _CONFIG_READ_OPTS)
+    if ops and any(ch in ops[0] for ch in "$`") and not reading:
+        return "`git config` writes a key this gate cannot determine"
     if not ops or ops[0].strip().casefold() != HOOKS_KEY:
         return None
-    if verb in ("get", "list") or flags & _CONFIG_READ_OPTS:
+    if reading:
         return None
     if verb == "unset" or flags & {"--unset", "--unset-all"}:
         return "it unsets core.hooksPath, so git falls back to .git/hooks"
@@ -1700,7 +1825,7 @@ class _Analyzer:
     def check_hooks(self, target: str, st: _State) -> None:
         """Refuse a write into hook machinery in any tree (e033c406): the
         target as written (after expansion), then its resolved literal part."""
-        p = _expand(target, st)
+        p = _expand(self.gitdir_substs(target), st)
         if _hook_protected(p):
             self.hit_abs = _abs_target(target, st, self.root)
             raise _HookHit(target, "it writes into the repository's hook machinery")
@@ -1713,13 +1838,50 @@ class _Analyzer:
             self.hit_abs = _abs_target(target, st, self.root)
             raise _HookHit(target, "it writes into the repository's hook machinery")
 
+    def gitdir_substs(self, word: str) -> str:
+        """`word` with each substitution that prints a git directory (`$(git
+        rev-parse --git-dir)`, `--git-common-dir`, `--absolute-git-dir`,
+        `--git-path X`), quoted or already replaced by a marker, rewritten to
+        `.git` / `.git/X`, so the hook-machinery shape rule sees it."""
+        for marker, text in self.substs.items():
+            if marker in word:
+                g = _gitdir_text(text)
+                if g is not None:
+                    word = word.replace(marker, g)
+
+        def sub(m: re.Match) -> str:
+            g = _gitdir_text(m.group(1) if m.group(1) is not None else m.group(2))
+            return g if g is not None else m.group(0)
+
+        return _QUOTED_SUBST.sub(sub, word)
+
+    def check_git_pathspec(self, spec: str, st: _State) -> None:
+        """A pathspec of a git subcommand that writes the working tree: refuse
+        one that names, lies under, or (as a git glob, whose `*` crosses `/`
+        and leading dots) can match `.githooks` or `.git/hooks`."""
+        if spec.startswith(":(") and ")" in spec:
+            magic, spec = spec[2:spec.index(")")], spec[spec.index(")") + 1:]
+            if "exclude" in magic:
+                return
+        elif spec.startswith((":!", ":^")):
+            return  # an exclusion writes nothing
+        elif spec.startswith(":/"):
+            spec = spec[2:]
+        self.check_hooks(spec, st)
+        p = _expand(self.gitdir_substs(spec), st)
+        if _hook_protected(p, dotglob=True) or (any(ch in p for ch in _GLOB) and any(
+                fnmatch.fnmatchcase(rep, _fold(p))
+                for rep in (".githooks", ".githooks/x", ".git/hooks/x"))):
+            raise _HookHit(spec, "a git pathspec writes into the repository's "
+                                 "hook machinery")
+
     # -- text ---------------------------------------------------------------
     def analyze(self, text: str, st: _State, depth: int) -> _State:
         """Judge a whole command text; return the shell state it leaves."""
         if depth > MAX_DEPTH:
             raise _Undet(f"command wrappers nested more than {MAX_DEPTH} levels")
         stripped, bodies = _strip_heredoc_bodies(text)
-        tokens = _tokenize(_backquotes_to_subst(stripped))
+        tokens = _tokenize(_gitdir_substs_to_literal(_backquotes_to_subst(stripped)))
         if tokens is None:
             if depth == 0:
                 raise _Unparseable()
@@ -1907,6 +2069,7 @@ class _Walk:
                 m = _ASSIGN.match(a)
                 assert m is not None
                 new.vars[m.group(1)] = _expand(m.group(2), new)
+                self.git_env(m.group(1), new.vars[m.group(1)])
             return new
         env_st = st
         if k:
@@ -1917,6 +2080,7 @@ class _Walk:
                 m = _ASSIGN.match(a)
                 assert m is not None
                 env_st.vars[m.group(1)] = _expand(m.group(2), st)
+                self.git_env(m.group(1), env_st.vars[m.group(1)])
         argv = argv[k:]
 
         word = _expand(argv[0].lstrip("`"), st)
@@ -1954,6 +2118,7 @@ class _Walk:
                 m = _ASSIGN.match(a)
                 if m:
                     new.vars[m.group(1)] = _expand(m.group(2), new)
+                    self.git_env(m.group(1), new.vars[m.group(1)])
             return new
         if prog == "unset":
             new = st.copy()
@@ -2083,11 +2248,10 @@ class _Walk:
             if nxt in (";",) and any(a in ("-exec", "-execdir", "-ok", "-okdir") for a in rest):
                 self.find_cont = starts
         elif prog == "git":
-            # The one git judgement made here (e033c406): rewiring the hook
-            # directory disarms every local gate, from any tree.
-            why = _git_rewires_hooks(rest)
-            if why:
-                raise _HookHit("core.hooksPath", why)
+            # The git judgements made here (e033c406): rewiring the hook
+            # directory, or a subcommand writing into it, disarms every local
+            # gate, from any tree.
+            self.git_hooks(rest, st)
         # NOTE: git subcommands (rm/mv/apply/checkout/restore/stash/reset/clean)
         # are deliberately NOT handled here. Their effect depends on the cwd they
         # run in (often a worktree), they are frequently RECOVERY or move-to-
@@ -2101,6 +2265,77 @@ class _Walk:
         # `git -C <dir>` re-anchors only that one git command: it no longer
         # excuses the rest of the command line.
         return None
+
+    # -- git and the hook machinery (e033c406) ------------------------------------
+    def git_env(self, name: str, value: str) -> None:
+        why = _git_env_rewires(name, value)
+        if why:
+            raise _HookHit("core.hooksPath", why)
+
+    def git_hooks(self, rest: list[str], st: _State) -> None:
+        """`git REST…`: refuse rewiring core.hooksPath (words expanded with the
+        tracked variables first), and a working-tree-writing subcommand whose
+        pathspec reaches `.githooks` / `.git/hooks`."""
+        words = [_expand(a, st) for a in rest]
+        why = _git_rewires_hooks(words)
+        if why:
+            raise _HookHit("core.hooksPath", why)
+        gst = st
+        i = 0
+        while i < len(words):
+            a = words[i]
+            if a == "-C" and i + 1 < len(words):
+                d = words[i + 1]
+                if any(c in d for c in _UNRESOLVABLE) or (
+                        not os.path.isabs(d) and gst.rel is None):
+                    gst = _State(None, None, dict(st.vars))
+                else:
+                    r = _resolve(gst.rel or "/", d)
+                    gst = _State(r, r, dict(st.vars))
+                i += 2
+                continue
+            if a in ("-c", "--config-env") or a in _GIT_GLOBAL_VALUE_OPTS:
+                i += 2
+                continue
+            if a.startswith("-"):
+                i += 1
+                continue
+            break
+        if i >= len(words) or words[i] not in _GIT_TREE_WRITERS:
+            return
+        sub, args = words[i], rest[i + 1:]
+        if sub == "stash":
+            if args[:1] == ["push"]:
+                args = args[1:]
+            elif not (args and args[0].startswith("-")):
+                return  # list / show / pop / apply …: no pathspec (residual)
+        specs: list[str] = []
+        j = 0
+        while j < len(args):
+            a = args[j]
+            if a == "--":
+                if sub not in ("apply", "am"):
+                    specs += args[j + 1:]
+                break
+            if sub in ("apply", "am") and a in ("--directory", "--include"):
+                specs += args[j + 1:j + 2]
+                j += 2
+                continue
+            if sub in ("apply", "am") and a.startswith(("--directory=", "--include=")):
+                specs.append(a.split("=", 1)[1])
+                j += 1
+                continue
+            if a in _GIT_SUB_VALUE_OPTS:
+                j += 2
+                continue
+            if a.startswith("-"):
+                j += 1
+                continue
+            if sub not in ("apply", "am"):  # their operands are patch files
+                specs.append(a)
+            j += 1
+        for spec in specs:
+            self.an.check_git_pathspec(spec, gst)
 
     # -- state changers --------------------------------------------------------
     def loop_var(self, rest: list[str], st: _State) -> _State:
@@ -2171,7 +2406,10 @@ class _Walk:
             if a in ("-S", "--split-string") and j + 1 < len(rest):
                 self.an.analyze(" ".join(rest[j + 1:]), st2.copy(), self.depth + 1)
                 return None
-            if a.startswith("-") or _ASSIGN.match(a):
+            m = _ASSIGN.match(a)
+            if m:
+                self.git_env(m.group(1), _expand(m.group(2), st2))
+            if a.startswith("-") or m:
                 j += 1
                 continue
             break
@@ -3058,7 +3296,16 @@ if __name__ == "__main__":
 #     (`GIT_CONFIG_GLOBAL=<file>` whose file was written in an earlier call,
 #     `include.path`), a git alias, or an interpreter spawn whose command is
 #     not a literal; a relative write into `.githooks` against a cwd this walk
-#     could not track while in the hooks-only mode.
+#     could not track while in the hooks-only mode; a write target whose
+#     unknown variable stands for `.githooks` (`rm $X/pre-commit`); brace
+#     expansion (`.git{hooks,x}`).
+#   * git subcommands that rewrite hook files WITHOUT a pathspec naming them —
+#     deliberately, so merges and resets on main keep working: `git reset
+#     --hard`, `git checkout .` / `git checkout <branch>`, `git switch`, `git
+#     merge` / `pull` / `rebase` / `cherry-pick`, `git stash pop` / `apply`,
+#     `git apply` / `am` of a patch file whose content touches `.githooks`
+#     (the patch is not read), and `--pathspec-from-file`. A pathspec that is
+#     an ANCESTOR of `.githooks` (`.`, the repo root) is such a broad form.
 #   * deny ledger (e033c406): see the RESIDUALS in deny_ledger.py (no
 #     session_id key; a retry spelled relatively / through a symlink is not
 #     matched at PreToolUse, though its effect on main is still seen at Stop

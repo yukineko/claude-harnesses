@@ -1318,7 +1318,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 実測 2026-09-08、測定点 d47f0a4b、CLAUDE_PROJECT_DIR=/Users/yuki/src/harness。
 
@@ -1342,11 +1342,13 @@ done_criteria: 上記2コマンドの rc が両方 0 になること。かつ
 
 [backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test scripts/test_backlog_s05_repros.py (rev e70d48dd)"""
 created_at = 1788820645
-updated_at = 1790983275
+updated_at = 1791043783
 weight = 0.0
 issue_number = 441
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/441"
-rev = 0
+rev = 1
+ruling_kind = "judgment"
+rationale = "Superseded by the observing guard b8390f7a (session 521ce4dd, user ruling 2026-10-03), not yet merged: it replaces command-text parsing, so fd-number tokenization is obsolete. Static-guard fix exists unmerged on branch run-20261003-202619-762/ad524af9 (7cd70fb6, 6104ffca, 786235d6, 086f0f99; verifier round 1 FAIL on a docstring claim, fixed in 086f0f99, round 2 stopped). Only the SyntaxWarning hunk landed (39268375). Close when b8390f7a merges; if b8390f7a is abandoned, resume this branch from round-2 verification."
 
 [[task]]
 id = "2b1065a1"
@@ -2289,7 +2291,7 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 実測 2026-09-08 13:37 JST、main の作業ツリー (fix/issue-15-jsonl-append-race @ 10c22160)。
 
@@ -2324,11 +2326,13 @@ main のツリーに残したまま (削除していない)。
 
 [backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test scripts/test_backlog_s05_repros.py (rev e70d48dd)"""
 created_at = 1788842261
-updated_at = 1790983284
+updated_at = 1791043783
 weight = 0.0
 issue_number = 1108
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1108"
-rev = 0
+rev = 1
+ruling_kind = "judgment"
+rationale = "Superseded by the observing guard b8390f7a (user ruling 2026-10-03), which ports d796a630 as MergeTimePorts.test_d796a630_* in test_guard_maintree_bash_observe.py. Not started in batch 14. Close with that test as evidence when b8390f7a merges; if it is abandoned, reopen."
 
 [[task]]
 id = "65bfb279"
@@ -11821,13 +11825,16 @@ status = "unconfirmed"
 notes = """
 Live guard (4b0e5ab3) refused, from cwd = session worktree: `RID=$(condukt state init ... | tail -1); condukt worktree create --run $RID --topic X --branch X` -> "target `$RID` mutates this project's MAIN working tree". The literal-value form of the same calls was allowed. Over-block of the documented 'unknown program with unresolvable operand' class; friction for every condukt orchestration that captures a run id. Reading (a): over-block worth narrowing (e.g. a flag value, not a positional path); (b): intended fail-closed. Distinguish by whether an option VALUE (after --run) should ever be judged as a write target.
 
-Observed 2026-10-03 in flow batch 14 (run-20261003-202619-762), main 4b0e5ab3..4bc312db."""
+Observed 2026-10-03 in flow batch 14 (run-20261003-202619-762), main 4b0e5ab3..4bc312db.
+
+Second occurrence 2026-10-03 (main 9ea5a326): `B=<backlog bin>; $B driver register --session-id "$CLAUDE_CODE_SESSION_ID" --project /Users/yuki/src/harness` from the session worktree cwd was refused: target `$CLAUDE_CODE_SESSION_ID` mutates this project's MAIN working tree. Same class: an unknown program ($B) whose option VALUE is an unresolvable variable is judged as a main write. The literal binary path with the literal session id was allowed (declared openly to the user, not a silent respelling).
+Related, same session: an inline `python3 -c "..."` that only edits the backlog via the CLI was refused as 'a nested command payload does not tokenize' (see 7d87ada0)."""
 created_at = 1791028013
-updated_at = 1791028013
+updated_at = 1791033820
 weight = 0.0
 issue_number = 1193
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1193"
-rev = 0
+rev = 1
 
 [[task]]
 id = "eca8dea7"
@@ -11840,13 +11847,20 @@ status = "unconfirmed"
 notes = """
 User ruling (AskUserQuestion, 2026-10-03): 'Investigate each, propose'. check-unlisted-gates.py (666b6704, merged 4bc312db) names 8 scanners in scripts/ that no hook runs: check-bench-regression.py, check-closure-evidence.py, check-fail-open-mutation.py, check-projkey-store-classification.py, check-shell-syntax.py, check-unwind.sh, check-versions.sh, check-workspace-tests.py. Callers today are other scripts / release-plz.toml / tests. For each: measure what it checks, its runtime, and its current result on main. Prepare a .githooks patch (scratchpad, human-applied) wiring the green and fast ones, and propose removal or rename for the rest. The user approves before anything lands. The 666b6704 pre-commit patch (scratchpad 666b6704-githooks.patch) is applied only after this is resolved, because it blocks every commit while any scanner is unlisted.
 
-Observed 2026-10-03 in flow batch 14 (run-20261003-202619-762), main 4b0e5ab3..4bc312db."""
+Observed 2026-10-03 in flow batch 14 (run-20261003-202619-762), main 4b0e5ab3..4bc312db.
+
+INVESTIGATION DONE 2026-10-03 (main 9ea5a326): scratchpad eca8dea7-proposal.md, raw logs eca8dea7-run-*.log.
+USER RULINGS 2026-10-04 (AskUserQuestion):
+1. Stage A approved in full: scratchpad eca8dea7-githooks.patch (shell-syntax + unwind into pre-commit with a *.sh -> bash case in run(); fail-open-mutation into pre-push, scoped to ranges touching a GATE crate / harness-core / the harness, inside the throwaway checkout). Human applies (.githooks is human-only).
+2. check-workspace-tests.py: wire only the scripts/test_*.py part into pre-push now; the cargo part is decided after one uncapped run measures whether main is green and its runtime. Needs a scanner change (a python-only mode) plus a pre-push patch.
+3. Approved: rename check-bench-regression.py -> scripts/bench-regression.py; remove check-versions.sh and its test (check-plugin-versions.py covers it, observed with a planted 9.9.9). Implement in a worktree, update the expectedFailure pins (test_backlog_de721e5e_df49f872, test_backlog_65bfb279, test_backlog_audit_b1_0:264, test_backlog_5eb1f127), with a test-weakening-justified line for the removed test.
+Stage B (closure-evidence, projkey) waits for b0c3d263 and 6ca3d71f. Stage C (666b6704 rebased, eca8dea7-666b6704-rebased.patch) lands last, after A, B, the rename/removal and workspace-tests wiring."""
 created_at = 1791028015
-updated_at = 1791028015
+updated_at = 1791043633
 weight = 0.0
 issue_number = 1194
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1194"
-rev = 0
+rev = 1
 
 [[task]]
 id = "aef148dd"
@@ -12303,4 +12317,120 @@ updated_at = 1791044136
 weight = 0.0
 issue_number = 1230
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1230"
+rev = 0
+
+[[task]]
+id = "d30192af"
+title = "guard-maintree-bash: >& の非数字 operand (>&$fd) をファイル target として判定し over-refuse しうる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "ad524af9 worker (7cd70fb6): the >& handler still judges a non-digit operand such as >&$fd as a file target. Observed by reading; may over-refuse. Also the live guard refuses '$TDD red --help 2>&1' as 'target red mutates MAIN' (unknown program operand, same class as 9eb1df03-batch item 32 / $RID). Observed 2026-10-03, run-20261003-202619-762."
+created_at = 1791032743
+updated_at = 1791032743
+weight = 0.0
+issue_number = 1218
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1218"
+rev = 0
+
+[[task]]
+id = "1a73a49b"
+title = "guard-maintree-bash: git -C <main> add / checkout -- / cd <main> && git commit を allow する (git 書き込みは未判定)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = """
+From the verifier's corpus: `git -C <main> add f.txt`, `git -C <main> checkout -- f.txt` and `cd <main> && git commit` are allowed (rc 0) by guard-maintree-bash at base and HEAD, with or without a redirect. KNOWN HOLES lists 'git subcommands'. checkout -- discards a main working-tree change (destructive, not recoverable); add/commit on main are blocked later by pre-commit check-worktree-isolation only for commit, not for add/checkout. Reading (a): real fail-open in the main-tree guard for git writers other than the hook-path ones e033c406 covers; (b): intended, another layer owns git. Distinguish by checking whether any PreToolUse gate refuses `git -C <main> checkout -- f` today.
+
+Observed 2026-10-03 by the ad524af9 verifier (run-20261003-202619-762), base 9ea5a326 and HEAD 6104ffca, temp fixture repo."""
+created_at = 1791034277
+updated_at = 1791034277
+weight = 0.0
+issue_number = 1224
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1224"
+rev = 0
+
+[[task]]
+id = "dd91eb2f"
+title = "guard-maintree-bash: 算術式 $((2>1)) / (( 3>2 )) / [[ 2 > 1 ]] を main cwd で redirect と読み over-block する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = """
+From a main cwd, `echo $((2>1))`, `(( 3>2 ))` and `[[ 2 > 1 ]]` are refused (2) because `>1` / `>2` is read as a redirect target. Same at base and HEAD.
+
+Observed 2026-10-03 by the ad524af9 verifier (run-20261003-202619-762), base 9ea5a326 and HEAD 6104ffca, temp fixture repo."""
+created_at = 1791034279
+updated_at = 1791034279
+weight = 0.0
+issue_number = 1225
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1225"
+rev = 0
+
+[[task]]
+id = "b0c3d263"
+title = "check-closure-evidence.py は backlog CLI が書く closure 記録 (runner=cargo-test/pytest/script) を全件 block する — runner と command 先頭語の不一致"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = """
+crates/backlog/src/evidence.rs:61-66 records the runner as cargo-test / pytest / script; scripts/check-closure-evidence.py:298 requires it to equal the first word of the command (cargo / python3 / bash). Replaying 6 recent closing commits in a scratch clone: all 6 blocked, 3 of them on this mismatch alone (the other 3 closed rows with no closure record, which is intended). Prerequisite for wiring the scanner into pre-commit (eca8dea7 stage B). Fix both sides together with a regression test that pushes a CLI-written closure through the gate.
+
+Observed 2026-10-03 by the eca8dea7 investigation (main 9ea5a326); raw logs scratchpad eca8dea7-run-*.log, proposal eca8dea7-proposal.md."""
+created_at = 1791034486
+updated_at = 1791034486
+weight = 0.0
+issue_number = 1226
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1226"
+rev = 0
+
+[[task]]
+id = "6ca3d71f"
+title = "check-projkey-store-classification.py が main で 6 件 red (count drift 2 / stale 1 / 未分類 call site 3)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = """
+Exit 1 with 6 findings at 9ea5a326: 2 count drifts, 1 stale table entry, 3 unclassified projkey call sites in crates/*/src that need a shared-vs-worktree-local ruling each. Runtime 3.9-9.9 s (over the ~2 s pre-commit budget). test_backlog_de721e5e_df49f872 holds 2 expectedFailure pins. Prerequisite for wiring (eca8dea7 stage B).
+
+Observed 2026-10-03 by the eca8dea7 investigation (main 9ea5a326); raw logs scratchpad eca8dea7-run-*.log, proposal eca8dea7-proposal.md."""
+created_at = 1791034488
+updated_at = 1791034494
+weight = 0.0
+issue_number = 1227
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1227"
+rev = 1
+
+[task.repro]
+outcome = "undetermined"
+cmd = "python3 scripts/check-projkey-store-classification.py"
+observed_at = 1791034493
+detail = 'test command "python3 scripts/check-projkey-store-classification.py" is not on the runner allowlist (`cargo test ...`, `pytest ...`, `python3 -m pytest ...`, or `bash|sh <git-tracked script under a tests dir>`); grep/cat/echo and other non-test commands are never evidence'
+
+[[task]]
+id = "f8641da0"
+title = "長時間 batch 中に task claim が失効し、別セッションの /flow が同じ task を claim して重複実装した"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = """
+Observed 2026-10-04 (session 64554c4d, run-20261003-202619-762). This session claimed ad524af9 / d796a630 with `condukt state claim-task --stateless` at batch start, then spent hours in worker/verifier rounds without re-heartbeating the TASK claims (`condukt state heartbeat --run <RID>` refreshes the run's file claims; it reported 'refreshed 3 claim(s)' but the task-claim registry entries for these hashkeys showed the other session's run id). Session 33de4c25's /flow then claimed both hashkeys (claimed_at 1791033368, ~2.8h before discovery) and started an agent that wrote uncommitted edits to scripts/guard-maintree-bash.py in its own worktree, duplicating work in progress. Resolved by message: 33de4c25 stood down.
+Reading (a): the stateless claim's liveness check (owning-session transcript) judged this live session stale, or the 1h CLAIM_STALE_SECS elapsed without a task-claim heartbeat: a long-running batch loses its claims mid-run. (b): intended TTL and the orchestrator must heartbeat task claims; then the flow/condukt skill text should say which command refreshes TASK claims. Distinguish by reading condukt claim-task --stateless reap logic and whether `state heartbeat --run` touches task claims of that run."""
+created_at = 1791043800
+updated_at = 1791043800
+weight = 0.0
+issue_number = 1228
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1228"
 rev = 0

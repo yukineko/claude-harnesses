@@ -11872,3 +11872,19 @@ weight = 0.0
 issue_number = 1172
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1172"
 rev = 0
+
+[[task]]
+id = "a7bf3cca"
+title = "pre-push gate-bypass check blocks every push on a ledger entry for an unreachable commit that no pre-commit run can ever clear"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-03 ~18:30, pushing main c28cb61a. .git/gate-bypassed holds b77286119dc3 (fix(donegate) ... 0.1.36, authored 07:36). git branch -a --contains b7728611 is empty and git merge-base --is-ancestor b7728611 main is rc 1: the commit is unreachable (likely amended or rebased away; memory: amend always trips the bypass ledger). The ledger is cleared only for entries that are ancestors of a green pre-commit HEAD, so this entry can never clear, and pre-push blocks a push that does not contain the commit at all. That is an attribution defect (CLAUDE.md 8: a gate demanding another session content is a bug, not something to silence). The push of main c28cb61a was NOT performed. Fix direction: pre-push should judge only ledger entries reachable from the refs being pushed (push range), and report unreachable entries as a separate, non-blocking finding naming them (or prune them with a visible record), never treat them as clean silently. Repro: create a commit, amend it (ledger gets the pre-amend sha), then push a branch not containing it."
+created_at = 1791023796
+updated_at = 1791023796
+weight = 0.0
+issue_number = 1173
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1173"
+rev = 0

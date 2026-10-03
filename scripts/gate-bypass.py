@@ -24,6 +24,14 @@ whole point of this file is that an unexamined commit must not read as examined.
 The ledger is cleared by a pre-commit run that goes green, not by this script —
 and only by a run over a non-empty staged diff, and only for entries whose
 commit is an ancestor of the HEAD that run judged (backlog c767cb47).
+
+An entry whose commit is reachable from no ref, no worktree HEAD and no
+`--pushing` tip (e.g. the pre-rebase original that survives only in a reflog)
+cannot leave this machine, and no pre-commit run can ever clear it. It is
+listed as "unreachable" and does not count as outstanding; it is never removed
+from the ledger, and it blocks again the moment anything makes it reachable.
+An entry that cannot be placed (malformed id, missing or non-commit object, a
+failing git call) is undetermined, never unreachable (backlog a7bf3cca).
 That ordering is deliberate: clearing must be a side effect of actually
 inspecting the content, never an operation a caller can request on its own. A
 `--clear` flag here would be a one-command bypass of the bypass detector.
@@ -102,15 +110,109 @@ def read_ledger(path: Path) -> list[dict[str, str]]:
     return entries
 
 
+SHA_CHARS = frozenset("0123456789abcdef")
+
+
+def _git(repo: Path | None, args: list[str]) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(
+            ["git", *args],
+            cwd=str(repo) if repo else None,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:
+        raise Undetermined("git could not be executed: %s" % exc) from exc
+
+
+def head_tips(repo: Path | None) -> list[str]:
+    """The HEAD commit of every worktree, detached or not.
+
+    `for-each-ref` does not list HEAD, but a detached HEAD can still be pushed
+    (`git push origin HEAD:main`), so a commit reachable from one is live.
+    """
+    proc = _git(repo, ["worktree", "list", "--porcelain"])
+    if proc.returncode != 0:
+        raise Undetermined(
+            "`git worktree list` exited %d: %s"
+            % (proc.returncode, proc.stderr.strip() or "(no stderr)")
+        )
+    return [
+        line.split(" ", 1)[1]
+        for line in proc.stdout.splitlines()
+        if line.startswith("HEAD ")
+    ]
+
+
+def is_reachable(repo: Path | None, sha: str, tips: list[str]) -> bool:
+    """True if `sha` is contained in some ref, a worktree HEAD, or a pushed tip.
+
+    Raises Undetermined when that cannot be established (malformed sha, missing
+    or non-commit object, a git call that fails): an entry we cannot place is
+    never treated as unreachable (backlog a7bf3cca).
+    """
+    if not (4 <= len(sha) <= 64) or not set(sha) <= SHA_CHARS:
+        raise Undetermined("ledger entry %r is not a commit id" % sha)
+    obj = _git(repo, ["cat-file", "-t", sha])
+    if obj.returncode != 0 or obj.stdout.strip() != "commit":
+        raise Undetermined(
+            "ledger entry %s is not a commit in this repository (%s)"
+            % (sha, (obj.stderr.strip() or obj.stdout.strip() or "no output"))
+        )
+    refs = _git(repo, ["for-each-ref", "--contains", sha, "--format=%(refname)"])
+    if refs.returncode != 0:
+        raise Undetermined(
+            "`git for-each-ref --contains %s` exited %d: %s"
+            % (sha, refs.returncode, refs.stderr.strip() or "(no stderr)")
+        )
+    if refs.stdout.strip():
+        return True
+    for tip in tips:
+        anc = _git(repo, ["merge-base", "--is-ancestor", sha, tip])
+        if anc.returncode == 0:
+            return True
+        if anc.returncode != 1:
+            raise Undetermined(
+                "`git merge-base --is-ancestor %s %s` exited %d: %s"
+                % (sha, tip, anc.returncode, anc.stderr.strip() or "(no stderr)")
+            )
+    return False
+
+
+def split_unreachable(
+    repo: Path | None, entries: list[dict[str, str]], pushing: list[str]
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Partition entries into (outstanding, unreachable).
+
+    A commit reachable from no ref, no worktree HEAD and no tip being pushed
+    cannot leave this machine, and no pre-commit run can ever clear it (it is
+    an ancestor of no HEAD). It is reported, never deleted, and does not block.
+    """
+    if not entries:
+        return [], []
+    tips = head_tips(repo) + list(pushing)
+    outstanding, unreachable = [], []
+    for e in entries:
+        (outstanding if is_reachable(repo, e["commit"], tips) else unreachable).append(e)
+    return outstanding, unreachable
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--repo", type=Path, default=None)
     ap.add_argument("--json", action="store_true")
+    ap.add_argument(
+        "--pushing",
+        action="append",
+        default=[],
+        help="a local sha being pushed; an entry it contains is outstanding even if no ref holds it",
+    )
     args = ap.parse_args(argv[1:])
 
     try:
         ledger = common_git_dir(args.repo) / "gate-bypassed"
         entries = read_ledger(ledger)
+        entries, unreachable = split_unreachable(args.repo, entries, args.pushing)
     except Undetermined as exc:
         if args.json:
             print(json.dumps({"verdict": "undetermined", "reason": str(exc)}))
@@ -130,11 +232,23 @@ def main(argv: list[str]) -> int:
                     "verdict": "outstanding" if entries else "clean",
                     "ledger": str(ledger),
                     "entries": entries,
+                    "unreachable": unreachable,
                 },
                 ensure_ascii=False,
             )
         )
         return EXIT_OUTSTANDING if entries else EXIT_CLEAN
+
+    if unreachable:
+        print(
+            "gate-bypass: %d ledger entr%s for commits reachable from no ref,\n"
+            "worktree HEAD or pushed tip (unreachable; cannot be pushed, kept in the\n"
+            "ledger, not blocking):" % (len(unreachable), "y" if len(unreachable) == 1 else "ies"),
+            file=sys.stderr,
+        )
+        for e in unreachable:
+            print("  %s  %s" % (e["commit"][:12], e["subject"]), file=sys.stderr)
+        print("", file=sys.stderr)
 
     if not entries:
         print("gate-bypass: no ungated commit outstanding.")

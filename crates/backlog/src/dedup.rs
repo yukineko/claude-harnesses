@@ -260,6 +260,14 @@ pub fn is_queued(t: &Task) -> bool {
     matches!(t.status.as_str(), "pending" | "failed" | "claimed")
 }
 
+/// Whether a task is a LIVE finding for near-duplicate purposes: queued
+/// ([`is_queued`]) or non-terminal but outside the workable queue
+/// (`unconfirmed`, `needs-ruling`). A new filing that duplicates an
+/// unconfirmed finding is exactly what should be surfaced.
+pub fn is_live_finding(t: &Task) -> bool {
+    is_queued(t) || matches!(t.status.as_str(), "unconfirmed" | "needs-ruling")
+}
+
 /// Peers of `anchor` in the same project's queue whose titles score
 /// `>= threshold` under [`harness_core::lessons::text_similarity`], strongest
 /// first (ties broken by id for a stable render).
@@ -269,7 +277,7 @@ pub fn is_queued(t: &Task) -> bool {
 pub fn near_duplicates(anchor: &Task, tasks: &[Task], threshold: f64) -> Vec<NearDuplicate> {
     let mut found: Vec<NearDuplicate> = tasks
         .iter()
-        .filter(|t| t.id != anchor.id && t.project == anchor.project && is_queued(t))
+        .filter(|t| t.id != anchor.id && t.project == anchor.project && is_live_finding(t))
         .filter_map(|t| {
             let similarity = harness_core::lessons::text_similarity(&anchor.title, &t.title);
             (similarity >= threshold).then(|| {
@@ -344,6 +352,13 @@ mod tests {
             issue_number: None,
             issue_url: None,
             issue_closed_at: None,
+            issue_body_synced_rev: None,
+            rev: 0,
+            ruling_kind: None,
+            rationale: None,
+            untestable_reason: None,
+            repro: None,
+            closure: None,
         }
     }
 

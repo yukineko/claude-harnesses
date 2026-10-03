@@ -86,7 +86,9 @@ else
 fi
 ```
 
-移行後は `backlog.json`（および session-insights が生成しなくなった `<vault>/backlog.md`）を削除してよい。
+`backlog add` は重複、または cross-session claim 確認ができない場合に**拒否**する（非0 終了、理由は stderr。`--force` で強制追加）。上のループは拒否されても止まらない。`backlog.json` を削除する前に、open 項目がすべて移行できたこと（拒否メッセージが無く、`backlog list` に各項目が現れること）を必ず確認する。拒否された項目は `backlog.json` にしか存在しない。
+
+確認後は `backlog.json`（および session-insights が生成しなくなった `<vault>/backlog.md`）を削除してよい。
 
 ### Obsidian ログ（オプトイン）
 

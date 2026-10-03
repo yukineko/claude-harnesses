@@ -7,6 +7,8 @@
 //! checkout's TRACKED `.backlog/tasks.toml`, leaving the working tree dirty —
 //! which on the main tree trips `stop-verify-worktree.py` (CLAUDE.md §8).
 
+mod common;
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -27,6 +29,7 @@ fn unique(tag: &str) -> PathBuf {
 
 fn backlog(args: &[&str], home: &Path, cwd: &Path, stdin: &str) -> (i32, String, String) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_backlog"))
+        .env("PATH", common::path_with_condukt_shim())
         .args(args)
         .env("HOME", home)
         .env_remove("BACKLOG_STORE_DIR")

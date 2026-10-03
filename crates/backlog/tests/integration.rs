@@ -2,6 +2,8 @@
 //! code + stdout. `backlog` is a subcommand CLI; `session-start` is a hook whose
 //! invariant is to always exit 0 (never break a turn).
 
+mod common;
+
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -38,6 +40,64 @@ fn temp_repo(tag: &str) -> PathBuf {
     dir
 }
 
+/// Close-evidence (2026-10-01): `backlog add` lands `pending` (workable, what
+/// `next` / `next --claim` hand out) only when a committed repro test
+/// REPRODUCES the finding; without one it lands `unconfirmed`. This commits a
+/// repro script (exit 1 = reproduced) into `repo`, which must already be a
+/// real git repo, so the fixture's adds can pass `--repro-test` and exercise
+/// the same queue behaviour as before.
+fn commit_repro_script(repo: &std::path::Path) {
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    std::fs::create_dir_all(repo.join("tests")).unwrap();
+    std::fs::write(
+        repo.join("tests/repro.sh"),
+        "#!/bin/bash\necho 'bug present'\nexit 1\n",
+    )
+    .unwrap();
+    git(&["add", "--", "tests/repro.sh"]);
+    git(&["commit", "-q", "--no-verify", "-m", "repro"]);
+}
+
+/// The `--repro-test` value matching [`commit_repro_script`].
+const REPRO: &str = "bash tests/repro.sh";
+
+/// A REAL git repo (unlike [`temp_repo`]) holding a committed repro script:
+/// `add` lands `pending` only when `--repro-test` reproduces, and running it
+/// needs a real HEAD.
+fn evidence_repo(tag: &str) -> PathBuf {
+    let dir = temp_home(tag);
+    let st = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("git runs");
+    assert!(st.success(), "git init failed in {}", dir.display());
+    commit_repro_script(&dir);
+    dir
+}
+
 /// The canonical project label for a `temp_repo` — what `add --project` must
 /// name, since a repo store refuses a `--project` it cannot be scoped to.
 fn project_of(repo: &std::path::Path) -> String {
@@ -55,6 +115,7 @@ fn run(args: &[&str], payload: &str, home: &PathBuf) -> (i32, String) {
 fn run_in(args: &[&str], payload: &str, home: &PathBuf, cwd: Option<&PathBuf>) -> (i32, String) {
     let bin = env!("CARGO_BIN_EXE_backlog");
     let mut cmd = Command::new(bin);
+    cmd.env("PATH", common::path_with_condukt_shim());
     cmd.args(args)
         .env("HOME", home)
         .stdin(Stdio::piped())
@@ -117,7 +178,7 @@ fn list_json_emits_machine_readable_array() {
     // `.backlog/tasks.toml` and accumulating across runs, which breaks the
     // exact-one-task assertion below.
     let home = temp_home("list-json");
-    let cwd = temp_repo("list-json-cwd");
+    let cwd = evidence_repo("list-json-cwd");
     // The store is this repo's, so the project IS this repo: a `--project`
     // naming anything else (the old `/p`) is now refused, on the write side
     // as well as the read side.
@@ -131,6 +192,8 @@ fn list_json_emits_machine_readable_array() {
             &project,
             "--priority",
             "p1",
+            "--repro-test",
+            REPRO,
         ],
         "",
         &home,

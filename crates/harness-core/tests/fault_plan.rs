@@ -620,3 +620,48 @@ fn faulted_read_dir_result_is_not_a_known_empty_vec() {
 /// imports honest without an `#[allow(unused_imports)]`.
 #[allow(dead_code)]
 fn _type_witnesses(_: &CommandOutput, _: &Path) {}
+
+// ---- read_dir_entries_checked honours the ReadDir entry --------------------
+
+/// `read_dir_entries_checked` is the same directory-listing observation as
+/// `read_dir_entries`, so it shares `Entry::ReadDir`. Faulted, it must be
+/// `Undetermined` even for a path that does not exist: a blind boundary has
+/// not observed absence, so it must not report `Known(None)`.
+#[test]
+fn read_dir_entries_checked_is_faulted_by_read_dir_and_by_blind() {
+    let (_dir_guard, dir) = dir_with_one_entry();
+    let absent = dir.join("does-not-exist");
+
+    // Control: outside a plan both inputs are Known.
+    assert_known(
+        &boundary::read_dir_entries_checked(&dir),
+        "read_dir_entries_checked control (present)",
+    );
+    assert_known(
+        &boundary::read_dir_entries_checked(&absent),
+        "read_dir_entries_checked control (absent)",
+    );
+
+    for plan in [FaultPlan::only(Entry::ReadDir), FaultPlan::blind()] {
+        let faulted = with_fault_plan(plan.clone(), || {
+            assert_undetermined(
+                &boundary::read_dir_entries_checked(&dir),
+                "read_dir_entries_checked faulted (present)",
+            );
+            assert_undetermined(
+                &boundary::read_dir_entries_checked(&absent),
+                "read_dir_entries_checked faulted (absent)",
+            );
+        });
+        assert_eq!(faulted.injected, 2, "{plan:?} must inject on both calls");
+    }
+
+    // Anti-vacuity: a plan that faults something else leaves it observing.
+    let faulted = with_fault_plan(FaultPlan::only(Entry::ReadFile), || {
+        assert_known(
+            &boundary::read_dir_entries_checked(&absent),
+            "read_dir_entries_checked under ReadFile-only plan",
+        );
+    });
+    assert_eq!(faulted.injected, 0);
+}

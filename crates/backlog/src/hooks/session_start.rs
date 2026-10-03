@@ -124,6 +124,56 @@ pub fn run(input: &HookInput) -> Option<String> {
         }
     };
 
+    // GitHub mirror drift. The individual failures are already reported where
+    // they happen (`add` on stderr, `sync --apply` via a non-zero exit), but
+    // nothing restated the RUNNING TOTAL, so a machine with no usable `gh`
+    // drifted to 467 unclosed issues without one visible signal (measured
+    // 2026-10-02 at `448ff46f`). This hook has no exit code and no stderr the
+    // agent ever sees, so `additionalContext` is the only channel that can
+    // carry it (CLAUDE.md §1: silence is not an acceptable degrade).
+    //
+    // Computed from the SAME `sync_plan` the fix command uses, so the report
+    // can never name a different set of work than `backlog sync` would act on.
+    // It reads only the store — no git, no network, no `gh` — so it costs
+    // nothing and is visible precisely on the machine where the mirror is
+    // broken. `MirrorDrift::is_reportable` carries the anti-noise rule and the
+    // gap it knowingly leaves open.
+    let drift = store::mirror_drift(&tasks);
+    if drift.is_reportable() {
+        warnings.push_str("## Backlog \u{2014} GitHub mirror drift\n\n");
+        warnings.push_str(&format!(
+            "This store is out of sync with its GitHub issues: **{closes} issue(s) to close** (the task is already done/cancelled) and **{creates} issue(s) to create** (pending, never mirrored).\n\n",
+            closes = drift.closes,
+            creates = drift.creates,
+        ));
+        warnings.push_str("Reconcile with `backlog sync` (dry run), then `backlog sync --apply`. The two arms are selectable: `backlog sync --only close --apply` catches up the closes without publishing any new issue.\n\n");
+        warnings.push_str("If these counts keep growing, the mirror itself is not running \u{2014} check that `gh` is installed and authenticated (`gh auth status`). Every failed `gh issue create`/`close` leaves the task exactly as it was, so nothing is lost, but nothing is pushed either.\n\n");
+    }
+    // Rows OUTSIDE the workable queue that still need someone: `unconfirmed`
+    // (a suspicion with no reproduced repro test) and `needs-ruling` (waiting
+    // for a human at a TTY). They are not injected as tasks, but their COUNT
+    // is, so leaving the queue never reads as "nothing left".
+    let unconfirmed = tasks
+        .iter()
+        .filter(|t| t.status == crate::task::STATUS_UNCONFIRMED)
+        .count();
+    let needs_ruling = tasks
+        .iter()
+        .filter(|t| t.status == crate::task::STATUS_NEEDS_RULING)
+        .count();
+    let side_queues = if unconfirmed + needs_ruling > 0 {
+        format!(
+            "## Backlog \u{2014} outside the workable queue\n\n\
+             unconfirmed: {unconfirmed} (suspicions; promote with \
+             `backlog confirm ID --repro-test CMD`, or discard with \
+             `backlog cancel ID --reason R`), needs-ruling: {needs_ruling} (a human \
+             approves with `backlog ruling approve ID` at a TTY). `backlog list` shows them.\n\n"
+        )
+    } else {
+        String::new()
+    };
+    let warnings = warnings + &side_queues;
+
     // pending または failed のタスクのみ対象 (is_pending() で判定)
     let mut pending: Vec<_> = tasks.into_iter().filter(|t| t.is_pending()).collect();
 
@@ -167,7 +217,15 @@ pub fn run(input: &HookInput) -> Option<String> {
         out.push('\n');
     }
 
-    out.push_str("---\n\nTo mark a task done: `backlog done {id}`\nTo mark failed: `backlog fail {id} [--reason \"...\"]`\n");
+    out.push_str(
+        "---\n\nTo mark a task done (evidence is required; a bare `done` is refused):\n\
+         - `backlog done {id} --test CMD --red-rev REV [--reason fixed|already-fixed|obsolete]` \
+         (a committed test, RED at REV and GREEN at HEAD)\n\
+         - `backlog done {id} --doc-only COMMIT` / `backlog done {id} --duplicate-of ID`\n\
+         - untestable or judgment: `backlog ruling request {id} --kind judgment|untestable ...` \
+         (a human approves)\n\
+         To mark failed: `backlog fail {id} [--reason \"...\"]`\n",
+    );
 
     // inject_limit 超なら切り詰め
     if out.len() > cfg.inject_limit {
@@ -182,26 +240,26 @@ pub fn run(input: &HookInput) -> Option<String> {
 fn cycle_tag_instruction(cycle_tag: Option<&str>, id: &str, title: &str) -> String {
     match cycle_tag {
         Some("cycle:test-fix") => format!(
-            "テスト実行 → 失敗解析 → 修正 → 繰り返し。全テストが green になったら `backlog done {}` を呼ぶ",
+            "テスト実行 → 失敗解析 → 修正 → 繰り返し。全テストが green になったら `backlog done {} --test CMD --red-rev REV` を呼ぶ",
             id
         ),
         Some("cycle:tdd") => format!(
-            "RED → GREEN → VERIFY の TDD フロー (/tdd スキル)。VERIFY 完了後に `backlog done {}`",
+            "RED → GREEN → VERIFY の TDD フロー (/tdd スキル)。VERIFY 完了後に `backlog done {} --test CMD --red-rev REV`",
             id
         ),
         Some("cycle:implement") => format!(
-            "`/condukt {}` で実装。検証完了後に `backlog done {}`",
+            "`/condukt {}` で実装。検証完了後に `backlog done {} --test CMD --red-rev REV`",
             title, id
         ),
         Some("cycle:review-fix") => format!(
-            "`/code-review` で差分レビュー → 指摘修正 → 再レビュー。LGTM 後に `backlog done {}`",
+            "`/code-review` で差分レビュー → 指摘修正 → 再レビュー。LGTM 後に `backlog done {} --test CMD --red-rev REV`",
             id
         ),
         Some("cycle:once") => format!(
-            "一度実行して完了したら `backlog done {}`",
+            "一度実行して完了したら `backlog done {} --test CMD --red-rev REV`",
             id
         ),
-        _ => format!("`backlog done {}` で完了を記録してください", id),
+        _ => format!("`backlog done {} --test CMD --red-rev REV` で完了を記録してください", id),
     }
 }
 

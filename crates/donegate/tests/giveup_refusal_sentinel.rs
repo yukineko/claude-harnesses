@@ -114,15 +114,19 @@ fn refusal_attempt_cap_leaves_a_durable_giveup_sentinel() {
         );
         let ledger = violation_ledger(&home);
         assert!(
-            !ledger.contains("giveup"),
+            !ledger.contains("giveup") && !ledger.contains("donegate:undetermined:"),
             "attempt {i}: a give-up sentinel must not appear before the cap. ledger={ledger:?}"
         );
     }
     assert!(gave_up, "apparatus: the refusal give-up branch never ran");
 
     let ledger = violation_ledger(&home);
+    // The sentinel lives in donegate's reserved `undetermined:` namespace, not
+    // under `giveup:` — `giveup:<x>` is what a check named `x` produces when it
+    // exhausts the cap, so a `giveup:refusal:<kind>` signature was forgeable by
+    // a project check named `refusal:<kind>` (see refusal_giveup_sentinel.rs).
     assert!(
-        ledger.contains("donegate:giveup:refusal:untrusted"),
+        ledger.contains("donegate:undetermined:untrusted"),
         "the gate gave up WITHOUT judging and left no durable trace in the overwatch ledger \
          (only donegate's private JSONL). ledger={ledger:?}"
     );

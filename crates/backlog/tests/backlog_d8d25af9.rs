@@ -5,6 +5,8 @@
 //!
 //! Written by an independent author, not the implementer.
 
+mod common;
+
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -39,11 +41,44 @@ impl Fx {
             .status()
             .unwrap()
             .success());
+        // Close-evidence fixture: `add` without a reproduced repro test lands
+        // `unconfirmed` (outside the workable queue). Commit a repro script
+        // that FAILS (= the problem is reproduced) so `add` lands `pending`,
+        // the state every test below starts from.
+        std::fs::create_dir_all(repo.join("tests")).unwrap();
+        std::fs::write(
+            repo.join("tests/repro_yes.sh"),
+            "echo 'bug present'; exit 1\n",
+        )
+        .unwrap();
+        for args in [
+            vec!["add", "tests/repro_yes.sh"],
+            vec![
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t.t",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-q",
+                "-m",
+                "repro",
+            ],
+        ] {
+            assert!(Command::new("git")
+                .args(&args)
+                .current_dir(&repo)
+                .status()
+                .unwrap()
+                .success());
+        }
         Fx { home, repo }
     }
 
     fn run(&self, args: &[&str]) -> Out {
         let o = Command::new(env!("CARGO_BIN_EXE_backlog"))
+            .env("PATH", common::path_with_condukt_shim())
             .args(args)
             .env("HOME", &self.home)
             .current_dir(&self.repo)
@@ -64,6 +99,8 @@ impl Fx {
             title,
             "--project",
             self.repo.to_str().unwrap(),
+            "--repro-test",
+            "bash tests/repro_yes.sh",
         ]);
         assert_eq!(o.rc, 0, "precondition: add; out={} err={}", o.out, o.err);
         o.out
@@ -231,7 +268,10 @@ fn cancel_requires_reason() {
 fn cancel_done_task_is_refused() {
     let fx = Fx::new("done");
     let id = fx.add("finished");
-    let d = fx.run(&["done", &id]);
+    // Close-evidence: a bare `done` is refused; close it with an evidence
+    // route (a duplicate of another pending task) so it really is `done`.
+    let canonical = fx.add("canonical copy of finished");
+    let d = fx.run(&["done", &id, "--duplicate-of", &canonical]);
     assert_eq!(d.rc, 0, "precondition: done; out={} err={}", d.out, d.err);
     let o = fx.run(&["cancel", &id, "--reason", "r"]);
     assert_subcommand_exists(&o);
@@ -280,8 +320,18 @@ fn fail_on_cancelled_task_is_refused() {
     assert_eq!(fx.status(&id), "cancelled");
 }
 
+/// CONTRACT CHANGE (close-evidence port onto 0.3.22): this test originally
+/// asserted that `edit --status cancelled` is ACCEPTED. The close-evidence
+/// spec (2026-10-01, "No `backlog edit --status` bypass"; pinned by
+/// `closure_evidence::edit_status_cancelled_is_refused`) makes every terminal
+/// transition carry a recorded closure, and `edit` records none, so both tests
+/// cannot pass. The route to `cancelled` is now `backlog cancel ID --reason R`
+/// (a recorded discard). What 0dafa254 asked for is kept: `cancelled` is
+/// still RECOGNISED vocabulary (the refusal is a policy refusal naming
+/// `backlog cancel`, never "unknown status"), while `claimed` stays rejected as
+/// not storable.
 #[test]
-fn edit_status_cancelled_accepted_claimed_rejected() {
+fn edit_status_cancelled_refused_with_cancel_route_claimed_rejected() {
     let fx = Fx::new("edit");
     let id = fx.add("edit target");
     let bad = fx.run(&["edit", &id, "--status", "claimed"]);
@@ -296,11 +346,30 @@ fn edit_status_cancelled_accepted_claimed_rejected() {
         "claimed rejection must leave status unchanged"
     );
 
-    let ok = fx.run(&["edit", &id, "--status", "cancelled"]);
-    assert_eq!(
-        ok.rc, 0,
-        "edit --status cancelled: out={} err={}",
-        ok.out, ok.err
+    let refused = fx.run(&["edit", &id, "--status", "cancelled"]);
+    assert_ne!(
+        refused.rc, 0,
+        "edit --status cancelled must be refused (no recorded closure): out={} err={}",
+        refused.out, refused.err
     );
+    assert!(
+        !refused.err.to_lowercase().contains("unknown status"),
+        "cancelled is recognised vocabulary; the refusal must not call it unknown: {:?}",
+        refused.err
+    );
+    assert!(
+        refused.err.contains("backlog cancel"),
+        "the refusal must name the real route to cancelled: {:?}",
+        refused.err
+    );
+    assert_eq!(
+        fx.status(&id),
+        "pending",
+        "refused edit must not change status"
+    );
+
+    // The real route still reaches `cancelled`.
+    let ok = fx.run(&["cancel", &id, "--reason", "won't do"]);
+    assert_eq!(ok.rc, 0, "cancel: out={} err={}", ok.out, ok.err);
     assert_eq!(fx.status(&id), "cancelled");
 }

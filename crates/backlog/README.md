@@ -62,9 +62,11 @@ cargo install --path .
 backlog add --title "Fix X" --project "$PWD" --priority p1   # queue an item
 backlog list --status pending                                # see the queue
 backlog next                                                 # pick the next item
-backlog done <id>            # resolve it
+backlog done <id> --test "cargo test -p x" --red-rev <rev>  # resolve it (RED at rev, GREEN at HEAD)
+backlog done <id> --doc-only <commit>   # or: a doc-only ancestor commit
+backlog done <id> --duplicate-of <id>   # or: a duplicate
 backlog fail <id> --reason "blocked"   # defer it 2 days (it comes back as pending)
-backlog cancel <id> --reason "won't do"   # close it as not planned (terminal, never requeued)
+backlog cancel <id> --reason "won't do"   # discard it (terminal, never requeued; recorded as a `discard` closure, no test needed)
 backlog lock status         # who holds the run-lock
 backlog install             # merge the SessionStart hook into settings.json
 backlog uninstall           # remove it again
@@ -84,11 +86,16 @@ legitimate):
 
 - an existing `pending` or `failed` task already has that hashkey, or
 - `condukt` is on `PATH` and `condukt state is-claimed --hashkey <h>` exits 0
-  (another live session holds a claim on it). If `condukt` is missing or errors
-  for any other reason, this check fails soft to "no claim" — a missing/broken
-  `condukt` never fails the `add`.
+  (another live session holds a claim on it); exit 1 counts as "not claimed"
+  only when stdout also carries `"claimed": false`. Any other outcome — `condukt`
+  missing from `PATH` or failing to spawn, an exit code other than 0/1 (e.g. 3 = claim registry
+  unreadable), exit 0/1 without the matching `claimed` field, exit 1 with
+  `"claimed": true` (exit code and field disagree), termination by signal, or no
+  answer within 2.5s — means the claim check could not be made, and the `add` is
+  **refused** with the reason (a possible duplicate of a live claimed task
+  cannot be ruled out). "Cannot determine" is never read as "not claimed".
 
-Either rejection can be bypassed intentionally with `backlog add --force`.
+Each rejection can be bypassed intentionally with `backlog add --force`.
 
 Each element of `backlog list --json` carries a `hashkey` field (computed from
 title + project, not stored) so upstream drivers like `/flow` can gate on

@@ -1084,7 +1084,39 @@ fn ledger_contains<T: serde::de::DeserializeOwned>(
 /// ([`AppendOutcome::SkippedUndetermined`]) — it is never treated as "no prior
 /// disposition" (that appended duplicate rows; CA-overwatch-02).
 pub fn append_disposition(cwd: &Path, disposition: &Disposition) -> Result<AppendOutcome> {
-    append_disposition_with_deadline(cwd, disposition, LeaseLock::DEADLINE)
+    Ok(
+        match append_disposition_detailed_with_deadline(cwd, disposition, LeaseLock::DEADLINE)? {
+            DispositionAppend::Written | DispositionAppend::AlreadyDispositioned => {
+                AppendOutcome::Recorded
+            }
+            DispositionAppend::NotPersisted(o) => o,
+        },
+    )
+}
+
+/// The outcome of a disposition append, distinguishing "this call wrote the
+/// row" from "a row for this finding_id already existed" — which
+/// [`AppendOutcome::Recorded`] deliberately folds together. An automated
+/// closer (backlog 89544915) must not report a finding as closed BY IT when a
+/// human's earlier disposition is what actually closed it (first writer wins).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DispositionAppend {
+    /// This call appended the row.
+    Written,
+    /// A disposition for this finding_id was already present; nothing was
+    /// written (idempotent no-op, first writer wins).
+    AlreadyDispositioned,
+    /// Nothing was persisted: the payload is the non-`Recorded` outcome
+    /// (lock contended, or the dedup check was undetermined).
+    NotPersisted(AppendOutcome),
+}
+
+/// [`append_disposition`] with the written / already-present distinction kept.
+pub fn append_disposition_detailed(
+    cwd: &Path,
+    disposition: &Disposition,
+) -> Result<DispositionAppend> {
+    append_disposition_detailed_with_deadline(cwd, disposition, LeaseLock::DEADLINE)
 }
 
 /// Deadline-parameterized core of [`append_disposition`] (production passes the
@@ -1101,18 +1133,38 @@ pub fn append_disposition(cwd: &Path, disposition: &Disposition) -> Result<Appen
 /// report it truthfully — a contended skip previously returned a bare `Ok(())`
 /// indistinguishable from success, so `record-disposition` printed
 /// `recorded:true` while NOTHING was written.
+#[cfg(test)]
 fn append_disposition_with_deadline(
     cwd: &Path,
     disposition: &Disposition,
     deadline: std::time::Duration,
 ) -> Result<AppendOutcome> {
+    Ok(
+        match append_disposition_detailed_with_deadline(cwd, disposition, deadline)? {
+            DispositionAppend::Written | DispositionAppend::AlreadyDispositioned => {
+                AppendOutcome::Recorded
+            }
+            DispositionAppend::NotPersisted(o) => o,
+        },
+    )
+}
+
+fn append_disposition_detailed_with_deadline(
+    cwd: &Path,
+    disposition: &Disposition,
+    deadline: std::time::Duration,
+) -> Result<DispositionAppend> {
     let path = dispositions_path(cwd)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let _lock = match LeaseLock::acquire_or_skip_with_deadline(cwd, deadline) {
         Some(l) => l,
-        None => return Ok(AppendOutcome::SkippedContended),
+        None => {
+            return Ok(DispositionAppend::NotPersisted(
+                AppendOutcome::SkippedContended,
+            ))
+        }
     };
     // Dedup via the tri-state scan (CA-overwatch-02): the best-effort
     // `read_dispositions` dropped an unreadable ledger / undecodable line, so a
@@ -1123,13 +1175,15 @@ fn append_disposition_with_deadline(
     }) {
         // Already present (idempotent dedup on finding_id): the disposition IS
         // persisted, so this is a truthful Recorded, not a skip.
-        Determination::Known(true) => return Ok(AppendOutcome::Recorded),
+        Determination::Known(true) => return Ok(DispositionAppend::AlreadyDispositioned),
         Determination::Known(false) => {}
         Determination::Undetermined(why) => {
-            return Ok(AppendOutcome::SkippedUndetermined(format!(
-                "cannot tell whether finding {} is already dispositioned ({why}); disposition NOT appended to avoid a duplicate row",
-                disposition.finding_id
-            )))
+            return Ok(DispositionAppend::NotPersisted(
+                AppendOutcome::SkippedUndetermined(format!(
+                    "cannot tell whether finding {} is already dispositioned ({why}); disposition NOT appended to avoid a duplicate row",
+                    disposition.finding_id
+                )),
+            ))
         }
     }
     // Test-only race widener (no-op in prod).
@@ -1140,7 +1194,7 @@ fn append_disposition_with_deadline(
         .append(true)
         .open(&path)?
         .write_all(format!("{}\n", json).as_bytes())?;
-    Ok(AppendOutcome::Recorded)
+    Ok(DispositionAppend::Written)
 }
 
 /// Read all dispositions from dispositions.jsonl, leniently (same contract as
@@ -2202,6 +2256,8 @@ mod tests {
             verdict: DispositionVerdict::Confirmed,
             reviewer: "tester".to_string(),
             resolved_ts: now(),
+            evidence: None,
+            observed_source: None,
         };
 
         // The real production path must SKIP the append under contention, driven
@@ -3060,6 +3116,8 @@ mod tests {
             verdict: DispositionVerdict::Confirmed,
             reviewer: "tester".to_string(),
             resolved_ts: 1_700_000_000,
+            evidence: None,
+            observed_source: None,
         }
     }
 

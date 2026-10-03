@@ -19,6 +19,7 @@ mod diffrisk_record;
 mod editgate;
 mod env_lock;
 mod escalate;
+mod finding_reconcile;
 mod gate_exec;
 mod gatelog;
 mod hooks;
@@ -723,17 +724,22 @@ enum WtAction {
     },
     /// Remove finished `session-*` worktrees (user ruling 2026-09-30, backlog
     /// 491f6e94). A git-registered worktree on a `session-*` branch is removed
-    /// (`git worktree remove`, no --force; the branch is kept) only when its
-    /// session registration has aged out under the reconcile death rule, its
-    /// branch is an ancestor of the default branch, and its tree is clean
-    /// including untracked files. Everything else is kept; every worktree is
-    /// printed as `removed`, `kept` or `kept (undetermined)` with its reason.
-    /// Death needs two probes a window apart, so the first run on a fresh
-    /// worktree removes nothing.
+    /// (`git worktree remove`, no --force) only when its session registration
+    /// has aged out under the reconcile death rule, its branch is an ancestor
+    /// of the default branch, and its tree is clean including untracked files.
+    /// Everything else is kept; every worktree is printed as `removed`, `kept`
+    /// or `kept (undetermined)` with its reason. Death needs two probes a
+    /// window apart, so the first run on a fresh worktree removes nothing.
+    /// After a removal, the removed worktree's branch is deleted with the safe
+    /// `git branch -d` iff it is still an ancestor of the default branch
+    /// (backlog eea7c61f); branches of worktrees it did not remove are never
+    /// touched.
     ///
     /// Exit 0 means the pass completed (undetermined worktrees are kept and
     /// counted in the summary, not an error); exit 1 means an authorised
-    /// removal or its cleanup failed, or the reconciliation could not run.
+    /// removal, its cleanup, or an authorised branch delete (printed as
+    /// `FAILED to delete branch <name>`) failed, or the reconciliation could
+    /// not run.
     /// Never run automatically.
     Reap,
     /// List registered worktrees (path<TAB>branch).
@@ -1765,6 +1771,18 @@ enum GateAction {
         #[arg(long)]
         task: String,
     },
+    /// Close condukt-gate review findings (`gate-exec:<run>:<task>`) by
+    /// OBSERVING the run state (never by commit message): a terminal task
+    /// (done|verified|cancelled|discarded) closes with the non-human verdict
+    /// `resolved`; pending/running/failed stay open; unreadable state or a
+    /// missing task is undetermined (open); an absent run state closes only
+    /// after its absence has been observed for 30 days. Exit 0, or 3 when any
+    /// finding is undetermined (`NOT closed <id>: <why>` on stderr).
+    ReconcileFindings {
+        /// Print `{"resolved":[..],"undetermined":[{"finding_id","why"}]}`.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2302,6 +2320,9 @@ fn run_user(cmd: Command) -> Result<()> {
                 // escalate). Exit directly so a caller can branch on the status.
                 let code = gate_exec::run_gate_check(&cfg, &cwd, &run, &task);
                 std::process::exit(code);
+            }
+            GateAction::ReconcileFindings { json } => {
+                std::process::exit(finding_reconcile::run_cli(&cfg, &cwd, json));
             }
         },
         Command::Guard { action } => match action {
@@ -4620,7 +4641,18 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             eprintln!("released {n} task claim(s) for run '{run}'");
         }
         StateAction::IsClaimed { hashkey } => {
-            let live = claim::active_claims(cfg, cwd, state::now_secs())?;
+            // Exit codes are the contract: 0 = claimed, 1 = NOT claimed (stdout
+            // carries `"claimed": false`), 3 = the claim registry could not be
+            // read, so the answer is UNDETERMINED. An unreadable registry must
+            // never share exit 1 with "free" — callers (backlog add, flow) gate
+            // on it. Nothing is printed on stdout in the undetermined case.
+            let live = match claim::active_claims(cfg, cwd, state::now_secs()) {
+                Ok(live) => live,
+                Err(e) => {
+                    eprintln!("condukt state is-claimed: cannot determine claim state: {e:#}");
+                    std::process::exit(3);
+                }
+            };
             let holder = live.task_claims.get(&hashkey);
             let claimed = holder.is_some();
             let out = serde_json::json!({

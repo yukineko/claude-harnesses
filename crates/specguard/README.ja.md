@@ -169,7 +169,8 @@ specguard brief "<task>" --prompt  # ブリーフィングプロンプトのみ�
 specguard pending                  # sentinel があれば fix-offer を出力 (SessionStart hook)
 specguard ack                      # 対応済みの sentinel をクリア (sentinel 後に fix commit が必要)
 specguard ack --force              # fix-commit チェックを飛ばして無条件にクリア
-specguard ack --verdict false-positive  # disposition を明示指定 (confirmed|dismissed|false-positive)
+specguard ack --verdict false-positive  # disposition を明示指定 (confirmed|dismissed|false-positive。自動 verdict の resolved は不可)
+specguard reconcile-findings [--json] # 構造的 finding (undocumented/dangling-reference/untested) を再検出し、もう報告されないもの・map entry が削除されたもの (map は存在し解析可能) を resolved で close (map 不在/解析不能は undetermined・exit 3。shard 判定 kind は対象外)。構造的 finding id は episode 付き `specguard:<kind>:<key>:<epoch>` で、resolved 後に同じ gap が再発すると次の audit が新しい episode として再 open する (episode 無しの旧 id も処理)。人間 verdict (confirmed/dismissed/false-positive) で閉じた episode は、gap が存在し続ける限り再 open しないが、ある audit が gap の消失を**観測**した後 (spec map が存在し、findings store を厳密に読めた run だけが `specguard_observed_gone.jsonl` ― overwatch の `review_findings.jsonl` と同じ directory ― に記録する) に再び検出されれば新しい episode として再 open する。観測 ledger が読めない場合は隠さず再 open する側に倒す
 specguard testaudit                # 実装済みだが実行されていないテストを検出 (findings あれば exit 7)
 specguard testaudit --json         # 同上を機械可読 JSON で出力
 specguard decide "<title>"         # 決定ログ(ADR)を生成

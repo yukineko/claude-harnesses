@@ -6,6 +6,8 @@
 //! `#[ignore]` when the corresponding defect is fixed. Run them with
 //! `cargo test -p backlog --test backlog_s03_audit -- --ignored`.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -43,6 +45,39 @@ fn fx(tag: &str) -> Fx {
         .expect("git runs")
         .success();
     assert!(ok, "git init failed: fixture is void");
+    // Close-evidence fixture: `add` lands `pending` only with a REPRODUCED
+    // repro test from a committed script (otherwise `unconfirmed`, which
+    // `next` never hands out — that would make every claim-based test here
+    // vacuous). Commit one so `add` below files pending rows as before.
+    std::fs::create_dir_all(repo.join("tests")).unwrap();
+    std::fs::write(
+        repo.join("tests/repro_yes.sh"),
+        "echo 'bug present'; exit 1\n",
+    )
+    .unwrap();
+    for args in [
+        &["add", "tests/repro_yes.sh"][..],
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t.t",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "-m",
+            "repro",
+        ],
+    ] {
+        let ok = Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .status()
+            .expect("git runs")
+            .success();
+        assert!(ok, "git {args:?} failed: fixture is void");
+    }
     Fx { home, repo }
 }
 
@@ -54,9 +89,16 @@ fn run(f: &Fx, args: &[&str], path_prefix: Option<&Path>) -> (i32, String, Strin
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if let Some(p) = path_prefix {
-        let old = std::env::var("PATH").unwrap_or_default();
-        cmd.env("PATH", format!("{}:{}", p.display(), old));
+    match path_prefix {
+        Some(p) => {
+            // The caller's shim comes first; no deterministic condukt is
+            // added behind it, so the shim fully decides the claim check.
+            let old = std::env::var("PATH").unwrap_or_default();
+            cmd.env("PATH", format!("{}:{}", p.display(), old));
+        }
+        None => {
+            cmd.env("PATH", common::path_with_condukt_shim());
+        }
     }
     let out = cmd.output().expect("binary runs");
     (
@@ -69,7 +111,15 @@ fn run(f: &Fx, args: &[&str], path_prefix: Option<&Path>) -> (i32, String, Strin
 /// Add a task and return its id (precondition: add must succeed).
 fn add(f: &Fx, title: &str, extra: &[&str]) -> String {
     let proj = f.repo.to_str().unwrap();
-    let mut args = vec!["add", "--title", title, "--project", proj];
+    let mut args = vec![
+        "add",
+        "--title",
+        title,
+        "--project",
+        proj,
+        "--repro-test",
+        "bash tests/repro_yes.sh",
+    ];
     args.extend_from_slice(extra);
     let (rc, out, err) = run(f, &args, None);
     assert_eq!(rc, 0, "precondition: add must succeed; out={out} err={err}");
@@ -85,7 +135,6 @@ fn add(f: &Fx, title: &str, extra: &[&str]) -> String {
 /// "not claimed", so an undetermined claim check is indistinguishable from a
 /// clean one. Expected: refuse, or at least say the check could not be made.
 #[test]
-#[ignore = "backlog 420f1eec: open defect, remove ignore when fixed"]
 fn add_does_not_treat_an_undetermined_condukt_claim_check_as_not_claimed() {
     let f = fx("420f1eec");
     let shim = f.home.join("shim");

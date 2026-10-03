@@ -8,6 +8,8 @@
 //! hook) and the real `backlog` binary in an isolated `$HOME`; they say
 //! nothing about WHERE the record is stored, only what backlog reports.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -126,6 +128,7 @@ fn driver_files(home: &Path) -> usize {
 
 fn backlog(home: &Path, cwd: &Path, args: &[&str]) -> (i32, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_backlog"))
+        .env("PATH", common::path_with_condukt_shim())
         .args(args)
         .env("HOME", home)
         .current_dir(cwd)

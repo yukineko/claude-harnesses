@@ -22,7 +22,15 @@
 //! an empty cursor: reading it as empty would re-harvest every merge in the
 //! lookback and duplicate them all. Failures are written to
 //! `~/.fugu-router/harvest-error.json`, which the `UserPromptSubmit` hook
-//! surfaces — the `SessionEnd` hook's own exit code and stderr reach nobody.
+//! surfaces on the next prompt — the `SessionEnd` hook's own exit code never
+//! reaches an agent, and its stderr line is gone by the next session.
+//!
+//! Stream contract, same as `cmd_sync`'s: success goes to **stdout** (which
+//! Claude Code discards at `SessionEnd`, so a clean harvest is silent there and
+//! stays informative to a human running it by hand) and failure goes to
+//! **stderr**, which IS surfaced to the user. Measured 2026-10-02: the success
+//! line used to go to stderr, which is part of why a clean session end looked
+//! like an error.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -48,7 +56,7 @@ pub fn cmd_harvest(
         Ok(n) => {
             clear_marker();
             if n > 0 {
-                eprintln!("fugu-router: harvested {n} merge episode(s)");
+                println!("fugu-router: harvested {n} merge episode(s)");
             }
             Ok(())
         }

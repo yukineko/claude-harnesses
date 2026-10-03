@@ -25,8 +25,9 @@
 - **重複コンテンツ拒否（content hashkey）** — `add` は `task::hashkey`（title を trim→NFKC→lowercase→空白圧縮→前後記号除去
   で正規化し、`\u{1f}` で project と連結、FNV-1a 64bit を 16 桁 hex 化）で内容重複を検出。既存の `pending`/`failed` タスクが
   同 hashkey を持つ、または `condukt state is-claimed --hashkey <h>` が exit 0 を返す（live cross-session claim）なら
-  `check_duplicate` が拒否する。`done` 重複はブロックしない（再積みは正当）。`condukt` 不在・spawn 失敗・想定外 exit は
-  fail-soft に「claim なし」扱い（`is_claimed_elsewhere`）。`--force` で両拒否を意図的にバイパス。
+  `check_duplicate` が拒否する。`done` 重複はブロックしない（再積みは正当）。`condukt` 不在・spawn 失敗・想定外 exit・
+  2.5s 以内に答えが返らない・`claimed` フィールドを伴わない exit 0/1・exit 1 に `claimed:true`（exit と claimed の不一致）・シグナル終了は「判定不能」(`ClaimCheck::Undetermined`) であり、
+  `check_duplicate` は **`--force` が無い限り add を拒否する**（「claim なし」とは読まない。fail-closed）。`--force` で拒否を意図的にバイパス。
 - **run-lock は atomic かつ liveness-reaped** — `lock::acquire_inner` は temp ファイルへ完全書き込み後 `hard_link`(2) で
   atomic publish（EEXIST で敗者は1人だけ）。既存 lock は owner pid が **確実に dead**（`pid_alive`: Linux は `/proc/<pid>`、
   それ以外は `kill -0` へフォールバック）のときだけ reap し、live holder は bail する。`--force`（強制奪取）のみ live holder を

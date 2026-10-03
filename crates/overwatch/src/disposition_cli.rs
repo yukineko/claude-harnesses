@@ -20,7 +20,7 @@
 use crate::disposition::{self, Disposition, DispositionVerdict};
 use crate::reconcile::{self, ReconcileRange};
 use crate::review_queue::SourceHealth;
-use crate::store::{self, AppendOutcome};
+use crate::store::{self, AppendOutcome, DispositionAppend};
 use anyhow::Result;
 use harness_core::verdict::Determination;
 
@@ -36,13 +36,41 @@ const STALE_SCAN_LAST_N: usize = 200;
 /// here so this function stays testable without a wall clock). Fail-soft on
 /// the store write: a write error is warned to stderr but returns `Ok(())`
 /// so the caller is never broken by logging.
-pub fn record(finding_id: String, verdict_str: &str, reviewer: String, now: i64) -> Result<()> {
+pub fn record(
+    finding_id: String,
+    verdict_str: &str,
+    reviewer: String,
+    evidence: Option<String>,
+    observed_source: Option<String>,
+    now: i64,
+) -> Result<()> {
     let verdict = DispositionVerdict::parse_cli(verdict_str)?;
     let cwd = std::env::current_dir()?;
-    let record = Disposition::new(finding_id, verdict, reviewer, now);
+    let record = Disposition::new(finding_id, verdict, reviewer, now)
+        .with_evidence(evidence, observed_source);
 
-    match store::append_disposition(&cwd, &record) {
-        Ok(outcome) => {
+    match store::append_disposition_detailed(&cwd, &record) {
+        Ok(DispositionAppend::AlreadyDispositioned) => {
+            // First writer wins (backlog 89544915 R1): the finding is already
+            // closed by an earlier disposition, so this call wrote nothing.
+            // Exit 0 (the finding IS dispositioned), but say truthfully that
+            // THIS verdict was not the one recorded.
+            println!(
+                "{}",
+                serde_json::json!({
+                    "recorded": true,
+                    "written": false,
+                    "reason": "already_dispositioned",
+                    "note": "a disposition for this finding_id already exists; first writer wins, nothing written",
+                    "finding_id": record.finding_id,
+                })
+            );
+        }
+        Ok(detailed) => {
+            let outcome = match detailed {
+                DispositionAppend::NotPersisted(o) => o,
+                _ => AppendOutcome::Recorded,
+            };
             let (line, ok) = disposition_result(outcome, &record, verdict);
             println!("{line}");
             // Mirror the lease `begin` skip-JSON pattern: a contended HARD-SKIP
@@ -155,6 +183,7 @@ pub fn metrics(json: bool) -> Result<SourceHealth> {
                         "agreement_rate": serde_json::Value::Null,
                         "median_latency_secs": serde_json::Value::Null,
                         "by_verdict": serde_json::Value::Null,
+                        "auto_resolved": serde_json::Value::Null,
                         "stale_undisposed_with_fix_commit": serde_json::Value::Null,
                         "closure_rate": serde_json::Value::Null,
                         "closure_by_source": serde_json::Value::Null,
@@ -194,6 +223,13 @@ pub fn metrics(json: bool) -> Result<SourceHealth> {
     let false_positive = dispositions
         .iter()
         .filter(|d| d.verdict == DispositionVerdict::FalsePositive)
+        .count();
+    // Automated observation-based closures (backlog 89544915 R3): NOT a human
+    // verdict, so they are in none of the human figures above — shown here,
+    // separately, and still counted as closed by `closure_rate`.
+    let auto_resolved = dispositions
+        .iter()
+        .filter(|d| d.verdict == DispositionVerdict::Resolved)
         .count();
 
     // Early warning for the "fix commit landed, nobody dispositioned it"
@@ -251,6 +287,7 @@ pub fn metrics(json: bool) -> Result<SourceHealth> {
                     "dismissed": dismissed,
                     "false_positive": false_positive,
                 },
+                "auto_resolved": auto_resolved,
                 // `null` (never 0) when the join could not be computed; the
                 // `undetermined_sources` list below names why.
                 "stale_undisposed_with_fix_commit": stale_undisposed,
@@ -319,6 +356,7 @@ pub fn metrics(json: bool) -> Result<SourceHealth> {
     println!(
         "  by verdict: confirmed={confirmed} dismissed={dismissed} false_positive={false_positive}"
     );
+    println!("  auto-resolved (not a human verdict, excluded from the rates): {auto_resolved}");
     println!("  closure rate:           {}", fmt_rate(closure));
     for (source, (closed, of)) in &closure_by_source {
         println!("    [{source}]: {}", fmt_closure(*closed, *of));

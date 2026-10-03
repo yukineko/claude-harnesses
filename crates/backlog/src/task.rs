@@ -5,33 +5,199 @@ use unicode_normalization::UnicodeNormalization;
 /// (which sets these on add/done/fail/restore), the `--status` filter help, and
 /// the CLI's validation of a user-supplied filter. A task moves
 /// `pending → done` (done), `pending → failed` (fail) or `pending|failed →
-/// cancelled` (cancel); a deferred task is restored to `pending` once its
+/// cancelled` (`cancel --reason`, a recorded discard; abandoned, see
+/// [`STATUS_CANCELLED`]); a deferred task is restored to `pending` once its
 /// `defer_until` elapses. `done` and `cancelled` are terminal. NB: `backlog`
 /// has no `open` status — that vocabulary belongs to `hypothesis` (open/
 /// validated/rejected), a different binary.
 pub const STATUS_PENDING: &str = "pending";
 pub const STATUS_DONE: &str = "done";
 pub const STATUS_FAILED: &str = "failed";
-/// Terminal "decided not to do it" (backlog d8d25af9). Unlike `done` it does
-/// not claim the work was completed, and unlike `failed` it is never requeued.
-/// Its GitHub mirror is closed as "not planned".
+/// Terminal "decided not to do it" (backlog d8d25af9) — work that is over
+/// WITHOUT having been finished: a duplicate folded into its canonical ticket,
+/// a plan that was dropped, a question a later measurement already answered.
+/// Unlike `done` it does not claim the work was completed, and unlike `failed`
+/// it is never requeued. Terminal ([`crate::store::is_terminal_status`]), so a
+/// cancelled row lives in the done file and can never be reopened, and it is
+/// what makes a mirrored issue close as GitHub's `not planned` rather than
+/// `completed`.
+///
+/// **This value was once missing from [`STATUSES`] while the store already
+/// carried it.** Measured 2026-08-14 (577 tasks): 6 such records existed —
+/// written before the current validation, or by hand — and
+/// `edit --status cancelled` was rejected outright:
+///
+/// ```text
+/// $ backlog edit 5df88c1d --status cancelled
+/// Error: warning: unknown status 'cancelled'; valid values are pending | done | failed
+/// ```
+///
+/// That split the vocabulary this module claims to be the single source of
+/// truth for, and it had a consequence beyond tidiness: the `NotPlanned` arm of
+/// [`crate::store::sync_plan`] was reachable only from a hand-edited store, so
+/// no supported path could exercise it and the arm was never once observed in
+/// production. Admitting the value to [`STATUSES`] is the resolution of backlog
+/// `0dafa254`; the supported writer is `backlog cancel ID --reason R`, which
+/// records the discard as a closure (close-evidence then also refuses
+/// `edit --status cancelled`, this time on purpose and naming `cancel`).
+///
+/// `claimed` is deliberately NOT added alongside it: that one is derived from
+/// the untracked claim ledger for display and is never persisted as a task's
+/// status, so listing it in [`STATUSES`] would make `--status claimed`
+/// *settable*, which is a different and wrong thing from being filterable. It
+/// lives in [`FILTER_STATUSES`] instead.
 pub const STATUS_CANCELLED: &str = "cancelled";
 
-/// All STORED status values, in lifecycle order — what `edit --status` accepts.
-/// An unknown value is a loud error instead of a silently-stranded task.
+/// The core STORED lifecycle statuses, in lifecycle order. `stored_status_error`
+/// rejects any `edit --status` value outside this list (so the derived
+/// `claimed` is never persisted), and on top of that the close-evidence rule
+/// in `store::edit` admits only `pending` / `failed`: `done` / `cancelled`
+/// need a recorded closure (`backlog done` / `backlog cancel` with evidence,
+/// or `ruling approve`). `unconfirmed` / `needs-ruling` are stored too but are
+/// entered only through `add`/`confirm` and `ruling`, so they are not here.
 pub const STATUSES: [&str; 4] = [STATUS_PENDING, STATUS_DONE, STATUS_FAILED, STATUS_CANCELLED];
 
-/// The `--status` FILTER vocabulary: every stored status plus the DERIVED
-/// `claimed` (a pending/failed row holding a live claim-ledger lease, see
-/// `store::STATUS_CLAIMED`). `claimed` is filterable but never stored, so it
-/// is in this list and not in [`STATUSES`] (backlog 0dafa254).
-pub const FILTER_STATUSES: [&str; 5] = [
+/// A finding whose problem has NOT been observed: filed without a repro test,
+/// or whose repro test did not reproduce it (`not-reproduced`) or could not be
+/// run to a conclusion (`undetermined`). Non-terminal, but NOT workable: it is
+/// excluded from `next` / `next --claim` / requeue and from the pending count,
+/// and `list` shows it in its own section labelled `suspicion`. Only
+/// `backlog confirm ID --repro-test CMD` with a `reproduced` outcome moves it
+/// to `pending` (close-evidence spec, 2026-10-01: an unverified finding in the
+/// workable queue is low quality; the unconfirmed count and the
+/// not-reproduced rate are the quality metrics).
+pub const STATUS_UNCONFIRMED: &str = "unconfirmed";
+
+/// A close that no executed test can justify (a value judgment, or an item
+/// that is genuinely untestable) and that is waiting for a HUMAN ruling.
+/// Non-terminal and not workable (excluded from `next` / claim / requeue).
+/// Only `backlog ruling approve ID` (TTY stdin + the id typed back) closes it;
+/// `backlog ruling withdraw ID` returns it to `pending`.
+pub const STATUS_NEEDS_RULING: &str = "needs-ruling";
+
+/// Every status value a `--status` FILTER may name: the stored
+/// [`STATUSES`], then the DERIVED `claimed` (a pending/failed row holding a
+/// live claim-ledger lease, see `store::STATUS_CLAIMED`; filterable but never
+/// stored, backlog 0dafa254), then `unconfirmed` / `needs-ruling`, which this
+/// binary writes. A filter naming any of these must not warn; a filter naming
+/// anything else must.
+pub const FILTER_STATUSES: [&str; 7] = [
     STATUS_PENDING,
     STATUS_DONE,
     STATUS_FAILED,
     STATUS_CANCELLED,
     "claimed",
+    STATUS_UNCONFIRMED,
+    STATUS_NEEDS_RULING,
 ];
+
+/// How a task reached a terminal status, recorded as `[task.closure]`.
+///
+/// The on-disk shape is fixed by the close-evidence spec and re-checked at
+/// commit time by `scripts/check-closure-evidence.py`, so field names here
+/// must not drift: `reason`, `duplicate_of`, `doc_only_commit`, and the
+/// sub-tables `green`, `red`, `ruling`, plus `discard_reason`. Exactly one
+/// route is filled:
+///   - `green` + `red`: an executed committed test, RED (behavioural) at
+///     `red.rev` and GREEN at `green.rev` (reason fixed / already-fixed /
+///     obsolete);
+///   - `doc_only_commit`: an ancestor commit touching doc paths only;
+///   - `duplicate_of`: the canonical task id;
+///   - `ruling`: a human approval recorded by `backlog ruling approve`;
+///   - `discard_reason` (with `reason = "discard"`): `backlog cancel ID
+///     --reason R` throwing away an item nothing demonstrates (user ruling
+///     2026-10-03: 「証明できないのであれば、そもそも問題ではない。…捨てる」).
+///     A discard is valid ONLY for `cancelled` — it claims nothing was fixed,
+///     so it is never evidence for `done` and never a duplicate anchor
+///     ([`Closure::has_evidence`] stays false for it).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Closure {
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duplicate_of: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doc_only_commit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub green: Option<GreenRun>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub red: Option<RedRun>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ruling: Option<RulingRecord>,
+    /// Why an unproven item was discarded (`backlog cancel`). Set only with
+    /// `reason = "discard"` on a `cancelled` row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discard_reason: Option<String>,
+}
+
+impl Closure {
+    /// True when this closure carries one of the four evidence routes. A
+    /// `closure` table with none of them (hand-written, or truncated) is not
+    /// evidence, so it is not a valid duplicate anchor either. A discard
+    /// (`discard_reason`) is deliberately NOT one of them: it records that
+    /// nothing was demonstrated, so it can never justify `done`.
+    pub fn has_evidence(&self) -> bool {
+        (self.green.is_some() && self.red.is_some())
+            || self.doc_only_commit.is_some()
+            || self.duplicate_of.is_some()
+            || self.ruling.is_some()
+    }
+}
+
+/// The GREEN run of an F2P close: the committed test, executed at `rev`
+/// (the full 40-hex HEAD the working tree was clean at), exited 0 and reported
+/// at least one passing test.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GreenRun {
+    pub runner: String,
+    pub cmd: String,
+    pub exit: i32,
+    pub passed: u64,
+    pub rev: String,
+    pub observed_at: i64,
+    pub output_digest: String,
+    pub excerpt: String,
+}
+
+/// The RED run of an F2P close: the same command at `rev` (a detached temp
+/// worktree with the test files overlaid from HEAD) exited non-zero with a
+/// BEHAVIOURAL failure. A build/compile failure is never recorded here.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RedRun {
+    pub rev: String,
+    pub exit: i32,
+    pub kind: String,
+}
+
+/// A human ruling, recorded by `backlog ruling approve` only.
+/// `approved_via = "tty"` records that the approval came through an
+/// interactive terminal with the id typed back. That is a barrier against the
+/// non-interactive agent Bash tool, NOT proof of the approver's identity.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RulingRecord {
+    pub kind: String,
+    pub rationale: String,
+    pub approved_by: String,
+    pub approved_at: i64,
+    pub approved_via: String,
+}
+
+/// Outcomes of a finding's repro test (`add --repro-test` / `confirm`).
+pub const REPRO_REPRODUCED: &str = "reproduced";
+pub const REPRO_NOT_REPRODUCED: &str = "not-reproduced";
+pub const REPRO_UNDETERMINED: &str = "undetermined";
+
+/// The latest repro attempt for a finding, recorded as `[task.repro]`.
+/// `outcome` is one of [`REPRO_REPRODUCED`] / [`REPRO_NOT_REPRODUCED`] /
+/// [`REPRO_UNDETERMINED`]; `detail` names why (the cause, for undetermined).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Repro {
+    pub outcome: String,
+    pub cmd: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rev: Option<String>,
+    pub observed_at: i64,
+    pub detail: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
@@ -140,6 +306,75 @@ pub struct Task {
     /// forever.
     #[serde(default)]
     pub issue_closed_at: Option<i64>,
+    /// The value of [`rev`](Task::rev) at the moment this task's issue BODY was
+    /// last confirmed pushed to GitHub, or `None` if it never has been.
+    ///
+    /// **This was `updated_at`-based first, and that was wrong.** The reasoning
+    /// was that `store::edit` always re-stamps `updated_at`, so comparing it
+    /// against a recorded value could only OVER-report staleness (a title-only
+    /// edit re-pushes an unchanged body — one redundant, idempotent write) and
+    /// never UNDER-report a notes change. The flaw is resolution: `updated_at`
+    /// counts whole seconds, so an edit landing in the SAME second as the push
+    /// leaves it bit-identical and the change becomes invisible. Observed
+    /// 2026-10-02 by `tests/mirror_gaps_after_0323.rs`
+    /// (`a_pushed_body_goes_quiet_until_the_notes_change_again`): push, edit the
+    /// notes, re-run — and the re-run planned nothing. That is a systematic,
+    /// reproducible fail-open, not an unlikely one.
+    ///
+    /// A hash of the notes was the other candidate and is still rejected: a
+    /// collision SKIPS a needed update, which is the same failure direction,
+    /// and this crate carries no digest dependency. [`rev`](Task::rev) is exact
+    /// and clock-independent, so it is the witness used here.
+    ///
+    /// Compared with `!=`, not `>`: a store merged from two checkouts can carry
+    /// a lower `rev` than the stamp, and "the revision is not the one we pushed"
+    /// must resolve to stale rather than to current (CLAUDE.md §3).
+    ///
+    /// Absent for every task that predates it, so every already-mirrored task
+    /// reads as stale the first time it is examined — measured 2026-10-02: 471
+    /// of 535 pending tasks hold an issue. That is why the body arm is opt-in
+    /// (`sync --only body`) and is deliberately NOT part of
+    /// [`crate::store::mirror_drift`]: wiring it into the default would
+    /// manufacture a 471-item rewrite and a permanent SessionStart noise
+    /// source, which is the exact shape already filed as backlog `7438ea3a`.
+    #[serde(default)]
+    pub issue_body_synced_rev: Option<u64>,
+    /// How many times this task has been mutated, counting from 0 at creation.
+    ///
+    /// A logical clock, not a timestamp: it exists because `updated_at` cannot
+    /// distinguish two changes inside one second (see
+    /// [`issue_body_synced_rev`](Task::issue_body_synced_rev) for the measured
+    /// failure that forced this field into existence). Every store mutator that
+    /// re-stamps `updated_at` also bumps this, through the single helper
+    /// `store::touch`, so the two can never drift apart.
+    ///
+    /// Saturating, so a long-lived task cannot wrap to 0 and read as fresh.
+    /// Defaults to 0 for tasks written before it existed, which is why the
+    /// stamp above is an `Option` — "rev 0" means "never mutated", not "never
+    /// pushed", and conflating the two would mark an untouched task as synced.
+    #[serde(default)]
+    pub rev: u64,
+    /// `needs-ruling` rows only: the kind of ruling requested (`judgment` |
+    /// `untestable`). Flat on the row by spec (overwatch's needs-ruling stream
+    /// reads it there).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ruling_kind: Option<String>,
+    /// `needs-ruling` rows: why the requester believes a judgment close is
+    /// right (required for `judgment`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rationale: Option<String>,
+    /// `needs-ruling` rows of kind `untestable`: why no test can observe it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub untestable_reason: Option<String>,
+    /// The latest repro attempt (`add --repro-test` / `confirm`). Absent on
+    /// legacy rows and on findings filed without a repro test.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repro: Option<Repro>,
+    /// How this task was closed. Present on every row closed by this binary;
+    /// absent on legacy terminal rows (which `audit-closures` classifies but
+    /// never reopens).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closure: Option<Closure>,
 }
 
 impl Task {
@@ -260,6 +495,13 @@ mod tests {
             issue_number: None,
             issue_url: None,
             issue_closed_at: None,
+            issue_body_synced_rev: None,
+            rev: 0,
+            ruling_kind: None,
+            rationale: None,
+            untestable_reason: None,
+            repro: None,
+            closure: None,
             touched_files: Vec::new(),
         }
     }
@@ -267,8 +509,17 @@ mod tests {
     #[test]
     fn status_vocabulary_is_consistent() {
         // The set, lifecycle order, and the values the store actually writes
-        // (add → pending, done → done, fail → failed, cancel → cancelled) must
-        // agree, since STATUSES drives `edit --status` validation and `is_pending`.
+        // (add → pending, done → done, fail → failed, cancel → cancelled)
+        // must agree, since STATUSES drives `edit --status` validation and
+        // `is_pending`. (`edit --status` validates against STATUSES first,
+        // then the close-evidence rule admits only pending / failed.)
+        //
+        // `cancelled` joined the list to resolve backlog `0dafa254`. It was NOT
+        // added to make a failing assertion pass: the store already held such
+        // rows (6 of 577, measured 2026-08-14) that no CLI path could write,
+        // which left `store::sync_plan`'s NotPlanned close arm reachable only
+        // from a hand-edited file. `cancelled` sits after `failed` because it
+        // is reachable from `failed` (`pending|failed → cancelled`).
         assert_eq!(
             STATUSES,
             [STATUS_PENDING, STATUS_DONE, STATUS_FAILED, STATUS_CANCELLED]
@@ -280,7 +531,14 @@ mod tests {
         assert!(!STATUSES.contains(&"claimed"));
         // `open` is hypothesis's vocabulary, never backlog's.
         assert!(!STATUSES.contains(&"open"));
-        // is_pending agrees with the vocabulary it filters on.
+        // `claimed` is DERIVED from the untracked claim ledger for display and
+        // is never persisted as a status. Listing it here would make
+        // `--status claimed` settable, which is a different thing from being
+        // filterable — so its absence is load-bearing, not an oversight.
+        assert!(!STATUSES.contains(&"claimed"));
+        // is_pending agrees with the vocabulary it filters on. `cancelled` is
+        // terminal, so it must NOT be pending — a cancelled task is off the
+        // queue, not waiting on it.
         assert!(make_task(vec![], STATUS_PENDING).is_pending());
         assert!(make_task(vec![], STATUS_FAILED).is_pending());
         assert!(!make_task(vec![], STATUS_DONE).is_pending());

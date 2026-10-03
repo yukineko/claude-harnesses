@@ -16,6 +16,8 @@
 //!
 //! Written by an independent closure verifier, not the implementer.
 
+mod common;
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -36,6 +38,7 @@ fn unique_root(tag: &str) -> PathBuf {
 
 fn run_in(args: &[&str], cwd: &Path, home: &Path, stdin: &str) -> (i32, String, String) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_backlog"))
+        .env("PATH", common::path_with_condukt_shim())
         .args(args)
         .env("HOME", home)
         .env_remove("BACKLOG_DISABLE")
@@ -55,6 +58,11 @@ fn run_in(args: &[&str], cwd: &Path, home: &Path, stdin: &str) -> (i32, String, 
         String::from_utf8_lossy(&out.stderr).into_owned(),
     )
 }
+
+/// Close-evidence fixture: `add` lands `pending` only with a REPRODUCED repro
+/// test (otherwise `unconfirmed`, outside the workable queue and unclaimable).
+/// The repro script is committed on main so both checkouts can run it.
+const REPRO: &str = "bash tests/repro_yes.sh";
 
 fn git(args: &[&str], cwd: &Path, home: &Path) -> String {
     let out = Command::new("git")
@@ -99,9 +107,21 @@ fn a_stale_worktree_store_merged_into_main_does_not_release_a_claim() {
     std::fs::create_dir_all(&a).unwrap();
     git(&["init", "-q", "-b", "main"], &a, &home);
     git(&["commit", "-q", "--allow-empty", "-m", "init"], &a, &home);
+    std::fs::create_dir_all(a.join("tests")).unwrap();
+    std::fs::write(a.join("tests/repro_yes.sh"), "echo 'bug present'; exit 1\n").unwrap();
+    git(&["add", "tests/repro_yes.sh"], &a, &home);
+    git(&["commit", "-q", "-m", "repro script"], &a, &home);
     let project = a.to_str().unwrap().to_string();
     let (code, _, err) = run_in(
-        &["add", "--title", "only task", "--project", &project],
+        &[
+            "add",
+            "--title",
+            "only task",
+            "--project",
+            &project,
+            "--repro-test",
+            REPRO,
+        ],
         &a,
         &home,
         "",
@@ -136,7 +156,15 @@ fn a_stale_worktree_store_merged_into_main_does_not_release_a_claim() {
     let (code, _, err) = run_in(&["session-start"], &b, &home, &payload);
     assert_eq!(code, 0, "session-start in B: {err}");
     let (code, _, err) = run_in(
-        &["add", "--title", "from B", "--project", &project],
+        &[
+            "add",
+            "--title",
+            "from B",
+            "--project",
+            &project,
+            "--repro-test",
+            REPRO,
+        ],
         &b,
         &home,
         "",

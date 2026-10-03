@@ -1,8 +1,10 @@
 mod claim_ledger;
+mod closecmd;
 mod config;
 mod dedup;
 mod divergence;
 mod driver;
+mod evidence;
 mod github;
 mod hooks;
 mod install;
@@ -68,6 +70,46 @@ enum Command {
         /// this title+project's content hashkey.
         #[arg(long)]
         force: bool,
+
+        /// A committed test that REPRODUCES the finding (runner allowlist:
+        /// `cargo test ...`, `pytest ...`, `python3 -m pytest ...`, `bash|sh
+        /// <tracked script under a tests dir>`). It is run at HEAD before the
+        /// add: a behavioural FAILURE means reproduced and the task lands
+        /// `pending`; anything else (no repro test, exit 0 = not-reproduced,
+        /// or undetermined) lands `unconfirmed`, outside the workable queue.
+        /// The add itself always succeeds — a finding is never lost.
+        #[arg(long = "repro-test")]
+        repro_test: Option<String>,
+    },
+
+    /// Re-run a repro test for an `unconfirmed` finding. Promotes it to
+    /// `pending` only when the outcome is `reproduced`; the attempt is
+    /// recorded either way, and a non-reproduced/undetermined outcome exits
+    /// non-zero.
+    Confirm {
+        /// Task ID
+        id: String,
+
+        /// The repro test command (same allowlist as `add --repro-test`).
+        #[arg(long = "repro-test")]
+        repro_test: String,
+    },
+
+    /// Request / approve / withdraw / list human rulings for closes that no
+    /// executed test can justify (value judgments, genuinely untestable items).
+    Ruling {
+        #[command(subcommand)]
+        action: RulingAction,
+    },
+
+    /// Read-only classification of every terminal row's closure evidence
+    /// (observed-f2p, doc-only, duplicate, ruling-approved, cited-only,
+    /// judgment, none) plus untestable reasons grouped by crate. Never
+    /// reopens anything; the store is not written.
+    AuditClosures {
+        /// Emit JSON instead of the human report.
+        #[arg(long)]
+        json: bool,
     },
 
     /// Group the queued tasks by DECLARED file scope (`touched_files`), so two
@@ -94,8 +136,9 @@ enum Command {
         #[arg(long)]
         project: Option<String>,
 
-        /// Filter by status: pending | done | failed (NB: not "open" — that is
-        /// hypothesis's vocabulary, a different binary)
+        /// Filter by status: pending | done | failed | cancelled | claimed
+        /// (`task::FILTER_STATUSES`; `claimed` is derived, never stored. NB:
+        /// not "open" — that is hypothesis's vocabulary, a different binary)
         #[arg(long)]
         status: Option<String>,
 
@@ -143,10 +186,36 @@ enum Command {
         claim: bool,
     },
 
-    /// Mark a task as done
+    /// Mark a task as done WITH evidence. Exactly one of: `--test CMD
+    /// --red-rev REV` (an executed committed test that FAILS behaviourally at
+    /// REV and PASSES at HEAD; `--reason fixed|already-fixed|obsolete`),
+    /// `--doc-only COMMIT` (an ancestor commit touching doc paths only), or
+    /// `--duplicate-of ID`. A bare `done ID` is refused. Judgment/untestable
+    /// closes go through `backlog ruling request` + a human `ruling approve`.
     Done {
         /// Task ID
         id: String,
+
+        /// The committed test command (runner allowlist; argv, no shell).
+        #[arg(long)]
+        test: Option<String>,
+
+        /// The revision at which the test must FAIL behaviourally (RED).
+        #[arg(long = "red-rev")]
+        red_rev: Option<String>,
+
+        /// fixed (default) | already-fixed | obsolete
+        #[arg(long)]
+        reason: Option<String>,
+
+        /// Close as a duplicate of this task id (pending, or done WITH evidence).
+        #[arg(long = "duplicate-of")]
+        duplicate_of: Option<String>,
+
+        /// Close with a doc-only commit (ancestor of HEAD, non-root, non-merge,
+        /// doc paths only; SKILL.md and .md under agents/commands/skills are code).
+        #[arg(long = "doc-only")]
+        doc_only: Option<String>,
     },
 
     /// Mark a task as failed
@@ -159,13 +228,15 @@ enum Command {
         reason: Option<String>,
     },
 
-    /// Close a task as "decided not to do it": terminal, never requeued, and
-    /// not a claim of completion (unlike `done`)
+    /// Close a task as "decided not to do it" (discard an item nothing
+    /// demonstrates): terminal, never requeued, and not a claim of completion
+    /// (unlike `done`). Recorded as a `discard` closure; needs no test or ruling
     Cancel {
         /// Task ID
         id: String,
 
-        /// Why it will not be done (required; appended to the notes)
+        /// Why it will not be done (required, non-empty; recorded as the
+        /// closure's discard_reason and appended to the notes)
         #[arg(long)]
         reason: String,
     },
@@ -180,6 +251,13 @@ enum Command {
         /// Cap how many actions to perform in one run (0 = no cap).
         #[arg(long, default_value_t = 0)]
         limit: usize,
+
+        /// Which half of the mirror to reconcile. `close` catches up on issues
+        /// whose task is already finished; `create` PUBLISHES a new public
+        /// issue per unmirrored pending task. Defaults to `both`, which is what
+        /// `sync` has always done.
+        #[arg(long, value_enum, default_value = "both")]
+        only: store::SyncOnly,
     },
 
     /// Edit a task's fields
@@ -263,6 +341,41 @@ enum Command {
         #[command(subcommand)]
         action: DriverAction,
     },
+}
+
+#[derive(Subcommand)]
+enum RulingAction {
+    /// Put a task in `needs-ruling` (non-terminal, not workable).
+    Request {
+        /// Task ID
+        id: String,
+        /// judgment | untestable
+        #[arg(long)]
+        kind: String,
+        /// Why a judgment close is right (required for judgment).
+        #[arg(long)]
+        rationale: Option<String>,
+        /// Why no test can observe it (required for untestable).
+        #[arg(long = "untestable-reason")]
+        untestable_reason: Option<String>,
+    },
+    /// Close a needs-ruling task. Requires an interactive TTY on stdin and the
+    /// id typed back — a barrier against the non-interactive agent Bash tool,
+    /// NOT proof of identity. An LLM never runs this.
+    Approve {
+        /// Task ID
+        id: String,
+        /// Close as `cancelled` instead of `done`.
+        #[arg(long)]
+        cancel: bool,
+    },
+    /// Return a needs-ruling task to pending (evidence-gated `done` applies).
+    Withdraw {
+        /// Task ID
+        id: String,
+    },
+    /// List the tasks awaiting a ruling.
+    List,
 }
 
 #[derive(Subcommand)]
@@ -761,6 +874,7 @@ fn run(cli: Cli) -> Result<()> {
             notes,
             weight,
             force,
+            repro_test,
         } => {
             let tasks_path = store_path()?;
             // With the store as the scope (see `read_project_scope`), a task
@@ -786,7 +900,20 @@ fn run(cli: Cli) -> Result<()> {
             // `store::add_with_weight_and_github_push`) never runs a process
             // itself, so unit tests exercise it with fake closures only.
             let remote_url = git_remote_origin_url(&project);
-            let id = store::add_with_weight_and_github_push(
+            // The repro runs BEFORE the store lock is taken (a test can run
+            // for up to BACKLOG_TEST_TIMEOUT_SECS). Its outcome decides where
+            // the finding lands; it never decides WHETHER it lands.
+            let repro = match &repro_test {
+                Some(cmd) => Some(evidence::run_repro(&std::env::current_dir()?, cmd, now)),
+                None => None,
+            };
+            let intake = store::Intake::from_repro(repro);
+            let landed = intake.status;
+            let outcome = intake
+                .repro
+                .as_ref()
+                .map(|r| (r.outcome.clone(), r.detail.clone()));
+            let id = store::add_finding(
                 &tasks_path,
                 &title,
                 &project,
@@ -797,8 +924,16 @@ fn run(cli: Cli) -> Result<()> {
                 now,
                 &remote_url,
                 gh_probe,
+                intake,
             )?;
             println!("added: {id}");
+            match outcome {
+                Some((o, d)) => eprintln!("repro: {o} ({d}); filed as {landed}"),
+                None => eprintln!(
+                    "repro: none given; filed as {landed} (suspicion, outside the workable \
+                     queue) — promote with `backlog confirm {id} --repro-test CMD`"
+                ),
+            }
             // (f7b018f8) The store's own duplicate guard is an EXACT hashkey
             // match, so a differently-phrased filing of the same work is filed
             // silently. Surface the near-duplicate peers here. This is
@@ -930,6 +1065,14 @@ fn run(cli: Cli) -> Result<()> {
                 // (not stored) so callers like `/flow` can gate on
                 // `condukt state is-claimed --hashkey <h>` without recomputing the
                 // normalization themselves.
+                //
+                // `status` carries the SAME derived value the text renderer
+                // shows: a task whose `defer_until` is still in the future is
+                // `deferred` (backlog d65da48d). `deferred` is never stored —
+                // it is computed from `defer_until` (still present in the row)
+                // — so overwatch's `status == "deferred"` counter is reachable
+                // only through this derivation.
+                let now = now_unix();
                 let with_hashkey: Vec<serde_json::Value> = tasks
                     .iter()
                     .map(|t| {
@@ -939,6 +1082,12 @@ fn run(cli: Cli) -> Result<()> {
                                 "hashkey".to_string(),
                                 serde_json::Value::String(task::hashkey(&t.title, &t.project)),
                             );
+                            if t.is_deferred(now) {
+                                obj.insert(
+                                    "status".to_string(),
+                                    serde_json::Value::String("deferred".to_string()),
+                                );
+                            }
                         }
                         v
                     })
@@ -948,8 +1097,26 @@ fn run(cli: Cli) -> Result<()> {
                 println!("no tasks");
             } else {
                 let now = now_unix();
-                println!("{:<10} {:<10} {:<10} TITLE", "ID", "PRIORITY", "STATUS");
-                for t in &tasks {
+                // Unconfirmed findings are SUSPICION, not queued work: they
+                // get their own section and count, never mixed into the rows
+                // a driver works from.
+                let (unconfirmed, tasks): (Vec<task::Task>, Vec<task::Task>) = tasks
+                    .into_iter()
+                    .partition(|t| t.status == task::STATUS_UNCONFIRMED);
+                println!(
+                    "{:<10} {:<10} {:<12} {:<22} TITLE",
+                    "ID", "PRIORITY", "STATUS", "EVIDENCE"
+                );
+                for t in tasks.iter().chain(unconfirmed.iter()) {
+                    if t.status == task::STATUS_UNCONFIRMED
+                        && unconfirmed.first().is_some_and(|u| u.id == t.id)
+                    {
+                        println!(
+                            "--- unconfirmed: {} finding(s) — suspicion, NOT in the workable \
+                             queue (promote with `backlog confirm ID --repro-test CMD`) ---",
+                            unconfirmed.len()
+                        );
+                    }
                     let priority_str = match t.priority() {
                         0 => "p0",
                         1 => "p1",
@@ -975,8 +1142,13 @@ fn run(cli: Cli) -> Result<()> {
                         String::new()
                     };
                     println!(
-                        "{:<10} {:<10} {:<10} {}{}",
-                        t.id, priority_str, status_str, t.title, scope_str
+                        "{:<10} {:<10} {:<12} {:<22} {}{}",
+                        t.id,
+                        priority_str,
+                        status_str,
+                        closecmd::evidence_label(t),
+                        t.title,
+                        scope_str
                     );
                 }
             }
@@ -1149,10 +1321,26 @@ fn run(cli: Cli) -> Result<()> {
             }
         }
 
-        Command::Done { id } => {
+        Command::Done {
+            id,
+            test,
+            red_rev,
+            reason,
+            duplicate_of,
+            doc_only,
+        } => {
             let tasks_path = store_path()?;
-            store::mark_done(&tasks_path, &id)?;
-            println!("done: {id}");
+            closecmd::done(
+                &tasks_path,
+                closecmd::DoneArgs {
+                    id: id.clone(),
+                    test,
+                    red_rev,
+                    reason,
+                    duplicate_of,
+                    doc_only,
+                },
+            )?;
             // Mirror the completion to GitHub. `mark_done` above has already
             // committed the local truth, so this cannot fail the command — but
             // it also must not fail SILENTLY, which is precisely how 60 done
@@ -1161,10 +1349,42 @@ fn run(cli: Cli) -> Result<()> {
             mirror_close_for(&tasks_path, &id);
         }
 
-        Command::Sync { apply, limit } => {
+        Command::Confirm { id, repro_test } => {
+            let tasks_path = store_path()?;
+            closecmd::confirm(&tasks_path, &id, &repro_test)?;
+        }
+
+        Command::Ruling { action } => {
+            let tasks_path = store_path()?;
+            match action {
+                RulingAction::Request {
+                    id,
+                    kind,
+                    rationale,
+                    untestable_reason,
+                } => {
+                    closecmd::ruling_request(&tasks_path, &id, &kind, rationale, untestable_reason)?
+                }
+                RulingAction::Approve { id, cancel } => {
+                    closecmd::ruling_approve(&tasks_path, &id, cancel)?;
+                    mirror_close_for(&tasks_path, &id);
+                }
+                RulingAction::Withdraw { id } => closecmd::ruling_withdraw(&tasks_path, &id)?,
+                RulingAction::List => closecmd::ruling_list(&tasks_path)?,
+            }
+        }
+
+        Command::AuditClosures { json } => {
+            let tasks_path = store_path()?;
+            closecmd::audit_closures(&tasks_path, json)?;
+        }
+
+        Command::Sync { apply, limit, only } => {
             let tasks_path = store_path()?;
             let tasks = store::load(&tasks_path)?;
-            let mut plan = store::sync_plan(&tasks);
+            // Scope BEFORE truncating: `--only close --limit 50` must mean
+            // fifty closes, not the first fifty actions of a mixed plan.
+            let mut plan = store::filter_sync_plan(store::sync_plan(&tasks), only);
             if limit > 0 && plan.len() > limit {
                 plan.truncate(limit);
             }
@@ -1172,16 +1392,56 @@ fn run(cli: Cli) -> Result<()> {
                 .iter()
                 .filter(|a| matches!(a, store::SyncAction::Create { .. }))
                 .count();
-            let closes = plan.len() - creates;
+            let closes = plan
+                .iter()
+                .filter(|a| matches!(a, store::SyncAction::Close { .. }))
+                .count();
+            // Counted, not derived as `plan.len() - creates`: once a third
+            // action kind exists, subtraction reports body updates as closes.
+            let bodies = plan
+                .iter()
+                .filter(|a| matches!(a, store::SyncAction::UpdateBody { .. }))
+                .count();
             println!("sync plan: {creates} issue(s) to create, {closes} issue(s) to close");
+            // Printed only when the plan actually holds body updates, which
+            // needs `--only body`. A default run would otherwise gain a
+            // permanent ", 0 issue body(s)" line reporting an arm it never
+            // performs — noise of exactly the kind backlog 7438ea3a records.
+            if bodies > 0 {
+                println!("sync plan: {bodies} issue body(s) to update");
+            }
             if !apply {
                 for action in plan.iter().take(20) {
                     match action {
                         store::SyncAction::Create { id, title, .. } => {
                             println!("  create  {id}  {title}");
                         }
-                        store::SyncAction::Close { id, number, reason } => {
-                            println!("  close   #{number}  {id}  ({})", reason.as_gh_reason());
+                        store::SyncAction::Close {
+                            id,
+                            number,
+                            reason,
+                            comment,
+                        } => {
+                            // Say that content will be posted, and how much. A
+                            // dry run that printed only the close would
+                            // understate what `--apply` writes to a public
+                            // issue.
+                            println!(
+                                "  close   #{number}  {id}  ({}) + comment ({} chars)",
+                                reason.as_gh_reason(),
+                                comment.chars().count(),
+                            );
+                        }
+                        store::SyncAction::UpdateBody {
+                            id, number, body, ..
+                        } => {
+                            // Says REPLACE, because that is what `--apply`
+                            // does to a public issue; "update" would read as
+                            // an append.
+                            println!(
+                                "  body    #{number}  {id}  replace body ({} chars)",
+                                body.chars().count(),
+                            );
                         }
                     }
                 }
@@ -1224,14 +1484,45 @@ fn run(cli: Cli) -> Result<()> {
                             }
                         }
                     }
-                    store::SyncAction::Close { id, number, reason } => {
-                        match github::decide_issue_close(&remote_url, *number, *reason, gh_probe) {
+                    store::SyncAction::Close {
+                        id,
+                        number,
+                        reason,
+                        comment,
+                    } => {
+                        match github::decide_issue_close(
+                            &remote_url,
+                            *number,
+                            *reason,
+                            Some(comment.as_str()),
+                            gh_probe,
+                        ) {
                             github::CloseOutcome::Closed => {
                                 println!("closed #{number} for {id}");
                                 outcomes.push(store::SyncOutcome::Closed { id: id.clone() });
                             }
                             github::CloseOutcome::NotClosed { reason } => {
                                 failures.push(format!("{id}: close #{number} failed: {reason}"));
+                            }
+                        }
+                    }
+                    store::SyncAction::UpdateBody {
+                        id,
+                        number,
+                        body,
+                        rev,
+                    } => {
+                        match github::decide_issue_edit(&remote_url, *number, body, gh_probe) {
+                            github::EditOutcome::Edited => {
+                                println!("updated body of #{number} for {id}");
+                                outcomes.push(store::SyncOutcome::BodySynced {
+                                    id: id.clone(),
+                                    synced_rev: *rev,
+                                });
+                            }
+                            github::EditOutcome::NotEdited { reason } => {
+                                failures
+                                    .push(format!("{id}: body #{number} update failed: {reason}"));
                             }
                         }
                     }
@@ -1308,6 +1599,16 @@ fn run(cli: Cli) -> Result<()> {
                 status.as_deref(),
             )?;
             println!("updated: {id}");
+            // No mirror close here, and none is needed: a terminal transition
+            // mirrors its close whichever verb performed it, and since
+            // close-evidence `edit` is not such a verb — `store::edit` refuses
+            // every `--status` but `pending` / `failed`, with nothing written,
+            // so `edit --status done|cancelled` can no longer finish work
+            // locally while the issue stays open (the gap that once made this
+            // arm call `mirror_close_for`). The verbs that CAN reach a terminal
+            // state — `done`, `cancel`, `ruling approve` — each mirror inline.
+            // Pinned by tests/mirror_gaps_after_0323.rs
+            // (`edit_status_terminal_is_refused_and_leaves_store_and_issue_untouched`).
         }
 
         Command::SessionStart => {
@@ -1598,8 +1899,20 @@ fn mirror_close_for(tasks_path: &Path, id: &str) {
         .collect();
     let remote_url = git_remote_origin_url(&store_repo_root(tasks_path));
     for action in plan {
-        if let store::SyncAction::Close { number, reason, .. } = action {
-            match github::decide_issue_close(&remote_url, number, reason, gh_probe) {
+        if let store::SyncAction::Close {
+            number,
+            reason,
+            comment,
+            ..
+        } = action
+        {
+            match github::decide_issue_close(
+                &remote_url,
+                number,
+                reason,
+                Some(comment.as_str()),
+                gh_probe,
+            ) {
                 github::CloseOutcome::Closed => {
                     match store::record_sync_outcomes(
                         tasks_path,

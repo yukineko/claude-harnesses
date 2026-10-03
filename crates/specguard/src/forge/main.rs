@@ -34,8 +34,11 @@ mod queue;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use config::Config;
+use harness_core::verdict::Determination;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Exit codes — kept disjoint from anything the agent returns, mirroring
 /// specguard so a scheduler/hook sees one stable contract across both tools.
@@ -71,6 +74,22 @@ const EXIT_INTAKE_INCOMPLETE: u8 = 8;
 /// spec whose requirements silently never reached the queue looks exactly like a
 /// spec nobody needed to implement.
 const EXIT_QUEUE_FAILED: u8 = 9;
+/// The normalize agent exited 0 but wrote NOTHING to stdout. This is a
+/// cannot-determine, not a contract violation: we never saw output, so we
+/// cannot say whether the agent declined, crashed quietly, or had its output
+/// lost on the way back. It used to fold into [`EXIT_NO_MARKER`] (backlog
+/// 704dde46) — measured 2026-10-02: `specforge draft --id jev-advisory` ran
+/// 4m34s with no output and reported "marker '<<<SPEC_DRAFT>>>' missing in
+/// agent output", a sentence that asserts output EXISTED and lacked the marker.
+/// Splitting them is CLAUDE.md §3: judged-and-failed must stay distinguishable
+/// from could-not-judge. Both are non-zero, so no caller is loosened by this.
+const EXIT_AGENT_SILENT: u8 = 10;
+/// The agent claimed `rigor: pass` but the body it emitted is not valid
+/// requirement TOML. An OBSERVED contract violation, distinct from "no marker"
+/// (3) and from "no output at all" (10) — it previously reused [`EXIT_NO_MARKER`],
+/// so three different conditions shared one code and a reader of the exit status
+/// could not tell which had happened.
+const EXIT_BAD_DRAFT_BODY: u8 = 11;
 
 #[derive(Parser)]
 #[command(
@@ -288,20 +307,52 @@ fn draft(l: &Loaded, id: &str, title: &str, req: Option<&Path>, canon: &[String]
     );
 
     let out = agent::run(&l.cfg.agent, &l.repo_root, &rendered);
+    // Keep the raw agent output BEFORE interpreting it. Every failure below is
+    // otherwise undiagnosable after the fact: the process is gone and its stdout
+    // lived only in this function (backlog 704dde46).
+    let transcript = save_agent_transcript(l, id, &out);
+
     if out.code != 0 {
         eprintln!(
-            "specforge: normalize agent exited with code {}\n--- agent stderr ---\n{}",
+            "specforge: normalize agent exited with code {}\n--- agent stderr ---\n{}{}",
             out.code,
-            out.stderr.trim_end()
+            out.stderr.trim_end(),
+            transcript_hint(&transcript)
         );
         return Ok(EXIT_AGENT_FAILED);
+    }
+
+    // "Exited 0 and said nothing" is NOT "said something without the marker".
+    // The first is a cannot-determine, the second an observed contract
+    // violation; collapsing them into one message and one exit code is what
+    // CLAUDE.md §3 forbids, and it is what 704dde46 observed in the field.
+    if out.stdout.trim().is_empty() {
+        eprintln!(
+            "specforge: 判定不能 — normalize agent は exit 0 で終了したが stdout が空だった \
+             (stdout {} バイト、うち非空白 0 / stderr {} バイト)。\n  \
+             marker '{}' を探してすらいない: 探す対象が無い。agent が何もせず終えたのか、\
+             出力が失われたのかは、この情報だけでは区別できない。draft も sentinel も書かない。{}",
+            out.stdout.len(),
+            out.stderr.len(),
+            parse::MARKER,
+            transcript_hint(&transcript)
+        );
+        if !out.stderr.trim().is_empty() {
+            eprintln!("--- agent stderr ---\n{}", out.stderr.trim_end());
+        }
+        return Ok(EXIT_AGENT_SILENT);
     }
 
     let parsed = parse::parse(&out.stdout);
     if !parsed.marker_found {
         eprintln!(
-            "specforge: WARN marker '{}' missing in agent output; cannot assess. No draft, no sentinel.",
-            parse::MARKER
+            "specforge: WARN marker '{}' missing in agent output; cannot assess. No draft, no sentinel.\n  \
+             (観測: agent は stdout に {} バイト書いたが marker が無い = 契約違反。\
+             無出力で終わった場合は別物として exit {} で報告される。){}",
+            parse::MARKER,
+            out.stdout.len(),
+            EXIT_AGENT_SILENT,
+            transcript_hint(&transcript)
         );
         return Ok(EXIT_NO_MARKER);
     }
@@ -324,9 +375,11 @@ fn draft(l: &Loaded, id: &str, title: &str, req: Option<&Path>, canon: &[String]
         Ok(d) => d,
         Err(e) => {
             eprintln!(
-                "specforge: WARN rigor:pass but body is not valid requirement TOML: {e}\n  No draft written (agent contract violation)."
+                "specforge: WARN rigor:pass but body is not valid requirement TOML: {e}\n  \
+                 No draft written (agent contract violation).{}",
+                transcript_hint(&transcript)
             );
-            return Ok(EXIT_NO_MARKER);
+            return Ok(EXIT_BAD_DRAFT_BODY);
         }
     };
 
@@ -707,6 +760,62 @@ fn write_spec(l: &Loaded, id: &str, spec: &ir::Spec) -> Result<PathBuf> {
 
 fn sentinel_path(l: &Loaded) -> PathBuf {
     l.repo_root.join(&l.cfg.output.sentinel)
+}
+
+/// Persist the normalize agent's raw stdout/stderr so a failure is diagnosable
+/// after the process is gone (backlog 704dde46: the field failure left nothing
+/// behind, so "empty output" and "output without the marker" could not be told
+/// apart even in hindsight).
+///
+/// Returns the path on success and `Determination::Undetermined` when the
+/// transcript could NOT be written — the caller prints that fact rather than a
+/// path, because claiming a transcript exists when it does not is the same
+/// class of lie this function was added to stop. Saving is best-effort by
+/// design: a transcript we failed to write must never turn a draft failure into
+/// a different (or worse, a successful) verdict.
+fn save_agent_transcript(l: &Loaded, id: &str, out: &agent::AgentOutput) -> Determination<PathBuf> {
+    // `.scratch/` is already the repo's declared, git-ignored home for agent
+    // scratch that should live beside the work and die with the worktree.
+    // The timestamp keeps two concurrent drafts of the same id from writing the
+    // same file (the fixed-temp-path collision class of backlog b71c72a7).
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let dir = l.repo_root.join(".scratch").join("specforge");
+    if fs::create_dir_all(&dir).is_err() {
+        return Determination::undetermined("creating .scratch/specforge");
+    }
+    let path = dir.join(format!("{id}-{stamp}-agent.txt"));
+    let body = format!(
+        "# specforge normalize agent transcript\n\
+         # spec id : {id}\n\
+         # exit    : {}\n\
+         # stdout  : {} bytes\n\
+         # stderr  : {} bytes\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}\n",
+        out.code,
+        out.stdout.len(),
+        out.stderr.len(),
+        out.stdout,
+        out.stderr
+    );
+    match fs::write(&path, body) {
+        Ok(()) => Determination::Known(path),
+        Err(_) => Determination::undetermined("writing the agent transcript"),
+    }
+}
+
+/// The trailing "where to look" clause appended to every draft failure message.
+/// When the transcript could not be written this says so outright instead of
+/// going silent, so the reader is never left believing a file exists.
+fn transcript_hint(t: &Determination<PathBuf>) -> String {
+    match t {
+        Determination::Known(p) => format!("\n  agent の生出力: {}", p.display()),
+        Determination::Undetermined(why) => {
+            format!("\n  agent の生出力は保存できなかった ({why}) — 事後診断の材料は無い。")
+        }
+    }
 }
 
 /// Raise the escalation sentinel (HOTL pull). Same spirit as specguard's: a

@@ -4,8 +4,16 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+/// The status a task must hold for its GitHub issue to be closed as
+/// "not planned" ([`sync_plan`]). Re-exported from [`crate::task`], which owns
+/// the status vocabulary; see [`crate::task::STATUS_CANCELLED`] for why the
+/// `NotPlanned` arm was once reachable only from a hand-edited store
+/// (backlog `0dafa254`).
 pub use crate::task::STATUS_CANCELLED;
-use crate::task::{new_id, Task, STATUS_DONE, STATUS_FAILED, STATUS_PENDING};
+use crate::task::{
+    new_id, Closure, Repro, Task, STATUS_DONE, STATUS_FAILED, STATUS_NEEDS_RULING, STATUS_PENDING,
+    STATUS_UNCONFIRMED,
+};
 
 /// The DERIVED claim status (backlog f09db5ce). It is never written to the
 /// tracked store by this binary: a claim lease lives only in the untracked,
@@ -449,7 +457,7 @@ fn tasks_lock_path(path: &Path) -> PathBuf {
 /// CA-backlog-003: the critical section is USUALLY a single load-modify-save
 /// (sub-millisecond), but `add`/`add_with_weight` can additionally shell out
 /// to `condukt state is-claimed` via [`is_claimed_elsewhere`], which is bounded
-/// at [`IS_CLAIMED_TIMEOUT`] (300ms) but can legitimately take close to that
+/// at [`IS_CLAIMED_TIMEOUT`] (2.5s) but can legitimately take close to that
 /// long under load. The stale-reap window is therefore kept a comfortable
 /// multiple of BOTH that bound AND the blocking-acquire budget below
 /// ([`TASKS_LOCK_BUDGET`]).
@@ -466,12 +474,15 @@ const TASKS_LOCK_STALE_SECS: u64 = 10;
 ///
 /// CA-backlog-003 originally sized this to comfortably exceed a SINGLE
 /// legitimate holder's worst-case critical section ([`IS_CLAIMED_TIMEOUT`],
-/// 300ms). That undercounted heavy contention: under N concurrent callers of
-/// `add`/`add_with_weight` (each potentially paying the full 300ms inside the
-/// lock via `is_claimed_elsewhere`), a waiter can queue behind several such
-/// holders in a row — up to roughly N × 300ms serialized — not just one. At
-/// N=20 (this crate's own `add_and_claim_no_lost_update_under_heavy_contention`
-/// stress test: 10 adders + 10 claimers) that's ~6s worst case.
+/// 300ms at the time). That undercounted heavy contention: under N concurrent
+/// callers of `add`/`add_with_weight` (each potentially paying the full bound
+/// inside the lock via `is_claimed_elsewhere`), a waiter can queue behind
+/// several such holders in a row — N × bound serialized — not just one. With
+/// the bound now 2.5s a queue of more than three holders that ALL hit the
+/// timeout exceeds this 8s budget; that only happens when the helper hangs
+/// (a healthy helper answers in milliseconds, a cold first exec under 1s), and
+/// the waiter then gets a refusal (`next_claim` / add fail closed on lock
+/// failure), not an unprotected write.
 ///
 /// # Why this is a Duration and not `attempts × sleep`
 ///
@@ -936,6 +947,13 @@ pub fn add_with_weight(
             issue_number: None,
             issue_url: None,
             issue_closed_at: None,
+            issue_body_synced_rev: None,
+            rev: 0,
+            ruling_kind: None,
+            rationale: None,
+            untestable_reason: None,
+            repro: None,
+            closure: None,
             touched_files: Vec::new(),
         };
         tasks.push(task);
@@ -955,10 +973,11 @@ pub fn add_with_weight(
 /// `pending` in the store and (a) covers it directly (a legacy stored
 /// `claimed` row is loaded as `pending` too, see [`load`]).
 ///
-/// Fail-soft on (b): if the `condukt` binary is absent from PATH, or the
-/// command errors or exits with anything other than 0 (claimed) / 1 (not
-/// claimed), this is treated as "not claimed" — a missing or misbehaving
-/// `condukt` must never block `backlog add`.
+/// Fail-closed on (b) (backlog 420f1eec): if the `condukt` binary is absent
+/// from PATH, or the command errors, times out, or exits with anything other
+/// than 0 (claimed) / 1 (not claimed), the claim check is UNDETERMINED and the
+/// add is REFUSED (naming the reason; `--force` is the explicit escape).
+/// "Cannot determine" is never rendered as "not claimed".
 /// CA-backlog-007: a bare (non-path-shaped) `--project` label is not resolved
 /// against anything at write time — `canonicalize_project` passes it through
 /// unchanged — so it stays freely writable, and `bare_name_matches_path`
@@ -988,17 +1007,28 @@ fn check_duplicate(tasks: &[Task], title: &str, project: &str) -> Result<()> {
 
     if tasks.iter().any(|t| {
         crate::task::hashkey(&t.title, &t.project) == hk
-            && matches!(t.status.as_str(), STATUS_PENDING | STATUS_FAILED)
+            && matches!(
+                t.status.as_str(),
+                STATUS_PENDING | STATUS_FAILED | STATUS_UNCONFIRMED | STATUS_NEEDS_RULING
+            )
     }) {
         return Err(anyhow!(
-            "duplicate task rejected: an existing pending/failed/claimed task already has this content (hashkey {hk}); use --force to add anyway"
+            "duplicate task rejected: an existing pending/failed/claimed/unconfirmed/needs-ruling task already has this content (hashkey {hk}); use --force to add anyway"
         ));
     }
 
-    if is_claimed_elsewhere(&hk) {
-        return Err(anyhow!(
-            "duplicate task rejected: hashkey {hk} is claimed by a live cross-session run; use --force to add anyway"
-        ));
+    match claim_check(&hk) {
+        ClaimCheck::NotClaimed => {}
+        ClaimCheck::Claimed => {
+            return Err(anyhow!(
+                "duplicate task rejected: hashkey {hk} is claimed by a live cross-session run; use --force to add anyway"
+            ));
+        }
+        ClaimCheck::Undetermined(reason) => {
+            return Err(anyhow!(
+                "add refused: the cross-session claim check could not be made ({reason}), so a duplicate of a live claimed task cannot be ruled out (hashkey {hk}); use --force to add anyway"
+            ));
+        }
     }
 
     Ok(())
@@ -1006,75 +1036,195 @@ fn check_duplicate(tasks: &[Task], title: &str, project: &str) -> Result<()> {
 
 /// CA-backlog-002/003: upper bound on how long [`is_claimed_elsewhere`] will
 /// wait for the `condukt state is-claimed` subprocess before giving up and
-/// treating it as "not claimed". This call runs INSIDE `with_tasks_lock`'s
+/// reporting the claim check as undetermined. This call runs INSIDE `with_tasks_lock`'s
 /// critical section (via `check_duplicate`), so an unbounded wait (the old
 /// `Command::output()`, which blocks until the child exits) lets a hung/slow
 /// `condukt` process hold the tasks-file lock indefinitely — well past
 /// [`TASKS_LOCK_STALE_SECS`] (10s), at which point a second process reaps the
 /// "stale" lock and steals it mid-critical-section, causing a lost update on
-/// tasks.toml. Bounding this well under that stale-reap window (over an order
-/// of magnitude under 10s) means a hang here can never itself be the cause of
-/// a lock-steal: the call always gives up long before the lock could look
-/// stale. Separately, [`TASKS_LOCK_BUDGET`] (the
+/// tasks.toml. Bounding this well under that stale-reap window (a quarter of
+/// it at most, pinned by a compile-time assert) means a hang here can never
+/// itself be the cause of a lock-steal: the call always gives up long before
+/// the lock could look stale.
+///
+/// Why 2.5s and not the original 300ms (backlog 420f1eec round 3): on macOS the
+/// first exec of a freshly written condukt binary measured 382-752ms (OS
+/// scanning), so 300ms refused the first `add` after every rollout or rebuild
+/// even though the helper answered correctly. A timeout is still
+/// Undetermined and refused (fail-closed); this only stops a slow-but-correct
+/// helper from being treated as a hung one. The bound is a TOTAL deadline for
+/// exit-wait plus stdout read, so the worst case is that one shared deadline, plus at most the 50ms read
+/// floor on the final stdout read, plus the kill-and-reap after a timeout — not
+/// a multiple of the deadline. Separately, [`TASKS_LOCK_BUDGET`] (the
 /// blocking-acquire retry budget for a WAITING racer) is kept comfortably
 /// ABOVE this bound, so a racer never gives up waiting — and falls back to
-/// unprotected fail-soft execution — while the current holder is still
+/// unprotected execution — while the current holder is still
 /// legitimately inside this bound.
-const IS_CLAIMED_TIMEOUT: Duration = Duration::from_millis(300);
+const IS_CLAIMED_TIMEOUT: Duration = Duration::from_millis(2500);
+// Compile-time pin of the sizing contract: a hang may hold the tasks-file lock
+// for at most this bound, which must stay at most a quarter of the stale-reap
+// window and well under the blocking-acquire budget.
+const _: () = assert!(IS_CLAIMED_TIMEOUT.as_millis() * 4 <= (TASKS_LOCK_STALE_SECS as u128) * 1000);
+const _: () = assert!(IS_CLAIMED_TIMEOUT.as_millis() < TASKS_LOCK_BUDGET.as_millis());
 /// Poll interval while waiting for the subprocess to exit.
 const IS_CLAIMED_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
-/// Fail-soft check: does a live cross-session claim (from any `condukt` run)
-/// hold this hashkey? Shells out to `condukt state is-claimed --hashkey <h>`
-/// (exit 0 = claimed, exit 1 = not claimed). Any other outcome — `condukt`
-/// missing from PATH, spawn failure, unexpected exit code, OR the subprocess
-/// failing to exit within [`IS_CLAIMED_TIMEOUT`] (CA-backlog-002) — is treated
-/// as "not claimed" so a stale, absent, or hung `condukt` never blocks
-/// `backlog add`, and — critically — never holds the tasks-file lock past a
-/// bound well under the stale-reap window.
-fn is_claimed_elsewhere(hashkey: &str) -> bool {
+/// Outcome of the cross-session claim check. Three-valued on purpose: an
+/// inability to check is NOT "not claimed" (backlog 420f1eec).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ClaimCheck {
+    /// `condukt state is-claimed` exited 0: a live claim holds the hashkey.
+    Claimed,
+    /// It exited 1: no live claim.
+    NotClaimed,
+    /// Spawn failure, any other exit code / signal, or a timeout. Carries why.
+    Undetermined(String),
+}
+
+// Test seam: in unit tests the claim check never spawns the machine's real
+// `condukt` (whose behaviour depends on what is installed). It answers from a
+// per-thread override, defaulting to `NotClaimed`; tests of the real
+// subprocess path call [`is_claimed_elsewhere`] directly with a PATH shim.
+#[cfg(test)]
+thread_local! {
+    static CLAIM_CHECK_OVERRIDE: std::cell::RefCell<Option<ClaimCheck>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(not(test))]
+fn claim_check(hashkey: &str) -> ClaimCheck {
+    is_claimed_elsewhere(hashkey)
+}
+
+#[cfg(test)]
+fn claim_check(_hashkey: &str) -> ClaimCheck {
+    CLAIM_CHECK_OVERRIDE.with(|o| o.borrow().clone().unwrap_or(ClaimCheck::NotClaimed))
+}
+
+/// Does a live cross-session claim (from any `condukt` run) hold this
+/// hashkey? Shells out to `condukt state is-claimed --hashkey <h>`. Exit 1 is
+/// ambiguous on its own (older condukt also exited 1 when the claim registry
+/// was unreadable), so the stdout JSON is part of the contract: exit 0 with
+/// `"claimed": true` = claimed, exit 1 with `"claimed": false` = not claimed.
+/// Every other outcome — exit 0/1 without that matching field, `condukt`
+/// missing from PATH, spawn failure, unexpected exit code or signal, OR the
+/// subprocess failing to exit within [`IS_CLAIMED_TIMEOUT`] (CA-backlog-002) —
+/// is [`ClaimCheck::Undetermined`], which `check_duplicate` refuses. The
+/// timeout is one total deadline of 2.5s shared by the exit wait and the
+/// stdout read (it was 300ms before), so a hang holds the tasks-file lock for
+/// at most that deadline plus the 50ms read floor (`.max(Duration::from_millis(50))`)
+/// on the final read plus the kill-and-reap after a timeout — a quarter of
+/// the stale-reap window, enforced by the const assertions on
+/// [`IS_CLAIMED_TIMEOUT`].
+fn is_claimed_elsewhere(hashkey: &str) -> ClaimCheck {
+    use std::io::Read;
+    let started = std::time::Instant::now();
     let mut child = match std::process::Command::new("condukt")
         .arg("state")
         .arg("is-claimed")
         .arg("--hashkey")
         .arg(hashkey)
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
     {
         Ok(c) => c,
-        Err(_) => return false,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return ClaimCheck::Undetermined("condukt not found".to_string());
+        }
+        Err(e) => return ClaimCheck::Undetermined(format!("condukt spawn failed: {e}")),
     };
-    run_with_bounded_wait(&mut child, IS_CLAIMED_TIMEOUT, IS_CLAIMED_POLL_INTERVAL)
-        .map(|status| status.success())
-        .unwrap_or(false)
+    // Drain stdout on a thread while the bounded wait polls the exit, so a
+    // chatty child can never fill the pipe and wedge the wait. The read is
+    // capped (the payload is a few dozen bytes); past the cap the reader drops
+    // the pipe and the child sees EPIPE, which surfaces as a non-0/1 exit or an
+    // unparseable body — both Undetermined.
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    if let Some(mut out) = child.stdout.take() {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = (&mut out).take(64 * 1024).read_to_end(&mut buf);
+            let _ = tx.send(buf);
+        });
+    } else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return ClaimCheck::Undetermined("condukt stdout unavailable".to_string());
+    }
+    let status =
+        match run_with_bounded_wait(&mut child, IS_CLAIMED_TIMEOUT, IS_CLAIMED_POLL_INTERVAL) {
+            Ok(s) => s,
+            Err(BoundedWaitError::TimedOut) => {
+                return ClaimCheck::Undetermined(format!("timed out after {IS_CLAIMED_TIMEOUT:?}"))
+            }
+            Err(BoundedWaitError::Wait(e)) => {
+                return ClaimCheck::Undetermined(format!("waiting for condukt failed: {e}"))
+            }
+        };
+    // The child has exited; a surviving grandchild could still hold the pipe,
+    // so the read is bounded too rather than joined: it spends whatever is left
+    // of the SAME total deadline (floored so an already-sent body is not
+    // missed by a zero wait), so the whole call never exceeds the bound by more
+    // than that floor. The reader thread is detached, never joined.
+    let remaining = IS_CLAIMED_TIMEOUT
+        .saturating_sub(started.elapsed())
+        .max(Duration::from_millis(50));
+    let body = rx.recv_timeout(remaining).ok();
+    let claimed_field = body
+        .as_deref()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok())
+        .and_then(|v| v.get("claimed").and_then(|c| c.as_bool()));
+    match (status.code(), claimed_field) {
+        (Some(0), Some(true)) => ClaimCheck::Claimed,
+        (Some(1), Some(false)) => ClaimCheck::NotClaimed,
+        (Some(c @ (0 | 1)), _) => ClaimCheck::Undetermined(format!(
+            "condukt exit {c} without a parseable claimed:{} on stdout",
+            if c == 0 { "true" } else { "false" }
+        )),
+        (Some(c), _) => ClaimCheck::Undetermined(format!("condukt exit {c}")),
+        (None, _) => ClaimCheck::Undetermined("condukt terminated by signal".to_string()),
+    }
+}
+
+/// Why [`run_with_bounded_wait`] produced no exit status.
+#[derive(Debug)]
+enum BoundedWaitError {
+    /// The child did not exit within the budget (it was killed and reaped).
+    TimedOut,
+    /// `try_wait` itself failed (the child was killed and reaped best-effort).
+    Wait(std::io::Error),
 }
 
 /// Wait for `child` to exit, polling `try_wait` (non-blocking) instead of the
 /// blocking `wait()`/`output()`, so the caller can give up after `timeout`
-/// elapses. On timeout, best-effort `kill()` the child (so it doesn't linger
-/// as an orphan) and return `None` — the caller treats `None` as "unknown,
-/// fail open". Returns `Some(exit_status)` if the child exits within the
-/// budget.
+/// elapses. On timeout, or if `try_wait` itself errors, best-effort `kill()`
+/// and reap the child (so it doesn't linger) and return the matching
+/// [`BoundedWaitError`] — the caller treats either as undetermined
+/// (`check_duplicate` refuses). Returns `Ok(exit_status)` if the child exits
+/// within the budget.
 fn run_with_bounded_wait(
     child: &mut std::process::Child,
     timeout: Duration,
     poll_interval: Duration,
-) -> Option<std::process::ExitStatus> {
+) -> Result<std::process::ExitStatus, BoundedWaitError> {
     let start = std::time::Instant::now();
     loop {
         match child.try_wait() {
-            Ok(Some(status)) => return Some(status),
+            Ok(Some(status)) => return Ok(status),
             Ok(None) => {
                 if start.elapsed() >= timeout {
                     let _ = child.kill();
                     let _ = child.wait(); // reap so it doesn't become a zombie
-                    return None;
+                    return Err(BoundedWaitError::TimedOut);
                 }
                 std::thread::sleep(poll_interval);
             }
-            Err(_) => return None,
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(BoundedWaitError::Wait(e));
+            }
         }
     }
 }
@@ -1406,15 +1556,19 @@ pub fn requeue_expired(path: &Path, now: i64) -> Result<usize> {
             // retry-later path, and its expiry returning to `pending` is the
             // whole point (`requeue_expired_restores_pending`).
             let terminal = task.status == STATUS_DONE || task.status == STATUS_CANCELLED;
+            // `unconfirmed` / `needs-ruling` are not queue states either: a
+            // stale `defer_until` on one of them must not promote it into the
+            // workable queue without its repro / ruling.
+            let requeueable = matches!(task.status.as_str(), STATUS_PENDING | STATUS_FAILED);
             if let Some(defer_until) = task.defer_until {
-                if defer_until <= now && !terminal {
+                if defer_until <= now && !terminal && requeueable {
                     task.defer_until = None;
                     task.status = STATUS_PENDING.to_string();
                     changed = true;
                 }
             }
             if changed {
-                task.updated_at = now;
+                touch(task, now);
                 count += 1;
             }
         }
@@ -1434,6 +1588,12 @@ pub fn requeue_expired(path: &Path, now: i64) -> Result<usize> {
 /// re-stamping the completion time. This makes at-least-once callers
 /// (retry-on-timeout, `/flow` re-driving a step after a partial failure) safe
 /// to call twice for the same id without side effects.
+///
+/// Test-only since the close-evidence change: the shipped `done` never marks a
+/// task done without a recorded [`Closure`] — it goes through
+/// [`update_task`] from `main.rs`. This fixture keeps the store-level
+/// split/monotonic/lock tests able to produce a terminal row.
+#[cfg(test)]
 pub fn mark_done(path: &Path, id: &str) -> Result<()> {
     with_tasks_lock_required(path, "done", || {
         let mut tasks = load(path)?;
@@ -1447,9 +1607,79 @@ pub fn mark_done(path: &Path, id: &str) -> Result<()> {
         }
         task.status = STATUS_DONE.to_string();
         // updated_at はシステム時刻で更新（呼び出し元が now を持たないため現在時刻を使う）
-        task.updated_at = now_unix();
+        touch(task, now_unix());
         save(path, &tasks)
     })
+}
+
+/// Read-modify-write ONE task under the tasks-file lock (fail-closed: no lock,
+/// no write — see [`with_tasks_lock_required`]). `f` receives the task to
+/// change and a snapshot of the whole store as it was loaded under the lock
+/// (for cross-row checks such as a duplicate target). If `f` returns `Err`,
+/// nothing is written. On success the row is [`touch`]ed (`updated_at` and `rev`) and the store saved.
+///
+/// Unknown id and an unreadable store are `Err` naming the cause.
+pub fn update_task(
+    path: &Path,
+    op: &str,
+    id: &str,
+    f: impl FnOnce(&mut Task, &[Task]) -> Result<()>,
+) -> Result<()> {
+    with_tasks_lock_required(path, op, || {
+        let mut tasks = load(path)?;
+        let snapshot = tasks.clone();
+        let task = tasks
+            .iter_mut()
+            .find(|t| t.id == id)
+            .ok_or_else(|| anyhow!("task not found: {}", id))?;
+        f(task, &snapshot)?;
+        // Through `touch`, not a bare `updated_at` write: every closure,
+        // confirm and ruling transition rewrites the row (status, notes,
+        // closure), and the body re-sync arm reads `rev`, which only `touch`
+        // advances (see `Task::issue_body_synced_rev`).
+        touch(task, now_unix());
+        save(path, &tasks)
+    })
+}
+
+/// Refuse unless `task` is in a status an evidence close may start from:
+/// `pending`, `failed` or `unconfirmed`. A `needs-ruling` row is closed only
+/// by `backlog ruling approve`; a terminal row is final.
+pub fn require_closable(task: &Task) -> Result<()> {
+    match task.status.as_str() {
+        STATUS_PENDING | STATUS_FAILED | STATUS_UNCONFIRMED => Ok(()),
+        STATUS_NEEDS_RULING => Err(anyhow!(
+            "refused: task {} is needs-ruling; only `backlog ruling approve {}` (a human, at a \
+             TTY) closes it — or `backlog ruling withdraw {}` returns it to pending, after which \
+             an evidence-gated `done` applies",
+            task.id,
+            task.id,
+            task.id
+        )),
+        s if is_terminal_status(s) => Err(anyhow!(
+            "refused: task {} is already {s} (terminal status is final)",
+            task.id
+        )),
+        s => Err(anyhow!(
+            "refused: task {} has status {s:?}, which is not a closable status",
+            task.id
+        )),
+    }
+}
+
+/// Close `task` as `status` with `closure`, after [`require_closable`].
+pub fn apply_closure(task: &mut Task, status: &str, closure: Closure) -> Result<()> {
+    require_closable(task)?;
+    if !closure.has_evidence() {
+        return Err(anyhow!(
+            "refused: the closure for {} carries no evidence route",
+            task.id
+        ));
+    }
+    task.status = status.to_string();
+    task.closure = Some(closure);
+    task.defer_until = None;
+    Ok(())
 }
 
 /// One unit of GitHub mirror work, derived from the store's own contents.
@@ -1466,6 +1696,36 @@ pub enum SyncAction {
         id: String,
         number: u64,
         reason: crate::github::CloseReason,
+        /// The content recorded on the issue as it closes, already rendered by
+        /// [`build_close_comment`]. Carried IN the action rather than looked up
+        /// again at the call site: `sync` reconciles a whole store in one pass
+        /// and `mirror_close_for` builds its own one-item plan, so a
+        /// by-id lookup at each call site is two chances to pair a close with
+        /// the wrong task's content. Here the pairing is made once, where the
+        /// task is already in hand, and is a function of the store alone.
+        comment: String,
+    },
+    /// Live work whose issue exists but whose BODY is older than the task.
+    ///
+    /// The third arm, added in 0.3.24. The first two run on every default
+    /// `sync`; this one does NOT — it is reachable only through
+    /// [`SyncOnly::Body`]. See that type for why, and
+    /// [`crate::task::Task::issue_body_synced_rev`] for how staleness is decided.
+    UpdateBody {
+        id: String,
+        number: u64,
+        /// The notes as they stand now, to REPLACE the issue body.
+        body: String,
+        /// The task's [`Task::rev`] at the moment this action was planned, and
+        /// the value stamped onto the task when GitHub confirms the push.
+        ///
+        /// Carried through the plan rather than re-read at record time: a task
+        /// edited between the plan and the confirmation would otherwise be
+        /// stamped as though its NEW content had been pushed, and the mirror
+        /// would then quietly show superseded text forever. Using the planned
+        /// value means such a task simply stays stale and is picked up by the
+        /// next run — the restrictive side (CLAUDE.md §3).
+        rev: u64,
     },
 }
 
@@ -1473,7 +1733,9 @@ impl SyncAction {
     /// The task id this action operates on.
     pub fn task_id(&self) -> &str {
         match self {
-            SyncAction::Create { id, .. } | SyncAction::Close { id, .. } => id,
+            SyncAction::Create { id, .. }
+            | SyncAction::Close { id, .. }
+            | SyncAction::UpdateBody { id, .. } => id,
         }
     }
 }
@@ -1518,16 +1780,263 @@ pub fn sync_plan(tasks: &[Task]) -> Vec<SyncAction> {
                 id: t.id.clone(),
                 number: n,
                 reason: crate::github::CloseReason::Completed,
+                comment: build_close_comment(t, crate::github::CloseReason::Completed),
             }),
             (STATUS_CANCELLED, Some(n), None) => plan.push(SyncAction::Close {
                 id: t.id.clone(),
                 number: n,
                 reason: crate::github::CloseReason::NotPlanned,
+                comment: build_close_comment(t, crate::github::CloseReason::NotPlanned),
             }),
+            (STATUS_PENDING | STATUS_FAILED, Some(n), None) if body_is_stale(t) => {
+                plan.push(SyncAction::UpdateBody {
+                    id: t.id.clone(),
+                    number: n,
+                    body: t.notes.clone(),
+                    rev: t.rev,
+                })
+            }
             _ => {}
         }
     }
     plan
+}
+
+/// Whether `task`'s issue body is older than the task itself.
+///
+/// Pure, and deliberately NOT a content comparison — see
+/// [`crate::task::Task::issue_body_synced_rev`] for why a stamp beats a hash
+/// here. An unstamped task is stale: the body may well match, but we have no
+/// observation saying so, and "not known to be current" must not resolve to
+/// "current" (CLAUDE.md §3). That is also why this never gates on the notes
+/// being non-empty — a task whose notes were emptied needs the push most.
+fn body_is_stale(task: &Task) -> bool {
+    match task.issue_body_synced_rev {
+        None => true,
+        Some(stamp) => task.rev != stamp,
+    }
+}
+
+/// Record that `task` just changed: advance its wall-clock `updated_at` to `now`
+/// AND its logical [`Task::rev`].
+///
+/// The single place either field is written after creation, so they cannot
+/// drift. `rev` exists because `updated_at` has one-second resolution and
+/// therefore cannot witness two changes inside one second — the failure that
+/// made a `updated_at`-based body stamp silently skip edits (see
+/// [`Task::issue_body_synced_rev`]). Saturating: a task cannot wrap its
+/// revision counter back to a value it already published.
+pub(crate) fn touch(task: &mut Task, now: i64) {
+    task.updated_at = now;
+    task.rev = task.rev.saturating_add(1);
+}
+
+/// Upper bound on the rendered body handed to `gh issue close --comment`,
+/// measured in **bytes** (`str::len`), not characters.
+///
+/// GitHub rejects a comment body over 65536 *characters*, which would fail the
+/// whole close — the content and the close ride one invocation, so an oversized
+/// body does not degrade to "closed without the record", it degrades to "not
+/// closed at all". Bounding bytes is deliberately the conservative side of that
+/// limit: for UTF-8, bytes >= characters, so a body under this many bytes is
+/// always under the same number of characters. Measured 2026-10-02: 45000
+/// Japanese characters of notes render to a 59999-byte / 20301-character body,
+/// i.e. the bound binds on bytes long before GitHub's character limit is near.
+/// The headroom below 65536 also covers the header lines and the truncation
+/// marker.
+const CLOSE_COMMENT_MAX: usize = 60_000;
+
+/// Appended when `notes` did not fit. Says so in the body itself: dropping
+/// content silently would make the comment a worse record than no comment,
+/// because nothing downstream could tell a short task from a trimmed one
+/// (CLAUDE.md §4 — never make an error invisible).
+const CLOSE_COMMENT_TRUNCATED: &str = "\n\n*(notes truncated here to stay under GitHub's comment \
+     limit — the full text lives in this repo's `.backlog` store, keyed by the task id above.)*\n";
+
+/// Render what a closing comment should say about `task`. Pure: no IO, no clock
+/// (the timestamp comes from the task's own `updated_at`), no panics.
+///
+/// Never returns a blank string, so `build_issue_close_args` never has to drop
+/// it: even a task with no notes yields the id and the terminal state, which is
+/// the minimum needed for a reader on GitHub to find the local record. The
+/// notes are reproduced verbatim rather than summarized — a summary would be
+/// this function's judgment about someone else's content, and the store's text
+/// is the only authoritative account of what was actually resolved.
+pub fn build_close_comment(task: &Task, reason: crate::github::CloseReason) -> String {
+    let head = format!(
+        "Closed by `backlog`: this task reached its terminal state locally. The local store is \
+         authoritative and this issue is a one-way mirror of it.\n\n- task id: `{id}`\n- local \
+         status: `{status}`\n- GitHub close reason: `{reason}`\n- last updated locally: \
+         {when}\n\n### Notes at close\n\n",
+        id = task.id,
+        status = task.status,
+        reason = reason.as_gh_reason(),
+        when = crate::format_unix_datetime(task.updated_at.max(0) as u64),
+    );
+    let notes = task.notes.trim();
+    if notes.is_empty() {
+        return format!("{head}(this task carried no notes)\n");
+    }
+    let room = CLOSE_COMMENT_MAX.saturating_sub(head.len() + CLOSE_COMMENT_TRUNCATED.len());
+    if notes.len() <= room {
+        return format!("{head}{notes}\n");
+    }
+    // Cut on a char boundary: `notes` is arbitrary UTF-8 (these notes are
+    // routinely Japanese), and slicing mid-codepoint would panic inside a
+    // function whose whole job is to not fail a close.
+    let cut = notes
+        .char_indices()
+        .map(|(i, _)| i)
+        .take_while(|i| *i <= room)
+        .last()
+        .unwrap_or(0);
+    format!("{head}{}{CLOSE_COMMENT_TRUNCATED}", &notes[..cut])
+}
+
+/// Which half of the mirror a `sync` run is allowed to touch.
+///
+/// The two arms of [`sync_plan`] do not have the same blast radius, so an
+/// operator cannot always want both. A close is bookkeeping catch-up on an
+/// issue that already exists; a create PUBLISHES a brand-new public issue per
+/// task. Measured 2026-10-02 at measurement point `448ff46f`, this store
+/// planned 58 creates and 467 closes, and the ruling was to reconcile the
+/// closes and leave the pending tasks unmirrored — which the single `--apply`
+/// switch could not express (the plan follows store order, so `--limit`
+/// truncates across both kinds).
+///
+/// [`Both`](SyncOnly::Both) is the default and is exactly what every
+/// pre-existing `backlog sync` invocation already meant — which is why it does
+/// NOT include [`Body`](SyncOnly::Body), the arm added in 0.3.24. "Both" names
+/// the two arms that have always run, not "everything available".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+pub enum SyncOnly {
+    /// Reconcile the create and close arms (the pre-existing behaviour).
+    #[default]
+    Both,
+    /// Only file issues for pending tasks that have none.
+    Create,
+    /// Only close issues whose task is already done/cancelled.
+    Close,
+    /// Only re-push issue bodies whose task has been edited since the body was
+    /// last pushed.
+    ///
+    /// Opt-in, and excluded from [`Both`](SyncOnly::Both), because the stamp it
+    /// reads is absent on every task that predates it: measured 2026-10-02, 471
+    /// of 535 pending tasks hold an issue, so the first default run would have
+    /// rewritten 471 issue bodies with no operator ever asking for it. Keeping
+    /// it out of the default is the same ruling that produced
+    /// [`Close`](SyncOnly::Close) — a create PUBLISHES, a body edit OVERWRITES,
+    /// and neither belongs in a switch whose existing meaning was narrower.
+    Body,
+}
+
+impl SyncOnly {
+    /// Whether `action` is in scope for this selection.
+    ///
+    /// Every (scope, action) pair is spelled out — no `_` arm on either side —
+    /// so adding a [`SyncAction`] variant or a scope is a compile error here
+    /// rather than silently defaulting to "in scope", which for this type means
+    /// an unreviewed GitHub-visible write.
+    ///
+    /// Before 0.3.24 this match DID carry a `(Both, _)` catch-all while its doc
+    /// claimed a new variant would be a compile error. The claim was false and
+    /// the consequence was exactly the one the doc warned about: `UpdateBody`
+    /// would have fallen into the default scope and every `sync --apply` would
+    /// have started rewriting issue bodies.
+    pub fn allows(self, action: &SyncAction) -> bool {
+        match (self, action) {
+            (SyncOnly::Both, SyncAction::Create { .. })
+            | (SyncOnly::Both, SyncAction::Close { .. })
+            | (SyncOnly::Create, SyncAction::Create { .. })
+            | (SyncOnly::Close, SyncAction::Close { .. })
+            | (SyncOnly::Body, SyncAction::UpdateBody { .. }) => true,
+            (SyncOnly::Both, SyncAction::UpdateBody { .. })
+            | (SyncOnly::Create, SyncAction::Close { .. })
+            | (SyncOnly::Create, SyncAction::UpdateBody { .. })
+            | (SyncOnly::Close, SyncAction::Create { .. })
+            | (SyncOnly::Close, SyncAction::UpdateBody { .. })
+            | (SyncOnly::Body, SyncAction::Create { .. })
+            | (SyncOnly::Body, SyncAction::Close { .. }) => false,
+        }
+    }
+}
+
+/// Narrow a plan to one arm. Pure; preserves the plan order `sync_plan` set.
+///
+/// Applied BEFORE any `--limit` truncation on purpose: `--only close --limit
+/// 50` must mean "fifty closes", not "the first fifty actions, of which some
+/// happen to be closes".
+pub fn filter_sync_plan(plan: Vec<SyncAction>, only: SyncOnly) -> Vec<SyncAction> {
+    plan.into_iter().filter(|a| only.allows(a)).collect()
+}
+
+/// How far this store GitHub mirror has drifted from the store itself.
+///
+/// Reported by the SessionStart hook. Every individual mirror failure is
+/// already surfaced where it happens (`add` prints the degraded push on
+/// stderr, `sync --apply` exits non-zero), but nothing restated the running
+/// total — so a `gh`-absent machine accumulated 467 unclosed issues without a
+/// single visible signal (measured 2026-10-02 at `448ff46f`: 2 confirmed
+/// closes across 800 terminal rows). A hook has no exit code and no stderr the
+/// agent ever sees, which is why this has to reach `additionalContext`
+/// (CLAUDE.md §1: silence is not an acceptable degrade).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MirrorDrift {
+    /// Pending tasks with no issue yet (`sync --only create` would file these).
+    pub creates: usize,
+    /// done/cancelled tasks whose issue was never confirmed closed
+    /// (`sync --only close` would close these).
+    pub closes: usize,
+    /// Whether this store carries ANY linked issue at all.
+    ///
+    /// This is the anti-noise witness, and it is store-only (no git, no
+    /// network, no `gh` invocation). `sync_plan` names every unmirrored pending
+    /// task as a create regardless of whether the repo even has a GitHub
+    /// remote, so an ungated report would fire on every non-GitHub project and
+    /// train the reader to skip the line. One linked issue anywhere in the
+    /// store is deterministic proof that reconciliation means something here.
+    ///
+    /// KNOWN GAP, stated rather than papered over: a GitHub repo whose VERY
+    /// FIRST mirror attempt failed carries no linked issue yet, so it stays
+    /// silent until one succeeds. Closing that gap needs the remote itself (an
+    /// `is_github_remote` check), which this function deliberately does not do
+    /// — it is pure. Tracked in the backlog.
+    pub mirror_in_use: bool,
+}
+
+impl MirrorDrift {
+    /// Whether there is drift worth stating to the operator.
+    pub fn is_reportable(self) -> bool {
+        self.mirror_in_use && (self.creates > 0 || self.closes > 0)
+    }
+}
+
+/// Summarize the mirror drift of `tasks`. Pure: same inputs, same answer.
+///
+/// Derived from [`sync_plan`] rather than re-deriving the shapes, so the report
+/// can never name a different set of work than the command that fixes it.
+///
+/// [`SyncAction::UpdateBody`] is deliberately NOT counted. Both reported
+/// numbers name work the DEFAULT `sync --apply` performs, so adding a third
+/// number would point at an arm that `--only body` alone reaches — and it would
+/// read as 471 outstanding items on this store every session forever, which is
+/// the permanent-noise failure already filed as backlog `7438ea3a`. The counts
+/// are filtered by variant rather than by subtraction for the same reason: a
+/// `plan.len() - creates` would have silently folded body updates into the close
+/// total the moment the third arm existed.
+pub fn mirror_drift(tasks: &[Task]) -> MirrorDrift {
+    let plan = sync_plan(tasks);
+    MirrorDrift {
+        creates: plan
+            .iter()
+            .filter(|a| matches!(a, SyncAction::Create { .. }))
+            .count(),
+        closes: plan
+            .iter()
+            .filter(|a| matches!(a, SyncAction::Close { .. }))
+            .count(),
+        mirror_in_use: tasks.iter().any(|t| t.issue_number.is_some()),
+    }
 }
 
 /// A mirror action that GitHub actually confirmed. Only confirmations reach
@@ -1544,13 +2053,23 @@ pub enum SyncOutcome {
     Closed {
         id: String,
     },
+    /// GitHub accepted a `issue edit --body` for this task.
+    BodySynced {
+        id: String,
+        /// The [`Task::rev`] whose content was actually pushed — copied from
+        /// the [`SyncAction::UpdateBody`] that produced this, never re-read.
+        /// See that field for why.
+        synced_rev: u64,
+    },
 }
 
 impl SyncOutcome {
     /// The task id this outcome belongs to.
     pub fn task_id(&self) -> &str {
         match self {
-            SyncOutcome::Created { id, .. } | SyncOutcome::Closed { id } => id,
+            SyncOutcome::Created { id, .. }
+            | SyncOutcome::Closed { id }
+            | SyncOutcome::BodySynced { id, .. } => id,
         }
     }
 }
@@ -1589,6 +2108,14 @@ pub fn record_sync_outcomes(path: &Path, outcomes: &[SyncOutcome], now: i64) -> 
                 SyncOutcome::Closed { .. } => {
                     task.issue_closed_at = Some(now);
                 }
+                // The PLANNED rev, never the task's current one: the stamp
+                // records which revision was pushed. A task edited between the
+                // gh call and this write therefore stays stale and is re-pushed
+                // next run, instead of being marked current while GitHub holds
+                // the older text.
+                SyncOutcome::BodySynced { synced_rev, .. } => {
+                    task.issue_body_synced_rev = Some(*synced_rev);
+                }
             }
             updated += 1;
         }
@@ -1617,6 +2144,16 @@ pub fn mark_failed(path: &Path, id: &str, reason: Option<&str>) -> Result<()> {
             // Already failed — idempotent no-op, nothing to persist.
             return Ok(());
         }
+        // `failed` is a QUEUE status (`next` retries it). An unconfirmed
+        // finding or a row awaiting a human ruling must not reach the queue
+        // through `fail`.
+        if task.status == STATUS_UNCONFIRMED || task.status == STATUS_NEEDS_RULING {
+            return Err(anyhow!(
+                "refused: task {id} is {} and `fail` would move it into the workable queue; use \
+                 `backlog confirm` (unconfirmed) or `backlog ruling withdraw` (needs-ruling)",
+                task.status
+            ));
+        }
         // backlog 45c3a699: terminal is monotonic — `fail` must not reopen a
         // done/cancelled task (failed is a retryable, non-terminal status).
         if is_terminal_status(&task.status) {
@@ -1637,7 +2174,7 @@ pub fn mark_failed(path: &Path, id: &str, reason: Option<&str>) -> Result<()> {
         }
         let now = now_unix();
         task.defer_until = Some(now + 172_800);
-        task.updated_at = now;
+        touch(task, now);
         save(path, &tasks)
     })
 }
@@ -1646,11 +2183,30 @@ pub fn mark_failed(path: &Path, id: &str, reason: Option<&str>) -> Result<()> {
 /// d8d25af9). `done` would claim completion and `failed` is always requeued
 /// via `defer_until`, so neither can record this decision.
 ///
-/// `reason` is appended to the notes and any `defer_until` is cleared.
+/// Close-evidence: a cancel is a DISCARD and records `[task.closure]` with
+/// `reason = "discard"` and `discard_reason = <reason>` (user ruling
+/// 2026-10-03: 「証明できないのであれば、そもそも問題ではない。価値の低い推測で
+/// ある。推測だけで証拠がないならゴミである。捨てる」). Throwing away an item
+/// nothing demonstrates must stay cheap, so no test, ruling or TTY is needed —
+/// but the reason is: an empty / whitespace-only reason is refused, since a
+/// discard with no stated reason records nothing a reviewer can check. The
+/// discard claims nothing was fixed, so it is never evidence for `done`
+/// (`scripts/check-closure-evidence.py` re-checks this at commit time).
+///
+/// `reason` is also appended to the notes and any `defer_until` is cleared.
 /// Idempotent: an already-cancelled task is left untouched (no second copy of
-/// the reason). A `done` task is refused — rewriting a completion as a
-/// cancellation would erase the record that the work was done.
+/// the reason, no re-stamped closure). Refused, with nothing written: a `done`
+/// task (rewriting a completion as a cancellation would erase the record that
+/// the work was done) and a `needs-ruling` task (a human ruling is pending;
+/// `ruling approve --cancel` or `ruling withdraw` resolves it).
 pub fn mark_cancelled(path: &Path, id: &str, reason: &str) -> Result<()> {
+    let reason = reason.trim();
+    if reason.is_empty() {
+        return Err(anyhow!(
+            "refused: `cancel {id}` needs a non-empty --reason (it is recorded as the discard \
+             reason)"
+        ));
+    }
     with_tasks_lock_required(path, "cancel", || {
         let mut tasks = load(path)?;
         let task = tasks
@@ -1666,7 +2222,26 @@ pub fn mark_cancelled(path: &Path, id: &str, reason: &str) -> Result<()> {
                  as a cancellation"
             ));
         }
+        if task.status == STATUS_NEEDS_RULING {
+            return Err(anyhow!(
+                "refused: task {id} is needs-ruling (a human ruling is pending); a human closes it \
+                 with `backlog ruling approve {id} --cancel`, or `backlog ruling withdraw {id}` \
+                 returns it to pending"
+            ));
+        }
+        // Only the non-terminal workable/suspicion statuses may be discarded;
+        // anything else is refused with its status named.
+        require_closable(task)?;
         task.status = STATUS_CANCELLED.to_string();
+        task.closure = Some(Closure {
+            reason: "discard".to_string(),
+            duplicate_of: None,
+            doc_only_commit: None,
+            green: None,
+            red: None,
+            ruling: None,
+            discard_reason: Some(reason.to_string()),
+        });
         if task.notes.is_empty() {
             task.notes = reason.to_string();
         } else {
@@ -1674,7 +2249,10 @@ pub fn mark_cancelled(path: &Path, id: &str, reason: &str) -> Result<()> {
             task.notes.push_str(reason);
         }
         task.defer_until = None;
-        task.updated_at = now_unix();
+        // Through `touch`, not a bare `updated_at` write: `cancel` rewrites the
+        // notes, so the revision counter must move or the body-resync arm
+        // would treat the mirrored issue body as current.
+        touch(task, now_unix());
         save(path, &tasks)
     })
 }
@@ -1703,6 +2281,22 @@ pub fn edit(
         if let Some(w) = crate::task::stored_status_error(status) {
             return Err(anyhow!("{w}"));
         }
+        // Close-evidence: `edit --status` is not a route to any status that
+        // needs a recorded closure. Terminal statuses need one (`backlog done
+        // ... --test/--doc-only/--duplicate-of`, `backlog cancel --reason`'s
+        // discard, or a human `ruling approve`); `unconfirmed` / `needs-ruling` are entered
+        // and left only through `add`/`confirm` and `ruling`.
+        if let Some(v) = status {
+            if v != STATUS_PENDING && v != STATUS_FAILED {
+                return Err(anyhow!(
+                    "refused: `edit --status {v}` is not allowed. `done` needs evidence: \
+                     `backlog done ID --test CMD --red-rev REV`, `--doc-only COMMIT` or \
+                     `--duplicate-of ID`; `cancelled` is `backlog cancel ID --reason R` (a \
+                     recorded discard); judgment/untestable closes need a human ruling \
+                     (`backlog ruling request` then `ruling approve`)"
+                ));
+            }
+        }
         let mut tasks = load(path)?;
         let task = tasks
             .iter_mut()
@@ -1711,6 +2305,14 @@ pub fn edit(
         // backlog 45c3a699: terminal is monotonic. Refuse BEFORE touching any
         // field so a refused edit leaves the task exactly as it was.
         if let Some(v) = status {
+            if task.status == STATUS_UNCONFIRMED || task.status == STATUS_NEEDS_RULING {
+                return Err(anyhow!(
+                    "refused: task {id} is {} and `edit --status {v}` would move it into the \
+                     workable queue without its repro / ruling; use `backlog confirm` or \
+                     `backlog ruling withdraw`",
+                    task.status
+                ));
+            }
             if is_terminal_status(&task.status) && !is_terminal_status(v) {
                 return Err(anyhow!(
                     "refused: task {id} is {} (terminal) and terminal status is final; \
@@ -1731,7 +2333,7 @@ pub fn edit(
         if let Some(v) = status {
             task.status = v.to_string();
         }
-        task.updated_at = now_unix();
+        touch(task, now_unix());
         save(path, &tasks)
     })
 }
@@ -1775,6 +2377,14 @@ pub fn edit(
 ///
 /// Both errors name what actually happened so the caller can retry; neither is
 /// collapsed into a bool.
+///
+/// Test-only since the close-evidence change: it files the task straight into
+/// the workable queue (`pending`) with no repro evidence, which the shipped
+/// binary never does any more. The production entry point is
+/// [`add_finding`], which takes the [`Intake`] (status + observed repro)
+/// decided by `main.rs`; this wrapper exists so the locking/verify-the-write
+/// tests above keep driving that SAME body.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub fn add_with_weight_and_github_push<R: Fn(&[&str]) -> Option<(bool, String)>>(
     path: &Path,
@@ -1787,6 +2397,70 @@ pub fn add_with_weight_and_github_push<R: Fn(&[&str]) -> Option<(bool, String)>>
     now: i64,
     remote_url: &str,
     run: R,
+) -> Result<String> {
+    add_finding(
+        path,
+        title,
+        project,
+        tags,
+        notes,
+        weight,
+        force,
+        now,
+        remote_url,
+        run,
+        Intake {
+            status: STATUS_PENDING,
+            repro: None,
+        },
+    )
+}
+
+/// Where a new finding lands and what was observed about it.
+///
+/// Only a `reproduced` repro outcome may land in `pending` (the workable
+/// queue); everything else lands in [`STATUS_UNCONFIRMED`]. `main.rs` builds
+/// this from the repro run via [`Intake::from_repro`], which is the only
+/// production constructor.
+pub struct Intake {
+    pub status: &'static str,
+    pub repro: Option<Repro>,
+}
+
+impl Intake {
+    /// `pending` exactly when `repro` observed the problem; `unconfirmed`
+    /// otherwise (no repro test, not reproduced, or undetermined).
+    pub fn from_repro(repro: Option<Repro>) -> Self {
+        let reproduced = repro
+            .as_ref()
+            .is_some_and(|r| r.outcome == crate::task::REPRO_REPRODUCED);
+        Intake {
+            status: if reproduced {
+                STATUS_PENDING
+            } else {
+                STATUS_UNCONFIRMED
+            },
+            repro,
+        }
+    }
+}
+
+/// The production `add` (see [`add_with_weight_and_github_push`]'s docs for
+/// the two bd6d81df belts, which live here). The task is written with
+/// `intake.status` and `intake.repro`.
+#[allow(clippy::too_many_arguments)]
+pub fn add_finding<R: Fn(&[&str]) -> Option<(bool, String)>>(
+    path: &Path,
+    title: &str,
+    project: &str,
+    tags: Vec<String>,
+    notes: &str,
+    weight: f64,
+    force: bool,
+    now: i64,
+    remote_url: &str,
+    run: R,
+    intake: Intake,
 ) -> Result<String> {
     let is_bare =
         !(project.starts_with('/') || project.starts_with('.') || project.starts_with('~'));
@@ -1832,7 +2506,7 @@ pub fn add_with_weight_and_github_push<R: Fn(&[&str]) -> Option<(bool, String)>>
             // point (this one) would be the fail-open hole.
             project_unresolved,
             tags,
-            status: STATUS_PENDING.to_string(),
+            status: intake.status.to_string(),
             notes: notes.to_string(),
             created_at: now,
             updated_at: now,
@@ -1841,6 +2515,13 @@ pub fn add_with_weight_and_github_push<R: Fn(&[&str]) -> Option<(bool, String)>>
             issue_number: None,
             issue_url: None,
             issue_closed_at: None,
+            issue_body_synced_rev: None,
+            rev: 0,
+            ruling_kind: None,
+            rationale: None,
+            untestable_reason: None,
+            repro: intake.repro,
+            closure: None,
             touched_files: Vec::new(),
         };
 
@@ -2810,6 +3491,13 @@ mod tests {
             issue_number: None,
             issue_url: None,
             issue_closed_at: None,
+            issue_body_synced_rev: None,
+            rev: 0,
+            ruling_kind: None,
+            rationale: None,
+            untestable_reason: None,
+            repro: None,
+            closure: None,
             touched_files: Vec::new(),
         };
         let seed = vec![
@@ -2896,6 +3584,13 @@ mod tests {
                     issue_number: None,
                     issue_url: None,
                     issue_closed_at: None,
+                    issue_body_synced_rev: None,
+                    rev: 0,
+                    ruling_kind: None,
+                    rationale: None,
+                    untestable_reason: None,
+                    repro: None,
+                    closure: None,
                     touched_files: Vec::new(),
                 });
             }
@@ -3147,13 +3842,13 @@ mod tests {
 
     // --- duplicate content guard (hashkey dedup on add) ---
     //
-    // NB: `is_claimed_elsewhere` shells out to `condukt state is-claimed`. In
-    // this dev environment the installed `condukt` binary is a stale build
-    // that lacks the `is-claimed` subcommand and exits non-zero/non-one
-    // (clap "unrecognized subcommand" -> exit 2), which the fail-soft path
-    // correctly treats as "not claimed". These tests exercise the (a) local
-    // pending/failed guard, independent of whatever `condukt` happens to be
-    // on PATH.
+    // NB: `is_claimed_elsewhere` shells out to `condukt state is-claimed`, and
+    // an unusable `condukt` is now UNDETERMINED (add refused), not "not
+    // claimed". In unit tests `claim_check` therefore never reaches the real
+    // `condukt` (machine-dependent): it answers `NotClaimed` unless a test sets
+    // `CLAIM_CHECK_OVERRIDE`. These tests exercise the (a) local pending/failed
+    // guard; the real subprocess mapping is covered by the PATH-shim tests
+    // near `is_claimed_elsewhere_*`.
 
     #[test]
     fn add_rejects_duplicate_pending_hashkey() {
@@ -3483,6 +4178,13 @@ mod tests {
                     issue_number: None,
                     issue_url: None,
                     issue_closed_at: None,
+                    issue_body_synced_rev: None,
+                    rev: 0,
+                    ruling_kind: None,
+                    rationale: None,
+                    untestable_reason: None,
+                    repro: None,
+                    closure: None,
                     touched_files: Vec::new(),
                 });
             }
@@ -3799,7 +4501,7 @@ mod tests {
     /// `condukt state is-claimed` subprocess (here, literally shelling out to a
     /// process that sleeps far longer than IS_CLAIMED_TIMEOUT) via
     /// `run_with_bounded_wait` directly, and asserts the bounded wait gives up
-    /// (returns `None`) well under `TASKS_LOCK_STALE_SECS` (10s) — proving the
+    /// (returns `TimedOut`) well under `TASKS_LOCK_STALE_SECS` (10s) — proving the
     /// call cannot itself hold the tasks-file lock's critical section past a
     /// bound shorter than the stale-reap window.
     #[test]
@@ -3825,8 +4527,8 @@ mod tests {
         let elapsed = start.elapsed();
 
         assert!(
-            result.is_none(),
-            "a hung subprocess must be treated as timed-out (None), not waited on forever"
+            matches!(result, Err(BoundedWaitError::TimedOut)),
+            "a hung subprocess must be treated as timed-out, not waited on forever"
         );
         assert!(
             elapsed < Duration::from_secs(1),
@@ -3839,11 +4541,12 @@ mod tests {
         let _ = child.wait();
     }
 
-    /// End-to-end version of the same oracle through the real fail-soft
+    /// End-to-end version of the same oracle through the real subprocess
     /// surface: `is_claimed_elsewhere` shells out to a `condukt` binary that,
     /// in this test, we make resolve (via PATH override) to a slow/hanging
-    /// script instead of the real `condukt`. The call must return `false`
-    /// ("not claimed", fail-open per spec) within well under
+    /// script instead of the real `condukt`. The call must return
+    /// `Undetermined` (a timeout is "cannot determine", never "not claimed")
+    /// within well under
     /// `TASKS_LOCK_STALE_SECS`, never blocking on the hang.
     #[test]
     fn is_claimed_elsewhere_does_not_block_past_lock_stale_window_on_hang() {
@@ -3877,15 +4580,141 @@ mod tests {
         std::env::set_var("PATH", old_path);
 
         assert!(
-            !claimed,
-            "a hung condukt subprocess must fail-open to 'not claimed'"
+            matches!(&claimed, ClaimCheck::Undetermined(r) if r.contains("timed out")),
+            "a hung condukt subprocess must be Undetermined(timed out), got {claimed:?}"
         );
         assert!(
-            elapsed < Duration::from_secs(1),
+            elapsed < IS_CLAIMED_TIMEOUT + Duration::from_secs(1),
             "CA-backlog-002: is_claimed_elsewhere took {elapsed:?} against a hung subprocess, \
-             must give up well under TASKS_LOCK_STALE_SECS ({TASKS_LOCK_STALE_SECS}s) so it \
-             cannot hold with_tasks_lock's critical section past the stale-reap window"
+             must return within IS_CLAIMED_TIMEOUT ({IS_CLAIMED_TIMEOUT:?}) plus 1s of slack, \
+             far below TASKS_LOCK_STALE_SECS ({TASKS_LOCK_STALE_SECS}s), so it cannot hold \
+             with_tasks_lock's critical section past the stale-reap window"
         );
+    }
+
+    /// Write an executable `condukt` shim running `body` into a fresh dir.
+    fn condukt_shim(body: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tmp dir");
+        let f = dir.path().join("condukt");
+        std::fs::write(&f, format!("#!/bin/sh\n{body}\n")).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        dir
+    }
+
+    /// Run `is_claimed_elsewhere` with PATH replaced by `path` (restored after).
+    fn claim_with_path(path: &str) -> ClaimCheck {
+        let _g = PROBE_PATH_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let old = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", path);
+        // The claim-check bound can legitimately trip while the whole suite is
+        // loading the machine; retry ONLY a timeout (the mapping under test is
+        // about exit codes), never any other outcome.
+        let mut r = is_claimed_elsewhere("deadbeefcafef00d");
+        for _ in 0..20 {
+            if !matches!(&r, ClaimCheck::Undetermined(m) if m.starts_with("timed out")) {
+                break;
+            }
+            r = is_claimed_elsewhere("deadbeefcafef00d");
+        }
+        std::env::set_var("PATH", old);
+        r
+    }
+
+    /// backlog 420f1eec: exit 0 -> Claimed, exit 1 -> NotClaimed, everything
+    /// else (other exit code, missing binary) -> Undetermined with a reason.
+    #[test]
+    fn is_claimed_elsewhere_maps_exit_codes_three_valued() {
+        let d0 = condukt_shim("echo '{\"claimed\":true}'; exit 0");
+        assert_eq!(
+            claim_with_path(&format!("{}:/usr/bin:/bin", d0.path().display())),
+            ClaimCheck::Claimed
+        );
+        let d1 = condukt_shim("echo '{\"claimed\":false}'; exit 1");
+        assert_eq!(
+            claim_with_path(&format!("{}:/usr/bin:/bin", d1.path().display())),
+            ClaimCheck::NotClaimed
+        );
+        let d3 = condukt_shim("exit 3");
+        assert_eq!(
+            claim_with_path(&format!("{}:/usr/bin:/bin", d3.path().display())),
+            ClaimCheck::Undetermined("condukt exit 3".to_string())
+        );
+        // Exit 1 / exit 0 whose stdout does not carry the matching `claimed`
+        // field are NOT trusted: old condukt exited 1 on an unreadable
+        // registry, which is "cannot determine", not "not claimed".
+        let on_path = |d: &tempfile::TempDir| format!("{}:/usr/bin:/bin", d.path().display());
+        let bare1 = condukt_shim("exit 1");
+        assert!(matches!(
+            claim_with_path(&on_path(&bare1)),
+            ClaimCheck::Undetermined(r) if r.contains("condukt exit 1 without a parseable claimed:false")
+        ));
+        let lie0 = condukt_shim("echo '{\"claimed\":false}'; exit 0");
+        assert!(matches!(
+            claim_with_path(&on_path(&lie0)),
+            ClaimCheck::Undetermined(r) if r.contains("condukt exit 0 without a parseable claimed:true")
+        ));
+        let lie1 = condukt_shim("echo '{\"claimed\":true}'; exit 1");
+        assert!(matches!(
+            claim_with_path(&on_path(&lie1)),
+            ClaimCheck::Undetermined(_)
+        ));
+        let junk = condukt_shim("echo 'not json'; exit 1");
+        assert!(matches!(
+            claim_with_path(&on_path(&junk)),
+            ClaimCheck::Undetermined(_)
+        ));
+        // A child flooding stdout past the pipe buffer must neither deadlock the
+        // bounded wait nor be believed.
+        let flood = condukt_shim("yes | head -c 300000; exit 0");
+        let t = std::time::Instant::now();
+        assert!(matches!(
+            claim_with_path(&on_path(&flood)),
+            ClaimCheck::Undetermined(_)
+        ));
+        assert!(t.elapsed() < Duration::from_secs(5));
+        // The 64KiB stdout cap is load-bearing: a body that is valid JSON only
+        // when read in full (a >64KiB string value) must NOT be believed. With
+        // the cap removed this would parse and return NotClaimed.
+        let big = condukt_shim(
+            "printf '{\"claimed\":false,\"pad\":\"'; head -c 100000 /dev/zero | tr '\\0' a; printf '\"}'; exit 1",
+        );
+        assert!(
+            matches!(claim_with_path(&on_path(&big)), ClaimCheck::Undetermined(_)),
+            "an oversize stdout must be truncated by the cap and so not parse as claimed:false"
+        );
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(
+            claim_with_path(&empty.path().display().to_string()),
+            ClaimCheck::Undetermined("condukt not found".to_string())
+        );
+    }
+
+    /// backlog 420f1eec: an Undetermined claim check refuses the add (naming
+    /// the reason and `--force`); `--force` still bypasses it; Claimed refuses.
+    #[test]
+    fn add_refuses_on_undetermined_claim_check_and_force_bypasses() {
+        let path = tmp_path();
+        CLAIM_CHECK_OVERRIDE.with(|o| {
+            *o.borrow_mut() = Some(ClaimCheck::Undetermined("condukt exit 3".into()));
+        });
+        let err = add_with_weight(&path, "Probe", "/repo", vec![], "", 0.0, false, 100)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("claim check could not be made"), "{err}");
+        assert!(err.contains("condukt exit 3"), "{err}");
+        assert!(err.contains("--force"), "{err}");
+        assert!(list(&path, None, None, None).unwrap().is_empty());
+        add_with_weight(&path, "Probe", "/repo", vec![], "", 0.0, true, 100)
+            .expect("--force must still bypass the claim check");
+        CLAIM_CHECK_OVERRIDE.with(|o| *o.borrow_mut() = Some(ClaimCheck::Claimed));
+        let err = add_with_weight(&path, "Other", "/repo", vec![], "", 0.0, false, 100)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("live cross-session run"), "{err}");
+        CLAIM_CHECK_OVERRIDE.with(|o| *o.borrow_mut() = None);
     }
 
     // --- CA-backlog-001 / 003: durable, collision-free atomic save ----------
@@ -3937,6 +4766,13 @@ mod tests {
                             issue_number: None,
                             issue_url: None,
                             issue_closed_at: None,
+                            issue_body_synced_rev: None,
+                            rev: 0,
+                            ruling_kind: None,
+                            rationale: None,
+                            untestable_reason: None,
+                            repro: None,
+                            closure: None,
                             touched_files: Vec::new(),
                         });
                     }
@@ -4012,6 +4848,13 @@ mod tests {
                 issue_number: None,
                 issue_url: None,
                 issue_closed_at: None,
+                issue_body_synced_rev: None,
+                rev: 0,
+                ruling_kind: None,
+                rationale: None,
+                untestable_reason: None,
+                repro: None,
+                closure: None,
                 touched_files: Vec::new(),
             }],
             &rec,
@@ -4088,9 +4931,18 @@ mod tests {
             "the task must not be stranded out of the queue by a rejected edit"
         );
 
+        // Close-evidence (2026-10-01): `done`/`cancelled` are no longer valid
+        // EDIT targets — a close must go through `done`/`ruling` and record
+        // evidence — so the positive control moved from "done" to "failed".
+        let err = edit(&path, &id, None, None, None, Some("done"))
+            .expect_err("edit --status done must be refused");
+        assert!(err.to_string().contains("done"), "got: {err}");
+        assert_eq!(load(&path).unwrap()[0].status, "pending");
+
         // A VALID status still edits fine (fix must not over-reject).
-        edit(&path, &id, None, None, None, Some("done")).expect("a valid status must be accepted");
-        assert_eq!(load(&path).unwrap()[0].status, "done");
+        edit(&path, &id, None, None, None, Some("failed"))
+            .expect("a valid status must be accepted");
+        assert_eq!(load(&path).unwrap()[0].status, "failed");
     }
 
     // --- CA-backlog-005, re-anchored for backlog f09db5ce ----------------------
@@ -4123,6 +4975,13 @@ mod tests {
             issue_number: None,
             issue_url: None,
             issue_closed_at: None,
+            issue_body_synced_rev: None,
+            rev: 0,
+            ruling_kind: None,
+            rationale: None,
+            untestable_reason: None,
+            repro: None,
+            closure: None,
             touched_files: Vec::new(),
         };
         // Persisted as an old binary would have left them.
@@ -5023,6 +5882,13 @@ mod tests {
                 issue_number: None,
                 issue_url: None,
                 issue_closed_at: None,
+                issue_body_synced_rev: None,
+                rev: 0,
+                ruling_kind: None,
+                rationale: None,
+                untestable_reason: None,
+                repro: None,
+                closure: None,
                 touched_files: Vec::new(),
             }],
         )
@@ -5145,6 +6011,13 @@ mod tests {
             issue_number,
             issue_url: None,
             issue_closed_at,
+            issue_body_synced_rev: None,
+            rev: 0,
+            ruling_kind: None,
+            rationale: None,
+            untestable_reason: None,
+            repro: None,
+            closure: None,
             touched_files: Vec::new(),
         }
     }
@@ -5172,15 +6045,28 @@ mod tests {
     /// reason is swapped to NotPlanned, or if sync_plan returns empty.
     #[test]
     fn sync_plan_closes_done_as_completed() {
-        let plan = sync_plan(&[sync_task("bbb", STATUS_DONE, Some(42), None)]);
+        let task = sync_task("bbb", STATUS_DONE, Some(42), None);
+        let plan = sync_plan(std::slice::from_ref(&task));
         assert_eq!(
             plan,
             vec![SyncAction::Close {
                 id: "bbb".to_string(),
                 number: 42,
                 reason: crate::github::CloseReason::Completed,
+                comment: build_close_comment(&task, crate::github::CloseReason::Completed),
             }],
             "a done task with an open issue must be planned for a `completed` close"
+        );
+        // The `comment` above is built by the very function that filled it, so
+        // that field of the equality witnesses nothing about its CONTENT. Pin
+        // the content separately: a close that posts a record which does not
+        // identify the task is not a record.
+        let SyncAction::Close { comment, .. } = &plan[0] else {
+            panic!("expected a Close action, got {:?}", plan[0]);
+        };
+        assert!(
+            comment.contains("bbb") && comment.trim().len() > 20,
+            "the close comment must name the task and carry content; got {comment:?}"
         );
     }
 
@@ -5190,15 +6076,27 @@ mod tests {
     /// GitHub as completed.
     #[test]
     fn sync_plan_closes_cancelled_as_not_planned() {
-        let plan = sync_plan(&[sync_task("ccc", STATUS_CANCELLED, Some(7), None)]);
+        let task = sync_task("ccc", STATUS_CANCELLED, Some(7), None);
+        let plan = sync_plan(std::slice::from_ref(&task));
         assert_eq!(
             plan,
             vec![SyncAction::Close {
                 id: "ccc".to_string(),
                 number: 7,
                 reason: crate::github::CloseReason::NotPlanned,
+                comment: build_close_comment(&task, crate::github::CloseReason::NotPlanned),
             }],
             "a cancelled task's issue must be closed as `not planned`, not `completed`"
+        );
+        // Same caveat as the `done` case: the equality cannot witness the
+        // comment's content. An abandoned task's record must say it was
+        // abandoned, not borrow the `completed` wording.
+        let SyncAction::Close { comment, .. } = &plan[0] else {
+            panic!("expected a Close action, got {:?}", plan[0]);
+        };
+        assert!(
+            comment.contains("ccc") && comment.contains("not planned"),
+            "a cancelled task's close comment must name the task and its reason; got {comment:?}"
         );
     }
 
@@ -5230,6 +6128,14 @@ mod tests {
     /// added (the anti-vacuity mutation "failed tasks included in the close
     /// set"), and also if `failed` were routed to Create (its issue already
     /// exists).
+    ///
+    /// The assertion was `plan.is_empty()` until 0.3.24. It is now "no Create
+    /// and no Close" — the same claim, stated as what it always meant. A failed
+    /// task with an OPEN issue is live work whose notes keep changing (`fail`
+    /// itself appends its reason to them), so it legitimately earns an
+    /// `UpdateBody`. The CLOSE claim this test exists to protect is untouched,
+    /// and is now asserted directly rather than via emptiness, which would have
+    /// silently started covering a third arm it was never written to judge.
     #[test]
     fn sync_plan_never_touches_failed_tasks() {
         let plan = sync_plan(&[
@@ -5237,8 +6143,23 @@ mod tests {
             sync_task("fail-closed-stamp", STATUS_FAILED, Some(98), Some(123)),
         ]);
         assert!(
-            plan.is_empty(),
-            "a failed task's issue must stay open (unfinished work); got {plan:?}"
+            !plan
+                .iter()
+                .any(|a| matches!(a, SyncAction::Close { .. } | SyncAction::Create { .. })),
+            "a failed task's issue must stay open and must never be re-created \
+             (unfinished work); got {plan:?}"
+        );
+        // And the body arm must not reach a failed task whose issue is already
+        // closed: nothing is served by rewriting a closed issue's body.
+        let body_ids: Vec<&str> = plan
+            .iter()
+            .filter(|a| matches!(a, SyncAction::UpdateBody { .. }))
+            .map(|a| a.task_id())
+            .collect();
+        assert_eq!(
+            body_ids,
+            vec!["fail-with-issue"],
+            "only the failed task with an OPEN issue may get a body update; got {plan:?}"
         );
     }
 
@@ -5248,6 +6169,11 @@ mod tests {
     /// Dies if `(STATUS_PENDING, None, _)` is loosened to `(STATUS_PENDING, _, _)`
     /// (duplicate issue per task on every run), or if the close arms drop
     /// their `Some(n)` requirement.
+    ///
+    /// As with `sync_plan_never_touches_failed_tasks`, the emptiness assertion
+    /// became an explicit "no Create, no Close" in 0.3.24: an already-mirrored
+    /// pending task is exactly the shape the body arm is FOR, so emptiness
+    /// would now be asserting the opposite of the intended design.
     #[test]
     fn sync_plan_skips_already_mirrored_pending_and_issueless_done() {
         let plan = sync_plan(&[
@@ -5256,8 +6182,21 @@ mod tests {
             sync_task("cancelled-no-issue", STATUS_CANCELLED, None, None),
         ]);
         assert!(
-            plan.is_empty(),
-            "already-mirrored pending / issueless done must yield no action; got {plan:?}"
+            !plan
+                .iter()
+                .any(|a| matches!(a, SyncAction::Close { .. } | SyncAction::Create { .. })),
+            "an already-mirrored pending task must not be created again and an \
+             issueless done/cancelled task has nothing to close; got {plan:?}"
+        );
+        let body_ids: Vec<&str> = plan
+            .iter()
+            .filter(|a| matches!(a, SyncAction::UpdateBody { .. }))
+            .map(|a| a.task_id())
+            .collect();
+        assert_eq!(
+            body_ids,
+            vec!["pending-mirrored"],
+            "a task with NO issue can have no body to update; got {plan:?}"
         );
     }
 
@@ -5280,15 +6219,25 @@ mod tests {
             sync_task("create-2", STATUS_PENDING, None, None),
         ];
         let plan = sync_plan(&tasks);
-        let ids: Vec<&str> = plan.iter().map(|a| a.task_id()).collect();
+        // The create/close selection is judged on its own, with body actions
+        // filtered out, so every mutation this test killed before 0.3.24 it
+        // still kills: an empty Vec, every task, a dropped closed-stamp guard
+        // (`skip-closed` appears), `failed` added to the close set
+        // (`skip-failed` appears as a Close), or a plan regrouped by kind.
+        let cc: Vec<&SyncAction> = plan
+            .iter()
+            .filter(|a| !matches!(a, SyncAction::UpdateBody { .. }))
+            .collect();
+        let cc_ids: Vec<&str> = cc.iter().map(|a| a.task_id()).collect();
         assert_eq!(
-            ids,
+            cc_ids,
             vec!["create-1", "close-cancelled", "close-done", "create-2"],
-            "plan must be exactly the actionable tasks, in store order; got {plan:?}"
+            "the create/close plan must be exactly the actionable tasks, in store \
+             order; got {plan:?}"
         );
         assert!(
             matches!(
-                plan[1],
+                cc[1],
                 SyncAction::Close {
                     number: 3,
                     reason: crate::github::CloseReason::NotPlanned,
@@ -5296,11 +6245,11 @@ mod tests {
                 }
             ),
             "cancelled → not planned, number carried through; got {:?}",
-            plan[1]
+            cc[1]
         );
         assert!(
             matches!(
-                plan[2],
+                cc[2],
                 SyncAction::Close {
                     number: 5,
                     reason: crate::github::CloseReason::Completed,
@@ -5308,7 +6257,25 @@ mod tests {
                 }
             ),
             "done → completed, number carried through; got {:?}",
-            plan[2]
+            cc[2]
+        );
+        // And the WHOLE plan — body actions included — still follows store
+        // order. Added with the third arm: a body action appearing in a
+        // kind-grouped batch at the end would pass the filtered check above
+        // while breaking the ordering guarantee this test is named for.
+        let all_ids: Vec<&str> = plan.iter().map(|a| a.task_id()).collect();
+        assert_eq!(
+            all_ids,
+            vec![
+                "skip-failed",
+                "create-1",
+                "close-cancelled",
+                "skip-mirrored",
+                "close-done",
+                "create-2"
+            ],
+            "the full plan must follow store order; the two tasks holding an open \
+             issue with an unsynced body appear in place, not grouped; got {plan:?}"
         );
     }
 
@@ -5526,13 +6493,16 @@ mod tests {
         // gh failed → the caller pushes NO outcome.
         assert_eq!(record_sync_outcomes(&path, &[], 1_800_000_000).unwrap(), 0);
 
-        let replan = sync_plan(&load(&path).unwrap());
+        let reloaded = load(&path).unwrap();
+        assert_eq!(reloaded.len(), 1, "fixture must hold exactly the one task");
+        let replan = sync_plan(&reloaded);
         assert_eq!(
             replan,
             vec![SyncAction::Close {
                 id: "hhh".to_string(),
                 number: 42,
                 reason: crate::github::CloseReason::Completed,
+                comment: build_close_comment(&reloaded[0], crate::github::CloseReason::Completed),
             }],
             "a close that was never confirmed must be retried"
         );

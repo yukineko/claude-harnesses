@@ -14,6 +14,8 @@
 //!
 //! Written by an independent closure verifier, not an implementer.
 
+mod common;
+
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -46,13 +48,45 @@ impl Fixture {
     fn new(tag: &str) -> Self {
         let home = unique_dir(&format!("{tag}-home"));
         let repo = unique_dir(&format!("{tag}-repo"));
-        std::fs::create_dir_all(repo.join(".git")).unwrap();
         let repo = repo.canonicalize().unwrap();
+        // Close-evidence fixture: `add` lands `pending` (the state `fail` acts
+        // on) only with a REPRODUCED repro test run from a committed script,
+        // so this is a real git repo (was a bare `.git` dir) with one commit.
+        std::fs::create_dir_all(repo.join("tests")).unwrap();
+        std::fs::write(
+            repo.join("tests/repro_yes.sh"),
+            "echo 'bug present'; exit 1\n",
+        )
+        .unwrap();
+        for args in [
+            &["init", "-q"][..],
+            &["add", "tests/repro_yes.sh"],
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t.t",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-q",
+                "-m",
+                "repro",
+            ],
+        ] {
+            assert!(Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .status()
+                .unwrap()
+                .success());
+        }
         Fixture { home, repo }
     }
 
     fn run(&self, args: &[&str]) -> Out {
         let out = Command::new(env!("CARGO_BIN_EXE_backlog"))
+            .env("PATH", common::path_with_condukt_shim())
             .args(args)
             .env("HOME", &self.home)
             .current_dir(&self.repo)
@@ -68,7 +102,15 @@ impl Fixture {
 
     fn add(&self, title: &str) -> String {
         let project = self.repo.to_string_lossy().into_owned();
-        let out = self.run(&["add", "--title", title, "--project", &project]);
+        let out = self.run(&[
+            "add",
+            "--title",
+            title,
+            "--project",
+            &project,
+            "--repro-test",
+            "bash tests/repro_yes.sh",
+        ]);
         assert_eq!(out.code, 0, "add failed: {} {}", out.stdout, out.stderr);
         out.stdout
             .lines()

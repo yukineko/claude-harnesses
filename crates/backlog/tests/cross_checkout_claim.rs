@@ -16,6 +16,8 @@
 //! invocation so the machine-global ledger under `~/.backlog` is the test's
 //! own, never the user's.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
@@ -38,6 +40,7 @@ fn unique_root(tag: &str) -> PathBuf {
 
 fn spawn(args: &[&str], cwd: &Path, home: &Path) -> Child {
     Command::new(env!("CARGO_BIN_EXE_backlog"))
+        .env("PATH", common::path_with_condukt_shim())
         .args(args)
         .env("HOME", home)
         .current_dir(cwd)
@@ -111,6 +114,44 @@ impl Fixture {
     }
 }
 
+/// Close-evidence (2026-10-01): `backlog add` lands `pending` (workable, what
+/// `next` / `next --claim` hand out) only when a committed repro test
+/// REPRODUCES the finding; without one it lands `unconfirmed`. This commits a
+/// repro script (exit 1 = reproduced) into `repo`, which must already be a
+/// real git repo, so the fixture's adds can pass `--repro-test` and exercise
+/// the same queue behaviour as before.
+fn commit_repro_script(repo: &std::path::Path) {
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    std::fs::create_dir_all(repo.join("tests")).unwrap();
+    std::fs::write(
+        repo.join("tests/repro.sh"),
+        "#!/bin/bash\necho 'bug present'\nexit 1\n",
+    )
+    .unwrap();
+    git(&["add", "--", "tests/repro.sh"]);
+    git(&["commit", "-q", "--no-verify", "-m", "repro"]);
+}
+
+/// The `--repro-test` value matching [`commit_repro_script`].
+const REPRO: &str = "bash tests/repro.sh";
+
 /// A main working tree + a real linked worktree of it, each holding its OWN
 /// `.backlog/tasks.toml` with the SAME two task ids — the diverged state that
 /// was actually measured on this machine (17 checkouts, 10 distinct store
@@ -128,6 +169,7 @@ fn fixture(tag: &str) -> Fixture {
         &repo,
         &home,
     );
+    commit_repro_script(&repo);
     let wt = root.join("wt");
     git(
         &["worktree", "add", "-q", "-b", "side", wt.to_str().unwrap()],
@@ -150,6 +192,8 @@ fn fixture(tag: &str) -> Fixture {
                 &project,
                 "--priority",
                 prio,
+                "--repro-test",
+                REPRO,
             ],
             &repo,
             &home,

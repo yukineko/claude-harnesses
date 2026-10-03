@@ -3,9 +3,10 @@
 #
 #     git config core.hooksPath .githooks
 #
-# This hook has three advisory nudges plus three blocking checks (the bypass
-# ledger below, `cargo check` over each pushed tip, and the trybuild compile-fail
-# type contracts via scripts/check-compile-fail.py — see the end of this file):
+# This hook has three advisory nudges plus four blocking checks (the bypass
+# ledger below, `cargo check` over each pushed tip, the trybuild compile-fail
+# type contracts via scripts/check-compile-fail.py, and `specguard map
+# gate-check` over each pushed tip — see the end of this file):
 #   1. GATE crates (advisory) — when the push touches blastguard/propguard/
 #      specguard/stuckguard/mutategate/overwatch (the fleet defense gates),
 #      suggest a Continuous-Audit round (`scripts/continuous-audit.sh --dry-run`).
@@ -106,6 +107,12 @@ saw_ref=0
 # The tips actually being pushed. Collected here because the type check below
 # must judge WHAT IS BEING PUSHED, not whatever happens to be on disk.
 pushed_shas=""
+# "<sha>:<base>" per pushed ref. The gate spec-doc check at the end needs the
+# RANGE, not just the tip, and it must be the same range this loop diffed —
+# otherwise the two halves of the hook would be answering about different
+# content. git's empty-tree object is the determinate base for a root commit.
+pushed_pairs=""
+EMPTY_TREE=4b825dc642cb6eb9a060e54bf8d69288fbee4904
 
 while read -r local_ref local_sha remote_ref remote_sha; do
     [ -z "${local_sha:-}" ] && continue
@@ -123,13 +130,17 @@ while read -r local_ref local_sha remote_ref remote_sha; do
         esac
     fi
     if [ "$has_remote" = "1" ]; then
+        push_base="$remote_sha"
         diff_out="$(git diff --name-only "$remote_sha..$local_sha" -- 2>/dev/null)"
     else
         # No known remote tip (new branch / new ref) — diff against the
         # local sha's parents isn't well-defined generically, so list files
         # touched by the tip commit as a best-effort signal.
+        push_base="$(git rev-parse --verify --quiet "${local_sha}^" 2>/dev/null)"
+        [ -n "$push_base" ] || push_base="$EMPTY_TREE"
         diff_out="$(git show --name-only --pretty=format: "$local_sha" 2>/dev/null)"
     fi
+    pushed_pairs="$pushed_pairs $local_sha:$push_base"
     changed="$changed
 $diff_out"
 done
@@ -411,6 +422,91 @@ for sha in $pushed_shas; do
         echo "exited $compile_fail_rc (1 = a type contract failed, 2 = could not be" >&2
         echo "determined). See the output above." >&2
         exit 1
+    fi
+
+    # --- the fourth blocking check: gate-crate spec-doc coverage -----------
+    # A change to a blocking gate crate (harness_core::fleet::BLOCKING_GATES)
+    # must not leave this machine while the file it touched is described by no
+    # spec doc and acknowledged by nobody. `specguard map gate-check` is the
+    # deterministic form of that question (backlog 0c277117); until this block
+    # landed it was wired to NOTHING — specguard ran only from post-merge and
+    # SessionStart, neither of which can stop anything, which is why the last
+    # spec audit in this repo is dated 2026-07-13 with 700+ commits since.
+    #
+    # WHY THE MAP IS REBUILT HERE: .specguard/spec-map.toml is gitignored — a
+    # machine-local derived cache (.gitignore:80). Judging a pushed tree by THIS
+    # machine's map would let a stale or hand-edited local cache decide a push,
+    # and a fresh clone would have nothing to read at all. So the map is rebuilt
+    # inside $TYPECHECK_TREE (the detached checkout of the pushed sha) with the
+    # pushed range as its baseline, and only the two TRACKED files can actually
+    # satisfy the check: .specguard/spec-docs.toml ([[spec]] path/doc/reason,
+    # doc = an existing docs/specs/*.md) and .specguard/spec-doc-acks.toml
+    # ([[ack]] path/reason). `specguard map set-spec` writes the machine-local
+    # map only and deliberately does NOT satisfy this check.
+    #
+    # The specguard that judges the tree is BUILT FROM THAT TREE, not taken from
+    # the plugin cache: a stale cache binary would answer about different gate
+    # logic than the one being pushed. The build is warm after the first push
+    # because $TYPECHECK_TARGET persists.
+    #
+    # FAIL-CLOSED throughout: rc=1 (a changed entry is uncovered) and rc=2
+    # (undetermined — absent map, unparseable ack/binding file, bad rev, git
+    # failure, or a changed gate file no entry references) both block, and so
+    # does a tree whose specguard cannot be built or has no `map` subcommand.
+    # "Could not be checked" is not "covered".
+    sha_base=""
+    for pair in ${pushed_pairs:-}; do
+        case "$pair" in
+            "$sha":*) sha_base="${pair#*:}"; break ;;
+        esac
+    done
+    if [ -z "$sha_base" ]; then
+        # Manual invocation (no ref lines on stdin): the tip commit is still a
+        # determinate range. Never fall back to "skip".
+        sha_base="$(git rev-parse --verify --quiet "${sha}^" 2>/dev/null)"
+        [ -n "$sha_base" ] || sha_base="$EMPTY_TREE"
+    fi
+
+    # Only pay for the specguard build when the range actually touches a gate
+    # crate. A diff we could NOT compute is not an answer, so that case falls
+    # through to the full check rather than skipping it.
+    sha_changed="$(git diff --name-only "$sha_base..$sha" -- 2>/dev/null)"
+    sha_diff_rc=$?
+    if [ "$sha_diff_rc" -eq 0 ] && ! printf '%s\n' "$sha_changed" | grep -Eq "$GATE_PATTERN"; then
+        : # no gate-crate path in this range — gate-check would exit 0 anyway
+    else
+        echo "pre-push: gate spec-doc check at $(git rev-parse --short "$sha") (specguard map gate-check)..." >&2
+        if ! ( cd "$TYPECHECK_TREE" && CARGO_TARGET_DIR="$TYPECHECK_TARGET" \
+                 cargo build --quiet -p specguard --bin specguard >&2 ); then
+            echo "" >&2
+            echo "pre-push: BLOCKED — specguard could not be built from commit" >&2
+            echo "$(git rev-parse --short "$sha"), so that tree's gate-crate spec-doc" >&2
+            echo "coverage could not be checked. 'could not determine' is not 'covered'." >&2
+            exit 1
+        fi
+        SPECGUARD_BIN="$TYPECHECK_TARGET/debug/specguard"
+        if ! ( cd "$TYPECHECK_TREE" && "$SPECGUARD_BIN" map build --baseline "$sha_base" >/dev/null 2>&1 ); then
+            echo "" >&2
+            echo "pre-push: BLOCKED — the spec map could not be rebuilt inside the pushed" >&2
+            echo "tree at $(git rev-parse --short "$sha") (specguard map build --baseline" >&2
+            echo "$sha_base). Either that tree's specguard has no 'map' subcommand or the" >&2
+            echo "build failed; with no map built from that tree there is nothing" >&2
+            echo "determinate to check." >&2
+            exit 1
+        fi
+        ( cd "$TYPECHECK_TREE" && "$SPECGUARD_BIN" map gate-check --base "$sha_base" --head "$sha" >&2 )
+        gate_check_rc=$?
+        if [ "$gate_check_rc" -ne 0 ]; then
+            echo "" >&2
+            echo "pre-push: BLOCKED — gate spec-doc check at $(git rev-parse --short "$sha")" >&2
+            echo "exited $gate_check_rc (1 = a changed gate-crate entry has no spec doc and" >&2
+            echo "no reasoned ack, 2 = could not be determined). See the output above." >&2
+            echo "Fix: bind the file in .specguard/spec-docs.toml (path/doc/reason, doc = an" >&2
+            echo "existing docs/specs/*.md) or ack it in .specguard/spec-doc-acks.toml" >&2
+            echo "(path/reason). Both are tracked; 'specguard map set-spec' writes only the" >&2
+            echo "machine-local map and does not satisfy this check." >&2
+            exit 1
+        fi
     fi
 done
 

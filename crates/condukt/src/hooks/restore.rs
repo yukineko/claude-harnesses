@@ -15,6 +15,8 @@ pub fn run(cwd: &str) {
         PathBuf::from(cwd)
     };
 
+    reconcile_findings(&cfg, &cwd_path);
+
     let runs = state::open_runs(&cfg, &cwd_path);
     let repo = repo_root(&cwd_path);
     let orphans = crate::wt_reconcile::reportable_unregistered_dirs(&repo, &cfg.worktree_base)
@@ -50,5 +52,44 @@ pub fn run(cwd: &str) {
         "Resume with `/condukt` (it reads the open run) or clean up via \
          `condukt worktree cleanup` and `condukt state show --run <id>`.",
     ));
+    println!("{}", lines.join("\n"));
+}
+
+/// R5 (backlog 89544915): SessionStart also closes condukt-gate findings whose
+/// run state shows the task terminal. This hook is an observability entry and
+/// always exits 0, so a reconcile that could not decide (or that panicked) is
+/// made VISIBLE instead: every `NOT closed` line goes to stderr AND into the
+/// injected context on stdout, so it is never mistaken for "nothing to close".
+fn reconcile_findings(cfg: &Config, cwd: &std::path::Path) {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::finding_reconcile::reconcile(cfg, cwd)
+    }));
+    let report = match outcome {
+        Ok(r) => r,
+        Err(_) => {
+            let line =
+                "[condukt] gate reconcile-findings PANICKED during SessionStart: NOT closed \
+                        — no gate-exec finding was judged; run `condukt gate reconcile-findings`";
+            eprintln!("{line}");
+            println!("{line}");
+            return;
+        }
+    };
+    let not_closed = report.not_closed_lines("[condukt] gate reconcile-findings");
+    for line in &not_closed {
+        eprintln!("{line}");
+    }
+    if report.resolved.is_empty() && not_closed.is_empty() {
+        return;
+    }
+    let mut lines = Vec::new();
+    if !report.resolved.is_empty() {
+        lines.push(format!(
+            "[condukt] auto-resolved {} gate-exec finding(s) by observing run state: {}",
+            report.resolved.len(),
+            report.resolved.join(", ")
+        ));
+    }
+    lines.extend(not_closed);
     println!("{}", lines.join("\n"));
 }

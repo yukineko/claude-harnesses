@@ -166,3 +166,11 @@ reason = "Recursive rm judged by what it destroys (3aa215e1). blastguard.md does
 [[ack]]
 path = "crates/propguard/src/fault_injection_tests.rs"
 reason = "Unit-test submodule (classified impl by the path heuristic) pinning that a faulted git scan resolves to decide_scan_failed's git-scan-failed BLOCK (8696dd7e). propguard.md has no scan-failure section (grep scan_failed / git-scan: 0 hits). Spec debt."
+
+[[ack]]
+path = "crates/overwatch/src/test_freshness.rs"
+reason = "Reverse-looks up a `#[ignore = \"<finding-id>: …\"]` regression test from a finding_id and re-runs it so bridge.rs can mark a backlog task live-or-resolved. docs/specs/overwatch.md describes none of it (grep -ci on docs/specs/overwatch.md, 2026-10-02 @5f709e6c: freshness 0, test_freshness 0, bridge 0, 'ignore]' 0); the convention it implements is written in docs/DESIGN-continuous-audit-triage.md §2.5, which is not a docs/specs doc and so cannot be bound here. Spec debt."
+
+[[ack]]
+path = "crates/parallelguard/src/fault_injection_tests.rs"
+reason = "Unit-test submodule (classified impl by the path heuristic) blinding boundary::read_to_string under decide_with and pinning that the PreToolUse verdict stays Deny (8696dd7e slice 4). parallelguard has no docs/specs doc at all — docs/specs/parallelguard.md does not exist, which specguard.toml's gate-area comment already records — so there is nothing to bind to. Spec debt."

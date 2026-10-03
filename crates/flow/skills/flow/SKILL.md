@@ -296,7 +296,10 @@ backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drive
       → その item は諦めて次候補へ**。lease は ledger にしか無いので `backlog edit <id> --status pending`
       では解放されない（store 上は既に pending）。lease は `CLAIM_STALE_SECS`＝1 時間で自動的に
       除外をやめ、それまでは他の driver にも配られない。
-      `condukt` が無い/失敗した場合は fail-soft（従来どおりピックを続行）。
+      判定は 3 値: **exit 0 → claim 済み、その item はスキップ**／**exit 1 かつ stdout が `"claimed": false`
+      → claim なし、ピック続行**／**それ以外（`condukt` が無い・exit 3＝claim registry を読めない・exit 1 だが
+      `claimed:false` が無い・起動失敗・タイムアウト）→ 判定不能。claim 済みとみなしてその item をスキップし、
+      理由（exit code / stderr）を報告する**。「判定不能」を「claim なし」として続行してはならない。
    b. **コスト/危険ゲート（直列フォールバック）** — 次のどれかに該当する候補は**バッチから外して 1 件ずつ直列**に回す（安全側）:
       - budgetguard が予算逼迫を示す → バッチ幅を絞る（極端なら N=1＝従来の直列に縮退）。
       - notes から明らかに **相互依存**／同一領域・同一ファイルを触る／deploy・push（Gated 相当）を含むと読める。

@@ -102,7 +102,13 @@ else
 fi
 ```
 
-After migrating you can delete `backlog.json` (and the auto-generated
+`backlog add` now REFUSES (non-zero, message on stderr) a duplicate, or when its
+cross-session claim check cannot be made (use `--force` to add anyway); the loop
+above does not stop on a refusal. Before deleting `backlog.json`, verify that
+every open item actually migrated (no refusal messages, and `backlog list`
+shows each one) — a refused item exists only in `backlog.json`.
+
+After migrating and verifying, you can delete `backlog.json` (and the auto-generated
 `<vault>/backlog.md`, which was a session-insights render artifact and is no
 longer produced).
 

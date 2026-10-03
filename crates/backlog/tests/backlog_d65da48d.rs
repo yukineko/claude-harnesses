@@ -15,11 +15,14 @@
 //!
 //! Real binary, real git repo, pinned HOME; nothing outside the temp dir.
 
+mod common;
+
 use std::path::Path;
 use std::process::{Command, Stdio};
 
 fn run(args: &[&str], cwd: &Path, home: &Path) -> (i32, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_backlog"))
+        .env("PATH", common::path_with_condukt_shim())
         .args(args)
         .env("HOME", home)
         .env_remove("BACKLOG_DISABLE")
@@ -35,7 +38,6 @@ fn run(args: &[&str], cwd: &Path, home: &Path) -> (i32, String, String) {
 }
 
 #[test]
-#[ignore = "backlog d65da48d: open defect, remove ignore when fixed"]
 fn a_task_listed_as_deferred_is_deferred_in_the_json_feed_too() {
     let tmp = tempfile::tempdir().unwrap();
     let base = tmp.path().canonicalize().unwrap();
@@ -50,6 +52,38 @@ fn a_task_listed_as_deferred_is_deferred_in_the_json_feed_too() {
         .output()
         .unwrap();
     assert!(g.status.success());
+    // Close-evidence fixture: `add` without a reproduced repro test lands
+    // `unconfirmed` (outside the workable queue, and `fail` refuses it).
+    // Commit a FAILING repro script so `add` lands `pending`, as before.
+    std::fs::create_dir_all(repo.join("tests")).unwrap();
+    std::fs::write(
+        repo.join("tests/repro_yes.sh"),
+        "echo 'bug present'; exit 1\n",
+    )
+    .unwrap();
+    for args in [
+        vec!["add", "tests/repro_yes.sh"],
+        vec![
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t.t",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "-m",
+            "repro",
+        ],
+    ] {
+        let o = Command::new("git")
+            .args(&args)
+            .current_dir(&repo)
+            .env("HOME", &home)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "git {args:?}");
+    }
 
     let repo_s = repo.to_string_lossy().into_owned();
     let (rc, _, err) = run(
@@ -59,6 +93,8 @@ fn a_task_listed_as_deferred_is_deferred_in_the_json_feed_too() {
             "deferral probe d65da48d",
             "--project",
             &repo_s,
+            "--repro-test",
+            "bash tests/repro_yes.sh",
         ],
         &repo,
         &home,

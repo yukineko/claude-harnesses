@@ -2,7 +2,7 @@
 rust-version.workspace = true
 license.workspace = true
 name = "backlog"
-version = "0.3.22"
+version = "0.3.27"
 edition = "2021"
 description = "Cross-project task queue with cycle-type tags for Claude Code."
 
@@ -22,6 +22,8 @@ unicode-normalization = "0.1"
 # (ESRCH) from "exists but not ours to signal" (EPERM). See
 # `store::tasks_lock_holder_from_kill`.
 libc = "0.2"
+# `output_digest` of a recorded GREEN run (close-evidence).
+sha2 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

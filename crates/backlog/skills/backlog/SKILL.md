@@ -20,9 +20,16 @@ allowed-tools: Bash(backlog:*), Bash(git:*), Read
 backlog list --status pending [--project <path>]   # キュー一覧（純粋な read。ピックには使わない）
 backlog next [--project <path>]                    # 次のアイテムを覗く（予約しない）
 backlog next --claim [--project <path>]            # 次のアイテムを予約して取る（driver はこちら）
-backlog done <id>                                  # アイテムを完了マーク
+backlog done <id> --test "<cmd>" --red-rev <rev>   # 完了（committed test が REV で RED・HEAD で GREEN を実測）
+backlog done <id> --doc-only <commit>              # 完了（doc だけを触る祖先 commit が証拠）
+backlog done <id> --duplicate-of <id>              # 完了（重複。相手は pending / claimed / done）
+backlog ruling request <id> --kind judgment|untestable ...  # テスト不能・判断での close は人間の承認待ちへ
+backlog ruling approve <id>                        # 人間が TTY で id を打ち返して承認する（agent は不可）
+backlog add ... --repro-test "<cmd>"               # 再現した時だけ pending、それ以外は unconfirmed
+backlog confirm <id> --repro-test "<cmd>"          # unconfirmed を再現テストで pending へ昇格
+backlog audit-closures [--json]                    # 既存 close の証拠クラスを集計（read-only）
 backlog fail <id> --reason "<概要>"                # アイテムを失敗マーク（2 日後に再キューされる）
-backlog cancel <id> --reason "<理由>"              # やらないと決めて閉じる（終端。done と違い完了を主張しない）
+backlog cancel <id> --reason "<理由>"              # やらないと決めて捨てる（終端。`discard` closure として理由を記録。証明できない推測はこれで捨てる。done と違い完了を主張しない）
 
 # driver の存在通知（非排他。何セッションでも同時に登録できる）
 backlog driver register   --session-id <id> --project <path>
@@ -56,8 +63,8 @@ backlog lock release --project <path>
 |---|---|
 | キューを確認したい | `backlog list --status pending` |
 | 次のアイテムだけ確認したい | `backlog next`（覗くだけ。着手するなら `next --claim`） |
-| 手動で完了 / 失敗マークしたい | `backlog done <id>` / `backlog fail <id>` |
-| やらないと決めて閉じたい | `backlog cancel <id> --reason "<理由>"` |
+| 手動で完了 / 失敗マークしたい | `backlog done <id> --test ... --red-rev ...`（証拠必須。素の `done` は拒否）/ `backlog fail <id>` |
+| やらないと決めて閉じたい | `backlog cancel <id> --reason "<理由>"`（`discard` として記録。テスト・ruling 不要） |
 | **キューを自動で全件消化したい** | **`/flow` を使う** |
 
 ## 失敗モード

@@ -1,6 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Hit 3 (backlog main.rs:1643): gh_probe Undetermined => None.
 //! Force: repo whose origin is github.com, PATH containing only `git` (no `gh`).
+mod common;
+
 use std::os::unix::fs::symlink;
 use std::path::PathBuf;
 use std::process::Command;
@@ -41,6 +43,30 @@ fn setup(tag: &str) -> Env {
     };
     g(&["init", "-q", "."]);
     g(&["remote", "add", "origin", "https://github.com/o/r.git"]);
+    // Close-evidence fixture: only a `pending` row (a REPRODUCED, committed
+    // repro test) is live work that `sync` mirrors; an `unconfirmed` one is
+    // not, which would leave sync with nothing to do. Commit a failing repro
+    // script and expose `bash` (the allowlisted runner) on PATH — still no `gh`.
+    std::fs::create_dir_all(repo.join("tests")).unwrap();
+    std::fs::write(
+        repo.join("tests/repro_yes.sh"),
+        "echo 'bug present'; exit 1\n",
+    )
+    .unwrap();
+    g(&["add", "tests/repro_yes.sh"]);
+    g(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t.t",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-q",
+        "-m",
+        "repro",
+    ]);
+    symlink("/bin/bash", bin.join("bash")).unwrap();
     Env { home, bin, repo }
 }
 
@@ -50,7 +76,14 @@ fn bl(e: &Env, args: &[&str]) -> (i32, String, String) {
         .current_dir(&e.repo)
         .env_clear()
         .env("HOME", &e.home)
-        .env("PATH", &e.bin)
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                e.bin.display(),
+                common::condukt_shim_dir().display()
+            ),
+        )
         .output()
         .unwrap();
     (
@@ -65,7 +98,15 @@ fn gh_absent_on_sync_apply_is_nonzero() {
     let e = setup("sync");
     let (c, o, er) = bl(
         &e,
-        &["add", "--title", "verify gh absent sync", "--project", "."],
+        &[
+            "add",
+            "--title",
+            "verify gh absent sync",
+            "--project",
+            ".",
+            "--repro-test",
+            "bash tests/repro_yes.sh",
+        ],
     );
     eprintln!("ADD code={c} stdout={o:?} stderr={er:?}");
     let (c, o, er) = bl(&e, &["sync", "--apply"]);

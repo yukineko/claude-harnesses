@@ -17,6 +17,8 @@
 
 #![cfg(target_os = "macos")]
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -96,6 +98,7 @@ fn fx(tag: &str) -> Fx {
 
 fn add(f: &Fx, title: &str, armed: bool) -> (i32, String, String) {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_backlog"));
+    cmd.env("PATH", common::path_with_condukt_shim());
     cmd.args([
         "add",
         "--title",

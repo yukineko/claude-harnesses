@@ -10,6 +10,8 @@
 //!
 //! Written by an independent auditor, not an implementer.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -47,6 +49,7 @@ fn git(repo: &Path, home: &Path, args: &[&str]) -> (bool, String) {
 
 fn add(repo: &Path, home: &Path, title: &str) {
     let out = Command::new(env!("CARGO_BIN_EXE_backlog"))
+        .env("PATH", common::path_with_condukt_shim())
         .args(["add", "--title", title, "--project", repo.to_str().unwrap()])
         .env("HOME", home)
         .current_dir(repo)

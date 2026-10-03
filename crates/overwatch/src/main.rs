@@ -35,6 +35,7 @@ mod violation_cli;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use harness_core::verdict::Determination;
 use violation::{RecurrencePolicy, ViolationSource};
 
 #[derive(Parser)]
@@ -353,20 +354,30 @@ enum Command {
         #[arg(long)]
         window: Option<usize>,
     },
-    /// Record a human disposition (confirmed|dismissed|false-positive) of an
-    /// AI/adversarial review finding (join key: `--finding-id`, resolved
+    /// Record a disposition (confirmed|dismissed|false-positive, or the
+    /// automated observation-based `resolved`) of an AI/adversarial review
+    /// finding. First writer wins: a second disposition for the same id is an
+    /// idempotent no-op (join key: `--finding-id`, resolved
     /// against `record-finding`). `review-metrics` reads these back to
     /// compute false-positive rate / agreement rate / median latency.
     RecordDisposition {
         /// The finding_id this disposition resolves (joins to `record-finding`).
         #[arg(long = "finding-id")]
         finding_id: String,
-        /// The human verdict: confirmed | dismissed | false-positive.
+        /// The verdict: confirmed | dismissed | false-positive (human), or
+        /// resolved (automated re-observation; excluded from human rates).
         #[arg(long)]
         verdict: String,
         /// Free-text identifier of who resolved it.
         #[arg(long)]
         reviewer: String,
+        /// What was observed to justify the disposition (free text / JSON).
+        /// Expected for an automated `resolved` closure.
+        #[arg(long)]
+        evidence: Option<String>,
+        /// Which source was re-observed (e.g. `condukt run-state`).
+        #[arg(long = "observed-source")]
+        observed_source: Option<String>,
     },
     /// Read the disposition ledger (joined against the review-findings
     /// store) and print review-effectiveness metrics: false-positive rate,
@@ -804,8 +815,17 @@ fn main() -> Result<()> {
             finding_id,
             verdict,
             reviewer,
+            evidence,
+            observed_source,
         } => {
-            disposition_cli::record(finding_id, &verdict, reviewer, store::now())?;
+            disposition_cli::record(
+                finding_id,
+                &verdict,
+                reviewer,
+                evidence,
+                observed_source,
+                store::now(),
+            )?;
         }
         Command::ReviewMetrics { json } => {
             exit_on_undetermined_sources(disposition_cli::metrics(json)?);
@@ -893,11 +913,45 @@ fn run_compact_findings(json: bool) -> Result<()> {
 }
 
 /// Handler for `overwatch auto-approved`: read condukt's auto-approved
-/// gate-decision journal (fail-soft), window it with `since`, and print the
-/// count plus a deterministic seeded sample — either as human-readable text
-/// or as JSON. See [`review_gate_decisions`] for the pure core this wraps.
+/// gate-decision journal, window it with `since`, and print the count plus a
+/// deterministic seeded sample — either as human-readable text or as JSON.
+/// See [`review_gate_decisions`] for the pure core this wraps.
+///
+/// The read is three-valued and this handler is the reason it has to be
+/// (backlog afdcfd4d). "0 decision(s) passed a gate without human review" is
+/// the most reassuring sentence this command can print, and it used to be
+/// printed for a journal that could not be read or decoded as well as for one
+/// that genuinely held nothing. An `Undetermined` population therefore prints
+/// NO count at all — not zero, not a partial count — and exits non-zero.
 fn run_auto_approved(json: bool, since: Option<i64>, sample: usize, seed: u64) -> Result<()> {
-    let population = review_gate_decisions::read_auto_approved();
+    let population = match review_gate_decisions::read_auto_approved() {
+        Determination::Known(rows) => rows,
+        Determination::Undetermined(why) => {
+            if json {
+                // No `count` key, deliberately: a machine consumer reading
+                // `.count` must get null and notice, not read a 0 that was
+                // never established. `verdict` is the field to branch on.
+                let out = serde_json::json!({
+                    "verdict": "undetermined",
+                    "reason": why.as_str(),
+                    "since": since,
+                    "seed": seed,
+                });
+                println!("{}", serde_json::to_string_pretty(&out)?);
+            } else {
+                println!("auto-approved: UNDETERMINED — {}", why.as_str());
+                println!(
+                    "(the auto-approved population could not be established; \
+                     this is NOT a count of zero)"
+                );
+            }
+            // Same convention as `review-queue` / `review-metrics`:
+            // `SourceHealth::exit_code` is "0 when the answer is complete, 3
+            // when it is not", so a shell wrapper cannot read an incomplete
+            // audit as a clean one.
+            std::process::exit(review_queue::SourceHealth::SomeUndetermined.exit_code());
+        }
+    };
     let filtered = review_gate_decisions::filter_since(&population, since);
     let count = filtered.len();
     let picked = review_gate_decisions::sample_auto_approved(&filtered, sample, seed);

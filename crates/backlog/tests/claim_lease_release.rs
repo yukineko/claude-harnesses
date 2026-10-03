@@ -26,6 +26,8 @@
 //! never touched by A's `fail`/`done` (separate checkout), so B observes the
 //! ledger's exclusion alone.
 
+mod common;
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -59,6 +61,7 @@ fn unique_root(tag: &str) -> PathBuf {
 
 fn run_with_stdin(args: &[&str], cwd: &Path, home: &Path, stdin: &str) -> (i32, String, String) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_backlog"))
+        .env("PATH", common::path_with_condukt_shim())
         .args(args)
         .env("HOME", home)
         .env_remove("BACKLOG_DISABLE")
@@ -118,6 +121,8 @@ struct Fixture {
     a: PathBuf,
     /// Real linked worktree of `a` (checkout B), same committed tasks.
     b: PathBuf,
+    /// A doc-only commit on `main`, the evidence `done` closes with.
+    doc_commit: String,
 }
 
 impl Fixture {
@@ -168,6 +173,27 @@ fn fixture_with(tag: &str, seed: impl FnOnce(&Path, &Path)) -> Fixture {
     git(&["config", "user.email", "t@example.invalid"], &a, &home);
     git(&["commit", "-q", "--allow-empty", "-m", "init"], &a, &home);
 
+    // Close-evidence (2026-10-01): `add` lands `pending` (the queue `next
+    // --claim` hands out) only when a committed repro test REPRODUCES the
+    // finding; without one it lands `unconfirmed`. Commit a repro script
+    // (exit 1 = reproduced) so the fixture's adds can pass `--repro-test`
+    // and exercise the same queue as before.
+    std::fs::create_dir_all(a.join("tests")).unwrap();
+    std::fs::write(
+        a.join("tests/repro.sh"),
+        "#!/bin/bash\necho 'bug present'\nexit 1\n",
+    )
+    .unwrap();
+    git(&["add", "--", "tests/repro.sh"], &a, &home);
+    git(&["commit", "-q", "-m", "repro"], &a, &home);
+    // ... and one doc-only commit, so `done` can close with `--doc-only`
+    // (`done` now requires recorded evidence).
+    std::fs::create_dir_all(a.join("docs")).unwrap();
+    std::fs::write(a.join("docs/closed.md"), "# closed\n").unwrap();
+    git(&["add", "--", "docs/closed.md"], &a, &home);
+    git(&["commit", "-q", "-m", "doc"], &a, &home);
+    let doc_commit = git(&["rev-parse", "HEAD"], &a, &home).trim().to_string();
+
     seed(&a, &home);
 
     git(&["add", ".backlog/tasks.toml"], &a, &home);
@@ -181,7 +207,12 @@ fn fixture_with(tag: &str, seed: impl FnOnce(&Path, &Path)) -> Fixture {
     );
     assert!(b.join(".git").is_file(), "B must be a linked worktree");
 
-    let f = Fixture { home, a, b };
+    let f = Fixture {
+        home,
+        a,
+        b,
+        doc_commit,
+    };
     // Fixture sanity: both checkouts start clean and identical. If this
     // fails, the fixture (e.g. an untracked lockfile left by `add`) is at
     // fault, not the implementation under test.
@@ -209,6 +240,8 @@ fn fixture(tag: &str) -> Fixture {
                     &project,
                     "--priority",
                     prio,
+                    "--repro-test",
+                    "bash tests/repro.sh",
                 ],
                 a,
                 home,
@@ -350,11 +383,20 @@ fn claimant_fail_is_displayed_failed_but_still_excludes() {
     let (code, out, err) = run(&["fail", &id, "--reason", "boom"], &f.a, &f.home);
     assert_eq!(code, 0, "fail must succeed: stdout={out} stderr={err}");
 
+    // Re-anchored per user ruling 2026-10-03 (backlog d65da48d): `fail` sets
+    // `defer_until` in the future, and `list --json` now shows a deferred
+    // task as the DERIVED `deferred` (as the text list does). The property
+    // this assertion names is "not claimed"; `deferred` is the ruled display
+    // of a failed+deferred row.
     let rows_a = list_json(&f, &f.a);
-    assert_eq!(
-        status_of(&rows_a, "First task"),
-        "failed",
+    let status_a = status_of(&rows_a, "First task");
+    assert_ne!(
+        status_a, "claimed",
         "after the claimant's `fail`, A must list the task failed, not claimed: {rows_a:?}"
+    );
+    assert_eq!(
+        status_a, "deferred",
+        "after the claimant's `fail`, A must list the failed+deferred task as deferred: {rows_a:?}"
     );
     assert!(
         ids_with_status(&f, &f.a, "failed").contains(&id),
@@ -391,7 +433,7 @@ fn claimant_done_is_not_redispatched_from_another_checkout() {
     assert_eq!(got["title"], "First task", "fixture: p0 wins: {got}");
     let id = got["id"].as_str().unwrap().to_string();
 
-    let (code, out, err) = run(&["done", &id], &f.a, &f.home);
+    let (code, out, err) = run(&["done", &id, "--doc-only", &f.doc_commit], &f.a, &f.home);
     assert_eq!(code, 0, "done must succeed: stdout={out} stderr={err}");
 
     assert_eq!(
@@ -491,17 +533,39 @@ fn failed_row_claimed_boundary_is_strict() {
         "fixture: updated_at is recent, so a lease stamped at it is live"
     );
 
+    // Re-anchored per user ruling 2026-10-03 (backlog d65da48d): the row is
+    // deferred (`fail` set `defer_until` in the future), and in the JSON
+    // `status` the derived `deferred` now wins over `claimed` (as in the text
+    // list), so the display no longer exposes the claim boundary. The
+    // boundary is pinned through the `--status` filter instead, which is
+    // applied to the claim-derived status before the deferred display.
     set_lease_claimed_at(&f, &id, updated_at);
+    assert!(
+        !ids_with_status(&f, &f.a, "claimed").contains(&id),
+        "claimed_at == updated_at: the row was updated at the claim => failed, not claimed"
+    );
+    assert!(
+        ids_with_status(&f, &f.a, "failed").contains(&id),
+        "claimed_at == updated_at: the row was updated at the claim => failed"
+    );
     assert_eq!(
         status_of(&list_json(&f, &f.a), "First task"),
-        "failed",
-        "claimed_at == updated_at: the row was updated at the claim => failed"
+        "deferred",
+        "display: a failed+deferred row is shown deferred"
     );
 
     set_lease_claimed_at(&f, &id, updated_at + 1);
+    assert!(
+        ids_with_status(&f, &f.a, "claimed").contains(&id),
+        "claimed_at > updated_at: a claim after the failure => claimed"
+    );
+    assert!(
+        !ids_with_status(&f, &f.a, "failed").contains(&id),
+        "claimed_at > updated_at: a claim after the failure => not failed"
+    );
     assert_eq!(
         status_of(&list_json(&f, &f.a), "First task"),
-        "claimed",
-        "claimed_at > updated_at: a claim after the failure => claimed"
+        "deferred",
+        "display: deferred wins over claimed, as in the text list"
     );
 }

@@ -325,11 +325,25 @@ run_ow reconcile-fixed --last-n 200 --json
 # warned and skipped inside the bridge (never aborts the loop).
 echo
 echo "--- forwarding CONFIRMED findings to backlog (UNVERIFIED ones stay pending) ---"
-run_ow review-queue --to-backlog
+# The bridge exits 0 and prints a JSON summary even when individual `backlog add`
+# calls were refused or failed (it only warns on stderr; its "considered" count
+# includes already-bridged findings, so it cannot be diffed against "bridged").
+# The only per-failure signal it emits is those stderr WARNING lines, so capture
+# them (replayed to stderr afterwards) and count them for the final summary.
+BRIDGE_ERR="$(mktemp "${TMPDIR:-/tmp}/continuous-audit-bridge.XXXXXX")"
+run_ow review-queue --to-backlog 2> "$BRIDGE_ERR"
+cat "$BRIDGE_ERR" >&2
+BRIDGE_FAILED="$(grep -cE 'WARNING `backlog add` failed|WARNING could not spawn backlog|WARNING backlog binary not found' "$BRIDGE_ERR" 2>/dev/null || true)"
+BRIDGE_FAILED="${BRIDGE_FAILED:-0}"
+rm -f "$BRIDGE_ERR"
 
 echo
 echo "--- convergence metrics after this round ---"
 run_ow audit-metrics
 
 echo
-echo "PASS: round ${ROUND} recorded (findings -> backlog, metrics -> audit ledger)."
+if [ "$BRIDGE_FAILED" -gt 0 ]; then
+  echo "PARTIAL: round ${ROUND} recorded (metrics -> audit ledger) but ${BRIDGE_FAILED} backlog forward(s) FAILED or were refused (see the WARNING lines above); those findings did NOT reach the backlog. Fix the cause (e.g. backlog add refusing on an undetermined claim check) and re-run review-queue --to-backlog (idempotent)."
+else
+  echo "PASS: round ${ROUND} recorded (findings -> backlog, metrics -> audit ledger)."
+fi

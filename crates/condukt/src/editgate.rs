@@ -11,8 +11,9 @@
 //! is rejected). It never panics and never unwraps on an error path; blocking
 //! an edit on an undetermined verdict is the gate working, not a broken turn.
 //!
-//! The public items here are consumed by the PostToolUse hook subcommand added
-//! in the follow-up task; until then they are exercised only by unit tests.
+//! `check_edit` is consumed by the `condukt editgate` PostToolUse hook
+//! (main.rs `run_editgate`), which prints the verdict's `reason` followed by
+//! its `diagnostics` as the block reason the operator sees.
 #![allow(dead_code)]
 
 use std::path::Path;
@@ -116,6 +117,62 @@ fn line_is_error(line: &str) -> bool {
     })
 }
 
+/// Why a `cargo check` that did not succeed failed. Only [`FailureCause::Compile`]
+/// is evidence about the edited code; the other two mean the compiler never
+/// judged it, so whether the edit compiles is UNDETERMINED (still a block — see
+/// `check_edit` — but never described as a compile error).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FailureCause {
+    /// rustc produced a diagnostic, or cargo reported that a crate could not
+    /// compile.
+    Compile,
+    /// The rustup proxy could not resolve a toolchain, so cargo never ran.
+    Toolchain,
+    /// Some other pre-compile failure (manifest, lockfile, registry, ...), or
+    /// a non-zero exit with nothing recognisable.
+    Other,
+}
+
+/// Classify combined `cargo check` output from a run that did not succeed.
+///
+/// Compile evidence wins: a rustc diagnostic (`error[E...]`, or a
+/// `path:line:col: error` short-format line) or cargo's `could not compile`
+/// summary means the compiler DID run and reject something. Otherwise rustup's
+/// toolchain-resolution messages mark a toolchain failure. Anything else is
+/// `Other` — a bare `error:` line alone (e.g. `failed to parse manifest`) is
+/// not evidence that the code fails to compile.
+fn classify_failure(output: &str) -> FailureCause {
+    let plain = strip_ansi(output);
+    let compile = plain.lines().any(|line| {
+        let t = line.trim_start();
+        if t.starts_with("error[E") || t.contains("could not compile") {
+            return true;
+        }
+        // short-format `path:line:col: error...`: an error token preceded by
+        // `: ` that is not at the start of the line.
+        line.match_indices("error").any(|(i, _)| {
+            let rest = &line[i..];
+            i > 0
+                && (rest.starts_with("error[E") || rest.starts_with("error:"))
+                && line[..i].ends_with(": ")
+        })
+    });
+    if compile {
+        return FailureCause::Compile;
+    }
+    let lower = plain.to_ascii_lowercase();
+    let toolchain = lower.contains("rustup could not choose a version")
+        || lower.contains("no default is configured")
+        || lower.contains("no default toolchain")
+        || (lower.contains("toolchain") && lower.contains("is not installed"))
+        || lower.contains("invalid toolchain name");
+    if toolchain {
+        FailureCause::Toolchain
+    } else {
+        FailureCause::Other
+    }
+}
+
 /// Decide whether the edit to `file_path` left the crate compiling, deferring
 /// to `cargo check` run in `worktree`. Pure aside from the one external process
 /// spawn; never panics.
@@ -127,7 +184,33 @@ fn line_is_error(line: &str) -> bool {
 /// `cargo` was unspawnable and nothing could be determined (`broken:true` with
 /// a `reason` that says so). The edit is only ever rejected downstream (see
 /// `state::enforce_edit_gate`) when `required && !fallback && broken`.
+///
+/// The `cargo` child's toolchain env (`HOME`, `RUSTUP_HOME`, `CARGO_HOME`,
+/// `RUSTUP_TOOLCHAIN`) is pinned from `env_lock::toolchain_env_snapshot`, not
+/// inherited at spawn time: a process-global `HOME` that a sibling test has
+/// swapped to a sandbox made the rustup proxy fail to choose a toolchain, and a
+/// clean crate was then reported broken (backlog f7a0cadc). In the production
+/// hook process nothing mutates those vars, so the snapshot is what the child
+/// would have inherited anyway.
 pub fn check_edit(file_path: &Path, worktree: Option<&Path>, required: bool) -> serde_json::Value {
+    check_edit_in_env(
+        file_path,
+        worktree,
+        required,
+        crate::env_lock::toolchain_env_snapshot(),
+    )
+}
+
+/// [`check_edit`] with the `cargo` child's toolchain env given explicitly:
+/// each `(key, Some(v))` is set on the child and each `(key, None)` is removed
+/// from it. Split out so a test can drive a toolchain-resolution failure
+/// without mutating this process's env.
+fn check_edit_in_env(
+    file_path: &Path,
+    worktree: Option<&Path>,
+    required: bool,
+    toolchain_env: &[(&str, Option<std::ffi::OsString>)],
+) -> serde_json::Value {
     // Only Rust source files are in scope for a compile gate.
     if file_path.extension().and_then(|e| e.to_str()) != Some("rs") {
         return serde_json::json!({
@@ -158,7 +241,21 @@ pub fn check_edit(file_path: &Path, worktree: Option<&Path>, required: bool) -> 
     // `current_dir`) is `cannot determine`, and resolves to the restricted side
     // — mirroring `oracle::check_oracle`'s spawn-failure handling. Both used to
     // mirror the opposite way, degrading to fallback.
-    match Command::new("cargo")
+    let mut cmd = Command::new("cargo");
+    for (k, v) in toolchain_env {
+        match v {
+            Some(v) => cmd.env(k, v),
+            None => cmd.env_remove(k),
+        };
+    }
+    // `cargo` is resolved through PATH, which some tests in this binary mutate
+    // under `PATH_ENV_LOCK`'s write side; a spawn relying on PATH takes the read
+    // side, like every git spawn (`worktree::run_git_bounded_with`). Never
+    // contended in production (nothing takes the write side there).
+    let _path_guard = crate::env_lock::PATH_ENV_LOCK
+        .read()
+        .unwrap_or_else(|e| e.into_inner());
+    match cmd
         .args(["check", "--message-format=short", "--color=never"])
         // Pin the colour setting rather than inheriting it. `CARGO_TERM_COLOR`
         // is ambient (dtolnay/rust-toolchain exports `always` job-wide on CI;
@@ -200,14 +297,34 @@ pub fn check_edit(file_path: &Path, worktree: Option<&Path>, required: bool) -> 
             // whether or not this parser recognised a line, so it decides
             // `broken`; the parsed diagnostics only enrich the reason.
             let broken = parsed_broken || !out.status.success();
-            let reason = if parsed_broken {
-                "cargo check reported compile/type errors"
-            } else if broken {
-                // Non-zero exit we could not attribute to a diagnostic line. Not
-                // clean, and not silently so.
-                "cargo check exited non-zero without a diagnostic this gate could parse"
-            } else {
+            // An `error:` line is not by itself evidence about the edited code:
+            // rustup's "could not choose a version of cargo to run" is one, and
+            // was reported as "compile/type errors" (backlog 4fdf13ad). The
+            // verdict stays `broken:true` either way — nothing established that
+            // the crate compiles — but the reason states what was observed.
+            let reason = if !broken {
                 "cargo check reported no errors"
+            } else {
+                match classify_failure(&combined) {
+                    FailureCause::Compile => "cargo check reported compile/type errors",
+                    FailureCause::Toolchain => {
+                        "cargo could not run: the Rust toolchain could not be resolved \
+                         (rustup could not choose/find a toolchain), so whether the edit \
+                         compiles could not be determined. This is an environment failure, \
+                         not a compile error in the edited code; configure a rustup toolchain \
+                         for this environment"
+                    }
+                    FailureCause::Other if parsed_broken => {
+                        "cargo check failed before reporting any compile diagnostic \
+                         (environment/manifest error), so whether the edit compiles could \
+                         not be determined"
+                    }
+                    // Non-zero exit we could not attribute to a diagnostic line.
+                    // Not clean, and not silently so.
+                    FailureCause::Other => {
+                        "cargo check exited non-zero without a diagnostic this gate could parse"
+                    }
+                }
             };
             // When nothing parsed, hand back the raw tail so the block reason is
             // still actionable instead of an unexplained refusal.
@@ -435,9 +552,13 @@ src/lib.rs:3:5: \x1b[1m\x1b[91merror[E0308]\x1b[0m: mismatched types
         );
     }
 
-    /// The spawn-failure `reason` is the only thing the operator sees. It must
-    /// name `cargo`, say the compile gate could not be determined, and ask for
-    /// cargo to be installed/made available. Stable substrings only.
+    /// The spawn-failure `reason` is what the operator sees: `condukt editgate`
+    /// leads its block line with the verdict's `reason` (main.rs
+    /// `editgate_block_reason`), and a spawn failure has no diagnostics to
+    /// follow it. It must name `cargo`, say the compile gate could not be
+    /// determined, and ask for cargo to be installed/made available. Stable
+    /// substrings only. The binary-level observation is
+    /// tests/editgate_hook_reason_f7a0cadc.rs.
     #[test]
     fn spawn_failure_reason_names_cargo_and_demands_it_be_installed() {
         let bogus_dir =
@@ -609,6 +730,86 @@ edition = \"2021\"\n\n[workspace]\n\n[lib]\npath = \"src/lib.rs\"\n",
         );
     }
 
+    /// backlog f7a0cadc / 4fdf13ad: when `cargo` cannot run because rustup
+    /// cannot choose a toolchain, nothing was compiled. The verdict must stay
+    /// on the restricted side (not clean, Reject end-to-end) AND its reason
+    /// must name the toolchain — it used to say "cargo check reported
+    /// compile/type errors", blaming the edited code for an environment
+    /// failure.
+    ///
+    /// Driven through `check_edit_in_env` with a sandbox HOME and no
+    /// RUSTUP_HOME / CARGO_HOME / RUSTUP_TOOLCHAIN, which is the child env the
+    /// race produced; this process's env is not touched. Requires the `cargo`
+    /// on PATH to be a rustup proxy (this repo's documented toolchain setup);
+    /// the precondition is asserted, not assumed, via the diagnostics.
+    #[test]
+    fn a_toolchain_resolution_failure_is_reported_as_such_not_as_compile_errors() {
+        let d = scratch_crate("pub fn f() -> i32 { 1 }\n");
+        let sandbox_home = tempfile::tempdir().expect("sandbox home");
+        let env = [
+            ("HOME", Some(sandbox_home.path().as_os_str().to_owned())),
+            ("RUSTUP_HOME", None),
+            ("CARGO_HOME", None),
+            ("RUSTUP_TOOLCHAIN", None),
+        ];
+        let out = check_edit_in_env(&d.path().join("src/lib.rs"), Some(d.path()), true, &env);
+        let diag = out["diagnostics"].as_str().unwrap_or_default();
+        assert!(
+            diag.contains("rustup"),
+            "precondition: the sandbox HOME must make the rustup proxy fail: {out}"
+        );
+        assert_eq!(out["fallback"], false, "{out}");
+        assert_eq!(
+            out["broken"], true,
+            "nothing compiled, so this is not clean: {out}"
+        );
+        assert_eq!(
+            crate::state::enforce_edit_gate(&out),
+            crate::state::EditGateDecision::Reject,
+            "{out}"
+        );
+        let reason = out["reason"].as_str().unwrap_or_default();
+        assert!(
+            !reason.contains("compile/type errors"),
+            "a toolchain failure must not be reported as compile/type errors: {out}"
+        );
+        assert!(
+            reason.contains("toolchain"),
+            "the reason must name the toolchain as the cause: {out}"
+        );
+        assert!(
+            reason.contains("could not be determined"),
+            "the reason must say compile status is undetermined: {out}"
+        );
+    }
+
+    /// The classifier on the verbatim rustup message from the ticket, and on
+    /// genuine compile output (which must keep the compile-error reason).
+    #[test]
+    fn failure_cause_classifier_separates_toolchain_from_compile_errors() {
+        let rustup = "error: rustup could not choose a version of cargo to run, because one \
+                      wasn't specified explicitly, and no default is configured.\n";
+        assert_eq!(classify_failure(rustup), FailureCause::Toolchain);
+        assert_eq!(
+            classify_failure("error: toolchain 'nightly-zzz' is not installed\n"),
+            FailureCause::Toolchain
+        );
+        assert_eq!(
+            classify_failure("src/lib.rs:1:21: error[E0308]: mismatched types\n"),
+            FailureCause::Compile
+        );
+        assert_eq!(
+            classify_failure(
+                "error: expected `;`, found `}`\nerror: could not compile `x` (lib)\n"
+            ),
+            FailureCause::Compile
+        );
+        assert_eq!(
+            classify_failure("error: failed to parse manifest at `/x/Cargo.toml`\n"),
+            FailureCause::Other
+        );
+    }
+
     /// Coverage note for done_criteria (3): the end-to-end "broken Rust file
     /// inside a resolved worktree ⇒ fallback:false + broken:true" path is the
     /// composition of `check_edit`'s real-`cargo check` branch and
@@ -651,10 +852,13 @@ mod backlog_f7a0cadc {
     //! Deterministic reproduction of the interleaving: hold the same lock,
     //! swap HOME exactly as `with_home` does, and run the same check the
     //! clean-crate test runs.
+    //!
+    //! Fixed by pinning the child's toolchain env from
+    //! `env_lock::toolchain_env_snapshot`, which `HOME_ENV_LOCK` pins before
+    //! handing out any guard — so it can never observe a swapped HOME.
     use super::*;
 
     #[test]
-    #[ignore = "backlog f7a0cadc: open defect, remove ignore when fixed"]
     fn clean_crate_is_not_broken_while_a_sibling_has_home_swapped() {
         let d = tempfile::tempdir().expect("tempdir");
         std::fs::create_dir_all(d.path().join("src")).unwrap();

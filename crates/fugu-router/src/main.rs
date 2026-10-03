@@ -334,8 +334,10 @@ enum CodeIndexAction {
         #[arg(long)]
         if_stale: bool,
     },
-    /// Lexical top-K search over a previously-built code index (returns a
-    /// JSON array). An absent/empty index yields `[]` (fail-soft, exit 0).
+    /// Lexical top-K search over a previously-built code index. Prints a JSON
+    /// array (exit 0) only when the index was read: `[]` means "index read,
+    /// nothing matched". An absent index exits 3 and an unreadable/corrupt
+    /// index exits 4, each with a stderr diagnostic and nothing on stdout.
     Search {
         /// Query text.
         #[arg(long)]
@@ -940,14 +942,112 @@ fn cmd_code_index_build(root: Option<PathBuf>, if_stale: bool) -> Result<()> {
     Ok(())
 }
 
+/// Exit code of `code-index search` when no index exists at `<root>`.
+const CODE_INDEX_EXIT_ABSENT: i32 = 3;
+/// Exit code of `code-index search` when the index exists but cannot be
+/// trusted (IO error, a line that does not parse as a symbol, or an empty
+/// body the build sidecar does not vouch for).
+const CODE_INDEX_EXIT_UNREADABLE: i32 = 4;
+
+/// Why `code-index search` could not read the index. Mirrors
+/// context-governor's `codesearch::Decline` split (IndexAbsent / Unreadable);
+/// the third state, a genuine no-match, is a successful `[]`.
+#[derive(Debug, PartialEq, Eq)]
+enum CodeIndexLoadError {
+    /// No index file at the expected path: the index was never built.
+    Absent(PathBuf),
+    /// The index file exists but its contents cannot be trusted.
+    Unreadable(String),
+}
+
+/// Strict tri-state load of the code index at `root`.
+///
+/// Unlike `harness_core::code_index::load_index` (which skips unparseable
+/// lines and maps every IO error to an empty vec), this distinguishes:
+/// * file not found → [`CodeIndexLoadError::Absent`];
+/// * any other IO error, or any non-blank line that is not a valid symbol
+///   record → [`CodeIndexLoadError::Unreadable`] (a partially corrupt index
+///   would otherwise silently under-report matches);
+/// * an index with zero symbols → `Ok(vec![])` only when the build sidecar
+///   meta records `symbols: 0` (a repo with no `.rs` symbols); otherwise the
+///   empty body is unvouched-for and reported as `Unreadable`.
+fn load_code_index_strict(
+    root: &Path,
+) -> std::result::Result<Vec<harness_core::code_index::Symbol>, CodeIndexLoadError> {
+    use harness_core::code_index::{read_meta, Symbol};
+
+    let path = code_index_path(root);
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(CodeIndexLoadError::Absent(path));
+        }
+        Err(e) => {
+            return Err(CodeIndexLoadError::Unreadable(format!(
+                "cannot read {}: {e}",
+                path.display()
+            )));
+        }
+    };
+    let mut symbols = Vec::new();
+    for (i, line) in contents.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<Symbol>(line) {
+            Ok(s) => symbols.push(s),
+            Err(e) => {
+                return Err(CodeIndexLoadError::Unreadable(format!(
+                    "{} line {}: not a symbol record: {e}",
+                    path.display(),
+                    i + 1
+                )));
+            }
+        }
+    }
+    if symbols.is_empty() {
+        let vouched = read_meta(&code_index_meta_path(root)).is_some_and(|m| m.symbols == 0);
+        if !vouched {
+            return Err(CodeIndexLoadError::Unreadable(format!(
+                "{} holds zero symbols and its build meta does not record an empty build",
+                path.display()
+            )));
+        }
+    }
+    Ok(symbols)
+}
+
 /// `code-index search --query <q> [--root] [--k]`: load the index for `root`
-/// and run the deterministic lexical search. Fail-soft: a missing/empty index
-/// yields `[]` and exit 0, never an error.
+/// and run the deterministic lexical search.
+///
+/// Contract (three outcomes, not two):
+/// * index read → JSON array of hits on stdout, exit 0. `[]` means the index
+///   was read and nothing matched — never "there is no index".
+/// * index absent → nothing on stdout, diagnostic on stderr, exit 3.
+/// * index unreadable/corrupt → nothing on stdout, diagnostic on stderr,
+///   exit 4.
+///
+/// Callers that do `$(... 2>/dev/null || true)` therefore get an empty
+/// string (no context) for absent/unreadable, not a false "nothing found".
 fn cmd_code_index_search(query: String, root: Option<PathBuf>, k: usize) -> Result<()> {
-    use harness_core::code_index::{load_index, search};
+    use harness_core::code_index::search;
 
     let root = root.unwrap_or_else(|| PathBuf::from("."));
-    let symbols = load_index(&code_index_path(&root));
+    let symbols = match load_code_index_strict(&root) {
+        Ok(s) => s,
+        Err(CodeIndexLoadError::Absent(path)) => {
+            eprintln!(
+                "fugu-router: code-index search: no index at {} (run `fugu-router code-index build`)",
+                path.display()
+            );
+            std::process::exit(CODE_INDEX_EXIT_ABSENT);
+        }
+        Err(CodeIndexLoadError::Unreadable(why)) => {
+            eprintln!("fugu-router: code-index search: index unreadable: {why}");
+            std::process::exit(CODE_INDEX_EXIT_UNREADABLE);
+        }
+    };
     let hits = search(&symbols, &query, k);
     let arr: Vec<serde_json::Value> = hits
         .iter()

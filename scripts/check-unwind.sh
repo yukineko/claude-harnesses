@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
-# Lock the never-break-a-turn unwind invariant at build time.
+# Lock the panic = "unwind" invariant at build time.
 #
-# The exit-0-on-error guarantee relies on std::panic::catch_unwind in
-# harness-core (hook::run_hook / gate::run_guarded). Under panic="abort"
-# catch_unwind is a silent NO-OP, so a panicking hook would abort the process
-# and break the turn. Two independent guards must both hold; this script asserts
+# Both panic barriers in harness-core rely on std::panic::catch_unwind, and they
+# resolve a panic in opposite directions (backlog f6919056 corrected this prose):
+#   * hook::run_hook — observability hooks only (no verdict): a panic is
+#     swallowed and the hook exits 0.
+#   * gate::run_guarded — Stop gates (they return a verdict): a panic FAILS
+#     CLOSED, emitting {"decision":"block"} and surfacing the crash; only a
+#     second consecutive crash (stop_hook_active) falls to a bounded allow.
+#     See crates/harness-core/src/gate/run.rs.
+# Under panic="abort" catch_unwind is a silent NO-OP: the process aborts before
+# either barrier runs, so a crashed gate emits no decision at all and neither
+# contract holds. Two independent guards must both hold; this script asserts
 # both so neither can silently regress:
 #   1. the workspace [profile.release] pins panic = "unwind" (and nothing pins
 #      "abort"), so the distributed --release binaries are unwinding.

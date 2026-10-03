@@ -104,7 +104,6 @@ class BashGuard(unittest.TestCase):
         self.assertEqual(rc, 0, err)
 
     # --- open defects --------------------------------------------------
-    @open_defect("b5358f58")
     def test_b5358f58_cp_reading_from_main_into_worktree_is_allowed(self):
         rc, err = self.w.bash_guard(f"cp {self.w.main}/f.txt {self.w.wt}/f.copy")
         self.assertEqual(rc, 0, "read-only source operand judged as a write target: " + err[:200])
@@ -255,14 +254,12 @@ class PluginCacheResidue(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    @open_defect("9b64f427")
     def test_9b64f427_1_dangling_cache_root_is_a_problem(self):
         root = self.tmp / "cache"
         os.symlink(self.tmp / "nowhere", root)
         stale, problems = self.pc.scan(str(root), {"alpha": "1.0.0"})
         self.assertTrue(problems, "dangling cache root resolved to clean")
 
-    @open_defect("9b64f427")
     def test_9b64f427_2_unrecognised_in_use_marker_holds_the_dir(self):
         d = self.tmp / "c" / "alpha" / "0.9.0" / ".in_use"
         d.mkdir(parents=True)
@@ -271,7 +268,6 @@ class PluginCacheResidue(unittest.TestCase):
         self.assertFalse(any(s.removable for s in stale) and not problems,
                          "unrecognised holder record read as 'nobody holds it'")
 
-    @open_defect("9b64f427")
     def test_9b64f427_3_unreadable_crate_is_a_problem(self):
         pj = self.tmp / "crates" / "alpha" / ".claude-plugin" / "plugin.json"
         pj.parent.mkdir(parents=True)
@@ -279,7 +275,6 @@ class PluginCacheResidue(unittest.TestCase):
         versions, problems = self.pc.source_versions(str(self.tmp / "crates"))
         self.assertTrue(problems or "alpha" in versions, "unreadable crate silently dropped")
 
-    @open_defect("9b64f427")
     def test_9b64f427_4_non_version_directory_is_not_removable(self):
         (self.tmp / "c" / "alpha" / "node_modules").mkdir(parents=True)
         stale, problems = self.pc.scan(str(self.tmp / "c"), {"alpha": "1.0.0"})

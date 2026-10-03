@@ -3021,64 +3021,6 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/493"
 rev = 0
 
 [[task]]
-id = "cc809395"
-title = "guard-maintree-bash.py が worktree 内の相対パス編集と repo 外への書き込みを main ツリー変更として誤検知する (3 例)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "gate",
-    "false-positive",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = """
-
-実測 2026-09-10、worktree agent-a07923cb77ff8e38c、cwd は当該 worktree。いずれも main の作業ツリーには一切触っていない。
-
-誤検知 1 — repo の外へのディレクトリ作成:
-  mkdir -p /Users/yuki/bg-hermetic-probe
-  Refused: mkdir -p /Users/yuki/bg-hermetic-probe mutates this project MAIN working tree.
-  /Users/yuki は repo (/Users/yuki/src/harness) の外であり、main の作業ツリーではない。
-
-誤検知 2 — worktree 内の相対パスから scratchpad へのコピー:
-  cp crates/blastguard/src/detect.rs /private/tmp/claude-502/.../scratchpad/detect.rs.orig
-  Refused: ... mutates this project MAIN working tree.
-  書き込み先は /private/tmp 配下。読み出し元は自分の worktree。
-
-誤検知 3 — worktree 内の相対パスへの sed -i:
-  sed -i (空文字) 行番号指定 crates/blastguard/Cargo.toml など 3 ファイルの version bump
-  Refused: ... mutates this project MAIN working tree.
-  cwd は worktree なので、相対パスは worktree 内を指す。
-
-影響: version bump の 3 ファイル lockstep という日常作業が shell から実行できず、Edit ツールへの
-迂回を強いられる。ゲート自体は fail-closed で正しい方向に倒れているので緊急ではないが、
-誤検知が続くと 5 の「skip 機構で黙らせる」圧力になる。
-
-推測される原因 (未検証): 相対パスを cwd ではなく repo の main ツリーに対して解決している、
-または repo 外の絶対パスを「未知だから main」と扱っている。判定不能を制限側へ倒す設計自体は正しいので、
-直すなら cwd 解決の側であって、緩めることではない。
-
---- 追記 2026-09-11 (worktree agent-ac83774675a511f4d) ---
-
-誤検知 4 — シェル変数への代入だけを含む行:
-  行頭が SCR=/private/tmp/.../scratchpad という代入で始まる複合コマンド
-  Refused: `SCR=/private/tmp/.../scratchpad` mutates this project's MAIN working tree.
-  代入はファイルを一切変更しない。書き込み先も /private/tmp 配下で repo の外。
-  cwd は自分の worktree。誤検知 1・2 と同じ「repo 外の絶対パスを main とみなす」族に見える。
-  回避策として fixture 生成を python スクリプトファイルに移した (迂回ではなく、
-  同じ作業を別の道具で行った。ゲートは黙らせていない)。
-
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test scripts/test_backlog_s05_repros.py (rev e70d48dd)"""
-created_at = 1789044960
-updated_at = 1790983286
-weight = 0.0
-issue_number = 497
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/497"
-rev = 0
-
-[[task]]
 id = "e2f5f2b2"
 title = ".githooks/pre-push の冒頭 prose が「ブロックするチェックは ONE」と書くが実際は 2 本ある"
 project = "/Users/yuki/src/harness"
@@ -4555,100 +4497,6 @@ updated_at = 1790983325
 weight = 0.0
 issue_number = 624
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/624"
-rev = 0
-
-[[task]]
-id = "29b08fc7"
-title = "guard-maintree-bash.py が shell 変数代入と scratchpad への redirect を main ツリー変更として誤検知する"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "worktree-hygiene",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = """
-OBSERVED 2026-09-13、flow session 2444be10。2 回連続で誤検知に当たった。
-
-1 回目に拒否されたコマンド (要旨):
-  cd /Users/yuki/src/harness
-  git show <rev>:.backlog/tasks.toml > <scratchpad>/base.toml   ... など 3 本
-拒否理由: "cd /Users/yuki/src/harness mutates this project MAIN working tree"
-
-2 回目、cd を消して git -C に書き換え、出力先も scratchpad のままにしたところ、今度は
-  S=/private/tmp/claude-502/.../scratchpad
-という **shell 変数代入そのもの** が
-  "Refused: S=/private/... mutates this project MAIN working tree"
-として拒否された。
-
-なぜ誤検知か: どちらのコマンドも main のファイルを 1 バイトも書かない。redirect 先は
-すべて session scratchpad であり、git show は read-only。2 回目に至っては代入文であって
-コマンドですらない。マッチャが「main の repo パスらしき文字列が出現するか」で見ており、
-(a) 書き込み先がどこか (b) そもそも書き込みか、のどちらも見ていないように読める。
-
-なぜ害があるか: これは 9ec3609e (blastguard が値なしの git config を write 扱い) と
-同じクラスで、arity/方向を見ずにトークンだけで判定している。実害は 2 つある。
- 1. 進行中の merge の conflict を解析するには、3 バージョンを取り出して比較する必要がある。
-    その解析は read-only なのに止まる。CLAUDE.md 8 は merge/conflict 解決を main で
-    行うことを明示的に許しているので、その作業を支える読み取りまで止めるのは過剰。
- 2. 迂回が「別の綴りを試す」になりやすい。実際 1 回目の後に自分は綴りを変えて再試行し、
-    2 回目も拒否された。ゲートを緩めろという話ではなく、rewrite-until-it-passes の
-    反射を訓練してしまう形だという話 (ebd1359a と同じ懸念)。
-
-なお本体のゲート判定は正しく効いていることも観測した: 同じセッションで main への
-非 merge commit は main-tree-guard が実際に block し、merge 進行中の commit は
-"main-tree-guard: allowed — Merge in progress" として通した。つまり commit 経路の判定は
-正しい。問題は Bash PreToolUse 側の事前マッチャだけである。
-
-2 つの読みと見分け方:
- (a) 純粋な誤検知 — マッチャが repo パス文字列の出現だけを見ている。見分け方: 代入文
-     だけの行や、redirect 先が scratchpad のコマンドを食わせて、書き込み先を解析して
-     いるかを確認する。
- (b) 意図的に広く倒している — main パスに触れる形は全部 ask に寄せる設計。見分け方:
-     scratchpad 宛 redirect を許す例外がテストで固定されているかを見る。
-(b) であっても、代入文を「mutates」と表示するメッセージは誤りなので文言は直すべき。
-
---- 追記 2026-09-15、同 session 2444be10。さらに 3 形が同じ誤検知に当たった ---
-
-batch6 の worker worktree に残った未コミット作業を救出しようとして、いずれも main の
-ファイルを 1 バイトも触らないのに guard-maintree-bash.py が 3 連続で拒否した。逐語:
-
-3 形目 (mkdir):
-  mkdir -p /private/tmp/claude-502/.../scratchpad/batch6-rescue
-  "Refused: mkdir -p /private/tmp/... mutates this project MAIN working tree."
-  → 作成先は session scratchpad。main とは別ファイルシステム上の別ツリー。
-
-4 形目 (cp。source も dest も main の外):
-  cp ~/.condukt/worktrees/run-20260913-223733-78880-t1-subagentstop/crates/condukt/src/subagent_stop.rs /private/tmp/.../scratchpad/rescue-t1-subagent_stop.rs
-  "Refused: cp ~/.condukt/worktrees/... /private/tmp/claud mutates this project MAIN working tree."
-  → source は condukt の worker worktree、dest は scratchpad。main のパスは登場すらしない。
-    それでも拒否された。拒否メッセージが dest を途中で切って "claud" と表示している点も
-    (a) の読み (パス文字列のトークンマッチ) を補強する。
-
-5 形目 (blastguard 側。guard-maintree-bash とは別ゲートだが同じ作業を止めた):
-  for t in t1 t2 t3; do git -C <wt>-$t diff HEAD > <scratchpad>/full-$t.patch; done
-  "'> <scratchpad>/full-$t.patch' destroys the file's current contents and
-   <path> contains a shell expansion, so blastguard cannot tell which file this names"
-  → これは誤検知ではなく設計どおりの判定不能→制限側 (CLAUDE.md 3) であり、正しい。
-    ループを展開してリテラル名にしたら通った。この 1 件は本チケットの対象外として記録する。
-
-この追記で言いたいこと: 3/4 形目は (a) の読みを強める観測である。dest が main の外に
-あることが静的に読めるケース (絶対パスで scratchpad を指している) まで拒否しているので、
-「書き込み先を解析している」という (b) の読みは取りにくくなった。
-
-実害の追加観測: 今回止められたのは「死んだと思われた worker の未コミット作業を退避する」
-作業だった。退避を諦めていれば worktree ごと失われうる作業だったので、この誤検知は
-CLAUDE.md 4 (隠蔽の禁止) が守ろうとしているものと逆向きに働きうる。なお退避そのものは
-redirect 形に書き換えて完了しており、作業は失われていない。
-
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Only partly fixed. The cp-then-next-line form was fixed by caef0517: the test is GREEN, and RED when the _newlines_to_separators call is mutated out. The S=... assignment and $S/... redirect/mkdir for; test - (rev e70d48dd)"""
-created_at = 1789306451
-updated_at = 1790983231
-weight = 0.0
-issue_number = 633
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/633"
 rev = 0
 
 [[task]]
@@ -6698,25 +6546,6 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/673"
 rev = 0
 
 [[task]]
-id = "ee273b5e"
-title = "guard-maintree-bash が main での merge conflict 解決の書き込み (cp で解決済みファイルを置く) も拒否する — §8 は conflict 解決を許可している"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = """
-Observed 2026-09-29: during a merge of origin/main on main, cp of the merge-driver output into .backlog/tasks.toml was refused. Worked around by doing the merge in the session worktree. Also a variable path in the command was refused because the target could not be resolved (fail-closed, fine).
-
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_ee273b5e.py (rev dfa4e9ba): throwaway repo, merge stopped on a conflict in a.txt, MERGE_HEAD present, CLAUDE_PROJECT_DIR=repo"""
-created_at = 1790678420
-updated_at = 1790983249
-weight = 0.0
-issue_number = 862
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/862"
-rev = 0
-
-[[task]]
 id = "4b6f4aba"
 title = "overwatch status が TTL 切れリースを黙って捨てて Sessions を (none) と表示する — heartbeat が止まっただけの生存セッションと『誰もいない』を区別できない"
 project = "/Users/yuki/src/harness"
@@ -7330,28 +7159,6 @@ updated_at = 1790983250
 weight = 0.0
 issue_number = 923
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/923"
-rev = 0
-
-[[task]]
-id = "f036e218"
-title = "guard-maintree-bash.py がシェル変数 (W/S) を展開せず、未解決パスを main ツリーへの書き込みとして block する"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "worktree-hygiene",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = """
-実測 2026-10-01: 同一行で S=<scratchpad>; W=<worktree> を定義して cp W/... S/... したところ target 'W/.githooks/pre-commit' mutates MAIN と拒否された。06baf54d (cwd 誤検知) / b5358f58 (cp の読み出し元を書き込み対象扱い) とは別の軸: 変数の未展開を main 相対と解釈している。(a) 判定不能を block へ倒す正しい fail-closed か (b) 誤検知か — 変数値が同一行で定義済みなら静的に解決可能なので (b) 寄り。見分け方: 同一行定義と外部 env 由来で挙動を分けて測る。
-
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_s06_misc_b_repros.py::MainTreeBashGuard.test_same_line_shell_variables_are_resolved_not_treated_as_main (rev e128c13b): Pre-existing committed repro (plus scripts/test_backlog_55826e4f_f036e218.py), RED re-observed at HEAD."""
-created_at = 1790793951
-updated_at = 1790983293
-weight = 0.0
-issue_number = 924
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/924"
 rev = 0
 
 [[task]]
@@ -11668,22 +11475,6 @@ updated_at = 1791023796
 weight = 0.0
 issue_number = 1173
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1173"
-rev = 0
-
-[[task]]
-id = "4a64e6ff"
-title = "guard-maintree-bash: a heredoc BODY that merely contains the text REPO/scripts/x.py is judged as a write target in main and refused"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "unconfirmed"
-notes = "Observed 2026-10-03 at 4601daaa+ (session 521ce4dd), twice. Command: cd <session worktree> then python3 - with a quoted heredoc whose body is a python patch script; the body contains the string literal of a shell line referencing the REPO variable plus scripts/gate-bypass.py. The guard refused with: target (REPO var)/scripts/gate-bypass.py mutates this project's MAIN working tree. The python script only wrote files inside the worktree (.githooks/pre-push in worktree, and a scratchpad file). Two readings: (a) defect: heredoc body text is data, not a redirect/argv target; (b) intended conservative undetermined-tokenization for interpreter payloads (ae4543d5 added interpreter-payload recursion). Distinguish: replay the exact command through scripts/guard-maintree-bash.py with a body that writes only to the scratchpad. Related 8b7659cc, 2a775bea, ad524af9."
-created_at = 1791025460
-updated_at = 1791025460
-weight = 0.0
-issue_number = 1175
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1175"
 rev = 0
 
 [[task]]

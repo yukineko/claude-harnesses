@@ -8758,6 +8758,8 @@ notes = "2026-10-02 の origin 掃除で削除した origin/condukt/run-20260814
 created_at = 1790907084
 updated_at = 1790907084
 weight = 0.0
+issue_number = 1269
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1269"
 rev = 0
 
 [[task]]
@@ -8775,6 +8777,8 @@ notes = "2026-10-02 の origin 掃除で dependabot/* 9 本を削除した (GitH
 created_at = 1790907085
 updated_at = 1790907085
 weight = 0.0
+issue_number = 1270
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1270"
 rev = 0
 
 [[task]]
@@ -8804,6 +8808,8 @@ close 側は影響なし (成否を exit code で見て stdout を使わない)�
 created_at = 1790907262
 updated_at = 1790907262
 weight = 0.0
+issue_number = 1271
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1271"
 rev = 0
 
 [[task]]
@@ -8835,6 +8841,8 @@ notes = """
 created_at = 1790907262
 updated_at = 1790907262
 weight = 0.0
+issue_number = 1272
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1272"
 rev = 0
 
 [[task]]
@@ -8861,6 +8869,8 @@ MirrorDrift::mirror_in_use の doc comment に KNOWN GAP として明記済み�
 created_at = 1790907263
 updated_at = 1790907263
 weight = 0.0
+issue_number = 1273
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1273"
 rev = 0
 
 [[task]]
@@ -12269,4 +12279,209 @@ updated_at = 1791046778
 weight = 0.0
 issue_number = 1265
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1265"
+rev = 0
+
+[[task]]
+id = "dc272b08"
+title = "condukt schedule が done_criteria 中の 'specguard.toml;' を irreversible コマンドとして force-gate する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-02 @b4f0df80, condukt 0.7.195: 単一タスクの done_criteria が 'specguard.toml;' だけなら gated=['t']、'the [map] table' や '[map] x' だと gated=[]。また '(injected >= 1)'・'matches => exit 2'・'delete only' を含む done_criteria も force-gate された（言い換えると解除）。散文中の『単語+;』が実行コマンドとして分類されているように見える。(a) classify の過検出（散文をシェルとして読む）/ (b) 意図的な保守側分類。見分け方: condukt schedule が done_criteria をどう tokenize し、どの rule に hit したかを出すようにして確認する。既知の関連メモ: classify deploy-needle force-gate / condukt schedule arrow force-gate。"
+created_at = 1790881738
+updated_at = 1790881738
+weight = 0.0
+issue_number = 977
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/977"
+rev = 0
+
+[[task]]
+id = "e481be8f"
+title = "specguard の MapConfig が deny_unknown_fields のため、新キー review_max_commits を持つ specguard.toml を旧バイナリが読めない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "specguard",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "観測 2026-10-02（condukt run run-20261002-040905-21607 の b1 worktree）: crates/specguard/src/config.rs:224 の MapConfig が #[serde(deny_unknown_fields)]。6becbf8d slice 2 で [map].review_max_commits を足すと、それを書いた specguard.toml は古い specguard バイナリでは読み込みエラーになる。(a) 版ずれのたびに設定読み込みが落ちる実害（rollout されていない session・別マシン）/ (b) 未知キーを弾く意図どおりの厳格さ（typo を検出する）。見分け方: 設定読み込みが落ちたときの下流（fail-closed で止まるのか、黙って既定に倒れるのか）を確認し、旧バイナリ＋新 toml の組で実測する。"
+created_at = 1790882503
+updated_at = 1790882503
+weight = 0.0
+issue_number = 978
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/978"
+rev = 0
+
+[[task]]
+id = "b645e787"
+title = "reachability-probe: test exit without panic marker counts as reproduced (overclaim)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-02, run-20261002-040905-21607, c1 re-verifier (opus), at 87d8c64b. scripts/test_reachability_probe.py lines 183-192 pin this: when the test command exits 127 (or any other non-zero) without the panic marker, the result is 'reproduced'. overwatch review_finding.rs adjudicate then overturns REFUTED to CONFIRMED, and parse_probe ignores panic_marker_seen. Restrictive, not fail-open. But exit 2 / undetermined (which demotes to UNVERIFIED) would be more precise. Human decision: I raised it with the user 2026-10-02; the default was to keep the current behaviour. Second gap: the note check at line 130 is a substring check only, so a note with a contradicting sentence still passes."
+created_at = 1790883018
+updated_at = 1790883018
+weight = 0.0
+issue_number = 984
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/984"
+rev = 0
+
+[[task]]
+id = "41c98767"
+title = "specguard: live machine-local spec-map has 0 tracked entries (all changed)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-02 by b2 worker in run-20261002-040905-21607: /Users/yuki/src/harness/.specguard/spec-map.toml (mtime 2026-10-02 04:16, 189 entries) has tracked=0, changed=187, missing=2, so map review-status on this machine exits 2 with nothing to classify. The last committed map (fe238c59^) had 196 tracked. Readings: (a) sync moved every tracked entry to changed, a defect or expected drift that needs re-review; (b) intended. To tell them apart, check which command last wrote the file and diff its entries against fe238c59^."
+created_at = 1790883054
+updated_at = 1790883054
+weight = 0.0
+issue_number = 986
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/986"
+rev = 0
+
+[[task]]
+id = "7905a60b"
+title = "reachability-probe: result rev is the script's repo HEAD, not the target's"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-02 by the c2 verifier (opus) at a1df25b5 in run-20261002-040905-21607. In scripts/reachability-probe.py, REPO = Path(__file__).parent.parent and rev = git rev-parse HEAD of that repo. A probe run on a file outside this repo recorded rev a1df25b5, which is the wrong origin. Also: a test command that exits 0 having run zero tests (a filter matching nothing) gives not_reproduced. Only the note and panic_marker_seen flag this, and parse_probe ignores panic_marker_seen. Fix options: resolve rev from the target's git root; and refuse not_reproduced unless the test output shows that at least one test ran (or exit 2)."
+created_at = 1790883142
+updated_at = 1790883142
+weight = 0.0
+issue_number = 987
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/987"
+rev = 0
+
+[[task]]
+id = "23f9b548"
+title = "tdd green without --cmd runs workspace-wide cargo test and reports failing; cause unidentified"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-02 in the b2 worktree (run-20261002-040905-21607, HEAD 5ed7aad0). tdd green --task b2-specguard-stale-review-impl with no --cmd uses tdd.toml test_cmd = cargo test (whole workspace) rather than the cmd stored in the RED proof. It printed only 'tests still failing', while the RED proof's cmd (cargo test -p specguard --test map_stale_review ...) passes 15/15. Two readings: (a) a real red somewhere in the workspace at this base, which needs locating; (b) a scope mismatch where green should default to the RED proof's cmd, so RED and GREEN measure the same thing. To tell them apart, run cargo test --workspace at 5ed7aad0 and inspect the failures. The silent fallback to a different scope than RED is itself suspect either way."
+created_at = 1790883409
+updated_at = 1790883409
+weight = 0.0
+issue_number = 988
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/988"
+rev = 0
+
+[[task]]
+id = "0bd2402a"
+title = "specguard map list --json exits 0 even when entries are undetermined"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-02 by b2 panel voter 2 (run-20261002-040905-21607, specguard 0.2.74, HEAD 5ed7aad0). map list --json carries a per-entry review_state (fresh/stale-review/undetermined) but the command always exits 0, which is the existing list contract. A consumer that checks only the exit code would read undetermined as fine. map review-status is the gate-shaped command (exit 1/2). Readings: (a) by design, needing only docs saying list is a report, not a check; (b) a consumer exists that reads list's exit code. To tell them apart, grep the hooks and scripts for consumers of map list."
+created_at = 1790883802
+updated_at = 1790883802
+weight = 0.0
+issue_number = 990
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/990"
+rev = 0
+
+[[task]]
+id = "3a56ac96"
+title = "specguard forge: unreadable-intake paths not exercised by any test (probe 2026-10-02)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "Measured 2026-10-02 by scripts/reachability-probe.py at fc8cc3a6 (record: docs/probes/2026-10-02-specguard-gather-reachability.md, run-20261002-040905-21607 c3). Replacing each arm body with panic did NOT fail cargo test -p specguard for: gather.rs walk_suffix per-entry Err (H2); md_fragments read_to_string non-NotFound Err (H3); gather_transcripts read_to_string non-NotFound Err (H4); forge/main.rs 'if !outcome.unreadable.is_empty()' exit-8 body (H5). Only the walk_suffix read_dir Err (H1) is reached, by unreadable_existing_source_is_surfaced_not_silently_dropped. These are the fail-closed arms for finding 9a5e3c28. A zero-kill-rate forwarding arm can be deleted with the suite staying green. Needed: one behavioural test per arm, including a binary-level test that drives specforge gather to exit 8. This is not evidence that the arms are unreachable in production."
+created_at = 1790884632
+updated_at = 1790884632
+weight = 0.0
+issue_number = 991
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/991"
+rev = 0
+
+[[task]]
+id = "e3acc324"
+title = "reachability-probe: panic_marker_seen true from cached compiler warning quoting the mutated line"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-10-02 at c3 (fc8cc3a6, arm H2): cargo test replayed a cached compiler warning containing the mutated source line '130 | Err(e) => panic!("reachability-probe"),'. So panic_marker_seen=true while every test passed (verdict not_reproduced). The field does not affect the verdict, but readers can be misled. Fix: match the runtime panic message form ("panicked at" ... reachability-probe), not the bare token. Related: 7905a60b (rev field taken from the script repo, not the target; all OLD-rev results in that record say fc8cc3a6)."""
+created_at = 1790884636
+updated_at = 1790884636
+weight = 0.0
+issue_number = 992
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/992"
+rev = 0
+
+[[task]]
+id = "e3403964"
+title = "backlog merge-driver: same task notes edited on both sides keeps ours, silently drops theirs"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-02 while merging main into session-c6ed7cfd (merge 778e9a26). Task 8696dd7e had notes appended on both sides: ours added the propguard slice note; theirs (another session) added the blastguard slice note and held-back recoverability test. The backlog merge driver produced a parseable file equal to OURS for 8696dd7e, dropping theirs' appended text. git marked it unmerged (UU) but with no conflict markers, so the loss was visible only by a 3-way id-level diff. I fixed it by hand (base + ours suffix + theirs suffix). Expected: when both sides append to notes from a common base, concatenate. Otherwise refuse with an explicit id-level conflict listing the task, never pick a side silently. The UU state was the only signal."
+created_at = 1790885806
+updated_at = 1790885806
+weight = 0.0
+issue_number = 997
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/997"
+rev = 0
+
+[[task]]
+id = "68fb7237"
+title = "merging .backlog/tasks.toml by taking one side wholesale drops tasks added on the other side, leaving their GitHub issues open and orphaned"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04 (worktree flow-issue-sync, base main 4027a8dc). Merge e672436b (Merge branch 'session-c6ed7cfd', 2026-10-02 05:17, merge-base 8f50bc4d) resolved a conflict in .backlog/tasks.toml by keeping ^1 wholesale: 10 tasks added on ^2 since the merge-base (dc272b08 e481be8f b645e787 41c98767 7905a60b 23f9b548 0bd2402a 3a56ac96 e3acc324 e3403964, issues #977 #978 #984 #986 #987 #988 #990 #991 #992 #997) are present in e672436b^2 and absent from e672436b in both tasks.toml and tasks.done.toml. The follow-up merge 71e024a5 (parents e672436b 31229785) also lacks all 10 (71e024a5^2 has 10, result 0), though relative to its own merge-base it added only 1 new id and kept it. The tasks were never closed anywhere in history (only ever status pending in tasks.toml), so their issues stayed open with no backing task. Restored verbatim from 31229785 in branch flow-issue-sync. A further 17 open issues (#238 #249 #345-#348 #356-#361 #404 #670 #1048-#1050) have NO task block in any reachable commit, reflog-only commit, unreachable blob, any .harness-worktrees store, or the home store; the mechanism that lost them is unidentified (candidates: sync ran in a worktree whose store write was never committed, or another wholesale resolution before the issue_number was committed). Done criteria: a merge of .backlog/*.toml that drops an id present on either side since the merge-base is refused (merge driver or pre-commit check), with a RED-first test on a fixture merge reproducing e672436b."
+created_at = 1791047071
+updated_at = 1791047071
+weight = 0.0
+issue_number = 1274
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1274"
+rev = 0
+
+[[task]]
+id = "7e575392"
+title = "backlog sync has no reopen arm: a task moved back from done/cancelled to pending/needs-ruling leaves its GitHub issue closed"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04 (worktree flow-issue-sync, base main 4027a8dc). Six issues were CLOSED while their tasks were active in .backlog/tasks.toml: #420 ae4543d5 needs-ruling, #427 e033c406 needs-ruling, #497 cc809395 pending, #633 29b08fc7 pending, #862 ee273b5e pending, #924 f036e218 pending. backlog sync --help lists arms both/create/close/body only; the dry run before the manual reopen did not list them (plan was 5 create + close #140). Reopened by hand with gh issue reopen. Consequence: the GitHub mirror reads as resolved while the work is open, the silent-means-fine reading CLAUDE.md section 1 forbids. Done criteria: sync plans a reopen action for any task in an active status whose linked issue is CLOSED, with a RED-first test against a fake gh."
+created_at = 1791047075
+updated_at = 1791047075
+weight = 0.0
+issue_number = 1275
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1275"
 rev = 0

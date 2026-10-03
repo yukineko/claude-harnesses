@@ -355,3 +355,38 @@ fn json_reports_the_real_verdict_under_an_override() {
     assert_eq!(doc["override_reason"], "documented bypass");
     assert_eq!(doc["exit_code"], 0);
 }
+
+/// backlog abba6f0d (`located`): with an EMPTY plugin cache (the fixture HOME)
+/// and no stub on `PATH`, `plugin_bin::resolve` answers `Known(None)` — the
+/// liveness source is observed NOT INSTALLED. That observes no session, so it
+/// must not read as "nobody is live": the guard blocks as undetermined and
+/// names the missing binary. Written by the independent verifier; observed RED
+/// with observe_peers treating `Known(None)` as "skip this source".
+#[test]
+fn backlog_not_installed_is_undetermined_and_names_it() {
+    let f = Fixture::new("nobacklog");
+    f.stub(
+        "overwatch",
+        r#"{"backlog":{"pending":0,"done":0,"deferred":0}}"#,
+        0,
+    );
+    f.stage_a_change(&f.repo);
+    let out = f.guard(&f.repo, &[]);
+    let err = stderr(&out);
+    assert_eq!(code(&out), 2, "stderr: {err}");
+    assert!(err.contains("UNDETERMINED"), "{err}");
+    assert!(err.contains("backlog is not installed"), "{err}");
+}
+
+/// Same as above for the other liveness source.
+#[test]
+fn overwatch_not_installed_is_undetermined_and_names_it() {
+    let f = Fixture::new("noovr-named");
+    f.stub("backlog", "none", 0);
+    f.stage_a_change(&f.repo);
+    let out = f.guard(&f.repo, &[]);
+    let err = stderr(&out);
+    assert_eq!(code(&out), 2, "stderr: {err}");
+    assert!(err.contains("UNDETERMINED"), "{err}");
+    assert!(err.contains("overwatch is not installed"), "{err}");
+}

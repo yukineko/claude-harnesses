@@ -124,10 +124,41 @@ changing its spelling; each of these is now followed to the path it writes:
     the cwd), `find -delete`, `find -exec/-execdir/-ok` (`{}` replaced by the
     start path wherever it appears in a word), `chmod/chown/chgrp`,
     `rsync/scp/ditto` (the last non-option operand; for rsync and scp,
-    options and option values may also follow the operands), and
-    `cp/mv/install/ln --target-directory=DIR` / `-tDIR` / `-t DIR` — and the
-    GNU coreutils `g`-prefixed names Homebrew installs (grm, gcp, gmv,
-    ginstall, gln, gtouch, gmkdir, grmdir) like the plain ones;
+    options and option values may also follow the operands; with rsync
+    `--remove-source-files` / `--remove-sent-files` / any `--remove…` word,
+    every source too, because rsync deletes it), and — the GNU coreutils
+    `g`-prefixed names Homebrew installs (grm, gcp, gmv, ginstall, gln,
+    gtouch, gmkdir, grmdir) like the plain ones;
+  * cp / mv / ln / install by DESTINATION, not by every operand (b5358f58):
+    a source is read, so `cp <main>/f <worktree>/` — the sanctioned way to
+    bring a file from main into a worktree — is allowed. What is judged:
+      - the destination: the value of `-t DIR` / `-tDIR` / `-vt DIR` (any
+        bundle) / `--target-directory[=]DIR` or a unique GNU abbreviation of
+        it (`--target DIR`, `--targ=DIR`) when given, and then every other
+        operand is a source; otherwise the LAST operand. `ln` with a single
+        operand and no target directory creates its link in the cwd under
+        the operand's base name, and that path is judged;
+      - every source as well for `mv` (it removes them) and for a HARD link
+        — `ln` without `-s` / `--symbolic`, `cp -l` / `--link`, BSD `install
+        -l` — because the link shares the source's inode and a later write
+        through it changes main's file under a path this guard does not see;
+      - every operand for `install -d` / `--directory` (each is created);
+      - every operand and target directory when the destination cannot be
+        placed: an unknown or ambiguous GNU long option (its value could be
+        any following word), or a value option with no value; and a lone
+        operand of cp / mv / install (an `xargs` prefix, whose destination
+        arrives on stdin).
+    Options are read per tool (cp/mv/ln: GNU `-S`/`-t` take a value; install:
+    GNU `-g -m -o -S -t`, BSD `-B -D -f -g -h -l -M -m -N -o -T`; GNU long
+    options that require a value take the next word unless glued with `=`).
+    A `g` name is read as GNU only. A plain name may be the BSD (macOS) or
+    the GNU (gnubin) tool, so it is read BOTH ways and the targets of both
+    are judged: GNU getopt lets options follow operands, BSD getopt makes
+    every word after the first operand an operand (`cp a b -v` copies into
+    `-v`). The BSD reading is dropped when the command uses a target-directory
+    option (a `t` in a short bundle, or a `--t…` prefix of target-directory),
+    because no BSD cp / mv / ln / install has one and it fails before
+    writing;
   * text PRODUCED by a substitution and then run (`eval "$(…)"`, `sh -c
     "$(…)"`, `$(…)` or a backquote as the program): what it prints cannot be
     known, so the substitution's own command text is judged — it runs as a
@@ -291,8 +322,10 @@ mode that judges nothing else):
     `$( … )` / backquote whose text runs, ANYWHERE in it, `git … rev-parse
     --git-dir` / `--git-common-dir` / `--absolute-git-dir` / `--git-path X`
     stands for `.git` (`.git/X`), so `$(git rev-parse --git-dir)/config` and
-    `$(cd . && git rev-parse --git-dir)/config` are `.git/config`. Reading them is allowed; `cp` FROM them is judged as a
-    write like every `cp` operand. In the hooks-only mode a command this walk
+    `$(cd . && git rev-parse --git-dir)/config` are `.git/config`. Reading them is allowed, and so is copying
+    FROM them: only what a cp / ln / install writes (its destination, and
+    every source of a mv or a hard link) is a write target (b5358f58). In
+    the hooks-only mode a command this walk
     cannot tokenize or place is refused only if its text names `.githooks`,
     `.git/hooks`, `.git/config`, `config.worktree` or core.hooksPath.
 
@@ -1114,12 +1147,15 @@ SEPARATORS = frozenset(
 _CHAIN_END = {";", ";;", ";&", ";;&", "&", None}
 
 # Commands where every non-flag operand is a filesystem target that gets created,
-# overwritten, or removed. Over-inclusive on purpose (a refusal is cheap).
+# overwritten, or removed. Over-inclusive on purpose (a refusal is cheap). The
+# DEST_TOOLS among them (cp/mv/ln/install and their g-names) are judged by
+# _dest_write_targets instead (b5358f58); they stay listed here for `xargs`.
 TARGET_ALL = {
     "rm", "unlink", "rmdir", "mv", "cp", "tee", "touch", "mkdir",
     "grm", "gcp", "gmv", "ginstall", "gln", "gtouch", "gmkdir", "grmdir",
     "ln", "install", "truncate", "shred",
 }
+DEST_TOOLS = {"cp", "mv", "ln", "install", "gcp", "gmv", "gln", "ginstall"}
 # The first operand is a mode/owner, the rest are targets.
 TARGET_AFTER_FIRST = {"chmod", "chown", "chgrp"}
 # The LAST operand is the destination.
@@ -1837,6 +1873,175 @@ def _operands(args: list[str]) -> list[str]:
     return [a for a in args if not a.startswith("-")]
 
 
+def _rsync_removes_sources(word: str) -> bool:
+    """`--remove-source-files` / the older `--remove-sent-files`, glued value
+    or not, and any `--remove…` spelling (read as one, over-inclusively)."""
+    return word.startswith("--remove")
+
+
+# cp / mv / ln / install (b5358f58): only what the command WRITES is a target.
+# Per tool: GNU short options that take a value, GNU long options that REQUIRE
+# a value (a separate word when not glued with `=`), every GNU long option
+# name (for getopt_long's unique-prefix abbreviations), and the BSD (macOS /
+# FreeBSD) short options that take a value.
+_DEST_TOOLS = {"cp", "mv", "ln", "install"}
+_GNU_SHORT_VAL = {"cp": "St", "mv": "St", "ln": "St", "install": "gmoSt"}
+_GNU_LONG_REQ = {
+    "cp": {"no-preserve", "sparse", "suffix", "target-directory"},
+    "mv": {"suffix", "target-directory"},
+    "ln": {"suffix", "target-directory"},
+    "install": {"group", "mode", "owner", "strip-program", "suffix",
+                "target-directory"},
+}
+_GNU_LONG_ALL = {
+    "cp": {"archive", "attributes-only", "backup", "copy-contents", "debug",
+           "dereference", "force", "interactive", "link", "no-dereference",
+           "no-clobber", "no-preserve", "parents", "preserve", "recursive",
+           "reflink", "remove-destination", "sparse", "strip-trailing-slashes",
+           "suffix", "symbolic-link", "target-directory", "no-target-directory",
+           "update", "verbose", "keep-directory-symlink", "one-file-system",
+           "context", "help", "version"},
+    "mv": {"backup", "debug", "exchange", "force", "interactive", "no-clobber",
+           "no-copy", "strip-trailing-slashes", "suffix", "target-directory",
+           "no-target-directory", "update", "verbose", "context", "help",
+           "version"},
+    "ln": {"backup", "directory", "force", "interactive", "logical",
+           "no-dereference", "physical", "relative", "symbolic", "suffix",
+           "target-directory", "no-target-directory", "verbose", "help",
+           "version"},
+    "install": {"backup", "compare", "debug", "directory", "group", "mode",
+                "owner", "preserve-timestamps", "strip", "strip-program",
+                "suffix", "target-directory", "no-target-directory", "verbose",
+                "preserve-context", "context", "help", "version"},
+}
+_BSD_SHORT_VAL = {"cp": "", "mv": "", "ln": "", "install": "BDfghlMmNoT"}
+
+
+def _long_name(tool: str, name: str) -> str | None:
+    """The GNU long option `name` stands for: an exact name, or a prefix that
+    matches exactly one (getopt_long's abbreviation). None = unknown or
+    ambiguous."""
+    names = _GNU_LONG_ALL[tool]
+    if name in names:
+        return name
+    hits = [n for n in names if n.startswith(name)] if name else []
+    return hits[0] if len(hits) == 1 else None
+
+
+def _dest_reading(tool: str, args: list[str], gnu: bool) -> dict | None:
+    """One reading of a cp/mv/ln/install argv. GNU getopt permutes (options
+    may follow operands); BSD getopt stops at the first operand. Returns None
+    when, under this reading, the command fails before writing (a BSD tool
+    handed a target-directory option, which no BSD cp/mv/ln/install has)."""
+    ops: list[str] = []
+    tdirs: list[str] = []
+    shorts: set[str] = set()
+    longs: set[str] = set()
+    undet = False
+    short_val = _GNU_SHORT_VAL[tool] if gnu else _BSD_SHORT_VAL[tool]
+    j = 0
+    while j < len(args):
+        a = args[j]
+        j += 1
+        if a == "--":
+            ops += args[j:]
+            break
+        if not a.startswith("-") or a == "-":
+            if gnu:
+                ops.append(a)
+                continue
+            ops += args[j - 1:]
+            break
+        if a.startswith("--"):
+            name, eq, val = a[2:].partition("=")
+            if not gnu:
+                if name and "target-directory".startswith(name):
+                    return None
+                continue  # BSD: a flag at most
+            full = _long_name(tool, name)
+            if full is None:
+                undet = True  # unknown / ambiguous: its value is unplaceable
+                continue
+            longs.add(full)
+            if full in _GNU_LONG_REQ[tool] and not eq:
+                if j >= len(args):
+                    undet = True
+                    continue
+                val = args[j]
+                j += 1
+            if full == "target-directory":
+                tdirs.append(val)
+            continue
+        for q, ch in enumerate(a[1:], 1):
+            if not gnu and ch == "t":
+                return None
+            shorts.add(ch)
+            if ch in short_val:
+                val = a[q + 1:]
+                if not val:
+                    if j >= len(args):
+                        undet = True
+                        break
+                    val = args[j]
+                    j += 1
+                if ch == "t":
+                    tdirs.append(val)
+                break  # the rest of the bundle is the value
+    if tool == "ln":
+        hard = "s" not in shorts and "symbolic" not in longs
+    elif tool == "cp":
+        hard = "l" in shorts or "link" in longs
+    else:  # BSD install -l linkflags may ask for a hard link
+        hard = tool == "install" and not gnu and "l" in shorts
+    dirs = tool == "install" and ("d" in shorts or "directory" in longs)
+    return {"ops": ops, "tdirs": tdirs, "undet": undet, "hard": hard,
+            "dirs": dirs}
+
+
+def _dest_write_targets(prog: str, args: list[str]) -> list[str]:
+    """The operands cp / mv / ln / install (and the g-prefixed GNU names)
+    WRITE, judged under every reading the name can have: a `g` name is GNU
+    only; a plain name may be BSD (macOS) or GNU (Homebrew gnubin), so both
+    readings are taken and their targets united.
+
+      * the destination: the target-directory option's value(s) when given,
+        else the LAST operand; with a single operand and no target directory,
+        `ln` creates its link in the cwd under the operand's base name, and
+        for cp / mv / install that operand itself (an error by itself, an
+        `xargs` prefix otherwise) is judged;
+      * every source too, for mv (it removes them) and for a HARD link (`ln`
+        without -s, `cp -l` / `--link`, BSD `install -l`): the link shares
+        the source's inode, so a later write through it changes the source;
+      * every operand for `install -d` (each is a directory it creates);
+      * every operand and target directory when the reading is undetermined
+        (an unknown or ambiguous GNU long option, or a value option with no
+        value), because the destination cannot be placed."""
+    tool = prog[1:] if prog.startswith("g") and prog[1:] in _DEST_TOOLS else prog
+    readings = [True] if tool != prog else [True, False]
+    out: list[str] = []
+    for gnu in readings:
+        r = _dest_reading(tool, args, gnu)
+        if r is None:
+            continue
+        ops, tdirs = r["ops"], r["tdirs"]
+        if r["undet"] or r["dirs"]:
+            out += ops + tdirs
+            continue
+        if tdirs:
+            dests, srcs = tdirs, ops
+        elif len(ops) >= 2:
+            dests, srcs = ops[-1:], ops[:-1]
+        elif tool == "ln" and ops:
+            base = posixpath.basename(ops[0].rstrip("/"))
+            dests, srcs = [posixpath.join(".", base) if base else "."], ops
+        else:
+            dests, srcs = ops, []
+        out += dests
+        if tool == "mv" or r["hard"]:
+            out += srcs
+    return out
+
+
 class _Analyzer:
     def __init__(self, root: str, guard_main: bool = True):
         self.root = root
@@ -2423,20 +2628,15 @@ class _Walk:
             self.awk(rest, st)
             return None
 
-        if prog in TARGET_ALL:
+        if prog in DEST_TOOLS:
+            # b5358f58: a SOURCE is read, not written (`cp <main>/f <wt>/`
+            # is the sanctioned way to bring a file into a worktree); see
+            # _dest_write_targets for what is judged.
+            for a in _dest_write_targets(prog, rest):
+                self.an.check(a, st)
+        elif prog in TARGET_ALL:
             for a in _operands(rest):
                 self.an.check(a, st)
-            if prog in ("cp", "mv", "install", "ln", "gcp", "gmv", "ginstall", "gln"):
-                # `--target-directory=DIR` / `-tDIR` / `-vtDIR` name the
-                # destination inside a flag word (`-t DIR` already leaves DIR
-                # as an operand, judged above).
-                for a in rest:
-                    if a.startswith("--target-directory="):
-                        self.an.check(a.split("=", 1)[1], st)
-                    elif not a.startswith("--"):
-                        m = re.match(r"^-[A-Za-z]*?t(.+)$", a)
-                        if m:
-                            self.an.check(m.group(1), st)
         elif prog in TARGET_AFTER_FIRST:
             ops = _operands(rest)
             if prog == "chmod" and any(
@@ -2451,7 +2651,11 @@ class _Walk:
                 self.an.check(a, st)
         elif prog in TARGET_LAST:
             ops = _copy_operands(prog, rest)
-            if ops:
+            if prog == "rsync" and any(_rsync_removes_sources(a) for a in rest):
+                # `--remove-source-files` deletes every source it sent.
+                for a in ops:
+                    self.an.check(a, st)
+            elif ops:
                 self.an.check(ops[-1], st)
         elif prog in ("sed", "gsed"):
             self.sed(rest, st)
@@ -3527,8 +3731,24 @@ if __name__ == "__main__":
 #     tracked value at the point of the call; an assignment made only inside
 #     the outer process's environment by other means (a profile, `env -S`)
 #     is not.
-#   * GNU long-option abbreviations (`cp --target=DIR`, `--targ=DIR`, `rsync
-#     --exc zz`) are not expanded: only the full option names are recognised.
+#   * GNU long-option abbreviations are expanded only for cp / mv / ln /
+#     install (`cp --target=DIR`, `--targ DIR`), against the option names this
+#     file lists for them; elsewhere (`rsync --exc zz`) only the full option
+#     names are recognised.
+#   * cp / mv / ln / install destination rule (b5358f58): it rests on the
+#     option tables in _GNU_SHORT_VAL / _GNU_LONG_REQ / _GNU_LONG_ALL /
+#     _BSD_SHORT_VAL. A value-taking SHORT option missing from them (a newer
+#     or third implementation) is read as a flag, so its value counts as an
+#     operand — a value AFTER the real destination would then be taken for
+#     the destination (an unknown LONG option is undetermined and judged on
+#     every operand, so it does not have this hole). The BSD reading is
+#     dropped on a target-directory option on the assumption that no BSD tool
+#     has one. Hard links are caught only through cp / ln / BSD install; a
+#     hard link made another way (`link`, an interpreter's os.link without a
+#     main literal, `rsync --link-dest`) shares main's inode unseen. A
+#     symlink that points into main is allowed, and a later write THROUGH it
+#     is judged only if the link already exists when that later call is
+#     judged (paths are resolved with realpath).
 #   * IFS: word splitting is on blanks only; a command that changes IFS
 #     (`IFS=/; set -- $P`) is split as if IFS were the default.
 #   * ruby Pathname tracking is by direct `v = Pathname(…)` assignment only; a

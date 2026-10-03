@@ -104,7 +104,6 @@ class BashGuard(unittest.TestCase):
         self.assertEqual(rc, 0, err)
 
     # --- open defects --------------------------------------------------
-    @open_defect("b5358f58")
     def test_b5358f58_cp_reading_from_main_into_worktree_is_allowed(self):
         rc, err = self.w.bash_guard(f"cp {self.w.main}/f.txt {self.w.wt}/f.copy")
         self.assertEqual(rc, 0, "read-only source operand judged as a write target: " + err[:200])

@@ -9352,3 +9352,18 @@ updated_at = 1790995917
 weight = 0.0
 issue_number = 1124
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1124"
+
+[[task]]
+id = "1a7afde2"
+title = "backlog claim_check_slow_helper: force_bypasses_a_never_answering_helper once took 30.19s (1/9 under a mutant, 0/5 at HEAD) — something waited on a sibling's sleep 30; cause unconfirmed, needs a looped repro"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1790997807
+updated_at = 1790997807
+weight = 0.0
+issue_number = 1125
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1125"

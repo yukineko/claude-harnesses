@@ -536,5 +536,70 @@ class Round3ReadsSpawnsAndTemps(unittest.TestCase):
         self.assertEqual(self.run_wt(f"rm {o}/../x.txt {o}/*/y.txt")[0], 0)
 
 
+class Round4ProducersMktempAndEscapes(unittest.TestCase):
+    """Variables filled by a producer (read <<<, printf -v, set --, sh -c
+    positional arguments), mktemp as a write, nested escaped backquotes,
+    perl backslash escapes and multi-statement ruby writes."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.f = Fixture()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.f.close()
+
+    def test_refused(self):
+        f = self.f
+        m, w, o = f.main, f.wt, f.out
+        for c in (
+        f"sh -c 'rm \"$1\"' _ {m}/f.txt",
+        f"bash -c 'echo x > $1/n.txt' x {m}",
+        f"sh -c '\"$@\"' _ rm {m}/f.txt",
+        f"read C <<< 'rm {m}/f.txt'; $C",
+        f"read -r C <<< \"rm {m}/f.txt\"; eval \"$C\"",
+        f"set -- {m}/f.txt; rm $1",
+        f"set -- rm {m}/f.txt; $@",
+        f"printf -v P '%s/f.txt' {m}; rm $P",
+        f"echo `echo \\`echo \\\\\\`rm {m}/f.txt\\\\\\`\\``",
+        f"mktemp -dp {m}",
+        f"mktemp --tmpdir={m}",
+        f"mktemp -p {o} ../{m.name}/x.XXXX",
+        f"cd {m} && mktemp x.XXXX",
+        f"mktemp -p {o} sub/../../{m.name}/x.XXXX",
+        f"ruby -e 'q = Pathname.new(\"{m}/p\")\nq.delete'",
+        f"ruby -e 'File.open(\"{m}/p\", \"a\")'",
+        f"perl -e 'unlink \"\\/{str(m)[1:]}/f.txt\"'",
+        f"perl -e 'open(my $h, \">\", \"{m}\\/x\")'",
+        f"node -e \"const g=require('fs'); g.copyFile('/etc/hosts','{m}/h',()=>0)\"",
+        ):
+            with self.subTest(cmd=c):
+                self.assertEqual(f.run(c, payload_cwd=str(w))[0], 2, f"write into main allowed: {c}")
+
+    def test_allowed(self):
+        f = self.f
+        m, w, o = f.main, f.wt, f.out
+        for c in (
+        f"sh -c 'rm \"$1\"' _ {o}/x.txt",
+        f"sh -c 'echo $0 $1' a b",
+        f"read C <<< 'ls {m}'; $C",
+        f"set -- a b; echo $1 > {o}/o.txt",
+        f"printf -v P '%s' hi; echo $P",
+        "mktemp -d",
+        "mktemp -t x",
+        f"mktemp -p {o} x.XXXX",
+        f"mktemp -u {m}/x.XXXX",
+        f"cd {o} && mktemp x.XXXX",
+        f"ruby -e 'File.open(\"{m}/f.txt\", \"r\") {{|h| puts h.read}}'",
+        f"ruby -e 'File.open(\"{m}/f.txt\") {{|h| puts h.read}}'",
+        f"ruby -e 'q = Pathname.new(\"{m}/f.txt\"); puts q.read'",
+        f"node -e \"const a=[1,2,3]; a.copyWithin(0, 1); console.log(require('fs').readFileSync('{m}/f.txt','utf8'))\"",
+        f"perl -ne 'print if /a\\/b/' {m}/f.txt",
+        ):
+            with self.subTest(cmd=c):
+                rc, err = f.run(c, payload_cwd=str(w))
+                self.assertEqual(rc, 0, f"{c}: {err[:300]}")
+
+
 if __name__ == "__main__":
     unittest.main()

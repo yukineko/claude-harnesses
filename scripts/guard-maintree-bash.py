@@ -47,9 +47,12 @@ JUDGED BY EFFECT, NOT BY argv[0] (ae4543d5). The same write used to pass by
 changing its spelling; each of these is now followed to the path it writes:
   * shell wrappers: `sh -c`, `bash -lc` (any bundle containing `c`), `eval`,
     `env …`, `nohup`, `time`, `nice`, `sudo`, `timeout`, `xargs`, `command`,
-    `exec`, `find -exec`, a `$( … )` or backquote (quoted or not; an unquoted
-    backquote pair is rewritten to `$( … )` before tokenizing) — the payload
-    is tokenized and judged by this same procedure, recursively (depth-capped);
+    `exec`, `find -exec`, a `$( … )` or backquote (quoted or not; a backquote
+    pair is rewritten to `$( … )` before tokenizing, and a backslash-escaped
+    backquote pair inside one is unescaped and rewritten as a nested
+    substitution, recursively) — the payload is tokenized and judged
+    by this same procedure, recursively (depth-capped). `sh -c 'TEXT' NAME A
+    B` binds literal A B to `$1 $2` / `"$@"` (NAME to `$0`) inside TEXT;
   * a variable used as the command: `CMD="rm <path>"; $CMD` word-splits the
     known value and judges the resulting words as the command; `eval "$CMD"`
     and `sh -c "$CMD"` judge the known value as a command text;
@@ -96,7 +99,14 @@ changing its spelling; each of these is now followed to the path it writes:
       - perl regex / substitution / transliteration literals are blanked before
         the word scan (`print if /copy/` is a read) — only where perl itself
         expects a term, and never one that can run code (an `e` flag,
-        `(?{…})`, `@{[…]}` / `${…}`).
+        `(?{…})`, `@{[…]}` / `${…}`). perl literals are read with backslash
+        escapes removed (backslash-slash reads as a slash) when extracting
+        paths, and a regex-flag-shaped `/e` / `/gi` is not taken for a path.
+      - ruby: a write method (`write`, `delete`, `rename`, `mkpath`, …) on a
+        variable bound to `Pathname(…)` / `Pathname.new(…)` anywhere earlier
+        in the payload is a write, as is File/IO.open|new with a mode that is
+        not a read-only literal (`"r"`, `"rb"`, `File::RDONLY`) — a variable
+        mode included, as in python.
       - awk is parsed, not grepped: string literals are blanked first and only
         a `>`/`|` at parenthesis depth 0 inside a print/printf counts
         (`print ($1 > 3)` and `"|"` are not writes).
@@ -122,7 +132,17 @@ changing its spelling; each of these is now followed to the path it writes:
     operands that lands on main is refused; with none it is the same class as
     make/cargo/an arbitrary binary and is not refused, but the command that
     PRODUCES it (`brew shellenv` inside the `$( … )`) and every redirection
-    around it are judged.
+    around it are judged. This holds through a variable too: a variable
+    filled by `$( … )` / backquotes, `printf -v V FMT ARGS`, or `read` /
+    `mapfile` from a here-string carries its producer's text, and when that
+    variable is run (as the program, `eval "$V"`, `sh -c "$V"`) every literal
+    path in the producer text that lands on main is refused (`CMD=$(echo rm
+    <main>/f); $CMD`). `read V <<< 'one line'` into a single variable is the
+    literal line itself; `set -- A B` sets `$1 $2` / `"$@"` to the literal
+    words, so `set -- rm <main>/f; "$@"` is judged as `rm <main>/f`;
+  * mktemp CREATES a file or directory: that is a write, judged at the
+    directory it creates in (see the mktemp rule under variables below);
+    `-u` / `--dry-run` creates nothing.
 
 CWD AND VARIABLES ARE TRACKED THROUGH THE COMMAND, not used as a blanket
 excuse. `cd <dir>` changes what a RELATIVE path resolves against for the
@@ -142,12 +162,22 @@ Variables are handled the same way. `S=<dir>`, `export S=<dir>`, `declare`,
 `local`, `readonly` and `unset` earlier in the SAME command line are tracked
 and expanded (`$S`, `${S}`, `"$S"`), with the same uncertainty rules as `cd`.
 A value only known at runtime (`S=$(…)`, `read S`, two branches that
-disagree) becomes unresolvable — except `$(mktemp …)`: with no template, `-t`
-/ `--tmpdir` (TMPDIR or /tmp), `-p DIR` / `--tmpdir=DIR`, or a template whose
-directory is literal, it is that known directory plus one freshly invented
-name, which is never main or one of main's ancestors; a write under it is
-judged by whether that directory is under main (`S=$(mktemp -d)`, `cd
-"$(mktemp -d)"` -> allowed; `mktemp -p <main>` -> refused). A `for f in A B …` variable stands for the
+disagree) becomes unresolvable — except `$(mktemp …)`, which is a known
+directory plus one freshly invented name (never main or one of main's
+ancestors), so a write under it is judged by whether that directory is under
+main (`S=$(mktemp -d)`, `cd "$(mktemp -d)"` -> allowed). The directory is:
+a template's own directory part, taken relative to `-p DIR` /
+`--tmpdir[=DIR]` when given and to the cwd otherwise (an absolute template
+stands alone) — a template with any `..` component makes it unknown; for BSD
+`-t PREFIX` on darwin, the per-user confstr temp dir (`getconf
+DARWIN_USER_TEMP_DIR`), not TMPDIR, and a PREFIX holding `/` or `..` makes it
+unknown (GNU `-t`: under TMPDIR); otherwise `-p DIR` / `--tmpdir=DIR`; with
+neither, on darwin the confstr dir (observed: BSD mktemp ignores TMPDIR
+there), else TMPDIR, else /tmp. The mktemp COMMAND itself is judged as a write
+under both the darwin and the GNU/TMPDIR reading when they differ (`TMPDIR=<main>
+mktemp`, `mktemp -p <main>`, `mktemp <main>/x.XXXX` -> refused); an unknown
+directory is refused as undetermined. A `S=x cmd` prefix assignment reaches
+mktemp's TMPDIR. A `for f in A B …` variable stands for the
 longest literal prefix its listed values share plus a glob (`for f in
 <wt>/*.txt` -> under the worktree; a list mixing <wt> and <main> -> their
 common parent, refused); a list holding `$(…)` or an unknown variable, or no
@@ -318,7 +348,9 @@ SUBST_WORD = "$__substitution__"   # the output of `$( … )` / `<( … )`
 MKTEMP_MARK = "$__mktemp__"        # the fresh name `mktemp` invents, one component
 TILDE_USER = "$__tilde_user__"     # `~user/…`, which this process does not resolve
 
-_VAR_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
+_VAR_REF = re.compile(
+    r"\$\{([A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*])\}|\$([A-Za-z_][A-Za-z0-9_]*|[0-9@*])"
+)
 _ASSIGN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\+?=(.*)$", re.S)
 
 
@@ -665,7 +697,10 @@ def _backquotes_to_subst(text: str) -> str:
             if j >= len(text):
                 out.append(text[i:])
                 break
-            out.append("$(" + text[i + 1 : j] + ")")
+            # Inside backquotes `\``, `\$` and `\\` lose their backslash, so an
+            # escaped backquote there opens a NESTED substitution.
+            inner = re.sub(r"\\([$`\\])", r"\1", text[i + 1 : j])
+            out.append("$(" + _backquotes_to_subst(inner) + ")")
             i = j
         else:
             out.append(ch)
@@ -859,6 +894,21 @@ _JS_DYNAMIC = re.compile(
 )
 
 
+def _ruby_writes(code: str) -> bool:
+    """Ruby writes _WRITE cannot see within one statement: a method call on a
+    variable bound to `Pathname(…)` / `Pathname.new(…)` earlier in the
+    payload, and File/IO.open|new whose mode argument is not a read-only
+    literal (a variable mode is a write, as in python)."""
+    for m in re.finditer(r"\b(\w+)\s*=\s*Pathname(?:\.new)?\s*\(", code):
+        if re.search(rf"\b{re.escape(m.group(1))}\s*\.\s*(?:write|binwrite|delete|unlink|"
+                     r"rename|mkpath|mkdir|rmdir|rmtree|make_symlink|make_link|truncate|"
+                     r"chmod|chown|utime)\b", code):
+            return True
+    return bool(re.search(
+        r"""\b(?:File|IO)\.(?:open|new)\s*\(?\s*[^,()\n]+,"""
+        r"""(?!\s*(?:['"]r[bt]?(?::[\w-]+)?['"]|File::RDONLY\b))""", code))
+
+
 def _ambiguous_mutation(lang: str, code: str) -> bool:
     """An ambiguous mutation word reached through a filesystem module: an
     attribute of an alias bound to os / shutil / pathlib (python) or fs
@@ -903,8 +953,12 @@ def _ambiguous_mutation(lang: str, code: str) -> bool:
     if lang == "node":
         if _JS_DYNAMIC.search(code):
             return True
-        if re.search(r"\.\s*(?:cp|rm|link|copy)\w*\s*\(\s*[^)\s]", code):
-            return True  # an fs-style copy / remove / link call, whatever the receiver
+        if re.search(r"\.\s*(?:cp|rm|link|copy|copyFile|symlink)(?:Sync)?\s*\(\s*[^)\s]",
+                     code):
+            # An fs-style copy / remove / link call, whatever the receiver is
+            # named (exact fs method names: `copyWithin`, `rmdirAll`-style
+            # names of other APIs are not matched).
+            return True
         fs_mod = r"""['"`](?:node:)?fs(?:/promises|-extra)?['"`]"""
         if not re.search(fs_mod, code):
             return bool(re.search(rf"\bfs\s*(?:\.\s*promises\s*)?\.\s*{_AMBIG}", code))
@@ -1233,46 +1287,116 @@ def _quoted_substitutions(word: str) -> list[str]:
     return [s for s in out if s.strip()]
 
 
-def _mktemp_value(inner: list[str], st: _State, root: str) -> str | None:
-    """The path `$(mktemp …)` prints, as `<dir>/` + MKTEMP_MARK, when `inner`
-    is exactly one mktemp call whose directory is known: no template (TMPDIR or
-    /tmp), `-t`/`--tmpdir` (TMPDIR), `-p DIR`/`--tmpdir=DIR`, or a template
-    whose directory is literal. Anything else -> None (stays unknown)."""
-    if not inner or os.path.basename(inner[0]) != "mktemp":
+_USER_TMP: list = []
+
+
+def _darwin_user_temp_dir() -> str | None:
+    """macOS `confstr(_CS_DARWIN_USER_TEMP_DIR)`, the directory BSD
+    `mktemp -t` creates in (not $TMPDIR). None off darwin or if unreadable."""
+    if sys.platform != "darwin":
+        return None
+    if not _USER_TMP:
+        try:
+            r = subprocess.run(("getconf", "DARWIN_USER_TEMP_DIR"),
+                               capture_output=True, text=True, timeout=5)
+            val = r.stdout.strip() if r.returncode == 0 else ""
+        except (OSError, subprocess.SubprocessError):
+            val = ""
+        _USER_TMP.append(os.path.realpath(val) if val and os.path.isabs(val) else None)
+    return _USER_TMP[0]
+
+
+def _set_positional(st: _State, args: list[str]) -> None:
+    """`set -- A B`, `sh -c '…' _ A B`: $1 $2 … and "$@" / "$*" (a literal
+    list joined by spaces, so `"$@"` as the program word-splits like
+    `$CMD`)."""
+    for k in [k for k in st.vars if k.isdigit() and k != "0"] + ["@", "*"]:
+        st.vars.pop(k, None)
+    for i, a in enumerate(args, 1):
+        st.vars[str(i)] = a
+    st.vars["@"] = st.vars["*"] = " ".join(args)
+
+
+def _mktemp_value(inner: list[str], st: _State, root: str,
+                  darwin: bool = sys.platform == "darwin") -> str | None:
+    """The path `mktemp …` creates and prints, as `<dir>/` + MKTEMP_MARK, when
+    `inner` is exactly one mktemp call whose directory is known; else None.
+
+      * a template with a directory part: that directory, taken relative to
+        `-p DIR` / `--tmpdir[=DIR]` when given, else to the cwd (an absolute
+        template stands alone); any `..` component -> None;
+      * `-t PREFIX` (BSD, darwin): the per-user confstr temp dir (not
+        TMPDIR); a PREFIX holding `/` or `..` -> None. Elsewhere (GNU) `-t`
+        means "under TMPDIR";
+      * otherwise `-p DIR` / `--tmpdir=DIR`; else, on darwin, the per-user
+        confstr temp dir (observed: BSD mktemp with no template ignores
+        TMPDIR); else TMPDIR (tracked; the hook's own when absolute and
+        outside main), else /tmp.
+    `darwin=False` gives the GNU / TMPDIR reading of the same call.
+    A base that cannot be expanded -> None."""
+    if not inner or os.path.basename(inner[0]) not in ("mktemp", "gmktemp"):
         return None
     if any(t in SEPARATORS or t in REDIR_OUT for t in inner):
         return None
     tmpdir = st.vars.get("TMPDIR") or "/tmp"
-    base: str | None = None
+    explicit: str | None = None
+    tflag = False
+    prefix: str | None = None
     template: str | None = None
     j = 1
     while j < len(inner):
         a = _expand(inner[j], st)
         j += 1
         if a == "-p" and j < len(inner):
-            base = _expand(inner[j], st)
+            explicit = _expand(inner[j], st)
             j += 1
+        elif a.startswith("-p") and len(a) > 2:
+            explicit = a[2:]
         elif a.startswith("--tmpdir"):
-            base = a.split("=", 1)[1] if "=" in a else tmpdir
+            explicit = a.split("=", 1)[1] if "=" in a else tmpdir
         elif a == "-t":
-            base = tmpdir
+            tflag = True
             if j < len(inner) and not inner[j].startswith("-"):
-                j += 1  # BSD: the prefix argument
+                prefix = _expand(inner[j], st)
+                j += 1
+        elif a.startswith("-") and len(a) > 1 and not a.startswith("--"):
+            if "p" in a[1:] and j < len(inner):  # `-dp DIR`
+                explicit = _expand(inner[j], st)
+                j += 1
+            tflag = tflag or "t" in a[1:]
         elif a.startswith("-"):
             continue
         else:
             template = a
-    if template is not None and base is None:
+    if tflag and darwin:
+        if prefix is not None and ("/" in prefix or ".." in prefix):
+            return None
+        base = _darwin_user_temp_dir() or tmpdir
+    elif template is not None and "/" in template:
+        if ".." in template.split("/"):
+            return None
+        tdir = os.path.dirname(template)
         if os.path.isabs(template):
-            base = os.path.dirname(template)
+            base = tdir
+        elif explicit is not None:
+            base = os.path.join(explicit, tdir)
+        elif tflag:
+            base = os.path.join(tmpdir, tdir)
         elif st.rel is not None:
-            base = os.path.join(st.rel, os.path.dirname(template))
+            base = os.path.join(st.rel, tdir)
         else:
             return None
-    base = base or tmpdir
+    elif template is not None and explicit is None and not tflag:
+        if st.rel is None:
+            return None
+        base = st.rel  # a bare relative template: the cwd
+    elif explicit is not None:
+        base = explicit
+    else:
+        base = (_darwin_user_temp_dir() if darwin else None) or tmpdir
     if not base or any(c in base for c in _UNRESOLVABLE) or not os.path.isabs(base):
         return None
-    return base.rstrip("/") + "/" + MKTEMP_MARK
+    return os.path.normpath(base) + "/" + MKTEMP_MARK
 
 
 def _replace_quoted_mktemp(word: str, st: _State, root: str) -> str:
@@ -1507,7 +1631,16 @@ class _Walk:
                 assert m is not None
                 new.vars[m.group(1)] = _expand(m.group(2), new)
             return new
-        argv = argv[k:]  # prefix assignments only reach the command's environment
+        env_st = st
+        if k:
+            # Prefix assignments only reach the command's ENVIRONMENT (mktemp
+            # reads TMPDIR from it), not the expansion of its own arguments.
+            env_st = st.copy()
+            for a in argv[:k]:
+                m = _ASSIGN.match(a)
+                assert m is not None
+                env_st.vars[m.group(1)] = _expand(m.group(2), st)
+        argv = argv[k:]
 
         word = _expand(argv[0].lstrip("`"), st)
         if "$" in argv[0] and any(c in word for c in " \t\n"):
@@ -1516,6 +1649,9 @@ class _Walk:
             return self.judge(word.split() + argv[1:], st, stdin, nxt)
         if any(c in word for c in "$`"):
             self.subst_literals(argv[0], st)
+            # A variable carrying a producer's text (`CMD=$(…)`, `printf -v`,
+            # `read … <<<`): the producer's literal paths are judged too.
+            self.subst_literals(word, st)
             # An unknown PROGRAM (`$CMD`, `$(echo rm)`, a backquoted command):
             # it could be any tool, `rm` included, so every operand it is
             # handed is judged as a possible write target — a literal path in
@@ -1551,10 +1687,43 @@ class _Walk:
             return self.loop_var(rest, st)
         if prog in ("read", "mapfile", "readarray", "getopts"):
             new = st.copy()
-            for a in _operands(rest):
-                if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", a):
+            # A here-string is the literal the variable is filled from: keep
+            # it as the variable's producer text.
+            src = stdin[1] if (stdin and stdin[0] == "code" and stdin[1]) else None
+            names = [a for a in _operands(rest) if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", a)]
+            plain = prog == "read" and not any(a.startswith("-a") for a in rest)
+            for a in names:
+                if src is None:
                     new.vars[a] = UNKNOWN_VAL
+                elif plain and len(names) == 1 and "\n" not in src.strip():
+                    # `read V <<< 'text'`: V is exactly that one line.
+                    new.vars[a] = _expand(src.strip(), st)
+                else:
+                    new.vars[a] = self.producer(src)
             return new
+        if prog == "printf" and rest[:1] == ["-v"] and len(rest) > 1:
+            new = st.copy()
+            if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", rest[1]):
+                new.vars[rest[1]] = self.producer(
+                    " ".join(_expand(a, st) for a in rest[2:]))
+            return new
+        if prog == "set" and rest and (rest[0] == "--" or rest[0][:1] not in "-+"):
+            new = st.copy()
+            args = [_expand(a, st) for a in (rest[1:] if rest[0] == "--" else rest)]
+            _set_positional(new, args)
+            return new
+        if prog == "mktemp" or prog == "gmktemp":
+            # mktemp CREATES its file / directory: that is a write.
+            if "-u" in rest or "--dry-run" in rest:
+                return None
+            # Judged under BOTH readings (darwin BSD and GNU/TMPDIR) when they
+            # differ: either one landing on main is refused.
+            for darwin in {sys.platform == "darwin", False}:
+                made = _mktemp_value(argv, env_st, self.an.root, darwin)
+                if made is None:
+                    raise _Undet("cannot tell which directory mktemp creates in")
+                self.an.check(made, st)
+            return None
         if prog == "case":
             return None
 
@@ -1758,6 +1927,14 @@ class _Walk:
         new = self.judge(inner, st2, stdin, nxt)
         return new if prog in SAME_SHELL_WRAPPERS else None
 
+    def producer(self, text: str) -> str:
+        """A fresh marker standing for a value whose PRODUCING text is known
+        (`printf -v`, a here-string): it expands as unknown, but
+        subst_literals judges the text's literal paths where it is run."""
+        marker = f"{SUBST_WORD}{len(self.an.substs)}__"
+        self.an.substs[marker] = text
+        return marker
+
     def subst_literals(self, text: str, st: _State) -> None:
         """Text that a `$( … )` / backquote PRODUCES and that is then run
         (`eval "$(…)"`, `sh -c "$(…)"`, `$(…)` as a program) cannot be known.
@@ -1803,7 +1980,13 @@ class _Walk:
         if has_c:
             if j < len(rest):
                 self.subst_literals(rest[j], st)
-                self.an.analyze(rest[j], st.copy(), self.depth + 1)
+                inner = st.copy()
+                # `sh -c '…' NAME A B`: NAME is $0, A B are $1 $2 / "$@".
+                extra = [_expand(a, st) for a in rest[j + 1:]]
+                _set_positional(inner, extra[1:])
+                if extra:
+                    inner.vars["0"] = extra[0]
+                self.an.analyze(rest[j], inner, self.depth + 1)
             return
         if j < len(rest):
             return  # a script FILE: its content is not judged (residual)
@@ -1830,6 +2013,8 @@ class _Walk:
         else:
             body = _strip_perl_regex(code) if lang == "perl" else code
             writes = bool(_WRITE[lang].search(body))
+            if lang == "ruby" and _ruby_writes(body):
+                writes = True
             if lang == "python" and _py_open_for_write(code):
                 writes = True
             token = bool(_UNAMBIG_MUTATION.search(body)) or _ambiguous_mutation(lang, body)
@@ -1846,7 +2031,15 @@ class _Walk:
                     self.an.analyze(text, st.copy(), self.depth + 1)
         if not (writes or spawns or token):
             return  # nothing in it can change a file: a read
-        cands = _payload_paths(code) + _operands(args)
+        if lang == "perl":
+            # `\/` is `/` inside a perl string or s///e replacement; read the
+            # literals unescaped, and drop the `/e`-style regex flags that the
+            # absolute-path pattern would otherwise take for a path.
+            cands = [c for c in _payload_paths(re.sub(r"\\(.)", r"\1", code))
+                     if not re.fullmatch(r"/[msixpodualngcer]{1,8}", c)]
+        else:
+            cands = _payload_paths(code)
+        cands += _operands(args)
         if writes and not cands:
             raise _Undet(f"a {lang} payload writes files, but names no literal path")
         for c in cands:
@@ -2410,11 +2603,23 @@ if __name__ == "__main__":
 #     allowed. Single-quoted shell text inside a payload (`'$S'`) is expanded
 #     as if the shell had expanded it.
 #   * an UNKNOWN PROGRAM is only judged through its literal operands and the
-#     literal paths of the command that produced it: the text `eval "$(cmd)"`
-#     evaluates is not known (`eval "$(cat script)"` that writes main is not
-#     seen), nor is `sh -c "$CMD"` / `$CMD …` with CMD not assigned in the
-#     command, nor what any program with an unresolvable name does with a
-#     path it was not handed literally.
+#     literal paths of the command that produced it — directly or through a
+#     variable filled by `$( … )`, backquotes, `printf -v`, `read`/`mapfile`
+#     from a here-string, or `set --`: the text `eval "$(cmd)"` evaluates is
+#     not known (`eval "$(cat script)"` that writes main is not seen), nor is
+#     `sh -c "$CMD"` / `$CMD …` with CMD not assigned in the command or filled
+#     by a producer with no literal text (`read CMD < file`, a value merged
+#     from two branches), nor what any program with an unresolvable name does
+#     with a path it was not handed literally.
+#   * mktemp on a platform whose `-t` / no-template directory is neither the
+#     darwin confstr dir nor TMPDIR/`/tmp` is judged against those two; python
+#     `tempfile.mkdtemp()`-derived paths are not tracked (a write that names
+#     only such a path and no literal one is refused as undetermined).
+#   * perl backslash unescaping is applied to the whole payload text at once;
+#     a path spelled with other perl escapes (`\x2f`, `chr(47)`) is not read.
+#   * ruby Pathname tracking is by direct `v = Pathname(…)` assignment only; a
+#     Pathname reached through a method chain on another variable, a block
+#     parameter, or `Pathname(…).join(…)` held in a second variable is not.
 #   * an interpreter spawn that could not be parsed as a literal command
 #     (an alias, an f-string, os.exec*, Popen with cwd=, awk system() /
 #     `| "cmd"`) and names no literal path: the spawned command is not

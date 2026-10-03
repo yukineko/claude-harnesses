@@ -1041,19 +1041,21 @@ snippet を打つのではなく **condukt バイナリが決定論的に発火�
    # 推奨経路: Phase 5 で控えた Task tool の agentId を渡す。condukt 側 (record_runs) が
    # `gauge subagents --json` を agent_id **完全一致**で引いて実コストを解決する — description の
    # 書式ゆれ (旧来の "<t.id>: <title>" prefix マッチ) に一切依存しないので、worker の description が
-   # 慣習通りでなくても取りこぼさない。agentId が引けない/gauge が無い場合は condukt 側が
-   # 自動で --cost の値にフォールバックする (fail-soft、prose 側で何もしなくてよい)。
+   # 慣習通りでなくても取りこぼさない。agentId が引けない/gauge にデータが無い場合は condukt 側が
+   # 手で渡した --cost にフォールバックし、それも無ければ **未計測** として fugu-router record の
+   # --cost を省略する (0 を捏造しない — backlog 55fb3861)。**コストが分からないのに --cost 0 を
+   # 渡さない**: 明示した 0 は「計測値 0」として素通しで転送される。
    condukt state set --run "$RID" --task "<t.id>" --status verified \
-     --model <worker に使ったモデル> --agent-id "<Task tool が返した agentId>" --cost 0
+     --model <worker に使ったモデル> --agent-id "<Task tool が返した agentId>"
    # fail 時も同様に --status failed --model <試したモデル> --agent-id <同上> を残す (失敗も学習信号)
 
    # フォールバック (手動): agentId が無い/古い condukt の場合は従来通り gauge session の
    # セッション累積コストを --cost に渡してもよい (--agent-id 省略時は agent_id 解決を試みず
-   # --cost の値がそのまま使われる — 後方互換)。
+   # --cost の値がそのまま使われる — 後方互換)。取れなかったときは --cost ごと省略する。
    SID="${CLAUDE_CODE_SESSION_ID:-}"
    GAUGE_COST=$(gauge session --json ${SID:+--session "$SID"} 2>/dev/null | jq -r '.cost_usd // empty' 2>/dev/null || true)
    condukt state set --run "$RID" --task "<t.id>" --status verified \
-     --model <worker に使ったモデル> --cost "${GAUGE_COST:-0}"
+     --model <worker に使ったモデル> ${GAUGE_COST:+--cost "$GAUGE_COST"}
 
    # タスクが verified になった直後に checkpoint を1本書く: これで「良好な run-state」が
    # snapshot され、後続タスクが後で fail (verified→failed) したとき auto-rollback
@@ -1061,10 +1063,11 @@ snippet を打つのではなく **condukt バイナリが決定論的に発火�
    # 復元対象が生じず安全ネットは休眠のまま。checkpoint は fail-soft なので無条件に呼ぶ。
    condukt state checkpoint --run "$RID" --label "verified:<t.id>"
    ```
-   `--model` を省略すると decomposition の `suggested_model` に、`--agent-id`/`--cost` 省略はそれぞれ
-   unchanged/0.0 にフォールバックする (後方互換)。**agent-id 経由の実コスト解決には gauge >= 0.3.0
+   `--model` を省略すると decomposition の `suggested_model` にフォールバックし、`--agent-id`/`--cost`
+   の省略は unchanged (未設定のまま) になる。**agent-id 経由の実コスト解決には gauge >= 0.3.0
    (`gauge subagents --json` に `agent_id`/`cost_usd` が乗っている版) が必要**。それ未満、または
-   agentId が解決できない場合は `--cost` に渡した値がそのまま記録される。
+   agentId が解決できない場合は `--cost` に渡した値がそのまま記録され、`--cost` も無ければ
+   fugu-router には **未計測** (`--cost` 省略、fugu-router >= 0.1.41 で cost の集計から除外) として記録される。
 
    **verifier 側も対になる形で記録する** (計測専用。route.rs/decide_bandit 等の自動ルーティング
    ロジックはまだこの値を読まない — 将来 hypothesis を検証する際の観測データとして蓄積するだけ)。
@@ -1073,14 +1076,15 @@ snippet を打つのではなく **condukt バイナリが決定論的に発火�
    `--verifier-model` / `--verifier-agent-id` を追加で渡す:
    ```bash
    condukt state set --run "$RID" --task "<t.id>" --status verified \
-     --model <worker に使ったモデル> --agent-id "<worker の Task tool が返した agentId>" --cost 0 \
+     --model <worker に使ったモデル> --agent-id "<worker の Task tool が返した agentId>" \
      --verifier-model <verifier に使ったモデル> \
      --verifier-agent-id "<verifier の Task tool が返した agentId>"
    # fail 時も同様に --status failed に --verifier-model/--verifier-agent-id を残す (検証の失敗も学習信号)
    ```
    verifier のコストが分かる場合 (`gauge subagents --json` を verifier の agentId で引けた、または
    セッション累積コストが取れた) は `--verifier-cost` も一緒に渡してよい。省略すればいずれも
-   unchanged にフォールバックする (後方互換、fail-soft)。
+   unchanged のままで、verifier の agentId でも引けなければ worker 側と同じく **未計測** として
+   `--cost` を省略して記録される (0 を捏造しない — backlog 55fb3861)。
 
 1.5. **ルーティング根拠 (basis/confidence/rationale) と変更行数も同じ set で残す (完全 soft・
    欠けても記録は壊れない)**。今の判断がどの根拠 (basis/confidence/rationale) で下されたかは

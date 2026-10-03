@@ -69,7 +69,7 @@ fugu-router suggest --files src/auth/login.ts "fix login validation" [--mode fas
 fugu-router confidence --files src/auth/login.ts "fix login validation"  # calibrated pass-probability in [0,1]
 fugu-router procedures search --query "fix login validation" --files a,b --k 3
                                                              # k-NN over how similar verified tasks were solved
-fugu-router stats [--json]                                   # per-model pass-rate / avg cost + duration coverage
+fugu-router stats [--json]                                   # per-model pass-rate / avg cost (measured only) + duration & cost coverage
 fugu-router duration [--json]                                # alias of duration-outliers: duration coverage + per-class outliers
 fugu-router import --episodes /path/episodes.jsonl [--playbooks /path/playbooks.jsonl] [--dry-run]
                                                              # merge another machine's stores (content-hash dedup)
@@ -105,6 +105,11 @@ fugu-router record --title "<task title>" --files "<touched_files>" \
 
 `--status` other than a pass-word (`verified|pass|passed|ok|true`) counts as a
 non-pass. `--cost` is optional (read it from `gauge` if you want cost-aware routing).
+Omitting it records the episode's cost as **unmeasured** (`cost_usd` absent), which is
+excluded from every cost aggregate (`stats`, `delegation-stats`, the prompt summary,
+cost-per-pass routing) rather than averaged in as `$0`. A negative or non-finite `--cost`
+is rejected. A stored `0.0` (the pre-0.1.41 writer's encoding of "unmeasured") reads back
+as unmeasured, so `--cost 0` is also treated as unmeasured.
 
 Pass `--skill-fingerprint "$(fugu-router fingerprint)"` to stamp the episode with
 the version of the SKILL.md corpus that produced it (stored as

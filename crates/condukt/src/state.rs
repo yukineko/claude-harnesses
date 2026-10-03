@@ -2257,7 +2257,11 @@ pub struct RecordSpec {
     pub model: String,
     /// "verified" or "failed" — the fugu-router status vocabulary.
     pub status: String,
-    pub cost_usd: f64,
+    /// The manually-set cost (`state set --cost`), if any. `None` = never set,
+    /// which the caller must treat as UNMEASURED (omit `fugu-router record
+    /// --cost`), never as a fabricated `0.0` (backlog 55fb3861). An explicit
+    /// `--cost 0` is `Some(0.0)` and is forwarded as given.
+    pub cost_usd: Option<f64>,
     pub done_criteria: Option<String>,
     /// Wall-clock seconds between `started_at` (last `running` transition) and
     /// `updated_at` (the settling transition), when both are known. `None`
@@ -2359,7 +2363,7 @@ pub fn records_for_run(
                 class,
                 model,
                 status: status.to_string(),
-                cost_usd: ts.cost_usd.unwrap_or(0.0),
+                cost_usd: ts.cost_usd,
                 done_criteria,
                 duration_secs,
                 agent_id: ts.agent_id.clone(),
@@ -4998,7 +5002,7 @@ mod tests {
         let run = make_run_with_tasks(vec![t]);
         let specs = records_for_run(&run, &dec).unwrap();
         assert_eq!(specs[0].model, "opus");
-        assert_eq!(specs[0].cost_usd, 0.42);
+        assert_eq!(specs[0].cost_usd, Some(0.42));
     }
 
     /// records_for_run propagates the task state's agent_id into RecordSpec

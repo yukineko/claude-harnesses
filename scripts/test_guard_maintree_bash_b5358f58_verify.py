@@ -383,18 +383,73 @@ class SeveralSourcesExistenceExemption(Base):
             f"POSIXLY_CORRECT=1 gcp {self.O}/x -t {self.W} {self.M}/nodir",
         ], cwds=(self.r.wt,))
 
-    @unittest.expectedFailure
-    def test_bracket_glob_reaching_an_existing_directory_is_refused(self):
-        # OPEN DEFECT found by this verifier (round 3). `-[v]` is a bash
-        # bracket glob; with <main>/-v an existing directory bash expands it
-        # to `-v` and BSD cp copies into it (observed: `cp a b -[v]; ls -- -v`
-        # -> exit 0, `a b`). `[` is not in _UNRESOLVABLE, so the guard stats
-        # the LITERAL `<main>/-[v]`, gets ENOENT, and exempts the reading.
-        # d8426c4e and d4abf935 refused this; 4a7fcb1e allowed it (it judged
-        # no `-` word at all).
+    def test_shell_expanded_destination_reaching_an_existing_directory_is_refused(self):
+        # Found by this verifier in round 3 (fixed in ddcf0080). `-[v]` is a
+        # bash bracket glob; with <main>/-v an existing directory bash expands
+        # it to `-v` and BSD cp copies into it (observed: `cp a b -[v]; ls --
+        # -v` -> exit 0, `a b`). eb67faab statted the LITERAL `<main>/-[v]`,
+        # got ENOENT and exempted the reading.
         A = f"{self.W}/f.txt {self.W}/g.txt"
-        self.expect(DENY, [f"cp {A} -[v]", f"gcp {A} -[v]"],
-                    cwds=(self.r.main,))
+        self.expect(DENY, [
+            f"cp {A} -[v]", f"gcp {A} -[v]", f"mv {A} -[v]", f"ln -s {A} -[v]",
+            f"cp {A} -[v]/", f"cp {A} -[[:alpha:]]", f"cp {A} -[!x]", f"cp {A} -[^x]",
+            f"cp {A} -@(v)", f"cp {A} -+(v)", f"cp {A} -!(x)",
+            f"shopt -s extglob; cp {A} -@(v|z)", f"cp {A} -{{v,}}", f"cp {A} -?",
+            f"V='-[v]'; cp {A} $V", f"cp {A} $'-v'", f"cp {A} ~+/-v", f"cp {A} \\-v",
+        ], cwds=(self.r.main,))
+
+
+class BracketGlobIsAGlob(Base):
+    """ddcf0080 put `[` in _UNRESOLVABLE: `<parent>/mainrep[o]/f` IS
+    `<main>/f` once bash expands it, and was judged as the literal non-main
+    name (4a7fcb1e and eb67faab allowed it)."""
+
+    def test_bracket_glob_naming_main_is_refused(self):
+        P = str(self.r.tmp)
+        self.expect(DENY, [
+            f"rm {P}/mainrep[o]/f.txt",
+            f"rm {P}/mainre[p]o/sub/h.txt",
+            f"echo x > {P}/[m]ainrepo/g.txt",
+        ])
+
+    def test_ordinary_brackets_stay_allowed(self):
+        M, W, O = self.M, self.W, self.O
+        self.expect(ALLOW, [
+            f"cp {M}/f.txt {W}/[x]",
+            f"echo x > {W}/a[1].txt",
+            f"echo x > {O}/b[2].log",
+            f"cp {W}/[f].txt {O}/",
+            f"mv {O}/x {O}/y[1]",
+            f"rm -rf {O}/build[0-9]",
+            f"tar -cf {O}/a[1].tar -C {W} .",
+            f"find {W} -name '[f]*' -print",
+            f"sed -i '' 's/[a]/b/' {W}/f.txt",
+            f"cat {M}/f.txt | tr '[:lower:]' '[:upper:]' > {O}/up",
+            "ls '[a]'",
+            "[ -f f.txt ] && echo y",
+            "[[ -f f.txt ]] && echo y",
+            "git log --format='[%h]' -3",
+            "python3 -c 'a=[1];print(a[0])'",
+            "grep -E '[a-z]+' f.txt",
+            f"jq '.[0]' {W}/f.txt",
+        ])
+        self.expect(ALLOW, [f"rm {W}/[f].txt", "rm '[f].txt'"], cwds=(self.r.wt,))
+
+    @unittest.expectedFailure
+    def test_bracket_write_into_a_git_ignored_dir_of_main_is_allowed(self):
+        # OVER-BLOCK found by this verifier in round 4, pending a ruling.
+        # 4a7fcb1e and eb67faab allowed these (the literal path is git-
+        # ignored); ddcf0080 refuses them because a `[` word is now judged on
+        # its literal prefix, and that rule does not consult git-ignore. It
+        # is the same treatment `*`, `?` and `{}` already got in 4a7fcb1e
+        # (`echo x > ignored/a?.txt` was refused there too). A bracket
+        # expression cannot match `/`, so no expansion leaves ignored/.
+        (self.r.main / "ignored").mkdir(exist_ok=True)
+        self.expect(ALLOW, [
+            "echo x > ignored/a[1].txt",
+            "mkdir -p ignored/x[1]",
+            "touch ignored/[a]",
+        ], cwds=(self.r.main,))
 
 
 class NoOverBlock(Base):

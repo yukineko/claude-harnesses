@@ -36,6 +36,27 @@ _SPEC.loader.exec_module(cpr)
 
 OWNER = "yukineko"
 
+# Sentinel for "the attribute was not defined on the module at all", which is a
+# different state from "it was defined as None".
+_MISSING = object()
+
+# Name of the seam SharedCrateVersionDirection needs: a rebindable
+# (version) -> True | False | None query answering "does this shared-crate
+# version string appear anywhere in this source tree's history?". Named once
+# here so the contract has a single spelling the implementation can be held to.
+CORE_IN_HISTORY = "CORE_VERSION_IN_HISTORY"
+
+# Every `<major>.<minor>.<patch-ish>` token, including unorderable ones like
+# "0.2.x". Masking these is how a case asserts that two findings differ in what
+# they SAY, not merely in which numbers got substituted into one shared
+# sentence — the exact confusion this dimension is about.
+_VERSION_TOKEN = re.compile(r"\b\d+\.\d+\.\w+\b")
+
+
+def _mask_versions(text):
+    return _VERSION_TOKEN.sub("<V>", text)
+
+
 # The fixture fleet must contain EVERY expected GATE plugin: the script now
 # reconciles the plugins it found against EXPECTED_GATE_PLUGINS and fails on any
 # gate it could not account for, so a fixture missing one is (correctly) drift
@@ -367,8 +388,19 @@ class _FixtureCase(unittest.TestCase):
     """Rebinds the script's path constants at the fixture, restores after."""
 
     def run_main(self, tmp, *, changed=(), core_version="0.2.1", parked=None,
-                 retired=None, **kwargs):
+                 retired=None, core_in_history=None, **kwargs):
         crates, registry_path, settings_path = _make_fixture(Path(tmp), **kwargs)
+        # The provenance-history seam (see SharedCrateVersionDirection). Saved
+        # and restored out-of-band from the tuple below so the suite still
+        # imports and runs against a build of the checker that does not define
+        # the name yet — the cases that need it assert its existence themselves
+        # rather than making every unrelated case die at import.
+        cih_saved = getattr(cpr, CORE_IN_HISTORY, _MISSING)
+        setattr(
+            cpr, CORE_IN_HISTORY,
+            core_in_history if callable(core_in_history)
+            else (lambda version: core_in_history),
+        )
         saved = (
             cpr.CRATES,
             cpr.REGISTRY_PATH,
@@ -424,6 +456,11 @@ class _FixtureCase(unittest.TestCase):
                 cpr.PARKED_PATH,
                 cpr.RETIRED_PATH,
             ) = saved
+            if cih_saved is _MISSING:
+                if hasattr(cpr, CORE_IN_HISTORY):
+                    delattr(cpr, CORE_IN_HISTORY)
+            else:
+                setattr(cpr, CORE_IN_HISTORY, cih_saved)
         return rc, out.getvalue(), err.getvalue()
 
 
@@ -2694,6 +2731,289 @@ class DriftDoesNotMaskDarkness(_FixtureCase):
             "Those are different failures: stale runs old code (red), absent "
             f"runs nothing (dark).\nout={out}\nerr={err}",
         )
+
+
+class SharedCrateVersionDirection(_FixtureCase):
+    """A harness-core version mismatch has a DIRECTION, and it decides the remedy.
+
+    STALE  — the SOURCE is ahead of what was deployed. `rollout-plugins.sh` is
+             the correct fix.
+    ORPHAN — the DEPLOYED binary is ahead of the source tree, because the bytes
+             came from a branch that was never merged. `rollout-plugins.sh` is a
+             ROLLBACK here: it would overwrite newer running artifacts with
+             older ones, so prescribing it is the destructive answer.
+
+    Both were observed on 2026-08-07 in this repo: 42 plugins ORPHAN in the
+    morning (deployed 0.2.6 / source 0.2.5, with 0.2.6 living only on an
+    unmerged branch), then STALE after the merge. Same-looking red, opposite
+    correct action.
+
+    These cases pin the direction itself. They deliberately assert
+    DISTINGUISHABILITY (via `_mask_versions`, which blanks the version numbers)
+    rather than exact wording, so they constrain what the report must let an
+    operator conclude, not how a particular sentence is phrased.
+    """
+
+    CRATE = "condukt"
+
+    # Words that let a reader see that the DEPLOYED side is the newer one. The
+    # list is deliberately wide: the requirement is that the direction be
+    # readable at all, not that a specific phrase be used.
+    AHEAD_MARKERS = (
+        "rollback", "roll back", "rolling back", "rolled back",
+        "backward", "backwards", "downgrade", "newer", "ahead", "revert",
+    )
+
+    # Ways of naming the rollout as the missing action. Covers both the
+    # imperative ("re-run rollout-plugins.sh") and this file's existing
+    # accusative form ("rollout-plugins.sh not run since ..."). `\b(?:re-?run|
+    # run)\b` does not match "running", so a message may still MENTION the
+    # script while warning that running it would go backwards.
+    PRESCRIBES_ROLLOUT = re.compile(
+        r"\b(?:re-?run|rerun|run)\s+(?:scripts/)?rollout-plugins\.sh"
+        r"|rollout-plugins\.sh\s+(?:was\s+)?not\s+run",
+        re.IGNORECASE,
+    )
+
+    # Ways of admitting that something could not be established. Per CLAUDE.md
+    # §3 an undeterminable direction must be reported as undetermined, never as
+    # clean and never as a confident prescription.
+    UNDETERMINED_MARKERS = (
+        "undetermined", "could not", "cannot", "can not", "unable",
+        "not comparable", "uncomparable", "unorderable", "not orderable",
+        "cannot be ordered", "unparseable", "unparsable", "unknown",
+    )
+
+    def finding(self, recorded, current, **kw):
+        """The shared-crate provenance finding for one (deployed, source) pair."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp,
+                provenance={
+                    self.CRATE: {
+                        "commit": "deadbeef" * 5,
+                        "dirty": False,
+                        "harness_core_version": recorded,
+                    }
+                },
+                core_version=current,
+                **kw,
+            )
+        lines = [
+            ln.strip()
+            for ln in (out + err).splitlines()
+            if self.CRATE in ln and ("harness-core" in ln or "harness_core" in ln)
+        ]
+        self.assertTrue(
+            lines,
+            f"deployed={recorded!r} source={current!r} produced no finding "
+            f"naming both {self.CRATE} and the shared crate. A version "
+            f"mismatch must be reported however it is worded.\n"
+            f"rc={rc}\nout={out}\nerr={err}",
+        )
+        return rc, " ".join(lines)
+
+    def test_stale_and_orphan_do_not_share_one_message(self):
+        """The two opposite directions must not be the same sentence with the
+        two numbers swapped."""
+        _, stale = self.finding("0.2.5", "0.2.6")   # source ahead  -> STALE
+        _, orphan = self.finding("0.2.6", "0.2.5")  # deployed ahead -> ORPHAN
+        self.assertNotEqual(
+            _mask_versions(stale), _mask_versions(orphan),
+            "STALE and ORPHAN produce the identical finding once the version "
+            "numbers are blanked, so the only thing separating them is which "
+            "number landed in which slot. An operator reading this cannot tell "
+            "whether running the rollout fixes the fleet or rolls it back.\n"
+            f"stale  = {stale}\norphan = {orphan}",
+        )
+
+    def test_orphan_says_the_deployed_side_is_ahead(self):
+        """The ORPHAN finding must state that rolling out would go backwards."""
+        _, orphan = self.finding("0.2.6", "0.2.5")
+        low = orphan.lower()
+        self.assertTrue(
+            any(m in low for m in self.AHEAD_MARKERS),
+            "the ORPHAN finding carries no word indicating that the DEPLOYED "
+            "bytes are the newer ones. This is a behavioural requirement, not a "
+            "wording preference: the report is the only place the operator "
+            "learns the direction, and the obvious reflex on an unexplained "
+            "mismatch is to run the rollout, which here destroys the newer "
+            f"running artifacts.\n(looked for any of {self.AHEAD_MARKERS})\n"
+            f"orphan = {orphan}",
+        )
+
+    def test_orphan_does_not_prescribe_the_rollout(self):
+        """The ORPHAN finding must not name the rollout as the missing action."""
+        _, orphan = self.finding("0.2.6", "0.2.5")
+        hit = self.PRESCRIBES_ROLLOUT.search(orphan)
+        # Built before the assert, and only from a match that exists:
+        # `assertIsNone`'s message argument is evaluated EAGERLY, so reaching
+        # into `hit` inline raised AttributeError on the passing path.
+        matched = repr(hit.group(0)) if hit else "(no match)"
+        self.assertIsNone(
+            hit,
+            "the ORPHAN finding prescribes the rollout "
+            f"(matched {matched}). In this direction "
+            "the rollout is a rollback — it overwrites newer deployed artifacts "
+            "with older source — so naming it as the thing that was 'not run' "
+            "is an instruction to do the damaging thing. Mentioning the script "
+            "while warning against it is allowed; this pattern only matches the "
+            "imperative and the 'not run' accusation.\n"
+            f"orphan = {orphan}",
+        )
+
+    def test_stale_still_prescribes_the_rollout(self):
+        """Regression guard: fixing the ORPHAN case must not quieten STALE."""
+        rc, stale = self.finding("0.2.5", "0.2.6")
+        self.assertNotEqual(
+            rc, 0,
+            f"a binary linking an older harness-core must still be red.\n"
+            f"stale = {stale}",
+        )
+        self.assertIn(
+            "rollout-plugins.sh", stale,
+            "the STALE direction must keep pointing at the rollout as the fix — "
+            "it is the one direction where running it is correct.\n"
+            f"stale = {stale}",
+        )
+
+    def test_ordering_is_numeric_not_lexicographic(self):
+        """0.2.10 is NEWER than 0.2.9; a string compare gets this backwards."""
+        _, stale_ref = self.finding("0.2.5", "0.2.6")
+        _, orphan_ref = self.finding("0.2.6", "0.2.5")
+        _, source_ahead = self.finding("0.2.9", "0.2.10")   # STALE
+        _, deployed_ahead = self.finding("0.2.10", "0.2.9")  # ORPHAN
+        self.assertEqual(
+            _mask_versions(source_ahead), _mask_versions(stale_ref),
+            "deployed 0.2.9 / source 0.2.10 is the STALE direction (10 > 9), "
+            "but it was not classified the same way as deployed 0.2.5 / source "
+            "0.2.6. A lexicographic compare reads '0.2.10' < '0.2.9' and "
+            f"inverts exactly this pair.\nthis   = {source_ahead}\n"
+            f"stale  = {stale_ref}",
+        )
+        self.assertEqual(
+            _mask_versions(deployed_ahead), _mask_versions(orphan_ref),
+            "deployed 0.2.10 / source 0.2.9 is the ORPHAN direction, but it was "
+            "not classified the same way as deployed 0.2.6 / source 0.2.5.\n"
+            f"this   = {deployed_ahead}\norphan = {orphan_ref}",
+        )
+        self.assertNotEqual(
+            _mask_versions(source_ahead), _mask_versions(deployed_ahead),
+            "the 0.2.9 / 0.2.10 pair produces the same finding in both "
+            "directions, so the two-digit patch number is not being ordered at "
+            f"all.\nsource ahead   = {source_ahead}\n"
+            f"deployed ahead = {deployed_ahead}",
+        )
+
+    def test_unorderable_version_pair_does_not_get_a_direction(self):
+        """"0.2.x" vs "0.2.5" cannot be ordered — that is undetermined, which is
+        neither clean nor a direction."""
+        rc, msg = self.finding("0.2.x", "0.2.5")
+        self.assertNotEqual(
+            rc, 0,
+            "two different version strings must stay red even when they cannot "
+            f"be ordered; collapsing them into 'equal' is a fail-open.\n{msg}",
+        )
+        low = msg.lower()
+        self.assertTrue(
+            any(m in low for m in self.UNDETERMINED_MARKERS),
+            "the finding for an unorderable pair says nothing about the "
+            "direction being undeterminable; it reads as a settled verdict. "
+            "CLAUDE.md §3: 'cannot determine' must be reported as such, not "
+            f"resolved silently.\n(looked for any of {self.UNDETERMINED_MARKERS})"
+            f"\nmsg = {msg}",
+        )
+        hit = self.PRESCRIBES_ROLLOUT.search(msg)
+        self.assertIsNone(
+            hit,
+            "a direction that could not be determined must not come with a "
+            "confident remedy: the rollout is correct in one direction and "
+            f"destructive in the other, and here neither was established.\n"
+            f"msg = {msg}",
+        )
+
+    def test_two_unparseable_versions_that_differ_are_undetermined(self):
+        """Neither side parses, and they differ — still a problem, still no
+        direction."""
+        rc, msg = self.finding("0.2.x", "0.2.y")
+        self.assertNotEqual(
+            rc, 0,
+            "two unparseable version strings that differ must not be reported "
+            f"as agreeing just because neither could be parsed.\n{msg}",
+        )
+        low = msg.lower()
+        self.assertTrue(
+            any(m in low for m in self.UNDETERMINED_MARKERS),
+            "neither side is orderable, so the finding must say the direction "
+            "is undetermined rather than picking one.\n"
+            f"(looked for any of {self.UNDETERMINED_MARKERS})\nmsg = {msg}",
+        )
+        hit = self.PRESCRIBES_ROLLOUT.search(msg)
+        self.assertIsNone(
+            hit,
+            "an undetermined direction must not be given the rollout as a "
+            f"remedy.\nmsg = {msg}",
+        )
+
+    def test_orphan_reports_whether_the_deployed_version_exists_in_history(self):
+        """ORPHAN must say whether the deployed version is known to this tree's
+        history (plausibly an unmerged branch) or is known nowhere at all."""
+        self.assertTrue(
+            hasattr(cpr, CORE_IN_HISTORY),
+            f"check-plugin-rollout.py defines no module-level {CORE_IN_HISTORY}. "
+            "The ORPHAN direction needs a seam answering "
+            f"{CORE_IN_HISTORY}(version) -> True (that version string appears "
+            "somewhere in this repo's history of the shared crate) / False (it "
+            "appears nowhere) / None (could not look — git unavailable, unknown "
+            "object, ...), rebindable at a fixture the way SOURCE_CHANGED_SINCE "
+            "is, so the dimension is testable without a real git repo.",
+        )
+        found = self.finding("0.2.6", "0.2.5", core_in_history=True)[1]
+        nowhere = self.finding("0.2.6", "0.2.5", core_in_history=False)[1]
+        self.assertNotEqual(
+            _mask_versions(found), _mask_versions(nowhere),
+            "the ORPHAN finding is identical whether the deployed version "
+            "exists in this tree's history or exists nowhere in it, i.e. the "
+            f"{CORE_IN_HISTORY} seam is not consulted. Those are different "
+            "situations: 'built from an unmerged branch' is recoverable by "
+            "merging, 'this version is known nowhere' means the running bytes "
+            f"have no provenance in this repo at all.\nin-history = {found}\n"
+            f"nowhere    = {nowhere}",
+        )
+
+    def test_undeterminable_history_is_said_not_guessed(self):
+        """When the history question cannot be answered, say so — do not report
+        either answer."""
+        self.assertTrue(
+            hasattr(cpr, CORE_IN_HISTORY),
+            f"check-plugin-rollout.py defines no module-level {CORE_IN_HISTORY} "
+            "seam; see test_orphan_reports_whether_the_deployed_version_exists_"
+            "in_history for the contract it must satisfy.",
+        )
+        unknown = self.finding("0.2.6", "0.2.5", core_in_history=None)[1]
+        found = self.finding("0.2.6", "0.2.5", core_in_history=True)[1]
+        nowhere = self.finding("0.2.6", "0.2.5", core_in_history=False)[1]
+        self.assertNotEqual(
+            _mask_versions(unknown), _mask_versions(found),
+            "'could not determine whether this version is in history' is "
+            "reported identically to 'it is in history'.\n"
+            f"unknown = {unknown}\nin-history = {found}",
+        )
+        self.assertNotEqual(
+            _mask_versions(unknown), _mask_versions(nowhere),
+            "'could not determine whether this version is in history' is "
+            "reported identically to 'it is nowhere in history'.\n"
+            f"unknown = {unknown}\nnowhere = {nowhere}",
+        )
+        low = unknown.lower()
+        self.assertTrue(
+            any(m in low for m in self.UNDETERMINED_MARKERS),
+            "the finding must admit that the history lookup failed rather than "
+            "implying one of the two answers.\n"
+            f"(looked for any of {self.UNDETERMINED_MARKERS})\n"
+            f"unknown = {unknown}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

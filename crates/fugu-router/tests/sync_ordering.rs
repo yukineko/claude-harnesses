@@ -43,6 +43,27 @@
 //! These tests pin the three properties that were missing: sync completes from
 //! the steady state, it stays a no-op on repeat (the hook fires every session),
 //! and when it genuinely cannot complete it does not fail into silence.
+//!
+//! A second defect, measured 2026-10-02 at rev b478fdcf (fugu-router 0.1.31):
+//! every message `sync` emits — the pure success/progress ones included — went
+//! to **stderr**, and nothing at all went to stdout:
+//!
+//!     $ fugu-router sync 2>/dev/null       # stdout: EMPTY
+//!     $ fugu-router sync 2>&1 >/dev/null   # stderr:
+//!     pulling from remote…
+//!     pull done.
+//!     nothing to push (already up to date with the remote).
+//!     # exit 0
+//!
+//! The only caller is a `SessionEnd` hook (`hooks/hooks.json`), whose stderr IS
+//! surfaced to the user while its stdout is discarded. So a completely
+//! successful sync looked like an error at the end of every single session, and
+//! the user reported it as one. The fix is a split, not a silencing:
+//! success/progress goes to stdout (silent at SessionEnd, still informative when
+//! a human runs the command), stderr stays reserved for failures. Silencing
+//! both halves would convert a noisy success into an invisible failure — the
+//! fail-open this repository forbids (CLAUDE.md §1/§3) — so the tests below pin
+//! BOTH directions.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -243,13 +264,14 @@ fn sync_is_idempotent() {
 /// exit code and stderr reach nobody. The failure has to survive into a
 /// channel someone actually reads — here, the `UserPromptSubmit` hook that
 /// this plugin already owns.
-#[test]
-fn a_failed_sync_is_surfaced_through_the_prompt_hook() {
-    let root = scratch("failure");
+/// A fake home whose `sync_repo` points at a path that does not exist, so the
+/// clone phase — the first thing `sync` does — fails. Shared by every test that
+/// needs a genuinely failing sync, so they all exercise the same failure mode.
+fn unclonable_remote(name: &str) -> PathBuf {
+    let root = scratch(name);
     let home = root.join("home");
     let cfg_dir = home.join(".fugu-router");
     std::fs::create_dir_all(&cfg_dir).unwrap();
-    // A remote that cannot be cloned: the clone phase must fail.
     std::fs::write(
         cfg_dir.join("config.toml"),
         format!(
@@ -258,6 +280,12 @@ fn a_failed_sync_is_surfaced_through_the_prompt_hook() {
         ),
     )
     .unwrap();
+    home
+}
+
+#[test]
+fn a_failed_sync_is_surfaced_through_the_prompt_hook() {
+    let home = unclonable_remote("failure");
 
     let sync = run(&home, &["sync"], None);
     assert!(
@@ -324,5 +352,146 @@ fn the_failure_notice_clears_after_a_successful_sync() {
         !stdout.contains("could not sync"),
         "the stale failure notice survived a successful sync; a warning that \
          never clears is one nobody reads.\nprompt stdout: {stdout:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Which stream the messages go to. A SessionEnd hook's stderr reaches the user
+// and its stdout is discarded, so the stream *is* the user-visible behaviour.
+// ---------------------------------------------------------------------------
+
+/// A sync that succeeded must put NOTHING on stderr — and must still say what
+/// it did, on stdout. Both halves are asserted on purpose: a test that only
+/// demanded an empty stderr would be satisfied by a command that went mute,
+/// which trades a visible non-problem for an invisible one.
+#[test]
+fn a_successful_sync_is_silent_on_stderr_and_reports_progress_on_stdout() {
+    let (home, _remote, _record) = steady_state("stream-success");
+
+    let out = run(&home, &["sync"], None);
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+
+    // Precondition: this run really did succeed, so everything it printed is
+    // success/progress text and none of it is a failure report.
+    assert!(
+        out.status.success(),
+        "precondition failed: sync exited {:?} from the steady state, so this \
+         test cannot say anything about a *successful* sync's streams.\n\
+         stdout: {stdout:?}\nstderr: {stderr:?}",
+        out.status.code()
+    );
+
+    assert_eq!(
+        stderr.trim(),
+        "",
+        "a SUCCESSFUL `fugu-router sync` wrote to stderr. Its only caller is a \
+         SessionEnd hook whose stderr is surfaced to the user, so this exact \
+         text is what makes a clean sync look like an error at the end of every \
+         session (the reported symptom). stderr must be reserved for failures.\n\
+         observed stderr: {stderr:?}\nobserved stdout: {stdout:?}"
+    );
+
+    for expected in [
+        "committed: fugu-router sync",
+        "pulling from remote",
+        "pull done.",
+        "pushed local records.",
+    ] {
+        assert!(
+            stdout.contains(expected),
+            "sync's progress/success message {expected:?} is missing from \
+             stdout. Moving stderr's noise nowhere instead of to stdout would \
+             make a human running the command by hand see nothing at all — the \
+             fix is a stream split, not a silencing.\n\
+             observed stdout: {stdout:?}\nobserved stderr: {stderr:?}"
+        );
+    }
+}
+
+/// The verbatim case from the bug report: the second, no-op run. The hook fires
+/// at every session end, so this is the output the user actually saw most of the
+/// time — three progress lines on stderr with exit 0.
+#[test]
+fn a_noop_sync_is_silent_on_stderr_and_reports_on_stdout() {
+    let (home, _remote, _record) = steady_state("stream-noop");
+
+    let first = run(&home, &["sync"], None);
+    assert!(
+        first.status.success(),
+        "precondition failed: the first sync exited {:?}\nstdout: {}\nstderr: {}",
+        first.status.code(),
+        String::from_utf8_lossy(&first.stdout),
+        String::from_utf8_lossy(&first.stderr)
+    );
+
+    let out = run(&home, &["sync"], None);
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        out.status.success(),
+        "precondition failed: the repeat sync exited {:?}\nstdout: {stdout:?}\nstderr: {stderr:?}",
+        out.status.code()
+    );
+
+    assert_eq!(
+        stderr.trim(),
+        "",
+        "the no-op repeat sync — the common case at SessionEnd — still wrote to \
+         stderr. Measured 2026-10-02 the user saw exactly this: \"pulling from \
+         remote… / pull done. / nothing to push (already up to date with the \
+         remote).\" with exit 0, and read it as an error.\n\
+         observed stderr: {stderr:?}\nobserved stdout: {stdout:?}"
+    );
+
+    for expected in [
+        "pulling from remote",
+        "pull done.",
+        "nothing to push (already up to date with the remote)",
+    ] {
+        assert!(
+            stdout.contains(expected),
+            "the no-op sync's message {expected:?} is on neither stream; it \
+             must move to stdout, not disappear.\n\
+             observed stdout: {stdout:?}\nobserved stderr: {stderr:?}"
+        );
+    }
+}
+
+/// The other direction, and it matters just as much: a sync that FAILED must
+/// still be loud on stderr. Reuses `unclonable_remote`, the same failure mode
+/// `a_failed_sync_is_surfaced_through_the_prompt_hook` already pins, so the two
+/// halves of the property are asserted against one measured failure — not an
+/// invented one.
+#[test]
+fn a_failed_sync_still_writes_to_stderr() {
+    let home = unclonable_remote("stream-failure");
+
+    let out = run(&home, &["sync"], None);
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+
+    assert!(
+        !out.status.success(),
+        "precondition failed: sync against an unclonable remote exited 0, so \
+         this test is not observing a failure at all.\n\
+         stdout: {stdout:?}\nstderr: {stderr:?}"
+    );
+
+    assert!(
+        !stderr.trim().is_empty(),
+        "a FAILED `fugu-router sync` wrote nothing to stderr. SessionEnd \
+         discards a hook's stdout and surfaces its stderr, so moving the \
+         failure report to stdout along with the progress text would turn the \
+         one thing the user must see into silence — a visible non-problem \
+         traded for an invisible real one (CLAUDE.md §1/§3).\n\
+         observed stdout: {stdout:?}\nobserved stderr: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("clone"),
+        "sync failed in the clone phase, but stderr does not mention the clone \
+         failure — whatever it did print is not the failure report, so the \
+         actual cause is still dark.\n\
+         observed stderr: {stderr:?}\nobserved stdout: {stdout:?}"
     );
 }

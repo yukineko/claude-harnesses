@@ -102,9 +102,9 @@ prod 266 件から、波括弧対応が外れた/テスト専用であること�
 | 5 | crates/playbook/src/main.rs:148 | UserPromptSubmit hook: 読めない store を『空と同じ』= 注入なしで**無言 return**(コメントが 'treated the same as an empty one' と自認)。stderr 出力なし。消費者は model のコンテキスト(注入ノートの欠落を知り得ない) |
 | 6 | crates/runbook/src/main.rs:122 | playbook と同型: 読めない store を空と同じ扱いで無言 return(runbook 注入が黙って欠落) |
 | 7 | crates/overwatch/src/store.rs:376 | read_jsonl_best_effort: `Known(None) \| Undetermined(_) => Vec::new()`。doc が自認する『判定不能 → 空』(store.rs:366-372)。pub wrapper 10 本(read_events/rollbacks/review_findings/bridged_*/dispositions/runtime_conflicts/review_findings_all/merge_conflicts/merge_conflict_resolutions)が消費。production の消費者を追跡した結果(specguard main.rs:2104/2169, store.rs:1602-1603 compact, 1844-1845, 1899, condukt worktree.rs:1172)はいずれも『空 = 保守側』に倒れる形だったが、wrapper は pub のまま残る(latent) |
-| 8 | crates/backlog/src/main.rs:1506 | git config 読み出しの stdout 判定不能 → `String::new()`。消費: github::is_github_remote('')=false → decide_issue_create が 'remote is not github.com; left task as local-only' と**観測していない事実**を理由に DegradedLocalOnly |
-| 9 | crates/backlog/src/main.rs:1508 | git の spawn/timeout 判定不能 → `String::new()`。上に同じ(remote が無いと誤記される)。呼び出し: main.rs:783(add), 1195(sync), 1584(mirror_close) |
-| 10 | crates/backlog/src/main.rs:1643 | gh の spawn/timeout 判定不能 → None。消費側は None を 'gh CLI not found; left task as local-only' (github.rs:104) と記録。timeout を不在と取り違える(mirror_close は 'issue left OPEN' と警告するので黙殺ではない) |
+| 8 | crates/backlog/src/main.rs:1591 | git config 読み出しの stdout 判定不能 → `String::new()`。消費: github::is_github_remote('')=false → decide_issue_create が 'remote is not github.com; left task as local-only' と**観測していない事実**を理由に DegradedLocalOnly |
+| 9 | crates/backlog/src/main.rs:1593 | git の spawn/timeout 判定不能 → `String::new()`。上に同じ(remote が無いと誤記される)。呼び出し: main.rs:781(add), 1235(sync), 1669(mirror_close) |
+| 10 | crates/backlog/src/main.rs:1740 | gh の spawn/timeout 判定不能 → None。消費側は None を 'gh CLI not found; left task as local-only' (github.rs:104) と記録。timeout を不在と取り違える(mirror_close は 'issue left OPEN' と警告するので黙殺ではない) |
 | 11 | crates/condukt/src/circuit.rs:506 | journal の `CircuitRecord::idle_secs: i64` に判定不能を **0** で記録(コメントが 'KNOWN RESIDUAL' と自認)。stdout JSON は null だが永続 journal は 0。消費: load_circuit_records はテストからのみ(production 消費者は grep で未発見)。idle 軸 off 時は 0 が測定値と区別できない |
 | 12 | crates/session-insights/src/main.rs:203 | subagent 読み不能 → stderr のみで under-count の turns を record に書き続ける(main.rs:187-188 → record::write_from_session)。ノート本文の turns 数値に不完全の注記は無い(cost 側は inline 開示=record.rs:117)。消費者は Obsidian ノート。low |
 | 13 | crates/specguard/src/scope.rs:506 | relevant_file_map: code index 判定不能 → `Vec::new()`(base set のみ)。doc が『additive & advisory, 下流が短い map を clean と読まない』と主張。consumer を追跡: specguard/src/main.rs:582,674 の prompt 描画(auditor への読み順ヒント)のみで verdict 計算は見つからず。無音。low |
@@ -185,7 +185,7 @@ doc(:366-372)が『the very collapse `scan_jsonl` exists to avoid』『nothing t
 
 現状の消費者は全て保守側に倒れるので、現時点の実害は確認できなかった。ただし wrapper は pub のままで、新しい呼び出しが判定に使えば fail-open になる(latent)。『保守側に倒れる』の根拠は消費者 5 系統のコード読みであり、テストで固定されているわけではない点に注意。
 
-**P7/P8 crates/backlog/src/main.rs:1506,1508,1643 — 『remote が無い』『gh が無い』と観測していない事実を記録**
+**P7/P8 crates/backlog/src/main.rs:1591,1593,1740 — 『remote が無い』『gh が無い』と観測していない事実を記録**
 
 ```rust
 Determination::Undetermined(_) => String::new(),   // git_remote_origin_url (1506, 1508)
@@ -276,7 +276,7 @@ prod の `Determination::Known` pattern 行で、前後 25 行に Undetermined �
 | src/main.rs:1056 | D | R | `backlog next --claim REFUSED` で Err。'no pending tasks' と区別 |
 | src/main.rs:1454 | D | R | JSON に `undetermined: true` + reason を出力 |
 | src/main.rs:1506 | D | P | git config 読み出しの stdout 判定不能 → `String::new()`。消費: github::is_github_remote('')=false → decide_issue_create が 'remote is not github.com; left task as local-only' と**観測していない事実**を理由に DegradedLocalOnly |
-| src/main.rs:1508 | D | P | git の spawn/timeout 判定不能 → `String::new()`。上に同じ(remote が無いと誤記される)。呼び出し: main.rs:783(add), 1195(sync), 1584(mirror_close) |
+| src/main.rs:1508 | D | P | git の spawn/timeout 判定不能 → `String::new()`。上に同じ(remote が無いと誤記される)。呼び出し: main.rs:781(add), 1235(sync), 1669(mirror_close) |
 | src/main.rs:1637 | D | R | `unreachable!`。stdout_allowing(&[code]) は定義上 Known (boundary.rs:205)。万一到達すれば panic = 大きく落ちる |
 | src/main.rs:1643 | D | P | gh の spawn/timeout 判定不能 → None。消費側は None を 'gh CLI not found; left task as local-only' (github.rs:104) と記録。timeout を不在と取り違える(mirror_close は 'issue left OPEN' と警告するので黙殺ではない) |
 | src/store.rs:2070 | D | R | eprintln 警告 + `unresolved: true` のラベルで返す(検索で見えにくくなる旨を明示) |
@@ -652,7 +652,7 @@ docs の check-doc-claims.py は、バッククォートで囲んだ パス:行 
 - `crates/playbook/src/main.rs:148` 「Determination::Undetermined(_) => return,」
 - `crates/runbook/src/main.rs:122` 「Determination::Undetermined(_) => return,」
 - `crates/specguard/src/scope.rs:506` 「Determination::Undetermined(_) => Vec::new(),」
-- `crates/backlog/src/main.rs:1521` 「Determination::Undetermined(_) => String::new(),」
-- `crates/backlog/src/main.rs:1523` 「Determination::Undetermined(_) => String::new(),」
-- `crates/backlog/src/main.rs:1658` 「Determination::Undetermined(_) => None,」
+- `crates/backlog/src/main.rs:1616` 「Determination::Undetermined(_) => String::new(),」
+- `crates/backlog/src/main.rs:1618` 「Determination::Undetermined(_) => String::new(),」
+- `crates/backlog/src/main.rs:1765` 「Determination::Undetermined(_) => None,」
 

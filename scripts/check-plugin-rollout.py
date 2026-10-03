@@ -377,13 +377,36 @@ def _compare_versions(a, b):
 
 
 def _core_version_in_history(version):
-    """Did crates/harness-core/Cargo.toml ever carry `version = "<version>"`?
+    """Does `version` appear anywhere in this tree's history of the shared crate?
 
-    True / False, or None when git could not answer (None is not "absent").
+    True  — some reachable commit's `crates/harness-core/Cargo.toml` carried it,
+            so an orphan deployment plausibly came from a branch that was never
+            merged into the checked-out line.
+    False — it appears in no reachable commit.
+    None  — could not look (git missing, erroring, or not a repository). An
+            unanswered question is not a "no": the caller says it could not
+            look rather than reporting the version as unknown to the repo.
+
+    Searched over ALL refs rather than the current branch's ancestry — the whole
+    point of the question is to find versions living on a branch that was never
+    merged, and `HEAD`-only history would answer False for exactly the case this
+    exists to detect.
+
+    `--diff-merges=first-parent` is load-bearing, not decoration: `git log -S`
+    does not diff merge commits at all by default, and in this repository every
+    version bump reaches the mainline through a merge. Without it the query
+    answered False for the version sitting in HEAD (measured 2026-10-02 at
+    `cb1d56dc`: plain `-S 'version = "0.2.38"'` found 0 commits, and
+    `--full-history` alone still found 0, while this form finds 112 — the first
+    being a4a03806, whose diff is `-version = "0.2.35"` / `+version = "0.2.38"`).
+    A history query that answers False for the checked-out version is worse than
+    no query at all, because the caller would report the live version as
+    unknown to the repo.
     """
     import subprocess
 
-    needle = f'version = "{version}"'
+    if not isinstance(version, str) or not version:
+        return None
     # REPO is the cwd. From anywhere but the repo root the pathspec matches
     # nothing and git answers "no commits" with rc 0 — that would read as
     # "not in history" when the question was never asked.
@@ -391,21 +414,35 @@ def _core_version_in_history(version):
         return None
     try:
         proc = subprocess.run(
-            ["git", "log", "--all", "--format=%H", "-S", needle, "--",
-             "crates/harness-core/Cargo.toml"],
+            [
+                "git",
+                "log",
+                "--all",
+                "--full-history",
+                "--diff-merges=first-parent",
+                "-n",
+                "1",
+                "--format=%H",
+                "-S",
+                'version = "%s"' % version,
+                "--",
+                os.path.join("crates", "harness-core", "Cargo.toml"),
+            ],
             cwd=REPO,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            capture_output=True,
             text=True,
         )
     except (OSError, subprocess.SubprocessError):
         return None
     if proc.returncode != 0:
+        # The exit code is the verdict, not just stdout: a git that failed did
+        # not answer "no commits matched".
         return None
     return bool(proc.stdout.strip())
 
 
-# Rebindable so the orphan report is testable without a git repo.
+# Rebindable at a fixture the same way SOURCE_CHANGED_SINCE is, so the orphan
+# report is testable without building a real git history.
 CORE_VERSION_IN_HISTORY = _core_version_in_history
 
 
@@ -1464,11 +1501,20 @@ def _provenance_problem(crate, entry):
                 "undetermined is not 'agrees'"
             )
         if recorded_core != current_core:
-            # The DIRECTION decides the remedy (backlog e8aad6e6). Source newer
-            # is a stale deploy and rollout fixes it; deployed newer means the
-            # bytes came from code this tree does not have (an unmerged branch),
-            # so rollout would be a rollback. Both stay red. An order we cannot
-            # establish is red too, with no prescription in either direction.
+            # The mismatch alone does not say which side is behind, and the two
+            # directions have OPPOSITE remedies (backlog e8aad6e6; both were
+            # observed on 2026-08-07, hours apart, looking identical):
+            #
+            #   stale  - the source is ahead. Running rollout-plugins.sh is the
+            #            fix.
+            #   orphan - the DEPLOYED bytes are ahead (they came from code this
+            #            tree does not have, e.g. an unmerged branch). Rolling
+            #            out here is a rollback that overwrites newer running
+            #            artifacts, so this arm does not prescribe it.
+            #
+            # Both stay red. A pair that cannot be ordered resolves to neither
+            # (CLAUDE.md 3): it stays red with no prescription in either
+            # direction.
             order = _compare_versions(recorded_core, current_core)
             if order is None:
                 return (

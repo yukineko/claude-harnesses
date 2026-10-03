@@ -124,6 +124,32 @@ pub fn run(input: &HookInput) -> Option<String> {
         }
     };
 
+    // GitHub mirror drift. The individual failures are already reported where
+    // they happen (`add` on stderr, `sync --apply` via a non-zero exit), but
+    // nothing restated the RUNNING TOTAL, so a machine with no usable `gh`
+    // drifted to 467 unclosed issues without one visible signal (measured
+    // 2026-10-02 at `448ff46f`). This hook has no exit code and no stderr the
+    // agent ever sees, so `additionalContext` is the only channel that can
+    // carry it (CLAUDE.md §1: silence is not an acceptable degrade).
+    //
+    // Computed from the SAME `sync_plan` the fix command uses, so the report
+    // can never name a different set of work than `backlog sync` would act on.
+    // It reads only the store — no git, no network, no `gh` — so it costs
+    // nothing and is visible precisely on the machine where the mirror is
+    // broken. `MirrorDrift::is_reportable` carries the anti-noise rule and the
+    // gap it knowingly leaves open.
+    let drift = store::mirror_drift(&tasks);
+    if drift.is_reportable() {
+        warnings.push_str("## Backlog \u{2014} GitHub mirror drift\n\n");
+        warnings.push_str(&format!(
+            "This store is out of sync with its GitHub issues: **{closes} issue(s) to close** (the task is already done/cancelled) and **{creates} issue(s) to create** (pending, never mirrored).\n\n",
+            closes = drift.closes,
+            creates = drift.creates,
+        ));
+        warnings.push_str("Reconcile with `backlog sync` (dry run), then `backlog sync --apply`. The two arms are selectable: `backlog sync --only close --apply` catches up the closes without publishing any new issue.\n\n");
+        warnings.push_str("If these counts keep growing, the mirror itself is not running \u{2014} check that `gh` is installed and authenticated (`gh auth status`). Every failed `gh issue create`/`close` leaves the task exactly as it was, so nothing is lost, but nothing is pushed either.\n\n");
+    }
+
     // pending または failed のタスクのみ対象 (is_pending() で判定)
     let mut pending: Vec<_> = tasks.into_iter().filter(|t| t.is_pending()).collect();
 

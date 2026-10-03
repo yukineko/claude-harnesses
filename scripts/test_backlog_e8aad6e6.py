@@ -3,7 +3,8 @@
 that links a NEWER harness-core than the source (orphan provenance; rollout would
 be a destructive rollback) with the same message/remedy as one that is OLDER.
 
-Skipped while the defect is open (remove the skip decorator when fixed)."""
+Fixed (both merge parents implemented the direction split); the skip was removed
+in the merge that integrated them, so this repro now guards the fix."""
 import importlib.util
 import tempfile
 import unittest
@@ -18,7 +19,6 @@ _SPEC.loader.exec_module(base)
 
 
 class DeployedNewerThanSource(base._FixtureCase):
-    @unittest.skip("backlog e8aad6e6: open defect, remove skip when fixed")
     def test_deployed_core_newer_than_source_is_not_prescribed_a_rollout(self):
         with tempfile.TemporaryDirectory() as tmp:
             rc, out, err = self.run_main(

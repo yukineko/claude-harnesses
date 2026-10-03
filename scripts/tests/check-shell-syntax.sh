@@ -21,9 +21,9 @@ fail() { echo "  FAIL — $1" >&2; fails=$((fails + 1)); }
 # was never built proves nothing, so abort the whole test instead of continuing.
 die() { echo "ABORT: $1" >&2; exit 2; }
 
-# Portable temp dir. `mktemp -d -t <prefix>` is BSD-only: GNU mktemp treats the
-# -t argument as a template and rejects it with "too few X's", leaving $d empty
-# (backlog e4a1d386). An explicit path template ending in XXXXXX means the same
+# Portable temp dir. The BSD "-t prefix" form (a bare name after -t, no X's) is
+# BSD-only: GNU mktemp treats that argument as a template and rejects it with
+# "too few X's", leaving $d empty (backlog e4a1d386). An explicit path template ending in XXXXXX means the same
 # thing to both. Prints the directory, or returns non-zero with a message.
 make_tmpdir() {
   tmproot="${TMPDIR:-/tmp}"; tmproot="${tmproot%/}"

@@ -3131,9 +3131,6 @@ fn run_escalate(cfg: &Config, cwd: &Path, action: EscalateAction) -> Result<()> 
     Ok(())
 }
 
-/// Split a `--files`/`--symbols` comma-separated CLI flag into a `Vec<String>`,
-/// trimming whitespace and dropping empty entries (so `""`, `"a,,b"`, and
-/// `"a, b"` all behave sanely).
 /// clap value parser for task-claim `--hashkey` (backlog 55f55932): an empty
 /// or whitespace-only key is not a key. Accepting it let `claim-task` exit 0
 /// with `"claimed": [""]` — a claim nobody's real key matches — and let
@@ -3148,6 +3145,9 @@ fn parse_task_hashkey(raw: &str) -> std::result::Result<String, String> {
     Ok(raw.to_string())
 }
 
+/// Split a `--files`/`--symbols` comma-separated CLI flag into a `Vec<String>`,
+/// trimming whitespace and dropping empty entries (so `""`, `"a,,b"`, and
+/// `"a, b"` all behave sanely).
 fn parse_csv_list(raw: &str) -> Vec<String> {
     raw.split(',')
         .map(|s| s.trim().to_string())

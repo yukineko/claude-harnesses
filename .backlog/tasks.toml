@@ -1271,7 +1271,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 実測 2026-09-08、測定点 df570513、CLAUDE_PROJECT_DIR=/Users/yuki/src/harness を設定して scripts/guard-maintree-bash.py へ合成 payload を直接投入。
 
@@ -1303,11 +1303,13 @@ gitignore 済みで index を汚さないので妥当に見えるが、その判
 
 [backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test scripts/test_backlog_s05_repros.py (rev e70d48dd)"""
 created_at = 1788793588
-updated_at = 1790983275
+updated_at = 1791031908
 weight = 0.0
 issue_number = 440
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/440"
-rev = 0
+rev = 1
+ruling_kind = "judgment"
+rationale = "Implemented and merged (d1284de6). Independent verifier over 4 rounds (test_guard_maintree_bash_b5358f58_verify.py 22 tests, RED on base 4a7fcb1e; worker suite test_guard_maintree_bash_b5358f58.py 17 tests, RED first). Evidence is python unittest, which the F2P runner allowlist does not accept without pytest."
 
 [[task]]
 id = "ad524af9"
@@ -12232,4 +12234,116 @@ updated_at = 1791028030
 weight = 0.0
 issue_number = 1204
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1204"
+rev = 0
+
+[[task]]
+id = "5e79f3fd"
+title = "guard-maintree-bash: xargs が stdin で絶対パスの main destination を渡す cp を b5358f58 後は allow する (base は source 経由で偶然 refuse)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "echo <M>/d/ | xargs cp <M>/f.txt <W>/y from a worktree cwd: base=2, HEAD=0. xargs appends stdin words after the operands, so the real destination is <M>/d/. Documented KNOWN HOLE 'xargs targets that arrive ABSOLUTE on stdin'; base caught it only through the main source operand. Observed 2026-10-03 by the b5358f58 verifier (run-20261003-202619-762, base 4a7fcb1e, HEAD d8426c4e)."
+created_at = 1791028900
+updated_at = 1791028900
+weight = 0.0
+issue_number = 1207
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1207"
+rev = 0
+
+[[task]]
+id = "da07d648"
+title = "guard-maintree-bash: ( ... ) & ループ内で cd X && の後の代入が値を失い、読み取り専用コマンドを over-block する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Live guard on main: an assignment after 'cd X &&' inside a '( ... ) &' loop lost its value, leading to a refusal of a read-only probe. Pre-existing, not changed by b5358f58. Needs a minimal repro from the verifier's scratch b5358f58-verify-probe.py. Observed 2026-10-03 by the b5358f58 verifier (run-20261003-202619-762, base 4a7fcb1e, HEAD d8426c4e)."
+created_at = 1791028902
+updated_at = 1791028902
+weight = 0.0
+issue_number = 1208
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1208"
+rev = 0
+
+[[task]]
+id = "234011a6"
+title = "test_deny_ledger_e033c406 が短い TMPDIR に依存する (ledger の raw が 120 文字で切られ期待パスが消える)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "With a long scratchpad TMPDIR 4 tests fail because deny_ledger truncates raw at 120 chars; with only HOME overridden: Ran 67 tests OK. Test fragility, or the truncation drops the path that the retry matcher needs (check which: if the matcher uses raw, long paths escape the ledger). Observed 2026-10-03 by the b5358f58 verifier (run-20261003-202619-762, base 4a7fcb1e, HEAD d8426c4e)."
+created_at = 1791028903
+updated_at = 1791028903
+weight = 0.0
+issue_number = 1209
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1209"
+rev = 0
+
+[[task]]
+id = "7d87ada0"
+title = "guard-maintree-bash が二重引用符内のエスケープ済み backquote を含む読み取り専用 grep を 'does not tokenize' で拒否する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = '''b5358f58 worker, live guard on main 4bc312db: grep -n with a double-quoted pattern containing an escaped backquote (\`g\`) was refused as undetermined ('a nested command payload does not tokenize'); a python heredoc patch was refused the same way. Over-refusal of a read (safe direction per KNOWN HOLES), but friction. Observed 2026-10-03, run-20261003-202619-762.'''
+created_at = 1791029301
+updated_at = 1791029301
+weight = 0.0
+issue_number = 1212
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1212"
+rev = 0
+
+[[task]]
+id = "547e2b8b"
+title = "guard-maintree-bash: TARGET_ALL の _operands が -- 以降でも '-' 始まりの語を捨て、rm -- -f / mkdir -- -v2 / touch -- -n が main を書き換えても allow される"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = "b5358f58 round-3 verifier, base 4a7fcb1e and HEAD eb67faab both: with cwd=main, {'base': 0, 'head': 0} for 'rm -- -f', 'mkdir -- -v2', 'touch -- -n'; each really writes or deletes <main>/-f, <main>/-v2, <main>/-n. 'mkdir ./-v2' and 'mkdir <M>/-v2' are refused (2). _operands drops every word starting with '-' even after the end-of-options marker. Not in KNOWN HOLES. Real fail-open in the main-tree guard (rm of a main file named -f). Fix: after '--', every word is an operand. Observed 2026-10-03, run-20261003-202619-762."
+created_at = 1791030683
+updated_at = 1791030683
+weight = 0.0
+issue_number = 1215
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1215"
+rev = 0
+
+[[task]]
+id = "d689d6f8"
+title = "guard-maintree-bash: path component に貼り付いた extglob / zsh (…) が tokenizer で '(' 分割され、rm <parent>/harnes@(s)/f が allow される"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = "b5358f58 worker (ddcf0080) observed on the real repo: 'rm /Users/yuki/src/harnes@(s)/CLAUDE.md' returned rc=0 (bash with extglob expands to main). The tokenizer splits at '(' so the path judged is <parent>/harnes@. Recorded in KNOWN HOLES by ddcf0080, not fixed; the fix belongs in the tokenizer (treat a word glued to '(' as unresolvable). Observed 2026-10-03, run-20261003-202619-762."
+created_at = 1791031287
+updated_at = 1791031287
+weight = 0.0
+issue_number = 1216
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1216"
+rev = 0
+
+[[task]]
+id = "e595e24b"
+title = "guard-maintree-bash: main の git-ignored dir に入る glob 語 (*, ?, {}, [) の書き込みを literal prefix で拒否する over-block"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "b5358f58 round-4 verifier: with main cwd and a git-ignored dir ignored/, 'echo x > ignored/a[1].txt', 'mkdir -p ignored/x[1]', 'touch ignored/[a]' are refused after d1284de6 (base allowed them); 'echo x > ignored/a?.txt', 'touch ignored/a*', 'mkdir -p ignored/x{1,2}' were already refused at base. The glob literal-prefix rule does not consult git-ignore. Ruled acceptable for the merge (fail-closed, consistent with the existing rule); pinned as @expectedFailure test_bracket_write_into_a_git_ignored_dir_of_main_is_allowed in scripts/test_guard_maintree_bash_b5358f58_verify.py. Narrow fix: allow a glob word whose literal prefix is git-ignored and that has no '..' after the glob, for every glob character. Observed 2026-10-03."
+created_at = 1791031908
+updated_at = 1791031908
+weight = 0.0
+issue_number = 1217
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1217"
 rev = 0

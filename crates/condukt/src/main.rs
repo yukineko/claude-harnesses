@@ -1066,8 +1066,10 @@ enum StateAction {
         /// Human-readable task title, recorded for the execution-state view.
         #[arg(long)]
         title: Option<String>,
-        /// Opaque task hashkey to claim (repeatable, required).
-        #[arg(long)]
+        /// Opaque task hashkey to claim (repeatable, at least one required).
+        /// An empty or whitespace-only hashkey is rejected as a usage error
+        /// (exit 2, nothing claimed) — it is never recorded as a claim key.
+        #[arg(long, required = true, value_parser = parse_task_hashkey)]
         hashkey: Vec<String>,
         /// Mark the claim STATELESS: this run never writes run-state JSON (a
         /// `/flow` run). Only a marked claim is reaped on transcript evidence
@@ -1082,15 +1084,19 @@ enum StateAction {
     ReleaseTask {
         #[arg(long)]
         run: String,
-        /// Opaque task hashkey to release (repeatable, required).
-        #[arg(long)]
+        /// Opaque task hashkey to release (repeatable, at least one required).
+        /// An empty or whitespace-only hashkey is rejected as a usage error (exit 2).
+        #[arg(long, required = true, value_parser = parse_task_hashkey)]
         hashkey: Vec<String>,
     },
     /// Exit 0 if a live claim (from any run) holds the given task hashkey, else
     /// exit 1. Prints a small JSON `{hashkey, claimed, holder_run}` for humans,
-    /// but the exit code is the contract other tools should rely on.
+    /// but the exit code is the contract other tools should rely on. Exit 3 =
+    /// the claim registry could not be read (undetermined). Exit 2 = invalid
+    /// input (e.g. an empty or whitespace-only hashkey): no lookup happened and
+    /// nothing is printed on stdout, so it can never be read as "not claimed".
     IsClaimed {
-        #[arg(long)]
+        #[arg(long, value_parser = parse_task_hashkey)]
         hashkey: String,
     },
     /// Join the live task-claim registry against the project backlog and write
@@ -3146,6 +3152,20 @@ fn run_escalate(cfg: &Config, cwd: &Path, action: EscalateAction) -> Result<()> 
         }
     }
     Ok(())
+}
+
+/// clap value parser for task-claim `--hashkey` (backlog 55f55932): an empty
+/// or whitespace-only key is not a key. Accepting it let `claim-task` exit 0
+/// with `"claimed": [""]` — a claim nobody's real key matches — and let
+/// `is-claimed` answer `claimed: false` for a lookup that never happened.
+/// Rejected here, clap reports a usage error (exit 2) before any registry IO.
+/// A non-blank key is passed through verbatim (no trimming), so existing keys
+/// keep their identity.
+fn parse_task_hashkey(raw: &str) -> std::result::Result<String, String> {
+    if raw.trim().is_empty() {
+        return Err("task hashkey must not be empty or whitespace-only".to_string());
+    }
+    Ok(raw.to_string())
 }
 
 /// Split a `--files`/`--symbols` comma-separated CLI flag into a `Vec<String>`,

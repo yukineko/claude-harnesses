@@ -11,7 +11,7 @@ say that only the touched crates were checked.
 Throwaway cargo workspace: `core` and `app` (app depends on core). Only core is
 modified. A stub `cargo` on PATH records every invocation. The property: either
 `app` is linted too (candidate a), or the green line states its scope
-(candidate c). Today neither holds. Open defect -> expectedFailure.
+(candidate c). Fixed by candidate c: the green line names its scope.
 
     python3 scripts/test_backlog_d470a478.py
 """
@@ -73,7 +73,6 @@ class DependentsOfAChangedCrateAreCovered(unittest.TestCase):
         self.env = dict(os.environ)
         self.env["PATH"] = str(bindir) + os.pathsep + "/usr/bin:/bin"
 
-    @unittest.expectedFailure  # backlog d470a478: open defect, remove when fixed
     def test_dependent_is_linted_or_green_line_states_scope(self):
         p = subprocess.run(["bash", str(_SCRIPT)], cwd=self.repo, env=self.env,
                            capture_output=True, text=True)

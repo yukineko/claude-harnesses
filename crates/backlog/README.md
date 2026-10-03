@@ -245,9 +245,20 @@ machine-global ledger keyed by project IDENTITY, not by store location:
   main working tree, so every checkout of one project shares one ledger)
 - lock order, never inverted: `~/.backlog/claims/<slug>.lock` (project-wide),
   then `<store>.tasks.toml.lock` (this checkout)
-- an entry (a **lease**) stops excluding after 1h (`CLAIM_STALE_SECS`), so a
-  dead claimant cannot strand a task everywhere; entries are kept for 7 days
-  for a human reading the file
+- an entry (a **lease**) stops excluding once its holder has not been seen
+  alive for 1h (`CLAIM_STALE_SECS`), so a dead claimant cannot strand a task
+  everywhere; entries are kept for 7 days for a human reading the file
+- "seen alive" = the newer of the claim time and the holder's last lease
+  heartbeat. `next --claim` records the claiming session
+  (`CLAUDE_CODE_SESSION_ID`), and `backlog driver heartbeat --session-id S
+  --project P` also refreshes S's still-live leases in P's ledger, so a driver
+  heartbeating at least hourly keeps its claims however long the task takes
+  (backlog 486e83ca). An already-expired lease is not revived. A lease with no
+  session (an older binary's entry, or a claim outside a session) ages by claim
+  time alone. If the leases cannot be refreshed (ledger lock/read/parse/write
+  failure, unresolvable identity) the heartbeat exits non-zero saying so; a
+  malformed heartbeat field makes the ledger unparseable, which refuses claims
+  rather than treating the holder as dead
 
 Every undetermined condition on this path **refuses the claim** and exits
 non-zero with the reason on stderr — never `no pending tasks` on exit 0, which
@@ -285,7 +296,8 @@ yet is still not handed out until the lease ages out.
   `pending`; only a live lease excludes it. It is rewritten as `pending` the
   next time an unrelated command saves the store.
 - `done`/`fail`/`edit --status pending` do not release a lease; a leased
-  non-terminal task stays excluded until the lease ages out (1h).
+  non-terminal task stays excluded until the lease ages out (1h after the
+  holder was last seen alive).
 - `list`, plain `next` and `next --claim` locate the ledger the same way (the
   project identity, see above); outside any repo that identity is the
   canonical cwd. If the identity cannot be resolved (e.g. a dangling worktree

@@ -78,7 +78,6 @@ fn text(o: &Output) -> String {
 
 /// backlog 55f55932 / 65d0c726: an empty hashkey must be refused, not recorded.
 #[test]
-#[ignore = "backlog 55f55932: open defect, remove ignore when fixed"]
 fn claim_task_rejects_empty_hashkey() {
     let f = Fx::new("emptykey");
     let o = f.c(&["state", "claim-task", "--run", "r1", "--hashkey", ""]);

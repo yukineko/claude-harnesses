@@ -14,7 +14,10 @@ pub const PROTECTION: Protection = Protection {
     protects: "The session's files and uncommitted work (the project tree and \
         its git state under .git/), system directories such as /etc and \
         /Library, and the gate/hook/policy files (exclude::is_protected_path) \
-        whose modification switches a guard off.",
+        whose modification switches a guard off - except copies of those \
+        files strictly inside a linked git worktree checkout under a worktree \
+        storage root, which are that checkout's own tracked work \
+        (scope::SafeRoots::classify_worktree_checkout).",
     against: "An agent tool call that irreversibly destroys, overwrites or \
         disarms them: a Bash command doing recursive or wildcard rm, git reset \
         --hard, git clean -fd/-fdx, working-tree discard, a truncating > \

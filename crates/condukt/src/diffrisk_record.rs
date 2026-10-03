@@ -487,6 +487,19 @@ mod tests {
         assert!(worktree_rust_sources(missing).is_empty());
     }
 
+    /// A `Config` whose ledger lives in the caller's own TempDir (backlog
+    /// c63f1c23 / e494a8a3). `Config::load()` alone resolves `state_dir` from
+    /// process-global `$HOME`, which sibling tests swap in-process, so the
+    /// ledger could land in (and vanish with) another test's TempDir, and
+    /// otherwise leaked a namespace into the real `~/.condukt/state`.
+    /// Production takes the state dir from the injected `&Config`, so pinning
+    /// it here exercises exactly the production journaling path.
+    fn hermetic_cfg(state_dir: &Path) -> Config {
+        let mut cfg = Config::load();
+        cfg.state_dir = state_dir.to_path_buf();
+        cfg
+    }
+
     /// Every invocation must leave a trace saying WHY it ended the way it did.
     /// Without one, "we inspected the diff and it was fine" and "we never
     /// inspected anything" are the same observation from outside — the exact
@@ -495,7 +508,8 @@ mod tests {
     /// "hook never ran", and nothing on disk could tell them apart.
     #[test]
     fn every_invocation_is_journaled_even_when_nothing_is_recorded() {
-        let cfg = Config::load();
+        let state = tempfile::tempdir().expect("tempdir");
+        let cfg = hermetic_cfg(state.path());
         let cwd = tempfile::tempdir().expect("tempdir");
         let wt = tempfile::tempdir().expect("tempdir");
         let ledger = crate::gatelog::diffrisk_outcomes_path(&crate::state::project_state_dir(
@@ -549,7 +563,8 @@ mod tests {
     /// no-panic / no-record guarantee is unchanged; the assertion is stronger.
     #[test]
     fn record_is_fail_soft_when_worktree_missing() {
-        let cfg = Config::load();
+        let state = tempfile::tempdir().expect("tempdir");
+        let cfg = hermetic_cfg(state.path());
         let cwd = tempfile::tempdir().expect("tempdir");
         // (a) No worktree recorded at all → nothing was inspected, no panic.
         let task = TaskState {
@@ -610,7 +625,6 @@ mod backlog_e494a8a3 {
         "diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded";
 
     #[test]
-    #[ignore = "backlog e494a8a3: open defect, remove ignore when fixed"]
     fn journaling_test_does_not_write_into_the_home_state_root() {
         let home = tempfile::tempdir().expect("temp home");
         let exe = std::env::current_exe().expect("current test binary");
@@ -642,6 +656,64 @@ mod backlog_e494a8a3 {
              concurrent runs share it and every run leaves a namespace behind",
             leaked.len(),
             state_root.display()
+        );
+    }
+}
+
+#[cfg(test)]
+mod backlog_c63f1c23 {
+    //! backlog c63f1c23 (1): `diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded`
+    //! resolves its ledger through `Config::load()` → `$HOME/.condukt/state`
+    //! WITHOUT taking `HOME_ENV_LOCK`, while sibling tests (`claim::tests::pin_home`,
+    //! the stateless-* tests) swap `$HOME` in-process to their own TempDirs.
+    //! When the swap lands before `Config::load()`, the ledger goes into the
+    //! sibling's TempDir, which is deleted underneath it — observed as
+    //! `left: 1, right: 2` at `outcomes.len()` (7/11 full-suite runs).
+    //!
+    //! The production journaling path itself takes the state dir from the
+    //! injected `&Config` (`project_state_dir(cfg, cwd)`); it is the TEST that
+    //! couples the ledger location to process-global `$HOME`. Contract pinned
+    //! here: the target test's verdict must not depend on what `$HOME` is.
+    //!
+    //! Deterministic stand-in for "HOME was swapped to a directory that
+    //! vanishes": run exactly that test in a child copy of this test binary
+    //! whose `$HOME` is a regular FILE, so `$HOME/.condukt/state/...` can never
+    //! be created. A test whose ledger lives in its own TempDir (state dir
+    //! injected into its `Config`) is unaffected; one that follows `$HOME`
+    //! fails at its `ledger.exists()` assertion. The child mutates no env of
+    //! this process, so no lock is needed and no new race is added.
+    use std::process::Command;
+
+    const TARGET: &str =
+        "diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded";
+
+    #[test]
+    fn journaling_test_verdict_is_independent_of_home() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let home_file = dir.path().join("home-is-a-file");
+        std::fs::write(&home_file, b"not a directory").unwrap();
+        assert!(
+            home_file.is_file(),
+            "fixture precondition: HOME must be a non-directory"
+        );
+        let exe = std::env::current_exe().expect("current test binary");
+        let out = Command::new(&exe)
+            .args([TARGET, "--exact", "--test-threads=1"])
+            .env("HOME", &home_file)
+            .env_remove("CONDUKT_DISABLE")
+            .output()
+            .expect("spawn child test binary");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains("running 1 test"),
+            "fixture precondition: the target test must be selected; stdout={stdout}"
+        );
+        assert!(
+            out.status.success(),
+            "{TARGET} changed its verdict when $HOME's state root was unusable — its \
+             ledger follows process-global $HOME instead of its own TempDir, which is \
+             what a concurrent $HOME-swapping sibling exposes. stdout={stdout} stderr={}",
+            String::from_utf8_lossy(&out.stderr)
         );
     }
 }

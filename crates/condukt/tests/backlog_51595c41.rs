@@ -50,7 +50,6 @@ fn condukt(repo: &Path, home: &Path, args: &[&str]) -> Output {
 }
 
 #[test]
-#[ignore = "backlog 51595c41: open defect, remove ignore when fixed"]
 fn run_started_on_a_feature_branch_does_not_silently_land_feature_history_in_main() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");

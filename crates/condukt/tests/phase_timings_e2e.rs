@@ -247,6 +247,19 @@ fn phase_successful_merge_stamps_merge_completed() {
     fx.init_run("runM", "t1", "src/d.rs");
 
     // Build a mergeable branch off main.
+    // `worktree merge` refuses a branch with no recorded creation base
+    // (backlog 51595c41); record the one `worktree create` would have.
+    let head = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&fx.repo)
+        .output()
+        .expect("spawn git");
+    assert!(head.status.success(), "git rev-parse HEAD failed");
+    let head = String::from_utf8_lossy(&head.stdout).trim().to_string();
+    run_git(
+        &fx.repo,
+        &["config", "branch.condukt/runM-t1.conduktBase", &head],
+    );
     run_git(&fx.repo, &["checkout", "-q", "-b", "condukt/runM-t1"]);
     std::fs::write(fx.repo.join("d.txt"), "work\n").unwrap();
     run_git(&fx.repo, &["add", "."]);

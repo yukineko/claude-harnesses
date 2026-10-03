@@ -14,7 +14,7 @@ The other criteria are covered by the child items (ae4543d5, b5358f58, ad524af9,
 cc809395, 73c2c089, 5eb1f127 — each with its own repro); criterion 5 (the autoflow
 compass gate) no longer applies: that gate was retired 2026-08-20
 (crates/autoflow/src/main.rs "RETIRED 2026-08-20"). This file pins only what the
-umbrella itself owns. Open; expectedFailure.
+umbrella itself owns. Fixed: the norm is CLAUDE.md 5 item 4.
 """
 
 import re
@@ -47,7 +47,6 @@ class AgentSideNormIsWritten(unittest.TestCase):
         self.assertRegex(sample, NO_ALT_SYNTAX)
         self.assertRegex(sample, DECLARE_AND_ASK)
 
-    @unittest.expectedFailure
     def test_no_alt_syntax_and_declare_ask_norm_present(self):
         alt = [str(p.relative_to(REPO)) for p in sources() if NO_ALT_SYNTAX.search(p.read_text())]
         ask = [str(p.relative_to(REPO)) for p in sources() if DECLARE_AND_ASK.search(p.read_text())]

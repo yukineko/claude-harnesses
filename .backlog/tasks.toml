@@ -3033,7 +3033,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 同一秒に 2 つの cwd から compass gap を実行して実測（測定日 2026-09-13、測定点 main=05962e2a / worktree=dd6808b7、compass 0.1.17）。
 
@@ -3099,11 +3099,13 @@ DoD14(b) の是正後に seq を振り直して再記録できる。
 
 [backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/compass/tests/backlog_s10_repro.rs (rev 7e635343)"""
 created_at = 1789292019
-updated_at = 1790983374
+updated_at = 1791053672
 weight = 0.0
 issue_number = 602
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/602"
-rev = 0
+rev = 1
+ruling_kind = "judgment"
+rationale = "Contract conflict found by the worker (no code changed). Since 1e6f00ae (5bbc3a7e, 2026-10-03) compass refuses writes inside the primary tree (main.rs:299 guard_write -> refuse_if_primary) and crates/compass/tests/store_worktree_boundary.rs pins per-WORKTREE stores: a worktree outcome lands in <linked>/.compass/outcomes.json and NOT in the primary; carve-state stays per worktree. The auditor repro backlog_s10_repro.rs (db41c92f, 2026-10-02, one day older) records outcomes FROM MAIN, so it now fails at setup (rc 1 'compass outcome REFUSED ... primary working tree') and no longer proves b0e1e4a2 open. Under the 1e6f00ae contract the original 'hide' symptom is by design, but outcomes recorded in a worktree are still lost when the worktree is removed (gitignored, never merged). Options: (A) exempt outcomes.json/carve-state.json from the primary-tree boundary and resolve them to the main root; rewrite 5 store_worktree_boundary.rs tests with a test-weakening ack; repro stays. (B) keep the per-worktree boundary; retire/re-anchor the repro, and separately decide how worktree outcomes survive removal (e.g. fold into a tracked file, or refuse worktree removal with unmerged outcomes). (C) a machine-global store keyed by main worktree root (~/.compass/<projkey>), outside any work tree, which satisfies both the section 8 boundary and visibility; repro re-anchored to seed from a linked worktree. Driver recommends C."
 
 [[task]]
 id = "ebd1359a"
@@ -3125,90 +3127,6 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/589"
 rev = 0
 
 [[task]]
-id = "347db98f"
-title = "condukt diffrisk_record journal test intermittently sees 1 of 2 records under full-target test load"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "flaky-test",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-MEASURED 2026-09-13, tree = main mid-merge of run-20260913-182640-69073 t5 (MERGE_HEAD 66a5ce1d, base 05962e2a).
-
-SYMPTOM: diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded
-panics at crates/condukt/src/diffrisk_record.rs:540 -- assertion left == right failed:
-one record per invocation; left: 1, right: 2. Always the SAME test and SAME assertion.
-
-RATE: cargo test -p condukt --quiet (ALL targets) -> 1 FAIL in 4 runs. Plus 2 consecutive
-FAILs via scripts/test-changed-crates.sh, which is what donegate runs.
-NEVER reproduced with cargo test -p condukt --bins alone (3 runs green, one of them
---test-threads=1 with 809 passed). So it needs the integration-test binaries running
-concurrently, i.e. it is LOAD-dependent, not order-dependent.
-
-NOT the same defect as 4b94e371. That one had VARYING failure identity across runs;
-this one is stable. I initially reported it as that class and that was wrong.
-
-REFUTED (do not re-walk these):
- - shared ledger across tests. project_dir = cfg.state_dir.join(project_key(repo_root(cwd))).
-   repo_root falls back to cwd when no ancestor has .git, and project_key hashes the FULL
-   canonical path (harness-core/src/projkey.rs:24,50), so each tempdir test gets its own
-   diffrisk-outcomes.jsonl. No cross-test sharing.
- - a return path that skips journaling. Every return in record_post_execution_diff_risk
-   goes through journal(...) (diffrisk_record.rs:261,265,328,344,384).
- - git() swallowing a non-zero exit. git_output_to_result bails on both non-zero status
-   and timeout (worktree.rs:188,199).
-
-STILL UNDETERMINED (the actual open question): whether the lost record is (a) an append
-that failed, or (b) a line dropped at parse. append_line_reporting prints a LOST warning
-on failure (harness-core/src/append.rs:64) and load_diffrisk_outcomes silently drops
-unparseable lines via filter_map(ok()) (gatelog.rs:448). A --nocapture run grepping for
-that warning happened to PASS, so the discriminator was not captured. NEXT STEP: loop the
-full-target run under --nocapture until it fails and check whether the LOST warning is
-present. If it is absent, the line was written but did not parse, and the silent
-filter_map(ok()) drop is itself the CLAUDE.md section 3 problem -- a hole in the history
-that the loader hides.
-
-WHY IT MATTERS BEYOND THE TEST: this journal exists specifically so that
-inspected-and-clean is distinguishable from never-inspected. If a record can be lost
-under load, that distinction has a hole under exactly the concurrent conditions the
-fleet runs in.
-
-=== 追加実測 2026-09-16 (flow cycle6 / run-20260913-223733-78880 t1 worker, 測定点 847a782e) ===
-
-原因は「同時に走る integration test バイナリ」ではなく、より一般に
-TMPDIR に対する同時 create/write/remove の churn である。切り分け:
-
-  - t1 の新規テスト (subagent_stop 15 件) を含め既定並列度  -> 10 回中 4 回 FAIL
-  - t1 のテストを --skip subagent_stop で除外              -> 5 回中 0 回 FAIL
-  - 全体を --test-threads=1                                 -> 毎回 824/824 green
-  - 決定的: t1 のテストを除外したまま、無関係なプロセスに
-    $TMPDIR への平凡な create/write/remove churn をさせる   -> 3 回中 1 回 FAIL
-
-つまり subagent_stop のテストは原因ではなく、単に負荷を上げてヒット率を
-上げているだけ。既存メモの「integration-test バイナリが必要」という
-条件は狭すぎる ($TMPDIR churn で十分)。
-
-未解明で、ここが本題: 2 回の journal append のうち 1 回が落ちているのに、
-diffrisk-outcomes の "this record is LOST" 警告が一切出ていない。
-このテストが守ろうとしているのはまさに「穴の空いた履歴」であり、
-記録が失われたのに誰も気づけない経路が実在することになる。
-flake の再現条件よりこちらの方が重い。
-
-なお本件は weaken / skip / disable していない。cycle6 の 3 ブランチは
-すべて -- --test-threads=1 で測って green を確認した。
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Not a duplicate of e494a8a3: 347db98f carries an extra ask (determine whether the lost record is a failed append or a line silently dropped at parse; the loader's silent drop is itself a §3 hole) that; test - (rev e70d48dd)"""
-created_at = 1789294091
-updated_at = 1790983145
-weight = 0.0
-issue_number = 616
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/616"
-rev = 0
-
-[[task]]
 id = "19ed3ae9"
 title = "main の作業ツリーに未コミットの backlog 起票が残ると、並行セッション同士が同じファイルの clean を待ち合ってデッドロックする"
 project = "/Users/yuki/src/harness"
@@ -3219,7 +3137,7 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 測定 2026-09-13 19:18、測定点 main bc989543。
 
@@ -3243,11 +3161,13 @@ notes = """
 
 [backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/backlog/tests/backlog_19ed3ae9.rs (rev dfa4e9ba): pins the deterministic half (aborted merge); the two-session wait deadlock itself is timing and not reproduced"""
 created_at = 1789295854
-updated_at = 1790983230
+updated_at = 1791053589
 weight = 0.0
 issue_number = 619
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/619"
-rev = 0
+rev = 1
+ruling_kind = "judgment"
+rationale = "Design choice the ticket itself leaves open (reading 1 vs 2, discriminator not yet measured), and 6fcd99df is currently editing the main-tree guards (guard-maintree-bash/edit.py, stop-verify-worktree.py). The auditor repro (crates/backlog/tests/backlog_19ed3ae9.rs) requires that an uncommitted backlog add on main never blocks git merge. Options: (A, recommended) backlog add/edit run from the MAIN worktree writes nothing tracked: it appends the row to a gitignored per-task inbox file (.backlog/inbox/<id>.toml, read by list/next as part of the store) that any later store write from a linked worktree folds into that worktree's tasks.toml and then removes the inbox file; (B) backlog refuses to write when cwd is the main worktree and prints the session-worktree command to rerun (conflicts with always-file-findings); (C) keep behaviour, document the transplant procedure (does not satisfy the repro test, would need it retired). Which?"
 
 [[task]]
 id = "d65110df"
@@ -3358,7 +3278,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 実測 2026-09-13、測定点 c39701bc。
 
@@ -3387,11 +3307,13 @@ crates/*/bin/*-darwin-arm64 は .gitignore:45 で無視されており、リポ�
 
 [2026-10-04, session 33de4c25] The main defect (a --plugin run skipped verification and returned rc 0) is fixed by c9373b92 (fix 4bc8c975, tests 418c82e2/131e987d). This item's own repro, test_filtered_run_with_drift_in_the_filtered_plugin_fails, now passes, and its expectedFailure marker was removed. Still open here: the second issue in these notes (a stale untracked crates/tdd/bin/tdd-darwin-arm64 appearing in the mirror comparison) is not addressed. Close this item once that part has its own test, or narrow the item to that part."""
 created_at = 1789297053
-updated_at = 1791046807
+updated_at = 1791053718
 weight = 0.0
 issue_number = 624
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/624"
-rev = 1
+rev = 2
+ruling_kind = "judgment"
+rationale = "Two decisions. (1) condukt gate check on the remaining work returned verdict escalate, risk high (schedule warning verbatim: task '5e54fb25' force-gated: high-risk irreversible action (declared class Parallel)). The trigger is the deploy word rollout in the task prose; the work only edits scripts/check-plugin-rollout.py and its tests, no rollout is executed. I did not reword the task to get past the gate. (2) Scope: the main defect (--plugin run skipped verify, rc 0) is fixed by 4bc8c975 and scripts/test_backlog_5e54fb25.py passes. The residual (stray untracked crates/tdd/bin/tdd-darwin-arm64 compared as payload) no longer reproduces on this machine: crates/tdd/bin holds only the tdd launcher and check-plugin-rollout.py reports no mirror drift for tdd (2026-10-04, main 9e8e0a90). Options: (A) approve running the residual fix (exclude rebuild-artifact-shaped paths from the SOURCE side of the mirror comparison, with RED-first test); (B) close 5e54fb25 with the existing repro test (red-rev 4bc8c975^) and drop the residual as no longer reproducible."
 
 [[task]]
 id = "90e78490"
@@ -12968,4 +12890,42 @@ updated_at = 1791053154
 weight = 0.0
 issue_number = 1322
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1322"
+rev = 0
+
+[[task]]
+id = "4fdf13ad"
+title = "condukt editgate twin-checkout test fails 14/16 under concurrent test-binary copies: rustup cannot choose cargo (same HOME race as f7a0cadc), and editgate reports it as compile/type errors"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Measured 2026-10-04 on main 9e8e0a90: 16 copies of target/debug/deps/condukt-<hash>, 8 concurrent. editgate::tests::a_twin_checkout_sharing_a_target_dir_cannot_launder_a_broken_edit failed 14/16, a_clean_crate_still_passes 7/16. Verbatim at editgate.rs:596: broken true, diagnostics 'error: rustup could not choose a version of cargo to run', reason 'cargo check reported compile/type errors'. Two things: (1) same root cause as f7a0cadc (HOME swapped by sibling tests while cargo is spawned); (2) the gate labels a toolchain-resolution failure as a compile/type error - fail-closed, but the reason string misstates what was observed (section 4 prose vs behaviour)."
+created_at = 1791053433
+updated_at = 1791053433
+weight = 0.0
+issue_number = 1323
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1323"
+rev = 0
+
+[[task]]
+id = "e3ca0b92"
+title = "compass carve::load collapses a read or parse error of carve-state.json into None (fresh state)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "compass",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Worker side finding 2026-10-04 on b0e1e4a2: crates/compass/src/carve.rs:31-34 treats a read/parse error as None 'so a stale state never wedges a carve'. Unreadable and absent become the same answer (CLAUDE.md section 3 Absent vs Undetermined). Needs a repro test."
+created_at = 1791053672
+updated_at = 1791053672
+weight = 0.0
+issue_number = 1324
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1324"
 rev = 0

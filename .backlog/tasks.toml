@@ -1208,17 +1208,19 @@ project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p2"]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit aaff04c5 --status pending
 
 [backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/blastguard/tests/backlog_audit_s02.rs (rev e70d48dd)"""
 created_at = 1785310501
-updated_at = 1790983182
+updated_at = 1791054802
 weight = 0.0
 issue_number = 1095
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1095"
-rev = 0
+rev = 1
+ruling_kind = "judgment"
+rationale = "Verifier FAIL (c)+(e) on the implementation kept on branch run-20261004-035459-30460/90e78490 (commit 103ae521, blastguard 0.2.109, NOT merged; verifier test saved at scratchpad 90e78490-v-test.rs). The fix blanks >=, >, => in classify's prose view when the following token is a bare word. That cannot tell 'm > built_at' (prose) from ': > Makefile' / 'echo x > credentials' (a real truncation that detect itself Denies as unrecoverable-unknown): at the tip those become Low + reversible = auto-exec, while base force-gated them. Docstring classify.rs:203 claims the exclusion cannot disable the gate. This is the false-gate vs escape trade-off the ticket names. Options: (A) when any operator was blanked, floor the result at Medium + irreversible (no schedule force-gate, so prose tasks run; never auto-exec at gate_exec; literal truncations of bare-word files then also stop being force-gated); (B) blank only when the left side is also prose-shaped (no shell command word such as : echo printf cat tee before the operator) and floor as in A; (C) leave classify as-is and move the fix to condukt (stop feeding done_criteria to the shell classifier, classify only title + touched_files); (D) keep the false positives (status quo)."
 
 [[task]]
 id = "3611eb66"
@@ -3033,7 +3035,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 同一秒に 2 つの cwd から compass gap を実行して実測（測定日 2026-09-13、測定点 main=05962e2a / worktree=dd6808b7、compass 0.1.17）。
 
@@ -3099,11 +3101,13 @@ DoD14(b) の是正後に seq を振り直して再記録できる。
 
 [backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/compass/tests/backlog_s10_repro.rs (rev 7e635343)"""
 created_at = 1789292019
-updated_at = 1790983374
+updated_at = 1791053672
 weight = 0.0
 issue_number = 602
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/602"
-rev = 0
+rev = 1
+ruling_kind = "judgment"
+rationale = "Contract conflict found by the worker (no code changed). Since 1e6f00ae (5bbc3a7e, 2026-10-03) compass refuses writes inside the primary tree (main.rs:299 guard_write -> refuse_if_primary) and crates/compass/tests/store_worktree_boundary.rs pins per-WORKTREE stores: a worktree outcome lands in <linked>/.compass/outcomes.json and NOT in the primary; carve-state stays per worktree. The auditor repro backlog_s10_repro.rs (db41c92f, 2026-10-02, one day older) records outcomes FROM MAIN, so it now fails at setup (rc 1 'compass outcome REFUSED ... primary working tree') and no longer proves b0e1e4a2 open. Under the 1e6f00ae contract the original 'hide' symptom is by design, but outcomes recorded in a worktree are still lost when the worktree is removed (gitignored, never merged). Options: (A) exempt outcomes.json/carve-state.json from the primary-tree boundary and resolve them to the main root; rewrite 5 store_worktree_boundary.rs tests with a test-weakening ack; repro stays. (B) keep the per-worktree boundary; retire/re-anchor the repro, and separately decide how worktree outcomes survive removal (e.g. fold into a tracked file, or refuse worktree removal with unmerged outcomes). (C) a machine-global store keyed by main worktree root (~/.compass/<projkey>), outside any work tree, which satisfies both the section 8 boundary and visibility; repro re-anchored to seed from a linked worktree. Driver recommends C."
 
 [[task]]
 id = "ebd1359a"
@@ -3125,90 +3129,6 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/589"
 rev = 0
 
 [[task]]
-id = "347db98f"
-title = "condukt diffrisk_record journal test intermittently sees 1 of 2 records under full-target test load"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "flaky-test",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-MEASURED 2026-09-13, tree = main mid-merge of run-20260913-182640-69073 t5 (MERGE_HEAD 66a5ce1d, base 05962e2a).
-
-SYMPTOM: diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded
-panics at crates/condukt/src/diffrisk_record.rs:540 -- assertion left == right failed:
-one record per invocation; left: 1, right: 2. Always the SAME test and SAME assertion.
-
-RATE: cargo test -p condukt --quiet (ALL targets) -> 1 FAIL in 4 runs. Plus 2 consecutive
-FAILs via scripts/test-changed-crates.sh, which is what donegate runs.
-NEVER reproduced with cargo test -p condukt --bins alone (3 runs green, one of them
---test-threads=1 with 809 passed). So it needs the integration-test binaries running
-concurrently, i.e. it is LOAD-dependent, not order-dependent.
-
-NOT the same defect as 4b94e371. That one had VARYING failure identity across runs;
-this one is stable. I initially reported it as that class and that was wrong.
-
-REFUTED (do not re-walk these):
- - shared ledger across tests. project_dir = cfg.state_dir.join(project_key(repo_root(cwd))).
-   repo_root falls back to cwd when no ancestor has .git, and project_key hashes the FULL
-   canonical path (harness-core/src/projkey.rs:24,50), so each tempdir test gets its own
-   diffrisk-outcomes.jsonl. No cross-test sharing.
- - a return path that skips journaling. Every return in record_post_execution_diff_risk
-   goes through journal(...) (diffrisk_record.rs:261,265,328,344,384).
- - git() swallowing a non-zero exit. git_output_to_result bails on both non-zero status
-   and timeout (worktree.rs:188,199).
-
-STILL UNDETERMINED (the actual open question): whether the lost record is (a) an append
-that failed, or (b) a line dropped at parse. append_line_reporting prints a LOST warning
-on failure (harness-core/src/append.rs:64) and load_diffrisk_outcomes silently drops
-unparseable lines via filter_map(ok()) (gatelog.rs:448). A --nocapture run grepping for
-that warning happened to PASS, so the discriminator was not captured. NEXT STEP: loop the
-full-target run under --nocapture until it fails and check whether the LOST warning is
-present. If it is absent, the line was written but did not parse, and the silent
-filter_map(ok()) drop is itself the CLAUDE.md section 3 problem -- a hole in the history
-that the loader hides.
-
-WHY IT MATTERS BEYOND THE TEST: this journal exists specifically so that
-inspected-and-clean is distinguishable from never-inspected. If a record can be lost
-under load, that distinction has a hole under exactly the concurrent conditions the
-fleet runs in.
-
-=== 追加実測 2026-09-16 (flow cycle6 / run-20260913-223733-78880 t1 worker, 測定点 847a782e) ===
-
-原因は「同時に走る integration test バイナリ」ではなく、より一般に
-TMPDIR に対する同時 create/write/remove の churn である。切り分け:
-
-  - t1 の新規テスト (subagent_stop 15 件) を含め既定並列度  -> 10 回中 4 回 FAIL
-  - t1 のテストを --skip subagent_stop で除外              -> 5 回中 0 回 FAIL
-  - 全体を --test-threads=1                                 -> 毎回 824/824 green
-  - 決定的: t1 のテストを除外したまま、無関係なプロセスに
-    $TMPDIR への平凡な create/write/remove churn をさせる   -> 3 回中 1 回 FAIL
-
-つまり subagent_stop のテストは原因ではなく、単に負荷を上げてヒット率を
-上げているだけ。既存メモの「integration-test バイナリが必要」という
-条件は狭すぎる ($TMPDIR churn で十分)。
-
-未解明で、ここが本題: 2 回の journal append のうち 1 回が落ちているのに、
-diffrisk-outcomes の "this record is LOST" 警告が一切出ていない。
-このテストが守ろうとしているのはまさに「穴の空いた履歴」であり、
-記録が失われたのに誰も気づけない経路が実在することになる。
-flake の再現条件よりこちらの方が重い。
-
-なお本件は weaken / skip / disable していない。cycle6 の 3 ブランチは
-すべて -- --test-threads=1 で測って green を確認した。
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Not a duplicate of e494a8a3: 347db98f carries an extra ask (determine whether the lost record is a failed append or a line silently dropped at parse; the loader's silent drop is itself a §3 hole) that; test - (rev e70d48dd)"""
-created_at = 1789294091
-updated_at = 1790983145
-weight = 0.0
-issue_number = 616
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/616"
-rev = 0
-
-[[task]]
 id = "19ed3ae9"
 title = "main の作業ツリーに未コミットの backlog 起票が残ると、並行セッション同士が同じファイルの clean を待ち合ってデッドロックする"
 project = "/Users/yuki/src/harness"
@@ -3219,7 +3139,7 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 測定 2026-09-13 19:18、測定点 main bc989543。
 
@@ -3243,54 +3163,13 @@ notes = """
 
 [backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/backlog/tests/backlog_19ed3ae9.rs (rev dfa4e9ba): pins the deterministic half (aborted merge); the two-session wait deadlock itself is timing and not reproduced"""
 created_at = 1789295854
-updated_at = 1790983230
+updated_at = 1791053589
 weight = 0.0
 issue_number = 619
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/619"
-rev = 0
-
-[[task]]
-id = "d65110df"
-title = "abandon --all-stuck: dirty-veto の判定不能が exit 3 にならず、三値 scan_stuck と終了ステータスが割れている"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "condukt",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-実測 2026-09-13、測定点 bc989543 (t5 統合直後)。二つの独立した変更が同じ run で main へ landed した結果、「判定不能」の扱いが経路によって割れている。
-
-(1) 0791722b (backlog b637936f) が stuck スキャンを三値化した。state.rs::scan_stuck は Running task を stuck / healthy / undetermined に分け、undetermined のうち Undetermination::Unobservable が一つでもあれば state abandon --all-stuck は exit 3 で終わる。「判定できなかった」を exit 0 の沈黙に写さないためのもの。
-
-(2) その直後に統合した 5daf0b60 (t5) の uncommitted-work veto は、確定した Known(Stalled) であっても worktree が dirty または読めない場合に task を KEEP する。KEEP の理由は stderr に逐語で出るが、StuckScan のどちらのリストにも入らない。したがって has_unobservable() は false のままで、exit code は 0 になる。
-
-つまり同じ「判定不能」でも:
-  worktree HEAD が読めない  -> undetermined/Unobservable -> exit 3
-  worktree の dirtiness が読めない -> stderr のみ      -> exit 0
-
-abandon の可否についてはどちらも制限側 (KEEP) に倒れているので fail-open ではない。割れているのは下流へ渡す終了ステータスであり、スクリプトから見ると後者は「クリーンなスキャンだった」と読める。CLAUDE.md 3: 「検査した」と「検査できなかった」を下流から区別不能にしてはならない。
-
-現在の契約を固定しているテスト: crates/condukt/tests/abandon_dirty_guard.rs の helper abandon_all_stuck_twice が assert 二つで status.success() を要求している (行 242/244)。これは「dirty veto が効いた run は exit 0」を pin している。ただしこの assert は helper 内の前提条件であって、テストが自分の doc comment で名乗っている性質 (task が abandon されない) ではない。main 側には同種の再アンカー前例がある (0.7.159 が abandon_progress_gate_e2e の status.success() 二行を exit==3 へ張り直した。marketplace.json の condukt エントリに逐語で残っている)。
-
-完了条件 (利害のない agent が RED を先に観測すること、CLAUDE.md 2):
-  a. uncommitted_work_keep_reason が Determination を返す形のまま、Undetermined の読み (Err、worktree 未記録) を StuckScan.undetermined へ Unobservable として載せる。
-  b. Known(Some(reason)) = 観測できた dirty は undetermined ではない (worker は生きていると判定できている) ので、載せない。この非対称を doc に書く。
-  c. abandon_dirty_guard.rs の cannot-determine ケースの exit code を 3 に張り直し、dirty ケースは 0 のままであることを対照として同時に pin する。
-  d. どちらのケースも stderr の veto 行が消えないことを併せて確認する。
-
-起票者は本件を統合中に作り込んだ当人 (t5 のマージ実施者) であり、同一セッションで実装と検証を兼ねないために作業ではなく起票として残す。
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/condukt/tests/backlog_s03_audit.rs (rev e70d48dd)"""
-created_at = 1789294567
-updated_at = 1790983230
-weight = 0.0
-issue_number = 617
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/617"
-rev = 0
+rev = 1
+ruling_kind = "judgment"
+rationale = "Design choice the ticket itself leaves open (reading 1 vs 2, discriminator not yet measured), and 6fcd99df is currently editing the main-tree guards (guard-maintree-bash/edit.py, stop-verify-worktree.py). The auditor repro (crates/backlog/tests/backlog_19ed3ae9.rs) requires that an uncommitted backlog add on main never blocks git merge. Options: (A, recommended) backlog add/edit run from the MAIN worktree writes nothing tracked: it appends the row to a gitignored per-task inbox file (.backlog/inbox/<id>.toml, read by list/next as part of the store) that any later store write from a linked worktree folds into that worktree's tasks.toml and then removes the inbox file; (B) backlog refuses to write when cwd is the main worktree and prints the session-worktree command to rerun (conflicts with always-file-findings); (C) keep behaviour, document the transplant procedure (does not satisfy the repro test, would need it retired). Which?"
 
 [[task]]
 id = "1050f9d1"
@@ -3358,7 +3237,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 実測 2026-09-13、測定点 c39701bc。
 
@@ -3387,11 +3266,13 @@ crates/*/bin/*-darwin-arm64 は .gitignore:45 で無視されており、リポ�
 
 [2026-10-04, session 33de4c25] The main defect (a --plugin run skipped verification and returned rc 0) is fixed by c9373b92 (fix 4bc8c975, tests 418c82e2/131e987d). This item's own repro, test_filtered_run_with_drift_in_the_filtered_plugin_fails, now passes, and its expectedFailure marker was removed. Still open here: the second issue in these notes (a stale untracked crates/tdd/bin/tdd-darwin-arm64 appearing in the mirror comparison) is not addressed. Close this item once that part has its own test, or narrow the item to that part."""
 created_at = 1789297053
-updated_at = 1791046807
+updated_at = 1791053718
 weight = 0.0
 issue_number = 624
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/624"
-rev = 1
+rev = 2
+ruling_kind = "judgment"
+rationale = "Two decisions. (1) condukt gate check on the remaining work returned verdict escalate, risk high (schedule warning verbatim: task '5e54fb25' force-gated: high-risk irreversible action (declared class Parallel)). The trigger is the deploy word rollout in the task prose; the work only edits scripts/check-plugin-rollout.py and its tests, no rollout is executed. I did not reword the task to get past the gate. (2) Scope: the main defect (--plugin run skipped verify, rc 0) is fixed by 4bc8c975 and scripts/test_backlog_5e54fb25.py passes. The residual (stray untracked crates/tdd/bin/tdd-darwin-arm64 compared as payload) no longer reproduces on this machine: crates/tdd/bin holds only the tdd launcher and check-plugin-rollout.py reports no mirror drift for tdd (2026-10-04, main 9e8e0a90). Options: (A) approve running the residual fix (exclude rebuild-artifact-shaped paths from the SOURCE side of the mirror comparison, with RED-first test); (B) close 5e54fb25 with the existing repro test (red-rev 4bc8c975^) and drop the residual as no longer reproducible."
 
 [[task]]
 id = "90e78490"
@@ -3405,7 +3286,7 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 実測 2026-09-13、測定点 15adc7bd。condukt 0.7.154 (/Users/yuki/.claude/plugins/cache/yukineko/condukt/0.7.154/bin/condukt)。
 
@@ -3422,11 +3303,13 @@ notes = """
 
 [backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/blastguard/tests/backlog_audit_s02.rs (rev e70d48dd)"""
 created_at = 1789306920
-updated_at = 1790983182
+updated_at = 1791054801
 weight = 0.0
 issue_number = 640
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/640"
-rev = 0
+rev = 1
+ruling_kind = "judgment"
+rationale = "Verifier FAIL (c)+(e) on the implementation kept on branch run-20261004-035459-30460/90e78490 (commit 103ae521, blastguard 0.2.109, NOT merged; verifier test saved at scratchpad 90e78490-v-test.rs). The fix blanks >=, >, => in classify's prose view when the following token is a bare word. That cannot tell 'm > built_at' (prose) from ': > Makefile' / 'echo x > credentials' (a real truncation that detect itself Denies as unrecoverable-unknown): at the tip those become Low + reversible = auto-exec, while base force-gated them. Docstring classify.rs:203 claims the exclusion cannot disable the gate. This is the false-gate vs escape trade-off the ticket names. Options: (A) when any operator was blanked, floor the result at Medium + irreversible (no schedule force-gate, so prose tasks run; never auto-exec at gate_exec; literal truncations of bare-word files then also stop being force-gated); (B) blank only when the left side is also prose-shaped (no shell command word such as : echo printf cat tee before the operator) and floor as in A; (C) leave classify as-is and move the fix to condukt (stop feeding done_criteria to the shell classifier, classify only title + touched_files); (D) keep the false positives (status quo)."
 
 [[task]]
 id = "df49f872"
@@ -3435,7 +3318,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 測定日 2026-09-16、測定点 d8ae43cb。
 
@@ -3508,11 +3391,13 @@ pre-commit で止まる。これは charter の ONE (DoD14(a)) の完了条件 3
 
 [backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_de721e5e_df49f872.py::BacklogDf49f872 (rev e128c13b): Two RED tests: unwired from .githooks/pre-commit, and the checker is itself red today (table drift), which the wiring will surface."""
 created_at = 1789490571
-updated_at = 1790983293
+updated_at = 1791053771
 weight = 0.0
 issue_number = 658
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/658"
-rev = 0
+rev = 1
+ruling_kind = "judgment"
+rationale = "Blocked on a human-only edit: wiring scripts/check-projkey-store-classification.py into .githooks/pre-commit. .githooks is deny-listed for the assistant and the notes record the user ruling of 2026-09-23 that the user applies the patch. The script may already be covered by the eca8dea7 stage A/B/C .githooks patches in the driver scratchpad; check before applying."
 
 [[task]]
 id = "55fb3861"
@@ -3704,17 +3589,19 @@ project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 測定日 2026-09-18、測定点 main 5553217c、condukt 0.7.168。crates/condukt/src/schedule.rs:478 の resolve_force_gate(classify_change(&task_action_text(t), ...)) は task_action_text (title + done_criteria + touched_files を連結した自由文) を blastguard の shell コマンド分類器に渡す。実測(決定論・再現可能、probe は condukt schedule --file <1タスクの decomposition>): done_criteria='> foo' -> GATED / '>foo' -> GATED / '>= built_at' -> GATED / 'm > built_at' -> GATED / 'm >= built_at' -> GATED。対照: 'm < built_at' -> not gated / 'Determination<i64>' -> not gated / 'built_at' -> not gated / 'fresh' -> not gated。したがって trigger は文字 '>' 単体であり、< は引かない(プローブに識別力があることの control 済み)。実害: backlog e073bdb1 の実装タスク(overwatch cache_is_fresh が ledger mtime を consult する純粋なコード修正)が、done_criteria に比較条件 'Known(m) かつ m >= built_at は TTL に関わらず not fresh' と書いただけで gated へ隔離され、schedule の warnings が 'high-risk irreversible action (declared class Serial)' と報告した。方向は制限側(fail-closed)なので fail-open ではないが、(a) 正しい仕様記述が書けないほど分類器が過敏である、(b) gated 隔離が日常化すると §5 が禁じる恒常的迂回(散文を書き換えて分類器を避ける = ゲートのゲーミング)へ構造的な圧力がかかる。読みは 2 つ: (a) 実在の欠陥 = 自然言語の done_criteria に shell 分類器を掛けるのが誤り(action text から done_criteria を外す、または shell トークンとしての > を判定する前に自由文かコマンドかを判別する)。(b) 意図的な仕様 = LLM の under-tag を塞ぐため過剰検出を受容している。見分ける方法: classify_change の呼び出し側が期待する入力が『実行されるコマンド』か『タスクの説明文』かを、schedule.rs:461-476 の docstring (deploy/push/release を force-gate する意図) と blastguard::classify の契約 docstring の両方で確認する。前者が『説明文』を想定していないなら (a)。関連: bcfc5491 / e073bdb1 / 5e62b0eb の p0 trio run
 
 [backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/blastguard/tests/backlog_audit_s02.rs (rev e70d48dd)"""
 created_at = 1789704704
-updated_at = 1790983182
+updated_at = 1791054802
 weight = 0.0
 issue_number = 669
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/669"
-rev = 0
+rev = 1
+ruling_kind = "judgment"
+rationale = "Verifier FAIL (c)+(e) on the implementation kept on branch run-20261004-035459-30460/90e78490 (commit 103ae521, blastguard 0.2.109, NOT merged; verifier test saved at scratchpad 90e78490-v-test.rs). The fix blanks >=, >, => in classify's prose view when the following token is a bare word. That cannot tell 'm > built_at' (prose) from ': > Makefile' / 'echo x > credentials' (a real truncation that detect itself Denies as unrecoverable-unknown): at the tip those become Low + reversible = auto-exec, while base force-gated them. Docstring classify.rs:203 claims the exclusion cannot disable the gate. This is the false-gate vs escape trade-off the ticket names. Options: (A) when any operator was blanked, floor the result at Medium + irreversible (no schedule force-gate, so prose tasks run; never auto-exec at gate_exec; literal truncations of bare-word files then also stop being force-gated); (B) blank only when the left side is also prose-shaped (no shell command word such as : echo printf cat tee before the operator) and floor as in A; (C) leave classify as-is and move the fix to condukt (stop feeding done_criteria to the shell classifier, classify only title + touched_files); (D) keep the false positives (status quo)."
 
 [[task]]
 id = "f7a0cadc"
@@ -12968,4 +12855,156 @@ updated_at = 1791053154
 weight = 0.0
 issue_number = 1322
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1322"
+rev = 0
+
+[[task]]
+id = "4fdf13ad"
+title = "condukt editgate twin-checkout test fails 14/16 under concurrent test-binary copies: rustup cannot choose cargo (same HOME race as f7a0cadc), and editgate reports it as compile/type errors"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Measured 2026-10-04 on main 9e8e0a90: 16 copies of target/debug/deps/condukt-<hash>, 8 concurrent. editgate::tests::a_twin_checkout_sharing_a_target_dir_cannot_launder_a_broken_edit failed 14/16, a_clean_crate_still_passes 7/16. Verbatim at editgate.rs:596: broken true, diagnostics 'error: rustup could not choose a version of cargo to run', reason 'cargo check reported compile/type errors'. Two things: (1) same root cause as f7a0cadc (HOME swapped by sibling tests while cargo is spawned); (2) the gate labels a toolchain-resolution failure as a compile/type error - fail-closed, but the reason string misstates what was observed (section 4 prose vs behaviour)."
+created_at = 1791053433
+updated_at = 1791053433
+weight = 0.0
+issue_number = 1323
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1323"
+rev = 0
+
+[[task]]
+id = "e3ca0b92"
+title = "compass carve::load collapses a read or parse error of carve-state.json into None (fresh state)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "compass",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Worker side finding 2026-10-04 on b0e1e4a2: crates/compass/src/carve.rs:31-34 treats a read/parse error as None 'so a stale state never wedges a carve'. Unreadable and absent become the same answer (CLAUDE.md section 3 Absent vs Undetermined). Needs a repro test."
+created_at = 1791053672
+updated_at = 1791053672
+weight = 0.0
+issue_number = 1324
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1324"
+rev = 0
+
+[[task]]
+id = "b8eccf6d"
+title = "doc-claims gate reports many exempt citations whose quoted line no longer exists (docs/autoflow-verdict-audit.md, docs/audit-gauge-verdict-paths.md and others)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "docs",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Worker side finding 2026-10-04 (d65110df commit 770b6aac): the pre-commit doc-claims scan prints many [exempt] drift findings citing quotes absent from the cited files. Exempt means not blocking, so the audit docs silently cite code that moved or vanished. Reproduce: run the doc-claims checker over docs/ and count exempt findings."
+created_at = 1791054193
+updated_at = 1791054193
+weight = 0.0
+issue_number = 1325
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1325"
+rev = 0
+
+[[task]]
+id = "e79a4795"
+title = "fail-open-guard advisory lists 17 empty-fallback hits in blastguard, overwatch, propguard, specguard, stuckguard that nobody has triaged"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Worker side finding 2026-10-04 (d65110df commit): the fail-open-guard advisory printed by the commit hook lists 17 empty-fallback hits across GATE crates. Advisory only, so none block. Each needs a per-consumer check (CLAUDE.md section 3) or an explicit justified exemption."
+created_at = 1791054194
+updated_at = 1791054194
+weight = 0.0
+issue_number = 1326
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1326"
+rev = 0
+
+[[task]]
+id = "860efdd6"
+title = "condukt abandon exit-3 stderr header says a durable progress signal could not be read, but it now also covers uncommitted-work-undetermined entries"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Verifier side finding on d65110df (b0c7b6fe): main.rs exit-3 header wording contradicts the uncommitted_work_keep_reason docstring, which says dirtiness is not a progress signal. Per-task reason is correct; header prose is not (section 4)."
+created_at = 1791054768
+updated_at = 1791054768
+weight = 0.0
+issue_number = 1327
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1327"
+rev = 0
+
+[[task]]
+id = "87108f05"
+title = "verifier-authored test files under a plugin crate always trip bump-on-change, so the verifier cannot commit its test without bumping the worker's version files"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04 on d65110df: VERSION-BUMP GATE FAILED for crates/condukt/tests/verifier_d65110df.rs at 0.7.219. Driver landed it with a 0.7.220 bump (4245deba). Workflow conflict: either the verifier brief allows a micro bump, or tests/ under a plugin crate are exempt from bump-on-change like harness-core tests/ already are."
+created_at = 1791054769
+updated_at = 1791054769
+weight = 0.0
+issue_number = 1328
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1328"
+rev = 0
+
+[[task]]
+id = "4e560a64"
+title = "condukt is_dirty / HEAD read on a recorded worktree whose .git was deleted silently reads the enclosing parent repository"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Verifier side finding on d65110df, untested: if a task worktree path loses its .git but sits inside another git repo, git status and rev-parse run against the parent repo and return a confident answer about the wrong tree. Needs a repro test."
+created_at = 1791054771
+updated_at = 1791054771
+weight = 0.0
+issue_number = 1329
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1329"
+rev = 0
+
+[[task]]
+id = "69d90c90"
+title = "blastguard classify: rm -rf after prose text is classified Medium, not High (base only gated 'if a >= b then rm -rf /' because of the >=)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Verifier side finding on 90e78490 (2026-10-04): classify('if a is b then rm -rf /') returns Medium at base 9e8e0a90; the High at base for the >= variant came only from the redirect. Destructive rm embedded after prose is not detected as High."
+created_at = 1791054805
+updated_at = 1791054805
+weight = 0.0
+issue_number = 1330
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1330"
 rev = 0

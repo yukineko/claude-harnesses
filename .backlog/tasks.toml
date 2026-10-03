@@ -11313,3 +11313,67 @@ weight = 0.0
 issue_number = 1136
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1136"
 rev = 0
+
+[[task]]
+id = "3afa6e50"
+title = "plugin_bin::resolve picks the dotfile .version-history.jsonl as a version dir, so the SessionStart status renders backlog/condukt/compass as unknown"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = 'Observed 2026-10-03 (session 521ce4dd SessionStart, overwatch 0.2.56 status hook): == Backlog == (unknown: backlog could not be located (could not test /Users/yuki/.claude/plugins/cache/yukineko/backlog/.version-history.jsonl/bin/backlog: Not a directory (os error 20))); identical for condukt and compass. The plugin cache dir holds version dirs (0.3.22 ... 0.3.32) plus a hidden .version-history.jsonl file; the resolver (crates/harness-core/src/plugin_bin.rs) evidently selected that file as the newest "version" and then errored, so the status reported unknown (correctly not "empty", but the binaries were present and runnable). Fix direction: only consider entries that are directories whose name parses as a version; a non-version entry is skipped, not chosen. Distinguish: run the resolver against a temp cache with one version dir plus a .version-history.jsonl file.'
+created_at = 1791010764
+updated_at = 1791010764
+weight = 0.0
+issue_number = 1151
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1151"
+rev = 0
+
+[[task]]
+id = "8b7659cc"
+title = "guard-maintree-bash: an interpreter program fed on stdin / here-document (python3 - <<EOF, node <<EOF) is invisible, so a write into main through it is still allowed"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = "Residual hole after ae4543d5 (05943d1d, 2026-10-03). _strip_heredoc_bodies drops here-document bodies as data before tokenizing, which is correct for cat > f <<EOF but makes the PROGRAM invisible when the heredoc is an interpreter stdin: python3 - <<PY / open(MAIN/p, w) / PY is allowed. Listed in the KNOWN HOLES block of scripts/guard-maintree-bash.py. Fix direction: when the heredoc feeds python/node/ruby/perl/sh (no -c/-e, no script operand), run the body through the same _code_targets / _collect instead of dropping it. Repro: add a case to scripts/test_backlog_s05_repros.py BashGuard."
+created_at = 1791010766
+updated_at = 1791010766
+weight = 0.0
+issue_number = 1152
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1152"
+rev = 0
+
+[[task]]
+id = "80399986"
+title = "condukt diffrisk_record::every_invocation_is_journaled_even_when_nothing_is_recorded is RED on every full bin-suite run on this Mac (not intermittent)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Measured 2026-10-03 at 82ee4a78 (baseline, condukt change stashed) and at 758583c3: cargo test -q -p condukt --bin condukt -> FAILED 880 passed; 1 failed, panicked at crates/condukt/src/diffrisk_record.rs:537:9, 6 of 6 runs (with and without --skip backlog_4be23458); passes when run alone. Once also record_is_fail_soft_when_worktree_missing (diffrisk_record.rs:584). e494a8a3 describes it as intermittent; here it is deterministic in the full suite, so either the shared-state cause got worse or a different cause. Two readings: (a) shared process state (HOME / cwd) mutated by another test without the env lock; (b) the test depends on the real HOME state on this machine. Distinguish by running the bin suite with HOME pointed at an empty temp dir."
+created_at = 1791010767
+updated_at = 1791010767
+weight = 0.0
+issue_number = 1153
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1153"
+rev = 0
+
+[[task]]
+id = "2a775bea"
+title = 'blastguard refused a quoted-delimiter heredoc python body that contains no redirect, citing "> destroys the files current contents"'
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-03 session 521ce4dd: a Bash call of the form  cd WT && python3 - <<EOF ... p.write_text(s) ... EOF  (body edits a test file through pathlib, no shell > anywhere outside the body) was refused by blastguard PreToolUse with: > destroys the files current contents and `` is a relative path and blastguard does not know which directory it is relative to. The empty target name suggests the detector read a > inside the heredoc body (the body contained the text -> nowhere? it contained quote characters and the word replace). Probably the same class as fa1fce21 / 7037df97 (heredoc body judged as code); file separately until a test shows it is the same path. I did not retry via another syntax; used the Edit tool instead."
+created_at = 1791010768
+updated_at = 1791010768
+weight = 0.0
+issue_number = 1154
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1154"
+rev = 0

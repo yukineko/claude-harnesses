@@ -239,9 +239,10 @@ enum Command {
         action: MapAction,
     },
     /// Close specguard STRUCTURAL review findings
-    /// (`specguard:<undocumented|dangling-reference|untested>:<key>`) by
-    /// re-running the same deterministic structural detection `audit` uses: a
-    /// finding the detection no longer reports is closed with the non-human
+    /// (`specguard:<undocumented|dangling-reference|untested>:<key>[:<epoch>]`)
+    /// by re-running the same deterministic structural detection `audit` uses:
+    /// a finding the detection no longer reports, or whose map entry was
+    /// removed from a present, parseable map, is closed with the non-human
     /// verdict `resolved`. Never closes shard-audit kinds (spec-drift,
     /// spec-doc-stale, audit-indeterminate). When the detection cannot run
     /// (spec map absent/unparseable) every finding stays open and is reported
@@ -2377,15 +2378,23 @@ fn emit_audit_violations(repo_root: &Path, findings: &[auditmap::StructuralFindi
 /// per-finding disposition. The review-finding stream is per-item and shows up
 /// immediately, and `review-queue --to-backlog` can bridge it.
 ///
-/// Idempotency: `finding_id` is `specguard:<kind>:<key>`, derived only from the
-/// finding, so re-auditing an unchanged repo re-derives the same ids. Already
-/// recorded ids are skipped -- `store::append_review_finding` is a bare append
-/// with no dedupe of its own, so without this every audit run would re-row the
-/// whole finding set.
+/// Idempotency and recurrence: `finding_id` is the EPISODE id
+/// `specguard:<kind>:<key>:<epoch>` (see `reconcile.rs` "Episodes" and
+/// [`reconcile::next_episode`]). While the finding's episode is open (or a
+/// legacy episode-less `specguard:<kind>:<key>` row is open) the same id is
+/// kept and nothing is re-recorded -- `store::append_review_finding` is a bare
+/// append with no dedupe of its own, so without this every audit run would
+/// re-row the whole finding set. Once `reconcile-findings` closed the latest
+/// episode `resolved` and the gap is detected again, a NEW episode id is
+/// recorded: the review queue joins dispositions on the exact id, so reusing
+/// the old one would hide the recurrence behind the old disposition. A
+/// human-closed episode (confirmed / dismissed / false-positive) is not
+/// re-raised.
 ///
-/// If the existing findings cannot be read, the ids are re-appended rather than
-/// dropped. That is deliberate: a duplicate row is visible and harmless, while
-/// skipping would silently withhold a real finding from the only surface that
+/// If the existing findings or the disposition ledger cannot be read, a new
+/// episode is appended rather than the finding dropped. That is deliberate: a
+/// duplicate row is visible and harmless, while skipping would silently
+/// withhold a real finding (possibly a recurrence) from the only surface that
 /// shows it. Losing a finding is the failure that matters here; repeating one
 /// is not.
 ///
@@ -2396,18 +2405,44 @@ fn emit_audit_findings(repo_root: &Path, findings: &[auditmap::StructuralFinding
     if findings.is_empty() {
         return;
     }
-    // `Err` here means the store could not be read, NOT that it is empty; see
-    // the doc comment for why that resolves to "append anyway".
-    let already: std::collections::HashSet<String> =
-        match overwatch::store::read_review_findings(repo_root) {
-            Ok(existing) => existing.into_iter().map(|f| f.finding_id).collect(),
-            Err(_unreadable) => std::collections::HashSet::new(),
-        };
+    // `None` here means the store / ledger could not be read, NOT that it is
+    // empty; see the doc comment for why that resolves to "append anyway".
+    let mut rows: Option<Vec<(String, Option<String>)>> =
+        overwatch::store::read_review_findings(repo_root)
+            .ok()
+            .map(|v| v.into_iter().map(|f| (f.finding_id, f.file)).collect());
+    let verdicts: Option<
+        std::collections::HashMap<String, overwatch::disposition::DispositionVerdict>,
+    > = match overwatch::store::scan_dispositions(repo_root) {
+        // First writer wins on the ledger, so keep the first verdict per id.
+        Ok(Determination::Known(ds)) => {
+            let mut m = std::collections::HashMap::new();
+            for d in ds {
+                m.entry(d.finding_id).or_insert(d.verdict);
+            }
+            Some(m)
+        }
+        Ok(Determination::Undetermined(_)) | Err(_) => None,
+    };
+    let now = overwatch::store::now();
 
     for f in findings {
-        let finding_id = format!("specguard:{}:{}", f.kind.as_str(), f.key);
-        if already.contains(&finding_id) {
-            continue;
+        let finding_id = match (&rows, &verdicts) {
+            (Some(rows), Some(verdicts)) => match reconcile::next_episode(
+                f.kind,
+                &f.key,
+                rows.iter().map(|(id, file)| (id.as_str(), file.as_deref())),
+                |id| verdicts.get(id).cloned(),
+                now,
+            ) {
+                reconcile::Episode::Open(_) => continue,
+                reconcile::Episode::Start(id) => id,
+            },
+            // Cannot tell whether an episode is open: append a fresh one.
+            _ => reconcile::episode_id(f.kind, &f.key, now),
+        };
+        if let Some(rows) = rows.as_mut() {
+            rows.push((finding_id.clone(), Some(f.key.clone())));
         }
         // Severity mirrors what the kind actually asserts. A dangling reference
         // is a map that points at something gone -- the audit is reading a lie
@@ -3143,12 +3178,29 @@ mod tests {
 
         assert_eq!(recorded.len(), 2, "one row per structural finding");
         let ids: Vec<&str> = recorded.iter().map(|f| f.finding_id.as_str()).collect();
+        // Ids carry an episode (`specguard:<kind>:<key>:<epoch>`, see
+        // reconcile.rs "Episodes"); each must be an EPISODE id of exactly its
+        // own (kind, key), not merely mention the key.
         assert!(
-            ids.contains(&"specguard:undocumented:crate::foo::Bar"),
+            ids.iter().any(|id| matches!(
+                reconcile::episode_of(
+                    id,
+                    auditmap::StructuralKind::Undocumented,
+                    "crate::foo::Bar"
+                ),
+                Some(Some(_))
+            )),
             "{ids:?}"
         );
         assert!(
-            ids.contains(&"specguard:dangling-reference:crate::gone::Ref"),
+            ids.iter().any(|id| matches!(
+                reconcile::episode_of(
+                    id,
+                    auditmap::StructuralKind::DanglingReference,
+                    "crate::gone::Ref"
+                ),
+                Some(Some(_))
+            )),
             "{ids:?}"
         );
         for f in &recorded {

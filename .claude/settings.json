@@ -57,6 +57,16 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/deny-ledger-clear.py\""
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [

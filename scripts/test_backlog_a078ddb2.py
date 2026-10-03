@@ -19,7 +19,6 @@ ROLLOUT = HERE / "rollout-plugins.sh"
 
 
 class A078ddb2(unittest.TestCase):
-    @unittest.expectedFailure  # backlog a078ddb2: open defect; remove when fixed
     def test_rollout_does_not_demote_a_newer_registered_version(self):
         with tempfile.TemporaryDirectory() as t:
             t = Path(t)

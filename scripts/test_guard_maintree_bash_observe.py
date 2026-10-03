@@ -658,7 +658,8 @@ Q = "'"
 class RouteIndependence(ObserveGuardBase):
     """Ported from the static guard's spelling tables (ae4543d5 + verify1-4,
     test_maintree_isolation_guards, s05/s06 BashGuard, 29b08fc7, 06baf54d,
-    55826e4f, ee273b5e, 214bb9d4, f036e218, b5358f58, ad524af9).
+    55826e4f, ee273b5e, 214bb9d4, f036e218, b5358f58 incl. its main-side
+    test_guard_maintree_bash_b5358f58*.py, ad524af9, 1a73a49b).
 
     The old tests asked "is this SPELLING refused at Pre?". The property that
     survives the switch to observation is route independence: whatever spelling
@@ -791,6 +792,20 @@ class RouteIndependence(ObserveGuardBase):
             ("tar-extract", f"tar -cf {S}/a.tar -C {S}/src p.txt && tar -xf {S}/a.tar -C {M}", W,
              ("tar",), None),
             ("git-C-add", f"echo n > {M}/ga.txt && git -C {M} add ga.txt", W, (), None),
+            # b5358f58 (cp/mv/ln/install/rsync judged by what they WRITE), ported
+            # from test_guard_maintree_bash_b5358f58*.py: each row really writes main.
+            ("cp-several-sources-into-main-dir", f"cp /etc/hosts {S}/src/p.txt {M}/", W, (), None),
+            ("install-into-main", f"install -m 644 {S}/src/p.txt {M}/inst.txt", W, ("install",), None),
+            ("mv-out-of-main-removes-its-source", f"mv {M}/other.txt {W}/moved.txt", W, (), None),
+            ("rsync-remove-source-files-from-main",
+             f"rsync -a --remove-source-files {M}/other.txt {S}/", W, ("rsync",), None),
+            ("hard-link-into-main", f"ln {S}/src/p.txt {M}/hl.txt", W, (), None),
+            ("write-through-hard-link-of-main-file", f"ln {M}/tracked.txt {S}/hl && echo x >> {S}/hl",
+             W, (), None),
+            ("cp-through-wt-symlink-to-main-dir", f"ln -s {M} {W}/tomain && cp {S}/src/p.txt {W}/tomain/",
+             W, (), None),
+            ("lone-operand-ln-s-lands-in-main-cwd", "ln -s /etc/hosts", M, (), None),
+            ("bracket-glob-naming-main", f"cp /etc/hosts {T}/[m]ain/", W, (), None),
         ]
         if sys.platform != "darwin":
             # GNU mktemp honours TMPDIR; macOS BSD mktemp ignored it here
@@ -882,6 +897,21 @@ class RouteIndependence(ObserveGuardBase):
              ("node",), says("v1")),
             ("unparseable-command-runs-nothing", f"rm -rf {M}/'tracked.txt", M, (),
              lambda r: r.returncode != 0 and (M / "tracked.txt").exists()),
+            # b5358f58, ported from test_guard_maintree_bash_b5358f58*.py: reading
+            # main (as a cp / install / ln / rsync SOURCE) while writing elsewhere.
+            ("cp-relative-source-in-main-cwd-into-wt", f"cp tracked.txt {W}/f.copy", M, (),
+             exists(W / "f.copy")),
+            ("cp-several-main-sources-into-wt-dir",
+             f"mkdir {W}/sub && cp {M}/tracked.txt {M}/other.txt {W}/sub/", M, (),
+             exists(W / "sub" / "other.txt")),
+            ("install-main-into-wt", f"install -m 644 {M}/tracked.txt {W}/inst.txt", M, ("install",),
+             exists(W / "inst.txt")),
+            ("symlink-in-wt-pointing-at-main", f"ln -s {M}/tracked.txt {W}/lnk", M, (),
+             lambda r: (W / "lnk").is_symlink()),
+            ("hard-link-of-main-file-into-scratch", f"ln {M}/tracked.txt {S}/hl", W, (),
+             exists(S / "hl")),
+            ("rsync-copy-out-of-main", f"rsync -a {M}/tracked.txt {S}/r.txt", W, ("rsync",),
+             exists(S / "r.txt")),
         ]
 
     def _mktemp_outside_main(self, r) -> bool:
@@ -909,6 +939,33 @@ class RouteIndependence(ObserveGuardBase):
                                           f"stderr={r.stderr[:200]!r})")
                 self.assertEqual(before, self._fingerprint(), f"{name} changed main")
                 self.assert_allowed(post)
+
+    def test_1a73a49b_git_checkout_reverting_dirty_main_file_is_reported(self) -> None:
+        """backlog 1a73a49b: `git -C <main> checkout -- <file>` discarding a
+        dirty main file was rc 0 under the static guard. It changes main's
+        dirty state outside integration (no MERGE_HEAD, HEAD unmoved), so the
+        observing guard reports it (case d) whatever cwd it is spelled from."""
+        for cwd_name in ("wt", "main"):
+            with self.subTest(cwd=cwd_name):
+                cwd = self.wt if cwd_name == "wt" else self.main
+                self._reset()
+                (self.main / "tracked.txt").write_text("dirty\n")
+                before = self._fingerprint()
+                r, post = self._cycle(f"git -C {self.main} checkout -- tracked.txt", cwd)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertEqual((self.main / "tracked.txt").read_text(), "v1\n",
+                                 "anti-vacuity: checkout did not revert the dirty file")
+                self.assertNotEqual(before, self._fingerprint())
+                self.assert_blocked_d(post, "tracked.txt")
+
+    def test_1a73a49b_control_git_checkout_on_clean_main_file_is_allowed(self) -> None:
+        """Control: the same spelling on an already-clean file changes nothing."""
+        self._reset()
+        before = self._fingerprint()
+        r, post = self._cycle(f"git -C {self.main} checkout -- tracked.txt", self.wt)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(before, self._fingerprint())
+        self.assert_allowed(post)
 
 
 class MergeTimePorts(ObserveGuardBase):

@@ -105,14 +105,12 @@ class PluginCacheResidue(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    @open_defect("9b64f427")
     def test_9b64f427_1_dangling_cache_root_is_a_problem(self):
         root = self.tmp / "cache"
         os.symlink(self.tmp / "nowhere", root)
         stale, problems = self.pc.scan(str(root), {"alpha": "1.0.0"})
         self.assertTrue(problems, "dangling cache root resolved to clean")
 
-    @open_defect("9b64f427")
     def test_9b64f427_2_unrecognised_in_use_marker_holds_the_dir(self):
         d = self.tmp / "c" / "alpha" / "0.9.0" / ".in_use"
         d.mkdir(parents=True)
@@ -121,7 +119,6 @@ class PluginCacheResidue(unittest.TestCase):
         self.assertFalse(any(s.removable for s in stale) and not problems,
                          "unrecognised holder record read as 'nobody holds it'")
 
-    @open_defect("9b64f427")
     def test_9b64f427_3_unreadable_crate_is_a_problem(self):
         pj = self.tmp / "crates" / "alpha" / ".claude-plugin" / "plugin.json"
         pj.parent.mkdir(parents=True)
@@ -129,7 +126,6 @@ class PluginCacheResidue(unittest.TestCase):
         versions, problems = self.pc.source_versions(str(self.tmp / "crates"))
         self.assertTrue(problems or "alpha" in versions, "unreadable crate silently dropped")
 
-    @open_defect("9b64f427")
     def test_9b64f427_4_non_version_directory_is_not_removable(self):
         (self.tmp / "c" / "alpha" / "node_modules").mkdir(parents=True)
         stale, problems = self.pc.scan(str(self.tmp / "c"), {"alpha": "1.0.0"})
@@ -137,7 +133,6 @@ class PluginCacheResidue(unittest.TestCase):
 
 
 class RolloutProvenance(unittest.TestCase):
-    @open_defect("649d15f6")
     def test_649d15f6_recopy_keeps_deployed_from_json(self):
         tmp = Path(tempfile.mkdtemp(prefix="s05r-")).resolve()
         try:
@@ -160,7 +155,6 @@ class RolloutProvenance(unittest.TestCase):
 
 
 class ScriptGates(unittest.TestCase):
-    @open_defect("f6919056")
     def test_f6919056_check_versions_without_crates_dir_is_not_ok(self):
         tmp = Path(tempfile.mkdtemp(prefix="s05v-")).resolve()
         try:
@@ -171,7 +165,6 @@ class ScriptGates(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
-    @open_defect("f6919056")
     def test_f6919056_bench_gate_with_floorless_threshold_still_flags_a_regression(self):
         tmp = Path(tempfile.mkdtemp(prefix="s05b-")).resolve()
         try:

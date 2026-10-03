@@ -833,7 +833,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 ユーザーが明示的に追加を許可した「hack route を閉じる gate」。設計のみ、実装は未着手。
 
@@ -882,13 +882,251 @@ git config core.hooksPath を別パスへ / chmod / .git/hooks 配下への書�
 guard-maintree-bash.py で rc=0（実測）。ゲートを無効化するのが最も安い hack route である。
 親 826c29bf
 
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_e033c406.py (rev 34b1a083): gate not built; both the retry-after-deny and the hooksPath self-disable routes are rc=0"""
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_e033c406.py (rev 34b1a083): gate not built; both the retry-after-deny and the hooksPath self-disable routes are rc=0
+
+[flow 2026-10-03 session 33de4c25 @b90c0132] spec-gap divert (specguard brief: not-covered; user chose divert). specforge draft --id e033c406-retry-evasion-gate FAILED the rigor gate, so no draft was written and ratify is impossible. Returned to the human with the sentinel below verbatim. Answer Q1-Q6, then rerun the specforge draft.
+
+date: 2026-10-03
+spec: e033c406-retry-evasion-gate
+summary: taintguard が撤去済み(0521d013)なのに要望が denier と前例に使っている矛盾、N/T 窓・非対話 hardening の根拠・台帳消去の判定・Stop verdict・自己編集 denier の対象範囲で canon が沈黙
+
+# e033c406-retry-evasion-gate の正規化結果: rigor fail（Spec IR は出していません）
+
+1 件でも厳格化できない requirement があるため、draft は出さずに人間へ上げます。このセッションでは読み取り操作だけを行い、編集はしていません。
+
+## 観測した事実
+
+- **`crates/taintguard` は存在しない。** `ls crates/taintguard` の結果は `No such file or directory` でした。`git log -1 0521d013` は「feat(taintguard)!: crate をリポジトリから撤去する — 判定が厳しすぎて実害が出たため (ユーザー裁定)」です。
+- `crates/harness-core/src/hook.rs:39-81` のフィールド一覧は要望の記述と一致しました。`prompt` には `/// UserPromptSubmit` という注釈があり、deny を表すフィールドはありません。
+- `scripts/guard-maintree-bash.py`、`guard-maintree-edit.py`、`stop-verify-worktree.py`、`test_backlog_e033c406.py` はいずれも存在します。test_backlog_e033c406.py は expectedFailure 付きの RED 再現テストで、中身は確認しましたが実行はしていません。
+
+## CLAUDE.md で裏付けられた点（逐語引用）
+
+- 判定不能は制限側へ倒す（§3）:「**判定不能 — IO 失敗 / ロック取得失敗 / subprocess の異常終了 / パース不能 / panic / 空集合 — は `clean` ではない。必ず `block` か `ask` に解決する。**」
+- project root の skip ファイルは使わない（§5.3）:「**並行セッションがあるときは project root の共有 skip ファイルを使わない**（一度だけ消費されるため…）」
+- 状態はローカルに置く（§7）:「**ゲートの実体（block/allow を決める部分）は local に置く。**」
+- block 理由の逐語申告と、別構文での再試行の禁止（§5.4）:「**ゲートに block されたら、block 理由を逐語で申告して Ask する。** 別構文で同じ効果を得る再試行（redirect が止められた → `python3 -c "open(...)"` で同じ書き込み、等）は禁止。」
+
+ここまでは要望の方針と矛盾しません。足りないのは、以下の個別の決定点です。
+
+## 不足と確認したいこと
+
+### Q1 [G3 矛盾 / G1 接地不能] taintguard が撤去済み
+要望は taintguard を次の 3 か所で使っています:
+- 変更対象の denier の 1 つ
+- 状態の置き場の前例（`crates/taintguard/src/state.rs:93,161-168`）
+- ask を deny へ hardening する前例（`crates/taintguard/src/main.rs:212-218`）
+
+この 3 つはどれも存在しないファイルを指しています。どれが正しいかを機械は決められません。
+- **Ask:** denier から taintguard を外してよいですか。
+- **Ask:** 2 つの前例を何に付け替えますか。候補は hardening 側の `crates/blastguard/src/interactive.rs` です（CLAUDE_CODE_ENTRYPOINT による判別がここにあることは観測済み）。状態の置き場側の候補は未特定です。
+
+### Q2 [G2 沈黙] 予防信号の窓「N 呼び出し / T 分以内」の値がない
+CLAUDE.md にも要望にも値がありません。値が無いと「窓の外なら発火しない」という acceptance を反証可能な形にできません。
+- **Ask:** N と T の値を決めてください。
+- **Ask:** 窓の外へ出たときの扱いも決めてください。黙って解除するのか、引き続き Stop 時の dirty 比較だけで捕捉するのか。
+
+### Q3 [G2 沈黙] 非対話 entrypoint で ask を deny に hardening する規則が canon にない
+CLAUDE.md を `grep '非対話'` しても 0 件でした。G1 の根拠になる文書がありません。
+- **Ask:** この規則の根拠文書を canon に追加してください（例: blastguard の interactive.rs、または GLOSSARY の該当項目）。
+
+### Q4 [G2 沈黙] 台帳の消去条件「許可された場所に同一効果が着地したとき」の判定方法がない
+「同一効果」をどう観測するのかが決まっていません。tuple が一致するのか、effect_verb と basename が一致するのか、などです。
+- **Ask:** 判定式を決めてください。決められないなら、消去条件を UserPromptSubmit だけに縮めてよいかを決めてください。
+
+### Q5 [G2 沈黙] 健全な検出信号を Stop で使うときの verdict と所有者
+Stop には ask がありません。block しかない前提でよいかを確認したいです。
+- **Ask:** 既存の `scripts/stop-verify-worktree.py` に組み込みますか、それとも新しい Stop hook にしますか。
+- **Ask:** PostToolUse で dirty を検出したときの出力を決めてください。block ですか、それとも additionalContext で通知するだけですか。
+
+### Q6 [G2 沈黙 / G4] 第二のゲート（自己編集 denier）の対象範囲
+次の点が列挙されていません:
+- 「フック設定」に含まれるパス（`~/.claude/settings.json`、project の `.claude/settings*.json`、`.githooks/**` など）
+- `chmod` の対象を限るのか（全 chmod か、hook や launcher のパスだけか）
+- `core.hooksPath` を `.githooks` に設定するのは許すのか（CLAUDE.md §7 は opt-in の正規手順として `git config core.hooksPath .githooks` を挙げています）
+
+範囲が決まらないと、正しい手順まで deny する誤検知と、取りこぼしの境界を反証できません。
+
+### Q7 [G1] canon ポインタが CLAUDE.md だけ
+hook.rs のフィールド集合や guard-maintree-*.py の挙動は、実装事実であって canon ではありません。
+
+## 埋めてほしい雛形（canon への追記案）
+
+```markdown
+## retry-evasion gate 決定事項 (e033c406)
+- deniers: [guard-maintree-bash.py, guard-maintree-edit.py, blastguard]   # taintguard 除外の是非
+- ledger_path: ~/.<gate>/state/<session_id>.jsonl                        # ホーム配下・session keyed
+- window: { calls: <N>, minutes: <T> }; 窓外の扱い: <解除 | Stop 比較のみ継続>
+- noninteractive_hardening: 根拠 = <file:line>; 判別子 = CLAUDE_CODE_ENTRYPOINT != "cli"
+- ledger_clear: [UserPromptSubmit, <同一効果着地の判定式 or 削除>]
+- sound_detector: owner = <stop-verify-worktree.py | 新 hook>; PostToolUse verdict = <block|context>
+- self_edit_denier.targets: [<paths>]; chmod 範囲: <...>; hooksPath=.githooks は <allow|deny>
+- 既知の残余 (未捕捉): 断片から再構成したパス, $HOME/$PWD 経由のパス
+```
+
+```
+
+[flow 2026-10-03 session 33de4c25] User answered specforge rigor questions Q1-Q19 over 4 rounds (decisions below, verbatim as fed to specforge). GLOSSARY ask-hardening canon landed in dc5fd4f1. specforge draft still fails rigor at round 5; to resume, append the decisions below plus answers to the round-5 sentinel to the requirement, then rerun: specforge draft --id e033c406-retry-evasion-gate --canon CLAUDE.md --canon docs/GLOSSARY.md --canon crates/blastguard/src/interactive.rs
+
+## Decisions (user, 2026-10-03, answering specforge rigor sentinel Q1-Q6)
+- Q1: taintguard is removed (0521d013) and is dropped. Deniers that record denies: scripts/guard-maintree-bash.py, scripts/guard-maintree-edit.py, blastguard. The precedent for hardening ask to deny is crates/blastguard/src/interactive.rs. Deny state lives in a per-gate directory under $HOME, keyed by session_id, never in the project root.
+- Q2: The detection window runs from the deny until the next UserPromptSubmit (one turn). There is no N/T parameter.
+- Q3: The non-interactive hardening rule (ask is kept only when CLAUDE_CODE_ENTRYPOINT=cli, otherwise it hardens to deny) gets a docs/GLOSSARY.md entry citing crates/blastguard/src/interactive.rs, and that entry is the canon.
+- Q4: The deny ledger is cleared only on UserPromptSubmit. No "same effect landed somewhere allowed" clearing.
+- Q5: The Stop-time signal lives in the existing scripts/stop-verify-worktree.py. Verdict: at PostToolUse, a verbatim notice via additionalContext; at Stop, block. A second consecutive block falls through via stop_hook_active (bounded).
+- Q6: Self-edit denier paths: ~/.claude/settings*.json, project .claude/settings*.json, crates/*/hooks/*.json (plugin hook definitions), .githooks/**. chmod is a target only on those paths and on plugin launchers (crates/*/bin/*). Pointing the hooks path setting at the repo's .githooks directory is allowed (the documented opt-in in CLAUDE.md section 7); pointing it anywhere else is denied.
+
+## Decisions (round 2, user, 2026-10-03)
+- Q7: The canon for ask hardening is docs/GLOSSARY.md's "ask の非対話 hardening" entry, which states interactive.rs `resolve` in full: BLASTGUARD_ASK never/always/auto (unset = auto; any other value = never); under auto, ask only when CLAUDECODE=1 AND CLAUDE_CODE_ENTRYPOINT=cli. The new gate shares BLASTGUARD_ASK and adds no new override variable. The Python guards do not port `resolve`; they query the blastguard binary (adding that query entry point is part of this work).
+- Q8: Only blastguard denies whose target is a path are recorded. Denies with no path (egress, fetched-code, etc.) are not recorded by this gate. The Stop-time recheck covers the main tree only.
+- Q9: effect_verb vocabulary = write, delete, move, chmod, config. Reads (cat, less, grep, git diff, git show, etc.) of a denied target never trigger. Only an effect_verb in the vocabulary, on a target that contains the denied target_abs, triggers.
+- Q10: The self-edit denier's verdict is ask when interactive and deny when not (via the hardening rule above). This keeps the open override CLAUDE.md section 5.4 allows. It is a NEW PreToolUse script (it must cover paths outside the main tree, e.g. ~/.claude/settings*.json), not an extension of guard-maintree-*. The hooks-path setting is allowed when its value resolves to the .githooks directory of the main checkout or of the calling session's own worktree, whether written relative (".githooks") or absolute. Any other value goes to the ask/deny verdict.
+- Q11: In scripts/stop-verify-worktree.py, the ledger check runs BEFORE the "in a worktree" early return (the evasion is typically a worktree session writing into main). A Stop payload that cannot be parsed resolves to block, which changes the current behavior of continuing with {} (CLAUDE.md section 3).
+
+## Decisions (round 3, user, 2026-10-03)
+- Q12a: The read set is closed and exactly: cat, less, more, head, tail, wc, file, stat, ls, grep, rg, diff, git diff, git show, git log, git status, git blame. A command in this set whose arguments contain target_abs does not trigger.
+- Q12b: An invocation whose verb cannot be classified (interpreter wrappers: python3 -c, sh -c, bash -c, eval, awk, node -e, perl -e, ed, and any command outside both the read set and the effect_verb vocabulary) that contains target_abs resolves to ask, and to deny when not interactive (GLOSSARY ask hardening). Reads through an interpreter therefore also ask. This is intended (CLAUDE.md section 3).
+- Q13: A Stop payload that cannot be parsed blocks, bounded by a consecutive-parse-failure counter under $HOME/.retry-evasion-gate/: the 1st consecutive failure blocks, the 2nd consecutive failure allows, and a successful parse resets the counter to 0. If the counter itself cannot be read or written, the hook blocks (no allow on an unreadable counter).
+- Q14: Recorded blastguard denies are those of the path-targeted rules: write, overwrite (including redirect overwrite), delete (rm family) and move of a protected path. Decision::Deny gains a target: Option<PathBuf>. Only denies with Some(target) are recorded; None is never recorded.
+- Q15a: The PostToolUse handling is a new script, scripts/retry-evasion-notice.py.
+- Q15b: Registering hooks in .claude/settings.json is a human task. Acceptance for this item stops at the script plus a presented registration diff; the agent does not edit settings.json.
+
+## Decisions (round 4, user, 2026-10-03)
+- Q16: blastguard's protected-path write/overwrite is Ask (detect.rs:595). It IS recorded, at the moment the Ask is emitted (the hook cannot observe the human's answer). Decision::Ask also gains target: Option<PathBuf>. When hardened() converts Ask to Deny, the target is carried over unchanged and the deny is recorded. Only Some(target) is recorded. This amends Q14: recorded = path-targeted Deny AND path-targeted Ask.
+- Q17: The PreToolUse comparator is a new script, scripts/retry-evasion-gate.py. Matchers: Bash, Edit, Write, MultiEdit, NotebookEdit. Whether it may emit ask is decided by querying the blastguard binary (the Q7 entry point); if that query fails, it resolves to deny. This script is the entry point the tests drive (the GUARD of test_backlog_e033c406.py).
+- Q18: There is one ledger: $HOME/.retry-evasion-gate/<session_id>.jsonl, one JSON object per line per recorded deny/ask (fields: ts, session_id, denier, target_abs, effect_verb, reason). Every writer (Python guards and blastguard in Rust) appends under an exclusive flock on that file. A read failure, lock failure or unparseable line in the comparator resolves to ask, or deny when not interactive (fail-closed).
+- Q19: Clearing on UserPromptSubmit is a mode of the same script (scripts/retry-evasion-gate.py, UserPromptSubmit event): it truncates the calling session's ledger under the same flock. Its registration is part of the human-applied settings.json diff (Q15b).
+
+### specforge round-5 sentinel (verbatim)
+date: 2026-10-03
+spec: e033c406-retry-evasion-gate
+summary: read集合の書き込み穴(git diff --output等/redirect/複合分割)、台帳書込失敗時、Python guardの記録範囲、自己編集denierの名前と検出範囲、RED証跡不在(ae4543d5以降)、共有パース失敗カウンタ、Stop述語の順序が未決
+
+# e033c406-retry-evasion-gate の正規化結果：rigor fail（draft は出していません）
+
+7つの論点で厳格化ゲートを通りませんでした。決定ラウンド1〜4（Q1–Q19）のおかげで大半の分岐は決まっていますが、その決定を現行コードと照らすと、未決の点・決定と実体の矛盾・観測できていない RED が残っています。推測で埋めずに人間へ返します。
+
+## 確認済みの事実（requirement の土台として使える部分）
+
+- **ask 判定の正典**：`docs/GLOSSARY.md:21` の「ask の非対話 hardening」項と、`crates/blastguard/src/interactive.rs:122-135` の `resolve` は一致しています（`Some("auto") | None => claudecode == Some("1") && entrypoint == Some(INTERACTIVE_ENTRYPOINT)`, `Some(_) => false`）。GLOSSARY には「問い合わせ口は未実装」と書かれており、Q7 の作業範囲と矛盾しません。
+- **hook 入力**：`crates/harness-core/src/hook.rs:48-50` に `/// UserPromptSubmit` → `pub prompt: String` があります。deny 履歴を表すフィールドは存在しません。
+- **blastguard の現状**：
+  - `model.rs:34,42` は `Deny(String)` / `Ask(String)` で、target を持っていません（Q14/Q16 の型変更が要る）。
+  - `detect.rs:595` の `protected_path_block` は `Decision::ask(...)` を返します。
+  - `grep session_id crates/blastguard/src/*.rs` は 0 件です。台帳を書くには session_id のパース追加が必要です。
+- **Stop hook の現状**：`scripts/stop-verify-worktree.py:103-105` は `except Exception: payload = {}` です。Q11/Q13 で挙動変更の対象になります。
+- **taintguard**：`crates/taintguard` は存在しません。Q1 と一致します。
+
+## 不足と Ask
+
+### 1. 【G3＋G2】Q12a の読み取り集合に「書き込める読み取り」が混ざっている
+
+Q9 は「Reads … of a denied target never trigger」、Q12a は「A command in this set whose arguments contain target_abs does not trigger」としています。ところが集合内のコマンドで、拒否された対象そのものを上書きできます。
+
+- **観測済み（このホストで実行）**：`git diff --output=/dev/stdout --stat HEAD~1 HEAD` と `git log -1 --output=/dev/stdout` はどちらも受理され、指定したファイルへ書き込みました。したがって `git diff --output=<target_abs>` は「read 集合のコマンドで、引数に target_abs を含む」に当たり、発火しないまま対象を上書きします。
+- **未検証の予測**：
+  - `cat /dev/null > <target_abs>`：redirect を「引数」に数えるかが未定です。
+  - `cat <target_abs>; rm <target_abs>`：複合コマンドをどう分割するかが未定です。
+  - `rg --pre=<cmd>`：任意コマンドを実行するオプションです。
+- CLAUDE.md §3 は「判定不能 … は `clean` ではない。必ず `block` か `ask` に解決する」と定めています。上の形を read とみなすと、§3 に反して clean 側に倒れます。
+
+**Ask：**
+- read 集合への所属は、`;` `&&` `||` `|` `$( )` で分割した単純コマンドごとに判定しますか。
+- redirect 演算子（`>` `>>` `>|`）や、書き込み・実行オプション（`--output` `--pre` 等）を持つものは集合から外しますか。外す場合、オプションの列挙は閉じた集合にしますか。
+
+### 2. 【G2】台帳の書き込み側が失敗したときの扱いが未定
+
+Q18 が fail-closed を定めているのは比較側（comparator）の失敗だけです（「A read failure, lock failure or unparseable line in the comparator resolves to ask」）。
+
+- denier が追記に失敗した場合（flock 失敗、`$HOME` に書けない、payload の session_id が空）、台帳は空のまま残ります。
+- 比較側はこれを「deny 無し」と区別できません。§3 の「エラー時に空の集合を返さない」に当たります。
+
+**Ask：** 書き込み失敗時の振る舞いを決めてください。例：
+- 失敗マーカーを残し、そのセッションの以後の呼び出しをすべて ask にする。
+- 当該 deny の reason に失敗を併記するだけにする（この場合は fail-open が残ることを明記）。
+
+### 3. 【G2】Python guard のどの deny を記録するかが未定
+
+Q8/Q14/Q16 が記録対象を定めているのは blastguard だけです。`guard-maintree-bash.py` の deny のうち、target を持つのは `:2629` の `DENY.format(... target ...)` だけです。次の deny は target を持ちません。
+
+- `:2599`/`:2602` `DENY_BAD_PAYLOAD`
+- `:2611` `DENY_NO_ROOT`
+- `:2627` `DENY_UNPARSEABLE`
+- `:2631` `DENY_UNDETERMINED`
+
+また、guard が記録すべき `effect_verb`（write/delete/move/chmod/config）を、guard 側がどう判定するかも決まっていません。
+
+**Ask：**
+- Python guard でも記録は「path を持つ deny のみ」でよいですか。
+- effect_verb を判定できない deny は何として記録しますか。
+
+### 4. 【G3＋G4】RED テストの記述が Q17/Q10 と食い違っていて、現在は RED が観測できない
+
+- `scripts/test_backlog_e033c406.py:35` は `GUARD = os.path.join(SCRIPTS, "guard-maintree-bash.py")` です。Q17 の「the GUARD of test_backlog_e033c406.py」は retry-evasion-gate.py を指しており、一致しません。
+- `:80-81` は同じ GUARD に `rm` の deny（rc=2）を要求しています。比較子は denier ではないので、この形のままでは repoint できません。
+- `:76-77` には「Passes since ae4543d5: the guard now judges `python3 -c` payloads by effect … (no deny ledger involved)」とあります。interpreter による再試行の経路は既存 guard が閉じており、**台帳比較子の F→P（先に RED を見て GREEN）の候補が現時点で観測されていません**。CLAUDE.md §2(b)「落ちることを確認していないテストは、何も証明しない」に当たります。
+- `:92-93` の hooksPath テストも同じ guard-maintree-bash.py を叩いています。しかし Q10 は「a NEW PreToolUse script … not an extension of guard-maintree-*」としていて、**その新スクリプトの名前は決まっていません**。
+
+**Ask：**
+1. 自己編集 denier のスクリプト名。retry-evasion-gate.py に同居させるか、別ファイルにするか。
+2. 比較子が捕らえ、既存 guard は捕らえない具体的な再試行の綴りを1つ。ae4543d5 以降の main ツリー対象で RED になるもの。候補は guard の KNOWN HOLES か、main ツリー外にある blastguard の protected path です。
+3. テストを「denier を叩く → 比較子を叩く」の2段構成に書き換えてよいか。その際、`BLASTGUARD_ASK=never` で環境を固定するか。現行の `_guard` は `os.environ` を継承しており、cli セッションから流すと ask（rc=0）になって結果が揺れます。
+
+### 5. 【G2/G3】自己編集 denier の検出範囲が決まっていない
+
+- 要望の原文は「.git/hooks 配下への書き込み」を挙げていますが、Q6 のパス列挙にはありません。意図的に落としたのか、漏れなのかが不明です。
+- hooksPath の経路として、`git config core.hooksPath X` 以外の扱いが未定です。
+  - `git -c core.hooksPath=/dev/null commit`：1回だけ hook を外す。
+  - `.git/config` の直接編集。
+  - `git config --global core.hooksPath`。
+  - `GIT_CONFIG_*` 環境変数。
+- Bash 経由で settings*.json に書く綴り（interpreter・redirect）を、どの粒度で捕らえるかも未定です。
+
+**Ask：** 上の各経路を対象に含めるか、残余として明記するか。
+
+### 6. 【G3】Q13 の連続パース失敗カウンタがセッション間で共有される
+
+`$HOME/.retry-evasion-gate/` 直下のカウンタは、payload をパースできない以上 session_id で分けられません。そのため次のことが起きます。
+
+- セッション A の失敗のあと、セッション B の初回失敗が「2回目」として allow される。
+- 別セッションのパース成功でカウンタが 0 に戻る。
+
+CLAUDE.md §5.3 が共有 skip ファイルを禁じる理由「一度だけ消費されるため、他セッションの正当なゲートを素通りさせる」と同じ仕組みです。§5.3 の文言は project root 限定なので字義上の違反ではありませんが、趣旨には反します。
+
+**Ask：** この共有を承知の上で採用しますか。それとも別の鍵（例：transcript_path を部分的に取れた場合など）にしますか。
+
+### 7. 【G2】Stop 時の判定条件が細部で未定
+
+- **スナップショットの扱い**：Q18 の台帳フィールドには、原文にあった `git status --porcelain -z` と mtime/size のスナップショットがありません。deny 前から dirty だったパスも Stop で block されます（制限側の誤検出）。この述語でよいか確認したいです。
+- **チェックの順序**：Q11 は「worktree の早期 return より前」とだけ定めています。`:124-125` の `NO_REPO → return 0`（cwd がリポジトリ外のとき）より前に置くかが未定です。
+
+**Ask：** 台帳チェックは `stop_hook_active` 以外のすべての allow return より前、でよいですか。
+
+## 回答用の雛形
+
+人間が埋めて、要望末尾に追記する想定です。
+
+```
+## Decisions (round 5, user, 2026-10-03)
+- Q20 (read-set segmentation): <per simple command after splitting on ; && || | $( ) — yes/no>; redirect operators remove read-set membership: <yes/no>; options that remove membership (closed list): <--output, --pre, ...>
+- Q21 (writer failure): on ledger append/flock failure or empty session_id at deny time: <behavior>
+- Q22 (python guard recording): recorded guard-maintree-bash denies = <DENY at :2629 only / ...>; effect_verb for guard denies = <rule>
+- Q23 (self-edit denier script name): <scripts/....py>
+- Q24 (F→P witness): RED retry spelling that guard-maintree-bash allows today: <command>; test layout = <denier then comparator>; test env pins BLASTGUARD_ASK=<never>
+- Q25 (self-edit coverage): .git/hooks/** <in/out>; git -c core.hooksPath=… <in/out>; direct .git/config edit <in/out>; --global <in/out>; GIT_CONFIG_* <in/out>
+- Q26 (parse-failure counter scope): <global under $HOME accepted / keyed by ...>
+- Q27 (Stop predicate): dirty-at-Stop without baseline accepted: <yes/no>; ledger check precedes every allow return except stop_hook_active: <yes/no>
+```
+
+```"""
 created_at = 1788791851
-updated_at = 1790983314
+updated_at = 1791027619
 weight = 0.0
 issue_number = 427
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/427"
-rev = 0
+rev = 3
+ruling_kind = "judgment"
+rationale = "Fixed by merge 4b0e5ab3 (branch tip 1da8e60f). F2P evidence is python unittest, which the done --test runner allowlist does not accept without pytest: independent verifier files scripts/test_deny_ledger_e033c406_verify{,2,3,4,5}.py were observed RED on earlier tips (verify3 on cf3a0e5c, verify4 on 2b5ce63b, verify5 on 7e7cc650) and GREEN on 1da8e60f; tdd oracle {transition: fail_to_pass, valid_fp_oracle: true}. 279 guard tests OK after merging main (HOME in scratch). Approve, or install pytest so done --test can run them."
 
 [[task]]
 id = "73c2c089"
@@ -959,62 +1197,15 @@ verdict は returncode のみ、独立した exit 2 の状態が6つ）なので
 scripts/parked-plugins.json 相当の宣言（理由・parked_at・再検討起点）を置く、のどちらかへ決着させる。
 宣言の無い未配線を「たぶん意図的」と解釈しない（CLAUDE.md の明文）。親 826c29bf
 
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_5eb1f127.py (rev 2ff60f58): 5 of the original 6 still dark; docs/gate-taxonomy.md still claims CI triggers for two of them though .github/ no longer exists."""
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_5eb1f127.py (rev 2ff60f58): 5 of the original 6 still dark; docs/gate-taxonomy.md still claims CI triggers for two of them though .github/ no longer exists.
+
+[flow 2026-10-03 session 33de4c25 @b90c0132] Picked and returned unworked: wiring these scripts into hooks means editing .githooks/pre-commit or pre-push, and ~/.claude/settings.json denies Edit/Write on //Users/yuki/**/.githooks/** to agents (a Bash cp touching .githooks was refused by the same rule). Not routed around. Needs a human to apply the wiring, or a ruling on where the wiring should live outside .githooks."""
 created_at = 1788792879
-updated_at = 1790983274
+updated_at = 1791024532
 weight = 0.0
 issue_number = 436
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/436"
-rev = 0
-
-[[task]]
-id = "f6919056"
-title = "test-changed-crates.sh / check-versions.sh / check-bench-regression.py / mutation-gate.sh の判定不能 to exit 0 と、床なし閾値"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-観測とコード読みの混在。各件どちらかを明示する。
-
-1. scripts/test-changed-crates.sh:99-113 — 読み取り不能または name を awk で抽出できない
-   Cargo.toml は診断なしで捨てられ、それが唯一の触ったクレートなら
-   「touched crate dirs have no Cargo.toml (skill-only?) -- nothing to test」で exit 0。
-   同ファイルの git 側（:56-77）は rc を捕らえて exit 1 に硬化済みなので、manifest 側だけ未処置。
-   （読み取り推論。フォールト注入は未実施）
-
-2. scripts/check-versions.sh:12-16, 32-36 — crates/ が無い場合、展開されない glob が
-   リテラル文字列として d に入り全反復が continue、fail は 0 のまま
-   「version parity check OK」を印字。偽ルートで観測、EXIT=0。
-   :9 の cd にも || exit が無く、set -uo pipefail（-e 無し）は失敗した cd で中断しない。（観測）
-
-3. scripts/check-bench-regression.py — 判定不能 to exit 0 が5経路（いずれも観測）:
-   dashboard 不在（:131-136）／baseline ファイル不在（:149-151、実在する 0.9 から 0.1 への
-   退行があっても no regression）／baseline が範囲外（:116-118）／最新レコードに数値の
-   resolution_rate が無い（:140-145）／閾値 1.0（:154、0.8 の低下が OK）。
-   **U5**: resolution_rate_regressed は差が閾値を超えるかを見るだけで clamp が無く、
-   rate は 0..1 に有界なので **閾値 1.0 以上でゲートが恒久的に無効**。
-   緩和材料: 未配線（参照は docs/gate-taxonomy.md:44 のみで、しかも存在しない GHA workflow を指す）。
-
-4. scripts/mutation-gate.sh:69 — MIN_KILL_RATE は環境変数から検証も床も無しで
-   mutategate --min-kill-rate へ渡る。0 を与えると無条件合格。PILOT も未検証。
-   （読み取り推論。mutategate 側が clamp するかは scripts/ の外で未確認）
-   なお :58 が .github/workflows/mutation.yml を引用しているが、GHA はリポジトリ全体で禁止。
-
-5. scripts/check-unwind.sh:4-6 — docstring が run_hook と run_guarded の両方について
-   exit-0-on-error 保証を述べているが、crates/harness-core/src/gate/run.rs は run_guarded について
-   逐語で fail closed（block して crash を露出）と述べており d6db4670 以前の契約を記述している。
-   挙動自体は正しい（両入力不在で exit 1 を観測）が、散文が次の読者を誤らせる。CLAUDE.md 第4節。
-親 826c29bf
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test scripts/test_backlog_s05_repros.py (rev e70d48dd)"""
-created_at = 1788792882
-updated_at = 1790983274
-weight = 0.0
-issue_number = 438
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/438"
-rev = 0
+rev = 1
 
 [[task]]
 id = "b5358f58"
@@ -1023,7 +1214,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 実測 2026-09-08、測定点 df570513、CLAUDE_PROJECT_DIR=/Users/yuki/src/harness を設定して scripts/guard-maintree-bash.py へ合成 payload を直接投入。
 
@@ -1055,11 +1246,13 @@ gitignore 済みで index を汚さないので妥当に見えるが、その判
 
 [backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test scripts/test_backlog_s05_repros.py (rev e70d48dd)"""
 created_at = 1788793588
-updated_at = 1790983275
+updated_at = 1791031908
 weight = 0.0
 issue_number = 440
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/440"
-rev = 0
+rev = 1
+ruling_kind = "judgment"
+rationale = "Implemented and merged (d1284de6). Independent verifier over 4 rounds (test_guard_maintree_bash_b5358f58_verify.py 22 tests, RED on base 4a7fcb1e; worker suite test_guard_maintree_bash_b5358f58.py 17 tests, RED first). Evidence is python unittest, which the F2P runner allowlist does not accept without pytest."
 
 [[task]]
 id = "ad524af9"
@@ -1068,7 +1261,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 実測 2026-09-08、測定点 d47f0a4b、CLAUDE_PROJECT_DIR=/Users/yuki/src/harness。
 
@@ -1092,11 +1285,13 @@ done_criteria: 上記2コマンドの rc が両方 0 になること。かつ
 
 [backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test scripts/test_backlog_s05_repros.py (rev e70d48dd)"""
 created_at = 1788820645
-updated_at = 1790983275
+updated_at = 1791043783
 weight = 0.0
 issue_number = 441
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/441"
-rev = 0
+rev = 1
+ruling_kind = "judgment"
+rationale = "Superseded by the observing guard b8390f7a (session 521ce4dd, user ruling 2026-10-03), not yet merged: it replaces command-text parsing, so fd-number tokenization is obsolete. Static-guard fix exists unmerged on branch run-20261003-202619-762/ad524af9 (7cd70fb6, 6104ffca, 786235d6, 086f0f99; verifier round 1 FAIL on a docstring claim, fixed in 086f0f99, round 2 stopped). Only the SyntaxWarning hunk landed (39268375). Close when b8390f7a merges; if b8390f7a is abandoned, resume this branch from round-2 verification."
 
 [[task]]
 id = "2b1065a1"
@@ -1622,13 +1817,16 @@ ORIG_HEAD と HEAD の関係で判定できる。ORIG_HEAD が HEAD の祖先な
 
 再現 2026-10-01 (macOS, main 0693e289 -> 87566082): session worktree で gate green だった merge commit 87566082 を main で `git merge --ff-only` すると、ledger に UNGATED として記録されて push が止まった。1098befa でも同じことが起きた。回避は今回も、worktree 側で merge ではない gate 済み commit を 1 つ作り、tip を単一親にしてから ff すること。
 
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_6267bfbe_36c936bc.py::FastForwardOntoGatedMerge (rev 2ff60f58): post-merge still uses HEAD parent count as the 'created a merge commit' proxy."""
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_6267bfbe_36c936bc.py::FastForwardOntoGatedMerge (rev 2ff60f58): post-merge still uses HEAD parent count as the 'created a merge commit' proxy.
+[flow 2026-10-03 session 33de4c25 @7db4a861] BLOCKED for agents, not unfixed by choice: the fix lives in .githooks/post-merge, and ~/.claude/settings.json denies Edit/Write on //Users/yuki/**/.githooks/** (a Bash cp FROM .githooks was refused by the same rule). Not routed around (826c29bf norm). Proposed patch, written but NOT executed against the repro test because the hooks cannot be copied out: scratchpad 36c936bc-post-merge.patch (session 33de4c25) — keeps the parent-count early exit, then exits 0 only when the newest HEAD reflog entry points at the current HEAD and its subject ends in ": Fast-forward"; anything else (unreadable reflog, stale entry, other subject) falls through to post-commit (fail closed). Observed on git 2.50.1: ff subjects are "merge feat: Fast-forward", "pull -q --no-rebase . f3: Fast-forward", and ja_JP gives the same text; a created merge is "merge main: Merge made by the 'ort' strategy.". Needs a human to apply, then run python3 scripts/test_backlog_6267bfbe_36c936bc.py with the expectedFailure removed from FastForwardOntoGatedMerge.
+
+[reproduced again 2026-10-03, session 33de4c25] main ff (merge --ff-only) onto bc4433a7, a merge commit created in the session worktree with pre-merge-commit green; post-merge recorded it in the bypass ledger (gate-bypass.py --json listed bc4433a7, subject: Merge branch main into session-33de4c25). Same mechanism as the earlier entries. The commit carrying this note is the green non-empty pre-commit that clears it."""
 created_at = 1787905350
-updated_at = 1790983282
+updated_at = 1791024361
 weight = 0.0
 issue_number = 411
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/411"
-rev = 0
+rev = 2
 
 [[task]]
 id = "32706d14"
@@ -1677,25 +1875,6 @@ updated_at = 1790983182
 weight = 0.0
 issue_number = 453
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/453"
-rev = 0
-
-[[task]]
-id = "7037df97"
-title = "blastguard: 単一引用符つき heredoc 本体はシェルが一切解釈しないのに redirect 検出器が走る (fa1fce21 の精密化)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-2026-09-09 の 1 セッションで 4 回再発。逐語: (1) '> .scratch/commit-msg-gates.txt' truncates and overwrites an existing file / (2) '> f,' (Ok(f) => f, が heredoc 内) / (3) '> 1]' (if v>=2 が <<'PY' 内) / (4) '> ' (=> が python -c の引用符内)。いずれも respell せず別ツールへ迂回し逐語申告した。ルールとして精密に言える: <<'DELIM' のように delimiter が quote されている heredoc の本体は、シェルが展開も解釈も一切行わない純粋なバイト列である。したがって本体を shell 構文として走査すること自体が誤り。fa1fce21 は「散文データがコードとして判定される」と広く書かれているが、この quoted-heredoc の一点は inert であることが仕様で保証されており、決定論的に除外できる。関連: aaff04c5 (=> の force-gate), 079b643f (2>&1) の同族。over-block は 5./6. の意味で hack route への圧力になる (別ツールへの迂回が常態化すると、迂回そのものが無感覚になる)。
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/blastguard/tests/backlog_audit_s02.rs (rev e70d48dd)"""
-created_at = 1788902903
-updated_at = 1790983182
-weight = 0.0
-issue_number = 461
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/461"
 rev = 0
 
 [[task]]
@@ -1918,7 +2097,7 @@ project = "/home/hiroyuki_nakayama/src/claude-harnesses"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 実測 2026-09-08。`scripts/check-cross-crate-constants.py` を worktree で
 新設・配線して commit したところ、**そのゲートは commit 時に一度も実行されなかった**
@@ -2004,11 +2183,13 @@ launcher-exec-bit と同じクラス)。所見が出ないので、何も間違�
 
 [backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_666b6704.py (rev 2ff60f58): Split-brain observed with the real pre-commit; fix could be relative hooksPath setup or the hook detecting it is not the worktree's own."""
 created_at = 1788843085
-updated_at = 1790983283
+updated_at = 1791028041
 weight = 0.0
 issue_number = 1105
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1105"
-rev = 0
+rev = 1
+ruling_kind = "judgment"
+rationale = "Implemented and merged (4bc312db): scripts/check-unlisted-gates.py, verified by an independent verifier over 2 rounds (test_check_unlisted_gates.py 27 tests + _verify.py 24 tests, RED observed on base). Evidence is python unittest, which the F2P runner allowlist does not accept without pytest. The hook half is a human patch (scratchpad 666b6704-githooks.patch) that must wait for the dark-scanner ruling item 9eb1df03..d717a884 batch (title: 8 本の dark gate scanner), because on main it names 8 unlisted scanners and would block every commit."
 
 [[task]]
 id = "ab736bac"
@@ -2053,7 +2234,7 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 実測 2026-09-08 13:37 JST、main の作業ツリー (fix/issue-15-jsonl-append-race @ 10c22160)。
 
@@ -2088,11 +2269,13 @@ main のツリーに残したまま (削除していない)。
 
 [backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test scripts/test_backlog_s05_repros.py (rev e70d48dd)"""
 created_at = 1788842261
-updated_at = 1790983284
+updated_at = 1791043783
 weight = 0.0
 issue_number = 1108
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1108"
-rev = 0
+rev = 1
+ruling_kind = "judgment"
+rationale = "Superseded by the observing guard b8390f7a (user ruling 2026-10-03), which ports d796a630 as MergeTimePorts.test_d796a630_* in test_guard_maintree_bash_observe.py. Not started in batch 14. Close with that test as evidence when b8390f7a merges; if it is abandoned, reopen."
 
 [[task]]
 id = "65bfb279"
@@ -2272,240 +2455,17 @@ cargo 側も測りなおしており (c4321fc2 参照)、warm 152.8 秒。
 Edit(//Users/yuki/**/.githooks/**) と Write(...) を禁じている)。人間の操作が要る。
 
 
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_65bfb279.py (rev 2ff60f58): Wiring needs a human .githooks edit."""
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_65bfb279.py (rev 2ff60f58): Wiring needs a human .githooks edit.
+
+[flow 2026-10-03 session 33de4c25 @4bc312db] BLOCKED on a human .githooks edit (agents are denied). The runner scripts/check-workspace-tests.py exists (324be018); nothing in .githooks calls it. RED observed: scripts/test_backlog_65bfb279.py with expectedFailure off gives 'no .githooks file (outside comments) invokes check-workspace-tests.py or unittest'. Proposed wiring in .githooks/pre-push, right after the compile_fail_rc block inside the per-sha loop:
+( cd "$TYPECHECK_TREE" && CARGO_TARGET_DIR="$TYPECHECK_TARGET" python3 scripts/check-workspace-tests.py </dev/null >&2 ) || { echo "pre-push: BLOCKED — scripts/check-workspace-tests.py failed at $(git rev-parse --short "$sha")" >&2; exit 1; }
+Cost about 346s per push (measured 2026-09-10). After wiring: remove expectedFailure, then backlog done 65bfb279 --test 'python3 -m pytest scripts/test_backlog_65bfb279.py' --red-rev 4bc312db."""
 created_at = 1788849812
-updated_at = 1790983284
+updated_at = 1791028006
 weight = 0.0
 issue_number = 1109
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1109"
-rev = 0
-
-[[task]]
-id = "9b64f427"
-title = "plugin_cache.scan の残り 4 件: 判定不能が clean/削除に写る経路 (検証 agent 指摘、未修正)"
-project = "/home/hiroyuki_nakayama/src/claude-harnesses"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-## 出所
-
-12f77905 で (A/B)(C) を修正した後、独立した検証 agent が**修正後のコード**に対して
-掃き出した残り。いずれも「stale にも problems にも入らない」= 判定不能が clean に
-写る形 (CLAUDE.md 3.)。再現スクリプトは scratchpad の probe_residual.py /
-probe_dangling_root.py。**未修正のまま**起票する。
-
-## 1. cache root 自体が壊れたリンクだと丸ごと clean、exit 0
-
-`os.listdir()` が `FileNotFoundError` を投げ、`scan()` の
-`except FileNotFoundError: return [], []` に落ちる。これは「キャッシュが無い」
-という確定した観測のための経路であり、12f77905 でその旨を明記した — が、**root が
-dangling symlink の場合も同じ穴に落ちる**。実測: `lexists(root)=True`
-`isdir(root)=False` で `exit=0`、stdout `0 stale dir(s) removed`、stderr 空。
-このモジュールが対処している事故 (condukt/0.4.2) と**同じ形が root 段にある**。
-再現: `os.symlink(tmp+"/nowhere", cache); prune-plugin-cache.py --cache <cache>`。
-EACCES 版は正しく problems に落ちるので、穴は ENOENT の弁別だけ。
-
-→ 対処案: `os.path.lexists(cache_root)` が真なのに listdir が ENOENT なら、それは
-「キャッシュが無い」ではなく「root が壊れている」なので problems へ。
-
-## 2. 認識できない `.in_use` マーカー名が黙って無視され、dir が removable になる
-
-`_PID_RE` が非数値名を skip する。docstring は `.tmp.<hex>` の残骸だけを skip する
-と書いているのに、実際は**任意の非数値名**を落とす。実測: `pid-12345` という
-マーカー 1 個だけを置くと `stale=1 problems=0 removable=[True]` — 「この holder
-記録は読めない」が「誰も持っていない」に写っている。docstring と実挙動の食い違い
-でもあるので CLAUDE.md 4. にも触れる。
-
-## 3. `source_versions()` が読めない crate を黙って落とす
-
-`crates/alpha` を chmod 000 → `versions={} problems=[]`。plugin.json が dangling
-symlink → 同じく `versions={} problems=[]`。どちらも `if not os.path.isfile(pj):
-continue` を通る。`check-plugin-rollout.py:1041` はこの map を直接消費するので、
-「読めなかった crate」が「plugin ではない crate」と区別できない。scan 側の
-「cached but no current version known」で*間接的に*だけ声が出るが、それはその
-plugin がたまたま cache dir を持っている場合に限られる。
-
-## 4. version dir でない**ディレクトリ**が rmtree に渡る
-
-`<cache>/alpha/node_modules/` → `stale=['node_modules'] removable=[True]`。
-silent drop ではない (stale には入る) が、素性の分からない状態に対して
-不可逆な操作を取っている。plain file 側は「報告して残す」規則を守っているのに、
-型が 1 つ違うだけで逆になる。
-
-## 共通の注意
-
-3. と 4. は「削除する側」ではなく「判定できない側」に倒すのが規範どおり。ただし
-4. を problems 側へ倒すと、既存の運用で node_modules 等が紛れ込んでいた場合に
-prune が恒常的に exit 1 になる可能性があるので、実際の cache を測ってから決める。
-
-[triage 2026-09-29 @b325a169] p2->p1: plugin_cache.py: dangling cache root returns clean; non-numeric .in_use marker skipped -> dir removable (irreversible rmtree)
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test scripts/test_backlog_s05_repros.py (rev e70d48dd)"""
-created_at = 1788849813
-updated_at = 1790983284
-weight = 0.0
-issue_number = 1110
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1110"
-rev = 0
-
-[[task]]
-id = "a078ddb2"
-title = "rollout 直後に installed_plugins.json が巻き戻され、配備済み dir が .orphaned_at で無効化される"
-project = "/home/hiroyuki_nakayama/src/claude-harnesses"
-project_unresolved = false
-tags = [
-    "deploy-verify",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-observed 2026-09-09 09:20 JST（測定点 fde5f74d、session e9ebfcb6）。
-`scripts/rollout-plugins.sh --canary` が 41 plugin を配備し、registry patch も成功した
-（その直前のバックアップ `~/.claude/plugins/installed_plugins.json.bak-1788913100` は
-donegate=0.1.28 / reviewgate=0.1.23 と正しい値を持っている）。ところが同 09:20:19 に
-**別の書き手**が live の installed_plugins.json を上書きし、pointer が
-
-  - donegate  -> .../cache/yukineko/donegate/0.1.29   （ディレクトリは存在しない）
-  - reviewgate-> .../cache/yukineko/reviewgate/0.1.22  （存在しない）
-  - condukt   -> .../cache/yukineko/condukt/0.7.145    （存在しない）
-
-に戻された。同時刻に、配備されたばかりの各 version dir へ `.orphaned_at`
-（epoch ms、例 reviewgate/0.1.23 は 1788913219671）が書き込まれていた。
-`grep -rn 'orphaned_at' scripts/` は 0 ヒットなので、**このリポジトリのスクリプトが
-書いたものではない** — 書き手は Claude Code 本体か、別セッションの plugin 同期処理。
-
-なぜ重大か: registry が存在しない dir を指した状態は「red」ではなく **dark** である。
-launcher が見つからないので hook が起動せず、finding が 1 件も出ない。実際 rollout 直後の
-`check-plugin-rollout.py` は「rollout-plugins.sh not run since bump」と報告しており、
-これは症状の説明として誤り（rollout は走っていて、その後に巻き戻されていた）。
-
-暫定対処（本セッションで実施）: `rollout-plugins.sh --canary --force` を再実行すると
-`.orphaned_at` は消え registry も正しい dir を指す（最終 rc=0、
-「40 plugins deployed at their source version and file-for-file identical」）。
-ただしこれは競合が再発しないことを保証しない。
-
-完了条件: (1) `.orphaned_at` の書き手を特定する（Claude Code 本体か別セッションか）。
-(2) rollout の registry patch 後に pointer が指す dir の存在を検証し、存在しなければ
-非 0 で終わる（判定不能を成功に写さない）。(3) 巻き戻しが再発しうるなら、rollout の
-成功条件を「patch を書いた」ではなく「一定時間後も pointer が生きている」に変える。
-
----
-## 追試 (2026-09-09、測定点 f17bbba3) — 2 つの現象は別物だった。両方とも書き手を特定した
-
-起票時は「rollout 直後に registry が巻き戻り、配備済み dir に `.orphaned_at` が付く」を
-1 件として書いていたが、実測すると**原因の異なる 2 件**である。分けて追う。
-
-### (1) registry の巻き戻し — 出所は「別 base で走った別セッションの rollout」
-
-巻き戻った `installed_plugins.json` が指していたのは donegate 0.1.29 / propguard 0.1.43 /
-tdd 0.1.26。これは**いずれも origin/main (77049bfc) 側のバージョン**である
-（当ブランチ側は 0.1.30 / 0.1.44 / 0.1.27）。つまり registry を上書きしたのはバグではなく、
-**origin/main をチェックアウトした別セッションが自分の rollout を正常に実行した結果**で、
-こちらの新しい版へのポインタが last-writer-wins で潰されたもの。
-
-したがってこの半分は rollout の壊れではなく、**`installed_plugins.json` が全セッション共有の
-単一ファイルであること**に由来する構造的競合である。`f17bbba3` で両者のバージョンが合流した
-今は同じ潰れ方を再現しないが、**並行セッションが別の base で rollout するたびに必ず起きる**
-（§8「別セッションは常に存在する前提で動く」）。
-
-完了条件はここで変わる: rollout が registry を書くとき、**上書き対象が自分より新しくないことを
-確認する**（単調性チェック。降格になる書き込みは block、少なくとも報告）。判定不能
-（registry が読めない・版が比較不能）は §3 に従って書き込みを止める側へ倒すこと。
-
-### (2) `.orphaned_at` — 書き手は Claude Code 本体だった（このリポジトリではない）
-
-    grep -rln 'orphaned_at' --exclude-dir=target --exclude-dir=.git .
-      -> .backlog/tasks.toml だけ（＝この起票文だけ。scripts/ も crates/ も 0 hit）
-    grep -rl 'orphaned_at' ~/.claude/plugins
-      -> 0 hit（配備物にも書き手はいない）
-    grep -rl 'orphaned_at' /usr/lib/node_modules/@anthropic-ai/claude-code/bin
-      -> claude.exe   ← ここ
-
-`claude.exe` 内の逐語:
-
-    var JL=".orphaned_at", Nu=".in_use", uEt=".gcs-sha", SD=".links_materialized";
-    ...
-    n(`Not marking a symlinked plugin version: ${r}`)
-    n(`Not writing .orphaned_at outside the plugin cache root: ${r}`)
-    n(`Failed to write .orphaned_at: ${r}: ${f}`)
-    ...
-    n("Skipping the orphaned-version sweep: the cache root volume could not be read ...")
-
-書式も一致する: マーカーの中身は `${Date.now()}` の**ミリ秒 epoch 1 行**で、実測は
-`1788915479226`（= 2026-09-09 09:57:59 JST）。Rust なら RFC3339、Python なら秒の float に
-なるところで、JS の `Date.now()` 形式であること自体が書き手を示している。
-
-観測された 5 件（donegate 0.1.27 / propguard 0.1.40 / reviewgate 0.1.20 / condukt 0.7.148 /
-tdd 0.1.24）は**すべて mtime が 4 ミリ秒以内**に収まっており、plugin ごとの rollout ではなく
-**1 回の sweep** が付けたものと分かる。付いた対象はいずれも registry から参照されなくなった
-旧版 dir である。
-
-**したがって `.orphaned_at` は rollout の副作用ではなく、Claude Code の
-orphaned-version GC が「registry がもう指していない版 dir」に付ける印である。**
-これ自体は正常動作であり、このリポジトリ側に直すものは無い。
-
-### 2 件が繋がる箇所 — ここが本当の危険
-
-(1) と (2) は独立に正常でも、**連鎖すると配備物が消える**:
-別セッションの rollout が registry を古い版へ巻き戻す → こちらが配備したばかりの新しい版 dir が
-「参照されていない」状態になる → 次の sweep がそれに `.orphaned_at` を付ける → 猶予後に GC される。
-`claude.exe` の近傍には `jts=21600000`（6 時間）と `Wts=600000`（10 分）が置かれており、
-猶予と sweep 間隔と読めるが、**どちらがどちらかは未確認**なので推測で書かない。
-
-つまり**この ticket の実体は (1) の単調性チェック 1 本**である。(2) は原因究明済みとして
-閉じ、GC は与件として扱う。完了条件は (1) の節に書いたとおり。
-
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test scripts/test_backlog_a078ddb2.py (rev e70d48dd)"""
-created_at = 1788913542
-updated_at = 1790983328
-weight = 0.0
-issue_number = 1111
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1111"
-rev = 0
-
-[[task]]
-id = "649d15f6"
-title = "rollout-plugins.sh の --force と --no-rebuild を併用すると .deployed-from.json が全 plugin から消える"
-project = "/home/hiroyuki_nakayama/src/claude-harnesses"
-project_unresolved = false
-tags = [
-    "deploy-verify",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-observed 2026-09-09（測定点 fde5f74d、session e9ebfcb6）。
-`scripts/rollout-plugins.sh --canary --force --no-rebuild` を実行したところ、
-直後の `check-plugin-rollout.py` が **37 件**の
-「no .deployed-from.json beside the deployed binary — cannot tell which commit it was
-built from, so it is not verifiable as current」を報告した（実行前は 14 件で、内容も別物）。
-`--force` が配備先ツリーを crate の鏡像として作り直す際に `.deployed-from.json` を消し、
-その再生成が rebuild 側の工程にあるため `--no-rebuild` で飛ばされる、という組み合わせ。
-
-なぜ重大か: `.deployed-from.json` は「この binary はどのコミットから来たか」という
-**provenance の唯一の記録**であり、`check-plugin-rollout.py` の currency 判定と
-`harness_core_version` 判定の両方がこれを読む。消えると「古い版が配られている」ことを
-検出できなくなる ＝ 検査の目そのものが落ちる。しかも消したのは rollout 自身なので、
-「rollout を走らせた」ことが「検証可能性を失った」ことと同義になっていた。
-
-復旧: `--force` を rebuild 付き（`--no-rebuild` なし）で再実行すれば provenance は戻る（実施済み）。
-
-完了条件: `--force` と `--no-rebuild` の併用を (a) エラーにして拒否する、または
-(b) provenance 再生成を copy 側の工程へ移して両立させる。どちらでもよいが、
-**黙って provenance を消す経路を残さない**こと。回帰テストを添えること。
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test scripts/test_backlog_s05_repros.py (rev e70d48dd)"""
-created_at = 1788913542
-updated_at = 1790983284
-weight = 0.0
-issue_number = 1112
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1112"
-rev = 0
+rev = 1
 
 [[task]]
 id = "9c57995e"
@@ -2595,13 +2555,15 @@ commit 側は merge を許すのに、edit 側はその merge を完成させる
 許可する。**判定不能は従来どおり block 側**へ倒すこと。回帰テストを添え、
 `main-tree-guard` と許可範囲が一致することを機械照合できる形にすること。
 
-[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Not a duplicate. It has an extra done-criterion that ac2ba31d lacks: machine-check that the edit guard and the main-tree guard allow the same scope.; test scratchpad/s05/mergeedit.sh (rev e70d48dd)"""
+[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Not a duplicate. It has an extra done-criterion that ac2ba31d lacks: machine-check that the edit guard and the main-tree guard allow the same scope.; test scratchpad/s05/mergeedit.sh (rev e70d48dd)
+
+[ruling 2026-10-04, user via AskUserQuestion, session 33de4c25] Edit guard scope = same as the commit-side guard: while MERGE_HEAD exists in main's git dir, any edit in main's tree is allowed (no conflicted-path restriction). Only MERGE_HEAD counts; REBASE_HEAD and CHERRY_PICK_HEAD stay blocked. Undetermined (git dir unresolvable, marker unreadable) stays block. No independent repro test existed (the cited scratchpad/s05/mergeedit.sh is not in the repo); one is being written by an independent agent. Covers ac2ba31d too."""
 created_at = 1788923641
-updated_at = 1790983284
+updated_at = 1791043710
 weight = 0.0
 issue_number = 1114
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1114"
-rev = 0
+rev = 1
 
 [[task]]
 id = "963d0d09"
@@ -2632,13 +2594,15 @@ notes = """
 
 [triage 2026-09-29 @b325a169] p2->p1: live self-documented fail-open: harness-core transcript.rs:474-488 peer window excludes files from secrets/missing-test gate sets
 
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/harness-core/tests/backlog_s07_audit.rs (rev e70d48dd)"""
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/harness-core/tests/backlog_s07_audit.rs (rev e70d48dd)
+
+[ruling 2026-10-04, user via AskUserQuestion, session 33de4c25] Design D: a session is a peer only if it holds a live entry in condukt's claim registry (claims.json, heartbeat TTL); its footprint still comes from its transcript. Registry unreadable -> no exclusion (restrictive). The user approved re-anchoring the frozen assertions in crates/harness-core/tests/change_attribution.rs (~l.700-735) and peer_concurrency_window.rs (~l.175) to "fresh transcript + live registry entry". RED observed at fb3d3b2a: cargo test -p harness-core --test backlog_s07_audit -- --include-ignored backlog_873a2621. Needs rebuild+rollout of linking plugins once fixed."""
 created_at = 1788930715
-updated_at = 1790983309
+updated_at = 1791043710
 weight = 0.0
 issue_number = 1116
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1116"
-rev = 0
+rev = 1
 
 [[task]]
 id = "1b82a049"
@@ -11559,4 +11523,707 @@ updated_at = 1791033843
 weight = 0.0
 issue_number = 1223
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1223"
+rev = 0
+
+[[task]]
+id = "76ce2354"
+title = "guard-maintree-bash: a python -c string argument is read as a main-tree write target (false positive on a read-only probe)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = """
+Observed 2026-10-03, session 33de4c25, main at aceee2e1. scripts/guard-maintree-bash.py refused a read-only probe. Command (verbatim prefix): which -a pytest python3; for p in $(which -a python3); do $p -c "import pytest;print('$p',pytest.__version__)" 2>/dev/null; done
+Refusal (verbatim): target `import pytest;print('$p',pytest.__version__)` mutates this project's MAIN working tree.
+The quoted -c argument of an interpreter was parsed as a write target. Nothing in the command writes a file (the only redirect is 2>/dev/null). Earlier the same session saw a related refusal: unexpanded `$M/a` with M set to a scratchpad path was judged a main-tree target. Two readings: (a) defect: the guard treats an argv string as a path; (b) intended fail-closed for interpreter -c bodies it cannot analyse. To tell them apart, check whether the guard's docstring claims it judges by effect (ae4543d5 'judges writes into main by effect'). If it does, (a)."""
+created_at = 1791024106
+updated_at = 1791024106
+weight = 0.0
+issue_number = 1174
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1174"
+rev = 0
+
+[[task]]
+id = "c5df8fad"
+title = "docs/gate-taxonomy.md:44 still lists check-bench-regression.py as a CI (bench-regression.yml) gate; that workflow does not exist and GHA is banned, so the bench gate is unwired"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Seen 2026-10-03 by the f6919056 fork (session 33de4c25) at 0f7571fb. Two readings: (a) stale doc for a gate with no runner, i.e. dark; (b) intended advisory left unwired. To tell them apart, grep .githooks and scripts for check-bench-regression invocations."
+created_at = 1791027466
+updated_at = 1791027466
+weight = 0.0
+issue_number = 1188
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1188"
+rev = 0
+
+[[task]]
+id = "d058b22a"
+title = "mutation-gate.sh validates MIN_KILL_RATE only after the full cargo-mutants run (late validation, not fail-open)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "unconfirmed"
+notes = "Seen 2026-10-03 by the f6919056 fork at 0f7571fb. mutategate rejects MIN_KILL_RATE=0 (f276fc8d), but only after the expensive run. Efficiency only. Check by running with MIN_KILL_RATE=0 and timing until rejection."
+created_at = 1791027467
+updated_at = 1791027467
+weight = 0.0
+issue_number = 1189
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1189"
+rev = 0
+
+[[task]]
+id = "945a10ad"
+title = "a PreToolUse gate refuses a Bash command whose heredoc BODY (data written to a file) contains the text git config core.hooksPath"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "needs-ruling"
+notes = "Observed 2026-10-03, session 33de4c25, main 0f7571fb: a cat-heredoc appending a requirement document to a scratchpad file was refused with: git config core.hooksPath repoints every git hook at once, disabling the repo's hook gates. The heredoc was quoted data, not executed. Two readings: (a) defect: heredoc bodies are scanned as commands; (b) intended conservative scan. Repro: a quoted heredoc into /tmp containing that phrase."
+created_at = 1791027469
+updated_at = 1791028282
+weight = 0.0
+issue_number = 1190
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1190"
+rev = 1
+ruling_kind = "judgment"
+rationale = "blastguard (not a Python guard) denies a compound command: git merge/log/cp before a quoted heredoc whose body mentions core.hooksPath, plus specforge draft reading that file after the close. c0f7bd9b strips heredoc bodies only when the heredoc is the whole command and accepts this over-block on purpose. Widening the rule is a design call (agent replay 2026-10-03)."
+
+[[task]]
+id = "8ae9ec87"
+title = "pytest が venv に入ったので、pytest 不在を理由に needs-ruling にした項目を done --test で close し直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "2026-10-03 session 33de4c25: pytest 9.1.1 was installed in ~/venv. Candidates whose ruling rationale says that pytest is not installed: ae4543d5, e4a1d386, e033c406 (as of 4a7fcb1e) and others; find them with backlog ruling list and grep pytest. Withdraw each ruling and close with done --test 'python3 -m pytest ...' --red-rev <rev>."
+created_at = 1791027826
+updated_at = 1791027826
+weight = 0.0
+issue_number = 1192
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1192"
+rev = 0
+
+[[task]]
+id = "45ea74b5"
+title = "blastguard: interpreter -c/-e program text with > denies with empty target (python3 -c 'print(1 > 0)', node -e arrow fn)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Found by the 7037df97 agent on 2026-10-03. Cause: interpreter_code_verdict (crates/blastguard/src/detect.rs:5362) runs program text through analyze_shell_payload. The reason reads: the empty-target redirect destroys the file contents. Comments near detect.rs:5700 require a ruling before that layer changes. Unverified by a test."
+created_at = 1791028278
+updated_at = 1791028278
+weight = 0.0
+issue_number = 1205
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1205"
+rev = 0
+
+[[task]]
+id = "116678da"
+title = "blastguard: no test pins the redirect axis inside a quoted heredoc data body"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p3",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "The 7037df97 test covers only the fetch-exec axis. Proposed case: cat into a.txt with a quoted EOF heredoc whose body is foo > bar.txt should allow. Found 2026-10-03."
+created_at = 1791028280
+updated_at = 1791028280
+weight = 0.0
+issue_number = 1206
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1206"
+rev = 0
+
+[[task]]
+id = "9eb1df03"
+title = "guard-maintree-bash がコマンド置換で受けた変数 ($RID) を unknown program の operand として main 書き込み扱いし、condukt orchestration を拒否する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = """
+Live guard (4b0e5ab3) refused, from cwd = session worktree: `RID=$(condukt state init ... | tail -1); condukt worktree create --run $RID --topic X --branch X` -> "target `$RID` mutates this project's MAIN working tree". The literal-value form of the same calls was allowed. Over-block of the documented 'unknown program with unresolvable operand' class; friction for every condukt orchestration that captures a run id. Reading (a): over-block worth narrowing (e.g. a flag value, not a positional path); (b): intended fail-closed. Distinguish by whether an option VALUE (after --run) should ever be judged as a write target.
+
+Observed 2026-10-03 in flow batch 14 (run-20261003-202619-762), main 4b0e5ab3..4bc312db.
+
+Second occurrence 2026-10-03 (main 9ea5a326): `B=<backlog bin>; $B driver register --session-id "$CLAUDE_CODE_SESSION_ID" --project /Users/yuki/src/harness` from the session worktree cwd was refused: target `$CLAUDE_CODE_SESSION_ID` mutates this project's MAIN working tree. Same class: an unknown program ($B) whose option VALUE is an unresolvable variable is judged as a main write. The literal binary path with the literal session id was allowed (declared openly to the user, not a silent respelling).
+Related, same session: an inline `python3 -c "..."` that only edits the backlog via the CLI was refused as 'a nested command payload does not tokenize' (see 7d87ada0)."""
+created_at = 1791028013
+updated_at = 1791033820
+weight = 0.0
+issue_number = 1193
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1193"
+rev = 1
+
+[[task]]
+id = "eca8dea7"
+title = "8 本の dark gate scanner を 1 本ずつ調査し、hook へ配線するか撤去/改名を提案する (ユーザー裁定 2026-10-03)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = """
+User ruling (AskUserQuestion, 2026-10-03): 'Investigate each, propose'. check-unlisted-gates.py (666b6704, merged 4bc312db) names 8 scanners in scripts/ that no hook runs: check-bench-regression.py, check-closure-evidence.py, check-fail-open-mutation.py, check-projkey-store-classification.py, check-shell-syntax.py, check-unwind.sh, check-versions.sh, check-workspace-tests.py. Callers today are other scripts / release-plz.toml / tests. For each: measure what it checks, its runtime, and its current result on main. Prepare a .githooks patch (scratchpad, human-applied) wiring the green and fast ones, and propose removal or rename for the rest. The user approves before anything lands. The 666b6704 pre-commit patch (scratchpad 666b6704-githooks.patch) is applied only after this is resolved, because it blocks every commit while any scanner is unlisted.
+
+Observed 2026-10-03 in flow batch 14 (run-20261003-202619-762), main 4b0e5ab3..4bc312db.
+
+INVESTIGATION DONE 2026-10-03 (main 9ea5a326): scratchpad eca8dea7-proposal.md, raw logs eca8dea7-run-*.log.
+USER RULINGS 2026-10-04 (AskUserQuestion):
+1. Stage A approved in full: scratchpad eca8dea7-githooks.patch (shell-syntax + unwind into pre-commit with a *.sh -> bash case in run(); fail-open-mutation into pre-push, scoped to ranges touching a GATE crate / harness-core / the harness, inside the throwaway checkout). Human applies (.githooks is human-only).
+2. check-workspace-tests.py: wire only the scripts/test_*.py part into pre-push now; the cargo part is decided after one uncapped run measures whether main is green and its runtime. Needs a scanner change (a python-only mode) plus a pre-push patch.
+3. Approved: rename check-bench-regression.py -> scripts/bench-regression.py; remove check-versions.sh and its test (check-plugin-versions.py covers it, observed with a planted 9.9.9). Implement in a worktree, update the expectedFailure pins (test_backlog_de721e5e_df49f872, test_backlog_65bfb279, test_backlog_audit_b1_0:264, test_backlog_5eb1f127), with a test-weakening-justified line for the removed test.
+Stage B (closure-evidence, projkey) waits for b0c3d263 and 6ca3d71f. Stage C (666b6704 rebased, eca8dea7-666b6704-rebased.patch) lands last, after A, B, the rename/removal and workspace-tests wiring."""
+created_at = 1791028015
+updated_at = 1791043633
+weight = 0.0
+issue_number = 1194
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1194"
+rev = 1
+
+[[task]]
+id = "aef148dd"
+title = "guard-maintree-bash が読み取り専用の `ls ... 2>&1` と .githooks を open() で読むだけの python -c を拒否する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = """
+Seen by the 666b6704 worker on live guard 4b0e5ab3: `ls ... 2>&1` -> 'target 2 mutates main' (overlaps ad524af9), and a python -c that only open()-reads .githooks/* is read as hook rewiring. Over-blocks (mention-is-not-write class).
+
+Observed 2026-10-03 in flow batch 14 (run-20261003-202619-762), main 4b0e5ab3..4bc312db."""
+created_at = 1791028016
+updated_at = 1791028016
+weight = 0.0
+issue_number = 1195
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1195"
+rev = 0
+
+[[task]]
+id = "bfe3de26"
+title = "test_backlog_666b6704.py の fixture は hook が呼ぶ全 scanner を exit 0 で stub するため 666b6704 の修正を観測できない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = """
+scripts/test_backlog_666b6704.py stubs every scanner named in the hooks with exit 0, so it cannot observe the fix even after the human patch lands. The real-scanner tests are scripts/test_check_unlisted_gates.py and _verify.py. Either rewrite it to run check-unlisted-gates.py or close it pointing at those.
+
+Observed 2026-10-03 in flow batch 14 (run-20261003-202619-762), main 4b0e5ab3..4bc312db."""
+created_at = 1791028018
+updated_at = 1791028018
+weight = 0.0
+issue_number = 1196
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1196"
+rev = 0
+
+[[task]]
+id = "74280d46"
+title = "check-unlisted-gates は到達不能コード (呼ばれない関数・if false・exit 0 の後) の呼び出しも invoked と数える"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = """
+666b6704 verifier: a scanner invoked only inside a function that is never called, inside `if false; then`, or after `exit 0` counts as invoked (fail-open direction). Not claimed by the docstring; documented as a limitation in scripts/check-unlisted-gates.py.
+
+Observed 2026-10-03 in flow batch 14 (run-20261003-202619-762), main 4b0e5ab3..4bc312db."""
+created_at = 1791028020
+updated_at = 1791028020
+weight = 0.0
+issue_number = 1197
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1197"
+rev = 0
+
+[[task]]
+id = "ff0ff37b"
+title = "guard-maintree-bash が python -c 文字列中の `$REPO/scripts/check-b.sh` や scratchpad heredoc 本文中の hook-path キーの記述を書き込み扱いで拒否する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = """
+666b6704 verifier, live guard 4b0e5ab3: a worktree probe refused because `$REPO/scripts/check-b.sh` appeared inside a python -c string; a heredoc into the scratchpad whose text mentioned the hook-path config key was refused. Over-blocks (mention-is-not-write class); see also the 'over-refusal of read-only payload' items.
+
+Observed 2026-10-03 in flow batch 14 (run-20261003-202619-762), main 4b0e5ab3..4bc312db."""
+created_at = 1791028021
+updated_at = 1791028021
+weight = 0.0
+issue_number = 1198
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1198"
+rev = 0
+
+[[task]]
+id = "cf70f785"
+title = "condukt state set --status verified --worktree W が F->P oracle を W ではなく以前記録された worktree (無ければ cwd) で走らせる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = """
+crates/condukt/src/main.rs:4228-4234 resolves run_dir from rs.tasks[..].worktree (the PREVIOUSLY recorded worktree), falling back to cwd; the --worktree passed in the same call is not applied first. With no prior record it runs tdd oracle in the session cwd -> 'tdd oracle exited non-zero' although `tdd oracle --task <id>` in W exits 0. Workaround used: `state set --status done --worktree W --branch B` first. Fix: apply the call's --worktree before resolving run_dir, or refuse when they differ (fail-closed). Needs a cargo test RED first.
+
+Observed 2026-10-03 in flow batch 14 (run-20261003-202619-762), main 4b0e5ab3..4bc312db."""
+created_at = 1791028023
+updated_at = 1791028023
+weight = 0.0
+issue_number = 1199
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1199"
+rev = 0
+
+[[task]]
+id = "dc37a4da"
+title = "tdd oracle は RED と GREEN が別のテストコマンドで記録されていても fail_to_pass と認める"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = """
+666b6704 verifier: the worker's RED was on scripts/test_check_unlisted_gates.py and the verifier's GREEN on scripts/test_check_unlisted_gates_verify.py; tdd oracle accepted the pair as valid fail_to_pass. It may not prove the same test went F->P. Reading (a): real gap, the oracle should require a GREEN for each RED command; (b): intended (task-level proof). Distinguish by the tdd README contract for fail_to_pass.
+
+Observed 2026-10-03 in flow batch 14 (run-20261003-202619-762), main 4b0e5ab3..4bc312db."""
+created_at = 1791028024
+updated_at = 1791028024
+weight = 0.0
+issue_number = 1200
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1200"
+rev = 0
+
+[[task]]
+id = "5482443f"
+title = """check-unlisted-gates の残余: ANSI-C $'...' / ネストした ${X:-"a}b"} で exit 2、`2>&1 python3 scripts/x`・case パターン・unquoted heredoc 内の $(...) は見逃し"""
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = """
+666b6704 verifier residuals. Exit 2 (safe direction) on ANSI-C quoting and nested quoted parameter expansions. Missed invocations (shown as unlisted, also safe direction): a redirection before the program word, `case (a)` patterns, $(...) inside an unquoted heredoc body.
+
+Observed 2026-10-03 in flow batch 14 (run-20261003-202619-762), main 4b0e5ab3..4bc312db."""
+created_at = 1791028026
+updated_at = 1791028026
+weight = 0.0
+issue_number = 1201
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1201"
+rev = 0
+
+[[task]]
+id = "b8e70681"
+title = "test_backlog_s05_repros.py の ad524af9 open-defect マーカーが stale の可能性 (base で既に rc=0)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = """
+b5358f58 worker (base 4a7fcb1e): `cp /etc/hosts <wt>/... 2>/dev/null` already returned rc=0 on the unmodified guard, and the test passes under AUDIT_RUN_OPEN=1. Compare b13 item 17: it passes only because the stray `2` resolves against the worktree cwd; from a main cwd it may still be refused. ad524af9 is in this batch; re-measure from both cwds there.
+
+Observed 2026-10-03 in flow batch 14 (run-20261003-202619-762), main 4b0e5ab3..4bc312db."""
+created_at = 1791028028
+updated_at = 1791028028
+weight = 0.0
+issue_number = 1202
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1202"
+rev = 0
+
+[[task]]
+id = "93df1ba1"
+title = "guard-maintree-bash: rsync の --backup-dir / --partial-dir / --temp-dir / --log-file / --write-batch が main を指しても destination しか判定しない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = """
+b5358f58 worker: these rsync options write into the named path, but only the destination operand is judged. Present before b5358f58 too. Fail-open for a main-pointing option value.
+
+Observed 2026-10-03 in flow batch 14 (run-20261003-202619-762), main 4b0e5ab3..4bc312db."""
+created_at = 1791028029
+updated_at = 1791028029
+weight = 0.0
+issue_number = 1203
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1203"
+rev = 0
+
+[[task]]
+id = "d717a884"
+title = "deny ledger が source path の過去の deny を再生し、b5358f58 後に許可されるはずの cp <main>/f <wt>/ を 25 call / 20 分拒否する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = """
+b5358f58 worker probes: after an earlier deny on a source path, the now-allowed `cp <main>/f <wt>/` stays refused for the ledger window. Reading (a): intended (any mention of a denied path is refused, e033c406 spec); (b): the ledger should record only write targets. Joins b13 item 26 (narrow the ledger to write-shaped calls).
+
+Observed 2026-10-03 in flow batch 14 (run-20261003-202619-762), main 4b0e5ab3..4bc312db."""
+created_at = 1791028030
+updated_at = 1791028030
+weight = 0.0
+issue_number = 1204
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1204"
+rev = 0
+
+[[task]]
+id = "6798f47d"
+title = "blastguard: stdin-program scan (python3 - heredoc) flags the word rmtree inside comments/strings, not only real calls"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p3",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "From the 9b64f427 agent, 2026-10-03. The patch script deleted nothing; rmtree appeared only in comment text. Verbatim: takes its program from stdin, and it runs rmtree, which deletes files or directories outright. Unverified by a test."
+created_at = 1791029535
+updated_at = 1791029535
+weight = 0.0
+issue_number = 1213
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1213"
+rev = 0
+
+[[task]]
+id = "a14b2fa2"
+title = "backlog done: red-rev run inherits caller env (closure of 9b64f427 needed AUDIT_RUN_OPEN=1 to unskip at red rev) but the closure record does not store the env"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p3",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "2026-10-03: 9b64f427 closed with AUDIT_RUN_OPEN=1 in the caller env; RED at 4bc312db was exit 1 behavioural (4 failed), GREEN at HEAD 4 passed. A re-run of the stored command without that env would skip at red rev. Either record env in the closure or reject env-dependent skips."
+created_at = 1791029536
+updated_at = 1791029536
+weight = 0.0
+issue_number = 1214
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1214"
+rev = 0
+
+[[task]]
+id = "5e79f3fd"
+title = "guard-maintree-bash: xargs が stdin で絶対パスの main destination を渡す cp を b5358f58 後は allow する (base は source 経由で偶然 refuse)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "echo <M>/d/ | xargs cp <M>/f.txt <W>/y from a worktree cwd: base=2, HEAD=0. xargs appends stdin words after the operands, so the real destination is <M>/d/. Documented KNOWN HOLE 'xargs targets that arrive ABSOLUTE on stdin'; base caught it only through the main source operand. Observed 2026-10-03 by the b5358f58 verifier (run-20261003-202619-762, base 4a7fcb1e, HEAD d8426c4e)."
+created_at = 1791028900
+updated_at = 1791028900
+weight = 0.0
+issue_number = 1207
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1207"
+rev = 0
+
+[[task]]
+id = "da07d648"
+title = "guard-maintree-bash: ( ... ) & ループ内で cd X && の後の代入が値を失い、読み取り専用コマンドを over-block する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Live guard on main: an assignment after 'cd X &&' inside a '( ... ) &' loop lost its value, leading to a refusal of a read-only probe. Pre-existing, not changed by b5358f58. Needs a minimal repro from the verifier's scratch b5358f58-verify-probe.py. Observed 2026-10-03 by the b5358f58 verifier (run-20261003-202619-762, base 4a7fcb1e, HEAD d8426c4e)."
+created_at = 1791028902
+updated_at = 1791028902
+weight = 0.0
+issue_number = 1208
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1208"
+rev = 0
+
+[[task]]
+id = "234011a6"
+title = "test_deny_ledger_e033c406 が短い TMPDIR に依存する (ledger の raw が 120 文字で切られ期待パスが消える)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "With a long scratchpad TMPDIR 4 tests fail because deny_ledger truncates raw at 120 chars; with only HOME overridden: Ran 67 tests OK. Test fragility, or the truncation drops the path that the retry matcher needs (check which: if the matcher uses raw, long paths escape the ledger). Observed 2026-10-03 by the b5358f58 verifier (run-20261003-202619-762, base 4a7fcb1e, HEAD d8426c4e)."
+created_at = 1791028903
+updated_at = 1791028903
+weight = 0.0
+issue_number = 1209
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1209"
+rev = 0
+
+[[task]]
+id = "7d87ada0"
+title = "guard-maintree-bash が二重引用符内のエスケープ済み backquote を含む読み取り専用 grep を 'does not tokenize' で拒否する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = '''b5358f58 worker, live guard on main 4bc312db: grep -n with a double-quoted pattern containing an escaped backquote (\`g\`) was refused as undetermined ('a nested command payload does not tokenize'); a python heredoc patch was refused the same way. Over-refusal of a read (safe direction per KNOWN HOLES), but friction. Observed 2026-10-03, run-20261003-202619-762.'''
+created_at = 1791029301
+updated_at = 1791029301
+weight = 0.0
+issue_number = 1212
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1212"
+rev = 0
+
+[[task]]
+id = "547e2b8b"
+title = "guard-maintree-bash: TARGET_ALL の _operands が -- 以降でも '-' 始まりの語を捨て、rm -- -f / mkdir -- -v2 / touch -- -n が main を書き換えても allow される"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = "b5358f58 round-3 verifier, base 4a7fcb1e and HEAD eb67faab both: with cwd=main, {'base': 0, 'head': 0} for 'rm -- -f', 'mkdir -- -v2', 'touch -- -n'; each really writes or deletes <main>/-f, <main>/-v2, <main>/-n. 'mkdir ./-v2' and 'mkdir <M>/-v2' are refused (2). _operands drops every word starting with '-' even after the end-of-options marker. Not in KNOWN HOLES. Real fail-open in the main-tree guard (rm of a main file named -f). Fix: after '--', every word is an operand. Observed 2026-10-03, run-20261003-202619-762."
+created_at = 1791030683
+updated_at = 1791030683
+weight = 0.0
+issue_number = 1215
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1215"
+rev = 0
+
+[[task]]
+id = "d689d6f8"
+title = "guard-maintree-bash: path component に貼り付いた extglob / zsh (…) が tokenizer で '(' 分割され、rm <parent>/harnes@(s)/f が allow される"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = "b5358f58 worker (ddcf0080) observed on the real repo: 'rm /Users/yuki/src/harnes@(s)/CLAUDE.md' returned rc=0 (bash with extglob expands to main). The tokenizer splits at '(' so the path judged is <parent>/harnes@. Recorded in KNOWN HOLES by ddcf0080, not fixed; the fix belongs in the tokenizer (treat a word glued to '(' as unresolvable). Observed 2026-10-03, run-20261003-202619-762."
+created_at = 1791031287
+updated_at = 1791031287
+weight = 0.0
+issue_number = 1216
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1216"
+rev = 0
+
+[[task]]
+id = "e595e24b"
+title = "guard-maintree-bash: main の git-ignored dir に入る glob 語 (*, ?, {}, [) の書き込みを literal prefix で拒否する over-block"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "b5358f58 round-4 verifier: with main cwd and a git-ignored dir ignored/, 'echo x > ignored/a[1].txt', 'mkdir -p ignored/x[1]', 'touch ignored/[a]' are refused after d1284de6 (base allowed them); 'echo x > ignored/a?.txt', 'touch ignored/a*', 'mkdir -p ignored/x{1,2}' were already refused at base. The glob literal-prefix rule does not consult git-ignore. Ruled acceptable for the merge (fail-closed, consistent with the existing rule); pinned as @expectedFailure test_bracket_write_into_a_git_ignored_dir_of_main_is_allowed in scripts/test_guard_maintree_bash_b5358f58_verify.py. Narrow fix: allow a glob word whose literal prefix is git-ignored and that has no '..' after the glob, for every glob character. Observed 2026-10-03."
+created_at = 1791031908
+updated_at = 1791031908
+weight = 0.0
+issue_number = 1217
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1217"
+rev = 0
+
+[[task]]
+id = "d123f4b8"
+title = "gate-bypass ledger can never clear entries for commits a rebase orphaned (e.g. 426d7350 after a078ddb2 rebase)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "hooks",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Reported by the a078ddb2 agent 2026-10-03: the pre-rebase commit 426d7350 was recorded ungated; the rebased commit aac65881 went through pre-commit, but no future commit can contain 426d7350, so gate-bypass.py keeps reporting it and may block push. Unverified by a test; check whether the clearing logic is reachability-based."
+created_at = 1791033525
+updated_at = 1791033525
+weight = 0.0
+issue_number = 1219
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1219"
+rev = 0
+
+[[task]]
+id = "2fb36437"
+title = "guard-maintree-bash.py treats heredoc-body text and relative paths after cd to a non-main dir as main-tree write targets"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "hooks",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "From the 649d15f6 agent 2026-10-03, verbatim: target $dst/.deployed-from.json (inside a python heredoc) and target nobin/$t after cd to the scratchpad. Related 76ce2354 (unexpanded var). Unverified by a test."
+created_at = 1791033706
+updated_at = 1791033706
+weight = 0.0
+issue_number = 1220
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1220"
+rev = 0
+
+[[task]]
+id = "9e59a302"
+title = "guard-maintree-bash.py:171 emits SyntaxWarning invalid escape sequence (docstring should be raw)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "hooks",
+    "p3",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "From the 649d15f6 agent 2026-10-03. Unverified."
+created_at = 1791033708
+updated_at = 1791033708
+weight = 0.0
+issue_number = 1221
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1221"
+rev = 0
+
+[[task]]
+id = "2324944e"
+title = "rollout-plugins.sh: no test covers the no-rsync copy path preserving .deployed-from.json; orphaned binary leaves stale provenance"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "deploy-verify",
+    "p3",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "649d15f6 fix (9ebad91d) was checked on the no-rsync path only by a hand probe. Also unverified whether check-plugin-rollout.py flags a provenance file whose binary was dropped as orphan."
+created_at = 1791033710
+updated_at = 1791033710
+weight = 0.0
+issue_number = 1222
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1222"
+rev = 0
+
+[[task]]
+id = "d30192af"
+title = "guard-maintree-bash: >& の非数字 operand (>&$fd) をファイル target として判定し over-refuse しうる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "ad524af9 worker (7cd70fb6): the >& handler still judges a non-digit operand such as >&$fd as a file target. Observed by reading; may over-refuse. Also the live guard refuses '$TDD red --help 2>&1' as 'target red mutates MAIN' (unknown program operand, same class as 9eb1df03-batch item 32 / $RID). Observed 2026-10-03, run-20261003-202619-762."
+created_at = 1791032743
+updated_at = 1791032743
+weight = 0.0
+issue_number = 1218
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1218"
+rev = 0
+
+[[task]]
+id = "1a73a49b"
+title = "guard-maintree-bash: git -C <main> add / checkout -- / cd <main> && git commit を allow する (git 書き込みは未判定)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = """
+From the verifier's corpus: `git -C <main> add f.txt`, `git -C <main> checkout -- f.txt` and `cd <main> && git commit` are allowed (rc 0) by guard-maintree-bash at base and HEAD, with or without a redirect. KNOWN HOLES lists 'git subcommands'. checkout -- discards a main working-tree change (destructive, not recoverable); add/commit on main are blocked later by pre-commit check-worktree-isolation only for commit, not for add/checkout. Reading (a): real fail-open in the main-tree guard for git writers other than the hook-path ones e033c406 covers; (b): intended, another layer owns git. Distinguish by checking whether any PreToolUse gate refuses `git -C <main> checkout -- f` today.
+
+Observed 2026-10-03 by the ad524af9 verifier (run-20261003-202619-762), base 9ea5a326 and HEAD 6104ffca, temp fixture repo."""
+created_at = 1791034277
+updated_at = 1791034277
+weight = 0.0
+issue_number = 1224
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1224"
+rev = 0
+
+[[task]]
+id = "dd91eb2f"
+title = "guard-maintree-bash: 算術式 $((2>1)) / (( 3>2 )) / [[ 2 > 1 ]] を main cwd で redirect と読み over-block する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = """
+From a main cwd, `echo $((2>1))`, `(( 3>2 ))` and `[[ 2 > 1 ]]` are refused (2) because `>1` / `>2` is read as a redirect target. Same at base and HEAD.
+
+Observed 2026-10-03 by the ad524af9 verifier (run-20261003-202619-762), base 9ea5a326 and HEAD 6104ffca, temp fixture repo."""
+created_at = 1791034279
+updated_at = 1791034279
+weight = 0.0
+issue_number = 1225
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1225"
+rev = 0
+
+[[task]]
+id = "b0c3d263"
+title = "check-closure-evidence.py は backlog CLI が書く closure 記録 (runner=cargo-test/pytest/script) を全件 block する — runner と command 先頭語の不一致"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = """
+crates/backlog/src/evidence.rs:61-66 records the runner as cargo-test / pytest / script; scripts/check-closure-evidence.py:298 requires it to equal the first word of the command (cargo / python3 / bash). Replaying 6 recent closing commits in a scratch clone: all 6 blocked, 3 of them on this mismatch alone (the other 3 closed rows with no closure record, which is intended). Prerequisite for wiring the scanner into pre-commit (eca8dea7 stage B). Fix both sides together with a regression test that pushes a CLI-written closure through the gate.
+
+Observed 2026-10-03 by the eca8dea7 investigation (main 9ea5a326); raw logs scratchpad eca8dea7-run-*.log, proposal eca8dea7-proposal.md."""
+created_at = 1791034486
+updated_at = 1791034486
+weight = 0.0
+issue_number = 1226
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1226"
+rev = 0
+
+[[task]]
+id = "6ca3d71f"
+title = "check-projkey-store-classification.py が main で 6 件 red (count drift 2 / stale 1 / 未分類 call site 3)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = """
+Exit 1 with 6 findings at 9ea5a326: 2 count drifts, 1 stale table entry, 3 unclassified projkey call sites in crates/*/src that need a shared-vs-worktree-local ruling each. Runtime 3.9-9.9 s (over the ~2 s pre-commit budget). test_backlog_de721e5e_df49f872 holds 2 expectedFailure pins. Prerequisite for wiring (eca8dea7 stage B).
+
+Observed 2026-10-03 by the eca8dea7 investigation (main 9ea5a326); raw logs scratchpad eca8dea7-run-*.log, proposal eca8dea7-proposal.md."""
+created_at = 1791034488
+updated_at = 1791034494
+weight = 0.0
+issue_number = 1227
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1227"
+rev = 1
+
+[task.repro]
+outcome = "undetermined"
+cmd = "python3 scripts/check-projkey-store-classification.py"
+observed_at = 1791034493
+detail = 'test command "python3 scripts/check-projkey-store-classification.py" is not on the runner allowlist (`cargo test ...`, `pytest ...`, `python3 -m pytest ...`, or `bash|sh <git-tracked script under a tests dir>`); grep/cat/echo and other non-test commands are never evidence'
+
+[[task]]
+id = "f8641da0"
+title = "長時間 batch 中に task claim が失効し、別セッションの /flow が同じ task を claim して重複実装した"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = """
+Observed 2026-10-04 (session 64554c4d, run-20261003-202619-762). This session claimed ad524af9 / d796a630 with `condukt state claim-task --stateless` at batch start, then spent hours in worker/verifier rounds without re-heartbeating the TASK claims (`condukt state heartbeat --run <RID>` refreshes the run's file claims; it reported 'refreshed 3 claim(s)' but the task-claim registry entries for these hashkeys showed the other session's run id). Session 33de4c25's /flow then claimed both hashkeys (claimed_at 1791033368, ~2.8h before discovery) and started an agent that wrote uncommitted edits to scripts/guard-maintree-bash.py in its own worktree, duplicating work in progress. Resolved by message: 33de4c25 stood down.
+Reading (a): the stateless claim's liveness check (owning-session transcript) judged this live session stale, or the 1h CLAIM_STALE_SECS elapsed without a task-claim heartbeat: a long-running batch loses its claims mid-run. (b): intended TTL and the orchestrator must heartbeat task claims; then the flow/condukt skill text should say which command refreshes TASK claims. Distinguish by reading condukt claim-task --stateless reap logic and whether `state heartbeat --run` touches task claims of that run."""
+created_at = 1791043800
+updated_at = 1791043800
+weight = 0.0
+issue_number = 1228
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1228"
 rev = 0

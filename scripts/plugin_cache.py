@@ -13,7 +13,9 @@ The cache layout is:
     <cache>/<plugin-name>/<version>/.in_use/<pid>   a live session holding it
 
 `.in_use` entries are named by the PID of the `claude` process that loaded that
-version, plus `.tmp.<hex>` leftovers from interrupted writes. The markers are
+version, plus `<pid>.tmp.<hex>` leftovers from interrupted writes. Any OTHER
+name is a holder record this module cannot read, and is undetermined (held),
+not "nobody". The markers are
 NOT cleaned up when a session exits, so the mere presence of `.in_use` proves
 nothing — measured 2026-07-26: scout 0.1.0 carried 64 markers and every pid in
 it was dead. Liveness has to be asked of the OS, per pid. The ABSENCE of a
@@ -37,10 +39,19 @@ here instead of being collapsed to a bool by whichever caller got there first.
 import errno
 import os
 import re
+import stat
 
 # A version dir entry that is a live-session marker rather than a payload file.
 IN_USE_DIR = ".in_use"
 _PID_RE = re.compile(r"^[0-9]+$")
+# An interrupted marker write: `<pid>.tmp.<hex>` (measured: `19808.tmp.3e6c10da`).
+# Only this exact shape is skipped; see holders_of.
+_TMP_MARKER_RE = re.compile(r"^[0-9]*\.tmp\.[0-9A-Za-z]+$")
+# What a version dir under <cache>/<plugin>/ is named. Measured 2026-10-03 over
+# every marketplace in ~/.claude/plugins/cache: all are plain x.y.z. A directory
+# with any other name (node_modules, a stray checkout) is unaccounted state and
+# is reported, never deleted (backlog 9b64f427 #4).
+_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.+-]+)?$")
 
 
 class Holders:
@@ -172,9 +183,18 @@ def holders_of(version_dir):
 
     live = []
     for name in entries:
-        # `.tmp.<hex>` leftovers from interrupted marker writes carry no pid.
-        if not _PID_RE.match(name):
+        # `<pid>.tmp.<hex>` leftovers from interrupted marker writes are not a
+        # holder record. That exact shape — and only it — is skipped.
+        if _TMP_MARKER_RE.match(name):
             continue
+        if not _PID_RE.match(name):
+            # A marker name we cannot parse is a holder record we cannot
+            # read. Skipping it used to make the dir removable — "could not
+            # read who holds it" resolved to "nobody holds it" (backlog
+            # 9b64f427 #2). Undetermined is held.
+            return Holders(
+                undetermined=f"unrecognised .in_use marker {name!r} in {marker_dir}"
+            )
         state = pid_alive(int(name))
         if state is None:
             return Holders(undetermined=f"cannot determine whether pid {name} is alive")
@@ -201,7 +221,23 @@ def source_versions(crates_dir):
         return {}, [f"cannot list {crates_dir}: {exc}"]
     for d in names:
         pj = os.path.join(crates_dir, d, ".claude-plugin", "plugin.json")
-        if not os.path.isfile(pj):
+        # `isfile()` is False both for "this crate has no plugin.json" and for
+        # "could not look" (EACCES on the crate dir, a dangling plugin.json
+        # symlink), and the old `if not isfile: continue` dropped the second
+        # as if it were the first (backlog 9b64f427 #3). Ask errno: only a
+        # path that is provably absent (ENOENT/ENOTDIR with nothing at the
+        # name) means "not a plugin crate".
+        try:
+            st = os.stat(pj)
+        except (FileNotFoundError, NotADirectoryError) as exc:
+            if os.path.lexists(pj):
+                problems.append(f"{d}: plugin.json is a dangling link ({exc})")
+            continue
+        except OSError as exc:
+            problems.append(f"{d}: cannot inspect plugin.json ({exc})")
+            continue
+        if not stat.S_ISREG(st.st_mode):
+            problems.append(f"{d}: plugin.json is not a regular file")
             continue
         try:
             with open(pj, "r", encoding="utf-8") as fh:
@@ -361,7 +397,9 @@ def scan(
     The rollout lock dir (`ROLLOUT_LOCK_NAME`) at the cache root is not a
     plugin and is skipped by exact name, as is the version-history ledger
     (`VERSION_HISTORY_NAME`) inside a plugin dir; any other non-plugin /
-    non-version entry is still reported.
+    non-version entry is still reported — including a DIRECTORY whose name is
+    not a version (`_VERSION_RE`), which is never handed to the pruner. A
+    cache root that exists but does not resolve is a problem, not "no cache".
     """
     settings_pins = settings_pins or {}
     registry_refs = registry_refs or {}
@@ -382,6 +420,17 @@ def scan(
         # (check-plugin-rollout.py) turns each problem into a red. Splitting on
         # errno here is the same discrimination _link_resolution makes for the
         # entries inside; do not collapse it back to a bare `except OSError`.
+        #
+        # ENOENT is only "there is no cache" when NOTHING is at the name. A
+        # dangling symlink at the root also raises ENOENT, and it is the same
+        # broken-pointer shape as the condukt/0.4.2 incident one level up —
+        # "the cache is unreachable", not "the cache is empty" (backlog
+        # 9b64f427 #1).
+        if os.path.lexists(cache_root):
+            return [], [
+                f"plugin cache root {cache_root} exists but does not resolve "
+                "(dangling symlink?) — cannot inspect the cache"
+            ]
         return [], []
     except OSError as exc:
         return [], [f"cannot list plugin cache {cache_root}: {exc}"]
@@ -504,6 +553,17 @@ def scan(
                     )
                 continue
             if v == cur:
+                continue
+            if not _VERSION_RE.match(v):
+                # A directory not named like a version. Deleting it is the
+                # irreversible action on state we cannot account for; a plain
+                # file in the same place is already "report and leave", and
+                # the type of the entry must not flip that (backlog 9b64f427 #4).
+                problems.append(
+                    f"{pname}: {vdir} is a directory in the plugin cache but "
+                    "is not named like a version — left in place, since "
+                    "deletion is the irreversible action here"
+                )
                 continue
             h = holders_of(vdir)
             h = Holders(

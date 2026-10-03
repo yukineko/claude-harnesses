@@ -90,7 +90,8 @@ class Backlog05726f9f(unittest.TestCase):
 
 
 class Backlog_bee1ccbc(unittest.TestCase):
-    @open_defect("bee1ccbc")
+    # guard-maintree-edit.py half fixed by e033c406 (an unreadable payload
+    # cannot be checked against the deny ledger, so it is refused).
     def test_guard_maintree_edit_refuses_unreadable_payload(self):
         for bad in ("this is not json\n", "[1,2]\n"):
             with self.subTest(payload=bad):

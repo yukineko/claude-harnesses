@@ -263,9 +263,11 @@ mode that judges nothing else):
     glob is matched against stand-ins AND against every entry that exists
     under `<toplevel>/.githooks` and `<git-common-dir>/hooks` (repo-relative,
     prefixed with the cwd's path in the repo unless `:(top)` / `:/`; case
-    folded under `:(icase)` and on darwin; `:(literal)` is not a glob). A glob
-    whose hook directories cannot be listed (unknown cwd, git failing, an
-    unreadable directory) is refused as undetermined. Options that take a
+    folded under `:(icase)` and on darwin; `:(literal)` is not a glob; `./`
+    and `../` resolved as git does, by normalising the cwd-prefixed pattern).
+    A glob whose hook directories cannot be listed (unknown cwd, git failing,
+    an unreadable directory), or whose normalised pattern climbs above the
+    toplevel, is refused as undetermined. Options that take a
     value are known per subcommand: `-p` / `-C` take one only for apply / am
     (`-p<n>`); for restore / checkout / stash `-p` is `--patch` and the next
     word is a pathspec. `:!` / `:(exclude)` pathspecs write nothing and are
@@ -323,6 +325,7 @@ import ast
 import fnmatch
 import json
 import os
+import posixpath
 import re
 import shlex
 import subprocess
@@ -1935,8 +1938,10 @@ class _Analyzer:
         and leading dots) can match `.githooks` or `.git/hooks` — matched
         against stand-ins AND against the entries that actually exist under
         `<toplevel>/.githooks` and `<git-common-dir>/hooks` (`'*pre-commit'`
-        matches `.githooks/pre-commit` but no stand-in). `:(icase)` folds
-        case; a glob whose hook directories cannot be listed is refused."""
+        matches `.githooks/pre-commit` but no stand-in). The cwd-prefixed
+        pattern is normalised as git does (`./`, `../`); one that climbs above
+        the toplevel is refused. `:(icase)` folds case; a glob whose hook
+        directories cannot be listed is refused."""
         magic = ""
         top = False
         if spec.startswith(":(") and ")" in spec:
@@ -1968,7 +1973,17 @@ class _Analyzer:
             raise _HookHit(spec, "a git glob pathspec could not be matched against "
                                  f"the hook files ({prefix}); undetermined is refused")
         full = pat if (top or not prefix) else fold(prefix) + "/" + pat
-        if any(fnmatch.fnmatchcase(fold(e), full) for e in entries):
+        # git resolves `./` and `../` against the cwd before matching
+        # (`'./*pre-commit'`, `'../*pre-commit'` from a subdirectory): do the
+        # same, so the pattern is repo-relative like the listed entries.
+        full = posixpath.normpath(full)
+        if full == ".." or full.startswith("../") or full.startswith("/"):
+            raise _HookHit(spec, "a git glob pathspec climbs above the repository "
+                                 "toplevel; where it matches cannot be determined, "
+                                 "so it is refused")
+        if any(fnmatch.fnmatchcase(rep, full)
+               for rep in (".githooks", ".githooks/x", ".git/hooks/x")) or any(
+                fnmatch.fnmatchcase(fold(e), full) for e in entries):
             raise _HookHit(spec, why + " (the glob matches an existing hook file)")
 
     def hook_entries(self, st: _State) -> tuple[str, list[str] | None]:

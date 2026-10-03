@@ -772,6 +772,20 @@ class Round3Findings(_Fixture):
                     "git mv -k a.rs b.rs", "git clean -e x.keep -fd out"):
             self._allowed_in_wt(cmd)
 
+    def test_dot_relative_pathspecs_are_normalised(self):
+        os.makedirs(os.path.join(self.wt, "src"), exist_ok=True)
+        for i, cmd in enumerate((
+                "git checkout HEAD -- './*pre-commit'",
+                "cd src && git checkout HEAD -- '../*pre-commit'",
+                "cd src && git rm '.././.githooks/*'",
+                "git checkout HEAD -- ./.githooks/pre-commit",
+                "cd src && git checkout HEAD -- ../.githooks",
+                "cd src && git checkout HEAD -- '../../*'")):
+            self._refused_in_wt(cmd, sid=f"n{i}")
+        for cmd in ("git checkout HEAD -- './*.rs'",
+                    "cd src && git checkout HEAD -- '../*.rs'"):
+            self._allowed_in_wt(cmd)
+
 
 if __name__ == "__main__":
     unittest.main()

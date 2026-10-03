@@ -220,6 +220,17 @@ fn block_appends_propguard_signed_violation() {
     let home = temp_home();
     git_init(&home);
     std::fs::write(home.join("a.rs"), "fn f() { panic!() }\n").unwrap();
+    // Subprocess mode with a checker that FAILs one PROP-* property: only a
+    // property that was actually evaluated and failed is a violation (inject
+    // mode evaluates nothing, so it records none).
+    std::fs::create_dir_all(home.join(".propguard")).unwrap();
+    std::fs::write(
+        home.join(".propguard").join("config.toml"),
+        "mode = \"subprocess\"\nthreshold = 4\n\
+         checker_cmd = \"echo 'PROP error-path: PASS'; echo 'PROP output-schema: PASS'; \
+         echo 'PROP determinism: PASS'; echo 'PROP idempotence: FAIL - not idempotent'\"\n",
+    )
+    .unwrap();
     let payload = hook_payload("s-ov1", &home);
     let (code, stdout) = run_in(
         &home,

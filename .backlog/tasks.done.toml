@@ -31898,3 +31898,81 @@ scripts/test_backlog_826c29bf.py ..                                      [100%]
 rev = "7db4a861569fe11d534d7b35f6593060dd9bfca4"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "f6919056"
+title = "test-changed-crates.sh / check-versions.sh / check-bench-regression.py / mutation-gate.sh の判定不能 to exit 0 と、床なし閾値"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+観測とコード読みの混在。各件どちらかを明示する。
+
+1. scripts/test-changed-crates.sh:99-113 — 読み取り不能または name を awk で抽出できない
+   Cargo.toml は診断なしで捨てられ、それが唯一の触ったクレートなら
+   「touched crate dirs have no Cargo.toml (skill-only?) -- nothing to test」で exit 0。
+   同ファイルの git 側（:56-77）は rc を捕らえて exit 1 に硬化済みなので、manifest 側だけ未処置。
+   （読み取り推論。フォールト注入は未実施）
+
+2. scripts/check-versions.sh:12-16, 32-36 — crates/ が無い場合、展開されない glob が
+   リテラル文字列として d に入り全反復が continue、fail は 0 のまま
+   「version parity check OK」を印字。偽ルートで観測、EXIT=0。
+   :9 の cd にも || exit が無く、set -uo pipefail（-e 無し）は失敗した cd で中断しない。（観測）
+
+3. scripts/check-bench-regression.py — 判定不能 to exit 0 が5経路（いずれも観測）:
+   dashboard 不在（:131-136）／baseline ファイル不在（:149-151、実在する 0.9 から 0.1 への
+   退行があっても no regression）／baseline が範囲外（:116-118）／最新レコードに数値の
+   resolution_rate が無い（:140-145）／閾値 1.0（:154、0.8 の低下が OK）。
+   **U5**: resolution_rate_regressed は差が閾値を超えるかを見るだけで clamp が無く、
+   rate は 0..1 に有界なので **閾値 1.0 以上でゲートが恒久的に無効**。
+   緩和材料: 未配線（参照は docs/gate-taxonomy.md:44 のみで、しかも存在しない GHA workflow を指す）。
+
+4. scripts/mutation-gate.sh:69 — MIN_KILL_RATE は環境変数から検証も床も無しで
+   mutategate --min-kill-rate へ渡る。0 を与えると無条件合格。PILOT も未検証。
+   （読み取り推論。mutategate 側が clamp するかは scripts/ の外で未確認）
+   なお :58 が .github/workflows/mutation.yml を引用しているが、GHA はリポジトリ全体で禁止。
+
+5. scripts/check-unwind.sh:4-6 — docstring が run_hook と run_guarded の両方について
+   exit-0-on-error 保証を述べているが、crates/harness-core/src/gate/run.rs は run_guarded について
+   逐語で fail closed（block して crash を露出）と述べており d6db4670 以前の契約を記述している。
+   挙動自体は正しい（両入力不在で exit 1 を観測）が、散文が次の読者を誤らせる。CLAUDE.md 第4節。
+親 826c29bf
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test scripts/test_backlog_s05_repros.py (rev e70d48dd)"""
+created_at = 1788792882
+updated_at = 1791025828
+weight = 0.0
+issue_number = 438
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/438"
+issue_closed_at = 1791025831
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_backlog_s05_repros.py -k f6919056"
+exit = 0
+passed = 2
+rev = "45af3800570ab5882df5314b9c0c02ef1dfbcd27"
+observed_at = 1791025826
+output_digest = "sha256:0262f05aa207066b5d1112ceb5fe5c0f46da91e4b11646356a08f694576d3906"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-33de4c25
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 22 items / 20 deselected / 2 selected
+
+scripts/test_backlog_s05_repros.py ..                                    [100%]
+
+======================= 2 passed, 20 deselected in 0.07s =======================
+"""
+
+[task.closure.red]
+rev = "c8f7f74aaa19a034b23ebcc1c6fe7d92f3397239"
+exit = 1
+kind = "behavioural"

@@ -257,7 +257,7 @@ pub struct TaskState {
     /// Completion of the MERGE phase — stamped set-once when this task's branch
     /// is successfully merged into the integration branch (`worktree merge
     /// --run --task`). Same contract as `worker_started_at`; `None` for tasks
-    /// never merged (small-task fast path, or not yet merged) — rendered as an
+    /// never merged (legacy runs from the retired small-task fast path, or not yet merged) — rendered as an
     /// explicit unmeasured marker, never 0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub merge_completed_at: Option<i64>,
@@ -1557,7 +1557,7 @@ const PROBE_PROGRESS_KEY_PREFIX: &str = "probe";
 ///   moves for reasons having nothing to do with this task.
 /// * `task-updated-at` — that task's `updated_at`.
 ///
-/// A task with **no worktree** (serial / fast-path / single-worktree mode) has
+/// A task with **no worktree** (legacy runs only: serial-in-main / fast-path / single-worktree mode were retired 2026-10-03, backlog 5e5cf0a9) has
 /// no task-scoped durable signal at all: that is `Undetermined` (§3), and it
 /// deliberately does NOT fall back to the repo-wide HEAD, which would resolve
 /// "I cannot see this task" into a signal somebody else controls. Because
@@ -1633,8 +1633,7 @@ fn task_progress(
 ///
 /// # A task with no worktree is `undetermined` (CLAUDE.md §3)
 ///
-/// A RUNNING task whose `worktree` is `None` (serial / fast-path /
-/// single-worktree mode) has **no task-scoped durable signal at all**. That is
+/// A RUNNING task whose `worktree` is `None` (legacy runs only: serial-in-main / fast-path / single-worktree mode were retired 2026-10-03, backlog 5e5cf0a9) has **no task-scoped durable signal at all**. That is
 /// "cannot determine", so `task-worktree-head` is `Undetermined` and — since
 /// [`progress::fingerprint_from_signals`] is fail-closed on any unreadable
 /// signal — the task's verdict is `undetermined`. It deliberately does NOT fall
@@ -4288,8 +4287,7 @@ mod tests {
     }
 
     /// Fail-closed (CLAUDE.md §3), second Undetermined arm: a RUNNING task past
-    /// the TTL that records NO worktree at all (serial / fast-path /
-    /// single-worktree mode) has no task-scoped durable signal to read, so its
+    /// the TTL that records NO worktree at all (legacy runs only: serial-in-main / fast-path / single-worktree mode were retired 2026-10-03, backlog 5e5cf0a9) has no task-scoped durable signal to read, so its
     /// progress is `Undetermined` and it must NOT be selected as stuck.
     ///
     /// This is the same reading `state::probe_run` and `claim::claim_progress`

@@ -6,7 +6,10 @@
 //! shared git index.
 //!
 //! Background (backlog 15b682d2): condukt's single-worktree mode and the
-//! small-task fast path implement work directly in the primary working tree.
+//! small-task fast path USED TO implement work directly in the primary working
+//! tree (both retired 2026-10-03, backlog 5e5cf0a9; every task now runs in its
+//! own worktree). The index-isolation property pinned here still holds for any
+//! two `repo commit` calls that share one checkout.
 //! Two sessions sharing one index/working tree is the ONE conflict git cannot
 //! resolve by merging — branch isolation does not apply. That path used to be
 //! performed by the `/condukt` skill's own shell (`git add <paths> && git

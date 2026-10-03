@@ -79,16 +79,15 @@ pub struct Config {
     pub adversarial_min_voters: usize,
     /// Refute ratio at/above which the panel blocks (inclusive). Defaults to 0.5.
     pub adversarial_block_ratio: f64,
-    /// Single-worktree execution mode. When true, the /condukt skill runs ALL
-    /// tasks in the main repo working tree instead of creating one isolated
-    /// worktree+branch per parallel task. File-conflicting tasks still serialize
-    /// (schedule.rs already forces that); non-conflicting tasks run concurrently
-    /// in the one tree, each staging ONLY its own `touched_files` (`git add
-    /// <files>`, not `-A`) so peers' in-flight edits are never swept into a
-    /// commit — and the per-task merge/remove dance (Phase 7) is skipped entirely.
-    /// OFF by default (every existing run keeps per-task worktree isolation —
-    /// fully backward compatible). Read by `condukt state worktree-mode-check`.
-    /// Overridable via `CONDUKT_SINGLE_WORKTREE`.
+    /// RETIRED and INERT (user ruling 2026-10-03, backlog 5e5cf0a9). This used
+    /// to switch the /condukt skill into a single-worktree mode; that mode and
+    /// the small-task fast path no longer exist — every task, serial ones
+    /// included, runs in its own worktree (CLAUDE.md §8). The field and its
+    /// parsing (`single_worktree` in config.toml, `CONDUKT_SINGLE_WORKTREE`) are
+    /// kept only so existing configs still parse; the value changes no
+    /// behaviour except that `condukt state worktree-mode-check` prints a
+    /// stderr notice when it is truthy, so an operator is not left believing
+    /// the mode is active.
     pub single_worktree: bool,
     /// Opt-in worker sandboxing. When true, the /condukt skill routes a worker's
     /// build/test commands through the existing docker exec backend
@@ -228,6 +227,28 @@ fn resolve_autonomy(config_value: Option<bool>) -> harness_core::autonomy::Resol
             )),
         },
     }
+}
+
+/// Which sources set the RETIRED `single_worktree` setting truthy (backlog
+/// 5e5cf0a9). Reads the config file and the env var INDEPENDENTLY of each other
+/// and of the merged [`Config`], so a truthy file value is still named when
+/// `CONDUKT_SINGLE_WORKTREE=0` overrides it in the final Config (and vice
+/// versa). Purely informational: the setting is inert.
+pub fn retired_single_worktree_sources() -> Vec<&'static str> {
+    let mut out = Vec::new();
+    if let Ok(txt) = std::fs::read_to_string(base_dir().join("config.toml")) {
+        if let Ok(fc) = toml::from_str::<FileConfig>(&txt) {
+            if fc.single_worktree == Some(true) {
+                out.push("config.toml `single_worktree = true`");
+            }
+        }
+    }
+    if let Ok(v) = std::env::var("CONDUKT_SINGLE_WORKTREE") {
+        if parse_autonomous_env(&v) == Some(true) {
+            out.push("env CONDUKT_SINGLE_WORKTREE");
+        }
+    }
+    out
 }
 
 impl Config {
@@ -395,8 +416,8 @@ impl Config {
                 cfg.adversarial_enabled = b;
             }
         }
-        // Reuses the generic truthy/falsy parser to force single-worktree mode
-        // from the environment, overriding config.toml.
+        // RETIRED, inert (backlog 5e5cf0a9): parsed only so
+        // `worktree-mode-check` can tell the operator the setting is retired.
         if let Ok(v) = std::env::var("CONDUKT_SINGLE_WORKTREE") {
             if let Some(b) = parse_autonomous_env(&v) {
                 cfg.single_worktree = b;

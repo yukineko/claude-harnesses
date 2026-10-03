@@ -123,8 +123,11 @@ fn scopes_overlap(a: &[String], b: &[String]) -> harness_core::verdict::Determin
 ///
 /// On success prints a JSON summary to stdout (exit 0). It carries
 /// `scope_overlap` (§4.5): other live leases (different key) whose scope overlaps
-/// this one — a non-blocking early warning. Empty when nothing overlaps or when
-/// this lease has no scope.
+/// this one — a non-blocking early warning. `scope_undeclared` lists the peers
+/// whose overlap could not be determined because either side declared no scope
+/// (backlog 56eb3f9a: undeclared is not the same as "no overlap"), and
+/// `scope_declared` is false when this lease itself declared no scope — in that
+/// case every peer lands in `scope_undeclared`, never silently in neither list.
 pub fn begin(
     key: &str,
     title: &str,
@@ -177,14 +180,16 @@ pub fn begin(
     }
 
     // Early scope-overlap warning (§4.5): other live leases (different key) whose
-    // scope overlaps this one. Skipped when this lease declares no scope. Purely
+    // scope overlaps this one. When this lease declares no scope every peer is
+    // reported in `scope_undeclared` (Undetermined), not dropped. Purely
     // advisory — never changes the exit code.
     //
     // Distinguish between peers with undeclared scope vs. declared non-overlapping scope.
     // This tri-state (via Determination<bool>) allows clients to see the difference and
     // make informed decisions.
     let (mut scope_overlap, mut scope_undeclared) = (Vec::new(), Vec::new());
-    if !scope.is_empty() {
+    let scope_declared = !scope.is_empty();
+    {
         for l in leases.values().filter(|l| l.key != key) {
             match scopes_overlap(&scope, &l.scope) {
                 harness_core::verdict::Determination::Known(true) => {
@@ -253,6 +258,7 @@ pub fn begin(
     let summary = json!({
         "scope_overlap": scope_overlap,
         "scope_undeclared": scope_undeclared,
+        "scope_declared": scope_declared,
         "possible_duplicate": possible_duplicate,
     });
     println!("{summary}");

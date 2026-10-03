@@ -107,6 +107,8 @@ On a successful `begin` (exit 0) an advisory JSON summary is printed to stdout:
 
 ```json
 { "scope_overlap": [ { "key": "...", "title": "...", "scope": ["..."] } ],
+  "scope_undeclared": [ { "key": "...", "title": "..." } ],
+  "scope_declared": true,
   "possible_duplicate": [ { "key": "...", "title": "...", "similarity": 0.72 } ] }
 ```
 
@@ -114,10 +116,15 @@ On a successful `begin` (exit 0) an advisory JSON summary is printed to stdout:
   this one, via a coarse glob-prefix match. It is a **non-blocking early
   warning** — scope overlap is not necessarily a conflict; condukt's Phase 3.5
   `conflict-check` makes the precise call.
+- `scope_undeclared` lists other live leases whose overlap is **undetermined**
+  because this lease or that peer declared no scope. Undeclared is not "no
+  overlap": a peer missing from both lists has a declared, non-overlapping scope.
+- `scope_declared` is `false` when this lease itself declared no scope; then
+  every peer is listed in `scope_undeclared` (backlog 56eb3f9a).
 - `possible_duplicate` lists other live leases whose title/done_criteria are
   lexically similar (Jaccard ≥ threshold, default 0.6, override via
   `OVERWATCH_DUP_THRESHOLD`), reusing `harness_core::lessons::text_similarity`.
-- Both default to empty arrays and **never change the exit code**.
+- The lists default to empty arrays and **never change the exit code**.
 
 ### Reading a session's anchor
 

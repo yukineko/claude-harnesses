@@ -292,29 +292,38 @@ class RefusedWritesIntoMain(Base):
         self.expect(ALLOW, [f"ln -s {self.M}/f.txt"], cwds=(self.r.wt,))
 
 
-class OpenDefectsFoundByVerifier(Base):
-    """Fail-opens this verification found in the new destination rule. Each
-    is marked expectedFailure so the file stays usable as a regression
-    suite while the defect is open; when it is fixed the test reports an
-    UNEXPECTED SUCCESS and the marker must be removed."""
+class PosixlyCorrectNonPermuting(Base):
+    """Found by this verifier in round 1 (fixed in d4abf935): GNU getopt
+    with POSIXLY_CORRECT set stops option processing at the first non-option
+    (glibc manual, Using Getopt), so in `gcp SRC -t WT MAIN/d` the `-t` and
+    WT are SOURCES and MAIN/d is the destination. d8426c4e read g-names only
+    with permutation and allowed this; the 4a7fcb1e guard refused it."""
 
-    @unittest.expectedFailure
     def test_posixly_correct_g_name_stops_option_parsing_at_first_operand(self):
-        # GNU getopt with POSIXLY_CORRECT set stops option processing at the
-        # first non-option (glibc manual, Using Getopt), so in
-        # `gcp SRC -t WT MAIN/d` the `-t` and WT are SOURCES and MAIN/d is
-        # the destination. The g-name is read only with GNU permutation, so
-        # MAIN/d is taken for a source and the write into main is allowed.
-        # The pre-change guard refused this (every operand was judged).
-        # (POSIXLY_CORRECT inherited from the session's shell is invisible
-        # to this hook; that variant is not asserted here.)
         (self.r.main / "d").mkdir(exist_ok=True)
         M, W, O = self.M, self.W, self.O
         self.expect(DENY, [
             f"POSIXLY_CORRECT=1 gcp {O}/x -t {W} {M}/d",
             f"env POSIXLY_CORRECT=1 gcp {O}/x -t {W} {M}/d",
             f"POSIXLY_CORRECT=1 ginstall {O}/x -t {W} {M}/d",
+            f"POSIXLY_CORRECT=1 gln -s {O}/x -t {W} {M}/d",
+            f"POSIXLY_CORRECT=1 gcp {O}/x --target-directory={W} {M}/d",
+            f"POSIXLY_CORRECT=1 gcp -v {O}/x -t {W} {M}/d",
+            f"bash -c 'POSIXLY_CORRECT=1 gcp {O}/x -t {W} {M}/d'",
         ])
+
+    def test_gnu_style_copies_out_of_main_stay_allowed_from_a_worktree(self):
+        M, W, O = self.M, self.W, self.O
+        self.expect(ALLOW, [
+            f"gcp -r {M}/sub {W}/",
+            f"gcp {M}/f.txt {W}/x --verbose",
+            f"gcp {M}/f.txt -t {W}",
+            f"gcp {M}/f.txt --target-directory={W}",
+            f"gcp -t {W} {M}/f.txt",
+            f"gcp --target-directory={O} -- {M}/f.txt",
+            f"ginstall -m 644 {M}/f.txt {O}/i",
+            f"gln -s {M}/f.txt {W}/l",
+        ], cwds=(self.r.wt,))
 
 
 class NoOverBlock(Base):

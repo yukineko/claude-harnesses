@@ -34856,3 +34856,60 @@ scripts/test_verifier_d470a478.py .....                                  [100%]
 rev = "7e05ab454eb28204d05471f3402b859d8bbfcec6"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "486e83ca"
+title = "SessionStart の requeue が live な lease を持つ task の claim を解放する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flow",
+    "backlog",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+観測 2026-09-13 17:22:46 (測定点 16f16879)。session a6738634 の SessionStart で backlog の session-start hook が .backlog/tasks.toml の 4 件を一括で claimed から pending へ戻した (updated_at が 4 件とも 1789287766 の単一書き込み)。うち 3 件 f7b018f8 / e73a1fd5 / 15eb3f94 は overwatch status 上の lease が live で heartbeat 58 秒前だった (前セッション 79d79a35 の worker が実際に稼働中)。つまり requeue は claim 保持者の生存を一切見ずに解放している。損害: 解放された task を別セッションが claim でき、同一ブランチに 2 本目の worker が積まれる (既知の二重 dispatch)。なお同時に解放された 6267bfbe は lease が無く、そちらの解放は正しい。読みは 2 つ: (a) requeue は「前セッションは死んだ」前提の設計で、生存確認の欠落がバグ。(b) 意図的に無条件 requeue で、排他は condukt state claim-task の最終ガードに委ねている。見分け方: claim-task が live lease を持つ task に対して他セッションの claim を実際に弾くかを観測する。弾かないなら (a) で確定。完了条件: live lease を持つ task が requeue されないことをテストで観測し、lease の生存が観測できない場合は解放しない (制限側に倒す) こと。是正済みの現物: この finding の commit で 3 件を claimed へ戻してある。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Done criterion: 'live lease を持つ task が requeue されない ... lease の生存が観測できない場合は解放しない'. At HEAD SessionStart no longer touches claims, but the claim itself now silently stops excluding after CLAIM_STALE_SE; test crates/backlog/src/store.rs (rev e70d48dd)"""
+created_at = 1789287880
+updated_at = 1791051136
+weight = 0.0
+issue_number = 580
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/580"
+issue_closed_at = 1791051138
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test verifier_486e83ca"
+exit = 0
+passed = 4
+rev = "0234e448868d4d34567a7b1e845cb0d998e71079"
+observed_at = 1791051110
+output_digest = "sha256:bc65315f5b0c674636830612b67aa5ac7902672e531d2dc9464a1b59e98ff014"
+excerpt = """
+
+running 4 tests
+test verifier_empty_session_id_cannot_keep_dead_lease_alive ... ok
+test verifier_live_holder_keeps_lease_past_window ... ok
+test verifier_malformed_heartbeat_refused_by_every_reader ... ok
+test verifier_dead_holder_is_reclaimable ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.65s
+
+   Compiling harness-core v0.2.45 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/harness-core)
+   Compiling backlog v0.3.34 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.41s
+     Running tests/verifier_486e83ca.rs (target/debug/deps/verifier_486e83ca-80aad64bf831cd5d)
+"""
+
+[task.closure.red]
+rev = "7e05ab454eb28204d05471f3402b859d8bbfcec6"
+exit = 101
+kind = "behavioural"

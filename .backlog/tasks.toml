@@ -2947,30 +2947,6 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/576"
 rev = 0
 
 [[task]]
-id = "486e83ca"
-title = "SessionStart の requeue が live な lease を持つ task の claim を解放する"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "flow",
-    "backlog",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-観測 2026-09-13 17:22:46 (測定点 16f16879)。session a6738634 の SessionStart で backlog の session-start hook が .backlog/tasks.toml の 4 件を一括で claimed から pending へ戻した (updated_at が 4 件とも 1789287766 の単一書き込み)。うち 3 件 f7b018f8 / e73a1fd5 / 15eb3f94 は overwatch status 上の lease が live で heartbeat 58 秒前だった (前セッション 79d79a35 の worker が実際に稼働中)。つまり requeue は claim 保持者の生存を一切見ずに解放している。損害: 解放された task を別セッションが claim でき、同一ブランチに 2 本目の worker が積まれる (既知の二重 dispatch)。なお同時に解放された 6267bfbe は lease が無く、そちらの解放は正しい。読みは 2 つ: (a) requeue は「前セッションは死んだ」前提の設計で、生存確認の欠落がバグ。(b) 意図的に無条件 requeue で、排他は condukt state claim-task の最終ガードに委ねている。見分け方: claim-task が live lease を持つ task に対して他セッションの claim を実際に弾くかを観測する。弾かないなら (a) で確定。完了条件: live lease を持つ task が requeue されないことをテストで観測し、lease の生存が観測できない場合は解放しない (制限側に倒す) こと。是正済みの現物: この finding の commit で 3 件を claimed へ戻してある。
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Done criterion: 'live lease を持つ task が requeue されない ... lease の生存が観測できない場合は解放しない'. At HEAD SessionStart no longer touches claims, but the claim itself now silently stops excluding after CLAIM_STALE_SE; test crates/backlog/src/store.rs (rev e70d48dd)"""
-created_at = 1789287880
-updated_at = 1790983257
-weight = 0.0
-issue_number = 580
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/580"
-rev = 0
-
-[[task]]
 id = "55f55932"
 title = "condukt state claim-task が空の hashkey を受理して成功を返し、空文字キーの claim を記録する"
 project = "/Users/yuki/src/harness"
@@ -12726,4 +12702,55 @@ updated_at = 1791050231
 weight = 0.0
 issue_number = 1302
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1302"
+rev = 0
+
+[[task]]
+id = "545642f0"
+title = "flow SKILL treats a failed backlog driver heartbeat as fail-soft, so since 486e83ca an unrefreshed claim lease silently lapses back to age-only expiry while the loop continues"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Verifier side finding on 486e83ca (merged ed90f694). crates/flow/skills/flow/SKILL.md:647 keeps looping on heartbeat failure; the heartbeat now exits non-zero when leases could not be refreshed, and that signal is ignored by its main caller. Related doc item c892afa2."
+created_at = 1791051147
+updated_at = 1791051147
+weight = 0.0
+issue_number = 1303
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1303"
+rev = 0
+
+[[task]]
+id = "4411b4e4"
+title = "backlog claim liveness is per session: a crashed subagent sharing the parent CLAUDE_CODE_SESSION_ID keeps its lease as long as the parent heartbeats; a future heartbeat_at keeps a lease live until real time catches up (no test)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Verifier side findings on 486e83ca. Also: crates/backlog/src/lib.rs (empty) fails cargo fmt --check since 0b054696."
+created_at = 1791051148
+updated_at = 1791051148
+weight = 0.0
+issue_number = 1304
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1304"
+rev = 0
+
+[[task]]
+id = "6051ebd4"
+title = "condukt SKILL step 9 treats a failed claim-task as fail-soft (continue unclaimed); claim::claim_tasks/release_tasks library functions do not reject blank keys themselves, only the CLI parser does"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Verifier side findings on 55f55932. Also many main.rs line citations in docs/audit-schemaguard-verdict-paths.md and .compass/charter.md:15 were already stale at base."
+created_at = 1791051150
+updated_at = 1791051150
+weight = 0.0
+issue_number = 1305
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1305"
 rev = 0

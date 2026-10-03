@@ -11292,3 +11292,118 @@ weight = 0.0
 issue_number = 1136
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1136"
 rev = 0
+
+[[task]]
+id = "7b26ed30"
+title = "condukt SKILL.md code-index prose says include CODE_CONTEXT when not [] but callers now get an empty string on absent/unreadable"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "prose",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Seen 2026-10-03 by the 3f3a0e90 worker (run-20261003-141339-41881, commit 1c4e9eaa): fugu-router code-index search now exits 3/4 with empty stdout for an absent or unreadable index. crates/condukt/skills/condukt/SKILL.md around line 321 reads CODE_CONTEXT が [] 以外なら interpreter プロンプトに含める; taken literally an empty string is not [], so an orchestrator could emit an empty code_context block. Noise, not a false claim. Fix the wording to non-empty and not []; touches condukt, needs a bump."
+created_at = 1791004703
+updated_at = 1791004703
+weight = 0.0
+issue_number = 1139
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1139"
+rev = 0
+
+[[task]]
+id = "33e24267"
+title = "harness_core::code_index::load_index erases errors: IO error -> empty vec, unparseable lines silently skipped"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Seen 2026-10-03 by the 3f3a0e90 worker. fugu-router search now uses its own strict loader, but harness_core::code_index::load_index still returns an empty vec on any IO error and skips bad lines. context-governor codesearch::load calls it, so a partially corrupt index is served as a smaller valid index and a non-NotFound IO error becomes parsed-to-zero-symbols with the cause lost. Readings: (a) defect per CLAUDE.md 3 (empty set on error); (b) intended fail-soft for context injection - then the consumer must still not claim no-symbol. Check codesearch.rs consumers of the result. Fix belongs in harness-core (bump harness-core)."
+created_at = 1791004705
+updated_at = 1791004705
+weight = 0.0
+issue_number = 1140
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1140"
+rev = 0
+
+[[task]]
+id = "e65acc45"
+title = "harness_core code_index write_index / write_meta drop IO errors, so code-index build prints rebuilt: true after a failed write"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Seen 2026-10-03 by the 3f3a0e90 worker. Their doc says Fail-soft. A failed write leaves a stale or absent index while build reports success; that index then feeds code-index search and context-governor codesearch. Verify by making the index path unwritable and running fugu-router code-index build."
+created_at = 1791004707
+updated_at = 1791004707
+weight = 0.0
+issue_number = 1141
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1141"
+rev = 0
+
+[[task]]
+id = "984e3ed9"
+title = "harness_core::index_store::fresh_symbols wraps load_index in Determination::known, so an unreadable index is Known([]) - module doc claims it resolves to Undetermined"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "prose",
+    "p1",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Seen 2026-10-03 by the 3f3a0e90 verifier (read, no test written). crates/harness-core/src/index_store.rs fresh_symbols returns Determination::known(code_index::load_index(&paths.symbols_body)); load_index skips corrupt lines and maps every IO error (EISDIR, invalid UTF-8, permissions) to an empty Vec. specguard scope.rs code_index_files -> search_symbols therefore gets Known([]) or a partial list for an unreadable index - the conflation 3f3a0e90 fixed in the fugu-router CLI (strict loader load_code_index_strict in crates/fugu-router/src/main.rs). The module docstring says an index that will not load resolves to Undetermined, which the code contradicts (CLAUDE.md 4). Related: 33e24267 (load_index itself). Likely fix: move the strict loader into harness-core and have fresh_symbols return Undetermined on its error; bump harness-core."
+created_at = 1791004936
+updated_at = 1791004936
+weight = 0.0
+issue_number = 1142
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1142"
+rev = 0
+
+[[task]]
+id = "a57e299b"
+title = "scripts/test_backlog_audit_b1_0.py RealRepoState expects 39 binary-shipping plugins but the repo has 40"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "test-red",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Measured 2026-10-03 on main 82ee4a78 (session worktree): python3 -m unittest scripts.test_backlog_audit_b1_0 -> FAILED (failures=1) via Backlog06a9d33fDirectInvocationRunsTests.test_a_direct_run_reports_a_nonzero_test_count; inner RealRepoState.test_the_scope_finds_every_plugin_that_ships_a_binary: AssertionError: 40 != 39. pre-commit prints launcher-exec-bit: all 40 plugin launcher(s) recorded 100755. Readings: (a) the hard-coded 39 is stale after a plugin was added; (b) a launcher was added that should not be in scope. Find which crate is the 40th (git log on crates/*/bin) and decide; do not just bump the number without checking (b)."
+created_at = 1791004938
+updated_at = 1791004938
+weight = 0.0
+issue_number = 1143
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1143"
+rev = 0
+
+[[task]]
+id = "661f713b"
+title = "git merge.backlog.driver invokes bare 'backlog'; when it is not on PATH the merge driver fails and tasks.toml falls back to a textual conflict"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "path-resolution",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-03 merging fix/run-20261003-141339-41881/3f3a0e90 into main from the Bash tool: 'backlog merge-driver .merge_file_Uu1iLR ...: backlog: command not found' then CONFLICT (content) in .backlog/tasks.toml. Retrying with the backlog cache bin prepended to PATH merged cleanly. git config: merge.backlog.driver = backlog merge-driver %O %A %B. Same class as abba6f0d (bare-name harness spawn, plugin bin dirs are not on PATH outside the Bash tool shell). The failure is loud (conflict), not silent, so it fails closed; the cost is a manual conflict on every concurrent backlog edit. Readings: (a) configure the driver via a resolver wrapper script (e.g. scripts/backlog-merge-driver.sh resolving the cache like harness_core::plugin_bin); (b) intended - document that the user must have backlog on PATH."
+created_at = 1791005259
+updated_at = 1791005259
+weight = 0.0
+issue_number = 1144
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1144"
+rev = 0

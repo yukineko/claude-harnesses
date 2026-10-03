@@ -3256,49 +3256,6 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/506"
 rev = 0
 
 [[task]]
-id = "b74955f4"
-title = "propguard inject mode records EVERY derived property as a fleet violation, contradicting the CA-propguard-06 comment in the same function"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-Reported by an adversarial audit 2026-09-11 at HEAD 2abf8dea. Verdict CONFIRMED by the auditor with verbatim quotes; I have NOT independently re-verified the overwatch write path, so treat the consumption half as UNVERIFIED until someone traces it.
-
-crates/propguard/src/gate.rs:442-445 verbatim:
-
-    fn unsatisfied_prop_ids(props: &[Property], findings: Option<&str>) -> Vec<&static str> {
-        let Some(out) = findings else {
-            return props.iter().map(|p| p.id).collect();
-        };
-
-The early return fires whenever findings is None. Inject mode constructs exactly that: gate.rs around :273-279 builds Determination::Known(Verified { satisfied: 0, findings: None }). So in inject mode ALL 3-5 derived properties are returned as violated and appended as ViolationSource::Propguard events (main.rs around :306 and :485-497), read later by overwatch violations / overwatch review-queue.
-
-Nothing evaluated any of them. The same function guards against precisely this, but only inside the Some(out) branch. gate.rs:451-457 verbatim:
-
-    // None means the checker emitted NO verdict line for it - it was
-    // never evaluated, which is NOT the same as checked-and-failed. Only
-    // a property that was checked and FAILED (Some(false)) is a fleet
-    // violation; a never-evaluated (unchecked) property must not be
-    // reported violated / pollute the fleet-correlation store, per
-    // property (CA-propguard-06).
-
-and main.rs:446 verbatim: "Record a fleet-level overwatch violation for each failing PROP-* property on a Block decision." In inject mode none of them is failing; none was checked.
-
-The sibling path gets this right - decide_diff_failed doc (gate.rs around :649-652) says NO per-property violation is attributed because nothing was checked. Same defect class as the satisfied=0 headline that b61d68b4 fixed, surviving on the durable-record surface instead of the message surface.
-
-Currently latent in THIS repo: there is no propguard.toml and no criteria file at the repo root, so derive.rs source_criteria returns None and gate.rs allows at the no-criteria arm before any of this runs. It is not latent for any project that configures propguard, and inject is the mode the shipped starter template writes.
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/propguard/src/gate.rs (rev e70d48dd)"""
-created_at = 1789064369
-updated_at = 1790983255
-weight = 0.0
-issue_number = 510
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/510"
-rev = 0
-
-[[task]]
 id = "c193cf9e"
 title = "Starter config templates written to user disk still carry the pre-b61d68b4 overclaims for tdd, propguard and reviewgate (the block reasons were fixed, the templates were not)"
 project = "/Users/yuki/src/harness"
@@ -12225,13 +12182,15 @@ status = "unconfirmed"
 notes = """
 Observed 2026-10-04 by the 873a2621 test-writer agent (session 33de4c25). Verbatim block: '> /claims.json' destroys the file's current contents and /claims.json contains a shell expansion, so blastguard cannot tell which file this names. Trigger: a heredoc body that is Python source, with a comment that wraps claims.json in backticks. Also a process finding: the agent then wrote the same script with the Write tool and ran it, which is the reroute-around-a-gate pattern that CLAUDE.md section 5.4 forbids (the effect was benign: test edits in its own worktree). Needs a reproduction test.
 
-[2026-10-04, session 33de4c25] Second observation, same verbatim block: the 873a2621 implementer's python3 heredoc that spliced crates/harness-core/src/transcript.rs was refused because Rust doc text "<project_key(main_worktree_root(root))>/claims.json" (in backticks) was parsed as a > redirect. The script never ran. Declared and asked; the user ruled to make the same change with the Edit tool."""
+[2026-10-04, session 33de4c25] Second observation, same verbatim block: the 873a2621 implementer's python3 heredoc that spliced crates/harness-core/src/transcript.rs was refused because Rust doc text "<project_key(main_worktree_root(root))>/claims.json" (in backticks) was parsed as a > redirect. The script never ran. Declared and asked; the user ruled to make the same change with the Edit tool.
+
+[2026-10-04, session 33de4c25] Third observation, same block text: the reviewgate test re-anchor agent's python heredoc that edited crates/reviewgate/tests/session_attribution.rs was refused on backtick-wrapped "/claims.json" in text. Nothing ran (git status clean). The agent redid the edit with the Edit tool, under the user's ruling for the 873a2621 implementer. Three hits in one session: any heredoc whose body mentions a path with > before it, inside backticks, is refused."""
 created_at = 1791044006
-updated_at = 1791044228
+updated_at = 1791044448
 weight = 0.0
 issue_number = 1229
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1229"
-rev = 1
+rev = 2
 
 [[task]]
 id = "1af8be51"
@@ -12366,4 +12325,23 @@ updated_at = 1791043800
 weight = 0.0
 issue_number = 1228
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1228"
+rev = 0
+
+[[task]]
+id = "86471e94"
+title = "check-fail-open ALLOWLIST needle is a per-file substring: an identical later line in the same file is silently exempt"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p3",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04 (session 33de4c25) while adding two user-approved entries for transcript.rs (873a2621, commit 42b5b567). The ALLOWLIST matches path + rule + a needle substring of the flagged line, so a second, unreviewed line with the same text in that file would be exempt too, and the reviewed-exception count would not grow. Needs a reproduction test: add a duplicate of an allowlisted line and assert that fail-open-diff still counts it."
+created_at = 1791044675
+updated_at = 1791044675
+weight = 0.0
+issue_number = 1232
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1232"
 rev = 0

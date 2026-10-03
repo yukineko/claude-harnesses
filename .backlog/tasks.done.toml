@@ -33097,6 +33097,411 @@ exit = 1
 kind = "behavioural"
 
 [[task]]
+id = "881d7933"
+title = "check-fail-open.py の READDIR_WINDOW=6 が 1 行足りず、b0cacd15 が名指しした 2 サイト目 (path_shadow.rs の list_binary_names) を検出できない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "failopen",
+    "scripts",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-09-10、測定点 8c056f05、測定コマンド: python3 scripts/check-fail-open.py --all
+
+b0cacd15 の完了条件は「上記 2 サイトが検出されること」。実測:
+ - サイト 1 crates/harness-status/src/plugins.rs:108 dir_nonempty は検出される。
+   逐語出力: crates/harness-status/src/plugins.rs:108: [read-unwrap-or-empty] (advisory) .unwrap_or(false)
+ - サイト 2 crates/harness-status/src/path_shadow.rs:99-108 list_binary_names は検出されない
+   (--all の全出力に path_shadow.rs のヒットが 1 件も無い)。
+
+原因 (推測ではなく行数で決まる):
+  path_shadow.rs:100 が std::fs::read_dir(dir)、:107 が .unwrap_or_default()。距離は 7 行。
+  scripts/check-fail-open.py:346-349 は
+    lo = max(0, idx - READDIR_WINDOW)
+    if any(RS_IO_CALL.search(code[j]) for j in range(lo, idx + 1))
+  で、READDIR_WINDOW は :111 で 6。idx は 0 起点なので unwrap の idx=106、lo=100、
+  range(100,107) が見るのは 0 起点 100..106 = 1 起点 101..107。read_dir のある 1 起点 100 行目
+  (0 起点 99) はちょうど 1 つ外。off-by-one というより窓幅がこのサイトに 1 足りない。
+
+実体側も未修正のまま残っている (逐語 crates/harness-status/src/path_shadow.rs:99-108):
+  fn list_binary_names(dir: &Path) -> Vec<String> {
+      std::fs::read_dir(dir).map(|it| { ... .collect() }).unwrap_or_default()
+  }
+同じファイルの直下 :110-119 の scan_cache_bins は既に三値化されており
+「A missing cache root is a legitimate absence ... yields Known(vec![]); any OTHER read_dir error」
+と docstring に書いている。b0cacd15 が指摘したミラーギャップがそのまま残っている。
+
+本物の欠陥か意図か: 窓幅の拡大は誤検知を増やしうるので、単純に 7 や 8 にするのが正しいとは限らない。
+より確実なのは「read_dir から unwrap までを行数ではなく式の連鎖 (.map(...).unwrap_or_default() が
+同一 statement か) で判定する」こと。どちらを採るかは人間裁定。ただし現状は
+「baseline の数字がこのサイトを含んでいない」ので、ラチェットの母数が過小である点は事実。
+
+b0cacd15 は本件のため PARTIAL 判定として pending のまま残した。
+
+[triage 2026-09-29 @b325a169] p2->p1: live fail-open harness-status/src/path_shadow.rs:99-108 unwrap_or_default; ratchet window undercounts it
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test scripts/test_backlog_881d7933.py (rev e70d48dd)"""
+created_at = 1788982197
+updated_at = 1791048498
+weight = 0.0
+issue_number = 473
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/473"
+issue_closed_at = 1791048500
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_check_fail_open_881d7933.py"
+exit = 0
+passed = 6
+rev = "185f68153cc5b4099adc12c5037a01d85ef77a24"
+observed_at = 1791048493
+output_digest = "sha256:6a5bb7522fb817d062030cc0e1e1d9eaedf7aed03dcf47c041b855c6050aa624"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/flow-closures
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 7 items
+
+scripts/test_check_fail_open_881d7933.py ..s....                         [100%]
+
+========================= 6 passed, 1 skipped in 0.87s =========================
+"""
+
+[task.closure.red]
+rev = "f51e281e939680fb09866da6a6ff4a0acafc47f0"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "1b82a049"
+title = "blastguard: chmod -x <plugin cache binary> が ALLOW — ゲート無効化が dark に失敗する"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-09-09 (blastguard 0.2.59)。chmod -x /home/hiroyuki_nakayama/.claude/plugins/cache/yukineko/blastguard/0.2.58/bin/blastguard が ALLOW。実行ビットを落とされた hook は Permission denied で起動せず、finding を一切出さない。つまり red ではなく dark に落ちる — 沈黙が「問題なし」と読まれる典型的な fail-open (CLAUDE.md 3)。plugin cache のパスが exclude.rs の PROTECTED_GLOBS に無いのが原因。可逆性の軸とは独立 (chmod は完全に可逆だが、無効化されたゲートは以後のすべての verdict を無意味にする)。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/blastguard/tests/backlog_audit_s02.rs (rev e70d48dd)"""
+created_at = 1788947185
+updated_at = 1791048538
+weight = 0.0
+issue_number = 1117
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1117"
+issue_closed_at = 1791048539
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_audit_s02 backlog_1b82a049_chmod_x_off_plugin_cache_binary_is_not_allowed"
+exit = 0
+passed = 1
+rev = "185f68153cc5b4099adc12c5037a01d85ef77a24"
+observed_at = 1791048507
+output_digest = "sha256:084d5ddcdd3ca7912092d90d918fe0aca2dfde1d2008b26543c9991c2472ff79"
+excerpt = """
+
+running 1 test
+test backlog_1b82a049_chmod_x_off_plugin_cache_binary_is_not_allowed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 47 filtered out; finished in 0.50s
+
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+   Compiling serde_core v1.0.228
+   Compiling unicode-ident v1.0.24
+   Compiling libc v0.2.186
+   Compiling memchr v2.8.2
+   Compiling serde v1.0.228
+   Compiling version_check v0.9.5
+   Compiling autocfg v1.5.1
+   Compiling generic-array v0.14.7
+   Compiling zmij v1.0.21
+   Compiling num-traits v0.2.19
+   Compiling aho-corasick v1.1.4
+   Compiling equivalent v1.0.2
+   Compiling utf8parse v0.2.2
+   Compiling serde_json v1.0.150
+   Compiling typenum v1.20.1
+   Compiling hashbrown v0.17.1
+   Compiling regex-syntax v0.8.11
+   Compiling indexmap v2.14.0
+   Compiling anstyle-parse v1.0.0
+   Compiling syn v2.0.118
+   Compiling toml_write v0.1.2
+   Compiling core-foundation-sys v0.8.7
+   Compiling regex-automata v0.4.14
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling anyhow v1.0.103
+   Compiling option-ext v0.2.0
+   Compiling anstyle v1.0.14
+   Compiling itoa v1.0.18
+   Compiling colorchoice v1.0.5
+   Compiling anstyle-query v1.1.5
+   Compiling winnow v0.7.15
+   Compiling anstream v1.0.0
+   Compiling dirs-sys v0.4.1
+   Compiling iana-time-zone v0.1.65
+   Compiling heck v0.5.0
+   Compiling clap_lex v1.1.0
+   Compiling cfg-if v1.0.4
+   Compiling strsim v0.11.1
+   Compiling chrono v0.4.45
+   Compiling clap_builder v4.6.0
+   Compiling dirs v5.0.1
+   Compiling crypto-common v0.1.7
+   Compiling block-buffer v0.10.4
+   Compiling wait-timeout v0.2.1
+   Compiling digest v0.10.7
+   Compiling cpufeatures v0.2.17
+   Compiling bstr v1.12.2
+   Compiling log v0.4.33
+   Compiling rustix v1.1.4
+   Compiling target-triple v1.0.1
+   Compiling winnow v1.0.4
+   Compiling getrandom v0.4.3
+   Compiling regex v1.12.4
+   Compiling globset v0.4.18
+   Compiling toml_parser v1.1.2+spec-1.1.0
+   Compiling sha2 v0.10.9
+   Compiling serde_derive v1.0.228
+   Compiling clap_derive v4.6.1
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling serde_spanned v1.1.1
+   Compiling errno v0.3.14
+   Compiling bitflags v2.13.0
+   Compiling toml_writer v1.1.2+spec-1.1.0
+   Compiling toml v1.1.3+spec-1.1.0
+   Compiling termcolor v1.4.1
+   Compiling once_cell v1.21.4
+   Compiling fastrand v2.4.1
+   Compiling glob v0.3.3
+   Compiling clap v4.6.1
+   Compiling tempfile v3.27.0
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+   Compiling trybuild v1.0.118
+   Compiling toml_edit v0.22.27
+   Compiling toml v0.8.23
+   Compiling harness-core v0.2.45 (/Users/yuki/src/.harness-worktrees/flow-closures/crates/harness-core)
+   Compiling overwatch v0.2.59 (/Users/yuki/src/.harness-worktrees/flow-closures/crates/overwatch)
+   Compiling blastguard v0.2.108 (/Users/yuki/src/.harness-worktrees/flow-closures/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.85s
+     Running tests/backlog_audit_s02.rs (target/debug/deps/backlog_audit_s02-07ef0c208a2fab93)
+"""
+
+[task.closure.red]
+rev = "f51e281e939680fb09866da6a6ff4a0acafc47f0"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "6316fec1"
+title = "worktree 内の編集・削除を拒むゲートを撤去（blastguard PROTECTED_GLOBS と settings の形状 deny）"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "worktree-hygiene",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "User ruling 2026-10-03 (verbatim): worktreeの編集や削除を拒むのはむしろ不正なのでなおしてほしい. Observed refusals this session: (1) ~/.claude/settings.json deny Bash(rm *)/Bash(rm)/Bash(rmdir *) refused rm of 10 test files in session worktree and rm -f in scratchpad, overriding blastguard deletion.rs worktree-storage Allow; (2) settings deny Edit/Write(//Users/yuki/**/.githooks/**) refused Edit of worktree .githooks/pre-push; (3) blastguard exclude.rs PROTECTED_GLOBS **/.githooks/** etc deny regardless of worktree; (4) old guard-maintree-bash refuses .githooks writes from any tree (replaced by observing guard b8390f7a, unmerged). Done: paths strictly inside a worktree storage root (~/.condukt/worktrees, <parent>/.harness-worktrees) are not refused by blastguard protected-path rules for Write/Edit/rm/redirect; main-tree and home-level protection unchanged; settings deny narrowed (user applies)."
+created_at = 1791033843
+updated_at = 1791048572
+weight = 0.0
+issue_number = 1223
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1223"
+issue_closed_at = 1791048574
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test worktree_protected_paths"
+exit = 0
+passed = 26
+rev = "185f68153cc5b4099adc12c5037a01d85ef77a24"
+observed_at = 1791048543
+output_digest = "sha256:6a8433e6b602afc3d9a676458079664ad4841bb3c3b2facf5b7bf26dbb694ad8"
+excerpt = """
+
+running 26 tests
+test bash_rmdir_plain_dir_in_harness_worktree ... ok
+test bash_chmod_githooks_in_harness_worktree ... ok
+test bash_rm_f_plain_file_in_harness_worktree ... ok
+test bash_rm_githooks_file_in_condukt_worktree ... ok
+test bash_rmdir_protected_dir_in_harness_worktree ... ok
+test bash_rm_githooks_file_in_harness_worktree ... ok
+test bash_rm_claude_settings_in_harness_worktree ... ok
+test bash_redirect_githooks_in_harness_worktree ... ok
+test bash_sed_i_githooks_in_harness_worktree ... ok
+test edit_githooks_pre_push_in_harness_worktree ... ok
+test edit_githooks_in_condukt_worktree ... ok
+test multiedit_claude_settings_in_harness_worktree ... ok
+test dotdot_climbing_out_of_worktree_stays_denied ... ok
+test home_claude_settings_stays_denied ... ok
+test home_zshrc_stays_denied ... ok
+test harness_worktrees_nested_in_main_tree_stays_denied ... ok
+test storage_roots_themselves_stay_denied ... ok
+test unrelated_harness_worktrees_dir_stays_denied ... ok
+test undetermined_operands_are_not_asserted_allow ... ok
+test symlinked_storage_root_stays_denied ... ok
+test write_claude_hooks_file_in_harness_worktree ... ok
+test write_claude_settings_in_harness_worktree ... ok
+test write_from_a_session_inside_the_worktree ... ok
+test symlink_inside_worktree_into_main_tree_stays_denied ... ok
+test write_githooks_in_condukt_worktree ... ok
+test write_githooks_pre_push_in_harness_worktree ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.57s
+
+   Compiling blastguard v0.2.108 (/Users/yuki/src/.harness-worktrees/flow-closures/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.05s
+     Running tests/worktree_protected_paths.rs (target/debug/deps/worktree_protected_paths-3feb6165588f94a9)
+"""
+
+[task.closure.red]
+rev = "f51e281e939680fb09866da6a6ff4a0acafc47f0"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "e494a8a3"
+title = "condukt diffrisk_record::every_invocation_is_journaled_even_when_nothing_is_recorded が workspace 実行時のみ間欠的に RED"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = '''
+実測 2026-09-10/11、worktree agent-aa54b994b297e4963、測定点 d415d5ea (ツリーは 3 回とも同一)。
+
+## 観測 (診断ではない)
+
+同じツリーに対する cargo test --workspace --no-fail-fast の 3 回の完走:
+
+  run 1 (cold, 345.2s)  failing 4 件 — condukt は含まれない
+  run 2 (warm, 152.8s)  failing 4 件 — condukt は含まれない
+  run 3 (warm, 183s、scripts/check-workspace-tests.py 経由の初の end-to-end 実行)
+                        failing 5 件 — **condukt が増えている**
+
+  condukt (unittests src/main.rs) ::
+    diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded
+
+単体で再実行すると通る:
+  cargo test -p condukt --bin condukt \
+    diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded -- --exact
+  -> test result: ok. 1 passed; 0 failed; 768 filtered out; finished in 0.05s
+
+したがって「3 回中 1 回、workspace 実行時にのみ RED を観測した」が事実である。
+**flaky と断定はしない** — それは診断であり、まだ観測していない。
+
+## 状態依存の疑い (コードの逐語観測まで。原因の断定はしていない)
+
+crates/condukt/src/diffrisk_record.rs:500 のテスト本体:
+
+  501:  let cfg = Config::load();
+  502:  let cwd = tempfile::tempdir().expect("tempdir");
+  504:  let ledger = crate::gatelog::diffrisk_outcomes_path(&crate::state::project_state_dir(
+  505:      &cfg,
+  506:      cwd.path(),
+  507:  ));
+
+cwd と worktree は tempdir に隔離されているが、**Config::load() は実環境の設定を読み、
+project_state_dir(&cfg, ...) は cfg 由来の実 state dir を指しうる**。
+HOME も state dir も pin されていない。並行するテスト・並行セッション・
+同一マシン上の別の condukt 実行と同じ ledger を共有する経路があれば、
+順序依存/競合で間欠 RED になりうる。**これは仮説であって、まだ検証していない。**
+
+既知の同型 (MEMORY): 「ledger tests must pin state dir + session id or they pollute
+the live ledger」(cg injector dedup env-session の件)。
+
+## やること
+
+1. まず再現させる: workspace 全体を数回まわして頻度を測る (単体では出ない)。
+   併走している他の cargo/condukt プロセスの有無も同時に記録すること。
+2. 再現したら、HOME と state dir を pin したうえで同じ観測をとる。
+   pin して消えるなら共有 state が原因、消えないなら別。
+3. 判断で「flaky だから無視」にしない。CLAUDE.md 2. — 判断は予測であって事実ではない。
+
+## なぜ p1 か
+
+間欠 RED は、人が手で 1 回まわして「通ったからよし」と判断したときに最も見逃される種類で
+あり、まさに 65bfb279 / c4321fc2 が言う「赤が誰にも見えない」状態を作る。
+実際この 5 本目は、手で 2 回まわした測定では 2 回とも見えず、
+ゲート (scripts/check-workspace-tests.py) の初回実行で初めて見えた。
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/condukt/src/diffrisk_record.rs (mod backlog_e494a8a3) (rev 596108b9): every_invocation_is_journaled test journals into the real HOME state root.
+
+[2026-10-03, session 64554c4d] Observed failing in 3 of 3 full `cargo test -p condukt` runs on macOS at 82ee4a78 baseline and on branch fix/run-20261003-141339-41881/abba6f0d (left: 1 right: 2, one record per invocation), passing when run alone. Deterministic in full runs on this host, not intermittent.
+
+[2026-10-04, session 33de4c25] FIX COMMITTED, NOT MERGED.
+- Fix: f9218851 on branch flow/e494a8a3 (worktree /Users/yuki/src/.harness-worktrees/flow-e494a8a3).
+- Root cause (observed with temporary diagnostics, since removed): the journaling test called Config::load(), which read $HOME without HOME_ENV_LOCK. A claim:: test had swapped $HOME to a temp dir and deleted it between the test's two appends. Result: left 1 right 2, with no LOST warning.
+- Change: the tests use hermetic_cfg(), whose state_dir is inside their own TempDir. The repro's #[ignore] is removed.
+- Close: red-rev 596108b9, test command: cargo test -p condukt --bin condukt diffrisk_record::backlog_e494a8a3 -- --include-ignored
+- TO DO BEFORE MERGE:
+  (1) Rebase or merge onto main. main already has condukt 0.7.211 from e5174b6a, so bump the version again (0.7.212) in lockstep.
+  (2) Read the repeated-run loop results at the session-33de4c25 scratchpad e494-after/summary.txt. Before the fix, 3 of 6 full runs failed; after it, 2 of 2 passed so far.
+- Also covered: 057fa13c, and the diffrisk parts of 7c798579 and 347db98f.
+- Not covered:
+  - c63f1c23 part 1 (oracle no_reproduction_tests_falls_back_even_when_required, a PATH/tdd race). It reproduced after the fix.
+  - runtime_conflict::tests::no_op_when_worktree_absent: same $HOME exposure.
+  - gatelog.rs:448: filter_map(ok()) silently skips lines.
+  - diffrisk_record.rs:209-210: the docstring says "Fully fail-soft ... silent no-op", which contradicts the journaling.
+- Separate finding: the maintree-guard PostToolUse hook refused a read-only command that had timed out into the background ("no Pre snapshot ... for this call").'''
+created_at = 1789057581
+updated_at = 1791048726
+weight = 0.0
+issue_number = 502
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/502"
+issue_closed_at = 1791048729
+rev = 3
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --bin condukt -- --exact --include-ignored diffrisk_record::backlog_e494a8a3::journaling_test_does_not_write_into_the_home_state_root"
+exit = 0
+passed = 1
+rev = "185f68153cc5b4099adc12c5037a01d85ef77a24"
+observed_at = 1791048683
+output_digest = "sha256:49d852a6bee7495f310833c7dba40abac8b7f892c9fc6a47da20b030949641eb"
+excerpt = """
+
+running 1 test
+test diffrisk_record::backlog_e494a8a3::journaling_test_does_not_write_into_the_home_state_root ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 887 filtered out; finished in 0.08s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running unittests src/main.rs (target/debug/deps/condukt-d271b1b199f78fc0)
+"""
+
+[task.closure.red]
+rev = "f51e281e939680fb09866da6a6ff4a0acafc47f0"
+exit = 101
+kind = "behavioural"
+
+[[task]]
 id = "e033c406"
 title = "新ゲート: block 直後に同一効果を別構文で再試行する回避を検出する（ユーザー承認済み・hack route を閉じる）"
 project = "/Users/yuki/src/harness"
@@ -33719,54 +34124,6 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 [task.closure.red]
 rev = "d8dccdac6daac02fb10238191ddf3e2182b434d5"
-exit = 101
-kind = "behavioural"
-
-[[task]]
-id = "1b82a049"
-title = "blastguard: chmod -x <plugin cache binary> が ALLOW — ゲート無効化が dark に失敗する"
-project = "/home/hiroyuki_nakayama/src/claude-harnesses"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "done"
-notes = """
-実測 2026-09-09 (blastguard 0.2.59)。chmod -x /home/hiroyuki_nakayama/.claude/plugins/cache/yukineko/blastguard/0.2.58/bin/blastguard が ALLOW。実行ビットを落とされた hook は Permission denied で起動せず、finding を一切出さない。つまり red ではなく dark に落ちる — 沈黙が「問題なし」と読まれる典型的な fail-open (CLAUDE.md 3)。plugin cache のパスが exclude.rs の PROTECTED_GLOBS に無いのが原因。可逆性の軸とは独立 (chmod は完全に可逆だが、無効化されたゲートは以後のすべての verdict を無意味にする)。
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/blastguard/tests/backlog_audit_s02.rs (rev e70d48dd)"""
-created_at = 1788947185
-updated_at = 1791048299
-weight = 0.0
-issue_number = 1117
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1117"
-issue_closed_at = 1791048301
-rev = 1
-
-[task.closure]
-reason = "fixed"
-
-[task.closure.green]
-runner = "cargo-test"
-cmd = "cargo test -p blastguard --test backlog_audit_s02 backlog_1b82a049"
-exit = 0
-passed = 1
-rev = "fcb44641b989e5da8d05ddf5292684c81bd69c47"
-observed_at = 1791048252
-output_digest = "sha256:2141b9bf7b42b6f684b4ad7a5a26769c67c4d7b6f3ccd44e851405f702f71f82"
-excerpt = """
-
-running 1 test
-test backlog_1b82a049_chmod_x_off_plugin_cache_binary_is_not_allowed ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 47 filtered out; finished in 0.60s
-
-   Compiling blastguard v0.2.108 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.52s
-     Running tests/backlog_audit_s02.rs (target/debug/deps/backlog_audit_s02-07ef0c208a2fab93)
-"""
-
-[task.closure.red]
-rev = "f51e281e939680fb09866da6a6ff4a0acafc47f0"
 exit = 101
 kind = "behavioural"
 

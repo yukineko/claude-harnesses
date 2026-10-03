@@ -2156,61 +2156,6 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/1119"
 rev = 0
 
 [[task]]
-id = "881d7933"
-title = "check-fail-open.py の READDIR_WINDOW=6 が 1 行足りず、b0cacd15 が名指しした 2 サイト目 (path_shadow.rs の list_binary_names) を検出できない"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "failopen",
-    "scripts",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-実測 2026-09-10、測定点 8c056f05、測定コマンド: python3 scripts/check-fail-open.py --all
-
-b0cacd15 の完了条件は「上記 2 サイトが検出されること」。実測:
- - サイト 1 crates/harness-status/src/plugins.rs:108 dir_nonempty は検出される。
-   逐語出力: crates/harness-status/src/plugins.rs:108: [read-unwrap-or-empty] (advisory) .unwrap_or(false)
- - サイト 2 crates/harness-status/src/path_shadow.rs:99-108 list_binary_names は検出されない
-   (--all の全出力に path_shadow.rs のヒットが 1 件も無い)。
-
-原因 (推測ではなく行数で決まる):
-  path_shadow.rs:100 が std::fs::read_dir(dir)、:107 が .unwrap_or_default()。距離は 7 行。
-  scripts/check-fail-open.py:346-349 は
-    lo = max(0, idx - READDIR_WINDOW)
-    if any(RS_IO_CALL.search(code[j]) for j in range(lo, idx + 1))
-  で、READDIR_WINDOW は :111 で 6。idx は 0 起点なので unwrap の idx=106、lo=100、
-  range(100,107) が見るのは 0 起点 100..106 = 1 起点 101..107。read_dir のある 1 起点 100 行目
-  (0 起点 99) はちょうど 1 つ外。off-by-one というより窓幅がこのサイトに 1 足りない。
-
-実体側も未修正のまま残っている (逐語 crates/harness-status/src/path_shadow.rs:99-108):
-  fn list_binary_names(dir: &Path) -> Vec<String> {
-      std::fs::read_dir(dir).map(|it| { ... .collect() }).unwrap_or_default()
-  }
-同じファイルの直下 :110-119 の scan_cache_bins は既に三値化されており
-「A missing cache root is a legitimate absence ... yields Known(vec![]); any OTHER read_dir error」
-と docstring に書いている。b0cacd15 が指摘したミラーギャップがそのまま残っている。
-
-本物の欠陥か意図か: 窓幅の拡大は誤検知を増やしうるので、単純に 7 や 8 にするのが正しいとは限らない。
-より確実なのは「read_dir から unwrap までを行数ではなく式の連鎖 (.map(...).unwrap_or_default() が
-同一 statement か) で判定する」こと。どちらを採るかは人間裁定。ただし現状は
-「baseline の数字がこのサイトを含んでいない」ので、ラチェットの母数が過小である点は事実。
-
-b0cacd15 は本件のため PARTIAL 判定として pending のまま残した。
-
-[triage 2026-09-29 @b325a169] p2->p1: live fail-open harness-status/src/path_shadow.rs:99-108 unwrap_or_default; ratchet window undercounts it
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test scripts/test_backlog_881d7933.py (rev e70d48dd)"""
-created_at = 1788982197
-updated_at = 1790983352
-weight = 0.0
-issue_number = 473
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/473"
-rev = 0
-
-[[task]]
 id = "c63f1c23"
 title = "condukt の unit test が full-suite 並列時のみ落ちる flake クラス (プロセス外の共有状態が原因)"
 project = "/Users/yuki/src/harness"
@@ -2499,98 +2444,6 @@ weight = 0.0
 issue_number = 495
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/495"
 rev = 0
-
-[[task]]
-id = "e494a8a3"
-title = "condukt diffrisk_record::every_invocation_is_journaled_even_when_nothing_is_recorded が workspace 実行時のみ間欠的に RED"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = '''
-実測 2026-09-10/11、worktree agent-aa54b994b297e4963、測定点 d415d5ea (ツリーは 3 回とも同一)。
-
-## 観測 (診断ではない)
-
-同じツリーに対する cargo test --workspace --no-fail-fast の 3 回の完走:
-
-  run 1 (cold, 345.2s)  failing 4 件 — condukt は含まれない
-  run 2 (warm, 152.8s)  failing 4 件 — condukt は含まれない
-  run 3 (warm, 183s、scripts/check-workspace-tests.py 経由の初の end-to-end 実行)
-                        failing 5 件 — **condukt が増えている**
-
-  condukt (unittests src/main.rs) ::
-    diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded
-
-単体で再実行すると通る:
-  cargo test -p condukt --bin condukt \
-    diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded -- --exact
-  -> test result: ok. 1 passed; 0 failed; 768 filtered out; finished in 0.05s
-
-したがって「3 回中 1 回、workspace 実行時にのみ RED を観測した」が事実である。
-**flaky と断定はしない** — それは診断であり、まだ観測していない。
-
-## 状態依存の疑い (コードの逐語観測まで。原因の断定はしていない)
-
-crates/condukt/src/diffrisk_record.rs:500 のテスト本体:
-
-  501:  let cfg = Config::load();
-  502:  let cwd = tempfile::tempdir().expect("tempdir");
-  504:  let ledger = crate::gatelog::diffrisk_outcomes_path(&crate::state::project_state_dir(
-  505:      &cfg,
-  506:      cwd.path(),
-  507:  ));
-
-cwd と worktree は tempdir に隔離されているが、**Config::load() は実環境の設定を読み、
-project_state_dir(&cfg, ...) は cfg 由来の実 state dir を指しうる**。
-HOME も state dir も pin されていない。並行するテスト・並行セッション・
-同一マシン上の別の condukt 実行と同じ ledger を共有する経路があれば、
-順序依存/競合で間欠 RED になりうる。**これは仮説であって、まだ検証していない。**
-
-既知の同型 (MEMORY): 「ledger tests must pin state dir + session id or they pollute
-the live ledger」(cg injector dedup env-session の件)。
-
-## やること
-
-1. まず再現させる: workspace 全体を数回まわして頻度を測る (単体では出ない)。
-   併走している他の cargo/condukt プロセスの有無も同時に記録すること。
-2. 再現したら、HOME と state dir を pin したうえで同じ観測をとる。
-   pin して消えるなら共有 state が原因、消えないなら別。
-3. 判断で「flaky だから無視」にしない。CLAUDE.md 2. — 判断は予測であって事実ではない。
-
-## なぜ p1 か
-
-間欠 RED は、人が手で 1 回まわして「通ったからよし」と判断したときに最も見逃される種類で
-あり、まさに 65bfb279 / c4321fc2 が言う「赤が誰にも見えない」状態を作る。
-実際この 5 本目は、手で 2 回まわした測定では 2 回とも見えず、
-ゲート (scripts/check-workspace-tests.py) の初回実行で初めて見えた。
-
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/condukt/src/diffrisk_record.rs (mod backlog_e494a8a3) (rev 596108b9): every_invocation_is_journaled test journals into the real HOME state root.
-
-[2026-10-03, session 64554c4d] Observed failing in 3 of 3 full `cargo test -p condukt` runs on macOS at 82ee4a78 baseline and on branch fix/run-20261003-141339-41881/abba6f0d (left: 1 right: 2, one record per invocation), passing when run alone. Deterministic in full runs on this host, not intermittent.
-
-[2026-10-04, session 33de4c25] FIX COMMITTED, NOT MERGED.
-- Fix: f9218851 on branch flow/e494a8a3 (worktree /Users/yuki/src/.harness-worktrees/flow-e494a8a3).
-- Root cause (observed with temporary diagnostics, since removed): the journaling test called Config::load(), which read $HOME without HOME_ENV_LOCK. A claim:: test had swapped $HOME to a temp dir and deleted it between the test's two appends. Result: left 1 right 2, with no LOST warning.
-- Change: the tests use hermetic_cfg(), whose state_dir is inside their own TempDir. The repro's #[ignore] is removed.
-- Close: red-rev 596108b9, test command: cargo test -p condukt --bin condukt diffrisk_record::backlog_e494a8a3 -- --include-ignored
-- TO DO BEFORE MERGE:
-  (1) Rebase or merge onto main. main already has condukt 0.7.211 from e5174b6a, so bump the version again (0.7.212) in lockstep.
-  (2) Read the repeated-run loop results at the session-33de4c25 scratchpad e494-after/summary.txt. Before the fix, 3 of 6 full runs failed; after it, 2 of 2 passed so far.
-- Also covered: 057fa13c, and the diffrisk parts of 7c798579 and 347db98f.
-- Not covered:
-  - c63f1c23 part 1 (oracle no_reproduction_tests_falls_back_even_when_required, a PATH/tdd race). It reproduced after the fix.
-  - runtime_conflict::tests::no_op_when_worktree_absent: same $HOME exposure.
-  - gatelog.rs:448: filter_map(ok()) silently skips lines.
-  - diffrisk_record.rs:209-210: the docstring says "Fully fail-soft ... silent no-op", which contradicts the journaling.
-- Separate finding: the maintree-guard PostToolUse hook refused a read-only command that had timed out into the background ("no Pre snapshot ... for this call").'''
-created_at = 1789057581
-updated_at = 1791047916
-weight = 0.0
-issue_number = 502
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/502"
-rev = 2
 
 [[task]]
 id = "49a457c8"
@@ -11576,26 +11429,6 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/1211"
 rev = 0
 
 [[task]]
-id = "6316fec1"
-title = "worktree 内の編集・削除を拒むゲートを撤去（blastguard PROTECTED_GLOBS と settings の形状 deny）"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "worktree-hygiene",
-    "p1",
-]
-touched_files = []
-status = "unconfirmed"
-notes = "User ruling 2026-10-03 (verbatim): worktreeの編集や削除を拒むのはむしろ不正なのでなおしてほしい. Observed refusals this session: (1) ~/.claude/settings.json deny Bash(rm *)/Bash(rm)/Bash(rmdir *) refused rm of 10 test files in session worktree and rm -f in scratchpad, overriding blastguard deletion.rs worktree-storage Allow; (2) settings deny Edit/Write(//Users/yuki/**/.githooks/**) refused Edit of worktree .githooks/pre-push; (3) blastguard exclude.rs PROTECTED_GLOBS **/.githooks/** etc deny regardless of worktree; (4) old guard-maintree-bash refuses .githooks writes from any tree (replaced by observing guard b8390f7a, unmerged). Done: paths strictly inside a worktree storage root (~/.condukt/worktrees, <parent>/.harness-worktrees) are not refused by blastguard protected-path rules for Write/Edit/rm/redirect; main-tree and home-level protection unchanged; settings deny narrowed (user applies)."
-created_at = 1791033843
-updated_at = 1791033843
-weight = 0.0
-issue_number = 1223
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1223"
-rev = 0
-
-[[task]]
 id = "bf581a6b"
 title = "READDIR_WINDOW=7 で新たに見えた readdir-flatten-swallow 4件（playbook/runbook/session-insights/ship）"
 project = "/Users/yuki/src/harness"
@@ -12257,6 +12090,65 @@ updated_at = 1791048119
 weight = 0.0
 issue_number = 1050
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1050"
+rev = 0
+
+[[task]]
+id = "7fbaa1ae"
+title = "prune: test_prune_env_pin test_3 RED — registry entry without parseable lastUpdated holds dir as undetermined"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04 session 33de4c25: scripts/test_prune_env_pin.py (committed 18fa478a on branch tests-18fe626f, NOT in main) gives 1 failed 3 passed. test_3_guard_unreferenced_dir_is_pruned: KEPT backlog/0.3.21: undetermined: session-age hold ... registry entry backlog@yukineko has no parseable lastUpdated (None). Decide: fixture defect (registry fixture lacks lastUpdated) vs product defect. Merge was backed out of session-33de4c25."
+created_at = 1791048452
+updated_at = 1791048452
+weight = 0.0
+issue_number = 1289
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1289"
+rev = 0
+
+[[task]]
+id = "b74955f4"
+title = "propguard inject mode records EVERY derived property as a fleet violation, contradicting the CA-propguard-06 comment in the same function"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+Reported by an adversarial audit 2026-09-11 at HEAD 2abf8dea. Verdict CONFIRMED by the auditor with verbatim quotes; I have NOT independently re-verified the overwatch write path, so treat the consumption half as UNVERIFIED until someone traces it.
+
+crates/propguard/src/gate.rs:442-445 verbatim:
+
+    fn unsatisfied_prop_ids(props: &[Property], findings: Option<&str>) -> Vec<&static str> {
+        let Some(out) = findings else {
+            return props.iter().map(|p| p.id).collect();
+        };
+
+The early return fires whenever findings is None. Inject mode constructs exactly that: gate.rs around :273-279 builds Determination::Known(Verified { satisfied: 0, findings: None }). So in inject mode ALL 3-5 derived properties are returned as violated and appended as ViolationSource::Propguard events (main.rs around :306 and :485-497), read later by overwatch violations / overwatch review-queue.
+
+Nothing evaluated any of them. The same function guards against precisely this, but only inside the Some(out) branch. gate.rs:451-457 verbatim:
+
+    // None means the checker emitted NO verdict line for it - it was
+    // never evaluated, which is NOT the same as checked-and-failed. Only
+    // a property that was checked and FAILED (Some(false)) is a fleet
+    // violation; a never-evaluated (unchecked) property must not be
+    // reported violated / pollute the fleet-correlation store, per
+    // property (CA-propguard-06).
+
+and main.rs:446 verbatim: "Record a fleet-level overwatch violation for each failing PROP-* property on a Block decision." In inject mode none of them is failing; none was checked.
+
+The sibling path gets this right - decide_diff_failed doc (gate.rs around :649-652) says NO per-property violation is attributed because nothing was checked. Same defect class as the satisfied=0 headline that b61d68b4 fixed, surviving on the durable-record surface instead of the message surface.
+
+Currently latent in THIS repo: there is no propguard.toml and no criteria file at the repo root, so derive.rs source_criteria returns None and gate.rs allows at the no-criteria arm before any of this runs. It is not latent for any project that configures propguard, and inject is the mode the shipped starter template writes.
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/propguard/src/gate.rs (rev e70d48dd)"""
+created_at = 1789064369
+updated_at = 1790983255
+weight = 0.0
+issue_number = 510
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/510"
 rev = 0
 
 [[task]]

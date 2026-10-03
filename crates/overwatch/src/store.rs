@@ -7,7 +7,7 @@ use crate::disposition::Disposition;
 use crate::event::LifecycleEvent;
 use crate::lock::LeaseLock;
 use crate::merge_conflict::{MergeConflictEntry, MergeConflictResolution};
-use crate::review_finding::ReviewFinding;
+use crate::review_finding::{AuditVerdict, ReviewFinding};
 use crate::rollback::RollbackEvent;
 use crate::violation::ViolationEvent;
 use anyhow::Result;
@@ -605,14 +605,25 @@ pub fn append_review_finding(cwd: &Path, finding: &ReviewFinding) -> Result<()> 
     Ok(())
 }
 
-/// Record one AI/adversarial review finding into the overwatch-readable store,
-/// stamping the current timestamp. Thin library entry point so an external
-/// crate (e.g. condukt's gate-exec escalate path — the first real producer of
-/// this stream) can record a finding by value without hand-constructing a
-/// [`ReviewFinding`] or reaching into private fields. Mirrors
-/// [`append_review_finding`]; callers that need fail-soft semantics (a
-/// recording failure must never change their own return value) should ignore
-/// the `Err` the way `append_review_finding` callers already do.
+/// Record one RAW gate signal into the overwatch-readable review-findings
+/// store, stamping the current timestamp. Thin library entry point so an
+/// external crate (condukt's gate-exec escalate path, specguard's structural
+/// drift / shard flags, propguard's outage signal) can record a finding by
+/// value without hand-constructing a [`ReviewFinding`] or reaching into
+/// private fields. Mirrors [`append_review_finding`]; callers that need
+/// fail-soft semantics (a recording failure must never change their own
+/// return value) should ignore the `Err` the way `append_review_finding`
+/// callers already do.
+///
+/// **Verdict**: the row is stored as [`AuditVerdict::Unverified`] (backlog
+/// 7f07228e). This entry point takes no verdict, and none of its producers
+/// runs an adversarial verifier — they record an observation that still needs
+/// one. Stamping it `Confirmed` (what [`ReviewFinding::new`] does) presented an
+/// unverified signal as established work, so `review-queue --to-backlog`
+/// bridged it as actionable. As `Unverified` the row stays visible on the
+/// review surface (rendered with an `UNVERIFIED` marker) and is NOT bridged.
+/// A verifier that has established a finding records it through the
+/// `record-finding` CLI, which takes and adjudicates an explicit verdict.
 #[allow(clippy::too_many_arguments)]
 pub fn record_finding(
     cwd: &Path,
@@ -631,7 +642,8 @@ pub fn record_finding(
         file,
         rationale,
         now(),
-    );
+    )
+    .with_verdict(AuditVerdict::Unverified);
     append_review_finding(cwd, &finding)
 }
 

@@ -14,7 +14,6 @@
 use overwatch::review_finding::AuditVerdict;
 
 #[test]
-#[ignore = "backlog 7f07228e: open defect, remove ignore when fixed"]
 fn library_record_finding_does_not_stamp_an_unverified_gate_signal_as_confirmed() {
     let home = tempfile::tempdir().unwrap();
     let project = tempfile::tempdir().unwrap();

@@ -34856,3 +34856,281 @@ scripts/test_verifier_d470a478.py .....                                  [100%]
 rev = "7e05ab454eb28204d05471f3402b859d8bbfcec6"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "486e83ca"
+title = "SessionStart の requeue が live な lease を持つ task の claim を解放する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flow",
+    "backlog",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+観測 2026-09-13 17:22:46 (測定点 16f16879)。session a6738634 の SessionStart で backlog の session-start hook が .backlog/tasks.toml の 4 件を一括で claimed から pending へ戻した (updated_at が 4 件とも 1789287766 の単一書き込み)。うち 3 件 f7b018f8 / e73a1fd5 / 15eb3f94 は overwatch status 上の lease が live で heartbeat 58 秒前だった (前セッション 79d79a35 の worker が実際に稼働中)。つまり requeue は claim 保持者の生存を一切見ずに解放している。損害: 解放された task を別セッションが claim でき、同一ブランチに 2 本目の worker が積まれる (既知の二重 dispatch)。なお同時に解放された 6267bfbe は lease が無く、そちらの解放は正しい。読みは 2 つ: (a) requeue は「前セッションは死んだ」前提の設計で、生存確認の欠落がバグ。(b) 意図的に無条件 requeue で、排他は condukt state claim-task の最終ガードに委ねている。見分け方: claim-task が live lease を持つ task に対して他セッションの claim を実際に弾くかを観測する。弾かないなら (a) で確定。完了条件: live lease を持つ task が requeue されないことをテストで観測し、lease の生存が観測できない場合は解放しない (制限側に倒す) こと。是正済みの現物: この finding の commit で 3 件を claimed へ戻してある。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Done criterion: 'live lease を持つ task が requeue されない ... lease の生存が観測できない場合は解放しない'. At HEAD SessionStart no longer touches claims, but the claim itself now silently stops excluding after CLAIM_STALE_SE; test crates/backlog/src/store.rs (rev e70d48dd)"""
+created_at = 1789287880
+updated_at = 1791051136
+weight = 0.0
+issue_number = 580
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/580"
+issue_closed_at = 1791051138
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test verifier_486e83ca"
+exit = 0
+passed = 4
+rev = "0234e448868d4d34567a7b1e845cb0d998e71079"
+observed_at = 1791051110
+output_digest = "sha256:bc65315f5b0c674636830612b67aa5ac7902672e531d2dc9464a1b59e98ff014"
+excerpt = """
+
+running 4 tests
+test verifier_empty_session_id_cannot_keep_dead_lease_alive ... ok
+test verifier_live_holder_keeps_lease_past_window ... ok
+test verifier_malformed_heartbeat_refused_by_every_reader ... ok
+test verifier_dead_holder_is_reclaimable ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.65s
+
+   Compiling harness-core v0.2.45 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/harness-core)
+   Compiling backlog v0.3.34 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.41s
+     Running tests/verifier_486e83ca.rs (target/debug/deps/verifier_486e83ca-80aad64bf831cd5d)
+"""
+
+[task.closure.red]
+rev = "7e05ab454eb28204d05471f3402b859d8bbfcec6"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "55f55932"
+title = "condukt state claim-task が空の hashkey を受理して成功を返し、空文字キーの claim を記録する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+測定点 main d0c4adc1 / 2026-09-13 17:29 JST. 観測: claim-task を --hashkey の値が空文字のまま呼んだところ exit 0 で成功を返し、/Users/yuki/.condukt/state/session-79d79a35-4f9872cd/claims.json の task_claims に空文字をキーとするエントリが書かれた。逐語: task_claims の唯一のキーが空文字で、値は run_id flow-79d79a35-3490-4bbd-9bb4-d501e749e65d、title は f7b018f8 11a1e1bfe1878e1a、claimed_at 1789288129。呼び出し側 (当セッション) の zsh では引用符なしパラメータの単語分割が既定で起きないため title に 2 語が入り hashkey が空になった。これは呼び出し側のミスだが、ゲート側の問題はそこではない。claim-task の契約は exit 0 を claim 成功として下流に読ませることであり、空キーで成功を返すと、呼び出し側は claim を取ったと信じて実行に進む一方、実 hashkey に対する is-claimed は false のままになる。CLAUDE.md 第3節の空集合を clean に写さないという不変条件に反する。期待挙動: 空または空白のみの hashkey は不正入力として非 0 で拒否する。読み 1 (実在の欠陥): 入力検証が無い。読み 2 (意図どおり): 空 hashkey は任意の opaque 文字列として正当。見分け方: crates/condukt/src/claim.rs の claim_tasks に空文字を弾く経路があるかを読む。無ければ読み 1。RED の作り方: 空 hashkey で claim-task を呼び、exit 0 かつ claims.json に空文字キーが増えることを先に観測してから修正する
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/condukt/tests/backlog_audit_s01.rs (rev e70d48dd)"""
+created_at = 1789289865
+updated_at = 1791051828
+weight = 0.0
+issue_number = 588
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/588"
+issue_closed_at = 1791051830
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test verifier_55f55932"
+exit = 0
+passed = 6
+rev = "63cc064eb2eaf8ad76f0dd63718ee722cc525351"
+observed_at = 1791051803
+output_digest = "sha256:e3170f5b9751bc27553a9437ba992f71c61fb9f11e884adbb42a4c551280322f"
+excerpt = """
+
+running 6 tests
+test claim_task_blank_key_mixed_with_real_key_claims_neither ... ok
+test release_task_with_no_hashkey_is_a_usage_error ... ok
+test release_task_blank_key_does_not_release_or_touch_a_real_claim ... ok
+test nonblank_keys_still_round_trip_verbatim ... ok
+test claim_task_blank_keys_exit_2_and_write_nothing ... ok
+test is_claimed_blank_key_exits_2_no_stdout_no_registry ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.50s
+
+   Compiling condukt v0.7.216 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.81s
+     Running tests/verifier_55f55932.rs (target/debug/deps/verifier_55f55932-c323dd9e28a7e5bf)
+"""
+
+[task.closure.red]
+rev = "bffb0f8b0d92443588822d0bf46523d8c6be2cde"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "057fa13c"
+title = "condukt の diffrisk_record every_invocation_is_journaled テストが並列実行で 2/4 の確率で落ちる (共有 ledger の分離漏れ)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p1",
+    "flaky-test",
+    "condukt",
+]
+touched_files = []
+status = "done"
+notes = """
+測定点 main 874d6d47 / 2026-09-13. サイクル5 の b637936f 実装中に検出。crates/condukt/src/diffrisk_record.rs:540 の assertion left == right one record per invocation が cargo test -p condukt のフル実行で落ちる。実測: 変更を stash して branch point 874d6d47 の素の状態で 4 回連続実行し FAILED / FAILED / ok / ok。単体 (--test 名指し・単一スレッド) では通る。したがって当該変更とは無関係の既存 flake であり、共有 ledger か固定パスの fixture が並列テスト間で干渉している疑いが濃い。memory の killed task leaves orphan loop と同型 (固定 /tmp fixture の相互破壊) の可能性。完了条件: ledger のパスをテストごとに分離し 10 回連続で green を観測すること。注意: この flake があるかぎり cargo test -p condukt のフル green は判定不能であり、他タスクの検証結果を汚染する。
+
+[triage 2026-09-29 @b325a169] p2->p1: diffrisk_record flake makes full cargo test -p condukt green unreliable; condukt verifies other tasks
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Shares the failure with e494a8a3 (RED pin --include-ignored -> FAILED, body uses Config::load()), but 057fa13c carries an extra done criterion ('10 consecutive greens') absent from e494a8a3's notes ->; test - (rev e70d48dd)"""
+created_at = 1789291716
+updated_at = 1791052307
+weight = 0.0
+issue_number = 599
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/599"
+issue_closed_at = 1791052310
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --bin condukt -- --exact --include-ignored diffrisk_record::backlog_e494a8a3::journaling_test_does_not_write_into_the_home_state_root"
+exit = 0
+passed = 1
+rev = "8c159fd6d9dabada6d3210fd344e3bfb7e5e9777"
+observed_at = 1791052288
+output_digest = "sha256:6c2d1b88f6175c5a4b2d76b5e52dda80fbee031753c50a5d627def09348ac6aa"
+excerpt = """
+
+running 1 test
+test diffrisk_record::backlog_e494a8a3::journaling_test_does_not_write_into_the_home_state_root ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 887 filtered out; finished in 0.07s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running unittests src/main.rs (target/debug/deps/condukt-ae479190a6341130)
+"""
+
+[task.closure.red]
+rev = "f51e281e939680fb09866da6a6ff4a0acafc47f0"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "51595c41"
+title = "condukt: worktree の作成基点(current HEAD)とマージ先(default_branch)の非対称を解消する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+iro 0bb8dcfd で実測・判定済み。worktree.rs:726-729 は start-point 無しの 'git worktree add -b' ＝着手時の HEAD から切る。main.rs:3174 の merge は常に cfg.default_branch へ。この2つが食い違うと、feature ブランチ上で走らせた run が **feature の履歴ごと default_branch へ統合する**（2026-09-13 run-20260913-130340-73812 で iro の main が実機A/B未の広角補正を抱えたまま進んだ）。SKILL.md/README.md はこの組み合わせに一切触れていない（'feature ブランチ'/'start-point'/'base branch'/'基点' で 0 ヒット）。
+
+取り得る決着は3つで、どれを選ぶかが本チケットの判断:
+(a) 作成側を default_branch 基点に揃える（worktree add -b <branch> <default_branch>）— マージ先と一致するが、feature ブランチ上のコードに依存するタスクが土台を失う。
+(b) マージ先を『着手時の HEAD のブランチ』にする — create 時に基点 ref を記録する状態追加が要る。意図（元の場所へ戻す）を保つのはこちら。
+(c) 作成時の基点 sha を記録し、**merge 時にそれが default_branch の祖先でなければ止めて報告する**（統合はせず人へ返す）。ハッピーパスを変えずに『黙って main が動く』だけを潰す最小案。
+
+いずれにせよ SKILL.md Phase 7 に『どのブランチへマージされるか』を明記すること。注意: 現在 harness の配備バイナリは 35 件が harness-core 0.2.17 のまま（7357bc96）なので、source を直しても rollout するまで挙動は変わらない。
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/condukt/tests/backlog_51595c41.rs (rev 596108b9): Create base (HEAD) vs merge target (default_branch) asymmetry; test is GREEN under any of fixes a/b/c."""
+created_at = 1789291438
+updated_at = 1791053097
+weight = 0.0
+issue_number = 596
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/596"
+issue_closed_at = 1791053099
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test verifier_51595c41"
+exit = 0
+passed = 5
+rev = "c8c654241238c3dbef3bffbd75fc1431ed2b60ea"
+observed_at = 1791053067
+output_digest = "sha256:68abda84d93764f679bc305099d6d423939bb6e4f42570d71fdf4e5f0fef3725"
+excerpt = """
+
+running 5 tests
+test ancestry_probe_error_exit_is_refused_and_main_unchanged ... ok
+test resolve_merge_refuses_base_off_main_and_main_unchanged ... ok
+test record_pointing_at_a_blob_is_refused_and_main_unchanged ... ok
+test hand_cut_branch_without_record_is_refused_and_main_unchanged ... ok
+test create_from_main_then_main_advances_still_merges ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.20s
+
+   Compiling condukt v0.7.218 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.52s
+     Running tests/verifier_51595c41.rs (target/debug/deps/verifier_51595c41-ac585c3b662d652f)
+"""
+
+[task.closure.red]
+rev = "387cb95c5c9d2dc619abdbc9640a738a33c6b167"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "43393ce2"
+title = "condukt の run-state も worktree ごとに別ストアへ分裂している (claims だけでなく project_dir 全体)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p1",
+    "fail-open",
+    "condukt",
+]
+touched_files = []
+status = "done"
+notes = """
+測定点 main 874d6d47 / 2026-09-13. d83b0e8f (claim registry の worktree 分裂) を調査中に発見した同型の別件。crates/condukt/src/state.rs:331 の project_dir も cfg.state_dir.join(project_key(repo_root(cwd))) であり、claim registry と同じく linked worktree では repo_root が worktree 自身を返すため別キーになる。実測: /Users/yuki/.condukt/state/ 配下に session- で始まるキーのディレクトリが多数あり、そのうち session-2444be10-d7db0410 は run-20260913-133807-77531.json と .decomposition.json と .journal.jsonl と .checkpoints.json を、session-b57a58c3-3fcd5268 は run-20260811-230435-19389 一式を、session-b9a78b46-e56b248f は run-20260805-224954-26962 ほか 2 run を保持している。つまり worktree を cwd にして作られた run は main から見えない。読み 1 (実在の欠陥): run-state も main worktree root で addressing すべきで、condukt status や state list が cwd 次第で別集合を返すのは二重着手と孤児 run の温床。読み 2 (意図どおり): run は作った tree に属するローカル状態であり分裂は無害。見分け方: condukt state list を main の cwd と /Users/yuki/src/.harness-worktrees/session-2444be10 の cwd の両方で実行し run-20260913-133807-77531 が前者に出るかを見る。両方に出れば読み 2、片方だけなら読み 1。注意: d83b0e8f では claim 経路のみを局所修正し project_dir は意図的に触っていない。repo_root を全体で変えると既存の run-state が孤児化するため。関連 d83b0e8f
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Still open: RED pin --include-ignored backlog_43393ce2_4708069b -> FAILED (run created in worktree listed from main: got ""; worktree control listed it). Not a duplicate of 4708069b: harness-core/src/; test crates/condukt/tests/backlog_audit_s01.rs (rev e70d48dd)"""
+created_at = 1789290713
+updated_at = 1791053122
+weight = 0.0
+issue_number = 592
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/592"
+issue_closed_at = 1791053124
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test verifier_43393ce2"
+exit = 0
+passed = 5
+rev = "c8c654241238c3dbef3bffbd75fc1431ed2b60ea"
+observed_at = 1791053103
+output_digest = "sha256:b0d71ba4ce8b605685806af8bc32dac5fba45d1a80fc55b29005e35f0294c473"
+excerpt = """
+
+running 5 tests
+test verifier_garbage_gitfile_is_nonzero_for_list_and_show ... ok
+test verifier_main_tree_run_is_shown_and_listed_from_worktree ... ok
+test verifier_unreadable_legacy_dir_is_an_error_not_a_canonical_fork ... ok
+test verifier_worktree_run_set_from_main_tree_has_one_canonical_copy ... ok
+test verifier_legacy_run_write_back_never_forks ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.79s
+
+   Compiling condukt v0.7.218 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running tests/verifier_43393ce2.rs (target/debug/deps/verifier_43393ce2-913066a6de4f9bdc)
+"""
+
+[task.closure.red]
+rev = "bffb0f8b0d92443588822d0bf46523d8c6be2cde"
+exit = 101
+kind = "behavioural"

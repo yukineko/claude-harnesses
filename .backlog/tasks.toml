@@ -2896,17 +2896,19 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 実測 2026-09-13、測定点 36e3f960。2d3cbda2 (死んだセッションの worktree/branch を回収する GC が無い) を再測した結果、literal な主張は HEAD では偽だったので done にした。その実測と、残った本当の gap を記録する。/ 存在する側 (逐語): crates/condukt/src/main.rs:684 が delete the ones the reconcile gate says are safe (--remove) と書き、:686 が Deletion is reachable ONLY through wt_reconcile::is_removable と書く。判定側は crates/condukt/src/wt_reconcile.rs の module doc が conjunction of three positively observed terms (:58) / window elapsed, and no Claude session transcript bound to its path at all (:60) / Not merely a transcript that stopped growing that was the first cut (:61) と 3条件連言を明記し、Stalled therefore resolves to Undetermined occupancy, i.e. keep (:42) と unreadable transcript store is not an absence of sessions (:66) で判定不能を保全側へ倒している。つまり GC は存在し、しかも向きが正しい (削除側へ倒れない)。/ 存在しない側 = 本チケットの中身: 自動駆動する経路が無い。grep -rn reconcile crates/condukt/hooks/ crates/condukt/skills/ .githooks/ は worktree reconcile --remove の呼び出しを 1 件も返さない (SKILL.md がヒットするのは condukt state reconcile という別コマンドで、task 状態の昇格であって worktree の回収ではない)。したがって回収は人間が手で打つまで起きない。/ なぜこれが問題か: CLAUDE.md 第8節が全作業の worktree 化を絶対義務にした以上、worktree は毎セッション生成される。回収が手動なら残渣は単調増加する。元チケットの副題 worktree 義務化の前提として必須 はこの点を指していた。/ 完了条件: 死んだセッションの worktree が人手を介さずに回収される。ただし GC は向きが反転するゲートなので、自動化しても判定不能が削除へ倒れないこと (is_removable の現在の向きを壊さないこと) を対照として同時に観測すること。起動点の候補は SessionStart / SessionEnd / pre-commit のいずれかだが、どれが正しいかは測ってから決める (SessionStart なら自セッションの worktree を消しかねない順序問題がある)。
 
 [backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_7100bb4e.py (rev 596108b9): Dead-session worktree GC is never driven automatically."""
 created_at = 1789279404
-updated_at = 1790983155
+updated_at = 1791052009
 weight = 0.0
 issue_number = 570
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/570"
-rev = 0
+rev = 1
+ruling_kind = "judgment"
+rationale = "Parked by the p1 loop (session 64554c4d, 2026-10-04) without implementation: the fix wires an automatic worktree DELETION path (condukt worktree reconcile --remove) into a hook, and the ticket itself says the trigger point (SessionStart / SessionEnd / pre-commit) must be chosen after measurement because SessionStart can delete the session's own worktree. Needs a human ruling: (1) which trigger, (2) whether automatic deletion is acceptable at all versus a reported list the human runs, (3) any paths that must never be reaped (e.g. pgv-target). Repro: scripts/test_backlog_7100bb4e.py."
 
 [[task]]
 id = "73b167d3"
@@ -2944,49 +2946,6 @@ updated_at = 1790983338
 weight = 0.0
 issue_number = 576
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/576"
-rev = 0
-
-[[task]]
-id = "486e83ca"
-title = "SessionStart の requeue が live な lease を持つ task の claim を解放する"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "flow",
-    "backlog",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-観測 2026-09-13 17:22:46 (測定点 16f16879)。session a6738634 の SessionStart で backlog の session-start hook が .backlog/tasks.toml の 4 件を一括で claimed から pending へ戻した (updated_at が 4 件とも 1789287766 の単一書き込み)。うち 3 件 f7b018f8 / e73a1fd5 / 15eb3f94 は overwatch status 上の lease が live で heartbeat 58 秒前だった (前セッション 79d79a35 の worker が実際に稼働中)。つまり requeue は claim 保持者の生存を一切見ずに解放している。損害: 解放された task を別セッションが claim でき、同一ブランチに 2 本目の worker が積まれる (既知の二重 dispatch)。なお同時に解放された 6267bfbe は lease が無く、そちらの解放は正しい。読みは 2 つ: (a) requeue は「前セッションは死んだ」前提の設計で、生存確認の欠落がバグ。(b) 意図的に無条件 requeue で、排他は condukt state claim-task の最終ガードに委ねている。見分け方: claim-task が live lease を持つ task に対して他セッションの claim を実際に弾くかを観測する。弾かないなら (a) で確定。完了条件: live lease を持つ task が requeue されないことをテストで観測し、lease の生存が観測できない場合は解放しない (制限側に倒す) こと。是正済みの現物: この finding の commit で 3 件を claimed へ戻してある。
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Done criterion: 'live lease を持つ task が requeue されない ... lease の生存が観測できない場合は解放しない'. At HEAD SessionStart no longer touches claims, but the claim itself now silently stops excluding after CLAIM_STALE_SE; test crates/backlog/src/store.rs (rev e70d48dd)"""
-created_at = 1789287880
-updated_at = 1790983257
-weight = 0.0
-issue_number = 580
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/580"
-rev = 0
-
-[[task]]
-id = "55f55932"
-title = "condukt state claim-task が空の hashkey を受理して成功を返し、空文字キーの claim を記録する"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-測定点 main d0c4adc1 / 2026-09-13 17:29 JST. 観測: claim-task を --hashkey の値が空文字のまま呼んだところ exit 0 で成功を返し、/Users/yuki/.condukt/state/session-79d79a35-4f9872cd/claims.json の task_claims に空文字をキーとするエントリが書かれた。逐語: task_claims の唯一のキーが空文字で、値は run_id flow-79d79a35-3490-4bbd-9bb4-d501e749e65d、title は f7b018f8 11a1e1bfe1878e1a、claimed_at 1789288129。呼び出し側 (当セッション) の zsh では引用符なしパラメータの単語分割が既定で起きないため title に 2 語が入り hashkey が空になった。これは呼び出し側のミスだが、ゲート側の問題はそこではない。claim-task の契約は exit 0 を claim 成功として下流に読ませることであり、空キーで成功を返すと、呼び出し側は claim を取ったと信じて実行に進む一方、実 hashkey に対する is-claimed は false のままになる。CLAUDE.md 第3節の空集合を clean に写さないという不変条件に反する。期待挙動: 空または空白のみの hashkey は不正入力として非 0 で拒否する。読み 1 (実在の欠陥): 入力検証が無い。読み 2 (意図どおり): 空 hashkey は任意の opaque 文字列として正当。見分け方: crates/condukt/src/claim.rs の claim_tasks に空文字を弾く経路があるかを読む。無ければ読み 1。RED の作り方: 空 hashkey で claim-task を呼び、exit 0 かつ claims.json に空文字キーが増えることを先に観測してから修正する
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/condukt/tests/backlog_audit_s01.rs (rev e70d48dd)"""
-created_at = 1789289865
-updated_at = 1790983158
-weight = 0.0
-issue_number = 588
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/588"
 rev = 0
 
 [[task]]
@@ -3046,54 +3005,6 @@ updated_at = 1790983293
 weight = 0.0
 issue_number = 574
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/574"
-rev = 0
-
-[[task]]
-id = "057fa13c"
-title = "condukt の diffrisk_record every_invocation_is_journaled テストが並列実行で 2/4 の確率で落ちる (共有 ledger の分離漏れ)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p1",
-    "flaky-test",
-    "condukt",
-]
-touched_files = []
-status = "pending"
-notes = """
-測定点 main 874d6d47 / 2026-09-13. サイクル5 の b637936f 実装中に検出。crates/condukt/src/diffrisk_record.rs:540 の assertion left == right one record per invocation が cargo test -p condukt のフル実行で落ちる。実測: 変更を stash して branch point 874d6d47 の素の状態で 4 回連続実行し FAILED / FAILED / ok / ok。単体 (--test 名指し・単一スレッド) では通る。したがって当該変更とは無関係の既存 flake であり、共有 ledger か固定パスの fixture が並列テスト間で干渉している疑いが濃い。memory の killed task leaves orphan loop と同型 (固定 /tmp fixture の相互破壊) の可能性。完了条件: ledger のパスをテストごとに分離し 10 回連続で green を観測すること。注意: この flake があるかぎり cargo test -p condukt のフル green は判定不能であり、他タスクの検証結果を汚染する。
-
-[triage 2026-09-29 @b325a169] p2->p1: diffrisk_record flake makes full cargo test -p condukt green unreliable; condukt verifies other tasks
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Shares the failure with e494a8a3 (RED pin --include-ignored -> FAILED, body uses Config::load()), but 057fa13c carries an extra done criterion ('10 consecutive greens') absent from e494a8a3's notes ->; test - (rev e70d48dd)"""
-created_at = 1789291716
-updated_at = 1790983144
-weight = 0.0
-issue_number = 599
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/599"
-rev = 0
-
-[[task]]
-id = "43393ce2"
-title = "condukt の run-state も worktree ごとに別ストアへ分裂している (claims だけでなく project_dir 全体)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p1",
-    "fail-open",
-    "condukt",
-]
-touched_files = []
-status = "pending"
-notes = """
-測定点 main 874d6d47 / 2026-09-13. d83b0e8f (claim registry の worktree 分裂) を調査中に発見した同型の別件。crates/condukt/src/state.rs:331 の project_dir も cfg.state_dir.join(project_key(repo_root(cwd))) であり、claim registry と同じく linked worktree では repo_root が worktree 自身を返すため別キーになる。実測: /Users/yuki/.condukt/state/ 配下に session- で始まるキーのディレクトリが多数あり、そのうち session-2444be10-d7db0410 は run-20260913-133807-77531.json と .decomposition.json と .journal.jsonl と .checkpoints.json を、session-b57a58c3-3fcd5268 は run-20260811-230435-19389 一式を、session-b9a78b46-e56b248f は run-20260805-224954-26962 ほか 2 run を保持している。つまり worktree を cwd にして作られた run は main から見えない。読み 1 (実在の欠陥): run-state も main worktree root で addressing すべきで、condukt status や state list が cwd 次第で別集合を返すのは二重着手と孤児 run の温床。読み 2 (意図どおり): run は作った tree に属するローカル状態であり分裂は無害。見分け方: condukt state list を main の cwd と /Users/yuki/src/.harness-worktrees/session-2444be10 の cwd の両方で実行し run-20260913-133807-77531 が前者に出るかを見る。両方に出れば読み 2、片方だけなら読み 1。注意: d83b0e8f では claim 経路のみを局所修正し project_dir は意図的に触っていない。repo_root を全体で変えると既存の run-state が孤児化するため。関連 d83b0e8f
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Still open: RED pin --include-ignored backlog_43393ce2_4708069b -> FAILED (run created in worktree listed from main: got ""; worktree control listed it). Not a duplicate of 4708069b: harness-core/src/; test crates/condukt/tests/backlog_audit_s01.rs (rev e70d48dd)"""
-created_at = 1789290713
-updated_at = 1790983127
-weight = 0.0
-issue_number = 592
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/592"
 rev = 0
 
 [[task]]
@@ -3211,32 +3122,6 @@ updated_at = 1790983182
 weight = 0.0
 issue_number = 589
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/589"
-rev = 0
-
-[[task]]
-id = "51595c41"
-title = "condukt: worktree の作成基点(current HEAD)とマージ先(default_branch)の非対称を解消する"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-iro 0bb8dcfd で実測・判定済み。worktree.rs:726-729 は start-point 無しの 'git worktree add -b' ＝着手時の HEAD から切る。main.rs:3174 の merge は常に cfg.default_branch へ。この2つが食い違うと、feature ブランチ上で走らせた run が **feature の履歴ごと default_branch へ統合する**（2026-09-13 run-20260913-130340-73812 で iro の main が実機A/B未の広角補正を抱えたまま進んだ）。SKILL.md/README.md はこの組み合わせに一切触れていない（'feature ブランチ'/'start-point'/'base branch'/'基点' で 0 ヒット）。
-
-取り得る決着は3つで、どれを選ぶかが本チケットの判断:
-(a) 作成側を default_branch 基点に揃える（worktree add -b <branch> <default_branch>）— マージ先と一致するが、feature ブランチ上のコードに依存するタスクが土台を失う。
-(b) マージ先を『着手時の HEAD のブランチ』にする — create 時に基点 ref を記録する状態追加が要る。意図（元の場所へ戻す）を保つのはこちら。
-(c) 作成時の基点 sha を記録し、**merge 時にそれが default_branch の祖先でなければ止めて報告する**（統合はせず人へ返す）。ハッピーパスを変えずに『黙って main が動く』だけを潰す最小案。
-
-いずれにせよ SKILL.md Phase 7 に『どのブランチへマージされるか』を明記すること。注意: 現在 harness の配備バイナリは 35 件が harness-core 0.2.17 のまま（7357bc96）なので、source を直しても rollout するまで挙動は変わらない。
-
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/condukt/tests/backlog_51595c41.rs (rev 596108b9): Create base (HEAD) vs merge target (default_branch) asymmetry; test is GREEN under any of fixes a/b/c."""
-created_at = 1789291438
-updated_at = 1790983160
-weight = 0.0
-issue_number = 596
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/596"
 rev = 0
 
 [[task]]
@@ -12710,4 +12595,377 @@ updated_at = 1791050109
 weight = 0.0
 issue_number = 1301
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1301"
+rev = 0
+
+[[task]]
+id = "e7ee1b04"
+title = "condukt is-claimed/claim-task keep task hashkeys with leading or trailing spaces as distinct keys (' abc' != 'abc'); check whether any producer can emit such a key"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Side finding of the 55f55932 worker. Also docs/specs/condukt.md:38 says is-claimed uses exit codes as its contract without listing them (0 claimed / 1 not claimed / 2 invalid input / 3 undetermined after 55f55932)."
+created_at = 1791050231
+updated_at = 1791050231
+weight = 0.0
+issue_number = 1302
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1302"
+rev = 0
+
+[[task]]
+id = "545642f0"
+title = "flow SKILL treats a failed backlog driver heartbeat as fail-soft, so since 486e83ca an unrefreshed claim lease silently lapses back to age-only expiry while the loop continues"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Verifier side finding on 486e83ca (merged ed90f694). crates/flow/skills/flow/SKILL.md:647 keeps looping on heartbeat failure; the heartbeat now exits non-zero when leases could not be refreshed, and that signal is ignored by its main caller. Related doc item c892afa2."
+created_at = 1791051147
+updated_at = 1791051147
+weight = 0.0
+issue_number = 1303
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1303"
+rev = 0
+
+[[task]]
+id = "4411b4e4"
+title = "backlog claim liveness is per session: a crashed subagent sharing the parent CLAUDE_CODE_SESSION_ID keeps its lease as long as the parent heartbeats; a future heartbeat_at keeps a lease live until real time catches up (no test)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Verifier side findings on 486e83ca. Also: crates/backlog/src/lib.rs (empty) fails cargo fmt --check since 0b054696."
+created_at = 1791051148
+updated_at = 1791051148
+weight = 0.0
+issue_number = 1304
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1304"
+rev = 0
+
+[[task]]
+id = "6051ebd4"
+title = "condukt SKILL step 9 treats a failed claim-task as fail-soft (continue unclaimed); claim::claim_tasks/release_tasks library functions do not reject blank keys themselves, only the CLI parser does"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Verifier side findings on 55f55932. Also many main.rs line citations in docs/audit-schemaguard-verdict-paths.md and .compass/charter.md:15 were already stale at base."
+created_at = 1791051150
+updated_at = 1791051150
+weight = 0.0
+issue_number = 1305
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1305"
+rev = 0
+
+[[task]]
+id = "0805b07a"
+title = "condukt state set --status running skips recording --worktree when the task's files are claimed by another live run, so the later verified transition runs the F->P oracle in the wrong cwd and refuses; check-oracle doc says no tdd on PATH degrades to fallback:true but it returns fallback:false 'exited non-zero'"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04 in the p1 loop: runs run-20261004-024204-44254 (486e83ca) and run-20261004-024816-76469 (55f55932) printed 'task skipped — N file(s) already claimed by a live run' on state set running, leaving worktree=None. state set verified then refused: 'no valid fail-to-pass reproduction oracle (tdd oracle exited non-zero ...)'. With tdd absent from PATH check-oracle printed fallback:false although its help says a missing tdd degrades to fallback:true. Recording the worktree via state set --status done --worktree then verified worked for 55f55932. 486e83ca's worktree was already removed so its run stays done/unverified (backlog item closed with test evidence)."
+created_at = 1791051845
+updated_at = 1791051845
+weight = 0.0
+issue_number = 1306
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1306"
+rev = 0
+
+[[task]]
+id = "dfaa609a"
+title = "condukt escalate.rs and precedent.rs load() turn a corrupt registry file into an empty one (unwrap_or_default): an unparseable escalations.json reads as no open escalations"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Side finding of the 43393ce2 worker (pre-existing). Also load_replan_records/load_run_policy_records map any read error, not only ENOENT, to an empty Vec."
+created_at = 1791051846
+updated_at = 1791051846
+weight = 0.0
+issue_number = 1307
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1307"
+rev = 0
+
+[[task]]
+id = "416d6fbf"
+title = "condukt RunState::save writes <run_id>.json without safe_session while run_path/run_dir sanitise, so an id rewritten by safe_session saves and loads from different paths"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Side finding of the 43393ce2 worker (pre-existing)."
+created_at = 1791051848
+updated_at = 1791051848
+weight = 0.0
+issue_number = 1308
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1308"
+rev = 0
+
+[[task]]
+id = "4e6a583c"
+title = "condukt legacy per-worktree run-state (pre-43393ce2) is visible only from the checkout that created it; listing from the main tree would need git worktree list enumeration"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Known limit of the 43393ce2 legacy strategy (write back where found, no migration). Also gate-exec AutoExec prints auto_exec even if checkpoint dir resolution fails (unreachable in practice, unpinned by a test)."
+created_at = 1791051851
+updated_at = 1791051851
+weight = 0.0
+issue_number = 1309
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1309"
+rev = 0
+
+[[task]]
+id = "5ed8b8f8"
+title = "condukt marketplace.json description began 'v0.7.211: ...' while its version was 0.7.212; docs/gate-taxonomy.md:246 cites a quote absent from scripts/check-fail-open.py:92 (doc-claims exempt)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Side findings of the 51595c41 worker, observed 2026-10-04."
+created_at = 1791051853
+updated_at = 1791051853
+weight = 0.0
+issue_number = 1310
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1310"
+rev = 0
+
+[[task]]
+id = "3ebc42d1"
+title = "condukt run を backlog lease / claim-task 無しで回すセッションがあり、/flow の next --claim が同じ item を配って重複着手する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04: session 6fcd99df run run-20261004-023737-16648 implemented backlog 56eb3f9a, 233f819c, 7100bb4e, 7b6bcfe6 without a backlog lease or condukt claim-task; session 64554c4d's p1 loop received the same items from next --claim, started a 56eb3f9a worker (stopped as duplicate) and parked 7100bb4e for a ruling while 6fcd99df was implementing it. Reading (a): condukt state init / the /condukt skill should take claim-task (and a backlog lease) for each backlog-derived task, so a direct /condukt run is visible to next --claim; (b): intended that only /flow claims, then /condukt must refuse or warn when its tasks carry backlog ids with no lease. Distinguish by reading condukt state init and the /condukt SKILL for claim-task calls."
+created_at = 1791052079
+updated_at = 1791052079
+weight = 0.0
+issue_number = 1311
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1311"
+rev = 0
+
+[[task]]
+id = "8d8846fa"
+title = "After the 56eb3f9a scope tri-state fix, flow SKILL.md (~417: empty scope is outside collision detection) and docs/specs/overwatch.md (54-60, 91: summary only scope_overlap/possible_duplicate, names scopes_overlap) describe the old binary behaviour"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Found by the (stopped, duplicate) 56eb3f9a worker of session 64554c4d; the landing fix is session 6fcd99df run-20261004-023737-16648 t1. Check its docs once merged; flow SKILL change needs a flow version bump."
+created_at = 1791052102
+updated_at = 1791052102
+weight = 0.0
+issue_number = 1312
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1312"
+rev = 0
+
+[[task]]
+id = "a13399ac"
+title = "condukt lock::tests::repo_primary_lock_is_one_lock_across_a_repo_and_its_linked_worktree failed 1 of 10 full --bin condukt runs (panic at lock.rs:783, the git fixture helper)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flaky-test",
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04 at session-64554c4d HEAD 8c159fd6 while measuring 057fa13c: 10 sequential runs of cargo test -p condukt --bin condukt; runs 1-9 881 passed/0 failed, run 10 880/1 with this test panicking at crates/condukt/src/lock.rs:783:33 (fixture git() helper: a git command in the fixture exited non-zero). Two condukt verifiers were running cargo test in other worktrees concurrently (machine load). diffrisk_record (057fa13c) passed all 10. Full panic text not captured (script grepped only the test name and panic line)."
+created_at = 1791052321
+updated_at = 1791052321
+weight = 0.0
+issue_number = 1313
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1313"
+rev = 0
+
+[[task]]
+id = "50158d9d"
+title = "condukt worktree merge accepts a conduktBase read from global/system gitconfig, not only the repo-local branch record"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "verifier side finding on 51595c41 (merge 8730b720): the base is read via git config without --local, so a branch.<b>.conduktBase in ~/.gitconfig is honoured as if worktree create had recorded it. Unverified whether reachable in practice; needs a repro test."
+created_at = 1791053141
+updated_at = 1791053141
+weight = 0.0
+issue_number = 1314
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1314"
+rev = 0
+
+[[task]]
+id = "08aad783"
+title = "condukt merge-base-undetermined on git timeout does not name which git call timed out"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "verifier side finding on 51595c41: the timeout path of the conduktBase/merge-base probe surfaces merge-base-undetermined without the diagnostic naming the subprocess, so a human cannot tell what to retry."
+created_at = 1791053143
+updated_at = 1791053143
+weight = 0.0
+issue_number = 1315
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1315"
+rev = 0
+
+[[task]]
+id = "df3c986c"
+title = "condukt worktree merge drops rollback errors with let underscore after a merge-base refusal"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "verifier side finding on 51595c41: on the refusal path the restore of the original branch is done with a discarded Result, so a failed rollback leaves the repo on default_branch silently. Possible fail-open on the cleanup path; needs a repro."
+created_at = 1791053144
+updated_at = 1791053144
+weight = 0.0
+issue_number = 1316
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1316"
+rev = 0
+
+[[task]]
+id = "135af7af"
+title = "condukt merge-base gate does not cover a feature branch merged INTO a task branch after create"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "verifier side finding on 51595c41: the gate checks only the recorded creation base; commits from an off-default feature branch merged into the task branch later still ride onto default_branch. Scope question: is this in the ticket's threat model."
+created_at = 1791053146
+updated_at = 1791053146
+weight = 0.0
+issue_number = 1317
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1317"
+rev = 0
+
+[[task]]
+id = "d87b4305"
+title = "condukt state init in the main tree with a legacy run id shadows the legacy run"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "verifier side finding on 43393ce2 (merge bc90c229): run_dir prefers the canonical dir, so creating a canonical run with the same id as a legacy (session-root-keyed) run hides the legacy one."
+created_at = 1791053147
+updated_at = 1791053147
+weight = 0.0
+issue_number = 1318
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1318"
+rev = 0
+
+[[task]]
+id = "beae70df"
+title = "condukt run_dir: an unreadable legacy state dir blocks creating new runs"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "verifier side finding on 43393ce2: an IO error probing the legacy dir is propagated on the create path too, so a permission problem in an old dir stops all new runs. Fail-closed but over-broad."
+created_at = 1791053148
+updated_at = 1791053148
+weight = 0.0
+issue_number = 1319
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1319"
+rev = 0
+
+[[task]]
+id = "33a8f5fb"
+title = "condukt run-state keying by main worktree root is untested for a symlinked main root"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "verifier side finding on 43393ce2: no test covers a main worktree reached via a symlink, where canonicalisation could split one repo into two state roots."
+created_at = 1791053150
+updated_at = 1791053150
+weight = 0.0
+issue_number = 1320
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1320"
+rev = 0
+
+[[task]]
+id = "1eae7cb9"
+title = "autoflow still keys its state off repo_root rather than the main worktree root"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "verifier side finding on 43393ce2: condukt moved to main_worktree_root but autoflow did not, so the two disagree when invoked from a linked worktree."
+created_at = 1791053152
+updated_at = 1791053152
+weight = 0.0
+issue_number = 1321
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1321"
+rev = 0
+
+[[task]]
+id = "d5efedb7"
+title = "condukt state show from the main tree cannot see runs created from a session worktree before 0.7.217"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "observed 2026-10-04 after rolling out 0.7.218: state show --run run-20261004-025611-67375 from /Users/yuki/src/harness fails with no run at .condukt/state/harness-e77d23c7/...; the same command from the session worktree succeeds. Legacy fallback only resolves from the tree that created the run."
+created_at = 1791053154
+updated_at = 1791053154
+weight = 0.0
+issue_number = 1322
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1322"
 rev = 0

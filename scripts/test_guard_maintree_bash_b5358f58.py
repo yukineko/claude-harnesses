@@ -250,6 +250,30 @@ class DestinationOnly(unittest.TestCase):
         self._expect([f"cp {W}/f.txt {W}/g.txt -v"], 2, cwds=(self.f.main,))
         self._expect([f"cp {W}/f.txt {W}/g.txt -v"], 0, cwds=(self.f.wt,))
 
+    def test_posixly_correct_non_permuting_gnu_reading(self):
+        # Under POSIXLY_CORRECT (as a prefix, through env, or inherited from
+        # the session where the command text does not show it) GNU getopt
+        # stops at the first operand: `-t <W>` after it are operands and
+        # `<M>/d` is the destination. Judged for every name, unconditionally.
+        M, W, O = self.M, self.W, self.O
+        cmds = []
+        for prog in ("gcp", "ginstall", "gln -s", "gmv", "cp", "install"):
+            cmds += [
+                f"POSIXLY_CORRECT=1 {prog} {O}/x -t {W} {M}/d",
+                f"env POSIXLY_CORRECT=1 {prog} {O}/x -t {W} {M}/d",
+                f"{prog} {O}/x -t {W} {M}/d",
+                f"{prog} {O}/x --target-directory={W} {M}/d",
+                f"{prog} {O}/x -S .bak {M}/d",
+            ]
+        self._expect(cmds, 2)
+        # no over-refusal: the destination is the worktree in every reading
+        self._expect([
+            f"gcp {M}/f.txt -t {W}",
+            f"gcp {M}/f.txt --target-directory {W}",
+            f"ginstall {M}/f.txt -t {W}",
+            f"gln -s {M}/f.txt -t {W}",
+        ], 0)
+
     def test_write_through_an_existing_symlink_into_main_is_refused(self):
         # The symlink itself is allowed (above); a LATER write through it is
         # judged at its resolved path, which is main.

@@ -151,11 +151,17 @@ changing its spelling; each of these is now followed to the path it writes:
     Options are read per tool (cp/mv/ln: GNU `-S`/`-t` take a value; install:
     GNU `-g -m -o -S -t`, BSD `-B -D -f -g -h -l -M -m -N -o -T`; GNU long
     options that require a value take the next word unless glued with `=`).
-    A `g` name is read as GNU only. A plain name may be the BSD (macOS) or
-    the GNU (gnubin) tool, so it is read BOTH ways and the targets of both
-    are judged: GNU getopt lets options follow operands, BSD getopt makes
-    every word after the first operand an operand (`cp a b -v` copies into
-    `-v`). The BSD reading is dropped when the command uses a target-directory
+    Every name is read as GNU twice and the targets of every reading are
+    judged: with argument permutation (options may follow operands), and
+    without it, as under POSIXLY_CORRECT, where getopt stops at the first
+    operand (`gcp <x> -t <wt> <main>/d` then copies `<x>`, `-t` and `<wt>`
+    into `<main>/d`). The second reading is taken unconditionally, not only
+    when the command text sets POSIXLY_CORRECT, because the variable may be
+    inherited from the session's environment, which this hook cannot see. A
+    plain name may also be the BSD (macOS) tool rather than the GNU
+    (gnubin) one, so it is read a third way, as BSD: getopt makes every word
+    after the first operand an operand (`cp a b -v` copies into `-v`). The
+    BSD reading is dropped when the command uses a target-directory
     option (a `t` in a short bundle, or a `--t…` prefix of target-directory),
     because no BSD cp / mv / ln / install has one and it fails before
     writing;
@@ -1928,9 +1934,11 @@ def _long_name(tool: str, name: str) -> str | None:
     return hits[0] if len(hits) == 1 else None
 
 
-def _dest_reading(tool: str, args: list[str], gnu: bool) -> dict | None:
+def _dest_reading(tool: str, args: list[str], gnu: bool,
+                  permute: bool = True) -> dict | None:
     """One reading of a cp/mv/ln/install argv. GNU getopt permutes (options
-    may follow operands); BSD getopt stops at the first operand. Returns None
+    may follow operands) unless POSIXLY_CORRECT is set (`permute=False`: it
+    stops at the first operand, like BSD getopt). Returns None
     when, under this reading, the command fails before writing (a BSD tool
     handed a target-directory option, which no BSD cp/mv/ln/install has)."""
     ops: list[str] = []
@@ -1947,7 +1955,7 @@ def _dest_reading(tool: str, args: list[str], gnu: bool) -> dict | None:
             ops += args[j:]
             break
         if not a.startswith("-") or a == "-":
-            if gnu:
+            if gnu and permute:
                 ops.append(a)
                 continue
             ops += args[j - 1:]
@@ -2000,9 +2008,10 @@ def _dest_reading(tool: str, args: list[str], gnu: bool) -> dict | None:
 
 def _dest_write_targets(prog: str, args: list[str]) -> list[str]:
     """The operands cp / mv / ln / install (and the g-prefixed GNU names)
-    WRITE, judged under every reading the name can have: a `g` name is GNU
-    only; a plain name may be BSD (macOS) or GNU (Homebrew gnubin), so both
-    readings are taken and their targets united.
+    WRITE, judged under every reading the name can have, their targets
+    united: GNU with argument permutation, GNU without it (POSIXLY_CORRECT,
+    taken always because it may be inherited unseen), and, for a plain name
+    (which may be BSD on macOS rather than Homebrew gnubin's GNU), BSD.
 
       * the destination: the target-directory option's value(s) when given,
         else the LAST operand; with a single operand and no target directory,
@@ -2017,10 +2026,15 @@ def _dest_write_targets(prog: str, args: list[str]) -> list[str]:
         (an unknown or ambiguous GNU long option, or a value option with no
         value), because the destination cannot be placed."""
     tool = prog[1:] if prog.startswith("g") and prog[1:] in _DEST_TOOLS else prog
-    readings = [True] if tool != prog else [True, False]
+    # (gnu, permute). The non-permuting GNU reading is POSIXLY_CORRECT, which
+    # may be inherited from the session's environment without appearing in
+    # the command, so it is taken for every name, unconditionally.
+    readings = [(True, True), (True, False)]
+    if tool == prog:
+        readings.append((False, False))
     out: list[str] = []
-    for gnu in readings:
-        r = _dest_reading(tool, args, gnu)
+    for gnu, permute in readings:
+        r = _dest_reading(tool, args, gnu, permute)
         if r is None:
             continue
         ops, tdirs = r["ops"], r["tdirs"]

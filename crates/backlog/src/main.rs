@@ -1169,11 +1169,14 @@ fn run(cli: Cli) -> Result<()> {
             claim,
             all,
         } => {
-            // `next --claim` is NOT a store write: it records its lease under
-            // ~/.backlog/claims (outside any repo) and never runs the issue
-            // sync (measured by the oracle author), so it stays allowed from
-            // the primary checkout. Do not add a write guard here without a
-            // test showing it writes tasks.toml.
+            // `next --claim` does not write tasks.toml: it records its lease
+            // under ~/.backlog/claims and never runs the issue sync (measured
+            // by the oracle author), so it stays allowed from the primary
+            // checkout. It is NOT side-effect free there: taking the
+            // tasks-file lock creates `.backlog/` (if absent) and a transient
+            // `.backlog/tasks.toml.lock` (store.rs try_acquire_tasks_lock_with),
+            // both untracked. Do not add a write guard here without a test
+            // showing it writes tasks.toml.
             let tasks_path = store_path()?;
             // `next` carries the SAME cwd-derived default project scope as
             // `list` (`default_project_scope`), and for the same two reasons.

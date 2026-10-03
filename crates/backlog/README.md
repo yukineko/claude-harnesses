@@ -61,7 +61,7 @@ ownership-marked) so pending work shows up at every session open.
 nothing written) when the store lies inside the *primary* working tree of a git repo: main's
 tree only receives merges (CLAUDE.md §8), so run them from a linked worktree
 (`git worktree add …`). If git cannot say which kind of checkout this is, the write is
-refused too. Reads (`list`, `next`, `ruling list`, `audit-closures`, `sync` without `--apply`) work anywhere, and `next --claim` writes only an out-of-repo lease (`~/.backlog/claims`), so it is allowed in the primary tree too, and a cwd outside any git
+refused too. Reads (`list`, `next`, `ruling list`, `audit-closures`, `sync` without `--apply`) work anywhere, and `next --claim` is allowed in the primary tree too: its lease goes to `~/.backlog/claims` and it never writes `tasks.toml`, but it does take the tasks-file lock, which creates `.backlog/` (if absent) and a transient `.backlog/tasks.toml.lock` in the cwd's checkout (neither is tracked, so `git status` stays clean), and a cwd outside any git
 repo behaves as before. The SessionStart hook skips its requeue in the primary tree and says so.
 
 ## Standalone (cargo)

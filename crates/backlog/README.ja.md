@@ -48,7 +48,7 @@ backlog はこの失敗モードを潰す。一度キューに積めば、
 `add` / `done` / `fail` / `edit` / `cancel` / `confirm` / `ruling request|approve|withdraw` / `sync --apply` は、store が git リポジトリの **primary（main）作業ツリー**内にある場合
 **拒否**される（非 0 終了・何も書かない）。main の作業ツリーは merge だけを受け取る（CLAUDE.md §8）ので、
 linked worktree（`git worktree add …`）から実行すること。git が checkout の種別を答えられない場合も拒否する。
-読み取り（`list` / `next` / `ruling list` / `audit-closures` / `--apply` なしの `sync`）はどこでも動き、`next --claim` は repo 外のリース（`~/.backlog/claims`）だけを書くので primary でも許可される、git リポジトリ外の cwd は従来どおり。
+読み取り（`list` / `next` / `ruling list` / `audit-closures` / `--apply` なしの `sync`）はどこでも動き、`next --claim` も primary で許可される（リースは `~/.backlog/claims` に書き `tasks.toml` は書かないが、tasks-file ロックを取るため cwd の checkout に `.backlog/`〈無ければ〉と一時的な `.backlog/tasks.toml.lock` を作る。どちらも untracked なので `git status` は clean のまま）、git リポジトリ外の cwd は従来どおり。
 SessionStart フックは primary では requeue をスキップし、その旨を表示する。
 
 ### slash command

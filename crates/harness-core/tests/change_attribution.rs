@@ -95,6 +95,79 @@ use harness_core::verdict::Determination;
 
 // ── fixture helpers ─────────────────────────────────────────────────────────
 
+// -- live-registry fixture (backlog 873a2621, user ruling 2026-10-04 design D) --
+//
+// A session is a peer only if it holds a LIVE entry in condukt's claim registry
+// (HOME/.condukt/state/<project_key(main_worktree_root(dir))>/claims.json).
+// HOME is swapped to a private dir for the guard's lifetime (serialised by a
+// mutex); claims are written under the key of every root given AND of the process
+// cwd, so the fixture holds whichever the implementation keys on.
+static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+struct LiveRegistry {
+    _g: std::sync::MutexGuard<'static, ()>,
+    old_home: Option<std::ffi::OsString>,
+    home: PathBuf,
+}
+
+impl LiveRegistry {
+    fn with(roots: &[&Path], live_sessions: &[&str]) -> LiveRegistry {
+        static N: AtomicU64 = AtomicU64::new(0);
+        let g = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = std::env::temp_dir().join(format!(
+            "hc-liveness-home-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).expect("create the registry HOME");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_secs();
+        let mut body = String::from("{");
+        for (i, s) in live_sessions.iter().enumerate() {
+            if i > 0 {
+                body.push(',');
+            }
+            body.push_str(&format!(
+                r#""/work/claimed-{i}.rs":{{"run_id":"run-{s}","session_id":"{s}","pid":1,"claimed_at":{now},"heartbeat_at":{now}}}"#
+            ));
+        }
+        body.push('}');
+        let mut dirs: Vec<PathBuf> = roots.iter().map(|r| r.to_path_buf()).collect();
+        dirs.push(std::env::current_dir().expect("cwd"));
+        for d in dirs {
+            if let harness_core::verdict::Determination::Known(k) =
+                harness_core::projkey::main_worktree_root(&d)
+            {
+                let dir = home
+                    .join(".condukt/state")
+                    .join(harness_core::projkey::project_key(&k));
+                std::fs::create_dir_all(&dir).expect("create the registry dir");
+                std::fs::write(dir.join("claims.json"), &body).expect("write claims.json");
+            }
+        }
+        let old_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", &home);
+        LiveRegistry {
+            _g: g,
+            old_home,
+            home,
+        }
+    }
+}
+
+impl Drop for LiveRegistry {
+    fn drop(&mut self) {
+        match &self.old_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        let _ = std::fs::remove_dir_all(&self.home);
+    }
+}
+
 /// A private temp directory that removes itself on drop.
 ///
 /// Named with the pid, a per-test tag and a process-wide counter: two threads of
@@ -694,6 +767,9 @@ fn peer_scan_collects_other_sessions_and_never_my_own_session() {
     let tmp = Tmp::new("peer-scan");
     let root = tmp.path().join("repo");
     std::fs::create_dir_all(&root).expect("create repo root");
+    // Re-anchored (user ruling 2026-10-04 design D, backlog 873a2621): a peer is a
+    // fresh transcript AND a live claim-registry entry.
+    let _live = LiveRegistry::with(&[&root], &["bbbbbbbb-1111", "cccccccc-2222"]);
     touch(&root, "src/mine.rs");
     touch(&root, "src/peer_one.rs");
     touch(&root, "src/peer_two.rs");
@@ -791,6 +867,12 @@ fn unparseable_peer_transcript_keeps_files_never_excludes_them() {
     let tmp = Tmp::new("peer-garbage");
     let root = tmp.path().join("repo");
     std::fs::create_dir_all(&root).expect("create repo root");
+    // Re-anchored (design D): every sibling is a LIVE registered peer, so the
+    // unreadable ones are still unreadable-live peers, not merely unregistered.
+    let _live = LiveRegistry::with(
+        &[&root],
+        &["bbbbbbbb-2222", "cccccccc-3333", "dddddddd-4444"],
+    );
     touch(&root, "src/only_garbage_peers_nearby.rs");
     touch(&root, "src/peer_claimed.rs");
 
@@ -955,6 +1037,8 @@ fn end_to_end_keeps_mine_and_unattributed_and_excludes_only_the_peer_file() {
     let tmp = Tmp::new("e2e");
     let root = tmp.path().join("repo");
     std::fs::create_dir_all(&root).expect("create repo root");
+    // Re-anchored (design D): the peer is a fresh transcript + a live registry entry.
+    let _live = LiveRegistry::with(&[&root], &["99999999-0000"]);
     for rel in ["src/edited.rs", "src/peer_edited.rs", "src/nobody_saw.rs"] {
         touch(&root, rel);
     }

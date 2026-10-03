@@ -41,6 +41,79 @@ use harness_core::transcript::peer_edit_footprint_within;
 
 // ── fixture helpers ─────────────────────────────────────────────────────────
 
+// -- live-registry fixture (backlog 873a2621, user ruling 2026-10-04 design D) --
+//
+// A session is a peer only if it holds a LIVE entry in condukt's claim registry
+// (HOME/.condukt/state/<project_key(main_worktree_root(dir))>/claims.json).
+// HOME is swapped to a private dir for the guard's lifetime (serialised by a
+// mutex); claims are written under the key of every root given AND of the process
+// cwd, so the fixture holds whichever the implementation keys on.
+static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+struct LiveRegistry {
+    _g: std::sync::MutexGuard<'static, ()>,
+    old_home: Option<std::ffi::OsString>,
+    home: PathBuf,
+}
+
+impl LiveRegistry {
+    fn with(roots: &[&Path], live_sessions: &[&str]) -> LiveRegistry {
+        static N: AtomicU64 = AtomicU64::new(0);
+        let g = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = std::env::temp_dir().join(format!(
+            "hc-liveness-home-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).expect("create the registry HOME");
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_secs();
+        let mut body = String::from("{");
+        for (i, s) in live_sessions.iter().enumerate() {
+            if i > 0 {
+                body.push(',');
+            }
+            body.push_str(&format!(
+                r#""/work/claimed-{i}.rs":{{"run_id":"run-{s}","session_id":"{s}","pid":1,"claimed_at":{now},"heartbeat_at":{now}}}"#
+            ));
+        }
+        body.push('}');
+        let mut dirs: Vec<PathBuf> = roots.iter().map(|r| r.to_path_buf()).collect();
+        dirs.push(std::env::current_dir().expect("cwd"));
+        for d in dirs {
+            if let harness_core::verdict::Determination::Known(k) =
+                harness_core::projkey::main_worktree_root(&d)
+            {
+                let dir = home
+                    .join(".condukt/state")
+                    .join(harness_core::projkey::project_key(&k));
+                std::fs::create_dir_all(&dir).expect("create the registry dir");
+                std::fs::write(dir.join("claims.json"), &body).expect("write claims.json");
+            }
+        }
+        let old_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", &home);
+        LiveRegistry {
+            _g: g,
+            old_home,
+            home,
+        }
+    }
+}
+
+impl Drop for LiveRegistry {
+    fn drop(&mut self) {
+        match &self.old_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        let _ = std::fs::remove_dir_all(&self.home);
+    }
+}
+
 /// A private temp directory that removes itself on drop. Named with the pid, a
 /// per-test tag and a process-wide counter so that two threads of this binary
 /// and two concurrent `cargo test` processes never share a tree.
@@ -156,6 +229,10 @@ fn a_transcript_older_than_the_window_is_not_a_peer() {
     let projects = tmp.path().join("projects");
     let repo = tmp.path().join("repo");
     let fresh_file = touch(&repo, "fresh.rs");
+    // Re-anchored (user ruling 2026-10-04 design D, backlog 873a2621): peers need a
+    // live registry entry. BOTH sessions are registered so the stale one is still
+    // excluded by the time window alone (this test's property), not by the registry.
+    let _live = LiveRegistry::with(&[&repo], &["peer-fresh", "peer-stale"]);
     let stale_file = touch(&repo, "stale.rs");
 
     transcript(
@@ -207,6 +284,9 @@ fn a_file_only_a_stale_session_claims_stays_in_the_audit_set() {
     let tmp = Tmp::new("endtoend");
     let projects = tmp.path().join("projects");
     let repo = tmp.path().join("repo");
+    // Re-anchored (design D): both peers are registered live; only the 48h-old
+    // transcript distinguishes them, preserving this test's window property.
+    let _live = LiveRegistry::with(&[&repo], &["peer-fresh", "peer-stale"]);
     let fresh_file = touch(&repo, "peer_fresh.rs");
     let stale_file = touch(&repo, "peer_stale.rs");
 
@@ -256,6 +336,8 @@ fn a_file_only_a_stale_session_claims_stays_in_the_audit_set() {
 fn peers_are_only_read_from_a_real_projects_root() {
     let tmp = Tmp::new("root");
     let repo = tmp.path().join("repo");
+    // Re-anchored (design D): "peer" is a live registered session in both layouts.
+    let _live = LiveRegistry::with(&[&repo], &["peer"]);
     let their_file = touch(&repo, "theirs.rs");
     let changed = vec!["theirs.rs".to_string()];
 

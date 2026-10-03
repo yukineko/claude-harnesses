@@ -102,7 +102,17 @@ def _load_doc_claims_engine():
     if spec is None or spec.loader is None:
         raise ImportError(f"could not load spec for {_DOC_CLAIMS_PATH}")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    # Compiled from the SOURCE TEXT, deliberately not via the spec loader's
+    # exec_module: SourceFileLoader reuses a __pycache__ .pyc validated only by
+    # (source mtime at 1 s granularity, size), so a same-second size-preserving
+    # edit (e.g. a reordering mutant) would run stale bytecode -- a false GREEN /
+    # false mutation SURVIVOR, never a false red. Backlog 05726f9f; do not
+    # "simplify" this back. get_source() reads the .py, never the cache;
+    # dont_inherit keeps this file's __future__ flags off the subject.
+    exec(  # noqa: S102
+        compile(spec.loader.get_source(spec.name), spec.origin, "exec", dont_inherit=True),
+        module.__dict__,
+    )
     return module
 
 

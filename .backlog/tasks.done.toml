@@ -34279,3 +34279,99 @@ scripts/test_verifier_a0525604_empty_metadata_real_run.py .              [100%]
 rev = "6acdb6b7716193b8716cdc72604acd4b1940b7cc"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "7f07228e"
+title = "overwatch store::record_finding (library 経路) が verdict を引数に持たず ReviewFinding::new が無条件 Confirmed を刻む — CLI 側を必須化しても 3 producer がここを通る"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-09-13、測定点 f667897d の worktree (backlog eda212a0 の作業中に発見)。
+
+eda212a0 は CLI (`overwatch record-finding --verdict`) の省略時 confirmed 既定を廃止したが、
+**同じ欠陥が library 経路に残る**。
+
+逐語 crates/overwatch/src/review_finding.rs:155-174:
+    pub fn new(
+        finding_id: String, source: String, severity: Option<String>,
+        summary: String, file: Option<String>, rationale: Option<String>, ts: i64,
+    ) -> Self {
+        Self { ..., verdict: AuditVerdict::Confirmed, ts }
+    }
+
+逐語 crates/overwatch/src/store.rs:514-532 — `pub fn record_finding(...)` の引数に
+**verdict が無い**。`ReviewFinding::new(...)` をそのまま `append_review_finding` する
+(`.with_verdict(..)` を呼ばない) ので、この経路で記録された finding は
+**常に Confirmed** になる。呼び出し側が unverified を表明する手段が型に存在しない。
+
+実 producer は 3 本 (いずれも `let _ =` で戻り値も捨てている):
+  crates/specguard/src/main.rs:2116
+  crates/specguard/src/main.rs:2200
+  crates/propguard/src/main.rs:372
+  crates/condukt/src/gate_exec.rs:319
+
+なぜ問題か: eda212a0 のユーザー裁定は「UNVERIFIED が既定では決して発生しない」ことを
+問題視したものだった。CLI を必須化しても、この 4 箇所が通る経路では
+UNVERIFIED は**表現すら不可能**なままなので、裁定の意図は半分しか達成されていない。
+`confirmed` のみが `review-queue --to-backlog` で backlog へ橋渡しされるため、
+「検証していない finding が actionable work として queue に入る」経路が残る。
+
+判定不能なので両方の読みを残す:
+  (a) 実在の欠陥 = library 経路も verdict を要求すべきで、new() の
+      hardcoded Confirmed は CLI 側と同じ「確実性の捏造」。
+  (b) 意図的な仕様 = これらの producer (gate escalate / spec drift / prop violation) は
+      「ゲートが実際に検出した事実」なので confirmed で正しい、という読み。
+      その場合でも new() が既定を握るのではなく、各 producer が明示すべき
+      (eda212a0 の裁定理由がまさにそれ)。
+
+見分ける方法: 4 producer それぞれについて、記録している事実が
+「敵対的検証を経た CONFIRMED」なのか「ゲートが観測しただけの raw signal」なのかを読む。
+後者が 1 つでもあれば (a)。gate_exec の escalate は「人間の判断が要る」状態なので
+unverified 寄りに見えるが未確認。
+
+あわせて: 4 producer は全て `let _ =` で Result を捨てている。fail-soft の意図は
+docstring に書かれているが、記録失敗が完全に不可視なのが妥当かは別途要検討。
+
+スコープ外として起票: eda212a0 の完了条件は CLI の --verdict 必須化なので、
+本件はそこに含めず別チケットにした。
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/overwatch/tests/backlog_7f07228e.rs (rev d2e54735): Asserts reading (a) (audit found gate-exec/specguard are raw signals)."""
+created_at = 1789273494
+updated_at = 1791049263
+weight = 0.0
+issue_number = 546
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/546"
+issue_closed_at = 1791049266
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test backlog_7f07228e"
+exit = 0
+passed = 1
+rev = "7e05ab454eb28204d05471f3402b859d8bbfcec6"
+observed_at = 1791049237
+output_digest = "sha256:8466056665ea0be860440677a1a34186675859fb7c6ff775919e059ce179a516"
+excerpt = """
+
+running 1 test
+test library_record_finding_does_not_stamp_an_unverified_gate_signal_as_confirmed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling harness-core v0.2.45 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/harness-core)
+   Compiling overwatch v0.2.60 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.02s
+     Running tests/backlog_7f07228e.rs (target/debug/deps/backlog_7f07228e-991d25ec8f68a8f7)
+"""
+
+[task.closure.red]
+rev = "6acdb6b7716193b8716cdc72604acd4b1940b7cc"
+exit = 101
+kind = "behavioural"

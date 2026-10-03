@@ -160,6 +160,92 @@ class DiffRatchet(unittest.TestCase):
         self.assertEqual(fd.main(["x", "--repo", str(self.repo.path)]), 1)
 
 
+class MergeAttribution(unittest.TestCase):
+    """A merge commit is compared against EVERY parent, not only HEAD.
+
+    Measured 2026-10-03 (session-64554c4d merging origin/main b0f626e4):
+    crates/jev/src/client.rs exists only on the MERGE_HEAD side, so against
+    HEAD it is a brand-new file and its pre-existing hit was attributed to
+    the merge. CLAUDE.md §8 names that mis-attribution a bug. A hit is the
+    merge's own only when the merged blob holds more hits than EVERY parent's
+    blob of that path does.
+    """
+
+    def setUp(self) -> None:
+        self.repo = Repo()
+        self.repo.write("crates/a/src/lib.rs", CLEAN_RS)
+        self.repo.stage("crates")
+        self.repo.commit()
+        git(self.repo.path, "checkout", "-q", "-b", "other")
+        self.repo.write("crates/b/src/theirs.rs", OLD_SWALLOW_RS)
+        self.repo.stage("crates")
+        self.repo.commit()
+        git(self.repo.path, "checkout", "-q", "main")
+        self.repo.write("crates/a/src/ours.rs", CLEAN_RS)
+        self.repo.stage("crates")
+        self.repo.commit()
+
+    def tearDown(self) -> None:
+        self.repo.close()
+
+    def _merge(self) -> None:
+        subprocess.run(
+            ["git", "-C", str(self.repo.path), "merge", "-q", "--no-ff",
+             "--no-commit", "other"],
+            capture_output=True, text=True, check=True,
+            env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull,
+                 "GIT_CONFIG_NOSYSTEM": "1"},
+        )
+
+    def test_hit_carried_in_from_the_other_parent_does_not_fire(self):
+        self._merge()
+        self.assertEqual(fd.evaluate(self.repo.path), (0, []))
+
+    def test_swallow_added_by_the_merge_resolution_still_blocks(self):
+        self._merge()
+        self.repo.write("crates/a/src/lib.rs", CLEAN_RS.replace(
+            "        Err(e) => panic!(\"{e}\"),\n", SWALLOW))
+        self.repo.stage("crates/a/src/lib.rs")
+        code, rises = fd.evaluate(self.repo.path)
+        self.assertEqual(code, 1)
+        self.assertEqual([r.path for r in rises], ["crates/a/src/lib.rs"])
+
+    def test_union_of_both_parents_hits_in_one_file_blocks(self):
+        # Each parent's blob holds ONE hit; the merged blob holds two. That
+        # exceeds every parent, so it is the merge's own and must block.
+        git(self.repo.path, "checkout", "-q", "other")
+        self.repo.write("crates/a/src/lib.rs", OLD_SWALLOW_RS)
+        self.repo.stage("crates")
+        self.repo.commit()
+        git(self.repo.path, "checkout", "-q", "main")
+        self.repo.write("crates/a/src/lib.rs", OLD_SWALLOW_RS.replace(
+            "pub fn old()", "pub fn mine()"))
+        self.repo.stage("crates")
+        self.repo.commit()
+        subprocess.run(
+            ["git", "-C", str(self.repo.path), "merge", "-q", "--no-ff",
+             "--no-commit", "other"],
+            capture_output=True, text=True,
+            env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull,
+                 "GIT_CONFIG_NOSYSTEM": "1"},
+        )
+        self.repo.write("crates/a/src/lib.rs",
+                        OLD_SWALLOW_RS + OLD_SWALLOW_RS.replace(
+                            "pub fn old()", "pub fn mine()"))
+        self.repo.stage("crates/a/src/lib.rs")
+        code, rises = fd.evaluate(self.repo.path)
+        self.assertEqual(code, 1)
+        self.assertIn("crates/a/src/lib.rs", [r.path for r in rises])
+
+    def test_unreadable_merge_head_is_undetermined(self):
+        self._merge()
+        git_dir = git(self.repo.path, "rev-parse", "--git-dir").strip()
+        (self.repo.path / git_dir / "MERGE_HEAD").write_text(
+            "not-a-commit\n", encoding="utf-8")
+        with self.assertRaises(fd.Undetermined):
+            fd.evaluate(self.repo.path)
+
+
 class Undetermined(unittest.TestCase):
     def test_no_head_is_undetermined_not_clean(self):
         repo = Repo()

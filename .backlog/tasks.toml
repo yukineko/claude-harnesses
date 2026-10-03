@@ -833,7 +833,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 ユーザー指示（2026-09-07、5メッセージにわたる確定形）。
 
@@ -879,11 +879,13 @@ gate は何も守っておらず、回避だけを学習させた。本セッシ
 
 [backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_826c29bf.py (rev 2ff60f58): Pins the umbrella's own criterion 6; children carry their own repros; criterion 5 obsolete (autoflow compass gate RETIRED 2026-08-20, crates/autoflow/src/main.rs:343)."""
 created_at = 1788789695
-updated_at = 1790983273
+updated_at = 1791024191
 weight = 0.0
 issue_number = 412
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/412"
-rev = 0
+rev = 1
+ruling_kind = "untestable"
+untestable_reason = "Criterion 6 (the only one this umbrella owns; children ae4543d5/b5358f58/ad524af9/cc809395/73c2c089/5eb1f127 carry the rest, criterion 5 obsolete) is fixed in 7927324f (CLAUDE.md section 5 item 4). Evidence: python3 scripts/test_backlog_826c29bf.py, expectedFailure removed, OK at aceee2e1 (observed 2026-10-03); RED before 7927324f as the expectedFailure. The backlog evidence runner allowlists only cargo test / pytest / bash, pytest is not installed, and --doc-only is refused because 7927324f also edits the test file. Approve to close."
 
 [[task]]
 id = "ae4543d5"

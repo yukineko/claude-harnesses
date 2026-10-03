@@ -2947,25 +2947,6 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/576"
 rev = 0
 
 [[task]]
-id = "55f55932"
-title = "condukt state claim-task が空の hashkey を受理して成功を返し、空文字キーの claim を記録する"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-測定点 main d0c4adc1 / 2026-09-13 17:29 JST. 観測: claim-task を --hashkey の値が空文字のまま呼んだところ exit 0 で成功を返し、/Users/yuki/.condukt/state/session-79d79a35-4f9872cd/claims.json の task_claims に空文字をキーとするエントリが書かれた。逐語: task_claims の唯一のキーが空文字で、値は run_id flow-79d79a35-3490-4bbd-9bb4-d501e749e65d、title は f7b018f8 11a1e1bfe1878e1a、claimed_at 1789288129。呼び出し側 (当セッション) の zsh では引用符なしパラメータの単語分割が既定で起きないため title に 2 語が入り hashkey が空になった。これは呼び出し側のミスだが、ゲート側の問題はそこではない。claim-task の契約は exit 0 を claim 成功として下流に読ませることであり、空キーで成功を返すと、呼び出し側は claim を取ったと信じて実行に進む一方、実 hashkey に対する is-claimed は false のままになる。CLAUDE.md 第3節の空集合を clean に写さないという不変条件に反する。期待挙動: 空または空白のみの hashkey は不正入力として非 0 で拒否する。読み 1 (実在の欠陥): 入力検証が無い。読み 2 (意図どおり): 空 hashkey は任意の opaque 文字列として正当。見分け方: crates/condukt/src/claim.rs の claim_tasks に空文字を弾く経路があるかを読む。無ければ読み 1。RED の作り方: 空 hashkey で claim-task を呼び、exit 0 かつ claims.json に空文字キーが増えることを先に観測してから修正する
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/condukt/tests/backlog_audit_s01.rs (rev e70d48dd)"""
-created_at = 1789289865
-updated_at = 1790983158
-weight = 0.0
-issue_number = 588
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/588"
-rev = 0
-
-[[task]]
 id = "7b6bcfe6"
 title = "harness_core の text_similarity は日本語で機能しない — 分かち書きしないため文節が丸ごと1トークンになり、既知の重複ペアが 0.26 (閾値 0.6) にしかならない"
 project = "/Users/yuki/src/harness"
@@ -12753,4 +12734,87 @@ updated_at = 1791051150
 weight = 0.0
 issue_number = 1305
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1305"
+rev = 0
+
+[[task]]
+id = "0805b07a"
+title = "condukt state set --status running skips recording --worktree when the task's files are claimed by another live run, so the later verified transition runs the F->P oracle in the wrong cwd and refuses; check-oracle doc says no tdd on PATH degrades to fallback:true but it returns fallback:false 'exited non-zero'"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "unconfirmed"
+notes = "Observed 2026-10-04 in the p1 loop: runs run-20261004-024204-44254 (486e83ca) and run-20261004-024816-76469 (55f55932) printed 'task skipped — N file(s) already claimed by a live run' on state set running, leaving worktree=None. state set verified then refused: 'no valid fail-to-pass reproduction oracle (tdd oracle exited non-zero ...)'. With tdd absent from PATH check-oracle printed fallback:false although its help says a missing tdd degrades to fallback:true. Recording the worktree via state set --status done --worktree then verified worked for 55f55932. 486e83ca's worktree was already removed so its run stays done/unverified (backlog item closed with test evidence)."
+created_at = 1791051845
+updated_at = 1791051845
+weight = 0.0
+issue_number = 1306
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1306"
+rev = 0
+
+[[task]]
+id = "dfaa609a"
+title = "condukt escalate.rs and precedent.rs load() turn a corrupt registry file into an empty one (unwrap_or_default): an unparseable escalations.json reads as no open escalations"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "Side finding of the 43393ce2 worker (pre-existing). Also load_replan_records/load_run_policy_records map any read error, not only ENOENT, to an empty Vec."
+created_at = 1791051846
+updated_at = 1791051846
+weight = 0.0
+issue_number = 1307
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1307"
+rev = 0
+
+[[task]]
+id = "416d6fbf"
+title = "condukt RunState::save writes <run_id>.json without safe_session while run_path/run_dir sanitise, so an id rewritten by safe_session saves and loads from different paths"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Side finding of the 43393ce2 worker (pre-existing)."
+created_at = 1791051848
+updated_at = 1791051848
+weight = 0.0
+issue_number = 1308
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1308"
+rev = 0
+
+[[task]]
+id = "4e6a583c"
+title = "condukt legacy per-worktree run-state (pre-43393ce2) is visible only from the checkout that created it; listing from the main tree would need git worktree list enumeration"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Known limit of the 43393ce2 legacy strategy (write back where found, no migration). Also gate-exec AutoExec prints auto_exec even if checkpoint dir resolution fails (unreachable in practice, unpinned by a test)."
+created_at = 1791051851
+updated_at = 1791051851
+weight = 0.0
+issue_number = 1309
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1309"
+rev = 0
+
+[[task]]
+id = "5ed8b8f8"
+title = "condukt marketplace.json description began 'v0.7.211: ...' while its version was 0.7.212; docs/gate-taxonomy.md:246 cites a quote absent from scripts/check-fail-open.py:92 (doc-claims exempt)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "unconfirmed"
+notes = "Side findings of the 51595c41 worker, observed 2026-10-04."
+created_at = 1791051853
+updated_at = 1791051853
+weight = 0.0
+issue_number = 1310
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1310"
 rev = 0

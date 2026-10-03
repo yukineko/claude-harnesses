@@ -237,6 +237,64 @@ class MergeAttribution(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("crates/a/src/lib.rs", [r.path for r in rises])
 
+    # Round-2 verifier of 9d16cecd: git records only the INDEPENDENT parents.
+    # A MERGE_HEAD naming an ancestor of HEAD yields a single-parent commit on
+    # HEAD; one naming a descendant yields a single-parent commit on THAT
+    # commit. The gate must judge against the parents git will record.
+    def _git_dir(self) -> Path:
+        return self.repo.path / git(self.repo.path, "rev-parse",
+                                    "--git-dir").strip()
+
+    def test_ancestor_merge_head_cannot_launder_a_readded_swallow(self):
+        git(self.repo.path, "checkout", "-q", "-b", "fixline")
+        self.repo.write("crates/a/src/lib.rs", OLD_SWALLOW_RS)
+        self.repo.stage("crates")
+        self.repo.commit()
+        old = git(self.repo.path, "rev-parse", "HEAD").strip()
+        self.repo.write("crates/a/src/lib.rs", CLEAN_RS)
+        self.repo.stage("crates")
+        self.repo.commit()
+        (self._git_dir() / "MERGE_HEAD").write_text(old + "\n",
+                                                    encoding="utf-8")
+        self.repo.write("crates/a/src/lib.rs", OLD_SWALLOW_RS)
+        self.repo.stage("crates/a/src/lib.rs")
+        code, rises = fd.evaluate(self.repo.path)
+        self.assertEqual(code, 1)
+        self.assertEqual([r.path for r in rises], ["crates/a/src/lib.rs"])
+
+    def test_descendant_merge_head_judges_against_the_recorded_parent(self):
+        # HEAD holds a swallow; S (a descendant) removed it. With MERGE_HEAD=S
+        # git records S as the only parent, so keeping HEAD's blob ADDS the
+        # swallow even though `diff --cached HEAD` does not list the file.
+        self.repo.write("crates/a/src/lib.rs", OLD_SWALLOW_RS)
+        self.repo.stage("crates")
+        self.repo.commit()
+        head = git(self.repo.path, "rev-parse", "HEAD").strip()
+        self.repo.write("crates/a/src/lib.rs", CLEAN_RS)
+        self.repo.stage("crates")
+        self.repo.commit()
+        s = git(self.repo.path, "rev-parse", "HEAD").strip()
+        git(self.repo.path, "reset", "-q", "--hard", head)
+        (self._git_dir() / "MERGE_HEAD").write_text(s + "\n",
+                                                    encoding="utf-8")
+        code, rises = fd.evaluate(self.repo.path)
+        self.assertEqual(code, 1)
+        self.assertEqual([r.path for r in rises], ["crates/a/src/lib.rs"])
+
+    def test_empty_merge_head_is_undetermined(self):
+        self._merge()
+        (self._git_dir() / "MERGE_HEAD").write_text("", encoding="utf-8")
+        with self.assertRaises(fd.Undetermined):
+            fd.evaluate(self.repo.path)
+
+    def test_hit_kept_from_our_side_of_a_real_merge_does_not_fire(self):
+        # Pins the max: our parent holds the hit, theirs does not.
+        self.repo.write("crates/a/src/ours.rs", OLD_SWALLOW_RS)
+        self.repo.stage("crates")
+        self.repo.commit()
+        self._merge()
+        self.assertEqual(fd.evaluate(self.repo.path), (0, []))
+
     def test_unreadable_merge_head_is_undetermined(self):
         self._merge()
         git_dir = git(self.repo.path, "rev-parse", "--git-dir").strip()

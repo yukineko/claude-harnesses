@@ -45,11 +45,20 @@ A payload that does not decode as a JSON object is likewise refused (exit 2):
 the deny ledger below cannot be consulted for a call it cannot read.
 
 HOOK MACHINERY (e033c406, second gate). Before any of the above, an edit whose
-target — as written or after realpath — is inside `.githooks`, inside
-`.git/hooks`, is a `.git/config`, or is a `config.worktree` under `.git` is
-refused, in ANY tree (main, a worktree, another repo) and regardless of
-CLAUDE_PROJECT_DIR: those files hold or wire the local gates, and rewriting them
-disarms every gate at once. Likewise an edit whose realpath is inside either deny
+target — as written or after realpath — is inside `.git/hooks`, is a
+`.git/config`, or is a `config.worktree` under `.git` is refused, in ANY tree
+(main, a worktree, another repo) and regardless of CLAUDE_PROJECT_DIR: those
+files are git's own untracked hook/config plumbing (no reviewable commit), and
+rewriting them disarms every gate at once.
+
+The tracked `.githooks` directory is NOT in that set (user rulings 2026-10-03
+"refusing edits/deletes in a worktree is itself the defect" and 2026-10-04
+"remove what stops wiring into .githooks"). An edit to `.githooks` inside a
+linked worktree is ordinary, reviewable work and is allowed like any other
+worktree file. An edit to the MAIN tree's `.githooks` is still refused — by the
+general main-tree rule above (it is tracked, so not git-ignored), with the
+main-tree message — and a worktree path whose realpath lands in main's
+`.githooks` (a symlink) is judged by that realpath and refused the same way. Likewise an edit whose realpath is inside either deny
 ledger directory (`~/.claude/state/maintree-deny`, `<tmp>/maintree-deny-<uid>`)
 is refused in any tree: editing it would erase or forge the record below.
 There are no twin rules for Bash: guard-maintree-bash.py observes main's state
@@ -147,13 +156,14 @@ _FOLD_CASE = sys.platform == "darwin"
 
 
 def _hook_protected(path: str) -> bool:
-    """Same shape rule as guard-maintree-bash.py's: inside `.githooks`, inside
-    `.git/hooks`, a `.git/config`, or a `config.worktree` under `.git`."""
+    """Inside `.git/hooks`, a `.git/config`, or a `config.worktree` under
+    `.git`. Unlike guard-maintree-bash.py's shape rule this deliberately does
+    NOT include `.githooks` (user rulings 2026-10-03/04): the tracked
+    `.githooks` is editable in a linked worktree, and main's copy is refused by
+    the main-tree rule in _judge."""
     p = path.casefold() if _FOLD_CASE else path
     comps = [c for c in p.split("/") if c]
     for i, c in enumerate(comps):
-        if c == ".githooks":
-            return True
         if c == ".git" and i + 1 < len(comps):
             if comps[i + 1] == "hooks":
                 return True
@@ -323,11 +333,13 @@ side. Inspect that path; if no merge is in progress, make the edit in a worktree
 
 DENY_HOOKS = """Refused: editing `{path}` would rewrite this repository's git hook machinery.
 
-The local gates live in `.githooks` and are wired through `core.hooksPath` in
-`.git/config` (CLAUDE.md 最上位の方針 7). Writing into `.githooks`, `.git/hooks`
-or `.git/config` can disarm every one of them at once, so it is refused in any
-tree (backlog e033c406). Reading them is allowed. If the hooks genuinely need to
-change, hand it to the human.
+The local gates are wired through `core.hooksPath` in `.git/config` and git's
+own `.git/hooks` (CLAUDE.md 最上位の方針 7). Those are untracked plumbing:
+writing into `.git/hooks`, `.git/config` or a `config.worktree` can disarm every
+gate at once without leaving a reviewable commit, so it is refused in any tree
+(backlog e033c406). Reading them is allowed. If they genuinely need to change,
+hand it to the human. (The tracked `.githooks` directory is different: edit it
+inside a linked worktree and commit it there.)
 """
 
 DENY_LEDGER_DIR = """Refused: editing `{path}` writes into the maintree deny ledger directory `{dir}`.

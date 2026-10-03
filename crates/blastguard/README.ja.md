@@ -61,7 +61,11 @@ finding も出ないので gate が赤ではなく暗転する — backlog 1b82a
 書き込みは ask〈人間が答えられない場では deny に硬化〉、読み取りと `chmod +x` は allow）
 など、どのゲート・フックが動くか自体を決めるファイルはこの除外の
 **対象外**であり、常に deny になる（守護者自身を無効化する経路を塞ぐため、
-この一群は設定ファイル除外より優先される）。
+この一群は設定ファイル除外より優先される）。唯一の例外は、worktree 置き場
+（`$HOME/.condukt/worktrees/<wt>/…`、`<parent>/.harness-worktrees/<wt>/…`）にある
+linked worktree チェックアウトの**内側**のファイルで、絶対パスで指定された
+Write/Edit または単一の素のコマンドに限り、保護パス規則を適用しない（そのチェックアウト
+自身の作業物であるため。2026-10-03 のユーザー裁定）。
 
 **さらに `.claude/worktrees/` 配下のチェックアウトは、設定ファイルではなくソース**
 として扱う（0.2.63）。CLAUDE.md 8 は実装作業を worktree でのみ行うことを義務づけており、
@@ -124,7 +128,8 @@ rm -rf /        -> deny: recursive rm (-r) can delete an entire directory tree
   もの（`$VAR`, `~`, `` `pwd` ``, `*`, `{}`）／解決できない `cd`（`cd $VAR && rm -rf
   target`）／`cd` で外に出る相対パス（`cd /usr && rm -rf lib`）／**安全ルートそれ自身**
   （`rm -rf .` は `.git` ごと消えるので deny のまま）／**保護パス**（`.git`,
-  `.claude/settings.json`, `.githooks/**` は場所で免罪されない）／**symlink で外へ
+  `.claude/settings.json`, `.githooks/**` は場所で免罪されない。linked worktree
+  チェックアウト内側の例外は上記のとおり）／**symlink で外へ
   出るもの**（実パスを解決してから判定する。ただし `..` は symlink 解決の*前に*字面で
   畳むので、`<project>/lnk/../x` のように外向き symlink の後ろに `..` を置いた綴りは
   ここでは止まらない — 下の「既知の未修正事項」）／`find . -delete` のように絞り込み述語を
@@ -332,7 +337,7 @@ git の probe の失敗・タイムアウト（各呼び出し 1.5 秒）・解�
 オペランドより後ろのオプション風の語。
 
 優先順位は変わらない: 保護パス（`.git`、`.git/hooks`、`.claude`、`.githooks`、ゲート
-設定）の `deny` が最初、次に worktree 置き場の `allow`、次に設定ファイル除外、その後に
+設定。linked worktree チェックアウト内側は除く）の `deny` が最初、次に worktree 置き場の `allow`、次に設定ファイル除外、その後に
 この節の判定。ライブラリ利用（`detect::detect`、`SafeRoots::none()`）には一時・
 キャッシュのルートも git probe も無いので、従来の判定のまま。
 

@@ -68,6 +68,14 @@ const ALLOW_GLOBS: &[&str] = &[
 ///
 /// The `.example.toml` templates are deliberately NOT listed: they are
 /// checked-in samples, not the live config a gate reads.
+///
+/// This list is a NAME match and knows nothing about location. The one
+/// location that lifts it is applied by the caller, not here: a path strictly
+/// inside a linked worktree checkout under a worktree storage root is that
+/// checkout's own tracked file, and `detect` (`Ctx::in_worktree_checkout`,
+/// backed by [`crate::scope::SafeRoots::classify_worktree_checkout`]) does not
+/// apply the protected-path rule to it (user ruling 2026-10-03). Every other
+/// match — the main tree, `$HOME`, an undetermined placement — is unchanged.
 const PROTECTED_GLOBS: &[&str] = &[
     // ---- Claude Code settings & hook wiring (project, $HOME, or nested) ----
     // These decide which hooks fire, i.e. whether blastguard itself runs.

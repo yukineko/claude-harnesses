@@ -89,14 +89,14 @@ pub fn detect_scoped(tool_name: &str, tool_input: Option<&Value>, scope: &SafeRo
                 None => unreadable_operand("Bash", "tool_input.command"),
             }
         }
-        "Write" => detect_write(tool_input),
+        "Write" => detect_write(tool_input, &Ctx::new(scope, "")),
         // Edit / MultiEdit / NotebookEdit are partial edits, not full-file
         // destruction, so they are allowed for ordinary files. They are NOT
         // unconditionally allowed: a one-line edit is all it takes to disarm a
         // gate (`.claude/settings.json`, `.githooks/pre-commit`, a shell rc),
         // and "partial" says nothing about blast radius. Classifying the TARGET
         // is what distinguishes the two.
-        "Edit" | "MultiEdit" | "NotebookEdit" => detect_edit(tool_input),
+        "Edit" | "MultiEdit" | "NotebookEdit" => detect_edit(tool_input, &Ctx::new(scope, "")),
         // An UNMATCHED TOOL is a different situation and stays a silent Allow:
         // blastguard claims no jurisdiction over Read/Grep/WebFetch/Task, so
         // there is genuinely nothing here to judge. Do not fold this arm into
@@ -160,6 +160,11 @@ struct Ctx<'a> {
     /// of [`crate::deletion`] at all — see [`deletion_rm_eligible`]. Computed
     /// once in [`Ctx::new`], carried unchanged like `worktree_rm_eligible`.
     deletion_rm_eligible: bool,
+    /// Whether the TOP-LEVEL command may lift the protected-path rule for a
+    /// path inside a linked worktree checkout at all — see
+    /// [`Ctx::in_worktree_checkout`] and [`checkout_exempt_eligible`].
+    /// Computed once in [`Ctx::new`], carried unchanged into derived contexts.
+    checkout_exempt_eligible: bool,
 }
 
 impl<'a> Ctx<'a> {
@@ -172,6 +177,42 @@ impl<'a> Ctx<'a> {
             raw_base: scope.session_cwd().map(str::to_string),
             worktree_rm_eligible: worktree_rm_eligible(command),
             deletion_rm_eligible: deletion_rm_eligible(command),
+            checkout_exempt_eligible: checkout_exempt_eligible(command),
+        }
+    }
+
+    /// True ONLY when `path` is a protected-NAMED path that is the checkout's
+    /// own file: spelled ABSOLUTE, no glob/expansion, on a command line that is
+    /// a single plain command ([`checkout_exempt_eligible`]), and placed by
+    /// [`SafeRoots::classify_worktree_checkout`] as
+    /// [`Placement::Inside`] a linked worktree checkout under a worktree
+    /// storage root (user ruling 2026-10-03:
+    /// 「worktreeの編集や削除を拒むのはむしろ不正なのでなおしてほしい」).
+    ///
+    /// Every other answer — relative spelling, an ineligible command line,
+    /// `IsRoot`, `Outside`, and every `Undetermined` — is `false`, i.e. the
+    /// protected-path rule applies exactly as before. There is no default that
+    /// answers `true`.
+    ///
+    /// Relative operands are refused because the base they are judged against
+    /// is this analysis' model of the cwd, and a cwd change it does not model
+    /// (`env -C`, `git -C`, a `cd` that fails) would place a main-tree file
+    /// inside a checkout. An absolute operand's placement depends on no base.
+    /// The placement (symlinks included) is observed at JUDGE time; that is
+    /// why the whole line must be one plain command — see
+    /// [`checkout_exempt_eligible`].
+    fn in_worktree_checkout(&self, path: &str) -> bool {
+        if !self.checkout_exempt_eligible
+            || !path.starts_with('/')
+            || has_glob_meta(path)
+            || has_unresolvable_expansion(path)
+        {
+            return false;
+        }
+        match self.scope.classify_worktree_checkout(path, None) {
+            Determination::Known(Placement::Inside { .. }) => true,
+            Determination::Known(Placement::IsRoot { .. } | Placement::Outside { .. })
+            | Determination::Undetermined(_) => false,
         }
     }
 
@@ -189,6 +230,7 @@ impl<'a> Ctx<'a> {
             raw_base,
             worktree_rm_eligible: self.worktree_rm_eligible,
             deletion_rm_eligible: self.deletion_rm_eligible,
+            checkout_exempt_eligible: self.checkout_exempt_eligible,
         }
     }
 
@@ -203,6 +245,7 @@ impl<'a> Ctx<'a> {
             raw_base: None,
             worktree_rm_eligible: self.worktree_rm_eligible,
             deletion_rm_eligible: self.deletion_rm_eligible,
+            checkout_exempt_eligible: self.checkout_exempt_eligible,
         }
     }
 
@@ -592,8 +635,8 @@ fn extract_path(ti: Option<&Value>) -> Option<String> {
 /// see [`protected_disarm_deny`] and [`protected_tree_deny`], where the outcome
 /// IS established by the command alone (a deleted file stops running; a
 /// recursive delete takes every protected path under it).
-fn protected_path_block(action: &str, path: &str) -> Option<Decision> {
-    if exclude::is_protected_path(path) {
+fn protected_path_block(ctx: &Ctx<'_>, action: &str, path: &str) -> Option<Decision> {
+    if exclude::is_protected_path(path) && !ctx.in_worktree_checkout(path) {
         Some(Decision::ask(format!(
             "{action} targets a protected gate/config path ({path}) — it controls which hooks, \
 gates or policies run, and blastguard cannot tell from the tool call whether this strengthens \
@@ -649,8 +692,8 @@ $PATH), so whether the old bytes were recoverable does not make it safe"
 /// folded into [`protected_path_block`], because "an agent WROTE to the file that
 /// decides whether the gates run" and "an agent made that file stop being read"
 /// are different recurring failures and want different signatures.
-fn protected_disarm_deny(action: &str, path: &str) -> Option<Decision> {
-    if exclude::is_protected_path(path) {
+fn protected_disarm_deny(ctx: &Ctx<'_>, action: &str, path: &str) -> Option<Decision> {
+    if exclude::is_protected_path(path) && !ctx.in_worktree_checkout(path) {
         Some(Decision::deny(format!(
             "{action} disarms a protected gate/config path ({path}) without writing to it — \
 it controls which hooks, gates or policies run, so blastguard refuses"
@@ -669,8 +712,10 @@ it controls which hooks, gates or policies run, so blastguard refuses"
 /// Deny rather than an Ask because a recursive delete of a directory removes
 /// EVERYTHING under it — the protected paths are a subset of what goes, so there
 /// is nothing to guess about.
-fn protected_tree_deny(action: &str, path: &str) -> Option<Decision> {
-    if exclude::is_protected_path(path) || exclude::holds_protected_paths(path) {
+fn protected_tree_deny(ctx: &Ctx<'_>, action: &str, path: &str) -> Option<Decision> {
+    if (exclude::is_protected_path(path) || exclude::holds_protected_paths(path))
+        && !ctx.in_worktree_checkout(path)
+    {
         Some(Decision::deny(format!(
             "{action} destroys a directory tree holding protected gate/config paths ({path}) — \
 it controls which hooks, gates or policies run, so blastguard refuses"
@@ -697,7 +742,10 @@ it controls which hooks, gates or policies run, so blastguard refuses"
 /// This closes a MIRROR GAP with the `chmod` arm next door, which has classified
 /// its targets since round 3 while this verb kept measuring blast radius (`-R`)
 /// only — so `chown nobody .githooks/pre-commit` was a plain `Allow`.
-fn protected_reown_ask(action: &str, path: &str) -> Option<Decision> {
+fn protected_reown_ask(ctx: &Ctx<'_>, action: &str, path: &str) -> Option<Decision> {
+    if ctx.in_worktree_checkout(path) {
+        return None;
+    }
     let reaches = exclude::is_protected_path(path)
         || exclude::holds_protected_paths(path)
         || (has_glob_meta(path)
@@ -733,9 +781,12 @@ on the command line, so blastguard refuses to guess and asks"
 /// a Deny, so the restrictive resolution CLAUDE.md requires holds either way —
 /// what `Ask` buys is that the two situations stay distinguishable downstream
 /// instead of both being recorded as "blastguard knows this is bad".
-fn protected_landing_block(action: &str, dir: &str) -> Option<Decision> {
+fn protected_landing_block(ctx: &Ctx<'_>, action: &str, dir: &str) -> Option<Decision> {
+    if ctx.in_worktree_checkout(dir) {
+        return None;
+    }
     if exclude::is_protected_path(dir) {
-        return protected_path_block(action, dir);
+        return protected_path_block(ctx, action, dir);
     }
     if exclude::holds_protected_paths(dir) {
         return Some(Decision::ask(format!(
@@ -1036,12 +1087,12 @@ fn backlog_writes_operand_paths(rest: &[&str]) -> bool {
 /// non-recursive single-target delete is below this crate's destructive bar
 /// (same rule `analyze_rm` applies), so only the protected-target case is a
 /// verdict.
-fn analyze_unlink_rmdir(cmd: &str, rest: &[&str]) -> Decision {
+fn analyze_unlink_rmdir(cmd: &str, rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     for op in positional_operands(rest, &[]) {
-        if let Some(deny) = protected_disarm_deny(cmd, op) {
+        if let Some(deny) = protected_disarm_deny(ctx, cmd, op) {
             return deny;
         }
-        if let Some(deny) = protected_tree_deny(cmd, op) {
+        if let Some(deny) = protected_tree_deny(ctx, cmd, op) {
             return deny;
         }
         if let Some(deny) = protected_glob_deny(&format!("{cmd} operand"), op) {
@@ -1093,9 +1144,9 @@ fn sort_output_file<'a>(rest: &[&'a str]) -> Option<&'a str> {
 /// destination, so it is a Deny. Pure reads (`sort .githooks/pre-commit`, no
 /// `-o`) and non-protected outputs stay Allow — `sort`'s read semantics are
 /// known, so there is no need to Ask.
-fn analyze_sort(rest: &[&str]) -> Decision {
+fn analyze_sort(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     match sort_output_file(rest) {
-        Some(out) => protected_path_block("sort -o", out)
+        Some(out) => protected_path_block(ctx, "sort -o", out)
             .or_else(|| protected_glob_deny("sort -o", out))
             .unwrap_or(Decision::Allow),
         None => Decision::Allow,
@@ -1121,10 +1172,10 @@ const UNIQ_VALUE_FLAGS: &[&str] = &[
 /// SECOND positional operand (proven: truncated a real file). Only the 2nd
 /// operand is a write target; the 1st (INPUT) is read, so a protected INPUT
 /// stays Allow and only a protected OUTPUT is a Deny.
-fn analyze_uniq(rest: &[&str]) -> Decision {
+fn analyze_uniq(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     let operands = positional_operands(rest, UNIQ_VALUE_FLAGS);
     if let Some(out) = operands.get(1) {
-        if let Some(deny) = protected_path_block("uniq output", out)
+        if let Some(deny) = protected_path_block(ctx, "uniq output", out)
             .or_else(|| protected_glob_deny("uniq output", out))
         {
             return deny;
@@ -1133,7 +1184,7 @@ fn analyze_uniq(rest: &[&str]) -> Decision {
     Decision::Allow
 }
 
-fn detect_write(ti: Option<&Value>) -> Decision {
+fn detect_write(ti: Option<&Value>, ctx: &Ctx<'_>) -> Decision {
     let path = match extract_path(ti) {
         Some(p) => p,
         None => return unreadable_operand("Write", "file_path"),
@@ -1143,7 +1194,7 @@ fn detect_write(ti: Option<&Value>) -> Decision {
     // exemption used to swallow exactly the paths that decide whether the gates
     // run at all. "It is a config file" is the reason to look harder here, not
     // the reason to stop looking.
-    if let Some(deny) = protected_path_block("Write", &path) {
+    if let Some(deny) = protected_path_block(ctx, "Write", &path) {
         return deny;
     }
     if exclude::is_config_file(&path) {
@@ -1171,12 +1222,12 @@ fn detect_write(ti: Option<&Value>) -> Decision {
 /// how a guard gets switched off, so the target is classified rather than
 /// assumed harmless. `NotebookEdit` addresses its target via `notebook_path`,
 /// which `extract_path` already covers.
-fn detect_edit(ti: Option<&Value>) -> Decision {
+fn detect_edit(ti: Option<&Value>, ctx: &Ctx<'_>) -> Decision {
     let path = match extract_path(ti) {
         Some(p) => p,
         None => return unreadable_operand("Edit", "file_path/notebook_path"),
     };
-    if let Some(deny) = protected_path_block("Edit", &path) {
+    if let Some(deny) = protected_path_block(ctx, "Edit", &path) {
         return deny;
     }
     Decision::Allow
@@ -1549,17 +1600,17 @@ primitive, not a filesystem path",
         let target = match place_redirect_target(cmd, seg_idx, &seg_cwds, target) {
             Ok(placed) => placed,
             Err(raw) => {
-                if let Some(deny) = protected_path_block("redirect", &raw) {
+                if let Some(deny) = protected_path_block(ctx, "redirect", &raw) {
                     return deny;
                 }
                 line_level_asks.push(unplaceable_redirect_ask(">", &raw));
                 continue;
             }
         };
-        if let Some(deny) = protected_path_block("redirect", &target) {
+        if let Some(deny) = protected_path_block(ctx, "redirect", &target) {
             return deny;
         }
-        if !redirect_target_is_safe(&target) {
+        if !redirect_target_is_safe(&target, ctx) {
             // SYSTEM-DIRECTORY axis, checked BEFORE recoverability for the same
             // reason the protected-path axis above is: the recoverability probe
             // reports `NothingToDestroy` for a path that does not exist yet, and
@@ -1615,8 +1666,18 @@ primitive, not a filesystem path",
                 // was merely asked about (measured 2026-09-14 against 0.2.63).
                 // "git can undo it" answers the COST question, not the
                 // WHOSE-TREE one, so both must hold to skip the prompt.
+                //
+                // A linked worktree checkout under this session's worktree
+                // storage roots is this session's tree too (user ruling
+                // 2026-10-03: refusing edits inside a worktree is itself the
+                // defect), even when the session runs in the main tree and the
+                // checkout is therefore not one of its safe roots. Judged by
+                // `Ctx::in_worktree_checkout`: absolute target, one plain
+                // command, placement observed with no symlink below the
+                // checkout.
                 crate::reversible::Recovery::RecoverableFromGit => {
                     ctx.confined_root("redirect", &[target.as_str()]).is_some()
+                        || ctx.in_worktree_checkout(&target)
                 }
                 // Unrecoverable / Undetermined keep falling through, per
                 // CLAUDE.md §3.
@@ -1685,14 +1746,14 @@ primitive, not a filesystem path",
         let target = match place_redirect_target(cmd, seg_idx, &seg_cwds, target) {
             Ok(placed) => placed,
             Err(raw) => {
-                if let Some(deny) = protected_path_block("append redirect", &raw) {
+                if let Some(deny) = protected_path_block(ctx, "append redirect", &raw) {
                     return deny;
                 }
                 line_level_asks.push(unplaceable_redirect_ask(">>", &raw));
                 continue;
             }
         };
-        if let Some(deny) = protected_path_block("append redirect", &target) {
+        if let Some(deny) = protected_path_block(ctx, "append redirect", &target) {
             return deny;
         }
         // The system-directory axis does not care about the truncate/append
@@ -2231,12 +2292,16 @@ system directory or on a protected gate/config path, and refuses to guess"
     ))
 }
 
-fn redirect_target_is_safe(target: &str) -> bool {
+fn redirect_target_is_safe(target: &str, ctx: &Ctx<'_>) -> bool {
     let t = exclude::normalize(target);
     // A protected path is never "safe" to truncate, even though most of them
     // (`.claude/settings.json`, `deny.toml`, …) also match `is_config_file`.
     // Checked first so the config-file exemption cannot re-open the hole.
-    if exclude::is_protected_path(&t) {
+    // A protected-NAMED file inside a linked worktree checkout is the
+    // checkout's own file (`Ctx::in_worktree_checkout`) and is judged like any
+    // other path from here on — it is not thereby "safe", it just loses the
+    // protected-path precedence.
+    if exclude::is_protected_path(&t) && !ctx.in_worktree_checkout(target) {
         return false;
     }
     matches!(t.as_str(), "/dev/null" | "/dev/stdout" | "/dev/stderr") || exclude::is_config_file(&t)
@@ -7148,7 +7213,7 @@ analyse — it cannot tell what this would do, so it refuses to guess"
         "cp" | "mv" | "install" | "ln" => analyze_copy_move(cmd, rest, ctx),
         // Round 2: the single-file and empty-directory twins of `rm`, which had
         // no arm at all. See `analyze_unlink_rmdir`.
-        "unlink" | "rmdir" => analyze_unlink_rmdir(cmd, rest),
+        "unlink" | "rmdir" => analyze_unlink_rmdir(cmd, rest, ctx),
         // Egress: exfiltration via curl/wget upload flags and nc/netcat fed a
         // file on stdin. See `analyze_fetch` / `analyze_nc`. Remote-exec
         // (fetch piped into a shell/interpreter) is handled separately, across
@@ -7159,9 +7224,9 @@ analyse — it cannot tell what this would do, so it refuses to guess"
         // output-FILE forms that truncate the named file, so they get dedicated
         // arms that Deny the write-onto-a-protected-path shape (pure reads stay
         // Allow). See `analyze_sort` / `analyze_uniq`.
-        "sort" => analyze_sort(rest),
-        "uniq" => analyze_uniq(rest),
-        "sed" => analyze_sed(rest),
+        "sort" => analyze_sort(rest, ctx),
+        "uniq" => analyze_uniq(rest, ctx),
+        "sed" => analyze_sed(rest, ctx),
         "find" => analyze_find(rest, depth, ctx),
         "xargs" => analyze_xargs(rest, depth, ctx),
         // Both of these were location-blind: `truncate -s 0 target/log.txt`
@@ -7248,8 +7313,8 @@ analyse — it cannot tell what this would do, so it refuses to guess"
                     targets
                         .into_iter()
                         .find_map(|t| {
-                            protected_disarm_deny("chmod", t)
-                                .or_else(|| protected_tree_deny("chmod", t))
+                            protected_disarm_deny(ctx, "chmod", t)
+                                .or_else(|| protected_tree_deny(ctx, "chmod", t))
                                 .or_else(|| protected_glob_deny("chmod target", t))
                         })
                         .unwrap_or(Decision::Allow)
@@ -7289,7 +7354,7 @@ analyse — it cannot tell what this would do, so it refuses to guess"
                 let (_owner, targets) = chown_owner_and_targets(rest);
                 targets
                     .into_iter()
-                    .find_map(|t| protected_reown_ask(verb, t))
+                    .find_map(|t| protected_reown_ask(ctx, verb, t))
                     .unwrap_or(Decision::Allow)
             }
         }
@@ -7313,7 +7378,7 @@ analyse — it cannot tell what this would do, so it refuses to guess"
             // later verdict.
             if let Some(deny) = targets
                 .iter()
-                .find_map(|t| protected_path_block("tee target", t))
+                .find_map(|t| protected_path_block(ctx, "tee target", t))
             {
                 return deny;
             }
@@ -7667,7 +7732,7 @@ fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
         if has_glob_meta(operand) {
             continue;
         }
-        if let Some(deny) = protected_disarm_deny("rm", operand) {
+        if let Some(deny) = protected_disarm_deny(ctx, "rm", operand) {
             return deny;
         }
         // The CONTAINER case: `.claude` matches no protected glob but is where
@@ -7677,7 +7742,7 @@ fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
         // is nothing to resolve restrictively for it.
         if recursive || dir_flag {
             let action = if recursive { "recursive rm" } else { "rm -d" };
-            if let Some(deny) = protected_tree_deny(action, operand) {
+            if let Some(deny) = protected_tree_deny(ctx, action, operand) {
                 return deny;
             }
         }
@@ -7693,7 +7758,9 @@ fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     // operand is a literal path resolving strictly inside a worktree storage
     // root (`$HOME/.condukt/worktrees`, `<parent>/.harness-worktrees`) is
     // Allow — no confirmation. Placed AFTER the protected-path precedence above
-    // (so `.git/hooks`, `.claude`, … under a worktree still Deny) and only for
+    // (so `.git/hooks`, `.claude`, … under a worktree storage root still Deny,
+    // unless `Ctx::in_worktree_checkout` places them strictly inside a linked
+    // worktree checkout — user ruling 2026-10-03) and only for
     // `-r`; the root itself, anything above it, a glob, a symlink out, ANY
     // operand spelled with a `..` component (even one that stays inside — see
     // the `..` rule of `worktree_rm_eligible`), and any operand that cannot be
@@ -7764,6 +7831,54 @@ fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
         Decision::deny("rm with a wildcard can delete many files at once")
     }
 }
+
+/// Whole-command precondition for [`Ctx::in_worktree_checkout`]: may a
+/// protected-NAMED path inside a linked worktree checkout lose the
+/// protected-path rule on this command line at all?
+///
+/// The checkout placement (no symlink below the checkout, the checkout's own
+/// `.git` file) is observed when the hook runs. A command line that can MUTATE
+/// the tree before its own later write runs defeats that observation:
+/// `mv <wt>/.githooks <wt>/old && ln -s <main>/.githooks <wt>/.githooks &&
+/// echo x > <wt>/.githooks/pre-push` judges a real directory and writes into
+/// the main tree's gates. So the exemption is available only to a line that is
+/// ONE plain command:
+///
+///   * the empty line (the Write / Edit / MultiEdit / NotebookEdit tools,
+///     which perform exactly one write);
+///   * otherwise no `;`, `&`, `|`, `(`, `)`, `{`, `}`, `<`, `$`, backtick,
+///     backslash or line break anywhere (no second command, subshell, process
+///     or command substitution, expansion, here-doc, or escaped separator);
+///   * and the first word is one of [`CHECKOUT_EXEMPT_VERBS`] — verbs that
+///     neither create symlinks nor run other programs (no `ln`, `find -exec`,
+///     `xargs`, shells, `env`, `git`, `sudo`, assignments).
+///
+/// Over-matching only withholds the exemption, which is the restrictive
+/// direction: the protected-path rule then applies exactly as before.
+fn checkout_exempt_eligible(command: &str) -> bool {
+    if command.trim().is_empty() {
+        return true;
+    }
+    if command.chars().any(|c| {
+        matches!(
+            c,
+            ';' | '&' | '|' | '(' | ')' | '{' | '}' | '<' | '$' | '`' | '\\' | '\n' | '\r'
+        )
+    }) {
+        return false;
+    }
+    command
+        .split_whitespace()
+        .next()
+        .is_some_and(|w| CHECKOUT_EXEMPT_VERBS.contains(&w))
+}
+
+/// First words [`checkout_exempt_eligible`] accepts: each performs its own
+/// writes/deletes on its named operands and nothing else.
+const CHECKOUT_EXEMPT_VERBS: &[&str] = &[
+    "rm", "rmdir", "unlink", "chmod", "chown", "chgrp", "sed", "gsed", "tee", "cp", "mv",
+    "install", "echo", "printf", "cat", "sort", "uniq", "touch", "truncate",
+];
 
 /// Whole-command precondition for the worktree-storage `Allow` (backlog
 /// 873651b9, second pass).
@@ -7992,7 +8107,14 @@ fn worktree_confined(ctx: &Ctx<'_>, operands: &[&str]) -> bool {
     // and `classify_worktree` then answers `Undetermined` for every operand.
     let base = ctx.base_for("rm");
     for operand in operands {
-        if has_glob_meta(operand) || exclude::touches_protected(operand) {
+        if has_glob_meta(operand) {
+            return false;
+        }
+        // A protected-NAMED operand is still refused here unless it is the
+        // checkout's own file (`Ctx::in_worktree_checkout`, user ruling
+        // 2026-10-03) — the same lift the protected-path precedence in
+        // `analyze_rm` applies, so the two never disagree.
+        if exclude::touches_protected(operand) && !ctx.in_worktree_checkout(operand) {
             return false;
         }
         match ctx.scope.classify_worktree(operand, base) {
@@ -8159,11 +8281,11 @@ fn analyze_copy_move(cmd: &str, rest: &[&str], ctx: &Ctx<'_>) -> Decision {
             operands.split_last().map(|(_, init)| init).unwrap_or(&[])
         };
         for src in moved {
-            if let Some(deny) = protected_disarm_deny("mv source", src) {
+            if let Some(deny) = protected_disarm_deny(ctx, "mv source", src) {
                 return deny;
             }
             // Moving the CONTAINER away takes every protected file in it.
-            if let Some(deny) = protected_tree_deny("mv source", src) {
+            if let Some(deny) = protected_tree_deny(ctx, "mv source", src) {
                 return deny;
             }
             // Round 2: `mv .claude/* /tmp/` was ALLOW. The two checks above are
@@ -8204,7 +8326,7 @@ path — blastguard cannot tell what it expands to, and mv unlinks it, so it ref
                 _ => None,
             });
         if let Some(landing) = landing {
-            if let Some(block) = protected_landing_block(&action, &landing) {
+            if let Some(block) = protected_landing_block(ctx, &action, &landing) {
                 return block;
             }
             if let Some(deny) = system_path_block(&action, &landing, ctx) {
@@ -8214,7 +8336,7 @@ path — blastguard cannot tell what it expands to, and mv unlinks it, so it ref
     }
 
     if let Some(dir) = dir {
-        if let Some(deny) = protected_path_block(&action, &dir) {
+        if let Some(deny) = protected_path_block(ctx, &action, &dir) {
             return deny;
         }
         if let Some(deny) = protected_glob_deny(&action, &dir) {
@@ -8223,7 +8345,7 @@ path — blastguard cannot tell what it expands to, and mv unlinks it, so it ref
         let base = dir.trim_end_matches('/');
         for src in sources {
             let landed = format!("{base}/{}", basename(src));
-            if let Some(deny) = protected_path_block(&action, &landed) {
+            if let Some(deny) = protected_path_block(ctx, &action, &landed) {
                 return deny;
             }
         }
@@ -8243,7 +8365,7 @@ path — blastguard cannot tell what it expands to, and mv unlinks it, so it ref
     }
 
     match operands.last() {
-        Some(dest) => protected_path_block(&action, dest)
+        Some(dest) => protected_path_block(ctx, &action, dest)
             .or_else(|| protected_glob_deny(&action, dest))
             .or_else(|| system_path_block(&action, dest, ctx))
             .unwrap_or(Decision::Allow),
@@ -8280,7 +8402,7 @@ const SED_VALUE_FLAGS: &[&str] = &["-e", "--expression", "-f", "--file", "-l", "
 /// getting the script/file split wrong in the other direction — BSD's
 /// `sed -i '' SCRIPT FILE` takes a separate suffix argument, GNU's `-i.bak`
 /// attaches it — would drop a real target and fail open.
-fn analyze_sed(rest: &[&str]) -> Decision {
+fn analyze_sed(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     let in_place = rest.iter().any(|t| {
         *t == "--in-place"
             || t.starts_with("--in-place=")
@@ -8291,7 +8413,7 @@ fn analyze_sed(rest: &[&str]) -> Decision {
         return Decision::Allow;
     }
     for operand in positional_operands(rest, SED_VALUE_FLAGS) {
-        if let Some(deny) = protected_path_block("sed -i target", operand) {
+        if let Some(deny) = protected_path_block(ctx, "sed -i target", operand) {
             return deny;
         }
     }
@@ -8502,10 +8624,10 @@ fn analyze_git(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
             // Target classification runs FIRST so a protected path gets the
             // disarm reason (and its own rule id) rather than the generic one.
             for op in positional_operands(&rest[idx + 1..], &[]) {
-                if let Some(deny) = protected_disarm_deny("git checkout", op) {
+                if let Some(deny) = protected_disarm_deny(ctx, "git checkout", op) {
                     return deny;
                 }
-                if let Some(deny) = protected_tree_deny("git checkout", op) {
+                if let Some(deny) = protected_tree_deny(ctx, "git checkout", op) {
                     return deny;
                 }
             }
@@ -8577,10 +8699,10 @@ directory",
         // TARGET is classified, never the blast radius.
         "rm" => {
             for op in positional_operands(&rest[idx + 1..], &[]) {
-                if let Some(deny) = protected_disarm_deny("git rm", op) {
+                if let Some(deny) = protected_disarm_deny(ctx, "git rm", op) {
                     return deny;
                 }
-                if let Some(deny) = protected_tree_deny("git rm", op) {
+                if let Some(deny) = protected_tree_deny(ctx, "git rm", op) {
                     return deny;
                 }
                 if let Some(deny) = protected_glob_deny("git rm operand", op) {

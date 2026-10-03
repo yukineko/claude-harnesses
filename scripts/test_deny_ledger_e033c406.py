@@ -346,13 +346,39 @@ class StopDetectsChange(_Fixture):
 
 class HookMachineryIsProtected(_Fixture):
     def test_edit_tool_into_hook_machinery_is_refused_in_any_tree(self):
-        for path in (os.path.join(self.wt, ".githooks", "pre-commit"),
-                     os.path.join(self.main, ".git", "hooks", "pre-commit"),
-                     os.path.join(self.main, ".git", "config")):
-            with self.subTest(path=path):
-                r = self.edit(path, project=self.wt)
-                self.assertEqual(r.returncode, 2, r.stderr)
-                self.assertIn("hook machinery", r.stderr)
+        # `.git/hooks` / `.git/config` stay refused from any tree and anchor.
+        for project in (self.wt, self.main):
+            for path in (os.path.join(self.main, ".git", "hooks", "pre-commit"),
+                         os.path.join(self.main, ".git", "config")):
+                with self.subTest(path=path, project=project):
+                    r = self.edit(path, project=project)
+                    self.assertEqual(r.returncode, 2, r.stderr)
+                    self.assertIn("hook machinery", r.stderr)
+
+    def test_edit_tool_into_worktree_githooks_is_allowed(self):
+        # User rulings 2026-10-03/04: refusing an edit to the tracked
+        # `.githooks` inside a linked worktree is itself the defect.
+        for project in (self.wt, self.main):
+            with self.subTest(project=project):
+                r = self.edit(os.path.join(self.wt, ".githooks", "pre-commit"),
+                              sid="wt-githooks-" + os.path.basename(project),
+                              project=project)
+                self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_edit_tool_into_main_githooks_is_still_refused(self):
+        # Control: main's `.githooks` is refused by the general main-tree rule.
+        r = self.edit(os.path.join(self.main, ".githooks", "pre-commit"),
+                      project=self.main)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("MAIN working tree", r.stderr)
+        # A worktree path that symlinks into main's `.githooks` is judged by
+        # its realpath and refused the same way.
+        link = os.path.join(self.wt, "hooks-link")
+        os.symlink(os.path.join(self.main, ".githooks"), link)
+        r = self.edit(os.path.join(link, "pre-commit"), sid="symlink-sid",
+                      project=self.main)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("MAIN working tree", r.stderr)
 
 
 class LedgerDirSelfProtection(_Fixture):

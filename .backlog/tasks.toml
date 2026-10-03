@@ -11540,3 +11540,23 @@ weight = 0.0
 issue_number = 1211
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1211"
 rev = 0
+
+[[task]]
+id = "6316fec1"
+title = "worktree 内の編集・削除を拒むゲートを撤去（blastguard PROTECTED_GLOBS と settings の形状 deny）"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "worktree-hygiene",
+    "p1",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "User ruling 2026-10-03 (verbatim): worktreeの編集や削除を拒むのはむしろ不正なのでなおしてほしい. Observed refusals this session: (1) ~/.claude/settings.json deny Bash(rm *)/Bash(rm)/Bash(rmdir *) refused rm of 10 test files in session worktree and rm -f in scratchpad, overriding blastguard deletion.rs worktree-storage Allow; (2) settings deny Edit/Write(//Users/yuki/**/.githooks/**) refused Edit of worktree .githooks/pre-push; (3) blastguard exclude.rs PROTECTED_GLOBS **/.githooks/** etc deny regardless of worktree; (4) old guard-maintree-bash refuses .githooks writes from any tree (replaced by observing guard b8390f7a, unmerged). Done: paths strictly inside a worktree storage root (~/.condukt/worktrees, <parent>/.harness-worktrees) are not refused by blastguard protected-path rules for Write/Edit/rm/redirect; main-tree and home-level protection unchanged; settings deny narrowed (user applies)."
+created_at = 1791033843
+updated_at = 1791033843
+weight = 0.0
+issue_number = 1223
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1223"
+rev = 0

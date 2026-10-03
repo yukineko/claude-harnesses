@@ -90,7 +90,7 @@ pub const REPO_PRIMARY_LOCK_KEY: &str = "__repo_primary__";
 /// of the repo containing `cwd`, so every linked worktree of that repo and the
 /// main tree itself address ONE lock file.
 ///
-/// Why not `repo_root` (which every run-state path still uses): `repo_root`
+/// Why not `repo_root`: `repo_root`
 /// stops at the first ancestor holding a `.git` ENTRY, and in a linked worktree
 /// `.git` is a FILE — so it returns the LINKED WORKTREE, giving each checkout
 /// its own project key and therefore its own `__repo_primary__.lock`. Two
@@ -100,10 +100,10 @@ pub const REPO_PRIMARY_LOCK_KEY: &str = "__repo_primary__";
 /// every session works in its own linked worktree, so that split is the normal
 /// case, not an edge one.
 ///
-/// Run state is deliberately NOT re-keyed here: it is per-run bookkeeping that
-/// already lives on disk under `repo_root`-derived keys, and moving it would
-/// orphan those files (backlog `43393ce2`). Same opt-in shape the claim
-/// registry took in `d83b0e8f`.
+/// Run state has since been re-keyed the same way (backlog `43393ce2`, see
+/// `state::run_dir`, which also keeps runs stored under the old per-checkout
+/// key readable in place). Same opt-in shape the claim registry took in
+/// `d83b0e8f`.
 ///
 /// `Undetermined` is a legitimate answer and is never collapsed into a path —
 /// see [`harness_core::projkey::main_worktree_root`] for the arms.
@@ -212,9 +212,11 @@ fn pid_alive(pid: u32) -> Determination<bool> {
     harness_core::boundary::run(&mut cmd).map(|out| out.code() == 0)
 }
 
-/// Lock file path for a run — sits beside the run's `<run-id>.json` state file,
-/// keyed the same way (sanitised run id, per project) so unrelated runs and
-/// unrelated projects never share a lock.
+/// Lock file path keyed by the CHECKOUT (`repo_root(cwd)`) and a sanitised
+/// key, so unrelated keys and unrelated checkouts never share a lock. Used only
+/// by [`RunLock::acquire_or_skip`] (`repo_commit`'s per-index lock). It is NOT
+/// the run-state lock any more: that sits beside the run's state file in
+/// `state::run_dir` (see [`RunLock::acquire_run_state_or_skip`]).
 fn lock_path(cfg: &Config, cwd: &Path, run_id: &str) -> PathBuf {
     lock_path_in_project(cfg, &repo_root(cwd), run_id)
 }
@@ -270,32 +272,58 @@ impl RunLock {
     /// caller SKIP its read-modify-write instead of mutating unlocked, which
     /// under pathological contention is what lets two timed-out writers both
     /// proceed and double-write (last-writer-wins). Never panics.
-    /// Waits up to [`RunLock::DEADLINE`]. Live callers:
-    /// `state::with_run_locked`, `state::discard_experiment`, the `state set`
-    /// CLI arm, `claim::{claim_tasks, release_*, heartbeat, active_claims,
-    /// write_execution_state}`, `repo_commit::commit`, and (via
-    /// [`acquire_repo_primary`]) every primary-repo mutator in `worktree`/`main`.
+    /// Waits up to [`RunLock::DEADLINE`]. Keyed by `repo_root(cwd)` — the
+    /// CHECKOUT — which is what `repo_commit::commit` (the one production
+    /// caller) wants: it serializes commits into one checkout's index. Run
+    /// state is NOT locked through here any more; see
+    /// [`RunLock::acquire_run_state_or_skip`].
     pub fn acquire_or_skip(cfg: &Config, cwd: &Path, run_id: &str) -> Option<Self> {
         Self::acquire_or_skip_at(lock_path(cfg, cwd, run_id), Self::DEADLINE)
+    }
+
+    /// The per-RUN state lock: `<run_dir>/<run>.lock`, beside the run's state
+    /// file in [`crate::state::run_dir`] (the canonical main-worktree-root dir,
+    /// or the legacy per-checkout dir a pre-`43393ce2` run still lives in). So
+    /// every checkout that read-modify-writes ONE run file contends ONE lock —
+    /// keying the lock by `repo_root(cwd)` like [`RunLock::acquire_or_skip`]
+    /// would give a linked worktree and the main tree two different locks for
+    /// the same shared file.
+    ///
+    /// Three answers: `Ok(Some)` held; `Ok(None)` contended/IO failure (the
+    /// caller hard-skips); `Err` the run's dir itself cannot be determined (no
+    /// fallback lock path is invented).
+    pub fn acquire_run_state_or_skip(
+        cfg: &Config,
+        cwd: &Path,
+        run_id: &str,
+    ) -> Result<Option<Self>> {
+        let dir = crate::state::run_dir(cfg, cwd, run_id)?;
+        let path = dir.join(format!(
+            "{}.lock",
+            harness_core::store::safe_session(run_id)
+        ));
+        Ok(Self::acquire_or_skip_at(path, Self::DEADLINE))
     }
 
     /// [`RunLock::acquire_or_skip`] against an ALREADY-RESOLVED project root
     /// instead of a `cwd`.
     ///
-    /// Two callers use this, both because the thing they guard is shared by
-    /// every checkout of a repo and so must be keyed by the MAIN worktree root:
+    /// Its callers all guard something shared by every checkout of a repo,
+    /// which must therefore be keyed by the MAIN worktree root:
     ///
     /// - the claim registry, for its reserved [`crate::claim::CLAIMS_LOCK_KEY`]
     ///   — every linked worktree read-modify-writes ONE `claims.json` and must
     ///   therefore contend ONE `__claims__.lock`;
     /// - [`acquire_repo_primary`], for [`REPO_PRIMARY_LOCK_KEY`] — every
     ///   checkout mutates ONE git index, ONE `.git/worktrees` admin dir and ONE
-    ///   default branch, so they must contend ONE `__repo_primary__.lock`.
+    ///   default branch, so they must contend ONE `__repo_primary__.lock`;
+    /// - the escalation registry (`__escalations__`) and the precedent store
+    ///   (`__precedents__`), whose single per-project file every checkout
+    ///   read-modify-writes since backlog `43393ce2`.
     ///
-    /// Run state is NOT keyed that way, so every run-state caller stays on
-    /// [`RunLock::acquire_or_skip`] and its `repo_root`-derived path is
-    /// unchanged. Same fallible contract: a failed acquisition is `None`, never
-    /// a usable guard.
+    /// Run state is keyed by the main worktree root too (backlog `43393ce2`),
+    /// but per RUN dir, through [`RunLock::acquire_run_state_or_skip`]. Same
+    /// fallible contract: a failed acquisition is `None`, never a usable guard.
     pub(crate) fn acquire_or_skip_in_project(
         cfg: &Config,
         project_root: &Path,

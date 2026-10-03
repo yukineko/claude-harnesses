@@ -22,9 +22,17 @@
 //!
 //! The store is a single project-scoped JSON file at
 //! `<state_dir>/<project-key>/escalations.json` — right beside `claims.json`,
-//! so unrelated projects never share a queue. Writes are atomic (temp +
-//! rename). Everything is fail-soft: a missing or corrupt file is treated as an
-//! empty registry rather than an error, and the module never panics.
+//! so unrelated projects never share a queue. The project key is the MAIN
+//! worktree root's (backlog `43393ce2`), so an escalation enqueued from a
+//! linked worktree is listed from the main tree and vice versa, like the run
+//! it belongs to. A registry a pre-`43393ce2` condukt left under this
+//! checkout's own per-checkout key is still read (merged, canonical first) and
+//! an id found only there is resolved in place; new records always go to the
+//! canonical file. Read-modify-writes hold the `__escalations__` lock, since
+//! the file is now shared by every checkout. Writes are atomic (temp + rename).
+//! A missing or corrupt file is treated as an empty registry; an
+//! undeterminable main worktree root, or a lock that cannot be acquired, is an
+//! `Err`. The module never panics.
 //!
 //! # Determinism
 //!
@@ -34,8 +42,7 @@
 //! separately for observability and never feeds the id.
 
 use crate::config::Config;
-use crate::store::{project_key, repo_root};
-use anyhow::Result;
+use anyhow::{bail, Result};
 use harness_core::projkey::fnv1a32;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -73,12 +80,52 @@ pub struct Registry {
     pub escalations: Vec<Escalation>,
 }
 
-/// `<state_dir>/<project-key>/escalations.json` — beside `claims.json`, so it is
-/// per-project and unrelated projects never share a queue.
-fn escalations_path(cfg: &Config, cwd: &Path) -> PathBuf {
-    cfg.state_dir
-        .join(project_key(&repo_root(cwd)))
-        .join("escalations.json")
+/// Reserved lock key serializing every read-modify-write of the registry.
+const ESCALATIONS_LOCK_KEY: &str = "__escalations__";
+
+const FILE: &str = "escalations.json";
+
+/// `<state_dir>/<project-key of the main worktree root>/escalations.json` —
+/// beside `claims.json`, so it is per-project and unrelated projects never
+/// share a queue. `Err` when the main worktree root cannot be determined.
+fn escalations_path(cfg: &Config, cwd: &Path) -> Result<PathBuf> {
+    Ok(crate::state::project_state_dir(cfg, cwd)?.join(FILE))
+}
+
+/// Every registry file that may hold this project's escalations, canonical
+/// first (then this checkout's legacy per-checkout file, when distinct).
+fn escalations_paths(cfg: &Config, cwd: &Path) -> Result<Vec<PathBuf>> {
+    Ok(crate::state::project_state_dirs(cfg, cwd)?
+        .into_iter()
+        .map(|d| d.join(FILE))
+        .collect())
+}
+
+/// Hold the registry lock (keyed by the main worktree root, like the file).
+fn lock(cfg: &Config, cwd: &Path) -> Result<crate::lock::RunLock> {
+    let root = crate::state::project_root(cwd)?;
+    match crate::lock::RunLock::acquire_or_skip_in_project(cfg, &root, ESCALATIONS_LOCK_KEY) {
+        Some(g) => Ok(g),
+        None => bail!(
+            "escalation registry lock for {} is contended; refusing an unlocked \
+             read-modify-write (retry shortly)",
+            root.display()
+        ),
+    }
+}
+
+/// All escalations across [`escalations_paths`], canonical first. An id present
+/// in more than one file is reported once, from the first.
+fn load_all(paths: &[PathBuf]) -> Registry {
+    let mut merged = Registry::default();
+    for p in paths {
+        for e in load(p).escalations {
+            if !merged.escalations.iter().any(|m| m.id == e.id) {
+                merged.escalations.push(e);
+            }
+        }
+    }
+    merged
 }
 
 /// Fail-soft load: a missing or corrupt registry is treated as empty rather than
@@ -130,8 +177,12 @@ pub fn add_escalation(
     recommended: usize,
     now: i64,
 ) -> Result<Escalation> {
-    let path = escalations_path(cfg, cwd);
+    let _guard = lock(cfg, cwd)?;
+    let path = escalations_path(cfg, cwd)?;
     let mut reg = load(&path);
+    // Dedup and the id's prior-count see the legacy records too, so a question
+    // still open in a pre-`43393ce2` per-checkout registry is not re-enqueued.
+    let all = load_all(&escalations_paths(cfg, cwd)?);
 
     // Content-dedup backpressure: an identical (run, task, question) that is
     // still OPEN is returned as-is rather than appended again, so a flood of
@@ -139,7 +190,7 @@ pub fn add_escalation(
     // single durable record instead of piling up duplicates. A RESOLVED match
     // does NOT dedup — a re-ask after an answer must create a fresh open
     // record.
-    if let Some(existing) = reg
+    if let Some(existing) = all
         .escalations
         .iter()
         .find(|e| !e.resolved && e.run == run && e.task == task && e.question == question)
@@ -148,7 +199,7 @@ pub fn add_escalation(
     }
 
     let rec = Escalation {
-        id: derive_id(run, task, question, reg.escalations.len()),
+        id: derive_id(run, task, question, all.escalations.len()),
         run: run.to_string(),
         task: task.to_string(),
         question: question.to_string(),
@@ -165,8 +216,7 @@ pub fn add_escalation(
 
 /// List the still-OPEN (unresolved) escalations for `run`, in enqueue order.
 pub fn list_escalations(cfg: &Config, cwd: &Path, run: &str) -> Result<Vec<Escalation>> {
-    let path = escalations_path(cfg, cwd);
-    let reg = load(&path);
+    let reg = load_all(&escalations_paths(cfg, cwd)?);
     Ok(reg
         .escalations
         .into_iter()
@@ -184,21 +234,26 @@ pub fn resolve_escalation(
     id: &str,
     choice: &str,
 ) -> Result<Option<Escalation>> {
-    let path = escalations_path(cfg, cwd);
-    let mut reg = load(&path);
-    let mut updated = None;
-    for e in reg.escalations.iter_mut() {
-        if e.id == id {
-            e.resolved = true;
-            e.chosen = Some(choice.to_string());
-            updated = Some(e.clone());
-            break;
+    let _guard = lock(cfg, cwd)?;
+    // Resolve the record where it is stored (canonical first, then a legacy
+    // per-checkout registry), so it is never forked into a second copy.
+    for path in escalations_paths(cfg, cwd)? {
+        let mut reg = load(&path);
+        let mut updated = None;
+        for e in reg.escalations.iter_mut() {
+            if e.id == id {
+                e.resolved = true;
+                e.chosen = Some(choice.to_string());
+                updated = Some(e.clone());
+                break;
+            }
+        }
+        if updated.is_some() {
+            save(&path, &reg)?;
+            return Ok(updated);
         }
     }
-    if updated.is_some() {
-        save(&path, &reg)?;
-    }
-    Ok(updated)
+    Ok(None)
 }
 
 /// Retrieve a single escalation by id regardless of resolved state (so a caller
@@ -207,8 +262,7 @@ pub fn resolve_escalation(
 // resume wiring in a follow-up task.
 #[allow(dead_code)]
 pub fn get_escalation(cfg: &Config, cwd: &Path, id: &str) -> Result<Option<Escalation>> {
-    let path = escalations_path(cfg, cwd);
-    let reg = load(&path);
+    let reg = load_all(&escalations_paths(cfg, cwd)?);
     Ok(reg.escalations.into_iter().find(|e| e.id == id))
 }
 
@@ -324,7 +378,7 @@ mod tests {
         let got = get_escalation(&cfg, tmp, &rec.id).unwrap().unwrap();
         assert_eq!(got, rec);
         // The file lives beside claims.json under the project key.
-        assert!(escalations_path(&cfg, tmp).exists());
+        assert!(escalations_path(&cfg, tmp).unwrap().exists());
     }
 
     #[test]
@@ -395,7 +449,7 @@ mod tests {
         let tmp_dir = make_tmp_dir("corrupt");
         let tmp = tmp_dir.path();
         let cfg = make_cfg(tmp);
-        let path = escalations_path(&cfg, tmp);
+        let path = escalations_path(&cfg, tmp).unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, b"not json at all {{{").unwrap();
         // Fail-soft: add still succeeds (registry read as empty then written).
@@ -448,7 +502,7 @@ mod tests {
         .unwrap();
         assert_eq!(first.id, second.id);
 
-        let path = escalations_path(&cfg, tmp);
+        let path = escalations_path(&cfg, tmp).unwrap();
         let reg = load(&path);
         assert_eq!(reg.escalations.len(), 1, "must not duplicate an open ask");
     }
@@ -468,7 +522,7 @@ mod tests {
         assert_ne!(first.id, second.id);
         assert!(!second.resolved);
 
-        let path = escalations_path(&cfg, tmp);
+        let path = escalations_path(&cfg, tmp).unwrap();
         let reg = load(&path);
         assert_eq!(reg.escalations.len(), 2, "resolved + new open");
 

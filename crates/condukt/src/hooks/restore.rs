@@ -17,7 +17,18 @@ pub fn run(cwd: &str) {
 
     reconcile_findings(&cfg, &cwd_path);
 
-    let runs = state::open_runs(&cfg, &cwd_path);
+    // Silence here means "nothing to resume", so a run-state store that cannot
+    // be located (undeterminable main worktree root) is said out loud instead.
+    let runs = match state::open_runs(&cfg, &cwd_path) {
+        Ok(runs) => runs,
+        Err(e) => {
+            println!(
+                "[condukt] Could not determine this project's run state, so open runs \
+                 cannot be listed: {e:#}"
+            );
+            Vec::new()
+        }
+    };
     let repo = repo_root(&cwd_path);
     let orphans = crate::wt_reconcile::reportable_unregistered_dirs(&repo, &cfg.worktree_base)
         .unwrap_or_default();

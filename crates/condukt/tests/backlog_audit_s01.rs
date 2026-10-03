@@ -120,7 +120,6 @@ fn worktree_create_does_not_double_the_run_prefix() {
 /// backlog 4708069b / 43393ce2: run-state created in the main checkout must be
 /// visible from a linked worktree of the same repository.
 #[test]
-#[ignore = "backlog 4708069b: open defect, remove ignore when fixed"]
 fn run_state_is_visible_from_a_linked_worktree() {
     let f = Fx::new("statesplit");
     let d = f.base.join("d.json");

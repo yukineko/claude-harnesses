@@ -212,8 +212,11 @@ pub fn record_progress(cfg: &Config, state_cwd: &Path, owner: &Owner, now: i64) 
 /// process's own cwd — the session's repo checkout), which is how every other
 /// condukt run-state reader locates the project. The payload's `cwd` is used
 /// only to attribute the stop to a task; it is deliberately NOT used to address
-/// the state directory, because a linked worktree hashes to a different project
-/// key than the repo the run was created in.
+/// the state directory. Run state is keyed by the main worktree root (backlog
+/// `43393ce2`), so any checkout of the repo addresses the same canonical store;
+/// only a LEGACY run stored under a per-checkout key is reachable solely from
+/// the checkout it was created in, which is `state_cwd`, not the sub-agent's
+/// worktree.
 pub fn run(cfg: &Config, state_cwd: &Path, raw_stdin: &str, now: i64) -> Outcome {
     let Some(input) = harness_core::hook::HookInput::parse(raw_stdin) else {
         return Outcome::NotWritten(
@@ -228,7 +231,14 @@ pub fn run(cfg: &Config, state_cwd: &Path, raw_stdin: &str, now: i64) -> Outcome
         ));
     }
 
-    let runs = state::all_runs(cfg, state_cwd);
+    let runs = match state::all_runs(cfg, state_cwd) {
+        Ok(runs) => runs,
+        Err(e) => {
+            return Outcome::NotWritten(format!(
+                "run state could not be located ({e:#}); nothing was attributed"
+            ))
+        }
+    };
     match resolve_owner(&input.cwd, &runs).require() {
         Required::Blocked(v) => Outcome::NotWritten(v.as_str().to_string()),
         Required::Determined(owner) => record_progress(cfg, state_cwd, &owner, now),

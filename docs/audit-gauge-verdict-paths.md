@@ -47,7 +47,9 @@ CLAUDE.md 第1節は **「判定を持つ」は返り値の型ではなく消費
 | C2 | `crates/budgetguard/src/gate.rs:206` `let rec = session::load_one(gauge_state_dir, session_id)?;` | 同 record の `models` | cache-health の判定（`additionalContext` として注入） |
 | C3 | `crates/harness-status/src/sessions.rs:43` `let mut records = match session::load_all(&session::default_state_dir()) {` | store 全体 | `/status` パネル |
 | C4 | `crates/session-insights/src/record.rs:80,114` `session::load_one(&session::default_state_dir(), ctx.session_id)` | record の `models` / `agents` | Obsidian record ノートの `## コスト` ブロック（人間が「このセッションはいくらかかったか」として読む） |
+<!-- doc-claim-exempt: 修正前のコードの逐語引用。C5/C6 の裸名 `gauge` spawn は abba6f0d で `harness_core::plugin_bin::resolve("gauge")` 経由（`gauge_subagents_json`）に置き換わり、resolve_agent_cost/tokens は `Determination<Option<..>>` を返す（Undetermined の episode は fallback コストで記録されず未記録のまま失敗として表面化する）。監査時点の記録として残している -->
 | C5 | `crates/condukt/src/state.rs:2259` `let out = std::process::Command::new("gauge")` | gauge の stdout | task ごとの実コスト → `record-run --cost` → **fugu-router の routing 方策（どのモデルを使うか）** |
+<!-- doc-claim-exempt: 修正前のコードの逐語引用（C5 の注記を参照。abba6f0d で置換済み） -->
 | C6 | `crates/condukt/src/state.rs:2292` `let out = std::process::Command::new("gauge")` | 同上（`tokens_input`/`tokens_output`） | 同上 |
 | C7 | `crates/condukt/skills/condukt/SKILL.md:1036` `AGENT_ID=$(gauge subagents --json ${SID:+--session "$SID"} 2>/dev/null` | stdout | worker の transcript 特定 |
 | C8 | condukt SKILL.md の `record-run` フォールバック（逐語は下の箇条書き） | stdout | task の記録コスト |

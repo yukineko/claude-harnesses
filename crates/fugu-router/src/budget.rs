@@ -7,14 +7,27 @@
 //! so the remaining budget isn't burned on an opus×N fan-out.
 //!
 //! This asks budgetguard for its deterministic pressure verdict
-//! (`budgetguard status --json`). Soft dependency: if budgetguard isn't
-//! installed (or errors / emits garbage) we return `false` and routing is
-//! unchanged. Read-only — never writes.
+//! (`budgetguard status --json`). Soft dependency: if budgetguard is observed
+//! to be **not installed** (`plugin_bin::resolve` → `Known(None)`), we return
+//! `false` and routing is unchanged — there is no budget to protect.
+//!
+//! Locating budgetguard goes through `harness_core::plugin_bin::resolve`
+//! (plugin cache first, numeric version order, `$PATH` second). When that
+//! lookup is **undetermined** (the cache dir exists but could not be read, a
+//! `$PATH` entry exists but cannot be spawned, …) we could not tell whether a
+//! budget is being enforced. "No pressure" is the permissive side of this check
+//! (no downgrade, full-price models), so an undetermined lookup resolves to
+//! `true` — pressured, routing downgrades one tier — and the reason is printed
+//! on stderr (CLAUDE.md §3: cannot-determine resolves to the restrictive side).
+//!
+//! Not changed here (pre-existing, still soft): once budgetguard *is* located,
+//! a spawn error, a non-zero exit or unparseable stdout still reads as `false`.
+//! Read-only — never writes.
 
-use std::path::PathBuf;
 use std::process::Command;
 
-use harness_core::config::home;
+use harness_core::plugin_bin;
+use harness_core::verdict::Determination;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -23,11 +36,23 @@ struct Status {
     pressure: bool,
 }
 
-/// True iff budgetguard reports the day's spend has reached the warn threshold.
-/// `false` when budgetguard is absent/errors (soft dep → routing unchanged).
+/// True iff budgetguard reports the day's spend has reached the warn threshold,
+/// OR budgetguard's presence could not be determined (restrictive side; the
+/// reason is printed on stderr). `false` when budgetguard is observed absent
+/// (soft dep → routing unchanged) or, once located, errors / emits garbage.
 pub fn under_pressure() -> bool {
-    let Some(binary) = find_budgetguard_binary() else {
-        return false;
+    let binary = match plugin_bin::resolve("budgetguard") {
+        Determination::Known(Some(p)) => p,
+        // Observed: budgetguard is not installed here ⇒ no budget to protect.
+        Determination::Known(None) => return false,
+        // Could not tell whether a budget is enforced ⇒ do NOT fall to the
+        // permissive "no pressure" answer; downgrade and say why.
+        Determination::Undetermined(why) => {
+            eprintln!(
+                "fugu-router: could not locate budgetguard ({why}); treating the budget as under pressure"
+            );
+            return true;
+        }
     };
     let Ok(out) = Command::new(&binary).args(["status", "--json"]).output() else {
         return false;
@@ -44,31 +69,6 @@ fn parse_pressure(stdout: &[u8]) -> bool {
     serde_json::from_slice::<Status>(stdout)
         .map(|s| s.pressure)
         .unwrap_or(false)
-}
-
-/// Locate budgetguard: PATH first, then the plugin cache (newest version).
-fn find_budgetguard_binary() -> Option<PathBuf> {
-    if Command::new("budgetguard")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        return Some(PathBuf::from("budgetguard"));
-    }
-    let base = home()
-        .join(".claude")
-        .join("plugins")
-        .join("cache")
-        .join("yukineko")
-        .join("budgetguard");
-    let mut candidates: Vec<PathBuf> = std::fs::read_dir(&base)
-        .ok()?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path().join("bin").join("budgetguard"))
-        .filter(|p| p.exists())
-        .collect();
-    candidates.sort();
-    candidates.pop()
 }
 
 #[cfg(test)]

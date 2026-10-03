@@ -5,8 +5,9 @@
 //! (`~/.claude/plugins/cache/yukineko/<name>/<version>/bin/<name>`) for every
 //! bare-name PATH lookup — `scripts/rollout-plugins.sh` keeps the cache copy
 //! current, but has no way to touch a stray `~/.cargo/bin` copy. This module
-//! flags that drift so it doesn't go unnoticed indefinitely. Purely
-//! diagnostic: fail-soft throughout, never blocks a turn.
+//! flags that drift so it doesn't go unnoticed indefinitely. Diagnostic only
+//! (never blocks a turn), but not silent: a scan that could not be completed
+//! is reported as undetermined, never as "nothing shadowed".
 
 use harness_core::verdict::Determination;
 use serde::Serialize;
@@ -71,47 +72,72 @@ fn detect_with<F: Fn(&Path) -> bool>(
     out
 }
 
-/// The plugin-cache root: `~/.claude/plugins/cache/yukineko`.
-fn cache_root() -> PathBuf {
-    harness_core::config::home()
-        .join(".claude")
-        .join("plugins")
-        .join("cache")
-        .join("yukineko")
+/// Non-recursive list of the file names directly inside `dir`, in three
+/// answers. Each entry is classified with `std::fs::metadata` (follows
+/// symlinks, so a symlinked binary counts): a file is listed, a non-file is
+/// skipped, and a `NotFound` (dangling symlink / vanished entry) is skipped as
+/// observed-nothing. Any other error — `dir` unreadable, an entry unreadable or
+/// un-stat-able, a non-UTF-8 name — is `Undetermined`, never a shorter list.
+fn list_binary_names(dir: &Path) -> Determination<Vec<String>> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(it) => it,
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "could not enumerate {}: {e}",
+                dir.display()
+            ))
+        }
+    };
+    let mut names = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "could not read an entry of {}: {e}",
+                    dir.display()
+                ))
+            }
+        };
+        let path = entry.path();
+        match std::fs::metadata(&path) {
+            Ok(meta) if meta.is_file() => {}
+            Ok(_) => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "could not stat {}: {e}",
+                    path.display()
+                ))
+            }
+        }
+        match entry.file_name().into_string() {
+            Ok(name) => names.push(name),
+            Err(_) => {
+                return Determination::undetermined(format!(
+                    "a binary name under {} is not UTF-8",
+                    dir.display()
+                ))
+            }
+        }
+    }
+    Determination::Known(names)
 }
 
-/// Pick the highest-sorting version dir's `bin/` under a plugin dir (mirrors
-/// the sort+pop "current version" resolution used elsewhere in the harness,
-/// e.g. `autoflow::backlog::find_backlog_binary`).
-fn latest_bin_dir(plugin_dir: &Path) -> Option<PathBuf> {
-    let mut versions: Vec<PathBuf> = std::fs::read_dir(plugin_dir)
-        .ok()?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.is_dir())
-        .collect();
-    versions.sort();
-    let bin = versions.pop()?.join("bin");
-    bin.is_dir().then_some(bin)
-}
-
-/// Non-recursive list of file names directly inside `dir`.
-fn list_binary_names(dir: &Path) -> Vec<String> {
-    std::fs::read_dir(dir)
-        .map(|it| {
-            it.filter_map(|e| e.ok())
-                .filter(|e| e.path().is_file())
-                .filter_map(|e| e.file_name().into_string().ok())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// Enumerate every `(name, cache_path)` pair across all plugin-cache dirs.
+/// Enumerate every `(name, cache_path)` pair across all plugin-cache dirs
+/// under `root` (the live caller passes `harness_core::plugin_bin::cache_root()`).
+///
 /// A missing cache root is a legitimate absence (e.g. no plugins installed
-/// yet) and yields `Known(vec![])`; any OTHER `read_dir` error (permission
-/// denied, IO) is a cannot-determine and must not be silently read as "no
-/// shadowed binaries" — it comes back `Undetermined` so callers can say so.
+/// yet) and yields `Known(vec![])`. Each plugin's current version is picked by
+/// `harness_core::plugin_bin::cache_lookup_in` (numeric version order, the
+/// newest version dir that holds `bin/<plugin>`), and every file in that
+/// `bin/` dir is listed. A plugin with no `bin/<plugin>` in any version
+/// (`Known(None)`: a skill-only plugin) has nothing to shadow and is skipped.
+///
+/// Every cannot-determine — the root or a plugin dir unreadable, an entry that
+/// cannot be read or stat'ed, a non-UTF-8 name, an unreadable `bin/` dir —
+/// makes the whole scan `Undetermined` (naming the plugin). It is never read as
+/// "no shadowed binaries", and a plugin is never silently dropped from the scan.
 fn scan_cache_bins(root: &Path) -> Determination<Vec<(String, PathBuf)>> {
     let entries = match std::fs::read_dir(root) {
         Ok(e) => e,
@@ -120,19 +146,68 @@ fn scan_cache_bins(root: &Path) -> Determination<Vec<(String, PathBuf)>> {
         }
         Err(e) => return Determination::undetermined(format!("{}: {e}", root.display())),
     };
-    let mut plugin_dirs: Vec<PathBuf> = entries
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.is_dir())
-        .collect();
-    plugin_dirs.sort();
+    let mut plugins: Vec<String> = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "could not read an entry of {}: {e}",
+                    root.display()
+                ))
+            }
+        };
+        let path = entry.path();
+        match std::fs::metadata(&path) {
+            Ok(meta) if meta.is_dir() => {}
+            // A plain file in the cache root cannot be a plugin dir.
+            Ok(_) => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "could not stat {}: {e}",
+                    path.display()
+                ))
+            }
+        }
+        match entry.file_name().into_string() {
+            Ok(name) => plugins.push(name),
+            Err(_) => {
+                return Determination::undetermined(format!(
+                    "a plugin dir name under {} is not UTF-8",
+                    root.display()
+                ))
+            }
+        }
+    }
+    plugins.sort();
 
     let mut out = Vec::new();
-    for plugin_dir in plugin_dirs {
-        let Some(bin_dir) = latest_bin_dir(&plugin_dir) else {
-            continue;
+    for plugin in plugins {
+        let bin_dir = match harness_core::plugin_bin::cache_lookup_in(root, &plugin) {
+            Determination::Known(Some(bin)) => match bin.parent() {
+                Some(dir) => dir.to_path_buf(),
+                None => {
+                    return Determination::undetermined(format!(
+                        "plugin {plugin}: resolved binary {} has no parent dir",
+                        bin.display()
+                    ))
+                }
+            },
+            // No version dir holds `bin/<plugin>`: nothing of this plugin can
+            // be shadowed. An observation, not a skip-on-error.
+            Determination::Known(None) => continue,
+            Determination::Undetermined(why) => {
+                return Determination::undetermined(format!("plugin {plugin}: {why}"))
+            }
         };
-        for name in list_binary_names(&bin_dir) {
+        let names = match list_binary_names(&bin_dir) {
+            Determination::Known(names) => names,
+            Determination::Undetermined(why) => {
+                return Determination::undetermined(format!("plugin {plugin}: {why}"))
+            }
+        };
+        for name in names {
             let cache_path = bin_dir.join(&name);
             out.push((name, cache_path));
         }
@@ -140,15 +215,17 @@ fn scan_cache_bins(root: &Path) -> Determination<Vec<(String, PathBuf)>> {
     Determination::Known(out)
 }
 
-/// Live detection: reads `$PATH`, the real plugin-cache root, and the real
-/// filesystem. Fail-soft throughout — a missing `$PATH` env var or missing
-/// cache root yields an empty report, never panics.
+/// Live detection: reads `$PATH`, the real plugin-cache root
+/// (`harness_core::plugin_bin::cache_root()`), and the real filesystem. A
+/// missing cache root yields `Known` empty; an unset `$PATH` or any
+/// cannot-determine in the cache scan (see [`scan_cache_bins`]) yields
+/// `Undetermined`. Never panics.
 pub fn detect() -> Determination<Vec<ShadowedBinary>> {
     let Ok(path_env) = std::env::var("PATH") else {
         return Determination::undetermined("$PATH is not set");
     };
     let path_dirs = split_path(&path_env);
-    match scan_cache_bins(&cache_root()) {
+    match scan_cache_bins(&harness_core::plugin_bin::cache_root()) {
         Determination::Known(cache_bins) => {
             Determination::Known(detect_with(&path_dirs, &cache_bins, |p| p.is_file()))
         }

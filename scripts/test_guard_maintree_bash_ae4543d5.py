@@ -300,7 +300,7 @@ class SameEffectIntoMainIsRefused(unittest.TestCase):
     def test_untrackable_variable_refused(self):
         o = self.f.out
         for cmd in (
-            "S=$(mktemp -d); echo x > $S/f",           # value only known at runtime
+            "S=$(cat cfg); echo x > $S/f",             # value only known at runtime
             f"[ -d /nope ] && S={o}; echo x > $S/f",   # assignment may not run
             f"(S={o}); echo x > $S/f",                 # subshell does not leak
             f"S={o} true; echo x > $S/f",              # prefix assignment: env only
@@ -365,6 +365,175 @@ class SameEffectIntoMainIsRefused(unittest.TestCase):
             with self.subTest(cmd=cmd):
                 rc, err = self.f.run(cmd)
                 self.assertEqual(rc, 0, f"{cmd}: {err[:300]}")
+
+
+
+class Round3ReadsSpawnsAndTemps(unittest.TestCase):
+    """Reads of main through an interpreter must pass (the cwd is the
+    worktree); writes through a literal spawn, a mktemp name, or the
+    g-prefixed GNU tools are judged on their effect."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.f = Fixture()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.f.close()
+
+    def run_wt(self, cmd, **env):
+        return self.f.run(cmd, payload_cwd=str(self.f.wt))
+
+    def test_interpreter_reads_of_main_allowed(self):
+        m = self.f.main
+        for cmd in (
+            f"python3 -c \"import subprocess; subprocess.run(['cat','{m}/f.txt'])\"",
+            f"python3 -c \"import subprocess; print(subprocess.check_output(['git','-C','{m}','log']))\"",
+            f"python3 -c \"import re; print(re.findall('copy', open('{m}/f.txt').read()))\"",
+            f"python3 -c \"print(open('{m}/f.txt').read().replace('a','b'))\"",
+            f"python3 -c \"import os,sys; sys.stdout.write(open('{m}/f.txt').read())\"",
+            f"node -e \"const s=require('fs').readFileSync('{m}/f.txt','utf8'); console.log(s.replace(/a/g,'b'))\"",
+            f"node -e \"console.log(require('child_process').execSync('git -C {m} status').toString())\"",
+            f"perl -ne 'print if /copy/' {m}/f.txt",
+            f"perl -ne 'print if /unlink|rename/' {m}/f.txt",
+            f"ruby -e 'puts File.read(\"{m}/f.txt\")'",
+            f"ruby -e '$stdout.write(File.read(\"{m}/f.txt\"))'",
+        ):
+            with self.subTest(cmd=cmd):
+                rc, err = self.run_wt(cmd)
+                self.assertEqual(rc, 0, f"read of main refused: {cmd}: {err[:300]}")
+
+    def test_interpreter_writes_into_main_refused(self):
+        m = self.f.main
+        for cmd in (
+            f"python3 -c \"import subprocess; subprocess.run(['rm','{m}/f.txt'])\"",
+            f"python3 -c \"import subprocess; subprocess.run(['sh','-c','rm {m}/f.txt'])\"",
+            f"python3 -c \"import subprocess; subprocess.run(['rm','f.txt'], cwd='{m}')\"",
+            f"python3 -c \"import os; os.system('cp /etc/hosts {m}/h')\"",
+            f"python3 -c \"import os; os.replace('/etc/hosts', '{m}/h')\"",
+            f"python3 -c \"import shutil as s; s.copy('/etc/hosts', '{m}/h')\"",
+            f"python3 -c \"from pathlib import Path; Path('{m}/x').replace('{m}/y')\"",
+            f"python3 -c \"from shutil import copy; copy('/etc/hosts', '{m}/h')\"",
+            f"python3 -c \"import subprocess; r = subprocess.run; r(['rm','{m}/f.txt'])\"",
+            f"python3 -c \"import os; os.execv('/bin/rm', ['rm','{m}/f.txt'])\"",
+            f"node -e \"require('fs').cpSync('/etc/hosts','{m}/h')\"",
+            f"node -e \"const f=require('fs'); f.copyFileSync('/etc/hosts','{m}/h')\"",
+            f"node -e \"const f=require('fs'); f.cp('/etc/hosts','{m}/h',()=>{{}})\"",
+            f"node -e \"require('child_process').execSync('rm {m}/f.txt')\"",
+            f"node -e \"require('child_process').spawnSync('rm', ['{m}/f.txt'])\"",
+            f"perl -e 'unlink(\"{m}/f.txt\")'",
+            f"perl -MFile::Copy -e 'copy(\"/etc/hosts\", \"{m}/h\")'",
+            f"perl -e 'system(\"rm\", \"{m}/f.txt\")'",
+            f"perl -e '`rm {m}/f.txt`'",
+            f"ruby -e 'File.write(\"{m}/x\", \"y\")'",
+            f"ruby -e 'File.open(\"{m}/x\", \"w\") {{|f| f.write(1)}}'",
+            f"ruby -e 'system(\"rm {m}/f.txt\")'",
+            f"grm {m}/f.txt",
+            f"gcp /etc/hosts {m}/h",
+            f"gmv {self.f.out}/a {m}/b",
+            f"gln -s /etc/hosts {m}/h",
+            f"ginstall /etc/hosts {m}/h",
+            f"S=$(mktemp -p {m}); echo x > $S",
+            f"cd $(mktemp -d -p {m}) && echo x > f",
+        ):
+            with self.subTest(cmd=cmd):
+                rc, err = self.run_wt(cmd)
+                self.assertEqual(rc, 2, f"write into main allowed: {cmd}")
+
+    def test_mktemp_outside_main_allowed(self):
+        o = self.f.out
+        for cmd in (
+            "S=$(mktemp); echo x > $S",
+            "T=$(mktemp -d); echo x > $T/f.txt",
+            "T=$(mktemp -d -t ae45); echo x > $T/f.txt && rm -rf $T",
+            "cd $(mktemp -d) && echo x > f.txt",
+            'cd "$(mktemp -d)" && echo x > f.txt',
+            f"S=$(mktemp {o}/x.XXXX); echo x > $S",
+            f"S=$(mktemp -p {o}); echo x > $S",
+            "grm -f /tmp/ae45-nonexistent",
+        ):
+            with self.subTest(cmd=cmd):
+                rc, err = self.run_wt(cmd)
+                self.assertEqual(rc, 0, f"write outside main refused: {cmd}: {err[:300]}")
+
+    def test_spelling_variants_of_interpreter_and_substitution_writes_refused(self):
+        m = self.f.main
+        for cmd in (
+            f"echo `rm {m}/f.txt`",
+            f"X=`rm {m}/f.txt`",
+            f"`echo rm {m}/f.txt`",
+            f"$(echo rm) {m}/f.txt",
+            f"cd {m} && $(echo rm) f.txt",
+            f"python3 -c \"import os, subprocess; os.chdir('{m}'); subprocess.run(['rm','f.txt'])\"",
+            f"python3 -c \"import os; getattr(os, 'rep'+'lace')('/etc/hosts', '{m}/h')\"",
+            f"python3 -c \"from os import *; replace('/etc/hosts', '{m}/h')\"",
+            f"python3 -c \"from pathlib import Path\nfor q in Path('{m}').glob('*'): q.replace('/tmp/x')\"",
+            f"python3 -c \"def g(p, t): p.replace(t)\nimport pathlib; g(pathlib.Path('{m}/f.txt'), '/tmp/z')\"",
+            f"python3 -c \"import io; io.FileIO('{m}/x', 'w')\"",
+            f"python3 -c \"m='w'; open('{m}/x', m)\"",
+            f"python3 -c \"import os; os.open('{m}/x', os.O_WRONLY|os.O_CREAT)\"",
+            f"node -e \"const {{promises: p}} = require('fs'); p.cp('/etc/hosts','{m}/h')\"",
+            f"node -e \"const a=require('fs'); const b=a; b.cp('/etc/hosts','{m}/h',()=>0)\"",
+            f"node -e \"const a=require('fs'); a['c'+'p']('/etc/hosts','{m}/h',()=>0)\"",
+            f"node -e \"require('child_process').execSync('rm f.txt', {{cwd: '{m}'}})\"",
+            f"node -e \"process.chdir('{m}'); require('child_process').execSync('rm f.txt')\"",
+            f"perl -e '$_=\"x\"; s/x/unlink(\"{m}\\/f.txt\")/e'",
+            f"perl -e 'chdir \"{m}\"; system(\"rm f.txt\")'",
+            f"perl -e 'my $f=\"{m}/f.txt\"; system(\"rm $f\")'",
+            f"ruby -e 'Dir.chdir(\"{m}\"); system(\"rm f.txt\")'",
+            f"ruby -e 'require \"pathname\"; Pathname.new(\"{m}/x\").write(\"y\")'",
+            f"T=$(mktemp -d); rm $T/../../{m.name}/f.txt",
+            f"export TMPDIR={m}; S=$(mktemp -t x); echo x > $S",
+        ):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self.run_wt(cmd)[0], 2, f"write into main allowed: {cmd}")
+
+    def test_ordinary_interpreter_code_reading_main_allowed(self):
+        m, o = self.f.main, self.f.out
+        for cmd in (
+            f"python3 -c \"d = {{'a':1}}; e = d.copy(); print(e)\" > {o}/o.txt",
+            f"python3 -c \"import copy; print(copy.copy([1]), open('{m}/f.txt').read())\"",
+            f"python3 -c \"import os; print(os.listdir('{m}'))\"",
+            f"python3 -c \"import os; fd=os.open('{m}/f.txt', os.O_RDONLY); print(os.read(fd, 9))\"",
+            f"python3 -c \"import subprocess; subprocess.run(['grep','-r','x','{m}'])\"",
+            f"python3 -c \"import subprocess; subprocess.run('ls {m}', shell=True)\"",
+            f"node -e \"const fs=require('fs'); console.log(fs.readdirSync('{m}'))\"",
+            f"perl -ne 'print if /copy/ || /unlink/' {m}/f.txt",
+            f"perl -ne 's/copy/X/; print' {m}/f.txt",
+            f"perl -e 'print `ls {m}`'",
+            f"ruby -e 'puts `ls {m}`'",
+            "echo `date`",
+            "S=$(mktemp); T=$(mktemp -d); mv $S $T/; ls $T",
+            f"cd {o} && $(echo true)",
+        ):
+            with self.subTest(cmd=cmd):
+                rc, err = self.run_wt(cmd)
+                self.assertEqual(rc, 0, f"{cmd}: {err[:300]}")
+
+    def test_tmpdir_is_taken_from_the_environment_only_when_outside_main(self):
+        f = self.f
+        cmd = "S=$(mktemp); echo x > $S"
+        for tmpdir, want in (
+            (str(f.main), 2),       # a TMPDIR under main: mktemp writes there
+            ("rel", 2),             # set but unusable: unknown, not /tmp
+            (str(f.out), 0),
+            (None, 0),              # unset: /tmp
+        ):
+            env = _env(CLAUDE_PROJECT_DIR=str(f.main), HOME=str(f.home))
+            env.pop("TMPDIR", None)
+            if tmpdir is not None:
+                env["TMPDIR"] = tmpdir
+            payload = {"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": str(f.wt)}
+            r = subprocess.run([sys.executable, str(GUARD)], input=json.dumps(payload),
+                               capture_output=True, text=True, env=env, cwd=str(f.wt))
+            with self.subTest(tmpdir=tmpdir):
+                self.assertEqual(r.returncode, want, r.stderr[:300])
+
+    def test_dotdot_after_unknown_component(self):
+        o, m = self.f.out, self.f.main
+        self.assertEqual(self.run_wt(f"rm {o}/$X/../../{m.name}/f.txt")[0], 2)
+        self.assertEqual(self.run_wt(f"rm {o}/*/../x.txt")[0], 2)
+        self.assertEqual(self.run_wt(f"rm {o}/../x.txt {o}/*/y.txt")[0], 0)
 
 
 if __name__ == "__main__":

@@ -47,39 +47,82 @@ JUDGED BY EFFECT, NOT BY argv[0] (ae4543d5). The same write used to pass by
 changing its spelling; each of these is now followed to the path it writes:
   * shell wrappers: `sh -c`, `bash -lc` (any bundle containing `c`), `eval`,
     `env …`, `nohup`, `time`, `nice`, `sudo`, `timeout`, `xargs`, `command`,
-    `exec`, `find -exec`, a quoted `"$( … )"` or backquote — the payload is
-    tokenized and judged by this same procedure, recursively (depth-capped);
+    `exec`, `find -exec`, a `$( … )` or backquote (quoted or not; an unquoted
+    backquote pair is rewritten to `$( … )` before tokenizing) — the payload
+    is tokenized and judged by this same procedure, recursively (depth-capped);
+  * a variable used as the command: `CMD="rm <path>"; $CMD` word-splits the
+    known value and judges the resulting words as the command; `eval "$CMD"`
+    and `sh -c "$CMD"` judge the known value as a command text;
   * interpreters whose payload is NOT shell — `python -c` / `python - <<EOF`,
-    `node -e`, `perl -e`, `ruby -e`, an awk program. If the payload contains
-    a FILE-WRITE primitive (open(…,'w'), write_text, shutil.copy,
-    writeFileSync, an awk print/printf `>` redirection, …), a PROCESS-SPAWN
-    primitive (os.system/popen, subprocess, child_process, perl/ruby
-    backticks, system(), an awk `| "cmd"`), or ANY mutation-capable word
-    (remove, unlink, rmtree, write, rename, replace, copy, move, mkdir,
-    chmod, symlink, truncate, … — no module prefix needed, so `from os import
-    remove`, `import os as o`, `__import__`, getattr, `{writeFileSync: w}` and
-    `fs['writeFileSync']` are all seen), then every literal path in it — and
-    every operand handed to it — is judged, and one that lands on main is
-    refused. Only a FILE WRITE that names no literal path at all is refused
-    for that reason alone (cannot determine); a spawn without a literal path
-    runs an unknown program (residual). A payload with none of these is a read
-    and is allowed, even of main. awk is parsed, not grepped: string literals
-    are blanked first and only a `>`/`|` at parenthesis depth 0 inside a
-    print/printf counts (`print ($1 > 3)` and `"|"` are not writes). A literal
-    that begins with a trailing run of the main root's components
-    (`'/src/harness/x'`, the shape of `$HOME + '/src/harness/x'`) counts as
-    main;
+    `node -e`, `perl -e`, `ruby -e`, an awk program.
+      - A process spawn whose command is a LITERAL — subprocess.run/call/
+        check_call/check_output/Popen/getoutput, os.system/popen (python,
+        read with the ast module; no cwd= / env= / executable= / **kwargs),
+        exec/execSync/execFile/spawn/spawnSync (node; no cwd/env/shell
+        option), backquotes / qx / %x / system / exec (perl, ruby; no
+        interpolation) — is judged with these same shell rules, so
+        `subprocess.run(['cat', '<main>/f'])` is a read and `['rm', …]` is not.
+      - Every other spawn (an alias, os.exec*/spawn*, Popen with cwd=, an
+        f-string, an awk `| "cmd"` / system()), and every literal spawn in a
+        payload that also changes its own cwd or environment (chdir,
+        os.environ, %ENV, ENV[…], process.env), is UNPARSED.
+      - If the payload contains a FILE-WRITE primitive (open(…) with a w / a /
+        x / + mode or a non-literal mode, io.FileIO, os.open with O_WRONLY /
+        O_RDWR / O_CREAT / O_APPEND / O_TRUNC, write_text, shutil.copy,
+        writeFileSync, File.write, a ruby File.open with a write mode, an awk
+        print/printf `>` redirection, …), an UNAMBIGUOUS mutation word
+        (remove, unlink, rmtree, rmdir, rename, renames, symlink, chmod,
+        chown, truncate, mkdir, makedirs, copyfile, copytree, copy2,
+        copymode, move, write_text, write_bytes, writeFile(Sync),
+        appendFile(Sync), unlinkSync, rmSync, renameSync, mkdirSync,
+        copyFileSync, symlinkSync, … anywhere, no module prefix needed), an
+        AMBIGUOUS mutation word (replace, write, copy, link, rm, cp) reached
+        through os / shutil / pathlib / fs — an alias bound by import /
+        require / assignment / a for-loop over one, `Path(…)`, a name
+        imported from one, a destructuring of fs, `fs.copy…` — or a python
+        call whose arity only a path method has (`x.replace(target)` with ONE
+        argument, `x.copy/move/link/rm/cp(arg)`), a dynamic lookup that could
+        hand one out by a name this scan cannot read (getattr, __import__,
+        __dict__, importlib, exec/eval/compile, `from os import *`, a node
+        computed member call `x[…](…)`, eval / Function / a non-literal
+        require), or an UNPARSED spawn, then every literal path in it — and
+        every operand handed to it — is judged, and one that lands on main is
+        refused. `.read().replace(…)`, `sys.stdout.write(…)`,
+        `re.findall('copy', …)`, `s.replace(/a/, 'b')` are not mutations.
+      - Only a FILE WRITE that names no literal path at all is refused for that
+        reason alone (cannot determine); an unparsed spawn without a literal
+        path runs an unknown program (residual). A payload with none of these
+        is a read and is allowed, even of main.
+      - perl regex / substitution / transliteration literals are blanked before
+        the word scan (`print if /copy/` is a read) — only where perl itself
+        expects a term, and never one that can run code (an `e` flag,
+        `(?{…})`, `@{[…]}` / `${…}`).
+      - awk is parsed, not grepped: string literals are blanked first and only
+        a `>`/`|` at parenthesis depth 0 inside a print/printf counts
+        (`print ($1 > 3)` and `"|"` are not writes).
+      - A literal that begins with a trailing run of the main root's
+        components (`'/src/harness/x'`, the shape of `$HOME +
+        '/src/harness/x'`) counts as main;
   * in-place flags in any spelling: `-i`, `-i.bak`, `-pi`, `-Ei`,
     `--in-place[=sfx]`, BSD `-i ''`, gawk `-i inplace`;
   * downloaders and extractors: `curl -o/--output/-O/--output-dir`,
     `wget -O/-P` (and plain `wget`, which writes into the cwd), `tar -x`
     (`-C`/`--directory` or the cwd), `tar -c` (the archive), `unzip` (`-d` or
     the cwd), `find -delete`, `chmod/chown/chgrp`, `rsync/scp/ditto`, and
-    `cp/mv/install/ln --target-directory=DIR` / `-tDIR` / `-t DIR`;
-  * an UNKNOWN PROGRAM (`$CMD …`, `sh -c "$CMD"`, the text `eval "$(brew
-    shellenv)"` runs) is the same class as make/cargo/an arbitrary binary:
-    it is not refused, but the command that PRODUCES it (`brew shellenv`
-    inside the `$( … )`) and every redirection around it are judged.
+    `cp/mv/install/ln --target-directory=DIR` / `-tDIR` / `-t DIR` — and the
+    GNU coreutils `g`-prefixed names Homebrew installs (grm, gcp, gmv,
+    ginstall, gln, gtouch, gmkdir, grmdir) like the plain ones;
+  * text PRODUCED by a substitution and then run (`eval "$(…)"`, `sh -c
+    "$(…)"`, `$(…)` or a backquote as the program): what it prints cannot be
+    known, so the substitution's own command text is judged — it runs as a
+    command in its own right, and any literal path in it that lands on main
+    is refused (`eval "$(echo rm <main>/f)"`, a printf format naming main);
+  * an UNKNOWN PROGRAM (an unknown `$CMD …`, `$(echo rm) …`, the text `eval
+    "$(brew shellenv)"` runs) could be any tool, so each of its non-option
+    operands that lands on main is refused; with none it is the same class as
+    make/cargo/an arbitrary binary and is not refused, but the command that
+    PRODUCES it (`brew shellenv` inside the `$( … )`) and every redirection
+    around it are judged.
 
 CWD AND VARIABLES ARE TRACKED THROUGH THE COMMAND, not used as a blanket
 excuse. `cd <dir>` changes what a RELATIVE path resolves against for the
@@ -99,23 +142,35 @@ Variables are handled the same way. `S=<dir>`, `export S=<dir>`, `declare`,
 `local`, `readonly` and `unset` earlier in the SAME command line are tracked
 and expanded (`$S`, `${S}`, `"$S"`), with the same uncertainty rules as `cd`.
 A value only known at runtime (`S=$(…)`, `read S`, two branches that
-disagree) becomes unresolvable. A `for f in A B …` variable stands for the
+disagree) becomes unresolvable — except `$(mktemp …)`: with no template, `-t`
+/ `--tmpdir` (TMPDIR or /tmp), `-p DIR` / `--tmpdir=DIR`, or a template whose
+directory is literal, it is that known directory plus one freshly invented
+name, which is never main or one of main's ancestors; a write under it is
+judged by whether that directory is under main (`S=$(mktemp -d)`, `cd
+"$(mktemp -d)"` -> allowed; `mktemp -p <main>` -> refused). A `for f in A B …` variable stands for the
 longest literal prefix its listed values share plus a glob (`for f in
 <wt>/*.txt` -> under the worktree; a list mixing <wt> and <main> -> their
 common parent, refused); a list holding `$(…)` or an unknown variable, or no
 `in` list at all, makes it unknown. A `S=x cmd` PREFIX assignment
 only reaches cmd's environment and does not expand `$S` in its own arguments.
 What is chosen for a variable that is NOT assigned in the command and is
-therefore inherited from the session's shell: only `$HOME` (and `~`) is taken
-from this hook's environment, because it is the one value the hook reliably
-shares with the session. `$PWD` is the TRACKED cwd (initially the session's cwd,
+therefore inherited from the session's shell: only `$HOME` (and `~`) and
+`$TMPDIR` are taken from this hook's environment, because they are the values
+the hook reliably shares with the session (both are launched by the same Claude
+Code process); TMPDIR only when it is an absolute path that is not under main
+(a TMPDIR that is set but fails that is unknown; mktemp falls back to /tmp only
+when TMPDIR is unset). `$PWD` is the TRACKED cwd (initially the session's cwd,
 as above). Every other inherited variable is treated as unknown — this hook's
 environment is not the Bash tool's shell, so reading it would judge a value
 that may not be the one used. An unknown variable is refused only if it could
 point into main: a path that BEGINS with an unknown value (`$X/f`,
-`~user/f`, `$(…)/f`) may be absolute and is refused; otherwise the path is
-judged on its longest LITERAL prefix, so `<parent-of-main>/$X` is refused, while
-`/tmp/$X/f` and `<worktree>/$X` provably cannot reach main and are allowed.
+`~user/f`, `$(…)/f`) may be absolute and is refused; a path with a `..`
+component ANYWHERE after its first unknown or glob component (`/tmp/$X/../f`,
+`<scratch>/*/../../main/f`, a for-loop variable followed by `/../`) is refused,
+because the unknown part may stand for any depth and the `..` can then climb
+anywhere; otherwise the path is judged on its longest LITERAL prefix, so
+`<parent-of-main>/$X` is refused, while `/tmp/$X/f` and `<worktree>/$X` (no
+later `..`) cannot reach main and are allowed.
 
 UNDECIDABLE INPUT RESOLVES TO DENY (CLAUDE.md 3), as it always has in the twin
 guard-maintree-edit.py. Three sites used to answer "I could not tell" with ALLOW:
@@ -131,10 +186,11 @@ decidable, and only then denies what is left:
     shell syntax) — but only when the terminator is actually found, so a `<<`
     inside a quoted string cannot swallow later lines;
   * `~`, `$HOME`, `$PWD` and same-command assignments are expanded;
-  * for a target still holding `$`, a glob or a brace, the longest LITERAL path
-    prefix is resolved: if that prefix and the main root are on the same ancestor
-    chain the expansion could land on main, so it is refused; if they are on
-    disjoint branches it provably cannot, so it is allowed.
+  * for a target still holding `$`, a glob or a brace, and no `..` after the
+    first such component (that is refused), the longest LITERAL path prefix is
+    resolved: if that prefix and the main root are on the same ancestor chain
+    the expansion could land on main, so it is refused; if they are on disjoint
+    branches it cannot, so it is allowed.
 
 The remaining refusals are honest "cannot determine" answers, and each names what
 could not be resolved so the caller can rewrite it with a literal path.
@@ -145,6 +201,7 @@ could not be resolved so the caller can rewrite it with a literal path.
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -258,6 +315,7 @@ _UNRESOLVABLE = set("$`*?{}")
 # and is judged on its literal prefix (see _hit) — never silently resolved.
 UNKNOWN_VAL = "$__undetermined__"  # a variable whose value could not be tracked
 SUBST_WORD = "$__substitution__"   # the output of `$( … )` / `<( … )`
+MKTEMP_MARK = "$__mktemp__"        # the fresh name `mktemp` invents, one component
 TILDE_USER = "$__tilde_user__"     # `~user/…`, which this process does not resolve
 
 _VAR_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
@@ -372,6 +430,22 @@ def _hits_main(root: str, path: str, own_gitdir: str | None, st: _State) -> bool
         # lie on the same ancestor chain. `<wt>/*.rs` provably cannot (disjoint
         # branches) and is allowed; `<parent-of-root>/*` and a bare `*.rs` both
         # can, and are refused.
+        comps = path.split("/")
+        first = next(i for i, c in enumerate(comps) if any(ch in c for ch in _UNRESOLVABLE))
+        if ".." in comps[first + 1:]:
+            # `<scratch>/*/../../main/f`: the unknown component may stand for
+            # any depth (a glob, a variable holding `a/b/c`), so a later `..`
+            # can climb anywhere — main included. The literal prefix proves
+            # nothing once that happens.
+            return True
+        if comps[first] == MKTEMP_MARK and first > 0 and not any(
+                ch in c for c in comps[first + 1:] for ch in _UNRESOLVABLE):
+            # `$(mktemp …)`: a name that did not exist until mktemp invented it,
+            # directly under a known directory. It is never main or one of
+            # main's ancestors, so only "is that directory under main" decides.
+            base = "/".join(comps[:first]) or "/"
+            if os.path.isabs(base):
+                return _under_main(os.path.realpath(base), root)
         prefix = _literal_prefix(path)
         if not prefix and path[0] in "$`":
             # The path BEGINS with a value this process does not know, which
@@ -563,6 +637,42 @@ def _split_punct(tok: str) -> list[str]:
     return out
 
 
+def _backquotes_to_subst(text: str) -> str:
+    """Rewrite each shell backquote substitution `` `…` `` (unquoted or inside
+    double quotes — not inside single quotes, not escaped) as `$( … )`, so it
+    is walked like one: its own command is judged, and its output is an
+    unknown word. An unterminated backquote is left as it is."""
+    out: list[str] = []
+    i, sq, dq = 0, False, False
+    while i < len(text):
+        ch = text[i]
+        if sq:
+            out.append(ch)
+            sq = ch != "'"
+        elif ch == "\\" and i + 1 < len(text):
+            out.append(text[i : i + 2])
+            i += 1
+        elif ch == "'" and not dq:
+            out.append(ch)
+            sq = True
+        elif ch == '"':
+            out.append(ch)
+            dq = not dq
+        elif ch == "`":
+            j = i + 1
+            while j < len(text) and text[j] != "`":
+                j += 2 if text[j] == "\\" else 1
+            if j >= len(text):
+                out.append(text[i:])
+                break
+            out.append("$(" + text[i + 1 : j] + ")")
+            i = j
+        else:
+            out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def _tokenize(command: str) -> list[str] | None:
     lexer = shlex.shlex(
         _newlines_to_separators(command), posix=True, punctuation_chars="();<>|&"
@@ -606,6 +716,7 @@ _CHAIN_END = {";", ";;", ";&", ";;&", "&", None}
 # overwritten, or removed. Over-inclusive on purpose (a refusal is cheap).
 TARGET_ALL = {
     "rm", "unlink", "rmdir", "mv", "cp", "tee", "touch", "mkdir",
+    "grm", "gcp", "gmv", "ginstall", "gln", "gtouch", "gmkdir", "grmdir",
     "ln", "install", "truncate", "shred",
 }
 # The first operand is a mode/owner, the rest are targets.
@@ -637,8 +748,8 @@ WRAPPERS: dict[str, set[str]] = {
 # Wrappers that run the command IN the current shell (state changes persist).
 SAME_SHELL_WRAPPERS = {"command", "builtin", "exec", "time"}
 
-# Write primitives per interpreter. Over-inclusive on purpose: a match only
-# means "this payload may write", and its literal paths are then judged.
+# A mode-shaped string; only the fallback for a python payload that does not
+# parse (see _py_open_for_write, which reads the actual open() mode argument).
 _PY_MODE = re.compile(r"""['"](?:[rbtU]*[wax][rbt+]*|[rbt]*\+[rbt]*)['"]""")
 # FILE-WRITE primitives per interpreter: a match means "this payload writes a
 # file", so its literal paths are write targets, and a write that names no
@@ -659,19 +770,26 @@ _WRITE = {
     ),
     "perl": re.compile(
         r"""\bopen\b[^;]*?['"]\s*(?:\+?>|\+<)|['"]\s*(?:>>?|\+<)\s*['"]|"""
-        r"\b(?:unlink|rename|mkdir|rmdir|symlink|link|truncate|chmod|utime|"
-        r"sysopen|copy|move|make_path|mkpath|remove_tree|rmtree)\b"
+        r"\b(?:unlink|rename|mkdir|rmdir|symlink|link|truncate|chmod|chown|utime|"
+        r"sysopen|make_path|mkpath|remove_tree|rmtree)\b|"
+        r"""\b(?:copy|move|cp|mv)\s*(?:\(|['"$])"""
     ),
     "ruby": re.compile(
-        r"\bFile\.(?:write|open|new|delete|unlink|rename|symlink|link|truncate|chmod|"
+        r"\bFile\.(?:write|delete|unlink|rename|symlink|link|truncate|chmod|chown|"
         r"binwrite)\b|\bIO\.(?:write|binwrite|sysopen)\b|\bFileUtils\b|"
-        r"\bDir\.(?:mkdir|rmdir|delete|unlink)\b|\bPathname\b|\.write\s*\("
+        r"""\b(?:File|IO)\.(?:open|new)\b[^;\n]*(?:['"][rb]*[wa+]|File::(?:WRONLY|RDWR|"""
+        r"CREAT|APPEND|TRUNC))|"
+        r"\bDir\.(?:mkdir|rmdir|delete|unlink)\b|"
+        r"\bPathname\b[^;\n]*\.(?:write|binwrite|delete|unlink|rename|mkpath|mkdir|rmdir|"
+        r"rmtree|make_symlink|make_link|truncate|chmod)\b"
     ),
 }
-# PROCESS-SPAWN primitives: they run another program, not a file write. Only
-# the literal paths in the payload are judged (refused if one lands on main);
-# a spawn that names no literal path is an unknown program, like make/cargo,
-# and is allowed (residual).
+# PROCESS-SPAWN primitives: they run another program, not a file write. A
+# match sends the payload to _spawn_sites: a spawn whose command is a literal
+# is judged with the shell rules; any other (UNPARSED) spawn makes every
+# literal path in the payload a candidate (refused if one lands on main), and
+# one that names no literal path is an unknown program, like make/cargo, and
+# is allowed (residual).
 _SPAWN = {
     "python": re.compile(
         r"\bos\.(?:system|popen|exec\w*|spawn\w*|posix_spawn\w*)\b|\bsubprocess\b|"
@@ -684,15 +802,361 @@ _SPAWN = {
     "perl": re.compile(r"""\b(?:system|exec|qx)\b|`|\bopen\b[^;]*?['"]\s*\||\|\s*['"]"""),
     "ruby": re.compile(r"\b(?:system|exec|spawn)\b|`|%x|\bOpen3\b|\bIO\.popen\b"),
 }
-# Mutation-capable WORDS, with no module prefix required, so aliasing
-# (`from os import remove`, `import os as o`, `__import__('os')`, getattr,
-# `{writeFileSync: w}`, `fs['writeFileSync']`) cannot hide the call. A payload
-# that contains one of these AND a literal path landing on main is refused;
-# merely reading main (no such word) stays allowed.
-_MUTATION_TOKEN = re.compile(
-    r"remove|unlink|rmtree|rmdir|write|rename|replace|copy|move|mkdir|chmod|chown|"
-    r"symlink|link|truncate|appendFile|\brm(?:Sync)?\b|\bcp(?:Sync)?\b"
+# Mutation-capable WORDS. UNAMBIGUOUS ones count wherever they appear, with
+# no module prefix required, so aliasing (`from os import remove`,
+# `import os as o`, `__import__('os')`, getattr, `{writeFileSync: w}`,
+# `fs['writeFileSync']`) cannot hide the call. AMBIGUOUS ones (`replace`,
+# `write`, `copy`, `link`, `rm`, `cp`) are also ordinary string / stream
+# methods (`s.replace(…)`, `sys.stdout.write(…)`, `re.findall('copy', …)`), so
+# they count only where they are reached through os / shutil / pathlib / fs
+# (see _ambiguous_mutation). A payload with a mutation word AND a literal path
+# landing on main is refused; merely reading main stays allowed.
+_UNAMBIG_MUTATION = re.compile(
+    r"\b(?:remove|removedirs|unlink|rmtree|rmdir|rename|renames|symlink|chmod|chown|"
+    r"truncate|mkdir|makedirs|copyfile|copytree|copy2|copymode|copystat|move|"
+    r"write_text|write_bytes|writeFile|writeFileSync|appendFile|appendFileSync|"
+    r"unlinkSync|rmSync|rmdirSync|renameSync|mkdirSync|copyFile|copyFileSync|cpSync|"
+    r"symlinkSync|linkSync|chmodSync|chownSync|truncateSync|remove_tree|make_path|"
+    r"mkpath|hardlink_to|symlink_to)\b"
 )
+_AMBIG = r"(?:replace|write|copy|link|rm|cp)\w*"
+
+
+def _py_ambiguous_methods(code: str) -> bool | None:
+    """Python method calls whose ARITY gives them away as filesystem calls,
+    whatever the receiver is called (a parameter, a loop variable, …):
+    `x.replace(target)` with ONE argument is Path.replace (str.replace needs
+    two); `x.copy(…)` / `x.move(…)` / `x.link(…)` / `x.rm(…)` / `x.cp(…)` with
+    an argument is a path / shutil-style copy (dict.copy and copy.copy are not
+    reached this way: the first takes none, the second is the `copy` module).
+    None if the source does not parse."""
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return None
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        nm = node.func.attr
+        nargs = len(node.args) + len(node.keywords)
+        if nm == "replace" and nargs == 1:
+            return True
+        if re.fullmatch(r"(?:copy|move|link|rm|cp)\w*", nm) and nargs >= 1:
+            if getattr(node.func.value, "id", None) == "copy":
+                continue
+            return True
+    return False
+
+
+_PY_DYNAMIC = re.compile(
+    r"__import__|\bgetattr\b|__dict__|\bvars\s*\(|\bglobals\s*\(|\blocals\s*\(|"
+    r"\bimportlib\b|\bexec\s*\(|\beval\s*\(|\bcompile\s*\(|\bfrom\s+(?:os|shutil|"
+    r"pathlib)\b[\w.]*\s+import\s+\*"
+)
+_JS_DYNAMIC = re.compile(
+    r"\beval\s*\(|\bFunction\s*\(|\bimport\s*\(\s*[^'\"`\s]|\brequire\s*\(\s*[^'\"`\s]|"
+    r"\bprocess\.binding\b"
+)
+
+
+def _ambiguous_mutation(lang: str, code: str) -> bool:
+    """An ambiguous mutation word reached through a filesystem module: an
+    attribute of an alias bound to os / shutil / pathlib (python) or fs
+    (node), of `Path(…)`, a name imported from one of them, a call whose
+    arity only a filesystem method has (_py_ambiguous_methods), or a
+    getattr / subscript / destructuring / eval that could hand one out by a
+    name this scan cannot read (those count as mutation, 3.)."""
+    if lang == "python":
+        if _PY_DYNAMIC.search(code):
+            return True
+        by_arity = _py_ambiguous_methods(code)
+        if by_arity is None:
+            # Unparsable: fall back to the word itself anywhere.
+            return bool(re.search(r"\b" + _AMBIG + r"\b", code))
+        if by_arity:
+            return True
+        aliases = {"os", "shutil", "pathlib", "Path", "PurePath", "PosixPath"}
+        for m in re.finditer(r"\bimport\s+([\w.]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.]+"
+                             r"(?:\s+as\s+\w+)?)*)", code):
+            for part in m.group(1).split(","):
+                bits = part.split()
+                if bits and bits[0].split(".")[0] in ("os", "shutil", "pathlib"):
+                    aliases.add(bits[-1])
+        for m in re.finditer(r"\bfrom\s+(os|shutil|pathlib)\b[\w.]*\s+import\s+"
+                             r"\(?([\w\s,]+)", code):
+            names = re.findall(r"\w+", m.group(2))
+            if any(re.fullmatch(_AMBIG, n) for n in names):
+                return True
+            aliases.update(names)
+        grew = True
+        while grew:
+            grew = False
+            pairs = re.findall(r"\b(\w+)\s*=\s*\(?\s*(?:\w+\s*\.\s*)?(\w+)\b", code)
+            pairs += re.findall(r"\bfor\s+(\w+)\s+in\s+[^:\]]*?\b(\w+)\b\s*[.(]", code)
+            for new_name, src in pairs:
+                if src in aliases and new_name not in aliases:
+                    aliases.add(new_name)
+                    grew = True
+        names = "|".join(sorted(re.escape(a) for a in aliases))
+        return bool(re.search(rf"\b(?:{names})\s*(?:\([^()]*\))?\s*\.\s*{_AMBIG}\b",
+                              code))
+    if lang == "node":
+        if _JS_DYNAMIC.search(code):
+            return True
+        if re.search(r"\.\s*(?:cp|rm|link|copy)\w*\s*\(\s*[^)\s]", code):
+            return True  # an fs-style copy / remove / link call, whatever the receiver
+        fs_mod = r"""['"`](?:node:)?fs(?:/promises|-extra)?['"`]"""
+        if not re.search(fs_mod, code):
+            return bool(re.search(rf"\bfs\s*(?:\.\s*promises\s*)?\.\s*{_AMBIG}", code))
+        if re.search(rf"\{{[^}}]*\}}\s*=\s*(?:await\s+)?(?:require|import)\s*\(\s*{fs_mod}|"
+                     rf"\bimport\s*\{{[^}}]*\}}\s*from\s*{fs_mod}", code) and re.search(
+                         rf"\b{_AMBIG}\b", code):
+            return True  # destructured from fs: a renamed binding may be one
+        if re.search(rf"""\[\s*[^\]]*\]\s*\(""", code):
+            return True  # a computed member call: the name cannot be read
+        aliases = {"fs"}
+        for m in re.finditer(rf"\b(\w+)\s*=\s*(?:await\s+)?(?:require|import)\s*\(\s*{fs_mod}"
+                             rf"\s*\)(?!\s*\.\s*(?!promises\b))", code):
+            aliases.add(m.group(1))
+        for m in re.finditer(rf"\bimport\s+(?:\*\s+as\s+)?(\w+)\s+from\s+{fs_mod}", code):
+            aliases.add(m.group(1))
+        grew = True
+        while grew:
+            grew = False
+            for new_name, src in re.findall(r"\b(\w+)\s*=\s*(\w+)\b", code):
+                if src in aliases and new_name not in aliases:
+                    aliases.add(new_name)
+                    grew = True
+        if re.search(rf"(?:require|import)\s*\(\s*{fs_mod}\s*\)\s*(?:\.\s*promises\s*)?"
+                     rf"\.\s*{_AMBIG}", code):
+            return True
+        names = "|".join(sorted(re.escape(a) for a in aliases))
+        return bool(re.search(rf"\b(?:{names})\s*(?:\.\s*promises\s*)?\.\s*{_AMBIG}",
+                              code))
+    return False
+
+
+_PERL_REGEX = re.compile(
+    r"\b(?:s|tr|y)(/)(?:[^/\\\n;]|\\.)*/(?:[^/\\\n;]|\\.)*/[a-z]*|"
+    r"(?:(?<=[=!]~)|(?<=[(,;{!|&?:])|(?<=^)|\b(?:if|unless|and|or|not|split|grep|while|until)\b)"
+    r"\s*(?:m|qr)?/(?:[^/\\\n;]|\\.)+/[a-z]*|"
+    r"\b(?:m|qr)\s*\{[^{}\n;]*\}[a-z]*"
+)
+
+
+def _strip_perl_regex(code: str) -> str:
+    """Perl source with its regex / substitution literals blanked, so the
+    pattern text (`print if /copy/`) is not read as a call. Only `/…/` where
+    perl itself expects a term (after `=~`, `(`, `,`, `if`, …) and that holds
+    no `;` is a regex here; anything else is left in place. A literal that can
+    RUN code — an `e` flag on s///, `(?{…})`, `@{[…]}` / `${…}`
+    interpolation — is never blanked."""
+
+    def blank(m: re.Match) -> str:
+        t = m.group(0)
+        flags = re.search(r"[a-z]*$", t).group(0)
+        if "e" in flags or any(x in t for x in ("(?{", "(??{", "@{", "${")):
+            return t
+        return " "
+
+    return _PERL_REGEX.sub(blank, code)
+
+
+def _py_open_for_write(code: str) -> bool:
+    """An `open(…)` (builtin, io/codecs, Path.open, os.fdopen, io.FileIO)
+    given a mode with w / a / x / +, a non-literal mode, or **kwargs; or
+    os.open with write flags. A mode-shaped string elsewhere in the payload
+    (`s.replace('a', 'b')`) is not one. Unparsable source falls back to
+    "open( and any mode-shaped string"."""
+    if re.search(r"\bO_(?:WRONLY|RDWR|CREAT|APPEND|TRUNC)\b", code):
+        return True
+    if not re.search(r"\b(?:fd)?open\s*\(|\bFileIO\b", code):
+        return False
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return bool(_PY_MODE.search(code)) or "FileIO" in code
+    mode_re = re.compile(r"[rbtU]*[wax][rbtU+]*|[rbtU]*\+[rbtU]*")
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        f = node.func
+        nm = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else None
+        if nm not in ("open", "fdopen", "FileIO"):
+            continue
+        attr = isinstance(f, ast.Attribute)
+        owner = getattr(f.value, "id", None) if attr else None
+        if nm == "open" and owner == "os":
+            continue  # os.open: its write flags are the O_* check above
+        if any(k.arg is None for k in node.keywords):
+            return True  # **kwargs: the mode cannot be read
+        modes = [k.value for k in node.keywords if k.arg == "mode"]
+        # builtin / io / codecs open(file, mode), os.fdopen(fd, mode),
+        # FileIO(file, mode); a method `x.open(mode)` (Path.open) takes it first.
+        pos = 0 if (attr and nm == "open" and owner not in ("io", "codecs")) else 1
+        if len(node.args) > pos:
+            modes.append(node.args[pos])
+        for mv in modes:
+            if not (isinstance(mv, ast.Constant) and isinstance(mv.value, str)):
+                return True
+            if mode_re.fullmatch(mv.value):
+                return True
+    return False
+
+
+_PY_SPAWN_CALLS = {"run", "call", "check_call", "check_output", "Popen", "getoutput",
+                   "getstatusoutput", "system", "popen"}
+_PY_SPAWN_NAMES = _PY_SPAWN_CALLS | {"pty", "spawn", "posix_spawn", "posix_spawnp"}
+_PY_SPAWN_RE = re.compile(r"^(?:exec|spawn)\w*$")
+
+
+def _python_spawns(code: str) -> tuple[list, bool]:
+    """(sites, unparsed) for a python payload. A site is ("sh", text) or
+    ("argv", [words]) for a subprocess / os.system / os.popen CALL whose first
+    argument is a literal string or a literal list of strings and which passes
+    no cwd / executable / env / **kwargs. Every other reference to a spawn
+    name (an alias, an os.exec*, an f-string, a getattr string) makes the
+    payload unparsed."""
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return [], True
+    sites: list = []
+    unparsed = False
+    funcs: set[int] = set()
+
+    def name_of(node) -> str | None:
+        if isinstance(node, ast.Name):
+            return node.id
+        if isinstance(node, ast.Attribute):
+            return node.attr
+        return None
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            nm = name_of(node.func)
+            if nm in _PY_SPAWN_CALLS:
+                funcs.add(id(node.func))
+                ok = bool(node.args) and not any(
+                    k.arg in (None, "cwd", "executable", "env", "args", "preexec_fn")
+                    for k in node.keywords)
+                if ok:
+                    a0 = node.args[0]
+                    if isinstance(a0, ast.Constant) and isinstance(a0.value, str):
+                        sites.append(("sh", a0.value))
+                    elif isinstance(a0, (ast.List, ast.Tuple)) and a0.elts and all(
+                            isinstance(e, ast.Constant) and isinstance(e.value, str)
+                            for e in a0.elts):
+                        sites.append(("argv", [e.value for e in a0.elts]))
+                    else:
+                        ok = False
+                if not ok:
+                    unparsed = True
+    for node in ast.walk(tree):
+        # Any other mention of a spawn name: an alias (`r = subprocess.run`),
+        # an import of it, os.exec*/spawn*, a getattr string.
+        names: list[str] = []
+        if isinstance(node, (ast.Name, ast.Attribute)) and id(node) not in funcs:
+            names = [name_of(node) or ""]
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            names = [node.value]
+        elif isinstance(node, ast.alias):
+            names = [node.name.split(".")[-1], node.asname or ""]
+        if any(n in _PY_SPAWN_NAMES or _PY_SPAWN_RE.match(n) for n in names if n):
+            unparsed = True
+    return sites, unparsed
+
+
+_JS_STR = r"""(?:'([^'\\\n]*)'|"([^"\\\n]*)"|`([^`\\\n$]*)`)"""
+_JS_OPTS = r"(?:\s*,\s*\{(?![^{}]*\b(?:cwd|env|shell|argv0)\b)[^{}]*\})?"
+
+
+def _node_spawns(code: str) -> tuple[list, bool]:
+    if re.search(r"\bBun\.spawn|\bDeno\.|\bfork\b|\bworker_threads\b", code):
+        return [], True
+    sites: list = []
+    unparsed = False
+    for m in re.finditer(r"\b(exec|execSync|execFile|execFileSync|spawn|spawnSync)\b", code):
+        tail = code[m.end():]
+        if m.group(1) in ("exec", "execSync"):
+            c = re.match(rf"\s*\(\s*{_JS_STR}{_JS_OPTS}\s*\)", tail)
+            if c:
+                sites.append(("sh", c.group(1) or c.group(2) or c.group(3) or ""))
+                continue
+        else:
+            c = re.match(rf"\s*\(\s*{_JS_STR}\s*(?:,\s*\[([^\]]*)\])?{_JS_OPTS}\s*\)",
+                         tail)
+            if c:
+                words = [c.group(1) or c.group(2) or c.group(3) or ""]
+                lst = c.group(4)
+                if lst is not None and lst.strip():
+                    items = [x.strip() for x in lst.split(",") if x.strip()]
+                    vals = [re.fullmatch(_JS_STR, x) for x in items]
+                    if not all(vals):
+                        unparsed = True
+                        continue
+                    words += [v.group(1) or v.group(2) or v.group(3) or "" for v in vals]
+                sites.append(("argv", words))
+                continue
+        unparsed = True
+    return sites, unparsed
+
+
+_RB_STR = r"""(?:'([^'\\\n]*)'|"([^"\\\n$@#]*)")"""
+
+
+def _perl_ruby_spawns(lang: str, code: str) -> tuple[list, bool]:
+    if lang == "perl" and re.search(r"""\bopen\b[^;]*?['"]\s*\||\|\s*['"]""", code):
+        return [], True
+    if lang == "ruby" and re.search(r"\bOpen3\b|\bIO\.popen\b|\bspawn\b|\bPTY\b", code):
+        return [], True
+    sites: list = []
+    unparsed = False
+    interp = "$@" if lang == "perl" else "#"
+    i = 0
+    while True:
+        j = code.find("`", i)
+        if j < 0:
+            break
+        k = code.find("`", j + 1)
+        if k < 0:
+            return sites, True
+        body = code[j + 1 : k]
+        if any(c in body for c in interp):
+            unparsed = True
+        else:
+            sites.append(("sh", body))
+        i = k + 1
+    for m in re.finditer(r"\b(?:qx|%x)\s*([({\[/|!])", code):
+        close = {"(": ")", "{": "}", "[": "]"}.get(m.group(1), m.group(1))
+        k = code.find(close, m.end())
+        body = code[m.end() : k] if k >= 0 else None
+        if body is None or any(c in body for c in interp) or m.group(1) in body:
+            unparsed = True
+        else:
+            sites.append(("sh", body))
+    for m in re.finditer(r"\b(?:system|exec)\b", code):
+        c = re.match(rf"\s*\(?\s*({_RB_STR}(?:\s*,\s*{_RB_STR})*)\s*\)?\s*(?:;|$|\bif\b|\bor\b|\band\b|\|\||&&)",
+                     code[m.end():])
+        if not c:
+            unparsed = True
+            continue
+        words = [a or b for a, b in re.findall(_RB_STR, c.group(1))]
+        sites.append(("sh", words[0]) if len(words) == 1 else ("argv", words))
+    return sites, unparsed
+
+
+_MOVES_CONTEXT = re.compile(
+    r"\bchdir\b|\benviron\b|\bputenv\b|%ENV|\bENV\s*\[|\bprocess\.env\b|\bfchdir\b"
+)
+
+
+def _spawn_sites(lang: str, code: str) -> tuple[list, bool]:
+    if lang == "python":
+        return _python_spawns(code)
+    if lang == "node":
+        return _node_spawns(code)
+    return _perl_ruby_spawns(lang, code)
 
 
 def _awk_effects(program: str) -> tuple[bool, bool]:
@@ -769,6 +1233,62 @@ def _quoted_substitutions(word: str) -> list[str]:
     return [s for s in out if s.strip()]
 
 
+def _mktemp_value(inner: list[str], st: _State, root: str) -> str | None:
+    """The path `$(mktemp …)` prints, as `<dir>/` + MKTEMP_MARK, when `inner`
+    is exactly one mktemp call whose directory is known: no template (TMPDIR or
+    /tmp), `-t`/`--tmpdir` (TMPDIR), `-p DIR`/`--tmpdir=DIR`, or a template
+    whose directory is literal. Anything else -> None (stays unknown)."""
+    if not inner or os.path.basename(inner[0]) != "mktemp":
+        return None
+    if any(t in SEPARATORS or t in REDIR_OUT for t in inner):
+        return None
+    tmpdir = st.vars.get("TMPDIR") or "/tmp"
+    base: str | None = None
+    template: str | None = None
+    j = 1
+    while j < len(inner):
+        a = _expand(inner[j], st)
+        j += 1
+        if a == "-p" and j < len(inner):
+            base = _expand(inner[j], st)
+            j += 1
+        elif a.startswith("--tmpdir"):
+            base = a.split("=", 1)[1] if "=" in a else tmpdir
+        elif a == "-t":
+            base = tmpdir
+            if j < len(inner) and not inner[j].startswith("-"):
+                j += 1  # BSD: the prefix argument
+        elif a.startswith("-"):
+            continue
+        else:
+            template = a
+    if template is not None and base is None:
+        if os.path.isabs(template):
+            base = os.path.dirname(template)
+        elif st.rel is not None:
+            base = os.path.join(st.rel, os.path.dirname(template))
+        else:
+            return None
+    base = base or tmpdir
+    if not base or any(c in base for c in _UNRESOLVABLE) or not os.path.isabs(base):
+        return None
+    return base.rstrip("/") + "/" + MKTEMP_MARK
+
+
+def _replace_quoted_mktemp(word: str, st: _State, root: str) -> str:
+    if "$(" not in word:
+        return word
+    for inner in _quoted_substitutions(word):
+        try:
+            toks = shlex.split(inner)
+        except ValueError:
+            continue
+        made = _mktemp_value(toks, st, root)
+        if made is not None:
+            word = word.replace("$(" + inner + ")", made)
+    return word
+
+
 def _operands(args: list[str]) -> list[str]:
     return [a for a in args if not a.startswith("-")]
 
@@ -777,6 +1297,8 @@ class _Analyzer:
     def __init__(self, root: str):
         self.root = root
         self._own: tuple[bool, str | None] = (False, None)
+        # marker word -> the command text of an unquoted `$( … )` it replaced
+        self.substs: dict[str, str] = {}
 
     # -- target judgement ---------------------------------------------------
     def own_gitdir(self) -> str | None:
@@ -796,7 +1318,7 @@ class _Analyzer:
         if depth > MAX_DEPTH:
             raise _Undet(f"command wrappers nested more than {MAX_DEPTH} levels")
         stripped, bodies = _strip_heredoc_bodies(text)
-        tokens = _tokenize(stripped)
+        tokens = _tokenize(_backquotes_to_subst(stripped))
         if tokens is None:
             if depth == 0:
                 raise _Unparseable()
@@ -829,7 +1351,7 @@ class _Walk:
         stack: list[tuple] = []
         cur: list[str] = []
         prev: str | None = None
-        for tok in tokens + [None]:
+        for idx, tok in enumerate(tokens + [None]):
             if tok is not None and tok not in SEPARATORS:
                 cur.append(tok)
                 continue
@@ -841,15 +1363,19 @@ class _Walk:
                 if subst or tok != "(":
                     # `$( … )` / `<( … )`: judged on its own, continues the
                     # enclosing command with an unresolvable word in its place.
+                    marker = f"{SUBST_WORD}{len(self.an.substs)}__"
+                    self.an.substs[marker] = ""
                     if subst:
-                        cur[-1] = cur[-1][:-1] + SUBST_WORD
+                        cur[-1] = cur[-1][:-1] + marker
                     else:
-                        cur.append(SUBST_WORD)
-                    stack.append(("cont", cur, self.st.copy(), prev, self.fallback))
+                        cur.append(marker)
+                    stack.append(("cont", cur, self.st.copy(), prev, self.fallback,
+                                  idx, marker, subst))
                 else:
                     if cur:
                         self.segment(cur, prev, tok)
-                    stack.append(("sub", None, self.st.copy(), prev, self.fallback))
+                    stack.append(("sub", None, self.st.copy(), prev, self.fallback,
+                                  idx, None, False))
                 cur, prev, self.fallback = [], None, None
                 continue
             if tok == ")":
@@ -858,11 +1384,16 @@ class _Walk:
                 self.end_chain()
                 cur = []
                 if stack:
-                    kind, saved, st, prev, fb = stack.pop()
+                    kind, saved, st, prev, fb, start, marker, subst = stack.pop()
                     # A subshell / substitution's cwd and variables do not leak.
                     self.st, self.fallback = st, fb
                     if kind == "cont":
                         cur = saved
+                        inner = tokens[start + 1 : idx]
+                        self.an.substs[marker] = " ".join(inner)
+                        made = _mktemp_value(inner, self.st, self.an.root) if subst else None
+                        if made is not None:
+                            cur[:] = [w.replace(marker, made) for w in cur]
                 continue
             if cur:
                 self.segment(cur, prev, tok)
@@ -891,6 +1422,7 @@ class _Walk:
         for w in seg:
             for inner in _quoted_substitutions(w):
                 self.an.analyze(inner, pre.copy(), self.depth + 1)
+        seg = [_replace_quoted_mktemp(w, pre, self.an.root) for w in seg]
         argv, stdin = self.redirects(seg, pre)
 
         # Compound-command keywords: track blocks, then judge what follows.
@@ -978,13 +1510,23 @@ class _Walk:
         argv = argv[k:]  # prefix assignments only reach the command's environment
 
         word = _expand(argv[0].lstrip("`"), st)
+        if "$" in argv[0] and any(c in word for c in " \t\n"):
+            # `CMD="rm <path>"; $CMD`: an unquoted expansion word-splits, so
+            # the value's words ARE the command.
+            return self.judge(word.split() + argv[1:], st, stdin, nxt)
         if any(c in word for c in "$`"):
-            # An unknown PROGRAM (`$CMD`, the output of `eval "$(brew
-            # shellenv)"`): the same class as make/cargo/an arbitrary binary,
-            # which this hook cannot see into (residual). Its redirections were
-            # judged above and any `$( … )` that produced it was judged as a
-            # command of its own; its operands are not write targets of a known
-            # tool, so nothing more can be decided here.
+            self.subst_literals(argv[0], st)
+            # An unknown PROGRAM (`$CMD`, `$(echo rm)`, a backquoted command):
+            # it could be any tool, `rm` included, so every operand it is
+            # handed is judged as a possible write target — a literal path in
+            # the substitution that produced it (above) or a non-option
+            # argument that lands on main is refused. With no such operand it
+            # is the same class as make/cargo/an arbitrary binary, which this
+            # hook cannot see into (residual).
+            for a in argv[1:]:
+                a = a.strip("`")
+                if a and not a.startswith("-"):
+                    self.an.check(a, st)
             return None
         prog = os.path.basename(word)
         rest = argv[1:]
@@ -1021,7 +1563,9 @@ class _Walk:
         if prog in WRAPPERS:
             return self.wrapper(prog, rest, st, stdin, nxt)
         if prog == "eval":
-            return self.an.analyze(" ".join(rest), st.copy(), self.depth + 1)
+            text = " ".join(rest)
+            self.subst_literals(text, st)
+            return self.an.analyze(text, st.copy(), self.depth + 1)
         if prog in SHELLS:
             self.shell(rest, st, stdin)
             return None
@@ -1133,6 +1677,13 @@ class _Walk:
             return _State(None, None, dict(st.vars))  # $OLDPWD: not tracked
         else:
             dest = _expand(ops[0], st)
+        fresh = dest.endswith("/" + MKTEMP_MARK) and not any(
+            c in dest[: -len(MKTEMP_MARK)] for c in _UNRESOLVABLE)
+        if fresh:
+            # `cd "$(mktemp -d)"`: a known directory (its last component is the
+            # invented name) that exists as soon as mktemp returned.
+            here = os.path.realpath(dest[: -len(MKTEMP_MARK)]) + "/" + MKTEMP_MARK
+            return _State(here, here, dict(st.vars))
         if any(c in dest for c in _UNRESOLVABLE) or (not os.path.isabs(dest) and st.rel is None):
             return _State(None, None, dict(st.vars))
         resolved = _resolve(st.rel or self.an.root, dest)
@@ -1207,6 +1758,18 @@ class _Walk:
         new = self.judge(inner, st2, stdin, nxt)
         return new if prog in SAME_SHELL_WRAPPERS else None
 
+    def subst_literals(self, text: str, st: _State) -> None:
+        """Text that a `$( … )` / backquote PRODUCES and that is then run
+        (`eval "$(…)"`, `sh -c "$(…)"`, `$(…)` as a program) cannot be known.
+        What can be judged is the substitution's own command text: a literal
+        path in it that lands on main (`eval "$(echo rm <main>/f)"`, a printf
+        format) is refused. `eval "$(brew shellenv)"` names none and passes."""
+        inners = list(_quoted_substitutions(text))
+        inners += [t for m, t in self.an.substs.items() if m in text]
+        for inner in inners:
+            for c in _payload_paths(inner):
+                self.an.check(c, st)
+
     def _stdin_code(self, stdin, what: str) -> str | None:
         """The code an interpreter reads from stdin, if this process can see it."""
         if stdin is None or stdin[0] != "code":
@@ -1239,6 +1802,7 @@ class _Walk:
             break
         if has_c:
             if j < len(rest):
+                self.subst_literals(rest[j], st)
                 self.an.analyze(rest[j], st.copy(), self.depth + 1)
             return
         if j < len(rest):
@@ -1248,22 +1812,38 @@ class _Walk:
             self.an.analyze(code, st.copy(), self.depth + 1)
 
     def scan(self, lang: str, code: str, args: list[str], st: _State) -> None:
-        """Judge interpreter source that cannot be parsed as shell. If it
-        contains a file-write primitive, a process-spawn primitive, or any
-        mutation-capable word, every literal path in it (and every operand
-        passed to it) is a write-target candidate and is refused if it lands on
-        main. Only a FILE WRITE with no literal path at all is refused for that
-        reason alone (it cannot be placed, 3.); a spawn without one is an
-        unknown program (residual)."""
+        """Judge interpreter source that cannot be parsed as shell.
+
+        A process spawn whose command is a LITERAL (`subprocess.run(['cat',
+        p])`, `os.system('…')`, `execSync('…')`, perl/ruby backquotes,
+        `system('…')`) is judged with the shell rules, like `sh -c`. If the
+        payload contains a file-write primitive, a mutation word (see
+        _UNAMBIG_MUTATION), or a spawn that could not be parsed that way, every
+        literal path in it (and every operand passed to it) is a write-target
+        candidate and is refused if it lands on main. Only a FILE WRITE with
+        no literal path at all is refused for that reason alone (it cannot be
+        placed, 3.); an unparsed spawn without one is an unknown program
+        (residual)."""
         if lang == "awk":
             writes, spawns = _awk_effects(code)
             token = False
         else:
-            writes = bool(_WRITE[lang].search(code))
-            if lang == "python" and re.search(r"\bopen\s*\(", code) and _PY_MODE.search(code):
+            body = _strip_perl_regex(code) if lang == "perl" else code
+            writes = bool(_WRITE[lang].search(body))
+            if lang == "python" and _py_open_for_write(code):
                 writes = True
-            spawns = bool(_SPAWN[lang].search(code))
-            token = bool(_MUTATION_TOKEN.search(code))
+            token = bool(_UNAMBIG_MUTATION.search(body)) or _ambiguous_mutation(lang, body)
+            spawns = False
+            if _SPAWN[lang].search(body):
+                sites, spawns = _spawn_sites(lang, body)
+                if _MOVES_CONTEXT.search(body):
+                    # The payload changes its own cwd / environment before
+                    # spawning, so the literal command would run somewhere
+                    # this walk does not know: judge it as unparsed too.
+                    spawns = True
+                for kind, val in sites:
+                    text = val if kind == "sh" else " ".join(shlex.quote(w) for w in val)
+                    self.an.analyze(text, st.copy(), self.depth + 1)
         if not (writes or spawns or token):
             return  # nothing in it can change a file: a read
         cands = _payload_paths(code) + _operands(args)
@@ -1717,7 +2297,7 @@ def _first_line(command: str) -> str:
     return stripped[0][:120] if stripped else ""
 
 
-def _start_state(payload: dict) -> _State:
+def _start_state(payload: dict, root: str | None = None) -> _State:
     """The shell's cwd when the command starts: the hook payload's `cwd`
     (the session's working directory), else this process's own cwd. Relative
     paths and `$PWD` both resolve against it, so they always agree.
@@ -1726,14 +2306,26 @@ def _start_state(payload: dict) -> _State:
     an existing directory) is NOT replaced by a guess: the cwd is unknown, so
     every relative write is refused while absolute targets are still judged
     normally (3.)."""
+    inherited: dict[str, str] = {}
+    tmp = os.environ.get("TMPDIR")
+    if tmp:
+        if os.path.isabs(tmp) and root is not None and not _under_main(
+                os.path.realpath(tmp), root) and not any(c in tmp for c in _UNRESOLVABLE):
+            # Like HOME: the one other inherited value the hook shares with the
+            # session (both are launched by the same Claude Code process).
+            inherited["TMPDIR"] = tmp
+        else:
+            # Set, but relative / under main / unexpandable: unknown, never the
+            # /tmp default (mktemp would honour it).
+            inherited["TMPDIR"] = UNKNOWN_VAL
     if "cwd" not in payload:
         here = os.path.realpath(os.getcwd())
-        return _State(here, here, {})
+        return _State(here, here, inherited)
     cwd = payload.get("cwd")
     if isinstance(cwd, str) and os.path.isabs(cwd) and os.path.isdir(cwd):
         here = os.path.realpath(cwd)
-        return _State(here, here, {})
-    return _State(None, None, {})
+        return _State(here, here, inherited)
+    return _State(None, None, inherited)
 
 
 def decide(payload: dict) -> tuple[int, str]:
@@ -1761,7 +2353,7 @@ def decide(payload: dict) -> tuple[int, str]:
     assert root is not None
 
     an = _Analyzer(root)
-    start = _start_state(payload)
+    start = _start_state(payload, root)
     try:
         an.analyze(command, start, 0)
     except _Unparseable:
@@ -1817,17 +2409,29 @@ if __name__ == "__main__":
 #     unrelated literal path outside main is judged on that literal and
 #     allowed. Single-quoted shell text inside a payload (`'$S'`) is expanded
 #     as if the shell had expanded it.
-#   * an UNKNOWN PROGRAM is not judged: the text `eval "$(cmd)"` evaluates
-#     (only `cmd` itself is), `sh -c "$CMD"` / `$CMD …` with CMD not assigned
-#     in the command, and any program whose name is unresolvable. Its
-#     redirections and the command producing it are still judged.
-#   * an interpreter payload that spawns a program (os.system, subprocess,
-#     child_process, backticks, awk system()/`| "cmd"`) with no literal path
-#     in it: the spawned command is not parsed.
-#   * the mutation-word rule OVER-refuses a payload that both names a main
-#     path and merely mentions such a word (`open(<main>/x).read().replace(…)`,
-#     `sys.stdout.write(open(<main>/x).read())`); that is the accepted price of
-#     seeing through aliasing.
+#   * an UNKNOWN PROGRAM is only judged through its literal operands and the
+#     literal paths of the command that produced it: the text `eval "$(cmd)"`
+#     evaluates is not known (`eval "$(cat script)"` that writes main is not
+#     seen), nor is `sh -c "$CMD"` / `$CMD …` with CMD not assigned in the
+#     command, nor what any program with an unresolvable name does with a
+#     path it was not handed literally.
+#   * an interpreter spawn that could not be parsed as a literal command
+#     (an alias, an f-string, os.exec*, Popen with cwd=, awk system() /
+#     `| "cmd"`) and names no literal path: the spawned command is not
+#     judged. A literal spawn is judged as shell, but a payload that changes
+#     its cwd/environment through a spelling not listed (e.g. ctypes) is not
+#     seen, and the literal command is then judged against the session cwd.
+#   * the ambiguous-word rule follows aliases by assignment / import /
+#     for-loop and python call arity only; a filesystem object reached another
+#     way (python: a function returning `shutil` whose result is called
+#     `.copy`-free, e.g. `.replace(a, b)` with two arguments; node: an fs
+#     object passed in as an argument and called `.write`) is a read to this
+#     scan. The perl regex blanking trusts the term-position
+#     heuristic; text it blanks is not scanned for mutation words.
+#   * the rules can still OVER-refuse a read of main: a payload naming a main
+#     path that also holds an unrelated unparsed spawn, a dynamic lookup
+#     (getattr, eval, …), a `.copy(x)` call on a non-path object, or an
+#     open(…) whose file name is a bare mode-shaped word (`open('a')`).
 #   * git subcommands (`git apply`, `git checkout -- <path>`, `git restore`,
 #     `git stash`, `git merge`, …) — deliberately, so merges on main stay
 #     possible; the commit-time gate is the backstop.

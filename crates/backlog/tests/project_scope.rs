@@ -30,6 +30,8 @@
 //! blanket removal of the filter: a pinned store really can hold several
 //! projects, so there the label is the only thing that separates them.
 
+mod common;
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -51,6 +53,7 @@ fn unique(tag: &str) -> PathBuf {
 fn run_in(args: &[&str], home: &Path, cwd: &Path) -> (i32, String, String) {
     let bin = env!("CARGO_BIN_EXE_backlog");
     let mut cmd = Command::new(bin);
+    cmd.env("PATH", common::path_with_condukt_shim());
     cmd.args(args)
         .env("HOME", home)
         .current_dir(cwd)

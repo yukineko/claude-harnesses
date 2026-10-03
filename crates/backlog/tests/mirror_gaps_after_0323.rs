@@ -113,6 +113,19 @@ fn setup(tag: &str) -> Env {
     symlink(tool_path("grep"), bin.join("grep")).unwrap();
     // The repro runner (`add --repro-test bash tests/...`) executes `bash`.
     symlink(tool_path("bash"), bin.join("bash")).unwrap();
+    // `add` runs the cross-session claim check (`condukt state is-claimed`);
+    // with PATH=bin there is no condukt, which is UNDETERMINED and refuses the
+    // add (backlog 420f1eec). Pin a deterministic "not claimed" answer.
+    std::fs::write(
+        bin.join("condukt"),
+        "#!/bin/sh\necho '{\"claimed\":false}'\nexit 1\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        bin.join("condukt"),
+        <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755),
+    )
+    .unwrap();
 
     let e = Env {
         home,

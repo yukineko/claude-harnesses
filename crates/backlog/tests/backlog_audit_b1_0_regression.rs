@@ -6,6 +6,8 @@
 //! whose closure it proves and drives the REAL `backlog` binary with `HOME`
 //! pinned to a temp dir, so no test touches the operator's real stores.
 
+mod common;
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -26,6 +28,7 @@ fn unique(tag: &str) -> PathBuf {
 
 fn run_with_stdin(args: &[&str], cwd: &Path, home: &Path, stdin: &str) -> (i32, String, String) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_backlog"))
+        .env("PATH", common::path_with_condukt_shim())
         .args(args)
         .env("HOME", home)
         .env_remove("BACKLOG_DISABLE")

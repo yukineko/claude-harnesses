@@ -1072,7 +1072,8 @@ pub fn active_claims(cfg: &Config, cwd: &Path, now: i64) -> Result<Registry> {
     let ttl = ttl_secs(cfg);
     // An unresolvable project root is an ERROR here, never an empty `Registry`:
     // `state claims` printing `{}` and `state is-claimed` exiting "not claimed"
-    // is precisely how this bug read as "the work is free".
+    // is precisely how this bug read as "the work is free". (`is-claimed` now
+    // maps this Err to exit 3, distinct from its exit 1 = not claimed.)
     let (root, path) = match claim_paths(cfg, cwd) {
         Determination::Known(p) => p,
         Determination::Undetermined(why) => {

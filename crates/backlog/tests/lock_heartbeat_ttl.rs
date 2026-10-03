@@ -20,6 +20,8 @@
 //!    `HARNESS_PROGRESS_WINDOW_SECS=0`, the second acquire attempt confirms the
 //!    stall and reaps.
 
+mod common;
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -72,6 +74,7 @@ fn lock_path(home: &Path) -> PathBuf {
 fn run(args: &[&str], home: &Path) -> (i32, String) {
     let bin = env!("CARGO_BIN_EXE_backlog");
     let child = Command::new(bin)
+        .env("PATH", common::path_with_condukt_shim())
         .args(args)
         .env("HOME", home)
         .stdin(Stdio::null())
@@ -337,6 +340,7 @@ fn frozen_signals_across_the_window_are_confirmed_stalled_and_reaped() {
     let acquire = |session: &str| -> (i32, String) {
         let bin = env!("CARGO_BIN_EXE_backlog");
         let out = Command::new(bin)
+            .env("PATH", common::path_with_condukt_shim())
             .args([
                 "lock",
                 "acquire",

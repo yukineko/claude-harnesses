@@ -15,6 +15,8 @@
 //!     silently vanish into an empty "no tasks" result indistinguishable
 //!     from a genuinely empty queue.
 
+mod common;
+
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -56,6 +58,7 @@ fn temp_dir(tag: &str) -> PathBuf {
 fn run_in(args: &[&str], payload: &str, home: &PathBuf, cwd: &PathBuf) -> (i32, String, String) {
     let bin = env!("CARGO_BIN_EXE_backlog");
     let mut cmd = Command::new(bin);
+    cmd.env("PATH", common::path_with_condukt_shim());
     cmd.args(args)
         .env("HOME", home)
         .current_dir(cwd)

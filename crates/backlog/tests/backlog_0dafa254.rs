@@ -13,6 +13,8 @@
 //!
 //! Written by an independent auditor, not an implementer.
 
+mod common;
+
 use std::process::{Command, Stdio};
 
 #[test]
@@ -68,6 +70,7 @@ fn list_status_cancelled_is_a_recognised_status() {
     }
     let run = |args: &[&str]| {
         let o = Command::new(env!("CARGO_BIN_EXE_backlog"))
+            .env("PATH", common::path_with_condukt_shim())
             .args(args)
             .env("HOME", &home)
             .current_dir(&repo)

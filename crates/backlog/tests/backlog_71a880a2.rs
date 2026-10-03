@@ -9,10 +9,13 @@
 //!
 //! Written by an independent auditor, not an implementer.
 
+mod common;
+
 use std::process::{Command, Stdio};
 
 fn help(sub: &str) -> String {
     let out = Command::new(env!("CARGO_BIN_EXE_backlog"))
+        .env("PATH", common::path_with_condukt_shim())
         .args([sub, "--help"])
         .stdin(Stdio::null())
         .output()

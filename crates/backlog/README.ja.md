@@ -81,10 +81,14 @@ backlog uninstall                                            # 再び除去す�
 
 - 同じ hashkey を持つ既存タスクが `pending` または `failed` である。
 - `condukt` が PATH 上にあり、`condukt state is-claimed --hashkey <h>` が exit 0 (= 他セッションの
-  live なクレームが握っている) を返す。`condukt` が不在、または上記以外の理由でエラー/非0終了した場合は
-  fail-soft に倒し「クレームなし」として扱う (`condukt` の欠落や不調で `add` を失敗させない)。
+  live なクレームが握っている) を返す。exit 1 は stdout に `"claimed": false` が付いている場合に限り
+  「クレームなし」と読む。それ以外 — `condukt` の不在や起動失敗、0/1 以外の exit code (例: 3 = claim registry
+  を読めない)、`claimed` フィールドを伴わない exit 0/1、exit 1 に `"claimed": true` (exit と
+  claimed の不一致)、シグナル終了、2.5s 以内に答えが返らない — は
+  クレーム確認ができなかったことを意味し、`add` は理由を添えて**拒否**される (live な claim 済みタスクの
+  重複を排除できないため)。「判定不能」を「クレームなし」とは読まない。
 
-どちらの拒否も `backlog add --force` で意図的にバイパスできる。
+いずれの拒否も `backlog add --force` で意図的にバイパスできる。
 
 `backlog list --json` の各要素には `hashkey` フィールドが含まれる (title + project から計算、保存はされない)。
 `/flow` など上位 driver がこれを使って `condukt state is-claimed` によるゲートを追加コストなしに行える。

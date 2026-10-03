@@ -15,6 +15,8 @@
 //! commit, terminal-refusal branches absent) and GREEN against cf5237d0
 //! (implementation commit) in a scratch detached worktree.
 
+mod common;
+
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -112,6 +114,7 @@ impl Fixture {
     fn run(&self, args: &[&str]) -> Out {
         let bin = env!("CARGO_BIN_EXE_backlog");
         let mut child = Command::new(bin)
+            .env("PATH", common::path_with_condukt_shim())
             .args(args)
             .env("HOME", &self.home)
             .current_dir(&self.repo)

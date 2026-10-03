@@ -1,6 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Hit 3 (backlog main.rs:1643): gh_probe Undetermined => None.
 //! Force: repo whose origin is github.com, PATH containing only `git` (no `gh`).
+mod common;
+
 use std::os::unix::fs::symlink;
 use std::path::PathBuf;
 use std::process::Command;
@@ -74,7 +76,14 @@ fn bl(e: &Env, args: &[&str]) -> (i32, String, String) {
         .current_dir(&e.repo)
         .env_clear()
         .env("HOME", &e.home)
-        .env("PATH", &e.bin)
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                e.bin.display(),
+                common::condukt_shim_dir().display()
+            ),
+        )
         .output()
         .unwrap();
     (

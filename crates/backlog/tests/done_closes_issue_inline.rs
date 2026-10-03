@@ -49,6 +49,19 @@ fn setup(tag: &str) -> Env {
     // The stub shells out to `grep`, and the binary runs with env_clear() +
     // PATH=bin, so the stub's own tools have to live in that same dir.
     symlink(tool_path("grep"), bin.join("grep")).unwrap();
+    // `add` runs the cross-session claim check (`condukt state is-claimed`);
+    // with PATH=bin there is no condukt, which is UNDETERMINED and refuses the
+    // add (backlog 420f1eec). Pin a deterministic "not claimed" answer.
+    std::fs::write(
+        bin.join("condukt"),
+        "#!/bin/sh\necho '{\"claimed\":false}'\nexit 1\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        bin.join("condukt"),
+        <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755),
+    )
+    .unwrap();
 
     let ghlog = t.join("gh.log");
     let stub = format!(

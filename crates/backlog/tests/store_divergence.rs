@@ -22,6 +22,8 @@
 //!     projects' work, a store that is populated, and the legacy store being
 //!     the resolved store itself must all stay silent and exit 0.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -109,6 +111,7 @@ fn run_with_stdin(args: &[&str], payload: &str, home: &Path, cwd: &Path) -> (i32
     use std::io::Write;
     let bin = env!("CARGO_BIN_EXE_backlog");
     let mut child = Command::new(bin)
+        .env("PATH", common::path_with_condukt_shim())
         .args(args)
         .env("HOME", home)
         .current_dir(cwd)

@@ -91,7 +91,6 @@ impl Fx {
 /// on stderr). A shell consumer that reads exit 1 as "free" proceeds on a
 /// registry whose contents are unknown.
 #[test]
-#[ignore = "backlog c603605c: open defect, remove ignore when fixed"]
 fn is_claimed_distinguishes_unreadable_registry_from_not_claimed() {
     let fx = Fx::new("c603605c");
     let claim = fx.run(

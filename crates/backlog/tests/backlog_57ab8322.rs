@@ -10,6 +10,8 @@
 //!
 //! Written by an independent auditor, not an implementer.
 
+mod common;
+
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -65,7 +67,14 @@ fn hung_gh_is_not_reported_as_gh_not_found() {
     let out = Command::new(env!("CARGO_BIN_EXE_backlog"))
         .args(["add", "--title", "hung gh probe", "--project", &proj])
         .env("HOME", &home)
-        .env("PATH", format!("{}:/bin:/usr/bin", bin.display()))
+        .env(
+            "PATH",
+            format!(
+                "{}:{}:/bin:/usr/bin",
+                bin.display(),
+                common::condukt_shim_dir().display()
+            ),
+        )
         .current_dir(&repo)
         .stdin(Stdio::null())
         .output()

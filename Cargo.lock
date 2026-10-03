@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "backlog"
-version = "0.3.26"
+version = "0.3.27"
 dependencies = [
  "anyhow",
  "clap",
@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.203"
+version = "0.7.204"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -1241,7 +1241,7 @@ dependencies = [
 
 [[package]]
 name = "session-insights"
-version = "0.2.20"
+version = "0.2.21"
 dependencies = [
  "anyhow",
  "chrono",

@@ -18,6 +18,8 @@
 //! empty peer list rendered as silence would read as "checked, no duplicates",
 //! which is exactly the false clean bill of health CLAUDE.md §3 forbids.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -107,6 +109,7 @@ fn evidence_repo(tag: &str) -> PathBuf {
 /// Run the real binary; returns (exit code, stdout, stderr).
 fn run(args: &[&str], cwd: &Path, home: &Path) -> (i32, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_backlog"))
+        .env("PATH", common::path_with_condukt_shim())
         .args(args)
         .env("HOME", home)
         .current_dir(cwd)

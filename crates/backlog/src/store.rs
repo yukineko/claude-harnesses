@@ -457,7 +457,7 @@ fn tasks_lock_path(path: &Path) -> PathBuf {
 /// CA-backlog-003: the critical section is USUALLY a single load-modify-save
 /// (sub-millisecond), but `add`/`add_with_weight` can additionally shell out
 /// to `condukt state is-claimed` via [`is_claimed_elsewhere`], which is bounded
-/// at [`IS_CLAIMED_TIMEOUT`] (300ms) but can legitimately take close to that
+/// at [`IS_CLAIMED_TIMEOUT`] (2.5s) but can legitimately take close to that
 /// long under load. The stale-reap window is therefore kept a comfortable
 /// multiple of BOTH that bound AND the blocking-acquire budget below
 /// ([`TASKS_LOCK_BUDGET`]).
@@ -474,12 +474,15 @@ const TASKS_LOCK_STALE_SECS: u64 = 10;
 ///
 /// CA-backlog-003 originally sized this to comfortably exceed a SINGLE
 /// legitimate holder's worst-case critical section ([`IS_CLAIMED_TIMEOUT`],
-/// 300ms). That undercounted heavy contention: under N concurrent callers of
-/// `add`/`add_with_weight` (each potentially paying the full 300ms inside the
-/// lock via `is_claimed_elsewhere`), a waiter can queue behind several such
-/// holders in a row — up to roughly N × 300ms serialized — not just one. At
-/// N=20 (this crate's own `add_and_claim_no_lost_update_under_heavy_contention`
-/// stress test: 10 adders + 10 claimers) that's ~6s worst case.
+/// 300ms at the time). That undercounted heavy contention: under N concurrent
+/// callers of `add`/`add_with_weight` (each potentially paying the full bound
+/// inside the lock via `is_claimed_elsewhere`), a waiter can queue behind
+/// several such holders in a row — N × bound serialized — not just one. With
+/// the bound now 2.5s a queue of more than three holders that ALL hit the
+/// timeout exceeds this 8s budget; that only happens when the helper hangs
+/// (a healthy helper answers in milliseconds, a cold first exec under 1s), and
+/// the waiter then gets a refusal (`next_claim` / add fail closed on lock
+/// failure), not an unprotected write.
 ///
 /// # Why this is a Duration and not `attempts × sleep`
 ///
@@ -970,10 +973,11 @@ pub fn add_with_weight(
 /// `pending` in the store and (a) covers it directly (a legacy stored
 /// `claimed` row is loaded as `pending` too, see [`load`]).
 ///
-/// Fail-soft on (b): if the `condukt` binary is absent from PATH, or the
-/// command errors or exits with anything other than 0 (claimed) / 1 (not
-/// claimed), this is treated as "not claimed" — a missing or misbehaving
-/// `condukt` must never block `backlog add`.
+/// Fail-closed on (b) (backlog 420f1eec): if the `condukt` binary is absent
+/// from PATH, or the command errors, times out, or exits with anything other
+/// than 0 (claimed) / 1 (not claimed), the claim check is UNDETERMINED and the
+/// add is REFUSED (naming the reason; `--force` is the explicit escape).
+/// "Cannot determine" is never rendered as "not claimed".
 /// CA-backlog-007: a bare (non-path-shaped) `--project` label is not resolved
 /// against anything at write time — `canonicalize_project` passes it through
 /// unchanged — so it stays freely writable, and `bare_name_matches_path`
@@ -1013,10 +1017,18 @@ fn check_duplicate(tasks: &[Task], title: &str, project: &str) -> Result<()> {
         ));
     }
 
-    if is_claimed_elsewhere(&hk) {
-        return Err(anyhow!(
-            "duplicate task rejected: hashkey {hk} is claimed by a live cross-session run; use --force to add anyway"
-        ));
+    match claim_check(&hk) {
+        ClaimCheck::NotClaimed => {}
+        ClaimCheck::Claimed => {
+            return Err(anyhow!(
+                "duplicate task rejected: hashkey {hk} is claimed by a live cross-session run; use --force to add anyway"
+            ));
+        }
+        ClaimCheck::Undetermined(reason) => {
+            return Err(anyhow!(
+                "add refused: the cross-session claim check could not be made ({reason}), so a duplicate of a live claimed task cannot be ruled out (hashkey {hk}); use --force to add anyway"
+            ));
+        }
     }
 
     Ok(())
@@ -1024,75 +1036,195 @@ fn check_duplicate(tasks: &[Task], title: &str, project: &str) -> Result<()> {
 
 /// CA-backlog-002/003: upper bound on how long [`is_claimed_elsewhere`] will
 /// wait for the `condukt state is-claimed` subprocess before giving up and
-/// treating it as "not claimed". This call runs INSIDE `with_tasks_lock`'s
+/// reporting the claim check as undetermined. This call runs INSIDE `with_tasks_lock`'s
 /// critical section (via `check_duplicate`), so an unbounded wait (the old
 /// `Command::output()`, which blocks until the child exits) lets a hung/slow
 /// `condukt` process hold the tasks-file lock indefinitely — well past
 /// [`TASKS_LOCK_STALE_SECS`] (10s), at which point a second process reaps the
 /// "stale" lock and steals it mid-critical-section, causing a lost update on
-/// tasks.toml. Bounding this well under that stale-reap window (over an order
-/// of magnitude under 10s) means a hang here can never itself be the cause of
-/// a lock-steal: the call always gives up long before the lock could look
-/// stale. Separately, [`TASKS_LOCK_BUDGET`] (the
+/// tasks.toml. Bounding this well under that stale-reap window (a quarter of
+/// it at most, pinned by a compile-time assert) means a hang here can never
+/// itself be the cause of a lock-steal: the call always gives up long before
+/// the lock could look stale.
+///
+/// Why 2.5s and not the original 300ms (backlog 420f1eec round 3): on macOS the
+/// first exec of a freshly written condukt binary measured 382-752ms (OS
+/// scanning), so 300ms refused the first `add` after every rollout or rebuild
+/// even though the helper answered correctly. A timeout is still
+/// Undetermined and refused (fail-closed); this only stops a slow-but-correct
+/// helper from being treated as a hung one. The bound is a TOTAL deadline for
+/// exit-wait plus stdout read, so the worst case is that one shared deadline, plus at most the 50ms read
+/// floor on the final stdout read, plus the kill-and-reap after a timeout — not
+/// a multiple of the deadline. Separately, [`TASKS_LOCK_BUDGET`] (the
 /// blocking-acquire retry budget for a WAITING racer) is kept comfortably
 /// ABOVE this bound, so a racer never gives up waiting — and falls back to
-/// unprotected fail-soft execution — while the current holder is still
+/// unprotected execution — while the current holder is still
 /// legitimately inside this bound.
-const IS_CLAIMED_TIMEOUT: Duration = Duration::from_millis(300);
+const IS_CLAIMED_TIMEOUT: Duration = Duration::from_millis(2500);
+// Compile-time pin of the sizing contract: a hang may hold the tasks-file lock
+// for at most this bound, which must stay at most a quarter of the stale-reap
+// window and well under the blocking-acquire budget.
+const _: () = assert!(IS_CLAIMED_TIMEOUT.as_millis() * 4 <= (TASKS_LOCK_STALE_SECS as u128) * 1000);
+const _: () = assert!(IS_CLAIMED_TIMEOUT.as_millis() < TASKS_LOCK_BUDGET.as_millis());
 /// Poll interval while waiting for the subprocess to exit.
 const IS_CLAIMED_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
-/// Fail-soft check: does a live cross-session claim (from any `condukt` run)
-/// hold this hashkey? Shells out to `condukt state is-claimed --hashkey <h>`
-/// (exit 0 = claimed, exit 1 = not claimed). Any other outcome — `condukt`
-/// missing from PATH, spawn failure, unexpected exit code, OR the subprocess
-/// failing to exit within [`IS_CLAIMED_TIMEOUT`] (CA-backlog-002) — is treated
-/// as "not claimed" so a stale, absent, or hung `condukt` never blocks
-/// `backlog add`, and — critically — never holds the tasks-file lock past a
-/// bound well under the stale-reap window.
-fn is_claimed_elsewhere(hashkey: &str) -> bool {
+/// Outcome of the cross-session claim check. Three-valued on purpose: an
+/// inability to check is NOT "not claimed" (backlog 420f1eec).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ClaimCheck {
+    /// `condukt state is-claimed` exited 0: a live claim holds the hashkey.
+    Claimed,
+    /// It exited 1: no live claim.
+    NotClaimed,
+    /// Spawn failure, any other exit code / signal, or a timeout. Carries why.
+    Undetermined(String),
+}
+
+// Test seam: in unit tests the claim check never spawns the machine's real
+// `condukt` (whose behaviour depends on what is installed). It answers from a
+// per-thread override, defaulting to `NotClaimed`; tests of the real
+// subprocess path call [`is_claimed_elsewhere`] directly with a PATH shim.
+#[cfg(test)]
+thread_local! {
+    static CLAIM_CHECK_OVERRIDE: std::cell::RefCell<Option<ClaimCheck>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(not(test))]
+fn claim_check(hashkey: &str) -> ClaimCheck {
+    is_claimed_elsewhere(hashkey)
+}
+
+#[cfg(test)]
+fn claim_check(_hashkey: &str) -> ClaimCheck {
+    CLAIM_CHECK_OVERRIDE.with(|o| o.borrow().clone().unwrap_or(ClaimCheck::NotClaimed))
+}
+
+/// Does a live cross-session claim (from any `condukt` run) hold this
+/// hashkey? Shells out to `condukt state is-claimed --hashkey <h>`. Exit 1 is
+/// ambiguous on its own (older condukt also exited 1 when the claim registry
+/// was unreadable), so the stdout JSON is part of the contract: exit 0 with
+/// `"claimed": true` = claimed, exit 1 with `"claimed": false` = not claimed.
+/// Every other outcome — exit 0/1 without that matching field, `condukt`
+/// missing from PATH, spawn failure, unexpected exit code or signal, OR the
+/// subprocess failing to exit within [`IS_CLAIMED_TIMEOUT`] (CA-backlog-002) —
+/// is [`ClaimCheck::Undetermined`], which `check_duplicate` refuses. The
+/// timeout is one total deadline of 2.5s shared by the exit wait and the
+/// stdout read (it was 300ms before), so a hang holds the tasks-file lock for
+/// at most that deadline plus the 50ms read floor (`.max(Duration::from_millis(50))`)
+/// on the final read plus the kill-and-reap after a timeout — a quarter of
+/// the stale-reap window, enforced by the const assertions on
+/// [`IS_CLAIMED_TIMEOUT`].
+fn is_claimed_elsewhere(hashkey: &str) -> ClaimCheck {
+    use std::io::Read;
+    let started = std::time::Instant::now();
     let mut child = match std::process::Command::new("condukt")
         .arg("state")
         .arg("is-claimed")
         .arg("--hashkey")
         .arg(hashkey)
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
     {
         Ok(c) => c,
-        Err(_) => return false,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return ClaimCheck::Undetermined("condukt not found".to_string());
+        }
+        Err(e) => return ClaimCheck::Undetermined(format!("condukt spawn failed: {e}")),
     };
-    run_with_bounded_wait(&mut child, IS_CLAIMED_TIMEOUT, IS_CLAIMED_POLL_INTERVAL)
-        .map(|status| status.success())
-        .unwrap_or(false)
+    // Drain stdout on a thread while the bounded wait polls the exit, so a
+    // chatty child can never fill the pipe and wedge the wait. The read is
+    // capped (the payload is a few dozen bytes); past the cap the reader drops
+    // the pipe and the child sees EPIPE, which surfaces as a non-0/1 exit or an
+    // unparseable body — both Undetermined.
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    if let Some(mut out) = child.stdout.take() {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = (&mut out).take(64 * 1024).read_to_end(&mut buf);
+            let _ = tx.send(buf);
+        });
+    } else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return ClaimCheck::Undetermined("condukt stdout unavailable".to_string());
+    }
+    let status =
+        match run_with_bounded_wait(&mut child, IS_CLAIMED_TIMEOUT, IS_CLAIMED_POLL_INTERVAL) {
+            Ok(s) => s,
+            Err(BoundedWaitError::TimedOut) => {
+                return ClaimCheck::Undetermined(format!("timed out after {IS_CLAIMED_TIMEOUT:?}"))
+            }
+            Err(BoundedWaitError::Wait(e)) => {
+                return ClaimCheck::Undetermined(format!("waiting for condukt failed: {e}"))
+            }
+        };
+    // The child has exited; a surviving grandchild could still hold the pipe,
+    // so the read is bounded too rather than joined: it spends whatever is left
+    // of the SAME total deadline (floored so an already-sent body is not
+    // missed by a zero wait), so the whole call never exceeds the bound by more
+    // than that floor. The reader thread is detached, never joined.
+    let remaining = IS_CLAIMED_TIMEOUT
+        .saturating_sub(started.elapsed())
+        .max(Duration::from_millis(50));
+    let body = rx.recv_timeout(remaining).ok();
+    let claimed_field = body
+        .as_deref()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok())
+        .and_then(|v| v.get("claimed").and_then(|c| c.as_bool()));
+    match (status.code(), claimed_field) {
+        (Some(0), Some(true)) => ClaimCheck::Claimed,
+        (Some(1), Some(false)) => ClaimCheck::NotClaimed,
+        (Some(c @ (0 | 1)), _) => ClaimCheck::Undetermined(format!(
+            "condukt exit {c} without a parseable claimed:{} on stdout",
+            if c == 0 { "true" } else { "false" }
+        )),
+        (Some(c), _) => ClaimCheck::Undetermined(format!("condukt exit {c}")),
+        (None, _) => ClaimCheck::Undetermined("condukt terminated by signal".to_string()),
+    }
+}
+
+/// Why [`run_with_bounded_wait`] produced no exit status.
+#[derive(Debug)]
+enum BoundedWaitError {
+    /// The child did not exit within the budget (it was killed and reaped).
+    TimedOut,
+    /// `try_wait` itself failed (the child was killed and reaped best-effort).
+    Wait(std::io::Error),
 }
 
 /// Wait for `child` to exit, polling `try_wait` (non-blocking) instead of the
 /// blocking `wait()`/`output()`, so the caller can give up after `timeout`
-/// elapses. On timeout, best-effort `kill()` the child (so it doesn't linger
-/// as an orphan) and return `None` — the caller treats `None` as "unknown,
-/// fail open". Returns `Some(exit_status)` if the child exits within the
-/// budget.
+/// elapses. On timeout, or if `try_wait` itself errors, best-effort `kill()`
+/// and reap the child (so it doesn't linger) and return the matching
+/// [`BoundedWaitError`] — the caller treats either as undetermined
+/// (`check_duplicate` refuses). Returns `Ok(exit_status)` if the child exits
+/// within the budget.
 fn run_with_bounded_wait(
     child: &mut std::process::Child,
     timeout: Duration,
     poll_interval: Duration,
-) -> Option<std::process::ExitStatus> {
+) -> Result<std::process::ExitStatus, BoundedWaitError> {
     let start = std::time::Instant::now();
     loop {
         match child.try_wait() {
-            Ok(Some(status)) => return Some(status),
+            Ok(Some(status)) => return Ok(status),
             Ok(None) => {
                 if start.elapsed() >= timeout {
                     let _ = child.kill();
                     let _ = child.wait(); // reap so it doesn't become a zombie
-                    return None;
+                    return Err(BoundedWaitError::TimedOut);
                 }
                 std::thread::sleep(poll_interval);
             }
-            Err(_) => return None,
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(BoundedWaitError::Wait(e));
+            }
         }
     }
 }
@@ -3710,13 +3842,13 @@ mod tests {
 
     // --- duplicate content guard (hashkey dedup on add) ---
     //
-    // NB: `is_claimed_elsewhere` shells out to `condukt state is-claimed`. In
-    // this dev environment the installed `condukt` binary is a stale build
-    // that lacks the `is-claimed` subcommand and exits non-zero/non-one
-    // (clap "unrecognized subcommand" -> exit 2), which the fail-soft path
-    // correctly treats as "not claimed". These tests exercise the (a) local
-    // pending/failed guard, independent of whatever `condukt` happens to be
-    // on PATH.
+    // NB: `is_claimed_elsewhere` shells out to `condukt state is-claimed`, and
+    // an unusable `condukt` is now UNDETERMINED (add refused), not "not
+    // claimed". In unit tests `claim_check` therefore never reaches the real
+    // `condukt` (machine-dependent): it answers `NotClaimed` unless a test sets
+    // `CLAIM_CHECK_OVERRIDE`. These tests exercise the (a) local pending/failed
+    // guard; the real subprocess mapping is covered by the PATH-shim tests
+    // near `is_claimed_elsewhere_*`.
 
     #[test]
     fn add_rejects_duplicate_pending_hashkey() {
@@ -4369,7 +4501,7 @@ mod tests {
     /// `condukt state is-claimed` subprocess (here, literally shelling out to a
     /// process that sleeps far longer than IS_CLAIMED_TIMEOUT) via
     /// `run_with_bounded_wait` directly, and asserts the bounded wait gives up
-    /// (returns `None`) well under `TASKS_LOCK_STALE_SECS` (10s) — proving the
+    /// (returns `TimedOut`) well under `TASKS_LOCK_STALE_SECS` (10s) — proving the
     /// call cannot itself hold the tasks-file lock's critical section past a
     /// bound shorter than the stale-reap window.
     #[test]
@@ -4395,8 +4527,8 @@ mod tests {
         let elapsed = start.elapsed();
 
         assert!(
-            result.is_none(),
-            "a hung subprocess must be treated as timed-out (None), not waited on forever"
+            matches!(result, Err(BoundedWaitError::TimedOut)),
+            "a hung subprocess must be treated as timed-out, not waited on forever"
         );
         assert!(
             elapsed < Duration::from_secs(1),
@@ -4409,11 +4541,12 @@ mod tests {
         let _ = child.wait();
     }
 
-    /// End-to-end version of the same oracle through the real fail-soft
+    /// End-to-end version of the same oracle through the real subprocess
     /// surface: `is_claimed_elsewhere` shells out to a `condukt` binary that,
     /// in this test, we make resolve (via PATH override) to a slow/hanging
-    /// script instead of the real `condukt`. The call must return `false`
-    /// ("not claimed", fail-open per spec) within well under
+    /// script instead of the real `condukt`. The call must return
+    /// `Undetermined` (a timeout is "cannot determine", never "not claimed")
+    /// within well under
     /// `TASKS_LOCK_STALE_SECS`, never blocking on the hang.
     #[test]
     fn is_claimed_elsewhere_does_not_block_past_lock_stale_window_on_hang() {
@@ -4447,15 +4580,141 @@ mod tests {
         std::env::set_var("PATH", old_path);
 
         assert!(
-            !claimed,
-            "a hung condukt subprocess must fail-open to 'not claimed'"
+            matches!(&claimed, ClaimCheck::Undetermined(r) if r.contains("timed out")),
+            "a hung condukt subprocess must be Undetermined(timed out), got {claimed:?}"
         );
         assert!(
-            elapsed < Duration::from_secs(1),
+            elapsed < IS_CLAIMED_TIMEOUT + Duration::from_secs(1),
             "CA-backlog-002: is_claimed_elsewhere took {elapsed:?} against a hung subprocess, \
-             must give up well under TASKS_LOCK_STALE_SECS ({TASKS_LOCK_STALE_SECS}s) so it \
-             cannot hold with_tasks_lock's critical section past the stale-reap window"
+             must return within IS_CLAIMED_TIMEOUT ({IS_CLAIMED_TIMEOUT:?}) plus 1s of slack, \
+             far below TASKS_LOCK_STALE_SECS ({TASKS_LOCK_STALE_SECS}s), so it cannot hold \
+             with_tasks_lock's critical section past the stale-reap window"
         );
+    }
+
+    /// Write an executable `condukt` shim running `body` into a fresh dir.
+    fn condukt_shim(body: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tmp dir");
+        let f = dir.path().join("condukt");
+        std::fs::write(&f, format!("#!/bin/sh\n{body}\n")).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        dir
+    }
+
+    /// Run `is_claimed_elsewhere` with PATH replaced by `path` (restored after).
+    fn claim_with_path(path: &str) -> ClaimCheck {
+        let _g = PROBE_PATH_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let old = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", path);
+        // The claim-check bound can legitimately trip while the whole suite is
+        // loading the machine; retry ONLY a timeout (the mapping under test is
+        // about exit codes), never any other outcome.
+        let mut r = is_claimed_elsewhere("deadbeefcafef00d");
+        for _ in 0..20 {
+            if !matches!(&r, ClaimCheck::Undetermined(m) if m.starts_with("timed out")) {
+                break;
+            }
+            r = is_claimed_elsewhere("deadbeefcafef00d");
+        }
+        std::env::set_var("PATH", old);
+        r
+    }
+
+    /// backlog 420f1eec: exit 0 -> Claimed, exit 1 -> NotClaimed, everything
+    /// else (other exit code, missing binary) -> Undetermined with a reason.
+    #[test]
+    fn is_claimed_elsewhere_maps_exit_codes_three_valued() {
+        let d0 = condukt_shim("echo '{\"claimed\":true}'; exit 0");
+        assert_eq!(
+            claim_with_path(&format!("{}:/usr/bin:/bin", d0.path().display())),
+            ClaimCheck::Claimed
+        );
+        let d1 = condukt_shim("echo '{\"claimed\":false}'; exit 1");
+        assert_eq!(
+            claim_with_path(&format!("{}:/usr/bin:/bin", d1.path().display())),
+            ClaimCheck::NotClaimed
+        );
+        let d3 = condukt_shim("exit 3");
+        assert_eq!(
+            claim_with_path(&format!("{}:/usr/bin:/bin", d3.path().display())),
+            ClaimCheck::Undetermined("condukt exit 3".to_string())
+        );
+        // Exit 1 / exit 0 whose stdout does not carry the matching `claimed`
+        // field are NOT trusted: old condukt exited 1 on an unreadable
+        // registry, which is "cannot determine", not "not claimed".
+        let on_path = |d: &tempfile::TempDir| format!("{}:/usr/bin:/bin", d.path().display());
+        let bare1 = condukt_shim("exit 1");
+        assert!(matches!(
+            claim_with_path(&on_path(&bare1)),
+            ClaimCheck::Undetermined(r) if r.contains("condukt exit 1 without a parseable claimed:false")
+        ));
+        let lie0 = condukt_shim("echo '{\"claimed\":false}'; exit 0");
+        assert!(matches!(
+            claim_with_path(&on_path(&lie0)),
+            ClaimCheck::Undetermined(r) if r.contains("condukt exit 0 without a parseable claimed:true")
+        ));
+        let lie1 = condukt_shim("echo '{\"claimed\":true}'; exit 1");
+        assert!(matches!(
+            claim_with_path(&on_path(&lie1)),
+            ClaimCheck::Undetermined(_)
+        ));
+        let junk = condukt_shim("echo 'not json'; exit 1");
+        assert!(matches!(
+            claim_with_path(&on_path(&junk)),
+            ClaimCheck::Undetermined(_)
+        ));
+        // A child flooding stdout past the pipe buffer must neither deadlock the
+        // bounded wait nor be believed.
+        let flood = condukt_shim("yes | head -c 300000; exit 0");
+        let t = std::time::Instant::now();
+        assert!(matches!(
+            claim_with_path(&on_path(&flood)),
+            ClaimCheck::Undetermined(_)
+        ));
+        assert!(t.elapsed() < Duration::from_secs(5));
+        // The 64KiB stdout cap is load-bearing: a body that is valid JSON only
+        // when read in full (a >64KiB string value) must NOT be believed. With
+        // the cap removed this would parse and return NotClaimed.
+        let big = condukt_shim(
+            "printf '{\"claimed\":false,\"pad\":\"'; head -c 100000 /dev/zero | tr '\\0' a; printf '\"}'; exit 1",
+        );
+        assert!(
+            matches!(claim_with_path(&on_path(&big)), ClaimCheck::Undetermined(_)),
+            "an oversize stdout must be truncated by the cap and so not parse as claimed:false"
+        );
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(
+            claim_with_path(&empty.path().display().to_string()),
+            ClaimCheck::Undetermined("condukt not found".to_string())
+        );
+    }
+
+    /// backlog 420f1eec: an Undetermined claim check refuses the add (naming
+    /// the reason and `--force`); `--force` still bypasses it; Claimed refuses.
+    #[test]
+    fn add_refuses_on_undetermined_claim_check_and_force_bypasses() {
+        let path = tmp_path();
+        CLAIM_CHECK_OVERRIDE.with(|o| {
+            *o.borrow_mut() = Some(ClaimCheck::Undetermined("condukt exit 3".into()));
+        });
+        let err = add_with_weight(&path, "Probe", "/repo", vec![], "", 0.0, false, 100)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("claim check could not be made"), "{err}");
+        assert!(err.contains("condukt exit 3"), "{err}");
+        assert!(err.contains("--force"), "{err}");
+        assert!(list(&path, None, None, None).unwrap().is_empty());
+        add_with_weight(&path, "Probe", "/repo", vec![], "", 0.0, true, 100)
+            .expect("--force must still bypass the claim check");
+        CLAIM_CHECK_OVERRIDE.with(|o| *o.borrow_mut() = Some(ClaimCheck::Claimed));
+        let err = add_with_weight(&path, "Other", "/repo", vec![], "", 0.0, false, 100)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("live cross-session run"), "{err}");
+        CLAIM_CHECK_OVERRIDE.with(|o| *o.borrow_mut() = None);
     }
 
     // --- CA-backlog-001 / 003: durable, collision-free atomic save ----------

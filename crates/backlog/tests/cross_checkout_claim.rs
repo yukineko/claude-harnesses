@@ -16,6 +16,8 @@
 //! invocation so the machine-global ledger under `~/.backlog` is the test's
 //! own, never the user's.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
@@ -38,6 +40,7 @@ fn unique_root(tag: &str) -> PathBuf {
 
 fn spawn(args: &[&str], cwd: &Path, home: &Path) -> Child {
     Command::new(env!("CARGO_BIN_EXE_backlog"))
+        .env("PATH", common::path_with_condukt_shim())
         .args(args)
         .env("HOME", home)
         .current_dir(cwd)

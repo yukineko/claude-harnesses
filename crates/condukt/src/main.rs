@@ -4641,7 +4641,18 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             eprintln!("released {n} task claim(s) for run '{run}'");
         }
         StateAction::IsClaimed { hashkey } => {
-            let live = claim::active_claims(cfg, cwd, state::now_secs())?;
+            // Exit codes are the contract: 0 = claimed, 1 = NOT claimed (stdout
+            // carries `"claimed": false`), 3 = the claim registry could not be
+            // read, so the answer is UNDETERMINED. An unreadable registry must
+            // never share exit 1 with "free" — callers (backlog add, flow) gate
+            // on it. Nothing is printed on stdout in the undetermined case.
+            let live = match claim::active_claims(cfg, cwd, state::now_secs()) {
+                Ok(live) => live,
+                Err(e) => {
+                    eprintln!("condukt state is-claimed: cannot determine claim state: {e:#}");
+                    std::process::exit(3);
+                }
+            };
             let holder = live.task_claims.get(&hashkey);
             let claimed = holder.is_some();
             let out = serde_json::json!({

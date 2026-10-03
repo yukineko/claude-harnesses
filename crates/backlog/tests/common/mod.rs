@@ -79,6 +79,10 @@ case "$m" in
 esac
 "#;
 
+/// A `condukt` that answers "not claimed" the way the real one does:
+/// `{"claimed":false}` on stdout and exit 1.
+const NOT_CLAIMED_CONDUKT: &str = "#!/bin/sh\necho '{\"claimed\":false}'\nexit 1\n";
+
 impl Fixture {
     pub fn new(tag: &str) -> Self {
         let home = unique_dir(&format!("{tag}-home"));
@@ -89,6 +93,10 @@ impl Fixture {
         f.git(&["init", "-q", "-b", "main"]);
         f.write("README.txt", "x\n");
         f.write_exec_shim("cargo", FAKE_CARGO);
+        // `add` runs the cross-session claim check (`condukt state is-claimed`),
+        // and an unusable condukt is UNDETERMINED, so `add` is refused (backlog
+        // 420f1eec). Pin a deterministic "not claimed" answer for this fixture.
+        f.write_exec_shim("condukt", NOT_CLAIMED_CONDUKT);
         // Repro scripts: a FAILING repro (exit 1) means the bug is REPRODUCED
         // (same polarity as a RED test); exit 0 means NOT reproduced.
         f.write_script("tests/repro_yes.sh", "echo 'bug present'; exit 1");
@@ -334,4 +342,38 @@ pub fn assert_refused_unchanged(f: &Fixture, id: &str, before_status: &str, out:
 
 pub fn is_path(_p: &Path) -> bool {
     true
+}
+
+// ---- Shared condukt claim-check seam (backlog 420f1eec) ----
+
+use std::sync::OnceLock;
+
+/// Directory holding a `condukt` that reports "not claimed" the way the real
+/// one does: `{"claimed":false}` on stdout and exit 1 (backlog trusts exit 1
+/// only together with that field). One stable dir shared by every test process
+/// (nothing leaks per pid); the script is published by atomic rename so a
+/// concurrent reader never sees a half-written file.
+pub fn condukt_shim_dir() -> &'static std::path::Path {
+    static DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        use std::os::unix::fs::PermissionsExt;
+        const BODY: &str = "#!/bin/sh\necho '{\"claimed\":false}'\nexit 1\n";
+        let dir = std::env::temp_dir().join("backlog-test-condukt-shim-v2");
+        std::fs::create_dir_all(&dir).expect("create shim dir");
+        let sh = dir.join("condukt");
+        if std::fs::read_to_string(&sh).ok().as_deref() != Some(BODY) {
+            let tmp = dir.join(format!("condukt.{}.tmp", std::process::id()));
+            std::fs::write(&tmp, BODY).expect("write shim");
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod shim");
+            std::fs::rename(&tmp, &sh).expect("publish shim");
+        }
+        dir
+    })
+}
+
+/// `PATH` value with the shim first, then the inherited PATH.
+pub fn path_with_condukt_shim() -> String {
+    let old = std::env::var("PATH").unwrap_or_default();
+    format!("{}:{}", condukt_shim_dir().display(), old)
 }

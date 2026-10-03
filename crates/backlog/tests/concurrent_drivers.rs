@@ -4,6 +4,8 @@
 //! These drive the real built binary in separate OS processes, which is what
 //! two `/flow` sessions actually are, and assert on real stdout.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
@@ -95,6 +97,7 @@ fn spawn(args: &[&str], home: &Path) -> Child {
     // (`driver`/`lock` resolve via `base_dir("backlog")`, keyed off `HOME`
     // only), so pinning cwd changes no other test's behavior.
     Command::new(env!("CARGO_BIN_EXE_backlog"))
+        .env("PATH", common::path_with_condukt_shim())
         .args(args)
         .env("HOME", home)
         .current_dir(home)

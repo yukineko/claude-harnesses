@@ -6,6 +6,8 @@
 //! `#[ignore]` when the corresponding defect is fixed. Run them with
 //! `cargo test -p backlog --test backlog_s03_audit -- --ignored`.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -87,9 +89,16 @@ fn run(f: &Fx, args: &[&str], path_prefix: Option<&Path>) -> (i32, String, Strin
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if let Some(p) = path_prefix {
-        let old = std::env::var("PATH").unwrap_or_default();
-        cmd.env("PATH", format!("{}:{}", p.display(), old));
+    match path_prefix {
+        Some(p) => {
+            // The caller's shim comes first; no deterministic condukt is
+            // added behind it, so the shim fully decides the claim check.
+            let old = std::env::var("PATH").unwrap_or_default();
+            cmd.env("PATH", format!("{}:{}", p.display(), old));
+        }
+        None => {
+            cmd.env("PATH", common::path_with_condukt_shim());
+        }
     }
     let out = cmd.output().expect("binary runs");
     (
@@ -126,7 +135,6 @@ fn add(f: &Fx, title: &str, extra: &[&str]) -> String {
 /// "not claimed", so an undetermined claim check is indistinguishable from a
 /// clean one. Expected: refuse, or at least say the check could not be made.
 #[test]
-#[ignore = "backlog 420f1eec: open defect, remove ignore when fixed"]
 fn add_does_not_treat_an_undetermined_condukt_claim_check_as_not_claimed() {
     let f = fx("420f1eec");
     let shim = f.home.join("shim");

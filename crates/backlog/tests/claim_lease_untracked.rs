@@ -16,6 +16,8 @@
 //! --porcelain` is a meaningful observation. `HOME` is pinned to a temp dir
 //! in every invocation so the ledger is the test's own, never the user's.
 
+mod common;
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -49,6 +51,7 @@ fn unique_root(tag: &str) -> PathBuf {
 
 fn run_with_stdin(args: &[&str], cwd: &Path, home: &Path, stdin: &str) -> (i32, String, String) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_backlog"))
+        .env("PATH", common::path_with_condukt_shim())
         .args(args)
         .env("HOME", home)
         .env_remove("BACKLOG_DISABLE")

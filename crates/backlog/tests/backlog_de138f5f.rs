@@ -13,6 +13,8 @@
 //!
 //! Written by an independent auditor, not an implementer.
 
+mod common;
+
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -107,7 +109,14 @@ fn run(f: &Fx, args: &[&str], path: &Path) -> (i32, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_backlog"))
         .args(args)
         .env("HOME", &f.home)
-        .env("PATH", path)
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                path.display(),
+                common::condukt_shim_dir().display()
+            ),
+        )
         .current_dir(&f.repo)
         .stdin(Stdio::null())
         .output()

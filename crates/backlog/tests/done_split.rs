@@ -17,6 +17,8 @@
 //! Written by an independent test writer (CLAUDE.md §2(a)) before the
 //! implementation existed.
 
+mod common;
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -128,6 +130,7 @@ impl Fixture {
     fn run(&self, args: &[&str]) -> Out {
         let bin = env!("CARGO_BIN_EXE_backlog");
         let mut child = Command::new(bin)
+            .env("PATH", common::path_with_condukt_shim())
             .args(args)
             .env("HOME", &self.home)
             .current_dir(&self.repo)

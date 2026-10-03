@@ -15,11 +15,14 @@
 //!
 //! Real binary, real git repo, pinned HOME; nothing outside the temp dir.
 
+mod common;
+
 use std::path::Path;
 use std::process::{Command, Stdio};
 
 fn run(args: &[&str], cwd: &Path, home: &Path) -> (i32, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_backlog"))
+        .env("PATH", common::path_with_condukt_shim())
         .args(args)
         .env("HOME", home)
         .env_remove("BACKLOG_DISABLE")

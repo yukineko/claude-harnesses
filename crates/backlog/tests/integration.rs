@@ -2,6 +2,8 @@
 //! code + stdout. `backlog` is a subcommand CLI; `session-start` is a hook whose
 //! invariant is to always exit 0 (never break a turn).
 
+mod common;
+
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -113,6 +115,7 @@ fn run(args: &[&str], payload: &str, home: &PathBuf) -> (i32, String) {
 fn run_in(args: &[&str], payload: &str, home: &PathBuf, cwd: Option<&PathBuf>) -> (i32, String) {
     let bin = env!("CARGO_BIN_EXE_backlog");
     let mut cmd = Command::new(bin);
+    cmd.env("PATH", common::path_with_condukt_shim());
     cmd.args(args)
         .env("HOME", home)
         .stdin(Stdio::piped())

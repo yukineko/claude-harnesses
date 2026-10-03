@@ -15,6 +15,68 @@ use std::time::Duration;
 
 use harness_core::transcript::peer_edit_footprint_within;
 
+// Live claim-registry fixture: HOME is swapped (mutex-serialised) to a private dir
+// holding HOME/.condukt/state/<project_key(main_worktree_root(cwd))>/claims.json,
+// because `peer_edit_footprint_within` keys the registry by the process cwd.
+static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+struct LiveRegistry {
+    _g: std::sync::MutexGuard<'static, ()>,
+    old_home: Option<std::ffi::OsString>,
+    home: PathBuf,
+}
+
+impl LiveRegistry {
+    fn for_cwd(live_sessions: &[&str]) -> LiveRegistry {
+        let g = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = std::env::temp_dir().join(format!("hc-963d0d09-home-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let mut body = String::from("{");
+        for (i, s) in live_sessions.iter().enumerate() {
+            if i > 0 {
+                body.push(',');
+            }
+            body.push_str(&format!(
+                r#""/work/claimed-{i}.rs":{{"run_id":"run-{s}","session_id":"{s}","pid":1,"claimed_at":{now},"heartbeat_at":{now}}}"#
+            ));
+        }
+        body.push('}');
+        let cwd = std::env::current_dir().unwrap();
+        match harness_core::projkey::main_worktree_root(&cwd) {
+            harness_core::verdict::Determination::Known(k) => {
+                let dir = home
+                    .join(".condukt/state")
+                    .join(harness_core::projkey::project_key(&k));
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join("claims.json"), &body).unwrap();
+            }
+            _ => panic!("cannot resolve the main worktree root of cwd {cwd:?}"),
+        }
+        let old_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", &home);
+        LiveRegistry {
+            _g: g,
+            old_home,
+            home,
+        }
+    }
+}
+
+impl Drop for LiveRegistry {
+    fn drop(&mut self) {
+        match &self.old_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        let _ = std::fs::remove_dir_all(&self.home);
+    }
+}
+
 fn fixture(tag: &str) -> PathBuf {
     let p = std::env::temp_dir().join(format!("hc-963d0d09-{}-{tag}", std::process::id()));
     let _ = std::fs::remove_dir_all(&p);
@@ -40,6 +102,10 @@ fn control_a_genuinely_active_peer_claims_its_file() {
         edit_line("/tmp/claimed.rs", now) + "\n",
     )
     .unwrap();
+    // Re-anchored (user ruling 2026-10-04 design D, backlog 873a2621): a "genuinely
+    // active" peer is one holding a LIVE entry in condukt's claim registry. The
+    // assertion below is unchanged.
+    let _live = LiveRegistry::for_cwd(&["peer"]);
     let got = peer_edit_footprint_within(&root, "me", Duration::from_secs(24 * 3600));
     assert!(
         got.contains("/tmp/claimed.rs"),

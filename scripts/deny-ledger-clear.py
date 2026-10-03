@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """UserPromptSubmit hook: clear this session's maintree deny ledger (e033c406).
 
-guard-maintree-bash.py / guard-maintree-edit.py record every refusal in
+guard-maintree-edit.py records every refusal in
 `~/.claude/state/maintree-deny/<session_id>.jsonl`, or in the temp-dir fallback
 `<tmp>/maintree-deny-<uid>/<session_id>.jsonl` when HOME is unwritable
 (scripts/deny_ledger.py), and both the PreToolUse retry check and the Stop-time

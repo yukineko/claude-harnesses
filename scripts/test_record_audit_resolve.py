@@ -51,7 +51,17 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 _spec = importlib.util.spec_from_file_location("record_audit", _HERE / "record-audit.py")
 ra = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(ra)
+# Compiled from the SOURCE TEXT, deliberately not via the spec loader's
+# exec_module: SourceFileLoader reuses a __pycache__ .pyc validated only by
+# (source mtime at 1 s granularity, size), so a same-second size-preserving
+# edit (e.g. a reordering mutant) would run stale bytecode -- a false GREEN /
+# false mutation SURVIVOR, never a false red. Backlog 05726f9f; do not
+# "simplify" this back. get_source() reads the .py, never the cache;
+# dont_inherit keeps this file's __future__ flags off the subject.
+exec(  # noqa: S102
+    compile(_spec.loader.get_source(_spec.name), _spec.origin, "exec", dont_inherit=True),
+    ra.__dict__,
+)
 
 DAY = 86400
 NOW = 1785000000

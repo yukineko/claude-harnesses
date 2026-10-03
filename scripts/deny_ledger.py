@@ -4,10 +4,18 @@ WHY THIS EXISTS. A PreToolUse refusal is invisible to every later hook call: the
 payload Claude Code hands a hook (crates/harness-core/src/hook.rs, HookInput)
 carries session_id / transcript_path / cwd / hook_event_name / tool_name /
 tool_input, never "the previous call was denied". So after
-guard-maintree-bash.py or guard-maintree-edit.py refuses a write into the main
-working tree, nothing stopped the agent from reaching the very same file with a
-different spelling the guard happens not to parse (the "hack route"). The
-denier must therefore RECORD its refusals, and that record is this ledger.
+guard-maintree-edit.py refuses an Edit/Write into the main working tree, nothing
+stopped the agent from reaching the very same file with a different spelling
+(the "hack route"). The denier must therefore RECORD its refusals, and that
+record is this ledger.
+
+ONLY THE EDIT GUARD USES IT (user ruling 2026-10-04). guard-maintree-bash.py
+OBSERVES main before and after each Bash call instead of predicting writes from
+command text; it records nothing here, consults nothing here, and does not
+protect the ledger directories. A Bash call is therefore neither recorded as a
+deny, nor counted as a guarded call, nor refused by signal 1. A Bash write into
+main is caught by that guard's own Post comparison; a Bash write that reaches a
+target refused by the edit guard is still seen at Stop by signal 2.
 
 WHERE. `$HOME/.claude/state/maintree-deny/<session_id>.jsonl` — one file per
 session, under the home directory (`os.path.expanduser("~")`). Deliberately
@@ -34,12 +42,10 @@ so a deny that could only be recorded in the fallback is still seen by later
 calls and at Stop. A refusal that can be written to neither keeps its deny and
 says so in its message (RESIDUALS).
 
-SELF-PROTECTION. Writing, deleting, touching, chmod-ing or moving anything
-inside either ledger directory (protected_dirs) is refused from any tree, by
-guard-maintree-bash.py (including an ancestor of a ledger directory below
-$HOME, or at/below the temp dir — `rm -rf ~/.claude`, `rm -rf $TMPDIR/*` — and
-glob or unknown components that may name one) and by guard-maintree-edit.py.
-Reading them stays allowed.
+SELF-PROTECTION. An Edit/Write/MultiEdit/NotebookEdit into either ledger
+directory (protected_dirs) is refused from any tree by guard-maintree-edit.py.
+Reading them stays allowed. A Bash command that writes, deletes or moves a
+ledger file is NOT refused by any hook (user ruling 2026-10-04; see RESIDUALS).
 
 FORMAT. JSON lines, each an object with `"v": 1` and a `kind`:
 
@@ -62,11 +68,11 @@ FORMAT. JSON lines, each an object with `"v": 1` and a `kind`:
   A line that does not decode, is not an object, has an unknown `v`/`kind`, or
   lacks a required field makes the WHOLE ledger corrupt.
 
-SIGNAL 1 — PREVENTION (check_retry, called by both PreToolUse guards after their
+SIGNAL 1 — PREVENTION (check_retry, called by guard-maintree-edit.py after its
 own judgement allowed the call). A deny entry is ACTIVE for
 RETRY_WINDOW_CALLS (25) guarded calls or RETRY_WINDOW_SECS (20 minutes) after
-it, whichever ends first. "Guarded calls" are the PreToolUse calls of the two
-guards (Bash, Edit/Write/MultiEdit/NotebookEdit) in the same session that reach
+it, whichever ends first. "Guarded calls" are the PreToolUse calls of the edit
+guard (Edit/Write/MultiEdit/NotebookEdit) in the same session that reach
 this check (calls the guard itself refused are recorded as denies instead); they
 are counted by tick lines, which are only written while at least one deny is active
 (so a session with no recent refusal pays two failed `open`s — home and
@@ -107,7 +113,7 @@ prior denies".
 BRICK BOUND. An unreadable or corrupt ledger file refuses only for
 RETRY_WINDOW_SECS (20 minutes) measured from that file's mtime — otherwise a
 non-interactive run, which never submits a prompt, would be refused on every
-Bash/Edit call and every Stop for the rest of the run. Once the file is older
+Edit/Write call and every Stop for the rest of the run. Once the file is older
 than that, it is renamed aside to `<name>.corrupt-<unix-ts>` (left for a human
 to inspect) and SALVAGED: its lines that are valid `deny` entries are written
 into a fresh active file at the original path (O_CREAT|O_EXCL|O_NOFOLLOW, 0600),
@@ -148,11 +154,13 @@ RESIDUALS (recorded, not hidden — CLAUDE.md 4):
     it until the ledger is cleared (the next UserPromptSubmit) or pruned (a
     file older than 7 days, at a later clear). This is deliberate: a vanished
     root is not evidence that the refused path was left alone.
-  * ledger self-protection judges the target as the Bash guard can expand it
-    ($HOME, ~, $TMPDIR/$TEMP/$TMP from the environment, variables set earlier
-    in the same command). A target relative to an unknown cwd, or reached
-    through a symlink created in the same command, is not matched. A
-    tampered or deleted ledger FILE is not detected after the fact.
+  * ledger self-protection covers the edit tools only. A Bash command can
+    write, delete or move a ledger file and no hook refuses it (user ruling
+    2026-10-04 dropped the Bash side). A tampered or deleted ledger FILE is not
+    detected after the fact.
+  * signal 1 never fires on a Bash call: a Bash retry of a target the edit
+    guard refused is not prevented; only its effect is seen, at Stop, by
+    signal 2 (and, for main, by guard-maintree-bash.py's Post comparison).
 """
 
 from __future__ import annotations

@@ -55,7 +55,17 @@ SCRIPT_PATH = os.path.join(SCRIPTS, "check-worktree-isolation.py")
 
 _SPEC = importlib.util.spec_from_file_location("check_worktree_isolation", SCRIPT_PATH)
 wti = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(wti)
+# Compiled from the SOURCE TEXT, deliberately not via the spec loader's
+# exec_module: SourceFileLoader reuses a __pycache__ .pyc validated only by
+# (source mtime at 1 s granularity, size), so a same-second size-preserving
+# edit (e.g. a reordering mutant) would run stale bytecode -- a false GREEN /
+# false mutation SURVIVOR, never a false red. Backlog 05726f9f; do not
+# "simplify" this back. get_source() reads the .py, never the cache;
+# dont_inherit keeps this file's __future__ flags off the subject.
+exec(  # noqa: S102
+    compile(_SPEC.loader.get_source(_SPEC.name), _SPEC.origin, "exec", dont_inherit=True),
+    wti.__dict__,
+)
 
 
 def _run(cwd: str, env_extra=None, timeout: float = 15.0) -> subprocess.CompletedProcess:

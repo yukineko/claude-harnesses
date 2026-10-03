@@ -110,7 +110,6 @@ fn backlog_8abd74c4_clobber_redirect_reason_names_the_real_target() {
 
 // ---------------------------------------------------------------- 1b82a049
 #[test]
-#[ignore = "backlog 1b82a049: open defect, remove ignore when fixed"]
 fn backlog_1b82a049_chmod_x_off_plugin_cache_binary_is_not_allowed() {
     let (d, r) = verdict(
         "chmod -x /Users/yuki/.claude/plugins/cache/yukineko/blastguard/0.2.58/bin/blastguard",

@@ -24968,6 +24968,7 @@ updated_at = 1790983551
 weight = 0.0
 issue_number = 140
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/140"
+issue_closed_at = 1791047021
 rev = 0
 
 [[task]]
@@ -31614,11 +31615,11 @@ begin/end の対応漏れが検出されない。
 
 [backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/overwatch/tests/backlog_s04_audit.rs (rev e70d48dd)"""
 created_at = 1788771923
-updated_at = 1791024172
+updated_at = 1791024103
 weight = 0.0
 issue_number = 1104
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1104"
-issue_closed_at = 1791024173
+issue_closed_at = 1791024106
 rev = 1
 
 [task.closure]
@@ -31626,84 +31627,25 @@ reason = "fixed"
 
 [task.closure.green]
 runner = "cargo-test"
-cmd = "cargo test -p overwatch --test backlog_s04_audit s3b056c02"
+cmd = "cargo test -p overwatch --test backlog_s04_audit s3b056c02 -- --include-ignored"
 exit = 0
 passed = 1
-rev = "bc0f54685542d14aabc749b452fe3c2074612de3"
-observed_at = 1791024125
-output_digest = "sha256:b691e512089e1e240aac6fedc0b54e6e96e26de0f9b866bea768563c449d7bad"
+rev = "aceee2e13bee8c0f82b0a3fa236084758e4b9c32"
+observed_at = 1791024085
+output_digest = "sha256:df1643b3aad677cbd20c747bd28fe0e29788207ce2f2ed2f2a29c12ff0e973d2"
 excerpt = """
 
 running 1 test
 test s3b056c02_end_of_missing_key_is_distinguishable_from_release ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 1.37s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.59s
 
-   Compiling cfg-if v1.0.4
-   Compiling libc v0.2.186
-   Compiling memchr v2.8.2
-   Compiling serde_core v1.0.228
-   Compiling utf8parse v0.2.2
-   Compiling regex-syntax v0.8.11
-   Compiling hashbrown v0.17.1
-   Compiling equivalent v1.0.2
-   Compiling anstyle-parse v1.0.0
-   Compiling num-traits v0.2.19
-   Compiling option-ext v0.2.0
-   Compiling toml_write v0.1.2
-   Compiling is_terminal_polyfill v1.70.2
-   Compiling winnow v0.7.15
-   Compiling anstyle v1.0.14
-   Compiling core-foundation-sys v0.8.7
-   Compiling colorchoice v1.0.5
-   Compiling anstyle-query v1.1.5
-   Compiling anstream v1.0.0
-   Compiling getrandom v0.3.4
-   Compiling aho-corasick v1.1.4
-   Compiling rand_core v0.9.5
-   Compiling dirs-sys v0.4.1
-   Compiling indexmap v2.14.0
-   Compiling iana-time-zone v0.1.65
-   Compiling zmij v1.0.21
-   Compiling clap_lex v1.1.0
-   Compiling strsim v0.11.1
-   Compiling itoa v1.0.18
-   Compiling chrono v0.4.45
-   Compiling clap_builder v4.6.0
-   Compiling zerocopy v0.8.52
-   Compiling anyhow v1.0.103
-   Compiling dirs v5.0.1
-   Compiling wait-timeout v0.2.1
-   Compiling bitflags v2.13.0
-   Compiling regex-automata v0.4.14
-   Compiling errno v0.3.14
-   Compiling rustix v1.1.4
-   Compiling serde v1.0.228
-   Compiling serde_json v1.0.150
-   Compiling getrandom v0.4.3
-   Compiling rand v0.9.4
-   Compiling toml_datetime v0.6.11
-   Compiling serde_spanned v0.6.9
-   Compiling toml_edit v0.22.27
-   Compiling clap v4.6.1
-   Compiling rand_xorshift v0.4.0
-   Compiling fastrand v2.4.1
-   Compiling unarray v0.1.4
-   Compiling once_cell v1.21.4
-   Compiling tempfile v3.27.0
-   Compiling regex v1.12.4
-   Compiling ppv-lite86 v0.2.21
-   Compiling rand_chacha v0.9.0
-   Compiling toml v0.8.23
-   Compiling proptest v1.11.0
-   Compiling harness-core v0.2.44 (/Users/yuki/src/.harness-worktrees/session-33de4c25/crates/harness-core)
-   Compiling overwatch v0.2.59 (/Users/yuki/src/.harness-worktrees/session-33de4c25/crates/overwatch)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.98s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
      Running tests/backlog_s04_audit.rs (target/debug/deps/backlog_s04_audit-b2a8e76c1b539b6d)
 """
 
 [task.closure.red]
-rev = "7db4a861569fe11d534d7b35f6593060dd9bfca4"
+rev = "7927324f7f7b8ebd670b8fb2fb07f866065308df"
 exit = 101
 kind = "behavioural"
 
@@ -31720,11 +31662,11 @@ acquire_or_skip None path; restrictive side but silent.
 
 [backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/overwatch/tests/backlog_s04_audit.rs (rev e70d48dd)"""
 created_at = 1790678166
-updated_at = 1791024197
+updated_at = 1791024134
 weight = 0.0
 issue_number = 852
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/852"
-issue_closed_at = 1791024198
+issue_closed_at = 1791024137
 rev = 1
 
 [task.closure]
@@ -31732,12 +31674,12 @@ reason = "fixed"
 
 [task.closure.green]
 runner = "cargo-test"
-cmd = "cargo test -p overwatch --test backlog_s04_audit s6a9eb1ed"
+cmd = "cargo test -p overwatch --test backlog_s04_audit s6a9eb1ed -- --include-ignored"
 exit = 0
 passed = 1
-rev = "bc0f54685542d14aabc749b452fe3c2074612de3"
-observed_at = 1791024178
-output_digest = "sha256:eb67c5d04c72949eda9f0ada313be9dc5ddae5b90f685a5a94b233ca3b021ad6"
+rev = "aceee2e13bee8c0f82b0a3fa236084758e4b9c32"
+observed_at = 1791024110
+output_digest = "sha256:469354e599120ea22e50ddd1135c0d387879dd00345883896d6761fe600bb1ca"
 excerpt = """
 
 running 1 test
@@ -31745,12 +31687,12 @@ test s6a9eb1ed_end_that_could_not_lock_is_not_reported_as_release ... ok
 
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.45s
 
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
      Running tests/backlog_s04_audit.rs (target/debug/deps/backlog_s04_audit-b2a8e76c1b539b6d)
 """
 
 [task.closure.red]
-rev = "7db4a861569fe11d534d7b35f6593060dd9bfca4"
+rev = "7927324f7f7b8ebd670b8fb2fb07f866065308df"
 exit = 101
 kind = "behavioural"
 
@@ -31777,11 +31719,11 @@ discard は repo-primary lock 取得失敗には既に fail-closed で refuse �
 
 [backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/condukt/src/worktree.rs (mod backlog_4be23458) (rev 596108b9): worktree discard force-destroys uncommitted work; discard's doc calls force intentional, so a human ruling may change the contract."""
 created_at = 1788790462
-updated_at = 1791024270
+updated_at = 1791024178
 weight = 0.0
 issue_number = 414
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/414"
-issue_closed_at = 1791024271
+issue_closed_at = 1791024180
 rev = 1
 
 [task.closure]
@@ -31789,25 +31731,25 @@ reason = "fixed"
 
 [task.closure.green]
 runner = "cargo-test"
-cmd = "cargo test -p condukt --bin condukt backlog_4be23458 -- --include-ignored"
+cmd = "cargo test -p condukt --bins discard_does_not_silently_destroy_uncommitted_work -- --include-ignored"
 exit = 0
 passed = 1
-rev = "bc0f54685542d14aabc749b452fe3c2074612de3"
-observed_at = 1791024246
-output_digest = "sha256:f05aa49eb35b34290c7c3edda53c88ed21e49f6a4b0054184d4e2c0ec6588f41"
+rev = "aceee2e13bee8c0f82b0a3fa236084758e4b9c32"
+observed_at = 1791024138
+output_digest = "sha256:cc14672fa869b96ee0a879f72e74961795c7cdf5484bf9161f022562afcadf1f"
 excerpt = """
 
 running 1 test
 test worktree::backlog_4be23458::discard_does_not_silently_destroy_uncommitted_work ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 886 filtered out; finished in 0.49s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 886 filtered out; finished in 0.51s
 
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
      Running unittests src/main.rs (target/debug/deps/condukt-d5b35b37885b8452)
 """
 
 [task.closure.red]
-rev = "7db4a861569fe11d534d7b35f6593060dd9bfca4"
+rev = "d2e8b728994c9dd9b94e7074cf0ac18418b8ee2e"
 exit = 101
 kind = "behavioural"
 
@@ -31864,11 +31806,11 @@ gate は何も守っておらず、回避だけを学習させた。本セッシ
 
 [backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_826c29bf.py (rev 2ff60f58): Pins the umbrella's own criterion 6; children carry their own repros; criterion 5 obsolete (autoflow compass gate RETIRED 2026-08-20, crates/autoflow/src/main.rs:343)."""
 created_at = 1788789695
-updated_at = 1791024477
+updated_at = 1791024514
 weight = 0.0
 issue_number = 412
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/412"
-issue_closed_at = 1791024480
+issue_closed_at = 1791024515
 rev = 3
 
 [task.closure]
@@ -31879,13 +31821,13 @@ runner = "pytest"
 cmd = "python3 -m pytest scripts/test_backlog_826c29bf.py"
 exit = 0
 passed = 2
-rev = "c26b1cd99b206d49e832da281603fc7d1874c2ab"
-observed_at = 1791024475
-output_digest = "sha256:d446d8ef2787162e081f806f43e255f3bdad17e8322df6d817bdfe36bc23ba32"
+rev = "4601daaa0376cee615274ff3e442ef5e08f4cbd9"
+observed_at = 1791024512
+output_digest = "sha256:aaaf85cadb76a18f543d0618688a9e9ba68f8c5ed1935f7be1afaea4fcdcea9e"
 excerpt = """
 ============================= test session starts ==============================
 platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
-rootdir: /Users/yuki/src/.harness-worktrees/session-33de4c25
+rootdir: /Users/yuki/src/.harness-worktrees/session-521ce4dd
 plugins: anyio-4.9.0, langsmith-0.4.8
 collected 2 items
 
@@ -31895,7 +31837,7 @@ scripts/test_backlog_826c29bf.py ..                                      [100%]
 """
 
 [task.closure.red]
-rev = "7db4a861569fe11d534d7b35f6593060dd9bfca4"
+rev = "82ee4a782add20440391fbc642021e94d46a3bbd"
 exit = 1
 kind = "behavioural"
 
@@ -32558,4 +32500,598 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 [task.closure.red]
 rev = "79667521fa3057f3ce9d0c006ca00c02d6d82d4e"
 exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "873a2621"
+title = "peer footprint: 24h window は liveness ではない — 2時間前に終了したセッションが今も自分のファイルを除外しうる。heartbeat-TTL claim registry(condukt/overwatch)から peer を導出する"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+
+
+[triage 2026-09-29 @b325a169] p2->p1: live self-documented fail-open: harness-core transcript.rs:474-488 peer window excludes files from secrets/missing-test gate sets
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/harness-core/tests/backlog_s07_audit.rs (rev e70d48dd)
+
+[ruling 2026-10-04, user via AskUserQuestion, session 33de4c25] Design D: a session is a peer only if it holds a live entry in condukt's claim registry (claims.json, heartbeat TTL); its footprint still comes from its transcript. Registry unreadable -> no exclusion (restrictive). The user approved re-anchoring the frozen assertions in crates/harness-core/tests/change_attribution.rs (~l.700-735) and peer_concurrency_window.rs (~l.175) to "fresh transcript + live registry entry". RED observed at fb3d3b2a: cargo test -p harness-core --test backlog_s07_audit -- --include-ignored backlog_873a2621. Needs rebuild+rollout of linking plugins once fixed."""
+created_at = 1788930715
+updated_at = 1791046267
+weight = 0.0
+issue_number = 1116
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1116"
+issue_closed_at = 1791046271
+rev = 2
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p harness-core --test backlog_873a2621_liveness"
+exit = 0
+passed = 6
+rev = "bfae2b4eeb226ef1dbf4ecabd633f9d89ac5e38c"
+observed_at = 1791046235
+output_digest = "sha256:4c94db10cfd75874ca8dda82f5a184e1ac24b8615c1e8401802b67d442b43840"
+excerpt = """
+
+running 6 tests
+test corrupt_registry_yields_no_exclusion ... ok
+test fresh_transcript_with_no_registry_file_is_not_a_peer ... ok
+test fresh_transcript_without_registry_entry_is_not_a_peer ... ok
+test live_registry_entry_makes_a_fresh_transcript_a_peer ... ok
+test stale_heartbeat_registry_entry_is_not_a_peer ... ok
+test unreadable_registry_yields_no_exclusion ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+   Compiling serde v1.0.228
+   Compiling toml_datetime v0.6.11
+   Compiling serde_spanned v0.6.9
+   Compiling trybuild v1.0.118
+   Compiling toml_edit v0.22.27
+   Compiling toml v0.8.23
+   Compiling harness-core v0.2.45 (/Users/yuki/src/.harness-worktrees/session-33de4c25/crates/harness-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.28s
+     Running tests/backlog_873a2621_liveness.rs (target/debug/deps/backlog_873a2621_liveness-44dbaaee4f350f8e)
+"""
+
+[task.closure.red]
+rev = "33fd9c8f858d60a1eca5b48e9a736e887a9fc2b8"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "e5174b6a"
+title = "condukt oracle.rs の fallback:true 3分岐が check_oracle 経由では到達不能 — 散文は charter DoD の縮退契約と書いているが実挙動は Reject"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-09-11、測定点 5b3251a1。crates/condukt/src/oracle.rs には run 由来の fallback:true が 3 経路ある: (1) verdict_from_oracle の transition unknown 分岐 (oracle.rs:70 付近)、(2) verdict_from_oracle_output の stdout 空 分岐、(3) 同 stdout が JSON パース不能 分岐。いずれも check_oracle 経由では到達しない。理由: crates/tdd/src/main.rs:349 の oracle_command は valid_fp_oracle が true でない限り exit 1 で終了する。deployed の tdd 0.1.29 で直接確認した -- tdd oracle --task no-such-task-xyz は {has_green:false,has_red:false,transition:unknown,valid_fp_oracle:false} を印字して exit=1。verdict_from_oracle_output は exit_ok=false を先頭で短絡して fallback:false を返すので、(1) には決して降りない。(2)(3) も tdd が exit 0 のときは必ず整形済み JSON を印字するため到達しない。問題は挙動そのものではなく散文との食い違いである: verdict_from_oracle の doc comment は逐語で「Per the charter DoD (オラクル生成不能時の fallback) that is a can't-generate condition and must degrade to the legacy done_criteria gate (fallback: true -- enforce_fp_gate Allows), NOT hard-reject」と書いており、charter の DoD が実装されているかのように読める。実際には charter が要求した縮退は起きず hard-reject される。CLAUDE.md 第4節 (散文が実挙動と食い違ったら次のレビュアーを騙す仕掛けになる) に該当。要判断: charter DoD の縮退契約を本当に実現したいのか (その場合 tdd oracle の exit code 設計を変える必要がある。ただし縮退は fail-open なので第3節と衝突する)、それとも縮退契約自体を撤回して散文を実挙動に合わせるのか。後者が妥当に見えるが、これは仕様判断なので人間に返す。付随して、到達不能な 3 分岐にユニットテストが付いている場合、それらは pure function の契約テストであって gate 経路の証明ではないことを doc に明記すべき。
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/condukt/src/oracle.rs (mod backlog_e5174b6a) (rev 596108b9): Contract pinned = prose and behaviour agree; GREEN under either resolution (rewrite doc, or change exit protocol + fixture)."""
+created_at = 1789070218
+updated_at = 1791046555
+weight = 0.0
+issue_number = 525
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/525"
+issue_closed_at = 1791046558
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --bin condukt backlog_e5174b6a -- --include-ignored"
+exit = 0
+passed = 1
+rev = "0dce774f64c2493114eb426c8e351b19f11aa139"
+observed_at = 1791046421
+output_digest = "sha256:353cd6acb370b9b9bad07f27a79ee19cef08f1cf8fabd3bb7292189cd4e114c5"
+excerpt = """
+
+running 1 test
+test oracle::backlog_e5174b6a::documented_unknown_transition_degradation_is_what_check_oracle_delivers ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 886 filtered out; finished in 0.04s
+
+   Compiling harness-core v0.2.45 (/Users/yuki/src/.harness-worktrees/session-33de4c25/crates/harness-core)
+   Compiling overwatch v0.2.59 (/Users/yuki/src/.harness-worktrees/session-33de4c25/crates/overwatch)
+   Compiling schemaguard v0.1.18 (/Users/yuki/src/.harness-worktrees/session-33de4c25/crates/schemaguard)
+   Compiling blastguard v0.2.105 (/Users/yuki/src/.harness-worktrees/session-33de4c25/crates/blastguard)
+   Compiling condukt v0.7.211 (/Users/yuki/src/.harness-worktrees/session-33de4c25/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 42.39s
+     Running unittests src/main.rs (target/debug/deps/condukt-2d3d773171de6eea)
+"""
+
+[task.closure.red]
+rev = "4027a8dcac83a9e2910e6ddd9f07c8780825aeb8"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "c9373b92"
+title = "rollout-plugins.sh --plugin runs skip the verification that would catch a dark deploy"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+scripts/rollout-plugins.sh:1106-1113 returns 0 early for any filtered run: 'verify: skipped — this run was filtered to: ...'. check-plugin-rollout.py DOES detect 'installed but execs nothing' (check-plugin-rollout.py:1147-1153, ROLLOUT-class fatal at rollout-plugins.sh:1120-1125), but the single most common invocation shape — scripts/rollout-plugins.sh --plugin <name> — never runs it. So the one path an operator uses to roll out one plugin has ZERO post-hoc check that the host binary actually landed. The stated reason (a whole-fleet verdict would fail for plugins this run never touched) argues for a SCOPED verification of the targeted plugins, not for skipping verification entirely. Found while closing 8206b09f.
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_rollout_nt_e_repros.py::VerifyRolloutComplete.test_filtered_run_still_verifies_the_targeted_plugins (rev e128c13b): verify_rollout_complete() extracted verbatim from rollout-plugins.sh and run in a sandbox with a stub checker; the script itself was not executed."""
+created_at = 1789118611
+updated_at = 1791046795
+weight = 0.0
+issue_number = 537
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/537"
+issue_closed_at = 1791046797
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest -q scripts/test_backlog_c9373b92.py"
+exit = 0
+passed = 10
+rev = "4cb1fc0106cd6caf7274efe70e5d76dad80aa355"
+observed_at = 1791046783
+output_digest = "sha256:925660f2db6d44219fe7417b85db0f44987aecc11872ee887b8db4596a3f96e4"
+excerpt = """
+..........                                                               [100%]
+10 passed in 4.90s
+"""
+
+[task.closure.red]
+rev = "418c82e2e428a7e1ac163615e116a65d00adb999"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "ae4543d5"
+title = "guard-maintree-bash.py の同一効果ミラー: interpreter ラッパ / チルダ・HOME・PWD / cd による再アンカー / perl -pi -e が main ツリーへの書き込みを素通しする"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+実測（rc=2 block / rc=0 allow、対象はすべて /Users/yuki/src/harness 配下）。
+block される綴りと、同一効果で allow される綴りの対:
+
+  BLOCK: echo hi リダイレクト main配下/PROBE.txt
+  ALLOW: python3 -c で open(main配下/PROBE.txt, w) して write     ← 本セッションで実際に起きた回避
+  ALLOW: sh -c / bash -lc / eval で同じリダイレクト
+  ALLOW: awk の BEGIN block から print をファイルへ
+  ALLOW: node -e で writeFileSync
+
+  ALLOW: チルダ/src/harness/PROBE.txt へのリダイレクト
+  ALLOW: HOME 変数展開経由の同パス
+  ALLOW: PWD 変数展開経由の同パス
+     -- :106 の _UNRESOLVABLE に展開文字が入っており :132-138 で「展開できない＝hit ではない」と
+        allow へ落ちる。チルダも HOME も自明に展開できて main を指すのに。
+
+  ALLOW: cd /tmp のあとに絶対パスで main へ書き戻す
+  ALLOW: git -C /tmp status のあとに絶対パスで main へ書き戻す
+     -- :168-180 の _reanchored_outside が最初の cd / -C を見た時点でコマンド全体を allow にする（:315-317 に既知として記載）
+
+  BLOCK: sed -i / gsed -i / perl -i -pe
+  ALLOW: sed --in-place / perl -pi -e / ruby -pi -e
+     -- :235-237 が a == -i または a.startswith(-i) を見るため、-pi は -p 始まりで素通り。
+        perl -pi -e は正典的な in-place イディオムなのでこれが一番踏まれやすい。既知リストにも無い。
+
+  ALLOW: curl -o / wget -O / rsync / tar -xf -C main / unzip -d main
+  ALLOW: chmod / chown / git config core.hooksPath を別パスへ ← ゲート自体の武装解除
+
+根因は :217-242 の argv[0] ディスパッチ。TARGET_ALL（:63-66）は rm/unlink/rmdir/mv/cp/tee/touch/
+mkdir/ln/install/truncate/shred のみで、argv[0] が既知ミューテータでなければ引数を一切見ない。
+-c の文字列は shlex の単一トークンなので、:188 のリダイレクト走査からも見えない。
+:311-314 にこの穴は既知として記載されている。doctrine 5 いわく「既知でも hack route が通るなら問題」。
+
+修正の骨格: (1) 判定を argv[0] リストから「効果」へ移す、(2) interpreter ラッパのペイロードを
+再帰的に同じ decide へ渡す、(3) チルダと HOME と PWD は展開して判定する（展開できないものは
+allow ではなく deny/ask）、(4) cd 再アンカー後の絶対パスは依然 main を指すなら hit、
+(5) in-place フラグ判定をフラグ束の文字走査へ。RED 先行 + anti-vacuity 対照。
+親 826c29bf
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test scripts/test_backlog_s05_repros.py (rev e70d48dd)"""
+created_at = 1788791613
+updated_at = 1791024505
+weight = 0.0
+issue_number = 420
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/420"
+issue_closed_at = 1791024507
+rev = 3
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_ae4543d5_verify4.py"
+exit = 0
+passed = 8
+rev = "4601daaa0376cee615274ff3e442ef5e08f4cbd9"
+observed_at = 1791024499
+output_digest = "sha256:1acd34da9826dcd7197ec68675db64f016957e2ff24687517e971a87dfd3c205"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-521ce4dd
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 8 items
+
+scripts/test_guard_maintree_bash_ae4543d5_verify4.py ........            [100%]
+
+============================== 8 passed in 1.95s ===============================
+"""
+
+[task.closure.red]
+rev = "af8f4d1cb892a7245df778134664375ae0abb10c"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "cc809395"
+title = "guard-maintree-bash.py が worktree 内の相対パス編集と repo 外への書き込みを main ツリー変更として誤検知する (3 例)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = """
+
+実測 2026-09-10、worktree agent-a07923cb77ff8e38c、cwd は当該 worktree。いずれも main の作業ツリーには一切触っていない。
+
+誤検知 1 — repo の外へのディレクトリ作成:
+  mkdir -p /Users/yuki/bg-hermetic-probe
+  Refused: mkdir -p /Users/yuki/bg-hermetic-probe mutates this project MAIN working tree.
+  /Users/yuki は repo (/Users/yuki/src/harness) の外であり、main の作業ツリーではない。
+
+誤検知 2 — worktree 内の相対パスから scratchpad へのコピー:
+  cp crates/blastguard/src/detect.rs /private/tmp/claude-502/.../scratchpad/detect.rs.orig
+  Refused: ... mutates this project MAIN working tree.
+  書き込み先は /private/tmp 配下。読み出し元は自分の worktree。
+
+誤検知 3 — worktree 内の相対パスへの sed -i:
+  sed -i (空文字) 行番号指定 crates/blastguard/Cargo.toml など 3 ファイルの version bump
+  Refused: ... mutates this project MAIN working tree.
+  cwd は worktree なので、相対パスは worktree 内を指す。
+
+影響: version bump の 3 ファイル lockstep という日常作業が shell から実行できず、Edit ツールへの
+迂回を強いられる。ゲート自体は fail-closed で正しい方向に倒れているので緊急ではないが、
+誤検知が続くと 5 の「skip 機構で黙らせる」圧力になる。
+
+推測される原因 (未検証): 相対パスを cwd ではなく repo の main ツリーに対して解決している、
+または repo 外の絶対パスを「未知だから main」と扱っている。判定不能を制限側へ倒す設計自体は正しいので、
+直すなら cwd 解決の側であって、緩めることではない。
+
+--- 追記 2026-09-11 (worktree agent-ac83774675a511f4d) ---
+
+誤検知 4 — シェル変数への代入だけを含む行:
+  行頭が SCR=/private/tmp/.../scratchpad という代入で始まる複合コマンド
+  Refused: `SCR=/private/tmp/.../scratchpad` mutates this project's MAIN working tree.
+  代入はファイルを一切変更しない。書き込み先も /private/tmp 配下で repo の外。
+  cwd は自分の worktree。誤検知 1・2 と同じ「repo 外の絶対パスを main とみなす」族に見える。
+  回避策として fixture 生成を python スクリプトファイルに移した (迂回ではなく、
+  同じ作業を別の道具で行った。ゲートは黙らせていない)。
+
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test scripts/test_backlog_s05_repros.py (rev e70d48dd)"""
+created_at = 1789044960
+updated_at = 1791029328
+weight = 0.0
+issue_number = 497
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/497"
+issue_closed_at = 1791029331
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_observe.py -k test_routes_that_do_not_change_main_are_allowed"
+exit = 0
+passed = 1
+rev = "b8390f7acf1b7f14e0a9626caa9140d4c8a10ac9"
+observed_at = 1791029308
+output_digest = "sha256:b7ca44f794a2339e0c7593d120bdf090124020c539a48298e9fda8ccf4566ba8"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-521ce4dd
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 53 items / 52 deselected / 1 selected
+
+scripts/test_guard_maintree_bash_observe.py .                            [100%]
+
+====================== 1 passed, 52 deselected in 11.13s =======================
+"""
+
+[task.closure.red]
+rev = "26e1d535653430214c907484daeff56768f4ab2c"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "29b08fc7"
+title = "guard-maintree-bash.py が shell 変数代入と scratchpad への redirect を main ツリー変更として誤検知する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = """
+OBSERVED 2026-09-13、flow session 2444be10。2 回連続で誤検知に当たった。
+
+1 回目に拒否されたコマンド (要旨):
+  cd /Users/yuki/src/harness
+  git show <rev>:.backlog/tasks.toml > <scratchpad>/base.toml   ... など 3 本
+拒否理由: "cd /Users/yuki/src/harness mutates this project MAIN working tree"
+
+2 回目、cd を消して git -C に書き換え、出力先も scratchpad のままにしたところ、今度は
+  S=/private/tmp/claude-502/.../scratchpad
+という **shell 変数代入そのもの** が
+  "Refused: S=/private/... mutates this project MAIN working tree"
+として拒否された。
+
+なぜ誤検知か: どちらのコマンドも main のファイルを 1 バイトも書かない。redirect 先は
+すべて session scratchpad であり、git show は read-only。2 回目に至っては代入文であって
+コマンドですらない。マッチャが「main の repo パスらしき文字列が出現するか」で見ており、
+(a) 書き込み先がどこか (b) そもそも書き込みか、のどちらも見ていないように読める。
+
+なぜ害があるか: これは 9ec3609e (blastguard が値なしの git config を write 扱い) と
+同じクラスで、arity/方向を見ずにトークンだけで判定している。実害は 2 つある。
+ 1. 進行中の merge の conflict を解析するには、3 バージョンを取り出して比較する必要がある。
+    その解析は read-only なのに止まる。CLAUDE.md 8 は merge/conflict 解決を main で
+    行うことを明示的に許しているので、その作業を支える読み取りまで止めるのは過剰。
+ 2. 迂回が「別の綴りを試す」になりやすい。実際 1 回目の後に自分は綴りを変えて再試行し、
+    2 回目も拒否された。ゲートを緩めろという話ではなく、rewrite-until-it-passes の
+    反射を訓練してしまう形だという話 (ebd1359a と同じ懸念)。
+
+なお本体のゲート判定は正しく効いていることも観測した: 同じセッションで main への
+非 merge commit は main-tree-guard が実際に block し、merge 進行中の commit は
+"main-tree-guard: allowed — Merge in progress" として通した。つまり commit 経路の判定は
+正しい。問題は Bash PreToolUse 側の事前マッチャだけである。
+
+2 つの読みと見分け方:
+ (a) 純粋な誤検知 — マッチャが repo パス文字列の出現だけを見ている。見分け方: 代入文
+     だけの行や、redirect 先が scratchpad のコマンドを食わせて、書き込み先を解析して
+     いるかを確認する。
+ (b) 意図的に広く倒している — main パスに触れる形は全部 ask に寄せる設計。見分け方:
+     scratchpad 宛 redirect を許す例外がテストで固定されているかを見る。
+(b) であっても、代入文を「mutates」と表示するメッセージは誤りなので文言は直すべき。
+
+--- 追記 2026-09-15、同 session 2444be10。さらに 3 形が同じ誤検知に当たった ---
+
+batch6 の worker worktree に残った未コミット作業を救出しようとして、いずれも main の
+ファイルを 1 バイトも触らないのに guard-maintree-bash.py が 3 連続で拒否した。逐語:
+
+3 形目 (mkdir):
+  mkdir -p /private/tmp/claude-502/.../scratchpad/batch6-rescue
+  "Refused: mkdir -p /private/tmp/... mutates this project MAIN working tree."
+  → 作成先は session scratchpad。main とは別ファイルシステム上の別ツリー。
+
+4 形目 (cp。source も dest も main の外):
+  cp ~/.condukt/worktrees/run-20260913-223733-78880-t1-subagentstop/crates/condukt/src/subagent_stop.rs /private/tmp/.../scratchpad/rescue-t1-subagent_stop.rs
+  "Refused: cp ~/.condukt/worktrees/... /private/tmp/claud mutates this project MAIN working tree."
+  → source は condukt の worker worktree、dest は scratchpad。main のパスは登場すらしない。
+    それでも拒否された。拒否メッセージが dest を途中で切って "claud" と表示している点も
+    (a) の読み (パス文字列のトークンマッチ) を補強する。
+
+5 形目 (blastguard 側。guard-maintree-bash とは別ゲートだが同じ作業を止めた):
+  for t in t1 t2 t3; do git -C <wt>-$t diff HEAD > <scratchpad>/full-$t.patch; done
+  "'> <scratchpad>/full-$t.patch' destroys the file's current contents and
+   <path> contains a shell expansion, so blastguard cannot tell which file this names"
+  → これは誤検知ではなく設計どおりの判定不能→制限側 (CLAUDE.md 3) であり、正しい。
+    ループを展開してリテラル名にしたら通った。この 1 件は本チケットの対象外として記録する。
+
+この追記で言いたいこと: 3/4 形目は (a) の読みを強める観測である。dest が main の外に
+あることが静的に読めるケース (絶対パスで scratchpad を指している) まで拒否しているので、
+「書き込み先を解析している」という (b) の読みは取りにくくなった。
+
+実害の追加観測: 今回止められたのは「死んだと思われた worker の未コミット作業を退避する」
+作業だった。退避を諦めていれば worktree ごと失われうる作業だったので、この誤検知は
+CLAUDE.md 4 (隠蔽の禁止) が守ろうとしているものと逆向きに働きうる。なお退避そのものは
+redirect 形に書き換えて完了しており、作業は失われていない。
+
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Only partly fixed. The cp-then-next-line form was fixed by caef0517: the test is GREEN, and RED when the _newlines_to_separators call is mutated out. The S=... assignment and $S/... redirect/mkdir for; test - (rev e70d48dd)"""
+created_at = 1789306451
+updated_at = 1791029352
+weight = 0.0
+issue_number = 633
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/633"
+issue_closed_at = 1791029355
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_observe.py -k test_routes_that_do_not_change_main_are_allowed"
+exit = 0
+passed = 1
+rev = "b8390f7acf1b7f14e0a9626caa9140d4c8a10ac9"
+observed_at = 1791029331
+output_digest = "sha256:e9ca3d7cc01f47f110319e4f6f5088acbd834fbb7cac8a9d83331468c355f674"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-521ce4dd
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 53 items / 52 deselected / 1 selected
+
+scripts/test_guard_maintree_bash_observe.py .                            [100%]
+
+====================== 1 passed, 52 deselected in 11.22s =======================
+"""
+
+[task.closure.red]
+rev = "26e1d535653430214c907484daeff56768f4ab2c"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "f036e218"
+title = "guard-maintree-bash.py がシェル変数 (W/S) を展開せず、未解決パスを main ツリーへの書き込みとして block する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-10-01: 同一行で S=<scratchpad>; W=<worktree> を定義して cp W/... S/... したところ target 'W/.githooks/pre-commit' mutates MAIN と拒否された。06baf54d (cwd 誤検知) / b5358f58 (cp の読み出し元を書き込み対象扱い) とは別の軸: 変数の未展開を main 相対と解釈している。(a) 判定不能を block へ倒す正しい fail-closed か (b) 誤検知か — 変数値が同一行で定義済みなら静的に解決可能なので (b) 寄り。見分け方: 同一行定義と外部 env 由来で挙動を分けて測る。
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_s06_misc_b_repros.py::MainTreeBashGuard.test_same_line_shell_variables_are_resolved_not_treated_as_main (rev e128c13b): Pre-existing committed repro (plus scripts/test_backlog_55826e4f_f036e218.py), RED re-observed at HEAD."""
+created_at = 1790793951
+updated_at = 1791029377
+weight = 0.0
+issue_number = 924
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/924"
+issue_closed_at = 1791029379
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_observe.py -k test_routes_that_do_not_change_main_are_allowed"
+exit = 0
+passed = 1
+rev = "b8390f7acf1b7f14e0a9626caa9140d4c8a10ac9"
+observed_at = 1791029355
+output_digest = "sha256:5e0449216c205c6f99b7de9aa6762ea04e0c2cdb68b685b7747d3bdded663b99"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-521ce4dd
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 53 items / 52 deselected / 1 selected
+
+scripts/test_guard_maintree_bash_observe.py .                            [100%]
+
+====================== 1 passed, 52 deselected in 11.57s =======================
+"""
+
+[task.closure.red]
+rev = "26e1d535653430214c907484daeff56768f4ab2c"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "ee273b5e"
+title = "guard-maintree-bash が main での merge conflict 解決の書き込み (cp で解決済みファイルを置く) も拒否する — §8 は conflict 解決を許可している"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = """
+Observed 2026-09-29: during a merge of origin/main on main, cp of the merge-driver output into .backlog/tasks.toml was refused. Worked around by doing the merge in the session worktree. Also a variable path in the command was refused because the target could not be resolved (fail-closed, fine).
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_ee273b5e.py (rev dfa4e9ba): throwaway repo, merge stopped on a conflict in a.txt, MERGE_HEAD present, CLAUDE_PROJECT_DIR=repo"""
+created_at = 1790678420
+updated_at = 1791031203
+weight = 0.0
+issue_number = 862
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/862"
+issue_closed_at = 1791031205
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_observe.py -k test_ee273b5e_cp_resolved_file_into_conflicted_path_mid_merge"
+exit = 0
+passed = 1
+rev = "b8390f7acf1b7f14e0a9626caa9140d4c8a10ac9"
+observed_at = 1791031200
+output_digest = "sha256:aad8a29d3f8aa830bca69446fb75e0f2771c646c31ef37cd1d37bb5129c2255e"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-521ce4dd
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 53 items / 52 deselected / 1 selected
+
+scripts/test_guard_maintree_bash_observe.py .                            [100%]
+
+======================= 1 passed, 52 deselected in 0.43s =======================
+"""
+
+[task.closure.red]
+rev = "26e1d535653430214c907484daeff56768f4ab2c"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "4a64e6ff"
+title = "guard-maintree-bash: a heredoc BODY that merely contains the text REPO/scripts/x.py is judged as a write target in main and refused"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-03 at 4601daaa+ (session 521ce4dd), twice. Command: cd <session worktree> then python3 - with a quoted heredoc whose body is a python patch script; the body contains the string literal of a shell line referencing the REPO variable plus scripts/gate-bypass.py. The guard refused with: target (REPO var)/scripts/gate-bypass.py mutates this project's MAIN working tree. The python script only wrote files inside the worktree (.githooks/pre-push in worktree, and a scratchpad file). Two readings: (a) defect: heredoc body text is data, not a redirect/argv target; (b) intended conservative undetermined-tokenization for interpreter payloads (ae4543d5 added interpreter-payload recursion). Distinguish: replay the exact command through scripts/guard-maintree-bash.py with a body that writes only to the scratchpad. Related 8b7659cc, 2a775bea, ad524af9."
+created_at = 1791025460
+updated_at = 1791031208
+weight = 0.0
+issue_number = 1175
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1175"
+issue_closed_at = 1791031210
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_observe.py -k test_pre_allows_4a64e6ff_heredoc_and_post_allows_worktree_only_effect"
+exit = 0
+passed = 1
+rev = "b8390f7acf1b7f14e0a9626caa9140d4c8a10ac9"
+observed_at = 1791031205
+output_digest = "sha256:7a2b82af192f6150da8ddd6954ad75833dbf5bb787adb664098803c81004851b"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-521ce4dd
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 53 items / 52 deselected / 1 selected
+
+scripts/test_guard_maintree_bash_observe.py .                            [100%]
+
+======================= 1 passed, 52 deselected in 0.34s =======================
+"""
+
+[task.closure.red]
+rev = "26e1d535653430214c907484daeff56768f4ab2c"
+exit = 1
 kind = "behavioural"

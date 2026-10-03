@@ -8,17 +8,17 @@ crash the hook (exit 2 on every call). Observed 2026-10-03 on main d1284de6:
 
 Written by the ad524af9 worker (commit 6104ffca, class
 CompilesWithoutWarnings); landed alone because the rest of ad524af9 is
-superseded by the observing guard (b8390f7a).
+superseded by the observing guard (b8390f7a). The docstring-text assertion
+on the old static guard's escape fix (39268375) was dropped when the observing
+guard replaced that docstring; the compile-under `-W error` property is kept.
 
     python3 -m unittest scripts.test_guard_maintree_bash_compiles
 """
-import ast
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
-import warnings
 from pathlib import Path
 
 GUARD = Path(__file__).resolve().parent / "guard-maintree-bash.py"
@@ -35,12 +35,6 @@ class CompilesWithoutWarnings(unittest.TestCase):
             env=dict(os.environ, PYTHONPYCACHEPREFIX=tempfile.mkdtemp(prefix="guard-pyc-")),
         )
         self.assertEqual(r.returncode, 0, r.stderr[-800:])
-
-    def test_docstring_text_is_unchanged_by_the_escape_fix(self):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            doc = ast.get_docstring(ast.parse(GUARD.read_text()), clean=False)
-        self.assertIn("(any of `$ \\` * ? { } [ ] \\ ~ ( ) < > ^ #` in the word as", doc)
 
 
 if __name__ == "__main__":

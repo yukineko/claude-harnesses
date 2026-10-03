@@ -1517,24 +1517,44 @@ verify_rollout_complete() {
     echo "verify: skipped (dry-run — nothing was deployed)"
     return 0
   fi
-  if [ "${#only_plugins[@]}" -gt 0 ]; then
-    # A filtered run deliberately left the rest of the fleet alone, so a
-    # whole-fleet verdict would fail for reasons this run never attempted.
-    echo
-    echo "verify: skipped — this run was filtered to: ${only_plugins[*]}"
-    echo "        (run without --plugin to verify and enforce the whole fleet)"
-    return 0
-  fi
+  # A filtered run deliberately left the rest of the fleet alone, so a
+  # whole-fleet verdict would fail for reasons this run never attempted. That
+  # argues for SCOPING the verdict, not for skipping it: --plugin <name> is the
+  # remedy the checker itself prescribes, and skipping here returned rc=0 while
+  # the targeted plugin was still drifted or dark (backlog c9373b92 / 5e54fb25).
+  # --only keeps every finding for the targeted plugins (and every finding that
+  # belongs to no known plugin) fatal; other plugins' findings are printed as
+  # OUT OF SCOPE, not enforced.
+  local -a scope_args=()
+  local _p
+  for _p in ${only_plugins[@]+"${only_plugins[@]}"}; do
+    scope_args+=(--only "$_p")
+  done
   echo
-  echo ">>> scripts/check-plugin-rollout.py (verifying this rollout actually landed)"
-  out="$(python3 "$REPO/scripts/check-plugin-rollout.py" 2>&1)" || rc=$?
+  if [ "${#scope_args[@]}" -gt 0 ]; then
+    echo ">>> scripts/check-plugin-rollout.py ${scope_args[*]} (verifying this rollout actually landed, scoped to: ${only_plugins[*]})"
+  else
+    echo ">>> scripts/check-plugin-rollout.py (verifying this rollout actually landed)"
+  fi
+  out="$(python3 "$REPO/scripts/check-plugin-rollout.py" ${scope_args[@]+"${scope_args[@]}"} 2>&1)" || rc=$?
   printf '%s\n' "$out"
   case "$rc" in
     0) return 0 ;;
     1)
       echo >&2
-      echo "rollout: FAILED — drift remains after this run (see above). The fleet is" >&2
-      echo "         NOT current, so this script will not report success." >&2
+      if [ "${#scope_args[@]}" -gt 0 ]; then
+        echo "rollout: FAILED — drift remains for the targeted plugin(s) after this run" >&2
+        echo "         (see above). They are NOT current, so this script will not report success." >&2
+      else
+        echo "rollout: FAILED — drift remains after this run (see above). The fleet is" >&2
+        echo "         NOT current, so this script will not report success." >&2
+      fi
+      return 1
+      ;;
+    7)
+      echo >&2
+      echo "rollout: FAILED — the checker rejected its command line (exit 7), so" >&2
+      echo "         nothing was verified. That is not a pass." >&2
       return 1
       ;;
     *)

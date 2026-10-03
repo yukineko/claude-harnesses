@@ -31,7 +31,17 @@ _SPEC = importlib.util.spec_from_file_location(
     "check_hardcoded_secret", _HERE / "check-hardcoded-secret.py"
 )
 hs = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(hs)
+# Compiled from the SOURCE TEXT, deliberately not via the spec loader's
+# exec_module: SourceFileLoader reuses a __pycache__ .pyc validated only by
+# (source mtime at 1 s granularity, size), so a same-second size-preserving
+# edit (e.g. a reordering mutant) would run stale bytecode -- a false GREEN /
+# false mutation SURVIVOR, never a false red. Backlog 05726f9f; do not
+# "simplify" this back. get_source() reads the .py, never the cache;
+# dont_inherit keeps this file's __future__ flags off the subject.
+exec(  # noqa: S102
+    compile(_SPEC.loader.get_source(_SPEC.name), _SPEC.origin, "exec", dont_inherit=True),
+    hs.__dict__,
+)
 
 
 class ScanLineDetectsPlantedSecret(unittest.TestCase):

@@ -34,15 +34,17 @@ Exit codes (distinct per failure CLASS, because the two classes have different
 fixes and a caller that conflates them sends the reader to the wrong command —
 `rollout-plugins.sh` does NOT enable plugins):
   0 — no rollout drift, no disabled/unaccounted-for GATE crate, no malformed
-      input. Warnings about disabled non-gate plugins may still have been
+      OR ABSENT input (an absent registry / settings file cannot be checked
+      against, so it resolves like an unparseable one: rc 1 / rc 2 below — it
+      is never a pass). Warnings about disabled non-gate plugins may still have been
       printed to stderr.
   1 — ROLLOUT class: at least one plugin's source version was never rolled out,
       OR its deployed BINARY is not provably built from current source, OR the
-      registry is malformed. Fix: scripts/rollout-plugins.sh.
+      registry is malformed or absent. Fix: scripts/rollout-plugins.sh.
       Takes precedence when both classes fail; the enablement detail and its
       own fix line are still printed to stderr in that case.
   2 — ENABLEMENT class only: a GATE crate is disabled, or settings.json is
-      malformed / has a non-dict enabledPlugins. Fix: edit enabledPlugins in
+      malformed / absent / has a non-dict enabledPlugins. Fix: edit enabledPlugins in
       settings.json and restart Claude Code.
   3 — UNVERIFIABLE class: some crate under crates/ ships a plugin.json that is
       unparseable or nameless, or an expected GATE plugin has no readable
@@ -2042,10 +2044,13 @@ def main():
             for name, items in suppressed.items():
                 parked_suppressed[name].extend(items)
 
+    registry_absent = False
+    settings_absent = False
     if rollout_problems is None:
         print(f"installed_plugins.json not found: {REGISTRY_PATH}", file=sys.stderr)
         print("(set CLAUDE_PLUGIN_REGISTRY to override, or install at least one plugin first)", file=sys.stderr)
-        print("SKIP: no registry to check against (not a failure — nothing is deployed yet)")
+        print("FAIL: no registry to check against — rollout cannot be verified (treated like an unparseable registry)")
+        registry_absent = True
 
     # Folded in only after the SKIP notice above, so an absent registry still
     # reports itself as a skip rather than being masked by a cache finding.
@@ -2059,7 +2064,8 @@ def main():
     if gate_failures is None:
         print(f"settings.json not found: {SETTINGS_PATH}", file=sys.stderr)
         print("(set CLAUDE_SETTINGS to override)", file=sys.stderr)
-        print("SKIP: no settings to check enabledPlugins against (not a failure)")
+        print("FAIL: no settings to check enabledPlugins against — enablement cannot be verified (treated like an unparseable settings file)")
+        settings_absent = True
 
     if parked:
         print(
@@ -2346,9 +2352,9 @@ def main():
         return RC_RETIRED_CONFIG
     if unverifiable:
         return RC_UNVERIFIABLE
-    if rollout_problems:
+    if rollout_problems or registry_absent:
         return RC_ROLLOUT
-    if gate_failures:
+    if gate_failures or settings_absent:
         return RC_ENABLEMENT
     if orphan_problems:
         return RC_RETIRED

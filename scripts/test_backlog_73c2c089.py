@@ -54,7 +54,6 @@ class AbsentIsNotAPass(unittest.TestCase):
             p = run_check(reg, Path(d) / "absent-settings.json")
             self.assertNotEqual(p.returncode, 0, p.stdout + p.stderr)
 
-    @unittest.expectedFailure
     def test_absent_registry_and_settings_is_not_exit_zero(self):
         with tempfile.TemporaryDirectory(prefix="bl-73c2c089-") as d:
             p = run_check(Path(d) / "no-such-registry.json", Path(d) / "no-such-settings.json")

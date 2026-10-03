@@ -16,17 +16,31 @@ regression. The baseline is, by default, the immediately preceding entry in the
 JSONL; it can instead be pinned to a specific run (by 0-based index or negative
 index) or read from a separate baseline file.
 
-A missing / absent baseline (empty file, or only a single run) is NOT an error:
-there is simply nothing to compare against, so the gate reports "cannot compare"
-and exits 0.
+Three answers, not two (CLAUDE.md 3, backlog f6919056). "Could not compare" is
+not "no regression": a missing or unreadable dashboard, a missing / out-of-range
+baseline, or a run without a usable resolution_rate exits 2 (UNDETERMINED), never 0.
 
-Exit 0 = no regression (or nothing to compare); exit 1 = regression detected.
+The threshold is clamped into [0.0, MAX_THRESHOLD]. resolution_rate is bounded to
+[0.0, 1.0], so an unclamped threshold of 1.0 or more could never be exceeded and
+silently disabled the gate; a non-finite threshold is rejected as UNDETERMINED.
+
+Exit 0 = compared, no regression; exit 1 = regression detected;
+exit 2 = undetermined (nothing could be compared).
 Stdlib only (argparse, json, sys). Run from the repo root:
   python3 scripts/check-bench-regression.py --dashboard <path> --threshold 0.05
 """
 import argparse
 import json
+import math
 import sys
+
+EXIT_OK = 0
+EXIT_REGRESSION = 1
+EXIT_UNDETERMINED = 2
+
+# Largest allowed drop. Must stay well below 1.0 (the full range of
+# resolution_rate) or the gate can never fire.
+MAX_THRESHOLD = 0.5
 
 
 def resolution_rate_regressed(latest_rate, baseline_rate, threshold):
@@ -41,8 +55,9 @@ def resolution_rate_regressed(latest_rate, baseline_rate, threshold):
 def load_runs(path):
     """Read a benchkit dashboard JSONL file into a list of run records.
 
-    Blank lines are skipped. A missing file is treated as an empty store (no
-    runs) rather than an error, so the gate never crashes on a fresh checkout.
+    Blank lines are skipped. A missing file yields an empty list; the caller
+    reports that as UNDETERMINED, not as "no regression". Unreadable or
+    malformed content raises (OSError / ValueError) for the caller to report.
     """
     runs = []
     try:
@@ -86,11 +101,22 @@ def parse_args(argv=None):
 
 
 def _rate(record):
-    """Extract resolution_rate from a run record, or None if absent."""
+    """Extract a usable resolution_rate (finite, within [0, 1]) or None."""
     if not isinstance(record, dict):
         return None
     rate = record.get("resolution_rate")
-    return rate if isinstance(rate, (int, float)) else None
+    if isinstance(rate, bool) or not isinstance(rate, (int, float)):
+        return None
+    if not math.isfinite(rate) or not 0.0 <= rate <= 1.0:
+        return None
+    return float(rate)
+
+
+def clamp_threshold(threshold):
+    """Clamp into [0, MAX_THRESHOLD]; None for a non-finite value."""
+    if not math.isfinite(threshold):
+        return None
+    return min(max(threshold, 0.0), MAX_THRESHOLD)
 
 
 def resolve_baseline(runs, baseline_arg):
@@ -100,7 +126,7 @@ def resolve_baseline(runs, baseline_arg):
       - default (None): the immediately preceding entry (runs[-2]),
       - integer-like string: index into `runs`,
       - otherwise: a path to a separate JSONL file whose LAST run is the baseline.
-    A None record means "no baseline available" (caller treats as no regression).
+    A None record means "no baseline available" (caller reports UNDETERMINED).
     """
     if baseline_arg is None:
         if len(runs) < 2:
@@ -127,44 +153,56 @@ def resolve_baseline(runs, baseline_arg):
 def main(argv=None):
     args = parse_args(argv)
 
-    runs = load_runs(args.dashboard)
+    def undetermined(why):
+        print(f"UNDETERMINED: {why} -> nothing was compared", file=sys.stderr)
+        return EXIT_UNDETERMINED
+
+    threshold = clamp_threshold(args.threshold)
+    if threshold is None:
+        return undetermined(f"--threshold {args.threshold} is not a finite number")
+    if threshold != args.threshold:
+        print(
+            f"note: --threshold {args.threshold} clamped to {threshold} "
+            f"(allowed range 0.0..{MAX_THRESHOLD})",
+            file=sys.stderr,
+        )
+
+    try:
+        runs = load_runs(args.dashboard)
+    except (OSError, ValueError) as e:
+        return undetermined(f"dashboard {args.dashboard} unreadable ({e})")
     if not runs:
-        print(
-            f"cannot compare: dashboard {args.dashboard} is empty or missing "
-            "(no runs) -> no regression"
-        )
-        return 0
+        return undetermined(f"dashboard {args.dashboard} is empty or missing (no runs)")
 
-    latest = runs[-1]
-    latest_rate = _rate(latest)
+    latest_rate = _rate(runs[-1])
     if latest_rate is None:
-        print(
-            f"cannot compare: latest run in {args.dashboard} has no numeric "
-            "resolution_rate -> no regression"
+        return undetermined(
+            f"latest run in {args.dashboard} has no usable resolution_rate"
         )
-        return 0
 
-    baseline, desc = resolve_baseline(runs, args.baseline)
+    try:
+        baseline, desc = resolve_baseline(runs, args.baseline)
+    except (OSError, ValueError) as e:
+        return undetermined(f"baseline {args.baseline} unreadable ({e})")
     baseline_rate = _rate(baseline)
     if baseline_rate is None:
-        print(f"cannot compare: no usable baseline ({desc}) -> no regression")
-        return 0
+        return undetermined(f"no usable baseline ({desc})")
 
     drop = baseline_rate - latest_rate
-    if resolution_rate_regressed(latest_rate, baseline_rate, args.threshold):
+    if resolution_rate_regressed(latest_rate, baseline_rate, threshold):
         print(
             "REGRESSION: resolution_rate dropped "
             f"{drop:.4f} (baseline {baseline_rate:.4f} [{desc}] -> "
-            f"latest {latest_rate:.4f}), exceeds threshold {args.threshold:.4f}",
+            f"latest {latest_rate:.4f}), exceeds threshold {threshold:.4f}",
             file=sys.stderr,
         )
-        return 1
+        return EXIT_REGRESSION
 
     print(
         f"OK: resolution_rate {latest_rate:.4f} vs baseline {baseline_rate:.4f} "
-        f"[{desc}] (drop {drop:.4f} <= threshold {args.threshold:.4f})"
+        f"[{desc}] (drop {drop:.4f} <= threshold {threshold:.4f})"
     )
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":

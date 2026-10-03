@@ -78,25 +78,28 @@ class MainExitCodes(unittest.TestCase):
             rc = cbr.main(["--dashboard", str(p), "--threshold", "0.05"])
             self.assertEqual(rc, 1)
 
-    def test_single_run_absent_baseline_exit_0(self):
+    def test_single_run_absent_baseline_is_undetermined_not_ok(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "runs.jsonl"
             _write_jsonl(p, [0.40])  # only one run -> nothing to compare
             rc = cbr.main(["--dashboard", str(p), "--threshold", "0.05"])
-            self.assertEqual(rc, 0)
+            # backlog f6919056: nothing was compared -> UNDETERMINED (2), never OK (0)
+            self.assertEqual(rc, cbr.EXIT_UNDETERMINED)
 
-    def test_empty_dashboard_exit_0(self):
+    def test_empty_dashboard_is_undetermined_not_ok(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "runs.jsonl"
             p.write_text("", encoding="utf-8")
             rc = cbr.main(["--dashboard", str(p), "--threshold", "0.05"])
-            self.assertEqual(rc, 0)
+            # backlog f6919056: nothing was compared -> UNDETERMINED (2), never OK (0)
+            self.assertEqual(rc, cbr.EXIT_UNDETERMINED)
 
-    def test_missing_dashboard_file_exit_0(self):
+    def test_missing_dashboard_file_is_undetermined_not_ok(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "does-not-exist.jsonl"
             rc = cbr.main(["--dashboard", str(p), "--threshold", "0.05"])
-            self.assertEqual(rc, 0)
+            # backlog f6919056: nothing was compared -> UNDETERMINED (2), never OK (0)
+            self.assertEqual(rc, cbr.EXIT_UNDETERMINED)
 
     def test_explicit_index_baseline(self):
         with tempfile.TemporaryDirectory() as d:

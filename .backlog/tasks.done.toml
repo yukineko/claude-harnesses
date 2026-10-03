@@ -31492,3 +31492,409 @@ test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "82ee4a782add20440391fbc642021e94d46a3bbd"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "fa1fce21"
+title = "blastguard: heredoc 本体と散文データがコードとして判定される — 監査エージェント自身が本文にコマンド文字列を含むテキストを書こうとして3回止められた"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+実測（deployed 0.2.50）。detect_bash は生のコマンド文字列を走査し、rule 2 が
+redirect_targets(cmd) を文字列全体に当て（crates/blastguard/src/detect.rs:1015）、split_segments は
+**改行で分割**するため、here-document の**本体**がコマンドセグメントになる。
+opens_here_document（detect.rs:1860）は存在するが、代入解決器からしか参照されず、
+本体を判定対象から除外する用途には使われていない。
+
+観測: 監査エージェントが、本文に以下の文字列を含むだけの**プレーンなテキスト fixture** を書こうとして
+3回 block された（本体は definitionally データであり実行されない）:
+  - a code interpreter invoked with an inline-eval flag ...
+  - 単一ファイルへの truncate リダイレクトが既存ファイルを上書きする、という理由文
+  - recursive rm (-r) can delete an entire directory tree
+  - recursive chown re-owns a whole tree
+これは内容が完全に手元にあり、かつ実行されないことが証明可能な、最大級の形状判定ケース。
+
+同一クラスが1層上にもある: crates/blastguard/src/classify.rs:213-219 が
+detect::detect を task の title + done_criteria + ファイル一覧という**英語の散文**に当てている。
+破壊的コマンドを**記述する**散文は、たとえ「実行するな」と書いてあっても High/irreversible へ force-gate される。
+（memory classify-deploy-needle-forcegate として既知だが、根が同じなのでここに併記）
+
+修正: opens_here_document を述語から**抽出器**へ格上げし、本体をデータとして全ルールから除外する
+（これは inline-eval 修正でペイロードを取り出す際にも要る同じ関数）。
+classify 側は detect を散文に当てるのをやめ、コマンド形状の抽出を経由させる。
+親 826c29bf
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/blastguard/tests/backlog_audit_s02.rs (rev e70d48dd)"""
+created_at = 1788791893
+updated_at = 1791018512
+weight = 0.0
+issue_number = 428
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/428"
+issue_closed_at = 1791018514
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test heredoc_data_body_verify2"
+exit = 0
+passed = 3
+rev = "c0d4701c00887a75a191ef5b7b5d2b5d009baaaa"
+observed_at = 1791018493
+output_digest = "sha256:4e28f1374101a4266479a19a953dcea79efd0a93f4dbce55c6fbd4b82403232b"
+excerpt = """
+
+running 3 tests
+test contract_data_body_still_allowed ... ok
+test smuggle_consumer_redefined_out_of_sight ... ok
+test smuggle_written_file_reached_by_another_spelling ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+
+   Compiling blastguard v0.2.105 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.66s
+     Running tests/heredoc_data_body_verify2.rs (target/debug/deps/heredoc_data_body_verify2-5bae4d1947d5ded5)
+"""
+
+[task.closure.red]
+rev = "1e3998f9a15d33b8a72476f932e66d119c3f889e"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "3b056c02"
+title = "overwatch end が存在しない key に exit 0 + 空出力を返し、解放できた場合と区別できない"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+実測 (2026-09-07, overwatch 0.2.32, cache の bin を直接実行):
+
+    $ overwatch end --key "definitely-not-a-real-key-12345" --status done
+    out=[]
+    rc=0
+
+`overwatch status` は同じ瞬間に `== Sessions ==  (none)` を返しており、この key の
+lease は **存在しない**。それでも end は「解放した」ときと**同一の出力・同一の
+終了ステータス**を返す。呼び出し側 (flow SKILL.md Step 4、および /flow を回す
+LLM) は fail-soft で扱えと書かれているので、この 0 を見て「解放できた」と記録する。
+
+なぜこれが fail-open か: これは ledger write である。同じ plugin の launcher
+(crates/overwatch/bin/overwatch:38) は自分の missing-binary 経路について
+まさにこの形を名指しで禁じている —
+
+    * begin / end / heartbeat / record-* -> ledger writes; reporting success
+      for a write that never happened is what leaves a stale lease behind.
+
+launcher は binary が無い場合を exit 1 で塞いでいるが、**binary 自身**が key の
+不在に対して同じ穴を開けている。守られているのは 1 段上だけである。
+
+観測される害: begin した key を typo などで取り違えて end すると、実 lease は
+解放されないまま「解放済み」と報告される。overwatch status には残り続け、TTL で
+reap されるまで他セッションからは「そのスコープは担当者あり」に見える。
+逆に一度も begin していない key を end しても何も言わないので、
+begin/end の対応漏れが検出されない。
+
+あるべき形 (CLAUDE.md 第3節): 三値にする。
+  - 実在する lease を解放した -> exit 0、解放した旨を出力
+  - key が存在しない        -> 非0 (「解放していない」は「解放した」ではない)
+  - 台帳が読めない          -> 非0、判定不能として理由を出力
+少なくとも「存在しなかった」と「解放した」を出力で区別できること。
+
+帰属メモ: 本セッションの変更ではない。/flow Step 4 の anchor 解放を実行する過程で
+観測した。
+
+[triage 2026-09-29 @b325a169] p2->p1: overwatch lease end reports success on missing key and on lock contention (lease.rs:305-307, 316-323) - write that did nothing exits 0
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/overwatch/tests/backlog_s04_audit.rs (rev e70d48dd)"""
+created_at = 1788771923
+updated_at = 1791024172
+weight = 0.0
+issue_number = 1104
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1104"
+issue_closed_at = 1791024173
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test backlog_s04_audit s3b056c02"
+exit = 0
+passed = 1
+rev = "bc0f54685542d14aabc749b452fe3c2074612de3"
+observed_at = 1791024125
+output_digest = "sha256:b691e512089e1e240aac6fedc0b54e6e96e26de0f9b866bea768563c449d7bad"
+excerpt = """
+
+running 1 test
+test s3b056c02_end_of_missing_key_is_distinguishable_from_release ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 1.37s
+
+   Compiling cfg-if v1.0.4
+   Compiling libc v0.2.186
+   Compiling memchr v2.8.2
+   Compiling serde_core v1.0.228
+   Compiling utf8parse v0.2.2
+   Compiling regex-syntax v0.8.11
+   Compiling hashbrown v0.17.1
+   Compiling equivalent v1.0.2
+   Compiling anstyle-parse v1.0.0
+   Compiling num-traits v0.2.19
+   Compiling option-ext v0.2.0
+   Compiling toml_write v0.1.2
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling winnow v0.7.15
+   Compiling anstyle v1.0.14
+   Compiling core-foundation-sys v0.8.7
+   Compiling colorchoice v1.0.5
+   Compiling anstyle-query v1.1.5
+   Compiling anstream v1.0.0
+   Compiling getrandom v0.3.4
+   Compiling aho-corasick v1.1.4
+   Compiling rand_core v0.9.5
+   Compiling dirs-sys v0.4.1
+   Compiling indexmap v2.14.0
+   Compiling iana-time-zone v0.1.65
+   Compiling zmij v1.0.21
+   Compiling clap_lex v1.1.0
+   Compiling strsim v0.11.1
+   Compiling itoa v1.0.18
+   Compiling chrono v0.4.45
+   Compiling clap_builder v4.6.0
+   Compiling zerocopy v0.8.52
+   Compiling anyhow v1.0.103
+   Compiling dirs v5.0.1
+   Compiling wait-timeout v0.2.1
+   Compiling bitflags v2.13.0
+   Compiling regex-automata v0.4.14
+   Compiling errno v0.3.14
+   Compiling rustix v1.1.4
+   Compiling serde v1.0.228
+   Compiling serde_json v1.0.150
+   Compiling getrandom v0.4.3
+   Compiling rand v0.9.4
+   Compiling toml_datetime v0.6.11
+   Compiling serde_spanned v0.6.9
+   Compiling toml_edit v0.22.27
+   Compiling clap v4.6.1
+   Compiling rand_xorshift v0.4.0
+   Compiling fastrand v2.4.1
+   Compiling unarray v0.1.4
+   Compiling once_cell v1.21.4
+   Compiling tempfile v3.27.0
+   Compiling regex v1.12.4
+   Compiling ppv-lite86 v0.2.21
+   Compiling rand_chacha v0.9.0
+   Compiling toml v0.8.23
+   Compiling proptest v1.11.0
+   Compiling harness-core v0.2.44 (/Users/yuki/src/.harness-worktrees/session-33de4c25/crates/harness-core)
+   Compiling overwatch v0.2.59 (/Users/yuki/src/.harness-worktrees/session-33de4c25/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.98s
+     Running tests/backlog_s04_audit.rs (target/debug/deps/backlog_s04_audit-b2a8e76c1b539b6d)
+"""
+
+[task.closure.red]
+rev = "7db4a861569fe11d534d7b35f6593060dd9bfca4"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "6a9eb1ed"
+title = "overwatch lease end/run が storage root 判定不能のとき何も出さずに Ok を返す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = """
+acquire_or_skip None path; restrictive side but silent.
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/overwatch/tests/backlog_s04_audit.rs (rev e70d48dd)"""
+created_at = 1790678166
+updated_at = 1791024197
+weight = 0.0
+issue_number = 852
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/852"
+issue_closed_at = 1791024198
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test backlog_s04_audit s6a9eb1ed"
+exit = 0
+passed = 1
+rev = "bc0f54685542d14aabc749b452fe3c2074612de3"
+observed_at = 1791024178
+output_digest = "sha256:eb67c5d04c72949eda9f0ada313be9dc5ddae5b90f685a5a94b233ca3b021ad6"
+excerpt = """
+
+running 1 test
+test s6a9eb1ed_end_that_could_not_lock_is_not_reported_as_release ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.45s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/backlog_s04_audit.rs (target/debug/deps/backlog_s04_audit-b2a8e76c1b539b6d)
+"""
+
+[task.closure.red]
+rev = "7db4a861569fe11d534d7b35f6593060dd9bfca4"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "4be23458"
+title = "condukt worktree::discard also force-discards uncommitted work — the twin of the remove() fail-open (DoD12d)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+測定点 47d02894 / 測定日 2026-09-07。crates/condukt/src/worktree.rs:1951 の pub fn discard は remove と同一の blanket パターンを持つ: plain worktree remove が失敗したら無条件で --force へ retry する。git はまさに未コミット作業があるときに拒否するので、この retry は git 自身の安全弁を外している。
+
+production の到達経路は2本あり、どちらも未コミット内容を保全していない:
+(1) crates/condukt/src/state.rs:1007 discard_experiment。直前の capture は branch_sha (rev-parse branch) と diff_stat (diff --stat default_branch branch) の2つだけで、どちらも COMMIT 済みの状態からしか導かれない。docstring も callers MUST capture the branch SHA / diff before calling this と書くが、これは commit の話であって worktree の未コミット内容には一切触れていない。
+(2) crates/condukt/src/shadow_run.rs:73 finish。discard の前に何も capture していない。
+
+discard は repo-primary lock 取得失敗には既に fail-closed で refuse する (worktree.rs:1865 のテスト)。硬化されているのは lock 軸だけで、未コミット作業の軸は素通り。
+
+本タスク (DoD12d) の remedy は charter の指定どおり remove() と worktree_remove_force_removes_dirty_worktree に限定したので、discard は意図的に手を付けていない。discard は experiment worktree の廃棄経路であり throwing away が意図なので、保全すべきか否かは人間の判断が要る。ただし現状は「意図的に捨てる」と「捨てたことに気づかない」が区別不能である。
+
+参考: mirror-gap の再発クラス。fix が片側のミラーにだけ着地するのを避けること。
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/condukt/src/worktree.rs (mod backlog_4be23458) (rev 596108b9): worktree discard force-destroys uncommitted work; discard's doc calls force intentional, so a human ruling may change the contract."""
+created_at = 1788790462
+updated_at = 1791024270
+weight = 0.0
+issue_number = 414
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/414"
+issue_closed_at = 1791024271
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --bin condukt backlog_4be23458 -- --include-ignored"
+exit = 0
+passed = 1
+rev = "bc0f54685542d14aabc749b452fe3c2074612de3"
+observed_at = 1791024246
+output_digest = "sha256:f05aa49eb35b34290c7c3edda53c88ed21e49f6a4b0054184d4e2c0ec6588f41"
+excerpt = """
+
+running 1 test
+test worktree::backlog_4be23458::discard_does_not_silently_destroy_uncommitted_work ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 886 filtered out; finished in 0.49s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running unittests src/main.rs (target/debug/deps/condukt-d5b35b37885b8452)
+"""
+
+[task.closure.red]
+rev = "7db4a861569fe11d534d7b35f6593060dd9bfca4"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "826c29bf"
+title = "gate の mission を「明瞭な指示に照らした Audit」に揃える: 不明瞭なら明確化 Ask 必須、正当な根拠があれば block+Ask、根拠が無ければ通す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+ユーザー指示（2026-09-07、5メッセージにわたる確定形）。
+
+## Gate の mission
+明瞭な指示にもとづいて Audit し判定することが Gate の mission。指示は gate の入力である。
+指示を参照せずに発火する gate（純粋な形状マッチ、要求が含意していない作業を要求する Stop hook）は
+mission を果たしていない。それが欠陥であって、block すること自体は欠陥ではない。
+
+## 各 gate が従うべき判定手順
+1. 指示は明瞭か。不明瞭なら明確化のための Ask は必須。仕様が無いものは audit できない。
+2. 明瞭なら、行為を指示に照らして audit する。
+   - 正当と思う根拠がある: block し、かつ Ask する（根拠を逐語で申告）。
+   - 根拠が無い: 通す。止めない。
+3. Ask で却下されたら却下でよい。蒸し返さない、再質問しない、別ルートを探さない。
+
+## Ask は万能既定ではない
+何でも Ask だと自律しない。Ask の対象は (a) 不明瞭な指示 (b) 正当な根拠のある block の2つだけ。
+それ以外は自律的に進む。
+
+## 既存の規範との接続
+明確な指示が破壊的でないなら実行する。破壊的なら Ask。自律時は gate を完全に機能させる。
+block されたら理由を逐語で申告して Ask。指示に明確に反する block は公然と無効化してよい。
+黙って迂回する、あるいは別構文で同じ効果を得るのがバグ。
+fail-closed は弱めない。CLAUDE.md 3 は判定不能を block または ask と明記しており、
+blastguard の Decision::Ask がその制限側の第三の答え。作業は block 側の callsite のうち
+本来 ask であるべきものを移すことであって、permissive な既定を作ることではない。
+
+## done_criteria
+1. gate を (a) コードを判定するもの（fail-closed 維持）と (b) 指示・意図を判定するものに分類する。
+2. 一律 advisory 化はしない。すべての block が逐語引用可能な理由を返し、公然の override 経路を持つ。
+3. 自律時の判定不能は ask に解決する（block 一択にしない）。
+4. 本当に block すべきケースが依然止まることを RED 先行の behavioural test で固定する。
+5. autoflow の compass gate は、自分が宣言した前提が成立するときだけ block する
+   （観測: 前提が成立していないのに before automatically draining the backlog と述べて block した）。
+6. agent 側の規範（申告して Ask、別構文で再試行しない）を SKILL / CLAUDE.md に書く。
+7. 不明瞭な指示に対する明確化 Ask を、gate が省略できない経路として実装する。
+
+## 観測されたコスト
+シェルの redirect が拒否されたので同一の書き込みを python 経由に迂回した。書き込みは結局成立したので
+gate は何も守っておらず、回避だけを学習させた。本セッションでも同じ形が再発している（python3 の
+インライン eval が blastguard に止められた）。そのときは heredoc へ書き換えず、インタプリタを使わない
+経路へ落とし、block 理由を逐語で申告した。これが正しい形。
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_826c29bf.py (rev 2ff60f58): Pins the umbrella's own criterion 6; children carry their own repros; criterion 5 obsolete (autoflow compass gate RETIRED 2026-08-20, crates/autoflow/src/main.rs:343)."""
+created_at = 1788789695
+updated_at = 1791024477
+weight = 0.0
+issue_number = 412
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/412"
+issue_closed_at = 1791024480
+rev = 3
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_backlog_826c29bf.py"
+exit = 0
+passed = 2
+rev = "c26b1cd99b206d49e832da281603fc7d1874c2ab"
+observed_at = 1791024475
+output_digest = "sha256:d446d8ef2787162e081f806f43e255f3bdad17e8322df6d817bdfe36bc23ba32"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-33de4c25
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 2 items
+
+scripts/test_backlog_826c29bf.py ..                                      [100%]
+
+============================== 2 passed in 0.04s ===============================
+"""
+
+[task.closure.red]
+rev = "7db4a861569fe11d534d7b35f6593060dd9bfca4"
+exit = 1
+kind = "behavioural"

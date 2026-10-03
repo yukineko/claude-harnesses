@@ -229,11 +229,11 @@ class OpenPin840c4a17StopVerifyWorktreeAttribution(unittest.TestCase):
         )
 
 
-@unittest.skipUnless(OPEN_PINS, OPEN_PIN_REASON + " (90a358d3 == e4a1d386)")
 class OpenPin90a358d3ShellSyntaxTestMktemp(unittest.TestCase):
-    """90a358d3 == e4a1d386 (STILL OPEN): scripts/tests/check-shell-syntax.sh
-    calls `mktemp -d -t <name>` without X's, which GNU mktemp rejects, so 4 of
-    its 6 assertions never run on Linux."""
+    """90a358d3 == e4a1d386 (FIXED by e4a1d386): scripts/tests/check-shell-syntax.sh
+    used to call `mktemp -d -t <name>` without X's, which GNU mktemp rejects, so
+    4 of its 6 assertions never ran on Linux. It now uses an explicit
+    `<dir>/<name>.XXXXXX` template; this pin guards against regression."""
 
     def test_every_mktemp_template_has_xs(self):
         src = (SCRIPTS / "tests" / "check-shell-syntax.sh").read_text(encoding="utf-8")

@@ -179,8 +179,16 @@ store の隣に置く lockfile = checkout 単位だったので、両者が **�
   FNV-1a の project ハッシュ。linked worktree は main working tree に正規化されるので、同一
   プロジェクトの全 checkout が 1 つの ledger を共有する)
 - ロック順序 (逆順にしないこと): `~/.backlog/claims/<slug>.lock` (project 全体) → `<store>.lock` (この checkout)
-- entry (**lease**) は 1h (`CLAIM_STALE_SECS`) で除外をやめるので、死んだ claimant が全 checkout
-  でタスクを永久にロックすることはない。記録自体は 7 日保持する。
+- entry (**lease**) は holder の生存が 1h (`CLAIM_STALE_SECS`) 観測されないと除外をやめるので、
+  死んだ claimant が全 checkout でタスクを永久にロックすることはない。記録自体は 7 日保持する。
+- 「生存の観測」= claim 時刻と holder の最後の lease heartbeat のうち新しい方。`next --claim` は
+  claim したセッション (`CLAUDE_CODE_SESSION_ID`) を記録し、`backlog driver heartbeat --session-id S
+  --project P` は P の ledger 上の S の **まだ生きている** lease も更新する。したがって 1h 以内ごとに
+  heartbeat する driver は、タスクに何時間かかっても claim を保つ (backlog 486e83ca)。期限切れの
+  lease は蘇生しない。セッションの無い lease (旧バイナリの entry やセッション外の claim) は従来どおり
+  claim 時刻だけで期限切れになる。lease を更新できない (ledger のロック/読み取り/パース/書き込み失敗、
+  identity 解決不能) 場合、heartbeat はその旨を出して非0終了する。heartbeat フィールドが壊れていれば
+  ledger 全体がパース不能となり、holder を死んだとはみなさず claim を拒否する。
 
 このパス上の判定不能はすべて **claim を拒否** し、理由を stderr に出して非0終了する。exit 0 +
 `no pending tasks` (= driver は「仕事がない」と読む) には決して倒さない。対象は: ledger ディレクトリを
@@ -209,8 +217,8 @@ claimant が直前に fail したタスクは `failed` と表示されつつ、l
   `claimed` と表示される行を選ぶ (`claimed` は保存されるステータスではないので "unknown status" 警告は出る)。
 - 旧バイナリが `status = "claimed"` で保存した行は `pending` として読む。除外するのは生きた lease
   だけ。その行は、無関係なコマンドが次に store を保存したときに `pending` として書き直される。
-- `done`/`fail`/`edit --status pending` は lease を解放しない。終端でないタスクの lease は 1h で
-  期限切れになるまで除外を続ける。
+- `done`/`fail`/`edit --status pending` は lease を解放しない。終端でないタスクの lease は、holder の
+  最後の生存観測から 1h で期限切れになるまで除外を続ける。
 - `list`・素の `next`・`next --claim` は同じ方法 (上記の project identity) で ledger を特定する。
   repo 外ではその identity は正規化した cwd。identity を解決できない (例: worktree の `.git` リンクが
   切れている) か、ledger が存在するのに読めない・パースできない場合、`list` と素の `next` は

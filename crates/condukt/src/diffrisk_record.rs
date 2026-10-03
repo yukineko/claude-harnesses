@@ -239,18 +239,24 @@ pub(crate) fn record_post_execution_diff_risk(
     // record per invocation and a zero-finding registry stays interpretable.
     let journal =
         |outcome: DiffRiskOutcome, changed_symbols: Option<usize>, caller_sites: Option<usize>| {
-            crate::gatelog::append_diffrisk_outcome(
-                &crate::state::project_state_dir(cfg, cwd),
-                &crate::gatelog::DiffRiskRecord {
-                    outcome: outcome.as_str().to_string(),
-                    inspected: outcome.inspected(),
-                    run_id: run_id.to_string(),
-                    task_id: task.id.clone(),
-                    changed_symbols,
-                    caller_sites,
-                    recorded_at: now,
-                },
-            );
+            // Project-wide journal: the CANONICAL dir. An unlocatable dir is
+            // reported on stderr, never silently dropped (journaling stays
+            // fail-soft; `diffrisk report` reads an absent journal as unknown).
+            match crate::state::project_state_dir(cfg, cwd) {
+                Ok(dir) => crate::gatelog::append_diffrisk_outcome(
+                    &dir,
+                    &crate::gatelog::DiffRiskRecord {
+                        outcome: outcome.as_str().to_string(),
+                        inspected: outcome.inspected(),
+                        run_id: run_id.to_string(),
+                        task_id: task.id.clone(),
+                        changed_symbols,
+                        caller_sites,
+                        recorded_at: now,
+                    },
+                ),
+                Err(e) => eprintln!("condukt: warning: diff-risk: not journaling: {e:#}"),
+            }
             outcome
         };
 
@@ -512,10 +518,9 @@ mod tests {
         let cfg = hermetic_cfg(state.path());
         let cwd = tempfile::tempdir().expect("tempdir");
         let wt = tempfile::tempdir().expect("tempdir");
-        let ledger = crate::gatelog::diffrisk_outcomes_path(&crate::state::project_state_dir(
-            &cfg,
-            cwd.path(),
-        ));
+        let ledger = crate::gatelog::diffrisk_outcomes_path(
+            &crate::state::project_state_dir(&cfg, cwd.path()).unwrap(),
+        );
 
         // (a) never inspected: no worktree was ever recorded for the task.
         let no_wt = TaskState {
@@ -544,10 +549,9 @@ mod tests {
              'inspected and clean' is distinguishable from 'never inspected'",
             ledger.display()
         );
-        let outcomes = crate::gatelog::load_diffrisk_outcomes(&crate::state::project_state_dir(
-            &cfg,
-            cwd.path(),
-        ));
+        let outcomes = crate::gatelog::load_diffrisk_outcomes(
+            &crate::state::project_state_dir(&cfg, cwd.path()).unwrap(),
+        );
         assert_eq!(outcomes.len(), 2, "one record per invocation");
         assert_ne!(
             outcomes[0].outcome, outcomes[1].outcome,
@@ -592,10 +596,9 @@ mod tests {
         // Neither path may claim a call-graph measurement it never made: the
         // counts are absent, NOT zero. `Some(0)` would read as "the call graph
         // ran and found no callers", which is a different fact entirely.
-        let recs = crate::gatelog::load_diffrisk_outcomes(&crate::state::project_state_dir(
-            &cfg,
-            cwd.path(),
-        ));
+        let recs = crate::gatelog::load_diffrisk_outcomes(
+            &crate::state::project_state_dir(&cfg, cwd.path()).unwrap(),
+        );
         assert_eq!(recs.len(), 2);
         for r in &recs {
             assert!(!r.inspected);

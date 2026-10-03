@@ -257,15 +257,26 @@ pub fn run_gate_check(cfg: &Config, cwd: &Path, run_id: &str, task_id: &str) -> 
     });
     println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
 
-    let dir = state::project_state_dir(cfg, cwd);
+    // The run's own dir (canonical, or the legacy per-checkout dir a pre-
+    // `43393ce2` run still lives in), so the checkpoint and journal sit beside
+    // the run they describe. If it cannot be located the decomposition could not
+    // have been read either, so the verdict above is already Escalate; the
+    // journal/checkpoint are fail-soft as before, but the skip is said out loud.
+    let dir = match state::run_dir(cfg, cwd, run_id) {
+        Ok(d) => Some(d),
+        Err(e) => {
+            eprintln!("condukt: warning: gate check: not journaling or checkpointing: {e:#}");
+            None
+        }
+    };
 
     // On AutoExec: checkpoint FIRST so the auto-executed action is recoverable,
     // reusing the exact function `state checkpoint` calls. Fail-soft: an
     // unloadable run or a checkpoint write error must not change the exit code.
     if matches!(verdict, GateExec::AutoExec) {
-        if let Ok(rs) = state::RunState::load(cfg, cwd, run_id) {
+        if let (Some(dir), Ok(rs)) = (&dir, state::RunState::load(cfg, cwd, run_id)) {
             let shas = crate::capture_branch_shas(cwd, &rs);
-            let _ = crate::checkpoint::write_checkpoint(&dir, run_id, &rs, "gate-exec", shas);
+            let _ = crate::checkpoint::write_checkpoint(dir, run_id, &rs, "gate-exec", shas);
         }
     }
 
@@ -279,7 +290,9 @@ pub fn run_gate_check(cfg: &Config, cwd: &Path, run_id: &str, task_id: &str) -> 
         policy_is_auto,
         recorded_at: state::now_secs(),
     };
-    crate::gatelog::append_gate_exec(&dir, run_id, &record);
+    if let Some(dir) = &dir {
+        crate::gatelog::append_gate_exec(dir, run_id, &record);
+    }
 
     // On Escalate ONLY: also record a durable overwatch review-finding so a
     // needs-human verdict reaches `overwatch review-queue`'s ai-finding stream
@@ -481,7 +494,7 @@ mod tests {
         let cwd = tmp.join("repo");
         std::fs::create_dir_all(&cwd).unwrap();
 
-        let path = state::decomposition_path(&cfg, &cwd, "run-x");
+        let path = state::decomposition_path(&cfg, &cwd, "run-x").unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, b"{\"goal\":\"g\",\"tasks\":[]}").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();

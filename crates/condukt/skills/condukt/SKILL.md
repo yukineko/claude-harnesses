@@ -1187,6 +1187,16 @@ condukt state gate --run $RID      # exit 0 まで完了宣言しない
   （Phase 5 で `--run "$RID"` を渡して切った run-名前空間つき branch 名をそのまま使う。`--run` を
   渡さずに切った旧レイアウトの worktree は従来どおり `condukt/<id>`）。
   最後に `condukt worktree cleanup` で orphan が無いことを確認。
+- **統合先は常に config の `default_branch`**（既定 `main`）。run を開始したときの primary tree の
+  ブランチではない。`condukt worktree create` は task branch をその時点の HEAD から切り、切った commit を
+  git config `branch.<task-branch>.conduktBase` に記録する。`condukt worktree merge`（と
+  `worktree resolve-merge`）は、この記録された base が `default_branch` の祖先でなければ
+  **非ゼロ終了で拒否し、`default_branch` を動かさない**（診断名 `merge-base-not-on-default-branch`）。
+  記録が無い・読めない・commit に解決しない（旧バイナリや手で切った branch を含む）場合も判定不能として
+  同様に拒否する（`merge-base-unrecorded` / `merge-base-undetermined`）。feature branch 上で run を始めると
+  ここで止まる — 黙って feature の履歴を main へ運ばないための拒否である。対処は
+  `git log <default>..<branch>` をレビューしてその履歴を載せてよいなら人間が手で merge する、
+  または `default_branch` から run をやり直す。拒否を迂回するために記録を書き換えない。
 - **merge pre-flight 衝突への対処**: `condukt worktree merge` が merge pre-flight で衝突を検出した
   場合は以下の手順で対処する:
   1. 衝突しているタスク (branch) を特定する。衝突 branch が複数ある場合は 1 つずつ処理する。

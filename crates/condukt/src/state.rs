@@ -1,7 +1,10 @@
 //! Run-state persistence and the completion gate.
 //!
 //! A run records each task's status and (once assigned) its worktree/branch.
-//! State lives at `<state_dir>/<project-key>/<run-id>.json`. The gate is the
+//! State lives at `<state_dir>/<project-key>/<run-id>.json`, the project key
+//! being the MAIN worktree root's so every checkout of a repo shares it (a run
+//! a pre-`43393ce2` condukt stored under a linked worktree's own key stays
+//! readable in place: see [`run_dir`]). The gate is the
 //! deterministic "are we actually done?" check the skill calls before declaring
 //! success: every task verified, and no worktree left dirty or unremoved.
 
@@ -335,38 +338,139 @@ pub struct RunState {
     pub recorded_episodes: Vec<String>,
 }
 
-fn project_dir(cfg: &Config, cwd: &Path) -> PathBuf {
-    let root = repo_root(cwd);
-    cfg.state_dir.join(project_key(&root))
+/// The root every per-project state file is keyed by: the MAIN worktree root
+/// of the repo containing `cwd` (backlog `43393ce2`/`4708069b`).
+///
+/// This used to be `repo_root(cwd)`, which stops at the first ancestor holding
+/// a `.git` ENTRY and so returns a LINKED worktree itself: a run created from a
+/// worktree was invisible from the main tree (and vice versa), although under
+/// CLAUDE.md §8 working from a linked worktree is the normal case. The claim
+/// registry and the repo-primary lock were re-anchored the same way first.
+///
+/// An undeterminable root (unreadable/unparseable gitfile, missing
+/// `commondir`, ...) is an `Err` naming it. There is no fallback to the
+/// per-checkout key: that would silently address a DIFFERENT store, i.e.
+/// recreate the split while looking like it worked.
+pub fn project_root(cwd: &Path) -> Result<PathBuf> {
+    use harness_core::verdict::Required;
+    match harness_core::projkey::main_worktree_root(cwd).require() {
+        Required::Determined(root) => Ok(root),
+        Required::Blocked(v) => bail!(
+            "could not determine the main worktree root for {} ({}); refusing to \
+             address run state under a per-checkout fallback key, which would be a \
+             different store than every other checkout of this repo uses",
+            cwd.display(),
+            v.as_str()
+        ),
+    }
 }
 
-/// The per-project state directory (`<state_dir>/<project-key>`). Exposed so
-/// sibling gates (e.g. `condukt circuit check`'s append-only verdict journal)
-/// can locate the same per-project location that run-state and the run-policy
-/// log already live under, without re-deriving the project key.
-pub fn project_state_dir(cfg: &Config, cwd: &Path) -> PathBuf {
+/// `<state_dir>/<project-key of the main worktree root>` — the canonical
+/// per-project state dir every checkout of a repo shares.
+fn project_dir(cfg: &Config, cwd: &Path) -> Result<PathBuf> {
+    Ok(cfg.state_dir.join(project_key(&project_root(cwd)?)))
+}
+
+/// The LEGACY per-checkout state dir (`<state_dir>/<project-key of
+/// repo_root(cwd)>`) — where every condukt before the `43393ce2` re-keying
+/// wrote run state when invoked from a linked worktree. `None` when it is the
+/// canonical dir itself (the main tree, a plain repo, a non-repo dir), so there
+/// is nothing separate to consult.
+///
+/// Only ever READ from, and written back to for a run that already lives
+/// there — its state, siblings, journals and lock (see [`run_dir`]); no NEW run
+/// and no project-wide file is ever created under it.
+fn legacy_project_dir(cfg: &Config, cwd: &Path) -> Result<Option<PathBuf>> {
+    let canonical = project_dir(cfg, cwd)?;
+    let legacy = cfg.state_dir.join(project_key(&repo_root(cwd)));
+    Ok((legacy != canonical).then_some(legacy))
+}
+
+/// The state dirs that may hold runs for `cwd`, canonical first: the canonical
+/// dir, then the legacy per-checkout dir when it differs. `Err` when the main
+/// worktree root cannot be determined.
+pub fn project_state_dirs(cfg: &Config, cwd: &Path) -> Result<Vec<PathBuf>> {
+    let mut dirs = vec![project_dir(cfg, cwd)?];
+    if let Some(legacy) = legacy_project_dir(cfg, cwd)? {
+        dirs.push(legacy);
+    }
+    Ok(dirs)
+}
+
+/// Whether `path` exists, as an observation: an I/O error other than ENOENT
+/// (permission denied on the dir, ...) is an `Err`, never "absent".
+fn observed_exists(path: &Path) -> Result<bool> {
+    path.try_exists()
+        .with_context(|| format!("cannot tell whether {} exists", path.display()))
+}
+
+/// The dir `run_id`'s state file and every per-run sibling (decomposition,
+/// checkpoints, replan/run-policy logs, circuit journal, run lock) live in.
+///
+/// Legacy strategy — **write back to where it was found**, no migration:
+///
+/// * the canonical dir when the run exists there, or exists nowhere (a NEW run
+///   is therefore always created canonically);
+/// * the legacy per-checkout dir when the run exists ONLY there — a run started
+///   by a pre-fix condukt from this linked worktree. Every later read AND write
+///   for it resolves here too, so it keeps working in place and is never forked
+///   into a second canonical copy.
+///
+/// Moving the files instead was rejected: a run is several files (state,
+/// decomposition, checkpoints, logs, lock) that cannot be renamed as one atomic
+/// unit, and an in-flight peer holding the old lock would race a mover.
+///
+/// "Exists" is decided on `<run>.json` OR `<run>.decomposition.json`, because
+/// `state init` writes the decomposition first. An existence probe that errors
+/// is an `Err`, not "absent".
+pub fn run_dir(cfg: &Config, cwd: &Path, run_id: &str) -> Result<PathBuf> {
+    let canonical = project_dir(cfg, cwd)?;
+    let Some(legacy) = legacy_project_dir(cfg, cwd)? else {
+        return Ok(canonical);
+    };
+    let safe = harness_core::store::safe_session(run_id);
+    let has_run = |dir: &Path| -> Result<bool> {
+        Ok(observed_exists(&dir.join(format!("{safe}.json")))?
+            || observed_exists(&dir.join(format!("{safe}.decomposition.json")))?)
+    };
+    if has_run(&canonical)? {
+        return Ok(canonical);
+    }
+    if has_run(&legacy)? {
+        return Ok(legacy);
+    }
+    Ok(canonical)
+}
+
+/// The CANONICAL per-project state directory (`<state_dir>/<project-key of the
+/// main worktree root>`), for project-wide files (journals, ledgers,
+/// registries). Per-run files must go through [`run_dir`] instead, so a run
+/// still living under a legacy per-checkout key keeps its siblings beside it.
+/// `Err` when the main worktree root cannot be determined.
+pub fn project_state_dir(cfg: &Config, cwd: &Path) -> Result<PathBuf> {
     project_dir(cfg, cwd)
 }
 
-fn run_path(cfg: &Config, cwd: &Path, run_id: &str) -> PathBuf {
+fn run_path(cfg: &Config, cwd: &Path, run_id: &str) -> Result<PathBuf> {
     // `run_id` can come from the CLI (e.g. `condukt status <run_id>`); sanitise
     // it so a crafted id like `../../etc/x` cannot escape the project dir.
-    project_dir(cfg, cwd).join(format!(
+    Ok(run_dir(cfg, cwd, run_id)?.join(format!(
         "{}.json",
         harness_core::store::safe_session(run_id)
-    ))
+    )))
 }
 
 /// The path a run's state file lives at (whether or not it exists). Exposed so
 /// an observer can tell ABSENT from UNREADABLE itself (see
 /// `finding_reconcile`), which [`RunState::load`]'s single `Err` folds together.
-pub fn run_state_path(cfg: &Config, cwd: &Path, run_id: &str) -> PathBuf {
+/// `Err` when the main worktree root cannot be determined.
+pub fn run_state_path(cfg: &Config, cwd: &Path, run_id: &str) -> Result<PathBuf> {
     run_path(cfg, cwd, run_id)
 }
 
 impl RunState {
     pub fn load(cfg: &Config, cwd: &Path, run_id: &str) -> Result<Self> {
-        let path = run_path(cfg, cwd, run_id);
+        let path = run_path(cfg, cwd, run_id)?;
         let txt = std::fs::read_to_string(&path)
             .with_context(|| format!("no run '{run_id}' at {}", path.display()))?;
         let state = serde_json::from_str(&txt).context("corrupt run-state JSON")?;
@@ -374,7 +478,7 @@ impl RunState {
     }
 
     pub fn save(&self, cfg: &Config, cwd: &Path) -> Result<PathBuf> {
-        let dir = project_dir(cfg, cwd);
+        let dir = run_dir(cfg, cwd, &self.run_id)?;
         std::fs::create_dir_all(&dir)
             .with_context(|| format!("creating state dir {}", dir.display()))?;
         let path = dir.join(format!("{}.json", self.run_id));
@@ -403,15 +507,16 @@ impl RunState {
 }
 
 /// Open runs (not every task verified) for this project. Used by the SessionStart
-/// hook and `state list`.
-pub fn open_runs(cfg: &Config, cwd: &Path) -> Vec<RunState> {
-    all_runs(cfg, cwd)
+/// hook and `state list`. `Err` when the main worktree root cannot be
+/// determined (see [`all_runs`]).
+pub fn open_runs(cfg: &Config, cwd: &Path) -> Result<Vec<RunState>> {
+    Ok(all_runs(cfg, cwd)?
         .into_iter()
         .filter(|rs| {
             let (done, total) = rs.counts();
             done < total
         })
-        .collect()
+        .collect())
 }
 
 /// Serialized load → mutate → save for a run. The per-run state lock is held
@@ -438,7 +543,7 @@ where
     // Silently dropping a run-state transition (e.g. a status change) would let
     // the orchestrator act on stale state, so this fails loud rather than skips
     // quiet. The old fail-soft `acquire` left this double-write window open.
-    let _lock = match crate::lock::RunLock::acquire_or_skip(cfg, cwd, run_id) {
+    let _lock = match crate::lock::RunLock::acquire_run_state_or_skip(cfg, cwd, run_id)? {
         Some(l) => l,
         None => anyhow::bail!(
             "run '{run_id}' state lock is contended; skipping update to avoid a \
@@ -483,10 +588,33 @@ pub(crate) fn is_run_state_sidecar(fname: &str) -> bool {
 /// `eprintln!` rather than silently read as "no runs" (the run list still
 /// degrades to whatever was readable — this is best-effort discovery, not a
 /// gate — but the gap must be visible, not silent).
-pub fn all_runs(cfg: &Config, cwd: &Path) -> Vec<RunState> {
-    let dir = project_dir(cfg, cwd);
+///
+/// Scans every dir of [`project_state_dirs`]: the canonical (main worktree
+/// root) dir, then the legacy per-checkout dir of `cwd` when it differs, so a
+/// run a pre-`43393ce2` condukt stored under this worktree's own key is still
+/// listed. A run id present in both is reported once, from the canonical dir —
+/// the same precedence [`run_dir`] resolves reads and writes with.
+///
+/// `Err` when the main worktree root cannot be determined: an empty list there
+/// would read as "no runs" while the store was never even located.
+pub fn all_runs(cfg: &Config, cwd: &Path) -> Result<Vec<RunState>> {
+    let mut runs: Vec<RunState> = Vec::new();
+    for dir in project_state_dirs(cfg, cwd)? {
+        for rs in runs_in_dir(&dir) {
+            if !runs.iter().any(|r| r.run_id == rs.run_id) {
+                runs.push(rs);
+            }
+        }
+    }
+    runs.sort_by(|a, b| a.run_id.cmp(&b.run_id));
+    Ok(runs)
+}
+
+/// Every parseable run-state file directly in `dir` (see [`all_runs`] for the
+/// degrade contract: unreadable entries are surfaced on stderr, not hidden).
+fn runs_in_dir(dir: &Path) -> Vec<RunState> {
     let mut runs = Vec::new();
-    match std::fs::read_dir(&dir) {
+    match std::fs::read_dir(dir) {
         Ok(rd) => {
             for entry in rd {
                 let entry = match entry {
@@ -524,19 +652,20 @@ pub fn all_runs(cfg: &Config, cwd: &Path) -> Vec<RunState> {
             eprintln!("warning: all_runs: cannot read {}: {e}", dir.display());
         }
     }
-    runs.sort_by(|a, b| a.run_id.cmp(&b.run_id));
     runs
 }
 
 // ── Decomposition sidecar ──────────────────────────────────────────────────
 
-pub fn decomposition_path(cfg: &Config, cwd: &Path, run_id: &str) -> PathBuf {
-    project_dir(cfg, cwd).join(format!("{run_id}.decomposition.json"))
+/// `<run_dir>/<run>.decomposition.json` (see [`run_dir`] for which dir). `Err`
+/// when the main worktree root cannot be determined.
+pub fn decomposition_path(cfg: &Config, cwd: &Path, run_id: &str) -> Result<PathBuf> {
+    Ok(run_dir(cfg, cwd, run_id)?.join(format!("{run_id}.decomposition.json")))
 }
 
 /// Persist the raw decomposition JSON alongside the run state.
 pub fn save_decomposition(cfg: &Config, cwd: &Path, run_id: &str, json: &str) -> Result<()> {
-    let path = decomposition_path(cfg, cwd, run_id);
+    let path = decomposition_path(cfg, cwd, run_id)?;
     let dir = path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("decomposition path {} has no parent", path.display()))?;
@@ -557,7 +686,7 @@ pub fn save_decomposition(cfg: &Config, cwd: &Path, run_id: &str, json: &str) ->
 /// with that. A caller whose output is consumed as a judgment must use
 /// [`load_decomposition_determined`] instead, which keeps the two apart.
 pub fn load_decomposition(cfg: &Config, cwd: &Path, run_id: &str) -> Result<String> {
-    let path = decomposition_path(cfg, cwd, run_id);
+    let path = decomposition_path(cfg, cwd, run_id)?;
     std::fs::read_to_string(&path)
         .with_context(|| format!("no decomposition for run '{run_id}' at {}", path.display()))
 }
@@ -587,7 +716,11 @@ pub fn load_decomposition_determined(
     cwd: &Path,
     run_id: &str,
 ) -> Determination<Option<String>> {
-    harness_core::boundary::read_to_string(&decomposition_path(cfg, cwd, run_id))
+    match decomposition_path(cfg, cwd, run_id) {
+        Ok(path) => harness_core::boundary::read_to_string(&path),
+        // The store itself could not be located: that is not "no decomposition".
+        Err(e) => Determination::undetermined(format!("{e:#}")),
+    }
 }
 
 // ── Replan decision log ─────────────────────────────────────────────────────
@@ -612,8 +745,8 @@ pub struct ReplanLogRecord {
     pub recorded_at: i64,
 }
 
-fn replan_log_path(cfg: &Config, cwd: &Path, run_id: &str) -> PathBuf {
-    project_dir(cfg, cwd).join(format!("{run_id}.replan-log.jsonl"))
+fn replan_log_path(cfg: &Config, cwd: &Path, run_id: &str) -> Result<PathBuf> {
+    Ok(run_dir(cfg, cwd, run_id)?.join(format!("{run_id}.replan-log.jsonl")))
 }
 
 /// Append one replan decision record to the run's JSONL log. Creates the
@@ -625,7 +758,7 @@ pub fn record_replan_decision(
     record: &ReplanLogRecord,
 ) -> Result<()> {
     use std::io::Write;
-    let path = replan_log_path(cfg, cwd, run_id);
+    let path = replan_log_path(cfg, cwd, run_id)?;
     let dir = path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("replan log path {} has no parent", path.display()))?;
@@ -644,16 +777,19 @@ pub fn record_replan_decision(
 /// Load all replan decision records for a run. Missing file → empty vec.
 /// Fail-soft: malformed lines are skipped rather than erroring or panicking,
 /// mirroring `open_runs`/`all_runs`'s tolerance of unparseable state files.
-pub fn load_replan_records(cfg: &Config, cwd: &Path, run_id: &str) -> Vec<ReplanLogRecord> {
-    let path = replan_log_path(cfg, cwd, run_id);
+/// `Err` only when the main worktree root (so the log's dir) cannot be
+/// determined.
+pub fn load_replan_records(cfg: &Config, cwd: &Path, run_id: &str) -> Result<Vec<ReplanLogRecord>> {
+    let path = replan_log_path(cfg, cwd, run_id)?;
     let txt = match std::fs::read_to_string(&path) {
         Ok(t) => t,
-        Err(_) => return Vec::new(),
+        Err(_) => return Ok(Vec::new()),
     };
-    txt.lines()
+    Ok(txt
+        .lines()
         .filter(|l| !l.trim().is_empty())
         .filter_map(|l| serde_json::from_str::<ReplanLogRecord>(l).ok())
-        .collect()
+        .collect())
 }
 
 /// Aggregate counts of replan decisions by directive category. Used by
@@ -706,8 +842,8 @@ pub struct RunPolicyLogRecord {
     pub recorded_at: i64,
 }
 
-fn run_policy_log_path(cfg: &Config, cwd: &Path, run_id: &str) -> PathBuf {
-    project_dir(cfg, cwd).join(format!("{run_id}.run-policy-log.jsonl"))
+fn run_policy_log_path(cfg: &Config, cwd: &Path, run_id: &str) -> Result<PathBuf> {
+    Ok(run_dir(cfg, cwd, run_id)?.join(format!("{run_id}.run-policy-log.jsonl")))
 }
 
 /// Append one RUN-POLICY decision record to the run's JSONL log. Creates the
@@ -719,7 +855,7 @@ pub fn record_run_policy_decision(
     record: &RunPolicyLogRecord,
 ) -> Result<()> {
     use std::io::Write;
-    let path = run_policy_log_path(cfg, cwd, run_id);
+    let path = run_policy_log_path(cfg, cwd, run_id)?;
     let dir = path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("run-policy log path {} has no parent", path.display()))?;
@@ -738,16 +874,23 @@ pub fn record_run_policy_decision(
 /// Load all RUN-POLICY decision records for a run. Missing file → empty vec.
 /// Fail-soft: malformed lines are skipped rather than erroring or panicking,
 /// mirroring `open_runs`/`all_runs`'s tolerance of unparseable state files.
-pub fn load_run_policy_records(cfg: &Config, cwd: &Path, run_id: &str) -> Vec<RunPolicyLogRecord> {
-    let path = run_policy_log_path(cfg, cwd, run_id);
+/// `Err` only when the main worktree root (so the log's dir) cannot be
+/// determined.
+pub fn load_run_policy_records(
+    cfg: &Config,
+    cwd: &Path,
+    run_id: &str,
+) -> Result<Vec<RunPolicyLogRecord>> {
+    let path = run_policy_log_path(cfg, cwd, run_id)?;
     let txt = match std::fs::read_to_string(&path) {
         Ok(t) => t,
-        Err(_) => return Vec::new(),
+        Err(_) => return Ok(Vec::new()),
     };
-    txt.lines()
+    Ok(txt
+        .lines()
         .filter(|l| !l.trim().is_empty())
         .filter_map(|l| serde_json::from_str::<RunPolicyLogRecord>(l).ok())
-        .collect()
+        .collect())
 }
 
 /// Aggregate counts of RUN-POLICY decisions by verdict category. Used by
@@ -917,11 +1060,13 @@ pub fn detect_duplicate_completions(
     cfg: &Config,
     cwd: &Path,
     run: &RunState,
-) -> Vec<DuplicateCompletion> {
+) -> Result<Vec<DuplicateCompletion>> {
     // Index sibling runs' completed tasks by hashkey once. `all_runs` is
     // fail-soft (unparseable state files are skipped), so a corrupt neighbour
-    // degrades to "no duplicate from that file" rather than erroring.
-    let siblings = all_runs(cfg, cwd);
+    // degrades to "no duplicate from that file" rather than erroring. An
+    // undeterminable store location is NOT that degrade: it is an `Err`, since
+    // "no siblings" there would read as "no duplicate" without looking.
+    let siblings = all_runs(cfg, cwd)?;
 
     let mut out = Vec::new();
     for t in &run.tasks {
@@ -966,7 +1111,7 @@ pub fn detect_duplicate_completions(
             });
         }
     }
-    out
+    Ok(out)
 }
 
 // ── Discard an experiment worktree (resolve-by-learning) ──────────────────
@@ -984,7 +1129,7 @@ pub fn discard_experiment(cfg: &Config, cwd: &Path, run_id: &str, task_id: &str)
     // remove→mutate→save; proceeding unlocked could lose a concurrent update or
     // race a peer mutator. Surface an error so the caller can retry rather than
     // silently corrupt state. The old fail-soft `acquire` left the window open.
-    let _lock = match crate::lock::RunLock::acquire_or_skip(cfg, cwd, run_id) {
+    let _lock = match crate::lock::RunLock::acquire_run_state_or_skip(cfg, cwd, run_id)? {
         Some(l) => l,
         None => anyhow::bail!(
             "run '{run_id}' state lock is contended; skipping worktree discard to \
@@ -1702,8 +1847,8 @@ pub struct RunStats {
     pub status_counts: std::collections::HashMap<String, usize>,
 }
 
-pub fn compute_stats(cfg: &Config, cwd: &Path) -> Vec<RunStats> {
-    all_runs(cfg, cwd)
+pub fn compute_stats(cfg: &Config, cwd: &Path) -> Result<Vec<RunStats>> {
+    Ok(all_runs(cfg, cwd)?
         .into_iter()
         .map(|rs| {
             let mut counts = std::collections::HashMap::new();
@@ -1722,7 +1867,7 @@ pub fn compute_stats(cfg: &Config, cwd: &Path) -> Vec<RunStats> {
                 status_counts: counts,
             }
         })
-        .collect()
+        .collect())
 }
 
 /// Decision produced by [`enforce_fp_gate`] from an `oracle::check_oracle`
@@ -2603,9 +2748,9 @@ pub struct CancellableTask {
 
 /// All non-terminal tasks across open runs that can be cancelled.
 /// Loads decomposition sidecars to include task titles.
-pub fn list_cancellable_tasks(cfg: &Config, cwd: &Path) -> Vec<CancellableTask> {
+pub fn list_cancellable_tasks(cfg: &Config, cwd: &Path) -> Result<Vec<CancellableTask>> {
     let mut result = Vec::new();
-    for run in open_runs(cfg, cwd) {
+    for run in open_runs(cfg, cwd)? {
         let titles: std::collections::HashMap<String, String> =
             if let Ok(raw) = load_decomposition(cfg, cwd, &run.run_id) {
                 if let Ok(dec) = serde_json::from_str::<crate::model::Decomposition>(&raw) {
@@ -2641,7 +2786,7 @@ pub fn list_cancellable_tasks(cfg: &Config, cwd: &Path) -> Vec<CancellableTask> 
             });
         }
     }
-    result
+    Ok(result)
 }
 
 /// Check whether the incoming decomposition's touched_files overlap with any
@@ -2657,7 +2802,7 @@ pub fn cross_run_conflicts(
     cfg: &Config,
     cwd: &Path,
     new_dec: &crate::model::Decomposition,
-) -> ConflictReport {
+) -> Result<ConflictReport> {
     let new_files: Vec<String> = new_dec
         .tasks
         .iter()
@@ -2669,7 +2814,9 @@ pub fn cross_run_conflicts(
     let mut similar_goal_runs = Vec::new();
     let mut file_conflict_run_ids = std::collections::HashSet::new();
 
-    for run in open_runs(cfg, cwd) {
+    // An undeterminable store location is an `Err`, not "no open runs" (which
+    // would report no conflict without having looked).
+    for run in open_runs(cfg, cwd)? {
         let all_settled = run.tasks.iter().all(|t| {
             matches!(
                 t.status,
@@ -2726,12 +2873,12 @@ pub fn cross_run_conflicts(
     let all_goal_inactive = similar_goal_runs.iter().all(|s| !s.is_active);
     let auto_proceed = all_file_inactive && all_goal_inactive;
     let has_conflicts = !conflicts.is_empty() || !similar_goal_runs.is_empty();
-    ConflictReport {
+    Ok(ConflictReport {
         has_conflicts,
         auto_proceed,
         conflicts,
         similar_goal_runs,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -3465,7 +3612,7 @@ mod tests {
         save_run_with_task(&cfg, &tmp, "runA", "hk-1", Status::Verified, 100, 150);
 
         let a = RunState::load(&cfg, &tmp, "runA").unwrap();
-        let dups = detect_duplicate_completions(&cfg, &tmp, &a);
+        let dups = detect_duplicate_completions(&cfg, &tmp, &a).unwrap();
         assert_eq!(dups.len(), 1);
         assert_eq!(dups[0].hashkey, "hk-1");
         assert_eq!(dups[0].runs.first().map(String::as_str), Some("runA"));
@@ -3484,7 +3631,9 @@ mod tests {
         save_run_with_task(&cfg, &tmp, "runA", "hk-1", Status::Verified, 100, 150);
 
         let a = RunState::load(&cfg, &tmp, "runA").unwrap();
-        assert!(detect_duplicate_completions(&cfg, &tmp, &a).is_empty());
+        assert!(detect_duplicate_completions(&cfg, &tmp, &a)
+            .unwrap()
+            .is_empty());
         std::fs::remove_dir_all(&tmp).ok();
     }
 
@@ -3497,7 +3646,9 @@ mod tests {
         // Solo run, keyed but no sibling → no duplicate.
         save_run_with_task(&cfg, &tmp, "runA", "hk-1", Status::Verified, 100, 150);
         let a = RunState::load(&cfg, &tmp, "runA").unwrap();
-        assert!(detect_duplicate_completions(&cfg, &tmp, &a).is_empty());
+        assert!(detect_duplicate_completions(&cfg, &tmp, &a)
+            .unwrap()
+            .is_empty());
 
         // Add an unkeyed completed task in another run: must not match anything.
         let rs = RunState {
@@ -3516,7 +3667,9 @@ mod tests {
         };
         rs.save(&cfg, &tmp).unwrap();
         let a = RunState::load(&cfg, &tmp, "runA").unwrap();
-        assert!(detect_duplicate_completions(&cfg, &tmp, &a).is_empty());
+        assert!(detect_duplicate_completions(&cfg, &tmp, &a)
+            .unwrap()
+            .is_empty());
         std::fs::remove_dir_all(&tmp).ok();
     }
 
@@ -3709,7 +3862,8 @@ mod tests {
         // across load → (widened window) → save, exactly like the production
         // pause/resume/Set paths do.
         let rmw = |which: char| {
-            let _lock = crate::lock::RunLock::acquire_or_skip(&cfg, &tmp, run_id)
+            let _lock = crate::lock::RunLock::acquire_run_state_or_skip(&cfg, &tmp, run_id)
+                .unwrap()
                 .expect("the per-run lock must be genuinely held for this RMW cycle");
             let mut rs = RunState::load(&cfg, &tmp, run_id).unwrap();
             // Widen the load→save window so the race is deterministic without
@@ -3750,7 +3904,7 @@ mod tests {
         let json = r#"{"tasks":[]}"#;
         save_decomposition(&cfg, &tmp, run_id, json).unwrap();
         // final file exists
-        let final_path = decomposition_path(&cfg, &tmp, run_id);
+        let final_path = decomposition_path(&cfg, &tmp, run_id).unwrap();
         assert!(
             final_path.exists(),
             "decomposition .json must exist after save"
@@ -5572,7 +5726,7 @@ mod tests {
             .unwrap();
         }
 
-        let loaded = load_replan_records(&cfg, &tmp, run_id);
+        let loaded = load_replan_records(&cfg, &tmp, run_id).unwrap();
         assert_eq!(loaded.len(), 4, "all appended records must be loaded");
 
         let stats = aggregate_replan_stats(&loaded);
@@ -5588,7 +5742,7 @@ mod tests {
     fn load_replan_records_missing_file_returns_empty() {
         let tmp = make_tmp_dir("replan-log-missing");
         let cfg = make_test_cfg(&tmp);
-        let loaded = load_replan_records(&cfg, &tmp, "no-such-run");
+        let loaded = load_replan_records(&cfg, &tmp, "no-such-run").unwrap();
         assert!(loaded.is_empty());
         std::fs::remove_dir_all(&tmp).ok();
     }
@@ -5689,7 +5843,7 @@ mod tests {
             .unwrap();
         }
 
-        let loaded = load_run_policy_records(&cfg, &tmp, run_id);
+        let loaded = load_run_policy_records(&cfg, &tmp, run_id).unwrap();
         assert_eq!(loaded.len(), 5, "all appended records must be loaded");
 
         let stats = aggregate_run_policy_stats(&loaded);
@@ -5706,7 +5860,7 @@ mod tests {
     fn load_run_policy_records_missing_file_returns_empty() {
         let tmp = make_tmp_dir("run-policy-log-missing");
         let cfg = make_test_cfg(&tmp);
-        let loaded = load_run_policy_records(&cfg, &tmp, "no-such-run");
+        let loaded = load_run_policy_records(&cfg, &tmp, "no-such-run").unwrap();
         assert!(loaded.is_empty());
         std::fs::remove_dir_all(&tmp).ok();
     }
@@ -5810,7 +5964,7 @@ mod tests {
         let cwd = tmp.path().join("cwd");
         std::fs::create_dir_all(&cwd).unwrap();
         let cfg = make_test_cfg(tmp.path());
-        let project_dir = project_dir(&cfg, &cwd);
+        let project_dir = project_dir(&cfg, &cwd).unwrap();
         std::fs::create_dir_all(&project_dir).unwrap();
         std::fs::write(project_dir.join("r1.json"), "{}").unwrap();
         let mut perms = std::fs::metadata(&project_dir).unwrap().permissions();
@@ -5823,7 +5977,7 @@ mod tests {
             result.is_ok(),
             "all_runs must not panic on an unreadable project dir"
         );
-        assert!(result.unwrap().is_empty());
+        assert!(result.unwrap().unwrap().is_empty());
     }
 
     /// Regression test for backlog 1af91627: `all_runs` must skip every
@@ -5837,7 +5991,7 @@ mod tests {
         let cwd = tmp.path().join("cwd");
         std::fs::create_dir_all(&cwd).unwrap();
         let cfg = make_test_cfg(tmp.path());
-        let project_dir = project_dir(&cfg, &cwd);
+        let project_dir = project_dir(&cfg, &cwd).unwrap();
         std::fs::create_dir_all(&project_dir).unwrap();
 
         let valid = make_run_with_tasks(vec![]);
@@ -5863,7 +6017,7 @@ mod tests {
         std::fs::write(project_dir.join("escalations.json"), r#"[]"#).unwrap();
         std::fs::write(project_dir.join("execution-state.json"), r#"{}"#).unwrap();
 
-        let runs = all_runs(&cfg, &cwd);
+        let runs = all_runs(&cfg, &cwd).unwrap();
         assert_eq!(
             runs.len(),
             1,
@@ -5900,5 +6054,92 @@ mod tests {
             active_worktree_for_path(Path::new("/tmp/x"), &missing),
             None
         );
+    }
+
+    /// `(repo, linked worktree)` from a real `git worktree add`, under `base`.
+    fn git_repo_with_linked_worktree(base: &Path) -> (PathBuf, PathBuf) {
+        let repo = base.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |dir: &Path, args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t.t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t.t")
+                .output()
+                .expect("git spawns");
+            assert!(out.status.success(), "git {args:?}: {out:?}");
+        };
+        git(&repo, &["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join("a.txt"), "a\n").unwrap();
+        git(&repo, &["add", "a.txt"]);
+        git(&repo, &["commit", "-q", "-m", "seed"]);
+        let wt = base.join("wt");
+        git(
+            &repo,
+            &["worktree", "add", "-q", "-b", "side", wt.to_str().unwrap()],
+        );
+        (repo, wt)
+    }
+
+    /// backlog 43393ce2: `run_dir` resolves a NEW run to the canonical dir from
+    /// both checkouts, a run that exists only under the worktree's legacy key
+    /// to that legacy dir (from the worktree), and prefers canonical when both
+    /// exist. The run-state lock is published beside the run, in that dir.
+    #[test]
+    fn run_dir_is_canonical_for_new_runs_and_write_back_for_legacy_ones() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = make_test_cfg(tmp.path());
+        let (repo, wt) = git_repo_with_linked_worktree(tmp.path());
+        let canonical = cfg.state_dir.join(project_key(&repo));
+        let legacy = cfg.state_dir.join(project_key(&wt));
+        assert_ne!(canonical, legacy);
+
+        assert_eq!(run_dir(&cfg, &repo, "new").unwrap(), canonical);
+        assert_eq!(run_dir(&cfg, &wt, "new").unwrap(), canonical);
+        assert_eq!(
+            project_state_dirs(&cfg, &wt).unwrap(),
+            vec![canonical.clone(), legacy.clone()]
+        );
+        assert_eq!(
+            project_state_dirs(&cfg, &repo).unwrap(),
+            vec![canonical.clone()]
+        );
+
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("old.json"), "{}").unwrap();
+        assert_eq!(run_dir(&cfg, &wt, "old").unwrap(), legacy);
+        // The main tree has no legacy dir of its own: it sees canonical only.
+        assert_eq!(run_dir(&cfg, &repo, "old").unwrap(), canonical);
+
+        let guard = crate::lock::RunLock::acquire_run_state_or_skip(&cfg, &wt, "old")
+            .unwrap()
+            .expect("uncontended lock is held");
+        assert!(
+            legacy.join("old.lock").exists(),
+            "lock beside the legacy run"
+        );
+        drop(guard);
+
+        std::fs::create_dir_all(&canonical).unwrap();
+        std::fs::write(canonical.join("old.json"), "{}").unwrap();
+        assert_eq!(run_dir(&cfg, &wt, "old").unwrap(), canonical);
+    }
+
+    /// An unparseable gitfile makes the main worktree root undeterminable:
+    /// every resolver is an `Err`, never the per-checkout key.
+    #[test]
+    fn an_undeterminable_main_worktree_root_is_an_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = make_test_cfg(tmp.path());
+        let (_repo, wt) = git_repo_with_linked_worktree(tmp.path());
+        std::fs::write(wt.join(".git"), "garbage\n").unwrap();
+        assert!(project_state_dir(&cfg, &wt).is_err());
+        assert!(run_dir(&cfg, &wt, "r").is_err());
+        assert!(all_runs(&cfg, &wt).is_err());
+        assert!(RunState::load(&cfg, &wt, "r").is_err());
+        assert!(crate::lock::RunLock::acquire_run_state_or_skip(&cfg, &wt, "r").is_err());
     }
 }

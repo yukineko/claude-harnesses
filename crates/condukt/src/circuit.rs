@@ -515,7 +515,13 @@ pub fn run_circuit_check(
         idle_ttl_secs,
         recorded_at: state::now_secs(),
     };
-    crate::gatelog::append_circuit(&state::project_state_dir(cfg, cwd), run_id, &record);
+    // The run's own dir (see `state::run_dir`), so a legacy-keyed run's
+    // journal stays beside it. Journaling is fail-soft as before; an
+    // unlocatable dir is reported, not silently dropped.
+    match state::run_dir(cfg, cwd, run_id) {
+        Ok(dir) => crate::gatelog::append_circuit(&dir, run_id, &record),
+        Err(e) => eprintln!("condukt: warning: circuit check: not journaling: {e:#}"),
+    }
 
     match verdict {
         CircuitVerdict::Continue => 0,
@@ -774,8 +780,10 @@ mod tests {
         let code = run_circuit_check(&cfg, cwd, "trip-run", 3, 1800, None, None);
         assert_eq!(code, 1, "beyond-cap failure streak must trip (exit 1)");
         // and it journaled a trip record with the failure_streak reason.
-        let recs =
-            crate::gatelog::load_circuit_records(&state::project_state_dir(&cfg, cwd), "trip-run");
+        let recs = crate::gatelog::load_circuit_records(
+            &state::run_dir(&cfg, cwd, "trip-run").unwrap(),
+            "trip-run",
+        );
         assert_eq!(recs.len(), 1);
         assert_eq!(recs[0].verdict, "trip");
         assert_eq!(recs[0].reason.as_deref(), Some("failure_streak"));
@@ -818,7 +826,7 @@ mod tests {
             "an unloadable run's idleness is unmeasurable, which must not exit 0"
         );
         let recs = crate::gatelog::load_circuit_records(
-            &state::project_state_dir(&cfg, cwd),
+            &state::run_dir(&cfg, cwd, "does-not-exist").unwrap(),
             "does-not-exist",
         );
         assert_eq!(recs.len(), 1);
@@ -847,8 +855,10 @@ mod tests {
         run.save(&cfg, cwd).unwrap();
         let code = run_circuit_check(&cfg, cwd, "stale", 3, 1800, None, None);
         assert_eq!(code, 1);
-        let recs =
-            crate::gatelog::load_circuit_records(&state::project_state_dir(&cfg, cwd), "stale");
+        let recs = crate::gatelog::load_circuit_records(
+            &state::run_dir(&cfg, cwd, "stale").unwrap(),
+            "stale",
+        );
         assert_eq!(recs[0].reason.as_deref(), Some("stall"));
     }
 
@@ -1042,8 +1052,10 @@ mod tests {
             code, 1,
             "unmeasurable idleness must not exit 0 (that is the fail-open)"
         );
-        let recs =
-            crate::gatelog::load_circuit_records(&state::project_state_dir(&cfg, cwd), "no-ts");
+        let recs = crate::gatelog::load_circuit_records(
+            &state::run_dir(&cfg, cwd, "no-ts").unwrap(),
+            "no-ts",
+        );
         assert_eq!(recs.len(), 1);
         assert_eq!(recs[0].verdict, "trip");
         // The journaled record LABELS its unmeasured idle: `idle_secs` is an
@@ -1094,7 +1106,8 @@ mod backlog_a81911ee {
     }
 
     fn journal_lines(cfg: &Config, cwd: &Path, run_id: &str) -> Vec<serde_json::Value> {
-        let path = crate::gatelog::circuit_log_path(&state::project_state_dir(cfg, cwd), run_id);
+        let path =
+            crate::gatelog::circuit_log_path(&state::run_dir(cfg, cwd, run_id).unwrap(), run_id);
         let text = std::fs::read_to_string(&path).expect("circuit journal written");
         text.lines()
             .filter(|l| !l.trim().is_empty())

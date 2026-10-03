@@ -114,7 +114,6 @@ class BashGuard(unittest.TestCase):
         rc, err = self.w.bash_guard(f"cp /etc/hosts {self.w.wt}/.scratch/h 2>/dev/null")
         self.assertEqual(rc, 0, "fd number '2' treated as an operand: " + err[:200])
 
-    @open_defect("cc809395")
     def test_cc809395_relative_paths_resolve_against_cwd_not_main(self):
         rc, err = self.w.bash_guard("sed -i '' 's/a/b/' f.txt", cwd=self.w.wt)
         self.assertEqual(rc, 0, "relative operand resolved under main root: " + err[:200])

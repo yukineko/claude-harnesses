@@ -73,7 +73,8 @@ class RetryAfterDenyIsDetected(unittest.TestCase):
             capture_output=True, text=True, env=env,
         )
 
-    @unittest.expectedFailure  # backlog e033c406: open defect, remove when fixed
+    # Passes since ae4543d5: the guard now judges `python3 -c` payloads by
+    # effect, so the retry is refused on its own (no deny ledger involved).
     def test_same_target_retry_via_interpreter_after_deny_is_not_allowed(self):
         target = os.path.join(self.main, "tracked.rs")
         first = self._guard("rm " + target)

@@ -184,6 +184,19 @@ fn exit_on_err(r: anyhow::Result<()>) {
     }
 }
 
+/// The effective config for a read command, or refuse: a config file that
+/// exists but cannot be applied must not yield numbers computed from defaults
+/// (backlog 00880b3d). Prints the reason (naming the file) and exits 1.
+fn config_or_exit(root: &Path) -> Config {
+    match Config::load_checked(root) {
+        Determination::Known(cfg) => cfg,
+        Determination::Undetermined(why) => {
+            eprintln!("gauge: config unusable, refusing to report from defaults: {why}");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn record_hook() {
     if Config::disabled_env() {
         return;
@@ -193,7 +206,17 @@ fn record_hook() {
         return;
     };
     let root = input.cwd_or_current();
-    let cfg = Config::load(&root);
+    let cfg = match Config::load_checked(&root) {
+        Determination::Known(cfg) => cfg,
+        Determination::Undetermined(why) => {
+            // Which state_dir / enabled / track_tools the operator meant is
+            // unknown, so writing a record anywhere would be a guess. Record
+            // nothing and say why (budgetguard then prices the transcript
+            // itself; the transcript is not lost).
+            eprintln!("gauge: not recording session {}: {why}", input.session_id);
+            return;
+        }
+    };
     if !cfg.enabled {
         return;
     }
@@ -235,7 +258,7 @@ fn record_hook() {
 
 fn report_cmd(project: Option<String>, since: Option<String>) {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
-    let cfg = Config::load(&root);
+    let cfg = config_or_exit(&root);
     let mut records = known_records(store::load_all(&cfg.state_dir));
     if let Some(p) = project.as_deref() {
         let needle = p.to_lowercase();
@@ -249,7 +272,7 @@ fn report_cmd(project: Option<String>, since: Option<String>) {
 
 fn session_cmd(json: bool, session_id: Option<&str>) {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
-    let cfg = Config::load(&root);
+    let cfg = config_or_exit(&root);
 
     let rec = if let Some(id) = session_id {
         store::load_one(cfg.state_dir.as_path(), id)
@@ -515,7 +538,7 @@ fn subagent_json(s: &usage::SubAgentUsage, cost: Determination<f64>) -> serde_js
 
 fn subagents_cmd(json: bool, session_id: Option<&str>) {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
-    let cfg = Config::load(&root);
+    let cfg = config_or_exit(&root);
     let Some(path) = find_transcript(session_id) else {
         if json {
             println!("[]");
@@ -636,7 +659,7 @@ fn fmt_duration(secs: i64) -> String {
 
 fn status() {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
-    let cfg = Config::load(&root);
+    let cfg = config_or_exit(&root);
     // `unknown`, not `0` / `$0.00`: a human reads a zero here as "nothing was
     // spent". Only a store we actually read may produce a number.
     let (sessions_line, cost_line) = match store::load_all(&cfg.state_dir) {

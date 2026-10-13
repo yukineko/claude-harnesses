@@ -75,7 +75,6 @@ fn cost_of(home: &Path, sid: &str) -> f64 {
 /// $0.00 override that beats the built-in table. Controls pin the two
 /// legitimate cases (no override -> built-in; complete override -> override).
 #[test]
-#[ignore = "backlog 00880b3d: open defect, remove ignore when fixed"]
 fn backlog_00880b3d_malformed_pricing_override_is_not_a_zero_dollar_override() {
     // Control 1: no override.
     let h1 = home();

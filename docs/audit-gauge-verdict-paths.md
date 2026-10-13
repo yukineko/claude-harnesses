@@ -237,7 +237,7 @@ case 2 で gauge が persist した record（逐語）:
 
 **`agents` に `sub-agent` バケットが存在しない。** $270 の子は「読めなかった」ではなく
 「**居なかった**」として記録されている。`subagent_scan` は `Known(())` のままなので
-`complete()` は `Known` を返し、`crates/gauge/src/main.rs:212` `let aggregate = match est.aggregate.complete() {` の
+`complete()` は `Known` を返し、`crates/gauge/src/main.rs:235` `let aggregate = match est.aggregate.complete() {` の
 guard は素通りする。
 
 **case 3 が対照として決定的**である。同じセッション・同じ金額で、失敗の粒度だけが
@@ -789,7 +789,7 @@ cwd が解決できないときに `"."` へ落ちると、**別プロジェク�
         );
 ```
 
-**`crates/gauge/src/main.rs:557` `serde_json::to_string(&serde_json::Value::Array(arr)).unwrap_or_else(|_| "[]".into())` が既定値として出す `[]` は、その 25 行上（P7 で引いた 500-505 行）が
+**`crates/gauge/src/main.rs:580` `serde_json::to_string(&serde_json::Value::Array(arr)).unwrap_or_else(|_| "[]".into())` が既定値として出す `[]` は、その 25 行上（P7 で引いた 500-505 行）が
 「condukt にとって『sub-agent の支出は無かった』と伝えることになる」として拒否している当の値である。**
 同じ関数の中で、同じ出力が、一方では拒否され一方では既定値として使われている。
 
@@ -946,12 +946,12 @@ claim cites 81)` と報告する（exempt 扱いなので block はしない）�
 | R6 | `crates/gauge/src/main.rs:546-552` | `None => "time unknown".to_string(),` | 人間向けにも `0s` ではなく **`time unknown`** | — |
 | R7 | `crates/gauge/src/config.rs:116-120` | `std::env::var("GAUGE_DISABLE").map(\|v\| !v.is_empty() && v != "0").unwrap_or(false)` | **`false` は「無効化されていない」＝記録は armed のまま**。未設定・不正値で記録が止まらない。budgetguard R（`BUDGETGUARD_DISABLE`）と同一 | — |
 | R8 | find_transcript の最新候補選択（逐語は表の下） | `unwrap_or(true)` は**初回候補の採用**（`best` が `None` のときだけ真） | 判定ではない | — |
-| R9 | `crates/gauge/src/main.rs:335` | `report::money(costs.get(name).copied().unwrap_or(0.0)),` | `costs` は直前の `rec.agent_costs()` が**同じ `rec.agents` から**構築するので全キーが存在する。全域関数であり `unwrap_or` は到達しない | — |
+| R9 | `crates/gauge/src/main.rs:366` | `.get(name)` | `costs` は直前の `rec.agent_costs()` が**同じ `rec.agents` から**構築するので全キーが存在する。全域関数であり fallback は到達しない（監査時点の `.copied().unwrap_or(0.0)` は ff98fed0 の修正で、到達しても `unknown` を出す形に置き換えた） | — |
 | R10 | `crates/gauge/src/report.rs:150` / `:168` / `:190` | `.unwrap_or(std::cmp::Ordering::Equal)` | NaN コストの**並び順**にしか影響しない。合計にも判定にも入らない | — |
 | R11 | `crates/gauge/src/main.rs:139` | `Command::Record => run_hook(record_hook),` | **条件つき R**。panic → record 不在 → C1 が transcript 再パースへ fallback（正確な情報源）。§0 参照。**この免責は budgetguard 側の fallback が存在し続けることに依存しており、gauge 側は何も強制していない** | Probe 4-1（record 無しでも block $270.0075） |
 | R12 | `crates/harness-core/src/session.rs:135-161` | `pub fn upsert(…)` の無音失敗 | **消費者を列挙したうえで**宣言された免責（CLAUDE.md 第1節が要求する形式を満たす数少ない例）。書き込み欠落は「transcript から再導出」へ degrade する | — |
 
-R8 の逐語（`|` を含むため表の外に置く）— `crates/gauge/src/main.rs:444` `if best.as_ref().map(|(t, _)| modified > *t).unwrap_or(true) {`
+R8 の逐語（`|` を含むため表の外に置く）— `crates/gauge/src/main.rs:467` `if best.as_ref().map(|(t, _)| modified > *t).unwrap_or(true) {`
 
 ---
 
@@ -981,13 +981,13 @@ R8 の逐語（`|` を含むため表の外に置く）— `crates/gauge/src/mai
 | `crates/gauge/src/main.rs:560-562` `.or(s.agent_type.as_deref()).unwrap_or("")` | fail-open | **REFUTED** | 同上（人間向け列） |
 | `crates/gauge/src/report.rs:219-226` `truncate` | fail-open | **REFUTED** | 表示幅のみ |
 | `crates/gauge/src/main.rs:586-592` `duration_secs` の `.max(0)` が逆転した span を `0` に clamp | fail-open | **RECORDED, not asserted** | `span_secs`（R5）は逆転を `None` にするのに、`duration_secs` は `0` に clamp する — **同じ crate 内で方針が食い違っている**。ただし消費者は `session` の人間向け表示 1 箇所（`crates/gauge/src/main.rs:308-310`）のみで、判定には入らない。`crates/gauge/src/main.rs:446-450` の docstring がこの非対称を**意図として明記**しているので P には数えない |
-| `crates/gauge/src/config.rs:57` `pricing: Vec::new()` （`Default`） | 空集合 fail-open | **REFUTED（単独では）** | 「override なし」は**内蔵表へのフォールバック**であり、より permissive にはならない。**ただし P3 / P4 と組み合わさると** override が消えて価格が下がるので、そちらで数えている |
+| `crates/gauge/src/config.rs:69` `pricing: Vec::new()` （`Default`） | 空集合 fail-open | **REFUTED（単独では）** | 「override なし」は**内蔵表へのフォールバック**であり、より permissive にはならない。**ただし P3 / P4 と組み合わさると** override が消えて価格が下がるので、そちらで数えている |
 | `record_hook` の `HookInput::parse` → `None` 無音 return（`crates/gauge/src/main.rs:192-194`） | fail-open | **REFUTED（条件つき）** | 下流 C1 は record 不在で transcript 再パースへ fallback（Probe 4-1 で record 無しでも `$270.0075` の block を観測）。**ただしこれは budgetguard 側の性質であり、gauge 側は何も保証していない**（R11 と同じ caveat） |
 | `crates/harness-core/src/hook.rs:245-249` `run_hook` の常時 exit 0 | fail-open | **REFUTED** | CLAUDE.md 第1節が明示する carve-out（判定を持たない hook 用の入口）。gauge の record は §0 の分析どおり、欠落しても消費側が restrictive に倒れる。**ただし「部分的な record」は救われない → P1** |
 
 上の 2 行で表から外に出した逐語（`|` を含むため）:
 
-- `crates/gauge/src/main.rs:568` `path.file_stem().and_then(|s| s.to_str()).unwrap_or("")`
+- `crates/gauge/src/main.rs:591` `path.file_stem().and_then(|s| s.to_str()).unwrap_or("")`
 
 ---
 

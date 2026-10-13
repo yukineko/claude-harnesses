@@ -5,8 +5,7 @@ Both tickets: the UNGATED COMMIT guidance in .githooks/post-commit tells the
 reader to run `python3 scripts/gate-bypass.py --status`, but gate-bypass.py has
 no `--status` option (argparse usage error, exit 2).
 
-Fixed 2026-10-13 by correcting the hook's prose (the CLI was right), so the
-formerly ignored test now runs unconditionally: every
+The test was RED while 25692f6e was open (post-commit cited --status); every
 `gate-bypass.py --<flag>` the hook cites must be an option gate-bypass.py
 accepts. The non-ignored control proves the extractor sees the hook's citations
 at all (so the ignored test cannot pass vacuously on an empty set).

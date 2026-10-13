@@ -34796,11 +34796,11 @@ notes = """
 
 [backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test scripts/test_backlog_s06_misc_b_repros.py (rev e70d48dd)"""
 created_at = 1790687714
-updated_at = 1791865352
+updated_at = 1791856838
 weight = 0.0
 issue_number = 865
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/865"
-issue_closed_at = 1791865353
+issue_closed_at = 1791856841
 rev = 1
 
 [task.closure]
@@ -34808,24 +34808,18 @@ reason = "fixed"
 
 [task.closure.green]
 runner = "pytest"
-cmd = "python3 -m pytest scripts/test_backlog_1da483dc_25692f6e.py"
+cmd = "python3 -m pytest -q scripts/test_backlog_1da483dc_25692f6e.py"
 exit = 0
 passed = 2
-rev = "534c60cc0bea56d6c63a7cd790140e53af816298"
-observed_at = 1791865351
-output_digest = "sha256:74af22986d476a63501946f01632adb1a521fffac59b8d8ab3429593f3e7d514"
+rev = "2e373e4afeb49df300c1be759f7eaefcd7ea9eb1"
+observed_at = 1791856835
+output_digest = "sha256:19e95f03931508bcb63d5f1f276741db94fd3f8f0399d2690ed306a73c3ba6c7"
 excerpt = """
-============================= test session starts ==============================
-platform linux -- Python 3.12.3, pytest-7.4.4, pluggy-1.4.0
-rootdir: /home/hiroyuki_nakayama/src/.claude-harnesses-worktrees/session-7b97f0e7
-collected 2 items
-
-scripts/test_backlog_1da483dc_25692f6e.py ..                             [100%]
-
-============================== 2 passed in 0.04s ===============================
+..                                                                       [100%]
+2 passed in 0.08s
 """
 
 [task.closure.red]
-rev = "b0360875fdcc9ea418ca549f773d56ee996d3c31"
+rev = "d87077ff8d1fce283f8d31586069174fac2f231c"
 exit = 1
 kind = "behavioural"

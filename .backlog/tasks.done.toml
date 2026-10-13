@@ -35524,3 +35524,44 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "2a0167f6475425bd616f3eb94939e2d93bb6132c"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "25692f6e"
+title = ".githooks/post-commit が存在しない gate-bypass.py --status を案内する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-09-29 main 07804a76。worktree で git merge --ff-only main した直後に post-commit が「python3 scripts/gate-bypass.py --status reports non-zero」を表示。実際に叩くと 'error: unrecognized arguments: --status' (usage: gate-bypass.py [-h] [--repo REPO] [--json])。.githooks/post-commit:47 と :108、scripts/test_gate_bypass.py:1200 が --status を参照。読み (a) フラグが削除/改名されたのに hook とテストの文言が残った (b) --status が別ブランチで未 merge。見分け方: git log -S'--status' -- scripts/gate-bypass.py。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test scripts/test_backlog_s06_misc_b_repros.py (rev e70d48dd)"""
+created_at = 1790687714
+updated_at = 1791856838
+weight = 0.0
+issue_number = 865
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/865"
+issue_closed_at = 1791856841
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest -q scripts/test_backlog_1da483dc_25692f6e.py"
+exit = 0
+passed = 2
+rev = "2e373e4afeb49df300c1be759f7eaefcd7ea9eb1"
+observed_at = 1791856835
+output_digest = "sha256:19e95f03931508bcb63d5f1f276741db94fd3f8f0399d2690ed306a73c3ba6c7"
+excerpt = """
+..                                                                       [100%]
+2 passed in 0.08s
+"""
+
+[task.closure.red]
+rev = "d87077ff8d1fce283f8d31586069174fac2f231c"
+exit = 1
+kind = "behavioural"

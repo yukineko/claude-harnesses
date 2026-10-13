@@ -5196,25 +5196,6 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/863"
 rev = 0
 
 [[task]]
-id = "25692f6e"
-title = ".githooks/post-commit が存在しない gate-bypass.py --status を案内する"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = """
-実測 2026-09-29 main 07804a76。worktree で git merge --ff-only main した直後に post-commit が「python3 scripts/gate-bypass.py --status reports non-zero」を表示。実際に叩くと 'error: unrecognized arguments: --status' (usage: gate-bypass.py [-h] [--repo REPO] [--json])。.githooks/post-commit:47 と :108、scripts/test_gate_bypass.py:1200 が --status を参照。読み (a) フラグが削除/改名されたのに hook とテストの文言が残った (b) --status が別ブランチで未 merge。見分け方: git log -S'--status' -- scripts/gate-bypass.py。
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test scripts/test_backlog_s06_misc_b_repros.py (rev e70d48dd)"""
-created_at = 1790687714
-updated_at = 1790983301
-weight = 0.0
-issue_number = 865
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/865"
-rev = 0
-
-[[task]]
 id = "3d97dd01"
 title = "worktree での git merge --ff-only が、main で検査済みのコミットを gate-bypass 台帳に「未検査」として記録する"
 project = "/Users/yuki/src/harness"

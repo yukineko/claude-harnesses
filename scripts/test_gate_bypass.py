@@ -1200,7 +1200,7 @@ class KnownDefects(GateTestCase):
                     proc.returncode, 2, "%r must be refused" % command
                 )
 
-    def test_DEFECT_documented_status_flag_does_not_exist(self):
+    def test_FIXED_documented_status_flag_does_not_exist(self):
         """DEFECT (severity: low, but it is the docstring-lies class).
         `.githooks/post-commit` tells the reader to run
 
@@ -1211,6 +1211,9 @@ class KnownDefects(GateTestCase):
         command exits 2 with a usage error.  A reader who follows the printed
         instruction sees UNDETERMINED-coloured failure and cannot tell it apart
         from a real one, because 2 is also the undetermined code.
+
+        FIXED (backlog 25692f6e): the hook now cites the bare invocation and
+        `--json`; `--status` is still rejected, so the hook must not name it.
         """
         h = self.harness()
         proc = h.gate_bypass("--status")
@@ -1223,7 +1226,7 @@ class KnownDefects(GateTestCase):
         )
 
         hook_text = (_HOOKS_DIR / "post-commit").read_text()
-        self.assertIn(
+        self.assertNotIn(
             "gate-bypass.py --status",
             hook_text,
             "the hook still prints an invocation that does not exist",

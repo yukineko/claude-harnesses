@@ -180,7 +180,6 @@ class Backlog_ae8e917b(unittest.TestCase):
 
 
 class Backlog_25692f6e(unittest.TestCase):
-    @open_defect("25692f6e")
     def test_post_commit_does_not_advertise_a_nonexistent_status_flag(self):
         r = subprocess.run([sys.executable, str(HERE / "gate-bypass.py"), "--status"], capture_output=True, text=True)
         hook = (REPO / ".githooks" / "post-commit").read_text()

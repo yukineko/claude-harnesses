@@ -709,4 +709,105 @@ mod tests {
             "apparatus: the transcript usage must have been read:\n{cb}"
         );
     }
+
+    const SUBAGENT_WARNING: &str = "サブエージェント費用を読めませんでした";
+
+    /// backlog ff98fed0 (independent test author). `cost_incompleteness`
+    /// labels EVERY `complete_cost()` Undetermined as a sub-agent read
+    /// failure, so a session whose only model is unpriced (and which has no
+    /// sub-agents at all) renders
+    /// `- ⚠ サブエージェント費用を読めませんでした（以下は過少計上）: no price for model …`
+    /// — a false statement about the cause (nothing about sub-agents failed)
+    /// and about the shape ("過少計上" implies a lower bound; the total is
+    /// unknown). Required: the sub-agent warning appears only when the
+    /// sub-agent scan itself was undetermined; the unpriced model stays
+    /// reported as unknown cost on the total line.
+    ///
+    /// What this does NOT prove: it does not pin how (or whether) the unknown
+    /// price is additionally flagged beyond the `unknown (…)` total; it does
+    /// not exercise the gauge-record source of `session_models`, a mix of
+    /// priced and unpriced models, or an unpriced model COMBINED with an
+    /// undetermined sub-agent scan (where both messages would be warranted).
+    #[test]
+    fn cost_body_unpriced_model_is_not_labelled_a_subagent_read_failure() {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "si-record-{}-ff98fed0-mislabel.jsonl",
+            std::process::id()
+        ));
+        let body = concat!(
+            r#"{"type":"assistant","timestamp":"2026-06-22T10:00:01Z","message":{"model":"claude-newfamily-1","content":[{"type":"text","text":"x"}],"usage":{"input_tokens":1000000,"output_tokens":0,"cache_read_input_tokens":0}}}"#,
+            "\n",
+        );
+        std::fs::write(&p, body).unwrap();
+        let ctx = RecordCtx {
+            session_id: "no-such-session-ff98fed0-mislabel-xyzzy",
+            project: "harness",
+            date: "2026-06-22",
+            turns: 1,
+            tool_events: 0,
+            files_touched: 0,
+            transcript_path: p.to_str().unwrap(),
+            overrides: &[],
+        };
+        let cb = cost_body(&ctx);
+        let _ = std::fs::remove_file(&p);
+        assert!(
+            cb.lines()
+                .any(|l| l.starts_with("- total: unknown (") && l.contains("claude-newfamily-1")),
+            "apparatus: the unpriced model must reach the cost block as an unknown total:\n{cb}"
+        );
+        assert!(
+            !cb.contains(SUBAGENT_WARNING),
+            "backlog ff98fed0: an unpriced model (no sub-agents in the session) is reported as a \
+             sub-agent read failure:\n{cb}"
+        );
+    }
+
+    /// CONTROL for the test above: when the sub-agent scan really is
+    /// undetermined (one sub-agent transcript unreadable, mode 000) on a
+    /// PRICED model, the sub-agent warning must still be shown — so the probe
+    /// above cannot be satisfied by deleting the warning.
+    #[cfg(unix)]
+    #[test]
+    fn cost_body_undetermined_subagent_scan_still_warns() {
+        use std::os::unix::fs::PermissionsExt;
+        let base =
+            std::env::temp_dir().join(format!("si-record-{}-ff98fed0-subscan", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let sub_dir = base.join("sess").join("subagents");
+        std::fs::create_dir_all(&sub_dir).unwrap();
+        let line = concat!(
+            r#"{"type":"assistant","timestamp":"2026-06-22T10:00:01Z","message":{"model":"claude-opus-4-8","content":[{"type":"text","text":"x"}],"usage":{"input_tokens":1000,"output_tokens":0,"cache_read_input_tokens":0}}}"#,
+            "\n",
+        );
+        let main_path = base.join("sess.jsonl");
+        std::fs::write(&main_path, line).unwrap();
+        let victim = sub_dir.join("agent-aaa111.jsonl");
+        std::fs::write(&victim, line).unwrap();
+        std::fs::set_permissions(&victim, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let injected = std::fs::read_to_string(&victim).is_err();
+        let ctx = RecordCtx {
+            session_id: "no-such-session-ff98fed0-subscan-xyzzy",
+            project: "harness",
+            date: "2026-06-22",
+            turns: 1,
+            tool_events: 0,
+            files_touched: 0,
+            transcript_path: main_path.to_str().unwrap(),
+            overrides: &[],
+        };
+        let cb = cost_body(&ctx);
+        let _ = std::fs::set_permissions(&victim, std::fs::Permissions::from_mode(0o644));
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(
+            injected,
+            "fault injection ineffective: a mode-000 file is still readable (root?); \
+             this control proves nothing here"
+        );
+        assert!(
+            cb.contains(SUBAGENT_WARNING),
+            "an undetermined sub-agent scan must still be disclosed:\n{cb}"
+        );
+    }
 }

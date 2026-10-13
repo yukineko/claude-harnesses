@@ -3691,29 +3691,6 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/697"
 rev = 0
 
 [[task]]
-id = "ceb0a9bf"
-title = "fugu-router UserPromptSubmit hook emits additionalContext at TOP level, not inside hookSpecificOutput — routing context may never reach the model"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fugu-router",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-Found while settling 3e2aade5 (2026-09-24). crates/fugu-router/src/main.rs ~L541 builds json!({"additionalContext": ctx}) and adds systemMessage, printed as the UserPromptSubmit hook stdout. Primary source https://code.claude.com/docs/en/hooks.md: "Return additionalContext inside hookSpecificOutput alongside the event name" (Add context for Claude section) and hookSpecificOutput "requires a hookEventName field set to the event name" (JSON output section). Because the stdout starts with a brace it is parsed as JSON, so it is NOT added as plain-text context either. The comment claims additionalContext reaches the model; the documented schema says top-level additionalContext is not a documented field. UNVERIFIED by observation: needs a behavioural test (real claude -p run with the hook) before fixing. Same check applies to any other crate emitting top-level additionalContext (grep).
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/fugu-router/tests/backlog_s10_repro.rs (rev 7e635343)"""
-created_at = 1790179827
-updated_at = 1790983371
-weight = 0.0
-issue_number = 702
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/702"
-rev = 0
-
-[[task]]
 id = "bf262dc7"
 title = "clippy deny-lint opt-in: remaining 28 crates after b19aad51 (condukt, tdd, autoflow, ctxrot, compass, precommit-audit first)"
 project = "/Users/yuki/src/harness"

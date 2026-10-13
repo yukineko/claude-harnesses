@@ -35620,3 +35620,59 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "626d7e843ba290b2e8ad24519193b61e003bab42"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "ceb0a9bf"
+title = "fugu-router UserPromptSubmit hook emits additionalContext at TOP level, not inside hookSpecificOutput — routing context may never reach the model"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fugu-router",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+Found while settling 3e2aade5 (2026-09-24). crates/fugu-router/src/main.rs ~L541 builds json!({"additionalContext": ctx}) and adds systemMessage, printed as the UserPromptSubmit hook stdout. Primary source https://code.claude.com/docs/en/hooks.md: "Return additionalContext inside hookSpecificOutput alongside the event name" (Add context for Claude section) and hookSpecificOutput "requires a hookEventName field set to the event name" (JSON output section). Because the stdout starts with a brace it is parsed as JSON, so it is NOT added as plain-text context either. The comment claims additionalContext reaches the model; the documented schema says top-level additionalContext is not a documented field. UNVERIFIED by observation: needs a behavioural test (real claude -p run with the hook) before fixing. Same check applies to any other crate emitting top-level additionalContext (grep).
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/fugu-router/tests/backlog_s10_repro.rs (rev 7e635343)"""
+created_at = 1790179827
+updated_at = 1791922202
+weight = 0.0
+issue_number = 702
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/702"
+issue_closed_at = 1791922203
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p fugu-router --test backlog_s10_repro"
+exit = 0
+passed = 2
+rev = "f79cc0d79852bb100ea713e322084af06eb09a5e"
+observed_at = 1791922184
+output_digest = "sha256:63198a2f773e8b9297a1c1ce3d99c5e24e4a2f1e0bcaec1443b3c231aa0f978b"
+excerpt = """
+
+running 2 tests
+test backlog_ceb0a9bf_prompt_hook_nests_additional_context ... ok
+test backlog_3f3a0e90_missing_index_differs_from_no_match ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+
+   Compiling bitflags v2.13.0
+   Compiling harness-core v0.2.47 (/Users/yuki/src/.harness-worktrees/session-4dadba08/crates/harness-core)
+   Compiling proptest v1.11.0
+   Compiling fugu-router v0.1.43 (/Users/yuki/src/.harness-worktrees/session-4dadba08/crates/fugu-router)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.87s
+     Running tests/backlog_s10_repro.rs (target/debug/deps/backlog_s10_repro-fa1bcae43acdd4db)
+"""
+
+[task.closure.red]
+rev = "db59146e8a523574076c0185553995cf8c043b3e"
+exit = 101
+kind = "behavioural"

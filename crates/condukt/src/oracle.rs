@@ -958,46 +958,74 @@ mod tests {
     // bare name (`sh`, `git`) WITHOUT taking the read side, e.g.
     // `record_runs_exit_code_tests::zero_exit_status_is_counted_as_emitted`
     // (`Command::new("sh")`) and `lock::tests::git` (`Command::new("git")`), are
-    // not excluded by it. Both tests below spawn exactly the way those do.
+    // not excluded by it. The second test below spawns exactly the way those do.
 
-    /// Deterministic: the mutation window is held open by a barrier, and an
-    /// unguarded `sh` spawn is made inside it. Models the mutator with the same
-    /// write guard + empty-dir PATH the real helper uses; it does NOT call the
-    /// real helper, so it proves the HAZARD (a plain spawn can observe the
-    /// swapped PATH), not that this window produced any given historical flake.
-    #[cfg(unix)]
+    /// Invariant: no condukt source file (tests included) mutates the
+    /// process-wide PATH. A custom PATH for a child must be passed to that
+    /// child (`Command::env("PATH", ..)` or an injected parameter), because a
+    /// process-wide swap is visible to every concurrently spawning thread.
+    /// Deterministic source scan; the needles are built at runtime so this file
+    /// does not match itself, and `//` comments are ignored. Whitespace (also
+    /// across lines), `unsafe {}` wrappers and `env::` / `std::env::` prefixes
+    /// are all irrelevant because the match is on `set_var("PATH"` /
+    /// `remove_var("PATH"` with whitespace stripped. This proves the invariant
+    /// on the source, not that any flake is gone.
     #[test]
-    fn unguarded_spawn_succeeds_while_path_is_swapped_to_an_empty_dir() {
-        use std::sync::{Arc, Barrier};
-        let barrier = Arc::new(Barrier::new(2));
-        let b2 = Arc::clone(&barrier);
-        let mutator = std::thread::spawn(move || {
-            let _guard = crate::env_lock::PATH_ENV_LOCK
-                .write()
-                .unwrap_or_else(|e| e.into_inner());
-            let tmp = tempfile::TempDir::new().unwrap();
-            let empty_bin = tmp.path().join("empty-bin");
-            std::fs::create_dir_all(&empty_bin).unwrap();
-            let old_path = std::env::var_os("PATH");
-            std::env::set_var("PATH", &empty_bin);
-            b2.wait(); // window open
-            b2.wait(); // spawner done
-            match old_path {
-                Some(p) => std::env::set_var("PATH", p),
-                None => std::env::remove_var("PATH"),
+    fn condukt_never_mutates_process_path() {
+        let q = '"';
+        let needles = [
+            format!("set_var({q}PATH{q}"),
+            format!("remove_var({q}PATH{q}"),
+        ];
+        fn rs_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(dir).expect("cannot read source dir") {
+                let p = e.expect("cannot read dir entry").path();
+                if p.is_dir() {
+                    rs_files(&p, out);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    out.push(p);
+                }
             }
-        });
-        barrier.wait();
-        // Exactly the unguarded spawn in zero_exit_status_is_counted_as_emitted.
-        let got = std::process::Command::new("sh")
-            .args(["-c", "exit 0"])
-            .status();
-        barrier.wait();
-        mutator.join().unwrap();
-        let st = got.unwrap_or_else(|e| {
-            panic!("unguarded `sh` spawn observed the swapped PATH and failed: {e}")
-        });
-        assert!(st.success());
+        }
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        rs_files(&root, &mut files);
+        assert!(
+            !files.is_empty(),
+            "scan found no source files under {}",
+            root.display()
+        );
+        let mut offenders = Vec::new();
+        for f in &files {
+            let text = std::fs::read_to_string(f)
+                .unwrap_or_else(|e| panic!("cannot read {}: {e}", f.display()));
+            // Whitespace-stripped content, each char remembering its line.
+            let mut stripped = String::new();
+            let mut line_of = Vec::new();
+            for (i, line) in text.lines().enumerate() {
+                let code = line.split("//").next().unwrap_or("");
+                for c in code.chars().filter(|c| !c.is_whitespace()) {
+                    stripped.push(c);
+                    line_of.push(i + 1);
+                }
+            }
+            let chars: Vec<char> = stripped.chars().collect();
+            for n in &needles {
+                let nc: Vec<char> = n.chars().collect();
+                for s in 0..chars.len().saturating_sub(nc.len() - 1) {
+                    if chars[s..s + nc.len()] == nc[..] {
+                        offenders.push(format!("{}:{}", f.display(), line_of[s]));
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "process-wide PATH mutation found at {} site(s); pass PATH to the child via \
+             Command::env instead:\n{}",
+            offenders.len(),
+            offenders.join("\n")
+        );
     }
 
     /// Same hazard against the REAL mutator: run the actual no-tdd helper

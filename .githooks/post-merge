@@ -53,8 +53,16 @@ fi
 #   fast-forward       git writes the HEAD reflog entry "<action>: Fast-forward"
 #                      (plus " (no commit created; -m option ignored)" with -m).
 #                      A merge that creates a commit writes "<action>: Merge
-#                      made by the '<strategy>' strategy." instead. The entry is
-#                      honoured only when it is about the current HEAD.
+#                      made by the '<strategy>' strategy." (or, for -s resolve,
+#                      "<action>: In-index merge") instead. Only <action> is
+#                      user-controlled (GIT_REFLOG_ACTION), so the patterns are
+#                      anchored on the fixed SUFFIX: a prefix of "x: Fast-forward"
+#                      on a real merge still ends in "...strategy.". The entry
+#                      is honoured only when it is about the current HEAD.
+#
+# Scope, stated: a merge commit created in ANOTHER clone and fast-forwarded in
+# here is not recorded (the old parent-count check recorded it only by
+# accident; a fetched single-parent commit was never recorded either).
 #
 # Only a POSITIVE fast-forward/squash observation skips the recorder. Anything
 # else — a merge-made entry, no reflog at all (core.logAllRefUpdates=false),

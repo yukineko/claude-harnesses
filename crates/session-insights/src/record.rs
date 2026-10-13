@@ -653,4 +653,60 @@ mod tests {
         );
         let _ = std::fs::remove_file(&p);
     }
+
+    /// backlog ff98fed0 (consumer erasure). A transcript whose only model
+    /// (`claude-newfamily-1`) has usage but no known rate (and no override)
+    /// must render the `## コスト` total as `unknown (why)` — never `$0.00 USD`,
+    /// which a reader takes as "nothing was spent". The per-agent line for the
+    /// same usage must likewise not be a dollar figure.
+    ///
+    /// What this does NOT prove: it does not exercise the gauge-record source
+    /// of `session_models` (the session id has no gauge record, so the
+    /// transcript fallback is taken), a mix of priced and unpriced models, or
+    /// `[[price]]` overrides; it does not pin the exact reason text.
+    #[test]
+    fn cost_body_unpriced_model_total_is_unknown_not_zero() {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "si-record-{}-ff98fed0-unpriced.jsonl",
+            std::process::id()
+        ));
+        let body = concat!(
+            r#"{"type":"assistant","timestamp":"2026-06-22T10:00:01Z","message":{"model":"claude-newfamily-1","content":[{"type":"text","text":"x"}],"usage":{"input_tokens":1000000,"output_tokens":0,"cache_read_input_tokens":0}}}"#,
+            "\n",
+        );
+        std::fs::write(&p, body).unwrap();
+        let ctx = RecordCtx {
+            session_id: "no-such-session-ff98fed0-unpriced-xyzzy",
+            project: "harness",
+            date: "2026-06-22",
+            turns: 1,
+            tool_events: 0,
+            files_touched: 0,
+            transcript_path: p.to_str().unwrap(),
+            overrides: &[],
+        };
+        let cb = cost_body(&ctx);
+        let _ = std::fs::remove_file(&p);
+        let total = cb
+            .lines()
+            .find(|l| l.starts_with("- total:"))
+            .unwrap_or_else(|| unreachable!("no total line in cost body: {cb}"));
+        // A determined cell renders as `$x.xx USD` (`usd_cell`); the reason
+        // text legitimately contains "(not $0)", which is not an amount, so the
+        // discriminator is the ` USD` suffix / a `$0.0` amount.
+        let has_amount = |s: &str| s.contains(" USD") || s.contains("$0.0");
+        assert!(
+            total.starts_with("- total: unknown (") && !has_amount(total),
+            "backlog ff98fed0: unpriced model total must be unknown, got {total:?}\n{cb}"
+        );
+        assert!(
+            !has_amount(&cb),
+            "backlog ff98fed0: no dollar cell may appear for unpriced usage:\n{cb}"
+        );
+        assert!(
+            cb.contains("- total tokens: 1000000"),
+            "apparatus: the transcript usage must have been read:\n{cb}"
+        );
+    }
 }

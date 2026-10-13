@@ -197,7 +197,7 @@ dependencies = [
 
 [[package]]
 name = "budgetguard"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "anyhow",
  "chrono",
@@ -586,7 +586,7 @@ dependencies = [
 
 [[package]]
 name = "gauge"
-version = "0.3.21"
+version = "0.3.23"
 dependencies = [
  "anyhow",
  "chrono",
@@ -683,7 +683,7 @@ dependencies = [
 
 [[package]]
 name = "harness-status"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "anyhow",
  "clap",
@@ -1241,7 +1241,7 @@ dependencies = [
 
 [[package]]
 name = "session-insights"
-version = "0.2.23"
+version = "0.2.24"
 dependencies = [
  "anyhow",
  "chrono",

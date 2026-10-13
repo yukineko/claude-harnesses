@@ -310,7 +310,7 @@ pub fn near_duplicate_report(anchor: &Task, peers: &[NearDuplicate], threshold: 
             "near-duplicate scan for {}: no queued peer scored >= {threshold} — this is NOT \
              \"checked, no duplicates\": the scorer is lexical Jaccard (Japanese as character \
              bigrams, backlog 7b6bcfe6), so it cannot see a duplicate that is worded \
-             differently — the known Japanese duplicate pair 91e503c8/15eb3f94 scores 0.14.",
+             differently — the known Japanese duplicate pair 91e503c8/15eb3f94 scores 0.26.",
             anchor.id
         );
     }
@@ -368,7 +368,7 @@ mod tests {
         "donegate/reviewgate の required check を自分の worktree スコープに絞る (workspace 全体スキャンをやめる)";
     /// `text_similarity(TITLE_91E503C8, TITLE_15EB3F94)` as measured 2026-10-13
     /// with the character-bigram tokenizer (backlog 7b6bcfe6). An observation.
-    const MEASURED_PAIR_SCORE: f64 = 0.13793103448275862;
+    const MEASURED_PAIR_SCORE: f64 = 0.2631578947368421;
 
     // --- (B) three-valued scope overlap -------------------------------------
 
@@ -478,16 +478,17 @@ mod tests {
     /// a FACT in the repo rather than a claim: this known duplicate pair is NOT
     /// caught at 0.6. Before backlog 7b6bcfe6 the cause was the tokenizer (a whole
     /// Japanese clause was one token; 0.263 came only from the English words).
-    /// With Japanese now tokenized as character bigrams the pair scores LOWER,
-    /// because the two titles are a paraphrase sharing few bigrams: lexical
-    /// overlap cannot see this duplicate. The threshold is deliberately left at
+    /// Japanese is now also scored as character bigrams, but the bigram score
+    /// for this pair is lower (0.138: a paraphrase sharing few bigrams) and
+    /// `text_similarity` takes the max of the two scorers, so the value stays
+    /// 0.263: lexical overlap cannot see this duplicate. The threshold is deliberately left at
     /// 0.6 — bending it to make this pair match would drag in unrelated pairs.
     #[test]
     fn measured_similarity_of_the_known_duplicate_pair() {
         let measured = harness_core::lessons::text_similarity(TITLE_91E503C8, TITLE_15EB3F94);
         // Observed 2026-09-13 (old tokenizer): 0.2631578947368421 (5/19).
-        // Re-measured 2026-10-13 after the bigram tokenizer (7b6bcfe6),
-        // `cargo test -p backlog`: see the value below. Still NOT caught.
+        // Re-measured 2026-10-14 after 7b6bcfe6 (max of word and bigram
+        // Jaccard), `cargo test -p backlog`: unchanged. Still NOT caught.
         assert_eq!(
             measured, MEASURED_PAIR_SCORE,
             "this is an OBSERVATION of what text_similarity returns, not a target"

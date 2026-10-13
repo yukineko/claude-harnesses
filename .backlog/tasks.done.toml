@@ -35877,3 +35877,165 @@ test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "d499988e50962745847fc167cbd645bc7f6b8dcc"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "8a4fe104"
+title = "condukt claim.rs backlog_pending maps a non-zero backlog list to an empty Vec"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+crates/condukt/src/claim.rs backlog_pending: a failed backlog list returns Vec::new(). Since backlog 0.3.9 (f09db5ce) list exits non-zero when the claim ledger is unreadable or the project identity is undetermined, so this path is now more reachable: an undetermined queue renders as no pending tasks in execution-state. Found by the f09db5ce verifier 2026-09-24.
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/condukt/tests/backlog_s03_audit.rs (rev e70d48dd)"""
+created_at = 1790218379
+updated_at = 1791931784
+weight = 0.0
+issue_number = 764
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/764"
+issue_closed_at = 1791931788
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test execution_state_unreadable_backlog"
+exit = 0
+passed = 9
+rev = "192c07bfdc91c89ae9ae5b99dd982aed2a65de4e"
+observed_at = 1791931760
+output_digest = "sha256:b09dea4dea76444f9d0ada10556e9f0061c0b213046610d1ce1368a5db5be266"
+excerpt = """
+
+running 9 tests
+test backlog_list_json_scalar_fails_execution_state ... ok
+test backlog_list_garbage_output_fails_execution_state ... ok
+test backlog_list_object_without_tasks_fails_execution_state ... ok
+test backlog_list_nonzero_exit_fails_execution_state ... ok
+test control_empty_queue_succeeds ... ok
+test backlog_list_tasks_not_array_fails_execution_state ... ok
+test backlog_list_row_without_title_fails_execution_state ... ok
+test backlog_list_non_object_rows_fail_execution_state ... ok
+test control_shim_row_is_joined_into_execution_state ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.94s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/execution_state_unreadable_backlog.rs (target/debug/deps/execution_state_unreadable_backlog-95bc2793abe0f6e2)
+"""
+
+[task.closure.red]
+rev = "85c6b1dc4f2c41877898ed59e44ed20bc253035f"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "1d2446de"
+title = "gate-bypass ledger が pre-merge-commit を green で通った merge を ungated として記録する (98548fda が 2 重に載り push が blocked)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+観測 (2026-09-24、すべて実測):
+
+python3 scripts/gate-bypass.py --json
+  verdict=outstanding、entries に 98548fda が 2 回。
+  .git/gate-bypassed にも同じ行が 2 行ある。
+  scripts/gate-bypass.py の docstring どおり exit 1 相当で、push が blocked になる。
+
+しかし当の merge は gate を素通りしていない。agent の transcript に残っている
+その merge の出力には pre-merge-commit の全チェックが green で並んでいる:
+  check-doc-claims / check-claudemd-claims OK
+  41 plugins version-consistent、un-bumped なし
+  hardcoded-secret-guard clean、raw-io-ratchet count == baseline (46)
+  GATE_CRATES consistent、launcher-exec-bit 39/39
+  clippy-lints: checking blastguard -> clean
+  main-tree-guard: allowed - Merge in progress (declared by .githooks/pre-merge-commit
+    and corroborated by GIT_REFLOG_ACTION)
+  check-test-weakening: no unacknowledged test weakening
+コマンドは素の git merge --no-ff で、--no-verify は付いていない
+(transcript を grep して確認した。付いていたら pre-merge-commit の出力自体が出ない)。
+
+つまり .githooks/post-merge が「pre-commit が certify した tree hash」と
+実際に commit された tree を比べる仕組みで、gate が実際に走って green だったのに
+不一致と判定している。.githooks/post-commit の header はこの仕組みを
+  match   -> gate を通った。sentinel を消費して黙る
+  no match -> 検査されていない。ledger へ追記
+と書いている。今回は「検査された」が「no match」になっている。
+
+対照 (同じ session の同じ main tree での merge):
+  9db95175 (conflict 解決後の git commit 経由)  -> ledger に載っていない
+  f6add075 (素の git merge --no-ff)            -> ledger に載っていない
+  98548fda (素の git merge --no-ff)            -> 2 回載っている
+f6add075 と 98548fda は同じコマンド形なので、コマンドの違いでは説明できない。
+差分の候補は「触ったファイルの種類」(前者は .backlog/tasks.toml のみ、後者は
+crates/blastguard/src/detect.rs + version 3 点 + Cargo.lock) と
+「clippy が実際に走ったかどうか」(前者は nothing to check、後者は blastguard を checking)。
+どちらが効いているかは未検証。ここから先は推測になるので測っていない。
+
+なぜ重要か: これは 4. が最も嫌う向きの逆、すなわち「検査したのに検査していないと
+記録する」偽陽性である。fail-open ではないので安全側ではあるが、
+偽陽性が常態化すると ledger が「いつもの赤」になり、本物の --no-verify が
+紛れても誰も見なくなる。ledger の価値はそこにしかないので、偽陽性は実害がある。
+2 重登録も別軸の bug (1 merge = 1 entry のはず)。
+
+done_criteria:
+  (1) 同じ形の merge (crate のソースを含む素の git merge --no-ff) を再現させ、
+      post-merge が ledger に書く条件を RED として観測すること。
+      推測ではなく、sentinel の tree hash と commit の tree hash を実際に
+      並べて差を見ること。
+  (2) 1 つの merge が 2 entry になる経路を特定すること。
+  (3) 偽陽性であれば post-merge 側を直す。もし「certify した tree と
+      commit された tree が本当に違う」のなら、それは gate が別の内容を
+      見ていたということなので、偽陽性ではなく pre-merge-commit 側の欠陥として
+      扱うこと。3. に従い、どちらか判定できないうちは ledger を黙らせない。
+
+注意: ledger は scripts/gate-bypass.py からは消せない (--clear を意図的に
+持たない)。green な pre-commit が走ると消える設計なので、次の通常 commit で
+消える見込みだが、それは「原因が直った」ことを意味しない。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Not a duplicate. The finder admitted inference. done_criteria (1)-(3) concern the post-merge / pre-merge-commit tree-hash path, which 3d97dd01 (ff-only in worktrees) does not cover.; test - (rev e70d48dd)"""
+created_at = 1790239210
+updated_at = 1791931847
+weight = 0.0
+issue_number = 769
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/769"
+issue_closed_at = 1791931850
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_backlog_1d2446de.py"
+exit = 0
+passed = 11
+rev = "192c07bfdc91c89ae9ae5b99dd982aed2a65de4e"
+observed_at = 1791931791
+output_digest = "sha256:7e00fd2a325b6254fcf2127afa5d402d7858d518a7e2ef96dede387c7041d969"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-4dadba08
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 11 items
+
+scripts/test_backlog_1d2446de.py ...........                             [100%]
+
+============================= 11 passed in 28.53s ==============================
+"""
+
+[task.closure.red]
+rev = "4b178c2d72c961d56358950bfa61f208302747cd"
+exit = 1
+kind = "behavioural"

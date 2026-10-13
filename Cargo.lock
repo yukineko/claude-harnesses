@@ -197,7 +197,7 @@ dependencies = [
 
 [[package]]
 name = "budgetguard"
-version = "0.1.29"
+version = "0.1.30"
 dependencies = [
  "anyhow",
  "chrono",
@@ -586,7 +586,7 @@ dependencies = [
 
 [[package]]
 name = "gauge"
-version = "0.3.18"
+version = "0.3.19"
 dependencies = [
  "anyhow",
  "chrono",

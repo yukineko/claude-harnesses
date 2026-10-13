@@ -414,7 +414,8 @@ backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drive
    - `<pdo-unit-id>` は backlog なら `hashkey`、compass 主筋 / measure / hypothesis なら move / 仮説 ID など
      その PDO 単位を一意に指す文字列。**この key は Step 4 の `overwatch end` で解放するため控えておく**。
    - `--scope` は分かるなら condukt の `touched_files` と同じ語彙（カンマ区切り）で渡す。調査・carve ループ中など
-     scope が未確定なら**省略**する（空 scope は衝突検知の対象外）。
+     scope が未確定なら**省略**する（空 scope は「重なり無し」ではなく `scope_undeclared` として報告される。
+     自分の scope が空なら全 peer が `scope_undeclared` に並ぶ＝衝突を判定できていない、の意味）。
    - **バッチ（複数 backlog item）なら item ごとに `overwatch begin` を呼ぶ**（key = 各 item の `hashkey`）。
    - **fail-soft**: `overwatch` バイナリが無い / 呼び出し失敗時は skip して続行する（既存の
      `backlog`/`condukt`/`compass` 欠落時と同じ方針＝turn を壊さない）。

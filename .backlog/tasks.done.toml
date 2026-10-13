@@ -35676,3 +35676,204 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "db59146e8a523574076c0185553995cf8c043b3e"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "2ae3fa29"
+title = "budgetguard lock::LedgerLock が parallelguard と同じ O_EXCL + 30s mtime stale-steal (CA-parallelguard-01/02 の mirror 候補)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+Mirror sweep of CA-2026W39: docs/specs/budgetguard.md describes the same create_new + 30s stale-steal pattern parallelguard had (drop removes by path; two waiters can both steal). UNVERIFIED — only the spec doc was read, not the code. If confirmed, the parallelguard fix c9a28dc2 (std File::try_lock kernel advisory lock, guard owns File, never unlink) is the template; tests in crates/parallelguard/src/store.rs ca_parallelguard_01/02 are the model (02 is a 24-thread race, RED 6/6 on the old scheme).
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/budgetguard/src/lock.rs (rev 7e635343)"""
+created_at = 1790184456
+updated_at = 1791925246
+weight = 0.0
+issue_number = 743
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/743"
+issue_closed_at = 1791925249
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p budgetguard ca_budgetguard_lock"
+exit = 0
+passed = 2
+rev = "9921e3461ecfe43210d87924f04d3d3b9433d540"
+observed_at = 1791925199
+output_digest = "sha256:b62b8a404212492cb7272dc5849ea22678a6c675a77c131e89398266fa63cbf6"
+excerpt = """
+
+running 2 tests
+test lock::ca_budgetguard_lock::ca_budgetguard_lock_01 ... ok
+test lock::ca_budgetguard_lock::ca_budgetguard_lock_02 ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 44 filtered out; finished in 27.65s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+   Compiling harness-core v0.2.47 (/Users/yuki/src/.harness-worktrees/session-4dadba08/crates/harness-core)
+   Compiling overwatch v0.2.61 (/Users/yuki/src/.harness-worktrees/session-4dadba08/crates/overwatch)
+   Compiling budgetguard v0.1.28 (/Users/yuki/src/.harness-worktrees/session-4dadba08/crates/budgetguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.71s
+     Running unittests src/main.rs (target/debug/deps/budgetguard-da719cb41f98cd48)
+     Running tests/backlog_a1cc21f2.rs (target/debug/deps/backlog_a1cc21f2-8fda4e653db1075f)
+     Running tests/integration.rs (target/debug/deps/integration-dcfcc4e1f29c99a2)
+     Running tests/launcher_missing_binary.rs (target/debug/deps/launcher_missing_binary-24602e0333ab505b)
+"""
+
+[task.closure.red]
+rev = "99869c097ed8f4aecc94e3b3ca7cd5e7a2fda6cf"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "7c798579"
+title = "condukt claim_progress_head_signal / diffrisk_record journaling tests fail under concurrent test-binary runs (fixture dir vanishes, record count 1 vs 2)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "flaky",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+Measured 2026-09-23, branch session-9d349393 at 2ddbd51d. Running 16 copies of the full condukt test binary, 8 at a time: claim::tests::claim_progress_head_signal_binds_each_head_to_its_owning_task failed 2/16 and diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded failed 1/16. Neither failed in 6 single-copy runs under CPU load.
+Verbatim (claim.rs:2665): left Undetermined(... git rev-parse HEAD could not be spawned in /var/folders/.../condukt-claim-claim-scope-identity-23640-0/wt-b: No such file or directory (os error 2)) right Known(Progressing). The fixture worktree directory is missing mid-test.
+Verbatim (diffrisk_record.rs:540): one record per invocation, left 1 right 2.
+Readings: (a) fixture paths shared across processes or another test cleaning temp dirs / a shared journal path (cross-process fixture collision, cf. memory killed-task-leaves-orphan-loop); (b) a spawn failure under process pressure reported as missing dir. Discriminator: print the fixture paths and check for cross-process reuse; rerun with unique per-process roots.
+This is the same load/concurrency-sensitive class as 8c5d46fa and 35d61d23.
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Not a pure duplicate. Besides the diffrisk_record flake that e494a8a3 owns (pinned RED by the shared test), it also reports a separate failure, claim::tests::claim_progress_head_signal_binds_each_head; test - (rev e70d48dd)"""
+created_at = 1790127753
+updated_at = 1791925275
+weight = 0.0
+issue_number = 678
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/678"
+issue_closed_at = 1791925278
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --bin condukt condukt_never_mutates_process_path"
+exit = 0
+passed = 1
+rev = "9921e3461ecfe43210d87924f04d3d3b9433d540"
+observed_at = 1791925256
+output_digest = "sha256:24235646fd80a750a955c0ff053a76dfe5ca1a85854788233a4e571d46e70ced"
+excerpt = """
+
+running 1 test
+test oracle::tests::condukt_never_mutates_process_path ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 904 filtered out; finished in 0.09s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/main.rs (target/debug/deps/condukt-61d47fd7aeaf0a15)
+"""
+
+[task.closure.red]
+rev = "31c8d8f363c3e98e2eb337e7158870eb1dba7f24"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "6a668d24"
+title = "claim-skip ゲートの deadlock: is-claimed は期限切れしないが backlog は 1 時間で requeue する — 51 日前の死んだ claim が task を恒久的に着手不能にする"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flow",
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-09-24、測定点 38b460f0。backlog 67e95a19 (hashkey 3358a647274b19d0) の
+task claim を run `flow-5aaa9924-681a-4c95-8b6e-8579166d725a` が保持していた。
+  claimed_at == heartbeat_at (一度も heartbeat していない)
+  経過 1218.6 時間 (約 51 日)
+  pid 16722 は不在
+  ~/.claude/projects/-Users-yuki-src-harness/ に 5aaa9924* の transcript が存在しない
+
+機構: backlog 側は CLAIM_STALE_SECS (1 時間) で status を pending へ戻すので、item は
+何度でも `next --claim` に現れる。しかし condukt の claim registry 側は期限切れしないため
+`condukt state is-claimed` が exit 0 を返し続ける。flow の claim-skip ゲートは exit 0 を
+「他セッションが作業中」と読んで item を pending へ戻す。**結果としてどのセッションも
+永久に着手できない。** 2 つのストアの期限が非対称なことが原因。
+
+今回は死亡の証拠を 4 つ独立に確認 (上記) したうえで `condukt policy answer --approval` を
+通し、`condukt state release-task` で手動解放した。手動解放が要るということ自体が欠陥。
+
+注意: pid の不在は単独では証拠にならない (claim-task は一度きりの CLI なので pid は常に
+死んでいる。memory: maintree-guard-stale-lock)。transcript の不在と 51 日という経過が
+効いている証拠である。
+
+done_criteria: 2 つのストアの期限を同じ根拠で揃えるか、is-claimed が死んだ run の claim を
+claimed:true と報告しない。手動 release-task なしに item が再び着手可能になること。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: The existing claim::tests::stateless_marked_unreadable_transcript_is_kept passes (9/9 stateless tests green), but that covers only marked claims. The item's observed dead claim (transcript absent, unm; test - (rev e70d48dd)"""
+created_at = 1790183636
+updated_at = 1791925298
+weight = 0.0
+issue_number = 710
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/710"
+issue_closed_at = 1791925300
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_6a668d24_dead_claim"
+exit = 0
+passed = 6
+rev = "9921e3461ecfe43210d87924f04d3d3b9433d540"
+observed_at = 1791925279
+output_digest = "sha256:d088483019b6a31578703309ab658630585de71ac5dcfbad8b53203f0bfffc56"
+excerpt = """
+
+running 6 tests
+test live_stateless_holder_with_transcript_under_claude_config_dir_stays_claimed ... ok
+test live_holder_with_transcript_under_claude_config_dir_stays_claimed ... ok
+test old_claim_with_undeterminable_transcript_stays_claimed ... ok
+test fresh_unmarked_claim_stays_claimed ... ok
+test old_non_flow_run_claim_stays_claimed ... ok
+test dead_unmarked_claim_is_not_reported_claimed ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.84s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_6a668d24_dead_claim.rs (target/debug/deps/backlog_6a668d24_dead_claim-07726c528c645bba)
+"""
+
+[task.closure.red]
+rev = "d499988e50962745847fc167cbd645bc7f6b8dcc"
+exit = 101
+kind = "behavioural"

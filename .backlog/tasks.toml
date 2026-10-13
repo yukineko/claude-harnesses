@@ -3490,33 +3490,6 @@ ruling_kind = "judgment"
 rationale = "Verifier FAIL (c)+(e) on the implementation kept on branch run-20261004-035459-30460/90e78490 (commit 103ae521, blastguard 0.2.109, NOT merged; verifier test saved at scratchpad 90e78490-v-test.rs). The fix blanks >=, >, => in classify's prose view when the following token is a bare word. That cannot tell 'm > built_at' (prose) from ': > Makefile' / 'echo x > credentials' (a real truncation that detect itself Denies as unrecoverable-unknown): at the tip those become Low + reversible = auto-exec, while base force-gated them. Docstring classify.rs:203 claims the exclusion cannot disable the gate. This is the false-gate vs escape trade-off the ticket names. Options: (A) when any operator was blanked, floor the result at Medium + irreversible (no schedule force-gate, so prose tasks run; never auto-exec at gate_exec; literal truncations of bare-word files then also stop being force-gated); (B) blank only when the left side is also prose-shaped (no shell command word such as : echo printf cat tee before the operator) and floor as in A; (C) leave classify as-is and move the fix to condukt (stop feeding done_criteria to the shell classifier, classify only title + touched_files); (D) keep the false positives (status quo)."
 
 [[task]]
-id = "7c798579"
-title = "condukt claim_progress_head_signal / diffrisk_record journaling tests fail under concurrent test-binary runs (fixture dir vanishes, record count 1 vs 2)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "condukt",
-    "flaky",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-Measured 2026-09-23, branch session-9d349393 at 2ddbd51d. Running 16 copies of the full condukt test binary, 8 at a time: claim::tests::claim_progress_head_signal_binds_each_head_to_its_owning_task failed 2/16 and diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded failed 1/16. Neither failed in 6 single-copy runs under CPU load.
-Verbatim (claim.rs:2665): left Undetermined(... git rev-parse HEAD could not be spawned in /var/folders/.../condukt-claim-claim-scope-identity-23640-0/wt-b: No such file or directory (os error 2)) right Known(Progressing). The fixture worktree directory is missing mid-test.
-Verbatim (diffrisk_record.rs:540): one record per invocation, left 1 right 2.
-Readings: (a) fixture paths shared across processes or another test cleaning temp dirs / a shared journal path (cross-process fixture collision, cf. memory killed-task-leaves-orphan-loop); (b) a spawn failure under process pressure reported as missing dir. Discriminator: print the fixture paths and check for cross-process reuse; rerun with unique per-process roots.
-This is the same load/concurrency-sensitive class as 8c5d46fa and 35d61d23.
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Not a pure duplicate. Besides the diffrisk_record flake that e494a8a3 owns (pinned RED by the shared test), it also reports a separate failure, claim::tests::claim_progress_head_signal_binds_each_head; test - (rev e70d48dd)"""
-created_at = 1790127753
-updated_at = 1790983149
-weight = 0.0
-issue_number = 678
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/678"
-rev = 0
-
-[[task]]
 id = "830715af"
 title = "schemaguard: README / plugin manifest / marketplace description list a stale schema set and version (no verdict, no undetermined-probe; 0.1.2)"
 project = "/Users/yuki/src/harness"
@@ -3716,50 +3689,6 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/706"
 rev = 0
 
 [[task]]
-id = "6a668d24"
-title = "claim-skip ゲートの deadlock: is-claimed は期限切れしないが backlog は 1 時間で requeue する — 51 日前の死んだ claim が task を恒久的に着手不能にする"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "flow",
-    "condukt",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-実測 2026-09-24、測定点 38b460f0。backlog 67e95a19 (hashkey 3358a647274b19d0) の
-task claim を run `flow-5aaa9924-681a-4c95-8b6e-8579166d725a` が保持していた。
-  claimed_at == heartbeat_at (一度も heartbeat していない)
-  経過 1218.6 時間 (約 51 日)
-  pid 16722 は不在
-  ~/.claude/projects/-Users-yuki-src-harness/ に 5aaa9924* の transcript が存在しない
-
-機構: backlog 側は CLAIM_STALE_SECS (1 時間) で status を pending へ戻すので、item は
-何度でも `next --claim` に現れる。しかし condukt の claim registry 側は期限切れしないため
-`condukt state is-claimed` が exit 0 を返し続ける。flow の claim-skip ゲートは exit 0 を
-「他セッションが作業中」と読んで item を pending へ戻す。**結果としてどのセッションも
-永久に着手できない。** 2 つのストアの期限が非対称なことが原因。
-
-今回は死亡の証拠を 4 つ独立に確認 (上記) したうえで `condukt policy answer --approval` を
-通し、`condukt state release-task` で手動解放した。手動解放が要るということ自体が欠陥。
-
-注意: pid の不在は単独では証拠にならない (claim-task は一度きりの CLI なので pid は常に
-死んでいる。memory: maintree-guard-stale-lock)。transcript の不在と 51 日という経過が
-効いている証拠である。
-
-done_criteria: 2 つのストアの期限を同じ根拠で揃えるか、is-claimed が死んだ run の claim を
-claimed:true と報告しない。手動 release-task なしに item が再び着手可能になること。
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: The existing claim::tests::stateless_marked_unreadable_transcript_is_kept passes (9/9 stateless tests green), but that covers only marked claims. The item's observed dead claim (transcript absent, unm; test - (rev e70d48dd)"""
-created_at = 1790183636
-updated_at = 1790983235
-weight = 0.0
-issue_number = 710
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/710"
-rev = 0
-
-[[task]]
 id = "d186c736"
 title = "record freshness: audit-convergence at 0 exceeds threshold 1 — Continuous-Audit rounds are finding fewer new problems over time"
 project = "/Users/yuki/src/harness"
@@ -3789,25 +3718,6 @@ updated_at = 1790983183
 weight = 0.0
 issue_number = 720
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/720"
-rev = 0
-
-[[task]]
-id = "2ae3fa29"
-title = "budgetguard lock::LedgerLock が parallelguard と同じ O_EXCL + 30s mtime stale-steal (CA-parallelguard-01/02 の mirror 候補)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-Mirror sweep of CA-2026W39: docs/specs/budgetguard.md describes the same create_new + 30s stale-steal pattern parallelguard had (drop removes by path; two waiters can both steal). UNVERIFIED — only the spec doc was read, not the code. If confirmed, the parallelguard fix c9a28dc2 (std File::try_lock kernel advisory lock, guard owns File, never unlink) is the template; tests in crates/parallelguard/src/store.rs ca_parallelguard_01/02 are the model (02 is a 24-thread race, RED 6/6 on the old scheme).
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/budgetguard/src/lock.rs (rev 7e635343)"""
-created_at = 1790184456
-updated_at = 1790983377
-weight = 0.0
-issue_number = 743
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/743"
 rev = 0
 
 [[task]]

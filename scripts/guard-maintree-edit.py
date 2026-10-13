@@ -301,6 +301,7 @@ def _judge(payload: dict) -> tuple[int, str, dict]:
     # main, editing main's tree IS the allowed operation (conflict resolution).
     merge = _merge_head_state(git_dir)
     if merge == "present":
+        meta["allowed_main_write"] = True
         return 0, "", meta
     if merge == "undetermined":
         return 2, DENY_MERGE_HEAD_UNDETERMINED.format(
@@ -429,6 +430,19 @@ permitted.
 """
 
 
+def _record_edit(payload: dict, meta: dict) -> None:
+    """Attribute an ALLOWED main-tree write to this session (edit_ledger.py,
+    233f819c). Never changes the decision: a failure to record is reported on
+    stderr and the allow stands, because a missing entry only makes the Stop
+    gate block (unrecorded dirt blocks), never allow."""
+    try:
+        import edit_ledger  # noqa: PLC0415
+        edit_ledger.record(payload.get("session_id"), meta["root"], [meta["target_abs"]])
+    except Exception as e:  # noqa: BLE001
+        sys.stderr.write(f"note: edit ledger write failed ({type(e).__name__}: {e}); "
+                         "the Stop gate will treat this path as unattributed.\n")
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -452,6 +466,8 @@ def main() -> int:
         return code
     if payload.get("tool_name") not in EDIT_TOOLS:
         return 0
+    if meta.get("allowed_main_write"):
+        _record_edit(payload, meta)
     # This guard's own judgement allowed the edit; now the deny ledger
     # (signal 1): the same session re-reaching a refused target.
     rc = deny_ledger.gate(payload)

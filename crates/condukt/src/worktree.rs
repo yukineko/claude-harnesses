@@ -67,18 +67,15 @@ fn run_git_bounded_with(
     timeout: Duration,
     envs: &[(&str, &Path)],
 ) -> Result<GitOutput> {
-    // Every real git spawn in this crate funnels through here, so this is the
-    // one place that needs to defend against `crate::env_lock`'s PATH-mutating
-    // tests (oracle.rs, main.rs): take PATH_ENV_LOCK's read side so a spawn
-    // relying on PATH resolution can never interleave with a mutation window.
-    // Many concurrent git spawns are fine (shared read lock); only a mutator
-    // holding the write lock excludes this. See `env_lock` for the race this
-    // closes (reproduced: repo_commit.rs's git-spawning tests flaked when a
-    // PATH mutator ran concurrently, without either side taking any lock).
-    // Unconditional (not gated to test-only compilation): in production
-    // nothing ever takes the write side, so this read lock is always
-    // uncontended — negligible cost for sidestepping a cfg(test)-on-a-
-    // bare-statement ambiguity (see `env_lock`'s doc comment).
+    // Every real git spawn in this crate funnels through here. It takes
+    // PATH_ENV_LOCK's read side, which used to exclude the PATH-mutating tests
+    // in oracle.rs / main.rs / lock.rs (reproduced: repo_commit.rs's
+    // git-spawning tests flaked when a PATH mutator ran concurrently). Since
+    // backlog 7c798579 nothing takes the write side at all — tests pass a
+    // custom PATH to their own child instead, pinned by
+    // `oracle::tests::condukt_never_mutates_process_path` — so this read lock
+    // is always uncontended, in tests and production alike. Kept rather than
+    // removed; see `env_lock`'s doc comment.
     let _path_guard = crate::env_lock::PATH_ENV_LOCK
         .read()
         .unwrap_or_else(|e| e.into_inner());

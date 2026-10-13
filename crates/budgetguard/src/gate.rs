@@ -978,7 +978,13 @@ mod tests {
     #[test]
     fn a_contended_ledger_lock_makes_the_day_undetermined_and_blocks() {
         let ledger_dir = tempfile::tempdir().unwrap();
-        std::fs::write(ledger_dir.path().join("ledger.lock"), b"").unwrap();
+        // Another session is inside the critical section: it holds the kernel
+        // lock on `ledger.lock` for the whole evaluation.
+        let _other_session = crate::lock::LedgerLock::acquire(ledger_dir.path());
+        assert!(
+            _other_session.held(),
+            "fixture: the other session holds the lock"
+        );
         let (cfg, tp, store) = lock_fixture(
             "lock-busy",
             Config {
@@ -1014,7 +1020,9 @@ mod tests {
     #[test]
     fn a_contended_lock_with_no_daily_limit_armed_still_allows() {
         let ledger_dir = tempfile::tempdir().unwrap();
-        std::fs::write(ledger_dir.path().join("ledger.lock"), b"").unwrap();
+        // Another session holds the kernel lock for the whole evaluation.
+        let _other_session = crate::lock::LedgerLock::acquire(ledger_dir.path());
+        assert!(_other_session.held(), "fixture: the other session holds the lock");
         let (cfg, tp, store) = lock_fixture(
             "lock-nolimit",
             Config {
@@ -1041,7 +1049,9 @@ mod tests {
     #[test]
     fn a_contended_lock_still_reports_a_session_block_precisely() {
         let ledger_dir = tempfile::tempdir().unwrap();
-        std::fs::write(ledger_dir.path().join("ledger.lock"), b"").unwrap();
+        // Another session holds the kernel lock for the whole evaluation.
+        let _other_session = crate::lock::LedgerLock::acquire(ledger_dir.path());
+        assert!(_other_session.held(), "fixture: the other session holds the lock");
         let (cfg, tp, store) = lock_fixture(
             "lock-sess",
             Config {

@@ -2776,7 +2776,25 @@ fn calibrated_confidence_via(
     files: &[String],
     class: &Option<String>,
 ) -> Option<policy::Level> {
+    calibrated_confidence_via_with_env_path(program, title, files, class, None)
+}
+
+/// [`calibrated_confidence_via`] with an optional `PATH` for the CHILD only.
+/// `None` (production) inherits this process's environment as before;
+/// `Some(p)` sets `PATH=p` on the child, which on Unix is also what a bare
+/// `program` is resolved against — so a test can hide `fugu-router` without
+/// mutating the process-wide PATH (backlog 7c798579).
+fn calibrated_confidence_via_with_env_path(
+    program: &Path,
+    title: &Option<String>,
+    files: &[String],
+    class: &Option<String>,
+    child_path: Option<&std::ffi::OsStr>,
+) -> Option<policy::Level> {
     let mut cmd = std::process::Command::new(program);
+    if let Some(p) = child_path {
+        cmd.env("PATH", p);
+    }
     cmd.arg("confidence");
     if !files.is_empty() {
         cmd.args(["--files", &files.join(",")]);
@@ -6299,7 +6317,7 @@ fn read_stdin() -> String {
 
 #[cfg(test)]
 mod calibrated_confidence_tests {
-    use super::{calibrated_confidence, calibrated_confidence_via};
+    use super::{calibrated_confidence, calibrated_confidence_via_with_env_path};
 
     /// The legacy invocation supplies none of the new flags: the calibrated
     /// path must be entirely inert (return `None`, no shell-out) so `decide`
@@ -6314,53 +6332,20 @@ mod calibrated_confidence_tests {
     /// subcommand missing), the probe must fail-soft to `None` — never a hard
     /// error — so the caller falls back to `--confidence`.
     ///
-    /// This is made HERMETIC by forcing `PATH` to exclude any directory that
+    /// This is made HERMETIC by forcing the child's `PATH` to exclude any directory that
     /// actually contains a `fugu-router` executable, so the assertion holds
     /// regardless of ambient machine state (e.g. a dev box where fugu-router
     /// IS on PATH and its episode store has history would otherwise return
     /// `Some(..)`, per `calibrated_confidence`'s shell-out above). Every
-    /// other directory (git, gh, tty, ...) stays resolvable, and the
-    /// original `PATH` is restored on drop (incl. on panic, since `Drop`
-    /// still runs during unwind).
+    /// other directory (git, gh, tty, ...) stays resolvable.
     ///
-    /// PATH is process-global and `cargo test` runs tests on multiple
-    /// threads in one process, so this also takes `crate::env_lock::
-    /// PATH_ENV_LOCK` — the same lock `oracle.rs`'s PATH-mutating tests
-    /// take — before mutating, and holds the guard until PATH is restored.
-    /// Without this, this test and oracle.rs's tests could interleave their
-    /// PATH mutations, producing nondeterministic spawn failures in
-    /// whichever test observed the other's half-restored PATH.
+    /// The filtered PATH is passed to the fugu-router CHILD only, via
+    /// [`calibrated_confidence_via_with_env_path`]; the process-wide PATH is
+    /// never mutated. A process-wide swap is visible to every concurrently
+    /// spawning test thread and made their bare-name spawns fail with ENOENT
+    /// (backlog 7c798579).
     #[test]
     fn flag_supplied_but_probe_unusable_falls_back() {
-        /// RAII guard: temporarily overrides the process `PATH` env var,
-        /// restoring the original value on drop.
-        struct PathGuard {
-            original: Option<String>,
-        }
-        impl PathGuard {
-            fn install(filtered: &str) -> Self {
-                let original = std::env::var("PATH").ok();
-                // SAFETY: test-only, single-purpose mutation; always
-                // restored by `Drop::drop` below (incl. on panic/unwind).
-                unsafe { std::env::set_var("PATH", filtered) };
-                Self { original }
-            }
-        }
-        impl Drop for PathGuard {
-            fn drop(&mut self) {
-                match &self.original {
-                    // SAFETY: see `install` above — this only ever restores
-                    // the exact value that was captured before mutation.
-                    Some(v) => unsafe { std::env::set_var("PATH", v) },
-                    None => unsafe { std::env::remove_var("PATH") },
-                }
-            }
-        }
-
-        let _guard = crate::env_lock::PATH_ENV_LOCK
-            .write()
-            .unwrap_or_else(|e| e.into_inner());
-
         let original_path = std::env::var("PATH").unwrap_or_default();
         let sep = if cfg!(windows) { ';' } else { ':' };
         let filtered: Vec<&str> = original_path
@@ -6370,17 +6355,21 @@ mod calibrated_confidence_tests {
         let sep_str = sep.to_string();
         let filtered_path = filtered.join(sep_str.as_str());
 
-        let _guard = PathGuard::install(&filtered_path);
-
         let title = Some("some task".to_string());
-        // With fugu-router unresolvable on PATH, `Command::output()` fails
-        // to spawn → soft-skip → `None`, regardless of any ambient
+        // With fugu-router unresolvable on the child's PATH, `Command::output()`
+        // fails to spawn → soft-skip → `None`, regardless of any ambient
         // fugu-router install / episode history on the host. Goes through
-        // `calibrated_confidence_via` on the bare name: `calibrated_confidence`
-        // resolves the host's plugin cache first, which this PATH filter
-        // cannot hide.
+        // the `calibrated_confidence_via` shell-out on the bare name:
+        // `calibrated_confidence` resolves the host's plugin cache first,
+        // which this PATH filter cannot hide.
         assert_eq!(
-            calibrated_confidence_via(std::path::Path::new("fugu-router"), &title, &[], &None),
+            calibrated_confidence_via_with_env_path(
+                std::path::Path::new("fugu-router"),
+                &title,
+                &[],
+                &None,
+                Some(std::ffi::OsStr::new(&filtered_path)),
+            ),
             None
         );
     }

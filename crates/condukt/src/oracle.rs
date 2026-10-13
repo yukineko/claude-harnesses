@@ -220,11 +220,28 @@ fn check_oracle_with(
 /// wiring is testable against a shim without depending on what the host's
 /// plugin cache holds.
 fn spawn_oracle(program: &Path, task_id: &str, run_dir: &Path) -> serde_json::Value {
-    match Command::new(program)
-        .args(["oracle", "--task", task_id])
-        .current_dir(run_dir)
-        .output()
-    {
+    spawn_oracle_with_env_path(program, task_id, run_dir, None)
+}
+
+/// [`spawn_oracle`] with an optional `PATH` for the CHILD only. `None` (the
+/// production path) leaves the child inheriting this process's environment,
+/// exactly as before. `Some(p)` sets `PATH=p` on the child via
+/// `Command::env`, which on Unix is also the PATH a bare `program` is resolved
+/// against — so a test can put a fake `tdd` (or no `tdd`) in front of the
+/// spawn without mutating the process-wide PATH that concurrently spawning
+/// sibling tests read (backlog 7c798579).
+fn spawn_oracle_with_env_path(
+    program: &Path,
+    task_id: &str,
+    run_dir: &Path,
+    child_path: Option<&std::ffi::OsStr>,
+) -> serde_json::Value {
+    let mut cmd = Command::new(program);
+    cmd.args(["oracle", "--task", task_id]).current_dir(run_dir);
+    if let Some(p) = child_path {
+        cmd.env("PATH", p);
+    }
+    match cmd.output() {
         Ok(out) => {
             verdict_from_oracle_output(&String::from_utf8_lossy(&out.stdout), out.status.success())
         }
@@ -702,32 +719,23 @@ mod tests {
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
-    /// Run `spawn_oracle` on a bare `tdd` with a fake `tdd` on PATH that exits `code` printing
-    /// `stdout`. PATH is restored before returning.
+    /// Run `spawn_oracle` on a bare `tdd` with a fake `tdd` first on the
+    /// CHILD's PATH that exits `code` printing `stdout`. The PATH is passed to
+    /// the child only; the process-wide PATH is never touched (backlog 7c798579).
     #[cfg(unix)]
     fn check_oracle_with_fake_tdd(stdout: &str, code: i32) -> serde_json::Value {
-        let _guard = crate::env_lock::PATH_ENV_LOCK
-            .write()
-            .unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::TempDir::new().unwrap();
         let bin = tmp.path().join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         write_fake_tdd(&bin, stdout, code);
 
-        let old_path = std::env::var_os("PATH");
         let mut parts = vec![bin.clone()];
-        if let Some(p) = &old_path {
-            parts.extend(std::env::split_paths(p));
+        if let Some(p) = std::env::var_os("PATH") {
+            parts.extend(std::env::split_paths(&p));
         }
-        std::env::set_var("PATH", std::env::join_paths(parts).unwrap());
+        let child_path = std::env::join_paths(parts).unwrap();
 
-        let out = spawn_oracle(Path::new("tdd"), "t1", tmp.path());
-
-        match old_path {
-            Some(p) => std::env::set_var("PATH", p),
-            None => std::env::remove_var("PATH"),
-        }
-        out
+        spawn_oracle_with_env_path(Path::new("tdd"), "t1", tmp.path(), Some(&child_path))
     }
 
     /// Sanity: the fake `tdd` really is what gets spawned. If PATH injection
@@ -778,15 +786,12 @@ mod tests {
         );
     }
 
-    /// Run `spawn_oracle` on a bare `tdd` with a PATH that contains nothing at all (a single
-    /// empty temp dir), so `tdd` is genuinely unreachable and the spawn fails.
-    /// PATH is restored before returning. Returns the verdict plus the run dir's
-    /// guard so it outlives the call.
+    /// Run `spawn_oracle` on a bare `tdd` with a CHILD PATH that contains
+    /// nothing at all (a single empty temp dir), so `tdd` is genuinely
+    /// unreachable and the spawn fails. The PATH is passed to the child only;
+    /// the process-wide PATH is never touched (backlog 7c798579).
     #[cfg(unix)]
     fn check_oracle_with_no_tdd_on_path() -> serde_json::Value {
-        let _guard = crate::env_lock::PATH_ENV_LOCK
-            .write()
-            .unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::TempDir::new().unwrap();
         let empty_bin = tmp.path().join("empty-bin");
         std::fs::create_dir_all(&empty_bin).unwrap();
@@ -797,16 +802,12 @@ mod tests {
             "PATH dir must contain no tdd"
         );
 
-        let old_path = std::env::var_os("PATH");
-        std::env::set_var("PATH", &empty_bin);
-
-        let out = spawn_oracle(Path::new("tdd"), "t1", &run_dir);
-
-        match old_path {
-            Some(p) => std::env::set_var("PATH", p),
-            None => std::env::remove_var("PATH"),
-        }
-        out
+        spawn_oracle_with_env_path(
+            Path::new("tdd"),
+            "t1",
+            &run_dir,
+            Some(empty_bin.as_os_str()),
+        )
     }
 
     /// CASE C (the wiring proof for "no tdd installed"): the run dir is fine,
@@ -950,6 +951,120 @@ mod tests {
              reproduction_tests — got {out}"
         );
     }
+
+    // ---- backlog 7c798579: an unguarded spawn observes a swapped PATH ----------
+    //
+    // `check_oracle_with_no_tdd_on_path` (above) used to point the process-global
+    // PATH at an empty dir under `PATH_ENV_LOCK`'s WRITE side (it now passes that
+    // PATH to its own child only). Tests that spawn a child by
+    // bare name (`sh`, `git`) WITHOUT taking the read side, e.g.
+    // `record_runs_exit_code_tests::zero_exit_status_is_counted_as_emitted`
+    // (`Command::new("sh")`) and `lock::tests::git` (`Command::new("git")`), are
+    // not excluded by it. The second test below spawns exactly the way those do.
+
+    /// Invariant: no condukt source file (tests included) mutates the
+    /// process-wide PATH. A custom PATH for a child must be passed to that
+    /// child (`Command::env("PATH", ..)` or an injected parameter), because a
+    /// process-wide swap is visible to every concurrently spawning thread.
+    /// Deterministic source scan; the needles are built at runtime so this file
+    /// does not match itself, and `//` comments are ignored. Whitespace (also
+    /// across lines), `unsafe {}` wrappers and `env::` / `std::env::` prefixes
+    /// are all irrelevant because the match is on `set_var("PATH"` /
+    /// `remove_var("PATH"` with whitespace stripped. This proves the invariant
+    /// on the source, not that any flake is gone.
+    #[test]
+    fn condukt_never_mutates_process_path() {
+        let q = '"';
+        let needles = [
+            format!("set_var({q}PATH{q}"),
+            format!("remove_var({q}PATH{q}"),
+        ];
+        fn rs_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(dir).expect("cannot read source dir") {
+                let p = e.expect("cannot read dir entry").path();
+                if p.is_dir() {
+                    rs_files(&p, out);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    out.push(p);
+                }
+            }
+        }
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        rs_files(&root, &mut files);
+        assert!(
+            !files.is_empty(),
+            "scan found no source files under {}",
+            root.display()
+        );
+        let mut offenders = Vec::new();
+        for f in &files {
+            let text = std::fs::read_to_string(f)
+                .unwrap_or_else(|e| panic!("cannot read {}: {e}", f.display()));
+            // Whitespace-stripped content, each char remembering its line.
+            let mut stripped = String::new();
+            let mut line_of = Vec::new();
+            for (i, line) in text.lines().enumerate() {
+                let code = line.split("//").next().unwrap_or("");
+                for c in code.chars().filter(|c| !c.is_whitespace()) {
+                    stripped.push(c);
+                    line_of.push(i + 1);
+                }
+            }
+            let chars: Vec<char> = stripped.chars().collect();
+            for n in &needles {
+                let nc: Vec<char> = n.chars().collect();
+                for s in 0..chars.len().saturating_sub(nc.len() - 1) {
+                    if chars[s..s + nc.len()] == nc[..] {
+                        offenders.push(format!("{}:{}", f.display(), line_of[s]));
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "process-wide PATH mutation found at {} site(s); pass PATH to the child via \
+             Command::env instead:\n{}",
+            offenders.len(),
+            offenders.join("\n")
+        );
+    }
+
+    /// Same hazard against the REAL mutator: run the actual no-tdd helper
+    /// repeatedly while a sibling spawns `sh` unguarded. Probabilistic (the
+    /// window is the helper's own duration), but the invariant is the same:
+    /// no plain spawn may fail because a sibling test swapped PATH.
+    #[cfg(unix)]
+    #[test]
+    fn unguarded_spawns_never_fail_during_real_no_tdd_path_mutator() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let done = Arc::new(AtomicBool::new(false));
+        let d2 = Arc::clone(&done);
+        let spawner = std::thread::spawn(move || {
+            let mut failures = Vec::new();
+            while !d2.load(Ordering::SeqCst) {
+                if let Err(e) = std::process::Command::new("sh")
+                    .args(["-c", "exit 0"])
+                    .status()
+                {
+                    failures.push(e.to_string());
+                }
+            }
+            failures
+        });
+        for _ in 0..200 {
+            let _ = check_oracle_with_no_tdd_on_path();
+        }
+        done.store(true, Ordering::SeqCst);
+        let failures = spawner.join().unwrap();
+        assert!(
+            failures.is_empty(),
+            "{} unguarded `sh` spawn(s) failed during the PATH mutator; first: {:?}",
+            failures.len(),
+            failures.first()
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1058,9 +1173,6 @@ mod backlog_e5174b6a {
         let src = include_str!("oracle.rs");
         let doc_claims_degrade = src.contains(CLAIM);
 
-        let _guard = crate::env_lock::PATH_ENV_LOCK
-            .write()
-            .unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::TempDir::new().unwrap();
         let bin = tmp.path().join("bin");
         std::fs::create_dir_all(&bin).unwrap();
@@ -1071,17 +1183,14 @@ mod backlog_e5174b6a {
         )
         .unwrap();
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let old_path = std::env::var_os("PATH");
-        let mut parts = vec![bin.clone()];
-        if let Some(p) = &old_path {
-            parts.extend(std::env::split_paths(p));
-        }
-        std::env::set_var("PATH", std::env::join_paths(parts).unwrap());
-        let out = super::check_oracle(true, Some("cargo test -p x"), "t1", Path::new(tmp.path()));
-        match old_path {
-            Some(p) => std::env::set_var("PATH", p),
-            None => std::env::remove_var("PATH"),
-        }
+        // The fake is handed to `check_oracle`'s own resolver seam rather than
+        // put first on the process-wide PATH: a PATH swap is visible to every
+        // concurrently spawning test (backlog 7c798579), and the plugin cache
+        // under the real `$HOME` would win over PATH anyway, so the old swap
+        // did not even guarantee this fixture was the `tdd` consulted.
+        let out = super::check_oracle_with(true, "t1", Path::new(tmp.path()), || {
+            harness_core::verdict::Determination::Known(Some(fake.clone()))
+        });
 
         assert!(
             doc_claims_degrade || out["fallback"] == serde_json::json!(false),

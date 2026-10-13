@@ -216,10 +216,25 @@ const STOP: &[&str] = &[
     "make", "use", "via", "into", "from", "that", "this", "be", "is", "are", "new",
 ];
 
-/// Normalise free text into a token set: lowercased, alphanumeric, min length 3,
-/// stopwords dropped. Copied (minus the concept-expansion) from
-/// `fugu_router::rag::tokenize` so harness-core takes no dependency on that
-/// plugin crate.
+/// Hiragana, Katakana (incl. the prolonged sound mark), CJK ideographs. These
+/// scripts are written without spaces, so a word boundary cannot be found by
+/// splitting; they are tokenized as character bigrams instead (backlog 7b6bcfe6).
+fn is_cjk(c: char) -> bool {
+    matches!(c,
+        '\u{3040}'..='\u{309F}'   // Hiragana
+        | '\u{30A0}'..='\u{30FF}' // Katakana (incl. ー U+30FC)
+        | '\u{31F0}'..='\u{31FF}' // Katakana phonetic extensions
+        | '\u{FF66}'..='\u{FF9F}' // halfwidth Katakana
+        | '\u{3400}'..='\u{4DBF}' // CJK ext. A
+        | '\u{4E00}'..='\u{9FFF}' // CJK unified ideographs
+        | '\u{F900}'..='\u{FAFF}' // CJK compatibility ideographs
+        | '\u{20000}'..='\u{2FFFF}')
+}
+
+/// Normalise free text into a token set: lowercased, split on non-alphanumerics
+/// (min length 3 bytes, stopwords dropped). A Japanese phrase has no
+/// separators, so it stays ONE token here; that is why `text_similarity` also
+/// scores [`tokenize_bigrams`]. Lesson search keeps this tokenizer unchanged.
 fn tokenize(s: &str) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     for t in s.to_lowercase().split(|c: char| !c.is_alphanumeric()) {
@@ -228,6 +243,56 @@ fn tokenize(s: &str) -> BTreeSet<String> {
         }
     }
     out
+}
+
+/// Like [`tokenize`], but non-CJK words keep the original rule (min length 3 bytes, so ASCII
+/// scores are unchanged). A run of CJK characters becomes its character
+/// bigrams (a single-character run becomes that one character): Japanese has
+/// no spaces, so splitting on non-alphanumerics alone turned a whole phrase
+/// into ONE token and near-identical Japanese titles scored 0 (backlog
+/// 7b6bcfe6). Copied (minus the concept-expansion) from
+/// `fugu_router::rag::tokenize` so harness-core takes no dependency on that
+/// plugin crate.
+fn tokenize_bigrams(s: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for t in s.to_lowercase().split(|c: char| !c.is_alphanumeric()) {
+        let mut word = String::new();
+        let mut cjk: Vec<char> = Vec::new();
+        for c in t.chars() {
+            if is_cjk(c) {
+                flush_word(&mut word, &mut out);
+                cjk.push(c);
+            } else {
+                flush_cjk(&mut cjk, &mut out);
+                word.push(c);
+            }
+        }
+        flush_word(&mut word, &mut out);
+        flush_cjk(&mut cjk, &mut out);
+    }
+    out
+}
+
+fn flush_word(word: &mut String, out: &mut BTreeSet<String>) {
+    if word.len() >= 3 && !STOP.contains(&word.as_str()) {
+        out.insert(word.clone());
+    }
+    word.clear();
+}
+
+fn flush_cjk(run: &mut Vec<char>, out: &mut BTreeSet<String>) {
+    match run.len() {
+        0 => {}
+        1 => {
+            out.insert(run[0].to_string());
+        }
+        _ => {
+            for w in run.windows(2) {
+                out.insert(w.iter().collect());
+            }
+        }
+    }
+    run.clear();
 }
 
 fn jaccard(a: &BTreeSet<String>, b: &BTreeSet<String>) -> f64 {
@@ -239,14 +304,22 @@ fn jaccard(a: &BTreeSet<String>, b: &BTreeSet<String>) -> f64 {
     }
 }
 
-/// Lexical Jaccard token-overlap similarity of two free-text strings, in `[0,1]`.
-/// Reuses the same tokenizer (lowercase, alphanumeric, len ≥ 3, stopwords
-/// dropped) as lesson search, so callers get identical fuzzy-match semantics
-/// without depending on an embedding model. Two texts with no shared 3+ char
-/// tokens score 0.0; identical token sets score 1.0. Exposed for reuse by other
+/// Lexical Jaccard token-overlap similarity of two free-text strings, in `[0,1]`:
+/// the MAX of the Jaccard over [`tokenize`] (whole words/phrases, the scorer
+/// lesson search uses) and over [`tokenize_bigrams`] (CJK runs as character
+/// bigrams). The bigram score is what makes near-identical Japanese titles
+/// comparable at all (backlog 7b6bcfe6: they scored 0). It is not used ALONE
+/// because, in mixed Japanese/identifier titles, every unshared Japanese run
+/// adds many bigrams to the union and dilutes the identifier overlap: measured
+/// on this repo's 1642 backlog titles, bigrams alone dropped 3 real duplicate
+/// pairs (one at 0.727 to 0.545) below 0.6. Taking the max means no pair scores
+/// lower than under the whole-word scorer. No embedding model; no shared token
+/// scores 0.0, identical token sets score 1.0. Exposed for reuse by other
 /// crates (e.g. overwatch's near-duplicate anchor detection, §4.6a).
 pub fn text_similarity(a: &str, b: &str) -> f64 {
-    jaccard(&tokenize(a), &tokenize(b))
+    let words = jaccard(&tokenize(a), &tokenize(b));
+    let bigrams = jaccard(&tokenize_bigrams(a), &tokenize_bigrams(b));
+    words.max(bigrams)
 }
 
 /// The lexical token set of a lesson: its task summary + lesson text combined,

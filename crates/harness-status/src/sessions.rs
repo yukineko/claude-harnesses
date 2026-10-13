@@ -18,7 +18,21 @@ pub struct SessionSummary {
     pub turns: u64,
     pub total_tokens: u64,
     pub last_ts: Option<String>,
-    pub cost_usd: f64,
+    /// `None` = the cost could not be determined (a model with usage has no
+    /// known rate — backlog ff98fed0); serialized as `null`, rendered
+    /// `unknown`, never as `$0`. `cost_unknown_reason` says why.
+    pub cost_usd: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_unknown_reason: Option<String>,
+}
+
+/// Render a session cost cell: `$x.xxxx`, or `unknown` when it could not be
+/// determined (never `$0.0000`, which would read as "nothing spent").
+pub fn cost_cell(cost_usd: Option<f64>) -> String {
+    match cost_usd {
+        Some(c) => format!("${c:.4}"),
+        None => "unknown".to_string(),
+    }
 }
 
 /// The `n` most recent sessions gauge recorded.
@@ -61,9 +75,13 @@ pub fn recent(n: usize) -> Determination<Vec<SessionSummary>> {
         .into_iter()
         .map(|r| {
             let total_tokens = r.total_tokens();
-            let cost_usd = ledger
-                .session_cost(&r.session_id)
-                .unwrap_or_else(|| pricing::session_cost(r.models.iter(), &[]));
+            let (cost_usd, cost_unknown_reason) = match ledger.session_cost(&r.session_id) {
+                Some(c) => (Some(c), None),
+                None => match pricing::session_cost(r.models.iter(), &[]) {
+                    Determination::Known(c) => (Some(c), None),
+                    Determination::Undetermined(why) => (None, Some(why.as_str().to_string())),
+                },
+            };
             SessionSummary {
                 session_id: r.session_id,
                 project: r.project,
@@ -71,6 +89,7 @@ pub fn recent(n: usize) -> Determination<Vec<SessionSummary>> {
                 total_tokens,
                 last_ts: r.last_ts,
                 cost_usd,
+                cost_unknown_reason,
             }
         })
         .collect();

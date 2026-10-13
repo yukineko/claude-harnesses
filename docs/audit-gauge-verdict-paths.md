@@ -45,7 +45,7 @@ CLAUDE.md 第1節は **「判定を持つ」は返り値の型ではなく消費
 |---|---|---|---|
 | C1 | `crates/budgetguard/src/gate.rs:326` `if let Some(rec) = session::load_one(gauge_state_dir, session_id) {` | gauge が書いた `SessionRecord.models` | `pricing::session_cost` → `verdict()` → **`{"decision":"block"}`（ユーザのターンを実際に止める）** |
 | C2 | `crates/budgetguard/src/gate.rs:206` `let rec = session::load_one(gauge_state_dir, session_id)?;` | 同 record の `models` | cache-health の判定（`additionalContext` として注入） |
-| C3 | `crates/harness-status/src/sessions.rs:43` `let mut records = match session::load_all(&session::default_state_dir()) {` | store 全体 | `/status` パネル |
+| C3 | `crates/harness-status/src/sessions.rs:57` `let mut records = match session::load_all(&session::default_state_dir()) {` | store 全体 | `/status` パネル |
 | C4 | `crates/session-insights/src/record.rs:80,114` `session::load_one(&session::default_state_dir(), ctx.session_id)` | record の `models` / `agents` | Obsidian record ノートの `## コスト` ブロック（人間が「このセッションはいくらかかったか」として読む） |
 <!-- doc-claim-exempt: 修正前のコードの逐語引用。C5/C6 の裸名 `gauge` spawn は abba6f0d で `harness_core::plugin_bin::resolve("gauge")` 経由（`gauge_subagents_json`）に置き換わり、resolve_agent_cost/tokens は `Determination<Option<..>>` を返す（Undetermined の episode は fallback コストで記録されず未記録のまま失敗として表面化する）。監査時点の記録として残している -->
 | C5 | `crates/condukt/src/state.rs:2259` `let out = std::process::Command::new("gauge")` | gauge の stdout | task ごとの実コスト → `record-run --cost` → **fugu-router の routing 方策（どのモデルを使うか）** |
@@ -57,7 +57,7 @@ CLAUDE.md 第1節は **「判定を持つ」は返り値の型ではなく消費
 
 表のセルに入れると markdown の `|` エスケープで逐語性が壊れるものを、表の外に置く:
 
-- **C3 の自己宣言** — `crates/harness-status/src/sessions.rs:32` 「numbers are read by a human as spend.」。
+- **C3 の自己宣言** — `crates/harness-status/src/sessions.rs:46` 「numbers are read by a human as spend.」。
   harness-status 自身が、このパネルの数字は人間に支出として読まれる＝判定を持つ側だと書いている。
 - **C8** — `crates/condukt/skills/condukt/SKILL.md:1054` `GAUGE_COST=$(gauge session --json ${SID:+--session "$SID"} 2>/dev/null | jq -r '.cost_usd // empty' 2>/dev/null || true)`。
   末尾の `|| true` が gauge の exit code を消すので、gauge 側が非 0 で「unknown」を主張しても
@@ -789,7 +789,7 @@ cwd が解決できないときに `"."` へ落ちると、**別プロジェク�
         );
 ```
 
-**`crates/gauge/src/main.rs:527` `serde_json::to_string(&serde_json::Value::Array(arr)).unwrap_or_else(|_| "[]".into())` が既定値として出す `[]` は、その 25 行上（P7 で引いた 500-505 行）が
+**`crates/gauge/src/main.rs:557` `serde_json::to_string(&serde_json::Value::Array(arr)).unwrap_or_else(|_| "[]".into())` が既定値として出す `[]` は、その 25 行上（P7 で引いた 500-505 行）が
 「condukt にとって『sub-agent の支出は無かった』と伝えることになる」として拒否している当の値である。**
 同じ関数の中で、同じ出力が、一方では拒否され一方では既定値として使われている。
 
@@ -951,7 +951,7 @@ claim cites 81)` と報告する（exempt 扱いなので block はしない）�
 | R11 | `crates/gauge/src/main.rs:139` | `Command::Record => run_hook(record_hook),` | **条件つき R**。panic → record 不在 → C1 が transcript 再パースへ fallback（正確な情報源）。§0 参照。**この免責は budgetguard 側の fallback が存在し続けることに依存しており、gauge 側は何も強制していない** | Probe 4-1（record 無しでも block $270.0075） |
 | R12 | `crates/harness-core/src/session.rs:135-161` | `pub fn upsert(…)` の無音失敗 | **消費者を列挙したうえで**宣言された免責（CLAUDE.md 第1節が要求する形式を満たす数少ない例）。書き込み欠落は「transcript から再導出」へ degrade する | — |
 
-R8 の逐語（`|` を含むため表の外に置く）— `crates/gauge/src/main.rs:433` `if best.as_ref().map(|(t, _)| modified > *t).unwrap_or(true) {`
+R8 の逐語（`|` を含むため表の外に置く）— `crates/gauge/src/main.rs:444` `if best.as_ref().map(|(t, _)| modified > *t).unwrap_or(true) {`
 
 ---
 
@@ -987,7 +987,7 @@ R8 の逐語（`|` を含むため表の外に置く）— `crates/gauge/src/mai
 
 上の 2 行で表から外に出した逐語（`|` を含むため）:
 
-- `crates/gauge/src/main.rs:538` `path.file_stem().and_then(|s| s.to_str()).unwrap_or("")`
+- `crates/gauge/src/main.rs:568` `path.file_stem().and_then(|s| s.to_str()).unwrap_or("")`
 
 ---
 

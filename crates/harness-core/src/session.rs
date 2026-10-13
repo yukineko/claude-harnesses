@@ -77,11 +77,12 @@ impl SessionRecord {
     }
 
     /// USD spent by each agent bucket (main / sub-agent), via `session_cost`.
+    /// A bucket is `Undetermined` when it used a model with no known rate.
     /// Empty when the record predates per-agent attribution.
     pub fn agent_costs(
         &self,
         overrides: &[crate::pricing::PriceOverride],
-    ) -> BTreeMap<String, f64> {
+    ) -> BTreeMap<String, crate::verdict::Determination<f64>> {
         self.agents
             .iter()
             .map(|(name, a)| {
@@ -343,7 +344,10 @@ mod tests {
         let costs = rec.agent_costs(&[]);
         // Main carried the tokens; sub-agent bucket had none → 0 USD.
         assert!(costs.contains_key(AGENT_MAIN));
-        assert_eq!(costs.get(AGENT_SUB).copied(), Some(0.0));
+        assert_eq!(
+            costs.get(AGENT_SUB).cloned(),
+            Some(Determination::Known(0.0))
+        );
     }
 
     #[test]

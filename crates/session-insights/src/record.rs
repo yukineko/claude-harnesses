@@ -134,6 +134,14 @@ fn session_agents(ctx: &RecordCtx) -> Option<BTreeMap<String, harness_core::usag
         .filter(|a| !a.is_empty())
 }
 
+/// `$x.xx USD` for a determined cost; `unknown (why)` otherwise — never `$0`.
+fn usd_cell(cost: Determination<f64>, decimals: usize) -> String {
+    match cost {
+        Determination::Known(c) => format!("${c:.decimals$} USD"),
+        Determination::Undetermined(why) => format!("unknown ({why})"),
+    }
+}
+
 /// Build the auto `## コスト` block body (between markers, exclusive).
 fn cost_body(ctx: &RecordCtx) -> String {
     let Some(models) = session_models(ctx) else {
@@ -142,7 +150,9 @@ fn cost_body(ctx: &RecordCtx) -> String {
     let incomplete = cost_incompleteness(ctx)
         .map(|why| format!("- ⚠ サブエージェント費用を読めませんでした（以下は過少計上）: {why}\n"))
         .unwrap_or_default();
-    let total_usd = pricing::session_cost(models.iter(), ctx.overrides);
+    // An unpriceable model makes the total unknown (backlog ff98fed0): rendered
+    // as `unknown (why)`, never as `$0.00`.
+    let total_usd = usd_cell(pricing::session_cost(models.iter(), ctx.overrides), 2);
     let mut input = 0u64;
     let mut output = 0u64;
     let mut cache_write = 0u64;
@@ -170,11 +180,8 @@ fn cost_body(ctx: &RecordCtx) -> String {
             let mut sorted: Vec<_> = agents.iter().collect();
             sorted.sort_by_key(|(k, _)| k.as_str());
             for (name, au) in &sorted {
-                let cost = pricing::session_cost(au.models.iter(), ctx.overrides);
-                lines.push_str(&format!(
-                    "  - {name}: ${cost:.4} USD ({} turns)\n",
-                    au.turns
-                ));
+                let cost = usd_cell(pricing::session_cost(au.models.iter(), ctx.overrides), 4);
+                lines.push_str(&format!("  - {name}: {cost} ({} turns)\n", au.turns));
             }
             format!("- by agent:\n{lines}")
         }
@@ -183,7 +190,7 @@ fn cost_body(ctx: &RecordCtx) -> String {
 
     format!(
         "{incomplete}\
-         - total: ${total_usd:.2} USD\n\
+         - total: {total_usd}\n\
          {agent_lines}\
          - total tokens: {total_tokens}\n\
          - input: {input}   output: {output}\n\

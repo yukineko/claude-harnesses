@@ -309,9 +309,11 @@ fn undetermined_verdict(cfg: &Config, why: &str) -> Verdict {
 /// * `Known(None)` — there is nothing to price (empty/unreadable transcript and
 ///   no usable record). Same fail-soft data-error path as before: the caller
 ///   allows the stop, because no spend was observed *and none was missed*.
-/// * `Undetermined(why)` — a spend source could not be read, so any number here
-///   would be an under-count (see [`TranscriptCostEstimate::complete_cost`]).
-///   The caller must not price this as `0`.
+/// * `Undetermined(why)` — a spend source could not be read, or a model with
+///   usage has no known rate (backlog ff98fed0: an unrecognized model id is
+///   not $0), so any number here would be an under-count (see
+///   [`TranscriptCostEstimate::complete_cost`], [`pricing::rate_for`]). The
+///   caller must not price this as `0`.
 ///
 /// `gauge_state_dir` is a parameter (rather than calling
 /// `session::default_state_dir()` directly) so tests can point it at a
@@ -325,10 +327,9 @@ fn session_cost(
 ) -> Determination<Option<f64>> {
     if let Some(rec) = session::load_one(gauge_state_dir, session_id) {
         if !rec.models.is_empty() && record_is_fresh(&rec, transcript_path) {
-            return Determination::Known(Some(pricing::session_cost(
-                rec.models.iter(),
-                &cfg.price_overrides,
-            )));
+            // An unpriceable model in the record is `Undetermined` (backlog
+            // ff98fed0) and forwarded as such — never read as $0.
+            return pricing::session_cost(rec.models.iter(), &cfg.price_overrides).map(Some);
         }
     }
     match estimate_transcript_cost(transcript_path, &cfg.price_overrides) {
@@ -640,7 +641,9 @@ mod tests {
         .expect("fresh record path");
         let via_parse = estimate_transcript_cost(tp.to_str().unwrap(), &cfg.price_overrides)
             .expect("transcript parse")
-            .cost_usd;
+            .complete_cost()
+            .require()
+            .expect("opus transcript is priced");
         assert!(
             (via_record - via_parse).abs() < 1e-9,
             "record={via_record} parse={via_parse}"
@@ -1022,7 +1025,10 @@ mod tests {
         let ledger_dir = tempfile::tempdir().unwrap();
         // Another session holds the kernel lock for the whole evaluation.
         let _other_session = crate::lock::LedgerLock::acquire(ledger_dir.path());
-        assert!(_other_session.held(), "fixture: the other session holds the lock");
+        assert!(
+            _other_session.held(),
+            "fixture: the other session holds the lock"
+        );
         let (cfg, tp, store) = lock_fixture(
             "lock-nolimit",
             Config {
@@ -1051,7 +1057,10 @@ mod tests {
         let ledger_dir = tempfile::tempdir().unwrap();
         // Another session holds the kernel lock for the whole evaluation.
         let _other_session = crate::lock::LedgerLock::acquire(ledger_dir.path());
-        assert!(_other_session.held(), "fixture: the other session holds the lock");
+        assert!(
+            _other_session.held(),
+            "fixture: the other session holds the lock"
+        );
         let (cfg, tp, store) = lock_fixture(
             "lock-sess",
             Config {

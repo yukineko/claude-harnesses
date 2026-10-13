@@ -3571,7 +3571,7 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 Measured 2026-09-23, branch session-9d349393 at 2ddbd51d (condukt 0.7.171). Running the whole condukt bin test binary (target/debug/deps/condukt-*) fails editgate::tests::a_clean_crate_still_passes every time: 16/16 under 8 concurrent copies, 6/6 under CPU load, 1/1 idle, and also with the newly added worktree test skipped (so it predates that change). Isolated (filter editgate) it passes 17/17.
 Verbatim panic (crates/condukt/src/editgate.rs:506): a compiling crate must not be broken: {"broken":true,"diagnostics":"error: rustup could not choose a version of cargo to run, because one wasn't specified explicitly, and no default is configured.","fallback":false,...}
@@ -3581,11 +3581,13 @@ Found while working 35d61d23 / 8c5d46fa (load-sensitive tests).
 
 [backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/condukt/src/editgate.rs (mod backlog_f7a0cadc) (rev 596108b9): editgate's cargo check depends on HOME; a sibling HOME swap makes a clean crate read as broken."""
 created_at = 1790127752
-updated_at = 1790983162
+updated_at = 1791901145
 weight = 0.0
 issue_number = 677
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/677"
-rev = 0
+rev = 1
+ruling_kind = "judgment"
+rationale = "Fix merged on main at 7be45b88 (branch commits 4f0dace5 toolchain-env pin, ebb45add verifier tests, 94849a13 hook reason). Observed 2026-10-13 at session-4dadba08 2a0167f6: full condukt bin test 892 passed 0 failed incl. editgate::tests::a_clean_crate_still_passes; tests/editgate_hook_reason_f7a0cadc.rs passes. No mechanical RED evidence exists: (1) audit repro editgate::backlog_f7a0cadc PASSES at pre-fix 626d7e84 (race-dependent, not RED); (2) editgate_hook_reason_f7a0cadc was added in the fix commit 94849a13, so at 5f176b81 it fails at compile time, which backlog done refuses. Ask: accept close as fixed on this evidence, or require a new deterministic RED test first."
 
 [[task]]
 id = "7c798579"

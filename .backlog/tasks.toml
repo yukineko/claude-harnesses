@@ -12938,18 +12938,25 @@ tags = [
     "deferred",
 ]
 touched_files = []
-status = "unconfirmed"
+status = "pending"
 notes = "Deferred by user ruling 2026-10-14 (スクリプト実行は全部見送り / 一旦現状維持). Write/Edit/printf of a destructive script then bash x.sh is allowed: each call is judged alone. Reproduced by crates/blastguard/tests/script_file_content_exec.rs (14 tests ignored with the ruling as reason; run with --ignored). Agreed spec if resumed: script content gets the same verdict as the inline command, args and flags included in locating the script file; undeterminable -> Ask with 'Recommended: do not run this.'. Open question left by the user: argument-derived targets (rm -rf $1) may be the script side's responsibility. Introduced alongside commit db259cfb."
 created_at = 1791928061
-updated_at = 1791928061
+updated_at = 1791931749
 weight = 0.0
 issue_number = 1349
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1349"
-rev = 0
+rev = 1
 
 [task.repro]
-outcome = "undetermined"
+outcome = "reproduced"
 cmd = "cargo test -p blastguard --test script_file_content_exec -- --ignored"
-rev = "7278913878463019fb4fc291464524e7d7aef7f3"
-observed_at = 1791928061
-detail = "cannot determine whether the working tree is clean: git status --porcelain=v1 --untracked-files=all -- . :(exclude).backlog failed: git -C /Users/yuki/src/.harness-worktrees/session-c5b9c02b status --porcelain=v1 --untracked-files=all -- . :(exclude).backlog timed out after 120s — a checker that did not finish has not passed"
+rev = "e1b94646777ca2b0abf4f59c2040efe3e125f6ce"
+observed_at = 1791931748
+detail = """
+exit 101: adable_script_file_asks_with_marker
+
+test result: FAILED. 0 passed; 14 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.75s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/script_file_content_exec.rs (target/debug/deps/script_file_content_exec-9172a7d8fe005cd8)
+error: test failed, to rerun pass `-p blastguard --test script_file_content_exec`"""

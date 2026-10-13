@@ -637,6 +637,11 @@ fn stateless_transcript_signal(
     // `$CLAUDE_CONFIG_DIR/projects` must not read as "absent" just because
     // `$HOME/.claude/projects` lacks it. A transcript found there that the
     // shared reader could not read stays `Undetermined` (kept).
+    //
+    // NOT covered: the stores searched are THIS process's. A holder that ran
+    // with a different `CLAUDE_CONFIG_DIR` than the reaper is not reconciled
+    // (the claim does not record the holder's store), so its live transcript
+    // is invisible here and can read as absent.
     let mut stores = vec![PathBuf::from(home).join(".claude").join("projects")];
     if let Some(cfg) = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|v| !v.is_empty()) {
         stores.push(PathBuf::from(cfg).join("projects"));

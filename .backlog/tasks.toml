@@ -2864,13 +2864,18 @@ notes = """
 
 再観測 2026-09-24 (session 9d349393): 別セッション 2444be10 が main で merge 途中 (MERGE_HEAD 4d503182、UU .backlog/tasks.toml / tasks.done.toml、staged scripts/check-*.py 3 本) の状態で、stop-verify-worktree と reviewgate の両方が私の停止をブロックし、他セッションの merge 差分のレビューを要求した。自分は main を編集していない (私の変更は flow/post-integ-9d349393 にのみ commit)。
 
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test scripts/test_audit_s03_gates.py (rev e70d48dd)"""
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test scripts/test_audit_s03_gates.py (rev e70d48dd)
+
+[2026-10-14 session 4dadba08] Two attribution designs were tried and REJECTED by independent verifiers, both fail-open vs main's gate:
+(1) t2 owner-set ledger (dce99189): merged then reverted a3616edd. Stale record + later unrecorded Bash write gave stop exit 0 on the fix vs exit 2 on main.
+(2) content-hash ledger plus Bash merge-time recording, branch flow-233f819c @ 8d15be8a, NOT merged. Deterministic repro P2r (scratchpad verify-233b/probes/p2b.py): X's write is refused outside a merge, later Y runs git add -A during a merge, then X stops: main=2 branch=0. The race variants P2/P2e fail the same way.
+Root cause: sessions share one main index/tree, so a path's bytes cannot be soundly attributed to a session (staging and concurrent writes re-attribute). Open question for a human: reading (b), that main dirt blocks everyone by design and the section-8 worktree isolation is the real fix, versus continuing attribution work."""
 created_at = 1789279262
-updated_at = 1790983227
+updated_at = 1791920652
 weight = 0.0
 issue_number = 569
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/569"
-rev = 0
+rev = 2
 
 [[task]]
 id = "7100bb4e"

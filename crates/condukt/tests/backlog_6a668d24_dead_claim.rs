@@ -258,3 +258,88 @@ fn old_claim_with_undeterminable_transcript_stays_claimed() {
     );
     assert!(stdout.contains("\"claimed\": true"), "{stdout}");
 }
+
+/// B-1 (verifier finding): a LIVE holder whose transcript lives under
+/// `$CLAUDE_CONFIG_DIR/projects` (not `$HOME/.claude/projects`) must stay
+/// claimed. `$HOME/.claude/projects` exists, is readable and has no transcript
+/// for the session, so the reaper reads "determinately absent" and reaps a
+/// holder whose transcript is in fact GROWING. Holder and reaper share the env.
+fn live_holder_under_config_dir(extra_claim_args: &[&str]) {
+    let fx = Fixture::new(if extra_claim_args.is_empty() {
+        "cfgdir"
+    } else {
+        "cfgdir-sl"
+    });
+    let cfg = fx.base.join("cfg");
+    let slug = cfg.join("projects").join("-live-slug");
+    std::fs::create_dir_all(&slug).unwrap();
+    let transcript = slug.join(format!("{SESSION}.jsonl"));
+    std::fs::write(&transcript, "{\"n\":0}\n").unwrap();
+    let run = |args: &[&str]| -> Output {
+        Command::new(bin())
+            .args(args)
+            .current_dir(&fx.repo)
+            .env("HOME", &fx.home)
+            .env("CLAUDE_CONFIG_DIR", &cfg)
+            .env_remove("CLAUDE_CODE_SESSION_ID")
+            .env("HARNESS_PROGRESS_WINDOW_SECS", "0")
+            .output()
+            .expect("spawn condukt")
+    };
+    let mut args = vec![
+        "state",
+        "claim-task",
+        "--run",
+        RUN,
+        "--session",
+        SESSION,
+        "--title",
+        "t",
+        "--hashkey",
+        HASHKEY,
+    ];
+    args.extend_from_slice(extra_claim_args);
+    let out = run(&args);
+    assert!(out.status.success(), "claim-task must succeed: {out:?}");
+    fx.age_claim();
+    let isc = || {
+        let o = run(&["state", "is-claimed", "--hashkey", HASHKEY]);
+        (
+            o.status.code().expect("exit code"),
+            String::from_utf8_lossy(&o.stdout).into_owned(),
+        )
+    };
+    let (c1, o1) = isc();
+    assert!(
+        c1 == 0 && o1.contains("\"claimed\": true"),
+        "first sample: {c1} {o1}"
+    );
+    // The holder is alive: its transcript grows between the samples.
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&transcript)
+        .unwrap();
+    writeln!(
+        f,
+        "{{\"n\":1,\"pad\":\"more output from the live session\"}}"
+    )
+    .unwrap();
+    drop(f);
+    let (code, stdout) = isc();
+    assert!(
+        code == 0 && stdout.contains("\"claimed\": true"),
+        "a live holder (transcript under CLAUDE_CONFIG_DIR, growing) was reaped: \
+         exit {code}, stdout={stdout}"
+    );
+}
+
+#[test]
+fn live_holder_with_transcript_under_claude_config_dir_stays_claimed() {
+    live_holder_under_config_dir(&[]);
+}
+
+#[test]
+fn live_stateless_holder_with_transcript_under_claude_config_dir_stays_claimed() {
+    live_holder_under_config_dir(&["--stateless"]);
+}

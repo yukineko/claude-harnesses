@@ -631,11 +631,22 @@ fn stateless_transcript_signal(
     let Some(home) = std::env::var_os("HOME") else {
         return Determination::Undetermined(why);
     };
-    let projects = PathBuf::from(home).join(".claude").join("projects");
-    match transcript_absent_in(&projects, session_id) {
-        Determination::Known(()) => Determination::Known(ABSENT_TRANSCRIPT_MARKER.to_vec()),
-        Determination::Undetermined(_) => Determination::Undetermined(why),
+    // Claude Code relocates session history under `CLAUDE_CONFIG_DIR` when it
+    // is set. Absence is only observed when NO store this process could hold
+    // the transcript in has it: a live holder whose transcript lives under
+    // `$CLAUDE_CONFIG_DIR/projects` must not read as "absent" just because
+    // `$HOME/.claude/projects` lacks it. A transcript found there that the
+    // shared reader could not read stays `Undetermined` (kept).
+    let mut stores = vec![PathBuf::from(home).join(".claude").join("projects")];
+    if let Some(cfg) = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|v| !v.is_empty()) {
+        stores.push(PathBuf::from(cfg).join("projects"));
     }
+    for projects in &stores {
+        if let Determination::Undetermined(_) = transcript_absent_in(projects, session_id) {
+            return Determination::Undetermined(why);
+        }
+    }
+    Determination::Known(ABSENT_TRANSCRIPT_MARKER.to_vec())
 }
 
 /// `Known(())` only when it was OBSERVED that no `<projects_dir>/*/<id>.jsonl`

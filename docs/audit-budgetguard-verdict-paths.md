@@ -188,7 +188,7 @@ autoflow 監査の `crates/autoflow/src/lock.rs:81` と同じ、**grep の見た
 
 | 位置 | 逐語 | なぜ restrictive か |
 |---|---|---|
-| `crates/budgetguard/src/config.rs:220` | `env_bool("BUDGETGUARD_DISABLE").unwrap_or(false)` | `false` は「無効化**されていない**」＝ゲートは**armed のまま**。未設定・不正値でゲートは切れない |
+| `crates/budgetguard/src/config.rs:243` | `env_bool("BUDGETGUARD_DISABLE").unwrap_or(false)` | `false` は「無効化**されていない**」＝ゲートは**armed のまま**。未設定・不正値でゲートは切れない |
 | `crates/budgetguard/src/gate.rs:326-337` | `record_is_fresh` が `.ok()` 失敗時に `return false` | `false` は「gauge の記録は信用しない」＝**より正確な transcript 再計算へ**フォールバック。過少計上を防ぐ |
 | `crates/budgetguard/src/gate.rs:92-93` | `Determination::Undetermined(why) => ... undetermined_verdict(cfg, ...)` | 既に三値化済み（先行作業）。session 費用の測定不能は armed な上限に応じて Block/Warn |
 | `crates/budgetguard/src/gate.rs:122-132` | ledger 破損時に**上書きせず** `session_usd` を day total とする | 上書きは当日の累積を消す＝fail open。保存して自セッション分を下限とするのは保守的 |

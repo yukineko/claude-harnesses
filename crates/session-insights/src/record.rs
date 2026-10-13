@@ -112,8 +112,11 @@ fn session_models(ctx: &RecordCtx) -> Option<BTreeMap<String, ModelUsage>> {
 /// again.
 fn cost_incompleteness(ctx: &RecordCtx) -> Option<String> {
     let est = estimate_transcript_cost(ctx.transcript_path, ctx.overrides)?;
-    match est.complete_cost() {
-        Determination::Known(_) => None,
+    // The sub-agent scan only. An unpriced model also makes `complete_cost()`
+    // Undetermined, but that is an unknown PRICE, not unreadable sub-agent
+    // spend; it is already rendered by the total line as `unknown (...)`.
+    match &est.aggregate.subagent_scan {
+        Determination::Known(()) => None,
         Determination::Undetermined(why) => Some(why.to_string()),
     }
 }

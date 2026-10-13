@@ -95,7 +95,7 @@ output = 25.0
 
 プロジェクトの `./gauge.toml` > `~/.gauge/config.toml` > 組み込みデフォルトの順（最初に存在したファイルが勝つ）。`gauge.example.toml` を参照。ストアの既定値は `~/.gauge/store`。
 
-設定ファイルが存在するのに読めない・パースできない、または `[[pricing]]` 行に `pattern`/`input`/`output` が欠けている（typo などの未知キーを含む）場合、既定値へ黙って落ちない。読み取りコマンド（`report` / `session` / `subagents` / `status`）はファイル名つきの理由を出して exit 1 し、`record` hook は何も記録せず stderr に理由を出す。
+設定ファイルが存在するのに読めない・パースできない（`[[pricng]]` や `enabeld` のような typo を含む未知キーはすべてパース失敗扱い）、または `[[pricing]]` 行に `pattern`/`input`/`output` が欠けている・単価が有限の非負数でない場合、既定値へ黙って落ちない。読み取りコマンド（`report` / `session` / `subagents` / `status`）はファイル名つきの理由を出して exit 1 し、`record` hook は何も記録せず stderr に理由を出す。
 
 ## ビルド
 

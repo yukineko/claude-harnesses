@@ -44,7 +44,11 @@ struct FilePrice {
     output: Option<f64>,
 }
 
+/// The whole file. Unknown top-level keys are rejected: a misspelled
+/// `[[pricng]]` or `enabeld` would otherwise vanish silently and leave the
+/// defaults in force.
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FileConfig {
     enabled: Option<bool>,
     track_tools: Option<bool>,
@@ -104,8 +108,10 @@ impl Config {
     /// * `Known(defaults)` — no config file exists (the documented default
     ///   install).
     /// * `Known(cfg)` — a config file was read and every setting in it applied.
-    /// * `Undetermined` — a config file exists but could not be read or parsed,
-    ///   or a `[[pricing]]` row lacks `pattern`/`input`/`output`. The operator
+    /// * `Undetermined` — a config file exists but could not be read or parsed
+    ///   (including an unknown key anywhere), or a `[[pricing]]` row lacks
+    ///   `pattern`/`input`/`output` or has a rate that is not a finite
+    ///   non-negative number. The operator
     ///   configured *something* we cannot apply; any cost computed without it
     ///   would be a number from a config nobody wrote. The reason names the
     ///   file.
@@ -164,6 +170,14 @@ impl Config {
                         path.display()
                     ));
                 };
+                if !(input.is_finite() && input >= 0.0 && output.is_finite() && output >= 0.0) {
+                    return Determination::undetermined(format!(
+                        "gauge config {}: [[pricing]] row {n} (pattern {pattern:?}) has a rate \
+                         that is not a finite non-negative number (input = {input}, output = \
+                         {output})",
+                        path.display()
+                    ));
+                }
                 out.push(PriceOverride {
                     pattern,
                     input,

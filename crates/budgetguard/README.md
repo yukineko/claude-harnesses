@@ -150,7 +150,14 @@ Uses `harness-core`'s built-in rate table (same as gauge):
 | Sonnet | 3 | 15 |
 | Haiku | 1 | 5 |
 
-Override any model with a `[[price]]` stanza in `budgetguard.toml`.
+Override any model with a `[[price]]` stanza in `budgetguard.toml` (`pattern`
+is a case-insensitive substring of the model id). A model with usage that is
+neither in the table nor matched by an override has an **unknown** cost, not
+$0: the gate treats the session as unmeasured (`cost-undetermined`). Declare a
+genuinely free model with `input = 0.0` / `output = 0.0`. A `[[price]]` row
+with an empty `pattern` (it would match every model) or a rate that is not a
+finite non-negative number makes the config unusable, exactly like a parse
+error.
 
 ## License
 

@@ -115,9 +115,10 @@ Project `./gauge.toml` over `~/.gauge/config.toml` over built-in defaults (first
 file that exists wins). See `gauge.example.toml`. Store defaults to
 `~/.gauge/store`.
 
-A config file that exists but cannot be read or parsed, or a `[[pricing]]` row
-missing `pattern`/`input`/`output` (or carrying an unknown key such as a typo),
-is not silently replaced by defaults: the read commands (`report`, `session`,
+A config file that exists but cannot be read or parsed (including any unknown
+key, e.g. a misspelled `[[pricng]]` or `enabeld`), or a `[[pricing]]` row
+missing `pattern`/`input`/`output` or with a rate that is not a finite
+non-negative number, is not silently replaced by defaults: the read commands (`report`, `session`,
 `subagents`, `status`) print the reason naming the file and exit 1, and the
 `record` hook records nothing and says why on stderr.
 

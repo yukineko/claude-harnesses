@@ -187,6 +187,65 @@ class Controls(GateTestCase):
         self.assertLedgerHas(h, 1, "commit --no-verify must still be recorded")
 
 
+class UngatedMergeCannotDisguiseItselfAsFastForward(GateTestCase):
+    """An ungated `merge --no-ff --no-verify` IS a new commit that skipped the
+    gate. Whatever lets the hook tell "this merge created a commit" apart from
+    "this was a fast-forward" must not be steerable by caller-controlled text
+    (reflog action, branch name, message) and must not depend on reflogs
+    existing. Each case must still record exactly 1 entry: the new merge."""
+
+    def _prepare(self, h, branch="feat"):
+        h.git("checkout", "-q", "-b", branch)
+        h.write("b.txt", "b\n")
+        h.git("add", "-A")
+        h.commit("feature")
+        h.git("checkout", "-q", "main")
+        h.write("m.txt", "m\n")
+        h.git("add", "-A")
+        h.commit("main change")
+        self.assertLedgerEmpty(h, "before the merge")
+        h.clear_log()
+
+    def _assert_one_entry_for_new_merge(self, h):
+        self.assertEqual(h.ran(), [], "precondition: no gate ran")
+        head = h.git("rev-parse", "HEAD").stdout.strip()
+        self.assertEqual(
+            len(h.git("rev-parse", "HEAD^@").stdout.split()),
+            2,
+            "precondition: a real merge commit was created",
+        )
+        self.assertLedgerHas(h, 1, "the ungated merge must be recorded exactly once")
+        self.assertTrue(
+            h.ledger_lines()[0].startswith(head), "the entry is the new merge"
+        )
+
+    def test_reflog_action_saying_fast_forward_does_not_hide_it(self):
+        h = self.harness()
+        self._prepare(h)
+        h.env["GIT_REFLOG_ACTION"] = "evil: Fast-forward"
+        try:
+            h.git("merge", "--no-ff", "--no-verify", "-m", "ungated merge", "feat")
+        finally:
+            del h.env["GIT_REFLOG_ACTION"]
+        self._assert_one_entry_for_new_merge(h)
+
+    def test_branch_and_message_named_fast_forward_do_not_hide_it(self):
+        h = self.harness()
+        self._prepare(h, branch="Fast-forward")
+        h.git("merge", "--no-ff", "--no-verify", "-m", "x: Fast-forward",
+              "Fast-forward")
+        self._assert_one_entry_for_new_merge(h)
+
+    def test_recorded_without_any_reflog(self):
+        h = self.harness()
+        self._prepare(h)
+        h.git("config", "core.logAllRefUpdates", "false")
+        shutil.rmtree(str(h.root / ".git" / "logs"))
+        self.assertFalse((h.root / ".git" / "logs").exists(), "precondition")
+        h.git("merge", "--no-ff", "--no-verify", "-m", "ungated merge", "feat")
+        self._assert_one_entry_for_new_merge(h)
+
+
 class ConflictResolvedMerge(GateTestCase):
     def test_conflicted_merge_concluded_by_commit_records_nothing(self):
         h = self.harness()

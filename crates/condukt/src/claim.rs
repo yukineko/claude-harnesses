@@ -1612,18 +1612,26 @@ fn json_id(v: Option<&serde_json::Value>) -> Option<String> {
 }
 
 /// Shell out to `backlog list --status pending --json` and return the pending
-/// tasks as a list of JSON objects. Fail-soft: a missing binary, non-zero exit,
-/// or unparseable output yields an empty list rather than an error (never
-/// panics). Accepts either a top-level array or a `{ "tasks": [..] }` envelope.
+/// tasks as a list of JSON objects. Accepts either a top-level array or a
+/// `{ "tasks": [..] }` envelope.
+///
+/// Exactly one answer is soft: `backlog` is not installed at all (the lookup
+/// completed and found nothing) yields an empty list — there is no queue to
+/// join against, and the rows are written with `backlog_id`/`status`/`project`
+/// absent. Every other failure is `Err`, because "could not read the queue" is
+/// not "the queue has no pending tasks" (backlog 8a4fe104):
+/// - the lookup could not be completed (`Undetermined`: the plugin cache could
+///   not be read, or — with no cache copy — a `backlog` on `$PATH` exists but
+///   cannot be spawned);
+/// - `backlog list` could not be spawned, or exited non-zero (since backlog
+///   0.3.9 it does so when the claim ledger is unreadable or the project
+///   identity is undetermined);
+/// - its stdout is not JSON, or is neither an array nor an object carrying a
+///   `tasks` array.
 ///
 /// `backlog` is located with [`harness_core::plugin_bin::resolve`] (plugin
 /// cache first, `$PATH` second), not by bare name: a hook-spawned process does
-/// not inherit the plugin `bin/` dirs on `$PATH` (backlog abba6f0d). The one
-/// answer that is NOT soft is a lookup that could not be completed
-/// (`Undetermined`: the plugin cache could not be read, or — with no cache copy
-/// — a `backlog` on `$PATH` exists but cannot be spawned): that is `Err`,
-/// because "could not look for backlog" is not "backlog has no pending tasks" —
-/// the caller does not publish a view built on it.
+/// not inherit the plugin `bin/` dirs on `$PATH` (backlog abba6f0d).
 #[allow(dead_code)]
 fn backlog_pending() -> Result<Vec<serde_json::Value>> {
     let program = match harness_core::plugin_bin::resolve("backlog") {
@@ -1639,22 +1647,47 @@ fn backlog_pending() -> Result<Vec<serde_json::Value>> {
     };
     let output = std::process::Command::new(&program)
         .args(["list", "--status", "pending", "--json"])
-        .output();
-    let stdout = match output {
-        Ok(o) if o.status.success() => o.stdout,
-        _ => return Ok(Vec::new()),
+        .output()
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "`backlog list` could not be spawned ({e}); the pending queue is \
+                 undetermined, refusing to build the execution-state view"
+            )
+        })?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "`backlog list` exited with {} ({}); the pending queue is undetermined, \
+             refusing to build the execution-state view",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    parse_backlog_pending(&output.stdout)
+}
+
+/// Parse `backlog list --json` stdout. Unparseable output, or a shape that is
+/// neither an array nor an object with a `tasks` array, is `Err` — never an
+/// empty list (backlog 8a4fe104).
+fn parse_backlog_pending(stdout: &[u8]) -> Result<Vec<serde_json::Value>> {
+    let shape_err = || {
+        anyhow::anyhow!(
+            "`backlog list` output is neither a JSON array nor an object with a \
+             `tasks` array; the pending queue is undetermined, refusing to build \
+             the execution-state view"
+        )
     };
-    Ok(match serde_json::from_slice::<serde_json::Value>(&stdout) {
-        Ok(serde_json::Value::Array(a)) => a,
-        Ok(serde_json::Value::Object(mut m)) => m
-            .remove("tasks")
-            .and_then(|t| match t {
-                serde_json::Value::Array(a) => Some(a),
-                _ => None,
-            })
-            .unwrap_or_default(),
-        _ => Vec::new(),
-    })
+    match serde_json::from_slice::<serde_json::Value>(stdout) {
+        Ok(serde_json::Value::Array(a)) => Ok(a),
+        Ok(serde_json::Value::Object(mut m)) => match m.remove("tasks") {
+            Some(serde_json::Value::Array(a)) => Ok(a),
+            _ => Err(shape_err()),
+        },
+        Ok(_) => Err(shape_err()),
+        Err(e) => Err(anyhow::anyhow!(
+            "`backlog list` output is not JSON ({e}); the pending queue is \
+             undetermined, refusing to build the execution-state view"
+        )),
+    }
 }
 
 /// Pure JOIN of live task claims against backlog pending tasks, keyed on title
@@ -1704,11 +1737,11 @@ fn join_execution_state(
 
 /// Aggregate the live task claims into `execution-state.json` (beside
 /// `claims.json`): reap stale claims, JOIN the survivors against the backlog's
-/// pending tasks, and atomically write the rows. Fail-soft on the backlog (see
-/// [`backlog_pending`]) — the claims we hold are always written, with
-/// `backlog_id`/`status`/`project` left absent when unjoinable — EXCEPT when the
-/// `backlog` binary could not even be located (unreadable plugin cache), which
-/// is an error. Returns the rows written.
+/// pending tasks, and atomically write the rows. When `backlog` is not installed
+/// the rows are written with `backlog_id`/`status`/`project` absent; when the
+/// queue cannot be READ (see [`backlog_pending`]: lookup undetermined, spawn
+/// failure, non-zero exit, unparseable output) this is an error and no view is
+/// written or returned. Returns the rows written.
 // Wired into the CLI by the follow-up task.
 #[allow(dead_code)]
 pub fn write_execution_state(cfg: &Config, cwd: &Path, now: i64) -> Result<Vec<ExecutionEntry>> {

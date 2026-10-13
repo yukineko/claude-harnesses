@@ -36039,3 +36039,115 @@ scripts/test_backlog_1d2446de.py ...........                             [100%]
 rev = "4b178c2d72c961d56358950bfa61f208302747cd"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "00880b3d"
+title = "gauge P3+P4: gauge.toml の読み込み/パース失敗が無診断で既定値に落ち、rate 欠落の pricing override が 0 ドルで内蔵表を上書きして勝つ"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gauge",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+出典: docs/audit-gauge-verdict-paths.md の P3 / P4 (ともに HIGH)。本セッションで独立に再測定した (2026-09-24、測定点 b47f08e3、release ビルドの gauge バイナリ、全 probe に対照つき)。crates/gauge/src/config.rs:82-112 の Config::load は if let Ok(text) = read_to_string と if let Ok(fc) = toml::from_str の二重の if let Ok で失敗を捨て、:104-105 は r.input.unwrap_or(0.0) / r.output.unwrap_or(0.0) で rate 欠落を 0 ドルに写す。実測 (opus の input 100 万トークンを 1 セッション記録し gauge session --json を読む): 対照 1 override 無し cost_usd=5.0 / 対照 2 完全な override (input = 15.0) cost_usd=15.0 / probe 3 フィールド名を 1 文字だけ typo (inputt) cost_usd=0.0 rc=0 診断なし / probe 4 rate フィールドを丸ごと省略 cost_usd=0.0 rc=0。同時に gauge status は 3 と 4 でも pricing: 1 override(s) + built-in と表示し、読めなかった override を採用したと報告する。つまり設定ファイルの 1 文字の打ち間違いが全支出を 0 ドルに写し、その record を読む budgetguard の block を消す。修正: budgetguard の crates/budgetguard/src/config.rs:117 load_checked -> Determination<Config> と :192 locate の「不在 = Known(None)」「在るが読めない = Undetermined」の分離をそのまま移植する (前例が an_absent_config_is_known_default_not_undetermined として確立済み)。呼び出し側は gauge の 5 箇所 (crates/gauge/src/main.rs:196 238 252 489 609)。完了条件: 上記 4 ケースを RED 先行で固定し、対照 1 と 2 が引き続き正しい値を返すことも同時に固定する。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/gauge/tests/backlog_s10_repro.rs (rev 7e635343)"""
+created_at = 1790185719
+updated_at = 1791932305
+weight = 0.0
+issue_number = 753
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/753"
+issue_closed_at = 1791932307
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p gauge --test backlog_00880b3d"
+exit = 0
+passed = 8
+rev = "29464a2f69ebfb309d94e24cfc207e75ea7310a8"
+observed_at = 1791932293
+output_digest = "sha256:fc7f346e089e36eb5086811e60e0ec9c312f22fc6bc7a64c58a76d69eeacba0c"
+excerpt = """
+
+running 8 tests
+test control_1_no_config_uses_builtin_price ... ok
+test probe_5b_unreadable_config_is_not_silently_defaults ... ok
+test probe_5_unparseable_config_is_not_silently_defaults ... ok
+test probe_3_typo_rate_field_is_not_a_zero_dollar_override ... ok
+test probe_4_omitted_rate_fields_are_not_a_zero_dollar_override ... ok
+test probe_6_status_does_not_claim_a_broken_override_was_adopted ... ok
+test control_2_complete_override_applies ... ok
+test control_1b_valid_config_without_pricing_uses_builtin_price ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_00880b3d.rs (target/debug/deps/backlog_00880b3d-1e91aa215564f365)
+"""
+
+[task.closure.red]
+rev = "2158d24b420ca94673010bbed698e5763d174877"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "ff98fed0"
+title = "gauge/harness-core P2: 未知の model id が 0 ドルに価格付けされ、予算ゲートが恒久的に無効化される (unknown_model_is_free が仕様として固定している)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gauge",
+    "fail-open",
+    "harness-core",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+出典: docs/audit-gauge-verdict-paths.md の P2 (HIGH)。監査日 2026-09-24、測定点 b47f08e3。crates/harness-core/src/pricing.rs:59-64 の rate_for が未知の model id に 0 ドルを返す。監査の実測: 同一トークン数で block_usd=1.0 のとき opus は 30.0000 ドルで block、sonnet は 18.0000 ドルで block、claude-newfamily-1 は 0.0000 ドルを報告して block しない。model id はこちらが決める値ではなく外部が変える入力なので、新モデルが出た瞬間に予算ゲートが静かに無効になる。さらに悪いのは crates/harness-core/src/pricing.rs:155-162 の unknown_model_is_free がこの permissive 挙動を仕様として凍結していることで、CLAUDE.md 2 節が名指しする「検証していないテストの assert が仕様として書き下される」形そのものである (condukt verify.rs の checks_verdict(&[]) と同型)。修正: rate_for を Determination<Rate> 化する。ローカルモデル等の正当な無料ケースは明示的な input = 0.0 override を Known(0.0) として残す。unknown_model_is_free は逆向きの assert へ書き換える (削除ではなく反転 — 削除すると何が変わったか履歴から読めなくなる)。影響範囲は gauge 8 サイト + budgetguard + harness-status + session-insights なので段階移行になる。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/harness-core/tests/backlog_s07_audit.rs (rev e70d48dd)"""
+created_at = 1790185717
+updated_at = 1791932322
+weight = 0.0
+issue_number = 752
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/752"
+issue_closed_at = 1791932325
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p gauge --test backlog_ff98fed0"
+exit = 0
+passed = 3
+rev = "29464a2f69ebfb309d94e24cfc207e75ea7310a8"
+observed_at = 1791932311
+output_digest = "sha256:370dad7fb3ccb9f61af5aaaf7547f97b6b08d9c79340c5e5927cba400b28d7dc"
+excerpt = """
+
+running 3 tests
+test backlog_ff98fed0_control_opus_session_costs_five_dollars ... ok
+test backlog_ff98fed0_unknown_model_cost_is_not_claimed_zero ... ok
+test backlog_ff98fed0_control_explicit_zero_override_is_known_zero ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/backlog_ff98fed0.rs (target/debug/deps/backlog_ff98fed0-ee46fa7c1ee1f015)
+"""
+
+[task.closure.red]
+rev = "64294a2a92f53faaaff6830f1482fef12c6d605c"
+exit = 101
+kind = "behavioural"

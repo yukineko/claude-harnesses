@@ -28,7 +28,8 @@ const CACHE_WRITE_1H_MULT: f64 = 2.0;
 const CACHE_READ_MULT: f64 = 0.1;
 
 /// A per-model price override (USD per 1M input/output tokens). `pattern` is
-/// matched as a substring against the lower-cased model id; the first matching
+/// matched case-insensitively as a substring of the model id (both sides are
+/// lower-cased at match time, so a caller need not normalize); the first matching
 /// override wins over the built-in table. Rates of `0.0` are honoured as a
 /// deliberate "this model is free" declaration.
 #[derive(Debug, Clone)]
@@ -80,7 +81,7 @@ fn builtin_rate(model: &str) -> Option<Rate> {
 pub fn rate_for(model: &str, overrides: &[PriceOverride]) -> Determination<Rate> {
     let m = model.to_lowercase();
     for o in overrides {
-        if m.contains(&o.pattern) {
+        if m.contains(&o.pattern.to_lowercase()) {
             return Determination::Known(Rate {
                 input: o.input,
                 output: o.output,

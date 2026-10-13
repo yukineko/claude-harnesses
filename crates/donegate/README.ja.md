@@ -34,8 +34,9 @@ donegate は、この「未検証のまま完了宣言する」問題を停止�
 - **試行カウンタ**: セッションごとに連続ブロック回数を数え、`max_attempts`（既定 3）回に達したら諦めて停止を許す。本当に詰まったエージェントが罠にかからないようにするためだ。カウンタは `reset_after_secs` のアイドル後、またはグリーンになった時点でリセットされる。
 - **エスケープハッチ**: `donegate skip --reason "<理由>"`。一度だけ消費されて次の停止を通し、**発行したセッションにだけ**適用される。理由は必須で、発行と消費の両方がゲートログに追記されるため、記録の残らないバイパスは起こらない。（旧来の project root の `.donegate-skip` ファイルは撤去した。共有の 1 回限りマーカーは次に停止したセッションが消費してしまい、その*別*セッションの正当なゲートを素通りさせる — CLAUDE.md §5 が並行セッション下で禁じているのはまさにこれ。）
 - **キルスイッチ**: `DONEGATE_DISABLE=1`。ただし **Claude Code 自身を起動した環境**でのみ有効で、ツール呼び出しから export しても、このフックはアプリの環境を継承するため届かない。
-- **既定で安全**: `[[check]]` が 1 つも設定されていなければ、ゲートはすべての停止を許す。フックを入れただけで、オプトインしていないプロジェクトをブロックすることは決してない。
-- **ハーネスのエラー**（設定ミスや donegate 自身のバグ）は常に終了コード 0 で停止を通す。意図的にブロックするのは、実際に失敗したチェックだけだ。
+- **オプトイン**: 設定ファイルが 1 つも無い（`<root>/donegate.toml` も `~/.donegate/config.toml` も無い）か、読み込んだ設定に `[[check]]` が 1 つも無ければ、ゲートはすべての停止を許す。フックを入れただけで、オプトインしていないプロジェクトをブロックすることはない。
+- **判定できないときはブロックする**: project の `donegate.toml` があるのに root が**未信頼**（実行を拒否）、設定ファイルが存在するのに読めない・解析できない、宣言されたチェック名が予約名前空間 `undetermined:` に入っている — これらは許可ではなくブロックになる。同じ `max_attempts` カウンタで有界で、使い切ると「NOTHING WAS VERIFIED」と明示して停止を通す（`giveup-refusal` として記録）。
+- **donegate 自身の panic** は `harness_core::gate::run::run_guarded` を通り fail-closed（最初の停止はブロック。`stop_hook_active` の再入で 2 回連続 panic したときだけ通す）。
 
 ## どう使うか
 
@@ -68,7 +69,7 @@ donegate gate          # チェックを手動実行（人間向けレポート�
 | `donegate status` | 解決済みの設定と、現在の作業ツリーに対して実行されるチェックを表示する。 |
 | `donegate trust` | 現在のプロジェクトをワークスペース信頼リストに追加し、そのプロジェクト固有の `donegate.toml` のコマンドを Stop 時に honor させる。 |
 
-プロジェクトの `donegate.toml` は、そのプロジェクトが信頼済み（`donegate trust`）になって初めて honor される。未信頼のプロジェクトファイルは無視され、donegate は `~/.donegate/config.toml` にフォールバックする。これにより、敵対的なリポジトリが Stop 時に任意のコマンドを紛れ込ませることを防ぐ。
+プロジェクトの `donegate.toml` は、そのプロジェクトが信頼済み（`donegate trust`）になって初めて honor される。これにより、敵対的なリポジトリが Stop 時に任意のコマンドを紛れ込ませることを防ぐ。未信頼のプロジェクトファイルの代わりに `~/.donegate/config.toml` のチェックを使うことは**しない**：`donegate trust`（または `HARNESS_TRUST_ALL=1`）するまで、実行拒否として停止をブロックする（有界、上記参照）。home 設定から取るのはつまみ（`enabled`・`max_attempts`・`state_dir`・タイムアウト）だけ。リポジトリの main 作業ツリーを信頼すれば、その linked git worktree も信頼される。
 
 ### gate の動作
 
@@ -95,7 +96,7 @@ donegate gate          # チェックを手動実行（人間向けレポート�
 
 ### ログ
 
-すべての判定は `~/.donegate/state/log.jsonl` に JSONL 1 行として追記される（`verdict` は `green` / `blocked` / `giveup` / `skip` のいずれか）。ローカルのみ。
+すべての判定は `~/.donegate/state/log.jsonl` に JSONL 1 行として追記される（`verdict` は `green` / `blocked` / `giveup` / `giveup-reentry` / `skip` / `refused` / `giveup-refusal` / `giveup-refusal-reentry` のいずれか）。ローカルのみ。give-up は overwatch の violation ledger にも記録される（`donegate:giveup:<check>` / `donegate:undetermined:<kind>`）。
 
 ## ライセンス
 

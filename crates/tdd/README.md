@@ -86,7 +86,21 @@ verbatim), else `~/.tdd/config.toml`, else language-aware defaults. Common keys:
 | `proof_dir` | `.tdd` | where RED/GREEN proofs are written |
 
 `impl_globs` / `test_path_globs` / `test_markers` override the language-aware
-file/marker defaults. Other subcommands: `tdd status` (show the resolved config +
+file/marker defaults.
+
+### Strict test/impl author separation (`strict_separation`)
+
+`tdd red --author <id>` records who wrote the test into the RED proof; `tdd green
+--author <id>` is compared against it. With strict separation on, the same identity
+(case/whitespace-insensitive), or a missing `--author` on either side, makes `tdd
+green` **refuse** (fail-closed), so one agent cannot write both a wrong
+implementation and a test bent to match it. Effective value, highest first:
+`--strict-separation` / `--no-strict-separation` on `tdd green` (mutually
+exclusive), then `strict_separation` in the config, then **on by default inside a
+gate crate** (`crates/<gate>/…`, per `harness_core::fleet::GATE_CRATES`), else off.
+
+Other subcommands: `tdd skip --reason "<why>"` (one-shot, session-scoped; see
+above), `tdd init` (starter `tdd.toml`), `tdd status` (show the resolved config +
 what the gate would do), `tdd trust` (honor this project's `tdd.toml` `test_cmd`,
 untrusted by default), `tdd oracle --task <id>` (classify RED→GREEN and print
 a JSON verdict — see above), `tdd uninstall` (remove the Stop hook).

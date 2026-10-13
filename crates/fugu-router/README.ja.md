@@ -110,7 +110,17 @@ fugu-router import --episodes /path/episodes.jsonl [--playbooks ...] [--dry-run]
 fugu-router import --dedup                  # ローカル stores の重複除去（content-hash, first-seen 優先）
 fugu-router sync [--pull-only | --push-only]  # record ストアを sync_repo（git）と同期
                                             # SessionEnd フックとしても自動実行される
-fugu-router init                            # fugu-router.toml を書き出す
+fugu-router harvest [--repo P] [--window-days 3] [--lookback-days 60]
+                                            # main/master への merge を観測窓経過後に `merge` episode 化（SessionEnd で sync の前に実行）
+fugu-router audit-recent --class <C> --within <秒>  # 窓内に <C> の episode があれば exit 0、無ければ 1
+fugu-router delegation-stats [--json]       # fork vs inline（class flow-delegation）の比較
+fugu-router duration-outliers [--json] [--threshold 1.5]  # class 別 duration 外れ値（別名 duration）
+fugu-router lessons add --kind error-pattern|convention --task-summary "..." --lesson-text "..." [--source-run R]
+fugu-router lessons search --query "..." [--k 3]  # プロジェクト横断の lessons ストア（JSON 配列）
+fugu-router code-index build [--root P] [--if-stale]  # git 管理下の .rs から字句シンボル索引を構築
+fugu-router code-index search --query "..." [--root P] [--k N]  # JSON 配列。索引が無ければ exit 3、読めなければ exit 4
+fugu-router init [target]                   # fugu-router.toml を書き出す（既定 ./fugu-router.toml）
+fugu-router install|uninstall [--dry-run]   # 手動（非プラグイン）でのフック配線
 ```
 
 `procedures search` サブコマンドは、似た検証済みタスクが*どう解かれたか*を k-NN で引いて condukt の interpreter を seed する（独立した `playbook` プラグインの知識ノート注入とは別物。旧名 `playbook` は隠しエイリアスとして残る）。
@@ -122,10 +132,10 @@ fugu-router init                            # fugu-router.toml を書き出す
 
 ### インストールと配線
 
-プラグイン版はバイナリと 2 本のフックを同梱する。どちらも `hooks/hooks.json` に宣言され、`${CLAUDE_PLUGIN_ROOT}` 経由で解決される。API キー不要で**サブスクリプションで完結**する。
+プラグイン版は `bin/fugu-router` ランチャ（プラットフォーム別バイナリは gitignore されておりローカルでビルドし、`scripts/rollout-plugins.sh` が配置する）・`/fugu-router` skill・2 本のフックを同梱する。どちらも `hooks/hooks.json` に宣言され、`${CLAUDE_PLUGIN_ROOT}` 経由で解決される。API キー不要で**サブスクリプションで完結**する。
 
 - `UserPromptSubmit` → `fugu-router prompt`。プロンプトがコーディング作業に見えるときルーティングメモリの要約を 1 ブロック注入する。
-- `SessionEnd` → `fugu-router sync`。record ストアを `sync_repo` から pull し、ローカルの追記を commit & push する（`sync_repo` 未設定なら no-op）。
+- `SessionEnd` → `fugu-router harvest; fugu-router sync`（timeout 60 秒）。`harvest` が cwd リポジトリの `main`/`master` への merge のうち観測窓を過ぎたものを `merge` episode として記録し、続いて `sync` が record ストアを `sync_repo` から pull し、ローカルの追記を commit & push する（`sync_repo` 未設定なら no-op）。
 
 手動導入する場合は次のとおり。
 

@@ -44,7 +44,7 @@ context-governor is a **single hook-dispatch binary**. It reads the hook payload
 
 Two execution rules:
 
-- **Never break a turn** — the whole dispatch runs inside `harness_core::hook::run_hook`, which swallows panics and exits 0. Empty/invalid payloads are a silent no-op (`{}`).
+- **Panics and errors resolve to exit 0** — the whole dispatch runs inside `harness_core::hook::run_hook`, which swallows panics and exits 0. Empty/invalid payloads are a silent no-op (`{}`). Note this applies to `PreCompact` too: a panic, or a backing store that cannot be opened, resolves to `Proceed` (compaction is allowed) — the guard's block path is fail-open on those errors.
 - **Only PreCompact may block** — a `Block` decision exits 2 (Claude Code's block signal). Every other path writes its envelope and exits 0.
 
 ## Measurement (action ledger)
@@ -61,7 +61,7 @@ The size axis must be *measured*, not merely asserted. The three size levers (gr
 context-governor rollup
 ```
 
-aggregates the ledger into a deterministic, read-only view (`total_saved_tokens`, row count, per-action breakdown) — the evidence that lets you later disprove axis confusions like "pinning saves size".
+aggregates the ledger (for the current directory) into a deterministic, read-only view (`rows`, `total_saved_tokens`, per-event counts) — the evidence that lets you later disprove axis confusions like "pinning saves size".
 
 Because it is a thin layer over built-in compaction, no extra API key is needed — it is **subscription-native** (hooks + binary).
 

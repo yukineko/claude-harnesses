@@ -49,13 +49,16 @@ merge can't masquerade as a validated learning:
 | `validated` | measured evidence **supports** the bet | `hypothesis validate --evidence …` |
 | `rejected` | measured evidence **refutes** the bet | `hypothesis reject --reason …` |
 
-`validate` **requires** `--evidence` and `reject` takes a `--reason`: you cannot move a
+`validate` **requires** at least one non-empty `--evidence` or `--measurement`, and
+`reject` **requires** a non-empty `--reason` (both are refused otherwise): you cannot move a
 hypothesis to a terminal state without recording what you measured. Shipping alone only
 reaches `awaiting-measurement` — **build ≠ validate**.
 
 Each record holds `id` / `text` / `status` / `evidence[]` / `linked_goal` /
 `condukt_run` / `success_criterion` / `kill_criterion` / `assumptions[]` /
-`confidence` / `created_at` / `updated_at`.
+`confidence` / `created_at` / `updated_at` / `shipped_at` (set on every
+`await-measurement`) / `scope_write_paths` / `scope_read_paths` (the declared blast radius,
+recorded only by `draft`; absent = never asked).
 
 ## Subcommand surface
 
@@ -64,11 +67,13 @@ The binary is thin and deterministic:
 | Subcommand | Purpose |
 |---|---|
 | `hypothesis add <text> [--goal <keyword>] [--success "<metric> >= <n>"] [--kill "<metric> <= <n>"] [--confidence <0..1>]` | add a bet; prints the new id. `--goal` links it to a compass charter goal. `--success`/`--kill` pre-register a falsifiable bar *before* shipping (operators: `>= <= > < ==`). `--confidence` sets the discovery confidence (default 0.5) |
-| `hypothesis list [--status <s>]` | list bets in **discovery order** (confidence descending, then created_at), optionally filtered (`open` / `awaiting-measurement` / `validated` / `rejected`); pre-registered criteria are shown inline |
+| `hypothesis draft <text> [--goal <keyword>] [--success …] [--kill …] [--write-path <p>…\|--no-write-paths] [--read-path <p>…\|--no-read-paths]` | interrogate an ambiguous task: print what is still unresolved (D1 scope, D2 success criterion, D3 kill criterion, D4 goal link) and **write nothing** until every point is answered; then record the bet with its declared scope. An empty write surface (`--no-write-paths`) is refused; an empty read surface is accepted. Exits 0 while questions remain open |
+| `hypothesis list [--status <s>] [--json]` | list bets in **discovery order** (confidence descending, then created_at), optionally filtered (`open` / `awaiting-measurement` / `validated` / `rejected`; an unrecognised value matches nothing); pre-registered criteria, declared scope (`[scope: undeclared]` when never asked) and the RAT are shown inline. `--json` emits an array of `{id,status,text,confidence,run}` |
+| `hypothesis stats` | shipped-vs-measured health metrics as one JSON object (`shipped` / `validated` / `rejected` / `awaiting` / `avg_measurement_delay_days`) |
 | `hypothesis confidence <id> <value>` | set a bet's discovery confidence (verification priority; higher = surfaces for validation sooner). Reorders the `list` discovery queue |
 | `hypothesis await-measurement <id> [--run <run>]` | mark a shipped-but-unmeasured bet (condukt calls this on merge) |
-| `hypothesis validate <id> --evidence <text>… [--measurement "<metric>=<value>"…] [--run <run>]` | terminal: measured evidence supports the bet (evidence required). If a `--success` criterion was pre-registered, a matching `--measurement` must clear it — otherwise validation is refused (no post-hoc goalpost-shifting) |
-| `hypothesis reject <id> [--reason <text>] [--run <run>]` | terminal: measured evidence refutes the bet |
+| `hypothesis validate <id> [--evidence <text>…] [--measurement "<metric>=<value>"…] [--run <run>]` | terminal: measured evidence supports the bet (at least one evidence or measurement required). If a `--success` criterion was pre-registered, a matching `--measurement` must clear it — otherwise validation is refused (no post-hoc goalpost-shifting) |
+| `hypothesis reject <id> --reason <text> [--run <run>]` | terminal: measured evidence refutes the bet (a non-empty reason is required at runtime) |
 | `hypothesis assume <id> --text <t> --risk <low\|medium\|high> --evidence <strong\|weak\|none>` | record a belief the bet rests on (for RAT de-risking) |
 | `hypothesis rat <id>` | print the riskiest untested assumption (the leap of faith to de-risk first via a minimal experiment); prints nothing when the bet is already de-risked. flow runs this before a full build |
 | `hypothesis tested <id> <index>` | mark the assumption at `<index>` as tested (e.g. after a RAT), so it no longer registers as a leap of faith |
@@ -77,17 +82,20 @@ The binary is thin and deterministic:
 
 ## The hook
 
-Deterministic, non-blocking, exits 0 on any error (a discovery hook must never break a turn):
+Deterministic and non-blocking (it carries no verdict; it runs through
+`harness_core::hook::run_hook`, which always exits 0). Caveat — its silence is ambiguous:
+if the store cannot be loaded (parse error, unreadable file, or the store lock is
+contended) it prints **nothing**, exactly as when there are no open bets.
 
 | Hook | Event | What it does |
 |---|---|---|
-| **`hypothesis session-start`** | `SessionStart` (startup/resume/clear) | injects the project's **open** and **awaiting-measurement** hypotheses as context, with a `validate`/`reject` reminder. Bets whose `linked_goal` no longer matches the compass charter are flagged `[unlinked]` so discovery doesn't silently drift from the goal. Prints nothing when there are no open or awaiting bets. |
+| **`hypothesis session-start`** | `SessionStart` (no matcher — every source; timeout 5s) | injects the **open** and **awaiting-measurement** hypotheses from the (global, not per-project) store as context, with a measurement-debt summary (count + oldest age; a warning once it ages past a threshold) and a `validate`/`reject` reminder. Open bets whose `linked_goal` no longer matches the current repo's compass charter are flagged `[unlinked]` so discovery doesn't silently drift from the goal. Output is truncated to `inject_limit` bytes. Prints nothing when there are no open or awaiting bets. |
 
 ## Store & configuration
 
 The ledger lives at `~/.hypothesis/hypotheses.toml`. Optional `~/.hypothesis/config.toml`
-(a missing file/key falls back to the defaults; a parse error silently yields defaults so
-a discovery tool never crashes a turn):
+(a missing file/key falls back to the defaults; note that an unreadable or unparsable
+file **also** silently yields the defaults — there is no warning):
 
 ```toml
 enabled      = true     # set false to disable the SessionStart injection
@@ -113,8 +121,10 @@ The plugin bundles the SessionStart hook (`hooks/hooks.json`), the `/hypothesis`
 
 The hook calls `${CLAUDE_PLUGIN_ROOT}/bin/hypothesis session-start`. `bin/hypothesis` is
 a small POSIX launcher that selects the right per-platform binary
-(`bin/hypothesis-<os>-<arch>`); if a host has no matching binary it exits 0 silently and
-prints a one-line build hint to stderr.
+(`bin/hypothesis-<os>-<arch>`). If the host has no matching binary, `session-start` emits a
+visible `systemMessage` + `additionalContext` saying it did NOT run (so the absence of
+listed bets is UNKNOWN, not "none open"), and every other verb exits 127 with the reason on
+stderr — never a silent exit 0.
 
 > `hypothesis` pairs with [compass](../compass) (the goal it tests toward) and feeds
 > [flow](../flow) (which builds and measures the bets). It works standalone, but the loop
@@ -122,29 +132,24 @@ prints a one-line build hint to stderr.
 
 ### Build from source
 
+The per-platform binaries (`bin/hypothesis-<os>-<arch>`) are **not committed** (see the
+repo `.gitignore`); only the `bin/hypothesis` launcher is tracked. Local deploy builds from
+source via `scripts/rollout-plugins.sh`. To stage a binary by hand:
+
 ```sh
 scripts/build-plugin-bin.sh hypothesis                       # host platform
 scripts/build-plugin-bin.sh hypothesis x86_64-apple-darwin   # cross-target the Intel Mac build
-git add bin/ && git update-index --chmod=+x bin/hypothesis bin/hypothesis-*
 ```
-
-## Platform support
-
-| Host | File | Status |
-|---|---|---|
-| Linux x86_64 | `bin/hypothesis-linux-x86_64` | bundled |
-| macOS Apple Silicon | `bin/hypothesis-darwin-arm64` | bundled |
-| macOS Intel | `bin/hypothesis-darwin-x86_64` | built in CI on a macOS runner |
 
 ## Plugin layout
 
 ```
-.claude-plugin/plugin.json     # plugin manifest (version 0.1.2)
+.claude-plugin/plugin.json     # plugin manifest
 hooks/hooks.json               # SessionStart=session-start → ${CLAUDE_PLUGIN_ROOT}/bin/hypothesis
 skills/hypothesis/SKILL.md     # the /hypothesis skill (manage the lifecycle)
 skills/add/SKILL.md            # the /add skill (add a bet, link to a compass goal)
 bin/hypothesis                 # POSIX launcher → hypothesis-<os>-<arch>
-bin/hypothesis-<os>-<arch>     # prebuilt binaries
+bin/hypothesis-<os>-<arch>     # per-platform binaries (built locally, not committed)
 src/ … Cargo.toml              # the Rust crate
 ```
 
@@ -179,13 +184,14 @@ discovery(hypothesis) → flow → condukt → merge → awaiting-measurement �
 
 `open`（未検証の賭け）→ `awaiting-measurement`（**出荷したが未計測**。condukt が merge 時に遷移）
 → `validated`（計測した証拠が支持）/ `rejected`（計測した証拠が反証）。
-`validate` は `--evidence` 必須、`reject` は `--reason` を取る — **計測した内容を記録せずに終端に動かせない**。
+`validate` は空でない `--evidence` か `--measurement` のどちらか 1 つ以上が必須、`reject` は空でない `--reason` が必須 — **計測した内容を記録せずに終端に動かせない**。
 出荷だけでは `awaiting-measurement` 止まり（build ≠ validate）。
 
 ### SessionStart hook
 
-`hypothesis session-start` — その project の **open** と **awaiting-measurement** の仮説を
-context 注入し、`validate`/`reject` を促す。`linked_goal` が compass charter と乖離した賭けは
+`hypothesis session-start` — （project 別ではなくグローバルな）ストアの **open** と **awaiting-measurement** の仮説を
+context 注入し、`validate`/`reject` を促す。ストアが読めない（解析失敗・lock 競合等）ときも何も出さないので、
+沈黙は「open が無い」と区別できない。`linked_goal` が compass charter と乖離した賭けは
 `[unlinked]` として警告（発見がゴールから静かに逸れるのを防ぐ）。open/awaiting が無ければ何も出さない。
 `HYPOTHESIS_DISABLE=1` で無効化。
 

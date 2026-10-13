@@ -111,8 +111,12 @@ env into a bearer and calls anyway), all four absent-key assertions failed with
 jev check                 # three-valued availability as JSON; exit 0 / 1 / 10
 echo '{"state": "...", "questions": {"q": {"type":"noul","instructions":"..."}}}' \
   | jev ask               # answers as JSON; no network call without a key
+jev ask --model <route>   # override the model route for this call only
 jev ledger                # records, tokens, estimated USD
 ```
+
+The plugin also ships a `/jev` skill (`skills/jev/SKILL.md`) that asks jev for
+an advisory typed judgement and spells out where it may and may not be used.
 
 Configuration lives in `~/.jev/config.toml` (`JEV_CONFIG` to relocate):
 
@@ -121,7 +125,8 @@ model = "jev-1.13.0"   # pin: see below
 max_time_secs = 8
 ```
 
-Env overrides: `JEV_MODEL`, `JEV_MAX_TIME_SECS`, `JEV_LEDGER`, `JEV_ENDPOINT`.
+Env overrides: `JEV_MODEL`, `JEV_MAX_TIME_SECS`, `JEV_LEDGER` (default
+`~/.jev/usage.jsonl`), `JEV_ENDPOINT`.
 The key is **not** configurable here — environment only.
 
 ## Gotchas worth knowing before you use it

@@ -27,8 +27,9 @@ tracekit record --run RID-42 --span t2 --parent t1 --name "impl auth" \
 ```
 
 Spans append to `~/.tracekit/<RID>/spans.jsonl` (append-only — concurrent worker
-completions never clobber each other). `--end-unix-ms` overrides the record-time
-end stamp for deterministic replay.
+completions never clobber each other). `--task` attaches a task id (exported as
+`harness.task_id`), `--ms` defaults to 0 and `--status` to `ok`. `--end-unix-ms`
+overrides the record-time end stamp for deterministic replay.
 
 ## Render the tree
 
@@ -67,9 +68,10 @@ preserved as `parentSpanId`. See the
 tracekit list      # runs that have recorded spans
 ```
 
-## Integration (follow-up)
+## Integration
 
-The keystone here is the standalone recorder + tree + export. Wiring condukt's
-`state set` transitions to emit a span per phase (and joining gauge's per-agent
-cost onto the matching span) is the next increment — tracked separately so this
-crate ships and is verifiable on its own.
+tracekit itself ships no hook. The `/condukt` skill (`crates/condukt/skills/condukt/SKILL.md`)
+calls `tracekit record` from its shell steps as a soft dependency — an `interpret`
+root span, then a worker span and a verifier span per task. The condukt binary does
+not emit spans itself, and joining gauge's per-agent cost onto the matching span
+is not automated.

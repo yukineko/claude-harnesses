@@ -8,10 +8,10 @@ Claude Code 向けの**クロスプロジェクト・タスクキュー** — �
 
 backlog は「あとでやる」をセッションをまたいで持ち越すための耐久キューである。責務は次の 2 つに集約される。
 
-- **キューと state の管理**: `backlog` バイナリが作業項目の追加・一覧・ピック・完了/失敗マークを担い、複数セッションを直列化するための排他 run-lock (`~/.backlog/run.lock`) を所有する。
+- **キューと state の管理**: `backlog` バイナリが作業項目の追加・一覧・ピック・完了/失敗マークを担い、task 単位の予約（`next --claim`）と、明示的に全セッションを締め出すための project ごとの排他ロック (`~/.backlog/locks/<project>.lock`) を所有する。
 - **保留作業の自動浮上**: **SessionStart** フックが、セッションが開いた瞬間に pending なタスクを context として注入する。
 
-cycle-type のタグでタスクを分類できるため、リポジトリ横断で「どの種類の仕事が溜まっているか」を後から絞り込める。lock→pick→`/condukt`→done のループ driver 自体は `/flow` に統合されており、同梱の `/backlog` skill はその薄いエイリアス兼 queue/state 操作のエントリポイントである。
+cycle-type のタグでタスクを分類できるため、リポジトリ横断で「どの種類の仕事が溜まっているか」を後から絞り込める。driver 登録→`next --claim`→`/condukt`→done のループ driver 自体は `/flow` に統合されており、同梱の `/backlog` skill はその薄いエイリアス兼 queue/state 操作のエントリポイントである。
 
 **サブスクリプションネイティブ**: skill 1 つ、hook 1 つ、同梱の Rust バイナリ 1 つだけで動き、`ANTHROPIC_API_KEY` も追加インストールも不要。SessionStart フックは fail-soft で、壊れた stdin は stderr にログして読み飛ばし、常に exit 0 で返すのでターンを壊さない。
 
@@ -23,7 +23,7 @@ backlog はこの失敗モードを潰す。一度キューに積めば、
 
 - セッションを閉じても、別リポジトリに移っても、項目は永続キューに残り続ける。
 - 次にどのプロジェクトでセッションを開いても、SessionStart フックが pending な作業を自動で context に差し込むので、「何が残っていたか」を思い出す必要がない。
-- 排他 run-lock により、複数セッションが同時にキューを消化して競合することを防ぐ。`/flow` driver はキューを drain する前にロックを取得し、他セッションは `lock status` がアクティブな保有者を報告したら退避する。
+- `next --claim` が選択と予約を同一クリティカルセクションで行うので、複数セッションが同時にキューを消化しても同じタスクを渡されない。`/flow` はキュー全体をロックせず（同じ project を複数セッションが回せる）、`driver` 登録と task 単位の `next --claim` を使う。排他ロック（`lock acquire`）は明示的に全セッションを締め出したいときだけ使い、他セッションは `lock status` がアクティブな保有者を報告したら退避する。
 
 つまり backlog が無いと、保留作業の追跡が人間（または揮発する会話）任せになり、取りこぼしと並行消化の衝突が起きる。
 
@@ -33,15 +33,23 @@ backlog はこの失敗モードを潰す。一度キューに積めば、
 
 | サブコマンド | 役割 |
 |---|---|
-| `add` | タスクを追加 (`--title`, `--project`, `--tag`, `--priority p0/p1/p2`, `--notes`, `--weight`, `--force`) |
-| `list` | store のタスク一覧。`--tag` / `--status` で絞り込み。repo store では `--project` は絞り込みではなく **assertion**（下の「スコープ」参照）|
-| `next` | 次の最高優先度の pending タスクを JSON で出力 |
-| `done <id>` | タスクを完了マーク |
+| `add` | タスクを追加 (`--title`, `--project`, `--tag`, `--priority p0/p1/p2`, `--notes`, `--weight`, `--force`, `--repro-test`)。`--repro-test` 指定時は先に HEAD でテストを実行し、挙動として落ちれば `pending`、それ以外は `unconfirmed`（作業キュー外）で積む。add 自体は常に成功する |
+| `confirm <id> --repro-test CMD` | `unconfirmed` タスクの再現テストを再実行し、`reproduced` のときだけ `pending` に昇格。それ以外は試行を記録して非 0 終了 |
+| `list` | store のタスク一覧。`--tag` / `--status`（`pending` / `done` / `failed` / `cancelled` / `claimed`。`claimed` は導出値）/ `--json`。repo store では `--project` は絞り込みではなく **assertion**（下の「スコープ」参照）|
+| `next` | 次の最高優先度の pending タスクを JSON で出力（`--claim` で予約。下記参照） |
+| `done <id>` | タスクを**証拠付きで**完了マーク。`--test CMD --red-rev REV`（`--reason fixed\|already-fixed\|obsolete`）・`--doc-only COMMIT`・`--duplicate-of ID` のちょうど 1 つが必要。素の `done <id>` は拒否される |
 | `fail <id>` | タスクを失敗マーク (`--reason`)。再実行を 2 日先送りする |
+| `cancel <id> --reason R` | 「やらないと決めた」として閉じる。終端・再キューなし・`discard` closure として記録。テストも ruling も不要 |
+| `ruling {request,approve,withdraw,list}` | 実行テストで正当化できない close のための人間の裁定。`request` で `needs-ruling` に入れ、`approve` は対話 TTY と id の打ち返しを要求する |
+| `audit-closures` | 全終端行の closure 証拠を read-only で分類（`--json`）。store は書かない |
+| `overlap` | キュー中のタスクを宣言された `touched_files` scope でグループ化（advisory。未宣言は別に列挙） |
 | `edit <id>` | タスクの title / tags / notes / status を更新 |
+| `sync` | store を GitHub issue と突き合わせる（一方向・ローカル優先）。`--apply` なしでは報告のみ。`--only both\|create\|close\|body`、`--limit` |
 | `session-start` | SessionStart フック: pending タスクを context として注入 |
-| `install` / `uninstall` | `~/.claude/settings.json` の SessionStart フックを配線/除去 |
-| `lock {acquire,release,status}` | `~/.backlog/run.lock` 排他ロックの管理 |
+| `install` / `uninstall` | `~/.claude/settings.json` の SessionStart フックを配線/除去（standalone 用） |
+| `merge-driver` | task store 用の git merge driver（下記参照） |
+| `lock {acquire,release,status,heartbeat,probe}` | project ごとの排他ロック `~/.backlog/locks/<project>.lock` の管理。`probe` は保有者の進捗（git HEAD + transcript の伸び）を判定し、`stalled` の保有者だけが `acquire` で reap されうる |
+| `driver {register,heartbeat,unregister,status}` | project のキュー driver を排他せずに通知・観測する。`heartbeat` は自セッションの `next --claim` lease も更新する |
 
 ### store 書き込みは linked worktree で
 
@@ -53,13 +61,13 @@ SessionStart フックは primary では requeue をスキップし、その旨�
 
 ### slash command
 
-`/backlog` は queue・state 操作（`list` / `next` / `done` / `fail` / `lock`）を呼ぶ薄いエントリポイント。引数でサブコマンドを渡す。
+`/backlog` は queue・state 操作（`list` / `next` / `done` / `fail` / `driver` / `lock`）を呼ぶ薄いエントリポイント。引数でサブコマンドを渡す。
 
-> キューを自動で全件消化したいときは `/backlog` ではなく **`/flow`** を使う。lock 取得 → アイテムピック → `/condukt` → done/fail → lock 解放というループ driver は `/flow` に統合されており、compass ゲート・budgetguard・fugu-router によるモデル選択も含む上位互換 driver になっている。
+> キューを自動で全件消化したいときは `/backlog` ではなく **`/flow`** を使う。driver 登録 → `next --claim` でピック → `/condukt` → done/fail → 登録解除というループ driver は `/flow` に統合されており、compass ゲート・budgetguard・fugu-router によるモデル選択も含む上位互換 driver になっている。
 
 ### SessionStart フックの配線
 
-プラグイン導入後、`backlog install` を実行すると `~/.claude/settings.json` に `SessionStart` グループがマージされる（冪等・所有権マーク付き）。これでセッションを開くたびに pending な作業が浮上する。`install` / `uninstall` は `--dry-run` で書き込まず結果だけ表示できる。
+プラグインとして導入すると、プラグインの `hooks/hooks.json` が SessionStart フック（`backlog session-start`、timeout 10 秒）を登録するので、セッションを開くたびに pending な作業が浮上する。`backlog install` は standalone（cargo）利用向けで、同等の `SessionStart` グループを `~/.claude/settings.json` にマージする（冪等・所有権マーク付き）。`install` / `uninstall` は `--dry-run` で書き込まず結果だけ表示できる。
 
 ### 最小例（standalone / cargo）
 
@@ -73,7 +81,7 @@ backlog done <id> --doc-only <commit>                        # または doc だ
 backlog done <id> --duplicate-of <id>                        # または重複
 backlog fail <id> --reason "blocked"                         # 2 日先送りする（2 日後に pending へ戻る）
 backlog cancel <id> --reason "やらないと決めた"               # やらないと決めて捨てる（終端。再キューしない。`discard` closure として記録。テスト不要）
-backlog lock status                                          # run-lock の保有者を確認
+backlog lock status                                          # project の排他ロックの保有者を確認
 backlog install                                              # SessionStart フックを settings.json にマージ
 backlog uninstall                                            # 再び除去する
 ```
@@ -165,6 +173,35 @@ store は兄弟関係の 2 ファイルからなる: `tasks.toml`（live キュ�
   `done`/`cancelled` 行は通常どおり一覧に出て、いずれかのコマンドが lock 下で store を保存した
   次の機会に done ファイルへ移る。
 
+### store のマージ: `backlog merge-driver`
+
+両 store ファイルは追跡されており、各セッションが自分の worktree で編集するので
+`.backlog/tasks.toml` / `.backlog/tasks.done.toml` のマージは日常的に起きる。`.gitattributes` は
+両ファイルに `merge=backlog` を指定し、`backlog merge-driver <base> <ours> <theirs>`（git の
+`%O %A %B`）が行単位ではなくタスク id 単位でマージする:
+
+- id の和集合をとる。片側で（base に対して）削除され他方で未変更のタスクは削除のまま。片側だけで
+  変更されたタスクはその側を採る。
+- 同じ id が両側で異なって変更された場合（edit/edit、edit/delete、同じ新 id が異なる内容で追加）は
+  **conflict**: どちらも採らず非 0 終了し、`<ours>` は手を付けず、git がファイルを unmerged として
+  人間に返す。
+- 判定できないもの — パースできない入力、文字列 `id` を持たない行、1 入力内の id 重複、未知の
+  top-level キー、マージ結果が再パースでマージ行と一致しない — も非 0 終了で `<ours>` は不変。
+  clean な結果はアトミックに書かれる。
+
+**driver は設定された場所でしか動かない。** `.gitattributes` は driver 名を指すだけで、コマンドは
+バージョン管理されない git config にある。`merge.backlog.driver` が未設定の repo（や clone）では
+git は `merge=backlog` を無視し、通常の行単位テキストマージに落ちる。repo ごとに次で設定する:
+
+```sh
+backlog merge-driver --install   # repo 内で実行
+```
+
+これは `merge.backlog.name` と `merge.backlog.driver`（実行中の `backlog` バイナリの絶対パス）を
+repo のローカル git config（全 worktree で共有）に書く。バイナリが移動・削除されると driver
+コマンドが失敗し、git はそれを（黙ったテキストマージではなく）conflict として扱う — `--install` を
+再実行すること。
+
 ### checkout 間の claim 排他 (`next --claim`)
 
 store は意図的に checkout に追従する (`<repo root>/.backlog/tasks.toml`。linked worktree は
@@ -227,4 +264,4 @@ claimant が直前に fail したタスクは `failed` と表示されつつ、l
 - store 乖離チェックは lease 中のタスクを「キューに残る作業」に数えない (以前、保存された
   `claimed` 行を数えなかったのと同じ)。
 
-同梱の `bin/backlog-*` バイナリがプラグインの出荷物なので、エンドユーザーは cargo も API キーも不要。skill や hook が依存する挙動を変えたら、ワークスペースをビルド（`cargo build --workspace --release`）して再コミットする。
+git で追跡しているのは `bin/backlog` ランチャーだけである。ランチャーは配布先プラグインで隣に置かれたプラットフォーム別の `backlog-<os>-<arch>` バイナリを exec し、ホスト用のビルドが無ければ（空出力で exit 0 ではなく）非 0 で終了する。変更が稼働ハーネスに届くのは `scripts/rollout-plugins.sh` を通したときだけ（`docs/repo-operations.md` 参照）で、エンドユーザーは cargo も API キーも不要。

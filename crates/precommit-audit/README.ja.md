@@ -8,8 +8,10 @@ precommit-audit は、コミット前（あるいは Claude Code の停止前）
 
 監査ロジックは二層に分かれている。
 
-- **汎用チェック（バイナリ組み込み）。** テストを伴わないソース変更、ハードコードされた IP アドレスやシークレット（`password = "…"`）、握り潰された例外や `|| true`、関数の重複定義、`set -e` スクリプト中の `local VAR=$(…)` という silent-failure、壊れた Markdown リンク、CRLF/LF の改行コード、外部リンタ（py_compile・ruff・bash -n・eslint・tsc・radon・semgrep・gitleaks、いずれも任意）など。ファイルが長すぎる場合は警告のみ（ブロックしない）。
-- **プロジェクト固有ポリシー（TOML データ）。** `[[rule]]` エントリとして表現する。追加行に対する正規表現に、glob によるスコープ指定と allowlist を組み合わせたもので、コードにハードコードしない。
+- **汎用チェック（バイナリ組み込み）。** テストを伴わないソース変更、ハードコードされた IP アドレスやシークレット（`password = "…"`）、握り潰された例外や `|| true`、関数の重複定義、`set -e` スクリプト中の `local VAR=$(…)` という silent-failure、壊れた Markdown リンク、CRLF/LF の改行コード、外部リンタ（py_compile・ruff・bash -n・eslint・tsc・radon・semgrep・gitleaks、いずれも任意。`PATH` に無いリンタは失敗ではなく**スキップ**され、タイムアウトしたリンタは失敗として扱う）など。ファイルが長すぎる場合は警告のみ（ブロックしない）。opt-in の subagent レビュー契約（`[review_contract]`、`stop` モードのみ）は `<path>`（既定 `.claude/last-review.json`）が `"verdict": "pass"` と現在の diff hash を持つまでブロックする。
+- **プロジェクト固有ポリシー（TOML データ）。** `[[rule]]` エントリとして表現する。追加行に対する正規表現に、glob によるスコープ指定と allowlist を組み合わせたもので、コードにハードコードしない。`pattern` が正規表現として不正な rule は stderr に警告を出して**スキップ**される（その rule は走らない）。不正な `unless` 正規表現や glob は黙って捨てられる。
+
+**誰の変更か。** どちらのモードでも、検査対象の変更集合はセッション帰属（`harness_core::attribution`、`CLAUDE_CODE_SESSION_ID` がキー）で絞り込まれる。*別セッション*の transcript が編集を記録しており本セッションには記録が無いファイルは監査対象から除外される。帰属が判定不能なとき（セッション ID が無い＝端末からの素の `git commit`、transcript が無い等）は**全件**を監査し、どの transcript も主張しないファイルも残す。
 
 設計上の要点は、バイナリ自体が汎用・再利用可能であることだ。プロジェクト固有の方針はすべてコードから引き剥がされ `.precommit-audit.toml` に置かれるため、同じバイナリを複数のリポジトリで使い回せる。元は PowerShell（Windows 専用）の pre-commit フックだったものを、Linux/macOS/Windows でまったく同じに動く単一の静的バイナリとして Rust に書き直したものである。
 
@@ -42,17 +44,23 @@ precommit-audit は、コミット前（あるいは Claude Code の停止前）
 ```sh
 precommit-audit [--mode stop|precommit] [--config <file>] [--root <dir>]
 precommit-audit trust   # <root> を信頼し、その .precommit-audit.toml を honor させる
+precommit-audit skip --reason "<理由>"   # 一回限りのバイパス（このセッションのみ）
 ```
 
 主なフラグとサブコマンド:
 
 - `--mode precommit` — pre-commit フレームワーク / git フック（人間のコミット）向け。失敗時に **1** で終了し、レビュー契約はスキップする。
-- `--mode stop`（既定）— Claude Code の Stop フック向け。subagent のレビュー契約を honor し、指摘をエージェントへ戻すため **2** で終了する。**SessionEnd** 実行時は advisory（助言）モードで走り、ブロッキングな指摘も引き続き表面化する（stderr へ目立つ形で出力し、監査ログに `block` として記録する）が、終了コードは **0** のままなので、監査がセッションを失敗させることはない。
-- `--config` — 既定は `<root>/.precommit-audit.toml`。明示指定はオペレータの意図的選択として、信頼の有無にかかわらず常に honor される。
+- `--mode stop`（既定）— Claude Code の Stop フック向け。subagent のレビュー契約を honor し、指摘をエージェントへ戻すため **2** で終了する。hook 入力が `stop_hook_active: true`（同じ停止サイクル内の再発火）なら監査せず **0** で終了する。**SessionEnd** フックから呼ばれた場合（同梱の `hooks/hooks.json` が登録するのは **Stop のみ**で、SessionEnd は自分で配線したときだけ到達する）は advisory（助言）モードで走り、ブロッキングな指摘も引き続き表面化する（stderr へ目立つ形で出力し、監査ログに `block` として記録する）が、指摘による終了コードは **0** のままになる。ただし advisory モードでも非0終了は起こりうる: 変更集合の取得で git エラーが出れば **3**、panic なら **2** で終了する（いずれも fail-closed）。
+- モードは環境変数 `AUDIT_MODE` からも与えられる（`--mode` が優先）。
+- `--config` — 既定は `<root>/.precommit-audit.toml`。明示指定はオペレータの意図的選択として、信頼の有無にかかわらず常に honor される。読み込みに失敗した設定は **64** で終了する。
 - `--root` — 既定は `$CLAUDE_PROJECT_DIR`、無ければ git のトップレベル。
 - `trust` — 解決済みの `--root` を共有のワークスペース信頼リスト（`harness_core::trust`。`donegate`/`reviewgate`/`tdd` と同じリスト）に追加し、自動発見された `.precommit-audit.toml` を honor させる。信頼するまではリポジトリ同梱の設定は無視される（組み込みチェックはデフォルトで動作）。
 
-終了コード: `0` クリーン・`1` ブロック（precommit）・`2` ブロック（stop）。
+終了コード: `0` クリーン・`1` ブロック（precommit）・`2` ブロック（stop）・`3` SessionEnd での git エラー・`64` 引数／設定エラー。
+
+fail-closed の経路: 変更集合の取得時の git エラー、走査中の git エラー（`AUDIT INCOMPLETE`）、panic はいずれもモードのブロッキング終了コードで止め、決して 0 で終了しない。「監査対象なし」として **0** で終了するのは、積極的に検出される 2 状態だけ — git リポジトリの外のディレクトリと、まだコミットが無いリポジトリ（`git init` 直後）。
+
+状態ファイルは `<root>/<audit_dir>/`（既定 `.claude/`）に置かれる: `.audit-blocked`（ブロックマーカー）と `audit-log.jsonl`（実行ごとに 1 行の JSON）。
 
 ### git フック（生）として
 
@@ -91,40 +99,40 @@ exec precommit-audit --mode precommit
 
 - 行単位: 行末に `# audit-ignore: <理由>` を付ける（JS/TS は `//`）。理由は必須で、マーカーだけでは抑制されない。
 - ファイル単位: 先頭 20 行以内に `audit-ignore-file: <理由>` を書く。
-- 一回限りのバイパス: `precommit-audit skip --reason "<理由>"`。理由は必須で、**発行したセッション**の次の audit にだけ適用され、発行と消費の両方が記録される。（旧来の `<audit_dir>/.audit-skip` ファイルは撤去した。共有の作業ツリーに置かれ帰属を持たないため、次に走った invocation が消費してしまっていた — CLAUDE.md §5。）
+- 一回限りのバイパス: `precommit-audit skip --reason "<理由>"`。理由は必須で、**発行したセッション**（`CLAUDE_CODE_SESSION_ID` がキー。無ければ `skip` は 64 で拒否する）の次の audit にだけ適用され、`~/.precommit-audit/state/` に保存され、発行と消費の両方が記録される。（旧来の `<audit_dir>/.audit-skip` ファイルは撤去した。共有の作業ツリーに置かれ帰属を持たないため、次に走った invocation が消費してしまっていた — CLAUDE.md §5。）
 
 ### 他の Stop ゲート（donegate / reviewgate / tdd）との関係
 
-precommit-audit は意図的に、`harness_core::gate` 上に構築された JSON Stop ゲートの一員ではない。あの 3 つは Claude 専用の Stop フックで、`{"decision":"block","reason":…}` を出力してブロックする。precommit-audit は git フック（`precommit` モード、失敗時 **1**）と Claude Code Stop フック（`stop` モード、**2**）の両方として動き、さらに advisory な **SessionEnd** パス（**0**。ブロッキングな指摘を表面化・記録しつつセッションは失敗させない）も備える dual-mode フックである。git フックは Claude の JSON `decision:block` プロトコルを話せないため、終了コード＋ブロックマーカーという別の契約を保つ。プロジェクトローカル設定を `harness_core::trust` の背後でゲートする点は 3 つと共通だが、JSON Stop ゲートではなく、その兄弟として扱う。
+precommit-audit は意図的に、`harness_core::gate` 上に構築された JSON Stop ゲートの一員ではない。あの 3 つは Claude 専用の Stop フックで、`{"decision":"block","reason":…}` を出力してブロックする。precommit-audit は git フック（`precommit` モード、失敗時 **1**）と Claude Code Stop フック（`stop` モード、**2**）の両方として動き、さらに **SessionEnd** から呼ばれたときの advisory モード（指摘では **0**。ブロッキングな指摘は表面化・記録する。git エラーと panic は非0）も備える dual-mode フックである。git フックは Claude の JSON `decision:block` プロトコルを話せないため、終了コード＋ブロックマーカーという別の契約を保つ。プロジェクトローカル設定を `harness_core::trust` の背後でゲートする点は 3 つと共通だが、JSON Stop ゲートではなく、その兄弟として扱う。
 
 ## この repo 自身での位置づけ（self-apply、2026-07-23決定）
 
 precommit-audit はこの repo が生み出し配布する project-agnostic な製品だが、この repo 自身の
-git-commit-time ゲート（`.githooks/pre-commit`。injectguard/fail-open-guard/doc-claims/
-test-weakening/version-lockstep/bump-on-change/secret-guardの7本、`.githooks/pre-commit:26-43`）
+git-commit-time ゲート（`.githooks/pre-commit`。独立した stdlib-only python3 スキャナ群を
+`run …` 行で順に起動する。一覧は `.githooks/pre-commit` 自身を参照）
 には**統合されていない**（別々に発展した独立実装のまま）。ただし precommit-audit が user scope で
-インストール済みの環境では、Stop hook（`crates/precommit-audit/hooks/hooks.json:2-8`）として
+インストール済みの環境では、Stop hook（`crates/precommit-audit/hooks/hooks.json`）として
 この repo 上の Claude Code セッションでも実際に発火する——つまり `.githooks/pre-commit` には
 現れないが、この repo でも「使われていない」わけではない。
 
 **決定: 現状維持**。`.githooks/pre-commit` への統合は行わず、precommit-audit は引き続き
 project-agnostic な独立製品として、Stop hook 経由でのみこの repo に効く。理由は「意図的な
 設計判断が過去にあった」からではなく（そこまでの経緯は確認できていない）、統合の
-コスト（`.githooks/pre-commit` の6本は個々に stdlib-only python3 で書かれ独自の許容/除外
+コスト（`.githooks/pre-commit` の各ゲートは個々に stdlib-only python3 で書かれ独自の許容/除外
 規則を持つため、precommit-audit の汎用ルールへ置き換えるには両者のポリシーを一致させる
 作業が要る）に見合う具体的な破綻が今のところ観測されていないため。
 
 **記録したギャップ → 解消済み（2026-07-23、backlog aa74be67）**: 以前はここに「`.githooks/
-pre-commit` の6ゲートには `check_hardcoded_secret`（`crates/precommit-audit/src/checks/mod.rs:
-175-199`）に相当する汎用シークレットスキャンが1つも無い」というギャップを記録していた。
-`scripts/check-hardcoded-secret.py`（secret-guard、`.githooks/pre-commit:38`で起動）が
+pre-commit` のゲートには `check_hardcoded_secret`（`crates/precommit-audit/src/checks/mod.rs:
+175-200`）に相当する汎用シークレットスキャンが1つも無い」というギャップを記録していた。
+`scripts/check-hardcoded-secret.py`（secret-guard、`.githooks/pre-commit` の `run check-hardcoded-secret.py secret-guard` 行で起動）が
 precommit-audit を wholesale 統合せずにこの gap だけを埋めた — 同じキー名・同じ shape 要件
 （`(password|passwd|secret|api[_-]?key|token|private[_-]?key) = "<4文字以上>"`）で
 `check_hardcoded_secret` と歩調を合わせつつ、対象は ADDED 行のみ（`git diff <base>`、
-既存の6ゲートと同じ独立 stdlib-only python3 実装）。したがって precommit-audit を
+他のゲートと同じ独立 stdlib-only python3 実装）。したがって precommit-audit を
 user scope でインストールしていない contributor にも、この repo では hardcoded secret を
 検出する git-commit-time ゲートが存在する。上記「決定: 現状維持」（wholesale 統合はしない）
-は変わらない — 埋めたのはこの1つの記録済み gap だけで、他の5ゲートとの統合は今も行っていない。
+は変わらない — 埋めたのはこの1つの記録済み gap だけで、他のゲートとの統合は今も行っていない。
 
 ## なぜ移植したか
 

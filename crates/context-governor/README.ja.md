@@ -44,7 +44,7 @@ context-governor は**単一のフックディスパッチバイナリ**であ�
 
 実行ルールは 2 つ。
 
-- **ターンを壊さない** — ディスパッチ全体が `harness_core::hook::run_hook` の内側で走り、panic を握りつぶして exit 0 する。空・不正なペイロードは無音の no-op（`{}`）。
+- **panic・エラーは exit 0 に解決される** — ディスパッチ全体が `harness_core::hook::run_hook` の内側で走り、panic を握りつぶして exit 0 する。空・不正なペイロードは無音の no-op（`{}`）。これは `PreCompact` にも及ぶ：panic や backing store を開けない場合は `Proceed`（compaction を許可）に解決される — guard のブロック経路はこれらのエラーで fail-open である。
 - **ブロックできるのは PreCompact だけ** — `Block` 決定のみ exit 2（Claude Code のブロック信号）。`Proceed` を含む他のすべての経路はエンベロープを書いて exit 0 する。
 
 ## 計測（アクション台帳 / I6）
@@ -57,7 +57,7 @@ size 軸は「効いている」と主張するだけでは足りない——**�
 | inject（`UserPromptSubmit`） | `injected` | `resident_tokens` = 注入した参照本体の量 |
 | snapshot（`PreCompact` / `Stop`） | `snapshotted` | `resident_tokens` = 退避したスナップショットの量 |
 
-台帳は `context-governor rollup` で集計できる。セッションの `total_saved_tokens`・総行数・action 別内訳を、決定論的に（キー順安定で）出力する読み取り専用ビューで、副作用は持たない。これが「ピン留め＝省サイズ」のような axis 取り違えを、後から実数で否定できる根拠になる。
+台帳は `context-governor rollup` で集計できる。（カレントディレクトリの）`rows`（総行数）・`total_saved_tokens`・イベント別件数を、決定論的に（キー順安定で）出力する読み取り専用ビューで、副作用は持たない。これが「ピン留め＝省サイズ」のような axis 取り違えを、後から実数で否定できる根拠になる。
 
 組み込み compaction の上に被せる薄い層なので、追加の API キーは不要で **subscription で完結**する。動作に必要なのはフック配線とこのバイナリだけ（hooks + binary）。
 

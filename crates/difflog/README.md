@@ -77,12 +77,20 @@ difflog install
 difflog session-start   # SessionStart hook (reads stdin JSON)
 difflog session-end     # SessionEnd hook (writes the log)
 difflog last            # print the most recent log
-difflog list            # list log files, newest first
-difflog init            # write a starter difflog.toml
-difflog install         # merge hooks into ~/.claude/settings.json
-difflog uninstall       # remove them
+difflog list            # list log files, newest first (--limit N, default 10)
+difflog init            # write a starter ./difflog.toml (--force to overwrite)
+difflog install         # merge hooks into ~/.claude/settings.json (--dry-run)
+difflog uninstall       # remove them (--dry-run)
 difflog status          # show resolved config
 ```
+
+## Config
+
+`./difflog.toml` (project), else `~/.difflog/config.toml` — the first that exists
+wins; see [`difflog.example.toml`](difflog.example.toml): `enabled`, `log_dir`
+(default `~/.difflog/logs`), `diff_body_limit` (bytes of verbatim diff, default
+4096; `0` = stat only), `exclude_globs` (built-in default: `Cargo.lock`,
+`package-lock.json`, `*.min.js`, `*.min.css`). `DIFFLOG_DISABLE` turns it off.
 
 ## Narrative with `/difflog`
 

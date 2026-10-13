@@ -23,12 +23,13 @@ sub-agents doing read-only investigation:
 | Scope + reduce | Take the audit scope; reduce lens count by scope size to control cost (small → L1/L5, large → all 5) |
 | Deterministic review | Collect facts read-only (`git log`, `cargo test`, `compass gap`, `backlog list`, `cargo deny`, …) |
 | 5-lens fan-out | Parallel read-only sub-agents return measure candidates with verbatim evidence |
-| Synthesize | Dedupe, evidence-filter, then score: the LLM estimates `goal_proximity` per candidate and hands `severity`/`effort`/`lens`/`goal_proximity` to the deterministic `compass score` binary, which ranks (L2/L5 weighted up internally); fail-soft to a hand-computed `(severity × goal-proximity) ÷ effort` if `compass score` is unavailable. Tag `p0/p1/p2` |
-| Agree (HOTL) | Default: `AskUserQuestion` (multiSelect) — the user picks which measures to queue. Autonomy-gated: if `condukt state autonomy-check` reports autonomous, the select prompt is skipped and the top-N (default top 8, `p0`/`p1` first) are auto-queued |
-| Write + hand off | `backlog add` each approved measure (`--tag scout`), then hand to `/flow`. Default: propose-then-confirm; autonomous: auto-launch `/flow` when at least one measure was queued |
+| Synthesize | Dedupe, evidence-filter, then check each candidate's touched files against specguard's spec-map (`specguard map list`) and drop candidates whose `spec_doc`/`test_files` show the behavior is intended or already covered (skipped fail-soft if specguard is absent). Then score: the LLM estimates `goal_proximity` per candidate and hands `severity`/`effort`/`lens`/`goal_proximity` to the deterministic `compass score` binary, which ranks (L2/L5 weighted up internally); fail-soft to a hand-computed `(severity × goal-proximity) ÷ effort` if `compass score` is unavailable. Tag `p0/p1/p2` |
+| Agree (HOTL) | Default: `AskUserQuestion` (multiSelect) — the user picks which measures to queue. Autonomy-gated: if `condukt state autonomy-check` reports autonomous, the selection gate goes through `condukt policy answer` (auto → skip the prompt and auto-queue the top-N, default top 8, `p0`/`p1` first; escalate → ask; block → queue nothing). A decision that turns out to be unmeasurable is sent with `--untestable`, which clamps auto up to escalate |
+| Write + hand off | Skip measures another session already recorded in the compass discovery store (`compass discovery list` / `record`, `~/.compass/<project_key>/discovery.jsonl`, fail-soft), `backlog add` each approved measure (`--tag scout`), then hand to `/flow`. Default: propose-then-confirm; autonomous: auto-launch `/flow` when at least one measure was queued |
 
 Invariants: the audit is read-only, no measure ships without evidence (verbatim
-quote / `file:line` / source URL), and the only write is `backlog add`. Queuing
+quote / `file:line` / source URL), and the only repo-level write is `backlog add`
+(plus the machine-local compass discovery store used for cross-session dedup). Queuing
 requires explicit user agreement — except under autonomy
 (`condukt state autonomy-check`), where scout auto-queues the top-N and still
 summarises what it queued. `--dry-run` always stops at the agree phase, even
@@ -52,7 +53,7 @@ measures as Markdown for manual entry.
 
 After it queues measures, scout hands off to `/flow` and stands down —
 propose-then-confirm by default, or an automatic `/flow` launch under autonomy —
-the execution loop and backlog lock are flow's responsibility, not scout's.
+the execution loop and task claiming are flow's responsibility, not scout's.
 
 ## Build
 

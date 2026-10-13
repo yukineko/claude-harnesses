@@ -48,10 +48,23 @@ scripts/mutation-gate.sh
 PILOT=difflog MIN_KILL_RATE=0.70 scripts/mutation-gate.sh
 PILOT=specguard scripts/mutation-gate.sh   # GATE クレート: polarity ゲート (similarity.rs)
 PILOT=condukt scripts/mutation-gate.sh     # 非GATE クレート: サーキットブレーカーロジック (circuit.rs)
+PILOT=blastguard scripts/mutation-gate.sh  # GATE クレート: リスク分類器 (classify.rs)
+
+# このゲートが何を・何から・何を根拠に守るかを表示（判定はしない）:
+cargo run -p mutategate -- --protects
 ```
+
+既定値: `--outcomes mutants.out/outcomes.json`、`--min-kill-rate 0.80`。`1e-9` 以下
+（0・負値）の `--min-kill-rate` は常に pass するゲートになるため、exit `2` で拒否される。
 
 Exit コード: `0` pass、`1` kill-rate が閾値未満（または生存可能な mutant が無い）、`2`
 usage/IO/parse エラー。
+
+FAIL 時は overwatch の fleet violation ledger に違反イベントも追記する（run をまたいだ
+再発検出用）。この書き込みに失敗した場合は注記を出すが、FAIL の判定はそのまま維持される。
+
+`scripts/mutation-pilots.sh` は変更パスの一覧（stdin）を、走らせるべき較正済みパイロット
+クレートに写像する。どれにも当たらなければ `harness-core` に倒し、空の一覧は決して出さない。
 
 ## スコープ（意図的に狭い）
 
@@ -64,25 +77,26 @@ usage/IO/parse エラー。
   かつテスト品質検証（mutation testing）が最も必要な対象。`similarity.rs` の
   polarity ゲート（`polarity_preserved` / `polarity_signature` / `triage` 等）は
   過去のレビューで複数回バグが見つかった箇所であり、kill-rate 計測の価値が高い。
-  `specguard` 自体は大きいクレート（`main.rs` だけで 2300 行超）なので、
+  `specguard` 自体は大きいクレートなので、
   `scripts/mutation-gate.sh` は `PILOT=specguard` のとき既定で
-  `--file crates/specguard/src/similarity.rs` に絞り込んで実行時間を現実的に保つ
-  （66 mutant、実測 約3分）。あわせて `ack_blocks_when_no_new_commits_since_raised`
+  `--file crates/specguard/src/similarity.rs` に絞り込んで実行時間を現実的に保つ。あわせて `ack_blocks_when_no_new_commits_since_raised`
   という1テストを `--skip` している。このテストは `repo_root()` 経由で実際の git
   HEAD を読むが、`cargo-mutants` はソースを `.git` を含まないスクラッチコピー先で
   ビルド・テストするため `scope::current_head` が解決できずベースラインの時点で
   false-flake になる（mutation 由来の欠陥ではなく、cargo-mutants の実行モデルに
   起因するテスト環境依存）。
 - **パイロット3: `condukt`** — GATE_CRATES（blastguard/propguard/specguard/
-  stuckguard/mutategate/overwatch。`scripts/rollout-plugins.sh` 参照）以外で
-  初めて追加された非 GATE クレート。`condukt` はオーケストレーター本体で、
-  ワークスペース内で最もテスト密度が高い（36ファイル中29ファイルにテストがある）
-  ため、非 GATE の候補として適切と判断した。`condukt` 自体は極めて大きい
-  クレート（`main.rs` 等を含め合計 約25000 行）なので、
+  stuckguard/mutategate/overwatch/parallelguard。`scripts/rollout-plugins.sh` 参照）以外で
+  初めて追加された非 GATE クレート。`condukt` はオーケストレーター本体で、テスト密度の
+  高さから非 GATE の候補として選んだ。`condukt` 自体は極めて大きいクレートなので、
   `scripts/mutation-gate.sh` は `PILOT=condukt` のとき既定で
   `--file crates/condukt/src/circuit.rs` に絞り込む。`circuit.rs` はサーキット
   ブレーカーの状態遷移ロジックで、ファイルシステム/プロセス I/O を持たない
-  純粋なロジックであり、既に20個のユニットテストでカバーされている。
+  純粋なロジックである。
+- **パイロット4: `blastguard`** — GATE クレート。既定で
+  `--file crates/blastguard/src/classify.rs`（リスク分類器）に絞り込む。同時に計測した
+  他の GATE クレート（stuckguard / propguard / overwatch）はバーに届かなかったため意図的に
+  パイロットにしていない。計測結果は `scripts/mutation-pilots.sh` の冒頭に記録されている。
 - `PILOT=<crate>` で任意のクレートに切り替えられる。`MUTANTS_EXTRA="--file <path>"`
   でさらに絞れば高速な実走ができる（`<path>` はこのスクリプトを実行する repo root
   からの相対パス。例: `crates/harness-core/src/hash.rs`）。
@@ -103,10 +117,10 @@ usage/IO/parse エラー。
 - `specguard` は現時点で `similarity.rs` のみに絞っている。他のファイル
   （`ratify.rs`/`scope.rs`/`specmap.rs` 等）へのパイロット拡大は、それぞれの実行時間と
   ベースラインの安定性（他の git-HEAD 依存テストが無いか）を確認してから行う。
-- èµ·å契機: **現在は無い**（2026-09-11 実測、測定点 89b31bb4）。以前は
+- 起動契機: **現在は無い**（2026-09-11 実測、測定点 89b31bb4）。以前は
   `.github/workflows/mutation.yml` が走らせていたが、GitHub Actions の全面禁止
-  （CLAUDE.md Â§7）に伴い a572f5ad で削除され、**代替は置かれていない**。
+  （CLAUDE.md §7）に伴い a572f5ad で削除され、**代替は置かれていない**。
   `scripts/mutation-gate.sh` を実行する箇所は repo 内に 1 つも無く、kill-rate
   ゲートは **INERT（100% passthrough）** である—人間が手で叩くときだけ動く。
-  この crate の存在を coverage と読まないこと。再結線は Â§7 に従い local
+  この crate の存在を coverage と読まないこと。再結線は §7 に従い local
   （pre-push または明示スクリプト）で行う—ホスト型 CI は使わない。

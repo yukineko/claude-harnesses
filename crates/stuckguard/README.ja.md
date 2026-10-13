@@ -31,7 +31,7 @@ stuckguard はこの失敗モードを、言語モデルの自己観察ではな
 
 ## どう使うか
 
-stuckguard は単一の Rust 実行ファイルで、ジョブごとに 1 つのサブコマンドを公開する。`watch` サブコマンドが **PostToolUse** フックに配線され、各ツール呼び出しのたびに次を行う。
+stuckguard は単一の Rust 実行ファイルで、ジョブごとに 1 つのサブコマンドを公開する。`watch` サブコマンドが **PostToolUse** フック（プラグインの matcher は `Bash|Edit|MultiEdit|Write|Read|Grep|Glob`、timeout 10 秒）に配線され、マッチした各ツール呼び出しのたびに次を行う。
 
 1. 呼び出しから安定した**シグネチャ**を作る（コマンドの正規化、編集ならファイル名 + before/after のハッシュ）。`DefaultHasher` によりプロセスをまたいで決定論的。
 2. セッションごとの**リングバッファ**（`window` 件のイベント）をディスクに追記する。
@@ -53,12 +53,13 @@ stuckguard install     # PostToolUse フックを ~/.claude/settings.json にマ
 stuckguard status      # 解決済みの設定を表示する
 ```
 
-解除は `stuckguard uninstall`。一時無効化のキルスイッチは `STUCKGUARD_DISABLE=1`。
+解除は `stuckguard uninstall`。一時無効化のキルスイッチは `STUCKGUARD_DISABLE=1`（または設定の `enabled = false`）。`stuckguard --protects` でこのゲートが何を・何から・何を根拠に守るかを表示する。
 
 設定は [`stuckguard.example.toml`](stuckguard.example.toml) を参照。主なキーは次のとおり。
 
 | キー | 意味 | 既定値 |
 |---|---|---|
+| `enabled` | マスタースイッチ | true |
 | `window` | セッションごとに検査する直近のツールイベント数 | 12 |
 | `repeat_threshold` | ウィンドウ内で同一アクションが何回でナッジするか | 3 |
 | `similarity_threshold` | 同一ツールへの 2 回の呼び出しを近似反復とみなす Jaccard トークン集合類似度（`[0, 1]`）。`1.0` は完全一致のみ（従来の挙動） | 1.0 |

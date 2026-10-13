@@ -62,10 +62,16 @@ evaluate ─► carve ループ ─► charter ─► gap ─► (condukt 分解
 
 ### 2 つの hook
 
-どちらも決定的・非ブロッキングで、エラー時も exit 0（再接地 hook はターンを壊してはならない）:
+どちらも決定的・非ブロッキング（block 判定を出すことは無い）:
 
 - **SessionStart = `compass nudge`** — C1/C2 の決定的 floor のみ（LLM 不使用）。charter が無い/霞む/drift 疑いなら「`/compass` で再接地を」と一行 nudge する。
 - **Stop = `compass breadcrumb`** — 本体の最終応答から明示的な ```` ```compass-next ```` ブロックを抽出し `charter.next_action` へ書き戻す。推測はせず、ブロックが無ければ何もしない。
+
+無言が何を意味し、何を意味しないか:
+
+- **`nudge` の無言は charter の鮮明さの保証ではない。** charter が無ければ必ず nudge するが、ファイルが存在して**パースに失敗した場合は fresh 扱い**になる（nudge なし、`nudge --json` は `{"fresh":true,"reason":null}`）。C2 では、git で計算できないシグナル（git リポジトリでない・`git` の失敗・最終更新時刻が決まらない）は trip せず何も寄与しない。trip するのは観測に成功し閾値を超えたシグナルだけである。
+- **`breadcrumb`** は Stop payload が空/不正、transcript が読めない、`compass-next` ブロックが無い場合に黙る。charter への書き込み失敗は握りつぶされ報告されない。cwd が primary 作業ツリーであるために書き込みを拒否した場合（下記）は stderr に出す。
+- ホスト向けバイナリが無い場合、launcher は黙らない: `nudge` と `breadcrumb` は「実行されなかった」旨の `systemMessage` を出し（`nudge` は鮮度が UNKNOWN であることを `additionalContext` にも出す）、それ以外のすべての呼び出し（`nudge --json` を含む）は exit 127 で終わる。
 
 **store 書き込みは linked worktree で。** `charter --write` / `gap --write` / `outcome` / `opportunity add` / `apply` /
 `evaluate` / `carve-reset` / `route` は、cwd が git リポジトリの **primary（main）作業ツリー**内なら拒否される
@@ -91,12 +97,14 @@ primary では `compass breadcrumb` は書き込まず、stderr にその旨を�
 | `compass opportunity list [--json] [--outcome <ref>]` | active outcome 配下の named bet を一覧。`--json` は JSON 配列で出力 |
 | `compass discovery record --title <T> [--session-id <ID>]` | 指定（または env 由来）のセッション配下に discovery 行を追記（cross-session dedup 用）。fail-soft、常に exit 0 |
 | `compass discovery select [--fingerprint <FP>] [--title <T>]` | 発見済みタスクを `Selected` にする（fingerprint は verbatim か `--title` から導出）。fail-soft |
-| `compass discovery list [--json]` | discovery 行を一覧。`--json` は JSON 配列（空なら `[]`）。fail-soft、常に exit 0 |
+| `compass discovery list [--json]` | discovery 行を一覧。`--json` は JSON 配列（空なら `[]`。store が無い/読めない場合も `[]` になり、壊れた行は読み飛ばされるので、`[]` は store が空であることの証明ではない） |
 | `compass c3-screen` | C3「観測可能な DoD」ゲートの advisory 決定的スクリーン。曖昧/非観測可能な `definition_of_done` 項目を `{"flagged":[{"index","item","reason"}...]}` で出す。skill の C3 判定を補完するのみで、ブロックはしない |
 | `compass suggest-verdict --tests-delta <N> [--regressions <N>] [--gap-closed]` | `compass outcome` の advisory な決定的デフォルト verdict を観測事実から導出。`{"suggested":"forward\|unchanged\|backward"}` を出力（skill は `outcome --verdict` で上書き可） |
 | `compass score --severity <high\|medium\|low> --effort <xs\|s\|m\|l\|xl> --lens <l1..l5> --goal-proximity <f64>` | harness-core のスコアラーを公開した決定的優先度スコア — `(severity × goal_proximity) ÷ effort`、L2（security）/L5（safety）レンズは 1.5 倍で up-weight — scout skill が LLM の手計算なしで候補を順位付けできる。`{"score": f64}` を出力 |
 
 ### config（`.compass/config.toml`、すべて任意・既定値）
+
+ファイル・セクション・キーが無ければ既定値になる。パースに失敗したファイルも**黙って**全キー既定値に戻る（typo しても警告は出ない）。
 
 ```toml
 [freshness]
@@ -113,26 +121,34 @@ right_size     = ["s", "m"]  # B案: これらの size を condukt へ、残り�
 
 ### 導入
 
-Claude Code プラグイン（推奨）として、2 つの hook・`/compass` skill・プリビルドバイナリを同梱する。subscription で完結し、API キーも別途 `cargo install` も不要:
+Claude Code プラグイン（推奨）として、2 つの hook・`/compass` skill・プラットフォーム別バイナリ（ローカルでビルド。下記参照）を同梱する。subscription で完結し、API キーも別途 `cargo install` も不要:
 
 ```text
 /plugin marketplace add <git-url-of-this-repo>
 /plugin install compass@yukineko
 ```
 
-hook は `${CLAUDE_PLUGIN_ROOT}/bin/compass <sub>` を呼ぶ。`bin/compass` は host に合った `bin/compass-<os>-<arch>` を選ぶ POSIX ランチャで、Linux/macOS どちらでも動く。一致するバイナリが無ければ無言で exit 0 する。ソースからビルドする場合は `scripts/build-plugin-bin.sh compass`（macOS バイナリは CI または Mac 上でビルドしてコミットする）。
+hook は `${CLAUDE_PLUGIN_ROOT}/bin/compass <sub>` を呼ぶ。`bin/compass` は host に合った `bin/compass-<os>-<arch>` を選ぶ POSIX ランチャで、Linux/macOS どちらでも動く。一致するバイナリが無い場合は stderr にビルド方法を出し、無言にはしない: `nudge`/`breadcrumb` hook は「実行されなかった」旨の `systemMessage` を出し（exit 0、block はしない）、それ以外の呼び出しは exit 127 で終わる。
 
-### プラットフォーム対応 / バイナリのビルド
+### バイナリのビルド / プラットフォーム対応
 
-プラグインはランタイムに `bin/compass` ランチャが選ぶプリビルド per-platform バイナリを同梱する:
+プラットフォーム別バイナリは**コミットしない**（`crates/*/bin/*-<os>-<arch>` は gitignore。追跡されるのは `bin/compass` ランチャだけ）。対象マシン上でワークスペース root からビルドする:
 
-| Host | ファイル | 状態 |
-|---|---|---|
-| Linux x86_64 | `bin/compass-linux-x86_64` | 同梱 |
-| macOS Apple Silicon | `bin/compass-darwin-arm64` | macOS runner の CI（または Mac 上で `scripts/build-plugin-bin.sh`）でビルド |
-| macOS Intel | `bin/compass-darwin-x86_64` | macOS runner の CI（または Mac 上で `scripts/build-plugin-bin.sh x86_64-apple-darwin`）でビルド |
+```sh
+scripts/build-plugin-bin.sh compass                        # host platform
+rustup target add x86_64-apple-darwin
+scripts/build-plugin-bin.sh compass x86_64-apple-darwin    # Mac 上で Intel 版も
+```
 
-Linux バイナリは直接コミットされる。**macOS バイナリ**は Linux からクロスビルドできない（Apple フレームワークに macOS SDK が要る）ため、リポジトリの CI が macOS runner 上で生成してコミットするか、Mac 上で手動ビルドする。
+稼働プラグインへの反映は手動コピーではなくリポジトリの `scripts/rollout-plugins.sh` で行う（`docs/repo-operations.md` 参照）。`bin/compass` ランチャは git index 上で 100755 でなければならず（ここでは `core.fileMode=false`）、pre-commit の `check-launcher-exec-bit.py` が強制する。
+
+| Host | ファイル |
+|---|---|
+| Linux x86_64 / arm64 | `bin/compass-linux-x86_64` / `bin/compass-linux-arm64` |
+| macOS Apple Silicon | `bin/compass-darwin-arm64` |
+| macOS Intel | `bin/compass-darwin-x86_64` |
+
+どれもコミットされず、各プラットフォーム上（または向け）でビルドする。macOS バイナリは Linux からクロスビルドできない（macOS SDK が要る）。
 
 ## プラグイン構成
 
@@ -141,7 +157,7 @@ Linux バイナリは直接コミットされる。**macOS バイナリ**は Lin
 hooks/hooks.json               # SessionStart=nudge / Stop=breadcrumb → ${CLAUDE_PLUGIN_ROOT}/bin/compass
 skills/compass/SKILL.md        # /compass skill（carve ループを駆動）
 bin/compass                    # POSIX ランチャ → compass-<os>-<arch>
-bin/compass-<os>-<arch>        # プリビルドバイナリ
+bin/compass-<os>-<arch>        # プラットフォーム別バイナリ（gitignore、ローカルでビルド）
 src/ … Cargo.toml              # Rust クレート本体
 ```
 

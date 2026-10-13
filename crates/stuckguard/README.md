@@ -56,7 +56,8 @@ nudge path.
 
 ## How it works
 
-`stuckguard watch` is wired to the **PostToolUse** hook. On each tool call it:
+`stuckguard watch` is wired to the **PostToolUse** hook (plugin matcher
+`Bash|Edit|MultiEdit|Write|Read|Grep|Glob`, timeout 10s). On each matched tool call it:
 
 1. builds a stable **signature** of the call (normalized command / file+before/after
    hashes for edits) — `DefaultHasher`, deterministic across processes;
@@ -88,7 +89,9 @@ stuckguard install     # merges the PostToolUse hook into ~/.claude/settings.jso
 stuckguard status      # show resolved config
 ```
 
-Remove with `stuckguard uninstall`. Kill switch: `STUCKGUARD_DISABLE=1`.
+Remove with `stuckguard uninstall`. Kill switch: `STUCKGUARD_DISABLE=1` (or
+`enabled = false` in config). `stuckguard --protects` prints what the gate
+protects, from what, and on what grounds.
 
 ## Config
 
@@ -96,6 +99,7 @@ See [`stuckguard.example.toml`](stuckguard.example.toml).
 
 | key | meaning | default |
 |---|---|---|
+| `enabled` | master switch | true |
 | `window` | recent tool events inspected per session | 12 |
 | `repeat_threshold` | identical actions in window ⇒ nudge | 3 |
 | `similarity_threshold` | Jaccard token-bag similarity (`[0, 1]`) above which two same-tool calls count as a near-repeat even if their exact signature differs; `1.0` = exact-match only (legacy behavior) | 1.0 |

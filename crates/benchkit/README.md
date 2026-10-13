@@ -1,9 +1,12 @@
 # benchkit
 
 External-benchmark runner for the harness monorepo, targeting **SWE-bench
-Verified**. This is the skeleton slice: a typed instance model, a deterministic
-fixture-based JSONL loader, and a gated `download` subcommand. The scorer /
-dashboard / harness layers land in later tasks.
+Verified**. It provides a typed instance model, a deterministic fixture-based
+JSONL loader, a gated `download` subcommand, a pure resolution scorer
+(`scorer`), a single-instance harness (`run-instance`), an append-only
+`runs.jsonl` dashboard library (`dashboard`; not exposed as a subcommand), and
+a post-hoc sampling calibration loop (`audit-sample`). The patch generator
+behind `run-instance` is still a stub that returns an empty candidate.
 
 ## Why
 
@@ -11,7 +14,8 @@ condukt and evalkit measure the harness against *our own* invariants. benchkit
 measures it against an *external, industry-standard* benchmark — SWE-bench
 Verified — so improvements are comparable to the published numbers other agents
 report. The loading path is pure and deterministic (no network, no clock), so
-tests are hermetic; only `download` touches the network, and only when you ask.
+tests are hermetic; only `download` and `run-instance --real` touch the
+network/shell, and only when you ask.
 
 ## Instance model
 
@@ -49,7 +53,26 @@ benchkit load crates/benchkit/tests/fixtures/instances.jsonl
 benchkit download                 # → .benchkit-cache/swe-bench-verified.jsonl
 benchkit download --dest data/verified.jsonl
 benchkit download --force         # re-fetch even if cached
+
+# Run one instance through setup -> generate -> test -> score.
+# Without --real this is a dry run (stub generator, no results -> unresolved).
+benchkit run-instance <instances.jsonl> <instance_id>
+benchkit run-instance <instances.jsonl> <instance_id> --real   # git clone/apply + pytest
+
+# Post-hoc sampling calibration over auto-gate-passed changes:
+benchkit audit-sample <changes.jsonl> [--audits <verdicts.jsonl> | --from-violations] \
+    [--fraction 0.1] [--seed 0] [--json]
 ```
+
+`run-instance --real` is the only path that shells out to git / pytest; no test
+constructs it. Scoring is fail-closed: a test id absent from the result map
+counts as not passing.
+
+`audit-sample` draws a deterministic seeded sample of changes that passed only
+via auto-gates and, given verdicts (`--audits`, a modeled JSONL input) or the
+real overwatch violation stream (`--from-violations`), routes misses into
+new-invariant candidates and a threshold-adjustment ratify queue (never
+auto-applied).
 
 `download` is **gated**: its network path is reached only on explicit
 invocation and is a no-op when the cache already exists (idempotent). It never
@@ -72,5 +95,5 @@ the bundled binary tiny.
 ## Determinism
 
 The loader is pure: same file → same `Vec<Instance>`, in file order, with a
-clear `path:line` error on a malformed row. Nothing outside `download` performs
-network or environment I/O.
+clear `path:line` error on a malformed row. Nothing outside `download` and
+`run-instance --real` performs network or shell I/O.

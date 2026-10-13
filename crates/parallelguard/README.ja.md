@@ -63,7 +63,8 @@ binary が panic する / そのプラットフォームのビルドが無い �
 ## 運用コマンド
 
 ```sh
-parallelguard status   # 実効の上限・セッションごとの count・直近の deny
+parallelguard status       # 実効の上限・セッションごとの count・直近の deny
+parallelguard --protects   # PROTECTS / AGAINST / GROUNDS の保護宣言を表示（判定はしない）
 ```
 
 `status` は「何も走っていない」と「この hook は一度も動いていない」を**区別して**

@@ -17,7 +17,10 @@ Subscription-native: one Rust binary, two hooks (SessionStart + Stop), no API ke
 
 ## What it manages
 
-`.claude/progress.md` (in the project, committed with the code if you like):
+`.claude/progress.md` at the **project root** — the nearest ancestor of the session
+cwd that contains a `.git` entry (a git worktree root counts, so each worktree keeps
+its own file). If no such root can be found, taskprog writes nothing and says so
+rather than falling back to the cwd. Committed with the code if you like:
 
 ```markdown
 # Progress
@@ -56,10 +59,10 @@ taskprog install
 taskprog session-start   # SessionStart hook: inject progress file (reads stdin JSON)
 taskprog stop            # Stop hook: prompt the agent to update the file
 taskprog show            # print the current progress file
-taskprog write --cwd .   # write progress.md from stdin
-taskprog init            # write a starter taskprog.toml
-taskprog install         # merge hooks into ~/.claude/settings.json
-taskprog uninstall       # remove them
+taskprog write --cwd .   # write progress.md from stdin (--cwd defaults to .)
+taskprog init [TARGET]   # write a starter config (default TARGET: taskprog.toml)
+taskprog install         # merge hooks into ~/.claude/settings.json (--dry-run)
+taskprog uninstall       # remove them (--dry-run)
 taskprog status          # show resolved config
 ```
 
@@ -72,13 +75,17 @@ rewriting it.
 
 ## Config (`taskprog.toml`)
 
+Read from `taskprog.toml` in the session cwd, else `~/.taskprog/config.toml` (see
+[`taskprog.example.toml`](taskprog.example.toml)):
+
 ```toml
 enabled = true
-# progress_file = "~/.claude/progress.md"   # default: <cwd>/.claude/progress.md
+# progress_file = "~/.claude/progress.md"   # default: <project root>/.claude/progress.md
 inject_limit = 4096                          # bytes injected at SessionStart (0 = all)
 ```
 
-Disable per-session with `TASKPROG_DISABLED=1`.
+An explicit `progress_file` is used as-is (`~` expanded) with no project-root lookup.
+Disable per-session with `TASKPROG_DISABLED=1` (or `true`).
 
 ## License
 

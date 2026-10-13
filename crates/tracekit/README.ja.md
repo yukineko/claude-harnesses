@@ -37,7 +37,7 @@ tracekit record --run RID-42 --span t2 --parent t1 --name "impl auth" \
   --phase worker --model opus --ms 30200 --cost 0.41 --status verified
 ```
 
-`--parent` で親 span を指定してツリーを構成する。`--end-unix-ms` を渡すと記録時の終了タイムスタンプを上書きでき、決定論的なリプレイに使える。
+`--parent` で親 span を指定してツリーを構成する。`--task` でタスク id を付けられる（`harness.task_id` として export される）。`--ms` の既定は 0、`--status` の既定は `ok`。`--end-unix-ms` を渡すと記録時の終了タイムスタンプを上書きでき、決定論的なリプレイに使える。
 
 ### ツリーをレンダリングする
 
@@ -71,6 +71,6 @@ tracekit list      # span を記録済みのラン一覧
 
 ### condukt との連携について
 
-現状の中心は、スタンドアロンの recorder ＋ ツリー ＋ export である。condukt の `state set` 遷移にフックしてフェーズごとに span を発行する（そして gauge のエージェント単位コストを対応する span に結合する）配線は、次の増分として別途管理されている。これにより本 crate は単独で出荷・検証できる。
+tracekit 自身はフックを持たない。`/condukt` スキル（`crates/condukt/skills/condukt/SKILL.md`）がシェル手順から soft 依存として `tracekit record` を呼ぶ — まず `interpret` のルート span、続いてタスクごとに worker span と verifier span を記録する。condukt バイナリ自体は span を発行せず、gauge のエージェント単位コストを対応する span に結合する処理も自動化されていない。
 
 なお、バックエンドへのライブ OTLP/HTTP プッシュは予定されている後続作業である。エクスポート済みファイルは既に OTLP の `TracesData` 形状に一致しているため、後からリプレイできる。

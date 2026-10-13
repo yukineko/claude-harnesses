@@ -54,7 +54,7 @@ notifications are on by default.
 
 ```sh
 cargo install --path .
-beacon init          # write a starter ./beacon.toml
+beacon init          # write a starter ./beacon.toml (--force to overwrite)
 beacon test          # fire a sample notification through configured channels
 beacon install       # merge the Stop + Notification hooks into ~/.claude/settings.json
 beacon status        # show resolved config + active channels
@@ -62,7 +62,7 @@ beacon trust         # trust this project so its beacon.toml `command` is honore
 beacon uninstall     # remove them again
 ```
 
-`beacon install`/`uninstall` are idempotent, back up `settings.json` before any
+`beacon install`/`uninstall` accept `--dry-run`, are idempotent, back up `settings.json` before any
 write, and preserve foreign hook groups.
 
 ## Config
@@ -80,6 +80,7 @@ make linux    # just the Linux x86_64 cross-build (cargo-zigbuild)
 cargo test
 ```
 
-The committed `bin/beacon-*` binaries are what the plugin ships, so end users
-need neither cargo nor an API key. Rebuild and recommit them when you change
-behavior the hook relies on.
+Only the `bin/beacon` launcher is committed; the per-platform `bin/beacon-<os>-<arch>`
+builds are git-ignored. In this repo the installed plugin gets its binary from
+`scripts/rollout-plugins.sh` (build from source + copy into the plugin cache), not
+from git. No API key is needed at runtime.

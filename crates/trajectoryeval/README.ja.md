@@ -28,7 +28,7 @@ trajectoryeval はこの死角を埋める。期待する経路を spec とし�
 
 #### `trajectoryeval extract --transcript <jsonl>`
 
-Claude Code のトランスクリプトを**1 行ずつ**ストリーム処理し(全体をメモリに載せない)、`tool_use` の名前を出現順に JSON 配列として stdout に出力する。そのまま `check --actual` に流し込める。
+Claude Code のトランスクリプトを**1 行ずつ**ストリーム処理し(全体をメモリに載せない)、`tool_use` の名前を出現順に JSON 配列として stdout に出力する。そのまま `check --actual` に流し込める。JSON として読めない行は**黙って読み飛ばす**ため、途中で切れたファイルや形式違いのファイルでも短い(または空の)配列が exit `0` で返りうる。exit `2` になるのはファイル自体が読めない場合だけ。
 
 #### `trajectoryeval check --expected <spec.json> --actual <actual.json> [--json]`
 
@@ -48,17 +48,27 @@ Claude Code のトランスクリプトを**1 行ずつ**ストリーム処理�
 
 - **core フロー**: 毎回スナップショットを取得して実際に **diff** する。`--baseline <base.json> --snapshot <snap.json>` を渡す。このリポジトリはデプロイ済みランタイム UI を持たないため、常時利用可能な一次メカニズムは決定論的な **構造化データ照合**(正規化された shape の JSON 等価性。オブジェクトのキー順は正規化され無視、値・構造は一致必須)。差異があれば差分位置を JSON ポインタで列挙する。
   - **perceptual-hash / screenshot** 比較は `diff_strategy: "screenshot"` として trait/enum 境界の背後に用意してあるが、これは**正直な stub**(未実装)で、選ぶと `DiffOutcome::Stubbed` を返すだけ。後から実装を差し込めるよう境界だけ切ってある。
+  - **`diff_strategy: "fuzzy_hash"`** は許容差つきの構造化データ照合。決定論的なドリフト距離 `distance_permille = round(1000 × 差異のある葉の数 / 葉の総数)` を計算し、`distance_permille <= threshold_permille` なら **match** とみなす。超えた場合は `DiffOutcome::DriftedBeyondThreshold`(距離と差異位置の JSON ポインタ)を返し、これは fail ではなく **needs-human** 判定(exit `3`)になる。`threshold_permille` は config のキー(既定 `0`=どんなドリフトもエスカレート)。例: [`examples/tier-config-fuzzy.json`](examples/tier-config-fuzzy.json)(`threshold_permille: 250`)。
 
-- **non-core フロー**: 軽量な **存在チェック**(specguard spec-audit 流の「そのフローが在るか」)。`--exists true|false`(既定 true)。さらに `sample_one_in > 0` なら、`(flow_id, --seed, --run-index)` を鍵にした **決定論的な低頻度サンプリング**(seedable。unseeded な乱数は使わない)で、その run が深いサンプル対象かを決める。同じ入力なら常に同じ判定。
+- **non-core フロー**: 軽量な **存在チェック**(specguard spec-audit 流の「そのフローが在るか」)。`--exists true|false`(既定 true)。さらに `sample_one_in > 0` なら、`(flow_id, --seed, --run-index)` を鍵にした **決定論的な低頻度サンプリング**(seedable。unseeded な乱数は使わない)で、その run がサンプル対象かを決める。同じ入力なら常に同じ判定。サンプリング判定は**報告されるだけ**(`present (sampled this run)` / `present (not sampled this run)`)で、サンプル対象になっても CLI が追加の検査を行うわけではなく、どちらも pass。non-core フローを fail にするのは `--exists false` だけ。
 
 CLI はフローの core/non-core 分類と diff(match/mismatch)結果、または non-core の存在/サンプリング判定を、人間向けレポートまたは `--json` で報告する。
+
+- **終了コード**: `0` pass、`1` 実際の逸脱(mismatch、または存在チェック失敗)、`2` harness エラー(入力が読めない/パースできない、または core フローで `--baseline` と `--snapshot` の両方が無い)、`3` **needs-human** — core フローが未実装の diff 戦略(現状 `screenshot`)を使った、または `fuzzy_hash` のドリフトが `threshold_permille` を超えたため、自動判定を出せない。`3` は意図的に `1` と区別している: 未実装の戦略は能力の欠如であって実際の回帰ではなく、毎回黙って赤にしてはならない。
+- 実行可能な例: [`examples/tier-config.json`](examples/tier-config.json)
+  ```sh
+  trajectoryeval tier --config examples/tier-config.json --flow checkout \
+    --baseline base.json --snapshot snap.json     # core フロー → 実 diff
+  trajectoryeval tier --config examples/tier-config.json --flow settings \
+    --exists true --seed 42 --run-index 3          # non-core → 存在/サンプリング
+  ```
 
 - **expected** spec の JSON:
   ```json
   { "mode": "strict",
     "steps": [ { "tool": "Read" }, { "tool": "Edit", "optional": true } ] }
   ```
-  `optional` の既定値は `false`。
+  `mode` は必須(`strict` / `unordered` / `subsequence`)。`optional` の既定値は `false`。`steps` は省略可で既定は空 — 空の spec は `subsequence` モードでは**どんな**実軌跡に対しても pass する点に注意。
 - **actual** の JSON: ツール名文字列の配列、例 `["Read", "Edit"]`(`extract` の出力をそのまま渡せる)。
 
 ### モード
@@ -71,13 +81,14 @@ CLI はフローの core/non-core 分類と diff(match/mismatch)結果、また�
 
 ### 終了コード
 
-evalkit / schemaguard と同じ 0/1/2 ゲートポリシーに従う。
+evalkit / schemaguard と同じ 0/1/2 ゲートポリシーに、`tier` 用の `3` を加えたもの。
 
 | code | 意味 |
 |------|------|
 | `0`  | 軌跡が spec と一致した (pass) |
-| `1`  | 逸脱あり (missing / unexpected / 順序違反) |
+| `1`  | 逸脱あり (missing / unexpected / 順序違反。`tier` では mismatch または不在) |
 | `2`  | harness エラー (入力が読めない / パースできない) |
+| `3`  | `tier` のみ: needs-human (未実装の diff 戦略、または fuzzy ドリフトが閾値超過) |
 
 ## condukt への組み込み (Phase 6)
 

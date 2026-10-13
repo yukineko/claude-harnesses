@@ -12,7 +12,16 @@ Deterministic retrieval (keyword + trigger scoring, no embeddings, no API key).
 
 ## How it works
 
-`playbook inject` is wired to the **UserPromptSubmit** hook. On each prompt it:
+`playbook inject` is wired to the **UserPromptSubmit** hook. On each prompt it
+does two things:
+
+**Complexity detection.** A deterministic keyword classifier (no LLM) flags
+prompts that look like complex work — production impact, cross-crate Rust
+changes, untestable constraints, an explicit "condukt で回して" request — and
+prints a `→ /flow <problem>` suggestion. Knowledge injection still runs
+alongside it.
+
+**Knowledge injection.**
 
 1. loads the notes visible from the cwd — the project store
    (`<store>/<basename>-<hash>/`) plus the shared `_global/` store;
@@ -35,11 +44,14 @@ playbook add --title "メモリ: 一括読込み禁止" \
 
 playbook add --title "commit は branch を切ってから" --always \
   --body "main で直接コミットしない。必ず作業ブランチを切る。"
+# --global stores the note in the shared _global store; without --body the body is read from stdin
 
 playbook list
 playbook search lightgbm が OOM で落ちる   # see what would be injected (✓ marks it)
 playbook rm <slug>
 playbook status                  # resolved config + store paths + visible note count
+playbook init                    # create the store dirs and a sample note
+playbook uninstall               # remove the hook (install/uninstall accept --dry-run)
 ```
 
 A note is a markdown file with TOML frontmatter:
@@ -57,16 +69,19 @@ read_csv 等で全件ロード禁止。chunksize / ParquetFile.read_row_group �
 
 ## Config
 
-See [`playbook.example.toml`](playbook.example.toml).
+See [`playbook.example.toml`](playbook.example.toml). Project `./playbook.toml`
+over `~/.playbook/config.toml` over built-in defaults (the first file that exists
+wins; no merging).
 
 | key | meaning | default |
 |---|---|---|
+| `store_dir` | note store root | `~/.playbook/store` |
 | `top_k` | max notes injected per prompt | 3 |
 | `min_score` | relevance threshold (`always` bypasses) | 5 |
 | `max_chars` | hard cap on injected characters | 1500 |
 | `include_global` | also search the `_global` store | true |
 
-Kill switch: `PLAYBOOK_DISABLE=1`.
+Kill switch: `PLAYBOOK_DISABLE` set to any non-empty value other than `0`.
 
 ## The harness family
 

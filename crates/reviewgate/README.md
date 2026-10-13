@@ -22,12 +22,27 @@ headless `claude -p` it spawns (subprocess mode).
 reviewgate hashes the reviewable diff. A stop whose diff matches the one it last
 forced a review of is allowed through — the agent already reviewed exactly that.
 A *changed* diff costs one more round, capped by `max_attempts` (default 2), so
-the agent is never trapped. A genuine *harness* error (no git, bad config, our
-own bug) always **allows** the stop — reviewgate must never trap a turn because
-it itself broke.
+the agent is never trapped. In `inject` mode, exceeding `max_attempts` allows
+the stop **silently** (log tag `giveup` only — no stderr warning, no overwatch
+event).
 
-Safe by default: no git repo, or no reviewable file changed, → the stop is
-allowed. Lockfiles, `node_modules`, `target`, generated files, etc. are excluded.
+When there is nothing to review (not a git repo, no reviewable file changed, an
+empty diff) the stop is **allowed**. When reviewgate *cannot determine* the
+change it does **not** allow: a git command that errors inside a real repo
+leaves the changed set undetermined and **blocks** (bounded by `max_attempts`).
+A config file that cannot be read/parsed does not disable the gate — it runs on
+the built-in defaults with a WARNING. A panic inside reviewgate itself fails
+**closed**: `harness_core::gate::run::run_guarded` blocks and surfaces the
+crash; only a second consecutive panic (`stop_hook_active`) falls through to
+allow, so a broken reviewgate cannot trap a turn forever. Lockfiles,
+`node_modules`, `target`, generated files, etc. are excluded.
+
+**Whose changes.** The changed set is narrowed by session attribution
+(`harness_core::attribution`, read from the hook's `transcript_path`): a file
+another session's transcript claims and this one's does not is excluded, and
+the exclusion is printed to stderr (and appended to any block reason). When
+attribution is undetermined (no/unreadable transcript) every changed file is
+reviewed.
 
 ## Fail closed, but bounded
 
@@ -44,7 +59,10 @@ not silently allow — that would turn a broken reviewer into a bypass:
   (bounded, same path as a failed change scan), never hashed as reviewed.
 - When the independent reviewer still reports findings after `max_attempts`,
   the stop is allowed with a stderr WARNING, the distinct log tag
-  `review-giveup`, and an overwatch violation event.
+  `review-giveup`, and an overwatch violation event. (The other give-up
+  paths — `reviewer-error-giveup`, `truncated-giveup`,
+  `git-scan-failed-giveup` — allow with a stderr WARNING and log tag but emit
+  no overwatch event.)
 - A malformed `include` glob widens the review to every changed file (a
   malformed `exclude` glob excludes nothing), with a stderr WARNING. A config
   file that cannot be read/parsed is reported (stderr WARNING, and `status`
@@ -79,6 +97,8 @@ reviewgate install       # wire the Stop hook into ~/.claude/settings.json
 - `reviewgate status` — show the resolved config and what would be reviewed now.
 - `reviewgate trust` — trust the current project so its `./reviewgate.toml`
   (incl. `reviewer_cmd`) is honored; until trusted, a repo-shipped config is ignored.
+- `reviewgate skip --reason "<why>"` — one-shot, session-scoped skip (see
+  Escape hatches).
 
 Run `reviewgate review` by hand (no stdin) for a human-readable dry check.
 
@@ -89,8 +109,21 @@ See [`reviewgate.example.toml`](reviewgate.example.toml). Project
 but only once the project root is **trusted** (`reviewgate trust`), since
 `reviewer_cmd` runs as a subprocess.
 
-Key fields: `mode`, `max_attempts`, `min_changed_files`, `include`/`exclude`
-globs, `rubric`, and (subprocess) `reviewer_cmd` / `reviewer_timeout_secs`.
+Key fields: `mode`, `max_attempts`, `reset_after_secs` (default 600; the
+per-session attempt counter resets after this idle gap), `min_changed_files`,
+`max_diff_bytes` (default 200000), `include`/`exclude` globs, `rubric`,
+`state_dir`, and (subprocess) `reviewer_cmd` / `reviewer_timeout_secs`
+(default 300). A value of `0` for `max_attempts` / `min_changed_files` is
+clamped to 1, and `0` for `max_diff_bytes` / `reviewer_timeout_secs` falls back
+to the default.
+
+## Bundled agent
+
+The plugin also ships `agents/reviewgate-typing.md`, a read-only subagent that
+reviews a diff only for whether it uses the type checker and determinism
+(undeterminable states the types cannot represent, contracts erased at the call
+site, non-deterministic verification). The `review` hook does not invoke it;
+call it explicitly.
 
 ## Escape hatches
 

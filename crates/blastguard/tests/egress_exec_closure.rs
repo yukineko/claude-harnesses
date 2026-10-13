@@ -47,6 +47,78 @@ fn assert_allow(d: Decision, what: &str) {
     assert_eq!(d, Decision::Allow, "expected Allow for {what}");
 }
 
+/// Marker every Ask produced under the user's 2026-10-14 rulings must carry in
+/// `permissionDecisionReason` (ruling R0).
+const RECOMMEND_NO: &str = "Recommended: do not run this.";
+
+/// User ruling R1 (2026-10-14): a here-string into a shell whose operand
+/// cannot be statically determined is NOT denied by the egress rule (no fetch
+/// anywhere) and resolves to an Ask whose `permissionDecisionReason` carries
+/// [`RECOMMEND_NO`]. The not-Deny half is checked at the library entry point
+/// this file uses; the Ask + marker half through the hook binary, because the
+/// marker is specified on the hook's `permissionDecisionReason`.
+#[track_caller]
+fn assert_undeterminable_here_string_asks(cmd: &str) {
+    let d = bash(cmd);
+    assert!(
+        !d.is_deny(),
+        "egress rule must not falsely deny {cmd:?} (no fetch anywhere), got {d:?}"
+    );
+    let (decision, reason) = hook_verdict(cmd);
+    assert!(
+        decision == "ask" && reason.contains(RECOMMEND_NO),
+        "expected Ask carrying {RECOMMEND_NO:?} for {cmd:?}, got {decision} ({reason})"
+    );
+}
+
+/// `(permissionDecision, permissionDecisionReason)` from the built hook binary
+/// for a Bash `cmd` (`"allow"` when it printed nothing). `CLAUDECODE=1` +
+/// `CLAUDE_CODE_ENTRYPOINT=cli` so an Ask is not hardened to Deny; no session
+/// id so the repeat-refusal downgrade cannot fire.
+fn hook_verdict(cmd: &str) -> (String, String) {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let payload = json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": { "command": cmd },
+    })
+    .to_string();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_blastguard"))
+        .env("CLAUDECODE", "1")
+        .env("CLAUDE_CODE_ENTRYPOINT", "cli")
+        .env_remove("CLAUDE_CODE_SESSION_ID")
+        .env_remove("BLASTGUARD_ASK")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("binary spawns");
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(payload.as_bytes());
+    }
+    let out = child.wait_with_output().expect("binary runs");
+    assert_eq!(out.status.code(), Some(0), "hook must exit 0 for {cmd:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    if stdout.trim().is_empty() {
+        return ("allow".to_string(), String::new());
+    }
+    let doc: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout is not JSON for {cmd:?} ({e}): {stdout}"));
+    let hso = doc.get("hookSpecificOutput");
+    let decision = hso
+        .and_then(|h| h.get("permissionDecision"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_else(|| panic!("no permissionDecision for {cmd:?}, got: {stdout}"))
+        .to_string();
+    let reason = hso
+        .and_then(|h| h.get("permissionDecisionReason"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    (decision, reason)
+}
+
 // ---------------------------------------------------------------------------
 // RED baseline — pins what the PRE-FIX binary actually returned (all Allow),
 // so this file itself is evidence the attack surface was open, not just an
@@ -504,12 +576,12 @@ fn triple_nested_here_string_feeding_an_interpreter_is_denied() {
 }
 
 #[test]
-fn nested_here_string_anti_vacuity_controls_stay_allow() {
-    // Benign nested here-string — no fetch anywhere in either layer.
-    assert_allow(
-        bash(r#"bash <<<"$(bash <<<"echo hi")""#),
-        r#"bash <<<"$(bash <<<"echo hi")" (no fetch anywhere)"#,
-    );
+fn nested_here_string_egress_rule_does_not_falsely_deny_and_other_controls_stay_allow() {
+    // Benign nested here-string — no fetch anywhere in either layer, so the
+    // EGRESS rule must not deny it. Its verdict is no longer Allow: user
+    // ruling R1 (2026-10-14) makes a here-string into a shell whose operand
+    // cannot be statically determined an Ask carrying RECOMMEND_NO.
+    assert_undeterminable_here_string_asks(r#"bash <<<"$(bash <<<"echo hi")""#);
     // Pure data-consumer: `cat` never executes the operand, only prints it,
     // so a fetch nested inside is never remote-EXECUTION.
     assert_allow(
@@ -565,13 +637,13 @@ fn process_substitution_embedded_quoted_paren_then_fetch_is_denied() {
 }
 
 #[test]
-fn embedded_quoted_paren_anti_vacuity_controls_stay_allow() {
+fn embedded_quoted_paren_egress_rule_does_not_falsely_deny_and_other_controls_stay_allow() {
     // Quoted `)` present but NO fetch anywhere — quote-awareness must not
-    // turn a benign embedded-paren command into a false Deny.
-    assert_allow(
-        bash(r#"bash <<<"$(echo ")" ; echo hi)""#),
-        r#"bash <<<"$(echo ")" ; echo hi)" (embedded quoted paren, no fetch)"#,
-    );
+    // turn a benign embedded-paren command into a false Deny. The here-string
+    // spelling is no longer Allow: its operand is built by a command
+    // substitution, so per user ruling R1 (2026-10-14) it is an Ask carrying
+    // RECOMMEND_NO.
+    assert_undeterminable_here_string_asks(r#"bash <<<"$(echo ")" ; echo hi)""#);
     assert_allow(
         bash(r#"bash <(echo ")" ; echo hi)"#),
         r#"bash <(echo ")" ; echo hi) (embedded quoted paren, no fetch)"#,
@@ -587,11 +659,9 @@ fn embedded_quoted_paren_anti_vacuity_controls_stay_allow() {
         r#"grep foo <<<"$(cat file.txt)" (local-only, no fetch)"#,
     );
     // Benign nested here-string carried over from the previous round, kept
-    // here as a non-regression witness alongside the new controls.
-    assert_allow(
-        bash(r#"bash <<<"$(bash <<<"echo hi")""#),
-        r#"bash <<<"$(bash <<<"echo hi")" (no fetch anywhere)"#,
-    );
+    // here as a non-regression witness: the egress rule must not deny it
+    // (ruling R1: Ask + RECOMMEND_NO, not Allow).
+    assert_undeterminable_here_string_asks(r#"bash <<<"$(bash <<<"echo hi")""#);
 }
 
 // ---------------------------------------------------------------------------

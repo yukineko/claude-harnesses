@@ -497,13 +497,18 @@ pub(crate) fn progress_store_dir(cfg: &Config, cwd: &Path) -> Determination<Path
 /// (kept), exactly as before.
 ///
 /// Only the explicit marker, set by the caller that knows it never creates run
-/// state, drops the run-scoped signals: for a marked claim the run state is not
+/// state, or the equivalent `flow-<owning session id>` run-id pairing that an
+/// unmarked pre-marker /flow claim carries (backlog 6a668d24), drops the
+/// run-scoped signals: for a marked claim the run state is not
 /// loaded at all and the fingerprint is the transcript signal alone (sampled
 /// under its own `claim-stateless:<run>` progress key). The transcript's own
 /// "cannot determine" arms still hold — no owning session id or an unreadable
-/// transcript is `Undetermined` (kept), and the first sample / an unelapsed
-/// window is `Undetermined` as for every claim. Only a transcript frozen for
-/// the full window yields `Known(Stalled)`.
+/// transcript store is `Undetermined` (kept), and the first sample / an
+/// unelapsed window is `Undetermined` as for every claim. A transcript that is
+/// DETERMINATELY ABSENT (the projects store was read in full and no
+/// `<slug>/<id>.jsonl` exists) is a successful observation and folds in as a
+/// stable marker ([`stateless_transcript_signal`]). Only a transcript — present
+/// or absent — frozen for the full window yields `Known(Stalled)`.
 fn claim_progress(cfg: &Config, cwd: &Path, c: &Claim, now: i64) -> Determination<Liveness> {
     #[cfg(test)]
     if let Some(forced) = test_hook::forced_progress() {
@@ -515,7 +520,17 @@ fn claim_progress(cfg: &Config, cwd: &Path, c: &Claim, now: i64) -> Determinatio
             "claim has no owning session id — transcript progress unreadable",
         ),
     };
-    let (current, key) = if c.stateless {
+    // A /flow claim is stateless either by the explicit marker or because its
+    // run id is EXACTLY `flow-<its own owning session id>` — the same vouch
+    // `circuit` uses (`session_vouches_for_run`). Claims made before the marker
+    // existed are unmarked but carry that pairing, and without it a dead one is
+    // immortal (backlog 6a668d24: 1218.6 h, never heartbeated, no transcript).
+    // The legacy-worktree hazard below does not apply: the fingerprint is still
+    // the owning session's transcript, so a LIVE holder (its transcript grows)
+    // reads Progressing and is kept whatever its run state's whereabouts.
+    let stateless = c.stateless
+        || crate::circuit::session_vouches_for_run(&c.run_id, c.session_id.as_deref()).is_some();
+    let (current, key) = if stateless {
         // Explicitly marked by a caller that never creates run state: the run
         // state is NOT loaded at all (its absence is expected, not a failed
         // read). The transcript is the whole fingerprint, and its own
@@ -524,6 +539,16 @@ fn claim_progress(cfg: &Config, cwd: &Path, c: &Claim, now: i64) -> Determinatio
         // key keeps this one-signal fingerprint from alternating with an
         // unmarked claim's three-signal fingerprint for the same run id, which
         // would read as perpetual churn.
+        //
+        // One refinement over the shared reader: a transcript that is
+        // DETERMINATELY ABSENT (see [`stateless_transcript_signal`]) folds in
+        // as a stable marker instead of `Undetermined`, so a dead holder whose
+        // session left no transcript can still converge to Stalled (backlog
+        // 6a668d24). An unreadable transcript store stays `Undetermined`.
+        let transcript = match c.session_id.as_deref() {
+            Some(sid) => stateless_transcript_signal(transcript, sid),
+            None => transcript,
+        };
         (
             progress::fingerprint_from_signals(vec![("transcript", transcript)]),
             format!("claim-stateless:{}", c.run_id),
@@ -565,6 +590,135 @@ fn claim_progress(cfg: &Config, cwd: &Path, c: &Claim, now: i64) -> Determinatio
         now,
         progress::window_secs(progress::DEFAULT_WINDOW_SECS),
     )
+}
+
+/// The value [`stateless_transcript_signal`] folds in for an owning session
+/// whose transcript is determinately absent. Like [`ABSENT_WORKTREE_MARKER`] it
+/// can never alias a real `size:mtime` growth value (those are digits and a
+/// colon), and it is a constant, so an absent transcript reads as frozen at
+/// every sample rather than as churn.
+const ABSENT_TRANSCRIPT_MARKER: &[u8] = b"<absent-transcript>";
+
+/// Transcript signal for a [`Claim::stateless`] claim.
+///
+/// `read` is the shared reader's answer ([`progress::session_transcript_signal`]).
+/// A `Known` reading is returned unchanged. An `Undetermined` reading is
+/// re-examined, because the shared reader folds two different situations into
+/// it: "no transcript exists for this session" and "the transcript store could
+/// not be read". Only the first is a successful observation, so only the first
+/// is converted — into the stable [`ABSENT_TRANSCRIPT_MARKER`]. Everything
+/// else keeps the original `Undetermined` (the claim is kept; CLAUDE.md §3).
+///
+/// Absence feeds the normal multi-sample gate, it does not reap by itself: the
+/// claim must already be heartbeat-stale past the TTL ([`retain_claim`]), and
+/// the marker must be observed unchanged for the full progress window before
+/// the verdict is `Known(Stalled)`. A transcript that appears in between
+/// changes the fingerprint and reads as `Progressing`.
+///
+/// This is the stateless counterpart of the absent-worktree rule on
+/// [`run_worktree_head_signal`]: conflating absence with unreadability made a
+/// dead `/flow` holder's task claim immortal (backlog 6a668d24: a claim held
+/// 1218.6 hours, never heartbeated, no transcript, kept "claimed" by `state
+/// is-claimed` so no session could ever start the item).
+fn stateless_transcript_signal(
+    read: Determination<Vec<u8>>,
+    session_id: &str,
+) -> Determination<Vec<u8>> {
+    let why = match read {
+        Determination::Known(v) => return Determination::Known(v),
+        Determination::Undetermined(why) => why,
+    };
+    let Some(home) = std::env::var_os("HOME") else {
+        return Determination::Undetermined(why);
+    };
+    let projects = PathBuf::from(home).join(".claude").join("projects");
+    match transcript_absent_in(&projects, session_id) {
+        Determination::Known(()) => Determination::Known(ABSENT_TRANSCRIPT_MARKER.to_vec()),
+        Determination::Undetermined(_) => Determination::Undetermined(why),
+    }
+}
+
+/// `Known(())` only when it was OBSERVED that no `<projects_dir>/*/<id>.jsonl`
+/// exists — the same layout
+/// [`harness_core::transcript::locate_session_transcript_in`] searches.
+///
+/// Every step that could not be observed is `Undetermined`:
+///
+/// * an empty session id or one that is not a single path component (it could
+///   not name a file in a project dir, so nothing was looked at);
+/// * `projects_dir` missing or unreadable — a missing store says nothing about
+///   whether this session ever had a transcript (wrong `$HOME`, other machine);
+/// * any directory entry that cannot be read or stat'd;
+/// * a candidate `<slug>/<id>.jsonl` whose `stat()` fails with anything other
+///   than `NotFound` (permissions, IO) — "could not look" is not "not there";
+/// * a candidate that DOES exist (the shared reader failed on it for another
+///   reason, or it appeared since).
+///
+/// Non-directory entries are skipped: a regular file cannot contain the
+/// transcript. A dangling symlink (`NotFound` when followed) likewise.
+fn transcript_absent_in(projects_dir: &Path, session_id: &str) -> Determination<()> {
+    let sid = session_id.trim();
+    if sid.is_empty()
+        || sid == "."
+        || sid == ".."
+        || sid.contains('/')
+        || sid.contains('\\')
+        || sid.contains('\0')
+    {
+        return Determination::undetermined(format!(
+            "session id {session_id:?} does not name a transcript file — absence not observable"
+        ));
+    }
+    let target = format!("{sid}.jsonl");
+    let entries = match std::fs::read_dir(projects_dir) {
+        Ok(e) => e,
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "projects dir {} unreadable: {e} — transcript absence not observable",
+                projects_dir.display()
+            ))
+        }
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(en) => en,
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "projects dir {} entry unreadable: {e}",
+                    projects_dir.display()
+                ))
+            }
+        };
+        let slug = entry.path();
+        match std::fs::metadata(&slug) {
+            Ok(m) if !m.is_dir() => continue,
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "project dir {} could not be stat'd: {e}",
+                    slug.display()
+                ))
+            }
+        }
+        let candidate = slug.join(&target);
+        match std::fs::metadata(&candidate) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "transcript candidate {} could not be stat'd: {e}",
+                    candidate.display()
+                ))
+            }
+            Ok(_) => {
+                return Determination::undetermined(format!(
+                    "transcript {} exists — not absent",
+                    candidate.display()
+                ))
+            }
+        }
+    }
+    Determination::Known(())
 }
 
 /// The value [`run_worktree_head_signal`] folds in for a recorded worktree that
@@ -3473,16 +3627,185 @@ mod tests {
         let tmp_dir = make_tmp_dir("stateless-untx");
         let tmp = tmp_dir.path();
         let (cfg, claim, home, transcript) = stateless_fixture(tmp, true, Some(FIXTURE_SESSION));
-        std::fs::remove_file(&transcript).unwrap();
+        // UNREADABLE, not absent: the project dir holding the transcript is
+        // made unsearchable, so `stat()` of the transcript fails with a
+        // permission error. (This fixture used to DELETE the transcript, which
+        // is the determinately-absent case — covered separately by
+        // `stateless_dead_claim_with_absent_transcript_stops_being_claimed`.)
+        let slug = transcript.parent().unwrap().to_path_buf();
+        set_mode(&slug, 0o000);
+        let probe = std::fs::metadata(&transcript);
+        assert!(
+            matches!(&probe, Err(e) if e.kind() != std::io::ErrorKind::NotFound),
+            "fixture precondition: the transcript must be unreadable, not absent ({probe:?})"
+        );
         let _h = pin_home(&home);
         let (now, v2) = two_samples(&cfg, tmp, &claim);
+        let kept = retain_claim(&claim, now, ttl_secs(&cfg), &|c| {
+            claim_progress(&cfg, tmp, c, now)
+        });
+        set_mode(&slug, 0o755);
         assert!(
             matches!(v2, Determination::Undetermined(_)),
             "an unreadable transcript is 'cannot determine', not 'frozen' (got {v2:?})"
         );
+        assert!(kept);
+        std::fs::remove_dir_all(tmp).ok();
+    }
+
+    fn set_mode(p: &Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    /// Precondition guard for the unreadable fixtures: if the process can read
+    /// through a 0o000 dir anyway (root), the fixture would silently become an
+    /// "absent"/"present" case and the assertion would prove nothing.
+    fn assert_mode_000_is_enforced(dir: &Path) {
+        assert!(
+            std::fs::read_dir(dir).is_err(),
+            "fixture precondition: a 0o000 dir must be unreadable to this process"
+        );
+    }
+
+    /// A LIVE holder (heartbeat within the TTL) is kept even when its
+    /// transcript is absent: absence only feeds the progress gate, which is
+    /// consulted only for heartbeat-stale claims.
+    #[test]
+    fn live_stateless_claim_with_absent_transcript_is_kept() {
+        let tmp_dir = make_tmp_dir("stateless-absent-live");
+        let tmp = tmp_dir.path();
+        let (cfg, mut claim, home, transcript) =
+            stateless_fixture(tmp, true, Some(FIXTURE_SESSION));
+        std::fs::remove_file(&transcript).unwrap();
+        let _h = pin_home(&home);
+        let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
+        let t0 = 1_790_000_000i64;
+        claim.claimed_at = t0;
+        claim.heartbeat_at = t0 + window;
+        let hk = "live-hk".to_string();
+        let mut reg = Registry::default();
+        reg.task_claims.insert(hk.clone(), claim);
+        save(&registry_path_for_test(&cfg, tmp), &reg).unwrap();
+        let _ = active_claims(&cfg, tmp, t0).unwrap();
+        let later = active_claims(&cfg, tmp, t0 + window).unwrap();
+        assert!(
+            later.task_claims.contains_key(&hk),
+            "a fresh heartbeat keeps the claim regardless of the transcript"
+        );
+        std::fs::remove_dir_all(tmp).ok();
+    }
+
+    /// A heartbeat-stale stateless claim whose transcript store
+    /// (`~/.claude/projects`) does not exist at all stays claimed: a missing
+    /// store is not evidence the session never had a transcript.
+    #[test]
+    fn stateless_claim_with_missing_projects_store_is_kept() {
+        let tmp_dir = make_tmp_dir("stateless-no-store");
+        let tmp = tmp_dir.path();
+        let (cfg, claim, home, _t) = stateless_fixture(tmp, true, Some(FIXTURE_SESSION));
+        std::fs::remove_dir_all(home.join(".claude").join("projects")).unwrap();
+        let _h = pin_home(&home);
+        let (now, v2) = two_samples(&cfg, tmp, &claim);
+        assert!(
+            matches!(v2, Determination::Undetermined(_)),
+            "a missing transcript store is 'cannot determine' (got {v2:?})"
+        );
         assert!(retain_claim(&claim, now, ttl_secs(&cfg), &|c| {
             claim_progress(&cfg, tmp, c, now)
         }));
+        std::fs::remove_dir_all(tmp).ok();
+    }
+
+    /// A heartbeat-stale stateless claim whose projects store itself cannot be
+    /// listed stays claimed.
+    #[test]
+    fn stateless_claim_with_unlistable_projects_store_is_kept() {
+        let tmp_dir = make_tmp_dir("stateless-unlistable");
+        let tmp = tmp_dir.path();
+        let (cfg, claim, home, transcript) = stateless_fixture(tmp, true, Some(FIXTURE_SESSION));
+        std::fs::remove_file(&transcript).unwrap();
+        let projects = home.join(".claude").join("projects");
+        set_mode(&projects, 0o000);
+        assert_mode_000_is_enforced(&projects);
+        let _h = pin_home(&home);
+        let (now, v2) = two_samples(&cfg, tmp, &claim);
+        let kept = retain_claim(&claim, now, ttl_secs(&cfg), &|c| {
+            claim_progress(&cfg, tmp, c, now)
+        });
+        set_mode(&projects, 0o755);
+        assert!(
+            matches!(v2, Determination::Undetermined(_)),
+            "an unlistable transcript store is 'cannot determine' (got {v2:?})"
+        );
+        assert!(kept);
+        std::fs::remove_dir_all(tmp).ok();
+    }
+
+    #[test]
+    fn transcript_absent_in_refuses_ids_that_are_not_one_path_component() {
+        let tmp_dir = make_tmp_dir("absent-in-ids");
+        let projects = tmp_dir.path();
+        std::fs::create_dir_all(projects.join("-p")).unwrap();
+        for bad in ["", "  ", ".", "..", "a/b", "../x", "a\\b"] {
+            assert!(
+                matches!(
+                    transcript_absent_in(projects, bad),
+                    Determination::Undetermined(_)
+                ),
+                "session id {bad:?} must not yield an absence observation"
+            );
+        }
+        assert_eq!(
+            transcript_absent_in(projects, "ok-id"),
+            Determination::Known(())
+        );
+        std::fs::write(projects.join("-p").join("ok-id.jsonl"), "x\n").unwrap();
+        assert!(matches!(
+            transcript_absent_in(projects, "ok-id"),
+            Determination::Undetermined(_)
+        ));
+    }
+
+    /// Backlog 6a668d24, reproduced at the layer `state is-claimed` reads
+    /// ([`active_claims`]): a `/flow` (stateless-marked) task claim whose
+    /// heartbeat never moved past `claimed_at`, 1218.6 hours old, and whose
+    /// owning session has NO transcript anywhere under a readable
+    /// `~/.claude/projects`. Nothing can ever advance for that holder, so once
+    /// the progress window has elapsed the claim must no longer be reported —
+    /// otherwise the item can never be started without a manual release-task.
+    #[test]
+    fn stateless_dead_claim_with_absent_transcript_stops_being_claimed() {
+        let tmp_dir = make_tmp_dir("stateless-absent-tx");
+        let tmp = tmp_dir.path();
+        let (cfg, mut claim, home, transcript) =
+            stateless_fixture(tmp, true, Some(FIXTURE_SESSION));
+        std::fs::remove_file(&transcript).unwrap();
+        let _h = pin_home(&home);
+        // The incident's shape: claimed_at == heartbeat_at, 1218.6h old.
+        let t0 = 1_790_000_000i64;
+        let age = 4_386_960i64;
+        claim.claimed_at = t0 - age;
+        claim.heartbeat_at = t0 - age;
+        let hk = "3358a647274b19d0".to_string();
+        let mut reg = Registry::default();
+        reg.task_claims.insert(hk.clone(), claim);
+        save(&registry_path_for_test(&cfg, tmp), &reg).unwrap();
+
+        let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
+        // First observation only anchors the progress window (no prior sample).
+        let first = active_claims(&cfg, tmp, t0).unwrap();
+        assert!(
+            first.task_claims.contains_key(&hk),
+            "a single observation is never enough to reap"
+        );
+        let later = active_claims(&cfg, tmp, t0 + window).unwrap();
+        assert!(
+            !later.task_claims.contains_key(&hk),
+            "a heartbeat-stale stateless claim whose transcript is determinately absent \
+             for the full window must not be reported as claimed (got {:?})",
+            later.task_claims.get(&hk)
+        );
         std::fs::remove_dir_all(tmp).ok();
     }
 

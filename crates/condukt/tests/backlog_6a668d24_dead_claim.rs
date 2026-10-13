@@ -90,17 +90,19 @@ impl Fixture {
             .current_dir(&self.repo)
             .env("HOME", &self.home)
             .env_remove("CLAUDE_CODE_SESSION_ID")
+            // Reaping is multi-sample: window 0 lets the 2nd identical sample stall.
+            .env("HARNESS_PROGRESS_WINDOW_SECS", "0")
             .output()
             .expect("spawn condukt")
     }
 
     /// Unmarked claim (NO --stateless), exactly as an older /flow made it.
-    fn claim_unmarked(&self) {
+    fn claim_unmarked(&self, run: &str) {
         let out = self.condukt(&[
             "state",
             "claim-task",
             "--run",
-            RUN,
+            run,
             "--session",
             SESSION,
             "--title",
@@ -112,8 +114,8 @@ impl Fixture {
         let claims =
             String::from_utf8_lossy(&self.condukt(&["state", "claims"]).stdout).into_owned();
         assert!(
-            claims.contains(RUN) && !claims.contains("\"stateless\""),
-            "precondition: registry must hold an UNMARKED claim for {RUN}; got {claims}"
+            claims.contains(run) && !claims.contains("\"stateless\""),
+            "precondition: registry must hold an UNMARKED claim for {run}; got {claims}"
         );
     }
 
@@ -178,29 +180,58 @@ impl Fixture {
     }
 }
 
+/// Two `is-claimed` calls: reaping is multi-sample (`progress::sample` is
+/// Undetermined on the first observation), so the first must still say
+/// claimed and only the SECOND can reap. Returns the second call's result.
+fn two_calls(fx: &Fixture) -> (i32, String) {
+    let (c1, o1) = fx.is_claimed();
+    assert!(
+        c1 == 0 && o1.contains("\"claimed\": true"),
+        "first sample must still be claimed (no prior sample); got exit {c1}, stdout={o1}"
+    );
+    fx.is_claimed()
+}
+
 /// (1) Determinately dead: unmarked, no run state, transcript absent from a
-/// readable projects dir, 51 days old and never heartbeated. Must be free.
+/// readable projects dir, 51 days old and never heartbeated. Must be free on
+/// the second sample.
 #[test]
 fn dead_unmarked_claim_is_not_reported_claimed() {
     let fx = Fixture::new("dead");
-    fx.claim_unmarked();
+    fx.claim_unmarked(RUN);
     fx.age_claim();
-    let (code, stdout) = fx.is_claimed();
+    let (code, stdout) = two_calls(&fx);
     assert!(
         code == 1 && stdout.contains("\"claimed\": false"),
-        "a 51-day-old, never-heartbeated, unmarked claim with no run state and no \
-         transcript must be reapable (is-claimed exit 1, claimed:false); \
+        "a 51-day-old, never-heartbeated, unmarked /flow claim with no run state and no \
+         transcript must be reapable on the 2nd sample (exit 1, claimed:false); \
          got exit {code}, stdout={stdout}"
     );
+}
+
+/// (4) Aged unmarked claim whose run id is NOT `flow-<session id>`: its run
+/// state may live under another worktree's key, so run-state absence is not
+/// evidence of death. Must stay claimed after two samples.
+#[test]
+fn old_non_flow_run_claim_stays_claimed() {
+    let fx = Fixture::new("nonflow");
+    fx.claim_unmarked("run-20260801-x");
+    fx.age_claim();
+    let (code, stdout) = two_calls(&fx);
+    assert_eq!(
+        code, 0,
+        "non-/flow run claim must stay claimed; stdout={stdout}"
+    );
+    assert!(stdout.contains("\"claimed\": true"), "{stdout}");
 }
 
 /// (2) Control: a fresh claim is live and stays claimed.
 #[test]
 fn fresh_unmarked_claim_stays_claimed() {
     let fx = Fixture::new("fresh");
-    fx.claim_unmarked();
-    let (code, stdout) = fx.is_claimed();
-    assert_eq!(code, 0, "fresh claim must be claimed; stdout={stdout}");
+    fx.claim_unmarked(RUN);
+    let (code, stdout) = two_calls(&fx);
+    assert_eq!(code, 0, "fresh claim must stay claimed; stdout={stdout}");
     assert!(stdout.contains("\"claimed\": true"), "{stdout}");
 }
 
@@ -209,7 +240,7 @@ fn fresh_unmarked_claim_stays_claimed() {
 #[test]
 fn old_claim_with_undeterminable_transcript_stays_claimed() {
     let fx = Fixture::new("undet");
-    fx.claim_unmarked();
+    fx.claim_unmarked(RUN);
     fx.age_claim();
     let projects = fx.home.join(".claude").join("projects");
     set_mode(&projects, 0o000).unwrap();
@@ -218,8 +249,9 @@ fn old_claim_with_undeterminable_transcript_stays_claimed() {
         std::fs::read_dir(&projects).is_err(),
         "precondition: projects dir must be unreadable (running as root?)"
     );
-    let (code, stdout) = fx.is_claimed();
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| two_calls(&fx)));
     set_mode(&projects, 0o755).unwrap();
+    let (code, stdout) = r.unwrap();
     assert_eq!(
         code, 0,
         "undeterminable transcript liveness must stay claimed (fail-closed); stdout={stdout}"

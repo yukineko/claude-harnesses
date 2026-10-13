@@ -43,9 +43,9 @@ compass では拾えない複数の独立した施策が欲しいとき、ある
 | 決定論的レビュー | `git log` / `cargo test` / `compass gap` / `backlog list` / `cargo deny` などで事実を read-only 収集し、全 sub-agent に渡す。 |
 | 5 レンズ並列調査 | read-only sub-agent が逐語証拠つきの施策候補（JSON）を返す。 |
 | 統合 | 重複排除・証拠フィルタの後、`specguard map list` で候補の touched file を spec-map と照合し、`spec_doc`/`test_files` が既にその挙動を意図的・カバー済みとしていれば候補を落とす（specguard 未導入なら fail-soft で省略）。続けてスコアリングは決定論バイナリ `compass score` に委譲（LLM は候補ごとに `goal_proximity` だけを見積もり、`severity`/`effort`/`lens`/`goal_proximity` を渡してランキングさせる。L2/L5 の重み上げはスコアラー側に内蔵済み）。`compass score` が無い／未対応なら `(severity × goal への近さ) ÷ effort` の手計算にフォールバック。`p0/p1/p2` タグ付与。 |
-| 合意（HOTL） | 既定は `AskUserQuestion`（multiSelect）で backlog に積む施策をユーザーが選ぶ。autonomy ゲート: `condukt state autonomy-check` が autonomous を返したら選別 Ask を省き、スコア上位 N 件（既定 top 8、`p0`/`p1` 優先）を自動採用する。 |
-| 書き出し＋引き渡し | 承認施策を `backlog add`（`--tag scout`、証拠と完了条件を `--notes` に記録）し、`/flow` へ引き渡す。既定は propose-then-confirm、autonomous なら 1 件以上積んだときに `/flow` を自動起動する。 |
+| 合意（HOTL） | 既定は `AskUserQuestion`（multiSelect）で backlog に積む施策をユーザーが選ぶ。autonomy ゲート: `condukt state autonomy-check` が autonomous を返したら選別ゲートを `condukt policy answer` に通す（auto → 選別 Ask を省きスコア上位 N 件（既定 top 8、`p0`/`p1` 優先）を自動採用、escalate → Ask、block → 積まない）。測れないと判明した決定は `--untestable` を付けて渡し、auto を escalate へ引き上げる。 |
+| 書き出し＋引き渡し | 他セッションが compass の発見ストア（`compass discovery list` / `record`、`~/.compass/<project_key>/discovery.jsonl`、fail-soft）に既に記録した施策はスキップし、承認施策を `backlog add`（`--tag scout`、証拠と完了条件を `--notes` に記録）し、`/flow` へ引き渡す。既定は propose-then-confirm、autonomous なら 1 件以上積んだときに `/flow` を自動起動する。 |
 
-施策を積んだら scout は `/flow` へ引き渡してから退く。既定では `/flow` を**提案**（propose-then-confirm）し、autonomy（`condukt state autonomy-check`）が有効なら `/flow` を自動起動する。実行ループと backlog ロックは flow の責務であり、scout は併走しない。`--dry-run` のときは autonomy でも合意フェーズで停止し、提示だけで終了する。
+施策を積んだら scout は `/flow` へ引き渡してから退く。既定では `/flow` を**提案**（propose-then-confirm）し、autonomy（`condukt state autonomy-check`）が有効なら `/flow` を自動起動する。実行ループと task の claim は flow の責務であり、scout は併走しない。`--dry-run` のときは autonomy でも合意フェーズで停止し、提示だけで終了する。
 
-不変条件は次のとおり。監査は read-only（scout も sub-agent もファイルを編集しない）、証拠の無い施策は採用しない、書き込みは `backlog add` のみ、施策の確定には明示的なユーザー合意を要する（ただし autonomy 有効時は top-N を自動採用し、その内容をサマリで明示する）。
+不変条件は次のとおり。監査は read-only（scout も sub-agent もファイルを編集しない）、証拠の無い施策は採用しない、repo への書き込みは `backlog add` のみ（ほかに並行セッション間の重複回避用に、機械ローカルな compass 発見ストアへ記録する）、施策の確定には明示的なユーザー合意を要する（ただし autonomy 有効時は top-N を自動採用し、その内容をサマリで明示する）。

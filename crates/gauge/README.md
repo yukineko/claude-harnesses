@@ -48,10 +48,14 @@ gauge report                       # totals + breakdown by project / model / day
 gauge report --project myrepo      # filter by project
 gauge report --since 2026-06-01    # filter by day
 gauge session                      # details for the most recent session
+gauge session --session <ID> --json  # a specific session as {session_id, cost_usd, models, agents}
 gauge subagents                    # per-sub-agent (Task) cost, read live from transcripts
+gauge subagents --session <ID> --json  # JSON array; time fields are null when unknown
 gauge status                       # resolved config, store path, session count
-gauge init                         # write a starter ./gauge.toml
+gauge init [--force]               # write a starter ./gauge.toml (--force overwrites)
 ```
+
+`gauge install` / `gauge uninstall` accept `--dry-run`.
 
 Example:
 

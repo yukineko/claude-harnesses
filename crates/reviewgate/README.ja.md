@@ -19,7 +19,9 @@ reviewgate は、エージェントが「終わった」と宣言する直前に
 
 reviewgate はレビュー対象の diff をハッシュ化する。最後にレビューを強制したときと同じ diff の stop は通過させる（エージェントはまさにその diff を既にレビュー済みだから）。diff が*変わった*場合は 1 ラウンド追加されるが、`max_attempts`（デフォルト 2）で上限がかかるため、エージェントが無限に閉じ込められることはない。レビュー対象がそもそも存在しない場合（git リポジトリでない・レビュー対象の変更が無い・diff が空）は stop を**許可**する。一方、判定できなかった場合は許可しない：git コマンドが実リポジトリ内で失敗した変更集合は *undetermined* であり、**ブロック**する（`max_attempts` で有界）。reviewgate 自身が panic した場合も `harness_core::gate::run::run_guarded` が **fail closed** でブロックしクラッシュを表面化させる（連続 2 回目の panic だけが `stop_hook_active` により有界に許可へ落ちるので、壊れた reviewgate が turn を永久に塞ぐことはない）。CLAUDE.md §3 — 「判定できなかった」は「問題なし」ではない。
 
-デフォルトで安全：git リポジトリでない、あるいはレビュー対象のファイル変更が無い場合は stop を許可する。ロックファイル・`node_modules`・`target`・生成物などは除外される。
+`inject` モードで `max_attempts` を超えた場合は stop を**黙って**許可する（ログタグ `giveup` のみ。stderr 警告も overwatch event も出さない）。設定ファイルが読めない／parse できない場合もゲートは無効化されず、WARNING を出して組み込み既定値で動く。ロックファイル・`node_modules`・`target`・生成物などは除外される。
+
+**誰の変更か。** 変更集合はセッション帰属（`harness_core::attribution`、hook 入力の `transcript_path` を読む）で絞り込まれる。別セッションの transcript が主張し本セッションの transcript が主張しないファイルは除外され、その除外は stderr に出力される（ブロック理由にも追記される）。帰属が判定不能（transcript が無い／読めない）なら変更ファイルを全件レビューする。
 
 ### fail closed だが有界
 
@@ -28,7 +30,7 @@ reviewgate はレビュー対象の diff をハッシュ化する。最後にレ
 - レビュアーの subprocess が crash / timeout / 解析不能な出力（stdout が空・非 UTF-8、prompt を渡せなかった場合を含む） → **ブロック**（`max_attempts` で有界）後に警告して通過。
 - diff が大きすぎて丸ごとレビューできず切り詰められた（`max_diff_bytes` で truncate）場合、未レビューの末尾が残る → **ブロック**（`max_attempts` で有界）後に警告して通過。
 - diff 内容の取得が一部でも失敗した（`git diff` / `git ls-files` のエラー、未追跡ファイルが読めない）場合、diff は不完全 → **ブロック**（変更スキャン失敗と同じ有界経路）。レビュー済みとして hash しない。
-- 独立レビュアーが `max_attempts` 回を超えても所見を返し続けた場合は通過させるが、stderr に WARNING を出し、専用タグ `review-giveup` で記録し、overwatch の violation event も残す。
+- 独立レビュアーが `max_attempts` 回を超えても所見を返し続けた場合は通過させるが、stderr に WARNING を出し、専用タグ `review-giveup` で記録し、overwatch の violation event も残す。（他の打ち切り経路 — `reviewer-error-giveup`・`truncated-giveup`・`git-scan-failed-giveup` — は stderr WARNING とログタグを残して通過させるが、overwatch event は出さない。）
 - `include` の glob が 1 つでも不正なら全変更ファイルをレビュー対象に広げる（`exclude` の不正 glob は何も除外しない）。いずれも stderr に WARNING。設定ファイルが読めない／parse できない場合も WARNING を出し、`status` に `FAILED to load` と表示する（組み込み既定値で動作）。
 
 どちらの場合もブロック理由にすべての抜け道（`reviewgate skip --reason "<理由>"`、`REVIEWGATE_DISABLE=1`、`max_diff_bytes` の引き上げ）が明示されるため、壊れたレビュアーや大きすぎる diff が turn を永久に塞ぐことはない。
@@ -70,6 +72,7 @@ reviewgate install       # Stop フックを ~/.claude/settings.json に配線�
 - `reviewgate init [--force]` — 雛形の `reviewgate.toml` を書き出す。
 - `reviewgate status` — 解決済みの設定と、いま何がレビュー対象になるかを表示する。
 - `reviewgate trust` — 現在のプロジェクトを信頼し、その `./reviewgate.toml`（`reviewer_cmd` 含む）を honored にする。信頼するまで、リポジトリ同梱の設定は無視される。
+- `reviewgate skip --reason "<理由>"` — 一度だけ・セッション限定のスキップ（「抜け道」参照）。
 
 `reviewgate review` を stdin 無しで手実行すると、人間向けのドライチェックになる。
 
@@ -77,7 +80,11 @@ reviewgate install       # Stop フックを ~/.claude/settings.json に配線�
 
 [`reviewgate.example.toml`](reviewgate.example.toml) を参照。プロジェクトの `./reviewgate.toml` が `~/.reviewgate/config.toml` より、それが組み込みデフォルトより優先される（ただし `reviewer_cmd` を subprocess 実行するため、project root を **trust**（`reviewgate trust`）して初めて project 設定が honored される）。
 
-主なフィールド：`mode`、`max_attempts`、`min_changed_files`、`include`/`exclude` の glob、`rubric`、そして（subprocess 用の）`reviewer_cmd` / `reviewer_timeout_secs`。
+主なフィールド：`mode`、`max_attempts`、`reset_after_secs`（既定 600。セッションごとの試行カウンタがこの無操作秒数でリセットされる）、`min_changed_files`、`max_diff_bytes`（既定 200000）、`include`/`exclude` の glob、`rubric`、`state_dir`、そして（subprocess 用の）`reviewer_cmd` / `reviewer_timeout_secs`（既定 300）。`max_attempts` / `min_changed_files` の `0` は 1 に clamp され、`max_diff_bytes` / `reviewer_timeout_secs` の `0` は既定値に戻る。
+
+### 同梱エージェント
+
+プラグインは `agents/reviewgate-typing.md` も同梱する。差分を「型検査と決定性を使えているか」の観点だけでレビューする read-only subagent（判定不能を表現できない型・呼び出し側での契約消去・非決定な検証を指摘する）。`review` フックはこれを呼ばないので、明示的に呼び出して使う。
 
 ### 抜け道
 

@@ -51,11 +51,23 @@ and reads exit codes — so it can never hit a rate limit.
 - **Kill switch**: `DONEGATE_DISABLE=1`, effective only in the environment
   Claude Code itself was started with — exporting it from a tool call does not
   reach this hook, which inherits the app's environment.
-- **Safe by default**: with no `[[check]]` configured, the gate allows every
-  stop. Installing the hook can never block a project that hasn't opted in.
+- **Opt-in**: with no config file at all (neither `<root>/donegate.toml` nor
+  `~/.donegate/config.toml`), or a loaded config that declares no `[[check]]`,
+  the gate allows every stop. Installing the hook does not block a project that
+  never opted in.
 
-A *harness* error (bad config, our own bug) always exits 0 and lets the stop
-through. Only an actual failing check blocks — on purpose.
+When donegate **cannot judge**, it blocks rather than allowing:
+
+- a project `donegate.toml` exists but the root is **not trusted** (refused);
+- a config file exists but cannot be read or parsed;
+- a declared check's name falls in the reserved `undetermined:` namespace.
+
+These refusals are bounded by the same `max_attempts` counter: once exhausted,
+donegate gives up loudly and allows the stop with "NOTHING WAS VERIFIED"
+(logged as `giveup-refusal`). A panic in donegate itself goes through
+`harness_core::gate::run::run_guarded` and fails **closed** (blocks the first
+stop; only a second consecutive crash on the `stop_hook_active` re-entry is
+allowed through).
 
 ## Install
 
@@ -68,9 +80,12 @@ donegate install       # merges the Stop hook into ~/.claude/settings.json (back
 ```
 
 A project `donegate.toml` is only honored once the project is trusted
-(`donegate trust`); an untrusted project file is ignored and donegate falls back
-to `~/.donegate/config.toml` — so a hostile repo can't ship arbitrary Stop-time
-commands.
+(`donegate trust`), so a hostile repo can't ship arbitrary Stop-time commands.
+An untrusted project file is **not** replaced by the home config's checks: the
+stop is blocked as a refusal (bounded, see above) until you run `donegate trust`
+(or set `HARNESS_TRUST_ALL=1`). Only the knobs (`enabled`, `max_attempts`,
+`state_dir`, timeouts) still come from `~/.donegate/config.toml`. Trusting a
+repo's main working tree also covers its linked git worktrees.
 
 Then check what would run:
 
@@ -100,7 +115,10 @@ checks.
 ## Logs
 
 Every decision appends one JSONL line to `~/.donegate/state/log.jsonl`
-(`verdict` ∈ `green` / `blocked` / `giveup` / `skip`). Local only.
+(`verdict` ∈ `green` / `blocked` / `giveup` / `giveup-reentry` / `skip` /
+`refused` / `giveup-refusal` / `giveup-refusal-reentry`). Local only. Give-ups
+are additionally recorded in overwatch's violation ledger
+(`donegate:giveup:<check>` / `donegate:undetermined:<kind>`).
 
 ## License
 

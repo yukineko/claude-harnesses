@@ -14,7 +14,7 @@ SOURCE（課題の供給）                          EXECUTOR（解決手段の�
   prompt      … ユーザー直の課題文             ─┘
 ```
 
-flow 自身は **新しい状態を一切持たない**。ループ制御——どの source を引くか、いつ実行するか、いつ止めるか——という判断は `/flow` skill の中の **LLM** が担い、状態維持・ロック・size routing・モデル選択は **既存のバイナリ**（`compass` / `backlog` / `condukt` / `fugu-router`）に委ねる。flow はそれら決定論レイヤを束ねるだけの薄い層である。
+flow 自身は **新しい状態を一切持たない**。ループ制御——どの source を引くか、いつ実行するか、いつ止めるか——という判断は `/flow` skill の中の **LLM** が担い、状態維持・task 単位の claim・size routing・モデル選択は **既存のバイナリ**（`compass` / `backlog` / `condukt` / `fugu-router`）に委ねる。flow はそれら決定論レイヤを束ねるだけの薄い層である。
 
 ハーネスの中での位置づけは次のとおり。
 
@@ -27,19 +27,19 @@ flow 自身は **新しい状態を一切持たない**。ループ制御——�
 | どの Claude tier が最も安く通すか | `fugu-router` |
 | **source → executor をループで束ね、止め時を判断する** | **`flow`** |
 
-flow は **`/backlog` の上位互換**である（compass の鮮度ゲートと複数 source を上乗せしたもの）。両者は backlog のロックを共有するため直列化され、同時には走らせない。
+flow は **`/backlog` の上位互換**である（複数 source と compass フォールバックを上乗せしたもの）。キュー全体は**ロックしない**: 同じ project で複数セッションが同時に `/flow` を回してよい。排他は task 単位（選択と予約を同一クリティカルセクションで行う `backlog next --claim` と `condukt state claim-task`）で、各セッションは `backlog driver register` で非排他に driver 登録する。
 
 ## どうして必要か
 
 LLM 単体にセッション全体を「自走」させると、課題の選定と実行が混ざり、次のような失敗モードに陥る。
 
-- **盲目実行。** ゴールが陳腐・矛盾・抽象すぎる状態のままキューを流し始めると、的外れな一手を量産する。flow はループ前に compass ゲート（`compass gap`）を通し、charter が鮮明でない限り自動実行せず `/compass` での再オリエンテーションを促して停止する。
+- **盲目実行。** ゴールが陳腐・矛盾・抽象すぎる状態のまま compass 由来の一手を流すと、的外れな一手を量産する。flow は compass 由来の一手に charter の鮮度ゲート（`compass gap`）をかけ、一手が引けなければその場で charter を彫り直す（backlog item は起票時点で観測と done 条件を持つので、このゲートの対象外）。
 - **source と executor の混線。** 「次に何をやるか」と「それをどう実装するか」を同じ判断に押し込むと、優先順位付けが実装の都合に引きずられる。flow は供給（compass/backlog/hypothesis）と実行（condukt）を直交させ、それぞれ独立したストアに保つ。
-- **二重ループ。** 複数セッションが同時に課題を流すと condukt run が衝突する。flow は backlog のロックを取得してクロスセッションで直列化し、別セッションが保持中なら待機・強制奪取・中止を問う。さらに backlog item 単位でも `condukt state is-claimed`/`claim-task`/`release-task`/`heartbeat` を使い（`--run "flow-$CLAUDE_CODE_SESSION_ID"`）、同一タスクへの多重着手をピック時（claim-skip）と着手直前（TOCTOU ガード）の二段で防ぐ。
+- **二重着手。** 複数セッションが同時に同じ課題を掴むと condukt run が衝突する。flow はキュー全体をロックせず（並走は許す）、`backlog next --claim` で選択と予約を同一クリティカルセクションで行う。誰かが明示的に `backlog lock acquire` した排他ロックが生きている場合だけ尊重し、見送り・待機・強制奪取を問う。さらに backlog item 単位でも `condukt state is-claimed`/`claim-task`/`release-task`/`heartbeat` を使い（`--run "flow-$CLAUDE_CODE_SESSION_ID"`）、同一タスクへの多重着手をピック時（claim-skip）と着手直前（TOCTOU ガード）の二段で防ぐ。
 - **build と validate の取り違え。** 仮説を「出荷した」だけで「検証済み」と扱うと、計測ループが閉じない。flow は出荷した仮説を `awaiting-measurement` に残し、次サイクルの measure step が観測値を添えて初めて validate/reject する（build ≠ validate）。
-- **止め時の喪失。** 連続失敗や予算超過に気づかず走り続けると無駄に消費する。flow は早期脱出条件を持ち、どの経路でもロック解放を必須にする。
+- **止め時の喪失。** 連続失敗や予算超過に気づかず走り続けると無駄に消費する。flow は早期脱出条件を持ち、どの経路でも driver 登録の解除を必須にする。
 
-判断（どの source を引くか・実行・検証・止め時）は LLM、状態とロックとモデル選択は既存バイナリ、と割り切ることで、自走の利便を保ちつつ暴走を防ぐ。
+判断（どの source を引くか・実行・検証・止め時）は LLM、状態と claim とモデル選択は既存バイナリ、と割り切ることで、自走の利便を保ちつつ暴走を防ぐ。
 
 ## どう使うか
 
@@ -47,7 +47,7 @@ LLM 単体にセッション全体を「自走」させると、課題の選定�
 
 skill `/flow` でループを起動する。
 
-- 引数なし → source（compass の主筋 → measure step → backlog → 新規 open 仮説）から優先度順に自動ピックし、condukt に流して検証・sink するループを回す。
+- 引数なし → source（measure step → backlog → backlog が空のときだけ compass）から優先度順に自動ピックし、condukt に流して検証・sink するループを回す。
 - 課題文を直接渡す（`/flow <課題文>`）→ source 選択を飛ばし、その課題を condukt に1件だけ流して終了する（明示課題は「今これをやれ」の意味）。
 
 ループの骨子は次のとおり。
@@ -56,15 +56,21 @@ skill `/flow` でループを起動する。
 0. 引数分岐 — 課題文があれば condukt に直行（1 件だけ実行）
 0.5. 自律ゲート — `condukt state autonomy-check`。自律モードなら各 human gate を
      `condukt policy answer`（risk×reversible×confidence の graded 判定）に通す（下記参照）
-1. compass ゲート — charter が陳腐なら自動実行せず /compass を促して停止
-2. ロック取得 — backlog lock acquire（クロスセッション直列化）
-3. 実行ループ — 優先度順にピック（claim-skip ゲート）→ 着手前に claim（TOCTOU ガード）
+1. compass は先に引かない — 引数なしの /flow は backlog 優先（2026-09-23 裁定）。
+     compass は backlog が一手も出さなかったときのフォールバック
+2. driver 登録（非排他）— backlog driver register。キュー全体はロックしない。
+     明示的に lock acquire された排他ロックが生きている場合だけ尊重する
+3. 実行ループ — ピック（backlog next --claim、claim-skip ゲート）→ spec-gap ゲート
+       → 着手前に claim（condukt state claim-task、TOCTOU ガード）
        → overwatch anchor 登録（overwatch begin）→ /condukt → 検証 → sink
+       ピック順: measure step → backlog（主経路）→ backlog が空のときだけ compass gap
+                 （open 仮説はユーザーが明示指示したときだけ。自動ループでは報告のみ）
        sink: backlog done / compass outcome（前進・不変・後退を記録）
              / hypothesis は出荷で awaiting-measurement、計測後に validate/reject（証拠必須）
              / fugu-router に record
              / いずれも claim を release、ループ中は heartbeat で claim を live に保つ
-4. ロック解放 — source が尽きる/予算超過/中断で lock release + overwatch end + サマリ報告 + pivot-check
+4. 終了 — source が尽きる/予算超過/中断で backlog driver unregister（例外的に lock acquire した
+     場合のみ lock release）+ overwatch end + サマリ報告 + pivot-check
 ```
 
 ### PDO session anchor（`overwatch begin`/`end`）
@@ -99,7 +105,7 @@ condukt state autonomy-check   # exit 0 = 自律 / exit 1（既定）= 非自律
 
 | ゲート | 典型 verdict | auto 時の既定 |
 |---|---|---|
-| ロック競合（Step 2・生きた保有者） | auto | stand down（報告して clean exit。`--force` 自動奪取はしない） |
+| 排他ロック保持中（Step 2。誰かが明示的に `backlog lock acquire` した場合のみ。driver の並走では発生しない） | auto | stand down（報告して clean exit。`--force` 自動奪取はしない） |
 | resume 選択（複数候補） | auto | 既存の優先度 pick 順 |
 | pivot-check（Step 4） | **escalate** | —（常に人間の判断） |
 | 循環ブレーカー trip（早期脱出） | auto | clean stop |
@@ -112,13 +118,14 @@ escalate/block を返したゲート。
 
 | 状況 | 対応 |
 |---|---|
-| ユーザーが中断を指示 | 直ちに Step 4（ロック解放）へ |
+| ユーザーが中断を指示 | 直ちに Step 4（driver 登録の解除）へ |
 | 循環ブレーカーが trip（`condukt circuit check` が毎イテレーション failure-streak上限・予算超過・no-progress stall を判定） | 決定論的に clean stop（人にも policy にも聞かない hard stop）。非自律での追加確認は `AskUserQuestion` フォールバックのみ |
 | budgetguard が予算超過を返す | ループ終了（予算軸は上の circuit check にも統合済み） |
-| compass ゲートが再スコープを示す | ループを止め `/compass` を促す |
+| compass フォールバックで charter を彫っても右サイズの一手が出ない / `sentinel` で離席 | ループを止め Step 4 へ（彫り直しを勝手に繰り返さない） |
+| `compass` バイナリ不在・呼び出し失敗 | 「仕事なし」にも「実行してよい」にも丸めず、報告して Step 4 へ |
 | `backlog next` が予期しないエラー | 報告して Step 4 へ |
 
-いずれの早期脱出でもロック解放は必ず行う。
+いずれの早期脱出でも driver 登録の解除は必ず行う。
 
 ### SessionStart hook は廃止した（2026-08-20）
 

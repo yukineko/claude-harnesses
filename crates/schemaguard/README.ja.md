@@ -6,15 +6,15 @@
 
 ## 目的
 
-harness のある段が次の段に JSON ペイロードを引き渡すとき (分解 decomposition、エピソード記録 episode、プレイブック playbook、scout の計測 scout-measure)、その値を **名前付きで宣言済みのスキーマ** に照らして検証する CLI である。
+harness のある段が次の段に JSON ペイロードを引き渡すとき (分解 decomposition、エピソード記録 episode、プレイブック playbook、scout の計測 scout-measure、condukt の合議 verdict)、その値を **名前付きで宣言済みのスキーマ** に照らして検証する CLI である。
 
 責務は 3 つに絞られている:
 
 - **検証** — `check --schema <name>` で JSON 値 (`--file <path>` または stdin) を宣言済みスキーマに照合する。
 - **構造化エラーの提示** — 違反時に `{valid, schema, errors[], undetermined[], not_checked[]}` を出力し、`errors[]` には `{path, problem}` を並べる。これが producer がモデルに再依頼 (re-ask) するための契約となる。
-- **メトリクス計上** — パース失敗・フィールド違反の双方を reject としてスキーマ別に記録し、`metrics` で参照できる。
+- **メトリクス計上** — パース失敗・フィールド違反・判定不能の検査を reject としてスキーマ別に `~/.schemaguard/rejects.jsonl` へ記録し、`metrics` で参照できる。
 
-宣言済みスキーマは `decomposition` / `episode` / `playbook` / `scout-measure` の 4 つ (`schemaguard list` で確認できる)。
+宣言済みスキーマは `decomposition` / `episode` / `playbook` / `scout-measure` / `verdict` (condukt の合議 verdict の形) と、判定不能 (exit `2`) 経路を end-to-end で突くためのプローブ用 `undetermined-probe` の計 6 つ (`schemaguard list` で確認できる)。
 
 subscription-native であり、バンドルされた単一の Rust バイナリで動く。**API キーは不要**。lifecycle hook ではなく素の CLI であり、構造化された受け渡しが起きる箇所で呼び出して終了コードで分岐する設計である。
 
@@ -81,4 +81,4 @@ schemaguard metrics --json                                # スキーマ別 reje
 cargo test
 ```
 
-コミット済みの `bin/schemaguard-*` バイナリがプラグインとして配布されるため、エンドユーザーは cargo も API キーも不要である。検証の振る舞いを変えたら、ワークスペースをビルド (`cargo build --workspace --release`) して再コミットする。
+コミットされているのは `bin/schemaguard` ランチャーだけで、プラットフォーム別の `bin/schemaguard-<os>-<arch>` バイナリは git-ignore されており、`scripts/rollout-plugins.sh` がビルドしてインストール済みプラグインへ配置する。そのためエンドユーザーは cargo も API キーも不要である。

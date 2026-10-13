@@ -76,7 +76,22 @@ fugu-router import --episodes /path/episodes.jsonl [--playbooks /path/playbooks.
 fugu-router import --dedup                                   # dedup local stores in place
 fugu-router sync [--pull-only | --push-only]                 # sync the record store with sync_repo (git)
                                                              # also runs automatically as the SessionEnd hook
-fugu-router init                                             # write fugu-router.toml
+fugu-router harvest [--repo P] [--window-days 3] [--lookback-days 60]
+                                                             # turn aged merges into main/master into `merge` episodes
+                                                             # (runs in the SessionEnd hook before `sync`)
+fugu-router label "<title substr>" --verdict good|bad [--by human] | --latest
+                                                             # human teacher signal (see below)
+fugu-router audit-recent --class <C> --within <secs>         # exit 0 if a <C> episode was recorded in the window, else 1
+fugu-router delegation-stats [--json]                        # fork vs inline (class flow-delegation) comparison
+fugu-router duration-outliers [--json] [--threshold 1.5]     # per-class duration outliers (alias: duration)
+fugu-router lessons add --kind error-pattern|convention --task-summary "..." --lesson-text "..." [--source-run R]
+fugu-router lessons search --query "..." [--k 3]             # cross-project lessons store (JSON array)
+fugu-router code-index build [--root P] [--if-stale]         # lexical symbol index over git-tracked .rs files
+fugu-router code-index search --query "..." [--root P] [--k N]
+                                                             # JSON array; absent index exits 3, unreadable exits 4
+fugu-router fingerprint [--dir D]                            # SKILL.md corpus version stamp (see below)
+fugu-router init [target]                                    # write fugu-router.toml (default ./fugu-router.toml)
+fugu-router install|uninstall [--dry-run]                    # manual (non-plugin) hook wiring
 fugu-router prompt                                           # UserPromptSubmit hook (injects a summary)
 ```
 
@@ -228,14 +243,18 @@ breaks. See `crates/condukt/skills/condukt/SKILL.md`.
 ## Install
 
 ### Plugin
-Bundles the binary + two hooks, both declared in `hooks/hooks.json` and
+Bundles the `bin/fugu-router` launcher (the per-platform binary is built
+locally — it is gitignored — and deployed by `scripts/rollout-plugins.sh`), the
+`/fugu-router` skill, and two hooks, both declared in `hooks/hooks.json` and
 resolved through `${CLAUDE_PLUGIN_ROOT}`:
 
 - `UserPromptSubmit` → `fugu-router prompt`, which injects a one-block
   routing-memory summary when your prompt looks like coding work.
-- `SessionEnd` → `fugu-router sync`, which pulls the record store from
-  `sync_repo` and commits+pushes local appends back (no-op when `sync_repo`
-  is unset).
+- `SessionEnd` → `fugu-router harvest; fugu-router sync` (60s timeout):
+  `harvest` records `merge` episodes for merges into the cwd repo's
+  `main`/`master` whose observation window has closed, then `sync` pulls the
+  record store from `sync_repo` and commits+pushes local appends back (no-op
+  when `sync_repo` is unset).
 
 ### Manual
 ```

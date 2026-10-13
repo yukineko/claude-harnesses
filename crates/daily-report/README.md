@@ -38,6 +38,7 @@ materials (deterministic)                 synthesis (LLM)          output
 - Missing config, non-git dirs, or zero records never stop it — it reports from whatever it can gather.
 - Numbers (turns/tokens/cost, change size) come only from real record/git values; nothing is fabricated.
 - Output goes only to `<vault>/daily/<date>.md`; it never writes into `records/`.
+- If `<date>.md` already exists with different hand-written content, it is not overwritten: the report is appended as a `## 自動生成日報 (<time>)` section.
 
 ## Related
 

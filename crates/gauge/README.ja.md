@@ -44,10 +44,14 @@ gauge report                       # 合計とプロジェクト/モデル/日�
 gauge report --project myrepo      # プロジェクトで絞り込む
 gauge report --since 2026-06-01    # 日付で絞り込む
 gauge session                      # 直近セッションの詳細
+gauge session --session <ID> --json  # 指定セッションを {session_id, cost_usd, models, agents} の JSON で
 gauge subagents                    # サブエージェント(Task)別のコスト按分
+gauge subagents --session <ID> --json  # JSON 配列。時刻フィールドは不明なら null
 gauge status                       # 解決済み設定・ストアパス・セッション数
-gauge init                         # スターター ./gauge.toml を書き出す
+gauge init [--force]               # スターター ./gauge.toml を書き出す(--force で上書き)
 ```
+
+`gauge install` / `gauge uninstall` は `--dry-run` を受け付ける。
 
 `gauge report` の出力例:
 

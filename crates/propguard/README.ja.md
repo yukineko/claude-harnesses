@@ -61,18 +61,25 @@ propguard derive "冪等に再実行でき、失敗時は panic せずエラー�
 
 唯一の判定点（`gate::below_threshold`）：**`satisfied < threshold` のときブロック**。inject
 モードでは新しい diff は *未検証*（`satisfied = 0`）なので、まずチェックリスト注入のため 1 回
-ブロックし、エージェントが対応した後は同じ diff（プロパティ集合とあわせてハッシュ）を許可。
+ブロックし、次の停止では同じ diff（プロパティ集合とあわせてハッシュ）を許可する —
+*trust-after-one-block*：エージェントが実際にプロパティを検証したかを propguard は観測しておらず、
+保証するのは「チェックリストを 1 回提示した」ことだけ。
 subprocess モードでは PASS 数を直接比較。閾値は実際に導出されたプロパティ数にクランプされる
 ため、恒久的に達成不能になることはありません。
 
 ## 収束と安全性
 
-`(diff, properties)` をハッシュ化。直前に検査を強制した停止と一致すれば許可（既に対応済み）。
-diff が *変化* すれば 1 ラウンド消費、`max_attempts`（既定 2）で上限。fail-closed だが有界：
+`(diff, properties)` をハッシュ化。ハッシュが記録されるのは subprocess の合格
+（`properties-satisfied`）か inject の trust-after-one-block のときだけで、記録済みハッシュと一致する
+停止は許可（`already-verified`）。subprocess の閾値未満はハッシュを記録しないので次の停止で再検査する。
+ブロックした各ラウンドは `max_attempts`（既定 2。`reset_after_secs`〈既定 600〉の無操作でリセット）に
+数えられ、超えると閾値未満のまま **許可**（tag `giveup`、プロパティは未充足）してエージェントを閉じ込めない。
+fail-closed だが有界：
 
 - git リポジトリでない / 検査対象なし / done_criteria が一切設定されていない → **許可**
 - 設定ファイル（`propguard.toml` / `~/.propguard/config.toml`）が存在するのに読めない・解析
   できない → **ブロック**（`config-unreadable`、自動通過なし）。組み込み既定値で黙って代用しない
+- 解析はできたが `mode` の値が未知 → **ブロック**（`config-invalid`、自動通過なし）。どちらのモードにも写さない
 - `criteria_file` が存在するのに読めず inline も空 → **ブロック**（`criteria-unreadable`、自動通過なし）
 - 障害系の give-up（`checker-error-giveup` / `git-scan-failed-giveup` / `diff-read-failed-giveup`）は
   overwatch の violation ledger に記録し、タスク/セッションを跨いで再発したら **ブロック**
@@ -80,12 +87,18 @@ diff が *変化* すれば 1 ラウンド消費、`max_attempts`（既定 2）�
   `truncated-giveup` は障害ではないので対象外
 - チェッカーが crash / timeout / 解析不能出力 → **ブロック**（有界）後に警告して通過 —
   壊れたチェッカーはバイパスにならない
+- 実リポジトリ内で `git` コマンドが失敗（変更集合が判定不能）→ **ブロック**（有界、`git-scan-failed`）後に
+  警告して通過（`git-scan-failed-giveup`）
 - 大きすぎて切り詰められた diff（未検査の末尾）→ **ブロック**（有界）後に通過
+- diff が **読めなかった** — `git diff` / `git diff --cached` / untracked の `ls-files` / untracked
+  ファイル本体のいずれかが実行できない・デコードできない → **ブロック**（有界、`diff-read-failed`）後に
+  警告して通過。一方が読めて他方が読めない部分的なケースも同じで、読めた半分を diff 全体であるかのように
+  渡さない。読めなかった diff は判定不能であって「空 ⇒ 変更なし」ではない
 - ハーネス自身の panic → `run_guarded` 経由で fail-closed。1 回目の panic は判定不能として
   **ブロック**（クラッシュを表面化）、`stop_hook_active` が立つ 2 回連続 panic のときだけ
   bounded に許可（同じ panic で永久にブロックし続けないための上限）
 
-エスケープ：`propguard skip --reason "<理由>"`（1 回限り・理由必須・**発行したセッション限定**・発行と消費の両方をゲートログに記録）、または `PROPGUARD_DISABLE=1`（後者は **Claude Code 自身を起動した環境**でのみ有効。フックはアプリの環境を継承するため、ツール呼び出しからの export は届かない）。共有された project root の `.propguard-skip` ファイルは撤去した — 共有ツリーの 1 回限りマーカーは次に停止したセッションが消費してしまう（CLAUDE.md §5）。
+エスケープ：`propguard skip --reason "<理由>"`（1 回限り・理由必須・**発行したセッション限定**・発行と消費の両方をゲートログに記録）、設定の `enabled = false`、または `PROPGUARD_DISABLE=1`（後者は **Claude Code 自身を起動した環境**でのみ有効。フックはアプリの環境を継承するため、ツール呼び出しからの export は届かない）。共有された project root の `.propguard-skip` ファイルは撤去した — 共有ツリーの 1 回限りマーカーは次に停止したセッションが消費してしまう（CLAUDE.md §5）。
 
 ## インストール
 
@@ -104,12 +117,42 @@ cargo build --release -p propguard
 propguard init                         # 雛形 ./propguard.toml を生成
 ```
 
+その他のサブコマンド：`propguard uninstall`（Stop hook を除去）、`propguard --protects`（このゲートが
+何を・何から・なぜ守るかを表示）。セッション状態は `~/.propguard/state`（設定キー `state_dir`、
+環境変数 `PROPGUARD_STATE_DIR` で上書き可）。
+
 ## 設定
 
 [`propguard.example.toml`](./propguard.example.toml) を参照。主なつまみ：`mode`、
-`min_properties`/`max_properties`（3〜5）、`threshold`、`max_attempts`、`criteria_file`、
-`include`/`exclude`、（subprocess）`checker_cmd`。project の `propguard.toml` は root を
+`min_properties`/`max_properties`（3〜5）、`threshold`、`max_attempts`、`reset_after_secs`、
+`min_changed_files`、`max_diff_bytes`、`criteria_file`、`include`/`exclude`、`enabled`、
+（subprocess）`checker_cmd` / `checker_timeout_secs`。project の `propguard.toml` は root を
 **trust**（`propguard trust`）して初めて honored されます（`checker_cmd` を subprocess 実行
 するため）。
 
 `propguard status` で解決済み設定と現タスクのプロパティを確認できます。
+
+### チェッカー subprocess のタイムアウト（`checker_timeout_secs`）
+
+`subprocess` モードでは `checker_cmd` は実 OS subprocess として起動され、ハング・遅延したチェッカーが
+ターンを無期限に閉じ込めないようタイムアウトで上限が付く：
+
+- **既定 300 秒。**
+- `propguard.toml`（または `~/.propguard/config.toml`）のトップレベルキー `checker_timeout_secs` で
+  設定（`checker_cmd` と同じファイル。別の `[check]` セクションではない）：
+
+  ```toml
+  # subprocess モードのみ:
+  checker_cmd = "claude -p"
+  checker_timeout_secs = 45   # 既定 300 秒を上書き
+  ```
+
+- `0` はタイムアウト無効化ではなく既定 300 秒へ sanitize される — タイムアウトを無制限待ちにはできない。
+  不正値・負値は TOML 解析に失敗し、設定全体が読めない扱いで **ブロック**（`config-unreadable`）になる
+  （黙って既定値にはならない）。
+- **タイムアウト時はチェッカーのプロセスツリー全体を kill する**：チェッカーは自身のプロセスグループで
+  起動される（Unix）ので、シェル経由の `checker_cmd`（`;`・`&&`・`&` で孫をバックグラウンド化するもの等）も
+  グループ kill 1 回で回収され、子孫がタイムアウト後も生き残って stdout パイプを開いたままにすることはない。
+  非 Unix では直接の子しか kill できない（best-effort）。
+- タイムアウトはチェッカーの `Error` として報告され（「全件合格」には決してならない）、他のチェッカー
+  失敗と同じ fail-closed・`max_attempts` で有界な give-up 経路を通る（上の「収束と安全性」参照）。

@@ -4,13 +4,18 @@
 
 A distributed multi-session system requires coordination. overwatch keeps a single, authoritative **claim registry** that tracks which keys (tasks, hypotheses, resources) are claimed by which session, with heartbeat-based liveness. When a new session tries to begin work on an already-claimed key, overwatch reports it (exit 1 + skip JSON) so the caller skips duplicate execution.
 
-- On **SessionStart** it injects the project-wide progress view (via `overwatch status`) so the session knows what is in-flight, what is pending, and what has been reaped.
+- On **SessionStart** it injects the project-wide progress view (via `overwatch status`) so the session knows which sessions hold live leases, what is pending (PDO hypotheses, backlog), which condukt runs exist, and the compass gap. The helper binaries (`backlog` / `hypothesis` / `condukt` / `compass`) are resolved from the plugin cache first and `PATH` second (`harness_core::plugin_bin::resolve`).
 - On **Stop** it refreshes the status view for the human to review.
 - Any session can call `overwatch begin --key <k>` to atomically claim a key; if another session already holds a live lease, the request is denied.
 - Dedup contract: **exit 1 + skip JSON** = "another session has this"; caller must NOT proceed.
-- Liveness is heartbeat-TTL; dead leases (no heartbeat for 1800s / 30 min) are reaped on demand via `overwatch reap` (HOTL-gated).
+- Liveness is heartbeat-TTL; a lease with no heartbeat for more than 1800s (30 min) is stale. Stale leases are dropped by **every** lease mutation (`begin` / `run` / `end` / `heartbeat` / `reassign` / `reap`), and ignored by `status` / `sessions` / `lease`, so a dead holder never blocks a `begin`. `overwatch reap` just runs that cleanup on its own.
 
-Subscription-native: one Rust binary, two hooks (SessionStart + Stop), no API key.
+Subscription-native: one Rust binary, two hooks (SessionStart + Stop, both running `overwatch status` with a 5s hook timeout), no API key. The two hooks share a 10-second on-disk status cache (`aggregate::STATUS_CACHE_TTL_SECS`), which is discarded early when `leases.json` was written at or after the second the cache was built, or when its mtime cannot be observed (`aggregate::cache_is_fresh`). The other sources in the view (backlog / hypothesis / condukt / compass) can therefore be up to 10s old.
+
+Beyond the lease registry the same binary also hosts fleet-level gate-violation
+recurrence detection, the canary rollout plan/gate helpers, and the unified
+human review surface (`review-queue` and its ledgers); see
+[Other commands](#other-commands).
 
 ### `(none)` vs `(unknown)` in the status view
 
@@ -56,18 +61,44 @@ setup command to run.
 ## Commands
 
 ```sh
-overwatch begin --key <k> --title <t> [--session <sid>] [--scope <csv>] [--done-criteria <text>]   # try to acquire exclusive lease on key <k>; exit 1 + skip JSON if held by another live session
+overwatch begin --key <k> --title <t> [--session <sid>] [--scope <csv>] [--done-criteria <text>]   # try to acquire exclusive lease on key <k>; exit 1 + skip JSON if held by another live session or the lease lock is contended
 overwatch lease --session <sid> [--json]    # print the live lease (PDO anchor) held by a session; exit 1 (silent) if none
-overwatch run --key <k> [--note <text>]     # record a running heartbeat + event for a held lease (fail-soft if the key isn't held)
-overwatch status [--json]                   # show project-wide progress: active leases, events, sessions
-overwatch sessions [--json]                 # list all sessions (live or dead)
-overwatch pause --run <id>                  # pause a run (HOTL-gated)
-overwatch resume --run <id>                 # resume a paused run (HOTL-gated)
-overwatch reassign --key <k> --to <sid>    # reassign lease from current holder to <sid> (HOTL-gated)
-overwatch end --key <k> --status <s>        # release a lease, recording its terminal status (HOTL-gated)
-overwatch reap                              # delete dead leases (no heartbeat within TTL) (HOTL-gated)
-overwatch heartbeat --key <k>               # reset the TTL for a key (keep the lease alive)
+overwatch run --key <k> [--note <text>]     # record a running heartbeat + event for a held lease (see caveats below)
+overwatch status [--json]                   # project-wide progress view: Sessions / PDO hypotheses / Backlog / Condukt runs / Compass gap
+overwatch sessions [--json]                 # only the Sessions roster: sessions holding a live (non-stale) lease
+overwatch pause --run <id>                  # delegate to `condukt state pause --run <id>` and record a control event
+overwatch resume --run <id>                 # delegate to `condukt state resume --run <id>` and record a control event
+overwatch reassign --key <k> --to <sid>     # RELEASE the lease on <k> and record a "reassign to=<sid>" event (does not create a lease for <sid>)
+overwatch end --key <k> --status <s>        # release a lease, recording its terminal status
+overwatch reap                              # drop stale leases (no heartbeat within TTL); prints {"reaped": N}
+overwatch heartbeat --key <k>               # refresh heartbeat_at for a key; prints {"refreshed": 0|1}
+overwatch --protects                        # print what this gate protects, from what, and on what grounds
 ```
+
+Session id resolution for `begin`/`run`: `--session`, else `$CLAUDE_CODE_SESSION_ID`,
+else `pid-<pid>`. The run id comes from `$OVERWATCH_RUN_ID`, else a timestamp-based
+`run-…` id.
+
+What each mutation reports when it did **not** do its job (from `src/lease.rs` /
+`src/control.rs`):
+
+| command | lease lock contended | key not held | downstream failure |
+|---|---|---|---|
+| `begin` | exit 1, `{"skipped": true, "reason": "lock_contended"}` | — | — |
+| `end` | **non-zero**, lease NOT released | **non-zero** ("nothing was released") | — |
+| `run` | **exit 0, nothing written** (silent skip) | exit 0, event still recorded with derived ids | — |
+| `heartbeat` | exit 0, `{"refreshed": 0}` | exit 0, `{"refreshed": 0}` | — |
+| `reap` | exit 0, `{"reaped": 0}` (indistinguishable from "nothing stale") | — | — |
+| `reassign` | exit 0, `control_note` JSON, nothing released | exit 0, `control_note`, intent still recorded | — |
+| `pause` / `resume` | — | — | exit 0 with a `control_note` JSON when `condukt` is absent or exits non-zero |
+
+Only `begin` and `end` signal failure through the exit code; callers of the
+others must read stdout.
+
+The binary itself does **not** ask for approval before `pause` / `resume` /
+`reassign` / `end` / `reap`. "HOTL-gated" means the `/overwatch` skill is
+instructed to confirm with AskUserQuestion before running them (see below);
+calling the binary directly performs the action immediately.
 
 ## The dedup contract
 
@@ -77,10 +108,15 @@ overwatch begin --key "hypothesis-v2.3"
 
 Returns:
 
-- **exit 0**: Lease acquired. You may proceed.
-- **exit 1** + JSON `{ "skip": "reason", ... }`: Lease is held by another live session. Do NOT proceed.
+- **exit 0**: Lease acquired (or refreshed, if the same session already held it — `claimed_at` is kept). You may proceed.
+- **exit 1** + JSON `{ "skipped": true, "holder": { "session_id", "run_id", "heartbeat_at" } }`: Lease is held by another live session. Do NOT proceed.
+- **exit 1** + JSON `{ "skipped": true, "reason": "lock_contended" }`: the lease-registry lock could not be taken, so whether the key is free was not checked. Do NOT proceed (retry later).
 
-The caller's job is to check the exit code and skip if it's 1.
+The caller's job is to check the exit code and skip if it is non-zero. Note
+that an internal error (store root unresolvable, `leases.json` unreadable or
+corrupt) also exits **1** — `main` returns `anyhow::Result`, so the error goes
+to stderr and there is no skip JSON on stdout. Either way the key was not
+acquired.
 
 ## PDO session anchor (`--scope` / `--done-criteria`)
 
@@ -146,7 +182,9 @@ Run `/overwatch` any time to:
 - List sessions (`sessions`)
 - Control in-flight runs (pause/resume, reassign, reap)
 
-All side-effect commands (pause/resume/reassign/end/reap) are gated by AskUserQuestion before execution.
+The skill instructs the agent to confirm every side-effect command
+(pause/resume/reassign/end/reap) with AskUserQuestion before running it. This
+gate lives in the skill prose only; the binary does not enforce it.
 
 ## Liveness & TTL
 
@@ -157,7 +195,7 @@ judged against a **fixed** heartbeat TTL of **1800 seconds (30 minutes)** —
 - A session calls `overwatch begin` → `claimed_at`/`heartbeat_at` recorded, lease acquired.
 - Session keeps the lease alive by calling `overwatch heartbeat --key <k>` periodically (refreshes `heartbeat_at`).
 - If heartbeat updates stop (session crashed, hung, or disconnected), `heartbeat_at` stales.
-- Once `now - heartbeat_at > 1800s`, `overwatch reap` can delete the dead lease, freeing the key.
+- Once `now - heartbeat_at > 1800s` the lease is stale: the next lease mutation (any of `begin` / `run` / `end` / `heartbeat` / `reassign` / `reap`) drops it from `leases.json`, and a `begin` on that key by another session succeeds. `overwatch reap` is simply that cleanup with nothing else attached.
 
 ## Storage
 
@@ -187,7 +225,46 @@ All data lives under the user's home directory, outside the repository:
   called by `storage_root` in `src/store.rs`). It is not configurable — there is no
   config file (see Storage above).
 - `<project-key>` is `<basename>-<fnv1a32 of the canonical path>` of the repository's MAIN worktree root (shared by all its linked worktrees).
-- Leases are **not** persisted across full reapers; they are session-scoped ephemeral records.
+- A lease stays in `leases.json` until it is `end`ed, released by `reassign`, or dropped as stale by a later lease mutation; overwatch does not tie it to the Claude Code process, and no overwatch hook removes it when the session exits (callers such as `/flow` release their own leases with `overwatch end`).
+
+## Fleet-level correlated-error detection (gate-violation signature recurrence)
+
+Alongside the lease registry, overwatch records gate-violation events with a
+**normalized signature** and escalates a signature as a **systemic issue** when
+it recurs N+ times within a time window across tasks/sessions.
+
+```sh
+overwatch record-violation --source <gate> --discriminator <d> --task <key> [--symbol <sym>] [--session <sid>] [--detail <text>]
+overwatch violations  [--json] [--threshold N] [--window-secs S]   # recurrence stats for every signature
+overwatch escalations [--json] [--threshold N] [--window-secs S]   # only the signatures judged systemic
+```
+
+- `--source` is one of `blastguard | propguard | specguard | mutategate | donegate | reviewgate | tdd | budgetguard | autoflow | ctxrot`; anything else is an error.
+- Signature normalization (`violation::normalize_signature`) and recurrence detection (`violation::detect_recurrence`) are pure functions; the clock is passed in.
+- Default policy: 3+ occurrences within a 24h window (`RecurrencePolicy::default`), overridable per call with `--threshold` / `--window-secs`.
+- A signature is systemic only when it reaches the threshold **and** spans more than one distinct task or session; one task retrying the same gate is a local retry loop, not systemic.
+- Stored in `violations.jsonl` (append-only, separate from `events.jsonl`) under the same `<base>/<project-key>/overwatch/` directory.
+
+## Other commands
+
+`overwatch --help` lists every subcommand with a full description; this is a map.
+
+| group | commands |
+|---|---|
+| canary rollout | `canary-plan` (pure stage split), `canary-gate` (PROCEED/ROLLBACK JSON; **exit 3** when rollback is advised), `canary-rollback-plan` (pure restore plan), `record-rollback` (called by `scripts/rollout-plugins.sh`; a store-write error is warned on stderr and does not fail the caller) |
+| review surface | `review-queue [--json] [--since] [--limit] [--to-backlog]` (merges six sources — systemic violations, canary rollbacks, AI review findings, condukt escalations, unresolved merge conflicts, and backlog tasks in `needs-ruling` — into one severity-ordered list; `--to-backlog` drains every stream except needs-ruling, which is display-only), `record-finding`, `record-disposition`, `review-metrics`, `compact-findings`, `resolve-merge-conflict`, `reconcile-fixed [--since-ref\|--range\|--last-n] [--dry-run]` (default last 50 commits), `auto-approved [--since] [--sample 5] [--seed 0]` |
+| Continuous-Audit | `audit-round record` / `audit-round close`, `audit-metrics [--window 3]` |
+| telemetry | `undetermined-metrics [--window-days N]`, `gate-outcomes` (donegate / tdd / reviewgate firing outcomes from `~/.<gate>/state/log.jsonl`) |
+
+Exit-code convention for the read side: when a ledger/journal **cannot be read**
+(as opposed to being absent or empty), `review-queue` (including
+`--to-backlog`), `review-metrics`, `reconcile-fixed`, `auto-approved` and
+`gate-outcomes` exit **3** and say which source was undetermined, rather than
+printing a zero/empty answer; `audit-metrics` and `undetermined-metrics` return
+an error (non-zero) instead of a zero report. `reconcile-fixed` remains
+fail-soft on the **git** side only: a failing `git log` is read as "0 commits
+scanned" (exit 0). `review-queue --to-backlog` is fail-soft on the backlog side
+(an absent `backlog` binary or failed `backlog add` is warned and skipped).
 
 ## PDO positioning
 

@@ -46,12 +46,16 @@ difflog install   # ~/.claude/settings.json に hook をマージする
 difflog session-start   # SessionStart hook（stdin の JSON を読む）
 difflog session-end     # SessionEnd hook（ログを書き出す）
 difflog last            # 直近のログを表示する
-difflog list            # ログファイルを新しい順に一覧する
-difflog init            # 雛形の difflog.toml を書き出す
-difflog install         # hook を ~/.claude/settings.json にマージする
-difflog uninstall       # hook を取り除く
+difflog list            # ログファイルを新しい順に一覧する（--limit N、既定 10）
+difflog init            # 雛形の ./difflog.toml を書き出す（--force で上書き）
+difflog install         # hook を ~/.claude/settings.json にマージする（--dry-run 可）
+difflog uninstall       # hook を取り除く（--dry-run 可）
 difflog status          # 解決済みの設定を表示する
 ```
+
+### 設定
+
+`./difflog.toml`（プロジェクト）、無ければ `~/.difflog/config.toml` を読む（先に存在した方が勝ち）。[`difflog.example.toml`](difflog.example.toml) 参照: `enabled`、`log_dir`（既定 `~/.difflog/logs`）、`diff_body_limit`（そのまま含める diff のバイト数。既定 4096、`0` で stat のみ）、`exclude_globs`（組み込み既定: `Cargo.lock`、`package-lock.json`、`*.min.js`、`*.min.css`）。`DIFFLOG_DISABLE` で無効化する。
 
 ### `/difflog` でナラティブを生成する
 

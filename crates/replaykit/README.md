@@ -10,7 +10,8 @@ condukt runs are recorded by [`tracekit`](../tracekit) as append-only spans
 run's phase set, error count, and cost — and promotes that into an
 [`evalkit`](../evalkit) golden case. Replaying the golden re-checks the pinned
 invariants, so a regression (a new error, a cost blowout, a missing phase)
-surfaces as a failing golden in CI.
+surfaces as a failing golden when `evalkit run` is next run (there is no CI wiring;
+nothing runs it automatically).
 
 It is **subscription-native**: one bundled Rust binary, std + serde + clap, no
 API key, no network.
@@ -24,7 +25,7 @@ replaykit promote --run my-run-2026-06-28 --root . --dataset replayed
 #    writes  evals/replay/fixtures/<id>.json      (the portable summary)
 #       and  evals/replay/replayed.jsonl          (the golden, deduped by id)
 # 3. evalkit runs the golden, whose cmd is `replaykit verify <fixture>`
-evalkit            # re-checks the pinned invariants on every CI run
+evalkit run        # re-checks the pinned invariants (run it manually)
 ```
 
 ## Subcommands
@@ -48,6 +49,8 @@ Build the summary, write it to `<root>/<evals_dir>/replay/fixtures/<id>.json`,
 and append a golden line to `<root>/<evals_dir>/replay/<sanitize(dataset)>.jsonl`
 (deduped by `id`). The golden's `cmd` is `["replaykit","verify",<rel-fixture>]`
 with the fixture path **relative to root**, so the committed golden is portable.
+`--root` defaults to the CWD, `--evals-dir` to `evals`, `--dataset` to `replayed`.
+`--draft` is accepted but is currently a **no-op** (reserved for parity with curate).
 
 ## Exit codes
 

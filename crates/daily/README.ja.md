@@ -18,11 +18,14 @@
 ```
 
 - exit 0 → `name (ok)`
-- exit 非 0 → `name (fail exit N: <最初の要点行>)`（`error` / `warning` / `RUSTSEC` 行を優先）
+- exit 非 0 → `name (fail exit N: <最初の要点行>)`（`error` / `warning` / `RUSTSEC` 行を優先）。シグナルで kill された（exit code 無し）→ `name (fail killed: …)`
 - コマンドを spawn できない → `name (error: …)`
+- spawn 前に blastguard が拒否した → `name (blocked: <理由>)`
 - 当日実行すべきものが無い → 沈黙する
 
-各タスクは `dir`（無ければセッションの `cwd`）で、`$CARGO_HOME/bin` を `PATH` の先頭に足して実行される（`~/.cargo/bin` が PATH に無くても `cargo-deny` 等の cargo サブコマンドが解決できる）。デフォルトの security タスクを機能させるには `cargo-deny` を別途インストールする必要がある（`cargo install cargo-deny`）。
+spawn の前に、`task.command` は PreToolUse フックと同じ `blastguard` 検出器にかけられる。blastguard が **Deny**（破壊的）と判定したコマンドは spawn されず、`name (blocked: <理由>)` として要約／レポートに記録される。**ブロックするのは `Deny` だけ**である: blastguard が `Ask`（解析できない構文）を返したコマンドは、ここでは拒否されない — `daily` は `Ask` を `Deny` に硬化しない（`src/main.rs` の `run_task` は `Decision::Deny` しか見ていない）ため、そのようなコマンドは通常どおり spawn される。
+
+各タスクは `dir`（無ければセッションの `cwd`）で実行される。`dir` は正規化され、セッションの `cwd` 自身かその**配下**でなければならない: 存在しない・正規化できない・セッション `cwd` の外に解決される（`../../etc` や別の場所の絶対パス等）`dir` は**黙って無視され**、セッションの `cwd` で実行される。また `$CARGO_HOME/bin` を `PATH` の先頭に足して実行される（`~/.cargo/bin` が PATH に無くても `cargo-deny` 等の cargo サブコマンドが解決できる）。デフォルトの security タスクを機能させるには `cargo-deny` を別途インストールする必要がある（`cargo install cargo-deny`）。
 
 実行結果は `additionalContext` としてエージェントに渡される**非ブロッキング**な情報であり、ターンを中断させることはない。また **subscription-native**（サブスクリプション完結）であり、API キーは不要、マシン外に何も送らない。フックは LLM を呼ばない決定論的バイナリである。
 
@@ -54,7 +57,8 @@
 
 - **生きた driver がロック保持中** → 静かに skip。タスクは `pending today` のまま残り、**次に driver が居ないセッション開始時**に実行される。
 - **ロックが空 / 死んだ（stale）プロセスが保持** → 通常どおり実行（クラッシュした driver が `daily` を永久に塞がない）。
-- **`backlog` 未インストール** → fail-open: driver 基盤が無い＝driver 稼働なし＝実行する。
+- **`backlog` 未インストール**（plugin cache にも `$PATH` にも無いと観測された）→ driver 基盤が無い＝driver 稼働なし＝実行する。
+- **答えが得られない** — `backlog` の所在が判定できない（plugin cache が読めない、または `$PATH` 上の copy が spawn できない）・起動できない・`backlog lock status` が非 0 終了・出力が `none` でも JSON でもない → **driver 稼働中とみなし**、このセッションの実行を skip する。backlog が返す JSON の `kind: undetermined` も稼働中として読む。
 
 `skip_when_driver_active = false` にすると常に実行する。
 
@@ -64,7 +68,7 @@
 
 ### レポート
 
-タスク実行ごとに 1 行の JSON が `~/.daily/reports.jsonl` に追記される（`{date, at, task, status, code, detail}`、`status` ∈ `ok`/`fail`/`error`）。`daily report` で確認する。
+タスク実行ごとに 1 行の JSON が `~/.daily/reports.jsonl` に追記される（`{date, at, task, status, code, detail}`、`status` ∈ `ok`/`fail`/`error`/`blocked`）。追記に失敗した場合は stderr に `warning: daily log: … this record is LOST` が出る。`daily report` で確認する。
 
 ```sh
 daily report                 # 今日の実行結果
@@ -98,7 +102,7 @@ daily list     # 登録タスクと「今日実行済みか」を表示
 | `daily list` | 登録タスクと当日実行済みかを表示する |
 | `daily report [--date <d>] [--last <n>]` | 過去の実行結果レポートを表示する（既定は今日） |
 | `daily add --name <n> --command <c> [--dir <d>]` | `~/.daily/config.toml` に日次タスクを登録する |
-| `daily install` | （未実装）フックを `~/.claude/settings.json` に追加する。現状は手動配線が必要 |
+| `daily install` | （未実装 — 通知を出して exit 0）フックを `~/.claude/settings.json` に追加する。現状は手動配線が必要 |
 
 ### プラグインとしての導入（推奨）
 
@@ -108,7 +112,7 @@ daily list     # 登録タスクと「今日実行済みか」を表示
 /plugin install daily@yukineko
 ```
 
-フックは `${CLAUDE_PLUGIN_ROOT}/bin/daily session-start` を呼ぶ。`bin/daily` はプラットフォーム別バイナリ（`bin/daily-<os>-<arch>`）を選ぶ POSIX ランチャーで、対応バイナリの無いホストでは静かに exit 0 する。セキュリティタスクを機能させるには `cargo-deny` を別途インストールする必要がある（`cargo install cargo-deny`）。
+フックは `${CLAUDE_PLUGIN_ROOT}/bin/daily session-start` を呼ぶ。`bin/daily` はプラットフォーム別バイナリ（`bin/daily-<os>-<arch>`）を選ぶ POSIX ランチャーである。対応バイナリの無いホストでも沈黙はしない: `session-start` では「当日のタスクは実行されておらず結果は UNKNOWN」という `systemMessage` + `additionalContext` を出して exit 0、それ以外の verb は理由を stderr に出して exit 127 する。プラットフォーム別バイナリはコミットされない（`.gitignore` が `crates/*/bin/*-<os>-<arch>` を無視し、追跡されるのは `bin/daily` ランチャーのみ）。ローカル配備は `scripts/rollout-plugins.sh` がソースからビルドする。セキュリティタスクを機能させるには `cargo-deny` を別途インストールする必要がある（`cargo install cargo-deny`）。
 
 ### 設定
 
@@ -125,9 +129,10 @@ command = "cargo deny check advisories bans sources licenses"
 [[task]]
 name = "notes-sync"
 command = "git -C ~/notes pull --ff-only"
-dir = "/home/me/notes"    # 任意。省略時はセッションの cwd
+dir = "tools"             # 任意。セッションの cwd かその配下に解決される必要がある（外れると無視され cwd で実行）
 ```
 
 - `enabled` は省略時 **true**。`enabled = false` でランナー全体を停止できる。
 - `[[task]]` が登録タスク。**1 つも登録しなければ**組み込みの `security` タスクが走り、**1 つ以上登録すれば**それらだけが走る（security も欲しければ自分で追加する）。
 - 各 `name` は一意でなければならない（タスク毎の日次状態キーになるため）。
+- **パースできない** config は stderr に警告を出して無視され、既定（有効・登録なし → 組み込みの `security` タスクが走る）として扱われる。

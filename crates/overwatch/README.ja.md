@@ -6,13 +6,15 @@ Claude Code 向けの、**プロジェクト全体の実行レジストリ**。R
 
 新しいセッションが、既に claim されているキーで begin を試みれば、overwatch はそれを report し（exit 1 + skip JSON）、呼び出し元は重複実行をスキップする。
 
-- **SessionStart** フックで、プロジェクト全体の進捗ビュー（`overwatch status`）を注入する。新セッションは、開始時点で「何が進行中か・何が pending か・何が reaped されたか」を把握できる。
+- **SessionStart** フックで、プロジェクト全体の進捗ビュー（`overwatch status`）を注入する。新セッションは、開始時点で「どのセッションが live lease を保持しているか・何が pending か（PDO 仮説・backlog）・どの condukt run があるか・compass gap」を把握できる。
 - **Stop** フックで、status ビューをリフレッシュし、人間がレビューできるようにする。
 - いずれかのセッションが `overwatch begin --key <k>` を呼べば、原子的にそのキーを claim する。別セッションが既に live lease を保持していれば、リクエストは reject される。
 - **Dedup 契約**: exit 1 + skip JSON = 「別セッションが保持中」→ 呼び出し元は **決して先に進んではいけない**。
-- Liveness はハートビート TTL で管理。dead lease（1800 秒 / 30 分ハートビート更新なし）は `overwatch reap` で手動 reap する（HOTL gate）。自動 expire はしない。
+- Liveness はハートビート TTL で管理。1800 秒（30 分）を超えてハートビート更新が無い lease は stale になる。stale lease は**すべての** lease 変更操作（`begin` / `run` / `end` / `heartbeat` / `reassign` / `reap`）で削除され、`status` / `sessions` / `lease` では無視される。したがって dead な保持者が `begin` を阻むことはない。`overwatch reap` はその掃除だけを単独で行う。
 
-単一 Rust バイナリと 2 つのフック（SessionStart + Stop）だけで動き、サブスクリプションネイティブである。追加の API key も要らない。
+単一 Rust バイナリと 2 つのフック（SessionStart + Stop。どちらも `overwatch status` を hook timeout 5 秒で実行）だけで動き、サブスクリプションネイティブである。追加の API key も要らない。2 つのフックは 10 秒のディスク上 status cache（`aggregate::STATUS_CACHE_TTL_SECS`）を共有する。
+
+lease レジストリのほか、同じバイナリが fleet 単位の gate 違反再発検知・canary rollout の plan/gate ヘルパー・統合人間レビュー窓口（`review-queue` とその ledger 群）も担う。[その他のコマンド](#その他のコマンド) を参照。
 
 ### status ビューの `(none)` と `(unknown)`
 
@@ -55,18 +57,37 @@ cargo install --path .
 ## コマンド
 
 ```sh
-overwatch begin --key <k> --title <t> [--session <sid>] [--scope <csv>] [--done-criteria <text>]   # キー <k> を排他的に claim する。別セッションが live で保持していれば exit 1 + skip JSON
+overwatch begin --key <k> --title <t> [--session <sid>] [--scope <csv>] [--done-criteria <text>]   # キー <k> を排他的に claim する。別セッションが live で保持中、または lease ロックが競合したら exit 1 + skip JSON
 overwatch lease --session <sid> [--json]     # そのセッションが保持中の live lease（PDO anchor）を表示。無ければ exit 1（無音）
-overwatch run --key <k> [--note <text>]      # 保持中のリースにハートビート＋イベントを記録（キー未保持でも fail-soft）
-overwatch status [--json]                    # プロジェクト全体の進捗: 有効な lease・イベント・セッション
-overwatch sessions [--json]                  # セッション一覧（live または dead）
-overwatch pause --run <id>                   # run を一時停止（HOTL gate）
-overwatch resume --run <id>                  # 一時停止状態の run を再開（HOTL gate）
-overwatch reassign --key <k> --to <sid>    # lease の保有者を別セッションに再割当（HOTL gate）
-overwatch end --key <k> --status <s>         # キーの lease を解放し、終端 status を記録（HOTL gate）
-overwatch reap                               # dead lease（TTL 超過）を削除（HOTL gate）
-overwatch heartbeat --key <k>                # lease の TTL をリセット（lease を keep-alive）
+overwatch run --key <k> [--note <text>]      # 保持中のリースにハートビート＋イベントを記録（下の表を参照）
+overwatch status [--json]                    # プロジェクト全体の進捗ビュー: Sessions / PDO hypotheses / Backlog / Condukt runs / Compass gap
+overwatch sessions [--json]                  # Sessions ロスターのみ: live（stale でない）lease を保持するセッション
+overwatch pause --run <id>                   # `condukt state pause --run <id>` に委譲し、control イベントを記録
+overwatch resume --run <id>                  # `condukt state resume --run <id>` に委譲し、control イベントを記録
+overwatch reassign --key <k> --to <sid>      # <k> の lease を「解放」し reassign to=<sid> イベントを記録（<sid> 側に lease は作らない）
+overwatch end --key <k> --status <s>         # キーの lease を解放し、終端 status を記録
+overwatch reap                               # stale lease（TTL 内にハートビート無し）を削除。{"reaped": N} を出力
+overwatch heartbeat --key <k>                # キーの heartbeat_at を更新。{"refreshed": 0|1} を出力
+overwatch --protects                         # このゲートが何を・何から・どんな根拠で守るかを表示
 ```
+
+各変更操作が仕事を**しなかった**ときの報告（`src/lease.rs` / `src/control.rs` より）:
+
+| コマンド | lease ロック競合 | キー未保持 | 下流の失敗 |
+|---|---|---|---|
+| `begin` | exit 1、`{"skipped": true, "reason": "lock_contended"}` | — | — |
+| `end` | **非 0**、lease は解放されない | **非 0**（nothing was released） | — |
+| `run` | **exit 0、何も書かない**（無言スキップ） | exit 0、導出 ID でイベントは記録 | — |
+| `heartbeat` | exit 0、`{"refreshed": 0}` | exit 0、`{"refreshed": 0}` | — |
+| `reap` | exit 0、`{"reaped": 0}`（stale なしと区別不能） | — | — |
+| `reassign` | exit 0、`control_note` JSON、何も解放しない | exit 0、`control_note`、意図は記録 | — |
+| `pause` / `resume` | — | — | `condukt` 不在・非 0 終了でも exit 0（`control_note` JSON を出すだけ） |
+
+exit code で失敗を伝えるのは `begin` と `end` だけである。他は stdout を読む必要がある。
+
+バイナリ自身は `pause` / `resume` / `reassign` / `end` / `reap` の前に承認を求め**ない**。
+「HOTL gate」とは `/overwatch` スキルが実行前に AskUserQuestion で確認するよう指示されている
+という意味であり（下記）、バイナリを直接呼べば即座に実行される。
 
 ## Dedup 契約
 
@@ -76,10 +97,14 @@ overwatch begin --key "hypothesis-v2.3"
 
 戻り値：
 
-- **exit 0**: Lease 取得成功。先に進んでよい。
-- **exit 1** + JSON `{ "skip": "reason", ... }`: このキーについて、別の live セッションが lease を保持中。**決して先に進んではいけない**。
+- **exit 0**: Lease 取得成功（同じセッションが既に保持していた場合は refresh。`claimed_at` は維持）。先に進んでよい。
+- **exit 1** + JSON `{ "skipped": true, "holder": { "session_id", "run_id", "heartbeat_at" } }`: このキーについて、別の live セッションが lease を保持中。**決して先に進んではいけない**。
+- **exit 1** + JSON `{ "skipped": true, "reason": "lock_contended" }`: lease レジストリのロックが取れず、キーが空いているかを確認していない。**先に進んではいけない**（後で再試行）。
 
-呼び出し元の責務は、exit code を確認し、1 なら処理をスキップすることである。
+呼び出し元の責務は、exit code を確認し、非 0 なら処理をスキップすることである。内部エラー
+（store root を解決できない、`leases.json` が読めない/壊れている）も exit **1** になる（`main` が
+`anyhow::Result` を返すため。エラーは stderr に出て、stdout に skip JSON は出ない）。いずれにせよ
+キーは取得されていない。
 
 ## PDO セッションアンカー（`--scope` / `--done-criteria`）
 
@@ -142,7 +167,7 @@ title / done_criteria を context に再注入する読み取り経路。`docs/D
 - セッション一覧を表示（`sessions`）
 - 進行中の run を制御（pause/resume、再割当、reap）
 
-すべての side-effect コマンド（pause/resume/reassign/end/reap）は、実行前に AskUserQuestion で確認される。
+スキルは、すべての side-effect コマンド（pause/resume/reassign/end/reap）を実行前に AskUserQuestion で確認するよう指示している。このゲートはスキルの散文にのみ存在し、バイナリは強制しない。
 
 ## Liveness と TTL
 
@@ -153,7 +178,7 @@ TTL はコンパイル時定数であり、設定変更はできない。
 - セッションが `overwatch begin` を呼ぶ → `claimed_at`／`heartbeat_at` が記録され、lease が取得される。
 - セッションが活動中（定期的に `overwatch heartbeat --key <k>` を呼ぶ）→ `heartbeat_at` が更新され、lease は有効。
 - セッションが crash・hang・異常終了に陥る → ハートビート更新が止まり、`heartbeat_at` が陳腐化。
-- `now - heartbeat_at > 1800s` になると、`overwatch reap` で dead lease を削除でき、キーが再利用可能になる。
+- `now - heartbeat_at > 1800s` になると lease は stale になる。次の lease 変更操作（`begin` / `run` / `end` / `heartbeat` / `reassign` / `reap` のいずれか）が `leases.json` から削除し、別セッションによるそのキーの `begin` は成功する。`overwatch reap` はその掃除だけを行う。
 
 ## ストレージ
 
@@ -181,32 +206,51 @@ cwd は cwd 自身がキーになる。設定ファイルや TTL の調整ノブ
 - `<base>`: `~/.overwatch`（`$HOME/.overwatch`。`src/store.rs` の `storage_root` が呼ぶ
   `harness_core::config::base_dir("overwatch")`）。設定では変えられない — 設定ファイルは存在しない（上の「ストレージ」参照）。
 - `<project-key>`: リポジトリの MAIN worktree root の `<basename>-<正規化パスの fnv1a32>`（linked worktree 間で共有）。
-- Lease は full reaper を超えて persist **しない**。セッション有効期間の ephemeral レコード。
+- lease は `end` されるか、`reassign` で解放されるか、後続の lease 変更操作で stale として削除されるまで `leases.json` に残る。overwatch は lease を Claude Code プロセスに紐づけておらず、セッション終了時に lease を消す overwatch フックも無い（`/flow` などの呼び出し元が `overwatch end` で自分の lease を解放する）。
 
 ## fleet 単位の相関エラー検知（gate 違反 signature の再発検知）
 
-`overwatch` は project-wide の実行/lease レジストリに加えて、gate 違反イベント（blastguard denial・
-propguard PROP failure・specguard drift finding・mutategate kill failure）を **正規化した
+`overwatch` は project-wide の実行/lease レジストリに加えて、gate 違反イベントを **正規化した
 signature** 付きで記録し、同一 signature が複数タスク/セッションにまたがって時間窓内に N 件以上
 再発したら **systemic issue** としてエスカレーションする。
 
 ```sh
-overwatch record-violation --source blastguard --discriminator rm-rf --task <key> [--symbol <sym>] [--detail <text>]
+overwatch record-violation --source <gate> --discriminator <d> --task <key> [--symbol <sym>] [--session <sid>] [--detail <text>]
 overwatch violations [--json] [--threshold N] [--window-secs S]     # 全 signature の再発状況
 overwatch escalations [--json] [--threshold N] [--window-secs S]    # systemic と判定された signature のみ
 ```
 
+- `--source` は `blastguard | propguard | specguard | mutategate | donegate | reviewgate | tdd | budgetguard | autoflow | ctxrot` のいずれか。それ以外はエラー。
 - **signature 正規化**（`violation::normalize_signature`）は純粋関数。同種の失敗（例:
   blastguard の同一 rule、propguard の同一 PROP、mutategate の同一 mutation operator、specguard の
   同一 drift kind + symbol）は、大文字小文字・空白の違いを問わず同じ signature になる。
 - **再発検知**（`violation::detect_recurrence`）も時刻を引数で受け取る純粋関数（`Date.now()` を
-  内部で読まない）。既定ポリシーは 24 時間窓・3 件以上。`RecurrencePolicy { threshold, window_secs }`
-  で両方とも設定可能。
+  内部で読まない）。既定ポリシーは 24 時間窓・3 件以上（`RecurrencePolicy::default`）。CLI では
+  `--threshold` / `--window-secs` で呼び出しごとに上書きできる。
 - **systemic 判定**は「閾値以上」かつ「複数タスク or 複数セッションにまたがる」の両方を要求する。
   単一タスクが同じゲートに何度もリトライして失敗するのは systemic ではなく local retry loop として
   区別する。
 - 保存先は既存の project-wide registry と同じ `<base>/<project-key>/overwatch/` 配下の
   `violations.jsonl`（events.jsonl とは別ストリーム、append-only）。
+
+## その他のコマンド
+
+`overwatch --help` が全サブコマンドを説明付きで列挙する。以下はその地図である。
+
+| 分類 | コマンド |
+|---|---|
+| canary rollout | `canary-plan`（純粋な stage 分割）、`canary-gate`（PROCEED/ROLLBACK の JSON。rollback 推奨時は **exit 3**）、`canary-rollback-plan`（純粋な復元計画）、`record-rollback`（`scripts/rollout-plugins.sh` が呼ぶ。store 書き込みエラーは stderr に警告し、呼び出し元を失敗させない） |
+| review 窓口 | `review-queue [--json] [--since] [--limit] [--to-backlog]`（6 source — systemic 違反・canary rollback・AI review finding・condukt escalation・未解決の merge conflict・`needs-ruling` の backlog task — を severity 順の 1 リストに統合。`--to-backlog` は表示専用の needs-ruling 以外の全 stream を backlog へ流す）、`record-finding`、`record-disposition`、`review-metrics`、`compact-findings`、`resolve-merge-conflict`、`reconcile-fixed [--since-ref\|--range\|--last-n] [--dry-run]`（既定は直近 50 commit）、`auto-approved [--since] [--sample 5] [--seed 0]` |
+| Continuous-Audit | `audit-round record` / `audit-round close`、`audit-metrics [--window 3]` |
+| テレメトリ | `undetermined-metrics [--window-days N]`、`gate-outcomes`（donegate / tdd / reviewgate の発火結果を `~/.<gate>/state/log.jsonl` から集計） |
+
+読み取り側の exit code 規約: ledger/journal が（不在・空ではなく）**読めない**とき、
+`review-queue`（`--to-backlog` を含む）・`review-metrics`・`reconcile-fixed`・`auto-approved`・
+`gate-outcomes` は 0 件/空の答えを出す代わりに **exit 3** し、判定不能だった source を明示する。
+`audit-metrics` と `undetermined-metrics` は 0 件レポートではなくエラー（非 0）を返す。
+`reconcile-fixed` が fail-soft なのは **git** 側だけで、`git log` の失敗は「0 commit scanned」
+（exit 0）として読まれる。`review-queue --to-backlog` は backlog 側で fail-soft
+（`backlog` バイナリ不在や `backlog add` 失敗は警告してスキップ）。
 
 ## PDO（Pending Data Object）との関連
 

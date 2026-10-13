@@ -38,18 +38,41 @@ It matches `Bash`, `Edit`, `Write`, `MultiEdit`, and `NotebookEdit`.
 | `git clean` force + dir/ignored | `git clean -fdx`, `git clean -fd` |
 | `git reset --hard` | `git reset --hard HEAD~3` |
 | Working-tree discard | `git checkout -- .`, `git checkout --force` |
-| Truncating redirect (single `>`) | `echo x > existing` |
+| Truncating redirect (single `>`) | `echo x > existing` (judged by recoverability — see [Truncating redirects](#truncating-redirects-are-judged-by-recoverability)) |
+| Bash write into a system directory | `echo x > /etc/paths.d/zz`, `… \| tee /etc/sudoers.d/x`, `cp evil /etc/paths.d/zz` |
 | File truncation / wipe | `truncate -s0 f`, `shred f` |
 | Filesystem / device writes | `mkfs.ext4 …`, `dd of=/dev/sda` |
 | Recursive permission/owner change | `chmod -R 777 .`, `chown -R root .` |
 | Mass delete via find | `find . -delete`, `find . -exec rm …` |
 | Fork bomb | `:(){ :\|:& };:` |
+| Raw network socket path | `… > /dev/tcp/host/port` |
+| Interpreter program that destroys / names a gate path | `python3 -c "import shutil; shutil.rmtree('/')"` (deny), `perl -e "unlink q{.githooks/pre-commit}"` (ask) |
+| Interpreter program from stdin | `cat x.py \| python3 -`, `python3 /dev/stdin`, `python3 <<EOF` (the program is not on the command line, so it is refused) |
+
+Inline-eval interpreters (`python3`/`perl`/`ruby`/`node`/`php`/`lua` with
+`-c`/`-e`/…) are no longer denied for their **shape**: the program text is
+audited (`analyze_code_interpreter` / `interpreter_code_verdict` in
+`src/detect.rs`). A program that demonstrably deletes something, or whose
+embedded shell line is destructive, is a deny; one that names a protected
+gate/config path is an ask; a benign program such as `python3 -c "print(1)"`
+is allowed (0.2.59). Running a script **file** (`python3 app.py`,
+`python3 -m …`) is not judged.
 
 ### File operations
 
 - **Write** that replaces a file with **empty content** (wipes it), or that
   overwrites **git internals** (`.git/**`) → denied.
-- **Edit / MultiEdit / NotebookEdit** are partial edits → always allowed.
+- **Write / Edit / MultiEdit / NotebookEdit** of a **protected gate/config
+  path** (see below) → `ask` (hardened to deny where no human can answer):
+  blastguard can see that the path controls which gates run, but not whether
+  the new bytes strengthen or disarm it.
+- Other **Edit / MultiEdit / NotebookEdit** calls are partial edits → allowed.
+- A **Write** tool call into a system directory (e.g. `/etc/paths.d/x`) is
+  **not** denied by the Write arm: `detect_write` does not consult
+  `system_path_block` (only the Bash redirect / `tee` / `cp`-family arms do).
+  Observed on the 0.2.108 build: a Write payload for `/etc/paths.d/evil`
+  produced no output (allow). Note that `blastguard --protects` currently
+  claims otherwise.
 
 **This table lists shapes, not verdicts.** Since 0.2.51 the delete/truncate
 rows above (`rm`, `find -delete`, `truncate`, `shred`, `>`, `git clean -f`,
@@ -57,7 +80,8 @@ rows above (`rm`, `find -delete`, `truncate`, `shred`, `>`, `git clean -f`,
 when — every target can be *proven* to sit inside the project tree or `/tmp`;
 see [The location axis](#the-location-axis-blast-radius--0251). Anything that
 cannot be proven, leaves those roots, or touches a protected path is denied
-exactly as before.
+exactly as before. A truncating `>` is further relaxed by recoverability
+(see [Truncating redirects](#truncating-redirects-are-judged-by-recoverability)).
 
 ## What it excludes (never blocks)
 
@@ -72,10 +96,23 @@ shape looks destructive:
 
 Truncating redirects to `/dev/null`, `/dev/stdout`, `/dev/stderr` are also fine.
 
+Two carve-outs from the `.claude/**` exemption (`src/exclude.rs`
+`is_config_file`): `.claude/plugins/**` and `.claude/projects/**` are state
+(deployed binaries, transcripts), not config, and are never exempt; and a
+repository checked out under `.claude/worktrees/<name>/` is source — the path
+*inside* the checkout is matched against the list (so its `Cargo.toml` is still
+exempt, its `src/main.rs` is not).
+
 Protected gate paths outrank this exemption and are never exempt: Claude Code settings
-and hook wiring, `.githooks/**`, `.git/hooks/**`, the gate config tomls, and the
-deployed plugin cache's executables and hook wiring
-(`.claude/plugins/cache/**/bin/**`, `.claude/plugins/cache/**/hooks/**`). A
+and hook wiring (`.claude/settings.json`, `settings.local.json`,
+`.claude/hooks.json`, `.claude/hooks/**`), `.githooks/**`, `.git/hooks/**`,
+shell rc files (`.zshrc`, `.bashrc`, `.profile`, …), the gate config tomls
+(`deny.toml`, `donegate.toml`, `blastguard.toml`, …, `.precommit-audit.toml`),
+and the deployed plugin cache's executables and hook wiring
+(`.claude/plugins/cache/**/bin/**`, `.claude/plugins/cache/**/hooks/**`) — the
+full list is `PROTECTED_GLOBS` in `src/exclude.rs`. Writing to one (Write, Edit,
+`>`, `cp` onto, `sed -i`, …) is an `ask`; disarming one without writing to it
+(`rm`, `mv` away, `chmod -x`) is a `deny`. A
 deployed launcher without its exec bit dies with `Permission denied` and
 emits no finding, so the gate goes dark rather than red (backlog 1b82a049).
 For the plugin cache paths, removing read/exec (`chmod -x`, `chmod 644`), `rm` and
@@ -98,9 +135,22 @@ about the command, a refusal to guess about one. Prose that describes a safer
 system than the code implements is the trap CLAUDE.md 4 forbids, so the
 behaviour is stated here instead.
 
-An `ask` is only emitted where a human can answer it; in a headless or
-agent-driven session `Decision::hardened` collapses it to a `deny`, never to an
-allow.
+An `ask` produced by the analyser is only emitted where a human can answer it;
+in a headless or agent-driven session `Decision::hardened` collapses it to a
+`deny`, never to an allow. "Can answer" is `interactive::ask_available`:
+`CLAUDECODE=1` **and** `CLAUDE_CODE_ENTRYPOINT=cli` (the only value measured to
+be an interactive terminal), overridable with `BLASTGUARD_ASK=never|always|auto`
+(unset = `auto`; an unrecognised value behaves as `never`).
+
+**Exception — the second identical deny becomes an `ask`, after hardening**
+(operator ruling 2026-09-18,「ユーザの指示を2度やぶるgateはいらない。2度目はaskせよ」;
+`downgrade_on_repeat` in `src/main.rs`). When blastguard has already denied the
+same effect (tool + command or `file_path` + deny reason) in the same session,
+the repeat is emitted as `ask` — deliberately placed after `hardened()`, so it
+is emitted as `ask` in headless sessions too. Only `Deny` is touched; it never
+produces an `Allow`. The ledger is `harness_core::repeat`
+(`~/.claude/harness-state/repeat/<CLAUDE_CODE_SESSION_ID>/`); an unset session
+id or a ledger IO failure keeps the deny.
 
 What an intervention actually prevented is reviewable after the fact with
 `blastguard retro` (see [Retrospective](#retrospective)).
@@ -184,6 +234,29 @@ plus `Undetermined` — and **only `Inside` may relax a verdict**.
   is an injected `scope::RealPathResolver` that only the hook binary supplies, so
   `detect` is still pure and condukt / specguard / daily's `sh -c` verdicts are
   unchanged.
+
+## Truncating redirects are judged by recoverability
+
+A single `>` (and `N>`, `&>`) to a target that is not `/dev/null` & co. or an
+exempt config file is no longer a flat deny. In order (`src/detect.rs`, the
+truncating-redirect arm; `src/reversible.rs` `probe`):
+
+1. A protected gate/config path → `ask`; a target inside a system directory →
+   `deny`.
+2. The target **does not exist** → allowed (no prior bytes to destroy).
+3. The target is inside a git work tree whose `git status` answered **and** it
+   lies inside this session's safe roots (or a linked worktree checkout under
+   a worktree storage root) → allowed, unattended. By operator ruling
+   2026-09-18 this covers tracked-clean, tracked-modified **and untracked**
+   files alike — `RecoverableFromGit` means "inside a work tree", not "git
+   holds these bytes" (see the doc on `reversible::Recovery`).
+4. Otherwise the location axis below applies: confined to a safe root → `ask`
+   (deny headless); anything else, including a probe that did not answer, →
+   `deny`.
+
+Measured on the 0.2.108 debug build (2026-10-14): `echo hi > existing.txt` on
+an untracked file in the session's git repo → allow; the same to an existing
+file under `/tmp` outside any repo → `ask` (interactive) / `deny` (headless).
 
 ## Approval memory: an `Ask` a human answered is not asked again — 0.2.53
 
@@ -304,8 +377,8 @@ a safety net dedicated to intercepting only that small set of destructive-yet-
 irreversible patterns before they run — deterministically, via a pure function —
 and it favors reliably stopping the clearly dangerous over casting a wide net
 that gets in the way of ordinary work. Undetermined outcomes (a panic inside the
-analyser) resolve to a deny, not to a silent allow — see "Build" below for how
-that is implemented.
+analyser) resolve to a deny, not to a silent allow — see the table at the top
+of this README for how each undetermined case is resolved.
 
 ## Also a library
 
@@ -316,11 +389,27 @@ before ever handing it to `sh -c`, and condukt's scheduler uses the graded
 actions (a deploy, `git push`, a release) through its GATED gate even when an
 upstream LLM mislabelled the task.
 
+Two diff-level modules are exported as well (pure, no I/O): `diffrisk`
+(`classify_diff` / `changes_public_symbol`) and `callgraph`
+(`changed_symbol_names` / `enumerate_callers`, now a thin re-export of
+`harness_core::callgraph`). condukt consumes both
+(`crates/condukt/src/diffrisk_record.rs`).
+
 ## Build
 
 The CLI surface is minimal: `--version` / `-V`, `--help` / `-h` and `--protects`
 (the gate's protection statement from `src/protection.rs`: PROTECTS / AGAINST /
-GROUNDS lines) short-circuit before stdin is touched; otherwise it reads a hook payload from stdin.
+GROUNDS lines) short-circuit before stdin is touched; `retro` runs the
+[retrospective](#retrospective); `record-approval` reads a PostToolUse payload
+(the approval-memory recorder); otherwise it reads a PreToolUse payload from
+stdin.
+
+| env var | effect |
+|---|---|
+| `BLASTGUARD_ASK` | `never` / `always` / `auto` (default): whether an `ask` may be emitted or is hardened to `deny` (see [Design bias](#design-bias)) |
+| `BLASTGUARD_APPROVALS_DIR` | approval-memory store location (default `~/.blastguard/approvals`) |
+| `CLAUDE_PROJECT_DIR`, `TMPDIR`, `HOME` | read by the hook to build the safe roots |
+| `CLAUDE_CODE_SESSION_ID` | keys the repeat-deny ledger |
 
 ```sh
 cargo build --release -p blastguard   # -> target/release/blastguard
@@ -328,14 +417,18 @@ make bins                             # refresh bundled per-platform binaries
 cargo test -p blastguard              # unit + integration tests
 ```
 
-The hook (`hooks/hooks.json`) registers on **PreToolUse** with matcher
-`Bash|Edit|Write|MultiEdit|NotebookEdit` (timeout 10) and calls
-`${CLAUDE_PLUGIN_ROOT}/bin/blastguard`, a POSIX-sh launcher (`bin/blastguard`)
-that execs the matching `blastguard-<os>-<arch>` build. If no build is bundled
-for the host platform, the launcher prints a warning to stderr and exits 0 — a
-known fail-open gap distinct from the deny-on-panic behaviour above: with no
-binary to run, there is no analyser present to resolve the "undetermined" case
-to a deny in the first place.
+The hooks (`hooks/hooks.json`): **PreToolUse** with matcher
+`Bash|Edit|Write|MultiEdit|NotebookEdit` (timeout 10) calls
+`${CLAUDE_PLUGIN_ROOT}/bin/blastguard`; **PostToolUse** with matcher `Bash`
+(timeout 10) calls `${CLAUDE_PLUGIN_ROOT}/bin/blastguard record-approval`.
+`bin/blastguard` is a POSIX-sh launcher that execs the matching
+`blastguard-<os>-<arch>` build. If no build is bundled for the host platform,
+the launcher prints a warning to stderr **and emits a PreToolUse decision**
+saying the call was not evaluated: `ask` when `BLASTGUARD_ASK=always`, or when
+it is `auto`/unset and `CLAUDECODE=1` with `CLAUDE_CODE_ENTRYPOINT=cli`;
+`deny` otherwise (the same policy as `interactive::ask_available`). It does not
+exit silently, because a silent exit 0 is an allow. (Until this was fixed the
+launcher exited 0 with no output — a fail-open — and this README said so.)
 
 ## Retrospective
 
@@ -347,7 +440,12 @@ Claude Code transcript to the `tool_result` for the same `toolUseID`:
 blastguard retro                              # this project, inferred from cwd
 blastguard retro --project /path/to/repo
 blastguard retro --dir ~/.claude/projects/-path-to-repo
+blastguard retro --list                       # one row per intervention
+blastguard retro --rule-id rm-recursive       # listing narrowed to one rule (implies --list)
 ```
+
+Without `--list` it prints a per-rule count table. An unknown argument, or a
+flag missing its value, exits 2.
 
 Each intervention gets a tri-state outcome — `executed-anyway` (a human said
 yes, so the gate prevented nothing that time), `not-executed`, or `unknown`. A

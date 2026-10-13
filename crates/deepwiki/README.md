@@ -35,20 +35,25 @@ deepwiki stamp PAGES…    # record HEAD + the pages written (called by /deepwik
 deepwiki init            # create .deepwiki/
 ```
 
+Every subcommand takes `--root <dir>` (default: the cwd).
+
 ## Layout
 
 - `commands/deepwiki.md` — the `/deepwiki` orchestration command.
 - `agents/deepwiki-writer.md` — the page-writing subagent.
-- `bin/deepwiki` + `bin/deepwiki-<os>-<arch>` — the bundled scanner.
+- `bin/deepwiki` (tracked launcher) + `bin/deepwiki-<os>-<arch>` (locally built,
+  git-ignored) — the scanner.
 - `.deepwiki/` (in *your* repo) — the generated wiki + `_meta.toml` freshness stamp.
 
 ## Build
 
 ```sh
-make bins     # refresh bin/deepwiki-darwin-<arch> and bin/deepwiki-linux-x86_64
-cargo test
+cargo build --release -p deepwiki
+cargo test -p deepwiki
 ```
 
-The committed `bin/deepwiki-*` binaries are what the plugin ships, so end users
-need neither cargo nor an API key. Rebuild and recommit them when behavior
-changes.
+The platform-tagged `bin/deepwiki-<os>-<arch>` binaries are **not committed**
+(`.gitignore` ignores `crates/*/bin/*-<os>-<arch>`); local deploy builds from
+source via `scripts/rollout-plugins.sh`. The crate's `Makefile` (`make bins`)
+copies from a crate-local `target/release/`, which a workspace build does not
+produce.

@@ -102,8 +102,12 @@ transport の三値は `harness_core::verdict::Determination` を使っており
 jev check                 # 三値の可用性を JSON で。exit 0 / 1 / 10
 echo '{"state": "...", "questions": {"q": {"type":"noul","instructions":"..."}}}' \
   | jev ask               # 回答を JSON で。キーが無ければネットワーク呼び出しなし
+jev ask --model <route>   # この呼び出しだけモデル route を上書き
 jev ledger                # 件数・トークン・推定 USD
 ```
+
+プラグインは `/jev` スキル（`skills/jev/SKILL.md`）も同梱する。jev に advisory な型付き判定を
+問い、使ってよい用途と使ってはならない用途を明示する。
 
 設定は `~/.jev/config.toml`（`JEV_CONFIG` で移動可）:
 
@@ -112,7 +116,7 @@ model = "jev-1.13.0"   # 固定推奨。下記参照
 max_time_secs = 8
 ```
 
-env override: `JEV_MODEL` / `JEV_MAX_TIME_SECS` / `JEV_LEDGER` / `JEV_ENDPOINT`。
+env override: `JEV_MODEL` / `JEV_MAX_TIME_SECS` / `JEV_LEDGER`（既定 `~/.jev/usage.jsonl`）/ `JEV_ENDPOINT`。
 **キーはここでは設定できない**（環境変数のみ）。
 
 ## 使う前に知っておくべき落とし穴

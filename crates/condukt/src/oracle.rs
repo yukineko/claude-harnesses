@@ -950,6 +950,91 @@ mod tests {
              reproduction_tests — got {out}"
         );
     }
+
+    // ---- backlog 7c798579: an unguarded spawn observes a swapped PATH ----------
+    //
+    // `check_oracle_with_no_tdd_on_path` (above) points the process-global PATH at
+    // an empty dir under `PATH_ENV_LOCK`'s WRITE side. Tests that spawn a child by
+    // bare name (`sh`, `git`) WITHOUT taking the read side, e.g.
+    // `record_runs_exit_code_tests::zero_exit_status_is_counted_as_emitted`
+    // (`Command::new("sh")`) and `lock::tests::git` (`Command::new("git")`), are
+    // not excluded by it. Both tests below spawn exactly the way those do.
+
+    /// Deterministic: the mutation window is held open by a barrier, and an
+    /// unguarded `sh` spawn is made inside it. Models the mutator with the same
+    /// write guard + empty-dir PATH the real helper uses; it does NOT call the
+    /// real helper, so it proves the HAZARD (a plain spawn can observe the
+    /// swapped PATH), not that this window produced any given historical flake.
+    #[cfg(unix)]
+    #[test]
+    fn unguarded_spawn_succeeds_while_path_is_swapped_to_an_empty_dir() {
+        use std::sync::{Arc, Barrier};
+        let barrier = Arc::new(Barrier::new(2));
+        let b2 = Arc::clone(&barrier);
+        let mutator = std::thread::spawn(move || {
+            let _guard = crate::env_lock::PATH_ENV_LOCK
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
+            let tmp = tempfile::TempDir::new().unwrap();
+            let empty_bin = tmp.path().join("empty-bin");
+            std::fs::create_dir_all(&empty_bin).unwrap();
+            let old_path = std::env::var_os("PATH");
+            std::env::set_var("PATH", &empty_bin);
+            b2.wait(); // window open
+            b2.wait(); // spawner done
+            match old_path {
+                Some(p) => std::env::set_var("PATH", p),
+                None => std::env::remove_var("PATH"),
+            }
+        });
+        barrier.wait();
+        // Exactly the unguarded spawn in zero_exit_status_is_counted_as_emitted.
+        let got = std::process::Command::new("sh")
+            .args(["-c", "exit 0"])
+            .status();
+        barrier.wait();
+        mutator.join().unwrap();
+        let st = got.unwrap_or_else(|e| {
+            panic!("unguarded `sh` spawn observed the swapped PATH and failed: {e}")
+        });
+        assert!(st.success());
+    }
+
+    /// Same hazard against the REAL mutator: run the actual no-tdd helper
+    /// repeatedly while a sibling spawns `sh` unguarded. Probabilistic (the
+    /// window is the helper's own duration), but the invariant is the same:
+    /// no plain spawn may fail because a sibling test swapped PATH.
+    #[cfg(unix)]
+    #[test]
+    fn unguarded_spawns_never_fail_during_real_no_tdd_path_mutator() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let done = Arc::new(AtomicBool::new(false));
+        let d2 = Arc::clone(&done);
+        let spawner = std::thread::spawn(move || {
+            let mut failures = Vec::new();
+            while !d2.load(Ordering::SeqCst) {
+                if let Err(e) = std::process::Command::new("sh")
+                    .args(["-c", "exit 0"])
+                    .status()
+                {
+                    failures.push(e.to_string());
+                }
+            }
+            failures
+        });
+        for _ in 0..200 {
+            let _ = check_oracle_with_no_tdd_on_path();
+        }
+        done.store(true, Ordering::SeqCst);
+        let failures = spawner.join().unwrap();
+        assert!(
+            failures.is_empty(),
+            "{} unguarded `sh` spawn(s) failed during the PATH mutator; first: {:?}",
+            failures.len(),
+            failures.first()
+        );
+    }
 }
 
 #[cfg(test)]

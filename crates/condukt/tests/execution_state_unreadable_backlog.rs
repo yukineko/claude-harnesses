@@ -194,3 +194,52 @@ fn backlog_list_object_without_tasks_fails_execution_state() {
         show(&out)
     );
 }
+
+/// (a) `backlog list` prints a JSON scalar: not a queue shape, undetermined.
+#[test]
+fn backlog_list_json_scalar_fails_execution_state() {
+    let fx = Fx::new("scalar");
+    let out = fx.execution_state_with("echo '42'");
+    assert!(
+        !out.status.success(),
+        "`backlog list` printed a JSON scalar but execution-state exited 0: {}",
+        show(&out)
+    );
+}
+
+/// (b) `backlog list` prints an object whose `tasks` is not an array.
+#[test]
+fn backlog_list_tasks_not_array_fails_execution_state() {
+    let fx = Fx::new("tasksstr");
+    let out = fx.execution_state_with(r#"echo '{"tasks": "nope"}'"#);
+    assert!(
+        !out.status.success(),
+        "`backlog list` printed `tasks` as a non-array but execution-state exited 0: {}",
+        show(&out)
+    );
+}
+
+/// (c) `backlog list` prints an array whose rows are not objects.
+#[test]
+fn backlog_list_non_object_rows_fail_execution_state() {
+    let fx = Fx::new("nonobj");
+    let out = fx.execution_state_with("echo '[1, 2]'");
+    assert!(
+        !out.status.success(),
+        "`backlog list` printed non-object rows but execution-state exited 0: {}",
+        show(&out)
+    );
+}
+
+/// (d) `backlog list` prints an object row with no string `title`: the join key
+/// is missing (schema drift), so the queue cannot be joined — undetermined.
+#[test]
+fn backlog_list_row_without_title_fails_execution_state() {
+    let fx = Fx::new("notitle");
+    let out = fx.execution_state_with(r#"echo '[{"id":"x","status":"pending"}]'"#);
+    assert!(
+        !out.status.success(),
+        "`backlog list` printed a row lacking a string `title` but execution-state exited 0: {}",
+        show(&out)
+    );
+}

@@ -1626,8 +1626,8 @@ fn json_id(v: Option<&serde_json::Value>) -> Option<String> {
 /// - `backlog list` could not be spawned, or exited non-zero (since backlog
 ///   0.3.9 it does so when the claim ledger is unreadable or the project
 ///   identity is undetermined);
-/// - its stdout is not JSON, or is neither an array nor an object carrying a
-///   `tasks` array.
+/// - its stdout is not JSON, is neither an array nor an object carrying a
+///   `tasks` array, or has a row that is not an object with a string `title`.
 ///
 /// `backlog` is located with [`harness_core::plugin_bin::resolve`] (plugin
 /// cache first, `$PATH` second), not by bare name: a hook-spawned process does
@@ -1665,9 +1665,10 @@ fn backlog_pending() -> Result<Vec<serde_json::Value>> {
     parse_backlog_pending(&output.stdout)
 }
 
-/// Parse `backlog list --json` stdout. Unparseable output, or a shape that is
-/// neither an array nor an object with a `tasks` array, is `Err` — never an
-/// empty list (backlog 8a4fe104).
+/// Parse `backlog list --json` stdout. Unparseable output, a shape that is
+/// neither an array nor an object with a `tasks` array, or any row that is not
+/// an object with a string `title` (the join key), is `Err` — never an empty or
+/// partial list (backlog 8a4fe104).
 fn parse_backlog_pending(stdout: &[u8]) -> Result<Vec<serde_json::Value>> {
     let shape_err = || {
         anyhow::anyhow!(
@@ -1676,18 +1677,33 @@ fn parse_backlog_pending(stdout: &[u8]) -> Result<Vec<serde_json::Value>> {
              the execution-state view"
         )
     };
-    match serde_json::from_slice::<serde_json::Value>(stdout) {
-        Ok(serde_json::Value::Array(a)) => Ok(a),
+    let rows = match serde_json::from_slice::<serde_json::Value>(stdout) {
+        Ok(serde_json::Value::Array(a)) => a,
         Ok(serde_json::Value::Object(mut m)) => match m.remove("tasks") {
-            Some(serde_json::Value::Array(a)) => Ok(a),
-            _ => Err(shape_err()),
+            Some(serde_json::Value::Array(a)) => a,
+            _ => return Err(shape_err()),
         },
-        Ok(_) => Err(shape_err()),
-        Err(e) => Err(anyhow::anyhow!(
-            "`backlog list` output is not JSON ({e}); the pending queue is \
-             undetermined, refusing to build the execution-state view"
-        )),
+        Ok(_) => return Err(shape_err()),
+        Err(e) => {
+            return Err(anyhow::anyhow!(
+                "`backlog list` output is not JSON ({e}); the pending queue is \
+                 undetermined, refusing to build the execution-state view"
+            ))
+        }
+    };
+    // The join keys on `title`: a row that is not an object, or carries no
+    // string `title`, cannot be joined, and silently skipping it would show its
+    // claim as unmatched — the same "queue unread" misreading (schema drift).
+    if let Some(i) = rows
+        .iter()
+        .position(|r| r.get("title").and_then(|v| v.as_str()).is_none())
+    {
+        anyhow::bail!(
+            "`backlog list` row {i} is not an object with a string `title`; the \
+             pending queue cannot be joined, refusing to build the execution-state view"
+        );
     }
+    Ok(rows)
 }
 
 /// Pure JOIN of live task claims against backlog pending tasks, keyed on title

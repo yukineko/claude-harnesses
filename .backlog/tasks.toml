@@ -3490,33 +3490,6 @@ ruling_kind = "judgment"
 rationale = "Verifier FAIL (c)+(e) on the implementation kept on branch run-20261004-035459-30460/90e78490 (commit 103ae521, blastguard 0.2.109, NOT merged; verifier test saved at scratchpad 90e78490-v-test.rs). The fix blanks >=, >, => in classify's prose view when the following token is a bare word. That cannot tell 'm > built_at' (prose) from ': > Makefile' / 'echo x > credentials' (a real truncation that detect itself Denies as unrecoverable-unknown): at the tip those become Low + reversible = auto-exec, while base force-gated them. Docstring classify.rs:203 claims the exclusion cannot disable the gate. This is the false-gate vs escape trade-off the ticket names. Options: (A) when any operator was blanked, floor the result at Medium + irreversible (no schedule force-gate, so prose tasks run; never auto-exec at gate_exec; literal truncations of bare-word files then also stop being force-gated); (B) blank only when the left side is also prose-shaped (no shell command word such as : echo printf cat tee before the operator) and floor as in A; (C) leave classify as-is and move the fix to condukt (stop feeding done_criteria to the shell classifier, classify only title + touched_files); (D) keep the false positives (status quo)."
 
 [[task]]
-id = "f7a0cadc"
-title = "condukt editgate::tests::a_clean_crate_still_passes fails every full-binary run (rustup cannot choose cargo: HOME race with with_home)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "condukt",
-    "flaky",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-Measured 2026-09-23, branch session-9d349393 at 2ddbd51d (condukt 0.7.171). Running the whole condukt bin test binary (target/debug/deps/condukt-*) fails editgate::tests::a_clean_crate_still_passes every time: 16/16 under 8 concurrent copies, 6/6 under CPU load, 1/1 idle, and also with the newly added worktree test skipped (so it predates that change). Isolated (filter editgate) it passes 17/17.
-Verbatim panic (crates/condukt/src/editgate.rs:506): a compiling crate must not be broken: {"broken":true,"diagnostics":"error: rustup could not choose a version of cargo to run, because one wasn't specified explicitly, and no default is configured.","fallback":false,...}
-Reading (a) test-isolation race: other tests (worktree.rs with_home) swap the process-wide HOME under crate::env_lock::HOME_ENV_LOCK, but editgate's check_edit spawns cargo without taking that lock, so rustup sees a sandbox HOME with no toolchain. Reading (b) something else resets rustup state. Discriminator: make the editgate test take HOME_ENV_LOCK (or pass an explicit env to the cargo child) and rerun the full binary; red->green distinguishes (a).
-Note: under (a) the production editgate reports broken=true when rustup is unusable - fail-closed direction, but the reason text claims compile/type errors that did not happen (the reason misattributes a toolchain failure to the user's code).
-Found while working 35d61d23 / 8c5d46fa (load-sensitive tests).
-
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/condukt/src/editgate.rs (mod backlog_f7a0cadc) (rev 596108b9): editgate's cargo check depends on HOME; a sibling HOME swap makes a clean crate read as broken."""
-created_at = 1790127752
-updated_at = 1791921355
-weight = 0.0
-issue_number = 677
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/677"
-rev = 2
-
-[[task]]
 id = "7c798579"
 title = "condukt claim_progress_head_signal / diffrisk_record journaling tests fail under concurrent test-binary runs (fixture dir vanishes, record count 1 vs 2)"
 project = "/Users/yuki/src/harness"

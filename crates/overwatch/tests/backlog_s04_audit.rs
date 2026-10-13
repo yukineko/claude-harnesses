@@ -149,7 +149,6 @@ fn s3b056c02_end_of_missing_key_is_distinguishable_from_release() {
 /// backlog 56eb3f9a: a peer lease with NO declared scope must be distinguishable
 /// from a peer whose declared scope does not overlap.
 #[test]
-#[ignore = "backlog 56eb3f9a: open defect, remove ignore when fixed"]
 fn s56eb3f9a_undeclared_scope_is_distinguishable_from_declared_disjoint() {
     let begin_b = |peer_scope: Option<&str>| {
         let home = TempDir::new().unwrap();

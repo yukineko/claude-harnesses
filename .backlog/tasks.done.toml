@@ -35386,3 +35386,141 @@ test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "c4928d36e7195808d9b8324ecd1d1c5ff17e7f71"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "56eb3f9a"
+title = "overwatch scopes_overlap が空 scope を no-overlap へ潰している (lease.rs:175) — 未宣言と非衝突を区別していない二値の実例"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-09-13 (condukt interpreter の検証中に発見)、測定点 e30c32a8。crates/overwatch/src/lease.rs:175 付近の scopes_overlap は private かつ bool を返し、空 scope を no overlap へ写す。flow SKILL.md も scope が未確定なら省略と指示しているので、空 scope は実運用で日常的に発生する。したがって「scope を宣言していない (未判定)」と「宣言したが重ならない (判定の結果)」が下流から区別不能であり、CLAUDE.md 第3節が名指しする二値型の欠陥そのものである。blastguard/src/model.rs:5 の Three answers, not two と同型。/ 三値化の案: Absent (未宣言) / Known(false) (宣言済みで重なり無し) / Known(true) (重なりあり)。harness_core::verdict::Determination で表現できる。/ 今回この欠陥が実際に効いた観測: 本セッションで 91e503c8 と 15eb3f94 という同一作業の2チケットを掴んだが、15eb3f94 に anchor を張っていなかったため scope_overlap は何も検出しなかった。一方 anchor を張った e73a1fd5 と f7b018f8 の重なりは正しく検出した。つまり検出できるのは宣言された分だけで、未宣言は静かに検査対象外へ落ちる。/ 関連 0437f3c5 / f7b018f8 / e73a1fd5。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/overwatch/tests/backlog_s04_audit.rs (rev e70d48dd)"""
+created_at = 1789274021
+updated_at = 1791919333
+weight = 0.0
+issue_number = 551
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/551"
+issue_closed_at = 1791919336
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test backlog_s04_audit s56eb3f9a -- --include-ignored"
+exit = 0
+passed = 1
+rev = "b1bc67e2bb3ac89391cc1ae6a147f1af22e4cebd"
+observed_at = 1791919311
+output_digest = "sha256:379deae2f9f8fdb8fc5e16555f3eabbbf756595b9b8ed0f765969fce665b9874"
+excerpt = """
+
+running 1 test
+test s56eb3f9a_undeclared_scope_is_distinguishable_from_declared_disjoint ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.67s
+
+   Compiling harness-core v0.2.47 (/Users/yuki/src/.harness-worktrees/session-4dadba08/crates/harness-core)
+   Compiling overwatch v0.2.61 (/Users/yuki/src/.harness-worktrees/session-4dadba08/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.04s
+     Running tests/backlog_s04_audit.rs (target/debug/deps/backlog_s04_audit-3cec98fad1852caf)
+"""
+
+[task.closure.red]
+rev = "7be45b886236a4906dd9b2e6bf3666b379945766"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "7b6bcfe6"
+title = "harness_core の text_similarity は日本語で機能しない — 分かち書きしないため文節が丸ごと1トークンになり、既知の重複ペアが 0.26 (閾値 0.6) にしかならない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-09-13、測定点 1235d60d。f7b018f8 の閾値 0.6 を既知の重複ペアで検証しようとして判明した、より上流の欠陥。
+
+【何が壊れているか】
+harness_core::lessons::tokenize は空白と非英数字でしか区切らない:
+
+    for t in s.to_lowercase().split(|c: char| !c.is_alphanumeric()) {
+        if t.len() >= 3 and STOP に無い { out.insert(t) }
+    }
+
+日本語は分かち書きしないうえ、ひらがな・カタカナ・漢字はすべて char::is_alphanumeric が true なので区切られない。結果、日本語の1文節がまるごと1トークンになる。さらに t.len() はバイト長なので、助詞「の」「が」は3バイトあり単独トークンとして残る。
+
+【実測】既知の重複ペア (2026-09-13 に単一セッションが別item として連続 claim した 91e503c8 と 15eb3f94) のタイトルで測ると:
+
+  tokens A: check, donegate, fail, open, required, skip, vector, workspace, が, の, ファイルへの構造的圧力, 他セッションの赤が全セッションを止める, 全体を見るため, 共有
+  tokens B: check, donegate, required, reviewgate, workspace, worktree, の, を自分の, スコープに絞る, 全体スキャンをやめる
+
+  intersection = check, donegate, required, workspace, の  (5)
+  union = 19
+  jaccard = 0.263158
+
+閾値 0.6 の半分以下であり、この「本物の重複」は検出できない。
+
+注意: この 0.263 は tokenize と jaccard を Python で忠実に再実装して出した replication であって、Rust の text_similarity を直接実行した値ではない。Rust 側での測定が要る。ただし結論の根拠はこの算術ではなくトークン列そのもので、そちらは tokenize を読めば確認できる。
+
+【何が言えるか】
+マッチしているのは英単語 (donegate / required / check / workspace) と助詞「の」だけで、日本語の実質部分は「他セッションの赤が全セッションを止める」のような巨大トークンになり何ともマッチしない。つまり text_similarity は日本語タイトルに対して事実上、英単語の混入率しか測っていない。「の」が効いているのは偶然のノイズであり、精度をさらに悪くしている。
+
+【影響範囲 — 既に出荷済みのゲートが無音で無効化されている】
+consumer は crates/overwatch/src/lease.rs:195 の possible_duplicate (第4.6a) 一本。このリポジトリの lease goal はほぼ日本語なので、possible_duplicate は日常的に「重複なし」を返している可能性が高い。これは CLAUDE.md 第1節が statusline の例 (3b1eb24) で名指しした「沈黙が余裕ありと読まれる fail-open」と同型である。何も出ないことが検査済みと読まれている。
+
+【やること】
+(1) Rust 側で上記ペアの text_similarity を実測し、値を事実として固定する。
+(2) possible_duplicate が日本語 goal のペアに対して実際に何を返すかを、既知の重複ペアで観測する。空振りするなら、それは閾値の問題ではなくトークナイザの問題として記録する。
+(3) 閾値 0.6 を黙って下げて取り繕わない。0.263 を拾うために閾値を下げると無関係なペアも拾う。直すならトークナイザ側 (日本語は文字 n-gram、たとえば bigram に落とす) である。
+(4) f7b018f8 の backlog 側クラスタリングは、この上流欠陥を継承する。同じ scorer を使う限り日本語タイトルでは効かないことを、実装側にも明記する。
+
+関連 f7b018f8 / 15eb3f94 / 91e503c8 / 56eb3f9a。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/harness-core/tests/backlog_7b6bcfe6.rs (rev e70d48dd)"""
+created_at = 1789280225
+updated_at = 1791919350
+weight = 0.0
+issue_number = 574
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/574"
+issue_closed_at = 1791919353
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p harness-core --test backlog_7b6bcfe6 -- --include-ignored"
+exit = 0
+passed = 2
+rev = "b1bc67e2bb3ac89391cc1ae6a147f1af22e4cebd"
+observed_at = 1791919336
+output_digest = "sha256:fd431be754bf1605166aecec03cd8f71a70a1f21d49c187ffbea49ff1c10fbce"
+excerpt = """
+
+running 2 tests
+test pure_japanese_single_char_difference_is_similar ... ok
+test pure_japanese_inserted_word_is_similar ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling harness-core v0.2.47 (/Users/yuki/src/.harness-worktrees/session-4dadba08/crates/harness-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.52s
+     Running tests/backlog_7b6bcfe6.rs (target/debug/deps/backlog_7b6bcfe6-5d2379ceda5196af)
+"""
+
+[task.closure.red]
+rev = "2a0167f6475425bd616f3eb94939e2d93bb6132c"
+exit = 101
+kind = "behavioural"

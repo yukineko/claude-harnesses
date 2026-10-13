@@ -105,16 +105,23 @@ overwatch begin --key "hypothesis-v2.3" --title "cache the router table" \
 
 ```json
 { "scope_overlap": [ { "key": "...", "title": "...", "scope": ["..."] } ],
+  "scope_undeclared": [ { "key": "...", "title": "..." } ],
+  "scope_declared": true,
   "possible_duplicate": [ { "key": "...", "title": "...", "similarity": 0.72 } ] }
 ```
 
 - `scope_overlap` は、この lease と scope が重なる別 key の live lease を、粗い glob-prefix
   マッチで列挙する。**blocking しない早期警告**であり——scope の重なりは必ずしも衝突ではない
   ——厳密な判定は condukt の Phase 3.5 `conflict-check` に委ねる。
+- `scope_undeclared` は、この lease か相手のどちらかが scope を宣言していないため重なりを
+  **判定できなかった** live lease を列挙する。未宣言は「重なりなし」ではない — どちらの
+  リストにも出ない peer は、scope を宣言したうえで重なっていないものだけである。
+- `scope_declared` は、この lease 自身が scope を宣言していないとき `false` になり、その場合は
+  すべての peer が `scope_undeclared` に入る（backlog 56eb3f9a）。
 - `possible_duplicate` は、title/done_criteria が語彙的に類似する（Jaccard ≥ 閾値、既定 0.6、
   環境変数 `OVERWATCH_DUP_THRESHOLD` で上書き可）別の live lease を、
   `harness_core::lessons::text_similarity` を再利用して列挙する。
-- どちらも既定は空配列で、**exit code は決して変えない**。
+- いずれのリストも既定は空配列で、**exit code は決して変えない**。
 
 ### セッションのアンカーを読む
 

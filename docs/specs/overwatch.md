@@ -51,13 +51,15 @@ CLI は `clap` の `Command` enum（`main.rs`）で定義。ledger/lease 系は�
   （`lease::resolve_session_id`/`resolve_run_id`）。`--scope` はカンマ区切りの files/globs（省略時は空 =
   scope 未確定）、`--done-criteria` は完了定義を lease の PDO-anchor フィールドに格納する（§4.1）。
   **成功時（exit 0）に advisory な success summary JSON を stdout へ出力する**（既存の exit code 契約
-  0=成功/1=同 key 保持中は不変）: `{"scope_overlap":[{key,title,scope}], "possible_duplicate":
-  [{key,title,similarity}]}`。`scope_overlap`（§4.5）は scope が重なる別 key の live lease を粗い
+  0=成功/1=同 key 保持中は不変）: `{"scope_declared":bool, "scope_overlap":[{key,title,scope}],
+  "scope_undeclared":[{key,title}], "possible_duplicate":[{key,title,similarity}]}`。`scope_overlap`（§4.5）は scope が重なる別 key の live lease を粗い
   glob-prefix マッチで列挙する早期警告（非 blocking。厳密判定は condukt の conflict-check）。
   `possible_duplicate`（§4.6a）は title/done_criteria が語彙的に類似する（Jaccard ≥ 閾値、既定 0.6、
   env `OVERWATCH_DUP_THRESHOLD` で上書き可）別 lease を `harness_core::lessons::text_similarity` で
-  列挙する。両者とも既定は空配列で exit code を変えない。scope が空の lease は overlap 検知から除外
-  （false positive 回避）。
+  列挙する。いずれも既定は空配列で exit code を変えない。scope が空の lease は「重なり無し」には
+  畳まず `scope_undeclared` に列挙する（未宣言は判定不能であって非衝突ではない。backlog 56eb3f9a）。
+  自分の scope が空なら `scope_declared:false` となり、全 peer が `scope_undeclared` に並ぶ。
+  どちらのリストにも出ない peer は「scope を宣言済みで重ならない」ことを意味する。
 - **`lease --session <id> [--json]`** — 指定 session が保持中の live lease（PDO anchor）を1件返す
   （複数保持なら最も直近に claim したもの＝`pick_session_lease`）。無ければ exit 1 で無音終了する
   （fail-soft）。§4.3 の ctxrot anchor 再注入の read path。`--json` で `Lease` を JSON、無指定なら

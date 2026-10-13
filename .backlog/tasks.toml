@@ -2799,25 +2799,6 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/531"
 rev = 0
 
 [[task]]
-id = "56eb3f9a"
-title = "overwatch scopes_overlap が空 scope を no-overlap へ潰している (lease.rs:175) — 未宣言と非衝突を区別していない二値の実例"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-実測 2026-09-13 (condukt interpreter の検証中に発見)、測定点 e30c32a8。crates/overwatch/src/lease.rs:175 付近の scopes_overlap は private かつ bool を返し、空 scope を no overlap へ写す。flow SKILL.md も scope が未確定なら省略と指示しているので、空 scope は実運用で日常的に発生する。したがって「scope を宣言していない (未判定)」と「宣言したが重ならない (判定の結果)」が下流から区別不能であり、CLAUDE.md 第3節が名指しする二値型の欠陥そのものである。blastguard/src/model.rs:5 の Three answers, not two と同型。/ 三値化の案: Absent (未宣言) / Known(false) (宣言済みで重なり無し) / Known(true) (重なりあり)。harness_core::verdict::Determination で表現できる。/ 今回この欠陥が実際に効いた観測: 本セッションで 91e503c8 と 15eb3f94 という同一作業の2チケットを掴んだが、15eb3f94 に anchor を張っていなかったため scope_overlap は何も検出しなかった。一方 anchor を張った e73a1fd5 と f7b018f8 の重なりは正しく検出した。つまり検出できるのは宣言された分だけで、未宣言は静かに検査対象外へ落ちる。/ 関連 0437f3c5 / f7b018f8 / e73a1fd5。
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/overwatch/tests/backlog_s04_audit.rs (rev e70d48dd)"""
-created_at = 1789274021
-updated_at = 1790983255
-weight = 0.0
-issue_number = 551
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/551"
-rev = 0
-
-[[task]]
 id = "2afeb849"
 title = "condukt schedule の force-gate が touched_files のパス名に反応する — checker script を編集するだけのタスクが high-risk irreversible に誤分類される"
 project = "/Users/yuki/src/harness"
@@ -2948,65 +2929,6 @@ updated_at = 1790983338
 weight = 0.0
 issue_number = 576
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/576"
-rev = 0
-
-[[task]]
-id = "7b6bcfe6"
-title = "harness_core の text_similarity は日本語で機能しない — 分かち書きしないため文節が丸ごと1トークンになり、既知の重複ペアが 0.26 (閾値 0.6) にしかならない"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "gate",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-実測 2026-09-13、測定点 1235d60d。f7b018f8 の閾値 0.6 を既知の重複ペアで検証しようとして判明した、より上流の欠陥。
-
-【何が壊れているか】
-harness_core::lessons::tokenize は空白と非英数字でしか区切らない:
-
-    for t in s.to_lowercase().split(|c: char| !c.is_alphanumeric()) {
-        if t.len() >= 3 and STOP に無い { out.insert(t) }
-    }
-
-日本語は分かち書きしないうえ、ひらがな・カタカナ・漢字はすべて char::is_alphanumeric が true なので区切られない。結果、日本語の1文節がまるごと1トークンになる。さらに t.len() はバイト長なので、助詞「の」「が」は3バイトあり単独トークンとして残る。
-
-【実測】既知の重複ペア (2026-09-13 に単一セッションが別item として連続 claim した 91e503c8 と 15eb3f94) のタイトルで測ると:
-
-  tokens A: check, donegate, fail, open, required, skip, vector, workspace, が, の, ファイルへの構造的圧力, 他セッションの赤が全セッションを止める, 全体を見るため, 共有
-  tokens B: check, donegate, required, reviewgate, workspace, worktree, の, を自分の, スコープに絞る, 全体スキャンをやめる
-
-  intersection = check, donegate, required, workspace, の  (5)
-  union = 19
-  jaccard = 0.263158
-
-閾値 0.6 の半分以下であり、この「本物の重複」は検出できない。
-
-注意: この 0.263 は tokenize と jaccard を Python で忠実に再実装して出した replication であって、Rust の text_similarity を直接実行した値ではない。Rust 側での測定が要る。ただし結論の根拠はこの算術ではなくトークン列そのもので、そちらは tokenize を読めば確認できる。
-
-【何が言えるか】
-マッチしているのは英単語 (donegate / required / check / workspace) と助詞「の」だけで、日本語の実質部分は「他セッションの赤が全セッションを止める」のような巨大トークンになり何ともマッチしない。つまり text_similarity は日本語タイトルに対して事実上、英単語の混入率しか測っていない。「の」が効いているのは偶然のノイズであり、精度をさらに悪くしている。
-
-【影響範囲 — 既に出荷済みのゲートが無音で無効化されている】
-consumer は crates/overwatch/src/lease.rs:195 の possible_duplicate (第4.6a) 一本。このリポジトリの lease goal はほぼ日本語なので、possible_duplicate は日常的に「重複なし」を返している可能性が高い。これは CLAUDE.md 第1節が statusline の例 (3b1eb24) で名指しした「沈黙が余裕ありと読まれる fail-open」と同型である。何も出ないことが検査済みと読まれている。
-
-【やること】
-(1) Rust 側で上記ペアの text_similarity を実測し、値を事実として固定する。
-(2) possible_duplicate が日本語 goal のペアに対して実際に何を返すかを、既知の重複ペアで観測する。空振りするなら、それは閾値の問題ではなくトークナイザの問題として記録する。
-(3) 閾値 0.6 を黙って下げて取り繕わない。0.263 を拾うために閾値を下げると無関係なペアも拾う。直すならトークナイザ側 (日本語は文字 n-gram、たとえば bigram に落とす) である。
-(4) f7b018f8 の backlog 側クラスタリングは、この上流欠陥を継承する。同じ scorer を使う限り日本語タイトルでは効かないことを、実装側にも明記する。
-
-関連 f7b018f8 / 15eb3f94 / 91e503c8 / 56eb3f9a。
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/harness-core/tests/backlog_7b6bcfe6.rs (rev e70d48dd)"""
-created_at = 1789280225
-updated_at = 1790983293
-weight = 0.0
-issue_number = 574
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/574"
 rev = 0
 
 [[task]]
@@ -3571,7 +3493,7 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 Measured 2026-09-23, branch session-9d349393 at 2ddbd51d (condukt 0.7.171). Running the whole condukt bin test binary (target/debug/deps/condukt-*) fails editgate::tests::a_clean_crate_still_passes every time: 16/16 under 8 concurrent copies, 6/6 under CPU load, 1/1 idle, and also with the newly added worktree test skipped (so it predates that change). Isolated (filter editgate) it passes 17/17.
 Verbatim panic (crates/condukt/src/editgate.rs:506): a compiling crate must not be broken: {"broken":true,"diagnostics":"error: rustup could not choose a version of cargo to run, because one wasn't specified explicitly, and no default is configured.","fallback":false,...}
@@ -3581,11 +3503,13 @@ Found while working 35d61d23 / 8c5d46fa (load-sensitive tests).
 
 [backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/condukt/src/editgate.rs (mod backlog_f7a0cadc) (rev 596108b9): editgate's cargo check depends on HOME; a sibling HOME swap makes a clean crate read as broken."""
 created_at = 1790127752
-updated_at = 1790983162
+updated_at = 1791901145
 weight = 0.0
 issue_number = 677
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/677"
-rev = 0
+rev = 1
+ruling_kind = "judgment"
+rationale = "Fix merged on main at 7be45b88 (branch commits 4f0dace5 toolchain-env pin, ebb45add verifier tests, 94849a13 hook reason). Observed 2026-10-13 at session-4dadba08 2a0167f6: full condukt bin test 892 passed 0 failed incl. editgate::tests::a_clean_crate_still_passes; tests/editgate_hook_reason_f7a0cadc.rs passes. No mechanical RED evidence exists: (1) audit repro editgate::backlog_f7a0cadc PASSES at pre-fix 626d7e84 (race-dependent, not RED); (2) editgate_hook_reason_f7a0cadc was added in the fix commit 94849a13, so at 5f176b81 it fails at compile time, which backlog done refuses. Ask: accept close as fixed on this evidence, or require a new deterministic RED test first."
 
 [[task]]
 id = "7c798579"

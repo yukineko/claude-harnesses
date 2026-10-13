@@ -16,7 +16,10 @@
 #
 # A fast-forward merge creates no commit, so there is nothing to certify and the
 # absent sentinel must not be read as a bypass — that would fire on every
-# `git pull`. Only a real merge commit (two or more parents) is handed on.
+# `git pull`. Only a merge commit that THIS merge created is handed on: HEAD
+# must have two or more parents (below) AND the merge must not have been a
+# fast-forward or a squash (further below — a fast-forward onto an existing
+# merge commit also leaves a two-parent HEAD).
 
 set -u
 
@@ -34,6 +37,49 @@ parents="$(git rev-parse HEAD^@ 2>/dev/null | grep -c .)" || exit 0
 if command -v specguard >/dev/null 2>&1; then
   mkdir -p "$HOME/.specguard" 2>/dev/null || true
   specguard map sync >>"$HOME/.specguard/map-sync.log" 2>&1 || true
+fi
+
+# Was HEAD CREATED by this merge, or did the merge merely move HEAD onto a
+# merge commit that already existed? The parent count above cannot tell:
+# fast-forwarding onto a merge commit leaves HEAD with two parents exactly like
+# a fresh merge does. Handing that on recorded the existing commit as ungated
+# — a commit this merge never created and which, when it was created, went
+# through pre-merge-commit green — and every further fast-forward onto it (each
+# worktree catching up to main) appended it again (backlog 1d2446de, measured:
+# one gated merge, two ledger entries, push blocked).
+#
+#   --squash ($1 = 1)  creates no commit at all; HEAD is whatever it was before,
+#                      possibly an earlier merge. Nothing to record.
+#   fast-forward       git writes the HEAD reflog entry "<action>: Fast-forward"
+#                      (plus " (no commit created; -m option ignored)" with -m).
+#                      A merge that creates a commit writes "<action>: Merge
+#                      made by the '<strategy>' strategy." (or, for -s resolve,
+#                      "<action>: In-index merge") instead. Only <action> is
+#                      user-controlled (GIT_REFLOG_ACTION), so the patterns are
+#                      anchored on the fixed SUFFIX: a prefix of "x: Fast-forward"
+#                      on a real merge still ends in "...strategy.". The entry
+#                      is honoured only when it is about the current HEAD.
+#
+# Scope, stated: a merge commit created in ANOTHER clone and fast-forwarded in
+# here is not recorded (the old parent-count check recorded it only by
+# accident; a fetched single-parent commit was never recorded either).
+#
+# Only a POSITIVE fast-forward/squash observation skips the recorder. Anything
+# else — a merge-made entry, no reflog at all (core.logAllRefUpdates=false),
+# an unreadable reflog, an entry for some other HEAD — falls through to
+# post-commit, which records the commit unless pre-merge-commit certified it.
+# Cannot determine is a record, never a pass (CLAUDE.md 3.); the worst case is a
+# false positive that a green pre-commit clears.
+[ "${1:-0}" = "1" ] && exit 0
+
+head_sha="$(git rev-parse HEAD 2>/dev/null)" || head_sha=""
+reflog_sha="$(git reflog -1 --format=%H HEAD 2>/dev/null)" || reflog_sha=""
+reflog_subject="$(git reflog -1 --format=%gs HEAD 2>/dev/null)" || reflog_subject=""
+if [ -n "$head_sha" ] && [ "$reflog_sha" = "$head_sha" ]; then
+  case "$reflog_subject" in
+    *": Fast-forward" | *": Fast-forward (no commit created; -m option ignored)")
+      exit 0 ;;
+  esac
 fi
 
 exec "$(dirname "$0")/post-commit"

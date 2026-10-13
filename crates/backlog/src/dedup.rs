@@ -19,21 +19,19 @@
 //! trusting an empty result)
 //!
 //! The scorer is [`harness_core::lessons::text_similarity`]: lexical Jaccard
-//! over tokens cut on non-alphanumeric characters, keeping tokens of at least 3
-//! **bytes**. That tokenizer is built for whitespace-segmented text. Japanese
-//! is not whitespace-segmented and kana/kanji are `char::is_alphanumeric`, so a
-//! whole Japanese clause collapses into ONE token that can only match another
-//! byte-identical clause. **This repo's backlog titles are mostly Japanese, so
-//! the scorer is largely inert on them** — see
-//! `tests::measured_similarity_of_the_known_duplicate_pair`, which pins the
-//! measured score of a pair that is a KNOWN real duplicate and is NOT caught at
-//! the [`NEAR_DUPLICATE_THRESHOLD`] in use. The tokenizer defect is filed
-//! upstream as backlog 7b6bcfe6; it is not fixed here and the threshold is not
-//! bent to paper over it.
+//! over tokens. Non-CJK words are cut on non-alphanumeric characters (min 3
+//! bytes); runs of kana/kanji are tokenized as character bigrams, because
+//! Japanese is not whitespace-segmented (before backlog 7b6bcfe6 a whole
+//! Japanese clause collapsed into ONE token and near-identical Japanese titles
+//! scored 0). Lexical overlap still cannot see a duplicate that is *worded
+//! differently*: `tests::measured_similarity_of_the_known_duplicate_pair` pins
+//! the measured score of a pair that is a KNOWN real duplicate (a paraphrase)
+//! and is NOT caught at the [`NEAR_DUPLICATE_THRESHOLD`] in use. The threshold
+//! is not bent to paper over that.
 //!
 //! Consequence, and the reason [`near_duplicate_report`] never renders an empty
 //! peer list as silence: **an empty peer set here does NOT mean "checked, no
-//! duplicates"** — on Japanese text it mostly means the scorer could not see.
+//! duplicates"** — a reworded duplicate (Japanese or not) scores below it.
 
 use crate::task::Task;
 use serde::Serialize;
@@ -47,9 +45,9 @@ use serde::Serialize;
 /// rather than each inventing a number. There is no measurement behind the
 /// value in either place. The measured score of the one known-duplicate pair we
 /// have (see `tests::measured_similarity_of_the_known_duplicate_pair`) is far
-/// BELOW this, and the threshold is still left alone: that gap is a tokenizer
-/// defect (backlog 7b6bcfe6), and lowering the threshold far enough to close it
-/// would drag in unrelated pairs instead of fixing anything.
+/// BELOW this, and the threshold is still left alone: that pair is a
+/// paraphrase, which lexical overlap cannot see, and lowering the threshold far
+/// enough to close it would drag in unrelated pairs instead of fixing anything.
 pub const NEAR_DUPLICATE_THRESHOLD: f64 = 0.6;
 
 /// Three answers, not two, to "do these two tasks touch the same files?".
@@ -304,15 +302,15 @@ pub fn near_duplicates(anchor: &Task, tasks: &[Task], threshold: f64) -> Vec<Nea
 /// The human-facing render of a near-duplicate scan. **Always non-empty** for a
 /// queued anchor: an empty peer list is rendered as an explicit "found nothing,
 /// and here is why that is not a clean bill of health" line rather than as
-/// silence, because silence is read as "checked, no duplicates" and on Japanese
-/// titles that reading is false (module docs; backlog 7b6bcfe6).
+/// silence, because silence is read as "checked, no duplicates" and for a
+/// reworded duplicate that reading is false (module docs; backlog 7b6bcfe6).
 pub fn near_duplicate_report(anchor: &Task, peers: &[NearDuplicate], threshold: f64) -> String {
     if peers.is_empty() {
         return format!(
             "near-duplicate scan for {}: no queued peer scored >= {threshold} — this is NOT \
-             \"checked, no duplicates\": the scorer is lexical Jaccard over tokens cut on \
-             non-alphanumeric characters, so it cannot see near-duplicates in Japanese titles \
-             (backlog 7b6bcfe6), which most of this queue's titles are.",
+             \"checked, no duplicates\": the scorer is lexical Jaccard (Japanese as character \
+             bigrams, backlog 7b6bcfe6), so it cannot see a duplicate that is worded \
+             differently — the known Japanese duplicate pair 91e503c8/15eb3f94 scores 0.14.",
             anchor.id
         );
     }
@@ -368,6 +366,9 @@ mod tests {
     /// The exact title of backlog 15eb3f94, same source.
     const TITLE_15EB3F94: &str =
         "donegate/reviewgate の required check を自分の worktree スコープに絞る (workspace 全体スキャンをやめる)";
+    /// `text_similarity(TITLE_91E503C8, TITLE_15EB3F94)` as measured 2026-10-13
+    /// with the character-bigram tokenizer (backlog 7b6bcfe6). An observation.
+    const MEASURED_PAIR_SCORE: f64 = 0.13793103448275862;
 
     // --- (B) three-valued scope overlap -------------------------------------
 
@@ -475,26 +476,27 @@ mod tests {
     /// The number asserted below is whatever the scorer actually returns. It is
     /// recorded so that the gap between it and [`NEAR_DUPLICATE_THRESHOLD`] is
     /// a FACT in the repo rather than a claim: this known duplicate pair is NOT
-    /// caught at 0.6, because the tokenizer cuts on non-alphanumeric characters
-    /// and Japanese text is not whitespace-segmented, so a whole clause becomes
-    /// one token (upstream defect: backlog 7b6bcfe6). The threshold is
-    /// deliberately left at 0.6 — bending it to make this pair match would hide
-    /// the tokenizer defect behind a number, not fix it.
+    /// caught at 0.6. Before backlog 7b6bcfe6 the cause was the tokenizer (a whole
+    /// Japanese clause was one token; 0.263 came only from the English words).
+    /// With Japanese now tokenized as character bigrams the pair scores LOWER,
+    /// because the two titles are a paraphrase sharing few bigrams: lexical
+    /// overlap cannot see this duplicate. The threshold is deliberately left at
+    /// 0.6 — bending it to make this pair match would drag in unrelated pairs.
     #[test]
     fn measured_similarity_of_the_known_duplicate_pair() {
         let measured = harness_core::lessons::text_similarity(TITLE_91E503C8, TITLE_15EB3F94);
-        // Observed 2026-09-13 in this worktree, `cargo test -p backlog`:
-        //   left: 0.2631578947368421   (= 5 shared tokens / 19 in the union)
-        // i.e. 0.263, against a threshold of 0.6. The pair is NOT caught.
+        // Observed 2026-09-13 (old tokenizer): 0.2631578947368421 (5/19).
+        // Re-measured 2026-10-13 after the bigram tokenizer (7b6bcfe6),
+        // `cargo test -p backlog`: see the value below. Still NOT caught.
         assert_eq!(
-            measured, 0.2631578947368421,
+            measured, MEASURED_PAIR_SCORE,
             "this is an OBSERVATION of what text_similarity returns, not a target"
         );
         assert!(
             measured < NEAR_DUPLICATE_THRESHOLD,
             "recorded fact: the known duplicate pair 91e503c8/15eb3f94 scores {measured}, \
              BELOW the {NEAR_DUPLICATE_THRESHOLD} threshold, so this feature does not catch \
-             it (tokenizer defect, backlog 7b6bcfe6). If this assertion ever fails, the \
+             it (a paraphrase; lexical overlap cannot see it). If this assertion ever fails, the \
              scorer changed and the module docs must be re-measured."
         );
     }
@@ -573,8 +575,8 @@ mod tests {
     }
 
     /// An empty peer set must NOT render as silence or as a clean bill of
-    /// health: it has to say that the scorer is lexical and inert on Japanese
-    /// titles, which is what most of this queue is.
+    /// health: it has to say that the scorer is lexical and cannot see a
+    /// reworded (Japanese) duplicate.
     #[test]
     fn empty_peer_set_is_not_reported_as_checked_clean() {
         let anchor = task("aaaa", TITLE_91E503C8, &[]);

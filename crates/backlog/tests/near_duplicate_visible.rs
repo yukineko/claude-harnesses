@@ -13,8 +13,9 @@
 //! that "it is computed" cannot pass for "a human can see it".
 //!
 //! The scan is also asserted to speak when it finds NOTHING (a queue of one),
-//! because the scorer is lexical Jaccard over whitespace-segmented tokens and
-//! is largely inert on this repo's Japanese titles (backlog 7b6bcfe6): an
+//! because the scorer is lexical Jaccard (Japanese as character bigrams,
+//! backlog 7b6bcfe6) and cannot see a reworded duplicate such as the known
+//! Japanese pair 91e503c8/15eb3f94: an
 //! empty peer list rendered as silence would read as "checked, no duplicates",
 //! which is exactly the false clean bill of health CLAUDE.md §3 forbids.
 

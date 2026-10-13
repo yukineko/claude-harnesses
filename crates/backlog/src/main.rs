@@ -1916,8 +1916,8 @@ fn store_repo_root(tasks_path: &Path) -> String {
 /// Every failure path says WHY the scan did not run instead of printing an
 /// empty peer list: "could not scan" and "scanned, found nothing" must not
 /// render the same (CLAUDE.md §3). Note that even a successful empty scan is
-/// not a clean bill of health here — see `dedup`'s module docs on the
-/// tokenizer's blind spot for Japanese titles (backlog 7b6bcfe6) — which is
+/// not a clean bill of health here — see `dedup`'s module docs: a lexical
+/// scorer cannot see a reworded duplicate (backlog 7b6bcfe6) — which is
 /// why `dedup::near_duplicate_report` renders that case explicitly rather than
 /// staying silent.
 fn report_near_duplicates(tasks_path: &Path, id: &str) {

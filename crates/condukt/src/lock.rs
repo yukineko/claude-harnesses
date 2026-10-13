@@ -73,11 +73,7 @@ impl Drop for RunLock {
 /// single primary repo's default branch — `worktree::merge` (checkout
 /// default_branch + merge) and `git worktree prune` — serializes on it instead
 /// of racing on `main` (which today is only serialized by the upstream flow
-/// backlog lock). NOTE: `repo_commit::commit` also uses this KEY but takes it
-/// through `RunLock::acquire_or_skip` (keyed on the current checkout via
-/// `repo_root`), NOT [`acquire_repo_primary`]; so it serializes commits that
-/// share one worktree index and does not contend with merge/prune on main,
-/// which touch a different index. Mirrors
+/// backlog lock). Mirrors
 /// `claim::CLAIMS_LOCK_KEY`; it never names a real run so cannot collide with one.
 ///
 /// The fixed key alone is not sufficient for that "ONE per-repo lock": the
@@ -273,7 +269,7 @@ impl RunLock {
     /// Waits up to [`RunLock::DEADLINE`]. Live callers:
     /// `state::with_run_locked`, `state::discard_experiment`, the `state set`
     /// CLI arm, `claim::{claim_tasks, release_*, heartbeat, active_claims,
-    /// write_execution_state}`, `repo_commit::commit`, and (via
+    /// write_execution_state}`, and (via
     /// [`acquire_repo_primary`]) every primary-repo mutator in `worktree`/`main`.
     pub fn acquire_or_skip(cfg: &Config, cwd: &Path, run_id: &str) -> Option<Self> {
         Self::acquire_or_skip_at(lock_path(cfg, cwd, run_id), Self::DEADLINE)
@@ -823,9 +819,8 @@ mod tests {
     // add` gives the main tree a `.git` DIRECTORY and the linked worktree a
     // `.git` FILE; both share ONE git index, ONE `.git/worktrees` admin dir and
     // ONE default branch, which is exactly what every holder of this lock
-    // mutates (`worktree::merge`'s checkout+merge and `git worktree prune`;
-    // `repo commit` is NOT one of them: it locks per checkout, see
-    // `REPO_PRIMARY_LOCK_KEY`). So a mutator whose cwd is the main tree and a
+    // mutates (`worktree::merge`'s checkout+merge and `git worktree prune`).
+    // So a mutator whose cwd is the main tree and a
     // mutator whose cwd is a linked worktree of the SAME repo must contend the
     // SAME lock file, and the second must be REFUSED while the first holds it.
     //

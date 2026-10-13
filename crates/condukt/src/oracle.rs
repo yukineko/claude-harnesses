@@ -220,11 +220,28 @@ fn check_oracle_with(
 /// wiring is testable against a shim without depending on what the host's
 /// plugin cache holds.
 fn spawn_oracle(program: &Path, task_id: &str, run_dir: &Path) -> serde_json::Value {
-    match Command::new(program)
-        .args(["oracle", "--task", task_id])
-        .current_dir(run_dir)
-        .output()
-    {
+    spawn_oracle_with_env_path(program, task_id, run_dir, None)
+}
+
+/// [`spawn_oracle`] with an optional `PATH` for the CHILD only. `None` (the
+/// production path) leaves the child inheriting this process's environment,
+/// exactly as before. `Some(p)` sets `PATH=p` on the child via
+/// `Command::env`, which on Unix is also the PATH a bare `program` is resolved
+/// against — so a test can put a fake `tdd` (or no `tdd`) in front of the
+/// spawn without mutating the process-wide PATH that concurrently spawning
+/// sibling tests read (backlog 7c798579).
+fn spawn_oracle_with_env_path(
+    program: &Path,
+    task_id: &str,
+    run_dir: &Path,
+    child_path: Option<&std::ffi::OsStr>,
+) -> serde_json::Value {
+    let mut cmd = Command::new(program);
+    cmd.args(["oracle", "--task", task_id]).current_dir(run_dir);
+    if let Some(p) = child_path {
+        cmd.env("PATH", p);
+    }
+    match cmd.output() {
         Ok(out) => {
             verdict_from_oracle_output(&String::from_utf8_lossy(&out.stdout), out.status.success())
         }
@@ -702,32 +719,23 @@ mod tests {
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
-    /// Run `spawn_oracle` on a bare `tdd` with a fake `tdd` on PATH that exits `code` printing
-    /// `stdout`. PATH is restored before returning.
+    /// Run `spawn_oracle` on a bare `tdd` with a fake `tdd` first on the
+    /// CHILD's PATH that exits `code` printing `stdout`. The PATH is passed to
+    /// the child only; the process-wide PATH is never touched (backlog 7c798579).
     #[cfg(unix)]
     fn check_oracle_with_fake_tdd(stdout: &str, code: i32) -> serde_json::Value {
-        let _guard = crate::env_lock::PATH_ENV_LOCK
-            .write()
-            .unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::TempDir::new().unwrap();
         let bin = tmp.path().join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         write_fake_tdd(&bin, stdout, code);
 
-        let old_path = std::env::var_os("PATH");
         let mut parts = vec![bin.clone()];
-        if let Some(p) = &old_path {
-            parts.extend(std::env::split_paths(p));
+        if let Some(p) = std::env::var_os("PATH") {
+            parts.extend(std::env::split_paths(&p));
         }
-        std::env::set_var("PATH", std::env::join_paths(parts).unwrap());
+        let child_path = std::env::join_paths(parts).unwrap();
 
-        let out = spawn_oracle(Path::new("tdd"), "t1", tmp.path());
-
-        match old_path {
-            Some(p) => std::env::set_var("PATH", p),
-            None => std::env::remove_var("PATH"),
-        }
-        out
+        spawn_oracle_with_env_path(Path::new("tdd"), "t1", tmp.path(), Some(&child_path))
     }
 
     /// Sanity: the fake `tdd` really is what gets spawned. If PATH injection
@@ -778,15 +786,12 @@ mod tests {
         );
     }
 
-    /// Run `spawn_oracle` on a bare `tdd` with a PATH that contains nothing at all (a single
-    /// empty temp dir), so `tdd` is genuinely unreachable and the spawn fails.
-    /// PATH is restored before returning. Returns the verdict plus the run dir's
-    /// guard so it outlives the call.
+    /// Run `spawn_oracle` on a bare `tdd` with a CHILD PATH that contains
+    /// nothing at all (a single empty temp dir), so `tdd` is genuinely
+    /// unreachable and the spawn fails. The PATH is passed to the child only;
+    /// the process-wide PATH is never touched (backlog 7c798579).
     #[cfg(unix)]
     fn check_oracle_with_no_tdd_on_path() -> serde_json::Value {
-        let _guard = crate::env_lock::PATH_ENV_LOCK
-            .write()
-            .unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::TempDir::new().unwrap();
         let empty_bin = tmp.path().join("empty-bin");
         std::fs::create_dir_all(&empty_bin).unwrap();
@@ -797,16 +802,12 @@ mod tests {
             "PATH dir must contain no tdd"
         );
 
-        let old_path = std::env::var_os("PATH");
-        std::env::set_var("PATH", &empty_bin);
-
-        let out = spawn_oracle(Path::new("tdd"), "t1", &run_dir);
-
-        match old_path {
-            Some(p) => std::env::set_var("PATH", p),
-            None => std::env::remove_var("PATH"),
-        }
-        out
+        spawn_oracle_with_env_path(
+            Path::new("tdd"),
+            "t1",
+            &run_dir,
+            Some(empty_bin.as_os_str()),
+        )
     }
 
     /// CASE C (the wiring proof for "no tdd installed"): the run dir is fine,
@@ -953,8 +954,9 @@ mod tests {
 
     // ---- backlog 7c798579: an unguarded spawn observes a swapped PATH ----------
     //
-    // `check_oracle_with_no_tdd_on_path` (above) points the process-global PATH at
-    // an empty dir under `PATH_ENV_LOCK`'s WRITE side. Tests that spawn a child by
+    // `check_oracle_with_no_tdd_on_path` (above) used to point the process-global
+    // PATH at an empty dir under `PATH_ENV_LOCK`'s WRITE side (it now passes that
+    // PATH to its own child only). Tests that spawn a child by
     // bare name (`sh`, `git`) WITHOUT taking the read side, e.g.
     // `record_runs_exit_code_tests::zero_exit_status_is_counted_as_emitted`
     // (`Command::new("sh")`) and `lock::tests::git` (`Command::new("git")`), are
@@ -1171,9 +1173,6 @@ mod backlog_e5174b6a {
         let src = include_str!("oracle.rs");
         let doc_claims_degrade = src.contains(CLAIM);
 
-        let _guard = crate::env_lock::PATH_ENV_LOCK
-            .write()
-            .unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::TempDir::new().unwrap();
         let bin = tmp.path().join("bin");
         std::fs::create_dir_all(&bin).unwrap();
@@ -1184,17 +1183,14 @@ mod backlog_e5174b6a {
         )
         .unwrap();
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let old_path = std::env::var_os("PATH");
-        let mut parts = vec![bin.clone()];
-        if let Some(p) = &old_path {
-            parts.extend(std::env::split_paths(p));
-        }
-        std::env::set_var("PATH", std::env::join_paths(parts).unwrap());
-        let out = super::check_oracle(true, Some("cargo test -p x"), "t1", Path::new(tmp.path()));
-        match old_path {
-            Some(p) => std::env::set_var("PATH", p),
-            None => std::env::remove_var("PATH"),
-        }
+        // The fake is handed to `check_oracle`'s own resolver seam rather than
+        // put first on the process-wide PATH: a PATH swap is visible to every
+        // concurrently spawning test (backlog 7c798579), and the plugin cache
+        // under the real `$HOME` would win over PATH anyway, so the old swap
+        // did not even guarantee this fixture was the `tdd` consulted.
+        let out = super::check_oracle_with(true, "t1", Path::new(tmp.path()), || {
+            harness_core::verdict::Determination::Known(Some(fake.clone()))
+        });
 
         assert!(
             doc_claims_degrade || out["fallback"] == serde_json::json!(false),

@@ -34,7 +34,6 @@ mod policy;
 mod pr;
 mod precedent;
 mod replan;
-mod repo_commit;
 mod review_brief;
 mod review_order;
 mod review_worthiness;
@@ -118,12 +117,6 @@ enum Command {
     Worktree {
         #[command(subcommand)]
         action: WtAction,
-    },
-    /// Mutations of the PRIMARY working tree (the shared one), serialized on the
-    /// repo-scoped primary lock.
-    Repo {
-        #[command(subcommand)]
-        action: RepoAction,
     },
     /// Run-state tracking and the completion gate.
     State {
@@ -556,33 +549,6 @@ enum EscalateAction {
         /// The chosen option (should be one of the recorded options).
         #[arg(long)]
         choice: String,
-    },
-}
-
-#[derive(Subcommand)]
-enum RepoAction {
-    /// Stage the named paths and commit them in the working tree you run it
-    /// from (cwd's toplevel; never the main tree: CLAUDE.md §8), with `lock::REPO_PRIMARY_LOCK_KEY` held (keyed on that checkout)
-    /// across the whole read-modify-write, so concurrent condukt executions
-    /// sharing that worktree's index can never interleave content in it.
-    ///
-    /// NOT required by the `/condukt` skill any more: single-worktree mode and
-    /// the small-task fast path were retired (2026-10-03, backlog 5e5cf0a9) and
-    /// every task commits in its own worktree. Kept for callers that share one
-    /// worktree's index: raw `git add ... && git commit` holds no lock there.
-    ///
-    /// Restrictive on every cannot-determine: no `--path`, a widening pathspec
-    /// (`.`, a glob, `:` magic), foreign content already staged in the shared
-    /// index, an unheld lock, or a failing `git` all refuse with a non-zero exit
-    /// and leave HEAD where it was.
-    Commit {
-        /// A file this task owns (repeatable). Explicit paths only — never `-A`,
-        /// `.` or a glob, so a peer's edits cannot ride along.
-        #[arg(long = "path")]
-        paths: Vec<String>,
-        /// Commit message.
-        #[arg(long, short = 'm')]
-        message: String,
     },
 }
 
@@ -1989,7 +1955,6 @@ fn run_user(cmd: Command) -> Result<()> {
             }
         }
         Command::Worktree { action } => run_worktree(&cfg, &cwd, action)?,
-        Command::Repo { action } => run_repo(&cfg, &cwd, action)?,
         Command::State { action } => run_state(&cfg, &cwd, action)?,
         Command::Verify { action } => match action {
             VerifyAction::Digest { file } => {
@@ -3419,20 +3384,6 @@ fn run_policy(action: PolicyAction) -> ! {
     }
 }
 
-/// Primary-working-tree mutators. `cwd` may be anywhere inside the repo; the
-/// repo toplevel is resolved so the lock is keyed per repo, exactly like the
-/// other primary-repo mutators.
-fn run_repo(cfg: &Config, cwd: &Path, action: RepoAction) -> Result<()> {
-    let repo = worktree::toplevel(cwd)?;
-    match action {
-        RepoAction::Commit { paths, message } => {
-            let sha = repo_commit::commit(cfg, &repo, &paths, &message)?;
-            println!("{}", serde_json::json!({ "commit": sha, "paths": paths }));
-        }
-    }
-    Ok(())
-}
-
 fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
     let repo = worktree::toplevel(cwd)?;
     match action {
@@ -3570,18 +3521,14 @@ fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
                 );
                 return Ok(());
             }
-            // The SAME repo-scoped lock the `reconcile` arm takes, for the same
-            // reason it takes it: the report must not be computed while a peer
-            // is adding or removing worktrees underneath it. A torn read here
-            // is not a harmless stale print — it is either offering a worktree
-            // that has just been removed, or failing to mention one that has
-            // just appeared, and both are answers about liveness that were
-            // never actually observed. This command writes nothing, so the lock
-            // is taken purely for a coherent read; refusing when it is
-            // contended (`?`) is right for a print-only discovery command —
-            // "run it again when the repo is quiet" costs nothing and leaves
-            // nothing half-done.
-            let _repo_lock = lock::acquire_repo_primary(cfg, &repo)?;
+            // Deliberately NOT under the repo-primary lock (user ruling
+            // 2026-10-13): this command writes nothing and has no caller that
+            // acts on its output, so waiting out (and then refusing on) a peer's
+            // merge/prune bought nothing. A report computed while a peer adds or
+            // removes a worktree may be momentarily stale; it is a discovery
+            // print, re-run it to refresh. `reconcile` still takes the lock
+            // because `--preserve` writes refs. Pinned by
+            // tests/resume_candidates_no_repo_lock.rs.
             // `preserve: false` — preservation writes refs into the repo, which
             // a print-only command must never do.
             let report = wt_reconcile::reconcile(cfg, cwd, &repo, false)?;

@@ -270,3 +270,83 @@ mod backlog_2ae3fa29 {
         }
     }
 }
+
+/// Independent RED regression tests for backlog 2ae3fa29 (mirror of parallelguard
+/// ca_parallelguard_01/02). Not ignored: they fail while the O_EXCL + mtime-steal
+/// + unlink-by-path scheme is in use.
+#[cfg(test)]
+mod ca_budgetguard_lock {
+    use super::*;
+    use std::time::SystemTime;
+
+    fn age_lock(path: &Path) {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(3600))
+            .unwrap();
+    }
+
+    /// A is a live holder whose lock file merely looks stale (mtime > 30s). B
+    /// steals it. When A drops, it must not unlink B's lock; C must stay out.
+    #[test]
+    fn ca_budgetguard_lock_01() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = LedgerLock::acquire(dir.path());
+        assert!(a.held(), "control: A acquires an uncontended lock");
+        age_lock(&LedgerLock::lock_path(dir.path()));
+        let b = LedgerLock::acquire_with_timeout(dir.path(), Duration::from_millis(200));
+        assert!(
+            !(a.held() && b.held()),
+            "A and B both hold the ledger lock at once (B stole a live holder's stale-looking lock)"
+        );
+        drop(a);
+        let c = LedgerLock::acquire_with_timeout(dir.path(), Duration::from_millis(100));
+        assert!(
+            !(b.held() && c.held()),
+            "C acquired the lock while B still holds it: A's Drop unlinked B's lock by path"
+        );
+        drop(b);
+    }
+
+    /// 24 threads race for an abandoned lock; count concurrent holders inside
+    /// the critical section.
+    #[test]
+    fn ca_budgetguard_lock_02() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Barrier};
+        const THREADS: usize = 24;
+        for iteration in 0..40 {
+            let dir = tempfile::tempdir().unwrap();
+            let lock_path = LedgerLock::lock_path(dir.path());
+            std::fs::write(&lock_path, b"").unwrap();
+            age_lock(&lock_path);
+            let concurrent = Arc::new(AtomicUsize::new(0));
+            let max_concurrent = Arc::new(AtomicUsize::new(0));
+            let barrier = Arc::new(Barrier::new(THREADS));
+            std::thread::scope(|s| {
+                for _ in 0..THREADS {
+                    let (c, m, b) = (concurrent.clone(), max_concurrent.clone(), barrier.clone());
+                    let d = dir.path().to_path_buf();
+                    s.spawn(move || {
+                        b.wait();
+                        let g = LedgerLock::acquire_with_timeout(&d, Duration::from_secs(5));
+                        if g.held() {
+                            let now = c.fetch_add(1, Ordering::SeqCst) + 1;
+                            m.fetch_max(now, Ordering::SeqCst);
+                            std::thread::sleep(Duration::from_millis(20));
+                            c.fetch_sub(1, Ordering::SeqCst);
+                        }
+                        drop(g);
+                    });
+                }
+            });
+            let observed = max_concurrent.load(Ordering::SeqCst);
+            assert!(
+                observed <= 1,
+                "ca_budgetguard_lock_02 iteration {iteration}: {observed} holders inside the critical section at once"
+            );
+        }
+    }
+}

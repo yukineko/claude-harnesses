@@ -200,7 +200,13 @@ fn now_unix_nanos() -> u128 {
 /// [`harness_core::boundary::run`] keeps the spawn/signal failure as
 /// `Undetermined`; `map` carries the exit code (`0` == alive) only when the
 /// process actually ran.
-fn pid_alive(pid: u32) -> Determination<bool> {
+///
+/// `child_path` is an optional `PATH` for the spawned `kill` CHILD only.
+/// `None` (production, via [`RunLock::acquire_at`]) inherits this process's environment;
+/// `Some(p)` sets `PATH=p` on the child, which on Unix is also what the bare
+/// `kill` is resolved against. Exists so a test can interpose a fake `kill`
+/// without mutating the process-wide PATH (backlog 7c798579).
+fn pid_alive_with_env_path(pid: u32, child_path: Option<&std::ffi::OsStr>) -> Determination<bool> {
     #[cfg(target_os = "linux")]
     {
         if Path::new(&format!("/proc/{pid}")).exists() {
@@ -209,6 +215,9 @@ fn pid_alive(pid: u32) -> Determination<bool> {
     }
     let mut cmd = std::process::Command::new("kill");
     cmd.args(["-0", &pid.to_string()]);
+    if let Some(p) = child_path {
+        cmd.env("PATH", p);
+    }
     harness_core::boundary::run(&mut cmd).map(|out| out.code() == 0)
 }
 
@@ -367,6 +376,18 @@ impl RunLock {
     /// reach a caller through a fallible wrapper that turns it into `None`/`Err`
     /// — the tests drive it directly against a self-contained temp path.
     fn acquire_at(path: PathBuf, deadline: Duration) -> Self {
+        Self::acquire_at_with_env_path(path, deadline, None)
+    }
+
+    /// [`RunLock::acquire_at`] with an optional `PATH` passed to the liveness
+    /// probe's `kill` child only (see [`pid_alive_with_env_path`]). `None` is
+    /// the production behaviour; the seam lets a test count `kill` spawns
+    /// without mutating the process-wide PATH (backlog 7c798579).
+    fn acquire_at_with_env_path(
+        path: PathBuf,
+        deadline: Duration,
+        kill_path: Option<&std::ffi::OsStr>,
+    ) -> Self {
         if let Some(parent) = path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 eprintln!(
@@ -442,7 +463,10 @@ impl RunLock {
                         // holder's lock — the exact fail-open this lock exists to
                         // close.
                         Some(existing)
-                            if matches!(pid_alive(existing.pid), Determination::Known(false)) =>
+                            if matches!(
+                                pid_alive_with_env_path(existing.pid, kill_path),
+                                Determination::Known(false)
+                            ) =>
                         {
                             let _ = std::fs::remove_file(&path);
                             continue;
@@ -990,7 +1014,7 @@ mod tests {
 #[cfg(test)]
 mod backlog_e9262d91 {
     //! backlog e9262d91: while waiting on a held lock, every 10ms poll calls
-    //! `pid_alive`, which (off Linux) spawns `kill -0 <pid>` — ~100 fork+exec
+    //! `pid_alive_with_env_path`, which (off Linux) spawns `kill -0 <pid>` — ~100 fork+exec
     //! per second per waiter, up to ~1000 per acquisition, self-amplifying
     //! under load. Both fixes the ticket proposes (short-circuit a holder pid
     //! equal to our own; or check liveness only every few polls) bound the
@@ -1031,20 +1055,18 @@ mod backlog_e9262d91 {
         };
         std::fs::write(&lock, serde_json::to_string(&info).unwrap()).unwrap();
 
-        let _guard = crate::env_lock::PATH_ENV_LOCK
-            .write()
-            .unwrap_or_else(|e| e.into_inner());
-        let old_path = std::env::var_os("PATH");
+        // The counting `kill` goes first on the CHILD's PATH only; the
+        // process-wide PATH is never mutated (backlog 7c798579).
         let mut parts = vec![bin.clone()];
-        if let Some(p) = &old_path {
-            parts.extend(std::env::split_paths(p));
+        if let Some(p) = std::env::var_os("PATH") {
+            parts.extend(std::env::split_paths(&p));
         }
-        std::env::set_var("PATH", std::env::join_paths(parts).unwrap());
-        let got = RunLock::acquire_at(lock.clone(), Duration::from_secs(1));
-        match old_path {
-            Some(p) => std::env::set_var("PATH", p),
-            None => std::env::remove_var("PATH"),
-        }
+        let kill_path = std::env::join_paths(parts).unwrap();
+        let got = RunLock::acquire_at_with_env_path(
+            lock.clone(),
+            Duration::from_secs(1),
+            Some(&kill_path),
+        );
 
         assert!(
             !got.held(),

@@ -248,10 +248,12 @@ fn check_edit_in_env(
             None => cmd.env_remove(k),
         };
     }
-    // `cargo` is resolved through PATH, which some tests in this binary mutate
-    // under `PATH_ENV_LOCK`'s write side; a spawn relying on PATH takes the read
-    // side, like every git spawn (`worktree::run_git_bounded_with`). Never
-    // contended in production (nothing takes the write side there).
+    // `cargo` is resolved through PATH. Tests in this binary used to mutate the
+    // process PATH under `PATH_ENV_LOCK`'s write side; since backlog 7c798579 no
+    // code takes the write side (tests pass PATH to their own child instead, and
+    // `oracle::tests::condukt_never_mutates_process_path` pins that). The read
+    // guard is kept as an always-uncontended no-op, like every git spawn's
+    // (`worktree::run_git_bounded_with`); see `env_lock`.
     let _path_guard = crate::env_lock::PATH_ENV_LOCK
         .read()
         .unwrap_or_else(|e| e.into_inner());

@@ -1,5 +1,19 @@
-//! Shared lock for tests that mutate — or depend on — the process-global
-//! `PATH` environment variable.
+//! Shared lock for the process-global `PATH` environment variable.
+//!
+//! **Current state (backlog 7c798579): nothing takes the write side.** No
+//! condukt code, tests included, mutates the process `PATH` any more — a test
+//! that needs a custom PATH passes it to its own child via `Command::env`
+//! through a seam (`oracle::spawn_oracle_with_env_path`,
+//! `lock::RunLock::acquire_at_with_env_path`,
+//! `calibrated_confidence_via_with_env_path` in main.rs), and
+//! `oracle::tests::condukt_never_mutates_process_path` fails on any new
+//! `set_var("PATH"` / `remove_var("PATH"` in this crate. The reason: most
+//! spawning tests never took the read side, so a write-side swap still raced
+//! them (ENOENT on a bare-name spawn, ~1/16 runs under concurrent load). The
+//! remaining read guards (`worktree::run_git_bounded_with`, editgate's
+//! `cargo check`) are therefore always uncontended; they are kept, not
+//! removed, so this static keeps its users. The history below explains why
+//! the lock was introduced.
 //!
 //! `cargo test` runs test functions on threads within one process, and env
 //! vars are process-global — two tests touching `PATH` concurrently race, and

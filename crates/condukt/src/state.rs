@@ -570,8 +570,7 @@ pub fn resume_run(cfg: &Config, cwd: &Path, run_id: &str) -> Result<()> {
 /// `<run_id>.json` run-state files: `<run_id>.decomposition.json` and
 /// `<run_id>.checkpoints.json` (per-run), plus the bare project-wide registries
 /// `claims.json` (claim.rs), `precedents.json` (precedent.rs), `escalations.json`
-/// (escalate.rs), and `execution-state.json` (claim.rs, not yet wired but same
-/// directory). None of these deserialize as `RunState`; a directory scan that
+/// (escalate.rs), and `execution-state.json` (claim.rs, written by `state execution-state`). None of these deserialize as `RunState`; a directory scan that
 /// tries anyway misreports them as corrupt run state (backlog 1af91627).
 pub(crate) fn is_run_state_sidecar(fname: &str) -> bool {
     fname.ends_with(".decomposition.json")

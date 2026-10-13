@@ -139,7 +139,6 @@ fn is_claimed_distinguishes_unreadable_registry_from_not_claimed() {
 /// Vec, so `state execution-state` joins against "no pending tasks" and exits
 /// 0 with no hint that the queue could not be read.
 #[test]
-#[ignore = "backlog 8a4fe104: open defect, remove ignore when fixed"]
 fn execution_state_reports_an_unreadable_backlog() {
     let fx = Fx::new("8a4fe104");
     let claim = fx.run(

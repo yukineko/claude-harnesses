@@ -41,17 +41,6 @@ exists cannot be re-snapshotted and blocks as undetermined until the ledger is
 cleared or pruned. A payload without a session_id key has no ledger
 (deny_ledger.py, RESIDUALS).
 
-Attribution (233f819c, scripts/edit_ledger.py). Dirt on main is not always this
-session's: another concurrent session may own it (the maintree guards record
-every main-tree write they ALLOW into a per-session edit ledger). A dirty path
-(`git status --porcelain`) is EXCLUDED from blocking only when the ledger is
-readable, the path has a recorded owner set, that set is non-empty and does NOT
-contain the stopping session (payload session_id). Everything else blocks and
-the block message names those paths: an unrecorded path, a path this session
-wrote (alone or with others), an unreadable or corrupt ledger, an unusable
-session_id, a missing edit_ledger module, or owners() raising. Attribution that
-cannot be determined blocks; it is never read as "someone else's".
-
 Bounded allow: `stop_hook_active` (a re-entrant stop after this hook already
 fired) resolves to allow, so a genuinely stuck state cannot trap the turn — the
 same bounded-allow the repo's other Stop gates use. It applies to the ledger
@@ -75,12 +64,6 @@ try:
 except Exception as _e:  # noqa: BLE001 — resolves to a block in main()
     deny_ledger = None
     _LEDGER_IMPORT_ERROR = f"{type(_e).__name__}: {_e}"
-
-
-try:
-    import edit_ledger  # noqa: E402
-except Exception:  # noqa: BLE001 — attribution unavailable => nothing excluded
-    edit_ledger = None
 
 
 def _git(cwd: str, *args: str):
@@ -131,9 +114,6 @@ main. Move the changes into a worktree and commit them there:
     # commit in the worktree, then merge onto main
 
 Then it is safe to stop.
-
-Dirty paths this block is on (from git status --porcelain):
-{paths}
 """
 
 UNDETERMINED = """Do not stop yet: could not determine whether this turn is ending dirty on main.
@@ -192,52 +172,9 @@ def main() -> int:
         sys.stderr.write(UNDETERMINED.format(what="git status --porcelain"))
         return 2
     if status.stdout.strip():
-        blocking = _blocking_paths(status.stdout, payload, cwd)
-        if blocking:
-            sys.stderr.write(BLOCK.format(
-                paths="\n".join(f"  {p}" for p in blocking)))
-            return 2
+        sys.stderr.write(BLOCK)
+        return 2
     return 0
-
-
-def _porcelain_paths(out: str) -> list[str]:
-    """Paths from `git status --porcelain` (rename "a -> b" yields both)."""
-    paths: list[str] = []
-    for ln in out.splitlines():
-        if len(ln) < 4:
-            continue
-        body = ln[3:]
-        parts = body.split(" -> ") if ("R" in ln[:2] or "C" in ln[:2]) else [body]
-        for p in parts:
-            p = p.strip()
-            if len(p) >= 2 and p[0] == '"' and p[-1] == '"':
-                p = p[1:-1]
-            paths.append(p)
-    return paths
-
-
-def _blocking_paths(out: str, payload, cwd: str) -> list[str]:
-    """Dirty paths that still block. Fails closed to ALL of them."""
-    paths = _porcelain_paths(out)
-    if not paths:
-        return [ln for ln in out.splitlines() if ln.strip()]
-    try:
-        if edit_ledger is None or not isinstance(payload, dict):
-            return paths
-        sid = payload.get("session_id")
-        if not isinstance(sid, str) or not sid:
-            return paths
-        st, top = _probe(cwd, "rev-parse", "--show-toplevel")
-        if st != OK or top is None:
-            return paths
-        res = edit_ledger.owners(top)
-        if not isinstance(res, edit_ledger.Known):
-            return paths
-        table = res.value
-        return [p for p in paths
-                if not (table.get(p) and sid not in table[p])]
-    except Exception:  # noqa: BLE001 — a raising probe blocks
-        return paths
 
 
 if __name__ == "__main__":

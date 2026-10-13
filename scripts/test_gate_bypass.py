@@ -40,6 +40,7 @@ corresponding defect is fixed; the docstrings say so individually.
 
 from __future__ import annotations
 
+import re
 import json
 import os
 import shutil
@@ -1200,34 +1201,34 @@ class KnownDefects(GateTestCase):
                     proc.returncode, 2, "%r must be refused" % command
                 )
 
-    def test_DEFECT_documented_status_flag_does_not_exist(self):
-        """DEFECT (severity: low, but it is the docstring-lies class).
-        `.githooks/post-commit` tells the reader to run
+    def test_FIXED_documented_invocations_exist(self):
+        """FIXED (backlog 25692f6e, 2026-10-13; was test_DEFECT_documented_
+        status_flag_does_not_exist). `.githooks/post-commit` used to tell the
+        reader to run `python3 scripts/gate-bypass.py --status`, an option
+        argparse does not have: it exited 2, the same code as UNDETERMINED, so a
+        reader following the printed instruction could not tell a usage error
+        from a real undetermined ledger. The CLI was right; the hook's prose was
+        corrected to cite the invocations that exist.
 
-            python3 scripts/gate-bypass.py --status
-
-        and `scripts/gate-bypass.py`'s own header says "The teeth are in
-        `scripts/gate-bypass.py --status`".  argparse has no such option; the
-        command exits 2 with a usage error.  A reader who follows the printed
-        instruction sees UNDETERMINED-coloured failure and cannot tell it apart
-        from a real one, because 2 is also the undetermined code.
+        Pinned: the hook no longer cites `--status`, and every `gate-bypass.py`
+        invocation it does cite runs to a real verdict (exit 0 on an empty
+        ledger), never to a usage error.
         """
-        h = self.harness()
-        proc = h.gate_bypass("--status")
-        self.assertEqual(proc.returncode, 2)
-        self.assertIn("unrecognized arguments: --status", proc.stderr)
-        self.assertNotIn(
-            "no ungated commit outstanding",
-            proc.stdout,
-            "DEFECT PINNED: the documented invocation does not work",
-        )
-
         hook_text = (_HOOKS_DIR / "post-commit").read_text()
-        self.assertIn(
-            "gate-bypass.py --status",
-            hook_text,
-            "the hook still prints an invocation that does not exist",
-        )
+        self.assertNotIn("gate-bypass.py --status", hook_text)
+
+        cited = re.findall(r"gate-bypass\.py((?:\s+--[a-z][a-z-]*)*)", hook_text)
+        self.assertTrue(cited, "extractor found no gate-bypass.py citation in post-commit")
+        h = self.harness()
+        for flags in sorted(set(cited)):
+            argv = flags.split()
+            with self.subTest(argv=argv):
+                proc = h.gate_bypass(*argv)
+                self.assertEqual(
+                    proc.returncode, 0,
+                    "cited invocation %r must reach a verdict: %s" % (argv, proc.stderr),
+                )
+                self.assertNotIn("unrecognized arguments", proc.stderr)
 
     def test_FIXED_a_ledger_line_with_no_commit_id_is_undetermined(self):
         """DEFECT (severity: low, but it is a dead fail-closed branch).

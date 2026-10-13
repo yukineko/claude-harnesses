@@ -309,9 +309,11 @@ fn undetermined_verdict(cfg: &Config, why: &str) -> Verdict {
 /// * `Known(None)` — there is nothing to price (empty/unreadable transcript and
 ///   no usable record). Same fail-soft data-error path as before: the caller
 ///   allows the stop, because no spend was observed *and none was missed*.
-/// * `Undetermined(why)` — a spend source could not be read, so any number here
-///   would be an under-count (see [`TranscriptCostEstimate::complete_cost`]).
-///   The caller must not price this as `0`.
+/// * `Undetermined(why)` — a spend source could not be read, or a model with
+///   usage has no known rate (backlog ff98fed0: an unrecognized model id is
+///   not $0), so any number here would be an under-count (see
+///   [`TranscriptCostEstimate::complete_cost`], [`pricing::rate_for`]). The
+///   caller must not price this as `0`.
 ///
 /// `gauge_state_dir` is a parameter (rather than calling
 /// `session::default_state_dir()` directly) so tests can point it at a
@@ -325,10 +327,9 @@ fn session_cost(
 ) -> Determination<Option<f64>> {
     if let Some(rec) = session::load_one(gauge_state_dir, session_id) {
         if !rec.models.is_empty() && record_is_fresh(&rec, transcript_path) {
-            return Determination::Known(Some(pricing::session_cost(
-                rec.models.iter(),
-                &cfg.price_overrides,
-            )));
+            // An unpriceable model in the record is `Undetermined` (backlog
+            // ff98fed0) and forwarded as such — never read as $0.
+            return pricing::session_cost(rec.models.iter(), &cfg.price_overrides).map(Some);
         }
     }
     match estimate_transcript_cost(transcript_path, &cfg.price_overrides) {
@@ -640,7 +641,9 @@ mod tests {
         .expect("fresh record path");
         let via_parse = estimate_transcript_cost(tp.to_str().unwrap(), &cfg.price_overrides)
             .expect("transcript parse")
-            .cost_usd;
+            .complete_cost()
+            .require()
+            .expect("opus transcript is priced");
         assert!(
             (via_record - via_parse).abs() < 1e-9,
             "record={via_record} parse={via_parse}"
@@ -1022,7 +1025,10 @@ mod tests {
         let ledger_dir = tempfile::tempdir().unwrap();
         // Another session holds the kernel lock for the whole evaluation.
         let _other_session = crate::lock::LedgerLock::acquire(ledger_dir.path());
-        assert!(_other_session.held(), "fixture: the other session holds the lock");
+        assert!(
+            _other_session.held(),
+            "fixture: the other session holds the lock"
+        );
         let (cfg, tp, store) = lock_fixture(
             "lock-nolimit",
             Config {
@@ -1051,7 +1057,10 @@ mod tests {
         let ledger_dir = tempfile::tempdir().unwrap();
         // Another session holds the kernel lock for the whole evaluation.
         let _other_session = crate::lock::LedgerLock::acquire(ledger_dir.path());
-        assert!(_other_session.held(), "fixture: the other session holds the lock");
+        assert!(
+            _other_session.held(),
+            "fixture: the other session holds the lock"
+        );
         let (cfg, tp, store) = lock_fixture(
             "lock-sess",
             Config {
@@ -1178,6 +1187,87 @@ mod tests {
         )
         .expect("result");
         assert!(matches!(r.verdict, Verdict::Allow));
+        let _ = std::fs::remove_file(&tp);
+    }
+
+    // --- backlog ff98fed0 (consumer erasure): the gauge-record cost source ---
+
+    /// backlog ff98fed0 (consumer erasure). A FRESH gauge `SessionRecord` whose
+    /// only model (`claude-newfamily-1`) has usage but no known rate must make
+    /// `session_cost` Undetermined, and with an armed $1 session block the gate
+    /// must block as `cost-undetermined` — the record path must not erase the
+    /// Undetermined into `Known(Some(0.0))`. The transcript is the $30 opus
+    /// fixture, so a fall-through to the transcript parse would also be caught
+    /// (it would yield a Known $30 / `session-budget-exceeded`).
+    ///
+    /// What this does NOT prove: it does not exercise the transcript-parse path
+    /// (covered by tests/backlog_ff98fed0.rs), a record mixing priced and
+    /// unpriced models, the daily ledger, or the warn-only branch of
+    /// `undetermined_verdict`.
+    #[cfg(unix)]
+    #[test]
+    fn fresh_gauge_record_with_unpriced_model_is_undetermined_and_blocks() {
+        let tp = write_transcript("ff98fed0-record-unpriced");
+        let store = tempfile::tempdir().unwrap();
+        let ledger_dir = tempfile::tempdir().unwrap();
+        let future = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        let mut rec = sample_record(&future);
+        rec.session_id = "ff98fed0-record-unpriced".to_string();
+        let mut models = BTreeMap::new();
+        models.insert(
+            "claude-newfamily-1".to_string(),
+            ModelUsage {
+                input: 1_000_000,
+                output: 0,
+                cache_write_5m: 0,
+                cache_write_1h: 0,
+                cache_read: 0,
+            },
+        );
+        rec.models = models;
+        session::upsert(store.path(), &rec);
+        assert!(
+            record_is_fresh(&rec, tp.to_str().unwrap()),
+            "apparatus: the record must be fresh so the record path is the one taken"
+        );
+
+        let cfg = Config {
+            session_block_usd: 1.0,
+            state_dir: ledger_dir.path().to_path_buf(),
+            ..Config::default()
+        };
+        let got = session_cost(
+            &cfg,
+            store.path(),
+            "ff98fed0-record-unpriced",
+            tp.to_str().unwrap(),
+        );
+        assert!(
+            matches!(got, Determination::Undetermined(_)),
+            "backlog ff98fed0: fresh gauge record with unpriced model must be Undetermined, got {got:?}"
+        );
+
+        let r = evaluate_with_store(
+            &cfg,
+            "ff98fed0-record-unpriced",
+            tp.to_str().unwrap(),
+            "2026-07-31",
+            store.path(),
+        )
+        .expect("result");
+        assert!(
+            matches!(r.verdict, Verdict::Block(_, "cost-undetermined")),
+            "backlog ff98fed0: expected Block(cost-undetermined), got {}",
+            match &r.verdict {
+                Verdict::Allow => "Allow".to_string(),
+                Verdict::Warn(m) => format!("Warn({m})"),
+                Verdict::Block(m, k) => format!("Block({m}, {k})"),
+            }
+        );
+        assert_eq!(
+            r.session_usd, None,
+            "an undetermined cost must not be a number"
+        );
         let _ = std::fs::remove_file(&tp);
     }
 }

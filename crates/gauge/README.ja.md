@@ -82,7 +82,7 @@ gauge config show                  # 現在登録されている窓設定を表�
 
 ### 価格
 
-組み込みレート（USD / 100万トークン, input/output）: **Opus** 5/25 ・ **Sonnet** 3/15 ・ **Haiku** 1/5 ・ **Fable/Mythos** 10/50。キャッシュ書き込みは input の 1.25倍（5分 TTL）または 2倍（1時間 TTL）、キャッシュ読み込みは input の 0.1倍で課金される。認識できないモデルの寄与は 0。`gauge.toml` でモデルを上書き・追加できる。
+組み込みレート（USD / 100万トークン, input/output）: **Opus** 5/25 ・ **Sonnet** 3/15 ・ **Haiku** 1/5 ・ **Fable/Mythos** 10/50。キャッシュ書き込みは input の 1.25倍（5分 TTL）または 2倍（1時間 TTL）、キャッシュ読み込みは input の 0.1倍で課金される。認識できないモデルの使用量の費用は 0 ではなく **不明**（`unknown`、JSON では `cost_usd: null` と `cost_undetermined`）として扱い、budgetguard もそのセッションを未計測とみなす。本当に無料のモデルは `input = 0.0` / `output = 0.0` の明示的な上書きで宣言する。`gauge.toml` でモデルを上書き・追加できる。
 
 ```toml
 [[pricing]]
@@ -94,6 +94,8 @@ output = 25.0
 ### 設定
 
 プロジェクトの `./gauge.toml` > `~/.gauge/config.toml` > 組み込みデフォルトの順（最初に存在したファイルが勝つ）。`gauge.example.toml` を参照。ストアの既定値は `~/.gauge/store`。
+
+設定ファイルが存在するのに読めない・パースできない（`[[pricng]]` や `enabeld` のような typo を含む未知キーはすべてパース失敗扱い）、または `[[pricing]]` 行に `pattern`/`input`/`output` が欠けている・単価が有限の非負数でない場合、既定値へ黙って落ちない。読み取りコマンド（`report` / `session` / `subagents` / `status`）はファイル名つきの理由を出して exit 1 し、`record` hook は何も記録せず stderr に理由を出す。
 
 ## ビルド
 

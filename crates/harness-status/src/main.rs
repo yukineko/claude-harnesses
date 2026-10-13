@@ -152,11 +152,11 @@ fn main() {
             } else {
                 for sess in &s {
                     println!(
-                        "{} | {} | {} turns | ${:.4}",
+                        "{} | {} | {} turns | {}",
                         sess.session_id.get(..8).unwrap_or(&sess.session_id),
                         sess.project,
                         sess.turns,
-                        sess.cost_usd
+                        sessions::cost_cell(sess.cost_usd)
                     );
                 }
             }

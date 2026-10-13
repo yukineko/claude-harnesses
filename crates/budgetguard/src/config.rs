@@ -161,15 +161,38 @@ impl Config {
         if let Some(v) = fc.daily.block_usd {
             cfg.daily_block_usd = v;
         }
-        cfg.price_overrides = fc
-            .price
-            .into_iter()
-            .map(|p| PriceOverride {
+        // A [[price]] row that cannot be applied as written makes the whole
+        // config undetermined, like a parse error: an empty pattern matches
+        // EVERY model (so `pattern = "" input = 0.0` would price all spend at
+        // $0), and a NaN / infinite / negative rate yields a cost no limit can
+        // be compared against (backlog 00880b3d).
+        let mut overrides = Vec::with_capacity(fc.price.len());
+        for (i, p) in fc.price.into_iter().enumerate() {
+            let n = i + 1;
+            if p.pattern.trim().is_empty() {
+                return Determination::undetermined(format!(
+                    "budgetguard config {}: [[price]] row {n} has an empty `pattern`, which \
+                     would match every model",
+                    path.display()
+                ));
+            }
+            if !(p.input.is_finite() && p.input >= 0.0 && p.output.is_finite() && p.output >= 0.0) {
+                return Determination::undetermined(format!(
+                    "budgetguard config {}: [[price]] row {n} (pattern {:?}) has a rate that \
+                     is not a finite non-negative number (input = {}, output = {})",
+                    path.display(),
+                    p.pattern,
+                    p.input,
+                    p.output
+                ));
+            }
+            overrides.push(PriceOverride {
                 pattern: p.pattern,
                 input: p.input,
                 output: p.output,
-            })
-            .collect();
+            });
+        }
+        cfg.price_overrides = overrides;
         // Carried through verbatim, NOT sanitized here: `cache::assess` clamps
         // at the point of use so that no caller can reach the comparison with an
         // unvalidated threshold. Sanitizing here as well would put the rule in

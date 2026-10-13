@@ -28,8 +28,11 @@ fn backlog_873a2621_two_hour_old_transcript_is_not_a_live_peer() {
 }
 
 // --- ff98fed0: unknown model id priced at $0 ---
+// Fixed: `cost` now returns `Determination<f64>`. The original assertion was
+// `c > 0.0` on a bare f64; the fix's contract is stronger than "some positive
+// number" (an unknown rate is not invented either), so it asserts the cost is
+// not CLAIMED known at all.
 #[test]
-#[ignore = "backlog ff98fed0: open defect, remove ignore when fixed"]
 fn backlog_ff98fed0_unknown_model_is_not_priced_free() {
     let u = harness_core::usage::ModelUsage {
         input: 1_000_000,
@@ -37,8 +40,8 @@ fn backlog_ff98fed0_unknown_model_is_not_priced_free() {
     };
     let c = harness_core::pricing::cost("claude-newfamily-1", &u, &[]);
     assert!(
-        c > 0.0,
-        "unknown model priced at {c} USD: budget gate silently disabled"
+        matches!(c, harness_core::verdict::Determination::Undetermined(_)),
+        "unknown model priced as {c:?}: budget gate silently disabled"
     );
 }
 

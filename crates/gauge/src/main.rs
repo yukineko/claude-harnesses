@@ -184,6 +184,19 @@ fn exit_on_err(r: anyhow::Result<()>) {
     }
 }
 
+/// The effective config for a read command, or refuse: a config file that
+/// exists but cannot be applied must not yield numbers computed from defaults
+/// (backlog 00880b3d). Prints the reason (naming the file) and exits 1.
+fn config_or_exit(root: &Path) -> Config {
+    match Config::load_checked(root) {
+        Determination::Known(cfg) => cfg,
+        Determination::Undetermined(why) => {
+            eprintln!("gauge: config unusable, refusing to report from defaults: {why}");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn record_hook() {
     if Config::disabled_env() {
         return;
@@ -193,7 +206,17 @@ fn record_hook() {
         return;
     };
     let root = input.cwd_or_current();
-    let cfg = Config::load(&root);
+    let cfg = match Config::load_checked(&root) {
+        Determination::Known(cfg) => cfg,
+        Determination::Undetermined(why) => {
+            // Which state_dir / enabled / track_tools the operator meant is
+            // unknown, so writing a record anywhere would be a guess. Record
+            // nothing and say why (budgetguard then prices the transcript
+            // itself; the transcript is not lost).
+            eprintln!("gauge: not recording session {}: {why}", input.session_id);
+            return;
+        }
+    };
     if !cfg.enabled {
         return;
     }
@@ -235,7 +258,7 @@ fn record_hook() {
 
 fn report_cmd(project: Option<String>, since: Option<String>) {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
-    let cfg = Config::load(&root);
+    let cfg = config_or_exit(&root);
     let mut records = known_records(store::load_all(&cfg.state_dir));
     if let Some(p) = project.as_deref() {
         let needle = p.to_lowercase();
@@ -249,7 +272,7 @@ fn report_cmd(project: Option<String>, since: Option<String>) {
 
 fn session_cmd(json: bool, session_id: Option<&str>) {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
-    let cfg = Config::load(&root);
+    let cfg = config_or_exit(&root);
 
     let rec = if let Some(id) = session_id {
         store::load_one(cfg.state_dir.as_path(), id)
@@ -269,24 +292,29 @@ fn session_cmd(json: bool, session_id: Option<&str>) {
     };
 
     if json {
-        let cost_usd = pricing::session_cost(rec.models.iter(), &cfg.pricing);
+        let (cost_usd, cost_why) =
+            cost_json(pricing::session_cost(rec.models.iter(), &cfg.pricing));
         let agent_costs: std::collections::BTreeMap<String, serde_json::Value> = rec
             .agents
             .iter()
             .map(|(name, au)| {
-                let c = pricing::session_cost(au.models.iter(), &cfg.pricing);
-                (
-                    name.clone(),
-                    serde_json::json!({"cost_usd": c, "turns": au.turns}),
-                )
+                let (c, why) = cost_json(pricing::session_cost(au.models.iter(), &cfg.pricing));
+                let mut v = serde_json::json!({"cost_usd": c, "turns": au.turns});
+                if let (Some(obj), Some(why)) = (v.as_object_mut(), why) {
+                    obj.insert("cost_undetermined".into(), why);
+                }
+                (name.clone(), v)
             })
             .collect();
-        let out = serde_json::json!({
+        let mut out = serde_json::json!({
             "session_id": rec.session_id,
             "cost_usd": cost_usd,
             "models": rec.models,
             "agents": agent_costs,
         });
+        if let (Some(obj), Some(why)) = (out.as_object_mut(), cost_why) {
+            obj.insert("cost_undetermined".into(), why);
+        }
         println!(
             "{}",
             serde_json::to_string(&out).unwrap_or_else(|_| "{}".to_string())
@@ -294,14 +322,14 @@ fn session_cmd(json: bool, session_id: Option<&str>) {
         return;
     }
 
-    let cost = pricing::session_cost(rec.models.iter(), &cfg.pricing);
+    let cost = report::CostSum::from(pricing::session_cost(rec.models.iter(), &cfg.pricing));
 
     println!("session  {}", rec.session_id);
     println!("project  {} ({})", rec.project, rec.cwd);
     println!("turns    {}", rec.turns);
     println!(
         "cost     {}  ·  tokens {} ({})",
-        report::money(cost),
+        report::money_d(cost),
         report::tokens_short(rec.total_tokens()),
         report::commas(rec.total_tokens()),
     );
@@ -314,7 +342,7 @@ fn session_cmd(json: bool, session_id: Option<&str>) {
         println!(
             "  {:<24} {:>9}  in {} / out {} / cache r {} w {} ({} hit)",
             m,
-            report::money(pricing::cost(m, u, &cfg.pricing)),
+            report::money_d(pricing::cost(m, u, &cfg.pricing).into()),
             report::tokens_short(u.input),
             report::tokens_short(u.output),
             report::tokens_short(u.cache_read),
@@ -332,7 +360,13 @@ fn session_cmd(json: bool, session_id: Option<&str>) {
             println!(
                 "  {:<12} {:>9}  {:>8}  {} turns",
                 name,
-                report::money(costs.get(name).copied().unwrap_or(0.0)),
+                // A bucket missing from `costs` was not priced: `unknown`,
+                // not `$0`.
+                costs
+                    .get(name)
+                    .cloned()
+                    .map(|d| report::money_d(d.into()))
+                    .unwrap_or_else(|| "unknown".to_string()),
                 report::tokens_short(a.total_tokens()),
                 a.turns,
             );
@@ -467,10 +501,24 @@ fn span_secs(first: Option<&str>, last: Option<&str>) -> Option<i64> {
 /// the current time. Rendering an unmeasured activity time as a number would
 /// make a long-dead sub-agent read as freshly active to any caller that
 /// compares it against the clock.
-fn subagent_json(s: &usage::SubAgentUsage, cost_usd: f64) -> serde_json::Value {
+/// `cost_usd` as JSON: the number when determined, else `null` plus the reason
+/// (for a `cost_undetermined` field). Never `0.0` for an unpriceable model
+/// (backlog ff98fed0) — a consumer reading `null` sees "not measured".
+fn cost_json(d: Determination<f64>) -> (serde_json::Value, Option<serde_json::Value>) {
+    match d {
+        Determination::Known(c) => (serde_json::json!(c), None),
+        Determination::Undetermined(why) => (
+            serde_json::Value::Null,
+            Some(serde_json::json!(why.as_str())),
+        ),
+    }
+}
+
+fn subagent_json(s: &usage::SubAgentUsage, cost: Determination<f64>) -> serde_json::Value {
     let tokens_input: u64 = s.models.values().map(|m| m.input).sum();
     let tokens_output: u64 = s.models.values().map(|m| m.output).sum();
-    serde_json::json!({
+    let (cost_usd, cost_why) = cost_json(cost);
+    let mut v = serde_json::json!({
         "agent_id": s.agent_id,
         "agent_type": s.agent_type,
         "description": s.description,
@@ -481,12 +529,16 @@ fn subagent_json(s: &usage::SubAgentUsage, cost_usd: f64) -> serde_json::Value {
         "first_activity_at": s.first_activity_at,
         "last_activity_at": s.last_activity_at,
         "elapsed_secs": span_secs(s.first_activity_at.as_deref(), s.last_activity_at.as_deref()),
-    })
+    });
+    if let (Some(obj), Some(why)) = (v.as_object_mut(), cost_why) {
+        obj.insert("cost_undetermined".into(), why);
+    }
+    v
 }
 
 fn subagents_cmd(json: bool, session_id: Option<&str>) {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
-    let cfg = Config::load(&root);
+    let cfg = config_or_exit(&root);
     let Some(path) = find_transcript(session_id) else {
         if json {
             println!("[]");
@@ -516,8 +568,9 @@ fn subagents_cmd(json: bool, session_id: Option<&str>) {
             std::process::exit(1);
         }
     };
-    let cost_of =
-        |s: &usage::SubAgentUsage| -> f64 { pricing::session_cost(s.models.iter(), &cfg.pricing) };
+    let cost_of = |s: &usage::SubAgentUsage| -> Determination<f64> {
+        pricing::session_cost(s.models.iter(), &cfg.pricing)
+    };
 
     if json {
         let arr: Vec<serde_json::Value> =
@@ -553,7 +606,7 @@ fn subagents_cmd(json: bool, session_id: Option<&str>) {
         println!(
             "  {:<18} {:>9}  {} turns  {:>12}  {}",
             s.agent_id,
-            report::money(cost_of(s)),
+            report::money_d(cost_of(s).into()),
             s.turns,
             span,
             s.description
@@ -606,16 +659,21 @@ fn fmt_duration(secs: i64) -> String {
 
 fn status() {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
-    let cfg = Config::load(&root);
+    let cfg = config_or_exit(&root);
     // `unknown`, not `0` / `$0.00`: a human reads a zero here as "nothing was
     // spent". Only a store we actually read may produce a number.
     let (sessions_line, cost_line) = match store::load_all(&cfg.state_dir) {
         Determination::Known(records) => {
-            let total_cost: f64 = records
-                .iter()
-                .map(|r| pricing::session_cost(r.models.iter(), &cfg.pricing))
-                .sum();
-            (records.len().to_string(), report::money(total_cost))
+            let mut total_cost = report::CostSum::default();
+            for r in &records {
+                total_cost.add(pricing::session_cost(r.models.iter(), &cfg.pricing));
+            }
+            let cost_line = if total_cost.is_undetermined() {
+                "unknown (a recorded model has no known price; see `gauge report`)".to_string()
+            } else {
+                report::money_d(total_cost)
+            };
+            (records.len().to_string(), cost_line)
         }
         Determination::Undetermined(why) => (
             format!("unknown ({why})"),
@@ -765,7 +823,7 @@ mod subagent_json_tests {
     fn emits_activity_timestamps_and_elapsed() {
         let v = subagent_json(
             &sub(Some("2026-07-25T10:00:00Z"), Some("2026-07-25T10:05:30Z")),
-            0.5,
+            Determination::Known(0.5),
         );
         assert_eq!(v["first_activity_at"], "2026-07-25T10:00:00Z");
         assert_eq!(v["last_activity_at"], "2026-07-25T10:05:30Z");
@@ -777,7 +835,7 @@ mod subagent_json_tests {
     /// make a long-dead child look freshly active (CLAUDE.md section 3).
     #[test]
     fn absent_timestamps_render_null_never_zero() {
-        let v = subagent_json(&sub(None, None), 0.0);
+        let v = subagent_json(&sub(None, None), Determination::Known(0.0));
         assert!(
             v["first_activity_at"].is_null(),
             "got {}",
@@ -798,7 +856,10 @@ mod subagent_json_tests {
     /// Only one endpoint known is still an unknown span.
     #[test]
     fn half_known_span_is_null() {
-        let v = subagent_json(&sub(Some("2026-07-25T10:00:00Z"), None), 0.0);
+        let v = subagent_json(
+            &sub(Some("2026-07-25T10:00:00Z"), None),
+            Determination::Known(0.0),
+        );
         assert_eq!(v["first_activity_at"], "2026-07-25T10:00:00Z");
         assert!(v["last_activity_at"].is_null());
         assert!(v["elapsed_secs"].is_null());

@@ -1,9 +1,18 @@
 //! Configuration: project `gauge.toml` (preferred) over a home-level
 //! `~/.gauge/config.toml` over built-in defaults. The first file that exists
 //! wins (the layers are not merged), matching the rest of the toolkit.
+//!
+//! Loading is three-valued ([`Config::load_checked`]): no config file at all is
+//! `Known(defaults)`; a config file that exists but cannot be read or parsed,
+//! or whose `[[pricing]]` row cannot be applied as written (a missing or
+//! misspelled rate field), is `Undetermined`. The old loader collapsed both
+//! into defaults and mapped a missing rate to `0.0` — a one-letter typo in an
+//! override then priced every matching model at $0 and beat the built-in table
+//! (backlog 00880b3d). Same split as budgetguard's `Config::load_checked`.
 
 use std::path::{Path, PathBuf};
 
+use harness_core::verdict::Determination;
 use serde::Deserialize;
 
 /// A per-model price override (USD per 1M input/output tokens). `pattern` is
@@ -25,14 +34,21 @@ pub struct Config {
     pub pricing: Vec<PriceOverride>,
 }
 
+/// One `[[pricing]]` row. Unknown keys are rejected (`inputt = 15.0` is a
+/// parse error, not an ignored key next to a missing rate).
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FilePrice {
     pattern: Option<String>,
     input: Option<f64>,
     output: Option<f64>,
 }
 
+/// The whole file. Unknown top-level keys are rejected: a misspelled
+/// `[[pricng]]` or `enabeld` would otherwise vanish silently and leave the
+/// defaults in force.
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FileConfig {
     enabled: Option<bool>,
     track_tools: Option<bool>,
@@ -68,49 +84,109 @@ impl Config {
         base_dir().join("config.toml")
     }
 
-    pub fn load(root: &Path) -> Self {
-        let mut cfg = Config::default();
-        let chosen = {
-            let p = Config::project_path(root);
-            if p.exists() {
-                Some(p)
-            } else {
-                let h = Config::home_path();
-                h.exists().then_some(h)
-            }
-        };
-        if let Some(path) = chosen {
-            if let Ok(text) = std::fs::read_to_string(&path) {
-                if let Ok(fc) = toml::from_str::<FileConfig>(&text) {
-                    if let Some(v) = fc.enabled {
-                        cfg.enabled = v;
-                    }
-                    if let Some(v) = fc.track_tools {
-                        cfg.track_tools = v;
-                    }
-                    if let Some(v) = fc.state_dir {
-                        cfg.state_dir = expand_tilde(&v);
-                    }
-                    if let Some(rows) = fc.pricing {
-                        cfg.pricing = rows
-                            .into_iter()
-                            .filter_map(|r| {
-                                let pattern = r.pattern?.trim().to_lowercase();
-                                if pattern.is_empty() {
-                                    return None;
-                                }
-                                Some(PriceOverride {
-                                    pattern,
-                                    input: r.input.unwrap_or(0.0),
-                                    output: r.output.unwrap_or(0.0),
-                                })
-                            })
-                            .collect();
-                    }
+    /// Which config file applies: the project's `gauge.toml`, else the home
+    /// fallback, else none. `try_exists`, not `exists`: "could not tell" is
+    /// undetermined, not "no config".
+    fn locate(root: &Path) -> Determination<Option<PathBuf>> {
+        for p in [Config::project_path(root), Config::home_path()] {
+            match p.try_exists() {
+                Ok(true) => return Determination::Known(Some(p)),
+                Ok(false) => {}
+                Err(e) => {
+                    return Determination::undetermined(format!(
+                        "gauge config: could not determine whether {} exists: {e}",
+                        p.display()
+                    ))
                 }
             }
         }
-        cfg
+        Determination::Known(None)
+    }
+
+    /// Load the effective config.
+    ///
+    /// * `Known(defaults)` — no config file exists (the documented default
+    ///   install).
+    /// * `Known(cfg)` — a config file was read and every setting in it applied.
+    /// * `Undetermined` — a config file exists but could not be read or parsed
+    ///   (including an unknown key anywhere), or a `[[pricing]]` row lacks
+    ///   `pattern`/`input`/`output` or has a rate that is not a finite
+    ///   non-negative number. The operator
+    ///   configured *something* we cannot apply; any cost computed without it
+    ///   would be a number from a config nobody wrote. The reason names the
+    ///   file.
+    pub fn load_checked(root: &Path) -> Determination<Self> {
+        let mut cfg = Config::default();
+        let path = match Config::locate(root) {
+            Determination::Known(Some(p)) => p,
+            Determination::Known(None) => return Determination::Known(cfg),
+            Determination::Undetermined(why) => return Determination::Undetermined(why),
+        };
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "gauge config {} exists but could not be read: {e}",
+                    path.display()
+                ))
+            }
+        };
+        let fc = match toml::from_str::<FileConfig>(&text) {
+            Ok(fc) => fc,
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "gauge config {} could not be parsed: {e}",
+                    path.display()
+                ))
+            }
+        };
+        if let Some(v) = fc.enabled {
+            cfg.enabled = v;
+        }
+        if let Some(v) = fc.track_tools {
+            cfg.track_tools = v;
+        }
+        if let Some(v) = fc.state_dir {
+            cfg.state_dir = expand_tilde(&v);
+        }
+        if let Some(rows) = fc.pricing {
+            let mut out = Vec::with_capacity(rows.len());
+            for (i, r) in rows.into_iter().enumerate() {
+                let n = i + 1;
+                let pattern = r
+                    .pattern
+                    .map(|p| p.trim().to_lowercase())
+                    .unwrap_or_default();
+                if pattern.is_empty() {
+                    return Determination::undetermined(format!(
+                        "gauge config {}: [[pricing]] row {n} has no (or an empty) `pattern`",
+                        path.display()
+                    ));
+                }
+                let (Some(input), Some(output)) = (r.input, r.output) else {
+                    return Determination::undetermined(format!(
+                        "gauge config {}: [[pricing]] row {n} (pattern {pattern:?}) is missing \
+                         its `input` and/or `output` rate; a missing rate is not $0",
+                        path.display()
+                    ));
+                };
+                if !(input.is_finite() && input >= 0.0 && output.is_finite() && output >= 0.0) {
+                    return Determination::undetermined(format!(
+                        "gauge config {}: [[pricing]] row {n} (pattern {pattern:?}) has a rate \
+                         that is not a finite non-negative number (input = {input}, output = \
+                         {output})",
+                        path.display()
+                    ));
+                }
+                out.push(PriceOverride {
+                    pattern,
+                    input,
+                    output,
+                });
+            }
+            cfg.pricing = out;
+        }
+        Determination::Known(cfg)
     }
 
     pub fn disabled_env() -> bool {

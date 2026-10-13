@@ -94,7 +94,10 @@ automatic trigger).
 Built-in rates (USD per 1M tokens, input/output): **Opus** 5/25 · **Sonnet**
 3/15 · **Haiku** 1/5 · **Fable/Mythos** 10/50. Cache writes bill at 1.25× input
 (5-minute TTL) or 2× (1-hour TTL); cache reads at 0.1× input. An unrecognized
-model contributes 0. Override or add a model in `gauge.toml`:
+model with usage has an **unknown** cost, not $0: gauge prints `unknown` (JSON
+`cost_usd: null` plus `cost_undetermined`) and budgetguard treats the session
+as unmeasured. Declare a genuinely free model with an explicit `input = 0.0` /
+`output = 0.0` override. Override or add a model in `gauge.toml`:
 
 ```toml
 [[pricing]]
@@ -111,6 +114,13 @@ table re-prices history.
 Project `./gauge.toml` over `~/.gauge/config.toml` over built-in defaults (first
 file that exists wins). See `gauge.example.toml`. Store defaults to
 `~/.gauge/store`.
+
+A config file that exists but cannot be read or parsed (including any unknown
+key, e.g. a misspelled `[[pricng]]` or `enabeld`), or a `[[pricing]]` row
+missing `pattern`/`input`/`output` or with a rate that is not a finite
+non-negative number, is not silently replaced by defaults: the read commands (`report`, `session`,
+`subagents`, `status`) print the reason naming the file and exit 1, and the
+`record` hook records nothing and says why on stderr.
 
 ## Build
 

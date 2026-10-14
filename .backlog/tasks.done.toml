@@ -36151,3 +36151,215 @@ test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "64294a2a92f53faaaff6830f1482fef12c6d605c"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "f738a79a"
+title = "blastguard record_violation が overwatch::store::append_violation の失敗を let _ = で捨て、失われた violation 記録が報告されない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+2026-09-24 26d84958 の現況調査 (main db9deefb) で発見。未修正・未検証。 crates/blastguard/src/main.rs record_violation。condukt gatelog の『失われた記録は報告する』規範と非対称。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/blastguard/tests/backlog_audit_s02.rs (rev e70d48dd)"""
+created_at = 1790252252
+updated_at = 1791974504
+weight = 0.0
+issue_number = 776
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/776"
+issue_closed_at = 1791974507
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_audit_s02 backlog_f738a79a -- --include-ignored"
+exit = 0
+passed = 1
+rev = "4f0621e90130330e516566eebb538f5747429eb8"
+observed_at = 1791974482
+output_digest = "sha256:96f20e6b5bf74c060018829019ff0639998534ead59f9a865e0ed656f0361c4e"
+excerpt = """
+
+running 1 test
+test backlog_f738a79a_lost_violation_record_is_reported ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 47 filtered out; finished in 0.48s
+
+   Compiling harness-core v0.2.49 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/harness-core)
+   Compiling overwatch v0.2.62 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/overwatch)
+   Compiling blastguard v0.2.111 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.88s
+     Running tests/backlog_audit_s02.rs (target/debug/deps/backlog_audit_s02-e4c5cc15bff15786)
+"""
+
+[task.closure.red]
+rev = "317cb062c51b4d6b5f449d02177cf1b8dd354121"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "d98465f9"
+title = "reviewgate classify が lgtm で始まる出力をすべて Clean にする — 'LGTM, but high: …' が Clean になる (監査 §5、未 assert)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "reviewgate",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+2026-09-24 277440b1 修正 worker の指摘。docs/audit-reviewgate-verdict-paths.md §5。未修正。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/reviewgate/src/review.rs (mod backlog_repro_s08, #[ignore]) (rev e70d48dd)"""
+created_at = 1790253003
+updated_at = 1791974530
+weight = 0.0
+issue_number = 795
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/795"
+issue_closed_at = 1791974533
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p reviewgate --bin reviewgate lgtm_prefix_with_finding_is_not_clean -- --include-ignored"
+exit = 0
+passed = 1
+rev = "4f0621e90130330e516566eebb538f5747429eb8"
+observed_at = 1791974511
+output_digest = "sha256:76c6132c4c587bb506adcc7ee8e2c1ba45adb9fa6c370c883c63414645eb75e6"
+excerpt = """
+
+running 1 test
+test review::backlog_repro_s08::lgtm_prefix_with_finding_is_not_clean ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 39 filtered out; finished in 0.00s
+
+   Compiling harness-core v0.2.49 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/harness-core)
+   Compiling overwatch v0.2.62 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/overwatch)
+   Compiling reviewgate v0.1.34 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/reviewgate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.09s
+     Running unittests src/main.rs (target/debug/deps/reviewgate-92f7cc783103e33f)
+"""
+
+[task.closure.red]
+rev = "317cb062c51b4d6b5f449d02177cf1b8dd354121"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "864eb3e8"
+title = "docs/gate-taxonomy.md が GitHub Actions workflow (injectguard.yml / fail-open.yml 等) を『本ゲート』と記述し CLAUDE.md §7 の GHA 全面禁止と矛盾する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "docs",
+    "gha-ban",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+2026-09-24 3a8e3b73 調査 (main 6bcf2a27) で発見。未修正。
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_864eb3e8_94b54358.py::Backlog864eb3e8 (rev e128c13b): Static doc test against docs/gate-taxonomy.md."""
+created_at = 1790252607
+updated_at = 1791974546
+weight = 0.0
+issue_number = 786
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/786"
+issue_closed_at = 1791974548
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_backlog_864eb3e8_94b54358.py"
+exit = 0
+passed = 3
+rev = "4f0621e90130330e516566eebb538f5747429eb8"
+observed_at = 1791974543
+output_digest = "sha256:1e1b3f0affac04f873a687b05201eb5cfcc748c78697a6a7e2e30b6f560dcdef"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-c5b9c02b
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 4 items
+
+scripts/test_backlog_864eb3e8_94b54358.py ...x                           [100%]
+
+========================= 3 passed, 1 xfailed in 0.05s =========================
+"""
+
+[task.closure.red]
+rev = "317cb062c51b4d6b5f449d02177cf1b8dd354121"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "ece51b35"
+title = "衝突マーカー入り (TOML として読めない) の .backlog/tasks.toml が commit でき、main まで fast-forward された — merge 完了 commit を検査するゲートが無い"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+2026-09-24 実測: 0d68e5d4 (merge 完了の git commit) が <<<<<<< を含む tasks.toml を記録し、post-merge は UNGATED COMMIT として台帳に載せただけで止めなかった。24a00986 で修復。原因の一端は dispatcher 側の手順 (merge の CONFLICT を grep で表示したあと ; で続行した)。案: pre-commit / pre-merge-commit で conflict marker と .backlog/*.toml の parse を検査し block する。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test scripts/test_audit_s03_gates.py (rev e70d48dd)"""
+created_at = 1790253957
+updated_at = 1791974551
+weight = 0.0
+issue_number = 803
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/803"
+issue_closed_at = 1791974554
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_audit_s03_gates.py"
+exit = 0
+passed = 1
+rev = "4f0621e90130330e516566eebb538f5747429eb8"
+observed_at = 1791974549
+output_digest = "sha256:7dbdb5d9036bda96ad812ce641bab45a30ed96d66da2e64ef89ab3b3fe3331db"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-c5b9c02b
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 3 items
+
+scripts/test_audit_s03_gates.py .xx                                      [100%]
+
+========================= 1 passed, 2 xfailed in 0.07s =========================
+"""
+
+[task.closure.red]
+rev = "317cb062c51b4d6b5f449d02177cf1b8dd354121"
+exit = 1
+kind = "behavioural"

@@ -1907,7 +1907,7 @@ cannot tell whether it is a protected gate/config file or a system directory"
     // separated from the command each segment really runs; see
     // `compound_views`. Index-aligned with `split_segments(cmd)`.
     let views = compound_views(cmd);
-    let mut scopes = SubshellCwdScopes::default();
+    let mut scopes = SubshellCwdScopes::new(&views);
     // `for`/`select` variables bound so far on this line; see `loop_variants`.
     let mut bindings: Vec<LoopBinding> = Vec::new();
     for (seg_idx, seg) in split_segments(cmd).into_iter().enumerate() {
@@ -1940,7 +1940,7 @@ cannot tell whether it is a protected gate/config file or a system directory"
         let aliases_before = aliases.clone();
         scopes.enter(views.get(seg_idx));
         let (effective_seg, extra, next_cwd) = advance_cwd_and_rewrite(command, &cwd, &mut aliases);
-        cwd = scopes.leave(views.get(seg_idx), &cwd_before, next_cwd);
+        cwd = scopes.leave(views.get(seg_idx), &cwd_before, next_cwd).0;
         // The same segment once more for every value its loop variables take
         // (see `loop_variants`), IN ADDITION to the judgement of the text as
         // written below — so this can only add verdicts, never remove one.
@@ -2289,7 +2289,7 @@ fn segment_cwd_states(cmd: &str) -> Vec<CwdState> {
     // The same compound-syntax view the loop uses, so `do cd .githooks` moves
     // the directory here exactly as it does there.
     let views = compound_views(cmd);
-    let mut scopes = SubshellCwdScopes::default();
+    let mut scopes = SubshellCwdScopes::new(&views);
     let mut out = Vec::with_capacity(segs.len());
     for (seg_idx, seg) in segs.iter().enumerate() {
         out.push(cwd.clone());
@@ -2298,7 +2298,13 @@ fn segment_cwd_states(cmd: &str) -> Vec<CwdState> {
             .map_or(seg.as_str(), |v| v.command.as_str());
         scopes.enter(views.get(seg_idx));
         let (_, _, next_cwd) = advance_cwd_and_rewrite(command, &cwd, &mut aliases);
-        cwd = scopes.leave(views.get(seg_idx), &out[seg_idx], next_cwd);
+        let (after, closed_dirty) = scopes.leave(views.get(seg_idx), &out[seg_idx], next_cwd);
+        // `( cd /tmp; true ) > hosts`: the redirect may belong to the group
+        // (outer cwd) or sit inside it (inner cwd); see `SubshellCwdScopes`.
+        if closed_dirty {
+            out[seg_idx] = CwdState::Unknown;
+        }
+        cwd = after;
     }
     out
 }
@@ -6838,19 +6844,63 @@ fn strip_unmatched_close_parens(s: &str) -> (String, usize, usize) {
 /// the inner directory nor a restored outer one — and every later relative
 /// operand is judged as unknown-cwd (Ask, which hardens to Deny outside an
 /// interactive session). A group with no cwd change leaves the cwd as it was,
-/// which is exactly right because nothing in it moved. A `)` that closes a
-/// group this bookkeeping never saw open makes the cwd Unknown once any cwd
-/// change has happened on the line. A miscount can therefore only turn a cwd
-/// Unknown, never Known-and-wrong.
-#[derive(Default)]
+/// which is exactly right because nothing in it moved.
+///
+/// The count is NOT trustworthy, and the rules below are what keeps a
+/// miscount from producing a Known-and-wrong cwd. The first version (one
+/// "dirty" flag per group, Unknown only when the popped group was dirty) was
+/// measured ALLOWING 12 lines main denied (`subshell_cd_miscount_9778927f`):
+/// a fake `(` opened AFTER the `cd` was clean and absorbed the real `)`; a `(`
+/// inside `"$(echo "(")"` swallowed the real `)`; and a redirect glued to the
+/// group (`( cd /tmp; true ) > hosts`) was placed in the inner directory.
+///
+/// - A `)` makes the cwd Unknown when the group it pops OR any group still
+///   open had a cwd change in it, so a fake inner group cannot absorb the
+///   close of a real dirty one.
+/// - A line whose `(`/`)` counts do not balance (more closes than opens at any
+///   point, or groups left open at the end) has a group structure this
+///   bookkeeping does not know. On such a line, ANY cwd change makes the cwd
+///   Unknown for the rest of the line (sticky, even past a later absolute
+///   `cd`, which may itself sit in an unseen group).
+/// - The segment whose `)` closes a dirty group has its OWN redirect placement
+///   Unknown too ([`segment_cwd_states`]): a redirect in that segment may be
+///   inside the group (inner cwd) or attached to it (outer cwd), and the text
+///   does not say which this bookkeeping can trust.
+///
+/// Residual, not closed: a line where a real `(` is NOT recognised as a group
+/// opener AND a fake `(` elsewhere restores the balance can still mis-scope.
+/// Every leading `(` in command position (after `!`, `{`, `then`, …) is
+/// recognised, so this needs a construct `compound_views` does not strip.
 struct SubshellCwdScopes {
     /// One entry per open group: whether a cwd change happened inside it.
     dirty: Vec<bool>,
-    /// Whether any segment so far changed the cwd.
-    any_change: bool,
+    /// The line's paren counts do not balance; see the type docs.
+    unbalanced: bool,
+    /// A cwd change happened on an unbalanced line: every later cwd is Unknown.
+    tainted: bool,
 }
 
 impl SubshellCwdScopes {
+    /// Bookkeeping for the line whose views are `views`.
+    fn new(views: &[SegmentView]) -> Self {
+        let mut depth: usize = 0;
+        let mut unbalanced = false;
+        for v in views {
+            depth += v.opens;
+            if v.closes > depth {
+                unbalanced = true;
+                depth = 0;
+            } else {
+                depth -= v.closes;
+            }
+        }
+        Self {
+            dirty: Vec::new(),
+            unbalanced: unbalanced || depth != 0,
+            tainted: false,
+        }
+    }
+
     /// Call BEFORE `view`'s segment runs.
     fn enter(&mut self, view: Option<&SegmentView>) {
         for _ in 0..view.map_or(0, |v| v.opens) {
@@ -6858,30 +6908,41 @@ impl SubshellCwdScopes {
         }
     }
 
-    /// Call AFTER `view`'s segment ran, with the cwd before and after it;
-    /// returns the cwd in force for the next segment.
+    /// Call AFTER `view`'s segment ran, with the cwd before and after it.
+    /// Returns the cwd in force for the next segment, and whether this
+    /// segment closed a group with a cwd change in it (its own redirects then
+    /// have no trustworthy base).
     fn leave(
         &mut self,
         view: Option<&SegmentView>,
         cwd_before: &CwdState,
         cwd_after: CwdState,
-    ) -> CwdState {
+    ) -> (CwdState, bool) {
         if &cwd_after != cwd_before {
-            self.any_change = true;
+            if self.unbalanced {
+                self.tainted = true;
+            }
             // A change inside a nested group also happened inside every group
             // enclosing it.
             for d in &mut self.dirty {
                 *d = true;
             }
         }
-        let mut cwd = cwd_after;
+        let mut closed_dirty = false;
         for _ in 0..view.map_or(0, |v| v.closes) {
-            let dirty = self.dirty.pop().unwrap_or(self.any_change);
-            if dirty {
-                cwd = CwdState::Unknown;
+            // A close with nothing open only happens on an unbalanced line,
+            // where any cwd change already set `tainted`.
+            let popped = self.dirty.pop().unwrap_or(false);
+            if popped || self.dirty.iter().any(|d| *d) {
+                closed_dirty = true;
             }
         }
-        cwd
+        let cwd = if closed_dirty || self.tainted {
+            CwdState::Unknown
+        } else {
+            cwd_after
+        };
+        (cwd, closed_dirty)
     }
 }
 

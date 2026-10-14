@@ -158,6 +158,11 @@ fn content_fetch_failure_after_a_confirmed_change_blocks_not_allows() {
         stdout.contains("変更内容を特定できませんでした"),
         "must be the git-scan-failed block, not the inject-mode review block. stdout: {stdout:?}"
     );
+    assert!(
+        stderr.contains("diff content fetch failed"),
+        "the block must come from diff_text()'s fetch_failed path, not from a changed_files() \
+         scan failure (both produce the same git-scan-failed block text). stderr: {stderr:?}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -206,6 +211,11 @@ fn partial_content_fetch_failure_blocks_not_certifies() {
         stdout.contains("変更内容を特定できませんでした"),
         "must be the git-scan-failed block, not the inject-mode review block. stdout: {stdout:?}"
     );
+    assert!(
+        stderr.contains("diff content fetch failed"),
+        "the block must come from diff_text()'s fetch_failed path, not from a changed_files() \
+         scan failure (both produce the same git-scan-failed block text). stderr: {stderr:?}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -234,6 +244,66 @@ fn control_real_git_confirmed_change_blocks_for_review() {
         stdout.contains("\"decision\":\"block\"") || stdout.contains("\"decision\": \"block\""),
         "a real, un-reviewed tracked edit must block for review (inject mode default). stdout: \
          {stdout:?}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The unreadable-untracked-file arm of `diff_text()`: real git (the scan and
+/// every git content fetch succeed), but an untracked file among the changes
+/// cannot be read. Its content is missing from the diff, so the diff is
+/// UNDETERMINED and must block through `fetch_failed`, not be certified.
+#[cfg(unix)]
+#[test]
+fn unreadable_untracked_file_blocks_via_fetch_failed() {
+    use std::os::unix::fs::PermissionsExt;
+    // Root reads mode-000 files, so the read failure cannot be produced. That
+    // is a failure to check, not a pass: fail loudly.
+    let uid = Command::new("id").arg("-u").output().expect("run id -u");
+    assert!(
+        uid.status.success(),
+        "id -u failed: cannot tell whether running as root"
+    );
+    let uid = String::from_utf8_lossy(&uid.stdout).trim().to_string();
+    assert_ne!(
+        uid, "0",
+        "running as root: a mode-000 file is still readable, so this test cannot produce the \
+         read failure it checks. Run it as a non-root user."
+    );
+    let path = std::env::var_os("PATH")
+        .expect("PATH is unset: cannot locate real git, so this test cannot check anything");
+
+    let root = unique_dir("unreadable-untracked");
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let work = root.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    setup_repo_with_a_tracked_edit(&work);
+    let secret = work.join("unreadable.rs");
+    std::fs::write(&secret, "NEVER REVIEWED MARKER\n").unwrap();
+    std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let (code, stdout, stderr) = run_review(&work, &home, Path::new(&path), &stop_payload(&work));
+
+    // Restore before asserting so cleanup works whatever the outcome.
+    std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    assert_eq!(
+        code, 0,
+        "the Stop hook must always exit 0; stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("\"decision\":\"block\"") || stdout.contains("\"decision\": \"block\""),
+        "an untracked file among the changes could not be read, so its content is missing from \
+         the diff. Certifying that diff is the fail-open. stdout: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("変更内容を特定できませんでした"),
+        "must be the git-scan-failed block, not the inject-mode review block. stdout: {stdout:?}"
+    );
+    assert!(
+        stderr.contains("diff content fetch failed") && stderr.contains("read untracked"),
+        "the block must come from diff_text()'s unreadable-untracked-file arm via fetch_failed. \
+         stderr: {stderr:?}"
     );
     let _ = std::fs::remove_dir_all(&root);
 }

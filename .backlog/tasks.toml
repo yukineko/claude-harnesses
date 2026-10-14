@@ -4245,27 +4245,6 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/825"
 rev = 0
 
 [[task]]
-id = "214bb9d4"
-title = "guard-maintree-bash.py: どこかの行に cd <worktree> があるとコマンド全体を allow し、後続行の main 絶対パス mutation を通す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "needs-ruling"
-notes = """
-Found 2026-09-29 by the 9fdb49d8 implementer; known hole listed at the bottom of guard-maintree-bash.py. Repro shape: cd WT then NEWLINE rm MAIN_ABS/f is allowed. Expected: absolute main-tree targets judged regardless of an earlier cd.
-
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_s06_misc_b_repros.py::MainTreeBashGuard.test_cd_to_other_dir_does_not_excuse_later_absolute_main_mutation (rev e128c13b): Pre-existing committed repro, RED re-observed at HEAD."""
-created_at = 1790634878
-updated_at = 1791980704
-weight = 0.0
-issue_number = 827
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/827"
-rev = 1
-ruling_kind = "judgment"
-rationale = "Already fixed by b8390f7a (guard observes main tree state before/after each command). Original RED test (fails at e128c13b with 0 != 2, passes at 26e1d535) was removed by b8390f7a with a test-weakening ack and ported as RouteIndependence row cd-elsewhere-then-absolute-main (scripts/test_guard_maintree_bash_observe.py:784, passes at HEAD). e128c13b is not an ancestor of HEAD, so no F->P on this history. Caveat: the port covers only the && spelling, not the original newline variant."
-
-[[task]]
 id = "68b8092f"
 title = "backlog merge-driver --install が版付き cache の絶対パスを記録する — prune 後は全 merge が conflict になる"
 project = "/Users/yuki/src/harness"
@@ -4283,48 +4262,6 @@ weight = 0.0
 issue_number = 834
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/834"
 rev = 0
-
-[[task]]
-id = "84fa118e"
-title = "blastguard: mv ~/.claude/plugins /tmp/p が許可される (9271d739 の双子)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "needs-ruling"
-notes = """
-mv is judged only on protected paths; moving the plugin tree away darkens every gate just like deleting it.
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/blastguard/tests/backlog_audit_s02.rs (rev e70d48dd)"""
-created_at = 1790635967
-updated_at = 1791980704
-weight = 0.0
-issue_number = 835
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/835"
-rev = 1
-ruling_kind = "judgment"
-rationale = "Already fixed: the blastguard binary built at HEAD b7dd5491 denies mv of ~/.claude/plugins (also abs and HOME spellings); cargo test -p blastguard --test backlog_audit_s02 backlog_84fa118e passes at HEAD (un-ignored in 29dd9a4e). No behavioural RED rev is reachable: at db41c92f and 2cf730d3^ the HEAD test does not compile (cargo exit 101, no FAILED line)."
-
-[[task]]
-id = "5d7867f0"
-title = "test_gate_bypass.py AmendIsNotABypass.test_amend_of_a_gated_commit_is_not_recorded_as_ungated が main で失敗している"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "needs-ruling"
-notes = """
-Pre-existing at 2e05bbe1; observed again 2026-09-29 on p0/gates.
-
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_gate_bypass.py::AmendIsNotABypass (rev e128c13b): The existing test is the repro and is RED at HEAD; the prior auditor additionally showed the amend case stays red after patching the stale SCANNERS list (not re-run here)."""
-created_at = 1790635972
-updated_at = 1792002539
-weight = 0.0
-issue_number = 838
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/838"
-rev = 1
-ruling_kind = "judgment"
-rationale = "User ruling 2026-10-15: keep the documented design (amend is recorded in the bypass ledger as a fail-closed false positive, cleared by the next green pre-commit). The red test asserted the opposite; it was re-anchored in 6530fbf4 (AmendIsRecordedFailClosed: amend recorded + cleared by next green pre-commit over a non-empty staged diff), mutation-verified by an independent sonnet verifier. No F->P exists because the hook behaviour did not change; python3 -m pytest -q scripts/test_gate_bypass.py passes at HEAD."
 
 [[task]]
 id = "06ec3503"

@@ -36838,3 +36838,78 @@ test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "6cd14752fe4d8210a72009e0edb3ac50fbc6bfd9"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "84fa118e"
+title = "blastguard: mv ~/.claude/plugins /tmp/p が許可される (9271d739 の双子)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "cancelled"
+notes = """
+mv is judged only on protected paths; moving the plugin tree away darkens every gate just like deleting it.
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/blastguard/tests/backlog_audit_s02.rs (rev e70d48dd)
+no RED evidence (no rev where the test fails behaviourally); user ruling 2026-10-15: without evidence, cancel instead of requesting a ruling"""
+created_at = 1790635967
+updated_at = 1792002778
+weight = 0.0
+issue_number = 835
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/835"
+issue_closed_at = 1792002781
+rev = 3
+
+[task.closure]
+reason = "discard"
+discard_reason = "no RED evidence (no rev where the test fails behaviourally); user ruling 2026-10-15: without evidence, cancel instead of requesting a ruling"
+
+[[task]]
+id = "214bb9d4"
+title = "guard-maintree-bash.py: どこかの行に cd <worktree> があるとコマンド全体を allow し、後続行の main 絶対パス mutation を通す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "cancelled"
+notes = """
+Found 2026-09-29 by the 9fdb49d8 implementer; known hole listed at the bottom of guard-maintree-bash.py. Repro shape: cd WT then NEWLINE rm MAIN_ABS/f is allowed. Expected: absolute main-tree targets judged regardless of an earlier cd.
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_s06_misc_b_repros.py::MainTreeBashGuard.test_cd_to_other_dir_does_not_excuse_later_absolute_main_mutation (rev e128c13b): Pre-existing committed repro, RED re-observed at HEAD.
+no RED evidence (no rev where the test fails behaviourally); user ruling 2026-10-15: without evidence, cancel instead of requesting a ruling"""
+created_at = 1790634878
+updated_at = 1792002781
+weight = 0.0
+issue_number = 827
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/827"
+issue_closed_at = 1792002786
+rev = 3
+
+[task.closure]
+reason = "discard"
+discard_reason = "no RED evidence (no rev where the test fails behaviourally); user ruling 2026-10-15: without evidence, cancel instead of requesting a ruling"
+
+[[task]]
+id = "5d7867f0"
+title = "test_gate_bypass.py AmendIsNotABypass.test_amend_of_a_gated_commit_is_not_recorded_as_ungated が main で失敗している"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "cancelled"
+notes = """
+Pre-existing at 2e05bbe1; observed again 2026-09-29 on p0/gates.
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_gate_bypass.py::AmendIsNotABypass (rev e128c13b): The existing test is the repro and is RED at HEAD; the prior auditor additionally showed the amend case stays red after patching the stale SCANNERS list (not re-run here).
+no RED evidence (no rev where the test fails behaviourally); user ruling 2026-10-15: without evidence, cancel instead of requesting a ruling"""
+created_at = 1790635972
+updated_at = 1792002787
+weight = 0.0
+issue_number = 838
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/838"
+issue_closed_at = 1792002790
+rev = 3
+
+[task.closure]
+reason = "discard"
+discard_reason = "no RED evidence (no rev where the test fails behaviourally); user ruling 2026-10-15: without evidence, cancel instead of requesting a ruling"

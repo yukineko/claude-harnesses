@@ -3988,52 +3988,6 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/771"
 rev = 0
 
 [[task]]
-id = "f738a79a"
-title = "blastguard record_violation が overwatch::store::append_violation の失敗を let _ = で捨て、失われた violation 記録が報告されない"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-2026-09-24 26d84958 の現況調査 (main db9deefb) で発見。未修正・未検証。 crates/blastguard/src/main.rs record_violation。condukt gatelog の『失われた記録は報告する』規範と非対称。
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/blastguard/tests/backlog_audit_s02.rs (rev e70d48dd)"""
-created_at = 1790252252
-updated_at = 1790983181
-weight = 0.0
-issue_number = 776
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/776"
-rev = 0
-
-[[task]]
-id = "864eb3e8"
-title = "docs/gate-taxonomy.md が GitHub Actions workflow (injectguard.yml / fail-open.yml 等) を『本ゲート』と記述し CLAUDE.md §7 の GHA 全面禁止と矛盾する"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "docs",
-    "gha-ban",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-2026-09-24 3a8e3b73 調査 (main 6bcf2a27) で発見。未修正。
-
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_864eb3e8_94b54358.py::Backlog864eb3e8 (rev e128c13b): Static doc test against docs/gate-taxonomy.md."""
-created_at = 1790252607
-updated_at = 1790983297
-weight = 0.0
-issue_number = 786
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/786"
-rev = 0
-
-[[task]]
 id = "94b54358"
 title = "docs/gate-taxonomy.md の trigger 凡例が pre-commit を fail-soft (python3/スクリプト不在で素通り) と書くが、現 .githooks/pre-commit は不在時に block する"
 project = "/Users/yuki/src/harness"
@@ -4100,29 +4054,6 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/794"
 rev = 0
 
 [[task]]
-id = "d98465f9"
-title = "reviewgate classify が lgtm で始まる出力をすべて Clean にする — 'LGTM, but high: …' が Clean になる (監査 §5、未 assert)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "reviewgate",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-2026-09-24 277440b1 修正 worker の指摘。docs/audit-reviewgate-verdict-paths.md §5。未修正。
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/reviewgate/src/review.rs (mod backlog_repro_s08, #[ignore]) (rev e70d48dd)"""
-created_at = 1790253003
-updated_at = 1790983329
-weight = 0.0
-issue_number = 795
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/795"
-rev = 0
-
-[[task]]
 id = "b03811d5"
 title = "blastguard: python3 - <<'PY' 本文中の文字列リテラル '>' を空 target の truncating redirect として deny する"
 project = "/Users/yuki/src/harness"
@@ -4143,29 +4074,6 @@ updated_at = 1790983181
 weight = 0.0
 issue_number = 781
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/781"
-rev = 0
-
-[[task]]
-id = "ece51b35"
-title = "衝突マーカー入り (TOML として読めない) の .backlog/tasks.toml が commit でき、main まで fast-forward された — merge 完了 commit を検査するゲートが無い"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "gate",
-    "backlog",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-2026-09-24 実測: 0d68e5d4 (merge 完了の git commit) が <<<<<<< を含む tasks.toml を記録し、post-merge は UNGATED COMMIT として台帳に載せただけで止めなかった。24a00986 で修復。原因の一端は dispatcher 側の手順 (merge の CONFLICT を grep で表示したあと ; で続行した)。案: pre-commit / pre-merge-commit で conflict marker と .backlog/*.toml の parse を検査し block する。
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test scripts/test_audit_s03_gates.py (rev e70d48dd)"""
-created_at = 1790253957
-updated_at = 1790983240
-weight = 0.0
-issue_number = 803
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/803"
 rev = 0
 
 [[task]]

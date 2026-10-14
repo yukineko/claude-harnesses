@@ -119,7 +119,6 @@ fn backlog_1b82a049_chmod_x_off_plugin_cache_binary_is_not_allowed() {
 
 // ---------------------------------------------------------------- 84fa118e
 #[test]
-#[ignore = "backlog 84fa118e: open defect, remove ignore when fixed"]
 fn backlog_84fa118e_mv_plugin_tree_away_is_not_allowed() {
     // Control: deleting the same tree is already blocked.
     assert_ne!(verdict("rm -rf /Users/yuki/.claude/plugins").0, "allow");

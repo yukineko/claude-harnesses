@@ -61,7 +61,6 @@ fn run_git(dir: &Path, args: &[&str]) {
 }
 
 #[test]
-#[ignore = "backlog 7fb00031: open defect, remove ignore when fixed"]
 fn unrecorded_conflict_is_not_reported_as_recorded() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
@@ -76,6 +75,10 @@ fn unrecorded_conflict_is_not_reported_as_recorded() {
     run_git(&repo, &["add", "."]);
     run_git(&repo, &["commit", "-q", "-m", "init"]);
     run_git(&repo, &["checkout", "-q", "-b", "feat"]);
+    // Fixture precondition added with the 51595c41 guard: `merge` refuses a
+    // branch with no recorded creation base before it ever reaches the conflict
+    // path under test. Record the floating ref `main` as the base (it resolves to a commit that is an ancestor of `main`).
+    run_git(&repo, &["config", "branch.feat.conduktBase", "main"]);
     std::fs::write(repo.join("f.txt"), "theirs\n").unwrap();
     run_git(&repo, &["commit", "-q", "-am", "theirs"]);
     run_git(&repo, &["checkout", "-q", "main"]);
@@ -113,4 +116,55 @@ fn unrecorded_conflict_is_not_reported_as_recorded() {
         "the conflict was NOT recorded to the review surface, yet the merge \
          exited 0 claiming it was: stdout={stdout:?} stderr={stderr:?}"
     );
+}
+
+/// Regression for the follow-up: git refuses the trial merge BEFORE creating
+/// merge state (an untracked `g.txt` on main that `feat` adds), so there is no
+/// MERGE_HEAD and `git merge --abort` itself exits nonzero ("There is no merge
+/// to abort"). That is "no merge in progress", not a failed abort: the conflict
+/// is recorded and the CLI still reports it and exits 0.
+#[test]
+fn refused_trial_without_merge_state_is_still_recorded_conflict() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    run_git(&repo, &["init", "-q", "-b", "main"]);
+    run_git(&repo, &["config", "user.email", "t@t.t"]);
+    run_git(&repo, &["config", "user.name", "t"]);
+    std::fs::write(repo.join("f.txt"), "base\n").unwrap();
+    run_git(&repo, &["add", "."]);
+    run_git(&repo, &["commit", "-q", "-m", "init"]);
+    run_git(&repo, &["checkout", "-q", "-b", "feat"]);
+    std::fs::write(repo.join("g.txt"), "theirs\n").unwrap();
+    run_git(&repo, &["add", "."]);
+    run_git(&repo, &["commit", "-q", "-m", "theirs"]);
+    run_git(&repo, &["config", "branch.feat.conduktBase", "main"]);
+    run_git(&repo, &["checkout", "-q", "main"]);
+    std::fs::write(repo.join("f.txt"), "ours\n").unwrap();
+    run_git(&repo, &["commit", "-q", "-am", "ours"]);
+    std::fs::write(repo.join("g.txt"), "untracked\n").unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_condukt"))
+        .args(["worktree", "merge", "--branch", "feat"])
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .env("CLAUDE_CODE_SESSION_ID", "sess-7fb00031b")
+        .env("CONDUKT_DEFAULT_BRANCH", "main")
+        .env_remove("CONDUKT_DISABLE")
+        .output()
+        .expect("spawn condukt");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success() && stdout.contains("merge conflict recorded"),
+        "expected exit 0 + recorded CONFLICT; status={:?} stdout={stdout:?} stderr={stderr:?}",
+        out.status
+    );
+    assert!(
+        !stderr.contains("could NOT be aborted"),
+        "stderr={stderr:?}"
+    );
+    assert!(!repo.join(".git/MERGE_HEAD").exists());
 }

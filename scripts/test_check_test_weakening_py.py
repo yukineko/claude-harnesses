@@ -241,5 +241,57 @@ class Ack(Base):
             self.assertEqual(rc, 1, msg + r.stdout)
 
 
+class SkipEvasions(Base):
+    """Indirect / aliased ways of disabling an existing test (911a93b8 follow-up)."""
+
+    def deco(self, imports, deco):
+        return imports + BASE.replace("    def test_a", "    " + deco + "\n    def test_a")
+
+    def test_aliased_skip_import(self):
+        self.assertDetected(self.deco("from unittest import skip as nope\n", "@nope('x')"), "ignore-added")
+
+    def test_aliased_expectedfailure_import(self):
+        self.assertDetected(self.deco("from unittest import expectedFailure as ef\n", "@ef"), "should-panic-added")
+
+    def test_pytest_mark_alias_skip(self):
+        self.assertDetected(self.deco("import pytest\nfrom pytest import mark as m\n", "@m.skip"), "ignore-added")
+
+    def test_dunder_test_false_module(self):
+        self.assertDetected("__test__ = False\n" + BASE, "ignore-added")
+
+    def test_dunder_test_false_class(self):
+        self.assertDetected(BASE.replace("class T(unittest.TestCase):\n",
+                                         "class T(unittest.TestCase):\n    __test__ = False\n"), "ignore-added")
+
+    def test_setupmodule_skip(self):
+        self.assertDetected(BASE + "\n\ndef setUpModule():\n    raise unittest.SkipTest('x')\n", "ignore-added")
+
+    def test_monkey_skip_assignment(self):
+        self.assertDetected(BASE + "\nT.test_a = unittest.skip('x')(T.test_a)\n", "ignore-added")
+
+    def test_monkey_expectedfailure_assignment(self):
+        self.assertDetected(BASE + "\nT.test_a = unittest.expectedFailure(T.test_a)\n", "should-panic-added")
+
+    def test_setattr_skip(self):
+        self.assertDetected(BASE + "\nsetattr(T, 'test_a', unittest.skip('x')(T.test_a))\n", "ignore-added")
+
+    def test_importorskip_module_level(self):
+        self.assertDetected("import pytest\npytest.importorskip('nonexistent_zzz')\n" + BASE, "ignore-added")
+
+    def test_importorskip_in_body(self):
+        b = "import pytest\n\n\ndef test_a():\n    assert f()\n"
+        self.assertDetected("import pytest\n\n\ndef test_a():\n    pytest.importorskip('zzz')\n    assert f()\n",
+                            "ignore-added", base_src=b)
+
+    # controls: must stay clean
+    def test_control_dunder_test_true_is_clean(self):
+        rc, j, r = self.weaken("__test__ = True\n" + BASE)
+        self.assertEqual(rc, 0, r.stdout)
+
+    def test_control_non_skip_module_assignment_is_clean(self):
+        rc, j, r = self.weaken(BASE + "\nCONFIG = {'a': 1}\nT.helper = staticmethod(lambda: 1)\n")
+        self.assertEqual(rc, 0, r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

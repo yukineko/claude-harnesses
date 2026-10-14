@@ -82,10 +82,147 @@ Exit codes:
 import argparse
 import os
 import shutil
+import signal
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import plugin_cache  # noqa: E402
+
+# --- the rollout lock (backlog ea39fbc9, lock from e3366b5c) ----------------
+# rollout-plugins.sh holds "<cache>/.rollout.lock" (holder pid in ./pid) across
+# read-registry -> copy -> repoint -> prune. A standalone prune used to ignore it
+# and could delete dirs between another session's copy and its registry repoint.
+# This mirrors rollout's acquire_rollout_lock: mkdir; a held lock is never
+# stolen (not even when its holder pid looks dead); every "cannot tell"
+# (unreadable pid, mkdir failure other than "already held", ps failure)
+# refuses. Run BY the holding rollout, it is accepted only if
+# HARNESS_ROLLOUT_LOCK_HOLDER_PID equals the pid recorded in the lock AND that
+# pid is an ancestor of this process — a bare env var is not a key.
+# --dry-run deletes nothing, so like rollout --dry-run it neither takes nor
+# needs the lock.
+LOCK_NAME = ".rollout.lock"
+HOLDER_ENV = "HARNESS_ROLLOUT_LOCK_HOLDER_PID"
+LOCK_REFUSED_EXIT = 6
+
+
+class LockRefused(Exception):
+    pass
+
+
+def _read_holder(lock_dir):
+    """The recorded holder pid as a digit string, or None if unreadable."""
+    try:
+        with open(os.path.join(lock_dir, "pid"), encoding="utf-8") as fh:
+            holder = fh.read().strip()
+    except OSError:
+        return None
+    return holder if holder.isdigit() else None
+
+
+def _lock_state(lock_dir):
+    """Diagnostic only (the lock is refused whatever this says), as in rollout."""
+    holder = _read_holder(lock_dir)
+    if holder is None:
+        return f"holder pid unknown (no readable {lock_dir}/pid)"
+    try:
+        os.kill(int(holder), 0)
+        return f"held by live pid {holder}"
+    except PermissionError:
+        return f"held by live pid {holder} (another user)"
+    except OSError:
+        return f"STALE? holder pid {holder} is not running"
+
+
+def _pid_is_ancestor(target):
+    """True / False, or None when the parent chain cannot be read."""
+    p = os.getppid()
+    for _ in range(256):
+        if p == target:
+            return True
+        if p <= 1:
+            return False
+        try:
+            r = subprocess.run(
+                ["ps", "-o", "ppid=", "-p", str(p)], capture_output=True, text=True
+            )
+        except OSError:
+            return None
+        nxt = r.stdout.strip()
+        if r.returncode != 0 or not nxt.isdigit():
+            return None
+        p = int(nxt)
+    return None
+
+
+def acquire_rollout_lock(cache_root):
+    """Return the lock dir if this process took the lock (the caller must
+    release it), or None if this process runs under the rollout that holds it.
+    Raise LockRefused in every other case."""
+    lock_dir = os.path.join(cache_root, LOCK_NAME)
+    env_holder = os.environ.get(HOLDER_ENV)
+    if env_holder:
+        if not os.path.isdir(lock_dir):
+            raise LockRefused(f"{HOLDER_ENV}={env_holder} is set but {lock_dir} does not exist.")
+        holder = _read_holder(lock_dir)
+        if holder is None or holder != env_holder:
+            raise LockRefused(f"{lock_dir} is {_lock_state(lock_dir)}, not by {HOLDER_ENV}={env_holder}.")
+        anc = _pid_is_ancestor(int(holder))
+        if anc is None:
+            raise LockRefused(
+                f"could not determine whether lock holder pid {holder} is an ancestor "
+                "of this process (ps failed)."
+            )
+        if not anc:
+            raise LockRefused(
+                f"{lock_dir} is held by pid {holder}, which is not an ancestor of this process."
+            )
+        print(f"rollout lock: running under holder pid {holder} (ancestor of this process)")
+        return None
+    try:
+        os.mkdir(lock_dir)
+    except FileExistsError:
+        raise LockRefused(f"a rollout holds {lock_dir} — {_lock_state(lock_dir)}.")
+    except OSError as exc:
+        raise LockRefused(
+            f"could not create {lock_dir} ({exc}), so cannot tell whether a rollout is running."
+        )
+    try:
+        with open(os.path.join(lock_dir, "pid"), "w", encoding="utf-8") as fh:
+            fh.write(f"{os.getpid()}\n")
+    except OSError as exc:
+        release_rollout_lock(lock_dir, force=True)
+        raise LockRefused(f"took {lock_dir} but could not record the pid in it ({exc}).")
+    return lock_dir
+
+
+def release_rollout_lock(lock_dir, force=False):
+    """Remove the lock only if it still names this process (as rollout does)."""
+    owner = _read_holder(lock_dir)
+    if not force and owner != str(os.getpid()):
+        print(
+            f"prune: {lock_dir} no longer names this process (pid {os.getpid()}, "
+            f"file says {owner!r}) — left in place",
+            file=sys.stderr,
+        )
+        return
+    try:
+        shutil.rmtree(lock_dir)
+    except OSError as exc:
+        print(
+            f'prune: could not remove {lock_dir} ({exc}) — remove it by hand: rm -r "{lock_dir}"',
+            file=sys.stderr,
+        )
+
+
+def _refuse(lock_dir, why):
+    print(f"ERROR: prune: {why}", file=sys.stderr)
+    print("       Refusing to proceed: nothing in the cache was touched.", file=sys.stderr)
+    print("       A prune during a rollout deletes dirs between its copy and its registry", file=sys.stderr)
+    print("       repoint (backlog ea39fbc9 / e3366b5c). If you have confirmed no rollout is", file=sys.stderr)
+    print("       running, remove the lock by hand:", file=sys.stderr)
+    print(f'         rm -r "{lock_dir}"', file=sys.stderr)
+    return LOCK_REFUSED_EXIT
 
 
 def main(argv=None):
@@ -102,6 +239,28 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     cache_root = args.cache or plugin_cache.default_cache_root()
+    if args.dry_run:
+        return _prune(args, cache_root)
+    try:
+        held = acquire_rollout_lock(cache_root)
+    except LockRefused as exc:
+        return _refuse(os.path.join(cache_root, LOCK_NAME), str(exc))
+    if held is None:
+        return _prune(args, cache_root)
+
+    def _on_signal(signum, _frame):
+        raise SystemExit(128 + signum)
+
+    prev = {sig: signal.signal(sig, _on_signal) for sig in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        return _prune(args, cache_root)
+    finally:
+        for sig, handler in prev.items():
+            signal.signal(sig, handler)
+        release_rollout_lock(held)
+
+
+def _prune(args, cache_root):
     crates = os.path.join(args.repo, "crates")
 
     current, src_problems = plugin_cache.source_versions(crates)

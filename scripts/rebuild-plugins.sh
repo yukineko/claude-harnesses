@@ -91,6 +91,107 @@ in_only() {
 }
 
 CACHE="${CLAUDE_PLUGIN_CACHE:-$HOME/.claude/plugins/cache/yukineko}"
+
+# --- honour the rollout lock (backlog ea39fbc9, lock from e3366b5c) ---------
+# rollout-plugins.sh holds "$CACHE/.rollout.lock" (holder pid in ./pid) across
+# read-registry -> copy -> repoint -> prune. A standalone rebuild used to ignore
+# it and swap cache binaries in the middle of another session's rollout. Now:
+#   - run BY the holding rollout: accepted only if HARNESS_ROLLOUT_LOCK_HOLDER_PID
+#     equals the pid recorded in the lock AND that pid is an ancestor of this
+#     process. A bare env var is not a key (see rollout-plugins.sh).
+#   - run standalone: take the lock exactly as rollout's acquire_rollout_lock
+#     does (mkdir; a held lock is never stolen, not even when its holder pid
+#     looks dead), so a rollout cannot start mid-rebuild either.
+# Every "cannot tell" (no readable pid, ps failure, mkdir failure) refuses, and
+# all of it happens BEFORE cargo is invoked or the cache is written.
+# --dry-run builds and copies nothing, so like rollout --dry-run it neither
+# takes nor needs the lock.
+ROLLOUT_LOCK_DIR="$CACHE/.rollout.lock"
+rebuild_lock_held=0
+# 0 = $1 is an ancestor of this process, 1 = it is not, 2 = cannot tell.
+pid_is_ancestor() {
+  local target="$1" p="$PPID" next i=0
+  while [ "$i" -lt 256 ]; do
+    [ "$p" = "$target" ] && return 0
+    [ "$p" -le 1 ] && return 1
+    # ps's own stderr is left visible: a failed lookup refuses (return 2) and
+    # the operator should see why.
+    if ! next="$(ps -o ppid= -p "$p")"; then return 2; fi
+    next="${next//[[:space:]]/}"
+    [[ "$next" =~ ^[0-9]+$ ]] || return 2
+    p="$next"; i=$((i + 1))
+  done
+  return 2
+}
+rollout_lock_state() {
+  local holder=""
+  holder="$(cat "$ROLLOUT_LOCK_DIR/pid" 2>/dev/null || true)"
+  if [ -z "$holder" ] || ! [[ "$holder" =~ ^[0-9]+$ ]]; then
+    echo "holder pid unknown (no readable $ROLLOUT_LOCK_DIR/pid)"
+  elif kill -0 "$holder" 2>/dev/null; then
+    echo "held by live pid $holder"
+  elif ps -p "$holder" >/dev/null 2>&1; then
+    echo "held by live pid $holder (another user)"
+  else
+    echo "STALE? holder pid $holder is not running"
+  fi
+}
+refuse_rollout_lock() {
+  echo "ERROR: rebuild: $1" >&2
+  echo "       Refusing to proceed: nothing was built and nothing in the cache was touched." >&2
+  echo "       A rebuild during a rollout swaps binaries between its copy and its registry" >&2
+  echo "       repoint (backlog ea39fbc9 / e3366b5c). If you have confirmed no rollout is" >&2
+  echo "       running, remove the lock by hand:" >&2
+  echo "         rm -r \"$ROLLOUT_LOCK_DIR\"" >&2
+  exit 6
+}
+release_rebuild_lock() {
+  if [ "$rebuild_lock_held" = 1 ]; then
+    local owner=""
+    owner="$(cat "$ROLLOUT_LOCK_DIR/pid" 2>/dev/null || true)"
+    if [ "$owner" = "$$" ]; then
+      rm -r "$ROLLOUT_LOCK_DIR" || echo "rebuild: could not remove $ROLLOUT_LOCK_DIR — remove it by hand: rm -r \"$ROLLOUT_LOCK_DIR\"" >&2
+    else
+      echo "rebuild: $ROLLOUT_LOCK_DIR no longer names this process (pid $$, file says '${owner}') — left in place" >&2
+    fi
+    rebuild_lock_held=0
+  fi
+}
+if [ "$dry" = 0 ]; then
+  if [ ! -d "$CACHE" ]; then
+    echo "plugin cache not found: $CACHE" >&2
+    echo "set CLAUDE_PLUGIN_CACHE to the correct root and retry." >&2
+    exit 1
+  fi
+  if [ -n "${HARNESS_ROLLOUT_LOCK_HOLDER_PID:-}" ]; then
+    lock_owner="$(cat "$ROLLOUT_LOCK_DIR/pid" 2>/dev/null || true)"
+    if [ ! -d "$ROLLOUT_LOCK_DIR" ]; then
+      refuse_rollout_lock "HARNESS_ROLLOUT_LOCK_HOLDER_PID=$HARNESS_ROLLOUT_LOCK_HOLDER_PID is set but $ROLLOUT_LOCK_DIR does not exist."
+    fi
+    if [ "$lock_owner" != "$HARNESS_ROLLOUT_LOCK_HOLDER_PID" ]; then
+      refuse_rollout_lock "$ROLLOUT_LOCK_DIR is $(rollout_lock_state), not by HARNESS_ROLLOUT_LOCK_HOLDER_PID=$HARNESS_ROLLOUT_LOCK_HOLDER_PID."
+    fi
+    anc=0; pid_is_ancestor "$lock_owner" || anc=$?
+    case "$anc" in
+      0) echo "rollout lock: running under holder pid $lock_owner (ancestor of this process)" ;;
+      1) refuse_rollout_lock "$ROLLOUT_LOCK_DIR is held by pid $lock_owner, which is not an ancestor of this process." ;;
+      *) refuse_rollout_lock "could not determine whether lock holder pid $lock_owner is an ancestor of this process (ps failed)." ;;
+    esac
+  elif mkdir "$ROLLOUT_LOCK_DIR" 2>/dev/null; then
+    rebuild_lock_held=1
+    trap release_rebuild_lock EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    if ! echo "$$" > "$ROLLOUT_LOCK_DIR/pid"; then
+      refuse_rollout_lock "took $ROLLOUT_LOCK_DIR but could not record the pid in it."
+    fi
+  elif [ -d "$ROLLOUT_LOCK_DIR" ]; then
+    refuse_rollout_lock "a rollout holds $ROLLOUT_LOCK_DIR — $(rollout_lock_state)."
+  else
+    refuse_rollout_lock "could not create $ROLLOUT_LOCK_DIR, so cannot tell whether a rollout is running."
+  fi
+fi
+
 # Ask cargo where it actually puts artifacts rather than assuming
 # $REPO/target/release — CARGO_TARGET_DIR or a target-dir override in
 # .cargo/config.toml (e.g. redirecting off a full C: drive under WSL) changes

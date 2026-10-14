@@ -95,7 +95,6 @@ class BacklogEa39fbc9(unittest.TestCase):
         self.assertFalse(self.fx.stale.exists())
         self.assertTrue(self.fx.current.exists())
 
-    @unittest.expectedFailure  # backlog ea39fbc9: open defect, remove when fixed
     def test_prune_refuses_while_a_live_rollout_holds_the_lock(self):
         self.fx.hold_lock()
         r = self.fx.prune()
@@ -107,7 +106,6 @@ class BacklogEa39fbc9(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)  # the fake cargo refuses
         self.assertTrue(self.fx.cargo_mutations(), r.stdout + r.stderr)
 
-    @unittest.expectedFailure  # backlog ea39fbc9: open defect, remove when fixed
     def test_rebuild_refuses_before_building_while_a_live_rollout_holds_the_lock(self):
         self.fx.hold_lock()
         r = self.fx.rebuild()

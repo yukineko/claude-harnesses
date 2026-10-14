@@ -141,6 +141,13 @@ is the `.md` files under `docs/` that are IN THE INDEX. An unstaged document is
 therefore not scanned — it is not part of the commit — and a document that is
 staged but deleted from the working tree still is.
 
+Record blocks
+-------------
+Lines between `<!-- record: YYYY-MM-DD -->` and `<!-- /record -->` are a dated
+record: their citations are still checked for path and line range, but NOT for
+quote presence or line drift (the record cites the tree as it was). An
+unterminated block or an invalid date exempts nothing.
+
 Exemption
 ---------
 Some claims describe a historical state on purpose. A line
@@ -195,6 +202,36 @@ QUOTE_RE = re.compile(
 EXEMPT_RE = re.compile(r"<!--\s*doc-claim-exempt\s*:\s*(?P<reason>\S.*?)\s*-->")
 
 LINE_DRIFT_TOLERANCE = 10
+
+# A dated record block (user ruling 2026-10-15). A record cites line numbers AS
+# THEY WERE when it was taken, so its citations are not held to the current
+# line or quote -- path and range checks still apply. Only a block that is
+# CLOSED and whose opener carries a real calendar date counts: an unterminated
+# or undated opener would otherwise exempt everything after it.
+RECORD_OPEN_RE = re.compile(r"^\s*<!--\s*record:\s*(\d{4})-(\d{2})-(\d{2})\s*-->\s*$")
+RECORD_CLOSE_RE = re.compile(r"^\s*<!--\s*/record\s*-->\s*$")
+
+
+def record_line_set(lines: list) -> set:
+    """0-based indices of lines inside a closed, validly dated record block."""
+    import datetime
+
+    inside: set = set()
+    open_idx = None
+    for idx, line in enumerate(lines):
+        m = RECORD_OPEN_RE.match(line)
+        if m:
+            try:
+                datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+                open_idx = idx
+            except ValueError:
+                open_idx = None
+            continue
+        if RECORD_CLOSE_RE.match(line):
+            if open_idx is not None:
+                inside.update(range(open_idx + 1, idx))
+            open_idx = None
+    return inside
 
 KIND_PATH_ESCAPES_REPO = "path-escapes-repo"
 KIND_PATH_NOT_FOUND = "path-not-found"
@@ -570,6 +607,7 @@ def extract_claims(doc_rel: str, text: str) -> list:
     """(doc, doc_line, path, cited_line, quote_or_None, exempt_reason_or_None)."""
     claims = []
     lines = text.split("\n")
+    in_record = record_line_set(lines)
     for idx, line in enumerate(lines):
         exempt = None
         if idx > 0:
@@ -590,6 +628,7 @@ def extract_claims(doc_rel: str, text: str) -> list:
                     "cited_line": int(cm.group("line")),
                     "quote": quote,
                     "exempt_reason": exempt,
+                    "in_record": idx in in_record,
                 }
             )
     return claims
@@ -621,7 +660,8 @@ def check_claim(source, claim: dict) -> dict | None:
         )
 
     quote = claim["quote"]
-    if quote is None:
+    if quote is None or claim.get("in_record"):
+        # a record's quote/line are as of when it was taken; not re-judged
         return None
 
     needle = norm_ws(quote)

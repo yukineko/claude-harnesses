@@ -1977,5 +1977,60 @@ class RepoRootIdentification(GateTestCase):
         )
 
 
+# ---------------------------------------------------------------------------
+# Record blocks: a dated `<!-- record: YYYY-MM-DD -->` ... `<!-- /record -->`
+# region is a snapshot, so line drift / vanished quotes inside it must not
+# block. Controls pin that the exemption is exactly that narrow.
+# ---------------------------------------------------------------------------
+
+
+class RecordBlockExemption(GateTestCase):
+    DRIFT = f"See `{PATH_LONG}:5` 「drifted marker」 today.\n"
+    GONE = f"See `{PATH_A}:3` 「fn goodbye() {{」 for the shape.\n"
+
+    def _doc(self, body):
+        return self.with_doc(body)
+
+    def test_drifted_citation_inside_record_block_does_not_block(self):
+        tree = self._doc(
+            "<!-- record: 2026-10-01 -->\n" + self.DRIFT + "<!-- /record -->\n"
+        )
+        self.assertClean(*self.run_gate(tree.root))
+
+    def test_vanished_quote_inside_record_block_does_not_block(self):
+        tree = self._doc(
+            "<!-- record: 2026-10-01 -->\n" + self.GONE + "<!-- /record -->\n"
+        )
+        self.assertClean(*self.run_gate(tree.root))
+
+    def test_control_drifted_citation_outside_record_block_blocks(self):
+        tree = self._doc(self.DRIFT)
+        self.assertBlocks(*self.run_gate(tree.root), kind="line-drifted")
+
+    def test_control_citation_after_record_block_closes_blocks(self):
+        tree = self._doc(
+            "<!-- record: 2026-10-01 -->\nA snapshot.\n<!-- /record -->\n\n"
+            + self.DRIFT
+        )
+        self.assertBlocks(*self.run_gate(tree.root), kind="line-drifted")
+
+    def test_control_missing_path_inside_record_block_still_blocks(self):
+        tree = self._doc(
+            "<!-- record: 2026-10-01 -->\nSee `src/gone.rs:3` for it.\n"
+            "<!-- /record -->\n"
+        )
+        self.assertBlocks(*self.run_gate(tree.root), kind="path-not-found")
+
+    def test_unterminated_record_block_does_not_exempt(self):
+        tree = self._doc("<!-- record: 2026-10-01 -->\n" + self.DRIFT)
+        self.assertBlocks(*self.run_gate(tree.root), kind="line-drifted")
+
+    def test_invalid_date_record_opener_does_not_exempt(self):
+        tree = self._doc(
+            "<!-- record: 2026-13-45 -->\n" + self.DRIFT + "<!-- /record -->\n"
+        )
+        self.assertBlocks(*self.run_gate(tree.root), kind="line-drifted")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

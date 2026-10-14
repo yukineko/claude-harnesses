@@ -190,13 +190,48 @@ fn backlog_814cfbbb_default_sink_is_unified_across_worktrees_and_fails_closed() 
     // record() in that state must return (an implementation that resolves the
     // main root inside sink_state may re-enter record via Determination::
     // undetermined) and must not write anywhere under HOME.
+    //
+    // Accounting contract: every event record() receives while the sink is
+    // Unresolvable — the outer event AND each nested undetermined event minted
+    // while resolving the sink (main_worktree_root's own give-up re-enters
+    // record) — is counted in dropped_writes(), and none is counted as written.
+    // So one outer call must raise dropped_writes() by >= 2 (1 outer + >= 1
+    // nested) and leave written() unchanged. The counters are process-global;
+    // they are sampled inside the thread, immediately around the single call,
+    // while the main thread is blocked on the channel.
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
+        let d0 = undetermined::dropped_writes();
+        let w0 = undetermined::written();
         undetermined::record("probe-814cfbbb", std::panic::Location::caller());
-        let _ = tx.send(());
+        let d1 = undetermined::dropped_writes();
+        let w1 = undetermined::written();
+        let _ = tx.send((d0, d1, w0, w1));
     });
-    if rx.recv_timeout(Duration::from_secs(20)).is_err() {
-        failures.push("(B) record() did not return within 20s in the unresolvable state".into());
+    match rx.recv_timeout(Duration::from_secs(20)) {
+        Err(_) => {
+            failures.push("(B) record() did not return within 20s in the unresolvable state".into())
+        }
+        Ok((d0, d1, w0, w1)) => {
+            if d1 <= d0 {
+                failures.push(format!(
+                    "(B) record() in the unresolvable state lost the event without counting it: \
+                     dropped_writes() {d0} -> {d1} (must strictly increase)"
+                ));
+            }
+            if d1 < d0 + 2 {
+                failures.push(format!(
+                    "(B) record() in the unresolvable state must count the outer event AND the \
+                     nested give-up(s) from resolving the sink: dropped_writes() {d0} -> {d1} \
+                     (expected an increase of >= 2)"
+                ));
+            }
+            if w1 != w0 {
+                failures.push(format!(
+                    "(B) record() in the unresolvable state counted a write: written() {w0} -> {w1}"
+                ));
+            }
+        }
     }
     let mut written = Vec::new();
     find_named(&home, "undetermined.jsonl", &mut written);

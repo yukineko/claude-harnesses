@@ -6697,6 +6697,14 @@ fn compound_views(cmd: &str) -> Vec<SegmentView> {
                 // command it looks like rather than guess.
                 expect_pattern = false;
             }
+            // 9778927f: a subshell's opening `(` in command position, whether
+            // it stands alone (`( rm …`) or is glued to the first word
+            // (`(rm …`, `((rm …`). It is syntax, not the program; its matching
+            // `)` is removed by `strip_unmatched_close_parens` below.
+            if let Some(after_paren) = rest.trim_start().strip_prefix('(') {
+                rest = after_paren;
+                continue;
+            }
             if COMPOUND_PREFIX_WORDS.contains(&word) {
                 if word == "esac" {
                     case_depth = case_depth.saturating_sub(1);
@@ -6741,9 +6749,53 @@ fn compound_views(cmd: &str) -> Vec<SegmentView> {
         }
         out.push(SegmentView {
             data,
-            command: rest.to_string(),
+            command: strip_unmatched_close_parens(rest),
             binding,
         });
+    }
+    out
+}
+
+/// `s` with every UNMATCHED, unquoted, unescaped `)` replaced by a space.
+///
+/// 9778927f: [`split_segments`] has no notion of a subshell, so the `)` that
+/// closes one lands glued to the last word of its final segment
+/// (`(true && git reset --hard)` → ` git reset --hard)`), and every rule then
+/// read `--hard)` instead of `--hard` — measured ALLOW for a command that is a
+/// DENY unwrapped. A `)` with no `(` before it in the same segment closes a
+/// group opened earlier (or a leading `(` [`compound_views`] already removed),
+/// so it is syntax, never part of a word. A `)` that closes a `(`/`$(`/`<(`
+/// opened inside the segment is matched and kept, and quoted or backslash-
+/// escaped parentheses are literal text and are not counted.
+///
+/// A `case` pattern's `)` never reaches here: [`compound_views`] moves the
+/// pattern into `data` before the command text is built.
+fn strip_unmatched_close_parens(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let (mut in_s, mut in_d, mut in_bt, mut escaped) = (false, false, false, false);
+    let mut depth: usize = 0;
+    for c in s.chars() {
+        if escaped {
+            escaped = false;
+            out.push(c);
+            continue;
+        }
+        match c {
+            '\\' if !in_s => escaped = true,
+            '\'' if !in_d && !in_bt => in_s = !in_s,
+            '"' if !in_s && !in_bt => in_d = !in_d,
+            '`' if !in_s => in_bt = !in_bt,
+            '(' if !in_s && !in_d && !in_bt => depth += 1,
+            ')' if !in_s && !in_d && !in_bt => {
+                if depth == 0 {
+                    out.push(' ');
+                    continue;
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+        out.push(c);
     }
     out
 }

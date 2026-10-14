@@ -318,6 +318,9 @@ echo
 # up running at once. The message says how to remove it by hand instead.
 # The lock is released on every exit path by the EXIT trap, and only if this
 # process owns it. --dry-run writes nothing, so it neither takes nor needs it.
+# rebuild-plugins.sh and prune-plugin-cache.py honour the same lock when run
+# standalone (backlog ea39fbc9); see HARNESS_ROLLOUT_LOCK_HOLDER_PID below for
+# how they recognise being run BY the holder.
 LOCK_DIR="$CACHE/.rollout.lock"
 lock_held=0
 release_rollout_lock() {
@@ -357,6 +360,15 @@ acquire_rollout_lock() {
       echo "rollout: took $LOCK_DIR but could not record the pid in it — refusing to proceed" >&2
       exit 6
     fi
+    # Reentrancy for the children this rollout runs under its own lock
+    # (rebuild-plugins.sh, prune-plugin-cache.py — backlog ea39fbc9). Run
+    # standalone they refuse while the lock exists; they accept it only when
+    # ALL of: this variable equals the pid recorded in $LOCK_DIR/pid, and that
+    # pid is an ANCESTOR of the child (walked via ps). The variable alone is not
+    # a key: exporting it from a shell that is not a descendant of the holder
+    # does not pass the ancestry check, so it cannot be used to bypass a
+    # rollout that is running elsewhere.
+    export HARNESS_ROLLOUT_LOCK_HOLDER_PID="$$"
     return 0
   fi
   local holder="" state

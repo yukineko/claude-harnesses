@@ -254,6 +254,28 @@ pub(crate) fn lock_path_in_project(cfg: &Config, project_root: &Path, run_id: &s
     ))
 }
 
+/// Minimum spacing between two liveness probes of the SAME holder pid while a
+/// waiter polls a held lock (backlog e9262d91). The wait loop polls every 10ms,
+/// and off Linux each probe is a `kill -0` fork+exec; probing on every poll
+/// meant ~100 spawns per second per waiter, which under CPU saturation slowed
+/// the waiter's own acquisition. Skipping a probe only ever means "keep
+/// waiting" (the reap arm needs a positive `Known(false)`), so the throttle is
+/// on the restrictive side: it can delay reaping a holder that died mid-wait by
+/// at most this interval, and can never steal a live holder's lock.
+const LIVENESS_PROBE_INTERVAL: Duration = Duration::from_millis(200);
+
+/// Liveness of a lock holder `pid` as seen from this process. A holder pid
+/// equal to our own pid is this very process — alive by observation, so no
+/// `kill` is spawned (the in-process contention case, e.g. several threads of
+/// one condukt invocation). Every other pid goes to
+/// [`pid_alive_with_env_path`] with its three-valued answer unchanged.
+fn holder_alive(pid: u32, child_path: Option<&std::ffi::OsStr>) -> Determination<bool> {
+    if pid == std::process::id() {
+        return Determination::known(true);
+    }
+    pid_alive_with_env_path(pid, child_path)
+}
+
 fn read_info(path: &Path) -> Option<LockInfo> {
     let txt = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&txt).ok()
@@ -448,43 +470,61 @@ impl RunLock {
         let _guard = TmpGuard(&tmp_path);
 
         let start = Instant::now();
+        // The holder pid we last probed and when. A new holder pid is probed
+        // immediately; the same holder is re-probed at most once per
+        // `LIVENESS_PROBE_INTERVAL` (backlog e9262d91).
+        let mut last_probe: Option<(u32, Instant)> = None;
         loop {
             match std::fs::hard_link(&tmp_path, &path) {
                 Ok(()) => return RunLock { path: Some(path) },
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                     // Someone holds the lock. Reap it only if we can positively
                     // confirm the owner pid is gone; otherwise wait for release.
-                    match read_info(&path) {
-                        // Reap ONLY on a positive "the owner is gone"
-                        // (`Known(false)`). A live owner (`Known(true)`) AND an
-                        // UNDETERMINED liveness (`kill` unspawnable / signalled —
-                        // "I could not ask the OS") both fall through to the wait
-                        // arm below. Reaping on "cannot tell" would steal a live
-                        // holder's lock — the exact fail-open this lock exists to
-                        // close.
-                        Some(existing)
-                            if matches!(
-                                pid_alive_with_env_path(existing.pid, kill_path),
-                                Determination::Known(false)
-                            ) =>
-                        {
-                            let _ = std::fs::remove_file(&path);
-                            continue;
-                        }
-                        _ => {
-                            if start.elapsed() >= deadline {
-                                eprintln!(
-                                    "condukt: state lock {} contended for {:?}; \
-                                     lock NOT acquired",
-                                    path.display(),
-                                    deadline
-                                );
-                                return RunLock { path: None };
+                    //
+                    // Reap ONLY on a positive "the owner is gone"
+                    // (`Known(false)`). A live owner (`Known(true)`), an
+                    // UNDETERMINED liveness (`kill` unspawnable / signalled —
+                    // "I could not ask the OS"), an unreadable lock file, AND a
+                    // probe skipped by the throttle all fall through to the
+                    // wait arm below. Reaping on "cannot tell" would steal a
+                    // live holder's lock — the exact fail-open this lock exists
+                    // to close.
+                    let holder_gone = match read_info(&path) {
+                        Some(existing) => {
+                            let due = match last_probe {
+                                Some((pid, at)) => {
+                                    pid != existing.pid || at.elapsed() >= LIVENESS_PROBE_INTERVAL
+                                }
+                                None => true,
+                            };
+                            if due {
+                                last_probe = Some((existing.pid, Instant::now()));
+                                matches!(
+                                    holder_alive(existing.pid, kill_path),
+                                    Determination::Known(false)
+                                )
+                            } else {
+                                false
                             }
-                            std::thread::sleep(Duration::from_millis(10));
-                            continue;
                         }
+                        None => false,
+                    };
+                    if holder_gone {
+                        let _ = std::fs::remove_file(&path);
+                        last_probe = None;
+                        continue;
                     }
+                    if start.elapsed() >= deadline {
+                        eprintln!(
+                            "condukt: state lock {} contended for {:?}; \
+                             lock NOT acquired",
+                            path.display(),
+                            deadline
+                        );
+                        return RunLock { path: None };
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                    continue;
                 }
                 Err(e) => {
                     eprintln!(

@@ -80,8 +80,15 @@
 #   launcher-only bin/ (dark; backlog ba5794b3). A halted canary run leaves
 #   the registry as it found it; a plugin it newly introduced is removed from
 #   the registry again. The same rollback runs on any other exit before the
-#   rebuild finishes (set -e abort, INT/TERM). Without --canary none of this runs and
-#   the script behaves exactly as it always has for NON-gate crates. Combine
+#   rebuild finishes (set -e abort, INT/TERM). Without --canary there are no
+#   stages, health gates or rollback plans; the only shared piece is that a
+#   default-path run which exits after repointing the registry but before the
+#   rebuild+sync has returned (a failed rebuild or sync, INT/TERM) restores
+#   each entry it repointed to its prior version/installPath, and removes any
+#   entry it newly created, provided the entry still holds exactly what this
+#   run wrote (one another writer has moved since is left alone, never
+#   demoted; one whose prior state the plan could not read in full is
+#   reported as ROLLBACK INCOMPLETE) (backlog 06ec3503). Combine
 #   with --dry-run to preview the staged plan + rollback plan and mutate
 #   nothing.
 #
@@ -343,6 +350,11 @@ on_rollout_exit() {
   # 1 after it is, so this guard also covers an exit before that point.
   if [ "${canary_inflight:-0}" = 1 ]; then
     canary_abort_cleanup "$rc"
+  fi
+  # Same guard for the default (non-canary) path: default_inflight only
+  # becomes 1 after default_abort_cleanup is defined (backlog 06ec3503).
+  if [ "${default_inflight:-0}" = 1 ]; then
+    default_abort_cleanup "$rc"
   fi
   release_rollout_lock
 }
@@ -848,7 +860,23 @@ for key, old, entry in changes:
 if dry:
     sys.exit(0)
 
-backup = f"{registry_path}.bak-{int(time.time())}"
+# Never overwrite an existing backup (backlog 06ec3503): a forward write and
+# its restore in the same second used to share one name, so the restore's copy
+# of the repointed registry replaced the pre-run backup. O_EXCL claims a fresh
+# name (.bak-<epoch>, then .bak-<epoch>-<n>).
+_bak_base = f"{registry_path}.bak-{int(time.time())}"
+backup = _bak_base
+_n = 0
+while True:
+    try:
+        os.close(os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+        break
+    except FileExistsError:
+        _n += 1
+        backup = f"{_bak_base}-{_n}"
+    except OSError as e:
+        print(f"registry write failed before backup completed (original left untouched): {e}", file=sys.stderr)
+        sys.exit(1)
 backed_up = False
 tmp = None
 try:
@@ -1599,8 +1627,81 @@ if [ "$canary" = 1 ]; then
   exit 0
 fi
 
-# --- run the plan (default, non-canary path — UNCHANGED) ---------------------
+# --- run the plan (default, non-canary path) ---------------------------------
+# In-flight restore (backlog 06ec3503, the default-path twin of ba5794b3): the
+# registry is repointed BEFORE run_rebuild_and_sync seeds the host binaries,
+# so until that returns every repointed entry names a fresh version dir whose
+# bin/ holds only the launcher (dark). default_inflight is armed just BEFORE
+# the registry write and cleared once run_rebuild_and_sync has returned; any
+# exit in that window (a failed rebuild or asset sync under set -e, INT/TERM —
+# including one that lands inside registry_patch after its swap) runs
+# default_abort_cleanup from the EXIT trap. The cleanup restores an entry to
+# its prior version/installPath (or removes an entry this run newly created)
+# ONLY if the entry still holds exactly the version+installPath this run
+# wrote: an entry another writer has moved since, or one a refused/failed
+# write never changed, is left alone, so the --allow-downgrade restore can
+# never demote a pointer this run did not set. Other metadata (gitCommitSha,
+# lastUpdated) is not restored.
+default_inflight=0
+# 5-tuples: name new_version new_target prior_version prior_path
+declare -a default_restore_args=()
+# Print, NUL-separated, the registry_patch restore triples for the tuples in
+# default_restore_args whose registry entry still holds what this run wrote.
+default_restore_filter() {
+  python3 - "$REGISTRY" "$OWNER" "$@" <<'PY'
+import json, sys
+registry_path, owner = sys.argv[1], sys.argv[2]
+rest = sys.argv[3:]
+with open(registry_path, encoding="utf-8") as f:
+    plugins = json.load(f).get("plugins", {})
+out = []
+for i in range(0, len(rest), 5):
+    name, new_v, new_t, prior_v, prior_p = rest[i:i + 5]
+    entries = plugins.get(f"{name}@{owner}")
+    cur = entries[0] if isinstance(entries, list) and entries else None
+    if cur is None or cur.get("version") != new_v or cur.get("installPath") != new_t:
+        print(f"  {name}: registry no longer holds this run's write "
+              f"({new_v} @ {new_t}) — left as-is", file=sys.stderr)
+        continue
+    out += [name, prior_v, prior_p]
+sys.stdout.write("".join(x + "\0" for x in out))
+PY
+}
+default_abort_cleanup() {
+  local rc="$1"
+  [ "$default_inflight" = 1 ] || return 0
+  default_inflight=0
+  echo "rollout: run ended (rc=$rc) before the rebuild+sync completed — restoring the registry entries this run repointed" >&2
+  echo "         (pre-run registry backup: the first 'registry backup:' line printed above)" >&2
+  if [ -n "$default_restore_unresolved" ]; then
+    # A prior entry whose version/installPath the plan could only read in part
+    # cannot be written back faithfully; say so instead of guessing.
+    echo "rollout: ROLLBACK INCOMPLETE for [${default_restore_unresolved# }] — the prior entry could not be read in full, so it was left repointed (likely at a dir with no host binary)." >&2
+    echo "         Restore $REGISTRY from the pre-run backup named above." >&2
+  fi
+  [ "${#default_restore_args[@]}" -gt 0 ] || return 0
+  local -a triples=()
+  local item filtered
+  if ! filtered="$(default_restore_filter "${default_restore_args[@]}" | tr '\0' '\036')"; then
+    echo "rollout: ROLLBACK FAILED — could not read $REGISTRY to decide what to restore." >&2
+    echo "         Restore it from the pre-run backup named above." >&2
+    return 0
+  fi
+  while IFS= read -r -d $'\036' item; do
+    triples+=("$item")
+  done <<<"$filtered"
+  [ "${#triples[@]}" -gt 0 ] || return 0
+  # --allow-downgrade: a restore writes back the pointer THIS run replaced
+  # (only where the entry still holds this run's write, see the filter),
+  # which is by definition older than the version it undoes.
+  if ! registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" --allow-downgrade "${triples[@]}" | sed 's/^/  /' >&2; then
+    echo "rollout: ROLLBACK FAILED — registry entries repointed by this run may name version dirs with no host binary." >&2
+    echo "         Restore $REGISTRY from the pre-run backup named above (NOT the newest .bak-*)." >&2
+  fi
+}
+
 declare -a reg_args=()
+default_restore_unresolved=""
 declare -a synced_plugins=()
 any_reg_change=0
 
@@ -1636,6 +1737,15 @@ while IFS=$'\t' read -r name version src target needs_copy needs_registry mismat
     changed=1
     any_reg_change=1
     reg_args+=("$name" "$version" "$target")
+    if [ -n "$cur_version" ] && [ -n "$cur_path" ]; then
+      default_restore_args+=("$name" "$version" "$target" "$cur_version" "$cur_path")
+    elif [ -z "$cur_version" ] && [ -z "$cur_path" ]; then
+      # No prior entry: restoring "nothing" means removing it (registry_patch
+      # treats an empty version AND target as a removal).
+      default_restore_args+=("$name" "$version" "$target" "" "")
+    else
+      default_restore_unresolved+=" $name"
+    fi
   fi
 
   if [ "$changed" = 1 ]; then
@@ -1656,6 +1766,12 @@ if [ "$any_reg_change" = 1 ]; then
   if [ "$dry" = 1 ]; then
     registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" --dry-run ${ALLOW_DOWNGRADE_FLAG[@]+"${ALLOW_DOWNGRADE_FLAG[@]}"} "${reg_args[@]}"
   else
+    # Armed BEFORE the write, so a signal that lands after registry_patch's
+    # swap but before the next statement still restores. Safe on a refused or
+    # failed write: the restore only touches entries that still hold exactly
+    # what this run wrote (default_restore_filter), so it never demotes a
+    # pointer another writer moved forward.
+    default_inflight=1
     registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" ${ALLOW_DOWNGRADE_FLAG[@]+"${ALLOW_DOWNGRADE_FLAG[@]}"} "${reg_args[@]}"
   fi
 else
@@ -1664,6 +1780,10 @@ fi
 
 # --- rebuild + asset sync (shared with the canary success path) --------------
 run_rebuild_and_sync ${synced_plugins[@]+"${synced_plugins[@]}"}
+# rebuild+sync returned: the repointed entries are final now (with
+# --no-rebuild nothing was seeded; that is the caller's explicit choice and
+# verify_rollout_complete below is what judges it).
+default_inflight=0
 
 prune_stale_versions
 

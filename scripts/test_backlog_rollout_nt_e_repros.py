@@ -8,7 +8,7 @@
     92e1a0e1  a prune failure never reaches the script's exit code.
     761cf58d  --canary with an empty plan aborts on bash 3.2 with
               "PLAN_ROWS[@]: unbound variable" instead of an explicit message.
-    06ec3503  default (non-canary) path: a failed rebuild exits with the registry
+    06ec3503  (FIXED) default (non-canary) path: a failed rebuild exits with the registry
               already repointed at a fresh version dir that holds no host binary.
     ef6b8cdf  the canary health gate runs before run_rebuild_and_sync swaps the new
               binaries in, so it can only ever observe the OLD code.
@@ -293,7 +293,6 @@ class Backlog06ec3503(Base):
         self.assertEqual(entry["installPath"], str(self.new))
         self.assertFalse((self.sb.cache / ".rollout.lock").exists(), "lock not released")
 
-    @unittest.expectedFailure  # backlog 06ec3503: open defect, remove when fixed
     def test_failed_rebuild_does_not_leave_registry_on_a_binaryless_dir(self):
         r, entry = self.run_default_path(rebuild_ok=False)
         self.assertNotEqual(r.returncode, 0)

@@ -82,5 +82,8 @@ timeout_secs = 900
 name = "hook-tests"
 cmd = "scripts/run-hook-tests.sh"
 when_changed = [".githooks/**", "scripts/test_precommit_hook.py", "scripts/test_git_hook_coverage.py", "scripts/test_gate_bypass.py", "scripts/run-hook-tests.sh", "scripts/gate-bypass.py", "scripts/deny-no-verify.py"]
-timeout_secs = 300
+# 600, not 300: with test_gate_bypass.py folded in, a loaded machine was
+# measured at 220s for that suite alone (2026-10-15), so 300 left a thin
+# margin and a timeout would be a red that detects nothing.
+timeout_secs = 600
 

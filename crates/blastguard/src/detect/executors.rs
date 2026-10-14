@@ -473,10 +473,12 @@ blastguard cannot see what would execute"
 // ------------------------------------------------------- exec env vars ------
 
 /// Environment variables whose VALUE a program runs as a command line: git's
-/// pager / editors / ssh / askpass / proxy / external diff, and the generic
+/// pager / editors / ssh / askpass / proxy / external diff, the generic
 /// `PAGER`/`MANPAGER`/`EDITOR`/`VISUAL` that man, crontab, less and friends
-/// honour. `GIT_SSH`/`GIT_ASKPASS`/`SSH_ASKPASS` name a program rather than a
-/// shell line; judging the value as a shell line is a superset of that.
+/// honour, and the same mechanism in sudo, the shell's `fc`, gh, kubectl,
+/// systemd, git web--browse and less's input preprocessor. `GIT_SSH`,
+/// `*_ASKPASS` and `BROWSER` name a program rather than a shell line; judging
+/// the value as a shell line is a superset of that.
 const EXEC_ENV_VARS: &[&str] = &[
     "GIT_PAGER",
     "GIT_EDITOR",
@@ -491,9 +493,61 @@ const EXEC_ENV_VARS: &[&str] = &[
     "MANPAGER",
     "EDITOR",
     "VISUAL",
+    "SUDO_ASKPASS",
+    "SUDO_EDITOR",
+    "FCEDIT",
+    "GH_PAGER",
+    "GH_EDITOR",
+    "KUBE_EDITOR",
+    "SYSTEMD_PAGER",
+    "BROWSER",
+    "LESSOPEN",
+    "LESSCLOSE",
 ];
 
-/// Judge every command-valued environment variable assigned anywhere in `seg`.
+/// Environment variables that make a program LOAD code or configuration from a
+/// file or directory: git's global/system config and exec/template dirs (each
+/// can set or supply something git runs), the startup file non-interactive
+/// bash (`BASH_ENV`) and an interactive POSIX sh (`ENV`) source, and the
+/// dynamic loader's preload lists. What runs is in the file, not on the
+/// command line, so a non-trivial value is Ask (the `include.path` answer).
+const LOAD_ENV_VARS: &[&str] = &[
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_SYSTEM",
+    "GIT_EXEC_PATH",
+    "GIT_TEMPLATE_DIR",
+    "BASH_ENV",
+    "ENV",
+    "LD_PRELOAD",
+    "DYLD_INSERT_LIBRARIES",
+];
+
+/// Builtins / programs whose ARGUMENTS are assignments, so a quoted spelling
+/// (`env 'GIT_PAGER=…'`, `export "GIT_PAGER=…"`, `env G"IT_PAGER=…"`) still
+/// assigns. In command-prefix position bash requires the name and `=` to be
+/// unquoted, so a quoted prefix word is a command name, not an assignment.
+const ASSIGNING_COMMANDS: &[&str] = &["env", "export", "declare", "typeset", "local", "readonly"];
+
+/// Commands that EXPORT a bare name (`export GIT_PAGER`), handing the
+/// variable's current value — assigned however — to every later program.
+const EXPORTING_COMMANDS: &[&str] = &["export", "declare", "typeset", "readonly"];
+
+fn is_watched_env_name(name: &str) -> bool {
+    EXEC_ENV_VARS.contains(&name)
+        || LOAD_ENV_VARS.contains(&name)
+        || name == "GIT_CONFIG_PARAMETERS"
+        || name.starts_with("GIT_CONFIG_KEY_")
+        || name.starts_with("GIT_CONFIG_VALUE_")
+}
+
+/// True when `v` is text the shell still expands at run time (a parameter,
+/// command or arithmetic expansion) — its value is not what is written.
+fn expands_at_run_time(v: &str) -> bool {
+    v.contains('$') || v.contains('`')
+}
+
+/// Judge every command-valued environment variable assigned anywhere in `seg`
+/// (one segment of `line`).
 ///
 /// 675eb991: leading `NAME=value` words are skipped on the way to the command
 /// word, so `GIT_PAGER='rm -rf ~/x' git log` was ALLOW while its twin
@@ -504,40 +558,113 @@ const EXEC_ENV_VARS: &[&str] = &[
 /// that merely LOOKS like an assignment (`echo PAGER=less`) is judged too —
 /// that can only add a verdict, never remove one.
 ///
-/// * A command-valued variable: the value is judged as the shell line it is
-///   ([`analyze_shell_payload`]); a value that is only known at run time
-///   (`"$X"`) is Ask through that same function. A value whose quoting this
-///   module cannot resolve to one literal is Ask.
+/// * A command-valued variable ([`EXEC_ENV_VARS`]): the value is judged as the
+///   shell line it is ([`analyze_shell_payload`]); a value that is only known
+///   at run time (`"$X"`) is Ask through that same function. A value whose
+///   quoting this module cannot resolve to one literal is Ask.
+/// * A code/config-loading variable ([`LOAD_ENV_VARS`]): Ask unless the value
+///   is empty or `/dev/null`. `ENV` is Ask only for a path-shaped or run-time
+///   value: `ENV=production npm start` is overwhelmingly a plain setting, and
+///   sh reads `ENV` only when interactive.
 /// * `GIT_CONFIG_PARAMETERS`: git's serialised `-c` list (`'k=v' 'k2=v2'`),
-///   each entry judged exactly as `git -c k=v` is; an unparseable list is Ask.
-/// * `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>`: paired by `<n>` and judged
-///   as `git -c key=value`; a key whose value is not assigned in the same
-///   segment comes from the environment and is Ask when the key is
-///   command-valued.
-pub(super) fn env_exec_var_verdict(seg: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
+///   each entry judged exactly as `git -c k=v` is; an unparseable list, or one
+///   that still expands at run time, is Ask.
+/// * `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>`: paired by `<n>` within the
+///   segment and judged as `git -c key=value`. A key that is not a literal is
+///   Ask; a command-valued key whose value is not a literal on this segment is
+///   Ask; a value whose key is not on this segment is Ask (the key comes from
+///   the environment and may be command-valued).
+/// * Quoted assignment words (`env 'GIT_PAGER=…'`, `export "GIT_PAGER=…"`) are
+///   read as assignments once an [`ASSIGNING_COMMANDS`] word precedes them.
+/// * A watched variable assigned WITHOUT `=` — `printf -v NAME`, `read NAME`,
+///   `${NAME:=…}` / `${NAME=…}` — or exported by bare name (`export NAME`)
+///   on a line that never assigns it with a literal `NAME=…`: its value is not
+///   on the command line, so Ask.
+pub(super) fn env_exec_var_verdict(seg: &str, line: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     let mut acc = VerdictAcc::default();
-    let mut config_keys: Vec<(String, String)> = Vec::new();
-    let mut config_values: Vec<(String, String)> = Vec::new();
-    for word in quote_aware_words(seg) {
-        let Some((name, raw_value)) = env_assignment(&word) else {
+    let mut config_keys: Vec<(String, Option<String>)> = Vec::new();
+    let mut config_values: Vec<(String, Option<String>)> = Vec::new();
+    let words = quote_aware_words(seg);
+    let mut assigning_context = false;
+    let mut exporting_context = false;
+    for (i, word) in words.iter().enumerate() {
+        let plain = unquote_literal_value(word);
+        let head = plain.as_deref().unwrap_or(word.as_str());
+        let head_base = head.rsplit('/').next().unwrap_or(head);
+        if let Some(d) = non_equals_assignment(&words, i) {
+            if let Some(deny) = acc.record(d) {
+                return deny;
+            }
+        }
+        if exporting_context && is_watched_env_name(head) && !line_assigns_literally(line, head) {
+            if let Some(deny) = acc.record(Decision::ask(format!(
+                "`{head}` is exported here, and its value is not assigned on this command line \
+— a program may run or load it, and blastguard cannot see what it is"
+            ))) {
+                return deny;
+            }
+        }
+        let parsed: Option<(String, Option<String>, String)> =
+            if let Some((name, raw_value)) = env_assignment(word) {
+                Some((
+                    name.to_string(),
+                    unquote_literal_value(raw_value),
+                    raw_value.to_string(),
+                ))
+            } else if assigning_context {
+                plain
+                    .as_deref()
+                    .and_then(env_assignment)
+                    .map(|(n, v)| (n.to_string(), Some(v.to_string()), v.to_string()))
+            } else {
+                None
+            };
+        if ASSIGNING_COMMANDS.contains(&head_base) {
+            assigning_context = true;
+        }
+        if EXPORTING_COMMANDS.contains(&head_base) {
+            exporting_context = true;
+        }
+        let Some((name, value, raw_value)) = parsed else {
             continue;
         };
+        let name = name.as_str();
         let verdict = if EXEC_ENV_VARS.contains(&name) {
-            match unquote_literal_value(raw_value) {
+            match value {
                 Some(v) if v.trim().is_empty() => Decision::Allow,
-                Some(v) => analyze_shell_payload(&v, depth, ctx),
+                Some(v) => {
+                    // less's input preprocessor: a leading `|` (or `||`) marks
+                    // the value as a command whose output less reads.
+                    let payload = if name.starts_with("LESS") {
+                        v.trim_start_matches('|').to_string()
+                    } else {
+                        v
+                    };
+                    analyze_shell_payload(&payload, depth, ctx)
+                }
                 None => Decision::ask(format!(
                     "`{name}` is a command line a program runs, and its value `{raw_value}` \
 cannot be resolved to one literal — blastguard cannot see what would execute"
                 )),
             }
+        } else if LOAD_ENV_VARS.contains(&name) {
+            match value.as_deref().map(str::trim) {
+                Some("" | "/dev/null") => Decision::Allow,
+                Some(v) if name == "ENV" && !v.contains('/') && !expands_at_run_time(v) => {
+                    Decision::Allow
+                }
+                _ => Decision::ask(format!(
+                    "`{name}={raw_value}` makes a program load code or configuration from a \
+file — what would run is in that file, not on the command line, so blastguard cannot see it"
+                )),
+            }
         } else if name == "GIT_CONFIG_PARAMETERS" {
-            git_config_parameters_verdict(raw_value, depth, ctx)
+            git_config_parameters_verdict(value.as_deref(), depth, ctx)
         } else if let Some(n) = name.strip_prefix("GIT_CONFIG_KEY_") {
-            config_keys.push((n.to_string(), raw_value.to_string()));
+            config_keys.push((n.to_string(), value));
             continue;
         } else if let Some(n) = name.strip_prefix("GIT_CONFIG_VALUE_") {
-            config_values.push((n.to_string(), raw_value.to_string()));
+            config_values.push((n.to_string(), value));
             continue;
         } else {
             continue;
@@ -546,27 +673,31 @@ cannot be resolved to one literal — blastguard cannot see what would execute"
             return deny;
         }
     }
-    for (n, raw_key) in &config_keys {
-        let Some(key) = unquote_literal_value(raw_key) else {
-            if let Some(deny) = acc.record(Decision::ask(format!(
-                "`GIT_CONFIG_KEY_{n}` names a git config key blastguard cannot resolve to one \
-literal — it cannot tell whether git would run its value as a command"
-            ))) {
-                return deny;
+    for (n, key) in &config_keys {
+        let key = match key {
+            Some(k) if !expands_at_run_time(k) => k,
+            _ => {
+                if let Some(deny) = acc.record(Decision::ask(format!(
+                    "`GIT_CONFIG_KEY_{n}` names a git config key blastguard cannot resolve to \
+one literal — it cannot tell whether git would run its value as a command"
+                ))) {
+                    return deny;
+                }
+                continue;
             }
-            continue;
         };
         let value = config_values
             .iter()
             .rev()
             .find(|(m, _)| m == n)
-            .map(|(_, v)| unquote_literal_value(v));
+            .and_then(|(_, v)| v.clone())
+            .filter(|v| !expands_at_run_time(v));
         let verdict = match value {
-            Some(Some(v)) => judge_git_config(&format!("{key}={v}"), false, depth, ctx),
-            // Value unresolvable, or not on this line at all (it comes from the
-            // environment): the `--config-env` case, judged the same way — but
-            // reported in this variable's own terms.
-            Some(None) | None => match judge_git_config(&format!("{key}="), true, depth, ctx) {
+            Some(v) => judge_git_config(&format!("{key}={v}"), false, depth, ctx),
+            // Value unresolvable, or not on this segment at all (it comes from
+            // the environment): the `--config-env` case, judged the same way —
+            // but reported in this variable's own terms.
+            None => match judge_git_config(&format!("{key}="), true, depth, ctx) {
                 Decision::Allow => Decision::Allow,
                 Decision::Deny(r) => Decision::Deny(r),
                 _ => Decision::ask(format!(
@@ -577,6 +708,17 @@ would execute"
             },
         };
         if let Some(deny) = acc.record(verdict) {
+            return deny;
+        }
+    }
+    for (n, _) in &config_values {
+        if config_keys.iter().any(|(m, _)| m == n) {
+            continue;
+        }
+        if let Some(deny) = acc.record(Decision::ask(format!(
+            "`GIT_CONFIG_VALUE_{n}` is set without `GIT_CONFIG_KEY_{n}` on this command line — \
+the key comes from the environment, and git may run this value as a command"
+        ))) {
             return deny;
         }
     }
@@ -594,19 +736,81 @@ fn env_assignment(word: &str) -> Option<(&str, &str)> {
     Some((name, &word[eq + 1..]))
 }
 
+/// True when `line` contains a literal `NAME=`/`NAME+=` assignment word (whose
+/// value [`env_exec_var_verdict`] judges where it stands).
+fn line_assigns_literally(line: &str, name: &str) -> bool {
+    quote_aware_words(line).iter().any(|w| {
+        let plain = unquote_literal_value(w).unwrap_or_else(|| w.clone());
+        env_assignment(&plain).is_some_and(|(n, _)| n == name)
+    })
+}
+
+/// An Ask when `words[i]` assigns a watched variable WITHOUT a `NAME=` word:
+/// `printf -v NAME …` / `printf -vNAME …`, `read … NAME`, or a `${NAME:=…}` /
+/// `${NAME=…}` default-assignment expansion anywhere in the word.
+fn non_equals_assignment(words: &[String], i: usize) -> Option<Decision> {
+    let word = words[i].as_str();
+    let ask = |name: &str, how: &str| {
+        Some(Decision::ask(format!(
+            "`{name}` is assigned by {how}, so its value is not on the command line — a program \
+may run or load it, and blastguard cannot see what it is"
+        )))
+    };
+    let mut rest = word;
+    while let Some(pos) = rest.find("${") {
+        let body = &rest[pos + 2..];
+        let end = body
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(body.len());
+        let (name, after) = body.split_at(end);
+        if is_watched_env_name(name) && (after.starts_with(":=") || after.starts_with('=')) {
+            return ask(name, "a `${NAME:=…}` expansion");
+        }
+        rest = body;
+    }
+    let base_at = |j: usize| -> String {
+        let w = &words[j];
+        let p = unquote_literal_value(w).unwrap_or_else(|| w.clone());
+        p.rsplit('/').next().unwrap_or(&p).to_string()
+    };
+    let plain = unquote_literal_value(word).unwrap_or_else(|| word.to_string());
+    // `printf -v NAME` / `printf -vNAME`.
+    if (0..i).any(|j| base_at(j) == "printf") {
+        let named = if i > 0 && words[i - 1] == "-v" {
+            Some(plain.as_str())
+        } else {
+            plain.strip_prefix("-v").filter(|n| !n.is_empty())
+        };
+        if let Some(n) = named.filter(|n| is_watched_env_name(n)) {
+            return ask(n, "`printf -v`");
+        }
+    }
+    // `read [opts] NAME…`: any later operand that is a watched name.
+    if (0..i).any(|j| base_at(j) == "read") && is_watched_env_name(&plain) {
+        return ask(&plain, "`read`");
+    }
+    None
+}
+
 /// Judge git's serialised `-c` list as carried by `GIT_CONFIG_PARAMETERS`.
-fn git_config_parameters_verdict(raw: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
+/// `list` is the value already resolved to a literal, or `None` when it could
+/// not be.
+fn git_config_parameters_verdict(list: Option<&str>, depth: usize, ctx: &Ctx<'_>) -> Decision {
     let unparseable = || {
         Decision::ask(
             "`GIT_CONFIG_PARAMETERS` sets git config for this command, and blastguard cannot \
-parse its value into `key=value` entries — it cannot tell whether git would run one as a command",
+parse its value into literal `key=value` entries — it cannot tell whether git would run one as a \
+command",
         )
     };
-    let Some(list) = unquote_literal_value(raw) else {
+    let Some(list) = list else {
         return unparseable();
     };
+    if expands_at_run_time(list) {
+        return unparseable();
+    }
     let mut acc = VerdictAcc::default();
-    for entry in quote_aware_words(&list) {
+    for entry in quote_aware_words(list) {
         let Some(assignment) = unquote_literal_value(&entry) else {
             return unparseable();
         };

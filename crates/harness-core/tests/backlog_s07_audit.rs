@@ -47,7 +47,6 @@ fn backlog_ff98fed0_unknown_model_is_not_priced_free() {
 
 // --- 00a8ba29: unreadable existing ledger read as empty ledger ---
 #[test]
-#[ignore = "backlog 00a8ba29: open defect, remove ignore when fixed"]
 fn backlog_00a8ba29_unreadable_existing_ledger_is_not_empty_ledger() {
     let dir = tempfile::tempdir().unwrap();
     // ledger.json exists but cannot be read as a file (it is a directory -> EISDIR).

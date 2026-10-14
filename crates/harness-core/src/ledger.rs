@@ -35,6 +35,20 @@ pub enum LoadError {
     /// must be PRESERVED (never overwritten with a reset/default), or one bad
     /// write would erase the whole spend history and fail the budget open.
     Corrupt,
+    /// The file exists but could not be read (permission denied, it is a
+    /// directory, an I/O error, ...). Reading it as an empty ledger would let a
+    /// caller record one session and save, erasing the day's spend, so this is
+    /// an error, never a default. The on-disk entry must be left untouched.
+    Unreadable(std::io::Error),
+}
+
+impl std::fmt::Display for LoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LoadError::Corrupt => write!(f, "ledger.json is corrupt (not valid ledger JSON)"),
+            LoadError::Unreadable(e) => write!(f, "ledger.json is unreadable ({e})"),
+        }
+    }
 }
 
 /// budgetguard's default state directory (`~/.budgetguard/state`). Consumers
@@ -51,17 +65,19 @@ impl Ledger {
     /// Load the ledger, distinguishing "absent" (a fresh default is correct)
     /// from "present but corrupt" (the caller must not clobber it).
     ///
-    /// - file missing            → `Ok(Ledger::default())`
-    /// - file present & parses    → `Ok(parsed)`
+    /// - file missing (`NotFound`)  → `Ok(Ledger::default())`
+    /// - file present & parses      → `Ok(parsed)`
     /// - file present & unparseable → `Err(LoadError::Corrupt)`
+    /// - any other read error       → `Err(LoadError::Unreadable(_))`
     pub fn load_checked(state_dir: &Path) -> Result<Self, LoadError> {
         match std::fs::read_to_string(Self::path(state_dir)) {
-            Err(_) => Ok(Self::default()), // absent (or unreadable) → fresh
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) => Err(LoadError::Unreadable(e)),
             Ok(s) => serde_json::from_str(&s).map_err(|_| LoadError::Corrupt),
         }
     }
 
-    /// Backwards-compatible lenient load: a corrupt file reads as default.
+    /// Backwards-compatible lenient load: a corrupt or unreadable file reads as default.
     /// Prefer [`Ledger::load_checked`] where clobbering must be avoided.
     pub fn load(state_dir: &Path) -> Self {
         Self::load_checked(state_dir).unwrap_or_default()
@@ -72,11 +88,24 @@ impl Ledger {
     /// that would then parse-fail and be treated as corrupt.
     pub fn save(&self, state_dir: &Path) -> std::io::Result<()> {
         std::fs::create_dir_all(state_dir)?;
-        let json = serde_json::to_string_pretty(self).unwrap_or_default();
+        // A serialization failure is an error; nothing is written.
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let final_path = Self::path(state_dir);
-        let tmp_path = final_path.with_extension("json.tmp");
+        // Unique per writer (pid + per-process counter) so concurrent writers
+        // never share a tmp file.
+        let tmp_path = final_path.with_extension(format!(
+            "json.tmp.{}.{}",
+            std::process::id(),
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::write(&tmp_path, json)?;
-        std::fs::rename(&tmp_path, &final_path)
+        if let Err(e) = std::fs::rename(&tmp_path, &final_path) {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(e);
+        }
+        Ok(())
     }
 
     /// Update the session entry for `today`, return the updated day total.

@@ -51,6 +51,8 @@ use std::panic::Location;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use crate::verdict::Determination;
+
 /// Environment override for the sink. An absolute path forces recording ON to
 /// that file (even under cargo); the literal `off` forces it OFF.
 pub const SINK_ENV: &str = "HARNESS_UNDETERMINED_SINK";
@@ -63,6 +65,11 @@ pub const MAX_RECORDS_PER_PROCESS: u64 = 512;
 static WRITTEN: AtomicU64 = AtomicU64::new(0);
 static DROPPED: AtomicU64 = AtomicU64::new(0);
 static WARNED: AtomicBool = AtomicBool::new(false);
+
+thread_local! {
+    /// Set while `record` is resolving its sink; see the guard in [`record`].
+    static IN_RECORD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 /// Where undetermined telemetry goes, or why it goes nowhere.
 ///
@@ -106,16 +113,18 @@ impl SinkState {
 /// Resolve the sink for the current environment and working directory.
 ///
 /// The default path is `base_dir("overwatch")/<project key>/overwatch/`, where
-/// `<project key>` is derived from `projkey::repo_root(cwd)` — so
+/// `<project key>` is derived from `projkey::main_worktree_root(cwd)` — the
+/// same identity `overwatch::store::storage_root` uses for every other
+/// overwatch stream — so one project has ONE `undetermined.jsonl` no matter
+/// which of its linked worktrees a hook runs in (backlog 814cfbbb), and
 /// `overwatch undetermined-metrics` (which resolves the same function) finds it
 /// without configuration and without harness-core depending on overwatch
 /// (which would invert the dependency direction).
 ///
-/// NOTE: for a cwd inside a LINKED git worktree this is NOT the directory
-/// overwatch's other streams use: `overwatch::store::storage_root` keys on the
-/// MAIN worktree root (`projkey::main_worktree_root`), while this keys on the
-/// linked worktree itself. For the main checkout and for non-repo cwds the two
-/// coincide.
+/// Fail-closed: when the main worktree root cannot be determined this returns
+/// [`SinkState::Unresolvable`] carrying the reason. It never falls back to a
+/// per-worktree path, which would read as the unified stream while silently
+/// being a different file.
 pub fn sink_state() -> SinkState {
     match std::env::var(SINK_ENV) {
         Ok(v) if v.trim().eq_ignore_ascii_case("off") => return SinkState::DisabledByEnv,
@@ -126,19 +135,31 @@ pub fn sink_state() -> SinkState {
         return SinkState::SuppressedUnderCargo;
     }
     match std::env::current_dir() {
-        Ok(cwd) => SinkState::Active(default_sink_path(&cwd)),
+        Ok(cwd) => match default_sink_path(&cwd) {
+            Determination::Known(p) => SinkState::Active(p),
+            Determination::Undetermined(why) => SinkState::Unresolvable(format!(
+                "cannot resolve the project's main worktree root for {}: {}",
+                cwd.display(),
+                why.as_str()
+            )),
+        },
         Err(e) => SinkState::Unresolvable(format!("cannot resolve cwd: {e}")),
     }
 }
 
-/// The default sink path for a project. Keyed on `projkey::repo_root` (per
-/// checkout); see [`sink_state`] for how that diverges from overwatch's
-/// `storage_root` inside a linked worktree.
-pub fn default_sink_path(cwd: &std::path::Path) -> PathBuf {
+/// The default sink path for a project, keyed on
+/// `projkey::main_worktree_root(cwd)` so every linked worktree of one repo
+/// shares a single file. `Undetermined` (forwarded verbatim, not re-recorded)
+/// when the main worktree root cannot be resolved — there is no per-worktree
+/// fallback.
+pub fn default_sink_path(cwd: &std::path::Path) -> Determination<PathBuf> {
+    let main_root = match crate::projkey::main_worktree_root(cwd) {
+        Determination::Known(root) => root,
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
     let base = crate::config::base_dir("overwatch");
-    let repo_root = crate::projkey::repo_root(cwd);
-    let key = crate::projkey::project_key(&repo_root);
-    base.join(key).join("overwatch").join("undetermined.jsonl")
+    let key = crate::projkey::project_key(&main_root);
+    Determination::Known(base.join(key).join("overwatch").join("undetermined.jsonl"))
 }
 
 /// How many records this process has written.
@@ -146,7 +167,9 @@ pub fn written() -> u64 {
     WRITTEN.load(Ordering::Relaxed)
 }
 
-/// How many records this process failed to write or dropped to the cap. Never
+/// How many records this process failed to write, dropped to the cap, or lost
+/// because the sink was unresolvable (including the nested events raised while
+/// resolving it — see the re-entrancy guard in [`record`]). Never
 /// silent: `undetermined-metrics` has no way to see this (it is per-process),
 /// which is why a failure also warns once on stderr.
 pub fn dropped_writes() -> u64 {
@@ -160,9 +183,34 @@ pub fn dropped_writes() -> u64 {
 /// actually gave up, not this function — so the crate/file/line identify the
 /// real branch.
 pub fn record(reason: &str, loc: &'static Location<'static>) {
-    let path = match sink_state() {
+    // Re-entrancy guard. Resolving the default sink calls
+    // `projkey::main_worktree_root`, whose own give-ups are minted through
+    // `Determination::undetermined` and therefore land back here. Without the
+    // guard an unresolvable root recurses without bound (record -> sink_state
+    // -> main_worktree_root -> record -> ...). A nested event has no sink to go
+    // to (it is the very reason the outer resolution fails), so it is counted
+    // as dropped; the outer call then handles the Unresolvable state below.
+    if IN_RECORD.with(|f| f.replace(true)) {
+        DROPPED.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    let state = sink_state();
+    IN_RECORD.with(|f| f.set(false));
+    let path = match state {
         SinkState::Active(p) => p,
-        _ => return,
+        SinkState::Unresolvable(why) => {
+            // Not a configured "off": the event is genuinely lost, so count it
+            // and say so once, exactly like a write failure.
+            DROPPED.fetch_add(1, Ordering::Relaxed);
+            if !WARNED.swap(true, Ordering::Relaxed) {
+                eprintln!(
+                    "harness-core: WARNING undetermined telemetry sink is unresolvable \
+                     ({why}); counts from this process will be missing"
+                );
+            }
+            return;
+        }
+        SinkState::SuppressedUnderCargo | SinkState::DisabledByEnv => return,
     };
 
     // Cap check first, so the pathological case costs one atomic and no IO.

@@ -31,8 +31,10 @@ whose `tool_input` is present but not an object. A Bash payload with no
 2026-10-14 (bee1ccbc). In each refused case whether the command is a bypass cannot be determined, and CLAUDE.md 3
 resolves that to the restricted side. This mirrors the sibling guards
 `guard-maintree-bash.py` and `guard-maintree-edit.py`, which refuse the same
-payloads. Note that an uncaught exception is NOT a refusal: it exits 1, which
-Claude Code treats as a non-blocking error, i.e. the tool call proceeds. An
+payloads. An uncaught exception would exit 1, which Claude Code treats as a
+non-blocking error (the tool call proceeds), so a crash barrier at the entry
+point turns any exception (e.g. RecursionError on a deeply nested payload)
+into exit 2 as well. An
 earlier version crashed that way on a non-object payload and exited 0 on a
 non-JSON one, justified by "this hook is not the gate, the ledger is the
 backstop". The next paragraph shows why that backstop does not cover every
@@ -532,4 +534,16 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        _rc = main()
+    except Exception as _crash:  # noqa: BLE001
+        # An uncaught exception (e.g. RecursionError decoding a deeply nested
+        # payload) exits 1, which Claude Code treats as a non-blocking error,
+        # i.e. the call proceeds. A check that crashed has not passed
+        # (CLAUDE.md 3), so it resolves to exit 2 (bee1ccbc; mirrors
+        # guard-maintree-edit.py e033c406).
+        sys.stderr.write(
+            f"Refused: deny-no-verify.py crashed ({type(_crash).__name__}: {_crash}); "
+            "a check that could not run has not passed.\n")
+        _rc = 2
+    sys.exit(_rc)

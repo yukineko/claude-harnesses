@@ -1350,15 +1350,12 @@ class KnownDefects(GateTestCase):
             h.pre_push().returncode, 0, "pre-push must refuse to send it"
         )
 
-    def test_DEFECT_a_non_dict_json_payload_crashes_the_deny_hook(self):
-        """DEFECT (severity: low).  The module docstring says an unparseable
-        payload exits 0.  A payload that PARSES but is not an object — `[]`,
-        `"x"`, `3` — reaches `payload.get(...)` and raises AttributeError, so
-        the hook dies with an unhandled traceback and exit 1.
-
-        Exit 1 is not a deny, so the bypass is not blocked either way; the cost
-        is a stack trace on every Bash call for as long as the malformed shape
-        persists, and a hook whose stated fail-open contract it does not meet.
+    def test_FIXED_a_non_dict_json_payload_is_refused_by_the_deny_hook(self):
+        """FIXED (backlog bee1ccbc, user ruling 2026-10-14) — inverted from
+        `test_DEFECT_a_non_dict_json_payload_crashes_the_deny_hook`, which
+        pinned exit 1 + Traceback.  Exit 1 is an ALLOW to Claude Code; a payload
+        that parses but is not an object is unreadable and now refuses with
+        exit 2 and no traceback (CLAUDE.md 3).
         """
         for payload in ("[]", '"a string"', "3", "null"):
             with self.subTest(payload=payload):
@@ -1368,10 +1365,8 @@ class KnownDefects(GateTestCase):
                     capture_output=True,
                     text=True,
                 )
-                self.assertEqual(
-                    proc.returncode, 1, "DEFECT PINNED: %r" % payload
-                )
-                self.assertIn("Traceback", proc.stderr)
+                self.assertEqual(proc.returncode, 2, "payload %r" % payload)
+                self.assertNotIn("Traceback", proc.stderr)
 
 
 # ---------------------------------------------------------------------------

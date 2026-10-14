@@ -81,7 +81,6 @@ fn backlog_f58a303f_probe_repo_times_out_on_hung_git() {
 
 // --- 814cfbbb: undetermined.jsonl default sink is per-checkout, not per-project ---
 #[test]
-#[ignore = "backlog 814cfbbb: open defect, remove ignore when fixed"]
 fn backlog_814cfbbb_default_sink_is_shared_across_worktrees() {
     use std::process::Command;
     let td = tempfile::tempdir().unwrap();

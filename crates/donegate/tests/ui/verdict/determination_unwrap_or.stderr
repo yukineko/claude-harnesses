@@ -6,6 +6,11 @@ error[E0599]: no method named `unwrap_or` found for enum `Determination<T>` in t
    |
 note: the method `unwrap_or` exists on the type `Option<Vec<String>>`
   --> $RUST/core/src/option.rs
+   |
+   | /     pub const fn unwrap_or(self, default: T) -> T
+   | |     where
+   | |         T: [const] Destruct,
+   | |____________________________^
 
 error[E0599]: no method named `ok` found for enum `Determination<T>` in the current scope
   --> tests/ui/verdict/determination_unwrap_or.rs:18:15
@@ -21,3 +26,8 @@ error[E0599]: no method named `unwrap_or_default` found for enum `Determination<
    |
 note: the method `unwrap_or_default` exists on the type `Option<Vec<String>>`
   --> $RUST/core/src/option.rs
+   |
+   | /     pub const fn unwrap_or_default(self) -> T
+   | |     where
+   | |         T: [const] Default,
+   | |___________________________^

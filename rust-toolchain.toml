@@ -6,6 +6,12 @@
 # them is pinned to the same release. Bump this together with a
 # `TRYBUILD=overwrite` regeneration of those snapshots, in one commit.
 # Enforced by scripts/check-compile-fail.py.
+#
+# rust-src is pinned too (USER RULING 2026-10-14). With it installed rustc adds a
+# std-source snippet to some diagnostics (tests/ui/verdict/from_bool.stderr), and
+# editor tooling reinstalls it on its own, so leaving it out made the snapshots
+# depend on whatever the machine happened to have. Pinning it makes every checkout
+# judge the snapshots with the same component set.
 [toolchain]
 channel = "1.97.1"
-components = ["clippy", "rustfmt"]
+components = ["clippy", "rustfmt", "rust-src"]

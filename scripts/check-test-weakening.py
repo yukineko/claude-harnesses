@@ -34,6 +34,10 @@ under a `tests/` dir), and every changed Python test file -- `test_*.py`,
 `*_test.py`, or any `.py` under a `tests/` dir (backlog 911a93b8; see the
 "Python test surface" section below for the Python-specific rules).
 
+What this does NOT see, for either language: the scanner is COUNT/SHAPE-based.
+A test body wrapped in dead code, an early return before the assertions, or an
+assertion weakened in place (same count, weaker check) is not detected.
+
 Acknowledging a deliberate deletion
 -----------------------------------
 Deleting a test that is genuinely obsolete is legitimate; silencing a test that
@@ -544,6 +548,20 @@ def counts(surface: str, path: str = "") -> dict:
 # in its `setUp`/`setUpClass`, or at module level (`pytestmark`, a module-level
 # `pytest.skip`/`raise SkipTest`) counts against every test it covers. Removing
 # a skip is never reported -- that is strengthening.
+#
+# Skip markers are recognised through the module's import table as well as by
+# last name (`from unittest import skip as nope`; `from pytest import mark as m`
+# then `@m.skip`). Also counted: `__test__ = False` at module level or as a
+# class attribute, skips raised/called in `setUpModule`, `pytest.importorskip`
+# (module level or in a test body), and module-level monkey-skips such as
+# `T.test_a = unittest.skip('x')(T.test_a)` or `setattr(T, "test_a", ...)`.
+#
+# LIMITATION, stated so the gate claims no more than it does: like the `.rs`
+# scanner this is COUNT/SHAPE-based. It does not detect a test body wrapped in
+# dead code (`if False:`), an early `return` before the assertions, an assertion
+# weakened in place (`assertEqual(x, 1)` -> `assertTrue(True)`), or a skip
+# reached through indirection it cannot name statically (a decorator built at
+# runtime, a skip applied from another module).
 
 PY_SKIP_DECORATORS = {"skip", "skipIf", "skipUnless", "skipif", "open_defect"}
 PY_XFAIL_DECORATORS = {"expectedFailure", "xfail"}
@@ -572,19 +590,76 @@ def _dotted(node) -> str:
     return ".".join(reversed(names))
 
 
-def _py_marker_kind(expr) -> str | None:
-    """'skip' / 'xfail' / None for a decorator or `pytestmark` element."""
-    last = _dotted(expr).rpartition(".")[2]
-    if last in PY_SKIP_DECORATORS:
+def _py_import_aliases(tree) -> dict:
+    """Local name -> fully dotted origin for every import in the module.
+
+    `from unittest import skip as nope` maps `nope` to `unittest.skip`;
+    `import pytest as pt` maps `pt` to `pytest`; `from pytest import mark as m`
+    maps `m` to `pytest.mark`. Imports anywhere in the file are collected, so an
+    alias cannot hide a skip marker behind a name the last-name match misses.
+    """
+    out = {}
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            for a in n.names:
+                if a.asname:
+                    out[a.asname] = a.name
+        elif isinstance(n, ast.ImportFrom) and n.module:
+            for a in n.names:
+                if a.name != "*":
+                    out[a.asname or a.name] = n.module + "." + a.name
+    return out
+
+
+def _resolve(dotted: str, aliases: dict) -> str:
+    """`dotted` with its first component replaced through the import table."""
+    if not dotted:
+        return dotted
+    head, sep, rest = dotted.partition(".")
+    if head in aliases:
+        return aliases[head] + (sep + rest if sep else "")
+    return dotted
+
+
+def _py_marker_kind(expr, aliases=None) -> str | None:
+    """'skip' / 'xfail' / None for a decorator or `pytestmark` element.
+
+    Both the raw last name and the last name after alias resolution are
+    checked, so `@nope('x')` (with `from unittest import skip as nope`) and
+    `@m.skip` (with `from pytest import mark as m`) are both seen."""
+    raw = _dotted(expr)
+    lasts = {raw.rpartition(".")[2], _resolve(raw, aliases or {}).rpartition(".")[2]}
+    if lasts & PY_SKIP_DECORATORS:
         return "skip"
-    if last in PY_XFAIL_DECORATORS:
+    if lasts & PY_XFAIL_DECORATORS:
         return "xfail"
     return None
 
 
-def _py_body_markers(nodes) -> tuple:
+def _py_expr_markers(expr, aliases) -> tuple:
+    """(skips, xfails) from every marker-shaped name anywhere in `expr` -- used
+    for the value of a monkey-skip such as `T.test_a = unittest.skip('x')(T.test_a)`.
+    Only maximal Name/Attribute chains are judged (`unittest.skip` once, not
+    also its `unittest` sub-node)."""
+    s = x = 0
+    stack = [expr]
+    while stack:
+        n = stack.pop()
+        if isinstance(n, (ast.Name, ast.Attribute)):
+            k = _py_marker_kind(n, aliases)
+            if k == "skip":
+                s += 1
+            elif k == "xfail":
+                x += 1
+            continue
+        stack.extend(ast.iter_child_nodes(n))
+    return s, x
+
+
+def _py_body_markers(nodes, aliases=None) -> tuple:
     """(skips, xfails) from calls/raises anywhere inside `nodes`, NOT descending
     into nested function or class definitions (those are their own scope)."""
+    aliases = aliases or {}
     skips = xfails = 0
     stack = list(nodes)
     while stack:
@@ -592,15 +667,18 @@ def _py_body_markers(nodes) -> tuple:
         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
             continue
         if isinstance(n, ast.Call):
-            d = _dotted(n)
+            d = _resolve(_dotted(n), aliases)
             last = d.rpartition(".")[2]
-            # `self.skipTest(...)`, `pytest.skip(...)`, `unittest.skip(...)()`-style calls.
-            if last == "skipTest" or (last == "skip" and d.startswith("pytest")):
+            # `self.skipTest(...)`, `pytest.skip(...)`, `pytest.importorskip(...)`.
+            if last == "skipTest" or (
+                last in ("skip", "importorskip") and d.startswith("pytest")
+            ):
                 skips += 1
             elif last in PY_XFAIL_CALLS and d.startswith("pytest"):
                 xfails += 1
         if isinstance(n, ast.Raise) and n.exc is not None:
-            if _dotted(n.exc).rpartition(".")[2] == "SkipTest":
+            raw = _dotted(n.exc)
+            if "SkipTest" in (raw.rpartition(".")[2], _resolve(raw, aliases).rpartition(".")[2]):
                 skips += 1
         stack.extend(ast.iter_child_nodes(n))
     return skips, xfails
@@ -637,11 +715,29 @@ def py_counts(src: str, path: str) -> dict:
     fn_assertions: dict = {}
     fn_skips: dict = {}
     fn_xfails: dict = {}
+    aliases = _py_import_aliases(tree)
+    # Skips applied from OUTSIDE the decorated definition: key is a test's
+    # qualified name ("T.test_a") or a class prefix ("T."); value (skips, xfails).
+    extra: dict = {}
+
+    def add_extra(key: str, s: int, x: int) -> None:
+        ps, px = extra.get(key, (0, 0))
+        extra[key] = (ps + s, px + x)
+
+    def disables(stmt) -> int:
+        """1 if `stmt` assigns `__test__` anything but a literal True (pytest's
+        switch that turns collection of the enclosing module/class off)."""
+        if isinstance(stmt, (ast.Assign, ast.AnnAssign)):
+            targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+            if any(isinstance(t, ast.Name) and t.id == "__test__" for t in targets):
+                v = stmt.value
+                return 0 if isinstance(v, ast.Constant) and v.value is True else 1
+        return 0
 
     def markers_of(decorators) -> tuple:
         s = x = 0
         for dec in decorators:
-            k = _py_marker_kind(dec)
+            k = _py_marker_kind(dec, aliases)
             if k == "skip":
                 s += 1
             elif k == "xfail":
@@ -652,8 +748,41 @@ def py_counts(src: str, path: str) -> dict:
     mod_s = mod_x = 0
     module_stmts = []
     for stmt in tree.body:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)) and stmt.name == "setUpModule":
+            # A skip raised/called in setUpModule skips every test in the module.
+            s, x = _py_body_markers(stmt.body, aliases)
+            mod_s += s
+            mod_x += x
+            continue
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             continue
+        mod_s += disables(stmt)
+        # Monkey-skip: `T.test_a = unittest.skip('x')(T.test_a)`,
+        # `test_a = pytest.mark.skip(test_a)`, `T = unittest.skip('x')(T)`,
+        # `setattr(T, "test_a", unittest.skip('x')(T.test_a))`.
+        mk_targets, mk_value = [], None
+        if isinstance(stmt, ast.Assign):
+            mk_targets = [_dotted(t) for t in stmt.targets]
+            mk_value = stmt.value
+        elif (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)
+              and _dotted(stmt.value) == "setattr" and len(stmt.value.args) == 3
+              and isinstance(stmt.value.args[1], ast.Constant)
+              and isinstance(stmt.value.args[1].value, str)):
+            mk_targets = [_dotted(stmt.value.args[0]) + "." + stmt.value.args[1].value]
+            mk_value = stmt.value.args[2]
+        if mk_value is not None:
+            ms, mx = _py_expr_markers(mk_value, aliases)
+            keys = []
+            for d in mk_targets:
+                if not d or d.startswith(".") or d in ("pytestmark", "__test__"):
+                    continue
+                # a test function gets its own key; anything else (a class)
+                # covers every test under it.
+                keys.append(d if d.rpartition(".")[2].startswith("test") else d + ".")
+            if (ms or mx) and keys:
+                for k in keys:
+                    add_extra(k, ms, mx)
+                continue  # attributed above; do not ALSO count it module-wide
         module_stmts.append(stmt)
         if isinstance(stmt, (ast.Assign, ast.AnnAssign)):
             targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
@@ -662,7 +791,7 @@ def py_counts(src: str, path: str) -> dict:
                 s, x = markers_of(vals)
                 mod_s += s
                 mod_x += x
-    s, x = _py_body_markers(module_stmts)
+    s, x = _py_body_markers(module_stmts, aliases)
     mod_s += s
     mod_x += x
 
@@ -671,19 +800,25 @@ def py_counts(src: str, path: str) -> dict:
             if isinstance(node, ast.ClassDef):
                 s, x = markers_of(node.decorator_list)
                 for item in node.body:
+                    s += disables(item)  # class attribute `__test__ = False`
                     if (isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
                             and item.name in ("setUp", "setUpClass")):
-                        bs, bx = _py_body_markers(item.body)
+                        bs, bx = _py_body_markers(item.body, aliases)
                         s += bs
                         x += bx
                 visit(node.body, prefix + node.name + ".", inh_s + s, inh_x + x)
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test"):
                 name = prefix + node.name
                 s, x = markers_of(node.decorator_list)
-                bs, bx = _py_body_markers(node.body)
+                bs, bx = _py_body_markers(node.body, aliases)
+                es = ex = 0
+                for key, (ks, kx) in extra.items():
+                    if key == name or (key.endswith(".") and name.startswith(key)):
+                        es += ks
+                        ex += kx
                 fn_assertions[name] = fn_assertions.get(name, 0) + _py_assert_count(node.body)
-                fn_skips[name] = fn_skips.get(name, 0) + inh_s + s + bs
-                fn_xfails[name] = fn_xfails.get(name, 0) + inh_x + x + bx
+                fn_skips[name] = fn_skips.get(name, 0) + inh_s + s + bs + es
+                fn_xfails[name] = fn_xfails.get(name, 0) + inh_x + x + bx + ex
 
     visit(tree.body, "", mod_s, mod_x)
 

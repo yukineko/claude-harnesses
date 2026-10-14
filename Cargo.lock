@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "backlog"
-version = "0.3.39"
+version = "0.3.40"
 dependencies = [
  "anyhow",
  "clap",

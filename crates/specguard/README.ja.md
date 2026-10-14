@@ -29,7 +29,7 @@ specguard を read-only の受け入れゲートとして呼び返す。`/specfo
 
 - **D1 実装↔正典 drift**: 実装が正典からずれていないか (矛盾は誤読/コード違反/正典陳腐化に分類)。
 - **D2 仕様品質**: 正典 doc 自体の沈黙・矛盾・重複。
-- **D3 決定ログ鮮度・陳腐化**: 仕様変更の *理由* を canon commit に pin し、決定が今も成立するか照合 (`[decisions]` で有効化)。
+- **D3 決定ログ鮮度・陳腐化**: 仕様変更の *理由* を canon commit に pin し、決定が今も成立するか照合 (`[decisions].dir` に `*.md` があれば既定で有効)。
 
 ## どうして必要か
 
@@ -166,9 +166,18 @@ specguard ingest [--from <file>]   # 収集済み shard 出力(JSON/stdin)を食
                                    #   parse→report→sentinel (agent を spawn しない)
 specguard brief "<task>"           # 着手前の read-only 仕様ブリーフィング (agent 実行)
 specguard brief "<task>" --prompt  # ブリーフィングプロンプトのみ描画 (プラグインが使う)
+specguard brief "<task>" --json    # 決定論的な canon カバレッジ判定のみ (agent なし):
+#   covered | not-covered | undetermined (undetermined は exit 10。--prompt とは併用不可)
+specguard audit [--json] [--filter <q>]  # map 駆動の正しさ監査: 構造的 findings (undocumented /
+#   dangling-reference / untested) + entry ごとの shard (--json は ingest 用 envelope)。
+#   常に exit 0 (ゲートではない)。map 不在は空扱い、パース不能な map は exit 2。
+#   構造的 findings は overwatch の violation / review finding にも fail-soft で記録される。
+specguard reconcile-findings [--json]  # 検出が報告しなくなった STRUCTURAL review finding を
+#   `resolved` で閉じる (shard 監査系は閉じない)。exit 0、判定不能が残れば 3
 specguard pending                  # sentinel があれば fix-offer を出力 (SessionStart hook)
 specguard ack                      # 対応済みの sentinel をクリア (sentinel 後に fix commit が必要)
 specguard ack --force              # fix-commit チェックを飛ばして無条件にクリア
+specguard ack --verdict <v>        # disposition を明示 (confirmed|dismissed|false-positive)
 specguard ack --verdict false-positive  # disposition を明示指定 (confirmed|dismissed|false-positive。自動 verdict の resolved は不可)
 specguard reconcile-findings [--json] # 構造的 finding (undocumented/dangling-reference/untested) を再検出し、もう報告されないもの・map entry が削除されたもの (map は存在し解析可能) を resolved で close (map 不在/解析不能は undetermined・exit 3。shard 判定 kind は対象外)。構造的 finding id は episode 付き `specguard:<kind>:<key>:<epoch>` で、resolved 後に同じ gap が再発すると次の audit が新しい episode として再 open する (episode 無しの旧 id も処理)。人間 verdict (confirmed/dismissed/false-positive) で閉じた episode は、gap が存在し続ける限り再 open しないが、ある audit が gap の消失を**観測**した後 (spec map が存在し、findings store を厳密に読めた run だけが `specguard_observed_gone.jsonl` ― overwatch の `review_findings.jsonl` と同じ directory ― に記録する) に再び検出されれば新しい episode として再 open する。観測 ledger が読めない場合は隠さず再 open する側に倒す
 specguard testaudit                # 実装済みだが実行されていないテストを検出 (findings あれば exit 7)
@@ -193,16 +202,28 @@ specguard map link <test> <key>    # テストファイルを entry に明示的
 # --reason (-m) は必須・空白不可: tracked は何も検証しない「レビューした」という主張なので、触った各 entry に
 # reviewed_reason と reviewed_at {commit = HEAD, date} を記録する。理由なし/空白は拒否され store は書き換わらない。
 specguard map prune                # [map].exclude 一致 entry を除去 (非 spec-bearing パス)
-specguard map gate-check --base <rev>  # <rev> 以降に変わった gate crate の entry は spec doc 必須:
+specguard map search "<query>" [--k N] [--json]  # シンボル索引 + 全文索引を検索し、ヒットした
+#   ファイルを所有する map entry を報告 (k 既定 10)。索引が答えられなければ exit 10 ("0 件" にしない)。
+#   注意: ここでは map の不在だけでなく読めない/壊れた map も空として読むため、その場合ヒットに
+#   所有 entry が付かない — `entries` が空でも「未 map」の証明にはならない。
+specguard map callers <symbol> [--callees]  # 字句的 call graph (呼び出し元 / 呼び出し先)。判定不能は exit 10
+specguard map enrich               # 各 entry の symbols / called_by を索引から埋める (exit 10 のときは保存しない)
+specguard map gate-check --base <rev> [--head <rev>]  # <rev>..<head> (head 既定 HEAD) で変わった gate crate の entry は spec doc 必須:
 # map の spec_doc、追跡対象 .specguard/spec-docs.toml の [[spec]] path/doc/reason (doc は実在し空でない
 # docs/specs/**/*.md)、追跡対象 .specguard/spec-doc-acks.toml の理由付き [[ack]] のいずれか。
 # exit 0 ok / 1 欠落 (列挙。却下された binding はその理由も) / 2 判定不能 (map/ack/spec ファイル不正、
-# doc 読めず、rev 不正、git 失敗、map 無し、どの entry も参照しない gate ファイル)。map は gitignore された
-# 機械ローカルのキャッシュなので、pre-push は検査ツリー内で `map build --baseline <base>` により
-# map を作り直し、追跡ファイルだけが判定に効く。
-specguard --baseline HEAD~5 run    # baseline を上書き
+# doc 読めず、rev 不正、git 失敗、gate パス変更時の map 無し、どの entry も参照しない gate ファイル)。
+# ack/binding/doc は作業ツリーから読む。map は gitignore された機械ローカルのキャッシュなので、
+# pre-push は push 対象 commit の検査ツリー内で `map build --baseline <base>` により map を作り直し、
+# commit 済みのファイルだけが判定に効く。
+specguard --baseline HEAD~5 run    # baseline を上書き (SPECGUARD_BASELINE_REF でも可)
+specguard --date 2026-01-31 run    # 実行日を上書き (SPECGUARD_NOW でも可。厳密な YYYY-MM-DD のみ)
 specguard --config examples/aegis.toml run
+specguard --protects               # このゲートが何を・何から・どんな根拠で守るかを表示
 ```
+
+`SPECGUARD_RELEVANT_MAP=1` (`1`/`true`/`yes`/`on`、既定 off) で、`run` が area shard の先頭に
+上限付きの関連ファイルマップを付け、文脈不足を申告した area shard を 1 回だけ再ディスパッチする。
 
 `ack` の fix-commit ゲート: `specguard ack` は sentinel が立った時点の git HEAD を記録し、
 新しい commit が少なくとも 1 つ積まれるまでクリアを拒否する (ドリフトを ack する前に修正が
@@ -232,10 +253,18 @@ finding ÷ 既知 finding）を出せる。verdict は観測から導く — `--
 その finding が閉じられた証跡が永久に失われるため。`covers:` を持たない旧形式 sentinel はクリアは
 できるが disposition は残らず、その旨を明示的に出力する（黙って通さない）。
 
-`testaudit` は全 `.rs` ファイルを走査し、(a) `#[ignore]` 付きのテスト、(b) コンパイルされない
-`#[cfg(…)]` ブロック内のテスト、(c) どの親からも `mod` 宣言されていない `#[test]` を含む
-`.rs` ファイル、(d) workspace に取り込まれていない `tests/` 配下の統合テストファイルを報告する
-(= 実装したのに `cargo test` で実行されないテスト)。clean なら exit 0、findings ありなら exit 7。
+`testaudit` はリポジトリルート配下の全 `.rs` ファイル (`target/` と隠しディレクトリを除く) を
+走査し、(a) `#[ignore]` 付きのテスト、(b) `#[cfg(not(test))]` ブロック内、またはターゲット
+プラットフォーム cfg (`target_os` / `target_arch` 等) 付きの `#[test]` (単一レベルのパターン照合のみ。
+入れ子の cfg 式は解析しない)、(c) `lib.rs` / `main.rs` / `mod.rs` を持つディレクトリで、その親から
+`mod` 宣言されていない兄弟 `.rs` ファイル (テストを含むかどうかを問わない)、(d) パスに `tests`
+コンポーネントを持つ全 `.rs` ファイル (`integration_test` 候補として報告。workspace が実際に実行するか
+は検査しない) を報告する。clean なら exit 0、findings ありなら exit 7、存在するのに読めない
+ディレクトリ/`.rs` があって走査が不完全なら exit 8 (clean と偽らず fail closed)。
+
+`ack --verdict`: 既定では covered finding の disposition を fix-commit ガードから導出する。
+`--verdict confirmed|dismissed|false-positive` で明示できる (`resolved` は `reconcile-findings`
+用の自動判定なので拒否)。sentinel が読めない・HEAD を解決できない場合は exit 6 で拒否する。
 
 ### spec-map ストア + `/specguard:drift-map` (書き込み側の補完)
 
@@ -304,7 +333,7 @@ feature 単位で検出する。各 entry を read-only subagent が3次元で�
   自然言語で指定でき、`specguard audit --filter <query>` に解決される (例: `drift-map`、`crates/specguard`、
   `/health`、**`e2e`**=`test_files` パスが `tests/e2e/...` の entry)。空なら全 map。クエリに対して map が
   古い/未収録なら監査前に `specguard map sync`/`build` で再構築する。
-- **is-read-only + 委譲**: 監査自体は書き込まない (findings→report/sentinel、HOTL)。テスト追加などの
+- **is-read-only + 委譲**: 監査自体は仕様/実装/テストを書き換えない (findings→report/sentinel、HOTL。構造的 findings は overwatch にも記録される)。テスト追加などの
   **是正は spec-audit 自身では行わず**、`backlog add` でタスクを積むか `/condukt`・`/flow` に渡して
   executor 側で実装する (source→executor の分離)。
 
@@ -315,10 +344,19 @@ feature 単位で検出する。各 entry を read-only subagent が3次元で�
 | `<report_dir>/<date>.md` | レポート本体 |
 | `<report_dir>/.last-ref` | 最後に監査した HEAD (次回の change-triggered baseline) |
 | `<sentinel>` | `needs_user=yes` のときだけ (date / report / summary) |
+| `<report_dir>/.shard-fingerprints` | 各 shard の、最後に **clean** だった監査時の入力 fingerprint (下記) |
+| `[map].path` (既定 `.specguard/spec-map.toml`) | spec-map ストア (`specguard map …`) |
 
 baseline は **ack 連動で前進**する。クリーンに監査できた回だけ `.last-ref` を HEAD へ
 進め、指摘が残っている間は据え置く (未修正 drift が次回の diff から外れて検出漏れに
 なるのを防ぐ)。
+
+**shard のメモ化 (`run` のみ)**: 入力ファイル (その shard の canon + マッチしたファイル) が、
+その shard が clean だった前回の監査とバイト単位で同一なら、**agent を呼ばずにスキップ**し clean
+な結果を合成する (`cached: N shards skipped` を表示)。findings が出た shard は fingerprint を
+捨てるので、clean になるまで毎回再監査される。fingerprint はこの入力ファイルだけを対象とし、
+それ以外 (プロンプトテンプレートや config 等) の変更では無効化されない。全面再監査したいときは
+`.shard-fingerprints` を消す。
 
 ### 設定 (TOML)
 
@@ -327,8 +365,10 @@ baseline は **ack 連動で前進**する。クリーンに監査できた回�
 - `[project]` … `name`, `root` (リポジトリルート)
 - `[agent]` … `command` + `args`。既定は `claude --print` (read-only allowlist 付き)。
   任意のエージェント CLI に差し替え可 (プロンプトを stdin、レポートを stdout)
-- `[scope]` … `baseline_ref` / `fallback_ref` (両方解決不能なら全 tracked file を監査)
-- `[output]` … `report_dir` / `sentinel`
+- `[scope]` … `baseline_ref` / `fallback_ref` (既定 `HEAD~20`。両方解決不能なら全 tracked file を監査) /
+  `whole_tree_fallback_max_files` (既定 `0` = 上限なし。正の値にすると、ツリーがそれより大きいとき
+  その全体フォールバックをエラーにする)
+- `[output]` … `report_dir` (既定 `reports/spec-audit`) / `sentinel` (既定 `.specguard-pending`)
 - `[prompt]` … `template` (省略時は埋め込み既定) / `require_ratification` (批准ゲート) /
   `graded` + `graded_threshold` (段階的トリアージ: 既定 OFF で従来の二値ゲート。ON にすると、
   批准済みテンプレートに決定論的類似度 (token-shingle Jaccard) が `graded_threshold` 以上の
@@ -337,12 +377,19 @@ baseline は **ack 連動で前進**する。クリーンに監査できた回�
   この類似度スコアには **polarity guard** が併走する: 同義語展開 + 正準バケットへの畳み込み
   (token-set 類似度) により、approve/deny・permit/forbid・human/auto などの同義語がそれぞれ
   同じバケットへ収束し、**バケットをまたぐ反転だけ**が意味の逆転として `Novel` 扱いになる。
-  字面上の類似度がどれだけ高くても、この極性反転は閾値によらず常に人間へエスカレーションされる
+  字面上の類似度がどれだけ高くても、この極性反転は閾値によらず常に人間へエスカレーションされる。
+  `graded = true` のとき閾値は正でなければならない) / `max_shard_chars` (既定 `0` = 無効。area
+  shard の変更ファイル一覧を明示的な「N files omitted」注記つきで切り詰める)
 - `[[area]]` (複数) … `name` / `globs` / `canon`。**globs にマッチする変更があれば in-scope**
-- `[[invariant]]` (複数) … `name` / `description` / `canon`。**毎回チェック**
+- `[[invariant]]` (複数) … `name` / `description` / `canon` / `always`。既定 (`always = true`) は
+  **毎回チェック**。`always = false` なら diff スコープ (diff がその `canon` パスに触れたときだけ含める)
 - `[verify]` … 検証ゲート (既定 OFF)。`enabled` = 反証 (偽陽性除去) / `completeness` =
   網羅性批評 (偽陰性発掘)。**両方併用を推奨**。詳細は [DESIGN-VERIFY.md](DESIGN-VERIFY.md)
-- `[decisions]` … 決定ログ (ADR) の鮮度・陳腐化照合を有効化
+- `[decisions]` … `dir` (既定 `decisions`)。このディレクトリに `*.md` があれば決定ログ (ADR) の
+  鮮度・陳腐化照合 (D3) が走る。`dir = ""` で無効化
+- `[map]` … spec-map ストア: `path` (既定 `.specguard/spec-map.toml`) / `spec_doc_dir` (既定
+  `docs/specs`) / `exclude` (非 spec-bearing パスの glob) / `review_max_commits` (`map review-status`
+  の窓。未指定または `0` は 50)
 
 AEGIS の元実装を再現する設定例は `examples/aegis.toml`。
 
@@ -359,6 +406,10 @@ AEGIS の元実装を再現する設定例は `examples/aegis.toml`。
 | 7 | `testaudit` が実装済みだが実行されていないテストを検出 |
 | 8 | `testaudit` が判定不能 — 読めないディレクトリ/`.rs` があり走査が不完全。GREEN と偽らず fail closed（不明は RED） |
 | 9 | `ack` が sentinel の covered finding の disposition を記録できなかった（overwatch store が書けない / lock 競合）。sentinel は**据え置き**。`--force` で記録を諦めてクリア可 |
+| 10 | `brief --json` の判定が `undetermined`、または `map search` / `map callers` / `map enrich` の索引クエリに答えられなかった |
+
+一部のサブコマンドは独自の狭いコードを使う: `map gate-check` (0 ok / 1 spec 欠落 / 2 判定不能)、
+`map review-status` (0 fresh / 1 stale-review / 2 判定不能)、`reconcile-findings` (0 / 3 = 判定不能が残った)。
 
 一次情報は `src/main.rs` の `EXIT_*` 定数。エージェント由来の終了コードはそのまま伝播せず、
 常に `4` に集約し各 shard の実コードを stderr に出す。

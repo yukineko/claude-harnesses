@@ -76,8 +76,12 @@ pub fn print_status(report: &StatusReport, cwd_display: &str) {
                 let id8 = s.session_id.get(..8).unwrap_or(&s.session_id);
                 let proj = truncate(&s.project, 20);
                 println!(
-                    "  {:<16} {:<20} {:>6} {:>12} {:>9.4}",
-                    id8, proj, s.turns, s.total_tokens, s.cost_usd
+                    "  {:<16} {:<20} {:>6} {:>12} {:>9}",
+                    id8,
+                    proj,
+                    s.turns,
+                    s.total_tokens,
+                    crate::sessions::cost_cell(s.cost_usd)
                 );
             }
         }

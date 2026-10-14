@@ -391,7 +391,11 @@ enum DriverAction {
 
     /// Refresh this session's registration so it is not reaped as stale.
     /// Upserts: a registration that was already reaped is written back, because
-    /// a session that heartbeats is alive right now.
+    /// a session that heartbeats is alive right now. Also refreshes the
+    /// still-live `next --claim` leases this session holds in the project's
+    /// claim ledger, so they keep excluding their tasks past the 1h stale
+    /// window while the session keeps heartbeating (backlog 486e83ca). Exits
+    /// non-zero if the leases could not be refreshed.
     Heartbeat {
         #[arg(long)]
         session_id: String,
@@ -1231,11 +1235,18 @@ fn run(cli: Cli) -> Result<()> {
                 // task (backlog 709ff549). `claim_ledger` records it under
                 // `~/.backlog/claims/<project-slug>.json` instead.
                 let identity = claim_identity(effective_project.as_deref())?;
+                // The holder identity `driver heartbeat --session-id` refreshes
+                // (backlog 486e83ca). Absent/empty = a lease nobody can refresh,
+                // which ages by `claimed_at` alone, as before.
+                let session_id = std::env::var("CLAUDE_CODE_SESSION_ID")
+                    .ok()
+                    .filter(|s| !s.trim().is_empty());
                 let claimed = claim_ledger::claim_next(
                     &tasks_path,
                     tag.as_deref(),
                     effective_project.as_deref(),
                     &identity,
+                    session_id.as_deref(),
                     None,
                 )?;
                 match claimed {
@@ -1774,7 +1785,29 @@ fn run(cli: Cli) -> Result<()> {
                 project,
             } => {
                 driver::heartbeat_at(&session_id, std::process::id(), &project, None)?;
-                println!("driver heartbeat updated");
+                // The same heartbeat keeps this session's claim leases alive
+                // past CLAIM_STALE_SECS (backlog 486e83ca). A refresh that
+                // could not be performed is a non-zero exit, never a quiet
+                // success: the leases would lapse under a live holder.
+                let identity = claim_identity(Some(&project)).map_err(|e| {
+                    anyhow::anyhow!(
+                        "driver heartbeat updated, but this session's claim leases were NOT \
+                         refreshed (they will age out after {}s): {e}",
+                        store::CLAIM_STALE_SECS
+                    )
+                })?;
+                match claim_ledger::refresh_leases(&identity, &session_id, None) {
+                    Determination::Known(n) => {
+                        println!("driver heartbeat updated; {n} claim lease(s) refreshed");
+                    }
+                    Determination::Undetermined(why) => {
+                        return Err(anyhow::anyhow!(
+                            "driver heartbeat updated, but this session's claim leases were NOT \
+                             refreshed (they will age out after {}s): {why}",
+                            store::CLAIM_STALE_SECS
+                        ));
+                    }
+                }
             }
             DriverAction::Unregister {
                 session_id,
@@ -1883,8 +1916,8 @@ fn store_repo_root(tasks_path: &Path) -> String {
 /// Every failure path says WHY the scan did not run instead of printing an
 /// empty peer list: "could not scan" and "scanned, found nothing" must not
 /// render the same (CLAUDE.md §3). Note that even a successful empty scan is
-/// not a clean bill of health here — see `dedup`'s module docs on the
-/// tokenizer's blind spot for Japanese titles (backlog 7b6bcfe6) — which is
+/// not a clean bill of health here — see `dedup`'s module docs: a lexical
+/// scorer cannot see a reworded duplicate (backlog 7b6bcfe6) — which is
 /// why `dedup::near_duplicate_report` renders that case explicitly rather than
 /// staying silent.
 fn report_near_duplicates(tasks_path: &Path, id: &str) {

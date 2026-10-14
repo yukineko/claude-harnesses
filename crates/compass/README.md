@@ -127,13 +127,27 @@ built. When driven by [`/flow`](../flow), the sink records this automatically.
 
 ## The two hooks
 
-Both are deterministic, non-blocking, and exit 0 on any error (a re-grounding hook must
-never break a turn):
+Both are deterministic and non-blocking (neither ever emits a block decision):
 
 | Hook | Event | What it does |
 |---|---|---|
 | **`compass nudge`** | `SessionStart` (startup/resume/clear) | runs the C1/C2 deterministic floor only (no LLM) and prints a one-line nudge if the charter is absent, blurry, or drift-suspect — "run `/compass` to re-ground." |
 | **`compass breadcrumb`** | `Stop` | reads the assistant's final message, extracts an explicit ```` ```compass-next ```` block, and writes it into `charter.next_action`. No LLM, never guesses; if there's no explicit block it does nothing. |
+
+Know what their silence does and does not mean:
+
+- **`nudge` silence is not a guaranteed-fresh charter.** An absent charter always nudges,
+  but a charter file that exists and **fails to parse is treated as fresh** (no nudge;
+  `nudge --json` reports `{"fresh":true,"reason":null}`). Within C2, a signal git cannot
+  compute (not a git repo, `git` failing, no determinable last-touch time) contributes
+  nothing rather than tripping. Only a successfully observed signal over threshold trips.
+- **`breadcrumb`** stays silent on an empty/invalid Stop payload, an unreadable transcript,
+  or no `compass-next` block. A failed charter write is swallowed (not reported); a write
+  refused because the cwd is the primary working tree (see below) *is* reported on stderr.
+- If the host has no bundled binary, the launcher does not fall silent: `nudge` and
+  `breadcrumb` emit a `systemMessage` saying they did NOT run (for `nudge`, also as
+  `additionalContext`, stating freshness is UNKNOWN); every other verb, including
+  `nudge --json`, exits 127.
 
 **Store writes need a linked worktree.** `charter --write`, `gap --write`, `outcome`,
 `opportunity add`, `apply`, `evaluate`, `carve-reset` and `route` are refused (non-zero exit,
@@ -163,7 +177,7 @@ The binary is thin and deterministic:
 | `compass opportunity list [--json] [--outcome <ref>]` | list the named bets under the active outcome; `--json` prints a JSON array |
 | `compass discovery record --title <T> [--session-id <ID>]` | append a discovery row for `<T>` under the given (or env-derived) session, for cross-session dedup; fail-soft, always exits 0 |
 | `compass discovery select [--fingerprint <FP>] [--title <T>]` | mark a discovered task `Selected` (fingerprint given verbatim, or derived from `--title`); fail-soft |
-| `compass discovery list [--json]` | list discovery rows; `--json` prints a JSON array (`[]` when empty); fail-soft, always exits 0 |
+| `compass discovery list [--json]` | list discovery rows; `--json` prints a JSON array (`[]` when empty — and also when the store is missing/unreadable, and corrupt lines are skipped, so `[]` is not proof of an empty store) |
 | `compass c3-screen` | advisory deterministic screen for the C3 "observable DoD" gate: flags vague/non-observable `definition_of_done` items as `{"flagged":[{"index","item","reason"}...]}`; SUPPLEMENTS the skill's C3 judgment, never blocks |
 | `compass suggest-verdict --tests-delta <N> [--regressions <N>] [--gap-closed]` | advisory deterministic DEFAULT verdict for `compass outcome`, derived from observed facts; prints `{"suggested":"forward\|unchanged\|backward"}` (the skill can still override via `outcome --verdict`) |
 | `compass score --severity <high\|medium\|low> --effort <xs\|s\|m\|l\|xl> --lens <l1..l5> --goal-proximity <f64>` | deterministic priority score exposing the harness-core scorer — `(severity × goal_proximity) ÷ effort`, with L2/security and L5/safety lenses up-weighted 1.5× — so the scout skill can rank candidates without LLM hand-arithmetic; prints `{"score": f64}` |
@@ -171,8 +185,9 @@ The binary is thin and deterministic:
 ## Configuration
 
 `.compass/config.toml` under the project root (all sections/keys optional; a missing
-file, section, or key falls back to the defaults below — a parse error silently yields
-defaults so a re-grounding tool never crashes a turn):
+file, section, or key falls back to the defaults below — and so does a file that fails
+to parse, **silently**: a typo in this file reverts every key to its default with no
+warning):
 
 ```toml
 [freshness]
@@ -192,8 +207,8 @@ right_size     = ["s", "m"]  # B-plan: these sizes go to condukt; the rest is pa
 ### As a Claude Code plugin (recommended)
 
 The plugin bundles the two hooks (`hooks/hooks.json`), the `/compass` skill, and a
-prebuilt binary — so it runs entirely on your Claude **subscription**, no API key and no
-separate `cargo install`.
+launcher for a per-platform binary (built locally — see *Build from source*) — so it runs
+entirely on your Claude **subscription**, no API key.
 
 ```text
 # in Claude Code:
@@ -204,57 +219,56 @@ separate `cargo install`.
 Hooks call `${CLAUDE_PLUGIN_ROOT}/bin/compass <sub>`. `bin/compass` is a small POSIX
 launcher that picks the right per-platform binary (`bin/compass-<os>-<arch>`) for the
 host, so the same repo works on Linux and macOS. If a host has no matching binary the
-launcher exits 0 silently (a hook never breaks your turn) and prints a one-line build
-hint to stderr.
+launcher prints a build hint to stderr and makes the gap visible rather than silent:
+the `nudge`/`breadcrumb` hooks emit a "did NOT run" `systemMessage` (exit 0, never a
+block), and any other invocation exits 127 so no caller reads a missing result as
+success.
 
 > **Per-user step:** each user must `/plugin marketplace add <git-url>` once — Claude
 > Code does not auto-register a marketplace from a checked-in repo.
 
 ### Build from source
 
-Run on the target machine and commit the result:
+Per-platform binaries are **not committed** (`crates/*/bin/*-<os>-<arch>` is
+gitignored; only the `bin/compass` launcher is tracked). Build on the target machine
+from the workspace root:
 
 ```sh
-# host platform (Linux here, Apple Silicon on a Mac, etc.)
+# host platform
 scripts/build-plugin-bin.sh compass
 
 # cross-target on a Mac to also produce the Intel build:
 rustup target add x86_64-apple-darwin
 scripts/build-plugin-bin.sh compass x86_64-apple-darwin
-
-git add bin/ && git update-index --chmod=+x bin/compass bin/compass-*
-git commit -m "Add <platform> binary"
 ```
 
-The script normalizes the Rust host triple to `compass-<os>-<arch>`. Because this repo
-lives on a `core.filemode=false` mount, exec bits are forced into the git index with
-`git update-index --chmod=+x` (otherwise the launcher/binaries would check out
-non-executable and hooks would fail).
+The script normalizes the Rust host triple to `compass-<os>-<arch>` in `bin/`. For the
+live plugin, use the repo's `scripts/rollout-plugins.sh` (it builds and places the
+binary in the plugin cache; see `docs/repo-operations.md`) rather than copying by hand.
+The `bin/compass` launcher must be mode 100755 in the git index (`core.fileMode=false`
+here), which `check-launcher-exec-bit.py` enforces at pre-commit.
 
-## Platform support / building the binaries
+## Platform support
 
-The plugin ships prebuilt per-platform binaries, selected at runtime by the
-`bin/compass` launcher:
+The `bin/compass` launcher selects `bin/compass-<os>-<arch>` at runtime:
 
-| Host | File | Status |
-|---|---|---|
-| Linux x86_64 | `bin/compass-linux-x86_64` | bundled |
-| macOS Apple Silicon | `bin/compass-darwin-arm64` | built in CI on a macOS runner (or `scripts/build-plugin-bin.sh` on a Mac) |
-| macOS Intel | `bin/compass-darwin-x86_64` | built in CI on a macOS runner (or `scripts/build-plugin-bin.sh x86_64-apple-darwin` on a Mac) |
+| Host | File |
+|---|---|
+| Linux x86_64 / arm64 | `bin/compass-linux-x86_64` / `bin/compass-linux-arm64` |
+| macOS Apple Silicon | `bin/compass-darwin-arm64` |
+| macOS Intel | `bin/compass-darwin-x86_64` |
 
-The Linux binary is committed directly. The **macOS binaries** can't be cross-built from
-Linux (Apple frameworks need the macOS SDK); they're produced by the repo's CI on a
-macOS runner and committed back, or by hand by running `scripts/build-plugin-bin.sh` on
-a Mac.
+None of these is committed; each must be built on (or for) its platform as above.
+macOS binaries can't be cross-built from Linux (they need the macOS SDK).
 
 ## Plugin layout
 
 ```
-.claude-plugin/plugin.json     # plugin manifest (version 0.1.6)
+.claude-plugin/plugin.json     # plugin manifest
 hooks/hooks.json               # SessionStart=nudge / Stop=breadcrumb → ${CLAUDE_PLUGIN_ROOT}/bin/compass
 skills/compass/SKILL.md        # the /compass skill (drives the carve loop)
 bin/compass                    # POSIX launcher → compass-<os>-<arch>
-bin/compass-<os>-<arch>        # prebuilt binaries
+bin/compass-<os>-<arch>        # per-platform binaries (gitignored, built locally)
 src/ … Cargo.toml              # the Rust crate
 ```
 
@@ -328,9 +342,10 @@ right_size     = ["s", "m"]
 ### 2 つの hook
 
 - **SessionStart = `compass nudge`** — C1/C2 の決定的 floor のみ（LLM 不使用）。charter が無い/霞む/drift 疑いなら一行 nudge。
+  ただし charter が存在してパースできない場合は fresh 扱い（nudge なし、`--json` は `fresh:true`）、git で計算できない C2 シグナルは trip しない — 無言は「鮮明」の保証ではない。
 - **Stop = `compass breadcrumb`** — 本体応答から ```` ```compass-next ```` ブロックを抽出し `charter.next_action` へ書き戻す（推測しない）。
 
 ### 導入
 
 プラグイン（推奨）: `/plugin marketplace add <git-url>` → `/plugin install compass@yukineko`。
-ソースビルド: `scripts/build-plugin-bin.sh`（macOS バイナリは CI または Mac 上でビルド）。
+ソースビルド: リポジトリ root で `scripts/build-plugin-bin.sh compass`（プラットフォーム別バイナリはコミットしない＝gitignore。macOS バイナリは Mac 上でビルド）。稼働プラグインへの反映は `scripts/rollout-plugins.sh`。

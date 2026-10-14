@@ -112,8 +112,11 @@ fn session_models(ctx: &RecordCtx) -> Option<BTreeMap<String, ModelUsage>> {
 /// again.
 fn cost_incompleteness(ctx: &RecordCtx) -> Option<String> {
     let est = estimate_transcript_cost(ctx.transcript_path, ctx.overrides)?;
-    match est.complete_cost() {
-        Determination::Known(_) => None,
+    // The sub-agent scan only. An unpriced model also makes `complete_cost()`
+    // Undetermined, but that is an unknown PRICE, not unreadable sub-agent
+    // spend; it is already rendered by the total line as `unknown (...)`.
+    match &est.aggregate.subagent_scan {
+        Determination::Known(()) => None,
         Determination::Undetermined(why) => Some(why.to_string()),
     }
 }
@@ -134,6 +137,14 @@ fn session_agents(ctx: &RecordCtx) -> Option<BTreeMap<String, harness_core::usag
         .filter(|a| !a.is_empty())
 }
 
+/// `$x.xx USD` for a determined cost; `unknown (why)` otherwise — never `$0`.
+fn usd_cell(cost: Determination<f64>, decimals: usize) -> String {
+    match cost {
+        Determination::Known(c) => format!("${c:.decimals$} USD"),
+        Determination::Undetermined(why) => format!("unknown ({why})"),
+    }
+}
+
 /// Build the auto `## コスト` block body (between markers, exclusive).
 fn cost_body(ctx: &RecordCtx) -> String {
     let Some(models) = session_models(ctx) else {
@@ -142,7 +153,9 @@ fn cost_body(ctx: &RecordCtx) -> String {
     let incomplete = cost_incompleteness(ctx)
         .map(|why| format!("- ⚠ サブエージェント費用を読めませんでした（以下は過少計上）: {why}\n"))
         .unwrap_or_default();
-    let total_usd = pricing::session_cost(models.iter(), ctx.overrides);
+    // An unpriceable model makes the total unknown (backlog ff98fed0): rendered
+    // as `unknown (why)`, never as `$0.00`.
+    let total_usd = usd_cell(pricing::session_cost(models.iter(), ctx.overrides), 2);
     let mut input = 0u64;
     let mut output = 0u64;
     let mut cache_write = 0u64;
@@ -170,11 +183,8 @@ fn cost_body(ctx: &RecordCtx) -> String {
             let mut sorted: Vec<_> = agents.iter().collect();
             sorted.sort_by_key(|(k, _)| k.as_str());
             for (name, au) in &sorted {
-                let cost = pricing::session_cost(au.models.iter(), ctx.overrides);
-                lines.push_str(&format!(
-                    "  - {name}: ${cost:.4} USD ({} turns)\n",
-                    au.turns
-                ));
+                let cost = usd_cell(pricing::session_cost(au.models.iter(), ctx.overrides), 4);
+                lines.push_str(&format!("  - {name}: {cost} ({} turns)\n", au.turns));
             }
             format!("- by agent:\n{lines}")
         }
@@ -183,7 +193,7 @@ fn cost_body(ctx: &RecordCtx) -> String {
 
     format!(
         "{incomplete}\
-         - total: ${total_usd:.2} USD\n\
+         - total: {total_usd}\n\
          {agent_lines}\
          - total tokens: {total_tokens}\n\
          - input: {input}   output: {output}\n\
@@ -645,5 +655,162 @@ mod tests {
             "{cb}"
         );
         let _ = std::fs::remove_file(&p);
+    }
+
+    /// backlog ff98fed0 (consumer erasure). A transcript whose only model
+    /// (`claude-newfamily-1`) has usage but no known rate (and no override)
+    /// must render the `## コスト` total as `unknown (why)` — never `$0.00 USD`,
+    /// which a reader takes as "nothing was spent". The per-agent line for the
+    /// same usage must likewise not be a dollar figure.
+    ///
+    /// What this does NOT prove: it does not exercise the gauge-record source
+    /// of `session_models` (the session id has no gauge record, so the
+    /// transcript fallback is taken), a mix of priced and unpriced models, or
+    /// `[[price]]` overrides; it does not pin the exact reason text.
+    #[test]
+    fn cost_body_unpriced_model_total_is_unknown_not_zero() {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "si-record-{}-ff98fed0-unpriced.jsonl",
+            std::process::id()
+        ));
+        let body = concat!(
+            r#"{"type":"assistant","timestamp":"2026-06-22T10:00:01Z","message":{"model":"claude-newfamily-1","content":[{"type":"text","text":"x"}],"usage":{"input_tokens":1000000,"output_tokens":0,"cache_read_input_tokens":0}}}"#,
+            "\n",
+        );
+        std::fs::write(&p, body).unwrap();
+        let ctx = RecordCtx {
+            session_id: "no-such-session-ff98fed0-unpriced-xyzzy",
+            project: "harness",
+            date: "2026-06-22",
+            turns: 1,
+            tool_events: 0,
+            files_touched: 0,
+            transcript_path: p.to_str().unwrap(),
+            overrides: &[],
+        };
+        let cb = cost_body(&ctx);
+        let _ = std::fs::remove_file(&p);
+        let total = cb
+            .lines()
+            .find(|l| l.starts_with("- total:"))
+            .unwrap_or_else(|| unreachable!("no total line in cost body: {cb}"));
+        // A determined cell renders as `$x.xx USD` (`usd_cell`); the reason
+        // text legitimately contains "(not $0)", which is not an amount, so the
+        // discriminator is the ` USD` suffix / a `$0.0` amount.
+        let has_amount = |s: &str| s.contains(" USD") || s.contains("$0.0");
+        assert!(
+            total.starts_with("- total: unknown (") && !has_amount(total),
+            "backlog ff98fed0: unpriced model total must be unknown, got {total:?}\n{cb}"
+        );
+        assert!(
+            !has_amount(&cb),
+            "backlog ff98fed0: no dollar cell may appear for unpriced usage:\n{cb}"
+        );
+        assert!(
+            cb.contains("- total tokens: 1000000"),
+            "apparatus: the transcript usage must have been read:\n{cb}"
+        );
+    }
+
+    const SUBAGENT_WARNING: &str = "サブエージェント費用を読めませんでした";
+
+    /// backlog ff98fed0 (independent test author). `cost_incompleteness`
+    /// labels EVERY `complete_cost()` Undetermined as a sub-agent read
+    /// failure, so a session whose only model is unpriced (and which has no
+    /// sub-agents at all) renders
+    /// `- ⚠ サブエージェント費用を読めませんでした（以下は過少計上）: no price for model …`
+    /// — a false statement about the cause (nothing about sub-agents failed)
+    /// and about the shape ("過少計上" implies a lower bound; the total is
+    /// unknown). Required: the sub-agent warning appears only when the
+    /// sub-agent scan itself was undetermined; the unpriced model stays
+    /// reported as unknown cost on the total line.
+    ///
+    /// What this does NOT prove: it does not pin how (or whether) the unknown
+    /// price is additionally flagged beyond the `unknown (…)` total; it does
+    /// not exercise the gauge-record source of `session_models`, a mix of
+    /// priced and unpriced models, or an unpriced model COMBINED with an
+    /// undetermined sub-agent scan (where both messages would be warranted).
+    #[test]
+    fn cost_body_unpriced_model_is_not_labelled_a_subagent_read_failure() {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "si-record-{}-ff98fed0-mislabel.jsonl",
+            std::process::id()
+        ));
+        let body = concat!(
+            r#"{"type":"assistant","timestamp":"2026-06-22T10:00:01Z","message":{"model":"claude-newfamily-1","content":[{"type":"text","text":"x"}],"usage":{"input_tokens":1000000,"output_tokens":0,"cache_read_input_tokens":0}}}"#,
+            "\n",
+        );
+        std::fs::write(&p, body).unwrap();
+        let ctx = RecordCtx {
+            session_id: "no-such-session-ff98fed0-mislabel-xyzzy",
+            project: "harness",
+            date: "2026-06-22",
+            turns: 1,
+            tool_events: 0,
+            files_touched: 0,
+            transcript_path: p.to_str().unwrap(),
+            overrides: &[],
+        };
+        let cb = cost_body(&ctx);
+        let _ = std::fs::remove_file(&p);
+        assert!(
+            cb.lines()
+                .any(|l| l.starts_with("- total: unknown (") && l.contains("claude-newfamily-1")),
+            "apparatus: the unpriced model must reach the cost block as an unknown total:\n{cb}"
+        );
+        assert!(
+            !cb.contains(SUBAGENT_WARNING),
+            "backlog ff98fed0: an unpriced model (no sub-agents in the session) is reported as a \
+             sub-agent read failure:\n{cb}"
+        );
+    }
+
+    /// CONTROL for the test above: when the sub-agent scan really is
+    /// undetermined (one sub-agent transcript unreadable, mode 000) on a
+    /// PRICED model, the sub-agent warning must still be shown — so the probe
+    /// above cannot be satisfied by deleting the warning.
+    #[cfg(unix)]
+    #[test]
+    fn cost_body_undetermined_subagent_scan_still_warns() {
+        use std::os::unix::fs::PermissionsExt;
+        let base =
+            std::env::temp_dir().join(format!("si-record-{}-ff98fed0-subscan", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let sub_dir = base.join("sess").join("subagents");
+        std::fs::create_dir_all(&sub_dir).unwrap();
+        let line = concat!(
+            r#"{"type":"assistant","timestamp":"2026-06-22T10:00:01Z","message":{"model":"claude-opus-4-8","content":[{"type":"text","text":"x"}],"usage":{"input_tokens":1000,"output_tokens":0,"cache_read_input_tokens":0}}}"#,
+            "\n",
+        );
+        let main_path = base.join("sess.jsonl");
+        std::fs::write(&main_path, line).unwrap();
+        let victim = sub_dir.join("agent-aaa111.jsonl");
+        std::fs::write(&victim, line).unwrap();
+        std::fs::set_permissions(&victim, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let injected = std::fs::read_to_string(&victim).is_err();
+        let ctx = RecordCtx {
+            session_id: "no-such-session-ff98fed0-subscan-xyzzy",
+            project: "harness",
+            date: "2026-06-22",
+            turns: 1,
+            tool_events: 0,
+            files_touched: 0,
+            transcript_path: main_path.to_str().unwrap(),
+            overrides: &[],
+        };
+        let cb = cost_body(&ctx);
+        let _ = std::fs::set_permissions(&victim, std::fs::Permissions::from_mode(0o644));
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(
+            injected,
+            "fault injection ineffective: a mode-000 file is still readable (root?); \
+             this control proves nothing here"
+        );
+        assert!(
+            cb.contains(SUBAGENT_WARNING),
+            "an undetermined sub-agent scan must still be disclosed:\n{cb}"
+        );
     }
 }

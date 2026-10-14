@@ -104,7 +104,7 @@ mod tests {
                 model: model.into(),
                 role: "worker".into(),
                 pass,
-                cost_usd: 0.0,
+                cost_usd: None,
                 human_label: None,
                 labeled_by: None,
                 skill_fingerprint: None,
@@ -281,7 +281,7 @@ mod tests {
                 model: "sonnet".into(),
                 role: "worker".into(),
                 pass: i < 3, // 3/4 pass
-                cost_usd: 0.0,
+                cost_usd: None,
                 human_label: None,
                 labeled_by: None,
                 skill_fingerprint: None,

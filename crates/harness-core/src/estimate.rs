@@ -17,27 +17,29 @@ use crate::verdict::Determination;
 /// A transcript's aggregated usage plus its estimated USD cost, computed in one
 /// pass. `aggregate` is the full per-model / per-agent tally (identical to what
 /// [`usage::aggregate`] returns); `cost_usd` is [`pricing::session_cost`] over
-/// its grand-total `models`.
+/// its grand-total `models` — `Undetermined` when a model with usage has no
+/// known rate (see [`pricing::rate_for`]).
 ///
-/// `cost_usd` is a bare `f64` and therefore **cannot express "this is an
-/// under-count"**. When the transcript's sibling `subagents/` directory could
-/// not be read, `aggregate.subagent_scan` is `Undetermined` and `cost_usd`
-/// omits that sub-agent spend. A consumer whose answer depends on the number
-/// being complete (a budget gate; a persisted canonical record) must read it
-/// through [`TranscriptCostEstimate::complete_cost`], not the field.
+/// `cost_usd` alone still **cannot express "the sub-agent spend is missing"**.
+/// When the transcript's sibling `subagents/` directory could not be read,
+/// `aggregate.subagent_scan` is `Undetermined` and a `Known` `cost_usd` omits
+/// that sub-agent spend. A consumer whose answer depends on the number being
+/// complete (a budget gate; a persisted canonical record) must read it through
+/// [`TranscriptCostEstimate::complete_cost`], which folds both give-ups.
 #[derive(Debug)]
 pub struct TranscriptCostEstimate {
     pub aggregate: Aggregate,
-    pub cost_usd: f64,
+    pub cost_usd: Determination<f64>,
 }
 
 impl TranscriptCostEstimate {
-    /// The cost, but only when every sub-agent spend source was actually read.
-    /// `Undetermined` (carrying the sub-agent scan's reason) when `cost_usd`
-    /// would be an under-count of unknown size.
+    /// The cost, but only when every sub-agent spend source was actually read
+    /// AND every model with usage had a known rate. `Undetermined` (carrying
+    /// the sub-agent scan's reason first, else the pricing reason) when the
+    /// number would be an under-count of unknown size.
     pub fn complete_cost(&self) -> Determination<f64> {
         match &self.aggregate.subagent_scan {
-            Determination::Known(()) => Determination::Known(self.cost_usd),
+            Determination::Known(()) => self.cost_usd.clone(),
             Determination::Undetermined(why) => Determination::Undetermined(why.clone()),
         }
     }
@@ -93,12 +95,30 @@ mod tests {
         // cost matches the hand-rolled aggregate-then-price sequence.
         let agg = usage::aggregate(p).unwrap();
         let expected = pricing::session_cost(agg.models.iter(), &[]);
-        assert!((est.cost_usd - expected).abs() < 1e-9);
-        assert!((est.cost_usd - 30.0).abs() < 1e-9);
+        assert_eq!(est.cost_usd, expected);
+        let got = est.complete_cost().require().expect("opus is priced");
+        assert!((got - 30.0).abs() < 1e-9);
         // aggregate is preserved intact.
         assert_eq!(est.aggregate.turns, 1);
         assert!(est.aggregate.models.contains_key("claude-opus-4-8"));
 
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn unknown_model_makes_complete_cost_undetermined() {
+        let body = concat!(
+            r#"{"type":"assistant","timestamp":"2026-06-22T10:00:01Z","message":{"model":"claude-newfamily-1","content":[],"usage":{"input_tokens":1000,"output_tokens":0}}}"#,
+            "\n",
+        );
+        let path = write_temp("unknown-model", body);
+        let est = estimate_transcript_cost(path.to_str().unwrap(), &[]).expect("estimate");
+        assert!(matches!(
+            est.complete_cost(),
+            Determination::Undetermined(_)
+        ));
+        // The aggregate is still produced: the tokens were observed, only their price is unknown.
+        assert!(est.aggregate.models.contains_key("claude-newfamily-1"));
         let _ = std::fs::remove_file(&path);
     }
 

@@ -45,6 +45,8 @@ mod state;
 mod status;
 mod store;
 mod subagent_stop;
+#[cfg(test)]
+mod verifier_f7a0cadc;
 mod verify;
 mod worktree;
 mod wt_reap;
@@ -1032,8 +1034,10 @@ enum StateAction {
         /// Human-readable task title, recorded for the execution-state view.
         #[arg(long)]
         title: Option<String>,
-        /// Opaque task hashkey to claim (repeatable, required).
-        #[arg(long)]
+        /// Opaque task hashkey to claim (repeatable, at least one required).
+        /// An empty or whitespace-only hashkey is rejected as a usage error
+        /// (exit 2, nothing claimed) — it is never recorded as a claim key.
+        #[arg(long, required = true, value_parser = parse_task_hashkey)]
         hashkey: Vec<String>,
         /// Mark the claim STATELESS: this run never writes run-state JSON (a
         /// `/flow` run). Only a marked claim is reaped on transcript evidence
@@ -1048,15 +1052,19 @@ enum StateAction {
     ReleaseTask {
         #[arg(long)]
         run: String,
-        /// Opaque task hashkey to release (repeatable, required).
-        #[arg(long)]
+        /// Opaque task hashkey to release (repeatable, at least one required).
+        /// An empty or whitespace-only hashkey is rejected as a usage error (exit 2).
+        #[arg(long, required = true, value_parser = parse_task_hashkey)]
         hashkey: Vec<String>,
     },
     /// Exit 0 if a live claim (from any run) holds the given task hashkey, else
     /// exit 1. Prints a small JSON `{hashkey, claimed, holder_run}` for humans,
-    /// but the exit code is the contract other tools should rely on.
+    /// but the exit code is the contract other tools should rely on. Exit 3 =
+    /// the claim registry could not be read (undetermined). Exit 2 = invalid
+    /// input (e.g. an empty or whitespace-only hashkey): no lookup happened and
+    /// nothing is printed on stdout, so it can never be read as "not claimed".
     IsClaimed {
-        #[arg(long)]
+        #[arg(long, value_parser = parse_task_hashkey)]
         hashkey: String,
     },
     /// Join the live task-claim registry against the project backlog and write
@@ -1852,14 +1860,48 @@ fn run_hook<F: FnOnce() + std::panic::UnwindSafe>(f: F) -> ! {
     std::process::exit(0);
 }
 
+/// The text the operator sees when the edit gate blocks: the verdict's `reason`
+/// (WHY it rejected — compile errors, toolchain unresolvable, cargo
+/// unspawnable), then `cargo check`'s diagnostics on the following lines when
+/// there are any. It used to be the diagnostics alone, falling back to "edit
+/// left the crate not compiling (see cargo check)" — so a `cargo` missing from
+/// PATH was reported to the operator as a compile failure (backlog f7a0cadc).
+/// A verdict without a readable `reason` is a producer malfunction and says so;
+/// it does not claim anything about whether the crate compiles.
+fn editgate_block_reason(verdict: &serde_json::Value) -> String {
+    let reason = verdict
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(
+            "condukt editgate rejected this edit, but its verdict carried no reason; \
+             whether the edit compiles was not established",
+        );
+    match verdict
+        .get("diagnostics")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        Some(diag) => format!("{reason}\n{diag}"),
+        None => reason.to_string(),
+    }
+}
+
 /// PostToolUse edit-time compile gate. Reads a PostToolUse payload from stdin,
-/// and — only for an Edit/Write/MultiEdit to a Rust file inside a live condukt
-/// worktree that a real (non-fallback) `cargo check` finds broken — prints one
-/// line of JSON `{"decision":"block","reason":<diagnostics>}` so the worker
-/// fixes it in the same turn. Every other path (non-edit tool, no file, non-Rust
-/// file, out-of-worktree edit, clean build, fallback, empty/invalid stdin, or
-/// any error) prints nothing. Called under [`run_hook`], so it exits 0 and a
-/// panic is swallowed — it can never break a turn.
+/// and — for an Edit/Write/MultiEdit to a Rust file inside a live condukt
+/// worktree whose verdict `state::enforce_edit_gate` rejects (a failed
+/// `cargo check`, or one that could not run: cargo unspawnable, toolchain
+/// unresolvable) — prints one line of JSON
+/// `{"decision":"block","reason":<verdict reason, then diagnostics>}` (see
+/// [`editgate_block_reason`]) so the worker fixes it in the same turn. It also
+/// blocks, with a stated reason, when the project's run state cannot be
+/// located. Out-of-scope paths (non-edit tool, no file, non-Rust file,
+/// out-of-worktree edit), a clean build, and empty/invalid stdin print nothing.
+/// Called under [`run_hook`], so the process exits 0 — exit status is not this
+/// hook's verdict channel; the printed block line is. Note that `run_hook`
+/// swallows a panic, and a panic before the block line is printed therefore
+/// leaves stdout empty, which the harness reads as "no block": that path is
+/// NOT fail-closed today.
 fn run_editgate() {
     // Parse the PostToolUse payload; empty/invalid stdin → stay silent.
     let input = match harness_core::hook::HookInput::parse(&read_stdin()) {
@@ -1883,23 +1925,37 @@ fn run_editgate() {
         Err(_) => return,
     };
 
-    // Resolve the project's run-state directory the same way CheckOracle does
-    // (Config.state_dir keyed by the repo root under `cwd`), then ask which
-    // live worktree — if any — this edited path falls under.
-    let run_dir = cfg
-        .state_dir
-        .join(store::project_key(&store::repo_root(&cwd)));
-    let wt = state::active_worktree_for_path(&file_path, &run_dir);
+    // Resolve the project's run-state directories the same way every run-state
+    // reader does (the canonical main-worktree-root dir, then this checkout's
+    // legacy per-checkout dir — see `state::project_state_dirs`), then ask which
+    // live worktree — if any — this edited path falls under. If the main
+    // worktree root cannot be determined, whether this edit is inside a live
+    // condukt worktree is unknown: that blocks (stated), it is not "out of scope".
+    let dirs = match state::project_state_dirs(&cfg, &cwd) {
+        Ok(d) => d,
+        Err(e) => {
+            let out = serde_json::json!({
+                "decision": "block",
+                "reason": format!(
+                    "condukt editgate could not locate this project's run state, so \
+                     whether this edit is inside a live condukt worktree is unknown: {e:#}"
+                ),
+            });
+            if let Ok(line) = serde_json::to_string(&out) {
+                println!("{line}");
+            }
+            return;
+        }
+    };
+    let wt = dirs
+        .iter()
+        .find_map(|dir| state::active_worktree_for_path(&file_path, dir));
 
     // BLOCK enforcement: only a real (non-fallback) broken verdict rejects.
     let verdict = editgate::check_edit(&file_path, wt.as_deref(), true);
     if let state::EditGateDecision::Reject = state::enforce_edit_gate(&verdict) {
-        let reason = verdict
-            .get("diagnostics")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .unwrap_or("edit left the crate not compiling (see cargo check)");
-        let out = serde_json::json!({ "decision": "block", "reason": reason });
+        let out =
+            serde_json::json!({ "decision": "block", "reason": editgate_block_reason(&verdict) });
         if let Ok(line) = serde_json::to_string(&out) {
             println!("{line}");
         }
@@ -2166,7 +2222,7 @@ fn run_user(cmd: Command) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&directive)?);
             }
             ReplanAction::Stats { run } => {
-                let records = state::load_replan_records(&cfg, &cwd, &run);
+                let records = state::load_replan_records(&cfg, &cwd, &run)?;
                 let stats = state::aggregate_replan_stats(&records);
                 println!("{}", serde_json::to_string_pretty(&stats)?);
             }
@@ -2244,7 +2300,7 @@ fn run_user(cmd: Command) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&decision)?);
             }
             RunPolicyAction::Stats { run } => {
-                let records = state::load_run_policy_records(&cfg, &cwd, &run);
+                let records = state::load_run_policy_records(&cfg, &cwd, &run)?;
                 let stats = state::aggregate_run_policy_stats(&records);
                 println!("{}", serde_json::to_string_pretty(&stats)?);
             }
@@ -2389,7 +2445,7 @@ fn run_user(cmd: Command) -> Result<()> {
             }
         },
         Command::LearningSignal => {
-            let sig = learning_signal::compute(&cfg, &cwd);
+            let sig = learning_signal::compute(&cfg, &cwd)?;
             #[derive(serde::Serialize)]
             struct Out {
                 metric: &'static str,
@@ -2439,7 +2495,7 @@ fn run_user(cmd: Command) -> Result<()> {
         Command::Policy { action } => run_policy(action),
         Command::Escalate { action } => run_escalate(&cfg, &cwd, action)?,
         Command::Precedent { action } => run_precedent(&cfg, &cwd, action)?,
-        Command::Status { all } => status::render(&cfg, &cwd, all),
+        Command::Status { all } => status::render(&cfg, &cwd, all)?,
         Command::ReviewBrief { run, task, format } => {
             run_review_brief(&cfg, &cwd, &run, &task, &format)?
         }
@@ -2458,7 +2514,7 @@ fn run_user(cmd: Command) -> Result<()> {
         } => run_review_worthiness(
             &cwd, files, insertions, deletions, rationale, task_link, json, from_git, &base, &head,
         )?,
-        Command::DiffriskReport { json } => run_diffrisk_report(&cfg, &cwd, json),
+        Command::DiffriskReport { json } => run_diffrisk_report(&cfg, &cwd, json)?,
         Command::ReviewOrder {
             diff_file,
             from_git,
@@ -2685,7 +2741,25 @@ fn calibrated_confidence_via(
     files: &[String],
     class: &Option<String>,
 ) -> Option<policy::Level> {
+    calibrated_confidence_via_with_env_path(program, title, files, class, None)
+}
+
+/// [`calibrated_confidence_via`] with an optional `PATH` for the CHILD only.
+/// `None` (production) inherits this process's environment as before;
+/// `Some(p)` sets `PATH=p` on the child, which on Unix is also what a bare
+/// `program` is resolved against — so a test can hide `fugu-router` without
+/// mutating the process-wide PATH (backlog 7c798579).
+fn calibrated_confidence_via_with_env_path(
+    program: &Path,
+    title: &Option<String>,
+    files: &[String],
+    class: &Option<String>,
+    child_path: Option<&std::ffi::OsStr>,
+) -> Option<policy::Level> {
     let mut cmd = std::process::Command::new(program);
+    if let Some(p) = child_path {
+        cmd.env("PATH", p);
+    }
     cmd.arg("confidence");
     if !files.is_empty() {
         cmd.args(["--files", &files.join(",")]);
@@ -2769,7 +2843,12 @@ fn run_review_brief(
     // Fail-soft: an unreadable/absent precedent store simply means no
     // precedent-downgrade signal is available (never a hard error for this
     // read-only digest command) — empty store => identical brief to today.
-    let precedents = precedent::load_precedents(cfg, cwd);
+    // Missing precedents only withhold a DOWNGRADE, so the degrade is the
+    // restrictive side; an unlocatable store is still said out loud.
+    let precedents = precedent::load_precedents(cfg, cwd).unwrap_or_else(|e| {
+        eprintln!("condukt: warning: no precedent-downgrade signal: {e:#}");
+        Vec::new()
+    });
 
     let brief = review_brief::build_review_brief(
         intent,
@@ -3090,6 +3169,20 @@ fn run_escalate(cfg: &Config, cwd: &Path, action: EscalateAction) -> Result<()> 
     Ok(())
 }
 
+/// clap value parser for task-claim `--hashkey` (backlog 55f55932): an empty
+/// or whitespace-only key is not a key. Accepting it let `claim-task` exit 0
+/// with `"claimed": [""]` — a claim nobody's real key matches — and let
+/// `is-claimed` answer `claimed: false` for a lookup that never happened.
+/// Rejected here, clap reports a usage error (exit 2) before any registry IO.
+/// A non-blank key is passed through verbatim (no trimming), so existing keys
+/// keep their identity.
+fn parse_task_hashkey(raw: &str) -> std::result::Result<String, String> {
+    if raw.trim().is_empty() {
+        return Err("task hashkey must not be empty or whitespace-only".to_string());
+    }
+    Ok(raw.to_string())
+}
+
 /// Split a `--files`/`--symbols` comma-separated CLI flag into a `Vec<String>`,
 /// trimming whitespace and dropping empty entries (so `""`, `"a,,b"`, and
 /// `"a, b"` all behave sanely).
@@ -3122,7 +3215,7 @@ fn run_precedent(cfg: &Config, cwd: &Path, action: PrecedentAction) -> Result<()
             println!("{}", serde_json::to_string_pretty(&rec)?);
         }
         PrecedentAction::List { json } => {
-            let all = precedent::load_precedents(cfg, cwd);
+            let all = precedent::load_precedents(cfg, cwd)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&all)?);
             } else if all.is_empty() {
@@ -3144,7 +3237,7 @@ fn run_precedent(cfg: &Config, cwd: &Path, action: PrecedentAction) -> Result<()
             let files = parse_csv_list(&files);
             let symbols = parse_csv_list(&symbols);
             let tolerance = tolerance.unwrap_or(DEFAULT_PRECEDENT_TOLERANCE);
-            let all = precedent::load_precedents(cfg, cwd);
+            let all = precedent::load_precedents(cfg, cwd)?;
             let m = precedent::match_precedent(&files, &symbols, &all, tolerance);
             println!("{}", serde_json::to_string_pretty(&m)?);
         }
@@ -3197,8 +3290,10 @@ fn resolve_policy_verdict(
 /// An ABSENT journal is reported as `unknown`, not as zero: no file means the
 /// hook has not run since journaling landed, which is not the same fact as
 /// "ran and found nothing".
-fn run_diffrisk_report(cfg: &Config, cwd: &Path, json: bool) {
-    let dir = state::project_state_dir(cfg, cwd);
+fn run_diffrisk_report(cfg: &Config, cwd: &Path, json: bool) -> Result<()> {
+    // `Err` (non-zero) when the main worktree root cannot be determined: the
+    // journal could not even be located, which is not "absent".
+    let dir = state::project_state_dir(cfg, cwd)?;
     let path = gatelog::diffrisk_outcomes_path(&dir);
     let present = path.exists();
     let recs = gatelog::load_diffrisk_outcomes(&dir);
@@ -3226,7 +3321,7 @@ fn run_diffrisk_report(cfg: &Config, cwd: &Path, json: bool) {
             "caller_sites_total": caller_sites,
         });
         println!("{v}");
-        return;
+        return Ok(());
     }
 
     println!("diff-risk journal: {}", path.display());
@@ -3235,7 +3330,7 @@ fn run_diffrisk_report(cfg: &Config, cwd: &Path, json: bool) {
         println!("  This is NOT the same as zero findings: it means the post-execution");
         println!("  diff-risk hook has not run here since journaling landed. Nothing");
         println!("  has been inspected, so nothing can be called clean.");
-        return;
+        return Ok(());
     }
     println!("  invocations : {total}");
     println!("  inspected   : {inspected}  (the call graph actually ran)");
@@ -3249,6 +3344,7 @@ fn run_diffrisk_report(cfg: &Config, cwd: &Path, json: bool) {
     for (k, n) in &by_outcome {
         println!("    {k:<20} {n}");
     }
+    Ok(())
 }
 
 fn run_policy(action: PolicyAction) -> ! {
@@ -4043,7 +4139,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             };
             let dec: model::Decomposition =
                 serde_json::from_str(&raw).context("parsing decomposition JSON")?;
-            let report = state::cross_run_conflicts(cfg, cwd, &dec);
+            let report = state::cross_run_conflicts(cfg, cwd, &dec)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
             if report.has_conflicts {
                 std::process::exit(1);
@@ -4076,7 +4172,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             // surface an error rather than proceed to an unlocked RMW that could
             // silently drop this transition. The old fail-soft `acquire` returned
             // an unlocked guard here, leaving the double-write window open.
-            let _lock = match lock::RunLock::acquire_or_skip(cfg, cwd, &run) {
+            let _lock = match lock::RunLock::acquire_run_state_or_skip(cfg, cwd, &run)? {
                 Some(l) => l,
                 None => anyhow::bail!(
                     "run '{run}' state lock is contended; skipping `state set` to \
@@ -4415,8 +4511,17 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             // that makes unattended proceeding reversible. Fail-soft: a missing
             // checkpoint or any restore error is logged, never breaks the turn.
             if st == state::Status::Failed && prior_status == state::Status::Verified {
-                let dir = checkpoint_project_dir(cfg, cwd, &run);
-                if let Some(cp) = checkpoint::latest_checkpoint(&dir, &run) {
+                let dir = match checkpoint_project_dir(cfg, cwd, &run) {
+                    Ok(d) => Some(d),
+                    Err(e) => {
+                        eprintln!("auto-rollback: NOT attempted, checkpoints unlocatable: {e:#}");
+                        None
+                    }
+                };
+                if let Some((dir, cp)) = dir.and_then(|d| {
+                    let cp = checkpoint::latest_checkpoint(&d, &run)?;
+                    Some((d, cp))
+                }) {
                     restore_checkpoint(
                         cfg,
                         cwd,
@@ -4700,7 +4805,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             // completed one of this run's hashkeys after we claimed it. If so, we
             // neither auto-merge nor auto-discard — the choice of which
             // implementation to keep needs a human (fail-closed, exit 2/escalate).
-            let dups = state::detect_duplicate_completions(cfg, cwd, &rs);
+            let dups = state::detect_duplicate_completions(cfg, cwd, &rs)?;
             if !dups.is_empty() {
                 let payload = serde_json::json!({ "duplicate_completion": dups });
                 println!("{}", serde_json::to_string(&payload)?);
@@ -4783,7 +4888,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             }
         }
         StateAction::List => {
-            for rs in state::open_runs(cfg, cwd) {
+            for rs in state::open_runs(cfg, cwd)? {
                 let (done, total) = rs.counts();
                 let paused_tag = if rs.paused { " [paused]" } else { "" };
                 let label_tag = rs
@@ -4798,7 +4903,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             }
         }
         StateAction::Stats => {
-            let all = state::compute_stats(cfg, cwd);
+            let all = state::compute_stats(cfg, cwd)?;
             if all.is_empty() {
                 eprintln!("no runs found");
                 return Ok(());
@@ -5015,7 +5120,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             state::resume_run(cfg, cwd, &run)?;
         }
         StateAction::ListTasks => {
-            let tasks = state::list_cancellable_tasks(cfg, cwd);
+            let tasks = state::list_cancellable_tasks(cfg, cwd)?;
             println!("{}", serde_json::to_string_pretty(&tasks)?);
         }
         StateAction::Cancel { run, task } => {
@@ -5207,7 +5312,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
         }
         StateAction::Checkpoint { run, label } => {
             let rs = state::RunState::load(cfg, cwd, &run)?;
-            let dir = checkpoint_project_dir(cfg, cwd, &run);
+            let dir = checkpoint_project_dir(cfg, cwd, &run)?;
             let shas = capture_branch_shas(cwd, &rs);
             let seq = checkpoint::write_checkpoint(
                 &dir,
@@ -5220,7 +5325,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             eprintln!("checkpoint {seq} recorded for run '{run}'");
         }
         StateAction::Rollback { run, to } => {
-            let dir = checkpoint_project_dir(cfg, cwd, &run);
+            let dir = checkpoint_project_dir(cfg, cwd, &run)?;
             let cp = match to {
                 Some(seq) => checkpoint::checkpoint_at(&dir, &run, seq),
                 None => checkpoint::latest_checkpoint(&dir, &run),
@@ -5272,11 +5377,12 @@ pub(crate) fn policy_is_autonomous(cfg: &Config) -> bool {
         == policy::Decision::Auto
 }
 
-fn checkpoint_project_dir(cfg: &Config, cwd: &Path, run_id: &str) -> PathBuf {
-    state::decomposition_path(cfg, cwd, run_id)
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| cwd.to_path_buf())
+/// The dir a run's checkpoints and checkpoint journal live in: the run's own
+/// dir ([`state::run_dir`] — canonical, or the legacy per-checkout dir a
+/// pre-`43393ce2` run still lives in). `Err` when the main worktree root
+/// cannot be determined; there is no fallback dir.
+fn checkpoint_project_dir(cfg: &Config, cwd: &Path, run_id: &str) -> Result<PathBuf> {
+    state::run_dir(cfg, cwd, run_id)
 }
 
 /// The owning Claude session id from the environment, if set — recorded on
@@ -5724,7 +5830,7 @@ fn print_timings(rs: &state::RunState, json: bool) -> Result<()> {
 fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Result<()> {
     let run_ids: Vec<String> = match (run, all) {
         (Some(r), _) => vec![r],
-        (None, true) => state::all_runs(cfg, cwd)
+        (None, true) => state::all_runs(cfg, cwd)?
             .into_iter()
             .map(|rs| rs.run_id)
             .collect(),
@@ -5764,9 +5870,11 @@ fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Resu
             // manually-set `cost_usd` (which SKILL.md prose often leaves at the
             // 0.0 default because description-string matching is fragile).
             // "No data" (gauge absent / no matching id) falls back to
-            // `s.cost_usd`; an UNDETERMINED gauge does not — the episode is
-            // left unrecorded (retried next firing) and surfaced as a failure,
-            // so a fabricated fallback cost never lands in fugu-router.
+            // `s.cost_usd`; when that was never set either, the cost is
+            // UNMEASURED and `--cost` is omitted (never sent as 0 — backlog
+            // 55fb3861). An UNDETERMINED gauge does not fall back — the episode
+            // is left unrecorded (retried next firing) and surfaced as a
+            // failure, so a fabricated fallback cost never lands in fugu-router.
             let worker_key = format!("{}:worker", s.task_id);
             if !rs.recorded_episodes.contains(&worker_key) {
                 match gauge_accounting(s.agent_id.as_deref()) {
@@ -5776,7 +5884,7 @@ fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Resu
                             s,
                             "worker",
                             &s.model,
-                            cost.unwrap_or(s.cost_usd),
+                            cost.or(s.cost_usd),
                             tokens,
                             &fingerprint,
                         ) {
@@ -5810,8 +5918,9 @@ fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Resu
             {
                 match gauge_accounting(s.verifier_agent_id.as_deref()) {
                     Determination::Known((cost, tokens)) => {
-                        let verifier_cost =
-                            cost.unwrap_or_else(|| s.verifier_cost_usd.unwrap_or(0.0));
+                        // Same rule as the worker episode: unresolved and
+                        // never set → `None` → `--cost` omitted (unmeasured).
+                        let verifier_cost = cost.or(s.verifier_cost_usd);
                         if spawn_fugu_record(
                             &fugu_bin,
                             s,
@@ -5897,7 +6006,7 @@ fn spawn_fugu_record(
     s: &state::RecordSpec,
     role: &str,
     model: &str,
-    cost: f64,
+    cost: Option<f64>,
     tokens: Option<(u64, u64)>,
     fingerprint: &str,
 ) -> bool {
@@ -5908,8 +6017,15 @@ fn spawn_fugu_record(
         .args(["--class", &s.class])
         .args(["--model", model])
         .args(["--status", &s.status])
-        .args(["--role", role])
-        .args(["--cost", &cost.to_string()]);
+        .args(["--role", role]);
+    // Forward a resolved or manually-set cost unchanged (an explicit 0 is sent
+    // as 0). `None` = the cost could not be resolved: OMIT `--cost`, which
+    // fugu-router (0.1.41+) records as unmeasured and excludes from every cost
+    // aggregate, instead of sending a fabricated 0 that reads as "this task
+    // was free" (backlog 55fb3861).
+    if let Some(c) = cost {
+        cmd.args(["--cost", &c.to_string()]);
+    }
     if let Some(dc) = &s.done_criteria {
         cmd.args(["--done-criteria", dc]);
     }
@@ -6148,7 +6264,7 @@ fn read_stdin() -> String {
 
 #[cfg(test)]
 mod calibrated_confidence_tests {
-    use super::{calibrated_confidence, calibrated_confidence_via};
+    use super::{calibrated_confidence, calibrated_confidence_via_with_env_path};
 
     /// The legacy invocation supplies none of the new flags: the calibrated
     /// path must be entirely inert (return `None`, no shell-out) so `decide`
@@ -6163,53 +6279,20 @@ mod calibrated_confidence_tests {
     /// subcommand missing), the probe must fail-soft to `None` — never a hard
     /// error — so the caller falls back to `--confidence`.
     ///
-    /// This is made HERMETIC by forcing `PATH` to exclude any directory that
+    /// This is made HERMETIC by forcing the child's `PATH` to exclude any directory that
     /// actually contains a `fugu-router` executable, so the assertion holds
     /// regardless of ambient machine state (e.g. a dev box where fugu-router
     /// IS on PATH and its episode store has history would otherwise return
     /// `Some(..)`, per `calibrated_confidence`'s shell-out above). Every
-    /// other directory (git, gh, tty, ...) stays resolvable, and the
-    /// original `PATH` is restored on drop (incl. on panic, since `Drop`
-    /// still runs during unwind).
+    /// other directory (git, gh, tty, ...) stays resolvable.
     ///
-    /// PATH is process-global and `cargo test` runs tests on multiple
-    /// threads in one process, so this also takes `crate::env_lock::
-    /// PATH_ENV_LOCK` — the same lock `oracle.rs`'s PATH-mutating tests
-    /// take — before mutating, and holds the guard until PATH is restored.
-    /// Without this, this test and oracle.rs's tests could interleave their
-    /// PATH mutations, producing nondeterministic spawn failures in
-    /// whichever test observed the other's half-restored PATH.
+    /// The filtered PATH is passed to the fugu-router CHILD only, via
+    /// [`calibrated_confidence_via_with_env_path`]; the process-wide PATH is
+    /// never mutated. A process-wide swap is visible to every concurrently
+    /// spawning test thread and made their bare-name spawns fail with ENOENT
+    /// (backlog 7c798579).
     #[test]
     fn flag_supplied_but_probe_unusable_falls_back() {
-        /// RAII guard: temporarily overrides the process `PATH` env var,
-        /// restoring the original value on drop.
-        struct PathGuard {
-            original: Option<String>,
-        }
-        impl PathGuard {
-            fn install(filtered: &str) -> Self {
-                let original = std::env::var("PATH").ok();
-                // SAFETY: test-only, single-purpose mutation; always
-                // restored by `Drop::drop` below (incl. on panic/unwind).
-                unsafe { std::env::set_var("PATH", filtered) };
-                Self { original }
-            }
-        }
-        impl Drop for PathGuard {
-            fn drop(&mut self) {
-                match &self.original {
-                    // SAFETY: see `install` above — this only ever restores
-                    // the exact value that was captured before mutation.
-                    Some(v) => unsafe { std::env::set_var("PATH", v) },
-                    None => unsafe { std::env::remove_var("PATH") },
-                }
-            }
-        }
-
-        let _guard = crate::env_lock::PATH_ENV_LOCK
-            .write()
-            .unwrap_or_else(|e| e.into_inner());
-
         let original_path = std::env::var("PATH").unwrap_or_default();
         let sep = if cfg!(windows) { ';' } else { ':' };
         let filtered: Vec<&str> = original_path
@@ -6219,17 +6302,21 @@ mod calibrated_confidence_tests {
         let sep_str = sep.to_string();
         let filtered_path = filtered.join(sep_str.as_str());
 
-        let _guard = PathGuard::install(&filtered_path);
-
         let title = Some("some task".to_string());
-        // With fugu-router unresolvable on PATH, `Command::output()` fails
-        // to spawn → soft-skip → `None`, regardless of any ambient
+        // With fugu-router unresolvable on the child's PATH, `Command::output()`
+        // fails to spawn → soft-skip → `None`, regardless of any ambient
         // fugu-router install / episode history on the host. Goes through
-        // `calibrated_confidence_via` on the bare name: `calibrated_confidence`
-        // resolves the host's plugin cache first, which this PATH filter
-        // cannot hide.
+        // the `calibrated_confidence_via` shell-out on the bare name:
+        // `calibrated_confidence` resolves the host's plugin cache first,
+        // which this PATH filter cannot hide.
         assert_eq!(
-            calibrated_confidence_via(std::path::Path::new("fugu-router"), &title, &[], &None),
+            calibrated_confidence_via_with_env_path(
+                std::path::Path::new("fugu-router"),
+                &title,
+                &[],
+                &None,
+                Some(std::ffi::OsStr::new(&filtered_path)),
+            ),
             None
         );
     }

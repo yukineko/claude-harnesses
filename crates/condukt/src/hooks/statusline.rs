@@ -17,7 +17,16 @@ pub fn run(cwd: &str) {
         PathBuf::from(cwd)
     };
 
-    let runs = state::open_runs(&cfg, &cwd_path);
+    // An empty status line reads as "no active run", so a run-state store that
+    // cannot even be located (undeterminable main worktree root) is rendered as
+    // an explicit `unknown`, never as silence.
+    let runs = match state::open_runs(&cfg, &cwd_path) {
+        Ok(runs) => runs,
+        Err(e) => {
+            println!("condukt run state unknown ({e:#})");
+            return;
+        }
+    };
     let Some(run) = runs.last() else {
         return;
     };

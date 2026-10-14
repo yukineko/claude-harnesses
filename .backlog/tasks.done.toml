@@ -34784,6 +34784,748 @@ reason = "discard"
 discard_reason = "unproven (passes at HEAD 3be54fd6). Claim: list --all / next --all prose promises to drop the project filter but does not. For a repo store there is no project filter at all (read_project_scope returns None), so --all and the default agree (measured 356 = 356 here, gap = claimed leases only, see 3bfe0d7a). For a pinned multi-project store, integration.rs list_all_flag_returns_every_project_in_the_resolved_store passes (with --all both projects listed, without it not). No prose-vs-behaviour gap observed."
 
 [[task]]
+id = "d470a478"
+title = "donegate を crate scoped にした結果、共有 crate を変更したときの依存先 fmt/clippy が誰にも検査されない (CI 禁止のため canon の backstop が存在しない)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "coverage",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-09-13、測定点 1235d60d。15eb3f94 の実装 (donegate の fmt/clippy を触った crate だけに絞る) で顕在化した、リポジトリ全体の被覆欠落。15eb3f94 自体は正しい修正であり、これはその副作用を独立の事実として残すもの。
+
+【欠落の内容】
+harness-core のように広く依存される crate を変更しても、lint されるのはその crate 自身だけで、~39 の依存先の clippy/fmt 状態は検査されない。
+
+写経元の scripts/test-changed-crates.sh は同じ制約を KNOWN LIMITATION (deliberate, not an oversight) として明記し、fan-out を捕まえるのは CI の仕事だと書いている。しかし CLAUDE.md 第7節により GitHub Actions はこのリポジトリで使用禁止なので、その逃げ道は存在しない。つまり canon のコメントが前提にしている backstop が、このリポジトリには無い。
+
+【実測した backstop の有無】
+自動で workspace 全体に効くのは .githooks/pre-push の cargo check --workspace --all-targets だけ。これは型検査であって lint でも fmt でもない。
+scripts/check-clippy-lints.py (pre-commit) も変更 crate scoped なので backstop にならない。
+したがって広く依存される crate を変更したあと、依存先の clippy/fmt 状態は手動 sweep まで UNKNOWN のままになる。
+
+【なぜ fail-open と呼ぶか】
+沈黙が検査済みと読まれる形だから。donegate が緑を返したとき、それは「触った crate は緑」であって「workspace が緑」ではない。下流 (人間) はその区別を出力から読み取れない。CLAUDE.md 第1節が statusline の例 (3b1eb24) で名指しした型と同じである。
+
+【候補の解】
+(a) 依存先を cargo metadata の逆依存グラフで求め、直接の依存先までは lint する。第1近似で fan-out の大半を拾えるはずで、コストは測る必要がある。
+(b) Stop ゲートではなく pre-push に workspace 全体の lint を足す。頻度が低いので latency 予算が違う。
+(c) 何もしないが、donegate の緑の意味を出力で明示する (触った crate のみ検査した、と毎回書く)。最低限これは要る。
+
+どれを採るかは latency の実測が要る。判断ではなく測定で決めること。
+
+関連 15eb3f94 / 91e503c8。
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_d470a478.py (rev 34b1a083): neither reverse-dep lint (a) nor scope wording (c) exists"""
+created_at = 1789287938
+updated_at = 1791050089
+weight = 0.0
+issue_number = 581
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/581"
+issue_closed_at = 1791050091
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_verifier_d470a478.py"
+exit = 0
+passed = 5
+rev = "3eb9803fd692f94833130cff2cdaf5ffc7e593f6"
+observed_at = 1791050072
+output_digest = "sha256:86a4d1c65ee77caae1a4a451ae3ba7d50aa51f8efb2f5ce6e36ba689877b8e5c"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-64554c4d
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 5 items
+
+scripts/test_verifier_d470a478.py .....                                  [100%]
+
+============================== 5 passed in 8.80s ===============================
+"""
+
+[task.closure.red]
+rev = "7e05ab454eb28204d05471f3402b859d8bbfcec6"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "486e83ca"
+title = "SessionStart の requeue が live な lease を持つ task の claim を解放する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flow",
+    "backlog",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+観測 2026-09-13 17:22:46 (測定点 16f16879)。session a6738634 の SessionStart で backlog の session-start hook が .backlog/tasks.toml の 4 件を一括で claimed から pending へ戻した (updated_at が 4 件とも 1789287766 の単一書き込み)。うち 3 件 f7b018f8 / e73a1fd5 / 15eb3f94 は overwatch status 上の lease が live で heartbeat 58 秒前だった (前セッション 79d79a35 の worker が実際に稼働中)。つまり requeue は claim 保持者の生存を一切見ずに解放している。損害: 解放された task を別セッションが claim でき、同一ブランチに 2 本目の worker が積まれる (既知の二重 dispatch)。なお同時に解放された 6267bfbe は lease が無く、そちらの解放は正しい。読みは 2 つ: (a) requeue は「前セッションは死んだ」前提の設計で、生存確認の欠落がバグ。(b) 意図的に無条件 requeue で、排他は condukt state claim-task の最終ガードに委ねている。見分け方: claim-task が live lease を持つ task に対して他セッションの claim を実際に弾くかを観測する。弾かないなら (a) で確定。完了条件: live lease を持つ task が requeue されないことをテストで観測し、lease の生存が観測できない場合は解放しない (制限側に倒す) こと。是正済みの現物: この finding の commit で 3 件を claimed へ戻してある。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Done criterion: 'live lease を持つ task が requeue されない ... lease の生存が観測できない場合は解放しない'. At HEAD SessionStart no longer touches claims, but the claim itself now silently stops excluding after CLAIM_STALE_SE; test crates/backlog/src/store.rs (rev e70d48dd)"""
+created_at = 1789287880
+updated_at = 1791051136
+weight = 0.0
+issue_number = 580
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/580"
+issue_closed_at = 1791051138
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test verifier_486e83ca"
+exit = 0
+passed = 4
+rev = "0234e448868d4d34567a7b1e845cb0d998e71079"
+observed_at = 1791051110
+output_digest = "sha256:bc65315f5b0c674636830612b67aa5ac7902672e531d2dc9464a1b59e98ff014"
+excerpt = """
+
+running 4 tests
+test verifier_empty_session_id_cannot_keep_dead_lease_alive ... ok
+test verifier_live_holder_keeps_lease_past_window ... ok
+test verifier_malformed_heartbeat_refused_by_every_reader ... ok
+test verifier_dead_holder_is_reclaimable ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.65s
+
+   Compiling harness-core v0.2.45 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/harness-core)
+   Compiling backlog v0.3.34 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.41s
+     Running tests/verifier_486e83ca.rs (target/debug/deps/verifier_486e83ca-80aad64bf831cd5d)
+"""
+
+[task.closure.red]
+rev = "7e05ab454eb28204d05471f3402b859d8bbfcec6"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "55f55932"
+title = "condukt state claim-task が空の hashkey を受理して成功を返し、空文字キーの claim を記録する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+測定点 main d0c4adc1 / 2026-09-13 17:29 JST. 観測: claim-task を --hashkey の値が空文字のまま呼んだところ exit 0 で成功を返し、/Users/yuki/.condukt/state/session-79d79a35-4f9872cd/claims.json の task_claims に空文字をキーとするエントリが書かれた。逐語: task_claims の唯一のキーが空文字で、値は run_id flow-79d79a35-3490-4bbd-9bb4-d501e749e65d、title は f7b018f8 11a1e1bfe1878e1a、claimed_at 1789288129。呼び出し側 (当セッション) の zsh では引用符なしパラメータの単語分割が既定で起きないため title に 2 語が入り hashkey が空になった。これは呼び出し側のミスだが、ゲート側の問題はそこではない。claim-task の契約は exit 0 を claim 成功として下流に読ませることであり、空キーで成功を返すと、呼び出し側は claim を取ったと信じて実行に進む一方、実 hashkey に対する is-claimed は false のままになる。CLAUDE.md 第3節の空集合を clean に写さないという不変条件に反する。期待挙動: 空または空白のみの hashkey は不正入力として非 0 で拒否する。読み 1 (実在の欠陥): 入力検証が無い。読み 2 (意図どおり): 空 hashkey は任意の opaque 文字列として正当。見分け方: crates/condukt/src/claim.rs の claim_tasks に空文字を弾く経路があるかを読む。無ければ読み 1。RED の作り方: 空 hashkey で claim-task を呼び、exit 0 かつ claims.json に空文字キーが増えることを先に観測してから修正する
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/condukt/tests/backlog_audit_s01.rs (rev e70d48dd)"""
+created_at = 1789289865
+updated_at = 1791051828
+weight = 0.0
+issue_number = 588
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/588"
+issue_closed_at = 1791051830
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test verifier_55f55932"
+exit = 0
+passed = 6
+rev = "63cc064eb2eaf8ad76f0dd63718ee722cc525351"
+observed_at = 1791051803
+output_digest = "sha256:e3170f5b9751bc27553a9437ba992f71c61fb9f11e884adbb42a4c551280322f"
+excerpt = """
+
+running 6 tests
+test claim_task_blank_key_mixed_with_real_key_claims_neither ... ok
+test release_task_with_no_hashkey_is_a_usage_error ... ok
+test release_task_blank_key_does_not_release_or_touch_a_real_claim ... ok
+test nonblank_keys_still_round_trip_verbatim ... ok
+test claim_task_blank_keys_exit_2_and_write_nothing ... ok
+test is_claimed_blank_key_exits_2_no_stdout_no_registry ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.50s
+
+   Compiling condukt v0.7.216 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.81s
+     Running tests/verifier_55f55932.rs (target/debug/deps/verifier_55f55932-c323dd9e28a7e5bf)
+"""
+
+[task.closure.red]
+rev = "bffb0f8b0d92443588822d0bf46523d8c6be2cde"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "057fa13c"
+title = "condukt の diffrisk_record every_invocation_is_journaled テストが並列実行で 2/4 の確率で落ちる (共有 ledger の分離漏れ)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p1",
+    "flaky-test",
+    "condukt",
+]
+touched_files = []
+status = "done"
+notes = """
+測定点 main 874d6d47 / 2026-09-13. サイクル5 の b637936f 実装中に検出。crates/condukt/src/diffrisk_record.rs:540 の assertion left == right one record per invocation が cargo test -p condukt のフル実行で落ちる。実測: 変更を stash して branch point 874d6d47 の素の状態で 4 回連続実行し FAILED / FAILED / ok / ok。単体 (--test 名指し・単一スレッド) では通る。したがって当該変更とは無関係の既存 flake であり、共有 ledger か固定パスの fixture が並列テスト間で干渉している疑いが濃い。memory の killed task leaves orphan loop と同型 (固定 /tmp fixture の相互破壊) の可能性。完了条件: ledger のパスをテストごとに分離し 10 回連続で green を観測すること。注意: この flake があるかぎり cargo test -p condukt のフル green は判定不能であり、他タスクの検証結果を汚染する。
+
+[triage 2026-09-29 @b325a169] p2->p1: diffrisk_record flake makes full cargo test -p condukt green unreliable; condukt verifies other tasks
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Shares the failure with e494a8a3 (RED pin --include-ignored -> FAILED, body uses Config::load()), but 057fa13c carries an extra done criterion ('10 consecutive greens') absent from e494a8a3's notes ->; test - (rev e70d48dd)"""
+created_at = 1789291716
+updated_at = 1791052307
+weight = 0.0
+issue_number = 599
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/599"
+issue_closed_at = 1791052310
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --bin condukt -- --exact --include-ignored diffrisk_record::backlog_e494a8a3::journaling_test_does_not_write_into_the_home_state_root"
+exit = 0
+passed = 1
+rev = "8c159fd6d9dabada6d3210fd344e3bfb7e5e9777"
+observed_at = 1791052288
+output_digest = "sha256:6c2d1b88f6175c5a4b2d76b5e52dda80fbee031753c50a5d627def09348ac6aa"
+excerpt = """
+
+running 1 test
+test diffrisk_record::backlog_e494a8a3::journaling_test_does_not_write_into_the_home_state_root ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 887 filtered out; finished in 0.07s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running unittests src/main.rs (target/debug/deps/condukt-ae479190a6341130)
+"""
+
+[task.closure.red]
+rev = "f51e281e939680fb09866da6a6ff4a0acafc47f0"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "51595c41"
+title = "condukt: worktree の作成基点(current HEAD)とマージ先(default_branch)の非対称を解消する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+iro 0bb8dcfd で実測・判定済み。worktree.rs:726-729 は start-point 無しの 'git worktree add -b' ＝着手時の HEAD から切る。main.rs:3174 の merge は常に cfg.default_branch へ。この2つが食い違うと、feature ブランチ上で走らせた run が **feature の履歴ごと default_branch へ統合する**（2026-09-13 run-20260913-130340-73812 で iro の main が実機A/B未の広角補正を抱えたまま進んだ）。SKILL.md/README.md はこの組み合わせに一切触れていない（'feature ブランチ'/'start-point'/'base branch'/'基点' で 0 ヒット）。
+
+取り得る決着は3つで、どれを選ぶかが本チケットの判断:
+(a) 作成側を default_branch 基点に揃える（worktree add -b <branch> <default_branch>）— マージ先と一致するが、feature ブランチ上のコードに依存するタスクが土台を失う。
+(b) マージ先を『着手時の HEAD のブランチ』にする — create 時に基点 ref を記録する状態追加が要る。意図（元の場所へ戻す）を保つのはこちら。
+(c) 作成時の基点 sha を記録し、**merge 時にそれが default_branch の祖先でなければ止めて報告する**（統合はせず人へ返す）。ハッピーパスを変えずに『黙って main が動く』だけを潰す最小案。
+
+いずれにせよ SKILL.md Phase 7 に『どのブランチへマージされるか』を明記すること。注意: 現在 harness の配備バイナリは 35 件が harness-core 0.2.17 のまま（7357bc96）なので、source を直しても rollout するまで挙動は変わらない。
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/condukt/tests/backlog_51595c41.rs (rev 596108b9): Create base (HEAD) vs merge target (default_branch) asymmetry; test is GREEN under any of fixes a/b/c."""
+created_at = 1789291438
+updated_at = 1791053097
+weight = 0.0
+issue_number = 596
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/596"
+issue_closed_at = 1791053099
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test verifier_51595c41"
+exit = 0
+passed = 5
+rev = "c8c654241238c3dbef3bffbd75fc1431ed2b60ea"
+observed_at = 1791053067
+output_digest = "sha256:68abda84d93764f679bc305099d6d423939bb6e4f42570d71fdf4e5f0fef3725"
+excerpt = """
+
+running 5 tests
+test ancestry_probe_error_exit_is_refused_and_main_unchanged ... ok
+test resolve_merge_refuses_base_off_main_and_main_unchanged ... ok
+test record_pointing_at_a_blob_is_refused_and_main_unchanged ... ok
+test hand_cut_branch_without_record_is_refused_and_main_unchanged ... ok
+test create_from_main_then_main_advances_still_merges ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.20s
+
+   Compiling condukt v0.7.218 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.52s
+     Running tests/verifier_51595c41.rs (target/debug/deps/verifier_51595c41-ac585c3b662d652f)
+"""
+
+[task.closure.red]
+rev = "387cb95c5c9d2dc619abdbc9640a738a33c6b167"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "43393ce2"
+title = "condukt の run-state も worktree ごとに別ストアへ分裂している (claims だけでなく project_dir 全体)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p1",
+    "fail-open",
+    "condukt",
+]
+touched_files = []
+status = "done"
+notes = """
+測定点 main 874d6d47 / 2026-09-13. d83b0e8f (claim registry の worktree 分裂) を調査中に発見した同型の別件。crates/condukt/src/state.rs:331 の project_dir も cfg.state_dir.join(project_key(repo_root(cwd))) であり、claim registry と同じく linked worktree では repo_root が worktree 自身を返すため別キーになる。実測: /Users/yuki/.condukt/state/ 配下に session- で始まるキーのディレクトリが多数あり、そのうち session-2444be10-d7db0410 は run-20260913-133807-77531.json と .decomposition.json と .journal.jsonl と .checkpoints.json を、session-b57a58c3-3fcd5268 は run-20260811-230435-19389 一式を、session-b9a78b46-e56b248f は run-20260805-224954-26962 ほか 2 run を保持している。つまり worktree を cwd にして作られた run は main から見えない。読み 1 (実在の欠陥): run-state も main worktree root で addressing すべきで、condukt status や state list が cwd 次第で別集合を返すのは二重着手と孤児 run の温床。読み 2 (意図どおり): run は作った tree に属するローカル状態であり分裂は無害。見分け方: condukt state list を main の cwd と /Users/yuki/src/.harness-worktrees/session-2444be10 の cwd の両方で実行し run-20260913-133807-77531 が前者に出るかを見る。両方に出れば読み 2、片方だけなら読み 1。注意: d83b0e8f では claim 経路のみを局所修正し project_dir は意図的に触っていない。repo_root を全体で変えると既存の run-state が孤児化するため。関連 d83b0e8f
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Still open: RED pin --include-ignored backlog_43393ce2_4708069b -> FAILED (run created in worktree listed from main: got ""; worktree control listed it). Not a duplicate of 4708069b: harness-core/src/; test crates/condukt/tests/backlog_audit_s01.rs (rev e70d48dd)"""
+created_at = 1789290713
+updated_at = 1791053122
+weight = 0.0
+issue_number = 592
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/592"
+issue_closed_at = 1791053124
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test verifier_43393ce2"
+exit = 0
+passed = 5
+rev = "c8c654241238c3dbef3bffbd75fc1431ed2b60ea"
+observed_at = 1791053103
+output_digest = "sha256:b0d71ba4ce8b605685806af8bc32dac5fba45d1a80fc55b29005e35f0294c473"
+excerpt = """
+
+running 5 tests
+test verifier_garbage_gitfile_is_nonzero_for_list_and_show ... ok
+test verifier_main_tree_run_is_shown_and_listed_from_worktree ... ok
+test verifier_unreadable_legacy_dir_is_an_error_not_a_canonical_fork ... ok
+test verifier_worktree_run_set_from_main_tree_has_one_canonical_copy ... ok
+test verifier_legacy_run_write_back_never_forks ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.79s
+
+   Compiling condukt v0.7.218 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running tests/verifier_43393ce2.rs (target/debug/deps/verifier_43393ce2-913066a6de4f9bdc)
+"""
+
+[task.closure.red]
+rev = "bffb0f8b0d92443588822d0bf46523d8c6be2cde"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "347db98f"
+title = "condukt diffrisk_record journal test intermittently sees 1 of 2 records under full-target test load"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flaky-test",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+MEASURED 2026-09-13, tree = main mid-merge of run-20260913-182640-69073 t5 (MERGE_HEAD 66a5ce1d, base 05962e2a).
+
+SYMPTOM: diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded
+panics at crates/condukt/src/diffrisk_record.rs:540 -- assertion left == right failed:
+one record per invocation; left: 1, right: 2. Always the SAME test and SAME assertion.
+
+RATE: cargo test -p condukt --quiet (ALL targets) -> 1 FAIL in 4 runs. Plus 2 consecutive
+FAILs via scripts/test-changed-crates.sh, which is what donegate runs.
+NEVER reproduced with cargo test -p condukt --bins alone (3 runs green, one of them
+--test-threads=1 with 809 passed). So it needs the integration-test binaries running
+concurrently, i.e. it is LOAD-dependent, not order-dependent.
+
+NOT the same defect as 4b94e371. That one had VARYING failure identity across runs;
+this one is stable. I initially reported it as that class and that was wrong.
+
+REFUTED (do not re-walk these):
+ - shared ledger across tests. project_dir = cfg.state_dir.join(project_key(repo_root(cwd))).
+   repo_root falls back to cwd when no ancestor has .git, and project_key hashes the FULL
+   canonical path (harness-core/src/projkey.rs:24,50), so each tempdir test gets its own
+   diffrisk-outcomes.jsonl. No cross-test sharing.
+ - a return path that skips journaling. Every return in record_post_execution_diff_risk
+   goes through journal(...) (diffrisk_record.rs:261,265,328,344,384).
+ - git() swallowing a non-zero exit. git_output_to_result bails on both non-zero status
+   and timeout (worktree.rs:188,199).
+
+STILL UNDETERMINED (the actual open question): whether the lost record is (a) an append
+that failed, or (b) a line dropped at parse. append_line_reporting prints a LOST warning
+on failure (harness-core/src/append.rs:64) and load_diffrisk_outcomes silently drops
+unparseable lines via filter_map(ok()) (gatelog.rs:448). A --nocapture run grepping for
+that warning happened to PASS, so the discriminator was not captured. NEXT STEP: loop the
+full-target run under --nocapture until it fails and check whether the LOST warning is
+present. If it is absent, the line was written but did not parse, and the silent
+filter_map(ok()) drop is itself the CLAUDE.md section 3 problem -- a hole in the history
+that the loader hides.
+
+WHY IT MATTERS BEYOND THE TEST: this journal exists specifically so that
+inspected-and-clean is distinguishable from never-inspected. If a record can be lost
+under load, that distinction has a hole under exactly the concurrent conditions the
+fleet runs in.
+
+=== 追加実測 2026-09-16 (flow cycle6 / run-20260913-223733-78880 t1 worker, 測定点 847a782e) ===
+
+原因は「同時に走る integration test バイナリ」ではなく、より一般に
+TMPDIR に対する同時 create/write/remove の churn である。切り分け:
+
+  - t1 の新規テスト (subagent_stop 15 件) を含め既定並列度  -> 10 回中 4 回 FAIL
+  - t1 のテストを --skip subagent_stop で除外              -> 5 回中 0 回 FAIL
+  - 全体を --test-threads=1                                 -> 毎回 824/824 green
+  - 決定的: t1 のテストを除外したまま、無関係なプロセスに
+    $TMPDIR への平凡な create/write/remove churn をさせる   -> 3 回中 1 回 FAIL
+
+つまり subagent_stop のテストは原因ではなく、単に負荷を上げてヒット率を
+上げているだけ。既存メモの「integration-test バイナリが必要」という
+条件は狭すぎる ($TMPDIR churn で十分)。
+
+未解明で、ここが本題: 2 回の journal append のうち 1 回が落ちているのに、
+diffrisk-outcomes の "this record is LOST" 警告が一切出ていない。
+このテストが守ろうとしているのはまさに「穴の空いた履歴」であり、
+記録が失われたのに誰も気づけない経路が実在することになる。
+flake の再現条件よりこちらの方が重い。
+
+なお本件は weaken / skip / disable していない。cycle6 の 3 ブランチは
+すべて -- --test-threads=1 で測って green を確認した。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Not a duplicate of e494a8a3: 347db98f carries an extra ask (determine whether the lost record is a failed append or a line silently dropped at parse; the loader's silent drop is itself a §3 hole) that; test - (rev e70d48dd)"""
+created_at = 1789294091
+updated_at = 1791053414
+weight = 0.0
+issue_number = 616
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/616"
+issue_closed_at = 1791053417
+rev = 1
+
+[task.closure]
+reason = "duplicate"
+duplicate_of = "e494a8a3"
+
+[[task]]
+id = "d65110df"
+title = "abandon --all-stuck: dirty-veto の判定不能が exit 3 にならず、三値 scan_stuck と終了ステータスが割れている"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-09-13、測定点 bc989543 (t5 統合直後)。二つの独立した変更が同じ run で main へ landed した結果、「判定不能」の扱いが経路によって割れている。
+
+(1) 0791722b (backlog b637936f) が stuck スキャンを三値化した。state.rs::scan_stuck は Running task を stuck / healthy / undetermined に分け、undetermined のうち Undetermination::Unobservable が一つでもあれば state abandon --all-stuck は exit 3 で終わる。「判定できなかった」を exit 0 の沈黙に写さないためのもの。
+
+(2) その直後に統合した 5daf0b60 (t5) の uncommitted-work veto は、確定した Known(Stalled) であっても worktree が dirty または読めない場合に task を KEEP する。KEEP の理由は stderr に逐語で出るが、StuckScan のどちらのリストにも入らない。したがって has_unobservable() は false のままで、exit code は 0 になる。
+
+つまり同じ「判定不能」でも:
+  worktree HEAD が読めない  -> undetermined/Unobservable -> exit 3
+  worktree の dirtiness が読めない -> stderr のみ      -> exit 0
+
+abandon の可否についてはどちらも制限側 (KEEP) に倒れているので fail-open ではない。割れているのは下流へ渡す終了ステータスであり、スクリプトから見ると後者は「クリーンなスキャンだった」と読める。CLAUDE.md 3: 「検査した」と「検査できなかった」を下流から区別不能にしてはならない。
+
+現在の契約を固定しているテスト: crates/condukt/tests/abandon_dirty_guard.rs の helper abandon_all_stuck_twice が assert 二つで status.success() を要求している (行 242/244)。これは「dirty veto が効いた run は exit 0」を pin している。ただしこの assert は helper 内の前提条件であって、テストが自分の doc comment で名乗っている性質 (task が abandon されない) ではない。main 側には同種の再アンカー前例がある (0.7.159 が abandon_progress_gate_e2e の status.success() 二行を exit==3 へ張り直した。marketplace.json の condukt エントリに逐語で残っている)。
+
+完了条件 (利害のない agent が RED を先に観測すること、CLAUDE.md 2):
+  a. uncommitted_work_keep_reason が Determination を返す形のまま、Undetermined の読み (Err、worktree 未記録) を StuckScan.undetermined へ Unobservable として載せる。
+  b. Known(Some(reason)) = 観測できた dirty は undetermined ではない (worker は生きていると判定できている) ので、載せない。この非対称を doc に書く。
+  c. abandon_dirty_guard.rs の cannot-determine ケースの exit code を 3 に張り直し、dirty ケースは 0 のままであることを対照として同時に pin する。
+  d. どちらのケースも stderr の veto 行が消えないことを併せて確認する。
+
+起票者は本件を統合中に作り込んだ当人 (t5 のマージ実施者) であり、同一セッションで実装と検証を兼ねないために作業ではなく起票として残す。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/condukt/tests/backlog_s03_audit.rs (rev e70d48dd)"""
+created_at = 1789294567
+updated_at = 1791054765
+weight = 0.0
+issue_number = 617
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/617"
+issue_closed_at = 1791054768
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test verifier_d65110df"
+exit = 0
+passed = 7
+rev = "3e4e40b8b8b5e6757e9683a2f94ac4f86d58d9a3"
+observed_at = 1791054739
+output_digest = "sha256:c6aec3c2f3f128b31a38b6c22aa593c69af90dab5897de5e521bff3839d88318"
+excerpt = """
+
+running 7 tests
+test verifier_removed_worktree_exits_3 ... ok
+test verifier_dirty_worktree_exits_0_and_is_kept ... ok
+test verifier_clean_stalled_worktree_is_abandoned ... ok
+test verifier_corrupt_index_stalled_task_exits_3 ... ok
+test verifier_unreadable_index_stalled_task_exits_3 ... ok
+test verifier_mixed_dirty_and_clean_exits_0 ... ok
+test verifier_mixed_run_abandons_clean_and_exits_3_for_unreadable ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.98s
+
+   Compiling condukt v0.7.220 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.84s
+     Running tests/verifier_d65110df.rs (target/debug/deps/verifier_d65110df-89be529a7fcb415c)
+"""
+
+[task.closure.red]
+rev = "9e8e0a90fe7c4a977d058b31139ec7f57132dea9"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "55fb3861"
+title = "condukt の fugu 記録で cost 解決失敗が 0.0 に潰れ、未計測がコスト 0 として記録される"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+backlog 53c825f6 の evidence 2。crates/condukt/src/main.rs:5218 付近:
+
+    let cost = s
+        .agent_id
+        .as_deref()
+        .and_then(state::resolve_agent_cost)
+        .unwrap_or(s.cost_usd);
+
+resolve_agent_cost が解決できなかった場合 s.cost_usd に落ちるが、SKILL.md の
+prose は description 文字列照合が脆いためこれを 0.0 の既定値のまま残すことが
+多いと同じ箇所のコメント自身が認めている。結果として「コストを解決できなかった」
+が「このタスクはコスト 0 だった」として fugu に記録され、下流の routing 計測が
+未計測を無料として集計する。CLAUDE.md #3 の判定不能を permissive 側へ倒す形。
+
+既に同一ファイル内に正しい先例がある: spawn_fugu_record (main.rs:5299 付近) の
+duration_secs は三値で、0.0 を「未計測」として扱い --duration を省略する。
+cost も同じ形に揃えればよい (約 4 行)。
+
+done_criteria:
+- cost を Option<f64> の三値にし、解決失敗時に 0.0 を捏造せず --cost を省略する
+  (もしくは fugu-router 側が未計測を表現できるキーへ渡す)
+- verifier 側の同型の unwrap_or_else(|| s.verifier_cost_usd.unwrap_or(0.0))
+  (main.rs:5230 付近) も同時に直す。片側だけの修正は gate-crate audit mirror gap
+  と同じ再発パターンになる
+- 解決失敗時に 0.0 が記録されないことを固定する挙動テストを追加する
+  (先に RED を観測すること)
+
+依存: このファイルは run-20260913-223733-78880-t1 (backlog e8c03e9e) が
+main.rs を触るため、そのマージ後に着手すること。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/condukt/tests/backlog_s03_audit.rs (rev e70d48dd)"""
+created_at = 1789490424
+updated_at = 1791056650
+weight = 0.0
+issue_number = 657
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/657"
+issue_closed_at = 1791056655
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p fugu-router --test verifier_55fb3861"
+exit = 0
+passed = 7
+rev = "27612ed6e5dda8d4d159502c065b97e606f2812e"
+observed_at = 1791056540
+output_digest = "sha256:d6c58ac4371ce8d754b427c2ee8b88ee598b42101340e6b5d1554ff5bdc71582"
+excerpt = """
+
+running 7 tests
+test v_legacy_zero_and_explicit_zero_read_back_as_unmeasured ... ok
+test v_unmeasured_is_not_stored_or_averaged_as_zero ... ok
+test v_measured_costs_are_averaged ... ok
+test v_negative_or_non_finite_cost_rejected_and_nothing_written ... ok
+test v_decide_does_not_treat_unmeasured_passes_as_free ... ok
+test v_decide_all_measured_unchanged ... ok
+test v_decide_nothing_measured_is_cheapest_first ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.54s
+
+   Compiling bitflags v2.13.0
+   Compiling harness-core v0.2.45 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/harness-core)
+   Compiling proptest v1.11.0
+   Compiling fugu-router v0.1.42 (/Users/yuki/src/.harness-worktrees/session-64554c4d/crates/fugu-router)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.77s
+     Running tests/verifier_55fb3861.rs (target/debug/deps/verifier_55fb3861-0e8a14d1cad29f46)
+"""
+
+[task.closure.red]
+rev = "c4928d36e7195808d9b8324ecd1d1c5ff17e7f71"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "56eb3f9a"
+title = "overwatch scopes_overlap が空 scope を no-overlap へ潰している (lease.rs:175) — 未宣言と非衝突を区別していない二値の実例"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-09-13 (condukt interpreter の検証中に発見)、測定点 e30c32a8。crates/overwatch/src/lease.rs:175 付近の scopes_overlap は private かつ bool を返し、空 scope を no overlap へ写す。flow SKILL.md も scope が未確定なら省略と指示しているので、空 scope は実運用で日常的に発生する。したがって「scope を宣言していない (未判定)」と「宣言したが重ならない (判定の結果)」が下流から区別不能であり、CLAUDE.md 第3節が名指しする二値型の欠陥そのものである。blastguard/src/model.rs:5 の Three answers, not two と同型。/ 三値化の案: Absent (未宣言) / Known(false) (宣言済みで重なり無し) / Known(true) (重なりあり)。harness_core::verdict::Determination で表現できる。/ 今回この欠陥が実際に効いた観測: 本セッションで 91e503c8 と 15eb3f94 という同一作業の2チケットを掴んだが、15eb3f94 に anchor を張っていなかったため scope_overlap は何も検出しなかった。一方 anchor を張った e73a1fd5 と f7b018f8 の重なりは正しく検出した。つまり検出できるのは宣言された分だけで、未宣言は静かに検査対象外へ落ちる。/ 関連 0437f3c5 / f7b018f8 / e73a1fd5。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/overwatch/tests/backlog_s04_audit.rs (rev e70d48dd)"""
+created_at = 1789274021
+updated_at = 1791919333
+weight = 0.0
+issue_number = 551
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/551"
+issue_closed_at = 1791919336
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test backlog_s04_audit s56eb3f9a -- --include-ignored"
+exit = 0
+passed = 1
+rev = "b1bc67e2bb3ac89391cc1ae6a147f1af22e4cebd"
+observed_at = 1791919311
+output_digest = "sha256:379deae2f9f8fdb8fc5e16555f3eabbbf756595b9b8ed0f765969fce665b9874"
+excerpt = """
+
+running 1 test
+test s56eb3f9a_undeclared_scope_is_distinguishable_from_declared_disjoint ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.67s
+
+   Compiling harness-core v0.2.47 (/Users/yuki/src/.harness-worktrees/session-4dadba08/crates/harness-core)
+   Compiling overwatch v0.2.61 (/Users/yuki/src/.harness-worktrees/session-4dadba08/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.04s
+     Running tests/backlog_s04_audit.rs (target/debug/deps/backlog_s04_audit-3cec98fad1852caf)
+"""
+
+[task.closure.red]
+rev = "7be45b886236a4906dd9b2e6bf3666b379945766"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "7b6bcfe6"
+title = "harness_core の text_similarity は日本語で機能しない — 分かち書きしないため文節が丸ごと1トークンになり、既知の重複ペアが 0.26 (閾値 0.6) にしかならない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-09-13、測定点 1235d60d。f7b018f8 の閾値 0.6 を既知の重複ペアで検証しようとして判明した、より上流の欠陥。
+
+【何が壊れているか】
+harness_core::lessons::tokenize は空白と非英数字でしか区切らない:
+
+    for t in s.to_lowercase().split(|c: char| !c.is_alphanumeric()) {
+        if t.len() >= 3 and STOP に無い { out.insert(t) }
+    }
+
+日本語は分かち書きしないうえ、ひらがな・カタカナ・漢字はすべて char::is_alphanumeric が true なので区切られない。結果、日本語の1文節がまるごと1トークンになる。さらに t.len() はバイト長なので、助詞「の」「が」は3バイトあり単独トークンとして残る。
+
+【実測】既知の重複ペア (2026-09-13 に単一セッションが別item として連続 claim した 91e503c8 と 15eb3f94) のタイトルで測ると:
+
+  tokens A: check, donegate, fail, open, required, skip, vector, workspace, が, の, ファイルへの構造的圧力, 他セッションの赤が全セッションを止める, 全体を見るため, 共有
+  tokens B: check, donegate, required, reviewgate, workspace, worktree, の, を自分の, スコープに絞る, 全体スキャンをやめる
+
+  intersection = check, donegate, required, workspace, の  (5)
+  union = 19
+  jaccard = 0.263158
+
+閾値 0.6 の半分以下であり、この「本物の重複」は検出できない。
+
+注意: この 0.263 は tokenize と jaccard を Python で忠実に再実装して出した replication であって、Rust の text_similarity を直接実行した値ではない。Rust 側での測定が要る。ただし結論の根拠はこの算術ではなくトークン列そのもので、そちらは tokenize を読めば確認できる。
+
+【何が言えるか】
+マッチしているのは英単語 (donegate / required / check / workspace) と助詞「の」だけで、日本語の実質部分は「他セッションの赤が全セッションを止める」のような巨大トークンになり何ともマッチしない。つまり text_similarity は日本語タイトルに対して事実上、英単語の混入率しか測っていない。「の」が効いているのは偶然のノイズであり、精度をさらに悪くしている。
+
+【影響範囲 — 既に出荷済みのゲートが無音で無効化されている】
+consumer は crates/overwatch/src/lease.rs:195 の possible_duplicate (第4.6a) 一本。このリポジトリの lease goal はほぼ日本語なので、possible_duplicate は日常的に「重複なし」を返している可能性が高い。これは CLAUDE.md 第1節が statusline の例 (3b1eb24) で名指しした「沈黙が余裕ありと読まれる fail-open」と同型である。何も出ないことが検査済みと読まれている。
+
+【やること】
+(1) Rust 側で上記ペアの text_similarity を実測し、値を事実として固定する。
+(2) possible_duplicate が日本語 goal のペアに対して実際に何を返すかを、既知の重複ペアで観測する。空振りするなら、それは閾値の問題ではなくトークナイザの問題として記録する。
+(3) 閾値 0.6 を黙って下げて取り繕わない。0.263 を拾うために閾値を下げると無関係なペアも拾う。直すならトークナイザ側 (日本語は文字 n-gram、たとえば bigram に落とす) である。
+(4) f7b018f8 の backlog 側クラスタリングは、この上流欠陥を継承する。同じ scorer を使う限り日本語タイトルでは効かないことを、実装側にも明記する。
+
+関連 f7b018f8 / 15eb3f94 / 91e503c8 / 56eb3f9a。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/harness-core/tests/backlog_7b6bcfe6.rs (rev e70d48dd)"""
+created_at = 1789280225
+updated_at = 1791919350
+weight = 0.0
+issue_number = 574
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/574"
+issue_closed_at = 1791919353
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p harness-core --test backlog_7b6bcfe6 -- --include-ignored"
+exit = 0
+passed = 2
+rev = "b1bc67e2bb3ac89391cc1ae6a147f1af22e4cebd"
+observed_at = 1791919336
+output_digest = "sha256:fd431be754bf1605166aecec03cd8f71a70a1f21d49c187ffbea49ff1c10fbce"
+excerpt = """
+
+running 2 tests
+test pure_japanese_single_char_difference_is_similar ... ok
+test pure_japanese_inserted_word_is_similar ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling harness-core v0.2.47 (/Users/yuki/src/.harness-worktrees/session-4dadba08/crates/harness-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.52s
+     Running tests/backlog_7b6bcfe6.rs (target/debug/deps/backlog_7b6bcfe6-5d2379ceda5196af)
+"""
+
+[task.closure.red]
+rev = "2a0167f6475425bd616f3eb94939e2d93bb6132c"
+exit = 101
+kind = "behavioural"
+
+[[task]]
 id = "25692f6e"
 title = ".githooks/post-commit が存在しない gate-bypass.py --status を案内する"
 project = "/Users/yuki/src/harness"
@@ -34822,4 +35564,590 @@ excerpt = """
 [task.closure.red]
 rev = "d87077ff8d1fce283f8d31586069174fac2f231c"
 exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "f7a0cadc"
+title = "condukt editgate::tests::a_clean_crate_still_passes fails every full-binary run (rustup cannot choose cargo: HOME race with with_home)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "flaky",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+Measured 2026-09-23, branch session-9d349393 at 2ddbd51d (condukt 0.7.171). Running the whole condukt bin test binary (target/debug/deps/condukt-*) fails editgate::tests::a_clean_crate_still_passes every time: 16/16 under 8 concurrent copies, 6/6 under CPU load, 1/1 idle, and also with the newly added worktree test skipped (so it predates that change). Isolated (filter editgate) it passes 17/17.
+Verbatim panic (crates/condukt/src/editgate.rs:506): a compiling crate must not be broken: {"broken":true,"diagnostics":"error: rustup could not choose a version of cargo to run, because one wasn't specified explicitly, and no default is configured.","fallback":false,...}
+Reading (a) test-isolation race: other tests (worktree.rs with_home) swap the process-wide HOME under crate::env_lock::HOME_ENV_LOCK, but editgate's check_edit spawns cargo without taking that lock, so rustup sees a sandbox HOME with no toolchain. Reading (b) something else resets rustup state. Discriminator: make the editgate test take HOME_ENV_LOCK (or pass an explicit env to the cargo child) and rerun the full binary; red->green distinguishes (a).
+Note: under (a) the production editgate reports broken=true when rustup is unusable - fail-closed direction, but the reason text claims compile/type errors that did not happen (the reason misattributes a toolchain failure to the user's code).
+Found while working 35d61d23 / 8c5d46fa (load-sensitive tests).
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/condukt/src/editgate.rs (mod backlog_f7a0cadc) (rev 596108b9): editgate's cargo check depends on HOME; a sibling HOME swap makes a clean crate read as broken."""
+created_at = 1790127752
+updated_at = 1791921664
+weight = 0.0
+issue_number = 677
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/677"
+issue_closed_at = 1791921665
+rev = 3
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_f7a0cadc_red"
+exit = 0
+passed = 1
+rev = "d835fe43775b0943b9082f7ef6e2472e352489b2"
+observed_at = 1791921646
+output_digest = "sha256:2b67717fe25212809bbb57e74ed440f9cd29829b01d0e0052875f0e5830e9d10"
+excerpt = """
+
+running 1 test
+test unresolvable_toolchain_blocks_with_an_undetermined_reason_not_a_compile_claim ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_f7a0cadc_red.rs (target/debug/deps/backlog_f7a0cadc_red-4e748174f0d8ac13)
+"""
+
+[task.closure.red]
+rev = "626d7e843ba290b2e8ad24519193b61e003bab42"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "ceb0a9bf"
+title = "fugu-router UserPromptSubmit hook emits additionalContext at TOP level, not inside hookSpecificOutput — routing context may never reach the model"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fugu-router",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+Found while settling 3e2aade5 (2026-09-24). crates/fugu-router/src/main.rs ~L541 builds json!({"additionalContext": ctx}) and adds systemMessage, printed as the UserPromptSubmit hook stdout. Primary source https://code.claude.com/docs/en/hooks.md: "Return additionalContext inside hookSpecificOutput alongside the event name" (Add context for Claude section) and hookSpecificOutput "requires a hookEventName field set to the event name" (JSON output section). Because the stdout starts with a brace it is parsed as JSON, so it is NOT added as plain-text context either. The comment claims additionalContext reaches the model; the documented schema says top-level additionalContext is not a documented field. UNVERIFIED by observation: needs a behavioural test (real claude -p run with the hook) before fixing. Same check applies to any other crate emitting top-level additionalContext (grep).
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/fugu-router/tests/backlog_s10_repro.rs (rev 7e635343)"""
+created_at = 1790179827
+updated_at = 1791922202
+weight = 0.0
+issue_number = 702
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/702"
+issue_closed_at = 1791922203
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p fugu-router --test backlog_s10_repro"
+exit = 0
+passed = 2
+rev = "f79cc0d79852bb100ea713e322084af06eb09a5e"
+observed_at = 1791922184
+output_digest = "sha256:63198a2f773e8b9297a1c1ce3d99c5e24e4a2f1e0bcaec1443b3c231aa0f978b"
+excerpt = """
+
+running 2 tests
+test backlog_ceb0a9bf_prompt_hook_nests_additional_context ... ok
+test backlog_3f3a0e90_missing_index_differs_from_no_match ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+
+   Compiling bitflags v2.13.0
+   Compiling harness-core v0.2.47 (/Users/yuki/src/.harness-worktrees/session-4dadba08/crates/harness-core)
+   Compiling proptest v1.11.0
+   Compiling fugu-router v0.1.43 (/Users/yuki/src/.harness-worktrees/session-4dadba08/crates/fugu-router)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.87s
+     Running tests/backlog_s10_repro.rs (target/debug/deps/backlog_s10_repro-fa1bcae43acdd4db)
+"""
+
+[task.closure.red]
+rev = "db59146e8a523574076c0185553995cf8c043b3e"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "2ae3fa29"
+title = "budgetguard lock::LedgerLock が parallelguard と同じ O_EXCL + 30s mtime stale-steal (CA-parallelguard-01/02 の mirror 候補)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+Mirror sweep of CA-2026W39: docs/specs/budgetguard.md describes the same create_new + 30s stale-steal pattern parallelguard had (drop removes by path; two waiters can both steal). UNVERIFIED — only the spec doc was read, not the code. If confirmed, the parallelguard fix c9a28dc2 (std File::try_lock kernel advisory lock, guard owns File, never unlink) is the template; tests in crates/parallelguard/src/store.rs ca_parallelguard_01/02 are the model (02 is a 24-thread race, RED 6/6 on the old scheme).
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/budgetguard/src/lock.rs (rev 7e635343)"""
+created_at = 1790184456
+updated_at = 1791925246
+weight = 0.0
+issue_number = 743
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/743"
+issue_closed_at = 1791925249
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p budgetguard ca_budgetguard_lock"
+exit = 0
+passed = 2
+rev = "9921e3461ecfe43210d87924f04d3d3b9433d540"
+observed_at = 1791925199
+output_digest = "sha256:b62b8a404212492cb7272dc5849ea22678a6c675a77c131e89398266fa63cbf6"
+excerpt = """
+
+running 2 tests
+test lock::ca_budgetguard_lock::ca_budgetguard_lock_01 ... ok
+test lock::ca_budgetguard_lock::ca_budgetguard_lock_02 ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 44 filtered out; finished in 27.65s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+   Compiling harness-core v0.2.47 (/Users/yuki/src/.harness-worktrees/session-4dadba08/crates/harness-core)
+   Compiling overwatch v0.2.61 (/Users/yuki/src/.harness-worktrees/session-4dadba08/crates/overwatch)
+   Compiling budgetguard v0.1.28 (/Users/yuki/src/.harness-worktrees/session-4dadba08/crates/budgetguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.71s
+     Running unittests src/main.rs (target/debug/deps/budgetguard-da719cb41f98cd48)
+     Running tests/backlog_a1cc21f2.rs (target/debug/deps/backlog_a1cc21f2-8fda4e653db1075f)
+     Running tests/integration.rs (target/debug/deps/integration-dcfcc4e1f29c99a2)
+     Running tests/launcher_missing_binary.rs (target/debug/deps/launcher_missing_binary-24602e0333ab505b)
+"""
+
+[task.closure.red]
+rev = "99869c097ed8f4aecc94e3b3ca7cd5e7a2fda6cf"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "7c798579"
+title = "condukt claim_progress_head_signal / diffrisk_record journaling tests fail under concurrent test-binary runs (fixture dir vanishes, record count 1 vs 2)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "flaky",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+Measured 2026-09-23, branch session-9d349393 at 2ddbd51d. Running 16 copies of the full condukt test binary, 8 at a time: claim::tests::claim_progress_head_signal_binds_each_head_to_its_owning_task failed 2/16 and diffrisk_record::tests::every_invocation_is_journaled_even_when_nothing_is_recorded failed 1/16. Neither failed in 6 single-copy runs under CPU load.
+Verbatim (claim.rs:2665): left Undetermined(... git rev-parse HEAD could not be spawned in /var/folders/.../condukt-claim-claim-scope-identity-23640-0/wt-b: No such file or directory (os error 2)) right Known(Progressing). The fixture worktree directory is missing mid-test.
+Verbatim (diffrisk_record.rs:540): one record per invocation, left 1 right 2.
+Readings: (a) fixture paths shared across processes or another test cleaning temp dirs / a shared journal path (cross-process fixture collision, cf. memory killed-task-leaves-orphan-loop); (b) a spawn failure under process pressure reported as missing dir. Discriminator: print the fixture paths and check for cross-process reuse; rerun with unique per-process roots.
+This is the same load/concurrency-sensitive class as 8c5d46fa and 35d61d23.
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Not a pure duplicate. Besides the diffrisk_record flake that e494a8a3 owns (pinned RED by the shared test), it also reports a separate failure, claim::tests::claim_progress_head_signal_binds_each_head; test - (rev e70d48dd)"""
+created_at = 1790127753
+updated_at = 1791925275
+weight = 0.0
+issue_number = 678
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/678"
+issue_closed_at = 1791925278
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --bin condukt condukt_never_mutates_process_path"
+exit = 0
+passed = 1
+rev = "9921e3461ecfe43210d87924f04d3d3b9433d540"
+observed_at = 1791925256
+output_digest = "sha256:24235646fd80a750a955c0ff053a76dfe5ca1a85854788233a4e571d46e70ced"
+excerpt = """
+
+running 1 test
+test oracle::tests::condukt_never_mutates_process_path ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 904 filtered out; finished in 0.09s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/main.rs (target/debug/deps/condukt-61d47fd7aeaf0a15)
+"""
+
+[task.closure.red]
+rev = "31c8d8f363c3e98e2eb337e7158870eb1dba7f24"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "6a668d24"
+title = "claim-skip ゲートの deadlock: is-claimed は期限切れしないが backlog は 1 時間で requeue する — 51 日前の死んだ claim が task を恒久的に着手不能にする"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flow",
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-09-24、測定点 38b460f0。backlog 67e95a19 (hashkey 3358a647274b19d0) の
+task claim を run `flow-5aaa9924-681a-4c95-8b6e-8579166d725a` が保持していた。
+  claimed_at == heartbeat_at (一度も heartbeat していない)
+  経過 1218.6 時間 (約 51 日)
+  pid 16722 は不在
+  ~/.claude/projects/-Users-yuki-src-harness/ に 5aaa9924* の transcript が存在しない
+
+機構: backlog 側は CLAIM_STALE_SECS (1 時間) で status を pending へ戻すので、item は
+何度でも `next --claim` に現れる。しかし condukt の claim registry 側は期限切れしないため
+`condukt state is-claimed` が exit 0 を返し続ける。flow の claim-skip ゲートは exit 0 を
+「他セッションが作業中」と読んで item を pending へ戻す。**結果としてどのセッションも
+永久に着手できない。** 2 つのストアの期限が非対称なことが原因。
+
+今回は死亡の証拠を 4 つ独立に確認 (上記) したうえで `condukt policy answer --approval` を
+通し、`condukt state release-task` で手動解放した。手動解放が要るということ自体が欠陥。
+
+注意: pid の不在は単独では証拠にならない (claim-task は一度きりの CLI なので pid は常に
+死んでいる。memory: maintree-guard-stale-lock)。transcript の不在と 51 日という経過が
+効いている証拠である。
+
+done_criteria: 2 つのストアの期限を同じ根拠で揃えるか、is-claimed が死んだ run の claim を
+claimed:true と報告しない。手動 release-task なしに item が再び着手可能になること。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: The existing claim::tests::stateless_marked_unreadable_transcript_is_kept passes (9/9 stateless tests green), but that covers only marked claims. The item's observed dead claim (transcript absent, unm; test - (rev e70d48dd)"""
+created_at = 1790183636
+updated_at = 1791925298
+weight = 0.0
+issue_number = 710
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/710"
+issue_closed_at = 1791925300
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_6a668d24_dead_claim"
+exit = 0
+passed = 6
+rev = "9921e3461ecfe43210d87924f04d3d3b9433d540"
+observed_at = 1791925279
+output_digest = "sha256:d088483019b6a31578703309ab658630585de71ac5dcfbad8b53203f0bfffc56"
+excerpt = """
+
+running 6 tests
+test live_stateless_holder_with_transcript_under_claude_config_dir_stays_claimed ... ok
+test live_holder_with_transcript_under_claude_config_dir_stays_claimed ... ok
+test old_claim_with_undeterminable_transcript_stays_claimed ... ok
+test fresh_unmarked_claim_stays_claimed ... ok
+test old_non_flow_run_claim_stays_claimed ... ok
+test dead_unmarked_claim_is_not_reported_claimed ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.84s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_6a668d24_dead_claim.rs (target/debug/deps/backlog_6a668d24_dead_claim-07726c528c645bba)
+"""
+
+[task.closure.red]
+rev = "d499988e50962745847fc167cbd645bc7f6b8dcc"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "8a4fe104"
+title = "condukt claim.rs backlog_pending maps a non-zero backlog list to an empty Vec"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+crates/condukt/src/claim.rs backlog_pending: a failed backlog list returns Vec::new(). Since backlog 0.3.9 (f09db5ce) list exits non-zero when the claim ledger is unreadable or the project identity is undetermined, so this path is now more reachable: an undetermined queue renders as no pending tasks in execution-state. Found by the f09db5ce verifier 2026-09-24.
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/condukt/tests/backlog_s03_audit.rs (rev e70d48dd)"""
+created_at = 1790218379
+updated_at = 1791931784
+weight = 0.0
+issue_number = 764
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/764"
+issue_closed_at = 1791931788
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test execution_state_unreadable_backlog"
+exit = 0
+passed = 9
+rev = "192c07bfdc91c89ae9ae5b99dd982aed2a65de4e"
+observed_at = 1791931760
+output_digest = "sha256:b09dea4dea76444f9d0ada10556e9f0061c0b213046610d1ce1368a5db5be266"
+excerpt = """
+
+running 9 tests
+test backlog_list_json_scalar_fails_execution_state ... ok
+test backlog_list_garbage_output_fails_execution_state ... ok
+test backlog_list_object_without_tasks_fails_execution_state ... ok
+test backlog_list_nonzero_exit_fails_execution_state ... ok
+test control_empty_queue_succeeds ... ok
+test backlog_list_tasks_not_array_fails_execution_state ... ok
+test backlog_list_row_without_title_fails_execution_state ... ok
+test backlog_list_non_object_rows_fail_execution_state ... ok
+test control_shim_row_is_joined_into_execution_state ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.94s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/execution_state_unreadable_backlog.rs (target/debug/deps/execution_state_unreadable_backlog-95bc2793abe0f6e2)
+"""
+
+[task.closure.red]
+rev = "85c6b1dc4f2c41877898ed59e44ed20bc253035f"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "1d2446de"
+title = "gate-bypass ledger が pre-merge-commit を green で通った merge を ungated として記録する (98548fda が 2 重に載り push が blocked)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+観測 (2026-09-24、すべて実測):
+
+python3 scripts/gate-bypass.py --json
+  verdict=outstanding、entries に 98548fda が 2 回。
+  .git/gate-bypassed にも同じ行が 2 行ある。
+  scripts/gate-bypass.py の docstring どおり exit 1 相当で、push が blocked になる。
+
+しかし当の merge は gate を素通りしていない。agent の transcript に残っている
+その merge の出力には pre-merge-commit の全チェックが green で並んでいる:
+  check-doc-claims / check-claudemd-claims OK
+  41 plugins version-consistent、un-bumped なし
+  hardcoded-secret-guard clean、raw-io-ratchet count == baseline (46)
+  GATE_CRATES consistent、launcher-exec-bit 39/39
+  clippy-lints: checking blastguard -> clean
+  main-tree-guard: allowed - Merge in progress (declared by .githooks/pre-merge-commit
+    and corroborated by GIT_REFLOG_ACTION)
+  check-test-weakening: no unacknowledged test weakening
+コマンドは素の git merge --no-ff で、--no-verify は付いていない
+(transcript を grep して確認した。付いていたら pre-merge-commit の出力自体が出ない)。
+
+つまり .githooks/post-merge が「pre-commit が certify した tree hash」と
+実際に commit された tree を比べる仕組みで、gate が実際に走って green だったのに
+不一致と判定している。.githooks/post-commit の header はこの仕組みを
+  match   -> gate を通った。sentinel を消費して黙る
+  no match -> 検査されていない。ledger へ追記
+と書いている。今回は「検査された」が「no match」になっている。
+
+対照 (同じ session の同じ main tree での merge):
+  9db95175 (conflict 解決後の git commit 経由)  -> ledger に載っていない
+  f6add075 (素の git merge --no-ff)            -> ledger に載っていない
+  98548fda (素の git merge --no-ff)            -> 2 回載っている
+f6add075 と 98548fda は同じコマンド形なので、コマンドの違いでは説明できない。
+差分の候補は「触ったファイルの種類」(前者は .backlog/tasks.toml のみ、後者は
+crates/blastguard/src/detect.rs + version 3 点 + Cargo.lock) と
+「clippy が実際に走ったかどうか」(前者は nothing to check、後者は blastguard を checking)。
+どちらが効いているかは未検証。ここから先は推測になるので測っていない。
+
+なぜ重要か: これは 4. が最も嫌う向きの逆、すなわち「検査したのに検査していないと
+記録する」偽陽性である。fail-open ではないので安全側ではあるが、
+偽陽性が常態化すると ledger が「いつもの赤」になり、本物の --no-verify が
+紛れても誰も見なくなる。ledger の価値はそこにしかないので、偽陽性は実害がある。
+2 重登録も別軸の bug (1 merge = 1 entry のはず)。
+
+done_criteria:
+  (1) 同じ形の merge (crate のソースを含む素の git merge --no-ff) を再現させ、
+      post-merge が ledger に書く条件を RED として観測すること。
+      推測ではなく、sentinel の tree hash と commit の tree hash を実際に
+      並べて差を見ること。
+  (2) 1 つの merge が 2 entry になる経路を特定すること。
+  (3) 偽陽性であれば post-merge 側を直す。もし「certify した tree と
+      commit された tree が本当に違う」のなら、それは gate が別の内容を
+      見ていたということなので、偽陽性ではなく pre-merge-commit 側の欠陥として
+      扱うこと。3. に従い、どちらか判定できないうちは ledger を黙らせない。
+
+注意: ledger は scripts/gate-bypass.py からは消せない (--clear を意図的に
+持たない)。green な pre-commit が走ると消える設計なので、次の通常 commit で
+消える見込みだが、それは「原因が直った」ことを意味しない。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: verifier KEEP_OPEN: Not a duplicate. The finder admitted inference. done_criteria (1)-(3) concern the post-merge / pre-merge-commit tree-hash path, which 3d97dd01 (ff-only in worktrees) does not cover.; test - (rev e70d48dd)"""
+created_at = 1790239210
+updated_at = 1791931847
+weight = 0.0
+issue_number = 769
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/769"
+issue_closed_at = 1791931850
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_backlog_1d2446de.py"
+exit = 0
+passed = 11
+rev = "192c07bfdc91c89ae9ae5b99dd982aed2a65de4e"
+observed_at = 1791931791
+output_digest = "sha256:7e00fd2a325b6254fcf2127afa5d402d7858d518a7e2ef96dede387c7041d969"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-4dadba08
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 11 items
+
+scripts/test_backlog_1d2446de.py ...........                             [100%]
+
+============================= 11 passed in 28.53s ==============================
+"""
+
+[task.closure.red]
+rev = "4b178c2d72c961d56358950bfa61f208302747cd"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "00880b3d"
+title = "gauge P3+P4: gauge.toml の読み込み/パース失敗が無診断で既定値に落ち、rate 欠落の pricing override が 0 ドルで内蔵表を上書きして勝つ"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gauge",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+出典: docs/audit-gauge-verdict-paths.md の P3 / P4 (ともに HIGH)。本セッションで独立に再測定した (2026-09-24、測定点 b47f08e3、release ビルドの gauge バイナリ、全 probe に対照つき)。crates/gauge/src/config.rs:82-112 の Config::load は if let Ok(text) = read_to_string と if let Ok(fc) = toml::from_str の二重の if let Ok で失敗を捨て、:104-105 は r.input.unwrap_or(0.0) / r.output.unwrap_or(0.0) で rate 欠落を 0 ドルに写す。実測 (opus の input 100 万トークンを 1 セッション記録し gauge session --json を読む): 対照 1 override 無し cost_usd=5.0 / 対照 2 完全な override (input = 15.0) cost_usd=15.0 / probe 3 フィールド名を 1 文字だけ typo (inputt) cost_usd=0.0 rc=0 診断なし / probe 4 rate フィールドを丸ごと省略 cost_usd=0.0 rc=0。同時に gauge status は 3 と 4 でも pricing: 1 override(s) + built-in と表示し、読めなかった override を採用したと報告する。つまり設定ファイルの 1 文字の打ち間違いが全支出を 0 ドルに写し、その record を読む budgetguard の block を消す。修正: budgetguard の crates/budgetguard/src/config.rs:117 load_checked -> Determination<Config> と :192 locate の「不在 = Known(None)」「在るが読めない = Undetermined」の分離をそのまま移植する (前例が an_absent_config_is_known_default_not_undetermined として確立済み)。呼び出し側は gauge の 5 箇所 (crates/gauge/src/main.rs:196 238 252 489 609)。完了条件: 上記 4 ケースを RED 先行で固定し、対照 1 と 2 が引き続き正しい値を返すことも同時に固定する。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/gauge/tests/backlog_s10_repro.rs (rev 7e635343)"""
+created_at = 1790185719
+updated_at = 1791932305
+weight = 0.0
+issue_number = 753
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/753"
+issue_closed_at = 1791932307
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p gauge --test backlog_00880b3d"
+exit = 0
+passed = 8
+rev = "29464a2f69ebfb309d94e24cfc207e75ea7310a8"
+observed_at = 1791932293
+output_digest = "sha256:fc7f346e089e36eb5086811e60e0ec9c312f22fc6bc7a64c58a76d69eeacba0c"
+excerpt = """
+
+running 8 tests
+test control_1_no_config_uses_builtin_price ... ok
+test probe_5b_unreadable_config_is_not_silently_defaults ... ok
+test probe_5_unparseable_config_is_not_silently_defaults ... ok
+test probe_3_typo_rate_field_is_not_a_zero_dollar_override ... ok
+test probe_4_omitted_rate_fields_are_not_a_zero_dollar_override ... ok
+test probe_6_status_does_not_claim_a_broken_override_was_adopted ... ok
+test control_2_complete_override_applies ... ok
+test control_1b_valid_config_without_pricing_uses_builtin_price ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_00880b3d.rs (target/debug/deps/backlog_00880b3d-1e91aa215564f365)
+"""
+
+[task.closure.red]
+rev = "2158d24b420ca94673010bbed698e5763d174877"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "ff98fed0"
+title = "gauge/harness-core P2: 未知の model id が 0 ドルに価格付けされ、予算ゲートが恒久的に無効化される (unknown_model_is_free が仕様として固定している)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gauge",
+    "fail-open",
+    "harness-core",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+出典: docs/audit-gauge-verdict-paths.md の P2 (HIGH)。監査日 2026-09-24、測定点 b47f08e3。crates/harness-core/src/pricing.rs:59-64 の rate_for が未知の model id に 0 ドルを返す。監査の実測: 同一トークン数で block_usd=1.0 のとき opus は 30.0000 ドルで block、sonnet は 18.0000 ドルで block、claude-newfamily-1 は 0.0000 ドルを報告して block しない。model id はこちらが決める値ではなく外部が変える入力なので、新モデルが出た瞬間に予算ゲートが静かに無効になる。さらに悪いのは crates/harness-core/src/pricing.rs:155-162 の unknown_model_is_free がこの permissive 挙動を仕様として凍結していることで、CLAUDE.md 2 節が名指しする「検証していないテストの assert が仕様として書き下される」形そのものである (condukt verify.rs の checks_verdict(&[]) と同型)。修正: rate_for を Determination<Rate> 化する。ローカルモデル等の正当な無料ケースは明示的な input = 0.0 override を Known(0.0) として残す。unknown_model_is_free は逆向きの assert へ書き換える (削除ではなく反転 — 削除すると何が変わったか履歴から読めなくなる)。影響範囲は gauge 8 サイト + budgetguard + harness-status + session-insights なので段階移行になる。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/harness-core/tests/backlog_s07_audit.rs (rev e70d48dd)"""
+created_at = 1790185717
+updated_at = 1791932322
+weight = 0.0
+issue_number = 752
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/752"
+issue_closed_at = 1791932325
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p gauge --test backlog_ff98fed0"
+exit = 0
+passed = 3
+rev = "29464a2f69ebfb309d94e24cfc207e75ea7310a8"
+observed_at = 1791932311
+output_digest = "sha256:370dad7fb3ccb9f61af5aaaf7547f97b6b08d9c79340c5e5927cba400b28d7dc"
+excerpt = """
+
+running 3 tests
+test backlog_ff98fed0_control_opus_session_costs_five_dollars ... ok
+test backlog_ff98fed0_unknown_model_cost_is_not_claimed_zero ... ok
+test backlog_ff98fed0_control_explicit_zero_override_is_known_zero ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/backlog_ff98fed0.rs (target/debug/deps/backlog_ff98fed0-ee46fa7c1ee1f015)
+"""
+
+[task.closure.red]
+rev = "64294a2a92f53faaaff6830f1482fef12c6d605c"
+exit = 101
 kind = "behavioural"

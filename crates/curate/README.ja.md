@@ -16,7 +16,7 @@ fugu-router は検証を通った各タスクについて、`title` / `done_crit
 | "cargo test -p evalkit is green" | `{"cmd":["cargo","test","-p","evalkit"],"assert":{"exit":0}}` |
 | "auth handles token refresh" | `{"draft":true,"describe":"… — TODO assert done_criteria: …"}` |
 
-機械的とみなすシグナルは、明示的にバッククォートで囲まれたコマンド、または認識済みのテストランナー（`cargo test` / `npm test` / `pytest` / `go test`）。それ以外は **draft（下書き）** になる。draft は妥当な golden だが、人間がアサーションを書くまで evalkit が**スキップ**する（pass にも fail にもならない）ため、CI を壊さずに「未対応の保留作業」としてリポジトリに可視化したまま置いておける。
+機械的とみなすシグナルは、明示的にバッククォートで囲まれたコマンド、または認識済みのテストランナー（`cargo test` / `npm test` / `pytest` / `go test`）。それ以外は **draft（下書き）** になる。draft は妥当な golden だが、人間がアサーションを書くまで evalkit が**スキップ**する（pass にも fail にもならない）ため、`evalkit run` を失敗させずに「未対応の保留作業」としてリポジトリに可視化したまま置いておける。
 
 ## どうして必要か
 
@@ -40,10 +40,10 @@ curate promote --latest --store /path/to/playbooks.jsonl  # playbook ストア�
 
 主なサブコマンド:
 
-- `curate candidates` — playbook ストア（既定 `~/.fugu-router/playbooks.jsonl`、`--store` で上書き可）を読み、昇格可能なエントリを `mech`（自動でコマンド化できる）/ `draft` 別に一覧する。
-- `curate promote` — 1 件の playbook を golden データセットへ昇格する。`title` 部分一致（大文字小文字を無視・最新一致が優先）か `--latest` で選び、`--dataset <name>` で出力先 `evals/curated/<name>.jsonl` を決める。`--draft` で機械的でも draft 化、`--root` で出力先の基準ディレクトリ（既定 CWD）、`--evals-dir`（既定 `evals`）で `curated/` を置くディレクトリ名、`--store` で読み込む playbook ストアのパスを指定する。
+- `curate candidates` — playbook ストア（既定 `~/.fugu-router/playbooks.jsonl`、`--store` で上書き可）を読み、昇格可能なエントリを `mech`（自動でコマンド化できる）/ `draft` 別に一覧する。`--limit N`（既定 20）で件数を絞る。
+- `curate promote` — 1 件の playbook を golden データセットへ昇格する。`title` 部分一致（大文字小文字を無視・最新一致が優先）か `--latest` で選び、`--dataset <name>`（既定 `promoted`）で出力先 `evals/curated/<name>.jsonl` を決める。`--draft` で機械的でも draft 化、`--root` で出力先の基準ディレクトリ（既定 CWD）、`--evals-dir`（既定 `evals`）で `curated/` を置くディレクトリ名、`--store` で読み込む playbook ストアのパスを指定する。
 
-昇格はケース id で重複排除しつつ `evals/curated/<name>.jsonl` に追記される。evalkit は `evals/` を**再帰的に**探索するため、昇格したケースは設定変更なしで `evalkit run` および `eval.yml` の CI ゲートに拾われる。
+昇格はケース id で重複排除しつつ `evals/curated/<name>.jsonl` に追記される。evalkit は `evals/` を**再帰的に**探索するため、昇格したケースは設定変更なしで `evalkit run` に拾われる（CI 配線は無く、`evalkit run` は手動で実行する）。
 
 このループの位置づけ:
 
@@ -51,7 +51,7 @@ curate promote --latest --store /path/to/playbooks.jsonl  # playbook ストア�
 condukt がタスクを検証 ─▶ fugu-router record (playbook)
         ▲                              │
         │                    curate promote
-   evalkit run  ◀── evals/curated/*.jsonl ◀┘   (eval.yml が push ごとにゲート)
+   evalkit run  ◀── evals/curated/*.jsonl ◀┘   (手動実行。CI なし)
 ```
 
 record の後、condukt の Phase 6 は `curate promote` に **HOTL 連携**されている。verified タスクの `done_criteria` が機械的で、かつ `curate` が PATH 上にあるとき、main loop は**ちょうど 1 回**だけ「この verified run を eval golden 化しますか？」と確認し、**肯定回答が返ったときに限り**実際に `curate promote` を shell-out する（否定なら書き込みは一切行わない）。**サブスクリプションネイティブ**——バンドルされた単一の Rust バイナリで完結し、API キーは不要。

@@ -2,7 +2,7 @@
 
 Claude Code 向けの**シップ（出荷）リチュアル**。Rust 製。
 
-`SessionEnd` で未出荷の状態（コミットされていない git 変更、古いプラグインキャッシュ）を検出し、リマインダーを表示します。
+`SessionEnd` で未出荷の状態（コミットされていない git 変更、未マージの condukt ブランチ、残った worktree、未 push のコミット、古いプラグインバイナリ）を検出し、リマインダーを表示します。
 出荷ワークフロー（チェック・プラグイン再ビルド・コミット・マージ・プッシュ）を段階的にガイドします。
 
 **GATED 不変式**: コミット・マージ・プッシュは、明示的なユーザー承認を必須とします。
@@ -15,8 +15,8 @@ Claude Code 向けの**シップ（出荷）リチュアル**。Rust 製。
 ## コマンド
 
 ```sh
-ship check             # 未出荷状態を表示（dirty git、古いプラグインキャッシュ）
-ship check --run-safe  # scripts/rebuild-plugins.sh --stage-repo を実行（安全：cache と committed crates/*/bin の両方を更新・git 不使用）
+ship check             # 未出荷状態を表示（dirty git、未マージ/未 push、残った worktree、古いバイナリ）
+ship check --run-safe  # scripts/rebuild-plugins.sh --stage-repo を実行（安全：cache とローカルの crates/*/bin の両方を更新・git 不使用）
 ship rollout            # scripts/rollout-plugins.sh を実行（重い操作：/plugin update ステップを自動化）
 ship session-end       # SessionEnd hook（stdin の JSON を読み、未出荷ならリマインダーを表示）
 ```
@@ -45,7 +45,14 @@ skill は、コミット・マージ・プッシュが実行される前に、�
 ## GATED 不変式 — 重要
 
 - **コミット・マージ・プッシュ**: 決して自動実行しない。MUST 明示的なユーザー承認を得る。diff を表示し、「承認？」と尋ね、「了解」まで待つ。
-- **rebuild-plugins.sh --stage-repo**: `ship check --run-safe` 経由で自動実行可能（cache と committed `crates/*/bin`（stale 判定が測る成果物）の両方を更新・ファイルコピーで git 不使用）。これが「stale plugin binaries」項目をクリアする。更新後の binary は GATED な commit が要る。
+- **rebuild-plugins.sh --stage-repo**: `ship check --run-safe` 経由で自動実行可能（cache とローカルの `crates/*/bin`（stale 判定が測る成果物）の両方を更新・ファイルコピーで git 不使用）。これが「stale plugin binaries」項目をクリアする。
+
+stale 判定は、各クレートの `src/` の最新 mtime をローカルの `crates/<name>/bin/<name>-linux-x86_64`
+と比べる。このリポジトリではプラットフォーム別バイナリは git 管理外なので、このファイルは誰かがローカルで
+ビルドした場所にしか存在せず、存在しないクレートは**新しいと判定されるのではなく、検査から外される**。
+したがって「no stale plugin binaries」は、そのファイルを持たないクレートについては何の証拠にもならない。
+（`ship check` が出すチェックリスト文言は今も「committed」binary と呼び commit を求めるが、バイナリが
+git 管理外なので commit するものは無い。）
 - **rollout-plugins.sh**: `ship rollout` 経由で自動実行可能（重い・明示的な操作 — `/plugin update` の自動化）。
 
 ## インストール（プラグイン）

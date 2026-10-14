@@ -24,22 +24,54 @@ deterministically. Nothing leaves the machine.
 
 `budgetguard gate` is wired to the Claude Code **Stop** hook. On each stop it:
 
-1. reads the transcript (JSONL) and aggregates per-model token usage;
+1. takes this session's per-model token usage — from gauge's persisted
+   session record when it is at least as new as the transcript, otherwise by
+   re-parsing the transcript (JSONL), including sub-agent spend;
 2. estimates the USD cost using the built-in pricing table;
 3. updates a local **daily ledger** (`~/.budgetguard/state/ledger.json`) with
-   this session's latest cost;
+   this session's latest cost, serialized against concurrent sessions by a
+   ledger lock (the day key rolls over at **local** midnight);
 4. checks the session total and the day's cumulative total against configured
    limits;
 5. **within limits** → exits 0, the stop proceeds;
    **warn threshold** → emits `{"additionalContext":"…"}` (advisory only, no block);
    **block threshold** → emits `{"decision":"block","reason":"…"}` asking the
    agent to save and commit before the turn ends.
+   Thresholds are inclusive (spend at or above the limit); block beats warn.
 
-### Safe by default
+It also reports **cache-hit health** from gauge's session record (to stderr,
+every stop): once `input + cache_read` reaches `[cache].min_tokens` (default
+200000), a hit rate below `[cache].min_rate` (default 0.5; out-of-range values
+fall back to the default) is promoted to an advisory `additionalContext`
+warning when nothing louder is being said. It never blocks.
 
-- No `[[session]]` or `[[daily]]` limits configured → every stop is allowed.
-- A harness error (bad config, unreadable transcript, our own bug) → exits 0.
-- `BUDGETGUARD_DISABLE=1` → hook is a no-op.
+A blocking stop also records an overwatch violation event.
+
+### What is allowed, and what is not
+
+Allowed (exit 0, no decision):
+
+- No config file at all, or `[session]` / `[daily]` limits all `0` → every
+  stop is allowed (a limit of 0 means "no limit").
+- No transcript data to price.
+- A re-entry with `stop_hook_active` (a previous Stop hook already blocked) —
+  an over-budget session is warned once, then allowed to stop.
+- `BUDGETGUARD_DISABLE=1` → hook is a no-op (checked before everything else).
+
+*Cannot determine* is **not** treated as within budget:
+
+- A config file that exists but cannot be read or parsed → **block**
+  (`config-undetermined`), whatever the limits were meant to be.
+- Session spend that cannot be measured (e.g. a sub-agent transcript that
+  could not be read) → **block** if any block limit is armed, else **warn** if
+  any warn limit is armed.
+- A day total that cannot be measured (ledger lock held by another session, or
+  a corrupt `ledger.json`, which is preserved untouched) → block/warn per the
+  armed *daily* limits; a session already over its own block limit still gets
+  that precise reason.
+- A panic inside the gate fails **closed** (`harness_core::gate::run::run_guarded`
+  blocks and surfaces the crash), bounded by `stop_hook_active`.
+- Unmeasured totals print as `unknown` on stderr, never as `$0`.
 
 ## Why
 
@@ -88,15 +120,23 @@ warn_usd  = 5.00
 block_usd = 20.00
 ```
 
+The project file, if present, is used *instead of* the home file (they are not
+merged). There is no trust gate: a repo-shipped `budgetguard.toml` is honored
+as-is. Other keys: `enabled`, `state_dir` (default `~/.budgetguard/state`),
+`[[price]]`, and `[cache]` (`min_rate`, `min_tokens`).
+
 ## Commands
 
 ```sh
 budgetguard gate           # Stop hook (reads stdin JSON, emits decision)
 budgetguard status         # resolved config + today's spend
-budgetguard status --json  # machine-readable budget pressure (feeds fugu-router)
-budgetguard init           # write a starter budgetguard.toml
-budgetguard install        # merge the hook into ~/.claude/settings.json
-budgetguard uninstall      # remove it
+budgetguard status --json  # machine-readable budget pressure (feeds fugu-router):
+                           #   {day_usd, daily_warn_usd, daily_block_usd, pressure};
+                           #   an unreadable config prints {error, undetermined:true}
+                           #   and exits 2
+budgetguard init [--force]          # write a starter budgetguard.toml
+budgetguard install [--dry-run]     # merge the hook into ~/.claude/settings.json
+budgetguard uninstall [--dry-run]   # remove it
 ```
 
 ## Pricing
@@ -110,7 +150,14 @@ Uses `harness-core`'s built-in rate table (same as gauge):
 | Sonnet | 3 | 15 |
 | Haiku | 1 | 5 |
 
-Override any model with a `[[price]]` stanza in `budgetguard.toml`.
+Override any model with a `[[price]]` stanza in `budgetguard.toml` (`pattern`
+is a case-insensitive substring of the model id). A model with usage that is
+neither in the table nor matched by an override has an **unknown** cost, not
+$0: the gate treats the session as unmeasured (`cost-undetermined`). Declare a
+genuinely free model with `input = 0.0` / `output = 0.0`. A `[[price]]` row
+with an empty `pattern` (it would match every model) or a rate that is not a
+finite non-negative number makes the config unusable, exactly like a parse
+error.
 
 ## License
 

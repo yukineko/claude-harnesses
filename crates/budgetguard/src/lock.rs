@@ -6,35 +6,40 @@
 //! save and the last writer clobbers the other's entry (lost update), silently
 //! under-counting the day total and letting the daily block fail open.
 //!
-//! We use an `O_EXCL` lock file (`OpenOptions::create_new`) — an atomic
-//! exclusive create that works the same on Unix and Windows without any external
-//! crate. Acquisition spins with a short backoff up to a bounded timeout; a lock
-//! left behind by a crashed process is stolen once it is older than
-//! `STALE_AFTER`. Release removes the file (also on `Drop`, so a panic in the
-//! critical section can't strand the lock).
+//! The guard owns `ledger.lock` open under a kernel advisory lock
+//! (`File::try_lock`, i.e. `flock(LOCK_EX|LOCK_NB)` on Unix). Releasing it —
+//! explicitly or on `Drop`, so a panic in the critical section can't strand it —
+//! closes the file and NEVER unlinks the path. A crashed holder's lock is
+//! released by the kernel when its process exits, so there is no staleness
+//! guess and no steal.
+//!
+//! This replaced an `O_EXCL` create + 30-second mtime stale-steal + unlink-on-
+//! drop scheme (backlog 2ae3fa29, the mirror of parallelguard CA-01/02): two
+//! waiters could both judge the same lock stale and both steal it, a live
+//! holder whose file merely LOOKED old was robbed, and a slow holder's drop
+//! deleted a different holder's lock by path — each one a second session inside
+//! the critical section, i.e. the lost update this module exists to prevent.
 //!
 //! Acquisition is bounded so the hook never hangs, but a bounded WAIT is not a
-//! licence to proceed unserialized. Failing to acquire is reported (`held()`),
+//! licence to proceed unserialized. Failing to acquire — contention past the
+//! timeout, or any IO error opening/locking the file — is reported (`held()`),
 //! not absorbed: the caller declines the read-modify-write and treats the day
-//! total as undetermined. Previously this module proceeded anyway "rather than
-//! ever blocking a turn" — which walked straight into the lost update described
-//! above, and an under-counted day total reads as headroom. A gate that cannot
-//! serialize its own accounting has not measured the day; it has guessed it.
+//! total as undetermined. A gate that cannot serialize its own accounting has
+//! not measured the day; it has guessed it.
 
+use std::fs::{File, TryLockError};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-/// A held lock; releases (removes the lock file) on drop.
+/// A held lock; releases (closes the locked file, never unlinks it) on drop.
 pub struct LedgerLock {
-    path: PathBuf,
-    /// False when we proceeded without truly holding the lock (timed out). Drop
-    /// then must not remove a file it doesn't own.
-    held: bool,
+    /// `Some` only while this guard owns the kernel lock on `ledger.lock`.
+    /// Dropping the `File` releases the lock. `None` = not held (contended past
+    /// the timeout, or the lock file could not be opened/locked).
+    file: Option<File>,
 }
 
-/// Steal a lock file older than this (its owner is assumed dead).
-const STALE_AFTER: Duration = Duration::from_secs(30);
-/// Give up trying to acquire after this and proceed best-effort.
+/// Give up trying to acquire after this and report the lock unheld.
 const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(3);
 /// Backoff between acquisition attempts.
 const BACKOFF: Duration = Duration::from_millis(25);
@@ -58,68 +63,42 @@ impl LedgerLock {
     /// update unserialized is what produces the lost update this module's
     /// header describes, and an under-counted day total reads as headroom.
     pub fn held(&self) -> bool {
-        self.held
+        self.file.is_some()
     }
 
     /// `acquire` with an injectable timeout so contention is testable without
     /// spending the full `ACQUIRE_TIMEOUT` in the suite.
     pub fn acquire_with_timeout(state_dir: &Path, timeout: Duration) -> Self {
+        const UNHELD: LedgerLock = LedgerLock { file: None };
         let path = Self::lock_path(state_dir);
         let _ = std::fs::create_dir_all(state_dir);
+        // Open without truncating or ever removing: the path is shared by every
+        // contender and only the kernel lock on it means "held". An open failure
+        // means we cannot serialize — report unheld, never proceed.
+        let file = match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+        {
+            Ok(f) => f,
+            Err(_) => return UNHELD,
+        };
         let start = Instant::now();
-
         loop {
-            match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-            {
-                Ok(_) => return LedgerLock { path, held: true },
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    // Owner looks dead AND we managed to remove its lock: retry
-                    // create immediately. If the removal fails (e.g. a races/perm
-                    // issue) we fall through to the timeout-bounded backoff below
-                    // rather than hot-spinning forever on a file we can't delete.
-                    if Self::is_stale(&path) && std::fs::remove_file(&path).is_ok() {
-                        continue;
-                    }
+            match file.try_lock() {
+                Ok(()) => return LedgerLock { file: Some(file) },
+                Err(TryLockError::WouldBlock) => {
                     if start.elapsed() >= timeout {
                         // Report the failure; do NOT pretend it was acquired.
-                        return LedgerLock { path, held: false };
+                        return UNHELD;
                     }
                     std::thread::sleep(BACKOFF);
                 }
-                // Any other error (e.g. permissions): don't block the turn.
-                Err(_) => return LedgerLock { path, held: false },
+                // Any other error: whether we would be serialized is unknown.
+                Err(TryLockError::Error(_)) => return UNHELD,
             }
-        }
-    }
-
-    fn is_stale(path: &Path) -> bool {
-        let meta = match std::fs::metadata(path) {
-            Ok(meta) => meta,
-            // Genuinely gone between attempts — acquirable.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return true,
-            // Any OTHER error (a permission problem, a non-directory component
-            // in the path) means we could not tell whether the owner is alive.
-            // Treating that as "vanished" would steal a LIVE session's lock and
-            // re-create the lost update the lock exists to prevent.
-            Err(_) => return false,
-        };
-        match meta.modified() {
-            Ok(mtime) => mtime
-                .elapsed()
-                .map(|age| age >= STALE_AFTER)
-                .unwrap_or(false),
-            Err(_) => false,
-        }
-    }
-}
-
-impl Drop for LedgerLock {
-    fn drop(&mut self) {
-        if self.held {
-            let _ = std::fs::remove_file(&self.path);
         }
     }
 }
@@ -138,13 +117,13 @@ mod tests {
         assert!(guard.held(), "an uncontended lock must be acquired");
     }
 
-    /// A fresh lock file belongs to a live owner. We must report that we do not
-    /// hold the lock rather than quietly proceeding as though we did.
+    /// A live owner holds the kernel lock. We must report that we do not hold
+    /// the lock rather than quietly proceeding as though we did.
     #[test]
     fn a_contended_lock_is_reported_unheld() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path()).unwrap();
-        std::fs::write(LedgerLock::lock_path(dir.path()), b"").unwrap();
+        let owner = LedgerLock::acquire(dir.path());
+        assert!(owner.held(), "fixture: the live owner must hold the lock");
         let guard = LedgerLock::acquire_with_timeout(dir.path(), Duration::from_millis(50));
         assert!(
             !guard.held(),
@@ -158,55 +137,64 @@ mod tests {
     fn dropping_an_unheld_guard_leaves_the_owners_lock_in_place() {
         let dir = tempfile::tempdir().unwrap();
         let path = LedgerLock::lock_path(dir.path());
-        std::fs::write(&path, b"").unwrap();
+        let owner = LedgerLock::acquire(dir.path());
+        assert!(owner.held(), "fixture: the live owner must hold the lock");
         drop(LedgerLock::acquire_with_timeout(
             dir.path(),
             Duration::from_millis(50),
         ));
         assert!(path.exists(), "the owner's lock file must survive");
+        assert!(
+            !LedgerLock::acquire_with_timeout(dir.path(), Duration::from_millis(50)).held(),
+            "the owner must still hold the lock after an unheld guard dropped"
+        );
     }
 
-    /// `metadata` failing is not evidence the owner is gone. A non-directory
-    /// component in the path makes it fail with something other than NotFound;
-    /// reading that as "vanished" would steal a live session's lock.
+    /// An IO error opening the lock file is not permission to proceed: whether
+    /// we would be serialized is unknown, so the guard must be unheld. A
+    /// non-directory component in the path makes the open fail.
     #[test]
-    fn an_unreadable_lock_is_not_assumed_stale() {
+    fn an_unopenable_lock_is_reported_unheld() {
         let dir = tempfile::tempdir().unwrap();
         // `state_dir` is a regular FILE, so `state_dir/ledger.lock` cannot be
-        // stat'd — the error is ENOTDIR, not NotFound.
+        // created — the error is ENOTDIR.
         let not_a_dir = dir.path().join("state");
         std::fs::write(&not_a_dir, b"").unwrap();
-        let path = LedgerLock::lock_path(&not_a_dir);
-        let err = std::fs::metadata(&path).unwrap_err();
-        assert_ne!(
-            err.kind(),
-            std::io::ErrorKind::NotFound,
-            "fixture must produce a non-NotFound error, else it proves nothing"
+        assert!(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(LedgerLock::lock_path(&not_a_dir))
+                .is_err(),
+            "fixture must make the lock file unopenable, else it proves nothing"
         );
         assert!(
-            !LedgerLock::is_stale(&path),
-            "an unreadable lock must not be assumed stale and stolen"
+            !LedgerLock::acquire_with_timeout(&not_a_dir, Duration::from_millis(50)).held(),
+            "an unopenable lock must be reported unheld"
         );
     }
 
-    /// CONTROL — an absent lock IS genuinely acquirable, so the assertion above
-    /// is about unreadability and not a blanket `false`.
+    /// A lock whose holder has gone (its guard dropped — the kernel released the
+    /// lock) is acquirable, even though the lock FILE is still there: release
+    /// never unlinks. Control for the contended case above.
     #[test]
-    fn an_absent_lock_is_stale() {
+    fn a_released_lock_is_reacquirable_though_the_file_remains() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(LedgerLock::is_stale(&dir.path().join("nope.lock")));
+        drop(LedgerLock::acquire(dir.path()));
+        assert!(LedgerLock::lock_path(dir.path()).exists());
+        assert!(LedgerLock::acquire_with_timeout(dir.path(), Duration::from_millis(50)).held());
     }
 }
 
 /// Reproduction tests for backlog 2ae3fa29 (mirror of parallelguard
-/// CA-parallelguard-01/02). RED while the O_EXCL + mtime-steal scheme is in use.
+/// CA-parallelguard-01/02). RED on the former O_EXCL + mtime-steal scheme.
 #[cfg(test)]
 mod backlog_2ae3fa29 {
     use super::*;
     use std::time::SystemTime;
 
     #[test]
-    #[ignore = "backlog 2ae3fa29: open defect, remove ignore when fixed"]
     fn guard_drop_never_removes_a_different_holders_lock() {
         let dir = tempfile::tempdir().unwrap();
         let a = LedgerLock::acquire(dir.path());
@@ -227,7 +215,6 @@ mod backlog_2ae3fa29 {
     }
 
     #[test]
-    #[ignore = "backlog 2ae3fa29: open defect, remove ignore when fixed"]
     fn concurrent_contenders_never_both_hold_an_abandoned_lock() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::{Arc, Barrier};
@@ -266,6 +253,86 @@ mod backlog_2ae3fa29 {
             assert!(
                 observed <= 1,
                 "over-admission on iteration {iteration}: {observed} guards held the lock at once"
+            );
+        }
+    }
+}
+
+/// Independent RED regression tests for backlog 2ae3fa29 (mirror of parallelguard
+/// ca_parallelguard_01/02). Not ignored: they fail while the O_EXCL + mtime-steal
+/// + unlink-by-path scheme is in use.
+#[cfg(test)]
+mod ca_budgetguard_lock {
+    use super::*;
+    use std::time::SystemTime;
+
+    fn age_lock(path: &Path) {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(3600))
+            .unwrap();
+    }
+
+    /// A is a live holder whose lock file merely looks stale (mtime > 30s). B
+    /// steals it. When A drops, it must not unlink B's lock; C must stay out.
+    #[test]
+    fn ca_budgetguard_lock_01() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = LedgerLock::acquire(dir.path());
+        assert!(a.held(), "control: A acquires an uncontended lock");
+        age_lock(&LedgerLock::lock_path(dir.path()));
+        let b = LedgerLock::acquire_with_timeout(dir.path(), Duration::from_millis(200));
+        assert!(
+            !(a.held() && b.held()),
+            "A and B both hold the ledger lock at once (B stole a live holder's stale-looking lock)"
+        );
+        drop(a);
+        let c = LedgerLock::acquire_with_timeout(dir.path(), Duration::from_millis(100));
+        assert!(
+            !(b.held() && c.held()),
+            "C acquired the lock while B still holds it: A's Drop unlinked B's lock by path"
+        );
+        drop(b);
+    }
+
+    /// 24 threads race for an abandoned lock; count concurrent holders inside
+    /// the critical section.
+    #[test]
+    fn ca_budgetguard_lock_02() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Barrier};
+        const THREADS: usize = 24;
+        for iteration in 0..40 {
+            let dir = tempfile::tempdir().unwrap();
+            let lock_path = LedgerLock::lock_path(dir.path());
+            std::fs::write(&lock_path, b"").unwrap();
+            age_lock(&lock_path);
+            let concurrent = Arc::new(AtomicUsize::new(0));
+            let max_concurrent = Arc::new(AtomicUsize::new(0));
+            let barrier = Arc::new(Barrier::new(THREADS));
+            std::thread::scope(|s| {
+                for _ in 0..THREADS {
+                    let (c, m, b) = (concurrent.clone(), max_concurrent.clone(), barrier.clone());
+                    let d = dir.path().to_path_buf();
+                    s.spawn(move || {
+                        b.wait();
+                        let g = LedgerLock::acquire_with_timeout(&d, Duration::from_secs(5));
+                        if g.held() {
+                            let now = c.fetch_add(1, Ordering::SeqCst) + 1;
+                            m.fetch_max(now, Ordering::SeqCst);
+                            std::thread::sleep(Duration::from_millis(20));
+                            c.fetch_sub(1, Ordering::SeqCst);
+                        }
+                        drop(g);
+                    });
+                }
+            });
+            let observed = max_concurrent.load(Ordering::SeqCst);
+            assert!(
+                observed <= 1,
+                "ca_budgetguard_lock_02 iteration {iteration}: {observed} holders inside the critical section at once"
             );
         }
     }

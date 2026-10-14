@@ -57,31 +57,39 @@ finding.
 
 | mode | what it does | cost |
 |------|--------------|------|
-| `inject` (default) | Blocks the stop once per new diff and injects the **property checklist**; the running agent self-verifies its own code against each property and fixes what fails before finishing. | free (no extra process) |
+| `inject` (default) | Blocks the stop once per new diff and injects the **property checklist**; the running agent self-verifies its own code (the uncommitted changes in this working tree) against each property and fixes what fails before finishing. The checked set is the union from `git::changed_files`; propguard does not verify who authored each file, so changes by a human or another session can be included. | free (no extra process) |
 | `subprocess` | Runs `checker_cmd` (default `claude -p`) as an **independent** checker that emits one `PROP <id>: PASS\|FAIL` line per property; propguard counts the PASSes. | one headless check per round |
 
 ## The block threshold
 
 The one enforcement point (`gate::below_threshold`): the stop is **blocked iff
 `satisfied < threshold`**. In inject mode a new diff is *unverified*
-(`satisfied = 0`), so it blocks once to inject the checklist; once the agent has
-addressed it, the same diff (hashed together with its property set) is allowed.
+(`satisfied = 0`), so it blocks once to inject the checklist; on the next stop
+the same diff (hashed together with its property set) is allowed —
+*trust-after-one-block*: propguard does not observe whether the agent actually
+checked the properties, it only guarantees the checklist was shown once.
 In subprocess mode the PASS count is compared directly. The threshold is clamped
 to the number of properties actually derived, so it can never be permanently
 unsatisfiable.
 
 ## How it converges / stays safe
 
-propguard hashes `(diff, properties)`. A stop matching the last one it forced a
-check of is allowed — the agent already addressed exactly that. A *changed* diff
-costs one more round, capped by `max_attempts` (default 2), so the agent is never
-trapped. Fail-closed but bounded:
+propguard hashes `(diff, properties)`. The hash is recorded only on a
+subprocess PASS (`properties-satisfied`) or on inject mode's
+trust-after-one-block; a stop matching a recorded hash is allowed
+(`already-verified`). A subprocess below-threshold result records no hash, so the
+checker re-runs on the next stop. Each blocked round counts toward
+`max_attempts` (default 2; the counter resets after `reset_after_secs` of idle,
+default 600). Once exceeded, a below-threshold result is **allowed** with tag
+`giveup` (properties NOT satisfied) so the agent is never trapped. Fail-closed but bounded:
 
 - No git repo, nothing checkable, no done_criteria source configured at all →
   **allow**.
 - A config file (`propguard.toml` / `~/.propguard/config.toml`) that exists but
   cannot be read or parsed → **block** (tag `config-unreadable`, no give-up) — it
   is never silently replaced by built-in defaults.
+- A config that parses but has an unrecognised `mode` value → **block** (tag
+  `config-invalid`, no give-up) — it is not mapped to either mode.
 - A `criteria_file` that exists but cannot be read, with no inline
   `done_criteria` to fall back to → **block** (tag `criteria-unreadable`, no
   give-up) — "configured but unreadable" is never reported as "not configured".
@@ -93,6 +101,9 @@ trapped. Fail-closed but bounded:
   escalated.
 - A checker that crashes / times out / emits unusable output → **block**
   (bounded), then give up loudly — a broken checker never becomes a bypass.
+- A `git` command that errors inside a real repo (changed set undetermined) →
+  **block** (bounded, tag `git-scan-failed`), then give up loudly
+  (`git-scan-failed-giveup`).
 - A truncated (too-large) diff has an unchecked tail → **block** (bounded), then
   give up loudly.
 - A diff that could not be **read** — any of `git diff`, `git diff --cached`,
@@ -108,7 +119,7 @@ trapped. Fail-closed but bounded:
 
 Escape hatches: `propguard skip --reason "<why>"` — one-shot, reason required,
 scoped to the session that issued it, and recorded in the gate log at both issue
-and consumption. Or `PROPGUARD_DISABLE=1`, effective only in the environment
+and consumption. Or `enabled = false` in the config, or `PROPGUARD_DISABLE=1`, effective only in the environment
 Claude Code itself was started with, since the hook inherits the app's
 environment rather than a tool call's. The old shared `.propguard-skip` file in
 the project root was removed: a one-shot marker in a shared tree is consumed by
@@ -131,11 +142,18 @@ cargo build --release -p propguard
 propguard init                         # writes a starter ./propguard.toml
 ```
 
+Other subcommands: `propguard uninstall` (remove the Stop hook), `propguard
+--protects` (print what the gate protects, from what, and why). Session state
+lives under `~/.propguard/state` (config key `state_dir`; the
+`PROPGUARD_STATE_DIR` env var overrides it).
+
 ## Config
 
 See [`propguard.example.toml`](./propguard.example.toml). Key knobs:
 `mode`, `min_properties`/`max_properties` (3–5), `threshold`, `max_attempts`,
-`criteria_file`, `include`/`exclude`, and (subprocess mode) `checker_cmd`. A
+`reset_after_secs`, `min_changed_files`, `max_diff_bytes`, `criteria_file`,
+`include`/`exclude`, `enabled`, and (subprocess mode) `checker_cmd` /
+`checker_timeout_secs`. A
 project `propguard.toml` is honored only once the root is **trusted**
 (`propguard trust`), since `checker_cmd` runs as a subprocess.
 
@@ -159,9 +177,10 @@ by a timeout so a hung or slow checker can never trap the turn indefinitely:
   checker_timeout_secs = 45   # override the 300s default
   ```
 
-- A value of `0` (or an invalid/negative value that fails TOML parsing) is
-  sanitized back to the 300s default rather than disabling the timeout — the
-  timeout can never be turned into an unbounded wait.
+- A value of `0` is sanitized back to the 300s default rather than disabling
+  the timeout — the timeout can never be turned into an unbounded wait. An
+  invalid/negative value fails TOML parsing, which makes the whole config
+  unreadable → **block** (`config-unreadable`), not a silent default.
 - **On timeout, propguard kills the checker's whole process tree**, not just
   the immediate child: the checker is spawned in its own process group
   (Unix), so a shell-wrapped `checker_cmd` (e.g. one containing `;`, `&&`, or

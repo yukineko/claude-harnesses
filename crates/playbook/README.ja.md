@@ -53,11 +53,14 @@ playbook add --title "メモリ: 一括読込み禁止" \
 
 playbook add --title "commit は branch を切ってから" --always \
   --body "main で直接コミットしない。必ず作業ブランチを切る。"
+# --global で横断共有の _global ストアに保存。--body を省くと本文は stdin から読む
 
 playbook list                              # ノート一覧
 playbook search lightgbm が OOM で落ちる    # 何が注入されるか（スコア付き、✓ が注入対象）を確認
 playbook rm <slug>                         # ノート削除
 playbook status                            # 解決された設定・ストアパス・可視ノート数
+playbook init                              # ストアディレクトリとサンプルノートを作成
+playbook uninstall                         # フックを外す（install/uninstall は --dry-run 可）
 ```
 
 フックを配線せずに注入を試すには、`inject` に stdin で JSON を渡す。
@@ -72,9 +75,10 @@ echo '{"cwd":"'$PWD'","prompt":"lightgbm が OOM で落ちる"}' | playbook inje
 
 | key | 意味 | デフォルト |
 |---|---|---|
+| `store_dir` | ノートストアのルート | `~/.playbook/store` |
 | `top_k` | プロンプトごとに注入する最大ノート数 | 3 |
 | `min_score` | 関連度のしきい値（`always` は迂回する） | 5 |
 | `max_chars` | 注入文字数の上限 | 1500 |
 | `include_global` | `_global` ストアも検索するか | true |
 
-キルスイッチ: `PLAYBOOK_DISABLE=1` を設定すると `inject` は何もしない。
+キルスイッチ: `PLAYBOOK_DISABLE` に `0` 以外の空でない値を設定すると `inject` は何もしない。

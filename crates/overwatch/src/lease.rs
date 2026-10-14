@@ -100,11 +100,18 @@ fn path_related(a: &str, b: &str) -> bool {
 /// Coarse overlap of two glob scopes via their literal prefixes. Deliberately
 /// approximate: overwatch only raises an *early* warning (§4.5); condukt's
 /// conflict-check makes the precise call.
-fn scopes_overlap(a: &[String], b: &[String]) -> bool {
-    a.iter().any(|ga| {
-        b.iter()
-            .any(|gb| path_related(glob_prefix(ga), glob_prefix(gb)))
-    })
+fn scopes_overlap(a: &[String], b: &[String]) -> harness_core::verdict::Determination<bool> {
+    if a.is_empty() || b.is_empty() {
+        // If either scope is undeclared (empty), we cannot determine overlap.
+        harness_core::verdict::Determination::undetermined("scope not declared")
+    } else {
+        // Both scopes are declared; check if they overlap.
+        let overlaps = a.iter().any(|ga| {
+            b.iter()
+                .any(|gb| path_related(glob_prefix(ga), glob_prefix(gb)))
+        });
+        harness_core::verdict::Determination::known(overlaps)
+    }
 }
 
 /// Begin a new lease for a task. If a live lease from another session already holds the key,
@@ -116,8 +123,11 @@ fn scopes_overlap(a: &[String], b: &[String]) -> bool {
 ///
 /// On success prints a JSON summary to stdout (exit 0). It carries
 /// `scope_overlap` (§4.5): other live leases (different key) whose scope overlaps
-/// this one — a non-blocking early warning. Empty when nothing overlaps or when
-/// this lease has no scope.
+/// this one — a non-blocking early warning. `scope_undeclared` lists the peers
+/// whose overlap could not be determined because either side declared no scope
+/// (backlog 56eb3f9a: undeclared is not the same as "no overlap"), and
+/// `scope_declared` is false when this lease itself declared no scope — in that
+/// case every peer lands in `scope_undeclared`, never silently in neither list.
 pub fn begin(
     key: &str,
     title: &str,
@@ -170,17 +180,32 @@ pub fn begin(
     }
 
     // Early scope-overlap warning (§4.5): other live leases (different key) whose
-    // scope overlaps this one. Skipped when this lease declares no scope. Purely
+    // scope overlaps this one. When this lease declares no scope every peer is
+    // reported in `scope_undeclared` (Undetermined), not dropped. Purely
     // advisory — never changes the exit code.
-    let scope_overlap: Vec<serde_json::Value> = if scope.is_empty() {
-        Vec::new()
-    } else {
-        leases
-            .values()
-            .filter(|l| l.key != key && !l.scope.is_empty() && scopes_overlap(&scope, &l.scope))
-            .map(|l| json!({ "key": l.key, "title": l.title, "scope": l.scope }))
-            .collect()
-    };
+    //
+    // Distinguish between peers with undeclared scope vs. declared non-overlapping scope.
+    // This tri-state (via Determination<bool>) allows clients to see the difference and
+    // make informed decisions.
+    let (mut scope_overlap, mut scope_undeclared) = (Vec::new(), Vec::new());
+    let scope_declared = !scope.is_empty();
+    {
+        for l in leases.values().filter(|l| l.key != key) {
+            match scopes_overlap(&scope, &l.scope) {
+                harness_core::verdict::Determination::Known(true) => {
+                    // Scopes overlap
+                    scope_overlap.push(json!({ "key": l.key, "title": l.title, "scope": l.scope }));
+                }
+                harness_core::verdict::Determination::Known(false) => {
+                    // Scopes declared but don't overlap — not included in either list
+                }
+                harness_core::verdict::Determination::Undetermined(_) => {
+                    // Peer scope undeclared
+                    scope_undeclared.push(json!({ "key": l.key, "title": l.title }));
+                }
+            }
+        }
+    }
 
     // Near-duplicate warning (§4.6a): other live leases (different key) whose
     // title/done_criteria are lexically similar (Jaccard ≥ threshold) to this
@@ -227,10 +252,13 @@ pub fn begin(
     store::save_leases(&cwd, &leases)?;
 
     // Advisory success summary (exit 0). `scope_overlap` is the §4.5 early
-    // warning; `possible_duplicate` is the §4.6a near-duplicate warning. Both
-    // are advisory and default to empty arrays.
+    // warning; `scope_undeclared` lists peers whose scope is undeclared;
+    // `possible_duplicate` is the §4.6a near-duplicate warning. All three are
+    // advisory and default to empty arrays.
     let summary = json!({
         "scope_overlap": scope_overlap,
+        "scope_undeclared": scope_undeclared,
+        "scope_declared": scope_declared,
         "possible_duplicate": possible_duplicate,
     });
     println!("{summary}");
@@ -471,6 +499,7 @@ pub fn reap() -> Result<()> {
 }
 
 #[cfg(test)]
+#[cfg_attr(test, allow(clippy::panic, clippy::expect_used))]
 mod tests {
     use super::*;
 
@@ -550,22 +579,74 @@ mod tests {
 
     #[test]
     fn scopes_overlap_matches_ancestor_and_exact_not_sibling() {
-        // glob dir vs a file inside it -> overlap
-        assert!(scopes_overlap(
-            &["crates/overwatch/src/**".into()],
-            &["crates/overwatch/src/store.rs".into()],
+        use harness_core::verdict::Determination;
+
+        // glob dir vs a file inside it -> Known(true)
+        assert!(matches!(
+            scopes_overlap(
+                &["crates/overwatch/src/**".into()],
+                &["crates/overwatch/src/store.rs".into()],
+            ),
+            Determination::Known(true)
         ));
-        // exact same path -> overlap
-        assert!(scopes_overlap(&["a/b.rs".into()], &["a/b.rs".into()]));
-        // sibling dirs sharing a string prefix but not a path boundary -> no overlap
-        assert!(!scopes_overlap(
-            &["crates/overwatch/**".into()],
-            &["crates/overwatchX/**".into()],
+
+        // exact same path -> Known(true)
+        assert!(matches!(
+            scopes_overlap(&["a/b.rs".into()], &["a/b.rs".into()]),
+            Determination::Known(true)
         ));
-        // disjoint crates -> no overlap
-        assert!(!scopes_overlap(
-            &["crates/overwatch/**".into()],
-            &["crates/stuckguard/**".into()],
+
+        // sibling dirs sharing a string prefix but not a path boundary -> Known(false)
+        assert!(matches!(
+            scopes_overlap(
+                &["crates/overwatch/**".into()],
+                &["crates/overwatchX/**".into()],
+            ),
+            Determination::Known(false)
+        ));
+
+        // disjoint crates -> Known(false)
+        assert!(matches!(
+            scopes_overlap(
+                &["crates/overwatch/**".into()],
+                &["crates/stuckguard/**".into()],
+            ),
+            Determination::Known(false)
+        ));
+    }
+
+    #[test]
+    fn scopes_overlap_returns_tri_state() {
+        use harness_core::verdict::Determination;
+
+        // Both declared and overlapping -> Known(true)
+        assert!(matches!(
+            scopes_overlap(&["crates/a/**".into()], &["crates/a/b.rs".into()]),
+            Determination::Known(true)
+        ));
+
+        // Both declared but disjoint -> Known(false)
+        assert!(matches!(
+            scopes_overlap(&["crates/a/**".into()], &["crates/b/**".into()]),
+            Determination::Known(false)
+        ));
+
+        // First scope undeclared -> Undetermined
+        assert!(matches!(
+            scopes_overlap(&[], &["crates/a/b.rs".into()]),
+            Determination::Undetermined(_)
+        ));
+
+        // Second scope undeclared -> Undetermined
+        assert!(matches!(
+            scopes_overlap(&["crates/a/b.rs".into()], &[]),
+            Determination::Undetermined(_)
+        ));
+
+        // Both undeclared -> Undetermined
+        assert!(matches!(
+            scopes_overlap(&[], &[]),
+            Determination::Undetermined(_)
         ));
     }
 }

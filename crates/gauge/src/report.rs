@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use crate::config::PriceOverride;
 use crate::store::{SessionRecord, Usage};
 use harness_core::pricing;
+use harness_core::verdict::Determination;
 
 /// Format an integer with thousands separators.
 pub fn commas(n: u64) -> String {
@@ -29,6 +30,60 @@ pub fn money(c: f64) -> String {
         format!("${c:.2}")
     } else {
         format!("${c:.4}")
+    }
+}
+
+/// A running cost total that remembers whether any part of it could not be
+/// priced (a model with usage but no known rate — backlog ff98fed0). Once one
+/// addend is undetermined the total is undetermined: the priced part alone is
+/// an under-count of unknown size, so it is never printed as the total.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct CostSum {
+    known: f64,
+    undetermined: bool,
+}
+
+impl CostSum {
+    pub fn add(&mut self, d: Determination<f64>) {
+        match d {
+            Determination::Known(c) => self.known += c,
+            Determination::Undetermined(_) => self.undetermined = true,
+        }
+    }
+
+    pub fn merge(&mut self, other: CostSum) {
+        self.known += other.known;
+        self.undetermined |= other.undetermined;
+    }
+
+    pub fn is_undetermined(&self) -> bool {
+        self.undetermined
+    }
+
+    /// Sort key: undetermined rows sort first (largest), never as $0.
+    fn sort_key(&self) -> f64 {
+        if self.undetermined {
+            f64::INFINITY
+        } else {
+            self.known
+        }
+    }
+}
+
+impl From<Determination<f64>> for CostSum {
+    fn from(d: Determination<f64>) -> Self {
+        let mut c = CostSum::default();
+        c.add(d);
+        c
+    }
+}
+
+/// [`money`] for a value that may be undetermined: `unknown`, never `$0`.
+pub fn money_d(c: CostSum) -> String {
+    if c.undetermined {
+        "unknown".to_string()
+    } else {
+        money(c.known)
     }
 }
 
@@ -66,11 +121,12 @@ pub fn pct(f: f64) -> String {
     format!("{:.0}%", f * 100.0)
 }
 
-fn record_cost(rec: &SessionRecord, overrides: &[PriceOverride]) -> f64 {
-    rec.models
-        .iter()
-        .map(|(m, u)| pricing::cost(m, u, overrides))
-        .sum()
+fn record_cost(rec: &SessionRecord, overrides: &[PriceOverride]) -> CostSum {
+    let mut c = CostSum::default();
+    for (m, u) in &rec.models {
+        c.add(pricing::cost(m, u, overrides));
+    }
+    c
 }
 
 /// Render the full report. `records` is consumed read-only.
@@ -79,50 +135,54 @@ pub fn render(records: &[SessionRecord], overrides: &[PriceOverride]) -> String 
         return "no sessions recorded yet. Run some turns, then `gauge report`.".to_string();
     }
 
-    let mut total_cost = 0.0;
+    let mut total_cost = CostSum::default();
+    // Models whose usage could not be priced, named in a footnote.
+    let mut unpriced: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut total_tokens = 0u64;
     let mut total_turns = 0u64;
 
     // project -> (cost, tokens, sessions)
-    let mut by_project: BTreeMap<String, (f64, u64, u64)> = BTreeMap::new();
+    let mut by_project: BTreeMap<String, (CostSum, u64, u64)> = BTreeMap::new();
     // model -> (cost, usage)
-    let mut by_model: BTreeMap<String, (f64, Usage)> = BTreeMap::new();
+    let mut by_model: BTreeMap<String, (CostSum, Usage)> = BTreeMap::new();
     // day -> (cost, tokens)
-    let mut by_day: BTreeMap<String, (f64, u64)> = BTreeMap::new();
+    let mut by_day: BTreeMap<String, (CostSum, u64)> = BTreeMap::new();
     // agent bucket (main / sub-agent) -> (cost, tokens, turns)
-    let mut by_agent: BTreeMap<String, (f64, u64, u64)> = BTreeMap::new();
+    let mut by_agent: BTreeMap<String, (CostSum, u64, u64)> = BTreeMap::new();
 
     for rec in records {
         let cost = record_cost(rec, overrides);
         let toks = rec.total_tokens();
-        total_cost += cost;
+        total_cost.merge(cost);
         total_tokens += toks;
         total_turns += rec.turns;
 
         let p = by_project.entry(rec.project.clone()).or_default();
-        p.0 += cost;
+        p.0.merge(cost);
         p.1 += toks;
         p.2 += 1;
 
         for (m, u) in &rec.models {
             let e = by_model.entry(m.clone()).or_default();
-            e.0 += pricing::cost(m, u, overrides);
+            let c = pricing::cost(m, u, overrides);
+            if matches!(c, Determination::Undetermined(_)) {
+                unpriced.insert(m.clone());
+            }
+            e.0.add(c);
             e.1.add(u);
         }
 
         if let Some(day) = rec.day() {
             let d = by_day.entry(day).or_default();
-            d.0 += cost;
+            d.0.merge(cost);
             d.1 += toks;
         }
 
         for (bucket, a) in &rec.agents {
             let e = by_agent.entry(bucket.clone()).or_default();
-            e.0 += a
-                .models
-                .iter()
-                .map(|(m, u)| pricing::cost(m, u, overrides))
-                .sum::<f64>();
+            for (m, u) in &a.models {
+                e.0.add(pricing::cost(m, u, overrides));
+            }
             e.1 += a.total_tokens();
             e.2 += a.turns;
         }
@@ -136,7 +196,7 @@ pub fn render(records: &[SessionRecord], overrides: &[PriceOverride]) -> String 
     ));
     out.push_str(&format!(
         "合計コスト {}  ·  トークン {} ({})\n",
-        money(total_cost),
+        money_d(total_cost),
         tokens_short(total_tokens),
         commas(total_tokens),
     ));
@@ -146,14 +206,15 @@ pub fn render(records: &[SessionRecord], overrides: &[PriceOverride]) -> String 
     let mut projects: Vec<_> = by_project.into_iter().collect();
     projects.sort_by(|a, b| {
         b.1 .0
-            .partial_cmp(&a.1 .0)
+            .sort_key()
+            .partial_cmp(&a.1 .0.sort_key())
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     for (name, (cost, toks, sessions)) in projects.iter().take(15) {
         out.push_str(&format!(
             "  {:<24} {:>9}  {:>8}  {} sess\n",
             truncate(name, 24),
-            money(*cost),
+            money_d(*cost),
             tokens_short(*toks),
             sessions,
         ));
@@ -164,14 +225,15 @@ pub fn render(records: &[SessionRecord], overrides: &[PriceOverride]) -> String 
     let mut models: Vec<_> = by_model.into_iter().collect();
     models.sort_by(|a, b| {
         b.1 .0
-            .partial_cmp(&a.1 .0)
+            .sort_key()
+            .partial_cmp(&a.1 .0.sort_key())
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     for (name, (cost, u)) in models.iter() {
         out.push_str(&format!(
             "  {:<24} {:>9}  in {} / out {} / cache r {} w {} ({} hit)\n",
             truncate(name, 24),
-            money(*cost),
+            money_d(*cost),
             tokens_short(u.input),
             tokens_short(u.output),
             tokens_short(u.cache_read),
@@ -186,14 +248,15 @@ pub fn render(records: &[SessionRecord], overrides: &[PriceOverride]) -> String 
         let mut agents: Vec<_> = by_agent.into_iter().collect();
         agents.sort_by(|a, b| {
             b.1 .0
-                .partial_cmp(&a.1 .0)
+                .sort_key()
+                .partial_cmp(&a.1 .0.sort_key())
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         for (name, (cost, toks, turns)) in agents.iter() {
             out.push_str(&format!(
                 "  {:<12} {:>9}  {:>8}  {} turns\n",
                 truncate(name, 12),
-                money(*cost),
+                money_d(*cost),
                 tokens_short(*toks),
                 commas(*turns),
             ));
@@ -208,8 +271,16 @@ pub fn render(records: &[SessionRecord], overrides: &[PriceOverride]) -> String 
         out.push_str(&format!(
             "  {}  {:>9}  {:>8}\n",
             day,
-            money(*cost),
+            money_d(*cost),
             tokens_short(*toks),
+        ));
+    }
+
+    if !unpriced.is_empty() {
+        out.push_str(&format!(
+            "\n※ unknown = 単価不明のモデルを含む（$0 ではない）: {}\n  \
+             gauge.toml の [[pricing]] で単価を指定してください（無料なら input/output = 0.0）。\n",
+            unpriced.into_iter().collect::<Vec<_>>().join(", ")
         ));
     }
 

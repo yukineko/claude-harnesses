@@ -20,9 +20,12 @@ injected as `additionalContext` for the agent — **non-blocking** (it never bre
 (optionally pinned to a `dir`), run once per calendar day via `sh -c`.
 
 Before spawning, `task.command` is checked against the same `blastguard` detector
-the PreToolUse hook uses. A flagged (destructive) command is refused fail-closed —
+the PreToolUse hook uses. A command blastguard **denies** (destructive) is refused —
 never spawned — and reported as `name (blocked: <reason>)` in the summary/report
-instead of running.
+instead of running. **Only a `Deny` verdict blocks**: a command for which blastguard
+returns `Ask` (a construct it cannot analyse) is *not* refused here — `daily` does not
+harden `Ask` to `Deny` (`run_task` in `src/main.rs` matches only `Decision::Deny`), so
+such a command is spawned like any other.
 
 With **no tasks registered**, a built-in default `security` task runs, preserving the
 original behavior:
@@ -40,13 +43,17 @@ that ran today (both successes and failures):
 ```
 
 - exit 0 → `name (ok)`
-- exit non-zero → `name (fail exit N: <first salient line>)` (prefers `error`/`warning`/`RUSTSEC` lines)
+- exit non-zero → `name (fail exit N: <first salient line>)` (prefers `error`/`warning`/`RUSTSEC` lines);
+  killed by a signal (no exit code) → `name (fail killed: …)`
 - command couldn't spawn → `name (error: …)`
 - command refused by blastguard before spawn → `name (blocked: <reason>)`
 - nothing was due today → stays silent
 
-Each task runs in its `dir` (or the session `cwd`) with `$CARGO_HOME/bin` prepended to
-`PATH`, so `cargo` subcommands like `cargo-deny` resolve even when `~/.cargo/bin` isn't
+Each task runs in its `dir` (or the session `cwd`). `dir` is canonicalized and must be
+the session `cwd` or a directory **under** it: a `dir` that does not exist, cannot be
+canonicalized, or resolves outside the session `cwd` (e.g. `../../etc`, or an absolute
+path elsewhere) is **silently ignored** and the task runs in the session `cwd` instead.
+`$CARGO_HOME/bin` is prepended to `PATH`, so `cargo` subcommands like `cargo-deny` resolve even when `~/.cargo/bin` isn't
 on the ambient PATH. `cargo-deny` must still be installed separately
 (`cargo install cargo-deny`) for the default security task to do anything.
 
@@ -76,7 +83,13 @@ holding the backlog lock** (via `backlog lock status`):
   the next session that starts while no driver is working.
 - **Lock is free, or held by a dead (stale) process** → run normally (a crashed driver
   never wedges `daily`).
-- **`backlog` isn't installed** → fail-open: no driver framework means no driver, so run.
+- **`backlog` isn't installed** (observed absent from both the plugin cache and `$PATH`)
+  → no driver framework means no driver, so run.
+- **No answer could be obtained** — `backlog` could not be located (plugin cache
+  unreadable, or a `$PATH` copy that cannot be spawned), could not be started,
+  `backlog lock status` exited non-zero, or its output is neither `none` nor JSON →
+  treated as **a driver is active**: this session's run is skipped. A JSON
+  `kind: undetermined` answer from backlog is likewise read as active.
 
 Set `skip_when_driver_active = false` to always run regardless.
 
@@ -90,7 +103,8 @@ looping.
 ## Report
 
 Every task run is appended as one JSON line to `~/.daily/reports.jsonl`
-(`{date, at, task, status, code, detail}`, `status` ∈ `ok`/`fail`/`error`). Inspect it
+(`{date, at, task, status, code, detail}`, `status` ∈ `ok`/`fail`/`error`/`blocked`). If an append fails, a
+`warning: daily log: … this record is LOST` line goes to stderr. Inspect it
 with `daily report`:
 
 ```sh
@@ -121,7 +135,7 @@ command = "cargo deny check advisories bans sources licenses"
 [[task]]
 name = "notes-sync"
 command = "git -C ~/notes pull --ff-only"
-dir = "/home/me/notes"    # optional; defaults to the session cwd
+dir = "tools"             # optional; must resolve to the session cwd or below — else ignored (runs in the session cwd)
 ```
 
 - `enabled` defaults to **true** when omitted; set `enabled = false` to turn the runner
@@ -130,6 +144,8 @@ dir = "/home/me/notes"    # optional; defaults to the session cwd
   `security` task runs; register **one or more** and only those run (add `security`
   yourself if you still want it).
 - Each `name` must be unique — it is the per-task daily state key.
+- An **unparseable** config is ignored with a stderr warning and treated as the default
+  (enabled, nothing registered → the built-in `security` task runs).
 
 ## Registering tasks
 
@@ -152,7 +168,7 @@ a duplicate name.
 | `daily list` | show registered tasks + whether each already ran today |
 | `daily report [--date <d>] [--last <n>]` | show the results report of past runs (today by default) |
 | `daily add --name <n> --command <c> [--dir <d>]` | register a new daily task in `~/.daily/config.toml` |
-| `daily install` | (not yet implemented) — add the hook to `~/.claude/settings.json` manually |
+| `daily install` | (not yet implemented — prints a notice and exits 0) — add the hook to `~/.claude/settings.json` manually |
 
 ## Install
 
@@ -165,24 +181,27 @@ a duplicate name.
 ```
 
 The hook calls `${CLAUDE_PLUGIN_ROOT}/bin/daily session-start`. `bin/daily` is a POSIX
-launcher that selects the right per-platform binary (`bin/daily-<os>-<arch>`); if a host
-has no matching binary it exits 0 silently. `cargo-deny` must be installed separately
+launcher that selects the right per-platform binary (`bin/daily-<os>-<arch>`). If a host
+has no matching binary it does **not** stay silent: for `session-start` it emits a
+`systemMessage` + `additionalContext` saying today's tasks did NOT run and their result
+is UNKNOWN (exit 0); any other verb exits 127 with the reason on stderr. `cargo-deny` must be installed separately
 (`cargo install cargo-deny`) for the security task to do anything.
 
 ### Build from source
 
 ```sh
-scripts/build-plugin-bin.sh
-git add bin/ && git update-index --chmod=+x bin/daily bin/daily-*
+scripts/build-plugin-bin.sh daily   # stages bin/daily-<os>-<arch> for the host
 ```
+
+Platform-tagged binaries are **never committed** (`.gitignore` ignores
+`crates/*/bin/*-<os>-<arch>`); only the `bin/daily` launcher is tracked. Local deploy
+builds from source via `scripts/rollout-plugins.sh`.
 
 ## Platform support
 
-| Host | File | Status |
-|---|---|---|
-| macOS Apple Silicon | `bin/daily-darwin-arm64` | bundled |
-| Linux x86_64 | `bin/daily-linux-x86_64` | bundled |
-| macOS Intel | `bin/daily-darwin-x86_64` | bundled |
+The launcher resolves `bin/daily-<os>-<arch>` (`darwin`/`linux`/`windows` ×
+`arm64`/`x86_64`). No platform binary is committed; a host has one only after it is
+built there (`scripts/build-plugin-bin.sh` / `scripts/rollout-plugins.sh`).
 
 ## Plugin layout
 
@@ -190,7 +209,7 @@ git add bin/ && git update-index --chmod=+x bin/daily bin/daily-*
 .claude-plugin/plugin.json     # plugin manifest
 hooks/hooks.json               # SessionStart=session-start → ${CLAUDE_PLUGIN_ROOT}/bin/daily
 bin/daily                      # POSIX launcher → daily-<os>-<arch>
-bin/daily-<os>-<arch>          # prebuilt binaries
+bin/daily-<os>-<arch>          # locally built binaries (git-ignored)
 src/main.rs … Cargo.toml       # the Rust crate (uses harness-core::daily::DailyGuard)
 ```
 

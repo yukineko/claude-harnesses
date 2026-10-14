@@ -38,7 +38,7 @@ beacon はこの「いつ戻ればいいか分からない」問題を、Stop �
 
 ```sh
 cargo install --path .
-beacon init          # 雛形の ./beacon.toml を書き出す
+beacon init          # 雛形の ./beacon.toml を書き出す（--force で上書き）
 beacon test          # 設定済みチャンネルへサンプル通知を 1 発撃つ
 beacon install       # Stop + Notification フックを ~/.claude/settings.json にマージ
 beacon status        # 解決済み設定と有効チャンネルを表示
@@ -46,7 +46,7 @@ beacon trust         # このプロジェクトを信頼し beacon.toml の `com
 beacon uninstall     # フックを取り除く
 ```
 
-`beacon install` / `uninstall` は冪等で、書き込み前に `settings.json` をバックアップし、他プラグインのフックグループは保持する。
+`beacon install` / `uninstall` は `--dry-run` を受け付け、冪等で、書き込み前に `settings.json` をバックアップし、他プラグインのフックグループは保持する。
 
 ### 設定
 

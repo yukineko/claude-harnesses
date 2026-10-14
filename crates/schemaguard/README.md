@@ -15,8 +15,8 @@ on its exit code.
 
 | Subcommand | What it does | Exit codes |
 |---|---|---|
-| `check --schema <name>` | Validate a JSON value (`--file <path>` or stdin) against a named schema; print `{valid, schema, errors[], not_checked[]}` | `0` valid · `1` schema violations · `2` parse error / unknown schema / a declared check could not be applied |
-| `metrics` | Print reject counts per schema (`--json` for machine-readable) | `0` |
+| `check --schema <name>` | Validate a JSON value (`--file <path>` or stdin) against a named schema; print `{valid, schema, errors[], undetermined[], not_checked[]}` | `0` valid · `1` schema violations · `2` parse error / unknown schema / a declared check could not be applied |
+| `metrics` | Print reject counts per schema from `~/.schemaguard/rejects.jsonl` (`--json` for machine-readable) | `0` |
 | `list` | List known schema names | `0` |
 
 ### Verdict schema (`check` output)
@@ -74,8 +74,10 @@ failure `{valid:false, error}` on stdout, unknown schema on stderr, or
 `valid:false` with a non-empty `undetermined[]`). Parse failures, field
 violations and undetermined checks are all counted as rejects in `metrics`.
 
-Declared schemas: `decomposition`, `episode`, `playbook`, `scout-measure`
-(see `schemaguard list`).
+Declared schemas: `decomposition`, `episode`, `playbook`, `scout-measure`,
+`verdict` (condukt's consensus verdict shape), plus `undetermined-probe`, a
+probe schema that exists to exercise the undetermined (exit `2`) path end to
+end (see `schemaguard list`).
 
 ## Install (plugin)
 
@@ -100,7 +102,7 @@ schemaguard metrics --json                    # reject counts per schema
 cargo test
 ```
 
-The committed `bin/schemaguard-*` binaries are what the plugin ships, so end
-users need neither cargo nor an API key. Rebuild and recommit them (the
-workspace builds with `cargo build --workspace --release`) when you change
-validation behavior callers rely on.
+Only the `bin/schemaguard` launcher is committed; the per-platform
+`bin/schemaguard-<os>-<arch>` binaries are git-ignored and are built and placed
+into the installed plugin by `scripts/rollout-plugins.sh`, so end users need
+neither cargo nor an API key.

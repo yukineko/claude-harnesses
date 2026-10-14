@@ -24,12 +24,12 @@ only when the acceptance criterion is **mechanical**, and drafts the rest:
 Mechanical signals: an explicit backticked command, or a recognised test runner
 (`cargo test`, `npm test`, `pytest`, `go test`). A **draft** is a valid golden
 that evalkit *skips* (never pass, never fail) until a human writes its assertion
-— so it can sit in the repo as visible pending work without breaking CI.
+— so it can sit in the repo as visible pending work without failing `evalkit run`.
 
 ## Usage
 
 ```sh
-curate candidates                       # list promotable playbooks (mech | draft)
+curate candidates                       # list promotable playbooks (mech | draft); --limit N (default 20)
 curate promote "add login" --dataset auth   # → evals/curated/auth.jsonl
 curate promote --latest                 # the most recent playbook
 curate promote "x" --draft              # force a draft even if mechanical
@@ -37,11 +37,13 @@ curate promote --latest --store /path/to/playbooks.jsonl  # override the playboo
 ```
 
 Both `candidates` and `promote` accept `--store` to override the playbook store
-path (default `~/.fugu-router/playbooks.jsonl`). Promotions append to
-`evals/curated/<name>.jsonl` (deduplicated by case id) under `--root` (default
-CWD), inside the `--evals-dir` (default `evals`). evalkit discovers `evals/`
-**recursively**, so a promoted case is picked up by `evalkit run` and the
-`eval.yml` CI gate with no config change.
+path (default `~/.fugu-router/playbooks.jsonl`). `promote` selects by
+case-insensitive title substring (most recent match wins) or `--latest`.
+Promotions append to `evals/curated/<name>.jsonl` (`--dataset`, default
+`promoted`; deduplicated by case id) under `--root` (default CWD), inside the
+`--evals-dir` (default `evals`). evalkit discovers `evals/` **recursively**, so a
+promoted case is picked up by `evalkit run` with no config change (there is no CI
+wiring — `evalkit run` is run manually).
 
 ## The loop it closes
 
@@ -49,7 +51,7 @@ CWD), inside the `--evals-dir` (default `evals`). evalkit discovers `evals/`
 condukt verifies a task ─▶ fugu-router record (playbook)
         ▲                              │
         │                    curate promote
-   evalkit run  ◀── evals/curated/*.jsonl ◀┘   (eval.yml gates every push)
+   evalkit run  ◀── evals/curated/*.jsonl ◀┘   (run manually; no CI)
 ```
 
 After `record`, condukt's Phase 6 is HOTL-wired to `curate promote`: when a

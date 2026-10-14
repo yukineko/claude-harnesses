@@ -74,7 +74,8 @@ without a human:
 ## Operator commands
 
 ```sh
-parallelguard status   # the cap in force, per-session counts, recent denials
+parallelguard status       # the cap in force, per-session counts, recent denials
+parallelguard --protects   # print the PROTECTS / AGAINST / GROUNDS statement (no verdict)
 ```
 
 `status` distinguishes "nothing in flight" from "this hook has never run" —

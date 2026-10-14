@@ -72,12 +72,30 @@
 //!
 //! ## What ages out, and why
 //!
-//! An entry stops excluding its task after [`crate::store::CLAIM_STALE_SECS`]
-//! (1h), so a task whose claimant died is re-offered. Never ageing out would
-//! make such a task permanently unclaimable in EVERY checkout, which is not
-//! "the restrictive side" but a deadlock. Entries are
-//! kept (for a human reading the file) until [`LEDGER_RETENTION_SECS`], then
-//! pruned on the next write so the file stays bounded.
+//! An entry stops excluding its task once its holder has not been observed
+//! alive for [`crate::store::CLAIM_STALE_SECS`] (1h), so a task whose claimant
+//! died is re-offered. Never ageing out would make such a task permanently
+//! unclaimable in EVERY checkout, which is not "the restrictive side" but a
+//! deadlock. Entries are kept (for a human reading the file) until
+//! [`LEDGER_RETENTION_SECS`] past the same moment, then pruned on the next
+//! write so the file stays bounded.
+//!
+//! "Last observed alive" is the newer of `claimed_at` and `heartbeat_at`
+//! ([`last_alive`]), not `claimed_at` alone (backlog 486e83ca: by claim age
+//! alone, a LIVE session working one task for more than an hour silently lost
+//! its lease and a second session was handed the same task). `next --claim`
+//! records the claiming session (`CLAUDE_CODE_SESSION_ID`) on the entry, and
+//! `backlog driver heartbeat --session-id S` ([`refresh_leases`]) stamps
+//! `heartbeat_at` on S's still-live entries. So a driver heartbeating within
+//! the window keeps its claims, and a crashed one stops heartbeating and ages
+//! out one window after its last heartbeat. An entry with no session id (an
+//! older binary's, or a claim made outside a session) cannot be refreshed and
+//! ages by `claimed_at` exactly as before. Both new fields are optional in the
+//! file format, so older binaries keep reading and writing this ledger — but an
+//! older binary that REWRITES it drops `heartbeat_at`, reverting those leases
+//! to claim-age expiry (the pre-486e83ca behaviour). A malformed
+//! `heartbeat_at` fails the whole parse and is refused like any unreadable
+//! ledger; it is never read as "holder dead".
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -144,6 +162,39 @@ pub(crate) struct ClaimRecord {
     /// CLI, so this pid is dead by the time anyone reads the ledger (the same
     /// reason `lock::LockInfo::pid` is not used to judge staleness).
     pub(crate) pid: u32,
+    /// The claiming Claude Code session (`CLAUDE_CODE_SESSION_ID` of the
+    /// claiming process), if it had one. This is the HOLDER identity that
+    /// `backlog driver heartbeat --session-id S` refreshes (backlog 486e83ca).
+    /// `None` — an older binary's entry, or a claim made outside a session —
+    /// means nobody can refresh the lease, so it ages by `claimed_at` alone,
+    /// exactly as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) session_id: Option<String>,
+    /// When the holder session last proved itself alive by heartbeating
+    /// (backlog 486e83ca). Staleness is measured from the NEWER of this and
+    /// `claimed_at` ([`last_alive`]). Absent (older binaries, never
+    /// heartbeated) = `claimed_at` only. A present-but-malformed value fails
+    /// the whole ledger parse, which every reader turns into a refusal — an
+    /// unreadable liveness field is never read as "the holder is dead".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) heartbeat_at: Option<i64>,
+}
+
+/// The last moment the lease's holder was observed alive: the newer of the
+/// claim itself and the holder's last lease heartbeat. Every staleness and
+/// retention decision in this module is measured from here.
+fn last_alive(e: &ClaimRecord) -> i64 {
+    match e.heartbeat_at {
+        Some(h) => e.claimed_at.max(h),
+        None => e.claimed_at,
+    }
+}
+
+/// Is the lease still excluding its task at `now`? A future `last_alive`
+/// (clock skew) saturates to a non-positive age, i.e. live — the restrictive
+/// side.
+fn is_live(e: &ClaimRecord, now: i64) -> bool {
+    now.saturating_sub(last_alive(e)) < CLAIM_STALE_SECS
 }
 
 /// The ledger file's contents.
@@ -297,7 +348,7 @@ fn write_ledger(path: &Path, ledger: &Ledger) -> std::result::Result<(), String>
     }
 }
 
-/// The ids holding a LIVE lease (age < [`CLAIM_STALE_SECS`]) in `identity`'s
+/// The ids holding a LIVE lease ([`is_live`]) in `identity`'s
 /// project-wide ledger — the set plain `next` excludes. See
 /// [`live_lease_times`] for the semantics; this is its key set.
 #[cfg(test)]
@@ -308,7 +359,8 @@ pub(crate) fn live_leases(
     live_lease_times(identity, override_dir).map(|m| m.into_keys().collect())
 }
 
-/// Every id holding a LIVE lease (age < [`CLAIM_STALE_SECS`]) in `identity`'s
+/// Every id holding a LIVE lease ([`is_live`]: holder seen alive within
+/// [`CLAIM_STALE_SECS`]) in `identity`'s
 /// project-wide ledger, mapped to the `claimed_at` of its NEWEST live entry —
 /// the input of the derived `claimed` view of `list` (which needs the claim
 /// time to tell a claimant's own later `fail` apart from a re-claim of an
@@ -329,11 +381,7 @@ pub(crate) fn live_lease_times(
     read_ledger(&ledger_path(&dir, identity)).map(|l| {
         let now = now_unix();
         let mut out: HashMap<String, i64> = HashMap::new();
-        for e in l
-            .entries
-            .iter()
-            .filter(|e| now.saturating_sub(e.claimed_at) < CLAIM_STALE_SECS)
-        {
+        for e in l.entries.iter().filter(|e| is_live(e, now)) {
             let at = out.entry(e.id.clone()).or_insert(e.claimed_at);
             *at = (*at).max(e.claimed_at);
         }
@@ -341,14 +389,14 @@ pub(crate) fn live_lease_times(
     })
 }
 
-/// Only LIVE claims exclude. See the module docs: ageing out after
-/// [`CLAIM_STALE_SECS`] is what keeps a dead claimant from making a task
-/// permanently unclaimable in every checkout.
+/// Only LIVE claims exclude. See the module docs: ageing out
+/// [`CLAIM_STALE_SECS`] after the holder was last seen alive is what keeps a
+/// dead claimant from making a task permanently unclaimable in every checkout.
 fn live_ids(ledger: &Ledger, now: i64) -> HashSet<String> {
     ledger
         .entries
         .iter()
-        .filter(|e| now.saturating_sub(e.claimed_at) < CLAIM_STALE_SECS)
+        .filter(|e| is_live(e, now))
         .map(|e| e.id.clone())
         .collect()
 }
@@ -374,6 +422,7 @@ pub(crate) fn claim_next(
     tag_filter: Option<&str>,
     project_filter: Option<&str>,
     identity: &str,
+    session_id: Option<&str>,
     override_dir: Option<&Path>,
 ) -> Result<Determination<Option<Task>>> {
     let dir = claims_dir(override_dir);
@@ -420,10 +469,12 @@ pub(crate) fn claim_next(
             checkout: checkout.clone(),
             store: store_display.clone(),
             pid: std::process::id(),
+            session_id: session_id.map(str::to_string),
+            heartbeat_at: None,
         });
         ledger
             .entries
-            .retain(|e| now.saturating_sub(e.claimed_at) < LEDGER_RETENTION_SECS);
+            .retain(|e| now.saturating_sub(last_alive(e)) < LEDGER_RETENTION_SECS);
         write_ledger(&path, &ledger)
     };
 
@@ -436,6 +487,68 @@ pub(crate) fn claim_next(
         &excluded,
         &mut reserve,
     )
+}
+
+/// Refresh the leases `session_id` holds in `identity`'s project-wide ledger:
+/// stamp `heartbeat_at = now` on every entry recorded with that session id
+/// that is STILL LIVE (backlog 486e83ca). Called by `backlog driver
+/// heartbeat`, which `/flow` runs every loop cycle, so a live driver keeps
+/// its claims past [`CLAIM_STALE_SECS`] while a crashed one stops refreshing
+/// and ages out one window after its last heartbeat.
+///
+/// An already-expired lease is NOT revived: once it stopped excluding, another
+/// session may have reclaimed the task, and extending the dead lease would not
+/// undo that — it would only make two holders look live.
+///
+/// Returns the number of leases refreshed. An ABSENT ledger is `Known(0)` (no
+/// checkout of this project ever claimed; the claims dir is not created).
+/// Every other failure — lock not acquired, ledger unreadable / unparseable /
+/// not writable — is `Undetermined`: the caller must report that the leases
+/// were NOT refreshed, never "refreshed 0", because a lease that silently fails
+/// to refresh lapses under a live holder (the double dispatch this closes).
+pub(crate) fn refresh_leases(
+    identity: &str,
+    session_id: &str,
+    override_dir: Option<&Path>,
+) -> Determination<usize> {
+    let dir = claims_dir(override_dir);
+    let path = ledger_path(&dir, identity);
+    match std::fs::symlink_metadata(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Determination::known(0),
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "could not stat the project-wide claim ledger {} ({e}); this session's claim \
+                 leases were NOT refreshed",
+                path.display()
+            ))
+        }
+        Ok(_) => {}
+    }
+    let _guard = match acquire_ledger_lock(&ledger_lock_path(&dir, identity)) {
+        Determination::Known(g) => g,
+        blocked @ Determination::Undetermined(_) => return blocked.map(|_| 0),
+    };
+    let mut ledger = match read_ledger(&path) {
+        Determination::Known(l) => l,
+        blocked @ Determination::Undetermined(_) => return blocked.map(|_| 0),
+    };
+    let now = now_unix();
+    let mut refreshed = 0usize;
+    for e in ledger.entries.iter_mut() {
+        if e.session_id.as_deref() == Some(session_id) && is_live(e, now) {
+            e.heartbeat_at = Some(now);
+            refreshed += 1;
+        }
+    }
+    if refreshed == 0 {
+        return Determination::known(0);
+    }
+    match write_ledger(&path, &ledger) {
+        Ok(()) => Determination::known(refreshed),
+        Err(why) => Determination::undetermined(format!(
+            "{why}; this session's claim leases were NOT refreshed"
+        )),
+    }
 }
 
 /// Test-only: backdate every entry of `identity`'s ledger to `claimed_at`, so
@@ -501,7 +614,7 @@ mod tests {
         std::fs::create_dir_all(&claims).unwrap();
         std::fs::write(ledger_path(&claims, "/proj"), "{ not json").unwrap();
 
-        let out = claim_next(&store_path, None, None, "/proj", Some(&claims)).unwrap();
+        let out = claim_next(&store_path, None, None, "/proj", None, Some(&claims)).unwrap();
         match out.require() {
             Required::Determined(t) => panic!("expected a refusal, got {t:?}"),
             Required::Blocked(why) => assert!(
@@ -520,7 +633,7 @@ mod tests {
         let store_path = store_with_one_task(&dir);
         let claims = dir.join("claims");
 
-        let out = claim_next(&store_path, None, None, "/proj", Some(&claims)).unwrap();
+        let out = claim_next(&store_path, None, None, "/proj", None, Some(&claims)).unwrap();
         let task = match out.require() {
             Required::Determined(t) => t.expect("a pending task must be claimed"),
             Required::Blocked(v) => panic!("unexpected refusal: {v:?}"),
@@ -552,7 +665,7 @@ mod tests {
         std::fs::copy(&a, &b).unwrap();
         let claims = dir.join("claims");
 
-        let first = match claim_next(&a, None, None, "/proj", Some(&claims))
+        let first = match claim_next(&a, None, None, "/proj", None, Some(&claims))
             .unwrap()
             .require()
         {
@@ -560,7 +673,7 @@ mod tests {
             Required::Blocked(v) => panic!("unexpected refusal: {v:?}"),
         };
 
-        let second = match claim_next(&b, None, None, "/proj", Some(&claims))
+        let second = match claim_next(&b, None, None, "/proj", None, Some(&claims))
             .unwrap()
             .require()
         {
@@ -595,11 +708,13 @@ mod tests {
                 checkout: "/elsewhere".to_string(),
                 store: "/elsewhere/.backlog/tasks.toml".to_string(),
                 pid: 1,
+                session_id: None,
+                heartbeat_at: None,
             }],
         };
         write_ledger(&ledger_path(&claims, "/proj"), &stale).unwrap();
 
-        match claim_next(&store_path, None, None, "/proj", Some(&claims))
+        match claim_next(&store_path, None, None, "/proj", None, Some(&claims))
             .unwrap()
             .require()
         {
@@ -623,7 +738,7 @@ mod tests {
         let held = ledger_lock_path(&claims, "/proj");
         std::fs::write(&held, "").unwrap();
 
-        let out = claim_next(&store_path, None, None, "/proj", Some(&claims)).unwrap();
+        let out = claim_next(&store_path, None, None, "/proj", None, Some(&claims)).unwrap();
         match out.require() {
             Required::Determined(t) => panic!("expected a refusal, got {t:?}"),
             Required::Blocked(why) => assert!(

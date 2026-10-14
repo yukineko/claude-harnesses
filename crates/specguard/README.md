@@ -129,12 +129,25 @@ ensuring a fix is actually committed before the drift is acknowledged. Use
 new commit (e.g. a rebase or cherry-pick that landed before the sentinel was raised).
 
 **`testaudit` — detect tests that are implemented but not run**: `specguard testaudit`
-scans all `.rs` files and reports: (a) `#[ignore]`-annotated tests, (b) tests inside
-`#[cfg(…)]` blocks that are never compiled, (c) `.rs` files containing `#[test]`
-functions that are not `mod`-declared by any parent (so `cargo test` never picks them
-up), and (d) integration-test files under `tests/` that are not included by the
-workspace. Exit 0 means clean; exit 7 means findings were found. Add `--json` for
-machine-readable output.
+walks every `.rs` file under the repo root (skipping `target/` and hidden dirs) and
+reports: (a) `#[ignore]`-annotated tests, (b) `#[test]` fns inside a `#[cfg(not(test))]`
+block or carrying a target-platform cfg (`target_os` / `target_arch` …) — single-level
+pattern matching only, nested cfg expressions are not analysed, (c) any sibling `.rs`
+file in a directory with a `lib.rs` / `main.rs` / `mod.rs` whose stem is not
+`mod`-declared by that parent (regardless of whether it contains tests), and (d) every
+`.rs` file with a `tests` path component, flagged as an `integration_test` candidate
+(there is no check of whether the workspace actually runs it). Exit 0 means clean;
+exit 7 means findings were found; exit 8 means a directory or `.rs` file exists but
+could not be read, so the scan is incomplete and fails closed instead of reporting
+clean. Add `--json` for machine-readable output.
+
+**`ack --verdict`**: by default `ack` derives the overwatch disposition of the covered
+findings from the fix-commit guard; `--verdict confirmed|dismissed|false-positive`
+states it explicitly (`resolved` is rejected — it is the automated verdict used by
+`reconcile-findings`). If the sentinel is unreadable or HEAD cannot be resolved, `ack`
+refuses with exit 6. If the disposition cannot be recorded (overwatch store unwritable
+/ lock contended), the sentinel is left raised and `ack` exits 9; `--force` downgrades
+that to a warning.
 
 ### Slash commands (plugin)
 
@@ -160,9 +173,18 @@ specguard ingest [--from <file>]   # feed pre-collected shard outputs (JSON/stdi
                                    #   parse→report→sentinel (does NOT spawn an agent)
 specguard brief "<task>"           # read-only pre-task spec briefing (runs the agent)
 specguard brief "<task>" --prompt  # render the briefing prompt only (used by the plugin)
+specguard brief "<task>" --json    # deterministic canon-coverage verdict only, no agent:
+#   covered | not-covered | undetermined (exit 10 for undetermined; conflicts with --prompt)
+specguard audit [--json] [--filter <q>]  # map-driven correctness audit: structural findings
+#   (undocumented / dangling-reference / untested) + per-entry shards (--json = envelope for ingest).
+#   Always exit 0 (not a gate); an absent map reads as empty, an unparseable map is exit 2.
+#   Structural findings are also recorded (fail-soft) as overwatch violations / review findings.
+specguard reconcile-findings [--json]  # close STRUCTURAL review findings the detection no longer
+#   reports (verdict `resolved`); never closes shard-audit kinds. exit 0, or 3 if anything undetermined
 specguard pending                  # print the active fix-offer if a sentinel is pending (SessionStart hook)
 specguard ack                      # clear a handled sentinel (requires a fix commit since the sentinel was raised)
 specguard ack --force              # clear the sentinel unconditionally (skips the fix-commit check)
+specguard ack --verdict <v>        # record the disposition explicitly (confirmed|dismissed|false-positive)
 specguard testaudit                # scan for tests implemented but not being run (exit 7 if findings)
 specguard testaudit --json         # same, but emit machine-readable JSON ({findings:[{kind,file,name,reason}]})
 specguard decide "<title>"         # scaffold a decision record (ADR)
@@ -186,16 +208,30 @@ specguard map link <test> <key>    # relate a test file to an entry explicitly (
 # touched entry records reviewed_reason + reviewed_at {commit = HEAD, date}. A blank or missing reason
 # is rejected and the store is left untouched.
 specguard map prune                # drop entries matching [map].exclude (non-spec-bearing paths)
-specguard map gate-check --base <rev>  # gate-crate entries changed since <rev> need a spec doc:
+specguard map search "<query>" [--k N] [--json]  # search the symbol + full-text indexes and
+#   report which map entries own the hit files (k default 10). An index that cannot answer is
+#   exit 10, never "0 hits". NOTE: an absent OR unreadable/corrupt map is read as empty here, so
+#   hits then show no owning entry — an empty `entries` does not by itself prove "unmapped".
+specguard map callers <symbol> [--callees]  # lexical call graph (who calls / what it calls); exit 10 if undetermined
+specguard map enrich               # fill each entry's symbols + called_by from the indexes (not saved on exit 10)
+specguard map gate-check --base <rev> [--head <rev>]  # gate-crate entries changed in <rev>..<head> (head default HEAD) need a spec doc:
 # a map spec_doc, a [[spec]] path/doc/reason binding in the TRACKED .specguard/spec-docs.toml
 # (doc = an existing, non-empty docs/specs/**/*.md), or a reasoned [[ack]] in the TRACKED
 # .specguard/spec-doc-acks.toml. exit 0 ok, 1 missing (printed, with any rejected binding),
-# 2 undetermined (bad map/ack/spec file, unreadable doc, bad rev, git failure, absent map, or a
-# changed gate file no entry references). The map is a gitignored machine-local cache, so the
-# pre-push hook builds a fresh one (`map build --baseline <base>`) and only the tracked files count.
-specguard --baseline HEAD~5 run    # override the baseline
+# 2 undetermined (bad map/ack/spec file, unreadable doc, bad rev, git failure, absent map while a
+# gate path changed, or a changed gate file no entry references). The ack/binding/doc files are read
+# from the working tree; the map is a gitignored machine-local cache, so the pre-push hook builds a
+# fresh one (`map build --baseline <base>`) in a checkout of the pushed commit, and only the
+# committed files count.
+specguard --baseline HEAD~5 run    # override the baseline (also SPECGUARD_BASELINE_REF)
+specguard --date 2026-01-31 run    # override the run date (also SPECGUARD_NOW, strict YYYY-MM-DD)
 specguard --config examples/aegis.toml run
+specguard --protects               # print what this gate protects, from what, on what grounds
 ```
+
+`SPECGUARD_RELEVANT_MAP=1` (`1`/`true`/`yes`/`on`, default off) opts `run` into prepending a
+bounded relevant-file map to area shards and re-dispatching (once) any area shard that signals
+insufficient context.
 
 ### The spec-map store + `/specguard:drift-map` (the write-side complement)
 
@@ -267,7 +303,7 @@ actually exercise the spec's behaviors).
   language, resolved to `specguard audit --filter <query>` (e.g. `drift-map`, `crates/specguard`, `/health`,
   or **`e2e`** → entries whose `test_files` are under `tests/e2e/...`). Empty = whole map. If the map is
   stale/unmapped for the query, it is rebuilt (`specguard map sync`/`build`) before auditing.
-- **Read-only + handoff**: the audit writes nothing (findings → report/sentinel, HOTL). Remediation such as
+- **Read-only + handoff**: the audit never edits spec, implementation or tests (findings → report/sentinel, HOTL; structural findings are also recorded in overwatch). Remediation such as
   **adding tests is NOT done by spec-audit itself** — it enqueues a `backlog add` task or hands off to
   `/condukt` / `/flow` for the executor to implement (source→executor separation).
 
@@ -278,10 +314,20 @@ actually exercise the spec's behaviors).
 | `<report_dir>/<date>.md` | the report |
 | `<report_dir>/.last-ref` | the last audited HEAD (next run's change-triggered baseline) |
 | `<sentinel>` | only when `needs_user=yes` (date / report / summary) |
+| `<report_dir>/.shard-fingerprints` | per-shard content fingerprint of the last **clean** audit (see below) |
+| `[map].path` (default `.specguard/spec-map.toml`) | the spec-map store (`specguard map …`) |
 
 The baseline **advances in lockstep with ack**: `.last-ref` moves to HEAD only on
 a clean run, and is held while findings remain (so unfixed drift can't fall out
 of the next run's diff and go undetected).
+
+**Shard memoization (`run` only)**: a shard whose input files (its canon + matched
+files) are byte-identical to the last run in which that shard came back clean is
+**skipped without an agent call** and synthesized as a clean result (`cached: N
+shards skipped` is printed). A shard with findings has its fingerprint dropped, so
+it is re-audited every run until it goes clean. The fingerprint covers only those
+input files — a change elsewhere (e.g. the prompt template or the config) does not by
+itself invalidate it; delete `.shard-fingerprints` to force a full re-audit.
 
 ---
 
@@ -293,9 +339,12 @@ of the next run's diff and go undetected).
 - `[agent]` … `command` + `args`. Defaults to `claude --print` (with a read-only
   allowlist). Swappable for any agent CLI (reads a prompt on stdin, writes the
   report to stdout)
-- `[scope]` … `baseline_ref` / `fallback_ref` (if neither resolves, all tracked
-  files are audited)
-- `[output]` … `report_dir` / `sentinel`
+- `[scope]` … `baseline_ref` / `fallback_ref` (default `HEAD~20`; if neither
+  resolves, all tracked files are audited) / `whole_tree_fallback_max_files`
+  (default `0` = no budget; a positive value makes that whole-tree fallback an
+  error when the tree is larger)
+- `[output]` … `report_dir` (default `reports/spec-audit`) / `sentinel` (default
+  `.specguard-pending`)
 - `[prompt]` … `template` (embedded default if omitted) / `require_ratification`
   (the ratification gate) / `graded` + `graded_threshold` (graded triage: default
   OFF keeps the classic binary gate; when ON, a changed template whose
@@ -306,15 +355,24 @@ of the next run's diff and go undetected).
   permit/forbid, human/auto all collapse to the same bucket as their synonyms)
   to detect meaning inversion, so only a genuine cross-bucket polarity flip
   forces `Novel` even when the lexical similarity stays high — that inversion
-  always escalates to a human regardless of the threshold)
+  always escalates to a human regardless of the threshold; with `graded = true`
+  the threshold must be positive) / `max_shard_chars` (default `0` = off; caps an
+  area shard's changed-file list with an explicit "N files omitted" note)
 - `[[area]]` (repeatable) … `name` / `globs` / `canon`. **In-scope when a change
   matches `globs`**
-- `[[invariant]]` (repeatable) … `name` / `description` / `canon`. **Checked
-  every run**
+- `[[invariant]]` (repeatable) … `name` / `description` / `canon` / `always`.
+  **Checked every run** by default (`always = true`); `always = false` makes it
+  diff-scoped (included only when the diff touches one of its `canon` paths)
 - `[verify]` … verification gates (default OFF). `enabled` = refutation (drop
   false positives) / `completeness` = completeness critique (surface false
   negatives). **Enabling both is recommended.** See [DESIGN-VERIFY.md](DESIGN-VERIFY.md)
-- `[decisions]` … enable the decision-record (ADR) freshness/staleness check (D3)
+- `[decisions]` … `dir` (default `decisions`). The decision-record (ADR)
+  freshness/staleness check (D3) runs whenever this dir has any `*.md`; set
+  `dir = ""` to disable it
+- `[map]` … the spec-map store: `path` (default `.specguard/spec-map.toml`) /
+  `spec_doc_dir` (default `docs/specs`) / `exclude` (globs of non-spec-bearing
+  paths) / `review_max_commits` (window for `map review-status`; absent or `0`
+  → 50)
 
 `examples/aegis.toml` is a config reproducing the original AEGIS implementation.
 
@@ -329,7 +387,7 @@ The canon is the audit prompt (`templates/audit-prompt.md` /
   themselves.
 - **D3 decision-log freshness/staleness**: pin the *reason* for a spec change to
   a canon commit and check whether the decision still holds (enable via
-  `[decisions]`).
+  `[decisions].dir`; on by default when that dir contains `*.md`).
 
 ---
 
@@ -345,9 +403,15 @@ The canon is the audit prompt (`templates/audit-prompt.md` /
 | 6 | `ack` found no fix commit since the sentinel was raised; pass `--force` to override |
 | 7 | `testaudit` found tests that are implemented but not being run |
 | 8 | `testaudit` could not determine — an unreadable dir/`.rs` made the scan incomplete; fails closed rather than report GREEN (unknown → RED) |
+| 9 | `ack` verified the fix but could not record the findings' disposition (overwatch store unwritable / lock contended); the sentinel stays raised. `--force` clears anyway |
+| 10 | `brief --json` verdict is `undetermined`, or a `map search` / `map callers` / `map enrich` index query could not be answered |
 
-The source of truth is the `EXIT_*` constants in `src/main.rs` (this is the only
-doc copy of the table). Agent exit codes are never propagated raw — they always
+Some subcommands use their own narrower codes: `map gate-check` (0 ok / 1 missing
+spec / 2 undetermined), `map review-status` (0 fresh / 1 stale-review / 2
+undetermined), and `reconcile-findings` (0 / 3 = something stayed undetermined).
+
+The source of truth is the `EXIT_*` constants in `src/main.rs` (this file and
+`README.ja.md` carry the only doc copies of the table). Agent exit codes are never propagated raw — they always
 collapse to `4`, with each shard's real code on stderr.
 
 ---

@@ -46,11 +46,13 @@ deepwiki stamp PAGES…    # HEAD と書き出したページを記録（/deepwi
 deepwiki init            # .deepwiki/ を作成
 ```
 
+全サブコマンドが `--root <dir>`（既定は cwd）を受け付ける。
+
 ### 構成
 
 - `commands/deepwiki.md` — `/deepwiki` のオーケストレーションコマンド。
 - `agents/deepwiki-writer.md` — ページを書くサブエージェント。
-- `bin/deepwiki` + `bin/deepwiki-<os>-<arch>` — バンドルされたスキャナ。
+- `bin/deepwiki`（追跡されるランチャー）+ `bin/deepwiki-<os>-<arch>`（ローカルビルド、git 管理外）— スキャナ。
 - `.deepwiki/`（あなたのリポジトリ側）— 生成された wiki と、鮮度スタンプである `_meta.toml`。
 
-コミット済みの `bin/deepwiki-*` バイナリがプラグインとして配布されるため、エンドユーザーは cargo も API キーも要らない。挙動を変えたときは `make bins` で再ビルドして再コミットする。
+プラットフォーム別の `bin/deepwiki-<os>-<arch>` は**コミットされない**（`.gitignore` が `crates/*/bin/*-<os>-<arch>` を無視する）。ローカル配備は `scripts/rollout-plugins.sh` がソースからビルドする（`cargo build --release -p deepwiki` / `cargo test -p deepwiki`）。crate の `Makefile`（`make bins`）は crate ローカルの `target/release/` からコピーするが、ワークスペースビルドはそこに出力しない。

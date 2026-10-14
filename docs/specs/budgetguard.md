@@ -32,9 +32,12 @@ gate 判定・config 層・ledger ロック・hook 配線という薄い周辺�
   block 閾値到達なら warn を出さずブロックする。閾値判定は inclusive（`>=`。`*_is_inclusive_at_threshold`
   テスト）。session と daily は独立に発火する（`daily_block_triggers_independently_of_session`）。
 - **ledger の lost-update 防止** — 日次台帳は全 Stop が更新する単一共有ファイル。`evaluate` は
-  load→record→save を `lock::LedgerLock`（`O_EXCL` の `ledger.lock`、`STALE_AFTER`30s で stale steal、
-  `ACQUIRE_TIMEOUT`3s、`BACKOFF`25ms）で直列化する。ロックは best-effort — 取れなくても turn を止めず
-  続行し（`held=false`）、`Drop` で自分の持つ file のみ削除する。
+  load→record→save を `lock::LedgerLock`（`ledger.lock` に対する kernel advisory lock〈`File::try_lock`〉、
+  `ACQUIRE_TIMEOUT`3s、`BACKOFF`25ms）で直列化する。解放（`Drop` 含む）は file を閉じるだけで path を
+  unlink しない。死んだ holder の lock は kernel が解放するので stale steal は無い（旧 `O_EXCL` +
+  30s mtime steal + drop 時 unlink は 2 holder を許した。backlog 2ae3fa29）。取れなかった
+  （timeout・IO エラー）ときは `held=false` を返し、呼び出し側は read-modify-write を行わず当日 total を
+  判定不能として扱う（続行しない）。
 - **corrupt ledger を破壊しない** — `Ledger::load_checked` が parse 失敗を返したら、上書きせず（当日累計を
   消して budget を fail-open させないため）ファイルを温存し、当日 total はこのセッション自身のコストに
   fall back する（保守的＝過小報告しない）。
@@ -77,8 +80,9 @@ Fable/Mythos 10/50・Opus 5/25・Sonnet 3/15・Haiku 1/5（gauge と同一）。
 - **`gate`** — 中核判定。`evaluate`（transcript→cost 見積 → lock 下で ledger 更新 → `verdict`）、
   `verdict`（純: block→warn の優先ロジック）、`budget_pressure`（純: 下流ルーティング信号）、
   `GateResult`/`Verdict`、`emit_and_exit`（`!` 返し、常に exit 0）。コスト集計と ledger は harness-core に委譲。
-- **`lock`** — `LedgerLock`。ledger の read-modify-write を並行セッション間で直列化する O_EXCL 製の
-  クロスプラットフォーム advisory lock。best-effort（timeout で unheld 続行）・stale steal・Drop 解放。
+- **`lock`** — `LedgerLock`。ledger の read-modify-write を並行セッション間で直列化する
+  `File::try_lock` 製のクロスプラットフォーム advisory lock。timeout / IO エラーは unheld を報告
+  （呼び出し側は day total を undetermined にする）・stale steal なし・Drop は unlink せず解放。
   外部 crate 非依存。
 - **`install`** — `~/.claude/settings.json` への Stop hook マージ/除去（`harness_core::install::push_group`
   /`remove_hooks_from_settings`/`write_settings`）。EVENT=`Stop`, SUB=`gate`, marker=`budgetguard`。

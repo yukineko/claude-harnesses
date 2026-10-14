@@ -17,25 +17,35 @@ The `backlog` binary owns the queue and its exclusive run-lock:
 
 | Subcommand | What it does |
 |---|---|
-| `add` | Append a task (`--title`, `--project`, `--tag`, `--priority p0/p1/p2`, `--notes`, `--weight`, `--force`) |
-| `list` | List the store's tasks, filterable by `--tag` / `--status` (vocabulary is `pending`/`done`/`failed` — not `open`, that's `hypothesis`'s vocabulary). For a repo store `--project` is an assertion, not a filter — see **Scope** |
-| `next` | Print the next highest-priority pending task as JSON |
-| `done <id>` | Mark a task done |
+| `add` | Append a task (`--title`, `--project`, `--tag`, `--priority p0/p1/p2`, `--notes`, `--weight`, `--force`, `--repro-test`). With `--repro-test` the test is run at HEAD first: a behavioural failure lands the task `pending`; anything else lands it `unconfirmed` (outside the workable queue). The add itself always succeeds |
+| `confirm <id> --repro-test CMD` | Re-run a repro test for an `unconfirmed` task; promotes it to `pending` only on `reproduced`, otherwise records the attempt and exits non-zero |
+| `list` | List the store's tasks, filterable by `--tag` / `--status` (`pending` / `done` / `failed` / `cancelled` / `claimed` — not `open`, that's `hypothesis`'s vocabulary; `claimed` is derived) and `--json`. For a repo store `--project` is an assertion, not a filter — see **Scope** |
+| `next` | Print the next highest-priority pending task as JSON (`--claim` reserves it — see below) |
+| `done <id>` | Mark a task done **with evidence**: exactly one of `--test CMD --red-rev REV` (`--reason fixed\|already-fixed\|obsolete`), `--doc-only COMMIT`, or `--duplicate-of ID`. A bare `done <id>` is refused |
 | `fail <id>` | Mark a task failed (`--reason`); defers re-run by 2 days |
+| `cancel <id> --reason R` | Close as "decided not to do it": terminal, never requeued, recorded as a `discard` closure, no test or ruling needed |
+| `ruling {request,approve,withdraw,list}` | Human rulings for closes no executed test can justify. `request` puts a task in `needs-ruling`; `approve` requires an interactive TTY and the id typed back |
+| `audit-closures` | Read-only classification of every terminal row's closure evidence (`--json`); never writes the store |
+| `overlap` | Group queued tasks by declared `touched_files` scope (advisory; undeclared scopes listed separately) |
 | `edit <id>` | Update a task's title / tags / notes / status |
+| `sync` | Reconcile the store against its GitHub issues (one-way, local wins). Report-only unless `--apply`; `--only both\|create\|close\|body`, `--limit` |
 | `session-start` | SessionStart hook: inject pending tasks as context |
-| `install` / `uninstall` | Wire/remove the SessionStart hook in `~/.claude/settings.json` |
-| `lock {acquire,release,status}` | Manage the `~/.backlog/run.lock` exclusive lock |
+| `install` / `uninstall` | Wire/remove the SessionStart hook in `~/.claude/settings.json` (standalone use) |
+| `merge-driver` | git merge driver for the task store — see below |
+| `lock {acquire,release,status,heartbeat,probe}` | Manage the per-project exclusive lock `~/.backlog/locks/<project>.lock`. `probe` judges the holder's progress (git HEAD + transcript growth); only a `stalled` holder may be reaped by `acquire` |
+| `driver {register,heartbeat,unregister,status}` | Announce/observe a project's queue drivers WITHOUT excluding them; `heartbeat` also refreshes this session's `next --claim` leases |
 
-The lock is how concurrent sessions serialize: a `/flow` driver acquires it
-before draining the queue, and other sessions back off when `lock status`
-reports an active holder.
+The lock is how concurrent sessions serialize when they want exclusion: a
+holder takes the project's lock, and other sessions back off when `lock status`
+reports an active holder. `/flow` itself no longer locks the whole queue (several
+sessions may drive one project); it uses `driver` registration plus per-task
+`next --claim` instead.
 
 The bundled `/backlog` skill is a thin entry point over queue/state
-operations (`list` / `next` / `done` / `fail` / `lock`), passed a subcommand as
+operations (`list` / `next` / `done` / `fail` / `driver` / `lock`), passed a subcommand as
 its argument. To drain the whole queue automatically, use **`/flow`** instead —
-it's the superset driver (lock acquire → pick item → `/condukt` → done/fail →
-lock release), also wired for the compass freshness gate, budgetguard, and
+it's the superset driver (driver register → `next --claim` → `/condukt` →
+done/fail → unregister), also wired for the compass freshness gate, budgetguard, and
 fugu-router model selection.
 
 ## Why it exists
@@ -45,15 +55,17 @@ goes with it, and once you start work in another repo the items you parked in a
 different project drop out of view entirely. Leaning on chat history or memory,
 pending tasks quietly get lost. backlog closes that failure mode — once an item
 is queued it survives across sessions and repos, the SessionStart hook re-injects
-pending work as context wherever you open next, and the exclusive run-lock keeps
-concurrent sessions from draining the queue at the same time and colliding.
+pending work as context wherever you open next, and `next --claim` keeps
+concurrent sessions from being handed the same task.
 
 ## Install (plugin)
 
 Installed via the plugin marketplace, the bundled `/backlog` skill is available
-immediately. The SessionStart hook is registered by running `backlog install`,
-which merges a `SessionStart` group into `~/.claude/settings.json` (idempotent,
-ownership-marked) so pending work shows up at every session open.
+immediately, and the plugin's `hooks/hooks.json` registers the SessionStart hook
+(`backlog session-start`, 10s timeout) so pending work shows up at every session
+open. `backlog install` is for standalone (cargo) use: it merges an equivalent
+`SessionStart` group into `~/.claude/settings.json` (idempotent,
+ownership-marked).
 
 ## Store writes need a linked worktree
 
@@ -76,7 +88,7 @@ backlog done <id> --doc-only <commit>   # or: a doc-only ancestor commit
 backlog done <id> --duplicate-of <id>   # or: a duplicate
 backlog fail <id> --reason "blocked"   # defer it 2 days (it comes back as pending)
 backlog cancel <id> --reason "won't do"   # discard it (terminal, never requeued; recorded as a `discard` closure, no test needed)
-backlog lock status         # who holds the run-lock
+backlog lock status         # who holds the project's lock
 backlog install             # merge the SessionStart hook into settings.json
 backlog uninstall           # remove it again
 ```
@@ -245,9 +257,20 @@ machine-global ledger keyed by project IDENTITY, not by store location:
   main working tree, so every checkout of one project shares one ledger)
 - lock order, never inverted: `~/.backlog/claims/<slug>.lock` (project-wide),
   then `<store>.tasks.toml.lock` (this checkout)
-- an entry (a **lease**) stops excluding after 1h (`CLAIM_STALE_SECS`), so a
-  dead claimant cannot strand a task everywhere; entries are kept for 7 days
-  for a human reading the file
+- an entry (a **lease**) stops excluding once its holder has not been seen
+  alive for 1h (`CLAIM_STALE_SECS`), so a dead claimant cannot strand a task
+  everywhere; entries are kept for 7 days for a human reading the file
+- "seen alive" = the newer of the claim time and the holder's last lease
+  heartbeat. `next --claim` records the claiming session
+  (`CLAUDE_CODE_SESSION_ID`), and `backlog driver heartbeat --session-id S
+  --project P` also refreshes S's still-live leases in P's ledger, so a driver
+  heartbeating at least hourly keeps its claims however long the task takes
+  (backlog 486e83ca). An already-expired lease is not revived. A lease with no
+  session (an older binary's entry, or a claim outside a session) ages by claim
+  time alone. If the leases cannot be refreshed (ledger lock/read/parse/write
+  failure, unresolvable identity) the heartbeat exits non-zero saying so; a
+  malformed heartbeat field makes the ledger unparseable, which refuses claims
+  rather than treating the holder as dead
 
 Every undetermined condition on this path **refuses the claim** and exits
 non-zero with the reason on stderr — never `no pending tasks` on exit 0, which
@@ -285,7 +308,8 @@ yet is still not handed out until the lease ages out.
   `pending`; only a live lease excludes it. It is rewritten as `pending` the
   next time an unrelated command saves the store.
 - `done`/`fail`/`edit --status pending` do not release a lease; a leased
-  non-terminal task stays excluded until the lease ages out (1h).
+  non-terminal task stays excluded until the lease ages out (1h after the
+  holder was last seen alive).
 - `list`, plain `next` and `next --claim` locate the ledger the same way (the
   project identity, see above); outside any repo that identity is the
   canonical cwd. If the identity cannot be resolved (e.g. a dangling worktree
@@ -301,7 +325,8 @@ yet is still not handed out until the lease ages out.
 cargo test
 ```
 
-The committed `bin/backlog-*` binaries are what the plugin ships, so end users
-need neither cargo nor an API key. Rebuild and recommit them (the workspace
-builds with `cargo build --workspace --release`) when you change behavior the
-skill or hook relies on.
+Only the `bin/backlog` launcher is tracked in git. It execs the per-platform
+`backlog-<os>-<arch>` binary placed beside it in the deployed plugin, and exits
+non-zero (not 0 with empty output) when no build exists for the host. Changes
+reach the running harness only through `scripts/rollout-plugins.sh` (see
+`docs/repo-operations.md`), so end users need neither cargo nor an API key.

@@ -1,17 +1,20 @@
 # benchkit
 
 harness モノレポ用の**外部ベンチマークランナー**。対象は **SWE-bench Verified**。
-本スライスはスケルトン: 型付き instance モデル、決定論的な fixture ベース JSONL
-ローダー、そして gate 付き `download` サブコマンド。scorer / dashboard / harness
-層は後続タスクで追加する。
+型付き instance モデル、決定論的な fixture ベース JSONL ローダー、gate 付き
+`download` サブコマンド、純粋な解決判定 scorer (`scorer`)、単一 instance
+ハーネス (`run-instance`)、追記専用の `runs.jsonl` ダッシュボード・ライブラリ
+(`dashboard`。サブコマンドとしては公開していない)、事後サンプリング較正ループ
+(`audit-sample`) を備える。`run-instance` の背後のパッチ生成器はまだ空の候補を
+返すスタブである。
 
 ## なぜ
 
 condukt / evalkit は *自前の* invariant に対してハーネスを測る。benchkit は
 *業界標準の外部ベンチマーク* SWE-bench Verified に対して測るので、他エージェントが
 公表する数値と比較できる。ローディング経路は純粋・決定論的 (ネットワーク無し・
-時刻無し) でテストは hermetic。ネットワークに触れるのは `download` のみ、しかも
-明示的に呼んだときだけ。
+時刻無し) でテストは hermetic。ネットワーク/shell に触れるのは `download` と
+`run-instance --real` のみ、しかも明示的に呼んだときだけ。
 
 ## Instance モデル
 
@@ -47,7 +50,24 @@ benchkit load crates/benchkit/tests/fixtures/instances.jsonl
 benchkit download                 # → .benchkit-cache/swe-bench-verified.jsonl
 benchkit download --dest data/verified.jsonl
 benchkit download --force         # キャッシュがあっても再取得
+
+# 1 instance を setup -> generate -> test -> score で回す。
+# --real 無しは dry run (スタブ生成器・結果なし -> unresolved)。
+benchkit run-instance <instances.jsonl> <instance_id>
+benchkit run-instance <instances.jsonl> <instance_id> --real   # git clone/apply + pytest
+
+# auto-gate だけで通過した変更の事後サンプリング較正:
+benchkit audit-sample <changes.jsonl> [--audits <verdicts.jsonl> | --from-violations] \
+    [--fraction 0.1] [--seed 0] [--json]
 ```
+
+git / pytest へ shell out するのは `run-instance --real` だけで、テストはこの経路を
+構築しない。採点は fail-closed: 結果マップに無いテスト ID は「通っていない」と数える。
+
+`audit-sample` は auto-gate だけで通過した変更から seed 固定の決定論的サンプルを引き、
+判定 (`--audits` のモデル化 JSONL 入力) または実際の overwatch violation ストリーム
+(`--from-violations`) を与えると、見逃しを新 invariant 候補と閾値調整の批准キュー
+(自動適用はしない) へ振り分ける。
 
 `download` は **gate 付き**: ネットワーク経路は明示呼び出し時のみ到達し、
 キャッシュ存在時は no-op (冪等)。`cargo test` 中には決して走らない。beacon の
@@ -67,4 +87,5 @@ benchkit download --force         # キャッシュがあっても再取得
 ## 決定論
 
 ローダーは純粋: 同じファイル → 同じ `Vec<Instance>` (ファイル順)、不正行は
-`path:line` 付きの明確なエラー。`download` 以外はネットワーク/環境 I/O をしない。
+`path:line` 付きの明確なエラー。`download` と `run-instance --real` 以外は
+ネットワーク/shell I/O をしない。

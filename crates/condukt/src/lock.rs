@@ -27,7 +27,7 @@
 use anyhow::{bail, Result};
 
 use crate::config::Config;
-use crate::store::{project_key, repo_root};
+use crate::store::project_key;
 use harness_core::verdict::{Determination, Required};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -86,7 +86,7 @@ pub const REPO_PRIMARY_LOCK_KEY: &str = "__repo_primary__";
 /// of the repo containing `cwd`, so every linked worktree of that repo and the
 /// main tree itself address ONE lock file.
 ///
-/// Why not `repo_root` (which every run-state path still uses): `repo_root`
+/// Why not `repo_root`: `repo_root`
 /// stops at the first ancestor holding a `.git` ENTRY, and in a linked worktree
 /// `.git` is a FILE — so it returns the LINKED WORKTREE, giving each checkout
 /// its own project key and therefore its own `__repo_primary__.lock`. Two
@@ -96,10 +96,10 @@ pub const REPO_PRIMARY_LOCK_KEY: &str = "__repo_primary__";
 /// every session works in its own linked worktree, so that split is the normal
 /// case, not an edge one.
 ///
-/// Run state is deliberately NOT re-keyed here: it is per-run bookkeeping that
-/// already lives on disk under `repo_root`-derived keys, and moving it would
-/// orphan those files (backlog `43393ce2`). Same opt-in shape the claim
-/// registry took in `d83b0e8f`.
+/// Run state has since been re-keyed the same way (backlog `43393ce2`, see
+/// `state::run_dir`, which also keeps runs stored under the old per-checkout
+/// key readable in place). Same opt-in shape the claim registry took in
+/// `d83b0e8f`.
 ///
 /// `Undetermined` is a legitimate answer and is never collapsed into a path —
 /// see [`harness_core::projkey::main_worktree_root`] for the arms.
@@ -196,7 +196,13 @@ fn now_unix_nanos() -> u128 {
 /// [`harness_core::boundary::run`] keeps the spawn/signal failure as
 /// `Undetermined`; `map` carries the exit code (`0` == alive) only when the
 /// process actually ran.
-fn pid_alive(pid: u32) -> Determination<bool> {
+///
+/// `child_path` is an optional `PATH` for the spawned `kill` CHILD only.
+/// `None` (production, via [`RunLock::acquire_at`]) inherits this process's environment;
+/// `Some(p)` sets `PATH=p` on the child, which on Unix is also what the bare
+/// `kill` is resolved against. Exists so a test can interpose a fake `kill`
+/// without mutating the process-wide PATH (backlog 7c798579).
+fn pid_alive_with_env_path(pid: u32, child_path: Option<&std::ffi::OsStr>) -> Determination<bool> {
     #[cfg(target_os = "linux")]
     {
         if Path::new(&format!("/proc/{pid}")).exists() {
@@ -205,14 +211,21 @@ fn pid_alive(pid: u32) -> Determination<bool> {
     }
     let mut cmd = std::process::Command::new("kill");
     cmd.args(["-0", &pid.to_string()]);
+    if let Some(p) = child_path {
+        cmd.env("PATH", p);
+    }
     harness_core::boundary::run(&mut cmd).map(|out| out.code() == 0)
 }
 
-/// Lock file path for a run — sits beside the run's `<run-id>.json` state file,
-/// keyed the same way (sanitised run id, per project) so unrelated runs and
-/// unrelated projects never share a lock.
+/// Lock file path keyed by the CHECKOUT (`repo_root(cwd)`) and a sanitised
+/// key, so unrelated keys and unrelated checkouts never share a lock. Used only
+/// by [`RunLock::acquire_or_skip`], which is test-only since its one production
+/// caller (`repo_commit`'s per-index lock) was removed. It is NOT the run-state
+/// lock any more: that sits beside the run's state file in `state::run_dir`
+/// (see [`RunLock::acquire_run_state_or_skip`]).
+#[cfg(test)]
 fn lock_path(cfg: &Config, cwd: &Path, run_id: &str) -> PathBuf {
-    lock_path_in_project(cfg, &repo_root(cwd), run_id)
+    lock_path_in_project(cfg, &crate::store::repo_root(cwd), run_id)
 }
 
 /// Lock file path for a run under an ALREADY-RESOLVED project root.
@@ -266,32 +279,59 @@ impl RunLock {
     /// caller SKIP its read-modify-write instead of mutating unlocked, which
     /// under pathological contention is what lets two timed-out writers both
     /// proceed and double-write (last-writer-wins). Never panics.
-    /// Waits up to [`RunLock::DEADLINE`]. Live callers:
-    /// `state::with_run_locked`, `state::discard_experiment`, the `state set`
-    /// CLI arm, `claim::{claim_tasks, release_*, heartbeat, active_claims,
-    /// write_execution_state}`, and (via
-    /// [`acquire_repo_primary`]) every primary-repo mutator in `worktree`/`main`.
+    /// Waits up to [`RunLock::DEADLINE`]. Keyed by `repo_root(cwd)` — the
+    /// CHECKOUT. Its one production caller was `repo_commit::commit`, removed
+    /// together with `condukt repo commit`, so it is compiled for tests only. Run state is NOT locked through here; see
+    /// [`RunLock::acquire_run_state_or_skip`]. Primary-repo mutators in
+    /// `worktree`/`main` lock via [`acquire_repo_primary`].
+    #[cfg(test)]
     pub fn acquire_or_skip(cfg: &Config, cwd: &Path, run_id: &str) -> Option<Self> {
         Self::acquire_or_skip_at(lock_path(cfg, cwd, run_id), Self::DEADLINE)
+    }
+
+    /// The per-RUN state lock: `<run_dir>/<run>.lock`, beside the run's state
+    /// file in [`crate::state::run_dir`] (the canonical main-worktree-root dir,
+    /// or the legacy per-checkout dir a pre-`43393ce2` run still lives in). So
+    /// every checkout that read-modify-writes ONE run file contends ONE lock —
+    /// keying the lock by `repo_root(cwd)` like [`RunLock::acquire_or_skip`]
+    /// would give a linked worktree and the main tree two different locks for
+    /// the same shared file.
+    ///
+    /// Three answers: `Ok(Some)` held; `Ok(None)` contended/IO failure (the
+    /// caller hard-skips); `Err` the run's dir itself cannot be determined (no
+    /// fallback lock path is invented).
+    pub fn acquire_run_state_or_skip(
+        cfg: &Config,
+        cwd: &Path,
+        run_id: &str,
+    ) -> Result<Option<Self>> {
+        let dir = crate::state::run_dir(cfg, cwd, run_id)?;
+        let path = dir.join(format!(
+            "{}.lock",
+            harness_core::store::safe_session(run_id)
+        ));
+        Ok(Self::acquire_or_skip_at(path, Self::DEADLINE))
     }
 
     /// [`RunLock::acquire_or_skip`] against an ALREADY-RESOLVED project root
     /// instead of a `cwd`.
     ///
-    /// Two callers use this, both because the thing they guard is shared by
-    /// every checkout of a repo and so must be keyed by the MAIN worktree root:
+    /// Its callers all guard something shared by every checkout of a repo,
+    /// which must therefore be keyed by the MAIN worktree root:
     ///
     /// - the claim registry, for its reserved [`crate::claim::CLAIMS_LOCK_KEY`]
     ///   — every linked worktree read-modify-writes ONE `claims.json` and must
     ///   therefore contend ONE `__claims__.lock`;
     /// - [`acquire_repo_primary`], for [`REPO_PRIMARY_LOCK_KEY`] — every
     ///   checkout mutates ONE git index, ONE `.git/worktrees` admin dir and ONE
-    ///   default branch, so they must contend ONE `__repo_primary__.lock`.
+    ///   default branch, so they must contend ONE `__repo_primary__.lock`;
+    /// - the escalation registry (`__escalations__`) and the precedent store
+    ///   (`__precedents__`), whose single per-project file every checkout
+    ///   read-modify-writes since backlog `43393ce2`.
     ///
-    /// Run state is NOT keyed that way, so every run-state caller stays on
-    /// [`RunLock::acquire_or_skip`] and its `repo_root`-derived path is
-    /// unchanged. Same fallible contract: a failed acquisition is `None`, never
-    /// a usable guard.
+    /// Run state is keyed by the main worktree root too (backlog `43393ce2`),
+    /// but per RUN dir, through [`RunLock::acquire_run_state_or_skip`]. Same
+    /// fallible contract: a failed acquisition is `None`, never a usable guard.
     pub(crate) fn acquire_or_skip_in_project(
         cfg: &Config,
         project_root: &Path,
@@ -335,6 +375,18 @@ impl RunLock {
     /// reach a caller through a fallible wrapper that turns it into `None`/`Err`
     /// — the tests drive it directly against a self-contained temp path.
     fn acquire_at(path: PathBuf, deadline: Duration) -> Self {
+        Self::acquire_at_with_env_path(path, deadline, None)
+    }
+
+    /// [`RunLock::acquire_at`] with an optional `PATH` passed to the liveness
+    /// probe's `kill` child only (see [`pid_alive_with_env_path`]). `None` is
+    /// the production behaviour; the seam lets a test count `kill` spawns
+    /// without mutating the process-wide PATH (backlog 7c798579).
+    fn acquire_at_with_env_path(
+        path: PathBuf,
+        deadline: Duration,
+        kill_path: Option<&std::ffi::OsStr>,
+    ) -> Self {
         if let Some(parent) = path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 eprintln!(
@@ -410,7 +462,10 @@ impl RunLock {
                         // holder's lock — the exact fail-open this lock exists to
                         // close.
                         Some(existing)
-                            if matches!(pid_alive(existing.pid), Determination::Known(false)) =>
+                            if matches!(
+                                pid_alive_with_env_path(existing.pid, kill_path),
+                                Determination::Known(false)
+                            ) =>
                         {
                             let _ = std::fs::remove_file(&path);
                             continue;
@@ -957,7 +1012,7 @@ mod tests {
 #[cfg(test)]
 mod backlog_e9262d91 {
     //! backlog e9262d91: while waiting on a held lock, every 10ms poll calls
-    //! `pid_alive`, which (off Linux) spawns `kill -0 <pid>` — ~100 fork+exec
+    //! `pid_alive_with_env_path`, which (off Linux) spawns `kill -0 <pid>` — ~100 fork+exec
     //! per second per waiter, up to ~1000 per acquisition, self-amplifying
     //! under load. Both fixes the ticket proposes (short-circuit a holder pid
     //! equal to our own; or check liveness only every few polls) bound the
@@ -998,20 +1053,18 @@ mod backlog_e9262d91 {
         };
         std::fs::write(&lock, serde_json::to_string(&info).unwrap()).unwrap();
 
-        let _guard = crate::env_lock::PATH_ENV_LOCK
-            .write()
-            .unwrap_or_else(|e| e.into_inner());
-        let old_path = std::env::var_os("PATH");
+        // The counting `kill` goes first on the CHILD's PATH only; the
+        // process-wide PATH is never mutated (backlog 7c798579).
         let mut parts = vec![bin.clone()];
-        if let Some(p) = &old_path {
-            parts.extend(std::env::split_paths(p));
+        if let Some(p) = std::env::var_os("PATH") {
+            parts.extend(std::env::split_paths(&p));
         }
-        std::env::set_var("PATH", std::env::join_paths(parts).unwrap());
-        let got = RunLock::acquire_at(lock.clone(), Duration::from_secs(1));
-        match old_path {
-            Some(p) => std::env::set_var("PATH", p),
-            None => std::env::remove_var("PATH"),
-        }
+        let kill_path = std::env::join_paths(parts).unwrap();
+        let got = RunLock::acquire_at_with_env_path(
+            lock.clone(),
+            Duration::from_secs(1),
+            Some(&kill_path),
+        );
 
         assert!(
             !got.held(),

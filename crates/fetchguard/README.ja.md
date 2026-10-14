@@ -48,8 +48,11 @@ fetchguard 単体を「prompt-injection 防御は閉じている」と読んで�
 - stdin が空でないのに hook payload として parse できない場合も、
   tool_response は一度もスキャンされていないので沈黙せず
   `fetchguard::gate::unreadable_payload_warning` の警告を出す
-  （沈黙は「injection なし」と読まれる）。stdin が完全に空のときだけ沈黙する
+  （沈黙は「injection なし」と読まれる）。stdin が空（空白のみを含む）のときだけ沈黙する
   （tool 呼び出しが何も記述されていない）。
+- 残る穴: `read_stdin`・`HookInput::parse`・最後の `println!` は上記の barrier の外にあり、
+  そこで panic した場合は `harness_core::hook::run_hook` の外側の catch が stderr に記録して
+  **警告なしで exit 0** する（`src/main.rs` の module doc 参照）。
 
 一方、以下は **正当な clean**（警告なし）として明示的に扱う:
 

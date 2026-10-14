@@ -46,20 +46,35 @@ deterministic pure functions (no LLM, no network, no clock).
   `DiffOutcome::Stubbed` so a real implementation can be dropped in later without
   changing the tiering logic.
 
+- **`diff_strategy: "fuzzy_hash"`** — a tolerance-based structured-data
+  comparison. It computes a deterministic drift distance
+  `distance_permille = round(1000 × differing leaves / total leaves)` and treats
+  `distance_permille <= threshold_permille` as a **match**; above that it returns
+  `DiffOutcome::DriftedBeyondThreshold` (distance + differing JSON-pointer paths),
+  which is a **needs-human** verdict (exit `3`), not a fail. `threshold_permille`
+  is a config key (default `0`, i.e. any drift escalates). Example:
+  [`examples/tier-config-fuzzy.json`](examples/tier-config-fuzzy.json)
+  (`threshold_permille: 250`).
+
 - **non-core** flows: a lightweight **existence check** (à la specguard
   spec-audit — `--exists true|false`, default true) plus, when
   `sample_one_in > 0`, a deterministic **seeded low-frequency sampling** decision
   keyed by `(flow_id, --seed, --run-index)` (seedable, no unseeded randomness) —
-  same inputs always yield the same decision.
+  same inputs always yield the same decision. The sampling decision is only
+  **reported** (`present (sampled this run)` vs `present (not sampled this run)`);
+  the CLI runs no extra check for a sampled flow, and both are a pass. Only
+  `--exists false` fails a non-core flow.
 
 The CLI reports the core/non-core classification and the diff (match/mismatch)
 result, or the non-core existence/sampling decision, as a human report or with
 `--json`.
 
 - **exit codes**: `0` pass, `1` a real deviation (mismatch, or existence check
-  failed), `2` harness error (unreadable/unparseable input), `3`
-  **needs-human** — a core flow used an unimplemented diff strategy (currently
-  `screenshot`), so no automated verdict could be rendered. `3` is deliberately
+  failed), `2` harness error (unreadable/unparseable input, or a core flow
+  without both `--baseline` and `--snapshot`), `3` **needs-human** — a core flow
+  used an unimplemented diff strategy (currently `screenshot`) or its
+  `fuzzy_hash` drift exceeded `threshold_permille`, so no automated verdict could
+  be rendered. `3` is deliberately
   distinct from `1`: an unimplemented strategy is a missing capability, not a
   real regression, and must not silently gate every run red.
 
@@ -77,7 +92,9 @@ result, or the non-core existence/sampling decision, as a human report or with
   { "mode": "strict",
     "steps": [ { "tool": "Read" }, { "tool": "Edit", "optional": true } ] }
   ```
-  `optional` defaults to `false`.
+  `mode` is required (`strict` / `unordered` / `subsequence`); `optional`
+  defaults to `false`; `steps` may be omitted and then defaults to empty — note
+  that an empty spec in `subsequence` mode passes for **any** actual trajectory.
 - **actual** JSON: an array of tool-name strings, e.g. `["Read", "Edit"]`
   (pipe the output of `extract` straight in).
 
@@ -85,7 +102,9 @@ result, or the non-core existence/sampling decision, as a human report or with
 
 Streams a Claude Code transcript **line-by-line** (it never loads the whole
 transcript into memory) and prints the ordered `tool_use` names as a JSON array
-on stdout — ready to feed into `check --actual`.
+on stdout — ready to feed into `check --actual`. Lines that are not valid JSON
+are **skipped silently**, so a truncated or wrong-format file can yield a short
+or empty array with exit `0`; only an unreadable file exits `2`.
 
 ## Modes
 
@@ -106,13 +125,14 @@ In every mode: `pass = missing.is_empty() && unexpected.is_empty() && !out_of_or
 
 ## Exit codes
 
-Mirrors the evalkit / schemaguard 0/1/2 gate policy:
+Mirrors the evalkit / schemaguard 0/1/2 gate policy, plus `3` for `tier`:
 
 | code | meaning |
 |------|---------|
 | `0`  | trajectory matched the spec (pass) |
-| `1`  | a deviation (missing / unexpected / out-of-order steps) |
+| `1`  | a deviation (missing / unexpected / out-of-order steps; `tier`: mismatch or absent) |
 | `2`  | harness error (unreadable or unparseable input) |
+| `3`  | `tier` only: needs-human (unimplemented diff strategy, or fuzzy drift beyond threshold) |
 
 This is a plain CLI **gate**, not a lifecycle hook.
 

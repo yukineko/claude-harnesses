@@ -49,10 +49,26 @@ scripts/mutation-gate.sh
 PILOT=difflog MIN_KILL_RATE=0.70 scripts/mutation-gate.sh
 PILOT=specguard scripts/mutation-gate.sh   # GATE crate: polarity gate (similarity.rs)
 PILOT=condukt scripts/mutation-gate.sh     # non-GATE crate: circuit-breaker logic (circuit.rs)
+PILOT=blastguard scripts/mutation-gate.sh  # GATE crate: risk classifier (classify.rs)
+
+# What this gate protects, from what, and on what grounds (no verdict):
+cargo run -p mutategate -- --protects
 ```
+
+Defaults: `--outcomes mutants.out/outcomes.json`, `--min-kill-rate 0.80`. A
+`--min-kill-rate` at or below `1e-9` (zero, negative) is rejected with exit `2`,
+because such a floor would always pass.
 
 Exit codes: `0` pass, `1` kill-rate below threshold (or no viable mutants), `2`
 usage/IO/parse error.
+
+On a FAIL the gate also appends a violation event to overwatch's fleet violation
+ledger (for cross-run recurrence). If that write fails, a note is printed and the
+FAIL verdict still stands.
+
+`scripts/mutation-pilots.sh` maps a list of changed paths (stdin) to the
+calibrated pilot crate(s) to run, falling back to `harness-core` so it never
+prints an empty list.
 
 ## Scope (deliberately narrow)
 
@@ -62,17 +78,20 @@ the pilot is **one crate**:
 - **Pilot 1: `harness-core`** (default) — shared build-time logic; `hash`/
   `pricing`/`spans` are pure and well-suited to mutation.
 - **Pilot 2: `specguard`** — a GATE crate (one of blastguard/propguard/
-  specguard/stuckguard/mutategate/overwatch; see `scripts/rollout-plugins.sh`)
+  specguard/stuckguard/mutategate/overwatch/parallelguard; see
+  `scripts/rollout-plugins.sh`)
   whose polarity check (`src/similarity.rs`) has been the source of real bugs
   found in review, so it is where kill-rate signal matters most. Narrowed by
   default to `--file crates/specguard/src/similarity.rs`.
-- **Pilot 3: `condukt`** — the first NON-GATE crate added. `condukt` is the
-  orchestrator binary and has the highest test density in the workspace (29/36
-  source files carry tests), making it a good non-GATE candidate. It is far
-  too large to mutate whole, so the default narrows to
-  `--file crates/condukt/src/circuit.rs` — the pure circuit-breaker
-  state-machine logic (no filesystem/process I/O), already covered by 20 unit
-  tests.
+- **Pilot 3: `condukt`** — the first NON-GATE crate added (the orchestrator
+  binary, chosen for its test density). It is far too large to mutate whole, so
+  the default narrows to `--file crates/condukt/src/circuit.rs` — the pure
+  circuit-breaker state-machine logic (no filesystem/process I/O).
+- **Pilot 4: `blastguard`** — a GATE crate, narrowed by default to
+  `--file crates/blastguard/src/classify.rs` (the risk classifier). The other
+  GATE crates measured alongside it (stuckguard, propguard, overwatch) did not
+  clear the bar and are deliberately not pilots; the measurement is recorded in
+  the header of `scripts/mutation-pilots.sh`.
 - Override the pilot with `PILOT=<crate>`. Narrow further with
   `MUTANTS_EXTRA="--file src/hash.rs"` for a fast real run; an explicit
   `MUTANTS_EXTRA` overrides the per-pilot default entirely.

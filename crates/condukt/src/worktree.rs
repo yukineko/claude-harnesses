@@ -67,18 +67,15 @@ fn run_git_bounded_with(
     timeout: Duration,
     envs: &[(&str, &Path)],
 ) -> Result<GitOutput> {
-    // Every real git spawn in this crate funnels through here, so this is the
-    // one place that needs to defend against `crate::env_lock`'s PATH-mutating
-    // tests (oracle.rs, main.rs): take PATH_ENV_LOCK's read side so a spawn
-    // relying on PATH resolution can never interleave with a mutation window.
-    // Many concurrent git spawns are fine (shared read lock); only a mutator
-    // holding the write lock excludes this. See `env_lock` for the race this
-    // closes (reproduced: the since-removed repo_commit.rs's git-spawning tests flaked when a
-    // PATH mutator ran concurrently, without either side taking any lock).
-    // Unconditional (not gated to test-only compilation): in production
-    // nothing ever takes the write side, so this read lock is always
-    // uncontended — negligible cost for sidestepping a cfg(test)-on-a-
-    // bare-statement ambiguity (see `env_lock`'s doc comment).
+    // Every real git spawn in this crate funnels through here. It takes
+    // PATH_ENV_LOCK's read side, which used to exclude the PATH-mutating tests
+    // in oracle.rs / main.rs / lock.rs (reproduced: the since-removed
+    // repo_commit.rs's git-spawning tests flaked when a PATH mutator ran
+    // concurrently). Since backlog 7c798579 nothing takes the write side at
+    // all — tests pass a custom PATH to their own child instead, pinned by
+    // `oracle::tests::condukt_never_mutates_process_path` — so this read lock
+    // is always uncontended, in tests and production alike. Kept rather than
+    // removed; see `env_lock`'s doc comment.
     let _path_guard = crate::env_lock::PATH_ENV_LOCK
         .read()
         .unwrap_or_else(|e| e.into_inner());
@@ -754,13 +751,121 @@ pub fn create(repo: &Path, worktree_base: &Path, topic: &str, branch: &str) -> R
         })?;
     }
     let path_str = path.to_string_lossy().to_string();
-    // Always create a fresh branch off the current base HEAD. `--` ends option
-    // parsing so a path/branch can never be read as a flag (defense in depth on
-    // top of validate_topic/validate_branch above).
-    git(repo, &["worktree", "add", "-b", branch, "--", &path_str]).with_context(|| {
-        format!("could not create worktree for branch '{branch}' at {path_str}")
-    })?;
+    // Always create a fresh branch off the current base HEAD. The HEAD is
+    // resolved to a SHA first and passed as the explicit start-point, so the
+    // creation base recorded below is by construction the commit the branch was
+    // cut from (backlog 51595c41). `--` ends option parsing so a path/branch can
+    // never be read as a flag (defense in depth on top of
+    // validate_topic/validate_branch above).
+    let base = git(repo, &["rev-parse", "--verify", "HEAD^{commit}"])
+        .with_context(|| "could not resolve HEAD to cut the task branch from")?;
+    git(
+        repo,
+        &["worktree", "add", "-b", branch, "--", &path_str, &base],
+    )
+    .with_context(|| format!("could not create worktree for branch '{branch}' at {path_str}"))?;
+    if let Err(e) = record_creation_base(repo, branch, &base) {
+        // Without a record `merge` refuses this branch anyway, but a worktree
+        // nobody can integrate is not a success: roll it back and say so.
+        let _ = git_try(repo, &["worktree", "remove", "--force", "--", &path_str]);
+        let _ = git_try(repo, &["branch", "-D", branch]);
+        return Err(e);
+    }
     Ok(path)
+}
+
+/// Git config key holding the commit a condukt task branch was cut from
+/// (backlog 51595c41).
+///
+/// Storage choice: `branch.<name>.conduktBase` in the repository's COMMON git
+/// config. It is written by plain `git config` (no `--worktree`), so it lands
+/// in the shared `config` file that every linked worktree and the primary tree
+/// read; it survives across processes; and git itself scopes it to the branch
+/// — `git branch -D` drops the `branch.<name>` section and `git branch -m`
+/// carries it along — so a record can never outlive or detach from the branch
+/// it describes the way an entry in a separate registry could.
+fn creation_base_key(branch: &str) -> String {
+    format!("branch.{branch}.conduktBase")
+}
+
+/// Durably record `base` as the creation base of `branch`, verified by reading
+/// it back (an unobserved write is not an observation).
+fn record_creation_base(repo: &Path, branch: &str, base: &str) -> Result<()> {
+    let key = creation_base_key(branch);
+    git(repo, &["config", "--replace-all", &key, base])
+        .with_context(|| format!("could not record creation base of '{branch}' in git config"))?;
+    let back = git(repo, &["config", "--get", &key]).unwrap_or_default();
+    if back.trim() != base {
+        bail!(
+            "creation base of '{branch}' could not be read back from git config \
+             ({key} = {back:?}, expected {base}); refusing to return a task branch \
+             `condukt worktree merge` could not verify"
+        );
+    }
+    Ok(())
+}
+
+/// Refuse to integrate `branch` into `default_branch` unless the branch's
+/// recorded creation base is already an ancestor of `default_branch`
+/// (backlog 51595c41).
+///
+/// `create` cuts the task branch from whatever HEAD the primary tree is on;
+/// `merge` always integrates into `default_branch`. A run started on a feature
+/// branch would therefore carry the feature's whole unreviewed history into
+/// `default_branch` with nothing saying so. Every non-determination — no record
+/// (e.g. a branch cut by an older binary or by hand), an unreadable config, a
+/// record that does not name a commit, a failed ancestry probe — refuses too:
+/// "could not tell" is not "the base is on the default branch".
+fn ensure_base_on_default_branch(repo: &Path, branch: &str, default_branch: &str) -> Result<()> {
+    const HOW: &str = "condukt integrates a task branch only into the default branch and only \
+         when the branch was cut from it; review `git log <default>..<branch>` and merge by \
+         hand if that history is meant to land, or re-run the task from the default branch";
+    let short = branch.strip_prefix("refs/heads/").unwrap_or(branch);
+    let key = creation_base_key(short);
+    let (found, value, err) = git_try(repo, &["config", "--get", &key])?;
+    let base = value.trim();
+    if !found || base.is_empty() {
+        bail!(
+            "merge-base-unrecorded: '{branch}' has no recorded creation base ({key}{}); \
+             cannot determine whether it was cut from '{default_branch}', refusing to merge \
+             ('{default_branch}' untouched). {HOW}",
+            if err.trim().is_empty() {
+                String::new()
+            } else {
+                format!(": {}", err.trim())
+            }
+        );
+    }
+    let (resolves, _, _) = git_try(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("{base}^{{commit}}"),
+        ],
+    )?;
+    if !resolves {
+        bail!(
+            "merge-base-unrecorded: the recorded creation base of '{branch}' ({key} = {base}) \
+             does not resolve to a commit; refusing to merge ('{default_branch}' untouched). {HOW}"
+        );
+    }
+    // `--is-ancestor` exits 0 for yes, 1 for no; any other code (or a timeout,
+    // surfaced as `Err` by `?`) is undetermined and refuses as well.
+    match git_exit_code(repo, &["merge-base", "--is-ancestor", base, default_branch])? {
+        0 => Ok(()),
+        1 => bail!(
+            "merge-base-not-on-default-branch: '{branch}' was cut from {base}, which is not \
+             on '{default_branch}'; merging it would carry that commit's history into \
+             '{default_branch}' silently, refusing ('{default_branch}' untouched). {HOW}"
+        ),
+        code => bail!(
+            "merge-base-undetermined: `git merge-base --is-ancestor {base} {default_branch}` \
+             exited {code}; cannot determine whether '{branch}' was cut from \
+             '{default_branch}', refusing to merge ('{default_branch}' untouched). {HOW}"
+        ),
+    }
 }
 
 /// Run a git command without bailing on non-zero exit; return (success, stdout, stderr).
@@ -1007,6 +1112,11 @@ pub fn merge(
         );
     }
 
+    // ── Creation base must be on the default branch (backlog 51595c41) ──────
+    // Before any checkout or review-surface write, so a refusal leaves
+    // `default_branch` and the primary tree exactly as they were.
+    ensure_base_on_default_branch(repo, branch, default_branch)?;
+
     // ── Pre-merge hold gate (decision A) ─────────────────────────────────────
     // A detected mid-flight actual-diff overlap HOLDS this branch for review.
     // Do not merge until it is resolved (the resolution clears the hold). An
@@ -1192,6 +1302,10 @@ pub fn resolve_merge(cfg: &Config, repo: &Path, conflict_id: &str) -> Result<Res
     let branch = &entry.branch;
     let default_branch = &entry.default_branch;
 
+    // Same gate as `merge` (backlog 51595c41): a runtime-overlap hold reaches
+    // here without ever passing through `merge`, so the twin must check too.
+    ensure_base_on_default_branch(repo, branch, default_branch)?;
+
     git(repo, &["checkout", default_branch])
         .with_context(|| format!("could not checkout {default_branch} before resolve-merge"))?;
     let current = git(repo, &["branch", "--show-current"])?;
@@ -1316,9 +1430,19 @@ mod worktree_remove_tests {
         }
     }
 
+    /// `git checkout -b branch` from HEAD and record HEAD as its creation base,
+    /// exactly as `create` does (backlog 51595c41): `merge` refuses a branch
+    /// with no recorded base, so a fixture standing in for a condukt task
+    /// branch must carry one.
+    fn cut_branch(repo: &Path, branch: &str) {
+        let base = git(repo, &["rev-parse", "HEAD"]).unwrap();
+        git(repo, &["checkout", "-b", branch]).unwrap();
+        record_creation_base(repo, branch, &base).unwrap();
+    }
+
     /// Create a branch from HEAD, write `content` to `file`, commit and return.
     fn make_branch(repo: &Path, branch: &str, file: &str, content: &str) {
-        git(repo, &["checkout", "-b", branch]).unwrap();
+        cut_branch(repo, branch);
         fs::write(repo.join(file), content).unwrap();
         git(repo, &["add", "."]).unwrap();
         git(repo, &["commit", "-m", &format!("add {file} on {branch}")]).unwrap();
@@ -1468,7 +1592,7 @@ mod worktree_remove_tests {
         git(&repo, &["commit", "-m", "add shared file"]).unwrap();
 
         // Branch: modify line2 to "branch version"
-        git(&repo, &["checkout", "-b", "conflict-branch"]).unwrap();
+        cut_branch(&repo, "conflict-branch");
         fs::write(repo.join(conflict_file), "line1\nbranch version\nline3\n").unwrap();
         git(&repo, &["add", "."]).unwrap();
         git(&repo, &["commit", "-m", "branch edit"]).unwrap();
@@ -1536,7 +1660,7 @@ mod worktree_remove_tests {
         git(&repo, &["add", "."]).unwrap();
         git(&repo, &["commit", "-m", "add shared file"]).unwrap();
 
-        git(&repo, &["checkout", "-b", "conflict-branch"]).unwrap();
+        cut_branch(&repo, "conflict-branch");
         fs::write(repo.join(conflict_file), "line1\nbranch version\nline3\n").unwrap();
         git(&repo, &["add", "."]).unwrap();
         git(&repo, &["commit", "-m", "branch edit"]).unwrap();
@@ -1594,6 +1718,119 @@ mod worktree_remove_tests {
                 msg.contains("no recorded resolution"),
                 "error should explain the missing resolution, got: {msg}"
             );
+        });
+    }
+
+    // ── creation-base gate (backlog 51595c41) ──────────────────────────────
+
+    #[test]
+    fn create_records_head_as_creation_base_and_merge_lands_it() {
+        let home = TempDir::new().unwrap();
+        let wtb = TempDir::new().unwrap();
+        with_home(home.path(), || {
+            let (_tmp, repo) = init_repo();
+            let head = git(&repo, &["rev-parse", "HEAD"]).unwrap();
+            let wt = create(&repo, wtb.path(), "t1", "task1").unwrap();
+            assert_eq!(
+                git(&repo, &["config", "--get", "branch.task1.conduktBase"]).unwrap(),
+                head,
+                "create must record the commit the branch was cut from"
+            );
+            fs::write(wt.join("t.txt"), "t\n").unwrap();
+            git(&wt, &["add", "."]).unwrap();
+            git(&wt, &["commit", "-m", "task"]).unwrap();
+            let cfg = test_cfg(&repo);
+            assert_eq!(
+                merge(&cfg, &repo, "task1", "main").unwrap(),
+                MergeOutcome::Merged,
+                "a branch cut from main must still merge (happy path unchanged)"
+            );
+        });
+    }
+
+    #[test]
+    fn merge_refuses_a_branch_with_no_recorded_base_and_leaves_main() {
+        let home = TempDir::new().unwrap();
+        with_home(home.path(), || {
+            let (_tmp, repo) = init_repo();
+            // Cut by hand / by an older binary: no conduktBase record.
+            git(&repo, &["checkout", "-b", "legacy"]).unwrap();
+            fs::write(repo.join("l.txt"), "l\n").unwrap();
+            git(&repo, &["add", "."]).unwrap();
+            git(&repo, &["commit", "-m", "legacy"]).unwrap();
+            git(&repo, &["checkout", "main"]).unwrap();
+            let before = git(&repo, &["rev-parse", "main"]).unwrap();
+            let cfg = test_cfg(&repo);
+            let err = merge(&cfg, &repo, "legacy", "main")
+                .expect_err("no recorded base is undetermined and must refuse");
+            let msg = format!("{err:#}");
+            assert!(msg.contains("merge-base-unrecorded"), "got: {msg}");
+            assert!(
+                msg.contains("merge by hand"),
+                "must say how to proceed: {msg}"
+            );
+            assert_eq!(git(&repo, &["rev-parse", "main"]).unwrap(), before);
+        });
+    }
+
+    #[test]
+    fn merge_refuses_a_recorded_base_that_is_not_a_commit() {
+        let home = TempDir::new().unwrap();
+        with_home(home.path(), || {
+            let (_tmp, repo) = init_repo();
+            make_branch(&repo, "feat", "f.txt", "f\n");
+            git(
+                &repo,
+                &[
+                    "config",
+                    "branch.feat.conduktBase",
+                    "0000000000000000000000000000000000000001",
+                ],
+            )
+            .unwrap();
+            let before = git(&repo, &["rev-parse", "main"]).unwrap();
+            let cfg = test_cfg(&repo);
+            let err = merge(&cfg, &repo, "feat", "main")
+                .expect_err("an unresolvable recorded base must refuse");
+            assert!(
+                format!("{err:#}").contains("merge-base-unrecorded"),
+                "got: {err:#}"
+            );
+            assert_eq!(git(&repo, &["rev-parse", "main"]).unwrap(), before);
+        });
+    }
+
+    #[test]
+    fn resolve_merge_refuses_when_base_is_off_the_default_branch() {
+        let home = TempDir::new().unwrap();
+        with_home(home.path(), || {
+            let (_tmp, repo, conflict_id) = seed_conflict_repo();
+            // Re-point the record at a commit that exists only off main.
+            git(&repo, &["checkout", "-b", "side"]).unwrap();
+            fs::write(repo.join("side.txt"), "s\n").unwrap();
+            git(&repo, &["add", "."]).unwrap();
+            git(&repo, &["commit", "-m", "side"]).unwrap();
+            let side = git(&repo, &["rev-parse", "HEAD"]).unwrap();
+            git(&repo, &["checkout", "main"]).unwrap();
+            git(
+                &repo,
+                &["config", "branch.conflict-branch.conduktBase", &side],
+            )
+            .unwrap();
+            record_resolution(
+                &repo,
+                &conflict_id,
+                overwatch::merge_conflict::ResolveChoice::Theirs,
+            );
+            let before = git(&repo, &["rev-parse", "main"]).unwrap();
+            let cfg = test_cfg(&repo);
+            let err = resolve_merge(&cfg, &repo, &conflict_id)
+                .expect_err("resolve-merge must apply the same base gate as merge");
+            assert!(
+                format!("{err:#}").contains("merge-base-not-on-default-branch"),
+                "got: {err:#}"
+            );
+            assert_eq!(git(&repo, &["rev-parse", "main"]).unwrap(), before);
         });
     }
 

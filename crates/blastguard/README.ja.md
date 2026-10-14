@@ -21,9 +21,18 @@ blastguard は Claude Code の **PreToolUse** フックである。エージェ�
   デバイス書き込み（`mkfs.*`, `dd of=/dev/sda`）、再帰的なパーミッション / 所有者
   変更（`chmod -R 777 .`, `chown -R root .`）、`find` 経由の一括削除
   （`find . -delete`, `find . -exec rm …`）、fork bomb。
+  さらに Bash 経由のシステムディレクトリへの書き込み（`> /etc/paths.d/zz`、`tee`、
+  `cp` の着地先）、`/dev/tcp/` / `/dev/udp/`、破壊的なインタプリタプログラム
+  （`python3 -c "import shutil; shutil.rmtree('/')"`）は deny、stdin からプログラムを
+  読むインタプリタ（`… | python3 -`、`python3 /dev/stdin`）は判定を拒否する（下の
+  「既知の high-frequency deny」節を参照）。
 - **ファイル操作**: 既存ファイルを**空内容で置き換える** Write（＝ファイルの抹消）、
-  および **git 内部**（`.git/**`）を上書きする Write は deny。Edit / MultiEdit /
-  NotebookEdit は部分編集なので常に allow。
+  および **git 内部**（`.git/**`）を上書きする Write は deny。**保護パス**（下記）への
+  Write / Edit / MultiEdit / NotebookEdit は `ask`（人間が答えられない場では deny）。
+  それ以外の Edit / MultiEdit / NotebookEdit は部分編集なので allow。なお Write
+  ツールでシステムディレクトリへ書く場合（`/etc/paths.d/x` 等）は Write の判定では
+  止めていない（`detect_write` は `system_path_block` を呼ばない。0.2.108 の debug
+  ビルドで allow を観測、2026-10-14）。
 
 **この一覧は「形」であって「判定」ではない。** 上記のうち削除・切り詰め系
 （`rm` / `find -delete` / `truncate` / `shred` / `>` / `git clean -f` /
@@ -44,9 +53,18 @@ blastguard は Claude Code の **PreToolUse** フックである。エージェ�
 拒否である。散文が実挙動より安全側に見える話を語るのは CLAUDE.md 4 が禁じる罠なので、
 ここに実挙動を書く。
 
-なお `ask` は**人間が答えられる場合にのみ**出力される。headless / agent 主導の
+なお解析器が出す `ask` は**人間が答えられる場合にのみ**出力される。headless / agent 主導の
 セッションでは答える人がいないため `Decision::hardened` で `deny` へ強化される
-（allow へは倒さない）。
+（allow へは倒さない）。判定は `interactive::ask_available`（`CLAUDECODE=1` かつ
+`CLAUDE_CODE_ENTRYPOINT=cli` のときだけ ask 可）で、`BLASTGUARD_ASK=never|always|auto`
+（未設定は `auto`、未知の値は `never` 扱い）で上書きできる。
+
+**例外 — 同一セッションで同じ効果を 2 度目に deny するときは `ask` にする**
+（2026-09-18 の operator 裁定「ユーザの指示を2度やぶるgateはいらない。2度目はaskせよ」、
+`src/main.rs` の `downgrade_on_repeat`）。これは `hardened()` の**後**に適用されるので、
+headless でも `ask` として出力される。触るのは `Deny` だけで `Allow` は作らない。
+台帳は `harness_core::repeat`（`~/.claude/harness-state/repeat/<CLAUDE_CODE_SESSION_ID>/`）で、
+session id 未設定や台帳の IO 失敗では deny のまま。
 
 介入が実際に何を防いだかは `blastguard retro` で事後検証できる（本 README 末尾の
 「事後検証」節を参照）。
@@ -59,9 +77,13 @@ blastguard は Claude Code の **PreToolUse** フックである。エージェ�
 `.claude/plugins/cache/**/hooks/**`。exec bit を外された launcher は `Permission denied` で起動せず、
 finding も出ないので gate が赤ではなく暗転する — backlog 1b82a049。ここでは読み/実行権の剥奪・`rm`・`mv` は deny、
 書き込みは ask〈人間が答えられない場では deny に硬化〉、読み取りと `chmod +x` は allow）
+、シェルの rc ファイル（`.zshrc`・`.bashrc`・`.profile` 等）、ゲート設定 toml
+（`deny.toml`・`blastguard.toml` 等。全リストは `src/exclude.rs` の `PROTECTED_GLOBS`）
 など、どのゲート・フックが動くか自体を決めるファイルはこの除外の
-**対象外**であり、常に deny になる（守護者自身を無効化する経路を塞ぐため、
-この一群は設定ファイル除外より優先される）。唯一の例外は、worktree 置き場
+**対象外**である（守護者自身を無効化する経路を塞ぐため、この一群は設定ファイル除外より
+優先される）。書き込み（Write / Edit / `>` / `cp` / `sed -i` 等）は `ask`（人間が
+答えられない場では deny）、書かずに無効化する操作（`rm`・`mv`・`chmod -x`）は deny。
+また `.claude/plugins/**`・`.claude/projects/**` は設定ではなく状態なので除外しない。唯一の例外は、worktree 置き場
 （`$HOME/.condukt/worktrees/<wt>/…`、`<parent>/.harness-worktrees/<wt>/…`）にある
 linked worktree チェックアウトの**内側**のファイルで、絶対パスで指定された
 Write/Edit または単一の素のコマンドに限り、保護パス規則を適用しない（そのチェックアウト
@@ -486,10 +508,26 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 
 ## 既知の high-frequency deny（backlog ba72dc46 / cd99fa2c の判定記録）
 
-overwatch の continuous-audit 再発トラッカー（`overwatch violations --json`）が
-`blastguard:truncating-redirect`（21回発火・4セッション）と
-`blastguard:code-interpreter-inline-eval`（17回発火・5セッション）を systemic
-（高頻度再発）として検出した。**大半は調査の結果、誤検知ではなく意図通りの
+> **現状（このセクションの下の本文は 2026-07-23 時点の歴史的記録であり、両ルールとも
+> その後変わっている。行番号も現在のソースとは一致しない）**:
+>
+> - **truncating-redirect**: もはや一律 deny ではない。順に、保護パスは `ask`・
+>   システムディレクトリは `deny`、**対象が存在しない**なら allow、セッションの安全
+>   ルート内の git 作業ツリーで `git status` が答えたなら（追跡・変更あり・**未追跡**を
+>   問わず。2026-09-18 の operator 裁定）allow、安全ルート内なら `ask`（headless では
+>   deny）、それ以外・probe 失敗は `deny`（`src/detect.rs` の切り詰めリダイレクト
+>   アーム、`src/reversible.rs` の `probe`）。D1（`/tmp` prefix の allow 例外）は
+>   撤去されたままである。
+> - **code-interpreter-inline-eval**: 「形」での一律 deny は廃止され、プログラム本文を
+>   監査する（`analyze_code_interpreter` / `interpreter_code_verdict`）。破壊的な呼び出し
+>   や破壊的なシェル行を含めば `deny`、保護パスを名指しすれば `ask`、
+>   `python3 -c "print(1)"` のような無害なものは allow（0.2.59）。stdin からプログラムを
+>   読む形（`… | python3 -`、`python3 /dev/stdin`、here-doc）は判定を拒否する。
+>   rule id も所見に応じたもの（例: `rm-recursive`）になる。
+
+当時、overwatch の continuous-audit 再発トラッカー（`overwatch violations --json`）が
+`blastguard:truncating-redirect` と `blastguard:code-interpreter-inline-eval` を
+systemic（高頻度再発）として検出した（件数は測定点が記録されていないため削除）。**大半は調査の結果、誤検知ではなく意図通りの
 設計と判定し、コードは変更していない**（2026-07-23 判定）。ただし
 truncating-redirect については、この判定と並行して**別種の純粋なバグを1件発見し
 修正した**（下記参照、v0.2.11）。
@@ -569,7 +607,8 @@ specguard の forge は LLM が生成した `test_cmd` を `sh -c` に渡す前�
   unified diff テキストから直接判定する（`classify_diff` / `changes_public_symbol`）。
   結果は command classification と同じ `crate::classify::RiskAssessment` に載るので、
   呼び出し側は2つの軸を別々に扱わず1本の risk として扱える。
-- **`callgraph`**（`src/callgraph.rs`）— 変更された symbol を diff から抽出し
+- **`callgraph`**（`src/callgraph.rs`。実装は `harness_core::callgraph` へ移り、
+  blastguard 側は re-export のみ）— 変更された symbol を diff から抽出し
   （`changed_symbol_names`）、その symbol を実際に参照している呼び出し箇所を
   ソースコーパス全体から字句レベルで列挙する（`enumerate_callers`）。パーサ・正規表現・
   外部 API 不使用の純粋な文字列トークンスキャンで、どんな入力に対しても panic しない
@@ -600,22 +639,36 @@ specguard の forge は LLM が生成した `test_cmd` を `sh -c` に渡す前�
           { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/blastguard", "timeout": 10 }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/blastguard record-approval", "timeout": 10 }
+        ]
+      }
     ]
   }
 }
 ```
 
+PostToolUse 側は承認の記憶（上記）を昇格する recorder である。
+
 `bin/blastguard` はホストの OS / アーキテクチャに合う `blastguard-<os>-<arch>` を
 exec する POSIX-sh ランチャである。**該当プラットフォーム向けの同梱ビルドが無い場合は
-stderr に警告を出しつつ exit 0 する**（`crates/blastguard/bin/blastguard` 参照） —
-これは analyser 内部の「判定不能は deny」とは異なるレイヤーの、既知の fail-open
-ギャップである。バイナリが存在しない環境では検出器そのものが起動しないため、判定を
-下す主体が居ない。この経路は起動前のプラットフォーム欠落のみに限られ、起動後の
-判定不能（内部 panic 等）は上記の通り deny に解決される。API キーは不要で、**1 フック
-+ 同梱バイナリだけで完結する subscription-native** な構成である。
+stderr に警告を出したうえで「評価していない」旨の PreToolUse 判定を出力する**
+（`crates/blastguard/bin/blastguard` 参照）: `BLASTGUARD_ASK=always`、または
+`auto`/未設定で `CLAUDECODE=1` かつ `CLAUDE_CODE_ENTRYPOINT=cli` のとき `ask`、
+それ以外は `deny`（`interactive::ask_available` と同じ方針）。黙って exit 0 する
+（＝allow）ことはない（以前はそうしており、この README もそう書いていた）。API キーは
+不要で、**フック + 同梱バイナリだけで完結する subscription-native** な構成である。
 
-CLI 表面は最小限で、stdin を触る前に `--version` / `-V` と `--help` / `-h` のみ
-短絡する。
+CLI 表面は最小限で、stdin を触る前に `--version` / `-V`、`--help` / `-h`、
+`--protects`（`src/protection.rs` の PROTECTS / AGAINST / GROUNDS を表示）が短絡する。
+サブコマンドは `retro`（事後検証、下記）と `record-approval`（PostToolUse の承認記録）。
+環境変数: `BLASTGUARD_ASK`（ask の可否）、`BLASTGUARD_APPROVALS_DIR`（承認ストア）、
+`CLAUDE_PROJECT_DIR`・`TMPDIR`・`HOME`（安全ルートの構築）、`CLAUDE_CODE_SESSION_ID`
+（2 度目の deny の台帳）。
 
 ビルド / テスト:
 
@@ -639,7 +692,11 @@ cargo test -p blastguard              # ユニット + 統合テスト
 blastguard retro                              # cwd から対象プロジェクトを推定
 blastguard retro --project /path/to/repo
 blastguard retro --dir ~/.claude/projects/-path-to-repo
+blastguard retro --list                       # 介入ごとに 1 行
+blastguard retro --rule-id rm-recursive       # 1 ルールに絞った一覧（--list を含意）
 ```
+
+`--list` なしではルール別の件数表を出す。未知の引数・値の欠けたフラグは exit 2。
 
 介入ごとに三値の outcome が付く — `executed-anyway`（人間が yes と答えた＝その回
 ゲートは何も阻止していない）／ `not-executed` ／ `unknown`。**`tool_result` が無い

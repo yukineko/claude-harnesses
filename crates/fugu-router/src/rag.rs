@@ -155,7 +155,7 @@ mod tests {
             model: model.into(),
             role: "worker".into(),
             pass,
-            cost_usd: 0.0,
+            cost_usd: None,
             human_label: None,
             labeled_by: None,
             skill_fingerprint: None,

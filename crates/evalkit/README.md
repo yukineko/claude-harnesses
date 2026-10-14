@@ -11,7 +11,7 @@ shape of a `--json` CLI contract. A careless prompt edit can quietly delete
 
 evalkit closes that gap. It reads **golden `*.jsonl` cases**, asserts over each
 subject deterministically, and exits non-zero when an invariant regresses — with
-**no API key**, so it runs as a CI gate and a `/flow` pre-release check.
+**no API key**, so it can be run as a local, manually invoked gate.
 
 ## Case format
 
@@ -40,14 +40,31 @@ One JSON object per line (`//` lines and blanks are skipped). A case names one
 A case has **exactly one** of `file` or `cmd` — except a `draft: true` case, which
 carries no subject yet and is exempt from that requirement.
 
+What a case does **not** check unless you say so:
+
+- A `cmd` case's exit code is checked **only if `assert.exit` is set** — without it, a
+  command that exits non-zero still passes as long as the text assertions hold.
+- Only **stdout** is the subject; stderr is captured but never asserted on.
+- An empty `assert` only checks that the subject could be acquired (file readable /
+  cmd spawned). Acquisition failures are reported as case failures.
+- `assert.exit` on a `file` case is itself a failure (a file has no exit code).
+
 ## Usage
 
 ```sh
-evalkit run                                   # discover ./evals/*.jsonl, assert, exit non-zero on failure
+evalkit run                                   # discover ./evals/**/*.jsonl, assert, exit non-zero on failure
 evalkit run --root . --bin-dir target/release # resolve `cmd` programs from a fresh build
+evalkit run --dir evals/replay                # a different case dir (relative to --root)
 evalkit run --json                            # machine-readable summary
 evalkit list                                  # show discovered cases without running them
 ```
+
+`--dir` (default `evals`) is searched **recursively** for `*.jsonl`, so a subdir such
+as `evals/replay/` is picked up with no config change. `--root` (default: the CWD)
+anchors `file` paths, `--dir`, a relative `--bin-dir`, and is the cwd of `cmd`
+subprocesses. Blank lines and `//` lines are skipped; any other unparseable line
+or a case with an empty `id` / both or neither subject makes the whole run a harness
+error (exit 2). `list` accepts the same flags but always prints the plain list.
 
 Exit codes — CI can tell a regression from a misconfigured path:
 
@@ -78,9 +95,17 @@ evalkit canary --baseline base.json --current head.json --json              # ma
 evalkit canary --baseline base.json --current head.json --fail-on-regression # exit 1 on any pass→fail
 ```
 
-It keys cases by `id` and classifies each as **regression** (pass→fail),
-**fix** (fail→pass), **added**, or **dropped**, and prints the pass-rate
-before → after with the delta.
+It keys cases by their report label (the `case` field of `run --json`, i.e. `id`,
+or `id — describe` when `describe` is set — so editing a `describe` shows up as one
+dropped + one added) and classifies each as **regression** (pass→fail, neither side
+a draft), **fix** (fail→pass), **added**, or **dropped**, and prints the pass-rate
+before → after with the delta. The pass-rate excludes drafts from the denominator;
+an all-draft or empty run counts as 0.0.
+
+**What `--fail-on-regression` does not catch:** only pass→fail transitions gate. A
+golden that **disappears** (dropped) or is turned into a **draft** (pass→skip,
+counted as unchanged) does not fail the canary, even though either removes the
+invariant from the gate. Read the `dropped` bucket yourself.
 
 | code | meaning |
 |---|---|
@@ -88,8 +113,8 @@ before → after with the delta.
 | `1` | `--fail-on-regression` set **and** ≥1 pass→fail transition |
 | `2` | harness error (unreadable / unparseable result file) |
 
-By default it is **informational** (exit 0) — `eval.yml`'s `canary` job annotates
-PRs without gating. Pass `--fail-on-regression` to turn it into a hard gate.
+By default it is **informational** (exit 0). Pass `--fail-on-regression` to turn
+it into a hard gate (for pass→fail only — see above).
 
 ## Where the goldens live
 
@@ -103,12 +128,15 @@ Repo-root `evals/`:
 
 Add a line whenever you codify a new invariant. The keystone of the LLMOps eval
 layer: future curation (`curate`) promotes high-signal fugu episodes/playbooks
-into goldens here, and `/flow` can run `evalkit run` as a pre-release gate.
+into goldens here (`curate promote`), as does `replaykit promote` for condukt run
+traces.
 
-## CI
+## Wiring
 
-`.github/workflows/eval.yml` builds the workspace and runs `evalkit run
---bin-dir target/release` on every push/PR. A dropped invariant turns the job
-red before it merges.
+There is **no CI wiring**: the former `.github/workflows/eval.yml` no longer exists
+(GitHub Actions is not used in this repo), and evalkit ships no hook. Nothing runs
+`evalkit run` automatically (no `/flow` or condukt step invokes it either) — run it
+yourself after a build,
+e.g. `evalkit run --bin-dir target/release`.
 
 Subscription-native: one bundled Rust binary, no API key.

@@ -165,6 +165,45 @@ struct Ctx<'a> {
     /// [`Ctx::in_worktree_checkout`] and [`checkout_exempt_eligible`].
     /// Computed once in [`Ctx::new`], carried unchanged into derived contexts.
     checkout_exempt_eligible: bool,
+    /// `Some` ONLY while [`interpreter_code_verdict`] runs its shell pass over
+    /// interpreter PROGRAM TEXT (user ruling R2, 2026-10-14). A truncating
+    /// redirect whose target cannot be determined (it carries a shell
+    /// expansion, or is relative with no known base — see
+    /// [`redirect_target_undeterminable`]) and that would otherwise be denied
+    /// is recorded here instead of denied; the caller turns the record into an
+    /// Ask carrying [`RECOMMEND_NO`] unless something else in the program is a
+    /// Deny. In program text such a `>` is far more often an operator inside a
+    /// string or expression (`print(1 > 0)`, `'x > \`y\`'`) than a redirect,
+    /// but it cannot be shown NOT to be one, so it is never cleared to Allow.
+    /// `None` everywhere else: an ordinary command line keeps today's Deny.
+    program_text_redirects: Option<&'a std::cell::RefCell<Vec<String>>>,
+}
+
+/// Marker every Ask produced under the user's 2026-10-14 rulings R1/R2 carries
+/// in its reason (ruling R0): the Ask states its recommended answer is the
+/// negative one.
+const RECOMMEND_NO: &str = "Recommended: do not run this.";
+
+/// `d` with [`RECOMMEND_NO`] appended when it is an Ask (and not already
+/// marked); `Allow`/`Deny` are returned unchanged.
+fn recommend_against(d: Decision) -> Decision {
+    match d {
+        Decision::Ask(reason) if !reason.contains(RECOMMEND_NO) => {
+            Decision::Ask(format!("{reason} {RECOMMEND_NO}"))
+        }
+        other => other,
+    }
+}
+
+/// Whether a redirect TARGET names no determinable file: it carries a shell
+/// expansion, or it is relative and no base is known to place it against.
+/// These are exactly the two pre-IO `Undetermined` rows of
+/// [`crate::reversible::probe`] — not the git-failure rows, whose target IS
+/// known and only its recoverability is not.
+fn redirect_target_undeterminable(target: &str, base: Option<&str>) -> bool {
+    target.contains('$')
+        || target.contains('`')
+        || crate::reversible::resolve(target, base).is_none()
 }
 
 impl<'a> Ctx<'a> {
@@ -178,6 +217,7 @@ impl<'a> Ctx<'a> {
             worktree_rm_eligible: worktree_rm_eligible(command),
             deletion_rm_eligible: deletion_rm_eligible(command),
             checkout_exempt_eligible: checkout_exempt_eligible(command),
+            program_text_redirects: None,
         }
     }
 
@@ -231,6 +271,7 @@ impl<'a> Ctx<'a> {
             worktree_rm_eligible: self.worktree_rm_eligible,
             deletion_rm_eligible: self.deletion_rm_eligible,
             checkout_exempt_eligible: self.checkout_exempt_eligible,
+            program_text_redirects: self.program_text_redirects,
         }
     }
 
@@ -246,6 +287,7 @@ impl<'a> Ctx<'a> {
             worktree_rm_eligible: self.worktree_rm_eligible,
             deletion_rm_eligible: self.deletion_rm_eligible,
             checkout_exempt_eligible: self.checkout_exempt_eligible,
+            program_text_redirects: self.program_text_redirects,
         }
     }
 
@@ -1716,10 +1758,26 @@ primitive, not a filesystem path",
                 ));
                 continue;
             }
-            return Decision::deny(format!(
+            let reason = format!(
                 "'> {target}' destroys the file's current contents and {}",
                 recovery.describe()
-            ));
+            );
+            // User ruling R2 (2026-10-14): inside interpreter PROGRAM TEXT a
+            // redirect whose target cannot be determined is not denied here;
+            // it is handed back to `interpreter_code_verdict`, which resolves
+            // it to an Ask (never Allow) unless the program holds a Deny. Only
+            // the undeterminable-target rows qualify — an existing
+            // unrecoverable target (`/etc/hosts`) is a definite finding and
+            // still denies. See `Ctx::program_text_redirects`.
+            if let Some(sink) = ctx.program_text_redirects {
+                if matches!(recovery, crate::reversible::Recovery::Undetermined(_))
+                    && redirect_target_undeterminable(&target, ctx.raw_base.as_deref())
+                {
+                    sink.borrow_mut().push(reason);
+                    continue;
+                }
+            }
+            return Decision::deny(reason);
         }
     }
 
@@ -5424,11 +5482,64 @@ fn quoted_string_literals(payload: &str) -> Vec<String> {
 /// human present `Decision::hardened` collapses the Ask to Deny anyway, so the
 /// restrictive resolution still holds; what changes is that a real finding is
 /// no longer indistinguishable from a shrug.
+///
+/// UNDETERMINABLE REDIRECTS IN PROGRAM TEXT (user ruling R2, 2026-10-14). The
+/// shell pass over the program text reads every `>` as a redirect, so
+/// `print(1 > 0)` or `s = 'x > \`y\`'` used to be DENIED as a truncating
+/// redirect onto a file it could not name. When that is the ONLY Deny the
+/// program text produces, the verdict is an Ask carrying [`RECOMMEND_NO`] —
+/// not Allow: the `>` cannot be shown not to be a redirect. A Deny found
+/// anywhere else (a destructive call, a shell command inside a literal such as
+/// `os.system("echo hi > /etc/hosts")`, an existing unrecoverable target)
+/// still wins. When another Ask is the result, the redirect finding and the
+/// marker are appended to it, so the downgrade never disappears from the
+/// reason.
 fn interpreter_code_verdict(
     shape: &str,
     payloads: &[String],
     depth: usize,
     ctx: &Ctx<'_>,
+    expansion_possible: bool,
+) -> Decision {
+    let redirects = std::cell::RefCell::new(Vec::new());
+    let program_ctx = Ctx {
+        program_text_redirects: Some(&redirects),
+        ..ctx.clone()
+    };
+    let verdict = interpreter_program_verdict(
+        shape,
+        payloads,
+        depth,
+        ctx,
+        &program_ctx,
+        expansion_possible,
+    );
+    let redirects = redirects.into_inner();
+    let Some(first) = redirects.first() else {
+        return verdict;
+    };
+    let finding = format!(
+        "{shape}, and the program text contains a `>` that a shell would read as a redirect \
+whose target cannot be determined ({first}); in program text it may be an operator or part of a \
+string, but blastguard cannot show that it is not a redirect."
+    );
+    match verdict {
+        Decision::Deny(reason) => Decision::Deny(reason),
+        Decision::Ask(reason) => recommend_against(Decision::ask(format!("{reason}; {finding}"))),
+        Decision::Allow => recommend_against(Decision::ask(finding)),
+    }
+}
+
+/// The body of [`interpreter_code_verdict`]. `program_ctx` is `ctx` with
+/// [`Ctx::program_text_redirects`] set; it is used ONLY for the shell pass
+/// over each program-text layer, so every other check judges exactly as before
+/// the R2 ruling.
+fn interpreter_program_verdict(
+    shape: &str,
+    payloads: &[String],
+    depth: usize,
+    ctx: &Ctx<'_>,
+    program_ctx: &Ctx<'_>,
     expansion_possible: bool,
 ) -> Decision {
     // Descend through nested quoting rather than stopping at the first layer.
@@ -5454,7 +5565,9 @@ fn interpreter_code_verdict(
                     "{shape}, and it runs `{call}`, which deletes files or directories outright"
                 ));
             }
-            if let Decision::Deny(reason) = analyze_shell_payload(payload, depth, ctx) {
+            // `program_ctx`: an undeterminable redirect target is recorded for
+            // `interpreter_code_verdict` instead of denied (ruling R2).
+            if let Decision::Deny(reason) = analyze_shell_payload(payload, depth, program_ctx) {
                 return Decision::Deny(reason);
             }
             let literals = quoted_string_literals(payload);
@@ -5767,6 +5880,22 @@ anything here is irreversible"
     // every layer, the argv-list re-join, and the recoverability probe over the
     // literals of any payload that writes. Do not remove one without taking the
     // ruling again.
+    //
+    // One narrowing of the first of those was ruled (user ruling R2,
+    // 2026-10-14): `analyze_shell_payload` runs here with
+    // `Ctx::program_text_redirects` set on EVERY quote layer (a string literal
+    // such as `'x > \`y\`'` is program text too, and is where the observed
+    // false positives sat), so a truncating redirect whose TARGET cannot be
+    // determined (shell expansion, or relative with no known base) is not a
+    // Deny from that pass. It is not dropped either: the wrapper
+    // `interpreter_code_verdict` turns it into an Ask carrying `RECOMMEND_NO`
+    // (never Allow) whenever nothing else denies — so a literal that really is
+    // a shell command (`os.system("echo hi > $X")`) is still put to a human,
+    // and with no human present `Decision::hardened` makes it a Deny again.
+    // Every other Deny of the shell pass, including a redirect onto an
+    // existing unrecoverable file (`os.system("echo hi > /etc/hosts")`), is
+    // unchanged. Nothing beyond that downgrade was ruled; the rest still needs
+    // the ruling again.
     Decision::Allow
 }
 
@@ -5950,6 +6079,12 @@ fn analyze_interpreter_stdin_exec(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Dec
     let mut acc = VerdictAcc::default();
     for statement in split_statements_into_pipe_stages(cmd) {
         for (i, stage) in statement.iter().enumerate() {
+            // The here-string mirror (`bash <<< 'rm -rf ~'`), judged before
+            // and independently of the stdin-program rule below, which it can
+            // only add to. See `shell_here_string_verdict`.
+            if let Some(deny) = acc.record(shell_here_string_verdict(stage, depth, ctx)) {
+                return deny;
+            }
             let tokens: Vec<&str> = stage.split_whitespace().collect();
             let Some(first) = tokens.first() else {
                 continue;
@@ -6003,6 +6138,103 @@ fn analyze_interpreter_stdin_exec(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Dec
         }
     }
     acc.finish()
+}
+
+/// A here-string fed to a SHELL is shell code: `bash <<< 'rm -rf ~'` runs
+/// `rm -rf ~` exactly as `echo 'rm -rf ~' | sh` does, and the pipe spelling was
+/// already denied by the stdin-mirror rule in
+/// [`analyze_interpreter_stdin_exec`] while the here-string spelling reached
+/// Allow (observed 2026-10-14 on 0.2.109). [`analyze_here_string_egress`] only
+/// looks for a fetch/decode in the operand, so nothing judged what the operand
+/// itself runs.
+///
+/// Each operand is judged by the same [`interpreter_code_verdict`] the pipe
+/// spelling goes through (which shell-analyses the text), whether or not the
+/// shell also names a script file or `-c` payload: a shell's stdin can still be
+/// read as code from there (`bash -c 'source /dev/stdin' <<< …`), and telling
+/// a script operand from an option value is a model of option parsing this file
+/// has repeatedly got wrong. Judging the operand regardless can only add a
+/// verdict — the deny-if-any widening `dash_c_payloads` already uses.
+///
+/// What cannot be read statically resolves to Ask, never Allow (CLAUDE.md §3):
+///   * a double-quoted or bare operand containing `$`/backtick — the OUTER
+///     shell expands it, so the text here is a template, not the script
+///     (`interpreter_code_verdict`'s `expansion_possible` guard);
+///   * a bare operand containing a quote or backslash — the shell joins and
+///     unescapes such a word in ways this scan does not model (`rm' -rf ~'`
+///     is ONE word), so the operand recorded here is not what runs;
+///   * a non-POSIX shell (`fish`, `pwsh`, …), whose language a POSIX reading
+///     cannot clear ([`is_foreign_shell`]).
+///
+/// Every Ask this function returns carries [`RECOMMEND_NO`] (user rulings R1
+/// and R0, 2026-10-14): `bash <<<"$(…)"` runs code that only exists at run
+/// time, so the recommended answer is not to run it. A literal destructive
+/// operand (`bash <<< 'rm -rf ~'`) is still a Deny.
+///
+/// A SINGLE-quoted operand is passed verbatim, so its text IS the script, and a
+/// `$(…)` in it is ordinary shell syntax judged by the shell analysis itself.
+///
+/// The shell is looked for in the stage with every here-string removed, so a
+/// glued `bash<<<'…'` still names `bash`, and through [`command_candidates`] so
+/// a wrapper (`sudo bash <<< …`) does not hide it.
+fn shell_here_string_verdict(stage: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
+    let spans = here_string_spans(stage);
+    if spans.is_empty() {
+        return Decision::Allow;
+    }
+    let chars: Vec<char> = stage.chars().collect();
+    let mut remainder = String::new();
+    let mut at = 0;
+    for span in &spans {
+        remainder.extend(&chars[at.min(span.start)..span.start]);
+        remainder.push(' ');
+        at = span.end;
+    }
+    remainder.extend(&chars[at.min(chars.len())..]);
+    let tokens: Vec<&str> = remainder.split_whitespace().collect();
+    let Some(shell) = command_candidates(&tokens)
+        .into_iter()
+        .map(|idx| normalized_command(tokens[idx]))
+        .find(|head| is_shell(head))
+    else {
+        return Decision::Allow;
+    };
+    let shape = format!("`{shell}` reads a here-string as its script");
+    let mut acc = VerdictAcc::default();
+    for span in &spans {
+        if span.bare && span.operand.contains(['\'', '"', '\\']) {
+            if let Some(deny) = acc.record(Decision::ask(format!(
+                "{shape}, and that operand (`{}`) is a quoted/escaped word blastguard does not \
+unquote — it cannot tell what text the shell will run",
+                span.operand
+            ))) {
+                return deny;
+            }
+            continue;
+        }
+        let verdict = interpreter_code_verdict(
+            &shape,
+            std::slice::from_ref(&span.operand),
+            depth,
+            ctx,
+            !span.single_quoted,
+        );
+        if let Some(deny) = acc.record(verdict) {
+            return deny;
+        }
+    }
+    if is_foreign_shell(&shell) {
+        if let Some(deny) = acc.record(Decision::ask(format!(
+            "{shape}, and `{shell}` is not a POSIX shell — blastguard's reading of the script \
+proves nothing about what it does"
+        ))) {
+            return deny;
+        }
+    }
+    // User rulings R1/R0 (2026-10-14): every Ask reached here is a shell about
+    // to run a here-string blastguard could not clear, so it carries
+    // `RECOMMEND_NO`. A Deny returned above is unaffected.
+    recommend_against(acc.finish())
 }
 
 fn interpreter_stdin_operand<'a>(rest: &[&'a str]) -> Option<&'a str> {
@@ -9817,6 +10049,28 @@ fn double_quoted_operand_end(chars: &[char], start: usize) -> Option<usize> {
 /// nothing further for that operand, the same safe direction every other
 /// extractor in this file takes.
 fn here_string_operands(stage: &str) -> Vec<(String, bool)> {
+    here_string_spans(stage)
+        .into_iter()
+        .map(|s| (s.operand, s.single_quoted))
+        .collect()
+}
+
+/// One here-string found by [`here_string_spans`]: the operand as
+/// [`here_string_operands`] reports it, plus the CHAR range of the whole
+/// construct (`<<<` through the operand's closing quote) in the stage text, so
+/// a caller can judge the rest of the stage with the here-string removed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HereStringSpan {
+    operand: String,
+    single_quoted: bool,
+    /// The operand was written bare (no surrounding quote).
+    bare: bool,
+    start: usize,
+    end: usize,
+}
+
+/// The [`here_string_operands`] scan, with the position of each construct.
+fn here_string_spans(stage: &str) -> Vec<HereStringSpan> {
     let chars: Vec<char> = stage.chars().collect();
     let mut out = Vec::new();
     let mut i = 0;
@@ -9856,7 +10110,13 @@ fn here_string_operands(stage: &str) -> Vec<(String, bool)> {
                     if k >= chars.len() {
                         break;
                     }
-                    out.push((chars[start..k].iter().collect(), true));
+                    out.push(HereStringSpan {
+                        operand: chars[start..k].iter().collect(),
+                        single_quoted: true,
+                        bare: false,
+                        start: i,
+                        end: k + 1,
+                    });
                     i = k + 1;
                     continue;
                 }
@@ -9865,7 +10125,13 @@ fn here_string_operands(stage: &str) -> Vec<(String, bool)> {
                     let Some(k) = double_quoted_operand_end(&chars, start) else {
                         break;
                     };
-                    out.push((chars[start..k].iter().collect(), false));
+                    out.push(HereStringSpan {
+                        operand: chars[start..k].iter().collect(),
+                        single_quoted: false,
+                        bare: false,
+                        start: i,
+                        end: k + 1,
+                    });
                     i = k + 1;
                     continue;
                 }
@@ -9875,7 +10141,13 @@ fn here_string_operands(stage: &str) -> Vec<(String, bool)> {
                     while k < chars.len() && !chars[k].is_whitespace() {
                         k += 1;
                     }
-                    out.push((chars[start..k].iter().collect(), false));
+                    out.push(HereStringSpan {
+                        operand: chars[start..k].iter().collect(),
+                        single_quoted: false,
+                        bare: true,
+                        start: i,
+                        end: k,
+                    });
                     i = k;
                     continue;
                 }

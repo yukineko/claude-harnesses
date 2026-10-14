@@ -8,7 +8,7 @@ Claude Code 向けの **context-rot（コンテキスト腐敗）ガード**。R
 
 中核は「フック＝速くて決定論的・LLM を呼ばない安全網」と「`/distill` スキル＝必要時に走る LLM 品質の要約」という役割分担である。フックは PreCompact の厳しいタイムアウト内でも安全に動き、判断を要する蒸留はセッション内のスキルに任せる。
 
-各フックは `ctxrot` バイナリのサブコマンドであり、フックの JSON ペイロードを **stdin** から読む。エラー時の振る舞いは **一律の「exit 0 で黙る」ではない**——判定を持つサブコマンド（`preguard`/`toolguard`/`stop`/`statusline` と、空出力が「データ無し」と読まれる CLI 系）は判定不能を restrictive 側に解決し、判定を持たない observability フック（`guard`/`rescue`/`restore`）だけが exit 0 で沈黙する。詳細は下の [ランチャの分類表](#ランチャの分類表判定を持つ--持たない) を見ること。
+各フックは `ctxrot` バイナリのサブコマンドであり、フックの JSON ペイロードを **stdin** から読む。エラー時の振る舞いは **一律の「exit 0 で黙る」ではない**——判定を持つサブコマンド（`preguard`/`toolguard`/`stop`/`statusline` と、空出力が「データ無し」と読まれる CLI 系）は判定不能を restrictive 側に解決し、判定を持たない observability フック（`guard`/`rescue`/`restore`/`handoff`/`handoff-record`）だけが exit 0 で沈黙する。詳細は下の [ランチャの分類表](#ランチャの分類表判定を持つ--持たない) を見ること。
 
 | サブコマンド | フック | 役割 |
 |---|---|---|
@@ -16,8 +16,11 @@ Claude Code 向けの **context-rot（コンテキスト腐敗）ガード**。R
 | `ctxrot rescue` | `PreCompact` | `/compact` の直前に直近 transcript をたどり、永続的な **rescue ノート**（決定事項・未消化 todo・触れたファイル・リンク・直近の生ターン）を書き出し、不可逆な圧縮で何も失わせない。決定論的・LLM 不使用。ファイル名にセッションタグ（`rescue-<session>-<ts>.md`）を持つ。既定では切り離した `claude -p` を fire-and-forget して非同期で LLM 品質に格上げする（`distill_on_compact`、圧縮はブロックしない）。 |
 | `ctxrot restore` | `SessionStart` | セッション開始時に **簡潔な carryover**（決定事項＋未消化 todo＋リンク）を注入する。*このセッション自身*のノート（セッションタグ照合）を優先し、並列セッションが同じプロジェクトディレクトリを共有する場合は兄弟セッションの carryover を掴まないよう制限する。ノート全文は決して注入しない。 |
 | `ctxrot preguard` | `PreToolUse` | **ロード前の予防ゲート。**（1）ルールベース——`load_deny` グロブに一致する `Read` はサイズに関係なく拒否、`load_allow` はサイズゲートを迂回。（2）サイズベース——`limit` 無しの *無制限* `Read` が `gate_file_bytes`（既定 **1MB**）以上だと実行可能な理由付きで拒否。優先順位は **deny → limit → allow → size**。通常のソース読みは触らないよう狭く設計。 |
-| `ctxrot toolguard` | `PostToolUse` | `Read`/`Bash`/`Grep`/… が巨大なペイロードを返した時、*次の*重い読みを sub-agent 経由にして結論だけ残すよう促す（preguard ゲートを通り抜ける 50KB〜1MB の中間帯を扱う）。1 セッションあたりの回数は `toolguard_nudge_cap`（既定 3）で上限を設ける（助言自体が rot 源にならないよう）。 |
-| `ctxrot stop` | `Stop` | **オプトインの auto-compact 促し。** バジェットメーターの使用率が `auto_compact_at_percentage`（既定 **0.90**）を超えると `{"decision":"block"}` を返して Claude に `/compact` を促す。しきい値は ctxrot **自身のバジェットメーター**（`est_tokens / context_window`。`guard`/`usage` と同じ推定で 100% 超も出せる）で測り、生の model-window `used_percentage` では **ない**——だから真の ~1M 窓に対しても正しく発火する。既定は無効（`auto_compact_enabled = false`）。block は帯をまたぐごとに一度だけで、ターンを恒久的に塞ぐことはない。 |
+| `ctxrot toolguard` | `PostToolUse` | `Read`/`Bash`/`Grep`/… が巨大なペイロードを返した時、context 上の出力を切り詰め（`updatedToolOutput` で先頭＋末尾＋省略ヘッダに置換）、*次の*重い読みを sub-agent 経由にして結論だけ残すよう促す（preguard ゲートを通り抜ける 50KB〜1MB の中間帯を扱う）。1 セッションあたりの回数は `toolguard_nudge_cap`（既定 3）で上限を設ける（助言自体が rot 源にならないよう）。 |
+| `ctxrot stop` | `Stop` | **オプトインの auto-compact 促し。** バジェットメーターの使用率が `auto_compact_at_percentage`（既定 **0.90**）を超えると `{"decision":"block"}` を返して Claude に `/compact` を促す。しきい値は ctxrot **自身のバジェットメーター**（`est_tokens / context_window`。`guard`/`usage` と同じ推定で 100% 超も出せる）で測り、生の model-window `used_percentage` では **ない**——だから真の ~1M 窓に対しても正しく発火する。既定は無効（`auto_compact_enabled = false`）。block は帯をまたぐごとに一度だけで、ターンを恒久的に塞ぐことはない。**veto**: Claude が報告した実際の `context_window.used_percentage` が `model_window_continue_below_percentage`（既定 50.0。`0.0` で veto 無効）未満なら真の窓に余裕があるとして Stop を通す。計測値が無い場合は veto しない（ブロックする）。 |
+| `ctxrot handoff-record` | `PostToolUse`（`Read`）| 大きな `Read`（`handoff_min_bytes` 既定 20000 以上）の内容を**このセッション限定**でキャッシュする。副作用のみで出力なし。 |
+| `ctxrot handoff` | `PreToolUse`（`Task`）| このセッションが既に読んだパスに言及する `Task` を発行したとき、キャッシュ内容を `Task` の prompt に差し込む（`updatedInput`）ので subagent が再 `Read` せずに済む。`handoff_max_entry_bytes` / `handoff_max_inject_bytes`（各既定 200000）と `handoff_cache_lines`（既定 50 のリング）で上限。`handoff_enabled` は既定 true。セッションをまたがず、総トークンは減らない（subagent の往復を省くだけ）。 |
+| `ctxrot autonomy` | — | 共有 autonomy スイッチ（`condukt state autonomy-set on\|off` が書くもの）と、それが既定値を与える 2 つの bool を報告する: `{"autonomous":<bool>,"auto_distill_on_band":<bool>,"auto_compact_enabled":<bool>,"source":"<layer>"}` を出力して exit 0。`source` は `env` / `switch-file` / `config` / `default` / `undetermined-switch-file`。スイッチファイルが在るのに読めない場合は `autonomous:false`・`source:"undetermined-switch-file"`。 |
 | `ctxrot statusline` | `statusLine` | 常時表示の context 使用率メーター（`ctxrot 52% ▮▮▯▯ band1 ~104k/200k`）を帯ごとに色付け（緑→黄→赤）で出す。Claude の `context_window.used_percentage` を読み（無ければ transcript から推定）。 |
 
 ### ランチャの分類表（判定を持つ / 持たない）
@@ -46,17 +49,18 @@ CLAUDE.md 第1節は「免責を主張するモジュールは下流消費者を
 | `rescue` | `PreCompact` | (1) ノートストアへの副作用（後で `restore` / `/distill` が読む）。(2) stderr のログ 1 行のみ（PreCompact は context 注入不可）| stdout を消費する主体が存在しない。ノート不在は `restore` 側で「前セッションのノート無し」として扱われ、そこでは判定を伴わない |
 | `restore` | `SessionStart` | stdout → セッション開始時の carryover 注入（モデルの context のみ）| 同上。carryover は「あれば良い」もので、機械消費者はいない |
 | `distill-bg` | （フックではない・`rescue` が detach して起動する内部コマンド）| ノートストアへの副作用のみ | fire-and-forget。呼び出し元はこのランチャ経由でバイナリが在るときにしか起動しない |
+| `handoff-record` / `handoff` | `PostToolUse:Read` / `PreToolUse:Task` | キャッシュへの副作用 / `Task` prompt への任意の差し込み（`updatedInput`）| 差し込みが無い `Task` は、このフックが未導入の場合とまったく同じに走る。不在を verdict として読む機械消費者はいない |
 
 これらは **exit 0 のまま**だが、**沈黙はしない**——ランチャは常に「no bundled binary for `<os>-<arch>`」を stderr に出す（「判定しないものは、失敗しても判定したふりをしない」）。
 
-> **残る限界（隠さず書く）**: フックが exit 0 のとき stderr は Claude Code の debug 出力にしか現れない。つまり `guard`/`rescue`/`restore` の「走らなかった」信号は、既定の UI では人間に見えない。ここを可視化するには注入チャネル（UserPromptSubmit / SessionStart の stdout）を使うしかなく、それは毎ターンのノイズと引き換えになる。上の免責は「機械消費者がいないので verdict にならない」という一点で成り立っており、**stderr が見えることを根拠にしていない**。この 4 つのいずれかの出力が将来なんらかの判定の入力になったら、免責は失効する。
+> **残る限界（隠さず書く）**: フックが exit 0 のとき stderr は Claude Code の debug 出力にしか現れない。つまり `guard`/`rescue`/`restore` の「走らなかった」信号は、既定の UI では人間に見えない。ここを可視化するには注入チャネル（UserPromptSubmit / SessionStart の stdout）を使うしかなく、それは毎ターンのノイズと引き換えになる。上の免責は「機械消費者がいないので verdict にならない」という一点で成り立っており、**stderr が見えることを根拠にしていない**。これらのいずれかの出力が将来なんらかの判定の入力になったら、免責は失効する。
 
 回帰テストは `tests/launcher_missing_binary.rs`（バイナリの無い一時ディレクトリにランチャを複製して実行し、上表の各行を固定する。バイナリが在るときに exec と引数透過が壊れていないことも併せて固定）。
 
 加えて 2 つのスキルがある:
 
 - **`/distill`** — オンデマンドの高品質 LLM 蒸留。フックが安価な決定論的安全網なのに対し、こちらが「賢い方」。
-- **`/ctx`** — context に何を載せる/載せないかを明示制御する。`/ctx load <path>` で意図的にロード（巨大なら sub-agent 経由で要約だけ）、`/ctx pin <path>` で次セッション以降もポインタを再浮上、`/ctx unload <path>`（別名 `drop`）で除外、`/ctx list` でプロジェクトの loadset を確認。状態は `ctxrot ctx`（プロジェクト単位の `pinned`/`dropped` セット）に持ち、`restore` がセッション開始時に浮上させる。
+- **`/ctx`** — context に何を載せる/載せないかを明示制御する。`/ctx load <path>` で意図的にロード（巨大なら sub-agent 経由で要約だけ）、`/ctx pin <path>` で次セッション以降もポインタを再浮上、`/ctx unload <path>`（別名 `drop`）で除外、`unpin`/`undrop` で取り消し、`use-note`/`clear-note` で restore が使うノートを固定/解除、`/ctx list` でプロジェクトの loadset を確認。状態は `ctxrot ctx`（プロジェクト単位の `pinned`/`dropped` セット）に持ち、`restore` がセッション開始時に浮上させる。
 
 蒸留ノートは **契約**で守られる。`ctxrot note write --require-sections` は `restore` が読む見出し（`決定事項/Decisions`、`残課題/Open todos`）を欠くノートを拒否（exit 1・未書き込み）するので、スキーマのずれは空の carryover を黙って生むのではなく書き込み時に大声で落ちる。
 
@@ -75,7 +79,7 @@ ctxrot が無いと、こうした劣化を人間が気付いて手で対処す�
 
 ## どう使うか
 
-推奨は **Claude Code プラグインとしての導入**。このリポジトリは Rust crate であると同時にプラグイン／マーケットプレースでもあり、6 つのフック・`/distill` と `/ctx` スキル・`ctxrot-distiller` subagent・ビルド済みバイナリ（`bin/ctxrot`）を同梱する。すべて Claude **サブスクリプション**で完結し、API キーも別途の `cargo install` も不要。
+推奨は **Claude Code プラグインとしての導入**。このリポジトリは Rust crate であると同時にプラグイン／マーケットプレースでもあり、6 イベント上の 8 つのフック定義（`hooks/hooks.json`）・`/distill` と `/ctx` スキル・`ctxrot-distiller` subagent・`bin/ctxrot` ランチャを同梱する。すべて Claude **サブスクリプション**で完結し、API キーも別途の `cargo install` も不要。
 
 ```text
 # Claude Code 内で:
@@ -119,9 +123,9 @@ cp -r skills/ctx ~/.claude/skills/
 
 ### 設定とストア
 
-設定は `~/.ctxrot/config.toml`（`ctxrot init` が作る）。主要項目は `store_dir`（Obsidian vault も指定可）/ `context_window`（**実窓ではなく「これ以下に抑えたい目標値」**——既定 200000 のまま使うこと。実 1M 窓に直すと帯が ~950K まで発火せず無効化する）/ `large_file_bytes`・`huge_tool_output_bytes`・`gate_file_bytes`（各種しきい値）/ `bands` / `load_deny`・`load_allow`（入口ゲートの恒久ルール）/ `restore_enabled`・`inject_*`（carryover 制御）/ `anchor_reinject_every`（既定 12。PDO session-anchor 再注入の頻度。live な overwatch lease を持つセッションで「今の担当（title + done_criteria）」を band ≥ 1 から N プロンプトごとに再浮上。決定事項 re-anchor とは別トラック・別クールダウン。lease 無し／overwatch 未導入なら無音）/ `distill_on_compact`・`auto_distill_on_band`（圧縮時／トップ帯到達時の非同期 LLM 蒸留。**共有 autonomy スイッチが on のとき既定で true** になるが、config.toml や `CTXROT_AUTO_DISTILL_ON_BAND` の明示指定が常に優先）/ `auto_compact_enabled`（既定 false。これも**共有スイッチが on なら既定で true**。`CTXROT_AUTO_COMPACT` や config.toml の明示指定が常に優先し、スイッチファイルがあるのに読めない場合は何も変えず stderr に警告を出す＝fail-closed。現在値は `ctxrot autonomy` で確認できる）・`auto_compact_at_percentage`（既定 0.90。Stop フックの auto-compact 促し。ctxrot 自身のバジェットメーターに対して測る）など。
+設定は `~/.ctxrot/config.toml`（`ctxrot init` が作る）。主要項目は `store_dir`（Obsidian vault も指定可）/ `context_window`（**実窓ではなく「これ以下に抑えたい目標値」**——既定 200000 のまま使うこと。実 1M 窓に直すと帯が ~950K まで発火せず無効化する）/ `large_file_bytes`・`huge_tool_output_bytes`・`gate_file_bytes`（各種しきい値）/ `bands` / `load_deny`・`load_allow`（入口ゲートの恒久ルール）/ `restore_enabled`・`inject_*`（carryover 制御）/ `anchor_reinject_every`（既定 12。PDO session-anchor 再注入の頻度。live な overwatch lease を持つセッションで「今の担当（title + done_criteria）」を band ≥ 1 から N プロンプトごとに再浮上。決定事項 re-anchor とは別トラック・別クールダウン。lease 無し／overwatch 未導入なら無音）/ `distill_on_compact`・`auto_distill_on_band`（圧縮時／トップ帯到達時の非同期 LLM 蒸留。**共有 autonomy スイッチが on のとき既定で true** になるが、config.toml や `CTXROT_AUTO_DISTILL_ON_BAND` の明示指定が常に優先）/ `auto_compact_enabled`（既定 false。これも**共有スイッチが on なら既定で true**。`CTXROT_AUTO_COMPACT` や config.toml の明示指定が常に優先し、スイッチファイルがあるのに読めない場合は何も変えず stderr に警告を出す＝fail-closed。現在値は `ctxrot autonomy` で確認できる）・`auto_compact_at_percentage`（既定 0.90。Stop フックの auto-compact 促し。ctxrot 自身のバジェットメーターに対して測る）/ `model_window_continue_below_percentage`（既定 50.0。Stop 促しの veto、env `CTXROT_MODEL_WINDOW_CONTINUE_BELOW`）/ `handoff_*`（handoff フックの有効化と各上限）など。
 
-ノートは Obsidian 互換 markdown でプロジェクト単位に格納される（`<store_dir>/<project-basename>-<hash>/`）。`ctxrot note list` / `ctxrot note latest` / `ctxrot note dir` で確認する。
+ノートは Obsidian 互換 markdown でプロジェクト単位に格納される（`<store_dir>/<project-basename>-<hash>/`）。`ctxrot note list` / `ctxrot note latest` / `ctxrot note dir` で確認し、`ctxrot note write`（stdin から書く。`--require-sections` で restore 契約を強制）/ `ctxrot note prune`（`keep_notes_per_project` 件＋distill ノート `keep_distill_min` 件を残して GC）で操作する。ストアが読めない場合 `note list`/`note prune` は空を出さず exit 1。
 
 ### メモリがセッションをまたぐ流れ
 
@@ -142,41 +146,29 @@ cp -r skills/ctx ~/.claude/skills/
 
 ## プラットフォーム対応 / バイナリのビルド
 
-プラグインはランタイムに `bin/ctxrot` ランチャが選ぶプリビルド per-platform バイナリを同梱する:
-
-| Host | ファイル | 状態 |
-|---|---|---|
-| Linux x86_64 | `bin/ctxrot-linux-x86_64` | 同梱 |
-| macOS Apple Silicon | `bin/ctxrot-darwin-arm64` | Mac 上でビルド（下記） |
-| macOS Intel | `bin/ctxrot-darwin-x86_64` | Mac 上でビルド（下記） |
-
-一致するバイナリが無ければランチャは無言で exit 0 する（フックはターンを壊さない）。ビルドヒントを stderr に一行出す。
+`bin/ctxrot` ランチャがランタイムに `bin/ctxrot-<os>-<arch>`（Linux x86_64/arm64、macOS arm64/x86_64）を選ぶ。これらのバイナリは**コミットしない**（gitignore）。対象マシン上でワークスペース root からビルドする:
 
 ```sh
-# host platform（Linux ならここ、Apple Silicon なら Mac 上で）
-scripts/build-plugin-bin.sh
-
-# Mac 上で Intel 版もクロスビルドする場合:
+scripts/build-plugin-bin.sh ctxrot                        # host platform
 rustup target add x86_64-apple-darwin
-scripts/build-plugin-bin.sh x86_64-apple-darwin
-
-git add bin/ && git update-index --chmod=+x bin/ctxrot bin/ctxrot-*
-git commit -m "Add <platform> binary"
+scripts/build-plugin-bin.sh ctxrot x86_64-apple-darwin    # Mac 上で Intel 版も
 ```
 
-このリポジトリは `core.filemode=false` マウント上にあるため、実行ビットは `git update-index --chmod=+x` で git index に強制する（そうしないとランチャ/バイナリが非実行可能でチェックアウトされフックが失敗する）。
+稼働プラグインへの反映は手動コピーではなく `scripts/rollout-plugins.sh` で行う（`docs/repo-operations.md` 参照）。macOS バイナリは Linux からクロスビルドできない（macOS SDK が要る）。`bin/ctxrot` ランチャは git index 上で 100755 でなければならない（ここでは `core.fileMode=false`。`check-launcher-exec-bit.py` が強制）。
+
+一致するバイナリが無い場合の挙動は上の [ランチャの分類表](#ランチャの分類表判定を持つ--持たない) のとおり（一律の「無言で exit 0」ではない）。
 
 ## プラグイン構成
 
 ```
 .claude-plugin/plugin.json        # プラグインマニフェスト
 .claude-plugin/marketplace.json   # 単一プラグインのマーケットプレース (name: yukineko)
-hooks/hooks.json                  # 6 つの hook → ${CLAUDE_PLUGIN_ROOT}/bin/ctxrot
+hooks/hooks.json                  # 6 イベント上の 8 つの hook → ${CLAUDE_PLUGIN_ROOT}/bin/ctxrot
 agents/ctxrot-distiller.md        # distiller subagent (重い読み込みを main context から追い出す)
 skills/distill/SKILL.md           # /distill skill (subagent へ委譲)
 skills/ctx/SKILL.md               # /ctx skill (`ctxrot ctx` 経由の pin/drop/load)
 bin/ctxrot                        # POSIX ランチャ → ctxrot-<os>-<arch>
-bin/ctxrot-<os>-<arch>            # プリビルドバイナリ
+bin/ctxrot-<os>-<arch>            # プラットフォーム別バイナリ（gitignore、ローカルでビルド）
 src/ … Cargo.toml                 # Rust クレート本体（無変更で再利用）
 ```
 

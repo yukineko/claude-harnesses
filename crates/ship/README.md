@@ -2,7 +2,8 @@
 
 **Shipping ritual for Claude Code**, written in Rust.
 
-On `SessionEnd`, it detects unshipped work (uncommitted git changes, stale plugin-cache) and prints a reminder.
+On `SessionEnd`, it detects unshipped work (uncommitted git changes, unmerged condukt branches, leftover
+worktrees, unpushed commits, stale plugin binaries) and prints a reminder.
 Guides you through the shipping workflow: check, rebuild plugins (safe), commit, merge, push.
 
 **GATED invariant**: commit, merge, and push require explicit user approval. `scripts/rebuild-plugins.sh`
@@ -15,8 +16,8 @@ Subscription-native: one Rust binary, one hook (SessionEnd), no API key.
 ## Commands
 
 ```sh
-ship check             # print unshipped state (dirty git, stale plugin-cache)
-ship check --run-safe  # run scripts/rebuild-plugins.sh --stage-repo (SAFE: refresh cache AND the committed crates/*/bin; never git)
+ship check             # print unshipped state (dirty git, unmerged/unpushed work, leftover worktrees, stale binaries)
+ship check --run-safe  # run scripts/rebuild-plugins.sh --stage-repo (SAFE: refresh cache AND the local crates/*/bin copy; never git)
 ship rollout            # run scripts/rollout-plugins.sh (heavier: automates the /plugin update step)
 ship session-end       # SessionEnd hook (reads hook JSON from stdin, prints reminder if unshipped)
 ```
@@ -45,7 +46,15 @@ visibility into what will be committed, merged, or pushed before any action is t
 ## GATED invariant — critical
 
 - **commit, merge, push**: NEVER auto-run. ALWAYS get explicit user approval first. Show diffs, ask "approve?", wait for "yes".
-- **rebuild-plugins.sh --stage-repo**: auto-runnable via `ship check --run-safe` (refreshes the cache AND the committed `crates/*/bin` binary — the artifact stale-detection measures; a file copy, never git). This is what clears a "stale plugin binaries" item; the refreshed binary then needs a GATED commit.
+- **rebuild-plugins.sh --stage-repo**: auto-runnable via `ship check --run-safe` (refreshes the cache AND the local `crates/*/bin` copy — the artifact stale-detection measures; a file copy, never git). This is what clears a "stale plugin binaries" item.
+
+Stale detection compares each crate's newest `src/` mtime against a local
+`crates/<name>/bin/<name>-linux-x86_64` file. Per-platform binaries are git-ignored
+in this repo, so that file exists only where someone built it locally; a crate
+without it is **skipped, not reported as fresh**. "no stale plugin binaries" is
+therefore not evidence about crates that have no such file. (The checklist text
+printed by `ship check` still calls this the "committed" binary and asks for a
+commit; with the binaries git-ignored there is nothing to commit.)
 - **rollout-plugins.sh**: auto-runnable via `ship rollout` (heavier, explicit — automates `/plugin update`).
 
 ## Install (plugin)

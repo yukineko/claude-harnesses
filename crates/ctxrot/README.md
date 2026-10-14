@@ -10,8 +10,17 @@ restore, distill, and control** what enters your conversation context.
 ## What it does
 
 Each hook is one subcommand of the `ctxrot` binary. It reads the hook's JSON
-payload on **stdin**. Cardinal rule: a hook **never breaks your turn** — on any
-error it exits 0 and stays silent.
+payload on **stdin**. Failure is **not** uniformly "exit 0 and stay silent":
+the verdict-bearing subcommands (`preguard` / `toolguard` / `stop` /
+`statusline`, plus CLI commands whose empty output would read as real data)
+resolve a cannot-determine to the restrictive side (`stop` runs under
+`harness_core::gate::run::run_guarded`, so a panic becomes one
+`{"decision":"block"}`; a `preguard` panic becomes a deny; a `toolguard` panic
+replaces the output with a placeholder; `statusline` renders an explicit
+`unknown`; an unreadable note store makes `note list`/`prune` exit 1). Only the
+pure-observability hooks (`guard` / `rescue` / `restore` / `handoff` /
+`handoff-record`) exit 0 silently on error. See `src/main.rs` and the launcher
+classification table in `README.ja.md`.
 
 | Subcommand | Hook | What it does |
 |---|---|---|
@@ -19,8 +28,10 @@ error it exits 0 and stays silent.
 | `ctxrot rescue` | `PreCompact` | Right before `/compact`, streams the recent transcript and writes a durable **rescue note** (decisions, open todos, touched files, links, raw recent turns) so nothing is lost to lossy compaction. Deterministic, no LLM. The note filename carries a **session tag** (`rescue-<session>-<ts>.md`). Same writer also powers guard's preemptive rescue (labeled `trigger: band-NN%`). By default it *also* fire-and-forgets a detached `claude -p` async distill (`distill_on_compact`, feature ④) that upgrades the note to LLM quality without blocking compaction. |
 | `ctxrot restore` | `SessionStart` | At session start, injects a **compact carryover** (decisions + open todos + a link). It prefers *this* session's own note (matched by session tag); the cross-session fallback returns the latest note when the stream is unambiguous (≤1 session in the dir) but, when **parallel sessions** share one project dir (≥2 sessions), restricts to untagged/shared notes so it never grabs a sibling's carryover. Never the whole note. |
 | `ctxrot preguard` | `PreToolUse` | **Preventive gate, before the load.** Two layers: (1) **rule-based** — a `Read` matching a `load_deny` glob is denied *regardless of size* ("never load these"; holds even for a bounded slice by default), while a `load_allow` glob bypasses the size gate ("trusted, load whole"). (2) **size-based** — an *unbounded* `Read` (no `limit`) of a local file at/above `gate_file_bytes` (default **1MB**) is denied with an actionable reason. Precedence: **deny → limit → allow → size**. Narrow by design so normal source reads are untouched. |
-| `ctxrot toolguard` | `PostToolUse` | When a `Read`/`Bash`/`Grep`/… returns a huge payload, nudges you to route the *next* heavy read through a sub-agent and keep only conclusions. (Handles the 50KB–1MB middle band the `preguard` gate lets through.) The per-session nudge count is bounded by `toolguard_nudge_cap` (default 3) so the advice itself doesn't become rot. |
-| `ctxrot stop` | `Stop` | **Opt-in auto-compact nudge.** When budget-meter usage crosses `auto_compact_at_percentage` (default **0.90**), returns `{"decision":"block"}` asking Claude to run `/compact`. The threshold is measured off ctxrot's **OWN budget meter** (`est_tokens / context_window`, the same estimate `guard`/`usage` band from — which can read >100%), **not** the raw model-window `used_percentage`, so it fires correctly against the true ~1M window. Off by default (`auto_compact_enabled = false`); the block is bounded to once per band crossing so it can never permanently trap a turn. |
+| `ctxrot toolguard` | `PostToolUse` | When a `Read`/`Bash`/`Grep`/… returns a huge payload, truncates it in context (head + tail with an omission header, via `updatedToolOutput`) and nudges you to route the *next* heavy read through a sub-agent and keep only conclusions. (Handles the 50KB–1MB middle band the `preguard` gate lets through.) The per-session nudge count is bounded by `toolguard_nudge_cap` (default 3) so the advice itself doesn't become rot. |
+| `ctxrot stop` | `Stop` | **Opt-in auto-compact nudge.** When budget-meter usage crosses `auto_compact_at_percentage` (default **0.90**), returns `{"decision":"block"}` asking Claude to run `/compact`. The threshold is measured off ctxrot's **OWN budget meter** (`est_tokens / context_window`, the same estimate `guard`/`usage` band from — which can read >100%), **not** the raw model-window `used_percentage`, so it fires correctly against the true ~1M window. Off by default (`auto_compact_enabled = false`); the block is bounded to once per band crossing so it can never permanently trap a turn. **Veto:** when Claude reports a real `context_window.used_percentage` below `model_window_continue_below_percentage` (default 50.0; `0.0` disables the veto), the true model window still has room and the Stop is allowed; an absent measurement does not veto. |
+| `ctxrot handoff-record` | `PostToolUse` (`Read`) | Caches a large `Read`'s content (≥ `handoff_min_bytes`, default 20000) for **this session only**. Side effect only, no output. |
+| `ctxrot handoff` | `PreToolUse` (`Task`) | When this session dispatches a `Task` whose prompt mentions a path it already read, splices the cached content into the `Task` prompt (`updatedInput`) so the subagent need not re-`Read` it. Bounded by `handoff_max_entry_bytes` / `handoff_max_inject_bytes` (default 200000 each) and a `handoff_cache_lines` ring (default 50); `handoff_enabled = true` by default. Never crosses sessions and does not reduce total tokens — it saves the subagent's round trip. |
 | `ctxrot autonomy` | — | Report the SHARED autonomy switch (the one `condukt state autonomy-set on\|off` writes, read directly — no subprocess) and the two ctxrot bools it defaults: prints `{"autonomous":<bool>,"auto_distill_on_band":<bool>,"auto_compact_enabled":<bool>,"source":"<layer>"}` and exits 0. `source` is one of `env` / `switch-file` / `config` / `default` / `undetermined-switch-file`. When the switch is ON and you configured neither bool, both default to true; an explicit config.toml value or `CTXROT_AUTO_COMPACT` / `CTXROT_AUTO_DISTILL_ON_BAND` always wins. A switch file that exists but cannot be read reports `autonomous:false` with `source:"undetermined-switch-file"` (fail-closed), never a silent "off". |
 | `ctxrot statusline` | `statusLine` | Always-on context-usage meter (`ctxrot 52% ▮▮▯▯ band1 ~104k/200k`), colored by band (green→yellow→red). Reads Claude's `context_window.used_percentage` from the status JSON (falls back to estimating from the transcript). `ctxrot install` sets it only when no status line exists yet, so a custom one is never clobbered. |
 
@@ -33,7 +44,8 @@ Plus two skills:
   for a summary), `/ctx pin <path>` keeps a pointer re-surfacing each session,
   `/ctx unload <path>` (alias `drop`) marks something to keep out (realized on
   the next `/compact` / `/distill` / fresh session — hooks can't evict live
-  tokens), and `/ctx list` shows the project's loadset. State lives in `ctxrot
+  tokens), `unpin` / `undrop` reverse those, `use-note` / `clear-note` pin or
+  release the note `restore` uses, and `/ctx list` shows the project's loadset. State lives in `ctxrot
   ctx` (a small per-project `pinned`/`dropped` set), surfaced at session start by
   `restore`.
 
@@ -51,8 +63,9 @@ write time instead of silently yielding an empty carryover.
 ## Install (recommended: as a Claude Code plugin)
 
 This repo is **both the Rust crate and a Claude Code plugin/marketplace**. The
-plugin bundles the six hooks, the `/distill` and `/ctx` skills, the
-`ctxrot-distiller` subagent, and a prebuilt binary (`bin/ctxrot`) — so installs
+plugin bundles eight hook entries on six events (`hooks/hooks.json`), the
+`/distill` and `/ctx` skills, the `ctxrot-distiller` subagent, and the
+`bin/ctxrot` launcher — so installs
 run entirely on your
 Claude **subscription**, no API key and no separate `cargo install` needed.
 
@@ -67,11 +80,10 @@ launcher that picks the right per-platform binary (`bin/ctxrot-<os>-<arch>`) for
 the host, so the same repo works on Linux and macOS. Run `ctxrot init` once for
 the config + store dirs (optional; defaults work without it).
 
-The Linux binary is committed directly; the **macOS binaries**
-(`bin/ctxrot-darwin-arm64` / `-x86_64`) are built by the `macOS binaries` GitHub
-Actions workflow on a macOS runner and committed back on each push to `main`
-that touches `src/` (they can't be cross-built from Linux — Apple frameworks need
-the macOS SDK). To build them by hand, run `scripts/build-plugin-bin.sh` on a Mac.
+The per-platform binaries are **not committed** (`crates/*/bin/*-<os>-<arch>` is
+gitignored); they are built locally — the repo's `scripts/rollout-plugins.sh`
+builds and deploys them into the plugin cache (see `docs/repo-operations.md`).
+macOS binaries can't be cross-built from Linux (they need the macOS SDK).
 
 It runs entirely on your Claude subscription — the hooks and subagent execute in
 the normal session model, no `ANTHROPIC_API_KEY` and no separate `cargo install`.
@@ -118,48 +130,40 @@ settings. Remove with `ctxrot uninstall`.
 
 ## Platform support / building the binaries
 
-The plugin ships prebuilt per-platform binaries, selected at runtime by the
-`bin/ctxrot` launcher:
-
-| Host | File | Status |
-|---|---|---|
-| Linux x86_64 | `bin/ctxrot-linux-x86_64` | bundled |
-| macOS Apple Silicon | `bin/ctxrot-darwin-arm64` | build on a Mac (see below) |
-| macOS Intel | `bin/ctxrot-darwin-x86_64` | build on a Mac (see below) |
-
-If a host has no matching binary, the launcher exits 0 silently (a hook never
-breaks your turn) and prints a one-line build hint to stderr.
-
-**Build for your platform** — run on that machine and commit the result:
+The `bin/ctxrot` launcher selects `bin/ctxrot-<os>-<arch>` at runtime (Linux
+x86_64/arm64, macOS arm64/x86_64). None of these binaries is committed; build on
+the target machine from the workspace root:
 
 ```sh
-# host platform (Linux here, Apple Silicon on a Mac, etc.)
-scripts/build-plugin-bin.sh
-
-# cross-target on a Mac to also produce the Intel build:
+scripts/build-plugin-bin.sh ctxrot                        # host platform
 rustup target add x86_64-apple-darwin
-scripts/build-plugin-bin.sh x86_64-apple-darwin
-
-git add bin/ && git update-index --chmod=+x bin/ctxrot bin/ctxrot-*
-git commit -m "Add <platform> binary"
+scripts/build-plugin-bin.sh ctxrot x86_64-apple-darwin    # Intel build on a Mac
 ```
 
-The script normalizes the Rust host triple to `ctxrot-<os>-<arch>`. Because this
-repo lives on a `core.filemode=false` mount, exec bits are forced into the git
-index with `git update-index --chmod=+x` (otherwise the launcher/binaries would
-check out non-executable and hooks would fail).
+For the live plugin use `scripts/rollout-plugins.sh` instead of copying by hand.
+The `bin/ctxrot` launcher must be mode 100755 in the git index
+(`core.fileMode=false` here; enforced by `check-launcher-exec-bit.py`).
+
+If a host has no matching binary, the launcher does **not** uniformly exit 0
+silently. It prints a build hint on stderr and then: `preguard` →
+`permissionDecision: "ask"`; `toolguard` → an `additionalContext` saying the
+output was not size-checked; `stop` → one fail-closed `{"decision":"block"}`
+(the `stop_hook_active` re-entry is allowed; empty stdin → exit 1);
+`statusline` → an explicit `unknown` meter; `guard` / `rescue` / `restore` /
+`distill-bg` / `handoff` / `handoff-record` → exit 0; any other (CLI) verb →
+exit 1. Pinned by `tests/launcher_missing_binary.rs`.
 
 ## Plugin layout
 
 ```
 .claude-plugin/plugin.json        # plugin manifest
 .claude-plugin/marketplace.json   # single-plugin marketplace (name: yukineko)
-hooks/hooks.json                  # the 6 hooks → ${CLAUDE_PLUGIN_ROOT}/bin/ctxrot
+hooks/hooks.json                  # 8 hook entries on 6 events → ${CLAUDE_PLUGIN_ROOT}/bin/ctxrot
 agents/ctxrot-distiller.md        # distiller subagent (keeps heavy reads off main ctx)
 skills/distill/SKILL.md           # /distill skill (delegates to the subagent)
 skills/ctx/SKILL.md               # /ctx skill (pin/drop/load via `ctxrot ctx`)
 bin/ctxrot                        # POSIX launcher → ctxrot-<os>-<arch>
-bin/ctxrot-<os>-<arch>            # prebuilt binaries
+bin/ctxrot-<os>-<arch>            # per-platform binaries (gitignored, built locally)
 src/ … Cargo.toml                 # the Rust crate (reused unchanged)
 ```
 
@@ -238,6 +242,16 @@ auto_compact_enabled = false    # OFF by default. When true, `ctxrot stop` (the 
 auto_compact_at_percentage = 0.90 # fraction at which to nudge — measured against ctxrot's
                                 #   OWN budget meter (est_tokens / context_window, same as
                                 #   guard/usage), NOT the raw model-window used_percentage.
+model_window_continue_below_percentage = 50.0 # Stop-nudge veto: a REPORTED model-window
+                                #   used_percentage below this allows the Stop (an absent
+                                #   reading does not veto). 0.0 disables the veto.
+
+# parent→child Read handoff (handoff / handoff-record hooks):
+handoff_enabled = true
+handoff_min_bytes = 20000       # cache Reads at/above this size (this session only)
+handoff_max_entry_bytes = 200000
+handoff_max_inject_bytes = 200000
+handoff_cache_lines = 50        # ring-buffer cap on the cache file (0 = unbounded)
 ```
 
 Glob syntax for `load_deny`/`load_allow` is path-aware: `*`/`?` stay within a
@@ -259,7 +273,8 @@ Env overrides (Python v1 compatibility): `GUARD_DISABLE` (any value → no-op),
 `CTXROT_DISTILL_ON_COMPACT` / `CTXROT_DISTILL_CMD` / `CTXROT_DISTILL_TIMEOUT_SECS`
 (async-distill toggle, command, and timeout), `CTXROT_AUTO_DISTILL_ON_BAND`,
 `CTXROT_TOOLGUARD_NUDGE_CAP`, and `CTXROT_AUTO_COMPACT` /
-`CTXROT_AUTO_COMPACT_AT_PERCENTAGE` (Stop-hook auto-compact toggle and threshold).
+`CTXROT_AUTO_COMPACT_AT_PERCENTAGE` (Stop-hook auto-compact toggle and threshold),
+`CTXROT_MODEL_WINDOW_CONTINUE_BELOW` (the Stop-nudge veto).
 
 > **CJK / token-estimate note.** The byte-based thresholds (`large_file_bytes`,
 > `huge_tool_output_bytes`, `gate_file_bytes`) and the `bytes/4` token estimate
@@ -280,7 +295,12 @@ Notes are Obsidian-compatible markdown, grouped per project (keyed by cwd):
 ctxrot note list      # newest first
 ctxrot note latest    # path of the most recent note
 ctxrot note dir       # the project's note directory
+ctxrot note write     # write a note from stdin (--require-sections enforces the restore contract)
+ctxrot note prune     # keep the newest keep_notes_per_project (+ keep_distill_min distill notes)
 ```
+
+An unreadable store makes `note list` / `note prune` exit 1 rather than print an
+empty listing.
 
 ## Metrics
 

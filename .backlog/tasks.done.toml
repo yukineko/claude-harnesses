@@ -36785,3 +36785,56 @@ excerpt = """
 rev = "5357b81127c32763bb3054ba7bf79032d57d6c86"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "7d56f1e3"
+title = "reviewgate: mode の綴り間違いが Subprocess を無診断で Inject へ降格させる (propguard 3ca750b9 の双子)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+2026-09-30 propguard 3ca750b9 の verifier が発見。crates/reviewgate/src/config.rs:29-30 '"subprocess" | "reviewer" | "independent" => Mode::Subprocess,' / '_ => Mode::Inject,'、呼び出しは :236 'cfg.mode = Mode::parse(&v);'。propguard 側の是正方針 (未知 mode は config-invalid として block、systemMessage で可視化、Subprocess への読み替えは不可 — checker の PASS で初回 stop が通るため厳密に厳しくない) を同じく適用する。
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/reviewgate/src/config.rs (mod backlog_repro_s08, #[ignore]) (rev e70d48dd)"""
+created_at = 1790718724
+updated_at = 1792002533
+weight = 0.0
+issue_number = 868
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/868"
+issue_closed_at = 1792002539
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p reviewgate --test backlog_7d56f1e3_unknown_mode_blocks"
+exit = 0
+passed = 4
+rev = "0f50530b8fc7437aaa5721374d2e576b71731bb2"
+observed_at = 1792002474
+output_digest = "sha256:5c24f5b85016946b8792811bce7f987b04c6b0a115147f86324f94a2c25f8af3"
+excerpt = """
+
+running 4 tests
+test unknown_mode_blocks_config_invalid_on_clean_repo ... ok
+test unknown_mode_blocks_config_invalid_with_reviewable_change ... ok
+test known_mode_on_clean_repo_allows ... ok
+test known_modes_do_not_produce_config_invalid ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.04s
+
+   Compiling harness-core v0.2.51 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/harness-core)
+   Compiling overwatch v0.2.62 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/overwatch)
+   Compiling reviewgate v0.1.38 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/reviewgate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.89s
+     Running tests/backlog_7d56f1e3_unknown_mode_blocks.rs (target/debug/deps/backlog_7d56f1e3_unknown_mode_blocks-e68619ee474ea401)
+"""
+
+[task.closure.red]
+rev = "6cd14752fe4d8210a72009e0edb3ac50fbc6bfd9"
+exit = 101
+kind = "behavioural"

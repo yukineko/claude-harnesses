@@ -1,5 +1,5 @@
 #!/bin/sh
-# The git-hook test suites that are GREEN, run as one donegate check (backlog
+# The git-hook test suites, run as one donegate check (backlog
 # c3a98510).
 #
 # These three suites — test_precommit_hook.py, test_git_hook_coverage.py and
@@ -9,25 +9,18 @@
 # tests.py` would (it globs scripts/test_*.py), but nothing invokes THAT either,
 # so the suites guarding the guards were themselves unguarded.
 #
-# WHY ONLY TWO OF THE THREE ARE HERE. Measured 2026-09-13 at aed66762:
+# All three run here as one required check. Measured 2026-09-13 at aed66762,
+# test_gate_bypass.py was the red one (failures=1, the amend test pinned by
+# backlog 6267bfbe) and ran as a separate ADVISORY check until that red was
+# resolved. It was resolved by USER RULING 2026-10-15 (backlog 5d7867f0): the
+# amend being recorded is the documented fail-closed design of
+# .githooks/pre-commit, and the test was re-anchored to pin that design
+# (AmendIsRecordedFailClosed). Measured 2026-10-15: test_gate_bypass.py
+# "Ran 148 tests in 143.432s / OK". The advisory entry was deleted in the same
+# commit, as its named expiry condition required.
 #
-#   test_precommit_hook.py    Ran 16 tests in 27.783s   OK
-#   test_git_hook_coverage.py Ran  9 tests in  7.227s   OK
-#   test_gate_bypass.py       Ran 124 tests in 75.616s  FAILED (failures=1)
-#
-# The two green ones run HERE, as a required check. test_gate_bypass runs as a
-# separate ADVISORY check (see donegate.toml), because its one failure is the
-# open defect backlog 6267bfbe pins — the post-commit amend certificate. Wiring
-# a suite with a live red into the blocking path would block every stop in the
-# repo, and the pressure that creates is precisely what produces a shared skip
-# file (CLAUDE.md 5) or a quietly-deleted assertion (CLAUDE.md 4).
-#
-# It is deliberately NOT silenced: it still runs, still reports, and the moment
-# 6267bfbe lands it should be moved into this script and the advisory entry
-# deleted. Splitting green-from-red is the honest way to enforce what passes
-# today without either lying about the red or being blocked by it.
-#
-# Latency: ~35s combined, and `when_changed` in donegate.toml keeps it off turns
+# Latency: ~35s for the first two plus ~70-145s for test_gate_bypass, and
+# `when_changed` in donegate.toml keeps it off turns
 # that touch neither the hooks nor the hook scripts.
 set -eu
 
@@ -44,7 +37,7 @@ command -v "$py" >/dev/null 2>&1 || {
 }
 
 rc=0
-for suite in test_precommit_hook test_git_hook_coverage; do
+for suite in test_precommit_hook test_git_hook_coverage test_gate_bypass; do
     if [ ! -f "scripts/$suite.py" ]; then
         # A vanished suite must not read as a passing one.
         echo "run-hook-tests: scripts/$suite.py is missing — refusing to report green." >&2

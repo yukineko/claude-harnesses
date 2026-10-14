@@ -4312,17 +4312,19 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 Pre-existing at 2e05bbe1; observed again 2026-09-29 on p0/gates.
 
 [backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_gate_bypass.py::AmendIsNotABypass (rev e128c13b): The existing test is the repro and is RED at HEAD; the prior auditor additionally showed the amend case stays red after patching the stale SCANNERS list (not re-run here)."""
 created_at = 1790635972
-updated_at = 1790983294
+updated_at = 1792002539
 weight = 0.0
 issue_number = 838
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/838"
-rev = 0
+rev = 1
+ruling_kind = "judgment"
+rationale = "User ruling 2026-10-15: keep the documented design (amend is recorded in the bypass ledger as a fail-closed false positive, cleared by the next green pre-commit). The red test asserted the opposite; it was re-anchored in 6530fbf4 (AmendIsRecordedFailClosed: amend recorded + cleared by next green pre-commit over a non-empty staged diff), mutation-verified by an independent sonnet verifier. No F->P exists because the hook behaviour did not change; python3 -m pytest -q scripts/test_gate_bypass.py passes at HEAD."
 
 [[task]]
 id = "06ec3503"
@@ -4669,25 +4671,6 @@ updated_at = 1790983295
 weight = 0.0
 issue_number = 866
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/866"
-rev = 0
-
-[[task]]
-id = "7d56f1e3"
-title = "reviewgate: mode の綴り間違いが Subprocess を無診断で Inject へ降格させる (propguard 3ca750b9 の双子)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-2026-09-30 propguard 3ca750b9 の verifier が発見。crates/reviewgate/src/config.rs:29-30 '"subprocess" | "reviewer" | "independent" => Mode::Subprocess,' / '_ => Mode::Inject,'、呼び出しは :236 'cfg.mode = Mode::parse(&v);'。propguard 側の是正方針 (未知 mode は config-invalid として block、systemMessage で可視化、Subprocess への読み替えは不可 — checker の PASS で初回 stop が通るため厳密に厳しくない) を同じく適用する。
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/reviewgate/src/config.rs (mod backlog_repro_s08, #[ignore]) (rev e70d48dd)"""
-created_at = 1790718724
-updated_at = 1790983329
-weight = 0.0
-issue_number = 868
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/868"
 rev = 0
 
 [[task]]

@@ -194,8 +194,19 @@ pub fn record(reason: &str, loc: &'static Location<'static>) {
         DROPPED.fetch_add(1, Ordering::Relaxed);
         return;
     }
-    let state = sink_state();
-    IN_RECORD.with(|f| f.set(false));
+    // Reset on drop, so a panic while resolving cannot leave the flag stuck
+    // and silently route every later event on this thread into the branch
+    // above.
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            IN_RECORD.with(|f| f.set(false));
+        }
+    }
+    let state = {
+        let _reset = Reset;
+        sink_state()
+    };
     let path = match state {
         SinkState::Active(p) => p,
         SinkState::Unresolvable(why) => {

@@ -235,15 +235,15 @@ symbol = "project_key"
 count = 1
 scope = "shared"
 kind = "store-key"
-evidence = "default_sink_path() = `<base>/<project-key>/overwatch/undetermined.jsonl` — the undetermined-event ledger `overwatch undetermined-metrics` reads. A ledger split per worktree reads back empty, i.e. 'no undetermined events', the exact fail-open it exists to measure. Still keyed off repo_root today."
+evidence = "default_sink_path() = `<base>/<project-key>/overwatch/undetermined.jsonl` — the undetermined-event ledger `overwatch undetermined-metrics` reads. A ledger split per worktree reads back empty, i.e. 'no undetermined events', the exact fail-open it exists to measure. Keyed off main_worktree_root since backlog 814cfbbb."
 
 [[consumer]]
 file = "crates/harness-core/src/undetermined.rs"
-symbol = "repo_root"
+symbol = "main_worktree_root"
 count = 1
 scope = "shared"
 kind = "store-key"
-evidence = "The inner half of default_sink_path()'s key derivation."
+evidence = "The inner half of default_sink_path()'s key derivation (backlog 814cfbbb): one undetermined.jsonl per project across all linked worktrees, matching overwatch::store::storage_root. Undetermined is forwarded verbatim and sink_state() reports SinkState::Unresolvable; there is no per-worktree fallback."
 
 # ── overwatch ──────────────────────────────────────────────────────────────
 

@@ -65,6 +65,7 @@ backlog lock release --project <path>
 | 次のアイテムだけ確認したい | `backlog next`（覗くだけ。着手するなら `next --claim`） |
 | 手動で完了 / 失敗マークしたい | `backlog done <id> --test ... --red-rev ...`（証拠必須。素の `done` は拒否）/ `backlog fail <id>` |
 | やらないと決めて閉じたい | `backlog cancel <id> --reason "<理由>"`（`discard` として記録。テスト・ruling 不要） |
+| `unconfirmed` を棚卸ししたい（証拠あり→テストを書いて pending／証拠なし→cancel） | **`/backlog:triage`** |
 | **キューを自動で全件消化したい** | **`/flow` を使う** |
 
 ## 失敗モード

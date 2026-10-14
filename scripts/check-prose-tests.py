@@ -14,8 +14,16 @@ exactly one of four classes, decided deterministically and in this order:
                `実測 YYYY-MM-DD`) or lies in a `<!-- record: YYYY-MM-DD -->` ..
                `<!-- /record -->` block -- a past observation, kept as a record
   imperative   an instruction to the agent: English first word in IMPERATIVE_EN,
-               or Japanese deontic ending in IMPERATIVE_JA_ENDINGS
+               or Japanese deontic/prohibitive ending in IMPERATIVE_JA_ENDINGS
+               (incl. しない); under docs/specs/ also a must/shall/
+               しなければならない requirement. EXEMPT ONLY IF it names no
+               concrete mechanism (MECHANISM_RES: code span, ENV_VAR, file
+               name, path, --flag, /command, hook event name); an imperative
+               naming one is treated as a claim (user ruling 2026-10-15)
   claim        everything else -> `uncited-claim`
+
+Comments inside fenced code blocks (`#` / `//` by the fence's language, both
+for a bare fence) are units too; code outside comments never is.
 
 The classifier is conservative: a unit it does not positively recognise as an
 instruction or a dated record is a claim.
@@ -71,7 +79,7 @@ RECORD_CLOSE_RE = re.compile(r"^\s*<!--\s*/record\s*-->\s*$")
 IMPERATIVE_EN = frozenset(
     """
     do don't never always run use read write add remove delete keep stage
-    commit check ask stop avoid prefer call pass set see make put quote report
+    commit check ask avoid prefer call pass set see make put quote report
     return treat verify build install enable disable open edit fix file record
     declare note
     """.split()
@@ -79,7 +87,27 @@ IMPERATIVE_EN = frozenset(
 IMPERATIVE_JA_ENDINGS = (
     "せよ", "しろ", "こと", "ならない", "いけない", "禁止", "禁止する",
     "禁止とする", "ください", "べき", "べきだ", "べきである", "必須",
+    "しない",
 )
+# A1: an imperative that names a concrete mechanism must be cited like a claim.
+HOOK_EVENTS = (
+    "SessionStart", "SessionEnd", "Stop", "SubagentStop", "PreToolUse",
+    "PostToolUse", "UserPromptSubmit", "Notification", "PreCompact",
+)
+MECHANISM_RES = (
+    re.compile(r"`[^`]+`"),
+    re.compile(r"(?<![A-Za-z0-9_])[A-Z][A-Z0-9]*_[A-Z0-9_]+"),
+    re.compile(r"[\w.-]+\.(?:toml|json|md|rs|py|sh|yaml|yml|lock|txt)\b"),
+    re.compile(r"[\w~.]/[\w.]"),
+    re.compile(r"--[A-Za-z]"),
+    re.compile(r"(?:^|(?<=[\s(（「]))/[a-z][\w:-]*"),
+    re.compile(r"(?<![A-Za-z0-9_])(?:" + "|".join(HOOK_EVENTS) + r")(?![A-Za-z0-9_])"),
+)
+# A2: normative requirement words, docs/specs only.
+NORMATIVE_RE = re.compile(r"(?i)(?<![A-Za-z])(?:must|shall)(?![A-Za-z])")
+# A3: comment syntax per fence info string ("" = both).
+HASH_LANGS = frozenset("sh bash shell zsh console toml yaml yml python py ini conf cfg make makefile dockerfile ruby rb".split())
+SLASH_LANGS = frozenset("rust rs js javascript ts typescript c cpp go java jsonc json5 swift kotlin kt scala".split())
 TRAILING_STRIP = "。．.!！）)」』*_ \t"
 
 LIST_MARK_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
@@ -87,7 +115,10 @@ HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s")
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
 HR_RE = re.compile(r"^\s{0,3}([-*_])(\s*\1){2,}\s*$")
 TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$")
-SENT_SPLIT_RE = re.compile(r"(?<=。)|(?<=[.!?])\s+")
+# Split after 。, and after . ! ? + whitespace -- except a digit-then-period
+# followed by a non-ASCII character (`3. に従って`: a section reference inside a
+# Japanese sentence, not a sentence end).
+SENT_SPLIT_RE = re.compile(r"(?<=。)|(?<=[.!?])(?<![0-9]\.)\s+|(?<=[0-9]\.)\s+(?=[\x00-\x7f])")
 WORDISH_RE = re.compile(r"[0-9A-Za-z぀-ヿ㐀-鿿０-ｚ]")
 
 
@@ -273,6 +304,17 @@ def is_record_unit(s: str) -> bool:
     return len(g) == 3 and valid_date(*g)
 
 
+def names_mechanism(s: str) -> bool:
+    s = CITATION_RE.sub("", s)
+    s = re.sub(r"\]\([^)]*\)", "]", s)
+    return any(r.search(s) for r in MECHANISM_RES)
+
+
+def is_normative(s: str) -> bool:
+    t = strip_lead(s).rstrip(TRAILING_STRIP)
+    return bool(NORMATIVE_RE.search(t)) or t.endswith("しなければならない")
+
+
 def is_imperative(s: str) -> bool:
     t = strip_lead(s)
     first = re.match(r"[A-Za-z][A-Za-z']*", t)
@@ -329,8 +371,21 @@ def iter_units(text: str):
         ln = i + 1
         i += 1
         if in_fence:
-            if raw.strip().startswith(in_fence):
+            if raw.strip().startswith(in_fence[0]):
                 in_fence = None
+                yield from flush()
+                para = []
+                continue
+            c = code_comment(raw, in_fence[1])
+            if c is None:
+                yield from flush()
+                para = []
+            elif c[1]:  # full-line comment: joins consecutive ones
+                para.append((ln, c[0]))
+            else:
+                yield from flush()
+                para = []
+                yield ("para", ln, [(ln, c[0])], record is not None)
             continue
         if in_comment:
             if "-->" in raw:
@@ -357,7 +412,9 @@ def iter_units(text: str):
         if fm:
             yield from flush()
             para = []
-            in_fence = fm.group(1)
+            info = raw.strip()[3:].strip().split()
+            lang = info[0].lower() if info else ""
+            in_fence = (fm.group(1), lang)
             continue
         stripped = raw.strip()
         if stripped.startswith("<!--"):
@@ -386,10 +443,50 @@ def iter_units(text: str):
         yield ("malformed", record, "record block is never closed (<!-- /record -->)")
 
 
+def code_comment(line: str, lang: str):
+    """Return (comment_text, is_full_line) for a code line, or None.
+
+    Only the markers of the fence's language are honoured ("" = both). A
+    marker inside a '...' or "..." string, or a `#!` shebang, is not a comment.
+    """
+    markers = []
+    if lang in HASH_LANGS or lang == "":
+        markers.append("#")
+    if lang in SLASH_LANGS or lang == "":
+        markers.append("//")
+    if not markers:
+        return None
+    if line.lstrip().startswith("#!"):
+        return None
+    quote = None
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+        elif ch in ("'", '"'):
+            quote = ch
+        else:
+            for m in markers:
+                if line.startswith(m, i) and (i == 0 or line[i - 1].isspace()):
+                    text = line[i + len(m):].lstrip("/!# \t").strip()
+                    full = not line[:i].strip()
+                    return (text, full) if text else None
+        i += 1
+    return None
+
+
 def split_sentences(para):
     """para: list of (line_no, text) -> list of (line_no, sentence)."""
     out = []
-    for ln, text in para:
+    for k, (ln, text) in enumerate(para):
+        if k == 0:
+            # the list marker (`1. `, `- `) is structure, not a sentence
+            text = LIST_MARK_RE.sub("", text, count=1)
         pieces = [p for p in SENT_SPLIT_RE.split(text) if p is not None]
         for idx, p in enumerate(pieces):
             if idx == 0 and out and not out[-1][2]:
@@ -442,7 +539,10 @@ def check_file(repo: str, rel: str, cache: dict) -> list:
                 continue
             if in_record or is_record_unit(unit):
                 continue
-            if is_imperative(unit):
+            imperative = is_imperative(unit) or (
+                rel.startswith("docs/specs/") and is_normative(unit)
+            )
+            if imperative and not names_mechanism(unit):
                 continue
             findings.append(f"{rel}:{uln}: uncited-claim: {unit}")
     return findings

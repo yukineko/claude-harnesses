@@ -1,92 +1,48 @@
-# taskprog
+- On **SessionStart** it injects the progress file as a top-level `additionalContext` [test: crates/taskprog/tests/prose_claims.rs::claim_session_start_injects].
+- On **Stop** it prompts the agent to update the file [test: crates/taskprog/tests/prose_claims.rs::claim_stop_prompts_update].
 
-**Multi-session progress file for Claude Code**, written in Rust.
+taskprog registers two hooks, SessionStart and Stop, which call `taskprog session-start` and `taskprog stop` [test: crates/taskprog/tests/prose_claims.rs::claim_hooks_json_two_hooks].
 
-A long task rarely fits one session. taskprog keeps a single `.claude/progress.md`
-current across sessions so the agent always resumes with full context:
+`.claude/progress.md` at the **project root** — an ancestor of the session
+cwd that contains a `.git` entry (a `.git` file, as in a git worktree root, counts) [test: crates/taskprog/src/config.rs::a_subdirectory_cwd_anchors_at_the_project_root] [test: crates/taskprog/src/config.rs::a_worktree_root_is_anchored_even_though_dot_git_is_a_file]. If no such root can be found, the Stop hook writes nothing and says so
+rather than falling back to the cwd [test: crates/taskprog/src/update.rs::on_stop_writes_nothing_when_the_root_is_undeterminable] [test: crates/taskprog/tests/prose_claims.rs::claim_no_root_says_so]. The Stop-seeded skeleton has a `## Done` section [test: crates/taskprog/src/update.rs::on_stop_writes_skeleton_when_missing].
 
-- On **SessionStart** it injects the progress file as `additionalContext`, so a
-  fresh session immediately knows what's done, what's pending, and what's blocked.
-- On **Stop** it prompts the agent to update the file with what just happened.
-
-This closes the HOTL handoff loop: the human sits at the boundaries (review the
-progress file, redirect), and each session picks up exactly where the last left
-off — no manual re-briefing.
-
-Subscription-native: one Rust binary, two hooks (SessionStart + Stop), no API key.
-
-## What it manages
-
-`.claude/progress.md` at the **project root** — the nearest ancestor of the session
-cwd that contains a `.git` entry (a git worktree root counts, so each worktree keeps
-its own file). If no such root can be found, taskprog writes nothing and says so
-rather than falling back to the cwd. Committed with the code if you like:
-
-```markdown
-# Progress
-
-Updated: 2026-06-23
-
-## Completed
-- budgetguard cost gate wired into Stop
-
-## Pending
-- specforge ⑤ parallel-impl worktree merge
-
-## Blockers
-- (none)
-
-## Notes
-- harness-status reads gauge from ~/.gauge/store, not /state
-```
-
-## Install (plugin)
+## Install the plugin
 
 ```
 /plugin install taskprog@yukineko
 ```
 
-## Manual install
+## Install manually
 
 ```sh
 cargo install --path .
 taskprog install
 ```
 
-## Commands
-
 ```sh
-taskprog session-start   # SessionStart hook: inject progress file (reads stdin JSON)
-taskprog stop            # Stop hook: prompt the agent to update the file
-taskprog show            # print the current progress file
-taskprog write --cwd .   # write progress.md from stdin (--cwd defaults to .)
-taskprog init [TARGET]   # write a starter config (default TARGET: taskprog.toml)
-taskprog install         # merge hooks into ~/.claude/settings.json (--dry-run)
-taskprog uninstall       # remove them (--dry-run)
-taskprog status          # show resolved config
+taskprog session-start   # SessionStart hook: inject the progress file [test: crates/taskprog/tests/prose_claims.rs::claim_session_start_injects]
+taskprog stop            # Stop hook: prompt the agent to update the file [test: crates/taskprog/tests/prose_claims.rs::claim_stop_prompts_update]
+taskprog show            # print the current progress file [test: crates/taskprog/tests/prose_claims.rs::claim_show_prints_file]
+taskprog write --cwd .   # write progress.md from stdin (--cwd defaults to .) [test: crates/taskprog/tests/prose_claims.rs::claim_write_from_stdin_default_cwd]
+taskprog init [TARGET]   # write a starter config (default TARGET: taskprog.toml) [test: crates/taskprog/tests/prose_claims.rs::claim_init_default_target]
+taskprog install         # merge hooks into ~/.claude/settings.json (--dry-run) [test: crates/taskprog/tests/prose_claims.rs::claim_install_merges_hooks]
+taskprog uninstall       # remove them (--dry-run) [test: crates/taskprog/tests/prose_claims.rs::claim_uninstall_removes_hooks]
+taskprog status          # show resolved config [test: crates/taskprog/tests/prose_claims.rs::claim_config_lookup_order]
 ```
 
-## Update with `/taskprog`
+The `/taskprog` skill takes a `--reset` argument [test: crates/taskprog/tests/prose_claims.rs::claim_skill_reset_arg].
 
-Run `/taskprog` any time to have the agent refresh the progress file with the
-current Completed / Pending / Blockers state (those three sections are required;
-empty ones are written as `(none)`). Pass `--reset` to blank the file before
-rewriting it.
-
-## Config (`taskprog.toml`)
-
-Read from `taskprog.toml` in the session cwd, else `~/.taskprog/config.toml` (see
-[`taskprog.example.toml`](taskprog.example.toml)):
+Config is read from `taskprog.toml` in the session cwd, else `~/.taskprog/config.toml` [test: crates/taskprog/tests/prose_claims.rs::claim_config_lookup_order]:
 
 ```toml
 enabled = true
-# progress_file = "~/.claude/progress.md"   # default: <project root>/.claude/progress.md
-inject_limit = 4096                          # bytes injected at SessionStart (0 = all)
+# progress_file = "~/.claude/progress.md"   # default: <project root>/.claude/progress.md [test: crates/taskprog/src/config.rs::a_subdirectory_cwd_anchors_at_the_project_root]
+inject_limit = 4096                          # caps the bytes of the file injected at SessionStart (0 = all) [test: crates/taskprog/tests/prose_claims.rs::claim_inject_limit_bytes]
 ```
 
-An explicit `progress_file` is used as-is (`~` expanded) with no project-root lookup.
-Disable per-session with `TASKPROG_DISABLED=1` (or `true`).
+An explicit `progress_file` is used as-is with no project-root lookup [test: crates/taskprog/src/config.rs::an_explicit_progress_file_is_unchanged_and_needs_no_project_root].
+A leading `~` in `progress_file` is expanded [test: crates/taskprog/tests/prose_claims.rs::claim_tilde_expanded].
+`TASKPROG_DISABLED=1` (or `true`) disables both hooks for the session [test: crates/taskprog/tests/prose_claims.rs::claim_disabled_env].
 
-## License
-
-MIT
+License: MIT [test: crates/taskprog/tests/prose_claims.rs::claim_license_mit].

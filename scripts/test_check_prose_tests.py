@@ -12,7 +12,7 @@ import sys
 import pytest
 
 SCRIPT = pathlib.Path(__file__).resolve().parent / "check-prose-tests.py"
-PLACEHOLDER = "Run `cargo test` before committing.\n"
+PLACEHOLDER = "Never skip the hook.\n"
 
 UNDET = "check-prose-tests: UNDETERMINED:"
 CLAIM = "The gate blocks unsigned commits."
@@ -146,9 +146,28 @@ def test_dangling_citation_python_def_not_a_test_name(tmp_path):
     assert "dangling-citation" in r.stdout
 
 
+@pytest.mark.parametrize("line", [
+    "1. **Run the tests.**",
+    "2. コミット前にテストを実行すること。",
+    "判定不能なら 3. に従って制限側へ倒すこと。",
+])
+def test_numbered_item_and_section_ref_imperatives_pass(tmp_path, line):
+    repo = make_repo(tmp_path, {"CLAUDE.md": line + "\n"})
+    r = run(repo)
+    assert r.returncode == 0, (line, r.stdout, r.stderr)
+
+
+def test_digit_period_before_ascii_capital_still_splits(tmp_path):
+    repo = make_repo(tmp_path, {"CLAUDE.md": "The gate exits 2. Run it again.\n"})
+    r = run(repo)
+    assert r.returncode == 1, (r.stdout, r.stderr)
+    found = [l for l in r.stdout.splitlines() if "uncited-claim" in l]
+    assert len(found) == 1, r.stdout
+    assert "The gate exits 2" in found[0]
+
+
 # 4 ------------------------------------------------------------------
 @pytest.mark.parametrize("sentence", [
-    "Run `cargo test` before committing.",
     "Never skip the hook.",
     "コミット前にテストを実行すること。",
     "迂回は禁止。",
@@ -305,15 +324,156 @@ SKILL = "crates/foo/skills/bar/SKILL.md"
 
 
 def test_skill_front_matter_name_is_not_a_claim(tmp_path):
-    text = "---\nname: bar\n---\n\nRun `cargo test` before committing.\n"
+    text = "---\nname: bar\n---\n\nNever skip the hook.\n"
     repo = make_repo(tmp_path, {SKILL: text})
     r = run(repo)
     assert r.returncode == 0, (r.stdout, r.stderr)
 
 
 def test_skill_front_matter_description_claim_blocks(tmp_path):
-    text = f"---\nname: bar\ndescription: {CLAIM}\n---\n\nRun `cargo test` first.\n"
+    text = f"---\nname: bar\ndescription: {CLAIM}\n---\n\nNever skip the hook.\n"
     repo = make_repo(tmp_path, {SKILL: text})
     r = run(repo)
+    assert r.returncode == 1, (r.stdout, r.stderr)
+    assert "uncited-claim" in r.stdout
+
+
+# ===== AMENDMENT 2026-10-15 ===========================================
+CITE = "[test: crates/foo/tests/t.rs::x]"
+RS = {"crates/foo/tests/t.rs": RUST_TEST}
+
+
+def one_line(tmp_path, line, rel="CLAUDE.md", extra=None):
+    return run(make_repo(tmp_path, {rel: line + "\n"}, extra))
+
+
+# A1 -----------------------------------------------------------------
+@pytest.mark.parametrize("line", [
+    "Run `cargo test` before committing.",
+    "Disable it with TASKPROG_DISABLED=1.",
+    "Edit taskprog.toml to change it.",
+    "Pass --dry-run to preview.",
+    "Run /taskprog to refresh.",
+    "Read scripts/x first.",
+    "**Stop** で進捗ファイルを更新すること。",
+    "Stop and ask the user.",
+])
+def test_a1_mechanism_naming_imperative_needs_citation(tmp_path, line):
+    r = one_line(tmp_path, line)
+    assert r.returncode == 1, (line, r.stdout, r.stderr)
+    assert "uncited-claim" in r.stdout
+
+
+def test_a1_mechanism_imperative_with_valid_citation_passes(tmp_path):
+    r = one_line(tmp_path, f"Run `cargo test` before committing. {CITE}", extra=RS)
+    assert r.returncode == 0, (r.stdout, r.stderr)
+
+
+@pytest.mark.parametrize("line", ["Never skip the hook.", "迂回は禁止。"])
+def test_a1_plain_imperative_controls_still_pass(tmp_path, line):
+    r = one_line(tmp_path, line)
+    assert r.returncode == 0, (line, r.stdout, r.stderr)
+
+
+def test_a1_dated_record_naming_mechanism_stays_exempt(tmp_path):
+    r = one_line(tmp_path, "実測 2026-07-21 `cargo build` が失敗した。")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+
+
+# A1b: Japanese prohibitions ------------------------------------------
+@pytest.mark.parametrize("line", [
+    "main の作業ツリーで直接編集しない。",
+    "迂回を禁止する。",
+    "Do not skip the hook.",
+])
+def test_a1b_prohibitions_are_imperatives(tmp_path, line):
+    r = one_line(tmp_path, line)
+    assert r.returncode == 0, (line, r.stdout, r.stderr)
+
+
+@pytest.mark.parametrize("line", [
+    "`cargo build` を省略しない。",
+    "Do not pass --no-verify.",
+])
+def test_a1b_prohibition_naming_mechanism_needs_citation(tmp_path, line):
+    r = one_line(tmp_path, line)
+    assert r.returncode == 1, (line, r.stdout, r.stderr)
+    assert "uncited-claim" in r.stdout
+
+
+# A2 -----------------------------------------------------------------
+@pytest.mark.parametrize("line", [
+    "The detector must refuse destructive commands.",
+    "検出器は破壊的コマンドを拒否しなければならない。",
+])
+def test_a2_normative_in_docs_specs_is_imperative(tmp_path, line):
+    r = one_line(tmp_path, line, rel="docs/specs/x.md")
+    assert r.returncode == 0, (line, r.stdout, r.stderr)
+
+
+def test_a2_normative_naming_mechanism_needs_citation(tmp_path):
+    r = one_line(tmp_path, "The detector must call `detect`.", rel="docs/specs/x.md")
+    assert r.returncode == 1, (r.stdout, r.stderr)
+    assert "uncited-claim" in r.stdout
+
+
+def test_a2_normative_outside_docs_specs_is_claim(tmp_path):
+    r = one_line(tmp_path, "The detector must refuse destructive commands.",
+                 rel="docs/other.md")
+    assert r.returncode == 1, (r.stdout, r.stderr)
+    assert "uncited-claim" in r.stdout
+
+
+# A3 -----------------------------------------------------------------
+def fenced(tmp_path, info, body, extra=None):
+    text = f"Never skip the hook.\n\n```{info}\n{body}\n```\n"
+    return run(make_repo(tmp_path, {"CLAUDE.md": text}, extra))
+
+
+@pytest.mark.parametrize("info,body", [
+    ("sh", "taskprog show   # print the current progress file"),
+    ("toml", "inject_limit = 4096  # bytes injected"),
+    ("rust", "// returns the value"),
+    ("", "# a claim here"),
+])
+def test_a3_uncited_comment_in_fence_is_claim(tmp_path, info, body):
+    r = fenced(tmp_path, info, body)
+    assert r.returncode == 1, (info, r.stdout, r.stderr)
+    assert "uncited-claim" in r.stdout
+
+
+def test_a3_cited_comment_in_fence_passes(tmp_path):
+    r = fenced(tmp_path, "sh",
+               f"taskprog show   # print the current progress file {CITE}", RS)
+    assert r.returncode == 0, (r.stdout, r.stderr)
+
+
+@pytest.mark.parametrize("info,body", [
+    ("markdown", "# Progress"),
+    ("json", '{"a": 1}\n// returns the value'),
+    ("sh", 'echo "# not a comment"'),
+    ("sh", "#!/bin/sh\necho hi"),
+])
+def test_a3_non_comments_and_other_languages_not_scanned(tmp_path, info, body):
+    r = fenced(tmp_path, info, body)
+    assert r.returncode == 0, (info, r.stdout, r.stderr)
+
+
+def test_a3_reported_line_is_comment_line_in_markdown(tmp_path):
+    text = "Never skip the hook.\n\n```sh\necho hi\ntaskprog show # prints progress\n```\n"
+    r = run(make_repo(tmp_path, {"CLAUDE.md": text}))
+    assert r.returncode == 1, (r.stdout, r.stderr)
+    lines = [l for l in r.stdout.splitlines() if "uncited-claim" in l]
+    assert len(lines) == 1 and lines[0].startswith("CLAUDE.md:5:"), r.stdout
+
+
+@pytest.mark.parametrize("body", ['echo "a # b"', "echo 'a # b'"])
+def test_a3_hash_inside_quotes_is_not_a_comment(tmp_path, body):
+    r = fenced(tmp_path, "sh", body)
+    assert r.returncode == 0, (body, r.stdout, r.stderr)
+
+
+def test_a3_empty_info_string_scans_slash_comments(tmp_path):
+    r = fenced(tmp_path, "", "// a claim here")
     assert r.returncode == 1, (r.stdout, r.stderr)
     assert "uncited-claim" in r.stdout

@@ -39,6 +39,14 @@
 #   doc-claims         check-doc-claims.py        a `path:line` citation in
 #                                                 docs/**/*.md that no longer
 #                                                 describes reality
+#   prose-tests        check-prose-tests.py       a claim sentence in CLAUDE.md,
+#                                                 docs/**/*.md, crates/*/README*.md
+#                                                 or crates/*/skills/*/SKILL.md
+#                                                 (changed vs HEAD) with no
+#                                                 `[test: path::name]` citation to
+#                                                 an existing test, or a citation
+#                                                 that does not resolve. Dated
+#                                                 records and imperatives pass.
 #   claudemd-claims    check-claudemd-claims.py   a `path:line` citation in
 #                                                 CLAUDE.md itself that no
 #                                                 longer describes reality —
@@ -214,6 +222,7 @@ run check-fail-open.py        fail-open-guard
 run check-fail-open-diff.py   fail-open-diff
 run check-doc-claims.py       doc-claims
 run check-claudemd-claims.py  claudemd-claims
+run check-prose-tests.py     prose-tests
 # check-test-weakening.py is NOT run here: it is run from .githooks/commit-msg
 # instead. Its acknowledgment marker lives in the commit message, which git has
 # not prepared yet at pre-commit time, so from here the remedy it prints is
@@ -299,6 +308,10 @@ Remediation hints:
                     gate; a reasoned `<!-- doc-claim-exempt: <reason> -->` on
                     the line before a deliberately historical claim is the
                     only escape hatch.
+  prose-tests       cite a test that reproduces the claim with
+                    `[test: <path>::<name>]`, or delete the claim. A past
+                    observation stays as a record only with a dated marker
+                    (`実測 YYYY-MM-DD`, `[record: YYYY-MM-DD]`).
   test-weakening    restore the assertion, or acknowledge one specific finding
                     with a commit-message line
                     `test-weakening-justified: <path>:<kind> - <reason>`.

@@ -36363,3 +36363,121 @@ scripts/test_audit_s03_gates.py .xx                                      [100%]
 rev = "317cb062c51b4d6b5f449d02177cf1b8dd354121"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "00a8ba29"
+title = "harness-core ledger.rs:59 Ledger::load_checked が読めない既存台帳を空台帳として返し、budgetguard が書き戻して当日支出を消す (trust.toml 10b72c4d と同型)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+Found 2026-09-29 by the 207d0da6 implementer, not independently verified. Err(_) => Ok(Self::default()); doc mentions only file missing. Same file: Ledger::save uses to_string_pretty(..).unwrap_or_default() (empty file on serialize failure), fixed .json.tmp name, no fsync.
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/harness-core/tests/backlog_s07_audit.rs (rev e70d48dd)"""
+created_at = 1790634976
+updated_at = 1791980636
+weight = 0.0
+issue_number = 828
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/828"
+issue_closed_at = 1791980640
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p harness-core --test backlog_s07_audit backlog_00a8ba29 -- --include-ignored"
+exit = 0
+passed = 1
+rev = "b7dd54910cef1e2b75f17d7995f6806152a29419"
+observed_at = 1791980619
+output_digest = "sha256:383d571403d08e15eea862f400d24e8a6e6e47952e35b72bbd0a3778914dde61"
+excerpt = """
+
+running 1 test
+test backlog_00a8ba29_unreadable_existing_ledger_is_not_empty_ledger ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+   Compiling getrandom v0.3.4
+   Compiling num-traits v0.2.19
+   Compiling zerocopy v0.8.52
+   Compiling serde v1.0.228
+   Compiling unarray v0.1.4
+   Compiling rand_core v0.9.5
+   Compiling rand v0.9.4
+   Compiling rand_xorshift v0.4.0
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+   Compiling trybuild v1.0.118
+   Compiling chrono v0.4.45
+   Compiling toml_edit v0.22.27
+   Compiling toml v0.8.23
+   Compiling harness-core v0.2.50 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/harness-core)
+   Compiling ppv-lite86 v0.2.21
+   Compiling rand_chacha v0.9.0
+   Compiling proptest v1.11.0
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.10s
+     Running tests/backlog_s07_audit.rs (target/debug/deps/backlog_s07_audit-786f5d2099671b4f)
+"""
+
+[task.closure.red]
+rev = "a4e648a3c439d0eeb548e2cef690d2a53268be9f"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "7fb00031"
+title = "condukt merge(): append_merge_conflict 失敗を (continuing) でログするだけで Conflict を返し、衝突が review 面に載らない。コメントに never break the turn"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+Found 2026-09-29 by the 617b3112 implementer. Same path: conflicted-file list fallback uses unwrap_or_default so a failed git diff records zero files. hold_placed_by_live_run collapses RunLiveness to bool (Undetermined->live, correct today but not type-enforced).
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/condukt/tests/backlog_7fb00031.rs (rev 596108b9): Merge claims a conflict was recorded when the ledger write failed. Side finding: overwatch append_merge_conflict also returns Ok(()) on lock contention (acquire_or_skip None)."""
+created_at = 1790634980
+updated_at = 1791980671
+weight = 0.0
+issue_number = 830
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/830"
+issue_closed_at = 1791980674
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_7fb00031 -- --include-ignored"
+exit = 0
+passed = 2
+rev = "b7dd54910cef1e2b75f17d7995f6806152a29419"
+observed_at = 1791980641
+output_digest = "sha256:bd1510d92c336fa1542fb87f0e49f6e0dcd5eeeee40e33182c3531c2db1e5e92"
+excerpt = """
+
+running 2 tests
+test unrecorded_conflict_is_not_reported_as_recorded ... ok
+test refused_trial_without_merge_state_is_still_recorded_conflict ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.32s
+
+   Compiling harness-core v0.2.50 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/harness-core)
+   Compiling overwatch v0.2.62 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/overwatch)
+   Compiling schemaguard v0.1.19 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/schemaguard)
+   Compiling blastguard v0.2.112 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/blastguard)
+   Compiling condukt v0.7.239 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.55s
+     Running tests/backlog_7fb00031.rs (target/debug/deps/backlog_7fb00031-13cbe13b35cd72f1)
+"""
+
+[task.closure.red]
+rev = "a4e648a3c439d0eeb548e2cef690d2a53268be9f"
+exit = 101
+kind = "behavioural"

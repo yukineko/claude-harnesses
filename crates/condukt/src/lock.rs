@@ -261,7 +261,8 @@ pub(crate) fn lock_path_in_project(cfg: &Config, project_root: &Path, run_id: &s
 /// the waiter's own acquisition. Skipping a probe only ever means "keep
 /// waiting" (the reap arm needs a positive `Known(false)`), so the throttle is
 /// on the restrictive side: it can delay reaping a holder that died mid-wait by
-/// at most this interval, and can never steal a live holder's lock.
+/// about this interval plus one 10ms poll (and the probe's own run time), and
+/// can never steal a live holder's lock.
 const LIVENESS_PROBE_INTERVAL: Duration = Duration::from_millis(200);
 
 /// Liveness of a lock holder `pid` as seen from this process. A holder pid
@@ -1064,12 +1065,19 @@ mod backlog_e9262d91 {
     //! contention of `repo_primary_lock_serializes_concurrent_rmw_no_lost_update`),
     //! put a counting `kill` first on PATH, wait 1s, count spawns. The bound
     //! (at most 10 in 1s, i.e. at most one liveness probe per ~10 polls) is
-    //! the contract chosen here; today it is ~one per poll.
+    //! the contract chosen here; before the fix (652e3cec) it was ~one per
+    //! poll.
+    //!
+    //! Contracts pinned below: a live holder is never stolen; a holder pid
+    //! equal to our own spawns ZERO probes; a dead holder is reaped on its
+    //! first probe (including one that dies mid-wait); and a holder pid that
+    //! changes mid-wait is probed at once rather than after the throttle
+    //! interval.
     use super::*;
 
-    /// The three tests below measure spawn RATES and reap LATENCY, both of
-    /// which the other two distort when run concurrently (each waiter's
-    /// fork+exec load slows the others' spawns). Serialize them.
+    /// Every test in this module measures spawn COUNTS/RATES or reap timing,
+    /// which a sibling waiter distorts when run concurrently (each waiter's
+    /// fork+exec load slows the others' spawns). Serialize them all.
     static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn serial() -> std::sync::MutexGuard<'static, ()> {
@@ -1342,5 +1350,171 @@ mod backlog_e9262d91 {
             "the holder (pid {holder_pid}) must be reaped on the FIRST probe that observes its \
              death: got {dead} dead probes ({alive} alive)"
         );
+    }
+
+    /// A holder pid equal to OUR OWN pid is this very process: alive by
+    /// observation, so the waiter must spawn ZERO `kill` probes (not merely a
+    /// throttled few), and must still neither acquire nor disturb the lock.
+    #[cfg(unix)]
+    #[test]
+    fn lock_wait_on_own_pid_holder_spawns_no_probe() {
+        let _serial = serial();
+        let (tmp, count, kill_path) = counting_kill_path();
+        let own = std::process::id();
+        let lock = tmp.path().join("held.lock");
+        write_lock(&lock, own);
+
+        let got = RunLock::acquire_at_with_env_path(
+            lock.clone(),
+            Duration::from_millis(500),
+            Some(&kill_path),
+        );
+
+        assert!(
+            !got.held(),
+            "a lock held under our OWN pid {own} (a live in-process holder) was acquired/stolen"
+        );
+        let on_disk: LockInfo = serde_json::from_str(
+            &std::fs::read_to_string(&lock).expect("the own-pid holder's lock must survive"),
+        )
+        .expect("the held lock file must still parse");
+        assert_eq!(
+            on_disk.pid, own,
+            "the lock file no longer names the own-pid holder (stolen/rewritten)"
+        );
+        let (alive, dead) = probe_log(&count);
+        assert_eq!(
+            alive + dead,
+            0,
+            "waiting 500ms on a lock held by our OWN pid spawned `kill` {} times \
+             ({alive} alive + {dead} dead); an own-pid holder must be judged alive \
+             with zero spawns",
+            alive + dead
+        );
+    }
+
+    /// A holder pid that CHANGES mid-wait is probed at once, not after the
+    /// same-holder throttle interval (`LIVENESS_PROBE_INTERVAL`).
+    ///
+    /// Choreography, driven by the fake `kill` itself (no sleeps, no helper
+    /// thread): the lock starts held by a live foreign pid A. The FIRST probe
+    /// of A answers "alive" and, before returning, atomically renames a lock
+    /// naming a dead pid B into place. A correct waiter then probes B on the
+    /// next poll (~10ms), reaps it, and acquires. A waiter that treats B as
+    /// the same holder cannot probe again until `LIVENESS_PROBE_INTERVAL`
+    /// after A's probe started, which is past the deadline below, so it must
+    /// give up WITHOUT ever probing B.
+    ///
+    /// The deadline must sit below `LIVENESS_PROBE_INTERVAL`, so this test is
+    /// timing-bound in one direction: if A's probe alone takes longer than
+    /// the deadline (heavy load), the waiter gives up before it can probe B
+    /// even when correct. That case is detected (A's marker mtime vs. the
+    /// wait start) and reported as INCONCLUSIVE — still a failure, never a
+    /// pass.
+    #[cfg(unix)]
+    #[test]
+    fn lock_wait_probes_a_changed_holder_pid_immediately() {
+        use std::os::unix::fs::PermissionsExt;
+        let _serial = serial();
+        const DEADLINE: Duration = Duration::from_millis(120);
+        assert!(
+            DEADLINE < LIVENESS_PROBE_INTERVAL,
+            "fixture: the deadline must be below the same-holder throttle interval"
+        );
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let lock = tmp.path().join("held.lock");
+        let log = tmp.path().join("kill.log");
+        let flag = tmp.path().join("rewritten.flag");
+        let b_json = tmp.path().join("b.json");
+        let b_stage = tmp.path().join("b.stage");
+
+        let holder_a = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("fixture: spawn `sleep 30` as live holder A");
+        let guard = ChildGuard(holder_a);
+        let pid_a = guard.0.id();
+        let mut short = std::process::Command::new("true")
+            .spawn()
+            .expect("fixture: spawn a short-lived child for dead pid B");
+        let pid_b = short.id();
+        assert!(
+            short.wait().expect("fixture: reap B").success(),
+            "fixture: `true` must exit 0"
+        );
+
+        write_lock(&lock, pid_a);
+        write_lock(&b_json, pid_b);
+
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let fake = bin.join("kill");
+        std::fs::write(
+            &fake,
+            format!(
+                "#!/bin/sh\n/bin/kill \"$@\"\nrc=$?\n\
+                 if [ $rc -eq 0 ]; then echo \"alive $2\" >> '{log}'; \
+                 else echo \"dead $2\" >> '{log}'; fi\n\
+                 if [ \"$2\" = \"{pid_a}\" ] && [ ! -e '{flag}' ]; then \
+                 : > '{flag}'; cp '{b_json}' '{b_stage}' && mv '{b_stage}' '{lock}'; fi\n\
+                 exit $rc\n",
+                log = log.display(),
+                flag = flag.display(),
+                b_json = b_json.display(),
+                b_stage = b_stage.display(),
+                lock = lock.display(),
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Warm-up (first exec of a fresh script is slow on macOS); probes our
+        // own pid, so it neither matches A nor touches the lock. Reset the log.
+        let warm = std::process::Command::new(&fake)
+            .args(["-0", &std::process::id().to_string()])
+            .output()
+            .expect("fixture: warm-up exec of the fake `kill`");
+        assert!(warm.status.success(), "fixture: warm-up must exit 0");
+        std::fs::remove_file(&log).expect("fixture: reset the probe log after warm-up");
+        let mut parts = vec![bin];
+        if let Some(p) = std::env::var_os("PATH") {
+            parts.extend(std::env::split_paths(&p));
+        }
+        let kill_path = std::env::join_paths(parts).unwrap();
+
+        let wall_start = std::time::SystemTime::now();
+        let got = RunLock::acquire_at_with_env_path(lock.clone(), DEADLINE, Some(&kill_path));
+
+        let probes: Vec<String> = std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect();
+        let a_probe_done = std::fs::metadata(&flag)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(wall_start).ok());
+        if !got.held() {
+            if let Some(took) = a_probe_done {
+                assert!(
+                    took < DEADLINE,
+                    "INCONCLUSIVE (not a pass): A's first probe alone took {took:?} >= the \
+                     {DEADLINE:?} deadline, so the waiter could not reach B's probe in time \
+                     even if correct (probes: {probes:?})"
+                );
+            }
+        }
+        assert!(
+            got.held(),
+            "the holder changed from live pid {pid_a} to dead pid {pid_b} mid-wait, but the \
+             lock was not acquired within {DEADLINE:?}: the changed holder was not probed \
+             immediately (probes: {probes:?})"
+        );
+        assert_eq!(
+            probes,
+            vec![format!("alive {pid_a}"), format!("dead {pid_b}")],
+            "expected exactly one probe of A (alive) then one of B (dead, reaped on first probe)"
+        );
+        drop(guard);
     }
 }

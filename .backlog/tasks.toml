@@ -4100,25 +4100,6 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/807"
 rev = 0
 
 [[task]]
-id = "e9262d91"
-title = "condukt lock の待機ループが poll ごとに kill サブプロセスを spawn し、負荷下で自分の獲得を遅らせる"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-測定点 c39701bc / 2026-09-13、読み取りのみ。crates/condukt/src/lock.rs:267 acquire_at の待機ループは AlreadyExists のたびに read_info してから pid_alive を呼ぶ。pid_alive は lock.rs:138 付近で std::process::Command::new(kill) に -0 pid を渡して harness_core::boundary::run で実行する。つまりロック待ちの 1 回のポーリングごとに fork+exec が 1 回走る。ポーリング間隔は 10 ミリ秒なので、待機スレッドは 1 秒あたり最大 100 回のプロセス生成を行う。DEADLINE は 10 秒なので 1 回の獲得試行で最大 1000 プロセス。crates/condukt/src/lock.rs:484 の repo_primary_lock_serializes_concurrent_rmw_no_lost_update は 6 スレッド 8 イテレーションで同じロックを奪い合うので、5 スレッドが同時に待機して spawn し続ける構造になる。CPU 飽和時にはこの spawn 自体が遅くなり、待機がさらに長引いて自己増幅する。加えて獲得は FIFO ではなく hard_link に勝った者勝ちなので、負荷下でスレッドが繰り返し負ける飢餓がありうる。Linux では /proc の exists() で先に返るので spawn は回避されるが、macOS では常に spawn する。影響は fail-open ではない (獲得できなければ Err に倒れる、正しい側) が、liveness の問題であり負荷下で condukt の merge やコミットが理由なく拒否されうる。改善案: 保持者の pid が自分自身のときは spawn せずに Known(true) を返す、あるいは liveness 確認を毎ポーリングではなく数回に 1 回に落とす。関連 35d61d23。 【救出 2026-09-29】元 id 680d541a（2026-09-13 に run-20260913-223004-15261 の orch worktree で起票されたが未コミットのまま残っていた。worktree 削除前に再起票。notes 中の関連 id は元 id のまま）
-
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/condukt/src/lock.rs (mod backlog_e9262d91) (rev 596108b9): Bound chosen: <=10 spawns per 1s wait; liveness defect, not fail-open. Count is timing-sensitive (wrapper speed), RED margin is 3x."""
-created_at = 1790632214
-updated_at = 1790983173
-weight = 0.0
-issue_number = 813
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/813"
-rev = 0
-
-[[task]]
 id = "3fc7d232"
 title = "負荷依存テストクラスの生存者一覧 (8c5d46fa の再測定で作成、最も余裕が薄いのは backlog store の bounded_wait)"
 project = "/Users/yuki/src/harness"
@@ -4147,17 +4128,19 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "needs-ruling"
 notes = """
 監査 P1 (git diff 取得失敗が clean に写る経路) は main で修正済み (git.rs の DiffText.fetch_failed、run_diff が Result) だが、main の docs/audit-reviewgate-verdict-paths.md 自身が P1 には専用の回帰テストが無いと書いている。main の tests に fetch_failed / git-scan-failed を突くテストは無い (2026-09-29 grep で確認)。旧ブランチ condukt/run-20260804-074132-25351/.../fix-reviewgate-failopens (3bc9fc20) に crates/reviewgate/tests/diff_fetch_failure_wiring.rs (224 行、偽 git shim を子プロセスで使う) があり、ブランチ削除前に tag archive/reviewgate-diff-fetch-failure-wiring で保全した。取り出し: git show archive/reviewgate-diff-fetch-failure-wiring:crates/reviewgate/tests/diff_fetch_failure_wiring.rs。main の git.rs / main.rs に対してコンパイルできるかは未確認。移植時は修正を一時的に外して RED を観測してから GREEN にすること (実装者と別の agent が行う)。reviewgate の micro bump が要る。
 
 [backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/reviewgate/tests/backlog_922f0a96_diff_fetch_failure_wiring.rs (rev e70d48dd)"""
 created_at = 1790632233
-updated_at = 1790983329
+updated_at = 1791978143
 weight = 0.0
 issue_number = 817
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/817"
-rev = 0
+rev = 1
+ruling_kind = "judgment"
+rationale = "Wiring test crates/reviewgate/tests/backlog_922f0a96_diff_fetch_failure_wiring.rs is on main and GREEN (4 passed). RED observed 2026-10-14 by placing the identical file at db9deefb (parent of fix efe6db14): 3 failed (P1 :151, P2 :210, untracked :299), control passed. Also RED on HEAD with the evaluate() fetch_failed guard deleted (3 failed, 1 passed). No committable red-rev exists: today's pre-commit refuses commits on db9deefb (gate scripts missing => fail-closed), and the fix-deleted mutant is blocked by doc-claims. User chose ruling-request close."
 
 [[task]]
 id = "1e04dbbf"
@@ -4190,46 +4173,6 @@ updated_at = 1790983332
 weight = 0.0
 issue_number = 818
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/818"
-rev = 0
-
-[[task]]
-id = "016c2562"
-title = "backlog: wontfix と裁定された項目が pending のまま next --claim の候補に上がる"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "backlog",
-    "queue-hygiene",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-実測 2026-08-14。966ae7aa は tags に wontfix を持ち、notes に「調査済み・実装不能につき
-guidance-only として close (ユーザー裁定 2026-08-02)」と裁定が書かれているが、status は
-pending のままだった。そのため本日 flow が backlog next --claim の候補として掴み、
-condukt バッチの task 4 として dispatch してしまった (実行中の agent へ停止を指示して取り下げ)。
-
-**タグは選択に一切影響していない。** crates/backlog の next/list は status と project で絞るだけで、
-tags は表示にしか使われない。したがって「人間が実装しないと決めた」項目と
-「まだ誰も見ていない」項目が、キュー上で同じ扱いになる。
-
-これは単なる読み落としの防止策ではなく fail-open の形である: 裁定という**判定済みの情報**が、
-下流の選択器から見えないため「未判定」と同じに写っている。
-
-完了条件: (1) next --claim が wontfix タグ付きの項目を候補から外す (または status を
-自動的に閉じる)。(2) その挙動を固定する回帰テストが RED を観測してから GREEN になっている。
-(3) 既存の wontfix タグ付き pending 項目が他に無いか棚卸しし、あれば同様に処理する。
-
-関連: c4fe6df9 / 0dafa254 (status 語彙に cancelled が無く done しか使えない問題)。
-wontfix を閉じるときに done を使うと「実装した」と読めてしまうのは同じ根。 【救出 2026-09-29】元 id 195bb7c5。session-b57a58c3 の未マージ/未コミットの tasks.toml にだけ存在していたため、ブランチ・worktree 整理の前に再起票した。notes 中の関連 id は元 id のまま。
-
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/backlog/tests/backlog_s03_audit.rs::next_claim_skips_wontfix_tagged_tasks (rev dfa4e9ba): already backed by a RED test"""
-created_at = 1790634573
-updated_at = 1790983242
-weight = 0.0
-issue_number = 819
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/819"
 rev = 0
 
 [[task]]
@@ -4299,25 +4242,6 @@ updated_at = 1790983335
 weight = 0.0
 issue_number = 825
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/825"
-rev = 0
-
-[[task]]
-id = "bee1ccbc"
-title = "guard-maintree-edit.py: payload が JSON でない / dict でないと exit 0 (allow) する fail-open (:178-191) — bash 版 02bdd012 の双子"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-Found 2026-09-29 by the 02bdd012 implementer (not yet independently verified). scripts/guard-maintree-edit.py:178-191 returns 0 on non-JSON or non-dict payload, with a comment justifying allow + backstop. Bash twin fixed in caef0517 to exit 2. Also check deny-no-verify.py for the same pattern.
-
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_s06_misc_b_repros.py::Backlog_bee1ccbc (rev e128c13b): Pre-existing committed repro, RED re-observed at HEAD (both guards)."""
-created_at = 1790634876
-updated_at = 1790983293
-weight = 0.0
-issue_number = 826
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/826"
 rev = 0
 
 [[task]]

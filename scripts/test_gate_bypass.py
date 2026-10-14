@@ -85,6 +85,7 @@ SCANNERS = [
     "check-cross-crate-constants.py",
     "check-launcher-exec-bit.py",
     "check-clippy-lints.py",
+    "check-backlog-store.py",
     # check-test-weakening.py runs last: it fires from .githooks/commit-msg,
     # which git invokes only after pre-commit (and every scanner above) has
     # already succeeded — see commit-msg's own header for why it moved there.

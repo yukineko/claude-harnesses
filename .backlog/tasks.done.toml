@@ -36363,3 +36363,174 @@ scripts/test_audit_s03_gates.py .xx                                      [100%]
 rev = "317cb062c51b4d6b5f449d02177cf1b8dd354121"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "bee1ccbc"
+title = "guard-maintree-edit.py: payload が JSON でない / dict でないと exit 0 (allow) する fail-open (:178-191) — bash 版 02bdd012 の双子"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+Found 2026-09-29 by the 02bdd012 implementer (not yet independently verified). scripts/guard-maintree-edit.py:178-191 returns 0 on non-JSON or non-dict payload, with a comment justifying allow + backstop. Bash twin fixed in caef0517 to exit 2. Also check deny-no-verify.py for the same pattern.
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_s06_misc_b_repros.py::Backlog_bee1ccbc (rev e128c13b): Pre-existing committed repro, RED re-observed at HEAD (both guards)."""
+created_at = 1790634876
+updated_at = 1791977878
+weight = 0.0
+issue_number = 826
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/826"
+issue_closed_at = 1791977881
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest -q scripts/test_backlog_bee1ccbc.py"
+exit = 0
+passed = 13
+rev = "d8248e755ef497cc2ee502657de1e3a2ec064f6d"
+observed_at = 1791977875
+output_digest = "sha256:9fc0ffbd15caeeeb6e4680bc61e4d2455e5b94ba7ff480ea350ee0532e1f74a9"
+excerpt = """
+.............                                                            [100%]
+13 passed in 0.31s
+"""
+
+[task.closure.red]
+rev = "7d3db73e2a38d891174733591846f5b4eb74bc99"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "016c2562"
+title = "backlog: wontfix と裁定された項目が pending のまま next --claim の候補に上がる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "queue-hygiene",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+実測 2026-08-14。966ae7aa は tags に wontfix を持ち、notes に「調査済み・実装不能につき
+guidance-only として close (ユーザー裁定 2026-08-02)」と裁定が書かれているが、status は
+pending のままだった。そのため本日 flow が backlog next --claim の候補として掴み、
+condukt バッチの task 4 として dispatch してしまった (実行中の agent へ停止を指示して取り下げ)。
+
+**タグは選択に一切影響していない。** crates/backlog の next/list は status と project で絞るだけで、
+tags は表示にしか使われない。したがって「人間が実装しないと決めた」項目と
+「まだ誰も見ていない」項目が、キュー上で同じ扱いになる。
+
+これは単なる読み落としの防止策ではなく fail-open の形である: 裁定という**判定済みの情報**が、
+下流の選択器から見えないため「未判定」と同じに写っている。
+
+完了条件: (1) next --claim が wontfix タグ付きの項目を候補から外す (または status を
+自動的に閉じる)。(2) その挙動を固定する回帰テストが RED を観測してから GREEN になっている。
+(3) 既存の wontfix タグ付き pending 項目が他に無いか棚卸しし、あれば同様に処理する。
+
+関連: c4fe6df9 / 0dafa254 (status 語彙に cancelled が無く done しか使えない問題)。
+wontfix を閉じるときに done を使うと「実装した」と読めてしまうのは同じ根。 【救出 2026-09-29】元 id 195bb7c5。session-b57a58c3 の未マージ/未コミットの tasks.toml にだけ存在していたため、ブランチ・worktree 整理の前に再起票した。notes 中の関連 id は元 id のまま。
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/backlog/tests/backlog_s03_audit.rs::next_claim_skips_wontfix_tagged_tasks (rev dfa4e9ba): already backed by a RED test"""
+created_at = 1790634573
+updated_at = 1791978437
+weight = 0.0
+issue_number = 819
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/819"
+issue_closed_at = 1791978440
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test backlog_016c2562"
+exit = 0
+passed = 5
+rev = "e513bdb49aba64d5175b955b71a9f0b5839ced44"
+observed_at = 1791978419
+output_digest = "sha256:d391f72543cb6b6093d764af3669f12e9468e63cab59c69c0b39b811da461cf5"
+excerpt = """
+
+running 5 tests
+test next_never_offers_a_lone_wontfix_task ... ok
+test next_claim_never_claims_a_lone_wontfix_task ... ok
+test next_skips_wontfix_and_offers_the_normal_task ... ok
+test control_untagged_p1_is_picked_over_p3 ... ok
+test next_claim_skips_wontfix_and_claims_the_normal_task ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.14s
+
+   Compiling tinyvec_macros v0.1.1
+   Compiling tinyvec v1.11.0
+   Compiling unicode-normalization v0.1.25
+   Compiling backlog v0.3.41 (/Users/yuki/src/.harness-worktrees/session-4dadba08/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.98s
+     Running tests/backlog_016c2562.rs (target/debug/deps/backlog_016c2562-79dbea52f61f8cc2)
+"""
+
+[task.closure.red]
+rev = "3152538ee60afa09543a5abb49a8c87ef454a039"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "e9262d91"
+title = "condukt lock の待機ループが poll ごとに kill サブプロセスを spawn し、負荷下で自分の獲得を遅らせる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+測定点 c39701bc / 2026-09-13、読み取りのみ。crates/condukt/src/lock.rs:267 acquire_at の待機ループは AlreadyExists のたびに read_info してから pid_alive を呼ぶ。pid_alive は lock.rs:138 付近で std::process::Command::new(kill) に -0 pid を渡して harness_core::boundary::run で実行する。つまりロック待ちの 1 回のポーリングごとに fork+exec が 1 回走る。ポーリング間隔は 10 ミリ秒なので、待機スレッドは 1 秒あたり最大 100 回のプロセス生成を行う。DEADLINE は 10 秒なので 1 回の獲得試行で最大 1000 プロセス。crates/condukt/src/lock.rs:484 の repo_primary_lock_serializes_concurrent_rmw_no_lost_update は 6 スレッド 8 イテレーションで同じロックを奪い合うので、5 スレッドが同時に待機して spawn し続ける構造になる。CPU 飽和時にはこの spawn 自体が遅くなり、待機がさらに長引いて自己増幅する。加えて獲得は FIFO ではなく hard_link に勝った者勝ちなので、負荷下でスレッドが繰り返し負ける飢餓がありうる。Linux では /proc の exists() で先に返るので spawn は回避されるが、macOS では常に spawn する。影響は fail-open ではない (獲得できなければ Err に倒れる、正しい側) が、liveness の問題であり負荷下で condukt の merge やコミットが理由なく拒否されうる。改善案: 保持者の pid が自分自身のときは spawn せずに Known(true) を返す、あるいは liveness 確認を毎ポーリングではなく数回に 1 回に落とす。関連 35d61d23。 【救出 2026-09-29】元 id 680d541a（2026-09-13 に run-20260913-223004-15261 の orch worktree で起票されたが未コミットのまま残っていた。worktree 削除前に再起票。notes 中の関連 id は元 id のまま）
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/condukt/src/lock.rs (mod backlog_e9262d91) (rev 596108b9): Bound chosen: <=10 spawns per 1s wait; liveness defect, not fail-open. Count is timing-sensitive (wrapper speed), RED margin is 3x."""
+created_at = 1790632214
+updated_at = 1791979537
+weight = 0.0
+issue_number = 813
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/813"
+issue_closed_at = 1791979540
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --bins backlog_e9262d91"
+exit = 0
+passed = 6
+rev = "de121197ad09373634af4e136519fc6764292e41"
+observed_at = 1791979488
+output_digest = "sha256:20265decccadbb52c315c5969cc53dfb7be5d142dbc53f05a015c6efccd89b3e"
+excerpt = """
+
+running 6 tests
+test lock::backlog_e9262d91::lock_wait_on_dead_holder_still_reaps_promptly ... ok
+test lock::backlog_e9262d91::lock_wait_on_holder_dying_mid_wait_reaps_on_first_dead_probe ... ok
+test lock::backlog_e9262d91::lock_wait_on_live_foreign_holder_is_throttled_and_never_steals ... ok
+test lock::backlog_e9262d91::lock_wait_on_own_pid_holder_spawns_no_probe ... ok
+test lock::backlog_e9262d91::lock_wait_probes_a_changed_holder_pid_immediately ... ok
+test lock::backlog_e9262d91::lock_wait_does_not_spawn_kill_on_every_poll ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 904 filtered out; finished in 5.44s
+
+   Compiling blastguard v0.2.111 (/Users/yuki/src/.harness-worktrees/session-4dadba08/crates/blastguard)
+   Compiling condukt v0.7.239 (/Users/yuki/src/.harness-worktrees/session-4dadba08/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.53s
+     Running unittests src/main.rs (target/debug/deps/condukt-1f5ad636e0024e67)
+"""
+
+[task.closure.red]
+rev = "21981662bea94c610794aa181a3789d5044145cd"
+exit = 101
+kind = "behavioural"

@@ -61,7 +61,6 @@ fn run_git(dir: &Path, args: &[&str]) {
 }
 
 #[test]
-#[ignore = "backlog 7fb00031: open defect, remove ignore when fixed"]
 fn unrecorded_conflict_is_not_reported_as_recorded() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
@@ -76,6 +75,10 @@ fn unrecorded_conflict_is_not_reported_as_recorded() {
     run_git(&repo, &["add", "."]);
     run_git(&repo, &["commit", "-q", "-m", "init"]);
     run_git(&repo, &["checkout", "-q", "-b", "feat"]);
+    // Fixture precondition added with the 51595c41 guard: `merge` refuses a
+    // branch with no recorded creation base before it ever reaches the conflict
+    // path under test. Record the (default-branch) init commit as the base.
+    run_git(&repo, &["config", "branch.feat.conduktBase", "main"]);
     std::fs::write(repo.join("f.txt"), "theirs\n").unwrap();
     run_git(&repo, &["commit", "-q", "-am", "theirs"]);
     run_git(&repo, &["checkout", "-q", "main"]);

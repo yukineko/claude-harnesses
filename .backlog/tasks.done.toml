@@ -36913,3 +36913,484 @@ rev = 3
 [task.closure]
 reason = "discard"
 discard_reason = "no RED evidence (no rev where the test fails behaviourally); user ruling 2026-10-15: without evidence, cancel instead of requesting a ruling"
+
+[[task]]
+id = "3afa6e50"
+title = "plugin_bin::resolve picks the dotfile .version-history.jsonl as a version dir, so the SessionStart status renders backlog/condukt/compass as unknown"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-10-03 (session 521ce4dd SessionStart, overwatch 0.2.56 status hook): == Backlog == (unknown: backlog could not be located (could not test /Users/yuki/.claude/plugins/cache/yukineko/backlog/.version-history.jsonl/bin/backlog: Not a directory (os error 20))); identical for condukt and compass. The plugin cache dir holds version dirs (0.3.22 ... 0.3.32) plus a hidden .version-history.jsonl file; the resolver (crates/harness-core/src/plugin_bin.rs) evidently selected that file as the newest "version" and then errored, so the status reported unknown (correctly not "empty", but the binaries were present and runnable). Fix direction: only consider entries that are directories whose name parses as a version; a non-version entry is skipped, not chosen. Distinguish: run the resolver against a temp cache with one version dir plus a .version-history.jsonl file.
+triage 2026-10-15 (/backlog:triage, independent agent): not reproduced at main 6cd14752: cache_lookup_in with .version-history.jsonl beside version dirs returns the newest version dir (scratch test history_file_beside_version_dirs_is_skipped ok); fixed by ab7ce91d (abba6f0d); tests/plugin_bin_cache_entries.rs 4 passed"""
+created_at = 1791010764
+updated_at = 1792003618
+weight = 0.0
+issue_number = 1151
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1151"
+issue_closed_at = 1792003621
+rev = 1
+
+[task.closure]
+reason = "discard"
+discard_reason = "triage 2026-10-15 (/backlog:triage, independent agent): not reproduced at main 6cd14752: cache_lookup_in with .version-history.jsonl beside version dirs returns the newest version dir (scratch test history_file_beside_version_dirs_is_skipped ok); fixed by ab7ce91d (abba6f0d); tests/plugin_bin_cache_entries.rs 4 passed"
+
+[[task]]
+id = "aca0fb3f"
+title = "donegate.toml:71 の『check-workspace-tests.py を呼ぶものは無い』は pre-push patch 適用まで真、適用時に同時更新が必要"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-10-04 by the eca8dea7 worker: one run of `python3 scripts/check-workspace-tests.py --python-only` on branch run-20261004-011114-7349/eca8dea7 (base f51e281e) took 1055 s over 153 suites and exited 4. Full log: session 64554c4d scratchpad eca8dea7-w-pyonly-worktree.log. None of the red files is in that branch's diff. USER RULING 2026-10-04: fix the reds first; the --python-only pre-push patch (scratchpad eca8dea7-workspace-prepush.patch) is applied only after the body is green. Keep the prose in sync with the eca8dea7-workspace-prepush.patch application (CLAUDE.md §4).
+triage 2026-10-15 (/backlog:triage, independent agent): not reproduced at main 6cd14752: donegate.toml:71 says nothing invokes check-workspace-tests.py; grep -rln check-workspace-tests .githooks/ has no hit, so the text is true today (the item is a reminder about an unapplied future patch, not an observed defect)"""
+created_at = 1791045947
+updated_at = 1792003621
+weight = 0.0
+issue_number = 1255
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1255"
+issue_closed_at = 1792003624
+rev = 1
+
+[task.closure]
+reason = "discard"
+discard_reason = "triage 2026-10-15 (/backlog:triage, independent agent): not reproduced at main 6cd14752: donegate.toml:71 says nothing invokes check-workspace-tests.py; grep -rln check-workspace-tests .githooks/ has no hit, so the text is true today (the item is a reminder about an unapplied future patch, not an observed defect)"
+
+[[task]]
+id = "8b7659cc"
+title = "guard-maintree-bash: an interpreter program fed on stdin / here-document (python3 - <<EOF, node <<EOF) is invisible, so a write into main through it is still allowed"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "cancelled"
+notes = """
+Residual hole after ae4543d5 (05943d1d, 2026-10-03). _strip_heredoc_bodies drops here-document bodies as data before tokenizing, which is correct for cat > f <<EOF but makes the PROGRAM invisible when the heredoc is an interpreter stdin: python3 - <<PY / open(MAIN/p, w) / PY is allowed. Listed in the KNOWN HOLES block of scripts/guard-maintree-bash.py. Fix direction: when the heredoc feeds python/node/ruby/perl/sh (no -c/-e, no script operand), run the body through the same _code_targets / _collect instead of dropping it. Repro: add a case to scripts/test_backlog_s05_repros.py BashGuard.
+triage 2026-10-15 (/backlog:triage, independent agent): not reproduced at main 6cd14752: the syntactic guard was replaced by the observing guard (b8390f7a); heredoc-fed python3/node/sh writes to main are all refused at Post rc=2 (probe run for real); python-heredoc row in test_guard_maintree_bash_observe.py passes"""
+created_at = 1791010766
+updated_at = 1792003625
+weight = 0.0
+issue_number = 1152
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1152"
+issue_closed_at = 1792003629
+rev = 1
+
+[task.closure]
+reason = "discard"
+discard_reason = "triage 2026-10-15 (/backlog:triage, independent agent): not reproduced at main 6cd14752: the syntactic guard was replaced by the observing guard (b8390f7a); heredoc-fed python3/node/sh writes to main are all refused at Post rc=2 (probe run for real); python-heredoc row in test_guard_maintree_bash_observe.py passes"
+
+[[task]]
+id = "547e2b8b"
+title = "guard-maintree-bash: TARGET_ALL の _operands が -- 以降でも '-' 始まりの語を捨て、rm -- -f / mkdir -- -v2 / touch -- -n が main を書き換えても allow される"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "cancelled"
+notes = """
+b5358f58 round-3 verifier, base 4a7fcb1e and HEAD eb67faab both: with cwd=main, {'base': 0, 'head': 0} for 'rm -- -f', 'mkdir -- -v2', 'touch -- -n'; each really writes or deletes <main>/-f, <main>/-v2, <main>/-n. 'mkdir ./-v2' and 'mkdir <M>/-v2' are refused (2). _operands drops every word starting with '-' even after the end-of-options marker. Not in KNOWN HOLES. Real fail-open in the main-tree guard (rm of a main file named -f). Fix: after '--', every word is an operand. Observed 2026-10-03, run-20261003-202619-762.
+triage 2026-10-15 (/backlog:triage, independent agent): not reproduced at main 6cd14752: touch -- -n, mkdir -- -v2, rm -- -f in main are all refused at Post rc=2 by the observing guard; the _operands tokenizer no longer exists"""
+created_at = 1791030683
+updated_at = 1792003630
+weight = 0.0
+issue_number = 1215
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1215"
+issue_closed_at = 1792003632
+rev = 1
+
+[task.closure]
+reason = "discard"
+discard_reason = "triage 2026-10-15 (/backlog:triage, independent agent): not reproduced at main 6cd14752: touch -- -n, mkdir -- -v2, rm -- -f in main are all refused at Post rc=2 by the observing guard; the _operands tokenizer no longer exists"
+
+[[task]]
+id = "d689d6f8"
+title = "guard-maintree-bash: path component に貼り付いた extglob / zsh (…) が tokenizer で '(' 分割され、rm <parent>/harnes@(s)/f が allow される"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "cancelled"
+notes = """
+b5358f58 worker (ddcf0080) observed on the real repo: 'rm /Users/yuki/src/harnes@(s)/CLAUDE.md' returned rc=0 (bash with extglob expands to main). The tokenizer splits at '(' so the path judged is <parent>/harnes@. Recorded in KNOWN HOLES by ddcf0080, not fixed; the fix belongs in the tokenizer (treat a word glued to '(' as unresolvable). Observed 2026-10-03, run-20261003-202619-762.
+triage 2026-10-15 (/backlog:triage, independent agent): not reproduced at main 6cd14752: extglob rm <parent>/mai@(n)/tracked.txt deleting a main file is refused at Post rc=2; the blamed tokenizer was removed"""
+created_at = 1791031287
+updated_at = 1792003632
+weight = 0.0
+issue_number = 1216
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1216"
+issue_closed_at = 1792003635
+rev = 1
+
+[task.closure]
+reason = "discard"
+discard_reason = "triage 2026-10-15 (/backlog:triage, independent agent): not reproduced at main 6cd14752: extglob rm <parent>/mai@(n)/tracked.txt deleting a main file is refused at Post rc=2; the blamed tokenizer was removed"
+
+[[task]]
+id = "1a73a49b"
+title = "guard-maintree-bash: git -C <main> add / checkout -- / cd <main> && git commit を allow する (git 書き込みは未判定)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "cancelled"
+notes = """
+From the verifier's corpus: `git -C <main> add f.txt`, `git -C <main> checkout -- f.txt` and `cd <main> && git commit` are allowed (rc 0) by guard-maintree-bash at base and HEAD, with or without a redirect. KNOWN HOLES lists 'git subcommands'. checkout -- discards a main working-tree change (destructive, not recoverable); add/commit on main are blocked later by pre-commit check-worktree-isolation only for commit, not for add/checkout. Reading (a): real fail-open in the main-tree guard for git writers other than the hook-path ones e033c406 covers; (b): intended, another layer owns git. Distinguish by checking whether any PreToolUse gate refuses `git -C <main> checkout -- f` today.
+
+Observed 2026-10-03 by the ad524af9 verifier (run-20261003-202619-762), base 9ea5a326 and HEAD 6104ffca, temp fixture repo.
+triage 2026-10-15 (/backlog:triage, independent agent): not reproduced at main 6cd14752: git -C <main> add and cd <main> && git commit are refused at Post rc=2; test_1a73a49b_* in scripts/test_guard_maintree_bash_observe.py pass (55 passed)"""
+created_at = 1791034277
+updated_at = 1792003635
+weight = 0.0
+issue_number = 1224
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1224"
+issue_closed_at = 1792003638
+rev = 1
+
+[task.closure]
+reason = "discard"
+discard_reason = "triage 2026-10-15 (/backlog:triage, independent agent): not reproduced at main 6cd14752: git -C <main> add and cd <main> && git commit are refused at Post rc=2; test_1a73a49b_* in scripts/test_guard_maintree_bash_observe.py pass (55 passed)"
+
+[[task]]
+id = "2a5db2d9"
+title = "observing main-tree Bash guard blocks the documented recovery: moving stray dirt out of main (stash, worktree add, apply) is reported as a modification"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "cancelled"
+notes = """
+Reported 2026-10-03 by the test author of the observing guard. When main is already dirty, the recovery that REMOVES the dirt (git stash in main, then apply in a worktree) changes main status, so Post refuses (case d) although the change makes main cleaner. Reading (a) defect: a change that only removes pre-existing dirt (after-dirt subset of before-dirt with unchanged remaining hashes, HEAD unchanged) should be allowed; (b) intended: any non-integration change is surfaced and the human confirms. Distinguish by user ruling; a test should pin whichever is chosen.
+triage 2026-10-15 (/backlog:triage, independent agent): untestable: untestable without a ruling: git -C <main> stash on a dirty main IS refused at Post rc=2 (observed), but the notes leave the expected verdict open ((a) should be allowed vs (b) intended); no test can pin a side until a human rules. Refile with --repro-test once the expected verdict is decided"""
+created_at = 1791029250
+updated_at = 1792003639
+weight = 0.0
+issue_number = 1211
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1211"
+issue_closed_at = 1792003642
+rev = 1
+
+[task.closure]
+reason = "discard"
+discard_reason = "triage 2026-10-15 (/backlog:triage, independent agent): untestable: untestable without a ruling: git -C <main> stash on a dirty main IS refused at Post rc=2 (observed), but the notes leave the expected verdict open ((a) should be allowed vs (b) intended); no test can pin a side until a human rules. Refile with --repro-test once the expected verdict is decided"
+
+[[task]]
+id = "346b68b2"
+title = "main-tree-guard pre-commit が condukt を CONDUKT_BIN/target/PATH にしか探さず、plugin cache だけにある環境では全 worktree commit を block する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-10-04 by the 6108a7fa worker (run-20261004-013009-74262, base main 4027a8dc, branch commit 048365e0). Verbatim: 'main-tree-guard: no condukt binary found (tried $CONDUKT_BIN, target/release, target/debug, PATH) — the §8 gate could not run, so this blocks.' Worker set CONDUKT_BIN=~/.claude/plugins/cache/yukineko/condukt/0.7.210/bin/condukt (an input .githooks/pre-commit:242 supports) and the gate ran and passed. Fail-closed is correct; the gap is discovery of the plugin-cache binary. Fix lives in .githooks (human-only) or a scripts/ helper it calls.
+triage 2026-10-15 (/backlog:triage, independent agent): duplicate of 0e4cfde5: same defect (pre-commit main-tree-guard does not resolve the plugin-cache condukt), same repro scripts/test_backlog_346b68b2.py imports the 0e4cfde5 test class"""
+created_at = 1791045513
+updated_at = 1792003642
+weight = 0.0
+issue_number = 1241
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1241"
+issue_closed_at = 1792003645
+rev = 1
+
+[task.closure]
+reason = "discard"
+discard_reason = "triage 2026-10-15 (/backlog:triage, independent agent): duplicate of 0e4cfde5: same defect (pre-commit main-tree-guard does not resolve the plugin-cache condukt), same repro scripts/test_backlog_346b68b2.py imports the 0e4cfde5 test class"
+
+[[task]]
+id = "3031365b"
+title = "condukt worktree からの commit は CONDUKT_BIN 未設定だと main-tree-guard pre-commit が必ず block する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-10-04 by the eca8dea7 independent verifier and on its merge (main 6acdb6b7). Verbatim: 'main-tree-guard: no condukt binary found (tried $CONDUKT_BIN, target/release, target/debug, PATH) — the §8 gate could not run, so this blocks.' Hit by the verifier commit (1ed3585e) and by the merge-main commit 059cf560 in /Users/yuki/.condukt/worktrees/run-20261004-011114-7349-eca8dea7. Worked around openly with CONDUKT_BIN=/Users/yuki/src/harness/target/release/condukt, a binary dated Oct 3 19:39 that may be stale vs crates/condukt HEAD. Fail-closed is correct; the gap is that worktrees (which have no target/) cannot find the deployed plugin binary ~/.claude/plugins/cache/yukineko/condukt/<ver>/bin/condukt-darwin-arm64. Reading (a) the hook should also try the deployed plugin cache, (b) intended and workers must export CONDUKT_BIN (then the condukt worker prompt must say so).
+triage 2026-10-15 (/backlog:triage, independent agent): duplicate of 0e4cfde5: same defect, repro scripts/test_backlog_3031365b.py fails identically (plugin-cache condukt-darwin-arm64 not resolved)"""
+created_at = 1791046392
+updated_at = 1792003645
+weight = 0.0
+issue_number = 1260
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1260"
+issue_closed_at = 1792003648
+rev = 1
+
+[task.closure]
+reason = "discard"
+discard_reason = "triage 2026-10-15 (/backlog:triage, independent agent): duplicate of 0e4cfde5: same defect, repro scripts/test_backlog_3031365b.py fails identically (plugin-cache condukt-darwin-arm64 not resolved)"
+
+[[task]]
+id = "c1944fcd"
+title = "merge commit 9a7b5b9c on main landed without a matching pre-commit certificate"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate-bypass",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+2026-10-03: git commit concluding the merge of session-64554c4d into main in the main tree ran pre-commit (gates green) yet post-commit recorded 9a7b5b9c as UNGATED in .git/gate-bypassed. Suspect: the per-worktree sentinel was overwritten by a concurrent commit of another session in the same main tree between pre-commit and post-commit, or the certified tree differed. Reproduce: two commits racing in one worktree, then compare sentinel tree/head with the committed tree. If it is the race, the sentinel needs a per-commit key.
+triage 2026-10-15 (/backlog:triage, independent agent): not reproduced at main 6cd14752: concluding a conflicted merge and a --no-commit merge with git commit through the real hooks leaves the bypass ledger empty (2 tests, control with --no-verify IS ledgered); the notes only suspect a concurrent-sentinel race; 9a7b5b9c is not in today's ledger"""
+created_at = 1790999890
+updated_at = 1792003648
+weight = 0.0
+issue_number = 1132
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1132"
+issue_closed_at = 1792003651
+rev = 1
+
+[task.closure]
+reason = "discard"
+discard_reason = "triage 2026-10-15 (/backlog:triage, independent agent): not reproduced at main 6cd14752: concluding a conflicted merge and a --no-commit merge with git commit through the real hooks leaves the bypass ledger empty (2 tests, control with --no-verify IS ledgered); the notes only suspect a concurrent-sentinel race; 9a7b5b9c is not in today's ledger"
+
+[[task]]
+id = "a7bf3cca"
+title = "pre-push gate-bypass check blocks every push on a ledger entry for an unreachable commit that no pre-commit run can ever clear"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-10-03 ~18:30, pushing main c28cb61a. .git/gate-bypassed holds b77286119dc3 (fix(donegate) ... 0.1.36, authored 07:36). git branch -a --contains b7728611 is empty and git merge-base --is-ancestor b7728611 main is rc 1: the commit is unreachable (likely amended or rebased away; memory: amend always trips the bypass ledger). The ledger is cleared only for entries that are ancestors of a green pre-commit HEAD, so this entry can never clear, and pre-push blocks a push that does not contain the commit at all. That is an attribution defect (CLAUDE.md 8: a gate demanding another session content is a bug, not something to silence). The push of main c28cb61a was NOT performed. Fix direction: pre-push should judge only ledger entries reachable from the refs being pushed (push range), and report unreachable entries as a separate, non-blocking finding naming them (or prune them with a visible record), never treat them as clean silently. Repro: create a commit, amend it (ledger gets the pre-amend sha), then push a branch not containing it.
+triage 2026-10-15 (/backlog:triage, independent agent): not reproduced at main 6cd14752: fixed by 619a4c42; scripts/test_gate_bypass.py -k Unreachable 18 passed (incl. test_unreachable_only_entry_lets_pre_push_through). The amend-ledger residual is pending a70d83f7"""
+created_at = 1791023796
+updated_at = 1792003651
+weight = 0.0
+issue_number = 1173
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1173"
+issue_closed_at = 1792003654
+rev = 1
+
+[task.closure]
+reason = "discard"
+discard_reason = "triage 2026-10-15 (/backlog:triage, independent agent): not reproduced at main 6cd14752: fixed by 619a4c42; scripts/test_gate_bypass.py -k Unreachable 18 passed (incl. test_unreachable_only_entry_lets_pre_push_through). The amend-ledger residual is pending a70d83f7"
+
+[[task]]
+id = "b665de33"
+title = "check-plugin-rollout.py の rc 優先順位で rollout drift (rc1) が GATE 無効 (rc2) を隠す — pre-push の rc2 ブロック patch が効かない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "cancelled"
+notes = """
+scripts/check-plugin-rollout.py:2355-2358: `rollout_problems or registry_absent` (rc 1) is checked before gate failures / settings_absent (rc 2). .githooks/pre-push treats rc 1 as advisory, so any drift hides a disabled or unverifiable GATE crate. The 73c2c089 pre-push patch (scratchpad githooks-73c2c089-prepush.patch, block on rc 2) therefore does not fire when drift coexists, nor when both files are absent (rc 1). Options: a bitmask exit code, or a separate gate-only invocation from pre-push. Reading (a): real defect, a disabled gate can be pushed past. Reading (b): intended precedence. Distinguish by whether pre-push is meant to block on GATE enablement at all.
+
+Observed 2026-10-03 in flow batch 13 (run-20261003-155809-33509), base fbc3dac8 / main c0d4701c.
+triage 2026-10-15 (/backlog:triage, independent agent): untestable: no failing test possible: pre-push treats rc 1-4 all as advisory at 6cd14752 (the rc-2 blocking patch was never applied), so the rc1-over-rc2 precedence (documented tie-break, test_check_plugin_rollout.py:649-659) changes no outcome; whether pre-push should block on GATE enablement is a policy ruling"""
+created_at = 1791018579
+updated_at = 1792003654
+weight = 0.0
+issue_number = 1155
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1155"
+issue_closed_at = 1792003657
+rev = 1
+
+[task.closure]
+reason = "discard"
+discard_reason = "triage 2026-10-15 (/backlog:triage, independent agent): untestable: no failing test possible: pre-push treats rc 1-4 all as advisory at 6cd14752 (the rc-2 blocking patch was never applied), so the rc1-over-rc2 precedence (documented tie-break, test_check_plugin_rollout.py:649-659) changes no outcome; whether pre-push should block on GATE enablement is a policy ruling"
+
+[[task]]
+id = "292b6a07"
+title = "test_p0_gate_undetermined LedgerClearedOnlyByInspection: 4 tests fail on main because the fixture seed git commit exits 1"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-10-04 by the 05726f9f worker on main 6acdb6b7 (before and after its change): 4 tests in scripts/test_p0_gate_undetermined.py class LedgerClearedOnlyByInspection fail with 'git commit -q -m seed failed (1)'; the captured log shows test-weakening gate output, so the fixture commit probably runs the real hooks (core.hooksPath inherited?). A standing red in a gate suite means the ledger-clearing behaviour is currently unverified. Cause not investigated.
+triage 2026-10-15 (/backlog:triage, independent agent): not reproduced at main 6cd14752: scripts/test_p0_gate_undetermined.py -k LedgerClearedOnlyByInspection 4 passed (whole file 19 passed) with core.hooksPath set"""
+created_at = 1791046973
+updated_at = 1792003658
+weight = 0.0
+issue_number = 1267
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1267"
+issue_closed_at = 1792003660
+rev = 1
+
+[task.closure]
+reason = "discard"
+discard_reason = "triage 2026-10-15 (/backlog:triage, independent agent): not reproduced at main 6cd14752: scripts/test_p0_gate_undetermined.py -k LedgerClearedOnlyByInspection 4 passed (whole file 19 passed) with core.hooksPath set"
+
+[[task]]
+id = "df307ea6"
+title = "test_gate_bypass (44) and test_precommit_hook (2) fail on main: the repo's pre-commit gates refuse the commits the tests make in scratch repos"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-10-04 by the 05726f9f worker at 34747778 (= main 6acdb6b7 plus test-loader changes, identical before/after): 44 failures in scripts/test_gate_bypass.py (GateBypassExitCodes, KnownDefects, MergeCommits, NoVerifyIsRecorded, PlainCommitIsClean, PrePushBlocks, GreenRunClearsTheLedger, AmendIsNotABypass, CertificateBindsTheDiffNotTheOperation, SentinelIsPerWorktree) and 2 in scripts/test_precommit_hook.py (CleanTreePasses, EveryScannerIsRun). Captured output shows the pre-commit gates refusing the fixture commits. Likely the same cause as 292b6a07 (test_p0_gate_undetermined seed commit exit 1). The gate-bypass ledger's own suite is red, so its behaviour is currently unverified.
+triage 2026-10-15 (/backlog:triage, independent agent): not reproduced at main 6cd14752: the claimed cause (real pre-commit gates refusing the fixtures' commits, 44 failures) is gone — test_gate_bypass 1 failed/146 passed; residuals are separate and already pending with repros: AmendIsNotABypass (a70d83f7), test_precommit_hook stale stub list (6cb94bff)"""
+created_at = 1791047745
+updated_at = 1792003661
+weight = 0.0
+issue_number = 1277
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1277"
+issue_closed_at = 1792003663
+rev = 1
+
+[task.closure]
+reason = "discard"
+discard_reason = "triage 2026-10-15 (/backlog:triage, independent agent): not reproduced at main 6cd14752: the claimed cause (real pre-commit gates refusing the fixtures' commits, 44 failures) is gone — test_gate_bypass 1 failed/146 passed; residuals are separate and already pending with repros: AmendIsNotABypass (a70d83f7), test_precommit_hook stale stub list (6cb94bff)"
+
+[[task]]
+id = "7fbaa1ae"
+title = "prune: test_prune_env_pin test_3 RED — registry entry without parseable lastUpdated holds dir as undetermined"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-10-04 session 33de4c25: scripts/test_prune_env_pin.py (committed 18fa478a on branch tests-18fe626f, NOT in main) gives 1 failed 3 passed. test_3_guard_unreferenced_dir_is_pruned: KEPT backlog/0.3.21: undetermined: session-age hold ... registry entry backlog@yukineko has no parseable lastUpdated (None). Decide: fixture defect (registry fixture lacks lastUpdated) vs product defect. Merge was backed out of session-33de4c25.
+triage 2026-10-15 (/backlog:triage, independent agent): not reproduced at main 6cd14752: test_3 KEPT is prune's documented fail-closed path caused by a fixture without lastUpdated (real installed_plugins.json entries all carry it); with lastUpdated added test_3 passes. tests 1/2/4 assert the superseded env-probe design (18fe626f closed with the ps start-time hold)"""
+created_at = 1791048452
+updated_at = 1792003663
+weight = 0.0
+issue_number = 1289
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1289"
+issue_closed_at = 1792003667
+rev = 1
+
+[task.closure]
+reason = "discard"
+discard_reason = "triage 2026-10-15 (/backlog:triage, independent agent): not reproduced at main 6cd14752: test_3 KEPT is prune's documented fail-closed path caused by a fixture without lastUpdated (real installed_plugins.json entries all carry it); with lastUpdated added test_3 passes. tests 1/2/4 assert the superseded env-probe design (18fe626f closed with the ps start-time hold)"
+
+[[task]]
+id = "545642f0"
+title = "flow SKILL treats a failed backlog driver heartbeat as fail-soft, so since 486e83ca an unrefreshed claim lease silently lapses back to age-only expiry while the loop continues"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Verifier side finding on 486e83ca (merged ed90f694). crates/flow/skills/flow/SKILL.md:647 keeps looping on heartbeat failure; the heartbeat now exits non-zero when leases could not be refreshed, and that signal is ignored by its main caller. Related doc item c892afa2.
+triage 2026-10-15 (/backlog:triage, independent agent): untestable: no failing test possible: the heartbeat-failure fail-soft lives only in LLM-followed SKILL.md prose (flow is skill-only, no binary); a grep on the prose would test text, not behaviour"""
+created_at = 1791051147
+updated_at = 1792003667
+weight = 0.0
+issue_number = 1303
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1303"
+issue_closed_at = 1792003670
+rev = 1
+
+[task.closure]
+reason = "discard"
+discard_reason = "triage 2026-10-15 (/backlog:triage, independent agent): untestable: no failing test possible: the heartbeat-failure fail-soft lives only in LLM-followed SKILL.md prose (flow is skill-only, no binary); a grep on the prose would test text, not behaviour"
+
+[[task]]
+id = "a13399ac"
+title = "condukt lock::tests::repo_primary_lock_is_one_lock_across_a_repo_and_its_linked_worktree failed 1 of 10 full --bin condukt runs (panic at lock.rs:783, the git fixture helper)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flaky-test",
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-10-04 at session-64554c4d HEAD 8c159fd6 while measuring 057fa13c: 10 sequential runs of cargo test -p condukt --bin condukt; runs 1-9 881 passed/0 failed, run 10 880/1 with this test panicking at crates/condukt/src/lock.rs:783:33 (fixture git() helper: a git command in the fixture exited non-zero). Two condukt verifiers were running cargo test in other worktrees concurrently (machine load). diffrisk_record (057fa13c) passed all 10. Full panic text not captured (script grepped only the test name and panic line).
+triage 2026-10-15 (/backlog:triage, independent agent): not reproduced: cargo test -p condukt --bin condukt repo_primary_lock_is_one_lock_across_a_repo_and_its_linked_worktree passed 20/20 at e516ce94; the original 1-in-10 failure under concurrent load never captured its panic text"""
+created_at = 1791052321
+updated_at = 1792003670
+weight = 0.0
+issue_number = 1313
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1313"
+issue_closed_at = 1792003673
+rev = 1
+
+[task.closure]
+reason = "discard"
+discard_reason = "triage 2026-10-15 (/backlog:triage, independent agent): not reproduced: cargo test -p condukt --bin condukt repo_primary_lock_is_one_lock_across_a_repo_and_its_linked_worktree passed 20/20 at e516ce94; the original 1-in-10 failure under concurrent load never captured its panic text"
+
+[[task]]
+id = "40733fac"
+title = "Two /flow sessions implemented ae4543d5 concurrently despite next --claim + claim-task: duplicated work and a merge conflict"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-10-03. Session 521ce4dd claimed ae4543d5 (hashkey b822dbff8f4f7085) via backlog next --claim, then condukt state is-claimed returned claimed:false and condukt state claim-task --stateless returned rc 0, all before ~15:40 local. A different run, run-20261003-155809-33509, then worked the same item from 15:58 (commits cd130363 .. a855f4fe, merged as c0d4701c at 18:07), while this session landed 05943d1d at 15:58. The two implementations conflicted in scripts/guard-maintree-bash.py at merge; main-side was taken (2a76658e). Readings: (a) the other run picked the item through a path that does not consult the claim ledger / claim registry (e.g. condukt run started from a prompt naming the id, or a backlog list read), (b) the claim expired or was reaped (CLAIM_STALE_SECS = 1h; this session started ~15:35), (c) the claim registry key differs between the two paths. Distinguish: inspect ~/.backlog/claims/<project-slug>.json history and the other run transcript for how ae4543d5 was selected.
+triage 2026-10-15 (/backlog:triage, independent agent): no evidence: one-off historical duplicate whose mechanism is only guessed (notes list readings (a)/(b)/(c) and say "Distinguish: inspect ... history"); nothing reproducible remains"""
+created_at = 1791023759
+updated_at = 1792003674
+weight = 0.0
+issue_number = 1172
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1172"
+issue_closed_at = 1792003676
+rev = 1
+
+[task.closure]
+reason = "discard"
+discard_reason = 'triage 2026-10-15 (/backlog:triage, independent agent): no evidence: one-off historical duplicate whose mechanism is only guessed (notes list readings (a)/(b)/(c) and say "Distinguish: inspect ... history"); nothing reproducible remains'
+
+[[task]]
+id = "f8641da0"
+title = "長時間 batch 中に task claim が失効し、別セッションの /flow が同じ task を claim して重複実装した"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-10-04 (session 64554c4d, run-20261003-202619-762). This session claimed ad524af9 / d796a630 with `condukt state claim-task --stateless` at batch start, then spent hours in worker/verifier rounds without re-heartbeating the TASK claims (`condukt state heartbeat --run <RID>` refreshes the run's file claims; it reported 'refreshed 3 claim(s)' but the task-claim registry entries for these hashkeys showed the other session's run id). Session 33de4c25's /flow then claimed both hashkeys (claimed_at 1791033368, ~2.8h before discovery) and started an agent that wrote uncommitted edits to scripts/guard-maintree-bash.py in its own worktree, duplicating work in progress. Resolved by message: 33de4c25 stood down.
+Reading (a): the stateless claim's liveness check (owning-session transcript) judged this live session stale, or the 1h CLAIM_STALE_SECS elapsed without a task-claim heartbeat: a long-running batch loses its claims mid-run. (b): intended TTL and the orchestrator must heartbeat task claims; then the flow/condukt skill text should say which command refreshes TASK claims. Distinguish by reading condukt claim-task --stateless reap logic and whether `state heartbeat --run` touches task claims of that run.
+triage 2026-10-15 (/backlog:triage, independent agent): no evidence: one-off historical event with two competing readings; the concrete sub-claim (state heartbeat --run does not touch task claims) is false as written (claim.rs:1230 refreshes task_claims of that run)"""
+created_at = 1791043800
+updated_at = 1792003676
+weight = 0.0
+issue_number = 1228
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1228"
+issue_closed_at = 1792003679
+rev = 1
+
+[task.closure]
+reason = "discard"
+discard_reason = "triage 2026-10-15 (/backlog:triage, independent agent): no evidence: one-off historical event with two competing readings; the concrete sub-claim (state heartbeat --run does not touch task claims) is false as written (claim.rs:1230 refreshes task_claims of that run)"
+
+[[task]]
+id = "3ebc42d1"
+title = "condukt run を backlog lease / claim-task 無しで回すセッションがあり、/flow の next --claim が同じ item を配って重複着手する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-10-04: session 6fcd99df run run-20261004-023737-16648 implemented backlog 56eb3f9a, 233f819c, 7100bb4e, 7b6bcfe6 without a backlog lease or condukt claim-task; session 64554c4d's p1 loop received the same items from next --claim, started a 56eb3f9a worker (stopped as duplicate) and parked 7100bb4e for a ruling while 6fcd99df was implementing it. Reading (a): condukt state init / the /condukt skill should take claim-task (and a backlog lease) for each backlog-derived task, so a direct /condukt run is visible to next --claim; (b): intended that only /flow claims, then /condukt must refuse or warn when its tasks carry backlog ids with no lease. Distinguish by reading condukt state init and the /condukt SKILL for claim-task calls.
+triage 2026-10-15 (/backlog:triage, independent agent): untestable: no failing test possible until ruled: /condukt never calls claim-task and the decomposition has no backlog id field (observed), but whether /condukt should claim or only /flow claims is an open design choice"""
+created_at = 1791052079
+updated_at = 1792003679
+weight = 0.0
+issue_number = 1311
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1311"
+issue_closed_at = 1792003682
+rev = 1
+
+[task.closure]
+reason = "discard"
+discard_reason = "triage 2026-10-15 (/backlog:triage, independent agent): untestable: no failing test possible until ruled: /condukt never calls claim-task and the decomposition has no backlog id field (observed), but whether /condukt should claim or only /flow claims is an open design choice"

@@ -4382,25 +4382,6 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/839"
 rev = 0
 
 [[task]]
-id = "06ec3503"
-title = "rollout: canary なし経路で rebuild が失敗するとバイナリの無い版が registry に登録されたまま残る"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-Same class as ba5794b3 on the non-canary path: registry repointed, then rebuild.
-
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_rollout_nt_e_repros.py::Backlog06ec3503.test_failed_rebuild_does_not_leave_registry_on_a_binaryless_dir (rev e128c13b): Script's own functions + its default-path top-level tail run in a sandbox (real registry_patch / acquire_rollout_lock / EXIT trap; plan, copy and rebuild stubbed)."""
-created_at = 1790635975
-updated_at = 1790983299
-weight = 0.0
-issue_number = 840
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/840"
-rev = 0
-
-[[task]]
 id = "3ca0a099"
 title = "rollout: execute_stage_rollback が overwatch canary-rollback-plan に依存 — overwatch が動かないと rollback が set -e で止まる"
 project = "/Users/yuki/src/harness"
@@ -4531,25 +4512,6 @@ updated_at = 1790983301
 weight = 0.0
 issue_number = 849
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/849"
-rev = 0
-
-[[task]]
-id = "814cfbbb"
-title = "harness-core undetermined.jsonl の既定シンクが worktree ごとに分かれている (overwatch は main_worktree_root に統一済み)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-sink_state/default_sink_path key on repo_root; moving needs SinkState/undetermined_metrics change. Found in overwatch worktree-partition fix baaf9503.
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/harness-core/tests/backlog_s07_audit.rs (rev e70d48dd)"""
-created_at = 1790678163
-updated_at = 1790983310
-weight = 0.0
-issue_number = 850
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/850"
 rev = 0
 
 [[task]]

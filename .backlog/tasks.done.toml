@@ -36652,3 +36652,98 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "a4e648a3c439d0eeb548e2cef690d2a53268be9f"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "06ec3503"
+title = "rollout: canary なし経路で rebuild が失敗するとバイナリの無い版が registry に登録されたまま残る"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+Same class as ba5794b3 on the non-canary path: registry repointed, then rebuild.
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_rollout_nt_e_repros.py::Backlog06ec3503.test_failed_rebuild_does_not_leave_registry_on_a_binaryless_dir (rev e128c13b): Script's own functions + its default-path top-level tail run in a sandbox (real registry_patch / acquire_rollout_lock / EXIT trap; plan, copy and rebuild stubbed)."""
+created_at = 1790635975
+updated_at = 1791983155
+weight = 0.0
+issue_number = 840
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/840"
+issue_closed_at = 1791983159
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/tests/test_rollout_default_path_rebuild_failure.py"
+exit = 0
+passed = 4
+rev = "9a342e2491cca14311e1aa1ec13a65a296112dc1"
+observed_at = 1791983151
+output_digest = "sha256:b83e53b6afe1019b0d1d9b93f1f12d968976174215ab416003932157c551f02f"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-4dadba08
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 4 items
+
+scripts/tests/test_rollout_default_path_rebuild_failure.py ....          [100%]
+
+============================== 4 passed in 1.17s ===============================
+"""
+
+[task.closure.red]
+rev = "6a3845985bf69679f377b1e0001b11377340f551"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "814cfbbb"
+title = "harness-core undetermined.jsonl の既定シンクが worktree ごとに分かれている (overwatch は main_worktree_root に統一済み)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+sink_state/default_sink_path key on repo_root; moving needs SinkState/undetermined_metrics change. Found in overwatch worktree-partition fix baaf9503.
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/harness-core/tests/backlog_s07_audit.rs (rev e70d48dd)"""
+created_at = 1790678163
+updated_at = 1791983837
+weight = 0.0
+issue_number = 850
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/850"
+issue_closed_at = 1791983840
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p harness-core --test undetermined_sink_unified_814cfbbb"
+exit = 0
+passed = 1
+rev = "c1cbf1f427835f657573feeca3f0eeac3efb05c3"
+observed_at = 1791983825
+output_digest = "sha256:4a7c73fdb0ef274e77e1209fc42dbe6c1c9511a26cb68643d5794d3d557fdfd5"
+excerpt = """
+
+running 1 test
+test backlog_814cfbbb_default_sink_is_unified_across_worktrees_and_fails_closed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/undetermined_sink_unified_814cfbbb.rs (target/debug/deps/undetermined_sink_unified_814cfbbb-3e437f8ab5d1cd43)
+"""
+
+[task.closure.red]
+rev = "9c3bea18d50ef74259445326ec6c545c8d9fd102"
+exit = 101
+kind = "behavioural"

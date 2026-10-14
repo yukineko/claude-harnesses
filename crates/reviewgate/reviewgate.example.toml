@@ -12,6 +12,9 @@ enabled = true
 #                  changes. No API key, no extra process. (default)
 #   "subprocess" — run `reviewer_cmd` as an independent reviewer over the diff
 #                  and block only when it reports issues (injecting just those).
+#   Aliases: "reviewer" / "independent" = "subprocess". Any other value is
+#   config-invalid: it is NOT mapped to a mode, and every stop is blocked
+#   (naming the bad value) until it is fixed.
 mode = "inject"
 
 # Consecutive review rounds in one session before reviewgate gives up and allows

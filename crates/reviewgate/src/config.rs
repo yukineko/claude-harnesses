@@ -24,10 +24,18 @@ pub enum Mode {
 }
 
 impl Mode {
-    fn parse(s: &str) -> Mode {
+    /// Parse a configured mode. An unrecognised value is `Err(<the value>)`:
+    /// it is NOT mapped to either mode. Picking one for a typo is a guess
+    /// (e.g. `subproces` silently downgrading an independent reviewer to
+    /// self-review), and CLAUDE.md sec.3 resolves "cannot determine" to a
+    /// block, not to a guess. The caller records the bad value in
+    /// [`Config::config_invalid`] and the Stop hook blocks `config-invalid`
+    /// (backlog 7d56f1e3, same shape as propguard 35f2ef54).
+    fn parse(s: &str) -> Result<Mode, String> {
         match s.trim().to_ascii_lowercase().as_str() {
-            "subprocess" | "reviewer" | "independent" => Mode::Subprocess,
-            _ => Mode::Inject,
+            "subprocess" | "reviewer" | "independent" => Ok(Mode::Subprocess),
+            "inject" => Ok(Mode::Inject),
+            _ => Err(s.to_string()),
         }
     }
     pub fn as_str(&self) -> &'static str {
@@ -70,6 +78,13 @@ pub struct Config {
     /// settings — `status` and the review path must say so rather than report
     /// the file as adopted (audit P7).
     pub load_error: Option<String>,
+    /// `Some(description)` when the config was read but holds a value that
+    /// cannot be interpreted (currently: an unrecognised `mode`, named in the
+    /// description). Undetermined, not a choice: `mode` keeps its default only
+    /// as a placeholder, and the Stop hook blocks `config-invalid` before any
+    /// review runs (even when nothing is reviewable). `reviewgate status`
+    /// reports it.
+    pub config_invalid: Option<String>,
 }
 
 /// On-disk form; every field optional.
@@ -171,6 +186,7 @@ impl Default for Config {
             reviewer_timeout_secs: 300,
             state_dir: base_dir().join("state"),
             load_error: None,
+            config_invalid: None,
         }
     }
 }
@@ -235,7 +251,10 @@ impl Config {
                     cfg.enabled = v;
                 }
                 if let Some(v) = fc.mode {
-                    cfg.mode = Mode::parse(&v);
+                    match Mode::parse(&v) {
+                        Ok(mode) => cfg.mode = mode,
+                        Err(bad) => cfg.config_invalid = Some(format!("unknown mode {bad:?}")),
+                    }
                 }
                 if let Some(v) = fc.max_attempts {
                     cfg.max_attempts = v;
@@ -409,13 +428,14 @@ mod tests {
 /// Closure regression for backlog 3b790fdb (closed as DUPLICATE of 7d56f1e3):
 /// both name the same site, `Mode::parse`'s `_ => Mode::Inject` arm — an
 /// unrecognised `mode` value is silently mapped to the default with no
-/// diagnostic. Pins the SHARED open failure; ignored (RED) until 7d56f1e3 lands.
+/// diagnostic. Pins the SHARED failure; re-anchored from `load_error` to
+/// `Config::config_invalid` when 7d56f1e3 landed (the file WAS read, so the
+/// unknown value is a config-invalid state, not a load error).
 #[cfg(test)]
 mod backlog_3b790fdb_7d56f1e3_regression {
     use super::*;
 
     #[test]
-    #[ignore = "backlog 7d56f1e3 / 3b790fdb OPEN: unknown mode value silently becomes Inject"]
     fn misspelled_mode_is_surfaced_not_silently_inject() {
         let _guard = HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let saved_home = std::env::var_os("HOME");
@@ -442,11 +462,86 @@ mod backlog_3b790fdb_7d56f1e3_regression {
         }
         let _ = std::fs::remove_dir_all(&base);
 
+        let why = cfg.config_invalid.as_deref().unwrap_or_else(|| {
+            panic!(
+                "mode = \"subproces\" was accepted with no diagnostic (mode={}, \
+                 config_invalid=None): an unknown value must be surfaced as config-invalid, \
+                 not mapped to the default",
+                cfg.mode.as_str()
+            )
+        });
         assert!(
-            cfg.load_error.is_some(),
-            "mode = \"subproces\" was accepted with no diagnostic (mode={}, load_error=None): \
-             an unknown value must be surfaced as config-invalid, not mapped to the default",
-            cfg.mode.as_str()
+            why.contains("subproces"),
+            "config-invalid must name the bad value: {why}"
         );
+    }
+}
+
+/// Backlog 7d56f1e3: known `mode` values (and their aliases) parse to their
+/// mode and leave `config_invalid` unset; an unknown one is `Err` naming the
+/// value, never a mode. Anti-vacuity control for the config-invalid block.
+#[cfg(test)]
+mod backlog_7d56f1e3_mode_parse {
+    use super::*;
+
+    #[test]
+    fn known_modes_parse_without_err() {
+        for (s, m) in [
+            ("inject", Mode::Inject),
+            (" Inject ", Mode::Inject),
+            ("subprocess", Mode::Subprocess),
+            (" REVIEWER ", Mode::Subprocess),
+            ("independent", Mode::Subprocess),
+        ] {
+            assert_eq!(Mode::parse(s), Ok(m), "{s:?}");
+        }
+    }
+
+    #[test]
+    fn unknown_mode_is_err_naming_the_value() {
+        assert_eq!(Mode::parse("subproces"), Err("subproces".to_string()));
+        assert_eq!(Mode::parse(""), Err(String::new()));
+    }
+
+    #[test]
+    fn known_modes_loaded_from_config_leave_config_invalid_none() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved_home = std::env::var_os("HOME");
+        let saved_trust = std::env::var_os("HARNESS_TRUST_ALL");
+        let base = std::env::temp_dir().join(format!("reviewgate-7d56f1e3-{}", std::process::id()));
+        let home = base.join("home");
+        let proj = base.join("proj");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&proj).unwrap();
+        std::env::set_var("HOME", &home);
+        std::env::remove_var("HARNESS_TRUST_ALL");
+        std::fs::create_dir_all(base_dir()).unwrap();
+
+        let mut results = Vec::new();
+        for (s, m) in [
+            ("inject", Mode::Inject),
+            ("subprocess", Mode::Subprocess),
+            ("reviewer", Mode::Subprocess),
+            ("independent", Mode::Subprocess),
+        ] {
+            std::fs::write(Config::home_path(), format!("mode = \"{s}\"\n")).unwrap();
+            let cfg = Config::load(&proj);
+            results.push((s, m, cfg.mode, cfg.config_invalid, cfg.load_error));
+        }
+
+        match saved_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        if let Some(t) = saved_trust {
+            std::env::set_var("HARNESS_TRUST_ALL", t);
+        }
+        let _ = std::fs::remove_dir_all(&base);
+
+        for (s, want, got, invalid, load_error) in results {
+            assert_eq!(got, want, "{s:?}");
+            assert!(invalid.is_none(), "{s:?} is known: {invalid:?}");
+            assert!(load_error.is_none(), "{s:?}: {load_error:?}");
+        }
     }
 }

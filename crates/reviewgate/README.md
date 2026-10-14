@@ -117,6 +117,13 @@ per-session attempt counter resets after this idle gap), `min_changed_files`,
 clamped to 1, and `0` for `max_diff_bytes` / `reviewer_timeout_secs` falls back
 to the default.
 
+`mode` accepts `"inject"` or `"subprocess"` (aliases `reviewer` /
+`independent`). Any other value is **config-invalid**: it is not mapped to
+either mode, and every stop is blocked (`config-invalid`, naming the value)
+— even when nothing is reviewable — until you fix the file. `reviewgate status`
+shows the state; `reviewgate skip --reason ...` or `REVIEWGATE_DISABLE=1` are
+the escape hatches.
+
 ## Bundled agent
 
 The plugin also ships `agents/reviewgate-typing.md`, a read-only subagent that

@@ -38981,3 +38981,109 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "9c3bea18d50ef74259445326ec6c545c8d9fd102"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "9778927f"
+title = "blastguard: (true && reboot) の後段 verb が reboot) と読まれ許可される"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+Found during 1875f626; allow at baseline and after.
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/blastguard/tests/backlog_audit_s02.rs (rev e70d48dd)"""
+created_at = 1790678170
+updated_at = 1792003864
+weight = 0.0
+issue_number = 854
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/854"
+issue_closed_at = 1792003867
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test subshell_paren_verb_9778927f"
+exit = 0
+passed = 7
+rev = "f98bf1c3787e4c44de4733feaa2017278cbeac1f"
+observed_at = 1792003838
+output_digest = "sha256:8e14de4b790331a30aa8337c8a4a2fb4b2ee23bb997b17a0b28eb02b4454d89b"
+excerpt = """
+
+running 7 tests
+test control_command_substitution_is_not_misread ... ok
+test control_benign_subshells_stay_allowed ... ok
+test dd_to_raw_disk_in_subshell_is_not_weaker ... ok
+test git_checkout_force_in_subshell_is_not_weaker ... ok
+test git_reset_hard_in_subshell_is_not_weaker ... ok
+test git_push_force_in_subshell_is_not_weaker ... ok
+test rm_rf_system_path_in_subshell_is_not_weaker ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.82s
+
+   Compiling blastguard v0.2.127 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.30s
+     Running tests/subshell_paren_verb_9778927f.rs (target/debug/deps/subshell_paren_verb_9778927f-4c49dfdf6ca3d071)
+"""
+
+[task.closure.red]
+rev = "fd6ea85a5fe74fda2256b846aaa9584b8aa3b774"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "675eb991"
+title = "blastguard: 環境変数経由の実行経路 (GIT_PAGER / GIT_EDITOR / GIT_SSH_COMMAND / GIT_CONFIG_PARAMETERS / PAGER / EDITOR) を判定しない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+Found during daf7611b; assignments skipped before verb.
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test crates/blastguard/tests/backlog_audit_s02.rs (rev e70d48dd)"""
+created_at = 1790678171
+updated_at = 1792003883
+weight = 0.0
+issue_number = 855
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/855"
+issue_closed_at = 1792003886
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test env_exec_vars_675eb991"
+exit = 0
+passed = 5
+rev = "f98bf1c3787e4c44de4733feaa2017278cbeac1f"
+observed_at = 1792003867
+output_digest = "sha256:36323094da9e763951a8869ad5b868b58d048611281ae7d9ab7ebea557ceb47a"
+excerpt = """
+
+running 5 tests
+test runtime_only_exec_var_value_is_not_allowed ... ok
+test control_payload_and_git_c_twin_are_denied ... ok
+test env_export_and_config_parameters_forms_are_not_allowed ... ok
+test benign_exec_var_values_stay_allowed ... ok
+test leading_assignment_exec_var_with_destructive_payload_is_denied ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+
+   Compiling blastguard v0.2.127 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s
+     Running tests/env_exec_vars_675eb991.rs (target/debug/deps/env_exec_vars_675eb991-88e7325359d5432b)
+"""
+
+[task.closure.red]
+rev = "138f8f875f32aa57308b3e667162090d27ee5cf4"
+exit = 101
+kind = "behavioural"

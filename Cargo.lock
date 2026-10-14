@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "backlog"
-version = "0.3.44"
+version = "0.3.45"
 dependencies = [
  "anyhow",
  "clap",
@@ -164,7 +164,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "blastguard"
-version = "0.2.112"
+version = "0.2.113"
 dependencies = [
  "globset",
  "harness-core",

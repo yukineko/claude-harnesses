@@ -25,11 +25,16 @@ notes の記述が具体的であっても、テストが通った（再現し�
 | **REPRODUCED** | notes に具体的な観測（逐語の出力・exit code・具体入力→誤出力を伴う file:line・rev 付きの失敗コマンド）があり、それを忠実に突くテストが **HEAD で behaviourally FAIL** した | テストを commit → `backlog confirm <id> --repro-test "<cmd>"`（`reproduced` なら pending） |
 | **NOT-REPRODUCED** | 具体的な主張を忠実に突くテストを書いたが **HEAD で PASS** した（修正済み／主張が誤り） | `backlog cancel <id> --reason "not reproduced at <rev>: <何を走らせ何が出たか>"`。通るだけのテストは commit しない |
 | **NO-EVIDENCE** | notes が推測だけ（suspect / probably / 具体入力なし）、または今は再現手段の残らない一過性の事象 | `backlog cancel <id> --reason "no evidence: <決め手になった notes の逐語>"` |
-| **UNTESTABLE** | 具体的な主張はあるが、意味のある自動テストが書けない | **判断で決めない。** 理由を添えて `AskUserQuestion` で人間に返す（CLAUDE.md 第2節「テストが書けない問題は ask する」）。unconfirmed のまま残す |
+| **UNTESTABLE** | 具体的な主張はあるが、失敗するテストが書けない（環境で観測できない・期待挙動そのものが未決の設計判断 等） | `backlog cancel <id> --reason "untestable: <なぜ失敗するテストが書けないか>"`。**報告で列挙**し、人間が期待挙動を決めたら RED テスト付きで起票し直せるようにする |
 
+> **unconfirmed は残さない**（2026-10-15 ユーザー裁定「失敗するテストがかけないなら、それはtaskじゃない」
+> 「unconfirmedは基本的に許容できない。証拠がないで終わらずないならcancelしてなくす。再度発見するなら証拠をもってきてpendingにせよ」）。
+> triage の終わりには、対象の全 item が pending か cancelled のどちらかになっている。
 > **cancel は「やらないと決めた」記録であって「直った」の主張ではない。** NOT-REPRODUCED を
 > `done` にしてはいけない（RED を観測していないので F→P 証拠にならない）。
-> **UNTESTABLE を cancel にも pending にも丸めない** — 測れないという事実が人間に渡すべき情報である。
+> **UNTESTABLE を pending に丸めない**（テストの無い pending は task ではない）。cancel するが、
+> 測れないという事実と理由は cancel reason と報告に必ず残す — 閉じることは隠すことではない。
+> `ruling request --kind judgment` で unconfirmed のまま人間の承認待ちに置くのも同じ理由で使わない。
 
 ## 手順
 
@@ -64,17 +69,19 @@ notes の記述が具体的であっても、テストが通った（再現し�
 4. **sink を当てる**（同じ worktree で）:
    ```bash
    backlog confirm <id> --repro-test "<cmd>"        # REPRODUCED。非 0 終了＝reproduced にならなかった
-   backlog cancel  <id> --reason "<理由>"            # NOT-REPRODUCED / NO-EVIDENCE
+   backlog cancel  <id> --reason "<理由>"            # NOT-REPRODUCED / NO-EVIDENCE / UNTESTABLE
    ```
-   - `confirm` が `reproduced` を返さなかった（not-reproduced / undetermined）ら、**pending にも cancel にもしない**。
-     その出力を逐語で記録し、agent の判定と食い違った事実として報告する（agent の自己申告より実測が優先）。
-   - UNTESTABLE はまとめて `AskUserQuestion` に掛ける（1 問に複数 item を並べてよい）。
+   - `confirm` が `reproduced` を返さなかった（not-reproduced / undetermined）ら、その出力を逐語で記録し、
+     agent の判定と食い違った事実として報告する（agent の自己申告より実測が優先）。原因が runner や
+     テストの書き方（allowlist 外・未 commit 等）なら直して confirm し直す。直しても reproduced に
+     ならなければ、実測の出力を reason に書いて cancel する（RED が観測できないものは task ではない）。
 
 5. **store を commit し、main へ統合する**: `.backlog/tasks.toml` とテスト・bump を含む branch を
    main へ fast-forward して push し、crate を触っていれば `scripts/rollout-plugins.sh --canary`。
    使い終えた `triage-<group>` worktree / branch は merge 済みを確認してから削除する。
 
-6. **報告**: verdict ごとの件数と id、confirm の実測結果、cancel 理由、UNTESTABLE の質問。
+6. **報告**: verdict ごとの件数と id、confirm の実測結果、cancel 理由。UNTESTABLE で cancel した item は
+   「期待挙動を決めれば RED テスト付きで再起票できる候補」として別に列挙する。
 
 ## やってはいけないこと
 
@@ -82,4 +89,5 @@ notes の記述が具体的であっても、テストが通った（再現し�
   NOT-REPRODUCED は**テストを走らせて通った**ときだけ。走らせていないなら NO-EVIDENCE の条件
   （notes が推測だけ）を満たすかを逐語で示す。
 - **confirm を通すためにテストを主張から逸らす**（proxy を落とす）。テストは notes の主張する性質を突く。
-- **UNTESTABLE を自分の判断で cancel / pending にする。**
+- **テストの無い item を pending にする／unconfirmed のまま残す。**
+- **UNTESTABLE の cancel を報告から落とす**（理由を書かずに閉じると、測れないという事実が消える）。

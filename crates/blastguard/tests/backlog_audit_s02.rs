@@ -128,7 +128,6 @@ fn backlog_84fa118e_mv_plugin_tree_away_is_not_allowed() {
 
 // ---------------------------------------------------------------- 675eb991
 #[test]
-#[ignore = "backlog 675eb991: open defect, remove ignore when fixed"]
 fn backlog_675eb991_env_exec_vars_are_judged() {
     let (d, r) = verdict("GIT_SSH_COMMAND='rm -rf /usr/lib' git fetch");
     assert_ne!(d, "allow", "GIT_SSH_COMMAND payload: {d} | {r}");

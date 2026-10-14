@@ -6474,6 +6474,12 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
                 }
             }
         }
+        // 675eb991: `GIT_PAGER='rm -rf ~/x' git log` — an environment
+        // variable whose value a program runs as a command line. See
+        // `executors::env_exec_var_verdict`.
+        if let Some(deny) = acc.record(executors::env_exec_var_verdict(seg, depth, ctx)) {
+            return deny;
+        }
         // 06345780: a `$(...)`/backtick body is EXECUTED to produce its text,
         // wherever it stands — command word, operand, assignment value or
         // inside double quotes. Judge each body with the full analyser, so

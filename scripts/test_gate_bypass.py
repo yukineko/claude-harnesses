@@ -974,13 +974,25 @@ class DenyNoVerify(unittest.TestCase):
                 )
                 self.assertEqual(proc.returncode, 0)
 
-    def test_unparseable_payloads_are_allowed(self):
-        for payload in ("", "not json", "{", '{"tool_name": "Bash"}'):
+    def test_unparseable_payloads_are_refused(self):
+        """Spec inverted by user ruling 2026-10-14 (backlog bee1ccbc): an
+        unreadable payload is undetermined and resolves to refuse (exit 2,
+        CLAUDE.md 3). It was previously pinned to exit 0. Exactly 2: exit 1
+        (a crash) is an ALLOW to Claude Code."""
+        for payload in ("", "not json", "{", "[1, 2]", '"str"',
+                        '{"tool_name": "Bash", "tool_input": [1, 2]}',
+                        '{"tool_name": "Bash", "tool_input": "git commit -n"}'):
             with self.subTest(payload=payload):
                 proc = self.run_hook(payload)
                 self.assertEqual(
-                    proc.returncode, 0, "stderr:\n%s" % proc.stderr
+                    proc.returncode, 2, "stderr:\n%s" % proc.stderr
                 )
+
+    def test_missing_tool_input_is_allowed(self):
+        """Missing command (here: no tool_input at all) stays exit 0 by the
+        same user ruling 2026-10-14 (bee1ccbc); only unreadable payloads flip."""
+        proc = self.run_hook('{"tool_name": "Bash"}')
+        self.assertEqual(proc.returncode, 0, "stderr:\n%s" % proc.stderr)
 
     def test_non_string_command_is_allowed(self):
         proc = self.run_hook(
@@ -1338,15 +1350,12 @@ class KnownDefects(GateTestCase):
             h.pre_push().returncode, 0, "pre-push must refuse to send it"
         )
 
-    def test_DEFECT_a_non_dict_json_payload_crashes_the_deny_hook(self):
-        """DEFECT (severity: low).  The module docstring says an unparseable
-        payload exits 0.  A payload that PARSES but is not an object — `[]`,
-        `"x"`, `3` — reaches `payload.get(...)` and raises AttributeError, so
-        the hook dies with an unhandled traceback and exit 1.
-
-        Exit 1 is not a deny, so the bypass is not blocked either way; the cost
-        is a stack trace on every Bash call for as long as the malformed shape
-        persists, and a hook whose stated fail-open contract it does not meet.
+    def test_FIXED_a_non_dict_json_payload_is_refused_by_the_deny_hook(self):
+        """FIXED (backlog bee1ccbc, user ruling 2026-10-14) — inverted from
+        `test_DEFECT_a_non_dict_json_payload_crashes_the_deny_hook`, which
+        pinned exit 1 + Traceback.  Exit 1 is an ALLOW to Claude Code; a payload
+        that parses but is not an object is unreadable and now refuses with
+        exit 2 and no traceback (CLAUDE.md 3).
         """
         for payload in ("[]", '"a string"', "3", "null"):
             with self.subTest(payload=payload):
@@ -1356,10 +1365,8 @@ class KnownDefects(GateTestCase):
                     capture_output=True,
                     text=True,
                 )
-                self.assertEqual(
-                    proc.returncode, 1, "DEFECT PINNED: %r" % payload
-                )
-                self.assertIn("Traceback", proc.stderr)
+                self.assertEqual(proc.returncode, 2, "payload %r" % payload)
+                self.assertNotIn("Traceback", proc.stderr)
 
 
 # ---------------------------------------------------------------------------

@@ -254,6 +254,29 @@ pub(crate) fn lock_path_in_project(cfg: &Config, project_root: &Path, run_id: &s
     ))
 }
 
+/// Minimum spacing between two liveness probes of the SAME holder pid while a
+/// waiter polls a held lock (backlog e9262d91). The wait loop polls every 10ms,
+/// and off Linux each probe is a `kill -0` fork+exec; probing on every poll
+/// meant ~100 spawns per second per waiter, which under CPU saturation slowed
+/// the waiter's own acquisition. Skipping a probe only ever means "keep
+/// waiting" (the reap arm needs a positive `Known(false)`), so the throttle is
+/// on the restrictive side: it can delay reaping a holder that died mid-wait by
+/// about this interval plus one 10ms poll (and the probe's own run time), and
+/// can never steal a live holder's lock.
+const LIVENESS_PROBE_INTERVAL: Duration = Duration::from_millis(200);
+
+/// Liveness of a lock holder `pid` as seen from this process. A holder pid
+/// equal to our own pid is this very process — alive by observation, so no
+/// `kill` is spawned (the in-process contention case, e.g. several threads of
+/// one condukt invocation). Every other pid goes to
+/// [`pid_alive_with_env_path`] with its three-valued answer unchanged.
+fn holder_alive(pid: u32, child_path: Option<&std::ffi::OsStr>) -> Determination<bool> {
+    if pid == std::process::id() {
+        return Determination::known(true);
+    }
+    pid_alive_with_env_path(pid, child_path)
+}
+
 fn read_info(path: &Path) -> Option<LockInfo> {
     let txt = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&txt).ok()
@@ -448,43 +471,61 @@ impl RunLock {
         let _guard = TmpGuard(&tmp_path);
 
         let start = Instant::now();
+        // The holder pid we last probed and when. A new holder pid is probed
+        // immediately; the same holder is re-probed at most once per
+        // `LIVENESS_PROBE_INTERVAL` (backlog e9262d91).
+        let mut last_probe: Option<(u32, Instant)> = None;
         loop {
             match std::fs::hard_link(&tmp_path, &path) {
                 Ok(()) => return RunLock { path: Some(path) },
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                     // Someone holds the lock. Reap it only if we can positively
                     // confirm the owner pid is gone; otherwise wait for release.
-                    match read_info(&path) {
-                        // Reap ONLY on a positive "the owner is gone"
-                        // (`Known(false)`). A live owner (`Known(true)`) AND an
-                        // UNDETERMINED liveness (`kill` unspawnable / signalled —
-                        // "I could not ask the OS") both fall through to the wait
-                        // arm below. Reaping on "cannot tell" would steal a live
-                        // holder's lock — the exact fail-open this lock exists to
-                        // close.
-                        Some(existing)
-                            if matches!(
-                                pid_alive_with_env_path(existing.pid, kill_path),
-                                Determination::Known(false)
-                            ) =>
-                        {
-                            let _ = std::fs::remove_file(&path);
-                            continue;
-                        }
-                        _ => {
-                            if start.elapsed() >= deadline {
-                                eprintln!(
-                                    "condukt: state lock {} contended for {:?}; \
-                                     lock NOT acquired",
-                                    path.display(),
-                                    deadline
-                                );
-                                return RunLock { path: None };
+                    //
+                    // Reap ONLY on a positive "the owner is gone"
+                    // (`Known(false)`). A live owner (`Known(true)`), an
+                    // UNDETERMINED liveness (`kill` unspawnable / signalled —
+                    // "I could not ask the OS"), an unreadable lock file, AND a
+                    // probe skipped by the throttle all fall through to the
+                    // wait arm below. Reaping on "cannot tell" would steal a
+                    // live holder's lock — the exact fail-open this lock exists
+                    // to close.
+                    let holder_gone = match read_info(&path) {
+                        Some(existing) => {
+                            let due = match last_probe {
+                                Some((pid, at)) => {
+                                    pid != existing.pid || at.elapsed() >= LIVENESS_PROBE_INTERVAL
+                                }
+                                None => true,
+                            };
+                            if due {
+                                last_probe = Some((existing.pid, Instant::now()));
+                                matches!(
+                                    holder_alive(existing.pid, kill_path),
+                                    Determination::Known(false)
+                                )
+                            } else {
+                                false
                             }
-                            std::thread::sleep(Duration::from_millis(10));
-                            continue;
                         }
+                        None => false,
+                    };
+                    if holder_gone {
+                        let _ = std::fs::remove_file(&path);
+                        last_probe = None;
+                        continue;
                     }
+                    if start.elapsed() >= deadline {
+                        eprintln!(
+                            "condukt: state lock {} contended for {:?}; \
+                             lock NOT acquired",
+                            path.display(),
+                            deadline
+                        );
+                        return RunLock { path: None };
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                    continue;
                 }
                 Err(e) => {
                     eprintln!(
@@ -1024,13 +1065,29 @@ mod backlog_e9262d91 {
     //! contention of `repo_primary_lock_serializes_concurrent_rmw_no_lost_update`),
     //! put a counting `kill` first on PATH, wait 1s, count spawns. The bound
     //! (at most 10 in 1s, i.e. at most one liveness probe per ~10 polls) is
-    //! the contract chosen here; today it is ~one per poll.
+    //! the contract chosen here; before the fix (652e3cec) it was ~one per
+    //! poll.
+    //!
+    //! Contracts pinned below: a live holder is never stolen; a holder pid
+    //! equal to our own spawns ZERO probes; a dead holder is reaped on its
+    //! first probe (including one that dies mid-wait); and a holder pid that
+    //! changes mid-wait is probed at once rather than after the throttle
+    //! interval.
     use super::*;
+
+    /// Every test in this module measures spawn COUNTS/RATES or reap timing,
+    /// which a sibling waiter distorts when run concurrently (each waiter's
+    /// fork+exec load slows the others' spawns). Serialize them all.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        SERIAL.lock().unwrap_or_else(|p| p.into_inner())
+    }
 
     #[cfg(unix)]
     #[test]
-    #[ignore = "backlog e9262d91: open defect, remove ignore when fixed"]
     fn lock_wait_does_not_spawn_kill_on_every_poll() {
+        let _serial = serial();
         use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::TempDir::new().unwrap();
         let bin = tmp.path().join("bin");
@@ -1083,5 +1140,381 @@ mod backlog_e9262d91 {
             spawns <= 10,
             "waiting 1s on a held lock spawned `kill` {spawns} times (one fork+exec per 10ms poll)"
         );
+    }
+
+    /// Counting fake `kill` placed first on a CHILD-only PATH. Each spawn
+    /// appends one line to the count file: `alive` (probe exit 0) or `dead`
+    /// (non-zero). Returns
+    /// `(tempdir, count_file, child_path)`; the tempdir must outlive the wait.
+    #[cfg(unix)]
+    fn counting_kill_path() -> (tempfile::TempDir, PathBuf, std::ffi::OsString) {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let count = tmp.path().join("kill.count");
+        let fake = bin.join("kill");
+        std::fs::write(
+            &fake,
+            format!(
+                "#!/bin/sh\n/bin/kill \"$@\"\nrc=$?\n\
+                 if [ $rc -eq 0 ]; then echo alive >> '{c}'; else echo dead >> '{c}'; fi\n\
+                 exit $rc\n",
+                c = count.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut parts = vec![bin];
+        if let Some(p) = std::env::var_os("PATH") {
+            parts.extend(std::env::split_paths(&p));
+        }
+        let kill_path = std::env::join_paths(parts).unwrap();
+        // Warm-up: the FIRST exec of a freshly written script is slow on
+        // macOS (observed ~300ms idle, 0.7-2.4s under load), which made a
+        // wall-clock reap bound measure the OS, and made a 0.3s holder die
+        // before the first probe ran. Exec it once, then reset the log.
+        let warm = std::process::Command::new(&fake)
+            .args(["-0", &std::process::id().to_string()])
+            .output()
+            .expect("fixture: warm-up exec of the fake `kill`");
+        assert!(
+            warm.status.success(),
+            "fixture: warm-up `kill -0 <self>` must exit 0"
+        );
+        std::fs::remove_file(&count).expect("fixture: reset the probe log after warm-up");
+        (tmp, count, kill_path)
+    }
+
+    #[cfg(unix)]
+    fn write_lock(path: &Path, pid: u32) {
+        let info = LockInfo {
+            pid,
+            run_id: "held".into(),
+            acquired_at: now_unix(),
+        };
+        std::fs::write(path, serde_json::to_string(&info).unwrap()).unwrap();
+    }
+
+    /// Kills and reaps the foreign holder on every exit path (incl. panic).
+    #[cfg(unix)]
+    struct ChildGuard(std::process::Child);
+    #[cfg(unix)]
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    /// The holder is a LIVE FOREIGN process (not this test's pid), so a fix
+    /// that only short-circuits `existing.pid == std::process::id()` does not
+    /// satisfy it: the liveness probe itself must be rate-limited, and the
+    /// live holder must still never be stolen.
+    #[cfg(unix)]
+    #[test]
+    fn lock_wait_on_live_foreign_holder_is_throttled_and_never_steals() {
+        let _serial = serial();
+        let (tmp, count, kill_path) = counting_kill_path();
+        let child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("fixture: spawn `sleep 30` as the foreign lock holder");
+        let guard = ChildGuard(child);
+        let holder_pid = guard.0.id();
+
+        let lock = tmp.path().join("held.lock");
+        write_lock(&lock, holder_pid);
+
+        let got = RunLock::acquire_at_with_env_path(
+            lock.clone(),
+            Duration::from_secs(1),
+            Some(&kill_path),
+        );
+
+        assert!(
+            !got.held(),
+            "a LIVE foreign holder (pid {holder_pid}) was stolen: the waiter acquired the lock"
+        );
+        let on_disk: LockInfo = serde_json::from_str(
+            &std::fs::read_to_string(&lock)
+                .expect("the live foreign holder's lock file must survive the wait"),
+        )
+        .expect("the held lock file must still parse");
+        assert_eq!(
+            on_disk.pid, holder_pid,
+            "the lock file no longer names the live foreign holder (stolen/rewritten)"
+        );
+        let spawns = std::fs::read_to_string(&count)
+            .map(|s| s.lines().count())
+            .unwrap_or(0);
+        assert!(
+            spawns <= 10,
+            "waiting 1s on a lock held by a live FOREIGN pid spawned `kill` {spawns} times \
+             (bound: <= 10 per second of waiting)"
+        );
+        drop(guard);
+    }
+
+    /// Reads the probe log written by [`counting_kill_path`]'s fake `kill`:
+    /// `(alive_probes, dead_probes)`.
+    #[cfg(unix)]
+    fn probe_log(count: &Path) -> (usize, usize) {
+        let log = std::fs::read_to_string(count).unwrap_or_default();
+        let alive = log.lines().filter(|l| *l == "alive").count();
+        let dead = log.lines().filter(|l| *l == "dead").count();
+        (alive, dead)
+    }
+
+    /// Guard against a throttling fix that breaks reaping: a lock held by an
+    /// already-DEAD pid must be reaped on the FIRST liveness probe and
+    /// acquired. Count-based, not wall-clock: one fork+exec of the shell
+    /// wrapper alone was observed to take 0.7–2.4s under load (avg 10–16), so
+    /// a latency bound measured the machine, not the reap.
+    #[cfg(unix)]
+    #[test]
+    fn lock_wait_on_dead_holder_still_reaps_promptly() {
+        let _serial = serial();
+        let (tmp, count, kill_path) = counting_kill_path();
+        let mut child = std::process::Command::new("true")
+            .spawn()
+            .expect("fixture: spawn a short-lived child");
+        let dead_pid = child.id();
+        let status = child.wait().expect("fixture: wait for the child to exit");
+        assert!(status.success(), "fixture: `true` must exit 0");
+
+        let lock = tmp.path().join("held.lock");
+        write_lock(&lock, dead_pid);
+
+        let got = RunLock::acquire_at_with_env_path(
+            lock.clone(),
+            Duration::from_secs(5),
+            Some(&kill_path),
+        );
+
+        assert!(
+            got.held(),
+            "a lock held by DEAD pid {dead_pid} was not reaped within the 5s deadline"
+        );
+        let (alive, dead) = probe_log(&count);
+        assert_eq!(
+            (alive, dead),
+            (0, 1),
+            "a DEAD holder (pid {dead_pid}) must be reaped on the first liveness probe: \
+             expected exactly 1 `kill` spawn reporting dead, got {alive} alive + {dead} dead"
+        );
+    }
+
+    /// Guard: a holder that dies MID-wait is reaped on the first probe that
+    /// observes its death (no extra probes after death) and the lock is
+    /// acquired before the deadline. A reaper thread `wait()`s the child so
+    /// it does not linger as a zombie (`kill -0` succeeds on a zombie).
+    #[cfg(unix)]
+    #[test]
+    fn lock_wait_on_holder_dying_mid_wait_reaps_on_first_dead_probe() {
+        let _serial = serial();
+        let (tmp, count, kill_path) = counting_kill_path();
+        let mut child = std::process::Command::new("sleep")
+            .arg("1")
+            .spawn()
+            .expect("fixture: spawn `sleep 1` as the soon-to-die holder");
+        let holder_pid = child.id();
+        let reaper = std::thread::spawn(move || child.wait());
+
+        let lock = tmp.path().join("held.lock");
+        write_lock(&lock, holder_pid);
+
+        let deadline = Duration::from_secs(5);
+        let start = Instant::now();
+        let got = RunLock::acquire_at_with_env_path(lock.clone(), deadline, Some(&kill_path));
+        let elapsed = start.elapsed();
+        let status = reaper
+            .join()
+            .expect("fixture: reaper thread panicked")
+            .expect("fixture: wait for the holder to exit");
+        assert!(status.success(), "fixture: `sleep 1` must exit 0");
+
+        let (alive, dead) = probe_log(&count);
+        assert!(
+            alive >= 1,
+            "fixture inconclusive: the holder (pid {holder_pid}) was never probed while alive \
+             ({alive} alive + {dead} dead), so this did not exercise a MID-wait death"
+        );
+        assert!(
+            got.held(),
+            "holder pid {holder_pid} died ~1s into the wait but the lock was not acquired \
+             before the {deadline:?} deadline (elapsed {elapsed:?}; {alive} alive + {dead} dead probes)"
+        );
+        assert_eq!(
+            dead, 1,
+            "the holder (pid {holder_pid}) must be reaped on the FIRST probe that observes its \
+             death: got {dead} dead probes ({alive} alive)"
+        );
+    }
+
+    /// A holder pid equal to OUR OWN pid is this very process: alive by
+    /// observation, so the waiter must spawn ZERO `kill` probes (not merely a
+    /// throttled few), and must still neither acquire nor disturb the lock.
+    #[cfg(unix)]
+    #[test]
+    fn lock_wait_on_own_pid_holder_spawns_no_probe() {
+        let _serial = serial();
+        let (tmp, count, kill_path) = counting_kill_path();
+        let own = std::process::id();
+        let lock = tmp.path().join("held.lock");
+        write_lock(&lock, own);
+
+        let got = RunLock::acquire_at_with_env_path(
+            lock.clone(),
+            Duration::from_millis(500),
+            Some(&kill_path),
+        );
+
+        assert!(
+            !got.held(),
+            "a lock held under our OWN pid {own} (a live in-process holder) was acquired/stolen"
+        );
+        let on_disk: LockInfo = serde_json::from_str(
+            &std::fs::read_to_string(&lock).expect("the own-pid holder's lock must survive"),
+        )
+        .expect("the held lock file must still parse");
+        assert_eq!(
+            on_disk.pid, own,
+            "the lock file no longer names the own-pid holder (stolen/rewritten)"
+        );
+        let (alive, dead) = probe_log(&count);
+        assert_eq!(
+            alive + dead,
+            0,
+            "waiting 500ms on a lock held by our OWN pid spawned `kill` {} times \
+             ({alive} alive + {dead} dead); an own-pid holder must be judged alive \
+             with zero spawns",
+            alive + dead
+        );
+    }
+
+    /// A holder pid that CHANGES mid-wait is probed at once, not after the
+    /// same-holder throttle interval (`LIVENESS_PROBE_INTERVAL`).
+    ///
+    /// Choreography, driven by the fake `kill` itself (no sleeps, no helper
+    /// thread): the lock starts held by a live foreign pid A. The FIRST probe
+    /// of A answers "alive" and, before returning, atomically renames a lock
+    /// naming a dead pid B into place. A correct waiter then probes B on the
+    /// next poll (~10ms), reaps it, and acquires. A waiter that treats B as
+    /// the same holder cannot probe again until `LIVENESS_PROBE_INTERVAL`
+    /// after A's probe started, which is past the deadline below, so it must
+    /// give up WITHOUT ever probing B.
+    ///
+    /// The deadline must sit below `LIVENESS_PROBE_INTERVAL`, so this test is
+    /// timing-bound in one direction: if A's probe alone takes longer than
+    /// the deadline (heavy load), the waiter gives up before it can probe B
+    /// even when correct. That case is detected (A's marker mtime vs. the
+    /// wait start) and reported as INCONCLUSIVE — still a failure, never a
+    /// pass.
+    #[cfg(unix)]
+    #[test]
+    fn lock_wait_probes_a_changed_holder_pid_immediately() {
+        use std::os::unix::fs::PermissionsExt;
+        let _serial = serial();
+        const DEADLINE: Duration = Duration::from_millis(120);
+        assert!(
+            DEADLINE < LIVENESS_PROBE_INTERVAL,
+            "fixture: the deadline must be below the same-holder throttle interval"
+        );
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let lock = tmp.path().join("held.lock");
+        let log = tmp.path().join("kill.log");
+        let flag = tmp.path().join("rewritten.flag");
+        let b_json = tmp.path().join("b.json");
+        let b_stage = tmp.path().join("b.stage");
+
+        let holder_a = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("fixture: spawn `sleep 30` as live holder A");
+        let guard = ChildGuard(holder_a);
+        let pid_a = guard.0.id();
+        let mut short = std::process::Command::new("true")
+            .spawn()
+            .expect("fixture: spawn a short-lived child for dead pid B");
+        let pid_b = short.id();
+        assert!(
+            short.wait().expect("fixture: reap B").success(),
+            "fixture: `true` must exit 0"
+        );
+
+        write_lock(&lock, pid_a);
+        write_lock(&b_json, pid_b);
+
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let fake = bin.join("kill");
+        std::fs::write(
+            &fake,
+            format!(
+                "#!/bin/sh\n/bin/kill \"$@\"\nrc=$?\n\
+                 if [ $rc -eq 0 ]; then echo \"alive $2\" >> '{log}'; \
+                 else echo \"dead $2\" >> '{log}'; fi\n\
+                 if [ \"$2\" = \"{pid_a}\" ] && [ ! -e '{flag}' ]; then \
+                 : > '{flag}'; cp '{b_json}' '{b_stage}' && mv '{b_stage}' '{lock}'; fi\n\
+                 exit $rc\n",
+                log = log.display(),
+                flag = flag.display(),
+                b_json = b_json.display(),
+                b_stage = b_stage.display(),
+                lock = lock.display(),
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Warm-up (first exec of a fresh script is slow on macOS); probes our
+        // own pid, so it neither matches A nor touches the lock. Reset the log.
+        let warm = std::process::Command::new(&fake)
+            .args(["-0", &std::process::id().to_string()])
+            .output()
+            .expect("fixture: warm-up exec of the fake `kill`");
+        assert!(warm.status.success(), "fixture: warm-up must exit 0");
+        std::fs::remove_file(&log).expect("fixture: reset the probe log after warm-up");
+        let mut parts = vec![bin];
+        if let Some(p) = std::env::var_os("PATH") {
+            parts.extend(std::env::split_paths(&p));
+        }
+        let kill_path = std::env::join_paths(parts).unwrap();
+
+        let wall_start = std::time::SystemTime::now();
+        let got = RunLock::acquire_at_with_env_path(lock.clone(), DEADLINE, Some(&kill_path));
+
+        let probes: Vec<String> = std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect();
+        let a_probe_done = std::fs::metadata(&flag)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(wall_start).ok());
+        if !got.held() {
+            if let Some(took) = a_probe_done {
+                assert!(
+                    took < DEADLINE,
+                    "INCONCLUSIVE (not a pass): A's first probe alone took {took:?} >= the \
+                     {DEADLINE:?} deadline, so the waiter could not reach B's probe in time \
+                     even if correct (probes: {probes:?})"
+                );
+            }
+        }
+        assert!(
+            got.held(),
+            "the holder changed from live pid {pid_a} to dead pid {pid_b} mid-wait, but the \
+             lock was not acquired within {DEADLINE:?}: the changed holder was not probed \
+             immediately (probes: {probes:?})"
+        );
+        assert_eq!(
+            probes,
+            vec![format!("alive {pid_a}"), format!("dead {pid_b}")],
+            "expected exactly one probe of A (alive) then one of B (dead, reaped on first probe)"
+        );
+        drop(guard);
     }
 }

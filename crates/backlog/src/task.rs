@@ -411,7 +411,21 @@ impl Task {
     pub fn is_deferred(&self, now: i64) -> bool {
         matches!(self.defer_until, Some(t) if t > now)
     }
+
+    /// Returns true when the task carries a [`TAG_WONTFIX`] tag (ASCII
+    /// case-insensitive): a human ruling "do not implement" (backlog 016c2562).
+    /// Such a task is never handed out by `next` / `next --claim`, whatever its
+    /// status — a recorded ruling must not read as "not yet looked at".
+    pub fn is_ruled_wontfix(&self) -> bool {
+        self.tags
+            .iter()
+            .any(|t| t.trim().eq_ignore_ascii_case(TAG_WONTFIX))
+    }
 }
+
+/// The tag recording a human "do not implement" ruling. Selection (`next`,
+/// `next --claim`) excludes every task carrying it (backlog 016c2562).
+pub const TAG_WONTFIX: &str = "wontfix";
 
 /// Returns a warning message when `status` is `Some` but not a recognised value,
 /// else `None`. Centralised here (next to `STATUSES`) so the `--status` filter in
@@ -696,6 +710,24 @@ mod tests {
         t.defer_until = Some(1_000);
         // defer_until == now  →  not deferred (> is strict)
         assert!(!t.is_deferred(1_000));
+    }
+
+    /// backlog 016c2562: the ruling tag is matched ASCII case-insensitively and
+    /// trimmed, exactly as the docstring states; other tags never match.
+    #[test]
+    fn is_ruled_wontfix_matches_case_insensitively_and_trimmed() {
+        for tag in ["wontfix", "WontFix", "WONTFIX", " wontfix "] {
+            assert!(
+                make_task(vec![tag], "pending").is_ruled_wontfix(),
+                "{tag:?} must count as a wontfix ruling"
+            );
+        }
+        for tags in [vec![], vec!["p1"], vec!["wontfixable"], vec!["not-wontfix"]] {
+            assert!(
+                !make_task(tags.clone(), "pending").is_ruled_wontfix(),
+                "{tags:?} must not count as a wontfix ruling"
+            );
+        }
     }
 
     #[test]

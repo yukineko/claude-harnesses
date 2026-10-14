@@ -198,11 +198,18 @@ pub fn assess(
 /// *used* and wrong here — the whole question is whether the old file exists —
 /// so existence is checked before loading rather than inferred from emptiness.
 pub fn scan_legacy(legacy_path: &Path, project: Option<&str>) -> LegacyStore {
-    scan_queued(legacy_path, project, &HashSet::new())
+    scan_queued(legacy_path, project, &HashSet::new(), false)
 }
 
-/// [`scan_legacy`], not counting any task whose id is in `leased`.
-fn scan_queued(legacy_path: &Path, project: Option<&str>, leased: &HashSet<String>) -> LegacyStore {
+/// [`scan_legacy`], not counting any task whose id is in `leased`, nor — when
+/// `skip_wontfix` — any task carrying a `wontfix` ruling
+/// ([`crate::task::Task::is_ruled_wontfix`]).
+fn scan_queued(
+    legacy_path: &Path,
+    project: Option<&str>,
+    leased: &HashSet<String>,
+    skip_wontfix: bool,
+) -> LegacyStore {
     if !legacy_path.exists() {
         return LegacyStore::Absent;
     }
@@ -216,6 +223,7 @@ fn scan_queued(legacy_path: &Path, project: Option<&str>, leased: &HashSet<Strin
     for t in tasks
         .iter()
         .filter(|t| t.is_pending() && !leased.contains(&t.id))
+        .filter(|t| !(skip_wontfix && t.is_ruled_wontfix()))
     {
         match filter.as_deref() {
             None => matched += 1,
@@ -247,12 +255,19 @@ fn scan_queued(legacy_path: &Path, project: Option<&str>, leased: &HashSet<Strin
 /// this count skipped; the lease no longer touches the store, so the caller
 /// passes the live leases instead, and a store whose every task is claimed
 /// still counts as holding no queued work.
+///
+/// Likewise a `wontfix`-tagged task (a human "do not implement" ruling) is NOT
+/// queued work: `next` never hands it out (backlog 016c2562), so counting it
+/// here would let a store holding only ruled-out rows suppress the refusal and
+/// answer `no pending tasks` while the legacy store holds real work. The
+/// legacy side ([`scan_legacy`]) still counts such rows — over-counting there
+/// can only push the verdict towards refusing/warning.
 pub fn resolved_pending(
     resolved_path: &Path,
     project: Option<&str>,
     leased: &HashSet<String>,
 ) -> usize {
-    match scan_queued(resolved_path, project, leased) {
+    match scan_queued(resolved_path, project, leased, true) {
         LegacyStore::Scanned { matched, .. } => matched,
         LegacyStore::Absent | LegacyStore::Unreadable(_) => 0,
     }

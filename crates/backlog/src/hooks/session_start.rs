@@ -193,8 +193,27 @@ pub fn run(input: &HookInput) -> Option<String> {
     };
     let warnings = warnings + &side_queues;
 
-    // pending または failed のタスクのみ対象 (is_pending() で判定)
-    let mut pending: Vec<_> = tasks.into_iter().filter(|t| t.is_pending()).collect();
+    // pending または failed のタスクのみ対象 (is_pending() で判定)。
+    // `wontfix` タグ (人間の「実装しない」裁定) は `next` と同じく実装候補として
+    // 提示しない (backlog 016c2562)。黙って消さず、件数だけ別行で明示する。
+    let (ruled, mut pending): (Vec<_>, Vec<_>) = tasks
+        .into_iter()
+        .filter(|t| t.is_pending())
+        .partition(|t| t.is_ruled_wontfix());
+    let warnings = if ruled.is_empty() {
+        warnings
+    } else {
+        let ids: Vec<&str> = ruled.iter().map(|t| t.id.as_str()).collect();
+        warnings
+            + &format!(
+                "## Backlog \u{2014} ruled wontfix (not offered)\n\n\
+                 {} pending task(s) carry a `wontfix` ruling and are excluded from \
+                 the work queue (`next` never hands them out): {}. Close them with \
+                 `backlog cancel ID --reason R`.\n\n",
+                ruled.len(),
+                ids.join(", ")
+            )
+    };
 
     // 優先度順 (priority() 昇順)、同優先度は created_at 昇順
     pending.sort_by_key(|t| (t.priority(), t.created_at));

@@ -392,7 +392,8 @@ fn status() {
     match &cfg.config_invalid {
         Some(why) => println!(
             "mode:          config-invalid ({why} — valid: \"inject\" / \"subprocess\" \
-             [aliases reviewer, independent]); every stop is BLOCKED until fixed"
+             [aliases reviewer, independent]); stops are BLOCKED (a repeat of the same block in a \
+             session is waived with a systemMessage) until fixed"
         ),
         None => println!("mode:          {}", cfg.mode.as_str()),
     }

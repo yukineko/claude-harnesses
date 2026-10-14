@@ -13,8 +13,9 @@ enabled = true
 #   "subprocess" — run `reviewer_cmd` as an independent reviewer over the diff
 #                  and block only when it reports issues (injecting just those).
 #   Aliases: "reviewer" / "independent" = "subprocess". Any other value is
-#   config-invalid: it is NOT mapped to a mode, and every stop is blocked
-#   (naming the bad value) until it is fixed.
+#   config-invalid: it is NOT mapped to a mode, and the stop is blocked
+#   (naming the bad value); a repeat of the same block in one session is
+#   passed with a systemMessage (shared repeat ledger) until it is fixed.
 mode = "inject"
 
 # Consecutive review rounds in one session before reviewgate gives up and allows

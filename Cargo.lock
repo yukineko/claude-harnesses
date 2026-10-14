@@ -1106,7 +1106,7 @@ dependencies = [
 
 [[package]]
 name = "reviewgate"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "anyhow",
  "chrono",

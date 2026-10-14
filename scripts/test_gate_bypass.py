@@ -974,13 +974,25 @@ class DenyNoVerify(unittest.TestCase):
                 )
                 self.assertEqual(proc.returncode, 0)
 
-    def test_unparseable_payloads_are_allowed(self):
-        for payload in ("", "not json", "{", '{"tool_name": "Bash"}'):
+    def test_unparseable_payloads_are_refused(self):
+        """Spec inverted by user ruling 2026-10-14 (backlog bee1ccbc): an
+        unreadable payload is undetermined and resolves to refuse (exit 2,
+        CLAUDE.md 3). It was previously pinned to exit 0. Exactly 2: exit 1
+        (a crash) is an ALLOW to Claude Code."""
+        for payload in ("", "not json", "{", "[1, 2]", '"str"',
+                        '{"tool_name": "Bash", "tool_input": [1, 2]}',
+                        '{"tool_name": "Bash", "tool_input": "git commit -n"}'):
             with self.subTest(payload=payload):
                 proc = self.run_hook(payload)
                 self.assertEqual(
-                    proc.returncode, 0, "stderr:\n%s" % proc.stderr
+                    proc.returncode, 2, "stderr:\n%s" % proc.stderr
                 )
+
+    def test_missing_tool_input_is_allowed(self):
+        """Missing command (here: no tool_input at all) stays exit 0 by the
+        same user ruling 2026-10-14 (bee1ccbc); only unreadable payloads flip."""
+        proc = self.run_hook('{"tool_name": "Bash"}')
+        self.assertEqual(proc.returncode, 0, "stderr:\n%s" % proc.stderr)
 
     def test_non_string_command_is_allowed(self):
         proc = self.run_hook(

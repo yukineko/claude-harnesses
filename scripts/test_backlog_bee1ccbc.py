@@ -79,11 +79,16 @@ class UnreadablePayloadRefused(unittest.TestCase):
     def test_tool_input_string(self):
         self.assert_refused(bash("git commit --no-verify -m x"))
 
-    def test_command_missing(self):
-        self.assert_refused(bash({}))
+    # Inverted (not deleted) by user ruling 2026-10-14: a missing / non-string
+    # command is NOT an unreadable payload and stays exit 0, matching
+    # test_gate_bypass.py::test_non_string_command_is_allowed.
+    def test_command_missing_is_allowed(self):
+        r = run_hook(bash({}))
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
 
-    def test_command_not_string(self):
-        self.assert_refused(bash({"command": ["git", "commit", "--no-verify"]}))
+    def test_command_not_string_is_allowed(self):
+        r = run_hook(bash({"command": ["git", "commit", "--no-verify"]}))
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
 
 
 if __name__ == "__main__":

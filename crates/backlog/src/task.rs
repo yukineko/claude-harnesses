@@ -712,6 +712,24 @@ mod tests {
         assert!(!t.is_deferred(1_000));
     }
 
+    /// backlog 016c2562: the ruling tag is matched ASCII case-insensitively and
+    /// trimmed, exactly as the docstring states; other tags never match.
+    #[test]
+    fn is_ruled_wontfix_matches_case_insensitively_and_trimmed() {
+        for tag in ["wontfix", "WontFix", "WONTFIX", " wontfix "] {
+            assert!(
+                make_task(vec![tag], "pending").is_ruled_wontfix(),
+                "{tag:?} must count as a wontfix ruling"
+            );
+        }
+        for tags in [vec![], vec!["p1"], vec!["wontfixable"], vec!["not-wontfix"]] {
+            assert!(
+                !make_task(tags.clone(), "pending").is_ruled_wontfix(),
+                "{tags:?} must not count as a wontfix ruling"
+            );
+        }
+    }
+
     #[test]
     fn is_pending_unaffected_by_defer_until() {
         // is_pending must ignore defer_until; callers decide with is_deferred()

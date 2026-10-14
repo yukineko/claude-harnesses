@@ -77,7 +77,7 @@ fn unrecorded_conflict_is_not_reported_as_recorded() {
     run_git(&repo, &["checkout", "-q", "-b", "feat"]);
     // Fixture precondition added with the 51595c41 guard: `merge` refuses a
     // branch with no recorded creation base before it ever reaches the conflict
-    // path under test. Record the (default-branch) init commit as the base.
+    // path under test. Record the floating ref `main` as the base (it resolves to a commit that is an ancestor of `main`).
     run_git(&repo, &["config", "branch.feat.conduktBase", "main"]);
     std::fs::write(repo.join("f.txt"), "theirs\n").unwrap();
     run_git(&repo, &["commit", "-q", "-am", "theirs"]);

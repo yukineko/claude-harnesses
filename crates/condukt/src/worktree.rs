@@ -1050,6 +1050,28 @@ fn git_diff_range(repo: &Path, from: &str, to: &str) -> String {
     git(repo, &["diff", &format!("{from}...{to}")]).unwrap_or_default()
 }
 
+/// Abort an in-progress trial merge and say truthfully what state it left.
+/// `Ok(())` only when `git merge --abort` ran and succeeded; otherwise the
+/// detail of the failure (the repo may be left mid-merge).
+fn abort_trial_merge(repo: &Path) -> std::result::Result<(), String> {
+    match git_try(repo, &["merge", "--abort"]) {
+        Ok((true, _, _)) => Ok(()),
+        Ok((false, out, err)) => Err(format!("{} {}", out.trim(), err.trim()).trim().to_string()),
+        Err(e) => Err(format!("{e:#}")),
+    }
+}
+
+/// Wording for the abort state, for inclusion in a fail-closed error.
+fn abort_state_phrase(r: &std::result::Result<(), String>) -> String {
+    match r {
+        Ok(()) => "the trial merge was aborted".to_string(),
+        Err(d) => format!(
+            "the trial merge could NOT be aborted ({d}); the repository may be left \
+             mid-merge - run `git merge --abort`"
+        ),
+    }
+}
+
 /// Merge `branch` into the configured default branch. Verifies the repo is
 /// actually on the default branch first (verify -> act).
 ///
@@ -1146,11 +1168,11 @@ pub fn merge(
     let unmerged = match git(repo, &["ls-files", "--unmerged"]) {
         Ok(u) => u,
         Err(e) => {
-            let _ = git_try(repo, &["merge", "--abort"]);
+            let aborted = abort_state_phrase(&abort_trial_merge(repo));
             bail!(
                 "could not list unmerged paths after the trial merge of '{branch}' into \
-                 '{default_branch}' (`git ls-files --unmerged` failed: {e:#}); the trial merge \
-                 was aborted, the merge was NOT performed and nothing was recorded"
+                 '{default_branch}' (`git ls-files --unmerged` failed: {e:#}); {aborted}, \
+                 the merge was NOT performed and nothing was recorded"
             );
         }
     };
@@ -1178,10 +1200,10 @@ pub fn merge(
                     .filter(|l| !l.is_empty())
                     .collect(),
                 Err(e) => {
-                    let _ = git_try(repo, &["merge", "--abort"]);
+                    let aborted = abort_state_phrase(&abort_trial_merge(repo));
                     bail!(
                         "could not list conflicted paths of '{branch}' vs '{default_branch}' \
-                         (`git diff --name-only` failed: {e:#}); the trial merge was aborted, \
+                         (`git diff --name-only` failed: {e:#}); {aborted}, \
                          the merge was NOT performed and nothing was recorded"
                     );
                 }
@@ -1211,12 +1233,20 @@ pub fn merge(
         // conflict is NOT on the review surface, so reporting `Conflict` (whose
         // contract is "recorded") would be false: fail closed with an error.
         let recorded = overwatch::store::append_merge_conflict(repo, &entry);
-        let _ = git_try(repo, &["merge", "--abort"]);
+        let aborted = abort_trial_merge(repo);
         if let Err(e) = recorded {
+            let state = abort_state_phrase(&aborted);
             bail!(
-                "condukt: could not record merge conflict '{conflict_id}': {e}; the merge of \
-                 '{branch}' into '{default_branch}' was NOT performed (trial merge aborted) and \
+                "could not record merge conflict '{conflict_id}': {e}; the merge of \
+                 '{branch}' into '{default_branch}' was NOT performed ({state}) and \
                  the conflict is NOT on the review surface (`overwatch review-queue`)"
+            );
+        }
+        if let Err(d) = aborted {
+            bail!(
+                "conflict '{conflict_id}' was recorded but the trial merge of '{branch}' could \
+                 NOT be aborted ({d}); the repository may be left mid-merge - run \
+                 `git merge --abort`"
             );
         }
         return Ok(MergeOutcome::Conflict(conflict_id));

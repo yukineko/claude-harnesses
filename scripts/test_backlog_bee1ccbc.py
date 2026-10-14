@@ -91,5 +91,39 @@ class UnreadablePayloadRefused(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr.decode())
 
 
+class PathologicalPayloadRefused(unittest.TestCase):
+    """A payload the hook cannot decode must be refused with exit 2 exactly.
+
+    A deeply nested value makes json decoding raise RecursionError; if that
+    escapes as an uncaught exception the hook exits 1, which Claude Code
+    treats as a non-blocking error = ALLOW, hiding the real --no-verify in
+    `command`. `!= 0` would accept that crash, so assert `== 2`.
+    """
+
+    def assert_refused(self, stdin: str, label: str):
+        r = run_hook(stdin)
+        self.assertEqual(
+            r.returncode, 2,
+            "%s: exit %d (0/1 are both ALLOW to Claude Code); stderr tail=%s"
+            % (label, r.returncode, r.stderr.decode()[-500:]),
+        )
+
+    def test_deeply_nested_payload_refused(self):
+        depth = 100000
+        stdin = (
+            '{"tool_name":"Bash","tool_input":{"command":"git commit --no-verify -m x","pad":'
+            + "[" * depth
+            + "]" * depth
+            + "}}"
+        )
+        self.assert_refused(stdin, "deeply nested payload (depth %d)" % depth)
+
+    def test_tool_input_null_refused(self):
+        self.assert_refused(
+            json.dumps({"tool_name": "Bash", "tool_input": None}),
+            "tool_input null",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

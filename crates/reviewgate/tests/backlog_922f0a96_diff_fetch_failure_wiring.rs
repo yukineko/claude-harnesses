@@ -170,12 +170,18 @@ fn partial_content_fetch_failure_blocks_not_certifies() {
     let root = unique_dir("partial-fetch-fails");
     let real_git = real_git_path();
     let shim = root.join("shim-bin");
-    // Fail ONLY ls-files (the untracked-file scan); diff / diff --cached
-    // succeed, so text is non-empty.
+    // Fail ONLY diff_text()'s content-fetch form of ls-files
+    // (`ls-files --others --exclude-standard -- <files>`, the one carrying the
+    // literal `--` separator). changed_files()'s scan form
+    // (`ls-files --others --exclude-standard`, no `--`) must SUCCEED: if it
+    // failed too, the git-scan-failed block below would come from the scan
+    // path and this test would not exercise the fetch_failed wiring at all.
+    // diff / diff --cached also succeed, so the fetched text is non-empty.
     write_fake_git(
         &shim,
         &real_git,
-        "if [ \"$1\" = \"ls-files\" ]; then exit 7; fi",
+        "if [ \"$1\" = \"ls-files\" ]; then for a in \"$@\"; do \
+         if [ \"$a\" = \"--\" ]; then exit 7; fi; done; fi",
     );
     let home = root.join("home");
     std::fs::create_dir_all(&home).unwrap();
@@ -207,10 +213,10 @@ fn partial_content_fetch_failure_blocks_not_certifies() {
 /// review (unrelated to fetch failure; pins the happy path is not regressed).
 #[test]
 fn control_real_git_confirmed_change_blocks_for_review() {
-    let Some(path) = std::env::var_os("PATH") else {
-        eprintln!("SKIPPED control_real_git_confirmed_change_blocks_for_review: no PATH");
-        return;
-    };
+    // No PATH means the control cannot run real git; that is a FAILURE to
+    // check, not a pass — never report green without having checked.
+    let path = std::env::var_os("PATH")
+        .expect("PATH is unset: the control cannot locate real git, so it cannot check anything");
     let root = unique_dir("control");
     let home = root.join("home");
     std::fs::create_dir_all(&home).unwrap();

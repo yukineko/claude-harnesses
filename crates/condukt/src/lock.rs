@@ -1134,7 +1134,9 @@ mod backlog_e9262d91 {
         );
     }
 
-    /// Counting fake `kill` placed first on a CHILD-only PATH. Returns
+    /// Counting fake `kill` placed first on a CHILD-only PATH. Each spawn
+    /// appends one line to the count file: `alive` (probe exit 0) or `dead`
+    /// (non-zero). Returns
     /// `(tempdir, count_file, child_path)`; the tempdir must outlive the wait.
     #[cfg(unix)]
     fn counting_kill_path() -> (tempfile::TempDir, PathBuf, std::ffi::OsString) {
@@ -1147,8 +1149,10 @@ mod backlog_e9262d91 {
         std::fs::write(
             &fake,
             format!(
-                "#!/bin/sh\necho x >> '{}'\nexec /bin/kill \"$@\"\n",
-                count.display()
+                "#!/bin/sh\n/bin/kill \"$@\"\nrc=$?\n\
+                 if [ $rc -eq 0 ]; then echo alive >> '{c}'; else echo dead >> '{c}'; fi\n\
+                 exit $rc\n",
+                c = count.display()
             ),
         )
         .unwrap();
@@ -1158,6 +1162,19 @@ mod backlog_e9262d91 {
             parts.extend(std::env::split_paths(&p));
         }
         let kill_path = std::env::join_paths(parts).unwrap();
+        // Warm-up: the FIRST exec of a freshly written script is slow on
+        // macOS (observed ~300ms idle, 0.7-2.4s under load), which made a
+        // wall-clock reap bound measure the OS, and made a 0.3s holder die
+        // before the first probe ran. Exec it once, then reset the log.
+        let warm = std::process::Command::new(&fake)
+            .args(["-0", &std::process::id().to_string()])
+            .output()
+            .expect("fixture: warm-up exec of the fake `kill`");
+        assert!(
+            warm.status.success(),
+            "fixture: warm-up `kill -0 <self>` must exit 0"
+        );
+        std::fs::remove_file(&count).expect("fixture: reset the probe log after warm-up");
         (tmp, count, kill_path)
     }
 
@@ -1231,8 +1248,21 @@ mod backlog_e9262d91 {
         drop(guard);
     }
 
-    /// Guard against a throttling fix that delays reaping: a lock held by a
-    /// DEAD pid must still be reaped and acquired promptly (< 500ms).
+    /// Reads the probe log written by [`counting_kill_path`]'s fake `kill`:
+    /// `(alive_probes, dead_probes)`.
+    #[cfg(unix)]
+    fn probe_log(count: &Path) -> (usize, usize) {
+        let log = std::fs::read_to_string(count).unwrap_or_default();
+        let alive = log.lines().filter(|l| *l == "alive").count();
+        let dead = log.lines().filter(|l| *l == "dead").count();
+        (alive, dead)
+    }
+
+    /// Guard against a throttling fix that breaks reaping: a lock held by an
+    /// already-DEAD pid must be reaped on the FIRST liveness probe and
+    /// acquired. Count-based, not wall-clock: one fork+exec of the shell
+    /// wrapper alone was observed to take 0.7–2.4s under load (avg 10–16), so
+    /// a latency bound measured the machine, not the reap.
     #[cfg(unix)]
     #[test]
     fn lock_wait_on_dead_holder_still_reaps_promptly() {
@@ -1248,25 +1278,69 @@ mod backlog_e9262d91 {
         let lock = tmp.path().join("held.lock");
         write_lock(&lock, dead_pid);
 
-        let start = Instant::now();
         let got = RunLock::acquire_at_with_env_path(
             lock.clone(),
             Duration::from_secs(5),
             Some(&kill_path),
         );
-        let elapsed = start.elapsed();
 
         assert!(
             got.held(),
             "a lock held by DEAD pid {dead_pid} was not reaped within the 5s deadline"
         );
+        let (alive, dead) = probe_log(&count);
+        assert_eq!(
+            (alive, dead),
+            (0, 1),
+            "a DEAD holder (pid {dead_pid}) must be reaped on the first liveness probe: \
+             expected exactly 1 `kill` spawn reporting dead, got {alive} alive + {dead} dead"
+        );
+    }
+
+    /// Guard: a holder that dies MID-wait is reaped on the first probe that
+    /// observes its death (no extra probes after death) and the lock is
+    /// acquired before the deadline. A reaper thread `wait()`s the child so
+    /// it does not linger as a zombie (`kill -0` succeeds on a zombie).
+    #[cfg(unix)]
+    #[test]
+    fn lock_wait_on_holder_dying_mid_wait_reaps_on_first_dead_probe() {
+        let _serial = serial();
+        let (tmp, count, kill_path) = counting_kill_path();
+        let mut child = std::process::Command::new("sleep")
+            .arg("1")
+            .spawn()
+            .expect("fixture: spawn `sleep 1` as the soon-to-die holder");
+        let holder_pid = child.id();
+        let reaper = std::thread::spawn(move || child.wait());
+
+        let lock = tmp.path().join("held.lock");
+        write_lock(&lock, holder_pid);
+
+        let deadline = Duration::from_secs(5);
+        let start = Instant::now();
+        let got = RunLock::acquire_at_with_env_path(lock.clone(), deadline, Some(&kill_path));
+        let elapsed = start.elapsed();
+        let status = reaper
+            .join()
+            .expect("fixture: reaper thread panicked")
+            .expect("fixture: wait for the holder to exit");
+        assert!(status.success(), "fixture: `sleep 1` must exit 0");
+
+        let (alive, dead) = probe_log(&count);
         assert!(
-            elapsed < Duration::from_millis(500),
-            "reaping a DEAD holder (pid {dead_pid}) took {elapsed:?} ({} `kill` spawns); \
-             must stay prompt (< 500ms)",
-            std::fs::read_to_string(&count)
-                .map(|s| s.lines().count())
-                .unwrap_or(0)
+            alive >= 1,
+            "fixture inconclusive: the holder (pid {holder_pid}) was never probed while alive \
+             ({alive} alive + {dead} dead), so this did not exercise a MID-wait death"
+        );
+        assert!(
+            got.held(),
+            "holder pid {holder_pid} died ~1s into the wait but the lock was not acquired \
+             before the {deadline:?} deadline (elapsed {elapsed:?}; {alive} alive + {dead} dead probes)"
+        );
+        assert_eq!(
+            dead, 1,
+            "the holder (pid {holder_pid}) must be reaped on the FIRST probe that observes its \
+             death: got {dead} dead probes ({alive} alive)"
         );
     }
 }

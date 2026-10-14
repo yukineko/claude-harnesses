@@ -82,6 +82,8 @@ reviewgate install       # Stop フックを ~/.claude/settings.json に配線�
 
 主なフィールド：`mode`、`max_attempts`、`reset_after_secs`（既定 600。セッションごとの試行カウンタがこの無操作秒数でリセットされる）、`min_changed_files`、`max_diff_bytes`（既定 200000）、`include`/`exclude` の glob、`rubric`、`state_dir`、そして（subprocess 用の）`reviewer_cmd` / `reviewer_timeout_secs`（既定 300）。`max_attempts` / `min_changed_files` の `0` は 1 に clamp され、`max_diff_bytes` / `reviewer_timeout_secs` の `0` は既定値に戻る。
 
+`mode` に指定できるのは `"inject"` か `"subprocess"`（別名 `reviewer` / `independent`）。それ以外の値は **config-invalid** で、どちらのモードにも推測で割り当てず、（レビュー対象が無い場合も含め）stop を `config-invalid`（値を明示）でブロックする。他の reviewgate のブロックと同じく共有の repeat ledger を通るため、同一セッションで同じ指摘の2度目のブロックは指摘を繰り返す `systemMessage` 付きで通過する（指摘自体はファイルを直すまで残る）。状態は `reviewgate status` で確認でき、抜け道は `reviewgate skip --reason ...` か `REVIEWGATE_DISABLE=1`。
+
 ### 同梱エージェント
 
 プラグインは `agents/reviewgate-typing.md` も同梱する。差分を「型検査と決定性を使えているか」の観点だけでレビューする read-only subagent（判定不能を表現できない型・呼び出し側での契約消去・非決定な検証を指摘する）。`review` フックはこれを呼ばないので、明示的に呼び出して使う。

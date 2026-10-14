@@ -101,8 +101,11 @@ fn cancel_failed_task_records_a_discard_closure() {
 #[test]
 fn cancel_unconfirmed_task_records_a_discard_closure() {
     let f = Fixture::new("d1u");
-    let (o, id) = f.add_extra("t", &[]);
-    let id = id.unwrap_or_else(|| panic!("no added id: {}", o.both()));
+    // `add` no longer creates `unconfirmed` rows (intake contract v2); a
+    // legacy one is planted with the label a filed task carries here.
+    let (_, label) = f.add_with_label("reference row for the project label");
+    let id = "0e0c0f05".to_string();
+    f.plant_open(&id, "t", "unconfirmed", &label);
     assert_eq!(f.status(&id), "unconfirmed");
     assert_discards(&f, &id);
 }

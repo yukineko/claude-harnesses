@@ -421,11 +421,22 @@ impl Task {
             .iter()
             .any(|t| t.trim().eq_ignore_ascii_case(TAG_WONTFIX))
     }
+
+    /// An `unconfirmed` finding older than [`UNCONFIRMED_EXPIRY_SECS`] (by
+    /// `created_at`): surfaced by `list` / SessionStart as a candidate to
+    /// confirm or close (`cancel --reason "unproven: ..."`). Never auto-closed.
+    pub fn is_expiry_candidate(&self, now: i64) -> bool {
+        self.status == STATUS_UNCONFIRMED
+            && now.saturating_sub(self.created_at) > UNCONFIRMED_EXPIRY_SECS
+    }
 }
 
 /// The tag recording a human "do not implement" ruling. Selection (`next`,
 /// `next --claim`) excludes every task carrying it (backlog 016c2562).
 pub const TAG_WONTFIX: &str = "wontfix";
+
+/// Age (seconds) after which an `unconfirmed` row is an expiry candidate.
+pub const UNCONFIRMED_EXPIRY_SECS: i64 = 7 * 86_400;
 
 /// Returns a warning message when `status` is `Some` but not a recognised value,
 /// else `None`. Centralised here (next to `STATUSES`) so the `--status` filter in

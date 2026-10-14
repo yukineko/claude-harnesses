@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "backlog"
-version = "0.3.42"
+version = "0.3.43"
 dependencies = [
  "anyhow",
  "clap",
@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.240"
+version = "0.7.242"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -1106,7 +1106,7 @@ dependencies = [
 
 [[package]]
 name = "reviewgate"
-version = "0.1.36"
+version = "0.1.38"
 dependencies = [
  "anyhow",
  "chrono",

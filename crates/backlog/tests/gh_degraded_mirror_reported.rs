@@ -123,7 +123,17 @@ fn gh_absent_on_add_is_reported() {
     let e = setup("add");
     let (c, o, er) = bl(
         &e,
-        &["add", "--title", "verify gh absent add", "--project", "."],
+        &[
+            "add",
+            "--title",
+            "verify gh absent add",
+            "--project",
+            ".",
+            // The mirror push runs only on the filed (reproduced) path
+            // (intake contract v2), so the setup must reproduce.
+            "--repro-test",
+            "bash tests/repro_yes.sh",
+        ],
     );
     eprintln!("ADD code={c} stdout={o:?} stderr={er:?}");
     assert_eq!(c, 0);

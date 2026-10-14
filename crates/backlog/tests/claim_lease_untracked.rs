@@ -512,7 +512,17 @@ fn duplicate_add_of_a_leased_task_is_rejected() {
 
     for (name, cwd) in [("A", &f.a), ("B", &f.b)] {
         let (code, out, err) = run(
-            &["add", "--title", "First task", "--project", &project],
+            // The duplicate guard runs on the filed (reproduced) path only
+            // (intake contract v2), so the re-add carries a reproducing repro.
+            &[
+                "add",
+                "--title",
+                "First task",
+                "--project",
+                &project,
+                "--repro-test",
+                "bash tests/repro.sh",
+            ],
             cwd,
             &f.home,
         );

@@ -1,9 +1,12 @@
-//! Findings side: `add` never loses a finding, but only a REPRODUCED outcome
-//! lands `pending`; anything else lands `unconfirmed` (excluded from next/claim
-//! and from the pending count). `confirm ID --repro-test CMD` promotes only on
-//! reproduced. Polarity assumed: a repro script that FAILS (exit 1) reproduces
-//! the bug (same as a RED test); exit 0 = not-reproduced; anything that cannot
-//! be run under the runner allowlist/timeout = undetermined.
+//! Findings side. Since the intake contract v2 (user rulings 2026-10-04) only a
+//! REPRODUCED outcome is filed (as `pending`); every other outcome files NO
+//! row, exits 2 and is kept in `.backlog/unproven.toml` (pinned in
+//! `intake_requires_repro.rs`). Legacy `unconfirmed` rows still exist in old
+//! stores, so they are PLANTED directly here: they stay excluded from
+//! next/claim and the pending count, and `confirm ID --repro-test CMD`
+//! promotes only on reproduced. Polarity: a repro script that FAILS (exit 1)
+//! reproduces the bug (same as a RED test); exit 0 = not-reproduced; anything
+//! that cannot be run under the runner allowlist/timeout = undetermined.
 mod common;
 use common::*;
 
@@ -12,13 +15,17 @@ fn has_outcome(row: &serde_json::Value, outcome: &str) -> bool {
     row.to_string().contains(&format!("\"{outcome}\""))
 }
 
-#[test]
-fn add_without_repro_test_lands_unconfirmed_but_succeeds() {
-    let f = Fixture::new("norepro");
-    let (o, id) = f.add_extra("a finding", &[]);
-    assert_eq!(o.code, 0, "add always succeeds: {}", o.both());
-    let id = id.expect("added: <id>");
-    assert_eq!(f.status(&id), "unconfirmed");
+fn unproven_records(f: &Fixture) -> Vec<toml::Value> {
+    let p = f.tasks_path().with_file_name("unproven.toml");
+    let Ok(s) = std::fs::read_to_string(&p) else {
+        return Vec::new();
+    };
+    let v: toml::Value =
+        toml::from_str(&s).unwrap_or_else(|e| panic!("unproven.toml unparseable ({e}):\n{s}"));
+    v.get("record")
+        .and_then(|r| r.as_array())
+        .cloned()
+        .unwrap_or_default()
 }
 
 #[test]
@@ -31,49 +38,56 @@ fn reproduced_lands_pending_and_records_outcome() {
     assert!(has_outcome(&f.row(&id), "reproduced"), "{}", f.row(&id));
 }
 
+/// Every undetermined runner case (not allowlisted, untracked, missing,
+/// shell composition, timeout) files NO row, exits 2 and is recorded as an
+/// `undetermined` unproven record — never pending.
 #[test]
-fn not_reproduced_lands_unconfirmed_and_is_never_lost() {
-    let f = Fixture::new("notrepro");
-    let (o, id) = f.add_extra("phantom", &["--repro-test", REPRO_NO]);
-    assert_eq!(o.code, 0, "{}", o.both());
-    let id = id.unwrap();
-    assert_eq!(f.status(&id), "unconfirmed");
-    assert!(has_outcome(&f.row(&id), "not-reproduced"), "{}", f.row(&id));
-}
-
-#[test]
-fn undetermined_repro_lands_unconfirmed_never_pending() {
+fn undetermined_repro_files_no_row_and_is_recorded_undetermined() {
     let f = Fixture::new("undet");
     f.write_script("tests/slow.sh", "sleep 30\nexit 1");
     f.commit_paths(&["tests/slow.sh"], "slow repro");
-    f.write_script("tests/untracked_repro.sh", "exit 1");
+    // The untracked script dirties the tree, which on its own makes every
+    // later run undetermined; it is therefore created only for the LAST case,
+    // so each earlier case is undetermined for its own reason.
     let cases: Vec<(&str, Vec<(&str, &str)>)> = vec![
         ("grep -q x README.txt", vec![]),
-        ("bash tests/untracked_repro.sh", vec![]),
         ("bash tests/does_not_exist.sh", vec![]),
         ("bash tests/repro_yes.sh; true", vec![]),
         (
             "bash tests/slow.sh",
             vec![("BACKLOG_TEST_TIMEOUT_SECS", "1")],
         ),
+        ("bash tests/untracked_repro.sh", vec![]),
     ];
     for (cmd, env) in cases {
+        if cmd == "bash tests/untracked_repro.sh" {
+            f.write_script("tests/untracked_repro.sh", "exit 1");
+        }
         let p = f.project();
         let o = f.run_env(
             &["add", "--title", cmd, "--project", &p, "--repro-test", cmd],
             &env,
         );
-        assert_eq!(o.code, 0, "add must succeed for {cmd:?}: {}", o.both());
-        let id = parse_added(&o.stdout);
-        assert_eq!(
-            f.status(&id),
-            "unconfirmed",
-            "{cmd:?} is Undetermined, never pending"
+        assert_eq!(o.code, 2, "{cmd:?} is not filed (exit 2): {}", o.both());
+        assert!(
+            !o.stdout.lines().any(|l| l.starts_with("added: ")),
+            "{cmd:?} must not be filed: {}",
+            o.stdout
         );
         assert!(
-            has_outcome(&f.row(&id), "undetermined"),
-            "{cmd:?}: {}",
-            f.row(&id)
+            f.list_all().is_empty(),
+            "{cmd:?} is Undetermined, never a row: {:?}",
+            f.list_all()
+        );
+        let recs = unproven_records(&f);
+        let rec = recs
+            .iter()
+            .find(|r| r.get("repro_test").and_then(|v| v.as_str()) == Some(cmd))
+            .unwrap_or_else(|| panic!("{cmd:?} not kept in unproven.toml: {recs:?}"));
+        assert_eq!(
+            rec.get("outcome").and_then(|v| v.as_str()),
+            Some("undetermined"),
+            "{cmd:?}: {rec:?}"
         );
     }
 }
@@ -81,9 +95,10 @@ fn undetermined_repro_lands_unconfirmed_never_pending() {
 #[test]
 fn unconfirmed_is_excluded_from_next_claim_and_pending_list() {
     let f = Fixture::new("excl");
-    let (_, unconf) = f.add_extra("unverified", &[]);
-    let unconf = unconf.unwrap();
-    let pending = f.add("verified");
+    let (pending, label) = f.add_with_label("verified");
+    let unconf = "0e0c0f01".to_string();
+    f.plant_open(&unconf, "unverified", "unconfirmed", &label);
+    assert_eq!(f.status(&unconf), "unconfirmed", "planted row is visible");
     let p = f.project();
     // Checked BEFORE the claim below: once `next --claim` leases `pending`,
     // `list` derives it as `claimed` (backlog f09db5ce), so a `--status
@@ -116,9 +131,9 @@ fn unconfirmed_is_excluded_from_next_claim_and_pending_list() {
 #[test]
 fn list_shows_unconfirmed_separately_with_observed_vs_suspicion_labels() {
     let f = Fixture::new("labels");
-    let (_, unconf) = f.add_extra("unverified one", &[]);
-    let unconf = unconf.unwrap();
-    let observed = f.add("verified one");
+    let (observed, label) = f.add_with_label("verified one");
+    let unconf = "0e0c0f02".to_string();
+    f.plant_open(&unconf, "unverified one", "unconfirmed", &label);
     let l = f.run(&["list", "--all"]);
     assert_eq!(l.code, 0, "{}", l.both());
     let line_of = |id: &str| {
@@ -148,8 +163,9 @@ fn list_shows_unconfirmed_separately_with_observed_vs_suspicion_labels() {
 #[test]
 fn confirm_promotes_to_pending_only_on_reproduced() {
     let f = Fixture::new("confirm");
-    let (_, id) = f.add_extra("finding", &[]);
-    let id = id.unwrap();
+    let (_, label) = f.add_with_label("reference row for the project label");
+    let id = "0e0c0f03".to_string();
+    f.plant_open(&id, "finding", "unconfirmed", &label);
     let o = f.run(&["confirm", &id, "--repro-test", REPRO_NO]);
     assert_eq!(
         f.status(&id),
@@ -178,8 +194,9 @@ fn confirm_promotes_to_pending_only_on_reproduced() {
 #[test]
 fn confirm_without_a_repro_test_is_refused() {
     let f = Fixture::new("confnotest");
-    let (_, id) = f.add_extra("finding", &[]);
-    let id = id.unwrap();
+    let (_, label) = f.add_with_label("reference row for the project label");
+    let id = "0e0c0f04".to_string();
+    f.plant_open(&id, "finding", "unconfirmed", &label);
     let o = f.run(&["confirm", &id]);
     assert_refused_unchanged(&f, &id, "unconfirmed", &o, "confirm needs --repro-test");
 }

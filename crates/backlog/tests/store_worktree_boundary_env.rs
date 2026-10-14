@@ -84,6 +84,13 @@ fn fixture(seed: bool) -> Fixture {
         &["remote", "add", "origin", "https://github.com/o/r.git"],
     );
     std::fs::write(primary.join("README"), "x\n").unwrap();
+    // `add` writes a task only for a reproduced finding (intake contract v2):
+    // commit a repro that exits 1 BEFORE the worktree is cut, so the primary
+    // and the linked checkout both carry it at HEAD. Every add probe below
+    // passes it (`add_args`), so a refusal observed here is the boundary's,
+    // not "not filed for lack of evidence".
+    std::fs::create_dir_all(primary.join("tests")).unwrap();
+    exec_shim(&primary.join(REPRO_SCRIPT), "#!/bin/bash\nexit 1\n");
     if seed {
         std::fs::create_dir_all(primary.join(".backlog")).unwrap();
         std::fs::write(primary.join(".backlog/tasks.toml"), seeded_task(&primary)).unwrap();
@@ -144,6 +151,9 @@ fn store(root: &Path) -> PathBuf {
     root.join(".backlog").join("tasks.toml")
 }
 
+const REPRO_SCRIPT: &str = "tests/repro.sh";
+const REPRO_CMD: &str = "bash tests/repro.sh";
+
 fn add_args(project: &Path) -> Vec<String> {
     vec![
         "add".into(),
@@ -151,6 +161,8 @@ fn add_args(project: &Path) -> Vec<String> {
         "env-probe".into(),
         "--project".into(),
         project.to_str().unwrap().into(),
+        "--repro-test".into(),
+        REPRO_CMD.into(),
     ]
 }
 

@@ -80,7 +80,9 @@ repo behaves as before. The SessionStart hook skips its requeue in the primary t
 
 ```sh
 cargo install --path .
-backlog add --title "Fix X" --project "$PWD" --priority p1   # queue an item
+backlog add --title "Fix X" --project "$PWD" --priority p1 \
+  --repro-test "bash tests/repro_fix_x.sh"                  # file an item ONLY if the committed test fails at HEAD
+backlog unproven search "Fix X"                              # was this already considered and NOT filed?
 backlog list --status pending                                # see the queue
 backlog next                                                 # pick the next item
 backlog done <id> --test "cargo test -p x" --red-rev <rev>  # resolve it (RED at rev, GREEN at HEAD)
@@ -95,6 +97,42 @@ backlog uninstall           # remove it again
 
 `install`/`uninstall` accept `--dry-run` to print the resulting settings without
 writing.
+
+## No test, no ticket (user rulings 2026-10-04)
+
+> 「testがないなら起票してはならない」 / 「見つけたら テストを実装する、検証されたときには起票する、テストがかけない、証拠がない場合は起票はしてはいけない。ただし記録はのこし同一の内容を検討しないようにする」
+
+- `add` writes a task **only** when `--repro-test CMD` (runner allowlist: `cargo test …`, `pytest …`,
+  `python3 -m pytest …`, `bash|sh <tracked script under a tests dir>`) fails behaviourally at HEAD of
+  a clean checkout. The task lands `pending` with the reproduced repro recorded.
+- No `--repro-test`, exit 0 (not reproduced), or undetermined (untracked/dirty, not allowlisted,
+  timeout, build failure, …) files **no task** and exits **2**. The finding is appended to the
+  considered-unproven record **`.backlog/unproven.toml`** (next to `tasks.toml`, outside the queue)
+  with title, notes, tags, repro command, outcome (`no-repro-test` / `not-reproduced` /
+  `undetermined`), detail, rev and time, and `unproven: u-…` is printed. If that record cannot be
+  read, the add fails (non-zero, not 2) and the file is left untouched.
+- Re-examination guard: every `add` first reports prior unproven records of the same project whose
+  title matches (normalized-equal or similarity ≥ 0.6) as `unproven-match: <id>` lines on stderr; no
+  match is said explicitly (`no prior unproven record`), and an unreadable record is `UNDETERMINED`,
+  never "no match". `backlog unproven search TEXT [--json]` (substring of title/notes, or title
+  similarity ≥ 0.6) and `backlog unproven list [--json]` read it; an unreadable record exits 3 with
+  nothing on stdout.
+- Legacy rows are not bulk-demoted. `next` / `next --claim` add `repro_required: true` (and a
+  `repro_required: <id>` stderr line) for a task without a reproduced repro; write the RED test and
+  run `backlog confirm <id> --repro-test CMD` (which now also accepts `pending`/`failed` rows and
+  records the repro without changing their status) before working it.
+- `unconfirmed` rows (created by the old intake) older than 7 days are expiry candidates:
+  `list` marks them (`expiry candidate`; JSON `expiry_candidate: true`) and SessionStart counts them.
+  Confirm them or close with `backlog cancel <id> --reason "unproven: …"`; nothing is auto-closed.
+- `backlog audit-open [--json]` audits OPEN rows only (pending / failed / unconfirmed; claimed =
+  leased pending), once each: `has-test` / `no-test` / `undetermined`, read from the recorded repro
+  (no test is ever run). Determined results go to an untracked ledger
+  `~/.backlog/audit-open/<project-slug>.json` and those rows are skipped on later runs (even if a
+  repro is added later); undetermined is re-examined next run; an unreadable ledger fails the
+  command and nothing counts as checked. Closed rows are records and are not audited — every close
+  path audits at close time instead (`done --test` observed F→P, `--doc-only` verified commit,
+  `--duplicate-of` existing target, `cancel` non-empty reason, judgment/untestable via a human
+  `ruling approve`; `edit --status done|cancelled` is refused).
 
 ## Duplicate-task rejection (content hashkey)
 

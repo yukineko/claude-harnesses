@@ -377,7 +377,17 @@ fn duplicate_guard_decision_is_unchanged_for_a_row_in_the_done_file() {
         "tasks.done.toml",
         &row("dddd0002", "Already shipped", &p, "done"),
     );
-    let out = fx.run(&["add", "--title", "Already shipped", "--project", &p]);
+    // The duplicate guard runs only on the filed (reproduced) path since the
+    // intake contract v2, so the re-add carries a reproducing repro.
+    let out = fx.run(&[
+        "add",
+        "--title",
+        "Already shipped",
+        "--project",
+        &p,
+        "--repro-test",
+        "bash tests/repro.sh",
+    ]);
     assert_eq!(
         out.code, 0,
         "a done task (wherever it is stored) does not block a re-add under the current \

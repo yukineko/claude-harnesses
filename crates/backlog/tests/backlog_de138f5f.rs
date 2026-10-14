@@ -88,6 +88,12 @@ fn fx(tag: &str) -> Fx {
     write_exe(&f.ok_bin.join("gh"), gh);
     write_exe(&f.bad_bin.join("gh"), gh);
     std::os::unix::fs::symlink(&git, f.ok_bin.join("git")).unwrap();
+    // `add` files only a reproduced finding (intake contract v2): commit a
+    // repro that exits 1, and give the runner a `bash` on this narrow PATH.
+    common::commit_repro(&f.repo);
+    for d in [&f.ok_bin, &f.bad_bin] {
+        std::os::unix::fs::symlink("/bin/bash", d.join("bash")).unwrap();
+    }
     write_exe(
         &f.bad_bin.join("git"),
         &format!(
@@ -132,7 +138,15 @@ fn add_mirrored(f: &Fx) -> String {
     let proj = f.repo.to_str().unwrap().to_string();
     let (rc, out, err) = run(
         f,
-        &["add", "--title", "mirrored task", "--project", &proj],
+        &[
+            "add",
+            "--title",
+            "mirrored task",
+            "--project",
+            &proj,
+            "--repro-test",
+            common::COMMITTED_REPRO,
+        ],
         &f.ok_bin,
     );
     assert_eq!(rc, 0, "precondition: add must succeed; out={out} err={err}");

@@ -267,8 +267,10 @@ for 施策名 in "${APPROVED_TASKS[@]}"; do
   # 本セッションの発見ストアに記録（失敗しても scout 続行 = fail-soft）
   compass discovery record --session-id "$SESSION_ID" --title "$施策名" 2>/dev/null || true
   
-  # backlog に積む
+  # backlog に積む — 再現テスト（RED）が書けた施策だけが起票される（2026-10-04 裁定「testがないなら起票してはならない」）。
+  # --repro-test が無い / 再現しない施策は task にならず exit 2 で .backlog/unproven.toml に記録される。
   backlog add --title "$施策名" --project "$PWD" \
+    --repro-test "<この施策の不足を示すコミット済みテスト>" \
     --priority <p0|p1|p2> \
     --tag <lens> --tag scout \
     --notes "<rationale> / 証拠: <evidence> / 完了条件: <suggested_done>"

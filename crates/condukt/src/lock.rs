@@ -1027,10 +1027,19 @@ mod backlog_e9262d91 {
     //! the contract chosen here; today it is ~one per poll.
     use super::*;
 
+    /// The three tests below measure spawn RATES and reap LATENCY, both of
+    /// which the other two distort when run concurrently (each waiter's
+    /// fork+exec load slows the others' spawns). Serialize them.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        SERIAL.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
     #[cfg(unix)]
     #[test]
-    #[ignore = "backlog e9262d91: open defect, remove ignore when fixed"]
     fn lock_wait_does_not_spawn_kill_on_every_poll() {
+        let _serial = serial();
         use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::TempDir::new().unwrap();
         let bin = tmp.path().join("bin");
@@ -1082,6 +1091,142 @@ mod backlog_e9262d91 {
         assert!(
             spawns <= 10,
             "waiting 1s on a held lock spawned `kill` {spawns} times (one fork+exec per 10ms poll)"
+        );
+    }
+
+    /// Counting fake `kill` placed first on a CHILD-only PATH. Returns
+    /// `(tempdir, count_file, child_path)`; the tempdir must outlive the wait.
+    #[cfg(unix)]
+    fn counting_kill_path() -> (tempfile::TempDir, PathBuf, std::ffi::OsString) {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let count = tmp.path().join("kill.count");
+        let fake = bin.join("kill");
+        std::fs::write(
+            &fake,
+            format!(
+                "#!/bin/sh\necho x >> '{}'\nexec /bin/kill \"$@\"\n",
+                count.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut parts = vec![bin];
+        if let Some(p) = std::env::var_os("PATH") {
+            parts.extend(std::env::split_paths(&p));
+        }
+        let kill_path = std::env::join_paths(parts).unwrap();
+        (tmp, count, kill_path)
+    }
+
+    #[cfg(unix)]
+    fn write_lock(path: &Path, pid: u32) {
+        let info = LockInfo {
+            pid,
+            run_id: "held".into(),
+            acquired_at: now_unix(),
+        };
+        std::fs::write(path, serde_json::to_string(&info).unwrap()).unwrap();
+    }
+
+    /// Kills and reaps the foreign holder on every exit path (incl. panic).
+    #[cfg(unix)]
+    struct ChildGuard(std::process::Child);
+    #[cfg(unix)]
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    /// The holder is a LIVE FOREIGN process (not this test's pid), so a fix
+    /// that only short-circuits `existing.pid == std::process::id()` does not
+    /// satisfy it: the liveness probe itself must be rate-limited, and the
+    /// live holder must still never be stolen.
+    #[cfg(unix)]
+    #[test]
+    fn lock_wait_on_live_foreign_holder_is_throttled_and_never_steals() {
+        let _serial = serial();
+        let (tmp, count, kill_path) = counting_kill_path();
+        let child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("fixture: spawn `sleep 30` as the foreign lock holder");
+        let guard = ChildGuard(child);
+        let holder_pid = guard.0.id();
+
+        let lock = tmp.path().join("held.lock");
+        write_lock(&lock, holder_pid);
+
+        let got = RunLock::acquire_at_with_env_path(
+            lock.clone(),
+            Duration::from_secs(1),
+            Some(&kill_path),
+        );
+
+        assert!(
+            !got.held(),
+            "a LIVE foreign holder (pid {holder_pid}) was stolen: the waiter acquired the lock"
+        );
+        let on_disk: LockInfo = serde_json::from_str(
+            &std::fs::read_to_string(&lock)
+                .expect("the live foreign holder's lock file must survive the wait"),
+        )
+        .expect("the held lock file must still parse");
+        assert_eq!(
+            on_disk.pid, holder_pid,
+            "the lock file no longer names the live foreign holder (stolen/rewritten)"
+        );
+        let spawns = std::fs::read_to_string(&count)
+            .map(|s| s.lines().count())
+            .unwrap_or(0);
+        assert!(
+            spawns <= 10,
+            "waiting 1s on a lock held by a live FOREIGN pid spawned `kill` {spawns} times \
+             (bound: <= 10 per second of waiting)"
+        );
+        drop(guard);
+    }
+
+    /// Guard against a throttling fix that delays reaping: a lock held by a
+    /// DEAD pid must still be reaped and acquired promptly (< 500ms).
+    #[cfg(unix)]
+    #[test]
+    fn lock_wait_on_dead_holder_still_reaps_promptly() {
+        let _serial = serial();
+        let (tmp, count, kill_path) = counting_kill_path();
+        let mut child = std::process::Command::new("true")
+            .spawn()
+            .expect("fixture: spawn a short-lived child");
+        let dead_pid = child.id();
+        let status = child.wait().expect("fixture: wait for the child to exit");
+        assert!(status.success(), "fixture: `true` must exit 0");
+
+        let lock = tmp.path().join("held.lock");
+        write_lock(&lock, dead_pid);
+
+        let start = Instant::now();
+        let got = RunLock::acquire_at_with_env_path(
+            lock.clone(),
+            Duration::from_secs(5),
+            Some(&kill_path),
+        );
+        let elapsed = start.elapsed();
+
+        assert!(
+            got.held(),
+            "a lock held by DEAD pid {dead_pid} was not reaped within the 5s deadline"
+        );
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "reaping a DEAD holder (pid {dead_pid}) took {elapsed:?} ({} `kill` spawns); \
+             must stay prompt (< 500ms)",
+            std::fs::read_to_string(&count)
+                .map(|s| s.lines().count())
+                .unwrap_or(0)
         );
     }
 }

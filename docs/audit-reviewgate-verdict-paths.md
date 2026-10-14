@@ -9,8 +9,11 @@
   ここに記す P（permissive）項目は**すべて未是正**である。「見つけたが直していない」ことを明記する。
 - **是正状況（2026-09-24 追記、reviewgate 0.1.28、branch `flow/fix-reviewgate-277440b1`）**: P2〜P8 は是正済み。
   回帰テストは `crates/reviewgate/tests/verdict_paths_p2_p8.rs`（実装者とは別の Agent が書き、未是正コードで RED を観測済み）。
-  P1 は同じ `DiffText::fetch_failed` 経路で塞がる（手動 probe で `git-scan-failed` の block を観測）が、専用の回帰テストは無く
-  backlog `3357c2e2` で別途追跡する。以下の本文は監査時点（`171062fc`）の記録である。是正で行が移動した引用だけは
+  P1 は同じ `DiffText::fetch_failed` 経路で塞がる（手動 probe で `git-scan-failed` の block を観測）。
+  **2026-10-14 追記**: P1 の専用回帰テストは `crates/reviewgate/tests/backlog_922f0a96_diff_fetch_failure_wiring.rs`
+  （偽 git shim を子プロセスの PATH に置く配線テスト。P1 と、`fetch_failed` 経路に限定した P2 の部分取得失敗を突く）。
+  是正前 rev `db9deefb` にテストを重ねて P1/P2 とも RED、現行で `evaluate()` の `fetch_failed` 分岐を削除する変異でも
+  P1/P2 とも RED、現行で GREEN を観測した（backlog `922f0a96`）。以下の本文は監査時点（`171062fc`）の記録である。是正で行が移動した引用だけは
   現行コードの行番号へ付け替え、是正で消えた引用（旧 docstring）は `doc-claim-exempt` を付けて監査時点の記録として残した。
 - **位置づけ**: `docs/audit-blastguard-verdict-paths.md` / `docs/audit-budgetguard-verdict-paths.md` と
   同じフォーマット（P/R/D の 3 分類・逐語引用・実測・棄却候補にも同じ立証責任）に従う、

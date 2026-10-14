@@ -4306,44 +4306,6 @@ ruling_kind = "judgment"
 rationale = "Already fixed: the blastguard binary built at HEAD b7dd5491 denies mv of ~/.claude/plugins (also abs and HOME spellings); cargo test -p blastguard --test backlog_audit_s02 backlog_84fa118e passes at HEAD (un-ignored in 29dd9a4e). No behavioural RED rev is reachable: at db41c92f and 2cf730d3^ the HEAD test does not compile (cargo exit 101, no FAILED line)."
 
 [[task]]
-id = "dc7a3bc3"
-title = "PreToolUse の verdict 経路を panic 時 exit 2 にする共通入口を harness-core に置く (fetchguard 等が run_hook のまま)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-blastguard got a local run_verdict_guarded in 99f1c0ef (70883137). run_guarded in harness-core speaks the Stop protocol and cannot be reused. fetchguard 56991fca is the named twin.
-
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/ctxrot/tests/backlog_dc7a3bc3.rs (rev 34b1a083): observed via ctxrot preguard (PreToolUse verdict path under run_hook); fetchguard itself is PostToolUse and has its own analyse barrier"""
-created_at = 1790635969
-updated_at = 1790983310
-weight = 0.0
-issue_number = 836
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/836"
-rev = 0
-
-[[task]]
-id = "911a93b8"
-title = "check-test-weakening.py が .rs しか走査しない — Python の gate テストの弱体化を検出できない"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-Observed 2026-09-29: the ack line for scripts/test_gate_bypass.py had no effect because the scanner never looks at .py.
-
-[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test scripts/test_backlog_s06_misc_b_repros.py (rev e70d48dd)"""
-created_at = 1790635970
-updated_at = 1790983299
-weight = 0.0
-issue_number = 837
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/837"
-rev = 0
-
-[[task]]
 id = "5d7867f0"
 title = "test_gate_bypass.py AmendIsNotABypass.test_amend_of_a_gated_commit_is_not_recorded_as_ungated が main で失敗している"
 project = "/Users/yuki/src/harness"
@@ -4360,25 +4322,6 @@ updated_at = 1790983294
 weight = 0.0
 issue_number = 838
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/838"
-rev = 0
-
-[[task]]
-id = "ea39fbc9"
-title = "rollout: 単体の prune-plugin-cache.py と rebuild-plugins.sh が .rollout.lock を取らない"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-A standalone prune can still race a rollout between copy and registry repoint (found while fixing e3366b5c).
-
-[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_ea39fbc9.py (rev e128c13b): Temp cache/registry/settings; rebuild-plugins.sh run with a fake cargo (metadata only, everything else exit 1 and logged), so no real build/clean."""
-created_at = 1790635974
-updated_at = 1790983299
-weight = 0.0
-issue_number = 839
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/839"
 rev = 0
 
 [[task]]

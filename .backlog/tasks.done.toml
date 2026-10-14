@@ -36652,3 +36652,136 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "a4e648a3c439d0eeb548e2cef690d2a53268be9f"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "dc7a3bc3"
+title = "PreToolUse の verdict 経路を panic 時 exit 2 にする共通入口を harness-core に置く (fetchguard 等が run_hook のまま)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+blastguard got a local run_verdict_guarded in 99f1c0ef (70883137). run_guarded in harness-core speaks the Stop protocol and cannot be reused. fetchguard 56991fca is the named twin.
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test crates/ctxrot/tests/backlog_dc7a3bc3.rs (rev 34b1a083): observed via ctxrot preguard (PreToolUse verdict path under run_hook); fetchguard itself is PostToolUse and has its own analyse barrier"""
+created_at = 1790635969
+updated_at = 1791983573
+weight = 0.0
+issue_number = 836
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/836"
+issue_closed_at = 1791983577
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p ctxrot --test backlog_dc7a3bc3 -- --include-ignored"
+exit = 0
+passed = 2
+rev = "ebf2e3cbed4c5408c6a2bd41a970b24c330fe86b"
+observed_at = 1791983556
+output_digest = "sha256:9e85d635a9eaa245ceb8be63c8e271b2a080a02987a78b1501ee21ad3a5d0c7e"
+excerpt = """
+
+running 2 tests
+test backlog_dc7a3bc3_control_preguard_denies_unbounded_huge_read ... ok
+test backlog_dc7a3bc3_panic_on_deny_path_does_not_exit_as_allow ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s
+
+   Compiling harness-core v0.2.51 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/harness-core)
+   Compiling overwatch v0.2.62 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/overwatch)
+   Compiling ctxrot v0.5.35 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/ctxrot)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.18s
+     Running tests/backlog_dc7a3bc3.rs (target/debug/deps/backlog_dc7a3bc3-40cddf8111e76638)
+"""
+
+[task.closure.red]
+rev = "5357b81127c32763bb3054ba7bf79032d57d6c86"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "911a93b8"
+title = "check-test-weakening.py が .rs しか走査しない — Python の gate テストの弱体化を検出できない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+Observed 2026-09-29: the ack line for scripts/test_gate_bypass.py had no effect because the scanner never looks at .py.
+
+[backlog audit 2026-10-02 (session 798a05c3)] kept: test_new; test scripts/test_backlog_s06_misc_b_repros.py (rev e70d48dd)"""
+created_at = 1790635970
+updated_at = 1791983579
+weight = 0.0
+issue_number = 837
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/837"
+issue_closed_at = 1791983582
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest -q scripts/test_backlog_s06_misc_b_repros.py -k 911a93b8"
+exit = 0
+passed = 1
+rev = "ebf2e3cbed4c5408c6a2bd41a970b24c330fe86b"
+observed_at = 1791983577
+output_digest = "sha256:fcd38a966d2e90ea9f54b40fc0dd5a9fe89b9469f15630adebf913929e1fd78f"
+excerpt = """
+.                                                                        [100%]
+1 passed, 9 deselected in 0.27s
+"""
+
+[task.closure.red]
+rev = "5357b81127c32763bb3054ba7bf79032d57d6c86"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "ea39fbc9"
+title = "rollout: 単体の prune-plugin-cache.py と rebuild-plugins.sh が .rollout.lock を取らない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+A standalone prune can still race a rollout between copy and registry repoint (found while fixing e3366b5c).
+
+[backlog audit 2026-10-02 (session 798a05c3)] RED repro test scripts/test_backlog_ea39fbc9.py (rev e128c13b): Temp cache/registry/settings; rebuild-plugins.sh run with a fake cargo (metadata only, everything else exit 1 and logged), so no real build/clean."""
+created_at = 1790635974
+updated_at = 1791983660
+weight = 0.0
+issue_number = 839
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/839"
+issue_closed_at = 1791983663
+rev = 1
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest -q --runxfail scripts/test_backlog_ea39fbc9.py"
+exit = 0
+passed = 4
+rev = "ebf2e3cbed4c5408c6a2bd41a970b24c330fe86b"
+observed_at = 1791983582
+output_digest = "sha256:5f338bfd16b989d782bc4a3fc37b5a1246f1857b56e60e4b8f9a1f2a64bba070"
+excerpt = """
+....                                                                     [100%]
+4 passed in 25.12s
+"""
+
+[task.closure.red]
+rev = "5357b81127c32763bb3054ba7bf79032d57d6c86"
+exit = 1
+kind = "behavioural"

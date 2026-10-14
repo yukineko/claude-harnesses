@@ -74,7 +74,6 @@ fn backlog_dc7a3bc3_control_preguard_denies_unbounded_huge_read() {
 }
 
 #[test]
-#[ignore = "backlog dc7a3bc3: open defect, remove ignore when fixed"]
 fn backlog_dc7a3bc3_panic_on_deny_path_does_not_exit_as_allow() {
     let root = scratch();
     let mut child = cmd(&root).stdout(Stdio::piped()).spawn().unwrap();

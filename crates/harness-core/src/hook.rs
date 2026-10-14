@@ -1,8 +1,16 @@
-//! Claude Code hook I/O: the stdin payload struct and the never-break-a-turn
-//! execution wrapper.
+//! Claude Code hook I/O: the stdin payload struct and the panic-barrier
+//! execution wrappers.
 //!
-//! Invariant (shared by every plugin): a hook must NEVER break the user's turn.
-//! On any error or panic we exit 0 and stay silent. `run_hook` enforces that.
+//! Two barriers, split by whether the hook decides anything:
+//!
+//! * [`run_hook`] — for hooks that decide NOTHING (pure observability). A
+//!   panic is logged to stderr and the process exits 0.
+//! * [`run_pretooluse_guarded`] — for verdict-bearing PreToolUse hooks. For
+//!   PreToolUse a silent exit 0 is an ALLOW, so a panic exits 2 (block) with a
+//!   stderr message instead (CLAUDE.md §3: cannot-determine resolves to the
+//!   restrictive side).
+//!
+//! Stop gates use `crate::gate::run::run_guarded` (the Stop protocol).
 
 use std::io::{IsTerminal, Read};
 use std::panic::UnwindSafe;
@@ -243,9 +251,79 @@ pub fn catch_and_log<F: FnOnce() + UnwindSafe>(hook_name: &str, f: F) -> bool {
 
 /// Run a hook handler with all panics caught and logged to stderr; always
 /// exits 0 so the turn is never broken.
+///
+/// ONLY for hooks that decide nothing (pure observability). For a PreToolUse
+/// hook a silent exit 0 IS an allow, so a verdict-bearing PreToolUse hook must
+/// use [`run_pretooluse_guarded`] instead; a Stop gate uses
+/// `crate::gate::run::run_guarded`.
 pub fn run_hook<F: FnOnce() + UnwindSafe>(f: F) -> ! {
     let _ = catch_and_log("hook", f);
     std::process::exit(0);
+}
+
+/// Exit code Claude Code treats as "block this tool call" for a PreToolUse
+/// hook (stderr is shown to the model).
+pub const PRETOOLUSE_BLOCK_EXIT: i32 = 2;
+
+/// Run a verdict-bearing PreToolUse hook body under a FAIL-CLOSED panic
+/// barrier, then exit.
+///
+/// * The body returned normally: exit 0. Whatever decision it already printed
+///   (a `permissionDecision` JSON, or nothing = defer to the normal permission
+///   flow) stands. A body that wants another exit code calls
+///   `std::process::exit` itself; that path is untouched.
+/// * The body panicked — anywhere: stdin read, payload parse, config load, the
+///   detector, or the decision `println!` (EPIPE on a closed stdout panics):
+///   exit [`PRETOOLUSE_BLOCK_EXIT`] (2) with a stderr line saying the gate
+///   crashed and the tool call is blocked. The call was not judged, and for
+///   PreToolUse exit 0 would be an allow (CLAUDE.md §3: a panic is a
+///   cannot-determine and resolves to the restrictive side).
+///
+/// Why not `crate::gate::run::run_guarded`: that is the Stop protocol — it
+/// answers a panic with `{"decision":"block"}` on stdout and bounds it with
+/// `stop_hook_active`, which a PreToolUse payload does not carry. Here stdout
+/// itself may be what panicked, so the answer is carried by the exit code
+/// only. No bounded-allow is needed: a blocked tool call does not trap the
+/// session; the model sees stderr and can do something else.
+///
+/// Modelled on blastguard's local `run_verdict_guarded` (commit 99f1c0ef).
+pub fn run_pretooluse_guarded<F: FnOnce()>(gate_name: &str, body: F) -> ! {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
+    std::process::exit(pretooluse_exit_code(
+        gate_name,
+        outcome,
+        &mut std::io::stderr(),
+    ))
+}
+
+/// Pure core of [`run_pretooluse_guarded`]: 0 when the body completed, 2 when
+/// it panicked (with the block message written to `err`). A failed write to
+/// `err` is ignored on purpose: the exit code, not the message, carries the
+/// block, so the restrictive outcome does not depend on stderr being writable.
+pub fn pretooluse_exit_code<W: std::io::Write>(
+    gate_name: &str,
+    outcome: std::thread::Result<()>,
+    err: &mut W,
+) -> i32 {
+    match outcome {
+        Ok(()) => 0,
+        Err(payload) => {
+            let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+                (*s).to_string()
+            } else if let Some(s) = payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "(non-string panic payload)".to_string()
+            };
+            let _ = writeln!(
+                err,
+                "[harness hook panic] {gate_name}: the PreToolUse gate crashed (panic: {msg}) \
+                 — the tool call was not judged, so it is BLOCKED (exit {PRETOOLUSE_BLOCK_EXIT}), \
+                 not allowed"
+            );
+            PRETOOLUSE_BLOCK_EXIT
+        }
+    }
 }
 
 /// A hook registered in `settings.json` whose command's binary could not be
@@ -485,6 +563,68 @@ mod tests {
             "a panicking handler must be caught, not propagated"
         );
         assert!(ok, "a clean handler reports success");
+    }
+
+    #[test]
+    fn pretooluse_exit_code_is_zero_when_body_completes() {
+        let mut err = Vec::new();
+        let outcome = std::panic::catch_unwind(|| {});
+        assert_eq!(pretooluse_exit_code("g", outcome, &mut err), 0);
+        assert!(err.is_empty(), "a clean run writes nothing to stderr");
+    }
+
+    #[test]
+    fn pretooluse_exit_code_blocks_on_every_panic_payload_shape() {
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let str_panic = std::panic::catch_unwind(|| panic!("static str boom"));
+        let string_panic = std::panic::catch_unwind(|| panic!("formatted {}", 42));
+        // The EPIPE shape: `println!` on a closed stdout panics with this text.
+        let print_panic = std::panic::catch_unwind(|| {
+            panic!("failed printing to stdout: Broken pipe (os error 32)")
+        });
+        let other_panic = std::panic::catch_unwind(|| std::panic::panic_any(7_u8));
+        std::panic::set_hook(prev);
+
+        for (outcome, needle) in [
+            (str_panic, "static str boom"),
+            (string_panic, "formatted 42"),
+            (print_panic, "failed printing to stdout"),
+            (other_panic, "(non-string panic payload)"),
+        ] {
+            let mut err = Vec::new();
+            assert_eq!(
+                pretooluse_exit_code("ctxrot preguard", outcome, &mut err),
+                PRETOOLUSE_BLOCK_EXIT,
+                "a panic on the PreToolUse verdict path must exit 2 (block), never 0 (allow)"
+            );
+            let text = String::from_utf8(err).unwrap();
+            assert!(text.contains("ctxrot preguard"), "names the gate: {text}");
+            assert!(text.contains(needle), "carries the panic message: {text}");
+            assert!(text.contains("BLOCKED"), "states the consequence: {text}");
+        }
+        assert_eq!(PRETOOLUSE_BLOCK_EXIT, 2);
+    }
+
+    #[test]
+    fn pretooluse_exit_code_still_blocks_when_stderr_is_unwritable() {
+        struct Broken;
+        impl std::io::Write for Broken {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+            }
+        }
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let outcome = std::panic::catch_unwind(|| panic!("boom"));
+        std::panic::set_hook(prev);
+        assert_eq!(
+            pretooluse_exit_code("g", outcome, &mut Broken),
+            PRETOOLUSE_BLOCK_EXIT
+        );
     }
 
     #[test]

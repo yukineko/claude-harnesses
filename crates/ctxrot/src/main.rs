@@ -10,8 +10,10 @@
 //!     plus the CLI commands whose empty output would read as real data. Here a
 //!     cannot-determine is resolved to the restrictive side of the relevant
 //!     protocol: `stop` runs under `gate::run::run_guarded` (a panic becomes
-//!     `{"decision":"block"}`), `preguard`/`toolguard` wrap their detectors in
-//!     `analyse` (a panic becomes a deny / a fail-closed placeholder),
+//!     `{"decision":"block"}`), `preguard` runs under
+//!     `hook::run_pretooluse_guarded` (a panic anywhere on its path exits 2 =
+//!     block), `preguard`/`toolguard` wrap their detectors in `analyse` (a
+//!     panic becomes a deny / a fail-closed placeholder),
 //!     `statusline` renders an explicit `unknown` band instead of a blank bar,
 //!     and the store-reading CLI paths go through `known_or_exit` (exit 1).
 //!   * **pure observability** — `guard` / `rescue` / `restore` / `distill-bg` /
@@ -366,7 +368,10 @@ fn main() {
                 }
             }
         }),
-        Command::Preguard => run_hook(|| {
+        // Verdict-bearing PreToolUse: a panic anywhere on this path (stdin,
+        // parse, config, the deny `println!`) must BLOCK (exit 2), not fall
+        // into `run_hook`'s exit 0, which PreToolUse reads as an allow.
+        Command::Preguard => harness_core::hook::run_pretooluse_guarded("ctxrot preguard", || {
             if Config::disabled() {
                 return;
             }

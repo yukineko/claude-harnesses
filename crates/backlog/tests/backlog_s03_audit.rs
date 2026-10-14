@@ -176,7 +176,6 @@ fn edit_accepts_priority() {
 /// backlog 016c2562: a task tagged `wontfix` (human ruling: do not implement)
 /// is still handed out by `next --claim`; tags are ignored by selection.
 #[test]
-#[ignore = "backlog 016c2562: open defect, remove ignore when fixed"]
 fn next_claim_skips_wontfix_tagged_tasks() {
     let f = fx("016c2562");
     let wf = add(

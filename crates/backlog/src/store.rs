@@ -1277,6 +1277,8 @@ fn run_with_bounded_wait(
 /// tag_filter: Some(tag) なら tags にそのタグを含むものだけ。
 /// project_filter: Some(project) ならプロジェクトが一致するものだけ (repo_root との比較)。
 /// defer_until が未来のタスク (is_deferred) はスキップする。
+/// `wontfix` タグ (人間の「実装しない」裁定、Task::is_ruled_wontfix) を持つタスクは
+/// tag_filter に関わらず常にスキップする (backlog 016c2562)。
 ///
 /// CA-backlog-001: this is a PURE READ — no lock, no mutation. It returns a
 /// clone of a task left in `pending`, so two concurrent callers can be handed
@@ -1379,6 +1381,10 @@ fn pick_next<'a>(
         .iter()
         .filter(|t| t.is_pending())
         .filter(|t| !t.is_deferred(now))
+        // A `wontfix` tag is a recorded human ruling (do not implement); it is
+        // excluded unconditionally — even under `--tag wontfix` — so a ruled
+        // item is never dispatched as if unjudged (backlog 016c2562).
+        .filter(|t| !t.is_ruled_wontfix())
         // Leased (claimed) in some checkout of this project, per the ledger.
         .filter(|t| !excluded.contains(&t.id))
         .filter(|t| match tag_filter {

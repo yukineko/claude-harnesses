@@ -112,7 +112,12 @@
 #                                                 plugin's hooks never run, so the
 #                                                 gate goes DARK, not red
 #                                                 (backlog 8cb3bc22)
-#   clippy-lints       check-clippy-lints.py      an unwrap_used/expect_used/
+#   backlog-store      check-backlog-store.py     an indexed .backlog/*.toml with
+#                                                 merge conflict markers or that
+#                                                 does not parse as TOML. Also runs
+#                                                 for merge commits via
+#                                                 pre-merge-commit (backlog ece51b35)
+#   clippy-lints      check-clippy-lints.py      an unwrap_used/expect_used/
 #                                                 panic deny-lint violation in a
 #                                                 crate that inherits `[lints]
 #                                                 workspace = true`. Scoped to
@@ -225,6 +230,7 @@ run check-gate-protection.py gate-protection
 run check-cross-crate-constants.py crossx-constants
 run check-launcher-exec-bit.py launcher-exec-bit
 run check-clippy-lints.py     clippy-lints
+run check-backlog-store.py    backlog-store
 
 # main-tree-guard — CLAUDE.md §8, the one gate here that is Rust rather than
 # python3, because its decision is a tri-state over injectable inputs and is

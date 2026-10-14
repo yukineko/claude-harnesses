@@ -575,8 +575,9 @@ fn real_path(path: &str) -> Option<String> {
     }
 }
 
-/// Best-effort: append a `ViolationEvent` for this denial to overwatch's
-/// project-scoped violations.jsonl. `reason` is free text (may embed a
+/// Append a `ViolationEvent` for this denial to overwatch's project-scoped
+/// violations.jsonl. A failed append does not change the verdict, but it is
+/// reported on stderr rather than dropped. `reason` is free text (may embed a
 /// variable path/target) — `rule_id::rule_id` normalizes it to a stable
 /// discriminator before it becomes the violation signature.
 fn record_violation(input: &HookInput, reason: &str) {
@@ -598,8 +599,23 @@ fn record_violation(input: &HookInput, reason: &str) {
         Some(reason.to_string()),
     );
     let cwd = input.cwd_or_current();
-    if let Some(event) = event {
-        let _ = overwatch::store::append_violation(&cwd, &event);
+    match event {
+        Some(event) => {
+            // The verdict itself is unaffected, but a lost record must not be
+            // silent: overwatch reads this ledger as "what blastguard denied"
+            // (backlog f738a79a).
+            if let Err(e) = overwatch::store::append_violation(&cwd, &event) {
+                eprintln!(
+                    "blastguard: WARNING could not record the `{}` violation in the overwatch \
+                     violation ledger: {e}. This denial is NOT represented there.",
+                    event.signature
+                );
+            }
+        }
+        None => eprintln!(
+            "blastguard: WARNING this denial produced no violation event (blank rule id), \
+             so it is NOT recorded in the overwatch violation ledger."
+        ),
     }
 }
 

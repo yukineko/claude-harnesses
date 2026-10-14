@@ -250,7 +250,6 @@ fn backlog_9778927f_leading_subshell_verb_is_judged() {
 
 // ---------------------------------------------------------------- f738a79a
 #[test]
-#[ignore = "backlog f738a79a: open defect, remove ignore when fixed"]
 fn backlog_f738a79a_lost_violation_record_is_reported() {
     let home = unique_home("lost");
     // `~/.overwatch` is a regular FILE, so the append cannot succeed.

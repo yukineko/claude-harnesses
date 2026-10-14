@@ -665,7 +665,9 @@ fn truncated_reason(cfg: &Config, files: &[String], attempt: u32, max: u32) -> S
 }
 
 /// Run `reviewer_cmd`, feeding it the review prompt on stdin and reading
-/// findings from stdout. Output whose first line starts with "LGTM" = clean.
+/// findings from stdout. Output that is exactly "LGTM" (case-insensitive, an
+/// optional trailing `.`/`!`) = clean; anything else, including "LGTM, but ...",
+/// is a finding.
 /// EMPTY output is NOT clean: the prompt asks for an explicit `LGTM`, so silence
 /// means the reviewer gave no answer (it may never have read the diff).
 ///
@@ -743,8 +745,11 @@ fn classify(out: &str) -> Verdict {
     if t.is_empty() {
         return Verdict::undetermined("reviewer produced no output (expected `LGTM` or findings)");
     }
-    let first = t.lines().next().unwrap_or("").trim();
-    if first.eq_ignore_ascii_case("lgtm") || first.to_ascii_lowercase().starts_with("lgtm") {
+    // The WHOLE answer must be the token (optionally with a trailing `.`/`!`):
+    // the prompt asks for `LGTM` and nothing else. A prefix match read
+    // "LGTM, but high: ..." as Clean and swallowed the finding (backlog d98465f9).
+    let bare = t.trim_end_matches(['.', '!']).trim_end();
+    if bare.eq_ignore_ascii_case("lgtm") {
         return Verdict::from_findings(vec![]);
     }
     Verdict::violation(t.to_string())
@@ -1388,7 +1393,6 @@ mod backlog_repro_s08 {
     /// backlog d98465f9: a reviewer answer that merely STARTS with "lgtm" but
     /// carries a finding must not be Clean.
     #[test]
-    #[ignore = "backlog d98465f9: open defect, remove ignore when fixed"]
     fn lgtm_prefix_with_finding_is_not_clean() {
         for out in [
             "LGTM, but high: src/x.rs:10 null deref",

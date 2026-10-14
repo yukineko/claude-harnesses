@@ -157,8 +157,8 @@ fn evaluate_with_store(
             }
             day_usd
         }
-        Err(_corrupt) => {
-            // The on-disk ledger is unparseable. Do NOT overwrite it (that would
+        Err(load_err) => {
+            // The on-disk ledger is unparseable or unreadable. Do NOT overwrite it (that would
             // erase the day's accumulated spend and fail the budget open), and
             // do NOT substitute this session's own cost for the day total: every
             // other session's spend is then missing by an unknown amount, and
@@ -166,17 +166,14 @@ fn evaluate_with_store(
             // is unmeasured, which is exactly `day_undetermined_verdict`.
             drop(_guard);
             eprintln!(
-                "budgetguard: ledger.json is corrupt; preserving it untouched;                  day total is undetermined"
+                "budgetguard: {load_err}; preserving it untouched; day total is undetermined"
             );
+            let reason = format!("{load_err} (preserved untouched)");
             return Some(GateResult {
                 session_usd: Some(session_usd),
                 day_usd: None,
                 cache: cache_health(cfg, gauge_state_dir, session_id),
-                verdict: day_undetermined_verdict(
-                    cfg,
-                    session_usd,
-                    "ledger.json is corrupt (preserved untouched)",
-                ),
+                verdict: day_undetermined_verdict(cfg, session_usd, &reason),
             });
         }
     };

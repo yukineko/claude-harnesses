@@ -1907,6 +1907,7 @@ cannot tell whether it is a protected gate/config file or a system directory"
     // separated from the command each segment really runs; see
     // `compound_views`. Index-aligned with `split_segments(cmd)`.
     let views = compound_views(cmd);
+    let mut scopes = SubshellCwdScopes::default();
     // `for`/`select` variables bound so far on this line; see `loop_variants`.
     let mut bindings: Vec<LoopBinding> = Vec::new();
     for (seg_idx, seg) in split_segments(cmd).into_iter().enumerate() {
@@ -1937,8 +1938,9 @@ cannot tell whether it is a protected gate/config file or a system directory"
         }
         let cwd_before = cwd.clone();
         let aliases_before = aliases.clone();
+        scopes.enter(views.get(seg_idx));
         let (effective_seg, extra, next_cwd) = advance_cwd_and_rewrite(command, &cwd, &mut aliases);
-        cwd = next_cwd;
+        cwd = scopes.leave(views.get(seg_idx), &cwd_before, next_cwd);
         // The same segment once more for every value its loop variables take
         // (see `loop_variants`), IN ADDITION to the judgement of the text as
         // written below — so this can only add verdicts, never remove one.
@@ -2287,14 +2289,16 @@ fn segment_cwd_states(cmd: &str) -> Vec<CwdState> {
     // The same compound-syntax view the loop uses, so `do cd .githooks` moves
     // the directory here exactly as it does there.
     let views = compound_views(cmd);
+    let mut scopes = SubshellCwdScopes::default();
     let mut out = Vec::with_capacity(segs.len());
     for (seg_idx, seg) in segs.iter().enumerate() {
         out.push(cwd.clone());
         let command = views
             .get(seg_idx)
             .map_or(seg.as_str(), |v| v.command.as_str());
+        scopes.enter(views.get(seg_idx));
         let (_, _, next_cwd) = advance_cwd_and_rewrite(command, &cwd, &mut aliases);
-        cwd = next_cwd;
+        cwd = scopes.leave(views.get(seg_idx), &out[seg_idx], next_cwd);
     }
     out
 }
@@ -6649,6 +6653,11 @@ struct SegmentView {
     command: String,
     /// Set when the segment is a `for`/`select` header.
     binding: Option<LoopBinding>,
+    /// `(`-groups this segment opens and leaves open: the leading `(`s removed
+    /// from `command`, plus any `(`/`$(`/`<(` still unmatched at its end.
+    opens: usize,
+    /// Unmatched `)`s in the segment: groups that close here.
+    closes: usize,
 }
 
 /// [`SegmentView`] for every segment of `cmd`, index-aligned with
@@ -6677,6 +6686,7 @@ fn compound_views(cmd: &str) -> Vec<SegmentView> {
         let mut rest: &str = &seg.text;
         let mut data = String::new();
         let mut binding = None;
+        let mut leading_opens = 0usize;
         while let Some((word, after)) = split_first_word(rest) {
             if expect_pattern {
                 if word == "esac" {
@@ -6709,6 +6719,7 @@ fn compound_views(cmd: &str) -> Vec<SegmentView> {
             // `)` is removed by `strip_unmatched_close_parens` below.
             if let Some(after_paren) = rest.trim_start().strip_prefix('(') {
                 rest = after_paren;
+                leading_opens += 1;
                 continue;
             }
             if COMPOUND_PREFIX_WORDS.contains(&word) {
@@ -6753,10 +6764,13 @@ fn compound_views(cmd: &str) -> Vec<SegmentView> {
                 expect_pattern = true;
             }
         }
+        let (command, closes, open_depth) = strip_unmatched_close_parens(rest);
         out.push(SegmentView {
             data,
-            command: strip_unmatched_close_parens(rest),
+            command,
             binding,
+            opens: leading_opens + open_depth,
+            closes,
         });
     }
     out
@@ -6776,7 +6790,8 @@ fn compound_views(cmd: &str) -> Vec<SegmentView> {
 ///
 /// A `case` pattern's `)` never reaches here: [`compound_views`] moves the
 /// pattern into `data` before the command text is built.
-fn strip_unmatched_close_parens(s: &str) -> String {
+fn strip_unmatched_close_parens(s: &str) -> (String, usize, usize) {
+    let mut closes = 0usize;
     let mut out = String::with_capacity(s.len());
     let (mut in_s, mut in_d, mut in_bt, mut escaped) = (false, false, false, false);
     let mut depth: usize = 0;
@@ -6795,6 +6810,7 @@ fn strip_unmatched_close_parens(s: &str) -> String {
             ')' if !in_s && !in_d && !in_bt => {
                 if depth == 0 {
                     out.push(' ');
+                    closes += 1;
                     continue;
                 }
                 depth -= 1;
@@ -6803,7 +6819,70 @@ fn strip_unmatched_close_parens(s: &str) -> String {
         }
         out.push(c);
     }
-    out
+    (out, closes, depth)
+}
+
+/// What the cwd tracking knows after a `(`-group closes.
+///
+/// 9778927f: once [`compound_views`] removed a subshell's parens, a `cd`
+/// inside `( cd /tmp )` was read as a `cd` in THIS shell, so a later relative
+/// write that really lands in the OUTER directory
+/// (`cd /etc && ( cd /tmp ) && echo x > hosts`) was placed in `/tmp` and
+/// ALLOWED, while main denied it. Restoring the outer directory exactly was
+/// tried and dropped (user ruling 2026-10-15): the group count comes from raw
+/// `(`/`)` text, which a `#` comment, a here-document body or `${x:-(}` can
+/// skew, and a skewed count restored the WRONG directory — Allow again.
+///
+/// So the rule is deliberately coarse and fail-closed: when a group contains
+/// any cwd change, the cwd after it closes is [`CwdState::Unknown`] — neither
+/// the inner directory nor a restored outer one — and every later relative
+/// operand is judged as unknown-cwd (Ask, which hardens to Deny outside an
+/// interactive session). A group with no cwd change leaves the cwd as it was,
+/// which is exactly right because nothing in it moved. A `)` that closes a
+/// group this bookkeeping never saw open makes the cwd Unknown once any cwd
+/// change has happened on the line. A miscount can therefore only turn a cwd
+/// Unknown, never Known-and-wrong.
+#[derive(Default)]
+struct SubshellCwdScopes {
+    /// One entry per open group: whether a cwd change happened inside it.
+    dirty: Vec<bool>,
+    /// Whether any segment so far changed the cwd.
+    any_change: bool,
+}
+
+impl SubshellCwdScopes {
+    /// Call BEFORE `view`'s segment runs.
+    fn enter(&mut self, view: Option<&SegmentView>) {
+        for _ in 0..view.map_or(0, |v| v.opens) {
+            self.dirty.push(false);
+        }
+    }
+
+    /// Call AFTER `view`'s segment ran, with the cwd before and after it;
+    /// returns the cwd in force for the next segment.
+    fn leave(
+        &mut self,
+        view: Option<&SegmentView>,
+        cwd_before: &CwdState,
+        cwd_after: CwdState,
+    ) -> CwdState {
+        if &cwd_after != cwd_before {
+            self.any_change = true;
+            // A change inside a nested group also happened inside every group
+            // enclosing it.
+            for d in &mut self.dirty {
+                *d = true;
+            }
+        }
+        let mut cwd = cwd_after;
+        for _ in 0..view.map_or(0, |v| v.closes) {
+            let dirty = self.dirty.pop().unwrap_or(self.any_change);
+            if dirty {
+                cwd = CwdState::Unknown;
+            }
+        }
+        cwd
+    }
 }
 
 /// Judge text the shell expands but does not run as a command (a loop word

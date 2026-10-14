@@ -24,9 +24,15 @@ restricted side, never to "fine")
 
 Exit 2 covers: git missing or erroring, the path is not a repo, the base ref
 does not resolve, a diff subprocess exits non-zero, a tracked file cannot be
-read or decoded, or a `#[cfg(test)]` module whose braces do not balance (an
-unparsed module is an uninspected one). None of these may collapse into 0: an
-unreadable test surface is not a clean test surface.
+read or decoded, a `#[cfg(test)]` module whose braces do not balance (an
+unparsed module is an uninspected one), or a Python test file that `ast` cannot
+parse. None of these may collapse into 0: an unreadable test surface is not a
+clean test surface.
+
+Scope: every changed `.rs` file (its `#[cfg(test)]` modules, or the whole file
+under a `tests/` dir), and every changed Python test file -- `test_*.py`,
+`*_test.py`, or any `.py` under a `tests/` dir (backlog 911a93b8; see the
+"Python test surface" section below for the Python-specific rules).
 
 Acknowledging a deliberate deletion
 -----------------------------------
@@ -93,11 +99,13 @@ Two consequences of that design, stated so they read as decisions:
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import re
 import subprocess
 import sys
+import warnings
 
 # --- the weakening signals -------------------------------------------------
 
@@ -505,6 +513,237 @@ def counts(surface: str, path: str = "") -> dict:
     }
 
 
+# --- Python test surface (backlog 911a93b8) -------------------------------
+#
+# Until 2026-10-14 only `.rs` was scanned, so gutting `scripts/test_*.py` (the
+# repo's gate tests) returned `{"verdict": "clean", "findings": []}` and the
+# `test-weakening-justified:` marker could not even name a `.py` finding.
+#
+# Python is read with `ast`, not regexes: the module is parsed by the running
+# interpreter, so comments and string literals are never mistaken for code. A
+# file that does not parse is UNDETERMINED (exit 2) -- an unparsed test file is
+# an uninspected one, the same answer an unbalanced `#[cfg(test)]` gets.
+#
+# The four Rust kinds are reused so the acknowledgment vocabulary stays one set:
+#   assertion-removed   `assert` statements + `assert*()` / `pytest.raises()` calls
+#                       (file total, AND per surviving test function)
+#   test-removed        number of `test*` functions (module level / in classes)
+#   ignore-added        a SURVIVING test gained a skip: `unittest.skip/skipIf/
+#                       skipUnless`, `pytest.mark.skip/skipif`, this repo's
+#                       `open_defect(...)` wrapper, `self.skipTest()`,
+#                       `pytest.skip()`, `raise SkipTest`
+#   should-panic-added  a SURVIVING test gained `expectedFailure` /
+#                       `pytest.mark.xfail` / `pytest.xfail()` -- like
+#                       `#[should_panic]`, it turns a failing test into a pass
+#
+# Skips are compared PER SURVIVING TEST, not per file, deliberately differently
+# from Rust's file-level `#[ignore]` count: this repo's "no test, no ticket"
+# workflow adds NEW red repro tests wrapped in `open_defect(...)` to existing
+# files every day, and a new skipped test hides no coverage that existed. A skip
+# that lands on a test which existed at the base does. A skip placed on a class,
+# in its `setUp`/`setUpClass`, or at module level (`pytestmark`, a module-level
+# `pytest.skip`/`raise SkipTest`) counts against every test it covers. Removing
+# a skip is never reported -- that is strengthening.
+
+PY_SKIP_DECORATORS = {"skip", "skipIf", "skipUnless", "skipif", "open_defect"}
+PY_XFAIL_DECORATORS = {"expectedFailure", "xfail"}
+PY_SKIP_CALLS = {"skipTest", "skip"}
+PY_XFAIL_CALLS = {"xfail"}
+
+
+def is_py_test_file(path) -> bool:
+    if not path or not path.endswith(".py"):
+        return False
+    parts = path.replace("\\", "/").split("/")
+    base = parts[-1]
+    return base.startswith("test_") or base.endswith("_test.py") or "tests" in parts[:-1]
+
+
+def _dotted(node) -> str:
+    """`a.b.c` for a Name/Attribute chain (a Call is unwrapped to its func)."""
+    if isinstance(node, ast.Call):
+        node = node.func
+    names = []
+    while isinstance(node, ast.Attribute):
+        names.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        names.append(node.id)
+    return ".".join(reversed(names))
+
+
+def _py_marker_kind(expr) -> str | None:
+    """'skip' / 'xfail' / None for a decorator or `pytestmark` element."""
+    last = _dotted(expr).rpartition(".")[2]
+    if last in PY_SKIP_DECORATORS:
+        return "skip"
+    if last in PY_XFAIL_DECORATORS:
+        return "xfail"
+    return None
+
+
+def _py_body_markers(nodes) -> tuple:
+    """(skips, xfails) from calls/raises anywhere inside `nodes`, NOT descending
+    into nested function or class definitions (those are their own scope)."""
+    skips = xfails = 0
+    stack = list(nodes)
+    while stack:
+        n = stack.pop()
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            continue
+        if isinstance(n, ast.Call):
+            d = _dotted(n)
+            last = d.rpartition(".")[2]
+            # `self.skipTest(...)`, `pytest.skip(...)`, `unittest.skip(...)()`-style calls.
+            if last == "skipTest" or (last == "skip" and d.startswith("pytest")):
+                skips += 1
+            elif last in PY_XFAIL_CALLS and d.startswith("pytest"):
+                xfails += 1
+        if isinstance(n, ast.Raise) and n.exc is not None:
+            if _dotted(n.exc).rpartition(".")[2] == "SkipTest":
+                skips += 1
+        stack.extend(ast.iter_child_nodes(n))
+    return skips, xfails
+
+
+def _py_assert_count(nodes) -> int:
+    total = 0
+    for top in nodes:
+        for n in ast.walk(top):
+            if isinstance(n, ast.Assert):
+                total += 1
+            elif isinstance(n, ast.Call):
+                d = _dotted(n)
+                last = d.rpartition(".")[2]
+                if last.startswith("assert") or d in ("pytest.raises", "pytest.fail"):
+                    total += 1
+    return total
+
+
+def py_counts(src: str, path: str) -> dict:
+    """Test-surface counts of a Python test file, in the same shape as
+    `counts`, plus per-test skip/xfail maps (`fn_skips` / `fn_xfails`)."""
+
+    if not src:
+        return {"assertions": 0, "tests": 0, "ignores": 0, "should_panics": 0,
+                "fn_assertions": {}, "fn_skips": {}, "fn_xfails": {}}
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            tree = ast.parse(src, filename=path)
+    except (SyntaxError, ValueError) as exc:
+        raise Undetermined(f"{path}: Python test file does not parse: {exc}") from exc
+
+    fn_assertions: dict = {}
+    fn_skips: dict = {}
+    fn_xfails: dict = {}
+
+    def markers_of(decorators) -> tuple:
+        s = x = 0
+        for dec in decorators:
+            k = _py_marker_kind(dec)
+            if k == "skip":
+                s += 1
+            elif k == "xfail":
+                x += 1
+        return s, x
+
+    # Module-level skips cover every test in the file.
+    mod_s = mod_x = 0
+    module_stmts = []
+    for stmt in tree.body:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        module_stmts.append(stmt)
+        if isinstance(stmt, (ast.Assign, ast.AnnAssign)):
+            targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+            if any(isinstance(t, ast.Name) and t.id == "pytestmark" for t in targets) and stmt.value is not None:
+                vals = stmt.value.elts if isinstance(stmt.value, (ast.List, ast.Tuple)) else [stmt.value]
+                s, x = markers_of(vals)
+                mod_s += s
+                mod_x += x
+    s, x = _py_body_markers(module_stmts)
+    mod_s += s
+    mod_x += x
+
+    def visit(body, prefix: str, inh_s: int, inh_x: int) -> None:
+        for node in body:
+            if isinstance(node, ast.ClassDef):
+                s, x = markers_of(node.decorator_list)
+                for item in node.body:
+                    if (isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+                            and item.name in ("setUp", "setUpClass")):
+                        bs, bx = _py_body_markers(item.body)
+                        s += bs
+                        x += bx
+                visit(node.body, prefix + node.name + ".", inh_s + s, inh_x + x)
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test"):
+                name = prefix + node.name
+                s, x = markers_of(node.decorator_list)
+                bs, bx = _py_body_markers(node.body)
+                fn_assertions[name] = fn_assertions.get(name, 0) + _py_assert_count(node.body)
+                fn_skips[name] = fn_skips.get(name, 0) + inh_s + s + bs
+                fn_xfails[name] = fn_xfails.get(name, 0) + inh_x + x + bx
+
+    visit(tree.body, "", mod_s, mod_x)
+
+    # Count test functions the same way `visit` finds them (module + classes).
+    def count_tests(body) -> int:
+        c = 0
+        for node in body:
+            if isinstance(node, ast.ClassDef):
+                c += count_tests(node.body)
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test"):
+                c += 1
+        return c
+
+    n_tests = count_tests(tree.body)
+    return {
+        "assertions": _py_assert_count(tree.body),
+        "tests": n_tests,
+        "ignores": 0,  # Python skips are judged per surviving test (fn_skips)
+        "should_panics": 0,
+        "fn_assertions": fn_assertions,
+        "fn_skips": fn_skips,
+        "fn_xfails": fn_xfails,
+    }
+
+
+def py_marker_gains(before: dict, after: dict, key: str) -> list:
+    """`(name, before, after)` for every test present on BOTH sides whose
+    skip/xfail count went up."""
+    out = []
+    for name, n_before in sorted(before[key].items()):
+        n_after = after[key].get(name)
+        if n_after is not None and n_after > n_before:
+            out.append((name, n_before, n_after))
+    return out
+
+
+def py_findings_for(path: str, before: dict, after: dict) -> list:
+    out = []
+    losses = per_fn_losses(before["fn_assertions"], after["fn_assertions"])
+    if after["assertions"] < before["assertions"] or losses:
+        detail = "assertions {} -> {}".format(before["assertions"], after["assertions"])
+        if losses:
+            detail += "; weakened test fn(s): " + ", ".join(
+                "{}() {} -> {}".format(n, b, a) for n, b, a in losses
+            )
+        out.append((path, KIND_ASSERTION_REMOVED, detail))
+    if after["tests"] < before["tests"]:
+        out.append((path, KIND_TEST_REMOVED,
+                    "test functions {} -> {}".format(before["tests"], after["tests"])))
+    for key, kind, label in (
+        ("fn_skips", KIND_IGNORE_ADDED, "skip markers"),
+        ("fn_xfails", KIND_SHOULD_PANIC_ADDED, "expected-failure markers"),
+    ):
+        gains = py_marker_gains(before, after, key)
+        if gains:
+            out.append((path, kind, "{} added to existing test(s): {}".format(
+                label, ", ".join("{}() {} -> {}".format(n, b, a) for n, b, a in gains))))
+    return out
+
+
 # --- file contents on both sides ------------------------------------------
 
 
@@ -726,7 +965,7 @@ def scan(repo: str, base: str, base_was_explicit: bool, pending_msg=None) -> lis
     pairs = [
         (old, new)
         for (old, new) in changed_pairs(repo, merge_base)
-        if _is_rs(old) or _is_rs(new)
+        if _is_rs(old) or _is_rs(new) or is_py_test_file(old) or is_py_test_file(new)
     ]
 
     acked = acknowledgements(repo, merge_base, pending_msg)
@@ -736,11 +975,20 @@ def scan(repo: str, base: str, base_was_explicit: bool, pending_msg=None) -> lis
         rep = new or old  # attribute the finding to the surviving/current path
         before_src = blob_at(repo, merge_base, old) if old else ""
         after_src = worktree_content(repo, new) if new else ""
-        before = (
-            counts(test_surface(before_src, old), old) if before_src else counts("")
-        )
-        after = counts(test_surface(after_src, new), new) if after_src else counts("")
-        for p, kind, detail in findings_for(rep, before, after):
+        if is_py_test_file(old) or is_py_test_file(new):
+            # Python side(s). A side that is not a Python test file (a rename to
+            # a non-test name, or an `.rs` counterpart) contributes an EMPTY
+            # surface, so moving tests out of the scanned set reads as removal.
+            before = py_counts(before_src if is_py_test_file(old) else "", old or "")
+            after = py_counts(after_src if is_py_test_file(new) else "", new or "")
+            found = py_findings_for(rep, before, after)
+        else:
+            before = (
+                counts(test_surface(before_src, old), old) if before_src else counts("")
+            )
+            after = counts(test_surface(after_src, new), new) if after_src else counts("")
+            found = findings_for(rep, before, after)
+        for p, kind, detail in found:
             results.append(
                 {
                     "path": p,

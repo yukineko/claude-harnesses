@@ -124,7 +124,6 @@ class Backlog_e3d49aea(unittest.TestCase):
 
 
 class Backlog_911a93b8(unittest.TestCase):
-    @open_defect("911a93b8")
     def test_python_test_assertion_loss_is_reported(self):
         d = _scratch_repo()
         self.addCleanup(shutil.rmtree, d, True)

@@ -84,7 +84,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "autoflow"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "clap",
  "harness-core",
@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "backlog"
-version = "0.3.46"
+version = "0.3.47"
 dependencies = [
  "anyhow",
  "clap",
@@ -164,7 +164,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "blastguard"
-version = "0.2.127"
+version = "0.2.129"
 dependencies = [
  "globset",
  "harness-core",
@@ -292,7 +292,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "compass"
-version = "0.1.22"
+version = "0.1.23"
 dependencies = [
  "anyhow",
  "clap",
@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.243"
+version = "0.7.246"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -546,7 +546,7 @@ checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
 name = "fugu-router"
-version = "0.1.45"
+version = "0.1.46"
 dependencies = [
  "anyhow",
  "clap",
@@ -1297,7 +1297,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "specguard"
-version = "0.2.88"
+version = "0.2.89"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -1321,7 +1321,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "stuckguard"
-version = "0.1.41"
+version = "0.1.42"
 dependencies = [
  "anyhow",
  "chrono",

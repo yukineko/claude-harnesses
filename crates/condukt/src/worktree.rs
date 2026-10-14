@@ -1051,23 +1051,37 @@ fn git_diff_range(repo: &Path, from: &str, to: &str) -> String {
 }
 
 /// Abort an in-progress trial merge and say truthfully what state it left.
-/// `Ok(())` only when `git merge --abort` ran and succeeded; otherwise the
-/// detail of the failure (the repo may be left mid-merge).
+/// `Ok(())` when no merge is in progress afterwards: either `git merge --abort`
+/// succeeded, or it failed AND a probe shows MERGE_HEAD absent (git refused the
+/// trial before creating merge state, so there is nothing to abort and the tree
+/// is untouched). A merge still in progress, or a probe that cannot be run or
+/// returns an unexpected status, is `Err(detail)` (cannot-determine stays
+/// fail-closed: the repo may be left mid-merge).
 fn abort_trial_merge(repo: &Path) -> std::result::Result<(), String> {
-    match git_try(repo, &["merge", "--abort"]) {
-        Ok((true, _, _)) => Ok(()),
-        Ok((false, out, err)) => Err(format!("{} {}", out.trim(), err.trim()).trim().to_string()),
-        Err(e) => Err(format!("{e:#}")),
+    let detail = match git_try(repo, &["merge", "--abort"]) {
+        Ok((true, _, _)) => return Ok(()),
+        Ok((false, out, err)) => format!("{} {}", out.trim(), err.trim()).trim().to_string(),
+        Err(e) => format!("{e:#}"),
+    };
+    // `rev-parse -q --verify`: exit 0 = MERGE_HEAD present, 1 = absent.
+    match git_exit_code(repo, &["rev-parse", "-q", "--verify", "MERGE_HEAD"]) {
+        Ok(1) => Ok(()),
+        Ok(0) => Err(format!("{detail}; MERGE_HEAD is still present")),
+        Ok(c) => Err(format!(
+            "{detail}; MERGE_HEAD probe returned unexpected status {c}"
+        )),
+        Err(e) => Err(format!("{detail}; MERGE_HEAD probe failed: {e:#}")),
     }
 }
 
-/// Wording for the abort state, for inclusion in a fail-closed error.
+/// Self-contained sentence describing the trial-merge state, for a fail-closed
+/// error.
 fn abort_state_phrase(r: &std::result::Result<(), String>) -> String {
     match r {
-        Ok(()) => "the trial merge was aborted".to_string(),
+        Ok(()) => "The trial merge was aborted (no merge in progress).".to_string(),
         Err(d) => format!(
-            "the trial merge could NOT be aborted ({d}); the repository may be left \
-             mid-merge - run `git merge --abort`"
+            "The trial merge could NOT be aborted ({d}); the repository may be left \
+             mid-merge - run `git merge --abort`."
         ),
     }
 }
@@ -1171,8 +1185,8 @@ pub fn merge(
             let aborted = abort_state_phrase(&abort_trial_merge(repo));
             bail!(
                 "could not list unmerged paths after the trial merge of '{branch}' into \
-                 '{default_branch}' (`git ls-files --unmerged` failed: {e:#}); {aborted}, \
-                 the merge was NOT performed and nothing was recorded"
+                 '{default_branch}' (`git ls-files --unmerged` failed: {e:#}). {aborted} \
+                 The merge was NOT performed and nothing was recorded."
             );
         }
     };
@@ -1203,8 +1217,8 @@ pub fn merge(
                     let aborted = abort_state_phrase(&abort_trial_merge(repo));
                     bail!(
                         "could not list conflicted paths of '{branch}' vs '{default_branch}' \
-                         (`git diff --name-only` failed: {e:#}); {aborted}, \
-                         the merge was NOT performed and nothing was recorded"
+                         (`git diff --name-only` failed: {e:#}). {aborted} \
+                         The merge was NOT performed and nothing was recorded."
                     );
                 }
             };
@@ -1238,15 +1252,15 @@ pub fn merge(
             let state = abort_state_phrase(&aborted);
             bail!(
                 "could not record merge conflict '{conflict_id}': {e}; the merge of \
-                 '{branch}' into '{default_branch}' was NOT performed ({state}) and \
-                 the conflict is NOT on the review surface (`overwatch review-queue`)"
+                 '{branch}' into '{default_branch}' was NOT performed and \
+                 the conflict is NOT on the review surface (`overwatch review-queue`). {state}"
             );
         }
         if let Err(d) = aborted {
             bail!(
                 "conflict '{conflict_id}' was recorded but the trial merge of '{branch}' could \
                  NOT be aborted ({d}); the repository may be left mid-merge - run \
-                 `git merge --abort`"
+                 `git merge --abort`."
             );
         }
         return Ok(MergeOutcome::Conflict(conflict_id));

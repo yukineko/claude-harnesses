@@ -149,7 +149,6 @@ impl Fixture {
 }
 
 #[test]
-#[ignore = "backlog 41c837ab: RED repro"]
 fn failed_unmerged_task_is_not_promoted_to_verified_by_reconcile() {
     let fx = Fixture::new("red");
     fx.init_run("r1");

@@ -53,6 +53,7 @@ model: sonnet
       "confidence": "high | medium | low",
       "done_criteria": "検証で確認する合格条件 (具体的・観測可能に)",
       "reproduction_tests": "worktree 内で実行して pass/fail を確認できるコマンド (省略可)",
+      "kind": "fix | feature | chore | refactor | docs (省略可)",
       "expected_trajectory": {
         "mode": "strict | unordered | subsequence",
         "steps": [{ "tool": "Read | Edit | Bash | ... (worker が呼ぶことを期待する tool 名)" }]
@@ -84,6 +85,9 @@ model: sonnet
   TDD (red→green) ループを回す起点になり、verifier が同じコマンドで客観的に合否を確認する。
   UI テストや設計判断タスクなど実行不可能な場合は省略。
   例: `"cargo test -p condukt -- test_name"` / `"pytest tests/test_foo.py::test_case"`
+- `kind`: 既存の誤った挙動を直すタスクは `fix`、観測可能な新しい挙動を足すタスクは `feature`、それ以外
+  (整形・リネーム・文書・依存更新など挙動を変えないもの) は `chore` 等にする。`fix`/`feature` は
+  F→P 再現性ゲートの対象になり、worker が `tdd` で RED→GREEN を記録しない限り `verified` にできない。
 - `confidence`: このタスク分割・スコープ判断に対する自己評価。以下の基準で設定する。
   - **high**: 要件が明確で、`touched_files` と `done_criteria` を確信を持って記述できる。
   - **medium**: 概ね把握しているが、外部ライブラリの挙動や既存コードとの連携に不確かな部分がある。

@@ -203,6 +203,36 @@ fn parse_autonomous_env(raw: &str) -> Option<bool> {
     }
 }
 
+/// Default `[loop] max_iters` when config.toml does not set it.
+pub const DEFAULT_LOOP_MAX_ITERS: usize = 10;
+
+/// Resolve `[loop] max_iters` strictly from the raw result of reading
+/// config.toml, for the `condukt loop` iteration cap.
+///
+/// Unlike [`Config::load`] (which ignores an unreadable or unparseable file and
+/// keeps every default), the cap must not be guessed: a file that exists but
+/// cannot be read or parsed yields `Err`, and the caller refuses the iteration.
+/// Only an absent file, or a file that does not mention `max_iters`, resolves
+/// to [`DEFAULT_LOOP_MAX_ITERS`].
+pub fn resolve_loop_max_iters(read: std::io::Result<String>) -> Result<usize, String> {
+    let txt = match read {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(DEFAULT_LOOP_MAX_ITERS),
+        Err(e) => return Err(format!("config.toml unreadable: {e}")),
+    };
+    let fc =
+        toml::from_str::<FileConfig>(&txt).map_err(|e| format!("config.toml unparseable: {e}"))?;
+    Ok(fc
+        .loop_cfg
+        .and_then(|lc| lc.max_iters)
+        .unwrap_or(DEFAULT_LOOP_MAX_ITERS))
+}
+
+/// [`resolve_loop_max_iters`] applied to `<base_dir>/config.toml`.
+pub fn loop_max_iters_strict() -> Result<usize, String> {
+    resolve_loop_max_iters(std::fs::read_to_string(base_dir().join("config.toml")))
+}
+
 /// `~/.condukt` (falls back to `./.condukt` if there is no home dir). Thin
 /// wrapper over the shared base-dir resolution.
 pub fn base_dir() -> PathBuf {
@@ -264,7 +294,7 @@ impl Config {
             stuck_ttl_secs: 1800,
             build_command: None,
             deploy_command: None,
-            loop_max_iters: 10,
+            loop_max_iters: DEFAULT_LOOP_MAX_ITERS,
             autonomous: false,
             autonomy_source: harness_core::autonomy::Source::BuiltinDefault,
             consensus_enabled: false,
@@ -485,6 +515,31 @@ max_iters = 5
             Some("kubectl rollout restart deployment/api")
         );
         assert_eq!(lc.max_iters, Some(5));
+    }
+
+    #[test]
+    fn loop_max_iters_strict_reads_value_and_defaults_only_when_unset() {
+        assert_eq!(
+            resolve_loop_max_iters(Ok("[loop]\nmax_iters = 3\n".into())),
+            Ok(3)
+        );
+        assert_eq!(
+            resolve_loop_max_iters(Ok("[test]\ncommand = \"x\"\n".into())),
+            Ok(DEFAULT_LOOP_MAX_ITERS)
+        );
+        let absent = std::io::Error::new(std::io::ErrorKind::NotFound, "absent");
+        assert_eq!(
+            resolve_loop_max_iters(Err(absent)),
+            Ok(DEFAULT_LOOP_MAX_ITERS)
+        );
+    }
+
+    #[test]
+    fn loop_max_iters_strict_is_undetermined_when_config_unreadable_or_broken() {
+        let denied = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        assert!(resolve_loop_max_iters(Err(denied)).is_err());
+        assert!(resolve_loop_max_iters(Ok("[loop\nmax_iters = 3".into())).is_err());
+        assert!(resolve_loop_max_iters(Ok("[loop]\nmax_iters = \"lots\"\n".into())).is_err());
     }
 
     #[test]

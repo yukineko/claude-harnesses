@@ -288,6 +288,11 @@ enum Command {
         /// Failure count from the previous iteration (used for no-progress detection).
         #[arg(long)]
         prev_failures: Option<usize>,
+        /// Iteration cap for this invocation, overriding `[loop] max_iters` in
+        /// config.toml. An `--iteration` above the cap is refused without running
+        /// the cycle: stop=true, a stop_reason naming the cap, exit 1.
+        #[arg(long)]
+        max_iters: Option<usize>,
     },
     /// Durable async escalation channel: enqueue / list / resolve out-of-band
     /// questions in a per-project persistent store, so a blocked or GATED task
@@ -2505,25 +2510,54 @@ fn run_user(cmd: Command) -> Result<()> {
             module,
             iteration,
             prev_failures,
+            max_iters,
         } => {
             use crate::config::ModuleCycle;
             use crate::state::{loop_should_stop, run_cycle};
             let cycle = ModuleCycle::from_str(&module)
                 .ok_or_else(|| anyhow!("unknown module '{module}'; use server, client, or e2e"))?;
-            let result = run_cycle(&cfg, &cwd, cycle)?;
-            let (stop, stop_reason) = loop_should_stop(prev_failures, result.failure_count);
+            // The cap is enforced here, not in skill prose. A cap that cannot be
+            // determined (config.toml unreadable/unparseable and no --max-iters)
+            // refuses the iteration instead of running it uncapped.
+            let cap = match max_iters {
+                Some(n) => Ok(n),
+                None => config::loop_max_iters_strict(),
+            };
+            let refusal = match &cap {
+                Ok(n) if iteration > *n => Some(format!(
+                    "max iters reached: iteration {iteration} exceeds max_iters {n}"
+                )),
+                Ok(_) => None,
+                Err(e) => Some(format!("max iters undetermined: {e}")),
+            };
+            // A refused iteration runs no cycle, so failure_count is null (not
+            // observed) rather than a carried-over value.
+            let (failure_count, success, stop, stop_reason, output) = match refusal {
+                Some(reason) => (None, false, true, reason, String::new()),
+                None => {
+                    let result = run_cycle(&cfg, &cwd, cycle)?;
+                    let (stop, reason) = loop_should_stop(prev_failures, result.failure_count);
+                    (
+                        Some(result.failure_count),
+                        result.success,
+                        stop,
+                        reason.to_string(),
+                        result.output,
+                    )
+                }
+            };
             let out = serde_json::json!({
                 "iteration": iteration,
                 "module": module,
-                "failure_count": result.failure_count,
-                "success": result.success,
+                "failure_count": failure_count,
+                "success": success,
                 "stop": stop,
                 "stop_reason": stop_reason,
-                "output": result.output,
+                "output": output,
             });
             println!("{}", serde_json::to_string_pretty(&out)?);
             // Exit non-zero when not all tests pass so shell scripts can branch on it.
-            if !result.success && stop {
+            if !success && stop {
                 std::process::exit(1);
             }
         }

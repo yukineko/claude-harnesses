@@ -13,13 +13,13 @@
 //!
 //! Design invariant — two disjoint paths:
 //!   * [`run_instance`] is **pure / mockable**: given a generator and a
-//!     test-result source it opens no network and shells out to nothing. Every
-//!     test drives this path with canned mocks, so `cargo test -p benchkit` is
-//!     hermetic.
+//!     test-result source it opens no network and shells out to nothing. The
+//!     unit tests drive this path with canned mocks.
 //!   * [`run_instance_real`] is the **explicitly-gated** real path: it builds a
 //!     [`RealExecSource`] that shells out (git clone / git apply / pytest,
 //!     matching the `download` house pattern) and is reached *only* via
-//!     `benchkit run-instance --real`. No test constructs it.
+//!     `benchkit run-instance --real`. Tests reach it only through the binary
+//!     with fake git / python first on PATH (tests/prose_claims.rs).
 
 use std::collections::BTreeMap;
 
@@ -100,8 +100,8 @@ where
 
 /// Run one instance through the **real** exec path (git clone + git apply +
 /// pytest). This is the explicitly-gated entrypoint reached only via
-/// `benchkit run-instance --real`; no test constructs the [`RealExecSource`] it
-/// wires, so `cargo test` never touches git / pytest / the network.
+/// `benchkit run-instance --real`; tests reach it only through the binary with
+/// fake git / python first on PATH, never the real git / pytest / network.
 ///
 /// It is deliberately a thin composition: the real path is just
 /// [`run_instance`] with a [`RealExecSource`] plugged into the test-result seam,
@@ -148,7 +148,7 @@ impl TestResultSource for RealExecSource {
         use std::io::Write;
         use std::process::{Command, Stdio};
 
-        // Structured real path (gated — never reached from tests). Each step
+        // Structured real path (gated; tests reach it only with fake tools). Each step
         // shells out via std::process::Command per the house pattern.
         let workdir = std::env::temp_dir().join(format!("benchkit-real-{}", instance.instance_id));
 

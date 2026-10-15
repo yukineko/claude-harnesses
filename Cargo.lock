@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "backlog"
-version = "0.3.48"
+version = "0.3.49"
 dependencies = [
  "anyhow",
  "clap",
@@ -116,7 +116,7 @@ dependencies = [
 
 [[package]]
 name = "beacon"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "anyhow",
  "chrono",
@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.247"
+version = "0.7.251"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -424,7 +424,7 @@ dependencies = [
 
 [[package]]
 name = "difflog"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "anyhow",
  "chrono",
@@ -664,7 +664,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.53"
+version = "0.2.54"
 dependencies = [
  "anyhow",
  "chrono",
@@ -683,7 +683,7 @@ dependencies = [
 
 [[package]]
 name = "harness-status"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "anyhow",
  "clap",
@@ -874,7 +874,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "overwatch"
-version = "0.2.64"
+version = "0.2.66"
 dependencies = [
  "anyhow",
  "clap",
@@ -906,7 +906,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "playbook"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1095,7 +1095,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "replaykit"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "clap",
  "harness-core",
@@ -1123,7 +1123,7 @@ dependencies = [
 
 [[package]]
 name = "runbook"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1168,7 +1168,7 @@ dependencies = [
 
 [[package]]
 name = "schemaguard"
-version = "0.1.19"
+version = "0.1.20"
 dependencies = [
  "anyhow",
  "clap",
@@ -1296,7 +1296,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "specguard"
-version = "0.2.90"
+version = "0.2.94"
 dependencies = [
  "anyhow",
  "blastguard",

@@ -10,7 +10,17 @@ use crate::state::{self, Status};
 use std::path::PathBuf;
 
 pub fn run(cwd: &str) {
-    let cfg = Config::load();
+    // An empty status line reads as "no active run", so a configuration that
+    // cannot be loaded (config.toml unreadable/unparseable: the configured
+    // state_dir is unknown) is rendered as an explicit `unknown`, never as
+    // silence or as whatever the default store holds.
+    let cfg = match Config::load() {
+        Ok(c) => c,
+        Err(e) => {
+            println!("condukt run state unknown ({e})");
+            return;
+        }
+    };
     let cwd_path = if cwd.is_empty() {
         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
     } else {

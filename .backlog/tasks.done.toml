@@ -50998,3 +50998,731 @@ rev = 1
 [task.closure]
 reason = "discard"
 discard_reason = "no RED evidence recorded; user ruling 2026-10-15: items that could not show evidence are cancelled without audit (refile only with a failing repro test)"
+
+[[task]]
+id = "b8d4f503"
+title = "backlog done --test deadlocks: the red-rev test run blocks in write() because the parent does not drain the child's stdout/stderr pipe"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+Observed 2026-10-04 (session 64554c4d) on backlog 0.3.26: 'backlog done b5358f58 --test "python3 -m pytest scripts/test_guard_maintree_bash_b5358f58.py" --red-rev 47775a95 --reason fixed'. The child pytest (cwd $TMPDIR/backlog-red-<pid>-<ns>, checkout 47775a95) sat 13+ minutes at 0% CPU; macOS sample showed its main thread in write() in libsystem_kernel; lsof showed fds 1/2 as pipes (64 KiB / 16 KiB). The same test run directly takes 183.82s (17 passed, 338 subtests). The main session saw the same hang for 28+ minutes. Most likely the parent reads one pipe to EOF (or waits on the child) before draining the other, and a RED run with large failure output fills the buffer. Effect: any verbose RED makes the done --test closure path unusable, which pushes closures back to rulings. Needs a repro test: a fake test command that writes >64 KiB to stderr and fails at the red rev.
+
+Second observation 2026-10-04 (session 64554c4d): `backlog confirm a70d83f7 --repro-test "python3 -m pytest scripts/test_gate_bypass.py"` stalled 15+ min at 0% CPU (pytest child idle) — the same undrained pipe, on the confirm path too, not only done --red-rev. A first `done b5358f58 --test ... _verify.py` hung 28 min the same way. Workaround observed: shrink the output with `python3 -m pytest -q -x --tb=no -p no:cacheprovider <file>`; with it, confirm of a70d83f7 d3716b21 6cb94bff 26f6dd72 completed in seconds. That workaround only moves the threshold; the fix is to drain stdout/stderr concurrently (or to a file)."""
+created_at = 1791047240
+updated_at = 1792065626
+weight = 0.0
+issue_number = 1276
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1276"
+issue_closed_at = 1792065628
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_b8d4f503 -- --ignored"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003569
+detail = """
+exit 101: yuki/src/.harness-worktrees/session-1a4ac77f/crates/harness-core)
+   Compiling backlog v0.3.46 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.13s
+     Running tests/backlog_b8d4f503.rs (target/debug/deps/backlog_b8d4f503-b76ced300da0093f)
+error: test failed, to rerun pass `-p backlog --test backlog_b8d4f503`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p harness-core --test backlog_b8d4f503 -- --include-ignored"
+exit = 0
+passed = 5
+rev = "f2f40197daaa00aea89713d7e3d2d4ac4b846ed9"
+observed_at = 1792065604
+output_digest = "sha256:5e2ab43950edf2c327e1b8f98c6e06adbe0bcb9a9f567924e59ee1a4f0db4b23"
+excerpt = """
+
+running 5 tests
+test one_mib_on_stderr_exit_zero_is_known_and_complete ... ok
+test one_mib_on_stdout_exit_zero_is_known_and_complete ... ok
+test nonzero_exit_with_large_stdout_is_known_with_code_and_full_output ... ok
+test stderr_flood_then_stdout_flood_is_known_and_complete ... ok
+test stdout_flood_then_stderr_flood_is_known_and_complete ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/backlog_b8d4f503.rs (target/debug/deps/backlog_b8d4f503-df74249b31637957)
+"""
+
+[task.closure.red]
+rev = "6167234daddc3f7e68f56e6031b1557c50ae6c45"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "eef89aa5"
+title = "specguard ingest silently drops audit --json shard outputs (spec-audit step 5 reports findings as clean)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "specguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-15 at ea512575 (branch drift-specguard). read_ingest matches only drift-scope labels; outputs whose label matches no shard are dropped. Empty drift scope: exit 0 with no sentinel although the outputs carried needs_user yes. Non-empty scope: exit 4, so the documented audit-to-ingest path never succeeds."
+created_at = 1792063086
+updated_at = 1792065382
+weight = 0.0
+issue_number = 1351
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1351"
+issue_closed_at = 1792065384
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p specguard --test drift_ingest_contract -- --ignored c2_"
+rev = "ea5125758c95885e091dfd80dc3c56035868ac4b"
+observed_at = 1792063086
+detail = """
+exit 101: ocking waiting for file lock on package cache
+   Compiling specguard v0.2.90 (/Users/yuki/src/.harness-worktrees/drift-specguard/crates/specguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.90s
+     Running tests/drift_ingest_contract.rs (target/debug/deps/drift_ingest_contract-ba179de3efb54d66)
+error: test failed, to rerun pass `-p specguard --test drift_ingest_contract`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p specguard --test drift_ingest_contract -- --include-ignored c2_"
+exit = 0
+passed = 2
+rev = "806b42f693dd153df2247badfc9ce8f1e1358a80"
+observed_at = 1792065361
+output_digest = "sha256:12f28f21ec31949a17a583fca3b16fc17a481706b856ba0bc731fc8d9af9b01e"
+excerpt = """
+
+running 2 tests
+test c2_audit_json_outputs_fed_to_ingest_as_documented_must_not_be_lost ... ok
+test c2_ingest_with_unmatched_labels_and_empty_scope_must_not_report_clean ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.11s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/drift_ingest_contract.rs (target/debug/deps/drift_ingest_contract-1c1c48615dedad71)
+"""
+
+[task.closure.red]
+rev = "ea5125758c95885e091dfd80dc3c56035868ac4b"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "42dd34a8"
+title = "specguard run.md / spec-audit.md ingest sections omit exit 5 (unratified) and exit 2 (usage)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "specguard",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-15 at ea512575. ingest exits 5 on an unratified spec (observed by c1_ingest_really_exits_5_when_unratified); both instruction files branch on 0/3/4 only."
+created_at = 1792063100
+updated_at = 1792065401
+weight = 0.0
+issue_number = 1352
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1352"
+issue_closed_at = 1792065403
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p specguard --test drift_ingest_contract -- --ignored c1_ingest_instructions_handle_every_ingest_exit_code"
+rev = "ea5125758c95885e091dfd80dc3c56035868ac4b"
+observed_at = 1792063100
+detail = """
+exit 101: est_instructions_handle_every_ingest_exit_code
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/drift_ingest_contract.rs (target/debug/deps/drift_ingest_contract-ba179de3efb54d66)
+error: test failed, to rerun pass `-p specguard --test drift_ingest_contract`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p specguard --test drift_ingest_contract -- --include-ignored c1_ingest_instructions_handle_every_ingest_exit_code"
+exit = 0
+passed = 1
+rev = "806b42f693dd153df2247badfc9ce8f1e1358a80"
+observed_at = 1792065385
+output_digest = "sha256:1572321c4b3fa1116a2e4f042656b98335dfeb1a8f6a0231ac45f0c632e33c4e"
+excerpt = """
+
+running 1 test
+test c1_ingest_instructions_handle_every_ingest_exit_code ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/drift_ingest_contract.rs (target/debug/deps/drift_ingest_contract-1c1c48615dedad71)
+"""
+
+[task.closure.red]
+rev = "ea5125758c95885e091dfd80dc3c56035868ac4b"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "039f3502"
+title = "condukt-loop SKILL.md documents flags the binary lacks (--run, --max-iters) and omits the emitted module key"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-15 at b6ec1bf4 (branch drift-condukt): 6 unknown flags of 119 condukt invocations, all in skills/condukt-loop/SKILL.md."
+created_at = 1792063202
+updated_at = 1792065700
+weight = 0.0
+issue_number = 1353
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1353"
+issue_closed_at = 1792065703
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test drift_c3_doc_cli_flags -- --ignored"
+rev = "b6ec1bf486df59cec2d4c000001ff46b5cc36cf7"
+observed_at = 1792063202
+detail = """
+exit 101: d; 0 measured; 0 filtered out; finished in 1.03s
+
+   Compiling condukt v0.7.247 (/Users/yuki/src/.harness-worktrees/drift-condukt/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.42s
+     Running tests/drift_c3_doc_cli_flags.rs (target/debug/deps/drift_c3_doc_cli_flags-e630e7fc38582cdd)
+error: test failed, to rerun pass `-p condukt --test drift_c3_doc_cli_flags`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test drift_c3_doc_cli_flags -- --include-ignored"
+exit = 0
+passed = 2
+rev = "3ab920f7b869a66e512ad23b95be403fc1b661dc"
+observed_at = 1792065674
+output_digest = "sha256:e93965405fe6d024bea1a67a6bc99b146517c2b5fb3582e929491a36e6c02aa8"
+excerpt = """
+
+running 2 tests
+test loop_skill_output_example_lists_every_emitted_key ... ok
+test documented_condukt_flags_exist_in_the_binary ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.08s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/drift_c3_doc_cli_flags.rs (target/debug/deps/drift_c3_doc_cli_flags-81803bd20cbdac7a)
+"""
+
+[task.closure.red]
+rev = "b6ec1bf486df59cec2d4c000001ff46b5cc36cf7"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "a1b4cac1"
+title = "condukt SKILL.md F->P oracle section contradicts oracle.rs (required gated on reproduction_tests; missing tdd said to fall back) and the interpreter schema cannot carry kind"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-15 at b6ec1bf4. SKILL.md ~852/~855 vs src/oracle.rs ~155/~191; agents/condukt-interpreter.md schema lacks kind and forbids extra keys, so the F->P gate is unreachable from an interpreter decomposition."
+created_at = 1792063209
+updated_at = 1792065732
+weight = 0.0
+issue_number = 1354
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1354"
+issue_closed_at = 1792065735
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test drift_c4_oracle_doc -- --ignored"
+rev = "b6ec1bf486df59cec2d4c000001ff46b5cc36cf7"
+observed_at = 1792063209
+detail = """
+exit 101:  0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+   Compiling condukt v0.7.247 (/Users/yuki/src/.harness-worktrees/drift-condukt/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running tests/drift_c4_oracle_doc.rs (target/debug/deps/drift_c4_oracle_doc-625b7b63a74d8755)
+error: test failed, to rerun pass `-p condukt --test drift_c4_oracle_doc`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test drift_c4_oracle_doc -- --include-ignored"
+exit = 0
+passed = 4
+rev = "3ab920f7b869a66e512ad23b95be403fc1b661dc"
+observed_at = 1792065703
+output_digest = "sha256:6e921eddb16ae216376758244d7333de76f912941c04e283f8e70b55d9ce3d33"
+excerpt = """
+
+running 4 tests
+test interpreter_output_schema_can_carry_kind ... ok
+test skill_does_not_say_missing_tdd_degrades_to_fallback_true ... ok
+test skill_required_bullet_does_not_gate_on_reproduction_tests ... ok
+test binary_missing_tdd_blocks_regardless_of_reproduction_tests ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.94s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/drift_c4_oracle_doc.rs (target/debug/deps/drift_c4_oracle_doc-6a1e12430788fa5c)
+"""
+
+[task.closure.red]
+rev = "b6ec1bf486df59cec2d4c000001ff46b5cc36cf7"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "43fede25"
+title = "condukt [loop] max_iters is parsed but never enforced: condukt loop accepts any iteration"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-15 at b6ec1bf4: --iteration 3 under max_iters=2 exits 0 with stop:false; config.rs:324 sets it, nothing in src reads it."
+created_at = 1792063211
+updated_at = 1792065762
+weight = 0.0
+issue_number = 1355
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1355"
+issue_closed_at = 1792065766
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test drift_b1_loop_cap -- --ignored"
+rev = "b6ec1bf486df59cec2d4c000001ff46b5cc36cf7"
+observed_at = 1792063211
+detail = """
+exit 101: ailed; 0 ignored; 0 measured; 0 filtered out; finished in 0.58s
+
+   Compiling condukt v0.7.247 (/Users/yuki/src/.harness-worktrees/drift-condukt/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running tests/drift_b1_loop_cap.rs (target/debug/deps/drift_b1_loop_cap-7d2c6f9f0c49f20f)
+error: test failed, to rerun pass `-p condukt --test drift_b1_loop_cap`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test drift_b1_loop_cap -- --include-ignored"
+exit = 0
+passed = 1
+rev = "3ab920f7b869a66e512ad23b95be403fc1b661dc"
+observed_at = 1792065735
+output_digest = "sha256:80e87bd09b646307ff4f825d9911484929d31eb0182436e9cd33a9b41ade8639"
+excerpt = """
+
+running 1 test
+test loop_refuses_iteration_beyond_configured_max_iters ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/drift_b1_loop_cap.rs (target/debug/deps/drift_b1_loop_cap-703b7bc5bc8ddfe8)
+"""
+
+[task.closure.red]
+rev = "b6ec1bf486df59cec2d4c000001ff46b5cc36cf7"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "aedae4e1"
+title = "specguard: same-day drift ingest overwrites the spec-audit report (shared reports/<date>.md)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "report::paths gives both finish and finish_audit reports/<date>.md (plain fs::write); the audit sentinel's report: line then points at the drift report. RED 6ee9a9ad (2026-10-15)."
+created_at = 1792066422
+updated_at = 1792068130
+weight = 0.0
+issue_number = 1356
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1356"
+issue_closed_at = 1792068133
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p specguard --test findings_20261015 -- --ignored audit_report_survives_a_same_day_drift_ingest"
+rev = "6ee9a9ad276aadb5f4f0828b3577e1b37b057d3c"
+observed_at = 1792066422
+detail = """
+exit 101: d; 0 ignored; 0 measured; 2 filtered out; finished in 1.27s
+
+   Compiling specguard v0.2.92 (/Users/yuki/src/.harness-worktrees/findings-red/crates/specguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.22s
+     Running tests/findings_20261015.rs (target/debug/deps/findings_20261015-c5cac7016653bcf6)
+error: test failed, to rerun pass `-p specguard --test findings_20261015`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p specguard --test findings_20261015 -- --include-ignored audit_report_survives_a_same_day_drift_ingest"
+exit = 0
+passed = 1
+rev = "f94105821f22af9ab7ef98994e948548541a1c77"
+observed_at = 1792068111
+output_digest = "sha256:4ded29885bf6446264fe19312cf19bbd459a7c13afe6dd3f1299e84470784281"
+excerpt = """
+
+running 1 test
+test audit_report_survives_a_same_day_drift_ingest ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.92s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/findings_20261015.rs (target/debug/deps/findings_20261015-bb10a7235d1c5b7d)
+"""
+
+[task.closure.red]
+rev = "6ee9a9ad276aadb5f4f0828b3577e1b37b057d3c"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "6f9a4ce6"
+title = "specguard: drift finish drops the pending sentinel's covers ids"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "main.rs finish writes the sentinel with only emit_drift_findings covers; finish_audit merges sentinel_covered_ids(prev), finish does not. RED 6ee9a9ad (2026-10-15)."
+created_at = 1792066428
+updated_at = 1792068150
+weight = 0.0
+issue_number = 1357
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1357"
+issue_closed_at = 1792068153
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p specguard --test findings_20261015 -- --ignored drift_sentinel_keeps_pending_audit_covers"
+rev = "6ee9a9ad276aadb5f4f0828b3577e1b37b057d3c"
+observed_at = 1792066428
+detail = """
+exit 101: 
+
+
+failures:
+    drift_sentinel_keeps_pending_audit_covers
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 1.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/findings_20261015.rs (target/debug/deps/findings_20261015-c5cac7016653bcf6)
+error: test failed, to rerun pass `-p specguard --test findings_20261015`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p specguard --test findings_20261015 -- --include-ignored drift_sentinel_keeps_pending_audit_covers"
+exit = 0
+passed = 1
+rev = "f94105821f22af9ab7ef98994e948548541a1c77"
+observed_at = 1792068133
+output_digest = "sha256:1e666cc0d9648793175bf6eb80fa506dab1588b760550a15405ef5ad2ce59389"
+excerpt = """
+
+running 1 test
+test drift_sentinel_keeps_pending_audit_covers ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.89s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/findings_20261015.rs (target/debug/deps/findings_20261015-bb10a7235d1c5b7d)
+"""
+
+[task.closure.red]
+rev = "6ee9a9ad276aadb5f4f0828b3577e1b37b057d3c"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "d7eb5262"
+title = "specguard: README ingest usage omits --kind and --filter"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = "README.md and README.ja.md ingest usage lines predate the --kind/--filter flags. RED 6ee9a9ad (2026-10-15)."
+created_at = 1792066431
+updated_at = 1792068179
+weight = 0.0
+issue_number = 1358
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1358"
+issue_closed_at = 1792068182
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p specguard --test findings_20261015 -- --ignored readme_ingest_usage_lists_every_ingest_flag"
+rev = "6ee9a9ad276aadb5f4f0828b3577e1b37b057d3c"
+observed_at = 1792066431
+detail = """
+exit 101: 
+failures:
+    readme_ingest_usage_lists_every_ingest_flag
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.51s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/findings_20261015.rs (target/debug/deps/findings_20261015-c5cac7016653bcf6)
+error: test failed, to rerun pass `-p specguard --test findings_20261015`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p specguard --test findings_20261015 -- --include-ignored readme_ingest_usage_lists_every_ingest_flag"
+exit = 0
+passed = 1
+rev = "f94105821f22af9ab7ef98994e948548541a1c77"
+observed_at = 1792068154
+output_digest = "sha256:8f3ac6d59cf0191ad81258801fbf5ba7210db5fd6d3ed2bd7237c6c123482703"
+excerpt = """
+
+running 1 test
+test readme_ingest_usage_lists_every_ingest_flag ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.48s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/findings_20261015.rs (target/debug/deps/findings_20261015-bb10a7235d1c5b7d)
+"""
+
+[task.closure.red]
+rev = "6ee9a9ad276aadb5f4f0828b3577e1b37b057d3c"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "55183589"
+title = "condukt: Config::load silently drops an unparseable config.toml (schedule ignores shared_globs)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "config.rs Config::load: if let Ok(read) / if let Ok(parse) with no else; schedule then runs a shared-glob task in parallel, exit 0, no warning. Other consumers: editgate, subagent-stop, lock, runtime_conflict, policy autonomy, statusline, restore, diffrisk_record. RED 6ee9a9ad (2026-10-15)."
+created_at = 1792066433
+updated_at = 1792068207
+weight = 0.0
+issue_number = 1359
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1359"
+issue_closed_at = 1792068209
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test findings_20261015 -- --ignored unparseable_config_does_not_silently_drop_shared_globs_in_schedule"
+rev = "6ee9a9ad276aadb5f4f0828b3577e1b37b057d3c"
+observed_at = 1792066433
+detail = """
+exit 101: failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.90s
+
+   Compiling condukt v0.7.249 (/Users/yuki/src/.harness-worktrees/findings-red/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.94s
+     Running tests/findings_20261015.rs (target/debug/deps/findings_20261015-c5d403d718a6400c)
+error: test failed, to rerun pass `-p condukt --test findings_20261015`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test findings_20261015 -- --include-ignored unparseable_config_does_not_silently_drop_shared_globs_in_schedule"
+exit = 0
+passed = 1
+rev = "f94105821f22af9ab7ef98994e948548541a1c77"
+observed_at = 1792068183
+output_digest = "sha256:44b1061ed7be63cc483b0e683418c5f5d15c874a0c46eb934f359b049a7571c6"
+excerpt = """
+
+running 1 test
+test unparseable_config_does_not_silently_drop_shared_globs_in_schedule ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.77s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/findings_20261015.rs (target/debug/deps/findings_20261015-4df7ec89fc140c44)
+"""
+
+[task.closure.red]
+rev = "6ee9a9ad276aadb5f4f0828b3577e1b37b057d3c"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "d6c980c1"
+title = "condukt: count_test_failures reads a failing multi-binary cargo run as all-pass and pytest all-failed as 1"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "state.rs count_test_failures returns on the first 'M failed' of the first test result line (0 for an ok binary) so a run exiting 101 gets stop_reason 'all tests pass'; pytest branch requires 'passed' on the line so '7 failed in' falls back to 1. RED 6ee9a9ad (2026-10-15); second test: pytest_all_failed_summary_counts_every_failure."
+created_at = 1792066442
+updated_at = 1792068233
+weight = 0.0
+issue_number = 1360
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1360"
+issue_closed_at = 1792068236
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test findings_20261015 -- --ignored summary"
+rev = "6ee9a9ad276aadb5f4f0828b3577e1b37b057d3c"
+observed_at = 1792066442
+detail = """
+exit 101: _all_pass
+    pytest_all_failed_summary_counts_every_failure
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.60s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/findings_20261015.rs (target/debug/deps/findings_20261015-c5d403d718a6400c)
+error: test failed, to rerun pass `-p condukt --test findings_20261015`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test findings_20261015 -- --include-ignored summary"
+exit = 0
+passed = 2
+rev = "f94105821f22af9ab7ef98994e948548541a1c77"
+observed_at = 1792068210
+output_digest = "sha256:d7447c93ce85223b21042efe0f600c75e6a8bc95a9b1bac395c97ac7d6b791a6"
+excerpt = """
+
+running 2 tests
+test pytest_all_failed_summary_counts_every_failure ... ok
+test cargo_multi_binary_summary_is_not_read_as_all_pass ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.79s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s
+     Running tests/findings_20261015.rs (target/debug/deps/findings_20261015-4df7ec89fc140c44)
+"""
+
+[task.closure.red]
+rev = "6ee9a9ad276aadb5f4f0828b3577e1b37b057d3c"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "3ec5851b"
+title = "condukt-loop SKILL.md: verbatim 'condukt loop --module server' documented as looping at most 10 times"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = "One invocation runs one cycle and --iteration defaults to 1, so the verbatim command is never capped (11 invocations = 11 cycles). RED 6ee9a9ad (2026-10-15)."
+created_at = 1792066444
+updated_at = 1792068256
+weight = 0.0
+issue_number = 1361
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1361"
+issue_closed_at = 1792068259
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test findings_20261015 -- --ignored documented_server_loop_cap_holds_for_the_documented_command"
+rev = "6ee9a9ad276aadb5f4f0828b3577e1b37b057d3c"
+observed_at = 1792066444
+detail = """
+exit 101:  documented_server_loop_cap_holds_for_the_documented_command
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.73s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/findings_20261015.rs (target/debug/deps/findings_20261015-c5d403d718a6400c)
+error: test failed, to rerun pass `-p condukt --test findings_20261015`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test findings_20261015 -- --include-ignored documented_server_loop_cap_holds_for_the_documented_command"
+exit = 0
+passed = 1
+rev = "f94105821f22af9ab7ef98994e948548541a1c77"
+observed_at = 1792068236
+output_digest = "sha256:83c1f36b15033ed051cfe5cff82200b8e28c9f93008e8f3594b5a6e28a702896"
+excerpt = """
+
+running 1 test
+test documented_server_loop_cap_holds_for_the_documented_command ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/findings_20261015.rs (target/debug/deps/findings_20261015-4df7ec89fc140c44)
+"""
+
+[task.closure.red]
+rev = "6ee9a9ad276aadb5f4f0828b3577e1b37b057d3c"
+exit = 101
+kind = "behavioural"

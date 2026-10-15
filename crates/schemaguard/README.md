@@ -1,30 +1,15 @@
-# schemaguard
+- `check --schema <name>`: validate a JSON value read from `--file <path>` or stdin against a named schema [test: crates/schemaguard/tests/prose_claims.rs::claim_check_file_input].
+  When the input parses, it prints `{valid, schema, errors[], undetermined[], not_checked[]}` (`undetermined` is omitted on a clean verdict) [test: crates/schemaguard/tests/prose_claims.rs::claim_check_output_keys].
+  Exit `0` valid, `1` schema violations, `2` parse error / unknown schema / a declared check could not be applied and no violation was found [test: crates/schemaguard/tests/prose_claims.rs::claim_check_exit_codes] [test: crates/schemaguard/tests/prose_claims.rs::claim_undetermined_exit_codes].
+- `metrics`: print reject counts per schema from `~/.schemaguard/rejects.jsonl` (`--json` for machine-readable) [test: crates/schemaguard/tests/prose_claims.rs::claim_metrics_reads_store].
+  A count is not the number of rejected checks: one `check` with two field violations adds `2`, a parse failure adds `1` [test: crates/schemaguard/tests/prose_claims.rs::claim_metrics_sums_violations].
+  Exit `0` when the store is absent or readable; exit `2` (stdout `{"status":"unknown",...}` with `--json`) when the store exists but cannot be read or has a malformed line [test: crates/schemaguard/tests/prose_claims.rs::claim_metrics_exit].
+- `list`: List known schema names; exit `0` [test: crates/schemaguard/tests/integration.rs::list_prints_known_schema_names].
 
-Schema-validation gate for LLM structured outputs at source→executor
-boundaries. When one stage of the harness hands a JSON payload to the next
-(a decomposition, an episode record, a playbook, a scout measure), schemaguard
-validates it against a *named, declared* schema, emits a structured error so the
-producer can re-ask exactly once, and counts every reject to metrics — so a
-silently-dropped or malformed payload becomes observable instead of vanishing.
+Once the schema name resolves, `check` prints a single JSON verdict object on stdout, including for unreadable or unparseable input [test: crates/schemaguard/tests/prose_claims.rs::claim_check_single_json_stdout].
+An unknown schema, or a missing `--schema`, prints nothing on stdout and exits `2` [test: crates/schemaguard/tests/prose_claims.rs::claim_check_single_json_stdout].
 
-Subscription-native: one bundled Rust binary, **no API key**. It's a plain CLI,
-not a lifecycle hook — call it wherever a structured handoff happens and branch
-on its exit code.
-
-## What it does
-
-| Subcommand | What it does | Exit codes |
-|---|---|---|
-| `check --schema <name>` | Validate a JSON value (`--file <path>` or stdin) against a named schema; print `{valid, schema, errors[], undetermined[], not_checked[]}` | `0` valid · `1` schema violations · `2` parse error / unknown schema / a declared check could not be applied |
-| `metrics` | Print reject counts per schema from `~/.schemaguard/rejects.jsonl` (`--json` for machine-readable) | `0` |
-| `list` | List known schema names | `0` |
-
-### Verdict schema (`check` output)
-
-`check` always prints a single JSON verdict object on stdout. There are two
-shapes, keyed on how far validation got:
-
-- **Valid, field-invalid, or undetermined** (JSON parsed, schema resolved):
+- **Valid, field-invalid, or undetermined** (JSON parsed, schema resolved): [test: crates/schemaguard/tests/prose_claims.rs::claim_check_output_keys]
 
   ```json
   {
@@ -36,73 +21,49 @@ shapes, keyed on how far validation got:
   }
   ```
 
-  `errors[]` is empty when `valid` is `true` (and `undetermined` is omitted on
-  that arm, since a clean verdict has none by construction). When `valid` is
-  `false` each `errors[]` entry is `{path, problem}` — a JSON-path into the
-  payload plus a human-readable problem — and this is the re-ask contract the
-  producer feeds back to the model.
+  `errors[]` is empty when `valid` is `true`, and `undetermined` is omitted on that arm [test: crates/schemaguard/tests/prose_claims.rs::claim_clean_arm_shape].
+  When `valid` is `false` each `errors[]` entry is `{path, problem}` — a path into the payload such as `tasks[0].id` plus a non-empty problem text [test: crates/schemaguard/tests/prose_claims.rs::claim_errors_entry_path_problem].
 
-  The three arrays are the gate's three answers, kept apart on purpose:
+  - `errors[]` — the check **ran and failed** [test: crates/schemaguard/tests/undetermined_probe.rs::missing_required_name_exits_one].
+  - `undetermined[]` — a declared constraint the engine **could not apply** to the value it was handed (for example an `items` sub-schema against a non-array) [test: crates/schemaguard/tests/prose_claims.rs::claim_undetermined_exit_codes].
+  - "Could not check" is not "passed": a verdict with an `undetermined[]` entry never exits `0` [test: crates/schemaguard/tests/prose_claims.rs::claim_undetermined_exit_codes].
+    It exits `2` when `errors[]` is empty and `1` when `errors[]` is non-empty too [test: crates/schemaguard/tests/prose_claims.rs::claim_undetermined_exit_codes].
+  - `not_checked[]` — checks **deliberately not performed**, each entry `{path, reason}` with a non-empty reason: [test: crates/schemaguard/tests/prose_claims.rs::claim_not_checked_entry_reason]
+    - an absent `required: false` field (its type/enum/items constraints were never evaluated), [test: crates/schemaguard/tests/integration.rs::valid_verdict_names_the_declared_checks_it_did_not_perform]
+    - a `Ty::Any` field (no type check), [test: crates/schemaguard/src/schema.rs::any_type_is_waived_not_undetermined]
+    - an array with no `items` schema, [test: crates/schemaguard/tests/prose_claims.rs::claim_array_without_items_not_checked]
+    - and any key the schema does not declare (unknown extra fields are allowed) [test: crates/schemaguard/src/schema.rs::waived_checks_do_not_block].
+  - `not_checked[]` entries do **not** block [test: crates/schemaguard/src/schema.rs::waived_checks_do_not_block].
 
-  - `errors[]` — the check **ran and failed**.
-  - `undetermined[]` — a declared constraint the engine **could not apply** to
-    the value it was handed (e.g. an `items` sub-schema against a non-array).
-    "Could not check" is not "passed": this exits `2`, never `0`.
-  - `not_checked[]` — checks **deliberately not performed**, each with the
-    declaration that makes it deliberate: an absent `required: false` field
-    (its type/enum/items constraints were never evaluated), a `Ty::Any` field
-    (no type check), an array with no `items` schema, and any key the schema
-    does not declare (unknown extra fields are allowed). These do **not** block
-    — they are printed so that `"valid": true` with `"errors": []` cannot be
-    read as "every declared constraint was evaluated and passed" when some were
-    never evaluated at all.
-
-- **Input failure** (unreadable stdin/file or unparseable JSON): no per-field
-  detail is available, so the verdict is
+- **Input failure** (unreadable stdin/file or unparseable JSON): the verdict is [test: crates/schemaguard/tests/prose_claims.rs::claim_input_failure_shape]
 
   ```json
   { "valid": false, "error": "<message>" }
   ```
 
-  Note the singular `error` (a string) rather than the plural `errors` array.
+  Note the singular `error` (a string) rather than the plural `errors` array [test: crates/schemaguard/tests/prose_claims.rs::claim_input_failure_shape].
 
-An **unknown schema** is reported earlier, before any input is read: a plain
-message goes to stderr (not a JSON verdict on stdout) and the process exits `2`.
+An **unknown schema** is reported earlier, before any input is read: a plain message goes to stderr (not a JSON verdict on stdout) and the process exits `2` [test: crates/schemaguard/tests/prose_claims.rs::claim_unknown_schema_stderr].
 
-Exit codes: `0` (`valid:true`), `1` (`valid:false` with `errors[]`), `2` (input
-failure `{valid:false, error}` on stdout, unknown schema on stderr, or
-`valid:false` with a non-empty `undetermined[]`). Parse failures, field
-violations and undetermined checks are all counted as rejects in `metrics`.
+Parse failures, field violations and undetermined checks are all counted as rejects in `metrics`; a clean check is not [test: crates/schemaguard/tests/prose_claims.rs::claim_rejects_counted].
 
-Declared schemas: `decomposition`, `episode`, `playbook`, `scout-measure`,
-`verdict` (condukt's consensus verdict shape), plus `undetermined-probe`, a
-probe schema that exists to exercise the undetermined (exit `2`) path end to
-end (see `schemaguard list`).
+Declared schemas: `decomposition`, `episode`, `playbook`, `scout-measure`, `verdict`, and `undetermined-probe` (see `schemaguard list`) [test: crates/schemaguard/tests/prose_claims.rs::claim_list_exact_names].
 
-## Install (plugin)
+The plugin bundles the `bin/schemaguard` launcher and declares no lifecycle hooks [test: crates/schemaguard/tests/prose_claims.rs::claim_plugin_no_hooks].
 
-Installed via the plugin marketplace, the bundled `bin/schemaguard` is on hand
-for any skill or hook that produces structured output — there are no lifecycle
-hooks to wire. Invoke `schemaguard check --schema <name>` at a handoff and act
-on the exit code (re-ask on `1`/`2`).
-
-## Standalone (cargo)
+Invoke `schemaguard check --schema <name>` at a handoff and act on the exit code (re-ask on `1`/`2`) [test: crates/schemaguard/tests/prose_claims.rs::claim_check_exit_codes].
 
 ```sh
 cargo install --path .
-schemaguard list                              # show declared schema names
-echo '{...}' | schemaguard check --schema decomposition   # validate stdin
-schemaguard check --schema episode --file out.json        # validate a file
-schemaguard metrics --json                    # reject counts per schema
+schemaguard list
+echo '{...}' | schemaguard check --schema decomposition   # validate stdin [test: crates/schemaguard/tests/integration.rs::check_valid_decomposition_exits_zero]
+schemaguard check --schema episode --file out.json
+schemaguard metrics --json
 ```
-
-## Build
 
 ```sh
 cargo test
 ```
 
-Only the `bin/schemaguard` launcher is committed; the per-platform
-`bin/schemaguard-<os>-<arch>` binaries are git-ignored and are built and placed
-into the installed plugin by `scripts/rollout-plugins.sh`, so end users need
-neither cargo nor an API key.
+Only the `bin/schemaguard` launcher is committed; the per-platform `bin/schemaguard-darwin-*` and `bin/schemaguard-linux-*` binaries are git-ignored, while the `bin/schemaguard-windows-*.exe` names are not [test: crates/schemaguard/tests/prose_claims.rs::claim_launcher_only_committed].
+They are built and copied by `scripts/rebuild-plugins.sh`, which `scripts/rollout-plugins.sh` runs [test: crates/schemaguard/tests/prose_claims.rs::claim_launcher_only_committed].

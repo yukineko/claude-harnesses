@@ -851,22 +851,23 @@ condukt state check-oracle --run "$RID" --task "<id>"
 # → {"required":bool,"valid_fp_oracle":bool,"fallback":bool,"transition":"fail_to_pass|fail_to_fail|pass_to_pass|pass_to_fail","reason":"..."}
 ```
 これは advisory な信号で常に exit 0 (JSON を出すだけでそれ自体はゲートしない)。フィールドの意味:
-- `required`: タスクの `kind` が `fix`/`feature` (大小無視) かつ `reproduction_tests` を持つときのみ true。
+- `required`: タスクの `kind` が `fix`/`feature` (大小無視) なら true、それ以外は false [test: crates/condukt/src/oracle.rs::check_oracle_non_fix_feature_task_is_still_exempted]。
+  再現コマンドを宣言したかどうかは、この値を変えない [test: crates/condukt/src/oracle.rs::check_oracle_fix_or_feature_without_reproduction_tests_is_not_exempted]。
 - `valid_fp_oracle`: `tdd oracle --task <id>` の判定。RED→GREEN が `fail_to_pass` のときだけ true
   (`fail_to_fail`/`pass_to_pass`/`pass_to_fail` はすべて false)。
-- `fallback`: true なら「この判定は信用できない、または対象外」= 従来の検証ゲート
-  (`state check-criteria` → verifier agent) にそのまま委ねてよい、という意味。`tdd` が PATH に無い・
-  spawn 失敗・stdout が空/壊れている、または対象外タスク (kind が fix/feature でない、
-  `reproduction_tests` が無い) はすべて fail-soft に `fallback:true` へ degrade する (パニックしない、
-  ターンを壊さない)。
+- `fallback`: true のときだけ判定を従来の検証ゲート (`state check-criteria` → verifier agent) に委ねる [test: crates/condukt/src/state.rs::enforce_fp_gate_allows_on_fallback_even_if_required]。
+  kind が fix/feature でないタスクは true になる [test: crates/condukt/src/oracle.rs::not_required_falls_back_immediately]。
+  `tdd` が見つからない・起動できない・非0終了したときは判定不能として
+  `required:true, fallback:false, valid_fp_oracle:false` になり、従来ゲートには委ねない [test: crates/condukt/tests/drift_c4_oracle_doc.rs::binary_missing_tdd_blocks_regardless_of_reproduction_tests] [test: crates/condukt/src/oracle.rs::oracle_check_oracle_forwards_nonzero_exit_and_rejects]。
+  exit 0 なのに stdout が空または JSON でないときは true になる [test: crates/condukt/src/oracle.rs::exit_ok_empty_stdout_still_falls_back] [test: crates/condukt/src/oracle.rs::exit_ok_corrupt_stdout_still_falls_back]。
 - `transition` / `reason`: 判定の詳細 (ログ・カスケードエスカレーションの `failure_context` に転記してよい)。
 
 **実際の強制は `condukt state set --run $RID --task <id> --status verified` 自身が行う**: このコマンドは
 内部で上と同じ判定 (`check-oracle` 相当) を再実行し、`required:true, fallback:false,
-valid_fp_oracle:false` のときは昇格を**拒否**する (非0終了・理由を出力)。つまり `kind: fix/feature` かつ
-`reproduction_tests` を持つタスクは、`tdd` による本物の Fail→Pass 再現ができていない限り `verified` に
-できない。`fallback:true` (tdd 不在・対象外タスク等) のときは従来通り verifier agent の pass/fail 判定に
-すべて委ねる (legacy gate への degrade)。
+valid_fp_oracle:false` のときは昇格を**拒否**する (非0終了・理由を出力) [test: crates/condukt/tests/fp_oracle_e2e.rs::fix_task_without_valid_fail_to_pass_oracle_is_refused]。
+`tdd` が無い環境でもこの拒否は同じで、`kind: fix/feature` のタスクは本物の Fail→Pass 再現が
+記録されるまで `verified` にできない [test: crates/condukt/src/state.rs::enforce_fp_gate_rejects_undetermined_spawn_failure_verdict]。
+`fallback:true` (kind が fix/feature でないタスク等) のときは verifier agent の pass/fail 判定に委ねる [test: crates/condukt/tests/fp_oracle_e2e.rs::task_without_a_fix_or_feature_kind_verifies_unconditionally]。
 
 done の各タスクを `condukt-verifier` 相当で done_criteria 照合する。検証する子の **model は
 worker と必ず別モデルにする**（同一モデルだと generation と verification が同じ盲点を共有するため）。

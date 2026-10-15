@@ -250,7 +250,7 @@ const STARTER: &str = r#"# beacon.toml — desktop & webhook notifications for C
 enabled = true
 on_stop = true            # notify when a turn finishes (Stop)
 on_notification = true    # notify when Claude needs input/permission (Notification)
-include_snippet = true    # on Stop, append a tail of Claude's last message
+include_snippet = true    # on Stop, append the head (first snippet_chars) of Claude's last message
 snippet_chars = 160
 
 # --- channels (any combination) ---

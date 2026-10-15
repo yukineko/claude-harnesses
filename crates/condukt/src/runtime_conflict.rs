@@ -197,7 +197,7 @@ mod tests {
 
     #[test]
     fn no_op_when_worktree_absent() {
-        let cfg = Config::load();
+        let cfg = Config::without_config_file();
         let task = TaskState {
             id: "t1".to_string(),
             ..Default::default()

@@ -262,7 +262,7 @@ result. The `/condukt-loop` skill calls this repeatedly, inserting a fix step
 between iterations, until all tests pass or no progress is detected.
 
 ```
-condukt loop --module <server|client|e2e> [--iteration N] [--prev-failures N]
+condukt loop --module <server|client|e2e> [--iteration N] [--prev-failures N] [--max-iters N]
 ```
 
 **Cycle sequences** (configured via `[loop]` in `config.toml`):
@@ -290,6 +290,10 @@ condukt loop --module <server|client|e2e> [--iteration N] [--prev-failures N]
 `stop=true` when `failure_count == 0` (`stop_reason: "all tests pass"`) or when
 `failure_count == prev_failures` (`stop_reason: "no progress: failure count unchanged"`).
 Exits 0 while progress is being made, and 1 when `stop=true` with tests still failing.
+An `--iteration` above the cap (`--max-iters`, else `[loop] max_iters`) runs no cycle and returns
+`stop=true`, `failure_count: null` and a `stop_reason` beginning `max iters reached` [test: crates/condukt/tests/loop_max_iters_flag.rs::max_iters_flag_lowers_the_configured_cap].
+If `config.toml` exists but cannot be read or parsed and no `--max-iters` is given, the cap is undetermined and the
+iteration is refused the same way with `max iters undetermined` [test: crates/condukt/tests/loop_max_iters_flag.rs::unparseable_config_refuses_instead_of_running_uncapped].
 
 **Config:**
 
@@ -297,7 +301,7 @@ Exits 0 while progress is being made, and 1 when `stop=true` with tests still fa
 [loop]
 build_command  = "npm run build"
 deploy_command = "kubectl rollout restart deployment/api && kubectl rollout status deployment/api"
-max_iters      = 10   # safety cap; the skill enforces it
+max_iters      = 10   # iteration cap, enforced by `condukt loop` [test: crates/condukt/tests/drift_b1_loop_cap.rs::loop_refuses_iteration_beyond_configured_max_iters]
 ```
 
 ### `condukt state test`

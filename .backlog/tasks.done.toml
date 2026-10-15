@@ -51064,3 +51064,125 @@ test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "6167234daddc3f7e68f56e6031b1557c50ae6c45"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "eef89aa5"
+title = "specguard ingest silently drops audit --json shard outputs (spec-audit step 5 reports findings as clean)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "specguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-15 at ea512575 (branch drift-specguard). read_ingest matches only drift-scope labels; outputs whose label matches no shard are dropped. Empty drift scope: exit 0 with no sentinel although the outputs carried needs_user yes. Non-empty scope: exit 4, so the documented audit-to-ingest path never succeeds."
+created_at = 1792063086
+updated_at = 1792065382
+weight = 0.0
+issue_number = 1351
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1351"
+issue_closed_at = 1792065384
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p specguard --test drift_ingest_contract -- --ignored c2_"
+rev = "ea5125758c95885e091dfd80dc3c56035868ac4b"
+observed_at = 1792063086
+detail = """
+exit 101: ocking waiting for file lock on package cache
+   Compiling specguard v0.2.90 (/Users/yuki/src/.harness-worktrees/drift-specguard/crates/specguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.90s
+     Running tests/drift_ingest_contract.rs (target/debug/deps/drift_ingest_contract-ba179de3efb54d66)
+error: test failed, to rerun pass `-p specguard --test drift_ingest_contract`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p specguard --test drift_ingest_contract -- --include-ignored c2_"
+exit = 0
+passed = 2
+rev = "806b42f693dd153df2247badfc9ce8f1e1358a80"
+observed_at = 1792065361
+output_digest = "sha256:12f28f21ec31949a17a583fca3b16fc17a481706b856ba0bc731fc8d9af9b01e"
+excerpt = """
+
+running 2 tests
+test c2_audit_json_outputs_fed_to_ingest_as_documented_must_not_be_lost ... ok
+test c2_ingest_with_unmatched_labels_and_empty_scope_must_not_report_clean ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.11s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/drift_ingest_contract.rs (target/debug/deps/drift_ingest_contract-1c1c48615dedad71)
+"""
+
+[task.closure.red]
+rev = "ea5125758c95885e091dfd80dc3c56035868ac4b"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "42dd34a8"
+title = "specguard run.md / spec-audit.md ingest sections omit exit 5 (unratified) and exit 2 (usage)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "specguard",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-15 at ea512575. ingest exits 5 on an unratified spec (observed by c1_ingest_really_exits_5_when_unratified); both instruction files branch on 0/3/4 only."
+created_at = 1792063100
+updated_at = 1792065401
+weight = 0.0
+issue_number = 1352
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1352"
+issue_closed_at = 1792065403
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p specguard --test drift_ingest_contract -- --ignored c1_ingest_instructions_handle_every_ingest_exit_code"
+rev = "ea5125758c95885e091dfd80dc3c56035868ac4b"
+observed_at = 1792063100
+detail = """
+exit 101: est_instructions_handle_every_ingest_exit_code
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/drift_ingest_contract.rs (target/debug/deps/drift_ingest_contract-ba179de3efb54d66)
+error: test failed, to rerun pass `-p specguard --test drift_ingest_contract`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p specguard --test drift_ingest_contract -- --include-ignored c1_ingest_instructions_handle_every_ingest_exit_code"
+exit = 0
+passed = 1
+rev = "806b42f693dd153df2247badfc9ce8f1e1358a80"
+observed_at = 1792065385
+output_digest = "sha256:1572321c4b3fa1116a2e4f042656b98335dfeb1a8f6a0231ac45f0c632e33c4e"
+excerpt = """
+
+running 1 test
+test c1_ingest_instructions_handle_every_ingest_exit_code ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/drift_ingest_contract.rs (target/debug/deps/drift_ingest_contract-1c1c48615dedad71)
+"""
+
+[task.closure.red]
+rev = "ea5125758c95885e091dfd80dc3c56035868ac4b"
+exit = 101
+kind = "behavioural"

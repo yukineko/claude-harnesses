@@ -3,11 +3,12 @@
 //! `evalkit run` discovers `evals/*.jsonl` golden cases and asserts over each
 //! subject — a `file`'s contents (catch a SKILL.md/prompt edit that drops an
 //! invariant) or a `cmd`'s stdout+exit (catch a CLI contract regression). It is
-//! the *offline* sibling of condukt's online Phase-6 verifier: deterministic,
-//! API-key-free, and meant to run as a CI gate and a `/flow` pre-release check.
+//! the *offline* sibling of condukt's online Phase-6 verifier: deterministic and
+//! API-key-free. No CI workflow and no hook runs it (pinned by
+//! `tests/prose_claims.rs::claim_no_ci_no_hook`); it is invoked by hand.
 //!
 //! Exit codes: `0` all passed, `1` a real regression, `2` harness error (no
-//! cases / unreadable eval files) — so CI distinguishes a regression from a
+//! cases / unreadable eval files) — so a caller can tell a regression from a
 //! misconfigured path.
 //!
 //! This is a plain CLI, not a lifecycle hook, so it does not wrap work in

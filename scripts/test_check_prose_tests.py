@@ -477,3 +477,137 @@ def test_a3_empty_info_string_scans_slash_comments(tmp_path):
     r = fenced(tmp_path, "", "// a claim here")
     assert r.returncode == 1, (r.stdout, r.stderr)
     assert "uncited-claim" in r.stdout
+
+
+# ---------------------------------------------------------------------
+# AMENDMENT B: diff-scoped default mode. Default mode checks only the
+# units whose span contains a line ADDED or MODIFIED vs HEAD; --all and
+# explicit FILE args still check every unit.
+# ---------------------------------------------------------------------
+BASE_CLAIMS = [
+    "The gate blocks unsigned commits.",
+    "The hook rejects empty messages.",
+    "The scanner flags stale locks.",
+    "The runner retries failed jobs.",
+    "The store keeps every ledger entry.",
+]
+
+
+def committed_claims(tmp_path, claims=BASE_CLAIMS, extra=None):
+    """Commit CLAUDE.md with one uncited claim per paragraph; the working
+    tree starts identical to HEAD (so the diff starts empty)."""
+    repo = init_repo(tmp_path / "repo")
+    write(repo, "CLAUDE.md", "\n\n".join(claims) + "\n")
+    for rel, text in (extra or {}).items():
+        write(repo, rel, text)
+    commit_all(repo)
+    return repo
+
+
+def uncited_lines(r):
+    return [l for l in r.stdout.splitlines() if "uncited-claim" in l]
+
+
+# A1
+def test_b_a1_modified_claim_is_the_only_finding(tmp_path):
+    repo = committed_claims(tmp_path)
+    claims = list(BASE_CLAIMS)
+    claims[2] = "The scanner flags every stale lock."  # 3rd paragraph -> line 5
+    write(repo, "CLAUDE.md", "\n\n".join(claims) + "\n")
+    r = run(repo)
+    assert r.returncode == 1, (r.stdout, r.stderr)
+    found = uncited_lines(r)
+    assert len(found) == 1, r.stdout
+    assert "CLAUDE.md:5:" in found[0], found
+
+
+# A2
+def test_b_a2_added_claim_is_the_only_finding(tmp_path):
+    repo = committed_claims(tmp_path)
+    text = "\n\n".join(BASE_CLAIMS) + "\n\nThe cache evicts the oldest entry.\n"
+    write(repo, "CLAUDE.md", text)
+    r = run(repo)
+    assert r.returncode == 1, (r.stdout, r.stderr)
+    found = uncited_lines(r)
+    assert len(found) == 1, r.stdout
+    assert "CLAUDE.md:11:" in found[0], found
+
+
+# A3
+def test_b_a3_citing_one_claim_leaves_others_unreported(tmp_path):
+    repo = committed_claims(tmp_path, extra={"scripts/test_y.py": PY_TEST})
+    claims = list(BASE_CLAIMS)
+    claims[1] = BASE_CLAIMS[1] + " [test: scripts/test_y.py::test_x]"
+    write(repo, "CLAUDE.md", "\n\n".join(claims) + "\n")
+    r = run(repo)
+    assert r.returncode == 0, (r.stdout, r.stderr)
+
+
+# A4
+def test_b_a4_all_still_reports_every_claim(tmp_path):
+    repo = committed_claims(tmp_path)
+    claims = list(BASE_CLAIMS)
+    claims[2] = "The scanner flags every stale lock."
+    write(repo, "CLAUDE.md", "\n\n".join(claims) + "\n")
+    r = run(repo, "--all")
+    assert r.returncode == 1, (r.stdout, r.stderr)
+    assert len(uncited_lines(r)) == len(BASE_CLAIMS), r.stdout
+
+
+def test_b_a4b_explicit_file_arg_still_reports_every_claim(tmp_path):
+    repo = committed_claims(tmp_path)
+    claims = list(BASE_CLAIMS)
+    claims[2] = "The scanner flags every stale lock."
+    write(repo, "CLAUDE.md", "\n\n".join(claims) + "\n")
+    r = run(repo, "CLAUDE.md")
+    assert r.returncode == 1, (r.stdout, r.stderr)
+    assert len(uncited_lines(r)) == len(BASE_CLAIMS), r.stdout
+
+
+# A5
+def test_b_a5_new_staged_file_every_claim_is_checked(tmp_path):
+    repo = init_repo(tmp_path / "repo")
+    write(repo, "README.md", "placeholder\n")
+    commit_all(repo)
+    write(repo, "CLAUDE.md",
+          "The gate blocks unsigned commits.\n\nThe hook rejects empty messages.\n")
+    git(repo, "add", "CLAUDE.md")
+    r = run(repo)
+    assert r.returncode == 1, (r.stdout, r.stderr)
+    assert len(uncited_lines(r)) == 2, r.stdout
+
+
+# A6
+def test_b_a6_modifying_second_physical_line_reports_the_sentence(tmp_path):
+    repo = committed_claims(
+        tmp_path, claims=["The gate blocks\nunsigned commits.", "The hook rejects empty messages."])
+    write(repo, "CLAUDE.md",
+          "The gate blocks\nunsigned merges.\n\nThe hook rejects empty messages.\n")
+    r = run(repo)
+    assert r.returncode == 1, (r.stdout, r.stderr)
+    found = uncited_lines(r)
+    assert len(found) == 1, r.stdout
+    assert "CLAUDE.md:1:" in found[0], found
+
+
+# A7
+def test_b_a7_deleting_middle_line_of_sentence_reports_the_sentence(tmp_path):
+    repo = committed_claims(
+        tmp_path,
+        claims=["The gate blocks\nevery single\nunsigned commit.",
+                "The hook rejects empty messages."])
+    write(repo, "CLAUDE.md",
+          "The gate blocks\nunsigned commit.\n\nThe hook rejects empty messages.\n")
+    r = run(repo)
+    assert r.returncode == 1, (r.stdout, r.stderr)
+    found = uncited_lines(r)
+    assert len(found) == 1, r.stdout
+    assert "CLAUDE.md:1:" in found[0], found
+
+
+def test_b_unrelated_edit_elsewhere_in_file_reports_nothing(tmp_path):
+    repo = committed_claims(tmp_path, claims=BASE_CLAIMS + ["Run the build."])
+    write(repo, "CLAUDE.md",
+          "\n\n".join(BASE_CLAIMS + ["Run the build now."]) + "\n")
+    r = run(repo)
+    assert r.returncode == 0, (r.stdout, r.stderr)

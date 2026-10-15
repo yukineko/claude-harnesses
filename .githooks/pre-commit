@@ -47,6 +47,14 @@
 #                                                 an existing test, or a citation
 #                                                 that does not resolve. Dated
 #                                                 records and imperatives pass.
+#   doc-duplication    check-doc-duplication.py   a change that ADDS a copy of a
+#                                                 block (Jaccard >= 0.6 over
+#                                                 5-char shingles) between two
+#                                                 corpus files, one of them a
+#                                                 skill/agent/command/CLAUDE.md.
+#                                                 Ratchet vs HEAD per file pair;
+#                                                 existing copies grandfathered.
+#                                                 `--all` prints the full audit.
 #   claudemd-claims    check-claudemd-claims.py   a `path:line` citation in
 #                                                 CLAUDE.md itself that no
 #                                                 longer describes reality —
@@ -223,6 +231,7 @@ run check-fail-open-diff.py   fail-open-diff
 run check-doc-claims.py       doc-claims
 run check-claudemd-claims.py  claudemd-claims
 run check-prose-tests.py     prose-tests
+run check-doc-duplication.py  doc-duplication
 # check-test-weakening.py is NOT run here: it is run from .githooks/commit-msg
 # instead. Its acknowledgment marker lives in the commit message, which git has
 # not prepared yet at pre-commit time, so from here the remedy it prints is

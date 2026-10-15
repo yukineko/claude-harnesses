@@ -31,9 +31,12 @@ instruction or a dated record is a claim.
 Covered files: CLAUDE.md, docs/**/*.md, crates/*/README*.md,
 crates/*/skills/*/SKILL.md.
 
-Scope: by default the covered files changed in the WORKING TREE vs HEAD
-(`git diff HEAD`), since this gate reads file content from disk and the diff
-source must match the scanned content. `--all` scans every covered file.
+Scope: by default only the units that the change ADDS or MODIFIES, i.e. whose
+line span intersects the added/modified lines of `git diff HEAD -U0` in the
+WORKING TREE (this gate reads content from disk, so the diff source matches the
+scanned content); a pure deletion touches the lines around it (user ruling
+2026-10-15: the existing corpus is cleaned area by area, not on every touch).
+`--all` and explicit FILE arguments check every unit.
 
 Exit codes (fail-closed):
   0  no findings
@@ -174,6 +177,48 @@ def all_covered(repo: str) -> list:
                 if is_covered(rel):
                     out.add(rel)
     return sorted(out)
+
+
+HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+
+
+def changed_lines(repo: str, rels: list) -> dict:
+    """{rel: set of new-side line numbers added or modified vs HEAD}.
+
+    A pure deletion (`+c,0`) touches lines c and c+1, the units around the
+    deletion point. A diff line this parser cannot place is undetermined.
+    """
+    out = {r: set() for r in rels}
+    if not rels:
+        return out
+    raw = run_git(
+        repo, "-c", "core.quotepath=off", "diff", "HEAD", "-U0", "--no-color",
+        "--no-ext-diff", "--no-renames", "--", *rels,
+    ).decode("utf-8", "surrogateescape")
+    cur = None
+    for line in raw.split("\n"):
+        if line.startswith("+++ "):
+            target = line[4:]
+            if target == "/dev/null":
+                cur = None
+                continue
+            if not target.startswith("b/"):
+                raise Undetermined(f"unparseable diff target line: {line!r}")
+            cur = target[2:]
+            if cur not in out:
+                raise Undetermined(f"diff names a file outside the request: {cur!r}")
+            continue
+        m = HUNK_RE.match(line)
+        if m:
+            if cur is None:
+                raise Undetermined(f"diff hunk without a target file: {line!r}")
+            start = int(m.group(1))
+            count = 1 if m.group(2) is None else int(m.group(2))
+            if count == 0:
+                out[cur].update({start, start + 1})
+            else:
+                out[cur].update(range(start, start + count))
+    return out
 
 
 def changed_covered(repo: str) -> list:
@@ -343,16 +388,16 @@ def iter_units(text: str):
                 m = re.match(r"^description:\s*(.*)$", lines[k])
                 if m:
                     val = m.group(1).strip()
-                    start = k + 1
+                    pieces = []
+                    if val not in ("|", ">", "|-", ">-", ""):
+                        pieces.append((k + 1, val.strip("'\"")))
                     k += 1
-                    if val in ("|", ">", "|-", ">-", ""):
-                        val = ""
                     while k < j and (lines[k].startswith((" ", "\t")) or not lines[k].strip()):
-                        val += " " + lines[k].strip()
+                        if lines[k].strip():
+                            pieces.append((k + 1, lines[k].strip().strip("'\"")))
                         k += 1
-                    val = val.strip().strip("'\"")
-                    if val:
-                        yield ("para", start, val, False)
+                    if pieces:
+                        yield ("para", pieces[0][0], pieces, False)
                     continue
                 k += 1
             i = j + 1
@@ -481,7 +526,7 @@ def code_comment(line: str, lang: str):
 
 
 def split_sentences(para):
-    """para: list of (line_no, text) -> list of (line_no, sentence)."""
+    """para: list of (line_no, text) -> list of (first_line, last_line, sentence)."""
     out = []
     for k, (ln, text) in enumerate(para):
         if k == 0:
@@ -491,26 +536,28 @@ def split_sentences(para):
         for idx, p in enumerate(pieces):
             if idx == 0 and out and not out[-1][2]:
                 # continuation of an unterminated sentence from the previous line
-                out[-1] = (out[-1][0], out[-1][1] + " " + p, False)
+                out[-1] = (out[-1][0], out[-1][1] + " " + p, False, ln)
             else:
-                out.append((ln, p, False))
+                out.append((ln, p, False, ln))
             ended = bool(re.search(r"[。.!?]\s*$", out[-1][1]))
-            out[-1] = (out[-1][0], out[-1][1], ended)
+            out[-1] = (out[-1][0], out[-1][1], ended, out[-1][3])
     # A fragment that is ONLY citations (`Claim. [test: a::b]`) belongs to the
     # sentence before it: the citation is written after that sentence's stop.
     merged = []
-    for ln, s, _ in out:
+    for ln, s, _, end in out:
         s = s.strip()
         if not s:
             continue
         if merged and CITATION_RE.search(s) and not CITATION_RE.sub("", s).strip(" \t.,;。"):
-            merged[-1] = (merged[-1][0], merged[-1][1] + " " + s)
+            merged[-1] = (merged[-1][0], end, merged[-1][2] + " " + s)
         else:
-            merged.append((ln, s))
+            merged.append((ln, end, s))
     return merged
 
 
-def check_file(repo: str, rel: str, cache: dict) -> list:
+def check_file(repo: str, rel: str, cache: dict, touched=None) -> list:
+    """Check one covered file. `touched` is the set of changed new-side line
+    numbers (diff-scoped default mode), or None to check every unit."""
     full = os.path.join(repo, rel)
     text = read_text(full, "covered file")
     findings = []
@@ -520,12 +567,14 @@ def check_file(repo: str, rel: str, cache: dict) -> list:
             continue
         kind, ln, payload, in_record = ev
         if kind == "single":
-            units = [(ln, payload)]
-        elif isinstance(payload, str):
-            units = split_sentences([(ln, payload)])
+            units = [(ln, ln, payload)]
         else:
             units = split_sentences(payload)
-        for uln, unit in units:
+        for uln, uend, unit in units:
+            if touched is not None and not any(
+                x in touched for x in range(uln, uend + 1)
+            ):
+                continue
             if not has_wordish(unit) and not CITATION_RE.search(unit):
                 continue
             cites = CITATION_RE.findall(unit)
@@ -559,6 +608,7 @@ def main(argv=None) -> int:
             repo = os.path.abspath(args.repo)
         else:
             repo = run_git(os.getcwd(), "rev-parse", "--show-toplevel").decode().strip()
+        touched: dict = {}
         if args.files:
             rels = sorted({posixpath.normpath(f) for f in args.files if is_covered(f)})
         elif args.all:
@@ -567,10 +617,11 @@ def main(argv=None) -> int:
                 raise Undetermined(f"--all found no covered file under {repo}")
         else:
             rels = changed_covered(repo)
+            touched = changed_lines(repo, rels)
         cache: dict = {}
         findings = []
         for rel in rels:
-            findings.extend(check_file(repo, rel, cache))
+            findings.extend(check_file(repo, rel, cache, touched.get(rel)))
     except Undetermined as exc:
         print(f"check-prose-tests: UNDETERMINED: {exc}", file=sys.stderr)
         return 2

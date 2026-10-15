@@ -315,3 +315,99 @@ fn claim_writer_forbids_invention() {
         "command must forbid inventing files"
     );
 }
+
+/// Tracked paths (as `git ls-files` prints them, relative to `repo`) under
+/// `bin_rel`. A failing git fails the test; it never yields an empty list.
+fn tracked_bin_entries(repo: &Path, bin_rel: &str) -> Vec<String> {
+    let home = tempfile::tempdir().unwrap();
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["ls-files", "--", bin_rel])
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", home.path())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .expect("git runs");
+    assert!(
+        out.status.success(),
+        "git ls-files {bin_rel} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+/// Violations of the claim "the launcher is the only tracked file in bin".
+fn bin_claim_violations(entries: &[String], launcher: &str) -> Vec<String> {
+    let mut v = Vec::new();
+    if !entries.iter().any(|e| e == launcher) {
+        v.push(format!("launcher {launcher} not tracked: {entries:?}"));
+    }
+    for e in entries {
+        if e != launcher {
+            v.push(format!("unexpected tracked entry {e}"));
+        }
+        if e.rsplit('/').next().unwrap_or("").starts_with("deepwiki-") {
+            v.push(format!("platform binary tracked: {e}"));
+        }
+    }
+    v
+}
+
+fn fixture_bin_repo(track_darwin: bool, track_launcher: bool) -> TempDir {
+    let home = tempfile::tempdir().unwrap();
+    let d = tempfile::tempdir().unwrap();
+    git(d.path(), home.path(), &["init", "-q"]);
+    std::fs::create_dir_all(d.path().join("bin")).unwrap();
+    std::fs::write(d.path().join("bin/deepwiki"), "#!/bin/sh\n").unwrap();
+    std::fs::write(d.path().join("bin/deepwiki-darwin-arm64"), "BIN").unwrap();
+    if track_launcher {
+        git(d.path(), home.path(), &["add", "-f", "bin/deepwiki"]);
+    }
+    if track_darwin {
+        git(
+            d.path(),
+            home.path(),
+            &["add", "-f", "bin/deepwiki-darwin-arm64"],
+        );
+    }
+    d
+}
+
+#[test]
+fn claim_platform_bins_untracked() {
+    let launcher = "bin/deepwiki";
+
+    // negative controls: the helper must see a tracked platform binary and
+    // an empty tracked list, and the predicate must reject both.
+    let bad = fixture_bin_repo(true, true);
+    let entries = tracked_bin_entries(bad.path(), "bin");
+    assert!(
+        entries.iter().any(|e| e == "bin/deepwiki-darwin-arm64"),
+        "helper cannot see tracked binary: {entries:?}"
+    );
+    assert!(!bin_claim_violations(&entries, launcher).is_empty());
+    let none = fixture_bin_repo(false, false);
+    let entries = tracked_bin_entries(none.path(), "bin");
+    assert!(entries.is_empty(), "{entries:?}");
+    assert!(!bin_claim_violations(&entries, launcher).is_empty());
+    let ok = fixture_bin_repo(false, true);
+    let entries = tracked_bin_entries(ok.path(), "bin");
+    assert_eq!(
+        bin_claim_violations(&entries, launcher),
+        Vec::<String>::new()
+    );
+
+    // the real crate
+    let real = manifest();
+    let entries = tracked_bin_entries(&real, "bin");
+    assert_eq!(
+        bin_claim_violations(&entries, launcher),
+        Vec::<String>::new(),
+        "tracked: {entries:?}"
+    );
+    assert_eq!(entries, vec![launcher.to_string()]);
+}

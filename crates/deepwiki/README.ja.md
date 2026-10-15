@@ -1,3 +1,5 @@
+存在しないファイル・シンボル・パスを捏造しない。実在する `path:line` を引用すること。[test: crates/deepwiki/tests/prose_claims.rs::claim_writer_forbids_invention]
+
 ```
 /deepwiki
 ```
@@ -19,14 +21,12 @@ deepwiki init
 
 全サブコマンドが `--root <dir>`（既定は cwd）を受け付ける。[test: crates/deepwiki/tests/prose_claims.rs::claim_root_flag]
 
-`deepwiki-writer` サブエージェント定義は、存在しないファイル・シンボル・パスの捏造を禁止し、実在する `path:line` の引用を求める（`/deepwiki` コマンドも「do not invent files」と指示する）。[test: crates/deepwiki/tests/prose_claims.rs::claim_writer_forbids_invention]
-
 - `commands/deepwiki.md` — `/deepwiki` のオーケストレーションコマンド。[test: crates/deepwiki/tests/prose_claims.rs::claim_command_file]
 - `agents/deepwiki-writer.md` — ページを書くサブエージェント。[test: crates/deepwiki/tests/prose_claims.rs::claim_writer_agent_file]
 - `bin/deepwiki`（ホストのバイナリを exec する、追跡されるランチャー）+ `bin/deepwiki-<os>-<arch>`（git 管理外）。[test: crates/deepwiki/tests/prose_claims.rs::claim_launcher_tracked_bins_ignored] [test: crates/deepwiki/tests/launcher_missing_binary.rs::control_launcher_still_execs_the_host_binary_when_it_is_present]
 - `.deepwiki/_meta.toml`（あなたのリポジトリ側）— `stamp` が書く鮮度スタンプ。[test: crates/deepwiki/tests/prose_claims.rs::claim_stamp_records]
 
-プラットフォーム別の `bin/deepwiki-<os>-<arch>` は**コミットされない**（`.gitignore` が `crates/*/bin/*-darwin-arm64`・`*-darwin-x86_64`・`*-linux-arm64`・`*-linux-x86_64` を無視する）。[test: crates/deepwiki/tests/prose_claims.rs::claim_launcher_tracked_bins_ignored]
+プラットフォーム別の `bin/deepwiki-<os>-<arch>` は**コミットされない**（`.gitignore` が `crates/*/bin/*-darwin-arm64`・`*-darwin-x86_64`・`*-linux-arm64`・`*-linux-x86_64` を無視する）。[test: crates/deepwiki/tests/prose_claims.rs::claim_launcher_tracked_bins_ignored] [test: crates/deepwiki/tests/prose_claims.rs::claim_platform_bins_untracked]
 
 ```sh
 cargo build --release -p deepwiki

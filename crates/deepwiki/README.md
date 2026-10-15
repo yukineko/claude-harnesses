@@ -1,3 +1,5 @@
+Never invent files, symbols or paths; cite a real `path:line`. [test: crates/deepwiki/tests/prose_claims.rs::claim_writer_forbids_invention]
+
 ```
 /deepwiki
 ```
@@ -21,10 +23,6 @@ deepwiki init
 
 Every subcommand takes `--root <dir>` (default: the cwd). [test: crates/deepwiki/tests/prose_claims.rs::claim_root_flag]
 
-The `deepwiki-writer` subagent definition forbids inventing files, symbols or
-paths and requires concrete `path:line` citations; `/deepwiki` repeats "do not
-invent files". [test: crates/deepwiki/tests/prose_claims.rs::claim_writer_forbids_invention]
-
 - `commands/deepwiki.md` — the `/deepwiki` orchestration command. [test: crates/deepwiki/tests/prose_claims.rs::claim_command_file]
 - `agents/deepwiki-writer.md` — the page-writing subagent. [test: crates/deepwiki/tests/prose_claims.rs::claim_writer_agent_file]
 - `bin/deepwiki` (tracked launcher that execs the host binary) +
@@ -38,4 +36,4 @@ cargo test -p deepwiki
 
 The platform-tagged `bin/deepwiki-<os>-<arch>` binaries are **not committed**
 (`.gitignore` ignores `crates/*/bin/*-darwin-arm64`, `*-darwin-x86_64`,
-`*-linux-arm64` and `*-linux-x86_64`). [test: crates/deepwiki/tests/prose_claims.rs::claim_launcher_tracked_bins_ignored]
+`*-linux-arm64` and `*-linux-x86_64`). [test: crates/deepwiki/tests/prose_claims.rs::claim_launcher_tracked_bins_ignored] [test: crates/deepwiki/tests/prose_claims.rs::claim_platform_bins_untracked]

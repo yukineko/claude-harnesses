@@ -958,7 +958,7 @@
     {
       "name": "replaykit",
       "description": "Trace→golden replay regression harness: turns a tracekit-recorded condukt run into an evalkit golden case so a real run becomes a committed regression fixture. `extract` distils a run's spans.jsonl into a portable trajectory summary (ordered phase/model/status steps + an `expect` block pinning phase set / error count / cost); `promote` writes the fixture under evals/replay/fixtures and appends a dedup'd golden whose `cmd` re-runs `replaykit verify`; `verify` recomputes those aggregates from the steps and gates 0/1/2. The trace-side sibling of curate's playbook→golden. Subscription-native (one bundled Rust binary, file-only, no network, no API key).",
-      "version": "0.1.6",
+      "version": "0.1.7",
       "category": "quality",
       "keywords": [
         "replay",

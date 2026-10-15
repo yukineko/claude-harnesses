@@ -98,7 +98,6 @@ fn assert_pressured(case: &str, body: &str, mode: u32) {
 }
 
 #[test]
-#[ignore = "backlog bf6b1aba: RED repro"]
 fn nonzero_exit_routes_as_pressured() {
     assert_pressured(
         "nonzero",
@@ -108,7 +107,6 @@ fn nonzero_exit_routes_as_pressured() {
 }
 
 #[test]
-#[ignore = "backlog bf6b1aba: RED repro"]
 fn unparseable_status_json_routes_as_pressured() {
     assert_pressured(
         "garbage",
@@ -118,7 +116,6 @@ fn unparseable_status_json_routes_as_pressured() {
 }
 
 #[test]
-#[ignore = "backlog bf6b1aba: RED repro"]
 fn spawn_error_routes_as_pressured() {
     // Present in the cache (so resolve() returns Known(Some)) but not
     // executable: Command::output() fails with PermissionDenied.

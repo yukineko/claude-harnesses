@@ -381,7 +381,7 @@
     {
       "name": "benchkit",
       "description": "v0.1.8: `auditsample.rs`'s `gate_name()` match arm now covers the 6 new `ViolationSource` variants (Donegate/Reviewgate/Tdd/Budgetguard/Autoflow/Ctxrot) added to overwatch's cross-gate ledger; no behavior change to sampling logic. External-benchmark (SWE-bench Verified) runner for Claude Code plugins: a typed SWE-bench Instance model, a deterministic fixture-based JSONL loader, and a gated `download` subcommand that shells out to `curl` (no HTTP crate) to fetch the Princeton NLP dataset only on explicit invocation. Subscription-native (one bundled Rust binary).",
-      "version": "0.1.12",
+      "version": "0.1.13",
       "category": "quality",
       "keywords": [
         "benchmark",

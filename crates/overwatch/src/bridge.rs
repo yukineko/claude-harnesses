@@ -76,6 +76,17 @@ fn resolve_backlog_bin() -> Determination<Option<PathBuf>> {
     harness_core::plugin_bin::resolve("backlog")
 }
 
+/// `backlog add`'s exit code when it files nothing because no `--repro-test`
+/// reproduced the finding (the finding goes to its unproven record instead).
+const BACKLOG_ADD_UNPROVEN: i32 = 2;
+
+/// The `--repro-test` command for a finding's `#[ignore]`d regression test:
+/// the same invocation `test_freshness::run_ignored_test` runs, so the
+/// backlog re-runs exactly what the bridge observed.
+fn repro_test_command(crate_name: &str, fn_name: &str) -> String {
+    format!("cargo test -p {crate_name} -- --ignored {fn_name}")
+}
+
 /// Map a reviewer severity to a backlog priority tier: `high` → p0, `medium`/
 /// `med` → p1, `low` → p2. Gate-defense findings carry outsized risk if left
 /// unattended, so the whole scale is one tier hotter than a generic finding.
@@ -494,6 +505,8 @@ fn run_in(cwd: &Path) -> Result<SourceHealth> {
     let project = cwd.to_string_lossy().into_owned();
     let now = store::now();
     let mut bridged_now = 0usize;
+    let mut unproven_now = 0usize;
+    let mut failed_now = 0usize;
 
     for &f in &to_bridge {
         let priority = severity_to_priority(f.severity.as_deref());
@@ -504,21 +517,36 @@ fn run_in(cwd: &Path) -> Result<SourceHealth> {
         // unreadable subtree) is surfaced as its own `TestFreshness` state so
         // it is NOT silently rendered as "no test" (50ad2c1e): a search that
         // couldn't finish must not read as a deprioritize signal.
-        let freshness = match test_freshness::find_ignored_test(&f.finding_id, cwd) {
+        //
+        // The same test is the finding's evidence: since backlog fd7ad41f,
+        // `backlog add` files a task ONLY when `--repro-test` fails
+        // behaviourally at HEAD, so a found test is passed through and the
+        // backlog — not this bridge — judges whether it reproduces. With no
+        // test the add is refused (exit 2) and lands in the backlog's
+        // unproven record; that is counted as `unproven` below, never as
+        // bridged.
+        let (freshness, repro_cmd) = match test_freshness::find_ignored_test(&f.finding_id, cwd) {
             IgnoredTestLookup::Found {
                 crate_name,
                 fn_name,
                 ..
-            } => Some(test_freshness::run_ignored_test(&crate_name, &fn_name)),
-            IgnoredTestLookup::NotFound => None,
+            } => (
+                Some(test_freshness::run_ignored_test(&crate_name, &fn_name)),
+                Some(repro_test_command(&crate_name, &fn_name)),
+            ),
+            IgnoredTestLookup::NotFound => (None, None),
             IgnoredTestLookup::ScanIncomplete { detail } => {
-                Some(TestFreshness::ScanIncomplete { detail })
+                (Some(TestFreshness::ScanIncomplete { detail }), None)
             }
         };
         let notes = build_notes(f, now, freshness.as_ref());
 
-        let status = std::process::Command::new(&backlog)
-            .arg("add")
+        let mut add = std::process::Command::new(&backlog);
+        add.arg("add");
+        if let Some(cmd) = &repro_cmd {
+            add.arg("--repro-test").arg(cmd);
+        }
+        let status = add
             .arg("--title")
             .arg(&f.summary)
             .arg("--project")
@@ -572,7 +600,21 @@ fn run_in(cwd: &Path) -> Result<SourceHealth> {
                     );
                 }
             },
+            Ok(s) if s.code() == Some(BACKLOG_ADD_UNPROVEN) => {
+                unproven_now += 1;
+                eprintln!(
+                    "overwatch: WARNING `backlog add` failed for finding {} (exit 2: {}) — NOT filed, \
+                     recorded in the backlog's unproven record; continuing",
+                    f.finding_id,
+                    if repro_cmd.is_some() {
+                        "the regression test did not reproduce at HEAD"
+                    } else {
+                        "no `#[ignore = \"<finding-id>: ...\"]` regression test to pass as --repro-test"
+                    }
+                );
+            }
             Ok(s) => {
+                failed_now += 1;
                 eprintln!(
                     "overwatch: WARNING `backlog add` failed for finding {} (exit {:?}) — continuing",
                     f.finding_id,
@@ -580,6 +622,7 @@ fn run_in(cwd: &Path) -> Result<SourceHealth> {
                 );
             }
             Err(e) => {
+                failed_now += 1;
                 eprintln!(
                     "overwatch: WARNING could not spawn backlog for finding {} (continuing): {e}",
                     f.finding_id
@@ -635,7 +678,16 @@ fn run_in(cwd: &Path) -> Result<SourceHealth> {
                     );
                 }
             },
+            Ok(s) if s.code() == Some(BACKLOG_ADD_UNPROVEN) => {
+                unproven_now += 1;
+                eprintln!(
+                    "overwatch: WARNING `backlog add` failed for entry {} (exit 2: no reproducing \
+                     test) — NOT filed, recorded in the backlog's unproven record; continuing",
+                    p.key
+                );
+            }
             Ok(s) => {
+                failed_now += 1;
                 eprintln!(
                     "overwatch: WARNING `backlog add` failed for entry {} (exit {:?}) — continuing",
                     p.key,
@@ -643,6 +695,7 @@ fn run_in(cwd: &Path) -> Result<SourceHealth> {
                 );
             }
             Err(e) => {
+                failed_now += 1;
                 eprintln!(
                     "overwatch: WARNING could not spawn backlog for entry {} (continuing): {e}",
                     p.key
@@ -658,6 +711,12 @@ fn run_in(cwd: &Path) -> Result<SourceHealth> {
             "considered": deduped.len(),
             "entries_bridged": entries_bridged_now,
             "entries_considered": planned.len(),
+            // Adds the backlog refused for want of a reproducing test (exit 2,
+            // kept in its unproven record) and adds that failed otherwise.
+            // Without these, a run where every add was refused printed the
+            // same summary as one with nothing to bridge.
+            "unproven": unproven_now,
+            "failed": failed_now,
             // Named ledgers, not a bare count: `"bridged": 0` with an empty
             // list is "nothing needed bridging", with a non-empty one it is
             // "this run could not see part of the queue" (and the command

@@ -265,6 +265,8 @@ an error (non-zero) instead of a zero report. `reconcile-fixed` remains
 fail-soft on the **git** side only: a failing `git log` is read as "0 commits
 scanned" (exit 0). `review-queue --to-backlog` is fail-soft on the backlog side
 (an absent `backlog` binary or failed `backlog add` is warned and skipped).
+A finding's `#[ignore = "<finding-id>: ..."]` regression test is passed to `backlog add` as `--repro-test`, so the backlog files the task only when that test reproduces [test: crates/overwatch/tests/bridge_repro_evidence.rs::confirmed_finding_with_failing_ignored_repro_test_is_filed_with_repro_test].
+Refused adds (exit 2, kept in the backlog's unproven record) and other failed adds are counted in the JSON summary as `unproven` and `failed` [test: crates/overwatch/tests/bridge_repro_evidence.rs::refused_backlog_add_is_distinguishable_from_success].
 
 ## PDO positioning
 

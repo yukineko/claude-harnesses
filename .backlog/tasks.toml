@@ -185,38 +185,6 @@ exit 1: == short test summary info ============================\u001B[0m
 \u001B[31m======================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[33m22 deselected\u001B[0m\u001B[31m in 0.09s\u001B[0m\u001B[31m =======================\u001B[0m"""
 
 [[task]]
-id = "bf6b1aba"
-title = "fugu-router budget under_pressure reads a budgetguard spawn error, non-zero exit or unparseable status --json as no pressure"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Seen 2026-10-03 by the abba6f0d implementer (run-20261003-141339-41881, branch fix/run-20261003-141339-41881/abba6f0d commit 27824792), read not tested. crates/fugu-router/src/budget.rs: after abba6f0d the lookup Undetermined arm returns true (pressure), but once budgetguard is found, a spawn failure, non-zero exit or unparseable output still returns false = full-price routing (the permissive side). parse_pressure tests pin unparseable as no pressure. Readings: (a) fail-open per CLAUDE.md 3; (b) intended - budget is advisory. Check whether any consumer treats routing as a gate."
-created_at = 1791008100
-updated_at = 1792003538
-weight = 0.0
-issue_number = 1148
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1148"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p fugu-router --test backlog_bf6b1aba -- --ignored"
-rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
-observed_at = 1792003536
-detail = """
-exit 101: nored; 0 measured; 1 filtered out; finished in 0.95s
-
-   Compiling fugu-router v0.1.45 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/fugu-router)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
-     Running tests/backlog_bf6b1aba.rs (target/debug/deps/backlog_bf6b1aba-1cc2ba60c9a1ea18)
-error: test failed, to rerun pass `-p fugu-router --test backlog_bf6b1aba`"""
-
-[[task]]
 id = "18ebbfe6"
 title = "condukt state parse_agent_cost / parse_agent_tokens treat malformed gauge JSON as no matching id, so broken gauge output becomes no data and the manual cost is recorded"
 project = "/Users/yuki/src/harness"

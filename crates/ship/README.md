@@ -1,61 +1,29 @@
-# ship
+Never auto-run commit, merge, or push; get explicit user approval first.
 
-**Shipping ritual for Claude Code**, written in Rust.
-
-On `SessionEnd`, it detects unshipped work (uncommitted git changes, unmerged condukt branches, leftover
-worktrees, unpushed commits, stale plugin binaries) and prints a reminder.
-Guides you through the shipping workflow: check, rebuild plugins (safe), commit, merge, push.
-
-**GATED invariant**: commit, merge, and push require explicit user approval. `scripts/rebuild-plugins.sh`
-(via `ship check --run-safe`) and `scripts/rollout-plugins.sh` (via `ship rollout`) are the only auto-runnable
-steps — both mutate `~/.claude/plugins/` state only, never git. The shipping ritual is user-driven; the agent
-provides the checklist and prompts for approval before each gate.
-
-Subscription-native: one Rust binary, one hook (SessionEnd), no API key.
-
-## Commands
+`ship check`, `ship check --run-safe` and `ship rollout` run only read-only git subcommands [test: crates/ship/tests/prose_claims.rs::claim_binary_runs_only_readonly_git] [test: crates/ship/tests/integration.rs::binary_never_mutates_git].
+Neither `scripts/rebuild-plugins.sh` nor `scripts/rollout-plugins.sh` contains a state-mutating git command [test: crates/ship/tests/prose_claims.rs::claim_scripts_no_mutating_git].
 
 ```sh
-ship check             # print unshipped state (dirty git, unmerged/unpushed work, leftover worktrees, stale binaries)
-ship check --run-safe  # run scripts/rebuild-plugins.sh --stage-repo (SAFE: refresh cache AND the local crates/*/bin copy; never git)
-ship rollout            # run scripts/rollout-plugins.sh (heavier: automates the /plugin update step)
-ship session-end       # SessionEnd hook (reads hook JSON from stdin, prints reminder if unshipped)
+ship check             # print a checklist: uncommitted changes, unmerged condukt/* branches, leftover worktrees, unpushed commits, stale plugin binaries [test: crates/ship/tests/prose_claims.rs::claim_check_lists_categories]
+ship check --run-safe  # also run scripts/rebuild-plugins.sh --stage-repo from the repo root, then reprint the GATED items [test: crates/ship/tests/prose_claims.rs::claim_run_safe_runs_rebuild_stage_repo]
+ship rollout           # run scripts/rollout-plugins.sh from the repo root (no arguments) [test: crates/ship/tests/prose_claims.rs::claim_rollout_runs_script_no_args]
+ship session-end       # the SessionEnd hook command [test: crates/ship/tests/prose_claims.rs::claim_hooks_json_sessionend]
 ```
 
-## Workflow
+`ship check` changes neither the working tree, the staged content, nor `HEAD` [test: crates/ship/tests/prose_claims.rs::claim_check_does_not_modify].
+`ship check --run-safe` does not itself run `scripts/rollout-plugins.sh`, and `ship rollout` does not itself run `scripts/rebuild-plugins.sh` [test: crates/ship/tests/prose_claims.rs::claim_run_safe_and_rollout_separate].
+`scripts/rollout-plugins.sh` runs `scripts/rebuild-plugins.sh` without `--stage-repo`, and `scripts/rebuild-plugins.sh` copies into `crates/*/bin` only under `--stage-repo` [test: crates/ship/tests/prose_claims.rs::claim_rollout_script_no_stage_repo].
 
-1. **Diagnostic**: `ship check` to see what is unshipped.
-2. **Auto-rebuild**: `ship check --run-safe` to rebuild the plugin cache from source.
-3. **Rollout** (as needed): `ship rollout` to fully clear stale plugin binaries by automating
-   `/plugin update` (advances the installed version pointer + creates the cache version dir), then
-   rebuild+sync. A separate, explicit operation from `--run-safe`.
-4. **Commit** (user approval required): `git add && git commit -m "..."`
-5. **Merge** (user approval required): `git merge <branch>`
-6. **Push** (user approval required): `git push origin <branch>`
+The plugin registers one hook: `SessionEnd` runs `${CLAUDE_PLUGIN_ROOT}/bin/ship session-end` [test: crates/ship/tests/prose_claims.rs::claim_hooks_json_sessionend].
+After the session, use `/ship` to walk through the shipping ritual step by step [test: crates/ship/tests/prose_claims.rs::claim_skill_ship_exists].
 
-## SessionEnd hook
+Stale detection compares the newest mtime under each crate's `src/` against a local
+`crates/<name>/bin/<name>-linux-x86_64` file [test: crates/ship/src/stale.rs::test_stale_crates_newer_src] [test: crates/ship/src/stale.rs::test_stale_crates_newer_bin] [test: crates/ship/tests/prose_claims.rs::claim_stale_newest_nested_src].
+Per-platform binaries (`crates/*/bin/*-linux-x86_64`) are git-ignored in this repo [test: crates/ship/tests/prose_claims.rs::claim_platform_bins_gitignored].
 
-On SessionEnd, ship runs automatically and reminds you if there is unshipped work. The reminder is informational 
-and never blocks anything.
+## Never auto-run commit, merge, or push
 
-## /ship skill
-
-After the session, use `/ship` to walk through the shipping ritual step by step. The skill ensures you have 
-visibility into what will be committed, merged, or pushed before any action is taken.
-
-## GATED invariant — critical
-
-- **commit, merge, push**: NEVER auto-run. ALWAYS get explicit user approval first. Show diffs, ask "approve?", wait for "yes".
-- **rebuild-plugins.sh --stage-repo**: auto-runnable via `ship check --run-safe` (refreshes the cache AND the local `crates/*/bin` copy — the artifact stale-detection measures; a file copy, never git). This is what clears a "stale plugin binaries" item.
-
-Stale detection compares each crate's newest `src/` mtime against a local
-`crates/<name>/bin/<name>-linux-x86_64` file. Per-platform binaries are git-ignored
-in this repo, so that file exists only where someone built it locally; a crate
-without it is **skipped, not reported as fresh**. "no stale plugin binaries" is
-therefore not evidence about crates that have no such file. (The checklist text
-printed by `ship check` still calls this the "committed" binary and asks for a
-commit; with the binaries git-ignored there is nothing to commit.)
-- **rollout-plugins.sh**: auto-runnable via `ship rollout` (heavier, explicit — automates `/plugin update`).
+- **commit, merge, push**: NEVER auto-run. ALWAYS get explicit user approval first. Ask "approve?" with the diffs shown, wait for "yes".
 
 ## Install (plugin)
 
@@ -63,13 +31,10 @@ commit; with the binaries git-ignored there is nothing to commit.)
 /plugin install ship@yukineko
 ```
 
-## Manual install
+## Install from source
 
 ```sh
 cargo install --path .
-ship session-end  # test it
 ```
 
-## License
-
-MIT
+License: MIT [test: crates/ship/tests/prose_claims.rs::claim_license_mit]

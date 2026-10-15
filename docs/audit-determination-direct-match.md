@@ -37,7 +37,7 @@ grep の生ヒット 402+40 行には局所 enum(`ChecksVerdict::Undetermined` �
 | テスト(cfg(test) / tests/ / ui fixture) | 112 | 7 |
 | **prod(本書の分類対象)** | **253** | **13** |
 
-prod 266 件から、波括弧対応が外れた/テスト専用であることを**個別に確認して**さらに 9 件を除外した: `condukt/src/maintree.rs` の `mod tests` 内 6 件(1216,1257,1284,1298,1345,1364)、`stuckguard/src/verdict_monotonicity.rs` の 2 件(`#[cfg(test)] mod verdict_monotonicity;` で、ファイル全体がテスト専用。『THE DEFECT』を意図的に再現する mutation 用フィクスチャ)。
+prod 266 件から、波括弧対応が外れた/テスト専用であることを**個別に確認して**さらに次を除外した: `condukt/src/maintree.rs` の `mod tests` 内 6 件(1216,1257,1284,1298,1345,1364)、`stuckguard/src/verdict_monotonicity.rs` の 2 件(`#[cfg(test)] mod verdict_monotonicity;` で、ファイル全体がテスト専用。『THE DEFECT』を意図的に再現する mutation 用フィクスチャ)。
 
 **分類対象は prod の Undetermined 腕 257 件(Determination 245 / Verdict 12)**。
 トリアージの『281』は test・doc を含む粗い数で、prod に絞ると 257 である(数字は継承せず測り直した)。
@@ -128,7 +128,7 @@ doc(:366-372)が『the very collapse `scan_jsonl` exists to avoid』『nothing t
 |---|---|---|
 | `read_events` / `read_rollbacks` / `read_runtime_conflicts` / `read_review_findings_all` / `read_bridged_entries` | production 消費者は grep で**未発見**(テストのみ) | — |
 
-現状の消費者は全て保守側に倒れるので、現時点の実害は確認できなかった。ただし wrapper は pub のままで、新しい呼び出しが判定に使えば fail-open になる(latent)。
+wrapper は pub のままで、新しい呼び出しが判定に使えば fail-open になる(latent)。
 
 **P9 crates/condukt/src/circuit.rs:506**
 
@@ -173,7 +173,7 @@ let journaled_idle_secs = match &idle {
 
 1. `git -C <worktree> rev-parse --short HEAD` が `74aad11f` であることを確認
 2. §1.1 の grep を実行して生カウントを確認
-3. prod の Undetermined 腕の列挙: `#[cfg(test)]` 項目の範囲(波括弧対応)・`tests/`・`//` 行を除き、正規表現 `(?<![A-Za-z_])(Determination|Verdict)::Undetermined\b` を行単位で適用 => 266 行、検証済みテスト 9 件を除外して 257 行
+3. prod の Undetermined 腕の列挙: `#[cfg(test)]` 項目の範囲(波括弧対応)・`tests/`・`//` 行を除き、正規表現 `(?<![A-Za-z_])(Determination|Verdict)::Undetermined\b` を行単位で適用 => 266 行、検証済みテストを除外
 4. 各行の前後 5 行を読み、腕の本体と消費者を分類
 
 <!-- /record -->

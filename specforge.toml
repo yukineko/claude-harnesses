@@ -34,7 +34,7 @@ root = "."
 #     10  docs/DESIGN-spec-loop.md
 #      6  docs/AGENTIC-CODING-GUIDE.md
 #      4  specs/spec-loop.toml          <-- only reachable via the toml glob
-#      2  docs/DESIGN-continuous-audit-triage.md
+#      2  docs/DESIGN-continuous-audit-triage.md  <-- doc since removed; row kept as the 2026-09-07 measurement
 #      1  docs/specs/spec-map-backfill-notes.md
 #      1  docs/GLOSSARY.md
 #

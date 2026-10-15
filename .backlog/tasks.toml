@@ -280,40 +280,6 @@ exit 1: == short test summary info ============================\u001B[0m
 \u001B[31m======================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[33m22 deselected\u001B[0m\u001B[31m in 0.09s\u001B[0m\u001B[31m =======================\u001B[0m"""
 
 [[task]]
-id = "41c837ab"
-title = "condukt reconcile promotes failed/running tasks to Verified when the recorded branch_sha is an ancestor of main (fork-point = merged)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-Observed 2026-10-03 by the 5e5cf0a9 verifier with the condukt binary built from flow-dc66/serial-wt (main 82ee4a78, reconcile code unchanged). state set --branch records branch_sha at that moment (main.rs ~4291-4297). If that is still the fork point (main tip), reconcile_run (state.rs ~824-851) treats "ancestor of main" as merged. Observed: reconcile right after worktree create printed Running -> Verified for both tasks; after merging, a task explicitly set failed went Failed -> Verified. Also: worktree remove of a non-existent branch exits 0 and reconcile then promotes with reason "branch no longer exists and worktree is gone". Phase 7 runs reconcile on any gate FAIL, so a failed task can come back verified. Affects per-task mode too (any branch with no commits yet). Fail-open: "cannot tell whether work was merged" resolves to Verified. Scratch evidence: scratchpad e2e2.sh / e2e3.sh / swt-e2e.
-
-Escalation 2026-10-03 (5e5cf0a9 round-3 verifier, serial e2e with the 0.7.205 worktree build): a FAILED, unmerged serial task t3 was promoted by state reconcile ([t3] Failed -> Verified, "branch condukt/s1/t3 is merged into main", because its recorded branch_sha was main tip at create). Reconcile also cleared its worktree path, so the next state gate printed "gate PASS: run s1 complete". state cancel then refused ("already verified") and worktree discard could not delete the branch (still checked out), orphaning the s1-t3 worktree and branch. The failed code did not reach main, but the run was reported complete and verified. Phase 7 runs reconcile on every gate FAIL, so any per-task run with a failed task can hit this. Evidence: scratchpad r3-serial.sh."""
-created_at = 1791003391
-updated_at = 1792003550
-weight = 0.0
-issue_number = 1138
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1138"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_41c837ab -- --ignored"
-rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
-observed_at = 1792003538
-detail = """
-exit 101: /yuki/src/.harness-worktrees/session-1a4ac77f/crates/blastguard)
-   Compiling condukt v0.7.243 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.49s
-     Running tests/backlog_41c837ab.rs (target/debug/deps/backlog_41c837ab-da625f80556ccc6a)
-error: test failed, to rerun pass `-p condukt --test backlog_41c837ab`"""
-
-[[task]]
 id = "bf6b1aba"
 title = "fugu-router budget under_pressure reads a budgetguard spawn error, non-zero exit or unparseable status --json as no pressure"
 project = "/Users/yuki/src/harness"

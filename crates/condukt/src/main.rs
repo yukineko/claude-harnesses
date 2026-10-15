@@ -4555,8 +4555,9 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                 t.branch = None;
                 t.branch_sha = None;
             } else if branch.is_some() {
-                // Record the SHA at assignment time so reconcile can detect
-                // force-push false-positives by checking the original commit.
+                // Record the SHA at assignment time (the fork point at
+                // dispatch) so reconcile can refuse a branch rewritten away
+                // from it. It is not merge evidence on its own.
                 if let Some(ref b) = branch {
                     if t.branch_sha.is_none() {
                         let repo = worktree::toplevel(cwd).ok();

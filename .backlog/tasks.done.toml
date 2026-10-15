@@ -51740,3 +51740,251 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; fini
 rev = "6ee9a9ad276aadb5f4f0828b3577e1b37b057d3c"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "e65acc45"
+title = "harness_core code_index write_index / write_meta drop IO errors, so code-index build prints rebuilt: true after a failed write"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Seen 2026-10-03 by the 3f3a0e90 worker. Their doc says Fail-soft. A failed write leaves a stale or absent index while build reports success; that index then feeds code-index search and context-governor codesearch. Verify by making the index path unwritable and running fugu-router code-index build."
+created_at = 1791004707
+updated_at = 1792087425
+weight = 0.0
+issue_number = 1141
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1141"
+issue_closed_at = 1792087425
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p fugu-router --test backlog_e65acc45 -- --ignored"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003516
+detail = """
+exit 101: ness-worktrees/session-1a4ac77f/crates/harness-core)
+   Compiling fugu-router v0.1.45 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/fugu-router)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.05s
+     Running tests/backlog_e65acc45.rs (target/debug/deps/backlog_e65acc45-35f03ac9c5ffb445)
+error: test failed, to rerun pass `-p fugu-router --test backlog_e65acc45`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p fugu-router --test backlog_e65acc45 -- --include-ignored"
+exit = 0
+passed = 2
+rev = "73dcb8acaf9ffc0a1c14954ad747251730d96801"
+observed_at = 1792087406
+output_digest = "sha256:4e3cbcf51ad99e92a9ee571ed45e2cd7ea2bd1137b0cdc490cc878c66a976821"
+excerpt = """
+
+running 2 tests
+test unwritable_index_dir_does_not_report_rebuilt ... ok
+test writable_root_reports_rebuilt_and_writes_index ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_e65acc45.rs (target/debug/deps/backlog_e65acc45-0268c5a64e863cb7)
+"""
+
+[task.closure.red]
+rev = "e7ce35eabd0d7f1da8fa3e1677da6b2789091745"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "984e3ed9"
+title = "harness_core::index_store::fresh_symbols wraps load_index in Determination::known, so an unreadable index is Known([]) - module doc claims it resolves to Undetermined"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "prose",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Seen 2026-10-03 by the 3f3a0e90 verifier (read, no test written). crates/harness-core/src/index_store.rs fresh_symbols returns Determination::known(code_index::load_index(&paths.symbols_body)); load_index skips corrupt lines and maps every IO error (EISDIR, invalid UTF-8, permissions) to an empty Vec. specguard scope.rs code_index_files -> search_symbols therefore gets Known([]) or a partial list for an unreadable index - the conflation 3f3a0e90 fixed in the fugu-router CLI (strict loader load_code_index_strict in crates/fugu-router/src/main.rs). The module docstring says an index that will not load resolves to Undetermined, which the code contradicts (CLAUDE.md 4). Related: 33e24267 (load_index itself). Likely fix: move the strict loader into harness-core and have fresh_symbols return Undetermined on its error; bump harness-core."
+created_at = 1791004936
+updated_at = 1792087440
+weight = 0.0
+issue_number = 1142
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1142"
+issue_closed_at = 1792087441
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p harness-core --test backlog_984e3ed9 -- --ignored"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003529
+detail = """
+exit 101: iling toml_edit v0.22.27
+   Compiling toml v0.8.23
+   Compiling harness-core v0.2.51 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/harness-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.91s
+     Running tests/backlog_984e3ed9.rs (target/debug/deps/backlog_984e3ed9-1f8b7fea8078fd9b)
+error: test failed, to rerun pass `-p harness-core --test backlog_984e3ed9`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p harness-core --test backlog_984e3ed9 -- --include-ignored"
+exit = 0
+passed = 4
+rev = "73dcb8acaf9ffc0a1c14954ad747251730d96801"
+observed_at = 1792087426
+output_digest = "sha256:6b30d7b179ff1642c26035e223a005ef350bac6d204e4b6a8902fbadd6840fa3"
+excerpt = """
+
+running 4 tests
+test intact_index_is_known_with_symbol ... ok
+test unreadable_symbol_body_is_undetermined_not_known_empty ... ok
+test symbol_body_that_is_a_directory_is_undetermined_for_search ... ok
+test partially_corrupt_symbol_body_is_not_served_as_complete ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/backlog_984e3ed9.rs (target/debug/deps/backlog_984e3ed9-ab49695b687ab731)
+"""
+
+[task.closure.red]
+rev = "e7ce35eabd0d7f1da8fa3e1677da6b2789091745"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "33e24267"
+title = "harness_core::code_index::load_index erases errors: IO error -> empty vec, unparseable lines silently skipped"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Seen 2026-10-03 by the 3f3a0e90 worker. fugu-router search now uses its own strict loader, but harness_core::code_index::load_index still returns an empty vec on any IO error and skips bad lines. context-governor codesearch::load calls it, so a partially corrupt index is served as a smaller valid index and a non-NotFound IO error becomes parsed-to-zero-symbols with the cause lost. Readings: (a) defect per CLAUDE.md 3 (empty set on error); (b) intended fail-soft for context injection - then the consumer must still not claim no-symbol. Check codesearch.rs consumers of the result. Fix belongs in harness-core (bump harness-core)."
+created_at = 1791004705
+updated_at = 1792087597
+weight = 0.0
+issue_number = 1140
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1140"
+issue_closed_at = 1792087598
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p context-governor --test backlog_33e24267 -- --ignored"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003510
+detail = """
+exit 101: /session-1a4ac77f/crates/harness-core)
+   Compiling context-governor v0.1.18 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/context-governor)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.12s
+     Running tests/backlog_33e24267.rs (target/debug/deps/backlog_33e24267-fd09c64b244f80b6)
+error: test failed, to rerun pass `-p context-governor --test backlog_33e24267`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p context-governor --test backlog_33e24267 -- --include-ignored"
+exit = 0
+passed = 2
+rev = "9a466a24b782661230e8bfe05747f5dd6e09d8c4"
+observed_at = 1792087586
+output_digest = "sha256:9d32ecac5a555bb3d737159c9182d9cb14597a37aea178535fe4770d6f8b9d48"
+excerpt = """
+
+running 2 tests
+test intact_index_loads_both_symbols ... ok
+test partially_corrupt_index_is_unreadable_not_ok_subset ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling context-governor v0.1.20 (/Users/yuki/src/.harness-worktrees/fix-codeindex/crates/context-governor)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.61s
+     Running tests/backlog_33e24267.rs (target/debug/deps/backlog_33e24267-9d77a8a7de4587ef)
+"""
+
+[task.closure.red]
+rev = "e7ce35eabd0d7f1da8fa3e1677da6b2789091745"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "41c837ab"
+title = "condukt reconcile promotes failed/running tasks to Verified when the recorded branch_sha is an ancestor of main (fork-point = merged)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+Observed 2026-10-03 by the 5e5cf0a9 verifier with the condukt binary built from flow-dc66/serial-wt (main 82ee4a78, reconcile code unchanged). state set --branch records branch_sha at that moment (main.rs ~4291-4297). If that is still the fork point (main tip), reconcile_run (state.rs ~824-851) treats "ancestor of main" as merged. Observed: reconcile right after worktree create printed Running -> Verified for both tasks; after merging, a task explicitly set failed went Failed -> Verified. Also: worktree remove of a non-existent branch exits 0 and reconcile then promotes with reason "branch no longer exists and worktree is gone". Phase 7 runs reconcile on any gate FAIL, so a failed task can come back verified. Affects per-task mode too (any branch with no commits yet). Fail-open: "cannot tell whether work was merged" resolves to Verified. Scratch evidence: scratchpad e2e2.sh / e2e3.sh / swt-e2e.
+
+Escalation 2026-10-03 (5e5cf0a9 round-3 verifier, serial e2e with the 0.7.205 worktree build): a FAILED, unmerged serial task t3 was promoted by state reconcile ([t3] Failed -> Verified, "branch condukt/s1/t3 is merged into main", because its recorded branch_sha was main tip at create). Reconcile also cleared its worktree path, so the next state gate printed "gate PASS: run s1 complete". state cancel then refused ("already verified") and worktree discard could not delete the branch (still checked out), orphaning the s1-t3 worktree and branch. The failed code did not reach main, but the run was reported complete and verified. Phase 7 runs reconcile on every gate FAIL, so any per-task run with a failed task can hit this. Evidence: scratchpad r3-serial.sh."""
+created_at = 1791003391
+updated_at = 1792087461
+weight = 0.0
+issue_number = 1138
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1138"
+issue_closed_at = 1792087462
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_41c837ab -- --ignored"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003538
+detail = """
+exit 101: /yuki/src/.harness-worktrees/session-1a4ac77f/crates/blastguard)
+   Compiling condukt v0.7.243 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.49s
+     Running tests/backlog_41c837ab.rs (target/debug/deps/backlog_41c837ab-da625f80556ccc6a)
+error: test failed, to rerun pass `-p condukt --test backlog_41c837ab`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_41c837ab -- --include-ignored"
+exit = 0
+passed = 2
+rev = "e6bb15600efa94e1abe3c1cba562ee2809c0ba7a"
+observed_at = 1792087441
+output_digest = "sha256:81a0e6e13cb85a824670c195222884744ab317b4f72eba84e4f637e00df4141e"
+excerpt = """
+
+running 2 tests
+test failed_unmerged_task_is_not_promoted_to_verified_by_reconcile ... ok
+test control_really_merged_task_is_still_promoted ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.30s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/backlog_41c837ab.rs (target/debug/deps/backlog_41c837ab-8c0baf2dd6ae3808)
+"""
+
+[task.closure.red]
+rev = "e7ce35eabd0d7f1da8fa3e1677da6b2789091745"
+exit = 101
+kind = "behavioural"

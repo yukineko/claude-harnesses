@@ -11,8 +11,11 @@ exactly one of four classes, decided deterministically and in this order:
   cited        carries `[test: <path>::<name>]` / `[test: <path>]`; every citation
                must resolve to an existing test, or it is `dangling-citation`
   record       begins with a dated marker (`[record: YYYY-MM-DD]`, `記録 YYYY-MM-DD`,
-               `実測 YYYY-MM-DD`) or lies in a `<!-- record: YYYY-MM-DD -->` ..
-               `<!-- /record -->` block -- a past observation, kept as a record
+               `実測 YYYY-MM-DD`, each optionally followed by `rev: <sha>`) or lies
+               in a `<!-- record: YYYY-MM-DD rev: <sha> -->` .. `<!-- /record -->`
+               block -- a past observation, kept as a record. A block opener
+               MUST carry `rev:`; any `rev:` given must resolve to a commit in
+               the repo, else the record is reported and not exempt
   imperative   an instruction to the agent: English first word in IMPERATIVE_EN,
                or Japanese deontic/prohibitive ending in IMPERATIVE_JA_ENDINGS
                (incl. しない); under docs/specs/ also a must/shall/
@@ -71,12 +74,15 @@ COVERED_GLOBS = (
 
 CITATION_RE = re.compile(r"\[test:\s*([^\]\s]+?)\s*\]")
 DATE_RE = r"(\d{4})-(\d{2})-(\d{2})"
-RECORD_START_RE = re.compile(
-    r"^(?:\[record:\s*" + DATE_RE + r"\]"
-    r"|記録[:：]?\s*" + DATE_RE +
-    r"|実測[:：（(]?\s*" + DATE_RE + r")"
+REV_RE = r"([0-9a-fA-F]{7,40})"
+REV_TAIL = r"(?:\s+rev:\s*" + REV_RE + r")?"
+RECORD_START_RES = (
+    re.compile(r"^\[record:\s*" + DATE_RE + REV_TAIL + r"\s*\]"),
+    re.compile(r"^記録[:：]?\s*" + DATE_RE + REV_TAIL),
+    re.compile(r"^実測[:：（(]?\s*" + DATE_RE + REV_TAIL),
 )
-RECORD_OPEN_RE = re.compile(r"^\s*<!--\s*record:\s*(\S*)\s*-->\s*$")
+RECORD_OPEN_RE = re.compile(r"^\s*<!--\s*record:\s*(.*?)\s*-->\s*$")
+RECORD_OPENER_BODY_RE = re.compile(DATE_RE + r"\s+rev:\s*" + REV_RE)
 RECORD_CLOSE_RE = re.compile(r"^\s*<!--\s*/record\s*-->\s*$")
 
 IMPERATIVE_EN = frozenset(
@@ -340,13 +346,45 @@ def has_wordish(s: str) -> bool:
     return bool(WORDISH_RE.search(s))
 
 
-def is_record_unit(s: str) -> bool:
+def record_marker(s: str):
+    """None if `s` is not a record unit, else (date_ok, rev_or_None)."""
     t = strip_lead(s).lstrip("(（").lstrip()
-    m = RECORD_START_RE.match(t)
-    if not m:
-        return False
-    g = [x for x in m.groups() if x is not None]
-    return len(g) == 3 and valid_date(*g)
+    for rx in RECORD_START_RES:
+        m = rx.match(t)
+        if m:
+            y, mo, d, rev = m.groups()
+            return (valid_date(y, mo, d), rev)
+    return None
+
+
+def make_rev_checker(repo: str):
+    """rev -> True if it names a commit in `repo`, False if it does not.
+    A git failure other than 'no such object' is UNDETERMINED (raised)."""
+    seen: dict = {}
+
+    def ok(rev: str) -> bool:
+        if rev not in seen:
+            try:
+                proc = subprocess.run(
+                    ["git", "-C", repo, "rev-parse", "--verify", "--quiet",
+                     "--end-of-options", rev + "^{commit}"],
+                    capture_output=True,
+                )
+            except OSError as exc:
+                raise Undetermined(f"could not run git rev-parse: {exc}") from exc
+            if proc.returncode == 0:
+                seen[rev] = True
+            elif proc.returncode == 1 and not proc.stdout.strip():
+                seen[rev] = False
+            else:
+                err = proc.stderr.decode("utf-8", "replace").strip() or "(no stderr)"
+                raise Undetermined(
+                    f"`git rev-parse --verify {rev}^{{commit}}` exited "
+                    f"{proc.returncode} in {repo}: {err}"
+                )
+        return seen[rev]
+
+    return ok
 
 
 def names_mechanism(s: str) -> bool:
@@ -369,7 +407,7 @@ def is_imperative(s: str) -> bool:
     return any(tail.endswith(e) for e in IMPERATIVE_JA_ENDINGS)
 
 
-def iter_units(text: str):
+def iter_units(text: str, rev_ok=None):
     """Yield (line_no, unit_text, in_record_block) and malformed-block findings.
 
     Yields tuples ("unit", line, text, in_record) or ("malformed", line, msg).
@@ -405,11 +443,12 @@ def iter_units(text: str):
     in_fence = None
     in_comment = False
     record = None  # line of open record block
+    record_ok = False  # the open block's opener is well-formed (exempts content)
     para = []  # list of (line_no, text)
 
     def flush():
         if para:
-            yield ("para", para[0][0], para, record is not None)
+            yield ("para", para[0][0], para, record_ok)
 
     while i < n:
         raw = lines[i]
@@ -430,7 +469,7 @@ def iter_units(text: str):
             else:
                 yield from flush()
                 para = []
-                yield ("para", ln, [(ln, c[0])], record is not None)
+                yield ("para", ln, [(ln, c[0])], record_ok)
             continue
         if in_comment:
             if "-->" in raw:
@@ -441,10 +480,21 @@ def iter_units(text: str):
             para = []
             if record is not None:
                 yield ("malformed", ln, "record block opened inside another record block")
-            dm = re.fullmatch(DATE_RE, RECORD_OPEN_RE.match(raw).group(1))
-            if not dm or not valid_date(*dm.groups()):
-                yield ("malformed", ln, "record block opener needs a valid YYYY-MM-DD date")
+            body = RECORD_OPEN_RE.match(raw).group(1)
+            dm = RECORD_OPENER_BODY_RE.fullmatch(body)
             record = ln
+            record_ok = False
+            if not dm:
+                yield ("malformed", ln,
+                       "record block opener needs `record: YYYY-MM-DD rev: <sha>` "
+                       "(the commit at which the record was true)")
+            elif not valid_date(*dm.groups()[:3]):
+                yield ("malformed", ln, "record block opener needs a valid YYYY-MM-DD date")
+            elif rev_ok is None or not rev_ok(dm.group(4)):
+                yield ("malformed", ln,
+                       f"record block rev {dm.group(4)} does not resolve to a commit")
+            else:
+                record_ok = True
             continue
         if RECORD_CLOSE_RE.match(raw):
             yield from flush()
@@ -452,6 +502,7 @@ def iter_units(text: str):
             if record is None:
                 yield ("malformed", ln, "record block close without an opener")
             record = None
+            record_ok = False
             continue
         fm = FENCE_RE.match(raw)
         if fm:
@@ -475,7 +526,7 @@ def iter_units(text: str):
         if HEADING_RE.match(raw) or stripped.startswith("|"):
             yield from flush()
             para = []
-            yield ("single", ln, stripped, record is not None)
+            yield ("single", ln, stripped, record_ok)
             continue
         new_block = bool(LIST_MARK_RE.match(raw)) or stripped.startswith(">")
         if new_block:
@@ -561,7 +612,8 @@ def check_file(repo: str, rel: str, cache: dict, touched=None) -> list:
     full = os.path.join(repo, rel)
     text = read_text(full, "covered file")
     findings = []
-    for ev in iter_units(text):
+    rev_ok = cache.setdefault("__rev_ok__", make_rev_checker(repo))
+    for ev in iter_units(text, rev_ok):
         if ev[0] == "malformed":
             findings.append(f"{rel}:{ev[1]}: malformed-record-block: {ev[2]}")
             continue
@@ -586,7 +638,16 @@ def check_file(repo: str, rel: str, cache: dict, touched=None) -> list:
                             f"{rel}:{uln}: dangling-citation: [test: {c}] ({reason})"
                         )
                 continue
-            if in_record or is_record_unit(unit):
+            if in_record:
+                continue
+            rec = record_marker(unit)
+            if rec is not None and rec[0]:
+                if rec[1] is None or rev_ok(rec[1]):
+                    continue
+                findings.append(
+                    f"{rel}:{uln}: unresolved-record-rev: rev {rec[1]} does not "
+                    f"resolve to a commit: {unit}"
+                )
                 continue
             imperative = is_imperative(unit) or (
                 rel.startswith("docs/specs/") and is_normative(unit)
@@ -631,8 +692,9 @@ def main(argv=None) -> int:
         print(
             f"\ncheck-prose-tests: {len(findings)} finding(s) in {len(rels)} file(s). "
             "A claim needs `[test: <path>::<name>]` pointing at a test that "
-            "reproduces it; a record needs a dated marker (`実測 YYYY-MM-DD`, "
-            "`[record: YYYY-MM-DD]`); a claim no test can reproduce is deleted.",
+            "reproduces it; a record needs a dated marker with the commit it was true at "
+            "(`[record: YYYY-MM-DD rev: <sha>]`, or a `<!-- record: YYYY-MM-DD rev: <sha> -->` "
+            "block); a claim no test can reproduce is deleted.",
             file=sys.stderr,
         )
         return 1

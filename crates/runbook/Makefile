@@ -1,6 +1,8 @@
 # Build the per-platform binaries the launcher (bin/runbook) dispatches to.
 # Hooks call ${CLAUDE_PLUGIN_ROOT}/bin/runbook, which execs runbook-<os>-<arch>.
-# `make bins` refreshes both bundled targets; commit them.
+# The bin/runbook-<os>-<arch> outputs are git-ignored (root .gitignore): never
+# commit them. Note: inside the workspace, cargo builds into the workspace-root
+# target/, so the crate-local target/release/ paths below do not exist.
 #
 # Linux cross-build uses cargo-zigbuild (no Docker). One-time setup on macOS:
 #   brew install zig

@@ -1,8 +1,8 @@
 //! Configuration: project `runbook.toml` over `~/.runbook/config.toml` over
 //! built-in defaults (first file that exists wins; layers are not merged). Env
 //! kill switch `RUNBOOK_DISABLE`. The hook only ever *injects* the procedures a
-//! prompt explicitly asked for under a hard char budget — it can never block a
-//! turn.
+//! prompt explicitly asked for, under a char budget that is not hard (the first
+//! procedure is always included; see tests/prose_claims.rs).
 
 use std::path::{Path, PathBuf};
 
@@ -24,7 +24,8 @@ pub struct Config {
     pub prefix: char,
     /// `!<index_token>` injects the list of available runbooks instead of a body.
     pub index_token: String,
-    /// Hard cap on total injected characters across all expanded macros.
+    /// Char budget across expanded macros: further procedures are omitted once the
+    /// next would overflow it, but the first is always included (not a hard cap).
     pub max_chars: usize,
     /// Per-runbook truncation cap.
     pub per_runbook_chars: usize,

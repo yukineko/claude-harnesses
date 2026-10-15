@@ -1,12 +1,12 @@
 # playbook.example.toml — copy to ./playbook.toml (or ~/.playbook/config.toml).
 #
 # A UserPromptSubmit hook scores the curated notes against your prompt and
-# injects the most relevant ones as added context — under a hard char budget so
-# it never bloats the conversation. Notes are atomic markdown files in the store.
+# injects the most relevant ones as added context. Notes are atomic markdown
+# files in the store.
 
 enabled = true
 # store_dir = "~/.playbook/store"
-top_k = 3              # max notes injected per prompt
+top_k = 3              # max scored notes injected per prompt (always-notes do not count)
 min_score = 5          # relevance threshold (always-notes bypass this)
-max_chars = 1500       # hard cap on total injected characters
+max_chars = 1500       # budget for scored notes (always-notes are injected in full past it; an overflowing scored note is dropped unless it is the first note admitted)
 include_global = true  # also search the shared _global store

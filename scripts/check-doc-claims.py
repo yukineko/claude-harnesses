@@ -71,6 +71,20 @@ follows it ON THE SAME LINE, delimited by `「 」`, `" "` or backticks, is take
 as part of the claim. Write claims that way and they stay checkable; write them
 as loose prose and this gate cannot help you.
 
+A backticked quote must be a real code span (backticks paired left to right
+from the start of the line), never the text between two spans. When a table
+cell `|` lies between the claim and the quote, the quote must be the first
+thing in its cell, as in  | `x.rs:3` | `let a = b;` |  ; a span mid-prose in a
+later cell is not attached, and the claim is then checked for path and line
+only. This applies to backticked and unwrapped claims alike.
+
+Exception, record scope only (user ruling 2026-10-16): on a line judged at a
+record's rev (see "Record blocks" below), an UNWRAPPED `<path>:<line>` token --
+in a table cell, in prose, or inside a larger backticked span -- is a claim
+too, with the same same-line quote rule. The path must carry a file-ish
+extension; for a comma list (`x.rs:12,14`) only the first number is taken.
+Outside records the claim syntax stays backticked-only.
+
 Findings
 --------
   path-escapes-repo  the cited path resolves outside the repository root
@@ -155,6 +169,20 @@ judged against the index like any other. A git failure while reading <rev> is
 undetermined (exit 2). An unterminated block or an invalid date exempts
 nothing.
 
+The inline form `[record: YYYY-MM-DD rev: <rev>]` may appear anywhere on a
+line; the citations that FOLLOW it on that SAME line (not the rest of the
+paragraph) are judged at <rev> exactly as above. A rev that does not resolve
+is a blocking `record-rev-unresolved` finding and those citations are judged
+against the index. An inline marker without a rev, or with an invalid date,
+re-targets nothing (no finding): its citations are judged against the index,
+backticked-only, like any other line.
+
+Inside a record -- block lines and the post-marker part of an inline record
+line -- unwrapped `<path>:<line>` tokens are claims as well (see "Claim
+syntax"), with the same fail-closed findings: path absent at <rev> is
+`path-not-found`, a line past its end `line-out-of-range`, a quote not at the
+cited line `quote-not-found`.
+
 Exemption
 ---------
 Some claims describe a historical state on purpose. A line
@@ -202,9 +230,65 @@ CLAIM_RE = re.compile(r"`(?P<path>[^`\s]+\.[A-Za-z0-9_]+):(?P<line>\d+)`")
 # quotations). A gate that cries wolf gets switched off, so the ambiguous form
 # is excluded and an author who wants a bare identifier checked writes it in
 # 「」 or "" to say so explicitly.
-QUOTE_RE = re.compile(
-    r"「(?P<jp>[^」]+)」|\"(?P<dq>[^\"]+)\"|`(?P<bt>[^`]*\s[^`]*)`"
-)
+#
+# The 「」 and "" arms are this regex; the backtick arm is resolved against
+# the line's REAL code spans by find_quote(), because a regex searched from the
+# claim's end can start at a span's CLOSING backtick and take the text BETWEEN
+# two spans as a "quote" (measured: `', '`, `' | '`, and a whole sentence of
+# prose were attached as quotes this way).
+DELIM_QUOTE_RE = re.compile(r"「(?P<jp>[^」]+)」|\"(?P<dq>[^\"]+)\"")
+
+
+def code_spans(line: str) -> list:
+    """The line's code spans as (open_idx, close_idx), backticks paired left to
+    right from the START of the line. A backtick that closes one span can never
+    open another, so the text BETWEEN two spans is never mistaken for one."""
+    ticks = [i for i, ch in enumerate(line) if ch == "`"]
+    return list(zip(ticks[0::2], ticks[1::2]))
+
+
+def find_quote(line: str, end: int):
+    """The quote attached to a claim ending at `end`, or None.
+
+    The earliest candidate after the claim wins: a 「」 or "" quote, or a REAL
+    code span (see code_spans) whose content contains whitespace. Then, if an
+    unescaped table-cell `|` outside any code span lies between the claim and
+    that candidate, the candidate counts only when it is the first thing in
+    its cell (a 「」/"" quote inside a code span is anchored at that span's
+    opening backtick). A span sitting mid-prose in a later cell is not a quote
+    of this claim, and the claim then has no quote at all -- the path and line
+    are still checked."""
+    spans = code_spans(line)
+    best = None
+    dm = DELIM_QUOTE_RE.search(line, end)
+    if dm:
+        best = (dm.start(), dm.group("jp") or dm.group("dq"))
+    for o, c in spans:
+        if o < end:
+            continue
+        body = line[o + 1 : c]
+        if any(ch.isspace() for ch in body):
+            if best is None or o < best[0]:
+                best = (o, body)
+            break
+    if best is None:
+        return None
+    qstart, quote = best
+    for o, c in spans:
+        if o < qstart <= c:
+            qstart = o
+            break
+    last_pipe = None
+    for i in range(end, qstart):
+        if line[i] != "|" or (i > 0 and line[i - 1] == "\\"):
+            continue
+        if any(o <= i <= c for o, c in spans):
+            continue
+        last_pipe = i
+    if last_pipe is not None and line[last_pipe + 1 : qstart].strip():
+        return None
+    return quote
+
 
 EXEMPT_RE = re.compile(r"<!--\s*doc-claim-exempt\s*:\s*(?P<reason>\S.*?)\s*-->")
 
@@ -220,6 +304,24 @@ RECORD_OPEN_RE = re.compile(
     r"^\s*<!--\s*record:\s*(\d{4})-(\d{2})-(\d{2})(?:\s+rev:\s*(\S+?))?\s*-->\s*$"
 )
 RECORD_CLOSE_RE = re.compile(r"^\s*<!--\s*/record\s*-->\s*$")
+
+# The inline record form, `[record: YYYY-MM-DD rev: <rev>]`, anywhere on a
+# line. It re-targets only the citations that FOLLOW it on that same line. The
+# rev is optional here (check-prose-tests.py accepts a revless inline record);
+# a revless inline marker re-targets nothing, so its citations stay judged
+# against the source like any other.
+INLINE_RECORD_RE = re.compile(
+    r"\[record:\s*(\d{4})-(\d{2})-(\d{2})(?:\s+rev:\s*([^\]\s]+))?\s*\]"
+)
+
+# An UNWRAPPED `path:line` (no backticks required). Used ONLY on lines judged
+# at a record's rev (user ruling 2026-10-16); outside records the claim syntax
+# stays backticked-only. The lookbehind makes the match start at the beginning
+# of the path token rather than in its middle. For a comma list such as
+# `x.rs:12,14` only the first number is taken.
+UNWRAPPED_CLAIM_RE = re.compile(
+    r"(?<![A-Za-z0-9_./\-])(?P<path>[A-Za-z0-9_./\-]+\.[A-Za-z0-9_]+):(?P<line>\d+)"
+)
 
 KIND_RECORD_WITHOUT_REV = "record-without-rev"
 KIND_RECORD_REV_UNRESOLVED = "record-rev-unresolved"
@@ -307,8 +409,11 @@ class RevReader:
 
 
 def record_opener_findings(doc_rel: str, lines: list, reader: RevReader):
-    """Blocking findings for record openers that are not records, and the map
-    0-based line index -> resolved sha for lines inside a real record."""
+    """Blocking findings for record markers that are not records, and the map
+    0-based line index -> [(start_col, rev, sha), ...] for lines judged at a
+    record's rev (see record_at). start_col is 0 inside a block record and the
+    end of the marker for an inline `[record: DATE rev: SHA]`: only citations
+    at or after it belong to that record."""
     findings = []
     inside: dict = {}
     for open_idx, close_idx, rev in record_blocks(lines):
@@ -342,8 +447,50 @@ def record_opener_findings(doc_rel: str, lines: list, reader: RevReader):
             )
             continue
         for idx in range(open_idx + 1, close_idx):
-            inside[idx] = (rev, sha)
+            inside[idx] = [(0, rev, sha)]
+    import datetime
+
+    for idx, line in enumerate(lines):
+        for m in INLINE_RECORD_RE.finditer(line):
+            try:
+                datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            except ValueError:
+                continue
+            rev = m.group(4)
+            if rev is None:
+                continue
+            sha = reader.resolve(rev)
+            if sha is None:
+                findings.append(
+                    finding(
+                        {
+                            "doc": doc_rel,
+                            "doc_line": idx + 1,
+                            "path": "(inline record)",
+                            "cited_line": 0,
+                            "exempt_reason": None,
+                        },
+                        KIND_RECORD_REV_UNRESOLVED,
+                        f"inline record rev {rev!r} does not resolve to a "
+                        "commit; it is not a record",
+                    )
+                )
+                continue
+            inside.setdefault(idx, []).append((m.end(), rev, sha))
     return findings, inside
+
+
+def record_at(segments, col: int):
+    """The (rev, sha) a citation starting at `col` is judged at, or None.
+
+    `segments` is one line's [(start_col, rev, sha), ...] in ascending
+    start_col; the last segment that starts at or before `col` wins, so a later
+    inline marker on a line re-targets only what follows it."""
+    hit = None
+    for start, rev, sha in segments or ():
+        if start <= col:
+            hit = (rev, sha)
+    return hit
 
 KIND_PATH_ESCAPES_REPO = "path-escapes-repo"
 KIND_PATH_NOT_FOUND = "path-not-found"
@@ -718,34 +865,61 @@ def make_source(repo: str, name: str):
 def extract_claims(doc_rel: str, text: str, in_record: dict | None = None) -> list:
     """(doc, doc_line, path, cited_line, quote_or_None, exempt_reason_or_None).
 
-    `in_record` maps a 0-based line index inside a real record block to that
-    record's (rev, sha); see record_opener_findings."""
+    `in_record` maps a 0-based line index to that line's record segments; see
+    record_opener_findings / record_at.
+
+    Backticked `path:line` claims are taken everywhere. On the part of a line
+    that is judged at a record's rev, UNWRAPPED `path:line` tokens are taken
+    too (UNWRAPPED_CLAIM_RE), so a citation in a table cell or in prose inside
+    a record cannot escape the check by omitting backticks."""
     claims = []
     lines = text.split("\n")
     in_record = in_record or {}
+
+    def add(idx, line, start, end, path, cited, exempt, rec):
+        quote = find_quote(line, end)
+        claims.append(
+            {
+                "doc": doc_rel,
+                "doc_line": idx + 1,
+                "path": path,
+                "cited_line": cited,
+                "quote": quote,
+                "exempt_reason": exempt,
+                "in_record": rec is not None,
+                "record_rev": rec,
+            }
+        )
+
     for idx, line in enumerate(lines):
         exempt = None
         if idx > 0:
             m = EXEMPT_RE.search(lines[idx - 1])
             if m:
                 exempt = m.group("reason")
+        segments = in_record.get(idx)
+        masked = line
         for cm in CLAIM_RE.finditer(line):
-            rest = line[cm.end() :]
-            qm = QUOTE_RE.search(rest)
-            quote = None
-            if qm:
-                quote = qm.group("jp") or qm.group("dq") or qm.group("bt")
-            claims.append(
-                {
-                    "doc": doc_rel,
-                    "doc_line": idx + 1,
-                    "path": cm.group("path"),
-                    "cited_line": int(cm.group("line")),
-                    "quote": quote,
-                    "exempt_reason": exempt,
-                    "in_record": idx in in_record,
-                    "record_rev": in_record.get(idx),
-                }
+            add(
+                idx, line, cm.start(), cm.end(), cm.group("path"),
+                int(cm.group("line")), exempt, record_at(segments, cm.start()),
+            )
+            # Blank the backticked claim so the unwrapped pass below does not
+            # take the same citation a second time.
+            masked = (
+                masked[: cm.start()] + " " * (cm.end() - cm.start()) + masked[cm.end() :]
+            )
+        if not segments:
+            continue
+        for um in UNWRAPPED_CLAIM_RE.finditer(masked):
+            rec = record_at(segments, um.start())
+            if rec is None:
+                # Before the line's first inline record marker: outside the
+                # record, so the backticked-only scope applies.
+                continue
+            add(
+                idx, line, um.start(), um.end(), um.group("path"),
+                int(um.group("line")), exempt, rec,
             )
     return claims
 

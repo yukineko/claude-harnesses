@@ -715,6 +715,24 @@ class DriftDetection(unittest.TestCase):
                 by_path["scripts/continuous-audit.sh"],
             )
 
+    def test_heading_with_trailing_citation_parses(self):
+        """The `## 対象 crate (既定)` heading may carry trailing `[test: ...]`
+        citation(s); skill_md_crates must still extract the backtick CSV."""
+        csv = "blastguard,propguard,backlog"
+        plain = f"## 対象 crate (既定)\n\n既定は `{csv}` である。\n"
+        cited = (
+            "## 対象 crate (既定) [test: a.py::test_x]\n\n"
+            f"既定は `{csv}` である。\n"
+        )
+        cited_twice = (
+            "## 対象 crate (既定) [test: a.py::test_x] [test: b.py::test_y]\n\n"
+            f"既定は `{csv}` である。\n"
+        )
+        expected = set(csv.split(","))
+        self.assertEqual(cgcs.skill_md_crates(plain), expected)
+        self.assertEqual(cgcs.skill_md_crates(cited), expected)
+        self.assertEqual(cgcs.skill_md_crates(cited_twice), expected)
+
     def test_unparseable_mirror_target_does_not_blame_the_mirror(self):
         """When continuous-audit.sh cannot be parsed, SKILL.md (its mirror) must
         not be reported as carrying `unexpected [...]` — that blames the doc for

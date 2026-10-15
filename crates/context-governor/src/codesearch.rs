@@ -307,12 +307,21 @@ pub fn render(hits: &[Hit]) -> String {
 /// distinguishable from an empty one.
 ///
 /// Split out from [`lookup`] so the store boundary is testable on its own.
+///
+/// Strict, via [`code_index::load_index_checked`]: no file is
+/// [`Decline::IndexAbsent`]; any other IO error, a line that is not a symbol
+/// record, a build meta that cannot be read, or a body whose record count
+/// disagrees with the build meta is [`Decline::Unreadable`]. A partially
+/// corrupt index is therefore never served as a smaller valid one.
 pub fn load(root: &Path) -> Result<Vec<Symbol>, Decline> {
     let path = index_path(root);
-    if !path.exists() {
-        return Err(Decline::IndexAbsent);
-    }
-    let symbols = code_index::load_index(&path);
+    let symbols = match code_index::load_index_checked(&path, &meta_path(root)) {
+        Ok(s) => s,
+        Err(code_index::IndexLoadError::Absent(_)) => return Err(Decline::IndexAbsent),
+        Err(code_index::IndexLoadError::Unreadable(why)) => {
+            return Err(Decline::Unreadable(why));
+        }
+    };
     if symbols.is_empty() {
         // An index file that parses to nothing is not a repo with no symbols;
         // it is a store we cannot trust. Do not report it as a clean miss.

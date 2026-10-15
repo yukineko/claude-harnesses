@@ -74,7 +74,6 @@ impl Drop for RestoreMode {
 }
 
 #[test]
-#[ignore = "backlog 984e3ed9: RED repro"]
 fn unreadable_symbol_body_is_undetermined_not_known_empty() {
     let repo = built_repo();
     let dir = damage_body_invalid_utf8(repo.path());
@@ -90,7 +89,6 @@ fn unreadable_symbol_body_is_undetermined_not_known_empty() {
 }
 
 #[test]
-#[ignore = "backlog 984e3ed9: RED repro"]
 fn symbol_body_that_is_a_directory_is_undetermined_for_search() {
     let repo = built_repo();
     let paths = IndexPaths::new(repo.path());
@@ -114,7 +112,6 @@ fn symbol_body_that_is_a_directory_is_undetermined_for_search() {
 }
 
 #[test]
-#[ignore = "backlog 984e3ed9: RED repro"]
 fn partially_corrupt_symbol_body_is_not_served_as_complete() {
     let repo = built_repo();
     let paths = IndexPaths::new(repo.path());

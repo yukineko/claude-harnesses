@@ -73,7 +73,6 @@ fn build(root: &Path) -> (i32, String, String) {
 }
 
 #[test]
-#[ignore = "backlog e65acc45: RED repro"]
 fn unwritable_index_dir_does_not_report_rebuilt() {
     let repo = TempRepo::new("unwritable");
     // `.fugu` as a plain file: create_dir_all / File::create under it fail.

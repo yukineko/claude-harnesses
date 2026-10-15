@@ -945,7 +945,11 @@ fn cmd_code_index_build(root: Option<PathBuf>, if_stale: bool) -> Result<()> {
         files_scanned += 1;
     }
 
-    write_index(&index_path, &symbols);
+    // Fail-loud: a build whose writes failed must not print `rebuilt: true`.
+    // The error propagates, so the command exits non-zero with the IO error on
+    // stderr and nothing on stdout.
+    write_index(&index_path, &symbols)
+        .with_context(|| format!("writing code index {}", index_path.display()))?;
     write_meta(
         &meta_path,
         &IndexMeta {
@@ -953,7 +957,8 @@ fn cmd_code_index_build(root: Option<PathBuf>, if_stale: bool) -> Result<()> {
             files: files_scanned,
             symbols: symbols.len(),
         },
-    );
+    )
+    .with_context(|| format!("writing code index meta {}", meta_path.display()))?;
 
     println!(
         "{}",
@@ -974,109 +979,22 @@ const CODE_INDEX_EXIT_ABSENT: i32 = 3;
 /// body the build sidecar does not vouch for).
 const CODE_INDEX_EXIT_UNREADABLE: i32 = 4;
 
-/// Why `code-index search` could not read the index. Mirrors
-/// context-governor's `codesearch::Decline` split (IndexAbsent / Unreadable);
-/// the third state, a genuine no-match, is a successful `[]`.
-#[derive(Debug, PartialEq, Eq)]
-enum CodeIndexLoadError {
-    /// No index file at the expected path: the index was never built.
-    Absent(PathBuf),
-    /// The index file exists but its contents cannot be trusted.
-    Unreadable(String),
-}
-
-/// Strict tri-state load of the code index at `root`.
-///
-/// Unlike `harness_core::code_index::load_index` (which skips unparseable
-/// lines and maps every IO error to an empty vec), this distinguishes:
-/// * file not found → [`CodeIndexLoadError::Absent`];
-/// * any other IO error, or any non-blank line that is not a valid symbol
-///   record → [`CodeIndexLoadError::Unreadable`] (a partially corrupt index
-///   would otherwise silently under-report matches);
-/// * build sidecar meta present but unparseable → `Unreadable`;
-/// * build sidecar meta present and its `symbols` count differs from the
-///   number of records parsed from the body → `Unreadable`, naming both
-///   counts (a truncated body that still holds valid lines would otherwise
-///   be served as a complete index and turn a lost symbol into a false
-///   "read, no match");
-/// * an index with zero symbols → `Ok(vec![])` only when the meta records
-///   `symbols: 0` (a repo with no `.rs` symbols); with no meta the empty body
-///   is unvouched-for and reported as `Unreadable`;
-/// * a non-empty body with **no** meta file → accepted as read. There is no
-///   count to compare against, every line already parsed as a symbol, and
-///   indexes built before the meta sidecar existed have no meta. This is the
-///   one case where truncation at a line boundary cannot be detected here.
-///
-/// `build` writes the body and the meta separately and both writes are
-/// fail-soft (`harness_core::code_index::{write_index, write_meta}` drop IO
-/// errors). If the body is rewritten but the meta write fails, the stale meta
-/// will disagree with the body and search reports `Unreadable` (exit 4) until
-/// the next successful build. That is deliberate: a body and meta that
-/// disagree cannot be told apart from a truncated body, and "cannot
-/// determine" resolves to the restrictive side, not to a served result.
+/// Strict tri-state load of the code index at `root` — the shared
+/// [`harness_core::code_index::load_index_checked`] over this crate's body and
+/// meta paths. Absent (exit 3) and Unreadable (exit 4: IO error, a line that is
+/// not a symbol record, an unreadable build meta, a body/meta symbol-count
+/// mismatch, or an empty body no meta vouches for) are distinct from a
+/// genuine no-match, which is a successful `[]`.
 fn load_code_index_strict(
     root: &Path,
-) -> std::result::Result<Vec<harness_core::code_index::Symbol>, CodeIndexLoadError> {
-    use harness_core::code_index::{read_meta, Symbol};
-
-    let path = code_index_path(root);
-    let contents = match std::fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(CodeIndexLoadError::Absent(path));
-        }
-        Err(e) => {
-            return Err(CodeIndexLoadError::Unreadable(format!(
-                "cannot read {}: {e}",
-                path.display()
-            )));
-        }
-    };
-    let mut symbols = Vec::new();
-    for (i, line) in contents.lines().enumerate() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        match serde_json::from_str::<Symbol>(line) {
-            Ok(s) => symbols.push(s),
-            Err(e) => {
-                return Err(CodeIndexLoadError::Unreadable(format!(
-                    "{} line {}: not a symbol record: {e}",
-                    path.display(),
-                    i + 1
-                )));
-            }
-        }
-    }
-    let meta_path = code_index_meta_path(root);
-    let meta = if meta_path.exists() {
-        match read_meta(&meta_path) {
-            Some(m) => Some(m),
-            None => {
-                return Err(CodeIndexLoadError::Unreadable(format!(
-                    "build meta {} exists but cannot be read as index meta",
-                    meta_path.display()
-                )));
-            }
-        }
-    } else {
-        None
-    };
-    match meta {
-        Some(m) if m.symbols != symbols.len() => Err(CodeIndexLoadError::Unreadable(format!(
-            "{} holds {} symbols but its build meta {} records {} (truncated index or stale meta; rebuild with `fugu-router code-index build`)",
-            path.display(),
-            symbols.len(),
-            meta_path.display(),
-            m.symbols
-        ))),
-        None if symbols.is_empty() => Err(CodeIndexLoadError::Unreadable(format!(
-            "{} holds zero symbols and has no build meta recording an empty build",
-            path.display()
-        ))),
-        _ => Ok(symbols),
-    }
+) -> std::result::Result<
+    Vec<harness_core::code_index::Symbol>,
+    harness_core::code_index::IndexLoadError,
+> {
+    harness_core::code_index::load_index_checked(
+        &code_index_path(root),
+        &code_index_meta_path(root),
+    )
 }
 
 /// `code-index search --query <q> [--root] [--k]`: load the index for `root`
@@ -1092,19 +1010,19 @@ fn load_code_index_strict(
 /// Callers that do `$(... 2>/dev/null || true)` therefore get an empty
 /// string (no context) for absent/unreadable, not a false "nothing found".
 fn cmd_code_index_search(query: String, root: Option<PathBuf>, k: usize) -> Result<()> {
-    use harness_core::code_index::search;
+    use harness_core::code_index::{search, IndexLoadError};
 
     let root = root.unwrap_or_else(|| PathBuf::from("."));
     let symbols = match load_code_index_strict(&root) {
         Ok(s) => s,
-        Err(CodeIndexLoadError::Absent(path)) => {
+        Err(IndexLoadError::Absent(path)) => {
             eprintln!(
                 "fugu-router: code-index search: no index at {} (run `fugu-router code-index build`)",
                 path.display()
             );
             std::process::exit(CODE_INDEX_EXIT_ABSENT);
         }
-        Err(CodeIndexLoadError::Unreadable(why)) => {
+        Err(IndexLoadError::Unreadable(why)) => {
             eprintln!("fugu-router: code-index search: index unreadable: {why}");
             std::process::exit(CODE_INDEX_EXIT_UNREADABLE);
         }

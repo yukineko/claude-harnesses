@@ -1176,7 +1176,7 @@ fi
 ```
 condukt state gate --run $RID      # exit 0 まで完了宣言しない
 ```
-- gate FAIL の場合、**まず reconcile を試みる**（branch がマージ済みのタスクを自動 verified に昇格）:
+- gate FAIL の場合、**まず reconcile を試みる**（branch が fork point より先の commit を持ちそれがマージ済みのタスクだけを自動 verified に昇格する [test: crates/condukt/tests/backlog_41c837ab.rs::control_really_merged_task_is_still_promoted]。`failed` タスクは昇格しない [test: crates/condukt/tests/backlog_41c837ab.rs::failed_unmerged_task_is_not_promoted_to_verified_by_reconcile]）:
   ```
   condukt state reconcile --run $RID
   condukt state gate --run $RID    # 再チェック

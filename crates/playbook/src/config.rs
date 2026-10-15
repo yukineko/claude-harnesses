@@ -1,6 +1,7 @@
 //! Configuration: project `playbook.toml` over `~/.playbook/config.toml` over
 //! defaults, with an env kill switch. Retrieval only ever *injects* short notes
-//! under a hard char budget — it can never block a turn.
+//! under a char budget for scored notes (`always` notes are injected in full
+//! past it) — it can never block a turn.
 
 use std::path::{Path, PathBuf};
 
@@ -13,11 +14,12 @@ pub use harness_core::config::expand_tilde;
 pub struct Config {
     pub enabled: bool,
     pub store_dir: PathBuf,
-    /// Max notes injected per prompt.
+    /// Max scored notes injected per prompt (`always` notes do not count).
     pub top_k: usize,
     /// Minimum relevance score for a note to be injected (always-notes bypass).
     pub min_score: i64,
-    /// Hard cap on total injected characters (keeps context lean).
+    /// Char budget for scored notes: `always` notes are injected in full past
+    /// it; an overflowing scored note is dropped unless it is the first admitted.
     pub max_chars: usize,
     /// Also search the shared `_global` store, not just the project's notes.
     pub include_global: bool,

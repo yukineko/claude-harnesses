@@ -40,7 +40,7 @@ const STOP: &[&str] = &[
     "した",
 ];
 
-/// Tokenize to a lowercase set: ASCII words (len ≥ 2) plus any run of CJK chars.
+/// Tokenize to a lowercase set: ASCII words (len ≥ 2) plus each CJK char on its own.
 pub fn tokenize(s: &str) -> HashSet<String> {
     let mut set = HashSet::new();
     let mut cur = String::new();
@@ -54,7 +54,7 @@ pub fn tokenize(s: &str) -> HashSet<String> {
         if c.is_ascii_alphanumeric() {
             cur.extend(c.to_lowercase());
         } else if is_cjk(c) {
-            // index CJK as individual chars and adjacent bigrams
+            // index CJK as individual chars (no bigrams)
             if !cur.is_empty() {
                 flush(&mut cur, &mut set);
             }

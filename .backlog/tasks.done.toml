@@ -51186,3 +51186,189 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; fini
 rev = "ea5125758c95885e091dfd80dc3c56035868ac4b"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "039f3502"
+title = "condukt-loop SKILL.md documents flags the binary lacks (--run, --max-iters) and omits the emitted module key"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-15 at b6ec1bf4 (branch drift-condukt): 6 unknown flags of 119 condukt invocations, all in skills/condukt-loop/SKILL.md."
+created_at = 1792063202
+updated_at = 1792065700
+weight = 0.0
+issue_number = 1353
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1353"
+issue_closed_at = 1792065703
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test drift_c3_doc_cli_flags -- --ignored"
+rev = "b6ec1bf486df59cec2d4c000001ff46b5cc36cf7"
+observed_at = 1792063202
+detail = """
+exit 101: d; 0 measured; 0 filtered out; finished in 1.03s
+
+   Compiling condukt v0.7.247 (/Users/yuki/src/.harness-worktrees/drift-condukt/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.42s
+     Running tests/drift_c3_doc_cli_flags.rs (target/debug/deps/drift_c3_doc_cli_flags-e630e7fc38582cdd)
+error: test failed, to rerun pass `-p condukt --test drift_c3_doc_cli_flags`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test drift_c3_doc_cli_flags -- --include-ignored"
+exit = 0
+passed = 2
+rev = "3ab920f7b869a66e512ad23b95be403fc1b661dc"
+observed_at = 1792065674
+output_digest = "sha256:e93965405fe6d024bea1a67a6bc99b146517c2b5fb3582e929491a36e6c02aa8"
+excerpt = """
+
+running 2 tests
+test loop_skill_output_example_lists_every_emitted_key ... ok
+test documented_condukt_flags_exist_in_the_binary ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.08s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/drift_c3_doc_cli_flags.rs (target/debug/deps/drift_c3_doc_cli_flags-81803bd20cbdac7a)
+"""
+
+[task.closure.red]
+rev = "b6ec1bf486df59cec2d4c000001ff46b5cc36cf7"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "a1b4cac1"
+title = "condukt SKILL.md F->P oracle section contradicts oracle.rs (required gated on reproduction_tests; missing tdd said to fall back) and the interpreter schema cannot carry kind"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-15 at b6ec1bf4. SKILL.md ~852/~855 vs src/oracle.rs ~155/~191; agents/condukt-interpreter.md schema lacks kind and forbids extra keys, so the F->P gate is unreachable from an interpreter decomposition."
+created_at = 1792063209
+updated_at = 1792065732
+weight = 0.0
+issue_number = 1354
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1354"
+issue_closed_at = 1792065735
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test drift_c4_oracle_doc -- --ignored"
+rev = "b6ec1bf486df59cec2d4c000001ff46b5cc36cf7"
+observed_at = 1792063209
+detail = """
+exit 101:  0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+   Compiling condukt v0.7.247 (/Users/yuki/src/.harness-worktrees/drift-condukt/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running tests/drift_c4_oracle_doc.rs (target/debug/deps/drift_c4_oracle_doc-625b7b63a74d8755)
+error: test failed, to rerun pass `-p condukt --test drift_c4_oracle_doc`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test drift_c4_oracle_doc -- --include-ignored"
+exit = 0
+passed = 4
+rev = "3ab920f7b869a66e512ad23b95be403fc1b661dc"
+observed_at = 1792065703
+output_digest = "sha256:6e921eddb16ae216376758244d7333de76f912941c04e283f8e70b55d9ce3d33"
+excerpt = """
+
+running 4 tests
+test interpreter_output_schema_can_carry_kind ... ok
+test skill_does_not_say_missing_tdd_degrades_to_fallback_true ... ok
+test skill_required_bullet_does_not_gate_on_reproduction_tests ... ok
+test binary_missing_tdd_blocks_regardless_of_reproduction_tests ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.94s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/drift_c4_oracle_doc.rs (target/debug/deps/drift_c4_oracle_doc-6a1e12430788fa5c)
+"""
+
+[task.closure.red]
+rev = "b6ec1bf486df59cec2d4c000001ff46b5cc36cf7"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "43fede25"
+title = "condukt [loop] max_iters is parsed but never enforced: condukt loop accepts any iteration"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-15 at b6ec1bf4: --iteration 3 under max_iters=2 exits 0 with stop:false; config.rs:324 sets it, nothing in src reads it."
+created_at = 1792063211
+updated_at = 1792065762
+weight = 0.0
+issue_number = 1355
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1355"
+issue_closed_at = 1792065766
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test drift_b1_loop_cap -- --ignored"
+rev = "b6ec1bf486df59cec2d4c000001ff46b5cc36cf7"
+observed_at = 1792063211
+detail = """
+exit 101: ailed; 0 ignored; 0 measured; 0 filtered out; finished in 0.58s
+
+   Compiling condukt v0.7.247 (/Users/yuki/src/.harness-worktrees/drift-condukt/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running tests/drift_b1_loop_cap.rs (target/debug/deps/drift_b1_loop_cap-7d2c6f9f0c49f20f)
+error: test failed, to rerun pass `-p condukt --test drift_b1_loop_cap`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test drift_b1_loop_cap -- --include-ignored"
+exit = 0
+passed = 1
+rev = "3ab920f7b869a66e512ad23b95be403fc1b661dc"
+observed_at = 1792065735
+output_digest = "sha256:80e87bd09b646307ff4f825d9911484929d31eb0182436e9cd33a9b41ade8639"
+excerpt = """
+
+running 1 test
+test loop_refuses_iteration_beyond_configured_max_iters ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/drift_b1_loop_cap.rs (target/debug/deps/drift_b1_loop_cap-703b7bc5bc8ddfe8)
+"""
+
+[task.closure.red]
+rev = "b6ec1bf486df59cec2d4c000001ff46b5cc36cf7"
+exit = 101
+kind = "behavioural"

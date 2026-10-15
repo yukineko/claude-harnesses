@@ -112,10 +112,11 @@ pub struct TaskState {
     pub worktree: Option<String>,
     #[serde(default)]
     pub branch: Option<String>,
-    /// The git SHA recorded at the time the branch was first assigned.
-    /// Used by reconcile to detect force-push false-positives: we check
-    /// whether the *original* tip commit is an ancestor of the default branch,
-    /// rather than the current (possibly rewritten) branch ref.
+    /// The git SHA recorded at the time the branch was first assigned
+    /// (normally the fork point, since dispatch records it right after
+    /// `worktree create`). Reconcile requires it to be an ancestor of the
+    /// branch's current tip (the branch was not rewritten away from it); it is
+    /// NEVER by itself evidence that the task's work was merged.
     #[serde(default)]
     pub branch_sha: Option<String>,
     /// Unix timestamp (seconds) when this task's status was last changed.
@@ -929,15 +930,29 @@ pub struct ReconcileChange {
     pub reason: String,
 }
 
-/// Auto-detect tasks whose branches are already merged (or gone) and promote
-/// them to `verified`, clearing stale worktree references along the way.
+/// Auto-detect tasks whose OWN work has provably reached `default_branch` and
+/// promote them to `verified`, clearing stale worktree references along the way.
 ///
-/// A task is reconciled to `verified` when:
-/// 1. Its branch is an ancestor of `default_branch` (`git merge-base --is-ancestor`), OR
-/// 2. Its branch no longer exists AND its worktree is gone from disk.
+/// A task is promoted ONLY on positive evidence (backlog `41c837ab`). All of:
+/// 1. its status is `pending`, `running` or `done` — a `failed` task is an
+///    explicit verdict and is never promoted (reconcile recovers stale state
+///    after a crash; it does not overturn a verifier);
+/// 2. its branch still exists, and its tip has at least one commit beyond the
+///    branch's fork point (see [`branch_fork_point`]) — a branch still sitting
+///    on its fork point has no work of its own, and "the fork point is an
+///    ancestor of main" is true of every freshly created branch;
+/// 3. the recorded `branch_sha` (if any) is an ancestor of the tip — the
+///    branch was not rewritten away from where it was assigned;
+/// 4. the tip is an ancestor of `default_branch`, so every commit the branch
+///    added is contained in it.
 ///
-/// If the worktree is gone but the branch still exists (unmerged), only the
-/// worktree reference is cleared — the status is left as-is.
+/// Anything that cannot be determined — branch gone, fork point unknown, a git
+/// probe that neither answers yes nor no — leaves the status unchanged. A
+/// deleted branch with a deleted worktree is NOT evidence of a merge (a
+/// discarded or never-created branch looks the same).
+///
+/// If the worktree is gone and the task is not promoted, only the worktree
+/// reference is cleared — the status is left as-is.
 ///
 /// Returns (updated RunState, list of changes) so the caller can save and report.
 pub fn reconcile_run(
@@ -963,56 +978,26 @@ pub fn reconcile_run(
             .map(|p| !PathBuf::from(p).exists())
             .unwrap_or(true); // no worktree recorded → treat as gone
 
-        let branch_merged = t.branch.as_deref().map(|b| {
-            // Prefer the recorded SHA over the current branch ref so that a
-            // force-push that resets the branch to a commit already in the
-            // default branch does not produce a false positive. If branch_sha
-            // was recorded, we check whether that exact commit is an ancestor
-            // of the default branch; otherwise we fall back to the branch name
-            // (which may have been rewritten by a force-push).
-            let ref_to_check = t.branch_sha.as_deref().unwrap_or(b);
-            crate::worktree::git(
-                &repo,
-                &["merge-base", "--is-ancestor", ref_to_check, default_branch],
-            )
-            .is_ok()
-        });
+        let promotable = !matches!(t.status, Status::Failed);
+        let merged = promotable
+            && t.branch.as_deref().is_some_and(|b| {
+                own_work_merged(&repo, b, t.branch_sha.as_deref(), default_branch)
+            });
 
-        let branch_exists = t.branch.as_deref().map(|b| {
-            crate::worktree::git(
-                &repo,
-                &["rev-parse", "--verify", &format!("refs/heads/{b}")],
-            )
-            .is_ok()
-        });
-
-        let should_verify = match (branch_merged, branch_exists) {
-            (Some(true), _) => true, // merged: branch is an ancestor of default
-            (Some(false), Some(false)) if worktree_gone => true, // branch deleted + worktree gone
-            _ => false,
-        };
-
-        if should_verify {
-            let reason = match branch_merged {
-                Some(true) => format!(
-                    "branch '{}' is merged into '{default_branch}'",
-                    t.branch.as_deref().unwrap_or("?")
-                ),
-                _ => format!(
-                    "branch '{}' no longer exists and worktree is gone",
-                    t.branch.as_deref().unwrap_or("?")
-                ),
-            };
+        if merged {
             changes.push(ReconcileChange {
                 task_id: t.id.clone(),
                 old_status: t.status,
                 new_status: Status::Verified,
-                reason,
+                reason: format!(
+                    "branch '{}' has commits beyond its fork point and all of them are in '{default_branch}'",
+                    t.branch.as_deref().unwrap_or("?")
+                ),
             });
             t.status = Status::Verified;
             t.worktree = None; // clear stale reference
         } else if worktree_gone && t.worktree.is_some() {
-            // Worktree gone but branch exists/unknown — just clear the stale path.
+            // Not provably merged — just clear the stale path.
             changes.push(ReconcileChange {
                 task_id: t.id.clone(),
                 old_status: t.status,
@@ -1024,6 +1009,73 @@ pub fn reconcile_run(
     }
 
     Ok((run, changes))
+}
+
+/// `git merge-base --is-ancestor a b` as a three-valued answer: exit 0 →
+/// `Some(true)`, exit 1 → `Some(false)`, anything else (bad ref, timeout,
+/// spawn failure) → `None` (cannot determine).
+fn is_ancestor(repo: &Path, a: &str, b: &str) -> Option<bool> {
+    match crate::worktree::git_exit_code(repo, &["merge-base", "--is-ancestor", a, b]) {
+        Ok(0) => Some(true),
+        Ok(1) => Some(false),
+        _ => None,
+    }
+}
+
+/// The commit `branch` was created from, read from the branch's own reflog
+/// (its oldest entry: `worktree add -b` / `checkout -b` / `branch` all log the
+/// creation point there). `None` when there is no reflog for the branch or it
+/// cannot be read — the caller must then treat "has own work" as unknown.
+fn branch_fork_point(repo: &Path, branch: &str) -> Option<String> {
+    let out = crate::worktree::git(
+        repo,
+        &[
+            "reflog",
+            "show",
+            "--format=%H",
+            &format!("refs/heads/{branch}"),
+        ],
+    )
+    .ok()?;
+    out.lines()
+        .map(str::trim)
+        .rfind(|l| !l.is_empty())
+        .map(str::to_string)
+}
+
+/// Positive evidence that `branch`'s own work reached `default_branch` (see
+/// [`reconcile_run`] for the rule). Every unknown answers `false`, which
+/// leaves the task's status unchanged.
+fn own_work_merged(
+    repo: &Path,
+    branch: &str,
+    branch_sha: Option<&str>,
+    default_branch: &str,
+) -> bool {
+    let Ok(tip) = crate::worktree::git(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            &format!("refs/heads/{branch}^{{commit}}"),
+        ],
+    ) else {
+        return false; // branch gone or unreadable: no evidence either way
+    };
+    let tip = tip.trim();
+    let Some(fork) = branch_fork_point(repo, branch) else {
+        return false;
+    };
+    // Own work: the tip is NOT contained in the fork point.
+    if is_ancestor(repo, tip, &fork) != Some(false) {
+        return false;
+    }
+    if let Some(sha) = branch_sha {
+        if is_ancestor(repo, sha, tip) != Some(true) {
+            return false;
+        }
+    }
+    is_ancestor(repo, tip, default_branch) == Some(true)
 }
 
 // ── Cross-run duplicate-completion detection (§4.6c) ──────────────────────

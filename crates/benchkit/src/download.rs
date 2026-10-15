@@ -1,14 +1,18 @@
 //! The gated `download` subcommand.
 //!
 //! Fetches the SWE-bench Verified split (princeton-nlp/SWE-bench_Verified on
-//! HuggingFace) into a local normalized JSONL cache. Following the beacon house
+//! HuggingFace) into a local cache file. NOTE: the bytes are written verbatim --
+//! the upstream file is a `.parquet`, and nothing converts it to the JSONL shape
+//! `load` reads (pinned by tests/prose_claims.rs::claim_download_shape).
+//! Following the beacon house
 //! pattern, network I/O shells out to `curl` rather than linking an HTTP stack,
 //! keeping the bundled binary tiny.
 //!
 //! Two invariants matter:
 //!   * **Gated** — the network path is reached *only* when `benchkit download`
-//!     is explicitly invoked. Nothing here runs during `cargo test`; the loader
-//!     and model are the deterministic, offline core.
+//!     is explicitly invoked. Under `cargo test` it runs only through the binary
+//!     with a FAKE `curl` first on PATH (tests/prose_claims.rs), never the real
+//!     network; the loader and model are the deterministic, offline core.
 //!   * **Idempotent** — if the cache file already exists it is a no-op (unless
 //!     `--force`), so re-running is cheap and safe.
 
@@ -17,8 +21,8 @@ use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 
-/// HuggingFace `datasets` server URL for the SWE-bench Verified `test` split as
-/// newline-delimited JSON rows (one instance per line).
+/// HuggingFace URL for the SWE-bench Verified `test` split. This is a `.parquet`
+/// file, NOT newline-delimited JSON; `fetch` stores it unconverted.
 const DATASET_URL: &str = "https://huggingface.co/datasets/princeton-nlp/SWE-bench_Verified/resolve/main/data/test-00000-of-00001.parquet";
 
 /// Default cache location, relative to the current working directory.

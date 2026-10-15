@@ -1,6 +1,8 @@
+# Never commit the bin/gauge-<os>-<arch> outputs (git-ignored, root .gitignore).
 # Build the per-platform binaries the launcher (bin/gauge) dispatches to.
 # Hooks call ${CLAUDE_PLUGIN_ROOT}/bin/gauge, which execs gauge-<os>-<arch>.
-# `make bins` refreshes both bundled targets; commit them.
+# Note: inside the workspace, cargo builds into the workspace-root
+# target/, so the crate-local target/release/ paths below do not exist.
 #
 # Linux cross-build uses cargo-zigbuild (no Docker). One-time setup on macOS:
 #   brew install zig

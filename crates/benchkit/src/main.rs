@@ -2,8 +2,8 @@
 //!
 //! `benchkit load` reads a JSONL split into typed instances (deterministic,
 //! offline). `benchkit download` fetches the upstream dataset via `curl` into a
-//! local cache — the only subcommand that touches the network, and only when
-//! explicitly invoked.
+//! local cache, only when explicitly invoked. `run-instance --real` is the other
+//! path that touches the network (git clone) and the shell.
 
 use std::path::PathBuf;
 use std::process::exit;
@@ -34,7 +34,7 @@ enum Command {
         /// Path to a JSONL file (one Instance per line).
         path: PathBuf,
     },
-    /// Fetch SWE-bench Verified into a local cache (idempotent; network only here).
+    /// Fetch SWE-bench Verified into a local cache (idempotent; skipped if cached).
     Download {
         /// Cache file path (default: .benchkit-cache/swe-bench-verified.jsonl).
         #[arg(long)]

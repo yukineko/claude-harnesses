@@ -9,8 +9,9 @@
 //! (`FAIL_TO_PASS` / `PASS_TO_PASS`); we `#[serde(rename = ...)]` them onto
 //! idiomatic snake_case Rust fields. Upstream sometimes encodes them as a
 //! JSON-*string* holding an array; the vendored fixture uses a plain JSON list
-//! of strings, which is what the model accepts here — the normalized shape the
-//! `download` subcommand is responsible for producing.
+//! of strings, which is what the model accepts here. `download` does NOT
+//! produce this shape: it stores the upstream `.parquet` unconverted
+//! (tests/prose_claims.rs::claim_download_shape).
 
 use serde::{Deserialize, Serialize};
 

@@ -25,7 +25,6 @@ fn sym(name: &str, line: usize) -> Symbol {
 }
 
 #[test]
-#[ignore = "backlog 33e24267: RED repro"]
 fn partially_corrupt_index_is_unreadable_not_ok_subset() {
     let dir = tempfile::tempdir().unwrap();
     let index_dir = dir.path().join(".fugu");
@@ -34,7 +33,8 @@ fn partially_corrupt_index_is_unreadable_not_ok_subset() {
     write_index(
         &index_path,
         &[sym("alpha_helper", 1), sym("beta_helper", 5)],
-    );
+    )
+    .expect("write index");
 
     // Corrupt the alpha_helper record; beta_helper survives.
     let body = std::fs::read_to_string(&index_path).unwrap();
@@ -68,6 +68,6 @@ fn intact_index_loads_both_symbols() {
     std::fs::create_dir_all(&index_dir).unwrap();
     let index_path = index_dir.join("code-index.jsonl");
     let syms = [sym("alpha_helper", 1), sym("beta_helper", 5)];
-    write_index(&index_path, &syms);
+    write_index(&index_path, &syms).expect("write index");
     assert_eq!(load(dir.path()).unwrap(), syms.to_vec());
 }

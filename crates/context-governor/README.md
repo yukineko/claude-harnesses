@@ -1,72 +1,20 @@
-# context-governor
+- `ToolResultGroomer` does not write summary text: it keeps a verbatim head and a verbatim tail of an over-budget tool result and replaces only the middle with an elision marker `…[context-governor: elided N chars of TOTAL]…` [test: crates/context-governor/tests/prose_claims.rs::claim_groomer_is_elision_not_summary].
+- An `Evictable` token cannot be minted from a `Pinned` or `Verbatim` item; only a `Lane::Evictable` item yields one [test: crates/context-governor/tests/context_governor_hooks.rs::evictable_token_only_from_evictable_lane].
+- `Stop` and `SubagentStop` each print exactly `{}` and exit 0 [test: crates/context-governor/tests/prose_claims.rs::claim_subagent_stop_never_blocks].
 
-A **thin control layer wrapped around Claude Code's built-in compaction**, wired as a single hook-dispatch binary. (日本語版: [README.ja.md](README.ja.md))
+The hook-dispatch binary reads the hook payload on stdin and writes a JSON envelope to stdout [test: crates/context-governor/tests/context_governor_coexistence_with_ctxrot.rs::post_tool_use_emits_valid_envelope_and_exits_zero].
+`hooks/hooks.json` registers that one binary for `PostToolUse` (matcher `Read|Bash|Grep|Glob|WebFetch|BashOutput|NotebookRead|Task`), `UserPromptSubmit`, `SessionStart`, `PreCompact`, `Stop` and `SubagentStop` [test: crates/context-governor/tests/prose_claims.rs::claim_hooks_json_registration].
+With a valid payload, `PostToolUse`, `UserPromptSubmit`, `SessionStart`, `Stop` and `SubagentStop` each exit 0 with a JSON object on stdout [test: crates/context-governor/tests/prose_claims.rs::claim_non_compact_events_exit_zero_with_envelope].
 
-## Purpose
+- `ToolResultGroomer` replaces a tool result that is over its token budget with a strictly smaller body carrying an elision marker [test: crates/context-governor/src/defaults/groomer.rs::over_budget_trims_strictly_smaller].
+- `ToolResultGroomer` leaves a tool result that is under its token budget untouched [test: crates/context-governor/src/defaults/groomer.rs::under_budget_passes_through].
+- `ContextInjector` reads the reference document named by `CONTEXT_GOVERNOR_REFERENCE_DOC` and returns an `additionalContext` envelope for a prompt that matches one of its headings [test: crates/context-governor/tests/context_governor_hooks.rs::injector_reads_reference_doc_from_env_and_injects].
+- `StateRehydrator` re-injects the pinned sections of the stored snapshot as resident content [test: crates/context-governor/src/defaults/rehydrator.rs::pinned_and_verbatim_sections_reinjected_as_resident].
+- The shipped `SessionStart` matcher covers `compact` [test: crates/context-governor/tests/backlog_23869ff7.rs::session_start_matcher_covers_compact], and a `compact` SessionStart through that matcher rehydrates the pin [test: crates/context-governor/tests/backlog_565fb2a8.rs::compact_session_start_through_shipped_matcher_rehydrates_the_pin].
+- `Checkpointer` records a snapshot when given a real transcript whose token usage is above its threshold [test: crates/context-governor/src/defaults/checkpointer.rs::checkpointer_emits_snapshotted_row_iff_real_snapshot].
 
-context-governor does not reinvent the context manager. It keeps the harness's existing compaction and adds only **four capabilities** around it:
+`ToolResultGroomer`, `ContextInjector` and `CompactionGuard` each append one JSONL row to the ledger, and every row carries numeric `saved_tokens` and `resident_tokens` [test: crates/context-governor/tests/context_governor_hooks.rs::action_ledger_records_groom_inject_snapshot_and_rollup_sums].
 
-- **pin** — keep norms (contracts, invariants, naming conventions, acceptance criteria) resident so they survive compaction.
-- **lossless-recall** — move verbatim-required information to a backing store so it is not silently paraphrased away by summarization.
-- **retrieval** — push large but situational reference bodies (exhaustive tables, full endpoint lists, appendices) out of the window and inject them only on the turns that need them.
-- **tool-hygiene** — groom tool results, the biggest growth term in an agent loop, on every turn.
-
-The design hinges on never conflating the **three axes** this layer touches (conflating them was the v1/v2 design error):
-
-- **size** (window occupancy) — actually shrink the window. Only three things do that: minimizing resident norm text, pushing reference bodies into retrieval, and grooming tool results per turn. Cache placement, pinning, and lowering the auto-compact threshold do **not** reduce size.
-- **cost** (recompute / latency) — make prefill cheap by keeping the prompt cache warm. A stable prefix wins; rewriting the prefix every turn loses it.
-- **correctness** (norm preservation) — stop norms and verbatim-required information from quietly disappearing inside a summary.
-
-Crucially, **this layer never ships its own lossy summarizer** — compression is delegated to built-in compaction. context-governor only adds the discipline of *what stays resident / what is evicted / what is recalled later*.
-
-## Why it's needed
-
-Over a long session, Claude Code's compaction fires and compresses the context. Compaction itself is necessary, but left raw it hits these failure modes:
-
-- **norms disappear** — a `contract` or invariant you want in force *every turn* gets paraphrased or dropped by the summary. A norm violation is invisible unless the norm is ambient (resident), so this silently breaks correctness.
-- **verbatim info is corrupted** — information that must match exactly (IDs, commands, the literal text of a spec) is altered by summarization.
-- **tool results balloon the window** — in an agent loop, bloated tool results are the dominant growth term; left alone they degrade both size and signal-to-noise and invite lost-in-the-middle.
-- **axis confusion** — reaching for moves that conflate size with cost/correctness, like "pinning shrinks the window" or "lowering the threshold saves size." Pinning actually *raises* resident cost (a fixed tax).
-
-context-governor prevents these **as types**. Each item lives in exactly one of three lanes — `Pinned` (always in the final context), `Verbatim` (never lossy-compressed), `Evictable` (groomable / evictable / retrievable) — and the lane is the single source of truth for how the item is handled. The "verbatim items must never be compressed" invariant is made *unrepresentable*: the only handler that compresses (`ToolResultGroomer`) accepts only `Evictable` tokens, so passing a `Pinned`/`Verbatim` token to it does not compile.
-
-## How it works
-
-context-governor is a **single hook-dispatch binary**. It reads the hook payload on stdin, branches on `hook_event_name`, runs the matching handler, and writes a JSON envelope to stdout. There are no slash commands; it is wired to Claude Code hooks (the one exception is the read-only `rollup` subcommand that aggregates the action ledger).
-
-| Hook event | Handler | Role (axis) |
-|---|---|---|
-| `PostToolUse` | `ToolResultGroomer` | ★ primary size lever. Trims/summary-replaces bloated tool results. Handles `Evictable` only, so output is smaller than input. |
-| `UserPromptSubmit` | `ContextInjector` | retrieval / reference-body injection. Adds `additionalContext` beside the prompt (a reduce before the model reads, not a replacement). |
-| `SessionStart` | `StateRehydrator` | restore. Re-injects normative core / verbatim from the store so pins survive compaction (and reseeds on resume). |
-| `PreCompact` | `CompactionGuard` | backstop. Snapshots the transcript before compaction and records verbatim spans to the backing store, then decides whether to proceed. Default is `Proceed`. |
-| `Stop` / `SubagentStop` | `Checkpointer` | externalizes completed work to the backing store behind a threshold gate. **Side-effect only** — output is discarded and it never blocks. |
-
-Two execution rules:
-
-- **Panics and errors resolve to exit 0** — the whole dispatch runs inside `harness_core::hook::run_hook`, which swallows panics and exits 0. Empty/invalid payloads are a silent no-op (`{}`). Note this applies to `PreCompact` too: a panic, or a backing store that cannot be opened, resolves to `Proceed` (compaction is allowed) — the guard's block path is fail-open on those errors.
-- **Only PreCompact may block** — a `Block` decision exits 2 (Claude Code's block signal). Every other path writes its envelope and exits 0.
-
-## Measurement (action ledger)
-
-The size axis must be *measured*, not merely asserted. The three size levers (groom / inject / snapshot) each append **one durable JSONL row** to `<state_dir>/ledger.jsonl` on every decision, carrying `saved_tokens` (window occupancy actually reclaimed) and `resident_tokens` (occupancy after the action), written via `harness_core::metrics::emit`.
-
-| Lever (hook) | action | size recorded |
-|---|---|---|
-| groom (`PostToolUse`) | `groomed` | `saved_tokens` = tokens trimmed away |
-| inject (`UserPromptSubmit`) | `injected` | `resident_tokens` = size of the injected reference body |
-| snapshot (`PreCompact` / `Stop`) | `snapshotted` | `resident_tokens` = size of the externalized snapshot |
-
-```
-context-governor rollup
-```
-
-aggregates the ledger (for the current directory) into a deterministic, read-only view (`rows`, `total_saved_tokens`, per-event counts) — the evidence that lets you later disprove axis confusions like "pinning saves size".
-
-Because it is a thin layer over built-in compaction, no extra API key is needed — it is **subscription-native** (hooks + binary).
-
-> Note: after Phase 1 froze the contract (the lane/spec types, the hook I/O envelope, the handler trait set, and the invariants), Phase 2 implemented the five default handlers (groomer / injector / rehydrator / guard / checkpointer). The action ledger that measures the size axis is wired too, so the levers above leave rows in the ledger and `rollup` aggregates them.
-
-## Coexistence with ctxrot
-
-context-governor and [ctxrot](../ctxrot) overlap on four hook events — `PostToolUse`, `UserPromptSubmit`, `SessionStart`, `PreCompact` — but do not conflict. They pull on **different levers** (CG is the size/cost/correctness lever that *rewrites* output — groom/inject/rehydrate/guard/checkpoint — while ctxrot is the rot-detect/rescue/control lever that adds *advice / rescue notes*), so the fields they write are disjoint. The intended per-event ordering and *why the two compose* (verified against the handler source) are documented in [docs/coexistence-with-ctxrot.md](docs/coexistence-with-ctxrot.md). CG's non-interference contract (emit a valid envelope and exit 0 on every shared event; never depend on or clobber ctxrot state) is locked by the integration test `tests/context_governor_coexistence_with_ctxrot.rs`.
+- The ledger file is `<state_dir>/<project_key>/<session>/ledger.jsonl`, where `<state_dir>` is `CONTEXT_GOVERNOR_STATE_DIR` and `<session>` is derived from `CLAUDE_CODE_SESSION_ID` [test: crates/context-governor/tests/prose_claims.rs::claim_ledger_path_under_state_dir].
+- A groom row has `event` `groomed`, an inject row has `event` `injected`, and a snapshot row has `event` `snapshotted` [test: crates/context-governor/tests/context_governor_hooks.rs::action_ledger_records_groom_inject_snapshot_and_rollup_sums].
+- `context-governor rollup` prints `rows`, `total_saved_tokens` and per-event counts from the ledger; two runs print identical output and leave the ledger file unchanged [test: crates/context-governor/tests/prose_claims.rs::claim_rollup_read_only_deterministic].

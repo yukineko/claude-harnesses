@@ -5,8 +5,9 @@
 //! earlier, `.specguard/spec-map.toml`): it never mutates the map, never fixes
 //! anything, and never spawns an agent. It emits (1) deterministic structural
 //! findings and (2) LLM audit shards packaged in the SAME machine-readable
-//! envelope shape as `prompt --json`, so the command layer can reuse the
-//! existing `specguard ingest` parse→report→sentinel pipeline unchanged.
+//! envelope shape as `prompt --json`, so the command layer can feed the outputs
+//! to `specguard ingest --kind audit`, which parses them into a report and the
+//! sentinel but, unlike drift ingest, never moves the drift baseline.
 //!
 //! ## Semantic distinction (important)
 //!
@@ -190,7 +191,12 @@ pub fn is_auditable(entry: &MapEntry) -> bool {
 /// Machine-readable envelope for `audit --json`: the SAME shape as the drift
 /// `prompt --json` envelope (`{project, baseline, head, date, marker, shards}`),
 /// so the command layer can hand each shard to a read-only subagent and feed the
-/// outputs straight back through `specguard ingest` (which matches by `label`).
+/// outputs back through `specguard ingest --kind audit [--filter <same filter>]`.
+/// Ingest matches by `label` against [`audit_labels`] for that filter — the same
+/// selection this envelope was built from — so an output it cannot account for
+/// is an error (exit 2), never silently dropped. Without `--kind`, ingest infers
+/// audit mode only when every provided label is an audit label and none is a
+/// drift-shard label; anything else it cannot attribute is likewise an error.
 #[derive(Debug, Serialize)]
 pub struct AuditEnvelope {
     pub project: String,
@@ -274,6 +280,28 @@ pub fn render_audit_shard(
         .replace("{{STRUCTURAL_SIGNALS}}", &signals_block(findings))
 }
 
+/// Whether `entry` is in the audit scope for `filter`: auditable and matching.
+fn in_audit_scope(entry: &MapEntry, filter: &str) -> bool {
+    is_auditable(entry) && entry_matches(entry, filter)
+}
+
+/// The entries one audit run turns into shards, in stable key order, capped at
+/// [`MAX_AUDIT_SHARDS`]. The single selection both [`build_envelope`] and
+/// [`audit_labels`] use, so the labels `ingest` expects can never disagree with
+/// the shards `audit --json` emitted for the same map and filter.
+fn audit_entries<'a>(map: &'a SpecMap, filter: &'a str) -> impl Iterator<Item = &'a MapEntry> {
+    map.entries
+        .values()
+        .filter(move |e| in_audit_scope(e, filter))
+        .take(MAX_AUDIT_SHARDS)
+}
+
+/// The shard labels `audit --json --filter <filter>` emits for `map`, in order:
+/// what `specguard ingest` expects back when it ingests audit outputs.
+pub fn audit_labels(map: &SpecMap, filter: &str) -> Vec<String> {
+    audit_entries(map, filter).map(|e| e.key.clone()).collect()
+}
+
 /// Assemble the audit envelope from the map: one shard per auditable entry that
 /// also matches `filter` (see [`entry_matches`]; empty filter = whole map),
 /// bounded by [`MAX_AUDIT_SHARDS`] in stable key order, each carrying its own
@@ -296,13 +324,12 @@ pub fn build_envelope(
         "spec-audit template is missing a required placeholder"
     );
     let exists = |p: &str| repo_root.join(p).exists();
-    let in_scope = |e: &&MapEntry| is_auditable(e) && entry_matches(e, filter);
-    let total_auditable = map.entries.values().filter(in_scope).count();
-    let shards: Vec<AuditShard> = map
+    let total_auditable = map
         .entries
         .values()
-        .filter(in_scope)
-        .take(MAX_AUDIT_SHARDS)
+        .filter(|e| in_audit_scope(e, filter))
+        .count();
+    let shards: Vec<AuditShard> = audit_entries(map, filter)
         .map(|e| {
             let findings = structural_findings(e, exists);
             AuditShard {
@@ -591,6 +618,27 @@ mod tests {
         // The filter surfaces in the serialized JSON when non-empty.
         let json = serde_json::to_value(&env).unwrap();
         assert_eq!(json["filter"], "login");
+    }
+
+    /// `ingest` expects exactly the labels `audit --json` emitted for the same
+    /// map and filter: filtered, orphan-skipped, and capped identically.
+    #[test]
+    fn audit_labels_equal_envelope_shard_labels_under_filter_and_cap() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut map = SpecMap::default();
+        for i in 0..(MAX_AUDIT_SHARDS + 3) {
+            let k = format!("feat{i:03}");
+            map.entries
+                .insert(k.clone(), entry(&k, Some("docs/f.md"), &["src/f.rs"], &[]));
+        }
+        map.entries
+            .insert("orphan".to_string(), entry("orphan", None, &[], &[]));
+        for filter in ["", "feat00", "orphan", "nomatch"] {
+            let env = build_envelope(&cfg(), &map, tmp.path(), "b", "h", "2026-07-08", filter);
+            let from_env: Vec<String> = env.shards.iter().map(|s| s.label.clone()).collect();
+            assert_eq!(audit_labels(&map, filter), from_env, "filter {filter:?}");
+        }
+        assert_eq!(audit_labels(&map, "").len(), MAX_AUDIT_SHARDS);
     }
 
     #[test]

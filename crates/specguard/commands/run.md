@@ -54,7 +54,7 @@ subagent は read-only (Read/Grep/Glob/読み取り専用 git のみ; Edit/Write
   **全 shard を必ず含める**。
 - 監査対象なしのときは `{ "shards": [] }`。
 
-次に `specguard ingest --from .specguard-ingest.json $ARGUMENTS` を Bash で実行する。
+次に `specguard ingest --from .specguard-ingest.json --kind drift $ARGUMENTS` を Bash で実行する。
 終了後、一時ファイルは `rm -f .specguard-ingest.json` で削除する。
 
 ingest の終了コードで結果を解釈する:
@@ -68,6 +68,11 @@ ingest の終了コードで結果を解釈する:
   手順 2 から **やり直す** か、ユーザーに報告する。
 - **exit 4** (agent-failed): 返し損ねた shard / 失敗 shard がある。stderr が該当 label を
   挙げるので、その shard を手順 2 で再実行して手順 3 をやり直す。
+- **exit 5** (未批准): 手順 1 の後に prompt が変わった。結果は記録されていない。
+  `/specguard:accept-prompt` を案内して停止する (批准後は手順 1 から)。
+- **exit 2** (入力/ラベル不一致): JSON が読めない、label の重複、または手順 1 の shard に
+  無い label の出力がある。結果は確定していないので監査完了と報告しない。stderr を
+  提示し、label を手順 1 の JSON からそのまま写して手順 3 をやり直す。
 
 ## 注意
 

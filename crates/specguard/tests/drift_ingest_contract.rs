@@ -131,7 +131,6 @@ fn report_text(repo: &Path) -> String {
 /// shard. Today: exit 0 "監査対象なし", report/sentinel clean. The provided
 /// `needs_user: yes` outputs are silently discarded. Must NOT be exit 0.
 #[test]
-#[ignore = "backlog TBD: RED repro"]
 fn c2_ingest_with_unmatched_labels_and_empty_scope_must_not_report_clean() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
@@ -158,7 +157,6 @@ fn c2_ingest_with_unmatched_labels_and_empty_scope_must_not_report_clean() {
 /// sentinel. Today: exit 4 "no output provided for shard 'src'", the report is
 /// never written, and the audit outputs are discarded.
 #[test]
-#[ignore = "backlog TBD: RED repro"]
 fn c2_audit_json_outputs_fed_to_ingest_as_documented_must_not_be_lost() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
@@ -288,7 +286,6 @@ fn c1_ingest_really_exits_5_when_unratified() {
 }
 
 #[test]
-#[ignore = "backlog TBD: RED repro"]
 fn c1_ingest_instructions_handle_every_ingest_exit_code() {
     let codes = ingest_exit_codes();
     let mut gaps = Vec::new();

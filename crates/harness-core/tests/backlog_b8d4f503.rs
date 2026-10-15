@@ -37,7 +37,6 @@ fn run(script: &str) -> (i32, String, usize, Duration) {
 const GEN: &str = "head -c 1048576 /dev/zero | tr '\\0' a";
 
 #[test]
-#[ignore = "backlog b8d4f503: RED repro"]
 fn one_mib_on_stdout_exit_zero_is_known_and_complete() {
     let (code, stdout, _, elapsed) = run(GEN);
     assert_eq!(code, 0);
@@ -46,7 +45,6 @@ fn one_mib_on_stdout_exit_zero_is_known_and_complete() {
 }
 
 #[test]
-#[ignore = "backlog b8d4f503: RED repro"]
 fn one_mib_on_stderr_exit_zero_is_known_and_complete() {
     let (code, stdout, stderr_len, elapsed) = run(&format!("{GEN} >&2"));
     assert_eq!(code, 0);
@@ -56,7 +54,6 @@ fn one_mib_on_stderr_exit_zero_is_known_and_complete() {
 }
 
 #[test]
-#[ignore = "backlog b8d4f503: RED repro"]
 fn stderr_flood_then_stdout_flood_is_known_and_complete() {
     let (code, stdout, stderr_len, elapsed) = run(&format!("{GEN} >&2; {GEN}"));
     assert_eq!(code, 0);
@@ -66,7 +63,6 @@ fn stderr_flood_then_stdout_flood_is_known_and_complete() {
 }
 
 #[test]
-#[ignore = "backlog b8d4f503: RED repro"]
 fn stdout_flood_then_stderr_flood_is_known_and_complete() {
     let (code, stdout, stderr_len, elapsed) = run(&format!("{GEN}; {GEN} >&2"));
     assert_eq!(code, 0);
@@ -76,7 +72,6 @@ fn stdout_flood_then_stderr_flood_is_known_and_complete() {
 }
 
 #[test]
-#[ignore = "backlog b8d4f503: RED repro"]
 fn nonzero_exit_with_large_stdout_is_known_with_code_and_full_output() {
     let (code, stdout, _, elapsed) = run(&format!("{GEN}; exit 3"));
     assert_eq!(code, 3);

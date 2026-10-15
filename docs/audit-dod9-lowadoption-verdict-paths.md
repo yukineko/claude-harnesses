@@ -264,9 +264,9 @@ crates/gauge/src/config.rs:82-112
    正しい形のJSONを返す。ただし中の`cost_usd`の値が、config破損により本来より低い（最悪$0）。
    `resolve_agent_cost`にはこれを見分ける手段が構造的に無い — 「exit 0 + パース可能なJSON」を
    「信頼できる実測値」として扱うのが設計そのものだからである。
-   `crates/condukt/src/state.rs:127`（`Task`構造体）のコメント「Observed USD cost of executing
-   this task (e.g. from `gauge`)」、および`crates/condukt/src/state.rs:2301`付近「overriding `cost_usd` on success」
-   が示すとおり、この値はconduktの永続状態（task実行の「観測されたコスト」）に上書き反映される。
+   `crates/condukt/src/state.rs:131`（`Task`構造体）[test: crates/condukt/src/state.rs::agent_cost_precedence_override_when_resolved] のコメント「Observed USD cost of executing
+   this task (e.g. from `gauge`)」、および`crates/condukt/src/state.rs:2356`付近「overriding `cost_usd` on success」
+   が示すとおり、この値はconduktの永続状態（task実行の「観測されたコスト」）に上書き反映される [test: crates/condukt/src/state.rs::agent_cost_precedence_override_when_resolved]。
 
 verdict: **CONFIRMED**（ただし severity の性質は budgetguard/reviewgate の finding とは異なる —
 Stop hookのblock/allow判定を動かすものではなく、condukt側の「観測コスト」という記録値を汚す。

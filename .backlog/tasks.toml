@@ -1373,40 +1373,6 @@ exit 1: st/unittest.py\u001B[0m:354: XFailed
 \u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 1.31s\u001B[0m\u001B[31m ==========================\u001B[0m"""
 
 [[task]]
-id = "b8d4f503"
-title = "backlog done --test deadlocks: the red-rev test run blocks in write() because the parent does not drain the child's stdout/stderr pipe"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "backlog",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-Observed 2026-10-04 (session 64554c4d) on backlog 0.3.26: 'backlog done b5358f58 --test "python3 -m pytest scripts/test_guard_maintree_bash_b5358f58.py" --red-rev 47775a95 --reason fixed'. The child pytest (cwd $TMPDIR/backlog-red-<pid>-<ns>, checkout 47775a95) sat 13+ minutes at 0% CPU; macOS sample showed its main thread in write() in libsystem_kernel; lsof showed fds 1/2 as pipes (64 KiB / 16 KiB). The same test run directly takes 183.82s (17 passed, 338 subtests). The main session saw the same hang for 28+ minutes. Most likely the parent reads one pipe to EOF (or waits on the child) before draining the other, and a RED run with large failure output fills the buffer. Effect: any verbose RED makes the done --test closure path unusable, which pushes closures back to rulings. Needs a repro test: a fake test command that writes >64 KiB to stderr and fails at the red rev.
-
-Second observation 2026-10-04 (session 64554c4d): `backlog confirm a70d83f7 --repro-test "python3 -m pytest scripts/test_gate_bypass.py"` stalled 15+ min at 0% CPU (pytest child idle) — the same undrained pipe, on the confirm path too, not only done --red-rev. A first `done b5358f58 --test ... _verify.py` hung 28 min the same way. Workaround observed: shrink the output with `python3 -m pytest -q -x --tb=no -p no:cacheprovider <file>`; with it, confirm of a70d83f7 d3716b21 6cb94bff 26f6dd72 completed in seconds. That workaround only moves the threshold; the fix is to drain stdout/stderr concurrently (or to a file)."""
-created_at = 1791047240
-updated_at = 1792003579
-weight = 0.0
-issue_number = 1276
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1276"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p backlog --test backlog_b8d4f503 -- --ignored"
-rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
-observed_at = 1792003569
-detail = """
-exit 101: yuki/src/.harness-worktrees/session-1a4ac77f/crates/harness-core)
-   Compiling backlog v0.3.46 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/backlog)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.13s
-     Running tests/backlog_b8d4f503.rs (target/debug/deps/backlog_b8d4f503-b76ced300da0093f)
-error: test failed, to rerun pass `-p backlog --test backlog_b8d4f503`"""
-
-[[task]]
 id = "636842cd"
 title = "specguard doc_problem follows symlinks: a docs/specs/x.md symlink to a file outside the repo counts as a valid binding (gate-check, and now brief covered)"
 project = "/Users/yuki/src/harness"

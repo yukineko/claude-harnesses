@@ -6147,8 +6147,9 @@ type GaugeAccounting = (Option<f64>, Option<(u64, u64)>);
 /// `agent_id` `None` (the task recorded no agentId) → `Known((None, None))`:
 /// nothing to look up, the caller uses its manual fallback. Otherwise the
 /// two lookups' answers are combined; either one `Undetermined` makes the
-/// whole result `Undetermined` (gauge could not be located or run), which the
-/// caller must keep distinct from "no data".
+/// whole result `Undetermined` (gauge could not be located or run, or printed
+/// unparseable output — backlog 18ebbfe6), which the caller must keep distinct
+/// from "no data".
 fn gauge_accounting(agent_id: Option<&str>) -> Determination<GaugeAccounting> {
     let Some(id) = agent_id else {
         return Determination::Known((None, None));

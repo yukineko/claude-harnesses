@@ -52051,3 +52051,64 @@ test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "efa0d8560350698275ccfe569fa71e68f0ea3304"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "18ebbfe6"
+title = "condukt state parse_agent_cost / parse_agent_tokens treat malformed gauge JSON as no matching id, so broken gauge output becomes no data and the manual cost is recorded"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Seen 2026-10-03 by the abba6f0d implementer (run-20261003-141339-41881, branch fix/run-20261003-141339-41881/abba6f0d commit 27824792), read not tested. crates/condukt/src/state.rs: resolve_agent_cost/tokens now return Determination<Option<..>> and lookup/spawn/exit failures are Undetermined (episode not recorded), but parse_agent_cost/parse_agent_tokens still map malformed JSON to None (= no data). Also record_runs uses s.verifier_cost_usd.unwrap_or(0.0), which can record a 0.0 verifier cost when none is known."
+created_at = 1791008101
+updated_at = 1792106270
+weight = 0.0
+issue_number = 1149
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1149"
+issue_closed_at = 1792106270
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_18ebbfe6 -- --ignored"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003555
+detail = """
+exit 101: ailed; 0 ignored; 0 measured; 1 filtered out; finished in 1.49s
+
+   Compiling condukt v0.7.243 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running tests/backlog_18ebbfe6.rs (target/debug/deps/backlog_18ebbfe6-6699fb6f690419cc)
+error: test failed, to rerun pass `-p condukt --test backlog_18ebbfe6`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_18ebbfe6 -- --include-ignored"
+exit = 0
+passed = 2
+rev = "97c08b7ef6e688e9d8956037d9cdb261b6a11385"
+observed_at = 1792106238
+output_digest = "sha256:7f3af4584cbc411f4b0431fdef16c6c27ba5b4490c5ddd5a32e509ed8fc9cb63"
+excerpt = """
+
+running 2 tests
+test malformed_gauge_json_is_not_recorded_as_manual_cost ... ok
+test control_valid_gauge_without_match_records_manual_cost ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.99s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/backlog_18ebbfe6.rs (target/debug/deps/backlog_18ebbfe6-d292e60f9d9c7749)
+"""
+
+[task.closure.red]
+rev = "efa0d8560350698275ccfe569fa71e68f0ea3304"
+exit = 101
+kind = "behavioural"

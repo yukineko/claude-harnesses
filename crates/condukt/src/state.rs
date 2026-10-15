@@ -2467,15 +2467,33 @@ pub fn records_for_run(
 /// output (`[{agent_id, agent_type, description, cost_usd, turns}, ...]`),
 /// return the `cost_usd` of the entry whose `agent_id` exactly matches
 /// `agent_id`. Injected-JSON so this is unit-testable without a real `gauge`
-/// binary. `None` on malformed JSON, an empty array, or no matching entry —
-/// never panics.
-fn parse_agent_cost(json: &str, agent_id: &str) -> Option<f64> {
-    let entries: Vec<serde_json::Value> = serde_json::from_str(json).ok()?;
-    entries
-        .iter()
-        .find(|e| e.get("agent_id").and_then(|v| v.as_str()) == Some(agent_id))
-        .and_then(|e| e.get("cost_usd"))
-        .and_then(|v| v.as_f64())
+/// binary. Never panics.
+///
+/// - `Known(Some(cost))` — a matching entry with a numeric `cost_usd`.
+/// - `Known(None)` — well-formed array (possibly empty) with no matching entry
+///   (or a match without a numeric `cost_usd`): genuinely "no data".
+/// - `Undetermined` — the output is not a JSON array of entries (malformed /
+///   empty / truncated stdout). A present-but-broken source is not "no data"
+///   (backlog 18ebbfe6).
+fn parse_agent_cost(json: &str, agent_id: &str) -> Determination<Option<f64>> {
+    parse_gauge_entries(json).map(|entries| {
+        entries
+            .iter()
+            .find(|e| e.get("agent_id").and_then(|v| v.as_str()) == Some(agent_id))
+            .and_then(|e| e.get("cost_usd"))
+            .and_then(|v| v.as_f64())
+    })
+}
+
+/// Parse `gauge subagents --json` stdout as an array of entries.
+/// Unparseable output is `Undetermined`, never an empty list (backlog 18ebbfe6).
+fn parse_gauge_entries(json: &str) -> Determination<Vec<serde_json::Value>> {
+    match serde_json::from_str::<Vec<serde_json::Value>>(json) {
+        Ok(entries) => Determination::Known(entries),
+        Err(e) => Determination::undetermined(format!(
+            "`gauge subagents --json` printed unparseable output: {e}"
+        )),
+    }
 }
 
 /// Run `gauge subagents --json` and return its stdout, in three answers.
@@ -2524,39 +2542,54 @@ fn gauge_subagents_json() -> Determination<Option<String>> {
 /// matching the SKILL.md prose used previously.
 ///
 /// `Known(Some(cost))` = matched. `Known(None)` = "no data": gauge is not
-/// installed, or its output is unparseable/empty or has no matching id — the
-/// caller may fall back to the manually recorded `cost_usd`. `Undetermined` =
-/// gauge could not be located or run (see [`gauge_subagents_json`]); the caller
-/// must NOT substitute the manual fallback as if gauge had nothing to say.
+/// installed, or its well-formed output has no matching id — the caller may
+/// fall back to the manually recorded `cost_usd`. `Undetermined` = gauge could
+/// not be located or run (see [`gauge_subagents_json`]), or it printed
+/// unparseable output (see [`parse_agent_cost`]); the caller must NOT
+/// substitute the manual fallback as if gauge had nothing to say.
 pub fn resolve_agent_cost(agent_id: &str) -> Determination<Option<f64>> {
-    gauge_subagents_json().map(|raw| raw.and_then(|raw| parse_agent_cost(&raw, agent_id)))
+    match gauge_subagents_json() {
+        Determination::Known(Some(raw)) => parse_agent_cost(&raw, agent_id),
+        Determination::Known(None) => Determination::Known(None),
+        Determination::Undetermined(why) => Determination::Undetermined(why),
+    }
 }
 
 /// Pure core of [`resolve_agent_tokens`]: given the raw `gauge subagents --json`
 /// output (`[{agent_id, ..., tokens_input, tokens_output}, ...]`), return the
 /// `(tokens_input, tokens_output)` of the entry whose `agent_id` exactly
-/// matches. `None` on malformed JSON, an empty array, no matching entry, or a
-/// match missing either token field (older `gauge` predating this field) —
-/// never panics.
-fn parse_agent_tokens(json: &str, agent_id: &str) -> Option<(u64, u64)> {
-    let entries: Vec<serde_json::Value> = serde_json::from_str(json).ok()?;
-    let entry = entries
-        .iter()
-        .find(|e| e.get("agent_id").and_then(|v| v.as_str()) == Some(agent_id))?;
-    let input = entry.get("tokens_input")?.as_u64()?;
-    let output = entry.get("tokens_output")?.as_u64()?;
-    Some((input, output))
+/// matches. Never panics.
+///
+/// - `Known(None)` — well-formed array (possibly empty) with no matching
+///   entry, or a match missing either token field (older `gauge` predating
+///   this field): "no data".
+/// - `Undetermined` — the output is not a JSON array of entries (malformed /
+///   empty / truncated stdout); not "no data" (backlog 18ebbfe6).
+fn parse_agent_tokens(json: &str, agent_id: &str) -> Determination<Option<(u64, u64)>> {
+    parse_gauge_entries(json).map(|entries| {
+        let entry = entries
+            .iter()
+            .find(|e| e.get("agent_id").and_then(|v| v.as_str()) == Some(agent_id))?;
+        let input = entry.get("tokens_input")?.as_u64()?;
+        let output = entry.get("tokens_output")?.as_u64()?;
+        Some((input, output))
+    })
 }
 
 /// Resolve the real token usage of a Task-tool subagent by exact `agentId`
 /// match against `gauge subagents --json`, mirroring [`resolve_agent_cost`].
 ///
-/// `Known(None)` = "no data" (gauge not installed, unparseable/empty stdout, no
-/// matching id, or an older `gauge` without the token fields). `Undetermined` =
-/// gauge could not be located or run, kept distinct so the caller can surface
-/// it instead of recording "no tokens".
+/// `Known(None)` = "no data" (gauge not installed, no matching id in its
+/// well-formed output, or an older `gauge` without the token fields).
+/// `Undetermined` = gauge could not be located or run, or printed unparseable
+/// output — kept distinct so the caller can surface it instead of recording
+/// "no tokens".
 pub fn resolve_agent_tokens(agent_id: &str) -> Determination<Option<(u64, u64)>> {
-    gauge_subagents_json().map(|raw| raw.and_then(|raw| parse_agent_tokens(&raw, agent_id)))
+    match gauge_subagents_json() {
+        Determination::Known(Some(raw)) => parse_agent_tokens(&raw, agent_id),
+        Determination::Known(None) => Determination::Known(None),
+        Determination::Undetermined(why) => Determination::Undetermined(why),
+    }
 }
 
 /// Run the project's test suite (from the repo root) and propagate its result.
@@ -5988,28 +6021,50 @@ mod tests {
             {"agent_id": "a1", "agent_type": "worker", "description": "x", "cost_usd": 1.23, "turns": 4},
             {"agent_id": "a2", "agent_type": "worker", "description": "y", "cost_usd": 9.99, "turns": 1}
         ]"#;
-        assert_eq!(parse_agent_cost(json, "a1"), Some(1.23));
-        assert_eq!(parse_agent_cost(json, "a2"), Some(9.99));
+        assert_eq!(
+            parse_agent_cost(json, "a1"),
+            Determination::Known(Some(1.23))
+        );
+        assert_eq!(
+            parse_agent_cost(json, "a2"),
+            Determination::Known(Some(9.99))
+        );
     }
 
     /// No entry has the given agent_id → None (caller falls back to cost_usd).
     #[test]
     fn parse_agent_cost_no_match_returns_none() {
         let json = r#"[{"agent_id": "other", "cost_usd": 5.0}]"#;
-        assert_eq!(parse_agent_cost(json, "a1"), None);
+        assert_eq!(parse_agent_cost(json, "a1"), Determination::Known(None));
     }
 
-    /// Malformed JSON never panics — returns None.
+    /// Malformed JSON never panics — and is `Undetermined`, NOT `Known(None)`
+    /// ("no data"): broken gauge output must not let the caller substitute the
+    /// manual cost (backlog 18ebbfe6).
     #[test]
-    fn parse_agent_cost_malformed_json_returns_none() {
-        assert_eq!(parse_agent_cost("not json", "a1"), None);
-        assert_eq!(parse_agent_cost("{", "a1"), None);
+    fn parse_agent_cost_malformed_json_is_undetermined() {
+        assert!(matches!(
+            parse_agent_cost("not json", "a1"),
+            Determination::Undetermined(_)
+        ));
+        assert!(matches!(
+            parse_agent_cost("{", "a1"),
+            Determination::Undetermined(_)
+        ));
+        assert!(matches!(
+            parse_agent_cost("", "a1"),
+            Determination::Undetermined(_)
+        ));
+        assert!(matches!(
+            parse_agent_cost("{}", "a1"),
+            Determination::Undetermined(_)
+        ));
     }
 
     /// An empty array (no subagents recorded yet) returns None, not a panic.
     #[test]
     fn parse_agent_cost_empty_array_returns_none() {
-        assert_eq!(parse_agent_cost("[]", "a1"), None);
+        assert_eq!(parse_agent_cost("[]", "a1"), Determination::Known(None));
     }
 
     /// Precedence: when the agent_id resolves to a real cost, that value must
@@ -6018,7 +6073,9 @@ mod tests {
     #[test]
     fn agent_cost_precedence_override_when_resolved() {
         let json = r#"[{"agent_id": "a1", "cost_usd": 2.5}]"#;
-        let resolved = parse_agent_cost(json, "a1");
+        let Determination::Known(resolved) = parse_agent_cost(json, "a1") else {
+            panic!("well-formed gauge output must be Known");
+        };
         let cost_usd = 0.0; // the SKILL.md-recorded fallback value
         assert_eq!(resolved.unwrap_or(cost_usd), 2.5);
     }
@@ -6028,7 +6085,9 @@ mod tests {
     #[test]
     fn agent_cost_precedence_falls_back_when_unresolved() {
         let json = r#"[{"agent_id": "other", "cost_usd": 9.0}]"#;
-        let resolved = parse_agent_cost(json, "a1");
+        let Determination::Known(resolved) = parse_agent_cost(json, "a1") else {
+            panic!("well-formed gauge output must be Known");
+        };
         let cost_usd = 5.5;
         assert_eq!(resolved.unwrap_or(cost_usd), 5.5);
     }
@@ -6040,15 +6099,21 @@ mod tests {
             {"agent_id": "a1", "cost_usd": 1.23, "turns": 4, "tokens_input": 100, "tokens_output": 200},
             {"agent_id": "a2", "cost_usd": 9.99, "turns": 1, "tokens_input": 5, "tokens_output": 6}
         ]"#;
-        assert_eq!(parse_agent_tokens(json, "a1"), Some((100, 200)));
-        assert_eq!(parse_agent_tokens(json, "a2"), Some((5, 6)));
+        assert_eq!(
+            parse_agent_tokens(json, "a1"),
+            Determination::Known(Some((100, 200)))
+        );
+        assert_eq!(
+            parse_agent_tokens(json, "a2"),
+            Determination::Known(Some((5, 6)))
+        );
     }
 
     /// No entry has the given agent_id → None (caller records no token fields).
     #[test]
     fn parse_agent_tokens_no_match_returns_none() {
         let json = r#"[{"agent_id": "other", "tokens_input": 1, "tokens_output": 2}]"#;
-        assert_eq!(parse_agent_tokens(json, "a1"), None);
+        assert_eq!(parse_agent_tokens(json, "a1"), Determination::Known(None));
     }
 
     /// An older `gauge` predating the token fields returns entries without
@@ -6056,20 +6121,35 @@ mod tests {
     #[test]
     fn parse_agent_tokens_missing_fields_returns_none() {
         let json = r#"[{"agent_id": "a1", "cost_usd": 1.0, "turns": 1}]"#;
-        assert_eq!(parse_agent_tokens(json, "a1"), None);
+        assert_eq!(parse_agent_tokens(json, "a1"), Determination::Known(None));
     }
 
-    /// Malformed JSON never panics — returns None.
+    /// Malformed JSON never panics — and is `Undetermined`, NOT `Known(None)`
+    /// ("no tokens") (backlog 18ebbfe6).
     #[test]
-    fn parse_agent_tokens_malformed_json_returns_none() {
-        assert_eq!(parse_agent_tokens("not json", "a1"), None);
-        assert_eq!(parse_agent_tokens("{", "a1"), None);
+    fn parse_agent_tokens_malformed_json_is_undetermined() {
+        assert!(matches!(
+            parse_agent_tokens("not json", "a1"),
+            Determination::Undetermined(_)
+        ));
+        assert!(matches!(
+            parse_agent_tokens("{", "a1"),
+            Determination::Undetermined(_)
+        ));
+        assert!(matches!(
+            parse_agent_tokens("", "a1"),
+            Determination::Undetermined(_)
+        ));
+        assert!(matches!(
+            parse_agent_tokens("{}", "a1"),
+            Determination::Undetermined(_)
+        ));
     }
 
     /// An empty array (no subagents recorded yet) returns None, not a panic.
     #[test]
     fn parse_agent_tokens_empty_array_returns_none() {
-        assert_eq!(parse_agent_tokens("[]", "a1"), None);
+        assert_eq!(parse_agent_tokens("[]", "a1"), Determination::Known(None));
     }
 
     #[cfg(unix)]

@@ -30,11 +30,12 @@ fn partially_corrupt_index_is_unreadable_not_ok_subset() {
     let index_dir = dir.path().join(".fugu");
     std::fs::create_dir_all(&index_dir).unwrap();
     let index_path = index_dir.join("code-index.jsonl");
-    write_index(
+    // drop(): write_index returns io::Result after the fix and () before it;
+    // a failed write still surfaces below when the file is read back.
+    drop(write_index(
         &index_path,
         &[sym("alpha_helper", 1), sym("beta_helper", 5)],
-    )
-    .expect("write index");
+    ));
 
     // Corrupt the alpha_helper record; beta_helper survives.
     let body = std::fs::read_to_string(&index_path).unwrap();
@@ -68,6 +69,6 @@ fn intact_index_loads_both_symbols() {
     std::fs::create_dir_all(&index_dir).unwrap();
     let index_path = index_dir.join("code-index.jsonl");
     let syms = [sym("alpha_helper", 1), sym("beta_helper", 5)];
-    write_index(&index_path, &syms).expect("write index");
+    drop(write_index(&index_path, &syms));
     assert_eq!(load(dir.path()).unwrap(), syms.to_vec());
 }

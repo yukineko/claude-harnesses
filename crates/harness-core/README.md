@@ -1,73 +1,46 @@
-# harness-core
+Do not use `hook::run_hook` for a hook that returns a decision: use `gate::run::run_guarded` for a Stop gate [test: crates/harness-core/tests/prose_claims.rs::claim_prohib_run_guarded] [test: crates/harness-core/tests/prose_claims.rs::claim_prohib_run_hook_cannot_carry_a_verdict] [test: crates/harness-core/tests/prose_claims.rs::claim_prohib_run_guarded_panic_carries_a_block_decision] and `hook::run_pretooluse_guarded` for a PreToolUse gate [test: crates/harness-core/tests/verify_dc7a3bc3_pretooluse_barrier.rs::every_panic_shape_exits_two_not_zero].
 
-The single source of truth for the unchanging infrastructure shared across the
-harness's Claude Code plugins. Anything that **must be identical in every
-plugin** — the parallel-session-safe note store, the hook I/O wrappers
-(exit-0 for verdict-free observability hooks, fail-closed for Stop gates), the
-three-valued `Verdict`/`Determination` types, the `~/.claude/settings.json`
-install mechanics, per-project addressing, the metrics sink — lives here once, so the plugins compose it
-instead of re-implementing it (and drifting apart).
+harness-core ships no `plugin.json`, no hooks, and no binary [test: crates/harness-core/tests/prose_claims.rs::claim_no_plugin_artifacts].
 
-This is a **build-time LIBRARY crate, not a plugin**: it ships no `plugin.json`,
-no hooks, and no binary. Each plugin links it statically into its self-contained
-binary, so the distributed `crates/<plugin>/bin/` never references
-`../harness-core` at runtime. Plugin-specific domain logic and config/metrics
-*fields* stay in each plugin crate.
-
-## What it provides
-
-| Module | What it shares |
-|---|---|
-| `store` | Durable Obsidian-compatible note store, per-project, with parallel-session-safe fallback (a harness invariant) |
-| `hook` | Hook stdin payload struct + `run_hook` wrapper (catches any panic, logs it to stderr, always exits 0). **Only for verdict-free observability hooks** — a hook that returns a decision must use `gate::run::run_guarded` instead, because exit 0 with no decision is indistinguishable from "allow" |
-| `hook_latency` | Central append-only Stop-hook latency ledger (`<base_dir>/state/hook-latency.jsonl`) — one shared file so aggregation is a single read; best-effort (IO errors are swallowed; observability only, not a verdict) |
-| `install` | `~/.claude/settings.json` load / timestamped backup / write + ownership detection by command markers |
-| `hash` | FNV-1a (32/64-bit) — the single source of truth for the non-cryptographic hashes that are load-bearing for on-disk addressing |
-| `projkey` | Per-project key `<basename>-<fnv1a32-hex>` — single source of truth for run-state file addressing |
-| `config` | home/base-dir resolution, tilde expansion, env-var parsing primitives |
-| `gate` | Shared Stop-gate machinery: `runner` (bounded-tail subprocess runner with timeout), `state` (per-session `max_attempts` counter), `run` (`run_guarded` panic barrier + one-shot skip), and `protection` (the `Protection` statement every blocking gate declares). `run_guarded` **fails closed**: a panicking gate body emits `{"decision":"block"}` on the first stop; only a second consecutive panic (`stop_hook_active`) is allowed through; interactive runs exit 1 |
-| `spans` | Span model + defensive JSONL loader (`~/.tracekit/<run_id>/spans.jsonl` on-disk contract) |
-| `session` | Canonical per-session record (`<state_dir>/sessions/<id>.json`) |
-| `usage` / `transcript` | Streaming JSONL transcript reader + per-model token/usage aggregation (never loads a whole transcript) |
-| `estimate` | The one bundled transcript → (usage, cost) estimator (`estimate_transcript_cost`, re-exported at the crate root), folding `usage::aggregate` + `pricing::session_cost` into a single call — `gauge`, `budgetguard`, and `session-insights` all consume this instead of each hand-rolling the aggregate-then-price pair |
-| `metrics` | The append-only JSONL metrics SINK, parallel-safe |
-| `pricing` | Model→USD cost table incl. cache read/write multipliers |
-| `ledger` | Persistent daily spend ledger (`~/.budgetguard/state/ledger.json`) |
-| `daily` | Once-per-calendar-day guard |
-| `inject` | Shared substrate for context-injection hooks (`playbook`, `runbook`) |
-| `inject_metrics` | Cross-harness UserPromptSubmit injection-size ledger, keyed by `turn_key = hash(session + prompt)` so the five injectors sum a single turn without cross-process coordination |
-| `interrogate` | Domain-agnostic gate-by-gate interrogation control structure |
-| `shell` | Cross-platform shell invocation, single source of truth |
-| `trust` | Workspace-trust gate for honoring command strings from project-local config |
-| `scorer` | Deterministic priority scorer (`score`, re-exported at the crate root): `severity_weight × clamp(goal_proximity, 0.0, 1.0) ÷ effort_factor × lens_multiplier`. Pure and referentially transparent — no clock, no RNG, no I/O. `L2`/`L5` (scout's security/safety lenses) carry a >1.0 multiplier ("壊さない・安全側") |
-| `verdict` | The one three-valued gate verdict (`Verdict`: `Clean` / `Violation` / `Undetermined`) and the generic `Determination<T>`. `Verdict` has no `Default` / `From<bool>`, is `#[must_use]`, and `Clean` needs a private witness, so a fail-open is a compile error rather than a review finding |
-| `boundary` | Fallible input boundaries (directory listings, file reads, subprocesses) that return `Determination`, so "could not observe" survives the call instead of flattening into an empty `Vec` / ignored exit code |
-| `undetermined` | Telemetry for the "could not determine" branch: every `Verdict::undetermined` / `Determination::undetermined` records one line (crate, file, line, reason), aggregated by `overwatch undetermined-metrics` |
-| `degrade` | Evidence degradation + the verdict-monotonicity property (degrading what a gate can see must never make its verdict more permissive) |
-| `git_probe` | Shared "is this a git repository?" probe for the gate crates, which does not collapse "git could not run" into "not a repo" |
-| `primary_tree` | "Is this path inside the PRIMARY working tree?" (git-dir vs git-common-dir), three-valued; `refuse_if_primary` refuses state-store writes into main's tree and treats `Undetermined` as a refusal |
-| `attribution` | Which of a shared working tree's changed files a gate may stop looking at, using the session transcript as identity |
-| `repeat` | Session-scoped repeat ledger: a gate does not get to block the same user instruction twice — the second time it must ask |
-| `fleet` | The canonical fleet GATE-crate name set (and `BLOCKING_GATES`), replacing hand-copied literals in condukt/tdd |
-| `autonomy` | The one autonomy switch, read directly by every plugin (replaces condukt/ctxrot/autoflow's independent switches) |
-| `parallel` | Session-wide concurrency ceiling; enforced only by `parallelguard`'s PreToolUse hook |
-| `plugin_bin` | Locate a sibling harness plugin's executable without trusting the hook process's ambient `$PATH` |
-| `progress` | "Is this holder progressing or merely alive?" engine shared by cross-session staleness reapers (backlog lock, condukt claims) |
-| `append` | Atomic single-`write()` append for JSONL sinks (body + newline in one buffer, so parallel `O_APPEND` writers cannot interleave) |
-| `discovery` | Machine-scope append-only "discovery record" store so concurrent compass/scout sessions don't duplicate tasks (fail-soft) |
-| `lessons` / `retrieval` | Machine-global cross-project lessons store (`~/.lessons/lessons.jsonl`, idempotent by id) and its read-side retrieval-event ledger |
-| `code_index` / `text_index` / `callgraph` / `index_store` | Deterministic, purely lexical code indexes (symbols, full text, caller→callee) and the in-process façade over all three — no embeddings, no external API |
-
-## Install (plugin)
-
-Not applicable — harness-core is a dependency, not a plugin. Plugins depend on
-it in their `Cargo.toml`; there are no hooks to wire and nothing to install.
-
-## Build
-
-```sh
-cargo test
-```
-
-Built as part of the workspace (`cargo build --workspace --release`). It has no
-committed `bin/` of its own — it is compiled into each plugin's binary.
+- `store`: Per-project note store; its fallback lookup does not return another session's tagged note [test: crates/harness-core/src/store.rs::fallback_parallel_avoids_sibling_tagged_note] and writes bytes atomically under concurrent writers [test: crates/harness-core/src/store.rs::save_bytes_concurrent_same_path_is_atomic].
+- `hook`: Hook stdin payload struct and the `run_hook` wrapper, which catches a panic in the handler, logs it to stderr and prints no decision [test: crates/harness-core/tests/prose_claims.rs::claim_prohib_run_hook_cannot_carry_a_verdict].
+- `hook_latency`: Append-only Stop-hook latency ledger that writes one line per recorded call [test: crates/harness-core/src/hook_latency.rs::record_to_writes_one_line_per_call_and_creates_dirs] and aggregates per session with a per-hook breakdown [test: crates/harness-core/src/hook_latency.rs::aggregate_groups_sums_and_sorts]. Its ledger is `<base_dir("harness")>/state/hook-latency.jsonl` [test: crates/harness-core/tests/prose_claims.rs::claim_hook_latency_path].
+- `install`: `~/.claude/settings.json` hook installation: command-marker ownership detection [test: crates/harness-core/src/install.rs::group_matches_any_marker], replacing the plugin's own groups while keeping foreign ones [test: crates/harness-core/src/install.rs::push_group_replaces_own_and_keeps_foreign]. Writing settings first leaves a timestamped `.bak-` copy of the old file [test: crates/harness-core/tests/prose_claims.rs::claim_install_backup].
+- `hash`: FNV-1a 32-bit and 64-bit hashes pinned to known vectors [test: crates/harness-core/src/hash.rs::fnv1a32_known_vectors] [test: crates/harness-core/src/hash.rs::fnv1a64_known_vectors].
+- `projkey`: Per-project key `<basename>-<fnv1a32-hex>` [test: crates/harness-core/src/projkey.rs::key_format_is_basename_dash_hash].
+- `config`: Tilde expansion (`~`, `~/x`) [test: crates/harness-core/src/config.rs::expand_tilde_handles_home_forms] and a dot-prefixed base dir under home [test: crates/harness-core/src/config.rs::base_dir_is_dotprefixed_under_home].
+- `gate::runner`: Subprocess runner that flags a timeout [test: crates/harness-core/src/gate/runner.rs::sleep_past_timeout_is_flagged] and keeps only the last lines of output [test: crates/harness-core/src/gate/runner.rs::read_tail_keeps_last_lines].
+- `gate::state`: Per-session attempt counter that increments within its window [test: crates/harness-core/src/gate/state.rs::bump_increments_within_window] and resets after an idle gap [test: crates/harness-core/src/gate/state.rs::idle_gap_resets_counter].
+- `gate::run`: `run_guarded` panic barrier **fails closed**: a panicking gate body blocks the first stop [test: crates/harness-core/src/gate/run.rs::guard_maps_panic_to_action] with a `{"decision":"block"}` payload [test: crates/harness-core/src/gate/run.rs::fail_closed_block_json_is_a_block_decision]; a panic while `stop_hook_active` is set (a re-entered stop, whatever blocked the previous one) is allowed through [test: crates/harness-core/src/gate/run.rs::guard_maps_panic_to_action]; an interactive run takes precedence over `stop_hook_active` [test: crates/harness-core/src/gate/run.rs::interactive_takes_precedence_over_stop_hook_active]. The one-shot skip is consumed once [test: crates/harness-core/tests/session_scoped_skip.rs::a_skip_is_one_shot_for_its_own_session_too] and is invisible to other sessions [test: crates/harness-core/tests/session_scoped_skip.rs::a_skip_issued_by_one_session_is_invisible_to_another]. A panic in an interactive run exits 1 [test: crates/harness-core/tests/prose_claims.rs::claim_run_guarded_interactive_exit1].
+- `gate::protection`: The `Protection` statement carries `protects`, `against` and `grounds` fields [test: crates/harness-core/tests/gate_protection.rs::protection_has_protects_against_grounds].
+- `spans`: Defensive JSONL span loader that skips malformed lines and reports how many [test: crates/harness-core/src/spans.rs::load_skips_malformed_lines].
+- `session`: Per-session record that round-trips through upsert and load, including the per-agent breakdown [test: crates/harness-core/src/session.rs::upsert_then_load_one_roundtrips]. The record is stored at `<state_dir>/sessions/<id>.json` [test: crates/harness-core/tests/prose_claims.rs::claim_session_path].
+- `usage` / `transcript`: Transcript token aggregation per model, with the 5m/1h cache-write split and tool counts [test: crates/harness-core/src/usage.rs::aggregates_multi_model_with_cache_split_and_tools].
+- `estimate`: `estimate_transcript_cost` returns the same cost as `usage::aggregate` followed by `pricing::session_cost` [test: crates/harness-core/src/estimate.rs::bundles_aggregate_and_cost_identically_to_building_blocks]; an unknown model makes the cost undetermined [test: crates/harness-core/src/estimate.rs::unknown_model_makes_complete_cost_undetermined]. `estimate_transcript_cost` is re-exported at the crate root [test: crates/harness-core/tests/prose_claims.rs::claim_estimate_reexport].
+- `metrics`: Append-only JSONL metrics sink that writes one line per `emit` [test: crates/harness-core/src/metrics.rs::emit_writes_one_line_with_core_fields].
+- `pricing`: Model-to-USD cost table with cache read/write multipliers [test: crates/harness-core/src/pricing.rs::cache_pricing_writes_and_reads]; an unrecognized model with usage is undetermined, not $0 [test: crates/harness-core/src/pricing.rs::unknown_model_is_not_free].
+- `ledger`: Daily spend ledger: a session's cost is summed into the day total and re-recording the same session overwrites it [test: crates/harness-core/src/ledger.rs::record_sums_sessions_into_day_total]; a corrupt file is an error and is preserved [test: crates/harness-core/src/ledger.rs::corrupt_file_is_an_error_and_is_preserved]. The default state dir is `~/.budgetguard/state`, holding `ledger.json` [test: crates/harness-core/tests/prose_claims.rs::claim_ledger_path].
+- `daily`: Once-per-calendar-day guard: runs on first use [test: crates/harness-core/src/daily.rs::first_run_should_run_is_true], not again after `mark_done` [test: crates/harness-core/src/daily.rs::after_mark_done_should_run_is_false], and again on a new date [test: crates/harness-core/src/daily.rs::stale_date_triggers_run].
+- `inject`: Layered config for context-injection hooks: project overrides global overrides default [test: crates/harness-core/src/inject.rs::load_layered_prefers_project_over_global_over_default], and a character budget caps what is admitted [test: crates/harness-core/src/inject.rs::char_budget_admits_first_then_caps].
+- `inject_metrics`: UserPromptSubmit injection-size metrics; its `turn_key` is stable and changes with the session or the prompt [test: crates/harness-core/src/inject_metrics.rs::turn_key_is_stable_and_prompt_sensitive].
+- `interrogate`: Gate-by-gate interrogation control structure whose source contains none of the listed direct-IO tokens such as `std::fs`, `std::net` and `std::process::Command` [test: crates/harness-core/tests/interrogate_purity.rs::interrogate_rs_has_no_direct_io_tokens_outside_doc_comments] and which sentinels at the round limit [test: crates/harness-core/src/interrogate.rs::apply_hits_sentinel_at_max_rounds].
+- `shell`: Shell invocation: `sh -c` on Unix, `cmd /C` on Windows [test: crates/harness-core/src/shell.rs::shell_matches_platform].
+- `trust`: Workspace-trust store: a project is untrusted until added, `add` is idempotent, `remove` reverses it [test: crates/harness-core/src/trust.rs::trust_roundtrip_and_env_override].
+- `scorer`: Deterministic priority scorer: referentially transparent, same input gives the same bits [test: crates/harness-core/src/scorer.rs::referentially_transparent_same_input_same_bits]; monotone in severity [test: crates/harness-core/src/scorer.rs::score_monotone_nondecreasing_in_severity] and effort [test: crates/harness-core/src/scorer.rs::score_monotone_nonincreasing_in_effort]; out-of-range `goal_proximity` is clamped to [0, 1] [test: crates/harness-core/src/scorer.rs::score_clamps_out_of_range_goal_proximity]; the `L2`/`L5` lenses outrank the others [test: crates/harness-core/src/scorer.rs::security_and_safety_lenses_outrank_the_rest]. `score` (re-exported at the crate root) is exactly `severity_weight × clamp(goal_proximity, 0.0, 1.0) ÷ effort_factor × lens_multiplier` [test: crates/harness-core/tests/prose_claims.rs::claim_scorer_formula].
+- `verdict`: Three-valued gate `Verdict` (`Clean` / `Violation` / `Undetermined`): no findings is `Clean`, any finding is `Violation` [test: crates/harness-core/src/verdict.rs::from_findings_empty_is_clean_nonempty_is_violation]; `Undetermined` blocks exactly like `Violation` [test: crates/harness-core/src/verdict.rs::undetermined_blocks_exactly_like_violation]; fabricating a `Clean`, a `Default` or a `From<bool>` is a compile error [test: crates/harness-core/tests/verdict_compile_fail.rs::verdict_type_contract_compile_fail].
+- `boundary`: Fallible input boundaries return `Determination`: an unreadable directory is `Undetermined`, not an empty `Vec` [test: crates/harness-core/src/boundary.rs::read_dir_entries_unreadable_dir_is_undetermined_not_empty], and a non-zero subprocess exit keeps its code and gates stdout on it [test: crates/harness-core/src/boundary.rs::run_nonzero_exit_is_known_but_stdout_stays_gated_by_the_code].
+- `undetermined`: Constructing a `Verdict::undetermined` or `Determination::undetermined` records one line with its reason, and a `Verdict::undetermined` line names the caller's file [test: crates/harness-core/tests/undetermined_telemetry.rs::the_whole_contract].
+- `degrade`: Verdict-monotonicity property: a clean verdict from degraded evidence is a violation [test: crates/harness-core/src/degrade.rs::clean_from_degraded_evidence_is_a_violation], while holding or tightening is fine [test: crates/harness-core/src/degrade.rs::holding_or_tightening_is_fine].
+- `git_probe`: Git-repository probe that reports `Undetermined`, not "not a repo", when git fails but `.git` exists [test: crates/harness-core/tests/git_probe.rs::decides_undetermined_when_git_fails_but_dot_git_exists], and "not a repo" when git fails and no `.git` exists [test: crates/harness-core/tests/git_probe.rs::decides_not_repo_when_git_fails_and_no_dot_git].
+- `primary_tree`: Three-valued primary/linked working-tree classification by git-dir vs git-common-dir [test: crates/harness-core/src/primary_tree.rs::decide_table]; `refuse_if_primary` treats `Undetermined` as a refusal [test: crates/harness-core/src/primary_tree.rs::unreadable_repo_is_refused_not_allowed].
+- `attribution`: Only files a peer session claims and this session does not are excluded [test: crates/harness-core/src/attribution.rs::only_a_peers_own_files_are_excluded]; an unreadable transcript narrows nothing [test: crates/harness-core/src/attribution.rs::an_unreadable_transcript_does_not_narrow_anything].
+- `repeat`: Session-scoped repeat ledger: the first occurrence of a finding stands and the second yields [test: crates/harness-core/src/repeat.rs::second_occurrence_of_the_same_finding_yields]; a missing session id is undetermined, not a repeat [test: crates/harness-core/src/repeat.rs::missing_session_id_is_undetermined_not_repeat].
+- `fleet`: Canonical fleet GATE-crate name set (`GATE_CRATES`) [test: crates/harness-core/src/fleet.rs::gate_crates_is_the_known_seven] and `BLOCKING_GATES`, a superset of it [test: crates/harness-core/tests/gate_protection.rs::blocking_gates_is_superset_of_gate_crates].
+- `autonomy`: Autonomy switch: mode parses only `on` and `off` [test: crates/harness-core/src/autonomy.rs::mode_parses_only_on_and_off], and the switch-file payload round-trips [test: crates/harness-core/src/autonomy.rs::switch_file_payload_roundtrips].
+- `parallel`: Session-wide concurrency ceiling of 3 [test: crates/harness-core/src/parallel.rs::ceiling_is_three], never exceeded by `clamp` [test: crates/harness-core/src/parallel.rs::clamp_never_exceeds_the_ceiling] and floored at 1 [test: crates/harness-core/src/parallel.rs::clamp_floors_at_one_so_a_session_can_always_run_something].
+- `plugin_bin`: Locates a sibling plugin's executable from the plugin cache, picking the newest version numerically [test: crates/harness-core/src/plugin_bin.rs::ten_or_more_patches_in_a_series_still_picks_the_newest], and, when the cache holds no version directory, reports a binary absent from `$PATH` as known-absent rather than undetermined [test: crates/harness-core/tests/plugin_bin_resolve_hook_env.rs::history_file_only_cache_dir_and_path_miss_is_known_absent].
+- `progress`: Liveness engine: any advancing signal is `Progressing` [test: crates/harness-core/src/progress.rs::any_signal_advancing_is_progressing_even_with_ancient_heartbeat], a fingerprint frozen across the window is `Stalled` [test: crates/harness-core/src/progress.rs::frozen_across_window_is_stalled], and a first observation is undetermined, never stalled [test: crates/harness-core/src/progress.rs::first_observation_is_undetermined_never_stalled].
+- `append`: Atomic single-`write()` JSONL append: one newline-terminated record per call [test: crates/harness-core/src/append.rs::append_line_writes_one_record_terminated_by_newline], and concurrent writers never interleave records [test: crates/harness-core/src/append.rs::concurrent_appends_never_interleave_records].
+- `discovery`: Append-only discovery-record store: a record persisted by one session is seen as owned by another session's lookup [test: crates/harness-core/src/discovery.rs::already_discovered_by_other_reads_the_store_end_to_end], with a deterministic fingerprint [test: crates/harness-core/src/discovery.rs::fingerprint_is_deterministic].
+- `lessons` / `retrieval`: Lessons store idempotent by id, first write wins [test: crates/harness-core/src/lessons.rs::append_is_idempotent_by_id], and a retrieval-event ledger idempotent by run id [test: crates/harness-core/src/retrieval.rs::record_is_idempotent_by_run_id]. The default lessons store is `~/.lessons/lessons.jsonl` [test: crates/harness-core/tests/prose_claims.rs::claim_lessons_path].
+- `code_index` / `text_index` / `callgraph` / `index_store`: Lexical indexes: deterministic symbols [test: crates/harness-core/src/code_index.rs::extract_symbols_is_deterministic_across_calls], deterministic full text [test: crates/harness-core/src/text_index.rs::build_is_deterministic_regardless_of_source_order] and a caller-to-callee graph that finds edges across files [test: crates/harness-core/src/callgraph.rs::build_graph_finds_caller_to_callee_edges_across_files], with a façade that answers symbol search [test: crates/harness-core/src/index_store.rs::symbol_search_returns_declarations_without_spawning_fugu_router] and full-text search [test: crates/harness-core/src/index_store.rs::full_text_search_finds_a_token_that_lives_only_in_a_body].

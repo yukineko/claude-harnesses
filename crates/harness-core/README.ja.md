@@ -1,77 +1,46 @@
-# harness-core
+判定を返す hook に `hook::run_hook` を使わず、Stop ゲートには `gate::run::run_guarded` [test: crates/harness-core/tests/prose_claims.rs::claim_prohib_run_guarded] [test: crates/harness-core/tests/prose_claims.rs::claim_prohib_run_hook_cannot_carry_a_verdict] [test: crates/harness-core/tests/prose_claims.rs::claim_prohib_run_guarded_panic_carries_a_block_decision]、PreToolUse ゲートには `hook::run_pretooluse_guarded` を使うこと [test: crates/harness-core/tests/verify_dc7a3bc3_pretooluse_barrier.rs::every_panic_shape_exits_two_not_zero]。
 
-> 🌐 [English](README.md) ・ **日本語**
+harness-core は `plugin.json`・hook・バイナリのいずれも持たない [test: crates/harness-core/tests/prose_claims.rs::claim_no_plugin_artifacts]。
 
-harness の各 Claude Code プラグインが共有する「不変のインフラ」の単一の正典 (single source of truth)。
-
-## 目的
-
-harness-core は、harness のすべてのプラグインで**同一でなければならない**土台を一箇所にまとめた、ビルド時の**ライブラリ crate** である。並列セッション安全なノートストア、hook の入出力ラッパー（判定を持たない observability hook 用の exit 0 ラッパーと、Stop ゲート用の fail-closed ラッパー）、三値の `Verdict`/`Determination` 型、`~/.claude/settings.json` のインストール機構、プロジェクトごとのアドレッシング、メトリクスのシンク——こうした「全プラグインで挙動が一致していなければならないもの」をここで一度だけ実装し、各プラグインはそれを再実装せずに合成する（そして相互にドリフトしない）。
-
-これは**プラグインではなくライブラリ crate** であり、`plugin.json`・hook・バイナリのいずれも持たない。各プラグインがこれを自分の自己完結バイナリへ静的にリンクするため、配布される `crates/<plugin>/bin/` は実行時に `../harness-core` を参照しない。プラグイン固有のドメインロジックや config/metrics の*フィールド*は、各プラグイン crate 側に残る。
-
-提供するモジュールは次のとおり。
-
-| モジュール | 共有する内容 |
-|---|---|
-| `store` | 永続的で Obsidian 互換のノートストア。プロジェクトごと、並列セッション安全なフォールバック付き（harness の不変条件） |
-| `hook` | Hook の stdin ペイロード構造体と `run_hook` ラッパー（パニックを捕捉して stderr に記録し、常に exit 0）。**判定を持たない observability hook 専用**——判定を返す hook は `gate::run::run_guarded` を使うこと（決定なしの exit 0 は「許可」と区別できないため） |
-| `hook_latency` | 中央集約された追記専用の Stop-hook レイテンシ台帳（`<base_dir>/state/hook-latency.jsonl`）——共有の 1 ファイルなので集計は 1 回の読み込みで済む。best-effort（IO エラーは握りつぶす。判定ではなく observability 用） |
-| `install` | `~/.claude/settings.json` の読み込み / タイムスタンプ付きバックアップ / 書き込みと、command marker による所有権検出 |
-| `hash` | FNV-1a（32/64-bit）——オンディスクのアドレッシングを支える非暗号ハッシュの単一の正典 |
-| `projkey` | プロジェクトキー `<basename>-<fnv1a32-hex>`——run-state ファイルのアドレッシングの単一の正典 |
-| `config` | home/base-dir の解決、チルダ展開、環境変数パースのプリミティブ |
-| `gate` | 共有の Stop ゲート機構：`runner`（タイムアウト付き・出力末尾のみ保持する subprocess ランナー）、`state`（セッションごとの `max_attempts` カウンタ）、`run`（`run_guarded` パニック防壁と一度きりの skip）、`protection`（全ブロッキングゲートが宣言する `Protection` 文）。`run_guarded` は **fail closed**：ゲート本体がパニックすると最初の stop では `{"decision":"block"}` を出し、連続 2 回目のパニック（`stop_hook_active`）だけを通す。interactive 実行では exit 1 |
-| `spans` | Span モデルと防御的な JSONL ローダー（`~/.tracekit/<run_id>/spans.jsonl` のオンディスク契約） |
-| `session` | セッションごとの正典レコード（`<state_dir>/sessions/<id>.json`） |
-| `usage` / `transcript` | ストリーミング JSONL transcript リーダーと、モデルごとのトークン/使用量集計（transcript 全体を読み込まない） |
-| `estimate` | transcript → (usage, cost) の唯一の同梱推定器（`estimate_transcript_cost`。crate ルートに re-export）。`usage::aggregate` と `pricing::session_cost` を1回の呼び出しに束ねる——`gauge` / `budgetguard` / `session-insights` はいずれも独自の推定ロジックを持たず、これを共有利用する |
-| `metrics` | 追記専用 JSONL のメトリクス SINK、並列安全 |
-| `pricing` | モデル→USD のコスト表（cache read/write の倍率を含む） |
-| `ledger` | 日次の支出を永続化する台帳（`~/.budgetguard/state/ledger.json`） |
-| `daily` | カレンダー日ごとに一度だけのガード |
-| `inject` | context-injection hook（`playbook`・`runbook`）の共有基盤 |
-| `inject_metrics` | ハーネス横断の UserPromptSubmit インジェクションサイズ台帳。`turn_key = hash(session + prompt)` をキーにするので、5 つのインジェクタがプロセス間協調なしで同一ターン分を合算できる |
-| `interrogate` | ドメイン非依存の、ゲート単位の interrogation 制御構造 |
-| `shell` | クロスプラットフォームなシェル起動の単一の正典 |
-| `trust` | プロジェクトローカル config のコマンド文字列を尊重するための workspace-trust ゲート |
-| `scorer` | 決定論的な優先度スコアラー（`score`。crate ルートに re-export）：`severity_weight × clamp(goal_proximity, 0.0, 1.0) ÷ effort_factor × lens_multiplier`。純粋関数で参照透過——clock も RNG も I/O も無い。`L2`/`L5`（scout の security/safety レンズ）は 1.0 超の乗数を持つ（「壊さない・安全側」） |
-| `verdict` | 唯一の三値ゲート判定（`Verdict`：`Clean` / `Violation` / `Undetermined`）と汎用の `Determination<T>`。`Verdict` は `Default` / `From<bool>` を持たず `#[must_use]` で、`Clean` は private witness 無しには作れないため、fail-open はレビュー指摘ではなくコンパイルエラーになる |
-| `boundary` | 失敗しうる入力境界（ディレクトリ列挙・ファイル読み込み・subprocess）を `Determination` で返し、「観測できなかった」が空 `Vec` や無視された終了コードへ潰れないようにする |
-| `undetermined` | 「判定不能」分岐のテレメトリ。`Verdict::undetermined` / `Determination::undetermined` ごとに 1 行（crate・ファイル・行・理由）を記録し、`overwatch undetermined-metrics` が集計する |
-| `degrade` | 証拠の劣化と判定単調性プロパティ（ゲートが見られるものを劣化させても、判定がより許可側へ動いてはならない） |
-| `git_probe` | ゲート crate 共有の「git リポジトリか？」プローブ。「git を実行できなかった」を「リポジトリではない」に潰さない |
-| `primary_tree` | 「このパスは PRIMARY working tree の中か？」（git-dir と git-common-dir の比較）を三値で返す。`refuse_if_primary` は main ツリーへの state-store 書き込みを拒否し、`Undetermined` も拒否として扱う |
-| `attribution` | 共有 working tree の変更ファイルのうち、ゲートが見なくてよいものを session transcript を識別子として判定する |
-| `repeat` | セッションスコープの repeat 台帳：ゲートは同じユーザー指示を 2 度ブロックしてはならず、2 度目は ask する |
-| `fleet` | fleet の GATE crate 名の正典集合（と `BLOCKING_GATES`）。condukt/tdd に手書きコピーされていたリテラルを置き換える |
-| `autonomy` | 全プラグインが直接読む唯一の autonomy スイッチ（condukt/ctxrot/autoflow が個別に持っていたスイッチを置き換える） |
-| `parallel` | セッション全体の並行数上限。強制するのは `parallelguard` の PreToolUse hook だけ |
-| `plugin_bin` | hook プロセスの `$PATH` を信用せずに、兄弟プラグインの実行ファイルを見つける |
-| `progress` | 「保持者は進捗しているか、生きているだけか？」の判定エンジン。セッション横断の staleness reaper（backlog のロック、condukt の claim）が共有する |
-| `append` | JSONL シンク向けのアトミックな単一 `write()` 追記（本文と改行を 1 バッファで書くので、並列の `O_APPEND` writer が交錯しない） |
-| `discovery` | マシンスコープの追記専用「discovery record」ストア。並行する compass/scout セッションのタスク重複を避ける（fail-soft） |
-| `lessons` / `retrieval` | マシン全体で共有するプロジェクト横断の lessons ストア（`~/.lessons/lessons.jsonl`、id で冪等）と、その読み出し側の retrieval イベント台帳 |
-| `code_index` / `text_index` / `callgraph` / `index_store` | 決定論的で純粋に字句的なコードインデックス（シンボル・全文・caller→callee）と、その 3 つをまとめるプロセス内ファサード——embedding も外部 API も使わない |
-
-## どうして必要か
-
-harness は多数のプラグインから成り、それらは同じ土台——ノートストア、hook の入出力、settings.json の配線、メトリクスの記録——の上に立っている。この土台を各プラグインが個別に実装すると、次の問題が起きる。
-
-- **ドリフト。** 同じはずの挙動が、プラグインごとに少しずつ違う実装になり、時間とともに食い違っていく。harness-core は「全プラグインで同一でなければならないもの」を一度だけ定義し、各プラグインに合成させることで、この食い違いを構造的に防ぐ。
-- **不変条件の崩れ。** 並列セッション安全なノートストアや「判定不能は制限側に倒す」のような harness の不変条件は、各所で再実装するたびに守り損ねるリスクがある。`store`・`verdict`・`gate::run::run_guarded`（パニック時は fail closed で block）として一箇所に置くことで、すべてのプラグインが同じ保証を共有する。なお `hook::run_hook`（あらゆるパニックでも exit 0）は判定を持たない observability hook 専用であり、判定を持つ hook には適用しない。
-- **実装の重複。** transcript のストリーミング読み込み、pricing 表、settings.json のバックアップと所有権検出といった土台コードを各 crate が書き直すのは無駄が多く、バグの温床になる。
-
-つまり harness-core は、harness 全体の「動作の一貫性」と「不変条件の保証」を担うレイヤーである。
-
-## どう使うか
-
-harness-core は依存ライブラリであり、プラグインではない。**インストールする hook も配線するものも無い**。各プラグインが自分の `Cargo.toml` でこの crate に依存し、必要なモジュールをリンクするだけで使える。
-
-ビルドとテストは次のとおり。
-
-```sh
-cargo test
-```
-
-ワークスペースの一部としてビルドされる（`cargo build --workspace --release`）。harness-core 自身は committed な `bin/` を持たず、各プラグインのバイナリへコンパイルされて取り込まれる。
+- `store`: プロジェクトごとのノートストア；fallback 参照は別セッションのタグ付きノートを返さない [test: crates/harness-core/src/store.rs::fallback_parallel_avoids_sibling_tagged_note]；並行書き込み下でもバイト列をアトミックに書く [test: crates/harness-core/src/store.rs::save_bytes_concurrent_same_path_is_atomic]。
+- `hook`: Hook の stdin ペイロード構造体と、ハンドラ内のパニックを捕捉して stderr に記録し、判定を出力しない `run_hook` ラッパー [test: crates/harness-core/tests/prose_claims.rs::claim_prohib_run_hook_cannot_carry_a_verdict]。
+- `hook_latency`: 追記専用の Stop-hook レイテンシ台帳；記録 1 回につき 1 行を書き [test: crates/harness-core/src/hook_latency.rs::record_to_writes_one_line_per_call_and_creates_dirs]、セッションごとに hook 別内訳付きで集計する [test: crates/harness-core/src/hook_latency.rs::aggregate_groups_sums_and_sorts]；台帳は `<base_dir("harness")>/state/hook-latency.jsonl` [test: crates/harness-core/tests/prose_claims.rs::claim_hook_latency_path]。
+- `install`: `~/.claude/settings.json` への hook インストール：command marker による所有権検出 [test: crates/harness-core/src/install.rs::group_matches_any_marker]、自プラグインのグループだけを置換し他者のグループは保持 [test: crates/harness-core/src/install.rs::push_group_replaces_own_and_keeps_foreign]；settings の書き込みは旧ファイルのタイムスタンプ付き `.bak-` コピーを先に残す [test: crates/harness-core/tests/prose_claims.rs::claim_install_backup]。
+- `hash`: FNV-1a の 32/64-bit ハッシュ；既知ベクタで固定 [test: crates/harness-core/src/hash.rs::fnv1a32_known_vectors] [test: crates/harness-core/src/hash.rs::fnv1a64_known_vectors]。
+- `projkey`: プロジェクトキー `<basename>-<fnv1a32-hex>` [test: crates/harness-core/src/projkey.rs::key_format_is_basename_dash_hash]。
+- `config`: チルダ展開（`~`、`~/x`）[test: crates/harness-core/src/config.rs::expand_tilde_handles_home_forms]と、home 配下のドット始まり base dir [test: crates/harness-core/src/config.rs::base_dir_is_dotprefixed_under_home]。
+- `gate::runner`: subprocess ランナー；タイムアウトを検出し [test: crates/harness-core/src/gate/runner.rs::sleep_past_timeout_is_flagged]、出力は末尾の行だけを保持する [test: crates/harness-core/src/gate/runner.rs::read_tail_keeps_last_lines]。
+- `gate::state`: セッションごとの試行カウンタ；ウィンドウ内で加算し [test: crates/harness-core/src/gate/state.rs::bump_increments_within_window]、アイドル間隔の後にリセットする [test: crates/harness-core/src/gate/state.rs::idle_gap_resets_counter]。
+- `gate::run`: `run_guarded` パニック防壁は **fail closed**：ゲート本体がパニックすると最初の stop をブロックし [test: crates/harness-core/src/gate/run.rs::guard_maps_panic_to_action]、`{"decision":"block"}` ペイロードを出す [test: crates/harness-core/src/gate/run.rs::fail_closed_block_json_is_a_block_decision]；`stop_hook_active` が立っている間（直前の block の理由を問わず再入した stop）のパニックは通す [test: crates/harness-core/src/gate/run.rs::guard_maps_panic_to_action]；interactive 実行は `stop_hook_active` より優先される [test: crates/harness-core/src/gate/run.rs::interactive_takes_precedence_over_stop_hook_active]；一度きりの skip は 1 回だけ消費され [test: crates/harness-core/tests/session_scoped_skip.rs::a_skip_is_one_shot_for_its_own_session_too]、他セッションからは見えない [test: crates/harness-core/tests/session_scoped_skip.rs::a_skip_issued_by_one_session_is_invisible_to_another]；interactive 実行でのパニックは exit 1 [test: crates/harness-core/tests/prose_claims.rs::claim_run_guarded_interactive_exit1]。
+- `gate::protection`: `Protection` 文は `protects`・`against`・`grounds` のフィールドを持つ [test: crates/harness-core/tests/gate_protection.rs::protection_has_protects_against_grounds]。
+- `spans`: 防御的な JSONL span ローダー；不正な行を飛ばし、その件数を返す [test: crates/harness-core/src/spans.rs::load_skips_malformed_lines]。
+- `session`: セッションごとのレコード；upsert と load で往復でき、エージェント別内訳も保持される [test: crates/harness-core/src/session.rs::upsert_then_load_one_roundtrips]；レコードは `<state_dir>/sessions/<id>.json` に保存される [test: crates/harness-core/tests/prose_claims.rs::claim_session_path]。
+- `usage` / `transcript`: transcript のモデルごとトークン集計；5m/1h の cache-write 分割とツール回数を含む [test: crates/harness-core/src/usage.rs::aggregates_multi_model_with_cache_split_and_tools]。
+- `estimate`: `estimate_transcript_cost` は `usage::aggregate` に続けて `pricing::session_cost` を呼んだ場合と同じ cost を返す [test: crates/harness-core/src/estimate.rs::bundles_aggregate_and_cost_identically_to_building_blocks]；未知のモデルがあるとコストは判定不能になる [test: crates/harness-core/src/estimate.rs::unknown_model_makes_complete_cost_undetermined]；`estimate_transcript_cost` は crate ルートに re-export されている [test: crates/harness-core/tests/prose_claims.rs::claim_estimate_reexport]。
+- `metrics`: 追記専用 JSONL のメトリクス SINK；`emit` ごとに 1 行を書く [test: crates/harness-core/src/metrics.rs::emit_writes_one_line_with_core_fields]。
+- `pricing`: モデル→USD のコスト表；cache read/write の倍率を含む [test: crates/harness-core/src/pricing.rs::cache_pricing_writes_and_reads]；使用量のある未知のモデルは $0 ではなく判定不能 [test: crates/harness-core/src/pricing.rs::unknown_model_is_not_free]。
+- `ledger`: 日次の支出台帳：セッションのコストは日合計に加算され、同じセッションの再記録は上書きになる [test: crates/harness-core/src/ledger.rs::record_sums_sessions_into_day_total]；壊れたファイルはエラーとなり保全される [test: crates/harness-core/src/ledger.rs::corrupt_file_is_an_error_and_is_preserved]；既定の state dir は `~/.budgetguard/state` で、そこに `ledger.json` を置く [test: crates/harness-core/tests/prose_claims.rs::claim_ledger_path]。
+- `daily`: カレンダー日ごとに一度だけのガード：初回は実行し [test: crates/harness-core/src/daily.rs::first_run_should_run_is_true]、`mark_done` 後は実行せず [test: crates/harness-core/src/daily.rs::after_mark_done_should_run_is_false]、日付が変わると再び実行する [test: crates/harness-core/src/daily.rs::stale_date_triggers_run]。
+- `inject`: context-injection hook の階層 config：project が global を、global が default を上書きし [test: crates/harness-core/src/inject.rs::load_layered_prefers_project_over_global_over_default]、文字数予算が受け入れ量を制限する [test: crates/harness-core/src/inject.rs::char_budget_admits_first_then_caps]。
+- `inject_metrics`: UserPromptSubmit インジェクションサイズのメトリクス；`turn_key` は安定で、セッションまたはプロンプトが変わると変わる [test: crates/harness-core/src/inject_metrics.rs::turn_key_is_stable_and_prompt_sensitive]。
+- `interrogate`: ゲート単位の interrogation 制御構造；ソースに `std::fs`・`std::net`・`std::process::Command` などの列挙された直接 IO トークンを含まず [test: crates/harness-core/tests/interrogate_purity.rs::interrogate_rs_has_no_direct_io_tokens_outside_doc_comments]、ラウンド上限で sentinel に達する [test: crates/harness-core/src/interrogate.rs::apply_hits_sentinel_at_max_rounds]。
+- `shell`: シェル起動：Unix では `sh -c`、Windows では `cmd /C` [test: crates/harness-core/src/shell.rs::shell_matches_platform]。
+- `trust`: Workspace-trust ストア：追加するまでプロジェクトは untrusted、`add` は冪等、`remove` で元に戻る [test: crates/harness-core/src/trust.rs::trust_roundtrip_and_env_override]。
+- `scorer`: 決定論的な優先度スコアラー：参照透過で、同じ入力は同じビット列を返す [test: crates/harness-core/src/scorer.rs::referentially_transparent_same_input_same_bits]；severity に対して単調 [test: crates/harness-core/src/scorer.rs::score_monotone_nondecreasing_in_severity]、effort に対して単調 [test: crates/harness-core/src/scorer.rs::score_monotone_nonincreasing_in_effort]；範囲外の `goal_proximity` は [0, 1] に clamp される [test: crates/harness-core/src/scorer.rs::score_clamps_out_of_range_goal_proximity]；`L2`/`L5` レンズは他より高く評価される [test: crates/harness-core/src/scorer.rs::security_and_safety_lenses_outrank_the_rest]；`score`（crate ルートに re-export）は正確に `severity_weight × clamp(goal_proximity, 0.0, 1.0) ÷ effort_factor × lens_multiplier` [test: crates/harness-core/tests/prose_claims.rs::claim_scorer_formula]。
+- `verdict`: 三値のゲート判定 `Verdict`（`Clean` / `Violation` / `Undetermined`）：findings が無ければ `Clean`、1 つでもあれば `Violation` [test: crates/harness-core/src/verdict.rs::from_findings_empty_is_clean_nonempty_is_violation]；`Undetermined` は `Violation` とまったく同じようにブロックする [test: crates/harness-core/src/verdict.rs::undetermined_blocks_exactly_like_violation]；`Clean` の偽造、`Default`、`From<bool>` はコンパイルエラーになる [test: crates/harness-core/tests/verdict_compile_fail.rs::verdict_type_contract_compile_fail]。
+- `boundary`: 失敗しうる入力境界は `Determination` を返す：読めないディレクトリは空 `Vec` ではなく `Undetermined` [test: crates/harness-core/src/boundary.rs::read_dir_entries_unreadable_dir_is_undetermined_not_empty]；subprocess の非 0 終了は終了コードを保持し、stdout をそのコードで制限する [test: crates/harness-core/src/boundary.rs::run_nonzero_exit_is_known_but_stdout_stays_gated_by_the_code]。
+- `undetermined`: `Verdict::undetermined` / `Determination::undetermined` を作るたびに、理由を持つ 1 行が記録され、`Verdict::undetermined` の行は呼び出し側のファイルを名指しする [test: crates/harness-core/tests/undetermined_telemetry.rs::the_whole_contract]。
+- `degrade`: 判定単調性プロパティ：劣化した証拠から clean が出たら違反であり [test: crates/harness-core/src/degrade.rs::clean_from_degraded_evidence_is_a_violation]、維持または厳格化は問題ない [test: crates/harness-core/src/degrade.rs::holding_or_tightening_is_fine]。
+- `git_probe`: git リポジトリか？のプローブ：git が失敗し `.git` が存在するときは「リポジトリではない」ではなく `Undetermined` [test: crates/harness-core/tests/git_probe.rs::decides_undetermined_when_git_fails_but_dot_git_exists]、git が失敗し `.git` も無いときは「リポジトリではない」 [test: crates/harness-core/tests/git_probe.rs::decides_not_repo_when_git_fails_and_no_dot_git]。
+- `primary_tree`: git-dir と git-common-dir の比較による primary / linked working tree の三値分類 [test: crates/harness-core/src/primary_tree.rs::decide_table]；`refuse_if_primary` は `Undetermined` も拒否として扱う [test: crates/harness-core/src/primary_tree.rs::unreadable_repo_is_refused_not_allowed]。
+- `attribution`: peer セッションが所有を主張し、このセッションが主張しないファイルだけが除外される [test: crates/harness-core/src/attribution.rs::only_a_peers_own_files_are_excluded]；読めない transcript は何も絞り込まない [test: crates/harness-core/src/attribution.rs::an_unreadable_transcript_does_not_narrow_anything]。
+- `repeat`: セッションスコープの repeat 台帳：同じ finding の 1 回目は成立し、2 回目は譲る [test: crates/harness-core/src/repeat.rs::second_occurrence_of_the_same_finding_yields]；session id が無い場合は repeat ではなく判定不能 [test: crates/harness-core/src/repeat.rs::missing_session_id_is_undetermined_not_repeat]。
+- `fleet`: fleet の GATE crate 名の正典集合（`GATE_CRATES`）[test: crates/harness-core/src/fleet.rs::gate_crates_is_the_known_seven]と、それを包含する `BLOCKING_GATES` [test: crates/harness-core/tests/gate_protection.rs::blocking_gates_is_superset_of_gate_crates]。
+- `autonomy`: autonomy スイッチ：mode は `on` と `off` だけをパースし [test: crates/harness-core/src/autonomy.rs::mode_parses_only_on_and_off]、スイッチファイルのペイロードは往復できる [test: crates/harness-core/src/autonomy.rs::switch_file_payload_roundtrips]。
+- `parallel`: セッション全体の並行数上限は 3 [test: crates/harness-core/src/parallel.rs::ceiling_is_three]；`clamp` は上限を超えず [test: crates/harness-core/src/parallel.rs::clamp_never_exceeds_the_ceiling]、下限は 1 [test: crates/harness-core/src/parallel.rs::clamp_floors_at_one_so_a_session_can_always_run_something]。
+- `plugin_bin`: 兄弟プラグインの実行ファイルを plugin キャッシュから見つけ、最新バージョンを数値比較で選ぶ [test: crates/harness-core/src/plugin_bin.rs::ten_or_more_patches_in_a_series_still_picks_the_newest]；`$PATH` に無いバイナリは、キャッシュに版ディレクトリが無ければ判定不能ではなく known-absent になる [test: crates/harness-core/tests/plugin_bin_resolve_hook_env.rs::history_file_only_cache_dir_and_path_miss_is_known_absent]。
+- `progress`: 進捗判定エンジン：いずれかの signal が進めば `Progressing` [test: crates/harness-core/src/progress.rs::any_signal_advancing_is_progressing_even_with_ancient_heartbeat]、ウィンドウ全体で fingerprint が凍結していれば `Stalled` [test: crates/harness-core/src/progress.rs::frozen_across_window_is_stalled]、初回観測は stalled ではなく判定不能 [test: crates/harness-core/src/progress.rs::first_observation_is_undetermined_never_stalled]。
+- `append`: アトミックな単一 `write()` による JSONL 追記：呼び出しごとに改行終端の 1 レコード [test: crates/harness-core/src/append.rs::append_line_writes_one_record_terminated_by_newline]、並列 writer でもレコードが交錯しない [test: crates/harness-core/src/append.rs::concurrent_appends_never_interleave_records]。
+- `discovery`: 追記専用の discovery record ストア：あるセッションが保存したレコードは、別セッションの照会から他者所有として見える [test: crates/harness-core/src/discovery.rs::already_discovered_by_other_reads_the_store_end_to_end]；fingerprint は決定論的 [test: crates/harness-core/src/discovery.rs::fingerprint_is_deterministic]。
+- `lessons` / `retrieval`: lessons ストアは id で冪等（最初の書き込みが勝つ）[test: crates/harness-core/src/lessons.rs::append_is_idempotent_by_id]、retrieval イベント台帳は run id で冪等 [test: crates/harness-core/src/retrieval.rs::record_is_idempotent_by_run_id]；既定の lessons ストアは `~/.lessons/lessons.jsonl` [test: crates/harness-core/tests/prose_claims.rs::claim_lessons_path]。
+- `code_index` / `text_index` / `callgraph` / `index_store`: 字句的なコードインデックス：決定論的なシンボル [test: crates/harness-core/src/code_index.rs::extract_symbols_is_deterministic_across_calls]、決定論的な全文 [test: crates/harness-core/src/text_index.rs::build_is_deterministic_regardless_of_source_order]、ファイルをまたいで caller→callee エッジを見つけるグラフ [test: crates/harness-core/src/callgraph.rs::build_graph_finds_caller_to_callee_edges_across_files]；ファサードがシンボル検索 [test: crates/harness-core/src/index_store.rs::symbol_search_returns_declarations_without_spawning_fugu_router]と全文検索 [test: crates/harness-core/src/index_store.rs::full_text_search_finds_a_token_that_lives_only_in_a_body]に答える。

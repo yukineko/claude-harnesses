@@ -223,12 +223,14 @@ def test_record_marker_dated_exempt(tmp_path):
 
 
 def test_record_block_exempts_claims(tmp_path):
-    text = ("<!-- record: 2026-07-21 -->\n"
+    # A record block must carry `rev:` (user ruling 2026-10-15); a rev-less
+    # opener is covered by test_block_without_rev_is_malformed_and_not_exempt.
+    text = ("<!-- record: 2026-07-21 rev: {full} -->\n"
             "The gate blocked unsigned commits.\n\n"
             "Another observed claim here.\n"
             "<!-- /record -->\n")
-    repo = make_repo(tmp_path, {"CLAUDE.md": text})
-    r = run(repo)
+    repo = _rev_repo(tmp_path, text)
+    r = run(repo, "--all")
     assert r.returncode == 0, (r.stdout, r.stderr)
 
 
@@ -610,4 +612,102 @@ def test_b_unrelated_edit_elsewhere_in_file_reports_nothing(tmp_path):
     write(repo, "CLAUDE.md",
           "\n\n".join(BASE_CLAIMS + ["Run the build now."]) + "\n")
     r = run(repo)
+    assert r.returncode == 0, (r.stdout, r.stderr)
+
+
+# Record rev (user ruling 2026-10-15): a record carries the commit at which
+# the recorded observation was true. ---------------------------------------
+def _head(repo):
+    return subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                          check=True, capture_output=True, text=True).stdout.strip()
+
+
+def _rev_repo(tmp_path, template):
+    """Fixture repo whose CLAUDE.md is `template` with {rev} filled by HEAD sha
+    (computed from a committed placeholder repo). `template` may use {full}/{short}."""
+    repo = make_repo(tmp_path, {"CLAUDE.md": PLACEHOLDER})
+    sha = _head(repo)
+    write(repo, "CLAUDE.md", template.format(full=sha, short=sha[:8]))
+    return repo
+
+
+@pytest.mark.parametrize("which", ["full", "short"])
+def test_rev_block_with_resolvable_rev_exempts_claims(tmp_path, which):
+    repo = _rev_repo(tmp_path,
+                     "<!-- record: 2026-07-21 rev: {" + which + "} -->\n"
+                     "The gate blocked unsigned commits.\n"
+                     "<!-- /record -->\n")
+    r = run(repo, "--all")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+
+
+def test_block_without_rev_is_malformed_and_not_exempt(tmp_path):
+    text = ("<!-- record: 2026-10-01 -->\n"
+            "The gate blocked unsigned commits.\n"
+            "<!-- /record -->\n")
+    repo = make_repo(tmp_path, {"CLAUDE.md": text})
+    r = run(repo, "--all")
+    assert r.returncode != 0, (r.stdout, r.stderr)
+    assert "malformed-record-block" in r.stdout, r.stdout
+    assert "rev" in r.stdout, r.stdout
+    assert "uncited-claim" in r.stdout, r.stdout  # contents not exempt
+
+
+def test_block_with_unresolvable_rev_is_malformed_and_not_exempt(tmp_path):
+    text = ("<!-- record: 2026-10-01 rev: deadbeef -->\n"
+            "The gate blocked unsigned commits.\n"
+            "<!-- /record -->\n")
+    repo = make_repo(tmp_path, {"CLAUDE.md": text})
+    r = run(repo, "--all")
+    assert r.returncode != 0, (r.stdout, r.stderr)
+    assert "malformed-record-block" in r.stdout, r.stdout
+    assert "deadbeef" in r.stdout or "rev" in r.stdout, r.stdout
+    assert "uncited-claim" in r.stdout, r.stdout
+
+
+def test_block_with_invalid_date_and_valid_rev_is_malformed(tmp_path):
+    repo = _rev_repo(tmp_path,
+                     "<!-- record: 2026-13-45 rev: {full} -->\n"
+                     "The gate blocked unsigned commits.\n"
+                     "<!-- /record -->\n")
+    r = run(repo, "--all")
+    assert r.returncode != 0, (r.stdout, r.stderr)
+    assert "malformed-record-block" in r.stdout, r.stdout
+    assert "uncited-claim" in r.stdout, r.stdout
+
+
+@pytest.mark.parametrize("which", ["full", "short"])
+def test_inline_record_with_resolvable_rev_is_exempt(tmp_path, which):
+    repo = _rev_repo(tmp_path,
+                     "[record: 2026-07-21 rev: {" + which + "}] The gate blocked unsigned commits.\n")
+    r = run(repo, "--all")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+
+
+def test_inline_record_with_unresolvable_rev_is_reported(tmp_path):
+    repo = make_repo(tmp_path, {
+        "CLAUDE.md": "[record: 2026-07-21 rev: deadbeef] The gate blocked unsigned commits.\n"})
+    r = run(repo, "--all")
+    assert r.returncode != 0, (r.stdout, r.stderr)
+    assert "CLAUDE.md" in r.stdout, r.stdout
+
+
+def test_inline_record_with_invalid_date_and_valid_rev_not_exempt(tmp_path):
+    repo = _rev_repo(tmp_path,
+                     "[record: 2026-13-45 rev: {full}] The gate blocked unsigned commits.\n")
+    r = run(repo, "--all")
+    assert r.returncode != 0, (r.stdout, r.stderr)
+    assert "uncited-claim" in r.stdout, r.stdout
+
+
+def test_inline_record_without_rev_still_accepted_control(tmp_path):
+    repo = make_repo(tmp_path, {
+        "CLAUDE.md": "[record: 2026-07-21] The gate blocked unsigned commits.\n"})
+    r = run(repo, "--all")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+
+
+def test_date_only_inline_marker_still_works_control(tmp_path):
+    repo = make_repo(tmp_path, {"CLAUDE.md": "実測 2026-10-01 にゲートが X を通した。\n"})
+    r = run(repo, "--all")
     assert r.returncode == 0, (r.stdout, r.stderr)

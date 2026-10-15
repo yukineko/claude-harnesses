@@ -117,8 +117,12 @@ fn undetermined_items_value_exits_two() {
         "must be judged by the registered schema (not the unknown-schema \
          fail-fast branch, which never prints a schema field); got: {stdout}"
     );
+    let verdict: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("stdout is one JSON object");
     assert!(
-        stdout.contains("undetermined") && stdout.contains("items_any"),
+        verdict["undetermined"]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|u| u["path"] == "items_any")),
         "the verdict must name items_any under `undetermined`, not just \
          report a bare exit 2; got stdout: {stdout} stderr: {stderr}"
     );

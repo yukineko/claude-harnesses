@@ -168,9 +168,18 @@ pub fn acquire_repo_primary(cfg: &Config, cwd: &Path) -> Result<RunLock> {
 /// Like [`acquire_repo_primary`] but loads [`Config`] internally, for
 /// primary-repo mutators (`worktree::create`, `worktree::discard`) that do not
 /// already thread a `Config` and whose callers live in sibling modules. Same
-/// fallible contract: cannot-acquire is `Err`, never an unheld guard.
+/// fallible contract: cannot-acquire is `Err`, never an unheld guard — and a
+/// configuration that cannot be loaded (config.toml unreadable/unparseable,
+/// so the lock's configured state dir is unknown) is `Err` too, not a lock
+/// taken in the default store where a peer would never see it.
 pub fn acquire_repo_primary_loaded(cwd: &Path) -> Result<RunLock> {
-    acquire_repo_primary(&Config::load(), cwd)
+    let cfg = Config::load().map_err(|e| {
+        anyhow::anyhow!(
+            "could not load condukt's configuration, so the repo-primary lock's \
+             location is unknown; refusing to mutate the primary repo unlocked: {e}"
+        )
+    })?;
+    acquire_repo_primary(&cfg, cwd)
 }
 
 fn now_unix() -> i64 {

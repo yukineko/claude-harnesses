@@ -1934,7 +1934,8 @@ fn editgate_block_reason(verdict: &serde_json::Value) -> String {
 /// `{"decision":"block","reason":<verdict reason, then diagnostics>}` (see
 /// [`editgate_block_reason`]) so the worker fixes it in the same turn. It also
 /// blocks, with a stated reason, when the project's run state cannot be
-/// located. Out-of-scope paths (non-edit tool, no file, non-Rust file,
+/// located, including when condukt's configuration cannot be loaded
+/// (config.toml unreadable or unparseable). Out-of-scope paths (non-edit tool, no file, non-Rust file,
 /// out-of-worktree edit), a clean build, and empty/invalid stdin print nothing.
 /// Called under [`run_hook`], so the process exits 0 — exit status is not this
 /// hook's verdict channel; the printed block line is. Note that `run_hook`
@@ -1958,7 +1959,26 @@ fn run_editgate() {
         None => return,
     };
 
-    let cfg = Config::load();
+    // An undeterminable config (config.toml unreadable/unparseable) means the
+    // run-state store this edit must be checked against is unknown (its
+    // `state_dir` may be configured): that blocks, stated, it is not "out of
+    // scope".
+    let cfg = match Config::load() {
+        Ok(c) => c,
+        Err(e) => {
+            let out = serde_json::json!({
+                "decision": "block",
+                "reason": format!(
+                    "condukt editgate could not load its configuration, so whether this \
+                     edit is inside a live condukt worktree is unknown: {e}"
+                ),
+            });
+            if let Ok(line) = serde_json::to_string(&out) {
+                println!("{line}");
+            }
+            return;
+        }
+    };
     let cwd = match std::env::current_dir() {
         Ok(c) => c,
         Err(_) => return,
@@ -2012,7 +2032,19 @@ fn run_editgate() {
 /// write a timestamp that could not be justified (a fabricated heartbeat makes
 /// a dead child look alive downstream).
 fn run_subagent_stop() {
-    let cfg = Config::load();
+    // The configured `state_dir` is unknown when config.toml cannot be read or
+    // parsed; writing to the default store would advance a timestamp nobody
+    // reads (or the wrong project's), so nothing is written and that is said.
+    let cfg = match Config::load() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "condukt subagent-stop: no progress timestamp written: configuration \
+                 undetermined ({e}), so the project's run state could not be located"
+            );
+            return;
+        }
+    };
     let cwd = match std::env::current_dir() {
         Ok(c) => c,
         Err(e) => {
@@ -2027,8 +2059,56 @@ fn run_subagent_stop() {
     eprintln!("condukt subagent-stop: {}", outcome.describe());
 }
 
+/// A user command refused because `Config::load` could not determine the
+/// configuration (config.toml exists but is unreadable or unparseable). Every
+/// user command reads some configured value (`shared_globs`, `state_dir`,
+/// `worktree_base`, `autonomous`, the test/loop commands, ...), and running it
+/// on the built-in defaults would silently drop what the user configured — a
+/// task their `shared_globs` serializes would be scheduled in parallel, run
+/// state would be read from the wrong store, autonomy would read as off.
+///
+/// `condukt loop` keeps its JSON verdict shape (stop, null `failure_count`,
+/// exit 1) so a driving script sees a refused iteration, not a crash; the
+/// `stop_reason` names the cap as undetermined when the cap would have come
+/// from the file. Every other command fails with the error (exit 1) — for
+/// `policy decide/answer` that is the "anything else → ask a human" branch of
+/// the shim's exit contract, never `auto`.
+fn refuse_undetermined_config(cmd: &Command, err: &str) -> Result<()> {
+    if let Command::Loop {
+        module,
+        iteration,
+        max_iters,
+        ..
+    } = cmd
+    {
+        let stop_reason = match max_iters {
+            None => format!("max iters undetermined: {err}"),
+            Some(_) => format!("config undetermined: {err}"),
+        };
+        let out = serde_json::json!({
+            "iteration": iteration,
+            "module": module,
+            "failure_count": serde_json::Value::Null,
+            "success": false,
+            "stop": true,
+            "stop_reason": stop_reason,
+            "output": "",
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        std::process::exit(1);
+    }
+    bail!(
+        "{err} ({}): refusing to run on built-in defaults, which would silently drop \
+         the configured settings; fix or remove the file",
+        config::base_dir().join("config.toml").display()
+    )
+}
+
 fn run_user(cmd: Command) -> Result<()> {
-    let cfg = Config::load();
+    let cfg = match Config::load() {
+        Ok(c) => c,
+        Err(e) => return refuse_undetermined_config(&cmd, &e),
+    };
     let cwd = std::env::current_dir().context("getting cwd")?;
     match cmd {
         Command::Schedule { file } => {
@@ -2269,7 +2349,6 @@ fn run_user(cmd: Command) -> Result<()> {
         },
         Command::Sandbox { action } => match action {
             SandboxAction::Run { cmd, timeout } => {
-                let cfg = Config::load();
                 let workdir = std::env::current_dir()
                     .map(|p| p.display().to_string())
                     .unwrap_or_else(|_| ".".to_string());
@@ -2561,7 +2640,7 @@ fn run_user(cmd: Command) -> Result<()> {
                 std::process::exit(1);
             }
         }
-        Command::Policy { action } => run_policy(action),
+        Command::Policy { action } => run_policy(&cfg, action),
         Command::Escalate { action } => run_escalate(&cfg, &cwd, action)?,
         Command::Precedent { action } => run_precedent(&cfg, &cwd, action)?,
         Command::Status { all } => status::render(&cfg, &cwd, all)?,
@@ -3328,6 +3407,7 @@ fn run_precedent(cfg: &Config, cwd: &Path, action: PrecedentAction) -> Result<()
 /// condition lives HERE, in the binary, rather than in skill prose, so a skill
 /// cannot lose its consent prompt by forgetting to check autonomy first.
 fn resolve_policy_verdict(
+    cfg: &Config,
     risk: policy::Level,
     reversible: policy::Level,
     confidence: policy::Level,
@@ -3339,7 +3419,7 @@ fn resolve_policy_verdict(
         policy::decide_untestable(risk, reversible, confidence)
     } else if conflict {
         policy::decide_conflict_resolution(risk, reversible, confidence)
-    } else if approval && policy_is_autonomous(&config::Config::load()) {
+    } else if approval && policy_is_autonomous(cfg) {
         policy::decide_approval(risk, reversible, confidence)
     } else {
         policy::decide(risk, reversible, confidence)
@@ -3416,7 +3496,7 @@ fn run_diffrisk_report(cfg: &Config, cwd: &Path, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn run_policy(action: PolicyAction) -> ! {
+fn run_policy(cfg: &Config, action: PolicyAction) -> ! {
     match action {
         PolicyAction::Decide {
             risk,
@@ -3443,7 +3523,7 @@ fn run_policy(action: PolicyAction) -> ! {
             // other way (escalate→auto) but only when autonomous, and never
             // relaxes a block. See `resolve_policy_verdict` for the precedence.
             let decision = resolve_policy_verdict(
-                risk, reversible, confidence, conflict, untestable, approval,
+                cfg, risk, reversible, confidence, conflict, untestable, approval,
             );
             println!("{decision}");
             let code = match decision {
@@ -3481,7 +3561,7 @@ fn run_policy(action: PolicyAction) -> ! {
             // run is autonomous, and still refuses on `block`. See
             // `resolve_policy_verdict` for the precedence between them.
             let decision = resolve_policy_verdict(
-                risk, reversible, confidence, conflict, untestable, approval,
+                cfg, risk, reversible, confidence, conflict, untestable, approval,
             );
             let outcome = gatelog::answer_outcome(decision, &options, recommend);
             // Every *consultation* is journaled — auto, escalate and block alike —
@@ -3491,9 +3571,7 @@ fn run_policy(action: PolicyAction) -> ! {
             // escalate/block `chosen` is empty because nothing was picked; the
             // record says the question was asked and what came back.
             let journal = |policy: &str, chosen: String| {
-                let dir = journal_dir
-                    .clone()
-                    .unwrap_or_else(|| config::Config::load().state_dir);
+                let dir = journal_dir.clone().unwrap_or_else(|| cfg.state_dir.clone());
                 let entry = gatelog::GateDecision {
                     question: question.clone(),
                     options: options.clone(),
@@ -3538,7 +3616,7 @@ fn run_policy(action: PolicyAction) -> ! {
             std::process::exit(outcome.exit_code());
         }
         PolicyAction::Answers { journal_dir } => {
-            let dir = journal_dir.unwrap_or_else(|| config::Config::load().state_dir);
+            let dir = journal_dir.unwrap_or_else(|| cfg.state_dir.clone());
             for entry in gatelog::load_decisions(&dir) {
                 if let Ok(line) = serde_json::to_string(&entry) {
                     println!("{line}");

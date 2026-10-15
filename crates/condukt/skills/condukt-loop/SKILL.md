@@ -32,7 +32,7 @@ max_iters = 10
 ## CLI 呼び出し例
 
 ```bash
-# server サイクル (deploy → test) を最大10回ループ
+# server サイクル (deploy → test) を 1 イテレーションだけ実行し、上限 max_iters は --iteration <i> を渡したときに検査されて上限を超えた呼び出しは cycle を実行せず拒否される [test: crates/condukt/tests/drift_b1_loop_cap.rs::loop_refuses_iteration_beyond_configured_max_iters]
 condukt loop --module server
 
 # client サイクル (build → test) の 3 回目、前回の failure_count は 4 [test: crates/condukt/tests/drift_b1_loop_cap.rs::loop_refuses_iteration_beyond_configured_max_iters]

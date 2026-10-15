@@ -209,23 +209,34 @@ pub const DEFAULT_LOOP_MAX_ITERS: usize = 10;
 /// Resolve `[loop] max_iters` strictly from the raw result of reading
 /// config.toml, for the `condukt loop` iteration cap.
 ///
-/// Unlike [`Config::load`] (which ignores an unreadable or unparseable file and
-/// keeps every default), the cap must not be guessed: a file that exists but
-/// cannot be read or parsed yields `Err`, and the caller refuses the iteration.
-/// Only an absent file, or a file that does not mention `max_iters`, resolves
-/// to [`DEFAULT_LOOP_MAX_ITERS`].
+/// The cap must not be guessed: a file that exists but cannot be read or
+/// parsed yields `Err`, and the caller refuses the iteration. Only an absent
+/// file, or a file that does not mention `max_iters`, resolves to
+/// [`DEFAULT_LOOP_MAX_ITERS`]. Same three-way contract as [`Config::load`]
+/// (see [`parse_file_config`]).
 pub fn resolve_loop_max_iters(read: std::io::Result<String>) -> Result<usize, String> {
-    let txt = match read {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(DEFAULT_LOOP_MAX_ITERS),
-        Err(e) => return Err(format!("config.toml unreadable: {e}")),
-    };
-    let fc =
-        toml::from_str::<FileConfig>(&txt).map_err(|e| format!("config.toml unparseable: {e}"))?;
-    Ok(fc
-        .loop_cfg
+    Ok(parse_file_config(read)?
+        .and_then(|fc| fc.loop_cfg)
         .and_then(|lc| lc.max_iters)
         .unwrap_or(DEFAULT_LOOP_MAX_ITERS))
+}
+
+/// The three-way contract for the raw result of reading config.toml, shared by
+/// [`resolve_loop_max_iters`] and [`Config::load`]:
+///
+/// * absent file (`NotFound`) → `Ok(None)`: nothing configured, defaults apply;
+/// * readable and parseable → `Ok(Some(file))`;
+/// * exists but unreadable, or unparseable → `Err`: what the user configured
+///   cannot be determined, so no caller may substitute the defaults for it.
+fn parse_file_config(read: std::io::Result<String>) -> Result<Option<FileConfig>, String> {
+    let txt = match read {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("config.toml unreadable: {e}")),
+    };
+    toml::from_str::<FileConfig>(&txt)
+        .map(Some)
+        .map_err(|e| format!("config.toml unparseable: {e}"))
 }
 
 /// [`resolve_loop_max_iters`] applied to `<base_dir>/config.toml`.
@@ -282,7 +293,32 @@ pub fn retired_single_worktree_sources() -> Vec<&'static str> {
 }
 
 impl Config {
-    pub fn load() -> Self {
+    /// Defaults <- `~/.condukt/config.toml` <- the shared autonomy switch file
+    /// <- environment.
+    ///
+    /// `Err` when config.toml exists but cannot be read or parsed: the user's
+    /// settings (`shared_globs`, `state_dir`, `worktree_base`, `autonomous`,
+    /// ...) are then undetermined, and running on the defaults instead would
+    /// silently drop them. Only an ABSENT file resolves to the defaults. Every
+    /// caller must handle the `Err` deliberately (refuse / block / show it).
+    pub fn load() -> Result<Self, String> {
+        Self::load_from(std::fs::read_to_string(base_dir().join("config.toml")))
+    }
+
+    /// The configuration an ABSENT config.toml resolves to (built-in defaults,
+    /// then the autonomy switch file and the environment), without reading the
+    /// file — for unit-test fixtures that must not depend on what `$HOME`
+    /// holds (a `$HOME` that is not a directory makes [`Config::load`] `Err`).
+    #[cfg(test)]
+    pub(crate) fn without_config_file() -> Self {
+        match Self::load_from(Err(std::io::ErrorKind::NotFound.into())) {
+            Ok(cfg) => cfg,
+            Err(e) => unreachable!("an absent config.toml resolves to defaults: {e}"),
+        }
+    }
+
+    /// [`Config::load`] with the raw config.toml read result injected.
+    fn load_from(read: std::io::Result<String>) -> Result<Self, String> {
         let base = base_dir();
         let mut cfg = Config {
             worktree_base: base.join("worktrees"),
@@ -316,88 +352,86 @@ impl Config {
         // said anything at all: `Some(false)` (an explicit "off") and `None`
         // (never mentioned) resolve to the same bool but to different sources.
         let mut file_autonomous: Option<bool> = None;
-        if let Ok(txt) = std::fs::read_to_string(base.join("config.toml")) {
-            if let Ok(fc) = toml::from_str::<FileConfig>(&txt) {
-                if let Some(v) = fc.worktree_base {
-                    cfg.worktree_base = expand_tilde(&v);
+        if let Some(fc) = parse_file_config(read)? {
+            if let Some(v) = fc.worktree_base {
+                cfg.worktree_base = expand_tilde(&v);
+            }
+            if let Some(v) = fc.default_branch {
+                cfg.default_branch = v;
+            }
+            if let Some(v) = fc.shared_globs {
+                cfg.shared_globs = v;
+            }
+            if let Some(v) = fc.max_parallel {
+                cfg.max_parallel = v;
+            }
+            if let Some(v) = fc.state_dir {
+                cfg.state_dir = expand_tilde(&v);
+            }
+            if let Some(t) = fc.test {
+                cfg.test_command = t.command;
+            }
+            if let Some(v) = fc.stuck_ttl_secs {
+                cfg.stuck_ttl_secs = v;
+            }
+            if let Some(v) = fc.autonomous {
+                cfg.autonomous = v;
+                file_autonomous = Some(v);
+            }
+            if let Some(lc) = fc.loop_cfg {
+                if let Some(v) = lc.build_command {
+                    cfg.build_command = Some(v);
                 }
-                if let Some(v) = fc.default_branch {
-                    cfg.default_branch = v;
+                if let Some(v) = lc.deploy_command {
+                    cfg.deploy_command = Some(v);
                 }
-                if let Some(v) = fc.shared_globs {
-                    cfg.shared_globs = v;
+                if let Some(v) = lc.max_iters {
+                    cfg.loop_max_iters = v;
                 }
-                if let Some(v) = fc.max_parallel {
-                    cfg.max_parallel = v;
+            }
+            if let Some(cc) = fc.consensus {
+                if let Some(v) = cc.enabled {
+                    cfg.consensus_enabled = v;
                 }
-                if let Some(v) = fc.state_dir {
-                    cfg.state_dir = expand_tilde(&v);
+                if let Some(v) = cc.samples {
+                    cfg.consensus_samples = v;
                 }
-                if let Some(t) = fc.test {
-                    cfg.test_command = t.command;
+                if let Some(v) = cc.threshold {
+                    cfg.consensus_threshold = v;
                 }
-                if let Some(v) = fc.stuck_ttl_secs {
-                    cfg.stuck_ttl_secs = v;
+            }
+            if let Some(ac) = fc.adversarial {
+                if let Some(v) = ac.enabled {
+                    cfg.adversarial_enabled = v;
                 }
-                if let Some(v) = fc.autonomous {
-                    cfg.autonomous = v;
-                    file_autonomous = Some(v);
+                if let Some(v) = ac.size {
+                    cfg.adversarial_size = v;
                 }
-                if let Some(lc) = fc.loop_cfg {
-                    if let Some(v) = lc.build_command {
-                        cfg.build_command = Some(v);
-                    }
-                    if let Some(v) = lc.deploy_command {
-                        cfg.deploy_command = Some(v);
-                    }
-                    if let Some(v) = lc.max_iters {
-                        cfg.loop_max_iters = v;
-                    }
+                if let Some(v) = ac.min_voters {
+                    cfg.adversarial_min_voters = v;
                 }
-                if let Some(cc) = fc.consensus {
-                    if let Some(v) = cc.enabled {
-                        cfg.consensus_enabled = v;
-                    }
-                    if let Some(v) = cc.samples {
-                        cfg.consensus_samples = v;
-                    }
-                    if let Some(v) = cc.threshold {
-                        cfg.consensus_threshold = v;
-                    }
+                if let Some(v) = ac.block_ratio {
+                    cfg.adversarial_block_ratio = v;
                 }
-                if let Some(ac) = fc.adversarial {
-                    if let Some(v) = ac.enabled {
-                        cfg.adversarial_enabled = v;
-                    }
-                    if let Some(v) = ac.size {
-                        cfg.adversarial_size = v;
-                    }
-                    if let Some(v) = ac.min_voters {
-                        cfg.adversarial_min_voters = v;
-                    }
-                    if let Some(v) = ac.block_ratio {
-                        cfg.adversarial_block_ratio = v;
-                    }
+            }
+            if let Some(v) = fc.single_worktree {
+                cfg.single_worktree = v;
+            }
+            if let Some(w) = fc.worker {
+                if let Some(v) = w.sandbox_enabled {
+                    cfg.worker_sandbox_enabled = v;
                 }
-                if let Some(v) = fc.single_worktree {
-                    cfg.single_worktree = v;
+                if let Some(v) = w.docker_image {
+                    cfg.worker_sandbox_image = Some(v);
                 }
-                if let Some(w) = fc.worker {
-                    if let Some(v) = w.sandbox_enabled {
-                        cfg.worker_sandbox_enabled = v;
-                    }
-                    if let Some(v) = w.docker_image {
-                        cfg.worker_sandbox_image = Some(v);
-                    }
-                    if let Some(v) = w.memory_limit {
-                        cfg.worker_sandbox_memory = Some(v);
-                    }
-                    if let Some(v) = w.cpus {
-                        cfg.worker_sandbox_cpus = Some(v);
-                    }
-                    if let Some(v) = w.pids_limit {
-                        cfg.worker_sandbox_pids_limit = Some(v);
-                    }
+                if let Some(v) = w.memory_limit {
+                    cfg.worker_sandbox_memory = Some(v);
+                }
+                if let Some(v) = w.cpus {
+                    cfg.worker_sandbox_cpus = Some(v);
+                }
+                if let Some(v) = w.pids_limit {
+                    cfg.worker_sandbox_pids_limit = Some(v);
                 }
             }
         }
@@ -465,7 +499,7 @@ impl Config {
                 cfg.worker_sandbox_image = Some(v);
             }
         }
-        cfg
+        Ok(cfg)
     }
 
     /// Global kill switch for the hooks (`CONDUKT_DISABLE=1`).

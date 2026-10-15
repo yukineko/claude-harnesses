@@ -30,17 +30,106 @@ pub fn read_last_ref(paths: &Paths) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// Write the report body. Advancing the baseline is a SEPARATE step
-/// ([`advance_baseline`]) so a run that leaves findings pending can persist the
-/// report without moving the baseline past the unfixed drift.
-pub fn write_report(paths: &Paths, body: &str) -> Result<()> {
+/// Opening / closing markers of the spec-audit section inside the dated report.
+///
+/// The drift run (`finish`) and the spec-audit ingest (`finish_audit`) share the
+/// one dated report file (`<report_dir>/<date>.md`), so each sentinel's
+/// `report:` line points at a file that still holds its findings. The drift
+/// report owns everything OUTSIDE this section; the spec-audit report owns the
+/// section. Each writer replaces only its own part, so a same-day ingest of the
+/// other kind no longer destroys the earlier report.
+const AUDIT_OPEN: &str = "<!-- specguard:spec-audit -->";
+const AUDIT_CLOSE: &str = "<!-- /specguard:spec-audit -->";
+
+/// Neutralise any text in an agent-produced report body that could form a
+/// section marker. The markers are in-band plain text, so a body quoting one
+/// (e.g. an auditor citing this file format) would otherwise end or open the
+/// spec-audit section early: the tail of an audit body would become
+/// "drift-owned" and be dropped by the next drift write, and a drift body with
+/// the opening marker would make every later write for that date refuse.
+///
+/// The `<` of every marker-prefix occurrence becomes the HTML entity `&lt;`, so
+/// the text is kept (reversibly, and it still renders as `<` in Markdown) but
+/// can never match [`AUDIT_OPEN`] / [`AUDIT_CLOSE`].
+fn neutralise_markers(body: &str) -> String {
+    const PREFIXES: [&str; 2] = ["<!-- specguard:spec-audit", "<!-- /specguard:spec-audit"];
+    let mut out = body.to_string();
+    for prefix in PREFIXES {
+        out = out.replace(prefix, &format!("&lt;{}", &prefix[1..]));
+    }
+    out
+}
+
+/// The current report split into (drift part, spec-audit section incl. markers).
+///
+/// Fail-closed: a report that exists but cannot be read, or whose spec-audit
+/// section has an opening marker without a closing one, is an error — the
+/// boundaries of what we would overwrite cannot be determined, and guessing
+/// would destroy the other kind's findings.
+fn split_report(paths: &Paths) -> Result<(String, Option<String>)> {
+    let existing = match harness_core::boundary::read_to_string(&paths.report) {
+        Determination::Known(Some(s)) => s,
+        Determination::Known(None) => return Ok((String::new(), None)),
+        Determination::Undetermined(why) => anyhow::bail!(
+            "refusing to overwrite the report {} (its other section would be lost): {why}",
+            paths.report.display()
+        ),
+    };
+    let Some(open) = existing.find(AUDIT_OPEN) else {
+        return Ok((existing, None));
+    };
+    let Some(close_rel) = existing[open..].find(AUDIT_CLOSE) else {
+        anyhow::bail!(
+            "refusing to overwrite the report {}: its spec-audit section opens ({AUDIT_OPEN}) \
+             but never closes ({AUDIT_CLOSE}), so its extent cannot be determined",
+            paths.report.display()
+        );
+    };
+    let close = open + close_rel + AUDIT_CLOSE.len();
+    let outside = format!("{}{}", &existing[..open], &existing[close..]);
+    Ok((outside, Some(existing[open..close].to_string())))
+}
+
+fn write_report_text(paths: &Paths, text: &str) -> Result<()> {
     if let Some(dir) = paths.report.parent() {
         std::fs::create_dir_all(dir)
             .with_context(|| format!("creating report dir {}", dir.display()))?;
     }
-    std::fs::write(&paths.report, format!("{}\n", body.trim_end()))
+    std::fs::write(&paths.report, text)
         .with_context(|| format!("writing report {}", paths.report.display()))?;
     Ok(())
+}
+
+/// Write the drift report body, keeping any spec-audit section already in the
+/// same dated report. Advancing the baseline is a SEPARATE step
+/// ([`advance_baseline`]) so a run that leaves findings pending can persist the
+/// report without moving the baseline past the unfixed drift.
+pub fn write_report(paths: &Paths, body: &str) -> Result<()> {
+    let (_, audit) = split_report(paths)?;
+    let mut text = format!("{}\n", neutralise_markers(body.trim_end()));
+    if let Some(audit) = audit {
+        text.push('\n');
+        text.push_str(&audit);
+        text.push('\n');
+    }
+    write_report_text(paths, &text)
+}
+
+/// Write the spec-audit report body as the dated report's spec-audit section,
+/// keeping the drift report (everything outside the section) intact.
+pub fn write_audit_report(paths: &Paths, body: &str) -> Result<()> {
+    let (outside, _) = split_report(paths)?;
+    let outside = outside.trim_end();
+    let mut text = String::new();
+    if !outside.is_empty() {
+        text.push_str(outside);
+        text.push_str("\n\n");
+    }
+    text.push_str(&format!(
+        "{AUDIT_OPEN}\n{}\n{AUDIT_CLOSE}\n",
+        neutralise_markers(body.trim_end())
+    ));
+    write_report_text(paths, &text)
 }
 
 /// Advance the recorded baseline (`.last-ref`) to `head`. Called only when a run
@@ -151,6 +240,37 @@ pub fn sentinel_covered_ids(content: &str) -> Vec<String> {
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
         .collect()
+}
+
+/// The `covers:` ids of the sentinel that is already pending, read BEFORE a new
+/// raise overwrites it, so the new sentinel can carry their union (see
+/// [`union_covers`]). Both the drift raise and the spec-audit raise go through
+/// this, so neither kind drops the other's still-undisposed findings.
+///
+/// Fail-closed: `Ok(vec![])` only when the sentinel is positively absent
+/// (`NotFound`). A sentinel that exists but cannot be read is an error — the
+/// caller must refuse to overwrite it, never treat "cannot read" as "covers
+/// nothing" (that would silently drop the ids `ack` needs).
+pub fn pending_sentinel_covers(paths: &Paths) -> Result<Vec<String>> {
+    match harness_core::boundary::read_to_string(&paths.sentinel) {
+        Determination::Known(Some(prev)) => Ok(sentinel_covered_ids(&prev)),
+        Determination::Known(None) => Ok(Vec::new()),
+        Determination::Undetermined(why) => anyhow::bail!(
+            "reading the pending sentinel {} (its covers would be lost by overwriting it): {why}",
+            paths.sentinel.display()
+        ),
+    }
+}
+
+/// `fresh` followed by every id of `prev` not already in it (order-preserving,
+/// no duplicates).
+pub fn union_covers(mut fresh: Vec<String>, prev: Vec<String>) -> Vec<String> {
+    for id in prev {
+        if !fresh.contains(&id) {
+            fresh.push(id);
+        }
+    }
+    fresh
 }
 
 /// Extract the `raised_at` commit from a sentinel file's contents.

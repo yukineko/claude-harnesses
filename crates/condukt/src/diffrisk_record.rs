@@ -501,7 +501,7 @@ mod tests {
     /// Production takes the state dir from the injected `&Config`, so pinning
     /// it here exercises exactly the production journaling path.
     fn hermetic_cfg(state_dir: &Path) -> Config {
-        let mut cfg = Config::load();
+        let mut cfg = Config::without_config_file();
         cfg.state_dir = state_dir.to_path_buf();
         cfg
     }

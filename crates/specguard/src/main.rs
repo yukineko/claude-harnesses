@@ -1199,11 +1199,7 @@ fn finish(
         .collect();
     if !missing.is_empty() {
         let merged = merge_report(&l.cfg, scope, &l.date, &head, &parsed);
-        if let Some(dir) = paths.report.parent() {
-            std::fs::create_dir_all(dir).ok();
-        }
-        std::fs::write(&paths.report, &merged)
-            .with_context(|| format!("writing report {}", paths.report.display()))?;
+        report::write_report(paths, &merged)?;
         eprintln!(
             "specguard: WARN marker '{}' missing in shard(s): {}; saved {} but cannot assess findings",
             parse::MARKER,
@@ -1238,10 +1234,18 @@ fn finish(
         // the unfixed drift in the next run's diff so it is re-detected; a human
         // releases it with `specguard ack` once handled.
         let summary = merge_summary(&parsed);
+        // A sentinel already pending (e.g. raised by a same-day spec-audit
+        // ingest) keeps its `covers:` ids: the new sentinel carries the union,
+        // and one that cannot be read refuses the raise rather than dropping
+        // them. Read BEFORE emitting, so a refusal leaves no uncovered findings.
+        let prev = report::pending_sentinel_covers(paths)?;
         // Put each flagged shard on the unified review queue and stamp the ids
         // into the sentinel, so the eventual `ack` can dispose of them by id
         // instead of clearing an anonymous flag.
-        let covers = emit_drift_findings(&l.repo_root, &report_rel, &parsed);
+        let covers = report::union_covers(
+            emit_drift_findings(&l.repo_root, &report_rel, &parsed),
+            prev,
+        );
         report::write_sentinel(paths, &l.date, &report_rel, &summary, &head, &covers)?;
         println!(
             "specguard: 修正候補あり -> {} (report: {}); baseline は据え置き (ack するまで再検出)",
@@ -1537,7 +1541,9 @@ fn align_ingest(
 /// — a clean audit says nothing about unreviewed drift. The drift-only
 /// verification gates and content-hash memo are not applied. A sentinel that is
 /// already pending keeps its `covers:` ids (the new one carries their union),
-/// and one that cannot be read is an error rather than an overwrite.
+/// and one that cannot be read is an error rather than an overwrite — the same
+/// rule [`finish`] applies. The report goes into the dated report's spec-audit
+/// section ([`report::write_audit_report`]), so a same-day drift ingest keeps it.
 fn finish_audit(
     l: &Loaded,
     paths: &report::Paths,
@@ -1557,7 +1563,7 @@ fn finish_audit(
     );
 
     if outs.is_empty() {
-        report::write_report(
+        report::write_audit_report(
             paths,
             &format!("{title}{scope_line}\n## findings\n監査対象なし。\n"),
         )?;
@@ -1594,7 +1600,7 @@ fn finish_audit(
         body.push_str(p.report.trim_end());
         body.push('\n');
     }
-    report::write_report(paths, &body)?;
+    report::write_audit_report(paths, &body)?;
 
     let missing: Vec<&str> = parsed
         .iter()
@@ -1620,23 +1626,14 @@ fn finish_audit(
     }
 
     let report_rel = format!("{}/{}.md", l.cfg.output.report_dir, l.date);
-    let mut covers = emit_spec_audit_findings(&l.repo_root, &report_rel, &parsed);
-    match harness_core::boundary::read_to_string(&paths.sentinel) {
-        Determination::Known(Some(prev)) => {
-            for id in report::sentinel_covered_ids(&prev) {
-                if !covers.contains(&id) {
-                    covers.push(id);
-                }
-            }
-        }
-        Determination::Known(None) => {}
-        Determination::Undetermined(why) => {
-            anyhow::bail!(
-                "reading the pending sentinel {} (its covers would be lost by overwriting it): {why}",
-                paths.sentinel.display()
-            );
-        }
-    }
+    // Read the pending sentinel's covers BEFORE emitting, so an unreadable
+    // sentinel refuses the raise without leaving freshly emitted findings that
+    // no sentinel covers.
+    let prev = report::pending_sentinel_covers(paths)?;
+    let covers = report::union_covers(
+        emit_spec_audit_findings(&l.repo_root, &report_rel, &parsed),
+        prev,
+    );
     let summary = merge_summary(&parsed);
     report::write_sentinel(paths, &l.date, &report_rel, &summary, &head, &covers)?;
     println!(

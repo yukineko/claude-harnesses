@@ -2579,47 +2579,69 @@ fn run_command_capture(cmd_str: &str, cwd: &Path) -> (bool, String) {
 }
 
 /// Count failures in test output using common framework patterns.
-/// Falls back to 1 when failures exist but count can't be parsed.
+///
+/// * exit 0 → 0 (the test command reported success).
+/// * cargo: the `M failed` of EVERY `test result:` line is summed — a
+///   workspace / `--no-fail-fast` run prints one summary per test binary, and
+///   the first is often `test result: ok. ..; 0 failed`, which says nothing
+///   about the binaries after it.
+/// * pytest / jest summaries: `N failed` in a summary line (`== 7 failed in
+///   0.12s ==`, `7 failed in 0.12s`, `2 failed, 8 passed`), with or without a
+///   `passed` count.
+/// * jest: otherwise, the number of `FAIL <file>` lines.
+///
+/// A non-zero exit never yields 0: whatever was parsed (or nothing, for an
+/// unknown format) is floored at 1, so a failing run can never be read
+/// downstream (`loop_should_stop`) as "all tests pass".
 pub fn count_test_failures(output: &str, exit_ok: bool) -> usize {
     if exit_ok {
         return 0;
     }
-    // Cargo: "test result: FAILED. N passed; M failed"
+    count_failures_parsed(output).max(1)
+}
+
+/// The failure count the output itself states (0 when it states none).
+fn count_failures_parsed(output: &str) -> usize {
+    // Cargo: "test result: FAILED. N passed; M failed; ..." — one per binary.
+    let mut cargo_seen = false;
+    let mut cargo_failed = 0usize;
     for line in output.lines() {
         let l = line.trim();
-        if l.starts_with("test result: FAILED") || l.starts_with("test result: ok") {
-            // "N passed; M failed; ..."
-            for part in l.split(';') {
-                let p = part.trim();
-                if let Some(rest) = p.strip_suffix(" failed") {
-                    if let Ok(n) = rest.trim().parse::<usize>() {
-                        return n;
-                    }
+        if !l.starts_with("test result:") {
+            continue;
+        }
+        cargo_seen = true;
+        for part in l.split(';') {
+            if let Some(rest) = part.trim().strip_suffix(" failed") {
+                if let Some(n) = rest.split_whitespace().last().and_then(|w| w.parse().ok()) {
+                    cargo_failed = cargo_failed.saturating_add(n);
                 }
             }
         }
-        // pytest: "N failed, M passed"
-        if l.contains("failed") && l.contains("passed") {
-            let words: Vec<&str> = l.split_whitespace().collect();
-            for (i, w) in words.iter().enumerate() {
-                if (*w == "failed," || *w == "failed") && i > 0 {
-                    if let Ok(n) = words[i - 1].parse::<usize>() {
-                        return n;
-                    }
+    }
+    if cargo_seen {
+        return cargo_failed;
+    }
+    // pytest / jest summary: "N failed" where the line is recognisably a
+    // summary — it also reports `passed`, is a pytest `=====` banner, or
+    // starts with the count (`pytest -q`: "7 failed in 0.12s").
+    for line in output.lines() {
+        let l = line.trim();
+        let summary_shaped = l.contains("passed") || l.starts_with('=');
+        let words: Vec<&str> = l.split_whitespace().collect();
+        for (i, w) in words.iter().enumerate() {
+            if (*w == "failed," || *w == "failed") && i > 0 && (summary_shaped || i == 1) {
+                if let Ok(n) = words[i - 1].parse::<usize>() {
+                    return n;
                 }
             }
         }
     }
     // npm/jest: count lines starting with "FAIL "
-    let jest_fails = output
+    output
         .lines()
         .filter(|l| l.trim_start().starts_with("FAIL "))
-        .count();
-    if jest_fails > 0 {
-        return jest_fails;
-    }
-    // Unknown format but exit non-0: report as 1 so stop-detection can track it
-    1
+        .count()
 }
 
 /// Whether the loop should stop given previous and current failure counts.

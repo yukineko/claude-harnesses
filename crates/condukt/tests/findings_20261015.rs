@@ -101,7 +101,6 @@ fn is_serial(o: &Output, id: &str) -> bool {
 /// serialized. The control half proves the same shared_globs DO serialize the
 /// task when the file parses, so the RED is attributable to the swallow.
 #[test]
-#[ignore = "backlog TBD: RED repro"]
 fn unparseable_config_does_not_silently_drop_shared_globs_in_schedule() {
     // Control: well-formed config serializes the shared-glob task.
     let ok = schedule_with_config("cfg-ok", "shared_globs = [\"shared/**\"]\n");
@@ -152,7 +151,6 @@ fn loop_with_test_output(tag: &str, summary: &str, code: i32) -> serde_json::Val
 ///
 /// Expected: failure_count == 7.
 #[test]
-#[ignore = "backlog TBD: RED repro"]
 fn pytest_all_failed_summary_counts_every_failure() {
     let j = loop_with_test_output(
         "pytest-allfail",
@@ -176,7 +174,6 @@ fn pytest_all_failed_summary_counts_every_failure() {
 /// Expected: failure_count == 7 (sum over the summaries) and the loop does not
 /// stop with "all tests pass".
 #[test]
-#[ignore = "backlog TBD: RED repro"]
 fn cargo_multi_binary_summary_is_not_read_as_all_pass() {
     let j = loop_with_test_output(
         "cargo-multibin",
@@ -229,7 +226,6 @@ fn documented_loop_claim() -> Option<(usize, String)> {
 /// the documented maximum holds. It passes once the doc stops claiming a cap
 /// for that command (no `最大N回ループ` comment) or the binary enforces it.
 #[test]
-#[ignore = "backlog TBD: RED repro"]
 fn documented_server_loop_cap_holds_for_the_documented_command() {
     let Some((n, cmd)) = documented_loop_claim() else {
         return; // doc no longer claims a cap for the verbatim command

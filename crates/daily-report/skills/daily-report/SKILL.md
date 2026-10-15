@@ -1,89 +1,92 @@
 ---
 name: daily-report
-description: その日の作業を「git のコミットログ」＋「Obsidian の session record ノート」から集約し、1枚の日報（何をやったか / なぜか / 学び / 残課題 / 数値）に合成して Obsidian vault へ書き戻すコマンド。git は当該リポジトリの変更を、Obsidian records は横断プロジェクトのサマリ・学び・残課題・コスト/トークン数を供給する。集約と合成（判断）は LLM、材料は git と session-insights が書いた既存 record が供給。生成のみで record は書き換えない。
+description: その日の作業を git のコミットと session record から1枚の日報にまとめたいときに使うこと。
 argument-hint: "[YYYY-MM-DD | today | yesterday | --since <git-expr>] [--repo <path> ...] [--stdout]  省略時は今日"
 allowed-tools: Bash(git:*), Bash(ls:*), Bash(cat:*), Bash(mkdir:*), Bash(date:*), Read, Grep, Glob, Write
 ---
 
-# /daily-report — git log ＋ Obsidian から日報を合成
+## ハードルール（禁止事項を最優先で守ること）
 
-`/daily-report` は **その日の git コミット** と **Obsidian の session record** を材料に、
-スキャンで読める **日報（Markdown）** を合成し、`<vault>/daily/<date>.md` に書き戻す。
+- session-insights の record ノートは絶対に書き換えないこと。
+- 数値を捏造しないこと。
+- 全 diff 本文は読まないこと。
+- `<vault>/daily/<date>.md` 以外には書かないこと（`records/` には決して書かないこと） [test: scripts/test_prose_daily_report.py::test_claim_write_only_daily]。
+- turns / tokens / cost は record の機械充填値、変更規模は git の実値だけを使うこと。
+- config 欠如・非 git リポジトリ・records 0 件でも止まらず、拾えた材料で日報を出すこと。
+- プロジェクトを跨ぐ全体像は record から、当該リポジトリの変更詳細は git から取り、両者を突き合わせて合成すること。
 
-```
-材料（決定論的に収集）                合成（LLM）              出力
-  git log（当該リポジトリの変更）  ─┐
-  Obsidian records（横断サマリ・   ├─▶  日報ナラティブ  ─▶  <vault>/daily/<date>.md
-    学び・残課題・コスト/トークン） ─┘                        （＋任意で stdout）
-```
+その日の git コミットと Obsidian の session record を材料に、スキャンで読める日報（Markdown）を合成すること。
+新しい状態を作らず、材料を読んで合成するだけにすること。
 
-**役割分担**: 材料集めは git と（session-insights が既に書いた）record が供給。
-このコマンドは **新しい状態を作らず**、材料を読んで **合成するだけ**。record ノートは決して書き換えない。
+- その日一日の作業を振り返り、日報 / standup メモを1枚にまとめたいときに使うこと。
+- 複数プロジェクトを跨いで作業した日の成果を、記録済みの record から横断集約したいときに使うこと。
 
-## いつ使うか
+### Step 0 — 引数から対象日と設定を決めること
 
-- その日一日の作業を振り返り、日報 / standup メモを1枚にまとめたいとき。
-- 複数プロジェクトを跨いで作業した日の成果を、記録済みの record から横断集約したいとき。
+- 引数に日付 `YYYY-MM-DD` があれば、それを対象日にすること [test: scripts/test_prose_daily_report.py::test_claim_arg_date]。
+- 引数が `today` または省略なら今日、`yesterday` なら前日を対象日にすること [test: scripts/test_prose_daily_report.py::test_claim_arg_date]。
+- 日付の解決には、今日は `date +%F`、前日は `date -v-1d +%F`（BSD/macOS の date）か `date -d yesterday +%F`（GNU date）を使うこと [test: scripts/test_prose_daily_report.py::test_claim_date_today_yesterday]。
+- `--since <git-expr>` が渡されたら期間モードにし、`<date>` をその期間の終端日にすること [test: scripts/test_prose_daily_report.py::test_claim_arg_since]。
+- `--repo <path>` が渡されたら、そのリポジトリも追加で走査すること [test: scripts/test_prose_daily_report.py::test_claim_arg_repo]。省略時はカレントリポジトリのみを走査すること。
+- `--stdout` が渡されたら、vault へ書き込まずターミナル出力だけにすること [test: scripts/test_prose_daily_report.py::test_claim_arg_stdout]。
 
-## 手順
+### Step 1 — Obsidian vault を解決すること
 
-### Step 0 — 引数から対象日と設定を決める
+1. カレントディレクトリに `session-insights.toml` があればそれを、無ければ `~/.session-insights/config.toml` を読み（2 つはマージせず、先に見つかった 1 つだけを使う）、`obsidian_vault` と `record_dir` を採ること [test: scripts/test_prose_daily_report.py::test_claim_config_home_keys]。
+2. `obsidian_vault` は `~` を展開すること [test: scripts/test_prose_daily_report.py::test_claim_config_tilde]。
+3. config が無ければ既定にフォールバックし、vault は `~/Documents/vault/yukineko`、record_dir は `records` を使うこと [test: scripts/test_prose_daily_report.py::test_claim_config_defaults]。
+4. 解決した records ディレクトリが存在しなければ、その旨を報告し、records 無しで git だけから日報を作ること。records が 0 件でも同様に続行すること。
 
-- 引数に日付 `YYYY-MM-DD` があればそれを対象日 `<date>` にする。`today`/省略＝今日、`yesterday`＝前日。
-  日付の解決は `date +%F`（今日）や `date -d yesterday +%F` を使ってよい。
-- `--since <git-expr>`（例: `--since "3 days ago"`）が渡されたら期間モード。`<date>` はその期間の終端日にする。
-- `--repo <path>` は追加で走査する git リポジトリ（複数可）。省略時は **カレントリポジトリのみ**。
-- `--stdout` があれば vault への書き込みを省き、ターミナル出力だけにする。
+### Step 2 — git コミットを収集すること
 
-### Step 1 — Obsidian vault を解決（fail-soft）
-
-1. `~/.session-insights/config.toml` があれば読み、`obsidian_vault` と `record_dir` を採る
-   （`obsidian_vault` は `~` 展開する）。
-2. 無ければ **既定**にフォールバック: vault=`~/Documents/vault/yukineko` / `record_dir=records`
-   （session-insights の既定と一致）。
-3. 解決した `<vault>/<record_dir>/` が存在しなければ、その旨を報告し **records 無しで** git だけから日報を作る
-   （records が今日 0 件でも同様に続行）。
-
-### Step 2 — git コミットを収集（当該リポジトリ＝変更の一次情報）
-
-対象リポジトリ（カレント＋`--repo` 指定分）ごとに、対象日の**自分のコミット**を集める:
+- 全 diff 本文は読まないこと。
+- 対象リポジトリ（カレントと追加指定分）ごとに、対象日のコミットを作者で絞らずに集めること [test: scripts/test_prose_daily_report.py::test_claim_git_log_single_day_all_authors]。
+- 単日なら次の git log を実行すること [test: scripts/test_prose_daily_report.py::test_claim_git_log_single_day_all_authors]。
 
 ```bash
-# 単日
 git log --since="<date> 00:00" --until="<date> 23:59:59" --no-merges \
         --pretty=format:'%h%x09%an%x09%ad%x09%s' --date=format:'%H:%M'
-# 期間モード（--since 指定時）
+```
+
+- 期間モードなら次の git log を実行すること [test: scripts/test_prose_daily_report.py::test_claim_git_log_period]。
+
+```bash
 git log --since="<git-expr>" --no-merges --pretty=format:'%h%x09%an%x09%ad%x09%s' --date=short
 ```
 
-- 変更規模は `git log ... --shortstat` か、代表コミットに `git show --stat <sha>` を使う（全 diff 本文は読まない＝コスト節約）。
-- コミットが 0 件なら「このリポジトリでのコミットは無し」と控え、records 側の成果に依存する。
-- **git の失敗（非リポジトリ等）は fail-soft**: そのリポジトリを飛ばして続行する。
+- 変更規模は `git log --shortstat` か、代表コミットに対する `git show --stat <sha>` で調べること [test: scripts/test_prose_daily_report.py::test_claim_git_shortstat]。
+- コミットが 0 件なら「このリポジトリでのコミットは無し」と控え、records 側の成果に依存すること。
+- git が失敗した（非リポジトリ等の）場合は、そのリポジトリを飛ばして続行すること。
 
-### Step 3 — 対象日の Obsidian record を読む（横断サマリの一次情報）
+### Step 3 — 対象日の Obsidian record を読むこと
 
-record ノート名は `<date>-<project>-<session8>.md`。対象日ぶんを列挙して読む:
+- record の数値を創作しないこと。
+
+対象日の record ノート（ファイル名は `<date>-<project>-<session8>.md` [test: crates/session-insights/src/record.rs::write_record_first_then_merge_on_disk]）を列挙して読むこと [test: scripts/test_prose_daily_report.py::test_claim_record_list_grep]。
 
 ```bash
-ls "<vault>/<record_dir>/" | grep "^<date>-"     # 例: 2026-07-03-*.md
+ls "<vault>/<record_dir>/" | grep "^<date>-"
 ```
 
-各 record から **散文セクション**を抽出する（見出しは session-insights の record フォーマット）:
+各 record から次の散文セクションを抽出すること（見出しは session-insights の record フォーマットに従うこと）。
 
-- `## 完了サマリ` — その session で完了したこと（成果の主材料）
-- `## つまずき / 学び` — 学び・気づき
-- `## 振り返り / 確立した方針` — 確立した方針
-- `## 注意点 / 落とし穴` / `## 残課題` / `## 要追跡 / あとで確認` — 残課題・フォローアップ
-- `## 数値サマリ` / `## コスト` — **機械が自動充填した数値**（turns / tool events / files / tokens / cost）。
-  数値は**そのまま引用**し、創作しない。
+- `## 完了サマリ` から、その session で完了したことを成果の主材料として抽出すること。[test: crates/session-insights/src/record.rs::skeleton_has_all_sections_and_placeholders]
+- `## つまずき / 学び` から、学び・気づきを抽出すること。[test: crates/session-insights/src/record.rs::skeleton_has_all_sections_and_placeholders]
+- `## 振り返り / 確立した方針` から、確立した方針を抽出すること。[test: crates/session-insights/src/record.rs::skeleton_has_all_sections_and_placeholders]
+- `## 注意点 / 落とし穴`、`## 残課題`、`## 要追跡 / あとで確認` から、残課題・フォローアップを抽出すること。[test: crates/session-insights/src/record.rs::skeleton_has_all_sections_and_placeholders]
+- `## 数値サマリ` と `## コスト` から、機械が自動充填した数値（turns / tool events / files / tokens / cost）をそのまま引用すること [test: crates/session-insights/src/record.rs::skeleton_has_all_sections_and_placeholders]。
 
-> record が 0 件の日は、git コミットだけから成果を書く（散文は git message から要約）。
-> record 本文が薄い（プレースホルダのみ）の session は数値だけ拾って散文はスキップしてよい。
+> record が 0 件の日は、git コミットだけから成果を書き、散文は git message から要約すること。
+> record 本文が薄い（プレースホルダのみ）session は、散文はスキップしてよいが、数値は拾うこと。
 
-### Step 4 — 日報を合成（LLM の判断）
+### Step 4 — 日報を合成すること
 
-材料（git コミット群 ＋ record の散文・数値）を統合し、**重複を排除**して1枚に合成する。
-同じ作業が複数 session に跨る場合は 1 項目にまとめる。以下の構造で **日本語・エンジニア向け**に出力する:
+- 無い数値を捏造しないこと。
+- 全 diff や長い引用は貼らないこと。
+
+材料（git コミット群と record の散文・数値）を統合し、重複を排除して1枚に合成すること。
+同じ作業が複数 session に跨る場合は 1 項目にまとめること。
+次の構造で日本語・エンジニア向けに出力すること。
 
 ```markdown
 # 日報 — <date>
@@ -108,21 +111,14 @@ ls "<vault>/<record_dir>/" | grep "^<date>-"     # 例: 2026-07-03-*.md
   （record が無い項目は「—」）
 ```
 
-- **数値は record / git から取った実値のみ**。無い数値は捏造せず「—」やスキップにする。
-- 分量はスキャンで読める程度に抑える（全 diff や長い引用は貼らない）。
+- 数値は record / git から取った実値のみを使い、無い数値は「—」やスキップにすること。
+- 分量はスキャンで読める程度に抑えること。
 
-### Step 5 — 出力（vault へ書き戻す）
+### Step 5 — 出力すること
 
-- `--stdout` 指定時 → 合成結果を**ターミナルに出力するだけ**で終了。
-- 通常時 → `<vault>/daily/` を用意（`mkdir -p`）し、`<vault>/daily/<date>.md` に **Write** する。
-  - 既に同名ファイルがあれば **Read して内容を確認**し、追記/更新かを判断する
-    （既存が手書きの別内容なら上書きせず、`## 自動生成日報 (<時刻>)` セクションとして追記する）。
-  - 書き込み後、**保存先パス**と本文（または要約）をターミナルにも表示して完了報告する。
-
-## ハードルール
-
-- **生成のみ**: session-insights の record ノートは**絶対に書き換えない**（読み取り専用の材料）。
-- **数値を捏造しない**: turns / tokens / cost は record の機械充填値、変更規模は git の実値だけを使う。
-- **fail-soft**: config 欠如・非 git リポジトリ・records 0 件でも止まらず、拾えた材料で日報を出す。
-- **横断は records、変更詳細は git**: プロジェクトを跨ぐ全体像は record が、当該リポジトリの「何をどう変えたか」は git が供給する。両者を突き合わせて合成する。
-- **daily/ 以外に書かない**: 出力先は `<vault>/daily/<date>.md` のみ（records/ には書かない）。
+- 既存が手書きの別内容なら上書きしないこと。
+- `--stdout` 指定時は、合成結果をターミナルに出力するだけで終了すること [test: scripts/test_prose_daily_report.py::test_claim_arg_stdout]。
+- 通常時は `mkdir -p` で `<vault>/daily/` を用意し、`<vault>/daily/<date>.md` に Write すること [test: scripts/test_prose_daily_report.py::test_claim_mkdir_write_allowed]。
+- 既に同名ファイルがあれば Read して内容を確認し、追記か更新かを判断すること。
+- 既存が手書きの別内容なら、別セクションとして追記すること。
+- 書き込み後、保存先パスと本文（または要約）をターミナルにも表示して完了報告すること。

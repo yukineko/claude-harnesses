@@ -1,30 +1,16 @@
-# mutategate
+Do not read this crate's existence as coverage. Treat it as scoring machinery, not as coverage.
 
-A **mutation-testing kill-rate gate** for this workspace. Internal tooling — not a
-distributed Claude Code plugin (no `plugin.json`).
+Never trigger the gate from hosted CI: any replacement trigger must be local per §7 (pre-push or an explicit script).
 
-## Why
+No git hook under `.githooks/` references `scripts/mutation-gate.sh` and there is no `.github/workflows/` directory, so the kill-rate gate is INERT: it runs only when a human invokes it. [test: crates/mutategate/tests/prose_claims.rs::claim_inert_no_trigger]
 
-Golden/regression tests prove the code *still does what it did*. They say nothing
-about whether the tests would **catch a fault** if one were introduced. Mutation
-testing closes that gap: it injects small faults ("mutants") and checks whether
-the existing tests fail (mutant **caught/killed**) or still pass (mutant
-**missed/survived**). The fraction of viable mutants killed is the **kill-rate**
-(mutation score). A low score means the suite is weak no matter how green it looks.
+Internal tooling — not a distributed Claude Code plugin (no `plugin.json`). [test: crates/mutategate/tests/prose_claims.rs::claim_not_a_plugin_a] [test: crates/mutategate/tests/prose_claims.rs::claim_not_a_plugin_b]
 
-Background: Meta's Automated Compliance Hardening (ACH) and PRIMG
-(arXiv:2505.05584).
+See Meta's Automated Compliance Hardening (ACH) and PRIMG (arXiv:2505.05584) for background.
 
-## What it is (and is not)
+The gate parses `cargo-mutants`'s `outcomes.json`, computes the kill-rate, and exits non-zero when it is below the threshold. [test: crates/mutategate/tests/overwatch_violation.rs::fail_outcome_appends_a_signed_nonempty_violation]
 
-- It does **not** implement a mutation engine. It stands on the standard Rust tool
-  [`cargo-mutants`](https://mutants.rs).
-- It **is** the gate: parse `cargo-mutants`'s `outcomes.json` → compute kill-rate →
-  exit non-zero when below a threshold. That parse→score→exit logic is pure and
-  unit-tested (`cargo test -p mutategate`) on fixed sample JSON, so the pass/fail
-  decision is deterministic and runs without the (slow) engine.
-
-Kill-rate definition used here:
+Kill-rate definition used here: [test: crates/mutategate/src/lib.rs::viable_and_killed_exclude_unviable] [test: crates/mutategate/src/lib.rs::kill_rate_is_killed_over_viable] [test: crates/mutategate/src/lib.rs::unknown_summary_does_not_inflate_kill_rate] [test: crates/mutategate/src/lib.rs::no_viable_mutants_fails_the_gate]
 
 ```
 viable   = caught + missed + timeout + unknown   (unviable mutants excluded — no signal)
@@ -32,87 +18,53 @@ killed   = caught + timeout                      (a timeout is a test-exposed mi
 kill_rate = killed / viable                      (undefined -> gate fails)
 ```
 
-`unknown` is a mutant whose `summary` state this crate does not recognise (or a
-record with no `summary`). It counts toward `viable` but not toward `killed`, so
-an unrecognised state is scored as a survivor instead of vanishing from the
-denominator and inflating the rate (CA-mutategate-01; `MutationSummary::viable`
-in `src/lib.rs`). A run with any `unknown` also carries a warning in its reason.
+`unknown` is a mutant whose `summary` state this crate does not recognise, or a record with no `summary`. [test: crates/mutategate/src/lib.rs::unknown_summary_states_are_tracked_not_dropped]
 
-## Usage
+A record whose `scenario` is neither `"Baseline"` nor a `Mutant` object (null or absent included) is also counted as `unknown`. [test: crates/mutategate/src/lib.rs::ca_mutategate_03_null_scenario_dropped_flips_fail_to_pass]
+
+It counts toward `viable` but not toward `killed`, so an unrecognised state is scored as a survivor instead of vanishing from the denominator and inflating the rate. [test: crates/mutategate/src/lib.rs::unknown_summary_does_not_inflate_kill_rate]
+
+A run with any `unknown` also carries a warning in its reason. [test: crates/mutategate/tests/prose_claims.rs::claim_unknown_warning_in_reason_a] [test: crates/mutategate/tests/prose_claims.rs::claim_unknown_warning_in_reason_b] [test: crates/mutategate/tests/prose_claims.rs::claim_unknown_warning_in_reason_c_no_unknown_no_warning]
 
 ```sh
-# Deterministic gate over an existing outcomes.json:
+# Gate an existing outcomes.json [test: crates/mutategate/tests/overwatch_violation.rs::fail_outcome_appends_a_signed_nonempty_violation]
 cargo run -p mutategate -- --outcomes mutants.out/outcomes.json --min-kill-rate 0.80
 
-# End-to-end (runs the engine on the pilot crate, then gates):
+# End-to-end: run the engine on the pilot crate, then gate [test: scripts/test_mutation_gate_status.sh] [test: crates/mutategate/tests/prose_claims.rs::claim_pilot_default_harness_core]
 scripts/mutation-gate.sh
 PILOT=difflog MIN_KILL_RATE=0.70 scripts/mutation-gate.sh
-PILOT=specguard scripts/mutation-gate.sh   # GATE crate: polarity gate (similarity.rs)
-PILOT=condukt scripts/mutation-gate.sh     # non-GATE crate: circuit-breaker logic (circuit.rs)
-PILOT=blastguard scripts/mutation-gate.sh  # GATE crate: risk classifier (classify.rs)
+PILOT=specguard scripts/mutation-gate.sh
+PILOT=condukt scripts/mutation-gate.sh
+PILOT=blastguard scripts/mutation-gate.sh
 
-# What this gate protects, from what, and on what grounds (no verdict):
+# Show what this gate protects, from what, and on what grounds, without a verdict [test: crates/mutategate/tests/protects_flag.rs::protects_prints_three_labelled_nonempty_lines_and_exits_zero]
 cargo run -p mutategate -- --protects
 ```
 
-Defaults: `--outcomes mutants.out/outcomes.json`, `--min-kill-rate 0.80`. A
-`--min-kill-rate` at or below `1e-9` (zero, negative) is rejected with exit `2`,
-because such a floor would always pass.
+Defaults: `--outcomes mutants.out/outcomes.json`, `--min-kill-rate 0.80`. [test: crates/mutategate/tests/prose_claims.rs::claim_defaults_a_exactly_080_passes_with_default_path] [test: crates/mutategate/tests/prose_claims.rs::claim_defaults_b_075_fails_with_default_path] [test: crates/mutategate/tests/prose_claims.rs::claim_defaults_c_default_path_is_the_one_read]
 
-Exit codes: `0` pass, `1` kill-rate below threshold (or no viable mutants), `2`
-usage/IO/parse error.
+A `--min-kill-rate` at or below `1e-9` (zero, negative) is rejected with exit `2`. [test: crates/mutategate/src/lib.rs::negative_min_kill_rate_is_rejected] [test: crates/mutategate/src/lib.rs::sub_epsilon_min_kill_rate_is_rejected_it_still_disables_the_gate] [test: crates/mutategate/tests/overwatch_violation.rs::zero_min_kill_rate_is_rejected_by_the_cli_before_evaluating] [test: crates/mutategate/tests/overwatch_violation.rs::sub_epsilon_min_kill_rate_is_rejected_by_the_cli]
 
-On a FAIL the gate also appends a violation event to overwatch's fleet violation
-ledger (for cross-run recurrence). If that write fails, a note is printed and the
-FAIL verdict still stands.
+Exit codes: `0` pass, `1` kill-rate below threshold (or no viable mutants), `2` usage/IO/parse error. [test: crates/mutategate/tests/prose_claims.rs::claim_exit_codes_a_pass_is_0] [test: crates/mutategate/tests/prose_claims.rs::claim_exit_codes_b_below_threshold_is_1] [test: crates/mutategate/tests/prose_claims.rs::claim_exit_codes_c_no_viable_mutants_is_1] [test: crates/mutategate/tests/prose_claims.rs::claim_exit_codes_d_missing_file_is_2] [test: crates/mutategate/tests/prose_claims.rs::claim_exit_codes_e_malformed_json_is_2] [test: crates/mutategate/tests/prose_claims.rs::claim_exit_codes_f_unknown_flag_is_2]
 
-`scripts/mutation-pilots.sh` maps a list of changed paths (stdin) to the
-calibrated pilot crate(s) to run, falling back to `harness-core` so it never
-prints an empty list.
+On a FAIL the gate also appends a violation event to overwatch's fleet violation ledger. [test: crates/mutategate/tests/overwatch_violation.rs::fail_outcome_appends_a_signed_nonempty_violation]
 
-## Scope (deliberately narrow)
+If that write fails, a note is printed and the FAIL verdict still stands. [test: crates/mutategate/tests/overwatch_violation.rs::emit_failure_does_not_gate_the_gate_but_is_announced]
 
-Running `cargo-mutants` over the whole workspace is far too slow to gate on, so
-the pilot is **one crate**:
+`scripts/mutation-pilots.sh` maps a list of changed paths (stdin) to the calibrated pilot crate(s) to run, falling back to `harness-core` so it never prints an empty list. [test: scripts/test_mutation_pilots.sh]
 
-- **Pilot 1: `harness-core`** (default) — shared build-time logic; `hash`/
-  `pricing`/`spans` are pure and well-suited to mutation.
-- **Pilot 2: `specguard`** — a GATE crate (one of blastguard/propguard/
-  specguard/stuckguard/mutategate/overwatch/parallelguard; see
-  `scripts/rollout-plugins.sh`)
-  whose polarity check (`src/similarity.rs`) has been the source of real bugs
-  found in review, so it is where kill-rate signal matters most. Narrowed by
-  default to `--file crates/specguard/src/similarity.rs`.
-- **Pilot 3: `condukt`** — the first NON-GATE crate added (the orchestrator
-  binary, chosen for its test density). It is far too large to mutate whole, so
-  the default narrows to `--file crates/condukt/src/circuit.rs` — the pure
-  circuit-breaker state-machine logic (no filesystem/process I/O).
-- **Pilot 4: `blastguard`** — a GATE crate, narrowed by default to
-  `--file crates/blastguard/src/classify.rs` (the risk classifier). The other
-  GATE crates measured alongside it (stuckguard, propguard, overwatch) did not
-  clear the bar and are deliberately not pilots; the measurement is recorded in
-  the header of `scripts/mutation-pilots.sh`.
-- Override the pilot with `PILOT=<crate>`. Narrow further with
-  `MUTANTS_EXTRA="--file src/hash.rs"` for a fast real run; an explicit
-  `MUTANTS_EXTRA` overrides the per-pilot default entirely.
+- Pilot 1: `harness-core` (default). [test: crates/mutategate/tests/prose_claims.rs::claim_pilot_default_harness_core]
+- Pilot 2: `specguard` — narrowed by default to `--file crates/specguard/src/similarity.rs`, and by default skips the one test `ack_blocks_when_no_new_commits_since_raised`. [test: crates/mutategate/tests/prose_claims.rs::claim_pilot_specguard_default_a_file] [test: crates/mutategate/tests/prose_claims.rs::claim_pilot_specguard_default_b_skip]
+- Pilot 3: `condukt` — narrowed by default to `--file crates/condukt/src/circuit.rs`. [test: crates/mutategate/tests/prose_claims.rs::claim_pilot_condukt_default]
+- Pilot 4: `blastguard` — narrowed by default to `--file crates/blastguard/src/classify.rs`. [test: crates/mutategate/tests/prose_claims.rs::claim_pilot_blastguard_default]
+- Override the pilot with `PILOT=<crate>` [test: crates/mutategate/tests/prose_claims.rs::claim_mutants_extra_overrides_a_arbitrary_pilot]. `MUTANTS_EXTRA` (for example `MUTANTS_EXTRA="--file crates/harness-core/src/hash.rs"`) is passed to cargo-mutants verbatim, and the script runs cargo-mutants from the repo root whatever the caller's directory [test: crates/mutategate/tests/prose_claims.rs::claim_mutants_extra_overrides_b_path_passed_verbatim_cwd_is_repo_root] [test: crates/mutategate/tests/prose_claims.rs::claim_mutants_extra_overrides_b2_cwd_independent_of_caller_cwd]. A non-empty `MUTANTS_EXTRA` overrides the per-pilot default entirely. [test: crates/mutategate/tests/prose_claims.rs::claim_mutants_extra_overrides_c_explicit_extra_replaces_default]
 
-**Threshold: 0.80.** This mirrors the practical robustness bar of established
-mutation tools (e.g. PIT) and the Meta ACH line of work; below it a suite is
-demonstrably missing detectable faults. Kept conservative for the pilot so the
-gate is signal, not flake.
+[record: 2026-09-11 rev: 89b31bb4] Of the GATE crates measured alongside blastguard, stuckguard and propguard scored below the bar and overwatch could not be measured (baseline failure); none of the three was made a pilot.
 
-## Expanding later
+Add crates one at a time, only once each already clears the threshold.
 
-- Add crates one at a time only once each already clears the threshold, so a new
-  crate cannot silently drag the gate down (the `condukt` pilot followed this:
-  narrowed to `circuit.rs` and confirmed the threshold before being added to
-  the `case "$PILOT"` block).
-- Raise `MIN_KILL_RATE` as suites harden; inspect survivors under
-  `target/mutants-<pilot>/` (`missed.txt`).
-- TRIGGER: none, as of 2026-09-11 (measured at 89b31bb4). The gate used to be run
-  by `.github/workflows/mutation.yml`, which was deleted in a572f5ad when GitHub
-  Actions was banned repo-wide (CLAUDE.md §7). Nothing replaced it, so
-  `scripts/mutation-gate.sh` has no execution site and the kill-rate gate is
-  INERT — 100% passthrough until a human runs it by hand. Treat this crate as
-  scoring machinery that is currently unwired, not as coverage. Any replacement
-  trigger must be local per §7 (pre-push or an explicit script), never hosted CI.
+Raise `MIN_KILL_RATE` as suites harden [test: crates/mutategate/tests/prose_claims.rs::claim_min_kill_rate_env_a_passed_to_mutategate] [test: crates/mutategate/tests/prose_claims.rs::claim_min_kill_rate_env_a2_default_is_080_and_fails_same_data].
+
+The script passes `--output target/mutants-<pilot>` to cargo-mutants and scores `target/mutants-<pilot>/mutants.out/outcomes.json`. [test: crates/mutategate/tests/prose_claims.rs::claim_min_kill_rate_env_b_output_dir_per_pilot]
+
+[record: 2026-09-11 rev: 89b31bb4] At that revision nothing executed `scripts/mutation-gate.sh`; the kill-rate gate ran only when a human invoked it by hand.

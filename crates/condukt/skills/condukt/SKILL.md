@@ -1050,6 +1050,8 @@ snippet を打つのではなく **condukt バイナリが決定論的に発火�
    # 渡さない**: condukt は明示した 0 をそのまま `--cost 0` として転送するが、fugu-router >= 0.1.41
    # は保存された 0 を duration と同じく **未計測** として読み戻す。したがって本当に $0 だった
    # コストを「計測値 0」として記録する手段は無い (0 は常に未計測扱い)。
+   # ただし gauge が JSON として読めない出力を返した場合は「データ無し」ではなく判定不能として扱い、
+   # 手動 --cost にはフォールバックせず episode を記録しない [test: crates/condukt/tests/backlog_18ebbfe6.rs::malformed_gauge_json_is_not_recorded_as_manual_cost]
    condukt state set --run "$RID" --task "<t.id>" --status verified \
      --model <worker に使ったモデル> --agent-id "<Task tool が返した agentId>"
    # fail 時も同様に --status failed --model <試したモデル> --agent-id <同上> を残す (失敗も学習信号)

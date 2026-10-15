@@ -215,9 +215,9 @@ pub fn build(sources: &[(String, String)], fingerprint: &str) -> TextIndex {
 
 /// Write the index body (JSONL, one token per line) and its sidecar meta.
 ///
-/// Fail-soft on write, exactly like [`crate::code_index::write_index`]: the
-/// index is a cache, and a failed write must not break the caller's turn. The
-/// *read* side is where honesty matters, and [`load`] is fail-closed.
+/// Fail-soft on write — unlike [`crate::code_index::write_index`], which returns
+/// its IO error. The *read* side is where honesty matters for this index, and
+/// [`load`] is fail-closed.
 pub fn write(body_path: &Path, meta_path: &Path, index: &TextIndex) {
     use std::io::Write;
 

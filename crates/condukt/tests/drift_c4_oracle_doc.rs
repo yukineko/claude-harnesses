@@ -36,7 +36,6 @@ fn bullets(s: &str) -> Vec<(usize, String)> {
 }
 
 #[test]
-#[ignore = "backlog TBD: RED repro"]
 fn skill_required_bullet_does_not_gate_on_reproduction_tests() {
     let s = skill();
     let b = bullets(&s);
@@ -54,7 +53,6 @@ fn skill_required_bullet_does_not_gate_on_reproduction_tests() {
 }
 
 #[test]
-#[ignore = "backlog TBD: RED repro"]
 fn skill_does_not_say_missing_tdd_degrades_to_fallback_true() {
     let s = skill();
     let joined: Vec<(usize, String)> = bullets(&s);
@@ -141,7 +139,6 @@ fn binary_missing_tdd_blocks_regardless_of_reproduction_tests() {
 }
 
 #[test]
-#[ignore = "backlog TBD: RED repro"]
 fn interpreter_output_schema_can_carry_kind() {
     let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("agents/condukt-interpreter.md");
     let t = std::fs::read_to_string(p).unwrap();

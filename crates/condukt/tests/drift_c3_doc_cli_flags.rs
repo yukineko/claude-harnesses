@@ -173,7 +173,6 @@ struct Finding {
 }
 
 #[test]
-#[ignore = "backlog TBD: RED repro"]
 fn documented_condukt_flags_exist_in_the_binary() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let home = std::env::temp_dir().join(format!("condukt-c3-home-{}", std::process::id()));
@@ -291,7 +290,6 @@ fn documented_condukt_flags_exist_in_the_binary() {
 /// The binary's `condukt loop` JSON carries `"module"` (src/main.rs); the
 /// SKILL's documented output example must list every key the binary emits.
 #[test]
-#[ignore = "backlog TBD: RED repro"]
 fn loop_skill_output_example_lists_every_emitted_key() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let skill = std::fs::read_to_string(crate_dir.join("skills/condukt-loop/SKILL.md")).unwrap();

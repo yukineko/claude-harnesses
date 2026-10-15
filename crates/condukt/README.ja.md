@@ -91,7 +91,7 @@ LLM 単体で大きな課題をオーケストレーションさせると、決�
 | `condukt state timings --run <id> [--json]` | `TaskState` のフェーズ時刻（worker/verifier/merge）から per-task のフェーズ所要時間を出す。未計測フェーズは `unmeasured`（JSON では `null`）と表示し、0 秒にはしない。 |
 | `condukt learning-signal` | replan ログの `replan_count` × 検索台帳の `hit` フラグを `run_id` 単位で突き合わせ、`mean_replan_reduction_ratio = 1 - (mean_hit / mean_miss)` を算出する — cross-task 学習の決定論的な計測面（フェイルソフト、グループが空か `mean_miss == 0` のときは `ratio` が `null`）。 |
 | `condukt state test --run <id>` | リポジトリルートからプロジェクトのテストスイートを実行し、終了コードを伝播する。優先順位は `[test].command` → 自動検出（`cargo test` / `npm test` / `pytest`、最後は `cargo test` にフォールバック）。`sh -c` 経由のためパイプ・クォート・環境変数展開が使える。 |
-| `condukt loop --module <server\|client\|e2e> [--iteration N] [--prev-failures N]` | 指定モジュールのテスト修正サイクルを 1 イテレーション実行し JSON を返す。`/condukt-loop` が修正ステップを挟んで繰り返す。進捗中は exit 0、`stop=true` かつテスト失敗が残るときは exit 1。 |
+| `condukt loop --module <server\|client\|e2e> [--iteration N] [--prev-failures N] [--max-iters N]` | 指定モジュールのテスト修正サイクルを 1 イテレーション実行し JSON を返す。`/condukt-loop` が修正ステップを挟んで繰り返す。進捗中は exit 0、`stop=true` かつテスト失敗が残るときは exit 1。`--iteration` が上限 (`--max-iters`、無ければ `[loop] max_iters`) を超えると cycle を実行せず `stop=true` で拒否する [test: crates/condukt/tests/drift_b1_loop_cap.rs::loop_refuses_iteration_beyond_configured_max_iters] [test: crates/condukt/tests/loop_max_iters_flag.rs::max_iters_flag_lowers_the_configured_cap]。 |
 | `condukt knowledge` | `~/.condukt/knowledge.md`（インタープリター/ワーカープロンプトへ注入する規約/落とし穴）を出力する（無ければ空出力）。 |
 | `condukt lessons harvest/stats/record-retrieval` | cross-task 学習の取り込み側。`harvest --run` は完了 run の根拠事実を JSON で出し、スキルの Phase-8 で lesson を書く材料にする（run が無い/壊れていれば `{}`）。`stats` は lessons ストアを集計。`record-retrieval` は字句検索を実行し hit/miss を検索台帳に記録（run 単位で冪等）、Phase-1 注入用の `lessons_context` 配列を出力する。 |
 | `condukt editgate` | PostToolUse フック: worker が live worktree 内の Rust ファイルを Edit/Write した直後、**edit-time コンパイルゲート**がその編集でクレートが壊れたかを決定論的に判定する。reject のとき 1 行 `{"decision":"block","reason":"<原因>\n<cargo の診断（あれば）>"}` を出力し、worker が同じターンで直せるようにする。`<原因>` は本当のコンパイル失敗なら `cargo check reported compile/type errors`（続いて rustc の診断）。`cargo check` がコードを判定できなかった場合はそれを明示する — `failed to spawn cargo (...) — whether the edit still compiles could not be determined ...`（cargo を起動できない、例: PATH に無い）または `cargo could not run: the Rust toolchain could not be resolved ...`（rustup が toolchain を選べない。続いて rustup のメッセージ）— いずれも同じく block する。project の run state を特定できない場合も理由を明示して block する。`cargo` 子プロセスの `HOME`/`RUSTUP_HOME`/`CARGO_HOME`/`RUSTUP_TOOLCHAIN` はプロセスごとに一度だけ取ったスナップショットで固定する。clean なビルドとスコープ外（非 Rust ファイル、live worktree 外、編集以外のツール、空 stdin）は何も出力しない。プロセスは常に exit 0。**全経路で fail-closed ではない**: `CONDUKT_DISABLE=1` でゲートは丸ごと無効になり、cwd が読めなければ何も出力せず、panic は block 行を出す前に hook barrier が握り潰す — harness はその空 stdout を「block なし」と読む（`src/main.rs` の `run_editgate` docstring）。 |
@@ -278,7 +278,7 @@ force-remove、ブランチを force-delete）で常に破棄される — 本�
 [loop]
 build_command  = "npm run build"
 deploy_command = "kubectl rollout restart deployment/api && kubectl rollout status deployment/api"
-max_iters      = 10   # 安全キャップ; スキルが強制する
+max_iters      = 10   # イテレーション上限; condukt loop が強制する [test: crates/condukt/tests/drift_b1_loop_cap.rs::loop_refuses_iteration_beyond_configured_max_iters]
 ```
 
 内部の仕組みの詳細（Phase 0〜8 など）は `docs/internals.ja.md` を参照。

@@ -7,7 +7,6 @@
 use std::process::{Command, Stdio};
 
 #[test]
-#[ignore = "backlog TBD: RED repro"]
 fn loop_refuses_iteration_beyond_configured_max_iters() {
     let base = std::env::temp_dir().join(format!("condukt-b1-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);

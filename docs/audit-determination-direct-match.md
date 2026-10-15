@@ -1,4 +1,4 @@
-<!-- record: 2026-10-01 rev: eb7a739aef03d352dc97e64b78133e50a8a636cb -->
+<!-- record: 2026-10-01 rev: 74aad11fea9e5ee7aae2086ca37fd96beddfcacf -->
 # Determination 直接 match 監査 (backlog e269274f)
 
 `harness_core::verdict::Determination<T>` は variant が pub のため、`require()` を経由せず直接 `match` / `if let` / `matches!` できる。`require()` 経由(約45箇所)は監査済みだが、直接 match 側(2026-09-29 のトリアージで `Determination::Undetermined` 腕が harness-core 外に281件)は全体として未監査だった。本書はその全件列挙と、各 Undetermined 腕がどちら側に解決するかの分類である。
@@ -630,6 +630,9 @@ prod の `Determination::Known` pattern 行で、前後 25 行に Undetermined �
 3. prod の Undetermined 腕の列挙: `#[cfg(test)]` 項目の範囲(波括弧対応)・`tests/`・`//` 行を除き、正規表現 `(?<![A-Za-z_])(Determination|Verdict)::Undetermined\b` を行単位で適用 => 266 行、検証済みテスト 9 件を除外して 257 行
 4. 各行の前後 5 行を読み、腕の本体と消費者を分類(表 §4)
 
+<!-- /record -->
+
+<!-- record: 2026-10-15 rev: eb7a739aef03d352dc97e64b78133e50a8a636cb -->
 ## 7. 機械検証つき逐語引用
 
 docs の check-doc-claims.py は、バッククォートで囲んだ パス:行 とその直後の引用を index と照合する。本書の他の箇所は誤検知(短縮パス・複数行指定・同一行の別引用)を避けるためバッククォートを外してあるので、主要な PERMISSIVE 箇所だけをここで機械検証可能な形で固定する。

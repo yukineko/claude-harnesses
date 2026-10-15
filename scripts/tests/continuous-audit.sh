@@ -52,9 +52,19 @@ mkdir -p "$SANDBOX_HOME" "$WORK"
 # there), capturing stdout+stderr into $OUT and the exit code into $RC in the
 # PARENT shell (the `cd` is inside the command substitution, not a wrapping
 # subshell, so $OUT/$RC survive for the assertions below).
+#
+# The bridge's `backlog add` goes to a fake that accepts every add: these cases
+# test the record path, and without it the bridge reached whatever `backlog`
+# was on PATH (the real one refuses from a non-worktree dir, exit 1), so the
+# record case exercised a FAILED forward. A failed forward is a failure of the
+# run (exit 1) -- covered in crates/overwatch/tests/continuous_audit_to_backlog_fail.rs.
+FAKE_BACKLOG="$TMP/fake-backlog"
+printf '#!/bin/sh\necho "added: fake"\nexit 0\n' > "$FAKE_BACKLOG"
+chmod +x "$FAKE_BACKLOG"
 run_ca() {
   OUT="$(
     cd "$WORK" && OVERWATCH_BIN="$OW" HOME="$SANDBOX_HOME" \
+    OVERWATCH_BACKLOG_BIN="$FAKE_BACKLOG" \
     bash "$SCRIPT" "$@" 2>&1
   )"
   RC=$?
@@ -93,6 +103,7 @@ run_ca --round 2026W28 --target specguard,stuckguard \
     --finding 'R-007|high|confirmed real finding|crates/specguard/src/y.rs'
 [ "$RC" -eq 0 ] || fail "record run should exit 0 (got $RC)"
 grep -q "round 2026W28 recorded" <<<"$OUT" || fail "record run should confirm the round was recorded"
+grep -q "^PASS: round 2026W28" <<<"$OUT" || fail "record run with every forward accepted should sign off PASS"
 
 # The finding must surface in the review queue.
 QUEUE="$( run_ow review-queue --json )"

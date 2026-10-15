@@ -191,8 +191,16 @@ H3 は、コードを読んだ段階の予測が外れた例である。予測�
   [test: crates/overwatch/tests/bridge_repro_evidence.rs::confirmed_finding_with_failing_ignored_repro_test_is_filed_with_repro_test]
 - 拒否された add と失敗した add を、JSON summary の `unproven` と `failed` に数える
   [test: crates/overwatch/tests/bridge_repro_evidence.rs::refused_backlog_add_is_distinguishable_from_success]
-- スクリプトは bridge の終了コードも読み、exit 3 を PASS ではなく PARTIAL にする
+- スクリプトは bridge の終了コードも読み、exit 3 を PASS にしない
   [test: crates/overwatch/tests/continuous_audit_to_backlog_fail.rs::undetermined_bridge_ledger_does_not_print_pass]
+- 転送が 1 件でも失敗した run は、FAIL を出して exit 1 で終わる
+  [test: crates/overwatch/tests/continuous_audit_to_backlog_fail.rs::refused_backlog_add_does_not_exit_zero]
+
+最後の点は、最初は「PARTIAL（一部失敗）を出して exit 0」だった。人間の指摘は短かった。
+**「そもそも PARTIAL なんてものが存在してはいけない。成功じゃないものは失敗」。**
+第三の状態は、成功と失敗の区別を下流から消す。PARTIAL を廃止して exit 1 にしたところ、既存のテストが
+1 本落ちた。そのテストは、転送が実際に失敗していた run を「exit 0 であるべき」と assert していた。
+**テストの方が、失敗を成功として固定していた。** テストの環境を、転送を受理する偽の backlog に直した。
 
 テストは偽の backlog を使うので、それとは別に、本物の backlog バイナリでも確かめた。
 使い捨ての linked worktree で、bridge と同じ形式の `--repro-test` を渡すと「filed as pending」になった。
@@ -228,8 +236,6 @@ H3 は、コードを読んだ段階の予測が外れた例である。予測�
 
 - **テストを誰が書いたかは、機械では強制していない。** 原則（別 context の別 agent）は triage skill の指示にあり、
   `backlog add` と `confirm` が見るのは「テストが挙動として落ちるか」だけである
-- **PARTIAL でも exit 0 になる。** スクリプトは advisory を名乗っており、終了コードを変えるかは設計判断として未決である
-  （テスト `refused_backlog_add_does_not_exit_zero` は open-defect として `#[ignore]` のまま残している）
 - **token の実額は測れていない。** 1 finding あたりのコストは、notes の文字数という代用指標しかない
 - **破棄した 461 件に本物がどれだけ含まれていたかは、判定できない。** 人間の裁定で閉じたものだからである
 

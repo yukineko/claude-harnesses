@@ -353,7 +353,10 @@ run_ow audit-metrics
 
 echo
 if [ "$BRIDGE_FAILED" -gt 0 ]; then
-  echo "PARTIAL: round ${ROUND} recorded (metrics -> audit ledger) but ${BRIDGE_FAILED} backlog forward(s) FAILED or were refused (see the WARNING lines above); those findings did NOT reach the backlog. Fix the cause (e.g. backlog add refusing on an undetermined claim check) and re-run review-queue --to-backlog (idempotent)."
+  # Not a success, so a failure: there is no third "partial" outcome. A caller
+  # that reads only the exit status must not see a failed forward as success.
+  echo "FAIL: round ${ROUND} recorded (metrics -> audit ledger) but ${BRIDGE_FAILED} backlog forward(s) FAILED or were refused (see the WARNING lines above); those findings did NOT reach the backlog. Fix the cause (e.g. a CONFIRMED finding with no #[ignore = \"<finding-id>: ...\"] regression test, or backlog add refusing on an undetermined claim check) and re-run review-queue --to-backlog (idempotent)."
+  exit 1
 else
   echo "PASS: round ${ROUND} recorded (findings -> backlog, metrics -> audit ledger)."
 fi

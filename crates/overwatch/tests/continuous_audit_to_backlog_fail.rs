@@ -112,7 +112,6 @@ fn refused_backlog_add_does_not_print_pass() {
 /// Observation: the same scenario should also not exit 0 (a caller that reads
 /// only the exit status sees success).
 #[test]
-#[ignore = "open defect: continuous-audit.sh prints PARTIAL but exits 0 when backlog forwards failed"]
 fn refused_backlog_add_does_not_exit_zero() {
     let sb = Sandbox::new("refused-exit");
     let bl = fake_backlog(&sb.root.join("bin"), 2);

@@ -106,6 +106,17 @@ mkdir -p "$FAKE_TARGET/release"
 printf 'FAKE-TDD-HOST-BIN\n' > "$FAKE_TARGET/release/$PLUGIN$EXT"
 chmod +x "$FAKE_TARGET/release/$PLUGIN$EXT"
 
+# The fake artifacts here are text, not binaries. rebuild-plugins.sh refuses
+# any artifact it cannot observe to be stripped (fail closed; pinned by
+# scripts/tests/rebuild-ships-stripped-binaries.sh). Stand in for "cargo
+# produced a stripped binary" the same way FAKE_TARGET stands in for the build:
+# nm / file on PATH report a stripped executable.
+mkdir -p "$TMP/strip-shim"
+printf '#!/bin/sh\necho "0000000100000000 T __mh_execute_header"\n' > "$TMP/strip-shim/nm"
+printf '#!/bin/sh\necho "ELF 64-bit LSB executable, stripped"\n' > "$TMP/strip-shim/file"
+chmod +x "$TMP/strip-shim/nm" "$TMP/strip-shim/file"
+export PATH="$TMP/strip-shim:$PATH"
+
 # A launcher basename that is deliberately NOT a workspace binary, so
 # target/release/<it> can never exist by accident.
 ORPHAN=zz-no-such-artifact

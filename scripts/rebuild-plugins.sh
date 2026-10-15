@@ -419,6 +419,80 @@ found_src=0
 # that is installed, version-consistent and execs NOTHING. Non-empty makes this
 # script exit non-zero — see the tail.
 seed_missing=""
+# Release artifacts that were NOT observed to be stripped, as "<bin>(<reason>)".
+# None of them is copied anywhere; non-empty makes this script exit non-zero.
+unstripped=""
+
+# assert_stripped <artifact> — exit 0 ONLY when the artifact was OBSERVED to be
+# stripped of symbols and debug info; otherwise print the reason and return 1.
+#
+# Why verify instead of trusting `[profile.release] strip = true`: that profile
+# key is a request, not an observation. CARGO_PROFILE_RELEASE_STRIP=false in the
+# environment overrides it with no diagnostic, and on macOS rustc only WARNS
+# when the external `strip` tool fails (e.g. the Xcode-license exit 69) — in
+# both cases `cargo build` exits 0 and the artifact keeps its full symbol table.
+# Copying without looking deployed exactly that, with exit 0 (CLAUDE.md §3).
+#
+# Fail closed: a missing/failing inspection tool, an unrecognised format or an
+# unsupported host OS (no verifier is implemented for Windows/PE) is "cannot
+# determine", and resolves to "not stripped" — the artifact is not deployed.
+# Pinned by scripts/tests/rebuild-ships-stripped-binaries.sh.
+assert_stripped() {
+  local f="$1" out extra
+  case "$os" in
+    darwin)
+      # Mach-O. `nm -a` lists every symbol-table entry including stabs (the
+      # debug map, type "-"). A stripped executable keeps only undefined
+      # imports ("U") and `__mh_execute_header`; any other entry is a local or
+      # debug symbol strip would have removed. nm's exit status is part of the
+      # verdict: a failed nm is not an empty symbol table. stderr is kept in
+      # `out`: on failure it is the reason; on success any stray diagnostic
+      # line counts as an unexplained entry below, i.e. it refuses.
+      if ! out="$(nm -a "$f" 2>&1)"; then
+        echo "nm -a failed (cannot inspect the symbol table): $(printf '%s' "$out" | head -n 1)"
+        return 1
+      fi
+      extra="$(printf '%s\n' "$out" | awk 'NF && !($1=="U" || $2=="U") && $NF!="__mh_execute_header"' | wc -l | tr -d ' ')"
+      if [ "$extra" != 0 ]; then
+        echo "$extra non-import symbol/debug entries remain"
+        return 1
+      fi
+      ;;
+    linux)
+      # ELF. `file` reports ", stripped" / ", not stripped" and "with debug_info".
+      if ! out="$(file -b "$f" 2>&1)"; then
+        echo "file failed (cannot inspect the binary): $(printf '%s' "$out" | head -n 1)"
+        return 1
+      fi
+      case "$out" in
+        *"not stripped"*|*"with debug_info"*) echo "file: $out"; return 1 ;;
+        *", stripped"*) ;;
+        *) echo "cannot determine strip state from file: $out"; return 1 ;;
+      esac
+      ;;
+    *)
+      echo "no strip verifier for host os '$os'"
+      return 1
+      ;;
+  esac
+  return 0
+}
+# check_src_stripped <artifact> <binname> — memoised wrapper; records refusals.
+stripped_ok=" " stripped_bad=" "
+check_src_stripped() {
+  local reason
+  case "$stripped_ok" in *" $2 "*) return 0 ;; esac
+  case "$stripped_bad" in *" $2 "*) return 1 ;; esac
+  if reason="$(assert_stripped "$1")"; then
+    stripped_ok="$stripped_ok$2 "
+    return 0
+  fi
+  stripped_bad="$stripped_bad$2 "
+  unstripped="$unstripped $2($reason)"
+  echo "REFUSED $2: release artifact is not stripped: $reason" >&2
+  return 1
+}
+
 shopt -s nullglob
 for binfile in "$CACHE"/*/*/bin/*-"$SUF$EXT"; do
   checked=$((checked+1))
@@ -475,6 +549,11 @@ for binfile in "$CACHE"/*/*/bin/*-"$SUF$EXT"; do
     continue
   fi
   found_src=$((found_src+1))
+  # 0b) never deploy an artifact not observed to be stripped (neither the cache
+  #     copy nor the --stage-repo copy below). See assert_stripped.
+  if ! check_src_stripped "$src" "$binname"; then
+    continue
+  fi
   # 1) live cache copy — what the running harness actually execs
   if ! cmp -s "$src" "$binfile"; then
     if [ $dry = 1 ]; then
@@ -596,6 +675,9 @@ for i in "${!plugin_names[@]}"; do
     fi
     checked=$((checked+1))
     found_src=$((found_src+1))
+    if ! check_src_stripped "$src" "$binname"; then
+      continue
+    fi
     if [ $dry = 1 ]; then
       echo "cache  would seed $binname-$SUF$EXT (fresh version dir $pname/$ver)"
     else
@@ -669,6 +751,18 @@ if [ -n "$seed_missing" ]; then
   echo "  plugin execs NOTHING while looking correctly deployed (dark, not red)." >&2
   echo "  Check that the launcher name matches a workspace bin target, and that" >&2
   echo "  the release build actually wrote to: $REL" >&2
+  rc=1
+fi
+# An artifact not observed to be stripped was deployed NOWHERE. Exiting 0 would
+# report "refused to ship it" the same as "shipped everything" (CLAUDE.md §3);
+# non-zero also aborts rollout-plugins.sh (set -e) before it prunes or reports
+# done. Pinned by scripts/tests/rebuild-ships-stripped-binaries.sh.
+if [ -n "$unstripped" ]; then
+  echo "ERROR: refused to deploy release artifact(s) not observed to be stripped:$unstripped" >&2
+  echo "  [profile.release] strip = true in the workspace Cargo.toml requests it, but" >&2
+  echo "  CARGO_PROFILE_RELEASE_STRIP in the environment, or a failing external" >&2
+  echo "  \`strip\` (rustc only warns), produces an unstripped binary with exit 0." >&2
+  echo "  Rebuild without the override / fix the strip tool, then rerun." >&2
   rc=1
 fi
 exit "$rc"

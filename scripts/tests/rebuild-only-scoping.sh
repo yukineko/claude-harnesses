@@ -130,6 +130,17 @@ printf 'FAKE-A-NEW\n' > "$FAKE_TARGET/release/backlog$EXT"
 printf 'FAKE-B-NEW\n' > "$FAKE_TARGET/release/taskprog$EXT"
 chmod +x "$FAKE_TARGET/release/backlog$EXT" "$FAKE_TARGET/release/taskprog$EXT"
 
+# The fake artifacts above are text, not binaries. rebuild-plugins.sh refuses
+# any artifact it cannot observe to be stripped (fail closed; pinned by
+# scripts/tests/rebuild-ships-stripped-binaries.sh). Stand in for "cargo
+# produced a stripped binary" the same way FAKE_TARGET stands in for the build:
+# nm / file on PATH report a stripped executable.
+mkdir -p "$TMP/strip-shim"
+printf '#!/bin/sh\necho "0000000100000000 T __mh_execute_header"\n' > "$TMP/strip-shim/nm"
+printf '#!/bin/sh\necho "ELF 64-bit LSB executable, stripped"\n' > "$TMP/strip-shim/file"
+chmod +x "$TMP/strip-shim/nm" "$TMP/strip-shim/file"
+export PATH="$TMP/strip-shim:$PATH"
+
 # The two fixture plugins must be REAL repo plugins at their CURRENT
 # (crates/*/.claude-plugin/plugin.json) version: rebuild-plugins.sh writes only a
 # plugin's current version dir, and a cached plugin with no crate has no

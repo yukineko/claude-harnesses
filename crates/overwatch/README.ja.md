@@ -251,6 +251,8 @@ overwatch escalations [--json] [--threshold N] [--window-secs S]    # systemic �
 `reconcile-fixed` が fail-soft なのは **git** 側だけで、`git log` の失敗は「0 commit scanned」
 （exit 0）として読まれる。`review-queue --to-backlog` は backlog 側で fail-soft
 （`backlog` バイナリ不在や `backlog add` 失敗は警告してスキップ）。
+finding の `#[ignore = "<finding-id>: ..."]` 回帰テストは `--repro-test` として `backlog add` に渡され、backlog はそのテストが再現した時だけ task を起こす [test: crates/overwatch/tests/bridge_repro_evidence.rs::confirmed_finding_with_failing_ignored_repro_test_is_filed_with_repro_test]。
+拒否された add（exit 2、backlog の unproven 記録に残る）とそれ以外の失敗は、JSON summary の `unproven` と `failed` に数えられる [test: crates/overwatch/tests/bridge_repro_evidence.rs::refused_backlog_add_is_distinguishable_from_success]。
 
 ## PDO（Pending Data Object）との関連
 

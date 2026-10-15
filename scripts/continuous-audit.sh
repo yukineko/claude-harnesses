@@ -330,12 +330,22 @@ echo "--- forwarding CONFIRMED findings to backlog (UNVERIFIED ones stay pending
 # includes already-bridged findings, so it cannot be diffed against "bridged").
 # The only per-failure signal it emits is those stderr WARNING lines, so capture
 # them (replayed to stderr afterwards) and count them for the final summary.
+#
+# The bridge's own exit status is read too: exit 3 means it could not read part
+# of its queue or ledgers (e.g. bridged_findings.jsonl), so findings may have
+# been skipped without any per-add WARNING line. That is a failed forward, not
+# a PASS -- the grep alone missed it.
 BRIDGE_ERR="$(mktemp "${TMPDIR:-/tmp}/continuous-audit-bridge.XXXXXX")"
-run_ow review-queue --to-backlog 2> "$BRIDGE_ERR"
+BRIDGE_RC=0
+"$OW" review-queue --to-backlog 2> "$BRIDGE_ERR" || BRIDGE_RC=$?
 cat "$BRIDGE_ERR" >&2
 BRIDGE_FAILED="$(grep -cE 'WARNING `backlog add` failed|WARNING could not spawn backlog|WARNING backlog binary not found' "$BRIDGE_ERR" 2>/dev/null || true)"
 BRIDGE_FAILED="${BRIDGE_FAILED:-0}"
 rm -f "$BRIDGE_ERR"
+if [ "$BRIDGE_RC" -ne 0 ]; then
+  echo "continuous-audit: WARNING overwatch review-queue --to-backlog exited ${BRIDGE_RC} (3 = part of the queue or a ledger could not be read; findings may not have been forwarded)" >&2
+  BRIDGE_FAILED=$((BRIDGE_FAILED + 1))
+fi
 
 echo
 echo "--- convergence metrics after this round ---"
@@ -343,7 +353,10 @@ run_ow audit-metrics
 
 echo
 if [ "$BRIDGE_FAILED" -gt 0 ]; then
-  echo "PARTIAL: round ${ROUND} recorded (metrics -> audit ledger) but ${BRIDGE_FAILED} backlog forward(s) FAILED or were refused (see the WARNING lines above); those findings did NOT reach the backlog. Fix the cause (e.g. backlog add refusing on an undetermined claim check) and re-run review-queue --to-backlog (idempotent)."
+  # Not a success, so a failure: there is no third "partial" outcome. A caller
+  # that reads only the exit status must not see a failed forward as success.
+  echo "FAIL: round ${ROUND} recorded (metrics -> audit ledger) but ${BRIDGE_FAILED} backlog forward(s) FAILED or were refused (see the WARNING lines above); those findings did NOT reach the backlog. Fix the cause (e.g. a CONFIRMED finding with no #[ignore = \"<finding-id>: ...\"] regression test, or backlog add refusing on an undetermined claim check) and re-run review-queue --to-backlog (idempotent)."
+  exit 1
 else
   echo "PASS: round ${ROUND} recorded (findings -> backlog, metrics -> audit ledger)."
 fi

@@ -1,52 +1,22 @@
-# harness-status
+It is **read-only** — it writes nothing under HOME, the working directory or TMPDIR, and only aggregates other plugins' stores [test: crates/harness-status/tests/prose_claims.rs::claim_read_only].
 
-**Unified HOTL status dashboard for Claude Code**, written in Rust.
+It does **not** register a general-purpose `SessionStart` dashboard hook [test: crates/harness-status/tests/prose_claims.rs::claim_hooks_json_single_session_start].
 
-The harness plugins each keep their own state. harness-status reads them all and
-prints one human-on-the-loop view — what you'd glance at to decide whether to
-step in:
+**Unified HOTL status dashboard for Claude Code** [test: crates/harness-status/tests/prose_claims.rs::claim_full_dashboard].
 
-- **Budget** (budgetguard): today's spend and session count, from
-  `~/.budgetguard/state/ledger.json`.
-- **Recent sessions** (gauge): the last N sessions with turns, tokens, and USD
-  cost, from `~/.gauge/store/sessions/`.
-- **Progress** (taskprog): the current `.claude/progress.md` preview.
-- **Stop-hook latency**: per-session totals from `~/.harness/state/hook-latency.jsonl`.
-- **UserPromptSubmit injection size**: per-turn totals from
-  `~/.harness/state/inject-metrics.jsonl`.
-- **Hook binary health**: hooks registered in `~/.claude/settings.json` whose
-  binary is missing on disk.
-- **PATH shadowing**: a stray binary on `PATH` (e.g. a stale `~/.cargo/bin` copy)
-  that shadows a plugin-cache binary of the same name.
+- **Budget** (budgetguard): today's spend and session count, from `~/.budgetguard/state/ledger.json` [test: crates/harness-status/tests/prose_claims.rs::claim_budget_from_ledger].
+- **Recent sessions** (gauge): the last N sessions with turns, tokens, and USD cost, from `~/.gauge/store/sessions/` [test: crates/harness-status/tests/prose_claims.rs::claim_sessions_from_gauge_limit].
+- **Progress** (taskprog): the current `.claude/progress.md` preview [test: crates/harness-status/tests/prose_claims.rs::claim_progress_preview].
+- **Stop-hook latency**: per-session totals from `~/.harness/state/hook-latency.jsonl` [test: crates/harness-status/tests/prose_claims.rs::claim_hooks_latency_per_session].
+- **UserPromptSubmit injection size**: per-turn totals from `~/.harness/state/inject-metrics.jsonl` [test: crates/harness-status/tests/prose_claims.rs::claim_inject_per_turn].
+- **Hook binary health**: hooks registered in `~/.claude/settings.json` whose binary is missing on disk [test: crates/harness-status/tests/integration.rs::session_start_warns_via_additional_context_when_binary_missing] [test: crates/harness-status/src/hooks_health.rs::read_at_reports_missing_binaries_and_tolerates_absent_file].
+- **PATH shadowing**: a stray binary on `PATH` that shadows a plugin-cache binary of the same name [test: crates/harness-status/src/path_shadow.rs::earlier_dir_with_same_name_is_flagged_as_shadowing] [test: crates/harness-status/tests/prose_claims.rs::claim_path_shadow_cli].
 
-It is **read-only** — it never writes, only aggregates other plugins' stores. No
-API key: a single binary you (or a `/status` command) run on demand.
-
-**Activation scope: manual (CLI-only) dashboard, plus one narrow observability
-hook.** harness-status is the unified manual human-on-the-loop inspection
-dashboard, and does **not** register a general-purpose `SessionStart` dashboard
-hook — auto-injecting the full dashboard every session would grow the always-on
-injection/hook budget that this very tool (`hooks` / `inject`) and
-[ADR 0001](../ctxrot/docs/adr/0001-cross-harness-injection-budget.md) exist to
-curb. It registers exactly one lightweight exception: a `SessionStart` hook
-(`hooks/hooks.json`) that runs the hooks-binary health check
-(`harness-status session-start`) and injects `additionalContext` **only** when a
-hook registered in `~/.claude/settings.json` points at a binary missing from disk,
-when a plugin-cache binary is shadowed by a stray `PATH` copy, or when the
-PATH-shadow scan itself could not complete (reported as undetermined) — a
-silently-broken hook is the kind of thing a human can't notice without checking,
-so it's surfaced rather than left to a manual `/status` run. Otherwise it is
-silent (no output, no injected context) and never blocks the turn.
-
-Scope limits of that check: it reads only `~/.claude/settings.json`. Hooks that
-plugins register through their own `hooks/hooks.json` with
-`${CLAUDE_PLUGIN_ROOT}` are not resolved and therefore never flagged, and a
-missing or unparseable `settings.json` is read as "no hooks" — silence is **not**
-proof that every plugin hook binary is present. See
-[`docs/plugin-activation-scopes.md`](../../docs/plugin-activation-scopes.md) for
-the full three-scope taxonomy and the current classification of every plugin.
-
-## Output
+It registers exactly one hook: a `SessionStart` hook (`hooks/hooks.json`) that runs the hooks-binary health check (`harness-status session-start`) [test: crates/harness-status/tests/prose_claims.rs::claim_hooks_json_single_session_start].
+It injects `additionalContext` when a hook registered in `~/.claude/settings.json` points at a binary missing from disk [test: crates/harness-status/tests/integration.rs::session_start_warns_via_additional_context_when_binary_missing].
+It injects `additionalContext` when a plugin-cache binary is shadowed by a stray `PATH` copy [test: crates/harness-status/tests/prose_claims.rs::claim_session_start_shadow_injects].
+It injects `additionalContext` when the PATH-shadow scan itself could not complete (reported as undetermined) [test: crates/harness-status/tests/prose_claims.rs::claim_session_start_undetermined_injects].
+Otherwise it is silent (no output, no injected context) [test: crates/harness-status/tests/integration.rs::session_start_is_silent_when_all_hook_binaries_present].
 
 ```
 ╔══════════════════════════════════════════════╗
@@ -64,65 +34,42 @@ the full three-scope taxonomy and the current classification of every plugin.
 ── Progress file (taskprog) ──────────────────────
   cwd: /repo
   /repo/.claude/progress.md
-  │ # Progress
-  │ ## Pending
   │ - specforge ⑤ worktree merge
 ```
-
-## Install (plugin)
 
 ```
 /plugin install harness-status@yukineko
 ```
 
-Then run `/status` in any session.
-
-## Manual install
+Then run `/status` in any session [test: crates/harness-status/tests/prose_claims.rs::claim_status_command].
 
 ```sh
 cargo install --path .
-harness-status            # full dashboard
+harness-status
 ```
-
-## Commands
 
 ```sh
-harness-status                       # full dashboard
-harness-status budget                # today's spend only
-harness-status sessions --sessions 10  # recent sessions (limit N)
-harness-status progress              # progress file only
-harness-status hooks                 # Stop-hook latency aggregation (budget monitor)
-harness-status inject                # UserPromptSubmit injection-size aggregation (budget monitor)
-harness-status plugins               # classify every plugin by activation scope
-harness-status hooks-health          # settings.json hooks whose binary is missing
-harness-status path-shadow           # stray PATH binaries shadowing plugin-cache ones
-harness-status --json                # machine-readable output (any subcommand)
+harness-status                       # full dashboard [test: crates/harness-status/tests/prose_claims.rs::claim_full_dashboard]
+harness-status budget                # today's spend only [test: crates/harness-status/tests/prose_claims.rs::claim_budget_from_ledger]
+harness-status sessions --sessions 10  # recent sessions (limit N) [test: crates/harness-status/tests/prose_claims.rs::claim_sessions_from_gauge_limit]
+harness-status progress              # progress file only [test: crates/harness-status/tests/prose_claims.rs::claim_progress_preview]
+harness-status hooks                 # Stop-hook latency aggregation (budget monitor) [test: crates/harness-status/tests/prose_claims.rs::claim_hooks_latency_per_session]
+harness-status inject                # UserPromptSubmit injection-size aggregation (budget monitor) [test: crates/harness-status/tests/prose_claims.rs::claim_inject_per_turn]
+harness-status plugins               # classify every plugin by activation scope [test: crates/harness-status/tests/prose_claims.rs::claim_plugins_cli]
+harness-status hooks-health          # settings.json hooks whose binary is missing [test: crates/harness-status/tests/prose_claims.rs::claim_hooks_health_cli]
+harness-status path-shadow           # stray PATH binaries shadowing plugin-cache ones [test: crates/harness-status/src/path_shadow.rs::earlier_dir_with_same_name_is_flagged_as_shadowing] [test: crates/harness-status/tests/prose_claims.rs::claim_path_shadow_cli]
+harness-status --json                # machine-readable output (with the full dashboard, budget, sessions, progress, hooks, inject, plugins, hooks-health, path-shadow) [test: crates/harness-status/tests/prose_claims.rs::claim_json_any_subcommand]
 ```
 
-The `plugins` subcommand scans the monorepo and groups every plugin as
-**always-on** / **event-scoped** / **manual** (see
-[`docs/plugin-activation-scopes.md`](../../docs/plugin-activation-scopes.md)). It
-is a dev/HOTL tool: it classifies from the repo layout, so run it from a checkout.
+The `plugins` subcommand groups every plugin as **always-on** / **event-scoped** / **manual** [test: crates/harness-status/src/plugins.rs::classify_always_on_on_high_frequency_event] [test: crates/harness-status/src/plugins.rs::classify_event_scoped_on_only_low_frequency_events] [test: crates/harness-status/src/plugins.rs::classify_manual_when_no_hooks] [test: crates/harness-status/tests/prose_claims.rs::claim_plugins_cli].
+Run it from a checkout; it classifies from the repo layout [test: crates/harness-status/src/plugins.rs::find_repo_root_walks_up_to_marketplace] [test: crates/harness-status/tests/prose_claims.rs::claim_plugins_cli].
 
-## Notes
+- Do not read a zero, an empty panel, or a silent hook health check as proof that everything is fine.
+- When a plugin's store is absent, its section says "not installed?" and the command still exits 0 [test: crates/harness-status/tests/prose_claims.rs::claim_not_installed].
+- `sessions` and `path-shadow` exit 1 when they cannot read their source: an unreadable gauge store makes `sessions` print `sessions: unknown — …` on stderr (with `--json`, `{"status":"unknown",…}` on stdout), and an incomplete PATH scan makes `path-shadow` print `harness-status: PATH-shadow scan could not be completed: …` on stderr; the full dashboard shows both cases as `unknown — …` [test: crates/harness-status/tests/prose_claims.rs::claim_unknown_exit1].
+- `harness-status hooks` flags any session whose combined Stop-hook wall-time exceeds `HARNESS_HOOK_LATENCY_BUDGET_MS` (default `30000`; unparsable values fall back to the default) [test: crates/harness-status/tests/prose_claims.rs::claim_hooks_budget_default_and_env].
+- `harness-status inject` flags any turn whose combined UserPromptSubmit injection exceeds `HARNESS_INJECT_BUDGET_CHARS` (default `20000`) [test: crates/harness-status/tests/prose_claims.rs::claim_inject_budget_default_and_env].
+- The date comes from the system clock [test: crates/harness-status/tests/prose_claims.rs::claim_date_system_clock].
+- Override the date with `HARNESS_DATE=YYYY-MM-DD` for testing [test: crates/harness-status/tests/integration.rs::budget_subcommand_reports_pinned_date].
 
-- A section that reports "not installed" just means that plugin's store is
-  absent — not an error.
-- `sessions` and `path-shadow` distinguish "could not read" from "nothing there":
-  an unreadable gauge store or an incomplete PATH scan prints `unknown — …` (or
-  `{"status":"unknown",…}` with `--json`) and exits 1.
-- The other panels do **not** make that distinction: a `ledger.json` that exists
-  but cannot be read or parsed shows as `$0.0000` spend, and an unreadable
-  latency/injection ledger shows as "nothing recorded". Treat a surprising zero
-  as unverified.
-- `harness-status hooks` flags any session whose combined Stop-hook wall-time
-  exceeds `HARNESS_HOOK_LATENCY_BUDGET_MS` (default `30000`; unparsable values
-  fall back to the default).
-- `harness-status inject` flags any turn whose combined UserPromptSubmit
-  injection exceeds `HARNESS_INJECT_BUDGET_CHARS` (default `20000`).
-- The date comes from the system clock (no chrono dependency); override with
-  `HARNESS_DATE=YYYY-MM-DD` for testing.
-
-## License
-
-MIT
+License: MIT [test: crates/harness-status/tests/prose_claims.rs::claim_license_mit]

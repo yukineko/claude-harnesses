@@ -683,7 +683,7 @@ dependencies = [
 
 [[package]]
 name = "harness-status"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "anyhow",
  "clap",

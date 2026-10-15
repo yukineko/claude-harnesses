@@ -1,62 +1,27 @@
-# curate
+`curate promote` turns a chosen playbook entry (a JSON line with `title` and `done_criteria`) into a golden case line with an `id` [test: crates/curate/tests/integration.rs::promote_writes_curated_golden_end_to_end].
 
-Promote **fugu-router playbooks** into versioned **golden eval datasets** for
-[evalkit](../evalkit) — the supply side of the offline eval loop.
+curate auto-derives a runnable case only when the acceptance criterion (`done_criteria`) is **mechanical** [test: crates/curate/src/derive.rs::backticked_command_becomes_cmd_golden] [test: crates/curate/src/derive.rs::non_mechanical_criterion_becomes_draft] [test: crates/curate/src/derive.rs::backtick_ignored_when_not_a_command]. It drafts the rest [test: crates/curate/src/derive.rs::non_mechanical_criterion_becomes_draft].
 
-evalkit consumes goldens; until now nothing produced them from real verified
-work. fugu-router records one playbook per verified task (`title`,
-`done_criteria`, `touched_files`) to `~/.fugu-router/playbooks.jsonl` — but that
-log is policy-search only: append-only, never holdout-curated, no `input→expected`
-test. curate closes the gap: it distils a chosen entry into an evalkit golden
-case, fixed into a versioned, deduplicated dataset.
+- `` `cargo test --workspace` passes `` gets `"cmd":["cargo","test","--workspace"]` and `"assert":{"exit":0}` [test: crates/curate/src/derive.rs::backticked_command_becomes_cmd_golden].
+- "cargo test -p evalkit is green" gets `"cmd":["cargo","test","-p","evalkit"]` and `"assert":{"exit":0}` [test: crates/curate/tests/prose_claims.rs::claim_cargo_test_scoped_golden].
+- "auth handles token refresh" becomes `{"draft":true,"describe":"… — TODO assert done_criteria: …"}` [test: crates/curate/tests/prose_claims.rs::claim_non_mechanical_draft_describe].
 
-## The honest mapping
+Mechanical signals: an explicit backticked command [test: crates/curate/src/derive.rs::backticked_command_becomes_cmd_golden], or a recognised test runner (`cargo test` [test: crates/curate/src/derive.rs::cargo_test_with_scope_is_captured], `npm test` and `pytest` [test: crates/curate/src/derive.rs::pytest_and_npm_recognised]). `go test` is also a recognised test runner [test: crates/curate/tests/prose_claims.rs::claim_go_test_recognised].
 
-A playbook is a *procedure*, not a test. So curate auto-derives a runnable case
-only when the acceptance criterion is **mechanical**, and drafts the rest:
-
-| `done_criteria` | promoted golden |
-|---|---|
-| `` `cargo test --workspace` passes `` | `{"cmd":["cargo","test","--workspace"],"assert":{"exit":0}}` |
-| "cargo test -p evalkit is green" | `{"cmd":["cargo","test","-p","evalkit"],"assert":{"exit":0}}` |
-| "auth handles token refresh" | `{"draft":true,"describe":"… — TODO assert done_criteria: …"}` |
-
-Mechanical signals: an explicit backticked command, or a recognised test runner
-(`cargo test`, `npm test`, `pytest`, `go test`). A **draft** is a valid golden
-that evalkit *skips* (never pass, never fail) until a human writes its assertion
-— so it can sit in the repo as visible pending work without failing `evalkit run`.
-
-## Usage
+evalkit skips a draft case: it is neither a pass nor a fail [test: crates/evalkit/src/run.rs::draft_case_is_skipped_not_failed].
 
 ```sh
-curate candidates                       # list promotable playbooks (mech | draft); --limit N (default 20)
-curate promote "add login" --dataset auth   # → evals/curated/auth.jsonl
-curate promote --latest                 # the most recent playbook
-curate promote "x" --draft              # force a draft even if mechanical
-curate promote --latest --store /path/to/playbooks.jsonl  # override the playbook store
+curate candidates                       # list promotable playbooks (mech | draft), newest first; --k N limits the count (default 20) [test: crates/curate/tests/prose_claims.rs::claim_candidates_limit_default_20]
+curate promote "add login" --dataset auth   # → evals/curated/auth.jsonl [test: crates/curate/tests/integration.rs::promote_writes_curated_golden_end_to_end]
+curate promote --latest                 # the most recent playbook [test: crates/curate/tests/prose_claims.rs::claim_promote_latest_cli]
+curate promote "x" --draft              # force a draft even if mechanical [test: crates/curate/tests/prose_claims.rs::claim_promote_draft_flag]
+curate promote --latest --store /path/to/playbooks.jsonl  # override the playbook store [test: crates/curate/tests/integration.rs::promote_writes_curated_golden_end_to_end]
 ```
 
-Both `candidates` and `promote` accept `--store` to override the playbook store
-path (default `~/.fugu-router/playbooks.jsonl`). `promote` selects by
-case-insensitive title substring (most recent match wins) or `--latest`.
-Promotions append to `evals/curated/<name>.jsonl` (`--dataset`, default
-`promoted`; deduplicated by case id) under `--root` (default CWD), inside the
-`--evals-dir` (default `evals`). evalkit discovers `evals/` **recursively**, so a
-promoted case is picked up by `evalkit run` with no config change (there is no CI
-wiring — `evalkit run` is run manually).
+`promote` accepts `--store` to read the playbook store from another path [test: crates/curate/tests/integration.rs::promote_writes_curated_golden_end_to_end]. `candidates` reads the playbook store from `--store` too [test: crates/curate/tests/prose_claims.rs::claim_candidates_store_reads_file]. The default store path is `~/.fugu-router/playbooks.jsonl` [test: crates/curate/tests/prose_claims.rs::claim_default_store_path].
 
-## The loop it closes
+`promote` selects by case-insensitive title substring, and the most recent match wins [test: crates/curate/tests/prose_claims.rs::claim_promote_selector_cli]. `promote --latest` selects the newest playbook [test: crates/curate/tests/prose_claims.rs::claim_promote_latest_cli].
 
-```
-condukt verifies a task ─▶ fugu-router record (playbook)
-        ▲                              │
-        │                    curate promote
-   evalkit run  ◀── evals/curated/*.jsonl ◀┘   (run manually; no CI)
-```
+Promotions append to `<root>/<evals-dir>/curated/<name>.jsonl`, where `--evals-dir` defaults to `evals` [test: crates/curate/tests/integration.rs::promote_writes_curated_golden_end_to_end] [test: crates/curate/tests/prose_claims.rs::claim_promote_appends] [test: crates/curate/tests/prose_claims.rs::claim_evals_dir_flag]. `--dataset` defaults to `promoted` [test: crates/curate/tests/prose_claims.rs::claim_dataset_default_promoted]. A promotion is deduplicated by case id [test: crates/curate/tests/prose_claims.rs::claim_dedup_by_case_id]. `--root` defaults to the CWD [test: crates/curate/tests/prose_claims.rs::claim_root_defaults_to_cwd].
 
-After `record`, condukt's Phase 6 is HOTL-wired to `curate promote`: when a
-verified task's `done_criteria` is mechanical and `curate` is on PATH, the main
-loop asks **exactly one** confirmation ("promote this verified run to an eval
-golden?") and, only on an affirmative answer, actually shells out to
-`curate promote` — declining writes nothing. Subscription-native: one bundled
-Rust binary, no API key.
+evalkit discovers `*.jsonl` goldens recursively, so cases under `curated/` are found [test: crates/evalkit/src/run.rs::discover_recurses_into_subdirs].

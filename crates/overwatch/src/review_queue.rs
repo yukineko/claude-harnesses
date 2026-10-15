@@ -22,10 +22,6 @@
 /// cannot be read in full, nothing is hidden: the findings are shown unfiltered
 /// behind a `SOURCE NOT FILTERED` marker (see below), never as a clean join.
 ///
-/// `review-queue --to-backlog` ([`crate::bridge`]) does NOT apply this join: by
-/// the agreement in `docs/DESIGN-continuous-audit-triage.md`, a disposition is
-/// not a pre-gate for the backlog drain, whose idempotency is its own ledger.
-///
 /// # A source that was READ and held nothing vs one that could not be read
 ///
 /// A missing source contributes nothing — that is a real observation of zero.
@@ -49,7 +45,6 @@ use crate::disposition::Disposition;
 use crate::merge_conflict::MergeConflictEntry;
 use crate::review_escalation::{self, ConduktEscalation};
 use crate::review_finding::{AuditVerdict, ReviewFinding};
-use crate::review_ruling::{self, NeedsRulingTask};
 use crate::rollback::RollbackEvent;
 use crate::store;
 use crate::violation::{self, RecurrencePolicy, SignatureRecurrence};
@@ -76,11 +71,7 @@ pub enum EntryKind {
     /// real git 3-way conflict OR a gated mid-flight actual-diff overlap
     /// (decision A), recorded in `merge_conflicts.jsonl`, still unresolved.
     MergeConflict,
-    /// A backlog task whose closure awaits a human ruling (`status =
-    /// "needs-ruling"` in the cwd repo's `.backlog/tasks.toml`). Display-only:
-    /// never bridged back into backlog (see `review_ruling.rs`).
-    NeedsRuling,
-    /// NOT an item found in a source — the record that one of the six sources
+    /// NOT an item found in a source — the record that one of the five sources
     /// could not be read (or held a line that could not be decoded), so its
     /// items are missing from this queue.
     ///
@@ -89,8 +80,7 @@ pub enum EntryKind {
     /// otherwise: a `--json` consumer checking `length == 0`, or a human
     /// reading "review queue empty", would take "I could not look" for "there
     /// is nothing there". Emitted only by [`run`] — never by [`build_queue`],
-    /// so it can never be mistaken for a source record, and the backlog drain
-    /// ([`crate::bridge`]) never sees one.
+    /// so it can never be mistaken for a source record.
     UndeterminedSource,
 }
 
@@ -103,7 +93,6 @@ impl EntryKind {
             EntryKind::AiFinding => "ai-finding",
             EntryKind::Escalation => "escalation",
             EntryKind::MergeConflict => "merge-conflict",
-            EntryKind::NeedsRuling => "needs-ruling",
             EntryKind::UndeterminedSource => "undetermined-source",
         }
     }
@@ -185,13 +174,6 @@ pub const SRC_MERGE_CONFLICT: SourceMeta = SourceMeta {
     ledger: "the blocked-merge ledger (merge_conflicts.jsonl)",
     file: "merge_conflicts.jsonl",
     noun: "merge conflicts",
-};
-/// Source 6: backlog rows awaiting a human ruling.
-pub const SRC_NEEDS_RULING: SourceMeta = SourceMeta {
-    tag: "needs-ruling",
-    ledger: "the repo backlog store (tasks.toml)",
-    file: "tasks.toml",
-    noun: "rulings awaiting a human",
 };
 /// The join partner of source 5. Not a source of rows of its own: it only
 /// FILTERS source 5 (resolved conflicts drop out).
@@ -464,9 +446,8 @@ pub(crate) fn dedup_findings(findings: &[ReviewFinding]) -> Vec<(ReviewFinding, 
         // original input order) wins — mirrors the "last write wins" rule.
         //
         // CA-overwatch-001: ts-only selection let a later same-fingerprint
-        // Unverified/Refuted record SHADOW an earlier Confirmed one, and
-        // `plan_finding_bridges` filters on the representative's verdict alone
-        // — so the whole group silently vanished from the backlog bridge even
+        // Unverified/Refuted record SHADOW an earlier Confirmed one, so the
+        // whole group was shown under the non-actionable verdict even
         // though Confirmed evidence exists in it. An actionable
         // (`is_actionable()`) record therefore always outranks a
         // non-actionable one regardless of `ts`; ties within the same
@@ -557,8 +538,6 @@ pub fn build_queue(
     findings: &[ReviewFinding],
     escalations: &[ConduktEscalation],
     merge_conflicts: &[MergeConflictEntry],
-    needs_ruling: &[NeedsRulingTask],
-    now: i64,
 ) -> Vec<ReviewQueueEntry> {
     let mut rows: Vec<ReviewQueueEntry> = Vec::new();
 
@@ -620,9 +599,7 @@ pub fn build_queue(
             .unwrap_or_default();
         // Non-CONFIRMED verdicts are marked inline so a row is never read as
         // an established finding. UNVERIFIED means "undetermined — still
-        // pending re-verification", not "handled": it stays visible here but
-        // is NOT bridged into the backlog as actionable work (see
-        // `bridge::plan_finding_bridges`).
+        // pending re-verification", not "handled": it stays visible here.
         let verdict_tag = match f.verdict {
             AuditVerdict::Confirmed => String::new(),
             other => format!("[{}] ", other.label().to_ascii_uppercase()),
@@ -682,30 +659,6 @@ pub fn build_queue(
             identifier: e.id.clone(),
             // condukt's add_escalation already dedups identical OPEN asks
             // upstream (content backpressure); no further collapse here.
-            occurrences: 1,
-        });
-    }
-
-    for t in needs_ruling {
-        let reason = if t.ruling_kind == "untestable" {
-            &t.untestable_reason
-        } else {
-            &t.rationale
-        };
-        let kind = if t.ruling_kind.is_empty() {
-            "unspecified"
-        } else {
-            t.ruling_kind.as_str()
-        };
-        rows.push(ReviewQueueEntry {
-            kind: EntryKind::NeedsRuling,
-            // A human decision is pending, but nothing is broken: Medium.
-            severity: Severity::Medium,
-            // The store carries no request time; `now` keeps the row inside
-            // any `--since` window (a pending ruling never ages out).
-            ts: now,
-            summary: format!("awaiting human ruling ({kind}): {} — {}", t.title, reason),
-            identifier: t.id.clone(),
             occurrences: 1,
         });
     }
@@ -805,7 +758,7 @@ fn assemble(
     out
 }
 
-/// Read all six sources, merge, and render the unified queue.
+/// Read all five sources, merge, and render the unified queue.
 ///
 /// `since` filters to entries with `ts >= since` when supplied; `limit` caps
 /// the number of rows shown (after ordering), keeping the top-K RISKIEST rows
@@ -922,14 +875,6 @@ pub fn run(json: bool, since: Option<i64>, limit: Option<usize>) -> Result<Sourc
     }
     let merge_conflicts = resolve_source(merge_scan.open, SRC_MERGE_CONFLICT, &mut undetermined);
 
-    // Source 6: backlog rows awaiting a human ruling (absent store = real zero;
-    // unreadable/unparseable = announced, never read as empty).
-    let needs_ruling = resolve_source(
-        review_ruling::scan_needs_ruling(&cwd),
-        SRC_NEEDS_RULING,
-        &mut undetermined,
-    );
-
     for u in &undetermined {
         eprintln!("{}", u.warning());
     }
@@ -940,8 +885,6 @@ pub fn run(json: bool, since: Option<i64>, limit: Option<usize>) -> Result<Sourc
         &findings,
         &escalations,
         &merge_conflicts,
-        &needs_ruling,
-        now,
     );
 
     if let Some(since_ts) = since {
@@ -1063,9 +1006,8 @@ mod tests {
 
     /// Pin the exact bytes of [`finding_fingerprint`] so any future change to
     /// the normalization (whitespace collapse, trim, ascii-lowercase) or the
-    /// unit-separator join is caught. This is the shared key both the dedup
-    /// grouping and the to-backlog idempotency contract (CA-overwatch-01) rely
-    /// on; drifting it silently would break already-bridged recognition.
+    /// unit-separator join is caught. This is the key the dedup grouping
+    /// relies on; drifting it silently would split or merge groups.
     // 7c27050b, implementer-written: the join is on the exact finding_id, so a
     // recurring finding re-recorded under a NEW id (same fingerprint) is not
     // hidden by the older record's disposition.
@@ -1115,7 +1057,7 @@ mod tests {
     #[test]
     fn unverified_finding_row_is_labelled_unverified() {
         let f = finding("F-U", 200).with_verdict(AuditVerdict::Unverified);
-        let rows = build_queue(&[], &[], std::slice::from_ref(&f), &[], &[], &[], 0);
+        let rows = build_queue(&[], &[], std::slice::from_ref(&f), &[], &[]);
         assert_eq!(rows.len(), 1, "the finding must NOT be dropped");
         assert!(
             rows[0].summary.contains("UNVERIFIED"),
@@ -1129,7 +1071,7 @@ mod tests {
     #[test]
     fn confirmed_finding_row_carries_no_verdict_marker() {
         let f = finding("F-C", 200).with_verdict(AuditVerdict::Confirmed);
-        let rows = build_queue(&[], &[], std::slice::from_ref(&f), &[], &[], &[], 0);
+        let rows = build_queue(&[], &[], std::slice::from_ref(&f), &[], &[]);
         assert_eq!(rows.len(), 1);
         assert!(
             !rows[0].summary.contains("UNVERIFIED") && !rows[0].summary.contains("REFUTED"),
@@ -1144,7 +1086,7 @@ mod tests {
         let rollbacks = vec![rb("overwatch", 300)];
         let findings = vec![finding("F-1", 200)];
 
-        let q = build_queue(&systemic, &rollbacks, &findings, &[], &[], &[], 0);
+        let q = build_queue(&systemic, &rollbacks, &findings, &[], &[]);
         assert_eq!(q.len(), 3);
         // Newest-first: 300 (rollback), 200 (ai-finding), 100 (systemic).
         assert_eq!(q[0].kind, EntryKind::Rollback);
@@ -1159,12 +1101,12 @@ mod tests {
     fn build_queue_missing_sources_degrade_gracefully() {
         // Only rollbacks present (systemic + findings empty): must still return
         // the rollback rows, not error / not drop everything.
-        let q = build_queue(&[], &[rb("p", 10)], &[], &[], &[], &[], 0);
+        let q = build_queue(&[], &[rb("p", 10)], &[], &[], &[]);
         assert_eq!(q.len(), 1);
         assert_eq!(q[0].kind, EntryKind::Rollback);
 
         // All empty -> empty queue.
-        assert!(build_queue(&[], &[], &[], &[], &[], &[], 0).is_empty());
+        assert!(build_queue(&[], &[], &[], &[], &[]).is_empty());
     }
 
     #[test]
@@ -1174,8 +1116,8 @@ mod tests {
         let s = vec![sig("blastguard:x", 50)];
         let r = vec![rb("p", 50)];
         let f = vec![finding("F", 50)];
-        let q1 = build_queue(&s, &r, &f, &[], &[], &[], 0);
-        let q2 = build_queue(&s, &r, &f, &[], &[], &[], 0);
+        let q1 = build_queue(&s, &r, &f, &[], &[]);
+        let q2 = build_queue(&s, &r, &f, &[], &[]);
         assert_eq!(q1, q2);
         // tags sorted: "ai-finding" < "rollback" < "systemic"
         assert_eq!(q1[0].kind, EntryKind::AiFinding);
@@ -1191,7 +1133,7 @@ mod tests {
 
     #[test]
     fn review_queue_entry_carries_kind_discriminator_in_json() {
-        let q = build_queue(&[], &[rb("overwatch", 1)], &[], &[], &[], &[], 0);
+        let q = build_queue(&[], &[rb("overwatch", 1)], &[], &[], &[]);
         let json = serde_json::to_string(&q).unwrap();
         assert!(json.contains("\"kind\":\"rollback\""));
     }
@@ -1210,7 +1152,7 @@ mod tests {
             vec![old.clone(), new.clone()],
             vec![new.clone(), old.clone()],
         ] {
-            let q = build_queue(&[], &[], &findings, &[], &[], &[], 0);
+            let q = build_queue(&[], &[], &findings, &[], &[]);
             let ai: Vec<_> = q
                 .iter()
                 .filter(|r| r.kind == EntryKind::AiFinding)
@@ -1230,7 +1172,7 @@ mod tests {
             finding_with("F-2", "finding two", 100),
             finding_with("F-3", "finding three", 100),
         ];
-        let q = build_queue(&[], &[], &findings, &[], &[], &[], 0);
+        let q = build_queue(&[], &[], &findings, &[], &[]);
         let ai = q.iter().filter(|r| r.kind == EntryKind::AiFinding).count();
         assert_eq!(
             ai, 3,
@@ -1283,7 +1225,7 @@ mod tests {
             None,
             999, // new ts
         );
-        let q = build_queue(&[], &[], &[stale_high, fresh_low], &[], &[], &[], 0);
+        let q = build_queue(&[], &[], &[stale_high, fresh_low], &[], &[]);
         assert_eq!(q.len(), 2);
         assert_eq!(q[0].identifier, "F-STALE-HIGH", "stale-high must lead");
         assert_eq!(q[0].severity, Severity::High);
@@ -1298,7 +1240,7 @@ mod tests {
         // tiebreak ordering between two genuinely distinct findings.
         let old_high = finding_with("F-OLD", "old finding content", 100);
         let new_high = finding_with("F-NEW", "new finding content", 200);
-        let q = build_queue(&[], &[], &[old_high, new_high], &[], &[], &[], 0);
+        let q = build_queue(&[], &[], &[old_high, new_high], &[], &[]);
         assert_eq!(q[0].identifier, "F-NEW");
         assert_eq!(q[1].identifier, "F-OLD");
     }
@@ -1307,7 +1249,7 @@ mod tests {
     fn systemic_and_rollback_rows_default_to_high_severity() {
         let systemic = vec![sig("blastguard:x", 10)];
         let rollbacks = vec![rb("overwatch", 20)];
-        let q = build_queue(&systemic, &rollbacks, &[], &[], &[], &[], 0);
+        let q = build_queue(&systemic, &rollbacks, &[], &[], &[]);
         for row in &q {
             assert_eq!(
                 row.severity,
@@ -1342,7 +1284,7 @@ mod tests {
                 1000 + i,
             ));
         }
-        let mut q = build_queue(&[], &[], &findings, &[], &[], &[], 0);
+        let mut q = build_queue(&[], &[], &findings, &[], &[]);
         q.truncate(1);
         assert_eq!(q[0].identifier, "F-HIGH");
     }
@@ -1350,9 +1292,8 @@ mod tests {
     /// CA-overwatch-001 (verified bypass): the representative was picked by
     /// newest `ts` alone, ignoring `verdict`. A later same-fingerprint
     /// Unverified/Refuted re-audit therefore SHADOWED an earlier Confirmed
-    /// record, and `plan_finding_bridges` filters on the representative's
-    /// verdict — so the whole group silently dropped out of the backlog
-    /// bridge even though a Confirmed record genuinely exists in it.
+    /// record, so the whole group was shown under the non-actionable verdict
+    /// even though a Confirmed record genuinely exists in it.
     #[test]
     fn dedup_representative_prefers_confirmed_over_a_later_shadowing_verdict() {
         let confirmed_old = finding("F-1", 100); // Confirmed by default (older).
@@ -1383,7 +1324,7 @@ mod tests {
         // Two records of the SAME finding id (collapse to 1) alongside the other
         // two streams (which must each still contribute exactly one row).
         let findings = vec![finding("F-1", 30), finding("F-1", 40)];
-        let q = build_queue(&systemic, &rollbacks, &findings, &[], &[], &[], 0);
+        let q = build_queue(&systemic, &rollbacks, &findings, &[], &[]);
         assert_eq!(
             q.iter().filter(|r| r.kind == EntryKind::Systemic).count(),
             1
@@ -1426,7 +1367,7 @@ mod tests {
             None,
             200,
         );
-        let q = build_queue(&[], &[], &[a, b], &[], &[], &[], 0);
+        let q = build_queue(&[], &[], &[a, b], &[], &[]);
         let ai: Vec<_> = q
             .iter()
             .filter(|r| r.kind == EntryKind::AiFinding)
@@ -1453,7 +1394,7 @@ mod tests {
     #[test]
     fn build_queue_collapses_repeated_same_plugin_rollbacks() {
         let rollbacks = vec![rb("overwatch", 10), rb("overwatch", 20)];
-        let q = build_queue(&[], &rollbacks, &[], &[], &[], &[], 0);
+        let q = build_queue(&[], &rollbacks, &[], &[], &[]);
         let rb_rows: Vec<_> = q.iter().filter(|r| r.kind == EntryKind::Rollback).collect();
         assert_eq!(
             rb_rows.len(),
@@ -1476,7 +1417,7 @@ mod tests {
     #[test]
     fn build_queue_keeps_distinct_plugin_rollbacks_separate() {
         let rollbacks = vec![rb("overwatch", 10), rb("condukt", 20)];
-        let q = build_queue(&[], &rollbacks, &[], &[], &[], &[], 0);
+        let q = build_queue(&[], &rollbacks, &[], &[], &[]);
         let rb_rows = q.iter().filter(|r| r.kind == EntryKind::Rollback).count();
         assert_eq!(rb_rows, 2, "distinct plugins must not be collapsed");
     }
@@ -1488,7 +1429,7 @@ mod tests {
         let systemic = vec![sig("blastguard:x", 10)];
         let rollbacks = vec![rb("overwatch", 20)];
         let findings = vec![finding("F-1", 30)];
-        let q = build_queue(&systemic, &rollbacks, &findings, &[], &[], &[], 0);
+        let q = build_queue(&systemic, &rollbacks, &findings, &[], &[]);
         for row in &q {
             assert_eq!(
                 row.occurrences, 1,
@@ -1511,7 +1452,7 @@ mod tests {
         let rollbacks = vec![rb("overwatch", 300)];
         let escalations = vec![esc("esc-1", "runA", "t1", "Which approach?", 200)];
 
-        let q = build_queue(&systemic, &rollbacks, &[], &escalations, &[], &[], 0);
+        let q = build_queue(&systemic, &rollbacks, &[], &escalations, &[]);
         assert_eq!(q.len(), 3);
 
         let escalation_row = q
@@ -1563,7 +1504,7 @@ mod tests {
         let real = mc("c-real", ConflictOrigin::MergeConflict, 300);
         let overlap = mc("c-overlap", ConflictOrigin::RuntimeOverlap, 250);
 
-        let q = build_queue(&[], &[], &[], &[], &[real, overlap], &[], 0);
+        let q = build_queue(&[], &[], &[], &[], &[real, overlap]);
         assert_eq!(q.len(), 2);
         assert!(q.iter().all(|r| r.kind == EntryKind::MergeConflict));
         assert!(q.iter().all(|r| r.severity == Severity::High));
@@ -1641,7 +1582,7 @@ mod tests {
 
         // Real rows truncated to nothing by `--limit 0`: the marker survives
         // because it is prepended AFTER the cap.
-        let mut capped = build_queue(&[], &[rb("p", 10)], &[], &[], &[], &[], 0);
+        let mut capped = build_queue(&[], &[rb("p", 10)], &[], &[], &[]);
         // `--limit 0` reaches `run` as this exact call (a variable, not a
         // literal, so clippy sees the cap for what it is).
         let limit: usize = 0;
@@ -1656,7 +1597,7 @@ mod tests {
     /// furniture that fires on a healthy store.
     #[test]
     fn a_fully_read_queue_gets_no_marker_rows() {
-        let real = build_queue(&[], &[rb("p", 10)], &[], &[], &[], &[], 0);
+        let real = build_queue(&[], &[rb("p", 10)], &[], &[], &[]);
         let rows = assemble(real.clone(), &[], 999);
         assert_eq!(rows, real, "nothing may be injected when all sources read");
         assert!(assemble(Vec::new(), &[], 999).is_empty());
@@ -1753,8 +1694,7 @@ mod tests {
         let rollbacks = vec![rb("overwatch", 300)];
         let findings = vec![finding("F-1", 200)];
 
-        let with_empty_escalations =
-            build_queue(&systemic, &rollbacks, &findings, &[], &[], &[], 0);
+        let with_empty_escalations = build_queue(&systemic, &rollbacks, &findings, &[], &[]);
         assert_eq!(with_empty_escalations.len(), 3);
         assert!(with_empty_escalations
             .iter()

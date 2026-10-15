@@ -47,8 +47,8 @@ fn a_task_listed_as_deferred_is_deferred_in_the_json_feed_too() {
     std::fs::create_dir_all(&repo).unwrap();
     // A LINKED worktree: store writes are refused in a PRIMARY working tree (1e6f00ae).
     common::linked_checkout(&repo);
-    // Close-evidence fixture: `add` without a reproduced repro test lands
-    // `unconfirmed` (outside the workable queue, and `fail` refuses it).
+    // Close-evidence fixture: `add` without a reproduced repro test is
+    // refused and writes nothing.
     // Commit a FAILING repro script so `add` lands `pending`, as before.
     std::fs::create_dir_all(repo.join("tests")).unwrap();
     std::fs::write(

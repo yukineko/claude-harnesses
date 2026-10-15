@@ -168,7 +168,8 @@ executor に委譲します。**コスト有界**: 監査が実際にフラグ�
   是正タスクを積む:
 
   ```sh
-  backlog add --title "add tests for <entry key>: <網羅すべき振る舞い>" --project "$PWD" --priority p2
+  backlog add --title "add tests for <entry key>: <網羅すべき振る舞い>" --project "$PWD" --priority p2 \
+    --repro-test "<不足を示す、HEAD で失敗するコミット済みテスト>"   # 再現しなければ拒否され store に何も書かれない [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_with_non_reproducing_repro_writes_nothing_anywhere]
   ```
 
   (`backlog add` は Bash 経由。backlog store に書くだけで、リポジトリの仕様/実装/

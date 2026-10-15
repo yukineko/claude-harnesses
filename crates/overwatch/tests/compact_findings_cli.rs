@@ -8,10 +8,10 @@
 //! Mirrors the HOME-sandbox + real-binary + `find_file` idiom of
 //! `tests/disposition_metrics.rs` / `tests/auto_approved_cli.rs`: seeds the
 //! hot findings store with 3 OPEN findings + 2 findings whose ids are then
-//! resolved (one bridged, one dispositioned with a resolved_ts), runs the
+//! resolved (both dispositioned with a resolved_ts), runs the
 //! real `overwatch compact-findings --json` binary, and asserts the hot
 //! file is bounded to OPEN items while the archive holds the resolved ones
-//! and the review-metrics latency join still sees the dispositioned finding
+//! and the review-metrics latency join still sees the dispositioned findings
 //! (join over hot plus archive). A second run must be a byte-identical
 //! no-op.
 //!
@@ -120,8 +120,8 @@ fn try_find_file(dir: &Path, name: &str) -> Option<PathBuf> {
 fn compact_findings_archives_resolved_and_keeps_hot_bounded_to_open() {
     let (home, work) = make_sandbox("core");
 
-    // Seed 5 findings via the real CLI: F-1..F-3 stay OPEN, F-4 will be
-    // bridged, F-5 will be dispositioned.
+    // Seed 5 findings via the real CLI: F-1..F-3 stay OPEN, F-4 and F-5 will
+    // be dispositioned.
     for id in ["F-1", "F-2", "F-3", "F-4", "F-5"] {
         run_ow(
             &home,
@@ -162,25 +162,17 @@ fn compact_findings_archives_resolved_and_keeps_hot_bounded_to_open() {
         + "\n";
     std::fs::write(&findings_path, &findings_jsonl).unwrap();
 
-    // F-4 resolved via bridging: seed bridged_findings.jsonl directly
-    // (mirrors `store::BridgedFinding { finding_id, ts }`).
-    let bridged_path = findings_path
-        .parent()
-        .unwrap()
-        .join("bridged_findings.jsonl");
-    std::fs::write(
-        &bridged_path,
-        format!("{}\n", serde_json::json!({"finding_id": "F-4", "ts": 4500})),
-    )
-    .unwrap();
-
-    // F-5 resolved via disposition (with a resolved_ts, for the latency
-    // join): seed dispositions.jsonl directly.
+    // F-4 and F-5 resolved via disposition (with a resolved_ts, for the
+    // latency join): seed dispositions.jsonl directly.
     let dispositions_path = findings_path.parent().unwrap().join("dispositions.jsonl");
     std::fs::write(
         &dispositions_path,
         format!(
-            "{}\n",
+            "{}\n{}\n",
+            serde_json::json!({
+                "finding_id": "F-4", "verdict": "confirmed",
+                "reviewer": "alice", "resolved_ts": 4050,
+            }),
             serde_json::json!({
                 "finding_id": "F-5", "verdict": "confirmed",
                 "reviewer": "alice", "resolved_ts": 5050,
@@ -228,16 +220,16 @@ fn compact_findings_archives_resolved_and_keeps_hot_bounded_to_open() {
         "archive={archive_contents}"
     );
 
-    // review-metrics latency join must still count the dispositioned finding
-    // (join now reads hot plus archive): F-5 ts=5000, resolved_ts=5050 ->
-    // latency 50.
+    // review-metrics latency join must still count the dispositioned findings
+    // (join now reads hot plus archive): F-4 ts=4000, resolved_ts=4050 and
+    // F-5 ts=5000, resolved_ts=5050 -> latency 50 each.
     let metrics_out = run_ow(&home, &work, &["review-metrics", "--json"]);
     let m: Value = serde_json::from_str(&metrics_out).expect("review-metrics --json must parse");
-    assert_eq!(m["total"], 1, "{m}");
+    assert_eq!(m["total"], 2, "{m}");
     assert_eq!(
         m["median_latency_secs"].as_i64().unwrap(),
         50,
-        "latency join must still see the archived F-5 finding: {m}"
+        "latency join must still see the archived F-4 and F-5 findings: {m}"
     );
 
     // Run compact-findings a SECOND time: must be a no-op (archived == 0)

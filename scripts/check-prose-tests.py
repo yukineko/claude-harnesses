@@ -76,7 +76,9 @@ RECORD_START_RE = re.compile(
     r"|記録[:：]?\s*" + DATE_RE +
     r"|実測[:：（(]?\s*" + DATE_RE + r")"
 )
-RECORD_OPEN_RE = re.compile(r"^\s*<!--\s*record:\s*(\S*)\s*-->\s*$")
+# The opener may name the commit the record was measured at (`rev: <sha>`);
+# check-doc-claims.py requires and verifies it, this gate only needs the date.
+RECORD_OPEN_RE = re.compile(r"^\s*<!--\s*record:\s*(\S*)(?:\s+rev:\s*\S+)?\s*-->\s*$")
 RECORD_CLOSE_RE = re.compile(r"^\s*<!--\s*/record\s*-->\s*$")
 
 IMPERATIVE_EN = frozenset(

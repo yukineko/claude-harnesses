@@ -33,7 +33,7 @@ fn list_status_cancelled_is_a_recognised_status() {
     let repo = std::fs::canonicalize(&repo).unwrap();
     common::linked_checkout(&repo);
     // Close-evidence fixture: `add` lands `pending` only with a REPRODUCED,
-    // committed repro test (otherwise `unconfirmed`); commit a failing repro
+    // committed repro test (otherwise `add` is refused); commit a failing repro
     // script so the row this test rewrites starts `pending` as before.
     std::fs::create_dir_all(repo.join("tests")).unwrap();
     std::fs::write(

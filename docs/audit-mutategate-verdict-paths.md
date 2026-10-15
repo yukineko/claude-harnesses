@@ -183,6 +183,7 @@ CLAUDE.md 第1節は carve-out の条件を明示している:
 
 `emit_violation` は免責を主張しているが、**下流消費者を列挙していない**。実際には存在する:
 
+<!-- record: 2026-08-04 rev: 171062fcf6d4bf6aad9d69fdda6202a5c4ecd928 -->
 ```
 mutategate emit_violation
   → overwatch::store::append_violation  (violation ledger)
@@ -204,6 +205,7 @@ mutategate emit_violation
 >  or held an undecodable line; NO systemic-violation entries were bridged
 >  from it. This is NOT a report of zero systemic violations; re-run once
 >  the store is readable."
+<!-- /record -->
 
 **読み側がここまで厳密に「読めなかった ≠ ゼロ」を守っているのに、書き側が
 黙って書かないと、読み側は正常に読める空の台帳を見て「ゼロ」と正しく報告する。**

@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "backlog"
-version = "0.3.47"
+version = "0.3.48"
 dependencies = [
  "anyhow",
  "clap",
@@ -164,7 +164,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "blastguard"
-version = "0.2.129"
+version = "0.2.130"
 dependencies = [
  "globset",
  "harness-core",
@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.246"
+version = "0.7.247"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -874,7 +874,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "overwatch"
-version = "0.2.63"
+version = "0.2.64"
 dependencies = [
  "anyhow",
  "clap",
@@ -886,7 +886,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "toml 0.8.23",
- "wait-timeout",
 ]
 
 [[package]]
@@ -1241,7 +1240,7 @@ dependencies = [
 
 [[package]]
 name = "session-insights"
-version = "0.2.26"
+version = "0.2.27"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1297,7 +1296,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "specguard"
-version = "0.2.89"
+version = "0.2.90"
 dependencies = [
  "anyhow",
  "blastguard",

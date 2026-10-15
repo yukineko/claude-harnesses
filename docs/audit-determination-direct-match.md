@@ -1,4 +1,4 @@
-<!-- record: 2026-10-01 -->
+<!-- record: 2026-10-01 rev: eb7a739aef03d352dc97e64b78133e50a8a636cb -->
 # Determination 直接 match 監査 (backlog e269274f)
 
 `harness_core::verdict::Determination<T>` は variant が pub のため、`require()` を経由せず直接 `match` / `if let` / `matches!` できる。`require()` 経由(約45箇所)は監査済みだが、直接 match 側(2026-09-29 のトリアージで `Determination::Undetermined` 腕が harness-core 外に281件)は全体として未監査だった。本書はその全件列挙と、各 Undetermined 腕がどちら側に解決するかの分類である。

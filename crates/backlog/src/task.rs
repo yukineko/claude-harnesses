@@ -1,3 +1,4 @@
+pub use backlog::status::Status;
 use serde::{Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization;
 
@@ -10,9 +11,9 @@ use unicode_normalization::UnicodeNormalization;
 /// `defer_until` elapses. `done` and `cancelled` are terminal. NB: `backlog`
 /// has no `open` status — that vocabulary belongs to `hypothesis` (open/
 /// validated/rejected), a different binary.
-pub const STATUS_PENDING: &str = "pending";
-pub const STATUS_DONE: &str = "done";
-pub const STATUS_FAILED: &str = "failed";
+pub const STATUS_PENDING: Status = Status::Pending;
+pub const STATUS_DONE: Status = Status::Done;
+pub const STATUS_FAILED: Status = Status::Failed;
 /// Terminal "decided not to do it" (backlog d8d25af9) — work that is over
 /// WITHOUT having been finished: a duplicate folded into its canonical ticket,
 /// a plan that was dropped, a question a later measurement already answered.
@@ -46,64 +47,34 @@ pub const STATUS_FAILED: &str = "failed";
 /// status, so listing it in [`STATUSES`] would make `--status claimed`
 /// *settable*, which is a different and wrong thing from being filterable. It
 /// lives in [`FILTER_STATUSES`] instead.
-pub const STATUS_CANCELLED: &str = "cancelled";
+pub const STATUS_CANCELLED: Status = Status::Cancelled;
 
 /// The core STORED lifecycle statuses, in lifecycle order. `stored_status_error`
 /// rejects any `edit --status` value outside this list (so the derived
 /// `claimed` is never persisted), and on top of that the close-evidence rule
 /// in `store::edit` admits only `pending` / `failed`: `done` / `cancelled`
-/// need a recorded closure (`backlog done` / `backlog cancel` with evidence,
-/// or `ruling approve`). `unconfirmed` / `needs-ruling` are stored too but are
-/// entered only through `add`/`confirm` and `ruling`, so they are not here.
-pub const STATUSES: [&str; 4] = [STATUS_PENDING, STATUS_DONE, STATUS_FAILED, STATUS_CANCELLED];
-
-/// A finding whose problem has NOT been observed: filed without a repro test,
-/// or whose repro test did not reproduce it (`not-reproduced`) or could not be
-/// run to a conclusion (`undetermined`). Non-terminal, but NOT workable: it is
-/// excluded from `next` / `next --claim` / requeue and from the pending count,
-/// and `list` shows it in its own section labelled `suspicion`. Only
-/// `backlog confirm ID --repro-test CMD` with a `reproduced` outcome moves it
-/// to `pending` (close-evidence spec, 2026-10-01: an unverified finding in the
-/// workable queue is low quality; the unconfirmed count and the
-/// not-reproduced rate are the quality metrics).
-pub const STATUS_UNCONFIRMED: &str = "unconfirmed";
-
-/// A close that no executed test can justify (a value judgment, or an item
-/// that is genuinely untestable) and that is waiting for a HUMAN ruling.
-/// Non-terminal and not workable (excluded from `next` / claim / requeue).
-/// Only `backlog ruling approve ID` (TTY stdin + the id typed back) closes it;
-/// `backlog ruling withdraw ID` returns it to `pending`.
-pub const STATUS_NEEDS_RULING: &str = "needs-ruling";
+/// need a recorded closure (`backlog done` with evidence, or `backlog cancel`).
+pub const STATUSES: [Status; 4] = [STATUS_PENDING, STATUS_DONE, STATUS_FAILED, STATUS_CANCELLED];
 
 /// Every status value a `--status` FILTER may name: the stored
 /// [`STATUSES`], then the DERIVED `claimed` (a pending/failed row holding a
 /// live claim-ledger lease, see `store::STATUS_CLAIMED`; filterable but never
-/// stored, backlog 0dafa254), then `unconfirmed` / `needs-ruling`, which this
-/// binary writes. A filter naming any of these must not warn; a filter naming
-/// anything else must.
-pub const FILTER_STATUSES: [&str; 7] = [
-    STATUS_PENDING,
-    STATUS_DONE,
-    STATUS_FAILED,
-    STATUS_CANCELLED,
-    "claimed",
-    STATUS_UNCONFIRMED,
-    STATUS_NEEDS_RULING,
-];
+/// stored, backlog 0dafa254). A filter naming any of these must not warn; a
+/// filter naming anything else (any string that is not a [`Status`]) must.
+pub const FILTER_STATUSES: [Status; 5] = Status::ALL;
 
 /// How a task reached a terminal status, recorded as `[task.closure]`.
 ///
 /// The on-disk shape is fixed by the close-evidence spec and re-checked at
 /// commit time by `scripts/check-closure-evidence.py`, so field names here
 /// must not drift: `reason`, `duplicate_of`, `doc_only_commit`, and the
-/// sub-tables `green`, `red`, `ruling`, plus `discard_reason`. Exactly one
+/// sub-tables `green`, `red`, plus `discard_reason`. Exactly one
 /// route is filled:
 ///   - `green` + `red`: an executed committed test, RED (behavioural) at
 ///     `red.rev` and GREEN at `green.rev` (reason fixed / already-fixed /
 ///     obsolete);
 ///   - `doc_only_commit`: an ancestor commit touching doc paths only;
 ///   - `duplicate_of`: the canonical task id;
-///   - `ruling`: a human approval recorded by `backlog ruling approve`;
 ///   - `discard_reason` (with `reason = "discard"`): `backlog cancel ID
 ///     --reason R` throwing away an item nothing demonstrates (user ruling
 ///     2026-10-03: 「証明できないのであれば、そもそも問題ではない。…捨てる」).
@@ -111,6 +82,7 @@ pub const FILTER_STATUSES: [&str; 7] = [
 ///     so it is never evidence for `done` and never a duplicate anchor
 ///     ([`Closure::has_evidence`] stays false for it).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Closure {
     pub reason: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -121,8 +93,6 @@ pub struct Closure {
     pub green: Option<GreenRun>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub red: Option<RedRun>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ruling: Option<RulingRecord>,
     /// Why an unproven item was discarded (`backlog cancel`). Set only with
     /// `reason = "discard"` on a `cancelled` row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -130,7 +100,7 @@ pub struct Closure {
 }
 
 impl Closure {
-    /// True when this closure carries one of the four evidence routes. A
+    /// True when this closure carries one of the three evidence routes. A
     /// `closure` table with none of them (hand-written, or truncated) is not
     /// evidence, so it is not a valid duplicate anchor either. A discard
     /// (`discard_reason`) is deliberately NOT one of them: it records that
@@ -139,7 +109,6 @@ impl Closure {
         (self.green.is_some() && self.red.is_some())
             || self.doc_only_commit.is_some()
             || self.duplicate_of.is_some()
-            || self.ruling.is_some()
     }
 }
 
@@ -147,6 +116,7 @@ impl Closure {
 /// (the full 40-hex HEAD the working tree was clean at), exited 0 and reported
 /// at least one passing test.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct GreenRun {
     pub runner: String,
     pub cmd: String,
@@ -162,23 +132,11 @@ pub struct GreenRun {
 /// worktree with the test files overlaid from HEAD) exited non-zero with a
 /// BEHAVIOURAL failure. A build/compile failure is never recorded here.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct RedRun {
     pub rev: String,
     pub exit: i32,
     pub kind: String,
-}
-
-/// A human ruling, recorded by `backlog ruling approve` only.
-/// `approved_via = "tty"` records that the approval came through an
-/// interactive terminal with the id typed back. That is a barrier against the
-/// non-interactive agent Bash tool, NOT proof of the approver's identity.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct RulingRecord {
-    pub kind: String,
-    pub rationale: String,
-    pub approved_by: String,
-    pub approved_at: i64,
-    pub approved_via: String,
 }
 
 /// Outcomes of a finding's repro test (`add --repro-test` / `confirm`).
@@ -190,6 +148,7 @@ pub const REPRO_UNDETERMINED: &str = "undetermined";
 /// `outcome` is one of [`REPRO_REPRODUCED`] / [`REPRO_NOT_REPRODUCED`] /
 /// [`REPRO_UNDETERMINED`]; `detail` names why (the cause, for undetermined).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Repro {
     pub outcome: String,
     pub cmd: String,
@@ -200,6 +159,7 @@ pub struct Repro {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Task {
     pub id: String,
     pub title: String,
@@ -261,7 +221,7 @@ pub struct Task {
     /// `Undeclared` rather than guessing either way.
     #[serde(default)]
     pub touched_files: Vec<String>,
-    pub status: String,
+    pub status: Status,
     #[serde(default)]
     pub notes: String,
     pub created_at: i64,
@@ -354,18 +314,6 @@ pub struct Task {
     /// pushed", and conflating the two would mark an untouched task as synced.
     #[serde(default)]
     pub rev: u64,
-    /// `needs-ruling` rows only: the kind of ruling requested (`judgment` |
-    /// `untestable`). Flat on the row by spec (overwatch's needs-ruling stream
-    /// reads it there).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ruling_kind: Option<String>,
-    /// `needs-ruling` rows: why the requester believes a judgment close is
-    /// right (required for `judgment`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rationale: Option<String>,
-    /// `needs-ruling` rows of kind `untestable`: why no test can observe it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub untestable_reason: Option<String>,
     /// The latest repro attempt (`add --repro-test` / `confirm`). Absent on
     /// legacy rows and on findings filed without a repro test.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -403,7 +351,16 @@ impl Task {
     /// Note: does NOT consider defer_until. Callers combine with is_deferred()
     /// to decide whether to surface a task.
     pub fn is_pending(&self) -> bool {
-        matches!(self.status.as_str(), STATUS_PENDING | STATUS_FAILED)
+        matches!(self.status, Status::Pending | Status::Failed)
+    }
+
+    /// True when the row carries a repro whose outcome is `reproduced` — the
+    /// only evidence that makes a `pending`/`failed` row a task (user ruling
+    /// 2026-10-15: 「証拠だせ」). `next` / `next --claim` hand out nothing else.
+    pub fn has_reproduced_repro(&self) -> bool {
+        self.repro
+            .as_ref()
+            .is_some_and(|r| r.outcome == REPRO_REPRODUCED)
     }
 
     /// Returns true when the task is deferred past the given unix timestamp.
@@ -421,22 +378,11 @@ impl Task {
             .iter()
             .any(|t| t.trim().eq_ignore_ascii_case(TAG_WONTFIX))
     }
-
-    /// An `unconfirmed` finding older than [`UNCONFIRMED_EXPIRY_SECS`] (by
-    /// `created_at`): surfaced by `list` / SessionStart as a candidate to
-    /// confirm or close (`cancel --reason "unproven: ..."`). Never auto-closed.
-    pub fn is_expiry_candidate(&self, now: i64) -> bool {
-        self.status == STATUS_UNCONFIRMED
-            && now.saturating_sub(self.created_at) > UNCONFIRMED_EXPIRY_SECS
-    }
 }
 
 /// The tag recording a human "do not implement" ruling. Selection (`next`,
 /// `next --claim`) excludes every task carrying it (backlog 016c2562).
 pub const TAG_WONTFIX: &str = "wontfix";
-
-/// Age (seconds) after which an `unconfirmed` row is an expiry candidate.
-pub const UNCONFIRMED_EXPIRY_SECS: i64 = 7 * 86_400;
 
 /// Returns a warning message when `status` is `Some` but not a recognised value,
 /// else `None`. Centralised here (next to `STATUSES`) so the `--status` filter in
@@ -445,9 +391,9 @@ pub const UNCONFIRMED_EXPIRY_SECS: i64 = 7 * 86_400;
 /// offending value and lists the valid ones.
 pub fn status_warning(status: Option<&str>) -> Option<String> {
     match status {
-        Some(s) if !FILTER_STATUSES.contains(&s) => Some(format!(
+        Some(s) if s.parse::<Status>().is_err() => Some(format!(
             "warning: unknown status '{s}'; valid values are {}",
-            FILTER_STATUSES.join(" | ")
+            join_statuses(&FILTER_STATUSES)
         )),
         _ => None,
     }
@@ -458,12 +404,20 @@ pub fn status_warning(status: Option<&str>) -> Option<String> {
 /// refused rather than persisted.
 pub fn stored_status_error(status: Option<&str>) -> Option<String> {
     match status {
-        Some(s) if !STATUSES.contains(&s) => Some(format!(
+        Some(s) if !s.parse::<Status>().is_ok_and(|v| STATUSES.contains(&v)) => Some(format!(
             "unknown status '{s}' (not a storable status); valid values are {}",
-            STATUSES.join(" | ")
+            join_statuses(&STATUSES)
         )),
         _ => None,
     }
+}
+
+/// `a | b | c` over a status list, for the help / warning text.
+pub fn join_statuses(list: &[Status]) -> String {
+    list.iter()
+        .map(|v| v.as_str())
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 /// Generate an 8-char hex ID from title and unix timestamp using FNV-1a 32-bit
@@ -504,14 +458,14 @@ pub fn hashkey(title: &str, project: &str) -> String {
 mod tests {
     use super::*;
 
-    fn make_task(tags: Vec<&str>, status: &str) -> Task {
+    fn make_task(tags: Vec<&str>, status: Status) -> Task {
         Task {
             id: "00000000".to_string(),
             title: "test".to_string(),
             project: "/tmp/proj".to_string(),
             project_unresolved: false,
             tags: tags.into_iter().map(|s| s.to_string()).collect(),
-            status: status.to_string(),
+            status,
             notes: String::new(),
             created_at: 0,
             updated_at: 0,
@@ -522,9 +476,6 @@ mod tests {
             issue_closed_at: None,
             issue_body_synced_rev: None,
             rev: 0,
-            ruling_kind: None,
-            rationale: None,
-            untestable_reason: None,
             repro: None,
             closure: None,
             touched_files: Vec::new(),
@@ -553,14 +504,14 @@ mod tests {
         // The filter vocabulary is the stored one plus the derived `claimed`.
         assert_eq!(&FILTER_STATUSES[..4], &STATUSES[..]);
         assert_eq!(FILTER_STATUSES[4], "claimed");
-        assert!(!STATUSES.contains(&"claimed"));
+        assert!(!STATUSES.contains(&Status::Claimed));
         // `open` is hypothesis's vocabulary, never backlog's.
-        assert!(!STATUSES.contains(&"open"));
+        assert!("open".parse::<Status>().is_err());
         // `claimed` is DERIVED from the untracked claim ledger for display and
         // is never persisted as a status. Listing it here would make
         // `--status claimed` settable, which is a different thing from being
         // filterable — so its absence is load-bearing, not an oversight.
-        assert!(!STATUSES.contains(&"claimed"));
+        assert!(!STATUSES.contains(&Status::Claimed));
         // is_pending agrees with the vocabulary it filters on. `cancelled` is
         // terminal, so it must NOT be pending — a cancelled task is off the
         // queue, not waiting on it.
@@ -596,48 +547,48 @@ mod tests {
     #[test]
     fn priority_p0() {
         assert_eq!(
-            make_task(vec!["p0", "cycle:test-fix"], "pending").priority(),
+            make_task(vec!["p0", "cycle:test-fix"], STATUS_PENDING).priority(),
             0
         );
     }
 
     #[test]
     fn priority_p1() {
-        assert_eq!(make_task(vec!["p1"], "pending").priority(), 1);
+        assert_eq!(make_task(vec!["p1"], STATUS_PENDING).priority(), 1);
     }
 
     #[test]
     fn priority_p2() {
-        assert_eq!(make_task(vec!["p2"], "pending").priority(), 2);
+        assert_eq!(make_task(vec!["p2"], STATUS_PENDING).priority(), 2);
     }
 
     #[test]
     fn priority_none() {
-        assert_eq!(make_task(vec![], "pending").priority(), 3);
+        assert_eq!(make_task(vec![], STATUS_PENDING).priority(), 3);
     }
 
     #[test]
     fn cycle_tag_found() {
-        let t = make_task(vec!["p1", "cycle:test-fix"], "pending");
+        let t = make_task(vec!["p1", "cycle:test-fix"], STATUS_PENDING);
         assert_eq!(t.cycle_tag(), Some("cycle:test-fix"));
     }
 
     #[test]
     fn cycle_tag_none() {
-        let t = make_task(vec!["p1"], "pending");
+        let t = make_task(vec!["p1"], STATUS_PENDING);
         assert_eq!(t.cycle_tag(), None);
     }
 
     #[test]
     fn is_pending_true_for_pending_and_failed() {
-        assert!(make_task(vec![], "pending").is_pending());
-        assert!(make_task(vec![], "failed").is_pending());
+        assert!(make_task(vec![], STATUS_PENDING).is_pending());
+        assert!(make_task(vec![], STATUS_FAILED).is_pending());
     }
 
     #[test]
     fn is_pending_false_for_others() {
-        assert!(!make_task(vec![], "running").is_pending());
-        assert!(!make_task(vec![], "done").is_pending());
+        assert!("running".parse::<Status>().is_err());
+        assert!(!make_task(vec![], STATUS_DONE).is_pending());
     }
 
     #[test]
@@ -694,14 +645,14 @@ mod tests {
 
     #[test]
     fn is_deferred_none_is_never_deferred() {
-        let t = make_task(vec![], "pending");
+        let t = make_task(vec![], STATUS_PENDING);
         assert!(!t.is_deferred(0));
         assert!(!t.is_deferred(9_999_999_999));
     }
 
     #[test]
     fn is_deferred_future_timestamp_returns_true() {
-        let mut t = make_task(vec![], "pending");
+        let mut t = make_task(vec![], STATUS_PENDING);
         t.defer_until = Some(2_000);
         // now = 1_000 < 2_000  →  deferred
         assert!(t.is_deferred(1_000));
@@ -709,7 +660,7 @@ mod tests {
 
     #[test]
     fn is_deferred_past_timestamp_returns_false() {
-        let mut t = make_task(vec![], "pending");
+        let mut t = make_task(vec![], STATUS_PENDING);
         t.defer_until = Some(500);
         // now = 1_000 >= 500  →  not deferred
         assert!(!t.is_deferred(1_000));
@@ -717,7 +668,7 @@ mod tests {
 
     #[test]
     fn is_deferred_equal_timestamp_returns_false() {
-        let mut t = make_task(vec![], "pending");
+        let mut t = make_task(vec![], STATUS_PENDING);
         t.defer_until = Some(1_000);
         // defer_until == now  →  not deferred (> is strict)
         assert!(!t.is_deferred(1_000));
@@ -729,13 +680,13 @@ mod tests {
     fn is_ruled_wontfix_matches_case_insensitively_and_trimmed() {
         for tag in ["wontfix", "WontFix", "WONTFIX", " wontfix "] {
             assert!(
-                make_task(vec![tag], "pending").is_ruled_wontfix(),
+                make_task(vec![tag], STATUS_PENDING).is_ruled_wontfix(),
                 "{tag:?} must count as a wontfix ruling"
             );
         }
         for tags in [vec![], vec!["p1"], vec!["wontfixable"], vec!["not-wontfix"]] {
             assert!(
-                !make_task(tags.clone(), "pending").is_ruled_wontfix(),
+                !make_task(tags.clone(), STATUS_PENDING).is_ruled_wontfix(),
                 "{tags:?} must not count as a wontfix ruling"
             );
         }
@@ -744,7 +695,7 @@ mod tests {
     #[test]
     fn is_pending_unaffected_by_defer_until() {
         // is_pending must ignore defer_until; callers decide with is_deferred()
-        let mut t = make_task(vec![], "pending");
+        let mut t = make_task(vec![], STATUS_PENDING);
         t.defer_until = Some(9_999_999_999);
         assert!(t.is_pending());
     }
@@ -856,7 +807,7 @@ mod tests {
     /// Dies if the field is marked `#[serde(skip)]`.
     #[test]
     fn touched_files_roundtrips_through_serde() {
-        let mut t = make_task(vec![], "pending");
+        let mut t = make_task(vec![], STATUS_PENDING);
         t.touched_files = vec![
             "crates/backlog/src/task.rs".to_string(),
             "crates/backlog/src/dedup.rs".to_string(),
@@ -872,7 +823,7 @@ mod tests {
     /// Dies if the field is marked `#[serde(skip)]`.
     #[test]
     fn issue_closed_at_roundtrips_through_serde() {
-        let mut t = make_task(vec![], "done");
+        let mut t = make_task(vec![], STATUS_DONE);
         t.issue_number = Some(42);
         t.issue_closed_at = Some(1_800_000_000);
         let json = serde_json::to_string(&t).unwrap();

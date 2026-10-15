@@ -23,13 +23,8 @@ backlog next --claim [--project <path>]            # 次のアイテムを予約
 backlog done <id> --test "<cmd>" --red-rev <rev>   # 完了（committed test が REV で RED・HEAD で GREEN を実測）
 backlog done <id> --doc-only <commit>              # 完了（doc だけを触る祖先 commit が証拠）
 backlog done <id> --duplicate-of <id>              # 完了（重複。相手は pending / claimed / done）
-backlog ruling request <id> --kind judgment|untestable ...  # テスト不能・判断での close は人間の承認待ちへ
-backlog ruling approve <id>                        # 人間が TTY で id を打ち返して承認する（agent は不可）
-backlog add ... --repro-test "<cmd>"               # 再現した時だけ起票（pending）。テスト無し・再現せず・判定不能は起票せず exit 2、.backlog/unproven.toml に記録
-backlog unproven search "<text>" [--json]          # 起票されなかった（未実証の）記録を検索。調べ直す前に必ず引く（読めない記録は exit 3）
-backlog unproven list [--json]                     # 未実証記録の全件
-backlog confirm <id> --repro-test "<cmd>"          # unconfirmed を再現テストで pending へ昇格／repro の無い旧 pending に再現テストを記録
-backlog audit-open [--json]                        # open 行（pending/failed/unconfirmed）に記録済み再現テストがあるかを 1 行 1 回だけ確認（テストは実行しない）
+backlog add --repro-test "<cmd>" ...               # 再現した時だけ pending で起票し、それ以外は非 0 で拒否して store に何も書かない [test: crates/backlog/tests/repro_evidence.rs::reproduced_lands_pending_and_records_outcome] [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_without_repro_writes_nothing_anywhere] [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_with_non_reproducing_repro_writes_nothing_anywhere]
+backlog audit-open [--json]                        # open 行（pending/failed）に記録済み再現テストがあるかを、テストを実行せずに分類する [test: crates/backlog/tests/audit_open_once.rs::first_run_classifies_open_rows_and_excludes_terminal] [test: crates/backlog/tests/audit_open_once.rs::no_test_is_executed]
 backlog audit-closures [--json]                    # 既存 close の証拠クラスを集計（read-only）
 backlog fail <id> --reason "<概要>"                # アイテムを失敗マーク（2 日後に再キューされる）
 backlog cancel <id> --reason "<理由>"              # やらないと決めて捨てる（終端。`discard` closure として理由を記録。証明できない推測はこれで捨てる。done と違い完了を主張しない）
@@ -60,38 +55,20 @@ backlog lock release --project <path>
 > `add`/`list`/`next` は拒否する（`~/.backlog` へフォールバックしない）ので、キュー操作は
 > 必ず repo の中から実行する。
 
-## 起票の基準 — テストが無ければ起票しない（2026-10-04 ユーザー裁定）
-
-> 「testがないなら起票してはならない」
-> 「見つけたら テストを実装する、検証されたときには起票する、テストがかけない、証拠がない場合は起票はしてはいけない。ただし記録はのこし同一の内容を検討しないようにする」
+## 起票の基準 — テストが無ければ起票しない
 
 - 見つけたら**まず再現テスト（RED）を書いてコミット**し、`backlog add ... --repro-test "<cmd>"` で起票する。
-  `<cmd>` が HEAD で振る舞いとして失敗（＝再現）した時だけ task が `pending` で書かれる。
-- `--repro-test` 無し・exit 0（再現せず）・判定不能（未追跡スクリプト・allowlist 外・タイムアウト等）は
-  **task を書かず exit 2**。代わりに `.backlog/unproven.toml`（キューの外）に title/notes/試行結果/時刻を
-  1 件追記し、`unproven: u-…` を出す。テストが書けないなら Ask する（自分の判断で起票しない）。
-- **同じ内容を検討し直さない**: `add` は毎回、過去の未実証記録との一致を stderr に `unproven-match: <id>` で出す
-  （一致なしは明示的に `no prior unproven record`、記録が読めなければ `UNDETERMINED` ＝「一致なし」ではない）。
-  調査を始める前に `backlog unproven search "<語>"` を引く（日本語は部分一致で引ける）。
-- **旧 pending**（repro 記録の無い task）は一括降格しない。`next` / `next --claim` の JSON に
-  `repro_required: true` が付き、stderr にも `repro_required: <id>` が出る。着手前に RED テストを書いて
-  `backlog confirm <id> --repro-test "<cmd>"` で記録する。書けなければ `backlog cancel <id> --reason "unproven: …"`。
-- **unconfirmed**（旧仕様で作られた疑い）のうち作成から 7 日を超えたものは `list`（`expiry candidate`、JSON は
-  `expiry_candidate: true`）と SessionStart で失効候補として出る。`confirm` するか `cancel --reason "unproven: …"`
-  で閉じる（`fail` は unconfirmed を拒否する）。自動では閉じない。
-- **監査は open 行だけ、1 行 1 回だけ**（2026-10-04 裁定「完了のテストはみなくていい。pendingにテストがあるかだけ
-  確認すればいいし2度確認しなくていい」）: `backlog audit-open [--json]` は pending / failed / unconfirmed（claimed は
-  リース中の pending）の各行が **記録済みの** 再現テストを持つかを `has-test` / `no-test` / `undetermined` で返す。
-  テストは一切実行しない（add/confirm 時に記録された repro を読むだけ）。判定済み（has-test / no-test）は untracked な
-  `~/.backlog/audit-open/<project-slug>.json` に記録され、以後の実行では読み飛ばす（後で `confirm` で repro が付いても
-  再確認しない）。undetermined は記録せず次回また見る。記録が読めなければ失敗し、何も確認済みにしない。store は書かない。
-- **closed 行は記録として扱い、何もしない**（2026-10-04 裁定「過去はあくまで記録としてあつかう…ただしcloseにするときに
-  監査されていないといけない」）。監査は close する瞬間に、その close コマンド自身が行う: `done --test` は RED@red-rev /
-  GREEN@HEAD の実測（判断だけの done は拒否）、`done --doc-only` は doc だけの祖先 commit の検証、`done --duplicate-of` は
-  相手 id の存在と status、`cancel` は空でない `--reason`（何を試し何を観測したか／なぜテスト不能か。`"unproven: …"`）、
-  判断・テスト不能の close は人間の `ruling approve`（TTY）。`edit --status done|cancelled` は拒否。判定不能はすべて拒否
-  （非 0・store 不変）。記録された closure がその close の監査結果であり、後から読み直さない。`fail` は終端ではない
-  （2 日後に再キューされる）。
+  `<cmd>` が HEAD で振る舞いとして失敗（＝再現）した時だけ task が `pending` で書かれる [test: crates/backlog/tests/repro_evidence.rs::reproduced_lands_pending_and_records_outcome]。
+- それ以外は非 0 終了で拒否し、store に何も書かない: `--repro-test` 無し [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_without_repro_writes_nothing_anywhere]、再現せず [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_with_non_reproducing_repro_writes_nothing_anywhere]、判定不能 [test: crates/backlog/tests/repro_evidence.rs::undetermined_repro_files_no_row_and_writes_nothing]。
+- `next` / `next --claim` は reproduced な repro の無い行を渡さない [test: crates/backlog/tests/no_confirm_no_unproven.rs::next_skips_pending_row_without_repro] [test: crates/backlog/tests/no_confirm_no_unproven.rs::next_claim_skips_pending_row_without_repro]。
+- status が `unconfirmed` / `needs-ruling` の行を含む store は `list` / `next` が拒否し、その行を名指しする [test: crates/backlog/tests/no_unconfirmed.rs::list_fails_closed_on_an_unconfirmed_row_in_tasks_toml] [test: crates/backlog/tests/no_unconfirmed.rs::next_fails_closed_on_an_unconfirmed_row_in_tasks_toml] [test: crates/backlog/tests/no_needs_ruling.rs::list_fails_closed_on_a_needs_ruling_row_in_tasks_toml] [test: crates/backlog/tests/no_needs_ruling.rs::next_fails_closed_on_a_needs_ruling_row_in_tasks_toml] [test: crates/backlog/tests/status_type.rs::store_with_unconfirmed_row_fails_naming_id_and_status] [test: crates/backlog/tests/status_type.rs::store_with_needs_ruling_row_fails_naming_id_and_status]。
+- `backlog audit-open [--json]` は pending / failed の各行が **記録済みの** 再現テストを持つかを
+  `has-test` / `no-test` / `undetermined` で返す [test: crates/backlog/tests/audit_open_once.rs::first_run_classifies_open_rows_and_excludes_terminal]。
+- `audit-open` はテストを実行しない [test: crates/backlog/tests/audit_open_once.rs::no_test_is_executed]。
+- 判定済みは `~/.backlog/audit-open/<project-slug>.json` に記録され、以後読み飛ばす [test: crates/backlog/tests/audit_open_once.rs::first_run_ledger_records_has_and_no_test_but_not_undetermined] [test: crates/backlog/tests/audit_open_once.rs::row_checked_as_no_test_stays_skipped_after_repro_added]。
+- undetermined の行は次回また見る [test: crates/backlog/tests/audit_open_once.rs::second_run_skips_checked_and_reexamines_undetermined]。
+- `cancel` は空でない `--reason` が要る [test: crates/backlog/tests/cancel_evidence.rs::cancel_with_empty_or_whitespace_reason_is_refused]。
+- `edit --status done|cancelled` は拒否される [test: crates/backlog/tests/closure_evidence.rs::edit_status_done_is_refused] [test: crates/backlog/tests/closure_evidence.rs::edit_status_cancelled_is_refused]。
 
 ## 使い分け
 
@@ -100,8 +77,7 @@ backlog lock release --project <path>
 | キューを確認したい | `backlog list --status pending` |
 | 次のアイテムだけ確認したい | `backlog next`（覗くだけ。着手するなら `next --claim`） |
 | 手動で完了 / 失敗マークしたい | `backlog done <id> --test ... --red-rev ...`（証拠必須。素の `done` は拒否）/ `backlog fail <id>` |
-| やらないと決めて閉じたい | `backlog cancel <id> --reason "<理由>"`（`discard` として記録。テスト・ruling 不要） |
-| `unconfirmed` を棚卸ししたい（証拠あり→テストを書いて pending／証拠なし→cancel） | **`/backlog:triage`** |
+| やらないと決めて閉じたい | `backlog cancel <id> --reason "<理由>"`（テスト無しで `discard` として記録される [test: crates/backlog/tests/cancel_evidence.rs::cancel_pending_task_records_a_discard_closure_without_tty]） |
 | **キューを自動で全件消化したい** | **`/flow` を使う** |
 
 ## 失敗モード

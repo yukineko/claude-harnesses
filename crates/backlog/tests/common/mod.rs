@@ -13,11 +13,7 @@
 //!   backlog done ID --test CMD [--red-rev REV] [--reason fixed|already-fixed|obsolete]
 //!   backlog done ID --duplicate-of ID
 //!   backlog done ID --doc-only COMMIT
-//!   backlog ruling request ID --kind judgment --rationale T
-//!   backlog ruling request ID --kind untestable --untestable-reason T
-//!   backlog ruling approve ID | withdraw ID | list
-//!   backlog add ... [--repro-test CMD]   (only a REPRODUCED outcome lands pending; else `unconfirmed`)
-//!   backlog confirm ID --repro-test CMD
+//!   backlog add ... [--repro-test CMD]   (only a REPRODUCED outcome lands pending; else refused, nothing written)
 //!   backlog audit-closures [--json]
 //! A closed row is read back with `list --all --json`; its recorded closure is
 //! the JSON object under the key `closure`.
@@ -356,8 +352,8 @@ impl Fixture {
         std::fs::write(&p, cur).unwrap();
     }
 
-    /// Plant an OPEN row (e.g. a legacy `unconfirmed` one, which `add` can no
-    /// longer create since the 2026-10-04 intake contract) straight into the
+    /// Plant an OPEN row (e.g. a legacy row with a removed status, which `add`
+    /// cannot create) straight into the
     /// LIVE file `tasks.toml`. `project` must be the label a filed task carries
     /// in this fixture — read it off a reproduced row (see
     /// [`Fixture::add_with_label`]) rather than assuming `self.project()`.

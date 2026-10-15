@@ -172,6 +172,11 @@ notes = ""
 created_at = 1000
 updated_at = 1000
 weight = 0.0
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p fixture"
+observed_at = 1000
+detail = "fixture"
 "#
     );
     std::fs::write(store_dir.join("tasks.toml"), toml).unwrap();
@@ -196,6 +201,11 @@ notes = ""
 created_at = 1000
 updated_at = 1000
 weight = {weight:?}
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p fixture"
+observed_at = 1000
+detail = "fixture"
 "#
         ));
     }

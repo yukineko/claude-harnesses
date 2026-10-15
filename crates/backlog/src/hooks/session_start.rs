@@ -168,48 +168,15 @@ pub fn run(input: &HookInput) -> Option<String> {
         warnings.push_str("Reconcile with `backlog sync` (dry run), then `backlog sync --apply`. The two arms are selectable: `backlog sync --only close --apply` catches up the closes without publishing any new issue.\n\n");
         warnings.push_str("If these counts keep growing, the mirror itself is not running \u{2014} check that `gh` is installed and authenticated (`gh auth status`). Every failed `gh issue create`/`close` leaves the task exactly as it was, so nothing is lost, but nothing is pushed either.\n\n");
     }
-    // Rows OUTSIDE the workable queue that still need someone: `unconfirmed`
-    // (a suspicion with no reproduced repro test) and `needs-ruling` (waiting
-    // for a human at a TTY). They are not injected as tasks, but their COUNT
-    // is, so leaving the queue never reads as "nothing left".
-    let unconfirmed = tasks
-        .iter()
-        .filter(|t| t.status == crate::task::STATUS_UNCONFIRMED)
-        .count();
-    let needs_ruling = tasks
-        .iter()
-        .filter(|t| t.status == crate::task::STATUS_NEEDS_RULING)
-        .count();
-    let expiring = tasks.iter().filter(|t| t.is_expiry_candidate(now)).count();
-    let expiry_note = if expiring > 0 {
-        format!(
-            " {expiring} unconfirmed row(s) are expiry candidates (older than 7 days): confirm \
-             them or close with `backlog cancel ID --reason \"unproven: ...\"` \u{2014} nothing \
-             is auto-closed."
-        )
-    } else {
-        String::new()
-    };
-    let side_queues = if unconfirmed + needs_ruling > 0 {
-        format!(
-            "## Backlog \u{2014} outside the workable queue\n\n\
-             unconfirmed: {unconfirmed} (suspicions; promote with \
-             `backlog confirm ID --repro-test CMD`, or discard with \
-             `backlog cancel ID --reason R`), needs-ruling: {needs_ruling} (a human \
-             approves with `backlog ruling approve ID` at a TTY). `backlog list` shows \
-             them.{expiry_note}\n\n"
-        )
-    } else {
-        String::new()
-    };
-    let warnings = warnings + &side_queues;
 
     // pending または failed のタスクのみ対象 (is_pending() で判定)。
     // `wontfix` タグ (人間の「実装しない」裁定) は `next` と同じく実装候補として
     // 提示しない (backlog 016c2562)。黙って消さず、件数だけ別行で明示する。
+    // Like `next`, only rows with a reproduced repro are offered as work
+    // (user ruling 2026-10-15: a row without one is not a task).
     let (ruled, mut pending): (Vec<_>, Vec<_>) = tasks
         .into_iter()
-        .filter(|t| t.is_pending())
+        .filter(|t| t.is_pending() && t.has_reproduced_repro())
         .partition(|t| t.is_ruled_wontfix());
     let warnings = if ruled.is_empty() {
         warnings
@@ -271,8 +238,7 @@ pub fn run(input: &HookInput) -> Option<String> {
          - `backlog done {id} --test CMD --red-rev REV [--reason fixed|already-fixed|obsolete]` \
          (a committed test, RED at REV and GREEN at HEAD)\n\
          - `backlog done {id} --doc-only COMMIT` / `backlog done {id} --duplicate-of ID`\n\
-         - untestable or judgment: `backlog ruling request {id} --kind judgment|untestable ...` \
-         (a human approves)\n\
+         - no test reproduces it: `backlog cancel {id} --reason R` (there is no evidence-free close)\n\
          To mark failed: `backlog fail {id} [--reason \"...\"]`\n",
     );
 

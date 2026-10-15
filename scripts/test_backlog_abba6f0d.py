@@ -232,7 +232,6 @@ REMAINING = {
     "crates/fugu-router/src/budget.rs": "budgetguard",
     "crates/harness-status/src/path_shadow.rs": None,
     "crates/condukt/src/main.rs": "fugu-router",
-    "crates/overwatch/src/bridge.rs": "backlog",
     "crates/condukt/src/state.rs": "gauge",
     "crates/condukt/src/oracle.rs": "tdd",
 }

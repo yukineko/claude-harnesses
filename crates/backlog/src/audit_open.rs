@@ -2,10 +2,10 @@
 //! reproducing test? (user ruling 2026-10-04:
 //! 「完了のテストはみなくていい。pendingにテストがあるかだけ確認すればいいし2度確認しなくていい」).
 //!
-//! - Scope: stored status `pending` / `failed` / `unconfirmed` (a `claimed`
+//! - Scope: stored status `pending` / `failed` (a `claimed`
 //!   row is a leased pending row). Terminal rows are records only and are
 //!   never audited here; their evidence was audited at close time by
-//!   `done` / `cancel` / `ruling approve`.
+//!   `done` / `cancel`.
 //! - The result is read from the row's recorded `repro`; NO test is run.
 //! - Each row is checked ONCE: a determined result (`has-test` / `no-test`) is
 //!   written to an untracked ledger
@@ -16,9 +16,7 @@
 //!   and nothing counts as checked.
 
 use crate::store;
-use crate::task::{
-    Task, REPRO_NOT_REPRODUCED, REPRO_REPRODUCED, STATUS_FAILED, STATUS_PENDING, STATUS_UNCONFIRMED,
-};
+use crate::task::{Task, REPRO_NOT_REPRODUCED, REPRO_REPRODUCED, STATUS_FAILED, STATUS_PENDING};
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -58,10 +56,7 @@ fn load_ledger(path: &Path) -> Result<Ledger> {
 }
 
 fn is_open(t: &Task) -> bool {
-    matches!(
-        t.status.as_str(),
-        STATUS_PENDING | STATUS_FAILED | STATUS_UNCONFIRMED
-    )
+    matches!(t.status, STATUS_PENDING | STATUS_FAILED)
 }
 
 /// Classify from the RECORDED repro only.

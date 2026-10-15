@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Independent behavioural test for scripts/check-closure-evidence.py (pre-commit
 # closure-evidence gate). Spec: a terminal transition (done / cancelled) needs an
-# EXECUTED, COMMITTED test or a human TTY ruling; the gate compares HEAD vs INDEX
+# EXECUTED, COMMITTED test (or doc-only / duplicate); a cancel needs a discard;
+# a human ruling is never evidence (2026-10-15). The gate compares HEAD vs INDEX
 # for .backlog/tasks.toml + tasks.done.toml and RE-RUNS the recorded tests.
 #
 # Every case builds a throwaway git repo. Block cases are single-variable
@@ -17,8 +18,7 @@
 # ASSUMED closure-table shape (spec left the TOML keys to the implementer; this
 # test pins them):  [task.closure] reason, duplicate_of, doc_only_commit;
 # [task.closure.green] runner cmd exit passed rev observed_at output_digest excerpt;
-# [task.closure.red] rev exit kind; [task.closure.ruling] kind rationale
-# approved_by approved_at approved_via; discard closure: [task.closure]
+# [task.closure.red] rev exit kind; discard closure: [task.closure]
 # reason = "discard" + discard_reason (cancelled only; never justifies done).
 #
 # Exit 0 iff every expectation holds; otherwise non-zero naming each failed case.
@@ -211,9 +211,13 @@ case_; new_repo
   ( cd "$D" && git add .backlog/tasks.toml ); expect "P4 legacy terminal row unchanged, new pending row added" pass
 case_; new_repo
   printf '[[task]]\nid = "cccc3333"\ntitle = "judge"\nstatus = "needs-ruling"\n[task.closure.ruling]\nkind = "judgment"\nrationale = "value"\n' >>"$D/.backlog/tasks.toml"
-  ( cd "$D" && git add .backlog/tasks.toml ); expect "P5 needs-ruling pending row (non-terminal)" pass
+  ( cd "$D" && git add .backlog/tasks.toml ); expect "B31 needs-ruling status row is no longer a valid status (2026-10-15 ruling)" block
 case_; new_repo; echo x >"$D/other.txt"; ( cd "$D" && git add other.txt ); expect "P6 commit not touching .backlog" pass
-case_; STATUS=cancelled; stage_ruling; expect "P7 cancelled with full TTY ruling record" pass
+case_; STATUS=cancelled; stage_ruling; expect "B32 cancelled with full TTY ruling record (ruling is no longer an evidence class)" block
+case_; STATUS=done; stage_ruling; expect "B33 done with full TTY ruling record and no other evidence" block
+case_; new_repo
+  printf '[[task]]\nid = "dddd4444"\ntitle = "unverified"\nstatus = "unconfirmed"\n' >>"$D/.backlog/tasks.toml"
+  ( cd "$D" && git add .backlog/tasks.toml ); expect "B34 unconfirmed status row is no longer a valid status (2026-10-15 ruling)" block
 case_; new_repo
   { printf '[task.closure]\nreason = "duplicate"\nduplicate_of = "legacy01"\n' ; } | stage_done_row done
   ( cd "$D" && git add .backlog/tasks.toml .backlog/tasks.done.toml ); expect "P8 duplicate_of existing done row" pass
@@ -249,11 +253,8 @@ case_; DOC_FILE=skills/foo/SKILL.md; stage_doc_only; expect "B16 doc-only commit
 case_; DOC_FILE=agents/x.md; stage_doc_only; expect "B17 doc-only commit touches agents/x.md (prompt-bearing = code)" block
 
 # ---------------------------------------------------------------- BLOCK: rulings
-case_; RK_BY=DROP; stage_ruling; expect "B18 cancelled lacking approved_by" block
-case_; RK_AT=DROP; stage_ruling; expect "B19 cancelled lacking approved_at" block
-case_; RK_VIA=DROP; stage_ruling; expect "B20 cancelled lacking approved_via" block
-case_; RK_VIA=file; stage_ruling; expect "B21 cancelled with approved_via != tty" block
-case_; STATUS=done; RK_BY=DROP; stage_ruling; expect "B22 ruling-closed done row lacking approved_by" block
+# A ruling is not an evidence class at all (B32/B33 pin the full record);
+# B18-B22, which pinned the shape of an approval record, were removed with it.
 
 # ---------------------------------------------------------------- BLOCK: parse / tamper
 case_; new_repo

@@ -116,15 +116,12 @@ impl Fx {
         )
     }
 
-    /// Task files only: `unproven.toml` holds considered-but-unfiled findings
-    /// (intake contract v2), so a title there is not a stored task.
+    /// Task files only.
     fn stored(&self) -> String {
         let mut s = String::new();
         if let Ok(rd) = std::fs::read_dir(self.linked.join(".backlog")) {
             for e in rd.flatten() {
-                if e.path().extension().and_then(|x| x.to_str()) == Some("toml")
-                    && e.file_name() != "unproven.toml"
-                {
+                if e.path().extension().and_then(|x| x.to_str()) == Some("toml") {
                     s.push_str(&std::fs::read_to_string(e.path()).unwrap_or_default());
                 }
             }

@@ -43,7 +43,7 @@ fn temp_repo(tag: &str) -> PathBuf {
 
 /// Close-evidence (2026-10-01): `backlog add` lands `pending` (workable, what
 /// `next` / `next --claim` hand out) only when a committed repro test
-/// REPRODUCES the finding; without one it lands `unconfirmed`. This commits a
+/// REPRODUCES the finding; without one `add` is refused and writes nothing. This commits a
 /// repro script (exit 1 = reproduced) into `repo`, which must already be a
 /// real git repo, so the fixture's adds can pass `--repro-test` and exercise
 /// the same queue behaviour as before.

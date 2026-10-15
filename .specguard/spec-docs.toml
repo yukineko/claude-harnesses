@@ -340,11 +340,6 @@ doc = "docs/specs/overwatch.md"
 reason = "Same bullet (record-disposition / compact-findings): CLI glue for the disposition ledger."
 
 [[spec]]
-path = "crates/overwatch/src/bridge.rs"
-doc = "docs/specs/overwatch.md"
-reason = "review-queue --to-backlog bullet. KNOWN DRIFT: doc says only CONFIRMED findings are bridged; bridge.rs forwards the whole queue. Recorded so the audit owns it."
-
-[[spec]]
 path = "crates/overwatch/src/undetermined_metrics.rs"
 doc = "docs/specs/overwatch.md"
 reason = "Review-queue section bullet 'overwatch undetermined-metrics' (aggregation of harness_core::undetermined telemetry)."

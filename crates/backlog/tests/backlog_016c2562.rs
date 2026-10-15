@@ -47,7 +47,7 @@ fn fx(tag: &str) -> Fx {
     std::fs::create_dir_all(&repo).unwrap();
     common::linked_checkout(&repo);
     // `add` lands `pending` only with a REPRODUCED repro test from a committed
-    // script (otherwise `unconfirmed`, which `next` never hands out — that
+    // script (otherwise `add` is refused and writes nothing, which
     // would make every test here vacuous). Commit one.
     std::fs::create_dir_all(repo.join("tests")).unwrap();
     std::fs::write(

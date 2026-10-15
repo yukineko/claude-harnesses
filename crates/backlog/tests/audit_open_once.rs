@@ -6,9 +6,10 @@
 //! binary through the shared [`Fixture`] (isolated HOME + linked git worktree).
 //!
 //! Contract pinned here:
-//! - Scope: stored status `pending` / `failed` / `unconfirmed` only. `done`,
-//!   `cancelled` (terminal, in tasks.done.toml) and `needs-ruling` are NOT
-//!   audited.
+//! - Scope: stored status `pending` / `failed` only. `done` and `cancelled`
+//!   (terminal, in tasks.done.toml) are NOT audited. (`unconfirmed` and
+//!   `needs-ruling` were removed 2026-10-15; a store holding one is refused
+//!   by `list` and `next` — see tests/no_needs_ruling.rs, tests/no_unconfirmed.rs.)
 //! - Classification is READ from the recorded `repro` (no test is executed):
 //!   `reproduced` -> has-test; none / `not-reproduced` -> no-test; anything
 //!   else -> undetermined.
@@ -153,14 +154,14 @@ const PEND_YES: &str = "a0e00001";
 const PEND_NONE: &str = "a0e00002";
 const FAIL_NOTREP: &str = "a0e00003";
 const UNCONF_WEIRD: &str = "a0e00004";
-const NEEDS_RULING: &str = "a0e00005";
 const DONE_ROW: &str = "a0e00006";
 const CANCELLED_ROW: &str = "a0e00007";
 
 /// The standard scenario. Returns (filed id, project label).
 /// Open rows: the filed task (pending, reproduced) + PEND_YES (has-test),
-/// PEND_NONE + FAIL_NOTREP (no-test), UNCONF_WEIRD (undetermined).
-/// Excluded: NEEDS_RULING (live file), DONE_ROW / CANCELLED_ROW (done file).
+/// PEND_NONE + FAIL_NOTREP (no-test), UNCONF_WEIRD (a pending row whose repro
+/// outcome is unrecognised: undetermined).
+/// Excluded: DONE_ROW / CANCELLED_ROW (done file).
 fn scenario(f: &Fixture, with_undetermined: bool) -> (String, String) {
     let (filed, label) = f.add_with_label("filed reproduced finding");
     let live = f.tasks_path();
@@ -197,21 +198,12 @@ fn scenario(f: &Fixture, with_undetermined: bool) -> (String, String) {
             f,
             &live,
             UNCONF_WEIRD,
-            "unconfirmed weird",
-            "unconfirmed",
+            "pending weird",
+            "pending",
             &label,
             Some(("weird", REPRO_YES)),
         );
     }
-    plant(
-        f,
-        &live,
-        NEEDS_RULING,
-        "needs ruling row",
-        "needs-ruling",
-        &label,
-        None,
-    );
     plant(f, &done, DONE_ROW, "done row", "done", &label, None);
     plant(
         f,
@@ -223,14 +215,7 @@ fn scenario(f: &Fixture, with_undetermined: bool) -> (String, String) {
         None,
     );
     // Sanity: the planted store parses and every row is visible to the CLI.
-    for id in [
-        PEND_YES,
-        PEND_NONE,
-        FAIL_NOTREP,
-        NEEDS_RULING,
-        DONE_ROW,
-        CANCELLED_ROW,
-    ] {
+    for id in [PEND_YES, PEND_NONE, FAIL_NOTREP, DONE_ROW, CANCELLED_ROW] {
         let _ = f.row(id);
     }
     (filed, label)
@@ -239,7 +224,7 @@ fn scenario(f: &Fixture, with_undetermined: bool) -> (String, String) {
 // ---- tests ------------------------------------------------------------------
 
 #[test]
-fn first_run_classifies_open_rows_and_excludes_terminal_and_needs_ruling() {
+fn first_run_classifies_open_rows_and_excludes_terminal() {
     let f = Fixture::new("ao-first");
     let (filed, _) = scenario(&f, true);
     let v = audit_json(&f);
@@ -259,14 +244,14 @@ fn first_run_classifies_open_rows_and_excludes_terminal_and_needs_ruling() {
     assert_eq!(
         got,
         set(&[&filed, PEND_YES, PEND_NONE, FAIL_NOTREP, UNCONF_WEIRD]),
-        "first run checks exactly the open rows (no done/cancelled/needs-ruling): {v}"
+        "first run checks exactly the open rows (no done/cancelled): {v}"
     );
     let expect = [
         (filed.as_str(), "pending", "has-test"),
         (PEND_YES, "pending", "has-test"),
         (PEND_NONE, "pending", "no-test"),
         (FAIL_NOTREP, "failed", "no-test"),
-        (UNCONF_WEIRD, "unconfirmed", "undetermined"),
+        (UNCONF_WEIRD, "pending", "undetermined"),
     ];
     for (id, status, result) in expect {
         let (s, r, _) = &now[id];
@@ -317,7 +302,7 @@ fn first_run_ledger_records_has_and_no_test_but_not_undetermined() {
             "checked_at must be an integer for {id}: {l}"
         );
     }
-    for id in [UNCONF_WEIRD, NEEDS_RULING, DONE_ROW, CANCELLED_ROW] {
+    for id in [UNCONF_WEIRD, DONE_ROW, CANCELLED_ROW] {
         assert!(
             !checked.contains_key(id),
             "{id} must not be in the ledger: {l}"
@@ -585,7 +570,7 @@ fn no_test_is_executed() {
         &live,
         "a0e00013",
         "marker undetermined",
-        "unconfirmed",
+        "pending",
         &label,
         Some(("undetermined", cmd)),
     );

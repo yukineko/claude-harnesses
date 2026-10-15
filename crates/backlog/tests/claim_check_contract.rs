@@ -126,16 +126,13 @@ impl Fx {
     }
 
     /// Concatenated text of every TASK `.toml` under the linked checkout's
-    /// store. `unproven.toml` is excluded: it holds considered-but-unfiled
-    /// findings (intake contract v2), so a title there is not a stored task.
+    /// store..
     fn stored(&self) -> String {
         let mut s = String::new();
         let dir = self.linked.join(".backlog");
         if let Ok(rd) = std::fs::read_dir(&dir) {
             for e in rd.flatten() {
-                if e.path().extension().and_then(|x| x.to_str()) == Some("toml")
-                    && e.file_name() != "unproven.toml"
-                {
+                if e.path().extension().and_then(|x| x.to_str()) == Some("toml") {
                     s.push_str(&std::fs::read_to_string(e.path()).unwrap_or_default());
                 }
             }

@@ -10,7 +10,7 @@ store went UU, and the working file held ours verbatim.
 
 The fixture reproduces that in a throwaway repo: `.gitattributes`
 `merge=backlog`, the bare driver config, and a PATH without `backlog`. Ours
-adds a task; theirs CHANGES an existing task (status pending -> needs-ruling,
+adds a task; theirs CHANGES an existing task (status pending -> failed,
 new notes) -- a change that is not an id drop, so only content-level loss is
 involved. After the driver fails and the file is `git add`ed unchanged, the
 gate the pre-commit / pre-merge-commit hook runs on the store
@@ -71,7 +71,7 @@ def failed_driver_merge(tmp: Path):
     git(repo, "add", ".gitattributes", ".backlog/tasks.toml", ".backlog/tasks.done.toml")
     git(repo, "commit", "-q", "-m", "base")
     git(repo, "checkout", "-q", "-b", "theirs")
-    store.write_text(task("aaaa0001", status="needs-ruling", notes="theirs ruling request"))
+    store.write_text(task("aaaa0001", status="failed", notes="theirs failure note"))
     git(repo, "commit", "-q", "-am", "theirs changes A")
     git(repo, "checkout", "-q", "main")
     ours = task("aaaa0001") + "\n" + task("bbbb0002")

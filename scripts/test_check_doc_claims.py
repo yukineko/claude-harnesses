@@ -1991,18 +1991,6 @@ class RecordBlockExemption(GateTestCase):
     def _doc(self, body):
         return self.with_doc(body)
 
-    def test_drifted_citation_inside_record_block_does_not_block(self):
-        tree = self._doc(
-            "<!-- record: 2026-10-01 -->\n" + self.DRIFT + "<!-- /record -->\n"
-        )
-        self.assertClean(*self.run_gate(tree.root))
-
-    def test_vanished_quote_inside_record_block_does_not_block(self):
-        tree = self._doc(
-            "<!-- record: 2026-10-01 -->\n" + self.GONE + "<!-- /record -->\n"
-        )
-        self.assertClean(*self.run_gate(tree.root))
-
     def test_control_drifted_citation_outside_record_block_blocks(self):
         tree = self._doc(self.DRIFT)
         self.assertBlocks(*self.run_gate(tree.root), kind="line-drifted")

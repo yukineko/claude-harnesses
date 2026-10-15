@@ -310,10 +310,6 @@ SH_PROBE = re.compile(r"\bcommand\s+-v\b|\btype\s+-p\b|\bwhich\b")
 # fix (grandfathered so this detector can ship and block NEW instances — never a
 # silent excuse).
 ALLOWLIST: list[dict[str, str]] = [
-    # (Round #19 / 50ad2c1e resolved: the overwatch test_freshness.rs `.rs` walk
-    # now fails closed via `rust_source_files -> io::Result` + `IgnoredTestLookup
-    # ::ScanIncomplete` — the read_dir let-else and `entries.flatten()` swallows
-    # were removed, so the two grandfathered entries here are gone with them.)
     # BENIGN (reviewed): the round-#6 unborn-branch in test-changed-crates.sh.
     # This `git ls-files` runs ONLY after `! git rev-parse --verify HEAD` has
     # proven the repo is on an unborn branch — a fully-determinable "no baseline,

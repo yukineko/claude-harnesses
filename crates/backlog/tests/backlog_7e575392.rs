@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! backlog 7e575392: `backlog sync` has no reopen arm. A task in an ACTIVE
-//! status (pending / needs-ruling) whose linked issue is recorded CLOSED
+//! status (pending / failed) whose linked issue is recorded CLOSED
 //! (`issue_closed_at` set — e.g. the row was closed, synced, then came back to
 //! the active store through a merge or a hand edit) gets no action at all, so
 //! the GitHub mirror keeps reading "resolved" while the work is open.
@@ -30,7 +30,7 @@ fn tool_path(name: &str) -> PathBuf {
 }
 
 /// Dry-run `backlog sync` over a store holding: one unmirrored pending task
-/// (control: must plan a create), one pending and one needs-ruling task whose
+/// (control: must plan a create), one pending and one failed task whose
 /// issues are recorded closed.
 fn dry_run_sync(tag: &str) -> String {
     let t = std::env::temp_dir().join(format!("bl-7e575392-{tag}-{}", std::process::id()));
@@ -77,11 +77,11 @@ issue_url = "https://github.com/o/r/issues/420"
 issue_closed_at = 1791024507
 
 [[task]]
-id = "rule0427"
-title = "needs-ruling, issue recorded closed"
+id = "fail0427"
+title = "failed, issue recorded closed"
 project = "/repo"
 tags = []
-status = "needs-ruling"
+status = "failed"
 notes = ""
 created_at = 3
 updated_at = 3
@@ -124,7 +124,7 @@ fn control_dry_run_plans_the_unmirrored_create() {
 #[ignore = "backlog 7e575392: RED repro"]
 fn active_task_with_closed_issue_is_planned_for_reopen() {
     let out = dry_run_sync("reopen");
-    for (id, num) in [("pend0420", "#420"), ("rule0427", "#427")] {
+    for (id, num) in [("pend0420", "#420"), ("fail0427", "#427")] {
         assert!(
             out.contains(id) && out.contains(num),
             "active task {id} has its issue {num} recorded CLOSED, but sync plans nothing for it: {out}"

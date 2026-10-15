@@ -188,8 +188,8 @@ pub fn scan_open_escalations(cwd: &Path) -> Determination<Vec<ConduktEscalation>
 /// collapse is the whole reason [`scan_open_escalations`] exists.
 ///
 /// **`#[cfg(test)]` since t3: it has no production caller left.** It was the
-/// two-valued shim `review-queue` and `--to-backlog` used while they were being
-/// migrated; both now handle the third answer themselves (they warn and omit
+/// two-valued shim `review-queue` used while it was being
+/// migrated; it now handles the third answer itself (it warns and omits
 /// the source), so the shim survives only as the test-only witness that the two
 /// contracts are deliberately DIFFERENT — `..._collapses_where_the_scan_does_not`
 /// asserts the collapse beside the scan's tri-state answer. Compiling it out of
@@ -401,7 +401,7 @@ mod tests {
     fn read_open_escalations_best_effort_collapses_where_the_scan_does_not() {
         // Pins the shim's documented contract BESIDE the scan's, so the two
         // read as deliberately different rather than accidentally the same.
-        // The remaining fail-open at the review-queue / --to-backlog call sites
+        // The collapse this shim performs
         // is exactly this line, and it is visible here rather than implied.
         let (scan, shim, absent_shim) = with_sandboxed_home("shim", |cwd| {
             let absent_shim = read_open_escalations_best_effort(cwd);

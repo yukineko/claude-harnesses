@@ -91,9 +91,11 @@ allowed-tools: Task, AskUserQuestion, Bash(condukt:*), Bash(fugu-router:*), Bash
    並列 run では**その worktree を消した時点で観測の文脈ごと消える**。落とした 1 件は誰にも見えず、
    余分な 1 件はキューの 1 行で済む。orchestrator は Phase 5/6 で worker と verifier の返り値を読んだら、
    `別件:` 行と verifier の reason 中の対象外の指摘を**Phase 7 の worktree 削除より前に**すべて
-   `backlog add` する（**再現テスト（RED）を書いて `--repro-test` を付ける**。2026-10-04 裁定「testがないなら起票してはならない」により、テスト無し・再現しないものは task にならず exit 2 で `.backlog/unproven.toml` に記録されるだけ。テストが書けなければ Ask）。書く内容は: 逐語の観測・測定点 (rev と日付・どの task の worktree で見たか)・
-   判定できないときは (a) 実在の欠陥 / (b) 意図どおりの両方の読みと、それを見分ける方法。
-   起票は着手ではない。書いたら元の task に戻る。
+   **再現テスト（RED）を書いて** `backlog add --repro-test` で起票すること（テスト無し・再現しないものは拒否され store に何も書かれない [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_without_repro_writes_nothing_anywhere] [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_with_non_reproducing_repro_writes_nothing_anywhere]）。
+   テストが書けなければ Ask すること。
+   書く内容は逐語の観測・測定点 (rev と日付・どの task の worktree で見たか)・
+   判定できないときは (a) 実在の欠陥 / (b) 意図どおりの両方の読みと、それを見分ける方法とすること。
+   起票を着手として扱わないこと。書いたら元の task に戻ること。
 
 ## 手順
 
@@ -187,7 +189,7 @@ open run が 0 件かつ引数が「次は何をする」系のとき。**残タ
 
 ```bash
 # 1. バックログを確認
-BACKLOG=$(backlog list --status pending 2>/dev/null | head -10 || true)
+BACKLOG=$(backlog next)   # reproduced な repro を持つ最優先の 1 件を返し、store が読めなければ失敗する [test: crates/backlog/tests/no_confirm_no_unproven.rs::next_hands_out_the_reproduced_row_over_a_repro_less_one] [test: crates/backlog/tests/no_unconfirmed.rs::next_fails_closed_on_an_unconfirmed_row_in_tasks_toml]
 
 # 2. compass の gap を確認（charter があれば）
 COMPASS_GAP=$(compass gap 2>/dev/null | head -30 || true)
@@ -205,7 +207,7 @@ OPEN_HYPOS=$(hypothesis list --status open 2>/dev/null | head -10 || true)
 
 | 状態 | 対応 |
 |---|---|
-| バックログに pending 項目あり | 最優先の 1 件を課題文として Phase 0.5 へ進む |
+| `backlog next` が task を返した | その 1 件を課題文として Phase 0.5 へ進む（`next` は reproduced な repro の無い行を返さない [test: crates/backlog/tests/no_confirm_no_unproven.rs::next_hands_out_the_reproduced_row_over_a_repro_less_one]） |
 | compass gap が明確な next_action を示す | それを課題文として Phase 0.5 へ進む |
 | どちらもなく直近コミットから自明な続きがある | それを課題文として Phase 0.5 へ進む |
 | 判断できない・選択肢が複数ある | `AskUserQuestion` でユーザーに候補を提示して選ばせる |

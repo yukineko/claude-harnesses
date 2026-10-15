@@ -115,7 +115,7 @@ fn task(id: &str, title: &str, project: &str) -> String {
     format!(
         "[[task]]\nid = \"{id}\"\ntitle = \"{title}\"\nproject = \"{project}\"\n\
          tags = [\"p1\"]\nstatus = \"pending\"\nnotes = \"\"\n\
-         created_at = 1000\nupdated_at = 1000\nweight = 0.0\n\n"
+         created_at = 1000\nupdated_at = 1000\nweight = 0.0\n[task.repro]\noutcome = \"reproduced\"\ncmd = \"cargo test -p fixture\"\nobserved_at = 1000\ndetail = \"fixture\"\n\n"
     )
 }
 

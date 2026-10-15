@@ -143,10 +143,17 @@ staged but deleted from the working tree still is.
 
 Record blocks
 -------------
-Lines between `<!-- record: YYYY-MM-DD -->` and `<!-- /record -->` are a dated
-record: their citations are still checked for path and line range, but NOT for
-quote presence or line drift (the record cites the tree as it was). An
-unterminated block or an invalid date exempts nothing.
+Lines between `<!-- record: YYYY-MM-DD rev: <rev> -->` and `<!-- /record -->`
+are a record measured at commit <rev> (user ruling 2026-10-15). Their citations
+are checked against THAT commit, not the index: the path must exist at <rev>
+(`git ls-tree`), the line must be in range in `git cat-file blob <rev>:<path>`,
+and a quote must be present AT the cited line (no drift tolerance -- the record
+says where it was). An opener with no rev, or whose rev does not resolve to a
+commit, is NOT a record: it is reported as a blocking finding
+(`record-without-rev` / `record-rev-unresolved`) and the citations inside are
+judged against the index like any other. A git failure while reading <rev> is
+undetermined (exit 2). An unterminated block or an invalid date exempts
+nothing.
 
 Exemption
 ---------
@@ -203,35 +210,140 @@ EXEMPT_RE = re.compile(r"<!--\s*doc-claim-exempt\s*:\s*(?P<reason>\S.*?)\s*-->")
 
 LINE_DRIFT_TOLERANCE = 10
 
-# A dated record block (user ruling 2026-10-15). A record cites line numbers AS
-# THEY WERE when it was taken, so its citations are not held to the current
-# line or quote -- path and range checks still apply. Only a block that is
-# CLOSED and whose opener carries a real calendar date counts: an unterminated
-# or undated opener would otherwise exempt everything after it.
-RECORD_OPEN_RE = re.compile(r"^\s*<!--\s*record:\s*(\d{4})-(\d{2})-(\d{2})\s*-->\s*$")
+# A record block (user ruling 2026-10-15): a record cites the tree AS IT WAS at
+# the commit it names, so its citations are judged against that commit. Only a
+# block that is CLOSED and whose opener carries a real calendar date is a
+# candidate: an unterminated or undated opener would otherwise re-target
+# everything after it. A candidate without a `rev:` is not a record (see
+# record_opener_findings).
+RECORD_OPEN_RE = re.compile(
+    r"^\s*<!--\s*record:\s*(\d{4})-(\d{2})-(\d{2})(?:\s+rev:\s*(\S+?))?\s*-->\s*$"
+)
 RECORD_CLOSE_RE = re.compile(r"^\s*<!--\s*/record\s*-->\s*$")
 
+KIND_RECORD_WITHOUT_REV = "record-without-rev"
+KIND_RECORD_REV_UNRESOLVED = "record-rev-unresolved"
 
-def record_line_set(lines: list) -> set:
-    """0-based indices of lines inside a closed, validly dated record block."""
+
+def record_blocks(lines: list) -> list:
+    """Closed, validly dated record blocks: [(open_idx, close_idx, rev_or_None)]."""
     import datetime
 
-    inside: set = set()
-    open_idx = None
+    blocks = []
+    opened = None
     for idx, line in enumerate(lines):
         m = RECORD_OPEN_RE.match(line)
         if m:
             try:
                 datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-                open_idx = idx
+                opened = (idx, m.group(4))
             except ValueError:
-                open_idx = None
+                opened = None
             continue
         if RECORD_CLOSE_RE.match(line):
-            if open_idx is not None:
-                inside.update(range(open_idx + 1, idx))
-            open_idx = None
-    return inside
+            if opened is not None:
+                blocks.append((opened[0], idx, opened[1]))
+            opened = None
+    return blocks
+
+
+class RevReader:
+    """Reads files AT a commit, for record-block citations. Every git failure
+    that is not a definite "absent" answer raises Undetermined."""
+
+    def __init__(self, repo: str):
+        self.repo = repo
+        self._resolved: dict = {}
+        self._lines: dict = {}
+
+    def _git(self, *args: str):
+        try:
+            return subprocess.run(["git", "-C", self.repo, *args], capture_output=True)
+        except OSError as exc:
+            raise Undetermined(f"git could not be run: {exc}") from exc
+
+    def resolve(self, rev: str):
+        """The commit sha `rev` names, or None when it names no commit."""
+        if rev not in self._resolved:
+            proc = self._git("rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}")
+            out = proc.stdout.decode("utf-8", "replace").strip()
+            if proc.returncode == 0 and out:
+                self._resolved[rev] = out
+            elif proc.returncode == 1 and not out:
+                self._resolved[rev] = None
+            else:
+                raise Undetermined(
+                    f"git rev-parse {rev!r} exited {proc.returncode}: "
+                    f"{proc.stderr.decode('utf-8', 'replace').strip()}"
+                )
+        return self._resolved[rev]
+
+    def lines(self, sha: str, rel: str):
+        """The file's lines at `sha`, or None when the path is absent there."""
+        key = (sha, rel)
+        if key not in self._lines:
+            ls = self._git("ls-tree", "-z", sha, "--", rel)
+            if ls.returncode != 0:
+                raise Undetermined(
+                    f"git ls-tree {sha} -- {rel} exited {ls.returncode}: "
+                    f"{ls.stderr.decode('utf-8', 'replace').strip()}"
+                )
+            entry = ls.stdout.split(b"\0")[0].decode("utf-8", "surrogateescape")
+            if not entry:
+                self._lines[key] = None
+            elif not entry.split(" ", 2)[1:2] == ["blob"]:
+                self._lines[key] = None
+            else:
+                blob = self._git("cat-file", "blob", f"{sha}:{rel}")
+                if blob.returncode != 0:
+                    raise Undetermined(
+                        f"git cat-file blob {sha}:{rel} exited {blob.returncode}: "
+                        f"{blob.stderr.decode('utf-8', 'replace').strip()}"
+                    )
+                self._lines[key] = source_lines(
+                    blob.stdout.decode("utf-8", "surrogateescape")
+                )
+        return self._lines[key]
+
+
+def record_opener_findings(doc_rel: str, lines: list, reader: RevReader):
+    """Blocking findings for record openers that are not records, and the map
+    0-based line index -> resolved sha for lines inside a real record."""
+    findings = []
+    inside: dict = {}
+    for open_idx, close_idx, rev in record_blocks(lines):
+        stub = {
+            "doc": doc_rel,
+            "doc_line": open_idx + 1,
+            "path": "(record block)",
+            "cited_line": 0,
+            "exempt_reason": None,
+        }
+        if rev is None:
+            findings.append(
+                finding(
+                    stub,
+                    KIND_RECORD_WITHOUT_REV,
+                    "a record block must name the commit it was measured at "
+                    "(`<!-- record: YYYY-MM-DD rev: <sha> -->`); without a rev "
+                    "it is not a record",
+                )
+            )
+            continue
+        sha = reader.resolve(rev)
+        if sha is None:
+            findings.append(
+                finding(
+                    stub,
+                    KIND_RECORD_REV_UNRESOLVED,
+                    f"record rev {rev!r} does not resolve to a commit; "
+                    "it is not a record",
+                )
+            )
+            continue
+        for idx in range(open_idx + 1, close_idx):
+            inside[idx] = (rev, sha)
+    return findings, inside
 
 KIND_PATH_ESCAPES_REPO = "path-escapes-repo"
 KIND_PATH_NOT_FOUND = "path-not-found"
@@ -603,11 +715,14 @@ def make_source(repo: str, name: str):
     raise Undetermined(f"unknown --source {name!r}; expected one of {SOURCES}")
 
 
-def extract_claims(doc_rel: str, text: str) -> list:
-    """(doc, doc_line, path, cited_line, quote_or_None, exempt_reason_or_None)."""
+def extract_claims(doc_rel: str, text: str, in_record: dict | None = None) -> list:
+    """(doc, doc_line, path, cited_line, quote_or_None, exempt_reason_or_None).
+
+    `in_record` maps a 0-based line index inside a real record block to that
+    record's (rev, sha); see record_opener_findings."""
     claims = []
     lines = text.split("\n")
-    in_record = record_line_set(lines)
+    in_record = in_record or {}
     for idx, line in enumerate(lines):
         exempt = None
         if idx > 0:
@@ -629,12 +744,48 @@ def extract_claims(doc_rel: str, text: str) -> list:
                     "quote": quote,
                     "exempt_reason": exempt,
                     "in_record": idx in in_record,
+                    "record_rev": in_record.get(idx),
                 }
             )
     return claims
 
 
-def check_claim(source, claim: dict) -> dict | None:
+def check_record_claim(source, reader: RevReader, claim: dict) -> dict | None:
+    """A record citation, judged against the record's commit."""
+    rev, sha = claim["record_rev"]
+    if source.escapes_repo(claim["path"]):
+        return finding(
+            claim,
+            KIND_PATH_ESCAPES_REPO,
+            "cited path resolves outside the repository root",
+        )
+    src_lines = reader.lines(sha, claim["path"])
+    if src_lines is None:
+        return finding(claim, KIND_PATH_NOT_FOUND, f"cited path does not exist at record rev {rev}")
+    if not (1 <= claim["cited_line"] <= len(src_lines)):
+        return finding(
+            claim,
+            KIND_LINE_OUT_OF_RANGE,
+            f"file has {len(src_lines)} lines at record rev {rev}, "
+            f"claim cites {claim['cited_line']}",
+        )
+    quote = claim["quote"]
+    if quote is None:
+        return None
+    if norm_ws(quote) in norm_ws(src_lines[claim["cited_line"] - 1]):
+        return None
+    return finding(
+        claim,
+        KIND_QUOTE_NOT_FOUND,
+        f"quote is not at the cited line at record rev {rev}",
+    )
+
+
+def check_claim(source, claim: dict, reader: RevReader | None = None) -> dict | None:
+    if claim.get("record_rev") is not None:
+        if reader is None:
+            raise Undetermined("a record citation was judged without a rev reader")
+        return check_record_claim(source, reader, claim)
     if source.escapes_repo(claim["path"]):
         return finding(
             claim,
@@ -660,8 +811,7 @@ def check_claim(source, claim: dict) -> dict | None:
         )
 
     quote = claim["quote"]
-    if quote is None or claim.get("in_record"):
-        # a record's quote/line are as of when it was taken; not re-judged
+    if quote is None:
         return None
 
     needle = norm_ws(quote)
@@ -753,9 +903,14 @@ def scan(repo: str, explicit_docs: list, source) -> list:
     rels = doc_set(repo, explicit_docs, source)
     source.prefetch(rels)
 
+    reader = RevReader(repo)
     claims = []
+    record_problems = []
     for rel in rels:
-        claims.extend(extract_claims(rel, source.read(rel, "document")))
+        text = source.read(rel, "document")
+        problems, inside = record_opener_findings(rel, text.split("\n"), reader)
+        record_problems.extend(problems)
+        claims.extend(extract_claims(rel, text, inside))
 
     # Warm the cited-file side too, for the paths that are actually going to be
     # read. A claim that escapes the repo, or names a path the judged tree does
@@ -765,6 +920,8 @@ def scan(repo: str, explicit_docs: list, source) -> list:
     # it there, with that claim's own context attached.
     cited = []
     for claim in claims:
+        if claim.get("record_rev") is not None:
+            continue
         try:
             if not source.escapes_repo(claim["path"]) and (
                 source.classify(claim["path"]) == PRESENT_FILE
@@ -774,9 +931,9 @@ def scan(repo: str, explicit_docs: list, source) -> list:
             continue
     source.prefetch(cited)
 
-    results = []
+    results = list(record_problems)
     for claim in claims:
-        f = check_claim(source, claim)
+        f = check_claim(source, claim, reader)
         if f is not None:
             results.append(f)
     return results

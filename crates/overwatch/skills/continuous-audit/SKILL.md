@@ -1,6 +1,6 @@
 ---
 name: continuous-audit
-description: gate crates に対する敵対的レビュー1ラウンド(finder→refute ベース verifier→CONFIRMED/REFUTED/UNVERIFIED の三値判定)を回し、CONFIRMED を overwatch review-queue と backlog へ、UNVERIFIED を再検証待ちとして queue にだけ記録する Continuous-Audit driver。round metrics を audit ledger に残し収束(round 越しの new-findings 減少)を追跡する。opt-in・fail-soft。
+description: gate crates に対する敵対的レビュー1ラウンド(finder→refute ベース verifier→CONFIRMED/REFUTED/UNVERIFIED の三値判定)を回し、CONFIRMED を overwatch review-queue へ、UNVERIFIED を再検証待ちとして [UNVERIFIED] マーク付きで queue へ記録する Continuous-Audit driver [test: crates/overwatch/tests/verdict_tri_state.rs::unverified_findings_stay_pending_and_visible]。round metrics を audit ledger に残し収束(round 越しの new-findings 減少)を追跡する [test: crates/overwatch/tests/audit_round.rs::audit_metrics_reports_decreasing_trend_and_closure_rate]。
 argument-hint: [round-id] [--target crate1,crate2] [--dry-run]
 allowed-tools: Task, Bash(scripts/continuous-audit.sh:*), Bash(overwatch:*), Bash(git:*), Read, Grep, Glob
 ---
@@ -8,13 +8,13 @@ allowed-tools: Task, Bash(scripts/continuous-audit.sh:*), Bash(overwatch:*), Bas
 # /continuous-audit — Continuous-Audit ループ 1 ラウンド駆動
 
 gate crates への **敵対的レビュー 1 ラウンド**を回し、確認された指摘 (CONFIRMED findings) を
-`overwatch review-queue` と backlog に、**判定不能な指摘 (UNVERIFIED)** を review-queue に
-「再検証待ち」として自動供給する。決定論の記録は `scripts/continuous-audit.sh`(+ overwatch
-バイナリ) が担い、この skill は **finder→verifier の意味判断**を担う。
+`overwatch review-queue` に、**判定不能な指摘 (UNVERIFIED)** を review-queue に
+「再検証待ち」として自動供給する [test: crates/overwatch/tests/verdict_tri_state.rs::unverified_findings_stay_pending_and_visible]。決定論の記録は `scripts/continuous-audit.sh`(+ overwatch
+バイナリ) が担い、この skill は **finder→verifier の意味判断**を担う [test: crates/overwatch/tests/continuous_audit_script.rs::continuous_audit_script_behaves]。
 
 ```
 finder (提案)  →  refute-verifier (反証で篩う)  →  verdict 三値
-                                                    ├─ CONFIRMED  → --finding             → queue + backlog
+                                                    ├─ CONFIRMED  → --finding             → queue
                                                     ├─ UNVERIFIED → --unverified-finding  → queue のみ (pending)
                                                     └─ REFUTED    → --unverified-finding  → queue のみ (pending)
                                                                      (REFUTED として成立するのは probe + 人間の sign-off が揃った時だけ。下記)
@@ -83,7 +83,7 @@ finder の各指摘を、**別の (finder とは独立した) `Task` verifier su
 
 **verdict は三値 (CONFIRMED / REFUTED / UNVERIFIED)**。verifier には次を指示する:
 
-- **CONFIRMED**: verifier がコードで再現/立証できた指摘。→ review-queue に載せ、backlog へ流す。
+- **CONFIRMED** (verifier がコードで再現/立証できた指摘) は review-queue に載せる [test: crates/overwatch/tests/verdict_tri_state.rs::unverified_findings_stay_pending_and_visible]。
   - 立証には該当箇所の **file:line と逐語引用**、および「その状態が下流でどう permissive に作用するか」の
     経路を 1 本以上示すこと。
 - **REFUTED**: 指摘が実在しないことを**積極的に立証できた**ときだけ。**立証責任は反証側にもある**:
@@ -104,10 +104,8 @@ finder の各指摘を、**別の (finder とは独立した) `Task` verifier su
     REFUTED として閉じられるのは、人間が probe を回して `overwatch record-finding --verdict refuted --probe <file>
     --signed-off-by <name>` を実行した時だけ。この代償 (人間が働くまで queue は単調増加する) は受け入れ済み。
 - **UNVERIFIED**: 上記いずれも満たさない = **判定不能**。立証も反証もできなかった。
-  - **捨てない**。項目は pending のまま残す (done にも失敗にもしない)。
-  - CONFIRMED と同じ扱い (backlog への自動起票 = 対応済みの作業として流す) にもしない。
-  - 記録先は Step 3 の `--unverified-finding`。review-queue には `[UNVERIFIED]` マークつきで並び、
-    `--to-backlog` では**流れない** (再検証待ちとして可視化されたまま残る)。
+  - **捨てない**: 項目は pending のまま (done にも失敗にもしない) Step 3 の `--unverified-finding` で記録し、
+    review-queue には `[UNVERIFIED]` マークつきで並び、再検証待ちとして可視化されたまま残る [test: crates/overwatch/tests/verdict_tri_state.rs::unverified_findings_stay_pending_and_visible]。
   - verifier には「何が確認できて、何が確認できなかったか (辿れなかった経路の名前)」を rationale に書かせる。
 - **PLAUSIBLE** という語は使わない (UNVERIFIED に統合された)。
 - **finder と verifier は必ず別 subagent を使用し、かつ異なるモデルを指定すること (MUST)**。
@@ -168,10 +166,8 @@ scripts/continuous-audit.sh --round <round-id> --dry-run
   スクリプトは `--verdict refuted` を書かない — witness 無しの REFUTED は overwatch 側でも UNVERIFIED に倒される)。
   `--unverified` 件数にも数える。
 - **UNVERIFIED の下流での扱い** (ここが二値との差):
-  - `overwatch review-queue` に `[UNVERIFIED]` マークつきで並ぶ = **捨てられない**。
-  - `overwatch review-queue --to-backlog` では**流れない** = CONFIRMED のように「対応中の作業」に
-    昇格しない。pending のまま再検証を待つ。
-  - `--confirmed` 件数には含めない (closure-rate の分母は CONFIRMED のみ)。
+  - `overwatch review-queue` に `[UNVERIFIED]` マークつきで並ぶ = **捨てられない** [test: crates/overwatch/tests/verdict_tri_state.rs::unverified_findings_stay_pending_and_visible]。
+  - `--confirmed` 件数には含めない (closure-rate の分母は CONFIRMED のみ) [test: crates/overwatch/src/audit_round.rs::round_records_unverified_count_separately_from_confirmed]。
 - `--finder-model` / `--verifier-model` は Step 2 の model diversity MUST の**機械強制**入力。両方渡すと
   overwatch が `same_model` で決定論判定し、同一なら review-queue に high の警告 finding を冪等記録する
   (fail-soft・round は記録継続)。両省略時は従来どおりチェックしない（後方互換）が、**MUST を実効化するため
@@ -263,15 +259,14 @@ overwatch audit-round close --round <round-id> --tests <N>
 ### Step 5 — 結果確認と収束
 
 ```sh
-overwatch review-queue            # 記録した finding が [ai-finding] タグで最新順に並ぶ (finding-id で dedup 済み)
-                                  # UNVERIFIED は summary 先頭に [UNVERIFIED] が付き、--to-backlog では流れない
-overwatch audit-metrics           # round 越しの new-findings 推移・converging フラグ
+overwatch review-queue            # 記録した finding が [ai-finding] タグで最新順に並ぶ (finding-id で dedup 済み) [test: crates/overwatch/tests/review_queue.rs::review_queue_merges_all_three_sources_time_ordered] [test: crates/overwatch/tests/review_queue.rs::review_queue_collapses_a_refound_finding_to_one_row]
+overwatch audit-metrics           # round 越しの new-findings 推移・converging フラグ [test: crates/overwatch/tests/audit_round.rs::audit_metrics_reports_decreasing_trend_and_closure_rate]
 ```
 
 - CONFIRMED は `overwatch review-queue` に `[ai-finding]` 行として現れる (systemic / rollback と統合表示)。
-- UNVERIFIED も同じく `[ai-finding]` 行として現れるが `[UNVERIFIED]` マークが付き、backlog には流れない。
+- UNVERIFIED も同じく `[ai-finding]` 行として現れるが `[UNVERIFIED]` マークが付く [test: crates/overwatch/tests/verdict_tri_state.rs::unverified_findings_stay_pending_and_visible]。
   **UNVERIFIED が積み上がるのは異常ではなく情報**: 次ラウンドで優先的に再検証する対象を指している
-  (`audit-metrics` の `cumulative unverified` で追える)。
+  (`audit-metrics` の `cumulative unverified` で追える [test: crates/overwatch/src/audit_round.rs::round_records_unverified_count_separately_from_confirmed])。
 - **収束の読み方**: ラウンドを重ねて `new-findings` が下降トレンドなら健全 (掘り尽くしに近づく)。
   下がらない/増える場合はゲートに構造的欠陥が残っている合図。
 - この ONE は「1 ラウンドの実接続と自動供給」まで。収束の longitudinal 実証はラウンドを蓄積してからの

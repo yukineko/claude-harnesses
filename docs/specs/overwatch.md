@@ -221,16 +221,16 @@ append-only なレジストリである。同じ種類の失敗は、発生し�
   二値ではない。`unverified` は「立証も反証もできなかった＝判定不能」であり、**制限側の既定**である:
   パース不能な verdict 値は `unverified` に倒れ (silently confirmed にならず、行も捨てられない)、
   verdict キーの無い旧行だけが `confirmed` として読まれる (旧 ingestion 契約が CONFIRMED subset 専用
-  だったため)。**新規記録では `--verdict` が必須**であり、省略は入力エラー (非0終了) になる —
+  だったため) [test: crates/overwatch/tests/verdict_tri_state.rs::unverified_findings_stay_pending_and_visible] [test: crates/overwatch/src/review_finding.rs::legacy_row_without_verdict_field_reads_as_confirmed]。**新規記録では `--verdict` が必須**であり、省略は入力エラー (非0終了) になる [test: crates/overwatch/tests/verdict_required.rs::omitting_verdict_is_an_input_error] —
   既定を置くと `unverified` が既定では決して発生せず、三値が実質二値になるため
-  (ユーザー裁定 2026-07-21、backlog eda212a0)。`confirmed` のみが `--to-backlog` で backlog へ橋渡しされ、`unverified` は
-  review-queue に `[UNVERIFIED]` マークつきで残り続ける (pending 扱い: 対応済みにも棄却にもしない)。
+  (ユーザー裁定 2026-07-21、backlog eda212a0)。`unverified` は
+  review-queue に `[UNVERIFIED]` マークつきで残り続ける (pending 扱い: 対応済みにも棄却にもしない) [test: crates/overwatch/tests/verdict_tri_state.rs::unverified_findings_stay_pending_and_visible]。
   **`refuted` は witness 無しでは保存されない** (ユーザー裁定 2026-10-01、backlog 80a46e9f): 記録時に
   `review_finding::adjudicate` が、機械 probe の結果 (`--probe <file>`、JSON `{"result":"not_reproduced"|"reproduced"}`)
-  と人間の sign-off (`--signed-off-by <name>`) で裁定する。`not_reproduced` の probe と sign-off の**両方**が
+  と人間の sign-off (`--signed-off-by <name>`) で裁定する [test: crates/overwatch/tests/refuted_witness.rs::refuted_with_no_witness_flags_at_all_is_stored_unverified] [test: crates/overwatch/tests/refuted_witness.rs::refuted_with_not_reproduced_probe_and_signoff_stands_control]。`not_reproduced` の probe と sign-off の**両方**が
   揃った時だけ `refuted`、`reproduced` の probe は `confirmed`、それ以外 (probe 無し・読めない/パース不能・
-  sign-off 無し) は `unverified` として保存し、欠けたものを stderr に出す。`confirmed` / `unverified` は
-  witness に関係なくそのまま保存される。
+  sign-off 無し) は `unverified` として保存する [test: crates/overwatch/tests/refuted_witness.rs::refuted_with_not_reproduced_probe_and_signoff_stands_control] [test: crates/overwatch/tests/refuted_witness.rs::reproduced_probe_against_a_refuted_claim_lands_confirmed] [test: crates/overwatch/tests/refuted_witness.rs::refuted_without_a_probe_is_stored_unverified] [test: crates/overwatch/tests/refuted_witness.rs::unreadable_or_unparseable_probe_is_never_refuted] [test: crates/overwatch/tests/refuted_witness.rs::refuted_with_a_probe_but_no_signoff_is_stored_unverified]。`confirmed` / `unverified` は
+  witness に関係なくそのまま保存される [test: crates/overwatch/tests/refuted_witness.rs::confirmed_and_unverified_are_unaffected_by_the_witness_rule_control]。
 - **audit-round ledger は per-round メトリクスの append-only 記録** — `audit_round.rs` はラウンドごとに
   `{new_findings, confirmed, unverified, regression_tests_added}` を追記するだけで、finder/verifier は模さない。
   `unverified` は `confirmed` に畳み込まれない (`new_findings - confirmed` を「残りは refuted」と
@@ -239,10 +239,8 @@ append-only なレジストリである。同じ種類の失敗は、発生し�
   confirmed）が得られる。emission は fail-soft。
 
 **振る舞い**:
-- **`overwatch review-queue [--json] [--since <ts>] [--limit <n>] [--to-backlog]`** — 統合リストを人間可読
-  （`[systemic]`/`[rollback]`/`[ai-finding]`/`[escalation]` タグ付き・新しい順）または `kind` 判別子付き
-  JSON 配列で表示する。`--since`/`--limit` で窓を絞る。`--to-backlog` は CONFIRMED review findings を
-  backlog へ橋渡しする。
+- **`overwatch review-queue [--json] [--since <ts>] [--limit <n>]`** — 統合リストを新しい順に表示し、
+  `--json` では `kind` 判別子付きの JSON 配列になる [test: crates/overwatch/tests/review_queue.rs::review_queue_merges_all_three_sources_time_ordered]。`--limit` で行数を絞る [test: crates/overwatch/tests/undetermined_e2e.rs::limit_zero_on_a_readable_store_sheds_every_row_and_exits_zero]。
 - **`overwatch record-finding --source <src> --verdict confirmed|refuted|unverified [--probe <file>] [--signed-off-by <name>] …`** — AI finding を1件
   `review_findings.jsonl` へ追記する（review-queue の ai-finding アームの唯一の書き込み経路）。
   `/continuous-audit` の CONFIRMED subset と UNVERIFIED subset がここへ流れる。`--verdict` は**必須**で、

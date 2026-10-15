@@ -4,9 +4,8 @@
 //! `AuditVerdict::Confirmed` unconditionally. Its producers (condukt gate_exec
 //! escalations, specguard structural drift / shard flags, propguard outages)
 //! record raw gate observations that no adversarial verifier ever checked, yet
-//! they land as CONFIRMED and are therefore forwarded by
-//! `review-queue --to-backlog` as actionable work. eda212a0 made the CLI state
-//! its verdict; this path still cannot express UNVERIFIED at all.
+//! they land as CONFIRMED, i.e. as established work. eda212a0 made the CLI
+//! state its verdict; this path still cannot express UNVERIFIED at all.
 //!
 //! One test per binary: it swaps HOME for a temp dir, so it must not race
 //! another test in the same process.

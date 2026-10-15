@@ -167,7 +167,7 @@ impl LeaseLock {
     /// Fail-soft: never panics. Uses the same [`LeaseLock::DEADLINE`] as
     /// [`LeaseLock::acquire`]. Live callers: `lease::{begin, run, end, heartbeat,
     /// reap}`, `control::reassign`, and the `store::` registry / check-then-append
-    /// mutators (`append_bridged_*`, `append_disposition`, `append_merge_*`,
+    /// mutators (`append_disposition`, `append_merge_*`,
     /// `record_changeset_and_detect`, `mark_*_merged`, `prune_stale_changesets`,
     /// the review-findings compaction), plus `audit_round_cli::close_at`.
     pub fn acquire_or_skip(cwd: &Path) -> Option<Self> {

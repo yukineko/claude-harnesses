@@ -189,13 +189,15 @@ fn failure_reason_class(outcome: &GateOutcome) -> &'static str {
 /// ```text
 /// append_violation -> violation ledger -> scan_violations
 ///   -> detect_recurrence -> filter(is_systemic)
-///     -> review_queue::build_queue -> bridge -> backlog add (p0)
+///     -> review_queue::build_queue
 /// ```
 ///
 /// A dropped write lowers the recurrence count, so a genuinely systemic failure
 /// can stay under the threshold and never reach the queue. The READ side is
-/// already careful about this — `bridge.rs` refuses to report an unreadable
-/// ledger as "zero systemic violations" — but no amount of care on the read side
+/// already careful about this — `review-queue` refuses to report an unreadable
+/// ledger as "zero systemic violations" (overwatch
+/// `tests/undetermined_e2e.rs::undecodable_violation_ledger_is_not_rendered_as_no_systemic_violations`)
+/// — but no amount of care on the read side
 /// can recover an event that was never written. The reader sees a perfectly
 /// readable ledger and correctly reports zero. That is the mirror gap (§6): the
 /// fix landed on the reader and not on the writer.

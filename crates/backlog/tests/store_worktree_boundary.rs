@@ -113,7 +113,7 @@ fn fixture(seed: Option<&dyn Fn(&Path) -> String>) -> Fixture {
 
 fn seeded_task(project: &Path) -> String {
     format!(
-        "[[task]]\nid = \"seed0001\"\ntitle = \"seeded\"\nproject = \"{}\"\ntags = []\nstatus = \"pending\"\nnotes = \"\"\ncreated_at = 1000\nupdated_at = 1000\n\n",
+        "[[task]]\nid = \"seed0001\"\ntitle = \"seeded\"\nproject = \"{}\"\ntags = []\nstatus = \"pending\"\nnotes = \"\"\ncreated_at = 1000\nupdated_at = 1000\n[task.repro]\noutcome = \"reproduced\"\ncmd = \"cargo test -p fixture\"\nobserved_at = 1000\ndetail = \"fixture\"\n\n",
         project.display()
     )
 }
@@ -122,7 +122,7 @@ fn seeded_task(project: &Path) -> String {
 /// close-evidence form (a bare `done` is refused for missing evidence).
 fn seeded_two(project: &Path) -> String {
     format!(
-        "{}[[task]]\nid = \"seed0002\"\ntitle = \"other\"\nproject = \"{}\"\ntags = []\nstatus = \"pending\"\nnotes = \"\"\ncreated_at = 1000\nupdated_at = 1000\n\n",
+        "{}[[task]]\nid = \"seed0002\"\ntitle = \"other\"\nproject = \"{}\"\ntags = []\nstatus = \"pending\"\nnotes = \"\"\ncreated_at = 1000\nupdated_at = 1000\n[task.repro]\noutcome = \"reproduced\"\ncmd = \"cargo test -p fixture\"\nobserved_at = 1000\ndetail = \"fixture\"\n\n",
         seeded_task(project),
         project.display()
     )

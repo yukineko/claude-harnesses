@@ -99,18 +99,6 @@ fn cancel_failed_task_records_a_discard_closure() {
 }
 
 #[test]
-fn cancel_unconfirmed_task_records_a_discard_closure() {
-    let f = Fixture::new("d1u");
-    // `add` no longer creates `unconfirmed` rows (intake contract v2); a
-    // legacy one is planted with the label a filed task carries here.
-    let (_, label) = f.add_with_label("reference row for the project label");
-    let id = "0e0c0f05".to_string();
-    f.plant_open(&id, "t", "unconfirmed", &label);
-    assert_eq!(f.status(&id), "unconfirmed");
-    assert_discards(&f, &id);
-}
-
-#[test]
 fn cancel_with_empty_or_whitespace_reason_is_refused() {
     let f = Fixture::new("d2");
     let id = f.add("t");
@@ -143,33 +131,6 @@ fn cancel_of_a_done_task_is_refused_and_closure_unchanged() {
     );
     assert_eq!(f.status(&a), "done");
     assert_eq!(f.store_bytes(), before, "closure/store must be unchanged");
-}
-
-#[test]
-fn cancel_of_a_needs_ruling_task_is_refused_mentioning_ruling() {
-    let f = Fixture::new("d4");
-    let id = f.add("t");
-    let r = f.run(&[
-        "ruling",
-        "request",
-        &id,
-        "--kind",
-        "judgment",
-        "--rationale",
-        "x",
-    ]);
-    assert_eq!(r.code, 0, "{}", r.both());
-    assert_eq!(f.status(&id), "needs-ruling");
-    let before = f.store_bytes();
-    let o = f.run(&["cancel", &id, "--reason", REASON]);
-    assert_ne!(o.code, 0, "{}", o.both());
-    assert_eq!(f.status(&id), "needs-ruling");
-    assert_eq!(f.store_bytes(), before);
-    assert!(
-        o.both().to_lowercase().contains("ruling"),
-        "refusal must mention the pending ruling: {}",
-        o.both()
-    );
 }
 
 #[test]

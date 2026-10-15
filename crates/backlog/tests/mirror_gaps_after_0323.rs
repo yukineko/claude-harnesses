@@ -409,8 +409,8 @@ fn add(e: &Env, title: &str, notes: &str) -> String {
 }
 
 /// Like [`add`], but the task lands `pending`: since close-evidence (main
-/// 04ea9b35) a finding filed without a REPRODUCED repro test lands
-/// `unconfirmed`, and the body re-sync arm deliberately acts only on workable
+/// 04ea9b35) a finding filed without a REPRODUCED repro test is
+/// refused, and the body re-sync arm deliberately acts only on workable
 /// rows (`pending` / `failed`). The repro script exits 1 (= reproduced) and is
 /// committed, because only a git-tracked script at HEAD is evidence.
 fn add_pending(e: &Env, title: &str, notes: &str) -> String {
@@ -561,7 +561,7 @@ fn the_argv_log_round_trips_multibyte_and_huge_arguments() {
 // the issue open. main's close-evidence change (04ea9b35) then removed that
 // route entirely: `edit --status` may only name `pending` / `failed`, and a
 // terminal state needs a recorded closure (`done` with evidence, `cancel
-// --reason`, or a human `ruling approve`). The merge of the two lines keeps
+// --reason`). The merge of the two lines keeps
 // the stricter rule, so Gap 1 is now closed from BOTH ends and is pinned that
 // way:
 //   * `edit --status <terminal>` is refused with nothing written and nothing

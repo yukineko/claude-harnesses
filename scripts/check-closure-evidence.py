@@ -2,11 +2,14 @@
 """Pre-commit gate: a backlog row may only become terminal WITH observed evidence.
 
 Rule (user-ratified 2026-10-01): suspicion is never evidence. A `done`
-transition needs an EXECUTED, COMMITTED test, a doc-only commit, a duplicate
-target, or a human TTY ruling. A `cancelled` transition needs a human TTY
-ruling OR a recorded discard (user ruling 2026-10-03: an item nothing
-demonstrates is not a problem and is thrown away cheaply; a discard claims
-nothing was fixed, so it is never evidence for `done`). The backlog CLI records that
+transition needs an EXECUTED, COMMITTED test, a doc-only commit, or a
+duplicate target. A `cancelled` transition needs a recorded discard (user
+ruling 2026-10-03: an item nothing demonstrates is not a problem and is thrown
+away cheaply; a discard claims nothing was fixed, so it is never evidence for
+`done`). A human ruling is NOT evidence (user ruling 2026-10-15: 「証拠が
+ないなんてものはただの誤検知」): a newly judged closure carrying `ruling` is
+refused, and a staged row with a removed status (`needs-ruling`,
+`unconfirmed`) is refused wherever it appears. The backlog CLI records that
 evidence as a `[task.closure]` table; this gate is the commit-time check that
 the table is well formed AND that its tests really behave as recorded. It
 re-runs them: shape alone is a claim, and a claim is not an observation.
@@ -39,13 +42,11 @@ Evidence classes (every class present is validated; at least one is required)
             that touches ONLY doc paths (predicate `is_doc_path`, below).
   duplicate closure.duplicate_of: an existing row (not itself) whose status is
             pending/claimed/done.
-  ruling    [task.closure.ruling]: kind judgment|untestable with its rationale,
-            approved_by, approved_at and approved_via = "tty".
   discard   closure.reason = "discard" + a non-empty closure.discard_reason,
             written by `backlog cancel ID --reason R`. Valid ONLY on a
             `cancelled` row and only as the sole class (a discard mixed with
             another class is refused, so it cannot dress up a `done`).
-`cancelled` requires the ruling or the discard class.
+`cancelled` requires the discard class.
 
 Runner allowlist (same rule as the backlog CLI): `cargo test ...`,
 `pytest ...`, `python3 -m pytest ...`, `bash|sh <script under a tests/ dir>`.
@@ -80,7 +81,7 @@ TAG = "closure-evidence"
 STORE_FILES = (".backlog/tasks.toml", ".backlog/tasks.done.toml")
 TERMINAL = ("done", "cancelled")
 DUPLICATE_TARGET_STATUSES = ("pending", "claimed", "done")
-RULING_KINDS = ("judgment", "untestable")
+REMOVED_STATUSES = ("needs-ruling", "unconfirmed")
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 # Any of these in a recorded cmd means it was not a plain argv; refuse.
 SHELL_META = set(";&|<>$`\\'\"*?()[]{}!#~\n\r\t")
@@ -560,31 +561,6 @@ def check_duplicate(row: dict, cl: dict, ctx: Ctx) -> list[str]:
     return []
 
 
-def check_ruling(row: dict, cl: dict) -> list[str]:
-    rl = cl.get("ruling")
-    if not isinstance(rl, dict):
-        return ["closure.ruling is missing (a cancelled or ruling-closed row needs a human TTY ruling)"]
-    errs = []
-    kind = rl.get("kind")
-    if kind not in RULING_KINDS:
-        errs.append(f"closure.ruling.kind = {kind!r} (expected one of {list(RULING_KINDS)})")
-    elif kind == "judgment" and not _nonempty_str(rl.get("rationale")):
-        errs.append("closure.ruling.rationale is missing for a judgment ruling")
-    elif kind == "untestable" and not (_nonempty_str(rl.get("untestable_reason"))
-                                       or _nonempty_str(row.get("untestable_reason"))
-                                       or _nonempty_str(rl.get("rationale"))):
-        errs.append("closure.ruling: an untestable ruling carries no untestable_reason/rationale")
-    if not _nonempty_str(rl.get("approved_by")):
-        errs.append("closure.ruling.approved_by is missing (no human approval recorded)")
-    at = rl.get("approved_at")
-    if not ((isinstance(at, int) and not isinstance(at, bool) and at > 0) or _nonempty_str(at)):
-        errs.append("closure.ruling.approved_at is missing (no approval time recorded)")
-    via = rl.get("approved_via")
-    if via != "tty":
-        errs.append(f"closure.ruling.approved_via = {via!r} (only an interactive \"tty\" approval closes a ruling)")
-    return errs
-
-
 def judge_row(row: dict, ctx: Ctx) -> list[str]:
     status = row.get("status")
     cl = row.get("closure")
@@ -616,16 +592,15 @@ def judge_row(row: dict, ctx: Ctx) -> list[str]:
         if reason != "discard":
             errs.append(f"closure.discard_reason is set but closure.reason = {reason!r} (expected \"discard\")")
         return errs
-    if status == "cancelled" and "ruling" not in cl:
-        errs.append("status = \"cancelled\" requires closure.ruling (a human TTY ruling) or a discard "
-                    "(closure.reason = \"discard\" + discard_reason, from `backlog cancel --reason`), "
-                    "and has neither")
-        has_ruling = False  # already reported; nothing further to validate
-    elif not (has_f2p or has_doc or has_dup or has_ruling):
-        errs.append(f"closure.reason = {reason!r} with no evidence "
-                    "(no green/red, doc_only_commit, duplicate_of or ruling)")
     if has_ruling:
-        errs += check_ruling(row, cl)
+        errs.append("closure carries a human ruling, which is not evidence (user ruling 2026-10-15); "
+                    "close with a test/doc-only/duplicate, or cancel with a discard")
+    if status == "cancelled":
+        errs.append("status = \"cancelled\" requires a discard (closure.reason = \"discard\" + "
+                    "discard_reason, from `backlog cancel --reason`)")
+    elif not (has_f2p or has_doc or has_dup):
+        errs.append(f"closure.reason = {reason!r} with no evidence "
+                    "(no green/red, doc_only_commit or duplicate_of)")
     if has_dup:
         errs += check_duplicate(row, cl, ctx)
     if has_doc:
@@ -653,6 +628,10 @@ def evaluate() -> tuple[int, list[str]]:
         raise Undetermined(f"HEAD's backlog store cannot be parsed, so a transition cannot be judged: {e}")
     judged, errs = select_judged(head_rows, idx_rows)
     msgs = list(errs)
+    for r in idx_rows:
+        if r.get("status") in REMOVED_STATUSES:
+            msgs.append(f"task {r.get('id')} has status {r.get('status')!r}, which no longer exists "
+                        "(user ruling 2026-10-15); cancel it with a discard")
     if not judged:
         return (1 if msgs else 0), msgs
     parents = parent_revs(head)
@@ -687,8 +666,7 @@ def main(argv: list[str]) -> int:
     print(
         f"\n{TAG}: a backlog row became terminal (or its closure changed) without observed "
         "evidence. Close it through the backlog CLI (`backlog done --test ... --red-rev ...`, "
-        "`--doc-only`, `--duplicate-of`), discard an unproven item (`backlog cancel ID --reason R`), "
-        "or request a human ruling (`backlog ruling request`). "
+        "`--doc-only`, `--duplicate-of`), or discard an unproven item (`backlog cancel ID --reason R`). "
         "Suspicion, citations and code reading are not evidence.",
         file=sys.stderr,
     )

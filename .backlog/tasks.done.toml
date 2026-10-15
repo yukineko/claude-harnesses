@@ -52112,3 +52112,62 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "efa0d8560350698275ccfe569fa71e68f0ea3304"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "0e4cfde5"
+title = "main-tree-guard pre-commit が新しい condukt worktree で condukt バイナリを見つけられず、全 worker の commit を block する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+The pre-commit main-tree-guard looks only at $CONDUKT_BIN, target/ and PATH. A fresh condukt worktree has no build, so every worker's first commit is refused ('no condukt binary found ... the §8 gate could not run'). Workers worked around it by setting CONDUKT_BIN to main's target/release/condukt or by building condukt in the worktree. The gate is right to fail closed; the resolver should use harness_core::plugin_bin-style plugin-cache lookup (installed condukt) before giving up.
+
+Observed 2026-10-03 in flow batch 13 (run-20261003-155809-33509), base fbc3dac8 / main c0d4701c."""
+created_at = 1791018592
+updated_at = 1792106553
+weight = 0.0
+issue_number = 1163
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1163"
+issue_closed_at = 1792106553
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_0e4cfde5.py"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003562
+detail = """
+exit 1: [0m:354: XFailed
+\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
+\u001B[31mFAILED\u001B[0m scripts/test_backlog_0e4cfde5.py::\u001B[1mPluginCacheCondukt::test_plugin_cache_condukt_is_used_when_nothing_else_exists\u001B[0m - _pytest.outcomes.XFailed
+\u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m2 passed\u001B[0m\u001B[31m in 1.89s\u001B[0m\u001B[31m ==========================\u001B[0m"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --color=no --runxfail scripts/test_backlog_0e4cfde5.py"
+exit = 0
+passed = 3
+rev = "8c95f47705c45497b4b61f508e0a3a7cda5dec19"
+observed_at = 1792106547
+output_digest = "sha256:c44a0e19b32c77d6ab319c90153e1d404ee5d8d51a73261c1750320b54d186a2"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/fix-0e4cfde5
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 3 items
+
+scripts/test_backlog_0e4cfde5.py ...                                     [100%]
+
+============================== 3 passed in 2.22s ===============================
+"""
+
+[task.closure.red]
+rev = "efa0d8560350698275ccfe569fa71e68f0ea3304"
+exit = 1
+kind = "behavioural"

@@ -30,7 +30,7 @@
 
 - `0` — 全ケース通過 [test: crates/evalkit/tests/prose_claims.rs::claim_exit_codes_run]
 - `1` — 真の回帰（アサーション失敗） [test: crates/evalkit/tests/prose_claims.rs::claim_exit_codes_run]
-- `2` — harness エラー（ケースが見つからない、eval ファイルが読めない等） [test: crates/evalkit/tests/prose_claims.rs::claim_exit_codes_run]
+- `2` — harness エラー（ケースが見つからない、eval ファイルが読めない等） [test: crates/evalkit/tests/prose_claims.rs::claim_exit_codes_run]、または全ケースが draft で何も検査していない場合 [test: crates/evalkit/tests/canary_gate.rs::run_all_draft_exits_2]
 
 ```sh
 evalkit run
@@ -53,16 +53,16 @@ evalkit run --json > base.json
 evalkit run --json > head.json
 evalkit canary --baseline base.json --current head.json
 evalkit canary --baseline base.json --current head.json --json
-evalkit canary --baseline base.json --current head.json --fail-on-regression # pass→fail があれば exit 1 [test: crates/evalkit/src/canary.rs::fail_on_regression_exit_policy]
+evalkit canary --baseline base.json --current head.json --report-only # 入力が使えない場合を除き常に exit 0 [test: crates/evalkit/tests/canary_gate.rs::canary_report_only_exits_0_on_regression]
 ```
 
-ケースはレポート上のラベル（`run --json` の `case` フィールド：`id`、`describe` があれば `id — describe`）でキーにする — そのため `describe` を編集すると dropped 1 件 + added 1 件として現れる[test: crates/evalkit/tests/prose_claims.rs::claim_canary_label_keys]。それぞれを **regression**（pass→fail、どちらも draft でない）[test: crates/evalkit/src/canary.rs::skipped_transitions_are_not_regressions]、**fix**（fail→pass）、**added**、**dropped** に分類し、合格率を before → after と delta で表示する[test: crates/evalkit/tests/prose_claims.rs::claim_canary_label_keys]。合格率の分母から draft は除外され、全件 draft または空なら 0.0 になる[test: crates/evalkit/src/canary.rs::pass_rate_math_and_divide_by_zero]。既定では**情報提供のみ**（exit 0）である[test: crates/evalkit/src/canary.rs::fail_on_regression_exit_policy]。`--fail-on-regression` を渡すと pass→fail が 1 件でもあれば exit 1 になる[test: crates/evalkit/src/canary.rs::fail_on_regression_exit_policy]。
+ケースはレポート上のラベル（`run --json` の `case` フィールド：`id`、`describe` があれば `id — describe`）でキーにする — そのため `describe` を編集すると dropped 1 件 + added 1 件として現れる[test: crates/evalkit/tests/prose_claims.rs::claim_canary_label_keys]。それぞれを **regression**（pass→fail、どちらも draft でない）[test: crates/evalkit/src/canary.rs::skipped_transitions_are_not_regressions]、**fix**（fail→pass）、**added**、**dropped**、**demoted**（pass→draft [test: crates/evalkit/tests/canary_gate.rs::canary_pass_to_draft_exits_1_and_reports_demoted]・fail→draft [test: crates/evalkit/tests/canary_gate.rs::canary_fail_to_draft_exits_1_and_reports_demoted]）に分類し、合格率を before → after と delta で表示する[test: crates/evalkit/tests/prose_claims.rs::claim_canary_label_keys]。合格率の分母から draft は除外され、全件 draft または空なら 0.0 になる[test: crates/evalkit/src/canary.rs::pass_rate_math_and_divide_by_zero]。既定で canary は**ゲートする**: ゴールデンの判定を 1 件でも失えば exit 1 になる[test: crates/evalkit/src/canary.rs::default_gates_report_only_exit_policy]。`--report-only` は情報提供のみ（exit 0）にする明示的な opt-in である[test: crates/evalkit/src/canary.rs::default_gates_report_only_exit_policy]。`--report-only` でも exit 2 は和らがない: 全件 draft の側は何も検査していない[test: crates/evalkit/tests/canary_gate.rs::canary_all_draft_current_exits_2]。旧 `--fail-on-regression` フラグは削除され、渡すと拒否される[test: crates/evalkit/tests/canary_gate.rs::canary_rejects_removed_fail_on_regression_flag]。
 
 `dropped` は自分で確認すること[test: crates/evalkit/tests/prose_claims.rs::claim_canary_dropped_bucket]。
 
-- `0` — 報告済み（`--fail-on-regression` 時は回帰なし）[test: crates/evalkit/src/canary.rs::fail_on_regression_exit_policy]
-- `1` — `--fail-on-regression` 指定かつ pass→fail が 1 件以上 [test: crates/evalkit/src/canary.rs::fail_on_regression_exit_policy]
-- `2` — harness エラー（結果ファイルが読めない／パースできない） [test: crates/evalkit/tests/prose_claims.rs::claim_canary_exit2]
+- `0` — ゴールデンの判定を 1 件も失っていない [test: crates/evalkit/tests/canary_gate.rs::canary_clean_diff_exits_0]、または `--report-only` 指定 [test: crates/evalkit/tests/canary_gate.rs::canary_report_only_exits_0_on_regression] [test: crates/evalkit/tests/canary_gate.rs::canary_fail_to_draft_report_only_exits_0]
+- `1` — ゴールデンの判定を失った: pass→fail の回帰 [test: crates/evalkit/tests/canary_gate.rs::canary_default_exits_1_on_regression]、dropped [test: crates/evalkit/tests/canary_gate.rs::canary_dropped_golden_exits_1]、pass→draft の demoted [test: crates/evalkit/tests/canary_gate.rs::canary_pass_to_draft_exits_1_and_reports_demoted]、失敗を隠す fail→draft の demoted [test: crates/evalkit/tests/canary_gate.rs::canary_fail_to_draft_exits_1_and_reports_demoted]
+- `2` — harness エラー（結果ファイルが読めない／パースできない） [test: crates/evalkit/tests/prose_claims.rs::claim_canary_exit2]、または判定を持つケースが無い側がある（全件 draft [test: crates/evalkit/tests/canary_gate.rs::canary_all_draft_current_exits_2]・空 [test: crates/evalkit/tests/canary_gate.rs::canary_empty_current_exits_2]）
 
 ゴールデンはリポジトリルートの `evals/` にある[test: crates/evalkit/tests/prose_claims.rs::claim_evals_files]。
 

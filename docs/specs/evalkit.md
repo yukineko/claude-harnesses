@@ -29,12 +29,19 @@ doc-comment が宣言するとおり、これは lifecycle hook ではなく pla
   parse から独立している。
 - **取得失敗は沈黙合格でなく failure** — `run_case` は subject 取得失敗（読めない `file`・spawn 不能な
   `cmd`）を failure として記録し、壊れたケースが黙って通ることを防ぐ。無効な正規表現も panic せず failure。
-- **exit code の区別** — `run`/`list` は `0`=全通過 / `1`=真の回帰（アサーション失敗）/ `2`=harness エラー
-  （ケース 0 件・eval ファイル読めず等）。CI が「真の回帰」と「設定ミス」を判別できる。
-- **canary の回帰は厳密定義かつ既定 non-gating** — `canary::diff` の regression は *厳密に*
-  `baseline.pass && current.fail`（両側とも非 skipped）のみ。skip 遷移（pass→skip 等）は regression に
-  数えず `unchanged` へ落ちる。既定は情報提供のみ exit 0 で、`--fail-on-regression` 指定時のみ regression
-  1 件以上で exit 1 のハードゲートになる。
+- **exit code の区別** — `run` は `0`=全通過 / `1`=真の回帰（アサーション失敗）/ `2`=harness エラー
+  （ケース 0 件・eval ファイル読めず）[test: crates/evalkit/tests/prose_claims.rs::claim_exit_codes_run]。`run` は全ケースが
+  draft（判定を持つケースが 0 件）の場合も何も検査していないので exit 2
+  [test: crates/evalkit/tests/canary_gate.rs::run_all_draft_exits_2]。
+- **canary は既定でゲートする（fail-closed）** — `canary::diff` の regression は *厳密に*
+  `baseline.pass && current.fail`（両側とも非 skipped）のみだが、ゲート判定はそれより広い: regression・
+  dropped（baseline にあり current に無い）・demoted（pass→draft、および失敗を隠す fail→draft
+  [test: crates/evalkit/tests/canary_gate.rs::canary_fail_to_draft_exits_1_and_reports_demoted]）のいずれか 1 件以上で既定 exit 1
+  [test: crates/evalkit/src/canary.rs::default_gates_report_only_exit_policy]。情報提供のみ（exit 0）は
+  `--report-only` による明示的な opt-in [test: crates/evalkit/tests/canary_gate.rs::canary_report_only_exits_0_on_regression]。
+  判定を持つケースが 0 件の側（空・全件 draft）は判定不能として `--report-only` の有無に関わらず exit 2
+  [test: crates/evalkit/tests/canary_gate.rs::canary_all_draft_current_exits_2]。旧 `--fail-on-regression` は削除
+  [test: crates/evalkit/tests/canary_gate.rs::canary_rejects_removed_fail_on_regression_flag]。
 - **決定論** — `run::discover` は `*.jsonl` を再帰収集し `sort()` してから parse するため、ケース列挙は
   ファイル順に決定的。`canary` は `BTreeMap` キー（ソート済み）で各 bucket を安定順にする。
 
@@ -48,9 +55,10 @@ doc-comment が宣言するとおり、これは lifecycle hook ではなく pla
   を出す（`report_json`）。失敗 0 で exit 0、1 件以上で exit 1。
 - **`list [--dir] [--root] ...`** — 同じ `execute(list_only=true)`。ケースを実行せず `path\tlabel` を
   列挙して exit 0（ケース 0 件なら discover 段で exit 2）。
-- **`canary --baseline <f> --current <f> [--json] [--fail-on-regression]`** — `canary::execute`。2 つの
+- **`canary --baseline <f> --current <f> [--json] [--report-only]`** — `canary::execute`。2 つの
   `run --json` 出力（`parse_report` で `cases[]` を label キーの case-map 化）を `diff` し、各ケースを
-  **regression**(pass→fail) / **fix**(fail→pass) / **added** / **dropped** / **unchanged** に分類、
+  **regression**(pass→fail) / **fix**(fail→pass) / **added** / **dropped** / **demoted**(pass/fail→draft) /
+  **unchanged** に分類 [test: crates/evalkit/tests/canary_gate.rs::canary_pass_to_draft_exits_1_and_reports_demoted]、
   合格率を before→after と delta で表示。`--json` は機械可読差分。読めない／`cases` 配列の無い入力は exit 2。
 
 `--bin-dir DIR` は `cmd` ケース解決時に PATH の先頭へ prepend され（相対なら `--root` に解決、

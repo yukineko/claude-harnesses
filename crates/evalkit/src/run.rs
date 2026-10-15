@@ -198,8 +198,8 @@ fn collect_jsonl(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
 }
 
 /// Orchestrate a run/list. Returns the process exit code:
-/// `0` all passed, `1` at least one failed, `2` harness error (no cases, bad
-/// eval files). Splitting the exit code lets CI tell a real regression (`1`)
+/// `0` all passed, `1` at least one failed, `2` harness error (no cases, only
+/// draft cases, bad eval files). Splitting the exit code lets CI tell a real regression (`1`)
 /// from a misconfigured path (`2`).
 pub fn execute(
     dir: PathBuf,
@@ -257,6 +257,16 @@ pub fn execute(
         report_json(&outcomes, failed);
     } else {
         report_human(&outcomes, failed);
+    }
+    // All drafts: nothing carried a verdict, so "0 failed" checked nothing.
+    // That is "cannot determine", the same class as "no cases found" → exit 2.
+    if outcomes.iter().all(|o| o.skipped) {
+        eprintln!(
+            "evalkit: no runnable cases under {} (all {} are drafts); nothing was checked",
+            eval_dir.display(),
+            outcomes.len()
+        );
+        return 2;
     }
     if failed == 0 {
         0

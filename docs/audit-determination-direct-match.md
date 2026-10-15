@@ -37,14 +37,14 @@ grep の生ヒット 402+40 行には局所 enum(`ChecksVerdict::Undetermined` �
 | テスト(cfg(test) / tests/ / ui fixture) | 112 | 7 |
 | **prod(本書の分類対象)** | **253** | **13** |
 
-prod 266 件から、波括弧対応が外れた/テスト専用であることを**個別に確認して**さらに 9 件を除外した: `condukt/src/maintree.rs` の `mod tests` 内 6 件(1216,1257,1284,1298,1345,1364)、(mod tests 内)、`stuckguard/src/verdict_monotonicity.rs` の 2 件( が `#[cfg(test)] mod verdict_monotonicity;` で、ファイル全体がテスト専用。『THE DEFECT』を意図的に再現する mutation 用フィクスチャ)。
+prod 266 件から、波括弧対応が外れた/テスト専用であることを**個別に確認して**さらに 9 件を除外した: `condukt/src/maintree.rs` の `mod tests` 内 6 件(1216,1257,1284,1298,1345,1364)、`stuckguard/src/verdict_monotonicity.rs` の 2 件(`#[cfg(test)] mod verdict_monotonicity;` で、ファイル全体がテスト専用。『THE DEFECT』を意図的に再現する mutation 用フィクスチャ)。
 
 **分類対象は prod の Undetermined 腕 257 件(Determination 245 / Verdict 12)**。
 トリアージの『281』は test・doc を含む粗い数で、prod に絞ると 257 である(数字は継承せず測り直した)。
 
 ### 1.3 Undetermined を名指ししない直接 match
 
-`Determination::Known(..)` だけを書き、Undetermined を wildcard / else / `matches!` に落とす形は grep `Undetermined` では拾えない。prod の `Determination::Known` pattern 行のうち、前後 25 行に Undetermined 腕が無いものを別途抽出した(§3.2)。
+`Determination::Known(..)` だけを書き、Undetermined を wildcard / else / `matches!` に落とす形は grep `Undetermined` では拾えない。prod の `Determination::Known` pattern 行のうち、前後 25 行に Undetermined 腕が無いものを別途抽出した。
 
 ## 2. 集計
 
@@ -53,46 +53,44 @@ prod 266 件から、波括弧対応が外れた/テスト専用であること�
 | PERMISSIVE | 10 | 空・既定値・skip・allow に写す(または下流が沈黙を OK と読み得る) |
 | UNCLEAR | 6 | 最終消費者まで辿れなかった |
 
-- FORWARDED の最終消費者は各行に書いた。消費者側が制限側であることを確認できたものは理由欄にそう書いてある。書いていないものは『転送』までしか確認していない。
-
 ## 3. 修正候補(PERMISSIVE / UNCLEAR)
 
 ### 3.1 PERMISSIVE(10 件)
 
-重い順。★は下流が沈黙/既定値を OK と読み得る、または判定系の近くにあるもの。
+重い順。
 
 | # | file:line | 理由と消費者 |
 |---:|---|---|
-| 1 | crates/blastguard/src/reversible.rs:286 | git status 判定不能 → GitState::Undetermined を作るが、decide_recovery の Repo 腕が `let _ = git;` で**読まずに捨て**RecoverableFromGit を返す。消費:  が ctx.confined_root が Some なら無人実行を許可。2026-09-18 の operator ruling(doc に明記)。消去は callsite(decide_recovery)側 |
-| 2 | crates/blastguard/src/reversible.rs:288 | git status 判定不能 → GitState::Undetermined を作るが、decide_recovery の Repo 腕が `let _ = git;` で**読まずに捨て**RecoverableFromGit を返す。消費:  が ctx.confined_root が Some なら無人実行を許可。2026-09-18 の operator ruling(doc に明記)。消去は callsite(decide_recovery)側 |
-| 3 | crates/autoflow/src/lock.rs:58 | find_backlog_binary 判定不能 → `return true`(driver active = 'stand down')。 が `return` し autoflow の Stop block 自体を行わない = この Stop は素通り。doc は restrictive と自称するが、Stop ゲートから見れば skip |
+| 1 | crates/blastguard/src/reversible.rs:286 | git status 判定不能 → GitState::Undetermined を作るが、decide_recovery の Repo 腕が `let _ = git;` で**読まずに捨て**RecoverableFromGit を返す。消費: ctx.confined_root が Some なら無人実行を許可。2026-09-18 の operator ruling(doc に明記)。消去は callsite(decide_recovery)側 |
+| 2 | crates/blastguard/src/reversible.rs:288 | git status 判定不能 → GitState::Undetermined を作るが、decide_recovery の Repo 腕が `let _ = git;` で**読まずに捨て**RecoverableFromGit を返す。消費: ctx.confined_root が Some なら無人実行を許可。2026-09-18 の operator ruling(doc に明記)。消去は callsite(decide_recovery)側 |
+| 3 | crates/autoflow/src/lock.rs:58 | find_backlog_binary 判定不能 → `return true`(driver active = 'stand down')。`return` し autoflow の Stop block 自体を行わない = この Stop は素通り。doc は restrictive と自称するが、Stop ゲートから見れば skip |
 | 4 | crates/propguard/src/derive.rs:185 | criteria_file 読めず → stderr 警告のうえ **inline done_criteria があればそれで続行**。ゲートは走るが、意図した基準(file)と異なる基準で評価される(既定値への fallback)。inline も空なら Undetermined を転送(205) |
 | 5 | crates/playbook/src/main.rs:148 | UserPromptSubmit hook: 読めない store を『空と同じ』= 注入なしで**無言 return**(コメントが 'treated the same as an empty one' と自認)。stderr 出力なし。消費者は model のコンテキスト(注入ノートの欠落を知り得ない) |
 | 6 | crates/runbook/src/main.rs:122 | playbook と同型: 読めない store を空と同じ扱いで無言 return(runbook 注入が黙って欠落) |
-| 7 | crates/overwatch/src/store.rs:376 | read_jsonl_best_effort: `Known(None) \| Undetermined(_) => Vec::new()`。doc が自認する『判定不能 → 空』。pub wrapper 10 本(read_events/rollbacks/review_findings/bridged_*/dispositions/runtime_conflicts/review_findings_all/merge_conflicts/merge_conflict_resolutions)が消費。production の消費者を追跡した結果(specguard ,  compact, 1844-1845, 1899, condukt )はいずれも『空 = 保守側』に倒れる形だったが、wrapper は pub のまま残る(latent) |
+| 7 | crates/overwatch/src/store.rs:376 | read_jsonl_best_effort: `Known(None) \| Undetermined(_) => Vec::new()`。doc が自認する『判定不能 → 空』。pub wrapper 10 本(read_events/rollbacks/review_findings/bridged_*/dispositions/runtime_conflicts/review_findings_all/merge_conflicts/merge_conflict_resolutions)が消費。production の消費者を追跡した結果はいずれも『空 = 保守側』に倒れる形だったが、wrapper は pub のまま残る(latent) |
 | 8 | crates/condukt/src/circuit.rs:506 | journal の `CircuitRecord::idle_secs: i64` に判定不能を **0** で記録(コメントが 'KNOWN RESIDUAL' と自認)。stdout JSON は null だが永続 journal は 0。消費: load_circuit_records はテストからのみ(production 消費者は grep で未発見)。idle 軸 off 時は 0 が測定値と区別できない |
-| 9 | crates/session-insights/src/main.rs:203 | subagent 読み不能 → stderr のみで under-count の turns を record に書き続ける( → record::write_from_session)。ノート本文の turns 数値に不完全の注記は無い(cost 側は inline 開示=)。消費者は Obsidian ノート。low |
-| 10 | crates/specguard/src/scope.rs:506 | relevant_file_map: code index 判定不能 → `Vec::new()`(base set のみ)。doc が『additive & advisory, 下流が短い map を clean と読まない』と主張。consumer を追跡:  の prompt 描画(auditor への読み順ヒント)のみで verdict 計算は見つからず。無音。low |
+| 9 | crates/session-insights/src/main.rs:203 | subagent 読み不能 → stderr のみで under-count の turns を record に書き続ける(record::write_from_session)。ノート本文の turns 数値に不完全の注記は無い(cost 側は inline 開示)。消費者は Obsidian ノート。low |
+| 10 | crates/specguard/src/scope.rs:506 | relevant_file_map: code index 判定不能 → `Vec::new()`(base set のみ)。doc が『additive & advisory, 下流が短い map を clean と読まない』と主張。consumer を追跡: prompt 描画(auditor への読み順ヒント)のみで verdict 計算は見つからず。無音。low |
 
 #### 逐語引用と消費者の追跡
 
 **P1 crates/blastguard/src/reversible.rs:286,288 — 消去は callsite ではなく `decide_recovery`(:174)にある**
 
 ```rust
-//   (probe)
+// (probe)
 Determination::Known(out) => match out.stdout_allowing(&[0]) {
     Determination::Known(stdout) => decide_git_state(true, true, &stdout),
     Determination::Undetermined(_) => decide_git_state(true, false, ""),   // -> GitState::Undetermined
 },
 Determination::Undetermined(_) => decide_git_state(false, false, ""),     // -> GitState::Undetermined
 
-//   (decide_recovery)
+// (decide_recovery)
 let _ = git;
 ...
 RepoProbe::Repo => Recovery::RecoverableFromGit,
 ```
 
-`git status` が答えなかった場合でも、`RepoProbe::Repo`(work tree 内)と判定済みなら `RecoverableFromGit` になる。消費者  は `RecoverableFromGit => ctx.confined_root("redirect", ..).is_some()` なら無人実行(プロンプト省略)を許す。doc(:135-160)に operator ruling 2026-09-18 として『`Repo` 行は git 状態を見ない』『この保護を手放す』と明記されている = **意図的な緩和**。ただし『git が答えなかった』ことまで捨てているかは ruling 文言(『gitで復元できるもの』)の射程外にも読めるため、人間判断に返す候補。
+`git status` が答えなかった場合でも、`RepoProbe::Repo`(work tree 内)と判定済みなら `RecoverableFromGit` になる。消費者は `RecoverableFromGit => ctx.confined_root("redirect", ..).is_some()` なら無人実行(プロンプト省略)を許す。doc(:135-160)に operator ruling 2026-09-18 として『`Repo` 行は git 状態を見ない』『この保護を手放す』と明記されている = **意図的な緩和**。ただし『git が答えなかった』ことまで捨てているかは ruling 文言(『gitで復元できるもの』)の射程外にも読めるため、人間判断に返す候補。
 
 **P2 crates/autoflow/src/lock.rs:58**
 
@@ -100,7 +98,7 @@ RepoProbe::Repo => Recovery::RecoverableFromGit,
 Determination::Undetermined(_) => return true,   // backlog_driver_active: 'stand down'
 ```
 
-消費者 : `if lock::backlog_driver_active(&cwd) { return; }` — `stop_run` の先頭で抜け、以降の block 判定(record-requested / condukt 状態 / backlog 残)を**全て行わない** = この Stop は素通り。docは『stand down が制限側』と書くが、それは『二重駆動の回避』という意味での制限であり、Stop ゲートとしては allow。§1 の『docstring が実挙動と違う安全な話を書く』に該当する可能性があり、記述か挙動のどちらかを直す候補。
+消費者: `if lock::backlog_driver_active(&cwd) { return; }` — `stop_run` の先頭で抜け、以降の block 判定(record-requested / condukt 状態 / backlog 残)を**全て行わない** = この Stop は素通り。docは『stand down が制限側』と書くが、それは『二重駆動の回避』という意味での制限であり、Stop ゲートとしては allow。§1 の『docstring が実挙動と違う安全な話を書く』に該当する可能性があり、記述か挙動のどちらかを直す候補。
 
 **P3 crates/propguard/src/derive.rs:185**
 
@@ -116,9 +114,7 @@ if !inline.is_empty() {
 }
 ```
 
-criteria_file が読めないとき、inline `done_criteria` が非空ならそれで `Known` を返す。ゲート自体は走る(allow ではない)が、意図した基準とは別の基準で評価される。通知は stderr のみ。inline も空なら Undetermined を転送し  が `criteria-unreadable` で Block する。
-
-UserPromptSubmit 注入 hook。読めない store を『空と同じ』と自認し、**stderr すら出さず**無言で return。消費者は model のコンテキストで、注入されるはずだったノート/runbook の欠落を知り得ない。同じ crate の CLI 側は `unknown — store could not be read` と明示して exit 1 しているので、hook 側だけが沈黙。コメントの『must never fail a turn』は CLAUDE.md §1 が撤去した正当化と同型。ただし hook は verdict を返さないので、少なくとも stderr での unknown 表明が最低線。
+criteria_file が読めないとき、inline `done_criteria` が非空ならそれで `Known` を返す。ゲート自体は走る(allow ではない)が、意図した基準とは別の基準で評価される。通知は stderr のみ。
 
 **P6 crates/overwatch/src/store.rs:376 — `read_jsonl_best_effort`** (解消済み: backlog e8a61ec3 で `Result<Vec<T>>` 化し、読めない台帳は `Err`。以下は修正前の記録)
 
@@ -145,9 +141,9 @@ let journaled_idle_secs = match &idle {
 
 コメント(:488-503)が『KNOWN RESIDUAL』と自認。stdout JSON は `null` だが、永続 journal(`CircuitRecord::idle_secs: i64`)には 0 が入る。`idle_ttl_secs==0`(idle 軸 off)のときは 0 が測定値と区別できない。`load_circuit_records` の消費者はテストのみで production 消費者は見つからなかった。修正は `Option<i64>` 化(コメントが follow-up と記載)。
 
-**P10 crates/session-insights/src/main.rs:203** — sub-agent の turns を読めず under-count になっても、記録は書き続け、通知は stderr のみ。ノート本文の turns 数値に不完全の注記は無い(cost 側は  で inline 開示)。消費者は Obsidian ノート。low。
+**P10 crates/session-insights/src/main.rs:203** — sub-agent の turns を読めず under-count になっても、記録は書き続け、通知は stderr のみ。ノート本文の turns 数値に不完全の注記は無い(cost 側は inline 開示)。消費者は Obsidian ノート。low。
 
-**P11 crates/specguard/src/scope.rs:506** — code index が答えなければ `Vec::new()`(base set のみ)。doc は『additive and advisory、verdict を計算しない』と主張。`relevant_file_map` の呼び出しは (prompt 描画)のみと確認。無音。low。doc 自身が『下流が内容から結論を出し始めたら Determination を返せ』と条件を書いているので、その条件のガードが無い点だけが残る。
+**P11 crates/specguard/src/scope.rs:506** — code index が答えなければ `Vec::new()`(base set のみ)。doc は『additive and advisory、verdict を計算しない』と主張。`relevant_file_map` の呼び出しは prompt 描画のみと確認。無音。low。doc 自身が『下流が内容から結論を出し始めたら Determination を返せ』と条件を書いているので、その条件のガードが無い点だけが残る。
 
 ### 3.2 UNCLEAR(6 件)
 
@@ -165,17 +161,6 @@ let journaled_idle_secs = match &idle {
 
 確認方法の提案: Claude Code が hook の stderr をどの経路で表示するか(SessionStart / UserPromptSubmit / Stop 別)をテストで観測する。観測できなければ人間に ask。
 
-### 3.3 Undetermined を名指ししない直接 match(grep では拾えない形)
-
-これらは wildcard が制限側に倒れるよう**意図して書かれている**ことをコメントとコードで確認した。ただし『将来 variant が増えても同じ』という保証は型では無い(`Determination` は 2 variant で `#[non_exhaustive]` でもなく exhaustive match になるので、新 variant は pattern 側でもコンパイルエラーになる)。
-
-## 4. 全件表(crate 別)
-
-凡例: R=RESTRICTIVE / F=FORWARDED / P=PERMISSIVE / U=UNCLEAR。kind は `Determination` または `Verdict`(`Verdict::Undetermined`)。
-`Required::Blocked(Verdict::Undetermined(..))` の destructure は require() 経路なので既監査領域だが、Verdict 腕として数えたうえで F にしてある。
-
-> **追記 2026-10-02（測定点 4498c50d）**: 上の行と下の表の  の `Required::Blocked(Verdict::Undetermined(r))` は、本書の監査時点の形である。490f12c6（backlog 1a6c1c48）で `Required::Blocked` のペイロードが `Verdict` から `Undet` に狭まり、これらの腕は今 `Required::Blocked(r)`になっている。`Blocked(Clean)` は外部から構築できない（negative fixture `crates/harness-core/tests/ui/verdict/forge_blocked_clean.rs`）。判定 F（転送）は変わらない。行番号と §0 の件数は監査時点の値で、再測定していない。
-
 ## 5. この監査が主張しないこと(限界)
 
 - 『消費者まで追った』と書いた行以外は、Undetermined 腕の**腕自身の本体**を読んだだけである。腕が `Determination::Undetermined(why)` を返している FORWARDED の最終消費者全てを辿ってはいない。
@@ -189,7 +174,7 @@ let journaled_idle_secs = match &idle {
 1. `git -C <worktree> rev-parse --short HEAD` が `74aad11f` であることを確認
 2. §1.1 の grep を実行して生カウントを確認
 3. prod の Undetermined 腕の列挙: `#[cfg(test)]` 項目の範囲(波括弧対応)・`tests/`・`//` 行を除き、正規表現 `(?<![A-Za-z_])(Determination|Verdict)::Undetermined\b` を行単位で適用 => 266 行、検証済みテスト 9 件を除外して 257 行
-4. 各行の前後 5 行を読み、腕の本体と消費者を分類(表 §4)
+4. 各行の前後 5 行を読み、腕の本体と消費者を分類
 
 <!-- /record -->
 

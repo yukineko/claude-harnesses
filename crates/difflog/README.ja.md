@@ -1,74 +1,42 @@
-# difflog
+- `SessionStart` で現在の HEAD の SHA を `~/.difflog/logs/sessions/<session_id>.json` にスナップショットする[test: crates/difflog/tests/prose_claims.rs::claim_session_start_snapshots_head]。
+- `SessionEnd` は `git diff --stat -- <開始SHA>..HEAD` を実行するが、git は `--` 以降の範囲を pathspec として読むため stat が空になり、ログファイルは書き出されない[test: crates/difflog/tests/prose_claims.rs::claim_session_end_writes_log]。
+- `~/.difflog/logs/<YYYY-MM-DD>-<session8>.md` にファイルは作られない[test: crates/difflog/tests/prose_claims.rs::claim_log_path_format]。
 
-Claude Code 向けの**セッション差分ログ (session diff-log)**。Rust 製。
-
-## 目的
-
-difflog はひとつのセッションで何が変わったかを git 差分として記録し、それを読みやすいナラティブに変換するための harness である。
-
-- `SessionStart` で現在の HEAD の SHA をスナップショットする。
-- `SessionEnd` で `git diff <開始SHA>..HEAD` を実行し、構造化された Markdown ログをローカルのログディレクトリへ書き出す。ログにはコミット一覧、stat、変更ファイル一覧、上限付きの diff 本体が含まれる。
-- 出力先は `~/.difflog/logs/<YYYY-MM-DD>-<session8>.md`。
-
-差分の記録（決定論的な部分）はひとつの Rust バイナリと 2 つの hook (SessionStart + SessionEnd) だけで完結し、API キーを必要としない。記録されたログから人間向けの説明文を生成する部分は、同梱の `/difflog` skill が LLM を使って担う（サブスクリプションで実行される）。
-
-## どうして必要か
-
-エージェントが行った変更は、セッションが終わるとどこに何を加えたのかが追いにくくなる。レビューや引き継ぎのたびに `git log` や `git diff` を手で追い直すのは手間で、しかもセッション境界（このセッションで何を触ったか）はコミット履歴からは復元しづらい。
-
-difflog はセッション開始時の HEAD を覚えておくことで「このセッションの差分」だけを正確に切り出し、後から読める形で残す。これにより、
-
-- 変更内容を毎回手で diff を組み立てて確認する必要がなくなる。
-- レビューや他者への引き継ぎの際に、「何をどう変えたか」「なぜか」を一枚にまとめた説明をすぐ用意できる。
-
-README が引くデータでは、エージェントが diff サマリを添えた場合の開発者による変更の受け入れ率は 89%、生の出力のみの場合は 62% とされている。
-
-## どう使うか
-
-### インストール（プラグイン）
+プラグインは SessionStart と SessionEnd の 2 つの hook を登録する[test: crates/difflog/tests/prose_claims.rs::claim_two_hooks_registered]。
 
 ```
 /plugin install difflog@yukineko
 ```
 
-### 手動インストール
-
 ```sh
 cargo install --path .
-difflog install   # ~/.claude/settings.json に hook をマージする
+difflog install   # ~/.claude/settings.json に hook をマージする [test: crates/difflog/tests/prose_claims.rs::claim_install_merges_hooks]
 ```
 
-`difflog install` が SessionStart / SessionEnd の 2 つの hook を配線する。以降はセッションのたびに自動でスナップショットとログ書き出しが行われる。
-
-### サブコマンド
+`difflog install` が SessionStart / SessionEnd の 2 つの hook を配線する[test: crates/difflog/tests/prose_claims.rs::claim_install_merges_hooks]。
 
 ```sh
-difflog session-start   # SessionStart hook（stdin の JSON を読む）
-difflog session-end     # SessionEnd hook（ログを書き出す）
-difflog last            # 直近のログを表示する
-difflog list            # ログファイルを新しい順に一覧する（--limit N、既定 10）
-difflog init            # 雛形の ./difflog.toml を書き出す（--force で上書き）
-difflog install         # hook を ~/.claude/settings.json にマージする（--dry-run 可）
-difflog uninstall       # hook を取り除く（--dry-run 可）
-difflog status          # 解決済みの設定を表示する
+difflog session-start   # SessionStart hook（stdin の JSON を読む） [test: crates/difflog/tests/prose_claims.rs::claim_session_start_snapshots_head]
+difflog session-end     # SessionEnd hook（範囲が pathspec として渡るためログは書き出さない） [test: crates/difflog/tests/prose_claims.rs::claim_session_end_writes_log]
+difflog last            # 直近のログを表示する [test: crates/difflog/tests/prose_claims.rs::claim_last_prints_newest]
+difflog list            # ログファイルを新しい順に一覧する（--limit N、既定 10） [test: crates/difflog/tests/prose_claims.rs::claim_list_newest_first_limit]
+difflog init            # 雛形の ./difflog.toml を書き出す（--force で上書き） [test: crates/difflog/tests/prose_claims.rs::claim_init_writes_starter]
+difflog install         # hook を ~/.claude/settings.json にマージする（--dry-run 可） [test: crates/difflog/tests/prose_claims.rs::claim_install_merges_hooks]
+difflog uninstall       # hook を取り除く（--dry-run 可） [test: crates/difflog/tests/prose_claims.rs::claim_uninstall_removes_hooks]
+difflog status          # 解決済みの設定を表示する [test: crates/difflog/tests/integration.rs::status_prints_resolved_config] [test: crates/difflog/tests/prose_claims.rs::claim_config_project_wins] [test: crates/difflog/tests/prose_claims.rs::claim_config_defaults]
 ```
 
-### 設定
+`./difflog.toml`（プロジェクト）、無ければ `~/.difflog/config.toml` を読む（先に存在した方が勝ち、両者は重ね合わせない）[test: crates/difflog/tests/prose_claims.rs::claim_config_project_wins]。
+`log_dir` には SessionStart の状態 `sessions/<session_id>.json` も置かれる[test: crates/difflog/tests/prose_claims.rs::claim_log_dir_holds_session_state]。
+[`difflog.example.toml`](difflog.example.toml) のキーと既定値: `enabled`（既定 `true`）、`log_dir`（既定 `~/.difflog/logs`）、`diff_body_limit`（既定 4096 バイト）、`exclude_globs`（組み込み既定 `Cargo.lock`、`package-lock.json`、`*.min.js`、`*.min.css`）[test: crates/difflog/tests/prose_claims.rs::claim_config_defaults]。
+`diff_body_limit` は `difflog status` に表示されるが、ログが書き出されないため出力には影響しない[test: crates/difflog/tests/prose_claims.rs::claim_diff_body_limit_no_log_effect]。
+`exclude_globs` は読み込まれ `difflog status` に表示されるが、差分処理からは参照されない[test: crates/difflog/tests/prose_claims.rs::claim_exclude_globs_effect]。
+`DIFFLOG_DISABLE=1` で SessionStart のスナップショットを無効化する[test: crates/difflog/tests/prose_claims.rs::claim_disable_env]。
 
-`./difflog.toml`（プロジェクト）、無ければ `~/.difflog/config.toml` を読む（先に存在した方が勝ち）。[`difflog.example.toml`](difflog.example.toml) 参照: `enabled`、`log_dir`（既定 `~/.difflog/logs`）、`diff_body_limit`（そのまま含める diff のバイト数。既定 4096、`0` で stat のみ）、`exclude_globs`（組み込み既定: `Cargo.lock`、`package-lock.json`、`*.min.js`、`*.min.css`）。`DIFFLOG_DISABLE` で無効化する。
-
-### `/difflog` でナラティブを生成する
-
-セッション後に slash command を実行すると、ログから LLM がナラティブを生成する。
+ナラティブは生成のみとし、ログファイルを書き換えることは禁止。
 
 ```
-/difflog
+/difflog:difflog
 ```
 
-特定のセッションを対象にする場合は `/difflog --session <id>` を渡す。skill は直近のログ（または指定したセッション）を読み、「変更の概要」「主な変更点」「コミット」「残課題」を含む一枚の人間向けサマリを出力する。ナラティブは生成のみで、ログファイル自体は書き換えない。diff 本体が大きい場合はコスト節約のため stat と name-status だけを読んで概要をまとめる。
-
-決定論的な差分記録は API キー不要で動作し、ナラティブ生成のみサブスクリプション上で実行される。
-
-## ライセンス
-
-MIT
+`difflog` プラグインの `difflog` skill（`/difflog:difflog`）を実行する[test: crates/difflog/tests/prose_claims.rs::claim_skill_slash_command] [test: crates/difflog/tests/prose_claims.rs::claim_skill_invocation_namespace]。特定のセッションを対象にする場合は `/difflog:difflog --session <id>` を渡す[test: crates/difflog/tests/prose_claims.rs::claim_skill_session_arg] [test: crates/difflog/tests/prose_claims.rs::claim_skill_invocation_namespace]。

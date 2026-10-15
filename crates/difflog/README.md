@@ -1,62 +1,11 @@
-# difflog
+On `SessionStart`, difflog snapshots the current HEAD SHA into
+`~/.difflog/logs/sessions/<session_id>.json` [test: crates/difflog/tests/prose_claims.rs::claim_session_start_snapshots_head].
+On `SessionEnd` it runs `git diff --stat -- <start>..HEAD`; git reads the range
+after `--` as a pathspec, the stat comes back empty, and no log file is written [test: crates/difflog/tests/prose_claims.rs::claim_session_end_writes_log].
 
-**Session diff-log for Claude Code**, written in Rust.
+The plugin registers two hooks: SessionStart and SessionEnd [test: crates/difflog/tests/prose_claims.rs::claim_two_hooks_registered].
 
-On `SessionStart` it snapshots the current HEAD SHA. On `SessionEnd` it runs
-`git diff <start>..HEAD` and writes a structured Markdown log (commits, stat,
-file list, bounded diff body) to a local log directory. A bundled `/difflog`
-skill can then have an LLM summarise the log into a plain-English narrative
-for review or handoff.
-
-> Developer acceptance rate of agent-generated changes is **89%** when the
-> agent provides a diff summary, versus **62%** for raw output.
-> — Anthropic 2026 Agentic Coding Trends Report
-
-Subscription-native: one Rust binary, two hooks (SessionStart + SessionEnd),
-no API key for the deterministic part. The LLM narrative via `/difflog` runs
-on your subscription.
-
-## What it writes
-
-`~/.difflog/logs/<YYYY-MM-DD>-<session8>.md`:
-
-```markdown
-# difflog — myrepo
-
-- **session**: `abc12345…`
-- **started**: 2026-06-23T09:00:00Z
-- **ended**:   2026-06-23T09:47:12Z
-- **range**:   `f5a2807..3c8d91a`
-
-## Commits
-
-```
-3c8d91a add budgetguard: real-time cost gate
-a7b2f4c fix: ctxrot preguard deny precedence
-```
-
-## Files changed
-
-**Added** (2)
-- `crates/budgetguard/src/main.rs`
-- `crates/budgetguard/src/gate.rs`
-
-**Modified** (3)
-- `Cargo.toml`
-- `README.md`
-- `crates/harness-core/src/pricing.rs`
-
-## Stat
-
- crates/budgetguard/src/main.rs | 95 ++++++++++++++++++++++++
-
-## Diff
-
-```diff
-+++ b/crates/budgetguard/src/main.rs
-…
-```
-```
+No file is written at `~/.difflog/logs/<YYYY-MM-DD>-<session8>.md` [test: crates/difflog/tests/prose_claims.rs::claim_log_path_format].
 
 ## Install (plugin)
 
@@ -64,46 +13,38 @@ a7b2f4c fix: ctxrot preguard deny precedence
 /plugin install difflog@yukineko
 ```
 
-## Manual install
-
 ```sh
 cargo install --path .
 difflog install
 ```
 
-## Commands
-
 ```sh
-difflog session-start   # SessionStart hook (reads stdin JSON)
-difflog session-end     # SessionEnd hook (writes the log)
-difflog last            # print the most recent log
-difflog list            # list log files, newest first (--limit N, default 10)
-difflog init            # write a starter ./difflog.toml (--force to overwrite)
-difflog install         # merge hooks into ~/.claude/settings.json (--dry-run)
-difflog uninstall       # remove them (--dry-run)
-difflog status          # show resolved config
+difflog session-start   # SessionStart hook (reads stdin JSON) [test: crates/difflog/tests/prose_claims.rs::claim_session_start_snapshots_head]
+difflog session-end     # SessionEnd hook (writes no log: the range is passed as a pathspec) [test: crates/difflog/tests/prose_claims.rs::claim_session_end_writes_log]
+difflog last            # print the most recent log [test: crates/difflog/tests/prose_claims.rs::claim_last_prints_newest]
+difflog list            # list log files, newest first (--limit N, default 10) [test: crates/difflog/tests/prose_claims.rs::claim_list_newest_first_limit]
+difflog init            # write a starter ./difflog.toml (--force to overwrite) [test: crates/difflog/tests/prose_claims.rs::claim_init_writes_starter]
+difflog install         # merge hooks into ~/.claude/settings.json (--dry-run) [test: crates/difflog/tests/prose_claims.rs::claim_install_merges_hooks]
+difflog uninstall       # remove them (--dry-run) [test: crates/difflog/tests/prose_claims.rs::claim_uninstall_removes_hooks]
+difflog status          # show resolved config [test: crates/difflog/tests/integration.rs::status_prints_resolved_config] [test: crates/difflog/tests/prose_claims.rs::claim_config_project_wins] [test: crates/difflog/tests/prose_claims.rs::claim_config_defaults]
 ```
-
-## Config
 
 `./difflog.toml` (project), else `~/.difflog/config.toml` — the first that exists
-wins; see [`difflog.example.toml`](difflog.example.toml): `enabled`, `log_dir`
-(default `~/.difflog/logs`), `diff_body_limit` (bytes of verbatim diff, default
-4096; `0` = stat only), `exclude_globs` (built-in default: `Cargo.lock`,
-`package-lock.json`, `*.min.js`, `*.min.css`). `DIFFLOG_DISABLE` turns it off.
+wins; the files are not layered [test: crates/difflog/tests/prose_claims.rs::claim_config_project_wins].
+`log_dir` also holds the SessionStart state `sessions/<session_id>.json` [test: crates/difflog/tests/prose_claims.rs::claim_log_dir_holds_session_state].
+Keys (see [`difflog.example.toml`](difflog.example.toml)): `enabled` (default
+`true`), `log_dir` (default `~/.difflog/logs`), `diff_body_limit` (default 4096
+bytes), `exclude_globs` (built-in default `Cargo.lock`, `package-lock.json`, `*.min.js`,
+`*.min.css`) [test: crates/difflog/tests/prose_claims.rs::claim_config_defaults].
+`diff_body_limit` is printed by `difflog status` but has no effect on output, because no log is written [test: crates/difflog/tests/prose_claims.rs::claim_diff_body_limit_no_log_effect].
+`exclude_globs` is parsed and printed by `difflog status` but never read by the
+diff code [test: crates/difflog/tests/prose_claims.rs::claim_exclude_globs_effect].
+`DIFFLOG_DISABLE=1` disables the SessionStart snapshot [test: crates/difflog/tests/prose_claims.rs::claim_disable_env].
 
-## Narrative with `/difflog`
+Do not rewrite log files when generating the narrative; only generate it.
 
-After the session, run `/difflog` to get an LLM-generated narrative:
+After the session, run the `difflog` skill of the `difflog` plugin (`/difflog:difflog`) [test: crates/difflog/tests/prose_claims.rs::claim_skill_slash_command] [test: crates/difflog/tests/prose_claims.rs::claim_skill_invocation_namespace]:
 
 ```
-/difflog
+/difflog:difflog
 ```
-
-The skill reads the last log (or a specific session with `/difflog --session <id>`)
-and produces a one-page human-readable summary — what changed, why, and what
-comes next.
-
-## License
-
-MIT

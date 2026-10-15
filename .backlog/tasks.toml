@@ -2053,3 +2053,31 @@ test result: FAILED. 0 passed; 14 failed; 0 ignored; 0 measured; 6 filtered out;
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
      Running tests/script_file_content_exec.rs (target/debug/deps/script_file_content_exec-9172a7d8fe005cd8)
 error: test failed, to rerun pass `-p blastguard --test script_file_content_exec`"""
+
+[[task]]
+id = "b85f6d5d"
+title = "blastguard: a '//' literal inside a quoted python heredoc is misparsed and denied"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1792086412
+updated_at = 1792086412
+weight = 0.0
+issue_number = 1362
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1362"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test heredoc_slash_literal_misparse -- --ignored"
+rev = "4c9a42be8b24c5a75e2312765378d124836468f5"
+observed_at = 1792086412
+detail = """
+exit 101: es/overwatch)
+   Compiling blastguard v0.2.130 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.49s
+     Running tests/heredoc_slash_literal_misparse.rs (target/debug/deps/heredoc_slash_literal_misparse-de50a0a88f2ca2e2)
+error: test failed, to rerun pass `-p blastguard --test heredoc_slash_literal_misparse`"""

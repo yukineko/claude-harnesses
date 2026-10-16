@@ -54,7 +54,6 @@ class ForeignFastForwardDuringCall(ObserveGuardBase):
     def test_control_ff_with_branch_still_present_is_allowed(self) -> None:
         self.assert_allowed(self._foreign_ff_during_unrelated_call(delete_branch=False))
 
-    @unittest.expectedFailure
     def test_ff_whose_branch_was_deleted_is_not_refused(self) -> None:
         self.assert_allowed(self._foreign_ff_during_unrelated_call(delete_branch=True))
 

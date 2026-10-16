@@ -1385,6 +1385,13 @@ fn run(cli: Cli) -> Result<()> {
             if bodies > 0 {
                 println!("sync plan: {bodies} issue body(s) to update");
             }
+            let reopens = plan
+                .iter()
+                .filter(|a| matches!(a, store::SyncAction::Reopen { .. }))
+                .count();
+            if reopens > 0 {
+                println!("sync plan: {reopens} issue(s) to reopen");
+            }
             if !apply {
                 for action in plan.iter().take(20) {
                     match action {
@@ -1417,6 +1424,9 @@ fn run(cli: Cli) -> Result<()> {
                                 "  body    #{number}  {id}  replace body ({} chars)",
                                 body.chars().count(),
                             );
+                        }
+                        store::SyncAction::Reopen { id, number } => {
+                            println!("  reopen  #{number}  {id}");
                         }
                     }
                 }
@@ -1498,6 +1508,17 @@ fn run(cli: Cli) -> Result<()> {
                             github::EditOutcome::NotEdited { reason } => {
                                 failures
                                     .push(format!("{id}: body #{number} update failed: {reason}"));
+                            }
+                        }
+                    }
+                    store::SyncAction::Reopen { id, number } => {
+                        match github::decide_issue_reopen(&remote_url, *number, gh_probe) {
+                            github::ReopenOutcome::Reopened => {
+                                println!("reopened #{number} for {id}");
+                                outcomes.push(store::SyncOutcome::Reopened { id: id.clone() });
+                            }
+                            github::ReopenOutcome::NotReopened { reason } => {
+                                failures.push(format!("{id}: reopen #{number} failed: {reason}"));
                             }
                         }
                     }

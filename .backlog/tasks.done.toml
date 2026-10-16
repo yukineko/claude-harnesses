@@ -53391,6 +53391,67 @@ reason = "discard"
 discard_reason = "Fixed by branch fix-26f6dd72 162389a6 (test-only): the pinned 39 was stale after jev (f56497bf) became the 42nd plugin; specforge (0eb9996e) is intended. Expected launcher set now derived from each plugin crate's Cargo.toml bin targets (independent of the checker), asserted as exact list + count. RED: old test at 2ac122ac '40 != 39'; GREEN: 23 passed. New assertion's kill shown by a LAUNCHER_RE scope-shrink mutation (went red). backlog done refuses by design: the fix IS the test file (F2P overlays HEAD tests). The 06a9d33f half (test_a_direct_run_reports_a_nonzero_test_count) also passes now; the remaining main-guard failure in test_backlog_audit_b1_0 is a different cause, filed separately."
 
 [[task]]
+id = "f597cbbd"
+title = "observing main-tree guard が他セッションの main への fast-forward merge を並行する無関係な Bash call に帰属させた"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+Observed 2026-10-04 (session 64554c4d, reported by its p1 driver sub-agent and re-checked): main carries two single-parent commits, 98312703 (2026-10-04 02:22:02 +0900, 'specguard: ack 5 gate files with no docs/specs coverage (unblock push)', parent 5af9693e) and dfd7357d (02:23:21, 'backlog: file 5 p2 spec-debt items for gate files acked in 98312703'), followed by f2e3e057 'Merge branch flow-orphan-issues'. The sub-agent also saw a staged .backlog/tasks.toml in main's tree at the time; by the time this was filed main's tree was clean. Neither commit came from session 64554c4d. The main-tree guard attributed the change to the sub-agent's call (whose commands all ran in the session-64554c4d worktree).
+Reading (a): another session committed directly in main's working tree, so scripts/check-worktree-isolation.py (pre-commit, blocks non-merge commits from main's tree) did not fire: bypassed, not wired, or the commit ran with a different hooksPath. (b): the commits were made in a worktree and reached main by a fast-forward merge, which leaves only single-parent commits on main; §8 is satisfied but history cannot show it.
+Distinguish: find the session whose transcript contains 'unblock push' / the commit hash and check its cwd at commit time; check the reflog of main (`git reflog show main` around 02:22) for 'commit' vs 'merge ... Fast-forward'. Also: the guard's attribution of a foreign mutation to whichever call happened to run next is a separate defect (false attribution).
+
+SETTLED 2026-10-04 right after filing: reading (b). `git reflog show main` shows 'dfd7357d main@{2026-10-04 02:23:55 +0900}: merge flow-specdoc: Fast-forward' — the two commits were made on branch flow-specdoc and fast-forwarded onto main; no §8 violation. What remains open is only the false attribution: the main-tree guard (observing guard) attributed main's change (the fast-forward / a transient staged .backlog/tasks.toml during it) to an unrelated concurrent Bash call of session 64554c4d's sub-agent."""
+created_at = 1791048270
+updated_at = 1792192708
+weight = 0.0
+issue_number = 1288
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1288"
+issue_closed_at = 1792192709
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_f597cbbd.py"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003559
+detail = """
+exit 1: \u001B[0m:354: XFailed
+\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
+\u001B[31mFAILED\u001B[0m scripts/test_backlog_f597cbbd.py::\u001B[1mForeignFastForwardDuringCall::test_ff_whose_branch_was_deleted_is_not_refused\u001B[0m - _pytest.outcomes.XFailed
+\u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 1.44s\u001B[0m\u001B[31m ==========================\u001B[0m"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_backlog_f597cbbd.py"
+exit = 0
+passed = 2
+rev = "75b00795b574b1dce8da00732c3605dd19970ad9"
+observed_at = 1792192695
+output_digest = "sha256:554f78f87153ef17ab7870e88eaceb41d336627d993f3d8c97bba8cb9d44d45d"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/fix-f597cbbd
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 2 items
+
+scripts/test_backlog_f597cbbd.py ..                                      [100%]
+
+============================== 2 passed in 1.79s ===============================
+"""
+
+[task.closure.red]
+rev = "caad9a023d7da7b66ebcd3d6e4bd958fe067145a"
+exit = 1
+kind = "behavioural"
+
+[[task]]
 id = "68fb7237"
 title = "merging .backlog/tasks.toml by taking one side wholesale drops tasks added on the other side, leaving their GitHub issues open and orphaned"
 project = "/Users/yuki/src/harness"
@@ -53447,4 +53508,65 @@ scripts/test_backlog_68fb7237.py ..                                      [100%]
 [task.closure.red]
 rev = "54325ea802a8828ce6bf2e3db47d1bfd6c723dd2"
 exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "7e575392"
+title = "backlog sync has no reopen arm: a task moved back from done/cancelled to pending/needs-ruling leaves its GitHub issue closed"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-04 (worktree flow-issue-sync, base main 4027a8dc). Six issues were CLOSED while their tasks were active in .backlog/tasks.toml: #420 ae4543d5 needs-ruling, #427 e033c406 needs-ruling, #497 cc809395 pending, #633 29b08fc7 pending, #862 ee273b5e pending, #924 f036e218 pending. backlog sync --help lists arms both/create/close/body only; the dry run before the manual reopen did not list them (plan was 5 create + close #140). Reopened by hand with gh issue reopen. Consequence: the GitHub mirror reads as resolved while the work is open, the silent-means-fine reading CLAUDE.md section 1 forbids. Done criteria: sync plans a reopen action for any task in an active status whose linked issue is CLOSED, with a RED-first test against a fake gh."
+created_at = 1791047075
+updated_at = 1792192817
+weight = 0.0
+issue_number = 1275
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1275"
+issue_closed_at = 1792192818
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_7e575392 -- --ignored"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003602
+detail = """
+exit 101: failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.49s
+
+   Compiling backlog v0.3.46 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running tests/backlog_7e575392.rs (target/debug/deps/backlog_7e575392-a3ec624f5dfd0573)
+error: test failed, to rerun pass `-p backlog --test backlog_7e575392`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test backlog_7e575392"
+exit = 0
+passed = 2
+rev = "fbb045ada5a428143647a2dfde8c42d571e2fc42"
+observed_at = 1792192794
+output_digest = "sha256:78f28610c1d9c237548281628ad7b2c15716e8f974a9883c2aba1314170f4ada"
+excerpt = """
+
+running 2 tests
+test control_dry_run_plans_the_unmirrored_create ... ok
+test active_task_with_closed_issue_is_planned_for_reopen ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.44s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
+     Running tests/backlog_7e575392.rs (target/debug/deps/backlog_7e575392-63a2b6189169ebb2)
+"""
+
+[task.closure.red]
+rev = "54325ea802a8828ce6bf2e3db47d1bfd6c723dd2"
+exit = 101
 kind = "behavioural"

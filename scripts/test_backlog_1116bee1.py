@@ -10,8 +10,13 @@ and require the gate to pass. Any non-zero gate exit fails this test -- a
 below-threshold rate (exit 1) and an unmeasurable run (exit 2, fail-closed) are
 both NOT a pass (CLAUDE.md section 3).
 
-Slow (minutes): opt in with RUN_MUTATION_REPROS=1. Without it the test is
-SKIPPED, which unittest reports as skipped, never as passed.
+Slow (minutes): the measurement always runs. It used to be opt-in
+(RUN_MUTATION_REPROS=1) and otherwise skipped in setUpClass, which made the
+suite report `Ran 0 tests` -- a suite that proves nothing, so
+check-workspace-tests.py rightly reported it as undetermined (backlog
+69e34456). The kill-rate has since met the 0.80 bar, so the threshold test is
+a plain regression test (no expectedFailure): it fails if the kill-rate drops
+back below the bar.
 """
 import os
 import subprocess
@@ -25,14 +30,12 @@ FILE = "crates/propguard/src/config.rs"
 
 class KillRate(unittest.TestCase):
     """Runs the gate ONCE; two tests read the one result so an unmeasurable
-    run (exit 2) can never be absorbed by the expected-failure marker."""
+    run (exit 2) is reported as such, distinct from a below-threshold run."""
 
     result = None
 
     @classmethod
     def setUpClass(cls):
-        if os.environ.get("RUN_MUTATION_REPROS") != "1":
-            raise unittest.SkipTest("slow mutation run; set RUN_MUTATION_REPROS=1")
         # fixture precondition: cargo-mutants does not create target/ itself
         (REPO / "target").mkdir(exist_ok=True)
         env = dict(os.environ, PILOT=PILOT, MUTANTS_EXTRA=f"--file {FILE}")
@@ -47,7 +50,6 @@ class KillRate(unittest.TestCase):
         rc, tail = self.result
         self.assertIn(rc, (0, 1), f"mutation gate could not measure (exit {rc}):\n{tail}")
 
-    @unittest.expectedFailure  # backlog 1116bee1: open defect, remove when fixed
     def test_kill_rate_meets_pilot_threshold(self):
         rc, tail = self.result
         self.assertEqual(rc, 0, f"kill-rate below threshold for {FILE} (exit {rc}):\n{tail}")

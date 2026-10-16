@@ -185,70 +185,6 @@ exit 1: == short test summary info ============================\u001B[0m
 \u001B[31m======================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[33m22 deselected\u001B[0m\u001B[31m in 0.09s\u001B[0m\u001B[31m =======================\u001B[0m"""
 
 [[task]]
-id = "bf6b1aba"
-title = "fugu-router budget under_pressure reads a budgetguard spawn error, non-zero exit or unparseable status --json as no pressure"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Seen 2026-10-03 by the abba6f0d implementer (run-20261003-141339-41881, branch fix/run-20261003-141339-41881/abba6f0d commit 27824792), read not tested. crates/fugu-router/src/budget.rs: after abba6f0d the lookup Undetermined arm returns true (pressure), but once budgetguard is found, a spawn failure, non-zero exit or unparseable output still returns false = full-price routing (the permissive side). parse_pressure tests pin unparseable as no pressure. Readings: (a) fail-open per CLAUDE.md 3; (b) intended - budget is advisory. Check whether any consumer treats routing as a gate."
-created_at = 1791008100
-updated_at = 1792003538
-weight = 0.0
-issue_number = 1148
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1148"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p fugu-router --test backlog_bf6b1aba -- --ignored"
-rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
-observed_at = 1792003536
-detail = """
-exit 101: nored; 0 measured; 1 filtered out; finished in 0.95s
-
-   Compiling fugu-router v0.1.45 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/fugu-router)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
-     Running tests/backlog_bf6b1aba.rs (target/debug/deps/backlog_bf6b1aba-1cc2ba60c9a1ea18)
-error: test failed, to rerun pass `-p fugu-router --test backlog_bf6b1aba`"""
-
-[[task]]
-id = "18ebbfe6"
-title = "condukt state parse_agent_cost / parse_agent_tokens treat malformed gauge JSON as no matching id, so broken gauge output becomes no data and the manual cost is recorded"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Seen 2026-10-03 by the abba6f0d implementer (run-20261003-141339-41881, branch fix/run-20261003-141339-41881/abba6f0d commit 27824792), read not tested. crates/condukt/src/state.rs: resolve_agent_cost/tokens now return Determination<Option<..>> and lookup/spawn/exit failures are Undetermined (episode not recorded), but parse_agent_cost/parse_agent_tokens still map malformed JSON to None (= no data). Also record_runs uses s.verifier_cost_usd.unwrap_or(0.0), which can record a 0.0 verifier cost when none is known."
-created_at = 1791008101
-updated_at = 1792003557
-weight = 0.0
-issue_number = 1149
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1149"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_18ebbfe6 -- --ignored"
-rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
-observed_at = 1792003555
-detail = """
-exit 101: ailed; 0 ignored; 0 measured; 1 filtered out; finished in 1.49s
-
-   Compiling condukt v0.7.243 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
-     Running tests/backlog_18ebbfe6.rs (target/debug/deps/backlog_18ebbfe6-6699fb6f690419cc)
-error: test failed, to rerun pass `-p condukt --test backlog_18ebbfe6`"""
-
-[[task]]
 id = "65dfc23e"
 title = "session-rollout-drift.py が rc2 (enablement) に rollout-plugins.sh を勧める — rollout は plugin を有効化しない"
 project = "/Users/yuki/src/harness"
@@ -277,67 +213,6 @@ exit 1: 0m:354: XFailed
 \u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
 \u001B[31mFAILED\u001B[0m scripts/test_backlog_65dfc23e.py::\u001B[1mEnablementRemedyIsNotRollout::test_enablement_notice_does_not_prescribe_rollout\u001B[0m - _pytest.outcomes.XFailed
 \u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.06s\u001B[0m\u001B[31m ==========================\u001B[0m"""
-
-[[task]]
-id = "11be9484"
-title = "blastguard classify.rs が task の散文に detect を当て、破壊的コマンドを『記述する』散文や file 名で force-gate する"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-crates/blastguard/src/classify.rs:213-219 runs detect::detect on title + done_criteria + file list. Seen again in batch 13: 73c2c089 stayed force-gated because its touched file is scripts/check-plugin-rollout.py (needle 'rollout'), and e033c406 because its prose quoted git config core.hooksPath. Not fixed by fa1fce21 (different root: prose is not shell). Needs a decision: condukt passes real commands separately, or a backtick-span extraction rule. Either moves the measured DENY 85 / ASK 101 distribution.
-
-Observed 2026-10-03 in flow batch 13 (run-20261003-155809-33509), base fbc3dac8 / main c0d4701c."""
-created_at = 1791018586
-updated_at = 1792003597
-weight = 0.0
-issue_number = 1159
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1159"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_11be9484 -- --ignored"
-rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
-observed_at = 1792003592
-detail = """
-exit 101: c/.harness-worktrees/session-1a4ac77f/crates/overwatch)
-   Compiling blastguard v0.2.113 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.26s
-     Running tests/backlog_11be9484.rs (target/debug/deps/backlog_11be9484-55b4c2d69dad1992)
-error: test failed, to rerun pass `-p blastguard --test backlog_11be9484`"""
-
-[[task]]
-id = "0e4cfde5"
-title = "main-tree-guard pre-commit が新しい condukt worktree で condukt バイナリを見つけられず、全 worker の commit を block する"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-The pre-commit main-tree-guard looks only at $CONDUKT_BIN, target/ and PATH. A fresh condukt worktree has no build, so every worker's first commit is refused ('no condukt binary found ... the §8 gate could not run'). Workers worked around it by setting CONDUKT_BIN to main's target/release/condukt or by building condukt in the worktree. The gate is right to fail closed; the resolver should use harness_core::plugin_bin-style plugin-cache lookup (installed condukt) before giving up.
-
-Observed 2026-10-03 in flow batch 13 (run-20261003-155809-33509), base fbc3dac8 / main c0d4701c."""
-created_at = 1791018592
-updated_at = 1792003564
-weight = 0.0
-issue_number = 1163
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1163"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_backlog_0e4cfde5.py"
-rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
-observed_at = 1792003562
-detail = """
-exit 1: [0m:354: XFailed
-\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
-\u001B[31mFAILED\u001B[0m scripts/test_backlog_0e4cfde5.py::\u001B[1mPluginCacheCondukt::test_plugin_cache_condukt_is_used_when_nothing_else_exists\u001B[0m - _pytest.outcomes.XFailed
-\u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m2 passed\u001B[0m\u001B[31m in 1.89s\u001B[0m\u001B[31m ==========================\u001B[0m"""
 
 [[task]]
 id = "d058b22a"
@@ -613,36 +488,6 @@ detail = """
 exit 1: ::\u001B[1mMergeHeadShape::test_directory_merge_head_does_not_allow_a_main_commit\u001B[0m - _pytest.outcomes.XFailed
 \u001B[31mFAILED\u001B[0m scripts/test_backlog_1af8be51.py::\u001B[1mMergeHeadShape::test_symlink_to_directory_merge_head_does_not_allow_a_main_commit\u001B[0m - _pytest.outcomes.XFailed
 \u001B[31m========================= \u001B[31m\u001B[1m2 failed\u001B[0m, \u001B[32m2 passed\u001B[0m\u001B[31m in 1.14s\u001B[0m\u001B[31m ==========================\u001B[0m"""
-
-[[task]]
-id = "b0c3d263"
-title = "check-closure-evidence.py は backlog CLI が書く closure 記録 (runner=cargo-test/pytest/script) を全件 block する — runner と command 先頭語の不一致"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-crates/backlog/src/evidence.rs:61-66 records the runner as cargo-test / pytest / script; scripts/check-closure-evidence.py:298 requires it to equal the first word of the command (cargo / python3 / bash). Replaying 6 recent closing commits in a scratch clone: all 6 blocked, 3 of them on this mismatch alone (the other 3 closed rows with no closure record, which is intended). Prerequisite for wiring the scanner into pre-commit (eca8dea7 stage B). Fix both sides together with a regression test that pushes a CLI-written closure through the gate.
-
-Observed 2026-10-03 by the eca8dea7 investigation (main 9ea5a326); raw logs scratchpad eca8dea7-run-*.log, proposal eca8dea7-proposal.md."""
-created_at = 1791034486
-updated_at = 1792003600
-weight = 0.0
-issue_number = 1226
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1226"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_backlog_b0c3d263.py"
-rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
-observed_at = 1792003597
-detail = """
-exit 1: test/unittest.py\u001B[0m:354: XFailed
-\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
-\u001B[31mFAILED\u001B[0m scripts/test_backlog_b0c3d263.py::\u001B[1mClosureRunnerLabel::test_cli_written_runner_label_is_accepted\u001B[0m - _pytest.outcomes.XFailed
-\u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 2.06s\u001B[0m\u001B[31m ==========================\u001B[0m"""
 
 [[task]]
 id = "6ca3d71f"
@@ -1984,3 +1829,438 @@ exit 101: esult: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered o
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
      Running tests/backlog_launcher_reentry_first_failure.rs (target/debug/deps/backlog_launcher_reentry_first_failure-bdbc63c80997c99c)
 error: test failed, to rerun pass `-p harness-core --test backlog_launcher_reentry_first_failure`"""
+
+[[task]]
+id = "f39a48f4"
+title = "ship: stale-binary check only knows linux-x86_64 names, never fires on darwin-arm64"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "crates/ship/src/stale.rs check_stale_crate builds bin/NAME-linux-x86_64 and returns None when absent, so a stale darwin-arm64 binary is reported as no stale plugin binaries. Test asserts a darwin-arm64 binary older than src is not reported clean."
+created_at = 1792155523
+updated_at = 1792155523
+weight = 0.0
+issue_number = 1365
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1365"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p ship --test repro_stale_binary_name_linux_only -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155523
+detail = """
+exit 101: t; finished in 0.66s
+
+   Compiling ship v0.1.16 (/Users/yuki/src/.harness-worktrees/repro-failopens/crates/ship)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.94s
+     Running tests/repro_stale_binary_name_linux_only.rs (target/debug/deps/repro_stale_binary_name_linux_only-6771d7908d466a39)
+error: test failed, to rerun pass `-p ship --test repro_stale_binary_name_linux_only`"""
+
+[[task]]
+id = "b1a27409"
+title = "ship: SessionEnd reminder suppressed whenever stdout is piped (always, under the real hook)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "crates/ship/src/main.rs session_end prints only if !is_headless(), and is_headless is !stdout.is_terminal(); Claude Code captures hook stdout so the unshipped-work reminder never appears. Test pipes stdout with an uncommitted file present and asserts a non-empty reminder."
+created_at = 1792155547
+updated_at = 1792155547
+weight = 0.0
+issue_number = 1366
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1366"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p ship --test repro_session_end_suppressed_when_piped -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155547
+detail = """
+exit 101: 0.85s
+
+   Compiling ship v0.1.16 (/Users/yuki/src/.harness-worktrees/repro-failopens/crates/ship)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/repro_session_end_suppressed_when_piped.rs (target/debug/deps/repro_session_end_suppressed_when_piped-3e3f6ea64fa26443)
+error: test failed, to rerun pass `-p ship --test repro_session_end_suppressed_when_piped`"""
+
+[[task]]
+id = "77483c04"
+title = "ship: git errors in src/git.rs resolve to clean (no upstream gives 0 unpushed, failed git gives no uncommitted)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "crates/ship/src/git.rs: uncommitted_changes false on Err and ignores exit status; unmerged_condukt_branches/leftover_worktrees empty vec; unpushed_count returns 0 when both upstream and origin/main fail. Checklist then prints [x]. Existing unit test test_unpushed_count_no_upstream pins the 0 and encodes the fail-open as spec; NOT edited here, owner must revisit it when fixing. Tests assert no [x] line when git could not answer."
+created_at = 1792155551
+updated_at = 1792155551
+weight = 0.0
+issue_number = 1367
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1367"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p ship --test repro_git_errors_resolve_clean -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155551
+detail = """
+exit 101:  filtered out; finished in 0.45s
+
+   Compiling ship v0.1.16 (/Users/yuki/src/.harness-worktrees/repro-failopens/crates/ship)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
+     Running tests/repro_git_errors_resolve_clean.rs (target/debug/deps/repro_git_errors_resolve_clean-5502a19c7f138336)
+error: test failed, to rerun pass `-p ship --test repro_git_errors_resolve_clean`"""
+
+[[task]]
+id = "96bfbac6"
+title = "ship: failed or missing rebuild/rollout script still exits 0"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "crates/ship/src/main.rs check --run-safe and rollout print the FAILED summary (checklist.rs run_safe/rollout return Ok) or eprintln on Err, never setting an exit code. Tests assert non-zero exit for a failing script and a missing script."
+created_at = 1792155554
+updated_at = 1792155554
+weight = 0.0
+issue_number = 1369
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1369"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p ship --test repro_script_failure_exits_zero -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155554
+detail = """
+exit 101: ltered out; finished in 1.25s
+
+   Compiling ship v0.1.16 (/Users/yuki/src/.harness-worktrees/repro-failopens/crates/ship)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s
+     Running tests/repro_script_failure_exits_zero.rs (target/debug/deps/repro_script_failure_exits_zero-43ee4a53c79a23fe)
+error: test failed, to rerun pass `-p ship --test repro_script_failure_exits_zero`"""
+
+[[task]]
+id = "bc29c30a"
+title = "evalkit: cmd case without assert.exit passes on a non-zero exit"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "crates/evalkit/src/run.rs check_exit returns early when assert.exit is None and other checks look at stdout only; a command exiting 101 with empty stdout satisfies not_contains and is reported ok. Test asserts non-zero overall exit."
+created_at = 1792155563
+updated_at = 1792155563
+weight = 0.0
+issue_number = 1371
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1371"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p evalkit --test repro_cmd_case_ignores_exit_status -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155563
+detail = """
+exit 101: hed in 0.41s
+
+   Compiling evalkit v0.1.9 (/Users/yuki/src/.harness-worktrees/repro-failopens/crates/evalkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
+     Running tests/repro_cmd_case_ignores_exit_status.rs (target/debug/deps/repro_cmd_case_ignores_exit_status-f42af028fb2a0991)
+error: test failed, to rerun pass `-p evalkit --test repro_cmd_case_ignores_exit_status`"""
+
+[[task]]
+id = "72564611"
+title = "evalkit: empty assert passes vacuously"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "crates/evalkit/src/case.rs documents empty Assert as acquisition-only and validate does not reject it; run.rs check_assert loops over empty vectors so zero assertions is ok and exit 0. Note the doc comment states this as intended; the fix must change that prose in the same commit. Test asserts non-zero."
+created_at = 1792155566
+updated_at = 1792155566
+weight = 0.0
+issue_number = 1372
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1372"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p evalkit --test repro_empty_assert_passes_vacuously -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155566
+detail = """
+exit 101:  in 0.42s
+
+   Compiling evalkit v0.1.9 (/Users/yuki/src/.harness-worktrees/repro-failopens/crates/evalkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/repro_empty_assert_passes_vacuously.rs (target/debug/deps/repro_empty_assert_passes_vacuously-4385305a027c1005)
+error: test failed, to rerun pass `-p evalkit --test repro_empty_assert_passes_vacuously`"""
+
+[[task]]
+id = "cedfa91e"
+title = "trajectoryeval: fuzzy_hash at default threshold 0 rounds real drift to match"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "crates/trajectoryeval/src/tier.rs fuzzy_diff round-half-up: 1 changed leaf of 2001 gives distance 0, 0<=0 is Match, exit 0, contradicting the TierConfig doc that default 0 means any drift escalates. Test asserts non-zero exit."
+created_at = 1792155569
+updated_at = 1792155569
+weight = 0.0
+issue_number = 1373
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1373"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p trajectoryeval --test repro_fuzzy_hash_default_threshold_rounds_drift_away -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155569
+detail = """
+exit 101: worktrees/repro-failopens/crates/trajectoryeval)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.43s
+     Running tests/repro_fuzzy_hash_default_threshold_rounds_drift_away.rs (target/debug/deps/repro_fuzzy_hash_default_threshold_rounds_drift_away-96e836cb97e18345)
+error: test failed, to rerun pass `-p trajectoryeval --test repro_fuzzy_hash_default_threshold_rounds_drift_away`"""
+
+[[task]]
+id = "dc5c8b29"
+title = "trajectoryeval: empty subsequence spec passes any trajectory"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "crates/trajectoryeval/src/match_traj.rs: spec with mode subsequence and no steps (serde default) requires nothing, reports nothing unexpected, check prints matched and exits 0. Test asserts non-zero."
+created_at = 1792155576
+updated_at = 1792155576
+weight = 0.0
+issue_number = 1375
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1375"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p trajectoryeval --test repro_empty_subsequence_spec_passes_anything -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155576
+detail = """
+exit 101: Users/yuki/src/.harness-worktrees/repro-failopens/crates/trajectoryeval)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s
+     Running tests/repro_empty_subsequence_spec_passes_anything.rs (target/debug/deps/repro_empty_subsequence_spec_passes_anything-a234c31cc429f706)
+error: test failed, to rerun pass `-p trajectoryeval --test repro_empty_subsequence_spec_passes_anything`"""
+
+[[task]]
+id = "ceafad0e"
+title = "trajectoryeval: extract skips non-JSON lines, garbage transcript gives [] and exit 0"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "crates/trajectoryeval/src/extract.rs extract_tools does Err(_) => continue per line; an entirely unparseable transcript prints [] with exit 0, indistinguishable from a session with no tool calls; main.rs reserves exit 2 for unparseable input. Test asserts non-zero."
+created_at = 1792155578
+updated_at = 1792155578
+weight = 0.0
+issue_number = 1376
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1376"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p trajectoryeval --test repro_extract_garbage_transcript_exits_zero -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155578
+detail = """
+exit 101:  (/Users/yuki/src/.harness-worktrees/repro-failopens/crates/trajectoryeval)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running tests/repro_extract_garbage_transcript_exits_zero.rs (target/debug/deps/repro_extract_garbage_transcript_exits_zero-32e8bb2508edee0a)
+error: test failed, to rerun pass `-p trajectoryeval --test repro_extract_garbage_transcript_exits_zero`"""
+
+[[task]]
+id = "331dd891"
+title = "trajectoryeval: tier --exists defaults true so an omitted existence input passes a non-core flow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "crates/trajectoryeval/src/main.rs --exists default_value_t = true; non_core flow with no existence input gets existence present and exit 0. Test asserts non-zero when --exists is omitted."
+created_at = 1792155582
+updated_at = 1792155582
+weight = 0.0
+issue_number = 1377
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1377"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p trajectoryeval --test repro_tier_exists_defaults_true -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155582
+detail = """
+exit 101: 
+   Compiling trajectoryeval v0.1.14 (/Users/yuki/src/.harness-worktrees/repro-failopens/crates/trajectoryeval)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running tests/repro_tier_exists_defaults_true.rs (target/debug/deps/repro_tier_exists_defaults_true-f4d6864a3f897651)
+error: test failed, to rerun pass `-p trajectoryeval --test repro_tier_exists_defaults_true`"""
+
+[[task]]
+id = "099a5cbb"
+title = "blastguard tests write into the live overwatch violation registry (HOME/env_clear do not isolate)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "overwatch",
+    "test-isolation",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Repro (commit 99cd73b1): crates/blastguard/tests/repro_live_registry_pollution.rs, tests env_clear_child_does_not_write_real_overwatch_registry and inherited_home_child_does_not_write_real_overwatch_registry; both RED. Path: blastguard main.rs record_violation -> overwatch store::append_violation(cwd) -> storage_root = harness_core::config::base_dir(overwatch) = home(); home() falls back to dirs::home_dir (real passwd home) when HOME is unset, so env_clear (ask_hardening_invariant.rs) does not isolate; most other blastguard tests inherit HOME. Canary false-halt evidence (2026-10-16 JST): rollout-plugins.sh --canary stage 12 ship 0.1.15 rolled back at ts 1792105431 (rollbacks.jsonl reason raw), raw observed_violations 5 vs threshold 2. The 5 counted events are all ts 1792105430, session_id _local, signature blastguard:unrecognised-wrapper, detail my-cleanup-wrapper = ask_hardening_invariant.rs fixture (5 tests). Source: session 1a4ac77f subagent agent-a8854e5 ran cargo test -p blastguard --no-fail-fast in worktree fix-11be9484 at 23:03:43Z; its output shows ask_hardening_invariant 5 passed. Subsequent _local burst 1792105436-1792105447 (mkfs, shred, rm-recursive, protected-path, write-empty-content, find-exec-shell, git-config-hookspath) is the rest of that suite. Measured observation (live harness-e77d23c7 violations.jsonl, 2026-10-16): 13666 of 19351 events (71%) have session_id _local; 930 contain my-cleanup-wrapper (186 runs of that one file). Not every _local event was verified to be test-originated. Also observed: ~2480 -tmpXXXX dirs in ~/.overwatch from some suite (not identified); overwatch own tests: 10 of 47 files set HOME, rest not audited. Do not fix by narrowing the canary gate."
+created_at = 1792106110
+updated_at = 1792106110
+weight = 0.0
+issue_number = 1363
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1363"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test repro_live_registry_pollution -- --ignored"
+rev = "99cd73b1030170e735c1c0fdc3eda5d46f630902"
+observed_at = 1792106110
+detail = """
+exit 101: al_overwatch_registry
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.96s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.62s
+     Running tests/repro_live_registry_pollution.rs (target/debug/deps/repro_live_registry_pollution-6c44738a648c523b)
+error: test failed, to rerun pass `-p blastguard --test repro_live_registry_pollution`"""
+
+[[task]]
+id = "86e21645"
+title = "maintree guard refuses a fast-forward when the source branch is already gone"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "scripts/guard-maintree-bash.py integration_head() accepts a moved HEAD only if it is a merge commit or contained in a ref other than main. A ff whose source branch is deleted before PostToolUse (same call, or another session during an unrelated call) is refused. User ruling 2026-10-16: main reflog 'merge ...: Fast-forward' / 'merge ...' is integration evidence; 'commit:' still refused; unreadable reflog refused (undetermined). Controls in the same file must stay green."
+created_at = 1792155566
+updated_at = 1792155566
+weight = 0.0
+issue_number = 1374
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1374"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_guard_maintree_bash_ff_source_gone.py"
+rev = "7b8cc0b73eed33d76260918d6cf74021f3e97633"
+observed_at = 1792155566
+detail = """
+exit 1: nfo ============================
+FAILED scripts/test_guard_maintree_bash_ff_source_gone.py::FfSourceGoneAllowed::test_a_ff_and_branch_delete_in_same_call_is_allowed
+FAILED scripts/test_guard_maintree_bash_ff_source_gone.py::FfSourceGoneAllowed::test_b_other_session_ff_and_branch_delete_during_unrelated_call_is_allowed
+========================= 2 failed, 6 passed in 9.36s =========================="""
+
+[[task]]
+id = "0d007aa5"
+title = "test-weakening ignores acks on MERGE_HEAD's side during a merge"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "check-test-weakening.py scan() diffs merge-base(main,HEAD)..worktree (includes MERGE_HEAD's changes) but acknowledgements() reads only merge_base..HEAD plus the pending msg, so main-side acks are invisible mid-merge. Observed on 96da33f6 and 99cd73b1. Repro scripts/test_test_weakening_merge_ack.py (45f62810)."
+created_at = 1792155730
+updated_at = 1792155730
+weight = 0.0
+issue_number = 1378
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1378"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_test_weakening_merge_ack.py::MergeMainIntoFeature::test_main_side_acked_removal_does_not_block_the_merge"
+rev = "854b0075a358b6d9fa9d07176a91b2ce0f16f4a4"
+observed_at = 1792155730
+detail = """
+exit 1: E           _pytest.outcomes.XFailed
+
+../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
+=========================== short test summary info ============================
+FAILED scripts/test_test_weakening_merge_ack.py::MergeMainIntoFeature::test_main_side_acked_removal_does_not_block_the_merge
+============================== 1 failed in 1.35s ==============================="""
+
+[[task]]
+id = "dc955812"
+title = "blastguard classify は backtick で引用されたコマンドを記述するだけの task 散文も force-gate する (11be9484 の散文側、ユーザー裁定 2026-10-16 で先送り)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "11be9484 split by user ruling 2026-10-16: the file-name half was fixed (blastguard 0.2.131); the prose half (a backtick-quoted command that the prose merely describes) still gates. Options from 11be9484: condukt passes real commands to classify separately (interface change; the repro test classifies joined text and would need rewriting with an ack), or a backtick-span rule (widest loosening: a task saying run rm -rf X would also pass). Needs a user design ruling before implementation."
+created_at = 1792155553
+updated_at = 1792155553
+weight = 0.0
+issue_number = 1368
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1368"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_11be9484 -- --ignored prose_describing_a_command_does_not_force_gate"
+rev = "12bfc9707a4aa5a712d30007e890b7da64ea6196"
+observed_at = 1792155553
+detail = """
+exit 101: failures:
+    prose_describing_a_command_does_not_force_gate
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/backlog_11be9484.rs (target/debug/deps/backlog_11be9484-27e56823383379b3)
+error: test failed, to rerun pass `-p blastguard --test backlog_11be9484`"""

@@ -42,3 +42,11 @@ benchkit audit-sample <changes.jsonl> [--audits <verdicts.jsonl> | --from-violat
 
 `download` はキャッシュ存在時は `--force` が無い限り no-op。 [test: crates/benchkit/src/download.rs::existing_cache_is_a_noop] [test: crates/benchkit/tests/prose_claims.rs::claim_download_force_refetch].
 `[dependencies]` に HTTP クライアント crate を持たず、`curl` にハードタイムアウト (`--max-time 120`) 付きで shell out する。 [test: crates/benchkit/tests/prose_claims.rs::claim_download_curl_timeout].
+
+<!-- record: 2026-07-08 rev: 999af47e -->
+- **データセット:** SWE-bench Verified — SWE-bench の人手検証済み 500 タスク部分集合。
+- **提供元:** Princeton NLP (HuggingFace `princeton-nlp/SWE-bench_Verified`,
+  <https://huggingface.co/datasets/princeton-nlp/SWE-bench_Verified>)。
+- **ライセンス:** データセットは上流条件で配布 (SWE-bench ツールは MIT。参照先
+  リポジトリは各自のライセンス)。
+<!-- /record -->

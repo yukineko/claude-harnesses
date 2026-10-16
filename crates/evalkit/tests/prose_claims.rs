@@ -372,14 +372,14 @@ fn case_line(id: &str, describe: &str, want: &str) -> String {
 #[test]
 fn claim_canary_label_keys() {
     let d = fresh_dir("canary");
-    // describe-edit => one dropped + one added
+    // describe-edit => one dropped + one added; the dropped golden gates (exit 1)
     let a = run_json_to(&case_line("k", "old", "HAVE"), &d, "a.json");
     let b = run_json_to(&case_line("k", "new", "HAVE"), &d, "b.json");
     let o = ev_in(
         &["canary", "--baseline", s(&a), "--current", s(&b), "--json"],
         &d,
     );
-    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(o.code, 1, "a describe-edit drops a golden: {}", o.stderr);
     let v: Value = serde_json::from_str(&o.stdout).unwrap();
     assert_eq!(v["added"], serde_json::json!(["k — new"]));
     assert_eq!(v["dropped"], serde_json::json!(["k — old"]));

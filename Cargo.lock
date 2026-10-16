@@ -131,7 +131,7 @@ dependencies = [
 
 [[package]]
 name = "benchkit"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "anyhow",
  "clap",
@@ -164,7 +164,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "blastguard"
-version = "0.2.130"
+version = "0.2.132"
 dependencies = [
  "globset",
  "harness-core",
@@ -197,7 +197,7 @@ dependencies = [
 
 [[package]]
 name = "budgetguard"
-version = "0.1.35"
+version = "0.1.36"
 dependencies = [
  "anyhow",
  "chrono",
@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.252"
+version = "0.7.253"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -504,7 +504,7 @@ dependencies = [
 
 [[package]]
 name = "evalkit"
-version = "0.1.8"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "clap",
@@ -546,7 +546,7 @@ checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
 name = "fugu-router"
-version = "0.1.47"
+version = "0.1.48"
 dependencies = [
  "anyhow",
  "clap",
@@ -874,7 +874,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "overwatch"
-version = "0.2.67"
+version = "0.2.69"
 dependencies = [
  "anyhow",
  "clap",
@@ -1266,7 +1266,7 @@ dependencies = [
 
 [[package]]
 name = "ship"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "anyhow",
  "clap",
@@ -1535,7 +1535,7 @@ dependencies = [
 
 [[package]]
 name = "trajectoryeval"
-version = "0.1.12"
+version = "0.1.14"
 dependencies = [
  "anyhow",
  "clap",

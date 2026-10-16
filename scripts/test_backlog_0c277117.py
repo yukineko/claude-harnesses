@@ -9,8 +9,9 @@ Stop. The remaining step of the ticket is the pre-push wiring.
 
 This is a WIRING test (lexical, by necessity): running the real pre-push needs
 a full `cargo check --workspace` of the pushed tip, so the observable here is
-whether the hook invokes gate-check at all, outside comments. Open defect ->
-expectedFailure.
+whether the hook invokes gate-check at all, outside comments. The wiring has
+landed (.githooks/pre-push runs `specguard map gate-check` per pushed tip), so
+the test is a plain regression test: it fails if the wiring is removed.
 
     python3 scripts/test_backlog_0c277117.py
 """
@@ -40,7 +41,6 @@ class SpecguardGateCheckIsWired(unittest.TestCase):
         for h in HOOKS:
             self.assertTrue(h.is_file(), "control: missing hook %s" % h)
 
-    @unittest.expectedFailure  # backlog 0c277117: open defect, remove when fixed
     def test_pre_push_invokes_specguard_map_gate_check(self):
         pat = re.compile(r"specguard\b.*\bmap\b.*\bgate-check\b")
         hits = [l for l in _code_lines(HOOKS[0]) if pat.search(l)]

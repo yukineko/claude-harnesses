@@ -10,8 +10,20 @@ and require the gate to pass. Any non-zero gate exit fails this test -- a
 below-threshold rate (exit 1) and an unmeasurable run (exit 2, fail-closed) are
 both NOT a pass (CLAUDE.md section 3).
 
-Slow (minutes): opt in with RUN_MUTATION_REPROS=1. Without it the test is
-SKIPPED, which unittest reports as skipped, never as passed.
+Slow (minutes): the measurement always runs. It used to be opt-in
+(RUN_MUTATION_REPROS=1) and otherwise skipped in setUpClass, which made the
+suite report `Ran 0 tests` -- a suite that proves nothing, so
+check-workspace-tests.py rightly reported it as undetermined (backlog
+69e34456).
+
+The defect is still OPEN, and the measurement is NOT deterministic: four runs
+on 2026-10-17 at 2ac122ac gave 80.8% / >=80% / 78.8% / 78.8%. The mutant that
+flips is detect.rs:128:47 (`>=` -> `<` on similarity_threshold in `repeat`),
+caught in some runs and missed in others, so some stuckguard test catches it
+only nondeterministically. The threshold test therefore keeps its
+expectedFailure marker: a run that misses the flaky mutant reports an expected
+failure, a run that catches it reports an UNEXPECTED SUCCESS (a red, named by
+check-workspace-tests.py).
 """
 import os
 import subprocess
@@ -31,8 +43,6 @@ class KillRate(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        if os.environ.get("RUN_MUTATION_REPROS") != "1":
-            raise unittest.SkipTest("slow mutation run; set RUN_MUTATION_REPROS=1")
         # fixture precondition: cargo-mutants does not create target/ itself
         (REPO / "target").mkdir(exist_ok=True)
         env = dict(os.environ, PILOT=PILOT, MUTANTS_EXTRA=f"--file {FILE}")

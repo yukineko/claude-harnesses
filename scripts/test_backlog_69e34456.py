@@ -57,19 +57,15 @@ class WorkspacePythonBodySuites(unittest.TestCase):
             % (module, report, completed.out),
         )
 
-    @unittest.expectedFailure
     def test_0c277117_suite_verdict_is_clean(self):
         self._assert_clean("test_backlog_0c277117")
 
-    @unittest.expectedFailure
     def test_b63cbdf0_suite_verdict_is_clean(self):
         self._assert_clean("test_backlog_b63cbdf0")
 
-    @unittest.expectedFailure
     def test_1116bee1_suite_verdict_is_clean(self):
         self._assert_clean("test_backlog_1116bee1")
 
-    @unittest.expectedFailure
     def test_f6c60f58_suite_verdict_is_clean(self):
         self._assert_clean("test_backlog_f6c60f58")
 

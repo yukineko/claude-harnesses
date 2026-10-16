@@ -2584,3 +2584,467 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
      Running tests/repro_session_start_malformed_stdin.rs (target/debug/deps/repro_session_start_malformed_stdin-dd5d8838be6468d6)
 error: test failed, to rerun pass `-p backlog --test repro_session_start_malformed_stdin`"""
+
+[[task]]
+id = "2756b4a6"
+title = "daily: run_task spawns a command blastguard answers Ask for (matches only Deny)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "run_task in crates/daily/src/main.rs matches only Decision::Deny, so an Ask (refusal to guess) command is still handed to sh -c. Observed: a task writing .claude/settings.json by redirect ran."
+created_at = 1792189369
+updated_at = 1792189369
+weight = 0.0
+issue_number = 1401
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1401"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p daily --test repro_ask_command_still_spawned -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189369
+detail = """
+exit 101: ings/crates/blastguard)
+   Compiling daily v0.3.19 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/daily)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.82s
+     Running tests/repro_ask_command_still_spawned.rs (target/debug/deps/repro_ask_command_still_spawned-8cc5ada547cb7a4f)
+error: test failed, to rerun pass `-p daily --test repro_ask_command_still_spawned`"""
+
+[[task]]
+id = "24a169f4"
+title = "daily: task dir that is missing or outside the session cwd is silently ignored; task runs in cwd"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "resolve_task_dir falls back to the session cwd on any failure with no diagnostic; existing resolve_task_dir_rejects_* unit tests pin the fallback. Observed: a task with dir=no-such-subdir ran in cwd."
+created_at = 1792189387
+updated_at = 1792189387
+weight = 0.0
+issue_number = 1402
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1402"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p daily --test repro_task_dir_fallback_to_cwd -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189387
+detail = """
+exit 101: ed out; finished in 0.49s
+
+   Compiling daily v0.3.19 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/daily)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running tests/repro_task_dir_fallback_to_cwd.rs (target/debug/deps/repro_task_dir_fallback_to_cwd-bf99acc1057dc582)
+error: test failed, to rerun pass `-p daily --test repro_task_dir_fallback_to_cwd`"""
+
+[[task]]
+id = "8e749f85"
+title = "daily: install is unimplemented but exits 0"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Cmd::Install prints not yet implemented and calls exit(0), so a caller scripting the install sees success while nothing was installed."
+created_at = 1792189390
+updated_at = 1792189390
+weight = 0.0
+issue_number = 1403
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1403"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p daily --test repro_install_unimplemented_exit0 -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189390
+detail = """
+exit 101: inished in 0.37s
+
+   Compiling daily v0.3.19 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/daily)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running tests/repro_install_unimplemented_exit0.rs (target/debug/deps/repro_install_unimplemented_exit0-e125b7539c8d6b17)
+error: test failed, to rerun pass `-p daily --test repro_install_unimplemented_exit0`"""
+
+[[task]]
+id = "f1f06417"
+title = "daily: unparseable ~/.daily/config.toml falls back to defaults and the built-in security task runs"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "parse_config maps a parse error to Config::default() with only a stderr warning; session-start then runs the default cargo deny task. Unreadable config is separate (d3245d99)."
+created_at = 1792189392
+updated_at = 1792189392
+weight = 0.0
+issue_number = 1404
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1404"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p daily --test repro_unparseable_config_runs_default -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189392
+detail = """
+exit 101: .52s
+
+   Compiling daily v0.3.19 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/daily)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running tests/repro_unparseable_config_runs_default.rs (target/debug/deps/repro_unparseable_config_runs_default-d0b08d3affe3351f)
+error: test failed, to rerun pass `-p daily --test repro_unparseable_config_runs_default`"""
+
+[[task]]
+id = "10f339ee"
+title = "tdd: Stop hook allows the stop on malformed stdin even in a violating repo"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "gate_command treats unparseable stdin as interactive: in a repo with implementation and no test the verdict is a violation but it is printed to stderr with exit 1 and no decision:block on stdout, which Claude Code reads as a non-blocking error. integration.rs gate_malformed_stdin_allows_the_stop pins only the empty-cwd case and is untouched."
+created_at = 1792189395
+updated_at = 1792189395
+weight = 0.0
+issue_number = 1405
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1405"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test repro_gate_malformed_stdin_allows -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189395
+detail = """
+exit 101: dings/crates/overwatch)
+   Compiling tdd v0.1.42 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.77s
+     Running tests/repro_gate_malformed_stdin_allows.rs (target/debug/deps/repro_gate_malformed_stdin_allows-a9977a41a6860119)
+error: test failed, to rerun pass `-p tdd --test repro_gate_malformed_stdin_allows`"""
+
+[[task]]
+id = "fa377dbe"
+title = "session-insights: unparseable config silently ignored (no stderr, defaults used)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Config::load in config.rs ignores a toml parse error and a size_thresholds array of the wrong length with no diagnostic; status shows defaults as if configured. Observed for the unparseable case."
+created_at = 1792189401
+updated_at = 1792189401
+weight = 0.0
+issue_number = 1406
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1406"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p session-insights --test repro_config_invalid_silently_ignored -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189401
+detail = """
+exit 101: ts v0.2.28 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/session-insights)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.79s
+     Running tests/repro_config_invalid_silently_ignored.rs (target/debug/deps/repro_config_invalid_silently_ignored-15eb11370ba23000)
+error: test failed, to rerun pass `-p session-insights --test repro_config_invalid_silently_ignored`"""
+
+[[task]]
+id = "b3c1daae"
+title = "session-insights: record and stop hooks drop an unparseable payload with exit 0 and no stderr"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "record() returns silently when HookInput::parse fails; integration.rs record_hook_survives_garbage_stdin pins only exit 0."
+created_at = 1792189404
+updated_at = 1792189404
+weight = 0.0
+issue_number = 1407
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1407"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p session-insights --test repro_hooks_garbage_payload_silent -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189404
+detail = """
+exit 101: on-insights v0.2.28 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/session-insights)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running tests/repro_hooks_garbage_payload_silent.rs (target/debug/deps/repro_hooks_garbage_payload_silent-c2bb45392650717b)
+error: test failed, to rerun pass `-p session-insights --test repro_hooks_garbage_payload_silent`"""
+
+[[task]]
+id = "d49f1bc2"
+title = "session-insights: report --all silently skips a corrupt session json and presents a partial list as complete"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "metrics::load_all drops any <sid>.json that fails to read or parse with no diagnostic."
+created_at = 1792189407
+updated_at = 1792189407
+weight = 0.0
+issue_number = 1408
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1408"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p session-insights --test repro_report_all_skips_corrupt_session -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189407
+detail = """
+exit 101: v0.2.28 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/session-insights)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running tests/repro_report_all_skips_corrupt_session.rs (target/debug/deps/repro_report_all_skips_corrupt_session-86afd5a78a11f590)
+error: test failed, to rerun pass `-p session-insights --test repro_report_all_skips_corrupt_session`"""
+
+[[task]]
+id = "5fd42034"
+title = "session-insights: record-now exits 0 with empty stdout when no note was written (vault missing)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "record_now prints a message to stderr but exits 0 and prints no path, so a caller reading stdout and the exit code sees success."
+created_at = 1792189409
+updated_at = 1792189409
+weight = 0.0
+issue_number = 1409
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1409"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p session-insights --test repro_record_now_exit0_no_note -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189409
+detail = """
+exit 101: piling session-insights v0.2.28 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/session-insights)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.45s
+     Running tests/repro_record_now_exit0_no_note.rs (target/debug/deps/repro_record_now_exit0_no_note-18084f1ef0564d72)
+error: test failed, to rerun pass `-p session-insights --test repro_record_now_exit0_no_note`"""
+
+[[task]]
+id = "c1174e86"
+title = "budgetguard: status --json reads a corrupt ledger as day_usd 0 and pressure false"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "main.rs status uses lenient Ledger::load (unwrap_or_default) so a corrupt ledger prints zero spend and no pressure with exit 0; check already uses load_checked and exits 2."
+created_at = 1792189420
+updated_at = 1792189420
+weight = 0.0
+issue_number = 1410
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1410"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p budgetguard --test repro_status_json_corrupt_ledger -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189420
+detail = """
+exit 101: h)
+   Compiling budgetguard v0.1.39 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/budgetguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.14s
+     Running tests/repro_status_json_corrupt_ledger.rs (target/debug/deps/repro_status_json_corrupt_ledger-702f571d4ccb3933)
+error: test failed, to rerun pass `-p budgetguard --test repro_status_json_corrupt_ledger`"""
+
+[[task]]
+id = "6bb90ca6"
+title = "propguard: unsearchable repo root reads as NotRepo (git_probe relies on Path::exists) and the Stop gate allows"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "harness-core git_probe::dot_git_present uses Path::exists; when the repo root is mode 000 both the stat and git chdir fail, so probe_repo returns NotRepo and propguard allows no-git instead of Undetermined."
+created_at = 1792189426
+updated_at = 1792189426
+weight = 0.0
+issue_number = 1411
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1411"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p propguard --test repro_git_probe_unreadable_ancestor -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189426
+detail = """
+exit 101:    Compiling propguard v0.1.60 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/propguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.76s
+     Running tests/repro_git_probe_unreadable_ancestor.rs (target/debug/deps/repro_git_probe_unreadable_ancestor-ba9ef126602973c1)
+error: test failed, to rerun pass `-p propguard --test repro_git_probe_unreadable_ancestor`"""
+
+[[task]]
+id = "60b59f75"
+title = "backlog: held exclusive lock does not stop next --claim from another session"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "lock acquire is documented as the way to exclude every other session from a project, but next --claim never reads the exclusive lock. Observed: session-B was handed a task while session-A held the lock."
+created_at = 1792189431
+updated_at = 1792189431
+weight = 0.0
+issue_number = 1412
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1412"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test repro_exclusive_lock_ignored_by_claim -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189431
+detail = """
+exit 101:    Compiling backlog v0.3.51 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.02s
+     Running tests/repro_exclusive_lock_ignored_by_claim.rs (target/debug/deps/repro_exclusive_lock_ignored_by_claim-995b323a548366e5)
+error: test failed, to rerun pass `-p backlog --test repro_exclusive_lock_ignored_by_claim`"""
+
+[[task]]
+id = "40dde238"
+title = "condukt: state release-task ignores --run and releases another run's claim"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "StateAction::ReleaseTask calls claim::release_tasks which removes entries regardless of holder run (documented as caller owns hashkey identity) while --run is required and the message says released for run X. Observed: run-B released run-A's claim."
+created_at = 1792189441
+updated_at = 1792189441
+weight = 0.0
+issue_number = 1413
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1413"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test repro_release_task_ignores_run -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189441
+detail = """
+exit 101: crates/blastguard)
+   Compiling condukt v0.7.257 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.54s
+     Running tests/repro_release_task_ignores_run.rs (target/debug/deps/repro_release_task_ignores_run-9b8a3d7e09614f87)
+error: test failed, to rerun pass `-p condukt --test repro_release_task_ignores_run`"""
+
+[[task]]
+id = "956d2c7a"
+title = "hypothesis: list --status bogus exits 0 with an empty listing"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "The help says an unrecognised value matches nothing; an empty result with exit 0 is indistinguishable from no hypotheses with that valid status."
+created_at = 1792189461
+updated_at = 1792189461
+weight = 0.0
+issue_number = 1414
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1414"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p hypothesis --test repro_list_unknown_status_exit0 -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189461
+detail = """
+exit 101: n 0.54s
+
+   Compiling hypothesis v0.1.20 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/hypothesis)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.11s
+     Running tests/repro_list_unknown_status_exit0.rs (target/debug/deps/repro_list_unknown_status_exit0-241834bd146fc682)
+error: test failed, to rerun pass `-p hypothesis --test repro_list_unknown_status_exit0`"""
+
+[[task]]
+id = "df9e188b"
+title = "overwatch: end --status bogus is accepted and the lease released"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "lease::end records the free-text status in an Ended event without validating it."
+created_at = 1792189470
+updated_at = 1792189470
+weight = 0.0
+issue_number = 1415
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1415"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_end_unknown_status_accepted -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189470
+detail = """
+exit 101: 65s
+
+   Compiling overwatch v0.2.71 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.15s
+     Running tests/repro_end_unknown_status_accepted.rs (target/debug/deps/repro_end_unknown_status_accepted-cc9a6f175075906b)
+error: test failed, to rerun pass `-p overwatch --test repro_end_unknown_status_accepted`"""

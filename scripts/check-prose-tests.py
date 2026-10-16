@@ -25,6 +25,10 @@ exactly one of four classes, decided deterministically and in this order:
                naming one is treated as a claim (user ruling 2026-10-15)
   claim        everything else -> `uncited-claim`
 
+One structural exemption: a heading declared in MACHINE_ANCHOR_HEADINGS (exact
+file + exact heading line, with the gate script that parses it as an anchor)
+is not a unit at all.
+
 Comments inside fenced code blocks (`#` / `//` by the fence's language, both
 for a bare fence) are units too; code outside comments never is.
 
@@ -118,6 +122,17 @@ NORMATIVE_RE = re.compile(r"(?i)(?<![A-Za-z])(?:must|shall)(?![A-Za-z])")
 HASH_LANGS = frozenset("sh bash shell zsh console toml yaml yml python py ini conf cfg make makefile dockerfile ruby rb".split())
 SLASH_LANGS = frozenset("rust rs js javascript ts typescript c cpp go java jsonc json5 swift kotlin kt scala".split())
 TRAILING_STRIP = "。．.!！）)」』*_ \t"
+
+# A heading that a repo gate script parses as a machine anchor is structure,
+# not a claim. Exempt ONLY the exact (covered file, stripped heading line) pairs
+# declared here, each with the (script, function) that parses it. Any other
+# heading -- the same text in another file, a different level, extra words --
+# is still a unit. scripts/test_check_prose_tests.py checks that every declared
+# parser really depends on its heading in the real repo file.
+MACHINE_ANCHOR_HEADINGS = {
+    ("crates/overwatch/skills/continuous-audit/SKILL.md", "## 対象 crate (既定)"):
+        ("scripts/check-gate-crates-sync.py", "skill_md_crates"),
+}
 
 LIST_MARK_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s")
@@ -619,6 +634,8 @@ def check_file(repo: str, rel: str, cache: dict, touched=None) -> list:
             continue
         kind, ln, payload, in_record = ev
         if kind == "single":
+            if (rel, payload) in MACHINE_ANCHOR_HEADINGS and HEADING_RE.match(payload):
+                continue
             units = [(ln, ln, payload)]
         else:
             units = split_sentences(payload)

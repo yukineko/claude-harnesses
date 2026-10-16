@@ -52173,6 +52173,66 @@ exit = 1
 kind = "behavioural"
 
 [[task]]
+id = "2e7481d4"
+title = "evalkit: an all-draft run exits 0 having evaluated nothing"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "crates/evalkit/src/run.rs execute counts drafts in total so the no-cases exit-2 guard never fires; every outcome is skipped, failed==0, exit 0, output 0/1 passed. Test asserts non-zero exit when no case was evaluated."
+created_at = 1792155558
+updated_at = 1792157985
+weight = 0.0
+issue_number = 1370
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1370"
+issue_closed_at = 1792157988
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p evalkit --test repro_all_draft_run_exits_zero -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155558
+detail = """
+exit 101: d out; finished in 0.46s
+
+   Compiling evalkit v0.1.9 (/Users/yuki/src/.harness-worktrees/repro-failopens/crates/evalkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.08s
+     Running tests/repro_all_draft_run_exits_zero.rs (target/debug/deps/repro_all_draft_run_exits_zero-2d4a512e0ca88a3b)
+error: test failed, to rerun pass `-p evalkit --test repro_all_draft_run_exits_zero`"""
+
+[task.closure]
+reason = "already-fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p evalkit --test repro_all_draft_run_exits_zero -- --ignored"
+exit = 0
+passed = 1
+rev = "347b5c7ddfcf1d3ee7b24de5a39a184af7ac1e4b"
+observed_at = 1792157956
+output_digest = "sha256:d05f3ed09da303dd73f1af33d1b184f500918b51b7e99e01a06c3290a593bb85"
+excerpt = """
+
+running 1 test
+test all_draft_run_does_not_exit_zero ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/repro_all_draft_run_exits_zero.rs (target/debug/deps/repro_all_draft_run_exits_zero-d7aafc6289a37eda)
+"""
+
+[task.closure.red]
+rev = "a0d1fe3da187692e760ec865562bdf7fc26ceb98"
+exit = 101
+kind = "behavioural"
+
+[[task]]
 id = "11be9484"
 title = "blastguard classify.rs が task の散文に detect を当て、破壊的コマンドを『記述する』散文や file 名で force-gate する"
 project = "/Users/yuki/src/harness"

@@ -89,7 +89,6 @@ fn log_verdicts(home: &Path) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "RED repro: reviewgate inject mode waives a changed unreviewed diff via the repeat ledger (same round-1 reason text)"]
 fn changed_diff_after_already_reviewed_is_blocked_not_waived() {
     let root = unique_dir("r1");
     let home = root.join("home");

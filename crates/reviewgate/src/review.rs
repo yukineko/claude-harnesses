@@ -274,8 +274,13 @@ pub fn evaluate(
         );
         return with_note(decide_scan_failed(cfg, prior_attempts), note);
     }
+    // `files` is non-empty here (min_changed_files passed), so git reported a
+    // reviewable change, yet its content came back empty — e.g. a
+    // `.gitattributes` diff driver whose command prints nothing. That is a
+    // change whose content could not be obtained: UNDETERMINED, not "nothing
+    // changed". Bounded fail-closed like the other undetermined paths.
     if diff.trim().is_empty() {
-        return allow("empty-diff", st);
+        return with_note(decide_empty_diff(cfg, files, prior_attempts), note);
     }
 
     // Truncation guard (fail closed, bounded): the diff was larger than
@@ -300,13 +305,23 @@ pub fn evaluate(
         Mode::Inject => {
             let attempts = prior_attempts + 1;
             if attempts > cfg.max_attempts {
+                // Bounded escape, but never silent: the latest diff was NOT
+                // reviewed. main.rs also surfaces this as a systemMessage.
+                eprintln!("reviewgate: {}", inject_giveup_message(cfg.max_attempts));
                 return Decision::Allow {
-                    tag: "giveup",
+                    tag: INJECT_GIVEUP_TAG,
                     attempts: 0,
                     last_hash: String::new(),
                 };
             }
-            let reason = inject_reason(cfg, &files, attempts);
+            // The diff hash is part of the reason so that a CHANGED diff never
+            // carries the same text as an earlier block: the repeat ledger in
+            // main.rs (`harness_core::repeat::emit_stop_block`) fingerprints the
+            // reason, and an identical text would waive an unreviewed diff.
+            let reason = format!(
+                "{}\n\n(diff fingerprint: {hash})",
+                inject_reason(cfg, &files, attempts)
+            );
             Decision::Block {
                 reason,
                 tag: "blocked-inject",
@@ -447,6 +462,71 @@ fn decide_subprocess(
 /// (the subprocess-mode giveup). Distinct from inject mode's `"giveup"`, and the
 /// caller must still record it as a violation event even though it allows.
 pub const VIOLATION_GIVEUP_TAG: &str = "review-giveup";
+
+/// Tag of inject mode's bounded give-up (`attempts > max_attempts`): the diff
+/// kept changing and the latest one was allowed UNREVIEWED. main.rs surfaces it
+/// as a user-visible `systemMessage`.
+pub const INJECT_GIVEUP_TAG: &str = "giveup";
+
+/// The text announcing an inject-mode give-up (stderr and `systemMessage`).
+pub fn inject_giveup_message(max_attempts: u32) -> String {
+    format!(
+        "WARNING inject-mode review gave up after max_attempts={max_attempts} round(s) — the \
+         diff kept changing, so the stop is allowed with the latest diff UNREVIEWED."
+    )
+}
+
+/// Git listed reviewable `files` but the diff text came back empty (e.g. a
+/// `.gitattributes` diff driver that prints nothing). The change exists but its
+/// content is unknown, so it is UNDETERMINED: block (bounded by
+/// `max_attempts`, escapable), then give up loudly. No hash is recorded, so an
+/// empty diff can never be certified as already-reviewed.
+fn decide_empty_diff(cfg: &Config, files: Vec<String>, prior_attempts: u32) -> Decision {
+    let attempts = prior_attempts + 1;
+    if attempts > cfg.max_attempts {
+        eprintln!(
+            "reviewgate: WARNING diff text still empty for {n} changed file(s) after {max} \
+             attempt(s) — allowing the stop with the change UNREVIEWED. Check the \
+             repo's diff drivers (.gitattributes `diff=`) or set REVIEWGATE_DISABLE=1.",
+            n = files.len(),
+            max = cfg.max_attempts,
+        );
+        return Decision::Allow {
+            tag: "empty-diff-giveup",
+            attempts: 0,
+            last_hash: String::new(),
+        };
+    }
+    eprintln!(
+        "reviewgate: WARNING git reports {n} changed file(s) but the diff text is empty — \
+         the change content is UNDETERMINED, not reviewed. Attempt {attempts}/{max}.",
+        n = files.len(),
+        max = cfg.max_attempts,
+    );
+    Decision::Block {
+        reason: empty_diff_reason(&files, attempts, cfg.max_attempts),
+        tag: "empty-diff-undetermined",
+        files,
+        attempts,
+        last_hash: String::new(),
+    }
+}
+
+fn empty_diff_reason(files: &[String], attempt: u32, max: u32) -> String {
+    format!(
+        "🚧 reviewgate: 変更内容を取得できませんでした (round {attempt}/{max}).\n\n\
+         git は次のファイルを変更ありと報告していますが、`git diff` の本文が空でした:\n{list}\n\
+         `.gitattributes` の diff ドライバ（`diff=<name>` と `diff.<name>.command`）が何も出力しない等、\
+         変更の中身を観測できない状態です。空の diff を「変更なし」と解釈して通過させると未レビューの変更が\
+         gate をすり抜けるため、この停止をブロックしています。{max}回連続で解消しなければ警告を出して\
+         通過を許可します（永久にはブロックしません）。\n\n\
+         前に進むには次のいずれか:\n\
+         - `git diff --no-ext-diff` 等で変更を確認してレビューし、diff ドライバの設定を見直す。\n\
+         - このレビューを1回だけスキップ: `reviewgate skip --reason ...` を実行（理由を1行）。\n\
+         - reviewgate を完全に無効化: 環境変数 REVIEWGATE_DISABLE=1。",
+        list = file_list(files),
+    )
+}
 
 fn allow(tag: &'static str, st: &crate::state::SessionState) -> Decision {
     Decision::Allow {

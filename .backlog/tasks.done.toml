@@ -52836,3 +52836,247 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "063ea2dc77f2da7d881d7c671e858cbac819e998"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "08d44b5e"
+title = "reviewgate inject mode: changed unreviewed diff waived by repeat ledger after an already-reviewed allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "After block round 1 and an already-reviewed allow, editing the same file gives attempts=1 with a reason byte-identical to round 1. harness_core::repeat fingerprints the reason text, so emit_stop_block waives it with only a systemMessage while log.jsonl records blocked-inject. Expected: a changed diff is blocked. Test is ignored, runs RED under --ignored."
+created_at = 1792188666
+updated_at = 1792189611
+weight = 0.0
+issue_number = 1395
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1395"
+issue_closed_at = 1792189613
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p reviewgate --test repro_inject_changed_diff_waived -- --ignored"
+rev = "ebae261ac55190c16a1bd391b2a18dc3d7ae2a21"
+observed_at = 1792188666
+detail = """
+exit 101: d_not_waived
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.90s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/repro_inject_changed_diff_waived.rs (target/debug/deps/repro_inject_changed_diff_waived-194432cb329ee29c)
+error: test failed, to rerun pass `-p reviewgate --test repro_inject_changed_diff_waived`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p reviewgate --test repro_inject_changed_diff_waived"
+exit = 0
+passed = 1
+rev = "7b91335591a5bee1c725313fa39094862bf407d3"
+observed_at = 1792189585
+output_digest = "sha256:ed289e0781b3b72a6d80255b19e176bb2c7bfd521703e25836f14bd6de20b94d"
+excerpt = """
+
+running 1 test
+test changed_diff_after_already_reviewed_is_blocked_not_waived ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.80s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/repro_inject_changed_diff_waived.rs (target/debug/deps/repro_inject_changed_diff_waived-1e67c260a41feb00)
+"""
+
+[task.closure.red]
+rev = "6b64a13e646e92a6f1c1d97290687f65531f5444"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "043c9f29"
+title = "reviewgate inject give-up allows with no visible signal"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "In inject mode, attempts over max_attempts returns Allow tag giveup (review.rs) with no stderr warning, no stdout message and no overwatch event, unlike the scan-failed and diff-failed giveups. Expected: a visible signal. Test ignored, RED under --ignored."
+created_at = 1792188671
+updated_at = 1792189639
+weight = 0.0
+issue_number = 1396
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1396"
+issue_closed_at = 1792189642
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p reviewgate --test repro_inject_giveup_silent -- --ignored"
+rev = "ebae261ac55190c16a1bd391b2a18dc3d7ae2a21"
+observed_at = 1792188671
+detail = """
+exit 101: ct_giveup_is_visibly_signalled
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.54s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running tests/repro_inject_giveup_silent.rs (target/debug/deps/repro_inject_giveup_silent-0f4ecf6ef13bd9ca)
+error: test failed, to rerun pass `-p reviewgate --test repro_inject_giveup_silent`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p reviewgate --test repro_inject_giveup_silent"
+exit = 0
+passed = 1
+rev = "7b91335591a5bee1c725313fa39094862bf407d3"
+observed_at = 1792189619
+output_digest = "sha256:af99f1eeee4442317edad0e08b8cc939bb8b05da1f2134e914e219d5a98df902"
+excerpt = """
+
+running 1 test
+test inject_giveup_is_visibly_signalled ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.62s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/repro_inject_giveup_silent.rs (target/debug/deps/repro_inject_giveup_silent-6ee1672dd0d22af2)
+"""
+
+[task.closure.red]
+rev = "6b64a13e646e92a6f1c1d97290687f65531f5444"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "0ed931a2"
+title = "reviewgate allows a real change as empty-diff when the git diff driver prints nothing"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "With .gitattributes diff=nop and diff.nop.command=true, git diff --name-only lists the file but the patch text is empty; evaluate logs empty-diff with files [] and allows. Expected: undetermined, not clean. Test ignored, RED under --ignored."
+created_at = 1792188676
+updated_at = 1792189661
+weight = 0.0
+issue_number = 1397
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1397"
+issue_closed_at = 1792189663
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p reviewgate --test repro_diff_driver_empty -- --ignored"
+rev = "ebae261ac55190c16a1bd391b2a18dc3d7ae2a21"
+observed_at = 1792188676
+detail = """
+exit 101: f_driver_change_is_not_allowed_as_empty
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.15s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/repro_diff_driver_empty.rs (target/debug/deps/repro_diff_driver_empty-3b98e5711e4fc904)
+error: test failed, to rerun pass `-p reviewgate --test repro_diff_driver_empty`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p reviewgate --test repro_diff_driver_empty"
+exit = 0
+passed = 1
+rev = "7b91335591a5bee1c725313fa39094862bf407d3"
+observed_at = 1792189643
+output_digest = "sha256:f84ef35dabfa4ee8e9d041de6c93bdcdd42d32eaa8abb25b21178ee3831c759a"
+excerpt = """
+
+running 1 test
+test silent_diff_driver_change_is_not_allowed_as_empty ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.73s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/repro_diff_driver_empty.rs (target/debug/deps/repro_diff_driver_empty-39aa278f19a6b69e)
+"""
+
+[task.closure.red]
+rev = "6b64a13e646e92a6f1c1d97290687f65531f5444"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "bca9cabe"
+title = "propguard treats non-UTF-8 PROPGUARD_CRITERIA as unset and allows as no-criteria"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "derive.rs source_criteria uses if let Ok(v) = std::env::var, so a set but non-UTF-8 value is ignored; with no other criteria the stop is allowed while the UTF-8 control blocks. Expected: block. Test includes the UTF-8 control, ignored, RED under --ignored."
+created_at = 1792188689
+updated_at = 1792189331
+weight = 0.0
+issue_number = 1400
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1400"
+issue_closed_at = 1792189334
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p propguard --test repro_criteria_env_non_utf8 -- --ignored"
+rev = "ebae261ac55190c16a1bd391b2a18dc3d7ae2a21"
+observed_at = 1792188689
+detail = """
+exit 101: blocks_like_the_utf8_control
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.64s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running tests/repro_criteria_env_non_utf8.rs (target/debug/deps/repro_criteria_env_non_utf8-01145266f84a6c8a)
+error: test failed, to rerun pass `-p propguard --test repro_criteria_env_non_utf8`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p propguard --test repro_criteria_env_non_utf8 -- --include-ignored"
+exit = 0
+passed = 1
+rev = "89cea71f805808214335b44c82d968886a3b8f17"
+observed_at = 1792189304
+output_digest = "sha256:dcb2f0940577660e7b978c7fd31b74e9ab8804c80a0c223bad5920bbfb39d6bb"
+excerpt = """
+
+running 1 test
+test non_utf8_criteria_env_blocks_like_the_utf8_control ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.98s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/repro_criteria_env_non_utf8.rs (target/debug/deps/repro_criteria_env_non_utf8-fc733650cc5e3429)
+"""
+
+[task.closure.red]
+rev = "6b64a13e646e92a6f1c1d97290687f65531f5444"
+exit = 101
+kind = "behavioural"

@@ -113,7 +113,6 @@ class PluginCacheCondukt(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("no condukt binary found", proc.stderr)
 
-    @unittest.expectedFailure
     def test_plugin_cache_condukt_is_used_when_nothing_else_exists(self) -> None:
         f = self.fixture()
         f.install_plugin_cache()

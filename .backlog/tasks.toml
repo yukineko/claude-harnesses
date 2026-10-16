@@ -185,70 +185,6 @@ exit 1: == short test summary info ============================\u001B[0m
 \u001B[31m======================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[33m22 deselected\u001B[0m\u001B[31m in 0.09s\u001B[0m\u001B[31m =======================\u001B[0m"""
 
 [[task]]
-id = "bf6b1aba"
-title = "fugu-router budget under_pressure reads a budgetguard spawn error, non-zero exit or unparseable status --json as no pressure"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Seen 2026-10-03 by the abba6f0d implementer (run-20261003-141339-41881, branch fix/run-20261003-141339-41881/abba6f0d commit 27824792), read not tested. crates/fugu-router/src/budget.rs: after abba6f0d the lookup Undetermined arm returns true (pressure), but once budgetguard is found, a spawn failure, non-zero exit or unparseable output still returns false = full-price routing (the permissive side). parse_pressure tests pin unparseable as no pressure. Readings: (a) fail-open per CLAUDE.md 3; (b) intended - budget is advisory. Check whether any consumer treats routing as a gate."
-created_at = 1791008100
-updated_at = 1792003538
-weight = 0.0
-issue_number = 1148
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1148"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p fugu-router --test backlog_bf6b1aba -- --ignored"
-rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
-observed_at = 1792003536
-detail = """
-exit 101: nored; 0 measured; 1 filtered out; finished in 0.95s
-
-   Compiling fugu-router v0.1.45 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/fugu-router)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
-     Running tests/backlog_bf6b1aba.rs (target/debug/deps/backlog_bf6b1aba-1cc2ba60c9a1ea18)
-error: test failed, to rerun pass `-p fugu-router --test backlog_bf6b1aba`"""
-
-[[task]]
-id = "18ebbfe6"
-title = "condukt state parse_agent_cost / parse_agent_tokens treat malformed gauge JSON as no matching id, so broken gauge output becomes no data and the manual cost is recorded"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Seen 2026-10-03 by the abba6f0d implementer (run-20261003-141339-41881, branch fix/run-20261003-141339-41881/abba6f0d commit 27824792), read not tested. crates/condukt/src/state.rs: resolve_agent_cost/tokens now return Determination<Option<..>> and lookup/spawn/exit failures are Undetermined (episode not recorded), but parse_agent_cost/parse_agent_tokens still map malformed JSON to None (= no data). Also record_runs uses s.verifier_cost_usd.unwrap_or(0.0), which can record a 0.0 verifier cost when none is known."
-created_at = 1791008101
-updated_at = 1792003557
-weight = 0.0
-issue_number = 1149
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1149"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_18ebbfe6 -- --ignored"
-rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
-observed_at = 1792003555
-detail = """
-exit 101: ailed; 0 ignored; 0 measured; 1 filtered out; finished in 1.49s
-
-   Compiling condukt v0.7.243 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
-     Running tests/backlog_18ebbfe6.rs (target/debug/deps/backlog_18ebbfe6-6699fb6f690419cc)
-error: test failed, to rerun pass `-p condukt --test backlog_18ebbfe6`"""
-
-[[task]]
 id = "65dfc23e"
 title = "session-rollout-drift.py が rc2 (enablement) に rollout-plugins.sh を勧める — rollout は plugin を有効化しない"
 project = "/Users/yuki/src/harness"
@@ -277,67 +213,6 @@ exit 1: 0m:354: XFailed
 \u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
 \u001B[31mFAILED\u001B[0m scripts/test_backlog_65dfc23e.py::\u001B[1mEnablementRemedyIsNotRollout::test_enablement_notice_does_not_prescribe_rollout\u001B[0m - _pytest.outcomes.XFailed
 \u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.06s\u001B[0m\u001B[31m ==========================\u001B[0m"""
-
-[[task]]
-id = "11be9484"
-title = "blastguard classify.rs が task の散文に detect を当て、破壊的コマンドを『記述する』散文や file 名で force-gate する"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-crates/blastguard/src/classify.rs:213-219 runs detect::detect on title + done_criteria + file list. Seen again in batch 13: 73c2c089 stayed force-gated because its touched file is scripts/check-plugin-rollout.py (needle 'rollout'), and e033c406 because its prose quoted git config core.hooksPath. Not fixed by fa1fce21 (different root: prose is not shell). Needs a decision: condukt passes real commands separately, or a backtick-span extraction rule. Either moves the measured DENY 85 / ASK 101 distribution.
-
-Observed 2026-10-03 in flow batch 13 (run-20261003-155809-33509), base fbc3dac8 / main c0d4701c."""
-created_at = 1791018586
-updated_at = 1792003597
-weight = 0.0
-issue_number = 1159
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1159"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_11be9484 -- --ignored"
-rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
-observed_at = 1792003592
-detail = """
-exit 101: c/.harness-worktrees/session-1a4ac77f/crates/overwatch)
-   Compiling blastguard v0.2.113 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.26s
-     Running tests/backlog_11be9484.rs (target/debug/deps/backlog_11be9484-55b4c2d69dad1992)
-error: test failed, to rerun pass `-p blastguard --test backlog_11be9484`"""
-
-[[task]]
-id = "0e4cfde5"
-title = "main-tree-guard pre-commit が新しい condukt worktree で condukt バイナリを見つけられず、全 worker の commit を block する"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-The pre-commit main-tree-guard looks only at $CONDUKT_BIN, target/ and PATH. A fresh condukt worktree has no build, so every worker's first commit is refused ('no condukt binary found ... the §8 gate could not run'). Workers worked around it by setting CONDUKT_BIN to main's target/release/condukt or by building condukt in the worktree. The gate is right to fail closed; the resolver should use harness_core::plugin_bin-style plugin-cache lookup (installed condukt) before giving up.
-
-Observed 2026-10-03 in flow batch 13 (run-20261003-155809-33509), base fbc3dac8 / main c0d4701c."""
-created_at = 1791018592
-updated_at = 1792003564
-weight = 0.0
-issue_number = 1163
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1163"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_backlog_0e4cfde5.py"
-rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
-observed_at = 1792003562
-detail = """
-exit 1: [0m:354: XFailed
-\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
-\u001B[31mFAILED\u001B[0m scripts/test_backlog_0e4cfde5.py::\u001B[1mPluginCacheCondukt::test_plugin_cache_condukt_is_used_when_nothing_else_exists\u001B[0m - _pytest.outcomes.XFailed
-\u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m2 passed\u001B[0m\u001B[31m in 1.89s\u001B[0m\u001B[31m ==========================\u001B[0m"""
 
 [[task]]
 id = "d058b22a"
@@ -1979,3 +1854,98 @@ exit 1: nfo ============================
 FAILED scripts/test_guard_maintree_bash_ff_source_gone.py::FfSourceGoneAllowed::test_a_ff_and_branch_delete_in_same_call_is_allowed
 FAILED scripts/test_guard_maintree_bash_ff_source_gone.py::FfSourceGoneAllowed::test_b_other_session_ff_and_branch_delete_during_unrelated_call_is_allowed
 ========================= 2 failed, 6 passed in 9.36s =========================="""
+
+[[task]]
+id = "099a5cbb"
+title = "blastguard tests write into the live overwatch violation registry (HOME/env_clear do not isolate)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "overwatch",
+    "test-isolation",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Repro (commit 99cd73b1): crates/blastguard/tests/repro_live_registry_pollution.rs, tests env_clear_child_does_not_write_real_overwatch_registry and inherited_home_child_does_not_write_real_overwatch_registry; both RED. Path: blastguard main.rs record_violation -> overwatch store::append_violation(cwd) -> storage_root = harness_core::config::base_dir(overwatch) = home(); home() falls back to dirs::home_dir (real passwd home) when HOME is unset, so env_clear (ask_hardening_invariant.rs) does not isolate; most other blastguard tests inherit HOME. Canary false-halt evidence (2026-10-16 JST): rollout-plugins.sh --canary stage 12 ship 0.1.15 rolled back at ts 1792105431 (rollbacks.jsonl reason raw), raw observed_violations 5 vs threshold 2. The 5 counted events are all ts 1792105430, session_id _local, signature blastguard:unrecognised-wrapper, detail my-cleanup-wrapper = ask_hardening_invariant.rs fixture (5 tests). Source: session 1a4ac77f subagent agent-a8854e5 ran cargo test -p blastguard --no-fail-fast in worktree fix-11be9484 at 23:03:43Z; its output shows ask_hardening_invariant 5 passed. Subsequent _local burst 1792105436-1792105447 (mkfs, shred, rm-recursive, protected-path, write-empty-content, find-exec-shell, git-config-hookspath) is the rest of that suite. Measured observation (live harness-e77d23c7 violations.jsonl, 2026-10-16): 13666 of 19351 events (71%) have session_id _local; 930 contain my-cleanup-wrapper (186 runs of that one file). Not every _local event was verified to be test-originated. Also observed: ~2480 -tmpXXXX dirs in ~/.overwatch from some suite (not identified); overwatch own tests: 10 of 47 files set HOME, rest not audited. Do not fix by narrowing the canary gate."
+created_at = 1792106110
+updated_at = 1792106110
+weight = 0.0
+issue_number = 1363
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1363"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test repro_live_registry_pollution -- --ignored"
+rev = "99cd73b1030170e735c1c0fdc3eda5d46f630902"
+observed_at = 1792106110
+detail = """
+exit 101: al_overwatch_registry
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.96s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.62s
+     Running tests/repro_live_registry_pollution.rs (target/debug/deps/repro_live_registry_pollution-6c44738a648c523b)
+error: test failed, to rerun pass `-p blastguard --test repro_live_registry_pollution`"""
+
+[[task]]
+id = "0d007aa5"
+title = "test-weakening ignores acks on MERGE_HEAD's side during a merge"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "check-test-weakening.py scan() diffs merge-base(main,HEAD)..worktree (includes MERGE_HEAD's changes) but acknowledgements() reads only merge_base..HEAD plus the pending msg, so main-side acks are invisible mid-merge. Observed on 96da33f6 and 99cd73b1. Repro scripts/test_test_weakening_merge_ack.py (45f62810)."
+created_at = 1792155730
+updated_at = 1792155730
+weight = 0.0
+issue_number = 1378
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1378"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_test_weakening_merge_ack.py::MergeMainIntoFeature::test_main_side_acked_removal_does_not_block_the_merge"
+rev = "854b0075a358b6d9fa9d07176a91b2ce0f16f4a4"
+observed_at = 1792155730
+detail = """
+exit 1: E           _pytest.outcomes.XFailed
+
+../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
+=========================== short test summary info ============================
+FAILED scripts/test_test_weakening_merge_ack.py::MergeMainIntoFeature::test_main_side_acked_removal_does_not_block_the_merge
+============================== 1 failed in 1.35s ==============================="""
+
+[[task]]
+id = "dc955812"
+title = "blastguard classify は backtick で引用されたコマンドを記述するだけの task 散文も force-gate する (11be9484 の散文側、ユーザー裁定 2026-10-16 で先送り)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "11be9484 split by user ruling 2026-10-16: the file-name half was fixed (blastguard 0.2.131); the prose half (a backtick-quoted command that the prose merely describes) still gates. Options from 11be9484: condukt passes real commands to classify separately (interface change; the repro test classifies joined text and would need rewriting with an ack), or a backtick-span rule (widest loosening: a task saying run rm -rf X would also pass). Needs a user design ruling before implementation."
+created_at = 1792155553
+updated_at = 1792155553
+weight = 0.0
+issue_number = 1368
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1368"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_11be9484 -- --ignored prose_describing_a_command_does_not_force_gate"
+rev = "12bfc9707a4aa5a712d30007e890b7da64ea6196"
+observed_at = 1792155553
+detail = """
+exit 101: failures:
+    prose_describing_a_command_does_not_force_gate
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/backlog_11be9484.rs (target/debug/deps/backlog_11be9484-27e56823383379b3)
+error: test failed, to rerun pass `-p blastguard --test backlog_11be9484`"""

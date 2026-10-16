@@ -6,8 +6,19 @@
 //!
 //! The classification core (`diff`) is pure over two case-maps so it is fully
 //! unit-testable without touching the filesystem — mirroring how `run.rs` keeps
-//! `check_assert` pure. Exit-code policy matches the rest of evalkit: `0` ok,
-//! `1` a real regression (only when `--fail-on-regression`), `2` harness error.
+//! `check_assert` pure.
+//!
+//! Exit-code policy (fail-closed by default):
+//! - `1` when a golden's verdict was lost: a regression (pass→fail), a dropped
+//!   golden (in baseline, gone from current), or a demotion (pass→draft or
+//!   fail→draft — turning a failing case into a draft hides the failure). This
+//!   is the default; `--report-only` is the explicit opt-in that turns it into
+//!   exit `0`.
+//! - `2` harness error OR "cannot determine": an unreadable / unparseable
+//!   report, or a side with no verdict-carrying case (empty or all-draft). That
+//!   is never `0`, and `--report-only` does not soften it — "nothing was
+//!   checked" is not "nothing regressed".
+//! - `0` otherwise.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -35,16 +46,36 @@ pub struct Diff {
     pub fixes: Vec<String>,
     /// Present only in the current run.
     pub added: Vec<String>,
-    /// Present only in the baseline run.
+    /// Present only in the baseline run. Gates: a golden that vanished is a
+    /// lost check, not a neutral change.
     pub dropped: Vec<String>,
-    /// Count of cases present on both sides with no class-changing transition
-    /// (includes benign skip transitions like pass→skip or skip→pass).
+    /// !baseline.skipped && current.skipped — a passing OR failing golden turned
+    /// into a draft. Gates: demoting a case to draft hides it (and, for a
+    /// failing case, its failure) from the run exactly like deleting it.
+    pub demoted: Vec<String>,
+    /// Count of cases present on both sides with no gating or fix transition
+    /// (pass→pass, fail→fail, skip→pass, skip→fail, skip→skip).
     pub unchanged: usize,
+    /// Cases on each side that carry a verdict (not skipped). Zero on either
+    /// side means the comparison cannot be determined.
+    pub baseline_verdicts: usize,
+    pub current_verdicts: usize,
 }
 
 impl Diff {
     pub fn delta(&self) -> f64 {
         self.current_pass_rate - self.baseline_pass_rate
+    }
+
+    /// True when a golden's verdict was lost: regression, dropped, or demoted.
+    pub fn lost_coverage(&self) -> bool {
+        !self.regressions.is_empty() || !self.dropped.is_empty() || !self.demoted.is_empty()
+    }
+
+    /// True when either side has no verdict-carrying case (empty or all-draft):
+    /// the diff compared nothing, so it cannot vouch for anything.
+    pub fn undetermined(&self) -> bool {
+        self.baseline_verdicts == 0 || self.current_verdicts == 0
     }
 }
 
@@ -64,11 +95,11 @@ fn pass_rate(cases: &BTreeMap<String, CaseResult>) -> f64 {
 /// Pure classification core: diff two case-maps keyed by `case` label.
 ///
 /// A `regression` is *strictly* `baseline.pass == true && current.pass == false`
-/// with neither side skipped — that is the only condition that may gate the
-/// process. A `fix` is the mirror (baseline fail → current pass). Skipped
-/// transitions (pass→skip, skip→pass, skip→skip) are intentionally NOT
-/// regressions/fixes; they fall through to `unchanged` since a draft carries no
-/// pass/fail signal to regress or fix.
+/// with neither side skipped. A `fix` is the mirror (baseline fail → current
+/// pass). A verdict-carrying baseline case (pass or fail) that is skipped in
+/// current is a demotion, its own bucket: a draft carries no verdict, so it is
+/// not a pass→fail regression, but it gates like one (see `execute`). Skip→X
+/// transitions (skip→pass, skip→fail, skip→skip) fall through to `unchanged`.
 pub fn diff(
     baseline: &BTreeMap<String, CaseResult>,
     current: &BTreeMap<String, CaseResult>,
@@ -77,6 +108,7 @@ pub fn diff(
     let mut fixes = Vec::new();
     let mut added = Vec::new();
     let mut dropped = Vec::new();
+    let mut demoted = Vec::new();
     let mut unchanged = 0usize;
 
     // Union of labels; BTreeMap iteration is sorted, so each bucket stays sorted.
@@ -92,6 +124,8 @@ pub fn diff(
                 let c_fail = !c.pass && !c.skipped;
                 if b.pass && c_fail {
                     regressions.push(label.clone());
+                } else if !b.skipped && c.skipped {
+                    demoted.push(label.clone());
                 } else if b_fail && c.pass {
                     fixes.push(label.clone());
                 } else {
@@ -111,8 +145,16 @@ pub fn diff(
         fixes,
         added,
         dropped,
+        demoted,
         unchanged,
+        baseline_verdicts: verdicts(baseline),
+        current_verdicts: verdicts(current),
     }
+}
+
+/// Number of cases that carry a pass/fail verdict (not skipped drafts).
+fn verdicts(cases: &BTreeMap<String, CaseResult>) -> usize {
+    cases.values().filter(|c| !c.skipped).count()
 }
 
 /// Parse one `evalkit run --json` report into a case-map keyed by `case` label.
@@ -147,15 +189,11 @@ fn parse_report(path: &Path) -> Result<BTreeMap<String, CaseResult>> {
 }
 
 /// Read+parse the two reports, diff them, print a human report or `--json`
-/// summary, and return the exit code. `2` on any harness error (unreadable /
-/// unparseable file), else `1` only when `fail_on_regression` is set AND there
-/// is at least one regression, else `0`.
-pub fn execute(
-    baseline: PathBuf,
-    current: PathBuf,
-    json_out: bool,
-    fail_on_regression: bool,
-) -> i32 {
+/// summary, and return the exit code: `2` on any harness error (unreadable /
+/// unparseable file) or when either side has no verdict-carrying case (empty or
+/// all-draft), regardless of `report_only`; else `1` when a golden's verdict
+/// was lost (regression / dropped / demoted) unless `report_only`; else `0`.
+pub fn execute(baseline: PathBuf, current: PathBuf, json_out: bool, report_only: bool) -> i32 {
     let (base_map, cur_map) = match (parse_report(&baseline), parse_report(&current)) {
         (Ok(b), Ok(c)) => (b, c),
         (Err(e), _) | (_, Err(e)) => {
@@ -171,7 +209,14 @@ pub fn execute(
         report_human(&d);
     }
 
-    if fail_on_regression && !d.regressions.is_empty() {
+    if d.undetermined() {
+        eprintln!(
+            "evalkit: canary cannot determine: no verdict-carrying cases (baseline {}, current {}); an empty or all-draft run checks nothing",
+            d.baseline_verdicts, d.current_verdicts
+        );
+        return 2;
+    }
+    if d.lost_coverage() && !report_only {
         1
     } else {
         0
@@ -195,6 +240,7 @@ fn report_human(d: &Diff) {
     print_bucket("fixes (fail → pass)", &d.fixes);
     print_bucket("added (new in current)", &d.added);
     print_bucket("dropped (gone from current)", &d.dropped);
+    print_bucket("demoted (pass/fail → draft)", &d.demoted);
     println!("\n  {} unchanged", d.unchanged);
 }
 
@@ -219,6 +265,7 @@ fn report_json(d: &Diff) {
             "fixes": d.fixes,
             "added": d.added,
             "dropped": d.dropped,
+            "demoted": d.demoted,
         })
     );
 }
@@ -258,8 +305,8 @@ mod tests {
         let d = diff(&b, &c);
         assert_eq!(d.fixes, vec!["a".to_string()]);
         assert!(d.regressions.is_empty());
-        // A fix alone never drives exit 1, even under --fail-on-regression.
-        assert!(d.regressions.is_empty());
+        // A fix alone never drives exit 1: it loses no passing golden.
+        assert!(!d.lost_coverage());
     }
 
     #[test]
@@ -274,13 +321,59 @@ mod tests {
 
     #[test]
     fn skipped_transitions_are_not_regressions() {
-        // pass → skip and skip → fail are both benign (no pass/fail verdict flip).
+        // Neither pass → skip nor skip → fail is a pass/fail verdict flip, so
+        // neither is a regression. pass → skip is a demotion (its own gating
+        // bucket); skip → fail stays unchanged.
         let b = map(&[("a", true, false), ("b", false, true)]);
         let c = map(&[("a", false, true), ("b", false, false)]);
         let d = diff(&b, &c);
         assert!(d.regressions.is_empty(), "{:?}", d.regressions);
         assert!(d.fixes.is_empty(), "{:?}", d.fixes);
-        assert_eq!(d.unchanged, 2);
+        assert_eq!(d.demoted, vec!["a".to_string()]);
+        assert!(d.lost_coverage());
+        assert_eq!(d.unchanged, 1);
+    }
+
+    #[test]
+    fn dropped_and_demoted_count_as_lost_coverage() {
+        let b = map(&[("keep", true, false), ("gone", true, false)]);
+        let c = map(&[("keep", true, false)]);
+        let d = diff(&b, &c);
+        assert_eq!(d.dropped, vec!["gone".to_string()]);
+        assert!(d.lost_coverage());
+
+        // A failing case turned draft hides its failure: demoted, gates.
+        let b = map(&[("keep", true, false), ("f", false, false)]);
+        let c = map(&[("keep", true, false), ("f", false, true)]);
+        let d = diff(&b, &c);
+        assert_eq!(d.demoted, vec!["f".to_string()]);
+        assert!(d.lost_coverage());
+
+        // A draft turned passing or failing loses nothing.
+        let b = map(&[
+            ("keep", true, false),
+            ("s", false, true),
+            ("t", false, true),
+        ]);
+        let c = map(&[
+            ("keep", true, false),
+            ("s", true, false),
+            ("t", false, false),
+        ]);
+        let d = diff(&b, &c);
+        assert!(!d.lost_coverage());
+        assert_eq!(d.unchanged, 3);
+    }
+
+    #[test]
+    fn all_draft_or_empty_side_is_undetermined() {
+        let pass = map(&[("a", true, false)]);
+        let draft = map(&[("a", false, true)]);
+        let empty: BTreeMap<String, CaseResult> = BTreeMap::new();
+        assert!(diff(&pass, &draft).undetermined());
+        assert!(diff(&draft, &pass).undetermined());
+        assert!(diff(&pass, &empty).undetermined());
+        assert!(!diff(&pass, &pass).undetermined());
     }
 
     #[test]
@@ -312,7 +405,7 @@ mod tests {
     }
 
     #[test]
-    fn fail_on_regression_exit_policy() {
+    fn default_gates_report_only_exit_policy() {
         // Build two tiny reports on disk and exercise the real exit-code policy.
         let dir = std::env::temp_dir().join(format!("evalkit-canary-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -329,12 +422,13 @@ mod tests {
         )
         .unwrap();
 
-        // A regression exists, but without the flag we still exit 0.
-        assert_eq!(execute(base.clone(), cur.clone(), true, false), 0);
-        // With the flag, the regression gates → exit 1.
-        assert_eq!(execute(base.clone(), cur.clone(), false, true), 1);
-        // Diffing a report against itself: no regression → exit 0 even with flag.
-        assert_eq!(execute(base.clone(), base.clone(), false, true), 0);
+        // A regression exists: by default it gates → exit 1 (json and human).
+        assert_eq!(execute(base.clone(), cur.clone(), true, false), 1);
+        assert_eq!(execute(base.clone(), cur.clone(), false, false), 1);
+        // --report-only is the explicit opt-in that makes it informational.
+        assert_eq!(execute(base.clone(), cur.clone(), false, true), 0);
+        // Diffing a report against itself: no regression → exit 0 by default.
+        assert_eq!(execute(base.clone(), base.clone(), false, false), 0);
 
         std::fs::remove_dir_all(&dir).ok();
     }

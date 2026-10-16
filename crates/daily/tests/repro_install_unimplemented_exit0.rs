@@ -16,7 +16,12 @@ fn daily(home: &Path, cwd: &Path, args: &[&str], stdin: &str) -> (i32, String, S
         .stderr(Stdio::piped())
         .spawn()
         .expect("daily spawns");
-    child.stdin.take().unwrap().write_all(stdin.as_bytes()).unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(stdin.as_bytes())
+        .unwrap();
     let out = child.wait_with_output().unwrap();
     (
         out.status.code().unwrap_or(-1),

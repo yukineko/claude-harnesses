@@ -12,8 +12,20 @@ fn held_exclusive_lock_stops_other_sessions_claiming() {
     let id = f.add("exclusive lock vs claim");
     let p = f.project();
 
-    let acq = f.run(&["lock", "acquire", "--session-id", "session-A", "--project", &p]);
-    assert_eq!(acq.code, 0, "apparatus: lock acquire failed: {}", acq.both());
+    let acq = f.run(&[
+        "lock",
+        "acquire",
+        "--session-id",
+        "session-A",
+        "--project",
+        &p,
+    ]);
+    assert_eq!(
+        acq.code,
+        0,
+        "apparatus: lock acquire failed: {}",
+        acq.both()
+    );
     let st = f.run(&["lock", "status", "--project", &p]);
     assert!(
         st.stdout.contains("session-A"),

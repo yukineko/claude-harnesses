@@ -21,7 +21,11 @@ fn end_with_unknown_status_is_rejected() {
     let project = TempDir::new().unwrap();
     let b = run(&home, &project, &["begin", "--key", "k1", "--title", "t"]);
     assert!(b.status.success(), "apparatus: begin failed");
-    let e = run(&home, &project, &["end", "--key", "k1", "--status", "bogus-status-zz"]);
+    let e = run(
+        &home,
+        &project,
+        &["end", "--key", "k1", "--status", "bogus-status-zz"],
+    );
     assert!(
         !e.status.success(),
         "unknown --status accepted and lease released. stdout={:?} stderr={:?}",

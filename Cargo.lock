@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "backlog"
-version = "0.3.53"
+version = "0.3.54"
 dependencies = [
  "anyhow",
  "clap",
@@ -197,7 +197,7 @@ dependencies = [
 
 [[package]]
 name = "budgetguard"
-version = "0.1.39"
+version = "0.1.40"
 dependencies = [
  "anyhow",
  "chrono",
@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.257"
+version = "0.7.258"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -396,7 +396,7 @@ dependencies = [
 
 [[package]]
 name = "daily"
-version = "0.3.19"
+version = "0.3.20"
 dependencies = [
  "blastguard",
  "chrono",
@@ -874,7 +874,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "overwatch"
-version = "0.2.73"
+version = "0.2.74"
 dependencies = [
  "anyhow",
  "clap",
@@ -953,7 +953,7 @@ dependencies = [
 
 [[package]]
 name = "propguard"
-version = "0.1.63"
+version = "0.1.64"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1240,7 +1240,7 @@ dependencies = [
 
 [[package]]
 name = "session-insights"
-version = "0.2.28"
+version = "0.2.29"
 dependencies = [
  "anyhow",
  "chrono",

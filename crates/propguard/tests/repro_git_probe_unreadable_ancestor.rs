@@ -30,14 +30,22 @@ fn run_check(cwd: &Path, home: &Path, payload_cwd: &Path, sid: &str) -> (i32, St
         .current_dir(cwd)
         .env("HOME", home)
         .env("PROPGUARD_STATE_DIR", home.join(".propguard-state"))
-        .env("PROPGUARD_CRITERIA", "idempotent; never panic; stable output schema")
+        .env(
+            "PROPGUARD_CRITERIA",
+            "idempotent; never panic; stable output schema",
+        )
         .env_remove("PROPGUARD_DISABLE")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("binary spawns");
-    child.stdin.take().unwrap().write_all(payload.as_bytes()).unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.as_bytes())
+        .unwrap();
     let out = child.wait_with_output().unwrap();
     (
         out.status.code().unwrap_or(-1),

@@ -53134,3 +53134,52 @@ FAILED scripts/test_p0_gate_undetermined.py::LedgerClearedOnlyByInspection::test
 [task.closure]
 reason = "discard"
 discard_reason = "Fixed by 7f4f204c (branch fix-hookfixture-drift 5b912d86): fixture drift, not a hook bug — hook test fixtures lacked gates added to .githooks (pre-commit SCANNERS now derived from the hook's run lines; frozen EXPECTED_SCANNERS extended by 6 gates each checked against .githooks/pre-commit:228-251; pre-push fixture init commit stubs scripts/check-compile-fail.py). RED observed 2026-10-17 at d5e60474: test_prepush_hook 5 failed, test_precommit_hook 2 failed, test_gate_bypass 63 failed, test_p0_gate_undetermined 4 failed. GREEN after: 11 / 16 / 148 / 19 passed. backlog done refuses by design: F2P overlays HEAD's test files and the fix IS those test files."
+
+[[task]]
+id = "396b6089"
+title = "check-plugin-versions.py は crates/ 不在で FileNotFoundError traceback (exit 1) になり、判定不能の exit 2 を返さない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-04 by the eca8dea7 worker: one run of `python3 scripts/check-workspace-tests.py --python-only` on branch run-20261004-011114-7349/eca8dea7 (base f51e281e) took 1055 s over 153 suites and exited 4. Full log: session 64554c4d scratchpad eca8dea7-w-pyonly-worktree.log. None of the red files is in that branch's diff. USER RULING 2026-10-04: fix the reds first; the --python-only pre-push patch (scratchpad eca8dea7-workspace-prepush.patch) is applied only after the body is green. Still blocks (non-zero), but the documented 'cannot determine' code is not produced; found by the eca8dea7 worker while mutating it for the replacement test test_f6919056_plugin_versions_without_crates_dir_is_not_ok."
+created_at = 1791045941
+updated_at = 1792190775
+weight = 0.0
+issue_number = 1253
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1253"
+issue_closed_at = 1792190776
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_396b6089.py"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003585
+detail = """
+exit 1: ed
+\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
+\u001B[31mFAILED\u001B[0m scripts/test_backlog_396b6089.py::\u001B[1mPluginVersionsWithoutCratesDir::test_missing_crates_dir_is_undetermined_exit_2_not_traceback\u001B[0m - _pytest.outcomes.XFailed
+\u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.19s\u001B[0m\u001B[31m ==========================\u001B[0m"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --color=no --runxfail -q -p no:cacheprovider scripts/test_backlog_396b6089.py"
+exit = 0
+passed = 2
+rev = "66f3ef7f25396cf1aae48ac32ccd30cc887093bd"
+observed_at = 1792190771
+output_digest = "sha256:0a97b591ab7ce9644866a9aea8e19c37ff6647585418c546d0481e0cb92bfbc7"
+excerpt = """
+..                                                                       [100%]
+2 passed in 0.14s
+"""
+
+[task.closure.red]
+rev = "2ac122ac4c733fd8d082714cf5e5d323cdc82bb3"
+exit = 1
+kind = "behavioural"

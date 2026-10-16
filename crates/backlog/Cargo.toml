@@ -2,7 +2,7 @@
 rust-version.workspace = true
 license.workspace = true
 name = "backlog"
-version = "0.3.51"
+version = "0.3.52"
 edition = "2021"
 description = "Cross-project task queue with cycle-type tags for Claude Code."
 

@@ -304,37 +304,6 @@ exit 101: ailed; 0 ignored; 0 measured; 1 filtered out; finished in 1.42s
 error: test failed, to rerun pass `-p condukt --test backlog_cf70f785`"""
 
 [[task]]
-id = "dc37a4da"
-title = "tdd oracle は RED と GREEN が別のテストコマンドで記録されていても fail_to_pass と認める"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-666b6704 verifier: the worker's RED was on scripts/test_check_unlisted_gates.py and the verifier's GREEN on scripts/test_check_unlisted_gates_verify.py; tdd oracle accepted the pair as valid fail_to_pass. It may not prove the same test went F->P. Reading (a): real gap, the oracle should require a GREEN for each RED command; (b): intended (task-level proof). Distinguish by the tdd README contract for fail_to_pass.
-
-Observed 2026-10-03 in flow batch 14 (run-20261003-202619-762), main 4b0e5ab3..4bc312db."""
-created_at = 1791028024
-updated_at = 1792003592
-weight = 0.0
-issue_number = 1200
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1200"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p tdd --test backlog_dc37a4da -- --ignored"
-rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
-observed_at = 1792003587
-detail = """
-exit 101: 0.2.62 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/overwatch)
-   Compiling tdd v0.1.40 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/tdd)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.27s
-     Running tests/backlog_dc37a4da.rs (target/debug/deps/backlog_dc37a4da-b9b47eca998c8e64)
-error: test failed, to rerun pass `-p tdd --test backlog_dc37a4da`"""
-
-[[task]]
 id = "6798f47d"
 title = "blastguard: stdin-program scan (python3 - heredoc) flags the word rmtree inside comments/strings, not only real calls"
 project = "/Users/yuki/src/harness"

@@ -272,38 +272,6 @@ exit 1: :354: XFailed
 \u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.56s\u001B[0m\u001B[31m ==========================\u001B[0m"""
 
 [[task]]
-id = "cf70f785"
-title = "condukt state set --status verified --worktree W が F->P oracle を W ではなく以前記録された worktree (無ければ cwd) で走らせる"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-crates/condukt/src/main.rs:4228-4234 resolves run_dir from rs.tasks[..].worktree (the PREVIOUSLY recorded worktree), falling back to cwd; the --worktree passed in the same call is not applied first. With no prior record it runs tdd oracle in the session cwd -> 'tdd oracle exited non-zero' although `tdd oracle --task <id>` in W exits 0. Workaround used: `state set --status done --worktree W --branch B` first. Fix: apply the call's --worktree before resolving run_dir, or refuse when they differ (fail-closed). Needs a cargo test RED first.
-
-Observed 2026-10-03 in flow batch 14 (run-20261003-202619-762), main 4b0e5ab3..4bc312db."""
-created_at = 1791028023
-updated_at = 1792003552
-weight = 0.0
-issue_number = 1199
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1199"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_cf70f785 -- --ignored"
-rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
-observed_at = 1792003550
-detail = """
-exit 101: ailed; 0 ignored; 0 measured; 1 filtered out; finished in 1.42s
-
-   Compiling condukt v0.7.243 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
-     Running tests/backlog_cf70f785.rs (target/debug/deps/backlog_cf70f785-1fe3a3c838c30663)
-error: test failed, to rerun pass `-p condukt --test backlog_cf70f785`"""
-
-[[task]]
 id = "dc37a4da"
 title = "tdd oracle は RED と GREEN が別のテストコマンドで記録されていても fail_to_pass と認める"
 project = "/Users/yuki/src/harness"
@@ -488,36 +456,6 @@ detail = """
 exit 1: ::\u001B[1mMergeHeadShape::test_directory_merge_head_does_not_allow_a_main_commit\u001B[0m - _pytest.outcomes.XFailed
 \u001B[31mFAILED\u001B[0m scripts/test_backlog_1af8be51.py::\u001B[1mMergeHeadShape::test_symlink_to_directory_merge_head_does_not_allow_a_main_commit\u001B[0m - _pytest.outcomes.XFailed
 \u001B[31m========================= \u001B[31m\u001B[1m2 failed\u001B[0m, \u001B[32m2 passed\u001B[0m\u001B[31m in 1.14s\u001B[0m\u001B[31m ==========================\u001B[0m"""
-
-[[task]]
-id = "6ca3d71f"
-title = "check-projkey-store-classification.py が main で 6 件 red (count drift 2 / stale 1 / 未分類 call site 3)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-Exit 1 with 6 findings at 9ea5a326: 2 count drifts, 1 stale table entry, 3 unclassified projkey call sites in crates/*/src that need a shared-vs-worktree-local ruling each. Runtime 3.9-9.9 s (over the ~2 s pre-commit budget). test_backlog_de721e5e_df49f872 holds 2 expectedFailure pins. Prerequisite for wiring (eca8dea7 stage B).
-
-Observed 2026-10-03 by the eca8dea7 investigation (main 9ea5a326); raw logs scratchpad eca8dea7-run-*.log, proposal eca8dea7-proposal.md."""
-created_at = 1791034488
-updated_at = 1792003583
-weight = 0.0
-issue_number = 1227
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1227"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_backlog_de721e5e_df49f872.py::BacklogDf49f872::test_projkey_store_classification_is_green_on_this_tree"
-rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
-observed_at = 1792003579
-detail = """
-exit 1: st.py\u001B[0m:354: XFailed
-\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
-\u001B[31mFAILED\u001B[0m scripts/test_backlog_de721e5e_df49f872.py::\u001B[1mBacklogDf49f872::test_projkey_store_classification_is_green_on_this_tree\u001B[0m - _pytest.outcomes.XFailed
-\u001B[31m============================== \u001B[31m\u001B[1m1 failed\u001B[0m\u001B[31m in 3.79s\u001B[0m\u001B[31m ===============================\u001B[0m"""
 
 [[task]]
 id = "eb93be49"
@@ -2264,3 +2202,34 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
      Running tests/backlog_11be9484.rs (target/debug/deps/backlog_11be9484-27e56823383379b3)
 error: test failed, to rerun pass `-p blastguard --test backlog_11be9484`"""
+
+[[task]]
+id = "a6ee76f7"
+title = "condukt autonomy_invariant askuserquestion_sites_match_frozen_allowlist が main で RED (overwatch SKILL.md の AskUserQuestion 数 allowlist 7 / 実測 2)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-16 by the cf70f785 worker on a tree branched from main a8ec7ac9-era: left 2 right 7 for crates/overwatch/skills/overwatch/SKILL.md. Likely introduced by ce76ce72 (prose-tests(overwatch)) which rewrote that SKILL.md. Readings: (a) ce76ce72 dropped AskUserQuestion gates that must stay (real regression: restore them); (b) the removal was intended and the frozen allowlist needs an acknowledged update (frozen test = human decision). Distinguish by diffing ce76ce72 on that SKILL.md for removed AskUserQuestion sites."
+created_at = 1792160219
+updated_at = 1792160219
+weight = 0.0
+issue_number = 1380
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1380"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test autonomy_invariant askuserquestion_sites_match_frozen_allowlist"
+rev = "22d4f8d5c0f72c0e25773cbb14e01e87ea17ed01"
+observed_at = 1792160219
+detail = """
+exit 101: ilures:
+    askuserquestion_sites_match_frozen_allowlist
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.01s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/autonomy_invariant.rs (target/debug/deps/autonomy_invariant-1700c292e4735461)
+error: test failed, to rerun pass `-p condukt --test autonomy_invariant`"""

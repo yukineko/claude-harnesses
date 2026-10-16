@@ -53389,3 +53389,123 @@ FAILED scripts/test_check_launcher_exec_bit.py::RealRepoState::test_the_scope_fi
 [task.closure]
 reason = "discard"
 discard_reason = "Fixed by branch fix-26f6dd72 162389a6 (test-only): the pinned 39 was stale after jev (f56497bf) became the 42nd plugin; specforge (0eb9996e) is intended. Expected launcher set now derived from each plugin crate's Cargo.toml bin targets (independent of the checker), asserted as exact list + count. RED: old test at 2ac122ac '40 != 39'; GREEN: 23 passed. New assertion's kill shown by a LAUNCHER_RE scope-shrink mutation (went red). backlog done refuses by design: the fix IS the test file (F2P overlays HEAD tests). The 06a9d33f half (test_a_direct_run_reports_a_nonzero_test_count) also passes now; the remaining main-guard failure in test_backlog_audit_b1_0 is a different cause, filed separately."
+
+[[task]]
+id = "f597cbbd"
+title = "observing main-tree guard が他セッションの main への fast-forward merge を並行する無関係な Bash call に帰属させた"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+Observed 2026-10-04 (session 64554c4d, reported by its p1 driver sub-agent and re-checked): main carries two single-parent commits, 98312703 (2026-10-04 02:22:02 +0900, 'specguard: ack 5 gate files with no docs/specs coverage (unblock push)', parent 5af9693e) and dfd7357d (02:23:21, 'backlog: file 5 p2 spec-debt items for gate files acked in 98312703'), followed by f2e3e057 'Merge branch flow-orphan-issues'. The sub-agent also saw a staged .backlog/tasks.toml in main's tree at the time; by the time this was filed main's tree was clean. Neither commit came from session 64554c4d. The main-tree guard attributed the change to the sub-agent's call (whose commands all ran in the session-64554c4d worktree).
+Reading (a): another session committed directly in main's working tree, so scripts/check-worktree-isolation.py (pre-commit, blocks non-merge commits from main's tree) did not fire: bypassed, not wired, or the commit ran with a different hooksPath. (b): the commits were made in a worktree and reached main by a fast-forward merge, which leaves only single-parent commits on main; §8 is satisfied but history cannot show it.
+Distinguish: find the session whose transcript contains 'unblock push' / the commit hash and check its cwd at commit time; check the reflog of main (`git reflog show main` around 02:22) for 'commit' vs 'merge ... Fast-forward'. Also: the guard's attribution of a foreign mutation to whichever call happened to run next is a separate defect (false attribution).
+
+SETTLED 2026-10-04 right after filing: reading (b). `git reflog show main` shows 'dfd7357d main@{2026-10-04 02:23:55 +0900}: merge flow-specdoc: Fast-forward' — the two commits were made on branch flow-specdoc and fast-forwarded onto main; no §8 violation. What remains open is only the false attribution: the main-tree guard (observing guard) attributed main's change (the fast-forward / a transient staged .backlog/tasks.toml during it) to an unrelated concurrent Bash call of session 64554c4d's sub-agent."""
+created_at = 1791048270
+updated_at = 1792192708
+weight = 0.0
+issue_number = 1288
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1288"
+issue_closed_at = 1792192709
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_f597cbbd.py"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003559
+detail = """
+exit 1: \u001B[0m:354: XFailed
+\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
+\u001B[31mFAILED\u001B[0m scripts/test_backlog_f597cbbd.py::\u001B[1mForeignFastForwardDuringCall::test_ff_whose_branch_was_deleted_is_not_refused\u001B[0m - _pytest.outcomes.XFailed
+\u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 1.44s\u001B[0m\u001B[31m ==========================\u001B[0m"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_backlog_f597cbbd.py"
+exit = 0
+passed = 2
+rev = "75b00795b574b1dce8da00732c3605dd19970ad9"
+observed_at = 1792192695
+output_digest = "sha256:554f78f87153ef17ab7870e88eaceb41d336627d993f3d8c97bba8cb9d44d45d"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/fix-f597cbbd
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 2 items
+
+scripts/test_backlog_f597cbbd.py ..                                      [100%]
+
+============================== 2 passed in 1.79s ===============================
+"""
+
+[task.closure.red]
+rev = "caad9a023d7da7b66ebcd3d6e4bd958fe067145a"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "68fb7237"
+title = "merging .backlog/tasks.toml by taking one side wholesale drops tasks added on the other side, leaving their GitHub issues open and orphaned"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-04 (worktree flow-issue-sync, base main 4027a8dc). Merge e672436b (Merge branch 'session-c6ed7cfd', 2026-10-02 05:17, merge-base 8f50bc4d) resolved a conflict in .backlog/tasks.toml by keeping ^1 wholesale: 10 tasks added on ^2 since the merge-base (dc272b08 e481be8f b645e787 41c98767 7905a60b 23f9b548 0bd2402a 3a56ac96 e3acc324 e3403964, issues #977 #978 #984 #986 #987 #988 #990 #991 #992 #997) are present in e672436b^2 and absent from e672436b in both tasks.toml and tasks.done.toml. The follow-up merge 71e024a5 (parents e672436b 31229785) also lacks all 10 (71e024a5^2 has 10, result 0), though relative to its own merge-base it added only 1 new id and kept it. The tasks were never closed anywhere in history (only ever status pending in tasks.toml), so their issues stayed open with no backing task. Restored verbatim from 31229785 in branch flow-issue-sync. A further 17 open issues (#238 #249 #345-#348 #356-#361 #404 #670 #1048-#1050) have NO task block in any reachable commit, reflog-only commit, unreachable blob, any .harness-worktrees store, or the home store; the mechanism that lost them is unidentified (candidates: sync ran in a worktree whose store write was never committed, or another wholesale resolution before the issue_number was committed). Done criteria: a merge of .backlog/*.toml that drops an id present on either side since the merge-base is refused (merge driver or pre-commit check), with a RED-first test on a fixture merge reproducing e672436b."
+created_at = 1791047071
+updated_at = 1792192650
+weight = 0.0
+issue_number = 1274
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1274"
+issue_closed_at = 1792192651
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_68fb7237.py"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003600
+detail = """
+exit 1: m:354: XFailed
+\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
+\u001B[31mFAILED\u001B[0m scripts/test_backlog_68fb7237.py::\u001B[1mWholesaleSideMerge::test_ours_wholesale_resolution_dropping_theirs_id_is_refused\u001B[0m - _pytest.outcomes.XFailed
+\u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.75s\u001B[0m\u001B[31m ==========================\u001B[0m"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_backlog_68fb7237.py"
+exit = 0
+passed = 2
+rev = "3e64b70a99c7b0ea6964bf09e993c814a59ef8ae"
+observed_at = 1792192639
+output_digest = "sha256:4407fd14abaed87375e67cdb45327b24f3e938b3b1d3e729055cea1c1623a948"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/fix-68fb7237
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 2 items
+
+scripts/test_backlog_68fb7237.py ..                                      [100%]
+
+============================== 2 passed in 1.57s ===============================
+"""
+
+[task.closure.red]
+rev = "54325ea802a8828ce6bf2e3db47d1bfd6c723dd2"
+exit = 1
+kind = "behavioural"

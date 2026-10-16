@@ -100,7 +100,7 @@ store は repo ごとに解決される (`<repo root>/.backlog/tasks.toml`) [tes
   よって `--project` は「どの store のことを言っているか」の **assertion** になる — この repo を
   指すなら何も変わらず [test: crates/backlog/tests/project_scope.rs::an_explicit_project_naming_this_repo_changes_nothing]、別の repo を指すのは（絞り込み結果ではなく）エラー [test: crates/backlog/tests/project_scope.rs::an_explicit_project_naming_a_different_repo_is_refused]。`--all` は受理される [test: crates/backlog/tests/integration.rs::list_all_flag_returns_every_project_in_the_resolved_store]。
 - **repo root が上に無い cwd には store が無い:** `add` と `list` は理由を述べて拒否し、
-  cross-project な `~/.backlog` へフォールバックしない [test: crates/backlog/tests/project_scope.rs::add_outside_any_repo_refuses_instead_of_writing_the_shared_store] [test: crates/backlog/tests/project_scope.rs::list_outside_any_repo_refuses_instead_of_reading_the_shared_store]。`next` も同様に拒否する [test: crates/backlog/tests/prose_claims.rs::claim_r_next_refuses_the_same_way]。共有 store を明示的に使いたい場合は
+  cross-project な `~/.backlog` へフォールバックしない [test: crates/backlog/tests/prose_claims.rs::claim_s_add_outside_repo_names_the_missing_repo] [test: crates/backlog/tests/project_scope.rs::list_outside_any_repo_refuses_instead_of_reading_the_shared_store]。`next` も同様に拒否する [test: crates/backlog/tests/prose_claims.rs::claim_r_next_refuses_the_same_way]。共有 store を明示的に使いたい場合は
   `~/.backlog/config.toml` で `store_dir` を pin する（pinned store は複数 project を持ちうるので、
   そこでは `--project` は従来どおりのフィルタ） [test: crates/backlog/tests/project_scope.rs::a_pinned_store_dir_still_scopes_by_project] [test: crates/backlog/tests/project_scope.rs::a_pinned_store_dir_still_works_outside_any_repo]。
 

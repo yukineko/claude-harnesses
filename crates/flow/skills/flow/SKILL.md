@@ -2,7 +2,7 @@
 name: flow
 description: **ユーザーが明示的に起動したときだけ走る**（SessionStart の自動提案を廃止したため、こちらから提案することはしない） [test: scripts/test_prose_flow_a.py::T::test_claim_no_propose_no_hook_runs_flow] [test: scripts/test_prose_flow_a.py::T::test_claim_no_propose_autoflow_has_no_sessionstart_and_no_proposal_strings] [test: scripts/test_prose_flow_a.py::T::test_claim_no_propose_autoflow_stop_output_never_proposes_flow] [test: scripts/test_prose_flow_a.py::T::test_claim_no_propose_docs_say_explicit_invocation_only]。課題の供給（compass の次の一手 / backlog のキュー）から解決手段の実行までを1本のループで回したいときに使うこと。
 argument-hint: "[任意: 直接の課題文。省略時は compass→backlog から自動でピック]"
-allowed-tools: Task, AskUserQuestion, Bash(backlog:*), Bash(compass:*), Bash(condukt:*), Bash(fugu-router:*), Bash(hypothesis:*), Bash(overwatch:*), Bash(specguard:*), Bash(specforge:*), Bash(jq:*), Bash(printf:*), Bash(git:*), Read
+allowed-tools: Task, AskUserQuestion, Bash(backlog:*), Bash(compass:*), Bash(condukt:*), Bash(fugu-router:*), Bash(hypothesis:*), Bash(overwatch:*), Bash(budgetguard:*), Bash(specguard:*), Bash(specforge:*), Bash(jq:*), Bash(printf:*), Bash(git:*), Read
 ---
 
 ```
@@ -38,7 +38,7 @@ SOURCE（課題の供給。上から順に引く）   EXECUTOR（解決手段の
 
 ### Step 0.5 — 自律モードでは人間への問い合わせをゲート単位で判定に通すこと
 
-自律モードでも、budgetguard の予算超過による早期脱出（Step 4）を省いてはならない。
+自律モードでも、budgetguard の予算超過による早期脱出（Step 4）を省いてはならない [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_over_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_corrupt_ledger_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_corrupt_config_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_missing_binary_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_prose_nonzero_goes_to_step_4]。
 
 ループ中に人間へ問い合わせる（`AskUserQuestion`）箇所は、**自律モードでは各ゲート固有の
 risk×reversibility×confidence を `condukt policy answer` に渡し、決定論的 verdict に従って
@@ -156,6 +156,12 @@ backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drive
 
 #### 3-1. 次のタスクを優先度順にピックすること
 
+予算を判定できないまま、または予算超過のままピックしてはならない [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_over_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_corrupt_ledger_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_corrupt_config_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_missing_binary_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_prose_nonzero_goes_to_step_4]。各サイクルのピックの前に次を実行すること [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_3_1_block_contains_check_command] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_frontmatter_allows_budgetguard]。
+```bash
+budgetguard check   # stdout は JSON 1 行 [test: crates/budgetguard/tests/check_contract.rs::check_within_budget_exits_0_with_verdict_within] [test: crates/budgetguard/tests/check_contract.rs::check_corrupt_ledger_is_undetermined_exit_2]。exit 0 = 予算内 / exit 1 = 予算超過 / exit 2 = 判定不能 [test: crates/budgetguard/tests/check_contract.rs::check_within_budget_exits_0_with_verdict_within] [test: crates/budgetguard/tests/check_contract.rs::check_at_or_over_block_threshold_exits_1_with_verdict_over] [test: crates/budgetguard/tests/check_contract.rs::check_corrupt_ledger_is_undetermined_exit_2] [test: crates/budgetguard/tests/check_contract.rs::check_corrupt_config_is_undetermined_exit_2]
+```
+exit 0 以外（exit 1・exit 2・`budgetguard` 不在・起動失敗）なら予算超過とみなし、ピックせず Step 4 へ進むこと（早期脱出条件） [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_over_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_corrupt_ledger_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_corrupt_config_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_missing_binary_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_prose_nonzero_goes_to_step_4]。
+
 compass / charter を先頭で引いてはならない。1 と 2 がどちらも一手を出さなかったときのフォールバックとしてだけ引くこと。
 出荷しただけで仮説を validate してはならない（build ≠ validate） [test: crates/hypothesis/src/store.rs::test_validate_requires_evidence]。
 
@@ -188,7 +194,7 @@ compass / charter を先頭で引いてはならない。1 と 2 がどちらも
       判定は 3 値: exit 0 は claim 済みなのでその item をスキップする [test: crates/condukt/tests/is_claimed_exit_contract.rs::claimed_hashkey_exits_0_with_claimed_true]。exit 1 かつ stdout が `"claimed": false` なら claim なしなのでピックを続行する [test: crates/condukt/tests/is_claimed_exit_contract.rs::clean_empty_registry_exits_1_with_claimed_false]。それ以外（`condukt` が無い・exit 3＝claim registry を読めない・起動失敗・タイムアウト）は判定不能なので、claim 済みとみなしてその item をスキップし、理由（exit code / stderr）を報告すること [test: crates/condukt/tests/is_claimed_exit_contract.rs::corrupt_registry_exits_3_not_1]。
       lease は保持者の heartbeat が続く間は 1 時間（`CLAIM_STALE_SECS`）を過ぎても除外し続け [test: crates/backlog/tests/verifier_486e83ca.rs::verifier_live_holder_keeps_lease_past_window]、heartbeat が止まって `CLAIM_STALE_SECS` を過ぎると除外をやめる [test: crates/backlog/tests/verifier_486e83ca.rs::verifier_dead_holder_is_reclaimable] [test: crates/backlog/tests/claim_lease_untracked.rs::stale_lease_releases_the_task]。
    （b）予算逼迫、相互依存、同一領域・同一ファイルへの接触、deploy・push（Gated 相当）のいずれかが読み取れる候補は、バッチから外して 1 件ずつ直列に回すこと。
-      - budgetguard が予算逼迫を示すときは、バッチ幅を絞ること。極端なら N=1 に縮退して従来の直列にすること。
+      - 3-1 冒頭の `budgetguard check` が exit 0 でも JSON の `pressure` が `true`（当日支出が `daily.warn_usd` 以上）なら予算逼迫なので、バッチ幅を N=1 に縮退して従来の直列にすること [test: crates/budgetguard/tests/check_contract.rs::check_between_warn_and_block_is_within_with_pressure_true] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_pressure_line_mentions_pressure_and_n1]。
       判断に迷うものはバッチに入れてよい（condukt が衝突を検出して直列化する） [test: crates/condukt/src/schedule.rs::shared_file_demotes_both_off_the_parallel_track]。
    （c）このループが `backlog add` する場合、cwd はこのセッションの linked worktree にすること（main では拒否される [test: crates/backlog/tests/store_worktree_boundary.rs::add_from_primary_checkout_is_refused_and_writes_nothing]）。compass opportunity 由来ならその weight を供給すること。
       ```bash
@@ -475,6 +481,7 @@ compass pivot-check   # {"recommendation":"persevere"|"pivot","streak":N,"thresh
 
 ## 早期脱出条件に当たったらループを止めること
 
+- 予算の判定不能（`budgetguard check` の exit 0 以外）を予算内として続行してはならない [test: crates/budgetguard/tests/check_contract.rs::check_corrupt_ledger_is_undetermined_exit_2] [test: crates/budgetguard/tests/check_contract.rs::check_unreadable_ledger_is_undetermined_exit_2] [test: crates/budgetguard/tests/check_contract.rs::check_corrupt_config_is_undetermined_exit_2] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_corrupt_ledger_is_nonzero]。
 - `--session` を付け忘れてはならない [test: crates/condukt/tests/backlog_audit_v11.rs::backlog_9eeffa69_flow_skill_passes_session_to_circuit_check]。付け忘れると毎バッチ後に trip する [test: crates/condukt/tests/circuit_session_idle_e2e.rs::no_session_flag_trips_unmeasured_control]。
 - 彫り直しを勝手に繰り返してはならない。
 - 「仕事なし」にも「実行してよい」にも丸めてはならない。
@@ -493,7 +500,7 @@ HOME 未設定・claim registry が読めない場合も `idle_unmeasured` で t
 - ユーザーが中断を指示したら、直ちに Step 4（driver 登録の解除）へ進むこと。
 - 循環ブレーカーが trip（毎イテレーション `condukt circuit check --run RID` を実行し nonzero）したら、決定論的に clean stop すること（ループを止めて Step 4 へ進み、人にも policy にも聞かない hard stop）[test: scripts/test_prose_flow_a.py::T::test_claim_circuit_idle_missing_transcript_trips_unmeasured] [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_circuit_trip_exits_nonzero]。
   非自律で追加確認を入れたい場合のフォールバックのみ `AskUserQuestion`「続行 / 中止」を使うこと [test: scripts/test_prose_flow_a.py::T::test_claim_frontmatter_declares_args_and_tools] [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_circuit_trip_exits_nonzero]。
-- budgetguard が予算超過を返したら、ループ終了（Step 4）とし、残キューはそのまま次セッションへ引き継ぐこと。
+- `budgetguard check` が exit 0 以外（exit 1＝予算超過、exit 2＝判定不能、`budgetguard` 不在・起動失敗を含む）を返したら、予算超過とみなしてループ終了（Step 4）とし、残キューはそのまま次セッションへ引き継ぐこと [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_over_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_corrupt_ledger_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_corrupt_config_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_missing_binary_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_prose_nonzero_goes_to_step_4]。
 - compass フォールバック（3-1 の 3）で charter を彫っても右サイズの一手が出ない、または `sentinel` で離席なら、ループを止め Step 4 へ進むこと [test: scripts/test_prose_flow_b.py::TestCarveSentinel::test_claim_carve_sentinel]。
 - `compass` バイナリ不在・呼び出し失敗（charter の状態を観測できなかった）なら、その事実を報告して Step 4 へ進むこと [test: scripts/test_prose_flow_b.py::TestCompassFailDetectable::test_claim_compass_fail_detectable_no_charter] [test: scripts/test_prose_flow_b.py::TestCompassFailDetectable::test_claim_compass_fail_detectable_unreadable_charter]。
 - `backlog next` が予期しないエラーなら、報告して Step 4 へ進むこと [test: scripts/test_prose_flow_b.py::TestBacklogNextError::test_claim_backlog_next_error]。

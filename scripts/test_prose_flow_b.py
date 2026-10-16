@@ -890,5 +890,129 @@ class TestPivotCheckShape(unittest.TestCase):
         self.assertEqual((j["recommendation"], j["streak"]), ("persevere", 0))
 
 
+def _section(text, start_pat, level_prefix):
+    """Body of the section whose heading line matches `start_pat`, up to the
+    next heading of the same or higher level (`level_prefix` e.g. '#### ')."""
+    lines = text.splitlines()
+    for i, ln in enumerate(lines):
+        if re.match(start_pat, ln):
+            out = []
+            depth = len(level_prefix.strip())
+            for nxt in lines[i + 1:]:
+                m = re.match(r"^(#+) ", nxt)
+                if m and len(m.group(1)) <= depth:
+                    break
+                out.append(nxt)
+            return "\n".join(out)
+    raise AssertionError(f"SKILL.md has no section matching {start_pat!r}")
+
+
+def _first_bash_block(section):
+    m = re.search(r"```bash\n(.*?)```", section, re.S)
+    assert m, "section has no fenced bash block"
+    return m.group(1)
+
+
+class TestBudgetCheck(unittest.TestCase):
+    """The 3-1 budget pre-check: `budgetguard check`, exit 0 only = proceed."""
+
+    _built = False
+
+    @classmethod
+    def budgetguard(cls):
+        if not cls._built:
+            cargo = shutil.which("cargo") or str(Path.home() / ".cargo" / "bin" / "cargo")
+            r = subprocess.run([cargo, "build", "-q", "-p", "budgetguard"],
+                               cwd=ROOT, capture_output=True, text=True)
+            assert r.returncode == 0, r.stderr
+            cls._built = True
+        p = target_dir() / "budgetguard"
+        assert p.exists(), p
+        return p
+
+    def _cmd(self):
+        block = _first_bash_block(_section(skill_text(), r"^#### 3-1\. ", "#### "))
+        lines = [re.sub(r"\s{2,}#.*$", "", l).strip() for l in block.splitlines()]
+        cmds = [l for l in lines if l.startswith("budgetguard check")]
+        self.assertEqual(len(cmds), 1, f"3-1 bash block lacks `budgetguard check`: {block!r}")
+        return cmds[0]
+
+    def _run(self, config=None, ledger=None, with_binary=True):
+        sb = Sandbox(self)
+        cwd = sb.base / "proj"
+        cwd.mkdir()
+        if config is not None:
+            (cwd / "budgetguard.toml").write_text(config)
+        if ledger is not None:
+            d = sb.home / ".budgetguard" / "state"
+            d.mkdir(parents=True)
+            (d / "ledger.json").write_text(ledger)
+        if with_binary:
+            (sb.extra_bin / "budgetguard").symlink_to(self.budgetguard())
+        env = sb.env()
+        env.pop("BUDGETGUARD_DISABLE", None)
+        return subprocess.run(["sh", "-c", self._cmd()], cwd=cwd, env=env,
+                              capture_output=True, text=True)
+
+    @staticmethod
+    def _today_ledger(usd):
+        today = subprocess.run(["date", "+%Y-%m-%d"], capture_output=True, text=True).stdout.strip()
+        return json.dumps({"days": {today: {"sessions": {"s1": usd}}}})
+
+    CFG = "[daily]\nwarn_usd = 5.0\nblock_usd = 10.0\n"
+
+    def _verdict(self, r):
+        try:
+            return json.loads(r.stdout.strip())["verdict"]
+        except Exception:
+            return f"<no verdict; stdout={r.stdout!r} stderr={r.stderr!r}>"
+
+    def test_claim_budget_frontmatter_allows_budgetguard(self):
+        fm = skill_text().split("---")[1]
+        line = next(l for l in fm.splitlines() if l.startswith("allowed-tools:"))
+        self.assertIn("Bash(budgetguard:*)", line)
+
+    def test_claim_budget_3_1_block_contains_check_command(self):
+        self.assertTrue(self._cmd().startswith("budgetguard check"))
+
+    def test_claim_budget_over_is_nonzero(self):
+        r = self._run(self.CFG, self._today_ledger(10.0))
+        self.assertEqual(self._verdict(r), "over", r)
+        self.assertNotEqual(r.returncode, 0)
+
+    def test_claim_budget_corrupt_ledger_is_nonzero(self):
+        r = self._run(self.CFG, "{ not a ledger")
+        self.assertEqual(self._verdict(r), "undetermined", r)
+        self.assertNotEqual(r.returncode, 0)
+
+    def test_claim_budget_corrupt_config_is_nonzero(self):
+        r = self._run("[daily\nblock_usd = = 1\n", self._today_ledger(999.0))
+        self.assertEqual(self._verdict(r), "undetermined", r)
+        self.assertNotEqual(r.returncode, 0)
+
+    def test_claim_budget_within_is_zero(self):
+        r = self._run(self.CFG, self._today_ledger(1.0))
+        self.assertEqual(self._verdict(r), "within", r)
+        self.assertEqual(r.returncode, 0, r)
+
+    def test_claim_budget_missing_binary_is_nonzero(self):
+        # Not in PATH => the shell reports 127; "exit 0 以外 -> Step 4" must catch it.
+        r = self._run(self.CFG, self._today_ledger(1.0), with_binary=False)
+        self.assertNotEqual(r.returncode, 0, r)
+
+    def test_claim_budget_prose_nonzero_goes_to_step_4(self):
+        t = skill_text()
+        for name, body in (("3-1", _section(t, r"^#### 3-1\. ", "#### ")),
+                           ("早期脱出条件", _section(t, r"^## 早期脱出条件", "## "))):
+            sents = re.split(r"。|\n", body)
+            self.assertTrue(any("exit 0 以外" in x and "Step 4" in x for x in sents),
+                            f"{name}: no sentence with both `exit 0 以外` and `Step 4`")
+
+    def test_claim_budget_pressure_line_mentions_pressure_and_n1(self):
+        s31 = _section(skill_text(), r"^#### 3-1\. ", "#### ")
+        lines = [l for l in s31.splitlines() if "pressure" in l and "N=1" in l]
+        self.assertTrue(lines, "3-1 has no line mentioning both `pressure` and `N=1`")
+
+
 if __name__ == "__main__":
     unittest.main()

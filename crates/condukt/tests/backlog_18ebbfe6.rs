@@ -149,7 +149,6 @@ impl Fixture {
 }
 
 #[test]
-#[ignore = "backlog 18ebbfe6: RED repro"]
 fn malformed_gauge_json_is_not_recorded_as_manual_cost() {
     let fx = Fixture::new("red", "{not json");
     fx.settled_run("r1");

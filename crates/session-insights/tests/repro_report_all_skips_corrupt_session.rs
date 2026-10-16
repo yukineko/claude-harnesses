@@ -46,7 +46,10 @@ fn report_all_does_not_present_partial_list_as_complete() {
     std::fs::write(state.join("corrupt-one.json"), "{ this is not json").unwrap();
     let (code, stdout, stderr) = run3(&h, &["report", "--all"], "");
     let _ = std::fs::remove_dir_all(&h);
-    assert!(stdout.contains("good-one"), "apparatus: good session listed: {stdout:?}");
+    assert!(
+        stdout.contains("good-one"),
+        "apparatus: good session listed: {stdout:?}"
+    );
     assert!(
         code != 0 || !stderr.trim().is_empty(),
         "corrupt session file skipped with no diagnostic. exit={code} stdout={stdout:?} stderr={stderr:?}"

@@ -18,13 +18,18 @@ impl Drop for Fx {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let o = Command::new("git").args(args).current_dir(dir).output().unwrap();
+    let o = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
     assert!(o.status.success(), "git {args:?}: {o:?}");
 }
 
 impl Fx {
     fn new(tag: &str) -> Self {
-        let base = std::env::temp_dir().join(format!("condukt-relrun-{}-{tag}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("condukt-relrun-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let repo = base.join("repo");
         let home = base.join("home");
@@ -54,11 +59,30 @@ impl Fx {
 #[ignore = "RED repro: condukt state release-task ignores --run"]
 fn release_task_by_another_run_does_not_release_the_holders_claim() {
     let f = Fx::new("other-run");
-    let o = f.c(&["state", "claim-task", "--run", "run-A", "--hashkey", "hk-held"]);
+    let o = f.c(&[
+        "state",
+        "claim-task",
+        "--run",
+        "run-A",
+        "--hashkey",
+        "hk-held",
+    ]);
     assert!(o.status.success(), "apparatus: claim failed: {o:?}");
-    assert_eq!(f.c(&["state", "is-claimed", "--hashkey", "hk-held"]).status.code(), Some(0));
+    assert_eq!(
+        f.c(&["state", "is-claimed", "--hashkey", "hk-held"])
+            .status
+            .code(),
+        Some(0)
+    );
 
-    let _ = f.c(&["state", "release-task", "--run", "run-B", "--hashkey", "hk-held"]);
+    let _ = f.c(&[
+        "state",
+        "release-task",
+        "--run",
+        "run-B",
+        "--hashkey",
+        "hk-held",
+    ]);
 
     let still = f.c(&["state", "is-claimed", "--hashkey", "hk-held"]);
     assert_eq!(

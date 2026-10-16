@@ -43,7 +43,6 @@ class PluginVersionsWithoutCratesDir(unittest.TestCase):
         p = self._run(with_crates=True)
         self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
 
-    @unittest.expectedFailure
     def test_missing_crates_dir_is_undetermined_exit_2_not_traceback(self):
         p = self._run(with_crates=False)
         self.assertNotIn("Traceback", p.stderr, p.stderr)

@@ -3,9 +3,8 @@
 //! stdin (stderr only). The injected backlog context silently vanishes and the
 //! session cannot tell "nothing to inject" from "could not read the payload".
 //!
-//! NOTE: tests/integration.rs::session_start_with_malformed_stdin_exits_zero
-//! pins the CURRENT behaviour (exit 0, empty stdout). It is deliberately not
-//! changed here and is the test that will flip when this is fixed.
+//! Fixed (f580e5ef): tests/integration.rs::session_start_with_malformed_stdin_exits_nonzero
+//! now pins the non-zero exit; it formerly pinned exit 0 with empty stdout.
 
 mod common;
 
@@ -35,7 +34,6 @@ fn run_hook(payload: &str, home: &PathBuf, cwd: &PathBuf) -> (i32, String, Strin
 }
 
 #[test]
-#[ignore = "RED repro: backlog session-start exits 0 with empty stdout on malformed stdin"]
 fn session_start_malformed_stdin_is_a_visible_failure() {
     let home = std::env::temp_dir().join(format!("backlog-repro-b2-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);

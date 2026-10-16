@@ -978,11 +978,13 @@ fn run(cli: Cli) -> Result<()> {
         } => {
             let tasks_path = store_path()?;
             // A typo'd status used to silently match nothing ("no tasks"),
-            // indistinguishable from a genuinely empty queue. Warn loudly so an
-            // unknown filter value (e.g. the wrong `open`) is obvious. The check
+            // indistinguishable from a genuinely empty queue. An unknown filter
+            // value (e.g. the wrong `open`) is undetermined, not empty: refuse
+            // with a non-zero exit before any listing is printed. The message
             // lives in `task::status_warning` so it is unit-tested.
+            // Pinned by tests/repro_list_unknown_status_exit.rs.
             if let Some(w) = task::status_warning(status.as_deref()) {
-                eprintln!("{w}");
+                anyhow::bail!("{w}");
             }
             // Default scope is the cwd-resolved project
             // (backlog-list-default-scope): an explicit `--project` always
@@ -1585,16 +1587,19 @@ fn run(cli: Cli) -> Result<()> {
         }
 
         Command::SessionStart => {
+            let raw = read_stdin();
+            // Don't silently coerce malformed stdin to an empty default —
+            // that would run session-start against a blank input and could
+            // mis-key the project. Nor exit 0 with empty stdout: that is
+            // indistinguishable from "nothing to inject". An unreadable
+            // payload is undetermined, so fail visibly with a non-zero exit.
+            // Pinned by tests/repro_session_start_malformed_stdin.rs.
+            let Some(input) = HookInput::parse(&raw) else {
+                anyhow::bail!(
+                    "backlog session-start: malformed hook input on stdin; backlog context was NOT injected"
+                );
+            };
             run_hook(|| {
-                let raw = read_stdin();
-                // Don't silently coerce malformed stdin to an empty default —
-                // that would run session-start against a blank input and could
-                // mis-key the project. Surface it on stderr and skip (the hook
-                // still exits 0, never breaking the turn).
-                let Some(input) = HookInput::parse(&raw) else {
-                    eprintln!("backlog session-start: malformed hook input on stdin; skipping");
-                    return;
-                };
                 if let Some(ctx) = hooks::session_start::run(&input) {
                     println!("{}", json!({ "additionalContext": ctx }));
                 }

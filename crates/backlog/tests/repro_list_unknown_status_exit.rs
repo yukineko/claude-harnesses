@@ -42,7 +42,6 @@ fn list(home: &PathBuf, repo: &PathBuf, status: &str) -> (i32, String, String) {
 }
 
 #[test]
-#[ignore = "RED repro: backlog list --status <unknown> exits 0 with stdout 'no tasks'"]
 fn list_with_unknown_status_exits_nonzero() {
     let (home, repo) = temp_repo("b1");
     let (ccode, cout, cerr) = list(&home, &repo, "pending");

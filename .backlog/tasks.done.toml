@@ -52231,3 +52231,68 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; fini
 rev = "1b3980736b649489a338c94ab1634fd6e08d93e8"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "cf70f785"
+title = "condukt state set --status verified --worktree W が F->P oracle を W ではなく以前記録された worktree (無ければ cwd) で走らせる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+crates/condukt/src/main.rs:4228-4234 resolves run_dir from rs.tasks[..].worktree (the PREVIOUSLY recorded worktree), falling back to cwd; the --worktree passed in the same call is not applied first. With no prior record it runs tdd oracle in the session cwd -> 'tdd oracle exited non-zero' although `tdd oracle --task <id>` in W exits 0. Workaround used: `state set --status done --worktree W --branch B` first. Fix: apply the call's --worktree before resolving run_dir, or refuse when they differ (fail-closed). Needs a cargo test RED first.
+
+Observed 2026-10-03 in flow batch 14 (run-20261003-202619-762), main 4b0e5ab3..4bc312db."""
+created_at = 1791028023
+updated_at = 1792160217
+weight = 0.0
+issue_number = 1199
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1199"
+issue_closed_at = 1792160218
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_cf70f785 -- --ignored"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003550
+detail = """
+exit 101: ailed; 0 ignored; 0 measured; 1 filtered out; finished in 1.42s
+
+   Compiling condukt v0.7.243 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
+     Running tests/backlog_cf70f785.rs (target/debug/deps/backlog_cf70f785-1fe3a3c838c30663)
+error: test failed, to rerun pass `-p condukt --test backlog_cf70f785`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_cf70f785 -- --include-ignored"
+exit = 0
+passed = 2
+rev = "22d4f8d5c0f72c0e25773cbb14e01e87ea17ed01"
+observed_at = 1792160174
+output_digest = "sha256:84ec20d1ccf239169eb1d49f11ca0d43cf6a4bbaa1cc0e63f71e2c3f82bccbda"
+excerpt = """
+
+running 2 tests
+{"valid_fp_oracle":true,"transition":"fail_to_pass"}
+{"valid_fp_oracle":false,"transition":"unknown"}
+{"valid_fp_oracle":true,"transition":"fail_to_pass"}
+{"valid_fp_oracle":false,"transition":"unknown"}
+test verified_with_worktree_runs_oracle_in_the_passed_worktree ... ok
+test control_worktree_recorded_first_then_verified_passes ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.66s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running tests/backlog_cf70f785.rs (target/debug/deps/backlog_cf70f785-2dd2ee06ad200359)
+"""
+
+[task.closure.red]
+rev = "677b88987124e25f1f0b4cd920acee5d0822e46f"
+exit = 101
+kind = "behavioural"

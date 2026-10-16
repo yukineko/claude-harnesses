@@ -2231,3 +2231,74 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 15 filtered out;
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
      Running tests/autonomy_invariant.rs (target/debug/deps/autonomy_invariant-1700c292e4735461)
 error: test failed, to rerun pass `-p condukt --test autonomy_invariant`"""
+
+[[task]]
+id = "50bceba2"
+title = "compass gap exits 0 with empty dod on an unparseable charter (unclosed front matter) - reads as no gap"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Found by prose-flow citation work (branch prose-flow 3b2228ac). A UTF-8 charter.md whose front matter does not parse makes compass gap exit 0 with dod=[] and measuring_stick empty, indistinguishable from a charter with no gap. Expected: non-zero exit (undetermined -> restrictive, CLAUDE.md 3). RED: scripts/test_prose_flow_b.py test_claim_compass_fail_detectable_garbage_charter (unittest.expectedFailure, fails under pytest --runxfail). Flip the expectedFailure when fixed."
+created_at = 1792187683
+updated_at = 1792187683
+weight = 0.0
+issue_number = 1383
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1383"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_prose_flow_b.py -k test_claim_compass_fail_detectable_garbage_charter -q"
+rev = "3b2228ace35777e08233ea8223a4ee45ea53ecad"
+observed_at = 1792187683
+detail = """
+exit 1:    ) -> None:
+        try:
+>           xfail(str(reason))
+E           _pytest.outcomes.XFailed
+
+../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
+=========================== short test summary info ============================
+FAILED scripts/test_prose_flow_b.py::TestCompassFailDetectable::test_claim_compass_fail_detectable_garbage_charter
+1 failed, 36 deselected in 1.05s"""
+
+[[task]]
+id = "cccc9c43"
+title = "flow circuit check: failure_streak and budget axes are structurally dead (no state init for flow-SID run, no budget cap passed)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Found by prose-flow citation work (branch prose-flow 3b2228ac). /flow runs condukt circuit check --run flow-SID --session SID but never state-inits that run and passes no budget cap; item failures go to backlog fail which the circuit cannot see. After three failed items the exact SKILL command reports streak 0, budget_over_cap false, exit 0 - the breaker can never trip on those axes. RED: scripts/test_prose_flow_a.py test_claim_circuit_flow_invocation_streak_and_budget_axes_are_dead (unittest.expectedFailure, fails under pytest --runxfail). Flip the expectedFailure when fixed."
+created_at = 1792187754
+updated_at = 1792187754
+weight = 0.0
+issue_number = 1385
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1385"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_prose_flow_a.py -k test_claim_circuit_flow_invocation_streak_and_budget_axes_are_dead -q"
+rev = "3b2228ace35777e08233ea8223a4ee45ea53ecad"
+observed_at = 1792187754
+detail = """
+exit 1:  = "",
+    ) -> None:
+        try:
+>           xfail(str(reason))
+E           _pytest.outcomes.XFailed
+
+../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
+=========================== short test summary info ============================
+FAILED scripts/test_prose_flow_a.py::T::test_claim_circuit_flow_invocation_streak_and_budget_axes_are_dead
+1 failed, 40 deselected in 2.49s"""
